@@ -142,9 +142,9 @@ ETL scope 全 21 张：
 | 20 | config_change_audit | paper_v2_config_change_audit | append | config.changed |
 | 21 | reset_audit | paper_v2_reset_audit | append | run.completed |
 
-### §3.2.1 表数对账（T11 修正，per Codex D5 Q1.a caveat drawer 9cd6d6bb）
+### §3.2.1 表数对账（T12 二次修正，21 → 22；per dw-schema T12 实施 commit a86b337 + §5.12 paper_v2_error 独立 DDL）
 
-**Codex 发现 D5 文中存在 3 个表数描述不一致**："21 runtime tables in scope" / "18 + 1" / 列举 1+3+13+5=22。本节统一 **18 + 1** 为权威数。
+**Codex 发现 D5 文中存在 3 个表数描述不一致**："21 runtime tables in scope" / "18 + 1" / 列举 1+3+13+5=22。T11（commit de26e5a）首次修正为 21；T12 实施时发现 §5.12 paper_v2_error 在 §3.2.1 旧表中被遗漏，本节修正为 **22**（21 paper_v2_* + 1 factor_value）。
 
 | 类别 | 数量 | 表 |
 |---|---|---|
@@ -153,11 +153,12 @@ ETL scope 全 21 张：
 | 事实表 | 9 | paper_v2_session / paper_v2_session_day / paper_v2_order / paper_v2_order_execution_state / paper_v2_fill / paper_v2_position_snapshot / paper_v2_daily_snapshot / paper_v2_intraday_snapshot / paper_v2_cash_ledger |
 | 配置/审计事实表 | 3 | paper_v2_runtime_config_activation / paper_v2_execution_policy_activation / paper_v2_reset_audit |
 | 事件表（append-only）| 4 | paper_v2_session_event / paper_v2_run_event / paper_v2_order_event / paper_v2_config_change_audit |
-| **paper_v2_* 总计** | **20** | |
+| 错误表（append-only）| 1 | paper_v2_error（含 broker 异常，per §3.2.2 + §5.12）|
+| **paper_v2_* 总计** | **21** | |
 | factor_value | 1 | factor_value（单独，按月分区）|
-| **qe_archive 新增总计** | **21** | |
+| **qe_archive 新增总计** | **22** | |
 
-注：之前 v1/v2 文中"18+1"是漏算的旧表，"22"重复计入了 broker_error。本节为权威。
+注：之前 v1/v2 文中"18+1"是漏算的旧表，T11 修正的 21 漏算了 paper_v2_error（独立类别，非事件、非事实），T12 修正为 22。paper_v2_error standalone 实施依据是 §3.2.2 broker_error 合并政策 + §5.12 完整 DDL + §3.2.3 source-to-archive mapping (errors → paper_v2_error)。本节为权威。
 
 ### §3.2.2 paper_v2_error 与 broker_error 合并政策（T11 决定）
 
