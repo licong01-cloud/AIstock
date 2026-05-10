@@ -19,7 +19,7 @@ This checkpoint preserves the current Codex-side AIstock QE governance progress 
 - Main branch status at checkpoint: `main...origin/main`; not touched by Codex governance work.
 - Governance integration worktree: `F:\Dev\AIstock_worktrees\qe-governance-integration-20260509`
 - Governance integration branch: `codex/qe-governance-integration-20260509`
-- Latest integration code commit before this checkpoint-doc update: `0dede08 merge(qe): governance eligibility summary`
+- Latest integration code commit before this checkpoint-doc update: `97ec0e9 test(qe): cover governance eligibility blockers`
 
 RD-Agent follow-up:
 
@@ -30,7 +30,7 @@ RD-Agent follow-up:
 
 ## Completed AIstock Governance Work
 
-All items below are merged only into `codex/qe-governance-integration-20260509` and pushed.
+All items below are merged only into `codex/qe-governance-integration-20260509`. Push state must be rechecked before handoff; this checkpoint includes local commits newer than `origin/codex/qe-governance-integration-20260509`.
 
 1. Phase 5 Model Registry foundation
    - Feature commit: `0cdaa60 feat(qe): add model registry foundation`
@@ -95,14 +95,29 @@ All items below are merged only into `codex/qe-governance-integration-20260509` 
    - Fixed the `enable_paper()` original fixed-weight retest gate to scan all matching validation runs, not only the latest 100, so an older passed original retest is not hidden by later noisy/requested runs.
    - Preserved the governance boundary: `latest_fixed_weight` cannot substitute for `original_fixed_weight`, failed gates do not mutate package status, and the endpoint is read-only.
 
+12. Governance eligibility readonly smoke coverage
+   - Feature commit: `6265607 test(qe): add governance eligibility readonly smoke`
+   - Integration merge: `1b85473 merge(qe): governance eligibility readonly smoke`
+   - Extended `scripts/strategy_package_governance_readonly_smoke.py` to call and validate `GET /strategy-packages/{package_id}/governance-eligibility`.
+   - The smoke now checks package/detail manifest hash alignment plus `paper_ready`, `blockers`, `satisfied_gates`, and the nested gate objects for the new eligibility summary.
+   - Added contract coverage for both the successful eligibility payload and a malformed summary that must fail fast.
+
+13. Governance eligibility blocker regression coverage
+   - Feature commit: `97ec0e9 test(qe): cover governance eligibility blockers`
+   - Added explicit `paper_ready=false` regressions for missing protected asset ledger, missing runtime Paper candidate, fragile validation stability, and disallowed package status.
+   - This is test-only coverage; no StrategyPackage service/router/runtime behavior changed.
+   - Cross-tool D5/T8-A reply was sent to Claude Code via `drawer_cross-tool_codex-claude-coord_9cd6d6bb5c81161be688915e`.
+
 ## Latest Verified Gates
 
-The latest integration gates after governance eligibility summary merge:
+The latest integration gates after governance eligibility blocker regression coverage:
 
-- `python -m pytest backend\tests\strategy_package -q -p no:cacheprovider` - `98 passed`.
+- `python -m pytest backend\tests\strategy_package\test_governance_eligibility.py -q -p no:cacheprovider` - `6 passed`.
+- `python -m pytest backend\tests\strategy_package\test_governance_readonly_smoke.py backend\tests\strategy_package\test_governance_eligibility.py backend\tests\strategy_package\test_repository_service.py -q -p no:cacheprovider` - `30 passed`.
+- `python -m pytest backend\tests\strategy_package -q -p no:cacheprovider` - `103 passed`.
 - `python scripts\governance_migration_smoke.py` - `status=passed mode=static_dry_run`.
-- `python -m py_compile backend\services\strategy_package\service.py backend\services\strategy_package\repository.py backend\routers\strategy_packages.py backend\tests\strategy_package\test_repository_service.py backend\tests\strategy_package\test_governance_eligibility.py` - passed.
-- `python scripts\aistock_guardrail_scan.py --fail-on-severity P1 backend\services\strategy_package\service.py backend\services\strategy_package\repository.py backend\routers\strategy_packages.py backend\tests\strategy_package\test_repository_service.py backend\tests\strategy_package\test_governance_eligibility.py` - `blocking=0`; non-blocking P2 complexity notes remain in `repository.py`.
+- `python -m py_compile backend\tests\strategy_package\test_governance_eligibility.py` - passed.
+- `python scripts\aistock_guardrail_scan.py --fail-on-severity P1 backend\tests\strategy_package\test_governance_eligibility.py` - `findings=0 blocking=0`.
 - `git diff --check` - passed.
 
 Previous integration gates after production-readonly preflight merge:
@@ -167,6 +182,8 @@ Codex changes that can affect Paper-adjacent behavior:
 
 - `StrategyPackageService.enable_paper()` requires a passed original fixed-weight validation run and scans all original fixed-weight runs for the current manifest.
 - `GET /strategy-packages/{package_id}/governance-eligibility` exposes a read-only summary of Paper eligibility blockers and satisfied gates.
+- Governance eligibility tests now explicitly cover `paper_ready=false` blockers for missing protected assets, missing runtime candidates, fragile stability, and disallowed package status.
+- `scripts/strategy_package_governance_readonly_smoke.py` now validates the eligibility endpoint as part of the read-only governance smoke.
 - Runtime variants can be marked Paper candidates only after validation evidence passes.
 - Model registry bridge keeps `paper_selectable=false`; Paper should select StrategyPackages, not raw model catalog rows.
 
@@ -174,12 +191,13 @@ Codex changes that can affect Paper-adjacent behavior:
 
 - Dev DB transaction migration smoke not yet successful for the full governance migration stack; local attempt stopped before migration execution because no dev DB password/config was available.
 - Dev-port UI/API business smoke is partially blocked:
-  - Existing `8011` is not a successful governance-enabled backend for these checks.
-  - Current integration branch full backend startup is blocked by missing `backend.services.rl_execution` imported through `backend.main`.
-  - StrategyPackage governance live API smoke requires both a governance-enabled backend and reachable dev DB credentials.
+   - Existing `8011` is not a successful governance-enabled backend for these checks.
+   - Current integration branch full backend startup is still blocked because the branch does not include the `origin/fix/rl_execution_module_visibility-20260510` fix yet.
+   - StrategyPackage governance live API smoke requires both a governance-enabled backend and reachable dev DB credentials.
 - The temporary `backend/main.py` startup compatibility change was reverted in integration; handle this separately if real dev-port smoke is required.
+- Claude Code reported N1+N2 `rl_execution` module visibility fix on `origin/fix/rl_execution_module_visibility-20260510` (`da6673c`, `6275e9d`); merge/rebase into the governance line is still pending.
 - Integration branch contains governance APIs and migrations but is not production-deployed.
-- `main` worktree may contain an unrelated untracked doc from another tool: `F:\Dev\AIstock\docs\discussion\user_decisions_for_morning_review_20260510.md`; Codex did not touch it.
+- `main` worktree may contain unrelated untracked files from other tools; Codex did not touch them.
 - RD-Agent follow-up branch is pushed but not merged to RD-Agent main.
 
 ## Recommended Resume Steps
@@ -188,7 +206,7 @@ Codex changes that can affect Paper-adjacent behavior:
 2. Run:
    - `git status --short --branch`
    - `git log --oneline -12`
-3. Confirm integration branch is still clean and at or after `0dede08`.
+3. Confirm integration branch is still clean and at or after `97ec0e9`.
 4. Do not merge to `main`.
 5. If continuing governance, first run static governance migration smoke:
    - `python scripts\governance_migration_smoke.py`
@@ -207,7 +225,7 @@ Codex changes that can affect Paper-adjacent behavior:
    - `strategy_pkg_runtime_variant_20260509.sql`
    - `strategy_pkg_validation_run_20260509.sql`
    - `strategy_pkg_package_asset_20260509.sql`
-9. Before real dev-port smoke, resolve or explicitly accept the `backend.services.rl_execution` startup blocker in `backend.main` without violating guardrails.
+9. Before real dev-port smoke, merge or otherwise integrate `origin/fix/rl_execution_module_visibility-20260510` into the governance line without rewriting unrelated work.
 10. Then run dev-port smoke on a real governance-enabled dev backend/frontend, not production `8001`:
    - Validation Center: `scripts\validation_center_readonly_smoke.py`
    - StrategyPackage governance: `scripts\strategy_package_governance_readonly_smoke.py`
