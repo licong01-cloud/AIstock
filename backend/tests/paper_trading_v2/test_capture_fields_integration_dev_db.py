@@ -50,11 +50,23 @@ def test_run_simulation_writes_capture_cols(dev_db_conn) -> None:
     """Every fills/positions/daily_snapshots row of a recent paper_v2 run
     has non-NULL created_at / updated_at, and created_at <= updated_at.
 
+    REV-1 P2.2: in addition to the SQL-roll-up NOT-NULL/ordering checks,
+    sample-validate per-row Python types so a regression that writes
+    string timestamps or float-cast Decimals fails loud here:
+      * created_at / updated_at are ``datetime`` instances
+      * intended_price (where non-NULL) is a ``Decimal``
+      * fill_market_context (where non-NULL) is a ``dict`` with anchor
+        keys (stock_id, generated_at) and no v1-fictional keys
+        (bid/ask/best_volume/spread). Full key-set is verified by INT-3.
+
     Approach: read an existing dev DB run rather than spinning a service-
     layer mini simulation. The write contract is identical (PG repository
     writes use NOW() for both timestamps); reading the resulting rows
     exercises the same invariant the simulation would generate.
     """
+    import datetime as _dt
+    from decimal import Decimal
+
     run_id = find_recent_run_with_full_data(dev_db_conn)
     assert run_id is not None, (
         "dev DB has no paper_v2.run with fills + positions + snapshots; "
@@ -96,6 +108,69 @@ def test_run_simulation_writes_capture_cols(dev_db_conn) -> None:
             )
             assert future == 0, (
                 f"{table} run={run_id}: {future}/{total} rows have updated_at in the future"
+            )
+
+    # REV-1 P2.2: per-row Python type assertions on a sample of fill rows.
+    # psycopg2 default adapters return:
+    #   timestamp/timestamptz -> datetime.datetime
+    #   numeric               -> decimal.Decimal
+    #   jsonb                 -> dict (with json adapter registered)
+    # If a regression switches the write path to write strings or to coerce
+    # Decimal -> float, the type assertions catch it at row read time.
+    _ANCHOR_MARKET_CONTEXT_KEYS = {"stock_id", "generated_at"}
+    _FORBIDDEN_MARKET_CONTEXT_KEYS = {"bid", "ask", "best_volume", "spread"}
+
+    with dev_db_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT fill_id, created_at, updated_at, intended_price, fill_market_context
+            FROM paper_v2.fills
+            WHERE run_id = %s
+            LIMIT 50
+            """,
+            (run_id,),
+        )
+        sample_fills = cur.fetchall()
+
+    assert sample_fills, f"sample fills query returned 0 rows for run {run_id}"
+
+    for fill_id, created_at, updated_at, intended_price, ctx in sample_fills:
+        # Timestamp types.
+        assert isinstance(created_at, _dt.datetime), (
+            f"fill {fill_id}: created_at must be datetime, got {type(created_at)!r}"
+        )
+        assert isinstance(updated_at, _dt.datetime), (
+            f"fill {fill_id}: updated_at must be datetime, got {type(updated_at)!r}"
+        )
+        # Ordering preserved at row level (SQL roll-up already covers
+        # aggregate, but make sure psycopg2 didn't lose precision).
+        assert created_at <= updated_at, (
+            f"fill {fill_id}: created_at {created_at!r} > updated_at {updated_at!r}"
+        )
+
+        # Numeric type for intended_price (where present).
+        if intended_price is not None:
+            assert isinstance(intended_price, Decimal), (
+                f"fill {fill_id}: intended_price must be Decimal, "
+                f"got {type(intended_price)!r}={intended_price!r}"
+            )
+
+        # JSONB type + anchor-key check (full key-set in INT-3).
+        if ctx is not None:
+            assert isinstance(ctx, dict), (
+                f"fill {fill_id}: fill_market_context must deserialise as dict, "
+                f"got {type(ctx)!r}"
+            )
+            keys = set(ctx.keys())
+            missing_anchors = _ANCHOR_MARKET_CONTEXT_KEYS - keys
+            assert not missing_anchors, (
+                f"fill {fill_id}: fill_market_context missing anchor keys "
+                f"{missing_anchors}; got keys={sorted(keys)}"
+            )
+            forbidden_present = _FORBIDDEN_MARKET_CONTEXT_KEYS & keys
+            assert not forbidden_present, (
+                f"fill {fill_id}: fill_market_context contains v1-fictional keys "
+                f"{forbidden_present}"
             )
 
 

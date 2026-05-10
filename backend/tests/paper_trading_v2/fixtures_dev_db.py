@@ -109,6 +109,15 @@ def _dev_dsn() -> dict[str, Any]:
             f"refusing to connect: dbname={dbname!r} does not contain 'dev'; "
             f"host={host} port={port} user={user}"
         )
+    # REV-1 P2.1: runtime hard assertion on host. Must be loopback to prevent
+    # accidental remote/prod hits — even a stray TDX_DB_DEV_HOST=<prod-ip>
+    # combined with port=5433 + dev-named DB would still be wrong.
+    if host != "127.0.0.1":
+        raise DevDbTargetMisconfigured(
+            f"refusing to connect: dev DB host must be 127.0.0.1, got {host!r}; "
+            f"prevents accidental remote/prod hits "
+            f"(port={port} dbname={dbname} user={user})"
+        )
 
     return {
         "host": host,

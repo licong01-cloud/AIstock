@@ -6,8 +6,12 @@ sim uses) and verify:
 
   INT-5a paper.daemon.* events land in qe_archive.outbox_event with the
          canonical event-id shape and idempotency semantics.
-  INT-5b telemetry routing_class is set to 'telemetry' (xfail until T13
-         lands the column on dev DB).
+  INT-5b telemetry routing_class is set to 'telemetry' in payload (xfail
+         until T13 lands payload-based routing_class in daemon emit).
+
+REV-1 P1.2 note: dw-foundation T14a routing_class is **payload-based**, NOT
+a column on qe_archive.outbox_event. The schema has no routing_class column
+and will not get one — routing is driven by payload->>'routing_class'.
 
 Mirrors ``test_daemon_pg_outbox.py`` patterns but against the real
 ``qe_archive.outbox_event`` table on dev (port 5433) — no fake
@@ -204,50 +208,45 @@ def test_daemon_emits_paper_daemon_event(event_log) -> None:
 
 
 # ---------------------------------------------------------------------------
-# INT-5b — telemetry routing_class (xfail until T13 lands the column)
+# INT-5b — telemetry routing_class via payload (xfail T13 pending)
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.xfail(
+    reason="T13 pending: paper-v2 daemon emit 应在 payload 加 routing_class='telemetry'",
+    strict=False,
+)
 def test_daemon_routing_class_telemetry(dev_db_conn, event_log) -> None:
-    """paper.daemon.* events should be classified as telemetry routing.
+    """paper.daemon.* events should carry payload.routing_class='telemetry'.
 
-    T13 plans to add a ``routing_class`` column to qe_archive.outbox_event so
-    DW handlers can route telemetry vs business events. As of this commit
-    the column does not exist on dev DB, so we xfail with a precise reason.
-    Once the migration lands, this test will start running and assert the
-    paper.daemon.* rows have routing_class='telemetry'.
+    REV-1 P1.2: dw-foundation T14a routing_class is **payload-based**, NOT
+    a column. The qe_archive.outbox_event schema does NOT and will not get
+    a routing_class column — DW handlers route on payload->>'routing_class'.
+
+    T13 will add ``routing_class='telemetry'`` to the JSON payload that
+    paper-v2 daemon emit() writes for paper.daemon.* event types. Until
+    then this test xfails (strict=False, so once T13 lands and the payload
+    contains the key, the test will simply pass without flipping to xpass-
+    failed).
     """
-    with dev_db_conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT 1 FROM information_schema.columns
-            WHERE table_schema = 'qe_archive'
-              AND table_name = 'outbox_event'
-              AND column_name = 'routing_class'
-            """
-        )
-        has_routing_class = cur.fetchone() is not None
-
-    if not has_routing_class:
-        pytest.xfail(
-            "outbox_event has no routing_class column; T13 routing decision "
-            "not landed in dev schema yet"
-        )
-
-    # When the column is added the actual assertions kick in.
     event_log.record(DaemonEventType.RUN_STARTED, {})
+
     with dev_db_conn.cursor() as cur:
         cur.execute(
             """
-            SELECT routing_class FROM qe_archive.outbox_event
-            WHERE source_id = %s
+            SELECT payload->>'routing_class'
+            FROM qe_archive.outbox_event
+            WHERE event_type LIKE 'paper.daemon.%%'
+              AND source_id = %s
+            ORDER BY occurred_at DESC
+            LIMIT 1
             """,
             (event_log.run_id,),
         )
-        rows = cur.fetchall()
-    assert rows, "INT-5a fixture should have inserted at least one row"
-    for (routing_class,) in rows:
-        assert routing_class == "telemetry", (
-            f"expected routing_class='telemetry' for paper.daemon.* events, "
-            f"got {routing_class!r}"
-        )
+        row = cur.fetchone()
+
+    assert row is not None, "no paper.daemon.* event found for this run_id"
+    assert row[0] == "telemetry", (
+        f"expected payload.routing_class='telemetry' for paper.daemon.* events, "
+        f"got {row[0]!r}"
+    )

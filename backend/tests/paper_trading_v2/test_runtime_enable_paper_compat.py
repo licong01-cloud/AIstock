@@ -1,16 +1,28 @@
 """Phase 3 INT-6: enable_paper() fail-fast compat against the dev DB.
 
+测试范围: **pre-d1ca0ba** enable_paper narrow gate
+(manifest_identity + original_fixed_weight_retest), 对应 commit
+9cd4c9b (in-memory invariants) + 4528a32 (T8-C router 409).
+
+注意: codex/qe-governance-integration-20260509 上的 d1ca0ba 引入了
+governance hard gate (paper_ready=true 才能 enable). d1ca0ba 决定不
+merge 到 main 在 Phase 3 全绿前. 因此本测试 **不覆盖** d1ca0ba 路径.
+
+TODO INT-7: d1ca0ba 合 main 后启用
+``backend/tests/paper_trading_v2/test_runtime_enable_paper_strict_gate_compat.py``
+测试新路径 (paper_ready=false → StrategyPackageValidationError +
+governance_eligibility detail).
+
+REV-1 P1.1: Codex review noted INT-6 不测 d1ca0ba 路径; this docstring
+clarifies that gap and INT-7 placeholder reserves the slot.
+
+---
+
 These tests exercise StrategyPackageService.enable_paper end-to-end against
 the real PG repository (``aistock_dev``). They mirror the in-memory
 invariants in ``backend/tests/strategy_package/test_enable_paper_invariants.py``
 (commit 9cd4c9b) but with the actual database-backed transition_status path
 (repository.py line 188-237).
-
-Note on prompt drift: the prompt referenced commit ``d1ca0ba`` for a strict-
-gate strictening. That commit is NOT present on this branch
-(``claude/paper-v2-vnpy-mvp-20260508``). The current strict gate (validator
-+ state-machine compare-and-set) is what 9cd4c9b locks in, and these tests
-verify it survives a real PG round-trip.
 
 Boundary: every test inserts records tagged with ``package_id LIKE 'pkg_test_int6_%'``
 and DELETEs them on teardown. No existing dev-DB packages are mutated.
