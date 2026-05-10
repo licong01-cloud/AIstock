@@ -179,13 +179,13 @@ def _write_backtest_recorder_isolation(payload: dict) -> dict:
 
 
 def _relocate_payload_mlruns_to_source_model(cwd: Path) -> None:
-    """Move extracted source mlruns out of target mlruns before qlib.init."""
+    """Move source mlruns payload out of target mlruns before qlib.init."""
     if os.environ.get(SOURCE_PARAMS_ENV) or os.environ.get(SOURCE_MLRUNS_ENV):
         return
 
     extracted_mlruns = cwd / "mlruns"
     source_mlruns = cwd / "source_model" / "mlruns"
-    if _is_reparse_or_symlink(extracted_mlruns) or not _has_params_pkl(extracted_mlruns):
+    if not _has_params_pkl(extracted_mlruns):
         return
     if source_mlruns.exists():
         raise BacktestRecorderIsolationError(
@@ -226,13 +226,13 @@ def _prepare_backtest_recorder_isolation(
     cwd = Path.cwd().resolve()
     target_mlruns = cwd / "mlruns"
 
+    _relocate_payload_mlruns_to_source_model(cwd)
     if _is_reparse_or_symlink(target_mlruns):
         raise BacktestRecorderIsolationError(
             ERR_TARGET_MLRUNS_SYMLINK,
             f"target mlruns must be a loop-local directory, not a symlink/reparse point: {target_mlruns}",
         )
 
-    _relocate_payload_mlruns_to_source_model(cwd)
     source_params_dir = _find_backtest_source_params_dir(cwd)
     if source_params_dir is None:
         raise BacktestRecorderIsolationError(
