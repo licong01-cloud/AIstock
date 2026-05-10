@@ -1,0 +1,63 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-031",
+  "title": "paper_v2_daily_snapshot benchmark and regime columns left NULL - violates DW design ETL join",
+  "description": "Both _handle_daily_snapshot narrow event path and run.completed path INSERT paper_v2_daily_snapshot with benchmark_close + regime columns NULL. Design (data_warehouse_extension_design_20260510.md) specifies ETL must join market.regime_label + market.index_daily for benchmark_close. Current behavior leaves these as NULL, blocking downstream regime-aware analysis. Codex T14b/c fix round 2 review P2.3 (drawer de61c45a). Round 3 fix scheduled to add pre-fetch of benchmark_close from market.index_daily + regime from market.regime_label (source_method=simple_quadrant) at archive time. Graceful NULL retained when market.regime_label has no row for trade_date.",
+  "module": "qe_archive",
+  "severity": "P2",
+  "risk_area": "data_completeness",
+  "status": "in_progress",
+  "trigger_condition": {
+    "scenario": "daily_snapshot_archived",
+    "always_reproduces": true
+  },
+  "reproduce_command": "pytest backend/tests/qe_archive/test_paper_v2_archive_handler.py::test_daily_snapshot_joins_benchmark_and_regime -q",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "drawer:cross-tool/codex-claude-coord/de61c45a1c2dbc1de36758ae",
+    "doc:docs/architecture/data_warehouse_extension_design_20260510.md",
+    "branch:origin/claude/dw-foundation-20260510",
+    "commit:a77a7d8",
+    "file:backend/services/qe_archive/handlers/paper_v2_archive_handler.py"
+  ],
+  "fingerprint": "qe_archive::paper_v2_archive_handler::daily_snapshot_benchmark_regime_null",
+  "assigned_agent": "claude_code",
+  "fix_branch": "claude/dw-foundation-20260510",
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-11T00:00:00Z",
+  "first_seen_at": "2026-05-11T00:43:21Z",
+  "last_seen_at": "2026-05-11T00:43:21Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-11T01:30:00Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/qe_archive/handlers/paper_v2_archive_handler.py",
+    "backend/tests/qe_archive/test_paper_v2_archive_handler.py"
+  ],
+  "suspected_modules": [
+    "backend/services/qe_archive/handlers/paper_v2_archive_handler.py"
+  ],
+  "required_verification": [
+    "test_daily_snapshot_joins_benchmark_and_regime against dev DB Batch A market.index_daily real data + Batch C synthetic regime_label",
+    "Codex round-3 review pass"
+  ],
+  "closure_requirements": [
+    "T14b/c fix round 3 includes ETL join logic",
+    "regime_label cron enabled in production (BUG-034 dependency)"
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-11T00:43:21Z",
+      "actor": "codex_app",
+      "action": "discovered",
+      "note": "T14b/c fix round 2 review P2.3 - benchmark/regime NULL violates design"
+    },
+    {
+      "timestamp": "2026-05-11T01:00:00Z",
+      "actor": "claude_code_strategy",
+      "action": "dispatched",
+      "note": "T14b/c fix round 3 dispatched"
+    }
+  ]
+}

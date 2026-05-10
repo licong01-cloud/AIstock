@@ -1,0 +1,69 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-029",
+  "title": "FactorValueArchiveHandler ignores payload data_start/data_end - reads entire parquet",
+  "description": "FactorValueArchiveHandler reads the full parquet file for the factor and does not narrow by payload data_start/data_end bounds. design_note (docs/architecture/factor_value_data_bounds_design_note_20260510.md) flags this as an open gap. Acceptable for current event-driven trickle, BUG before high-volume worker enable: writes can fan-out to all historic dates each event causing write-bandwidth amplification. Codex T14b/c fix round 2 review P2.1 (drawer de61c45a). Round 3 fix scheduled to add data_start/data_end filter in pd.read_parquet path + new test_factor_value_data_bounds_filter.",
+  "module": "qe_archive",
+  "severity": "P2",
+  "risk_area": "performance",
+  "status": "in_progress",
+  "trigger_condition": {
+    "scenario": "factor_recompute_completed_with_bounds",
+    "preconditions": ["payload includes data_start and/or data_end", "parquet file contains rows outside this range"]
+  },
+  "reproduce_command": "pytest backend/tests/qe_archive/test_factor_value_archive_handler.py::test_data_bounds_filter -q",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "drawer:cross-tool/codex-claude-coord/de61c45a1c2dbc1de36758ae",
+    "doc:docs/architecture/factor_value_data_bounds_design_note_20260510.md",
+    "branch:origin/claude/dw-foundation-20260510",
+    "commit:a77a7d8",
+    "file:backend/services/qe_archive/handlers/factor_value_archive_handler.py"
+  ],
+  "fingerprint": "qe_archive::factor_value_archive_handler::data_bounds_ignored",
+  "assigned_agent": "claude_code",
+  "fix_branch": "claude/dw-foundation-20260510",
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-11T00:00:00Z",
+  "first_seen_at": "2026-05-11T00:43:21Z",
+  "last_seen_at": "2026-05-11T00:43:21Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-11T01:30:00Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/qe_archive/handlers/factor_value_archive_handler.py",
+    "backend/tests/qe_archive/test_factor_value_archive_handler.py"
+  ],
+  "suspected_modules": [
+    "backend/services/qe_archive/handlers/factor_value_archive_handler.py"
+  ],
+  "required_verification": [
+    "test_factor_value_data_bounds_filter (new)",
+    "Codex round-3 review pass"
+  ],
+  "closure_requirements": [
+    "T14b/c fix round 3 includes data_bounds filter",
+    "Worker enablement gate satisfied: cannot enable factor.recompute.completed worker in prod without this fix"
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-10T00:00:00Z",
+      "actor": "claude_code",
+      "action": "self_flagged",
+      "note": "factor_value_data_bounds_design_note_20260510.md self-flagged as design gap requiring follow-up"
+    },
+    {
+      "timestamp": "2026-05-11T00:43:21Z",
+      "actor": "codex_app",
+      "action": "discovered",
+      "note": "T14b/c round 2 review P2.1 - confirmed as worker-enable blocker"
+    },
+    {
+      "timestamp": "2026-05-11T01:00:00Z",
+      "actor": "claude_code_strategy",
+      "action": "dispatched",
+      "note": "T14b/c fix round 3 dispatched to include data_bounds filter"
+    }
+  ]
+}
