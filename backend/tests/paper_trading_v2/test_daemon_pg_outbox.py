@@ -114,7 +114,7 @@ def test_emit_writes_pg_outbox_when_available(tmp_path) -> None:
         assert params[6] == "pending"
 
     # Sanity: distinct canonical names captured in inserts
-    captured_types = {row[1][1] for row in enumerate(executions)}
+    captured_types = {params[1] for sql, params in executions}
     assert captured_types == set(PAPER_DAEMON_EVENT_TYPE_NAMES.values())
 
     # And SQLite rows are all marked synced (unsynced = 0).
