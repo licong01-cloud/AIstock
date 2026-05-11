@@ -189,8 +189,14 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Compose nightly summary
+        # Per Codex r4 P1.1 review (drawer d09a0a0): the summary MUST
+        # include the dr-validate result line. full-summary.needs already
+        # depends on dr-validate, but the markdown report previously
+        # omitted it -- a dr-validate failure would not surface in the
+        # checked-in nightly summary md.
         env:
           DR_RESULT: ${{ needs.dr-snapshot.result }}
+          DR_VALIDATE_RESULT: ${{ needs.dr-validate.result }}
           L3_RESULT: ${{ needs.nightly-l3.result }}
           LIVE_RESULT: ${{ needs.paper-v2-live.result }}
           RUN_ID: ${{ github.run_id }}
@@ -203,6 +209,7 @@ jobs:
           # Nightly run ${RUN_ID} ${DATE}
 
           - dr-snapshot: ${DR_RESULT}
+          - dr-validate: ${DR_VALIDATE_RESULT}
           - nightly-l3: ${L3_RESULT}
           - paper-v2-live: ${LIVE_RESULT}
 
@@ -227,9 +234,15 @@ jobs:
           # canonical MCP report_bug path. Filed by: nightly_runner agent.
           import json, os, subprocess, sys, tempfile
 
+          # Per Codex r4 P1.2 review (drawer d09a0a0): the inline Python
+          # payload MUST read DR_VALIDATE_RESULT from env and include it
+          # in the finding's title/actual fields. The env was already
+          # exported in r1 but the Python body never read it, so a
+          # dr-validate failure would silently miss the BUG payload.
           run_id = os.environ.get("GITHUB_RUN_ID", "0")
           run_url = os.environ["RUN_URL"]
           dr = os.environ.get("DR_RESULT", "?")
+          dr_validate = os.environ.get("DR_VALIDATE_RESULT", "?")
           l3 = os.environ.get("L3_RESULT", "?")
           live = os.environ.get("LIVE_RESULT", "?")
           findings = {
@@ -239,15 +252,25 @@ jobs:
               "commit_list": [os.environ.get("GITHUB_SHA", "unknown")],
               "findings": [
                   {
-                      "title": f"Nightly run {run_id} failed (dr={dr} l3={l3} live={live})",
+                      "title": (
+                          f"Nightly run {run_id} failed "
+                          f"(dr-snapshot={dr} dr-validate={dr_validate} "
+                          f"l3={l3} live={live})"
+                      ),
                       "severity": "P1",
                       "module": "validation.runner",
                       "files": [".github/workflows/nightly.yml"],
                       "reproduce_command": f"see {run_url}",
                       "expected": "all jobs succeed",
-                      "actual": f"dr-snapshot={dr}, nightly-l3={l3}, paper-v2-live={live}",
+                      "actual": (
+                          f"dr-snapshot={dr}, dr-validate={dr_validate}, "
+                          f"nightly-l3={l3}, paper-v2-live={live}"
+                      ),
                       "fix_owner": "human",
-                      "comments": [f"Auto-filed by nightly full-summary job. Run URL: {run_url}"],
+                      "comments": [
+                          f"Auto-filed by nightly full-summary job. "
+                          f"Run URL: {run_url}"
+                      ],
                   }
               ],
           }
