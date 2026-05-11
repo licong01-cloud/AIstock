@@ -602,6 +602,77 @@ Rollback for code sync:
 - If sync succeeded but runtime not restarted, production process may still be running old code; rollback can be a Git revert/sync back before restart.
 - If runtime restarted on new code, rollback includes both Git rollback and backend/daemon restart to reload old code.
 
+### 8.5 Paper V2 Cold-start Sanity Automation
+
+This section records the automated final gate required after section 9 runtime activation and before the final 9:30 go/no-go decision. It is placed here per the Task 6 dispatch, but operators must run it only after backend `8001`, the Paper/R6 daemon, DB migrations, code sync, governance evidence backfill, and protected asset ledger backfill have already passed.
+
+Default dry-run preview, safe during preparation:
+
+```powershell
+# Safe preview only: opens no DB connection, sends no backend HTTP request, and performs no writes.
+Set-Location '<R6_WORKTREE>'
+python scripts/paper_v2_coldstart_sanity.py `
+  --mode dry-run `
+  --json `
+  --output '<SECURE_EVIDENCE_DIR>/paper_v2_coldstart_sanity_dry_run.json'
+```
+
+Production invocation template, for the approved non-trading runtime sanity window only:
+
+```powershell
+# Template only. Do not run unless release commander, strategy author, runtime operator,
+# and user have explicitly authorized the production cold-start sanity gate.
+Set-Location '<PROD_REPO>'
+$env:AISTOCK_PAPER_V2_COLDSTART_SANITY_PROD_ENABLED = 'true'
+$env:AISTOCK_PAPER_V2_COLDSTART_SANITY_MUTEX_HELD = 'true'
+$env:AISTOCK_PROD_DB_PASSWORD = '<PROD_DB_PASSWORD>'
+
+python scripts/paper_v2_coldstart_sanity.py `
+  --mode prod `
+  --confirm-prod RUN_PAPER_V2_COLDSTART_SANITY_PROD `
+  --operator-confirmation 'RUN_PAPER_V2_COLDSTART_SANITY_PROD target=prod packages=<PACKAGE_IDS> approved_by=<RELEASE_COMMANDER>' `
+  --api-base '<PROD_API_BASE>' `
+  --daemon-process-name '<R6_DAEMON_PROCESS_NAME>' `
+  --package-id '<PACKAGE_ID_1>' `
+  --package-id '<PACKAGE_ID_2>' `
+  --package-id '<PACKAGE_ID_3>' `
+  --package-id '<PACKAGE_ID_4>' `
+  --target-db prod `
+  --db-host '<PROD_DB_HOST>' `
+  --db-port 5432 `
+  --db-name '<PROD_DB_NAME>' `
+  --db-user '<PROD_DB_USER>' `
+  --db-password-env AISTOCK_PROD_DB_PASSWORD `
+  --json `
+  --output '<SECURE_EVIDENCE_DIR>/paper_v2_coldstart_sanity_prod.json'
+```
+
+Expected JSON shape:
+
+```json
+{
+  "schema_version": "aistock_paper_v2_coldstart_sanity_v1",
+  "mode": "prod",
+  "run_id": "sanity-<timestamp>",
+  "sentinel_order": {"symbol": "000001.SZ", "side": "BUY", "quantity": 100, "intended_price": "10.00"},
+  "phases": [{"check": "backend_health", "status": "PASS"}],
+  "verdict": "GO",
+  "real_trading_ready": true
+}
+```
+
+Abort criteria:
+
+- Dry-run output is only a preview and never authorizes trading readiness.
+- `--mode prod` must fail closed unless the exact token, env flag, mutex env, non-trading-hours check, DB target checks, and typed operator confirmation all pass before any DB connection or HTTP mutation.
+- Any phase `FAIL`, any cleanup rollback, missing `fill_market_context`, missing `created_at`/`updated_at`, wrong `intended_price`, missing `routing_class='telemetry'` outbox, missing governance evidence, or missing required protected ledger audit row is a NO-GO.
+- If the script exits non-zero or emits `verdict="NO-GO"`, keep R6 disabled or rolled back per commander decision and do not improvise fixes near the market open.
+
+9:30 gate usage:
+
+- The production JSON artifact must be attached to the go/no-go evidence package before the 09:29 decision.
+- `verdict="GO"` is necessary but not sufficient; all earlier R6 runbook gates and strategy-author readiness must also be green.
+
 ## 9. Backend `8001` And Daemon Enable/Restart
 
 Do not restart backend `8001` or enable/restart daemons until DB migrations and code sync have passed and the release commander explicitly authorizes runtime activation.
