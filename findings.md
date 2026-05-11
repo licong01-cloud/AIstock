@@ -233,6 +233,14 @@
 - Existing artifacts remain immutable. A deterministic daily filename may be reused only if metadata exactly matches; otherwise generation refuses to overwrite.
 - UI E2E initially exposed a proxy timeout risk for long generation calls; using absolute dev API base on port 8012 avoids the Next dev proxy during validation.
 
+## HMM Regime Redefinition and QE Cleanup Findings (2026-05-10)
+- Current continuation document is `docs/analysis/hmm_regime_redefinition_qe_handoff_20260510.md`.
+- `qe_20260510_010004_8c2d` is complete and remains negative for HMM overlay promotion: the no-HMM control is still better than the tested old/new HMM overlays.
+- `qe_20260510_102726_4fd3` completed on `rdagent-node1` as the follow-up backtest-only regime-redefinition validation, with four loops and parallelism 4. The no-HMM control remained best; Loop2 was the best HMM but stayed below no-HMM.
+- Prior QE experiments still have research value as documented positive/negative evidence, but the raw local `rdagent_assets/qe_experiments` folders are not required once conclusions are captured in docs/DB and no current task references them.
+- Disk scan shows `rdagent_assets/qe_experiments` is not the main space consumer. Larger local consumers include `rdagent_assets/qe_sota_assets` (~56 GB), `rdagent_assets/factor_values` (~25 GB), `rdagent_assets/qe_workspace_st_pit_validation` (~12 GB), and `rdagent_assets/factor_values_realtime` (~10 GB).
+- Safe cleanup should distinguish conclusion records from raw artifacts: keep docs, DB records, current task assets, and `backend/data/hmm_models`; only delete completed and documented validation artifacts after an explicit keep/delete list.
+
 
 ## HMM Dynamic Coefficient Offline Experiment Findings (2026-04-29T01:11:15)
 - User requested six offline HMM directions with ~1-year qlib/script validation before QE.

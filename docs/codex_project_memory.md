@@ -945,3 +945,10 @@ Mandatory future rules:
 - Added a Paper v2 forced-exit target overlay so ST PIT/risk-policy forced exits replace same-symbol QE-style ghost/sell targets instead of appending duplicate target rows. Day-runner, readiness, and live-session paths now share this helper.
 - Paper v2 readiness now loads DB historical first-observed minute close for existing positions when `current_prices` are absent, matching the day-runner equity path before target/rebalance checks.
 - Validation record: `tests/aistock_validation/history/paper_v2_selection_center/20260506_l3_paper-v2-st-pit-risk-readiness-closure.md`. Passed: Paper v2 focused tests (`4 passed`), full Paper v2 suite (`69 passed`), Selection/StrategyPackage/Paper regression (`145 passed`), QE config/rebalance regression (`49 passed`), frontend `tsc`, frontend `npm run build`, and guardrail scans. No protected assets or production data were modified.
+
+## HMM Regime Redefinition Handoff - 2026-05-10
+
+- Current HMM continuation document: `docs/analysis/hmm_regime_redefinition_qe_handoff_20260510.md`; read it after this memory file when resuming HMM/QE work.
+- Completed comparison task `qe_20260510_010004_8c2d` showed no-HMM still best versus the tested old/new HMM overlays; do not promote a new HMM candidate from that round.
+- Completed task `qe_20260510_102726_4fd3` was a four-loop backtest-only HMM regime-redefinition validation on `rdagent-node1` with parallelism 4 and unchanged non-HMM settings from `qe_20260502_131502_9b54` Loop1. It again showed no-HMM as best: Loop1 annual return 38.18%, Sharpe/IR 1.690, max drawdown -15.50%; best HMM Loop2 annual return 37.75%, Sharpe/IR 1.653, max drawdown -17.21%.
+- Cleanup note: `rdagent_assets/qe_experiments` is not the local disk-space bottleneck; keep `backend/data/hmm_models` and current task assets, and only delete old completed QE artifacts after a keep/delete classification.

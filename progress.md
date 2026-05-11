@@ -373,3 +373,27 @@
 - Data validation: `shsz_st_pit_active_v1` ready/dirty=false, coverage 2018-08-01~2026-04-27; Jan 2025 service eligible index rows 88193 matched direct SQL join rows 88193.
 
 - Follow-up hardening: `FactorValuePipeline` now recreates an existing snapshot when its universe key/fingerprint/index policy is stale relative to the current ST PIT state. Re-ran py_compile and targeted pytest after the change.
+
+---
+
+## Session: 2026-05-10 HMM Regime Redefinition Handoff and QE Cleanup Review
+- **Status:** documented; no code/runtime changes.
+- Actions taken:
+  - Re-read `docs/codex_project_memory.md` and current HMM analysis docs.
+  - Verified `qe_20260510_010004_8c2d` is completed and still shows `no-HMM` as the best baseline versus the tested HMM overlays.
+  - Initially verified `qe_20260510_102726_4fd3` was running on `rdagent-node1` with four backtest-only loops and parallelism 4; later completion is recorded below.
+  - Scanned local QE/asset disk usage: `rdagent_assets/qe_experiments` is only about 0.02 GB, while the large local consumers are `rdagent_assets/qe_sota_assets`, `rdagent_assets/factor_values`, `rdagent_assets/qe_workspace_st_pit_validation`, and `rdagent_assets/factor_values_realtime`.
+  - Created current HMM continuation document `docs/analysis/hmm_regime_redefinition_qe_handoff_20260510.md`.
+- Cleanup conclusion:
+  - Old completed `rdagent_assets/qe_experiments/<experiment_id>` folders can be deleted after confirming their conclusions are documented and not referenced by current tasks, but deleting them will not recover meaningful space.
+  - Do not delete `backend/data/hmm_models`, current or still-referenced QE task workspaces, or large shared asset directories without a separate keep/delete classification.
+
+### HMM regime redefinition task completion check
+- **Timestamp:** 2026-05-10T12:xx+08:00
+- `qe_20260510_102726_4fd3` is now completed with 4/4 loops.
+- Result summary:
+  - Loop1 no-HMM: annual return 38.18%, Sharpe/IR 1.690, max drawdown -15.50%.
+  - Loop2 retrained regime-linear gentle: annual return 37.75%, Sharpe/IR 1.653, max drawdown -17.21%.
+  - Loop3 retrained top/bottom gentle: annual return 37.39%, Sharpe/IR 1.640, max drawdown -16.88%.
+  - Loop4 top/bottom stronger risk penalty: annual return 36.05%, Sharpe/IR 1.576, max drawdown -16.80%.
+- Conclusion: no-HMM is still best; Loop2 is the best HMM in this round but remains below the no-HMM control. Updated `docs/analysis/hmm_regime_redefinition_qe_handoff_20260510.md`.
