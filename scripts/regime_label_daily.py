@@ -124,11 +124,89 @@ def fetch_csi300_60d_volatility(conn, trade_date: dt.date) -> float | None:
 
 
 def fetch_percentile(conn, trade_date: dt.date, value: float, signal: str) -> float | None:
-    """Percentile rank of `value` against last 5 years of similar signals."""
-    # TODO: implement either via window query or in-memory ranking
-    raise NotImplementedError(
-        "percentile rank computation pending - simple_quadrant method requires history baseline"
-    )
+    """Percentile rank of `value` against last 5 years of similar signals.
+
+    Implementation choice: pull historical signal series into Python and use
+    a manual rank computation (count of values <= target / N).
+
+    Why this over a single SQL `PERCENT_RANK() OVER (...)` window query:
+    - The historical series for ret_6m / vol_60d is itself a derived rolling
+      computation (LAG / window over close), which would require nesting
+      window functions inside another window — supported by Postgres but
+      hard to reason about and brittle if `market.index_daily` schema shifts.
+    - Pulling ~1260 daily rows (5y * 252) per signal per call is cheap and
+      keeps the percentile contract obvious for the simple_quadrant method.
+    - We avoid scipy here to keep the regime job dependency-light; a manual
+      rank works for our monotone, no-NaN history.
+
+    Caller passes the already-computed `value` for `trade_date`; we compare
+    against the historical distribution of the same signal across the prior
+    5 years (excluding `trade_date` itself).
+
+    Returns None if fewer than 60 historical observations exist (guards
+    against early-history degeneracy).
+    """
+    history_start = trade_date - dt.timedelta(days=int(HISTORY_LOOKBACK_YEARS * 365.25))
+
+    if signal == "ret_6m":
+        sql = """
+            WITH base AS (
+                SELECT trade_date, close
+                FROM market.index_daily
+                WHERE index_code = %s
+                  AND trade_date <= %s
+                  AND trade_date >= %s - INTERVAL '180 days'
+            )
+            SELECT
+                today.trade_date,
+                today.close / lookback.close - 1.0 AS ret
+            FROM base AS today
+            JOIN LATERAL (
+                SELECT close
+                FROM base AS prior
+                WHERE prior.trade_date <= today.trade_date - INTERVAL '180 days'
+                ORDER BY prior.trade_date DESC
+                LIMIT 1
+            ) AS lookback ON TRUE
+            WHERE today.trade_date >= %s
+              AND today.trade_date < %s
+        """
+        params = (CSI300_INDEX_CODE, trade_date, history_start, history_start, trade_date)
+    elif signal == "vol_60d":
+        sql = """
+            WITH returns AS (
+                SELECT
+                    trade_date,
+                    close / LAG(close) OVER (ORDER BY trade_date) - 1.0 AS r
+                FROM market.index_daily
+                WHERE index_code = %s
+                  AND trade_date <= %s
+                  AND trade_date >= %s - INTERVAL '120 days'
+            )
+            SELECT
+                trade_date,
+                STDDEV_SAMP(r) OVER (
+                    ORDER BY trade_date
+                    ROWS BETWEEN 59 PRECEDING AND CURRENT ROW
+                ) * SQRT(252) AS vol
+            FROM returns
+            WHERE trade_date >= %s
+              AND trade_date < %s
+        """
+        params = (CSI300_INDEX_CODE, trade_date, history_start, history_start, trade_date)
+    else:
+        raise ValueError(f"unknown signal {signal!r}; expected 'ret_6m' or 'vol_60d'")
+
+    with conn.cursor() as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+
+    history = [float(r[1]) for r in rows if r[1] is not None]
+    if len(history) < 60:
+        return None
+
+    n_le = sum(1 for h in history if h <= value)
+    return round(n_le / len(history), 4)
 
 
 def classify_simple_quadrant(signal: RegimeSignal) -> tuple[str, float]:
@@ -224,7 +302,19 @@ def main() -> int:
     parser.add_argument("--start", type=str, help="backfill start YYYY-MM-DD")
     parser.add_argument("--end", type=str, help="backfill end YYYY-MM-DD")
     parser.add_argument("--dry-run", action="store_true", help="compute but do not write")
+    parser.add_argument(
+        "--dry-run-1m",
+        action="store_true",
+        help="shortcut: backfill last ~30 days ending --date (or today), no DB write",
+    )
     args = parser.parse_args()
+
+    if args.dry_run_1m:
+        end = dt.date.fromisoformat(args.date) if args.date else dt.date.today()
+        args.backfill = True
+        args.start = (end - dt.timedelta(days=30)).isoformat()
+        args.end = end.isoformat()
+        args.dry_run = True
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 

@@ -37,6 +37,59 @@ class ArchiveWorkerRunResult:
 ArchiveEventHandler = Callable[[ClaimedOutboxEvent], ArchiveWorkerEventResult]
 
 
+def archive_handler_adapter(handler: Any) -> ArchiveEventHandler:
+    """P1.1 (Codex round 2): adapt a contract.ArchiveHandler instance to the
+    worker's ArchiveEventHandler protocol.
+
+    Bridges:
+      - signature: handler.handle(event, archive_job) -> ArchiveResult
+        worker callable: (event) -> ArchiveWorkerEventResult
+      - exceptions: handler raises on unrecoverable failure (P1.2);
+        adapter catches and reports success=False with error string so the
+        worker fails the job per its existing retry/dead-letter policy.
+
+    Stub ArchiveJobRecord is constructed so handler.handle's signature is
+    satisfied; the real archive_job record is owned by QEArchiveWorker._process_event
+    and is not passed through the adapter (worker creates it before dispatching).
+    """
+    # Late import to avoid circular dependency between worker.py and handlers/.
+    from .handlers.contract import ArchiveResult, HandlerStatus
+
+    def _adapted(event: ClaimedOutboxEvent) -> ArchiveWorkerEventResult:
+        run_id = (event.payload or {}).get("run_id") or event.source_sub_id or event.source_id
+        stub_job = ArchiveJobRecord(
+            event_id=event.event_id,
+            job_type=event.event_type,
+            level="A",
+            stats={"adapter_stub": True},
+        )
+        try:
+            result: ArchiveResult = handler.handle(event, stub_job)
+        except Exception as exc:
+            return ArchiveWorkerEventResult(
+                success=False,
+                run_id=run_id,
+                stats={},
+                error=f"{type(exc).__name__}: {exc}",
+            )
+        success = result.status == HandlerStatus.SUCCESS or result.status == HandlerStatus.NOOP
+        # Treat NOOP as success-with-zero-rows: the event is correctly handled
+        # (deferred / replay-skipped) and should not retry-storm the worker.
+        return ArchiveWorkerEventResult(
+            success=success,
+            run_id=run_id,
+            stats={
+                "rows_inserted": result.rows_inserted,
+                "rows_upserted": result.rows_upserted,
+                "handler_status": result.status.value,
+                **dict(result.stats or {}),
+            },
+            error=result.error_message if not success else None,
+        )
+
+    return _adapted
+
+
 class QEArchiveWorker:
     """Process archive outbox events only when explicitly enabled.
 
