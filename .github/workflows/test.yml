@@ -102,16 +102,28 @@ jobs:
           cache: pip
 
       - name: Install backend deps via venv (no conda on hosted runners)
+        # IMPORTANT: do NOT pip install -r requirements.txt on Linux.
+        # requirements.txt is a Windows conda export (UTF-16, contains
+        # `file:///C:/...` pins like `anaconda-anon-usage @ file:///C:/...`)
+        # that cannot resolve on ubuntu-latest. Stage 4+5 r1 round 2 fix:
+        # enumerate the actual Linux-safe dependency set required to run
+        # the backend nox sessions in this matrix, then `pip check` to
+        # fail fast if anything is missing or conflicting.
         run: |
           python -m pip install --upgrade pip
-          # Install the AIstock CI baseline directly. requirements.txt (if
-          # present) gets layered on top so backend imports resolve.
           python -m pip install \
-            nox httpx pyyaml psycopg2-binary pytest pytest-cov mcp \
-            fastapi uvicorn pydantic python-dotenv
-          if [ -f requirements.txt ]; then
-            python -m pip install -r requirements.txt || echo "requirements.txt install failed; some tests may skip"
-          fi
+            nox \
+            fastapi 'uvicorn[standard]' pydantic 'pydantic-settings' python-dotenv \
+            httpx 'httpx-sse' \
+            sqlalchemy alembic psycopg2-binary 'asyncpg' \
+            pyyaml 'orjson' \
+            pytest 'pytest-cov' 'pytest-asyncio' 'pytest-mock' \
+            mcp 'mcp[cli]' \
+            pandas numpy scipy 'scikit-learn' pyarrow \
+            'python-dateutil' pytz \
+            'tenacity' 'cachetools' \
+            'aiosqlite'
+          python -m pip check
 
       - name: nox -s ${{ matrix.session }}
         env:
