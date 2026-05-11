@@ -27,6 +27,7 @@ from backend.services.event_signal.financial_distress_qe_overlay_research import
     _rank_date_for_context,
     build_context_score_down_penalty_by_date,
     build_variable_score_down_ranking,
+    normalize_penalty_pct,
 )
 
 MATERIALIZER_VERSION = "financial_distress_pred_materializer_v1_20260509"
@@ -34,6 +35,11 @@ MATERIALIZER_VERSION = "financial_distress_pred_materializer_v1_20260509"
 
 def _json_dumps(value: Any, *, indent: Optional[int] = None) -> str:
     return json.dumps(value, ensure_ascii=False, indent=indent, sort_keys=True, default=str)
+
+
+def _penalty_pct_label(value: float) -> str:
+    pct = normalize_penalty_pct(value) * 100.0
+    return f"{pct:g}".replace(".", "p") + "pct"
 
 
 def load_prediction_pickle(path: Path) -> pd.DataFrame:
@@ -168,6 +174,52 @@ def build_rank_date_penalties(
                     "industries": source_row.get("industries"),
                 }
             )
+    return rank_date_penalties, trace_rows
+
+
+def build_fixed_rank_date_penalties(
+    overlay: pd.DataFrame,
+    *,
+    trading_days: Sequence[dt.date],
+    rank_penalty_pct: float,
+    ranking_date_mode: str = DEFAULT_SCORE_DOWN_RANKING_DATE_MODE,
+) -> tuple[dict[dt.date, dict[str, float]], list[dict[str, Any]]]:
+    """Map fixed score-down penalties from trade dates to Qlib prediction dates."""
+
+    if ranking_date_mode not in {"current", "previous"}:
+        raise ValueError("ranking_date_mode must be current or previous")
+    pct_value = normalize_penalty_pct(rank_penalty_pct)
+    rank_date_penalties: dict[dt.date, dict[str, float]] = {}
+    trace_rows: list[dict[str, Any]] = []
+    for row in overlay.to_dict("records"):
+        if bool(row.get("can_buy", True)) and not bool(row.get("force_exit", False)):
+            continue
+        trade_date = _date_key(row["trade_date"])
+        rank_date = _rank_date_for_context(
+            trade_date=trade_date,
+            trading_days=trading_days,
+            ranking_date_mode=ranking_date_mode,
+        )
+        symbol = str(row["ts_code"])
+        rank_date_penalties.setdefault(rank_date, {})[symbol] = max(
+            pct_value,
+            rank_date_penalties.get(rank_date, {}).get(symbol, 0.0),
+        )
+        trace_rows.append(
+            {
+                "trade_date": trade_date.isoformat(),
+                "rank_date": rank_date.isoformat(),
+                "ts_code": symbol,
+                "rank_penalty_pct": pct_value,
+                "context_profile": None,
+                "ranking_date_mode": ranking_date_mode,
+                "source_signal_ids": row.get("source_signal_ids"),
+                "event_types": row.get("event_types"),
+                "active_signal_count": row.get("active_signal_count"),
+                "market_cap_buckets": row.get("market_cap_buckets"),
+                "industries": row.get("industries"),
+            }
+        )
     return rank_date_penalties, trace_rows
 
 
@@ -324,21 +376,33 @@ def materialize_from_files(
     meta_json: Path,
     report_md: Optional[Path] = None,
     context_profile_key: str = "rank_decay_balanced",
+    rank_penalty_pct: Optional[float] = None,
     top_k: int = DEFAULT_SCORE_DOWN_TOP_K,
     ranking_date_mode: str = DEFAULT_SCORE_DOWN_RANKING_DATE_MODE,
 ) -> dict[str, Any]:
     pred = load_prediction_pickle(prediction_pkl)
     overlay = load_overlay_csv(overlay_csv)
-    candidate_scores = candidate_scores_from_prediction(pred)
     trading_days = trading_days_from_prediction(pred)
-    rank_date_penalties, penalty_trace = build_rank_date_penalties(
-        overlay,
-        candidate_scores=candidate_scores,
-        trading_days=trading_days,
-        context_profile_key=context_profile_key,
-        top_k=top_k,
-        ranking_date_mode=ranking_date_mode,
-    )
+    if rank_penalty_pct is None:
+        candidate_scores = candidate_scores_from_prediction(pred)
+        materialization_mode = f"score_down_context_{context_profile_key}_top{top_k}_{ranking_date_mode}"
+        rank_date_penalties, penalty_trace = build_rank_date_penalties(
+            overlay,
+            candidate_scores=candidate_scores,
+            trading_days=trading_days,
+            context_profile_key=context_profile_key,
+            top_k=top_k,
+            ranking_date_mode=ranking_date_mode,
+        )
+    else:
+        pct_value = normalize_penalty_pct(rank_penalty_pct)
+        materialization_mode = f"score_down_rank_{_penalty_pct_label(pct_value)}_top{top_k}_{ranking_date_mode}"
+        rank_date_penalties, penalty_trace = build_fixed_rank_date_penalties(
+            overlay,
+            trading_days=trading_days,
+            rank_penalty_pct=pct_value,
+            ranking_date_mode=ranking_date_mode,
+        )
     adjusted, rank_trace, metrics = materialize_score_down_prediction(
         pred,
         rank_date_penalties=rank_date_penalties,
@@ -349,7 +413,9 @@ def materialize_from_files(
     payload = {
         "version": MATERIALIZER_VERSION,
         "params": {
+            "mode": materialization_mode,
             "context_profile_key": context_profile_key,
+            "rank_penalty_pct": normalize_penalty_pct(rank_penalty_pct) if rank_penalty_pct is not None else None,
             "top_k": top_k,
             "ranking_date_mode": ranking_date_mode,
         },
@@ -379,6 +445,12 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--meta-json", required=True)
     parser.add_argument("--report-md", default=None)
     parser.add_argument("--context-profile", default="rank_decay_balanced", choices=sorted(CONTEXT_SCORE_DOWN_PROFILES))
+    parser.add_argument(
+        "--rank-penalty-pct",
+        type=float,
+        default=None,
+        help="Use a fixed TopK-relative rank penalty instead of context-profile penalties. Accepts 0.15 or 15 for 15%%.",
+    )
     parser.add_argument("--top-k", type=int, default=DEFAULT_SCORE_DOWN_TOP_K)
     parser.add_argument("--ranking-date-mode", choices=["current", "previous"], default=DEFAULT_SCORE_DOWN_RANKING_DATE_MODE)
     return parser.parse_args(argv)
@@ -394,6 +466,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         meta_json=Path(args.meta_json),
         report_md=Path(args.report_md) if args.report_md else None,
         context_profile_key=args.context_profile,
+        rank_penalty_pct=args.rank_penalty_pct,
         top_k=args.top_k,
         ranking_date_mode=args.ranking_date_mode,
     )

@@ -4,6 +4,7 @@ import pickle
 import pandas as pd
 
 from backend.services.event_signal.financial_distress_pred_materializer import (
+    build_fixed_rank_date_penalties,
     build_rank_date_penalties,
     candidate_scores_from_prediction,
     load_prediction_pickle,
@@ -100,6 +101,24 @@ def test_build_rank_date_penalties_maps_trade_date_to_previous_prediction_date()
     assert penalty_trace[0]["rank_date"] == "2024-01-02"
 
 
+def test_build_fixed_rank_date_penalties_maps_blocked_rows_to_previous_prediction_date():
+    pred = _prediction_frame()
+    overlay = _overlay_frame()
+    trading_days = trading_days_from_prediction(pred)
+
+    rank_date_penalties, penalty_trace = build_fixed_rank_date_penalties(
+        overlay,
+        trading_days=trading_days,
+        rank_penalty_pct=15,
+        ranking_date_mode="previous",
+    )
+
+    assert rank_date_penalties == {dt.date(2024, 1, 2): {"BAD": 0.15}}
+    assert penalty_trace[0]["trade_date"] == "2024-01-03"
+    assert penalty_trace[0]["rank_date"] == "2024-01-02"
+    assert penalty_trace[0]["rank_penalty_pct"] == 0.15
+
+
 def test_materialize_from_files_writes_adjusted_prediction_and_audit_files(tmp_path):
     pred_path = tmp_path / "pred.pkl"
     overlay_path = tmp_path / "overlay.csv"
@@ -130,3 +149,30 @@ def test_materialize_from_files_writes_adjusted_prediction_and_audit_files(tmp_p
     assert report_path.exists()
     assert payload["metrics"]["penalized_symbol_count"] == 1
     assert float(adjusted.loc[(pd.Timestamp("2024-01-02"), "BAD"), "score"]) < 0.8
+
+
+def test_materialize_from_files_accepts_fixed_rank_penalty(tmp_path):
+    pred_path = tmp_path / "pred.pkl"
+    overlay_path = tmp_path / "overlay.csv"
+    output_path = tmp_path / "adjusted_pred.pkl"
+    trace_path = tmp_path / "trace.csv"
+    meta_path = tmp_path / "meta.json"
+    with pred_path.open("wb") as fh:
+        pickle.dump(_prediction_frame(), fh)
+    _overlay_frame().to_csv(overlay_path, index=False)
+
+    payload = materialize_from_files(
+        prediction_pkl=pred_path,
+        overlay_csv=overlay_path,
+        output_pkl=output_path,
+        trace_csv=trace_path,
+        meta_json=meta_path,
+        rank_penalty_pct=0.50,
+        top_k=3,
+        ranking_date_mode="previous",
+    )
+
+    adjusted = load_prediction_pickle(output_path)
+    assert payload["params"]["rank_penalty_pct"] == 0.50
+    assert payload["metrics"]["topk_drop_count"] == 1
+    assert float(adjusted.loc[(pd.Timestamp("2024-01-02"), "BAD"), "score"]) == 0.6

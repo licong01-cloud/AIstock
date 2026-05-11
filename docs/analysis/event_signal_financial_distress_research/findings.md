@@ -22,6 +22,7 @@
 | F014 | 22-loop parameter sweep favors 60td context-balanced score-down | Use as primary research candidate; keep fixed 10% only as baseline. |
 | F015 | Robustness gate rejects runtime and DB promotion for now | Median is zero and effect is replacement-sparse; design true QE rerun next. |
 | F016 | qrun --pred-backtest enables copied-loop true rerun | Use materialized pred.pkl for research-only PortAnaRecord validation. |
+| F017 | Cheap overlay can overstate true QE materiality | Require one-loop WSL true smoke before runtime or multi-loop true promotion. |
 +------+----------------------------------------------+--------------------------------------------------------------+
 ```
 
@@ -374,5 +375,18 @@ Preferred current candidate for future non-hard overlay research: `indicator_lar
 | q_ocf_to_sales < 0 >=10bn 90td 17.5% | TRUE_QE_CANDIDATE | same cheap score/effect as 15%, can be a sensitivity check                     |
 | q_ocf_to_sales < 0 >=10bn 90td 20%   | TRUE_QE_CANDIDATE | score 67.6, slightly worse tail -0.252%                                        |
 | WSL true QE                          | RUN_NEXT          | candidate now passes strict cheap gate; use one-loop full-universe smoke first |
++--------------------------------------+-------------------+--------------------------------------------------------------------------------+
+```
+
+## Phase 28 q_ocf WSL True QE Smoke Finding
+
+```text
++--------------------------------------+-------------------+--------------------------------------------------------------------------------+
+| candidate                            | decision          | evidence                                                                       |
++--------------------------------------+-------------------+--------------------------------------------------------------------------------+
+| q_ocf_to_sales < 0 >=10bn 90td 15%   | KEEP_RESEARCH     | true ann excess +0.0907pp, IR +0.00549, MDD relief near zero                  |
+| cheap-to-true translation            | NEED_DIAGNOSTIC   | strict cheap gate passed but one-loop true effect is modest                    |
+| runtime promotion                    | REJECT            | no buy ban, forced sell, score boost, DB policy, or Paper/QE integration       |
+| next empirical step                  | HOLDING_HIT_STUDY | compare rank-date penalties, actual holdings, top-k drops, and replacement PnL |
 +--------------------------------------+-------------------+--------------------------------------------------------------------------------+
 ```

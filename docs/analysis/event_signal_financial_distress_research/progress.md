@@ -596,3 +596,24 @@ Phase 24 evidence:
 | production backend 8001 | not touched                                                                                                                            |
 +-------------------------+----------------------------------------------------------------------------------------------------------------------------------------+
 ```
+
+## 2026-05-11 Phase 28 Completed
+
+```text
++-------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------+
+| item                    | value                                                                                                                                            |
++-------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------+
+| report                  | docs/analysis/event_signal_financial_distress_phase28_q_ocf_true_qe_smoke_result_20260511.md                                                     |
+| source loop             | qe_20260507_132049_d4e7 / Loop2                                                                                                                  |
+| rule/profile            | indicator_decline_q_ocf_to_sales_lt_0_mv_ge_10bn / fixed_15 / 90td / previous / TopK=50                                                          |
+| baseline recorder       | 7b57828280ad40b988e6574c9a083da6                                                                                                                 |
+| adjusted recorder       | 8afe567e2bec4dc88a1f3fe15768567b                                                                                                                 |
+| WSL result              | pass: 442/442 backtest steps and PortAnaRecord completed                                                                                         |
+| true ann excess delta   | +0.0009068854                                                                                                                                    |
+| true IR delta           | +0.0054904364                                                                                                                                    |
+| true MDD delta          | +0.0000115081                                                                                                                                    |
+| decision                | keep research-only; positive but below runtime/multi-loop promotion threshold                                                                     |
+| artifact root           | F:/Dev/AIstock_artifacts/event_signal_true_qe_rerun_20260511_q_ocf_qe20260507_loop2                                                              |
+| production backend 8001 | not touched                                                                                                                                      |
++-------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------+
+```

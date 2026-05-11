@@ -40,6 +40,10 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | 22    | loss-history tail-control sweep          | complete | phase22_tail_control_result_20260510                        |
 | 23    | benchmark true QE smoke                  | complete | benchmark_true_qe_smoke_result_20260510                     |
 | 24    | structured signal-family screen          | complete | phase24_signal_family_screen_result_20260510                |
+| 25    | top-family threshold refinement          | complete | phase25_threshold_refinement_result_20260511                |
+| 26    | fixed penalty/window parameter sweep     | complete | phase26_parameter_shape_sweep_result_20260511               |
+| 27    | q_ocf fine sweep                         | complete | phase27_q_ocf_fine_sweep_result_20260511                    |
+| 28    | q_ocf WSL true QE smoke                  | complete | phase28_q_ocf_true_qe_smoke_result_20260511                 |
 +-------+------------------------------------------+----------+-------------------------------------------------------------+
 ```
 
@@ -78,8 +82,12 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | 22    | loss-history tail-control parameter sweep       | complete   | tail improved but still not enough for WSL true-rerun        |
 | 23    | benchmark true-rerun smoke                      | complete   | clean small-cap benchmark true-QE effect is too weak         |
 | 24    | structured signal-family screen                 | complete   | best new family is watchlist, not true-QE candidate          |
-| 25    | top-family threshold refinement or WSL smoke     | pending    | refine OCF/leverage rule or run one-loop WSL true-QE smoke   |
-| 26    | LLM/PDF preprocessing design                    | deferred   | start only after structured signals stop improving           |
+| 25    | top-family threshold refinement or WSL smoke     | complete   | refined OCF/leverage and q_ocf rules                         |
+| 26    | fixed penalty/window parameter sweep             | complete   | q_ocf improved but remained below WSL gate                    |
+| 27    | q_ocf fine sweep                                 | complete   | q_ocf 90td fixed_15 passed cheap WSL gate                     |
+| 28    | q_ocf WSL true QE smoke                          | complete   | positive but not strong enough for runtime promotion          |
+| 29    | cheap-to-true mismatch diagnostics               | pending    | inspect actual rank/holding hits before more WSL reruns       |
+| 30    | LLM/PDF preprocessing design                     | deferred   | start only after structured signals stop improving            |
 +-------+----------------------------------------------+------------+--------------------------------------------------------------+
 ```
 
@@ -335,5 +343,17 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | indicator_decline_q_ocf_to_sales_lt_0_mv_ge_10bn | TRUE_QE_CANDIDATE | 90td / 15% rank penalty, score 68.4                           |
 | runtime integration                              | STILL_REJECT      | cheap overlay is not final PnL evidence                       |
 | next phase                                       | WSL_TRUE_QE_SMOKE | materialize pred and run one-loop full-universe pred-backtest |
++--------------------------------------------------+-------------------+---------------------------------------------------------------+
+```
+
+## Phase 28 q_ocf WSL True QE Smoke Finding
+
+```text
++--------------------------------------------------+-------------------+---------------------------------------------------------------+
+| candidate                                        | decision          | evidence                                                      |
++--------------------------------------------------+-------------------+---------------------------------------------------------------+
+| q_ocf_to_sales < 0 >=10bn 90td fixed_15          | KEEP_RESEARCH     | WSL true ann excess +0.000907, IR +0.00549                    |
+| runtime integration                              | REJECT            | drawdown relief near zero and only one-loop true evidence     |
+| next phase                                       | DIAGNOSE_MISMATCH | inspect cheap overlay vs true holdings/top-k drop translation |
 +--------------------------------------------------+-------------------+---------------------------------------------------------------+
 ```
