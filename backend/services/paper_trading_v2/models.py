@@ -11,9 +11,20 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from backend.services.paper_trading_v2.market_data import MinuteDataSource
+from backend.services.paper_trading_v2.market_data import (
+    ALLOWED_MARKET_SOURCES,
+    MinuteDataSource,
+    assert_broker_market_source_match,
+)
 from backend.services.strategy_package.models import StrategyPackageManifest
 from backend.services.trading_core.models import AccountSnapshot, Fill, Order, OrderEvent, PositionLot, RunStatus
+
+
+# Strategy Engine design 2026-05-08 §3.6.1 (R-Q9 D1): broker_backend Literal
+# kept in sync with ALLOWED_MARKET_SOURCES keys. minqmt_live is reserved for
+# future live admission (main design §11) and not creatable through Paper v2
+# portfolio APIs in this round.
+BrokerBackendId = Literal["local_sim", "minqmt_sim"]
 
 
 class PortfolioStatus(str, Enum):
@@ -37,6 +48,7 @@ class PaperPortfolio(BaseModel):
     initial_cash: float = Field(gt=0)
     start_date: date
     data_source: MinuteDataSource
+    broker_backend: BrokerBackendId = "local_sim"
     fee_policy: dict[str, Any] = Field(default_factory=dict)
     risk_policy: dict[str, Any] = Field(default_factory=dict)
     execution_policy: dict[str, Any] = Field(default_factory=dict)
@@ -52,6 +64,22 @@ class PaperPortfolio(BaseModel):
             raise ValueError("frozen_manifest manifest_sha256 must match portfolio manifest_sha256")
         return self
 
+    @model_validator(mode="after")
+    def _broker_backend_matches_data_source(self) -> "PaperPortfolio":
+        # Strategy Engine design §3.6.4 (R-Q9 D3): minute data source is
+        # strongly bound to broker backend. Reject cross-pairing fail-fast at
+        # the model layer so DB-level CHECK is never the only line of defense.
+        if self.broker_backend not in ALLOWED_MARKET_SOURCES:
+            raise ValueError(
+                f"unknown broker_backend {self.broker_backend!r}; "
+                f"allowed: {sorted(ALLOWED_MARKET_SOURCES.keys())}"
+            )
+        assert_broker_market_source_match(self.broker_backend, self.data_source)
+        return self
+
+
+ModelParamsOrigin = Literal["node", "cache", "unavailable"]
+
 
 class PaperRun(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -65,6 +93,18 @@ class PaperRun(BaseModel):
     started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     completed_at: datetime | None = None
     error: dict[str, Any] | None = None
+    # Provenance of the QE model params used for this run. Default 'node'
+    # is intentional — it covers (a) existing rows post-migration and
+    # (b) PaperRun construction sites that fire BEFORE the live inference
+    # workspace is materialized (e.g. day_runner / live_session) and
+    # subsequently UPDATE the field once inference resolves origin.
+    # Cache fallback ('cache') is only legitimate when the live inference
+    # call site explicitly opted in via allow_cache_fallback=True; see
+    # backend/services/strategy_package/live_inference.py.
+    # TODO: once update_run_model_params_origin is wired through every
+    # live inference call site, consider tightening this to require an
+    # explicit value at INSERT time (no model-level default).
+    model_params_origin: ModelParamsOrigin = "node"
 
 
 class ExecutionPolicyActivationStatus(str, Enum):

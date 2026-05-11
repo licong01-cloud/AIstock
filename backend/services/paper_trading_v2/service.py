@@ -24,8 +24,13 @@ from backend.services.strategy_package.backtest_contract import (
     validate_execution_policy_matches_manifest,
 )
 
-from .market_data import MinuteDataSource
+from .market_data import (
+    ALLOWED_MARKET_SOURCES,
+    MinuteDataSource,
+    assert_broker_market_source_match,
+)
 from .models import (
+    BrokerBackendId,
     ConfigChangeType,
     PaperConfigChangeAudit,
     PaperExecutionPolicyActivation,
@@ -40,6 +45,11 @@ from .models import (
     compute_runtime_config_sha256,
 )
 from .repository import PaperTradingV2Repository
+
+# Allowed broker_backend values at the Paper v2 portfolio creation API.
+# minqmt_live is intentionally excluded — live admission goes through main
+# design §11 flow, not the Paper v2 router.
+PAPER_V2_CREATABLE_BROKER_BACKENDS: frozenset[str] = frozenset({"local_sim", "minqmt_sim"})
 
 
 RUNTIME_PROFILE_INPUT_KEYS = {
@@ -104,6 +114,7 @@ class PaperTradingV2PortfolioService:
         initial_cash: float,
         start_date: date,
         data_source: MinuteDataSource,
+        broker_backend: BrokerBackendId = "local_sim",
         fee_policy: dict[str, Any] | None = None,
         risk_policy: dict[str, Any] | None = None,
         execution_policy: dict[str, Any] | None = None,
@@ -116,6 +127,23 @@ class PaperTradingV2PortfolioService:
                 "paper portfolio requires frozen strategy package manifest",
                 context={"package_id": package_id},
             )
+        # R-Q9 D1/D3: validate broker_backend up-front (typed error, fail-fast).
+        # Engine §3.6.4 strong binding is re-checked inside PaperPortfolio model
+        # validator; this layer additionally restricts to Paper-v2-creatable
+        # backends (minqmt_live is admission-flow only, see main design §11).
+        if broker_backend not in PAPER_V2_CREATABLE_BROKER_BACKENDS:
+            raise StrategyPackageValidationError(
+                "broker_backend not allowed for paper v2 portfolio creation",
+                context={
+                    "broker_backend": broker_backend,
+                    "allowed": sorted(PAPER_V2_CREATABLE_BROKER_BACKENDS),
+                },
+            )
+        assert_broker_market_source_match(broker_backend, data_source)
+        # OPEN-EXT-3 stub — broker_compatibility manifest field not yet
+        # implemented in Codex schema. Once available, this gate will block
+        # portfolios whose backend is incompatible with the package.
+        self._validate_broker_compatibility(manifest=manifest, broker_backend=broker_backend)
         validated_policy = self._resolve_validated_execution_policy(
             package_id=package_id,
             manifest_sha256=manifest.manifest_sha256,
@@ -131,6 +159,7 @@ class PaperTradingV2PortfolioService:
             initial_cash=initial_cash,
             start_date=start_date,
             data_source=data_source,
+            broker_backend=broker_backend,
             fee_policy=fee_policy or self._default_fee_policy(),
             risk_policy=risk_policy or manifest.risk_policy.model_dump(mode="json"),
             execution_policy=self._paper_execution_policy_payload(validated_policy),
@@ -140,6 +169,28 @@ class PaperTradingV2PortfolioService:
         if hasattr(self.package_repository, "mark_paper_portfolio_created"):
             self.package_repository.mark_paper_portfolio_created(package_id, saved.portfolio_id)
         return saved
+
+    @staticmethod
+    def _validate_broker_compatibility(*, manifest: Any, broker_backend: BrokerBackendId) -> None:
+        """Stub for OPEN-EXT-3 broker_compatibility manifest gate.
+
+        Strategy Engine design §3.6.5 (R-Q9 D4) defines a manifest field
+        ``broker_compatible`` Literal["LocalSim_only", "MiniQMTSim_only", "both"].
+        The schema upgrade is part of the Codex main design double-PR flow
+        (OPEN-EXT-3) and is NOT yet landed; treating absence as "both" today
+        would silently grant cross-broker compatibility. This stub is wired but
+        currently a no-op so the call site is in place for the follow-up PR.
+
+        Once OPEN-EXT-3 ships, replace the body with the real check:
+            spec = getattr(manifest, "broker_compatible", "LocalSim_only")
+            allowed = COMPATIBILITY_MATRIX[spec]
+            if broker_backend not in allowed:
+                raise BrokerCompatibilityMismatchError(...)
+        """
+
+        # OPEN-EXT-3 stub — intentionally a no-op. Do not silently approve in
+        # the future schema; replace with the typed check above when landed.
+        return None
 
     def list_portfolios(self, *, limit: int = 100) -> list[PaperPortfolio]:
         return self.repository.list_portfolios(limit=limit)

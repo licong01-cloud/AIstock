@@ -270,13 +270,19 @@ DDL: list[str] = [
         frozen_manifest_json JSONB NOT NULL,
         initial_cash NUMERIC(20, 6) NOT NULL CHECK (initial_cash > 0),
         start_date DATE NOT NULL,
-        data_source TEXT NOT NULL CHECK (data_source IN ('TDX_REALTIME', 'DB_HISTORICAL')),
+        data_source TEXT NOT NULL CHECK (data_source IN ('TDX_REALTIME', 'DB_HISTORICAL', 'MINIQMT_REALTIME')),
+        broker_backend VARCHAR(32) NOT NULL DEFAULT 'local_sim'
+            CHECK (broker_backend IN ('local_sim', 'minqmt_sim')),
         fee_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
         risk_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
         execution_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
         status TEXT NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT portfolio_broker_market_source_check CHECK (
+            (broker_backend = 'local_sim' AND data_source IN ('TDX_REALTIME', 'DB_HISTORICAL'))
+            OR (broker_backend = 'minqmt_sim' AND data_source = 'MINIQMT_REALTIME')
+        )
     )
     """,
     """
@@ -370,6 +376,8 @@ DDL: list[str] = [
         started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         completed_at TIMESTAMPTZ,
         error_json JSONB,
+        model_params_origin VARCHAR(16) NOT NULL DEFAULT 'node'
+            CHECK (model_params_origin IN ('node', 'cache', 'unavailable')),
         UNIQUE(portfolio_id, trade_date)
     )
     """,
@@ -505,7 +513,11 @@ DDL: list[str] = [
         trade_time TIMESTAMPTZ NOT NULL,
         bar_time TIMESTAMPTZ,
         reason TEXT NOT NULL,
-        metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        intended_price NUMERIC(18, 4),
+        fill_market_context JSONB
     )
     """,
     """
@@ -537,6 +549,8 @@ DDL: list[str] = [
         market_price DOUBLE PRECISION NOT NULL,
         market_value DOUBLE PRECISION NOT NULL,
         metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE(run_id, symbol)
     )
     """,
@@ -552,6 +566,8 @@ DDL: list[str] = [
         position_count INTEGER NOT NULL,
         snapshot_time TIMESTAMPTZ NOT NULL,
         metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE(portfolio_id, trade_date)
     )
     """,

@@ -12,6 +12,7 @@ import ast
 import asyncio
 import io
 import json
+import logging
 import math
 import os
 import re
@@ -19,11 +20,15 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path, PurePosixPath
 from threading import Thread
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Literal
+
+logger = logging.getLogger(__name__)
+
+ModelParamsOrigin = Literal["node", "cache", "unavailable"]
 
 import pandas as pd
 import psycopg2.extras
@@ -59,6 +64,10 @@ class QEExperimentRuntimeSource:
     qe_task_id: str | None = None
     qe_loop_id: str | None = None
     execution_node_id: str | None = None
+    # Provenance of the params.pkl materialized into asset_workspace_path.
+    # Set by _materialize_runtime_source_from_node based on whether the
+    # mlruns archive came from the QE node API or the local cache fallback.
+    model_params_origin: ModelParamsOrigin = "node"
 
 
 @dataclass(frozen=True)
@@ -96,12 +105,124 @@ class PreparedInferenceWorkspace:
     dynamic_factors: list[str]
     model_source_path: Path
     model_candidate_count: int
+    # Provenance of the params.pkl used for this workspace. 'node' = downloaded
+    # from the QE node API (the only origin allowed by default); 'cache' = local
+    # StrategyPackage cache fallback (requires explicit allow_cache_fallback=True
+    # at the materialization call site); 'unavailable' is reserved for failed
+    # runs written from upstream error handlers.
+    model_params_origin: ModelParamsOrigin = "node"
 
 
 @dataclass(frozen=True)
 class LiveInferenceResult:
     scores: list[dict[str, Any]]
     metadata: dict[str, Any]
+
+
+# ---------------------------------------------------------------------------
+# Live inference cold-start preflight (P0-F / Codex doc P0-4)
+# ---------------------------------------------------------------------------
+
+PREFLIGHT_STATUS_PASS = "PASS"
+PREFLIGHT_STATUS_BLOCKED = "BLOCKED"
+
+PREFLIGHT_CHECK_QE_SOURCE = "qe_source"
+PREFLIGHT_CHECK_QE_NODE = "qe_node"
+PREFLIGHT_CHECK_CONF_YAML = "conf_yaml"
+PREFLIGHT_CHECK_FACTOR_SOURCE = "factor_source"
+PREFLIGHT_CHECK_MODEL_PARAMS = "model_params"
+
+PREFLIGHT_CHECK_NAMES = (
+    PREFLIGHT_CHECK_QE_SOURCE,
+    PREFLIGHT_CHECK_QE_NODE,
+    PREFLIGHT_CHECK_CONF_YAML,
+    PREFLIGHT_CHECK_FACTOR_SOURCE,
+    PREFLIGHT_CHECK_MODEL_PARAMS,
+)
+
+
+@dataclass(frozen=True)
+class LiveInferencePreflightCheck:
+    """Per-check result for live inference cold-start preflight."""
+
+    name: str
+    status: str
+    message: str
+    suggestion: str | None = None
+    context: dict[str, Any] | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "status": self.status,
+            "message": self.message,
+            "suggestion": self.suggestion,
+            "context": dict(self.context or {}),
+        }
+
+
+@dataclass(frozen=True)
+class LiveInferencePreflightResult:
+    """Aggregate preflight outcome.
+
+    ``checks`` always contains exactly 5 entries (one per
+    ``PREFLIGHT_CHECK_NAMES``). The first BLOCKED entry stops further checks
+    so we never run expensive node downloads or factor reads after a known
+    failure (cold-start root-cause for the 30+ historical failures).
+    """
+
+    passed: bool
+    checks: list[LiveInferencePreflightCheck]
+
+    @property
+    def blocked_check(self) -> LiveInferencePreflightCheck | None:
+        for check in self.checks:
+            if check.status == PREFLIGHT_STATUS_BLOCKED:
+                return check
+        return None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "passed": self.passed,
+            "checks": [check.to_dict() for check in self.checks],
+        }
+
+
+class LiveInferencePreflightError(StrategyPackageValidationError):
+    """Live inference cold-start preflight failed.
+
+    Surfaced fail-fast before Selection Center commits to a heavy
+    ``generate_from_live_inference`` invocation. Replaces the historical
+    behaviour of letting the run timeout deep inside ``prepare_workspace``.
+    """
+
+    error_code = "LIVE_INFERENCE_PREFLIGHT_FAILED"
+
+
+def _remaining_skipped_checks(*, after: str) -> list[LiveInferencePreflightCheck]:
+    """Return SKIPPED entries for every check that follows ``after``.
+
+    ``after`` itself is NOT emitted (the caller is responsible for emitting
+    the BLOCKED entry that triggered the short-circuit). This keeps the
+    ``checks`` list always 5 items long for the UI.
+    """
+
+    try:
+        idx = PREFLIGHT_CHECK_NAMES.index(after)
+    except ValueError:
+        return []
+    skipped: list[LiveInferencePreflightCheck] = []
+    for name in PREFLIGHT_CHECK_NAMES[idx + 1 :]:
+        skipped.append(
+            LiveInferencePreflightCheck(
+                name=name,
+                status=PREFLIGHT_STATUS_BLOCKED,
+                message=f"check skipped because {after} failed",
+                suggestion=None,
+                context={"skipped_due_to": after},
+            )
+        )
+    return skipped
 
 
 def _parse_jsonish(value: Any) -> Any:
@@ -393,6 +514,305 @@ class QEExperimentRuntimeAssetResolver:
             },
         )
 
+    def preflight_for_strategy_package(
+        self,
+        *,
+        source_type: str,
+        source_id: str,
+        loop_id: str | None = None,
+        run_id: str | None = None,
+        runtime_config: dict[str, Any] | None = None,
+    ) -> LiveInferencePreflightResult:
+        """Cold-start preflight for live inference (P0-F / Codex doc P0-4).
+
+        Runs five fail-fast checks before any heavy downstream work:
+
+        1. ``qe_source``     - QE experiment row resolves
+        2. ``qe_node``       - execution_node_id resolves and is non-empty
+        3. ``conf_yaml``     - QE conf.yaml exists in the materialized
+                               asset workspace
+        4. ``factor_source`` - QE factors directory exists; declared factor
+                               files are present
+        5. ``model_params``  - QE model params.pkl is locatable (explicit
+                               override or via mlruns artifact glob)
+
+        Each check produces a structured ``LiveInferencePreflightCheck`` with
+        ``status`` (``PASS`` / ``BLOCKED``), an operator-facing ``message``
+        and ``suggestion``, plus a ``context`` payload for the UI. The first
+        BLOCKED check short-circuits further checks (downstream work would
+        always fail, and we want fast rejection — not 30-minute hangs as in
+        the cold-start incident history).
+
+        This method NEVER mutates assets (no DB writes, no fresh downloads
+        beyond what ``load_source_for_strategy_package`` already performs).
+        """
+
+        config = runtime_config or {}
+        artifact_config = config.get("selection_artifact_config")
+        if artifact_config is None:
+            artifact_config = config.get("selection_artifact") or {}
+        if artifact_config and not isinstance(artifact_config, dict):
+            return LiveInferencePreflightResult(
+                passed=False,
+                checks=[
+                    LiveInferencePreflightCheck(
+                        name=PREFLIGHT_CHECK_QE_SOURCE,
+                        status=PREFLIGHT_STATUS_BLOCKED,
+                        message="selection_artifact_config must be an object for live inference preflight",
+                        suggestion=(
+                            "ensure runtime_config.selection_artifact_config is a JSON object, "
+                            "not a string or list"
+                        ),
+                        context={"actual_type": type(artifact_config).__name__},
+                    ),
+                    *_remaining_skipped_checks(after=PREFLIGHT_CHECK_QE_SOURCE),
+                ],
+            )
+
+        checks: list[LiveInferencePreflightCheck] = []
+
+        # ---- Check 1: qe_source ----
+        try:
+            source = self.load_source_for_strategy_package(
+                source_type=source_type,
+                source_id=source_id,
+                loop_id=loop_id,
+                run_id=run_id,
+            )
+        except (DataUnavailableError, StrategyPackageValidationError) as exc:
+            checks.append(
+                LiveInferencePreflightCheck(
+                    name=PREFLIGHT_CHECK_QE_SOURCE,
+                    status=PREFLIGHT_STATUS_BLOCKED,
+                    message=exc.message,
+                    suggestion=(
+                        "verify the StrategyPackage source identity (source_type / source_id"
+                        " / loop_id) points to a completed QE experiment"
+                    ),
+                    context={
+                        "source_type": source_type,
+                        "source_id": source_id,
+                        "loop_id": loop_id,
+                        "run_id": run_id,
+                        **(exc.context or {}),
+                    },
+                )
+            )
+            checks.extend(_remaining_skipped_checks(after=PREFLIGHT_CHECK_QE_SOURCE))
+            return LiveInferencePreflightResult(passed=False, checks=checks)
+
+        checks.append(
+            LiveInferencePreflightCheck(
+                name=PREFLIGHT_CHECK_QE_SOURCE,
+                status=PREFLIGHT_STATUS_PASS,
+                message="QE experiment source resolved",
+                context={
+                    "experiment_id": source.experiment_id,
+                    "qe_task_id": source.qe_task_id,
+                    "qe_loop_id": source.qe_loop_id,
+                },
+            )
+        )
+
+        # ---- Check 2: qe_node ----
+        execution_node_id = (source.execution_node_id or "").strip()
+        if not execution_node_id:
+            checks.append(
+                LiveInferencePreflightCheck(
+                    name=PREFLIGHT_CHECK_QE_NODE,
+                    status=PREFLIGHT_STATUS_BLOCKED,
+                    message="QE execution_node_id is missing for live inference",
+                    suggestion=(
+                        "set execution_node_id in qe_experiments.custom_params.execution_node_id"
+                        " or ensure resolve_default_qe_node_id() returns a non-empty value"
+                    ),
+                    context={"experiment_id": source.experiment_id},
+                )
+            )
+            checks.extend(_remaining_skipped_checks(after=PREFLIGHT_CHECK_QE_NODE))
+            return LiveInferencePreflightResult(passed=False, checks=checks)
+
+        checks.append(
+            LiveInferencePreflightCheck(
+                name=PREFLIGHT_CHECK_QE_NODE,
+                status=PREFLIGHT_STATUS_PASS,
+                message="QE execution node resolved",
+                context={
+                    "execution_node_id": execution_node_id,
+                    "asset_workspace_path": str(source.asset_workspace_path),
+                },
+            )
+        )
+
+        # ---- Check 3: conf.yaml ----
+        try:
+            conf_path = self._resolve_conf_path(source)
+        except DataUnavailableError as exc:
+            checks.append(
+                LiveInferencePreflightCheck(
+                    name=PREFLIGHT_CHECK_CONF_YAML,
+                    status=PREFLIGHT_STATUS_BLOCKED,
+                    message=exc.message,
+                    suggestion=(
+                        "ensure the QE node downloaded conf.yaml into"
+                        " asset_workspace_path; rerun the QE workspace export if missing"
+                    ),
+                    context={"experiment_id": source.experiment_id, **(exc.context or {})},
+                )
+            )
+            checks.extend(_remaining_skipped_checks(after=PREFLIGHT_CHECK_CONF_YAML))
+            return LiveInferencePreflightResult(passed=False, checks=checks)
+
+        checks.append(
+            LiveInferencePreflightCheck(
+                name=PREFLIGHT_CHECK_CONF_YAML,
+                status=PREFLIGHT_STATUS_PASS,
+                message="QE conf.yaml is present",
+                context={"conf_path": str(conf_path)},
+            )
+        )
+
+        # ---- Check 4: factor_source ----
+        try:
+            factor_source_dir = self._resolve_factor_source_dir(source)
+        except DataUnavailableError as exc:
+            checks.append(
+                LiveInferencePreflightCheck(
+                    name=PREFLIGHT_CHECK_FACTOR_SOURCE,
+                    status=PREFLIGHT_STATUS_BLOCKED,
+                    message=exc.message,
+                    suggestion=(
+                        "verify the QE workspace export includes the factors/ directory;"
+                        " rerun export if needed"
+                    ),
+                    context={"experiment_id": source.experiment_id, **(exc.context or {})},
+                )
+            )
+            checks.extend(_remaining_skipped_checks(after=PREFLIGHT_CHECK_FACTOR_SOURCE))
+            return LiveInferencePreflightResult(passed=False, checks=checks)
+
+        # cheap declared-factor presence check: just look for any one declared
+        # factor file under the source dir. Full per-factor verification is
+        # done later inside prepare_workspace; here we only want fast rejection
+        # when factors/ exists but is empty / missing the expected factor set.
+        missing_factor_samples: list[str] = []
+        sample_factors = list(source.factor_names[:3])  # at most 3 samples
+        for factor_name in sample_factors:
+            candidate = factor_source_dir / f"{factor_name}.py"
+            if not candidate.exists() or not candidate.is_file():
+                missing_factor_samples.append(factor_name)
+        if missing_factor_samples and len(missing_factor_samples) == len(sample_factors):
+            checks.append(
+                LiveInferencePreflightCheck(
+                    name=PREFLIGHT_CHECK_FACTOR_SOURCE,
+                    status=PREFLIGHT_STATUS_BLOCKED,
+                    message="QE factor source files are missing for declared factors",
+                    suggestion=(
+                        "rerun the QE workspace export to refresh factors/, or check"
+                        " qe_experiments.factor_names matches the workspace contents"
+                    ),
+                    context={
+                        "experiment_id": source.experiment_id,
+                        "factor_source_dir": str(factor_source_dir),
+                        "missing_factor_samples": missing_factor_samples,
+                        "factor_names_count": len(source.factor_names),
+                    },
+                )
+            )
+            checks.extend(_remaining_skipped_checks(after=PREFLIGHT_CHECK_FACTOR_SOURCE))
+            return LiveInferencePreflightResult(passed=False, checks=checks)
+
+        checks.append(
+            LiveInferencePreflightCheck(
+                name=PREFLIGHT_CHECK_FACTOR_SOURCE,
+                status=PREFLIGHT_STATUS_PASS,
+                message="QE factor source directory and sampled factor files are present",
+                context={
+                    "factor_source_dir": str(factor_source_dir),
+                    "factor_names_count": len(source.factor_names),
+                    "sampled_factors": sample_factors,
+                },
+            )
+        )
+
+        # ---- Check 5: model_params ----
+        try:
+            model_params_path, candidate_count = self._resolve_model_params_path(
+                source, artifact_config
+            )
+        except DataUnavailableError as exc:
+            checks.append(
+                LiveInferencePreflightCheck(
+                    name=PREFLIGHT_CHECK_MODEL_PARAMS,
+                    status=PREFLIGHT_STATUS_BLOCKED,
+                    message=exc.message,
+                    suggestion=(
+                        "ensure mlruns/<run>/artifacts/params.pkl exists in the QE"
+                        " workspace, or pass an explicit selection_artifact_config.model_params_path"
+                    ),
+                    context={"experiment_id": source.experiment_id, **(exc.context or {})},
+                )
+            )
+            return LiveInferencePreflightResult(passed=False, checks=checks)
+
+        checks.append(
+            LiveInferencePreflightCheck(
+                name=PREFLIGHT_CHECK_MODEL_PARAMS,
+                status=PREFLIGHT_STATUS_PASS,
+                message="QE model params.pkl is locatable",
+                context={
+                    "model_params_path": str(model_params_path),
+                    "candidate_count": candidate_count,
+                },
+            )
+        )
+
+        return LiveInferencePreflightResult(passed=True, checks=checks)
+
+    def require_preflight_or_raise(
+        self,
+        *,
+        source_type: str,
+        source_id: str,
+        loop_id: str | None = None,
+        run_id: str | None = None,
+        runtime_config: dict[str, Any] | None = None,
+    ) -> LiveInferencePreflightResult:
+        """Run preflight and raise ``LiveInferencePreflightError`` on failure.
+
+        Selection Center calls this before any heavy ``generate_from_live_inference``
+        invocation so failures surface fast (not after 30+ minutes inside
+        ``prepare_workspace``). The raised error carries the full
+        ``LiveInferencePreflightResult`` payload in its context for UI surfacing.
+        """
+
+        result = self.preflight_for_strategy_package(
+            source_type=source_type,
+            source_id=source_id,
+            loop_id=loop_id,
+            run_id=run_id,
+            runtime_config=runtime_config,
+        )
+        if result.passed:
+            return result
+        blocked = result.blocked_check
+        message = (
+            blocked.message
+            if blocked is not None
+            else "live inference preflight failed without a specific blocked check"
+        )
+        raise LiveInferencePreflightError(
+            f"live inference cold-start preflight failed: {message}",
+            context={
+                "source_type": source_type,
+                "source_id": source_id,
+                "loop_id": loop_id,
+                "run_id": run_id,
+                "preflight": result.to_dict(),
+                "blocked_check": blocked.name if blocked is not None else None,
+            },
+        )
+
     def _load_experiment_row_by_id(self, experiment_id: str) -> dict[str, Any]:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -486,7 +906,12 @@ class QEExperimentRuntimeAssetResolver:
             or execution_trace.get("node_id")
             or resolve_default_qe_node_id()
         ).strip()
-        asset_workspace = self._materialize_runtime_source_from_node(
+        # allow_cache_fallback is intentionally False here. Live inference must
+        # surface the node fetch failure rather than silently substitute a
+        # cached params.pkl (feedback_no_silent_errors). Callers that need
+        # cache fallback must construct the source through a dedicated path
+        # that flips this flag and records origin='cache' downstream.
+        asset_workspace, model_params_origin = self._materialize_runtime_source_from_node(
             experiment_id=experiment_id,
             qe_task_id=qe_task_id,
             qe_loop_id=qe_loop_id,
@@ -494,6 +919,7 @@ class QEExperimentRuntimeAssetResolver:
             factor_names=[str(item) for item in factor_names],
             custom_params=custom_params,
             data_split=data_split,
+            allow_cache_fallback=False,
         )
         return QEExperimentRuntimeSource(
             experiment_id=experiment_id,
@@ -502,6 +928,7 @@ class QEExperimentRuntimeAssetResolver:
             factor_names=[str(item) for item in factor_names],
             custom_params=custom_params,
             data_split=data_split,
+            model_params_origin=model_params_origin,
             qe_task_id=qe_task_id,
             qe_loop_id=qe_loop_id,
             execution_node_id=execution_node_id,
@@ -609,6 +1036,7 @@ class QEExperimentRuntimeAssetResolver:
                         "factor_source_dir": str(factor_source_dir),
                         "model_source_path": str(model_source_path),
                         "model_candidate_count": model_candidate_count,
+                        "model_params_origin": source.model_params_origin,
                     },
                 },
                 ensure_ascii=False,
@@ -630,6 +1058,7 @@ class QEExperimentRuntimeAssetResolver:
             dynamic_factors=factor_order_resolution.dynamic_factors,
             model_source_path=model_source_path,
             model_candidate_count=model_candidate_count,
+            model_params_origin=source.model_params_origin,
         )
 
     def _materialize_runtime_source_from_node(
@@ -642,7 +1071,21 @@ class QEExperimentRuntimeAssetResolver:
         factor_names: list[str],
         custom_params: dict[str, Any],
         data_split: dict[str, Any],
-    ) -> Path:
+        allow_cache_fallback: bool = False,
+    ) -> tuple[Path, ModelParamsOrigin]:
+        """Materialize a QE runtime source workspace from the node API.
+
+        Returns the (source_dir, origin) tuple. ``origin`` is ``'node'`` when
+        ``download_mlruns_params`` succeeded; ``'cache'`` only when both
+        ``allow_cache_fallback=True`` AND the node fetch failed but a local
+        cache hit replaced the params.
+
+        Per feedback_no_silent_errors: a node fetch failure with
+        ``allow_cache_fallback=False`` (the default) propagates the original
+        exception. Callers that want to opt into cache fallback must pass
+        ``allow_cache_fallback=True`` and record the resulting origin.
+        """
+
         source_dir = (
             self.cache_root
             / "_qe_node_sources"
@@ -652,6 +1095,10 @@ class QEExperimentRuntimeAssetResolver:
             / _safe_cache_component(qe_loop_id)
         )
         self._reset_cache_dir(source_dir)
+
+        # Mutable origin holder threaded into the inner async closure so the
+        # return value reflects the actual provenance of params.pkl.
+        origin_holder: dict[str, ModelParamsOrigin] = {"origin": "node"}
 
         async def _download() -> Path:
             async with QEWorkspaceClient.for_node(execution_node_id) as client:
@@ -731,27 +1178,66 @@ class QEExperimentRuntimeAssetResolver:
                 params_tar: bytes | None = None
                 try:
                     params_tar = await client.download_mlruns_params(qe_task_id, qe_loop_id)
-                except Exception:
-                    if not self._copy_cached_mlruns_params(
+                except Exception as fetch_exc:
+                    if not allow_cache_fallback:
+                        # Per feedback_no_silent_errors: do NOT silently fall
+                        # back to a locally cached params.pkl. Reproducibility
+                        # requires the caller to opt in to cache fallback.
+                        raise
+                    cache_path = self._copy_cached_mlruns_params(
                         experiment_id=experiment_id,
                         source_dir=source_dir,
-                    ):
+                    )
+                    if cache_path is None:
                         raise
+                    logger.warning(
+                        "live_inference.mlruns_params_cache_fallback experiment_id=%s "
+                        "qe_task_id=%s qe_loop_id=%s cache_path=%s reason=%s",
+                        experiment_id,
+                        qe_task_id,
+                        qe_loop_id,
+                        str(cache_path),
+                        repr(fetch_exc),
+                    )
+                    origin_holder["origin"] = "cache"
                 if params_tar:
                     self._extract_mlruns_params_archive(params_tar, source_dir)
                 elif not list(source_dir.glob("**/artifacts/params.pkl")):
-                    if not self._copy_cached_mlruns_params(
+                    # Node returned an empty archive (or fetch was bypassed via
+                    # cache fallback above without producing a params.pkl). Cache
+                    # fallback here is only allowed when the caller opted in.
+                    if not allow_cache_fallback:
+                        raise DataUnavailableError(
+                            "QE node API returned an empty mlruns params archive and cache fallback is disabled",
+                            context={
+                                "experiment_id": experiment_id,
+                                "qe_task_id": qe_task_id,
+                                "qe_loop_id": qe_loop_id,
+                            },
+                        )
+                    cache_path = self._copy_cached_mlruns_params(
                         experiment_id=experiment_id,
                         source_dir=source_dir,
-                    ):
+                    )
+                    if cache_path is None:
                         raise DataUnavailableError(
                             "QE node API returned an empty mlruns params archive and no local StrategyPackage cache was available",
                             context={"experiment_id": experiment_id, "qe_task_id": qe_task_id, "qe_loop_id": qe_loop_id},
                         )
+                    logger.warning(
+                        "live_inference.mlruns_params_cache_fallback_empty_archive experiment_id=%s "
+                        "qe_task_id=%s qe_loop_id=%s cache_path=%s",
+                        experiment_id,
+                        qe_task_id,
+                        qe_loop_id,
+                        str(cache_path),
+                    )
+                    origin_holder["origin"] = "cache"
             return source_dir
 
         try:
-            return _run_async_blocking(_download)
+            resolved = _run_async_blocking(_download)
+            return resolved, origin_holder["origin"]
         except StrategyPackageValidationError:
             raise
         except DataUnavailableError:
@@ -827,8 +1313,17 @@ class QEExperimentRuntimeAssetResolver:
                 context={"dest_dir": str(dest_dir)},
             )
 
-    def _copy_cached_mlruns_params(self, *, experiment_id: str, source_dir: Path) -> bool:
-        """Reuse an AIstock-local StrategyPackage model cache when the node lacks mlruns params."""
+    def _copy_cached_mlruns_params(
+        self, *, experiment_id: str, source_dir: Path
+    ) -> Path | None:
+        """Reuse an AIstock-local StrategyPackage model cache when the node lacks mlruns params.
+
+        Returns the destination ``params.pkl`` Path on cache hit (so the caller
+        can record the cache path used), or ``None`` when no cache candidate
+        was found. The caller is responsible for deciding whether a cache hit
+        is acceptable (origin='cache') or whether the absence of a cache hit
+        should propagate the original node fetch error.
+        """
 
         cache_root = self.cache_root.resolve(strict=False)
         candidates: list[Path] = []
@@ -851,7 +1346,7 @@ class QEExperimentRuntimeAssetResolver:
                 candidates.append(params_path)
 
         if not candidates:
-            return False
+            return None
         candidates.sort(key=lambda item: (item.stat().st_mtime, str(item).lower()), reverse=True)
         dest = source_dir / "mlruns" / "cached_strategy_package" / "artifacts" / "params.pkl"
         resolved_dest = dest.resolve(strict=False)
@@ -863,7 +1358,7 @@ class QEExperimentRuntimeAssetResolver:
             )
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(candidates[0], dest)
-        return True
+        return dest
 
     def _resolve_conf_path(self, source: QEExperimentRuntimeSource) -> Path:
         candidates = [source.asset_workspace_path / "conf.yaml"]

@@ -18,6 +18,7 @@ from backend.services.strategy_package.service import StrategyPackageService
 from backend.services.strategy_package.validators import StrategyPackageValidator
 from backend.services.trading_core.errors import (
     DataUnavailableError,
+    InvalidStateTransitionError,
     StrategyPackageValidationError,
     TradingCoreError,
     UnsupportedFeatureError,
@@ -87,6 +88,12 @@ def _raise_http(exc: TradingCoreError) -> None:
         status_code = 404
     elif isinstance(exc, UnsupportedFeatureError):
         status_code = 422
+    elif isinstance(exc, InvalidStateTransitionError):
+        # State-machine violation -> 409 Conflict (T8-C / T7 audit §5).
+        # `exc.to_dict()` already surfaces context with `from_status`,
+        # `to_status`, and (PG path) `allowed_from`, so callers can distinguish
+        # state-race vs validation-failure without parsing the message.
+        status_code = 409
     raise HTTPException(status_code=status_code, detail=exc.to_dict()) from exc
 
 

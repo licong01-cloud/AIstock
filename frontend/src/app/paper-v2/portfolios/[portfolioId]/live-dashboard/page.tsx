@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import CopyChip from "@/components/paper-v2/CopyChip";
+import ErrorListCard from "@/components/paper-v2/ErrorListCard";
 import ErrorPanel from "@/components/paper-v2/ErrorPanel";
 import MetricCard from "@/components/paper-v2/MetricCard";
 import NoticePanel from "@/components/paper-v2/NoticePanel";
@@ -134,11 +136,11 @@ export default function PaperV2LiveDashboardPage() {
           <MetricCard label="订单/成交/未成交" value={`${formatNumber(minuteSummary.order_count, 0)} / ${formatNumber(minuteSummary.fill_count, 0)} / ${formatNumber(minuteSummary.no_fill_count, 0)}`} hint={`调度器 ${scheduler.running ? "运行中" : "未运行"}`} tone={errors.length ? "danger" : "info"} />
         </div>
         <div className="pv2-chip-row" style={{ marginTop: 14 }}>
-          <span className="pv2-chip">portfolio: {shortHash(portfolioId)}</span>
-          <span className="pv2-chip">package: {shortHash(dashboard?.portfolio?.package_id)}</span>
-          <span className="pv2-chip">manifest: {shortHash(dashboard?.portfolio?.manifest_sha256)}</span>
           <span className="pv2-chip">数据源: {dataSourceLabel(dashboard?.current_run?.data_source)}</span>
           <span className="pv2-chip">交易日: {dashboard?.current_run?.trade_date || "-"}</span>
+          <CopyChip label={`portfolio_id ${shortHash(portfolioId, 6)}`} value={portfolioId} title={`完整 portfolio_id：${portfolioId}`} />
+          <CopyChip label={`package_id ${shortHash(dashboard?.portfolio?.package_id, 6)}`} value={dashboard?.portfolio?.package_id} title={dashboard?.portfolio?.package_id ? `完整 package_id：${dashboard.portfolio.package_id}` : ""} />
+          <CopyChip label={`manifest ${shortHash(dashboard?.portfolio?.manifest_sha256, 6)}`} value={dashboard?.portfolio?.manifest_sha256} title={dashboard?.portfolio?.manifest_sha256 ? `完整 manifest_sha256：${dashboard.portfolio.manifest_sha256}` : ""} />
         </div>
       </SectionCard>
 
@@ -249,15 +251,7 @@ export default function PaperV2LiveDashboardPage() {
       </div>
 
       <SectionCard title="错误与数据质量" eyebrow="fail-fast 结果必须显式展示">
-        <PaperTable
-          rows={errors.slice(0, 20)}
-          empty="暂无持久化错误。"
-          columns={[
-            { key: "time", header: "时间", render: (row) => dt(row.created_at) },
-            { key: "code", header: "错误码", render: (row) => <StatusBadge status={String(row.error_code || "ERROR")} /> },
-            { key: "message", header: "说明", render: (row) => asText(row.message || row.error_message) },
-          ]}
-        />
+        <ErrorListCard rows={errors.slice(0, 20)} empty="暂无持久化错误。" />
       </SectionCard>
     </main>
   );

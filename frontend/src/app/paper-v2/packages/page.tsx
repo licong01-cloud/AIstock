@@ -9,9 +9,11 @@ import MetricCard from "@/components/paper-v2/MetricCard";
 import NoticePanel from "@/components/paper-v2/NoticePanel";
 import PaperTable from "@/components/paper-v2/PaperTable";
 import SectionCard from "@/components/paper-v2/SectionCard";
+import CopyChip from "@/components/paper-v2/CopyChip";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
+import WorkflowStepper from "@/components/paper-v2/WorkflowStepper";
 import { strategyPackageApi } from "@/lib/paper-v2/api";
-import { formatPercent, shortHash } from "@/lib/paper-v2/format";
+import { formatPercent, packageDisplayLabel, paperV2WorkflowSteps, shortHash } from "@/lib/paper-v2/format";
 import type { ExecutionPolicy, JsonObject, QEPackagingSource, StrategyPackage } from "@/lib/paper-v2/types";
 
 function metricText(source: QEPackagingSource): string {
@@ -48,7 +50,7 @@ function selectionCapability(status: string): { ok: boolean; title: string; deta
   if (status === "BACKTEST_APPROVED") {
     return { ok: true, title: "可以选股", detail: "回测已批准；建议先点击“标记可用于选股”留下状态事件。" };
   }
-  return { ok: false, title: "不可选股", detail: "需要至少达到 BACKTEST_APPROVED 状态。" };
+  return { ok: false, title: "不可选股", detail: "需要至少达到“回测已批准”状态。" };
 }
 
 function paperCapability(
@@ -70,7 +72,7 @@ function paperCapability(
   if (PAPER_MARKABLE_STATUSES.has(status)) {
     return { ok: false, title: "未完成模拟盘准入", detail: "先点击“标记可用于模拟盘”，再创建具体模拟组合。" };
   }
-  return { ok: false, title: "不可新建模拟盘", detail: "需要至少达到 BACKTEST_APPROVED，并完成模拟盘准入。" };
+  return { ok: false, title: "不可新建模拟盘", detail: "需要至少达到“回测已批准”状态，并完成模拟盘准入。" };
 }
 
 export default function PaperV2PackagesPage() {
@@ -207,8 +209,18 @@ export default function PaperV2PackagesPage() {
   const selectionState = selectionCapability(selectedStatus);
   const paperState = paperCapability(selectedStatus, paperReadyPolicies.length, policies.length);
 
+  const workflowSteps = paperV2WorkflowSteps({
+    hasPackages: packages.length > 0,
+    hasSelectionEnabledPackage: packages.some((item) => ["SELECTION_ENABLED", "PAPER_ENABLED", "PAPER_RUNNING", "PAPER_PASSED"].includes(item.package_status)),
+    hasPaperEnabledPackage: packages.some((item) => ["PAPER_ENABLED", "PAPER_RUNNING", "PAPER_PASSED"].includes(item.package_status)),
+    hasSelectionRun: false,
+    hasPortfolio: false,
+    hasReadyRun: false,
+  }, packages.length === 0 ? "packages" : "enable");
+
   return (
     <main>
+      <WorkflowStepper steps={workflowSteps} compact />
       <ErrorPanel error={error} title="策略包操作失败" />
       <SectionCard title="从 QE 创建策略包" eyebrow="只显示未打包来源" action={<button className="pv2-button" onClick={load} disabled={loading} type="button">刷新来源</button>}>
         <div className="pv2-form-grid">
@@ -319,10 +331,12 @@ export default function PaperV2PackagesPage() {
               <MetricCard label="最大回撤" value={formatPercent(metrics.max_drawdown)} />
             </div>
             <div className="pv2-chip-row" style={{ marginTop: 14 }}>
-              <span className="pv2-chip">package_id: {shortHash(selected.package_id)}</span>
-              <span className="pv2-chip">manifest: {shortHash(selected.manifest_sha256)}</span>
+              <span className="pv2-chip">{packageDisplayLabel(selected)}</span>
+              {selected.created_at ? <span className="pv2-chip">创建于 {String(selected.created_at).slice(0, 10)}</span> : null}
               <span className="pv2-chip">模拟组合数: {selected.paper_portfolio_count || 0}</span>
               <span className="pv2-chip">执行策略: {policies.length} 个 / 可模拟盘 {paperReadyPolicies.length} 个</span>
+              <CopyChip label={`package_id ${shortHash(selected.package_id, 6)}`} value={selected.package_id} title={`完整 package_id：${selected.package_id}`} />
+              <CopyChip label={`manifest ${shortHash(selected.manifest_sha256, 6)}`} value={selected.manifest_sha256} title={`完整 manifest_sha256：${selected.manifest_sha256}`} />
             </div>
             <h3>模型状态</h3>
             {modelState ? <JsonPanel value={modelState} /> : <div className="pv2-muted">尚未获取模型状态。</div>}

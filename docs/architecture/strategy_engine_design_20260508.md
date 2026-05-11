@@ -388,13 +388,51 @@ class BrokerBackend(Protocol):
         BrokerConnectivityError) and propagated to adapter. NO silent
         fallback (feedback_no_silent_errors). Adapter MUST NOT catch and
         retry blindly; failed submit propagates up to trading_core errors.
+
+        Sync vs async semantics (Lead 2026-05-09 R-Q9.5 D4):
+          - LocalSim implementation: SYNCHRONOUS BLOCKING. submit returns
+            only after matching is fully resolved against the in-process
+            ledger. fill_callback (if subscribed) fires BEFORE submit
+            returns. The returned OrderHandle.status (queryable via
+            query_status) is already in a terminal state (FILLED /
+            PARTIALLY_FILLED / REJECTED). No PENDING window observable.
+          - MiniQMTSim implementation: TRUE ASYNC, callback-driven. submit
+            returns immediately with OrderHandle.status = PENDING. Fill /
+            cancel / rejection events arrive later via fill_callback (or
+            query_status polling). Adapter MUST NOT block waiting for fill.
+          - Engine layer is unaware of the difference: it only consumes
+            OrderHandle.status + on_fill_callback events. Both backends
+            satisfy the same Protocol; downstream code paths are identical.
         """
 
     def cancel(self, handle: OrderHandle) -> CancelAck: ...
     def query_status(self, handle: OrderHandle) -> OrderStatus: ...
     def subscribe_fill_callback(self, cb: Callable[[FillEvent], None]) -> SubscriptionHandle: ...
-    def query_account(self) -> AccountSnapshot: ...
-    def query_positions(self) -> dict[str, PositionLot]: ...
+    def unsubscribe_fill_callback(self, handle: SubscriptionHandle) -> None:
+        """Reverse of subscribe_fill_callback (Lead 2026-05-09 R-Q9.6).
+
+        MUST be called by the adapter on EngineSession.close() / portfolio
+        deactivation to release the registered callback. Failing to call
+        unsubscribe causes callback leakage across portfolio lifecycles —
+        in long-running processes this manifests as duplicate fill events
+        delivered to stale Engine sessions.
+
+        Idempotency: calling with an unknown / already-released handle MUST
+        be a no-op (do not raise). Calling during backend shutdown MUST
+        also be a no-op. Errors during actual unsubscribe (e.g. backend
+        connectivity drop mid-call) propagate as BrokerConnectivityError.
+        """
+
+    def query_account(self) -> BrokerAccountSnapshot: ...
+    def query_positions(self) -> dict[str, PositionLot]:
+        """Returns positions held by this BrokerBackend instance.
+
+        Type note (Lead 2026-05-09 R-Q9.5 D2): reuses
+        `backend.services.trading_core.models.PositionLot` directly — NO
+        BrokerPositionLot wrapper. LocalSim positions ARE portfolio
+        positions; broker_backend context is carried by the
+        LocalSimBackend(portfolio_id=...) instance, not by the lot type.
+        """
 
     # ----- Channel + capacity introspection -----
     def market_data_channel(self) -> MarketDataChannel:
@@ -433,7 +471,17 @@ class FillEvent(BaseModel):
     venue: str                                # "local_sim" / "minqmt_sim" / ...
 
 
-class AccountSnapshot(BaseModel):
+class BrokerAccountSnapshot(BaseModel):
+    """Broker-level account snapshot (Lead 2026-05-09 R-Q9.5 D1).
+
+    NAMING: Distinct from `backend.services.trading_core.models.AccountSnapshot`
+    (portfolio-dimension snapshot consumed by runner / day_runner /
+    live_session). This BrokerAccountSnapshot lives in the broker layer and
+    represents the balance/cash directly reported by the BrokerBackend
+    (e.g. xtquant query_stock_asset for MiniQMTSim, internal ledger for
+    LocalSim). Adapters may project this onto the portfolio-level
+    AccountSnapshot when needed.
+    """
     backend_id: str
     cash: Decimal
     nav: Decimal
@@ -445,6 +493,32 @@ class CancelAck(BaseModel):
     handle_id: str
     accepted: bool
     reason: str | None
+
+
+class SubscriptionHandle(BaseModel):
+    """Handle for a fill_callback subscription (Lead 2026-05-09 R-Q9.5 D3).
+
+    Pure descriptor / audit type — no business logic. Returned by
+    subscribe_fill_callback so the caller can later unsubscribe (if
+    BrokerBackend implementations expose unsubscribe; not part of the
+    Protocol contract for MVP).
+    """
+    subscription_id: str
+    backend_id: str
+
+
+class MarketDataChannel(BaseModel):
+    """Descriptor for the market-data channel bound to a BrokerBackend
+    (Lead 2026-05-09 R-Q9.5 D3).
+
+    Pure descriptor / audit type — no business logic. Returned by
+    BrokerBackend.market_data_channel() so adapter / Engine can record
+    the actual channel kind in DecisionTrace + reject incompatible
+    portfolios at init() (R-Q9 D3 enforcement; see §3.6.4).
+    """
+    backend_id: str
+    source: MinuteDataSource                  # TDX_REALTIME / DB_HISTORICAL / MINIQMT_REALTIME
+    channel_kind: Literal["in_process_tdx", "in_process_db", "minqmt_xtdata"]
 
 
 
@@ -468,6 +542,7 @@ Engine 输出的 `OrderIntent` schema **不变**；adapter 在 `submit()` 中翻
 | **历史回放** | ✅ 支持（`MinuteDataSource.DB_HISTORICAL` + CATCHUP_THEN_LIVE） | ❌ 不支持（miniQMT 仿真账户只接受实时单） |
 | **资金上限** | 配置决定（无外部约束） | miniQMT 仿真账户配置决定；超额抛 `BrokerRejectedError` |
 | **启动成本** | 低（in-process，进程启动即可） | 高（依赖 miniQMT 仿真服务进程在运行 + xtquant 已 attach） |
+| **submit 语义**（R-Q9.5 D4） | **同步阻塞** — `submit_order_intent` 返回前撮合已对内部 ledger 完成；`fill_callback` 在 return 之前触发；`OrderHandle.status` 返回时已是终态（FILLED / PARTIALLY_FILLED / REJECTED），无 PENDING 窗口可观察 | **真异步 callback driven** — `submit_order_intent` 立即返回 `OrderHandle.status=PENDING`；fill / cancel / rejection 事件后续通过 `fill_callback`（或 `query_status` 轮询）抵达；adapter 不得阻塞等待 fill |
 | **Engine 端差异** | 无（Engine 输出同一 OrderIntent） | 无（Engine 输出同一 OrderIntent） |
 | **Adapter 翻译层** | LocalSim adapter（沿用现 paper_trading_v2 day_runner 撮合分支） | MiniQMTSim adapter（task #3 vn.py PoC 已验证 — 详见下文"对接现有代码"列） |
 | **PortfolioState 来源** | adapter 内存 ledger 镜像 | xtquant `query_stock_positions` 实时拉取 |
@@ -1142,6 +1217,10 @@ class BrokerConnectivityError(StrategyEngineError):
 | **R-Q6** | RuntimeOverlay allow-list 来源 | **派生**：allow-list 派生自 Codex `package_runtime_variant` schema（source of truth），Engine 不硬编码字段。实施依赖 Codex Phase 6 合入集成分支。 | §3.2 / §13 |
 | **R-Q9** | BrokerBackend 抽象 + 两种 SimMode 二分（来源：`paper_v2_blockers_20260508.md` P0-H） | **4 项决策全采纳**（A/A/A/是，用户授权 2026-05-08）：D1 引入 `BrokerBackend` 抽象（`submit_order_intent` / `cancel` / `query_status` / `subscribe_fill_callback` / `query_account` / `query_positions`），落地 `LocalSimBroker` 与 `MiniQMTSimBroker` 两个 backend；D2 LocalSim 每 portfolio 独立 BrokerBackend 实例支持多包并行，MiniQMTSim 进程内单例（违反抛 `MiniQMTSingletonViolation`）；D3 行情通道**强绑定**撮合端 — `MinuteDataSource` 枚举新增 `MINIQMT_REALTIME`，跨配抛 `BrokerMarketSourceMismatchError` fail-fast；D4 StrategyPackage v2 manifest 加 `broker_compatible: Literal["LocalSim_only", "MiniQMTSim_only", "both"]` 字段（默认 `"both"`，LEGACY 默认 `"LocalSim_only"`），schema additive 走双 PR 模式协调 Codex（OPEN-EXT-3）。`broker_compatible` 与 audit §8.1 配置冻结边界**正交**——属能力声明类（必冻结）而非运行时配置。 | §3.6.1-3.6.7 / §10.1 / §11 / §13 |
 
+| **R-Q9.5** | §3.6.1 schema 细化（来源：impl-paper-v2 启动 task #20 时发现命名冲突 + schema 不全；2026-05-09） | **4 项小修全采纳**（impl-paper-v2 与 Lead 对齐）：D1 `AccountSnapshot` → `BrokerAccountSnapshot` 改名（避免与 `trading_core/models.py:213 AccountSnapshot` portfolio 维度类型冲突；docstring 注明区别）；D2 `query_positions` 复用 `trading_core.models.PositionLot`，不引入 `BrokerPositionLot`（broker_backend 上下文由 `LocalSimBackend(portfolio_id=...)` 实例承载）；D3 补 `SubscriptionHandle` / `MarketDataChannel` 最小定义（纯描述/audit 用，无业务逻辑）；D4 `submit_order_intent` docstring 加同步/异步分流注释（LocalSim 同步阻塞 + 终态返回；MiniQMTSim 真异步 callback driven + PENDING 立即返回；Engine 不感知差异）。**不开新 OPEN-EXT**。 | §3.6.1 / §3.6.2 |
+
+| **R-Q9.6** | §3.6.1 BrokerBackend Protocol 加 `unsubscribe_fill_callback` 方法（来源：subscribe 反向操作语义补全；2026-05-09） | **采纳**：方法签名 `unsubscribe_fill_callback(handle: SubscriptionHandle) -> None`，subscribe 的反向操作；adapter 在 EngineSession.close() / portfolio deactivation 时**必须调用**以释放 callback，防止跨 portfolio lifecycle callback 泄漏（长运行进程中表现为 duplicate fill 投递到 stale Engine session）。幂等约束：未知 / 已释放 handle MUST 为 no-op，不抛错；backend shutdown 期 MUST 为 no-op；真实 unsubscribe 期错误（如 connectivity drop）传 `BrokerConnectivityError`。**不开新 OPEN-EXT**。 | §3.6.1 |
+
 ### 17.2 已采纳但推迟到实施期（无紧迫性）
 
 | 编号 | 议题 | 裁决 | 占位说明 |
@@ -1176,6 +1255,9 @@ class BrokerConnectivityError(StrategyEngineError):
 - §11 Mode G 为合 main 硬 gate 写法保持，附注"待 Codex 主体 §6 正式纳入"（与 R-Q1 一致）✓
 - §13 custom_extension 行明确"Engine 仅 audit；如需 extension_handler 走 Codex 主体设计修订 + 全套 Mode A-G 回归"（与 R-Q2 一致）✓
 - §3.6 BrokerBackend 抽象 + 两种 SimMode 对照（R-Q9 D1/D2/D3/D4 全采纳）✓
+- §3.6.1 schema 细化：`BrokerAccountSnapshot` 改名 / `PositionLot` 复用 trading_core / `SubscriptionHandle` + `MarketDataChannel` 补定义 / `submit_order_intent` 同步异步分流注释（R-Q9.5 D1-D4 全采纳）✓
+- §3.6.2 对照表新增"submit 语义"行（R-Q9.5 D4 落地）✓
+- §3.6.1 BrokerBackend Protocol 新增 `unsubscribe_fill_callback` 方法 + 幂等约束 docstring（R-Q9.6 落地）✓
 - §10.1 新增 `BrokerCompatibilityMismatchError` / `BrokerBindCapacityExceededError`（R-Q9 D2/D4 错误传播）✓
 - §11 Mode G 自测最小集追加 4 条 broker 维度用例（R-Q9 §3.6.6）✓
 - §13 加两行：§5.4 加字段 / §11 准入门槛对接（R-Q9 D4 / D1+D3）✓

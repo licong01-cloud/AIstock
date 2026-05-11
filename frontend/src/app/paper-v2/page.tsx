@@ -8,8 +8,9 @@ import NoticePanel from "@/components/paper-v2/NoticePanel";
 import PaperTable from "@/components/paper-v2/PaperTable";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
+import WorkflowStepper from "@/components/paper-v2/WorkflowStepper";
 import { paperV2Api, selectionCenterApi, strategyPackageApi } from "@/lib/paper-v2/api";
-import { formatCompact, shortHash } from "@/lib/paper-v2/format";
+import { dataSourceLabel, formatCompact, packageDisplayLabel, paperV2WorkflowSteps, shortHash } from "@/lib/paper-v2/format";
 import {
   latestSnapshot,
   parseRunningSummaryItem,
@@ -98,8 +99,18 @@ export default function PaperV2OverviewPage() {
     next();
   }
 
+  const workflowSteps = paperV2WorkflowSteps({
+    hasPackages: packages.length > 0,
+    hasSelectionEnabledPackage: packages.some((item) => ["SELECTION_ENABLED", "PAPER_ENABLED", "PAPER_RUNNING", "PAPER_PASSED"].includes(item.package_status)),
+    hasPaperEnabledPackage: packages.some((item) => ["PAPER_ENABLED", "PAPER_RUNNING", "PAPER_PASSED"].includes(item.package_status)),
+    hasSelectionRun: selectable.some((item) => item.latest_selection_run),
+    hasPortfolio: rows.length > 0 || (pagination?.total ?? 0) > 0,
+    hasReadyRun: latestRuns > 0,
+  });
+
   return (
     <main>
+      <WorkflowStepper steps={workflowSteps} />
       <div className="pv2-grid pv2-grid-4">
         <MetricCard label="可用策略包" value={readyPackages} hint={`共 ${packages.length} 个策略包`} tone="success" />
         <MetricCard label="可选策略包" value={selectable.length} hint={`${staleModels} 个模型过期提醒`} tone={staleModels ? "warning" : "success"} />
@@ -155,9 +166,13 @@ export default function PaperV2OverviewPage() {
           columns={[
             { key: "name", header: "组合", render: ({ portfolio }) => <Link href={`/paper-v2/portfolios/${portfolio.portfolio_id}`}>{portfolio.portfolio_name}</Link> },
             { key: "status", header: "状态", render: ({ portfolio }) => <StatusBadge status={portfolio.status} /> },
-            { key: "package", header: "策略包", render: ({ portfolio }) => <span className="pv2-mono">{shortHash(portfolio.package_id, 7)}</span> },
+            { key: "package", header: "策略包", render: ({ portfolio }) => {
+              const pkg = packages.find((item) => item.package_id === portfolio.package_id);
+              const label = pkg ? packageDisplayLabel(pkg) : shortHash(portfolio.package_id, 7);
+              return <span title={String(portfolio.package_id)}>{label}</span>;
+            } },
             { key: "cash", header: "初始资金", render: ({ portfolio }) => formatCompact(portfolio.initial_cash) },
-            { key: "source", header: "数据源", render: ({ portfolio }) => portfolio.data_source },
+            { key: "source", header: "数据源", render: ({ portfolio }) => dataSourceLabel(portfolio.data_source) },
             { key: "run", header: "最近运行", render: (row) => row.latestRun ? <><StatusBadge status={row.latestRun.status} /> <span className="pv2-muted">{row.latestRun.trade_date}</span></> : <span className="pv2-muted">尚未运行</span> },
             { key: "errors", header: "错误", render: ({ counts }) => counts.errors ? <StatusBadge status="FAILED" /> : <StatusBadge status="PASSED" /> },
             { key: "action", header: "操作", render: ({ portfolio }) => <Link className="pv2-link-button" href={`/paper-v2/portfolios/${portfolio.portfolio_id}/run-console`}>运行控制台</Link> },

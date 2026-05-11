@@ -18,7 +18,7 @@ from backend.services.paper_trading_v2.replay import PaperTradingHistoricalRepla
 from backend.services.paper_trading_v2.repository import PaperTradingV2Repository
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
 from backend.services.paper_trading_v2.session import PaperTradingSessionRunner, PaperTradingSessionService
-from backend.services.paper_trading_v2.models import PaperSessionMode
+from backend.services.paper_trading_v2.models import BrokerBackendId, PaperSessionMode
 from backend.services.trading_core.errors import DataUnavailableError, TradingCoreError, UnsupportedFeatureError
 
 router = APIRouter(prefix="/paper-v2", tags=["paper-v2"])
@@ -30,6 +30,7 @@ class CreatePortfolioRequest(BaseModel):
     initial_cash: float = Field(gt=0)
     start_date: date
     data_source: MinuteDataSource
+    broker_backend: BrokerBackendId = "local_sim"
     fee_policy: dict[str, Any] | None = None
     risk_policy: dict[str, Any] | None = None
     execution_policy: dict[str, Any] | None = None
@@ -238,6 +239,7 @@ def create_portfolio(req: CreatePortfolioRequest) -> dict[str, Any]:
             initial_cash=req.initial_cash,
             start_date=req.start_date,
             data_source=req.data_source,
+            broker_backend=req.broker_backend,
             fee_policy=req.fee_policy,
             risk_policy=req.risk_policy,
             execution_policy=req.execution_policy,

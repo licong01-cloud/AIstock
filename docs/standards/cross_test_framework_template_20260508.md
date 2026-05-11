@@ -1,4 +1,4 @@
-# Cross-Test 框架通用模板（v0.3, 2026-05-08）
+# Cross-Test 框架通用模板（v0.5, 2026-05-09）
 
 > **定位**：本文档是 cross-test checklist 的**空模板**，供各模块负责人填写自己模块的具体测试矩阵。
 > **不写**任何具体模块（如 QE / Model Registry / config_composer / Strategy Package 等 Codex 维护模块）的实测矩阵 —— 那是各模块负责人的活。
@@ -346,8 +346,9 @@ seed_consistency_checks:
           单包 backend 上注入第二包 → adapter 抛 BrokerBindCapacityExceededError（D2 强制）
       - hint_4_naming_pattern: <module>_modeg_broker_compat_reject
         intent: |
-          spec.broker_compatibility 与 portfolio.broker.backend_id 不交集 →
-          init() 抛 BrokerCompatibilityMismatchError（D4 校验）
+          spec.broker_compatible 与 portfolio.broker.backend_id 不兼容 →
+          init() 抛 BrokerCompatibilityMismatchError（D4 校验；字段类型为
+          enum["LocalSim_only","MiniQMTSim_only","both"]，见 Engine §3.6.5）
 ```
 
 </details>
@@ -383,45 +384,59 @@ seed_consistency_checks:
 ```yaml
 market_channel_strong_binding_checks:
 
+  # 错误类型：见 Engine 设计 §10.1 `BrokerMarketSourceMismatchError`
+  # （v0.4 起替换 v0.3 占位的"broker 实例化级别 typed error"措辞）
+  # 校验函数：assert_broker_market_source_match(broker, source) — Engine §3.6.4
+  # 校验时机（三处必须）：portfolio 启动 / live_session bootstrap / Engine init()
+
   - name: localsim_must_pair_tdx
     description: |
-      LocalSim adapter 实例化时 market_data_channel() 必须返回 TDX 通道；
-      若注入 miniQMT 行情通道 → adapter 显式抛错（不静默 fallback）。
+      LocalSim adapter 启动时 `MinuteDataSource` 必须 ∈ `{TDX_REALTIME, DB_HISTORICAL}`；
+      若注入 `MINIQMT_REALTIME` → adapter 显式抛 `BrokerMarketSourceMismatchError`。
     method: |
-      1. 实例化 LocalSimBroker
-      2. 强行替换 market_data_channel 指向 miniQMT xtdata
-      3. 调 `<MODULE_B>`.bootstrap_portfolio(broker=...)
-      4. 期望抛 broker 实例化级别的 typed error；不允许 hot-swap
+      1. 实例化 LocalSimBroker（backend_id="local_sim"）
+      2. 注入 source=MinuteDataSource.MINIQMT_REALTIME
+      3. 调 `<MODULE_B>`.bootstrap_portfolio(broker=..., source=...)
+      4. 期望抛 BrokerMarketSourceMismatchError
+      5. assert error.context 含 backend_id + given_source + allowed
+    expected_failure_mode: explicit_typed_exception
     forbidden_behavior:
       - 静默接受任意行情源
       - 用环境变量切行情通道（行情绑定必须在 broker 实例化时硬绑）
+      - LocalSim 静默 fallback 到 TDX_REALTIME 而不抛错
 
-  - name: minqmtsim_must_pair_minqmt_quote
+  - name: minqmtsim_must_pair_minqmt_realtime
     description: |
-      MiniQMTSim adapter 实例化时 market_data_channel() 必须返回 xtquant xtdata；
-      若注入 TDX → adapter 显式抛错。
+      MiniQMTSim adapter 启动时 `MinuteDataSource` 必须 == `MINIQMT_REALTIME`；
+      若注入 TDX_REALTIME / DB_HISTORICAL → 抛 `BrokerMarketSourceMismatchError`。
     method: |
-      1. 实例化 MiniQMTSimBroker
-      2. 强行替换 market_data_channel 指向 TDX
-      3. 调 `<MODULE_B>`.bootstrap_portfolio(broker=...)
-      4. 期望抛 broker 实例化级别的 typed error
+      1. 实例化 MiniQMTSimBroker（backend_id="minqmt_sim"）
+      2. 注入 source=MinuteDataSource.TDX_REALTIME
+      3. 调 `<MODULE_B>`.bootstrap_portfolio(broker=..., source=...)
+      4. 期望抛 BrokerMarketSourceMismatchError
+      5. 重复用 source=DB_HISTORICAL 验证（MiniQMTSim 不支持历史回放）
     rationale_reference: |
       Engine 设计 §3.6.4 三条理由：(1) 价格幻觉破坏 Mode G 等价性物理基础
       (2) 实盘切换 MiniQMTSim → MiniQMTLive 仅切 trading 层不动行情 (3) 故障归因清晰
     forbidden_behavior:
       - 用 TDX 数据驱动 miniQMT 撮合（产生信号-撮合双源价格）
+      - MiniQMTSim 接 DB_HISTORICAL 假装回放（仿真账户只接受实时单）
 
   - name: market_channel_hot_swap_reject
     description: |
       运行期 hot-swap 行情通道一律拒绝，无论是否同源；行情通道必须在 broker
-      实例化时绑定，session 期间不可变。
+      实例化时绑定，session 期间不可变。三处校验时机（Engine §3.6.4）：
+      portfolio 启动 / live_session bootstrap / Engine init() —— 任一时机后
+      hot-swap 都必须抛错。
     method: |
-      1. 已绑定 broker（如 LocalSim + TDX）启动一个 EngineSession
+      1. 已绑定 broker（LocalSim + TDX_REALTIME）启动一个 EngineSession
       2. 尝试在运行期把 broker.market_data_channel 替换为另一 TDX 实例
       3. 期望抛 typed error；不允许"同源"作为放行理由
+      4. 同样验证 MiniQMTSim 在三处时机后的 hot-swap 都被拒
     forbidden_behavior:
       - 因"同是 TDX"就允许换实例
       - 把 hot-swap 包装成"reconnect" 路径绕过校验
+      - 跳过三处校验时机中的任一处（必须全覆盖）
 ```
 
 </details>
@@ -432,10 +447,11 @@ market_channel_strong_binding_checks:
 `BrokerBindCapacity.max_concurrent_packages` 是硬限制。
 
 - [ ] adapter 在 portfolio bootstrap 时调 `broker.bind_capacity()` 取容量
-- [ ] LocalSim：`max_concurrent_packages >= 1`，可同时绑定 N 个 StrategyPackage（每包独立 portfolio_id + ledger 切片）
-- [ ] MiniQMTSim：`max_concurrent_packages == 1`（单进程内 miniQMT 账户 = 一条 trading session）
-- [ ] 已绑定 MiniQMTSim 的 portfolio 上注入第二包 → 抛 `BrokerBindCapacityExceededError`（不静默替换）
-- [ ] 不允许把 LocalSim 多包共享的 ledger 切片混入 OrderIntent.portfolio_id（隔离要求）
+- [ ] LocalSim：每个 portfolio **独立** `LocalSimBroker` 实例（账本 / 资金 / 持仓互相隔离；不共享 ledger）；可同进程并发跑 N 个 portfolio
+- [ ] MiniQMTSim：进程内 **process-wide singleton**（一个 miniQMT 仿真账户进程 ↔ 一个 BrokerBackend 实例 ↔ 一个 EngineSession ↔ 一个 StrategyPackage）
+- [ ] 进程内构造第二个 `MiniQMTSimBroker` → 抛 `MiniQMTSingletonViolation`（取自 Engine §10.1）
+- [ ] 已绑定的 MiniQMTSim portfolio 上注入第二包 → 抛 `BrokerBindCapacityExceededError`（不静默替换）
+- [ ] 不允许 LocalSim 多 portfolio 之间共享 ledger 切片（`OrderIntent.portfolio_id` 严格区分账本边界）
 - [ ] 不允许用 LocalSim 的 PortfolioState 喂 MiniQMTSim 的 Engine（必须用 `broker.query_positions()` 实时拉取）
 
 <details>
@@ -444,33 +460,57 @@ market_channel_strong_binding_checks:
 ```yaml
 broker_bind_capacity_checks:
 
-  - name: minqmt_sim_singleton_capacity
+  # 错误类型：见 Engine 设计 §10.1
+  #   - MiniQMTSingletonViolation       — 进程内构造第二个 MiniQMTSimBroker 时抛
+  #   - BrokerBindCapacityExceededError — 同一 broker 实例上绑定第二个 package 时抛
+
+  - name: minqmt_sim_process_wide_singleton
     description: |
-      MiniQMTSim 是单包 backend；已存在绑定时再注入新 package 必须抛
-      BrokerBindCapacityExceededError（取自 Engine 设计 §10.1）。
+      MiniQMTSimBroker 是 process-wide singleton（Engine §3.6.3）；进程内构造
+      第二个 MiniQMTSimBroker 必须抛 `MiniQMTSingletonViolation`（v0.4 起替换 v0.3
+      的 BrokerBindCapacityExceededError 措辞）。
+    method: |
+      1. 构造 broker_a = MiniQMTSimBroker(...) → 成功
+      2. 构造 broker_b = MiniQMTSimBroker(...) → 期望抛 MiniQMTSingletonViolation
+         （在构造时检测既有实例，不进入 bind 阶段）
+      3. assert broker_a 仍然有效（错误不应导致原实例销毁）
+    expected_failure_mode: explicit_typed_exception
+    forbidden_behavior:
+      - 静默销毁 broker_a 让 broker_b 接管（覆盖式构造）
+      - 把检测放到 bind 阶段（必须在 __init__ 时检测；singleton invariant）
+
+  - name: minqmt_sim_singleton_bind_capacity
+    description: |
+      已绑定 package 的 MiniQMTSimBroker 上再 bind 第二个 package → 抛
+      `BrokerBindCapacityExceededError`（与 singleton 是两个不同时机的违规）。
     method: |
       1. 实例化 MiniQMTSimBroker；assert broker.bind_capacity().max_concurrent_packages == 1
       2. `<MODULE_B>`.bind_package(broker, package_a) → 成功
       3. `<MODULE_B>`.bind_package(broker, package_b) → 期望抛
          BrokerBindCapacityExceededError，message 含 broker.backend_id + package_a.id
-      4. 验证：原绑定 package_a 仍然有效（错误不应导致 session 中断或替换）
+      4. assert 原绑定 package_a 仍然有效
+    expected_failure_mode: explicit_typed_exception
     forbidden_behavior:
       - 静默替换原 binding（"覆盖式"绑定）
       - 把第二包丢进 queue 等 package_a 完成（无依据的隐式排队）
+      - 把这条 case 的错误类与 singleton case 混用（语义不同时机不同）
 
-  - name: localsim_multi_package_isolation
+  - name: localsim_multi_portfolio_isolation
     description: |
-      LocalSim 多包并行时，每包的 OrderIntent.portfolio_id 必须独立切片；
-      包 A 的 ledger 不可被包 B 看见。
+      LocalSim 多 portfolio 并行时，**每 portfolio 独立 LocalSimBroker 实例**
+      （Engine §3.6.3 修订；v0.3 时模型为单 broker 多包，v0.4 已对齐）；
+      portfolio 之间账本 / 资金 / 持仓互相隔离。
     method: |
-      1. 同一 LocalSimBroker 实例绑定 package_a + package_b（不同 portfolio_id）
-      2. 触发包 A 的 decide_eod() 产 OrderIntent_a
-      3. 触发包 B 的 decide_eod() 产 OrderIntent_b
-      4. assert OrderIntent_a.portfolio_id != OrderIntent_b.portfolio_id
-      5. assert package_a 的 PortfolioState.positions 与 package_b 的不重叠
+      1. 为 portfolio_dev_a 创建 broker_a = LocalSimBroker(portfolio_id=...)
+      2. 为 portfolio_dev_b 创建 broker_b = LocalSimBroker(portfolio_id=...)
+      3. 触发 broker_a 的 OrderIntent → assert 仅影响 broker_a 的 ledger
+      4. 触发 broker_b 的 OrderIntent → assert 仅影响 broker_b 的 ledger
+      5. assert broker_a.query_positions() 与 broker_b.query_positions() 无交集
+      6. assert OrderIntent_a.portfolio_id != OrderIntent_b.portfolio_id
     forbidden_behavior:
-      - 共享 ledger 视图（包 A 决策时看到包 B 持仓）
-      - 包 A 的成交事件回写到包 B 的 portfolio
+      - 共享 ledger 视图（portfolio_a 决策时看到 portfolio_b 持仓）
+      - portfolio_a 的成交事件回写到 portfolio_b
+      - 复用同一 LocalSimBroker 实例跨 portfolio（违反 §3.6.3 修订模型）
 
   - name: portfolio_state_source_per_backend
     description: |
@@ -490,92 +530,124 @@ broker_bind_capacity_checks:
 
 </details>
 
-#### 2.4.7 broker_compatibility 字段相容性校验
+#### 2.4.7 broker_compatible 字段相容性校验
 
-参考 Strategy Engine 设计 §3.6.5 / §10.1 / §17 R-Q9 D4 / OPEN-EXT-3：
-`StrategyPackage v2 manifest.broker_compatibility` 是 backend_id 白名单；
-`portfolio.broker.backend_id` 必须在白名单内，否则 `<MODULE_A>`.init() 抛
-`BrokerCompatibilityMismatchError`。
+参考 Strategy Engine 设计 §3.6.5 / §10.1 / §17 R-Q9 D4 / OPEN-EXT-3。
+**字段在 v0.4 起按 Engine §3.6.5 最新 schema 对齐**：从 v0.3 的 `broker_compatibility: list[str]`
+演进为 `broker_compatible: Literal["LocalSim_only", "MiniQMTSim_only", "both"]`（默认 `"both"`，
+LEGACY 默认 `"LocalSim_only"`）。
 
-**实施依赖**：本字段需走 Codex 主体附录 A.4.4 双 PR 模式（Codex 端 schema additive +
-Engine 端 reader + 切默认产出 + 全包重 freeze）。在 Codex schema 落地前，cross-test
-需用 `StrategySpec.custom_extension.broker_compatibility` 占位（与 R-Q2 audit-only
-语义一致）；模板 case 标 status=blocked_by_open_ext_3。
+**实施依赖**：仅 manifest schema 字段需走 Codex 主体附录 A.4.4 双 PR 模式（Codex 端 schema
+additive + Engine 端 reader + 切默认产出 + 全包重 freeze）。在 Codex schema 落地前，
+cross-test 用 `StrategySpec.custom_extension.broker_compatible` 占位（与 R-Q2 audit-only
+一致）；模板 case 标 status=blocked_by_open_ext_3。
 
-- [ ] 字段语义：`broker_compatibility: list[str]`，元素 ∈ `{local_sim, minqmt_sim, minqmt_live}`
-- [ ] 空数组 → 包不可投产（adapter init 阶段抛错）
-- [ ] LEGACY 包迁移默认 `["local_sim"]`（保持现状），不自动获得 minqmt_sim 兼容性
-- [ ] `portfolio.broker.backend_id in spec.broker_compatibility`：违反则抛 `BrokerCompatibilityMismatchError`
-- [ ] DecisionTrace.inputs_digest 折入 `spec.broker_compatibility`（影响等价性比对）
-- [ ] 不允许 runtime overlay 修改 `broker_compatibility`（与 frozen alpha core 等同保护）
-- [ ] `minqmt_live` 标记需主体晋级流程额外 gate（不在 Engine 设计 / 本模板范围）
+> **范围澄清（v0.4 新增，依 Engine §17.4 修订）**：`MinuteDataSource.MINIQMT_REALTIME` 枚举
+> 扩展位于 `backend/services/paper_trading_v2/market_data.py`，属 Claude Code 工作面，
+> **不在 OPEN-EXT-3 内**；仅 manifest schema 字段需要跨工作面协调。
+
+**兼容性矩阵**（取自 Engine §3.6.5）：
+
+| `broker_compatible` 取值 | 允许的 `portfolio.broker.backend_id` |
+| --- | --- |
+| `LocalSim_only` | 仅 `local_sim` |
+| `MiniQMTSim_only` | 仅 `minqmt_sim` / `minqmt_live` |
+| `both` | 任一 backend（默认值） |
+
+- [ ] 字段语义：`broker_compatible: enum["LocalSim_only", "MiniQMTSim_only", "both"]`
+- [ ] 默认 `"both"`：新包必须先跑通 Mode G `engine_modeg_localsim_vs_minqmtsim_orderintents` 才能保留默认
+- [ ] LEGACY 包迁移默认 `"LocalSim_only"`（保持现状），不自动获得 MiniQMTSim 兼容性
+- [ ] `portfolio.broker.backend_id` 与字段不兼容时：抛 `BrokerCompatibilityMismatchError`
+- [ ] DecisionTrace.inputs_digest 折入 `spec.broker_compatible`（影响等价性比对）
+- [ ] 不允许 runtime overlay 修改 `broker_compatible`（与 frozen alpha core 等同保护）
+- [ ] `minqmt_live` 准入由主体 §11 流程定义（不在 Engine 设计 / 本模板范围）
 
 <details>
 <summary><strong>示例片段（取材自 Engine 设计 §3.6.5 / §10.1 / §17 OPEN-EXT-3；占位形式 <code>&lt;MODULE_A&gt;=Engine</code> / <code>&lt;MODULE_B&gt;=Adapter</code>）</strong></summary>
 
-> **schema 来源约束**：本片段中 `broker_compatibility` 字段在 Codex 主体设计 §5.4 加入前由 `custom_extension.broker_compatibility` 占位。本模板**不替**主体设计做 schema 修订决定（依据 OPEN-EXT-3，待用户单独授权双 PR）。
+> **schema 来源约束**：本片段 `broker_compatible` 字段在 Codex 主体设计 §5.4 加入前由 `custom_extension.broker_compatible` 占位。本模板**不替**主体设计做 schema 修订决定（依据 OPEN-EXT-3，待用户单独授权双 PR）。
 
 ```yaml
-broker_compatibility_field_checks:
+broker_compatible_field_checks:
   status: blocked_by_open_ext_3
-  schema_placeholder_path: spec.custom_extension.broker_compatibility   # Codex schema 落地前占位
+  schema_placeholder_path: spec.custom_extension.broker_compatible   # Codex schema 落地前占位
+  schema_form:
+    type: string
+    enum: ["LocalSim_only", "MiniQMTSim_only", "both"]
+    default: "both"
+    legacy_default: "LocalSim_only"
 
-  - name: broker_compat_intersection_check
+  - name: broker_compat_localsim_only_rejects_minqmt
     description: |
-      portfolio.broker.backend_id 必须 ∈ spec.broker_compatibility；
-      不交集时 `<MODULE_A>`.init() 抛 BrokerCompatibilityMismatchError（取自 §10.1）。
+      `broker_compatible="LocalSim_only"` 时 portfolio 绑 minqmt_sim → 抛
+      BrokerCompatibilityMismatchError（取自 Engine §10.1）。
     method: |
-      1. 构造 spec.broker_compatibility=["local_sim"]
+      1. 构造 spec.broker_compatible="LocalSim_only"
       2. 构造 portfolio.broker.backend_id="minqmt_sim"
       3. 调 `<MODULE_A>`.init(spec, ..., portfolio=...)
       4. 期望抛 BrokerCompatibilityMismatchError，message 含
-         portfolio.broker.backend_id + spec.broker_compatibility 实际取值
+         portfolio.broker.backend_id + spec.broker_compatible 实际取值
     forbidden_behavior:
-      - 把不交集 backend 默认放行（"也许能跑"逻辑）
-      - 用 backend_id 子串匹配代替严格 equality（minqmt_sim ≠ minqmt_live）
+      - 把不兼容默认放行（"也许能跑"逻辑）
+      - 把 LocalSim_only 当 both 处理（必须严格 enum 校验）
 
-  - name: empty_broker_compat_reject
+  - name: broker_compat_minqmtsim_only_rejects_local
     description: |
-      broker_compatibility=[] → 包不可投产；adapter init 阶段抛错。
+      `broker_compatible="MiniQMTSim_only"` 时 portfolio 绑 local_sim → 抛错。
+      `MiniQMTSim_only` 同时允许 `minqmt_sim` 与 `minqmt_live`（兼容性矩阵）。
     method: |
-      1. 构造 spec.broker_compatibility=[]
-      2. 调 `<MODULE_A>`.init(spec, ...)
-      3. 期望抛 typed error；message 指向"包未声明 broker 兼容性"
+      1. spec.broker_compatible="MiniQMTSim_only"
+      2. 验证 portfolio.broker.backend_id="local_sim" → 抛错
+      3. 验证 portfolio.broker.backend_id="minqmt_sim" → 通过
+      4. （可选，待主体 §11 准入流程）portfolio.broker.backend_id="minqmt_live" → 通过
     forbidden_behavior:
-      - 空数组 fallback 到 ["local_sim"]（必须显式声明，不自动迁移）
+      - MiniQMTSim_only 拒收 minqmt_live（晋级路径要求向上兼容）
+      - 把 MiniQMTSim_only 解读为"仅 minqmt_sim"（少考虑 minqmt_live）
 
-  - name: legacy_default_local_sim_only
+  - name: broker_compat_both_accepts_all_in_scope_backends
     description: |
-      LEGACY_NON_ST_PIT 老包迁移时，broker_compatibility 默认填 ["local_sim"]；
-      cross-test 验证默认值不会自动扩到 minqmt_sim。
+      `broker_compatible="both"`（默认值）时所有当前在范 backend 都允许；但需在
+      Mode G `engine_modeg_localsim_vs_minqmtsim_orderintents` 通过后才能保留默认。
     method: |
-      1. 模拟 LEGACY 包（无 broker_compatibility 显式声明）
-      2. 经 Engine reader 读取 → 默认 ["local_sim"]
+      1. spec.broker_compatible="both"
+      2. assert local_sim / minqmt_sim 两者都允许 init() 通过
+      3. 反向验证：未跑 Mode G 通过的新包用 "both" 默认值 → 应在 freeze 阶段被 gate 拒
+         （此条由 freeze 流程拦截，不是 Engine.init() 阶段；cross-test 仅 audit）
+    note: |
+      Mode G gate 的具体执行点不在 Engine init() 内部；本 case 仅 audit "both"
+      需要 Mode G 前置条件这条约束，具体 gate 实现属 freeze 流程范围。
+
+  - name: legacy_default_localsim_only
+    description: |
+      LEGACY_NON_ST_PIT 老包迁移时，broker_compatible 默认填 "LocalSim_only"；
+      cross-test 验证默认值不会自动扩到 MiniQMTSim_only / both。
+    method: |
+      1. 模拟 LEGACY 包（无 broker_compatible 显式声明）
+      2. 经 Engine reader 读取 → 默认 "LocalSim_only"（不是 "both"）
       3. 配 portfolio.broker.backend_id="minqmt_sim" → init() 抛
          BrokerCompatibilityMismatchError
     forbidden_behavior:
-      - LEGACY 默认包含 minqmt_sim（仅 freeze 后显式 promote 才允许）
-      - reader 把缺失字段视为"全 backend 兼容"
+      - LEGACY 默认 "both"（默认值随新包；老包必须保守）
+      - reader 把缺失字段视为 "both"（必须显式区分新老包默认）
 
   - name: broker_compat_in_inputs_digest
     description: |
-      DecisionTrace.inputs_digest 必须折入 spec.broker_compatibility；
-      改 broker_compatibility 必然改变 digest（Mode G 等价性比对粒度）。
+      DecisionTrace.inputs_digest 必须折入 spec.broker_compatible；
+      改 broker_compatible 必然改变 digest（Mode G 等价性比对粒度）。
     method: |
-      1. 同 (scores, portfolio, seed) 用 broker_compatibility=["local_sim"] 跑 → digest_1
-      2. 同 (scores, portfolio, seed) 用 broker_compatibility=["local_sim","minqmt_sim"]
-         跑 → digest_2
+      1. 同 (scores, portfolio, seed) 用 broker_compatible="LocalSim_only" 跑 → digest_1
+      2. 同 (scores, portfolio, seed) 用 broker_compatible="both" 跑 → digest_2
       3. assert digest_1 != digest_2
     forbidden_behavior:
-      - 把 broker_compatibility 排除在 inputs_digest 之外（漂移监控漏帧）
+      - 把 broker_compatible 排除在 inputs_digest 之外（漂移监控漏帧）
 
   - name: broker_compat_overlay_reject
     description: |
-      runtime overlay 不得修改 broker_compatibility（与 frozen alpha core 等同保护）。
+      runtime overlay 不得修改 broker_compatible（与 frozen alpha core 等同保护）。
     method: |
-      1. 构造 RuntimeOverlay 含 broker_compatibility 字段（越权）
+      1. 构造 RuntimeOverlay 含 broker_compatible 字段（越权）
       2. 调 `<MODULE_A>`.init(..., overlay=overlay)
-      3. 期望抛 RuntimeOverlayValidationError，rejected_field=broker_compatibility
+      3. 期望抛 RuntimeOverlayValidationError，rejected_field=broker_compatible
     forbidden_behavior:
       - overlay 提升 broker 兼容性（必须经主体晋级流程，不允许 runtime 旁路）
 ```
@@ -597,6 +669,9 @@ broker_compatibility_field_checks:
 | **业务规则违反** | 输入数值超界（如 hold_thresh 越权） | 显式 `ValidationError`，含规则名 + 实际值 |
 | **下游故障** | 模拟 `<MODULE_C>`（依赖）挂掉 | 错误必须冒泡，不可降级到默认值 |
 | **超时** | 注入延迟 | 显式 `TimeoutError`，不静默成功 |
+| **broker 提交失败**（v0.4 新增） | 校验失败前置 / 参数不合法 | 显式 `BrokerSubmitError`（Engine §10.1）；不静默吞掉 |
+| **broker 拒单**（v0.4 新增） | 资金上限 / 停牌 / 涨跌停 / miniQMT 拒收 | 显式 `BrokerRejectedError`，含 `rejection_reason`；不重试 |
+| **broker 连接断**（v0.4 新增） | miniQMT 服务崩溃 / xtquant disconnect | 显式 `BrokerConnectivityError`；adapter 必须显式抛错，不静默 reconnect |
 
 #### 2.5.2 反模式（用作负 case）
 
@@ -610,6 +685,73 @@ broker_compatibility_field_checks:
 - [ ] 错误消息含 `module_name + operation + relevant_ids`
 - [ ] 错误堆栈跨进程能拼回（不被 RPC 层截断）
 - [ ] cross-tester 拿到错误 5 分钟内能定位到 suspected_files
+
+#### 2.5.4 typed error → UI 映射回引（v0.4 增量）
+
+> **填写指南**：当 `<MODULE_A>` 抛出的 typed error 会跨过 backend 边界传到前端 UI 时，
+> 必须验证错误类→中文 UI 的映射稳定。本节**不复刻**完整映射表，仅作 cross-test 取材
+> 接口。映射 source of truth 见 `docs/architecture/broker_backend_switch_flow_20260509.md`
+> §6.3（"4 个 typed error 的中文用户向 UI 映射"），cross-test 模板按需引用。
+>
+> **占位用法**：`<MODULE_A>=Engine`、`<MODULE_B>∈{LocalSim, MiniQMTSim, FrontendUI}`；
+> "FrontendUI" 在本小节首次出现，作为典型 cross-tester 角色（前端 ↔ 后端 typed error
+> 一致性测试）。本模板**不写**前端实测代码（仍 A5 边界）。
+
+##### 2.5.4.1 对照表（取自 §6.3，仅引）
+
+| 错误类（后端） | UI 视觉级别 | 关键 UI 不变量（cross-test 必校验） |
+| --- | --- | --- |
+| `BrokerCompatibilityMismatchError` | 页面级（占主内容区） | `forbidOverride: true`（无"强行继续"按钮）/ ≥ 2 条 actionable 选项 / 必带 §3.6.5 文档链接 |
+| `BrokerBindCapacityExceededError` | banner（顶部红色横条）+ 内联按钮 | message 含 `occupying_portfolio_name` / 提供"前往停用"路由 |
+| `MiniQMTSingletonViolation` | 系统错误模态 | `forbidRetry: true` / 显示 `error_id` / 不允许 dismiss-and-retry |
+| `BrokerMarketSourceMismatchError` | 行情步骤页内嵌 banner | `autoFixOption: true`（"自动切换为允许的行情通道"按钮）/ 列出 `allowed_set` |
+
+> 详细中文标题/内文/按钮顺序：见 §6.3 表（不在本模板内复刻；避免与 source of truth 漂移）。
+
+##### 2.5.4.2 context 字段必含项（cross-test fixture 取值）
+
+| context 字段 | 来源 | UI 用途 |
+| --- | --- | --- |
+| `package_id` | StrategySpec | 中文内文展示策略包 ID |
+| `broker_compatible_value` | StrategySpec.broker_compatible | 解释为何不兼容 |
+| `target_backend_id` | portfolio.broker_backend_id | 解释当前选择 |
+| `occupying_portfolio_name` | runtime singleton state | "前往停用"目标 |
+| `error_id` | logger session id | 让用户能复现到日志 |
+| `allowed_set` | `ALLOWED_MARKET_SOURCES[backend_id]` | 列举允许集 |
+| `given_source` | 用户提交的 MinuteDataSource | 解释当前不允许 |
+
+cross-test 必校验：**任一字段在抛错时缺失** → fail（前端无法正确渲染）。
+
+##### 2.5.4.3 ERROR_UI_MAP 前端规范 fixture flag（cross-test 行为校验）
+
+参考 §6.3 ERROR_UI_MAP 伪代码（TypeScript），下列前端规范属于"前后端 typed error
+一致性 cross-test"必查项：
+
+- [ ] `BrokerCompatibilityMismatchError` 路径不含"强行继续"按钮（`forbidOverride`）
+- [ ] `MiniQMTSingletonViolation` 模态不含"重试"按钮（`forbidRetry`）
+- [ ] `BrokerMarketSourceMismatchError` 提供"自动切换为允许的行情通道"操作（`autoFixOption`）
+- [ ] 上述任一行为越权 → cross-test fail
+
+##### 2.5.4.4 i18n key 规范
+
+- [ ] 所有 broker 维度 typed error UI key 统一前缀 `broker_error.*`（参 §6.3 i18n 子段）
+- [ ] cross-test 验证：构造 typed error → 前端渲染调 i18n 函数时 key 形如 `broker_error.<error_class_lower>.<title|body|actions>`
+- [ ] **禁止做法**（与 §6.4 不变量配套）：
+  - 把 4 个错误折叠成单一 toast（"操作失败"）
+  - 翻译时丢弃 context 字段（不提及具体 package_id / target_backend_id 等）
+  - 任意错误页加"强行继续"按钮（违反 fail-fast）
+  - 用 `alert()` / `window.confirm()` 等浏览器原生 dialog（无法承载 actions[]）
+
+##### 2.5.4.5 与 §3.5 矩阵草稿的衔接
+
+§3.5.1 / §3.5.2 中涉及 typed error 的 case（如 `xtest_localsim_broker_compat_*` /
+`xtest_minqmtsim_singleton_violation` 等）实施时应：
+
+1. 验证后端抛错语义（§2.5.1 表 + Engine §10.1）
+2. 验证 context 字段完整性（§2.5.4.2 表）
+3. **如果 cross-tester 角色为 FrontendUI** → 同步验证 UI 渲染规范（§2.5.4.3 / §2.5.4.4）
+
+§3.5 矩阵草稿无需为每行重复列上述三项；用本节作 checklist 引用即可。
 
 ---
 
@@ -745,6 +887,120 @@ state_consistency_checks:
 | 错误传播只验"会抛异常" | 拿不到根因，cross-tester 无法填 bug | 必须验异常类型 + 关键字段在 message 里 |
 | 不声明 `developer_agent` / `tester_agent` | 路由失败 / 责任不清 | 两个字段必填，且不能相同 |
 
+### 3.5 LocalSim / MiniQMTSim cross-test 矩阵草稿（占位骨架）
+
+> **本节定位**：v0.4 起新增的**矩阵骨架表**，列出 LocalSim ↔ Engine / MiniQMTSim ↔ Engine
+> 两个边界对的 cross-test 待填项；**仅给框架与命名占位**，每行的 method / expect /
+> agent_context 由对应 LocalSim / MiniQMTSim adapter 实施期负责人填写到
+> `tests/aistock_validation/modules/strategy_engine_localsim_xtest.md` /
+> `strategy_engine_minqmtsim_xtest.md`（**待新建**）。
+>
+> **本模板不预填实测内容**（A5 边界）；下表的 method 列均为 `<填写指南>` 占位。
+> 每个 case 引用回模板 §2 的对应章节，确保填写时不漏维度。
+
+#### 3.5.1 LocalSim ↔ Engine 矩阵（v0.5：method/expect 升级为具体）
+
+> **v0.5 起**：本节 9 行从 v0.4 占位升级为具体 method/expect。取材：
+> - **实施代码**：`backend/services/paper_trading_v2/broker/base.py`（`BrokerBackend` ABC）+ `localsim.py`（`LocalSimBackend`）—— Task #20 完成
+> - **既有实测函数名**：`backend/tests/paper_trading_v2/test_localsim_backend.py`（20 个 `test_*` 函数）+ `test_market_data_broker_match.py` + `test_portfolio_broker_backend.py`
+> - **R-Q9.5 同步语义 invariant**（Engine §3.6.1 / §3.6.2 R-Q9.5 D4）：LocalSim `submit_order_intent` 同步阻塞，返回时 `OrderHandle.status` 已为终态，`fill_callback` 已在返回前触发
+> - **R-Q9.5 schema 改名**：`AccountSnapshot` → `BrokerAccountSnapshot`（broker 层；与 `trading_core.AccountSnapshot` portfolio 维度区别）
+> - **R-Q9.5 schema 复用**：`query_positions()` 返回 `dict[str, trading_core.PositionLot]`（broker 上下文由 `LocalSimBackend(portfolio_id=...)` 承载）
+> - **R-Q9.6**：`unsubscribe_fill_callback` 加入 ABC（callback 清理）
+>
+> **填写说明**：每行的 `method` 与 `expect` 描述 cross-test 必校验项；`existing_test_refs`
+> 列引用现有实测函数（**仅作 anchor**；cross-test 模块负责人填实测时可重用 / 改名 /
+> 拆分）。本模板**仍不写**实测代码本身。
+>
+> Test ID 命名沿用 v0.4 建议；模块负责人写到 `tests/aistock_validation/modules/strategy_engine_localsim_xtest.md`（待新建）。
+
+| Test ID（建议） | 对应模板章节 | method 摘要 | expect（不可妥协） | 错误类 / invariant | existing_test_refs |
+| --- | --- | --- | --- | --- | --- |
+| `xtest_localsim_engine_init_smoke` | §2.1 / §2.2 | 构造 `LocalSimBackend(portfolio_id, package_manifest, market_data_provider, ledger=...)`；注入合法 (spec, seed, portfolio_dev)；调 `<MODULE_A>`.init() | init() 不抛错；`backend.backend_id == "local_sim"` / `backend.backend_version == "1.0.0"`；spec/portfolio 字段缺失即 `StrategySpecValidationError` | `StrategySpecValidationError` | `test_localsim_init_accepts_tdx_and_db` |
+| `xtest_localsim_engine_decide_eod_byte_equal` | §2.4.2 / Mode G | fix master_seed；同 (spec, scores, portfolio_dev_localsim) 跑 `<MODULE_A>`.decide_eod() 两次 | 两次 `OrderIntentBatch` byte-equal（含 intents 顺序 / DecisionTrace.pipeline_steps）；§2.4.2 三项约束（dict / set / float） | — | （需 Mode G fixture，留 adapter 实施期补） |
+| `xtest_localsim_market_source_tdx_realtime` | §2.4.5 | 用 `source=MinuteDataSource.TDX_REALTIME` 实例化 LocalSim → 通过；用 `MINIQMT_REALTIME` → 调 `assert_broker_market_source_match()` | TDX_REALTIME 通过；MINIQMT_REALTIME 抛 `BrokerMarketSourceMismatchError`，`error.context` 含 `backend_id="local_sim"` / `given_source` / `allowed=[TDX_REALTIME, DB_HISTORICAL]` | `BrokerMarketSourceMismatchError` | `test_localsim_init_rejects_miniqmt_realtime_source` / `test_market_data_channel_reflects_bound_source` |
+| `xtest_localsim_market_source_db_historical` | §2.4.5 | 用 `source=DB_HISTORICAL` 实例化 LocalSim（CATCHUP_THEN_LIVE 历史回放） | 通过；`market_data_channel().channel_kind == "in_process_db"` | — | `test_localsim_init_accepts_tdx_and_db` |
+| `xtest_localsim_multi_portfolio_isolation` | §2.4.6 | 为 portfolio_dev_a / portfolio_dev_b 各创一个 `LocalSimBackend(portfolio_id=...)` 实例；分别提交 OrderIntent；查询持仓 | broker_a / broker_b ledger / cash / positions 无交集；`OrderIntent.portfolio_id` 严格区分；`bind_capacity().max_concurrent_packages == 1`（per-portfolio 实例；多 portfolio = 多实例） | — | `test_two_localsim_instances_isolate_ledger_and_orders` / `test_localsim_subscriber_isolation` / `test_bind_capacity_localsim_is_per_portfolio` |
+| `xtest_localsim_broker_compat_localsim_only_pass` | §2.4.7 | spec.broker_compatible="LocalSim_only" + portfolio.broker.backend_id="local_sim" → `<MODULE_A>`.init() | 通过；`DecisionTrace.inputs_digest` 折入 `spec.broker_compatible`（§2.4.7 不变量） | — | （v0.4 标 blocked_by_open_ext_3；占位实施时引 `custom_extension.broker_compatible`） |
+| `xtest_localsim_broker_compat_minqmtsim_only_reject` | §2.4.7 | spec.broker_compatible="MiniQMTSim_only" + portfolio.broker.backend_id="local_sim" → `<MODULE_A>`.init() | 抛 `BrokerCompatibilityMismatchError`；`error.context` 含 `package_id` / `broker_compatible_value="MiniQMTSim_only"` / `target_backend_id="local_sim"`（§2.5.4.2 必含） | `BrokerCompatibilityMismatchError` | （同上 OPEN-EXT-3 占位） |
+| `xtest_localsim_broker_submit_error_propagation` | §2.5 | submit OrderIntent 触发场景：(a) `intent.portfolio_id` 与 broker 不符 → `BrokerSubmitError`；(b) ledger 余额不足 → `BrokerRejectedError`；(c) 行情数据不可用 → `BrokerConnectivityError`；(d) shutdown 后 → `BrokerConnectivityError`；(e) 重复 `intent_id` → `BrokerSubmitError` | 三类 typed error 显式抛出，**不**重试 / fallback；adapter 显式传到 trading_core；`OrderHandle` 不会处于 PENDING 状态（R-Q9.5 D4 同步语义）；rejection_reason 字符串可定位根因 | `BrokerSubmitError` / `BrokerRejectedError` / `BrokerConnectivityError` | `test_submit_order_intent_rejects_cross_portfolio_intent` / `test_submit_order_intent_rejects_cross_package_intent` / `test_submit_order_intent_rejects_duplicate_intent_id` / `test_submit_raises_broker_connectivity_when_market_data_unavailable` / `test_submit_raises_broker_connectivity_after_shutdown` / `test_submit_raises_broker_rejected_when_insufficient_cash` |
+| `xtest_localsim_seed_byte_equal_two_runs` | §2.4.2 | 同 master_seed + 完整 SeedBundle，跑 `<MODULE_A>`.decide_eod() 两次（同 process / 跨 process 各一次） | OrderIntentBatch + DecisionTrace byte-equal（依据 §2.4.2 `l4_byte_equal_two_runs_strict`） | — | （Mode G fixture，留 adapter 实施期） |
+
+##### 3.5.1.A 同步语义不变量（R-Q9.5 D4 LocalSim 专属）
+
+> 本子节是 v0.5 新增，列出 R-Q9.5 D4 LocalSim 同步语义在 cross-test 中的必校验项。
+> 与上表行 `xtest_localsim_broker_submit_error_propagation` / Mode G case 配合使用。
+
+- [ ] `submit_order_intent(intent)` 返回时 `OrderHandle.status` ∈ `{filled, partial_filled, rejected}`（**不可** 是 `pending`；同步语义 R-Q9.5 D4）
+- [ ] `fill_callback` 必须在 `submit_order_intent` 返回**之前**触发（不可在返回后异步触发）
+- [ ] `query_status(handle)` 在 submit 返回后立即查询，状态与 submit 返回时一致（无中间 PENDING 窗口）
+- [ ] Engine 共享代码**不得**假设 LocalSim 同步语义（参考 Engine §3.6.1 注释：必须按 MiniQMTSim 异步 superset 写）—— cross-test 验证 Engine 端 callback 处理路径在两种 backend 下都正确
+- [ ] 错误传播仍遵循 §2.5：同步抛错时不静默吞掉；callback 内异常必须 raise 给 submit 调用者
+
+**existing_test_refs**：
+- `test_submit_order_intent_returns_terminal_status_synchronously`（核心同步语义）
+- `test_subscribe_returns_handle_and_unsubscribe_releases`（R-Q9.6 unsubscribe 不变量）
+- `test_unsubscribe_unknown_handle_is_silent_noop`（R-Q9.6 边界）
+- `test_cancel_returns_unaccepted_for_filled_order_synchronous`（filled 后 cancel 语义）
+
+##### 3.5.1.B BrokerBackend ABC 接口完整性（R-Q9.5 D1/D2/D3 + R-Q9.6）
+
+> R-Q9.5 schema 改名 / 类型复用 / 辅助类型 + R-Q9.6 unsubscribe 在 cross-test 中的必校验。
+
+- [ ] `query_account()` 返回 **`BrokerAccountSnapshot`**（broker 层）；不可与 `trading_core.AccountSnapshot`（portfolio 层）混用（R-Q9.5 D1）
+- [ ] `query_positions()` 返回 `dict[str, trading_core.PositionLot]`（不在 broker 层重定义 PositionLot；R-Q9.5 D2）
+- [ ] `subscribe_fill_callback(cb)` 返回 `SubscriptionHandle`；`unsubscribe_fill_callback(handle)` 释放回调（R-Q9.5 D3 / R-Q9.6）
+- [ ] **portfolio 停用时**：adapter 必须调 `unsubscribe_fill_callback`（R-Q9.6 生命周期约束；防止 callback 泄漏跨 session）
+- [ ] **幂等性**：同一 `SubscriptionHandle` 第二次 `unsubscribe_fill_callback(handle)` **不抛错**（idempotent；重复释放无副作用）
+- [ ] **silent noop 范围**：unknown handle / 已 released handle / shutdown 期 unsubscribe → silent noop（不抛错）
+- [ ] **真实 unsubscribe 错误**：底层 broker 通道在 unsubscribe 操作时遇到真实连接故障（非"已释放"边界）→ 抛 `BrokerConnectivityError`（R-Q9.6；与"silent noop 范围"互补：边界值静默，真实错误显式抛）
+- [ ] `market_data_channel()` 返回 `MarketDataChannel`（描述 / audit；不承载业务逻辑）；`channel_kind ∈ {"in_process_tdx", "in_process_db", "minqmt_xtdata"}`
+- [ ] `bind_capacity()` 返回 `BrokerBindCapacity(backend_id, max_concurrent_packages>=1, rejection_reason_if_exceeded)`
+
+**existing_test_refs**：
+- `test_query_account_returns_decimal_snapshot`（R-Q9.5 D1）
+- `test_query_positions_returns_position_lot_dict`（R-Q9.5 D2）
+- `test_subscribe_returns_handle_and_unsubscribe_releases`（R-Q9.5 D3 + R-Q9.6）
+- `test_unsubscribe_unknown_handle_is_silent_noop`（R-Q9.6 边界）
+- `test_market_data_channel_reflects_bound_source`（R-Q9.5 D3 描述类型）
+- `test_bind_capacity_localsim_is_per_portfolio`（D2 capacity 语义）
+
+#### 3.5.2 MiniQMTSim ↔ Engine 矩阵草稿
+
+| Test ID（建议） | 对应模板章节 | 边界 | 测试目标占位 | 错误类（参考 Engine §10.1） |
+| --- | --- | --- | --- | --- |
+| `xtest_minqmtsim_engine_init_smoke` | §2.1 / §2.2 | MiniQMTSimAdapter ↔ Engine.init() | xtquant 已 attach 仿真账户运行；Engine.init() 通过 | StrategySpecValidationError |
+| `xtest_minqmtsim_singleton_violation` | §2.4.6 | MiniQMTSimBroker 构造 | 进程内构造第二个 MiniQMTSimBroker → 抛错（构造时检测，不进 bind 阶段） | MiniQMTSingletonViolation |
+| `xtest_minqmtsim_capacity_exceeded` | §2.4.6 | MiniQMTSimBroker.bind_package() | 已绑 package_a 时再 bind package_b → 抛错；package_a 仍有效 | BrokerBindCapacityExceededError |
+| `xtest_minqmtsim_market_source_minqmt_realtime` | §2.4.5 | MiniQMTSimAdapter ↔ MinuteDataSource | source=MINIQMT_REALTIME 通过；TDX/DB_HISTORICAL 抛错 | BrokerMarketSourceMismatchError |
+| `xtest_minqmtsim_portfolio_state_query_positions` | §2.4.6 | MiniQMTSimAdapter ↔ Engine | adapter 在 decide_eod 前必调 broker.query_positions()；不允许喂 LocalSim 风格内存 ledger | — |
+| `xtest_minqmtsim_broker_compat_minqmtsim_only_pass` | §2.4.7 | MiniQMTSimAdapter ↔ Engine init | spec.broker_compatible="MiniQMTSim_only" + backend_id="minqmt_sim" → 通过 | — |
+| `xtest_minqmtsim_broker_compat_localsim_only_reject` | §2.4.7 | MiniQMTSimAdapter ↔ Engine init | spec.broker_compatible="LocalSim_only" + backend_id="minqmt_sim" → 抛错 | BrokerCompatibilityMismatchError |
+| `xtest_minqmtsim_connectivity_loss_propagation` | §2.5 | MiniQMTSimBroker → adapter | xtquant disconnect 注入 → adapter 抛 BrokerConnectivityError 显式传到 trading_core；不静默重试 | BrokerConnectivityError |
+| `xtest_minqmtsim_rejected_capital_limit` | §2.5 | MiniQMTSimBroker.submit_order_intent() | 仿真账户资金上限触发 → adapter 抛 BrokerRejectedError | BrokerRejectedError |
+| `xtest_minqmtsim_no_db_historical_replay` | §2.4.5 | MiniQMTSimAdapter ↔ MinuteDataSource | source=DB_HISTORICAL 必抛错（仿真账户只接受实时单） | BrokerMarketSourceMismatchError |
+
+#### 3.5.3 跨 backend 等价性矩阵草稿（Mode G broker 维度）
+
+| Test ID（建议） | 对应模板章节 | 边界 | 测试目标占位 |
+| --- | --- | --- | --- |
+| `xtest_modeg_localsim_vs_minqmtsim_orderintents` | §2.4.2 hint_1 | 两 adapter ↔ Engine | 同 (spec_both, scores, portfolio_seed_aligned, seed) → 两 adapter OrderIntent byte-equal（NAV 不比） |
+| `xtest_modeg_broker_compat_dimension_in_digest` | §2.4.7 | DecisionTrace ↔ broker_compatible | 仅改 broker_compatible 取值 → inputs_digest 必须不同 |
+| `xtest_modeg_market_source_dimension_in_digest` | §2.4.5 | DecisionTrace ↔ MinuteDataSource | 仅改 source 取值 → inputs_digest 必须不同（如果 Engine 决定将 source 折入 digest；具体由 Engine §3.5 R-Q7 决定） |
+
+#### 3.5.4 矩阵草稿填写约束
+
+- 上述 Test ID 仅为**建议命名**；实施期可按各 adapter 模块测试 plan 命名规则微调
+- 每个 case 必须填到 `tests/aistock_validation/modules/strategy_engine_<adapter>_xtest.md`，**不得**直接写在本模板内
+- 填写时按本模板 §2.8 的 `agent_context` schema 提供 `developer_agent / tester_agent / reproduce_command / suspected_files / safety_constraints / required_verification_commands`
+- **依赖未到位的 case** 标 `status: blocked_by_<task_id>`：
+  - §2.4.7 `broker_compatible` 字段相关 case → blocked_by_open_ext_3（仍待 Codex schema 落地；可用 `custom_extension.broker_compatible` 占位）
+  - §2.4.5 `MINIQMT_REALTIME` 枚举相关 case → ~~blocked_by_task_16~~ → **解锁**（task #16 已 completed，2026-05-08）
+  - LocalSim Protocol 相关 case → ~~blocked_by_task_20~~ → **解锁**（task #20 已 completed，2026-05-09；§3.5.1 9 行已升级到具体 method/expect，见 v0.5）
+  - portfolio.broker_backend 字段相关 case → ~~blocked_by_task_19~~ → **解锁**（task #19 已 completed）
+  - MiniQMTSim 相关 case（§3.5.2）→ blocked_by_task_minqmtsim_impl（A#2 MiniQMTSim 实施待启动；现 §3.5.2 仍为 v0.4 占位）
+- **本草稿不构成承诺**：实施时模块负责人可以增删 case；本节仅作起点参考
+
 ---
 
 ## 4. 与 Validation Center / GitHub Issue 流程的衔接
@@ -843,9 +1099,47 @@ state_consistency_checks:
     - §2.4.5 行情通道强绑定示例 → 引用 `BrokerMarketSourceMismatchError`（替换"broker 实例化级别 typed error"占位措辞）
     - §2.4.6 `minqmt_sim_singleton_capacity` → 视 Engine §10.1 最终归属，决定改用 `MiniQMTSingletonViolation` 还是保持 `BrokerBindCapacityExceededError`（前者更具体，后者更通用；以 Engine 文档为准）
     - §2.5.1 错误传播表加一行 broker 维度（adapter 端 3 个错误的负 case 模式：submit / rejected / connectivity）
-  - OPEN-EXT-1（推 Codex 主体设计 §6 正式纳入 Mode G）授权后，把 §2.4.2 `mode_g_cross_adapter_equivalence` 示例的"单方面声明"措辞改为"主体 §6 正式定义"
+- **v0.4 (2026-05-09)**：错误类引用对齐 Engine §10.1 第二条简报增补 + schema 演进对齐 + 新增 LocalSim/MiniQMTSim 矩阵草稿（A5 边界内）：
+  - **错误类引用补全**（v0.3 起草时尚未落入 Engine 文档）：
+    - §2.4.5 引 `BrokerMarketSourceMismatchError`（替换 v0.3 占位"broker 实例化级别 typed error"），含 §3.6.4 `assert_broker_market_source_match` 三处校验时机
+    - §2.4.6 拆分错误类语义：`MiniQMTSingletonViolation`（构造时 process-wide singleton 违反）vs `BrokerBindCapacityExceededError`（同实例 bind 第二个 package）—— v0.3 把两者混为一类，v0.4 分开
+    - §2.5.1 错误传播表加 3 行：`BrokerSubmitError` / `BrokerRejectedError` / `BrokerConnectivityError`（adapter 端，Engine §10.1）
+  - **schema 演进对齐**（v0.3 起草时 §3.6.5 schema 仍为 list[str]；v0.4 已演进为 enum）：
+    - §2.4.7 字段从 `broker_compatibility: list[str]` 演进为 `broker_compatible: Literal["LocalSim_only","MiniQMTSim_only","both"]`（默认 `"both"`，LEGACY 默认 `"LocalSim_only"`）
+    - 5 个 case 全部按新 schema 重写：`broker_compat_localsim_only_rejects_minqmt` / `broker_compat_minqmtsim_only_rejects_local` / `broker_compat_both_accepts_all_in_scope_backends` / `legacy_default_localsim_only` / `broker_compat_in_inputs_digest` / `broker_compat_overlay_reject`
+    - 加兼容性矩阵表（Engine §3.6.5 取材）
+    - 加范围澄清：`MinuteDataSource.MINIQMT_REALTIME` 枚举不在 OPEN-EXT-3 内（依 §17.4 修订；属 Claude 工作面）
+  - **LocalSim 多 portfolio 模型对齐**：v0.3 模型为"单 broker 多包切片"；v0.4 按 §3.6.3 修订为"每 portfolio 独立 LocalSimBroker 实例"（`localsim_multi_portfolio_isolation` case 重写）
+  - **§2.4.2 Mode G hint 4 措辞** 跟随 §2.4.7 字段名变更同步更新
+  - **新增 §3.5「LocalSim / MiniQMTSim cross-test 矩阵草稿（占位骨架）」**：
+    - §3.5.1 LocalSim ↔ Engine 9 行待填表
+    - §3.5.2 MiniQMTSim ↔ Engine 10 行待填表
+    - §3.5.3 跨 backend 等价性 3 行待填表
+    - §3.5.4 填写约束（仅 Test ID 建议命名 + 模板 §2 章节回引 + blocked_by 标记 + 不构成承诺）
+    - **不预填实测内容**（method/expect 列均占位）；具体由各 adapter 负责人填到 `tests/aistock_validation/modules/strategy_engine_<adapter>_xtest.md`
+  - 占位形式仍 `<MODULE_A>=Engine` / `<MODULE_B>=Adapter`；矩阵草稿用具体 adapter 名（LocalSim / MiniQMTSim）作"待填表"骨架，不构成实测矩阵
+- **v0.4.1 (2026-05-09, 补丁)**：补 typed error → UI 映射回引（取材 `broker_backend_switch_flow_20260509.md` §6.3）。语义化补丁标记：非 schema 变更，仅章节增量；保持 v0.4 主版本号。
+- **v0.5 (2026-05-09)**：§3.5.1 LocalSim ↔ Engine 9 行升级为具体 method/expect（依据 task #20 完成 + R-Q9.5/R-Q9.6 schema 细化）：
+  - **9 行 method/expect 列升级**：从 v0.4 占位升级为引用 `LocalSimBackend(portfolio_id, ...)` 实际方法签名 + `OrderHandle.status` 终态约束 + `BrokerAccountSnapshot` / `MarketDataChannel.channel_kind` 等 R-Q9.5 schema
+  - **新增 `existing_test_refs` 列**：每行引用 `backend/tests/paper_trading_v2/test_localsim_backend.py` 实测函数名（仅作 anchor，cross-tester 可重用 / 改名 / 拆分；模板仍不写实测代码本身）
+  - **新增 §3.5.1.A 同步语义不变量**（R-Q9.5 D4 LocalSim 专属）：5 条 checklist + 4 个 existing_test_refs；显式声明"Engine 共享代码不得假设 LocalSim 同步语义，必须按 MiniQMTSim 异步 superset 写"
+  - **新增 §3.5.1.B BrokerBackend ABC 接口完整性**（R-Q9.5 D1/D2/D3 + R-Q9.6）：9 条 checklist 覆盖 `BrokerAccountSnapshot` 改名 / `PositionLot` 复用 / `subscribe`+`unsubscribe` 对偶 / R-Q9.6 4 条完整性（portfolio 停用必调 / 幂等性 / silent noop 范围 unknown+released+shutdown / 真实错误走 BrokerConnectivityError）/ `MarketDataChannel` 描述类型 / `BrokerBindCapacity` 语义
+  - **§3.5.4 解锁记录**：task #16 / #19 / #20 已完成 → 对应 blocked_by 标记改为"已解锁"+ 注明完成日期；新加 `blocked_by_task_minqmtsim_impl` 占位（§3.5.2 仍为 v0.4）
+  - 占位形式不变：`<MODULE_A>=Engine` / `<MODULE_B>=LocalSim`；模板仍不写实测代码（A5 边界）
+  - 引用源：Engine 设计 §3.6.1 / §3.6.2 R-Q9.5 / §3.6.3 / §10.1 / §17.1 R-Q9.5 / R-Q9.6；实施代码 `backend/services/paper_trading_v2/broker/{base,localsim}.py`；实测 `backend/tests/paper_trading_v2/test_localsim_backend.py`
+  - 新增 §2.5.4「typed error → UI 映射回引」5 子节：对照表（仅引，不复刻）/ context 字段必含项 / ERROR_UI_MAP 前端规范 fixture flag / i18n key 规范 / 与 §3.5 矩阵草稿的衔接
+  - 引入新占位 `<MODULE_B>=FrontendUI` 角色（仅本小节内首次出现，作为前端 ↔ 后端 typed error 一致性 cross-tester 角色）
+  - 章节编号**不重排**（保留 §3.5 矩阵草稿原位；按 lead 仲裁方案 b）
+  - source of truth 仍为 §6.3，本模板仅引；避免漂移
+- **下次更新触发**（v0.5 起新增 + 沿用 v0.4）：
+  - **v0.6 触发**（A#2 MiniQMTSim 实施完成后）：把 §3.5.2 MiniQMTSim ↔ Engine 10 行从 v0.4 占位升级为具体 method/expect，参照 v0.5 §3.5.1 模式（method 列 + expect 列 + existing_test_refs 列 + 异步语义不变量子节）
+  - **v0.6 触发**（Mode G fixture 准备好后）：把 §3.5.1 / §3.5.3 中标"留 adapter 实施期补"的 case（`xtest_localsim_engine_decide_eod_byte_equal` / `xtest_localsim_seed_byte_equal_two_runs` / `xtest_modeg_localsim_vs_minqmtsim_orderintents`）填具体 fixture 引用
+  - **task #16 完成（Claude 工作面）后**：把 §3.5.1 / §3.5.2 中 `MINIQMT_REALTIME` 相关 case 的 status 解锁
+  - **task #20 完成后**：解锁 §3.5.1 LocalSim BrokerBackend Protocol 相关 case
+  - **task #19 完成后**：解锁 §3.5.x portfolio.broker_backend 字段相关 case
+  - **OPEN-EXT-1**（推 Codex 主体设计 §6 正式纳入 Mode G）授权后，把 §2.4.2 `mode_g_cross_adapter_equivalence` 示例的"单方面声明"措辞改为"主体 §6 正式定义"
   - OPEN-EXT-2（on_event 与 announcement_event_risk_signal 对齐）授权后，新增 §2.4.x 事件触发一致性示例
-  - OPEN-EXT-3（`broker_compatibility` 字段走 Codex 主体附录 A.4.4 双 PR）授权 + Codex 端 schema additive 合入后，把 §2.4.7 的 `schema_placeholder_path: spec.custom_extension.broker_compatibility` 切到一等公民字段路径，并去掉 status=blocked_by_open_ext_3 标记
+  - OPEN-EXT-3（`broker_compatible` 字段走 Codex 主体附录 A.4.4 双 PR；v0.4 起 schema 已演进为 enum 形式）授权 + Codex 端 schema additive 合入后，把 §2.4.7 的 `schema_placeholder_path: spec.custom_extension.broker_compatible` 切到一等公民字段路径，并去掉 status=blocked_by_open_ext_3 标记；§3.5 矩阵草稿对应 case 同步解锁
   - audit §21.5.2 平台增强落地（双 agent 字段 / cross-test 路由）后，更新 §4.1 / §4.2
   - 主体设计 §A.5.1 任一 Phase 测试矩阵填出后，把模板里反复出现的真实模式回流到 §3
   - cross-test 实战中发现遗漏维度时，扩 §2

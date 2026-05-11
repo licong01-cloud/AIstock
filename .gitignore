@@ -52,6 +52,9 @@ frontend/.next-dev-*/
 frontend/.next-build-*/
 tmp/
 
+# Paper v2 sim runner state (worktree-local SQLite event log + scratch dir)
+var/
+
 # Debug tools and test scripts (not tracked)
 debug_tools/
 
@@ -71,6 +74,7 @@ nul
 !tests/aistock_validation/templates/**/*.json
 !tests/aistock_validation/guardrails_baseline_*.json
 !.mcp.json
+!.eslintrc.json
 
 # Backup and temp directories
 git_ignore_folder/
@@ -138,4 +142,5 @@ report/
 aistock_models/aistock_models.egg-info/
 
 # Local dev DB schema dumps belong in E:/DEV backup/aistock_pg_snapshots/ (DR playbook 20260511)
+# Dev DB schema snapshots (T17, 2026-05-10) — large, regenerable from prod
 backend/db/dev/

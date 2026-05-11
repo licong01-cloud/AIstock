@@ -73,3 +73,48 @@ class AlgoModeUnsupportedError(UnsupportedFeatureError):
 
 class AlgoRealtimeUnsupportedError(AlgoModeUnsupportedError):
     error_code = "ALGO_REALTIME_UNSUPPORTED"
+
+
+class BrokerBackendError(TradingCoreError):
+    """Base class for adapter-side BrokerBackend failures.
+
+    Strategy Engine design 2026-05-08 §3.6.1 / §10.1 (R-Q9). Engine itself does
+    not raise these — the BrokerBackend implementation does, and the adapter
+    propagates them up (no silent retry; feedback_no_silent_errors).
+    """
+
+    error_code = "BROKER_BACKEND_ERROR"
+
+
+class BrokerSubmitError(BrokerBackendError):
+    """submit_order_intent failed before reaching the backend (validation)."""
+
+    error_code = "BROKER_SUBMIT_ERROR"
+
+
+class BrokerRejectedError(BrokerBackendError):
+    """Backend rejected the order (capital limit / suspended / limit-up etc.)."""
+
+    error_code = "BROKER_REJECTED"
+
+
+class BrokerConnectivityError(BrokerBackendError):
+    """Backend session lost (e.g. miniQMT crash / xtquant disconnect).
+
+    The adapter MUST surface; never silently retry.
+    """
+
+    error_code = "BROKER_CONNECTIVITY_ERROR"
+
+
+class BrokerMarketSourceMismatchError(TradingCoreError):
+    """MinuteDataSource not in ALLOWED_MARKET_SOURCES[backend_id].
+
+    Strategy Engine design 2026-05-08 §3.6.4 (R-Q9 D3): market data channel is
+    strongly bound to the broker backend. Cross-pairing (e.g. local_sim with
+    MINIQMT_REALTIME, or minqmt_sim with TDX_REALTIME) is fail-fast at adapter
+    init / portfolio bootstrap / live_session bootstrap; never silently fall
+    back.
+    """
+
+    error_code = "BROKER_MARKET_SOURCE_MISMATCH"

@@ -16,7 +16,10 @@ from typing import Any, Callable, Iterator, Protocol
 from backend.data_service.tdx_adapter import fetch_minute_kline_tdx
 from backend.db.pg_pool import get_conn
 from backend.services.data_refresh_audit import DataRefreshAuditRepository
-from backend.services.trading_core.errors import DataUnavailableError
+from backend.services.trading_core.errors import (
+    BrokerMarketSourceMismatchError,
+    DataUnavailableError,
+)
 from backend.services.trading_core.limit_price_provider import (
     DailyLimitPrice,
     StkLimitPriceProvider,
@@ -33,10 +36,68 @@ ConnFactory = Callable[[], Iterator[Any]]
 
 
 class MinuteDataSource(str, Enum):
-    """Supported authoritative minute data sources."""
+    """Supported authoritative minute data sources.
+
+    MINIQMT_REALTIME is the channel emitted by the miniQMT-bound BrokerBackend
+    (Strategy Engine design 2026-05-08 §3.6.4, R-Q9 D3). The xtdata fetch
+    function for it is intentionally NOT wired here yet; this enum value plus
+    ``ALLOWED_MARKET_SOURCES`` / ``assert_broker_market_source_match`` only
+    establish the strong-binding invariant. Concrete miniQMT minute fetch will
+    be added when MiniQMTSim BrokerBackend lands (Task #20 follow-up after
+    PoC re-test, task #10).
+    """
 
     TDX_REALTIME = "TDX_REALTIME"
     DB_HISTORICAL = "DB_HISTORICAL"
+    MINIQMT_REALTIME = "MINIQMT_REALTIME"
+
+
+# Strong binding between BrokerBackend and minute data channel
+# (Strategy Engine design 2026-05-08 §3.6.4, R-Q9 D3). Cross-pairing is a
+# fail-fast invariant; do NOT add a fallback path.
+ALLOWED_MARKET_SOURCES: dict[str, set[MinuteDataSource]] = {
+    "local_sim": {MinuteDataSource.TDX_REALTIME, MinuteDataSource.DB_HISTORICAL},
+    "minqmt_sim": {MinuteDataSource.MINIQMT_REALTIME},
+    "minqmt_live": {MinuteDataSource.MINIQMT_REALTIME},
+}
+
+
+def assert_broker_market_source_match(
+    broker_id: str,
+    source: MinuteDataSource,
+) -> None:
+    """Validate broker_id <-> MinuteDataSource binding (R-Q9 D3 fail-fast).
+
+    Called at portfolio bootstrap, live_session bootstrap, and Engine.init().
+    Raises BrokerMarketSourceMismatchError on any mismatch. Never silently
+    falls back (feedback_no_silent_errors).
+    """
+
+    if not isinstance(source, MinuteDataSource):
+        raise BrokerMarketSourceMismatchError(
+            "minute data source must be a MinuteDataSource enum value",
+            context={"broker_id": broker_id, "given_source": repr(source)},
+        )
+    allowed = ALLOWED_MARKET_SOURCES.get(broker_id)
+    if allowed is None:
+        raise BrokerMarketSourceMismatchError(
+            f"unknown broker_id {broker_id!r}",
+            context={
+                "broker_id": broker_id,
+                "given_source": source.value,
+                "known_broker_ids": sorted(ALLOWED_MARKET_SOURCES.keys()),
+            },
+        )
+    if source not in allowed:
+        raise BrokerMarketSourceMismatchError(
+            f"broker_id {broker_id!r} requires market source in "
+            f"{sorted(s.value for s in allowed)}; got {source.value}",
+            context={
+                "broker_id": broker_id,
+                "given_source": source.value,
+                "allowed": sorted(s.value for s in allowed),
+            },
+        )
 
 
 @dataclass(frozen=True)

@@ -141,3 +141,112 @@ export function dataSourceLabel(source: unknown): string {
   if (raw === "TDX_REALTIME") return "TDX 实时分钟线（TDX_REALTIME）";
   return raw || "-";
 }
+
+export function packageDisplayLabel(pkg: {
+  package_name?: string | null;
+  package_id?: string | null;
+  alpha_mode?: string | null;
+  created_at?: string | null;
+  manifest?: { metadata?: { name?: string | null } | null } | null;
+}): string {
+  const metadataName = pkg.manifest?.metadata?.name;
+  const explicit = String(metadataName || pkg.package_name || "").trim();
+  if (explicit) return explicit;
+  return shortHash(pkg.package_id, 7);
+}
+
+export function selectionRunLabel(run: {
+  trade_date?: string | null;
+  mode?: string | null;
+  run_id?: string | null;
+}): string {
+  const parts: string[] = [];
+  if (run.trade_date) parts.push(String(run.trade_date));
+  if (run.mode) parts.push(statusLabel(run.mode));
+  if (!parts.length) return shortHash(run.run_id);
+  return parts.join(" / ");
+}
+
+export type PaperV2WorkflowSignals = {
+  hasPackages: boolean;
+  hasSelectionEnabledPackage: boolean;
+  hasPaperEnabledPackage: boolean;
+  hasSelectionRun: boolean;
+  hasPortfolio: boolean;
+  hasReadyRun: boolean;
+};
+
+export type PaperV2WorkflowStep = {
+  key: string;
+  label: string;
+  hint: string;
+  href: string;
+  status: "done" | "current" | "locked" | "available";
+};
+
+export function paperV2WorkflowSteps(signals: PaperV2WorkflowSignals, currentKey?: string): PaperV2WorkflowStep[] {
+  const stepDefs: Array<{ key: string; label: string; hint: string; href: string; done: boolean; reachable: boolean }> = [
+    {
+      key: "packages",
+      label: "1. 建立策略包",
+      hint: "从 QE 实验/演进 Loop 创建并冻结 manifest",
+      href: "/paper-v2/packages",
+      done: signals.hasPackages,
+      reachable: true,
+    },
+    {
+      key: "enable",
+      label: "2. 启用选股/模拟盘",
+      hint: "标记策略包可用于 Selection 或 Paper",
+      href: "/paper-v2/packages",
+      done: signals.hasSelectionEnabledPackage || signals.hasPaperEnabledPackage,
+      reachable: signals.hasPackages,
+    },
+    {
+      key: "selection",
+      label: "3. 运行选股",
+      hint: "进入 Selection Center 选包并出候选",
+      href: "/paper-v2/selection",
+      done: signals.hasSelectionRun,
+      reachable: signals.hasSelectionEnabledPackage || signals.hasPaperEnabledPackage,
+    },
+    {
+      key: "portfolio",
+      label: "4. 创建模拟组合",
+      hint: "用 PAPER_ENABLED 策略包冻结组合",
+      href: "/paper-v2/portfolios",
+      done: signals.hasPortfolio,
+      reachable: signals.hasPaperEnabledPackage,
+    },
+    {
+      key: "run",
+      label: "5. 运行控制台",
+      hint: "就绪检查、单日运行、回放、实时",
+      href: "/paper-v2",
+      done: signals.hasReadyRun,
+      reachable: signals.hasPortfolio,
+    },
+  ];
+
+  let currentAssigned = false;
+  return stepDefs.map((step) => {
+    let status: PaperV2WorkflowStep["status"];
+    if (step.done) {
+      status = "done";
+    } else if (!step.reachable) {
+      status = "locked";
+    } else if (currentKey ? step.key === currentKey : !currentAssigned) {
+      status = "current";
+      currentAssigned = true;
+    } else {
+      status = "available";
+    }
+    return {
+      key: step.key,
+      label: step.label,
+      hint: step.hint,
+      href: step.href,
+      status,
+    };
+  });
+}

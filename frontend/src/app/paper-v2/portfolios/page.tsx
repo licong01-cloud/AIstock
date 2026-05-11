@@ -7,9 +7,11 @@ import JsonPanel from "@/components/paper-v2/JsonPanel";
 import NoticePanel from "@/components/paper-v2/NoticePanel";
 import PaperTable from "@/components/paper-v2/PaperTable";
 import SectionCard from "@/components/paper-v2/SectionCard";
+import CopyChip from "@/components/paper-v2/CopyChip";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
+import WorkflowStepper from "@/components/paper-v2/WorkflowStepper";
 import { hmmTrainingApi, paperV2Api, strategyPackageApi } from "@/lib/paper-v2/api";
-import { formatCompact, hmmSnapshotLabel, shortHash, todayIso } from "@/lib/paper-v2/format";
+import { dataSourceLabel, formatCompact, hmmSnapshotLabel, packageDisplayLabel, paperV2WorkflowSteps, shortHash, todayIso } from "@/lib/paper-v2/format";
 import type { DataSource, ExecutionPolicy, HmmConfig, HmmSnapshot, JsonObject, PaperPortfolio, PaperSessionMode, PaperSessionProgress, RuntimeProfileVersion, StrategyPackage } from "@/lib/paper-v2/types";
 
 function daysAgoIso(days: number): string {
@@ -167,7 +169,7 @@ export default function PaperV2PortfoliosPage() {
       if (!packageId) throw new Error("请先选择 StrategyPackage。");
       if (topK < 1 || topK > 50) throw new Error("TopK 必须在 1 到 50 之间。");
       if (hmmEnabled && (!hmmConfigId || !hmmSnapshotId)) throw new Error("启用 HMM 时必须选择模型版本和已完成快照。");
-      if (sessionMode !== "LIVE_ONLY" && dataSource !== "DB_HISTORICAL") throw new Error("历史追赶必须使用 DB_HISTORICAL 数据源。");
+      if (sessionMode !== "LIVE_ONLY" && dataSource !== "DB_HISTORICAL") throw new Error(`历史追赶必须使用「${dataSourceLabel("DB_HISTORICAL")}」数据源。`);
       const isReplayOnly = sessionMode === "REPLAY_ONLY";
       const isCatchupThenLive = sessionMode === "CATCHUP_THEN_LIVE";
       const isLiveOnly = sessionMode === "LIVE_ONLY";
@@ -231,8 +233,18 @@ export default function PaperV2PortfoliosPage() {
     }
   }
 
+  const workflowSteps = paperV2WorkflowSteps({
+    hasPackages: packages.length > 0,
+    hasSelectionEnabledPackage: packages.length > 0,
+    hasPaperEnabledPackage: packages.some((item) => ["PAPER_ENABLED", "PAPER_RUNNING", "PAPER_PASSED"].includes(item.package_status)),
+    hasSelectionRun: false,
+    hasPortfolio: portfolios.length > 0,
+    hasReadyRun: false,
+  }, "portfolio");
+
   return (
     <main>
+      <WorkflowStepper steps={workflowSteps} compact />
       <ErrorPanel error={error} title="组合操作失败" />
       <div className="pv2-grid pv2-grid-main">
         <SectionCard title="从单个策略包启动模拟盘" eyebrow="单包执行主链路" action={<button className="pv2-button" onClick={load} disabled={loading} type="button">刷新</button>}>
@@ -241,7 +253,7 @@ export default function PaperV2PortfoliosPage() {
             <div className="pv2-field"><label>组合名称</label><input className="pv2-input" data-testid="portfolio-name" value={name} onChange={(event) => setName(event.target.value)} /></div>
             <div className="pv2-field"><label>初始资金</label><input className="pv2-input" data-testid="portfolio-initial-cash" type="number" min={1} value={initialCash} onChange={(event) => setInitialCash(Number(event.target.value))} /></div>
             <div className="pv2-field"><label>运行场景</label><select className="pv2-select" data-testid="portfolio-start-mode" value={sessionMode} onChange={(event) => setSessionMode(event.target.value as PaperSessionMode)}>{SESSION_MODE_OPTIONS.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}</select></div>
-            <div className="pv2-field"><label>数据源</label><input className="pv2-input" data-testid="portfolio-data-source" value={dataSource} readOnly /></div>
+            <div className="pv2-field"><label>数据源</label><input className="pv2-input" data-testid="portfolio-data-source" value={dataSourceLabel(dataSource)} readOnly /></div>
             <div className="pv2-field"><label>已验证执行策略</label><select className="pv2-select" data-testid="portfolio-policy" value={policyId} onChange={(event) => setPolicyId(event.target.value)}><option value="">Manifest 默认策略（后端会导入并校验）</option>{policies.map((item) => <option value={item.policy_id} key={item.policy_id}>{item.policy_name || item.policy_id} / {item.algo_code} / {item.paper_enabled ? "可用于模拟盘" : "未启用"}</option>)}</select></div>
             {sessionMode !== "LIVE_ONLY" ? <>
               <div className="pv2-field"><label>历史追赶开始</label><input className="pv2-input" data-testid="portfolio-replay-start" type="date" value={replayStart} onChange={(event) => setReplayStart(event.target.value)} /></div>
@@ -269,12 +281,12 @@ export default function PaperV2PortfoliosPage() {
           <div className="pv2-card" style={{ marginTop: 14 }}>
             <div className="pv2-eyebrow">创建前复核</div>
             <div className="pv2-chip-row">
-              <span className="pv2-chip">package: {selectedPackage?.package_name || "-"}</span>
-              <span className="pv2-chip">manifest: {shortHash(selectedPackage?.manifest_sha256)}</span>
-              <span className="pv2-chip">data: {dataSource}</span>
-              <span className="pv2-chip">cash: {formatCompact(initialCash)}</span>
-              <span className="pv2-chip">mode: {SESSION_MODE_OPTIONS.find((item) => item.value === sessionMode)?.label}</span>
-              <span className="pv2-chip">source role: {sessionMode === "LIVE_ONLY" ? "TDX_REALTIME" : sessionMode === "CATCHUP_THEN_LIVE" ? "DB_HISTORICAL -> TDX_REALTIME" : "DB_HISTORICAL"}</span>
+              <span className="pv2-chip">策略包: {selectedPackage ? packageDisplayLabel(selectedPackage) : "-"}</span>
+              <span className="pv2-chip">数据源: {dataSourceLabel(dataSource)}</span>
+              <span className="pv2-chip">初始资金: {formatCompact(initialCash)}</span>
+              <span className="pv2-chip">运行场景: {SESSION_MODE_OPTIONS.find((item) => item.value === sessionMode)?.label}</span>
+              <span className="pv2-chip">数据源角色: {sessionMode === "LIVE_ONLY" ? dataSourceLabel("TDX_REALTIME") : sessionMode === "CATCHUP_THEN_LIVE" ? `${dataSourceLabel("DB_HISTORICAL")} → ${dataSourceLabel("TDX_REALTIME")}` : dataSourceLabel("DB_HISTORICAL")}</span>
+              {selectedPackage?.manifest_sha256 ? <CopyChip label={`manifest ${shortHash(selectedPackage.manifest_sha256, 6)}`} value={selectedPackage.manifest_sha256} title={`完整 manifest_sha256：${selectedPackage.manifest_sha256}`} /> : null}
             </div>
           </div>
           <button className="pv2-button-primary" data-testid="portfolio-create" onClick={createPortfolio} disabled={busy} type="button">{busy ? "处理中..." : sessionMode === "LIVE_ONLY" ? "创建完全实时模拟盘" : sessionMode === "CATCHUP_THEN_LIVE" ? "创建并追赶后自动实时" : "创建并仅历史追赶"}</button>
@@ -299,9 +311,13 @@ export default function PaperV2PortfoliosPage() {
           columns={[
             { key: "name", header: "名称", render: (row) => <Link href={`/paper-v2/portfolios/${row.portfolio_id}`}>{row.portfolio_name}</Link> },
             { key: "status", header: "状态", render: (row) => <StatusBadge status={row.status} /> },
-            { key: "package", header: "策略包", render: (row) => <span className="pv2-mono">{shortHash(row.package_id, 7)}</span> },
+            { key: "package", header: "策略包", render: (row) => {
+              const pkg = packages.find((item) => item.package_id === row.package_id);
+              const label = pkg ? packageDisplayLabel(pkg) : shortHash(row.package_id, 7);
+              return <span title={String(row.package_id)}>{label}</span>;
+            } },
             { key: "cash", header: "初始资金", render: (row) => formatCompact(row.initial_cash) },
-            { key: "source", header: "数据源", render: (row) => row.data_source },
+            { key: "source", header: "数据源", render: (row) => dataSourceLabel(row.data_source) },
             { key: "start", header: "开始", render: (row) => row.start_date },
             { key: "actions", header: "操作", render: (row) => <div className="pv2-row-actions"><Link className="pv2-link-button" href={`/paper-v2/portfolios/${row.portfolio_id}/run-console`}>运行控制台</Link><Link className="pv2-link-button" href={`/paper-v2/portfolios/${row.portfolio_id}/ledger`}>账本</Link><button className="pv2-link-button" onClick={() => lifecycle(row.portfolio_id, row.status === "PAUSED" ? "resume" : "pause")} type="button">{row.status === "PAUSED" ? "恢复" : "暂停"}</button><button className="pv2-link-button" onClick={() => lifecycle(row.portfolio_id, "retire")} type="button">退役</button></div> },
           ]}

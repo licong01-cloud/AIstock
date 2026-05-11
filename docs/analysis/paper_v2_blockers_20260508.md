@@ -106,7 +106,7 @@ PoC 阶段 1 + 阶段 2 实证 + 数据源对照触发新决策。**用户 2026-
 | 改动 | 工作面归属 | 状态 |
 | --- | --- | --- |
 | `MarketDataSource` 枚举增 `MINIQMT_REALTIME` | 待 engine-design 判断（market_data.py 是否 Codex 边界）；否则进入 OPEN-EXT-3 | 待评估 |
-| StrategyPackage manifest 增 `broker_compatible` 字段 | 由 §8.5 已商定 strategy_package/ 模块边界决定（按 audit §8.5 当前归属 Claude Code 工作面） | 等用户授权实施 |
+| StrategyPackage manifest 增 `broker_compatible` 字段 | backend/services/strategy_package/live_inference.py + Paper v2 / vn.py / trading_core runtime execution path 是 Claude Code 工作面。strategy_package/ 目录下其他治理文件（service.py / repository.py / runtime_variant.py / validation_run.py / validation_stability.py / package_asset.py）属 Codex 治理工作面。边界依据：cross-tool 通道 drawer 0939d7d1720ed9d728630b5b（Codex D1 reply, 2026-05-09 ratify by user 2026-05-10）。 | 等用户授权实施 |
 | paper_trading_v2 portfolio 增 `broker_backend` 字段 + 创建/激活校验 | Claude Code 工作面（按 audit §8.5） | 等用户授权实施 |
 | `BrokerBackend` 抽象层与 LocalSim/MiniQMTSim 两实现 | Claude Code 工作面 | 等 Codex Phase 4（Master Seed Contract）合入集成分支后才能实施 |
 

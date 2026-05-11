@@ -6,12 +6,13 @@ import NoticePanel from "@/components/paper-v2/NoticePanel";
 import PaperTable from "@/components/paper-v2/PaperTable";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
+import WorkflowStepper from "@/components/paper-v2/WorkflowStepper";
 import { hmmTrainingApi, paperV2Api, selectionCenterApi } from "@/lib/paper-v2/api";
-import { asText, dataSourceLabel, formatNumber, formatPercent, hmmSnapshotLabel, shortHash, todayIso } from "@/lib/paper-v2/format";
+import { asText, dataSourceLabel, formatNumber, formatPercent, hmmSnapshotLabel, paperV2WorkflowSteps, selectionRunLabel, shortHash, statusLabel, todayIso } from "@/lib/paper-v2/format";
 import type { DataSource, HmmConfig, HmmSnapshot, JsonObject, SelectablePackage, SelectionMode, SelectionRun, SelectionWatchlistImportResult } from "@/lib/paper-v2/types";
 
 function runLabel(run: SelectionRun): string {
-  return `${run.trade_date} / ${run.mode} / ${run.package_ids.map((item) => shortHash(item, 5)).join(", ")}`;
+  return `${run.trade_date} / ${statusLabel(run.mode)} / ${run.package_ids.map((item) => shortHash(item, 5)).join(", ")}`;
 }
 
 function artifactCoversTradeDate(snapshot: HmmSnapshot, preset: string, tradeDate: string) {
@@ -308,8 +309,18 @@ export default function PaperV2SelectionPage() {
   const resultRows = run?.aggregate_results || [];
   const visibleResultRows = resultRows.slice(0, topK);
 
+  const workflowSteps = paperV2WorkflowSteps({
+    hasPackages: packages.length > 0,
+    hasSelectionEnabledPackage: packages.length > 0,
+    hasPaperEnabledPackage: packages.some((item) => packageHealthRunnable(item)),
+    hasSelectionRun: runs.length > 0,
+    hasPortfolio: false,
+    hasReadyRun: false,
+  }, "selection");
+
   return (
     <main>
+      <WorkflowStepper steps={workflowSteps} compact />
       <ErrorPanel error={error} title="选股操作失败" />
       <div className="pv2-grid pv2-grid-main">
         <SectionCard title="选股控制" eyebrow="StrategyPackage 权威推理" action={<button className="pv2-button" onClick={loadPackages} disabled={loading} type="button">刷新策略包</button>}>
@@ -364,7 +375,7 @@ export default function PaperV2SelectionPage() {
             ) : null}
           </div>
           <button className="pv2-button-primary" data-testid="selection-run" disabled={running || selectedPackageBlocked} onClick={runSelection} type="button">{running ? "运行中..." : "运行选股"}</button>
-          {selectedPackageBlocked ? <NoticePanel title="策略包健康预检阻断" tone="warning">当前选择包含 BLOCKED/LEGACY_NON_ST_PIT 策略包。请换用通过 ST PIT 合约的新包，或先重建/修复旧包。</NoticePanel> : null}
+          {selectedPackageBlocked ? <NoticePanel title="策略包健康预检阻断" tone="warning">当前选择包含 {statusLabel("BLOCKED")} 或 {statusLabel("LEGACY_NON_ST_PIT")} 策略包。请换用通过 ST PIT 合约的新包，或先重建/修复旧包。</NoticePanel> : null}
         </SectionCard>
 
         <SectionCard title="策略包选择器" eyebrow={`${selectedPackages.length} 个已选择`}>
@@ -385,10 +396,10 @@ export default function PaperV2SelectionPage() {
         </SectionCard>
       </div>
 
-      {dataSource === "TDX_REALTIME" ? <NoticePanel title="实时数据源提示" tone="warning">当前权威 artifact 推理仍要求 DB_HISTORICAL；选择 TDX_REALTIME 时后端会明确失败，不会静默回退。</NoticePanel> : null}
+      {dataSource === "TDX_REALTIME" ? <NoticePanel title="实时数据源提示" tone="warning">当前权威 artifact 推理仍要求「{dataSourceLabel("DB_HISTORICAL")}」；选择「{dataSourceLabel("TDX_REALTIME")}」时后端会明确失败，不会静默回退。</NoticePanel> : null}
       {mode !== "single_package" ? <NoticePanel title="多策略包边界" tone="warning">多策略包当前只用于统一选股研究；不能直接创建模拟盘执行组合。</NoticePanel> : null}
 
-      <SectionCard title="选股结果" eyebrow={run ? `run_id ${shortHash(run.run_id)}` : "尚未运行"} action={<button className="pv2-button" data-testid="selection-add-watchlist" onClick={addToWatchlist} disabled={!run || !resultRows.length} type="button">一键加入自选股票池</button>}>
+      <SectionCard title="选股结果" eyebrow={run ? selectionRunLabel(run) : "尚未运行"} action={<button className="pv2-button" data-testid="selection-add-watchlist" onClick={addToWatchlist} disabled={!run || !resultRows.length} type="button">一键加入自选股票池</button>}>
         <div className="pv2-form-grid" style={{ marginBottom: 12 }}>
           <div className="pv2-field"><label>自选分类名称</label><input className="pv2-input" data-testid="selection-watchlist-name" value={watchlistCategoryName} onChange={(event) => setWatchlistCategoryName(event.target.value)} placeholder="自动创建或复用同名分类" /></div>
           <div className="pv2-field"><label>目标交易日</label><div className="pv2-chip">{run?.trade_date || tradeDate}</div></div>
@@ -457,7 +468,7 @@ export default function PaperV2SelectionPage() {
             { key: "pick", header: "聚合", render: (row) => <input data-testid={`selection-run-checkbox-${row.run_id}`} type="checkbox" checked={Boolean(selectedRuns[row.run_id])} onChange={(event) => setSelectedRuns((prev) => ({ ...prev, [row.run_id]: event.target.checked }))} /> },
             { key: "run", header: "运行记录", render: (row) => <button className="pv2-link-button" onClick={() => showHistoryRun(row.run_id)} type="button">{runLabel(row)}</button> },
             { key: "status", header: "状态", render: (row) => <StatusBadge status={row.status || "unknown"} /> },
-            { key: "source", header: "数据源", render: (row) => row.data_source },
+            { key: "source", header: "数据源", render: (row) => dataSourceLabel(row.data_source) },
             { key: "pkgs", header: "策略包", render: (row) => row.package_ids.map((item) => shortHash(item, 5)).join(", ") },
             { key: "count", header: "候选数", render: (row) => row.aggregate_results?.length || 0 },
           ]}

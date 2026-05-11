@@ -1,0 +1,21 @@
+# vn.py PoC working tree -- keep credentials and bulky artefacts out of git.
+
+# Real env file with real account ID / userdata path. Use .env.poc.example as
+# the committed template instead.
+.env.poc
+
+# Override repo-root .gitignore rule `.env.*` so the committed template stays
+# tracked. Place AFTER the .env.poc rule so the example is not also blocked.
+!.env.poc.example
+
+# Stage-2 isolated venv (~800 MB, includes vnpy + PySide6 + xtquant chain).
+.venv-vnpy-poc/
+
+# Python bytecode + run logs.
+__pycache__/
+*.pyc
+*.log
+
+# Editor / OS noise.
+.DS_Store
+Thumbs.db
