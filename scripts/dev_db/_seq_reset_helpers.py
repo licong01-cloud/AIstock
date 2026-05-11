@@ -23,10 +23,16 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
-# Schemas in scope for sequence reset + FK validation. Only paper_v2 /
-# strategy_pkg / market are touched by Batch A's COPY path; qe_archive is
-# loaded via worker handlers (not COPY) so its sequences advance naturally.
-TARGET_SCHEMAS = ("paper_v2", "strategy_pkg", "market")
+# Schemas in scope for sequence reset + FK validation.
+#
+# T23 (Codex r1 BLOCKED, drawer 3efd4c9d) — qe_archive added: although qe_archive
+# was originally intended to be loaded via worker handlers (which advance
+# sequences naturally via INSERT), Batch A also COPIES qe_archive baseline
+# samples (per QE_ARCHIVE_SAMPLE in batch_a_import_real_data.py). Those COPY
+# paths bypass nextval(), so the qe_archive BIGSERIAL sequences also need
+# setval after import — and FK validation must cover qe_archive's run_source
+# / run_metric / run_factor / etc.
+TARGET_SCHEMAS = ("paper_v2", "strategy_pkg", "market", "qe_archive")
 
 
 @dataclass

@@ -63,22 +63,35 @@ PAPER_V2_ORDER = (
     "cash_ledger", "errors",
 )
 
-# qe_archive sampling spec: (table, time_column or None, days)
-# None = full table (small lookups), days=N = WHERE time_col >= NOW() - N days
+# qe_archive sampling spec: (table, time_column or None, days, extra_where)
+# - time_col + days: WHERE time_col >= NOW() - N days
+# - extra_where (T23 / Codex r1 BLOCKED fix): additional WHERE fragment
+#   ANDed onto the time filter. Used for FK-aware pruning to avoid orphan
+#   rows when the parent table is filtered to a narrower window than the child.
+# - None for any of (time_col, days, extra_where) means no filter on that axis.
 QE_ARCHIVE_SAMPLE = (
-    ("outbox_event", "created_at", 30),
-    ("archive_job", "created_at", 30),
-    ("run", "created_at", 7),
-    ("run_metric", "created_at", 7),
-    ("run_factor", "created_at", 7),
-    ("run_curve", "created_at", 7),
-    ("run_trade", "created_at", 7),
-    ("run_symbol_summary", "created_at", 7),
-    ("run_data_context", "created_at", 7),
-    ("run_source", None, None),  # tiny lookup
-    ("schema_version", None, None),  # tiny
-    ("metric_taxonomy", None, None),  # tiny
-    ("raw_payload", "created_at", 7),
+    ("outbox_event", "created_at", 30, None),
+    ("archive_job", "created_at", 30, None),
+    ("run", "created_at", 7, None),
+    ("run_metric", "created_at", 7, None),
+    ("run_factor", "created_at", 7, None),
+    ("run_curve", "created_at", 7, None),
+    ("run_trade", "created_at", 7, None),
+    ("run_symbol_summary", "created_at", 7, None),
+    ("run_data_context", "created_at", 7, None),
+    # T23 (Codex r1 BLOCKED) — run_source has a run_id FK to qe_archive.run.
+    # Codex dev-DB probe found 16 orphan rows here because the parent
+    # qe_archive.run is filtered to last 7 days while run_source previously
+    # imported the full table. Prune child to match parent's time window so
+    # FK integrity holds post-import. Net effect: run_source rowcount tracks
+    # qe_archive.run rowcount (both 0 in current dev sample, but the contract
+    # is correct for any future window where run has rows).
+    ("run_source", None, None,
+     "run_id IN (SELECT run_id FROM qe_archive.run "
+     "WHERE created_at >= NOW() - INTERVAL '7 days')"),
+    ("schema_version", None, None, None),  # tiny
+    ("metric_taxonomy", None, None, None),  # tiny
+    ("raw_payload", "created_at", 7, None),
 )
 
 
@@ -340,17 +353,20 @@ def main():
 
     # ---- 5. qe_archive baseline samples ----
     print(f"[5/5] qe_archive baseline samples ({len(QE_ARCHIVE_SAMPLE)} tables)")
-    for tbl, time_col, days in QE_ARCHIVE_SAMPLE:
+    for tbl, time_col, days, extra_where in QE_ARCHIVE_SAMPLE:
         with prod_conn.cursor() as pc:
             if time_col and not has_column(pc, "qe_archive", tbl, time_col):
                 r = TableResult("qe_archive", tbl, "skipped", note=f"missing column {time_col}")
                 report.add(r)
                 print(f"  {tbl}: skipped ({r.note})")
                 continue
+        # Build composite WHERE: time filter AND extra_where (T23 FK-aware prune)
+        where_parts: list[str] = []
         if time_col and days:
-            where = f"{time_col} >= (NOW() - INTERVAL '{days} days')"
-        else:
-            where = None
+            where_parts.append(f"{time_col} >= (NOW() - INTERVAL '{days} days')")
+        if extra_where:
+            where_parts.append(f"({extra_where})")
+        where = " AND ".join(where_parts) if where_parts else None
         r = safe_copy(prod_conn, dev_conn, "qe_archive", tbl, where_sql=where)
         print(f"  {tbl}: {r.status} rows={r.rows_copied} {r.note}")
         report.add(r)
