@@ -339,3 +339,78 @@ Codex 接手 contingency 未激活, 战略 session 继续主导。
 - 23:00 R6 merge
 - 23:30 prod backend + daemon enable + cold-start
 - 明早 9:30 实盘 ✅
+
+### 2026-05-11 18:20 — R5 paper-v2 merged to main ✅
+
+- merge commit: `3cfe10f`
+- pushed to origin/main
+- claude/paper-v2-vnpy-mvp-20260508 remote branch 已删除
+- conflict 解决: .gitignore (合并 exception lists + 注释)
+- 97 files changed, 16296 insertions(+), 203 deletions(-)
+- 验证: backend/services/paper_trading_v2/repository.py 含 intended_price/fill_market_context/created_at/updated_at capture
+
+### 2026-05-11 ~18:25 — 派 paper-v2 baseline post-R5 (流水线验证 R5)
+
+- drawer `9263d55b`
+- 用户明确要求: 所有功能必须经流水线验证 → R5 入 main 后必须跑 baseline 才能进 R6 prod
+- target: main HEAD 3cfe10f, expect GREEN ≥ 11 sessions
+- 重点: paper_v2_backend (T5/T6/INT) + paper_v2_l3 (daemon outbox) + qe_archive_backend (T14a)
+- 输出: docs/baseline/stage6_baseline_post_r5_20260511.md on 新 branch
+- SLA 60 min
+
+### 当前并行任务 (18:25 起)
+
+| Task | 持有方 | drawer | SLA |
+|---|---|---|---|
+| baseline post-R5 流水线验证 | paper-v2 | 9263d55b | 60 min |
+| verify Codex b976c23 backfill scripts | paper-v2 | 013ab7f7 | 60 min |
+| R6 prod apply runbook | Codex | 5dd13e99 | 1.5h |
+
+paper-v2 端 2 任务可串行 (推荐先 baseline 再 verify) 或并行。
+
+### R6 prod ops 流水线验证补充
+
+用户要求: R6 merge 后也必须跑流水线验证。新增计划:
+- R6 merge 后立即派 paper-v2 baseline post-R6
+- baseline GREEN 后才能 prod backend 8001 启动 + daemon enable
+- daemon enable 后跑 cold-start sanity (模拟单 round-trip)
+- sanity PASS 后才能进 9:30 实盘
+
+时间线推迟约 30-60 min: 实盘从 23:30 cold-start 推迟到 00:00-00:30 范围, 明早 9:30 开市仍可行 (用户睡眠时间被压缩)。
+
+### 2026-05-11 ~18:30 — 三方 deliver
+
+| Source | Verdict | 关键发现 |
+|---|---|---|
+| paper-v2 verify b976c23 (drawer 9a2668d5, commit 1acc15f) | READY-WITH-CAVEATS | scripts dev-locked, prod 需 separate entrypoint |
+| baseline post-R5 v1 (drawer b203c431, commit 779e904) | YELLOW 13G/3F/14SKIP | 3 fails 全 env-only (psycopg2 no-password); 0 R5 code regression |
+| Codex R6 runbook (drawer 09cd1a6c, commit 55ac10d) | COMPLETE | 明确警告 backfill scripts 不可 apply prod, 无 prod-capable executor by 09:00 → R6 NO-GO |
+
+### 🚨 关键阻断点: backfill scripts dev-locked, 无 prod path
+
+实盘 BLOCKER. Codex Task 1 的 negative safety check 是 by-design (反 prod 误用), 但反过来阻断了真 prod backfill.
+
+### 2026-05-11 ~18:40 — 战略 session cherry-pick docs 到 main (R0 风格)
+
+- main HEAD: `30879c2` (bdcdb4b verify doc + 30879c2 runbook doc)
+- `claude/paper-v2-vnpy-mvp-20260508` remote branch 再次删除 (paper-v2 worktree 不应再 push 到此 branch)
+
+### 2026-05-11 ~18:35 — 派 Codex Task 4 + paper-v2 双任务
+
+| Task | 持有方 | drawer | SLA |
+|---|---|---|---|
+| Codex Task 4: Prod-capable evidence backfill executor | Codex | d1c285d3 | 1.5h |
+| paper-v2 Task A: 推 verify commit (实际已 done, 战略 cherry-pick 后 paper-v2 可跳过) | paper-v2 | 2ba8573b | done |
+| paper-v2 Task B: baseline RE-RUN with env | paper-v2 | 2ba8573b | 45 min |
+
+### R6 prod ops 路径 (含新阻断)
+
+- ⏸️ 等 Codex Task 4 deliver: prod executor ready
+- ⏸️ 等 paper-v2 baseline v2 GREEN: 流水线验证 R5 in main 无 env-fail
+- ⏸️ 用户 prod DR snapshot + 授权
+- ⏸️ Codex prod executor `--apply` on prod
+- ⏸️ 6 migrations apply prod
+- ⏸️ R6 git merge
+- ⏸️ paper-v2 baseline post-R6 (流水线验证 R6 in main)
+- ⏸️ prod backend 8001 + daemon enable + cold-start sanity
+- ⏸️ 9:30 实盘
