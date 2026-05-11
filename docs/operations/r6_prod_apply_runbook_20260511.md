@@ -405,23 +405,39 @@ Pass criteria:
 
 ### 7.2 StrategyPackage Evidence Backfill Apply
 
-Template for a future approved production-capable executor. Do not run the current dev-only `scripts/strategy_package_evidence_backfill.py --apply` against production.
+Approved production operator flow for StrategyPackage evidence backfill:
+
+1. Re-run the evidence plan against the approved bundle in dry-run/planner mode.
+2. Confirm the target production DB, package ids, and manifest hashes in the cutover log before any write.
+3. Run the approved production-capable executor `scripts/strategy_package_governance_evidence_backfill_prod_executor.py`.
+4. Verify the apply report, row counts, and idempotency against the approved bundle.
+5. Keep the cutover blocked if the executor reports any target, package-status, or manifest mismatch.
 
 ```powershell
-# Template only. Do not run unless a production-capable executor is explicitly approved for R6.
-# Current prep script is dev-only; replace this command shape with the approved R6 executor if different.
+# Template only. Do not run outside the approved R6 production window.
+# Current prep script is dev-only; do not use it for production apply.
 Set-Location '<R6_WORKTREE>'
-$env:AISTOCK_R6_PROD_EVIDENCE_BACKFILL_APPLY_ENABLED = 'true'
-python <APPROVED_R6_STRATEGY_EVIDENCE_BACKFILL_EXECUTOR>.py `
+$env:AISTOCK_QE_GOVERNANCE_EVIDENCE_BACKFILL_PROD_APPLY_ENABLED = 'true'
+$env:AISTOCK_QE_GOVERNANCE_EVIDENCE_BACKFILL_MUTEX_HELD = 'true'
+$env:AISTOCK_PROD_DB_PASSWORD = '<PROD_DB_PASSWORD_FROM_SECRET_STORE>'
+python scripts/strategy_package_governance_evidence_backfill_prod_executor.py `
   --apply `
-  --confirm-apply '<APPROVED_R6_PROD_EVIDENCE_BACKFILL_TOKEN>' `
+  --confirm-apply 'APPLY_QE_GOVERNANCE_EVIDENCE_BACKFILL_PROD' `
   --evidence-bundle '<R6_EVIDENCE_BUNDLE>' `
+  --plan-preview '<SECURE_EVIDENCE_DIR>/r6_evidence_backfill_plan.json' `
+  --dr-snapshot '<SECURE_EVIDENCE_DIR>/r6_dr_snapshot_verified.json' `
+  --dr-snapshot-ref '<R6_DR_SNAPSHOT_REF>' `
+  --operator-confirmation '<SECURE_EVIDENCE_DIR>/r6_operator_confirmation.json' `
+  --target-db 'prod' `
   --db-host '<PROD_DB_HOST>' `
-  --db-port '<PROD_DB_PORT>' `
+  --db-port '5432' `
   --db-name '<PROD_DB_NAME>' `
   --db-user '<PROD_DB_USER>' `
+  --db-password-env 'AISTOCK_PROD_DB_PASSWORD' `
   --json > '<SECURE_EVIDENCE_DIR>/r6_strategy_package_evidence_backfill_apply.json'
-Remove-Item Env:AISTOCK_R6_PROD_EVIDENCE_BACKFILL_APPLY_ENABLED -ErrorAction SilentlyContinue
+Remove-Item Env:AISTOCK_QE_GOVERNANCE_EVIDENCE_BACKFILL_PROD_APPLY_ENABLED -ErrorAction SilentlyContinue
+Remove-Item Env:AISTOCK_QE_GOVERNANCE_EVIDENCE_BACKFILL_MUTEX_HELD -ErrorAction SilentlyContinue
+Remove-Item Env:AISTOCK_PROD_DB_PASSWORD -ErrorAction SilentlyContinue
 ```
 
 Expected writes, if authorized by the approved executor:
@@ -430,6 +446,9 @@ Expected writes, if authorized by the approved executor:
 - `strategy_pkg.package_runtime_variant` rows for validated R6 runtime candidates.
 - Optional `strategy_pkg.seed_fragility_score` rows if the strategy-approved bundle contains valid stability evidence.
 - No mutation of frozen manifests, model assets, HMM snapshots, or raw QE artifacts.
+- This is the only approved production apply path for StrategyPackage evidence backfill in this runbook.
+- The operator confirmation artifact must include the token, target DB label/name, plan preview SHA256, DR snapshot ref, and all four package IDs.
+- `scripts/strategy_package_evidence_backfill.py --apply` remains dev-locked and must not be used for production apply.
 
 ### 7.3 Protected Asset Ledger Backfill Apply
 

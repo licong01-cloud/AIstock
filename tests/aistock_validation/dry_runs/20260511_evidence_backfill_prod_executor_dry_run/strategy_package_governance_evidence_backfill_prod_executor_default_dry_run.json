@@ -1,0 +1,136 @@
+{
+  "audit_rows": [
+    {
+      "action": "governance_evidence_backfill_preview",
+      "dry_run": true,
+      "manifest_sha256": "sha256-pkg_1",
+      "package_id": "pkg_1",
+      "row_count": 6,
+      "tables": [
+        "strategy_pkg.package_asset",
+        "strategy_pkg.package_runtime_variant",
+        "strategy_pkg.package_validation_run",
+        "strategy_pkg.seed_fragility_score"
+      ]
+    },
+    {
+      "action": "governance_evidence_backfill_preview",
+      "dry_run": true,
+      "manifest_sha256": "sha256-pkg_2",
+      "package_id": "pkg_2",
+      "row_count": 6,
+      "tables": [
+        "strategy_pkg.package_asset",
+        "strategy_pkg.package_runtime_variant",
+        "strategy_pkg.package_validation_run",
+        "strategy_pkg.seed_fragility_score"
+      ]
+    },
+    {
+      "action": "governance_evidence_backfill_preview",
+      "dry_run": true,
+      "manifest_sha256": "sha256-pkg_3",
+      "package_id": "pkg_3",
+      "row_count": 6,
+      "tables": [
+        "strategy_pkg.package_asset",
+        "strategy_pkg.package_runtime_variant",
+        "strategy_pkg.package_validation_run",
+        "strategy_pkg.seed_fragility_score"
+      ]
+    },
+    {
+      "action": "governance_evidence_backfill_preview",
+      "dry_run": true,
+      "manifest_sha256": "sha256-pkg_4",
+      "package_id": "pkg_4",
+      "row_count": 6,
+      "tables": [
+        "strategy_pkg.package_asset",
+        "strategy_pkg.package_runtime_variant",
+        "strategy_pkg.package_validation_run",
+        "strategy_pkg.seed_fragility_score"
+      ]
+    }
+  ],
+  "db_connection_opened": false,
+  "db_target": "prod:aistock_operator@prod-db.invalid:5432/aistock",
+  "db_writes": false,
+  "db_writes_executed": false,
+  "ddl": false,
+  "dr_snapshot_ref": null,
+  "dry_run": true,
+  "evidence_bundle_sha256": "3c768ac70eb3b3d1d9770836896192a91030c24451cff4582099164ba0aa9b2c",
+  "generated_at": "2026-05-11T11:17:08.142301+00:00",
+  "mode": "dry_run",
+  "operator_confirmation_sha256": null,
+  "operator_confirmation_valid": false,
+  "package_count": 4,
+  "package_ids": [
+    "pkg_1",
+    "pkg_2",
+    "pkg_3",
+    "pkg_4"
+  ],
+  "packages": [
+    {
+      "manifest_sha256": "sha256-pkg_1",
+      "package_id": "pkg_1",
+      "package_status": "BACKTEST_APPROVED",
+      "row_count": 6,
+      "tables": [
+        "strategy_pkg.package_asset",
+        "strategy_pkg.package_runtime_variant",
+        "strategy_pkg.package_validation_run",
+        "strategy_pkg.seed_fragility_score"
+      ]
+    },
+    {
+      "manifest_sha256": "sha256-pkg_2",
+      "package_id": "pkg_2",
+      "package_status": "BACKTEST_APPROVED",
+      "row_count": 6,
+      "tables": [
+        "strategy_pkg.package_asset",
+        "strategy_pkg.package_runtime_variant",
+        "strategy_pkg.package_validation_run",
+        "strategy_pkg.seed_fragility_score"
+      ]
+    },
+    {
+      "manifest_sha256": "sha256-pkg_3",
+      "package_id": "pkg_3",
+      "package_status": "BACKTEST_APPROVED",
+      "row_count": 6,
+      "tables": [
+        "strategy_pkg.package_asset",
+        "strategy_pkg.package_runtime_variant",
+        "strategy_pkg.package_validation_run",
+        "strategy_pkg.seed_fragility_score"
+      ]
+    },
+    {
+      "manifest_sha256": "sha256-pkg_4",
+      "package_id": "pkg_4",
+      "package_status": "BACKTEST_APPROVED",
+      "row_count": 6,
+      "tables": [
+        "strategy_pkg.package_asset",
+        "strategy_pkg.package_runtime_variant",
+        "strategy_pkg.package_validation_run",
+        "strategy_pkg.seed_fragility_score"
+      ]
+    }
+  ],
+  "plan_preview_sha256": "af06bf9333168bd08d57cf823ba81ab87aa54bd1d976656a07c6fa405a4a236f",
+  "production_services_touched": false,
+  "safety_notes": [
+    "No DDL is executed by this executor.",
+    "Frozen manifest, package_status, model assets, Paper runtime, and service processes are not modified.",
+    "Production apply requires exact token, env flag, mutex marker, DR snapshot, approved operator confirmation, and per-package transactions."
+  ],
+  "schema_version": "aistock_qe_governance_evidence_backfill_prod_executor_v1",
+  "sql_package_validation": null,
+  "status": "passed",
+  "target_db": "prod"
+}
