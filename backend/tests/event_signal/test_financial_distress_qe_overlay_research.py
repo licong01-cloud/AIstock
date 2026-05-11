@@ -12,6 +12,7 @@ from backend.services.event_signal.financial_distress_qe_overlay_research import
     MID_LARGE_EVENT_RULES,
     PHASE24_RESEARCH_RULES,
     PHASE25_RESEARCH_RULES,
+    PHASE30_RESEARCH_RULES,
     REFINEMENT_RULES,
     SIZE_BUCKET_RULES,
     CandidateScore,
@@ -48,6 +49,7 @@ def _rule(key: str):
             *REFINEMENT_RULES,
             *PHASE24_RESEARCH_RULES,
             *PHASE25_RESEARCH_RULES,
+            *PHASE30_RESEARCH_RULES,
         )
         if rule.rule_key == key
     )
@@ -133,6 +135,12 @@ def test_select_research_rules_can_run_phase25_only():
     rules = select_research_rules(phase25_only=True)
 
     assert [rule.rule_key for rule in rules] == [rule.rule_key for rule in PHASE25_RESEARCH_RULES]
+
+
+def test_select_research_rules_can_run_phase30_only():
+    rules = select_research_rules(phase30_only=True)
+
+    assert [rule.rule_key for rule in rules] == [rule.rule_key for rule in PHASE30_RESEARCH_RULES]
 
 
 def test_select_research_rules_can_include_loss_history_with_first_batch():
@@ -475,19 +483,54 @@ def test_phase25_indicator_refinement_rules_match_threshold_splits():
     )
 
 
+def test_phase30_q_ocf_intersection_rules_match_high_confidence_filters():
+    base = {
+        "event_type": "financial_indicator_large_decline",
+        "market_cap_bucket": "mv_10bn_to_30bn_yuan",
+        "prior_loss_report_count_730d_bucket": "loss_reports_2",
+        "metric_detail": {
+            "actual_yoy": -90.0,
+            "or_yoy": 5.0,
+            "ocf_yoy": -60.0,
+            "q_ocf_to_sales": -2.0,
+            "debt_to_assets": 85.0,
+            "current_ratio": 0.7,
+        },
+    }
+
+    assert _rule_applies(base, _rule("indicator_decline_q_ocf_to_sales_lt_0_mv_10_30bn"))
+    assert not _rule_applies(base, _rule("indicator_decline_q_ocf_to_sales_lt_0_mv_ge_30bn"))
+    assert _rule_applies(
+        {**base, "market_cap_bucket": "mv_30bn_to_100bn_yuan"},
+        _rule("indicator_decline_q_ocf_to_sales_lt_0_mv_ge_30bn"),
+    )
+    assert _rule_applies(base, _rule("indicator_decline_q_ocf_to_sales_lt_0_actual_yoy_le_minus80_mv_ge_10bn"))
+    assert _rule_applies(base, _rule("indicator_decline_q_ocf_to_sales_lt_0_prior_loss_ge_2_mv_ge_10bn"))
+    assert _rule_applies(base, _rule("indicator_decline_q_ocf_to_sales_lt_0_profit_revenue_diverge_mv_ge_10bn"))
+    assert _rule_applies(base, _rule("indicator_decline_q_ocf_to_sales_lt_0_and_ocf_yoy_le_minus50_mv_ge_10bn"))
+    assert _rule_applies(base, _rule("indicator_decline_q_ocf_to_sales_lt_0_and_leverage_or_liquidity_mv_ge_10bn"))
+    assert _rule_applies(base, _rule("indicator_decline_q_ocf_to_sales_lt_0_multi_stress_mv_ge_10bn"))
+    assert not _rule_applies(
+        {**base, "metric_detail": {**base["metric_detail"], "q_ocf_to_sales": 0.1}},
+        _rule("indicator_decline_q_ocf_to_sales_lt_0_multi_stress_mv_ge_10bn"),
+    )
+
+
 def test_expand_simulator_scenarios_adds_score_down_penalty_modes():
     scenarios = expand_simulator_scenarios(
         simulator_modes=["score_down"],
         score_down_rank_penalty_pcts=[5, 0.10],
-        score_down_top_k=50,
+        score_down_top_k=[20, 50],
         score_down_ranking_date_mode="previous",
     )
 
     assert [scenario.mode_key for scenario in scenarios] == [
+        "score_down_rank_5pct_top20_previous",
+        "score_down_rank_10pct_top20_previous",
         "score_down_rank_5pct_top50_previous",
         "score_down_rank_10pct_top50_previous",
     ]
-    assert [scenario.rank_penalty_pct for scenario in scenarios] == [0.05, 0.10]
+    assert [scenario.rank_penalty_pct for scenario in scenarios] == [0.05, 0.10, 0.05, 0.10]
 
 
 def test_expand_simulator_scenarios_adds_severity_profiles():

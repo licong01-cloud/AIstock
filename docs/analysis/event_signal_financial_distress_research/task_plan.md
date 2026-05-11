@@ -45,6 +45,7 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | 27    | q_ocf fine sweep                         | complete | phase27_q_ocf_fine_sweep_result_20260511                    |
 | 28    | q_ocf WSL true QE smoke                  | complete | phase28_q_ocf_true_qe_smoke_result_20260511                 |
 | 29    | true QE attribution diagnostics          | complete | phase29_true_qe_attribution_result_20260511                 |
+| 30    | high-conviction intersection cheap screen| complete | phase30_high_confidence_intersection_result_20260511        |
 +-------+------------------------------------------+----------+-------------------------------------------------------------+
 ```
 
@@ -88,7 +89,7 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | 27    | q_ocf fine sweep                                 | complete   | q_ocf 90td fixed_15 passed cheap WSL gate                     |
 | 28    | q_ocf WSL true QE smoke                          | complete   | positive but not strong enough for runtime promotion          |
 | 29    | cheap-to-true mismatch diagnostics               | complete   | q_ocf broad low-precision vs Phase19 focused Top50 penalties  |
-| 30    | high-conviction intersection cheap screen        | pending    | combine q_ocf with Phase19-style/rank-aware filters           |
+| 30    | high-conviction intersection cheap screen        | complete   | no WSL true-QE candidate; best row remains watchlist-only      |
 | 31    | LLM/PDF preprocessing design                     | deferred   | start only after structured signals stop improving            |
 +-------+----------------------------------------------+------------+--------------------------------------------------------------+
 ```
@@ -371,4 +372,18 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | Phase23 loss/mv fixed20                          | CALIBRATION_ONLY      | high drop density but weaker true PnL, so drops alone are not |
 | next phase                                       | INTERSECTION_SCREEN   | prefer high-conviction/rank-aware filters before WSL reruns   |
 +--------------------------------------------------+-----------------------+---------------------------------------------------------------+
+```
+
+## Phase 30 High-Confidence Intersection Finding
+
+```text
++------------------------------------------+----------------------+--------------------------------------------------------------------------------+
+| item                                     | decision             | evidence                                                                       |
++------------------------------------------+----------------------+--------------------------------------------------------------------------------+
+| q_ocf 10-30bn / fixed15 top50 / 60td     | WATCHLIST_ONLY       | best cheap row score 9.5, avg +0.114%, 15/22 positive, hit/overlay 0.05%       |
+| WSL true-QE rerun                         | REJECT_NOW           | 0 true-QE candidates; all rows are far below the Phase-27 cheap gate           |
+| direct-event downside                     | KEEP_AS_RESEARCH     | every Phase-30 rule has direct downside support, but overlay effect is weak    |
+| rank-aware top20/top50 intersection       | NO_PRECISION_LIFT    | TopK concentration remains around 0.04%-0.06%, not close to Phase19 precision |
+| next empirical step                       | STOP_QOCF_INTERSECT  | do not spend WSL budget here; pivot to other structured families or design work|
++------------------------------------------+----------------------+--------------------------------------------------------------------------------+
 ```

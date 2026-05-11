@@ -634,3 +634,20 @@ Phase 24 evidence:
 | production backend 8001 | not touched                                                                                             |
 +-------------------------+---------------------------------------------------------------------------------------------------------+
 ```
+
+## 2026-05-11 Phase 30 Completed
+
+```text
++-------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------+
+| item                    | value                                                                                                                                             |
++-------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------+
+| script                  | scripts/financial_distress_phase30_high_confidence_intersection_screen.py                                                                         |
+| report                  | docs/analysis/event_signal_financial_distress_phase30_high_confidence_intersection_result_20260511.md                                             |
+| direct report           | reports\event_signal\financial_distress_phase30_high_confidence_intersection\direct\financial_distress_direct_event_20240701_20260511_194903.json |
+| overlay report          | reports\event_signal\financial_distress_phase30_high_confidence_intersection\overlay\rank_aware\financial_distress_qe_multiloop_20240701_20260511_202514.json |
+| rules / validations     | 8 rules / 96 stability rows / 2112 validations                                                                                                    |
+| best cheap row          | q_ocf 10-30bn / 60td / fixed15_top50, score 9.5, avg +0.114%, 15/22 positive, hit/overlay 0.05%                                                   |
+| decision                | no TRUE_QE_CANDIDATE; do not run WSL true QE for q_ocf intersections                                                                              |
+| production backend 8001 | not touched                                                                                                                                       |
++-------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------+
+```

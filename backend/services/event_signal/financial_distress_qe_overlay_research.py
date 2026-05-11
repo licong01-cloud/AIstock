@@ -82,6 +82,7 @@ PHASE24_INDICATOR_DETERIORATION_RESEARCH_RULES: tuple[FinancialDistressRule, ...
 PHASE24_CASHFLOW_LEVERAGE_RESEARCH_RULES: tuple[FinancialDistressRule, ...]
 PHASE24_RESEARCH_RULES: tuple[FinancialDistressRule, ...]
 PHASE25_RESEARCH_RULES: tuple[FinancialDistressRule, ...]
+PHASE30_RESEARCH_RULES: tuple[FinancialDistressRule, ...]
 MARKET_CAP_BUCKET_ORDER = (
     "mv_lt_5bn_yuan",
     "mv_5bn_to_10bn_yuan",
@@ -620,6 +621,65 @@ PHASE25_RESEARCH_RULES: tuple[FinancialDistressRule, ...] = (
     ),
 )
 
+PHASE30_RESEARCH_RULES: tuple[FinancialDistressRule, ...] = (
+    FinancialDistressRule(
+        rule_key="indicator_decline_q_ocf_to_sales_lt_0_mv_10_30bn",
+        title="financial indicator q OCF/sales <0 and market cap 10-30bn CNY",
+        description="Phase-30 high-conviction size intersection of q_ocf_to_sales<0 with the Phase-19 10-30bn bucket.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=1010,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_q_ocf_to_sales_lt_0_mv_ge_30bn",
+        title="financial indicator q OCF/sales <0 and market cap >=30bn CNY",
+        description="Phase-30 high-conviction size intersection for large/mega caps with q_ocf_to_sales<0.",
+        policy_risk_level="MEDIUM",
+        priority=1020,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_q_ocf_to_sales_lt_0_actual_yoy_le_minus80_mv_ge_10bn",
+        title="q OCF/sales <0 plus actual yoy <= -80%, market cap >=10bn CNY",
+        description="Phase-30 intersection of negative quarterly OCF/sales and sharp actual profit deterioration.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=1030,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_q_ocf_to_sales_lt_0_prior_loss_ge_2_mv_ge_10bn",
+        title="q OCF/sales <0 plus prior losses >=2, market cap >=10bn CNY",
+        description="Phase-30 intersection of negative quarterly OCF/sales and repeated recent loss history.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=1040,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_q_ocf_to_sales_lt_0_profit_revenue_diverge_mv_ge_10bn",
+        title="q OCF/sales <0 plus profit/revenue divergence, market cap >=10bn CNY",
+        description="Phase-30 intersection of negative quarterly OCF/sales and profit decline despite non-negative revenue growth.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=1050,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_q_ocf_to_sales_lt_0_and_ocf_yoy_le_minus50_mv_ge_10bn",
+        title="q OCF/sales <0 plus OCF yoy <= -50%, market cap >=10bn CNY",
+        description="Phase-30 compound cash-flow deterioration: negative quarterly OCF/sales and falling operating cash flow.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=1060,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_q_ocf_to_sales_lt_0_and_leverage_or_liquidity_mv_ge_10bn",
+        title="q OCF/sales <0 plus leverage or liquidity stress, market cap >=10bn CNY",
+        description="Phase-30 intersection of negative quarterly OCF/sales with high debt/assets or current ratio below one.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=1070,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_q_ocf_to_sales_lt_0_multi_stress_mv_ge_10bn",
+        title="q OCF/sales <0 plus at least two additional stress signals, market cap >=10bn CNY",
+        description="Phase-30 high-conviction compound rule requiring q_ocf_to_sales<0 and multiple independent stress features.",
+        policy_risk_level="HIGH",
+        priority=1080,
+    ),
+)
+
 SEVERITY_PROFILES: dict[str, SeverityProfile] = {
     "balanced": SeverityProfile(
         profile_key="balanced",
@@ -851,13 +911,17 @@ def expand_simulator_scenarios(
     *,
     simulator_modes: Sequence[str],
     score_down_rank_penalty_pcts: Sequence[float] = DEFAULT_SCORE_DOWN_RANK_PENALTY_PCTS,
-    score_down_top_k: int = DEFAULT_SCORE_DOWN_TOP_K,
+    score_down_top_k: int | Sequence[int] = DEFAULT_SCORE_DOWN_TOP_K,
     score_down_ranking_date_mode: str = DEFAULT_SCORE_DOWN_RANKING_DATE_MODE,
     score_down_severity_profiles: Sequence[str] = DEFAULT_SCORE_DOWN_SEVERITY_PROFILES,
     score_down_context_profiles: Sequence[str] = DEFAULT_SCORE_DOWN_CONTEXT_PROFILES,
 ) -> tuple[SimulatorScenario, ...]:
-    if score_down_top_k <= 0:
-        raise ValueError("score_down_top_k must be positive")
+    if isinstance(score_down_top_k, int):
+        top_k_values = (score_down_top_k,)
+    else:
+        top_k_values = tuple(int(value) for value in score_down_top_k)
+    if not top_k_values or any(value <= 0 for value in top_k_values):
+        raise ValueError("score_down_top_k must contain positive values")
     if score_down_ranking_date_mode not in {"current", "previous"}:
         raise ValueError("score_down_ranking_date_mode must be current or previous")
 
@@ -867,48 +931,51 @@ def expand_simulator_scenarios(
             scenarios.append(SimulatorScenario(mode_key=mode, base_mode=mode))
             continue
         if mode == SCORE_DOWN_BASE_MODE:
-            for raw_pct in score_down_rank_penalty_pcts:
-                pct_value = normalize_penalty_pct(raw_pct)
-                scenarios.append(
-                    SimulatorScenario(
-                        mode_key=(
-                            f"score_down_rank_{_pct_label(pct_value)}"
-                            f"_top{score_down_top_k}_{score_down_ranking_date_mode}"
-                        ),
-                        base_mode=SCORE_DOWN_BASE_MODE,
-                        rank_penalty_pct=pct_value,
-                        top_k=score_down_top_k,
-                        ranking_date_mode=score_down_ranking_date_mode,
+            for top_k in top_k_values:
+                for raw_pct in score_down_rank_penalty_pcts:
+                    pct_value = normalize_penalty_pct(raw_pct)
+                    scenarios.append(
+                        SimulatorScenario(
+                            mode_key=(
+                                f"score_down_rank_{_pct_label(pct_value)}"
+                                f"_top{top_k}_{score_down_ranking_date_mode}"
+                            ),
+                            base_mode=SCORE_DOWN_BASE_MODE,
+                            rank_penalty_pct=pct_value,
+                            top_k=top_k,
+                            ranking_date_mode=score_down_ranking_date_mode,
+                        )
                     )
-                )
             continue
         if mode == SCORE_DOWN_SEVERITY_BASE_MODE:
-            for profile_key in score_down_severity_profiles:
-                if profile_key not in SEVERITY_PROFILES:
-                    raise ValueError(f"unknown score-down severity profile: {profile_key}")
-                scenarios.append(
-                    SimulatorScenario(
-                        mode_key=f"score_down_severity_{profile_key}_top{score_down_top_k}_{score_down_ranking_date_mode}",
-                        base_mode=SCORE_DOWN_SEVERITY_BASE_MODE,
-                        top_k=score_down_top_k,
-                        ranking_date_mode=score_down_ranking_date_mode,
-                        severity_profile=profile_key,
+            for top_k in top_k_values:
+                for profile_key in score_down_severity_profiles:
+                    if profile_key not in SEVERITY_PROFILES:
+                        raise ValueError(f"unknown score-down severity profile: {profile_key}")
+                    scenarios.append(
+                        SimulatorScenario(
+                            mode_key=f"score_down_severity_{profile_key}_top{top_k}_{score_down_ranking_date_mode}",
+                            base_mode=SCORE_DOWN_SEVERITY_BASE_MODE,
+                            top_k=top_k,
+                            ranking_date_mode=score_down_ranking_date_mode,
+                            severity_profile=profile_key,
+                        )
                     )
-                )
             continue
         if mode == SCORE_DOWN_CONTEXT_BASE_MODE:
-            for profile_key in score_down_context_profiles:
-                if profile_key not in CONTEXT_SCORE_DOWN_PROFILES:
-                    raise ValueError(f"unknown context score-down profile: {profile_key}")
-                scenarios.append(
-                    SimulatorScenario(
-                        mode_key=f"score_down_context_{profile_key}_top{score_down_top_k}_{score_down_ranking_date_mode}",
-                        base_mode=mode,
-                        top_k=score_down_top_k,
-                        ranking_date_mode=score_down_ranking_date_mode,
-                        context_profile=profile_key,
+            for top_k in top_k_values:
+                for profile_key in score_down_context_profiles:
+                    if profile_key not in CONTEXT_SCORE_DOWN_PROFILES:
+                        raise ValueError(f"unknown context score-down profile: {profile_key}")
+                    scenarios.append(
+                        SimulatorScenario(
+                            mode_key=f"score_down_context_{profile_key}_top{top_k}_{score_down_ranking_date_mode}",
+                            base_mode=mode,
+                            top_k=top_k,
+                            ranking_date_mode=score_down_ranking_date_mode,
+                            context_profile=profile_key,
+                        )
                     )
-                )
             continue
         raise ValueError(f"unsupported simulator mode: {mode}")
     return tuple(scenarios)
@@ -932,17 +999,27 @@ def select_research_rules(
     include_refinement_rules: bool = False,
     include_phase24_rules: bool = False,
     include_phase25_rules: bool = False,
+    include_phase30_rules: bool = False,
     size_bucket_only: bool = False,
     loss_history_only: bool = False,
     mid_large_only: bool = False,
     refinement_only: bool = False,
     phase24_only: bool = False,
     phase25_only: bool = False,
+    phase30_only: bool = False,
 ) -> tuple[FinancialDistressRule, ...]:
     rules: list[FinancialDistressRule] = []
     enabled_only_flags = sum(
         1
-        for flag in (size_bucket_only, loss_history_only, mid_large_only, refinement_only, phase24_only, phase25_only)
+        for flag in (
+            size_bucket_only,
+            loss_history_only,
+            mid_large_only,
+            refinement_only,
+            phase24_only,
+            phase25_only,
+            phase30_only,
+        )
         if flag
     )
     if enabled_only_flags > 1:
@@ -959,6 +1036,8 @@ def select_research_rules(
         rules.extend(PHASE24_RESEARCH_RULES)
     elif phase25_only:
         rules.extend(PHASE25_RESEARCH_RULES)
+    elif phase30_only:
+        rules.extend(PHASE30_RESEARCH_RULES)
     else:
         if include_first_batch_rules:
             rules.extend(FIRST_BATCH_RULES)
@@ -974,6 +1053,8 @@ def select_research_rules(
             rules.extend(PHASE24_RESEARCH_RULES)
         if include_phase25_rules:
             rules.extend(PHASE25_RESEARCH_RULES)
+        if include_phase30_rules:
+            rules.extend(PHASE30_RESEARCH_RULES)
     if not rules:
         raise ValueError("at least one research rule set must be enabled")
     return tuple(sorted(rules, key=lambda item: item.priority))
@@ -1073,6 +1154,15 @@ def _rule_applies(row: Mapping[str, Any], rule: FinancialDistressRule) -> bool:
     debt_to_assets = _metric_detail_float(row, "debt_to_assets")
     current_ratio = _metric_detail_float(row, "current_ratio")
     netprofit_margin = _metric_detail_any_float(row, "netprofit_margin", "profit_to_gr")
+    has_q_ocf_stress = q_ocf_to_sales is not None and q_ocf_to_sales < 0.0
+    has_ocf_yoy_stress = ocf_yoy is not None and ocf_yoy <= -50.0
+    has_debt_stress = debt_to_assets is not None and debt_to_assets >= 70.0
+    has_liquidity_stress = current_ratio is not None and current_ratio < 1.0
+    has_actual_yoy_stress = actual_yoy is not None and actual_yoy <= -80.0
+    has_profit_revenue_divergence = (
+        actual_yoy is not None and actual_yoy <= -50.0 and revenue_yoy is not None and revenue_yoy >= 0.0
+    )
+    has_prior_loss_stress = prior_loss_count_bucket in PRIOR_LOSS_GE2_BUCKETS
     actual_source_type = str(
         (row.get("metric_detail") if isinstance(row.get("metric_detail"), Mapping) else {}).get("actual_source_type") or ""
     )
@@ -1216,7 +1306,35 @@ def _rule_applies(row: Mapping[str, Any], rule: FinancialDistressRule) -> bool:
             )
         )
     if rule.rule_key == "indicator_decline_q_ocf_to_sales_lt_0_mv_ge_10bn":
-        return is_indicator_large_decline and is_mid_large_cap and q_ocf_to_sales is not None and q_ocf_to_sales < 0.0
+        return is_indicator_large_decline and is_mid_large_cap and has_q_ocf_stress
+    if rule.rule_key == "indicator_decline_q_ocf_to_sales_lt_0_mv_10_30bn":
+        return is_indicator_large_decline and is_10_30bn_cap and has_q_ocf_stress
+    if rule.rule_key == "indicator_decline_q_ocf_to_sales_lt_0_mv_ge_30bn":
+        return is_indicator_large_decline and is_large_cap and has_q_ocf_stress
+    if rule.rule_key == "indicator_decline_q_ocf_to_sales_lt_0_actual_yoy_le_minus80_mv_ge_10bn":
+        return is_indicator_large_decline and is_mid_large_cap and has_q_ocf_stress and has_actual_yoy_stress
+    if rule.rule_key == "indicator_decline_q_ocf_to_sales_lt_0_prior_loss_ge_2_mv_ge_10bn":
+        return is_indicator_large_decline and is_mid_large_cap and has_q_ocf_stress and has_prior_loss_stress
+    if rule.rule_key == "indicator_decline_q_ocf_to_sales_lt_0_profit_revenue_diverge_mv_ge_10bn":
+        return is_indicator_large_decline and is_mid_large_cap and has_q_ocf_stress and has_profit_revenue_divergence
+    if rule.rule_key == "indicator_decline_q_ocf_to_sales_lt_0_and_ocf_yoy_le_minus50_mv_ge_10bn":
+        return is_indicator_large_decline and is_mid_large_cap and has_q_ocf_stress and has_ocf_yoy_stress
+    if rule.rule_key == "indicator_decline_q_ocf_to_sales_lt_0_and_leverage_or_liquidity_mv_ge_10bn":
+        return is_indicator_large_decline and is_mid_large_cap and has_q_ocf_stress and (has_debt_stress or has_liquidity_stress)
+    if rule.rule_key == "indicator_decline_q_ocf_to_sales_lt_0_multi_stress_mv_ge_10bn":
+        additional_stress_count = sum(
+            1
+            for flag in (
+                has_actual_yoy_stress,
+                has_ocf_yoy_stress,
+                has_debt_stress,
+                has_liquidity_stress,
+                has_prior_loss_stress,
+                has_profit_revenue_divergence,
+            )
+            if flag
+        )
+        return is_indicator_large_decline and is_mid_large_cap and has_q_ocf_stress and additional_stress_count >= 2
     if rule.rule_key == "indicator_decline_ocf_yoy_le_minus50_mv_10_30bn":
         return is_indicator_large_decline and is_10_30bn_cap and ocf_yoy is not None and ocf_yoy <= -50.0
     if rule.rule_key == "indicator_decline_debt_assets_ge_80_mv_ge_10bn":
@@ -3399,6 +3517,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--phase24-only", action="store_true")
     parser.add_argument("--include-phase25-rules", action="store_true")
     parser.add_argument("--phase25-only", action="store_true")
+    parser.add_argument("--include-phase30-rules", action="store_true")
+    parser.add_argument("--phase30-only", action="store_true")
     parser.add_argument("--rule-key", action="append", default=None, help="Limit research to one or more rule_key values.")
     return parser.parse_args(argv)
 
@@ -3414,12 +3534,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         include_refinement_rules=args.include_refinement_rules,
         include_phase24_rules=args.include_phase24_rules,
         include_phase25_rules=args.include_phase25_rules,
+        include_phase30_rules=args.include_phase30_rules,
         size_bucket_only=args.size_bucket_only,
         loss_history_only=args.loss_history_only,
         mid_large_only=args.mid_large_only,
         refinement_only=args.refinement_only,
         phase24_only=args.phase24_only,
         phase25_only=args.phase25_only,
+        phase30_only=args.phase30_only,
     )
     research_rules = filter_research_rules_by_key(research_rules, args.rule_key)
     if args.loop_spec or args.loop_spec_json:
