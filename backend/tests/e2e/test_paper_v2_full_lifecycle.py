@@ -444,13 +444,46 @@ class TestPaperV2GovernanceNotReadyPath:
                 f"expected {env_cfg['TDX_DB_DEV_NAME']!r}."
             )
 
-            # ----- P1.1 r2: transient UPDATE to force validator-side gate -----
-            # Mutate status to PAPER_RUNNING — validator's check
-            # (validators.py:62) rejects since PAPER_RUNNING NOT IN
-            # {BACKTEST_APPROVED, SELECTION_ENABLED, PAPER_ENABLED}.
-            # Pool was rebuilt above, so this UPDATE hits dev DB.
+            # ----- P1.1 r3 (Codex r2 BLOCKED): CAS-safe transient UPDATE -----
+            # Round 2 used SELECT (under no lock) → UPDATE → blind restore. Codex
+            # flagged the race: between our COMMIT and our restore, a concurrent
+            # legitimate writer could change the status. The blind restore would
+            # then overwrite that change (silent data loss).
+            #
+            # r3 uses SELECT ... FOR UPDATE to take a row-level lock while we
+            # capture `original_status`, then performs the mutate UPDATE inside
+            # the SAME transaction (atomic 2-statement update). The restore at
+            # the end of the test is a CAS:
+            #
+            #     UPDATE ... SET package_status = original_status
+            #       WHERE package_id = %s AND package_status = 'PAPER_RUNNING'
+            #
+            # If a concurrent writer changed package_status between our COMMIT
+            # and our restore, the WHERE clause does NOT match → rowcount=0 →
+            # we skip the blind overwrite. The concurrent writer's change wins
+            # (which is the correct semantic: their change is legitimate).
             with pg_pool.get_conn() as mutate_conn:
                 with mutate_conn.cursor() as cur:
+                    # Re-fetch original_status under a row lock, so the value
+                    # we restore to is consistent with the row state we are
+                    # mutating from.
+                    cur.execute(
+                        """SELECT package_status FROM strategy_pkg.package
+                           WHERE package_id = %s FOR UPDATE""",
+                        (not_ready_package_id,),
+                    )
+                    locked = cur.fetchone()
+                    assert locked is not None, \
+                        f"package {not_ready_package_id!r} disappeared before SELECT FOR UPDATE"
+                    original_status = locked[0]
+                    # If concurrent writer already advanced the row past our
+                    # eligible set, skip the test rather than poke a different
+                    # state.
+                    if original_status not in ("BACKTEST_APPROVED", "SELECTION_ENABLED"):
+                        pytest.skip(
+                            f"package {not_ready_package_id} status changed under us "
+                            f"to {original_status!r}; skip rather than mutate"
+                        )
                     cur.execute(
                         """UPDATE strategy_pkg.package
                            SET package_status = 'PAPER_RUNNING'
@@ -458,7 +491,7 @@ class TestPaperV2GovernanceNotReadyPath:
                         (not_ready_package_id,),
                     )
                     assert cur.rowcount == 1, f"transient UPDATE rowcount={cur.rowcount}"
-                mutate_conn.commit()
+                mutate_conn.commit()  # release row lock + commit mutation
             status_was_mutated = True
 
             # ----- P1.1 r2: strict VALIDATION error assertion -----
@@ -496,7 +529,14 @@ class TestPaperV2GovernanceNotReadyPath:
             )
         finally:
             # Restore the package status FIRST (before env teardown so we
-            # still have dev pool to do the UPDATE)
+            # still have dev pool to do the UPDATE).
+            #
+            # P1.1 r3 CAS restore: only flip back to original_status IF the
+            # row is still in our test-set state (PAPER_RUNNING). If a
+            # concurrent legitimate writer changed status away from
+            # PAPER_RUNNING during the test, the CAS doesn't match → we
+            # skip the restore → their change wins (correct semantic; no
+            # silent overwrite).
             if status_was_mutated:
                 try:
                     with pg_pool.get_conn() as restore_conn:
@@ -504,14 +544,40 @@ class TestPaperV2GovernanceNotReadyPath:
                             cur.execute(
                                 """UPDATE strategy_pkg.package
                                    SET package_status = %s
-                                   WHERE package_id = %s""",
+                                   WHERE package_id = %s
+                                     AND package_status = 'PAPER_RUNNING'""",
                                 (original_status, not_ready_package_id),
                             )
+                            cas_rows = cur.rowcount
                         restore_conn.commit()
+                    if cas_rows == 0:
+                        # Race detected: concurrent writer changed status away
+                        # from PAPER_RUNNING. Surface as a NOISY warning rather
+                        # than silently swallowing. Look up current status for
+                        # the message; don't fail the test (the test itself
+                        # already passed via pytest.raises above).
+                        with pg_pool.get_conn() as inspect_conn:
+                            with inspect_conn.cursor() as cur:
+                                cur.execute(
+                                    """SELECT package_status FROM strategy_pkg.package
+                                       WHERE package_id = %s""",
+                                    (not_ready_package_id,),
+                                )
+                                final_row = cur.fetchone()
+                        final_status = final_row[0] if final_row else "<DELETED>"
+                        import warnings
+                        warnings.warn(
+                            f"E2E test CAS-restore race: package {not_ready_package_id!r} "
+                            f"left in {final_status!r} (expected to restore from "
+                            f"PAPER_RUNNING to {original_status!r}). A concurrent "
+                            f"writer changed status during the test; their change wins.",
+                            stacklevel=1,
+                        )
                 except Exception as e:
-                    # If restoration fails, fail loudly so dev DB doesn't stay corrupted
+                    # If CAS UPDATE itself fails (DB error), surface loudly so dev
+                    # DB doesn't stay corrupted unnoticed
                     raise RuntimeError(
-                        f"FAILED to restore package {not_ready_package_id} to "
+                        f"FAILED to CAS-restore package {not_ready_package_id} to "
                         f"status {original_status!r}: {type(e).__name__}: {e}"
                     ) from e
             # Restore env so other tests in the session don't see dev creds
