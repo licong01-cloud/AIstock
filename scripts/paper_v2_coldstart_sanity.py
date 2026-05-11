@@ -10,6 +10,7 @@ scoped cleanup for the sentinel run.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -49,6 +50,8 @@ REQUIRED_TABLES = (
     "strategy_pkg.package_runtime_variant",
     "strategy_pkg.seed_fragility_score",
     "strategy_pkg.package_asset",
+    "paper_v2.portfolio",
+    "paper_v2.run",
     "paper_v2.orders",
     "paper_v2.fills",
     "paper_v2.run_events",
@@ -62,6 +65,8 @@ CLEANUP_TABLES = (
     "paper_v2.order_events",
     "paper_v2.orders",
     "paper_v2.run_events",
+    "paper_v2.run",
+    "paper_v2.portfolio",
 )
 
 
@@ -98,6 +103,7 @@ class DbTarget:
 @dataclass(frozen=True)
 class SentinelOrder:
     run_id: str
+    package_id: str
     symbol: str = SENTINEL_SYMBOL
     side: str = SENTINEL_SIDE
     quantity: int = SENTINEL_QUANTITY
@@ -106,11 +112,14 @@ class SentinelOrder:
     def payload(self) -> dict[str, Any]:
         return {
             "run_id": self.run_id,
+            "package_id": self.package_id,
             "symbol": self.symbol,
             "side": self.side,
             "quantity": self.quantity,
+            "qty": self.quantity,
             "intended_price": self.intended_price,
             "source": "paper_v2_coldstart_sanity",
+            "broker_backend": "local_sim",
         }
 
 
@@ -127,6 +136,11 @@ def _now_local() -> datetime:
 def _default_run_id(now: datetime | None = None) -> str:
     stamp = (now or _now_local()).strftime("%Y%m%d-%H%M%S")
     return f"sanity-{stamp}"
+
+
+def _sentinel_portfolio_id(run_id: str) -> str:
+    suffix = hashlib.sha256(run_id.encode("utf-8")).hexdigest()[:24]
+    return f"paper_v2_coldstart_sanity_{suffix}"
 
 
 def _require(condition: bool, message: str) -> None:
@@ -237,7 +251,7 @@ def _is_a_share_trading_window(now: datetime) -> bool:
     return dt_time(9, 30) <= local_time <= dt_time(15, 0)
 
 
-def _require_prod_guards(args: argparse.Namespace, target: DbTarget, *, now: datetime) -> None:
+def _require_prod_guards(args: argparse.Namespace, target: DbTarget, sentinel: SentinelOrder, *, now: datetime) -> None:
     _require(args.mode == "prod", "internal error: prod guards called outside --mode=prod")
     _require(args.confirm_prod == CONFIRM_PROD, f"--mode=prod requires exact --confirm-prod {CONFIRM_PROD}")
     _require(_env_truthy(ENV_PROD_ENABLED), f"--mode=prod requires {ENV_PROD_ENABLED}=true")
@@ -246,6 +260,11 @@ def _require_prod_guards(args: argparse.Namespace, target: DbTarget, *, now: dat
     confirmation = str(args.operator_confirmation or "").strip()
     _require(confirmation, "operator confirmation is required for production cold-start sanity")
     _require(CONFIRM_PROD in confirmation, "operator confirmation must include the exact production token")
+    _require(sentinel.package_id, "production sanity requires a sentinel package id")
+    _require(
+        sentinel.package_id in confirmation,
+        "operator confirmation must include the sentinel package id",
+    )
     _require(target.target_db == "prod", "production sanity requires --target-db prod")
     _require(target.port == 5432, "production sanity requires DB port 5432")
     _require(target.dbname not in {"aistock_dev", "dev", "test"}, "production sanity refuses dev/test DB names")
@@ -321,6 +340,40 @@ def _preflight_db_checks(conn: Any, package_ids: list[str]) -> list[dict[str, An
             "required governance/Paper v2 tables exist" if not missing_tables else f"missing required table(s): {', '.join(missing_tables)}",
             {"missing_tables": missing_tables},
         ))
+        if missing_tables:
+            return checks
+
+        required_fill_columns = {
+            "created_at",
+            "updated_at",
+            "intended_price",
+            "fill_market_context",
+        }
+        cur.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'paper_v2'
+              AND table_name = 'fills'
+              AND column_name = ANY(%s)
+            """,
+            (list(required_fill_columns),),
+        )
+        present_fill_columns = {_row_get(row, "column_name", 0) for row in list(cur.fetchall() or [])}
+        missing_fill_columns = sorted(required_fill_columns - present_fill_columns)
+        checks.append(_phase(
+            "required_capture_columns",
+            "PASS" if not missing_fill_columns else "FAIL",
+            "paper_v2.fills capture columns exist" if not missing_fill_columns else "missing paper_v2.fills capture columns",
+            {
+                "table": "paper_v2.fills",
+                "missing_columns": missing_fill_columns,
+                "required_columns": sorted(required_fill_columns),
+                "ddl_file": "backend/db/add_paper_v2_capture_fields_20260510.sql",
+            },
+        ))
+        if missing_fill_columns:
+            return checks
 
         if not package_ids:
             checks.append(_phase("package_ids", "FAIL", "production sanity requires approved package ids"))
@@ -595,6 +648,8 @@ def _cleanup_sentinel(conn: Any, sentinel: SentinelOrder) -> dict[str, Any]:
         ("paper_v2.order_events", "DELETE FROM paper_v2.order_events WHERE run_id = %s", (sentinel.run_id,)),
         ("paper_v2.orders", "DELETE FROM paper_v2.orders WHERE run_id = %s", (sentinel.run_id,)),
         ("paper_v2.run_events", "DELETE FROM paper_v2.run_events WHERE run_id = %s", (sentinel.run_id,)),
+        ("paper_v2.run", "DELETE FROM paper_v2.run WHERE run_id = %s", (sentinel.run_id,)),
+        ("paper_v2.portfolio", "DELETE FROM paper_v2.portfolio WHERE portfolio_id = %s", (_sentinel_portfolio_id(sentinel.run_id),)),
     ]
     results: list[dict[str, Any]] = []
     for table, sql, params in deletes:
@@ -637,6 +692,7 @@ def _remedial_action(failed: list[str]) -> list[str]:
         "paper_v2_daemon_process": "Start or fix the approved Paper v2/R6 daemon before re-running the gate.",
         "db_readonly_ping": "Confirm production DB credentials and read-only connectivity.",
         "required_tables": "Apply or verify the approved R6 migrations before runtime activation.",
+        "required_capture_columns": "Apply or verify backend/db/add_paper_v2_capture_fields_20260510.sql before the cold-start sentinel.",
         "governance_evidence_and_enable_paper": "Verify evidence backfill, protected asset ledger, runtime variants, and enable_paper status for approved packages.",
         "sentinel_order_trigger": "Verify the configured Paper v2 sentinel endpoint or daemon entry point.",
         "sentinel_fill_poll": "Inspect daemon logs, market data, and paper_v2.fills for the sentinel run_id.",
@@ -701,7 +757,7 @@ def run_prod(args: argparse.Namespace, target: DbTarget, sentinel: SentinelOrder
     cleanup_done = False
     checks: list[dict[str, Any]] = []
     try:
-        _require_prod_guards(args, target, now=_now_local())
+        _require_prod_guards(args, target, sentinel, now=_now_local())
         checks.append(_phase("prod_guards", "PASS", "all production guards passed"))
 
         health = _check_backend_health(args)
@@ -778,6 +834,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sentinel-endpoint", default=DEFAULT_SENTINEL_ENDPOINT)
     parser.add_argument("--daemon-process-name", default=DEFAULT_DAEMON_PROCESS_NAME)
     parser.add_argument("--package-id", action="append", default=[], help="Approved R6 package id; repeat for all production packages.")
+    parser.add_argument("--sentinel-package-id", help="Approved package id the sentinel endpoint must use. Defaults to first --package-id.")
     parser.add_argument("--run-id", help="Optional sentinel run_id. Defaults to sanity-<timestamp>.")
     parser.add_argument("--timeout-seconds", type=int, default=30)
     parser.add_argument("--poll-seconds", type=float, default=1.0)
@@ -823,7 +880,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     target = _target_from_args(args)
     run_id = args.run_id or _default_run_id()
-    sentinel = SentinelOrder(run_id=run_id)
+    package_ids = list(args.package_id or [])
+    sentinel_package_id = args.sentinel_package_id or (package_ids[0] if package_ids else "")
+    sentinel = SentinelOrder(run_id=run_id, package_id=sentinel_package_id)
     try:
         _require(args.timeout_seconds > 0, "--timeout-seconds must be positive")
         _require(args.poll_seconds > 0, "--poll-seconds must be positive")

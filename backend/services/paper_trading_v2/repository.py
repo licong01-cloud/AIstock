@@ -1407,15 +1407,27 @@ class PaperTradingV2Repository:
         )
         return [self._order_from_row(row) for row in rows]
 
-    def save_fill(self, run_id: str, fill: Fill) -> None:
+    def save_fill(
+        self,
+        run_id: str,
+        fill: Fill,
+        *,
+        intended_price: float | None = None,
+        fill_market_context: dict[str, Any] | None = None,
+    ) -> None:
+        if isinstance(fill.metadata, dict):
+            intended_price = fill.metadata.get("intended_price", intended_price)
+            fill_market_context = fill.metadata.get("fill_market_context", fill_market_context)
+        now = datetime.now(UTC)
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     INSERT INTO paper_v2.fills (
                         fill_id, run_id, order_id, symbol, side, quantity, price,
-                        trade_time, bar_time, reason, metadata
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        trade_time, bar_time, reason, metadata, created_at, updated_at,
+                        intended_price, fill_market_context
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT(fill_id) DO NOTHING
                     """,
                     (
@@ -1430,6 +1442,10 @@ class PaperTradingV2Repository:
                         fill.bar_time,
                         fill.reason,
                         psycopg2.extras.Json(fill.metadata),
+                        now,
+                        now,
+                        intended_price,
+                        psycopg2.extras.Json(fill_market_context) if fill_market_context is not None else None,
                     ),
                 )
 

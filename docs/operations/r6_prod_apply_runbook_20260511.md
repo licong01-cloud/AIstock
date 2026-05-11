@@ -606,6 +606,16 @@ Rollback for code sync:
 
 This section records the automated final gate required after section 9 runtime activation and before the final 9:30 go/no-go decision. It is placed here per the Task 6 dispatch, but operators must run it only after backend `8001`, the Paper/R6 daemon, DB migrations, code sync, governance evidence backfill, and protected asset ledger backfill have already passed.
 
+Task 8 wires the default sentinel API used by this script:
+
+- Effective route: `POST /api/v1/paper-v2/coldstart-sanity/sentinel-order`.
+- The endpoint is LocalSim-only and hard-rejects any `broker_backend` other than `local_sim`; it must not start the session scheduler, call miniQMT, or activate a live broker path.
+- The sentinel payload includes the approved `package_id`; pass `--sentinel-package-id '<PACKAGE_ID_1>'`, or the script defaults to the first `--package-id` when the flag is omitted.
+- It writes only run-scoped sentinel rows that the cleanup phase can remove: `paper_v2.portfolio`, `paper_v2.run`, `paper_v2.run_events`, `paper_v2.orders`, `paper_v2.order_events`, `paper_v2.fills`, `qe_archive.outbox_event`, `strategy_pkg.package_validation_run`, and `strategy_pkg.package_asset`. The synthetic sentinel portfolio is deterministic by `run_id` and isolated under a `paper_v2_coldstart_sanity_` prefix.
+- A clean sentinel `GO` proves only the LocalSim-backed Paper v2 cold-start path and required audit rows; it is not proof of MiniQMT/live broker readiness and does not validate live broker connectivity.
+- Before running this gate, confirm the Paper v2 capture-field DDL is present on the target DB (`paper_v2.fills.created_at`, `updated_at`, `intended_price`, `fill_market_context`), because the sanity script and endpoint select/write those fields directly.
+- The expected OpenAPI path must be visible after backend deploy/restart/code reload at `/openapi.json`; if it is absent, treat the runtime as stale and keep the final gate `NO-GO`.
+
 Default dry-run preview, safe during preparation:
 
 ```powershell
@@ -630,13 +640,15 @@ $env:AISTOCK_PROD_DB_PASSWORD = '<PROD_DB_PASSWORD>'
 python scripts/paper_v2_coldstart_sanity.py `
   --mode prod `
   --confirm-prod RUN_PAPER_V2_COLDSTART_SANITY_PROD `
-  --operator-confirmation 'RUN_PAPER_V2_COLDSTART_SANITY_PROD target=prod packages=<PACKAGE_IDS> approved_by=<RELEASE_COMMANDER>' `
+  --operator-confirmation 'RUN_PAPER_V2_COLDSTART_SANITY_PROD target=prod packages=<PACKAGE_IDS> sentinel_package_id=<PACKAGE_ID_1> approved_by=<RELEASE_COMMANDER>' `
   --api-base '<PROD_API_BASE>' `
+  --sentinel-endpoint '/paper-v2/coldstart-sanity/sentinel-order' `
   --daemon-process-name '<R6_DAEMON_PROCESS_NAME>' `
   --package-id '<PACKAGE_ID_1>' `
   --package-id '<PACKAGE_ID_2>' `
   --package-id '<PACKAGE_ID_3>' `
   --package-id '<PACKAGE_ID_4>' `
+  --sentinel-package-id '<PACKAGE_ID_1>' `
   --target-db prod `
   --db-host '<PROD_DB_HOST>' `
   --db-port 5432 `
@@ -654,7 +666,7 @@ Expected JSON shape:
   "schema_version": "aistock_paper_v2_coldstart_sanity_v1",
   "mode": "prod",
   "run_id": "sanity-<timestamp>",
-  "sentinel_order": {"symbol": "000001.SZ", "side": "BUY", "quantity": 100, "intended_price": "10.00"},
+  "sentinel_order": {"package_id": "<PACKAGE_ID_1>", "symbol": "000001.SZ", "side": "BUY", "quantity": 100, "qty": 100, "intended_price": "10.00", "broker_backend": "local_sim"},
   "phases": [{"check": "backend_health", "status": "PASS"}],
   "verdict": "GO",
   "real_trading_ready": true
@@ -672,6 +684,7 @@ Abort criteria:
 
 - The production JSON artifact must be attached to the go/no-go evidence package before the 09:29 decision.
 - `verdict="GO"` is necessary but not sufficient; all earlier R6 runbook gates and strategy-author readiness must also be green.
+- Because this Task 8 endpoint is LocalSim-only, any later miniQMT_sim or miniQMT_live rollout needs a separate explicit verification gate.
 
 ## 9. Backend `8001` And Daemon Enable/Restart
 
