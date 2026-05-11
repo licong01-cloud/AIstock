@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import gc
+import hashlib
+import json
 import logging
 import math
 import os
@@ -26,6 +28,100 @@ PIPELINE_VERSION = "qe_eval_v2"
 CODE_SOURCE = "qe_code_path"
 _DEFAULT_QLIB_BIN = Path(__file__).resolve().parents[3] / "qlib_bin" / "qlib_bin_20260311"
 _DEFAULT_DISPATCH_NODE_ID = os.getenv("AISTOCK_DEFAULT_GPU_NODE_ID", "wsl2-5080")
+
+# T15 — factor.recompute.completed emit hook (dw-foundation FactorValueArchiveHandler consumer)
+FACTOR_RECOMPUTE_EVENT_TYPE = "factor.recompute.completed"
+FACTOR_RECOMPUTE_SCHEMA_VERSION = 1
+FACTOR_RECOMPUTE_SOURCE_SYSTEM = "qe_factor_official_evaluation"
+FACTOR_RECOMPUTE_ROUTING_CLASS = "archive"
+
+
+def _emit_factor_recompute_event(
+    *,
+    factor_name: str,
+    code_text_hash: str,
+    data_start: str,
+    data_end: str,
+    snapshot_date: str,
+    recompute_run_id: Optional[str] = None,
+    conn=None,
+) -> str:
+    """Insert factor.recompute.completed into qe_archive.outbox_event.
+
+    Idempotency:
+    - event_id = qear_evt_<sha256[:24] of canonical input> (deterministic)
+    - ON CONFLICT (event_id) DO NOTHING
+    - source_sub_id encodes the same canonical fields so the source-level
+      unique index uq_qear_outbox_source_terminal also dedups identical emits
+
+    Per no-silent-error policy (T14a): DB failures are logged and re-raised.
+    The caller (_save_metrics) treats emit failures as a hard error.
+    """
+    canonical_input = "|".join([
+        FACTOR_RECOMPUTE_EVENT_TYPE,
+        factor_name,
+        code_text_hash,
+        data_start or "",
+        data_end or "",
+        snapshot_date or "",
+        recompute_run_id or "",
+    ])
+    event_id = "qear_evt_" + hashlib.sha256(canonical_input.encode("utf-8")).hexdigest()[:24]
+
+    payload = {
+        "schema_version": FACTOR_RECOMPUTE_SCHEMA_VERSION,
+        "factor_name": factor_name,
+        "code_text_hash": code_text_hash,
+        "data_start": data_start,
+        "data_end": data_end,
+        "snapshot_date": snapshot_date,
+        "recompute_run_id": recompute_run_id,
+        "occurred_at": datetime.now(timezone.utc).isoformat(),
+        "routing_class": FACTOR_RECOMPUTE_ROUTING_CLASS,
+    }
+
+    source_sub_id = "|".join([
+        snapshot_date or "",
+        code_text_hash,
+        data_start or "",
+        data_end or "",
+        recompute_run_id or "",
+    ])
+
+    sql = """
+        INSERT INTO qe_archive.outbox_event
+            (event_id, event_type, source_system, source_id, source_sub_id, payload, status)
+        VALUES (%s, %s, %s, %s, %s, %s::jsonb, 'pending')
+        ON CONFLICT (event_id) DO NOTHING
+    """
+    params = (
+        event_id,
+        FACTOR_RECOMPUTE_EVENT_TYPE,
+        FACTOR_RECOMPUTE_SOURCE_SYSTEM,
+        factor_name,
+        source_sub_id,
+        json.dumps(payload),
+    )
+
+    try:
+        if conn is not None:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+        else:
+            with get_conn() as own_conn:
+                with own_conn.cursor() as cur:
+                    cur.execute(sql, params)
+                own_conn.commit()
+    except Exception:
+        logger.error(
+            "factor.recompute.completed emit failed (factor=%s, event_id=%s)",
+            factor_name,
+            event_id,
+            exc_info=True,
+        )
+        raise
+
+    return event_id
 
 _UPSERT_SQL = """
 INSERT INTO aistock_factor_metrics (
@@ -963,8 +1059,13 @@ class FactorOfficialEvaluationService:
         inserted = 0
         skipped = 0
         errors: List[str] = []
+        emitted_events: List[str] = []
         calc_batch_id = engine_data.get("calc_batch_id", "")
         calculated_at = datetime.now(timezone.utc).isoformat()
+
+        # T15 emit hook: per-factor full-window bounds tracked for outbox event payload.
+        per_factor_full_bounds: Dict[str, Dict[str, Optional[str]]] = {}
+        per_factor_inserted: Dict[str, int] = {}
 
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -1073,10 +1174,51 @@ class FactorOfficialEvaluationService:
                     }
                     cur.execute(_UPSERT_SQL, params)
                     inserted += 1
+                    per_factor_inserted[factor_name] = per_factor_inserted.get(factor_name, 0) + 1
+                    if rec.get("eval_window") == "full":
+                        per_factor_full_bounds[factor_name] = {
+                            "data_start": rec.get("data_start"),
+                            "data_end": rec.get("data_end"),
+                        }
+
+                # T15 emit hook: write factor.recompute.completed to qe_archive.outbox_event
+                # for each factor whose metrics were just persisted. One event per factor.
+                # Per no-silent-error policy (T14a): failures are logged and re-raised.
+                emit_factor_names = sorted(per_factor_inserted.keys())
+                if emit_factor_names:
+                    cur.execute(
+                        "SELECT factor_name, code_text FROM aistock_factor_catalog WHERE factor_name = ANY(%s)",
+                        (emit_factor_names,),
+                    )
+                    code_text_map = {row[0]: row[1] for row in cur.fetchall()}
+                    for fname in emit_factor_names:
+                        code_text = code_text_map.get(fname)
+                        if not code_text:
+                            raise RuntimeError(
+                                f"factor.recompute.completed emit blocked: code_text missing for {fname} in aistock_factor_catalog"
+                            )
+                        code_text_hash = hashlib.sha256(code_text.encode("utf-8")).hexdigest()[:16]
+                        bounds = per_factor_full_bounds.get(fname) or {}
+                        event_id = _emit_factor_recompute_event(
+                            factor_name=fname,
+                            code_text_hash=code_text_hash,
+                            data_start=str(bounds.get("data_start") or ""),
+                            data_end=str(bounds.get("data_end") or ""),
+                            snapshot_date=str(snapshot_date),
+                            recompute_run_id=calc_batch_id or None,
+                            conn=conn,
+                        )
+                        emitted_events.append(event_id)
+                        logger.info(
+                            "factor.recompute.completed emitted: factor=%s event_id=%s",
+                            fname,
+                            event_id,
+                        )
 
         return {
             "inserted": inserted,
             "skipped": skipped,
             "errors": errors,
             "calc_engine": CALC_ENGINE,
+            "emitted_events": emitted_events,
         }
