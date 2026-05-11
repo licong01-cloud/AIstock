@@ -81,6 +81,7 @@ PHASE24_EXPECTATION_MISS_RESEARCH_RULES: tuple[FinancialDistressRule, ...]
 PHASE24_INDICATOR_DETERIORATION_RESEARCH_RULES: tuple[FinancialDistressRule, ...]
 PHASE24_CASHFLOW_LEVERAGE_RESEARCH_RULES: tuple[FinancialDistressRule, ...]
 PHASE24_RESEARCH_RULES: tuple[FinancialDistressRule, ...]
+PHASE25_RESEARCH_RULES: tuple[FinancialDistressRule, ...]
 MARKET_CAP_BUCKET_ORDER = (
     "mv_lt_5bn_yuan",
     "mv_5bn_to_10bn_yuan",
@@ -532,6 +533,93 @@ PHASE24_RESEARCH_RULES: tuple[FinancialDistressRule, ...] = (
     *PHASE24_CASHFLOW_LEVERAGE_RESEARCH_RULES,
 )
 
+PHASE25_RESEARCH_RULES: tuple[FinancialDistressRule, ...] = (
+    FinancialDistressRule(
+        rule_key="indicator_decline_ocf_negative_or_leverage_mv_10_30bn",
+        title="financial indicator cash-flow or leverage pressure and market cap 10-30bn CNY",
+        description="Phase-25 size split of the Phase-24 best OCF/leverage stress family for medium caps.",
+        policy_risk_level="MEDIUM",
+        priority=810,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_ocf_negative_or_leverage_mv_30_100bn",
+        title="financial indicator cash-flow or leverage pressure and market cap 30-100bn CNY",
+        description="Phase-25 size split of the Phase-24 best OCF/leverage stress family for large caps.",
+        policy_risk_level="MEDIUM",
+        priority=820,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_q_ocf_to_sales_lt_0_mv_ge_10bn",
+        title="financial indicator quarterly OCF/sales <0 and market cap >=10bn CNY",
+        description="Isolate negative operating cash-flow-to-sales stress inside mid/large-cap indicator decline events.",
+        policy_risk_level="MEDIUM",
+        priority=830,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_ocf_yoy_le_minus50_mv_10_30bn",
+        title="financial indicator OCF yoy <= -50% and market cap 10-30bn CNY",
+        description="Medium-cap split of OCF yoy deterioration within financial-indicator large decline events.",
+        policy_risk_level="MEDIUM",
+        priority=840,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_debt_assets_ge_80_mv_ge_10bn",
+        title="financial indicator debt/assets >=80% and market cap >=10bn CNY",
+        description="Stricter leverage threshold than the Phase-24 debt/assets >=70% rule.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=850,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_debt_assets_ge_90_mv_ge_10bn",
+        title="financial indicator debt/assets >=90% and market cap >=10bn CNY",
+        description="Very high leverage threshold for sparse but potentially severe mid/large-cap indicator deterioration.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=860,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_current_ratio_lt_08_mv_ge_10bn",
+        title="financial indicator current ratio <0.8 and market cap >=10bn CNY",
+        description="Stricter short-term liquidity threshold than the Phase-24 current ratio <1 rule.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=870,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_ocf_yoy_le_minus50_and_debt_assets_ge_70_mv_ge_10bn",
+        title="financial indicator OCF yoy <= -50% plus debt/assets >=70%, market cap >=10bn CNY",
+        description="Compound cash-flow deterioration and leverage stress in mid/large-cap indicator decline events.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=880,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_ocf_negative_and_current_ratio_lt_1_mv_ge_10bn",
+        title="financial indicator weak operating cash flow plus current ratio <1, market cap >=10bn CNY",
+        description="Compound operating cash-flow weakness and short-term liquidity pressure.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=890,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_ocf_negative_or_leverage_actual_yoy_le_minus80_mv_ge_10bn",
+        title="financial indicator OCF/leverage stress plus actual yoy <= -80%, market cap >=10bn CNY",
+        description="Combine Phase-24 OCF/leverage stress with sharper net-profit deterioration.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=900,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_ocf_negative_or_leverage_prior_loss_ge_2_mv_ge_10bn",
+        title="financial indicator OCF/leverage stress plus prior loss reports >=2, market cap >=10bn CNY",
+        description="Combine OCF/leverage stress with trailing loss-history context for mid/large caps.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=910,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_ocf_negative_or_leverage_profit_revenue_diverge_mv_ge_10bn",
+        title="financial indicator OCF/leverage stress plus profit-revenue divergence, market cap >=10bn CNY",
+        description="Combine financial quality stress with profit decline despite non-negative revenue growth.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=920,
+    ),
+)
+
 SEVERITY_PROFILES: dict[str, SeverityProfile] = {
     "balanced": SeverityProfile(
         profile_key="balanced",
@@ -843,16 +931,18 @@ def select_research_rules(
     include_mid_large_event_rules: bool = False,
     include_refinement_rules: bool = False,
     include_phase24_rules: bool = False,
+    include_phase25_rules: bool = False,
     size_bucket_only: bool = False,
     loss_history_only: bool = False,
     mid_large_only: bool = False,
     refinement_only: bool = False,
     phase24_only: bool = False,
+    phase25_only: bool = False,
 ) -> tuple[FinancialDistressRule, ...]:
     rules: list[FinancialDistressRule] = []
     enabled_only_flags = sum(
         1
-        for flag in (size_bucket_only, loss_history_only, mid_large_only, refinement_only, phase24_only)
+        for flag in (size_bucket_only, loss_history_only, mid_large_only, refinement_only, phase24_only, phase25_only)
         if flag
     )
     if enabled_only_flags > 1:
@@ -867,6 +957,8 @@ def select_research_rules(
         rules.extend(REFINEMENT_RULES)
     elif phase24_only:
         rules.extend(PHASE24_RESEARCH_RULES)
+    elif phase25_only:
+        rules.extend(PHASE25_RESEARCH_RULES)
     else:
         if include_first_batch_rules:
             rules.extend(FIRST_BATCH_RULES)
@@ -880,6 +972,8 @@ def select_research_rules(
             rules.extend(REFINEMENT_RULES)
         if include_phase24_rules:
             rules.extend(PHASE24_RESEARCH_RULES)
+        if include_phase25_rules:
+            rules.extend(PHASE25_RESEARCH_RULES)
     if not rules:
         raise ValueError("at least one research rule set must be enabled")
     return tuple(sorted(rules, key=lambda item: item.priority))
@@ -1092,6 +1186,95 @@ def _rule_applies(row: Mapping[str, Any], rule: FinancialDistressRule) -> bool:
         return (
             is_indicator_large_decline
             and is_mid_large_cap
+            and (
+                (ocf_yoy is not None and ocf_yoy <= -50.0)
+                or (q_ocf_to_sales is not None and q_ocf_to_sales < 0.0)
+                or (debt_to_assets is not None and debt_to_assets >= 70.0)
+                or (current_ratio is not None and current_ratio < 1.0)
+            )
+        )
+    if rule.rule_key == "indicator_decline_ocf_negative_or_leverage_mv_10_30bn":
+        return (
+            is_indicator_large_decline
+            and is_10_30bn_cap
+            and (
+                (ocf_yoy is not None and ocf_yoy <= -50.0)
+                or (q_ocf_to_sales is not None and q_ocf_to_sales < 0.0)
+                or (debt_to_assets is not None and debt_to_assets >= 70.0)
+                or (current_ratio is not None and current_ratio < 1.0)
+            )
+        )
+    if rule.rule_key == "indicator_decline_ocf_negative_or_leverage_mv_30_100bn":
+        return (
+            is_indicator_large_decline
+            and is_30_100bn_cap
+            and (
+                (ocf_yoy is not None and ocf_yoy <= -50.0)
+                or (q_ocf_to_sales is not None and q_ocf_to_sales < 0.0)
+                or (debt_to_assets is not None and debt_to_assets >= 70.0)
+                or (current_ratio is not None and current_ratio < 1.0)
+            )
+        )
+    if rule.rule_key == "indicator_decline_q_ocf_to_sales_lt_0_mv_ge_10bn":
+        return is_indicator_large_decline and is_mid_large_cap and q_ocf_to_sales is not None and q_ocf_to_sales < 0.0
+    if rule.rule_key == "indicator_decline_ocf_yoy_le_minus50_mv_10_30bn":
+        return is_indicator_large_decline and is_10_30bn_cap and ocf_yoy is not None and ocf_yoy <= -50.0
+    if rule.rule_key == "indicator_decline_debt_assets_ge_80_mv_ge_10bn":
+        return is_indicator_large_decline and is_mid_large_cap and debt_to_assets is not None and debt_to_assets >= 80.0
+    if rule.rule_key == "indicator_decline_debt_assets_ge_90_mv_ge_10bn":
+        return is_indicator_large_decline and is_mid_large_cap and debt_to_assets is not None and debt_to_assets >= 90.0
+    if rule.rule_key == "indicator_decline_current_ratio_lt_08_mv_ge_10bn":
+        return is_indicator_large_decline and is_mid_large_cap and current_ratio is not None and current_ratio < 0.8
+    if rule.rule_key == "indicator_decline_ocf_yoy_le_minus50_and_debt_assets_ge_70_mv_ge_10bn":
+        return (
+            is_indicator_large_decline
+            and is_mid_large_cap
+            and ocf_yoy is not None
+            and ocf_yoy <= -50.0
+            and debt_to_assets is not None
+            and debt_to_assets >= 70.0
+        )
+    if rule.rule_key == "indicator_decline_ocf_negative_and_current_ratio_lt_1_mv_ge_10bn":
+        return (
+            is_indicator_large_decline
+            and is_mid_large_cap
+            and ((ocf_yoy is not None and ocf_yoy <= -50.0) or (q_ocf_to_sales is not None and q_ocf_to_sales < 0.0))
+            and current_ratio is not None
+            and current_ratio < 1.0
+        )
+    if rule.rule_key == "indicator_decline_ocf_negative_or_leverage_actual_yoy_le_minus80_mv_ge_10bn":
+        return (
+            is_indicator_large_decline
+            and is_mid_large_cap
+            and actual_yoy is not None
+            and actual_yoy <= -80.0
+            and (
+                (ocf_yoy is not None and ocf_yoy <= -50.0)
+                or (q_ocf_to_sales is not None and q_ocf_to_sales < 0.0)
+                or (debt_to_assets is not None and debt_to_assets >= 70.0)
+                or (current_ratio is not None and current_ratio < 1.0)
+            )
+        )
+    if rule.rule_key == "indicator_decline_ocf_negative_or_leverage_prior_loss_ge_2_mv_ge_10bn":
+        return (
+            is_indicator_large_decline
+            and is_mid_large_cap
+            and prior_loss_count_bucket in PRIOR_LOSS_GE2_BUCKETS
+            and (
+                (ocf_yoy is not None and ocf_yoy <= -50.0)
+                or (q_ocf_to_sales is not None and q_ocf_to_sales < 0.0)
+                or (debt_to_assets is not None and debt_to_assets >= 70.0)
+                or (current_ratio is not None and current_ratio < 1.0)
+            )
+        )
+    if rule.rule_key == "indicator_decline_ocf_negative_or_leverage_profit_revenue_diverge_mv_ge_10bn":
+        return (
+            is_indicator_large_decline
+            and is_mid_large_cap
+            and actual_yoy is not None
+            and actual_yoy <= -50.0
+            and revenue_yoy is not None
+            and revenue_yoy >= 0.0
             and (
                 (ocf_yoy is not None and ocf_yoy <= -50.0)
                 or (q_ocf_to_sales is not None and q_ocf_to_sales < 0.0)
@@ -3214,6 +3397,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--refinement-only", action="store_true")
     parser.add_argument("--include-phase24-rules", action="store_true")
     parser.add_argument("--phase24-only", action="store_true")
+    parser.add_argument("--include-phase25-rules", action="store_true")
+    parser.add_argument("--phase25-only", action="store_true")
     parser.add_argument("--rule-key", action="append", default=None, help="Limit research to one or more rule_key values.")
     return parser.parse_args(argv)
 
@@ -3228,11 +3413,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         include_mid_large_event_rules=args.include_mid_large_rules,
         include_refinement_rules=args.include_refinement_rules,
         include_phase24_rules=args.include_phase24_rules,
+        include_phase25_rules=args.include_phase25_rules,
         size_bucket_only=args.size_bucket_only,
         loss_history_only=args.loss_history_only,
         mid_large_only=args.mid_large_only,
         refinement_only=args.refinement_only,
         phase24_only=args.phase24_only,
+        phase25_only=args.phase25_only,
     )
     research_rules = filter_research_rules_by_key(research_rules, args.rule_key)
     if args.loop_spec or args.loop_spec_json:

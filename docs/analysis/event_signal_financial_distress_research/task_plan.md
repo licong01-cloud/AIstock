@@ -299,3 +299,16 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | next phase                                             | pending                    | refine thresholds or run one-loop WSL smoke for watchlist candidate     |
 +-------------------------------------------------------+----------------------------+------------------------------------------------------------------------+
 ```
+
+## Phase 25 Threshold Refinement Finding
+
+```text
++-------------------------------------------------------+-----------------------+-----------------------------------------------------------------------+
+| candidate                                             | decision              | evidence                                                              |
++-------------------------------------------------------+-----------------------+-----------------------------------------------------------------------+
+| indicator_decline_ocf_negative_or_leverage_mv_10_30bn | WATCHLIST_PRIMARY     | best Phase25 cheap score 55.5; below TRUE_QE gate                     |
+| indicator_decline_q_ocf_to_sales_lt_0_mv_ge_10bn      | WATCHLIST_PRIMARY     | score 55.3; better ex-best but not enough                             |
+| immediate WSL true rerun                              | DEFER                 | no rule crossed score>=60; cheap overlay remains shortlist-only       |
+| next phase                                            | PARAMETER_SHAPE_SWEEP | test top rules across shorter/softer fixed penalties before WSL spend |
++-------------------------------------------------------+-----------------------+-----------------------------------------------------------------------+
+```

@@ -335,3 +335,17 @@ Preferred current candidate for future non-hard overlay research: `indicator_lar
 | next empirical step                                    | REFINE_OR_TRUE_QE_SMOKE    | either refine top rule thresholds or run one-loop WSL smoke if desired |
 +-------------------------------------------------------+----------------------------+------------------------------------------------------------------------+
 ```
+
+## Phase 25 Threshold Refinement Finding
+
+```text
++---------------------------+----------------------+---------------------------------------------------------------------------------+
+| candidate                 | decision             | evidence                                                                        |
++---------------------------+----------------------+---------------------------------------------------------------------------------+
+| ocf/leverage 10-30bn      | WATCHLIST_PRIMARY    | 15/22 positive, avg +0.124%, ex-best +0.040%, worst -0.100%, T+20 median -0.71% |
+| q_ocf_to_sales < 0 >=10bn | WATCHLIST_PRIMARY    | 14/22 positive, avg +0.117%, ex-best +0.068%, worst -0.092%, T+20 median -0.93% |
+| current_ratio <0.8 >=10bn | WATCHLIST_SECONDARY  | avg +0.114% but 120td/fixed20 and worst -0.273%; direct downside stronger       |
+| 30-100bn / debt>=90       | DIRECT_DOWNSIDE_ONLY | direct abnormal median strongly negative, but cheap overlay sparse/weak         |
+| WSL true QE               | DEFER                | no row passed score>=60; run parameter-shape sweep first                        |
++---------------------------+----------------------+---------------------------------------------------------------------------------+
+```

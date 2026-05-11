@@ -11,6 +11,7 @@ from backend.services.event_signal.financial_distress_qe_overlay_research import
     LOSS_HISTORY_RULES,
     MID_LARGE_EVENT_RULES,
     PHASE24_RESEARCH_RULES,
+    PHASE25_RESEARCH_RULES,
     REFINEMENT_RULES,
     SIZE_BUCKET_RULES,
     CandidateScore,
@@ -46,6 +47,7 @@ def _rule(key: str):
             *MID_LARGE_EVENT_RULES,
             *REFINEMENT_RULES,
             *PHASE24_RESEARCH_RULES,
+            *PHASE25_RESEARCH_RULES,
         )
         if rule.rule_key == key
     )
@@ -125,6 +127,12 @@ def test_select_research_rules_can_run_phase24_only():
     rules = select_research_rules(phase24_only=True)
 
     assert [rule.rule_key for rule in rules] == [rule.rule_key for rule in PHASE24_RESEARCH_RULES]
+
+
+def test_select_research_rules_can_run_phase25_only():
+    rules = select_research_rules(phase25_only=True)
+
+    assert [rule.rule_key for rule in rules] == [rule.rule_key for rule in PHASE25_RESEARCH_RULES]
 
 
 def test_select_research_rules_can_include_loss_history_with_first_batch():
@@ -429,6 +437,41 @@ def test_phase24_indicator_rules_match_deterioration_quality_fields():
     assert not _rule_applies(
         {**base, "market_cap_bucket": "mv_5bn_to_10bn_yuan"},
         _rule("indicator_decline_actual_yoy_le_minus80_mv_ge_10bn"),
+    )
+
+
+def test_phase25_indicator_refinement_rules_match_threshold_splits():
+    base = {
+        "event_type": "financial_indicator_large_decline",
+        "market_cap_bucket": "mv_10bn_to_30bn_yuan",
+        "prior_loss_report_count_730d_bucket": "loss_reports_2",
+        "metric_detail": {
+            "actual_yoy": -90.0,
+            "or_yoy": 5.0,
+            "ocf_yoy": -60.0,
+            "q_ocf_to_sales": -2.0,
+            "debt_to_assets": 85.0,
+            "current_ratio": 0.7,
+        },
+    }
+
+    assert _rule_applies(base, _rule("indicator_decline_ocf_negative_or_leverage_mv_10_30bn"))
+    assert not _rule_applies(base, _rule("indicator_decline_ocf_negative_or_leverage_mv_30_100bn"))
+    assert _rule_applies({**base, "market_cap_bucket": "mv_30bn_to_100bn_yuan"}, _rule("indicator_decline_ocf_negative_or_leverage_mv_30_100bn"))
+    assert _rule_applies(base, _rule("indicator_decline_q_ocf_to_sales_lt_0_mv_ge_10bn"))
+    assert _rule_applies(base, _rule("indicator_decline_ocf_yoy_le_minus50_mv_10_30bn"))
+    assert _rule_applies(base, _rule("indicator_decline_debt_assets_ge_80_mv_ge_10bn"))
+    assert not _rule_applies(base, _rule("indicator_decline_debt_assets_ge_90_mv_ge_10bn"))
+    assert _rule_applies({**base, "metric_detail": {**base["metric_detail"], "debt_to_assets": 91.0}}, _rule("indicator_decline_debt_assets_ge_90_mv_ge_10bn"))
+    assert _rule_applies(base, _rule("indicator_decline_current_ratio_lt_08_mv_ge_10bn"))
+    assert _rule_applies(base, _rule("indicator_decline_ocf_yoy_le_minus50_and_debt_assets_ge_70_mv_ge_10bn"))
+    assert _rule_applies(base, _rule("indicator_decline_ocf_negative_and_current_ratio_lt_1_mv_ge_10bn"))
+    assert _rule_applies(base, _rule("indicator_decline_ocf_negative_or_leverage_actual_yoy_le_minus80_mv_ge_10bn"))
+    assert _rule_applies(base, _rule("indicator_decline_ocf_negative_or_leverage_prior_loss_ge_2_mv_ge_10bn"))
+    assert _rule_applies(base, _rule("indicator_decline_ocf_negative_or_leverage_profit_revenue_diverge_mv_ge_10bn"))
+    assert not _rule_applies(
+        {**base, "market_cap_bucket": "mv_5bn_to_10bn_yuan"},
+        _rule("indicator_decline_ocf_negative_or_leverage_mv_10_30bn"),
     )
 
 

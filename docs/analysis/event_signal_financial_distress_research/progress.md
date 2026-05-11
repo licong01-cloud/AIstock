@@ -535,3 +535,31 @@ Phase 24 evidence:
 | production backend 8001               | not touched                                                  |
 +--------------------------------------+--------------------------------------------------------------+
 ```
+
+## 2026-05-11 Phase 25 Start
+
+```text
++------+--------------------------------------------------------------------------+
+| item | note                                                                     |
++------+--------------------------------------------------------------------------+
+| goal | refine Phase-24 OCF/leverage stress into size, component, compound rules |
+| scope| research-only scripts/services/tests/docs; no runtime consumer changes   |
+| gate | direct event + 22-loop cheap overlay before any WSL true QE spend        |
++------+--------------------------------------------------------------------------+
+```
+
+## 2026-05-11 Phase 25 Completed
+
+```text
++-------------------------+--------------------------------------------------------------------------------------------------------------------------------------------+
+| item                    | value                                                                                                                                      |
++-------------------------+--------------------------------------------------------------------------------------------------------------------------------------------+
+| script                  | scripts/financial_distress_phase25_threshold_refinement_screen.py                                                                          |
+| direct report           | reports\event_signal\financial_distress_phase25_threshold_refinement\direct\financial_distress_direct_event_20240701_20260511_011654.json  |
+| overlay report          | reports\event_signal\financial_distress_phase25_threshold_refinement\overlay\financial_distress_qe_multiloop_20240701_20260511_014959.json |
+| rules / validations     | 12 / 72 stability rows / 1584 validations                                                                                                  |
+| best rule               | indicator_decline_ocf_negative_or_leverage_mv_10_30bn, score 55.5                                                                          |
+| decision                | no TRUE_QE_CANDIDATE; continue with parameter-shape sweep                                                                                  |
+| production backend 8001 | not touched                                                                                                                                |
++-------------------------+--------------------------------------------------------------------------------------------------------------------------------------------+
+```
