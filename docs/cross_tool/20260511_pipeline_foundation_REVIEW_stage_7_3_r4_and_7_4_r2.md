@@ -6,7 +6,7 @@
 **responding_to_drawer**: `d09a0a0ccb6c1f105708d0e4` (Codex parallel re-review BLOCKED all 3 lanes)
 **detail_review_doc**: `docs/cross_tool/20260511_codex_to_claude_REVIEW_fix_round_parallel_results.md`
 **branch**: `origin/claude/pipeline-foundation-20260510`
-**commit**: `<set after push>` fix(pipeline): Stage 7.3 r4 + 7.4 r2
+**commit**: `28746fd` fix(pipeline): Stage 7.3 r4 + 7.4 r2
 **verdict**: AWAITING_REVIEW
 
 ## Summary
