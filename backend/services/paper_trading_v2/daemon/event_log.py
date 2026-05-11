@@ -79,6 +79,49 @@ PAPER_DAEMON_EVENT_TYPE_NAMES: dict[str, str] = {
 PAPER_DAEMON_SOURCE_SYSTEM = "paper_v2.daemon"
 
 
+# ---------------------------------------------------------------------------
+# Routing class (T13)
+#
+# dw-foundation T14a payload-based routing: every outbox payload written by
+# this daemon carries a top-level ``routing_class`` key. DW handlers use
+# ``payload->>'routing_class'`` to dispatch (no schema column change).
+#
+# paper.daemon.* events are telemetry (high-frequency lifecycle); the
+# portfolio-run / daily-snapshot / config-changed events are archive
+# (low-frequency, durable historical record).
+#
+# Unknown event types raise ValueError (fail-fast, no silent fallback) so
+# new emit call-sites can't slip through unrouted.
+# ---------------------------------------------------------------------------
+
+ARCHIVE_EVENTS: frozenset[str] = frozenset(
+    {
+        "paper.portfolio_run.completed",
+        "paper.daily_snapshot.captured",
+        "paper.config.changed",
+    }
+)
+
+DAEMON_EVENTS: frozenset[str] = frozenset(PAPER_DAEMON_EVENT_TYPE_NAMES.values())
+
+
+def _routing_class_for(event_type: str) -> str:
+    """Map a canonical event_type string to its routing_class.
+
+    Returns ``'archive'`` for paper.portfolio_run.* / daily_snapshot.* /
+    config.changed; ``'telemetry'`` for paper.daemon.*. Raises ValueError
+    on any unknown event type.
+    """
+    if event_type in ARCHIVE_EVENTS:
+        return "archive"
+    if event_type in DAEMON_EVENTS:
+        return "telemetry"
+    raise ValueError(
+        f"Unknown event_type {event_type!r}; must be in "
+        f"ARCHIVE_EVENTS or DAEMON_EVENTS"
+    )
+
+
 class DaemonEventType(str, Enum):
     """Types written by ``PaperV2SimRunner``.
 
@@ -423,6 +466,12 @@ class DaemonEventLog:
             "symbol": symbol,
             "payload": json.loads(payload_json),
         }
+        # T13: stamp dw-foundation routing_class at the top of the outbox
+        # payload BEFORE serialization. DW handlers route via
+        # payload->>'routing_class'. Unknown event_types fail-fast here.
+        outbox_payload["routing_class"] = _routing_class_for(
+            event_type.canonical_name
+        )
         event_id = _build_outbox_event_id(self._run_id, event_seq)
         sql = """
             INSERT INTO qe_archive.outbox_event (

@@ -14,11 +14,14 @@ from unittest.mock import MagicMock
 import pytest
 
 from backend.services.paper_trading_v2.daemon.event_log import (
+    ARCHIVE_EVENTS,
+    DAEMON_EVENTS,
     PAPER_DAEMON_EVENT_TYPE_NAMES,
     PAPER_DAEMON_SOURCE_SYSTEM,
     DaemonEventLog,
     DaemonEventType,
     _build_outbox_event_id,
+    _routing_class_for,
 )
 
 
@@ -294,3 +297,103 @@ def test_event_id_is_deterministic() -> None:
     assert a != c
     assert a.startswith("qear_evt_")
     assert len(a) == len("qear_evt_") + 24
+
+
+# ---------------------------------------------------------------------------
+# T13 — routing_class stamping in outbox payload
+# ---------------------------------------------------------------------------
+
+
+def _extract_outbox_payload(executions: list[tuple[str, tuple]]) -> dict:
+    """Pull the JSONB payload (param index 5) from the most recent capture.
+
+    DaemonEventLog wraps it in ``psycopg2.extras.Json``; the underlying dict
+    lives on ``.adapted``.
+    """
+    assert executions, "no PG executions captured"
+    _sql, params = executions[-1]
+    json_param = params[5]
+    return json_param.adapted
+
+
+def test_emit_unknown_event_type_raises_value_error() -> None:
+    """_routing_class_for must fail-fast on event types it doesn't recognise.
+
+    Per feedback_no_silent_errors — never silently default an unknown event
+    type's routing.
+    """
+    with pytest.raises(ValueError) as excinfo:
+        _routing_class_for("paper.unknown.foo")
+    assert "paper.unknown.foo" in str(excinfo.value)
+
+
+def test_archive_events_get_routing_class_archive() -> None:
+    """All ARCHIVE_EVENTS map to 'archive'."""
+    assert ARCHIVE_EVENTS == {
+        "paper.portfolio_run.completed",
+        "paper.daily_snapshot.captured",
+        "paper.config.changed",
+    }
+    for et in ARCHIVE_EVENTS:
+        assert _routing_class_for(et) == "archive"
+
+
+def test_emit_daemon_event_has_routing_class_telemetry(tmp_path) -> None:
+    """A single paper.daemon.* emit must stamp routing_class='telemetry' in
+    the outbox payload (top-level, matching INT-5b's payload->>'routing_class'
+    query shape).
+    """
+    executions: list[tuple[str, tuple]] = []
+    provider, _state = _make_pg_provider(executions)
+
+    log = DaemonEventLog(
+        db_path=tmp_path / "events.db",
+        portfolio_id="pf_rc",
+        package_id="pkg_rc",
+        run_id="run_rc1",
+        pg_conn_provider=provider,
+    )
+
+    log.record(DaemonEventType.RUN_STARTED, {"k": "v"})
+
+    outbox_payload = _extract_outbox_payload(executions)
+    assert outbox_payload["routing_class"] == "telemetry"
+    # The user payload remains nested under "payload" untouched.
+    assert outbox_payload["payload"] == {"k": "v"}
+
+
+@pytest.mark.parametrize("event_type", list(DaemonEventType))
+def test_emit_all_9_daemon_events_get_telemetry(tmp_path, event_type) -> None:
+    """Every one of the 9 canonical paper.daemon.* event types must stamp
+    routing_class='telemetry'.
+    """
+    executions: list[tuple[str, tuple]] = []
+    provider, _state = _make_pg_provider(executions)
+
+    log = DaemonEventLog(
+        db_path=tmp_path / "events.db",
+        portfolio_id="pf_rc",
+        package_id="pkg_rc",
+        run_id=f"run_rc_{event_type.value}",
+        pg_conn_provider=provider,
+    )
+
+    log.record(event_type, {})
+
+    outbox_payload = _extract_outbox_payload(executions)
+    assert outbox_payload["routing_class"] == "telemetry", (
+        f"event_type={event_type.value} canonical={event_type.canonical_name} "
+        f"did not get 'telemetry'; outbox_payload={outbox_payload}"
+    )
+
+
+def test_daemon_events_set_matches_canonical_names() -> None:
+    """DAEMON_EVENTS frozen set must mirror the 9 canonical paper.daemon.*
+    names. Drift between this set and PAPER_DAEMON_EVENT_TYPE_NAMES would
+    let an emit path slip through routing.
+    """
+    assert DAEMON_EVENTS == set(PAPER_DAEMON_EVENT_TYPE_NAMES.values())
+    assert len(DAEMON_EVENTS) == 9
+    for canonical in DAEMON_EVENTS:
+        assert canonical.startswith("paper.daemon.")
+        assert _routing_class_for(canonical) == "telemetry"

@@ -212,10 +212,6 @@ def test_daemon_emits_paper_daemon_event(event_log) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    reason="T13 pending: paper-v2 daemon emit 应在 payload 加 routing_class='telemetry'",
-    strict=False,
-)
 def test_daemon_routing_class_telemetry(dev_db_conn, event_log) -> None:
     """paper.daemon.* events should carry payload.routing_class='telemetry'.
 
@@ -223,11 +219,9 @@ def test_daemon_routing_class_telemetry(dev_db_conn, event_log) -> None:
     a column. The qe_archive.outbox_event schema does NOT and will not get
     a routing_class column — DW handlers route on payload->>'routing_class'.
 
-    T13 will add ``routing_class='telemetry'`` to the JSON payload that
-    paper-v2 daemon emit() writes for paper.daemon.* event types. Until
-    then this test xfails (strict=False, so once T13 lands and the payload
-    contains the key, the test will simply pass without flipping to xpass-
-    failed).
+    T13 (resolved): daemon emit now stamps routing_class='telemetry' into
+    the outbox payload for all paper.daemon.* event types. This test now
+    PASSES end-to-end against dev DB.
     """
     event_log.record(DaemonEventType.RUN_STARTED, {})
 
@@ -238,7 +232,7 @@ def test_daemon_routing_class_telemetry(dev_db_conn, event_log) -> None:
             FROM qe_archive.outbox_event
             WHERE event_type LIKE 'paper.daemon.%%'
               AND source_id = %s
-            ORDER BY occurred_at DESC
+            ORDER BY created_at DESC
             LIMIT 1
             """,
             (event_log.run_id,),
