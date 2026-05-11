@@ -110,10 +110,11 @@ modules:
     risk_level: high
     description: Frozen strategy manifests, model assets, selection artifacts, and package lifecycle.
     description_zh: 覆盖冻结策略包 manifest、模型资产、选股产物、执行策略和包生命周期。
-    ui_routes: [/paper-v2/packages]
+    ui_routes: [/paper-v2/packages, /strategy-package-governance]
     api_routes: [/api/v1/strategy-packages/*]
     test_plans:
       required_on_change: [l0, paper_v2_backend]
+      recommended: [strategy_package_governance_ui]
   - module_id: hmm
     display_name: HMM
     module_type: product_feature

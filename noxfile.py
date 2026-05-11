@@ -892,8 +892,8 @@ def qe_archive_ui(session: nox.Session) -> None:
     test_dir = ROOT / "frontend" / "tests" / "qe-archive"
     if not test_dir.exists():
         session.skip("QE archive UI tests are not implemented yet.")
-    backend_port = session.posargs[0] if session.posargs else os.environ.get("BACKEND_PORT", "8011")
-    frontend_port = session.posargs[1] if len(session.posargs) > 1 else os.environ.get("FRONTEND_PORT", "3011")
+    backend_port = session.posargs[0] if session.posargs else os.environ.get("BACKEND_PORT", "8012")
+    frontend_port = session.posargs[1] if len(session.posargs) > 1 else os.environ.get("FRONTEND_PORT", "3012")
     mock_api = os.environ.get("QE_ARCHIVE_UI_MOCK_API") == "1"
     session.run(
         "python",
@@ -999,6 +999,73 @@ def qe_archive_l3(session: nox.Session) -> None:
     session.notify("qe_archive_data_quality")
     if os.environ.get("QE_ARCHIVE_L3_SKIP_UI") != "1":
         session.notify("qe_archive_ui")
+
+
+@nox.session(venv_backend="none")
+def strategy_package_governance_ui(session: nox.Session) -> None:
+    """Run Strategy Package Governance UI E2E tests on dev ports.
+
+    Mocks /api/v1/strategy-packages/* responses; safe to run without the
+    governance backend branch merged. Live integration is wired once the
+    Codex governance branch lands on main.
+    """
+    test_dir = ROOT / "frontend" / "tests" / "strategy-package-governance"
+    if not test_dir.exists():
+        session.skip("Strategy Package Governance UI tests are not implemented yet.")
+    backend_port = session.posargs[0] if session.posargs else os.environ.get("BACKEND_PORT", "8012")
+    frontend_port = session.posargs[1] if len(session.posargs) > 1 else os.environ.get("FRONTEND_PORT", "3012")
+    mock_api = os.environ.get("STRATEGY_PACKAGE_GOVERNANCE_UI_MOCK_API", "1") == "1"
+    session.run(
+        "python",
+        "scripts/aistock_validate.py",
+        "ports",
+        "--allow-occupied",
+        backend_port,
+        frontend_port,
+        external=True,
+    )
+    if not mock_api:
+        session.run(
+            "python",
+            "scripts/aistock_validate.py",
+            "services",
+            "--backend-port",
+            backend_port,
+            "--skip-tdx",
+            external=True,
+        )
+    old_cwd = Path.cwd()
+    os.chdir(ROOT / "frontend")
+    try:
+        session.run(
+            "npm",
+            "exec",
+            "tsc",
+            "--",
+            "--noEmit",
+            "--incremental",
+            "false",
+            external=True,
+        )
+        session.run(
+            "npm",
+            "run",
+            "test:e2e",
+            "--",
+            "tests/strategy-package-governance",
+            env=_env(
+                {
+                    "BACKEND_PORT": backend_port,
+                    "FRONTEND_PORT": frontend_port,
+                    "STRATEGY_PACKAGE_GOVERNANCE_UI_MOCK_API": "1" if mock_api else "0",
+                    "NEXT_PUBLIC_API_BASE": f"http://127.0.0.1:{backend_port}/api/v1",
+                    "PLAYWRIGHT_SKIP_WEBSERVER": "1" if _is_port_open(frontend_port) else "0",
+                }
+            ),
+            external=True,
+        )
+    finally:
+        os.chdir(old_cwd)
 
 
 @nox.session(venv_backend="none")
