@@ -414,3 +414,31 @@ paper-v2 端 2 任务可串行 (推荐先 baseline 再 verify) 或并行。
 - ⏸️ paper-v2 baseline post-R6 (流水线验证 R6 in main)
 - ⏸️ prod backend 8001 + daemon enable + cold-start sanity
 - ⏸️ 9:30 实盘
+
+### 2026-05-11 ~18:50 — baseline v2 post-R5 = GREEN ✅
+
+- commit `e8ffbdd` (drawer `01984455`)
+- env-fix 3/3 flipped: paper_v2_data_quality + qe_archive_data_quality + local_data_management_audit
+- 16G/0F/14SKIP-UI/1NOX-SKIP, paper_v2_backend 264p, qe_archive_backend 70p
+- R6 GO for 9:30 实盘
+
+### 2026-05-11 ~19:28 — Codex Task 4 strategy_package prod executor = COMPLETE (partial)
+
+- commit `2fb81b3` (drawer `abafc500`)
+- scripts/strategy_package_governance_evidence_backfill_prod_executor.py
+- 24 executor tests + 53 total passed
+- 5-guard: token + 2 envs + mutex + target_db/port + DR snapshot ref + plan preview sha + operator confirmation
+- runbook §7.2 aligned
+- guardrail 0 P1, P2 ALGO-COMPLEXITY documented as bounded
+- **residual**: protected_asset_ledger prod executor 未做 (Codex 标 placeholder)
+
+### 2026-05-11 ~19:40 — 战略 cherry-pick baseline v2 doc 到 main
+
+- main HEAD: `c515cf4` (e8ffbdd cherry-pick)
+
+### 2026-05-11 ~19:35 — 派 Codex Task 5 + paper-v2 verify (并行)
+
+| Task | 持有方 | drawer | SLA |
+|---|---|---|---|
+| Codex Task 5: protected_asset_ledger prod executor (补缺) | Codex | c48d8347 | 60 min, ~20:30 deliver |
+| paper-v2 5-layer verify Codex 2fb81b3 | paper-v2 | 3e7fc4de | 60 min, ~20:35 deliver |
