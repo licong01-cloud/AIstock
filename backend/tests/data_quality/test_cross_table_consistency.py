@@ -15,6 +15,8 @@ import pytest
 
 from psycopg2.extras import RealDictCursor
 
+from .conftest import skip_if_missing_columns
+
 
 def test_module_collected_smoke():
     assert True
@@ -23,33 +25,58 @@ def test_module_collected_smoke():
 def test_paper_v2_fill_count_matches_archive_per_run(
     dev_conn, source_tables_ready, archive_tables_ready,
 ):
-    """For every archived run, source fill count == archive fill count."""
+    """For every archived run, source fill count == archive fill count.
+
+    Per Agent C P1.3 review: must FAIL (not skip) when ``paper_v2.run``
+    has rows but ``qe_archive.paper_v2_run`` does not — that's the
+    canonical 'handler not registered / archive worker not enabled'
+    state and surfaces the real regression. Only skip when BOTH source
+    and archive are empty (no data to compare).
+
+    Sentinel: query walks every archived run as the driver and a
+    LEFT JOIN on paper_v2.fills so a run with 0 archive fills against a
+    source with N fills shows up as drift, not vanishes.
+    """
+    with dev_conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM paper_v2.run")
+        source_run_n = cur.fetchone()[0]
+        cur.execute("SELECT count(*) FROM qe_archive.paper_v2_run")
+        archive_run_n = cur.fetchone()[0]
+    if source_run_n == 0:
+        pytest.skip("paper_v2.run is empty; nothing to compare.")
+    if archive_run_n == 0:
+        pytest.fail(
+            f"paper_v2.run has {source_run_n} row(s) but qe_archive.paper_v2_run "
+            f"has 0 -- handler is not registered on the archive worker yet, OR the "
+            f"worker is not consuming outbox events. This is a regression, not a "
+            f"clean-slate condition; the archive backfill is expected to run."
+        )
     with dev_conn.cursor(cursor_factory=RealDictCursor) as cur:
+        # Drive from qe_archive.paper_v2_run (one row per archived run), then
+        # LEFT JOIN both source and archive fill counts. This surfaces both
+        # archive_with_zero_fills AND source_with_zero_fills as drift rather
+        # than letting one side disappear via inner-join semantics.
         cur.execute(
             """
-            WITH archived AS (
-              SELECT run_id FROM qe_archive.paper_v2_run
-            ),
-            src AS (
-              SELECT f.run_id, count(*) AS src_n
-              FROM paper_v2.fills f
-              JOIN archived USING (run_id)
-              GROUP BY f.run_id
-            ),
-            arc AS (
-              SELECT f.run_id, count(*) AS arc_n
-              FROM qe_archive.paper_v2_fill f
-              JOIN archived USING (run_id)
-              GROUP BY f.run_id
-            )
-            SELECT a.run_id, COALESCE(s.src_n, 0) AS src_n, COALESCE(a.arc_n, 0) AS arc_n
-            FROM arc a
-            LEFT JOIN src s USING (run_id)
+            SELECT r.run_id,
+                   COALESCE(s.src_n, 0) AS src_n,
+                   COALESCE(a.arc_n, 0) AS arc_n
+            FROM qe_archive.paper_v2_run r
+            LEFT JOIN (
+              SELECT run_id, count(*) AS src_n
+              FROM paper_v2.fills
+              GROUP BY run_id
+            ) s USING (run_id)
+            LEFT JOIN (
+              SELECT run_id, count(*) AS arc_n
+              FROM qe_archive.paper_v2_fill
+              GROUP BY run_id
+            ) a USING (run_id)
             """
         )
         rows = list(cur.fetchall())
     if not rows:
-        pytest.skip("no joined runs between paper_v2.run and qe_archive.paper_v2_run yet.")
+        pytest.skip("qe_archive.paper_v2_run is empty after row-count check (race).")
     drift = [r for r in rows if r["src_n"] != r["arc_n"]]
     assert not drift, (
         f"{len(drift)} run(s) have fill-count drift; first 5: "
@@ -62,20 +89,12 @@ def test_archive_run_aggregate_counts_self_consistent(
 ):
     """archive_run.total_fill_count (if column exists) equals the
     paper_v2_fill count for the same run_id."""
-    with dev_conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT column_name FROM information_schema.columns
-            WHERE table_schema='qe_archive' AND table_name='paper_v2_run'
-              AND column_name = 'total_fill_count'
-            """
-        )
-        has_col = cur.fetchone() is not None
-    if not has_col:
-        pytest.skip(
-            "qe_archive.paper_v2_run.total_fill_count column not present in T12; "
-            "aggregate-self-consistency check deferred."
-        )
+    skip_if_missing_columns(
+        dev_conn, "qe_archive", "paper_v2_run", ("total_fill_count",),
+        "total_fill_count is not on the current T12 schema; tracked for "
+        "addition under the dw-foundation T14b/c r3 enhancement track. When "
+        "the column lands, this test activates automatically.",
+    )
     with dev_conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
             """

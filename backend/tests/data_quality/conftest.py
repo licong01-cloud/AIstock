@@ -104,6 +104,45 @@ def _table_exists(conn, schema: str, table: str) -> bool:
         return cur.fetchone() is not None
 
 
+def column_exists(conn, schema: str, table: str, column: str) -> bool:
+    """Public helper: True iff schema.table.column is present on the
+    connected DB. Tests call this directly to gate column-conditional
+    queries — preferred over try/except around SELECT because it makes
+    the skip reason explicit and surfaces unknown columns in test names.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema=%s AND table_name=%s AND column_name=%s
+            """,
+            (schema, table, column),
+        )
+        return cur.fetchone() is not None
+
+
+def skip_if_missing_columns(
+    conn,
+    schema: str,
+    table: str,
+    columns: tuple[str, ...],
+    reason: str,
+) -> None:
+    """Skip the calling test cleanly when any of the listed columns is
+    missing on the connected DB. ``reason`` should name the
+    dw-foundation milestone or BUG ID that will add the column.
+
+    Pytest skip messages MUST include both (a) which columns are missing
+    and (b) the actionable reason (next-step pointer). The agent's
+    Stage 7.3 r1 review insisted on this: a bare ``pytest.skip("...")``
+    without a pointer hides regressions that the test was meant to
+    catch.
+    """
+    missing = [c for c in columns if not column_exists(conn, schema, table, c)]
+    if missing:
+        pytest.skip(f"{schema}.{table} missing columns {missing}: {reason}")
+
+
 @pytest.fixture
 def archive_tables_ready(dev_conn) -> bool:
     """Skip the test if qe_archive.paper_v2_run does not exist on dev DB."""

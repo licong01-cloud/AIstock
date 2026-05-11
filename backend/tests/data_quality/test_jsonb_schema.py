@@ -21,6 +21,14 @@ import pytest
 from psycopg2.extras import RealDictCursor
 
 from ._reference import FILL_MARKET_CONTEXT_KEYS
+from .conftest import skip_if_missing_columns
+
+
+T6_1_REASON = (
+    "paper_v2.fills.fill_market_context not present; T6.1 capture-field "
+    "migration (paper-v2-vnpy-mvp-20260508 branch) has not been merged to "
+    "main yet. Test activates once paper-v2 team's T6.1 merge lands."
+)
 
 
 def test_module_collected_smoke():
@@ -42,6 +50,9 @@ def test_fill_market_context_has_all_required_keys(
     dev_conn, source_tables_ready,
 ):
     """T6.1 §5.7: each non-NULL fill_market_context carries 13 canonical keys."""
+    skip_if_missing_columns(
+        dev_conn, "paper_v2", "fills", ("fill_market_context",), T6_1_REASON,
+    )
     with dev_conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
             """
@@ -75,6 +86,9 @@ def test_fill_market_context_types_match_contract(
     dev_conn, source_tables_ready,
 ):
     """Types per FILL_MARKET_CONTEXT_KEYS (str / number / bool tolerance)."""
+    skip_if_missing_columns(
+        dev_conn, "paper_v2", "fills", ("fill_market_context",), T6_1_REASON,
+    )
     with dev_conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
             """

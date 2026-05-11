@@ -34,6 +34,7 @@ from ._reference import (
     synthesize_cash_ledger_entry_type,
     synthesize_reset_audit_reset_type,
 )
+from .conftest import skip_if_missing_columns
 
 
 def test_module_collected_smoke():
@@ -200,38 +201,58 @@ def test_regime_label_simple_quadrant_classification(
 
 
 def test_slippage_bps_consistent_with_intended_price(
-    dev_conn, source_tables_ready,
+    dev_conn, archive_tables_ready,
 ):
-    """When intended_price is non-NULL, slippage_bps must equal
-    compute_slippage_bps(intended_price, fill_price, side) within 0.5 bps
-    rounding tolerance. MARKET orders (intended_price NULL) are skipped."""
-    with dev_conn.cursor() as cur:
-        cur.execute(
-            "SELECT column_name FROM information_schema.columns "
-            "WHERE table_schema='paper_v2' AND table_name='fills' "
-            "AND column_name IN ('intended_price', 'slippage_bps', 'fill_price', 'side')"
-        )
-        cols = {r[0] for r in cur.fetchall()}
-    needed = {"intended_price", "slippage_bps", "fill_price", "side"}
-    if not needed.issubset(cols):
-        pytest.skip(
-            f"paper_v2.fills missing {sorted(needed - cols)}; T6.1 capture cols "
-            f"may not all be present on this dev DB."
-        )
+    """For each archived fill where slippage_bps is non-NULL,
+    slippage_bps must equal compute_slippage_bps(intended_price,
+    fill_price, side) within 0.5 bps tolerance.
+
+    Schema contract (per Agent C P1.2 review feedback):
+      - paper_v2.fills (source) carries: ``price``, ``intended_price``,
+        ``side`` -- NO ``slippage_bps`` or ``fill_price``.
+      - qe_archive.paper_v2_fill (archive) carries: ``fill_price`` (the
+        renamed source price), ``intended_price`` (mirrored), ``side``,
+        and ``slippage_bps`` -- the latter is populated by the
+        PaperV2ArchiveHandler at archive write time.
+
+    Today the handler inserts NULL for slippage_bps (placeholder; tracked
+    in BUG follow-up). When the handler populates it, this test
+    activates without code change. Skip reason is explicit so the gap
+    stays visible until the handler implements the derivation.
+    """
+    skip_if_missing_columns(
+        dev_conn, "qe_archive", "paper_v2_fill",
+        ("intended_price", "fill_price", "side", "slippage_bps"),
+        "T12 paper_v2_fill columns missing on this dev DB.",
+    )
     with dev_conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
             """
             SELECT fill_id, intended_price, fill_price, side, slippage_bps
-            FROM paper_v2.fills
-            WHERE intended_price IS NOT NULL AND slippage_bps IS NOT NULL
-            LIMIT 200
+            FROM qe_archive.paper_v2_fill
+            WHERE slippage_bps IS NOT NULL
+            LIMIT 500
             """
         )
         rows = list(cur.fetchall())
     if not rows:
+        # Distinguish two states so the skip reason is actionable:
+        # (a) no archive fills at all - handler not yet run for these data
+        # (b) archive fills exist but every slippage_bps is NULL - handler
+        #     does not yet populate the column.
+        with dev_conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM qe_archive.paper_v2_fill")
+            archive_n = cur.fetchone()[0]
+        if archive_n == 0:
+            pytest.skip(
+                "qe_archive.paper_v2_fill is empty; handler has not produced "
+                "archive fills yet (out of scope for slippage assertion)."
+            )
         pytest.skip(
-            "no fills with both intended_price and slippage_bps populated "
-            "(MARKET-only baseline per T6.1 §5.7)."
+            "qe_archive.paper_v2_fill has rows but every slippage_bps is NULL; "
+            "PaperV2ArchiveHandler does not derive slippage_bps yet -- when it "
+            "lands the test activates automatically. Track via the BUG "
+            "registry under the handler enhancements line."
         )
     drift = []
     for r in rows:
@@ -243,6 +264,6 @@ def test_slippage_bps_consistent_with_intended_price(
         if expected is None:
             continue
         actual = float(r["slippage_bps"])
-        if abs(actual - expected) > 0.5:  # 0.5 bps tolerance for Decimal rounding
+        if abs(actual - expected) > 0.5:  # 0.5 bps Decimal-rounding tolerance
             drift.append((r["fill_id"], actual, expected))
     assert not drift, f"{len(drift)} slippage_bps drift; first 5: {drift[:5]}"

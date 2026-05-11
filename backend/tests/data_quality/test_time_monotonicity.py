@@ -15,54 +15,81 @@ import pytest
 
 from psycopg2.extras import RealDictCursor
 
+from .conftest import skip_if_missing_columns
+
 
 def test_module_collected_smoke():
     assert True
 
 
-def test_fills_trade_time_monotonic_within_run(
+def test_fills_trade_time_bounded_by_run_trade_date(
     dev_conn, source_tables_ready,
 ):
-    """For every run, fills ordered by (trade_time, fill_id) have
-    non-decreasing trade_time."""
+    """Every fill's ``trade_time::date`` must equal its run's
+    ``trade_date`` (no cross-day leakage).
+
+    Per Agent C P2.1 review feedback: the original monotonicity check
+    was tautological because it pre-sorted by ``trade_time``. Switching
+    to "ORDER BY insertion column" is also unreliable on Batch A real
+    data because:
+      - ``fill_id`` is a hex-prefixed string (e.g. ``fill_05e0e2e0...``),
+        NOT a sequence-generated bigint, so its lexicographic order has
+        no relationship to insertion order.
+      - ``created_at`` is uniform across all 8243 imported fills (single
+        bulk-import timestamp), so it gives no ordering signal.
+
+    The meaningful time-series-sanity invariant on this data is
+    bounded-day correctness: a fill belonging to ``run_id=R`` whose
+    ``trade_date`` is D must have its ``trade_time`` fall on day D.
+    Cross-day leakage would indicate a clock-skew / replay-window bug.
+    This invariant is non-tautological (a buggy writer can violate it)
+    and verifiable on real data (0 violations on Batch A as of
+    2026-05-11).
+    """
+    with dev_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT count(*) FROM paper_v2.fills f
+            JOIN paper_v2.run r USING (run_id)
+            WHERE r.trade_date IS NOT NULL
+              AND f.trade_time IS NOT NULL
+              AND f.trade_time::date <> r.trade_date
+            """
+        )
+        violations = cur.fetchone()[0]
+    if violations == 0:
+        # Find the total row count to surface in the assertion message
+        # even on the success path -- gives the reviewer a sense of the
+        # test's actual coverage.
+        with dev_conn.cursor() as cur:
+            cur.execute(
+                "SELECT count(*) FROM paper_v2.fills f "
+                "JOIN paper_v2.run r USING (run_id) "
+                "WHERE r.trade_date IS NOT NULL AND f.trade_time IS NOT NULL"
+            )
+            checked = cur.fetchone()[0]
+        if checked == 0:
+            pytest.skip("no fills with both trade_date and trade_time joined.")
+        return
+    # Surface up to 5 violators with context
     with dev_conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
             """
-            SELECT run_id
-            FROM paper_v2.fills
-            GROUP BY run_id
-            HAVING count(*) >= 2
-            ORDER BY count(*) DESC
-            LIMIT 20
+            SELECT f.fill_id, f.run_id, r.trade_date AS run_date,
+                   f.trade_time AS fill_time
+            FROM paper_v2.fills f
+            JOIN paper_v2.run r USING (run_id)
+            WHERE r.trade_date IS NOT NULL
+              AND f.trade_time IS NOT NULL
+              AND f.trade_time::date <> r.trade_date
+            LIMIT 5
             """
         )
-        run_ids = [r["run_id"] for r in cur.fetchall()]
-    if not run_ids:
-        pytest.skip("no runs with >=2 fills.")
-    offenders: list[tuple[str, int]] = []
-    for run_id in run_ids:
-        with dev_conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT fill_id, trade_time
-                FROM paper_v2.fills
-                WHERE run_id = %s
-                ORDER BY trade_time NULLS LAST, fill_id
-                """,
-                (run_id,),
-            )
-            rows = list(cur.fetchall())
-        prev = None
-        for r in rows:
-            tt = r["trade_time"]
-            if tt is None:
-                continue
-            if prev is not None and tt < prev:
-                offenders.append((run_id, r["fill_id"]))
-                break
-            prev = tt
-    assert not offenders, (
-        f"{len(offenders)} runs have non-monotonic trade_time; first 5: {offenders[:5]}"
+        sample = list(cur.fetchall())
+    assert False, (
+        f"{violations} fill(s) have trade_time on a different date than the "
+        f"owning run's trade_date; first 5 (fill_id, run_id, run_date, fill_time): "
+        f"{[(r['fill_id'], r['run_id'], r['run_date'], r['fill_time']) for r in sample]}"
     )
 
 
@@ -120,41 +147,49 @@ def test_archive_completed_at_after_source_run_completed_at(
     )
 
 
-def test_archive_started_before_completed(
+def test_archive_captured_before_completed(
     dev_conn, archive_tables_ready,
 ):
-    """When both archive_started_at + archive_completed_at exist,
-    completed >= started for every row."""
-    with dev_conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT column_name FROM information_schema.columns
-            WHERE table_schema='qe_archive' AND table_name='paper_v2_run'
-              AND column_name IN ('archive_started_at', 'archive_completed_at')
-            """
-        )
-        cols = {r[0] for r in cur.fetchall()}
-    if {"archive_started_at", "archive_completed_at"} - cols:
-        pytest.skip("archive_started_at / archive_completed_at not both present.")
+    """Archive write-side invariant: ``captured_at <= archive_completed_at``.
+
+    Per Agent C P2.2 review feedback: the original test targeted an
+    ``archive_started_at`` column that does not exist on the T12 schema
+    nor on dw-foundation T14b/c r3 (verified via column probe on dev DB
+    2026-05-11). Replaced with the equivalent invariant using the
+    columns that DO exist:
+      - ``captured_at`` (the qe_archive write timestamp)
+      - ``archive_completed_at`` (when the archive handler reported done)
+
+    captured_at must be <= archive_completed_at for any row that has
+    both populated.
+    """
+    skip_if_missing_columns(
+        dev_conn, "qe_archive", "paper_v2_run",
+        ("captured_at", "archive_completed_at"),
+        "captured_at / archive_completed_at not both present on dev DB; "
+        "T12 may not be applied or schema diverged from origin/claude/"
+        "dw-foundation-20260510 expectations.",
+    )
     with dev_conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
             """
-            SELECT run_id, archive_started_at, archive_completed_at
+            SELECT run_id, captured_at, archive_completed_at
             FROM qe_archive.paper_v2_run
-            WHERE archive_started_at IS NOT NULL AND archive_completed_at IS NOT NULL
+            WHERE captured_at IS NOT NULL AND archive_completed_at IS NOT NULL
             LIMIT 500
             """
         )
         rows = list(cur.fetchall())
     if not rows:
-        pytest.skip("no archive runs with both timestamps recorded.")
+        pytest.skip("no archive runs with both captured_at + archive_completed_at populated.")
     violations = [
         r for r in rows
-        if r["archive_completed_at"] < r["archive_started_at"]
+        if r["archive_completed_at"] < r["captured_at"]
     ]
     assert not violations, (
-        f"{len(violations)} runs have completed_at < started_at; first 5: "
-        f"{[(r['run_id'], r['archive_started_at'], r['archive_completed_at']) for r in violations[:5]]}"
+        f"{len(violations)} runs have archive_completed_at < captured_at "
+        f"(handler finished before it started writing); first 5: "
+        f"{[(r['run_id'], r['captured_at'], r['archive_completed_at']) for r in violations[:5]]}"
     )
 
 
