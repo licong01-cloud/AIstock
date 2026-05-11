@@ -151,6 +151,28 @@ modules:
     ui_routes: [/qlib]
     test_plans:
       required_on_change: [l0]
+  - module_id: market_regime
+    display_name: Market Regime
+    module_type: data_pipeline
+    risk_level: medium
+    description: Market regime classification (market.regime_label) timeline and distribution surfaces.
+    description_zh: 覆盖市场状态分类(market.regime_label) 的时间线、分布与方法切换 UI。
+    ui_routes: [/market-regime]
+    api_routes: [/api/v1/market/regime-label/*]
+    test_plans:
+      required_on_change: [l0]
+      recommended: [market_regime_ui]
+  - module_id: rl_execution
+    display_name: RL Execution Models
+    module_type: product_feature
+    risk_level: high
+    description: RL execution model registry, dev_version lineage, rolling training and evaluation metrics.
+    description_zh: 覆盖 RL 执行模型注册表、dev_version 谱系、滚动训练与评估指标的展示与激活流程。
+    ui_routes: [/rl-execution]
+    api_routes: [/api/v1/rl-execution/*]
+    test_plans:
+      required_on_change: [l0]
+      recommended: [rl_execution_ui]
   - module_id: local_data
     display_name: Local data
     module_type: data_pipeline

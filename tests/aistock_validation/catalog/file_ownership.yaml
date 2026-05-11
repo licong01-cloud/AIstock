@@ -136,6 +136,29 @@ rules:
     layer: frontend_ui
     risk_level: high
     ownership_reason: Governance UI gates strategy_package paper enablement; UI must reflect 5-evidence eligibility.
+  - rule_id: market_regime_frontend
+    priority: 70
+    include:
+      - frontend/src/app/market-regime/**
+      - frontend/src/lib/market-regime/**
+      - frontend/tests/market-regime/**
+      - backend/routers/market_regime.py
+    primary_module: market_regime
+    impact_modules: [qe.archive, paper_v2]
+    layer: frontend_ui
+    risk_level: medium
+    ownership_reason: Market regime UI surfaces the daily classification consumed by qe_archive ETL.
+  - rule_id: rl_execution_frontend
+    priority: 70
+    include:
+      - frontend/src/app/rl-execution/**
+      - frontend/src/lib/rl-execution/**
+      - frontend/tests/rl-execution/**
+    primary_module: rl_execution
+    impact_modules: [paper_v2]
+    layer: frontend_ui
+    risk_level: medium
+    ownership_reason: RL Execution UI exposes the model registry consumed by minute-level paper execution.
   - rule_id: paper_v2_services
     priority: 80
     include:

@@ -1002,6 +1002,121 @@ def qe_archive_l3(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def market_regime_ui(session: nox.Session) -> None:
+    """Run Market Regime UI E2E tests on dev ports.
+
+    Uses Playwright route mocks for /api/v1/market/regime-label/*; the
+    backend router (backend/routers/market_regime.py) is read-only and
+    safe to query against dev_db once available.
+    """
+    test_dir = ROOT / "frontend" / "tests" / "market-regime"
+    if not test_dir.exists():
+        session.skip("Market Regime UI tests are not implemented yet.")
+    backend_port = session.posargs[0] if session.posargs else os.environ.get("BACKEND_PORT", "8012")
+    frontend_port = session.posargs[1] if len(session.posargs) > 1 else os.environ.get("FRONTEND_PORT", "3012")
+    mock_api = os.environ.get("MARKET_REGIME_UI_MOCK_API", "1") == "1"
+    session.run(
+        "python",
+        "scripts/aistock_validate.py",
+        "ports",
+        "--allow-occupied",
+        backend_port,
+        frontend_port,
+        external=True,
+    )
+    if not mock_api:
+        session.run(
+            "python",
+            "scripts/aistock_validate.py",
+            "services",
+            "--backend-port",
+            backend_port,
+            "--skip-tdx",
+            external=True,
+        )
+    old_cwd = Path.cwd()
+    os.chdir(ROOT / "frontend")
+    try:
+        session.run("npm", "exec", "tsc", "--", "--noEmit", "--incremental", "false", external=True)
+        session.run(
+            "npm",
+            "run",
+            "test:e2e",
+            "--",
+            "tests/market-regime",
+            env=_env(
+                {
+                    "BACKEND_PORT": backend_port,
+                    "FRONTEND_PORT": frontend_port,
+                    "MARKET_REGIME_UI_MOCK_API": "1" if mock_api else "0",
+                    "NEXT_PUBLIC_API_BASE": f"http://127.0.0.1:{backend_port}/api/v1",
+                    "PLAYWRIGHT_SKIP_WEBSERVER": "1" if _is_port_open(frontend_port) else "0",
+                }
+            ),
+            external=True,
+        )
+    finally:
+        os.chdir(old_cwd)
+
+
+@nox.session(venv_backend="none")
+def rl_execution_ui(session: nox.Session) -> None:
+    """Run RL Execution UI E2E tests on dev ports.
+
+    Mocks /api/v1/rl-execution/*; backend router already exists on main
+    so live wiring is one env-var flip away (MOCK_API=0).
+    """
+    test_dir = ROOT / "frontend" / "tests" / "rl-execution"
+    if not test_dir.exists():
+        session.skip("RL Execution UI tests are not implemented yet.")
+    backend_port = session.posargs[0] if session.posargs else os.environ.get("BACKEND_PORT", "8012")
+    frontend_port = session.posargs[1] if len(session.posargs) > 1 else os.environ.get("FRONTEND_PORT", "3012")
+    mock_api = os.environ.get("RL_EXECUTION_UI_MOCK_API", "1") == "1"
+    session.run(
+        "python",
+        "scripts/aistock_validate.py",
+        "ports",
+        "--allow-occupied",
+        backend_port,
+        frontend_port,
+        external=True,
+    )
+    if not mock_api:
+        session.run(
+            "python",
+            "scripts/aistock_validate.py",
+            "services",
+            "--backend-port",
+            backend_port,
+            "--skip-tdx",
+            external=True,
+        )
+    old_cwd = Path.cwd()
+    os.chdir(ROOT / "frontend")
+    try:
+        session.run("npm", "exec", "tsc", "--", "--noEmit", "--incremental", "false", external=True)
+        session.run(
+            "npm",
+            "run",
+            "test:e2e",
+            "--",
+            "tests/rl-execution",
+            env=_env(
+                {
+                    "BACKEND_PORT": backend_port,
+                    "FRONTEND_PORT": frontend_port,
+                    "RL_EXECUTION_UI_MOCK_API": "1" if mock_api else "0",
+                    "NEXT_PUBLIC_API_BASE": f"http://127.0.0.1:{backend_port}/api/v1",
+                    "PLAYWRIGHT_SKIP_WEBSERVER": "1" if _is_port_open(frontend_port) else "0",
+                }
+            ),
+            external=True,
+        )
+    finally:
+        os.chdir(old_cwd)
+
+
+@nox.session(venv_backend="none")
 def strategy_package_governance_ui(session: nox.Session) -> None:
     """Run Strategy Package Governance UI E2E tests on dev ports.
 
