@@ -22,7 +22,8 @@ import json
 
 import pytest
 
-from psycopg2.extras import RealDictCursor
+psycopg2 = pytest.importorskip("psycopg2")
+from psycopg2.extras import RealDictCursor  # noqa: E402  after importorskip
 
 from ._reference import (
     CASH_LEDGER_ENTRY_TYPES,
@@ -57,9 +58,10 @@ def _coerce(value):
 def test_cash_ledger_entry_type_matches_synth_reference(
     dev_conn, archive_tables_ready,
 ):
-    """For each row in qe_archive.paper_v2_cash_ledger, derive the expected
-    entry_type from the *source* paper_v2.cash_ledger row and assert
-    equality."""
+    """Whole-table contract: every row in qe_archive.paper_v2_cash_ledger
+    joined with paper_v2.cash_ledger must have entry_type matching the
+    reference synthesize logic. No LIMIT -- the contract applies to all
+    rows (per Codex r2 P2.3 review)."""
     with dev_conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
             """
@@ -67,7 +69,6 @@ def test_cash_ledger_entry_type_matches_synth_reference(
                    s.side, s.notional, s.fee, s.cash_delta
             FROM qe_archive.paper_v2_cash_ledger a
             JOIN paper_v2.cash_ledger s ON s.cash_id::text = a.ledger_entry_id
-            LIMIT 500
             """
         )
         rows = list(cur.fetchall())
@@ -92,10 +93,11 @@ def test_cash_ledger_entry_type_matches_synth_reference(
 def test_cash_ledger_entry_type_in_allowed_enum(
     dev_conn, archive_tables_ready,
 ):
-    """Every archived entry_type must be in CASH_LEDGER_ENTRY_TYPES."""
+    """Whole-table contract: every archived entry_type must be in
+    CASH_LEDGER_ENTRY_TYPES. No LIMIT (Codex r2 P2.3)."""
     with dev_conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
-            "SELECT ledger_entry_id, entry_type FROM qe_archive.paper_v2_cash_ledger LIMIT 1000"
+            "SELECT ledger_entry_id, entry_type FROM qe_archive.paper_v2_cash_ledger"
         )
         rows = list(cur.fetchall())
     if not rows:
@@ -122,7 +124,6 @@ def test_reset_audit_reset_type_matches_synth_reference(
             SELECT a.reset_type, s.rerun_policy, s.deleted_counts
             FROM qe_archive.paper_v2_reset_audit a
             JOIN paper_v2.reset_audit s ON s.audit_id::text = a.audit_id
-            LIMIT 500
             """
         )
         rows = list(cur.fetchall())
@@ -145,12 +146,14 @@ def test_reset_audit_reset_type_matches_synth_reference(
 def test_session_day_data_quality_in_allowed_enum(
     dev_conn, archive_tables_ready,
 ):
-    """BUG-008 partial fix: data_quality is derived but may still
-    under-report. The contract is the enum domain remains tight."""
+    """Whole-table contract (BUG-008 partial fix): data_quality is
+    derived but may still under-report. The enum-domain contract
+    remains tight; this test walks every non-NULL row. No LIMIT
+    (Codex r2 P2.3)."""
     with dev_conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
             "SELECT trade_session_id, data_quality FROM qe_archive.paper_v2_session_day "
-            "WHERE data_quality IS NOT NULL LIMIT 1000"
+            "WHERE data_quality IS NOT NULL"
         )
         rows = list(cur.fetchall())
     if not rows:
@@ -180,7 +183,6 @@ def test_regime_label_simple_quadrant_classification(
             SELECT trade_date, regime, source_signal_json
             FROM market.regime_label
             WHERE source_method = 'simple_quadrant'
-            LIMIT 500
             """
         )
         rows = list(cur.fetchall())
@@ -200,25 +202,18 @@ def test_regime_label_simple_quadrant_classification(
     assert not drift, f"{len(drift)} regime classifications drift; first 5: {drift[:5]}"
 
 
-def test_slippage_bps_consistent_with_intended_price(
+def test_slippage_bps_value_matches_d5_formula(
     dev_conn, archive_tables_ready,
 ):
-    """For each archived fill where slippage_bps is non-NULL,
-    slippage_bps must equal compute_slippage_bps(intended_price,
-    fill_price, side) within 0.5 bps tolerance.
+    """Whole-table contract: for **every** archived fill where
+    ``slippage_bps`` is non-NULL, the value must match the D5 raw formula
 
-    Schema contract (per Agent C P1.2 review feedback):
-      - paper_v2.fills (source) carries: ``price``, ``intended_price``,
-        ``side`` -- NO ``slippage_bps`` or ``fill_price``.
-      - qe_archive.paper_v2_fill (archive) carries: ``fill_price`` (the
-        renamed source price), ``intended_price`` (mirrored), ``side``,
-        and ``slippage_bps`` -- the latter is populated by the
-        PaperV2ArchiveHandler at archive write time.
+        ``(fill_price - intended_price) / intended_price * 10000``
 
-    Today the handler inserts NULL for slippage_bps (placeholder; tracked
-    in BUG follow-up). When the handler populates it, this test
-    activates without code change. Skip reason is explicit so the gap
-    stays visible until the handler implements the derivation.
+    within 0.5 bps tolerance (Decimal rounding). No LIMIT -- the contract
+    applies to all rows. Skips cleanly only when the archive has no
+    populated slippage_bps rows at all (canonical state today: 100%
+    MARKET orders per D5 §502, intended_price structurally NULL).
     """
     skip_if_missing_columns(
         dev_conn, "qe_archive", "paper_v2_fill",
@@ -231,39 +226,135 @@ def test_slippage_bps_consistent_with_intended_price(
             SELECT fill_id, intended_price, fill_price, side, slippage_bps
             FROM qe_archive.paper_v2_fill
             WHERE slippage_bps IS NOT NULL
-            LIMIT 500
             """
         )
         rows = list(cur.fetchall())
     if not rows:
-        # Distinguish two states so the skip reason is actionable:
-        # (a) no archive fills at all - handler not yet run for these data
-        # (b) archive fills exist but every slippage_bps is NULL - handler
-        #     does not yet populate the column.
-        with dev_conn.cursor() as cur:
-            cur.execute("SELECT count(*) FROM qe_archive.paper_v2_fill")
-            archive_n = cur.fetchone()[0]
-        if archive_n == 0:
-            pytest.skip(
-                "qe_archive.paper_v2_fill is empty; handler has not produced "
-                "archive fills yet (out of scope for slippage assertion)."
-            )
         pytest.skip(
-            "qe_archive.paper_v2_fill has rows but every slippage_bps is NULL; "
-            "PaperV2ArchiveHandler does not derive slippage_bps yet -- when it "
-            "lands the test activates automatically. Track via the BUG "
-            "registry under the handler enhancements line."
+            "qe_archive.paper_v2_fill has no rows with slippage_bps populated. "
+            "Canonical D5 §502 state today (intended_price structurally NULL "
+            "for MARKET-only orders). When paper_v2 adds LIMIT orders + the "
+            "handler populates slippage_bps, this test activates with no "
+            "code change."
         )
     drift = []
     for r in rows:
         expected = compute_slippage_bps(
             intended_price=r["intended_price"],
             fill_price=r["fill_price"],
-            side=r["side"],
+            # side intentionally omitted -- D5 §507 raw formula has no
+            # BUY/SELL branch (per Codex r2 review drawer 46553d25).
         )
         if expected is None:
+            # Defensive: shouldn't happen because we filtered on
+            # slippage_bps IS NOT NULL and the formula returns NULL only
+            # when intended_price/fill_price is NULL.
+            drift.append((r["fill_id"], "expected=None (one of inputs NULL)", r["slippage_bps"]))
             continue
         actual = float(r["slippage_bps"])
         if abs(actual - expected) > 0.5:  # 0.5 bps Decimal-rounding tolerance
             drift.append((r["fill_id"], actual, expected))
-    assert not drift, f"{len(drift)} slippage_bps drift; first 5: {drift[:5]}"
+    assert not drift, (
+        f"{len(drift)} slippage_bps rows violate the D5 raw formula; "
+        f"first 5 (fill_id, actual, expected): {drift[:5]}"
+    )
+
+
+def test_slippage_bps_market_orders_remain_null(
+    dev_conn, archive_tables_ready,
+):
+    """**Negative contract** (Codex r2 P1.1, second part).
+
+    D5 §507: ``slippage_bps`` is computed **only when**
+    ``intended_price IS NOT NULL``, **otherwise NULL**. Therefore any
+    archive row where ``intended_price IS NULL AND slippage_bps IS NOT
+    NULL`` violates the contract and must surface as a test failure
+    (it would mean the handler invented a slippage value out of
+    nothing, or attached it to a MARKET fill that has no reference
+    price).
+
+    Whole-table check: no LIMIT.
+    """
+    skip_if_missing_columns(
+        dev_conn, "qe_archive", "paper_v2_fill",
+        ("intended_price", "slippage_bps"),
+        "T12 paper_v2_fill columns missing on this dev DB.",
+    )
+    with dev_conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT fill_id, intended_price, slippage_bps
+            FROM qe_archive.paper_v2_fill
+            WHERE intended_price IS NULL
+              AND slippage_bps IS NOT NULL
+            """
+        )
+        violators = list(cur.fetchall())
+    assert not violators, (
+        f"{len(violators)} archive fill(s) violate D5 §507 'otherwise NULL': "
+        f"intended_price IS NULL but slippage_bps is set. Handler must NOT "
+        f"derive slippage for MARKET orders. First 5: "
+        f"{[(r['fill_id'], r['slippage_bps']) for r in violators[:5]]}"
+    )
+
+
+def test_slippage_bps_handler_derives_when_intended_price_present(
+    dev_conn, source_tables_ready, archive_tables_ready,
+):
+    """**Handler-coverage sentinel** (Codex r2 P1.1, first part).
+
+    When the source ``paper_v2.fills`` table has at least one row with
+    ``intended_price IS NOT NULL`` AND the archive has its mirror, the
+    archive's ``slippage_bps`` MUST be populated (not all-NULL). If the
+    handler regresses and stops deriving slippage_bps, this assertion
+    surfaces it instead of letting the value-matching test above skip.
+
+    Skips cleanly when no source rows have ``intended_price`` populated
+    (the canonical D5 §502 MARKET-only baseline).
+    """
+    skip_if_missing_columns(
+        dev_conn, "qe_archive", "paper_v2_fill",
+        ("intended_price", "slippage_bps"),
+        "T12 paper_v2_fill columns missing on this dev DB.",
+    )
+    with dev_conn.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) FROM paper_v2.fills WHERE intended_price IS NOT NULL"
+        )
+        source_with_intended = cur.fetchone()[0]
+    if source_with_intended == 0:
+        pytest.skip(
+            "paper_v2.fills has no rows with intended_price IS NOT NULL "
+            "(MARKET-only baseline per D5 §502). Handler-derivation sentinel "
+            "activates once paper_v2 adds LIMIT orders."
+        )
+    # Source has rows that SHOULD produce a non-NULL slippage_bps in
+    # archive. The archive must reflect this; if the corresponding archive
+    # rows exist but slippage_bps is NULL for all of them, fail loudly.
+    with dev_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+              count(*) FILTER (WHERE a.intended_price IS NOT NULL) AS arch_with_intended,
+              count(*) FILTER (
+                WHERE a.intended_price IS NOT NULL AND a.slippage_bps IS NOT NULL
+              ) AS arch_with_slippage
+            FROM qe_archive.paper_v2_fill a
+            """
+        )
+        arch_with_intended, arch_with_slippage = cur.fetchone()
+    if arch_with_intended == 0:
+        pytest.skip(
+            f"paper_v2.fills has {source_with_intended} row(s) with "
+            f"intended_price IS NOT NULL but qe_archive.paper_v2_fill has 0 "
+            f"such rows (archive worker has not consumed the relevant outbox "
+            f"events yet). Stage 7.3 r1 cross-table sentinel (BUG-NNN) "
+            f"surfaces the related gap; deferred here."
+        )
+    assert arch_with_slippage > 0, (
+        f"qe_archive.paper_v2_fill has {arch_with_intended} row(s) with "
+        f"intended_price IS NOT NULL but 0 with slippage_bps populated. "
+        f"Handler is failing to derive slippage_bps for LIMIT-order fills, "
+        f"violating D5 §507. This is the handler regression Codex r2 P1.1 "
+        f"asked the sentinel to surface."
+    )

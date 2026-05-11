@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import pytest
 
-from psycopg2.extras import RealDictCursor
+psycopg2 = pytest.importorskip("psycopg2")
+from psycopg2.extras import RealDictCursor  # noqa: E402  after importorskip
 
 from .conftest import skip_if_missing_columns
 

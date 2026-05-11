@@ -1,19 +1,37 @@
-"""Time-series monotonicity invariants.
+"""Time-series sanity invariants (Stage 7.3 §7.3.5).
 
-Per Stage 7.3 §7.3.5:
-- ``paper_v2.fills.trade_time`` is non-decreasing within a single run.
-- ``paper_v2.run.created_at`` < ``qe_archive.paper_v2_run.archive_completed_at``
-  (the archive cannot complete before its source row was even created).
-- ``paper_v2.session_day.trade_date`` is unique per session within a run.
+Original Stage 7.3 §7.3.5 framed this family as "monotonicity", but
+Stage 7.3 r1 review (Agent C P2.1) showed:
+  - Pre-sorting by trade_time before checking trade_time non-decreasing
+    is tautological.
+  - There is no usable "insertion-order" column on paper_v2.fills
+    (fill_id is a hex string; Batch A's created_at is identical across
+    all 8243 rows from a single bulk-import).
+
+The family was re-scoped to "time-series sanity" with bounded-day and
+positive-duration invariants that ARE testable on the real schema:
+
+- ``paper_v2.fills.trade_time::date`` equals its owning run's
+  ``paper_v2.run.trade_date`` (bounded-day correctness; catches
+  cross-day leakage from clock-skew or replay-window bugs).
+- ``qe_archive.paper_v2_run.captured_at`` <=
+  ``qe_archive.paper_v2_run.archive_completed_at`` (positive archive
+  duration; per Stage 7.3 r1 fix, ``archive_started_at`` was replaced
+  with ``captured_at`` because the former does not exist on T12 /
+  T14b/c r3 schema).
 - ``qe_archive.paper_v2_run.archive_completed_at`` >=
-  ``qe_archive.paper_v2_run.archive_started_at`` when both columns exist.
+  ``paper_v2.run.completed_at`` (archive cannot finish before source's
+  own completion timestamp).
+- ``qe_archive.paper_v2_session_day`` is unique per
+  ``(trade_session_id, trade_date)``.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from psycopg2.extras import RealDictCursor
+psycopg2 = pytest.importorskip("psycopg2")
+from psycopg2.extras import RealDictCursor  # noqa: E402  after importorskip
 
 from .conftest import skip_if_missing_columns
 

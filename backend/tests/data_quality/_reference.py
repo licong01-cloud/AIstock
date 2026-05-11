@@ -159,13 +159,23 @@ def classify_simple_quadrant(
 def compute_slippage_bps(
     intended_price: Any,
     fill_price: Any,
-    side: str | None,
+    side: str | None = None,  # accepted for ABI compatibility; ignored
 ) -> float | None:
-    """Slippage in bps relative to intended_price (None for MARKET orders).
+    """Slippage in bps per D5 ``data_warehouse_extension_design_20260510.md`` §507.
 
-    Sign convention: positive bps = adverse for the side.
-      BUY:  fill_price > intended -> positive (paid more than planned)
-      SELL: fill_price < intended -> positive (received less than planned)
+    Canonical formula (no side branch):
+
+        slippage_bps = (fill_price - intended_price) / intended_price * 10000
+
+    Returns ``None`` when ``intended_price`` is NULL (MARKET orders have no
+    reference price -- per D5 §502 ``intended_price`` is a first-class
+    NULL signal, not missing data).
+
+    ``side`` is accepted as a keyword for ABI stability with the earlier
+    flipped-sign implementation but is INTENTIONALLY ignored: per Codex
+    r2 review (drawer 46553d25), the D5 raw formula has no BUY/SELL
+    branch. Sign interpretation (positive = adverse for the side) is the
+    *consumer's* job downstream, not the storage contract.
     """
     if intended_price is None or fill_price is None:
         return None
@@ -174,8 +184,7 @@ def compute_slippage_bps(
     if intended_d is None or fill_d is None or intended_d == 0:
         return None
     delta = (fill_d - intended_d) / intended_d
-    if side == "SELL":
-        delta = -delta
+    _ = side  # explicitly ignored — see docstring rationale
     return float(delta) * 10000.0
 
 

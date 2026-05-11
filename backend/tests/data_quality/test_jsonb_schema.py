@@ -18,7 +18,8 @@ import json
 
 import pytest
 
-from psycopg2.extras import RealDictCursor
+psycopg2 = pytest.importorskip("psycopg2")
+from psycopg2.extras import RealDictCursor  # noqa: E402  after importorskip
 
 from ._reference import FILL_MARKET_CONTEXT_KEYS
 from .conftest import skip_if_missing_columns
