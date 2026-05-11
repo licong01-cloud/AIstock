@@ -359,6 +359,15 @@ rules:
     layer: backend_service
     risk_level: high
     ownership_reason: Archive event handlers translate live source rows into qe_archive durable storage; contract regressions break warehouse reliability.
+  - rule_id: validation_data_quality_deep
+    priority: 95
+    include:
+      - backend/tests/data_quality/**
+    primary_module: validation.data_quality
+    impact_modules: [qe.archive, qe.archive_handlers, paper_v2, market.regime_label]
+    layer: backend_test
+    risk_level: high
+    ownership_reason: Stage 7.3 deep data-quality assertions; failures here surface archive / source contract drift before any release.
   - rule_id: scripts_default
     priority: 10
     include:

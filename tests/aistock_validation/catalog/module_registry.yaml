@@ -449,3 +449,12 @@ modules:
     description_zh: 覆盖 QE 归档 handler 接口契约、各事件类型 handler 实现和归档协调子系统。
     test_plans:
       required_on_change: [l0, qe_archive_backend]
+  - module_id: validation.data_quality
+    display_name: Deep data quality assertions
+    parent_module: validation
+    module_type: cross_cutting
+    risk_level: high
+    description: Stage 7.3 deep data-quality assertions covering field-level consistency, JSONB structure, derived fields, cross-table cardinality, and time-series monotonicity.
+    description_zh: 覆盖 Stage 7.3 深度数据质量验证 (字段一致 / jsonb 结构 / 派生字段 / 跨表一致 / 时序单调)。
+    test_plans:
+      required_on_change: [l0, data_quality_deep]

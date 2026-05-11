@@ -288,6 +288,7 @@ def paper_v2_l3(session: nox.Session) -> None:
     session.notify("l0")
     session.notify("paper_v2_backend")
     session.notify("paper_v2_data_quality")
+    session.notify("data_quality_deep")
     if os.environ.get("PAPER_V2_L3_SKIP_UI") != "1":
         session.notify("paper_v2_ui")
 
@@ -408,6 +409,33 @@ def qe_read_l3(session: nox.Session) -> None:
     session.notify("qe_read_backend")
     if os.environ.get("QE_READ_L3_SKIP_UI") != "1":
         session.notify("qe_read_ui")
+
+
+@nox.session(venv_backend="none")
+def data_quality_deep(session: nox.Session) -> None:
+    """Stage 7.3 deep data-quality assertions against dev DB.
+
+    5 assertion families (≥15 tests) covering field-level consistency,
+    JSONB structural validation, derived-field correctness vs the
+    canonical reference implementation, cross-table cardinality, and
+    time-series monotonicity. Tests skip cleanly when the dev DB
+    credentials are unavailable, so the session is also safe to run on
+    fresh CI hosts without the dev DB loaded.
+    """
+    session.run(
+        "python",
+        "-m",
+        "compileall",
+        "backend/tests/data_quality",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/data_quality",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
 
 
 @nox.session(venv_backend="none")
@@ -1156,6 +1184,7 @@ def qe_archive_l3(session: nox.Session) -> None:
     )
     session.notify("qe_archive_backend")
     session.notify("qe_archive_data_quality")
+    session.notify("data_quality_deep")
     if os.environ.get("QE_ARCHIVE_L3_SKIP_UI") != "1":
         session.notify("qe_archive_ui")
 

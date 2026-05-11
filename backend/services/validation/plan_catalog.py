@@ -28,6 +28,7 @@ ALLOWED_COMMAND_KEYS: dict[str, str] = {
     "nox_model_registry_backend": "model_registry_backend",
     "nox_market_regime_label": "market_regime_label",
     "nox_rl_execution_smoke": "rl_execution_smoke",
+    "nox_data_quality_deep": "data_quality_deep",
 }
 ALLOWED_BACKEND_PORTS = {8011, 8012}
 ALLOWED_FRONTEND_PORTS = {3011, 3012}
