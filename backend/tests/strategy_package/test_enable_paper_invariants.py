@@ -27,6 +27,9 @@ from backend.services.trading_core.errors import (
     InvalidStateTransitionError,
     StrategyPackageValidationError,
 )
+from backend.tests.strategy_package.test_enable_paper_router_409 import (
+    _seed_paper_ready_package,
+)
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
 
@@ -36,11 +39,19 @@ def test_enable_paper_raises_on_manifest_sha256_mismatch() -> None:
 
     The validator (validators.py:32-42) recomputes
     compute_manifest_sha256(manifest) and compares to manifest.manifest_sha256;
-    mismatch raises StrategyPackageValidationError with both 'expected' and
-    'actual' in the context. We reach that branch by injecting a record whose
-    embedded manifest carries a deliberately wrong digest into the in-memory
-    repository directly (bypassing save_manifest, which would re-freeze and
-    overwrite the digest).
+    mismatch raises StrategyPackageValidationError. We reach that branch by
+    injecting a record whose embedded manifest carries a deliberately wrong
+    digest into the in-memory repository directly (bypassing save_manifest,
+    which would re-freeze and overwrite the digest).
+
+    R6: governance gate prereq seed; the new
+    ``_require_governance_paper_ready`` gate now intercepts before the legacy
+    raise point. The validator's sha-mismatch error is caught inside
+    ``_manifest_identity_gate`` and surfaced as a blocker string in the
+    governance eligibility context. We assert against the wrapped governance
+    error: error message identifies the governance gate, and
+    ``context["manifest_identity"]`` records the underlying sha mismatch (via
+    its ``blockers`` list and the persisted ``manifest_sha256``).
     """
 
     repo = InMemoryStrategyPackageRepository()
@@ -72,16 +83,25 @@ def test_enable_paper_raises_on_manifest_sha256_mismatch() -> None:
 
     service = StrategyPackageService(repository=repo)
 
+    # R6: seed governance gate prereqs so we exercise the manifest-identity
+    # blocker path rather than getting blocked by missing prereqs first.
+    _seed_paper_ready_package(service, record.package_id)
+
     with pytest.raises(StrategyPackageValidationError) as exc_info:
         service.enable_paper(record.package_id)
 
-    message = str(exc_info.value).lower()
-    assert "manifest" in message
-    assert "sha" in message
-    # Diagnostic context must surface both expected (manifest's claimed sha)
-    # and actual (recomputed sha) so reviewers can tell tampering from drift.
-    assert exc_info.value.context.get("expected") == bad_digest
-    assert exc_info.value.context.get("actual") and exc_info.value.context["actual"] != bad_digest
+    # R6: governance gate wraps the validator's sha-mismatch error.
+    err = exc_info.value
+    context = err.context or {}
+    manifest_identity = context.get("manifest_identity") or {}
+    blockers_str = " ".join(manifest_identity.get("blockers") or [])
+    # Top-level error must surface governance gate failure.
+    assert "governance" in str(err).lower() or "paper_ready" in str(err).lower()
+    # Underlying sha mismatch must remain discoverable in the eligibility
+    # context so reviewers can tell tampering from drift.
+    assert "manifest_sha256" in blockers_str.lower() or "sha" in blockers_str.lower()
+    assert manifest_identity.get("manifest_sha256") == bad_digest
+    assert manifest_identity.get("passed") is False
 
 
 def test_enable_paper_raises_on_invalid_status_transition() -> None:
@@ -107,14 +127,19 @@ def test_enable_paper_raises_on_invalid_status_transition() -> None:
         make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
     )
     record = repo.save_manifest(saved_manifest)
+
+    service = StrategyPackageService(repository=repo)
+    # R6: seed governance gate prereqs so the new
+    # ``_require_governance_paper_ready`` gate passes and we reach the
+    # legacy state-machine compare-and-set raise point.
+    _seed_paper_ready_package(service, record.package_id)
+
     # Force the persisted package_status to PAPER_ENABLED. current_manifest()
     # overlays this onto the manifest, so the validator's manifest-status gate
     # still sees an allowed value and we land in the state-machine check.
-    repo.records[record.package_id] = record.model_copy(
+    repo.records[record.package_id] = repo.get(record.package_id).model_copy(
         update={"package_status": PackageStatus.PAPER_ENABLED}
     )
-
-    service = StrategyPackageService(repository=repo)
 
     with pytest.raises(InvalidStateTransitionError) as exc_info:
         service.enable_paper(record.package_id)

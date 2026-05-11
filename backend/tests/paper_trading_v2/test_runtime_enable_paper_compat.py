@@ -49,6 +49,9 @@ from backend.services.trading_core.errors import (
     StrategyPackageValidationError,
 )
 from backend.tests.paper_trading_v2.fixtures_dev_db import _dev_dsn
+from backend.tests.strategy_package.test_enable_paper_router_409 import (
+    _seed_paper_ready_package,
+)
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
 
@@ -87,12 +90,26 @@ def dev_pkg_repo() -> Iterator[StrategyPackageRepository]:
     repo = StrategyPackageRepository(conn_factory=_dev_conn_factory())
     yield repo
     # Teardown: drop all rows tagged with our test prefix.
+    # R6: governance gate prereq seed writes to package_asset,
+    # package_runtime_variant, and package_validation_run; clean those too.
     conn = psycopg2.connect(**_dev_dsn())
     try:
         conn.autocommit = True
         with conn.cursor() as cur:
             cur.execute(
                 "DELETE FROM strategy_pkg.package_status_event "
+                "WHERE package_id LIKE 'pkg_test_int6_%%'"
+            )
+            cur.execute(
+                "DELETE FROM strategy_pkg.package_validation_run "
+                "WHERE package_id LIKE 'pkg_test_int6_%%'"
+            )
+            cur.execute(
+                "DELETE FROM strategy_pkg.package_runtime_variant "
+                "WHERE package_id LIKE 'pkg_test_int6_%%'"
+            )
+            cur.execute(
+                "DELETE FROM strategy_pkg.package_asset "
                 "WHERE package_id LIKE 'pkg_test_int6_%%'"
             )
             cur.execute(
@@ -176,6 +193,10 @@ def test_runtime_handles_invalid_state_409(dev_pkg_repo: StrategyPackageReposito
         asset_checks_passing=True,
     )
     service = StrategyPackageService(repository=dev_pkg_repo)
+    # R6: governance gate prereq seed; reaches legacy state-machine raise
+    # post-gate. Without this, _require_governance_paper_ready would block
+    # before the InvalidStateTransitionError state-machine compare-and-set.
+    _seed_paper_ready_package(service, pkg_id)
 
     with pytest.raises(InvalidStateTransitionError) as exc_info:
         service.enable_paper(pkg_id)
@@ -237,6 +258,10 @@ def test_runtime_handles_enable_paper_strict_gate_failure(
         asset_checks_passing=False,
     )
     service = StrategyPackageService(repository=dev_pkg_repo)
+    # R6: governance gate prereq seed; the asset-check failure remains the
+    # operative blocker (caught inside _manifest_identity_gate), but seeding
+    # the other gates avoids unrelated blockers crowding the eligibility dict.
+    _seed_paper_ready_package(service, pkg_id)
 
     with pytest.raises(StrategyPackageValidationError) as exc_info:
         service.enable_paper(pkg_id)
@@ -244,13 +269,22 @@ def test_runtime_handles_enable_paper_strict_gate_failure(
     err = exc_info.value
     context = getattr(err, "context", {}) or {}
     msg = str(err)
-    # Audit-grade observability: the error must point at asset_checks (so an
-    # operator knows which gate fired).
-    assert (
+    # R6: governance gate wraps the validator's asset-check failure as a
+    # blocker string inside ``context["manifest_identity"]["blockers"]``.
+    # Audit-grade observability: the failed asset-check must remain
+    # discoverable so operators know which gate fired.
+    manifest_identity = context.get("manifest_identity") or {}
+    blockers_str = " ".join(manifest_identity.get("blockers") or [])
+    surfaces_asset_check = (
         "asset" in msg.lower()
+        or "asset" in blockers_str.lower()
         or "asset_checks" in str(context)
-        or "failed_checks" in context
-    ), f"strict gate failure must surface asset-check context; got {msg!r} {context!r}"
+        or "failed_checks" in str(context)
+    )
+    assert surfaces_asset_check, (
+        f"strict gate failure must surface asset-check context; "
+        f"got msg={msg!r} context={context!r}"
+    )
 
     # Verify no silent state mutation: row stays SELECTION_ENABLED.
     conn = psycopg2.connect(**_dev_dsn())
