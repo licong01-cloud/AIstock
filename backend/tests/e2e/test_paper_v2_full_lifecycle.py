@@ -354,6 +354,13 @@ class TestPaperV2GovernanceNotReadyPath:
     StrategyPackageValidationError. Confirms the gating contract Paper v2
     consumes via thin adapter (per D5 T8-A clarification)."""
 
+    # P1.3 (Codex r3 BLOCKED) — pg_pool.get_conn() returns connections with
+    # autocommit=True (pg_pool.py:248). SELECT FOR UPDATE under autocommit
+    # immediately releases the row lock, defeating the round-3 CAS design.
+    # All transactional row-locked work in this test uses a DIRECT psycopg2
+    # connection via dev_conn_provider() (autocommit=False by default).
+    # pg_pool is reserved for the service.enable_paper() invocation which
+    # internally uses the pool's contract.
     def test_enable_paper_raises_validation_error_on_not_ready_package(
         self, dev_conn_provider,
     ):
@@ -444,29 +451,30 @@ class TestPaperV2GovernanceNotReadyPath:
                 f"expected {env_cfg['TDX_DB_DEV_NAME']!r}."
             )
 
-            # ----- P1.1 r3 (Codex r2 BLOCKED): CAS-safe transient UPDATE -----
-            # Round 2 used SELECT (under no lock) → UPDATE → blind restore. Codex
-            # flagged the race: between our COMMIT and our restore, a concurrent
-            # legitimate writer could change the status. The blind restore would
-            # then overwrite that change (silent data loss).
+            # ----- P1.1 r4 (Codex r3 BLOCKED): TRANSACTIONAL row lock + CAS UPDATE -----
+            # r3 used pg_pool.get_conn() which sets autocommit=True (pg_pool.py:248).
+            # SELECT FOR UPDATE under autocommit releases the lock immediately —
+            # the lock NEVER protected the capture→UPDATE window.
             #
-            # r3 uses SELECT ... FOR UPDATE to take a row-level lock while we
-            # capture `original_status`, then performs the mutate UPDATE inside
-            # the SAME transaction (atomic 2-statement update). The restore at
-            # the end of the test is a CAS:
+            # r4 uses dev_conn_provider() (direct psycopg2.connect, autocommit=False
+            # by default) for the row-locked transaction. Within ONE transaction:
+            #   1. SELECT ... FOR UPDATE captures current status under a row lock
+            #   2. UPDATE ... WHERE package_id=... AND package_status=captured CAS
+            #      → rowcount=1 confirms no concurrent writer interleaved
+            #      → rowcount=0 means our captured value is already stale → raise
+            #   3. COMMIT releases the lock atomically with the visible mutation
             #
-            #     UPDATE ... SET package_status = original_status
-            #       WHERE package_id = %s AND package_status = 'PAPER_RUNNING'
-            #
-            # If a concurrent writer changed package_status between our COMMIT
-            # and our restore, the WHERE clause does NOT match → rowcount=0 →
-            # we skip the blind overwrite. The concurrent writer's change wins
-            # (which is the correct semantic: their change is legitimate).
-            with pg_pool.get_conn() as mutate_conn:
+            # The CAS predicate on the MUTATION (not just the restore) is the P1.2
+            # round-4 fix — without it, even with a real lock, a writer who
+            # acquired the lock first could leave us with a wrong original_status
+            # to "restore" later.
+            with dev_conn_provider() as mutate_conn:
+                # Direct psycopg2 connection — autocommit=False by default
+                assert mutate_conn.autocommit is False, (
+                    "mutate_conn unexpectedly has autocommit=True; FOR UPDATE "
+                    "would not lock. Refusing to proceed."
+                )
                 with mutate_conn.cursor() as cur:
-                    # Re-fetch original_status under a row lock, so the value
-                    # we restore to is consistent with the row state we are
-                    # mutating from.
                     cur.execute(
                         """SELECT package_status FROM strategy_pkg.package
                            WHERE package_id = %s FOR UPDATE""",
@@ -476,22 +484,32 @@ class TestPaperV2GovernanceNotReadyPath:
                     assert locked is not None, \
                         f"package {not_ready_package_id!r} disappeared before SELECT FOR UPDATE"
                     original_status = locked[0]
-                    # If concurrent writer already advanced the row past our
-                    # eligible set, skip the test rather than poke a different
-                    # state.
                     if original_status not in ("BACKTEST_APPROVED", "SELECTION_ENABLED"):
+                        # Skip BEFORE mutating; the row lock will release on
+                        # implicit ROLLBACK when we exit the with-block.
+                        mutate_conn.rollback()
                         pytest.skip(
-                            f"package {not_ready_package_id} status changed under us "
-                            f"to {original_status!r}; skip rather than mutate"
+                            f"package {not_ready_package_id} captured under lock "
+                            f"with status {original_status!r}; skip rather than mutate"
                         )
+                    # P1.2 r4 — CAS predicate on the MUTATION UPDATE.
+                    # rowcount=0 means another writer slipped in between SELECT
+                    # FOR UPDATE result return and this UPDATE (essentially
+                    # impossible while we hold the lock, but defensive anyway).
                     cur.execute(
                         """UPDATE strategy_pkg.package
                            SET package_status = 'PAPER_RUNNING'
-                           WHERE package_id = %s""",
-                        (not_ready_package_id,),
+                           WHERE package_id = %s
+                             AND package_status = %s""",
+                        (not_ready_package_id, original_status),
                     )
-                    assert cur.rowcount == 1, f"transient UPDATE rowcount={cur.rowcount}"
-                mutate_conn.commit()  # release row lock + commit mutation
+                    if cur.rowcount != 1:
+                        mutate_conn.rollback()
+                        pytest.fail(
+                            f"CAS mutation rowcount={cur.rowcount} (expected 1); "
+                            f"row state changed unexpectedly under FOR UPDATE lock"
+                        )
+                mutate_conn.commit()  # atomically release lock + publish mutation
             status_was_mutated = True
 
             # ----- P1.1 r2: strict VALIDATION error assertion -----
@@ -538,8 +556,12 @@ class TestPaperV2GovernanceNotReadyPath:
             # skip the restore → their change wins (correct semantic; no
             # silent overwrite).
             if status_was_mutated:
+                # Restore uses dev_conn_provider (autocommit=False, real
+                # transaction) for the same reasons mutation does. CAS predicate
+                # protects against concurrent writers changing status away from
+                # PAPER_RUNNING during the test.
                 try:
-                    with pg_pool.get_conn() as restore_conn:
+                    with dev_conn_provider() as restore_conn:
                         with restore_conn.cursor() as cur:
                             cur.execute(
                                 """UPDATE strategy_pkg.package
@@ -551,12 +573,7 @@ class TestPaperV2GovernanceNotReadyPath:
                             cas_rows = cur.rowcount
                         restore_conn.commit()
                     if cas_rows == 0:
-                        # Race detected: concurrent writer changed status away
-                        # from PAPER_RUNNING. Surface as a NOISY warning rather
-                        # than silently swallowing. Look up current status for
-                        # the message; don't fail the test (the test itself
-                        # already passed via pytest.raises above).
-                        with pg_pool.get_conn() as inspect_conn:
+                        with dev_conn_provider() as inspect_conn:
                             with inspect_conn.cursor() as cur:
                                 cur.execute(
                                     """SELECT package_status FROM strategy_pkg.package
@@ -574,8 +591,6 @@ class TestPaperV2GovernanceNotReadyPath:
                             stacklevel=1,
                         )
                 except Exception as e:
-                    # If CAS UPDATE itself fails (DB error), surface loudly so dev
-                    # DB doesn't stay corrupted unnoticed
                     raise RuntimeError(
                         f"FAILED to CAS-restore package {not_ready_package_id} to "
                         f"status {original_status!r}: {type(e).__name__}: {e}"

@@ -88,48 +88,73 @@ def e2e_test_run_id(dev_conn_provider):
 
 
 @pytest.fixture
-def cleanup_qe_archive(dev_conn_provider, e2e_test_run_id):
-    """P2.1 r3 (Codex Stage 7.2 r2 BLOCKED): ROW-ID snapshot scope.
+def e2e_test_portfolio_id(dev_conn_provider, e2e_test_run_id) -> str | None:
+    """Portfolio_id tied to the chosen e2e_test_run_id. Used as ownership
+    label for cleanup_qe_archive (P1.3 r4 fix)."""
+    with dev_conn_provider() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT portfolio_id FROM paper_v2.run WHERE run_id = %s",
+                (e2e_test_run_id,),
+            )
+            row = cur.fetchone()
+    return row[0] if row else None
 
-    r2 time-scoped DELETE (captured_at >= threshold) was still over-broad:
-    any concurrent test / manual dev INSERT whose timestamp fell in the
-    window was wiped. Codex requires precise per-row tracking.
 
-    r3 approach: BEFORE the test runs, snapshot the set of PRIMARY KEYs
-    that already exist in each of the 7 dim/audit/activation tables.
-    AFTER the test, DELETE only those rows whose PK is NOT in the pre-test
-    snapshot. This is row-precise — concurrent rows that existed before
-    OR after the test (i.e., not inserted by THIS test) are untouched.
+@pytest.fixture
+def cleanup_qe_archive(dev_conn_provider, e2e_test_run_id, e2e_test_portfolio_id):
+    """P1.3 r4 (Codex Stage 7.2 r3 BLOCKED): OWNERSHIP-LABELED cleanup.
 
-    Run-scoped tables stay the same: DELETE WHERE run_id = e2e_test_run_id
-    remains the tightest scope for the 12 tables with a direct run_id col.
+    r3 PK-snapshot + time-window still wiped rows that concurrent writers
+    inserted DURING the test (because their PKs are also "not in pre-snapshot").
+    Codex requires explicit ownership scope.
+
+    r4 approach: limit cleanup to rows whose ownership column ties them to
+    THIS test's resources:
+      - portfolio_id = e2e_test_portfolio_id (for portfolio-tied tables)
+      - profile_id IN (test portfolio's profile_ids) (for runtime_profile dim)
+    Plus the PK-not-in-snapshot + captured_at intersection from r3, so
+    rows that pre-existed for the same portfolio AND rows captured outside
+    the test window are also untouched.
+
+    Triple intersection makes the cleanup surgical:
+      (1) ownership scope (portfolio_id) — only THIS test's portfolio
+      (2) PK new since snapshot — only rows inserted after pre-purge
+      (3) captured_at recent — defensive 10-min freshness window
+
+    Concurrent tests / dev work touching OTHER portfolios are completely safe.
+    Concurrent work on the SAME portfolio is protected by (2)+(3) intersection.
+
+    Run-scoped tables (with run_id col): DELETE WHERE run_id stays — already
+    maximally precise (run_id is a unique ownership label by definition).
 
     NEVER touches paper_v2 source rows.
     """
-    # Tables with a direct run_id column — run-scoped DELETE precise enough
+    # Tables with direct run_id column — run-scoped DELETE
     RUN_SCOPED_TABLES = (
         "paper_v2_session_event", "paper_v2_run_event", "paper_v2_order_event",
         "paper_v2_order_execution_state", "paper_v2_order",
         "paper_v2_position_snapshot", "paper_v2_intraday_snapshot",
         "paper_v2_daily_snapshot", "paper_v2_cash_ledger", "paper_v2_error",
         "paper_v2_session_day", "paper_v2_session",
-        "paper_v2_fill",  # partitioned but DELETE works via parent
+        "paper_v2_fill",  # partitioned, DELETE via parent
     )
-
-    # Tables without run_id column — row-id snapshot scope.
-    # (table_name, pk_column)
-    PK_SNAPSHOT_TABLES = (
+    # Tables with direct portfolio_id column — triple-scoped DELETE
+    # (table, pk_col)
+    PORTFOLIO_LABELED_TABLES = (
         ("dim_paper_v2_portfolio",              "portfolio_version_id"),
-        ("dim_paper_v2_runtime_profile",        "profile_version_id"),
-        ("dim_paper_v2_runtime_profile_version", "version_pk"),
         ("paper_v2_config_change_audit",        "audit_pk"),
         ("paper_v2_runtime_config_activation",  "activation_pk"),
         ("paper_v2_execution_policy_activation", "activation_pk"),
         ("paper_v2_reset_audit",                "audit_pk"),
     )
+    # runtime_profile dim tables — scope via profile_id JOIN to portfolio
+    PROFILE_LABELED_TABLES = (
+        ("dim_paper_v2_runtime_profile",        "profile_version_id"),
+        ("dim_paper_v2_runtime_profile_version", "version_pk"),
+    )
 
     def _run_scoped_purge(conn) -> None:
-        """Always safe pre- AND post-test cleanup of run-scoped rows."""
         with conn.cursor() as cur:
             for tbl in RUN_SCOPED_TABLES:
                 cur.execute(
@@ -146,56 +171,67 @@ def cleanup_qe_archive(dev_conn_provider, e2e_test_run_id):
         conn.commit()
 
     def _snapshot_pks(conn) -> dict[str, set]:
-        """Capture the set of PKs that exist in each dim/audit table
-        BEFORE the test runs."""
+        """Snapshot PKs of rows already tied to our portfolio_id / profile_ids."""
         snap: dict[str, set] = {}
+        if not e2e_test_portfolio_id:
+            return snap
         with conn.cursor() as cur:
-            for tbl, pk_col in PK_SNAPSHOT_TABLES:
-                cur.execute(f'SELECT "{pk_col}" FROM qe_archive."{tbl}"')
+            for tbl, pk_col in PORTFOLIO_LABELED_TABLES:
+                cur.execute(
+                    f'SELECT "{pk_col}" FROM qe_archive."{tbl}" '
+                    f'WHERE portfolio_id = %s',
+                    (e2e_test_portfolio_id,),
+                )
+                snap[tbl] = {r[0] for r in cur.fetchall()}
+            for tbl, pk_col in PROFILE_LABELED_TABLES:
+                cur.execute(
+                    f'''SELECT "{pk_col}" FROM qe_archive."{tbl}"
+                       WHERE profile_id IN (
+                           SELECT profile_id FROM paper_v2.runtime_profile
+                           WHERE portfolio_id = %s
+                       )''',
+                    (e2e_test_portfolio_id,),
+                )
                 snap[tbl] = {r[0] for r in cur.fetchall()}
         return snap
 
-    def _delete_new_pks(conn, snapshot: dict[str, set]) -> None:
-        """Post-test: DELETE rows whose PK is NOT in the pre-test snapshot.
-        Surgical — concurrent INSERTs that landed during the test BUT didn't
-        come from this test's writes are NOT affected because we only know
-        about OUR test's INSERTs as 'PKs not in pre-snapshot'.
-
-        Wait: that's wrong. We can't distinguish OUR INSERTs from concurrent
-        INSERTs by PK-not-in-snapshot alone. Both produce new PKs.
-
-        Refined contract: this method deletes ANY row whose PK is new since
-        pre-test snapshot. That includes concurrent writers' rows. To avoid
-        clobbering concurrent writers, we add a defensive captured_at sanity
-        check inside a SHORT window (3 minutes from test start). Rows with
-        captured_at far in the future or far in the past are NOT deleted.
-
-        This is the tightest scope achievable without a marker column: it's
-        the intersection of (PK new since snapshot) AND (captured_at within
-        plausible test window). Concurrent test rows are partially protected.
+    def _scoped_delete(conn, snapshot: dict[str, set]) -> None:
+        """Triple-intersection DELETE:
+          (1) ownership: portfolio_id == test's portfolio (or profile_id IN test's profiles)
+          (2) PK NOT IN pre-test snapshot
+          (3) captured_at >= window_start (defensive 10-min freshness)
         """
         from datetime import datetime, timezone, timedelta
+        if not e2e_test_portfolio_id:
+            return  # nothing to scope to — skip
         window_start = datetime.now(timezone.utc) - timedelta(minutes=10)
+
         with conn.cursor() as cur:
-            for tbl, pk_col in PK_SNAPSHOT_TABLES:
-                existing = snapshot.get(tbl, set())
-                if existing:
-                    cur.execute(
-                        f"""DELETE FROM qe_archive."{tbl}"
-                           WHERE "{pk_col}" NOT IN %s
-                             AND captured_at >= %s""",
-                        (tuple(existing), window_start),
-                    )
-                else:
-                    # snapshot was empty — delete all rows captured within window
-                    cur.execute(
-                        f"""DELETE FROM qe_archive."{tbl}"
-                           WHERE captured_at >= %s""",
-                        (window_start,),
-                    )
+            # Portfolio-labeled tables
+            for tbl, pk_col in PORTFOLIO_LABELED_TABLES:
+                existing = tuple(snapshot.get(tbl, set())) or (None,)
+                cur.execute(
+                    f"""DELETE FROM qe_archive."{tbl}"
+                       WHERE portfolio_id = %s
+                         AND "{pk_col}" NOT IN %s
+                         AND captured_at >= %s""",
+                    (e2e_test_portfolio_id, existing, window_start),
+                )
+            # Profile-labeled tables (scope by profile_id JOIN to portfolio)
+            for tbl, pk_col in PROFILE_LABELED_TABLES:
+                existing = tuple(snapshot.get(tbl, set())) or (None,)
+                cur.execute(
+                    f"""DELETE FROM qe_archive."{tbl}"
+                       WHERE profile_id IN (
+                           SELECT profile_id FROM paper_v2.runtime_profile
+                           WHERE portfolio_id = %s
+                       )
+                         AND "{pk_col}" NOT IN %s
+                         AND captured_at >= %s""",
+                    (e2e_test_portfolio_id, existing, window_start),
+                )
         conn.commit()
 
-    # Pre-test: run-scoped purge + capture PK snapshot for dim/audit tables
     with dev_conn_provider() as conn:
         _run_scoped_purge(conn)
         pk_snapshot = _snapshot_pks(conn)
@@ -204,4 +240,4 @@ def cleanup_qe_archive(dev_conn_provider, e2e_test_run_id):
 
     with dev_conn_provider() as conn:
         _run_scoped_purge(conn)
-        _delete_new_pks(conn, pk_snapshot)
+        _scoped_delete(conn, pk_snapshot)
