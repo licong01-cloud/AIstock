@@ -153,7 +153,13 @@ def test_factor_value_archive_unique_per_idempotency_key(
 ):
     """Per D5 Q4.c: factor_value rows are idempotent on
     (factor_name, code_text_hash, trade_date, code). The archive must not
-    contain duplicate rows on that key."""
+    contain duplicate rows on that key.
+
+    Whole-table aggregate: the GROUP BY/HAVING runs server-side over
+    every row. The trailing LIMIT 50 only caps the violator *sample*
+    surfaced in the assertion message; the count assertion below is
+    against the whole-table total.
+    """
     with dev_conn.cursor() as cur:
         cur.execute(
             "SELECT 1 FROM pg_tables WHERE schemaname='qe_archive' "
@@ -164,6 +170,17 @@ def test_factor_value_archive_unique_per_idempotency_key(
     with dev_conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
             """
+            SELECT count(*) AS total_violators FROM (
+              SELECT factor_name, code_text_hash, trade_date, code
+              FROM qe_archive.factor_value
+              GROUP BY factor_name, code_text_hash, trade_date, code
+              HAVING count(*) > 1
+            ) v
+            """
+        )
+        total_violators = cur.fetchone()["total_violators"]
+        cur.execute(
+            """
             SELECT factor_name, code_text_hash, trade_date, code, count(*) AS n
             FROM qe_archive.factor_value
             GROUP BY factor_name, code_text_hash, trade_date, code
@@ -171,7 +188,8 @@ def test_factor_value_archive_unique_per_idempotency_key(
             LIMIT 50
             """
         )
-        rows = list(cur.fetchall())
-    assert not rows, (
-        f"{len(rows)} factor_value idempotency-key collisions; first 5: {rows[:5]}"
+        sample = list(cur.fetchall())
+    assert total_violators == 0, (
+        f"{total_violators} factor_value idempotency-key collisions; "
+        f"first {len(sample)} sample: {sample[:5]}"
     )

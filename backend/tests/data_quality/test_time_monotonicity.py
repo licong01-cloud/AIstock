@@ -151,7 +151,6 @@ def test_archive_completed_at_after_source_run_completed_at(
             FROM qe_archive.paper_v2_run a
             JOIN paper_v2.run s USING (run_id)
             WHERE a.archive_completed_at IS NOT NULL AND s.{source_ts_col} IS NOT NULL
-            LIMIT 200
             """
         )
         rows = list(cur.fetchall())
@@ -194,7 +193,6 @@ def test_archive_captured_before_completed(
             SELECT run_id, captured_at, archive_completed_at
             FROM qe_archive.paper_v2_run
             WHERE captured_at IS NOT NULL AND archive_completed_at IS NOT NULL
-            LIMIT 500
             """
         )
         rows = list(cur.fetchall())
@@ -215,7 +213,13 @@ def test_session_day_unique_per_session_trade_date(
     dev_conn, archive_tables_ready,
 ):
     """qe_archive.paper_v2_session_day must have at most 1 row per
-    (trade_session_id, trade_date) pair."""
+    (trade_session_id, trade_date) pair.
+
+    Whole-table aggregate -- the GROUP BY ... HAVING count > 1 query
+    inspects every row server-side. The trailing ``LIMIT 50`` only caps
+    the *violator sample* returned for the assertion message; it does
+    not narrow which rows are checked.
+    """
     with dev_conn.cursor() as cur:
         cur.execute(
             "SELECT 1 FROM pg_tables WHERE schemaname='qe_archive' "
@@ -224,6 +228,19 @@ def test_session_day_unique_per_session_trade_date(
         if cur.fetchone() is None:
             pytest.skip("qe_archive.paper_v2_session_day not present.")
     with dev_conn.cursor(cursor_factory=RealDictCursor) as cur:
+        # First: whole-table count of violator (schema, table_key) groups.
+        cur.execute(
+            """
+            SELECT count(*) FROM (
+              SELECT trade_session_id, trade_date
+              FROM qe_archive.paper_v2_session_day
+              GROUP BY trade_session_id, trade_date
+              HAVING count(*) > 1
+            ) v
+            """
+        )
+        total_violators = cur.fetchone()["count"]
+        # Then: sample up to 50 for the assertion message.
         cur.execute(
             """
             SELECT trade_session_id, trade_date, count(*) AS n
@@ -233,7 +250,8 @@ def test_session_day_unique_per_session_trade_date(
             LIMIT 50
             """
         )
-        rows = list(cur.fetchall())
-    assert not rows, (
-        f"{len(rows)} (session_id, trade_date) collisions; first 5: {rows[:5]}"
+        sample = list(cur.fetchall())
+    assert total_violators == 0, (
+        f"{total_violators} (session_id, trade_date) collisions; "
+        f"first {len(sample)} sample: {sample[:5]}"
     )

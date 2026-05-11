@@ -50,9 +50,18 @@ def test_dump_structural_integrity(latest_dump, pg_restore_runner) -> None:
 
     Plain-SQL: text scan finds the canonical pg_dump header and at least
     one CREATE TABLE statement. Test passes for schema-only and data
-    dumps alike.
+    dumps alike. **Plain-SQL validation runs even when pg_restore is
+    not available** (Codex Lane A r3): the .sql format is fully
+    text-parseable, so it must not be skipped just because the host
+    lacks pg_restore.
     """
     if latest_dump.is_custom:
+        if pg_restore_runner is None:
+            pytest.skip(
+                "custom-format dump validation needs pg_restore (PATH or "
+                "canonical docker container DR_PG_CONTAINER / "
+                "{aistock-pg, aistock-pg-dev, timescaledb}); neither found."
+            )
         with latest_dump.path.open("rb") as fh:
             content = fh.read()
         proc = pg_restore_runner(["--list"], stdin_bytes=content)
@@ -96,7 +105,14 @@ def test_corrupted_dump_is_detected(tmp_path: Path, pg_restore_runner) -> None:
 
     Defends against future relaxation of ``test_dump_structural_integrity``
     that would let a corrupted custom-format dump through silently.
+    Skips cleanly when pg_restore is unavailable (the only path to
+    actually invoke the validator).
     """
+    if pg_restore_runner is None:
+        pytest.skip(
+            "negative test needs pg_restore (PATH or canonical docker "
+            "container); neither found on this host."
+        )
     bad = tmp_path / "corrupted.dump"
     bad.write_bytes(b"PGDMP\x00" + b"\xff" * 44)  # 50 bytes, mostly garbage
     with bad.open("rb") as fh:

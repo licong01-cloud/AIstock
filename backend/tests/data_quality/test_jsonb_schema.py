@@ -9,6 +9,14 @@ Per Stage 7.3 §7.3.2:
 - Archive outbox event payloads must declare schema_version so handler
   ``validate_payload`` doesn't silently accept new shapes.
 
+Sampling discipline (Codex r3 follow-up on r2 P2.3): these tests
+**sample** the first 50-100 rows rather than walking the whole table.
+JSONB structural validation is per-row-uniform by construction (the
+writer's serializer either emits the keys or it does not), so a small
+sample reliably surfaces drift while keeping query time bounded. The
+``LIMIT 50`` / ``LIMIT 100`` in each query is part of the test's
+documented contract, not a docstring drift.
+
 Tests skip cleanly when source tables / rows are missing.
 """
 

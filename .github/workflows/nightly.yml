@@ -26,7 +26,7 @@ jobs:
     runs-on: [self-hosted, windows]
     timeout-minutes: 60
     env:
-      DR_TARGET_DIR: 'E:/DEV backup/'
+      DR_TARGET_DIR: 'E:/DEV backup/aistock_pg_snapshots'
     steps:
       - uses: actions/checkout@v4
 
@@ -98,7 +98,12 @@ jobs:
 
   nightly-l3:
     name: Nightly L3 (paper_v2 + qe_archive + qe_read)
-    needs: dr-snapshot
+    # Sequential chain per Codex Lane A r3 review (drawer a25cd473):
+    # dr-snapshot -> dr-validate -> nightly-l3 -> paper-v2-live ->
+    # full-summary. Previously dr-snapshot and dr-validate ran in
+    # parallel with nightly-l3, which let a failing snapshot still
+    # produce green L3/live reports.
+    needs: dr-validate
     runs-on: [self-hosted, windows]
     timeout-minutes: 120
     steps:

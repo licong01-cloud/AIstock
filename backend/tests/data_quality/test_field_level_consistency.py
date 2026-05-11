@@ -79,14 +79,15 @@ def test_archive_run_status_is_uppercase(
 def test_archive_run_portfolio_id_matches_source(
     dev_conn, source_tables_ready, archive_tables_ready,
 ):
-    """portfolio_id on archive must equal the source row's portfolio_id."""
+    """Whole-table contract: portfolio_id on archive must equal the source
+    row's portfolio_id for every joined run. No LIMIT (Codex r3 follow-up
+    on r2 P2.3 docstring/sampling drift)."""
     rows = _fetchall_dict(
         dev_conn,
         """
         SELECT a.run_id, a.portfolio_id AS archive_pid, s.portfolio_id AS source_pid
         FROM qe_archive.paper_v2_run a
         JOIN paper_v2.run s USING (run_id)
-        LIMIT 200
         """,
     )
     if not rows:
@@ -101,8 +102,9 @@ def test_archive_run_portfolio_id_matches_source(
 def test_archive_run_status_case_matches_uppercased_source(
     dev_conn, source_tables_ready, archive_tables_ready,
 ):
-    """archive status must equal source.status.upper() (the handler upper-
-    cases at archive time per P1.4 round 1)."""
+    """Whole-table contract: archive status must equal source.status.upper()
+    for every joined non-NULL pair. No LIMIT (Codex r3 follow-up on r2
+    P2.3 docstring/sampling drift)."""
     rows = _fetchall_dict(
         dev_conn,
         """
@@ -110,7 +112,6 @@ def test_archive_run_status_case_matches_uppercased_source(
         FROM qe_archive.paper_v2_run a
         JOIN paper_v2.run s USING (run_id)
         WHERE a.status IS NOT NULL AND s.status IS NOT NULL
-        LIMIT 200
         """,
     )
     if not rows:

@@ -42,7 +42,7 @@ import sys
 from pathlib import Path
 from typing import Iterable, Sequence
 
-DEFAULT_TARGET_DIR = Path("E:/DEV backup/")
+DEFAULT_TARGET_DIR = Path("E:/DEV backup/aistock_pg_snapshots")
 DEFAULT_RETENTION_DAYS = 30
 SNAPSHOT_FILENAME_RE = re.compile(
     r"^aistock_pg_(?P<date>\d{8})(?P<permanent>_permanent)?\.dump$"

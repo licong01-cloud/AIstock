@@ -28,6 +28,11 @@ import pytest
 
 
 DEFAULT_BACKUP_DIR = Path("E:/DEV backup/aistock_pg_snapshots")
+# Canonical path is DEFAULT_BACKUP_DIR (matches dr_snapshot_prod_db.py
+# DEFAULT_TARGET_DIR + dr_cleanup_old_snapshots.py DEFAULT_TARGET_DIR after
+# the Codex Lane A r3 review; drawer a25cd473). LEGACY_BACKUP_DIR is kept
+# as a fallback only for hosts that still have dumps in the old parent
+# directory; new snapshots all land under aistock_pg_snapshots/.
 LEGACY_BACKUP_DIR = Path("E:/DEV backup")
 
 DUMP_SUFFIXES = (".dump", ".sql")
@@ -107,39 +112,68 @@ def latest_dump(all_dump_files: list[Path]) -> DumpInfo:
     )
 
 
+# Per Codex Lane A r3 review (drawer a25cd473): the docker fallback must
+# match exact container names rather than scanning for "any container with
+# timescale/postgres in its image". Random hosts may have unrelated
+# postgres containers running (e.g. a different project's test fixture),
+# and pg_restore against the wrong cluster would silently produce garbage
+# results.
+#
+# Resolution order:
+#   1. DR_PG_CONTAINER env var (exact name; user opt-in).
+#   2. Canonical AIstock container names below (exact match against
+#      `docker ps --format '{{.Names}}'`).
+# No image-substring matching.
+CANONICAL_PG_CONTAINER_NAMES = ("aistock-pg", "aistock-pg-dev", "timescaledb")
+
+
 def _docker_pg_container() -> str | None:
-    """Return the name of a local docker container running postgres/timescaledb,
-    or None if docker is unreachable / no matching container."""
+    """Return the name of the canonical AIstock postgres docker container,
+    or None if docker is unreachable / no canonical container is running."""
     if shutil.which("docker") is None:
         return None
+    explicit = os.environ.get("DR_PG_CONTAINER")
     try:
         proc = subprocess.run(
-            ["docker", "ps", "--format", "{{.Names}}\t{{.Image}}"],
+            ["docker", "ps", "--format", "{{.Names}}"],
             capture_output=True, text=True, timeout=5,
         )
     except (subprocess.SubprocessError, OSError):
         return None
     if proc.returncode != 0:
         return None
-    for line in proc.stdout.splitlines():
-        if "\t" not in line:
-            continue
-        name, image = line.split("\t", 1)
-        if "timescale" in image.lower() or "postgres" in image.lower():
-            return name.strip()
+    running = {line.strip() for line in proc.stdout.splitlines() if line.strip()}
+    if explicit and explicit in running:
+        return explicit
+    for name in CANONICAL_PG_CONTAINER_NAMES:
+        if name in running:
+            return name
     return None
 
 
 @pytest.fixture(scope="session")
 def pg_restore_runner():
-    """Return a callable ``(args: list[str], stdin_bytes: bytes | None) -> CompletedProcess``
-    that invokes ``pg_restore`` with the given args. Resolution order:
+    """Return a callable ``(args, stdin_bytes) -> CompletedProcess`` that
+    invokes ``pg_restore`` -- or ``None`` if neither PATH ``pg_restore`` nor
+    a canonical docker container is available.
 
+    Per Codex Lane A r3 review (drawer a25cd473): this fixture MUST NOT
+    eagerly ``pytest.skip()`` when pg_restore is missing, because:
+
+      - ``.sql`` plain-text dumps do not need pg_restore for validation;
+        they parse with regex. The previous eager-skip caused legacy
+        ``.sql`` tests to skip on every fresh host instead of running
+        their actual text-based checks.
+      - ``.dump`` custom-format dumps DO need pg_restore. The .dump-handling
+        path inside each test checks ``runner is None`` and pytest.skip()s
+        locally with an actionable reason.
+
+    Resolution order (same as before, but None on failure):
       1. ``pg_restore`` on PATH.
-      2. ``docker exec -i <postgres-container> pg_restore`` if a postgres /
-         timescaledb container is running locally.
-
-    Skips when neither is available.
+      2. ``docker exec -i <canonical-container> pg_restore`` -- name MUST
+         match either ``$DR_PG_CONTAINER`` or one of
+         ``CANONICAL_PG_CONTAINER_NAMES``. Arbitrary timescale/postgres
+         containers are no longer accepted.
     """
     direct = shutil.which("pg_restore") or shutil.which("pg_restore.exe")
     if direct:
@@ -154,15 +188,12 @@ def pg_restore_runner():
 
     container = _docker_pg_container()
     if container is None:
-        pytest.skip(
-            "pg_restore not on PATH and no local docker postgres/timescaledb "
-            "container is running; DR file-validity probe deferred."
-        )
+        return None  # explicit None so .sql tests still run
 
     def _docker_runner(args: list[str], stdin_bytes: bytes | None = None):
-        # We stream the dump bytes via stdin so the file does not need to
-        # exist inside the container. pg_restore --list on stdin requires
-        # /dev/stdin via the -i (interactive) flag.
+        # Stream the dump bytes via stdin so the file does not need to
+        # exist inside the container; pg_restore --list on stdin requires
+        # the -i (interactive) docker exec flag.
         cmd = ["docker", "exec", "-i", container, "pg_restore", *args]
         return subprocess.run(
             cmd,

@@ -58,7 +58,23 @@ def _read_first_mb(path: Path, size_mb: int = 8) -> bytes:
 
 
 def _extract_tables_from_dump(latest_dump, pg_restore_runner) -> set[tuple[str, str]]:
+    """Extract every (schema, table) declared in the dump.
+
+    For ``.sql`` plain-text dumps, ``pg_restore_runner`` is NEVER invoked
+    — the regex parse over the first 8 MB of the file is self-contained
+    (per Codex Lane A r3 review, drawer a25cd473: legacy .sql validation
+    must not depend on pg_restore availability).
+
+    For ``.dump`` custom-format dumps, ``pg_restore_runner`` is required.
+    When it is None (no PATH binary AND no canonical docker container),
+    skip with an actionable reason.
+    """
     if latest_dump.is_custom:
+        if pg_restore_runner is None:
+            pytest.skip(
+                "custom-format dump schema diff needs pg_restore (PATH or "
+                "canonical docker container); neither found on this host."
+            )
         with latest_dump.path.open("rb") as fh:
             content = fh.read()
         proc = pg_restore_runner(["--list"], stdin_bytes=content)
@@ -73,6 +89,7 @@ def _extract_tables_from_dump(latest_dump, pg_restore_runner) -> set[tuple[str, 
             tables.add((_strip_quotes(m["schema"]), _strip_quotes(m["table"])))
         return tables
 
+    # Plain-SQL path: text parse, no pg_restore dependency.
     head = _read_first_mb(latest_dump.path)
     tables = set()
     for m in CREATE_TABLE_RE.finditer(head):

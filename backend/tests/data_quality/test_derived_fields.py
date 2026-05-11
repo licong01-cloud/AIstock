@@ -298,6 +298,68 @@ def test_slippage_bps_market_orders_remain_null(
     )
 
 
+def test_slippage_bps_present_for_every_intended_price_row(
+    dev_conn, archive_tables_ready,
+):
+    """**Whole-table strict NULL contract** (Codex Lane E r3, drawer
+    a25cd473).
+
+    For every archive row where ``intended_price IS NOT NULL``,
+    ``slippage_bps`` MUST also be NOT NULL. The contrapositive
+    statement of D5 §507: if intended_price is set then the formula
+    must be applied (the formula never returns NULL on non-NULL,
+    non-zero inputs).
+
+    This closes the false-negative path Codex r2 review left open: the
+    earlier handler-coverage sentinel only checked that *some* archive
+    rows had slippage_bps populated. A handler that mis-derived a
+    single row to NULL would have slipped through. This test catches
+    that on the first such row, whole-table.
+
+    Skips cleanly when no archive rows have ``intended_price IS NOT
+    NULL`` (the canonical D5 §502 MARKET-only baseline).
+    """
+    skip_if_missing_columns(
+        dev_conn, "qe_archive", "paper_v2_fill",
+        ("intended_price", "slippage_bps"),
+        "T12 paper_v2_fill columns missing on this dev DB.",
+    )
+    with dev_conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT fill_id, intended_price, fill_price, side
+            FROM qe_archive.paper_v2_fill
+            WHERE intended_price IS NOT NULL
+              AND slippage_bps IS NULL
+            """
+        )
+        violators = list(cur.fetchall())
+    if not violators:
+        # Distinguish: are there ANY archive rows with intended_price NOT
+        # NULL? If not, the canonical MARKET-only state -> skip.
+        with dev_conn.cursor() as cur:
+            cur.execute(
+                "SELECT count(*) FROM qe_archive.paper_v2_fill "
+                "WHERE intended_price IS NOT NULL"
+            )
+            total = cur.fetchone()[0]
+        if total == 0:
+            pytest.skip(
+                "qe_archive.paper_v2_fill has no rows with intended_price "
+                "IS NOT NULL (canonical D5 §502 MARKET-only baseline). "
+                "Strict NULL contract activates once LIMIT orders appear."
+            )
+        return  # all intended-price rows have slippage_bps — contract OK
+    assert False, (
+        f"{len(violators)} archive fill(s) violate the D5 §507 strict NULL "
+        f"contract: intended_price IS NOT NULL but slippage_bps IS NULL. "
+        f"Handler must derive slippage_bps for every populated "
+        f"intended_price row. First 5 (fill_id, intended_price, fill_price, "
+        f"side): "
+        f"{[(r['fill_id'], r['intended_price'], r['fill_price'], r['side']) for r in violators[:5]]}"
+    )
+
+
 def test_slippage_bps_handler_derives_when_intended_price_present(
     dev_conn, source_tables_ready, archive_tables_ready,
 ):

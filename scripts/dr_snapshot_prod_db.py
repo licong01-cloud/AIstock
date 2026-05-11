@@ -61,7 +61,11 @@ from pathlib import Path
 from typing import Sequence
 
 ENV_FILE = Path("F:/Dev/AIstock/.env")
-DEFAULT_TARGET_DIR = Path("E:/DEV backup/")
+# Canonical snapshot directory. Per Codex Lane A r3 review (drawer
+# a25cd473): the snapshot writer and the dr_validate reader MUST agree on
+# this path. The reader (backend/tests/dr/conftest.py) uses the same value;
+# updating both keeps the nightly workflow chain consistent.
+DEFAULT_TARGET_DIR = Path("E:/DEV backup/aistock_pg_snapshots")
 DEFAULT_CONTAINER = "aistock-pg"
 DEFAULT_DB_USER_INSIDE = "postgres"
 PROD_PORT = 5432
