@@ -442,3 +442,72 @@ paper-v2 端 2 任务可串行 (推荐先 baseline 再 verify) 或并行。
 |---|---|---|---|
 | Codex Task 5: protected_asset_ledger prod executor (补缺) | Codex | c48d8347 | 60 min, ~20:30 deliver |
 | paper-v2 5-layer verify Codex 2fb81b3 | paper-v2 | 3e7fc4de | 60 min, ~20:35 deliver |
+
+### 2026-05-11 ~19:56 — paper-v2 verify 2fb81b3 strategy_package = READY
+
+- commit `c2ef5f5`, drawer `1d75214d`
+- L1-L5 全 PASS (8-guard fail-fast, 24/24 tests, JSON deterministic, runbook §7.2 9 fields match, ALGO bounded)
+- **R6 prod GO**
+
+### 2026-05-11 ~20:18 — Codex Task 5 protected_asset_ledger prod executor = COMPLETE
+
+- commit `2866f66`, drawer `b113a7a2`
+- 33 executor tests + 57 paired + 86 broader passed
+- 0 P1, 7 P2 ALGO bounded helper loops
+- runbook §7.3 + 2 dry-run JSON
+
+### 2026-05-11 ~20:25 — 战略 cherry-pick verify 2fb81b3 doc 到 main + 派 verify 2866f66 + Codex Task 6
+
+| Action | drawer/commit |
+|---|---|
+| main cherry-pick c2ef5f5 → `3435f21` | — |
+| 派 paper-v2 verify 2866f66 | drawer `009e23d7` |
+| 派 Codex Task 6 coldstart sanity automation | drawer `87c8f58a` |
+
+### 2026-05-11 ~21:08 — paper-v2 verify 2866f66 protected_asset_ledger = READY
+
+- commit `94242c1`, drawer `979e62d8`
+- L1-L5 全 PASS (8-guard, 33/33 tests + sister 24/24 regression, JSON det bundle_sha 47b48f72, runbook §7.3 5/5 + §7.2/§7.3 pair-consistent, 7 P2 bounded P=4 plan-gated all SQL bounded)
+- **R6 ledger GO=YES. Combined w/ c2ef5f5: full R6 GO**
+
+### 2026-05-11 ~21:39 — Codex Task 6 coldstart sanity automation = COMPLETE
+
+- commit `c2352a9`, drawer `ecf4adeae`
+- 30 tests + 87 with prod executors regression
+- guardrail 0 P1, P2 ALGO bounded
+- runbook §8.5
+- caveat: `/paper-v2/coldstart-sanity/sentinel-order` 端点必须对应 approved prod paper-v2 entry (paper-v2 verify L5 验)
+
+### 2026-05-11 ~21:30 — 战略 cherry-pick verify 2866f66 doc 到 main + 派 paper-v2 双任务 + Codex Task 7
+
+main HEAD: `f498246` (含 94242c1 cherry-pick)
+
+| Task | 持有方 | drawer | SLA |
+|---|---|---|---|
+| paper-v2 Task A: codex branch baseline c2352a9 (R6 merge 前置流水线验证) | paper-v2 | 003593038 | 60 min, ~22:25 |
+| paper-v2 Task B: 5-layer verify Codex c2352a9 coldstart sanity | paper-v2 | 003593038 (同 dispatch) | 60 min, 串行后 ~23:25 |
+| Codex Task 7: r6_prod_cutover_e2e_wrapper.py | Codex | 206deb97 | 1.5h, ~23:00 |
+
+### R6 readiness 状态 (21:40)
+
+✅ baseline post-R5 v2 GREEN (R5 in main 流水线)
+✅ 2 prod executors verify READY (strategy_package + protected_asset_ledger)
+✅ Cold-start sanity automation deliver (c2352a9, 等 paper-v2 verify)
+⏸️ codex/qe-governance branch baseline (paper-v2 Task A 进行中)
+⏸️ R6 merge to main (等 branch baseline GREEN)
+⏸️ baseline post-R6 (R6 in main 流水线)
+⏸️ E2E cutover wrapper (Codex Task 7 进行中, MEDIUM 优先)
+
+### 实盘时间线更新 (21:40)
+
+```
+21:40 现在 → 3 任务并行
+22:25 paper-v2 Task A (branch baseline) deliver
+23:00 Codex Task 7 (E2E wrapper) deliver
+23:25 paper-v2 Task B (verify sanity) deliver
+23:30 战略 cherry-pick verify+sanity verify docs + R6 merge (用户授权)
+00:30 baseline post-R6 GREEN
+01:00 用户 prod cutover (按 E2E wrapper 或 runbook 手动)
+03:00 cold-start sanity PASS
+09:30 实盘 ✅
+```
