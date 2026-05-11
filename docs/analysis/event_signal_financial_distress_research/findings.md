@@ -23,6 +23,7 @@
 | F015 | Robustness gate rejects runtime and DB promotion for now | Median is zero and effect is replacement-sparse; design true QE rerun next. |
 | F016 | qrun --pred-backtest enables copied-loop true rerun | Use materialized pred.pkl for research-only PortAnaRecord validation. |
 | F017 | Cheap overlay can overstate true QE materiality | Require one-loop WSL true smoke before runtime or multi-loop true promotion. |
+| F018 | q_ocf is broad but low-precision against Top50 | Prefer high-conviction intersections or rank-aware filtering before another WSL rerun. |
 +------+----------------------------------------------+--------------------------------------------------------------+
 ```
 
@@ -389,4 +390,17 @@ Preferred current candidate for future non-hard overlay research: `indicator_lar
 | runtime promotion                    | REJECT            | no buy ban, forced sell, score boost, DB policy, or Paper/QE integration       |
 | next empirical step                  | HOLDING_HIT_STUDY | compare rank-date penalties, actual holdings, top-k drops, and replacement PnL |
 +--------------------------------------+-------------------+--------------------------------------------------------------------------------+
+```
+
+## Phase 29 True QE Attribution Finding
+
+```text
++--------------------------------------+-----------------------+--------------------------------------------------------------------------------+
+| finding                              | decision              | evidence                                                                       |
++--------------------------------------+-----------------------+--------------------------------------------------------------------------------+
+| q_ocf true smoke gap                 | BROAD_LOW_PRECISION   | 41,673 penalty rows, 221 Top50 hits, 25 drops, only 3 dropped holdings removed |
+| Phase19 comparison                   | KEEP_BENCHMARK        | 311 penalties all Top50, best true return sum and hit precision                |
+| loss/mv benchmark comparison          | CALIBRATION_ONLY      | high drop density but weak true PnL; drop count alone is insufficient          |
+| next empirical step                  | INTERSECTION_SCREEN   | combine q_ocf with high-conviction deterioration/rank-aware filters            |
++--------------------------------------+-----------------------+--------------------------------------------------------------------------------+
 ```

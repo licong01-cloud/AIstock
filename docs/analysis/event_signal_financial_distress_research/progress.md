@@ -617,3 +617,20 @@ Phase 24 evidence:
 | production backend 8001 | not touched                                                                                                                                      |
 +-------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------+
 ```
+
+## 2026-05-11 Phase 29 Completed
+
+```text
++-------------------------+---------------------------------------------------------------------------------------------------------+
+| item                    | value                                                                                                   |
++-------------------------+---------------------------------------------------------------------------------------------------------+
+| script                  | scripts/financial_distress_phase29_true_qe_attribution.py                                               |
+| report                  | docs/analysis/event_signal_financial_distress_phase29_true_qe_attribution_result_20260511.md            |
+| cases                   | q_ocf fixed15, Phase19 indicator ctx60, Phase23 loss/mv fixed20                                         |
+| q_ocf hit density       | 41,673 penalties / 221 Top50 hits / 25 drops / 3 dropped holdings removed                               |
+| best true return case   | phase19_indicator_decline_ctx60                                                                         |
+| best hit precision case | phase19_indicator_decline_ctx60                                                                         |
+| decision                | q_ocf remains research-only; next step should test higher-conviction intersections before more WSL spend |
+| production backend 8001 | not touched                                                                                             |
++-------------------------+---------------------------------------------------------------------------------------------------------+
+```

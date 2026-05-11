@@ -44,6 +44,7 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | 26    | fixed penalty/window parameter sweep     | complete | phase26_parameter_shape_sweep_result_20260511               |
 | 27    | q_ocf fine sweep                         | complete | phase27_q_ocf_fine_sweep_result_20260511                    |
 | 28    | q_ocf WSL true QE smoke                  | complete | phase28_q_ocf_true_qe_smoke_result_20260511                 |
+| 29    | true QE attribution diagnostics          | complete | phase29_true_qe_attribution_result_20260511                 |
 +-------+------------------------------------------+----------+-------------------------------------------------------------+
 ```
 
@@ -86,8 +87,9 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | 26    | fixed penalty/window parameter sweep             | complete   | q_ocf improved but remained below WSL gate                    |
 | 27    | q_ocf fine sweep                                 | complete   | q_ocf 90td fixed_15 passed cheap WSL gate                     |
 | 28    | q_ocf WSL true QE smoke                          | complete   | positive but not strong enough for runtime promotion          |
-| 29    | cheap-to-true mismatch diagnostics               | pending    | inspect actual rank/holding hits before more WSL reruns       |
-| 30    | LLM/PDF preprocessing design                     | deferred   | start only after structured signals stop improving            |
+| 29    | cheap-to-true mismatch diagnostics               | complete   | q_ocf broad low-precision vs Phase19 focused Top50 penalties  |
+| 30    | high-conviction intersection cheap screen        | pending    | combine q_ocf with Phase19-style/rank-aware filters           |
+| 31    | LLM/PDF preprocessing design                     | deferred   | start only after structured signals stop improving            |
 +-------+----------------------------------------------+------------+--------------------------------------------------------------+
 ```
 
@@ -356,4 +358,17 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | runtime integration                              | REJECT            | drawdown relief near zero and only one-loop true evidence     |
 | next phase                                       | DIAGNOSE_MISMATCH | inspect cheap overlay vs true holdings/top-k drop translation |
 +--------------------------------------------------+-------------------+---------------------------------------------------------------+
+```
+
+## Phase 29 True QE Attribution Finding
+
+```text
++--------------------------------------------------+-----------------------+---------------------------------------------------------------+
+| item                                             | decision              | evidence                                                      |
++--------------------------------------------------+-----------------------+---------------------------------------------------------------+
+| q_ocf fixed_15 90td                              | KEEP_RESEARCH         | 41673 penalties but only 221 Top50 hits and 25 Top50 drops    |
+| Phase19 indicator decline ctx60                  | KEEP_BENCHMARK        | 311 penalties all Top50; best true return and hit precision   |
+| Phase23 loss/mv fixed20                          | CALIBRATION_ONLY      | high drop density but weaker true PnL, so drops alone are not |
+| next phase                                       | INTERSECTION_SCREEN   | prefer high-conviction/rank-aware filters before WSL reruns   |
++--------------------------------------------------+-----------------------+---------------------------------------------------------------+
 ```
