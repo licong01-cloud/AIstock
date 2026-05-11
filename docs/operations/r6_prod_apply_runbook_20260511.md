@@ -452,29 +452,54 @@ Expected writes, if authorized by the approved executor:
 
 ### 7.3 Protected Asset Ledger Backfill Apply
 
-Template for a future approved production-capable executor. Do not run the current dev-only `scripts/protected_asset_ledger_backfill.py --apply` against production.
+Expected production operator flow for protected asset ledger backfill. This section assumes a separately reviewed production-capable executor named `scripts/protected_asset_ledger_backfill_prod_executor.py` is present before the R6 production window. If that script is absent, unreviewed, or its CLI differs from this template, stop here and treat protected asset ledger production apply as no-go until the release commander approves an updated executor contract.
+
+Do not run the current dev-only `scripts/protected_asset_ledger_backfill.py --apply` against production, do not edit its guards to make it production-capable, and do not substitute a local script variant.
+
+Required gates before any protected asset ledger write:
+
+1. Governance migrations in section 6 are applied and verified.
+2. The protected asset ledger plan preview is approved and the package ids/manifest hashes match the release bundle.
+3. DR snapshot is verified and referenced in the operator confirmation.
+4. Release commander confirms the production executor source, CLI, token, and env guards.
+5. Backfill mutex is held so no concurrent evidence/asset backfill or governance promotion writer can run.
+6. Operator confirmation artifact includes token `APPLY_PROTECTED_ASSET_LEDGER_BACKFILL_PROD`, target DB label/name, plan preview SHA256, DR snapshot ref, and all four package IDs.
 
 ```powershell
-# Template only. Do not run unless a production-capable executor is explicitly approved for R6.
+# Template only. Do not run outside the approved R6 production window.
+# CLI assumptions must be rechecked against scripts/protected_asset_ledger_backfill_prod_executor.py before apply.
 Set-Location '<R6_WORKTREE>'
-$env:AISTOCK_R6_PROD_ASSET_LEDGER_BACKFILL_APPLY_ENABLED = 'true'
-python <APPROVED_R6_PROTECTED_ASSET_LEDGER_EXECUTOR>.py `
+$env:AISTOCK_PROTECTED_ASSET_LEDGER_BACKFILL_PROD_APPLY_ENABLED = 'true'
+$env:AISTOCK_PROTECTED_ASSET_LEDGER_BACKFILL_MUTEX_HELD = 'true'
+$env:AISTOCK_PROD_DB_PASSWORD = '<PROD_DB_PASSWORD_FROM_SECRET_STORE>'
+python scripts/protected_asset_ledger_backfill_prod_executor.py `
   --apply `
-  --confirm-apply '<APPROVED_R6_PROD_ASSET_LEDGER_BACKFILL_TOKEN>' `
-  --evidence-bundle '<R6_EVIDENCE_BUNDLE>' `
+  --confirm-apply 'APPLY_PROTECTED_ASSET_LEDGER_BACKFILL_PROD' `
+  --evidence-bundle '<SECURE_EVIDENCE_DIR>/r6_protected_asset_ledger_plan.json' `
+  --plan-preview '<SECURE_EVIDENCE_DIR>/r6_protected_asset_ledger_plan.json' `
+  --dr-snapshot '<SECURE_EVIDENCE_DIR>/r6_dr_snapshot_verified.json' `
+  --dr-snapshot-ref '<R6_DR_SNAPSHOT_REF>' `
+  --operator-confirmation '<SECURE_EVIDENCE_DIR>/r6_operator_confirmation.json' `
+  --target-db 'prod' `
   --db-host '<PROD_DB_HOST>' `
-  --db-port '<PROD_DB_PORT>' `
+  --db-port '5432' `
   --db-name '<PROD_DB_NAME>' `
   --db-user '<PROD_DB_USER>' `
+  --db-password-env 'AISTOCK_PROD_DB_PASSWORD' `
   --json > '<SECURE_EVIDENCE_DIR>/r6_protected_asset_ledger_backfill_apply.json'
-Remove-Item Env:AISTOCK_R6_PROD_ASSET_LEDGER_BACKFILL_APPLY_ENABLED -ErrorAction SilentlyContinue
+Remove-Item Env:AISTOCK_PROTECTED_ASSET_LEDGER_BACKFILL_PROD_APPLY_ENABLED -ErrorAction SilentlyContinue
+Remove-Item Env:AISTOCK_PROTECTED_ASSET_LEDGER_BACKFILL_MUTEX_HELD -ErrorAction SilentlyContinue
+Remove-Item Env:AISTOCK_PROD_DB_PASSWORD -ErrorAction SilentlyContinue
 ```
 
-Expected writes, if authorized:
+Expected writes, if authorized by the approved production executor:
 
 - `strategy_pkg.package_asset` metadata rows for protected governance/evidence assets.
+- Natural key is `(package_id, asset_type, asset_ref)`, with `asset_type='protected_asset_ledger_evidence'` and `asset_ref='governance/protected_asset_ledger_backfill'`.
 - `protected_asset=true` must be explicit.
 - No file copy, delete, overwrite, or manifest mutation.
+- No mutation of frozen package manifests, model assets, HMM snapshots, raw QE artifacts, or runtime promotion state.
+- The executor must fail closed before DB connect on target DB mismatch, manifest/package mismatch, blocked plan, missing mutex, missing verified DR snapshot, missing scoped operator confirmation, or missing exact token/env guards.
 
 ### 7.4 Evidence Backfill Verification
 
