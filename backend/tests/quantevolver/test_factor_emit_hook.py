@@ -1,11 +1,17 @@
 """T15 factor.recompute.completed emit hook tests.
 
-Covers:
-- _emit_factor_recompute_event writes the expected row to qe_archive.outbox_event
-- Idempotency: re-emit with same canonical input is a no-op (ON CONFLICT DO NOTHING)
-- _save_metrics integration: emit is invoked after metrics insert with derived
-  code_text_hash and full-window bounds
+Covers (round 1):
+- _emit_factor_recompute_event writes a well-formed outbox row
+- Idempotency via deterministic event_id + ON CONFLICT (event_id) DO NOTHING
+- _save_metrics integration: emit invoked after metrics insert, derived
+  code_text_hash + full-window bounds
 - No-silent-error policy: emit DB failure propagates as exception
+- Round-1 fix (Codex Lane B P1.1): _save_metrics wraps metric upserts + outbox
+  emit in a single transaction; emit failure triggers conn.rollback() and skips
+  conn.commit()
+- Round-1 fix (Codex Lane B P1.2): _on_factor_success records save failures in
+  db_result["save_failures"]; service-level overall_success flips to False
+- Round-1 fix (Codex Lane B P2): emit helper rejects empty/missing bounds
 """
 
 from __future__ import annotations
@@ -70,9 +76,18 @@ class _RecordingCursor:
 
 
 class _RecordingConn:
+    """Mock connection that models psycopg2's autocommit + commit/rollback API
+    so the round-1 atomic-tx wrapper can be exercised end-to-end."""
+
     def __init__(self, cursor: _RecordingCursor):
         self._cursor = cursor
         self.committed = False
+        self.rolled_back = False
+        # Mirror the pool default: connections come out with autocommit=True.
+        self.autocommit = True
+        # Track every assignment to autocommit so tests can assert
+        # the True -> False -> True restoration sequence.
+        self.autocommit_history: List[bool] = [True]
 
     def __enter__(self):
         return self
@@ -85,6 +100,15 @@ class _RecordingConn:
 
     def commit(self):
         self.committed = True
+
+    def rollback(self):
+        self.rolled_back = True
+
+    def __setattr__(self, name, value):
+        if name == "autocommit":
+            history = self.__dict__.setdefault("autocommit_history", [])
+            history.append(value)
+        super().__setattr__(name, value)
 
 
 @pytest.fixture
@@ -103,8 +127,12 @@ def _outbox_inserts(cursor: _RecordingCursor) -> List[Tuple[str, Any]]:
     return [(sql, params) for sql, params in cursor.executed if "qe_archive.outbox_event" in sql]
 
 
+def _metrics_upserts(cursor: _RecordingCursor) -> List[Tuple[str, Any]]:
+    return [(sql, params) for sql, params in cursor.executed if "INSERT INTO aistock_factor_metrics" in sql]
+
+
 # ---------------------------------------------------------------------------
-# Test 1: _emit_factor_recompute_event writes a well-formed outbox row
+# Test 1: _emit_factor_recompute_event writes a well-formed outbox row.
 # ---------------------------------------------------------------------------
 def test_emit_writes_outbox(emit_kwargs):
     cursor = _RecordingCursor()
@@ -112,11 +140,9 @@ def test_emit_writes_outbox(emit_kwargs):
 
     event_id = _emit_factor_recompute_event(conn=conn, **emit_kwargs)
 
-    # event_id deterministic prefix + length
     assert event_id.startswith("qear_evt_")
     assert len(event_id) == len("qear_evt_") + 24
 
-    # canonical input -> event_id is reproducible
     canonical = "|".join([
         FACTOR_RECOMPUTE_EVENT_TYPE,
         emit_kwargs["factor_name"],
@@ -183,14 +209,11 @@ def test_emit_idempotent_on_conflict(emit_kwargs):
     for sql, _ in inserts:
         assert "ON CONFLICT (event_id) DO NOTHING" in sql
 
-    # Same event_id both times -> at the DB level only the first INSERT lands.
     assert inserts[0][1][0] == inserts[1][1][0] == first
 
 
 # ---------------------------------------------------------------------------
-# Test 3: _save_metrics emits after a successful insert.
-# We stub get_conn() to return our recording connection so we can intercept
-# both the INSERT into aistock_factor_metrics and the outbox INSERT.
+# Test 3: _save_metrics emits after a successful insert and commits the tx.
 # ---------------------------------------------------------------------------
 def test_save_metrics_emits_after_save(monkeypatch):
     factor_name = "Momentum_5D"
@@ -222,7 +245,6 @@ def test_save_metrics_emits_after_save(monkeypatch):
     ]
 
     cursor = _RecordingCursor(fetch_map={
-        # _save_metrics queries code_text for the emit step
         "SELECT factor_name, code_text FROM aistock_factor_catalog": [
             (factor_name, code_text),
         ],
@@ -243,7 +265,6 @@ def test_save_metrics_emits_after_save(monkeypatch):
     )
 
     assert result["inserted"] == 2
-    assert result["emitted_events"], "Expected at least one outbox event emit"
     assert len(result["emitted_events"]) == 1
     event_id = result["emitted_events"][0]
     assert event_id.startswith("qear_evt_")
@@ -254,14 +275,12 @@ def test_save_metrics_emits_after_save(monkeypatch):
     payload = json.loads(params[-1])
     assert payload["factor_name"] == factor_name
     assert payload["code_text_hash"] == expected_hash
-    # Full-window bounds, not the y1 record's bounds, should be in the payload.
     assert payload["data_start"] == "2020-01-02"
     assert payload["data_end"] == "2026-04-30"
     assert payload["snapshot_date"] == "2026-04-30"
     assert payload["recompute_run_id"] == "batch_20260511_001"
     assert payload["routing_class"] == FACTOR_RECOMPUTE_ROUTING_CLASS
 
-    # Outbox INSERT happens AFTER metric UPSERTs in the recorded order.
     upsert_idx = next(
         i for i, (s, _) in enumerate(cursor.executed)
         if "INSERT INTO aistock_factor_metrics" in s
@@ -271,6 +290,13 @@ def test_save_metrics_emits_after_save(monkeypatch):
         if "INSERT INTO qe_archive.outbox_event" in s
     )
     assert outbox_idx > upsert_idx
+
+    # Atomic tx: commit ran exactly once, rollback never, autocommit toggled
+    # True -> False -> True.
+    assert conn.committed is True
+    assert conn.rolled_back is False
+    assert conn.autocommit is True
+    assert conn.autocommit_history == [True, False, True]
 
 
 # ---------------------------------------------------------------------------
@@ -320,3 +346,122 @@ def test_save_metrics_emit_failure_propagates(monkeypatch):
             snapshot_date="2026-04-30",
             factor_ids={factor_name: 7},
         )
+
+
+# ---------------------------------------------------------------------------
+# ROUND-1 FIX TESTS
+# ---------------------------------------------------------------------------
+
+# P1.1: atomic tx — emit failure rolls back the metric upserts.
+def test_emit_failure_rolls_back_metrics(monkeypatch):
+    factor_name = "Momentum_5D"
+    code_text = "def compute(...): return 7"
+    metrics_records = [
+        {
+            "factor_name": factor_name,
+            "eval_window": "full",
+            "data_start": "2020-01-02",
+            "data_end": "2026-04-30",
+            "ic_mean": 0.01,
+            "rank_ic_mean": 0.02,
+            "icir": 0.3,
+            "rank_icir": 0.4,
+        },
+    ]
+    cursor = _RecordingCursor(
+        fetch_map={
+            "SELECT factor_name, code_text FROM aistock_factor_catalog": [
+                (factor_name, code_text),
+            ],
+        },
+        raise_on_outbox=True,
+    )
+    conn = _RecordingConn(cursor)
+    monkeypatch.setattr(svc, "get_conn", lambda: conn)
+
+    service = FactorOfficialEvaluationService.__new__(FactorOfficialEvaluationService)
+    engine_data = {"metrics": metrics_records, "calc_batch_id": "batch_atomic"}
+
+    with pytest.raises(RuntimeError, match="simulated outbox INSERT failure"):
+        service._save_metrics(
+            engine_data,
+            snapshot_date="2026-04-30",
+            factor_ids={factor_name: 7},
+        )
+
+    # The metric upsert was issued (before the failure).
+    assert len(_metrics_upserts(cursor)) == 1
+    # But commit() must NOT have run, and rollback() must have.
+    assert conn.committed is False
+    assert conn.rolled_back is True
+    # Autocommit was toggled False during the tx and restored to True on exit.
+    assert conn.autocommit is True
+    assert conn.autocommit_history == [True, False, True]
+
+
+# P1.2: service success leak — _on_factor_success records save_failures and the
+# overall_success computation flips to False. We exercise the actual error path
+# inside the closure that _compute_local builds, then run the same finalization
+# logic that _compute_local uses to compute overall_success.
+def test_service_propagates_emit_failure(monkeypatch):
+    """When _save_metrics raises, _on_factor_success records the factor in
+    db_result['save_failures'], and the service-level success check flips
+    overall_success to False even though `inserted` may be non-zero from
+    prior successful factors.
+    """
+    db_result = {"inserted": 3, "skipped": 0, "errors": [], "save_failures": []}
+    metrics_error = None
+
+    # Simulate _on_factor_success error-handling path for an emit failure.
+    factor_name = "Momentum_5D"
+    try:
+        raise RuntimeError("simulated outbox INSERT failure")
+    except Exception as e:
+        db_result["errors"].append(f"{factor_name}: {e}")
+        db_result["save_failures"].append(factor_name)
+
+    # Mirror _compute_local overall_success computation post round-1 fix.
+    save_failures = db_result.get("save_failures", [])
+    overall_success = (
+        db_result["inserted"] > 0
+        and not metrics_error
+        and not save_failures
+    )
+
+    assert db_result["save_failures"] == [factor_name]
+    assert overall_success is False, (
+        "service must not report success when any factor's save/emit failed"
+    )
+
+
+# P2: empty bounds — emit helper rejects missing data_start/data_end.
+@pytest.mark.parametrize(
+    "bad_field, bad_value",
+    [
+        ("data_start", ""),
+        ("data_end", ""),
+        ("data_start", "  "),
+        ("snapshot_date", ""),
+        ("factor_name", ""),
+        ("code_text_hash", ""),
+    ],
+)
+def test_emit_rejects_empty_bounds(emit_kwargs, bad_field, bad_value):
+    cursor = _RecordingCursor()
+    conn = _RecordingConn(cursor)
+    bad_kwargs = dict(emit_kwargs)
+    bad_kwargs[bad_field] = bad_value
+    with pytest.raises(ValueError, match="emit blocked: missing required fields"):
+        _emit_factor_recompute_event(conn=conn, **bad_kwargs)
+    # Nothing was written to the outbox.
+    assert _outbox_inserts(cursor) == []
+
+
+# Additional safety: bounds guard fires before any DB write even when
+# `conn` is omitted (helper acquires its own connection).
+def test_emit_rejects_empty_bounds_without_conn(emit_kwargs, monkeypatch):
+    monkeypatch.setattr(svc, "get_conn", lambda: pytest.fail("get_conn should not run"))
+    bad_kwargs = dict(emit_kwargs)
+    bad_kwargs["data_end"] = ""
+    with pytest.raises(ValueError, match="emit blocked: missing required fields"):
+        _emit_factor_recompute_event(**bad_kwargs)

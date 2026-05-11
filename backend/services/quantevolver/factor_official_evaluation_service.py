@@ -56,14 +56,36 @@ def _emit_factor_recompute_event(
 
     Per no-silent-error policy (T14a): DB failures are logged and re-raised.
     The caller (_save_metrics) treats emit failures as a hard error.
+
+    Bounds validation (round-1 fix): factor_name / code_text_hash /
+    data_start / data_end / snapshot_date must be non-empty. Missing
+    full-window bounds would silently emit an event with empty date
+    fields, blocking the downstream FactorValueArchiveHandler — fail
+    fast instead.
     """
+    missing = [
+        name for name, value in (
+            ("factor_name", factor_name),
+            ("code_text_hash", code_text_hash),
+            ("data_start", data_start),
+            ("data_end", data_end),
+            ("snapshot_date", snapshot_date),
+        )
+        if not value or not str(value).strip()
+    ]
+    if missing:
+        raise ValueError(
+            f"factor.recompute.completed emit blocked: missing required fields {missing} "
+            f"(factor_name={factor_name!r})"
+        )
+
     canonical_input = "|".join([
         FACTOR_RECOMPUTE_EVENT_TYPE,
         factor_name,
         code_text_hash,
-        data_start or "",
-        data_end or "",
-        snapshot_date or "",
+        data_start,
+        data_end,
+        snapshot_date,
         recompute_run_id or "",
     ])
     event_id = "qear_evt_" + hashlib.sha256(canonical_input.encode("utf-8")).hexdigest()[:24]
@@ -81,10 +103,10 @@ def _emit_factor_recompute_event(
     }
 
     source_sub_id = "|".join([
-        snapshot_date or "",
+        snapshot_date,
         code_text_hash,
-        data_start or "",
-        data_end or "",
+        data_start,
+        data_end,
         recompute_run_id or "",
     ])
 
@@ -751,7 +773,10 @@ class FactorOfficialEvaluationService:
         )
 
         # ── 准备指标计算共享上下文（在因子计算之前，只准备一次）──
-        db_result = {"inserted": 0, "skipped": 0, "errors": []}
+        # save_failures: factor names whose _save_metrics call raised (incl. emit
+        # failures). Round-1 fix: surface these at service-level so partial
+        # success no longer reports overall success=True (Codex Lane B P1.2).
+        db_result = {"inserted": 0, "skipped": 0, "errors": [], "save_failures": []}
         metrics_error = None
         metrics_ctx = None
         calc_batch_id = str(__import__("uuid").uuid4())
@@ -827,8 +852,14 @@ class FactorOfficialEvaluationService:
                     logger.warning(f"因子 {factor_name} 指标计算返回空 metrics")
                     db_result["errors"].append(f"{factor_name}: 指标计算返回空")
             except Exception as e:
+                # Round-1 fix (Codex Lane B P1.2): track per-factor save/emit
+                # failures separately so the service top-level can flip
+                # overall_success=False. Previously these were appended only to
+                # `errors` and the service still reported success when any
+                # other factor's metrics had landed.
                 logger.warning(f"因子 {factor_name} 指标计算/入库失败: {e}")
                 db_result["errors"].append(f"{factor_name}: {e}")
+                db_result["save_failures"].append(factor_name)
 
         # ── 执行因子计算（每个因子成功后通过回调立即入库）──
         pipeline_result = self._pipeline.compute_factor_values(
@@ -864,10 +895,15 @@ class FactorOfficialEvaluationService:
                     )
                 )
 
-        # 判断整体成功：必须有因子实际入库，且没有致命异常
-        # inserted=0 + errors 非空 = 失败（不能静默报成功）
+        # 判断整体成功：必须有因子实际入库，且没有致命异常，且无 _save_metrics 失败。
+        # round-1 fix (Codex Lane B P1.2): save_failures 非空时不再报 success。
         has_db_errors = bool(db_result["errors"])
-        overall_success = db_result["inserted"] > 0 and not metrics_error
+        save_failures = db_result.get("save_failures", [])
+        overall_success = (
+            db_result["inserted"] > 0
+            and not metrics_error
+            and not save_failures
+        )
         if success_count > 0 and db_result["inserted"] == 0:
             # 因子计算成功但入库全部失败 — 这是严重错误
             if not error_detail:
@@ -875,6 +911,16 @@ class FactorOfficialEvaluationService:
             error_detail += f" | 因子计算成功 {success_count} 个但入库 0 条"
             if has_db_errors:
                 error_detail += f", 入库错误: {'; '.join(db_result['errors'][:3])}"
+        if save_failures:
+            if not error_detail:
+                error_detail = ""
+            else:
+                error_detail += " | "
+            error_detail += (
+                f"指标/事件入库失败 {len(save_failures)} 个因子: "
+                + ", ".join(save_failures[:5])
+                + (" ..." if len(save_failures) > 5 else "")
+            )
 
         result = {
             "success": overall_success,
@@ -1068,152 +1114,178 @@ class FactorOfficialEvaluationService:
         per_factor_inserted: Dict[str, int] = {}
 
         with get_conn() as conn:
-            with conn.cursor() as cur:
-                # factor_ids 缓存：外部传入则复用，否则查询一次
-                if factor_ids is None:
-                    cur.execute("SELECT factor_name, id FROM aistock_factor_catalog")
-                    factor_ids = {row[0]: row[1] for row in cur.fetchall()}
+            # T15 round-1 atomic fix: metric upserts + outbox emits share a single tx
+            # so emit failure rolls metric writes back. autocommit restored in finally.
+            prev_autocommit = getattr(conn, "autocommit", None)
+            if prev_autocommit is not None:
+                try:
+                    conn.autocommit = False
+                except Exception:
+                    prev_autocommit = None
+            tx_committed = False
+            try:
+                with conn.cursor() as cur:
+                    # factor_ids 缓存：外部传入则复用，否则查询一次
+                    if factor_ids is None:
+                        cur.execute("SELECT factor_name, id FROM aistock_factor_catalog")
+                        factor_ids = {row[0]: row[1] for row in cur.fetchall()}
 
-                # 收集本批写入的因子名：先一次性删除所有旧行（跨所有 snapshot_date/data_start/data_end/eval_window），
-                # 再插入当前 snapshot 的新行。确保每个因子只保留最新一次完整计算的 5 个 window 记录。
-                batch_factor_names = sorted({
-                    rec.get("factor_name")
-                    for rec in engine_data.get("metrics", [])
-                    if isinstance(rec, dict) and rec.get("factor_name")
-                })
-                if batch_factor_names:
-                    cur.execute(
-                        "DELETE FROM aistock_factor_metrics WHERE factor_name = ANY(%s)",
-                        (batch_factor_names,),
-                    )
-                    logger.info(
-                        "official evaluation _save_metrics: 清理 %s 个因子的旧行, 删除 %s 条",
-                        len(batch_factor_names),
-                        cur.rowcount,
-                    )
+                    # 收集本批写入的因子名：先一次性删除所有旧行（跨所有 snapshot_date/data_start/data_end/eval_window），
+                    # 再插入当前 snapshot 的新行。确保每个因子只保留最新一次完整计算的 5 个 window 记录。
+                    batch_factor_names = sorted({
+                        rec.get("factor_name")
+                        for rec in engine_data.get("metrics", [])
+                        if isinstance(rec, dict) and rec.get("factor_name")
+                    })
+                    if batch_factor_names:
+                        cur.execute(
+                            "DELETE FROM aistock_factor_metrics WHERE factor_name = ANY(%s)",
+                            (batch_factor_names,),
+                        )
+                        logger.info(
+                            "official evaluation _save_metrics: 清理 %s 个因子的旧行, 删除 %s 条",
+                            len(batch_factor_names),
+                            cur.rowcount,
+                        )
 
-                factor_level_enrichment: Dict[str, Dict[str, Any]] = {}
-                for metric_rec in engine_data.get("metrics", []):
-                    if (
-                        isinstance(metric_rec, dict)
-                        and metric_rec.get("factor_name")
-                        and metric_rec.get("eval_window") == "full"
-                    ):
-                        factor_level_enrichment[metric_rec["factor_name"]] = _metric_enrichment(metric_rec)
-                for rec in engine_data.get("metrics", []):
-                    if not isinstance(rec, dict):
-                        errors.append(f"metrics 记录格式错误: 期望 dict, 实际 {type(rec).__name__}: {str(rec)[:100]}")
-                        skipped += 1
-                        continue
-                    factor_name = rec.get("factor_name")
-                    if not factor_name:
-                        errors.append(f"metrics 记录缺少 factor_name: {str(rec)[:100]}")
-                        skipped += 1
-                        continue
-                    catalog_id = factor_ids.get(factor_name)
-                    if catalog_id is None:
-                        errors.append(f"{factor_name}: factor_catalog_id not found")
-                        skipped += 1
-                        continue
+                    factor_level_enrichment: Dict[str, Dict[str, Any]] = {}
+                    for metric_rec in engine_data.get("metrics", []):
+                        if (
+                            isinstance(metric_rec, dict)
+                            and metric_rec.get("factor_name")
+                            and metric_rec.get("eval_window") == "full"
+                        ):
+                            factor_level_enrichment[metric_rec["factor_name"]] = _metric_enrichment(metric_rec)
+                    for rec in engine_data.get("metrics", []):
+                        if not isinstance(rec, dict):
+                            errors.append(f"metrics 记录格式错误: 期望 dict, 实际 {type(rec).__name__}: {str(rec)[:100]}")
+                            skipped += 1
+                            continue
+                        factor_name = rec.get("factor_name")
+                        if not factor_name:
+                            errors.append(f"metrics 记录缺少 factor_name: {str(rec)[:100]}")
+                            skipped += 1
+                            continue
+                        catalog_id = factor_ids.get(factor_name)
+                        if catalog_id is None:
+                            errors.append(f"{factor_name}: factor_catalog_id not found")
+                            skipped += 1
+                            continue
 
-                    enrichment = _metric_enrichment(rec)
-                    factor_enrichment = factor_level_enrichment.get(factor_name) or {}
-                    for key in ("direction", "best_horizon", "best_horizon_advantage"):
-                        if factor_enrichment.get(key) is not None:
-                            enrichment[key] = factor_enrichment[key]
-                    params = {
-                        "factor_name": factor_name,
-                        "calculated_at": calculated_at,
-                        "data_start": rec.get("data_start"),
-                        "data_end": rec.get("data_end"),
-                        "eval_window": rec.get("eval_window"),
-                        "return_horizon": rec.get("return_horizon", "T2T1"),
-                        "universe": rec.get("universe", "official_v1"),
-                        "ic_mean": rec.get("ic_mean"),
-                        "ic_std": rec.get("ic_std"),
-                        "rank_ic_mean": rec.get("rank_ic_mean"),
-                        "rank_ic_std": rec.get("rank_ic_std"),
-                        "icir": rec.get("icir"),
-                        "rank_icir": rec.get("rank_icir"),
-                        "ic_positive_ratio": rec.get("ic_positive_ratio"),
-                        "top_annual_return": rec.get("top_annual_return"),
-                        "top_excess_annual_return": rec.get("top_excess_annual_return"),
-                        "top_sharpe": rec.get("top_sharpe"),
-                        "top_max_drawdown": rec.get("top_max_drawdown"),
-                        "top_excess_sharpe": rec.get("top_excess_sharpe"),
-                        "benchmark_annual_return": rec.get("benchmark_annual_return"),
-                        "group_return_monotonicity": rec.get("group_return_monotonicity"),
-                        "turnover": rec.get("turnover"),
-                        "ic_decay_half_life": rec.get("ic_decay_half_life"),
-                        "ic_csz_mean": rec.get("ic_csz_mean"),
-                        "rank_ic_1d": rec.get("rank_ic_1d"),
-                        "rank_ic_5d": rec.get("rank_ic_5d"),
-                        "rank_ic_10d": rec.get("rank_ic_10d"),
-                        "rank_ic_20d": rec.get("rank_ic_20d"),
-                        "icir_annualized": enrichment["icir_annualized"],
-                        "rank_icir_annualized": enrichment["rank_icir_annualized"],
-                        "direction": enrichment["direction"],
-                        "best_horizon": enrichment["best_horizon"],
-                        "best_horizon_advantage": enrichment["best_horizon_advantage"],
-                        "coverage": rec.get("coverage"),
-                        "coverage_numerator": rec.get("coverage_numerator"),
-                        "coverage_denominator": rec.get("coverage_denominator"),
-                        "coverage_semantics": rec.get("coverage_semantics"),
-                        "universe_rule_version": rec.get("universe_rule_version"),
-                        "universe_fingerprint_sha256": rec.get("universe_fingerprint_sha256"),
-                        "index_policy": rec.get("index_policy"),
-                        "eligible_sample_count": rec.get("eligible_sample_count"),
-                        "suspended_excluded_count": rec.get("suspended_excluded_count"),
-                        "st_pit_excluded_count": rec.get("st_pit_excluded_count"),
-                        "n_trading_days": rec.get("n_trading_days"),
-                        "source_task_id": None,
-                        "calc_batch_id": calc_batch_id,
-                        "calc_engine": CALC_ENGINE,
-                        "factor_catalog_id": catalog_id,
-                        "snapshot_date": snapshot_date,
-                    }
-                    cur.execute(_UPSERT_SQL, params)
-                    inserted += 1
-                    per_factor_inserted[factor_name] = per_factor_inserted.get(factor_name, 0) + 1
-                    if rec.get("eval_window") == "full":
-                        per_factor_full_bounds[factor_name] = {
+                        enrichment = _metric_enrichment(rec)
+                        factor_enrichment = factor_level_enrichment.get(factor_name) or {}
+                        for key in ("direction", "best_horizon", "best_horizon_advantage"):
+                            if factor_enrichment.get(key) is not None:
+                                enrichment[key] = factor_enrichment[key]
+                        params = {
+                            "factor_name": factor_name,
+                            "calculated_at": calculated_at,
                             "data_start": rec.get("data_start"),
                             "data_end": rec.get("data_end"),
+                            "eval_window": rec.get("eval_window"),
+                            "return_horizon": rec.get("return_horizon", "T2T1"),
+                            "universe": rec.get("universe", "official_v1"),
+                            "ic_mean": rec.get("ic_mean"),
+                            "ic_std": rec.get("ic_std"),
+                            "rank_ic_mean": rec.get("rank_ic_mean"),
+                            "rank_ic_std": rec.get("rank_ic_std"),
+                            "icir": rec.get("icir"),
+                            "rank_icir": rec.get("rank_icir"),
+                            "ic_positive_ratio": rec.get("ic_positive_ratio"),
+                            "top_annual_return": rec.get("top_annual_return"),
+                            "top_excess_annual_return": rec.get("top_excess_annual_return"),
+                            "top_sharpe": rec.get("top_sharpe"),
+                            "top_max_drawdown": rec.get("top_max_drawdown"),
+                            "top_excess_sharpe": rec.get("top_excess_sharpe"),
+                            "benchmark_annual_return": rec.get("benchmark_annual_return"),
+                            "group_return_monotonicity": rec.get("group_return_monotonicity"),
+                            "turnover": rec.get("turnover"),
+                            "ic_decay_half_life": rec.get("ic_decay_half_life"),
+                            "ic_csz_mean": rec.get("ic_csz_mean"),
+                            "rank_ic_1d": rec.get("rank_ic_1d"),
+                            "rank_ic_5d": rec.get("rank_ic_5d"),
+                            "rank_ic_10d": rec.get("rank_ic_10d"),
+                            "rank_ic_20d": rec.get("rank_ic_20d"),
+                            "icir_annualized": enrichment["icir_annualized"],
+                            "rank_icir_annualized": enrichment["rank_icir_annualized"],
+                            "direction": enrichment["direction"],
+                            "best_horizon": enrichment["best_horizon"],
+                            "best_horizon_advantage": enrichment["best_horizon_advantage"],
+                            "coverage": rec.get("coverage"),
+                            "coverage_numerator": rec.get("coverage_numerator"),
+                            "coverage_denominator": rec.get("coverage_denominator"),
+                            "coverage_semantics": rec.get("coverage_semantics"),
+                            "universe_rule_version": rec.get("universe_rule_version"),
+                            "universe_fingerprint_sha256": rec.get("universe_fingerprint_sha256"),
+                            "index_policy": rec.get("index_policy"),
+                            "eligible_sample_count": rec.get("eligible_sample_count"),
+                            "suspended_excluded_count": rec.get("suspended_excluded_count"),
+                            "st_pit_excluded_count": rec.get("st_pit_excluded_count"),
+                            "n_trading_days": rec.get("n_trading_days"),
+                            "source_task_id": None,
+                            "calc_batch_id": calc_batch_id,
+                            "calc_engine": CALC_ENGINE,
+                            "factor_catalog_id": catalog_id,
+                            "snapshot_date": snapshot_date,
                         }
+                        cur.execute(_UPSERT_SQL, params)
+                        inserted += 1
+                        per_factor_inserted[factor_name] = per_factor_inserted.get(factor_name, 0) + 1
+                        if rec.get("eval_window") == "full":
+                            per_factor_full_bounds[factor_name] = {
+                                "data_start": rec.get("data_start"),
+                                "data_end": rec.get("data_end"),
+                            }
 
-                # T15 emit hook: write factor.recompute.completed to qe_archive.outbox_event
-                # for each factor whose metrics were just persisted. One event per factor.
-                # Per no-silent-error policy (T14a): failures are logged and re-raised.
-                emit_factor_names = sorted(per_factor_inserted.keys())
-                if emit_factor_names:
-                    cur.execute(
-                        "SELECT factor_name, code_text FROM aistock_factor_catalog WHERE factor_name = ANY(%s)",
-                        (emit_factor_names,),
-                    )
-                    code_text_map = {row[0]: row[1] for row in cur.fetchall()}
-                    for fname in emit_factor_names:
-                        code_text = code_text_map.get(fname)
-                        if not code_text:
-                            raise RuntimeError(
-                                f"factor.recompute.completed emit blocked: code_text missing for {fname} in aistock_factor_catalog"
+                    # T15 emit hook: write factor.recompute.completed to qe_archive.outbox_event
+                    # for each factor whose metrics were just persisted. One event per factor.
+                    # Per no-silent-error policy (T14a): failures are logged and re-raised.
+                    emit_factor_names = sorted(per_factor_inserted.keys())
+                    if emit_factor_names:
+                        cur.execute(
+                            "SELECT factor_name, code_text FROM aistock_factor_catalog WHERE factor_name = ANY(%s)",
+                            (emit_factor_names,),
+                        )
+                        code_text_map = {row[0]: row[1] for row in cur.fetchall()}
+                        for fname in emit_factor_names:
+                            code_text = code_text_map.get(fname)
+                            if not code_text:
+                                raise RuntimeError(
+                                    f"factor.recompute.completed emit blocked: code_text missing for {fname} in aistock_factor_catalog"
+                                )
+                            code_text_hash = hashlib.sha256(code_text.encode("utf-8")).hexdigest()[:16]
+                            bounds = per_factor_full_bounds.get(fname) or {}
+                            event_id = _emit_factor_recompute_event(
+                                factor_name=fname,
+                                code_text_hash=code_text_hash,
+                                data_start=str(bounds.get("data_start") or ""),
+                                data_end=str(bounds.get("data_end") or ""),
+                                snapshot_date=str(snapshot_date),
+                                recompute_run_id=calc_batch_id or None,
+                                conn=conn,
                             )
-                        code_text_hash = hashlib.sha256(code_text.encode("utf-8")).hexdigest()[:16]
-                        bounds = per_factor_full_bounds.get(fname) or {}
-                        event_id = _emit_factor_recompute_event(
-                            factor_name=fname,
-                            code_text_hash=code_text_hash,
-                            data_start=str(bounds.get("data_start") or ""),
-                            data_end=str(bounds.get("data_end") or ""),
-                            snapshot_date=str(snapshot_date),
-                            recompute_run_id=calc_batch_id or None,
-                            conn=conn,
-                        )
-                        emitted_events.append(event_id)
-                        logger.info(
-                            "factor.recompute.completed emitted: factor=%s event_id=%s",
-                            fname,
-                            event_id,
-                        )
+                            emitted_events.append(event_id)
+                            logger.info(
+                                "factor.recompute.completed emitted: factor=%s event_id=%s",
+                                fname,
+                                event_id,
+                            )
+
+                conn.commit()
+                tx_committed = True
+            except Exception:
+                if not tx_committed:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                raise
+            finally:
+                if prev_autocommit is not None:
+                    try:
+                        conn.autocommit = prev_autocommit
+                    except Exception:
+                        pass
 
         return {
             "inserted": inserted,
