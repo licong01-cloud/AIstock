@@ -807,6 +807,97 @@ No-go criteria:
 - Any operator reports uncertainty about target, credentials, package ids, or strategy intent.
 - A market/data feed dependency is not ready.
 
+### 11.1 R6 Cutover E2E Wrapper
+
+`scripts/r6_prod_cutover_e2e_wrapper.py` is the operator wrapper for the final 9:30 cutover sequence. Default `--mode dry-run` is an offline preview only: it prints the ordered command plan and does not run `psql`, production executors, backend restart commands, daemon commands, HTTP requests, DB connections, or Git merges.
+
+Dry-run preview:
+
+```powershell
+# Offline preview only; safe for release review and evidence package planning.
+Set-Location '<R6_WORKTREE>'
+python scripts/r6_prod_cutover_e2e_wrapper.py `
+  --mode dry-run `
+  --release-worktree '<R6_WORKTREE>' `
+  --prod-repo '<PROD_REPO>' `
+  --secure-evidence-dir '<SECURE_EVIDENCE_DIR>' `
+  --ready-doc '<READY_VERIFY_DOC_1>' `
+  --ready-doc '<READY_VERIFY_DOC_2>' `
+  --evidence-bundle '<R6_EVIDENCE_BUNDLE>' `
+  --evidence-plan '<SECURE_EVIDENCE_DIR>/r6_evidence_backfill_plan.json' `
+  --ledger-plan '<SECURE_EVIDENCE_DIR>/r6_protected_asset_ledger_plan.json' `
+  --dr-snapshot '<SECURE_EVIDENCE_DIR>/r6_dr_snapshot_verified.json' `
+  --dr-snapshot-ref '<R6_DR_SNAPSHOT_REF>' `
+  --package-id '<PACKAGE_ID_1>' `
+  --package-id '<PACKAGE_ID_2>' `
+  --package-id '<PACKAGE_ID_3>' `
+  --package-id '<PACKAGE_ID_4>' `
+  --json `
+  --output '<SECURE_EVIDENCE_DIR>/r6_prod_cutover_e2e_wrapper_dry_run.json'
+```
+
+Production wrapper invocation template, only after sections 4-10 are authorized and the release commander chooses to use the wrapper instead of manual step-by-step execution:
+
+```powershell
+# Template only. Do not run without explicit user + strategy + release-commander authorization.
+Set-Location '<R6_WORKTREE>'
+$env:AISTOCK_R6_PROD_CUTOVER_E2E_PROD_ENABLED = 'true'
+$env:AISTOCK_R6_PROD_CUTOVER_E2E_MUTEX_HELD = 'true'
+$env:AISTOCK_QE_GOVERNANCE_EVIDENCE_BACKFILL_PROD_APPLY_ENABLED = 'true'
+$env:AISTOCK_QE_GOVERNANCE_EVIDENCE_BACKFILL_MUTEX_HELD = 'true'
+$env:AISTOCK_PROTECTED_ASSET_LEDGER_BACKFILL_PROD_APPLY_ENABLED = 'true'
+$env:AISTOCK_PROTECTED_ASSET_LEDGER_BACKFILL_MUTEX_HELD = 'true'
+$env:AISTOCK_PAPER_V2_COLDSTART_SANITY_PROD_ENABLED = 'true'
+$env:AISTOCK_PAPER_V2_COLDSTART_SANITY_MUTEX_HELD = 'true'
+$env:AISTOCK_PROD_DB_PASSWORD = '<PROD_DB_PASSWORD_FROM_SECRET_STORE>'
+
+python scripts/r6_prod_cutover_e2e_wrapper.py `
+  --mode prod `
+  --confirm-prod RUN_R6_PROD_CUTOVER_E2E `
+  --non-cutover-hours-ok R6_PROD_CUTOVER_E2E_NON_CUTOVER_HOURS_OK `
+  --operator-confirmation 'RUN_R6_PROD_CUTOVER_E2E <R6_WORKTREE> <PROD_REPO> <SECURE_EVIDENCE_DIR> <R6_EVIDENCE_BUNDLE> <SECURE_EVIDENCE_DIR>/r6_evidence_backfill_plan.json <SECURE_EVIDENCE_DIR>/r6_protected_asset_ledger_plan.json <SECURE_EVIDENCE_DIR>/r6_dr_snapshot_verified.json <READY_VERIFY_DOC_1> <READY_VERIFY_DOC_2> <R6_DR_SNAPSHOT_REF> EXECUTE_R6_PROD_CUTOVER_E2E_GO_NO_GO' `
+  --release-worktree '<R6_WORKTREE>' `
+  --prod-repo '<PROD_REPO>' `
+  --secure-evidence-dir '<SECURE_EVIDENCE_DIR>' `
+  --ready-doc '<READY_VERIFY_DOC_1>' `
+  --ready-doc '<READY_VERIFY_DOC_2>' `
+  --evidence-bundle '<R6_EVIDENCE_BUNDLE>' `
+  --evidence-plan '<SECURE_EVIDENCE_DIR>/r6_evidence_backfill_plan.json' `
+  --ledger-plan '<SECURE_EVIDENCE_DIR>/r6_protected_asset_ledger_plan.json' `
+  --dr-snapshot '<SECURE_EVIDENCE_DIR>/r6_dr_snapshot_verified.json' `
+  --dr-snapshot-ref '<R6_DR_SNAPSHOT_REF>' `
+  --backend-restart-command '["<APPROVED_BACKEND_RESTART_CMD>"]' `
+  --daemon-restart-command '["<APPROVED_DAEMON_RESTART_CMD>"]' `
+  --api-base '<PROD_API_BASE>' `
+  --package-id '<PACKAGE_ID_1>' `
+  --package-id '<PACKAGE_ID_2>' `
+  --package-id '<PACKAGE_ID_3>' `
+  --package-id '<PACKAGE_ID_4>' `
+  --target-db prod `
+  --db-host '<PROD_DB_HOST>' `
+  --db-port 5432 `
+  --db-name '<PROD_DB_NAME>' `
+  --db-user '<PROD_DB_USER>' `
+  --db-password-env AISTOCK_PROD_DB_PASSWORD `
+  --json `
+  --output '<SECURE_EVIDENCE_DIR>/r6_prod_cutover_e2e_wrapper_prod.json'
+```
+
+Wrapper GO criteria:
+
+- The exact token, env enable flag, mutex, target DB checks, cutover-window or non-cutover-hours acknowledgement, typed operator confirmation, all prerequisite paths, DR snapshot ref, and final intent pass before any command runs.
+- The wrapper applies the same six migration files as section 6, one `psql --single-transaction --file` step per migration.
+- The approved StrategyPackage evidence executor, protected asset ledger executor, backend restart command, daemon command, and Task 6 cold-start sanity script all return success.
+- Final evidence artifacts include applied evidence and ledger reports plus `paper_v2_coldstart_sanity_prod.json` with `verdict=GO` and `real_trading_ready=true`.
+
+Wrapper no-go criteria:
+
+- Any guard or prerequisite is missing or mismatched.
+- Any prerequisite verification doc says `READY-WITH-CAVEATS`, `GO-WITH-CAUTION`, `NO-GO`, `NOT READY`, or `BLOCKED`; resolve the caveat or provide a later clean READY doc before production use.
+- Any command exits non-zero or an expected JSON artifact is missing or not clean GO/READY.
+- Any cleanup, DB migration, runtime restart, daemon state, or cold-start sanity result is uncertain.
+- The wrapper output is `verdict=NO-GO`; keep R6 disabled/rolled back and follow the rollback matrix.
+
 At 09:30:
 
 ```text
