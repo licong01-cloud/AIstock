@@ -169,21 +169,31 @@ class PaperV2ArchiveHandler(ArchiveHandler):
         inserted = 0
         upserted = 0
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            # P1.5 (Codex round 2) — replay short-circuit: if paper_v2_run already
-            # exists for this run_id, treat as a replay and SUCCESS-NOOP. This
-            # prevents SCD2 dim_paper_v2_portfolio from version-bumping on replay
-            # when source portfolio attributes have drifted since the run completed.
-            # The run captures a point-in-time portfolio state; later portfolio
-            # changes must NOT be retroactively attributed to it.
+            # P1.1 (Codex round 3 BLOCKED) — short-circuit on completion marker,
+            # NOT mere row existence. If a previous attempt committed the
+            # paper_v2_run row but failed mid-way through child mirrors, that
+            # row would have archive_complete=false and we MUST retry the full
+            # 17-step mirror to recover. archive_complete flips to TRUE only
+            # after every child mirror commits in the same transaction.
+            #
+            # Replaces the round-2 P1.5 existence-only short-circuit: the prior
+            # design protected SCD2 dim from version-bumping on replay but also
+            # masked partial archives forever. The completion marker keeps the
+            # SCD2 protection (we still skip when archive_complete=true) AND
+            # restores worker retry semantics for partial failures.
             cur.execute(
-                "SELECT 1 FROM qe_archive.paper_v2_run WHERE run_id = %s", (run_id,),
+                """SELECT archive_complete FROM qe_archive.paper_v2_run
+                   WHERE run_id = %s""",
+                (run_id,),
             )
-            if cur.fetchone():
+            existing = cur.fetchone()
+            if existing and existing["archive_complete"]:
                 return ArchiveResult(
                     status=HandlerStatus.SUCCESS,
                     rows_inserted=0,
                     rows_upserted=0,
-                    stats={"run_id": run_id, "replay_skipped": True},
+                    stats={"run_id": run_id, "replay_skipped": True,
+                           "archive_complete": True},
                 )
 
             # 1) fetch source run row (NOOP if it disappeared from source)
@@ -247,11 +257,24 @@ class PaperV2ArchiveHandler(ArchiveHandler):
             # 17) paper_v2_reset_audit (synthesize reset_type per BUG-007)
             inserted += self._mirror_reset_audit(cur, run_row["portfolio_id"])
 
+            # P1.1 (Codex round 3) — flip completion marker AFTER all 17 child
+            # mirrors landed. If any step above raised, the whole transaction
+            # rolls back including this UPDATE — next event delivery sees
+            # archive_complete=false and re-runs the full mirror.
+            cur.execute(
+                """UPDATE qe_archive.paper_v2_run
+                   SET archive_complete = TRUE,
+                       archive_completed_at = NOW()
+                   WHERE run_id = %s""",
+                (run_id,),
+            )
+
         return ArchiveResult(
             status=HandlerStatus.SUCCESS,
             rows_inserted=inserted,
             rows_upserted=upserted,
-            stats={"run_id": run_id, "portfolio_version_id": portfolio_version_id},
+            stats={"run_id": run_id, "portfolio_version_id": portfolio_version_id,
+                   "archive_complete": True},
         )
 
     # ------------------------------------------------------------------
@@ -714,8 +737,16 @@ class PaperV2ArchiveHandler(ArchiveHandler):
         self, cur: Any, run_id: str, portfolio_version_id: int | None,
     ) -> int:
         cur.execute("SELECT * FROM paper_v2.daily_snapshots WHERE run_id = %s", (run_id,))
+        snapshots = cur.fetchall()
         n = 0
-        for s in cur.fetchall():
+        for s in snapshots:
+            # P2.3 (Codex round 3) — ETL-join market.index_daily for benchmarks
+            # and market.regime_label for regime. NULL fallback if either source
+            # is missing data for this trade_date (e.g., regime_label table not
+            # yet populated). No raise on missing — design §5.9 explicitly says
+            # "NULL 表示该日尚未生成标签".
+            enrichment = self._fetch_benchmark_and_regime(cur, s["trade_date"])
+            relative = self._compute_relative_to_csi300(s, enrichment)
             cur.execute(
                 """
                 INSERT INTO qe_archive.paper_v2_daily_snapshot (
@@ -726,18 +757,84 @@ class PaperV2ArchiveHandler(ArchiveHandler):
                 ) VALUES (
                     %s, %s, %s, %s,
                     %s, %s, NULL, NULL,
-                    NULL, NULL, NULL,
-                    NULL, NULL, NOW()
+                    %s, %s, %s,
+                    %s, %s, NOW()
                 )
                 ON CONFLICT (run_id, trade_date) DO NOTHING
                 """,
                 (
                     run_id, portfolio_version_id, s["trade_date"], s.get("nav"),
                     s.get("cash"), s.get("market_value"),
+                    enrichment.get("benchmark_csi300"),
+                    enrichment.get("benchmark_csi500"),
+                    enrichment.get("benchmark_csi1000"),
+                    relative,
+                    enrichment.get("regime"),
                 ),
             )
             n += cur.rowcount
         return n
+
+    # P2.3 helper — pre-fetch benchmarks + regime for a given trade_date.
+    # Index codes per design §5.9 + Batch A's INDEX_CODES tuple:
+    #   CSI300  = '000300.SH'
+    #   CSI500  = '000905.SH'
+    #   CSI1000 = '000852.SH'
+    # source_method default = 'simple_quadrant' (per design §8.6).
+    _BENCHMARK_INDEX_CODES = {
+        "benchmark_csi300":  "000300.SH",
+        "benchmark_csi500":  "000905.SH",
+        "benchmark_csi1000": "000852.SH",
+    }
+    _REGIME_DEFAULT_SOURCE_METHOD = "simple_quadrant"
+
+    def _fetch_benchmark_and_regime(
+        self, cur: Any, trade_date: Any,
+    ) -> dict[str, Any]:
+        """LEFT-join semantics: returns dict with all 4 keys; missing rows -> None.
+
+        Single round-trip for benchmarks via IN (3) + 1 round-trip for regime.
+        """
+        if trade_date is None:
+            return {k: None for k in
+                    list(self._BENCHMARK_INDEX_CODES) + ["regime"]}
+
+        out: dict[str, Any] = {k: None for k in self._BENCHMARK_INDEX_CODES}
+        # Benchmarks: pull all 3 close prices in one query
+        codes = list(self._BENCHMARK_INDEX_CODES.values())
+        cur.execute(
+            """SELECT ts_code, close FROM market.index_daily
+               WHERE trade_date = %s AND ts_code = ANY(%s)""",
+            (trade_date, codes),
+        )
+        code_to_close = {r["ts_code"]: r["close"] for r in cur.fetchall()}
+        for col, code in self._BENCHMARK_INDEX_CODES.items():
+            out[col] = code_to_close.get(code)
+
+        # Regime: NULL fallback if regime_label not yet computed for this date
+        cur.execute(
+            """SELECT regime FROM market.regime_label
+               WHERE trade_date = %s AND source_method = %s
+               LIMIT 1""",
+            (trade_date, self._REGIME_DEFAULT_SOURCE_METHOD),
+        )
+        row = cur.fetchone()
+        out["regime"] = row["regime"] if row else None
+        return out
+
+    def _compute_relative_to_csi300(
+        self, snapshot: Mapping[str, Any], enrichment: Mapping[str, Any],
+    ) -> float | None:
+        """relative_to_csi300 = (NAV / prior_close) - benchmark_pct_change is
+        complex (needs prior NAV). For round 3 we leave the cross-day return
+        derivation to a downstream view and only populate this column when
+        the snapshot has a directly-comparable single-day return field.
+        Currently source paper_v2.daily_snapshots has no ret_today column, so
+        we return None — design §5.9 calls this 'snapshot return - benchmark
+        return' which is a multi-row computation better suited for a SQL view
+        than a per-INSERT lookup.
+        """
+        return None
 
     def _mirror_intraday_snapshots_for_run(self, cur: Any, run_id: str) -> int:
         cur.execute("SELECT * FROM paper_v2.intraday_snapshots WHERE run_id = %s", (run_id,))
@@ -867,17 +964,29 @@ class PaperV2ArchiveHandler(ArchiveHandler):
             )
             inserted = 0
             for s in cur.fetchall():
+                # P2.3: same ETL-join treatment as the run-completed path.
+                enrichment = self._fetch_benchmark_and_regime(cur, s["trade_date"])
+                relative = self._compute_relative_to_csi300(s, enrichment)
                 cur.execute(
                     """
                     INSERT INTO qe_archive.paper_v2_daily_snapshot (
                         run_id, portfolio_version_id, trade_date, total_value,
                         cash, positions_value, realized_pnl, unrealized_pnl,
-                        captured_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, NULL, NULL, NOW())
+                        benchmark_csi300, benchmark_csi500, benchmark_csi1000,
+                        relative_to_csi300, regime, captured_at
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, NULL, NULL,
+                        %s, %s, %s, %s, %s, NOW()
+                    )
                     ON CONFLICT (run_id, trade_date) DO NOTHING
                     """,
                     (run_id, pvid, s["trade_date"], s.get("nav"),
-                     s.get("cash"), s.get("market_value")),
+                     s.get("cash"), s.get("market_value"),
+                     enrichment.get("benchmark_csi300"),
+                     enrichment.get("benchmark_csi500"),
+                     enrichment.get("benchmark_csi1000"),
+                     relative,
+                     enrichment.get("regime")),
                 )
                 inserted += cur.rowcount
 
@@ -1030,6 +1139,16 @@ class PaperV2ArchiveHandler(ArchiveHandler):
 
         Natural key: (profile_id, valid_from). valid_from = source created_at so
         replays are idempotent on ON CONFLICT (profile_id, valid_from) DO NOTHING.
+
+        P2.2 (Codex round 3) — close-current: when inserting a new SCD2 version
+        for an existing profile_id, FIRST close the previous current row
+        (UPDATE is_current=false, valid_to=new row's valid_from). Without this,
+        multiple is_current=true rows can coexist for the same profile_id —
+        not a true SCD2.
+
+        The lookup-then-write pattern uses ON CONFLICT DO NOTHING semantics:
+        if (profile_id, valid_from) already exists we skip the insert entirely
+        and DO NOT close the current row (it might already be the same row).
         """
         cur.execute(
             """SELECT profile_id, profile_name, status, current_version_id,
@@ -1046,6 +1165,28 @@ class PaperV2ArchiveHandler(ArchiveHandler):
                 "package_id": p.get("package_id"),
                 "created_by": p.get("created_by"),
             }
+            new_valid_from = p.get("created_at")
+
+            # Check if we already have a row at exactly this valid_from
+            cur.execute(
+                """SELECT 1 FROM qe_archive.dim_paper_v2_runtime_profile
+                   WHERE profile_id = %s AND valid_from = %s""",
+                (p["profile_id"], new_valid_from),
+            )
+            if cur.fetchone():
+                # Idempotent: same row, no SCD2 transition needed
+                continue
+
+            # P2.2 close-current: any prior is_current=TRUE row for this
+            # profile_id must be closed so we don't have multiple current rows.
+            cur.execute(
+                """UPDATE qe_archive.dim_paper_v2_runtime_profile
+                   SET is_current = FALSE, valid_to = %s
+                   WHERE profile_id = %s AND is_current = TRUE
+                     AND valid_from < %s""",
+                (new_valid_from, p["profile_id"], new_valid_from),
+            )
+
             cur.execute(
                 """
                 INSERT INTO qe_archive.dim_paper_v2_runtime_profile (
@@ -1060,7 +1201,7 @@ class PaperV2ArchiveHandler(ArchiveHandler):
                 (
                     p["profile_id"], p.get("profile_name"),
                     json.dumps(profile_json, default=str),
-                    p.get("created_at"),
+                    new_valid_from,
                 ),
             )
             n += cur.rowcount

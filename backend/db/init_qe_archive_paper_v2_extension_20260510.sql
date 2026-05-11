@@ -115,6 +115,12 @@ CREATE TABLE IF NOT EXISTS qe_archive.paper_v2_run (
     started_at           TIMESTAMPTZ,
     completed_at         TIMESTAMPTZ,
     captured_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    -- T24 (Codex round 2 BLOCKED): SCD2 replay completion marker. Set TRUE
+    -- only after all 17 child mirror steps succeed inside the same transaction.
+    -- handler short-circuit checks archive_complete (not row existence) so a
+    -- partially-failed first attempt is retried fresh on the next event delivery.
+    archive_complete       BOOLEAN      NOT NULL DEFAULT FALSE,
+    archive_completed_at   TIMESTAMPTZ,
     CONSTRAINT uq_paper_v2_run_natural UNIQUE (portfolio_id, trade_date),
     CONSTRAINT ck_paper_v2_run_status CHECK (
         -- Source paper_v2.run.status uses uppercase enum (probed values: SUCCEEDED, FAILED).

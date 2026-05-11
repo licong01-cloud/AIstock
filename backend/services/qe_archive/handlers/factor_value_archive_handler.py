@@ -218,6 +218,13 @@ class FactorValueArchiveHandler(ArchiveHandler):
 
         This is the production path. Tests inject a list-returning loader instead
         so they don't need parquet files on disk.
+
+        P2.1 (Codex round 3 follow-up): if payload carries data_start / data_end,
+        slice the dataframe to that window so a recompute event for a narrow
+        date range doesn't drag in the full historical parquet (which can be
+        50B rows × 8 years per design §7.4). The previous design note
+        (factor_value_data_bounds_design_note_20260510.md §3 Option A) is now
+        implemented here.
         """
         factor_name = payload["factor_name"]
         # Path is project-relative; assumes standard layout under repo root.
@@ -235,8 +242,38 @@ class FactorValueArchiveHandler(ArchiveHandler):
                 f"parquet at {parquet_path} missing required columns "
                 f"trade_date / code / value; have {list(df.columns)}"
             )
+
+        # P2.1 narrowing — payload-bounded slice
+        df = _apply_data_bounds(df, payload.get("data_start"), payload.get("data_end"))
+
         return df[["trade_date", "code", "value"]].to_dict(orient="records")
 
 
 def _today() -> date:
     return date.today()
+
+
+def _apply_data_bounds(df, data_start: Any, data_end: Any):
+    """P2.1 (Codex round 3) — slice a factor_value dataframe to the
+    [data_start, data_end] inclusive window declared in the recompute payload.
+
+    Pure helper so unit tests can exercise the slicing logic against a small
+    in-memory dataframe without parquet IO.
+
+    - data_start / data_end may be date / datetime / ISO string / None.
+    - df.trade_date may be date or pandas datetime; we coerce both sides via
+      pandas and let pd handle the comparison.
+    - Either bound being None leaves that side open. Both None -> identity.
+    - Empty df after slice is preserved (caller treats 0 rows as NOOP).
+    """
+    if data_start is None and data_end is None:
+        return df
+    import pandas as pd  # type: ignore[import-untyped]
+
+    td = pd.to_datetime(df["trade_date"])
+    mask = pd.Series(True, index=df.index)
+    if data_start is not None:
+        mask &= td >= pd.to_datetime(data_start)
+    if data_end is not None:
+        mask &= td <= pd.to_datetime(data_end)
+    return df[mask]
