@@ -213,3 +213,28 @@ Codex 应在以下情况开始 takeover:
 - `docs/handoff/morning_status_20260511.md`
 - mempalace cross-tool wing: 328 drawers
 - BUG registry: tests/aistock_validation/bugs/ (41 entries)
+
+---
+
+## Update Log
+
+### 2026-05-11 16:30 — Codex 完成 paper-v2 dispatched 2 tasks
+
+- Codex commit `7bf840d` on codex/qe-governance-integration-20260509
+- 4 BUG-PREP (M:2 L:2) 全 fix + 4 dry-run JSON outputs PASS
+- 37 tests + 0 guardrail findings
+- prod_touched=false
+
+R6 governance merge prep:
+- ✅ prep scripts (924d717)
+- ✅ 4 BUG-PREP fix (7bf840d, dry-runs included)
+- 🔄 paper-v2 verify Codex fix (dispatched, ETA 30-60 min)
+- ⏸️ 4 prod packages evidence backfill (待 verify + 用户授权)
+- ⏸️ R6 merge (待 evidence backfill + 用户授权)
+
+### Codex 当前状态变化
+- 主要 dispatched tasks 完成
+- 现可 self-driven: HMM / financial-distress / governance Phase 4-7
+- 等 paper-v2 verify deliver → R6 merge 评估
+
+Strategy session 继续主导，contingency 未激活。
