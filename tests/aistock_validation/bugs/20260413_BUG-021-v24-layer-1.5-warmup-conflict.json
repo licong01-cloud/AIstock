@@ -1,0 +1,56 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-021",
+  "title": "v24 Layer 1.5 WARMUP 修复 — 查表与 plan 模型冲突",
+  "description": "v24 执行模型 Layer 1.5 (WARMUP) 阶段存在查表逻辑与 plan 模型推理结果冲突。当查表返回的执行计划与 plan model 输出不一致时，当前实现优先查表，导致 plan model 在 WARMUP 期被旁路，模型行为退化。修复方向：(a) WARMUP 期完全使用查表 (移除 plan model)；(b) WARMUP 期完全使用 plan model (移除查表)；(c) 加权融合两者输出。需联系 RL 训练数据来佐证选择。从 MEMORY pending_fixes.md rl_execution_evolution.md 提取。",
+  "module": "rl_execution",
+  "severity": "P1",
+  "risk_area": "data_correctness",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "v24_b1_warmup_phase",
+    "lookup_vs_plan_disagree": true
+  },
+  "reproduce_command": "python rl_execution/v24/inference.py --warmup-replay --model v24_b1",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "memory:pending_fixes.md",
+    "memory:rl_execution_evolution.md",
+    "memory:rl_layer_b_progress.md"
+  ],
+  "fingerprint": "rl_execution::v24::layer_1_5_warmup_lookup_vs_plan_conflict",
+  "assigned_agent": null,
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-04-13T00:00:00Z",
+  "first_seen_at": "2026-04-13T00:00:00Z",
+  "last_seen_at": "2026-04-13T00:00:00Z",
+  "fixed_at": null,
+  "submitted_at": null,
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/rl_execution/v24/",
+    "rl_execution/v24/inference.py"
+  ],
+  "suspected_modules": [
+    "backend/services/rl_execution/",
+    "rl_execution/v24/"
+  ],
+  "required_verification": [
+    "Replay regression on warmup window with 3 candidate fix strategies",
+    "PA delta vs v20 baseline confirmed non-regressive"
+  ],
+  "closure_requirements": [
+    "Decision recorded for warmup policy",
+    "Layer 1.5 design doc updated"
+  ],
+  "events": [
+    {
+      "timestamp": "2026-04-13T00:00:00Z",
+      "actor": "claude_code",
+      "action": "discovered",
+      "note": "v24 bugfix and limit price bins work surfaced this conflict"
+    }
+  ]
+}

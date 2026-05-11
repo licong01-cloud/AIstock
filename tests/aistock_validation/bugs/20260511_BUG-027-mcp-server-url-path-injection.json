@@ -1,0 +1,63 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-027",
+  "title": "AIstock MCP server URL path identifier injection - httpx normalizes ../ allowing escape from /api/v1/validation",
+  "description": "scripts/aistock_mcp_server.py interpolates path identifiers directly into URL paths (get_plan f'/plans/{plan_key}', get_validation_run, get_bug_agent_context, get_validation_execution_status/log). httpx normalizes ../ segments, so a caller can escape /api/v1/validation and issue same-host GETs outside the intended Validation Center subset. Security risk if any caller is untrusted. Codex REV-5 P1.1 finding (drawer ac034eef + 6bdc47eb). Fixed in pipeline Stage 4+5 fix round 1 (commit c7441ba) by adding _sanitize_identifier with regex ^[A-Za-z0-9_.-]+$ to all 5 path-interpolating tools, blocking /, ?, #, %, whitespace. Plus 14 path-traversal regression tests + 4 canonical-id accept tests.",
+  "module": "validation_center",
+  "severity": "P1",
+  "risk_area": "security",
+  "status": "fixed",
+  "trigger_condition": {
+    "scenario": "mcp_tool_call_with_malicious_identifier",
+    "examples": ["get_plan('../../health')", "get_bug_agent_context('a/b')", "get_validation_run('plans/secret')"]
+  },
+  "reproduce_command": "pytest backend/tests/test_aistock_mcp_server.py::test_path_traversal_rejected -q",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "drawer:cross-tool/codex-claude-coord/ac034eef8cf59cdce4566183",
+    "drawer:cross-tool/codex-claude-coord/6bdc47eb502d8c07982517d5",
+    "branch:origin/claude/pipeline-foundation-20260510",
+    "commit:c7441ba",
+    "file:scripts/aistock_mcp_server.py"
+  ],
+  "fingerprint": "validation_center::mcp_server::path_injection",
+  "assigned_agent": "claude_code",
+  "fix_branch": "claude/pipeline-foundation-20260510",
+  "fix_commit": "c7441ba",
+  "verification_run_id": null,
+  "created_at": "2026-05-11T00:00:00Z",
+  "first_seen_at": "2026-05-11T00:18:32Z",
+  "last_seen_at": "2026-05-11T00:18:32Z",
+  "fixed_at": "2026-05-11T01:00:00Z",
+  "submitted_at": "2026-05-11T01:30:00Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "scripts/aistock_mcp_server.py",
+    "backend/tests/test_aistock_mcp_server.py"
+  ],
+  "suspected_modules": [
+    "scripts/aistock_mcp_server.py"
+  ],
+  "required_verification": [
+    "pytest backend/tests/test_aistock_mcp_server.py -q (33 tests including 14 path-traversal)",
+    "Codex independent re-review of pipeline Stage 4+5 fix round 1 on origin/claude/pipeline-foundation-20260510"
+  ],
+  "closure_requirements": [
+    "Codex round-2 review pass on pipeline Stage 4+5 fix round 1",
+    "MCP server activated in production-like config without bypass"
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-11T00:18:32Z",
+      "actor": "codex_app",
+      "action": "discovered",
+      "note": "REV-5 update drawer 6bdc47eb identified URL path injection P1 after final HTTP path check"
+    },
+    {
+      "timestamp": "2026-05-11T01:03:46Z",
+      "actor": "claude_code",
+      "action": "fixed",
+      "note": "pipeline-foundation Stage 4+5 fix round 1 commit c7441ba adds _sanitize_identifier + 14 path-traversal tests + 4 canonical-id accept tests"
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-030",
+  "title": "dim_paper_v2_runtime_profile SCD2 mirror does not close prior current row on drift",
+  "description": "_upsert_runtime_profile_dim inserts new SCD2 version with is_current=true but does NOT close prior current row (set is_current=false + effective_to). Acceptable as partial mirror today because path runs only at run.completed and profiles are not event-driven, but if profile changes are later replayed through the same path, multiple is_current=true rows will accumulate violating SCD2 invariant. Codex T14b/c fix round 2 review P2.2 (drawer de61c45a). Round 3 fix scheduled to add UPDATE...SET is_current=false WHERE source_profile_id=%s AND is_current=true before INSERT new version + test_runtime_profile_scd2_close_old_current_on_drift.",
+  "module": "qe_archive",
+  "severity": "P2",
+  "risk_area": "data_integrity",
+  "status": "in_progress",
+  "trigger_condition": {
+    "scenario": "runtime_profile_drift_replay",
+    "preconditions": ["dim row exists with is_current=true", "source profile attributes drifted", "run.completed event re-emitted"]
+  },
+  "reproduce_command": "pytest backend/tests/qe_archive/test_paper_v2_archive_handler.py::test_runtime_profile_scd2_close_old_current_on_drift -q",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "drawer:cross-tool/codex-claude-coord/de61c45a1c2dbc1de36758ae",
+    "branch:origin/claude/dw-foundation-20260510",
+    "commit:a77a7d8",
+    "file:backend/services/qe_archive/handlers/paper_v2_archive_handler.py:_upsert_runtime_profile_dim"
+  ],
+  "fingerprint": "qe_archive::paper_v2_archive_handler::runtime_profile_scd2_no_close",
+  "assigned_agent": "claude_code",
+  "fix_branch": "claude/dw-foundation-20260510",
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-11T00:00:00Z",
+  "first_seen_at": "2026-05-11T00:43:21Z",
+  "last_seen_at": "2026-05-11T00:43:21Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-11T01:30:00Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/qe_archive/handlers/paper_v2_archive_handler.py",
+    "backend/tests/qe_archive/test_paper_v2_archive_handler.py"
+  ],
+  "suspected_modules": [
+    "backend/services/qe_archive/handlers/paper_v2_archive_handler.py"
+  ],
+  "required_verification": [
+    "test_runtime_profile_scd2_close_old_current_on_drift (new)",
+    "Codex round-3 review pass"
+  ],
+  "closure_requirements": [
+    "T14b/c fix round 3 includes close-current logic",
+    "SCD2 invariant verified end-to-end"
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-11T00:43:21Z",
+      "actor": "codex_app",
+      "action": "discovered",
+      "note": "T14b/c fix round 2 review P2.2 - SCD2 partial mirror only"
+    },
+    {
+      "timestamp": "2026-05-11T01:00:00Z",
+      "actor": "claude_code_strategy",
+      "action": "dispatched",
+      "note": "T14b/c fix round 3 dispatched"
+    }
+  ]
+}

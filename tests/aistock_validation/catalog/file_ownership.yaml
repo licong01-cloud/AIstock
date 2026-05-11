@@ -314,6 +314,71 @@ rules:
     layer: frontend_test
     risk_level: medium
     ownership_reason: Frontend tests are owned by the test system and secondarily attributed by path-specific rules.
+  - rule_id: model_registry_services
+    priority: 90
+    include:
+      - backend/services/model_registry/**
+      - backend/routers/model_registry*.py
+      - backend/migrations/model_registry_*.sql
+      - backend/tests/model_registry/**
+    primary_module: model_registry
+    impact_modules: [strategy_package, qe.archive, validation.center]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: Model registry persists cross-team model assets and bridges governance schema changes.
+  - rule_id: market_regime_label
+    priority: 80
+    include:
+      - backend/db/init_market_regime_label_*.sql
+      - scripts/regime_label_*.py
+      - backend/tests/market/test_regime_label.py
+      - docs/operations/regime_label_cron_example.md
+    primary_module: market.regime_label
+    impact_modules: [hmm, qe.core, paper_v2]
+    layer: data_pipeline
+    risk_level: medium
+    ownership_reason: Regime label feeds HMM and runtime regime selection across QE and Paper v2.
+  - rule_id: rl_execution_module
+    priority: 80
+    include:
+      - backend/services/rl_execution/**
+      - backend/routers/rl_execution.py
+      - backend/tests/test_rl_execution_module_visibility.py
+    primary_module: rl_execution
+    impact_modules: [paper_v2, qe.core]
+    layer: backend_service
+    risk_level: medium
+    ownership_reason: rl_execution module supports execution algorithm scoring; visibility regression must not recur.
+  - rule_id: qe_archive_handlers
+    priority: 100
+    include:
+      - backend/services/qe_archive/handlers/**
+      - backend/tests/qe_archive/**
+    primary_module: qe.archive_handlers
+    impact_modules: [qe.archive, qe.data_completeness, paper_v2]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: Archive event handlers translate live source rows into qe_archive durable storage; contract regressions break warehouse reliability.
+  - rule_id: validation_data_quality_deep
+    priority: 95
+    include:
+      - backend/tests/data_quality/**
+    primary_module: validation.data_quality
+    impact_modules: [qe.archive, qe.archive_handlers, paper_v2, market.regime_label]
+    layer: backend_test
+    risk_level: high
+    ownership_reason: Stage 7.3 deep data-quality assertions; failures here surface archive / source contract drift before any release.
+  - rule_id: validation_dr
+    priority: 95
+    include:
+      - backend/tests/dr/**
+      - scripts/dr_snapshot_prod_db.py
+      - scripts/dr_cleanup_old_snapshots.py
+    primary_module: validation.dr
+    impact_modules: [platform.db, validation.runner]
+    layer: backend_test
+    risk_level: high
+    ownership_reason: Stage 7.4 DR validation + the snapshot/cleanup scripts they exercise; failures here surface backup-restoration risk before any production rollout.
   - rule_id: scripts_default
     priority: 10
     include:

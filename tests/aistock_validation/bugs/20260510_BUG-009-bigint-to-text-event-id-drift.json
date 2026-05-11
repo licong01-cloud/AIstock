@@ -1,0 +1,53 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-009",
+  "title": "paper_v2 event_id columns: source bigint vs archive TEXT type drift",
+  "description": "Several source paper_v2 event_id columns are bigint (sequence-generated), while archive declares TEXT. Considered acceptable since TEXT is a strict superset and preserves all values. T14b handler must cast bigint → str at archive time (str(int) is canonical). Test coverage required to ensure no precision loss for bigint values >= 2^53 (JS-safe int boundary, conservative). Decision needed: prefix-or-not for archive-side ids (e.g. 'evt_'+str(bigint) vs raw str(bigint)). Deferred design pass from round-2.",
+  "module": "qe_archive",
+  "severity": "P3",
+  "risk_area": "data_correctness",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "T14b_PaperV2ArchiveHandler_event_archive",
+    "type_cast_int_to_str": true
+  },
+  "reproduce_command": "pytest backend/tests/qe_archive/test_paper_v2_handler_id_casting.py -q",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "drawer:cross-tool/codex-claude-coord/dw-foundation-fix-round-2",
+    "branch:origin/claude/dw-foundation-20260510"
+  ],
+  "fingerprint": "qe_archive::event_id::bigint_vs_text_drift",
+  "assigned_agent": "claude_code",
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-10T00:00:00Z",
+  "first_seen_at": "2026-05-10T00:00:00Z",
+  "last_seen_at": "2026-05-10T00:00:00Z",
+  "fixed_at": null,
+  "submitted_at": null,
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/qe_archive/handlers/paper_v2_archive_handler.py"
+  ],
+  "suspected_modules": [
+    "backend/services/qe_archive/handlers/"
+  ],
+  "required_verification": [
+    "T14b handler cast tests covering bigint at int64 max boundary",
+    "Decision recorded for prefix vs raw int-as-string"
+  ],
+  "closure_requirements": [
+    "Casting policy documented in handler design doc",
+    "T14b implementation includes idempotent cast tests"
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-10T00:00:00Z",
+      "actor": "claude_code",
+      "action": "discovered",
+      "note": "Round-2 P1.3 audit flagged bigint→TEXT drift as acceptable but design-pass follow-up"
+    }
+  ]
+}

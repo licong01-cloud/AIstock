@@ -1,0 +1,69 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-AUDIT-002",
+  "title": "test_governance_migration_smoke.py lacks explicit apply-twice/idempotency assertion",
+  "description": "paper-v2 4-layer audit §6.BUG-AUDIT-002 found backend/tests/model_registry/test_governance_migration_smoke.py 19 existing tests exercise STACK_SPECS / SELECT-only / preflight / production guards but NONE applies migration set twice to assert idempotent behavior. Idempotency was only guaranteed by manual IF NOT EXISTS guard inspection. Codex fix (commit 1462099) adds 90 lines / new tests covering mocked apply-twice/idempotency flow. test_governance_migration_smoke.py now 20 passed including new idempotency test.",
+  "module": "model_registry",
+  "severity": "P3",
+  "risk_area": "test_coverage",
+  "status": "verified",
+  "trigger_condition": {
+    "scenario": "future_developer_adds_non_guarded_DDL_to_governance_migration",
+    "preconditions": ["governance_migration_smoke applies non-idempotent DDL"]
+  },
+  "reproduce_command": "pytest backend/tests/model_registry/test_governance_migration_smoke.py -q",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "drawer:cross-tool/codex-claude-coord/611e96d18f9a31ebfe251c64",
+    "drawer:cross-tool/codex-claude-coord/1e81eed678d99152ef4edc96",
+    "branch:origin/codex/qe-governance-integration-20260509",
+    "commit:1462099",
+    "file:backend/tests/model_registry/test_governance_migration_smoke.py",
+    "audit_doc:docs/cross_tool/20260511_paper_v2_REVIEW_codex_governance_audit.md"
+  ],
+  "fingerprint": "model_registry::test_governance_migration_smoke::missing_idempotency_test",
+  "assigned_agent": "codex_app",
+  "fix_branch": "codex/qe-governance-integration-20260509",
+  "fix_commit": "1462099",
+  "verification_run_id": "drawer_cross-tool_codex-claude-coord_5ab88a382198712d4c9606ae",
+  "created_at": "2026-05-11T11:00:00Z",
+  "first_seen_at": "2026-05-11T11:00:00Z",
+  "last_seen_at": "2026-05-11T11:00:00Z",
+  "fixed_at": "2026-05-11T13:26:00Z",
+  "submitted_at": "2026-05-11T14:00:00Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/tests/model_registry/test_governance_migration_smoke.py"
+  ],
+  "suspected_modules": [
+    "backend/tests/model_registry/test_governance_migration_smoke.py"
+  ],
+  "required_verification": [
+    "New mocked apply-twice idempotency test added",
+    "test_governance_migration_smoke.py 20 passed (was 19)"
+  ],
+  "closure_requirements": [
+    "Codex round-1 fix commit 1462099 reviewed by Claude strategy session (verified)",
+    "Future DDL additions guarded by this test"
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-11T11:00:00Z",
+      "actor": "claude_code_paper_v2_audit",
+      "action": "discovered",
+      "note": "paper-v2 4-layer audit §6.BUG-AUDIT-002 — no idempotency test for apply-twice flow"
+    },
+    {
+      "timestamp": "2026-05-11T13:26:00Z",
+      "actor": "codex_app",
+      "action": "fixed",
+      "note": "Codex commit 1462099 - added 90 lines mocked apply-twice test, 20 tests pass"
+    },
+    {
+      "timestamp": "2026-05-11T14:00:00Z",
+      "actor": "claude_code_strategy",
+      "action": "verified",
+      "note": "Strategy session verify - test file +90 lines per commit stat + 20 passed per Codex info"
+    }
+  ]
+}

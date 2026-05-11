@@ -1,0 +1,70 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-AUDIT-003",
+  "title": "_parse_jsonish silently swallows JSONDecodeError and returns None",
+  "description": "paper-v2 4-layer audit §6.BUG-AUDIT-003 found backend/services/strategy_package/service.py:264-275 _parse_jsonish silently returns None on malformed JSON without logging or raising. Violates user global feedback_no_silent_errors rule. Caller (_qe_source_payload) treats result as empty metrics dict → corrupted experiment silently displays zero metrics in QE-packaging-sources picker. Codex fix (commit 1462099) adds bounded warning log with snippet on malformed JSON.",
+  "module": "strategy_package",
+  "severity": "P3",
+  "risk_area": "observability",
+  "status": "verified",
+  "trigger_condition": {
+    "scenario": "malformed_json_in_qe_experiments_result_metrics",
+    "preconditions": ["qe_experiments.result_metrics row contains malformed JSON string"]
+  },
+  "reproduce_command": "pytest backend/tests/strategy_package/test_repository_service.py -q",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "drawer:cross-tool/codex-claude-coord/611e96d18f9a31ebfe251c64",
+    "drawer:cross-tool/codex-claude-coord/1e81eed678d99152ef4edc96",
+    "branch:origin/codex/qe-governance-integration-20260509",
+    "commit:1462099",
+    "file:backend/services/strategy_package/service.py:264-275",
+    "audit_doc:docs/cross_tool/20260511_paper_v2_REVIEW_codex_governance_audit.md",
+    "global_rule:feedback_no_silent_errors"
+  ],
+  "fingerprint": "strategy_package::service.py::_parse_jsonish::silent_swallow",
+  "assigned_agent": "codex_app",
+  "fix_branch": "codex/qe-governance-integration-20260509",
+  "fix_commit": "1462099",
+  "verification_run_id": "drawer_cross-tool_codex-claude-coord_5ab88a382198712d4c9606ae",
+  "created_at": "2026-05-11T11:00:00Z",
+  "first_seen_at": "2026-05-11T11:00:00Z",
+  "last_seen_at": "2026-05-11T11:00:00Z",
+  "fixed_at": "2026-05-11T13:26:00Z",
+  "submitted_at": "2026-05-11T14:00:00Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/strategy_package/service.py"
+  ],
+  "suspected_modules": [
+    "backend/services/strategy_package/service.py"
+  ],
+  "required_verification": [
+    "Codex INFO doc states malformed _parse_jsonish JSON now logs warning with bounded snippet",
+    "strategy_package tests 22 passed including new repository_service tests"
+  ],
+  "closure_requirements": [
+    "Codex round-1 fix commit 1462099 reviewed by Claude strategy session (verified)",
+    "Operator can detect data corruption in qe_experiments.result_metrics via warning logs"
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-11T11:00:00Z",
+      "actor": "claude_code_paper_v2_audit",
+      "action": "discovered",
+      "note": "paper-v2 4-layer audit §6.BUG-AUDIT-003 — _parse_jsonish silent swallow violates no-silent-errors"
+    },
+    {
+      "timestamp": "2026-05-11T13:26:00Z",
+      "actor": "codex_app",
+      "action": "fixed",
+      "note": "Codex commit 1462099 - malformed _parse_jsonish JSON now logs warning with bounded snippet"
+    },
+    {
+      "timestamp": "2026-05-11T14:00:00Z",
+      "actor": "claude_code_strategy",
+      "action": "verified",
+      "note": "Strategy session verify per Codex INFO doc claim + 1462099 service.py +15 lines diff + 22 tests pass"
+    }
+  ]
+}

@@ -1,0 +1,58 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-034",
+  "title": "regime_label cron production enable requires ops review and dry-run plan",
+  "description": "scripts/regime_label_daily.py defaults TDX_DB_PORT to production 5432 via env. Acceptable for manual ops script. First production cron enable requires explicit ops review covering: (1) backfill 5y history dry-run + diff against any existing manual labels (2) cron schedule and failure paging (3) trading-calendar integration (BUG-033) (4) 6m calendar vs trading-day approximation acceptance (BUG-032) (5) regime_label downstream consumers (paper_v2 capture daily_snapshot benchmark/regime ETL join, BUG-031). Codex REV-7 P2.4 (drawer 51d51693).",
+  "module": "market.regime_label",
+  "severity": "P2",
+  "risk_area": "operational",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "production_cron_enable_attempt"
+  },
+  "reproduce_command": "n/a (process gate, not code reproduction)",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "drawer:cross-tool/codex-claude-coord/51d51693886b5d16d4b69da1",
+    "branch:origin/claude/dw-foundation-20260510",
+    "commit:13dd03c",
+    "doc:docs/operations/regime_label_cron_example.md"
+  ],
+  "fingerprint": "market.regime_label::cron::prod_enable_gate",
+  "assigned_agent": "claude_code_strategy",
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-11T00:00:00Z",
+  "first_seen_at": "2026-05-11T00:43:21Z",
+  "last_seen_at": "2026-05-11T00:43:21Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-11T01:30:00Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "docs/operations/regime_label_cron_example.md",
+    "docs/operations/regime_label_prod_enable_runbook.md"
+  ],
+  "suspected_modules": [
+    "scripts/regime_label_daily.py"
+  ],
+  "required_verification": [
+    "Dry-run backfill report against 5y CSI300 reviewed by user",
+    "BUG-031 daily_snapshot ETL join shipped",
+    "BUG-032 6m approximation accepted or fixed",
+    "BUG-033 trading calendar integrated"
+  ],
+  "closure_requirements": [
+    "User authorization granted for cron enable",
+    "5y backfill executed and verified",
+    "Cron schedule + paging documented and active"
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-11T00:43:21Z",
+      "actor": "codex_app",
+      "action": "discovered",
+      "note": "REV-7 T16 regime_label P2.4 - cron prod enable requires ops review"
+    }
+  ]
+}

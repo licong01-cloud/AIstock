@@ -50,17 +50,27 @@ def _codex_quick_validate_script() -> Path:
 
 
 def _guardrail_baseline_json(session: nox.Session) -> str:
-    baseline_json = os.environ.get(
-        "AISTOCK_GUARDRAIL_BASELINE_JSON",
+    """Locate the guardrail baseline JSON.
+
+    Default points at the in-tree baseline under tests/aistock_validation/.
+    Falls back to the legacy ``tmp/validation/guardrails/baseline_20260504.json``
+    location for compatibility with older worktrees that haven't migrated yet.
+    """
+    candidates = [
+        os.environ.get("AISTOCK_GUARDRAIL_BASELINE_JSON"),
+        "tests/aistock_validation/guardrails_baseline_20260511.json",
+        "tests/aistock_validation/guardrails_baseline_20260504.json",
         "tmp/validation/guardrails/baseline_20260504.json",
+    ]
+    for candidate in candidates:
+        if candidate and (ROOT / candidate).exists():
+            return candidate
+    session.error(
+        "Missing guardrail baseline JSON. Run "
+        "`python scripts/aistock_guardrail_scan.py --baseline "
+        "--output-json tests/aistock_validation/guardrails_baseline_<YYYYMMDD>.json` "
+        "first, or set AISTOCK_GUARDRAIL_BASELINE_JSON to an existing file."
     )
-    if not (ROOT / baseline_json).exists():
-        session.error(
-            "Missing guardrail baseline JSON. Run "
-            "`python scripts/aistock_guardrail_scan.py --baseline "
-            "--output-json tmp/validation/guardrails/baseline_20260504.json` first."
-        )
-    return baseline_json
 
 
 @nox.session(venv_backend="none")
@@ -278,6 +288,7 @@ def paper_v2_l3(session: nox.Session) -> None:
     session.notify("l0")
     session.notify("paper_v2_backend")
     session.notify("paper_v2_data_quality")
+    session.notify("data_quality_deep")
     if os.environ.get("PAPER_V2_L3_SKIP_UI") != "1":
         session.notify("paper_v2_ui")
 
@@ -401,12 +412,71 @@ def qe_read_l3(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
-def qe_archive_backend(session: nox.Session) -> None:
-    """Run QE archive backend/schema regression tests without starting services."""
+def dr_validate(session: nox.Session) -> None:
+    """Stage 7.4 DR validation against E:/DEV backup/aistock_pg_snapshots/.
+
+    Three families (Stage 7.4 §1-§3):
+      - dump file validity (pg_restore --list / plain SQL header scan)
+      - dump schema vs dev DB schema diff (one-way subset)
+      - retention policy compliance (30 day rolling + monthly permanent)
+
+    Skips cleanly when the backup directory is empty or pg_restore /
+    docker postgres container are not available, so the session is safe
+    on fresh CI hosts without local DR state.
+    """
     session.run(
         "python",
         "-m",
         "compileall",
+        "backend/tests/dr",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/dr",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
+def data_quality_deep(session: nox.Session) -> None:
+    """Stage 7.3 deep data-quality assertions against dev DB.
+
+    5 assertion families (≥15 tests) covering field-level consistency,
+    JSONB structural validation, derived-field correctness vs the
+    canonical reference implementation, cross-table cardinality, and
+    time-series monotonicity. Tests skip cleanly when the dev DB
+    credentials are unavailable, so the session is also safe to run on
+    fresh CI hosts without the dev DB loaded.
+    """
+    session.run(
+        "python",
+        "-m",
+        "compileall",
+        "backend/tests/data_quality",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/data_quality",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
+def qe_archive_backend(session: nox.Session) -> None:
+    """Run QE archive backend/schema regression tests without starting services.
+
+    Includes the QE archive handler contract module (T14a) and its regression
+    tests when those paths are present on the active branch. The handler module
+    + tests live on origin/claude/dw-foundation-20260510 and are pulled into
+    main via merge; this session is forward-compatible with both states.
+    """
+    compileall_targets = [
         "backend/db/init_qe_archive_schema.py",
         "backend/routers/qe_archive.py",
         "backend/routers/quantevolver.py",
@@ -415,17 +485,160 @@ def qe_archive_backend(session: nox.Session) -> None:
         "backend/services/quantevolver/qe_evolution_service.py",
         "scripts/qe_archive_backfill.py",
         "scripts/qe_archive_data_quality_smoke.py",
+    ]
+    handlers_dir = ROOT / "backend" / "services" / "qe_archive" / "handlers"
+    if handlers_dir.exists():
+        compileall_targets.append("backend/services/qe_archive/handlers")
+    session.run(
+        "python",
+        "-m",
+        "compileall",
+        *compileall_targets,
         external=True,
     )
-    _run_pytest(
-        session,
+    pytest_targets = [
         "backend/tests/test_qe_archive_schema.py",
         "backend/tests/test_qe_archive_repository_static.py",
         "backend/tests/unified_engine/test_qe_completion_contract.py",
+    ]
+    handler_contract_test = ROOT / "backend" / "tests" / "qe_archive" / "test_handler_contract.py"
+    if handler_contract_test.exists():
+        pytest_targets.append("backend/tests/qe_archive/test_handler_contract.py")
+    _run_pytest(
+        session,
+        *pytest_targets,
         "-q",
         "-p",
         "no:cacheprovider",
     )
+
+
+@nox.session(venv_backend="none")
+def model_registry_backend(session: nox.Session) -> None:
+    """Run Model Registry backend regression tests without starting services.
+
+    The model_registry module + tests live on origin/codex/qe-governance-integration-20260509
+    until that branch merges to main. Session skips gracefully when sources are
+    not yet merged.
+    """
+    services_dir = ROOT / "backend" / "services" / "model_registry"
+    tests_dir = ROOT / "backend" / "tests" / "model_registry"
+    if not services_dir.exists() and not tests_dir.exists():
+        session.skip(
+            "Model Registry module not yet merged to main. Skipped pending "
+            "origin/codex/qe-governance-integration-20260509 merge."
+        )
+    compileall_targets: list[str] = []
+    if services_dir.exists():
+        compileall_targets.append("backend/services/model_registry")
+    for router in (ROOT / "backend" / "routers").glob("model_registry*.py"):
+        compileall_targets.append(f"backend/routers/{router.name}")
+    if compileall_targets:
+        session.run(
+            "python",
+            "-m",
+            "compileall",
+            *compileall_targets,
+            external=True,
+        )
+    pytest_targets: list[str] = []
+    for candidate in (
+        "test_governance_migration_smoke.py",
+        "test_model_registry_phase5.py",
+    ):
+        path = tests_dir / candidate
+        if path.exists():
+            pytest_targets.append(f"backend/tests/model_registry/{candidate}")
+    if not pytest_targets:
+        session.skip("Model Registry tests not yet present.")
+    _run_pytest(
+        session,
+        *pytest_targets,
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
+def market_regime_label(session: nox.Session) -> None:
+    """Run market.regime_label data-pipeline tests without starting services.
+
+    DDL + cron script live on origin/claude/dw-foundation-20260510. Test
+    `backend/tests/market/test_regime_label.py` (relocated from
+    scripts/test_regime_label.py) lands here once the dw-foundation merge
+    completes. Session skips when sources are not yet present.
+    """
+    test_path = ROOT / "backend" / "tests" / "market" / "test_regime_label.py"
+    cron_script = ROOT / "scripts" / "regime_label_daily.py"
+    sql_init = ROOT / "backend" / "db" / "init_market_regime_label_20260510.sql"
+    if not test_path.exists() and not cron_script.exists():
+        session.skip(
+            "market.regime_label sources not yet merged to main. Skipped pending "
+            "origin/claude/dw-foundation-20260510 merge."
+        )
+    compileall_targets: list[str] = []
+    if cron_script.exists():
+        compileall_targets.append("scripts/regime_label_daily.py")
+    fetch_script = ROOT / "scripts" / "regime_label_fetch_percentile.py"
+    if fetch_script.exists():
+        compileall_targets.append("scripts/regime_label_fetch_percentile.py")
+    if compileall_targets:
+        session.run(
+            "python",
+            "-m",
+            "compileall",
+            *compileall_targets,
+            external=True,
+        )
+    if not test_path.exists():
+        session.skip("backend/tests/market/test_regime_label.py not yet present.")
+    _run_pytest(
+        session,
+        "backend/tests/market/test_regime_label.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+    # Note: SQL DDL init_market_regime_label_20260510.sql is text-only and not
+    # exercised here; its application is owned by dw-foundation per
+    # cross-tool drawer eb441503881c1c0f680ca7ac.
+    _ = sql_init  # documented dependency
+
+
+@nox.session(venv_backend="none")
+def rl_execution_smoke(session: nox.Session) -> None:
+    """Module-visibility smoke for backend.services.rl_execution.
+
+    The rl_execution module + visibility regression test live on
+    origin/fix/rl_execution_module_visibility-20260510 (and via direct
+    contributions when that branch merges to main). The .gitignore-mask
+    regression test runs unconditionally because the .gitignore is on every
+    branch; the import-path tests skip when the module is not yet merged.
+    """
+    services_dir = ROOT / "backend" / "services" / "rl_execution"
+    test_path = ROOT / "backend" / "tests" / "test_rl_execution_module_visibility.py"
+    if test_path.exists():
+        if services_dir.exists():
+            session.run(
+                "python",
+                "-m",
+                "compileall",
+                "backend/services/rl_execution",
+                external=True,
+            )
+        _run_pytest(
+            session,
+            "backend/tests/test_rl_execution_module_visibility.py",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+        )
+    else:
+        session.skip(
+            "backend/tests/test_rl_execution_module_visibility.py not yet present "
+            "on this branch."
+        )
 
 
 @nox.session(venv_backend="none")
@@ -542,6 +755,7 @@ def validation_center_backend(session: nox.Session) -> None:
         "backend/routers/validation.py",
         "backend/services/validation",
         "scripts/aistock_validate.py",
+        "scripts/aistock_mcp_server.py",
         "scripts/validation_center_readonly_smoke.py",
         "scripts/validation_center_runner_smoke.py",
         external=True,
@@ -560,8 +774,10 @@ def validation_center_backend(session: nox.Session) -> None:
         "backend/tests/test_validation_ui_target_catalog.py",
         "backend/tests/test_aistock_validate_metadata.py",
         "backend/tests/test_aistock_validate_coverage.py",
+        "backend/tests/test_aistock_mcp_server.py",
         "--cov=backend.services.validation",
         "--cov=backend.routers.validation",
+        "--cov=scripts.aistock_mcp_server",
         "--cov=scripts.validation_center_readonly_smoke",
         "--cov=scripts.validation_center_runner_smoke",
         "--cov-branch",
@@ -997,6 +1213,7 @@ def qe_archive_l3(session: nox.Session) -> None:
     )
     session.notify("qe_archive_backend")
     session.notify("qe_archive_data_quality")
+    session.notify("data_quality_deep")
     if os.environ.get("QE_ARCHIVE_L3_SKIP_UI") != "1":
         session.notify("qe_archive_ui")
 

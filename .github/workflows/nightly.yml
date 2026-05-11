@@ -1,0 +1,296 @@
+name: AIstock Nightly L3 + DR
+
+on:
+  schedule:
+    # 19:07 UTC = 03:07 China Standard Time (UTC+8) -- after market close + log rotation
+    - cron: '7 19 * * *'
+  workflow_dispatch: {}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  PYTHONIOENCODING: utf-8
+  PYTHONDONTWRITEBYTECODE: '1'
+  AISTOCK_GUARDRAIL_BASELINE_JSON: tests/aistock_validation/guardrails_baseline_20260511.json
+
+permissions:
+  contents: read
+
+jobs:
+  dr-snapshot:
+    name: DR snapshot prod DB
+    # self-hosted is mandatory because the DR job needs to read the local
+    # production DB at 127.0.0.1:5432; GitHub-hosted runners cannot reach it.
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 60
+    env:
+      DR_TARGET_DIR: 'E:/DEV backup/aistock_pg_snapshots'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sanity - docker + target dir reachable
+        run: |
+          if ! command -v docker >/dev/null 2>&1; then
+            echo "::error::docker not on PATH on this self-hosted runner"
+            exit 1
+          fi
+          if [ ! -d "${DR_TARGET_DIR}" ]; then
+            echo "::error::DR target dir ${DR_TARGET_DIR} missing on this runner"
+            exit 1
+          fi
+
+      - name: Run dr_snapshot_prod_db.py
+        run: |
+          source "$(conda info --base)/etc/profile.d/conda.sh"
+          conda activate AIstock
+          python scripts/dr_snapshot_prod_db.py --target-dir "${DR_TARGET_DIR}"
+
+      - name: Run dr_cleanup_old_snapshots.py (apply)
+        run: |
+          source "$(conda info --base)/etc/profile.d/conda.sh"
+          conda activate AIstock
+          python scripts/dr_cleanup_old_snapshots.py --target-dir "${DR_TARGET_DIR}" --apply
+
+      - name: Capture DR snapshot metadata (no dump bytes)
+        if: always()
+        run: |
+          DATE=$(date +%Y%m%d)
+          mkdir -p tmp/dr
+          {
+            echo "DR snapshot run ${{ github.run_id }} ${DATE}"
+            echo "target_dir=${DR_TARGET_DIR}"
+            ls -la "${DR_TARGET_DIR}" || true
+          } > tmp/dr/snapshot_metadata_${{ github.run_id }}.txt
+
+      - name: Upload DR metadata (NOT the dump bytes)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dr-metadata-${{ github.run_id }}
+          path: tmp/dr/
+          if-no-files-found: ignore
+
+  dr-validate:
+    name: DR validation (dump validity + schema diff + retention)
+    needs: dr-snapshot
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 15
+    env:
+      DR_BACKUP_DIR: 'E:/DEV backup/aistock_pg_snapshots'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: nox -s dr_validate
+        run: |
+          source "$(conda info --base)/etc/profile.d/conda.sh"
+          conda activate AIstock
+          python -m nox -s dr_validate
+
+      - name: Upload DR validate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dr-validate-${{ github.run_id }}
+          path: tmp/dr/
+          if-no-files-found: ignore
+
+  nightly-l3:
+    name: Nightly L3 (paper_v2 + qe_archive + qe_read)
+    # Sequential chain per Codex Lane A r3 review (drawer a25cd473):
+    # dr-snapshot -> dr-validate -> nightly-l3 -> paper-v2-live ->
+    # full-summary. Previously dr-snapshot and dr-validate ran in
+    # parallel with nightly-l3, which let a failing snapshot still
+    # produce green L3/live reports.
+    needs: dr-validate
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      # Activates the local AIstock conda env. The runner must have conda on PATH
+      # and the AIstock env pre-built (see docs/process/mcp_server_setup_claude_code_20260510.md
+      # for env setup pointers). GitHub-hosted Linux runners can't do this.
+      - name: Sanity - conda AIstock env present
+        run: |
+          if ! command -v conda >/dev/null 2>&1; then
+            echo "::error::conda not on PATH on this self-hosted runner"
+            exit 1
+          fi
+          conda env list | grep -E "^AIstock\s" || (echo "::error::conda env AIstock missing"; exit 1)
+
+      - name: nox -s paper_v2_l3
+        run: |
+          source "$(conda info --base)/etc/profile.d/conda.sh"
+          conda activate AIstock
+          python -m nox -s paper_v2_l3
+        env:
+          PAPER_V2_SKIP_REALTIME: '1'
+
+      - name: nox -s qe_archive_l3
+        run: |
+          source "$(conda info --base)/etc/profile.d/conda.sh"
+          conda activate AIstock
+          python -m nox -s qe_archive_l3
+        env:
+          QE_ARCHIVE_L3_SKIP_UI: '1'
+
+      - name: nox -s qe_read_l3
+        run: |
+          source "$(conda info --base)/etc/profile.d/conda.sh"
+          conda activate AIstock
+          python -m nox -s qe_read_l3
+        env:
+          QE_READ_L3_SKIP_UI: '1'
+
+      - name: Upload validation history
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-l3-history-${{ github.run_id }}
+          path: tests/aistock_validation/history/
+          if-no-files-found: ignore
+
+  paper-v2-live:
+    name: Paper v2 live catch-up (skip realtime by default)
+    needs: nightly-l3
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 60
+    env:
+      PAPER_V2_SKIP_REALTIME: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: nox -s paper_v2_live
+        run: |
+          source "$(conda info --base)/etc/profile.d/conda.sh"
+          conda activate AIstock
+          python -m nox -s paper_v2_live
+
+      - name: Upload paper-v2 live evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-v2-live-${{ github.run_id }}
+          path: tmp/paper_v2/
+          if-no-files-found: ignore
+
+  full-summary:
+    name: Nightly summary + auto-bug on failure
+    needs: [dr-snapshot, dr-validate, nightly-l3, paper-v2-live]
+    if: always()
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compose nightly summary
+        # Per Codex r4 P1.1 review (drawer d09a0a0): the summary MUST
+        # include the dr-validate result line. full-summary.needs already
+        # depends on dr-validate, but the markdown report previously
+        # omitted it -- a dr-validate failure would not surface in the
+        # checked-in nightly summary md.
+        env:
+          DR_RESULT: ${{ needs.dr-snapshot.result }}
+          DR_VALIDATE_RESULT: ${{ needs.dr-validate.result }}
+          L3_RESULT: ${{ needs.nightly-l3.result }}
+          LIVE_RESULT: ${{ needs.paper-v2-live.result }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          DATE=$(date +%Y%m%d)
+          SUMMARY_DIR="tests/aistock_validation/history/${DATE}"
+          mkdir -p "${SUMMARY_DIR}"
+          cat <<EOF > "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
+          # Nightly run ${RUN_ID} ${DATE}
+
+          - dr-snapshot: ${DR_RESULT}
+          - dr-validate: ${DR_VALIDATE_RESULT}
+          - nightly-l3: ${L3_RESULT}
+          - paper-v2-live: ${LIVE_RESULT}
+
+          Run: ${RUN_URL}
+          EOF
+          cat "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
+
+      - name: Auto-register failure as BUG (cross_tool_review_dispatch)
+        if: failure() || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure'
+        env:
+          DR_RESULT: ${{ needs.dr-snapshot.result }}
+          DR_VALIDATE_RESULT: ${{ needs.dr-validate.result }}
+          L3_RESULT: ${{ needs.nightly-l3.result }}
+          LIVE_RESULT: ${{ needs.paper-v2-live.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          source "$(conda info --base)/etc/profile.d/conda.sh"
+          conda activate AIstock
+          python - <<'PY'
+          # Compose a single P1 finding for the failed nightly job(s) and dispatch
+          # it through cross_tool_review_dispatch.py so the BUG is filed via the
+          # canonical MCP report_bug path. Filed by: nightly_runner agent.
+          import json, os, subprocess, sys, tempfile
+
+          # Per Codex r4 P1.2 review (drawer d09a0a0): the inline Python
+          # payload MUST read DR_VALIDATE_RESULT from env and include it
+          # in the finding's title/actual fields. The env was already
+          # exported in r1 but the Python body never read it, so a
+          # dr-validate failure would silently miss the BUG payload.
+          run_id = os.environ.get("GITHUB_RUN_ID", "0")
+          run_url = os.environ["RUN_URL"]
+          dr = os.environ.get("DR_RESULT", "?")
+          dr_validate = os.environ.get("DR_VALIDATE_RESULT", "?")
+          l3 = os.environ.get("L3_RESULT", "?")
+          live = os.environ.get("LIVE_RESULT", "?")
+          findings = {
+              "schema_version": "aistock_cross_tool_review_findings_v1",
+              "reviewer": "human",
+              "target_branch": os.environ.get("GITHUB_REF", "unknown"),
+              "commit_list": [os.environ.get("GITHUB_SHA", "unknown")],
+              "findings": [
+                  {
+                      "title": (
+                          f"Nightly run {run_id} failed "
+                          f"(dr-snapshot={dr} dr-validate={dr_validate} "
+                          f"l3={l3} live={live})"
+                      ),
+                      "severity": "P1",
+                      "module": "validation.runner",
+                      "files": [".github/workflows/nightly.yml"],
+                      "reproduce_command": f"see {run_url}",
+                      "expected": "all jobs succeed",
+                      "actual": (
+                          f"dr-snapshot={dr}, dr-validate={dr_validate}, "
+                          f"nightly-l3={l3}, paper-v2-live={live}"
+                      ),
+                      "fix_owner": "human",
+                      "comments": [
+                          f"Auto-filed by nightly full-summary job. "
+                          f"Run URL: {run_url}"
+                      ],
+                  }
+              ],
+          }
+          with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+              json.dump(findings, fh)
+              path = fh.name
+          rc = subprocess.call([
+              sys.executable, "scripts/cross_tool_review_dispatch.py",
+              "--findings-json", path,
+              "--target-tool", "claude_code",
+              "--severity-filter", "P0,P1",
+              "--apply",
+          ])
+          sys.exit(rc)
+          PY
+
+      - name: Upload summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-summary-${{ github.run_id }}
+          path: tests/aistock_validation/history/
+          if-no-files-found: ignore

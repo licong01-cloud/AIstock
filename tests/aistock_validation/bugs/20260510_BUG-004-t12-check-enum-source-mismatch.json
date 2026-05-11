@@ -1,0 +1,68 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-004",
+  "title": "T12 CHECK constraints reject live paper_v2 source enum values",
+  "description": "Multiple CHECK constraints in T12 DDL accept lowercase enum values, but source paper_v2 stores uppercase RunStatus / order event_type values. Mismatches: paper_v2_run.status (lowercase pending/running/... vs SUCCEEDED/FAILED/...), paper_v2_order_event.event_type (lowercase placed/partial_fill/fill vs SUBMITTED/PARTIALLY_FILLED/FILLED/...). Plus deeper schema-level mismatches discovered in round-2 audit: paper_v2_cash_ledger.entry_type CHECK removed (source has NO entry_type column - handler must derive); paper_v2_config_change_audit.change_type was action vs subject confused (constraint renamed ck_..._action, accepts CREATE/ACTIVATE/DEACTIVATE/MODIFY); paper_v2_reset_audit.reset_type CHECK removed (source has NO reset_type - handler must derive); paper_v2_session_day.data_quality kept as 4-val CHECK (archive-derived field). Decision per brief: archive source enum values as-is, no transform layer. P1.4 of Codex T12+T14a review.",
+  "module": "qe_archive",
+  "severity": "P1",
+  "risk_area": "data_correctness",
+  "status": "verified",
+  "trigger_condition": {
+    "scenario": "T12_DDL_apply_then_archive_real_paper_v2_run",
+    "blocked_by_check_constraint": true
+  },
+  "reproduce_command": "psql -h 127.0.0.1 -p 5433 -d aistock_dev -f backend/db/init_qe_archive_paper_v2_extension_20260510.sql && python -c \"# attempt insert with status='SUCCEEDED'\"",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "drawer:cross-tool/codex-claude-coord/T12+T14a-review-2026-05-10",
+    "branch:origin/claude/dw-foundation-20260510",
+    "commit:9079ee5",
+    "file:backend/db/init_qe_archive_paper_v2_extension_20260510.sql:119-123,356-359",
+    "file:backend/services/trading_core/models.py:36-42,45-49"
+  ],
+  "fingerprint": "qe_archive::T12::check_enum_lowercase_vs_uppercase",
+  "assigned_agent": "claude_code",
+  "fix_branch": "claude/dw-foundation-20260510",
+  "fix_commit": "9079ee5",
+  "verification_run_id": "drawer_cross-tool_codex-claude-coord_5bd5430016acfaafd182577a",
+  "created_at": "2026-05-10T00:00:00Z",
+  "first_seen_at": "2026-05-10T00:00:00Z",
+  "last_seen_at": "2026-05-10T00:00:00Z",
+  "fixed_at": "2026-05-10T00:00:00Z",
+  "submitted_at": "2026-05-10T00:00:00Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/db/init_qe_archive_paper_v2_extension_20260510.sql"
+  ],
+  "suspected_modules": [
+    "backend/db/init_qe_archive_paper_v2_extension_20260510.sql"
+  ],
+  "required_verification": [
+    "Codex independent re-review of round-2 fix",
+    "post-apply smoke: archive real paper_v2 SUCCEEDED run + FILLED order_event without CHECK violation"
+  ],
+  "closure_requirements": [
+    "Codex round-2 review pass",
+    "T12 dev DB apply succeeds + Batch A real-history archive smoke green"
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-10T00:00:00Z",
+      "actor": "codex_app",
+      "action": "discovered",
+      "note": "T12+T14a review - 2 explicit mismatches + suspected more in config_change_audit/reset/cash_ledger"
+    },
+    {
+      "timestamp": "2026-05-10T00:00:00Z",
+      "actor": "claude_code",
+      "action": "fixed",
+      "note": "round-2 commit 9079ee5 - probed source actual values, aligned all 6 CHECK clauses, removed 2 (entry_type/reset_type) where source has no column"
+    },
+    {
+      "timestamp": "2026-05-10T20:16:15Z",
+      "actor": "codex_app",
+      "action": "verified",
+      "note": "Codex round-2 review PASS - paper_v2_run.status uppercase; paper_v2_order_event.event_type uppercase; order.status CHECK added; config_change_audit change_type → CREATE/ACTIVATE/DEACTIVATE/MODIFY; cash_ledger/reset_audit source-missing CHECKs deferred. drawer 5bd5430016acfaafd182577a"
+    }
+  ]
+}

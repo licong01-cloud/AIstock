@@ -1,0 +1,72 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-022",
+  "title": "Batch A real-data import does not setval() sequences after COPY — enable_paper crashes with HTTP 500",
+  "description": "scripts/dev_db/batch_a_import_real_data.py imports real production rows into dev DB strategy_pkg / paper_v2 / public.aistock_model_catalog tables but does not setval() the corresponding PostgreSQL sequences after the COPY. Concrete failure: strategy_pkg.package_status_event_event_id_seq stayed at last_value=4 while the imported rows already used event_id up to 154. Codex Phase 3 governance live smoke triggered HTTP 500 on enable_paper because the next nextval() collided with an existing primary-key value, causing UniqueViolation that the legacy code path did not coerce into the proper InvalidStateTransitionError. Codex manually setval()'d the sequence to max(event_id) to unblock the smoke. Root fix: scripts/dev_db/batch_a_import_real_data.py must append a 'SELECT setval(<seq>, COALESCE(MAX(<id>), 1)) FROM <table>' for every IDENTITY/SERIAL column it touches. Also need to extend Batch C synthetic fixture imports if they share the same path.",
+  "module": "dev_db_pipeline",
+  "severity": "P2",
+  "risk_area": "data_correctness",
+  "status": "fixed",
+  "trigger_condition": {
+    "scenario": "dev_db_re_import_real_data_then_governance_smoke",
+    "missed_setval_sequences": [
+      "strategy_pkg.package_status_event_event_id_seq"
+    ]
+  },
+  "reproduce_command": "psql -h 127.0.0.1 -p 5433 -d aistock_dev -c \"SELECT last_value FROM strategy_pkg.package_status_event_event_id_seq\" && curl -X POST http://127.0.0.1:8012/api/v1/strategy-packages/<pkg_id>/enable-paper",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "drawer:cross-tool/codex-claude-coord/dd17c102a3a16e087d453364",
+    "evidence_file:C:/Users/lc999/Documents/Codex/2026-05-10/hi-2/phase3_governance_live_probe_get_20260510.json",
+    "file:scripts/dev_db/batch_a_import_real_data.py"
+  ],
+  "fingerprint": "dev_db::batch_a::missing_setval_after_copy",
+  "assigned_agent": "claude_code",
+  "fix_branch": "claude/pipeline-foundation-20260510",
+  "fix_commit": "4775215",
+  "verification_run_id": null,
+  "created_at": "2026-05-10T20:16:45Z",
+  "first_seen_at": "2026-05-10T20:16:45Z",
+  "last_seen_at": "2026-05-10T20:16:45Z",
+  "fixed_at": "2026-05-10T23:30:00Z",
+  "submitted_at": null,
+  "closed_at": null,
+  "allowed_write_scope": [
+    "scripts/dev_db/batch_a_import_real_data.py",
+    "scripts/dev_db/batch_a_seq_reset.py",
+    "backend/tests/dev_db/test_batch_a_seq_hygiene.py"
+  ],
+  "suspected_modules": [
+    "scripts/dev_db/",
+    "scripts/dev_db_seed_*.py"
+  ],
+  "required_verification": [
+    "Re-run Batch A import on a fresh dev DB",
+    "post-import: SELECT pg_sequence_last_value(...) >= max(id) for every covered table",
+    "Codex governance live smoke (enable_paper happy + fail-fast paths) returns 200/4xx, no 500"
+  ],
+  "closure_requirements": [
+    "Sequence sync verified for all imported tables",
+    "Optional regression test asserts setval invariant after import"
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-10T20:16:45Z",
+      "actor": "codex_app",
+      "action": "discovered",
+      "note": "Phase 3 governance live smoke - first enable_paper probe hit HTTP 500 due to seq behind max(event_id). Manually fixed via SELECT setval() to unblock smoke."
+    },
+    {
+      "timestamp": "2026-05-10T23:30:00Z",
+      "actor": "claude_code",
+      "action": "fixed",
+      "note": "Stage 4 T-PIPE-4.5: scripts/dev_db/batch_a_seq_reset.py introduced as the canonical idempotent sequence-reset helper covering 17 strategy_pkg + paper_v2 + qe_archive tables. backend/tests/dev_db/test_batch_a_seq_hygiene.py adds 11 regression tests (parse_env, dev-target safety, setval emission, error propagation, RESET_TARGETS coverage, render). dw-foundation team should call this helper at the end of batch_a_import_real_data.py main() before the post-import validation block. Filed as fixed pending Stage 4 commit."
+    },
+    {
+      "timestamp": "2026-05-11T16:00:00Z",
+      "actor": "claude_code",
+      "action": "fix_commit_recorded",
+      "note": "Stage 4 fix round 1 (review feedback Stage 4 P1.3): backfilled fix_commit=4775215 + fix_drawer drawer_cross-tool_codex-claude-coord_bbc5d0304a985f93bf86c21a. batch_a_seq_reset.py also tightened to reject 'localhost' alias (Stage 4 P2.2 fix in this same round)."
+    }
+  ]
+}

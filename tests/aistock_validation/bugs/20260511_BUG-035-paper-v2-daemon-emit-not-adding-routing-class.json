@@ -1,0 +1,66 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-035",
+  "title": "paper-v2 daemon emit() does not add payload routing_class - T13 task pending",
+  "description": "paper-v2 daemon event_log.emit() writes outbox events but does NOT add payload['routing_class']. Per D5 Q2.a + T13 design, paper.daemon.* events should carry routing_class='telemetry' and the canonical capture-trigger events (paper.portfolio_run.completed / paper.daily_snapshot.captured / paper.config.changed) should carry routing_class='archive'. PaperV2ArchiveHandler.can_handle() filters on routing_class to skip telemetry. Currently relies on event_type prefix only. Acceptable while worker disabled (D5 Q2.c default), but blocker for worker enable. paper-v2 INT-5b xfailed pending this fix. Codex REV-1 P1.2 (drawer dae3f130). T13 task #25 pending dispatch (deferred to avoid schema-or-payload churn during T14b/c stabilization).",
+  "module": "paper_v2",
+  "severity": "P2",
+  "risk_area": "data_taxonomy",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "paper_v2_daemon_emits_event"
+  },
+  "reproduce_command": "pytest backend/tests/paper_trading_v2/test_daemon_outbox_dev_db.py::test_routing_class_payload_telemetry_for_daemon_events",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "drawer:cross-tool/codex-claude-coord/dae3f130028d9989fcffdcf1",
+    "drawer:cross-tool/codex-claude-coord/1b74cb070f8189bfe33a781d",
+    "branch:origin/claude/paper-v2-vnpy-mvp-20260508",
+    "commit:077e25c",
+    "file:backend/services/paper_trading_v2/event_log.py",
+    "doc:docs/architecture/data_warehouse_extension_design_20260510.md (D5 Q2.a)"
+  ],
+  "fingerprint": "paper_v2::daemon_emit::no_routing_class_payload",
+  "assigned_agent": "claude_code",
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-11T00:00:00Z",
+  "first_seen_at": "2026-05-11T00:22:02Z",
+  "last_seen_at": "2026-05-11T00:43:21Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-11T01:30:00Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/event_log.py",
+    "backend/tests/paper_trading_v2/test_daemon_pg_outbox.py",
+    "backend/tests/paper_trading_v2/test_daemon_outbox_dev_db.py"
+  ],
+  "suspected_modules": [
+    "backend/services/paper_trading_v2/event_log.py"
+  ],
+  "required_verification": [
+    "test_routing_class_payload_telemetry_for_daemon_events",
+    "test_routing_class_payload_archive_for_capture_triggers",
+    "PaperV2ArchiveHandler.can_handle filters daemon events out via routing_class"
+  ],
+  "closure_requirements": [
+    "T13 dispatch + commit on paper-v2 worktree",
+    "Codex re-review confirming routing_class taxonomy",
+    "Worker enable smoke verifies telemetry events skip handler"
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-11T00:22:02Z",
+      "actor": "codex_app",
+      "action": "discovered",
+      "note": "REV-1 P1.2 - INT-5b asserts schema column but design is payload-based; daemon does not add payload routing_class either"
+    },
+    {
+      "timestamp": "2026-05-11T00:54:04Z",
+      "actor": "claude_code",
+      "action": "test_workaround",
+      "note": "paper-v2 INT fix r1 commit 7b16367 - INT-5b xfail with reason='T13 daemon routing_class payload pending'"
+    }
+  ]
+}

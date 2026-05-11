@@ -1,0 +1,57 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-032",
+  "title": "regime_label 6m return uses calendar 180-day lookback not exactly 126 trading sessions",
+  "description": "scripts/regime_label_daily.py compute_6m_return uses calendar 180-day lookback. Strict spec is 126 trading sessions (per Chinese A-share calendar ~252 sessions/year, 6m = 126). Calendar-based approximation is acceptable for simple_quadrant initial method but introduces small bias when applied to regime windows containing extended holidays (Spring Festival cluster, October golden week). Codex REV-7 P2.2 (drawer 51d5169388...). Acceptable for current dev cron-disabled state; document as known approximation, can refine before production cron enable.",
+  "module": "market.regime_label",
+  "severity": "P2",
+  "risk_area": "calculation_precision",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "6m_return_computed_near_extended_holidays",
+    "examples": ["Spring Festival cluster", "Oct golden week"]
+  },
+  "reproduce_command": "manual: pytest scripts/test_regime_label.py + check 126 trading days vs 180 calendar days bias",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "drawer:cross-tool/codex-claude-coord/51d51693886b5d16d4b69da1",
+    "branch:origin/claude/dw-foundation-20260510",
+    "commit:13dd03c",
+    "file:scripts/regime_label_daily.py"
+  ],
+  "fingerprint": "market.regime_label::6m_return::calendar_lookback_approximation",
+  "assigned_agent": "claude_code",
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-11T00:00:00Z",
+  "first_seen_at": "2026-05-11T00:43:21Z",
+  "last_seen_at": "2026-05-11T00:43:21Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-11T01:30:00Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "scripts/regime_label_daily.py",
+    "scripts/test_regime_label.py",
+    "backend/tests/market/test_regime_label.py"
+  ],
+  "suspected_modules": [
+    "scripts/regime_label_daily.py"
+  ],
+  "required_verification": [
+    "Compute back-test bias between 126-trading-day vs 180-calendar-day windows over 5y CSI300",
+    "Either accept and document, or migrate to trading calendar lookup"
+  ],
+  "closure_requirements": [
+    "Document approximation in regime_label_daily docstring + design doc",
+    "Or implement trading-calendar lookup before prod cron enable"
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-11T00:43:21Z",
+      "actor": "codex_app",
+      "action": "discovered",
+      "note": "REV-7 T16 regime_label P2.2 - 6m calendar 180d vs 126 trading sessions"
+    }
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-AUDIT-001",
+  "title": "_require_governance_paper_ready uses default limit=500, possibly truncating validation history for stability gate",
+  "description": "paper-v2 4-layer audit (commit fca9d69, doc docs/cross_tool/20260511_paper_v2_REVIEW_codex_governance_audit.md §6) found StrategyPackage with >500 validation runs reaching enable_paper has stability gate truncated. _require_governance_paper_ready called governance_eligibility without explicit limit, defaulting to 500. Codex fix (commit 1462099) introduces PAPER_READY_GOVERNANCE_LIMIT = 10_000 constant and passes limit=PAPER_READY_GOVERNANCE_LIMIT to governance_eligibility call. 22 + 20 + 12 = 54 strategy_package/model_registry/governance tests pass.",
+  "module": "strategy_package",
+  "severity": "P2",
+  "risk_area": "data_completeness",
+  "status": "verified",
+  "trigger_condition": {
+    "scenario": "package_with_more_than_500_validation_runs_calls_enable_paper",
+    "preconditions": ["StrategyPackage exists with >500 historical validation runs"]
+  },
+  "reproduce_command": "pytest backend/tests/strategy_package/test_repository_service.py backend/tests/strategy_package/test_governance_eligibility.py -q",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "drawer:cross-tool/codex-claude-coord/611e96d18f9a31ebfe251c64",
+    "drawer:cross-tool/codex-claude-coord/1e81eed678d99152ef4edc96",
+    "branch:origin/codex/qe-governance-integration-20260509",
+    "commit:1462099",
+    "file:backend/services/strategy_package/service.py:775-782",
+    "audit_doc:docs/cross_tool/20260511_paper_v2_REVIEW_codex_governance_audit.md"
+  ],
+  "fingerprint": "strategy_package::service.py::_require_governance_paper_ready::limit_default_500",
+  "assigned_agent": "codex_app",
+  "fix_branch": "codex/qe-governance-integration-20260509",
+  "fix_commit": "1462099",
+  "verification_run_id": "drawer_cross-tool_codex-claude-coord_5ab88a382198712d4c9606ae",
+  "created_at": "2026-05-11T11:00:00Z",
+  "first_seen_at": "2026-05-11T11:00:00Z",
+  "last_seen_at": "2026-05-11T11:00:00Z",
+  "fixed_at": "2026-05-11T13:26:00Z",
+  "submitted_at": "2026-05-11T14:00:00Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/strategy_package/service.py"
+  ],
+  "suspected_modules": [
+    "backend/services/strategy_package/service.py"
+  ],
+  "required_verification": [
+    "PAPER_READY_GOVERNANCE_LIMIT constant defined = 10_000",
+    "_require_governance_paper_ready passes limit=PAPER_READY_GOVERNANCE_LIMIT",
+    "Codex strategy_package + model_registry + governance tests 54 passed"
+  ],
+  "closure_requirements": [
+    "Codex round-1 fix commit 1462099 reviewed by Claude strategy session (verified)",
+    "Sprint Stage 6 baseline runs without governance stability false-positive/negative",
+    "Decision: bump limit to 10K accepted; alternative (manifest_sha256 SQL-side filter) deferred"
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-11T11:00:00Z",
+      "actor": "claude_code_paper_v2_audit",
+      "action": "discovered",
+      "note": "paper-v2 4-layer audit §6.BUG-AUDIT-001 — limit=500 truncation risk in governance gate"
+    },
+    {
+      "timestamp": "2026-05-11T13:26:00Z",
+      "actor": "codex_app",
+      "action": "fixed",
+      "note": "Codex commit 1462099 - PAPER_READY_GOVERNANCE_LIMIT=10000 + pass limit kwarg + 54 tests pass"
+    },
+    {
+      "timestamp": "2026-05-11T14:00:00Z",
+      "actor": "claude_code_strategy",
+      "action": "verified",
+      "note": "Strategy session manual verify - PAPER_READY_GOVERNANCE_LIMIT=10_000 added at strategy_package/service.py + governance_eligibility called with kwarg + Codex 54 tests baseline"
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-013",
+  "title": "已禁用因子无法计算独立指标 — factor_eligibility_service 默认过滤掉 disabled 因子",
+  "description": "因子独立指标计算入口 backend/services/factor_eligibility_service.py 默认 include_disabled=False，前端在请求时也未传 include_disabled:true。结果是已禁用因子无法触发独立指标计算流水线，影响因子库后续 cleanup / 复活决策。修复方向：(a) 后端默认改 include_disabled=True 并由 caller 显式传 False 来过滤；或 (b) 前端在 disabled 列表入口显式传 include_disabled:true。从 MEMORY pending_fixes.md 提取。",
+  "module": "aistock_backend",
+  "severity": "P1",
+  "risk_area": "feature_gap",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "frontend_request_standalone_metrics_for_disabled_factor",
+    "default_include_disabled": false
+  },
+  "reproduce_command": "curl 'http://127.0.0.1:8001/api/v1/factor-library/{disabled_factor_id}/standalone-metrics'  # returns empty",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "memory:pending_fixes.md",
+    "file:backend/services/factor_eligibility_service.py"
+  ],
+  "fingerprint": "aistock::factor_eligibility::include_disabled_default_false",
+  "assigned_agent": null,
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-04-21T00:00:00Z",
+  "first_seen_at": "2026-04-21T00:00:00Z",
+  "last_seen_at": "2026-04-21T00:00:00Z",
+  "fixed_at": null,
+  "submitted_at": null,
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/factor_eligibility_service.py",
+    "frontend/src/api/factor-library.ts"
+  ],
+  "suspected_modules": [
+    "backend/services/factor_eligibility_service.py",
+    "frontend/src/components/factor-library/"
+  ],
+  "required_verification": [
+    "Standalone metrics computed for known-disabled factor",
+    "Backward compatibility test for active-factor flow"
+  ],
+  "closure_requirements": [
+    "Decision recorded for default include_disabled value",
+    "Frontend + backend aligned"
+  ],
+  "events": [
+    {
+      "timestamp": "2026-04-21T00:00:00Z",
+      "actor": "claude_code",
+      "action": "discovered",
+      "note": "Found during QE Official Eval Unification work"
+    }
+  ]
+}

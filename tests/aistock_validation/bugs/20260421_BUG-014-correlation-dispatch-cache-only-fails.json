@@ -1,0 +1,55 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-014",
+  "title": "相关性 dispatch cache_only 模式失败 — 需先完成独立指标计算",
+  "description": "相关性矩阵计算的 cache_only 调度模式失败。根因：相关性计算依赖独立指标（IC / RankIC / Sharpe）作为预条件，但当前流水线没有显式的依赖检查；在独立指标尚未计算的情况下 cache_only 模式查询缓存为空，dispatch 直接失败。修复方向：(a) cache_only 模式下检测到缓存空时自动 fallback 到 compute_then_cache；或 (b) 显式的 dependency check 在 dispatch 前 fail-fast 返回 'standalone_metrics_required' 错误。Phase 2 cluster 计算阻塞于此。从 MEMORY pending_fixes.md 提取。",
+  "module": "aistock_backend",
+  "severity": "P1",
+  "risk_area": "feature_gap",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "correlation_dispatch_cache_only_without_prior_standalone_metrics",
+    "blocks": ["v2_field_implementation_phase2_cluster"]
+  },
+  "reproduce_command": "curl -X POST 'http://127.0.0.1:8001/api/v1/correlation/dispatch' -d '{\"mode\":\"cache_only\",\"factor_ids\":[...]}'  # fails on missing cache",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "memory:pending_fixes.md",
+    "memory:v2_field_implementation_status.md"
+  ],
+  "fingerprint": "aistock::correlation_dispatch::cache_only_fail_on_missing_standalone",
+  "assigned_agent": null,
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-04-21T00:00:00Z",
+  "first_seen_at": "2026-04-21T00:00:00Z",
+  "last_seen_at": "2026-04-21T00:00:00Z",
+  "fixed_at": null,
+  "submitted_at": null,
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/correlation/dispatch_service.py",
+    "backend/services/factor_eligibility_service.py"
+  ],
+  "suspected_modules": [
+    "backend/services/correlation/",
+    "backend/services/factor_eligibility_service.py"
+  ],
+  "required_verification": [
+    "cache_only dispatch on factor with computed standalone metrics succeeds",
+    "cache_only dispatch on factor without standalone metrics returns clear error or auto-fallback"
+  ],
+  "closure_requirements": [
+    "Decision recorded for fallback vs fail-fast policy",
+    "v2_field_implementation Phase 2 unblocked"
+  ],
+  "events": [
+    {
+      "timestamp": "2026-04-21T00:00:00Z",
+      "actor": "claude_code",
+      "action": "discovered",
+      "note": "QE Official Eval Unification work; blocks Phase 2 cluster computation"
+    }
+  ]
+}

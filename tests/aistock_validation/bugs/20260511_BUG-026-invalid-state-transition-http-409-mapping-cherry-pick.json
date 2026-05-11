@@ -1,0 +1,67 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-026",
+  "title": "InvalidStateTransitionError -> HTTP 409 mapping not on origin/codex/qe-governance-integration-20260509",
+  "description": "Carved out from BUG-023 follow-up per Stage 4 P2.1 review feedback (2026-05-11). BUG-023 promoted the strategy_pkg.transition_status atomicity fix to verified after Codex round-2 review (commit 5bce68c, drawer 72c82167). However the *paper-v2* branch carries an additional commit 4528a32 that maps InvalidStateTransitionError to HTTP 409 (semantically correct: state-machine conflict is a 409, not a 400). That mapping is not on origin/codex/qe-governance-integration-20260509 yet. While transition_status itself is now atomic, the HTTP layer still answers 400 on this branch, which leaks the state-machine error as if it were an input-validation error. Codex commit d1ca0ba (per cross-tool drawer) appears to bring the mapping over but is not yet on main. Track separately so BUG-023 stays cleanly verified and the cherry-pick / merge state has its own ticket.",
+  "module": "strategy_package",
+  "severity": "P2",
+  "risk_area": "api_contract",
+  "status": "verified",
+  "trigger_condition": {
+    "scenario": "POST /api/v1/strategy-packages/<pkg>/enable-paper hits an invalid state transition",
+    "current_response": "HTTP 400 (incorrect)",
+    "expected_response": "HTTP 409"
+  },
+  "reproduce_command": "curl -X POST http://127.0.0.1:8011/api/v1/strategy-packages/<pkg_already_enabled>/enable-paper  # current branch returns 400 instead of 409",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "drawer:cross-tool/codex-claude-coord/72c82167df76a2e0a646d8a8",
+    "branch:origin/claude/paper-v2-vnpy-mvp-20260508",
+    "commit:4528a32",
+    "branch:origin/codex/qe-governance-integration-20260509"
+  ],
+  "fingerprint": "strategy_package::http_409_mapping::cherry_pick_pending",
+  "assigned_agent": "codex_app",
+  "fix_branch": "codex/qe-governance-integration-20260509",
+  "fix_commit": "d1ca0ba",
+  "verification_run_id": "drawer_cross-tool_codex-claude-coord_7fc3bb2bb920914b1991878d",
+  "created_at": "2026-05-11T16:00:00Z",
+  "first_seen_at": "2026-05-11T16:00:00Z",
+  "last_seen_at": "2026-05-11T16:00:00Z",
+  "fixed_at": "2026-05-11T01:34:52Z",
+  "submitted_at": "2026-05-11T16:00:00Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/strategy_package/repository.py",
+    "backend/routers/strategy_package*.py",
+    "backend/tests/strategy_package/"
+  ],
+  "suspected_modules": [
+    "backend/services/strategy_package/",
+    "backend/routers/strategy_package*.py"
+  ],
+  "required_verification": [
+    "After the cherry-pick / merge lands on the integration branch, replay the reproduce_command and confirm HTTP 409.",
+    "Add a regression test asserting raise_exception_handler maps InvalidStateTransitionError to HTTP 409.",
+    "Once verified on the integration branch, this BUG can be closed."
+  ],
+  "closure_requirements": [
+    "InvalidStateTransitionError -> HTTP 409 mapping present on origin/codex/qe-governance-integration-20260509",
+    "Regression test in backend/tests/strategy_package/",
+    "BUG-023 cross-reference unchanged (it remains verified for the atomicity fix scope)"
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-11T16:00:00Z",
+      "actor": "claude_code",
+      "action": "discovered",
+      "note": "Carved out from BUG-023 verified-but-with-caveats event. Codex commit d1ca0ba on the integration branch is the candidate cherry-pick. Filed separately per Stage 4 P2.1 review feedback so BUG-023's verified status is not contaminated by an unrelated follow-up."
+    },
+    {
+      "timestamp": "2026-05-11T01:34:52Z",
+      "actor": "codex_app",
+      "action": "verified",
+      "note": "Codex pipeline Stage 4+5 r1 review (drawer 7fc3bb2bb920914b1991878d) confirmed d1ca0ba is ancestor of origin/codex/qe-governance-integration-20260509 and that backend/routers/strategy_packages.py:146-147 already contains the InvalidStateTransitionError -> HTTP 409 mapping. Promoted to verified per dual-party verify protocol (codex_app verifies a claude_code-filed bug whose actual fix was implemented by codex_app earlier; the cross-toolchain check here is that pipeline-foundation Claude session verified the file:line evidence against the Codex-reported commit)."
+    }
+  ]
+}

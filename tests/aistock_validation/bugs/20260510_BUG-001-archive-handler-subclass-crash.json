@@ -1,0 +1,68 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-001",
+  "title": "ArchiveHandler subclassing crashes with AttributeError on __abstractmethods__",
+  "description": "Defining a concrete ArchiveHandler subclass raises AttributeError: __abstractmethods__ before any handler can be implemented. Root cause: __init_subclass__ at backend/services/qe_archive/handlers/contract.py:132-135 reads cls.__abstractmethods__ directly while ABCMeta has not yet populated that attribute on the subclass. Impact: PaperV2ArchiveHandler / FactorValueArchiveHandler cannot be declared, so the T14a interface contract is unusable. Fix uses getattr(cls, '__abstractmethods__', None) safe-check, with ABCMeta still enforcing required abstract methods on the final pass. P1.1 of Codex T12+T14a review.",
+  "module": "qe_archive",
+  "severity": "P1",
+  "risk_area": "runtime_crash",
+  "status": "verified",
+  "trigger_condition": {
+    "scenario": "subclass_definition",
+    "subclass_of": "backend.services.qe_archive.handlers.contract.ArchiveHandler"
+  },
+  "reproduce_command": "pytest backend/tests/qe_archive/test_handler_contract.py::test_inline_subclass_smoke -q",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "drawer:cross-tool/codex-claude-coord/T12+T14a-review-2026-05-10",
+    "branch:origin/claude/dw-foundation-20260510",
+    "commit:db6241f",
+    "file:backend/services/qe_archive/handlers/contract.py:132-135"
+  ],
+  "fingerprint": "qe_archive::contract.py::__init_subclass__::abstractmethods",
+  "assigned_agent": "claude_code",
+  "fix_branch": "claude/dw-foundation-20260510",
+  "fix_commit": "db6241f",
+  "verification_run_id": "drawer_cross-tool_codex-claude-coord_5bd5430016acfaafd182577a",
+  "created_at": "2026-05-10T00:00:00Z",
+  "first_seen_at": "2026-05-10T00:00:00Z",
+  "last_seen_at": "2026-05-10T00:00:00Z",
+  "fixed_at": "2026-05-10T00:00:00Z",
+  "submitted_at": "2026-05-10T00:00:00Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/qe_archive/handlers/contract.py",
+    "backend/tests/qe_archive/test_handler_contract.py"
+  ],
+  "suspected_modules": [
+    "backend/services/qe_archive/handlers/contract.py"
+  ],
+  "required_verification": [
+    "pytest backend/tests/qe_archive/test_handler_contract.py -q",
+    "Codex independent re-review of round-2 fix on origin/claude/dw-foundation-20260510"
+  ],
+  "closure_requirements": [
+    "Codex review pass on round-2 fix",
+    "T12 dev DB apply succeeds (separate gate)"
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-10T00:00:00Z",
+      "actor": "codex_app",
+      "action": "discovered",
+      "note": "T12+T14a review - manual subclass smoke failed with AttributeError __abstractmethods__"
+    },
+    {
+      "timestamp": "2026-05-10T00:00:00Z",
+      "actor": "claude_code",
+      "action": "fixed",
+      "note": "round-2 fix commit db6241f uses getattr safe check + 3 regression tests"
+    },
+    {
+      "timestamp": "2026-05-10T20:16:15Z",
+      "actor": "codex_app",
+      "action": "verified",
+      "note": "Codex round-2 review PASS - inline subclass smoke + 24 handler_contract tests pass; drawer 5bd5430016acfaafd182577a"
+    }
+  ]
+}
