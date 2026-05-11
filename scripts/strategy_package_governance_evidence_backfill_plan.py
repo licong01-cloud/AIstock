@@ -120,7 +120,9 @@ def _planned_asset_rows(package: dict[str, Any]) -> tuple[list[PlannedRow], bool
         _require(isinstance(asset, dict), "assets entries must be objects")
         asset_type = _text(asset.get("asset_type"))
         asset_ref = _text(asset.get("asset_ref"))
-        protected = bool(asset.get("protected_asset", True))
+        _require("protected_asset" in asset, f"{asset_ref} requires protected_asset")
+        _require(isinstance(asset.get("protected_asset"), bool), f"{asset_ref} protected_asset must be boolean")
+        protected = asset["protected_asset"]
         if protected:
             protected_count += 1
         else:
@@ -153,8 +155,8 @@ def _planned_validation_rows(package: dict[str, Any], *, metric_key: str) -> tup
     blockers: list[str] = []
     gates = {
         "original_fixed_weight_retest": False,
-        "seed_stability_evidence": False,
-        "regime_stability_evidence": False,
+        "seed_sample_count_present": False,
+        "regime_sample_count_present": False,
     }
     seed_values: set[int] = set()
     regime_samples = 0
@@ -214,8 +216,9 @@ def _planned_validation_rows(package: dict[str, Any], *, metric_key: str) -> tup
                 },
             )
         )
-    gates["seed_stability_evidence"] = len(seed_values) >= 2
-    gates["regime_stability_evidence"] = regime_samples >= 2
+    # These gates prove only sample-count presence; they do not assert stability quality.
+    gates["seed_sample_count_present"] = len(seed_values) >= 2
+    gates["regime_sample_count_present"] = regime_samples >= 2
     blockers.extend(name for name, passed in gates.items() if not passed)
     return rows, gates, blockers
 
@@ -364,6 +367,7 @@ def build_plan(payload: dict[str, Any], *, requested_ids: list[str] | None = Non
         "safety_notes": [
             "Planner only: no DB connection, no INSERT/UPDATE/DELETE execution, no service calls.",
             "The later executor, if separately authorized, must still re-check package_status and manifest_sha256 in the target DB.",
+            "seed_sample_count_present and regime_sample_count_present prove sample-count presence only, not variance stability.",
             "Do not mutate manifest_json, manifest_sha256, package_status, model artifacts, or Paper runtime state.",
         ],
     }
@@ -400,7 +404,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
         else:
             print(f"status=failed error={exc}", file=sys.stderr)
-        return 2
+        return 3
 
 
 if __name__ == "__main__":

@@ -135,14 +135,21 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(plan, ensure_ascii=False, indent=2, sort_keys=True))
         else:
             print(f"status={plan['status']} mode={plan['mode']} ddl_executed=false")
-        return 0
-    except (GovernanceProductionApplyPlanError, migration_smoke.GovernanceMigrationSmokeError) as exc:
+        return 0 if plan["status"] == "passed" else 2
+    except migration_smoke.GovernanceMigrationSmokeError as exc:
         payload = {"status": "failed", "mode": "production_apply_plan", "error": str(exc)}
         if args.json:
             print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
         else:
             print(f"status=failed error={exc}", file=sys.stderr)
         return 2
+    except GovernanceProductionApplyPlanError as exc:
+        payload = {"status": "failed", "mode": "production_apply_plan", "error": str(exc)}
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(f"status=failed error={exc}", file=sys.stderr)
+        return 3
 
 
 if __name__ == "__main__":

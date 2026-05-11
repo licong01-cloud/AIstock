@@ -120,8 +120,8 @@ def test_backfill_plan_builds_rows_without_db_or_service_calls() -> None:
         "manifest_identity": True,
         "protected_assets": True,
         "original_fixed_weight_retest": True,
-        "seed_stability_evidence": True,
-        "regime_stability_evidence": True,
+        "seed_sample_count_present": True,
+        "regime_sample_count_present": True,
         "runtime_variant_candidate": True,
     }
     assert set(first["tables"]) == {
@@ -158,11 +158,56 @@ def test_backfill_plan_marks_disallowed_package_status_as_blocked() -> None:
     assert report["blocked_packages"]["pkg_1"] == ["package_status=DRAFT"]
 
 
+def test_backfill_plan_uses_count_presence_gate_names_for_missing_samples() -> None:
+    payload = _bundle()
+    payload["packages"][0]["validation_runs"] = [
+        payload["packages"][0]["validation_runs"][0],
+        payload["packages"][0]["validation_runs"][1],
+    ]
+    payload["packages"][0]["validation_runs"][0]["evidence_json"] = {"regime_metrics": {"bull": {"annual_return": 0.101}}}
+
+    report = backfill_plan.build_plan(payload)
+
+    gates = report["packages"][0]["required_gates"]
+    assert gates["seed_sample_count_present"] is False
+    assert gates["regime_sample_count_present"] is False
+    assert "seed_stability_evidence" not in gates
+    assert "regime_stability_evidence" not in gates
+    assert report["blocked_packages"]["pkg_1"] == [
+        "seed_sample_count_present",
+        "regime_sample_count_present",
+    ]
+
+
+def test_backfill_plan_missing_protected_asset_field_is_invalid_input() -> None:
+    payload = _bundle()
+    del payload["packages"][0]["assets"][0]["protected_asset"]
+
+    with pytest.raises(backfill_plan.GovernanceEvidenceBackfillPlanError, match="requires protected_asset"):
+        backfill_plan.build_plan(payload)
+
+
 def test_backfill_cli_dry_run_does_not_open_db(tmp_path: Path) -> None:
     bundle_path = tmp_path / "bundle.json"
     bundle_path.write_text(json.dumps(_bundle()), encoding="utf-8")
 
     assert backfill_plan.main(["--evidence-bundle", str(bundle_path), "--json"]) == 0
+
+
+def test_backfill_cli_returns_2_for_valid_but_blocked_bundle(tmp_path: Path) -> None:
+    payload = _bundle()
+    payload["packages"][0]["package_status"] = "DRAFT"
+    bundle_path = tmp_path / "bundle.json"
+    bundle_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert backfill_plan.main(["--evidence-bundle", str(bundle_path), "--json"]) == 2
+
+
+def test_backfill_cli_returns_3_for_invalid_bundle(tmp_path: Path) -> None:
+    bundle_path = tmp_path / "bundle.json"
+    bundle_path.write_text(json.dumps({"packages": []}), encoding="utf-8")
+
+    assert backfill_plan.main(["--evidence-bundle", str(bundle_path), "--json"]) == 3
 
 
 def test_production_apply_plan_default_is_static_preview() -> None:
