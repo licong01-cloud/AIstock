@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -49,6 +50,9 @@ from .validation_stability import PackageValidationStabilitySummary, StabilitySt
 from .validators import StrategyPackageValidator
 
 
+logger = logging.getLogger(__name__)
+
+
 STATUS_TRANSITIONS: dict[PackageStatus, set[PackageStatus]] = {
     PackageStatus.ASSET_VALIDATED: {PackageStatus.DRAFT},
     PackageStatus.BACKTEST_APPROVED: {PackageStatus.DRAFT, PackageStatus.ASSET_VALIDATED},
@@ -68,6 +72,8 @@ STATUS_TRANSITIONS: dict[PackageStatus, set[PackageStatus]] = {
         PackageStatus.PAPER_FAILED,
     },
 }
+
+PAPER_READY_GOVERNANCE_LIMIT = 10_000
 
 
 class StrategyPackageService:
@@ -270,7 +276,12 @@ class StrategyPackageService:
                 return None
             try:
                 return json.loads(value)
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
+                logger.warning(
+                    "Failed to parse JSON-like strategy package value: %s; value_snippet=%r",
+                    exc,
+                    value[:200],
+                )
                 return None
         return value
 
@@ -773,7 +784,7 @@ class StrategyPackageService:
         )
 
     def _require_governance_paper_ready(self, record: StrategyPackageRecord) -> None:
-        eligibility = self.governance_eligibility(record.package_id)
+        eligibility = self.governance_eligibility(record.package_id, limit=PAPER_READY_GOVERNANCE_LIMIT)
         if eligibility["paper_ready"]:
             return
         raise StrategyPackageValidationError(

@@ -607,6 +607,96 @@ def test_apply_commits_per_file_in_phase1a_order(monkeypatch: pytest.MonkeyPatch
     assert fake_conn.close_count == 1
 
 
+def test_apply_can_be_run_twice_with_idempotent_migrations(monkeypatch: pytest.MonkeyPatch) -> None:
+    executed_files_by_run: list[list[str]] = []
+
+    class FakeCursor:
+        def __init__(self, connection: "FakeConnection") -> None:
+            self.connection = connection
+            self.last_sql = ""
+
+        def __enter__(self) -> "FakeCursor":
+            return self
+
+        def __exit__(self, *_exc_info: object) -> None:
+            return None
+
+        def execute(self, sql: str) -> None:
+            self.last_sql = sql
+            for spec in smoke.STACK_SPECS:
+                if spec.path.read_text(encoding="utf-8") == sql:
+                    self.connection.current_run_files.append(spec.filename)
+
+        def fetchone(self) -> tuple[object, ...]:
+            if "to_regclass('strategy_pkg.package')" in self.last_sql:
+                return ("strategy_pkg.package", "public.aistock_model_catalog")
+            raise AssertionError(f"unexpected fetchone SQL: {self.last_sql}")
+
+        def fetchall(self) -> list[tuple[str]]:
+            if "information_schema.columns" in self.last_sql:
+                schema = _query_literal(self.last_sql, "table_schema")
+                table = _query_literal(self.last_sql, "table_name")
+                return [(column,) for column in _preflight_columns().get((schema, table), [])]
+            if "FROM pg_indexes" in self.last_sql:
+                schema = _query_literal(self.last_sql, "schemaname")
+                return sorted(_preflight_indexes().get(schema, set()))
+            if "FROM pg_constraint" in self.last_sql:
+                schema = _query_literal(self.last_sql, "n.nspname")
+                return sorted(_preflight_constraints().get(schema, set()))
+            raise AssertionError(f"unexpected fetchall SQL: {self.last_sql}")
+
+    class FakeConnection:
+        def __init__(self) -> None:
+            self.autocommit = True
+            self.commit_count = 0
+            self.rollback_count = 0
+            self.close_count = 0
+            self.current_run_files: list[str] = []
+
+        def cursor(self) -> FakeCursor:
+            return FakeCursor(self)
+
+        def commit(self) -> None:
+            self.commit_count += 1
+
+        def rollback(self) -> None:
+            self.rollback_count += 1
+
+        def close(self) -> None:
+            self.close_count += 1
+            executed_files_by_run.append(list(self.current_run_files))
+            self.current_run_files = []
+
+    relations = _preflight_relations()
+
+    def relation_kind(cur: object, schema: str, relation_name: str) -> str | None:
+        return relations.get(f"{schema}.{relation_name}")
+
+    connections: list[FakeConnection] = []
+
+    def connect(_target: smoke.DbTarget) -> FakeConnection:
+        connection = FakeConnection()
+        connections.append(connection)
+        return connection
+
+    monkeypatch.setattr(smoke, "_connect", connect)
+    monkeypatch.setattr(smoke, "_relation_kind", relation_kind)
+    target = smoke.DbTarget(host="localhost", port=5432, dbname="aistock_dev", user="postgres")
+
+    first_report = smoke.run_db_execution(target=target, apply=True)
+    second_report = smoke.run_db_execution(target=target, apply=True)
+
+    expected_order = list(smoke.PHASE1A_APPLY_ORDER)
+    assert first_report.mode == "apply"
+    assert second_report.mode == "apply"
+    assert first_report.checks["db_execution"]["applied_files"] == expected_order
+    assert second_report.checks["db_execution"]["applied_files"] == expected_order
+    assert executed_files_by_run == [expected_order, expected_order]
+    assert [connection.commit_count for connection in connections] == [len(expected_order), len(expected_order)]
+    assert [connection.rollback_count for connection in connections] == [1, 1]
+    assert [connection.close_count for connection in connections] == [1, 1]
+
+
 def test_connect_wraps_driver_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     import psycopg2
 

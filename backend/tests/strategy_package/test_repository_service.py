@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, timezone
 
 import psycopg2
@@ -10,7 +11,7 @@ from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.package_asset import StrategyPackageAssetType
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository, StrategyPackageRepository
 from backend.services.strategy_package.runtime_variant import RuntimeVariantKind, RuntimeVariantValidationStatus
-from backend.services.strategy_package.service import StrategyPackageService
+from backend.services.strategy_package.service import PAPER_READY_GOVERNANCE_LIMIT, StrategyPackageService
 from backend.services.strategy_package.validation_run import (
     PackageValidationRetrainMode,
     PackageValidationStatus,
@@ -162,6 +163,36 @@ def test_enable_paper_requires_governance_eligibility_ready() -> None:
     assert [event.reason for event in repo.list_status_events(manifest.package_id)] == before_reasons
 
 
+def test_enable_paper_uses_large_governance_history_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = InMemoryStrategyPackageRepository()
+    manifest = freeze_manifest(
+        make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
+    )
+    repo.save_manifest(manifest)
+    service = StrategyPackageService(repository=repo)
+    observed: dict[str, object] = {}
+
+    def fake_governance_eligibility(
+        package_id: str,
+        *,
+        metric_key: str = "annual_return",
+        limit: int = 500,
+    ) -> dict[str, object]:
+        observed.update({"package_id": package_id, "metric_key": metric_key, "limit": limit})
+        return {"paper_ready": True}
+
+    monkeypatch.setattr(service, "governance_eligibility", fake_governance_eligibility)
+
+    paper = service.enable_paper(manifest.package_id)
+
+    assert paper.package_status == PackageStatus.PAPER_ENABLED
+    assert observed == {
+        "package_id": manifest.package_id,
+        "metric_key": "annual_return",
+        "limit": PAPER_READY_GOVERNANCE_LIMIT,
+    }
+
+
 def test_enable_paper_requires_passed_original_fixed_weight_retest() -> None:
     repo = InMemoryStrategyPackageRepository()
     manifest = freeze_manifest(
@@ -287,6 +318,21 @@ def test_enable_paper_finds_passed_original_retest_even_after_many_newer_runs() 
     assert report["original_fixed_weight_retest"]["matching_passed_run_id"] == passed.validation_run_id
     assert report["original_fixed_weight_retest"]["same_manifest_run_count"] == 101
     assert paper.package_status == PackageStatus.PAPER_ENABLED
+
+
+def test_qe_source_payload_warns_on_malformed_result_metrics(caplog: pytest.LogCaptureFixture) -> None:
+    row = {
+        "experiment_id": "exp_bad_metrics",
+        "result_metrics": "{\"annual_return\":",
+    }
+
+    with caplog.at_level(logging.WARNING, logger="backend.services.strategy_package.service"):
+        payload = StrategyPackageService._qe_source_payload(row, source_kind="qe_experiment")
+
+    assert payload["experiment_id"] == "exp_bad_metrics"
+    assert payload["metrics_summary"]["annual_return"] is None
+    assert "Failed to parse JSON-like strategy package value" in caplog.text
+    assert "value_snippet" in caplog.text
 
 
 def test_postgres_repository_wraps_status_event_sequence_collision(monkeypatch) -> None:
