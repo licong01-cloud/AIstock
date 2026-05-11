@@ -312,3 +312,16 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | next phase                                            | PARAMETER_SHAPE_SWEEP | test top rules across shorter/softer fixed penalties before WSL spend |
 +-------------------------------------------------------+-----------------------+-----------------------------------------------------------------------+
 ```
+
+## Phase 26 Parameter Shape Sweep Finding
+
+```text
++-------------------------------------------------------+-------------------+--------------------------------------------------------+
+| candidate                                             | decision          | evidence                                               |
++-------------------------------------------------------+-------------------+--------------------------------------------------------+
+| indicator_decline_q_ocf_to_sales_lt_0_mv_ge_10bn      | WATCHLIST_PRIMARY | best sweep row 56.1 with 60td / 15% penalty            |
+| indicator_decline_ocf_negative_or_leverage_mv_10_30bn | WATCHLIST_PRIMARY | 55.5 remains strong but lower than q_ocf_to_sales      |
+| immediate WSL true rerun                              | DEFER             | no rule reached 60 yet                                 |
+| next phase                                            | TIGHTER_SWEEP     | focus on the best rule and penalty/lifetime refinement |
++-------------------------------------------------------+-------------------+--------------------------------------------------------+
+```

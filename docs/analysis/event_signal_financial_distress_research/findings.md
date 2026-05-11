@@ -349,3 +349,17 @@ Preferred current candidate for future non-hard overlay research: `indicator_lar
 | WSL true QE               | DEFER                | no row passed score>=60; run parameter-shape sweep first                        |
 +---------------------------+----------------------+---------------------------------------------------------------------------------+
 ```
+
+## Phase 26 Parameter Shape Sweep Finding
+
+```text
++---------------------------+----------------------+---------------------------------------------------------------------+
+| candidate                 | decision             | evidence                                                            |
++---------------------------+----------------------+---------------------------------------------------------------------+
+| q_ocf_to_sales < 0 >=10bn | WATCHLIST_PRIMARY    | best sweep row score 56.1 at 60td and 15% rank penalty              |
+| ocf/leverage 10-30bn      | WATCHLIST_PRIMARY    | still strong at 55.5, but not improved enough                       |
+| current_ratio <0.8 >=10bn | WATCHLIST_SECONDARY  | top score 47.1, useful but clearly behind the first two             |
+| debt>=90 / 30-100bn       | DIRECT_DOWNSIDE_ONLY | direct downside persists but overlay interaction remains weak       |
+| WSL true QE               | DEFER                | best score still below 60, so keep searching before expensive rerun |
++---------------------------+----------------------+---------------------------------------------------------------------+
+```

@@ -563,3 +563,19 @@ Phase 24 evidence:
 | production backend 8001 | not touched                                                                                                                                |
 +-------------------------+--------------------------------------------------------------------------------------------------------------------------------------------+
 ```
+
+## 2026-05-11 Phase 26 Completed
+
+```text
++-------------------------+---------------------------------------------------------------------------------------------------------------------------------------------+
+| item                    | value                                                                                                                                       |
++-------------------------+---------------------------------------------------------------------------------------------------------------------------------------------+
+| script                  | scripts/financial_distress_phase26_parameter_shape_sweep.py                                                                                 |
+| direct report           | reports\event_signal\financial_distress_phase26_parameter_shape_sweep\direct\financial_distress_direct_event_20240701_20260511_134419.json  |
+| overlay report          | reports\event_signal\financial_distress_phase26_parameter_shape_sweep\overlay\financial_distress_qe_multiloop_20240701_20260511_145003.json |
+| rules / validations     | 12 / 180 stability rows / 3960 validations                                                                                                  |
+| best rule               | indicator_decline_q_ocf_to_sales_lt_0_mv_ge_10bn, score 56.1                                                                                |
+| decision                | no TRUE_QE_CANDIDATE; continue with tighter sweep                                                                                           |
+| production backend 8001 | not touched                                                                                                                                 |
++-------------------------+---------------------------------------------------------------------------------------------------------------------------------------------+
+```
