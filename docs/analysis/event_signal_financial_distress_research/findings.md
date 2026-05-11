@@ -363,3 +363,16 @@ Preferred current candidate for future non-hard overlay research: `indicator_lar
 | WSL true QE               | DEFER                | best score still below 60, so keep searching before expensive rerun |
 +---------------------------+----------------------+---------------------------------------------------------------------+
 ```
+
+## Phase 27 q_ocf Fine Sweep Finding
+
+```text
++--------------------------------------+-------------------+--------------------------------------------------------------------------------+
+| candidate                            | decision          | evidence                                                                       |
++--------------------------------------+-------------------+--------------------------------------------------------------------------------+
+| q_ocf_to_sales < 0 >=10bn 90td 15%   | TRUE_QE_CANDIDATE | score 68.4, avg +0.181%, ex-best +0.100%, worst -0.183%, drop 16               |
+| q_ocf_to_sales < 0 >=10bn 90td 17.5% | TRUE_QE_CANDIDATE | same cheap score/effect as 15%, can be a sensitivity check                     |
+| q_ocf_to_sales < 0 >=10bn 90td 20%   | TRUE_QE_CANDIDATE | score 67.6, slightly worse tail -0.252%                                        |
+| WSL true QE                          | RUN_NEXT          | candidate now passes strict cheap gate; use one-loop full-universe smoke first |
++--------------------------------------+-------------------+--------------------------------------------------------------------------------+
+```

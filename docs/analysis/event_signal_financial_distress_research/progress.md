@@ -579,3 +579,20 @@ Phase 24 evidence:
 | production backend 8001 | not touched                                                                                                                                 |
 +-------------------------+---------------------------------------------------------------------------------------------------------------------------------------------+
 ```
+
+## 2026-05-11 Phase 27 Completed
+
+```text
++-------------------------+----------------------------------------------------------------------------------------------------------------------------------------+
+| item                    | value                                                                                                                                  |
++-------------------------+----------------------------------------------------------------------------------------------------------------------------------------+
+| script                  | scripts/financial_distress_phase27_q_ocf_fine_sweep.py                                                                                 |
+| direct report           | reports\event_signal\financial_distress_phase27_q_ocf_fine_sweep\direct\financial_distress_direct_event_20240701_20260511_150037.json  |
+| overlay report          | reports\event_signal\financial_distress_phase27_q_ocf_fine_sweep\overlay\financial_distress_qe_multiloop_20240701_20260511_151633.json |
+| rules / validations     | 1 / 20 stability rows / 440 validations                                                                                                |
+| best rule               | indicator_decline_q_ocf_to_sales_lt_0_mv_ge_10bn, score 68.4                                                                           |
+| best shape              | 90td / score_down_rank_15pct_top50_previous                                                                                            |
+| decision                | TRUE_QE_CANDIDATE; prepare WSL true QE smoke                                                                                           |
+| production backend 8001 | not touched                                                                                                                            |
++-------------------------+----------------------------------------------------------------------------------------------------------------------------------------+
+```

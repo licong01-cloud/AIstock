@@ -325,3 +325,15 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | next phase                                            | TIGHTER_SWEEP     | focus on the best rule and penalty/lifetime refinement |
 +-------------------------------------------------------+-------------------+--------------------------------------------------------+
 ```
+
+## Phase 27 q_ocf Fine Sweep Finding
+
+```text
++--------------------------------------------------+-------------------+---------------------------------------------------------------+
+| candidate                                        | decision          | evidence                                                      |
++--------------------------------------------------+-------------------+---------------------------------------------------------------+
+| indicator_decline_q_ocf_to_sales_lt_0_mv_ge_10bn | TRUE_QE_CANDIDATE | 90td / 15% rank penalty, score 68.4                           |
+| runtime integration                              | STILL_REJECT      | cheap overlay is not final PnL evidence                       |
+| next phase                                       | WSL_TRUE_QE_SMOKE | materialize pred and run one-loop full-universe pred-backtest |
++--------------------------------------------------+-------------------+---------------------------------------------------------------+
+```
