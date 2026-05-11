@@ -204,6 +204,7 @@ plans:
     writes_database: false
     writes_artifacts: true
     writes_business_state: false
+    mock_api_used: true
     max_duration_seconds: 600
     evidence_kinds: [playwright]
   - plan_key: market_regime_ui
@@ -220,6 +221,7 @@ plans:
     writes_database: false
     writes_artifacts: true
     writes_business_state: false
+    mock_api_used: true
     max_duration_seconds: 600
     evidence_kinds: [playwright]
   - plan_key: rl_execution_ui
@@ -236,6 +238,7 @@ plans:
     writes_database: false
     writes_artifacts: true
     writes_business_state: false
+    mock_api_used: true
     max_duration_seconds: 600
     evidence_kinds: [playwright]
   - plan_key: qe_read_l3

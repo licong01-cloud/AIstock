@@ -1,6 +1,11 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
+// MOCK-first spec. Honours RL_EXECUTION_UI_MOCK_API so MOCK_API=0 in the nox
+// session actually skips this spec rather than silently installing mocks.
+const MOCK_API = process.env.RL_EXECUTION_UI_MOCK_API !== "0";
+test.skip(!MOCK_API, "rl-execution spec is mock-first; set RL_EXECUTION_UI_MOCK_API=1 (default) to run");
+
 const MODELS = [
   {
     id: 1,

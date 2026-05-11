@@ -1,6 +1,11 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
+// MOCK-first spec. Honours MARKET_REGIME_UI_MOCK_API so MOCK_API=0 in the nox
+// session actually skips this spec rather than silently installing mocks.
+const MOCK_API = process.env.MARKET_REGIME_UI_MOCK_API !== "0";
+test.skip(!MOCK_API, "market-regime spec is mock-first; set MARKET_REGIME_UI_MOCK_API=1 (default) to run");
+
 const SIMPLE_TIMELINE = {
   source_method: "simple_quadrant",
   items: [

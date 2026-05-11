@@ -894,7 +894,9 @@ def qe_archive_ui(session: nox.Session) -> None:
         session.skip("QE archive UI tests are not implemented yet.")
     backend_port = session.posargs[0] if session.posargs else os.environ.get("BACKEND_PORT", "8012")
     frontend_port = session.posargs[1] if len(session.posargs) > 1 else os.environ.get("FRONTEND_PORT", "3012")
-    mock_api = os.environ.get("QE_ARCHIVE_UI_MOCK_API") == "1"
+    # Default to mock-first; live mode requires QE_ARCHIVE_UI_MOCK_API=0
+    # AND live-data spec assertions (current spec encodes mock fixtures).
+    mock_api = os.environ.get("QE_ARCHIVE_UI_MOCK_API", "1") != "0"
     session.run(
         "python",
         "scripts/aistock_validate.py",
@@ -1014,7 +1016,8 @@ def market_regime_ui(session: nox.Session) -> None:
         session.skip("Market Regime UI tests are not implemented yet.")
     backend_port = session.posargs[0] if session.posargs else os.environ.get("BACKEND_PORT", "8012")
     frontend_port = session.posargs[1] if len(session.posargs) > 1 else os.environ.get("FRONTEND_PORT", "3012")
-    mock_api = os.environ.get("MARKET_REGIME_UI_MOCK_API", "1") == "1"
+    # Default mock-first; set MARKET_REGIME_UI_MOCK_API=0 for live mode.
+    mock_api = os.environ.get("MARKET_REGIME_UI_MOCK_API", "1") != "0"
     session.run(
         "python",
         "scripts/aistock_validate.py",
@@ -1071,7 +1074,8 @@ def rl_execution_ui(session: nox.Session) -> None:
         session.skip("RL Execution UI tests are not implemented yet.")
     backend_port = session.posargs[0] if session.posargs else os.environ.get("BACKEND_PORT", "8012")
     frontend_port = session.posargs[1] if len(session.posargs) > 1 else os.environ.get("FRONTEND_PORT", "3012")
-    mock_api = os.environ.get("RL_EXECUTION_UI_MOCK_API", "1") == "1"
+    # Default mock-first; set RL_EXECUTION_UI_MOCK_API=0 for live mode.
+    mock_api = os.environ.get("RL_EXECUTION_UI_MOCK_API", "1") != "0"
     session.run(
         "python",
         "scripts/aistock_validate.py",
@@ -1129,7 +1133,8 @@ def strategy_package_governance_ui(session: nox.Session) -> None:
         session.skip("Strategy Package Governance UI tests are not implemented yet.")
     backend_port = session.posargs[0] if session.posargs else os.environ.get("BACKEND_PORT", "8012")
     frontend_port = session.posargs[1] if len(session.posargs) > 1 else os.environ.get("FRONTEND_PORT", "3012")
-    mock_api = os.environ.get("STRATEGY_PACKAGE_GOVERNANCE_UI_MOCK_API", "1") == "1"
+    # Default mock-first; live mode requires Codex governance branch merge.
+    mock_api = os.environ.get("STRATEGY_PACKAGE_GOVERNANCE_UI_MOCK_API", "1") != "0"
     session.run(
         "python",
         "scripts/aistock_validate.py",

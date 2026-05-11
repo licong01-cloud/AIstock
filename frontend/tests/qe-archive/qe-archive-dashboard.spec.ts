@@ -1,5 +1,12 @@
 import { expect, test } from "@playwright/test";
 
+// MOCK-first spec. Honours QE_ARCHIVE_UI_MOCK_API so MOCK_API=0 in the nox
+// session actually skips this spec rather than silently installing mocks.
+// The qe-archive backend lives on origin/main so a live-mode spec is feasible
+// in the future, but the assertions below encode mock fixtures.
+const MOCK_API = process.env.QE_ARCHIVE_UI_MOCK_API !== "0";
+test.skip(!MOCK_API, "qe-archive dashboard spec is mock-first; set QE_ARCHIVE_UI_MOCK_API=1 (default) to run");
+
 test("QE archive dashboard uses mocked warehouse APIs", async ({ page }) => {
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];

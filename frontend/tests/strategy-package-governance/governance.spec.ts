@@ -1,6 +1,13 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
+// MOCK-first spec. Honours STRATEGY_PACKAGE_GOVERNANCE_UI_MOCK_API so
+// MOCK_API=0 skips this spec rather than silently installing mocks.
+// Live-mode requires the codex/qe-governance-integration-20260509 branch
+// to land /strategy-packages/{id}/governance-eligibility on main.
+const MOCK_API = process.env.STRATEGY_PACKAGE_GOVERNANCE_UI_MOCK_API !== "0";
+test.skip(!MOCK_API, "governance spec is mock-first; set STRATEGY_PACKAGE_GOVERNANCE_UI_MOCK_API=1 (default) to run");
+
 const PACKAGE_FIXTURES = [
   {
     package_id: "pkg_demo_ready",

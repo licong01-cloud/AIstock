@@ -1,5 +1,11 @@
 import { expect, test } from "@playwright/test";
 
+// MOCK-first spec. Honours QE_ARCHIVE_UI_MOCK_API so MOCK_API=0 in the nox
+// session actually skips this spec rather than silently installing mocks.
+// Live-mode assertions are TBD; the route fixtures below encode mock data.
+const MOCK_API = process.env.QE_ARCHIVE_UI_MOCK_API !== "0";
+test.skip(!MOCK_API, "qe-archive flows spec is mock-first; set QE_ARCHIVE_UI_MOCK_API=1 (default) to run");
+
 type CandidateOverrides = {
   candidates?: unknown[];
   page?: number;
