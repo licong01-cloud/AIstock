@@ -98,6 +98,9 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/paper-v2", label: "\u{1F4CC} V2 \u603B\u89C8" },
       { href: "/paper-v2/packages", label: "\u{1F4E6} \u7B56\u7565\u5305\u4E2D\u5FC3" },
+      { href: "/strategy-package-governance", label: "\u{1F6E1}\uFE0F \u7B56\u7565\u5305\u6CBB\u7406" },
+      { href: "/market-regime", label: "\u{1F30D} \u5E02\u573A\u72B6\u6001" },
+      { href: "/rl-execution", label: "\u{1F916} RL \u6267\u884C\u6A21\u578B" },
       { href: "/paper-v2/selection", label: "\u{1F3AF} \u7EDF\u4E00\u9009\u80A1\u4E2D\u5FC3" },
       { href: "/paper-v2/portfolios", label: "\u{1F4BC} \u6A21\u62DF\u76D8\u7EC4\u5408" },
       { href: "/paper-v2/model-hmm", label: "\u{1F9E0} \u6A21\u578B\u4E0E HMM" },

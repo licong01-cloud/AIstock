@@ -30,6 +30,9 @@ ALLOWED_COMMAND_KEYS: dict[str, str] = {
     "nox_rl_execution_smoke": "rl_execution_smoke",
     "nox_data_quality_deep": "data_quality_deep",
     "nox_dr_validate": "dr_validate",
+    "nox_strategy_package_governance_ui": "strategy_package_governance_ui",
+    "nox_market_regime_ui": "market_regime_ui",
+    "nox_rl_execution_ui": "rl_execution_ui",
 }
 ALLOWED_BACKEND_PORTS = {8011, 8012}
 ALLOWED_FRONTEND_PORTS = {3011, 3012}
