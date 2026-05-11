@@ -65,45 +65,118 @@ def dev_conn_provider(dev_db_creds):
 
 
 @pytest.fixture
-def cleanup_qe_archive(dev_conn_provider):
-    """Truncate the 22 T12 paper_v2_*/factor_value tables before AND after
-    each E2E test. NEVER touches paper_v2 source rows."""
-    PURGE_SQL = """
-        TRUNCATE TABLE qe_archive.paper_v2_session_event,
-                       qe_archive.paper_v2_run_event,
-                       qe_archive.paper_v2_order_event,
-                       qe_archive.paper_v2_order_execution_state,
-                       qe_archive.paper_v2_order,
-                       qe_archive.paper_v2_position_snapshot,
-                       qe_archive.paper_v2_intraday_snapshot,
-                       qe_archive.paper_v2_daily_snapshot,
-                       qe_archive.paper_v2_cash_ledger,
-                       qe_archive.paper_v2_error,
-                       qe_archive.paper_v2_session_day,
-                       qe_archive.paper_v2_session,
-                       qe_archive.paper_v2_run,
-                       qe_archive.dim_paper_v2_portfolio,
-                       qe_archive.paper_v2_config_change_audit,
-                       qe_archive.paper_v2_runtime_config_activation,
-                       qe_archive.paper_v2_execution_policy_activation,
-                       qe_archive.paper_v2_reset_audit,
-                       qe_archive.dim_paper_v2_runtime_profile,
-                       qe_archive.dim_paper_v2_runtime_profile_version,
-                       qe_archive.factor_value
-                  RESTART IDENTITY CASCADE
+def e2e_test_run_id(dev_conn_provider):
+    """Pick the Batch A run with the most fills (richest cross-table footprint).
+
+    Returned to tests so they all reference the same run_id, and so cleanup
+    can scope DELETEs to JUST that run_id (per Codex Stage 7.2 r1 P2.1).
     """
+    with dev_conn_provider() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT r.run_id FROM paper_v2.run r
+                   WHERE EXISTS (SELECT 1 FROM paper_v2.fills WHERE run_id = r.run_id)
+                   ORDER BY (
+                     SELECT COUNT(*) FROM paper_v2.fills f WHERE f.run_id = r.run_id
+                   ) DESC
+                   LIMIT 1"""
+            )
+            row = cur.fetchone()
+    if not row:
+        pytest.skip("Batch A not loaded; run scripts/dev_db/batch_a_import_real_data.py first")
+    return row[0]
 
-    def _purge():
-        with dev_conn_provider() as conn:
-            with conn.cursor() as cur:
-                cur.execute(PURGE_SQL)
-                cur.execute("TRUNCATE TABLE qe_archive.paper_v2_fill RESTART IDENTITY CASCADE")
-                # Also clean any e2e_test_* outbox events from prior runs
+
+@pytest.fixture
+def cleanup_qe_archive(dev_conn_provider, e2e_test_run_id):
+    """P2.1 (Codex Stage 7.2 r1): SCOPED cleanup. Replaces the previous
+    blanket TRUNCATE of all 22 T12 tables. Now deletes only:
+      - archive rows tied to the e2e_test_run_id (run-scoped)
+      - dim/activation/audit rows tied to that run's portfolio_id
+      - outbox_event rows whose event_id LIKE 'e2e_test_%'
+
+    Rationale: the TRUNCATE approach wiped concurrent dev-DB testers' data
+    in a shared environment. The scoped DELETE leaves other test fixtures
+    untouched while still leaving a clean slate for THIS test.
+
+    NEVER touches paper_v2 source rows.
+    """
+    # Tables with a direct run_id column (handler writes only for our run_id)
+    RUN_SCOPED_TABLES = (
+        "paper_v2_session_event", "paper_v2_run_event", "paper_v2_order_event",
+        "paper_v2_order_execution_state", "paper_v2_order",
+        "paper_v2_position_snapshot", "paper_v2_intraday_snapshot",
+        "paper_v2_daily_snapshot", "paper_v2_cash_ledger", "paper_v2_error",
+        "paper_v2_session_day", "paper_v2_session",
+        "paper_v2_fill",  # partitioned but DELETE works against parent
+    )
+    # Tables scoped by portfolio_id (dim/activation/audit families)
+    PORTFOLIO_SCOPED_TABLES = (
+        "dim_paper_v2_portfolio",
+        "paper_v2_config_change_audit",
+        "paper_v2_runtime_config_activation",
+        "paper_v2_execution_policy_activation",
+        "paper_v2_reset_audit",
+    )
+
+    def _purge(conn, portfolio_id: str | None) -> None:
+        with conn.cursor() as cur:
+            # Run-scoped deletes (always safe — only this run's rows)
+            for tbl in RUN_SCOPED_TABLES:
                 cur.execute(
-                    "DELETE FROM qe_archive.outbox_event WHERE event_id LIKE 'e2e_test_%'"
+                    f"DELETE FROM qe_archive.{tbl} WHERE run_id = %s",
+                    (e2e_test_run_id,),
                 )
-            conn.commit()
+            # paper_v2_run last (FK target for above)
+            cur.execute(
+                "DELETE FROM qe_archive.paper_v2_run WHERE run_id = %s",
+                (e2e_test_run_id,),
+            )
+            # Portfolio-scoped (only when we know the portfolio)
+            if portfolio_id:
+                for tbl in PORTFOLIO_SCOPED_TABLES:
+                    cur.execute(
+                        f"DELETE FROM qe_archive.{tbl} WHERE portfolio_id = %s",
+                        (portfolio_id,),
+                    )
+                # runtime_profile dim is scoped via profile_id JOIN to portfolio
+                cur.execute(
+                    """DELETE FROM qe_archive.dim_paper_v2_runtime_profile_version
+                       WHERE profile_id IN (
+                           SELECT profile_id FROM paper_v2.runtime_profile
+                           WHERE portfolio_id = %s
+                       )""",
+                    (portfolio_id,),
+                )
+                cur.execute(
+                    """DELETE FROM qe_archive.dim_paper_v2_runtime_profile
+                       WHERE profile_id IN (
+                           SELECT profile_id FROM paper_v2.runtime_profile
+                           WHERE portfolio_id = %s
+                       )""",
+                    (portfolio_id,),
+                )
+            # E2E test outbox events
+            cur.execute(
+                "DELETE FROM qe_archive.outbox_event WHERE event_id LIKE 'e2e_test_%'"
+            )
+        conn.commit()
 
-    _purge()
+    # Look up portfolio_id for the chosen run (safe SELECT on source)
+    portfolio_id: str | None = None
+    with dev_conn_provider() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT portfolio_id FROM paper_v2.run WHERE run_id = %s",
+                (e2e_test_run_id,),
+            )
+            r = cur.fetchone()
+            if r:
+                portfolio_id = r[0]
+        # Pre-test purge
+        _purge(conn, portfolio_id)
+
     yield
-    _purge()
+
+    with dev_conn_provider() as conn:
+        _purge(conn, portfolio_id)

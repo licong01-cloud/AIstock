@@ -114,26 +114,21 @@ class TestPaperV2FullLifecycleHappyPath:
     """All 10 steps; assertions tagged [A1]..[A10+] for the dispatch's
     'data assertion >= 10' completion criterion."""
 
-    def test_paper_v2_simulation_to_archive_full_lifecycle(self, dev_conn_provider):
+    def test_paper_v2_simulation_to_archive_full_lifecycle(
+        self, dev_conn_provider, e2e_test_run_id,
+    ):
         # ==========================================================
-        # Step 1: pick a Batch A run (substitutes for live simulation)
+        # Step 1: use e2e_test_run_id fixture (Codex Stage 7.2 r1 P2.1 — same
+        # run_id is shared with cleanup_qe_archive scope so DELETEs are precise)
         # ==========================================================
+        run_id = e2e_test_run_id
         with dev_conn_provider() as conn:
             with conn.cursor() as cur:
-                # Pick a run with the richest cross-table footprint so
-                # downstream archive coverage is meaningful.
                 cur.execute(
-                    """SELECT r.run_id, r.portfolio_id, r.trade_date
-                       FROM paper_v2.run r
-                       WHERE EXISTS (SELECT 1 FROM paper_v2.fills WHERE run_id = r.run_id)
-                       ORDER BY (
-                         SELECT COUNT(*) FROM paper_v2.fills f WHERE f.run_id = r.run_id
-                       ) DESC
-                       LIMIT 1"""
+                    "SELECT portfolio_id, trade_date FROM paper_v2.run WHERE run_id = %s",
+                    (run_id,),
                 )
-                row = cur.fetchone()
-        assert row is not None, "Batch A not loaded; run scripts/dev_db/batch_a_import_real_data.py first"
-        run_id, portfolio_id, trade_date = row
+                portfolio_id, trade_date = cur.fetchone()
         assertions: dict[str, Any] = {}
 
         # [A1] source run exists
@@ -359,28 +354,71 @@ class TestPaperV2GovernanceNotReadyPath:
     StrategyPackageValidationError. Confirms the gating contract Paper v2
     consumes via thin adapter (per D5 T8-A clarification)."""
 
-    def test_enable_paper_rejects_nonexistent_package(self, dev_conn_provider):
-        """Verify the gating contract by attempting enable_paper on a package_id
-        that does not exist. The service MUST raise (typed exception preferred,
-        but any raise is sufficient to demonstrate the gate fires) rather than
-        silently returning success.
+    def test_enable_paper_rejects_real_package_in_terminal_status(
+        self, dev_conn_provider,
+    ):
+        """P1.2 (Codex Stage 7.2 r1): use a REAL Batch A package whose current
+        status disallows transition to PAPER_ENABLED, rather than a bogus
+        package_id. Strict-asserts:
+          - exception class is exactly StrategyPackageValidationError
+          - context references the offending package_id
+          - context surfaces the gating reason (status or transition)
 
-        We use a non-existent package_id rather than picking a real one because
-        Batch A packages have varied statuses (PAPER_ENABLED already, or
-        SELECTION_ENABLED which may legitimately transition). The non-existent
-        path deterministically exercises the gate.
+        Real not-ready signal: pkg already in PAPER_ENABLED status. STATUS_TRANSITIONS
+        for PAPER_ENABLED requires from-set {BACKTEST_APPROVED, SELECTION_ENABLED};
+        already-PAPER_ENABLED row triggers the repository's transition rejection.
+
+        P1.1 (Codex Stage 7.2 r1): use the correct pg_pool API close_db_pool()
+        (not close_pool which doesn't exist) AND verify the rebuilt pool actually
+        targets dev DB so we don't silently grab a stale prod pool.
         """
         try:
             from backend.services.strategy_package.service import StrategyPackageService
+            from backend.services.trading_core.errors import (
+                InvalidStateTransitionError,
+                StrategyPackageValidationError,
+            )
+            from backend.db import pg_pool
         except Exception as e:
             pytest.skip(f"strategy_package import failed: {e}")
 
-        # Map dev creds onto the prod env names that pg_pool reads.
+        # Acceptance: codebase uses TWO distinct typed exception classes for the
+        # two distinct gating reasons:
+        #   StrategyPackageValidationError — manifest evidence missing
+        #     (validators.py line 67: 'package is not approved for paper trading')
+        #   InvalidStateTransitionError — current status not in allowed_from
+        #     (repository.py line 199: 'invalid strategy package status transition')
+        # Both inherit from TradingCoreError; both surface context with
+        # package_id + status. We accept either as evidence the typed gate fires.
+        EXPECTED_GATE_EXCEPTIONS = (
+            StrategyPackageValidationError, InvalidStateTransitionError,
+        )
+
+        # Pick a real Batch A package that is already PAPER_ENABLED — the
+        # repository.transition_status check will reject FROM PAPER_ENABLED.
+        with dev_conn_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT package_id FROM strategy_pkg.package
+                       WHERE package_status = 'PAPER_ENABLED'
+                       ORDER BY package_id LIMIT 1"""
+                )
+                row = cur.fetchone()
+        if not row:
+            pytest.skip(
+                "no PAPER_ENABLED package in dev DB; this variant requires Batch A "
+                "to have at least one already-enabled package as the not-ready signal"
+            )
+        not_ready_package_id = row[0]
+
+        # ----- P1.1: env remap + stale-pool teardown + target verification -----
         import os
         from backend.tests.e2e.conftest import _parse_env  # type: ignore[attr-defined]
         env_cfg = _parse_env()
-        env_keys = ("TDX_DB_HOST", "TDX_DB_PORT", "TDX_DB_NAME", "TDX_DB_USER", "TDX_DB_PASSWORD")
+        env_keys = ("TDX_DB_HOST", "TDX_DB_PORT", "TDX_DB_NAME",
+                    "TDX_DB_USER", "TDX_DB_PASSWORD")
         original = {k: os.environ.get(k) for k in env_keys}
+
         try:
             os.environ["TDX_DB_HOST"] = env_cfg["TDX_DB_DEV_HOST"]
             os.environ["TDX_DB_PORT"] = env_cfg["TDX_DB_DEV_PORT"]
@@ -388,46 +426,70 @@ class TestPaperV2GovernanceNotReadyPath:
             os.environ["TDX_DB_USER"] = env_cfg["TDX_DB_DEV_USER"]
             os.environ["TDX_DB_PASSWORD"] = env_cfg["TDX_DB_DEV_PASSWORD"]
 
-            try:
-                from backend.db import pg_pool
-                if hasattr(pg_pool, "close_pool"):
-                    pg_pool.close_pool()
-            except Exception:
-                pass
+            # CORRECTED API: close_db_pool() (close_pool() didn't exist; previous
+            # call was a silent no-op against ANY stale prod pool already initialized
+            # earlier in the pytest session)
+            pg_pool.close_db_pool()
 
+            # P1.1 verification — confirm the rebuilt pool actually targets dev DB.
+            # If a stale prod pool snuck through, this assertion catches it before
+            # the test exercises enable_paper against the wrong DB.
+            with pg_pool.get_conn() as verify_conn:
+                with verify_conn.cursor() as cur:
+                    cur.execute("SELECT current_database()")
+                    actual_db = cur.fetchone()[0]
+            assert actual_db == env_cfg["TDX_DB_DEV_NAME"], (
+                f"pg_pool stale-pool risk: connected to {actual_db!r} after env remap, "
+                f"expected {env_cfg['TDX_DB_DEV_NAME']!r}. close_db_pool() did not "
+                f"force a rebuild — STOP before invoking enable_paper."
+            )
+
+            # ----- P1.2: strict typed-exception assertion -----
             service = StrategyPackageService()
-            bogus_package_id = "pkg_e2e_nonexistent_for_not_ready_test"
 
-            # The gate must fire — either StrategyPackageValidationError or
-            # any other exception (KeyError / ValueError / DB lookup error).
-            # We accept any raise as evidence the gate is wired.
-            raised = None
-            try:
-                service.enable_paper(bogus_package_id)
-            except Exception as e:
-                raised = e
+            with pytest.raises(EXPECTED_GATE_EXCEPTIONS) as excinfo:
+                service.enable_paper(not_ready_package_id)
 
-            assert raised is not None, \
-                f"enable_paper({bogus_package_id!r}) returned without raising — " \
-                f"gate did NOT fire on non-existent package. This violates the " \
-                f"D5 T8-A contract that paper-v2 consumes via thin adapter."
+            err = excinfo.value
+            err_msg = str(err)
+            err_context = getattr(err, "context", None) or {}
 
-            # Diagnostic: the raise should carry context identifying the
-            # missing package or the failed lookup.
-            err_msg = str(raised).lower()
-            assert (bogus_package_id.lower() in err_msg
-                    or "package" in err_msg
-                    or "not found" in err_msg
-                    or "no such" in err_msg
-                    or "missing" in err_msg
-                    or "does not exist" in err_msg), \
-                f"raise lacks diagnostic context — got {type(raised).__name__}: {raised}"
+            # Strict assertion on the typed exception's diagnostic surface
+            assert "package" in err_msg.lower() or "status" in err_msg.lower() \
+                or "transition" in err_msg.lower(), \
+                f"err message lacks gating diagnostic: {err_msg!r}"
+
+            # Context must surface the offending package_id AND the gating reason
+            # (current/from status, transition target, OR manifest evidence). Both
+            # exception classes' code paths populate context with these fields.
+            assert "package_id" in err_context, \
+                f"err context missing package_id key: {err_context!r}"
+            assert err_context.get("package_id") == not_ready_package_id, \
+                f"package_id mismatch: expected {not_ready_package_id!r}, " \
+                f"got {err_context.get('package_id')!r}"
+
+            # The gating REASON differentiates the two valid exception classes:
+            #  - InvalidStateTransitionError populates from_status / to_status / allowed_from
+            #  - StrategyPackageValidationError populates package_status (or failed_checks)
+            reason_keys = {"from_status", "to_status", "allowed_from",
+                           "package_status", "failed_checks"}
+            actual_keys = set(err_context.keys())
+            assert reason_keys & actual_keys, \
+                f"err context lacks gating reason (expected one of {reason_keys}); " \
+                f"got keys {actual_keys}"
         finally:
+            # Restore env so other tests in the session don't see dev creds
             for k, v in original.items():
                 if v is None:
                     os.environ.pop(k, None)
                 else:
                     os.environ[k] = v
+            # Tear down the dev-targeted pool so subsequent tests/sessions
+            # rebuild against whatever env they prefer
+            try:
+                pg_pool.close_db_pool()
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
