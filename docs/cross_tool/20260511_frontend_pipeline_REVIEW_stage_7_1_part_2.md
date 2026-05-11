@@ -13,7 +13,7 @@ REVIEW-READY — all 4 sub-pages of Stage 7.1 have shipped on this branch. Part 
 
 ## Part 2 commit SHA
 
-To be filled by `git rev-parse HEAD` after the commit lands. (See README footer / `git log --oneline -3` on the branch tip.)
+`c482e46` — `feat(frontend): stage 7.1 part 2 — market-regime + rl-execution UIs` on `claude/frontend-pipeline-pages-20260511` (pushed to origin).
 
 ## What landed in part 2
 
