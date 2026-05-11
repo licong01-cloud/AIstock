@@ -1,4 +1,4 @@
-﻿# Event Signal Financial Distress Research Findings
+# Event Signal Financial Distress Research Findings
 
 ## Persistent Findings
 
@@ -411,8 +411,8 @@ Preferred current candidate for future non-hard overlay research: `indicator_lar
 +------------------------------------------+----------------------+--------------------------------------------------------------------------------+
 | finding                                  | decision             | evidence                                                                       |
 +------------------------------------------+----------------------+--------------------------------------------------------------------------------+
-| best q_ocf intersection                  | WATCHLIST_ONLY       | q_ocf 10-30bn fixed15 top50 60td: score 9.5, avg +0.114%, 15/22 positive      |
-| true-QE shortlist                         | EMPTY                | no row passes WSL true-rerun gate; best score is far below Phase27 score 68.4 |
+| best q_ocf intersection                  | WATCHLIST_ONLY       | q_ocf 10-30bn fixed15 top50 60td: score 53.2, avg +0.114%, 15/22 positive      |
+| true-QE shortlist                         | EMPTY                | no row passes WSL true-rerun gate; best score remains below Phase27 score 68.4 |
 | direct event evidence                     | DOWNSIDE_EXISTS      | all Phase30 rows have negative T+20 median abnormal returns                   |
 | rank-aware precision                      | NOT_FIXED            | hit/overlay remains only 0.04%-0.06%, far from Phase19 focused precision      |
 | next research                             | PIVOT                | stop q_ocf intersections unless a new hypothesis appears                      |

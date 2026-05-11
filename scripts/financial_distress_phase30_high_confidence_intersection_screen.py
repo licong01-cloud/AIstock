@@ -93,6 +93,26 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
     return number if math.isfinite(number) else default
 
 
+def _first_present(row: Mapping[str, Any], *keys: str, default: Any = None) -> Any:
+    for key in keys:
+        if key in row and row.get(key) is not None:
+            return row.get(key)
+    return default
+
+
+def _int_field(row: Mapping[str, Any], *keys: str, default: int = 0) -> int:
+    value = _first_present(row, *keys, default=default)
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return default
+
+
+def _float_field(row: Mapping[str, Any], *keys: str, default: float = 0.0) -> float:
+    value = _first_present(row, *keys, default=default)
+    return _safe_float(value, default=default)
+
+
 def _rate(numerator: Any, denominator: Any) -> Optional[float]:
     den = _safe_float(denominator)
     if den <= 0:
@@ -172,14 +192,14 @@ def _direct_rule_score(rows: Sequence[Mapping[str, Any]]) -> dict[str, dict[str,
 
 
 def _phase27_like_score(row: Mapping[str, Any]) -> float:
-    loops = int(row.get("loops") or 0)
-    avg = _safe_float(row.get("avg_return_delta"))
-    median = _safe_float(row.get("median_return_delta"))
-    min_delta = _safe_float(row.get("min_return_delta"))
-    positive = int(row.get("positive_return_loops") or 0)
-    evaluated = int(row.get("total_score_down_evaluated_topk_buy_events") or 0)
-    dropped = int(row.get("total_score_down_dropped_from_topk_events") or 0)
-    replacements = int(row.get("total_replacement_open_events") or 0)
+    loops = _int_field(row, "loops")
+    avg = _float_field(row, "avg_return_delta")
+    median = _float_field(row, "median_return_delta")
+    min_delta = _float_field(row, "min_return_delta")
+    positive = _int_field(row, "positive_return_loops", "positive_loops")
+    evaluated = _int_field(row, "total_score_down_evaluated_topk_buy_events", "evaluated_topk_events")
+    dropped = _int_field(row, "total_score_down_dropped_from_topk_events", "dropped_from_topk_events")
+    replacements = _int_field(row, "total_replacement_open_events", "replacement_open_events")
     ex_best = _ex_best_avg(row) or 0.0
     score = 0.0
     score += min(max(avg / 0.002, -1.0), 2.0) * 20.0
@@ -205,10 +225,10 @@ def _phase27_like_score(row: Mapping[str, Any]) -> float:
 
 def _cheap_score(row: Mapping[str, Any]) -> float:
     score = _phase27_like_score(row)
-    density = row.get("topk_hit_density")
-    drop_rate = row.get("drop_rate_within_evaluated")
-    overlay_rows = int(row.get("overlay_rows") or 0)
-    evaluated = int(row.get("evaluated_topk_events") or 0)
+    density = _first_present(row, "topk_hit_density", "hit_density")
+    drop_rate = _first_present(row, "drop_rate_within_evaluated", "drop_rate_within_bucket")
+    overlay_rows = _int_field(row, "overlay_rows")
+    evaluated = _int_field(row, "evaluated_topk_events", "total_score_down_evaluated_topk_buy_events")
     if density is not None:
         score += min(_safe_float(density) / 0.001, 1.5) * 8.0
     if drop_rate is not None:
@@ -221,13 +241,13 @@ def _cheap_score(row: Mapping[str, Any]) -> float:
 
 
 def _decision(row: Mapping[str, Any], score: float) -> tuple[str, str]:
-    loops = int(row.get("loops") or 0)
-    avg = _safe_float(row.get("avg_return_delta"))
-    min_delta = _safe_float(row.get("min_return_delta"))
+    loops = _int_field(row, "loops")
+    avg = _float_field(row, "avg_return_delta")
+    min_delta = _float_field(row, "min_return_delta")
     ex_best = _ex_best_avg(row) or 0.0
-    dropped = int(row.get("dropped_from_topk_events") or 0)
-    evaluated = int(row.get("evaluated_topk_events") or 0)
-    positive = int(row.get("positive_loops") or 0)
+    dropped = _int_field(row, "dropped_from_topk_events", "total_score_down_dropped_from_topk_events")
+    evaluated = _int_field(row, "evaluated_topk_events", "total_score_down_evaluated_topk_buy_events")
+    positive = _int_field(row, "positive_loops", "positive_return_loops")
     positive_ratio = positive / max(loops, 1)
     if (
         loops >= 22
@@ -258,8 +278,9 @@ def _overlay_summary_rows(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
         active_td = int(raw.get("active_trading_days") or 0)
         exposure = exposure_by_key.get((rule_key, active_td), {})
         overlay_rows = int(exposure.get("overlay_rows") or 0)
-        evaluated = int(raw.get("total_score_down_evaluated_topk_buy_events") or 0)
-        dropped = int(raw.get("total_score_down_dropped_from_topk_events") or 0)
+        evaluated = _int_field(raw, "total_score_down_evaluated_topk_buy_events")
+        dropped = _int_field(raw, "total_score_down_dropped_from_topk_events")
+        positive_loops = _int_field(raw, "positive_return_loops")
         row = {
             "rule_key": rule_key,
             "active_trading_days": active_td,
@@ -267,7 +288,7 @@ def _overlay_summary_rows(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
             "mode_tag": _mode_tag(str(raw.get("simulator_mode") or "")),
             "top_k": _top_k_from_mode(str(raw.get("simulator_mode") or "")),
             "loops": int(raw.get("loops") or 0),
-            "positive_loops": int(raw.get("positive_return_loops") or 0),
+            "positive_loops": positive_loops,
             "avg_return_delta": raw.get("avg_return_delta"),
             "median_return_delta": raw.get("median_return_delta"),
             "min_return_delta": raw.get("min_return_delta"),
@@ -407,7 +428,7 @@ def _build_markdown(payload: Mapping[str, Any]) -> str:
         [
             "phase decision",
             "NO_WSL_TRUE_QE_RERUN",
-            "direct downside exists, but cheap overlay precision/effect is far below the Phase-27 gate",
+            "direct downside exists, but cheap overlay precision/effect remains below the Phase-27 gate",
         ],
     ]
     shortlist_rows = [

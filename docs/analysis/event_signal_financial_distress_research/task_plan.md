@@ -1,4 +1,4 @@
-﻿# Event Signal Financial Distress Research Task Plan
+# Event Signal Financial Distress Research Task Plan
 
 ## Purpose
 
@@ -380,8 +380,8 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 +------------------------------------------+----------------------+--------------------------------------------------------------------------------+
 | item                                     | decision             | evidence                                                                       |
 +------------------------------------------+----------------------+--------------------------------------------------------------------------------+
-| q_ocf 10-30bn / fixed15 top50 / 60td     | WATCHLIST_ONLY       | best cheap row score 9.5, avg +0.114%, 15/22 positive, hit/overlay 0.05%       |
-| WSL true-QE rerun                         | REJECT_NOW           | 0 true-QE candidates; all rows are far below the Phase-27 cheap gate           |
+| q_ocf 10-30bn / fixed15 top50 / 60td     | WATCHLIST_ONLY       | best cheap row score 53.2, avg +0.114%, 15/22 positive, hit/overlay 0.05%       |
+| WSL true-QE rerun                         | REJECT_NOW           | 0 true-QE candidates; best row remains below the Phase-27 cheap gate           |
 | direct-event downside                     | KEEP_AS_RESEARCH     | every Phase-30 rule has direct downside support, but overlay effect is weak    |
 | rank-aware top20/top50 intersection       | NO_PRECISION_LIFT    | TopK concentration remains around 0.04%-0.06%, not close to Phase19 precision |
 | next empirical step                       | STOP_QOCF_INTERSECT  | do not spend WSL budget here; pivot to other structured families or design work|

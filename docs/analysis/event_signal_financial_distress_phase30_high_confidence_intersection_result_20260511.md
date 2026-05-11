@@ -21,13 +21,13 @@ Research-only screen for q_ocf intersections and rank-aware TopK filters. No run
 ## Outcome
 
 ```text
-+--------------------+-------------------------------------------------------------------------+-------------------------------------------------------------------------------------------+
-| item               | value                                                                   | interpretation                                                                            |
-+--------------------+-------------------------------------------------------------------------+-------------------------------------------------------------------------------------------+
-| true-QE candidates | 0                                                                       | 0 means do not spend WSL true-rerun budget in this phase                                  |
-| best cheap row     | indicator_decline_q_ocf_to_sales_lt_0_mv_10_30bn / fixed15_top50 / 60td | score 9.5, avg 0.11%, hit/overlay 0.05%                                                   |
-| phase decision     | NO_WSL_TRUE_QE_RERUN                                                    | direct downside exists, but cheap overlay precision/effect is far below the Phase-27 gate |
-+--------------------+-------------------------------------------------------------------------+-------------------------------------------------------------------------------------------+
++--------------------+-------------------------------------------------------------------------+--------------------------------------------------------------------------------------------+
+| item               | value                                                                   | interpretation                                                                             |
++--------------------+-------------------------------------------------------------------------+--------------------------------------------------------------------------------------------+
+| true-QE candidates | 0                                                                       | 0 means do not spend WSL true-rerun budget in this phase                                   |
+| best cheap row     | indicator_decline_q_ocf_to_sales_lt_0_mv_10_30bn / fixed15_top50 / 60td | score 53.2, avg 0.11%, hit/overlay 0.05%                                                   |
+| phase decision     | NO_WSL_TRUE_QE_RERUN                                                    | direct downside exists, but cheap overlay precision/effect remains below the Phase-27 gate |
++--------------------+-------------------------------------------------------------------------+--------------------------------------------------------------------------------------------+
 ```
 
 ## Phase 29 Calibration
@@ -48,14 +48,14 @@ Research-only screen for q_ocf intersections and rank-aware TopK filters. No run
 +-----------+-------+-------+-------+---------+--------+------+------+-------------+----+---------------+---------------------+---------+----------------------------------------------------------------------------+
 | decision  | score | pos   | avg   | ex_best | min    | eval | drop | hit/overlay | td | mode          | direct              | t20_med | rule                                                                       |
 +-----------+-------+-------+-------+---------+--------+------+------+-------------+----+---------------+---------------------+---------+----------------------------------------------------------------------------+
-| WATCHLIST | 9.5   | 15/22 | 0.11% | 0.06%   | -0.00% | 247  | 9    | 0.05%       | 60 | fixed15_top50 | supports_downweight | -0.71%  | indicator_decline_q_ocf_to_sales_lt_0_mv_10_30bn                           |
-| WATCHLIST | 2.2   | 13/22 | 0.06% | 0.04%   | -0.09% | 227  | 9    | 0.06%       | 60 | fixed15_top50 | supports_downweight | -0.92%  | indicator_decline_q_ocf_to_sales_lt_0_actual_yoy_le_minus80_mv_ge_10bn     |
-| WATCHLIST | 1.9   | 12/22 | 0.03% | 0.01%   | -0.13% | 55   | 4    | 0.05%       | 60 | fixed15_top50 | supports_downweight | -3.50%  | indicator_decline_q_ocf_to_sales_lt_0_prior_loss_ge_2_mv_ge_10bn           |
-| WATCHLIST | 0.8   | 12/22 | 0.03% | 0.01%   | -0.13% | 87   | 4    | 0.05%       | 60 | fixed15_top50 | supports_downweight | -1.29%  | indicator_decline_q_ocf_to_sales_lt_0_and_leverage_or_liquidity_mv_ge_10bn |
-| WATCHLIST | -2.3  | 13/22 | 0.02% | 0.00%   | -0.00% | 98   | 2    | 0.06%       | 60 | fixed10_top50 | supports_downweight | -1.06%  | indicator_decline_q_ocf_to_sales_lt_0_profit_revenue_diverge_mv_ge_10bn    |
-| WATCHLIST | -4.4  | 13/22 | 0.04% | 0.02%   | -0.00% | 172  | 4    | 0.05%       | 60 | fixed15_top50 | supports_downweight | -0.11%  | indicator_decline_q_ocf_to_sales_lt_0_and_ocf_yoy_le_minus50_mv_ge_10bn    |
-| WATCHLIST | -5.6  | 12/22 | 0.03% | 0.01%   | -0.13% | 213  | 5    | 0.05%       | 60 | fixed15_top50 | supports_downweight | -1.16%  | indicator_decline_q_ocf_to_sales_lt_0_multi_stress_mv_ge_10bn              |
-| WATCHLIST | -6.7  | 12/22 | 0.00% | 0.00%   | -0.00% | 44   | 0    | 0.04%       | 60 | fixed10_top20 | supports_downweight | -1.69%  | indicator_decline_q_ocf_to_sales_lt_0_mv_ge_30bn                           |
+| WATCHLIST | 53.2  | 15/22 | 0.11% | 0.06%   | -0.00% | 247  | 9    | 0.05%       | 60 | fixed15_top50 | supports_downweight | -0.71%  | indicator_decline_q_ocf_to_sales_lt_0_mv_10_30bn                           |
+| WATCHLIST | 42.2  | 13/22 | 0.06% | 0.04%   | -0.09% | 227  | 9    | 0.06%       | 60 | fixed15_top50 | supports_downweight | -0.92%  | indicator_decline_q_ocf_to_sales_lt_0_actual_yoy_le_minus80_mv_ge_10bn     |
+| WATCHLIST | 31.3  | 12/22 | 0.03% | 0.01%   | -0.13% | 55   | 4    | 0.05%       | 60 | fixed15_top50 | supports_downweight | -3.50%  | indicator_decline_q_ocf_to_sales_lt_0_prior_loss_ge_2_mv_ge_10bn           |
+| WATCHLIST | 30.5  | 12/22 | 0.03% | 0.01%   | -0.13% | 87   | 4    | 0.05%       | 60 | fixed15_top50 | supports_downweight | -1.29%  | indicator_decline_q_ocf_to_sales_lt_0_and_leverage_or_liquidity_mv_ge_10bn |
+| WATCHLIST | 27.4  | 13/22 | 0.03% | 0.02%   | -0.00% | 172  | 5    | 0.05%       | 60 | fixed20_top50 | supports_downweight | -0.11%  | indicator_decline_q_ocf_to_sales_lt_0_and_ocf_yoy_le_minus50_mv_ge_10bn    |
+| WATCHLIST | 26.4  | 12/22 | 0.03% | 0.01%   | -0.13% | 213  | 5    | 0.05%       | 60 | fixed15_top50 | supports_downweight | -1.16%  | indicator_decline_q_ocf_to_sales_lt_0_multi_stress_mv_ge_10bn              |
+| WATCHLIST | 26.3  | 13/22 | 0.02% | 0.00%   | -0.00% | 98   | 2    | 0.06%       | 60 | fixed10_top50 | supports_downweight | -1.06%  | indicator_decline_q_ocf_to_sales_lt_0_profit_revenue_diverge_mv_ge_10bn    |
+| WATCHLIST | 15.6  | 12/22 | 0.00% | 0.00%   | -0.00% | 44   | 0    | 0.04%       | 60 | fixed10_top20 | supports_downweight | -1.69%  | indicator_decline_q_ocf_to_sales_lt_0_mv_ge_30bn                           |
 +-----------+-------+-------+-------+---------+--------+------+------+-------------+----+---------------+---------------------+---------+----------------------------------------------------------------------------+
 ```
 
@@ -98,30 +98,30 @@ Research-only screen for q_ocf intersections and rank-aware TopK filters. No run
 +-------+------------------+-------+-------+---------+--------+------+------+-------------+----+---------------+----------------------------------------------------------------------------+
 | score | decision         | pos   | avg   | ex_best | min    | eval | drop | hit/overlay | td | mode          | rule                                                                       |
 +-------+------------------+-------+-------+---------+--------+------+------+-------------+----+---------------+----------------------------------------------------------------------------+
-| 9.5   | WATCHLIST        | 15/22 | 0.11% | 0.06%   | -0.00% | 247  | 9    | 0.05%       | 60 | fixed15_top50 | indicator_decline_q_ocf_to_sales_lt_0_mv_10_30bn                           |
-| 3.2   | WATCHLIST        | 14/22 | 0.09% | 0.03%   | -0.18% | 406  | 12   | 0.05%       | 90 | fixed15_top50 | indicator_decline_q_ocf_to_sales_lt_0_mv_10_30bn                           |
-| 2.2   | WATCHLIST        | 13/22 | 0.06% | 0.04%   | -0.09% | 227  | 9    | 0.06%       | 60 | fixed15_top50 | indicator_decline_q_ocf_to_sales_lt_0_actual_yoy_le_minus80_mv_ge_10bn     |
-| 2.2   | WATCHLIST        | 13/22 | 0.06% | 0.04%   | -0.09% | 227  | 9    | 0.06%       | 60 | fixed20_top50 | indicator_decline_q_ocf_to_sales_lt_0_actual_yoy_le_minus80_mv_ge_10bn     |
-| 1.9   | CALIBRATION_ONLY | 12/22 | 0.03% | 0.01%   | -0.13% | 55   | 4    | 0.05%       | 60 | fixed15_top50 | indicator_decline_q_ocf_to_sales_lt_0_prior_loss_ge_2_mv_ge_10bn           |
-| 1.9   | CALIBRATION_ONLY | 12/22 | 0.03% | 0.01%   | -0.13% | 55   | 4    | 0.05%       | 60 | fixed20_top50 | indicator_decline_q_ocf_to_sales_lt_0_prior_loss_ge_2_mv_ge_10bn           |
-| 0.8   | CALIBRATION_ONLY | 12/22 | 0.03% | 0.01%   | -0.13% | 87   | 4    | 0.05%       | 60 | fixed15_top50 | indicator_decline_q_ocf_to_sales_lt_0_and_leverage_or_liquidity_mv_ge_10bn |
-| 0.8   | CALIBRATION_ONLY | 12/22 | 0.03% | 0.01%   | -0.13% | 87   | 4    | 0.05%       | 60 | fixed20_top50 | indicator_decline_q_ocf_to_sales_lt_0_and_leverage_or_liquidity_mv_ge_10bn |
-| -0.1  | WATCHLIST        | 13/22 | 0.02% | 0.01%   | -0.29% | 73   | 6    | 0.05%       | 90 | fixed20_top20 | indicator_decline_q_ocf_to_sales_lt_0_prior_loss_ge_2_mv_ge_10bn           |
-| -2.1  | WATCHLIST        | 13/22 | 0.05% | 0.02%   | -0.09% | 227  | 8    | 0.06%       | 60 | fixed10_top50 | indicator_decline_q_ocf_to_sales_lt_0_actual_yoy_le_minus80_mv_ge_10bn     |
-| -2.3  | WATCHLIST        | 13/22 | 0.02% | 0.00%   | -0.00% | 98   | 2    | 0.06%       | 60 | fixed10_top50 | indicator_decline_q_ocf_to_sales_lt_0_profit_revenue_diverge_mv_ge_10bn    |
-| -2.3  | WATCHLIST        | 13/22 | 0.02% | 0.00%   | -0.00% | 98   | 2    | 0.06%       | 60 | fixed15_top50 | indicator_decline_q_ocf_to_sales_lt_0_profit_revenue_diverge_mv_ge_10bn    |
-| -2.3  | WATCHLIST        | 13/22 | 0.02% | 0.00%   | -0.00% | 98   | 2    | 0.06%       | 60 | fixed20_top50 | indicator_decline_q_ocf_to_sales_lt_0_profit_revenue_diverge_mv_ge_10bn    |
-| -2.4  | WATCHLIST        | 13/22 | 0.02% | 0.00%   | -0.07% | 73   | 3    | 0.05%       | 90 | fixed10_top20 | indicator_decline_q_ocf_to_sales_lt_0_prior_loss_ge_2_mv_ge_10bn           |
-| -2.4  | WATCHLIST        | 13/22 | 0.02% | 0.00%   | -0.07% | 73   | 3    | 0.05%       | 90 | fixed15_top20 | indicator_decline_q_ocf_to_sales_lt_0_prior_loss_ge_2_mv_ge_10bn           |
-| -4.3  | CALIBRATION_ONLY | 12/22 | 0.04% | 0.01%   | -0.18% | 350  | 12   | 0.06%       | 90 | fixed15_top50 | indicator_decline_q_ocf_to_sales_lt_0_actual_yoy_le_minus80_mv_ge_10bn     |
-| -4.3  | CALIBRATION_ONLY | 12/22 | 0.04% | 0.01%   | -0.18% | 350  | 12   | 0.06%       | 90 | fixed20_top50 | indicator_decline_q_ocf_to_sales_lt_0_actual_yoy_le_minus80_mv_ge_10bn     |
-| -4.4  | WATCHLIST        | 13/22 | 0.04% | 0.02%   | -0.00% | 172  | 4    | 0.05%       | 60 | fixed15_top50 | indicator_decline_q_ocf_to_sales_lt_0_and_ocf_yoy_le_minus50_mv_ge_10bn    |
-| -4.9  | WATCHLIST        | 13/22 | 0.03% | 0.02%   | -0.00% | 172  | 5    | 0.05%       | 60 | fixed20_top50 | indicator_decline_q_ocf_to_sales_lt_0_and_ocf_yoy_le_minus50_mv_ge_10bn    |
-| -5.3  | WATCHLIST        | 14/22 | 0.03% | 0.01%   | -0.00% | 247  | 6    | 0.05%       | 60 | fixed10_top50 | indicator_decline_q_ocf_to_sales_lt_0_mv_10_30bn                           |
-| -5.6  | CALIBRATION_ONLY | 12/22 | 0.03% | 0.01%   | -0.13% | 213  | 5    | 0.05%       | 60 | fixed15_top50 | indicator_decline_q_ocf_to_sales_lt_0_multi_stress_mv_ge_10bn              |
-| -5.6  | CALIBRATION_ONLY | 12/22 | 0.03% | 0.01%   | -0.13% | 213  | 5    | 0.05%       | 60 | fixed20_top50 | indicator_decline_q_ocf_to_sales_lt_0_multi_stress_mv_ge_10bn              |
-| -5.9  | CALIBRATION_ONLY | 12/22 | 0.04% | 0.01%   | -0.21% | 100  | 6    | 0.04%       | 90 | fixed15_top20 | indicator_decline_q_ocf_to_sales_lt_0_and_leverage_or_liquidity_mv_ge_10bn |
-| -6.7  | CALIBRATION_ONLY | 12/22 | 0.00% | 0.00%   | -0.00% | 44   | 0    | 0.04%       | 60 | fixed10_top20 | indicator_decline_q_ocf_to_sales_lt_0_mv_ge_30bn                           |
+| 53.2  | WATCHLIST        | 15/22 | 0.11% | 0.06%   | -0.00% | 247  | 9    | 0.05%       | 60 | fixed15_top50 | indicator_decline_q_ocf_to_sales_lt_0_mv_10_30bn                           |
+| 47.7  | WATCHLIST        | 14/22 | 0.09% | 0.03%   | -0.18% | 406  | 12   | 0.05%       | 90 | fixed15_top50 | indicator_decline_q_ocf_to_sales_lt_0_mv_10_30bn                           |
+| 42.2  | WATCHLIST        | 13/22 | 0.06% | 0.04%   | -0.09% | 227  | 9    | 0.06%       | 60 | fixed15_top50 | indicator_decline_q_ocf_to_sales_lt_0_actual_yoy_le_minus80_mv_ge_10bn     |
+| 42.2  | WATCHLIST        | 13/22 | 0.06% | 0.04%   | -0.09% | 227  | 9    | 0.06%       | 60 | fixed20_top50 | indicator_decline_q_ocf_to_sales_lt_0_actual_yoy_le_minus80_mv_ge_10bn     |
+| 36.8  | WATCHLIST        | 13/22 | 0.05% | 0.02%   | -0.09% | 227  | 8    | 0.06%       | 60 | fixed10_top50 | indicator_decline_q_ocf_to_sales_lt_0_actual_yoy_le_minus80_mv_ge_10bn     |
+| 36.1  | CALIBRATION_ONLY | 12/22 | 0.04% | 0.01%   | -0.18% | 350  | 12   | 0.06%       | 90 | fixed15_top50 | indicator_decline_q_ocf_to_sales_lt_0_actual_yoy_le_minus80_mv_ge_10bn     |
+| 36.1  | CALIBRATION_ONLY | 12/22 | 0.04% | 0.01%   | -0.18% | 350  | 12   | 0.06%       | 90 | fixed20_top50 | indicator_decline_q_ocf_to_sales_lt_0_actual_yoy_le_minus80_mv_ge_10bn     |
+| 32.6  | WATCHLIST        | 14/22 | 0.03% | 0.01%   | -0.00% | 247  | 6    | 0.05%       | 60 | fixed10_top50 | indicator_decline_q_ocf_to_sales_lt_0_mv_10_30bn                           |
+| 31.3  | CALIBRATION_ONLY | 12/22 | 0.03% | 0.01%   | -0.13% | 55   | 4    | 0.05%       | 60 | fixed15_top50 | indicator_decline_q_ocf_to_sales_lt_0_prior_loss_ge_2_mv_ge_10bn           |
+| 31.3  | CALIBRATION_ONLY | 12/22 | 0.03% | 0.01%   | -0.13% | 55   | 4    | 0.05%       | 60 | fixed20_top50 | indicator_decline_q_ocf_to_sales_lt_0_prior_loss_ge_2_mv_ge_10bn           |
+| 30.5  | CALIBRATION_ONLY | 12/22 | 0.03% | 0.01%   | -0.13% | 87   | 4    | 0.05%       | 60 | fixed15_top50 | indicator_decline_q_ocf_to_sales_lt_0_and_leverage_or_liquidity_mv_ge_10bn |
+| 30.5  | CALIBRATION_ONLY | 12/22 | 0.03% | 0.01%   | -0.13% | 87   | 4    | 0.05%       | 60 | fixed20_top50 | indicator_decline_q_ocf_to_sales_lt_0_and_leverage_or_liquidity_mv_ge_10bn |
+| 30.3  | WATCHLIST        | 13/22 | 0.02% | 0.01%   | -0.29% | 73   | 6    | 0.05%       | 90 | fixed20_top20 | indicator_decline_q_ocf_to_sales_lt_0_prior_loss_ge_2_mv_ge_10bn           |
+| 27.4  | WATCHLIST        | 13/22 | 0.03% | 0.02%   | -0.00% | 172  | 5    | 0.05%       | 60 | fixed20_top50 | indicator_decline_q_ocf_to_sales_lt_0_and_ocf_yoy_le_minus50_mv_ge_10bn    |
+| 27.0  | WATCHLIST        | 13/22 | 0.04% | 0.02%   | -0.00% | 172  | 4    | 0.05%       | 60 | fixed15_top50 | indicator_decline_q_ocf_to_sales_lt_0_and_ocf_yoy_le_minus50_mv_ge_10bn    |
+| 26.4  | CALIBRATION_ONLY | 12/22 | 0.03% | 0.01%   | -0.13% | 213  | 5    | 0.05%       | 60 | fixed15_top50 | indicator_decline_q_ocf_to_sales_lt_0_multi_stress_mv_ge_10bn              |
+| 26.4  | CALIBRATION_ONLY | 12/22 | 0.03% | 0.01%   | -0.13% | 213  | 5    | 0.05%       | 60 | fixed20_top50 | indicator_decline_q_ocf_to_sales_lt_0_multi_stress_mv_ge_10bn              |
+| 26.3  | WATCHLIST        | 13/22 | 0.02% | 0.00%   | -0.00% | 98   | 2    | 0.06%       | 60 | fixed10_top50 | indicator_decline_q_ocf_to_sales_lt_0_profit_revenue_diverge_mv_ge_10bn    |
+| 26.3  | WATCHLIST        | 13/22 | 0.02% | 0.00%   | -0.00% | 98   | 2    | 0.06%       | 60 | fixed15_top50 | indicator_decline_q_ocf_to_sales_lt_0_profit_revenue_diverge_mv_ge_10bn    |
+| 26.3  | WATCHLIST        | 13/22 | 0.02% | 0.00%   | -0.00% | 98   | 2    | 0.06%       | 60 | fixed20_top50 | indicator_decline_q_ocf_to_sales_lt_0_profit_revenue_diverge_mv_ge_10bn    |
+| 25.0  | CALIBRATION_ONLY | 12/22 | 0.04% | 0.01%   | -0.21% | 100  | 6    | 0.04%       | 90 | fixed15_top20 | indicator_decline_q_ocf_to_sales_lt_0_and_leverage_or_liquidity_mv_ge_10bn |
+| 24.9  | WATCHLIST        | 13/22 | 0.02% | 0.00%   | -0.07% | 73   | 3    | 0.05%       | 90 | fixed10_top20 | indicator_decline_q_ocf_to_sales_lt_0_prior_loss_ge_2_mv_ge_10bn           |
+| 24.9  | WATCHLIST        | 13/22 | 0.02% | 0.00%   | -0.07% | 73   | 3    | 0.05%       | 90 | fixed15_top20 | indicator_decline_q_ocf_to_sales_lt_0_prior_loss_ge_2_mv_ge_10bn           |
+| 24.3  | CALIBRATION_ONLY | 12/22 | 0.02% | 0.00%   | -0.09% | 284  | 6    | 0.05%       | 90 | fixed15_top50 | indicator_decline_q_ocf_to_sales_lt_0_and_ocf_yoy_le_minus50_mv_ge_10bn    |
 +-------+------------------+-------+-------+---------+--------+------+------+-------------+----+---------------+----------------------------------------------------------------------------+
 ```
 

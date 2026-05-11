@@ -1,4 +1,4 @@
-﻿# Event Signal Financial Distress Research Progress
+# Event Signal Financial Distress Research Progress
 
 ## Session Log
 
@@ -646,7 +646,7 @@ Phase 24 evidence:
 | direct report           | reports\event_signal\financial_distress_phase30_high_confidence_intersection\direct\financial_distress_direct_event_20240701_20260511_194903.json |
 | overlay report          | reports\event_signal\financial_distress_phase30_high_confidence_intersection\overlay\rank_aware\financial_distress_qe_multiloop_20240701_20260511_202514.json |
 | rules / validations     | 8 rules / 96 stability rows / 2112 validations                                                                                                    |
-| best cheap row          | q_ocf 10-30bn / 60td / fixed15_top50, score 9.5, avg +0.114%, 15/22 positive, hit/overlay 0.05%                                                   |
+| best cheap row          | q_ocf 10-30bn / 60td / fixed15_top50, score 53.2, avg +0.114%, 15/22 positive, hit/overlay 0.05%                                                   |
 | decision                | no TRUE_QE_CANDIDATE; do not run WSL true QE for q_ocf intersections                                                                              |
 | production backend 8001 | not touched                                                                                                                                       |
 +-------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------+
