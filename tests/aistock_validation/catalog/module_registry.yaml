@@ -163,15 +163,15 @@ modules:
       required_on_change: [l0]
       recommended: [market_regime_ui]
   - module_id: rl_execution
-    display_name: RL Execution Models
+    display_name: RL Execution (Models + Module)
     module_type: product_feature
     risk_level: high
-    description: RL execution model registry, dev_version lineage, rolling training and evaluation metrics.
-    description_zh: 覆盖 RL 执行模型注册表、dev_version 谱系、滚动训练与评估指标的展示与激活流程。
+    description: RL execution model registry, dev_version lineage, rolling training/evaluation metrics, plus backend.services.rl_execution module visibility, router registration, and .gitignore guard.
+    description_zh: 覆盖 RL 执行模型注册表、dev_version 谱系、滚动训练与评估指标的展示与激活流程；以及 backend.services.rl_execution 模块可见性、路由注册和 .gitignore 反向遮蔽防护。
     ui_routes: [/rl-execution]
     api_routes: [/api/v1/rl-execution/*]
     test_plans:
-      required_on_change: [l0]
+      required_on_change: [l0, rl_execution_smoke]
       recommended: [rl_execution_ui]
   - module_id: local_data
     display_name: Local data
@@ -454,15 +454,6 @@ modules:
     description_zh: 覆盖 market.regime_label DDL、每日 regime 计算 cron、5 年百分位查询和多方法共存。
     test_plans:
       required_on_change: [l0, market_regime_label]
-  - module_id: rl_execution
-    display_name: RL Execution Module
-    module_type: technical_layer
-    risk_level: medium
-    description: backend.services.rl_execution module visibility, router registration, and gitignore guard.
-    description_zh: 覆盖 backend.services.rl_execution 模块可见性、路由注册和 .gitignore 反向遮蔽防护。
-    api_routes: [/api/v1/rl-execution/*]
-    test_plans:
-      required_on_change: [l0, rl_execution_smoke]
   - module_id: qe.archive_handlers
     display_name: QE Archive Event Handlers
     parent_module: qe.archive
