@@ -89,94 +89,87 @@ def e2e_test_run_id(dev_conn_provider):
 
 @pytest.fixture
 def cleanup_qe_archive(dev_conn_provider, e2e_test_run_id):
-    """P2.1 (Codex Stage 7.2 r1): SCOPED cleanup. Replaces the previous
-    blanket TRUNCATE of all 22 T12 tables. Now deletes only:
-      - archive rows tied to the e2e_test_run_id (run-scoped)
-      - dim/activation/audit rows tied to that run's portfolio_id
-      - outbox_event rows whose event_id LIKE 'e2e_test_%'
+    """P2.1 r2 (Codex Stage 7.2 r2): TIME-scoped cleanup for dim/audit tables.
 
-    Rationale: the TRUNCATE approach wiped concurrent dev-DB testers' data
-    in a shared environment. The scoped DELETE leaves other test fixtures
-    untouched while still leaving a clean slate for THIS test.
+    Round 1 introduced portfolio-scoped cleanup which Codex found over-broad
+    (multiple test or non-test runs sharing a portfolio_id could be wiped).
+    Round 2 splits the cleanup into two narrow scopes:
+
+      Run-scoped DELETE: tables with a direct run_id column. DELETE WHERE
+      run_id = e2e_test_run_id is the tightest possible scope; only the
+      specific run's archive rows are touched.
+
+      Time-scoped DELETE: dim/audit/activation tables that lack run_id.
+      We capture test_started_at at fixture entry and post-test DELETE only
+      rows whose captured_at >= test_started_at. Pre-existing rows (from
+      prior tests / concurrent fixtures sharing the portfolio) are NOT
+      touched. Worst-case leaves harmless duplicate SCD2 dim rows; handler
+      is already idempotent on natural keys.
+
+      Outbox: DELETE WHERE event_id LIKE 'e2e_test_%' — already tight scope.
 
     NEVER touches paper_v2 source rows.
     """
-    # Tables with a direct run_id column (handler writes only for our run_id)
+    from datetime import datetime, timezone
+
+    # Tables with a direct run_id column — run-scoped DELETE is precise
     RUN_SCOPED_TABLES = (
         "paper_v2_session_event", "paper_v2_run_event", "paper_v2_order_event",
         "paper_v2_order_execution_state", "paper_v2_order",
         "paper_v2_position_snapshot", "paper_v2_intraday_snapshot",
         "paper_v2_daily_snapshot", "paper_v2_cash_ledger", "paper_v2_error",
         "paper_v2_session_day", "paper_v2_session",
-        "paper_v2_fill",  # partitioned but DELETE works against parent
+        "paper_v2_fill",  # partitioned but DELETE works via parent
     )
-    # Tables scoped by portfolio_id (dim/activation/audit families)
-    PORTFOLIO_SCOPED_TABLES = (
+
+    # Tables without run_id column — time-scoped DELETE
+    # (only rows this test wrote post-fixture-start)
+    TIME_SCOPED_TABLES = (
         "dim_paper_v2_portfolio",
+        "dim_paper_v2_runtime_profile",
+        "dim_paper_v2_runtime_profile_version",
         "paper_v2_config_change_audit",
         "paper_v2_runtime_config_activation",
         "paper_v2_execution_policy_activation",
         "paper_v2_reset_audit",
     )
 
-    def _purge(conn, portfolio_id: str | None) -> None:
+    def _run_scoped_purge(conn) -> None:
+        """Always safe pre- AND post-test cleanup of run-scoped rows."""
         with conn.cursor() as cur:
-            # Run-scoped deletes (always safe — only this run's rows)
             for tbl in RUN_SCOPED_TABLES:
                 cur.execute(
                     f"DELETE FROM qe_archive.{tbl} WHERE run_id = %s",
                     (e2e_test_run_id,),
                 )
-            # paper_v2_run last (FK target for above)
             cur.execute(
                 "DELETE FROM qe_archive.paper_v2_run WHERE run_id = %s",
                 (e2e_test_run_id,),
             )
-            # Portfolio-scoped (only when we know the portfolio)
-            if portfolio_id:
-                for tbl in PORTFOLIO_SCOPED_TABLES:
-                    cur.execute(
-                        f"DELETE FROM qe_archive.{tbl} WHERE portfolio_id = %s",
-                        (portfolio_id,),
-                    )
-                # runtime_profile dim is scoped via profile_id JOIN to portfolio
-                cur.execute(
-                    """DELETE FROM qe_archive.dim_paper_v2_runtime_profile_version
-                       WHERE profile_id IN (
-                           SELECT profile_id FROM paper_v2.runtime_profile
-                           WHERE portfolio_id = %s
-                       )""",
-                    (portfolio_id,),
-                )
-                cur.execute(
-                    """DELETE FROM qe_archive.dim_paper_v2_runtime_profile
-                       WHERE profile_id IN (
-                           SELECT profile_id FROM paper_v2.runtime_profile
-                           WHERE portfolio_id = %s
-                       )""",
-                    (portfolio_id,),
-                )
-            # E2E test outbox events
             cur.execute(
                 "DELETE FROM qe_archive.outbox_event WHERE event_id LIKE 'e2e_test_%'"
             )
         conn.commit()
 
-    # Look up portfolio_id for the chosen run (safe SELECT on source)
-    portfolio_id: str | None = None
-    with dev_conn_provider() as conn:
+    def _time_scoped_purge(conn, threshold) -> None:
+        """Post-test only: delete dim/audit rows captured during this test."""
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT portfolio_id FROM paper_v2.run WHERE run_id = %s",
-                (e2e_test_run_id,),
-            )
-            r = cur.fetchone()
-            if r:
-                portfolio_id = r[0]
-        # Pre-test purge
-        _purge(conn, portfolio_id)
+            for tbl in TIME_SCOPED_TABLES:
+                cur.execute(
+                    f"DELETE FROM qe_archive.{tbl} WHERE captured_at >= %s",
+                    (threshold,),
+                )
+        conn.commit()
 
+    # Pre-test: run-scoped purge only (don't time-scope on entry — might be
+    # legitimate concurrent rows from other tests that we should not touch)
+    with dev_conn_provider() as conn:
+        _run_scoped_purge(conn)
+
+    # Capture threshold AFTER pre-purge so post-test cleanup is tight
+    test_started_at = datetime.now(timezone.utc)
     yield
 
     with dev_conn_provider() as conn:
-        _purge(conn, portfolio_id)
+        _run_scoped_purge(conn)
+        _time_scoped_purge(conn, test_started_at)
