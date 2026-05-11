@@ -368,6 +368,17 @@ rules:
     layer: backend_test
     risk_level: high
     ownership_reason: Stage 7.3 deep data-quality assertions; failures here surface archive / source contract drift before any release.
+  - rule_id: validation_dr
+    priority: 95
+    include:
+      - backend/tests/dr/**
+      - scripts/dr_snapshot_prod_db.py
+      - scripts/dr_cleanup_old_snapshots.py
+    primary_module: validation.dr
+    impact_modules: [platform.db, validation.runner]
+    layer: backend_test
+    risk_level: high
+    ownership_reason: Stage 7.4 DR validation + the snapshot/cleanup scripts they exercise; failures here surface backup-restoration risk before any production rollout.
   - rule_id: scripts_default
     priority: 10
     include:

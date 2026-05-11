@@ -72,6 +72,30 @@ jobs:
           path: tmp/dr/
           if-no-files-found: ignore
 
+  dr-validate:
+    name: DR validation (dump validity + schema diff + retention)
+    needs: dr-snapshot
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 15
+    env:
+      DR_BACKUP_DIR: 'E:/DEV backup/aistock_pg_snapshots'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: nox -s dr_validate
+        run: |
+          source "$(conda info --base)/etc/profile.d/conda.sh"
+          conda activate AIstock
+          python -m nox -s dr_validate
+
+      - name: Upload DR validate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dr-validate-${{ github.run_id }}
+          path: tmp/dr/
+          if-no-files-found: ignore
+
   nightly-l3:
     name: Nightly L3 (paper_v2 + qe_archive + qe_read)
     needs: dr-snapshot
@@ -149,7 +173,7 @@ jobs:
 
   full-summary:
     name: Nightly summary + auto-bug on failure
-    needs: [dr-snapshot, nightly-l3, paper-v2-live]
+    needs: [dr-snapshot, dr-validate, nightly-l3, paper-v2-live]
     if: always()
     runs-on: [self-hosted, windows]
     timeout-minutes: 15
@@ -182,9 +206,10 @@ jobs:
           cat "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
 
       - name: Auto-register failure as BUG (cross_tool_review_dispatch)
-        if: failure() || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure'
+        if: failure() || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure'
         env:
           DR_RESULT: ${{ needs.dr-snapshot.result }}
+          DR_VALIDATE_RESULT: ${{ needs.dr-validate.result }}
           L3_RESULT: ${{ needs.nightly-l3.result }}
           LIVE_RESULT: ${{ needs.paper-v2-live.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

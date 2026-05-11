@@ -412,6 +412,35 @@ def qe_read_l3(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def dr_validate(session: nox.Session) -> None:
+    """Stage 7.4 DR validation against E:/DEV backup/aistock_pg_snapshots/.
+
+    Three families (Stage 7.4 §1-§3):
+      - dump file validity (pg_restore --list / plain SQL header scan)
+      - dump schema vs dev DB schema diff (one-way subset)
+      - retention policy compliance (30 day rolling + monthly permanent)
+
+    Skips cleanly when the backup directory is empty or pg_restore /
+    docker postgres container are not available, so the session is safe
+    on fresh CI hosts without local DR state.
+    """
+    session.run(
+        "python",
+        "-m",
+        "compileall",
+        "backend/tests/dr",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/dr",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
 def data_quality_deep(session: nox.Session) -> None:
     """Stage 7.3 deep data-quality assertions against dev DB.
 

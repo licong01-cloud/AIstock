@@ -458,3 +458,12 @@ modules:
     description_zh: 覆盖 Stage 7.3 深度数据质量验证 (字段一致 / jsonb 结构 / 派生字段 / 跨表一致 / 时序单调)。
     test_plans:
       required_on_change: [l0, data_quality_deep]
+  - module_id: validation.dr
+    display_name: DR validation
+    parent_module: validation
+    module_type: cross_cutting
+    risk_level: high
+    description: Stage 7.4 disaster-recovery validation (pg_dump file validity, schema diff vs dev DB, retention policy compliance).
+    description_zh: 覆盖 Stage 7.4 灾难恢复验证 (dump 文件完整性 / schema diff / 保留策略合规)。
+    test_plans:
+      required_on_change: [l0, dr_validate]
