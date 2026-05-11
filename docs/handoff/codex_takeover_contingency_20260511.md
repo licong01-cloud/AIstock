@@ -238,3 +238,104 @@ R6 governance merge prep:
 - 等 paper-v2 verify deliver → R6 merge 评估
 
 Strategy session 继续主导，contingency 未激活。
+
+### 2026-05-11 16:43 — paper-v2 verify Codex 7bf840d = PASS
+
+- paper-v2 commit `ee2e56f` on claude/paper-v2-vnpy-mvp-20260508
+- Verify doc: `docs/cross_tool/20260511_paper_v2_VERIFY_codex_governance_prep_fixes.md`
+- Drawer ref: `36b484c9` (cross-tool / codex-claude-coord)
+- 结果:
+  - BUG-PREP-001 (M exit codes): PASS
+  - BUG-PREP-002 (M gate rename): PASS
+  - BUG-PREP-003 (L fail-close): PASS
+  - BUG-PREP-004 (L apply-plan tests): PASS
+  - JSON safety invariants: OK (10 files, status=passed, ddl=false, db_writes=false)
+  - Regressions: none
+  - R6 readiness: READY (prep layer only; DDL exec + evidence writer remain separate gates)
+
+### R6 governance merge prep 进度更新
+- ✅ prep scripts (924d717)
+- ✅ 4 BUG-PREP fix + dry-runs (7bf840d)
+- ✅ paper-v2 verify Codex fix (ee2e56f, drawer 36b484c9)
+- ⏸️ 4 prod packages evidence backfill (待用户授权 prod DB write)
+- ⏸️ R6 merge (待 evidence backfill + 用户授权)
+
+### 2026-05-11 ~16:55 — 派 paper-v2 baseline post-R4 重跑
+
+- main HEAD: 4a3fa60 (R4 + handoff + hotfix)
+- 目的: R5 merge 前最后 gate, 验证 main GREEN + R4 内容(qe_archive_backend / e2e / paper_v2_l3)
+- 期望: GREEN ≥8 sessions + 5 SKIP (UI service-policy)
+- 输出: BASELINE post-R4 doc on paper-v2 branch
+- drawer: 500f98cb (cross-tool / codex-claude-coord)
+
+### 2026-05-11 ~17:00 — 派 Codex 2 任务并行
+
+drawer: d370a52f (cross-tool / codex-claude-coord)
+detail_doc: docs/cross_tool/20260511_strategy_DISPATCH_codex_evidence_backfill_prep.md
+
+- Task 1 HIGH: R6 evidence backfill script prep + dev dry-run
+  - branch: codex/qe-governance-integration-20260509
+  - scripts/strategy_package_evidence_backfill.py + scripts/protected_asset_ledger_backfill.py
+  - --dry-run/--apply 双模式, dev DB SELECT-only preview
+  - 2 test files + 4 JSON outputs
+  - SLA 2-3h
+  - 不 apply prod, 不 INSERT dev, 不 merge codex branch
+
+- Task 2 MED: main hotfix audit (post-R4)
+  - 范围: module_registry.yaml dedup + test_cross_table_consistency.py skip
+  - 验证 R0-R6 协议合规 + 不丢 metadata + skip 不掩盖真实回归
+  - 输出 <200 words drawer, 必要时 BUG-AUDIT-XXX
+  - SLA 30 min
+
+Codex 接手 contingency 未激活, 战略 session 继续主导。
+
+### 2026-05-11 ~17:08 — paper-v2 baseline post-R4 = GREEN
+
+- commit `535c539` (drawer `926b68f0`)
+- verdict: GREEN, 11G/0F/5SKIP UI/1 nox-skip (model_registry_backend)/0 MISS
+- hotfix Fix A verified: validation_module_registry_l0 8 passed, 12 mapped
+- hotfix Fix B verified: data_quality_deep 10p/21s, archive-empty SKIP per D5 Q2.c
+- R4 (T12/T14) verified: qe_archive_backend 70 passed, qe_archive_data_quality 27/27 tables
+- **R5 readiness: GO**
+
+### 2026-05-11 ~17:11 — Codex Task 2 hotfix audit = PASS
+
+- drawer `b3d63611`
+- PASS, no BUG-AUDIT findings, 协议合规 OK
+
+### 2026-05-11 ~17:51 — Codex Task 1 R6 backfill prep = COMPLETE
+
+- commit `b976c23` (drawer `d5816559`)
+- 2 scripts + 2 test files + 4 dry-run JSON outputs
+- 17 pytest passed + 54 governance smoke passed
+- guardrail 0 P1 findings
+- negative safety check PASS (反 target_db/port/dbname 误用)
+- production_touched=false, services_touched=false, main_merged=false
+
+### 2026-05-11 ~18:00 — 派 paper-v2 verify Codex b976c23
+
+- drawer `013ab7f7`
+- 4-layer audit: static / 17 tests / dry-run JSON / R6 semantic
+- KEY check: --apply mode 是否有 confirmation step before prod INSERT
+- SLA 60 min (实盘目标驱动)
+- 输出 verdict: READY / CAVEATS / BLOCKED
+
+### 2026-05-11 ~18:05 — 派 Codex Task 3 R6 prod apply runbook
+
+- drawer `5dd13e99`
+- 目标: 写 `docs/operations/r6_prod_apply_runbook_20260511.md`
+- 含 preflight / DR snapshot / backfill --apply / 6 migrations / R6 merge / daemon enable / cold-start / rollback / 9:30 cutover / time budget
+- 与 paper-v2 verify 并行
+- SLA 1.5h
+
+### 实盘目标 — 明早 9:30 A股开市
+
+路径 A 时间线（今晚完成 prod 配置）:
+- 19:00 paper-v2 verify deliver
+- 19:00 R5 merge (用户授权后)
+- 19:15 DR snapshot
+- 20:00 evidence backfill --apply
+- 22:00 6 migrations apply
+- 23:00 R6 merge
+- 23:30 prod backend + daemon enable + cold-start
+- 明早 9:30 实盘 ✅
