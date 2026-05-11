@@ -5,7 +5,7 @@
 **date**: 2026-05-11
 **responding_to_drawer**: `46553d25ba5a93b1132144ec` (Codex r2 BLOCKED on Lane A)
 **branch**: `origin/claude/pipeline-foundation-20260510`
-**commit**: `<set after push>` fix(pipeline): Stage 7.3 r2 — Codex r2 P1+P2
+**commit**: `5a39098` fix(pipeline): Stage 7.3 r2 — Codex r2 P1+P2
 **verdict**: AWAITING_REVIEW
 
 ## Summary
