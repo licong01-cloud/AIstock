@@ -34,6 +34,7 @@ from backend.services.event_signal.financial_distress_qe_overlay_research import
     PHASE24_RESEARCH_RULES,
     PHASE25_RESEARCH_RULES,
     PHASE30_RESEARCH_RULES,
+    PHASE31_RESEARCH_RULES,
     REFINEMENT_RULES,
     SIZE_BUCKET_RULES,
     FinancialDistressRule,
@@ -59,6 +60,7 @@ ALL_DIRECT_EVENT_RULES = (
     + PHASE24_RESEARCH_RULES
     + PHASE25_RESEARCH_RULES
     + PHASE30_RESEARCH_RULES
+    + PHASE31_RESEARCH_RULES
 )
 
 

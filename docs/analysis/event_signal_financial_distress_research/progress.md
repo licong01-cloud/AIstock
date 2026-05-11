@@ -651,3 +651,20 @@ Phase 24 evidence:
 | production backend 8001 | not touched                                                                                                                                       |
 +-------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------+
 ```
+
+## 2026-05-11 Phase 31 Completed
+
+```text
++-------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------+
+| item                    | value                                                                                                                                           |
++-------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------+
+| script                  | scripts/financial_distress_phase31_non_qocf_structured_screen.py                                                                                |
+| report                  | docs/analysis/event_signal_financial_distress_phase31_non_qocf_structured_screen_result_20260511.md                                             |
+| direct report           | reports\event_signal\financial_distress_phase31_non_qocf_structured_screen\direct\financial_distress_direct_event_20240701_20260511_233417.json |
+| overlay report          | reports\event_signal\financial_distress_phase31_non_qocf_structured_screen\overlay\rank_aware\financial_distress_qe_multiloop_20240701_20260512_000610.json |
+| rules / validations     | 14 rules / 84 stability rows / 1848 validations                                                                                                 |
+| best cheap row          | indicator_decline_current_ratio_lt_08_mv_10_30bn, fixed15_top50, 60td, score 27.6                                                              |
+| decision                | no TRUE_QE_CANDIDATE; keep as direct-risk/watchlist research only                                                                               |
+| production backend 8001 | not touched                                                                                                                                     |
++-------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------+
+```

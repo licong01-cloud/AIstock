@@ -387,3 +387,17 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | next empirical step                       | STOP_QOCF_INTERSECT  | do not spend WSL budget here; pivot to other structured families or design work|
 +------------------------------------------+----------------------+--------------------------------------------------------------------------------+
 ```
+
+## Phase 31 Non-q_ocf Structured Screen Finding
+
+```text
++--------------------------------------------------------+----------------------+--------------------------------------------------------------------------------+
+| item                                                   | decision             | evidence                                                                       |
++--------------------------------------------------------+----------------------+--------------------------------------------------------------------------------+
+| current_ratio<0.8 10-30bn / fixed15 top50 / 60td       | WATCHLIST_ONLY       | best cheap row score 27.6, avg +0.02%, 12/22 positive, hit/overlay 0.08%       |
+| expectation miss gap>=100 + prior losses               | DIRECT_DOWNSIDE_ONLY | T+60 median around -8%, but Top50 hits and drops are too sparse                |
+| profit/revenue both down 30-100bn                      | DIRECT_DOWNSIDE_ONLY | T+20 median -3.41%, T+60 median -4.74%, but cheap overlay remains weak         |
+| WSL true-QE rerun                                      | REJECT_NOW           | 0 true-QE candidates; no row clears the precision/effect cheap gate            |
+| next empirical step                                    | DIRECT_RISK_POLICY   | study direct-event risk watchlist, sizing, and post-event distribution first   |
++--------------------------------------------------------+----------------------+--------------------------------------------------------------------------------+
+```

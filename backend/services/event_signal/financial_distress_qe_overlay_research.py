@@ -83,6 +83,7 @@ PHASE24_CASHFLOW_LEVERAGE_RESEARCH_RULES: tuple[FinancialDistressRule, ...]
 PHASE24_RESEARCH_RULES: tuple[FinancialDistressRule, ...]
 PHASE25_RESEARCH_RULES: tuple[FinancialDistressRule, ...]
 PHASE30_RESEARCH_RULES: tuple[FinancialDistressRule, ...]
+PHASE31_RESEARCH_RULES: tuple[FinancialDistressRule, ...]
 MARKET_CAP_BUCKET_ORDER = (
     "mv_lt_5bn_yuan",
     "mv_5bn_to_10bn_yuan",
@@ -680,6 +681,107 @@ PHASE30_RESEARCH_RULES: tuple[FinancialDistressRule, ...] = (
     ),
 )
 
+PHASE31_RESEARCH_RULES: tuple[FinancialDistressRule, ...] = (
+    FinancialDistressRule(
+        rule_key="expectation_miss_gap_ge_100_mv_ge_10bn_prior_loss_ge_2",
+        title="expectation miss gap >=100ppt, market cap >=10bn, prior losses >=2",
+        description="Phase-31 non-q_ocf rule combining a large forecast-to-actual miss with repeated loss history.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=1110,
+    ),
+    FinancialDistressRule(
+        rule_key="expectation_miss_gap_ge_100_mv_10_30bn_prior_loss_ge_2",
+        title="expectation miss gap >=100ppt, market cap 10-30bn, prior losses >=2",
+        description="Phase-31 medium-cap split for a large expectation miss plus repeated loss history.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=1120,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_actual_yoy_le_minus80_mv_10_30bn",
+        title="actual yoy <= -80%, market cap 10-30bn CNY",
+        description="Phase-31 size split for sharp financial-indicator profit deterioration without q_ocf dependence.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=1130,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_actual_yoy_le_minus80_mv_30_100bn",
+        title="actual yoy <= -80%, market cap 30-100bn CNY",
+        description="Phase-31 large-cap split for sharp financial-indicator profit deterioration without q_ocf dependence.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=1140,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_profit_revenue_diverge_mv_10_30bn",
+        title="profit decline with non-negative revenue growth, market cap 10-30bn CNY",
+        description="Phase-31 medium-cap profit/revenue divergence rule independent of q_ocf.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=1150,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_profit_revenue_diverge_mv_30_100bn",
+        title="profit decline with non-negative revenue growth, market cap 30-100bn CNY",
+        description="Phase-31 large-cap profit/revenue divergence rule independent of q_ocf.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=1160,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_profit_revenue_both_down_mv_10_30bn",
+        title="profit and revenue both down, market cap 10-30bn CNY",
+        description="Phase-31 medium-cap rule for broad operating deterioration without q_ocf dependence.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=1170,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_profit_revenue_both_down_mv_30_100bn",
+        title="profit and revenue both down, market cap 30-100bn CNY",
+        description="Phase-31 large-cap rule for broad operating deterioration without q_ocf dependence.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=1180,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_negative_margin_mv_10_30bn",
+        title="negative net margin, market cap 10-30bn CNY",
+        description="Phase-31 medium-cap negative-margin split for indicator deterioration.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=1190,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_negative_margin_mv_30_100bn",
+        title="negative net margin, market cap 30-100bn CNY",
+        description="Phase-31 large-cap negative-margin split for indicator deterioration.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=1200,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_debt_assets_ge_90_mv_10_30bn",
+        title="debt/assets >=90%, market cap 10-30bn CNY",
+        description="Phase-31 medium-cap very-high-leverage split independent of q_ocf.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=1210,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_debt_assets_ge_90_mv_30_100bn",
+        title="debt/assets >=90%, market cap 30-100bn CNY",
+        description="Phase-31 large-cap very-high-leverage split independent of q_ocf.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=1220,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_current_ratio_lt_08_mv_10_30bn",
+        title="current ratio <0.8, market cap 10-30bn CNY",
+        description="Phase-31 medium-cap liquidity-stress split independent of q_ocf.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=1230,
+    ),
+    FinancialDistressRule(
+        rule_key="indicator_decline_current_ratio_lt_08_mv_30_100bn",
+        title="current ratio <0.8, market cap 30-100bn CNY",
+        description="Phase-31 large-cap liquidity-stress split independent of q_ocf.",
+        policy_risk_level="MEDIUM_HIGH",
+        priority=1240,
+    ),
+)
+
 SEVERITY_PROFILES: dict[str, SeverityProfile] = {
     "balanced": SeverityProfile(
         profile_key="balanced",
@@ -1000,6 +1102,7 @@ def select_research_rules(
     include_phase24_rules: bool = False,
     include_phase25_rules: bool = False,
     include_phase30_rules: bool = False,
+    include_phase31_rules: bool = False,
     size_bucket_only: bool = False,
     loss_history_only: bool = False,
     mid_large_only: bool = False,
@@ -1007,6 +1110,7 @@ def select_research_rules(
     phase24_only: bool = False,
     phase25_only: bool = False,
     phase30_only: bool = False,
+    phase31_only: bool = False,
 ) -> tuple[FinancialDistressRule, ...]:
     rules: list[FinancialDistressRule] = []
     enabled_only_flags = sum(
@@ -1019,6 +1123,7 @@ def select_research_rules(
             phase24_only,
             phase25_only,
             phase30_only,
+            phase31_only,
         )
         if flag
     )
@@ -1038,6 +1143,8 @@ def select_research_rules(
         rules.extend(PHASE25_RESEARCH_RULES)
     elif phase30_only:
         rules.extend(PHASE30_RESEARCH_RULES)
+    elif phase31_only:
+        rules.extend(PHASE31_RESEARCH_RULES)
     else:
         if include_first_batch_rules:
             rules.extend(FIRST_BATCH_RULES)
@@ -1055,6 +1162,8 @@ def select_research_rules(
             rules.extend(PHASE25_RESEARCH_RULES)
         if include_phase30_rules:
             rules.extend(PHASE30_RESEARCH_RULES)
+        if include_phase31_rules:
+            rules.extend(PHASE31_RESEARCH_RULES)
     if not rules:
         raise ValueError("at least one research rule set must be enabled")
     return tuple(sorted(rules, key=lambda item: item.priority))
@@ -1162,6 +1271,10 @@ def _rule_applies(row: Mapping[str, Any], rule: FinancialDistressRule) -> bool:
     has_profit_revenue_divergence = (
         actual_yoy is not None and actual_yoy <= -50.0 and revenue_yoy is not None and revenue_yoy >= 0.0
     )
+    has_profit_revenue_both_down = (
+        actual_yoy is not None and actual_yoy <= -50.0 and revenue_yoy is not None and revenue_yoy <= -20.0
+    )
+    has_negative_margin = netprofit_margin is not None and netprofit_margin < 0.0
     has_prior_loss_stress = prior_loss_count_bucket in PRIOR_LOSS_GE2_BUCKETS
     actual_source_type = str(
         (row.get("metric_detail") if isinstance(row.get("metric_detail"), Mapping) else {}).get("actual_source_type") or ""
@@ -1242,10 +1355,30 @@ def _rule_applies(row: Mapping[str, Any], rule: FinancialDistressRule) -> bool:
             and miss_gap >= 50.0
             and actual_source_type == "tushare_fina_indicator"
         )
+    if rule.rule_key == "expectation_miss_gap_ge_100_mv_ge_10bn_prior_loss_ge_2":
+        return (
+            event_type == EXPECTATION_MISS_EVENT_TYPE
+            and is_mid_large_cap
+            and miss_gap is not None
+            and miss_gap >= 100.0
+            and has_prior_loss_stress
+        )
+    if rule.rule_key == "expectation_miss_gap_ge_100_mv_10_30bn_prior_loss_ge_2":
+        return (
+            event_type == EXPECTATION_MISS_EVENT_TYPE
+            and is_10_30bn_cap
+            and miss_gap is not None
+            and miss_gap >= 100.0
+            and has_prior_loss_stress
+        )
     if rule.rule_key == "indicator_decline_actual_yoy_le_minus100_mv_10_30bn":
         return is_indicator_large_decline and is_10_30bn_cap and actual_yoy is not None and actual_yoy <= -100.0
     if rule.rule_key == "indicator_decline_actual_yoy_le_minus80_mv_ge_10bn":
         return is_indicator_large_decline and is_mid_large_cap and actual_yoy is not None and actual_yoy <= -80.0
+    if rule.rule_key == "indicator_decline_actual_yoy_le_minus80_mv_10_30bn":
+        return is_indicator_large_decline and is_10_30bn_cap and has_actual_yoy_stress
+    if rule.rule_key == "indicator_decline_actual_yoy_le_minus80_mv_30_100bn":
+        return is_indicator_large_decline and is_30_100bn_cap and has_actual_yoy_stress
     if rule.rule_key == "indicator_decline_profit_revenue_diverge_mv_ge_10bn":
         return (
             is_indicator_large_decline
@@ -1255,6 +1388,10 @@ def _rule_applies(row: Mapping[str, Any], rule: FinancialDistressRule) -> bool:
             and revenue_yoy is not None
             and revenue_yoy >= 0.0
         )
+    if rule.rule_key == "indicator_decline_profit_revenue_diverge_mv_10_30bn":
+        return is_indicator_large_decline and is_10_30bn_cap and has_profit_revenue_divergence
+    if rule.rule_key == "indicator_decline_profit_revenue_diverge_mv_30_100bn":
+        return is_indicator_large_decline and is_30_100bn_cap and has_profit_revenue_divergence
     if rule.rule_key == "indicator_decline_profit_revenue_both_down_mv_ge_10bn":
         return (
             is_indicator_large_decline
@@ -1264,8 +1401,16 @@ def _rule_applies(row: Mapping[str, Any], rule: FinancialDistressRule) -> bool:
             and revenue_yoy is not None
             and revenue_yoy <= -20.0
         )
+    if rule.rule_key == "indicator_decline_profit_revenue_both_down_mv_10_30bn":
+        return is_indicator_large_decline and is_10_30bn_cap and has_profit_revenue_both_down
+    if rule.rule_key == "indicator_decline_profit_revenue_both_down_mv_30_100bn":
+        return is_indicator_large_decline and is_30_100bn_cap and has_profit_revenue_both_down
     if rule.rule_key == "indicator_decline_negative_margin_mv_ge_10bn":
-        return is_indicator_large_decline and is_mid_large_cap and netprofit_margin is not None and netprofit_margin < 0.0
+        return is_indicator_large_decline and is_mid_large_cap and has_negative_margin
+    if rule.rule_key == "indicator_decline_negative_margin_mv_10_30bn":
+        return is_indicator_large_decline and is_10_30bn_cap and has_negative_margin
+    if rule.rule_key == "indicator_decline_negative_margin_mv_30_100bn":
+        return is_indicator_large_decline and is_30_100bn_cap and has_negative_margin
     if rule.rule_key == "indicator_decline_ocf_yoy_le_minus50_mv_ge_10bn":
         return is_indicator_large_decline and is_mid_large_cap and ocf_yoy is not None and ocf_yoy <= -50.0
     if rule.rule_key == "indicator_decline_debt_assets_ge_70_mv_ge_10bn":
@@ -1341,8 +1486,16 @@ def _rule_applies(row: Mapping[str, Any], rule: FinancialDistressRule) -> bool:
         return is_indicator_large_decline and is_mid_large_cap and debt_to_assets is not None and debt_to_assets >= 80.0
     if rule.rule_key == "indicator_decline_debt_assets_ge_90_mv_ge_10bn":
         return is_indicator_large_decline and is_mid_large_cap and debt_to_assets is not None and debt_to_assets >= 90.0
+    if rule.rule_key == "indicator_decline_debt_assets_ge_90_mv_10_30bn":
+        return is_indicator_large_decline and is_10_30bn_cap and debt_to_assets is not None and debt_to_assets >= 90.0
+    if rule.rule_key == "indicator_decline_debt_assets_ge_90_mv_30_100bn":
+        return is_indicator_large_decline and is_30_100bn_cap and debt_to_assets is not None and debt_to_assets >= 90.0
     if rule.rule_key == "indicator_decline_current_ratio_lt_08_mv_ge_10bn":
         return is_indicator_large_decline and is_mid_large_cap and current_ratio is not None and current_ratio < 0.8
+    if rule.rule_key == "indicator_decline_current_ratio_lt_08_mv_10_30bn":
+        return is_indicator_large_decline and is_10_30bn_cap and current_ratio is not None and current_ratio < 0.8
+    if rule.rule_key == "indicator_decline_current_ratio_lt_08_mv_30_100bn":
+        return is_indicator_large_decline and is_30_100bn_cap and current_ratio is not None and current_ratio < 0.8
     if rule.rule_key == "indicator_decline_ocf_yoy_le_minus50_and_debt_assets_ge_70_mv_ge_10bn":
         return (
             is_indicator_large_decline
@@ -3519,6 +3672,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--phase25-only", action="store_true")
     parser.add_argument("--include-phase30-rules", action="store_true")
     parser.add_argument("--phase30-only", action="store_true")
+    parser.add_argument("--include-phase31-rules", action="store_true")
+    parser.add_argument("--phase31-only", action="store_true")
     parser.add_argument("--rule-key", action="append", default=None, help="Limit research to one or more rule_key values.")
     return parser.parse_args(argv)
 
@@ -3535,6 +3690,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         include_phase24_rules=args.include_phase24_rules,
         include_phase25_rules=args.include_phase25_rules,
         include_phase30_rules=args.include_phase30_rules,
+        include_phase31_rules=args.include_phase31_rules,
         size_bucket_only=args.size_bucket_only,
         loss_history_only=args.loss_history_only,
         mid_large_only=args.mid_large_only,
@@ -3542,6 +3698,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         phase24_only=args.phase24_only,
         phase25_only=args.phase25_only,
         phase30_only=args.phase30_only,
+        phase31_only=args.phase31_only,
     )
     research_rules = filter_research_rules_by_key(research_rules, args.rule_key)
     if args.loop_spec or args.loop_spec_json:
