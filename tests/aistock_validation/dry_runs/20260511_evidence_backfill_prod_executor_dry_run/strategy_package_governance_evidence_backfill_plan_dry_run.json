@@ -1,0 +1,866 @@
+{
+  "blocked_packages": {},
+  "db_connection_opened": false,
+  "db_writes_executed": false,
+  "generated_at": "2026-05-11T11:01:32.888302+00:00",
+  "metric_key": "annual_return",
+  "mode": "dry_run_plan",
+  "package_count": 4,
+  "package_ids": [
+    "pkg_1",
+    "pkg_2",
+    "pkg_3",
+    "pkg_4"
+  ],
+  "packages": [
+    {
+      "blockers": [],
+      "manifest_sha256": "sha256-pkg_1",
+      "package_id": "pkg_1",
+      "package_status": "BACKTEST_APPROVED",
+      "required_gates": {
+        "manifest_identity": true,
+        "original_fixed_weight_retest": true,
+        "protected_assets": true,
+        "regime_sample_count_present": true,
+        "runtime_variant_candidate": true,
+        "seed_sample_count_present": true
+      },
+      "row_count": 6,
+      "rows": [
+        {
+          "action": "insert_or_update_protected_asset_metadata",
+          "columns": {
+            "asset_ref": "models/pkg_1/weights.pkl",
+            "asset_role": "governed_asset",
+            "asset_sha256": "sha256-weight-pkg_1",
+            "asset_size_bytes": null,
+            "asset_type": "model_weight",
+            "metadata": {},
+            "package_id": "pkg_1",
+            "protected_asset": true,
+            "source_uri": null
+          },
+          "natural_key": {
+            "asset_ref": "models/pkg_1/weights.pkl",
+            "asset_type": "model_weight",
+            "package_id": "pkg_1"
+          },
+          "table": "strategy_pkg.package_asset"
+        },
+        {
+          "action": "insert_append_only_validation_evidence",
+          "columns": {
+            "artifact_manifest_json": {
+              "artifact_sha256": "sha256-original-pkg_1"
+            },
+            "backtest_end": null,
+            "backtest_start": null,
+            "completed_at": "2026-05-11T00:00:00+00:00",
+            "created_by": "codex_governance_backfill_plan",
+            "evidence_json": {
+              "regime_metrics": {
+                "bear": {
+                  "annual_return": 0.102
+                },
+                "bull": {
+                  "annual_return": 0.101
+                }
+              }
+            },
+            "manifest_sha256": "sha256-pkg_1",
+            "metrics_json": {
+              "annual_return": 0.12
+            },
+            "model_version_id": null,
+            "package_id": "pkg_1",
+            "random_seed": null,
+            "reproducibility_level": "UNKNOWN",
+            "retrain_mode": "no_retrain",
+            "runtime_variant_hash": null,
+            "runtime_variant_id": null,
+            "seed_policy": null,
+            "source_data_version": null,
+            "status": "PASSED",
+            "target_data_version": null,
+            "validation_run_id": "vr_pkg_1_original",
+            "validation_type": "original_fixed_weight"
+          },
+          "natural_key": {
+            "validation_run_id": "vr_pkg_1_original"
+          },
+          "table": "strategy_pkg.package_validation_run"
+        },
+        {
+          "action": "insert_append_only_validation_evidence",
+          "columns": {
+            "artifact_manifest_json": {
+              "artifact_sha256": "sha256-seed101-pkg_1"
+            },
+            "backtest_end": null,
+            "backtest_start": null,
+            "completed_at": "2026-05-11T00:00:00+00:00",
+            "created_by": "codex_governance_backfill_plan",
+            "evidence_json": {},
+            "manifest_sha256": "sha256-pkg_1",
+            "metrics_json": {
+              "annual_return": 0.101
+            },
+            "model_version_id": null,
+            "package_id": "pkg_1",
+            "random_seed": 101,
+            "reproducibility_level": "UNKNOWN",
+            "retrain_mode": "fixed_seed_retrain",
+            "runtime_variant_hash": null,
+            "runtime_variant_id": null,
+            "seed_policy": "fixed",
+            "source_data_version": null,
+            "status": "PASSED",
+            "target_data_version": null,
+            "validation_run_id": "vr_pkg_1_seed101",
+            "validation_type": "original_retrain"
+          },
+          "natural_key": {
+            "validation_run_id": "vr_pkg_1_seed101"
+          },
+          "table": "strategy_pkg.package_validation_run"
+        },
+        {
+          "action": "insert_append_only_validation_evidence",
+          "columns": {
+            "artifact_manifest_json": {
+              "artifact_sha256": "sha256-seed202-pkg_1"
+            },
+            "backtest_end": null,
+            "backtest_start": null,
+            "completed_at": "2026-05-11T00:00:00+00:00",
+            "created_by": "codex_governance_backfill_plan",
+            "evidence_json": {},
+            "manifest_sha256": "sha256-pkg_1",
+            "metrics_json": {
+              "annual_return": 0.102
+            },
+            "model_version_id": null,
+            "package_id": "pkg_1",
+            "random_seed": 202,
+            "reproducibility_level": "UNKNOWN",
+            "retrain_mode": "fixed_seed_retrain",
+            "runtime_variant_hash": null,
+            "runtime_variant_id": null,
+            "seed_policy": "fixed",
+            "source_data_version": null,
+            "status": "PASSED",
+            "target_data_version": null,
+            "validation_run_id": "vr_pkg_1_seed202",
+            "validation_type": "original_retrain"
+          },
+          "natural_key": {
+            "validation_run_id": "vr_pkg_1_seed202"
+          },
+          "table": "strategy_pkg.package_validation_run"
+        },
+        {
+          "action": "insert_or_update_runtime_candidate_evidence",
+          "columns": {
+            "created_by": "codex_governance_backfill_plan",
+            "locked_core_hash": "core-pkg_1",
+            "manifest_sha256": "sha256-pkg_1",
+            "package_id": "pkg_1",
+            "paper_candidate": true,
+            "validation_evidence": {
+              "validation_run_id": "vr_pkg_1_runtime"
+            },
+            "validation_status": "VALIDATION_PASSED",
+            "variant_config": {
+              "risk_policy": {
+                "max_position_weight": 0.04
+              }
+            },
+            "variant_hash": "variant-pkg_1",
+            "variant_id": "rtv_pkg_1",
+            "variant_kind": "risk_policy",
+            "variant_name": "risk cap"
+          },
+          "natural_key": {
+            "variant_id": "rtv_pkg_1"
+          },
+          "table": "strategy_pkg.package_runtime_variant"
+        },
+        {
+          "action": "insert_or_update_same_manifest_seed_fragility_summary",
+          "columns": {
+            "best_seed_metric": {},
+            "evidence": {},
+            "factor_importance_stability": {},
+            "manifest_sha256": "sha256-pkg_1",
+            "master_seed": null,
+            "metric_mean_by_seed": {},
+            "metric_std_by_seed": {},
+            "nondeterministic_flags": [],
+            "package_id": "pkg_1",
+            "rank_stability": 0.99,
+            "reproducibility_level": "audit_only",
+            "seed_fragile": false,
+            "seed_policy": "fixed",
+            "seed_sensitivity_score": null,
+            "seed_sequence": [
+              101,
+              202
+            ],
+            "selection_overlap_by_seed": {},
+            "worst_seed_metric": {}
+          },
+          "natural_key": {
+            "package_id": "pkg_1"
+          },
+          "table": "strategy_pkg.seed_fragility_score"
+        }
+      ],
+      "tables": [
+        "strategy_pkg.package_asset",
+        "strategy_pkg.package_runtime_variant",
+        "strategy_pkg.package_validation_run",
+        "strategy_pkg.seed_fragility_score"
+      ]
+    },
+    {
+      "blockers": [],
+      "manifest_sha256": "sha256-pkg_2",
+      "package_id": "pkg_2",
+      "package_status": "BACKTEST_APPROVED",
+      "required_gates": {
+        "manifest_identity": true,
+        "original_fixed_weight_retest": true,
+        "protected_assets": true,
+        "regime_sample_count_present": true,
+        "runtime_variant_candidate": true,
+        "seed_sample_count_present": true
+      },
+      "row_count": 6,
+      "rows": [
+        {
+          "action": "insert_or_update_protected_asset_metadata",
+          "columns": {
+            "asset_ref": "models/pkg_2/weights.pkl",
+            "asset_role": "governed_asset",
+            "asset_sha256": "sha256-weight-pkg_2",
+            "asset_size_bytes": null,
+            "asset_type": "model_weight",
+            "metadata": {},
+            "package_id": "pkg_2",
+            "protected_asset": true,
+            "source_uri": null
+          },
+          "natural_key": {
+            "asset_ref": "models/pkg_2/weights.pkl",
+            "asset_type": "model_weight",
+            "package_id": "pkg_2"
+          },
+          "table": "strategy_pkg.package_asset"
+        },
+        {
+          "action": "insert_append_only_validation_evidence",
+          "columns": {
+            "artifact_manifest_json": {
+              "artifact_sha256": "sha256-original-pkg_2"
+            },
+            "backtest_end": null,
+            "backtest_start": null,
+            "completed_at": "2026-05-11T00:00:00+00:00",
+            "created_by": "codex_governance_backfill_plan",
+            "evidence_json": {
+              "regime_metrics": {
+                "bear": {
+                  "annual_return": 0.102
+                },
+                "bull": {
+                  "annual_return": 0.101
+                }
+              }
+            },
+            "manifest_sha256": "sha256-pkg_2",
+            "metrics_json": {
+              "annual_return": 0.12
+            },
+            "model_version_id": null,
+            "package_id": "pkg_2",
+            "random_seed": null,
+            "reproducibility_level": "UNKNOWN",
+            "retrain_mode": "no_retrain",
+            "runtime_variant_hash": null,
+            "runtime_variant_id": null,
+            "seed_policy": null,
+            "source_data_version": null,
+            "status": "PASSED",
+            "target_data_version": null,
+            "validation_run_id": "vr_pkg_2_original",
+            "validation_type": "original_fixed_weight"
+          },
+          "natural_key": {
+            "validation_run_id": "vr_pkg_2_original"
+          },
+          "table": "strategy_pkg.package_validation_run"
+        },
+        {
+          "action": "insert_append_only_validation_evidence",
+          "columns": {
+            "artifact_manifest_json": {
+              "artifact_sha256": "sha256-seed101-pkg_2"
+            },
+            "backtest_end": null,
+            "backtest_start": null,
+            "completed_at": "2026-05-11T00:00:00+00:00",
+            "created_by": "codex_governance_backfill_plan",
+            "evidence_json": {},
+            "manifest_sha256": "sha256-pkg_2",
+            "metrics_json": {
+              "annual_return": 0.101
+            },
+            "model_version_id": null,
+            "package_id": "pkg_2",
+            "random_seed": 101,
+            "reproducibility_level": "UNKNOWN",
+            "retrain_mode": "fixed_seed_retrain",
+            "runtime_variant_hash": null,
+            "runtime_variant_id": null,
+            "seed_policy": "fixed",
+            "source_data_version": null,
+            "status": "PASSED",
+            "target_data_version": null,
+            "validation_run_id": "vr_pkg_2_seed101",
+            "validation_type": "original_retrain"
+          },
+          "natural_key": {
+            "validation_run_id": "vr_pkg_2_seed101"
+          },
+          "table": "strategy_pkg.package_validation_run"
+        },
+        {
+          "action": "insert_append_only_validation_evidence",
+          "columns": {
+            "artifact_manifest_json": {
+              "artifact_sha256": "sha256-seed202-pkg_2"
+            },
+            "backtest_end": null,
+            "backtest_start": null,
+            "completed_at": "2026-05-11T00:00:00+00:00",
+            "created_by": "codex_governance_backfill_plan",
+            "evidence_json": {},
+            "manifest_sha256": "sha256-pkg_2",
+            "metrics_json": {
+              "annual_return": 0.102
+            },
+            "model_version_id": null,
+            "package_id": "pkg_2",
+            "random_seed": 202,
+            "reproducibility_level": "UNKNOWN",
+            "retrain_mode": "fixed_seed_retrain",
+            "runtime_variant_hash": null,
+            "runtime_variant_id": null,
+            "seed_policy": "fixed",
+            "source_data_version": null,
+            "status": "PASSED",
+            "target_data_version": null,
+            "validation_run_id": "vr_pkg_2_seed202",
+            "validation_type": "original_retrain"
+          },
+          "natural_key": {
+            "validation_run_id": "vr_pkg_2_seed202"
+          },
+          "table": "strategy_pkg.package_validation_run"
+        },
+        {
+          "action": "insert_or_update_runtime_candidate_evidence",
+          "columns": {
+            "created_by": "codex_governance_backfill_plan",
+            "locked_core_hash": "core-pkg_2",
+            "manifest_sha256": "sha256-pkg_2",
+            "package_id": "pkg_2",
+            "paper_candidate": true,
+            "validation_evidence": {
+              "validation_run_id": "vr_pkg_2_runtime"
+            },
+            "validation_status": "VALIDATION_PASSED",
+            "variant_config": {
+              "risk_policy": {
+                "max_position_weight": 0.04
+              }
+            },
+            "variant_hash": "variant-pkg_2",
+            "variant_id": "rtv_pkg_2",
+            "variant_kind": "risk_policy",
+            "variant_name": "risk cap"
+          },
+          "natural_key": {
+            "variant_id": "rtv_pkg_2"
+          },
+          "table": "strategy_pkg.package_runtime_variant"
+        },
+        {
+          "action": "insert_or_update_same_manifest_seed_fragility_summary",
+          "columns": {
+            "best_seed_metric": {},
+            "evidence": {},
+            "factor_importance_stability": {},
+            "manifest_sha256": "sha256-pkg_2",
+            "master_seed": null,
+            "metric_mean_by_seed": {},
+            "metric_std_by_seed": {},
+            "nondeterministic_flags": [],
+            "package_id": "pkg_2",
+            "rank_stability": 0.99,
+            "reproducibility_level": "audit_only",
+            "seed_fragile": false,
+            "seed_policy": "fixed",
+            "seed_sensitivity_score": null,
+            "seed_sequence": [
+              101,
+              202
+            ],
+            "selection_overlap_by_seed": {},
+            "worst_seed_metric": {}
+          },
+          "natural_key": {
+            "package_id": "pkg_2"
+          },
+          "table": "strategy_pkg.seed_fragility_score"
+        }
+      ],
+      "tables": [
+        "strategy_pkg.package_asset",
+        "strategy_pkg.package_runtime_variant",
+        "strategy_pkg.package_validation_run",
+        "strategy_pkg.seed_fragility_score"
+      ]
+    },
+    {
+      "blockers": [],
+      "manifest_sha256": "sha256-pkg_3",
+      "package_id": "pkg_3",
+      "package_status": "BACKTEST_APPROVED",
+      "required_gates": {
+        "manifest_identity": true,
+        "original_fixed_weight_retest": true,
+        "protected_assets": true,
+        "regime_sample_count_present": true,
+        "runtime_variant_candidate": true,
+        "seed_sample_count_present": true
+      },
+      "row_count": 6,
+      "rows": [
+        {
+          "action": "insert_or_update_protected_asset_metadata",
+          "columns": {
+            "asset_ref": "models/pkg_3/weights.pkl",
+            "asset_role": "governed_asset",
+            "asset_sha256": "sha256-weight-pkg_3",
+            "asset_size_bytes": null,
+            "asset_type": "model_weight",
+            "metadata": {},
+            "package_id": "pkg_3",
+            "protected_asset": true,
+            "source_uri": null
+          },
+          "natural_key": {
+            "asset_ref": "models/pkg_3/weights.pkl",
+            "asset_type": "model_weight",
+            "package_id": "pkg_3"
+          },
+          "table": "strategy_pkg.package_asset"
+        },
+        {
+          "action": "insert_append_only_validation_evidence",
+          "columns": {
+            "artifact_manifest_json": {
+              "artifact_sha256": "sha256-original-pkg_3"
+            },
+            "backtest_end": null,
+            "backtest_start": null,
+            "completed_at": "2026-05-11T00:00:00+00:00",
+            "created_by": "codex_governance_backfill_plan",
+            "evidence_json": {
+              "regime_metrics": {
+                "bear": {
+                  "annual_return": 0.102
+                },
+                "bull": {
+                  "annual_return": 0.101
+                }
+              }
+            },
+            "manifest_sha256": "sha256-pkg_3",
+            "metrics_json": {
+              "annual_return": 0.12
+            },
+            "model_version_id": null,
+            "package_id": "pkg_3",
+            "random_seed": null,
+            "reproducibility_level": "UNKNOWN",
+            "retrain_mode": "no_retrain",
+            "runtime_variant_hash": null,
+            "runtime_variant_id": null,
+            "seed_policy": null,
+            "source_data_version": null,
+            "status": "PASSED",
+            "target_data_version": null,
+            "validation_run_id": "vr_pkg_3_original",
+            "validation_type": "original_fixed_weight"
+          },
+          "natural_key": {
+            "validation_run_id": "vr_pkg_3_original"
+          },
+          "table": "strategy_pkg.package_validation_run"
+        },
+        {
+          "action": "insert_append_only_validation_evidence",
+          "columns": {
+            "artifact_manifest_json": {
+              "artifact_sha256": "sha256-seed101-pkg_3"
+            },
+            "backtest_end": null,
+            "backtest_start": null,
+            "completed_at": "2026-05-11T00:00:00+00:00",
+            "created_by": "codex_governance_backfill_plan",
+            "evidence_json": {},
+            "manifest_sha256": "sha256-pkg_3",
+            "metrics_json": {
+              "annual_return": 0.101
+            },
+            "model_version_id": null,
+            "package_id": "pkg_3",
+            "random_seed": 101,
+            "reproducibility_level": "UNKNOWN",
+            "retrain_mode": "fixed_seed_retrain",
+            "runtime_variant_hash": null,
+            "runtime_variant_id": null,
+            "seed_policy": "fixed",
+            "source_data_version": null,
+            "status": "PASSED",
+            "target_data_version": null,
+            "validation_run_id": "vr_pkg_3_seed101",
+            "validation_type": "original_retrain"
+          },
+          "natural_key": {
+            "validation_run_id": "vr_pkg_3_seed101"
+          },
+          "table": "strategy_pkg.package_validation_run"
+        },
+        {
+          "action": "insert_append_only_validation_evidence",
+          "columns": {
+            "artifact_manifest_json": {
+              "artifact_sha256": "sha256-seed202-pkg_3"
+            },
+            "backtest_end": null,
+            "backtest_start": null,
+            "completed_at": "2026-05-11T00:00:00+00:00",
+            "created_by": "codex_governance_backfill_plan",
+            "evidence_json": {},
+            "manifest_sha256": "sha256-pkg_3",
+            "metrics_json": {
+              "annual_return": 0.102
+            },
+            "model_version_id": null,
+            "package_id": "pkg_3",
+            "random_seed": 202,
+            "reproducibility_level": "UNKNOWN",
+            "retrain_mode": "fixed_seed_retrain",
+            "runtime_variant_hash": null,
+            "runtime_variant_id": null,
+            "seed_policy": "fixed",
+            "source_data_version": null,
+            "status": "PASSED",
+            "target_data_version": null,
+            "validation_run_id": "vr_pkg_3_seed202",
+            "validation_type": "original_retrain"
+          },
+          "natural_key": {
+            "validation_run_id": "vr_pkg_3_seed202"
+          },
+          "table": "strategy_pkg.package_validation_run"
+        },
+        {
+          "action": "insert_or_update_runtime_candidate_evidence",
+          "columns": {
+            "created_by": "codex_governance_backfill_plan",
+            "locked_core_hash": "core-pkg_3",
+            "manifest_sha256": "sha256-pkg_3",
+            "package_id": "pkg_3",
+            "paper_candidate": true,
+            "validation_evidence": {
+              "validation_run_id": "vr_pkg_3_runtime"
+            },
+            "validation_status": "VALIDATION_PASSED",
+            "variant_config": {
+              "risk_policy": {
+                "max_position_weight": 0.04
+              }
+            },
+            "variant_hash": "variant-pkg_3",
+            "variant_id": "rtv_pkg_3",
+            "variant_kind": "risk_policy",
+            "variant_name": "risk cap"
+          },
+          "natural_key": {
+            "variant_id": "rtv_pkg_3"
+          },
+          "table": "strategy_pkg.package_runtime_variant"
+        },
+        {
+          "action": "insert_or_update_same_manifest_seed_fragility_summary",
+          "columns": {
+            "best_seed_metric": {},
+            "evidence": {},
+            "factor_importance_stability": {},
+            "manifest_sha256": "sha256-pkg_3",
+            "master_seed": null,
+            "metric_mean_by_seed": {},
+            "metric_std_by_seed": {},
+            "nondeterministic_flags": [],
+            "package_id": "pkg_3",
+            "rank_stability": 0.99,
+            "reproducibility_level": "audit_only",
+            "seed_fragile": false,
+            "seed_policy": "fixed",
+            "seed_sensitivity_score": null,
+            "seed_sequence": [
+              101,
+              202
+            ],
+            "selection_overlap_by_seed": {},
+            "worst_seed_metric": {}
+          },
+          "natural_key": {
+            "package_id": "pkg_3"
+          },
+          "table": "strategy_pkg.seed_fragility_score"
+        }
+      ],
+      "tables": [
+        "strategy_pkg.package_asset",
+        "strategy_pkg.package_runtime_variant",
+        "strategy_pkg.package_validation_run",
+        "strategy_pkg.seed_fragility_score"
+      ]
+    },
+    {
+      "blockers": [],
+      "manifest_sha256": "sha256-pkg_4",
+      "package_id": "pkg_4",
+      "package_status": "BACKTEST_APPROVED",
+      "required_gates": {
+        "manifest_identity": true,
+        "original_fixed_weight_retest": true,
+        "protected_assets": true,
+        "regime_sample_count_present": true,
+        "runtime_variant_candidate": true,
+        "seed_sample_count_present": true
+      },
+      "row_count": 6,
+      "rows": [
+        {
+          "action": "insert_or_update_protected_asset_metadata",
+          "columns": {
+            "asset_ref": "models/pkg_4/weights.pkl",
+            "asset_role": "governed_asset",
+            "asset_sha256": "sha256-weight-pkg_4",
+            "asset_size_bytes": null,
+            "asset_type": "model_weight",
+            "metadata": {},
+            "package_id": "pkg_4",
+            "protected_asset": true,
+            "source_uri": null
+          },
+          "natural_key": {
+            "asset_ref": "models/pkg_4/weights.pkl",
+            "asset_type": "model_weight",
+            "package_id": "pkg_4"
+          },
+          "table": "strategy_pkg.package_asset"
+        },
+        {
+          "action": "insert_append_only_validation_evidence",
+          "columns": {
+            "artifact_manifest_json": {
+              "artifact_sha256": "sha256-original-pkg_4"
+            },
+            "backtest_end": null,
+            "backtest_start": null,
+            "completed_at": "2026-05-11T00:00:00+00:00",
+            "created_by": "codex_governance_backfill_plan",
+            "evidence_json": {
+              "regime_metrics": {
+                "bear": {
+                  "annual_return": 0.102
+                },
+                "bull": {
+                  "annual_return": 0.101
+                }
+              }
+            },
+            "manifest_sha256": "sha256-pkg_4",
+            "metrics_json": {
+              "annual_return": 0.12
+            },
+            "model_version_id": null,
+            "package_id": "pkg_4",
+            "random_seed": null,
+            "reproducibility_level": "UNKNOWN",
+            "retrain_mode": "no_retrain",
+            "runtime_variant_hash": null,
+            "runtime_variant_id": null,
+            "seed_policy": null,
+            "source_data_version": null,
+            "status": "PASSED",
+            "target_data_version": null,
+            "validation_run_id": "vr_pkg_4_original",
+            "validation_type": "original_fixed_weight"
+          },
+          "natural_key": {
+            "validation_run_id": "vr_pkg_4_original"
+          },
+          "table": "strategy_pkg.package_validation_run"
+        },
+        {
+          "action": "insert_append_only_validation_evidence",
+          "columns": {
+            "artifact_manifest_json": {
+              "artifact_sha256": "sha256-seed101-pkg_4"
+            },
+            "backtest_end": null,
+            "backtest_start": null,
+            "completed_at": "2026-05-11T00:00:00+00:00",
+            "created_by": "codex_governance_backfill_plan",
+            "evidence_json": {},
+            "manifest_sha256": "sha256-pkg_4",
+            "metrics_json": {
+              "annual_return": 0.101
+            },
+            "model_version_id": null,
+            "package_id": "pkg_4",
+            "random_seed": 101,
+            "reproducibility_level": "UNKNOWN",
+            "retrain_mode": "fixed_seed_retrain",
+            "runtime_variant_hash": null,
+            "runtime_variant_id": null,
+            "seed_policy": "fixed",
+            "source_data_version": null,
+            "status": "PASSED",
+            "target_data_version": null,
+            "validation_run_id": "vr_pkg_4_seed101",
+            "validation_type": "original_retrain"
+          },
+          "natural_key": {
+            "validation_run_id": "vr_pkg_4_seed101"
+          },
+          "table": "strategy_pkg.package_validation_run"
+        },
+        {
+          "action": "insert_append_only_validation_evidence",
+          "columns": {
+            "artifact_manifest_json": {
+              "artifact_sha256": "sha256-seed202-pkg_4"
+            },
+            "backtest_end": null,
+            "backtest_start": null,
+            "completed_at": "2026-05-11T00:00:00+00:00",
+            "created_by": "codex_governance_backfill_plan",
+            "evidence_json": {},
+            "manifest_sha256": "sha256-pkg_4",
+            "metrics_json": {
+              "annual_return": 0.102
+            },
+            "model_version_id": null,
+            "package_id": "pkg_4",
+            "random_seed": 202,
+            "reproducibility_level": "UNKNOWN",
+            "retrain_mode": "fixed_seed_retrain",
+            "runtime_variant_hash": null,
+            "runtime_variant_id": null,
+            "seed_policy": "fixed",
+            "source_data_version": null,
+            "status": "PASSED",
+            "target_data_version": null,
+            "validation_run_id": "vr_pkg_4_seed202",
+            "validation_type": "original_retrain"
+          },
+          "natural_key": {
+            "validation_run_id": "vr_pkg_4_seed202"
+          },
+          "table": "strategy_pkg.package_validation_run"
+        },
+        {
+          "action": "insert_or_update_runtime_candidate_evidence",
+          "columns": {
+            "created_by": "codex_governance_backfill_plan",
+            "locked_core_hash": "core-pkg_4",
+            "manifest_sha256": "sha256-pkg_4",
+            "package_id": "pkg_4",
+            "paper_candidate": true,
+            "validation_evidence": {
+              "validation_run_id": "vr_pkg_4_runtime"
+            },
+            "validation_status": "VALIDATION_PASSED",
+            "variant_config": {
+              "risk_policy": {
+                "max_position_weight": 0.04
+              }
+            },
+            "variant_hash": "variant-pkg_4",
+            "variant_id": "rtv_pkg_4",
+            "variant_kind": "risk_policy",
+            "variant_name": "risk cap"
+          },
+          "natural_key": {
+            "variant_id": "rtv_pkg_4"
+          },
+          "table": "strategy_pkg.package_runtime_variant"
+        },
+        {
+          "action": "insert_or_update_same_manifest_seed_fragility_summary",
+          "columns": {
+            "best_seed_metric": {},
+            "evidence": {},
+            "factor_importance_stability": {},
+            "manifest_sha256": "sha256-pkg_4",
+            "master_seed": null,
+            "metric_mean_by_seed": {},
+            "metric_std_by_seed": {},
+            "nondeterministic_flags": [],
+            "package_id": "pkg_4",
+            "rank_stability": 0.99,
+            "reproducibility_level": "audit_only",
+            "seed_fragile": false,
+            "seed_policy": "fixed",
+            "seed_sensitivity_score": null,
+            "seed_sequence": [
+              101,
+              202
+            ],
+            "selection_overlap_by_seed": {},
+            "worst_seed_metric": {}
+          },
+          "natural_key": {
+            "package_id": "pkg_4"
+          },
+          "table": "strategy_pkg.seed_fragility_score"
+        }
+      ],
+      "tables": [
+        "strategy_pkg.package_asset",
+        "strategy_pkg.package_runtime_variant",
+        "strategy_pkg.package_validation_run",
+        "strategy_pkg.seed_fragility_score"
+      ]
+    }
+  ],
+  "safety_notes": [
+    "Planner only: no DB connection, no INSERT/UPDATE/DELETE execution, no service calls.",
+    "The later executor, if separately authorized, must still re-check package_status and manifest_sha256 in the target DB.",
+    "seed_sample_count_present and regime_sample_count_present prove sample-count presence only, not variance stability.",
+    "Do not mutate manifest_json, manifest_sha256, package_status, model artifacts, or Paper runtime state."
+  ],
+  "schema_version": "aistock_qe_governance_evidence_backfill_plan_v1",
+  "service_calls_executed": false,
+  "status": "passed"
+}

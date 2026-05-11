@@ -1465,6 +1465,14 @@ class PaperTradingV2Repository:
         # created_at / updated_at are passed explicitly via now() so the
         # InMemoryPaperTradingV2Repository fallback (which does not have
         # DEFAULT NOW()) sees the same value the PG path writes.
+        # R6 sentinel endpoint path: when caller did not pass kwargs but
+        # threaded values via Fill.metadata (coldstart_sentinel.py), allow
+        # metadata.get() to fill in the kwargs.
+        if isinstance(fill.metadata, dict):
+            if intended_price is None:
+                intended_price = fill.metadata.get("intended_price")
+            if fill_market_context is None:
+                fill_market_context = fill.metadata.get("fill_market_context")
         now = datetime.now(UTC)
         with self._conn_factory() as conn:
             with conn.cursor() as cur:

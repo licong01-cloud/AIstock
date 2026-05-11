@@ -1,0 +1,70 @@
+{
+  "db_connection_opened": false,
+  "db_target": "prod:aistock_operator@prod-db.invalid:5432/aistock",
+  "db_writes_executed": false,
+  "dry_run": true,
+  "failed_checks": [],
+  "generated_at": "2026-05-11T13:31:48.932550+00:00",
+  "mode": "dry-run",
+  "phases": [
+    {
+      "check": "prod_guards",
+      "data": {
+        "non_trading_hours_required": true,
+        "required_env": "AISTOCK_PAPER_V2_COLDSTART_SANITY_PROD_ENABLED",
+        "required_mutex_env": "AISTOCK_PAPER_V2_COLDSTART_SANITY_MUTEX_HELD",
+        "required_token": "RUN_PAPER_V2_COLDSTART_SANITY_PROD"
+      },
+      "message": "dry-run does not evaluate live prod guards",
+      "status": "SKIPPED"
+    },
+    {
+      "check": "preflight",
+      "data": {},
+      "message": "dry-run opens no DB connection and makes no HTTP requests",
+      "status": "SKIPPED"
+    },
+    {
+      "check": "sentinel_round_trip",
+      "data": {},
+      "message": "dry-run does not trigger sentinel order",
+      "status": "SKIPPED"
+    },
+    {
+      "check": "audit_chain",
+      "data": {},
+      "message": "dry-run does not inspect production audit rows",
+      "status": "SKIPPED"
+    },
+    {
+      "check": "cleanup",
+      "data": {},
+      "message": "dry-run performs no cleanup writes",
+      "status": "SKIPPED"
+    }
+  ],
+  "prod_backend_http_touched": false,
+  "production_services_touched": false,
+  "real_trading_ready": false,
+  "remedial_action": [],
+  "run_id": "sanity-20260511-213148",
+  "safety_notes": [
+    "No production DB connection opened.",
+    "No backend HTTP request sent.",
+    "No dev DB insert or production write attempted.",
+    "Run --mode=prod only in the approved non-trading window with the exact token, env flag, mutex, and operator confirmation."
+  ],
+  "schema_version": "aistock_paper_v2_coldstart_sanity_v1",
+  "sentinel_order": {
+    "intended_price": "10.00",
+    "quantity": 100,
+    "run_id": "sanity-20260511-213148",
+    "side": "BUY",
+    "source": "paper_v2_coldstart_sanity",
+    "symbol": "000001.SZ"
+  },
+  "sentinel_order_requested": false,
+  "status": "dry_run_preview",
+  "target_db": "prod",
+  "verdict": "NO-GO"
+}

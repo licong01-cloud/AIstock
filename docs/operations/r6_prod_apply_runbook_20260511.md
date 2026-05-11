@@ -405,23 +405,39 @@ Pass criteria:
 
 ### 7.2 StrategyPackage Evidence Backfill Apply
 
-Template for a future approved production-capable executor. Do not run the current dev-only `scripts/strategy_package_evidence_backfill.py --apply` against production.
+Approved production operator flow for StrategyPackage evidence backfill:
+
+1. Re-run the evidence plan against the approved bundle in dry-run/planner mode.
+2. Confirm the target production DB, package ids, and manifest hashes in the cutover log before any write.
+3. Run the approved production-capable executor `scripts/strategy_package_governance_evidence_backfill_prod_executor.py`.
+4. Verify the apply report, row counts, and idempotency against the approved bundle.
+5. Keep the cutover blocked if the executor reports any target, package-status, or manifest mismatch.
 
 ```powershell
-# Template only. Do not run unless a production-capable executor is explicitly approved for R6.
-# Current prep script is dev-only; replace this command shape with the approved R6 executor if different.
+# Template only. Do not run outside the approved R6 production window.
+# Current prep script is dev-only; do not use it for production apply.
 Set-Location '<R6_WORKTREE>'
-$env:AISTOCK_R6_PROD_EVIDENCE_BACKFILL_APPLY_ENABLED = 'true'
-python <APPROVED_R6_STRATEGY_EVIDENCE_BACKFILL_EXECUTOR>.py `
+$env:AISTOCK_QE_GOVERNANCE_EVIDENCE_BACKFILL_PROD_APPLY_ENABLED = 'true'
+$env:AISTOCK_QE_GOVERNANCE_EVIDENCE_BACKFILL_MUTEX_HELD = 'true'
+$env:AISTOCK_PROD_DB_PASSWORD = '<PROD_DB_PASSWORD_FROM_SECRET_STORE>'
+python scripts/strategy_package_governance_evidence_backfill_prod_executor.py `
   --apply `
-  --confirm-apply '<APPROVED_R6_PROD_EVIDENCE_BACKFILL_TOKEN>' `
+  --confirm-apply 'APPLY_QE_GOVERNANCE_EVIDENCE_BACKFILL_PROD' `
   --evidence-bundle '<R6_EVIDENCE_BUNDLE>' `
+  --plan-preview '<SECURE_EVIDENCE_DIR>/r6_evidence_backfill_plan.json' `
+  --dr-snapshot '<SECURE_EVIDENCE_DIR>/r6_dr_snapshot_verified.json' `
+  --dr-snapshot-ref '<R6_DR_SNAPSHOT_REF>' `
+  --operator-confirmation '<SECURE_EVIDENCE_DIR>/r6_operator_confirmation.json' `
+  --target-db 'prod' `
   --db-host '<PROD_DB_HOST>' `
-  --db-port '<PROD_DB_PORT>' `
+  --db-port '5432' `
   --db-name '<PROD_DB_NAME>' `
   --db-user '<PROD_DB_USER>' `
+  --db-password-env 'AISTOCK_PROD_DB_PASSWORD' `
   --json > '<SECURE_EVIDENCE_DIR>/r6_strategy_package_evidence_backfill_apply.json'
-Remove-Item Env:AISTOCK_R6_PROD_EVIDENCE_BACKFILL_APPLY_ENABLED -ErrorAction SilentlyContinue
+Remove-Item Env:AISTOCK_QE_GOVERNANCE_EVIDENCE_BACKFILL_PROD_APPLY_ENABLED -ErrorAction SilentlyContinue
+Remove-Item Env:AISTOCK_QE_GOVERNANCE_EVIDENCE_BACKFILL_MUTEX_HELD -ErrorAction SilentlyContinue
+Remove-Item Env:AISTOCK_PROD_DB_PASSWORD -ErrorAction SilentlyContinue
 ```
 
 Expected writes, if authorized by the approved executor:
@@ -430,32 +446,60 @@ Expected writes, if authorized by the approved executor:
 - `strategy_pkg.package_runtime_variant` rows for validated R6 runtime candidates.
 - Optional `strategy_pkg.seed_fragility_score` rows if the strategy-approved bundle contains valid stability evidence.
 - No mutation of frozen manifests, model assets, HMM snapshots, or raw QE artifacts.
+- This is the only approved production apply path for StrategyPackage evidence backfill in this runbook.
+- The operator confirmation artifact must include the token, target DB label/name, plan preview SHA256, DR snapshot ref, and all four package IDs.
+- `scripts/strategy_package_evidence_backfill.py --apply` remains dev-locked and must not be used for production apply.
 
 ### 7.3 Protected Asset Ledger Backfill Apply
 
-Template for a future approved production-capable executor. Do not run the current dev-only `scripts/protected_asset_ledger_backfill.py --apply` against production.
+Expected production operator flow for protected asset ledger backfill. This section assumes a separately reviewed production-capable executor named `scripts/protected_asset_ledger_backfill_prod_executor.py` is present before the R6 production window. If that script is absent, unreviewed, or its CLI differs from this template, stop here and treat protected asset ledger production apply as no-go until the release commander approves an updated executor contract.
+
+Do not run the current dev-only `scripts/protected_asset_ledger_backfill.py --apply` against production, do not edit its guards to make it production-capable, and do not substitute a local script variant.
+
+Required gates before any protected asset ledger write:
+
+1. Governance migrations in section 6 are applied and verified.
+2. The protected asset ledger plan preview is approved and the package ids/manifest hashes match the release bundle.
+3. DR snapshot is verified and referenced in the operator confirmation.
+4. Release commander confirms the production executor source, CLI, token, and env guards.
+5. Backfill mutex is held so no concurrent evidence/asset backfill or governance promotion writer can run.
+6. Operator confirmation artifact includes token `APPLY_PROTECTED_ASSET_LEDGER_BACKFILL_PROD`, target DB label/name, plan preview SHA256, DR snapshot ref, and all four package IDs.
 
 ```powershell
-# Template only. Do not run unless a production-capable executor is explicitly approved for R6.
+# Template only. Do not run outside the approved R6 production window.
+# CLI assumptions must be rechecked against scripts/protected_asset_ledger_backfill_prod_executor.py before apply.
 Set-Location '<R6_WORKTREE>'
-$env:AISTOCK_R6_PROD_ASSET_LEDGER_BACKFILL_APPLY_ENABLED = 'true'
-python <APPROVED_R6_PROTECTED_ASSET_LEDGER_EXECUTOR>.py `
+$env:AISTOCK_PROTECTED_ASSET_LEDGER_BACKFILL_PROD_APPLY_ENABLED = 'true'
+$env:AISTOCK_PROTECTED_ASSET_LEDGER_BACKFILL_MUTEX_HELD = 'true'
+$env:AISTOCK_PROD_DB_PASSWORD = '<PROD_DB_PASSWORD_FROM_SECRET_STORE>'
+python scripts/protected_asset_ledger_backfill_prod_executor.py `
   --apply `
-  --confirm-apply '<APPROVED_R6_PROD_ASSET_LEDGER_BACKFILL_TOKEN>' `
-  --evidence-bundle '<R6_EVIDENCE_BUNDLE>' `
+  --confirm-apply 'APPLY_PROTECTED_ASSET_LEDGER_BACKFILL_PROD' `
+  --evidence-bundle '<SECURE_EVIDENCE_DIR>/r6_protected_asset_ledger_plan.json' `
+  --plan-preview '<SECURE_EVIDENCE_DIR>/r6_protected_asset_ledger_plan.json' `
+  --dr-snapshot '<SECURE_EVIDENCE_DIR>/r6_dr_snapshot_verified.json' `
+  --dr-snapshot-ref '<R6_DR_SNAPSHOT_REF>' `
+  --operator-confirmation '<SECURE_EVIDENCE_DIR>/r6_operator_confirmation.json' `
+  --target-db 'prod' `
   --db-host '<PROD_DB_HOST>' `
-  --db-port '<PROD_DB_PORT>' `
+  --db-port '5432' `
   --db-name '<PROD_DB_NAME>' `
   --db-user '<PROD_DB_USER>' `
+  --db-password-env 'AISTOCK_PROD_DB_PASSWORD' `
   --json > '<SECURE_EVIDENCE_DIR>/r6_protected_asset_ledger_backfill_apply.json'
-Remove-Item Env:AISTOCK_R6_PROD_ASSET_LEDGER_BACKFILL_APPLY_ENABLED -ErrorAction SilentlyContinue
+Remove-Item Env:AISTOCK_PROTECTED_ASSET_LEDGER_BACKFILL_PROD_APPLY_ENABLED -ErrorAction SilentlyContinue
+Remove-Item Env:AISTOCK_PROTECTED_ASSET_LEDGER_BACKFILL_MUTEX_HELD -ErrorAction SilentlyContinue
+Remove-Item Env:AISTOCK_PROD_DB_PASSWORD -ErrorAction SilentlyContinue
 ```
 
-Expected writes, if authorized:
+Expected writes, if authorized by the approved production executor:
 
 - `strategy_pkg.package_asset` metadata rows for protected governance/evidence assets.
+- Natural key is `(package_id, asset_type, asset_ref)`, with `asset_type='protected_asset_ledger_evidence'` and `asset_ref='governance/protected_asset_ledger_backfill'`.
 - `protected_asset=true` must be explicit.
 - No file copy, delete, overwrite, or manifest mutation.
+- No mutation of frozen package manifests, model assets, HMM snapshots, raw QE artifacts, or runtime promotion state.
+- The executor must fail closed before DB connect on target DB mismatch, manifest/package mismatch, blocked plan, missing mutex, missing verified DR snapshot, missing scoped operator confirmation, or missing exact token/env guards.
 
 ### 7.4 Evidence Backfill Verification
 
@@ -557,6 +601,90 @@ Rollback for code sync:
 - If sync fails before runtime restart, stop and restore production root to `<PROD_PRE_CUTOVER_COMMIT>` using the pre-approved Git rollback path.
 - If sync succeeded but runtime not restarted, production process may still be running old code; rollback can be a Git revert/sync back before restart.
 - If runtime restarted on new code, rollback includes both Git rollback and backend/daemon restart to reload old code.
+
+### 8.5 Paper V2 Cold-start Sanity Automation
+
+This section records the automated final gate required after section 9 runtime activation and before the final 9:30 go/no-go decision. It is placed here per the Task 6 dispatch, but operators must run it only after backend `8001`, the Paper/R6 daemon, DB migrations, code sync, governance evidence backfill, and protected asset ledger backfill have already passed.
+
+Task 8 wires the default sentinel API used by this script:
+
+- Effective route: `POST /api/v1/paper-v2/coldstart-sanity/sentinel-order`.
+- The endpoint is LocalSim-only and hard-rejects any `broker_backend` other than `local_sim`; it must not start the session scheduler, call miniQMT, or activate a live broker path.
+- The sentinel payload includes the approved `package_id`; pass `--sentinel-package-id '<PACKAGE_ID_1>'`, or the script defaults to the first `--package-id` when the flag is omitted.
+- It writes only run-scoped sentinel rows that the cleanup phase can remove: `paper_v2.portfolio`, `paper_v2.run`, `paper_v2.run_events`, `paper_v2.orders`, `paper_v2.order_events`, `paper_v2.fills`, `qe_archive.outbox_event`, `strategy_pkg.package_validation_run`, and `strategy_pkg.package_asset`. The synthetic sentinel portfolio is deterministic by `run_id` and isolated under a `paper_v2_coldstart_sanity_` prefix.
+- A clean sentinel `GO` proves only the LocalSim-backed Paper v2 cold-start path and required audit rows; it is not proof of MiniQMT/live broker readiness and does not validate live broker connectivity.
+- Before running this gate, confirm the Paper v2 capture-field DDL is present on the target DB (`paper_v2.fills.created_at`, `updated_at`, `intended_price`, `fill_market_context`), because the sanity script and endpoint select/write those fields directly.
+- The expected OpenAPI path must be visible after backend deploy/restart/code reload at `/openapi.json`; if it is absent, treat the runtime as stale and keep the final gate `NO-GO`.
+
+Default dry-run preview, safe during preparation:
+
+```powershell
+# Safe preview only: opens no DB connection, sends no backend HTTP request, and performs no writes.
+Set-Location '<R6_WORKTREE>'
+python scripts/paper_v2_coldstart_sanity.py `
+  --mode dry-run `
+  --json `
+  --output '<SECURE_EVIDENCE_DIR>/paper_v2_coldstart_sanity_dry_run.json'
+```
+
+Production invocation template, for the approved non-trading runtime sanity window only:
+
+```powershell
+# Template only. Do not run unless release commander, strategy author, runtime operator,
+# and user have explicitly authorized the production cold-start sanity gate.
+Set-Location '<PROD_REPO>'
+$env:AISTOCK_PAPER_V2_COLDSTART_SANITY_PROD_ENABLED = 'true'
+$env:AISTOCK_PAPER_V2_COLDSTART_SANITY_MUTEX_HELD = 'true'
+$env:AISTOCK_PROD_DB_PASSWORD = '<PROD_DB_PASSWORD>'
+
+python scripts/paper_v2_coldstart_sanity.py `
+  --mode prod `
+  --confirm-prod RUN_PAPER_V2_COLDSTART_SANITY_PROD `
+  --operator-confirmation 'RUN_PAPER_V2_COLDSTART_SANITY_PROD target=prod packages=<PACKAGE_IDS> sentinel_package_id=<PACKAGE_ID_1> approved_by=<RELEASE_COMMANDER>' `
+  --api-base '<PROD_API_BASE>' `
+  --sentinel-endpoint '/paper-v2/coldstart-sanity/sentinel-order' `
+  --daemon-process-name '<R6_DAEMON_PROCESS_NAME>' `
+  --package-id '<PACKAGE_ID_1>' `
+  --package-id '<PACKAGE_ID_2>' `
+  --package-id '<PACKAGE_ID_3>' `
+  --package-id '<PACKAGE_ID_4>' `
+  --sentinel-package-id '<PACKAGE_ID_1>' `
+  --target-db prod `
+  --db-host '<PROD_DB_HOST>' `
+  --db-port 5432 `
+  --db-name '<PROD_DB_NAME>' `
+  --db-user '<PROD_DB_USER>' `
+  --db-password-env AISTOCK_PROD_DB_PASSWORD `
+  --json `
+  --output '<SECURE_EVIDENCE_DIR>/paper_v2_coldstart_sanity_prod.json'
+```
+
+Expected JSON shape:
+
+```json
+{
+  "schema_version": "aistock_paper_v2_coldstart_sanity_v1",
+  "mode": "prod",
+  "run_id": "sanity-<timestamp>",
+  "sentinel_order": {"package_id": "<PACKAGE_ID_1>", "symbol": "000001.SZ", "side": "BUY", "quantity": 100, "qty": 100, "intended_price": "10.00", "broker_backend": "local_sim"},
+  "phases": [{"check": "backend_health", "status": "PASS"}],
+  "verdict": "GO",
+  "real_trading_ready": true
+}
+```
+
+Abort criteria:
+
+- Dry-run output is only a preview and never authorizes trading readiness.
+- `--mode prod` must fail closed unless the exact token, env flag, mutex env, non-trading-hours check, DB target checks, and typed operator confirmation all pass before any DB connection or HTTP mutation.
+- Any phase `FAIL`, any cleanup rollback, missing `fill_market_context`, missing `created_at`/`updated_at`, wrong `intended_price`, missing `routing_class='telemetry'` outbox, missing governance evidence, or missing required protected ledger audit row is a NO-GO.
+- If the script exits non-zero or emits `verdict="NO-GO"`, keep R6 disabled or rolled back per commander decision and do not improvise fixes near the market open.
+
+9:30 gate usage:
+
+- The production JSON artifact must be attached to the go/no-go evidence package before the 09:29 decision.
+- `verdict="GO"` is necessary but not sufficient; all earlier R6 runbook gates and strategy-author readiness must also be green.
+- Because this Task 8 endpoint is LocalSim-only, any later miniQMT_sim or miniQMT_live rollout needs a separate explicit verification gate.
 
 ## 9. Backend `8001` And Daemon Enable/Restart
 
@@ -691,6 +819,97 @@ No-go criteria:
 - Production root has unresolved Git state.
 - Any operator reports uncertainty about target, credentials, package ids, or strategy intent.
 - A market/data feed dependency is not ready.
+
+### 11.1 R6 Cutover E2E Wrapper
+
+`scripts/r6_prod_cutover_e2e_wrapper.py` is the operator wrapper for the final 9:30 cutover sequence. Default `--mode dry-run` is an offline preview only: it prints the ordered command plan and does not run `psql`, production executors, backend restart commands, daemon commands, HTTP requests, DB connections, or Git merges.
+
+Dry-run preview:
+
+```powershell
+# Offline preview only; safe for release review and evidence package planning.
+Set-Location '<R6_WORKTREE>'
+python scripts/r6_prod_cutover_e2e_wrapper.py `
+  --mode dry-run `
+  --release-worktree '<R6_WORKTREE>' `
+  --prod-repo '<PROD_REPO>' `
+  --secure-evidence-dir '<SECURE_EVIDENCE_DIR>' `
+  --ready-doc '<READY_VERIFY_DOC_1>' `
+  --ready-doc '<READY_VERIFY_DOC_2>' `
+  --evidence-bundle '<R6_EVIDENCE_BUNDLE>' `
+  --evidence-plan '<SECURE_EVIDENCE_DIR>/r6_evidence_backfill_plan.json' `
+  --ledger-plan '<SECURE_EVIDENCE_DIR>/r6_protected_asset_ledger_plan.json' `
+  --dr-snapshot '<SECURE_EVIDENCE_DIR>/r6_dr_snapshot_verified.json' `
+  --dr-snapshot-ref '<R6_DR_SNAPSHOT_REF>' `
+  --package-id '<PACKAGE_ID_1>' `
+  --package-id '<PACKAGE_ID_2>' `
+  --package-id '<PACKAGE_ID_3>' `
+  --package-id '<PACKAGE_ID_4>' `
+  --json `
+  --output '<SECURE_EVIDENCE_DIR>/r6_prod_cutover_e2e_wrapper_dry_run.json'
+```
+
+Production wrapper invocation template, only after sections 4-10 are authorized and the release commander chooses to use the wrapper instead of manual step-by-step execution:
+
+```powershell
+# Template only. Do not run without explicit user + strategy + release-commander authorization.
+Set-Location '<R6_WORKTREE>'
+$env:AISTOCK_R6_PROD_CUTOVER_E2E_PROD_ENABLED = 'true'
+$env:AISTOCK_R6_PROD_CUTOVER_E2E_MUTEX_HELD = 'true'
+$env:AISTOCK_QE_GOVERNANCE_EVIDENCE_BACKFILL_PROD_APPLY_ENABLED = 'true'
+$env:AISTOCK_QE_GOVERNANCE_EVIDENCE_BACKFILL_MUTEX_HELD = 'true'
+$env:AISTOCK_PROTECTED_ASSET_LEDGER_BACKFILL_PROD_APPLY_ENABLED = 'true'
+$env:AISTOCK_PROTECTED_ASSET_LEDGER_BACKFILL_MUTEX_HELD = 'true'
+$env:AISTOCK_PAPER_V2_COLDSTART_SANITY_PROD_ENABLED = 'true'
+$env:AISTOCK_PAPER_V2_COLDSTART_SANITY_MUTEX_HELD = 'true'
+$env:AISTOCK_PROD_DB_PASSWORD = '<PROD_DB_PASSWORD_FROM_SECRET_STORE>'
+
+python scripts/r6_prod_cutover_e2e_wrapper.py `
+  --mode prod `
+  --confirm-prod RUN_R6_PROD_CUTOVER_E2E `
+  --non-cutover-hours-ok R6_PROD_CUTOVER_E2E_NON_CUTOVER_HOURS_OK `
+  --operator-confirmation 'RUN_R6_PROD_CUTOVER_E2E <R6_WORKTREE> <PROD_REPO> <SECURE_EVIDENCE_DIR> <R6_EVIDENCE_BUNDLE> <SECURE_EVIDENCE_DIR>/r6_evidence_backfill_plan.json <SECURE_EVIDENCE_DIR>/r6_protected_asset_ledger_plan.json <SECURE_EVIDENCE_DIR>/r6_dr_snapshot_verified.json <READY_VERIFY_DOC_1> <READY_VERIFY_DOC_2> <R6_DR_SNAPSHOT_REF> EXECUTE_R6_PROD_CUTOVER_E2E_GO_NO_GO' `
+  --release-worktree '<R6_WORKTREE>' `
+  --prod-repo '<PROD_REPO>' `
+  --secure-evidence-dir '<SECURE_EVIDENCE_DIR>' `
+  --ready-doc '<READY_VERIFY_DOC_1>' `
+  --ready-doc '<READY_VERIFY_DOC_2>' `
+  --evidence-bundle '<R6_EVIDENCE_BUNDLE>' `
+  --evidence-plan '<SECURE_EVIDENCE_DIR>/r6_evidence_backfill_plan.json' `
+  --ledger-plan '<SECURE_EVIDENCE_DIR>/r6_protected_asset_ledger_plan.json' `
+  --dr-snapshot '<SECURE_EVIDENCE_DIR>/r6_dr_snapshot_verified.json' `
+  --dr-snapshot-ref '<R6_DR_SNAPSHOT_REF>' `
+  --backend-restart-command '["<APPROVED_BACKEND_RESTART_CMD>"]' `
+  --daemon-restart-command '["<APPROVED_DAEMON_RESTART_CMD>"]' `
+  --api-base '<PROD_API_BASE>' `
+  --package-id '<PACKAGE_ID_1>' `
+  --package-id '<PACKAGE_ID_2>' `
+  --package-id '<PACKAGE_ID_3>' `
+  --package-id '<PACKAGE_ID_4>' `
+  --target-db prod `
+  --db-host '<PROD_DB_HOST>' `
+  --db-port 5432 `
+  --db-name '<PROD_DB_NAME>' `
+  --db-user '<PROD_DB_USER>' `
+  --db-password-env AISTOCK_PROD_DB_PASSWORD `
+  --json `
+  --output '<SECURE_EVIDENCE_DIR>/r6_prod_cutover_e2e_wrapper_prod.json'
+```
+
+Wrapper GO criteria:
+
+- The exact token, env enable flag, mutex, target DB checks, cutover-window or non-cutover-hours acknowledgement, typed operator confirmation, all prerequisite paths, DR snapshot ref, and final intent pass before any command runs.
+- The wrapper applies the same six migration files as section 6, one `psql --single-transaction --file` step per migration.
+- The approved StrategyPackage evidence executor, protected asset ledger executor, backend restart command, daemon command, and Task 6 cold-start sanity script all return success.
+- Final evidence artifacts include applied evidence and ledger reports plus `paper_v2_coldstart_sanity_prod.json` with `verdict=GO` and `real_trading_ready=true`.
+
+Wrapper no-go criteria:
+
+- Any guard or prerequisite is missing or mismatched.
+- Any prerequisite verification doc says `READY-WITH-CAVEATS`, `GO-WITH-CAUTION`, `NO-GO`, `NOT READY`, or `BLOCKED`; resolve the caveat or provide a later clean READY doc before production use.
+- Any command exits non-zero or an expected JSON artifact is missing or not clean GO/READY.
+- Any cleanup, DB migration, runtime restart, daemon state, or cold-start sanity result is uncertain.
+- The wrapper output is `verdict=NO-GO`; keep R6 disabled/rolled back and follow the rollback matrix.
 
 At 09:30:
 

@@ -2168,10 +2168,11 @@ class AutoEvolutionScheduler:
                     ))
 
                     if is_sota:
-                        cur.execute("""
-                            INSERT INTO qe_sota_registry (loop_id, evaluation_reason)
-                            VALUES (%s, %s)
-                        """, (evolution_loop_db_id, "Evaluator Agent marked as SOTA based on metrics."))
+                        logger.info(
+                            "QE evaluator marked %s as an automatic candidate only; "
+                            "formal SOTA approval requires a manual promotion_review record.",
+                            evolution_loop_db_id,
+                        )
 
                     # 写入 qe_loop_factor_records（action_role 计算）
                     self._write_loop_factor_records(

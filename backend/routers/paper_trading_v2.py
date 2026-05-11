@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from backend.db.pg_pool import get_conn
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
+from backend.services.paper_trading_v2.coldstart_sentinel import ColdstartSentinelService, PaperV2DaemonUnavailableError
 from backend.services.paper_trading_v2.market_data import MinuteDataSource, TradeCalendarProvider
 from backend.services.paper_trading_v2.live_dashboard import PaperTradingLiveDashboardService
 from backend.services.paper_trading_v2.readiness import PaperTradingReadinessService
@@ -19,7 +20,7 @@ from backend.services.paper_trading_v2.repository import PaperTradingV2Repositor
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
 from backend.services.paper_trading_v2.session import PaperTradingSessionRunner, PaperTradingSessionService
 from backend.services.paper_trading_v2.models import BrokerBackendId, PaperSessionMode
-from backend.services.trading_core.errors import DataUnavailableError, TradingCoreError, UnsupportedFeatureError
+from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, TradingCoreError, UnsupportedFeatureError
 
 router = APIRouter(prefix="/paper-v2", tags=["paper-v2"])
 
@@ -133,6 +134,18 @@ class SchedulerRunOnceRequest(BaseModel):
     as_of_time: dt.datetime | None = None
 
 
+class ColdstartSentinelOrderRequest(BaseModel):
+    run_id: str = Field(min_length=1)
+    package_id: str = Field(min_length=1)
+    symbol: str = Field(min_length=1)
+    side: str = Field(min_length=1)
+    quantity: int | None = Field(default=None, gt=0)
+    qty: int | None = Field(default=None, gt=0)
+    intended_price: Any
+    source: str = "paper_v2_coldstart_sanity"
+    broker_backend: str = "local_sim"
+
+
 def _raise_http(exc: TradingCoreError) -> None:
     status_code = 400
     if isinstance(exc, DataUnavailableError):
@@ -140,6 +153,14 @@ def _raise_http(exc: TradingCoreError) -> None:
     elif isinstance(exc, UnsupportedFeatureError):
         status_code = 422
     raise HTTPException(status_code=status_code, detail=exc.to_dict()) from exc
+
+
+def _raise_coldstart_sentinel_http(exc: TradingCoreError) -> None:
+    if isinstance(exc, PaperV2DaemonUnavailableError):
+        raise HTTPException(status_code=503, detail=exc.to_dict()) from exc
+    if isinstance(exc, InvalidStateTransitionError):
+        raise HTTPException(status_code=409, detail=exc.to_dict()) from exc
+    _raise_http(exc)
 
 
 @router.get("/trading-days/defaults")
@@ -745,6 +766,14 @@ def run_session_scheduler_once(req: SchedulerRunOnceRequest) -> dict[str, Any]:
     from backend.services.paper_trading_v2.scheduler import paper_trading_v2_scheduler
 
     return {"ok": True, "result": paper_trading_v2_scheduler.run_once(limit=req.limit, as_of_time=req.as_of_time)}
+
+
+@router.post("/coldstart-sanity/sentinel-order")
+def create_coldstart_sentinel_order(req: ColdstartSentinelOrderRequest) -> dict[str, Any]:
+    try:
+        return ColdstartSentinelService().record_sentinel_order(req.model_dump())
+    except TradingCoreError as exc:
+        _raise_coldstart_sentinel_http(exc)
 
 
 @router.get("/portfolios/{portfolio_id}/orders")

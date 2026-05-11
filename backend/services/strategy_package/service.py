@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -28,9 +29,28 @@ from .model_state import (
     evaluate_model_staleness,
 )
 from .models import PackageStatus, StrategyPackageManifest
+from .package_asset import StrategyPackageAssetRecord, StrategyPackageAssetType
 from .qe_source_resolver import QEExperimentSourceResolver
 from .repository import PackageStatusEvent, StrategyPackageRecord, StrategyPackageRepository
+from .runtime_variant import (
+    RuntimeVariantKind,
+    RuntimeVariantValidationStatus,
+    StrategyPackageRuntimeVariant,
+    build_runtime_variant,
+)
+from .validation_run import (
+    PackageValidationRetrainMode,
+    PackageValidationReproducibility,
+    PackageValidationStatus,
+    PackageValidationType,
+    StrategyPackageValidationRun,
+    build_package_validation_run,
+)
+from .validation_stability import PackageValidationStabilitySummary, StabilityStatus, summarize_validation_stability
 from .validators import StrategyPackageValidator
+
+
+logger = logging.getLogger(__name__)
 
 
 STATUS_TRANSITIONS: dict[PackageStatus, set[PackageStatus]] = {
@@ -52,6 +72,8 @@ STATUS_TRANSITIONS: dict[PackageStatus, set[PackageStatus]] = {
         PackageStatus.PAPER_FAILED,
     },
 }
+
+PAPER_READY_GOVERNANCE_LIMIT = 10_000
 
 
 class StrategyPackageService:
@@ -254,7 +276,12 @@ class StrategyPackageService:
                 return None
             try:
                 return json.loads(value)
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as exc:
+                logger.warning(
+                    "Failed to parse JSON-like strategy package value: %s; value_snippet=%r",
+                    exc,
+                    value[:200],
+                )
                 return None
         return value
 
@@ -323,7 +350,7 @@ class StrategyPackageService:
             # policies are selected later from backtest-validated policy rows,
             # so enabling the package for Paper v2 must not validate an obsolete
             # manifest-embedded V24/V25 runtime asset path.
-            self.validator.validate_manifest_identity_for_paper_trading(record.current_manifest())
+            self._require_governance_paper_ready(record)
         return self.repository.transition_status(
             package_id=package_id,
             to_status=to_status,
@@ -355,6 +382,35 @@ class StrategyPackageService:
 
     def list_status_events(self, package_id: str, *, limit: int = 200) -> list[PackageStatusEvent]:
         return self.repository.list_status_events(package_id, limit=limit)
+
+    def record_package_asset(
+        self,
+        package_id: str,
+        *,
+        asset_type: StrategyPackageAssetType,
+        asset_ref: str,
+        asset_sha256: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        asset_role: str = "governed_asset",
+        asset_size_bytes: int | None = None,
+        protected_asset: bool = True,
+        source_uri: str | None = None,
+    ) -> StrategyPackageAssetRecord:
+        asset = StrategyPackageAssetRecord(
+            package_id=package_id,
+            asset_type=asset_type,
+            asset_ref=asset_ref,
+            asset_sha256=asset_sha256,
+            metadata=metadata or {},
+            asset_role=asset_role,
+            asset_size_bytes=asset_size_bytes,
+            protected_asset=protected_asset,
+            source_uri=source_uri,
+        )
+        return self.repository.save_package_asset(asset)
+
+    def list_package_assets(self, package_id: str, *, protected_only: bool = False) -> list[StrategyPackageAssetRecord]:
+        return self.repository.list_package_assets(package_id, protected_only=protected_only)
 
     def create_execution_policy(
         self,
@@ -534,6 +590,335 @@ class StrategyPackageService:
     def list_model_retrain_jobs(self, package_id: str, *, limit: int = 100) -> list[StrategyPackageModelRetrainJob]:
         self.repository.get(package_id)
         return self.repository.list_model_retrain_jobs(package_id, limit=limit)
+
+    def create_runtime_variant(
+        self,
+        package_id: str,
+        *,
+        variant_name: str,
+        variant_kind: RuntimeVariantKind,
+        variant_config: dict[str, Any],
+        validation_status: RuntimeVariantValidationStatus = RuntimeVariantValidationStatus.DRAFT,
+        paper_candidate: bool = False,
+        validation_evidence: dict[str, Any] | None = None,
+        created_by: str = "aistock_api",
+    ) -> StrategyPackageRuntimeVariant:
+        record = self.repository.get(package_id)
+        variant = build_runtime_variant(
+            record.current_manifest(),
+            variant_name=variant_name,
+            variant_kind=variant_kind,
+            variant_config=variant_config,
+            validation_status=validation_status,
+            paper_candidate=paper_candidate,
+            validation_evidence=validation_evidence,
+            created_by=created_by,
+        )
+        return self.repository.save_runtime_variant(variant)
+
+    def list_runtime_variants(
+        self,
+        package_id: str,
+        *,
+        include_retired: bool = False,
+        limit: int = 100,
+    ) -> list[StrategyPackageRuntimeVariant]:
+        return self.repository.list_runtime_variants(
+            package_id,
+            include_retired=include_retired,
+            limit=limit,
+        )
+
+    def mark_runtime_variant_validation(
+        self,
+        package_id: str,
+        variant_id: str,
+        *,
+        validation_status: RuntimeVariantValidationStatus,
+        paper_candidate: bool = False,
+        validation_evidence: dict[str, Any] | None = None,
+    ) -> StrategyPackageRuntimeVariant:
+        return self.repository.set_runtime_variant_validation(
+            package_id=package_id,
+            variant_id=variant_id,
+            validation_status=validation_status,
+            paper_candidate=paper_candidate,
+            validation_evidence=validation_evidence or {},
+        )
+
+    def create_validation_run(
+        self,
+        package_id: str,
+        *,
+        validation_type: PackageValidationType,
+        retrain_mode: PackageValidationRetrainMode,
+        runtime_variant_id: str | None = None,
+        model_version_id: str | None = None,
+        seed_policy: str | None = None,
+        random_seed: int | None = None,
+        source_data_version: str | None = None,
+        target_data_version: str | None = None,
+        backtest_start: date | None = None,
+        backtest_end: date | None = None,
+        status: PackageValidationStatus = PackageValidationStatus.REQUESTED,
+        metrics_json: dict[str, Any] | None = None,
+        artifact_manifest_json: dict[str, Any] | None = None,
+        evidence_json: dict[str, Any] | None = None,
+        reproducibility_level: PackageValidationReproducibility = PackageValidationReproducibility.UNKNOWN,
+        created_by: str = "aistock_api",
+        completed_at: datetime | None = None,
+    ) -> StrategyPackageValidationRun:
+        record = self.repository.get(package_id)
+        runtime_variant_hash = None
+        if runtime_variant_id is not None:
+            variant = self.repository.get_runtime_variant(package_id, runtime_variant_id)
+            runtime_variant_hash = variant.variant_hash
+        run = build_package_validation_run(
+            record.current_manifest(),
+            validation_type=validation_type,
+            retrain_mode=retrain_mode,
+            runtime_variant_id=runtime_variant_id,
+            runtime_variant_hash=runtime_variant_hash,
+            model_version_id=model_version_id,
+            seed_policy=seed_policy,
+            random_seed=random_seed,
+            source_data_version=source_data_version,
+            target_data_version=target_data_version,
+            backtest_start=backtest_start,
+            backtest_end=backtest_end,
+            status=status,
+            metrics_json=metrics_json,
+            artifact_manifest_json=artifact_manifest_json,
+            evidence_json=evidence_json,
+            reproducibility_level=reproducibility_level,
+            created_by=created_by,
+            completed_at=completed_at,
+        )
+        return self.repository.save_validation_run(run)
+
+    def get_validation_run(self, package_id: str, validation_run_id: str) -> StrategyPackageValidationRun:
+        return self.repository.get_validation_run(package_id, validation_run_id)
+
+    def list_validation_runs(
+        self,
+        package_id: str,
+        *,
+        validation_type: PackageValidationType | None = None,
+        runtime_variant_id: str | None = None,
+        limit: int = 100,
+    ) -> list[StrategyPackageValidationRun]:
+        return self.repository.list_validation_runs(
+            package_id,
+            validation_type=validation_type,
+            runtime_variant_id=runtime_variant_id,
+            limit=limit,
+        )
+
+    def summarize_validation_stability(
+        self,
+        package_id: str,
+        *,
+        metric_key: str = "annual_return",
+        limit: int = 500,
+    ) -> PackageValidationStabilitySummary:
+        runs = self.repository.list_validation_runs(package_id, limit=limit)
+        return summarize_validation_stability(package_id, runs, metric_key=metric_key)
+
+    def governance_eligibility(
+        self,
+        package_id: str,
+        *,
+        metric_key: str = "annual_return",
+        limit: int = 500,
+    ) -> dict[str, Any]:
+        if limit <= 0:
+            raise StrategyPackageValidationError("limit must be positive")
+        record = self.repository.get(package_id)
+        manifest = record.current_manifest()
+        manifest_identity = self._manifest_identity_gate(record, manifest)
+        original_retest = self._original_fixed_weight_retest_gate(record)
+        validation_stability = self._validation_stability_gate(
+            self.summarize_validation_stability(package_id, metric_key=metric_key, limit=limit),
+        )
+        protected_assets = self._protected_asset_gate(package_id)
+        runtime_variants = self._runtime_variant_candidate_gate(package_id)
+
+        gates = [
+            ("manifest_identity", manifest_identity),
+            ("original_fixed_weight_retest", original_retest),
+            ("validation_stability", validation_stability),
+            ("protected_assets", protected_assets),
+            ("runtime_variant_candidate", runtime_variants),
+        ]
+        satisfied_gates: list[str] = []
+        blockers: list[str] = []
+        for gate_name, gate in gates:
+            if gate["passed"]:
+                satisfied_gates.append(gate_name)
+                continue
+            for blocker in gate["blockers"]:
+                if blocker not in blockers:
+                    blockers.append(blocker)
+
+        return {
+            "package_id": package_id,
+            "manifest_sha256": record.manifest_sha256,
+            "package_status": record.package_status.value,
+            "paper_ready": not blockers,
+            "blockers": blockers,
+            "satisfied_gates": satisfied_gates,
+            "manifest_identity": manifest_identity,
+            "original_fixed_weight_retest": original_retest,
+            "validation_stability": validation_stability,
+            "protected_asset_status": protected_assets,
+            "runtime_variant_candidate_status": runtime_variants,
+        }
+
+    def _require_original_fixed_weight_retest_passed(self, record: StrategyPackageRecord) -> None:
+        report = self._original_fixed_weight_retest_gate(record)
+        if report["passed"]:
+            return
+        raise StrategyPackageValidationError(
+            "original fixed-weight validation must pass before enabling Paper",
+            context=report,
+        )
+
+    def _require_governance_paper_ready(self, record: StrategyPackageRecord) -> None:
+        eligibility = self.governance_eligibility(record.package_id, limit=PAPER_READY_GOVERNANCE_LIMIT)
+        if eligibility["paper_ready"]:
+            return
+        raise StrategyPackageValidationError(
+            "governance eligibility must be paper_ready before enabling Paper",
+            context=eligibility,
+        )
+
+    def _manifest_identity_gate(self, record: StrategyPackageRecord, manifest: StrategyPackageManifest) -> dict[str, Any]:
+        blockers: list[str] = []
+        allowed_statuses = [
+            PackageStatus.BACKTEST_APPROVED.value,
+            PackageStatus.SELECTION_ENABLED.value,
+            PackageStatus.PAPER_ENABLED.value,
+        ]
+        if record.package_status not in {
+            PackageStatus.BACKTEST_APPROVED,
+            PackageStatus.SELECTION_ENABLED,
+            PackageStatus.PAPER_ENABLED,
+        }:
+            blockers.append(f"package_status={record.package_status.value}")
+        try:
+            self.validator.validate_manifest(manifest)
+        except StrategyPackageValidationError as exc:
+            blockers.append(str(exc))
+        passed = not blockers
+        return {
+            "passed": passed,
+            "status": "READY" if passed else "BLOCKED",
+            "package_status": record.package_status.value,
+            "allowed_package_statuses": allowed_statuses,
+            "manifest_sha256": record.manifest_sha256,
+            "blockers": blockers,
+        }
+
+    def _original_fixed_weight_retest_gate(self, record: StrategyPackageRecord) -> dict[str, Any]:
+        runs = self.repository.list_validation_runs(
+            record.package_id,
+            validation_type=PackageValidationType.ORIGINAL_FIXED_WEIGHT,
+            limit=None,
+        )
+        observed_runs: list[dict[str, Any]] = []
+        same_manifest_run_count = 0
+        matching_passed_run_id: str | None = None
+        for run in runs:
+            manifest_matches = run.manifest_sha256 == record.manifest_sha256
+            if manifest_matches:
+                same_manifest_run_count += 1
+            if len(observed_runs) < 20:
+                observed_runs.append(
+                    {
+                        "validation_run_id": run.validation_run_id,
+                        "status": run.status.value,
+                        "manifest_sha256": run.manifest_sha256,
+                        "manifest_matches": manifest_matches,
+                        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+                        "created_by": run.created_by,
+                    }
+                )
+            if matching_passed_run_id is None and manifest_matches and run.status == PackageValidationStatus.PASSED:
+                matching_passed_run_id = run.validation_run_id
+        passed = matching_passed_run_id is not None
+        blockers = [] if passed else ["original_fixed_weight_retest_missing_passed_run_for_current_manifest"]
+        return {
+            "passed": passed,
+            "status": "READY" if passed else "BLOCKED",
+            "package_id": record.package_id,
+            "manifest_sha256": record.manifest_sha256,
+            "required_validation_type": PackageValidationType.ORIGINAL_FIXED_WEIGHT.value,
+            "required_status": PackageValidationStatus.PASSED.value,
+            "same_manifest_run_count": same_manifest_run_count,
+            "matching_passed_run_id": matching_passed_run_id,
+            "observed_original_fixed_weight_run_count": len(runs),
+            "observed_original_fixed_weight_runs": observed_runs,
+            "observed_original_fixed_weight_runs_truncated": len(runs) > len(observed_runs),
+            "blockers": blockers,
+        }
+
+    def _validation_stability_gate(self, summary: PackageValidationStabilitySummary) -> dict[str, Any]:
+        blockers: list[str] = []
+        if summary.seed_stability.status != StabilityStatus.STABLE:
+            blockers.append(f"seed_stability={summary.seed_stability.status.value}")
+        if summary.regime_stability.status != StabilityStatus.STABLE:
+            blockers.append(f"regime_stability={summary.regime_stability.status.value}")
+        passed = not blockers
+        return {
+            "passed": passed,
+            "status": "READY" if passed else "BLOCKED",
+            "seed_status": summary.seed_stability.status.value,
+            "regime_status": summary.regime_stability.status.value,
+            "seed_fragile": summary.seed_fragile,
+            "regime_fragile": summary.regime_fragile,
+            "warnings": summary.warnings,
+            "summary": summary.model_dump(mode="json"),
+            "blockers": blockers,
+        }
+
+    def _protected_asset_gate(self, package_id: str) -> dict[str, Any]:
+        assets = self.list_package_assets(package_id)
+        protected_assets = [asset for asset in assets if asset.protected_asset]
+        unprotected_assets = [asset for asset in assets if not asset.protected_asset]
+        blockers: list[str] = []
+        if not assets:
+            blockers.append("protected_asset_ledger_missing")
+        if unprotected_assets:
+            blockers.append("unprotected_assets_present")
+        passed = not blockers
+        return {
+            "passed": passed,
+            "status": "READY" if passed else "BLOCKED",
+            "asset_count": len(assets),
+            "protected_asset_count": len(protected_assets),
+            "unprotected_asset_count": len(unprotected_assets),
+            "protected_asset_refs": [asset.asset_ref for asset in protected_assets[:10]],
+            "unprotected_asset_refs": [asset.asset_ref for asset in unprotected_assets[:10]],
+            "blockers": blockers,
+        }
+
+    def _runtime_variant_candidate_gate(self, package_id: str) -> dict[str, Any]:
+        variants = self.list_runtime_variants(package_id)
+        candidates = [
+            variant
+            for variant in variants
+            if variant.paper_candidate and variant.validation_status == RuntimeVariantValidationStatus.VALIDATION_PASSED
+        ]
+        blockers = [] if candidates else ["runtime_variant_paper_candidate_missing"]
+        return {
+            "passed": bool(candidates),
+            "status": "READY" if candidates else "BLOCKED",
+            "runtime_variant_count": len(variants),
+            "paper_candidate_count": len(candidates),
+            "paper_candidate_variant_ids": [variant.variant_id for variant in candidates[:10]],
+            "paper_candidate_variant_names": [variant.variant_name for variant in candidates[:10]],
+            "blockers": blockers,
+        }
 
     @staticmethod
     def _initial_model_state(record: StrategyPackageRecord) -> StrategyPackageModelState:

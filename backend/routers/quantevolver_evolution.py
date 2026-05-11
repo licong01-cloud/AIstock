@@ -41,6 +41,8 @@ from ..services.quantevolver.node_execution import (
     preflight_qe_nodes,
     resolve_custom_loop_nodes,
 )
+from ..services.strategy_package.promotion_review import PromotionReviewService
+from ..services.trading_core.errors import TradingCoreError
 
 # RD-Agent QE workspace API base URL
 RDAGENT_QE_BASE = os.getenv("RDAGENT_RESULTS_API_BASE_URL", "http://127.0.0.1:9000").rstrip("/")
@@ -1475,6 +1477,11 @@ class LoopCompletedPayload(BaseModel):
     task_id: str = Field(..., description="演进任务ID")
     loop_id: str = Field(..., description="Loop DB ID, 格式: {task_id}_Loop{N}")
 
+
+class PromotionReviewCreateRequest(BaseModel):
+    requested_by: str = Field("manual_user", description="Operator or UI identity requesting manual SOTA review")
+    review_reason: Optional[str] = Field(None, description="Manual review note; does not approve SOTA")
+
 @router.post("/webhook/loop-completed", summary="Loop 完成回调（由 RDAgent 侧或扫描器触发）")
 async def on_loop_completed_webhook(request: Request, payload: LoopCompletedPayload):
     """
@@ -1496,6 +1503,54 @@ async def on_loop_completed_webhook(request: Request, payload: LoopCompletedPayl
     _task = asyncio.create_task(_process_with_logging())
     _task.add_done_callback(lambda t: logger.error(f"Webhook task error: {t.exception()}") if t.exception() else None)
     return {"status": "accepted", "message": f"Processing loop {payload.loop_id}"}
+
+
+@router.post("/tasks/{task_id}/loops/{loop_id}/promotion-review", summary="Create a manual SOTA promotion review")
+def create_loop_promotion_review(task_id: str, loop_id: str, req: PromotionReviewCreateRequest):
+    """
+    Create a REVIEW_PENDING audit record for a completed QE loop.
+
+    This is the Phase 1 manual gate: it never marks the loop as approved SOTA,
+    never enables Paper v2, and is idempotent while the source remains pending.
+    """
+    try:
+        evolution_loop_db_id = loop_id if loop_id.startswith(f"{task_id}_") else f"{task_id}_{loop_id}"
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT loop_id, task_id, experiment_id, metrics_json, status
+                    FROM qe_evolution_loops
+                    WHERE loop_id = %s AND task_id = %s
+                    """,
+                    (evolution_loop_db_id, task_id),
+                )
+                row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="QE evolution loop not found")
+        if row.get("status") != "completed":
+            raise HTTPException(status_code=400, detail="Only completed QE loops can enter manual SOTA review")
+
+        review = PromotionReviewService().request_loop_review(
+            task_id=task_id,
+            loop_id=evolution_loop_db_id,
+            requested_by=req.requested_by,
+            review_reason=req.review_reason,
+            source_metrics=row.get("metrics_json") or {},
+            experiment_id=row.get("experiment_id"),
+        )
+        return {
+            "status": "success",
+            "data": review.model_dump(mode="json"),
+            "message": "Created REVIEW_PENDING record; no approved SOTA or Paper v2 state was changed.",
+        }
+    except HTTPException:
+        raise
+    except TradingCoreError as e:
+        raise HTTPException(status_code=400, detail=e.to_dict()) from e
+    except Exception as e:
+        logger.error(f"Failed to create promotion review for {task_id}/{loop_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============================================================
@@ -1612,44 +1667,88 @@ def get_evolution_trajectory(task_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/leaderboard", summary="获取跨任务 SOTA 排行榜")
+@router.get("/leaderboard", summary="Get cross-task SOTA leaderboard")
 def get_sota_leaderboard():
-    """
-    从 qe_evolution_loops + qe_sota_registry 聚合所有任务的 SOTA 记录，按 IC 降序排列。
-    """
+    """Return approved legacy registry rows plus reviewable automatic candidates."""
     try:
         from ..db.pg_pool import get_conn
         import json as _json
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    SELECT l.task_id, l.loop_id, l.loop_index, l.action_type,
-                           l.metrics_json, l.is_sota, l.status,
-                           t.task_name,
-                           r.evaluation_reason, r.created_at
-                    FROM qe_sota_registry r
-                    JOIN qe_evolution_loops l ON r.loop_id = l.loop_id
-                    JOIN qe_evolution_tasks t ON l.task_id = t.task_id
-                    ORDER BY r.created_at DESC
+                    WITH legacy_registry AS (
+                        SELECT l.task_id, l.loop_id, l.loop_index, l.action_type,
+                               l.metrics_json, l.is_sota, l.status,
+                               t.task_name,
+                               r.evaluation_reason, r.created_at,
+                               r.model_assets_synced, r.local_asset_path,
+                               'LEGACY_REGISTRY'::text AS promotion_state,
+                               TRUE AS approved_sota,
+                               NULL::text AS review_id,
+                               NULL::text AS review_requested_by,
+                               NULL::timestamptz AS review_created_at
+                        FROM qe_sota_registry r
+                        JOIN qe_evolution_loops l ON r.loop_id = l.loop_id
+                        JOIN qe_evolution_tasks t ON l.task_id = t.task_id
+                    ),
+                    automatic_candidates AS (
+                        SELECT l.task_id, l.loop_id, l.loop_index, l.action_type,
+                               l.metrics_json, l.is_sota, l.status,
+                               t.task_name,
+                               'Automatic SOTA candidate; requires manual promotion review before approval.'::text AS evaluation_reason,
+                               l.created_at,
+                               FALSE AS model_assets_synced,
+                               NULL::text AS local_asset_path,
+                               COALESCE(pr.status, 'AUTO_CANDIDATE')::text AS promotion_state,
+                               FALSE AS approved_sota,
+                               pr.review_id,
+                               pr.requested_by AS review_requested_by,
+                               pr.created_at AS review_created_at
+                        FROM qe_evolution_loops l
+                        JOIN qe_evolution_tasks t ON l.task_id = t.task_id
+                        LEFT JOIN strategy_pkg.promotion_review pr
+                          ON pr.source_type = 'qe_evolution_loop'
+                         AND pr.source_id = l.loop_id
+                        WHERE l.is_sota = TRUE
+                          AND l.status = 'completed'
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM qe_sota_registry r
+                              WHERE r.loop_id = l.loop_id
+                          )
+                    )
+                    SELECT *
+                    FROM legacy_registry
+                    UNION ALL
+                    SELECT *
+                    FROM automatic_candidates
+                    ORDER BY created_at DESC
                     LIMIT 100
                 """)
                 cols = [desc[0] for desc in cur.description]
                 rows = [dict(zip(cols, row)) for row in cur.fetchall()]
 
-        # Extract IC from metrics_json for sorting
+        # Extract common metrics for sorting and frontend summaries.
         for row in rows:
             m = row.get("metrics_json") or {}
             if isinstance(m, str):
-                m = _json.loads(m)
+                try:
+                    m = _json.loads(m)
+                except Exception:
+                    m = {}
+            if not isinstance(m, dict):
+                m = {}
             row["ic"] = m.get("IC")
-            row["sharpe"] = m.get("sharpe")
+            row["rank_ic"] = m.get("Rank_IC")
+            row["icir"] = m.get("ICIR")
+            row["sharpe"] = m.get("Sharpe", m.get("sharpe"))
 
         rows.sort(key=lambda r: r.get("ic") or 0, reverse=True)
 
         total_tasks = len(set(r["task_id"] for r in rows))
         total_loops = len(rows)
-        best_ic = max((r["ic"] for r in rows if r.get("ic")), default=None)
-        best_sharpe = max((r["sharpe"] for r in rows if r.get("sharpe")), default=None)
+        best_ic = max((r["ic"] for r in rows if r.get("ic") is not None), default=None)
+        best_sharpe = max((r["sharpe"] for r in rows if r.get("sharpe") is not None), default=None)
 
         return {
             "status": "success",

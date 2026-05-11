@@ -1,0 +1,179 @@
+{
+  "blocked_packages": {},
+  "db_connection_opened": false,
+  "db_writes": false,
+  "db_writes_executed": false,
+  "ddl": false,
+  "dry_run": true,
+  "mode": "offline_dry_run",
+  "package_count": 4,
+  "package_ids": [
+    "pkg_1",
+    "pkg_2",
+    "pkg_3",
+    "pkg_4"
+  ],
+  "packages": [
+    {
+      "blockers": [],
+      "manifest_sha256": "sha256-pkg_1",
+      "package_id": "pkg_1",
+      "package_status": "BACKTEST_APPROVED",
+      "required_gates": {
+        "manifest_identity": true,
+        "original_fixed_weight_retest": true,
+        "protected_asset_ledger": true,
+        "runtime_variant_candidate": true
+      },
+      "rows": [
+        {
+          "action": "insert_protected_asset_ledger_evidence",
+          "columns": {
+            "asset_ref": "governance/protected_asset_ledger_backfill",
+            "asset_role": "governance_evidence",
+            "asset_sha256": null,
+            "asset_size_bytes": null,
+            "asset_type": "protected_asset_ledger_evidence",
+            "metadata": {
+              "dry_run_artifact": "protected_asset_ledger_apply_prod_dev_preview_offline.json",
+              "manifest_sha256": "sha256-pkg_1",
+              "schema_version": "aistock_protected_asset_ledger_backfill_prod_executor_v1",
+              "source": "protected_asset_ledger_backfill_prod_executor_fixture"
+            },
+            "package_id": "pkg_1",
+            "protected_asset": true,
+            "source_uri": "strategy_pkg.package"
+          },
+          "natural_key": {
+            "asset_ref": "governance/protected_asset_ledger_backfill",
+            "asset_type": "protected_asset_ledger_evidence",
+            "package_id": "pkg_1"
+          },
+          "table": "strategy_pkg.package_asset"
+        }
+      ]
+    },
+    {
+      "blockers": [],
+      "manifest_sha256": "sha256-pkg_2",
+      "package_id": "pkg_2",
+      "package_status": "BACKTEST_APPROVED",
+      "required_gates": {
+        "manifest_identity": true,
+        "original_fixed_weight_retest": true,
+        "protected_asset_ledger": true,
+        "runtime_variant_candidate": true
+      },
+      "rows": [
+        {
+          "action": "insert_protected_asset_ledger_evidence",
+          "columns": {
+            "asset_ref": "governance/protected_asset_ledger_backfill",
+            "asset_role": "governance_evidence",
+            "asset_sha256": null,
+            "asset_size_bytes": null,
+            "asset_type": "protected_asset_ledger_evidence",
+            "metadata": {
+              "dry_run_artifact": "protected_asset_ledger_apply_prod_dev_preview_offline.json",
+              "manifest_sha256": "sha256-pkg_2",
+              "schema_version": "aistock_protected_asset_ledger_backfill_prod_executor_v1",
+              "source": "protected_asset_ledger_backfill_prod_executor_fixture"
+            },
+            "package_id": "pkg_2",
+            "protected_asset": true,
+            "source_uri": "strategy_pkg.package"
+          },
+          "natural_key": {
+            "asset_ref": "governance/protected_asset_ledger_backfill",
+            "asset_type": "protected_asset_ledger_evidence",
+            "package_id": "pkg_2"
+          },
+          "table": "strategy_pkg.package_asset"
+        }
+      ]
+    },
+    {
+      "blockers": [],
+      "manifest_sha256": "sha256-pkg_3",
+      "package_id": "pkg_3",
+      "package_status": "BACKTEST_APPROVED",
+      "required_gates": {
+        "manifest_identity": true,
+        "original_fixed_weight_retest": true,
+        "protected_asset_ledger": true,
+        "runtime_variant_candidate": true
+      },
+      "rows": [
+        {
+          "action": "insert_protected_asset_ledger_evidence",
+          "columns": {
+            "asset_ref": "governance/protected_asset_ledger_backfill",
+            "asset_role": "governance_evidence",
+            "asset_sha256": null,
+            "asset_size_bytes": null,
+            "asset_type": "protected_asset_ledger_evidence",
+            "metadata": {
+              "dry_run_artifact": "protected_asset_ledger_apply_prod_dev_preview_offline.json",
+              "manifest_sha256": "sha256-pkg_3",
+              "schema_version": "aistock_protected_asset_ledger_backfill_prod_executor_v1",
+              "source": "protected_asset_ledger_backfill_prod_executor_fixture"
+            },
+            "package_id": "pkg_3",
+            "protected_asset": true,
+            "source_uri": "strategy_pkg.package"
+          },
+          "natural_key": {
+            "asset_ref": "governance/protected_asset_ledger_backfill",
+            "asset_type": "protected_asset_ledger_evidence",
+            "package_id": "pkg_3"
+          },
+          "table": "strategy_pkg.package_asset"
+        }
+      ]
+    },
+    {
+      "blockers": [],
+      "manifest_sha256": "sha256-pkg_4",
+      "package_id": "pkg_4",
+      "package_status": "BACKTEST_APPROVED",
+      "required_gates": {
+        "manifest_identity": true,
+        "original_fixed_weight_retest": true,
+        "protected_asset_ledger": true,
+        "runtime_variant_candidate": true
+      },
+      "rows": [
+        {
+          "action": "insert_protected_asset_ledger_evidence",
+          "columns": {
+            "asset_ref": "governance/protected_asset_ledger_backfill",
+            "asset_role": "governance_evidence",
+            "asset_sha256": null,
+            "asset_size_bytes": null,
+            "asset_type": "protected_asset_ledger_evidence",
+            "metadata": {
+              "dry_run_artifact": "protected_asset_ledger_apply_prod_dev_preview_offline.json",
+              "manifest_sha256": "sha256-pkg_4",
+              "schema_version": "aistock_protected_asset_ledger_backfill_prod_executor_v1",
+              "source": "protected_asset_ledger_backfill_prod_executor_fixture"
+            },
+            "package_id": "pkg_4",
+            "protected_asset": true,
+            "source_uri": "strategy_pkg.package"
+          },
+          "natural_key": {
+            "asset_ref": "governance/protected_asset_ledger_backfill",
+            "asset_type": "protected_asset_ledger_evidence",
+            "package_id": "pkg_4"
+          },
+          "table": "strategy_pkg.package_asset"
+        }
+      ]
+    }
+  ],
+  "production_services_touched": false,
+  "schema_version": "aistock_protected_asset_ledger_backfill_plan_v1",
+  "service_calls_executed": false,
+  "status": "passed",
+  "target_db": "dev-preview-offline"
+}

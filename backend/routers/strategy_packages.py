@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -11,10 +11,18 @@ from pydantic import BaseModel, Field
 from backend.db.pg_pool import get_conn
 from backend.services.strategy_package.metrics_summary import metrics_summary_from_record
 from backend.services.strategy_package.models import PackageStatus
+from backend.services.strategy_package.package_asset import StrategyPackageAssetType
 from backend.services.strategy_package.qe_source_resolver import QEExperimentSourceResolver
 from backend.services.strategy_package.repository import StrategyPackageRecord
+from backend.services.strategy_package.runtime_variant import RuntimeVariantKind, RuntimeVariantValidationStatus
 from backend.services.strategy_package.selection_artifact import StrategyPackageSelectionArtifactService
 from backend.services.strategy_package.service import StrategyPackageService
+from backend.services.strategy_package.validation_run import (
+    PackageValidationRetrainMode,
+    PackageValidationReproducibility,
+    PackageValidationStatus,
+    PackageValidationType,
+)
 from backend.services.strategy_package.validators import StrategyPackageValidator
 from backend.services.trading_core.errors import (
     DataUnavailableError,
@@ -57,6 +65,17 @@ class CreateExecutionPolicyRequest(BaseModel):
     paper_enabled: bool = False
 
 
+class RecordPackageAssetRequest(BaseModel):
+    asset_type: StrategyPackageAssetType
+    asset_ref: str = Field(min_length=1)
+    asset_sha256: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    asset_role: str = Field(default="governed_asset", min_length=1)
+    asset_size_bytes: int | None = Field(default=None, ge=0)
+    protected_asset: bool = True
+    source_uri: str | None = None
+
+
 class ModelRetrainPreviewRequest(BaseModel):
     as_of_date: date | None = None
     lookback_days: int = Field(default=756, gt=0)
@@ -69,6 +88,42 @@ class ModelRetrainStartRequest(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
     confirm_retrain: bool = False
     confirm_text: str | None = None
+
+
+class CreateRuntimeVariantRequest(BaseModel):
+    variant_name: str = Field(min_length=1)
+    variant_kind: RuntimeVariantKind
+    variant_config: dict[str, Any] = Field(default_factory=dict)
+    validation_status: RuntimeVariantValidationStatus = RuntimeVariantValidationStatus.DRAFT
+    paper_candidate: bool = False
+    validation_evidence: dict[str, Any] = Field(default_factory=dict)
+    created_by: str = Field(default="aistock_api", min_length=1)
+
+
+class RuntimeVariantValidationRequest(BaseModel):
+    validation_status: RuntimeVariantValidationStatus
+    paper_candidate: bool = False
+    validation_evidence: dict[str, Any] = Field(default_factory=dict)
+
+
+class CreateValidationRunRequest(BaseModel):
+    validation_type: PackageValidationType
+    retrain_mode: PackageValidationRetrainMode
+    runtime_variant_id: str | None = None
+    model_version_id: str | None = None
+    seed_policy: str | None = None
+    random_seed: int | None = None
+    source_data_version: str | None = None
+    target_data_version: str | None = None
+    backtest_start: date | None = None
+    backtest_end: date | None = None
+    status: PackageValidationStatus = PackageValidationStatus.REQUESTED
+    metrics_json: dict[str, Any] = Field(default_factory=dict)
+    artifact_manifest_json: dict[str, Any] = Field(default_factory=dict)
+    evidence_json: dict[str, Any] = Field(default_factory=dict)
+    reproducibility_level: PackageValidationReproducibility = PackageValidationReproducibility.UNKNOWN
+    created_by: str = Field(default="aistock_api", min_length=1)
+    completed_at: datetime | None = None
 
 
 class GenerateSelectionArtifactsRequest(BaseModel):
@@ -89,10 +144,6 @@ def _raise_http(exc: TradingCoreError) -> None:
     elif isinstance(exc, UnsupportedFeatureError):
         status_code = 422
     elif isinstance(exc, InvalidStateTransitionError):
-        # State-machine violation -> 409 Conflict (T8-C / T7 audit §5).
-        # `exc.to_dict()` already surfaces context with `from_status`,
-        # `to_status`, and (PG path) `allowed_from`, so callers can distinguish
-        # state-race vs validation-failure without parsing the message.
         status_code = 409
     raise HTTPException(status_code=status_code, detail=exc.to_dict()) from exc
 
@@ -120,11 +171,27 @@ def _execution_policy_payload(policy) -> dict[str, Any]:
     return policy.model_dump(mode="json")
 
 
+def _package_asset_payload(asset) -> dict[str, Any]:
+    return asset.model_dump(mode="json")
+
+
 def _selection_artifact_payload(artifact) -> dict[str, Any]:
     payload = artifact.model_dump(mode="json")
     payload.pop("scores_json", None)
     payload["score_preview"] = artifact.scores_json[:10]
     return payload
+
+
+def _runtime_variant_payload(variant) -> dict[str, Any]:
+    return variant.model_dump(mode="json")
+
+
+def _validation_run_payload(run) -> dict[str, Any]:
+    return run.model_dump(mode="json")
+
+
+def _validation_stability_payload(summary) -> dict[str, Any]:
+    return summary.model_dump(mode="json")
 
 
 def _trading_dates_between(start_date: date, end_date: date) -> list[date]:
@@ -216,6 +283,38 @@ def list_strategy_package_status_events(package_id: str, limit: int = 200) -> di
     try:
         events = StrategyPackageService().list_status_events(package_id, limit=limit)
         return {"ok": True, "package_id": package_id, "events": [event.model_dump(mode="json") for event in events]}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/{package_id}/assets")
+def record_strategy_package_asset(package_id: str, req: RecordPackageAssetRequest) -> dict[str, Any]:
+    try:
+        asset = StrategyPackageService().record_package_asset(
+            package_id,
+            asset_type=req.asset_type,
+            asset_ref=req.asset_ref,
+            asset_sha256=req.asset_sha256,
+            metadata=req.metadata,
+            asset_role=req.asset_role,
+            asset_size_bytes=req.asset_size_bytes,
+            protected_asset=req.protected_asset,
+            source_uri=req.source_uri,
+        )
+        return {"ok": True, "asset": _package_asset_payload(asset)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/{package_id}/assets")
+def list_strategy_package_assets(package_id: str, protected_only: bool = False) -> dict[str, Any]:
+    try:
+        assets = StrategyPackageService().list_package_assets(package_id, protected_only=protected_only)
+        return {
+            "ok": True,
+            "package_id": package_id,
+            "assets": [_package_asset_payload(asset) for asset in assets],
+        }
     except TradingCoreError as exc:
         _raise_http(exc)
 
@@ -418,6 +517,160 @@ def list_strategy_package_model_retrain_jobs(package_id: str, limit: int = 100) 
     try:
         jobs = StrategyPackageService().list_model_retrain_jobs(package_id, limit=limit)
         return {"ok": True, "package_id": package_id, "jobs": [job.model_dump(mode="json") for job in jobs]}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/{package_id}/runtime-variants")
+def create_strategy_package_runtime_variant(package_id: str, req: CreateRuntimeVariantRequest) -> dict[str, Any]:
+    try:
+        variant = StrategyPackageService().create_runtime_variant(
+            package_id,
+            variant_name=req.variant_name,
+            variant_kind=req.variant_kind,
+            variant_config=req.variant_config,
+            validation_status=req.validation_status,
+            paper_candidate=req.paper_candidate,
+            validation_evidence=req.validation_evidence,
+            created_by=req.created_by,
+        )
+        return {"ok": True, "runtime_variant": _runtime_variant_payload(variant)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/{package_id}/runtime-variants")
+def list_strategy_package_runtime_variants(
+    package_id: str,
+    include_retired: bool = False,
+    limit: int = 100,
+) -> dict[str, Any]:
+    try:
+        variants = StrategyPackageService().list_runtime_variants(
+            package_id,
+            include_retired=include_retired,
+            limit=limit,
+        )
+        return {
+            "ok": True,
+            "package_id": package_id,
+            "runtime_variants": [_runtime_variant_payload(variant) for variant in variants],
+        }
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/{package_id}/runtime-variants/{variant_id}/validation")
+def mark_strategy_package_runtime_variant_validation(
+    package_id: str,
+    variant_id: str,
+    req: RuntimeVariantValidationRequest,
+) -> dict[str, Any]:
+    try:
+        variant = StrategyPackageService().mark_runtime_variant_validation(
+            package_id,
+            variant_id,
+            validation_status=req.validation_status,
+            paper_candidate=req.paper_candidate,
+            validation_evidence=req.validation_evidence,
+        )
+        return {"ok": True, "runtime_variant": _runtime_variant_payload(variant)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/{package_id}/validation-runs")
+def create_strategy_package_validation_run(package_id: str, req: CreateValidationRunRequest) -> dict[str, Any]:
+    try:
+        run = StrategyPackageService().create_validation_run(
+            package_id,
+            validation_type=req.validation_type,
+            retrain_mode=req.retrain_mode,
+            runtime_variant_id=req.runtime_variant_id,
+            model_version_id=req.model_version_id,
+            seed_policy=req.seed_policy,
+            random_seed=req.random_seed,
+            source_data_version=req.source_data_version,
+            target_data_version=req.target_data_version,
+            backtest_start=req.backtest_start,
+            backtest_end=req.backtest_end,
+            status=req.status,
+            metrics_json=req.metrics_json,
+            artifact_manifest_json=req.artifact_manifest_json,
+            evidence_json=req.evidence_json,
+            reproducibility_level=req.reproducibility_level,
+            created_by=req.created_by,
+            completed_at=req.completed_at,
+        )
+        return {"ok": True, "validation_run": _validation_run_payload(run)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/{package_id}/validation-runs")
+def list_strategy_package_validation_runs(
+    package_id: str,
+    validation_type: PackageValidationType | None = None,
+    runtime_variant_id: str | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    try:
+        runs = StrategyPackageService().list_validation_runs(
+            package_id,
+            validation_type=validation_type,
+            runtime_variant_id=runtime_variant_id,
+            limit=limit,
+        )
+        return {
+            "ok": True,
+            "package_id": package_id,
+            "validation_runs": [_validation_run_payload(run) for run in runs],
+        }
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/{package_id}/validation-runs/{validation_run_id}")
+def get_strategy_package_validation_run(package_id: str, validation_run_id: str) -> dict[str, Any]:
+    try:
+        run = StrategyPackageService().get_validation_run(package_id, validation_run_id)
+        return {"ok": True, "validation_run": _validation_run_payload(run)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/{package_id}/validation-stability")
+def get_strategy_package_validation_stability(
+    package_id: str,
+    metric_key: str = "annual_return",
+    limit: int = 500,
+) -> dict[str, Any]:
+    try:
+        summary = StrategyPackageService().summarize_validation_stability(
+            package_id,
+            metric_key=metric_key,
+            limit=limit,
+        )
+        return {"ok": True, "stability": _validation_stability_payload(summary)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/{package_id}/governance-eligibility")
+def get_strategy_package_governance_eligibility(
+    package_id: str,
+    metric_key: str = "annual_return",
+    limit: int = 500,
+) -> dict[str, Any]:
+    """Return a read-only summary of paper-stage governance eligibility."""
+
+    try:
+        eligibility = StrategyPackageService().governance_eligibility(
+            package_id,
+            metric_key=metric_key,
+            limit=limit,
+        )
+        return {"ok": True, "package_id": package_id, "eligibility": eligibility}
     except TradingCoreError as exc:
         _raise_http(exc)
 

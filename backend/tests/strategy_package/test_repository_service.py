@@ -1,17 +1,108 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+import logging
+from datetime import date, datetime, timezone
 
+import psycopg2
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.metrics_summary import metrics_summary_from_record
 from backend.services.strategy_package.model_state import ModelRetrainJobStatus, ModelStalenessStatus, StrategyPackageModelState
 from backend.services.strategy_package.models import PackageStatus
-from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
-from backend.services.strategy_package.service import StrategyPackageService
+from backend.services.strategy_package.package_asset import StrategyPackageAssetType
+from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository, StrategyPackageRepository
+from backend.services.strategy_package.runtime_variant import RuntimeVariantKind, RuntimeVariantValidationStatus
+from backend.services.strategy_package.service import PAPER_READY_GOVERNANCE_LIMIT, StrategyPackageService
+from backend.services.strategy_package.validation_run import (
+    PackageValidationRetrainMode,
+    PackageValidationStatus,
+    PackageValidationType,
+)
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, StrategyPackageValidationError, UnsupportedFeatureError
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
 import pytest
+
+
+def _record_passed_original_retest(
+    service: StrategyPackageService,
+    package_id: str,
+    *,
+    completed_at: datetime | None = None,
+) -> None:
+    service.create_validation_run(
+        package_id,
+        validation_type=PackageValidationType.ORIGINAL_FIXED_WEIGHT,
+        retrain_mode=PackageValidationRetrainMode.NO_RETRAIN,
+        status=PackageValidationStatus.PASSED,
+        metrics_json={"annual_return": 0.12, "max_drawdown": -0.08},
+        artifact_manifest_json={"artifact_sha256": "sha256:unit-test-original-retest"},
+        evidence_json={
+            "commands": ["pytest synthetic original retest"],
+            "mode": "A",
+            "regime_metrics": {
+                "bull": {"annual_return": 0.101},
+                "bear": {"annual_return": 0.102},
+            },
+        },
+        completed_at=completed_at or datetime.now(timezone.utc),
+        created_by="unit_test",
+    )
+
+
+def _record_stable_seed_runs(
+    service: StrategyPackageService,
+    package_id: str,
+    *,
+    completed_at: datetime,
+) -> None:
+    for seed, annual_return in ((101, 0.101), (202, 0.102)):
+        service.create_validation_run(
+            package_id,
+            validation_type=PackageValidationType.ORIGINAL_RETRAIN,
+            retrain_mode=PackageValidationRetrainMode.FIXED_SEED_RETRAIN,
+            seed_policy="fixed",
+            random_seed=seed,
+            metrics_json={"annual_return": annual_return},
+            artifact_manifest_json={"artifact_sha256": f"sha256:seed-{seed}"},
+            evidence_json={
+                "regime_metrics": {
+                    "bull": {"annual_return": annual_return},
+                    "bear": {"annual_return": annual_return + 0.0001},
+                }
+            },
+            completed_at=completed_at,
+            created_by="unit_test",
+        )
+
+
+def _record_runtime_candidate(service: StrategyPackageService, package_id: str) -> None:
+    variant = service.create_runtime_variant(
+        package_id,
+        variant_name="risk cap",
+        variant_kind=RuntimeVariantKind.RISK_POLICY,
+        variant_config={"risk_policy": {"max_position_weight": 0.04}},
+        created_by="unit_test",
+    )
+    service.mark_runtime_variant_validation(
+        package_id,
+        variant.variant_id,
+        validation_status=RuntimeVariantValidationStatus.VALIDATION_PASSED,
+        paper_candidate=True,
+        validation_evidence={"validation_run_id": "vr_candidate", "status": "passed"},
+    )
+
+
+def _seed_paper_ready_package(service: StrategyPackageService, package_id: str) -> None:
+    completed_at = datetime.now(timezone.utc)
+    service.record_package_asset(
+        package_id,
+        asset_type=StrategyPackageAssetType.MODEL_WEIGHT,
+        asset_ref="weights/frozen.pkl",
+        asset_sha256="sha256:weights",
+    )
+    _record_runtime_candidate(service, package_id)
+    _record_passed_original_retest(service, package_id, completed_at=completed_at)
+    _record_stable_seed_runs(service, package_id, completed_at=completed_at)
 
 
 def test_strategy_package_repository_persists_frozen_manifest_and_status_flow() -> None:
@@ -21,6 +112,7 @@ def test_strategy_package_repository_persists_frozen_manifest_and_status_flow() 
 
     service = StrategyPackageService(repository=repo)
     selected = service.enable_selection(saved.package_id)
+    _seed_paper_ready_package(service, saved.package_id)
     paper = service.enable_paper(saved.package_id)
     repo.mark_paper_portfolio_created(saved.package_id, "paper_1")
 
@@ -42,10 +134,340 @@ def test_enable_paper_does_not_validate_manifest_minute_runtime_asset() -> None:
         make_manifest(algo_code="V24_PLAN").model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
     )
     repo.save_manifest(manifest)
+    service = StrategyPackageService(repository=repo)
+    _seed_paper_ready_package(service, manifest.package_id)
 
-    paper = StrategyPackageService(repository=repo).enable_paper(manifest.package_id)
+    paper = service.enable_paper(manifest.package_id)
 
     assert paper.package_status == PackageStatus.PAPER_ENABLED
+
+
+def test_enable_paper_requires_governance_eligibility_ready() -> None:
+    repo = InMemoryStrategyPackageRepository()
+    manifest = freeze_manifest(
+        make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
+    )
+    repo.save_manifest(manifest)
+    service = StrategyPackageService(repository=repo)
+    _record_passed_original_retest(service, manifest.package_id)
+    before_reasons = [event.reason for event in repo.list_status_events(manifest.package_id)]
+
+    with pytest.raises(StrategyPackageValidationError, match="governance eligibility") as exc_info:
+        service.enable_paper(manifest.package_id)
+
+    context = exc_info.value.context
+    assert context["paper_ready"] is False
+    assert "protected_asset_ledger_missing" in context["blockers"]
+    assert "runtime_variant_paper_candidate_missing" in context["blockers"]
+    assert repo.get(manifest.package_id).package_status == PackageStatus.BACKTEST_APPROVED
+    assert [event.reason for event in repo.list_status_events(manifest.package_id)] == before_reasons
+
+
+def test_enable_paper_uses_large_governance_history_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = InMemoryStrategyPackageRepository()
+    manifest = freeze_manifest(
+        make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
+    )
+    repo.save_manifest(manifest)
+    service = StrategyPackageService(repository=repo)
+    observed: dict[str, object] = {}
+
+    def fake_governance_eligibility(
+        package_id: str,
+        *,
+        metric_key: str = "annual_return",
+        limit: int = 500,
+    ) -> dict[str, object]:
+        observed.update({"package_id": package_id, "metric_key": metric_key, "limit": limit})
+        return {"paper_ready": True}
+
+    monkeypatch.setattr(service, "governance_eligibility", fake_governance_eligibility)
+
+    paper = service.enable_paper(manifest.package_id)
+
+    assert paper.package_status == PackageStatus.PAPER_ENABLED
+    assert observed == {
+        "package_id": manifest.package_id,
+        "metric_key": "annual_return",
+        "limit": PAPER_READY_GOVERNANCE_LIMIT,
+    }
+
+
+def test_enable_paper_requires_passed_original_fixed_weight_retest() -> None:
+    repo = InMemoryStrategyPackageRepository()
+    manifest = freeze_manifest(
+        make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
+    )
+    repo.save_manifest(manifest)
+
+    with pytest.raises(StrategyPackageValidationError, match="governance eligibility") as exc_info:
+        StrategyPackageService(repository=repo).enable_paper(manifest.package_id)
+    assert "original_fixed_weight_retest_missing_passed_run_for_current_manifest" in exc_info.value.context["blockers"]
+
+
+def test_enable_paper_reports_failed_original_retest_without_status_mutation() -> None:
+    repo = InMemoryStrategyPackageRepository()
+    manifest = freeze_manifest(
+        make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
+    )
+    repo.save_manifest(manifest)
+    service = StrategyPackageService(repository=repo)
+    failed = service.create_validation_run(
+        manifest.package_id,
+        validation_type=PackageValidationType.ORIGINAL_FIXED_WEIGHT,
+        retrain_mode=PackageValidationRetrainMode.NO_RETRAIN,
+        status=PackageValidationStatus.FAILED,
+        evidence_json={"reason": "nav drift exceeded tolerance"},
+        completed_at=datetime.now(timezone.utc),
+        created_by="unit_test",
+    )
+    before_reasons = [event.reason for event in repo.list_status_events(manifest.package_id)]
+
+    with pytest.raises(StrategyPackageValidationError, match="governance eligibility") as exc_info:
+        service.enable_paper(manifest.package_id)
+
+    context = exc_info.value.context
+    original_retest = context["original_fixed_weight_retest"]
+    assert context["paper_ready"] is False
+    assert "original_fixed_weight_retest_missing_passed_run_for_current_manifest" in context["blockers"]
+    assert original_retest["required_validation_type"] == PackageValidationType.ORIGINAL_FIXED_WEIGHT.value
+    assert original_retest["required_status"] == PackageValidationStatus.PASSED.value
+    assert original_retest["same_manifest_run_count"] == 1
+    assert original_retest["observed_original_fixed_weight_runs"] == [
+        {
+            "validation_run_id": failed.validation_run_id,
+            "status": PackageValidationStatus.FAILED.value,
+            "manifest_sha256": manifest.manifest_sha256,
+            "manifest_matches": True,
+            "completed_at": failed.completed_at.isoformat(),
+            "created_by": "unit_test",
+        }
+    ]
+    assert repo.get(manifest.package_id).package_status == PackageStatus.BACKTEST_APPROVED
+    assert [event.reason for event in repo.list_status_events(manifest.package_id)] == before_reasons
+
+
+def test_enable_paper_does_not_fall_back_to_latest_fixed_weight_validation() -> None:
+    repo = InMemoryStrategyPackageRepository()
+    manifest = freeze_manifest(
+        make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
+    )
+    repo.save_manifest(manifest)
+    service = StrategyPackageService(repository=repo)
+    service.create_validation_run(
+        manifest.package_id,
+        validation_type=PackageValidationType.LATEST_FIXED_WEIGHT,
+        retrain_mode=PackageValidationRetrainMode.NO_RETRAIN,
+        target_data_version="qlib_2026q2_latest",
+        status=PackageValidationStatus.PASSED,
+        metrics_json={"annual_return": 0.2},
+        artifact_manifest_json={"artifact_sha256": "sha256:latest-only"},
+        evidence_json={"commands": ["pytest synthetic latest validation"]},
+        completed_at=datetime.now(timezone.utc),
+        created_by="unit_test",
+    )
+
+    with pytest.raises(StrategyPackageValidationError) as exc_info:
+        service.enable_paper(manifest.package_id)
+
+    original_retest = exc_info.value.context["original_fixed_weight_retest"]
+    assert original_retest["required_validation_type"] == PackageValidationType.ORIGINAL_FIXED_WEIGHT.value
+    assert original_retest["same_manifest_run_count"] == 0
+    assert original_retest["observed_original_fixed_weight_runs"] == []
+    assert repo.get(manifest.package_id).package_status == PackageStatus.BACKTEST_APPROVED
+
+
+def test_enable_paper_finds_passed_original_retest_even_after_many_newer_runs() -> None:
+    repo = InMemoryStrategyPackageRepository()
+    manifest = freeze_manifest(
+        make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
+    )
+    repo.save_manifest(manifest)
+    service = StrategyPackageService(repository=repo)
+    service.record_package_asset(
+        manifest.package_id,
+        asset_type=StrategyPackageAssetType.MODEL_WEIGHT,
+        asset_ref="weights/frozen.pkl",
+        asset_sha256="sha256:weights",
+    )
+    _record_runtime_candidate(service, manifest.package_id)
+    passed = service.create_validation_run(
+        manifest.package_id,
+        validation_type=PackageValidationType.ORIGINAL_FIXED_WEIGHT,
+        retrain_mode=PackageValidationRetrainMode.NO_RETRAIN,
+        status=PackageValidationStatus.PASSED,
+        metrics_json={"annual_return": 0.12, "max_drawdown": -0.08},
+        artifact_manifest_json={"artifact_sha256": "sha256:unit-test-original-retest"},
+        evidence_json={"commands": ["pytest synthetic original retest"], "mode": "A"},
+        completed_at=datetime.now(timezone.utc),
+        created_by="unit_test",
+    )
+    for index in range(100):
+        service.create_validation_run(
+            manifest.package_id,
+            validation_type=PackageValidationType.ORIGINAL_FIXED_WEIGHT,
+            retrain_mode=PackageValidationRetrainMode.NO_RETRAIN,
+            status=PackageValidationStatus.REQUESTED,
+            created_by=f"noise_{index}",
+        )
+    _record_stable_seed_runs(service, manifest.package_id, completed_at=datetime.now(timezone.utc))
+
+    report = service.governance_eligibility(manifest.package_id)
+    paper = service.enable_paper(manifest.package_id)
+
+    assert report["original_fixed_weight_retest"]["matching_passed_run_id"] == passed.validation_run_id
+    assert report["original_fixed_weight_retest"]["same_manifest_run_count"] == 101
+    assert paper.package_status == PackageStatus.PAPER_ENABLED
+
+
+def test_qe_source_payload_warns_on_malformed_result_metrics(caplog: pytest.LogCaptureFixture) -> None:
+    row = {
+        "experiment_id": "exp_bad_metrics",
+        "result_metrics": "{\"annual_return\":",
+    }
+
+    with caplog.at_level(logging.WARNING, logger="backend.services.strategy_package.service"):
+        payload = StrategyPackageService._qe_source_payload(row, source_kind="qe_experiment")
+
+    assert payload["experiment_id"] == "exp_bad_metrics"
+    assert payload["metrics_summary"]["annual_return"] is None
+    assert "Failed to parse JSON-like strategy package value" in caplog.text
+    assert "value_snippet" in caplog.text
+
+
+def test_postgres_repository_wraps_status_event_sequence_collision(monkeypatch) -> None:
+    repo = StrategyPackageRepository()
+    manifest = freeze_manifest(
+        make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
+    )
+    state = {
+        "autocommit": True,
+        "commits": 0,
+        "rollbacks": 0,
+    }
+
+    class Cursor:
+        rowcount = 1
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, sql, params=None):
+            if "INSERT INTO strategy_pkg.package_status_event" in sql:
+                raise psycopg2.errors.UniqueViolation("duplicate event_id")
+
+    class Conn:
+        @property
+        def autocommit(self):
+            return state["autocommit"]
+
+        @autocommit.setter
+        def autocommit(self, value):
+            state["autocommit"] = value
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def cursor(self, *args, **kwargs):
+            return Cursor()
+
+        def commit(self):
+            state["commits"] += 1
+
+        def rollback(self):
+            state["rollbacks"] += 1
+
+    monkeypatch.setattr(repo, "get", lambda package_id: manifest_to_record(manifest))
+    monkeypatch.setattr(repo, "_conn_factory", lambda: Conn())
+
+    with pytest.raises(InvalidStateTransitionError, match="status event sequence is behind"):
+        repo.transition_status(
+            package_id=manifest.package_id,
+            to_status=PackageStatus.PAPER_ENABLED,
+            allowed_from={PackageStatus.BACKTEST_APPROVED},
+            reason="enable_paper",
+        )
+    assert state == {
+        "autocommit": True,
+        "commits": 0,
+        "rollbacks": 1,
+    }
+
+
+def test_postgres_repository_commits_status_transition_atomically(monkeypatch) -> None:
+    repo = StrategyPackageRepository()
+    manifest = freeze_manifest(
+        make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
+    )
+    state = {
+        "autocommit": True,
+        "commits": 0,
+        "rollbacks": 0,
+        "sql": [],
+    }
+
+    class Cursor:
+        rowcount = 1
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, sql, params=None):
+            state["sql"].append(sql)
+
+    class Conn:
+        @property
+        def autocommit(self):
+            return state["autocommit"]
+
+        @autocommit.setter
+        def autocommit(self, value):
+            state["autocommit"] = value
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def cursor(self, *args, **kwargs):
+            return Cursor()
+
+        def commit(self):
+            state["commits"] += 1
+
+        def rollback(self):
+            state["rollbacks"] += 1
+
+    monkeypatch.setattr(repo, "get", lambda package_id: manifest_to_record(manifest))
+    monkeypatch.setattr(repo, "_conn_factory", lambda: Conn())
+
+    repo.transition_status(
+        package_id=manifest.package_id,
+        to_status=PackageStatus.PAPER_ENABLED,
+        allowed_from={PackageStatus.BACKTEST_APPROVED},
+        reason="enable_paper",
+    )
+
+    assert state["autocommit"] is True
+    assert state["commits"] == 1
+    assert state["rollbacks"] == 0
+    assert any("UPDATE strategy_pkg.package" in sql for sql in state["sql"])
+    assert any("INSERT INTO strategy_pkg.package_status_event" in sql for sql in state["sql"])
+
+
+def manifest_to_record(manifest):
+    saved = InMemoryStrategyPackageRepository().save_manifest(manifest)
+    return saved
 
 
 def test_strategy_package_repository_rejects_silent_manifest_replacement() -> None:

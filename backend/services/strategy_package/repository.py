@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Iterator
 
 import psycopg2.extras
+from psycopg2 import errors as pg_errors
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.db.pg_pool import get_conn
@@ -28,6 +29,22 @@ from .model_state import (
     StrategyPackageModelState,
 )
 from .models import PackageStatus, StrategyPackageManifest
+from .package_asset import StrategyPackageAssetRecord, StrategyPackageAssetType
+from .runtime_variant import (
+    RuntimeVariantKind,
+    RuntimeVariantValidationStatus,
+    StrategyPackageRuntimeVariant,
+    derive_locked_core_hash,
+    ensure_runtime_variant_status,
+)
+from .validation_run import (
+    PackageValidationRetrainMode,
+    PackageValidationReproducibility,
+    PackageValidationStatus,
+    PackageValidationType,
+    StrategyPackageValidationRun,
+    ensure_package_validation_run,
+)
 
 ConnFactory = Callable[[], Iterator[Any]]
 
@@ -206,34 +223,61 @@ class StrategyPackageRepository:
                 },
             )
         with self._conn_factory() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE strategy_pkg.package
-                    SET package_status = %s, updated_at = NOW()
-                    WHERE package_id = %s AND package_status = %s
-                    """,
-                    (to_status.value, package_id, record.package_status.value),
-                )
-                if cur.rowcount != 1:
-                    raise InvalidStateTransitionError(
-                        "strategy package status transition lost compare-and-set race",
-                        context={"package_id": package_id},
+            original_autocommit = getattr(conn, "autocommit", None)
+            try:
+                # Keep package status and its audit event atomic even though
+                # pooled AIstock connections default to autocommit=True.
+                if original_autocommit is not None:
+                    conn.autocommit = False
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE strategy_pkg.package
+                        SET package_status = %s, updated_at = NOW()
+                        WHERE package_id = %s AND package_status = %s
+                        """,
+                        (to_status.value, package_id, record.package_status.value),
                     )
-                cur.execute(
-                    """
-                    INSERT INTO strategy_pkg.package_status_event (
-                        package_id, from_status, to_status, reason, context
-                    ) VALUES (%s, %s, %s, %s, %s)
-                    """,
-                    (
-                        package_id,
-                        record.package_status.value,
-                        to_status.value,
-                        reason,
-                        psycopg2.extras.Json(context or {}),
-                    ),
-                )
+                    if cur.rowcount != 1:
+                        raise InvalidStateTransitionError(
+                            "strategy package status transition lost compare-and-set race",
+                            context={"package_id": package_id},
+                        )
+                    cur.execute(
+                        """
+                        INSERT INTO strategy_pkg.package_status_event (
+                            package_id, from_status, to_status, reason, context
+                        ) VALUES (%s, %s, %s, %s, %s)
+                        """,
+                        (
+                            package_id,
+                            record.package_status.value,
+                            to_status.value,
+                            reason,
+                            psycopg2.extras.Json(context or {}),
+                        ),
+                    )
+                if hasattr(conn, "commit"):
+                    conn.commit()
+            except pg_errors.UniqueViolation as exc:
+                if hasattr(conn, "rollback"):
+                    conn.rollback()
+                raise InvalidStateTransitionError(
+                    "strategy package status event sequence is behind existing rows",
+                    context={
+                        "package_id": package_id,
+                        "from_status": record.package_status.value,
+                        "to_status": to_status.value,
+                        "reason": reason,
+                    },
+                ) from exc
+            except Exception:
+                if hasattr(conn, "rollback"):
+                    conn.rollback()
+                raise
+            finally:
+                if original_autocommit is not None:
+                    conn.autocommit = original_autocommit
         return self.get(package_id)
 
     def mark_paper_portfolio_created(self, package_id: str, portfolio_id: str) -> StrategyPackageRecord:
@@ -291,6 +335,61 @@ class StrategyPackageRepository:
             )
             for row in rows
         ]
+
+    def save_package_asset(self, asset: StrategyPackageAssetRecord) -> StrategyPackageAssetRecord:
+        self.get(asset.package_id)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    INSERT INTO strategy_pkg.package_asset (
+                        package_id, asset_type, asset_ref, asset_sha256, metadata,
+                        asset_role, asset_size_bytes, protected_asset, source_uri, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (package_id, asset_type, asset_ref) DO UPDATE
+                    SET asset_sha256 = EXCLUDED.asset_sha256,
+                        metadata = EXCLUDED.metadata,
+                        asset_role = EXCLUDED.asset_role,
+                        asset_size_bytes = EXCLUDED.asset_size_bytes,
+                        protected_asset = EXCLUDED.protected_asset,
+                        source_uri = EXCLUDED.source_uri
+                    RETURNING *
+                    """,
+                    (
+                        asset.package_id,
+                        asset.asset_type.value,
+                        asset.asset_ref,
+                        asset.asset_sha256,
+                        psycopg2.extras.Json(asset.metadata),
+                        asset.asset_role,
+                        asset.asset_size_bytes,
+                        asset.protected_asset,
+                        asset.source_uri,
+                        asset.created_at,
+                    ),
+                )
+                row = cur.fetchone()
+        return self._package_asset_from_row(dict(row))
+
+    def list_package_assets(self, package_id: str, *, protected_only: bool = False) -> list[StrategyPackageAssetRecord]:
+        self.get(package_id)
+        where = ["package_id = %s"]
+        params: list[Any] = [package_id]
+        if protected_only:
+            where.append("protected_asset = TRUE")
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    f"""
+                    SELECT *
+                    FROM strategy_pkg.package_asset
+                    WHERE {' AND '.join(where)}
+                    ORDER BY created_at DESC, asset_id DESC
+                    """,
+                    tuple(params),
+                )
+                rows = cur.fetchall()
+        return [self._package_asset_from_row(dict(row)) for row in rows]
 
     def save_execution_policy(self, policy: ValidatedExecutionPolicy) -> ValidatedExecutionPolicy:
         self.get(policy.package_id)
@@ -520,6 +619,242 @@ class StrategyPackageRepository:
                 rows = cur.fetchall()
         return [self._model_retrain_job_from_row(dict(row)) for row in rows]
 
+    def save_runtime_variant(self, variant: StrategyPackageRuntimeVariant) -> StrategyPackageRuntimeVariant:
+        record = self.get(variant.package_id)
+        _validate_variant_matches_package(variant, record)
+        ensure_runtime_variant_status(
+            validation_status=variant.validation_status,
+            paper_candidate=variant.paper_candidate,
+            validation_evidence=variant.validation_evidence,
+        )
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO strategy_pkg.package_runtime_variant (
+                        variant_id, package_id, manifest_sha256, locked_core_hash, variant_name,
+                        variant_kind, variant_config, variant_hash, validation_status,
+                        paper_candidate, validation_evidence, created_by, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (package_id, variant_hash) DO NOTHING
+                    """,
+                    (
+                        variant.variant_id,
+                        variant.package_id,
+                        variant.manifest_sha256,
+                        variant.locked_core_hash,
+                        variant.variant_name,
+                        variant.variant_kind.value,
+                        psycopg2.extras.Json(variant.variant_config),
+                        variant.variant_hash,
+                        variant.validation_status.value,
+                        variant.paper_candidate,
+                        psycopg2.extras.Json(variant.validation_evidence),
+                        variant.created_by,
+                        variant.created_at,
+                        variant.updated_at,
+                    ),
+                )
+                if cur.rowcount == 0:
+                    cur.execute(
+                        """
+                        SELECT variant_id
+                        FROM strategy_pkg.package_runtime_variant
+                        WHERE package_id = %s AND variant_hash = %s
+                        """,
+                        (variant.package_id, variant.variant_hash),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        variant = variant.model_copy(update={"variant_id": row[0]})
+        return self.get_runtime_variant(variant.package_id, variant.variant_id)
+
+    def get_runtime_variant(self, package_id: str, variant_id: str) -> StrategyPackageRuntimeVariant:
+        self.get(package_id)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM strategy_pkg.package_runtime_variant
+                    WHERE package_id = %s AND variant_id = %s
+                    """,
+                    (package_id, variant_id),
+                )
+                row = cur.fetchone()
+        if not row:
+            raise DataUnavailableError(
+                "strategy package runtime variant does not exist",
+                context={"package_id": package_id, "variant_id": variant_id},
+            )
+        return self._runtime_variant_from_row(dict(row))
+
+    def list_runtime_variants(
+        self,
+        package_id: str,
+        *,
+        include_retired: bool = False,
+        limit: int = 100,
+    ) -> list[StrategyPackageRuntimeVariant]:
+        self.get(package_id)
+        if limit <= 0:
+            raise StrategyPackageValidationError("limit must be positive")
+        where = "package_id = %s"
+        params: list[Any] = [package_id]
+        if not include_retired:
+            where += " AND validation_status <> 'RETIRED'"
+        params.append(limit)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    f"""
+                    SELECT *
+                    FROM strategy_pkg.package_runtime_variant
+                    WHERE {where}
+                    ORDER BY created_at DESC, variant_id DESC
+                    LIMIT %s
+                    """,
+                    tuple(params),
+                )
+                rows = cur.fetchall()
+        return [self._runtime_variant_from_row(dict(row)) for row in rows]
+
+    def set_runtime_variant_validation(
+        self,
+        *,
+        package_id: str,
+        variant_id: str,
+        validation_status: RuntimeVariantValidationStatus,
+        paper_candidate: bool,
+        validation_evidence: dict[str, Any],
+    ) -> StrategyPackageRuntimeVariant:
+        self.get_runtime_variant(package_id, variant_id)
+        ensure_runtime_variant_status(
+            validation_status=validation_status,
+            paper_candidate=paper_candidate,
+            validation_evidence=validation_evidence,
+        )
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE strategy_pkg.package_runtime_variant
+                    SET validation_status = %s,
+                        paper_candidate = %s,
+                        validation_evidence = %s,
+                        updated_at = NOW()
+                    WHERE package_id = %s AND variant_id = %s
+                    """,
+                    (
+                        validation_status.value,
+                        paper_candidate,
+                        psycopg2.extras.Json(validation_evidence),
+                        package_id,
+                        variant_id,
+                    ),
+                )
+        return self.get_runtime_variant(package_id, variant_id)
+
+    def save_validation_run(self, run: StrategyPackageValidationRun) -> StrategyPackageValidationRun:
+        record = self.get(run.package_id)
+        _validate_validation_run_matches_package(run, record)
+        if run.runtime_variant_id is not None:
+            variant = self.get_runtime_variant(run.package_id, run.runtime_variant_id)
+            _validate_validation_run_matches_variant(run, variant.variant_hash)
+        ensure_package_validation_run(run)
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO strategy_pkg.package_validation_run (
+                        validation_run_id, package_id, manifest_sha256, runtime_variant_id,
+                        runtime_variant_hash, validation_type, retrain_mode, model_version_id,
+                        seed_policy, random_seed, source_data_version, target_data_version,
+                        backtest_start, backtest_end, status, metrics_json, artifact_manifest_json,
+                        evidence_json, reproducibility_level, created_by, created_at, completed_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        run.validation_run_id,
+                        run.package_id,
+                        run.manifest_sha256,
+                        run.runtime_variant_id,
+                        run.runtime_variant_hash,
+                        run.validation_type.value,
+                        run.retrain_mode.value,
+                        run.model_version_id,
+                        run.seed_policy,
+                        run.random_seed,
+                        run.source_data_version,
+                        run.target_data_version,
+                        run.backtest_start,
+                        run.backtest_end,
+                        run.status.value,
+                        psycopg2.extras.Json(run.metrics_json),
+                        psycopg2.extras.Json(run.artifact_manifest_json),
+                        psycopg2.extras.Json(run.evidence_json),
+                        run.reproducibility_level.value,
+                        run.created_by,
+                        run.created_at,
+                        run.completed_at,
+                    ),
+                )
+        return self.get_validation_run(run.package_id, run.validation_run_id)
+
+    def get_validation_run(self, package_id: str, validation_run_id: str) -> StrategyPackageValidationRun:
+        self.get(package_id)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM strategy_pkg.package_validation_run
+                    WHERE package_id = %s AND validation_run_id = %s
+                    """,
+                    (package_id, validation_run_id),
+                )
+                row = cur.fetchone()
+        if not row:
+            raise DataUnavailableError(
+                "strategy package validation run does not exist",
+                context={"package_id": package_id, "validation_run_id": validation_run_id},
+            )
+        return self._validation_run_from_row(dict(row))
+
+    def list_validation_runs(
+        self,
+        package_id: str,
+        *,
+        validation_type: PackageValidationType | None = None,
+        runtime_variant_id: str | None = None,
+        limit: int | None = 100,
+    ) -> list[StrategyPackageValidationRun]:
+        self.get(package_id)
+        if limit is not None and limit <= 0:
+            raise StrategyPackageValidationError("limit must be positive")
+        where = ["package_id = %s"]
+        params: list[Any] = [package_id]
+        if validation_type is not None:
+            where.append("validation_type = %s")
+            params.append(validation_type.value)
+        if runtime_variant_id is not None:
+            where.append("runtime_variant_id = %s")
+            params.append(runtime_variant_id)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                sql = f"""
+                    SELECT *
+                    FROM strategy_pkg.package_validation_run
+                    WHERE {' AND '.join(where)}
+                    ORDER BY created_at DESC, validation_run_id DESC
+                """
+                if limit is not None:
+                    sql += " LIMIT %s"
+                    params.append(limit)
+                cur.execute(sql, tuple(params))
+                rows = cur.fetchall()
+        return [self._validation_run_from_row(dict(row)) for row in rows]
+
     def _record_from_row(self, row: dict[str, Any]) -> StrategyPackageRecord:
         manifest_json = row["manifest_json"]
         manifest = StrategyPackageManifest.model_validate(manifest_json)
@@ -567,6 +902,22 @@ class StrategyPackageRepository:
         )
 
     @staticmethod
+    def _package_asset_from_row(row: dict[str, Any]) -> StrategyPackageAssetRecord:
+        return StrategyPackageAssetRecord(
+            asset_id=row["asset_id"],
+            package_id=row["package_id"],
+            asset_type=StrategyPackageAssetType(row["asset_type"]),
+            asset_ref=row["asset_ref"],
+            asset_sha256=row["asset_sha256"],
+            metadata=row["metadata"] or {},
+            asset_role=row.get("asset_role") or "governed_asset",
+            asset_size_bytes=row.get("asset_size_bytes"),
+            protected_asset=bool(row.get("protected_asset", True)),
+            source_uri=row.get("source_uri"),
+            created_at=row["created_at"],
+        )
+
+    @staticmethod
     def _model_state_from_row(row: dict[str, Any]) -> StrategyPackageModelState:
         return StrategyPackageModelState(
             package_id=row["package_id"],
@@ -604,6 +955,52 @@ class StrategyPackageRepository:
             completed_at=row["completed_at"],
         )
 
+    @staticmethod
+    def _runtime_variant_from_row(row: dict[str, Any]) -> StrategyPackageRuntimeVariant:
+        return StrategyPackageRuntimeVariant(
+            variant_id=row["variant_id"],
+            package_id=row["package_id"],
+            manifest_sha256=row["manifest_sha256"],
+            locked_core_hash=row["locked_core_hash"],
+            variant_name=row["variant_name"],
+            variant_kind=RuntimeVariantKind(row["variant_kind"]),
+            variant_config=row["variant_config"] or {},
+            variant_hash=row["variant_hash"],
+            validation_status=RuntimeVariantValidationStatus(row["validation_status"]),
+            paper_candidate=bool(row["paper_candidate"]),
+            validation_evidence=row["validation_evidence"] or {},
+            created_by=row["created_by"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    @staticmethod
+    def _validation_run_from_row(row: dict[str, Any]) -> StrategyPackageValidationRun:
+        return StrategyPackageValidationRun(
+            validation_run_id=row["validation_run_id"],
+            package_id=row["package_id"],
+            manifest_sha256=row["manifest_sha256"],
+            runtime_variant_id=row["runtime_variant_id"],
+            runtime_variant_hash=row["runtime_variant_hash"],
+            validation_type=PackageValidationType(row["validation_type"]),
+            retrain_mode=PackageValidationRetrainMode(row["retrain_mode"]),
+            model_version_id=row["model_version_id"],
+            seed_policy=row["seed_policy"],
+            random_seed=row["random_seed"],
+            source_data_version=row["source_data_version"],
+            target_data_version=row["target_data_version"],
+            backtest_start=row["backtest_start"],
+            backtest_end=row["backtest_end"],
+            status=PackageValidationStatus(row["status"]),
+            metrics_json=row["metrics_json"] or {},
+            artifact_manifest_json=row["artifact_manifest_json"] or {},
+            evidence_json=row["evidence_json"] or {},
+            reproducibility_level=PackageValidationReproducibility(row["reproducibility_level"]),
+            created_by=row["created_by"],
+            created_at=row["created_at"],
+            completed_at=row["completed_at"],
+        )
+
 
 class InMemoryStrategyPackageRepository:
     """Test repository with the same fail-fast semantics as PostgreSQL."""
@@ -612,8 +1009,12 @@ class InMemoryStrategyPackageRepository:
         self.records: dict[str, StrategyPackageRecord] = {}
         self.events: list[PackageStatusEvent] = []
         self.execution_policies: dict[str, ValidatedExecutionPolicy] = {}
+        self.package_assets: dict[tuple[str, StrategyPackageAssetType, str], StrategyPackageAssetRecord] = {}
+        self._next_package_asset_id = 1
         self.model_states: dict[str, StrategyPackageModelState] = {}
         self.model_retrain_jobs: dict[str, StrategyPackageModelRetrainJob] = {}
+        self.runtime_variants: dict[str, StrategyPackageRuntimeVariant] = {}
+        self.validation_runs: dict[str, StrategyPackageValidationRun] = {}
 
     def save_manifest(self, manifest: StrategyPackageManifest) -> StrategyPackageRecord:
         frozen = freeze_manifest(manifest)
@@ -695,6 +1096,25 @@ class InMemoryStrategyPackageRepository:
     def list_status_events(self, package_id: str, *, limit: int = 200) -> list[PackageStatusEvent]:
         self.get(package_id)
         return [event for event in self.events if event.package_id == package_id][:limit]
+
+    def save_package_asset(self, asset: StrategyPackageAssetRecord) -> StrategyPackageAssetRecord:
+        self.get(asset.package_id)
+        key = (asset.package_id, asset.asset_type, asset.asset_ref)
+        existing = self.package_assets.get(key)
+        asset_id = existing.asset_id if existing else self._next_package_asset_id
+        if existing is None:
+            self._next_package_asset_id += 1
+        saved = asset.model_copy(update={"asset_id": asset_id})
+        self.package_assets[key] = saved
+        return saved
+
+    def list_package_assets(self, package_id: str, *, protected_only: bool = False) -> list[StrategyPackageAssetRecord]:
+        self.get(package_id)
+        rows = [asset for asset in self.package_assets.values() if asset.package_id == package_id]
+        if protected_only:
+            rows = [asset for asset in rows if asset.protected_asset]
+        rows.sort(key=lambda item: item.created_at, reverse=True)
+        return rows
 
     def mark_paper_portfolio_created(self, package_id: str, portfolio_id: str) -> StrategyPackageRecord:
         record = self.get(package_id)
@@ -778,3 +1198,173 @@ class InMemoryStrategyPackageRepository:
         rows = [job for job in self.model_retrain_jobs.values() if job.package_id == package_id]
         rows.sort(key=lambda item: item.created_at, reverse=True)
         return rows[:limit]
+
+    def save_runtime_variant(self, variant: StrategyPackageRuntimeVariant) -> StrategyPackageRuntimeVariant:
+        record = self.get(variant.package_id)
+        _validate_variant_matches_package(variant, record)
+        ensure_runtime_variant_status(
+            validation_status=variant.validation_status,
+            paper_candidate=variant.paper_candidate,
+            validation_evidence=variant.validation_evidence,
+        )
+        for existing in self.runtime_variants.values():
+            if existing.package_id == variant.package_id and existing.variant_hash == variant.variant_hash:
+                return existing
+        self.runtime_variants[variant.variant_id] = variant
+        return variant
+
+    def get_runtime_variant(self, package_id: str, variant_id: str) -> StrategyPackageRuntimeVariant:
+        self.get(package_id)
+        variant = self.runtime_variants.get(variant_id)
+        if variant is None or variant.package_id != package_id:
+            raise DataUnavailableError(
+                "strategy package runtime variant does not exist",
+                context={"package_id": package_id, "variant_id": variant_id},
+            )
+        return variant
+
+    def list_runtime_variants(
+        self,
+        package_id: str,
+        *,
+        include_retired: bool = False,
+        limit: int = 100,
+    ) -> list[StrategyPackageRuntimeVariant]:
+        self.get(package_id)
+        rows = [
+            variant
+            for variant in self.runtime_variants.values()
+            if variant.package_id == package_id
+            and (
+                include_retired
+                or variant.validation_status != RuntimeVariantValidationStatus.RETIRED
+            )
+        ]
+        rows.sort(key=lambda item: item.created_at, reverse=True)
+        return rows[:limit]
+
+    def set_runtime_variant_validation(
+        self,
+        *,
+        package_id: str,
+        variant_id: str,
+        validation_status: RuntimeVariantValidationStatus,
+        paper_candidate: bool,
+        validation_evidence: dict[str, Any],
+    ) -> StrategyPackageRuntimeVariant:
+        variant = self.get_runtime_variant(package_id, variant_id)
+        ensure_runtime_variant_status(
+            validation_status=validation_status,
+            paper_candidate=paper_candidate,
+            validation_evidence=validation_evidence,
+        )
+        updated = variant.model_copy(
+            update={
+                "validation_status": validation_status,
+                "paper_candidate": paper_candidate,
+                "validation_evidence": validation_evidence,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+        self.runtime_variants[variant_id] = updated
+        return updated
+
+    def save_validation_run(self, run: StrategyPackageValidationRun) -> StrategyPackageValidationRun:
+        record = self.get(run.package_id)
+        _validate_validation_run_matches_package(run, record)
+        if run.runtime_variant_id is not None:
+            variant = self.get_runtime_variant(run.package_id, run.runtime_variant_id)
+            _validate_validation_run_matches_variant(run, variant.variant_hash)
+        ensure_package_validation_run(run)
+        if run.validation_run_id in self.validation_runs:
+            raise StrategyPackageValidationError(
+                "validation run already exists",
+                context={"validation_run_id": run.validation_run_id},
+            )
+        self.validation_runs[run.validation_run_id] = run
+        return run
+
+    def get_validation_run(self, package_id: str, validation_run_id: str) -> StrategyPackageValidationRun:
+        self.get(package_id)
+        run = self.validation_runs.get(validation_run_id)
+        if run is None or run.package_id != package_id:
+            raise DataUnavailableError(
+                "strategy package validation run does not exist",
+                context={"package_id": package_id, "validation_run_id": validation_run_id},
+            )
+        return run
+
+    def list_validation_runs(
+        self,
+        package_id: str,
+        *,
+        validation_type: PackageValidationType | None = None,
+        runtime_variant_id: str | None = None,
+        limit: int | None = 100,
+    ) -> list[StrategyPackageValidationRun]:
+        self.get(package_id)
+        if limit is not None and limit <= 0:
+            raise StrategyPackageValidationError("limit must be positive")
+        rows = [run for run in self.validation_runs.values() if run.package_id == package_id]
+        if validation_type is not None:
+            rows = [run for run in rows if run.validation_type == validation_type]
+        if runtime_variant_id is not None:
+            rows = [run for run in rows if run.runtime_variant_id == runtime_variant_id]
+        rows.sort(key=lambda item: (item.created_at, item.validation_run_id), reverse=True)
+        if limit is None:
+            return rows
+        return rows[:limit]
+
+
+def _validate_variant_matches_package(
+    variant: StrategyPackageRuntimeVariant,
+    record: StrategyPackageRecord,
+) -> None:
+    current_manifest = record.current_manifest()
+    if variant.manifest_sha256 != record.manifest_sha256:
+        raise StrategyPackageValidationError(
+            "runtime variant manifest_sha256 does not match current package",
+            context={
+                "package_id": record.package_id,
+                "variant_manifest_sha256": variant.manifest_sha256,
+                "package_manifest_sha256": record.manifest_sha256,
+            },
+        )
+    expected_core_hash = derive_locked_core_hash(current_manifest)
+    if variant.locked_core_hash != expected_core_hash:
+        raise StrategyPackageValidationError(
+            "runtime variant locked core hash does not match current package core",
+            context={
+                "package_id": record.package_id,
+                "variant_locked_core_hash": variant.locked_core_hash,
+                "expected_locked_core_hash": expected_core_hash,
+            },
+        )
+
+
+def _validate_validation_run_matches_package(
+    run: StrategyPackageValidationRun,
+    record: StrategyPackageRecord,
+) -> None:
+    if run.manifest_sha256 != record.manifest_sha256:
+        raise StrategyPackageValidationError(
+            "validation run manifest_sha256 does not match current package manifest",
+            context={
+                "package_id": run.package_id,
+                "run_manifest_sha256": run.manifest_sha256,
+                "package_manifest_sha256": record.manifest_sha256,
+            },
+        )
+
+
+def _validate_validation_run_matches_variant(run: StrategyPackageValidationRun, expected_variant_hash: str) -> None:
+    if run.runtime_variant_hash != expected_variant_hash:
+        raise StrategyPackageValidationError(
+            "validation run runtime_variant_hash does not match current runtime variant",
+            context={
+                "package_id": run.package_id,
+                "runtime_variant_id": run.runtime_variant_id,
+                "run_runtime_variant_hash": run.runtime_variant_hash,
+                "expected_runtime_variant_hash": expected_variant_hash,
+            },
+        )
