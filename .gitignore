@@ -127,3 +127,6 @@ report/
 .env
 .claude/
 aistock_models/aistock_models.egg-info/
+
+# Local dev DB schema dumps belong in E:/DEV backup/aistock_pg_snapshots/ (DR playbook 20260511)
+backend/db/dev/
