@@ -167,3 +167,72 @@ PASS | BLOCKED | INFO | ACK | DECISION
 - T0+30 min: Codex ACK 后正式启用 v2
 - T0+1d: 所有 review/dispatch 都走 v2
 - T0+1 week: 评估效果（drawer 体长 / MCP 错误率 / HNSW 性能）
+
+## §10 重要修正 (2026-05-11 派发流程现实)
+
+### 派发到 Claude Code worktree teams ≠ mempalace drawer
+
+**真相**: mempalace drawer 仅对以下 peer 有效:
+- Codex App（另一个 LLM session，会读 cross-tool channel）
+- 战略 session 自身（用于审计追溯）
+- 跨 session 的 Claude Code（如重启后想恢复状态）
+
+**Claude Code worktree teams（dw-foundation / paper-v2 / pipeline-foundation）不会自动 poll mempalace**。每个 worktree 是独立 Claude Code 实例，需要：
+1. 用户复制派发文本
+2. 用户切到对应 worktree 的 Claude Code 窗口
+3. 用户粘贴派发文本
+4. team Lead 才会读到任务
+
+### 战略 session 派发到 worktree teams 的正确格式
+
+```
+═══════════════ 复制以下内容给 <team-name> team ═══════════════
+
+任务: <短任务名>
+
+详情文档: <绝对路径 to docs/cross_tool/...md>
+
+请按文档执行。摘要:
+- <bullet 1>
+- <bullet 2>
+- ...
+
+完成后 commit + push <branch> + 发 cross-tool drawer
+预计 <估时>
+
+═══════════════ 复制结束 ═══════════════
+```
+
+### 派发到 Codex 仍用 mempalace drawer（短摘要 + detail_doc）
+
+Codex 端会自动 poll mempalace channel，drawer + detail_doc 模式适用。
+
+### 派发审计链
+
+每次派发完整链路:
+```
+1. 战略 session 写 detail_doc (docs/cross_tool/...md)
+2. commit + push origin/main (审计 + 双方可查)
+3. mempalace drawer 短摘要 + detail_doc reference (Codex peer 同步)
+4. 给用户复制粘贴文本 (Claude Code worktree teams 中继)
+5. 用户复制粘贴到对应 team 窗口
+6. team Lead 读 detail_doc + 执行
+7. team 完成后 commit + push + 自发 cross-tool drawer + (可选) detail_doc
+8. 战略 session 看到 drawer → 协调下一步
+```
+
+### 不应该期望的事
+
+- ❌ Claude Code worktree teams 自动 poll mempalace
+- ❌ drawer 通知能直接触发 team 行动（除非用户中继）
+- ❌ 单 drawer 携带全部派发细节（已在 v2 协议明确：用 detail_doc）
+
+### 用户作为人工 bridge 的负担
+
+- 用户中继派发文本到对应 team 窗口
+- 用户监督 team 完成情况
+- 用户回到战略 session 报告"已派发"
+
+这是当前架构的必然，因为 Claude Code 单 session = 单工作单元。未来如有需要可考虑：
+- worktree teams 加 poll mempalace 的启动 hook（增加复杂度）
+- 用 MCP server 暴露 drawer 内容，team Lead 启动时自动 query（仍需主动调用）
