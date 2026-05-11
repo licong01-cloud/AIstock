@@ -1113,6 +1113,52 @@ class FactorOfficialEvaluationService:
         per_factor_full_bounds: Dict[str, Dict[str, Optional[str]]] = {}
         per_factor_inserted: Dict[str, int] = {}
 
+        # T15 round-2 fix (Codex Lane 3 P1): fail-fast bounds validation BEFORE
+        # any DB statement is issued. Atomic rollback (round 1) protected
+        # persistence, but round-2 requires that invalid input is rejected
+        # before the metrics DELETE/UPSERT or outbox emit run at all — no
+        # cursor is opened, no connection is even checked out from the pool.
+        # Validates every record's data_start/data_end and requires each
+        # named factor to carry a `full` eval_window record (the bounds
+        # source for the outbox payload).
+        if not snapshot_date or not str(snapshot_date).strip():
+            raise ValueError(
+                "_save_metrics blocked: snapshot_date is empty (required for outbox emit)"
+            )
+        batch_factor_names_preflight = set()
+        full_window_factors: set = set()
+        for rec in engine_data.get("metrics", []):
+            if not isinstance(rec, dict):
+                # Non-dict records would be skipped during the insert loop; do
+                # not let them affect bounds validation.
+                continue
+            fname = rec.get("factor_name")
+            if not fname:
+                # Missing factor_name records are also skipped in the loop and
+                # do not contribute to the emit-bounds invariant.
+                continue
+            batch_factor_names_preflight.add(fname)
+            ds = rec.get("data_start")
+            de = rec.get("data_end")
+            if ds is None or not str(ds).strip():
+                raise ValueError(
+                    f"_save_metrics blocked: empty data_start for factor {fname} "
+                    f"(eval_window={rec.get('eval_window')!r})"
+                )
+            if de is None or not str(de).strip():
+                raise ValueError(
+                    f"_save_metrics blocked: empty data_end for factor {fname} "
+                    f"(eval_window={rec.get('eval_window')!r})"
+                )
+            if rec.get("eval_window") == "full":
+                full_window_factors.add(fname)
+        missing_full = batch_factor_names_preflight - full_window_factors
+        if missing_full:
+            raise ValueError(
+                f"_save_metrics blocked: no full eval_window record for "
+                f"{sorted(missing_full)} (required for outbox emit bounds)"
+            )
+
         with get_conn() as conn:
             # T15 round-1 atomic fix: metric upserts + outbox emits share a single tx
             # so emit failure rolls metric writes back. autocommit restored in finally.

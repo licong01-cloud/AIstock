@@ -465,3 +465,191 @@ def test_emit_rejects_empty_bounds_without_conn(emit_kwargs, monkeypatch):
     bad_kwargs["data_end"] = ""
     with pytest.raises(ValueError, match="emit blocked: missing required fields"):
         _emit_factor_recompute_event(**bad_kwargs)
+
+
+# ---------------------------------------------------------------------------
+# ROUND-2 FIX TESTS (Codex Lane 3 P1: fail-fast BEFORE any DB write)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "scenario, records",
+    [
+        (
+            "empty_data_start",
+            [
+                {
+                    "factor_name": "Momentum_5D",
+                    "eval_window": "full",
+                    "data_start": "",
+                    "data_end": "2026-04-30",
+                    "ic_mean": 0.01,
+                    "rank_ic_mean": 0.02,
+                    "icir": 0.3,
+                    "rank_icir": 0.4,
+                }
+            ],
+        ),
+        (
+            "empty_data_end",
+            [
+                {
+                    "factor_name": "Momentum_5D",
+                    "eval_window": "full",
+                    "data_start": "2020-01-02",
+                    "data_end": "",
+                    "ic_mean": 0.01,
+                    "rank_ic_mean": 0.02,
+                    "icir": 0.3,
+                    "rank_icir": 0.4,
+                }
+            ],
+        ),
+        (
+            "whitespace_data_start",
+            [
+                {
+                    "factor_name": "Momentum_5D",
+                    "eval_window": "full",
+                    "data_start": "   ",
+                    "data_end": "2026-04-30",
+                    "ic_mean": 0.01,
+                    "rank_ic_mean": 0.02,
+                    "icir": 0.3,
+                    "rank_icir": 0.4,
+                }
+            ],
+        ),
+        (
+            "none_data_end",
+            [
+                {
+                    "factor_name": "Momentum_5D",
+                    "eval_window": "full",
+                    "data_start": "2020-01-02",
+                    "data_end": None,
+                    "ic_mean": 0.01,
+                    "rank_ic_mean": 0.02,
+                    "icir": 0.3,
+                    "rank_icir": 0.4,
+                }
+            ],
+        ),
+        (
+            "no_full_window",
+            # Only a y1 window present — emit would derive empty bounds from
+            # the full-window map. Round-2 fix rejects this pre-DB.
+            [
+                {
+                    "factor_name": "Momentum_5D",
+                    "eval_window": "y1",
+                    "data_start": "2025-04-30",
+                    "data_end": "2026-04-30",
+                    "ic_mean": 0.01,
+                    "rank_ic_mean": 0.02,
+                    "icir": 0.3,
+                    "rank_icir": 0.4,
+                }
+            ],
+        ),
+    ],
+)
+def test_save_metrics_validates_bounds_before_db_write(monkeypatch, scenario, records):
+    """Round-2 fix (Codex Lane 3 P1): invalid bounds raise ValueError BEFORE
+    any DB statement runs. The pool's get_conn must NOT be invoked; no
+    cursor.execute call should be observed; and the connection is never
+    transitioned out of autocommit."""
+
+    # If get_conn is called at all, the test fails — proves no DB connection
+    # was even checked out from the pool.
+    def _bomb_get_conn():
+        raise AssertionError(
+            "get_conn() called before bounds validation — fail-fast invariant "
+            "violated (round-2 fix expects ValueError pre-DB)"
+        )
+
+    monkeypatch.setattr(svc, "get_conn", _bomb_get_conn)
+
+    service = FactorOfficialEvaluationService.__new__(FactorOfficialEvaluationService)
+    engine_data = {"metrics": records, "calc_batch_id": f"batch_{scenario}"}
+
+    with pytest.raises(ValueError, match="_save_metrics blocked"):
+        service._save_metrics(
+            engine_data,
+            snapshot_date="2026-04-30",
+            factor_ids={"Momentum_5D": 1},
+        )
+
+
+def test_save_metrics_validates_bounds_no_db_writes_observed(monkeypatch):
+    """Stronger contract: even with a cursor that would happily record writes,
+    NOT a single execute() lands when bounds are invalid. Demonstrates that
+    fail-fast happens above the `with get_conn() as conn:` line."""
+
+    cursor = _RecordingCursor()
+    conn = _RecordingConn(cursor)
+    get_conn_calls = {"n": 0}
+
+    def _tracking_get_conn():
+        get_conn_calls["n"] += 1
+        return conn
+
+    monkeypatch.setattr(svc, "get_conn", _tracking_get_conn)
+
+    service = FactorOfficialEvaluationService.__new__(FactorOfficialEvaluationService)
+    engine_data = {
+        "metrics": [
+            {
+                "factor_name": "Momentum_5D",
+                "eval_window": "full",
+                "data_start": "",  # invalid
+                "data_end": "2026-04-30",
+                "ic_mean": 0.01,
+                "rank_ic_mean": 0.02,
+                "icir": 0.3,
+                "rank_icir": 0.4,
+            }
+        ],
+        "calc_batch_id": "batch_no_db",
+    }
+
+    with pytest.raises(ValueError, match="empty data_start"):
+        service._save_metrics(
+            engine_data,
+            snapshot_date="2026-04-30",
+            factor_ids={"Momentum_5D": 1},
+        )
+
+    # Zero DB statements executed, zero connection checkouts, no commit / no
+    # rollback. autocommit was never toggled.
+    assert cursor.executed == []
+    assert get_conn_calls["n"] == 0
+    assert conn.committed is False
+    assert conn.rolled_back is False
+    assert conn.autocommit_history == [True]
+
+
+def test_save_metrics_validates_empty_snapshot_date(monkeypatch):
+    """Empty snapshot_date is rejected pre-DB."""
+    monkeypatch.setattr(
+        svc, "get_conn", lambda: pytest.fail("get_conn must not run")
+    )
+    service = FactorOfficialEvaluationService.__new__(FactorOfficialEvaluationService)
+    engine_data = {
+        "metrics": [
+            {
+                "factor_name": "Momentum_5D",
+                "eval_window": "full",
+                "data_start": "2020-01-02",
+                "data_end": "2026-04-30",
+                "ic_mean": 0.01,
+                "rank_ic_mean": 0.02,
+                "icir": 0.3,
+                "rank_icir": 0.4,
+            }
+        ],
+        "calc_batch_id": "batch_x",
+    }
+    with pytest.raises(ValueError, match="snapshot_date is empty"):
+        service._save_metrics(
+            engine_data, snapshot_date="", factor_ids={"Momentum_5D": 1}
+        )
