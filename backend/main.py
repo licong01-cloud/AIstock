@@ -56,6 +56,7 @@ from .routers import (
     rdagent_llm_config_v2,
     rdagent_llm_config_endpoints,
     dispatch,
+    execution_algo_health,
     hmm_training,
 )
 from .routers import llm_config
@@ -498,6 +499,7 @@ def create_app() -> FastAPI:
     app.include_router(llm_config.router)
     app.include_router(paper_trading.router, prefix="/api/v1")
     app.include_router(dispatch.router, prefix="/api/v1")
+    app.include_router(execution_algo_health.router, prefix="/api/v1")
     if rl_execution is not None:
         app.include_router(rl_execution.router, prefix="/api/v1")
     app.include_router(market_regime.router, prefix="/api/v1")
