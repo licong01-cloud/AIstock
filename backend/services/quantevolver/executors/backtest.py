@@ -6,8 +6,10 @@ QE Unified Engine — BacktestExecutor
 """
 from __future__ import annotations
 
+import asyncio
 import re
 import logging
+from functools import partial
 from enum import Enum
 from typing import Any
 
@@ -75,7 +77,9 @@ class BacktestExecutor(BaseExecutor):
             )
 
         # 2. 调用 ConfigComposer（已有统一层，不改）
-        compose_res = self.composer.compose_experiment_in_memory(
+        loop = asyncio.get_running_loop()
+        compose_call = partial(
+            self.composer.compose_experiment_in_memory,
             factor_names=config.factor_names,
             model_id=config.model_id,
             strategy_id=config.strategy_id,
@@ -88,6 +92,7 @@ class BacktestExecutor(BaseExecutor):
             strategy_params=strategy_params if strategy_params else None,
             node_id=ctx.node_id,
         )
+        compose_res = await loop.run_in_executor(None, compose_call)
 
         experiment_files: dict[str, str] = dict(compose_res.get("experiment_files", {}) or {})
         wsl_command: str = compose_res.get("wsl_command", "")

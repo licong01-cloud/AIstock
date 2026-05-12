@@ -6,6 +6,8 @@ Level 2 集成测试 — BacktestExecutor
 """
 import pytest
 import asyncio
+import threading
+import time
 from unittest.mock import MagicMock, AsyncMock, patch, call
 
 from backend.services.quantevolver.experiment_config import ExperimentConfig, HmmConfig
@@ -126,6 +128,46 @@ class TestBacktestExecutorBasic:
         )
 
         assert "--backtest-only" not in (result.wsl_command or "")
+
+    def test_submit_keeps_event_loop_responsive_during_compose(self):
+        compose_started = threading.Event()
+        compose_done = threading.Event()
+        ticks: list[float] = []
+
+        def blocking_compose(**_kwargs):
+            compose_started.set()
+            time.sleep(0.2)
+            compose_done.set()
+            return {
+                "experiment_files": MOCK_EXPERIMENT_FILES,
+                "wsl_command": MOCK_WSL_COMMAND,
+            }
+
+        async def ticker_while_composing():
+            while not compose_started.is_set():
+                await asyncio.sleep(0)
+            while not compose_done.is_set():
+                ticks.append(time.perf_counter())
+                await asyncio.sleep(0.01)
+
+        async def run_submit_and_ticker():
+            composer = MagicMock()
+            composer.compose_experiment_in_memory.side_effect = blocking_compose
+            client = make_mock_client()
+            executor = BacktestExecutor(composer, client)
+            cfg = ExperimentConfig(factor_names=["f1"], model_id="lgbm")
+            ctx = make_ctx()
+
+            submit_task = asyncio.create_task(executor.submit(cfg, ctx))
+            ticker_task = asyncio.create_task(ticker_while_composing())
+            result = await asyncio.wait_for(submit_task, timeout=2)
+            await asyncio.wait_for(ticker_task, timeout=1)
+            return result
+
+        result = asyncio.run(run_submit_and_ticker())
+
+        assert result.job_id == "Loop1"
+        assert len(ticks) >= 3
 
 
 # ── compose_experiment_in_memory 参数验证 ──────────────────────────────────────
