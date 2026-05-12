@@ -12,6 +12,10 @@ import psycopg2.extras
 from backend.db.pg_pool import get_conn
 from backend.services.trading_core.errors import StrategyPackageValidationError
 
+from .candidate import (
+    CandidateStrategyPackageService,
+    CandidateStrategyPackageStatus,
+)
 from .execution_policy import (
     ExecutionPolicyValidationStatus,
     ValidatedExecutionPolicy,
@@ -28,7 +32,7 @@ from .model_state import (
     StrategyPackageModelState,
     evaluate_model_staleness,
 )
-from .models import PackageStatus, StrategyPackageManifest
+from .models import PackageStatus, SourceType, StrategyPackageManifest
 from .package_asset import StrategyPackageAssetRecord, StrategyPackageAssetType
 from .qe_source_resolver import QEExperimentSourceResolver
 from .repository import PackageStatusEvent, StrategyPackageRecord, StrategyPackageRepository
@@ -83,10 +87,12 @@ class StrategyPackageService:
         repository: StrategyPackageRepository | Any | None = None,
         resolver: QEExperimentSourceResolver | None = None,
         validator: StrategyPackageValidator | None = None,
+        candidate_service: CandidateStrategyPackageService | None = None,
     ) -> None:
         self.repository = repository or StrategyPackageRepository()
         self.resolver = resolver or QEExperimentSourceResolver()
         self.validator = validator or StrategyPackageValidator()
+        self.candidate_service = candidate_service or CandidateStrategyPackageService()
 
     def create_from_qe_experiment(
         self,
@@ -113,6 +119,37 @@ class StrategyPackageService:
             qe_loop_id=qe_loop_id,
             resolve_runtime_assets=resolve_runtime_assets,
         )
+        self.validator.validate_manifest(manifest)
+        return self.repository.save_manifest(manifest)
+
+    def create_from_candidate(
+        self,
+        candidate_id: str,
+        *,
+        manifest_json: dict[str, Any] | None = None,
+    ) -> StrategyPackageRecord:
+        candidate = self.candidate_service.get_candidate(candidate_id)
+        if candidate.status != CandidateStrategyPackageStatus.ACTIVE:
+            raise StrategyPackageValidationError(
+                "only active candidate strategy packages can create StrategyPackage",
+                context={"candidate_id": candidate_id, "status": candidate.status.value},
+            )
+        payload = manifest_json or candidate.snapshot_config.get("strategy_package_manifest")
+        if not isinstance(payload, dict) or not payload:
+            raise StrategyPackageValidationError(
+                "candidate strategy package requires a strategy_package_manifest snapshot",
+                context={"candidate_id": candidate_id},
+            )
+        manifest = StrategyPackageManifest.model_validate(payload)
+        source = manifest.source.model_copy(
+            update={
+                "source_type": SourceType.CANDIDATE_STRATEGY_PACKAGE,
+                "source_id": candidate_id,
+                "loop_id": None,
+                "run_id": candidate.archive_run_id,
+            }
+        )
+        manifest = manifest.model_copy(update={"source": source})
         self.validator.validate_manifest(manifest)
         return self.repository.save_manifest(manifest)
 

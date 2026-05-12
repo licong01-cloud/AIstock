@@ -1669,59 +1669,31 @@ def get_evolution_trajectory(task_id: str):
 
 @router.get("/leaderboard", summary="Get cross-task SOTA leaderboard")
 def get_sota_leaderboard():
-    """Return approved legacy registry rows plus reviewable automatic candidates."""
+    """Return approved legacy registry rows only.
+
+    Candidate StrategyPackages are now created by explicit user action through
+    the StrategyPackage candidate APIs; ``is_sota`` is historical evidence, not
+    an automatic candidate source.
+    """
     try:
         from ..db.pg_pool import get_conn
         import json as _json
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    WITH legacy_registry AS (
-                        SELECT l.task_id, l.loop_id, l.loop_index, l.action_type,
-                               l.metrics_json, l.is_sota, l.status,
-                               t.task_name,
-                               r.evaluation_reason, r.created_at,
-                               r.model_assets_synced, r.local_asset_path,
-                               'LEGACY_REGISTRY'::text AS promotion_state,
-                               TRUE AS approved_sota,
-                               NULL::text AS review_id,
-                               NULL::text AS review_requested_by,
-                               NULL::timestamptz AS review_created_at
-                        FROM qe_sota_registry r
-                        JOIN qe_evolution_loops l ON r.loop_id = l.loop_id
-                        JOIN qe_evolution_tasks t ON l.task_id = t.task_id
-                    ),
-                    automatic_candidates AS (
-                        SELECT l.task_id, l.loop_id, l.loop_index, l.action_type,
-                               l.metrics_json, l.is_sota, l.status,
-                               t.task_name,
-                               'Automatic SOTA candidate; requires manual promotion review before approval.'::text AS evaluation_reason,
-                               l.created_at,
-                               FALSE AS model_assets_synced,
-                               NULL::text AS local_asset_path,
-                               COALESCE(pr.status, 'AUTO_CANDIDATE')::text AS promotion_state,
-                               FALSE AS approved_sota,
-                               pr.review_id,
-                               pr.requested_by AS review_requested_by,
-                               pr.created_at AS review_created_at
-                        FROM qe_evolution_loops l
-                        JOIN qe_evolution_tasks t ON l.task_id = t.task_id
-                        LEFT JOIN strategy_pkg.promotion_review pr
-                          ON pr.source_type = 'qe_evolution_loop'
-                         AND pr.source_id = l.loop_id
-                        WHERE l.is_sota = TRUE
-                          AND l.status = 'completed'
-                          AND NOT EXISTS (
-                              SELECT 1
-                              FROM qe_sota_registry r
-                              WHERE r.loop_id = l.loop_id
-                          )
-                    )
-                    SELECT *
-                    FROM legacy_registry
-                    UNION ALL
-                    SELECT *
-                    FROM automatic_candidates
+                    SELECT l.task_id, l.loop_id, l.loop_index, l.action_type,
+                           l.metrics_json, l.is_sota, l.status,
+                           t.task_name,
+                           r.evaluation_reason, r.created_at,
+                           r.model_assets_synced, r.local_asset_path,
+                           'LEGACY_REGISTRY'::text AS promotion_state,
+                           TRUE AS approved_sota,
+                           NULL::text AS review_id,
+                           NULL::text AS review_requested_by,
+                           NULL::timestamptz AS review_created_at
+                    FROM qe_sota_registry r
+                    JOIN qe_evolution_loops l ON r.loop_id = l.loop_id
+                    JOIN qe_evolution_tasks t ON l.task_id = t.task_id
                     ORDER BY created_at DESC
                     LIMIT 100
                 """)
