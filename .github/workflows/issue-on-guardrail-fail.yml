@@ -1,0 +1,154 @@
+name: Issue On Guardrail Fail
+
+on:
+  workflow_dispatch:
+    inputs:
+      severity:
+        description: P0/P1 only. Lower severities should stay in local guardrail evidence.
+        required: true
+        default: P1
+        type: choice
+        options:
+          - P1
+          - P0
+      guardrail_result:
+        description: Path to a guardrail scan result JSON in this checkout.
+        required: true
+        default: tmp/validation/guardrails/guardrail_scan.json
+        type: string
+  workflow_run:
+    workflows:
+      - AIstock CI
+      - AIstock Nightly L3 + DR
+    types:
+      - completed
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+concurrency:
+  group: issue-on-guardrail-fail-${{ github.event.workflow_run.id || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  file-p0-p1-guardrail-issue:
+    name: File P0/P1 guardrail issue
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'failure')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build guardrail issue body
+        id: guardrail
+        shell: bash
+        env:
+          INPUT_SEVERITY: ${{ inputs.severity || 'P1' }}
+          INPUT_GUARDRAIL_RESULT: ${{ inputs.guardrail_result || '' }}
+          RUN_URL: ${{ github.event.workflow_run.html_url || format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name || 'manual guardrail dispatch' }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          severity = os.environ.get('INPUT_SEVERITY') or 'P1'
+          if severity not in {'P0', 'P1'}:
+              raise SystemExit('Only P0/P1 auto-file behavior is allowed.')
+
+          result_path = Path(os.environ.get('INPUT_GUARDRAIL_RESULT') or '')
+          findings = []
+          if result_path.exists():
+              payload = json.loads(result_path.read_text(encoding='utf-8'))
+              for finding in payload.get('findings', []):
+                  if str(finding.get('severity')).upper() in {'P0', 'P1'}:
+                      findings.append(finding)
+
+          marker = f"<!-- aistock-issue-on-guardrail-fail:{os.environ.get('GITHUB_RUN_ID')} -->"
+          lines = [
+              marker,
+              '## Automated AIstock guardrail issue',
+              '',
+              f"Severity: {severity}",
+              f"Workflow/source: {os.environ.get('WORKFLOW_NAME')}",
+              f"Run: {os.environ.get('RUN_URL')}",
+              f"Branch: {os.environ.get('HEAD_BRANCH')}",
+              f"Commit: {os.environ.get('HEAD_SHA')}",
+              f"Guardrail result path: {result_path if result_path else 'not provided'}",
+              '',
+              'This workflow auto-files P0/P1 guardrail failures only. GitHub Issues is a workflow layer; `tests/aistock_validation/bugs/` remains the canonical versioned registry when a BUG-NNN record is required.',
+              '',
+              '### P0/P1 findings',
+          ]
+          if findings:
+              for finding in findings[:20]:
+                  lines.append(
+                      f"- {finding.get('severity', '?')} `{finding.get('rule_id', 'unknown')}` "
+                      f"{finding.get('file', '?')}:{finding.get('line', '?')} - {finding.get('message') or finding.get('remediation') or 'guardrail finding'}"
+                  )
+          else:
+              lines.append('- Guardrail result JSON was unavailable or did not include parsed P0/P1 findings; inspect the workflow logs and uploaded guardrail evidence.')
+          lines.extend([
+              '',
+              '### Triage checklist',
+              '',
+              '- [ ] Confirm whether this is a real P0/P1 guardrail regression or an infrastructure-only failure.',
+              '- [ ] If real, mirror or link a BUG-NNN entry under `tests/aistock_validation/bugs/`.',
+              '- [ ] Link the fixing PR with `Fixes #NNN` or `Closes #NNN`.',
+              '',
+              '### Safety',
+              '',
+              '- No production service restart is requested by this issue.',
+              '- No production DB write is requested by this issue.',
+          ])
+          Path('guardrail_issue_body.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+          Path('guardrail_issue_title.txt').write_text(f"[{severity}] AIstock guardrail failure on {os.environ.get('HEAD_BRANCH')}\n", encoding='utf-8')
+          PY
+          {
+            echo 'body_path=guardrail_issue_body.md'
+            echo 'title_path=guardrail_issue_title.txt'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create or update guardrail issue
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const body = fs.readFileSync('${{ steps.guardrail.outputs.body_path }}', 'utf8');
+            const title = fs.readFileSync('${{ steps.guardrail.outputs.title_path }}', 'utf8').trim();
+            const marker = body.match(/<!-- aistock-issue-on-guardrail-fail:[^>]+ -->/)?.[0];
+            const query = marker ? `repo:${owner}/${repo} is:issue in:body "${marker}"` : '';
+            if (query) {
+              const existing = await github.rest.search.issuesAndPullRequests({ q: query, per_page: 1 });
+              if (existing.data.items.length) {
+                const issue = existing.data.items[0];
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: issue.number,
+                  body: `Guardrail failure observed again. Run: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
+                });
+                core.info(`Existing issue #${issue.number} already tracks this guardrail marker.`);
+                return;
+              }
+            }
+            const labels = ['bug', 'guardrail', 'auto-filed', title.startsWith('[P0]') ? 'P0' : 'P1'];
+            try {
+              const created = await github.rest.issues.create({ owner, repo, title, body, labels });
+              core.info(`Created guardrail issue #${created.data.number}.`);
+            } catch (error) {
+              if (error.status !== 422) throw error;
+              core.warning(`Could not apply labels (${labels.join(', ')}); retrying without labels.`);
+              const created = await github.rest.issues.create({ owner, repo, title, body });
+              core.info(`Created guardrail issue #${created.data.number} without labels.`);
+            }
