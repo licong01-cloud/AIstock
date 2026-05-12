@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import inspect
+import re
 from datetime import date
+from pathlib import Path
 
 import pytest
 
@@ -35,9 +37,19 @@ from backend.services.strategy_package.repository import InMemoryStrategyPackage
 from backend.services.strategy_package.service import StrategyPackageService
 from backend.services.trading_core.errors import StrategyPackageValidationError
 
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
 
 def _trading_core_ddl() -> str:
     return "\n".join(init_trading_core_v2_schema.iter_ddl())
+
+
+def _candidate_table_fragment(sql: str) -> str:
+    marker = "CREATE TABLE IF NOT EXISTS strategy_pkg.candidate_strategy_package ("
+    match = re.search(re.escape(marker) + r".*?\n\s*\)(?:;|\n)", sql, flags=re.DOTALL)
+    if not match:
+        raise AssertionError("candidate_strategy_package table DDL not found")
+    return match.group(0)
 
 
 def _make_manifest() -> StrategyPackageManifest:
@@ -320,6 +332,36 @@ def test_strategy_package_can_be_created_from_candidate_manifest_snapshot() -> N
     assert record.manifest_sha256 != manifest.manifest_sha256
 
 
+def test_promoted_package_survives_candidate_soft_delete() -> None:
+    candidate_repo = InMemoryCandidateStrategyPackageRepository()
+    candidate_service = CandidateStrategyPackageService(repository=candidate_repo)
+    manifest = _make_manifest()
+    candidate = candidate_service.create_from_qe_loop(
+        task_id="qe_cleanup_source",
+        loop_id="Loop3",
+        experiment_id="qe_cleanup_source_L3",
+        created_by="unit_test",
+        archive_run_id="qear_cleanup_source_L3",
+        snapshot_config={"strategy_package_manifest": manifest.model_dump(mode="json")},
+    )
+    package_repo = InMemoryStrategyPackageRepository()
+    service = StrategyPackageService(
+        repository=package_repo,
+        candidate_service=candidate_service,
+    )
+
+    record = service.create_from_candidate(candidate.candidate_id)
+    deleted_candidate = candidate_service.delete_candidate(
+        candidate_id=candidate.candidate_id,
+        deleted_by="unit_test",
+        delete_reason="source QE experiment cleanup rehearsal",
+    )
+
+    assert deleted_candidate.status == CandidateStrategyPackageStatus.DELETED
+    assert package_repo.get(record.package_id).source_id == candidate.candidate_id
+    assert package_repo.get(record.package_id).run_id == "qear_cleanup_source_L3"
+
+
 def test_trading_core_schema_declares_durable_candidate_tables_without_qe_cascade() -> None:
     ddl = _trading_core_ddl()
 
@@ -329,6 +371,46 @@ def test_trading_core_schema_declares_durable_candidate_tables_without_qe_cascad
     assert "source_id TEXT NOT NULL" in ddl
     assert "archive_run_id TEXT" in ddl
     assert "ON DELETE CASCADE" not in ddl
+
+
+def test_candidate_schema_keeps_qe_source_and_archive_refs_non_cascading() -> None:
+    ddl_sources = [
+        _trading_core_ddl(),
+        (_REPO_ROOT / "backend/migrations/trading_core_v2_schema.sql").read_text(encoding="utf-8"),
+        (_REPO_ROOT / "backend/migrations/strategy_pkg_candidate_strategy_package_20260513.sql").read_text(
+            encoding="utf-8"
+        ),
+    ]
+
+    for ddl in ddl_sources:
+        candidate_table = _candidate_table_fragment(ddl)
+        assert "source_id TEXT NOT NULL" in candidate_table
+        assert "archive_run_id TEXT" in candidate_table
+        assert "REFERENCES" not in candidate_table
+        assert "ON DELETE" not in candidate_table
+
+
+def test_qe_source_delete_paths_do_not_delete_candidate_or_strategy_package_state() -> None:
+    deletion_sources = [
+        _REPO_ROOT / "backend/routers/quantevolver.py",
+        _REPO_ROOT / "backend/services/quantevolver/qe_evolution_service.py",
+    ]
+
+    for path in deletion_sources:
+        source = path.read_text(encoding="utf-8")
+        destructive_strategy_pkg_sql = re.findall(
+            r"\b(?:DELETE\s+FROM|UPDATE)\s+strategy_pkg\.[a-z_]+",
+            source,
+            flags=re.IGNORECASE,
+        )
+        assert destructive_strategy_pkg_sql == []
+
+    experiment_delete_source = deletion_sources[0].read_text(encoding="utf-8")
+    task_delete_source = deletion_sources[1].read_text(encoding="utf-8")
+    assert "DELETE FROM qe_experiments" in experiment_delete_source
+    assert "deleted_experiment_ids" in experiment_delete_source
+    assert "DELETE FROM qe_evolution_tasks" in task_delete_source
+    assert "DELETE FROM qe_experiments" in task_delete_source
 
 
 def test_sota_leaderboard_no_longer_materializes_automatic_candidates() -> None:
