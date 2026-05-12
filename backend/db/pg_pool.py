@@ -6,6 +6,8 @@ from contextlib import contextmanager
 import threading
 import traceback
 import inspect
+import logging
+import json
 from typing import Any, Dict, Optional
 
 import psycopg2
@@ -23,6 +25,9 @@ warnings.filterwarnings(
 
 
 _DB_POOL: Optional[ThreadedConnectionPool] = None
+logger = logging.getLogger("aistock.db.pg_pool")
+
+DEFAULT_STATEMENT_TIMEOUT_MS = 60_000
 
 # Track checked-out connections to identify long holders / pool starvation.
 _CHECKED_OUT: Dict[int, Dict[str, Any]] = {}
@@ -32,6 +37,63 @@ _CHECKED_OUT_LOCK = threading.RLock()
 def _env_truthy(key: str) -> bool:
     v = (os.getenv(key) or "").strip().lower()
     return v in {"1", "true", "yes", "y", "on"}
+
+
+def _conn_audit_enabled() -> bool:
+    return _env_truthy("AISTOCK_DB_CONN_AUDIT") or _env_truthy("DB_POOL_DEBUG")
+
+
+def _pool_state(pool: Optional[ThreadedConnectionPool]) -> Dict[str, Any]:
+    if pool is None:
+        return {"pool_free": None, "pool_used": None, "pool_max": None}
+    state: Dict[str, Any] = {"pool_free": None, "pool_used": None, "pool_max": getattr(pool, "maxconn", None)}
+    try:
+        state["pool_used"] = len(getattr(pool, "_used", {}) or {})
+    except Exception:
+        pass
+    try:
+        state["pool_free"] = len(getattr(pool, "_pool", []) or [])
+    except Exception:
+        pass
+    return state
+
+
+def _emit_conn_audit_metric(event: str, **fields: Any) -> None:
+    """Emit structured DB connection audit data for production incident triage."""
+
+    if not (_conn_audit_enabled() or event in {"checkout_slow", "held_slow", "connect_slow"}):
+        return
+    payload: Dict[str, Any] = {
+        "metric": "db_connection_audit",
+        "event": event,
+        "pid": os.getpid(),
+        "thread": threading.current_thread().name,
+    }
+    payload.update(fields)
+    logger.info(
+        "db_connection_audit %s",
+        json.dumps(payload, ensure_ascii=False, sort_keys=True),
+        extra={"aistock_metric": payload},
+    )
+
+
+def _emit_checkout_audit(
+    *,
+    mode: str,
+    duration: float,
+    caller: str,
+    statement_timeout_ms: Optional[int],
+    pool: Optional[ThreadedConnectionPool] = None,
+) -> None:
+    event = "checkout_slow" if duration > 0.1 else "checkout"
+    _emit_conn_audit_metric(
+        event,
+        mode=mode,
+        duration_ms=round(duration * 1000, 3),
+        caller=caller,
+        statement_timeout_ms=statement_timeout_ms,
+        **_pool_state(pool),
+    )
 
 
 def _checked_out_snapshot(limit: int = 5) -> str:
@@ -104,21 +166,25 @@ def _db_cfg() -> Dict[str, Any]:
     }
 
 
-def _apply_statement_timeout(conn: psycopg2.extensions.connection) -> None:
-    v = (os.getenv("AISTOCK_PG_STATEMENT_TIMEOUT_MS") or "").strip()
-    if not v:
-        return
+def _statement_timeout_ms() -> int:
+    v = (os.getenv("AISTOCK_PG_STATEMENT_TIMEOUT_MS") or str(DEFAULT_STATEMENT_TIMEOUT_MS)).strip()
     try:
         ms = int(v)
         if ms < 0:
-            return
+            return DEFAULT_STATEMENT_TIMEOUT_MS
     except Exception:
-        return
+        return DEFAULT_STATEMENT_TIMEOUT_MS
+    return ms
+
+
+def _apply_statement_timeout(conn: psycopg2.extensions.connection) -> Optional[int]:
+    ms = _statement_timeout_ms()
     try:
         with conn.cursor() as cur:
             cur.execute(f"SET statement_timeout TO {ms}")
+        return ms
     except Exception:
-        return
+        return None
 
 
 def init_db_pool(minconn: int = 1, maxconn: int = 10) -> None:
@@ -175,37 +241,50 @@ def get_conn():
     global _DB_POOL
     start_time = time.time()
     if _DB_POOL is None:
+        caller = _caller_hint() if _conn_audit_enabled() else "<audit disabled>"
         try:
             if _env_truthy("DB_POOL_DEBUG"):
                 print(
                     "DEBUG: DB checkout (direct). pid=%s thread=%s caller=%s"
-                    % (os.getpid(), threading.current_thread().name, _caller_hint())
+                    % (os.getpid(), threading.current_thread().name, caller)
                 )
             conn = psycopg2.connect(**_db_cfg())
             conn.autocommit = True
-            _apply_statement_timeout(conn)
+            statement_timeout_ms = _apply_statement_timeout(conn)
             duration = time.time() - start_time
             if duration > 0.1:
                 print(f"DEBUG: Direct DB connection took {duration:.4f}s")
+            if duration > 0.1 and caller == "<audit disabled>":
+                caller = _caller_hint()
+            _emit_checkout_audit(
+                mode="direct",
+                duration=duration,
+                caller=caller,
+                statement_timeout_ms=statement_timeout_ms,
+            )
             try:
                 yield conn
             finally:
                 conn.close()
         except Exception as e:
+            _emit_conn_audit_metric("connection_failed", mode="direct", error=str(e), caller=caller)
             print(f"DEBUG: DB connection failed: {e}")
             raise
         return
 
     try:
+        caller = _caller_hint() if _conn_audit_enabled() else "<audit disabled>"
         if _env_truthy("DB_POOL_DEBUG"):
             print(
                 "DEBUG: DB checkout (pool). pid=%s thread=%s caller=%s"
-                % (os.getpid(), threading.current_thread().name, _caller_hint())
+                % (os.getpid(), threading.current_thread().name, caller)
             )
         conn = _DB_POOL.getconn()
         duration = time.time() - start_time
         if duration > 0.1:
             print(f"DEBUG: Pool getconn took {duration:.4f}s")
+        if duration > 0.1 and caller == "<audit disabled>":
+            caller = _caller_hint()
         if duration > 0.5:
             stack = "".join(traceback.format_stack(limit=12))
             print(
@@ -246,7 +325,14 @@ def get_conn():
                     pass
         try:
             conn.autocommit = True
-            _apply_statement_timeout(conn)
+            statement_timeout_ms = _apply_statement_timeout(conn)
+            _emit_checkout_audit(
+                mode="pool",
+                duration=duration,
+                caller=caller,
+                statement_timeout_ms=statement_timeout_ms,
+                pool=_DB_POOL,
+            )
             with _CHECKED_OUT_LOCK:
                 _CHECKED_OUT[id(conn)] = {
                     "checkout_ts": time.time(),
@@ -261,6 +347,12 @@ def get_conn():
             if checkout_info is not None:
                 held = time.time() - float(checkout_info.get("checkout_ts", time.time()))
                 if held > 1.0:
+                    _emit_conn_audit_metric(
+                        "held_slow",
+                        mode="pool",
+                        held_ms=round(held * 1000, 3),
+                        **_pool_state(_DB_POOL),
+                    )
                     print(
                         "DEBUG: DB conn held %.3fs (>1s). thread=%s\n%s"
                         % (held, checkout_info.get("thread"), checkout_info.get("stack"))
@@ -275,5 +367,6 @@ def get_conn():
             else:
                 pool.putconn(conn)
     except Exception as e:
+        _emit_conn_audit_metric("connection_failed", mode="pool", error=str(e), **_pool_state(_DB_POOL))
         print(f"DEBUG: Pool operation failed: {e}")
         raise

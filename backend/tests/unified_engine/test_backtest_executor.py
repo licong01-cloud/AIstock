@@ -129,45 +129,80 @@ class TestBacktestExecutorBasic:
 
         assert "--backtest-only" not in (result.wsl_command or "")
 
-    def test_submit_keeps_event_loop_responsive_during_compose(self):
-        compose_started = threading.Event()
-        compose_done = threading.Event()
+    def test_submit_keeps_event_loop_responsive_during_blocking_compose_work(self):
+        loop_thread_id: int | None = None
+        stock_pool_thread_id: int | None = None
+        compose_thread_id: int | None = None
+        blocking_started = threading.Event()
+        blocking_done = threading.Event()
         ticks: list[float] = []
+        blocking_stages: list[str] = []
+
+        def blocking_stock_pool(_node_id, _stock_pool):
+            nonlocal stock_pool_thread_id
+            stock_pool_thread_id = threading.get_ident()
+            blocking_started.set()
+            blocking_stages.append("stock_pool")
+            time.sleep(0.07)
+            return {
+                "experiment_files": {"filtered_pool_test.txt": "000001.SZ\n"},
+                "install_command": "echo install-filtered-pool",
+            }
 
         def blocking_compose(**_kwargs):
-            compose_started.set()
-            time.sleep(0.2)
-            compose_done.set()
+            nonlocal compose_thread_id
+            compose_thread_id = threading.get_ident()
+            blocking_started.set()
+            for stage in ("compose", "st_pit_payload", "fingerprint"):
+                blocking_stages.append(stage)
+                time.sleep(0.07)
+            blocking_done.set()
             return {
                 "experiment_files": MOCK_EXPERIMENT_FILES,
                 "wsl_command": MOCK_WSL_COMMAND,
             }
 
         async def ticker_while_composing():
-            while not compose_started.is_set():
+            while not blocking_started.is_set():
                 await asyncio.sleep(0)
-            while not compose_done.is_set():
+            while not blocking_done.is_set():
                 ticks.append(time.perf_counter())
                 await asyncio.sleep(0.01)
 
         async def run_submit_and_ticker():
+            nonlocal loop_thread_id
+            loop_thread_id = threading.get_ident()
             composer = MagicMock()
             composer.compose_experiment_in_memory.side_effect = blocking_compose
             client = make_mock_client()
             executor = BacktestExecutor(composer, client)
-            cfg = ExperimentConfig(factor_names=["f1"], model_id="lgbm")
-            ctx = make_ctx()
+            cfg = ExperimentConfig(
+                factor_names=["f1"],
+                model_id="lgbm",
+                stock_pool="filtered_pool_test.txt",
+            )
+            ctx = make_ctx(node_id="node-1")
 
-            submit_task = asyncio.create_task(executor.submit(cfg, ctx))
-            ticker_task = asyncio.create_task(ticker_while_composing())
-            result = await asyncio.wait_for(submit_task, timeout=2)
-            await asyncio.wait_for(ticker_task, timeout=1)
-            return result
+            with patch(
+                "backend.services.quantevolver.stock_pool_sync."
+                "prepare_stock_pool_loop_payload_for_compute_node_by_id",
+                side_effect=blocking_stock_pool,
+            ):
+                submit_task = asyncio.create_task(executor.submit(cfg, ctx))
+                ticker_task = asyncio.create_task(ticker_while_composing())
+                result = await asyncio.wait_for(submit_task, timeout=2)
+                await asyncio.wait_for(ticker_task, timeout=1)
+                return result
 
         result = asyncio.run(run_submit_and_ticker())
 
         assert result.job_id == "Loop1"
         assert len(ticks) >= 3
+        assert blocking_stages == ["stock_pool", "compose", "st_pit_payload", "fingerprint"]
+        assert stock_pool_thread_id is not None
+        assert compose_thread_id is not None
+        assert stock_pool_thread_id == compose_thread_id
+        assert compose_thread_id != loop_thread_id
 
 
 # ── compose_experiment_in_memory 参数验证 ──────────────────────────────────────

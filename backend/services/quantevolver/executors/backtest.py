@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import re
 import logging
-from functools import partial
 from enum import Enum
 from typing import Any
 
@@ -67,32 +66,34 @@ class BacktestExecutor(BaseExecutor):
         # 1. 构建 custom_params（配置层唯一注入点）
         custom_params = config.build_custom_params()
         strategy_params = config.build_strategy_params()
-        stock_pool_payload = None
-        if ctx.node_id:
-            from ..stock_pool_sync import prepare_stock_pool_loop_payload_for_compute_node_by_id
-
-            stock_pool_payload = prepare_stock_pool_loop_payload_for_compute_node_by_id(
-                ctx.node_id,
-                custom_params.get("stock_pool"),
-            )
 
         # 2. 调用 ConfigComposer（已有统一层，不改）
         loop = asyncio.get_running_loop()
-        compose_call = partial(
-            self.composer.compose_experiment_in_memory,
-            factor_names=config.factor_names,
-            model_id=config.model_id,
-            strategy_id=config.strategy_id,
-            data_split=config.data_split,
-            custom_params=custom_params,
-            experiment_name=ctx.experiment_name,
-            skip_db_save=True,
-            execution_algo=config.execution_algo,
-            execution_algo_params=config.execution_algo_params,
-            strategy_params=strategy_params if strategy_params else None,
-            node_id=ctx.node_id,
-        )
-        compose_res = await loop.run_in_executor(None, compose_call)
+        def compose_call() -> tuple[dict[str, Any], dict[str, Any] | None]:
+            stock_pool_payload = None
+            if ctx.node_id:
+                from ..stock_pool_sync import prepare_stock_pool_loop_payload_for_compute_node_by_id
+
+                stock_pool_payload = prepare_stock_pool_loop_payload_for_compute_node_by_id(
+                    ctx.node_id,
+                    custom_params.get("stock_pool"),
+                )
+            compose_res_local = self.composer.compose_experiment_in_memory(
+                factor_names=config.factor_names,
+                model_id=config.model_id,
+                strategy_id=config.strategy_id,
+                data_split=config.data_split,
+                custom_params=custom_params,
+                experiment_name=ctx.experiment_name,
+                skip_db_save=True,
+                execution_algo=config.execution_algo,
+                execution_algo_params=config.execution_algo_params,
+                strategy_params=strategy_params if strategy_params else None,
+                node_id=ctx.node_id,
+            )
+            return compose_res_local, stock_pool_payload
+
+        compose_res, stock_pool_payload = await loop.run_in_executor(None, compose_call)
 
         experiment_files: dict[str, str] = dict(compose_res.get("experiment_files", {}) or {})
         wsl_command: str = compose_res.get("wsl_command", "")
