@@ -1,5 +1,12 @@
 # Paper v2 / QE Integration 整改方案
 
+> **边界替换声明 / Superseded boundary note (2026-05-12)**
+> 本文早期方案中关于 StrategyPackage、ST/PIT、HMM、SOTA 殿堂、QE 数仓职责与删除持久化的边界，已被
+> `docs/architecture/paper_v2_qe_candidate_strategy_warehouse_design_20260512.md` 正式替换。
+> 与本文冲突时，以新文档和用户 2026-05-12 最新要求为准；本文其余不冲突的背景与问题描述可继续作为参考。
+
+---
+
 **日期**: 2026-05-12
 **类型**: 架构整改 (用户主导决策, Codex 主导设计 + 实施)
 **作者**: User vision + Strategy session 整理
@@ -124,11 +131,11 @@ paper-v2 daemon → fills
 1. **缺 end-to-end ownership**: 各模块各自正确, 但**模块间数据流没人负责**
 2. **门禁定位错配**: R6 gate / Selection Center health 按"实盘级别"设计, 加在 paper-v2 上 → 永远过不了
 3. **数据流未定义**: 各模块声明要什么数据 (evidence 4 类 / artifact / contract), 但**没人定义这些数据从哪里生成**
-4. **QE 实验产物与 paper-v2 期望不匹配**: 
+4. **QE 实验产物与 paper-v2 期望不匹配**:
    - QE 实验输出: backtest 结果 + model checkpoint + score CSV (legacy 模式)
    - paper-v2 期望: ST PIT manifest + 4 类 evidence + Selection artifact + HMM coef
    - **中间没人翻译**
-5. **回测 vs 模拟盘等价性未实现**: 
+5. **回测 vs 模拟盘等价性未实现**:
    - QE 用 Qlib 回测 (calendar 提取 + factor + model.predict + portfolio)
    - paper-v2 daemon 用 LocalSim (TDX 行情 + factor 重算 + model.predict + 撮合)
    - **两边 score 计算 path 不同, 等价性未保证**
