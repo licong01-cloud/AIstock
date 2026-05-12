@@ -88,6 +88,21 @@ class CandidateStrategyPackageRepository(Protocol):
         limit: int,
     ) -> list[CandidateStrategyPackageRecord]: ...
 
+    def update_snapshot(
+        self,
+        *,
+        candidate_id: str,
+        snapshot_config: dict[str, Any],
+        factor_manifest: dict[str, Any],
+        model_manifest: dict[str, Any],
+        strategy_manifest: dict[str, Any],
+        metric_snapshot: dict[str, Any],
+        artifact_refs: dict[str, Any],
+        completeness: dict[str, Any],
+        eligibility: dict[str, Any],
+        audit_context: dict[str, Any],
+    ) -> CandidateStrategyPackageRecord: ...
+
     def soft_delete(
         self,
         *,
@@ -193,6 +208,61 @@ class PostgresCandidateStrategyPackageRepository:
                 )
                 rows = cur.fetchall()
         return [self._record_from_row(dict(row)) for row in rows]
+
+    def update_snapshot(
+        self,
+        *,
+        candidate_id: str,
+        snapshot_config: dict[str, Any],
+        factor_manifest: dict[str, Any],
+        model_manifest: dict[str, Any],
+        strategy_manifest: dict[str, Any],
+        metric_snapshot: dict[str, Any],
+        artifact_refs: dict[str, Any],
+        completeness: dict[str, Any],
+        eligibility: dict[str, Any],
+        audit_context: dict[str, Any],
+    ) -> CandidateStrategyPackageRecord:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    UPDATE strategy_pkg.candidate_strategy_package
+                    SET snapshot_config_json = %s,
+                        factor_manifest_json = %s,
+                        model_manifest_json = %s,
+                        strategy_manifest_json = %s,
+                        metric_snapshot_json = %s,
+                        artifact_refs_json = %s,
+                        completeness_json = %s,
+                        eligibility_json = %s,
+                        audit_json = %s,
+                        updated_at = NOW()
+                    WHERE candidate_id = %s
+                      AND status = 'ACTIVE'
+                    RETURNING *
+                    """,
+                    (
+                        psycopg2.extras.Json(snapshot_config),
+                        psycopg2.extras.Json(factor_manifest),
+                        psycopg2.extras.Json(model_manifest),
+                        psycopg2.extras.Json(strategy_manifest),
+                        psycopg2.extras.Json(metric_snapshot),
+                        psycopg2.extras.Json(artifact_refs),
+                        psycopg2.extras.Json(completeness),
+                        psycopg2.extras.Json(eligibility),
+                        psycopg2.extras.Json(audit_context),
+                        candidate_id,
+                    ),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        if row is None:
+            raise InvalidStateTransitionError(
+                "candidate strategy package snapshot refresh lost compare-and-set race",
+                context={"candidate_id": candidate_id},
+            )
+        return self._record_from_row(dict(row))
 
     def soft_delete(
         self,
@@ -338,6 +408,43 @@ class InMemoryCandidateStrategyPackageRepository:
         ]
         rows.sort(key=lambda item: item.created_at, reverse=True)
         return rows[:limit]
+
+    def update_snapshot(
+        self,
+        *,
+        candidate_id: str,
+        snapshot_config: dict[str, Any],
+        factor_manifest: dict[str, Any],
+        model_manifest: dict[str, Any],
+        strategy_manifest: dict[str, Any],
+        metric_snapshot: dict[str, Any],
+        artifact_refs: dict[str, Any],
+        completeness: dict[str, Any],
+        eligibility: dict[str, Any],
+        audit_context: dict[str, Any],
+    ) -> CandidateStrategyPackageRecord:
+        current = self.get(candidate_id)
+        if current.status != CandidateStrategyPackageStatus.ACTIVE:
+            raise InvalidStateTransitionError(
+                "only active candidate strategy packages can refresh snapshots",
+                context={"candidate_id": candidate_id, "status": current.status.value},
+            )
+        record = current.model_copy(
+            update={
+                "snapshot_config": snapshot_config,
+                "factor_manifest": factor_manifest,
+                "model_manifest": model_manifest,
+                "strategy_manifest": strategy_manifest,
+                "metric_snapshot": metric_snapshot,
+                "artifact_refs": artifact_refs,
+                "completeness": completeness,
+                "eligibility": eligibility,
+                "audit_context": audit_context,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+        self.records[candidate_id] = record
+        return record
 
     def soft_delete(
         self,
@@ -487,6 +594,28 @@ class CandidateStrategyPackageService:
             return self._snapshot_with_assembler_error(snapshot, exc)
         return self._snapshot_with_manifest(snapshot, manifest)
 
+    @staticmethod
+    def _snapshot_from_record(record: CandidateStrategyPackageRecord) -> dict[str, Any]:
+        return {
+            "snapshot_config": record.snapshot_config,
+            "factor_manifest": record.factor_manifest,
+            "model_manifest": record.model_manifest,
+            "strategy_manifest": record.strategy_manifest,
+            "metric_snapshot": record.metric_snapshot,
+            "artifact_refs": record.artifact_refs,
+            "completeness": record.completeness,
+            "eligibility": record.eligibility,
+            "audit_context": record.audit_context,
+        }
+
+    @staticmethod
+    def _raw_loop_id(record: CandidateStrategyPackageRecord) -> str:
+        task_id = record.source_task_id or ""
+        loop_id = record.source_loop_id or record.source_id
+        if task_id and loop_id.startswith(f"{task_id}_"):
+            return loop_id[len(task_id) + 1:]
+        return loop_id
+
     def create_candidate(
         self,
         *,
@@ -623,6 +752,57 @@ class CandidateStrategyPackageService:
             completeness=overrides.get("completeness", source.completeness),
             eligibility=overrides.get("eligibility", source.eligibility),
             audit_context={"cloned_from_candidate_id": source_candidate_id},
+        )
+
+    def refresh_snapshot_from_source(
+        self,
+        *,
+        candidate_id: str,
+        refreshed_by: str,
+    ) -> CandidateStrategyPackageRecord:
+        if not refreshed_by.strip():
+            raise StrategyPackageValidationError("refreshed_by is required for candidate snapshot refresh")
+        record = self.repository.get(candidate_id)
+        if record.status != CandidateStrategyPackageStatus.ACTIVE:
+            raise InvalidStateTransitionError(
+                "only active candidate strategy packages can refresh snapshots",
+                context={"candidate_id": candidate_id, "status": record.status.value},
+            )
+        snapshot = self._snapshot_from_record(record)
+        if record.source_type == CandidateStrategyPackageSourceType.QE_EXPERIMENT:
+            snapshot = self._assemble_from_qe_experiment(record.source_experiment_id or record.source_id, snapshot)
+        elif record.source_type == CandidateStrategyPackageSourceType.QE_EVOLUTION_LOOP:
+            if not record.source_task_id:
+                raise StrategyPackageValidationError(
+                    "QE loop candidate snapshot refresh requires source_task_id",
+                    context={"candidate_id": candidate_id},
+                )
+            snapshot = self._assemble_from_qe_loop(
+                task_id=record.source_task_id,
+                loop_id=self._raw_loop_id(record),
+                snapshot=snapshot,
+            )
+        else:
+            raise StrategyPackageValidationError(
+                "only QE-sourced candidates can refresh snapshots from source",
+                context={"candidate_id": candidate_id, "source_type": record.source_type.value},
+            )
+        audit_context = {
+            **dict(snapshot.get("audit_context") or {}),
+            "snapshot_refreshed_by": refreshed_by,
+            "snapshot_refreshed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        return self.repository.update_snapshot(
+            candidate_id=candidate_id,
+            snapshot_config=dict(snapshot.get("snapshot_config") or {}),
+            factor_manifest=dict(snapshot.get("factor_manifest") or {}),
+            model_manifest=dict(snapshot.get("model_manifest") or {}),
+            strategy_manifest=dict(snapshot.get("strategy_manifest") or {}),
+            metric_snapshot=dict(snapshot.get("metric_snapshot") or {}),
+            artifact_refs=dict(snapshot.get("artifact_refs") or {}),
+            completeness=dict(snapshot.get("completeness") or {}),
+            eligibility=dict(snapshot.get("eligibility") or {}),
+            audit_context=audit_context,
         )
 
     def get_candidate(self, candidate_id: str) -> CandidateStrategyPackageRecord:

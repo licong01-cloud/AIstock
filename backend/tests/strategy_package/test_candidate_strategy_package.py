@@ -9,6 +9,7 @@ import pytest
 
 from backend.db import init_trading_core_v2_schema
 from backend.routers import quantevolver_evolution
+from backend.routers.strategy_packages import _record_payload
 from backend.services.strategy_package.candidate import (
     CandidateStrategyPackageService,
     CandidateStrategyPackageSourceType,
@@ -279,6 +280,52 @@ def test_candidate_from_qe_source_records_non_blocking_assembler_error() -> None
     )
     with pytest.raises(StrategyPackageValidationError, match="requires a strategy_package_manifest snapshot"):
         service.create_from_candidate(candidate.candidate_id)
+
+
+def test_candidate_snapshot_refresh_can_enrich_existing_legacy_candidate() -> None:
+    class Resolver:
+        def __init__(self) -> None:
+            self.fail = True
+
+        def build_from_experiment(self, experiment_id: str):
+            if self.fail:
+                raise StrategyPackageValidationError("legacy QE row missing runtime contract")
+            manifest = _make_manifest()
+            source = manifest.source.model_copy(update={"source_id": experiment_id})
+            return freeze_manifest(manifest.model_copy(update={"source": source, "manifest_sha256": None}))
+
+    resolver = Resolver()
+    repo = InMemoryCandidateStrategyPackageRepository()
+    service = CandidateStrategyPackageService(repository=repo, resolver=resolver)
+    candidate = service.create_from_qe_experiment(
+        experiment_id="qe_refresh_exp",
+        created_by="unit_test",
+    )
+    assert "strategy_package_manifest" not in candidate.snapshot_config
+    assert candidate.completeness["strategy_package_manifest_available"] is False
+
+    resolver.fail = False
+    refreshed = service.refresh_snapshot_from_source(
+        candidate_id=candidate.candidate_id,
+        refreshed_by="unit_test",
+    )
+
+    assert refreshed.candidate_id == candidate.candidate_id
+    assert refreshed.snapshot_config["strategy_package_manifest"]["source"]["source_id"] == "qe_refresh_exp"
+    assert refreshed.completeness["strategy_package_manifest_available"] is True
+    assert refreshed.audit_context["snapshot_refreshed_by"] == "unit_test"
+
+    package_service = StrategyPackageService(
+        repository=InMemoryStrategyPackageRepository(),
+        candidate_service=service,
+    )
+    package_record = package_service.create_from_candidate(refreshed.candidate_id)
+    payload = _record_payload(package_record)
+
+    assert payload["source_type"] == SourceType.CANDIDATE_STRATEGY_PACKAGE.value
+    assert payload["runtime_config_contract"]["equivalence"]["strategy_semantics_shared"] is True
+    assert payload["runtime_config_contract"]["qe_backtest"]["adapter"]["kind"] == "qe_qlib_bin"
+    assert payload["runtime_config_contract"]["paper_v2"]["adapter"]["kind"] == "paper_v2_db"
 
 
 def test_candidate_clone_and_soft_delete_do_not_touch_source_or_archive_refs() -> None:

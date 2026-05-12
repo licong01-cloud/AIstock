@@ -69,6 +69,7 @@ export type StrategyPackage = {
   updated_at?: string;
   metrics_summary?: MetricsSummary;
   manifest?: JsonObject;
+  runtime_config_contract?: JsonObject;
 };
 
 export type CandidateStrategyPackage = {

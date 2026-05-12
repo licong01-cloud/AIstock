@@ -170,6 +170,16 @@ export const strategyPackageApi = {
     );
     return data.candidate;
   },
+  async refreshCandidateSnapshot(
+    candidateId: string,
+    payload: { refreshed_by?: string } = {},
+  ): Promise<CandidateStrategyPackage> {
+    const data = await apiFetch<{ candidate: CandidateStrategyPackage }>(
+      `/strategy-packages/candidates/${encodeURIComponent(candidateId)}/refresh-snapshot`,
+      body(payload),
+    );
+    return data.candidate;
+  },
   async deleteCandidate(
     candidateId: string,
     payload: { deleted_by?: string; delete_reason?: string | null } = {},

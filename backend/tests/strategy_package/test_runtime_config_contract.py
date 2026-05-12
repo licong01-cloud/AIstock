@@ -29,6 +29,7 @@ from backend.services.strategy_package.runtime_config import (
     RuntimeAdapterConfig,
     RuntimeAdapterKind,
     build_unified_runtime_config_from_manifest,
+    build_default_runtime_config_bundle,
 )
 
 
@@ -195,3 +196,16 @@ def test_model_weight_policy_supports_rolling_retrain_without_changing_default_w
     assert config.strategy_semantics.model_weight_policy.default_weight_source == "backtest_manifest"
     assert config.strategy_semantics.model_weight_policy.rolling_retrain_enabled is True
     assert config.strategy_semantics.model_weight_policy.rolling_window_years == 3
+
+
+def test_default_runtime_config_bundle_exposes_cross_module_equivalence() -> None:
+    manifest = _make_manifest()
+
+    bundle = build_default_runtime_config_bundle(manifest)
+
+    assert bundle["config_sha256"] == bundle["qe_backtest"]["config_sha256"]
+    assert bundle["config_sha256"] == bundle["paper_v2"]["config_sha256"]
+    assert bundle["qe_backtest"]["adapter"]["kind"] == "qe_qlib_bin"
+    assert bundle["paper_v2"]["adapter"]["kind"] == "paper_v2_db"
+    assert bundle["equivalence"]["strategy_semantics_shared"] is True
+    assert bundle["equivalence"]["adapter_specific_runtime_hashes"] is True

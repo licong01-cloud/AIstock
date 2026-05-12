@@ -222,3 +222,36 @@ def build_unified_runtime_config_from_manifest(
         adapter=adapter,
     )
     return config.freeze()
+
+
+def default_qe_qlib_adapter(qlib_provider_uri: str = "qlib://qe-backtest-default") -> RuntimeAdapterConfig:
+    return RuntimeAdapterConfig(
+        kind=RuntimeAdapterKind.QE_QLIB_BIN,
+        data_source="qlib_bin",
+        execution_target="qe_backtest",
+        qlib_provider_uri=qlib_provider_uri,
+    )
+
+
+def default_paper_v2_db_adapter(db_profile: str = "paper_v2_runtime_default") -> RuntimeAdapterConfig:
+    return RuntimeAdapterConfig(
+        kind=RuntimeAdapterKind.PAPER_V2_DB,
+        data_source="paper_v2_realtime_db",
+        execution_target="aistock_paper",
+        db_profile=db_profile,
+    )
+
+
+def build_default_runtime_config_bundle(manifest: StrategyPackageManifest) -> dict[str, Any]:
+    qe_config = build_unified_runtime_config_from_manifest(manifest, adapter=default_qe_qlib_adapter())
+    paper_config = build_unified_runtime_config_from_manifest(manifest, adapter=default_paper_v2_db_adapter())
+    return {
+        "schema_version": qe_config.schema_version,
+        "config_sha256": qe_config.config_sha256,
+        "qe_backtest": qe_config.model_dump(mode="json"),
+        "paper_v2": paper_config.model_dump(mode="json"),
+        "equivalence": {
+            "strategy_semantics_shared": qe_config.config_sha256 == paper_config.config_sha256,
+            "adapter_specific_runtime_hashes": qe_config.runtime_config_sha256 != paper_config.runtime_config_sha256,
+        },
+    }

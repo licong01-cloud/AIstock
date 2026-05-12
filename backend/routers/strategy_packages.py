@@ -19,6 +19,7 @@ from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.package_asset import StrategyPackageAssetType
 from backend.services.strategy_package.qe_source_resolver import QEExperimentSourceResolver
 from backend.services.strategy_package.repository import StrategyPackageRecord
+from backend.services.strategy_package.runtime_config import build_default_runtime_config_bundle
 from backend.services.strategy_package.runtime_variant import RuntimeVariantKind, RuntimeVariantValidationStatus
 from backend.services.strategy_package.selection_artifact import StrategyPackageSelectionArtifactService
 from backend.services.strategy_package.service import StrategyPackageService
@@ -100,6 +101,10 @@ class CloneCandidateStrategyPackageRequest(BaseModel):
 class DeleteCandidateStrategyPackageRequest(BaseModel):
     deleted_by: str = Field(default="aistock_api", min_length=1)
     delete_reason: str | None = None
+
+
+class RefreshCandidateStrategyPackageRequest(BaseModel):
+    refreshed_by: str = Field(default="aistock_api", min_length=1)
 
 
 class TransitionStatusRequest(BaseModel):
@@ -205,6 +210,7 @@ def _raise_http(exc: TradingCoreError) -> None:
 
 
 def _record_payload(record: StrategyPackageRecord) -> dict[str, Any]:
+    manifest = record.current_manifest()
     return {
         "package_id": record.package_id,
         "package_name": record.package_name,
@@ -219,7 +225,8 @@ def _record_payload(record: StrategyPackageRecord) -> dict[str, Any]:
         "created_at": record.created_at.isoformat(),
         "updated_at": record.updated_at.isoformat(),
         "metrics_summary": metrics_summary_from_record(record).model_dump(mode="json"),
-        "manifest": record.current_manifest().model_dump(mode="json"),
+        "manifest": manifest.model_dump(mode="json"),
+        "runtime_config_contract": build_default_runtime_config_bundle(manifest),
     }
 
 
@@ -426,6 +433,21 @@ def clone_candidate_strategy_package(
             created_by=req.created_by,
             display_name=req.display_name,
             overrides=req.overrides,
+        )
+        return {"ok": True, "candidate": _candidate_payload(record)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/candidates/{candidate_id}/refresh-snapshot")
+def refresh_candidate_strategy_package_snapshot(
+    candidate_id: str,
+    req: RefreshCandidateStrategyPackageRequest,
+) -> dict[str, Any]:
+    try:
+        record = CandidateStrategyPackageService().refresh_snapshot_from_source(
+            candidate_id=candidate_id,
+            refreshed_by=req.refreshed_by,
         )
         return {"ok": True, "candidate": _candidate_payload(record)}
     except TradingCoreError as exc:

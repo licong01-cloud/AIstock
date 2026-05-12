@@ -130,6 +130,23 @@ export default function EvolutionSotaPage() {
     }
   };
 
+  const refreshCandidateSnapshot = async (candidate: CandidateStrategyPackage) => {
+    setBusyId(candidate.candidate_id);
+    setMessage(null);
+    try {
+      const refreshed = await strategyPackageApi.refreshCandidateSnapshot(candidate.candidate_id, {
+        refreshed_by: "candidate_strategy_page",
+      });
+      const ready = hasPackageManifest(refreshed) ? "manifest ready" : "snapshot only";
+      setMessage(`Refreshed candidate snapshot: ${refreshed.candidate_id} (${ready})`);
+      await fetchCandidates();
+    } catch (e) {
+      setMessage(`Refresh snapshot failed: ${apiErrorMessage(e)}`);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   return (
     <div style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "16px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16 }}>
@@ -207,6 +224,9 @@ export default function EvolutionSotaPage() {
                           </button>
                           <button disabled={isBusy} onClick={() => cloneCandidate(candidate)} style={{ padding: "6px 10px", borderRadius: 7, border: "1px solid #cbd5e1", background: "#fff", color: "#334155", cursor: isBusy ? "not-allowed" : "pointer" }}>
                             克隆
+                          </button>
+                          <button disabled={isBusy} onClick={() => refreshCandidateSnapshot(candidate)} title="Refresh server-side QE manifest snapshot" style={{ padding: "6px 10px", borderRadius: 7, border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", cursor: isBusy ? "not-allowed" : "pointer" }}>
+                            刷新快照
                           </button>
                           <button disabled={isBusy} onClick={() => deleteCandidate(candidate)} style={{ padding: "6px 10px", borderRadius: 7, border: "1px solid #fecaca", background: "#fff1f2", color: "#be123c", cursor: isBusy ? "not-allowed" : "pointer" }}>
                             删除
