@@ -100,9 +100,14 @@ def test_sota_leaderboard_does_not_create_automatic_candidate_state() -> None:
     assert "Candidate StrategyPackages are now created by explicit user action" in source
 
 
-def test_sota_page_uses_governance_leaderboard_without_legacy_silent_fallback() -> None:
+def test_sota_page_is_candidate_strategy_package_console_without_legacy_fallback() -> None:
     page = Path("frontend/src/app/quantevolver/evolution/sota/page.tsx").read_text(encoding="utf-8")
 
-    assert "/quantevolver/evolution/leaderboard" in page
+    assert "candidateList" in page
+    assert "createFromCandidate" in page
+    assert "deleteCandidate" in page
+    assert "候选策略包" in page
+    assert "/quantevolver/evolution/leaderboard" not in page
     assert "/quantevolver/evolution/sota" not in page
-    assert "Manual review" in page
+    assert "Manual review" not in page
+    assert "promotion-review" not in page

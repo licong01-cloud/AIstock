@@ -17,6 +17,7 @@ from backend.services.strategy_package.models import (
     AlphaCombinationPolicy,
     AlphaComponent,
     AlphaMode,
+    AssetCheck,
     BacktestSummary,
     ExecutionPolicy,
     FactorAsset,
@@ -29,6 +30,7 @@ from backend.services.strategy_package.models import (
     StrategyPackageSource,
     UniversePolicy,
 )
+from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.strategy_package.service import StrategyPackageService
 from backend.services.trading_core.errors import StrategyPackageValidationError
@@ -48,7 +50,7 @@ def _make_manifest() -> StrategyPackageManifest:
         rebalance_frequency="1day",
         score_direction="higher_better",
     )
-    return StrategyPackageManifest(
+    manifest = StrategyPackageManifest(
         package_name="candidate_test",
         source=StrategyPackageSource(source_type=SourceType.QE_EXPERIMENT, source_id="qe_exp"),
         alpha_mode=AlphaMode.SINGLE_ALPHA,
@@ -71,6 +73,7 @@ def _make_manifest() -> StrategyPackageManifest:
         ),
         package_status=PackageStatus.BACKTEST_APPROVED,
     )
+    return freeze_manifest(manifest)
 
 
 def test_strategy_package_source_type_accepts_candidate_source() -> None:
@@ -124,6 +127,148 @@ def test_candidate_snapshot_is_idempotent_and_independent_from_qe_source() -> No
     assert first.audit_context["live_approved"] is False
 
 
+def test_candidate_from_qe_experiment_assembles_strategy_manifest_snapshot() -> None:
+    class Resolver:
+        def build_from_experiment(self, experiment_id: str):
+            manifest = _make_manifest()
+            source = manifest.source.model_copy(update={"source_id": experiment_id})
+            return freeze_manifest(manifest.model_copy(update={"source": source, "manifest_sha256": None}))
+
+    service = CandidateStrategyPackageService(
+        repository=InMemoryCandidateStrategyPackageRepository(),
+        resolver=Resolver(),
+    )
+
+    candidate = service.create_from_qe_experiment(
+        experiment_id="qe_resolved_exp",
+        created_by="unit_test",
+        snapshot_config={"ui_context": "experiment_detail", "strategy_package_manifest_sha256": "ui_stale"},
+        completeness={"ui_payload": True, "strategy_package_manifest_available": False},
+        eligibility={"can_create_strategy_package": False},
+        audit_context={"ui_action": "add_to_candidate"},
+    )
+
+    manifest = candidate.snapshot_config["strategy_package_manifest"]
+    assert manifest["source"]["source_id"] == "qe_resolved_exp"
+    assert candidate.snapshot_config["ui_context"] == "experiment_detail"
+    assert candidate.snapshot_config["strategy_package_manifest_sha256"] == manifest["manifest_sha256"]
+    assert candidate.snapshot_config["strategy_package_manifest_source"] == "QEExperimentSourceResolver"
+    assert candidate.completeness["strategy_package_manifest_available"] is True
+    assert candidate.completeness["strategy_package_manifest_sha256"] == manifest["manifest_sha256"]
+    assert candidate.completeness["ui_payload"] is True
+    assert candidate.factor_manifest["factor_ids"] == ["factor_a"]
+    assert candidate.model_manifest["model_asset"]["model_id"] == "model_1"
+    assert candidate.strategy_manifest["minute_execution_policy"]["algo_code"] == "TWAP"
+    assert candidate.metric_snapshot["backtest_summary"]["ic"] == 0.05
+    assert candidate.eligibility["can_create_strategy_package"] is True
+    assert candidate.audit_context["snapshot_assembler"] == "QEExperimentSourceResolver"
+    assert candidate.audit_context["snapshot_assembler_status"] == "assembled"
+    assert candidate.audit_context["ui_action"] == "add_to_candidate"
+
+
+def test_candidate_from_qe_loop_uses_server_manifest_but_keeps_durable_source_id() -> None:
+    class Resolver:
+        def __init__(self) -> None:
+            self.called_with: tuple[str, str] | None = None
+
+        def build_from_evolution_loop(self, *, qe_task_id: str, qe_loop_id: str):
+            self.called_with = (qe_task_id, qe_loop_id)
+            manifest = _make_manifest()
+            source = manifest.source.model_copy(
+                update={
+                    "source_type": SourceType.QE_EVOLUTION_LOOP,
+                    "source_id": qe_task_id,
+                    "loop_id": qe_loop_id,
+                    "run_id": "qe_exp_loop",
+                }
+            )
+            return freeze_manifest(manifest.model_copy(update={"source": source, "manifest_sha256": None}))
+
+    resolver = Resolver()
+    service = CandidateStrategyPackageService(
+        repository=InMemoryCandidateStrategyPackageRepository(),
+        resolver=resolver,
+    )
+
+    candidate = service.create_from_qe_loop(
+        task_id="qe_task_resolved",
+        loop_id="Loop2",
+        created_by="unit_test",
+    )
+
+    assert resolver.called_with == ("qe_task_resolved", "Loop2")
+    assert candidate.source_id == "qe_task_resolved_Loop2"
+    assert candidate.source_loop_id == "qe_task_resolved_Loop2"
+    assert candidate.snapshot_config["strategy_package_manifest"]["source"]["loop_id"] == "Loop2"
+
+
+def test_candidate_manifest_failed_asset_checks_disable_package_creation_hint() -> None:
+    class Resolver:
+        def build_from_experiment(self, experiment_id: str):
+            manifest = _make_manifest()
+            return freeze_manifest(
+                manifest.model_copy(
+                    update={
+                        "manifest_sha256": None,
+                        "asset_checks": [
+                            AssetCheck(
+                                check_name="model_weight_exists",
+                                passed=False,
+                                message="missing historical model weight",
+                            )
+                        ],
+                    }
+                )
+            )
+
+    service = CandidateStrategyPackageService(
+        repository=InMemoryCandidateStrategyPackageRepository(),
+        resolver=Resolver(),
+    )
+
+    candidate = service.create_from_qe_experiment(
+        experiment_id="qe_missing_weight",
+        created_by="unit_test",
+        eligibility={"can_create_strategy_package": True},
+    )
+
+    assert candidate.completeness["strategy_package_manifest_available"] is True
+    assert candidate.completeness["failed_asset_checks"][0]["check_name"] == "model_weight_exists"
+    assert candidate.eligibility["can_create_strategy_package"] is False
+
+
+def test_candidate_from_qe_source_records_non_blocking_assembler_error() -> None:
+    class Resolver:
+        def build_from_experiment(self, experiment_id: str):
+            raise StrategyPackageValidationError(
+                "QE experiment missing execution_algo",
+                context={"experiment_id": experiment_id},
+            )
+
+    repo = InMemoryCandidateStrategyPackageRepository()
+    candidate_service = CandidateStrategyPackageService(repository=repo, resolver=Resolver())
+
+    candidate = candidate_service.create_from_qe_experiment(
+        experiment_id="qe_legacy_missing_runtime_contract",
+        created_by="unit_test",
+        snapshot_config={"ui_context": "legacy_experiment_detail"},
+    )
+
+    assert "strategy_package_manifest" not in candidate.snapshot_config
+    assert candidate.snapshot_config["ui_context"] == "legacy_experiment_detail"
+    assert candidate.completeness["strategy_package_manifest_available"] is False
+    assert candidate.completeness["snapshot_assembler_error"]["type"] == "StrategyPackageValidationError"
+    assert "missing execution_algo" in candidate.completeness["snapshot_assembler_error"]["message"]
+    assert candidate.audit_context["snapshot_assembler_status"] == "failed_non_blocking"
+
+    service = StrategyPackageService(
+        repository=InMemoryStrategyPackageRepository(),
+        candidate_service=candidate_service,
+    )
+    with pytest.raises(StrategyPackageValidationError, match="requires a strategy_package_manifest snapshot"):
+        service.create_from_candidate(candidate.candidate_id)
+
+
 def test_candidate_clone_and_soft_delete_do_not_touch_source_or_archive_refs() -> None:
     repo = InMemoryCandidateStrategyPackageRepository()
     service = CandidateStrategyPackageService(repository=repo)
@@ -171,6 +316,8 @@ def test_strategy_package_can_be_created_from_candidate_manifest_snapshot() -> N
     assert record.source_id == candidate.candidate_id
     assert record.run_id == "qear_run_candidate_source"
     assert record.current_manifest().source.source_type == SourceType.CANDIDATE_STRATEGY_PACKAGE
+    assert record.current_manifest().manifest_sha256 == record.manifest_sha256
+    assert record.manifest_sha256 != manifest.manifest_sha256
 
 
 def test_trading_core_schema_declares_durable_candidate_tables_without_qe_cascade() -> None:

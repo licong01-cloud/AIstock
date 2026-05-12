@@ -23,6 +23,7 @@ from .execution_policy import (
     normalize_execution_policy_json,
 )
 from .backtest_contract import validate_execution_policy_matches_manifest
+from .manifest import freeze_manifest
 from .metrics_summary import StrategyPackageMetricsSummary, metrics_summary_from_record
 from .model_state import (
     ModelRetrainJobStatus,
@@ -149,7 +150,7 @@ class StrategyPackageService:
                 "run_id": candidate.archive_run_id,
             }
         )
-        manifest = manifest.model_copy(update={"source": source})
+        manifest = freeze_manifest(manifest.model_copy(update={"source": source, "manifest_sha256": None}))
         self.validator.validate_manifest(manifest)
         return self.repository.save_manifest(manifest)
 

@@ -22,6 +22,9 @@ from backend.services.trading_core.errors import (
     StrategyPackageValidationError,
 )
 
+from .models import StrategyPackageManifest
+from .qe_source_resolver import QEExperimentSourceResolver
+
 ConnFactory = Callable[[], Iterator[Any]]
 
 
@@ -360,8 +363,129 @@ class InMemoryCandidateStrategyPackageRepository:
 
 
 class CandidateStrategyPackageService:
-    def __init__(self, repository: CandidateStrategyPackageRepository | None = None) -> None:
+    def __init__(
+        self,
+        repository: CandidateStrategyPackageRepository | None = None,
+        resolver: QEExperimentSourceResolver | Any | None = None,
+    ) -> None:
         self.repository = repository or PostgresCandidateStrategyPackageRepository()
+        self.resolver = resolver or QEExperimentSourceResolver()
+
+    def _snapshot_with_manifest(
+        self,
+        snapshot: dict[str, Any],
+        manifest: StrategyPackageManifest,
+    ) -> dict[str, Any]:
+        manifest_json = manifest.model_dump(mode="json")
+        failed_asset_checks = [check.model_dump(mode="json") for check in manifest.asset_checks if not check.passed]
+        model_asset_json = (
+            [asset.model_dump(mode="json") for asset in manifest.model_asset]
+            if isinstance(manifest.model_asset, list)
+            else manifest.model_asset.model_dump(mode="json")
+        )
+        snapshot_config = dict(snapshot.get("snapshot_config") or {})
+        snapshot_config.update(
+            {
+                "strategy_package_manifest": manifest_json,
+                "strategy_package_manifest_source": "QEExperimentSourceResolver",
+                "strategy_package_manifest_sha256": manifest.manifest_sha256,
+            }
+        )
+
+        factor_manifest = {
+            **dict(snapshot.get("factor_manifest") or {}),
+            "factor_set": [item.model_dump(mode="json") for item in manifest.factor_set],
+            "factor_ids": [item.factor_id for item in manifest.factor_set],
+        }
+        model_manifest = {
+            **dict(snapshot.get("model_manifest") or {}),
+            "model_asset": model_asset_json,
+        }
+        strategy_manifest = {
+            **dict(snapshot.get("strategy_manifest") or {}),
+            "strategy_config": manifest.strategy_config,
+            "execution_policy": manifest.execution_policy.model_dump(mode="json"),
+            "minute_execution_policy": manifest.minute_execution_policy.model_dump(mode="json"),
+            "portfolio_policy": manifest.portfolio_policy.model_dump(mode="json"),
+            "universe_policy": manifest.universe_policy.model_dump(mode="json"),
+        }
+        metric_snapshot = {
+            **dict(snapshot.get("metric_snapshot") or {}),
+            "backtest_summary": manifest.backtest_summary.model_dump(mode="json"),
+        }
+        completeness = {
+            **dict(snapshot.get("completeness") or {}),
+            "strategy_package_manifest_available": True,
+            "strategy_package_manifest_sha256": manifest.manifest_sha256,
+            "failed_asset_checks": failed_asset_checks,
+        }
+        eligibility = {
+            **dict(snapshot.get("eligibility") or {}),
+            "can_create_strategy_package": not failed_asset_checks,
+            "selection_or_paper_requires_package_validation": True,
+        }
+        audit_context = {
+            **dict(snapshot.get("audit_context") or {}),
+            "snapshot_assembler": "QEExperimentSourceResolver",
+            "snapshot_assembler_status": "assembled",
+            "snapshot_assembled_at": datetime.now(timezone.utc).isoformat(),
+        }
+        return {
+            **snapshot,
+            "snapshot_config": snapshot_config,
+            "factor_manifest": factor_manifest,
+            "model_manifest": model_manifest,
+            "strategy_manifest": strategy_manifest,
+            "metric_snapshot": metric_snapshot,
+            "completeness": completeness,
+            "eligibility": eligibility,
+            "audit_context": audit_context,
+        }
+
+    def _snapshot_with_assembler_error(
+        self,
+        snapshot: dict[str, Any],
+        exc: Exception,
+    ) -> dict[str, Any]:
+        completeness = {
+            **dict(snapshot.get("completeness") or {}),
+            "strategy_package_manifest_available": False,
+            "snapshot_assembler_error": {
+                "type": type(exc).__name__,
+                "message": str(exc),
+                "error_code": getattr(exc, "error_code", None),
+            },
+        }
+        audit_context = {
+            **dict(snapshot.get("audit_context") or {}),
+            "snapshot_assembler": "QEExperimentSourceResolver",
+            "snapshot_assembler_status": "failed_non_blocking",
+        }
+        return {
+            **snapshot,
+            "completeness": completeness,
+            "audit_context": audit_context,
+        }
+
+    def _assemble_from_qe_experiment(self, experiment_id: str, snapshot: dict[str, Any]) -> dict[str, Any]:
+        try:
+            manifest = self.resolver.build_from_experiment(experiment_id)
+        except Exception as exc:
+            return self._snapshot_with_assembler_error(snapshot, exc)
+        return self._snapshot_with_manifest(snapshot, manifest)
+
+    def _assemble_from_qe_loop(
+        self,
+        *,
+        task_id: str,
+        loop_id: str,
+        snapshot: dict[str, Any],
+    ) -> dict[str, Any]:
+        try:
+            manifest = self.resolver.build_from_evolution_loop(qe_task_id=task_id, qe_loop_id=loop_id)
+        except Exception as exc:
+            return self._snapshot_with_assembler_error(snapshot, exc)
+        return self._snapshot_with_manifest(snapshot, manifest)
 
     def create_candidate(
         self,
@@ -434,6 +558,7 @@ class CandidateStrategyPackageService:
         display_name: str | None = None,
         **snapshot: Any,
     ) -> CandidateStrategyPackageRecord:
+        snapshot = self._assemble_from_qe_experiment(experiment_id, dict(snapshot))
         return self.create_candidate(
             source_type=CandidateStrategyPackageSourceType.QE_EXPERIMENT,
             source_id=experiment_id,
@@ -456,6 +581,7 @@ class CandidateStrategyPackageService:
         if not task_id.strip() or not loop_id.strip():
             raise StrategyPackageValidationError("task_id and loop_id are required for QE loop candidate")
         source_id = loop_id if loop_id.startswith(f"{task_id}_") else f"{task_id}_{loop_id}"
+        snapshot = self._assemble_from_qe_loop(task_id=task_id, loop_id=loop_id, snapshot=dict(snapshot))
         return self.create_candidate(
             source_type=CandidateStrategyPackageSourceType.QE_EVOLUTION_LOOP,
             source_id=source_id,
