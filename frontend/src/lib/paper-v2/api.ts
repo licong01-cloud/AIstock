@@ -1,5 +1,7 @@
 import type {
   Activation,
+  CandidateStrategyPackage,
+  CandidateStrategyPackageInput,
   DataSource,
   ExecutionPolicy,
   HmmConfig,
@@ -128,6 +130,55 @@ export const strategyPackageApi = {
   async createFromQEEvolutionLoop(payload: { qe_task_id: string; qe_loop_id: string; resolve_runtime_assets?: boolean }): Promise<StrategyPackage> {
     const data = await apiFetch<{ package: StrategyPackage }>("/strategy-packages/from-qe-evolution-loop", body(payload));
     return data.package;
+  },
+  async createFromCandidate(candidateId: string, payload: { manifest_json?: JsonObject | null } = {}): Promise<StrategyPackage> {
+    const data = await apiFetch<{ package: StrategyPackage }>(
+      `/strategy-packages/from-candidate/${encodeURIComponent(candidateId)}`,
+      body(payload),
+    );
+    return data.package;
+  },
+  async candidateList(status = "ACTIVE", limit = 200): Promise<CandidateStrategyPackage[]> {
+    const qs = new URLSearchParams({ limit: String(limit) });
+    if (status) qs.set("status", status);
+    const data = await apiFetch<{ candidates: CandidateStrategyPackage[] }>(`/strategy-packages/candidates?${qs.toString()}`);
+    return data.candidates || [];
+  },
+  async candidate(candidateId: string): Promise<CandidateStrategyPackage> {
+    const data = await apiFetch<{ candidate: CandidateStrategyPackage }>(`/strategy-packages/candidates/${encodeURIComponent(candidateId)}`);
+    return data.candidate;
+  },
+  async createCandidateFromQEExperiment(
+    payload: CandidateStrategyPackageInput & { experiment_id: string },
+  ): Promise<CandidateStrategyPackage> {
+    const data = await apiFetch<{ candidate: CandidateStrategyPackage }>("/strategy-packages/candidates/from-qe-experiment", body(payload));
+    return data.candidate;
+  },
+  async createCandidateFromQELoop(
+    payload: CandidateStrategyPackageInput & { qe_task_id: string; qe_loop_id: string; experiment_id?: string | null },
+  ): Promise<CandidateStrategyPackage> {
+    const data = await apiFetch<{ candidate: CandidateStrategyPackage }>("/strategy-packages/candidates/from-qe-loop", body(payload));
+    return data.candidate;
+  },
+  async cloneCandidate(
+    candidateId: string,
+    payload: { created_by?: string; display_name?: string | null; overrides?: JsonObject } = {},
+  ): Promise<CandidateStrategyPackage> {
+    const data = await apiFetch<{ candidate: CandidateStrategyPackage }>(
+      `/strategy-packages/candidates/${encodeURIComponent(candidateId)}/clone`,
+      body(payload),
+    );
+    return data.candidate;
+  },
+  async deleteCandidate(
+    candidateId: string,
+    payload: { deleted_by?: string; delete_reason?: string | null } = {},
+  ): Promise<CandidateStrategyPackage> {
+    const data = await apiFetch<{ candidate: CandidateStrategyPackage }>(
+      `/strategy-packages/candidates/${encodeURIComponent(candidateId)}`,
+      { method: "DELETE", body: JSON.stringify(payload) },
+    );
+    return data.candidate;
   },
   async qeExperimentManifest(experimentId: string): Promise<JsonObject> {
     const data = await apiFetch<{ manifest: JsonObject }>(`/strategy-packages/from-qe-experiment/${encodeURIComponent(experimentId)}/manifest`);
