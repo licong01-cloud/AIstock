@@ -668,3 +668,20 @@ Phase 24 evidence:
 | production backend 8001 | not touched                                                                                                                                     |
 +-------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------+
 ```
+
+## 2026-05-13 Phase 32 Completed
+
+```text
++-------------------------+--------------------------------------------------------------------------------------------------------------+
+| item                    | value                                                                                                        |
++-------------------------+--------------------------------------------------------------------------------------------------------------+
+| script                  | scripts/financial_distress_phase32_direct_risk_policy_feasibility.py                                         |
+| report                  | docs/analysis/event_signal_financial_distress_phase32_direct_risk_policy_feasibility_result_20260513.md      |
+| rules / events          | 46 rules / 13,563 direct events                                                                              |
+| return rows             | 67,815 rows across T+1/T+5/T+20/T+60/T+120                                                                  |
+| risk candidates         | 37 risk-downweight candidates, 3 watchlist policy research rows, 0 hard-ban/forced-sell rows                 |
+| top evidence            | OCF yoy<=-50 + debt/assets>=70: T+60 median -2.58%, T+120 median -11.63%                                    |
+| decision                | use for next offline portfolio overlay research only; no runtime integration                                 |
+| production backend 8001 | not touched                                                                                                  |
++-------------------------+--------------------------------------------------------------------------------------------------------------+
+```

@@ -401,3 +401,17 @@ Generated reports  : reports/ is ignored; commit only curated docs and validatio
 | next empirical step                                    | DIRECT_RISK_POLICY   | study direct-event risk watchlist, sizing, and post-event distribution first   |
 +--------------------------------------------------------+----------------------+--------------------------------------------------------------------------------+
 ```
+
+## Phase 32 Direct-Risk Policy Feasibility Finding
+
+```text
++--------------------------------------------------------+--------------------------+--------------------------------------------------------------------------------+
+| item                                                   | decision                 | evidence                                                                       |
++--------------------------------------------------------+--------------------------+--------------------------------------------------------------------------------+
+| financial hard ban / forced sell                       | REJECT_NOW               | 0 hard policies; financial rules remain non-hard research-only                 |
+| direct-risk downweight candidates                      | RESEARCH_CANDIDATES      | 37/46 rules pass direct downside screen, mostly avoid-new-buy 20-60td          |
+| strongest direct-risk family                           | OCF_LEVERAGE_LIQUIDITY   | OCF decline + leverage/liquidity stress shows persistent median downside       |
+| expectation miss + actual indicator                    | EARLY_RISK_CANDIDATE     | T+20 abnormal median -4.56%, negative rate 71.35%                              |
+| next empirical step                                    | OFFLINE_PORTFOLIO_OVERLAY| test shortlisted avoid-new-buy/downweight rules outside QE/Paper runtime       |
++--------------------------------------------------------+--------------------------+--------------------------------------------------------------------------------+
+```
