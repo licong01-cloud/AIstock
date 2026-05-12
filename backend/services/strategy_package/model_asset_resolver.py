@@ -15,7 +15,7 @@ import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Mapping
 
 from backend.services.trading_core.execution_algo_capabilities import required_runtime_asset_keys
 from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
@@ -27,6 +27,8 @@ from .workspace_policy import ensure_not_forbidden_worker_workspace_path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_MODEL_CACHE_ROOT = PROJECT_ROOT / "rdagent_assets" / "model_cache" / "execution"
+
+AssetNamespaceLookup = Mapping[str, str | None] | Callable[[str], str | None]
 
 
 @dataclass(frozen=True)
@@ -43,9 +45,15 @@ class ResolvedModelAsset:
 class ModelAssetResolver:
     """Resolve execution model files into AIstock-accessible local paths."""
 
-    def __init__(self, cache_root: Path | str | None = None) -> None:
+    def __init__(
+        self,
+        cache_root: Path | str | None = None,
+        *,
+        asset_namespace_lookup: AssetNamespaceLookup | None = None,
+    ) -> None:
         root = cache_root or os.getenv("AISTOCK_MODEL_CACHE_DIR") or DEFAULT_MODEL_CACHE_ROOT
         self.cache_root = Path(root)
+        self._asset_namespace_lookup = asset_namespace_lookup
         ensure_not_forbidden_worker_workspace_path(self.cache_root, purpose="StrategyPackage model asset cache root")
 
     def resolve_manifest_assets(
@@ -115,6 +123,7 @@ class ModelAssetResolver:
     ) -> ResolvedModelAsset:
         algo_code = manifest.minute_execution_policy.algo_code.upper()
         config = manifest.minute_execution_policy.algo_config
+        asset_namespace = self._asset_namespace_for(algo_code, config)
         original_path = str(
             config.get(f"original_{config_key}")
             or (config.get("original_model_path") if config_key == "model_path" else None)
@@ -148,9 +157,16 @@ class ModelAssetResolver:
                 copied=False,
             )
 
-        destination = self._cache_destination(algo_code, original_path)
+        destination = self._cache_destination(asset_namespace, original_path)
         if self._is_existing_file(destination):
-            self._validate_cached_asset(destination, original_path, manifest.package_id, algo_code=algo_code, config_key=config_key)
+            self._validate_cached_asset(
+                destination,
+                original_path,
+                manifest.package_id,
+                algo_code=algo_code,
+                asset_namespace=asset_namespace,
+                config_key=config_key,
+            )
             return ResolvedModelAsset(
                 algo_code=algo_code,
                 config_key=config_key,
@@ -165,23 +181,25 @@ class ModelAssetResolver:
                 context={
                     "package_id": manifest.package_id,
                     "algo_code": algo_code,
+                    "asset_namespace": asset_namespace,
                     "config_key": config_key,
                     "asset_path": original_path,
                 },
             )
 
-        source = self._find_existing_source(original_path, algo_code=algo_code)
+        source = self._find_existing_source(original_path, algo_code=asset_namespace)
         if source is None:
             raise DataUnavailableError(
                 f"{algo_code} {config_key} is not accessible from AIstock backend",
                 context={
                     "package_id": manifest.package_id,
                     "algo_code": algo_code,
+                    "asset_namespace": asset_namespace,
                     "config_key": config_key,
                     "asset_path": original_path,
                     "cache_path": str(destination),
                     "attempted_paths": [
-                        str(path) for path in self._candidate_paths(original_path, algo_code=algo_code)
+                        str(path) for path in self._candidate_paths(original_path, algo_code=asset_namespace)
                     ],
                 },
             )
@@ -192,6 +210,7 @@ class ModelAssetResolver:
             original_path=original_path,
             package_id=manifest.package_id,
             algo_code=algo_code,
+            asset_namespace=asset_namespace,
             config_key=config_key,
         )
         return ResolvedModelAsset(
@@ -210,6 +229,7 @@ class ModelAssetResolver:
         original_path: str,
         package_id: str,
         algo_code: str,
+        asset_namespace: str,
         config_key: str,
     ) -> Path:
         self._ensure_positive_file(source, original_path, package_id)
@@ -219,7 +239,9 @@ class ModelAssetResolver:
         self._write_sidecar(
             destination,
             {
-                "algo_code": algo_code,
+                "algo_code": asset_namespace,
+                "requested_algo_code": algo_code,
+                "asset_namespace": asset_namespace,
                 "config_key": config_key,
                 "original_path": original_path,
                 "resolved_source_path": str(source),
@@ -238,6 +260,7 @@ class ModelAssetResolver:
         package_id: str,
         *,
         algo_code: str,
+        asset_namespace: str,
         config_key: str,
     ) -> None:
         self._ensure_positive_file(destination, original_path, package_id)
@@ -248,6 +271,7 @@ class ModelAssetResolver:
                 context={
                     "package_id": package_id,
                     "algo_code": algo_code,
+                    "asset_namespace": asset_namespace,
                     "config_key": config_key,
                     "asset_path": original_path,
                     "cache_path": str(destination),
@@ -262,6 +286,7 @@ class ModelAssetResolver:
                 context={
                     "package_id": package_id,
                     "algo_code": algo_code,
+                    "asset_namespace": asset_namespace,
                     "config_key": config_key,
                     "asset_path": original_path,
                     "sidecar_path": str(sidecar),
@@ -273,22 +298,27 @@ class ModelAssetResolver:
                 context={
                     "package_id": package_id,
                     "algo_code": algo_code,
+                    "asset_namespace": asset_namespace,
                     "config_key": config_key,
                     "asset_path": original_path,
                     "cache_path": str(destination),
                     "sidecar_original_path": metadata.get("original_path"),
                 },
             )
-        if metadata.get("algo_code") != algo_code:
+        sidecar_algo_code = metadata.get("algo_code")
+        sidecar_namespace = metadata.get("asset_namespace") or sidecar_algo_code
+        if sidecar_namespace != asset_namespace:
             raise DataUnavailableError(
-                "cached execution model sidecar does not match algorithm",
+                "cached execution model sidecar does not match asset namespace",
                 context={
                     "package_id": package_id,
                     "algo_code": algo_code,
+                    "asset_namespace": asset_namespace,
                     "config_key": config_key,
                     "asset_path": original_path,
                     "cache_path": str(destination),
-                    "sidecar_algo_code": metadata.get("algo_code"),
+                    "sidecar_algo_code": sidecar_algo_code,
+                    "sidecar_asset_namespace": metadata.get("asset_namespace"),
                 },
             )
         cached_size = metadata.get("cached_size")
@@ -298,6 +328,7 @@ class ModelAssetResolver:
                 context={
                     "package_id": package_id,
                     "algo_code": algo_code,
+                    "asset_namespace": asset_namespace,
                     "config_key": config_key,
                     "asset_path": original_path,
                     "cache_path": str(destination),
@@ -393,6 +424,30 @@ class ModelAssetResolver:
         stem = Path(original_path).stem or "model"
         safe_stem = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in stem)
         return self.cache_root / algo_code / f"{safe_stem}_{digest}{suffix}"
+
+    def _asset_namespace_for(self, algo_code: str, config: Mapping[str, Any]) -> str:
+        namespace = config.get("asset_namespace")
+        if namespace is None and self._asset_namespace_lookup is not None:
+            lookup = self._asset_namespace_lookup
+            namespace = lookup(algo_code) if callable(lookup) else lookup.get(algo_code)
+        normalized = str(namespace or algo_code).strip().upper()
+        if not normalized:
+            normalized = algo_code
+        if any(ch not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for ch in normalized):
+            raise DataUnavailableError(
+                "execution model asset namespace is invalid",
+                context={
+                    "algo_code": algo_code,
+                    "asset_namespace": namespace,
+                    "policy": "asset_namespace must be an algorithm-style cache directory name",
+                },
+            )
+        return normalized
+
+    def asset_namespace_for(self, algo_code: str, config: Mapping[str, Any]) -> str:
+        """Return the validated cache namespace used for an execution algo."""
+
+        return self._asset_namespace_for(algo_code, config)
 
     @staticmethod
     def _sidecar_path(destination: Path) -> Path:
