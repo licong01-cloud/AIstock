@@ -7,6 +7,10 @@ from dataclasses import asdict
 from typing import Any
 
 from .backfill_service import QEArchiveBackfillService
+from .listeners.qe_experiment_completed_listener import (
+    QEExperimentCompletedModelSyncListener,
+    qe_experiment_completed_model_sync_handler,
+)
 from .models import ClaimedOutboxEvent
 from .repository import QEArchiveRepository
 from .worker import ArchiveWorkerEventResult, ArchiveWorkerRunResult, QEArchiveWorker
@@ -24,11 +28,13 @@ class QEArchiveWorkerService:
         *,
         repository: QEArchiveRepository | None = None,
         backfill_service: QEArchiveBackfillService | None = None,
+        model_sync_listener: QEExperimentCompletedModelSyncListener | None = None,
         enabled: bool | None = None,
         worker_id: str = "qe_archive_api_worker",
     ) -> None:
         self._repository = repository or QEArchiveRepository()
         self._backfill_service = backfill_service or QEArchiveBackfillService(repository=self._repository)
+        self._model_sync_listener = model_sync_listener or qe_experiment_completed_model_sync_handler()
         self._enabled = enabled
         self._worker_id = worker_id
 
@@ -59,6 +65,9 @@ class QEArchiveWorkerService:
         return _archive_report_to_worker_result(report)
 
     def _handle_experiment_completed(self, event: ClaimedOutboxEvent) -> ArchiveWorkerEventResult:
+        if self._model_sync_listener.can_handle(event):
+            return self._model_sync_listener.handle(event)
+
         payload = _payload_dict(event.payload)
         experiment_id = _non_empty(payload.get("experiment_id")) or event.source_id
         if not experiment_id:
