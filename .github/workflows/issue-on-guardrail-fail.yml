@@ -16,6 +16,11 @@ on:
         required: true
         default: tmp/validation/guardrails/guardrail_scan.json
         type: string
+      dry_run:
+        description: Build and log the issue body without writing to GitHub Issues.
+        required: false
+        default: false
+        type: boolean
   workflow_run:
     workflows:
       - AIstock CI
@@ -49,6 +54,7 @@ jobs:
         env:
           INPUT_SEVERITY: ${{ inputs.severity || 'P1' }}
           INPUT_GUARDRAIL_RESULT: ${{ inputs.guardrail_result || '' }}
+          INPUT_DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
           RUN_URL: ${{ github.event.workflow_run.html_url || format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) }}
           WORKFLOW_NAME: ${{ github.event.workflow_run.name || 'manual guardrail dispatch' }}
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
@@ -114,9 +120,21 @@ jobs:
           {
             echo 'body_path=guardrail_issue_body.md'
             echo 'title_path=guardrail_issue_title.txt'
+            echo "dry_run=${INPUT_DRY_RUN}"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Report guardrail dry-run
+        if: steps.guardrail.outputs.dry_run == 'true'
+        shell: bash
+        run: |
+          echo "[dry-run] Would create or update guardrail issue with title:"
+          cat "${{ steps.guardrail.outputs.title_path }}"
+          echo
+          echo "[dry-run] Body:"
+          cat "${{ steps.guardrail.outputs.body_path }}"
+
       - name: Create or update guardrail issue
+        if: steps.guardrail.outputs.dry_run != 'true'
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}

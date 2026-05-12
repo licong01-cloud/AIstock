@@ -25,6 +25,11 @@ on:
         description: Short failure summary.
         required: true
         type: string
+      dry_run:
+        description: Log the issue that would be created or updated without writing to GitHub Issues.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   actions: read
@@ -47,12 +52,15 @@ jobs:
     steps:
       - name: Create or update failure issue
         uses: actions/github-script@v7
+        env:
+          INPUT_DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const isManual = context.eventName === 'workflow_dispatch';
+            const dryRun = isManual && String(process.env.INPUT_DRY_RUN || '').toLowerCase() === 'true';
 
             let severity;
             let sourceName;
@@ -115,6 +123,12 @@ jobs:
               '- No production DB write is requested by this issue.',
               '- This issue was created with `GITHUB_TOKEN` from a guarded workflow event.',
             ].join('\n');
+
+            if (dryRun) {
+              core.info(`[dry-run] Would create or update issue: ${title}`);
+              core.info(body);
+              return;
+            }
 
             if (existing.data.items.length) {
               const issue = existing.data.items[0];
