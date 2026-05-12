@@ -42,6 +42,7 @@ def test_maps_bug_json_to_github_issue_payload(tmp_path: Path) -> None:
     assert "bugs JSON entry remains the source of truth" in desired["body"]
     assert desired["state"] == "open"
     assert set(desired["labels"]) == {
+        "P1",
         "aistock:bug",
         "import:historical",
         "module:validation_center",
@@ -168,6 +169,33 @@ def test_issue_bug_id_falls_back_to_title_prefix() -> None:
     assert sync.issue_bug_id(issue) == "BUG-910"
 
 
+def test_issue_bug_id_handles_marker_variants_and_body_field() -> None:
+    marker_issue = sync.normalize_issue({
+        "number": 90,
+        "title": "missing title id",
+        "body": "<!-- AISTOCK_BUG_ID = bug-prep-001 -->",
+    })
+    field_issue = sync.normalize_issue({"number": 91, "title": "missing", "body": '"bug_id": "BUG-911",'})
+
+    assert sync.issue_bug_id(marker_issue) == "BUG-PREP-001"
+    assert sync.issue_bug_id(field_issue) == "BUG-911"
+
+
+def test_conflicting_issue_markers_are_skipped_for_safety(tmp_path: Path) -> None:
+    issue = {
+        "number": 912,
+        "title": "[BUG-912] conflict",
+        "body": "<!-- aistock-bug-id: BUG-912 --><!-- aistock-bug-id: BUG-913 -->",
+        "labels": ["severity:p1"],
+    }
+
+    plan = sync.plan_issues_to_json([issue], [], bugs_dir=tmp_path)
+
+    assert plan[0]["action"] == "skip"
+    assert plan[0]["reason"] == "conflicting_issue_markers"
+    assert plan[0]["bug_ids"] == ["BUG-912", "BUG-913"]
+
+
 def test_load_issues_snapshot_accepts_plain_list(tmp_path: Path) -> None:
     snapshot = tmp_path / "issues.json"
     snapshot.write_text(json.dumps([{"number": 11, "title": "[BUG-911] ok", "labels": ["P1"]}]), encoding="utf-8")
@@ -238,6 +266,24 @@ def test_plan_issues_to_json_updates_closed_status_for_existing_bug(tmp_path: Pa
     assert plan[0]["bug_id"] == bug["bug_id"]
 
 
+def test_closed_issue_status_prefers_verified_status_label(tmp_path: Path) -> None:
+    loaded = sync.load_bug_files(tmp_path) if tmp_path.exists() else []
+    issue = {
+        "number": 920,
+        "title": "[BUG-920] Verified upstream",
+        "body": "<!-- aistock-bug-id: BUG-920 -->",
+        "state": "closed",
+        "labels": ["severity:p1", "status:verified"],
+        "html_url": "https://github.example/issues/920",
+    }
+
+    plan = sync.plan_issues_to_json([issue], loaded, bugs_dir=tmp_path)
+
+    assert plan[0]["action"] == "create_json"
+    assert plan[0]["desired"]["status"] == "verified"
+    assert plan[0]["desired"]["closed_at"] is not None
+
+
 def test_apply_issues_to_json_plan_creates_file(tmp_path: Path) -> None:
     issue = {
         "number": 915,
@@ -255,6 +301,26 @@ def test_apply_issues_to_json_plan_creates_file(tmp_path: Path) -> None:
     assert created_path.exists()
     payload = json.loads(created_path.read_text(encoding="utf-8"))
     assert payload["bug_id"] == "BUG-GH-915"
+
+
+def test_apply_issues_to_json_plan_records_status_event(tmp_path: Path) -> None:
+    _write_bug(tmp_path, bug_id="BUG-916", severity="P1", status="open")
+    loaded = sync.load_bug_files(tmp_path)[0]
+    issue = {
+        "number": 916,
+        "title": "[BUG-916] Close me",
+        "body": "<!-- aistock-bug-id: BUG-916 -->",
+        "state": "closed",
+        "labels": ["severity:p1"],
+    }
+    plan = sync.plan_issues_to_json([issue], [loaded], bugs_dir=tmp_path)
+
+    results = sync.apply_issues_to_json_plan(plan)
+
+    payload = json.loads(Path(results[0]["path"]).read_text(encoding="utf-8"))
+    assert payload["status"] == "closed"
+    assert payload["closed_at"] is not None
+    assert payload["events"][-1]["action"] == "status_synced_from_github_issue"
 
 
 def test_apply_issues_to_json_plan_refuses_overwrite(tmp_path: Path) -> None:
@@ -311,3 +377,14 @@ def test_cli_bidirectional_dry_run_uses_issue_snapshot(tmp_path: Path, capsys: p
     assert payload["direction"] == "both"
     assert payload["json_to_issues_summary"] == {"create": 1}
     assert payload["issues_to_json_summary"] == {"create_json": 1}
+
+
+def test_cli_apply_json_to_issues_requires_token_even_with_snapshot(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _write_bug(tmp_path, bug_id="BUG-921", severity="P1")
+    snapshot = tmp_path / "issues.json"
+    snapshot.write_text(json.dumps({"issues": []}), encoding="utf-8")
+
+    code = sync.main(["--bugs-dir", str(tmp_path), "--issues-snapshot", str(snapshot), "--apply", "--repo", "owner/repo"])
+
+    assert code == 2
+    assert "--apply requires --token" in capsys.readouterr().err

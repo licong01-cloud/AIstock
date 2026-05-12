@@ -14,9 +14,15 @@ from urllib import error, request
 BUGS_DIR = Path("tests/aistock_validation/bugs")
 BUG_LABEL = "aistock:bug"
 HISTORICAL_IMPORT_LABEL = "import:historical"
-SYNC_MARKER_RE = re.compile(r"<!--\s*aistock-bug-id:\s*([^>\s]+)\s*-->", re.I)
+BUG_ID_RE = re.compile(r"\bBUG(?:-[A-Z0-9]+)*-\d+\b", re.I)
+SYNC_MARKER_RE = re.compile(r"<!--\s*aistock[-_\s]?bug[-_\s]?id\s*[:=]\s*([^>]+?)\s*-->", re.I | re.S)
 TITLE_PREFIX_RE = re.compile(r"^\[([^\]]+)\]")
+BODY_BUG_FIELD_RE = re.compile(
+    r'(?im)^\s*(?:"?bug_id"?|bug\s*id|aistock\s*bug\s*id)\s*[:=]\s*"?([A-Za-z0-9_.:-]+)"?\s*,?\s*$'
+)
 P0_P1 = {"P0", "P1"}
+CLOSED_BUG_STATUSES = {"fixed", "closed", "resolved", "verified"}
+OPEN_BUG_STATUSES = {"open", "reopened", "triaged", "in_progress", "in-progress", "blocked"}
 
 
 class BugGitHubSyncError(RuntimeError):
@@ -45,6 +51,11 @@ def _label_value(prefix: str, value: Any) -> str | None:
     raw = str(value).strip().lower()
     slug = re.sub(r"[^a-z0-9_.-]+", "-", raw).strip("-")
     return f"{prefix}:{slug}" if slug else None
+
+
+def normalize_bug_id(value: Any) -> str | None:
+    match = BUG_ID_RE.search(str(value or "").strip())
+    return match.group(0).upper() if match else None
 
 
 def load_bug_files(bugs_dir: Path = BUGS_DIR) -> list[dict[str, Any]]:
@@ -80,6 +91,9 @@ def issue_labels_for_bug(bug: dict[str, Any], *, historical_import: bool = False
         label = _label_value(prefix, bug.get(key))
         if label:
             labels.append(label)
+    severity = str(bug.get("severity") or "").upper()
+    if severity in P0_P1:
+        labels.append(severity)
     if historical_import:
         labels.append(HISTORICAL_IMPORT_LABEL)
     return sorted(dict.fromkeys(labels))
@@ -146,14 +160,55 @@ def normalize_issue(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def issue_marker_bug_ids(issue: dict[str, Any]) -> list[str]:
+    ids: list[str] = []
+    body = str(issue.get("body") or "")
+    for match in SYNC_MARKER_RE.finditer(body):
+        bug_id = normalize_bug_id(match.group(1))
+        if bug_id:
+            ids.append(bug_id)
+    return ids
+
+
+def issue_has_conflicting_markers(issue: dict[str, Any]) -> bool:
+    return len(dict.fromkeys(issue_marker_bug_ids(issue))) > 1
+
+
 def issue_bug_id(issue: dict[str, Any]) -> str | None:
-    body_match = SYNC_MARKER_RE.search(str(issue.get("body") or ""))
-    if body_match:
-        return body_match.group(1)
+    marker_ids = list(dict.fromkeys(issue_marker_bug_ids(issue)))
+    if marker_ids:
+        return marker_ids[0]
     title_match = TITLE_PREFIX_RE.search(str(issue.get("title") or ""))
-    if title_match and title_match.group(1).upper().startswith("BUG"):
-        return title_match.group(1)
+    if title_match:
+        bug_id = normalize_bug_id(title_match.group(1))
+        if bug_id:
+            return bug_id
+    title_bug = normalize_bug_id(str(issue.get("title") or "")[:120])
+    if title_bug:
+        return title_bug
+    for field_match in BODY_BUG_FIELD_RE.finditer(str(issue.get("body") or "")):
+        bug_id = normalize_bug_id(field_match.group(1))
+        if bug_id:
+            return bug_id
     return None
+
+
+def issue_status(issue: dict[str, Any]) -> str:
+    status_label: str | None = None
+    for label in issue.get("labels", []) or []:
+        raw = str(label).lower()
+        if raw.startswith("status:"):
+            status_label = raw.split(":", 1)[1].strip()
+            break
+
+    state = str(issue.get("state") or "open").lower()
+    if state == "closed":
+        if status_label in CLOSED_BUG_STATUSES:
+            return status_label
+        return "closed"
+    if status_label in OPEN_BUG_STATUSES:
+        return status_label
+    return "open"
 
 
 def issue_severity(issue: dict[str, Any]) -> str:
@@ -200,8 +255,7 @@ def bug_json_from_issue(issue: dict[str, Any], *, bug_id: str | None = None) -> 
     now = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     title = str(normalized.get("title") or "").strip()
     title = TITLE_PREFIX_RE.sub("", title).strip() or f"GitHub issue #{number}"
-    state = str(normalized.get("state") or "open").lower()
-    status = "closed" if state == "closed" else "open"
+    status = issue_status(normalized)
     return {
         "schema_version": "aistock_validation_bug_v1",
         "bug_id": resolved_bug_id,
@@ -219,7 +273,7 @@ def bug_json_from_issue(issue: dict[str, Any], *, bug_id: str | None = None) -> 
         "created_at": now,
         "first_seen_at": now,
         "last_seen_at": now,
-        "closed_at": now if status == "closed" else None,
+        "closed_at": now if status in CLOSED_BUG_STATUSES else None,
         "github_issue_number": number,
         "github_issue_url": normalized.get("html_url"),
         "events": [
@@ -250,6 +304,15 @@ def plan_issues_to_json(
 
     for raw_issue in issues:
         issue = normalize_issue(raw_issue)
+        marker_ids = list(dict.fromkeys(issue_marker_bug_ids(issue)))
+        if len(marker_ids) > 1:
+            plan.append({
+                "issue_number": issue.get("number"),
+                "action": "skip",
+                "reason": "conflicting_issue_markers",
+                "bug_ids": marker_ids,
+            })
+            continue
         severity = issue_severity(issue)
         if p0_p1_only and severity not in P0_P1:
             plan.append({
@@ -260,7 +323,7 @@ def plan_issues_to_json(
             })
             continue
 
-        bug_id = issue_bug_id(issue) or f"BUG-GH-{issue.get('number')}"
+        bug_id = marker_ids[0] if marker_ids else issue_bug_id(issue) or f"BUG-GH-{issue.get('number')}"
         existing = bugs_by_id.get(bug_id)
         desired = bug_json_from_issue(issue, bug_id=bug_id)
         if existing is None:
@@ -312,8 +375,21 @@ def apply_issues_to_json_plan(plan: list[dict[str, Any]]) -> list[dict[str, Any]
             if not path.exists():
                 raise BugGitHubSyncError(f"cannot update missing bug JSON: {path}")
             payload = json.loads(path.read_text(encoding="utf-8"))
+            previous_status = payload.get("status")
             payload.update(item["changes"])
-            payload["last_seen_at"] = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+            now = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+            if "status" in item["changes"]:
+                status = str(payload.get("status") or "").lower()
+                payload["closed_at"] = now if status in CLOSED_BUG_STATUSES else None
+                events = payload.setdefault("events", [])
+                if isinstance(events, list):
+                    events.append({
+                        "timestamp": now,
+                        "actor": "bug_github_sync.py",
+                        "action": "status_synced_from_github_issue",
+                        "note": f"GitHub issue #{item.get('issue_number')} status changed {previous_status!r} -> {payload.get('status')!r}.",
+                    })
+            payload["last_seen_at"] = now
             path.write_text(_json_safe(payload) + "\n", encoding="utf-8")
             results.append({"bug_id": item["bug_id"], "issue_number": item.get("issue_number"), "action": "updated_json", "path": str(path)})
             continue
@@ -340,7 +416,14 @@ def plan_json_to_issues(
     historical_import: bool = False,
     p0_p1_only: bool = False,
 ) -> list[dict[str, Any]]:
-    issues_by_bug_id = {bug_id: issue for issue in (existing_issues or []) if (bug_id := issue_bug_id(issue))}
+    issues_by_bug_id: dict[str, dict[str, Any]] = {}
+    for raw_issue in existing_issues or []:
+        issue = normalize_issue(raw_issue)
+        if issue_has_conflicting_markers(issue):
+            continue
+        bug_id = issue_bug_id(issue)
+        if bug_id:
+            issues_by_bug_id[bug_id] = issue
     plan: list[dict[str, Any]] = []
 
     for bug in bugs:
@@ -467,7 +550,7 @@ def summarize_plan(plan: list[dict[str, Any]]) -> dict[str, int]:
 
 def run(config: SyncConfig) -> dict[str, Any]:
     directions = {"json-to-issues"} if config.direction == "json-to-issues" else {"issues-to-json"} if config.direction == "issues-to-json" else {"json-to-issues", "issues-to-json"}
-    github_remote_needed = config.issues_snapshot is None and ("issues-to-json" in directions or (config.apply and "json-to-issues" in directions))
+    github_remote_needed = (config.apply and "json-to-issues" in directions) or (config.issues_snapshot is None and "issues-to-json" in directions)
     if config.apply and "json-to-issues" in directions and not config.token:
         raise BugGitHubSyncError("--apply requires --token or GITHUB_TOKEN; dry-run is the default offline mode")
     if github_remote_needed and not config.token:
@@ -476,7 +559,7 @@ def run(config: SyncConfig) -> dict[str, Any]:
         raise BugGitHubSyncError("--apply requires --repo owner/name or GITHUB_REPOSITORY")
 
     bugs = load_bug_files(config.bugs_dir)
-    if github_remote_needed or (config.apply and "json-to-issues" in directions):
+    if github_remote_needed:
         client = GitHubClient(repo=str(config.repo), token=str(config.token))
         existing = client.list_issues()
     else:
