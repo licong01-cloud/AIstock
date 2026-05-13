@@ -85,7 +85,7 @@ jobs:
         ports: ['5433:5432']
         env:
           POSTGRES_USER: aistock
-          POSTGRES_PASSWORD: ${{ secrets.TDX_DB_DEV_PASSWORD }}
+          POSTGRES_PASSWORD: aistock_dev_password
           POSTGRES_DB: aistock_dev
         options: >-
           --health-cmd "pg_isready -U aistock"
@@ -131,7 +131,7 @@ jobs:
           TDX_DB_PORT: 5433
           TDX_DB_NAME: aistock_dev
           TDX_DB_USER: aistock
-          TDX_DB_PASSWORD: ${{ secrets.TDX_DB_DEV_PASSWORD }}
+          TDX_DB_PASSWORD: aistock_dev_password
         run: python -m nox -s ${{ matrix.session }}
 
       - name: Upload validation artifacts
