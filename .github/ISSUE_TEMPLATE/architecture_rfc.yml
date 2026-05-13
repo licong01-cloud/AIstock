@@ -1,0 +1,122 @@
+name: Architecture RFC
+description: Request review or a decision for an AIstock architecture change.
+title: "[RFC] "
+labels:
+  - architecture
+  - rfc
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for architecture decisions that need durable review.
+        Link the detailed design doc when one exists; keep GitHub Issues as the workflow layer, not the only source of record.
+  - type: dropdown
+    id: rfc_status
+    attributes:
+      label: RFC status
+      options:
+        - Draft - feedback requested
+        - Decision needed
+        - Accepted - implementation planning
+        - Superseded or withdrawn
+    validations:
+      required: true
+  - type: input
+    id: design_doc
+    attributes:
+      label: Design doc or source of truth
+      description: Link the repo doc, cross-tool handoff, ADR, or issue that owns the detailed rationale.
+      placeholder: docs/architecture/example_design_YYYYMMDD.md
+    validations:
+      required: true
+  - type: input
+    id: owner
+    attributes:
+      label: Decision owner
+      description: Name the team, agent lane, or maintainer responsible for driving closure.
+      placeholder: strategy, Codex Team A, paper-v2, validation
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context and problem statement
+      description: Describe the current architecture, the pain, and why a decision is needed now.
+      placeholder: The existing validation pipeline stores canonical bugs in JSON, but needs a workflow layer for mobile triage.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed architecture
+      description: Include key data flow, ownership boundaries, compatibility requirements, and non-goals.
+      placeholder: |
+        - Keep bugs/ JSON as source of truth.
+        - Add GitHub Issues as UI/workflow mirror.
+        - Do not block existing nox or Validation Center flows.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and trade-offs
+      description: Include rejected options and why they are not preferred.
+      placeholder: |
+        - Linear/Jira: stronger PM workflow, but heavier migration.
+        - Cross-tool drawers only: fast, but weaker durable backlog UX.
+    validations:
+      required: true
+  - type: textarea
+    id: affected_components
+    attributes:
+      label: Affected components
+      description: List repo paths, services, DB schemas, workflows, UI pages, and external integrations.
+      placeholder: |
+        - .github/workflows/**
+        - tests/aistock_validation/bugs/**
+        - frontend/src/app/validation/**
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility and safety constraints
+      description: Call out production services, DB migrations, backward compatibility, dry-run mode, and fail-open/fail-closed behavior.
+      placeholder: |
+        - No production DB writes without explicit approval.
+        - Existing nox sessions must keep running even if the new workflow fails.
+        - New automation must support dry-run validation.
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation and rollout plan
+      description: List staged checks, owner for each validation layer, and rollback criteria.
+      placeholder: |
+        - Parse and lint YAML/workflow files.
+        - Run targeted tests for new scripts.
+        - Smoke on a non-production dev port before any production rollout.
+    validations:
+      required: true
+  - type: textarea
+    id: open_questions
+    attributes:
+      label: Open questions
+      description: List decision points, unresolved risks, or coordination needs.
+      placeholder: |
+        - Which labels are required before first import?
+        - Which team owns historical issue cleanup?
+    validations:
+      required: false
+  - type: checkboxes
+    id: coordination
+    attributes:
+      label: Coordination checks
+      options:
+        - label: I checked current cross-tool coordination before requesting this decision.
+          required: true
+        - label: I identified whether this affects production services, production DB, or live/paper trading paths.
+          required: true
+        - label: I linked or named the durable design document that remains the source of detailed rationale.
+          required: true
