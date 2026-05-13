@@ -65,6 +65,7 @@ def test_github_issue_list_defaults_to_local_registry(mcp_module, tmp_path: Path
     assert result["items"][0]["labels"] == [
         "aistock:bug",
         "module:qe",
+        "P1",
         "risk:runtime",
         "severity:p1",
         "status:open",
@@ -252,3 +253,155 @@ def test_github_issue_list_both_merges_live_mirror(mcp_module, tmp_path: Path, m
     assert item["registry_is_source_of_truth"] is True
     assert item["github_issue"]["number"] == 88
     assert item["html_url"] == "https://github.example/issues/88"
+
+
+def test_assign_bug_updates_registry_status_and_owner(mcp_module, tmp_path: Path):
+    path = _write_bug(tmp_path, "BUG-401", status="open", assigned_agent=None, fix_branch=None)
+
+    result = mcp_module.assign_bug(
+        "BUG-401",
+        assigned_agent="codex_app",
+        fix_branch="codex/fix-bug-401",
+        actor="pytest",
+        note="claiming for test",
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert result["current"]["status"] == "in_progress"
+    assert payload["status"] == "in_progress"
+    assert payload["assigned_agent"] == "codex_app"
+    assert payload["fix_branch"] == "codex/fix-bug-401"
+    assert payload["events"][-1]["action"] == "assigned"
+    assert result["github"] == {"synced": False, "reason": "sync_github_false"}
+
+
+def test_update_bug_status_records_fix_and_verification_fields(mcp_module, tmp_path: Path):
+    path = _write_bug(tmp_path, "BUG-402", status="in_progress")
+
+    fixed = mcp_module.update_bug_status(
+        "BUG-402",
+        "fixed",
+        actor="pytest",
+        fix_commit="abc1234",
+        note="fixed in test",
+    )
+    verified = mcp_module.update_bug_status(
+        "BUG-402",
+        "verified",
+        actor="pytest-reviewer",
+        verification_run_id="run-402",
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert fixed["current"]["status"] == "fixed"
+    assert payload["status"] == "verified"
+    assert payload["fix_commit"] == "abc1234"
+    assert payload["verification_run_id"] == "run-402"
+    assert payload["fixed_at"]
+    assert payload["closed_at"]
+    assert [event["action"] for event in payload["events"][-2:]] == ["status_changed", "status_changed"]
+    assert verified["current"]["verification_run_id"] == "run-402"
+
+
+def test_sync_bug_json_to_github_creates_issue_and_backfills_link(
+    mcp_module,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    path = _write_bug(tmp_path, "BUG-403", title="Sync create", module="mcp", severity="P1")
+    captured: dict[str, Any] = {}
+
+    class FakeGitHubClient:
+        def __init__(self, *, repo: str, token: str) -> None:
+            captured["repo"] = repo
+            captured["token"] = token
+
+        def list_issues(self, *, state: str = "open", labels: list[str] | None = None) -> list[dict[str, Any]]:
+            captured["list"] = {"state": state, "labels": labels}
+            return []
+
+        def create_issue(self, *, title: str, body: str, labels: list[str]) -> dict[str, Any]:
+            captured["created"] = {"title": title, "body": body, "labels": labels}
+            return {
+                "number": 403,
+                "title": title,
+                "body": body,
+                "state": "open",
+                "labels": [{"name": label} for label in labels],
+                "html_url": "https://github.example/issues/403",
+            }
+
+        def update_issue(self, number: int, changes: dict[str, Any]) -> dict[str, Any]:
+            raise AssertionError("open issue creation should not need a follow-up update")
+
+    monkeypatch.setenv("GH_TOKEN", "pytest-token")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setattr(mcp_module, "_github_client_factory", FakeGitHubClient)
+
+    result = mcp_module.mcp_github_issue_sync_bug("BUG-403", apply=True, actor="pytest")
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert result["results"][0]["action"] == "create"
+    assert captured["repo"] == "owner/repo"
+    assert captured["created"]["title"] == "[BUG-403] Sync create"
+    assert "<!-- aistock-bug-id: BUG-403 -->" in captured["created"]["body"]
+    assert "status:open" in captured["created"]["labels"]
+    assert payload["github_issue_number"] == 403
+    assert payload["github_issue_url"] == "https://github.example/issues/403"
+    assert payload["events"][-1]["action"] == "github_issue_created"
+
+
+def test_sync_github_to_json_backfills_status_label_and_link(
+    mcp_module,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    path = _write_bug(tmp_path, "BUG-404", status="open")
+
+    class FakeGitHubClient:
+        def __init__(self, *, repo: str, token: str) -> None:
+            self.repo = repo
+            self.token = token
+
+        def list_issues(self, *, state: str = "open", labels: list[str] | None = None) -> list[dict[str, Any]]:
+            assert state == "all"
+            return [
+                {
+                    "source": "github",
+                    "registry_is_source_of_truth": False,
+                    "bug_id": "BUG-404",
+                    "number": 404,
+                    "title": "[BUG-404] Remote verified",
+                    "body": "<!-- aistock-bug-id: BUG-404 -->",
+                    "state": "closed",
+                    "status": "verified",
+                    "severity": "P1",
+                    "module": "mcp",
+                    "labels": [
+                        "aistock:bug",
+                        "severity:p1",
+                        "module:mcp",
+                        "status:verified",
+                    ],
+                    "html_url": "https://github.example/issues/404",
+                }
+            ]
+
+    monkeypatch.setenv("GH_TOKEN", "pytest-token")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setattr(mcp_module, "_github_client_factory", FakeGitHubClient)
+
+    result = mcp_module.mcp_github_issue_sync_bug(
+        "BUG-404",
+        direction="github-to-json",
+        apply=True,
+        actor="pytest",
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert result["results"][0]["action"] == "update_json"
+    assert payload["github_issue_number"] == 404
+    assert payload["github_issue_url"] == "https://github.example/issues/404"
+    assert payload["status"] == "verified"
+    assert payload["closed_at"]
+    assert payload["events"][-1]["action"] == "github_issue_synced_to_json"

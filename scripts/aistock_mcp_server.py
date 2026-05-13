@@ -61,6 +61,7 @@ GITHUB_BUG_LABEL = "aistock:bug"
 GITHUB_STATE_VALUES = {"open", "closed", "all"}
 GITHUB_SOURCE_VALUES = {"local", "github", "both"}
 GITHUB_CLOSED_STATUSES = {"closed", "fixed", "resolved", "verified", "wontfix"}
+GITHUB_MANAGED_LABEL_PREFIXES = ("severity:", "module:", "status:", "risk:")
 GITHUB_MARKER_RE = re.compile(r"<!--\s*aistock-bug-id:\s*([^>\s]+)\s*-->", re.I)
 TITLE_PREFIX_RE = re.compile(r"^\[([^\]]+)\]")
 LOCAL_ENV_FILE = ".env.github-issues-local"
@@ -384,6 +385,12 @@ def _write_bug_record(record: dict[str, Any], slug: str) -> Path:
     return path
 
 
+def _write_existing_bug_record(path: Path, record: dict[str, Any]) -> None:
+    payload = dict(record)
+    payload.pop("_source_path", None)
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
 def _repo_relative_path(path: Path) -> str:
     try:
         return str(path.relative_to(REPO_ROOT)).replace("\\", "/")
@@ -406,6 +413,43 @@ def _load_bug_records() -> list[dict[str, Any]]:
         payload["_source_path"] = _repo_relative_path(path)
         records.append(payload)
     return records
+
+
+def _load_bug_record_by_id(bug_id: str) -> tuple[dict[str, Any], Path]:
+    safe_bug_id = _sanitize_identifier(bug_id, "bug_id")
+    if not BUG_ROOT.exists():
+        raise ValueError(f"bug registry does not exist: {_repo_relative_path(BUG_ROOT)}")
+    matches: list[tuple[dict[str, Any], Path]] = []
+    for path in sorted(BUG_ROOT.glob("*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"Failed to read bug JSON registry entry {path}: {exc}") from exc
+        if isinstance(payload, dict) and str(payload.get("bug_id") or "") == safe_bug_id:
+            record = dict(payload)
+            record["_source_path"] = _repo_relative_path(path)
+            matches.append((record, path))
+    if not matches:
+        raise ValueError(f"bug_id not found in registry: {safe_bug_id}")
+    if len(matches) > 1:
+        paths = ", ".join(_repo_relative_path(path) for _, path in matches)
+        raise RuntimeError(f"duplicate bug_id {safe_bug_id} in registry: {paths}")
+    return matches[0]
+
+
+def _append_bug_event(record: dict[str, Any], *, actor: str, action: str, note: str) -> None:
+    events = record.get("events")
+    if not isinstance(events, list):
+        events = []
+        record["events"] = events
+    events.append(
+        {
+            "timestamp": _utcnow_iso(),
+            "actor": actor or "mcp_agent",
+            "action": action,
+            "note": note,
+        }
+    )
 
 
 def _label_slug(value: Any) -> str | None:
@@ -435,6 +479,9 @@ def _github_labels_for_bug_record(record: dict[str, Any], extra_labels: list[str
         slug = _label_slug(record.get(key))
         if slug:
             labels.append(f"{prefix}:{slug}")
+    severity = str(record.get("severity") or "").upper()
+    if severity in {"P0", "P1"}:
+        labels.append(severity)
     labels.extend(extra_labels or [])
     return sorted(_dedupe_labels(labels), key=str.lower)
 
@@ -456,9 +503,12 @@ def _issue_body_for_bug_record(record: dict[str, Any]) -> str:
         "reproduce_command": record.get("reproduce_command"),
         "source_path": record.get("_source_path"),
     }
+    evidence = record.get("evidence_uris") or []
+    required = record.get("required_verification") or []
+    closure = record.get("closure_requirements") or []
     sections = [
         f"<!-- aistock-bug-id: {record.get('bug_id')} -->",
-        "<!-- managed-by: scripts/aistock_mcp_server.py -->",
+        "<!-- managed-by: scripts/bug_github_sync.py -->",
         "",
         "## Summary",
         str(record.get("description") or record.get("title") or "").strip() or "No description provided.",
@@ -471,6 +521,12 @@ def _issue_body_for_bug_record(record: dict[str, Any]) -> str:
         json.dumps({k: v for k, v in compact_fields.items() if v not in (None, "", [])}, ensure_ascii=False, indent=2, sort_keys=True),
         "```",
     ]
+    if evidence:
+        sections.extend(["", "## Evidence", *[f"- {item}" for item in evidence]])
+    if required:
+        sections.extend(["", "## Required Verification", *[f"- {item}" for item in required]])
+    if closure:
+        sections.extend(["", "## Closure Requirements", *[f"- {item}" for item in closure]])
     return "\n".join(sections).rstrip() + "\n"
 
 
@@ -599,8 +655,18 @@ def _issue_module_from_labels(labels: list[str]) -> str | None:
     return None
 
 
+def _issue_status_from_labels(labels: list[str], state: str | None) -> str:
+    for label in labels:
+        raw = label.lower()
+        if raw.startswith("status:"):
+            value = raw.split(":", 1)[1].strip()
+            return value or "open"
+    return "closed" if str(state or "").lower() == "closed" else "open"
+
+
 def _normalize_github_issue(raw: dict[str, Any]) -> dict[str, Any]:
     labels = _extract_label_names(raw)
+    state = raw.get("state") or "open"
     return {
         "source": "github",
         "registry_is_source_of_truth": False,
@@ -608,8 +674,8 @@ def _normalize_github_issue(raw: dict[str, Any]) -> dict[str, Any]:
         "number": raw.get("number"),
         "title": raw.get("title") or "",
         "body": raw.get("body") or "",
-        "state": raw.get("state") or "open",
-        "status": raw.get("state") or "open",
+        "state": state,
+        "status": _issue_status_from_labels(labels, state),
         "severity": _issue_severity_from_labels(labels),
         "module": _issue_module_from_labels(labels),
         "labels": labels,
@@ -722,6 +788,12 @@ class GitHubIssueClient:
             raise RuntimeError("GitHub Issues create returned unexpected payload")
         return _normalize_github_issue(created)
 
+    def update_issue(self, number: int, changes: dict[str, Any]) -> dict[str, Any]:
+        updated = self._request("PATCH", f"/issues/{number}", json_body=changes)
+        if not isinstance(updated, dict):
+            raise RuntimeError("GitHub Issues update returned unexpected payload")
+        return _normalize_github_issue(updated)
+
 
 _github_client_factory: Callable[..., GitHubIssueClient] = GitHubIssueClient
 
@@ -776,6 +848,194 @@ def _collect_issue_items(
         match["number"] = match.get("number") or remote.get("number")
         match["html_url"] = match.get("html_url") or remote.get("html_url")
     return merged
+
+
+def _github_labels_for_update(record: dict[str, Any], existing_labels: list[str] | None = None) -> list[str]:
+    preserved: list[str] = []
+    for label in existing_labels or []:
+        raw = str(label).strip()
+        lower = raw.lower()
+        if not raw or lower == GITHUB_BUG_LABEL or lower in {value.lower() for value in SEVERITY_VALUES}:
+            continue
+        if lower.startswith(GITHUB_MANAGED_LABEL_PREFIXES):
+            continue
+        preserved.append(raw)
+    return sorted(_dedupe_labels(preserved + _github_labels_for_bug_record(record, extra_labels=record.get("custom_github_labels") or [])), key=str.lower)
+
+
+def _find_matching_github_issue(record: dict[str, Any], issues: list[dict[str, Any]]) -> dict[str, Any] | None:
+    bug_id = str(record.get("bug_id") or "")
+    issue_number = record.get("github_issue_number")
+    for issue in issues:
+        if bug_id and issue.get("bug_id") == bug_id:
+            return issue
+    if isinstance(issue_number, int):
+        for issue in issues:
+            if issue.get("number") == issue_number:
+                return issue
+    return None
+
+
+def _desired_github_issue(record: dict[str, Any], *, existing_labels: list[str] | None = None) -> dict[str, Any]:
+    return {
+        "title": _issue_title_for_bug_record(record),
+        "body": _issue_body_for_bug_record(record),
+        "labels": _github_labels_for_update(record, existing_labels),
+        "state": _bug_state(record),
+    }
+
+
+def _github_issue_diff(existing: dict[str, Any], desired: dict[str, Any]) -> dict[str, Any]:
+    changes: dict[str, Any] = {}
+    for key in ("title", "body", "state"):
+        if str(existing.get(key) or "") != str(desired.get(key) or ""):
+            changes[key] = desired[key]
+    existing_labels = {str(label).lower() for label in existing.get("labels") or []}
+    desired_labels = {str(label).lower() for label in desired.get("labels") or []}
+    if existing_labels != desired_labels:
+        changes["labels"] = desired["labels"]
+    return changes
+
+
+def _sync_record_to_github(
+    record: dict[str, Any],
+    path: Path,
+    *,
+    client: GitHubIssueClient,
+    apply: bool,
+    actor: str,
+) -> dict[str, Any]:
+    issues = client.list_issues(state="all", labels=[GITHUB_BUG_LABEL])
+    existing = _find_matching_github_issue(record, issues)
+    desired = _desired_github_issue(record, existing_labels=existing.get("labels") if existing else None)
+
+    if existing is None:
+        result: dict[str, Any] = {
+            "action": "create",
+            "bug_id": record.get("bug_id"),
+            "dry_run": not apply,
+            "desired": desired,
+        }
+        if not apply:
+            return result
+        created = client.create_issue(title=desired["title"], body=desired["body"], labels=desired["labels"])
+        if desired["state"] == "closed" and created.get("state") != "closed":
+            created = client.update_issue(int(created["number"]), {"state": "closed"})
+        record["github_issue_number"] = created.get("number")
+        record["github_issue_url"] = created.get("html_url")
+        if created.get("html_url") and created.get("html_url") not in (record.get("evidence_uris") or []):
+            evidence = record.get("evidence_uris") if isinstance(record.get("evidence_uris"), list) else []
+            evidence.append(str(created["html_url"]))
+            record["evidence_uris"] = evidence
+        _append_bug_event(
+            record,
+            actor=actor,
+            action="github_issue_created",
+            note=f"Mirrored bug registry entry to GitHub issue #{created.get('number')}.",
+        )
+        _write_existing_bug_record(path, record)
+        result.update(
+            {
+                "github_issue_number": created.get("number"),
+                "github_issue_url": created.get("html_url"),
+                "state": created.get("state"),
+            }
+        )
+        return result
+
+    changes = _github_issue_diff(existing, desired)
+    link_changes: dict[str, Any] = {}
+    if existing.get("number") and record.get("github_issue_number") != existing.get("number"):
+        link_changes["github_issue_number"] = existing.get("number")
+    if existing.get("html_url") and record.get("github_issue_url") != existing.get("html_url"):
+        link_changes["github_issue_url"] = existing.get("html_url")
+
+    action = "update" if changes else "backfill_link" if link_changes else "noop"
+    result = {
+        "action": action,
+        "bug_id": record.get("bug_id"),
+        "dry_run": not apply,
+        "github_issue_number": existing.get("number"),
+        "github_issue_url": existing.get("html_url"),
+        "changes": changes,
+        "link_changes": link_changes,
+    }
+    if not apply:
+        return result
+    updated = existing
+    if changes:
+        updated = client.update_issue(int(existing["number"]), changes)
+    if link_changes:
+        record.update(link_changes)
+        _append_bug_event(
+            record,
+            actor=actor,
+            action="github_issue_backfilled",
+            note=f"Backfilled GitHub issue link #{existing.get('number')} into bug registry entry.",
+        )
+    if changes:
+        _append_bug_event(
+            record,
+            actor=actor,
+            action="github_issue_synced",
+            note=f"Synced bug registry entry to GitHub issue #{existing.get('number')}.",
+        )
+    if changes or link_changes:
+        _write_existing_bug_record(path, record)
+    result.update({"state": updated.get("state")})
+    return result
+
+
+def _sync_github_to_record(
+    record: dict[str, Any],
+    path: Path,
+    *,
+    client: GitHubIssueClient,
+    apply: bool,
+    actor: str,
+) -> dict[str, Any]:
+    issues = client.list_issues(state="all", labels=[GITHUB_BUG_LABEL])
+    existing = _find_matching_github_issue(record, issues)
+    if existing is None:
+        return {
+            "action": "noop",
+            "reason": "github_issue_not_found",
+            "bug_id": record.get("bug_id"),
+            "dry_run": not apply,
+        }
+
+    changes: dict[str, Any] = {}
+    if existing.get("number") and record.get("github_issue_number") != existing.get("number"):
+        changes["github_issue_number"] = existing.get("number")
+    if existing.get("html_url") and record.get("github_issue_url") != existing.get("html_url"):
+        changes["github_issue_url"] = existing.get("html_url")
+    remote_status = str(existing.get("status") or "").lower()
+    if remote_status and remote_status != str(record.get("status") or "").lower():
+        changes["status"] = remote_status
+    if remote_status in GITHUB_CLOSED_STATUSES and not record.get("closed_at"):
+        changes["closed_at"] = _utcnow_iso()
+
+    result = {
+        "action": "update_json" if changes else "noop",
+        "bug_id": record.get("bug_id"),
+        "dry_run": not apply,
+        "github_issue_number": existing.get("number"),
+        "github_issue_url": existing.get("html_url"),
+        "changes": changes,
+    }
+    if not apply or not changes:
+        return result
+
+    previous_status = record.get("status")
+    record.update(changes)
+    _append_bug_event(
+        record,
+        actor=actor,
+        action="github_issue_synced_to_json",
+        note=f"Synced GitHub issue #{existing.get('number')} to bug registry; status {previous_status!r} -> {record.get('status')!r}.",
+    )
+    _write_existing_bug_record(path, record)
+    return result
 
 
 # --- MCP server wiring ----------------------------------------------------
@@ -1203,6 +1463,204 @@ def mcp_github_issue_create(
         "path": str(path.relative_to(REPO_ROOT)).replace("\\", "/"),
         "fingerprint": fingerprint,
         "github": github_result,
+        "registry_is_source_of_truth": True,
+    }
+
+
+@mcp.tool()
+def assign_bug(
+    bug_id: str,
+    assigned_agent: str,
+    fix_branch: str | None = None,
+    actor: str = "mcp_agent",
+    note: str | None = None,
+    sync_github: bool = False,
+) -> dict[str, Any]:
+    """Claim/assign a bug and move it to ``in_progress`` in the JSON registry.
+
+    Set ``sync_github=True`` to mirror the updated assignment/status labels to
+    the linked GitHub Issue. Live GitHub sync requires ``GH_TOKEN`` and
+    ``GITHUB_REPOSITORY``.
+    """
+    if not isinstance(assigned_agent, str) or not assigned_agent.strip():
+        raise ValueError("assigned_agent must be a non-empty string")
+    record, path = _load_bug_record_by_id(bug_id)
+    previous = {
+        "status": record.get("status"),
+        "assigned_agent": record.get("assigned_agent"),
+        "fix_branch": record.get("fix_branch"),
+    }
+    record["assigned_agent"] = assigned_agent.strip()
+    record["status"] = "in_progress"
+    if fix_branch is not None:
+        record["fix_branch"] = fix_branch
+    record["last_seen_at"] = _utcnow_iso()
+    _append_bug_event(
+        record,
+        actor=actor,
+        action="assigned",
+        note=note or f"Assigned to {assigned_agent.strip()} via MCP.",
+    )
+    _write_existing_bug_record(path, record)
+
+    github: dict[str, Any] = {"synced": False, "reason": "sync_github_false"}
+    if sync_github:
+        github = _sync_record_to_github(
+            record,
+            path,
+            client=_github_issue_client_from_env(),
+            apply=True,
+            actor=actor,
+        )
+        github["synced"] = True
+    return {
+        "bug_id": record.get("bug_id"),
+        "path": _repo_relative_path(path),
+        "previous": previous,
+        "current": {
+            "status": record.get("status"),
+            "assigned_agent": record.get("assigned_agent"),
+            "fix_branch": record.get("fix_branch"),
+        },
+        "github": github,
+        "registry_is_source_of_truth": True,
+    }
+
+
+@mcp.tool()
+def update_bug_status(
+    bug_id: str,
+    status: str,
+    actor: str = "mcp_agent",
+    note: str | None = None,
+    fix_branch: str | None = None,
+    fix_commit: str | None = None,
+    verification_run_id: str | None = None,
+    sync_github: bool = False,
+) -> dict[str, Any]:
+    """Update a bug lifecycle status and optionally sync the mirror Issue.
+
+    Valid statuses are ``open``, ``in_progress``, ``fixed``, ``verified`` and
+    ``wontfix``. ``fixed`` records ``fixed_at``; ``verified``/``wontfix`` also
+    record ``closed_at`` when absent.
+    """
+    status_norm = str(status or "").strip().lower()
+    if status_norm not in STATUS_VALUES:
+        raise ValueError(f"status must be one of {sorted(STATUS_VALUES)}; got {status!r}")
+
+    record, path = _load_bug_record_by_id(bug_id)
+    previous = {
+        "status": record.get("status"),
+        "fix_branch": record.get("fix_branch"),
+        "fix_commit": record.get("fix_commit"),
+        "verification_run_id": record.get("verification_run_id"),
+        "fixed_at": record.get("fixed_at"),
+        "closed_at": record.get("closed_at"),
+    }
+    record["status"] = status_norm
+    record["last_seen_at"] = _utcnow_iso()
+    if fix_branch is not None:
+        record["fix_branch"] = fix_branch
+    if fix_commit is not None:
+        record["fix_commit"] = fix_commit
+    if verification_run_id is not None:
+        record["verification_run_id"] = verification_run_id
+    if status_norm == "fixed" and not record.get("fixed_at"):
+        record["fixed_at"] = _utcnow_iso()
+    if status_norm in {"verified", "wontfix"} and not record.get("closed_at"):
+        record["closed_at"] = _utcnow_iso()
+    _append_bug_event(
+        record,
+        actor=actor,
+        action="status_changed",
+        note=note or f"Status changed from {previous.get('status')!r} to {status_norm!r} via MCP.",
+    )
+    _write_existing_bug_record(path, record)
+
+    github: dict[str, Any] = {"synced": False, "reason": "sync_github_false"}
+    if sync_github:
+        github = _sync_record_to_github(
+            record,
+            path,
+            client=_github_issue_client_from_env(),
+            apply=True,
+            actor=actor,
+        )
+        github["synced"] = True
+    return {
+        "bug_id": record.get("bug_id"),
+        "path": _repo_relative_path(path),
+        "previous": previous,
+        "current": {
+            "status": record.get("status"),
+            "fix_branch": record.get("fix_branch"),
+            "fix_commit": record.get("fix_commit"),
+            "verification_run_id": record.get("verification_run_id"),
+            "fixed_at": record.get("fixed_at"),
+            "closed_at": record.get("closed_at"),
+        },
+        "github": github,
+        "registry_is_source_of_truth": True,
+    }
+
+
+@mcp.tool()
+def mcp_github_issue_sync_bug(
+    bug_id: str,
+    direction: str = "json-to-github",
+    apply: bool = False,
+    actor: str = "mcp_agent",
+) -> dict[str, Any]:
+    """Synchronize one BUG-NNN registry entry with its GitHub Issue mirror.
+
+    Directions:
+    - ``json-to-github``: create/update the GitHub Issue from bugs JSON and
+      backfill ``github_issue_number`` / ``github_issue_url``.
+    - ``github-to-json``: backfill the registry link/status from the matching
+      live GitHub Issue.
+    - ``both``: run ``github-to-json`` first, then mirror the resulting JSON
+      back to GitHub.
+
+    The default is dry-run. Pass ``apply=True`` to write to GitHub and/or the
+    local bug JSON file.
+    """
+    direction_norm = str(direction or "").strip().lower()
+    if direction_norm not in {"json-to-github", "github-to-json", "both"}:
+        raise ValueError("direction must be one of json-to-github, github-to-json, both")
+    record, path = _load_bug_record_by_id(bug_id)
+    client = _github_issue_client_from_env()
+    results: list[dict[str, Any]] = []
+
+    if direction_norm in {"github-to-json", "both"}:
+        results.append(
+            _sync_github_to_record(
+                record,
+                path,
+                client=client,
+                apply=apply,
+                actor=actor,
+            )
+        )
+        if apply:
+            record, path = _load_bug_record_by_id(bug_id)
+
+    if direction_norm in {"json-to-github", "both"}:
+        results.append(
+            _sync_record_to_github(
+                record,
+                path,
+                client=client,
+                apply=apply,
+                actor=actor,
+            )
+        )
+
+    return {
+        "bug_id": record.get("bug_id"),
+        "path": _repo_relative_path(path),
+        "direction": direction_norm,
+        "dry_run": not apply,
+        "results": results,
         "registry_is_source_of_truth": True,
     }
 
