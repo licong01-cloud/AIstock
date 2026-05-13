@@ -115,7 +115,7 @@ jobs:
             nox \
             fastapi 'uvicorn[standard]' pydantic 'pydantic-settings' python-dotenv \
             httpx 'httpx-sse' requests aiofiles openai reportlab schedule \
-            yfinance akshare ta pywencai \
+            yfinance akshare ta pywencai h5py \
             sqlalchemy alembic psycopg2-binary 'asyncpg' \
             pyyaml 'orjson' \
             pytest 'pytest-cov' 'pytest-asyncio' 'pytest-mock' \
