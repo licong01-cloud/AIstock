@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from backend.services.data_refresh_audit import DataRefreshAuditRepository
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
@@ -54,6 +55,8 @@ from .risk_targets import overlay_risk_forced_exit_targets
 
 
 MARKET_CLOSE = time(15, 0)
+LIVE_SESSION_TZ = ZoneInfo("Asia/Shanghai")
+STK_LIMIT_PREOPEN_READY_DEADLINE = time(9, 14)
 FINAL_ORDER_STATUSES = {OrderStatus.FILLED.value, OrderStatus.CANCELLED.value, OrderStatus.REJECTED.value}
 
 
@@ -229,6 +232,13 @@ class PaperTradingLiveMinuteExecutor:
 
         run = self.repository.get_run_by_portfolio_date(session.portfolio_id, as_of_time.date())
         if run is None:
+            waiting = self._wait_for_preopen_stk_limit_if_needed(
+                session,
+                trade_date=as_of_time.date(),
+                as_of_time=as_of_time,
+            )
+            if waiting is not None:
+                return self._progress(waiting.session_id)
             run = self._prepare_live_run(session, trade_date=as_of_time.date(), as_of_time=as_of_time)
             if run.status == RunStatus.SUCCEEDED:
                 return self._progress(session.session_id)
@@ -570,6 +580,96 @@ class PaperTradingLiveMinuteExecutor:
             started_at=session.started_at or datetime.now(UTC),
         )
         return run
+
+    def _wait_for_preopen_stk_limit_if_needed(
+        self,
+        session: PaperTradingSession,
+        *,
+        trade_date: date,
+        as_of_time: datetime,
+    ) -> PaperTradingSession | None:
+        portfolio = self.repository.get_portfolio(session.portfolio_id)
+        manifest = portfolio.frozen_manifest
+        execution_policy_context = self.day_helper._execution_policy_context_for_date(portfolio, trade_date)
+        execution_policy_json = execution_policy_context["policy_json"]
+        requirements = self.day_helper._data_requirements_for_policy(
+            execution_policy_json,
+            package_id=manifest.package_id,
+        )
+        if not requirements["requires_limit_price"]:
+            return None
+        try:
+            self.refresh_audit.require_success(dataset="stk_limit", trade_date=trade_date)
+        except DataUnavailableError as exc:
+            if self._is_before_stk_limit_preopen_deadline(as_of_time):
+                return self._save_waiting_live_data(
+                    session,
+                    trade_date=trade_date,
+                    message="paper v2 live session is waiting for pre-open stk_limit refresh",
+                    context={
+                        "dataset": "stk_limit",
+                        "trade_date": trade_date.isoformat(),
+                        "deadline_time": STK_LIMIT_PREOPEN_READY_DEADLINE.isoformat(timespec="minutes"),
+                        "timezone": str(LIVE_SESSION_TZ),
+                        "as_of_time": self._local_session_time(as_of_time).isoformat(),
+                        "reason": exc.to_dict(),
+                    },
+                )
+            raise DataUnavailableError(
+                "paper v2 live session requires stk_limit refresh by 09:14 before order preparation",
+                context={
+                    "dataset": "stk_limit",
+                    "trade_date": trade_date.isoformat(),
+                    "deadline_time": STK_LIMIT_PREOPEN_READY_DEADLINE.isoformat(timespec="minutes"),
+                    "timezone": str(LIVE_SESSION_TZ),
+                    "as_of_time": self._local_session_time(as_of_time).isoformat(),
+                    "reason": exc.to_dict(),
+                },
+            ) from exc
+        return None
+
+    @staticmethod
+    def _local_session_time(as_of_time: datetime) -> datetime:
+        if as_of_time.tzinfo is None:
+            return as_of_time
+        return as_of_time.astimezone(LIVE_SESSION_TZ)
+
+    @classmethod
+    def _is_before_stk_limit_preopen_deadline(cls, as_of_time: datetime) -> bool:
+        return cls._local_session_time(as_of_time).time() < STK_LIMIT_PREOPEN_READY_DEADLINE
+
+    def _save_waiting_live_data(
+        self,
+        session: PaperTradingSession,
+        *,
+        trade_date: date,
+        message: str,
+        context: dict[str, Any],
+    ) -> PaperTradingSession:
+        status = PaperSessionStatus.PAUSED if self._manual_tick_only(session) else PaperSessionStatus.LIVE_WAITING_FOR_BAR
+        self.repository.save_session_day(
+            PaperSessionDay(
+                session_id=session.session_id,
+                portfolio_id=session.portfolio_id,
+                trade_date=trade_date,
+                status=status,
+                phase=PaperSessionPhase.LIVE_INTRADAY,
+                data_source=session.live_data_source or MinuteDataSource.TDX_REALTIME,
+            )
+        )
+        self.repository.save_session_event(
+            session_id=session.session_id,
+            event_type="LIVE_WAITING_FOR_DATA",
+            message=message,
+            context=context,
+        )
+        self.repository.update_portfolio_status(session.portfolio_id, PortfolioStatus.RUNNING)
+        return self.repository.update_session_status(
+            session.session_id,
+            status=status,
+            phase=PaperSessionPhase.LIVE_INTRADAY,
+            started_at=session.started_at or datetime.now(UTC),
+        )
 
     def _process_live_run(
         self,

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
+import pytest
+
 from backend.services.paper_trading_v2.live_session import PaperTradingLiveMinuteExecutor
 from backend.services.paper_trading_v2.market_data import MinuteDataSource, MinuteExecutionMarketInput
 from backend.services.paper_trading_v2.models import (
@@ -20,6 +22,7 @@ from backend.services.paper_trading_v2.session import PaperTradingSessionRunner,
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
+from backend.services.trading_core.errors import DataUnavailableError
 from backend.services.trading_core.models import MinuteBar, OrderIntent, OrderSide, RunStatus
 from backend.services.trading_core.oms import OMS
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
@@ -71,6 +74,27 @@ class FakeReplayService:
                 ),
             ],
         )
+
+
+class MissingStkLimitAudit:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def require_success(self, *, dataset, trade_date, data_source=None, max_age_minutes=None):
+        self.calls.append(
+            {
+                "dataset": dataset,
+                "trade_date": trade_date,
+                "data_source": data_source,
+                "max_age_minutes": max_age_minutes,
+            }
+        )
+        if dataset == "stk_limit":
+            raise DataUnavailableError(
+                "required dataset refresh status is missing",
+                context={"dataset": dataset, "trade_date": trade_date.isoformat()},
+            )
+        return object()
 
 
 class FakeLiveMarket:
@@ -235,6 +259,66 @@ def test_live_session_injects_previous_trading_day_selection_cutoff() -> None:
 
     assert config["selection_artifact_config"]["cutoff_date"] == "2024-01-03"
     assert config["paper_v2_session"]["selection_cutoff_date"] == "2024-01-03"
+
+
+def test_live_session_waits_for_preopen_stk_limit_until_0914() -> None:
+    paper_repo, portfolio_id = make_portfolio_repo()
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+    )
+    audit = MissingStkLimitAudit()
+    live_executor = PaperTradingLiveMinuteExecutor(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=FakeLiveMarket([]),
+        refresh_audit=audit,
+    )
+
+    progress = PaperTradingSessionRunner(repository=paper_repo, live_executor=live_executor).tick(
+        session.session_id,
+        as_of_time=datetime(2024, 1, 2, 9, 13, 59),
+    )
+
+    assert progress.session.status == PaperSessionStatus.LIVE_WAITING_FOR_BAR
+    assert progress.session.phase == PaperSessionPhase.LIVE_INTRADAY
+    assert paper_repo.get_run_by_portfolio_date(portfolio_id, date(2024, 1, 2)) is None
+    events = paper_repo.list_session_events(session.session_id)
+    assert events[-1]["event_type"] == "LIVE_WAITING_FOR_DATA"
+    assert events[-1]["context"]["deadline_time"] == "09:14"
+    assert audit.calls[-1]["dataset"] == "stk_limit"
+
+
+def test_live_session_fails_if_stk_limit_missing_at_0914() -> None:
+    paper_repo, portfolio_id = make_portfolio_repo()
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+    )
+    live_executor = PaperTradingLiveMinuteExecutor(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=FakeLiveMarket([]),
+        refresh_audit=MissingStkLimitAudit(),
+    )
+
+    with pytest.raises(DataUnavailableError, match="requires stk_limit refresh by 09:14"):
+        PaperTradingSessionRunner(repository=paper_repo, live_executor=live_executor).tick(
+            session.session_id,
+            as_of_time=datetime(2024, 1, 2, 9, 14, 0),
+        )
+
+    failed = paper_repo.get_session(session.session_id)
+    assert failed.status == PaperSessionStatus.FAILED
+    assert failed.last_error is not None
+    assert failed.last_error["error_code"] == "DATA_UNAVAILABLE"
+    assert paper_repo.get_run_by_portfolio_date(portfolio_id, date(2024, 1, 2)) is None
 
 
 def test_catchup_replay_end_includes_current_day_only_after_close() -> None:
