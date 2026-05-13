@@ -1,0 +1,97 @@
+name: Feature Request
+description: Propose an AIstock workflow, UI, validation, or automation improvement.
+title: "[FEATURE] "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for additive AIstock improvements.
+        Production incidents, regressions, and confirmed defects should use the bug or regression forms instead.
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: P0/P1 defects belong in bug/regression forms; feature work normally starts at P2/P3.
+      options:
+        - P1 - roadmap-critical
+        - P2 - important
+        - P3 - nice to have
+    validations:
+      required: true
+  - type: input
+    id: module
+    attributes:
+      label: AIstock module
+      description: Prefer a module_id from tests/aistock_validation/catalog/module_registry.yaml when applicable.
+      placeholder: validation.center, qe.archive, paper_v2, strategy_package, frontend.validation
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or opportunity
+      description: Describe the workflow gap, user pain, or operational risk this feature addresses.
+      placeholder: It is hard to see which validation failures already have tracked fixes.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Summarize the smallest additive change that would solve the problem.
+      placeholder: Add a GitHub Issue link badge to the Validation Center run summary.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: List lower-risk, manual, or deferred options if known.
+      placeholder: |
+        - Keep tracking in cross-tool drawers only.
+        - Add a docs-only runbook instead of UI.
+    validations:
+      required: false
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Use verifiable bullets that can be checked before closing.
+      placeholder: |
+        - Users can open the linked GitHub Issue from the existing page.
+        - Existing nox sessions and Validation Center routes keep their current behavior.
+        - The feature works without production service or production DB changes.
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation plan
+      description: List expected tests, nox sessions, static checks, or UI smoke paths.
+      placeholder: |
+        - `python -m nox -s validation_center_backend`
+        - Static TypeScript/ESLint check for touched frontend files
+        - Manual UI smoke on a non-production dev port
+    validations:
+      required: true
+  - type: textarea
+    id: rollout
+    attributes:
+      label: Rollout and rollback notes
+      description: Mention flags, dry-run paths, docs/runbooks, or rollback steps.
+      placeholder: Feature is additive and can be hidden by removing the new link component.
+    validations:
+      required: false
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety checks
+      options:
+        - label: This request is additive and does not require production DB writes to evaluate.
+          required: true
+        - label: I identified whether existing nox, Validation Center, or paper/live trading flows are affected.
+          required: true
+        - label: I checked for an existing GitHub Issue, bugs/ JSON entry, or architecture doc that already covers this request.
+          required: false

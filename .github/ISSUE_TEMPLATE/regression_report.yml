@@ -1,0 +1,111 @@
+name: Regression Report
+description: Report a behavior that used to pass and now fails.
+title: "[REGRESSION] "
+labels:
+  - regression
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form when a previously green workflow, nox session, Validation Center plan, or runtime path regressed.
+        P0/P1 regressions are eligible for auto-file and urgent routing.
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - P0 - production/data loss/security/blocking
+        - P1 - release-blocking or major regression
+        - P2 - normal regression
+        - P3 - minor regression
+    validations:
+      required: true
+  - type: input
+    id: module
+    attributes:
+      label: AIstock module
+      description: Prefer a module_id from tests/aistock_validation/catalog/module_registry.yaml.
+      placeholder: validation.center, qe.archive, paper_v2, strategy_package
+    validations:
+      required: true
+  - type: input
+    id: last_good
+    attributes:
+      label: Last known good
+      description: Commit, tag, branch, run id, or date where the behavior passed.
+      placeholder: commit SHA, Actions run id, or Validation Center run id
+    validations:
+      required: true
+  - type: input
+    id: first_bad
+    attributes:
+      label: First known bad
+      description: Commit, branch, run id, or date where the behavior failed.
+      placeholder: commit SHA, Actions run id, or Validation Center run id
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Regression summary
+      placeholder: "`paper_v2_backend` passed on run A and fails on run B after ..."
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction command or workflow
+      description: Include the smallest command, workflow, or UI path that demonstrates the regression.
+      placeholder: |
+        `python -m nox -s paper_v2_backend`
+        or
+        GitHub Actions workflow/run URL:
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected prior behavior
+      placeholder: The session should pass and produce validation artifacts under tmp/validation/.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Current failing behavior
+      placeholder: The session exits with ...
+    validations:
+      required: true
+  - type: textarea
+    id: suspected_change
+    attributes:
+      label: Suspected change range
+      description: Link PRs, commits, or files if known.
+      placeholder: |
+        - PR:
+        - Commit range:
+        - Files:
+    validations:
+      required: false
+  - type: textarea
+    id: validation
+    attributes:
+      label: Closure validation
+      description: List evidence required to prove the regression is fixed.
+      placeholder: |
+        - Re-run failed nox session
+        - Re-run related L2/L3 plan
+        - Attach Actions or Validation Center run id
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety checks
+      options:
+        - label: This report does not include secrets, credentials, or private hostnames.
+          required: true
+        - label: I identified whether production service or production DB actions are required; if yes, they are only requested in comments with explicit approval.
+          required: true
+        - label: I checked for an existing bugs/ JSON entry or GitHub Issue before filing.
+          required: false

@@ -1,0 +1,184 @@
+name: Issue Auto Link
+
+on:
+  pull_request:
+    types:
+      - opened
+      - edited
+      - reopened
+      - synchronize
+      - ready_for_review
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to inspect.
+        required: true
+        type: number
+      dry_run:
+        description: Log planned issue/PR comments without writing them.
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: issue-auto-link-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  link-pr-to-issues:
+    name: Link PR closing keywords to issues
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Create or update issue link comments
+        uses: actions/github-script@v7
+        env:
+          INPUT_PR_NUMBER: ${{ github.event.inputs.pr_number || '' }}
+          INPUT_DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            async function main() {
+              const owner = context.repo.owner;
+              const repo = context.repo.repo;
+              const dryRun = String(process.env.INPUT_DRY_RUN || '').toLowerCase() === 'true';
+              let pr = context.payload.pull_request;
+
+              if (!pr) {
+                const prNumber = Number(process.env.INPUT_PR_NUMBER || 0);
+                if (!prNumber) {
+                  core.warning('No pull request payload or manual pr_number was provided.');
+                  return;
+                }
+                const response = await github.rest.pulls.get({
+                  owner,
+                  repo,
+                  pull_number: prNumber,
+                });
+                pr = response.data;
+              }
+
+              const issueNumbers = extractClosingIssueNumbers(
+                [pr.title || '', pr.body || ''].join('\n\n'),
+                owner,
+                repo
+              );
+
+              if (!issueNumbers.length) {
+                core.info(`PR #${pr.number} does not include Fixes/Closes/Resolves issue references.`);
+                return;
+              }
+
+              const prUrl = pr.html_url || `${context.serverUrl}/${owner}/${repo}/pull/${pr.number}`;
+              const headSha = pr.head?.sha || context.sha;
+              const refsText = issueNumbers.map((number) => `#${number}`).join(', ');
+              core.info(`PR #${pr.number} links closing keywords to: ${refsText}`);
+
+              const prSummaryMarker = `<!-- aistock-pr-auto-link-summary:${pr.number} -->`;
+              const prSummaryBody = [
+                prSummaryMarker,
+                '## AIstock issue auto-link',
+                '',
+                `Detected closing keyword references: ${refsText}`,
+                `Head commit: ${headSha}`,
+                '',
+                'GitHub Issues is the workflow layer. Keep `tests/aistock_validation/bugs/` or the linked design doc as the durable source of detailed evidence when required.',
+              ].join('\n');
+
+              if (dryRun) {
+                core.info(`[dry-run] Would upsert PR summary comment on PR #${pr.number}:`);
+                core.info(prSummaryBody);
+              } else {
+                await upsertIssueComment(owner, repo, pr.number, prSummaryMarker, prSummaryBody);
+              }
+
+              for (const issueNumber of issueNumbers) {
+                const marker = `<!-- aistock-pr-auto-link:${pr.number}:${issueNumber} -->`;
+                const body = [
+                  marker,
+                  `Linked PR: ${prUrl}`,
+                  '',
+                  `PR title: ${pr.title}`,
+                  `Head commit: ${headSha}`,
+                  '',
+                  'The PR uses a closing keyword (`Fixes`, `Closes`, or `Resolves`) for this issue. Verify closure evidence before merging if the issue maps to a BUG-NNN registry entry.',
+                ].join('\n');
+
+                if (dryRun) {
+                  core.info(`[dry-run] Would upsert link comment on issue #${issueNumber}:`);
+                  core.info(body);
+                  continue;
+                }
+
+                await upsertIssueComment(owner, repo, issueNumber, marker, body);
+              }
+            }
+
+            function extractClosingIssueNumbers(text, owner, repo) {
+              const numbers = new Set();
+              const blockPattern = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+((?:#\d+|https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/issues\/\d+)(?:[\s,]*(?:and\s+)?(?:#\d+|https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/issues\/\d+))*)/gi;
+              let blockMatch;
+              while ((blockMatch = blockPattern.exec(text)) !== null) {
+                const refs = blockMatch[1];
+                const refPattern = /#(\d+)|https:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/issues\/(\d+)/gi;
+                let refMatch;
+                while ((refMatch = refPattern.exec(refs)) !== null) {
+                  if (refMatch[1]) {
+                    numbers.add(Number(refMatch[1]));
+                    continue;
+                  }
+                  const refOwner = refMatch[2];
+                  const refRepo = refMatch[3];
+                  const refNumber = Number(refMatch[4]);
+                  if (
+                    refOwner.localeCompare(owner, undefined, { sensitivity: 'accent' }) === 0 &&
+                    refRepo.localeCompare(repo, undefined, { sensitivity: 'accent' }) === 0
+                  ) {
+                    numbers.add(refNumber);
+                  } else {
+                    core.info(`Skipping external issue URL ${refOwner}/${refRepo}#${refNumber}.`);
+                  }
+                }
+              }
+              return [...numbers].sort((a, b) => a - b);
+            }
+
+            async function upsertIssueComment(owner, repo, issueNumber, marker, body) {
+              try {
+                const comments = await github.paginate(github.rest.issues.listComments, {
+                  owner,
+                  repo,
+                  issue_number: issueNumber,
+                  per_page: 100,
+                });
+                const existing = comments.find((comment) => comment.body && comment.body.includes(marker));
+                if (existing) {
+                  await github.rest.issues.updateComment({
+                    owner,
+                    repo,
+                    comment_id: existing.id,
+                    body,
+                  });
+                  core.info(`Updated existing auto-link comment on #${issueNumber}.`);
+                  return;
+                }
+                const created = await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: issueNumber,
+                  body,
+                });
+                core.info(`Created auto-link comment ${created.data.html_url}.`);
+              } catch (error) {
+                core.warning(`Best-effort auto-link comment for #${issueNumber} failed: ${error.message}`);
+              }
+            }
+
+            await main().catch((error) => {
+              core.warning(`Issue auto-link completed with warning: ${error.message}`);
+            });

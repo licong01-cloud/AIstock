@@ -42,7 +42,7 @@ jobs:
       - name: Install nox + light deps
         run: |
           python -m pip install --upgrade pip
-          python -m pip install nox httpx pyyaml
+          python -m pip install nox httpx pyyaml pytest
 
       - name: nox -s l0
         run: python -m nox -s l0
@@ -85,7 +85,7 @@ jobs:
         ports: ['5433:5432']
         env:
           POSTGRES_USER: aistock
-          POSTGRES_PASSWORD: ${{ secrets.TDX_DB_DEV_PASSWORD }}
+          POSTGRES_PASSWORD: aistock_dev_password
           POSTGRES_DB: aistock_dev
         options: >-
           --health-cmd "pg_isready -U aistock"
@@ -114,7 +114,8 @@ jobs:
           python -m pip install \
             nox \
             fastapi 'uvicorn[standard]' pydantic 'pydantic-settings' python-dotenv \
-            httpx 'httpx-sse' \
+            httpx 'httpx-sse' requests aiofiles openai reportlab schedule \
+            yfinance akshare ta pywencai h5py \
             sqlalchemy alembic psycopg2-binary 'asyncpg' \
             pyyaml 'orjson' \
             pytest 'pytest-cov' 'pytest-asyncio' 'pytest-mock' \
@@ -131,7 +132,7 @@ jobs:
           TDX_DB_PORT: 5433
           TDX_DB_NAME: aistock_dev
           TDX_DB_USER: aistock
-          TDX_DB_PASSWORD: ${{ secrets.TDX_DB_DEV_PASSWORD }}
+          TDX_DB_PASSWORD: aistock_dev_password
         run: python -m nox -s ${{ matrix.session }}
 
       - name: Upload validation artifacts

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import MetricCard from "@/components/paper-v2/MetricCard";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
+import GitHubIssuesPanel from "@/components/validation/GitHubIssuesPanel";
 import {
   type JsonObject,
   type ValidationAgentContext,
@@ -777,6 +778,8 @@ export default function ValidationCenterPage() {
         <MetricCard label="质量发现" value={findingSummary?.finding_count ?? summary?.quality?.finding_count ?? health?.quality?.finding_count ?? "-"} hint="guardrail / legacy inventory" tone="warning" />
         <MetricCard label="Bug Registry" value={bugSummary?.bug_count ?? summary?.quality?.bug_count ?? health?.quality?.bug_count ?? "-"} hint={health?.production_8001_touched ? "异常：触碰 8001" : "read_only / agent-context"} tone={health?.production_8001_touched ? "danger" : "success"} />
       </section>
+
+      <GitHubIssuesPanel bugSummary={bugSummary} bugs={bugs.items} />
 
       <GitWorkspacePanel workspaceStatus={workspaceStatus} branchStatus={branchStatus} />
 

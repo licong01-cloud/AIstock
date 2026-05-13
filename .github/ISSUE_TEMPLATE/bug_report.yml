@@ -1,0 +1,104 @@
+name: Bug Report
+description: Report an AIstock defect and keep the bugs/ JSON registry as source of truth.
+title: "[BUG] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for user-visible or developer-visible defects.
+        GitHub Issues is a workflow layer; mirror accepted defects into `tests/aistock_validation/bugs/` when they need registry tracking.
+  - type: input
+    id: bug_id
+    attributes:
+      label: Existing BUG id
+      description: Use the canonical BUG-NNN id if this already exists in the validation bug registry.
+      placeholder: BUG-123 or new
+    validations:
+      required: false
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      description: P0/P1 defects are eligible for automation and urgent routing.
+      options:
+        - P0 - production/data loss/security/blocking
+        - P1 - release-blocking or major regression
+        - P2 - normal defect
+        - P3 - minor issue
+    validations:
+      required: true
+  - type: input
+    id: module
+    attributes:
+      label: AIstock module
+      description: Prefer a module_id from tests/aistock_validation/catalog/module_registry.yaml.
+      placeholder: validation.center, qe.archive, paper_v2, strategy_package
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One concise paragraph describing what is wrong and who is affected.
+      placeholder: The validation run page shows success while the backend run is still failed.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Include commands, routes, run ids, input payloads, and relevant branch/worktree.
+      placeholder: |
+        1. Run `python -m nox -s l0`
+        2. Open Validation Center run ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: The UI and backend status should agree and expose the failing plan key.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      placeholder: The UI reports success even though the runner result is failed.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Link logs, Actions runs, Validation Center run ids, screenshots, or bugs/ JSON files.
+      placeholder: |
+        - Actions run:
+        - Validation run id:
+        - bugs/ JSON path:
+    validations:
+      required: false
+  - type: textarea
+    id: validation
+    attributes:
+      label: Required validation
+      description: List nox sessions or Validation Center plan keys that must pass before closing.
+      placeholder: |
+        - `python -m nox -s l0`
+        - `python -m nox -s validation_center_backend`
+    validations:
+      required: false
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety checks
+      options:
+        - label: This report does not include secrets, credentials, or private hostnames.
+          required: true
+        - label: I checked whether this already exists in `tests/aistock_validation/bugs/` or open GitHub Issues.
+          required: false
+        - label: Production service or production DB action is not required to reproduce this issue.
+          required: false

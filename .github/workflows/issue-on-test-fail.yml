@@ -1,0 +1,167 @@
+name: Issue On Test Fail
+
+on:
+  workflow_run:
+    workflows:
+      - AIstock CI
+      - AIstock Nightly L3 + DR
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      severity:
+        description: P0/P1 only. Lower severities should be filed manually.
+        required: true
+        default: P1
+        type: choice
+        options:
+          - P1
+          - P0
+      run_url:
+        description: Failed Actions or Validation Center run URL.
+        required: true
+        type: string
+      summary:
+        description: Short failure summary.
+        required: true
+        type: string
+      dry_run:
+        description: Log the issue that would be created or updated without writing to GitHub Issues.
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+concurrency:
+  group: issue-on-test-fail-${{ github.event.workflow_run.id || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  file-p0-p1-issue:
+    name: File P0/P1 failure issue
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Issue writes are restricted to failed monitored workflows or explicit manual dispatch.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'failure')
+    steps:
+      - name: Create or update failure issue
+        uses: actions/github-script@v7
+        env:
+          INPUT_DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const isManual = context.eventName === 'workflow_dispatch';
+            const dryRun = isManual && String(process.env.INPUT_DRY_RUN || '').toLowerCase() === 'true';
+
+            let severity;
+            let sourceName;
+            let runId;
+            let runUrl;
+            let headBranch;
+            let headSha;
+            let summary;
+
+            if (isManual) {
+              severity = core.getInput('severity', { required: true });
+              if (!['P0', 'P1'].includes(severity)) {
+                core.setFailed('Only P0/P1 auto-file behavior is allowed.');
+                return;
+              }
+              sourceName = 'manual dispatch';
+              runId = String(context.runId);
+              runUrl = core.getInput('run_url', { required: true });
+              headBranch = context.ref.replace('refs/heads/', '');
+              headSha = context.sha;
+              summary = core.getInput('summary', { required: true });
+            } else {
+              const run = context.payload.workflow_run;
+              sourceName = run.name;
+              runId = String(run.id);
+              runUrl = run.html_url;
+              headBranch = run.head_branch;
+              headSha = run.head_sha;
+              severity = sourceName === 'AIstock Nightly L3 + DR' ? 'P1' : 'P1';
+              summary = `${sourceName} failed on ${headBranch}`;
+            }
+
+            const marker = `<!-- aistock-issue-on-test-fail:${runId} -->`;
+            const title = `[${severity}] ${summary}`;
+            const query = `repo:${owner}/${repo} is:issue in:body ${marker}`;
+            const existing = await github.rest.search.issuesAndPullRequests({ q: query, per_page: 1 });
+
+            const body = [
+              marker,
+              '## Automated AIstock test failure issue',
+              '',
+              `Severity: ${severity}`,
+              `Workflow/source: ${sourceName}`,
+              `Run: ${runUrl}`,
+              `Branch: ${headBranch}`,
+              `Commit: ${headSha}`,
+              '',
+              'This workflow auto-files P0/P1 only. The GitHub Issue is a workflow layer; `tests/aistock_validation/bugs/` remains the canonical bug registry when a BUG-NNN record is required.',
+              '',
+              '### Triage checklist',
+              '',
+              '- [ ] Confirm whether this is a real regression or infrastructure-only failure.',
+              '- [ ] If real, mirror or link a BUG-NNN entry under `tests/aistock_validation/bugs/`.',
+              '- [ ] Attach the minimal failing nox session, Validation Center run id, or Actions job log.',
+              '- [ ] Link the fixing PR with `Fixes #NNN` or `Closes #NNN`.',
+              '',
+              '### Safety',
+              '',
+              '- No production service restart is requested by this issue.',
+              '- No production DB write is requested by this issue.',
+              '- This issue was created with `GITHUB_TOKEN` from a guarded workflow event.',
+            ].join('\n');
+
+            if (dryRun) {
+              core.info(`[dry-run] Would create or update issue: ${title}`);
+              core.info(body);
+              return;
+            }
+
+            if (existing.data.items.length) {
+              const issue = existing.data.items[0];
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issue.number,
+                body: `Observed another failure for this run marker. Latest run: ${runUrl}`,
+              });
+              core.info(`Existing issue #${issue.number} already tracks run ${runId}.`);
+              return;
+            }
+
+            const labels = ['bug', 'ci', 'auto-filed', severity];
+            try {
+              const created = await github.rest.issues.create({
+                owner,
+                repo,
+                title,
+                body,
+                labels,
+              });
+              core.info(`Created issue #${created.data.number}.`);
+            } catch (error) {
+              if (error.status !== 422) {
+                throw error;
+              }
+              core.warning(`Could not apply labels (${labels.join(', ')}); retrying without labels.`);
+              const created = await github.rest.issues.create({
+                owner,
+                repo,
+                title,
+                body,
+              });
+              core.info(`Created issue #${created.data.number} without labels.`);
+            }
