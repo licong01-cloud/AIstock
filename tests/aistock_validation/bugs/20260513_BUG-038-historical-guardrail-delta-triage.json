@@ -15,6 +15,12 @@
       "actor": "codex_app",
       "note": "Created from 2026-05-13 guardrail delta scan. This is an aggregate triage issue, not authorization for broad runtime changes.",
       "timestamp": "2026-05-13T07:47:28Z"
+    },
+    {
+      "timestamp": "2026-05-13T13:23:21Z",
+      "actor": "codex_app",
+      "action": "triage_report_added",
+      "note": "Classified 44 new P0/P1 guardrail fingerprints; no business-code remediation in this step. See docs/operations/guardrail_delta_triage_20260513.md."
     }
   ],
   "evidence_uris": [
@@ -23,15 +29,18 @@
     "tmp/full_historical_rescan_20260513/guardrail_delta_vs_20260511.json (read-only scan artifact, gitignored)",
     "tmp/full_historical_rescan_20260513/targeted_pattern_scan.json (read-only scan artifact, gitignored)",
     "tests/aistock_validation/guardrails_baseline_20260511.json",
-    "docs/analysis/aistock_guardrail_baseline_20260504.md"
+    "docs/analysis/aistock_guardrail_baseline_20260504.md",
+    "docs/operations/guardrail_delta_triage_20260513.md",
+    "tmp/guardrail_delta_triage_20260513/guardrail_delta_current_vs_20260511.json (read-only scan artifact, gitignored)",
+    "tmp/guardrail_delta_triage_20260513/guardrail_delta_p0p1_triage.json (read-only scan artifact, gitignored)"
   ],
   "fingerprint": "historical_scan::p1::guardrail_delta_20260513",
   "first_seen_at": "2026-05-13T06:48:21Z",
   "github_issue_number": 19,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/19",
-  "last_seen_at": "2026-05-13T09:50:20Z",
+  "last_seen_at": "2026-05-13T13:23:21Z",
   "module": "validation.center",
-  "reproduce_command": "python scripts/aistock_guardrail_scan.py --baseline --baseline-json tests/aistock_validation/guardrails_baseline_20260511.json --fail-new-only --fail-on-severity NONE --output-json tmp/full_historical_rescan_20260513/guardrail_delta_vs_20260511.json --summary-md tmp/full_historical_rescan_20260513/guardrail_delta_vs_20260511.md",
+  "reproduce_command": "python scripts/aistock_guardrail_scan.py --baseline --baseline-json tests/aistock_validation/guardrails_baseline_20260511.json --fail-new-only --fail-on-severity NONE --output-json tmp/guardrail_delta_triage_20260513/guardrail_delta_current_vs_20260511.json --summary-md tmp/guardrail_delta_triage_20260513/guardrail_delta_current_vs_20260511.md",
   "required_verification": [
     "Review new P0/P1 fingerprints by owner and module before any remediation.",
     "Separate true new defects from scan line drift, generated artifacts, POC scripts, and known historical exceptions.",
@@ -41,12 +50,13 @@
   "risk_area": "guardrail_delta_triage",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "in_progress",
   "title": "Historical guardrail delta triage aggregate for 2026-05-13 rescan",
   "trigger_condition": {
     "new_fingerprints_total": 195,
     "new_p0_p1_total": 44,
     "scan_date": "2026-05-13",
     "scenario": "new guardrail fingerprints relative to 20260511 baseline"
-  }
+  },
+  "triage_report": "docs/operations/guardrail_delta_triage_20260513.md"
 }
