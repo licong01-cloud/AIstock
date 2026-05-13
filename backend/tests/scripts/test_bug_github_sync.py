@@ -154,6 +154,16 @@ def test_run_uses_offline_issue_snapshot_for_noop(tmp_path: Path, monkeypatch: p
     assert result["plan"][0]["bug_id"] == bug["bug_id"]
 
 
+def test_load_bug_files_accepts_utf8_bom(tmp_path: Path) -> None:
+    bug = _write_bug(tmp_path, bug_id="BUG-922", severity="P1")
+    target = tmp_path / "20260512_BUG-922.json"
+    target.write_text(json.dumps(bug), encoding="utf-8-sig")
+
+    loaded = sync.load_bug_files(tmp_path)
+
+    assert loaded[0]["bug_id"] == "BUG-922"
+
+
 def test_verified_bug_maps_to_closed_issue_state(tmp_path: Path) -> None:
     bug = _write_bug(tmp_path, bug_id="BUG-909", severity="P1", status="verified")
     bug["_source_path"] = "bug.json"
@@ -204,6 +214,15 @@ def test_load_issues_snapshot_accepts_plain_list(tmp_path: Path) -> None:
 
     assert issues[0]["number"] == 11
     assert issues[0]["labels"] == ["P1"]
+
+
+def test_load_issues_snapshot_accepts_utf8_bom(tmp_path: Path) -> None:
+    snapshot = tmp_path / "issues.json"
+    snapshot.write_text(json.dumps([{"number": 12, "title": "[BUG-912] ok", "labels": ["P1"]}]), encoding="utf-8-sig")
+
+    issues = sync.load_issues_snapshot(snapshot)
+
+    assert issues[0]["number"] == 12
 
 
 def test_issue_severity_prefers_labels_then_title() -> None:

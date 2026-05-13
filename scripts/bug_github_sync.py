@@ -64,7 +64,7 @@ def load_bug_files(bugs_dir: Path = BUGS_DIR) -> list[dict[str, Any]]:
 
     bugs: list[dict[str, Any]] = []
     for path in sorted(bugs_dir.glob("*.json")):
-        with path.open("r", encoding="utf-8") as handle:
+        with path.open("r", encoding="utf-8-sig") as handle:
             bug = json.load(handle)
         if not isinstance(bug, dict) or not bug.get("bug_id"):
             raise BugGitHubSyncError(f"invalid bug JSON missing bug_id: {path}")
@@ -374,7 +374,7 @@ def apply_issues_to_json_plan(plan: list[dict[str, Any]]) -> list[dict[str, Any]
         if action == "update_json":
             if not path.exists():
                 raise BugGitHubSyncError(f"cannot update missing bug JSON: {path}")
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
             previous_status = payload.get("status")
             payload.update(item["changes"])
             now = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -400,7 +400,7 @@ def apply_issues_to_json_plan(plan: list[dict[str, Any]]) -> list[dict[str, Any]
 def load_issues_snapshot(path: Path | None) -> list[dict[str, Any]]:
     if path is None:
         return []
-    with path.open("r", encoding="utf-8") as handle:
+    with path.open("r", encoding="utf-8-sig") as handle:
         payload = json.load(handle)
     if isinstance(payload, dict):
         payload = payload.get("issues", [])

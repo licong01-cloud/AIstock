@@ -1,22 +1,26 @@
-﻿# GitHub Issues Integration Validation Attempt - 2026-05-13
+# GitHub Issues Integration Live Validation - 2026-05-13
 
 ## Scope
 
 Branch: `codex/github-issues-integration-20260512`
-Head at validation start: `8c7e002`
+Head at validation start: `8c7e002`; validation-blocker doc commit: `961bca4`
 Worktree: `F:/Dev/AIstock_worktrees/github-issues-integration-20260512`
 
-Goal: run the proposed pre-merge validation gate, including local regression checks and a real GitHub issue round-trip smoke if credentials are available.
+Goal: run the proposed pre-merge validation gate, including local regression checks and a real GitHub issue round-trip smoke.
 
 ## Results
 
 ### Local / Branch Checks
 
-- Branch status: clean and aligned with `origin/codex/github-issues-integration-20260512` at `8c7e002`.
+- Branch status: clean and aligned with `origin/codex/github-issues-integration-20260512` at `8c7e002` before live-smoke follow-up edits.
 - `git diff --check origin/main...HEAD`: passed.
-- `python -m pytest backend/tests/scripts/test_bug_github_sync.py backend/tests/scripts/test_bug_github_webhook.py backend/tests/test_aistock_mcp_server.py backend/tests/scripts/test_aistock_mcp_github_issue_tools.py -q`: `69 passed in 2.19s`.
+- Initial regression suite: `python -m pytest backend/tests/scripts/test_bug_github_sync.py backend/tests/scripts/test_bug_github_webhook.py backend/tests/test_aistock_mcp_server.py backend/tests/scripts/test_aistock_mcp_github_issue_tools.py -q`
+  - Result: `69 passed in 2.19s`.
 - YAML parse check for `.github/ISSUE_TEMPLATE/*.yml` and `.github/workflows/*.yml`: `Parsed 9 YAML files`.
 - `cd frontend && npx tsc --noEmit --pretty false`: passed.
+- Live smoke found UTF-8 BOM input fragility in temporary PowerShell-generated JSON files. `scripts/bug_github_sync.py` was hardened to read bug files, issue snapshots, and update targets with `utf-8-sig`; regression tests were added.
+- Post-hardening regression suite: `python -m pytest backend/tests/scripts/test_bug_github_sync.py backend/tests/scripts/test_bug_github_webhook.py backend/tests/test_aistock_mcp_server.py backend/tests/scripts/test_aistock_mcp_github_issue_tools.py -q`
+  - Result: `71 passed in 1.93s`.
 
 ### Offline GitHub Sync Simulation
 
@@ -29,36 +33,48 @@ Goal: run the proposed pre-merge validation gate, including local regression che
 
 ### Live GitHub Round-Trip
 
-Blocked before any GitHub write:
+Authentication and network:
 
-- `gh --version`: available (`2.78.0`).
-- `gh auth status`: not logged in.
-- `GH_TOKEN`: missing.
-- `GITHUB_TOKEN`: missing.
+- `127.0.0.1:1080` SOCKS proxy was available and used for `gh auth login`.
+- `127.0.0.1:7890` was not listening during validation.
+- `gh auth status` after device-code login: logged in as `licong01-cloud`.
+- Repo check: `licong01-cloud/AIstock`, `hasIssuesEnabled=true`.
+- Local ignored env helper file `.env.github-issues-local` was created with only non-sensitive config (`GITHUB_REPOSITORY` + proxy URLs). No token was written to repo or env files.
 
-Because no GitHub credential is available, no live issue was created, updated, closed, or imported. This is intentional: the validation gate requires authenticated GitHub writes, and the script is designed to avoid live writes without an explicit token.
+Live smoke:
+
+1. Created temporary bug JSON under `%TEMP%/aistock_github_issue_smoke_20260513/bugs`.
+2. Ran `scripts/bug_github_sync.py --bugs-dir <temp> --repo licong01-cloud/AIstock --historical-import --apply --json`.
+   - Result: `status=applied`, `create=1`.
+   - Created issue: `https://github.com/licong01-cloud/AIstock/issues/1`.
+3. Updated the temporary bug JSON status to `fixed` and reran the same sync command.
+   - Result: `status=applied`, `update=1`.
+   - Issue `#1` was closed.
+4. Verified issue state with `gh issue view 1 --json number,title,state,url,labels --repo licong01-cloud/AIstock`.
+   - Result: `state=CLOSED`, URL `https://github.com/licong01-cloud/AIstock/issues/1`.
+   - Labels present: `P1`, `aistock:bug`, `import:historical`, `module:validation.center`, `risk:github_issues_live_smoke`, `severity:p1`, `status:fixed`.
+5. Fetched live issue payload via `gh api repos/licong01-cloud/AIstock/issues/1`, wrapped it as an issues snapshot, and ran `issues-to-json` import against a temp bugs dir.
+   - Dry-run result: `create_json=1`.
+   - Apply result: `created_json`, imported bug `BUG-GH-SMOKE-20260513`, `status=fixed`, `github_issue_number=1`, `github_issue_url=https://github.com/licong01-cloud/AIstock/issues/1`.
 
 ## Merge Readiness Assessment
 
-Current status: **not yet ready for main merge** if the merge gate requires real GitHub interoperability proof.
+Current status: **ready for PR / merge review** from the GitHub Issues integration perspective.
 
-Reason: local tests, typecheck, YAML parse, and dry-runs pass, but the real `bugs JSON -> GitHub Issue -> bugs JSON/status` round-trip has not been executed due to missing GitHub authentication.
+Reason: local tests, typecheck, YAML parse, offline dry-runs, and the real `bugs JSON -> GitHub Issue -> closed issue -> issue payload/imported bugs JSON` round-trip have passed.
 
-## Required Next Step
+Recommended remaining gates before merging to `main`:
 
-Authenticate GitHub in this environment, then run one live smoke using a temporary issue:
-
-1. Provide a token via `GH_TOKEN`/`GITHUB_TOKEN` or run `gh auth login` for `github.com`.
-2. Create a temporary P1 smoke bug JSON under a temporary bugs dir.
-3. Run `scripts/bug_github_sync.py --apply` to create the issue.
-4. Change the temporary bug status to `fixed` and rerun `--apply` to close/update the issue.
-5. Fetch the issue payload and run `scripts/bug_github_webhook.py` or `issues-to-json` import against a temporary bugs dir.
-6. Confirm the temporary issue is closed and labelled as a smoke/test artifact.
-7. Only then consider PR/merge to `main`.
+1. Review temporary issue `#1` and keep it closed as validation evidence.
+2. Confirm whether auto-created labels from the live smoke are acceptable; optionally recolor/standardize labels before importing historical bugs.
+3. Open PR from `codex/github-issues-integration-20260512` to `main`.
+4. Confirm GitHub Actions permissions allow issue writes on `main` after merge.
+5. Do not run the 36-bug historical import until explicitly authorized after merge.
 
 ## Production Safety
 
 - Production backend `8001`: not touched.
 - Production frontend `3000`: not touched.
 - Production DB: not touched.
-- No live GitHub writes were performed.
+- Live GitHub writes were limited to one temporary issue `#1`, which is closed.
+- No historical bugs were imported into GitHub Issues.
