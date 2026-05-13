@@ -1,0 +1,52 @@
+{
+  "assigned_agent": "codex_app",
+  "bug_id": "BUG-037",
+  "closed_at": null,
+  "closure_requirements": [
+    "Single authoritative writer and supported read API are documented and enforced by tests or guardrails.",
+    "Confirmed legacy-field compatibility paths are either removed, wrapped, or explicitly waived.",
+    "No duplicate child issues remain for the same factor metric defect."
+  ],
+  "created_at": "2026-05-13T07:47:28Z",
+  "description": "Aggregate historical issue for factor metrics/rating single-writer governance and legacy-field cleanup. The 2026-05-13 targeted scan found runtime/pipeline factor_metrics_legacy_surface hits=750 around factor metric, rating, eligibility, correlation, and standalone metric surfaces. This should be treated as a verification and remediation epic: confirm authoritative write paths and compatibility reads before changing code. Do not create separate issues for every static hit unless a focused reproduction proves a live bug.",
+  "events": [
+    {
+      "action": "aggregate_issue_created",
+      "actor": "codex_app",
+      "note": "Created from 2026-05-13 read-only targeted scan as aggregate issue for factor metric legacy debt.",
+      "timestamp": "2026-05-13T07:47:28Z"
+    }
+  ],
+  "evidence_uris": [
+    "tmp/full_historical_rescan_20260513/historical_rescan_report.md (read-only scan artifact, gitignored)",
+    "tmp/full_historical_rescan_20260513/guardrail_current_full.json (read-only scan artifact, gitignored)",
+    "tmp/full_historical_rescan_20260513/guardrail_delta_vs_20260511.json (read-only scan artifact, gitignored)",
+    "tmp/full_historical_rescan_20260513/targeted_pattern_scan.json (read-only scan artifact, gitignored)",
+    "docs/architecture/aistock_unresolved_quality_issues_20260429.md#P0-3/P0-5",
+    "docs/architecture/factor_legacy_metric_scripts_inventory_20260428.md",
+    "docs/architecture/aistock_high_priority_issue_audit_20260427.md#issue-5"
+  ],
+  "fingerprint": "historical_scan::p0::factor_metrics_single_writer::20260513",
+  "first_seen_at": "2026-05-13T06:48:21Z",
+  "github_issue_number": 18,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/18",
+  "last_seen_at": "2026-05-13T09:50:20Z",
+  "module": "aistock_backend",
+  "reproduce_command": "python scripts/bug_github_sync.py --historical-import --p0-p1-only --json # dry-run current BUG JSON/GitHub mirror before creating child bugs",
+  "required_verification": [
+    "Inventory current readers and writers for factor metrics, factor ratings, factor eligibility, and correlation/standalone metric surfaces.",
+    "Identify the authoritative service/API boundary and mark legacy compatibility paths explicitly.",
+    "For each confirmed live defect, split a child BUG with reproduction and allowed write scope.",
+    "Avoid QE experiment behavior changes unless coordinated with the QE window."
+  ],
+  "risk_area": "data_integrity",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "title": "Historical factor metrics single-writer and legacy-field cleanup aggregate",
+  "trigger_condition": {
+    "scan_date": "2026-05-13",
+    "scenario": "factor metric/rating legacy surfaces appear across runtime_or_pipeline code",
+    "targeted_pattern": "factor_metrics_legacy_surface"
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "assigned_agent": "codex_app",
+  "bug_id": "BUG-036",
+  "closed_at": null,
+  "closure_requirements": [
+    "No unresolved P0 runtime_or_pipeline ARCH-WSL-001 findings remain outside documented and justified exceptions.",
+    "Every exception has an owner, scope, and follow-up issue or waiver recorded.",
+    "Changed-files guardrail remains passing after remediation."
+  ],
+  "created_at": "2026-05-13T07:47:28Z",
+  "description": "Aggregate historical issue for WSL/Linux/local workstation path references and model/asset path hardcoding. The 2026-05-13 read-only rescan found current guardrail ARCH-WSL-001=141 and targeted runtime/pipeline local/WSL path hits=519. This is a backlog epic, not proof that every individual line is a live runtime bug. Treat each candidate as needing focused ownership, environment-contract review, and reproduction before code changes. Do not import the individual static findings as separate GitHub Issues.",
+  "events": [
+    {
+      "action": "aggregate_issue_created",
+      "actor": "codex_app",
+      "note": "Created from 2026-05-13 read-only historical rescan as an aggregate GitHub Issue candidate; individual line-level findings intentionally not imported.",
+      "timestamp": "2026-05-13T07:47:28Z"
+    }
+  ],
+  "evidence_uris": [
+    "tmp/full_historical_rescan_20260513/historical_rescan_report.md (read-only scan artifact, gitignored)",
+    "tmp/full_historical_rescan_20260513/guardrail_current_full.json (read-only scan artifact, gitignored)",
+    "tmp/full_historical_rescan_20260513/guardrail_delta_vs_20260511.json (read-only scan artifact, gitignored)",
+    "tmp/full_historical_rescan_20260513/targeted_pattern_scan.json (read-only scan artifact, gitignored)",
+    "docs/architecture/aistock_unresolved_quality_issues_20260429.md#P0-1/P0-2",
+    "docs/architecture/aistock_high_priority_issue_audit_20260427.md",
+    "tests/aistock_validation/guardrails_baseline_20260511.json"
+  ],
+  "fingerprint": "historical_scan::p0::wsl_local_asset_paths::20260513",
+  "first_seen_at": "2026-05-13T06:48:21Z",
+  "github_issue_number": 17,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/17",
+  "last_seen_at": "2026-05-13T09:50:20Z",
+  "module": "architecture",
+  "reproduce_command": "python scripts/aistock_guardrail_scan.py --baseline --fail-on-severity NONE --output-json tmp/full_historical_rescan_20260513/guardrail_current_full.json --summary-md tmp/full_historical_rescan_20260513/guardrail_current_full.md",
+  "required_verification": [
+    "Classify each top runtime_or_pipeline path hit as runtime-required, script-only, test/debug-only, or stale.",
+    "For runtime-required paths, replace workstation/WSL paths with explicit config, artifact registry, or task-scoped workspace contract.",
+    "Run guardrail scan and a targeted smoke proving no new portability regression for touched modules.",
+    "Do not touch Paper/Paper simulation or QE experiment runtime paths owned by other windows without separate approval."
+  ],
+  "risk_area": "portability_reproducibility",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "title": "Historical WSL/local asset path debt aggregate - portability and reproducibility risk",
+  "trigger_condition": {
+    "guardrail_rule": "ARCH-WSL-001",
+    "scan_date": "2026-05-13",
+    "scenario": "tracked runtime_or_pipeline code contains environment-specific paths or asset references",
+    "targeted_pattern": "local_wsl_absolute_paths"
+  }
+}
