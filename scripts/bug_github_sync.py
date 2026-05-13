@@ -208,7 +208,7 @@ def normalize_issue(raw: dict[str, Any]) -> dict[str, Any]:
         "body": raw.get("body") or "",
         "state": raw.get("state") or "open",
         "labels": sorted(dict.fromkeys(labels)),
-        "html_url": raw.get("html_url"),
+        "html_url": raw.get("html_url") or raw.get("url"),
     }
 
 

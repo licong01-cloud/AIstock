@@ -824,6 +824,7 @@ def validation_center_backend(session: nox.Session) -> None:
         "backend/tests/test_aistock_validate_metadata.py",
         "backend/tests/test_aistock_validate_coverage.py",
         "backend/tests/test_aistock_mcp_server.py",
+        "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
         "--cov=backend.services.validation",
         "--cov=backend.routers.validation",
         "--cov=scripts.aistock_mcp_server",

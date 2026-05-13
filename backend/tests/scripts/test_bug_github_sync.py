@@ -238,6 +238,12 @@ def test_issue_module_uses_module_label() -> None:
     assert sync.issue_module(issue) == "validation.center"
 
 
+def test_normalize_issue_accepts_gh_cli_url_alias() -> None:
+    issue = sync.normalize_issue({"number": 911, "title": "ok", "url": "https://github.example/issues/911"})
+
+    assert issue["html_url"] == "https://github.example/issues/911"
+
+
 def test_plan_issues_to_json_creates_missing_bug_entry(tmp_path: Path) -> None:
     issue = {
         "number": 912,

@@ -1,50 +1,52 @@
 {
-  "schema_version": "aistock_validation_bug_v1",
-  "bug_id": "BUG-019",
-  "title": "prepare_factors.py SyntaxError — rstrip('/\\\\') 反斜杠未转义",
-  "description": "scripts/prepare_factors.py 中 rstrip('/\\\\') 调用因反斜杠未转义触发 SyntaxError 或运行时未按预期剥除路径分隔符。修复：使用 r'/\\\\\\\\' 原始字符串或显式分别 rstrip('/').rstrip('\\\\\\\\')。从 MEMORY pending_fixes.md 提取。",
-  "module": "scripts",
-  "severity": "P1",
-  "risk_area": "runtime_crash",
-  "status": "open",
-  "trigger_condition": {
-    "scenario": "prepare_factors_invocation_on_windows"
-  },
-  "reproduce_command": "python scripts/prepare_factors.py --workdir 'F:/Dev/...'  # SyntaxError or wrong path normalization",
-  "failing_run_id": null,
-  "evidence_uris": [
-    "memory:pending_fixes.md"
-  ],
-  "fingerprint": "scripts::prepare_factors::rstrip_unescaped_backslash",
-  "assigned_agent": null,
-  "fix_branch": null,
-  "fix_commit": null,
-  "verification_run_id": null,
-  "created_at": "2026-04-17T00:00:00Z",
-  "first_seen_at": "2026-04-17T00:00:00Z",
-  "last_seen_at": "2026-04-17T00:00:00Z",
-  "fixed_at": null,
-  "submitted_at": null,
-  "closed_at": null,
   "allowed_write_scope": [
     "scripts/prepare_factors.py"
   ],
-  "suspected_modules": [
-    "scripts/"
+  "assigned_agent": null,
+  "bug_id": "BUG-019",
+  "closed_at": null,
+  "closure_requirements": [
+    "Both path styles handled correctly"
   ],
+  "created_at": "2026-04-17T00:00:00Z",
+  "description": "scripts/prepare_factors.py 中 rstrip('/\\\\') 调用因反斜杠未转义触发 SyntaxError 或运行时未按预期剥除路径分隔符。修复：使用 r'/\\\\\\\\' 原始字符串或显式分别 rstrip('/').rstrip('\\\\\\\\')。从 MEMORY pending_fixes.md 提取。",
+  "events": [
+    {
+      "action": "discovered",
+      "actor": "claude_code",
+      "note": "Found during multi-alpha worker setup on Windows host",
+      "timestamp": "2026-04-17T00:00:00Z"
+    }
+  ],
+  "evidence_uris": [
+    "memory:pending_fixes.md"
+  ],
+  "failing_run_id": null,
+  "fingerprint": "scripts::prepare_factors::rstrip_unescaped_backslash",
+  "first_seen_at": "2026-04-17T00:00:00Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 5,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5",
+  "last_seen_at": "2026-05-13T07:03:20Z",
+  "module": "scripts",
+  "reproduce_command": "python scripts/prepare_factors.py --workdir 'F:/Dev/...'  # SyntaxError or wrong path normalization",
   "required_verification": [
     "python -m py_compile scripts/prepare_factors.py",
     "Smoke run with windows-style and unix-style paths"
   ],
-  "closure_requirements": [
-    "Both path styles handled correctly"
+  "risk_area": "runtime_crash",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "submitted_at": null,
+  "suspected_modules": [
+    "scripts/"
   ],
-  "events": [
-    {
-      "timestamp": "2026-04-17T00:00:00Z",
-      "actor": "claude_code",
-      "action": "discovered",
-      "note": "Found during multi-alpha worker setup on Windows host"
-    }
-  ]
+  "title": "prepare_factors.py SyntaxError — rstrip('/\\\\') 反斜杠未转义",
+  "trigger_condition": {
+    "scenario": "prepare_factors_invocation_on_windows"
+  },
+  "verification_run_id": null
 }
