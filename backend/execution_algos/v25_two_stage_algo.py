@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional
 import numpy as np
 
 from .base_algo import BaseExecutionAlgo, OrderState, StepResult
+from .board_lot import round_to_board_lot
 from .registry import register
 from .v25_core import (
     EARLY_LEN,
@@ -274,9 +275,10 @@ class V25TwoStageAlgo(BaseExecutionAlgo):
             step_qty = min(step_qty, remaining)
             reason = f"V25_TWO_STAGE step {state.step + 1}/{horizon}"
 
+        step_qty = round_to_board_lot(step_qty, stock_id, side=side)
         state.step += 1
         if step_qty <= 0:
-            self._last_no_fill_reason = "round_lot_zero"
+            self._last_no_fill_reason = "board_lot_zero"
             self._last_no_fill_context = {"cur_step": cur_step, "remaining_quantity": remaining}
             return None
 

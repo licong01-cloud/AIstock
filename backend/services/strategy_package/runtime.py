@@ -11,6 +11,7 @@ import math
 from datetime import date
 from typing import Any
 
+from backend.execution_algos.board_lot import round_to_board_lot
 from backend.services.selection_center.hmm_runtime import SectorHMMRuntime
 from backend.services.selection_center.models import SelectionCandidate, SignalSnapshot, TargetPosition
 from backend.services.selection_center.runtime_profile import normalize_selection_runtime_config, parse_selection_runtime_profile
@@ -475,8 +476,7 @@ class TargetPositionEngine:
                 continue
             target_value = min(total_equity * weight, float(params["max_single_order_value"]))
             raw_quantity = int(target_value / candidate.reference_price)
-            lot_size = int(params.get("lot_size") or 100)
-            quantity = (raw_quantity // lot_size) * lot_size
+            quantity = round_to_board_lot(raw_quantity, symbol, side="BUY")
             if quantity <= 0:
                 continue
             targets.append(
@@ -711,9 +711,9 @@ class RebalanceEngine:
                 continue
             side = OrderSide.BUY if delta > 0 else OrderSide.SELL
             quantity = abs(delta)
-            if quantity % 100 != 0:
+            if round_to_board_lot(quantity, symbol, side=side.value) != quantity:
                 raise StrategyPackageValidationError(
-                    "rebalance quantity is not a 100-share round lot",
+                    "rebalance quantity does not follow board-lot rules",
                     context={"package_id": package_id, "symbol": symbol, "quantity": quantity},
                 )
             intents.append(

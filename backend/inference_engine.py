@@ -83,6 +83,16 @@ def _drop_invalid_feature_rows_for_strict(X: pd.DataFrame) -> pd.DataFrame:
 
     invalid_rows = invalid_mask.any(axis=1)
     invalid_columns = sorted({str(numeric.columns[col_idx]) for _, col_idx in zip(*np.where(invalid_mask))})
+    invalid_column_counts = invalid_mask.sum(axis=0)
+    invalid_column_details = [
+        {"column": str(numeric.columns[idx]), "invalid_count": int(count)}
+        for idx, count in sorted(
+            enumerate(invalid_column_counts),
+            key=lambda item: int(item[1]),
+            reverse=True,
+        )
+        if int(count) > 0
+    ]
     dropped_rows = int(invalid_rows.sum())
     kept_rows = int((~invalid_rows).sum())
     LAST_STRICT_FEATURE_FILTER = {
@@ -92,6 +102,7 @@ def _drop_invalid_feature_rows_for_strict(X: pd.DataFrame) -> pd.DataFrame:
         "dropped_rows": dropped_rows,
         "invalid_cell_count": int(invalid_mask.sum()),
         "invalid_columns": invalid_columns[:200],
+        "invalid_column_details": invalid_column_details[:200],
     }
     if kept_rows <= 0:
         raise ValueError(
@@ -397,6 +408,59 @@ def predict_scores(
     return scores
 
 
+def _apply_saved_qe_infer_processors(
+    X: pd.DataFrame,
+    *,
+    task_dir: Path,
+    primary_assets: dict[str, Any],
+) -> pd.DataFrame:
+    """Apply fitted Qlib infer processors packaged with the QE model."""
+    relpath = primary_assets.get("dataset_processor_relpath") or primary_assets.get("dataset_relpath")
+    if not relpath:
+        return X
+    processor_path = task_dir / str(relpath)
+    if not processor_path.exists() or not processor_path.is_file():
+        if _strict_inference_enabled():
+            raise ValueError(f"strict inference dataset processor artifact is missing: {processor_path}")
+        return X
+
+    import sys
+
+    search_paths = [
+        task_dir,
+        task_dir / "model",
+        Path(__file__).resolve().parent / "services" / "quantevolver",
+    ]
+    for path in search_paths:
+        path_str = str(path)
+        if path_str not in sys.path:
+            sys.path.insert(0, path_str)
+
+    with open(processor_path, "rb") as f:
+        dataset = pickle.load(f)
+    handler = getattr(dataset, "handler", None)
+    processors = list(getattr(handler, "infer_processors", []) or [])
+    if not processors:
+        return X
+
+    original_columns = list(X.columns)
+    processed = X.copy()
+    if not isinstance(processed.columns, pd.MultiIndex):
+        processed.columns = pd.MultiIndex.from_product([["feature"], original_columns])
+    for processor in processors:
+        processed = processor(processed)
+
+    if isinstance(processed.columns, pd.MultiIndex) and "feature" in processed.columns.get_level_values(0):
+        processed = processed["feature"]
+    processed = processed[original_columns]
+    logger.info(
+        "applied saved QE infer processors: artifact=%s processors=%s",
+        processor_path,
+        [type(processor).__name__ for processor in processors],
+    )
+    return processed
+
+
 def save_signals_to_db(
     task_run_id: str,
     loop_id: int,
@@ -564,39 +628,37 @@ class InferenceEngine:
                 f"数据最新日期={latest_date.date()}"
             )
 
-    def _get_default_universe_excluding_st(self) -> list[str]:
-        """获取默认股票池，剔除所有历史上有过ST记录的股票
-        
-        筛选条件:
-        1. 沪深A股 (ts_code LIKE '%.SH' OR '%.SZ')
-        2. 上市状态为'L' (list_status = 'L')
-        3. 历史上从未出现过ST记录 (NOT IN market.stock_st)
-        """
-        sql = """
-            SELECT ts_code FROM market.stock_basic 
-            WHERE (ts_code LIKE '%%.SH' OR ts_code LIKE '%%.SZ')
-              AND list_status = 'L'
-              AND ts_code NOT IN (
-                  SELECT DISTINCT ts_code FROM market.stock_st
-              )
-            ORDER BY ts_code
-        """
+    def _get_default_universe_excluding_st(self, trade_date: datetime | None = None) -> list[str]:
+        """Use the platform ST PIT universe for live/latest-data inference."""
+        effective_date = (trade_date or datetime.now()).date()
         try:
-            with get_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(sql)
-                    rows = cur.fetchall() or []
-            stock_count = len(rows)
-            logger.info(f"股票池筛选完成: 共 {stock_count} 只股票（已剔除所有历史ST股票）")
+            from .services.stock_universe_pit_service import StockUniversePitService
+
+            universe = StockUniversePitService().get_eligible_codes(trade_date=effective_date, ensure=True)
+            stock_count = len(universe)
+            logger.info(
+                "stock universe resolved from platform ST PIT: "
+                f"trade_date={effective_date}, count={stock_count}"
+            )
             if stock_count <= 0 and _strict_inference_enabled():
-                raise ValueError("strict inference default universe is empty")
-            return [str(r[0]) for r in rows if r and r[0]]
+                raise ValueError(f"strict inference ST PIT universe is empty for {effective_date}")
+            return universe
         except Exception as e:
             if _strict_inference_enabled():
-                raise ValueError(f"strict inference default universe query failed: {e}") from e
-            logger.error(f"默认股票池查询失败: {e}")
-            return []
+                raise ValueError(f"strict inference ST PIT universe query failed: {e}") from e
+            logger.error(f"ST PIT universe query failed, falling back to legacy active SH/SZ universe: {e}")
 
+        sql = """
+            SELECT ts_code FROM market.stock_basic
+            WHERE (ts_code LIKE '%%.SH' OR ts_code LIKE '%%.SZ')
+              AND list_status = 'L'
+            ORDER BY ts_code
+        """
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                rows = cur.fetchall() or []
+        return [str(r[0]) for r in rows if r and r[0]]
     def _compute_alpha158_last_day_only(self, df_history: pd.DataFrame, col_list: List[str]) -> pd.DataFrame:
         """优化版本：只计算最后一天的 Alpha158 因子值，大幅降低内存占用
         
@@ -1256,7 +1318,7 @@ class InferenceEngine:
         model, model_kind, inner_model, num_features_expected = load_model_from_pkl(model_file)
         
         # 4. 获取数据（支持内存缓存，同一交易日多次选股复用）
-        universe = self._get_default_universe_excluding_st()
+        universe = self._get_default_universe_excluding_st(actual_date)
 
         # 4.1 检查因子所需的数据窗口
         # factor_order 已在步骤2中通过 _infer_expected_features 获取
@@ -1731,6 +1793,12 @@ class InferenceEngine:
             f.write(f"df_today列名: {list(df_today.columns)[:50]}\n")
 
         # 7. 模型预测（使用提取的模块级函数）
+        df_today = _apply_saved_qe_infer_processors(
+            df_today,
+            task_dir=task_dir,
+            primary_assets=primary,
+        )
+
         X = _drop_invalid_feature_rows_for_strict(df_today)
         logger.info(f"模型预测: model_kind={model_kind}, X.shape={X.shape}")
 

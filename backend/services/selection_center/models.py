@@ -9,6 +9,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from backend.execution_algos.board_lot import board_lot_rule
+
 
 class SelectionMode(str, Enum):
     SINGLE_PACKAGE = "single_package"
@@ -44,12 +46,11 @@ class SelectionCandidate(BaseModel):
             raise ValueError("symbol is required")
         return value
 
-    @field_validator("target_quantity")
-    @classmethod
-    def _target_quantity_round_lot(cls, value: int | None) -> int | None:
-        if value is not None and value % 100 != 0:
-            raise ValueError("target_quantity must be a 100-share round lot")
-        return value
+    @model_validator(mode="after")
+    def _target_quantity_board_lot(self) -> "SelectionCandidate":
+        if self.target_quantity is not None:
+            _validate_target_quantity(self.symbol, self.target_quantity, label="target_quantity", require_buyable=True)
+        return self
 
 
 class SelectionExclusion(BaseModel):
@@ -106,18 +107,31 @@ class TargetPosition(BaseModel):
     reason: str
     metadata: dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("target_quantity")
-    @classmethod
-    def _quantity_round_lot(cls, value: int) -> int:
-        if value % 100 != 0:
-            raise ValueError("target_quantity must be a 100-share round lot")
-        return value
-
     @model_validator(mode="after")
     def _reference_price_required_for_nonzero_target(self) -> "TargetPosition":
+        _validate_target_quantity(
+            self.symbol,
+            self.target_quantity,
+            label="target_quantity",
+            require_buyable="buy" in str(self.reason or "").lower(),
+        )
         if self.target_quantity > 0 and self.reference_price is None:
             raise ValueError("reference_price is required for non-zero target positions")
         return self
+
+
+def _validate_target_quantity(symbol: str, quantity: int, *, label: str, require_buyable: bool) -> None:
+    if quantity == 0:
+        return
+    min_qty, increment = board_lot_rule(symbol)
+    if quantity >= min_qty and quantity % increment == 0:
+        return
+    if not require_buyable and 0 < quantity < min_qty:
+        return
+    raise ValueError(
+        f"{label} must follow board-lot rules for {symbol}: "
+        f"min_qty={min_qty}, increment={increment}"
+    )
 
 
 class SelectionRun(BaseModel):

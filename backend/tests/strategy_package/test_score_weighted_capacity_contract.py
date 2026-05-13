@@ -57,6 +57,24 @@ def _one_candidate_snapshot(manifest) -> SignalSnapshot:
     )
 
 
+def _star_candidate_snapshot(manifest) -> SignalSnapshot:
+    return SignalSnapshot(
+        package_id=manifest.package_id,
+        manifest_sha256=manifest.manifest_sha256 or "sha",
+        trade_date=date(2026, 5, 8),
+        data_source="unit_test",
+        candidates=[
+            SelectionCandidate(
+                symbol="688678.SH",
+                score=10.0,
+                rank=1,
+                reference_price=10.0,
+                reason="unit_test",
+            )
+        ],
+    )
+
+
 def test_capacity_strategy_contract_uses_new_strategy_id_and_defaults() -> None:
     assert CAPACITY_STRATEGY_ID in SCORE_WEIGHTED_V2_IDS
 
@@ -160,3 +178,24 @@ def test_explicit_capacity_parameters_flow_to_paper_target_value() -> None:
     assert params["max_position_ratio"] == 0.95
     assert targets[0].metadata["target_value"] == 15_000_000.0
     assert targets[0].target_quantity == 1_500_000
+
+
+def test_score_weighted_targets_use_star_board_lot_increment() -> None:
+    manifest = _paper_manifest(
+        strategy_id="score_weighted_topk_v2",
+        custom_params={
+            "max_single_order_value": 2_330.0,
+            "max_weight": 1.0,
+            "max_position_ratio": 1.0,
+        },
+    )
+
+    targets = TargetPositionEngine().build_targets(
+        snapshot=_star_candidate_snapshot(manifest),
+        total_equity=100_000.0,
+        top_k=1,
+        manifest=manifest,
+    )
+
+    assert targets[0].symbol == "688678.SH"
+    assert targets[0].target_quantity == 233

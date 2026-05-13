@@ -33,6 +33,37 @@ from backend.services.strategy_package.live_inference import (
 )
 
 
+class _OneRowCursor:
+    def __init__(self, row: dict[str, Any] | None) -> None:
+        self.row = row
+
+    def __enter__(self) -> "_OneRowCursor":
+        return self
+
+    def __exit__(self, *_args: Any) -> None:
+        return None
+
+    def execute(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    def fetchone(self) -> dict[str, Any] | None:
+        return self.row
+
+
+class _OneRowConn:
+    def __init__(self, row: dict[str, Any] | None) -> None:
+        self.row = row
+
+    def __enter__(self) -> "_OneRowConn":
+        return self
+
+    def __exit__(self, *_args: Any) -> None:
+        return None
+
+    def cursor(self, *_args: Any, **_kwargs: Any) -> _OneRowCursor:
+        return _OneRowCursor(self.row)
+
+
 def _seed_full_workspace(workspace: Path) -> None:
     """Materialize a minimal but complete QE asset workspace under ``workspace``."""
 
@@ -118,6 +149,52 @@ def test_preflight_happy_path_returns_five_pass_checks(tmp_path) -> None:
     assert [check.name for check in result.checks] == list(PREFLIGHT_CHECK_NAMES)
     assert all(check.status == PREFLIGHT_STATUS_PASS for check in result.checks)
     assert result.blocked_check is None
+
+
+def test_candidate_strategy_package_resolves_underlying_qe_loop(monkeypatch) -> None:
+    candidate_row = {
+        "candidate_id": "csp_1",
+        "source_type": "qe_evolution_loop",
+        "source_id": "qe_task_a_Loop1",
+        "source_task_id": "qe_task_a",
+        "source_loop_id": "qe_task_a_Loop1",
+        "source_experiment_id": "qe_exp_a",
+        "status": "ACTIVE",
+    }
+    resolver = QEExperimentRuntimeAssetResolver(conn_factory=lambda: _OneRowConn(candidate_row))
+    captured: dict[str, str] = {}
+
+    def fake_load_experiment_row_by_task_loop(*, qe_task_id: str, qe_loop_id: str) -> dict[str, Any]:
+        captured["qe_task_id"] = qe_task_id
+        captured["qe_loop_id"] = qe_loop_id
+        return {
+            "experiment_id": "qe_exp_a",
+            "status": "completed",
+            "qe_task_id": qe_task_id,
+            "qe_loop_id": qe_loop_id,
+            "factor_names": ["factor_a"],
+            "custom_params": {"execution_node_id": "node_a"},
+            "data_split": {},
+            "result_metrics": {},
+        }
+
+    def fake_source_from_experiment_row(row: dict[str, Any], *, source_lookup: dict[str, Any]) -> QEExperimentRuntimeSource:
+        return _make_runtime_source(
+            Path("."),
+            experiment_id=row["experiment_id"],
+            qe_task_id=source_lookup["qe_task_id"],
+            qe_loop_id=source_lookup["qe_loop_id"],
+        )
+
+    monkeypatch.setattr(resolver, "_load_experiment_row_by_task_loop", fake_load_experiment_row_by_task_loop)
+    monkeypatch.setattr(resolver, "_source_from_experiment_row", fake_source_from_experiment_row)
+    source = resolver.load_source_for_strategy_package(
+        source_type="candidate_strategy_package",
+        source_id="csp_1",
+    )
+
+    assert captured == {"qe_task_id": "qe_task_a", "qe_loop_id": "Loop1"}
+    assert source.experiment_id == "qe_exp_a"
 
 
 def test_preflight_qe_source_failure_short_circuits_remaining_checks(tmp_path) -> None:

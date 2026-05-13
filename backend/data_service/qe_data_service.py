@@ -25,7 +25,7 @@ import logging
 import threading
 import time
 from datetime import date, datetime
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, Iterable, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -33,6 +33,8 @@ import pandas as pd
 from ..db.pg_pool import get_conn
 
 logger = logging.getLogger("aistock.qe_data_service")
+LIVE_ASOF_STATIC_PREFIXES = ("bb_", "cp_", "md_", "sw2_")
+LIVE_ASOF_STATIC_COLUMNS = ("db_dv_ratio", "db_dv_ttm")
 
 # ============================================================
 # 内存缓存（选股执行期间避免重复查询数据库）
@@ -851,10 +853,56 @@ def compute_daily_basic_precomputed_factors(
     return out.sort_index()
 
 
+def _asof_fill_static_prefixes_to_target_index(
+    df: pd.DataFrame,
+    target_index: pd.MultiIndex,
+    *,
+    prefixes: Iterable[str] = LIVE_ASOF_STATIC_PREFIXES,
+    columns: Iterable[str] = LIVE_ASOF_STATIC_COLUMNS,
+) -> pd.DataFrame:
+    """Fill slow PIT datasets onto the live daily-bar index from DB rows only."""
+    if df is None or df.empty or not isinstance(df.index, pd.MultiIndex):
+        return df
+    if not isinstance(target_index, pd.MultiIndex) or target_index.empty:
+        return df
+
+    fill_prefixes = tuple(prefixes)
+    fill_columns = {str(col) for col in columns}
+    fill_cols = [
+        col
+        for col in df.columns
+        if str(col) in fill_columns or any(str(col).startswith(prefix) for prefix in fill_prefixes)
+    ]
+    if not fill_cols:
+        return df.reindex(target_index)
+
+    target_index = target_index.drop_duplicates()
+    union_index = df.index.union(target_index).drop_duplicates()
+    filled_source = df[fill_cols].reindex(union_index)
+
+    if "datetime" not in filled_source.index.names or "instrument" not in filled_source.index.names:
+        return df.reindex(target_index)
+
+    filled = (
+        filled_source.reorder_levels(["instrument", "datetime"])
+        .sort_index()
+        .groupby(level="instrument", group_keys=False)
+        .ffill()
+        .reorder_levels(["datetime", "instrument"])
+        .sort_index()
+        .reindex(target_index)
+    )
+    result = df.reindex(target_index)
+    result.loc[:, fill_cols] = filled
+    return result.sort_index()
+
+
 def build_static_factors(
     instruments: List[str],
     start_date: Union[str, date],
     end_date: Union[str, date],
+    *,
+    asof_fill_slow_static: bool = False,
 ) -> pd.DataFrame:
     """
     构建完整的 static_factors 数据集，与 generate_static_factors_bundle.py 生成的
@@ -936,6 +984,9 @@ def build_static_factors(
         if df_next.empty:
             continue
         df_merged = df_merged.join(df_next, how="left")
+
+    if asof_fill_slow_static and df_pv is not None and not df_pv.empty and isinstance(df_pv.index, pd.MultiIndex):
+        df_merged = _asof_fill_static_prefixes_to_target_index(df_merged, df_pv.index)
 
     df_merged = df_merged.sort_index()
     logger.info(f"build_static_factors: 完成，shape={df_merged.shape}")

@@ -5,7 +5,7 @@ from datetime import date, datetime
 import pytest
 
 from backend.services.trading_core.errors import InvalidStateTransitionError
-from backend.services.trading_core.models import Fill, OrderIntent, OrderSide, OrderStatus
+from backend.services.trading_core.models import Fill, OrderIntent, OrderSide, OrderStatus, StepFill
 from backend.services.trading_core.oms import OMS
 
 
@@ -73,5 +73,54 @@ def test_oms_rejects_overfill_and_final_cancel() -> None:
 
 
 def test_order_intent_requires_round_lot() -> None:
-    with pytest.raises(ValueError, match="100-share"):
+    with pytest.raises(ValueError, match="board-lot rules"):
         make_intent(quantity=50)
+
+
+def test_star_market_order_intent_accepts_board_lot_increment() -> None:
+    intent = OrderIntent(
+        package_id="pkg_1",
+        portfolio_id="paper_1",
+        symbol="688678.SH",
+        side=OrderSide.BUY,
+        quantity=233,
+        target_trade_date=date(2024, 1, 2),
+    )
+
+    assert intent.quantity == 233
+
+
+def test_star_market_fill_accepts_board_lot_increment() -> None:
+    fill = Fill(
+        order_id="ord_1",
+        symbol="688678.SH",
+        side=OrderSide.BUY,
+        quantity=233,
+        price=23.91,
+        trade_time=datetime(2024, 1, 2, 9, 31),
+        reason="star board fill",
+    )
+    step = StepFill(
+        symbol="688678.SH",
+        side=OrderSide.BUY,
+        quantity=233,
+        price=23.91,
+        bar_time=datetime(2024, 1, 2, 9, 31),
+        reason="star board step",
+    )
+
+    assert fill.quantity == 233
+    assert step.quantity == 233
+
+
+def test_main_board_fill_still_requires_100_share_round_lot() -> None:
+    with pytest.raises(ValueError, match="board-lot rules"):
+        Fill(
+            order_id="ord_1",
+            symbol="000001.SZ",
+            side=OrderSide.BUY,
+            quantity=233,
+            price=10.0,
+            trade_time=datetime(2024, 1, 2, 9, 31),
+            reason="invalid main board fill",
+        )

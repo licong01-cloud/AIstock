@@ -99,7 +99,12 @@ def _patch_strategy_package_data_window() -> None:
     from backend.data_service import timescaledb_adapter
 
     def fetch_static(universe, start_date, end_date):
-        return qe_data_service.build_static_factors(universe, start_date, end_date)
+        return qe_data_service.build_static_factors(
+            universe,
+            start_date,
+            end_date,
+            asof_fill_slow_static=True,
+        )
 
     inference_engine_module.get_required_data_window = _strategy_package_required_window
     timescaledb_adapter.fetch_fundamental_data_ts = fetch_static

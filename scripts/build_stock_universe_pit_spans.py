@@ -8,9 +8,9 @@ not delete feature data. Rules are intentionally conservative:
 - Negative ST events exclude from the first trading day after ``pub_date``.
 - ST removal/recovery can re-enter from
   ``max(next_trading_day(pub_date), first_trading_day_on_or_after(imp_date))``.
-- The default ``st_only_active`` scope does not implement delisting / paused
-  listing PIT. It uses the current active SH/SZ stock list and applies only ST
-  PIT exits/restores.
+- The default ``st_only_active`` scope does not implement full delisting /
+  paused listing PIT. It uses the SH/SZ stock list active as of the requested
+  generation end date and applies ST PIT exits/restores.
 - Existing ST status on the universe start date is seeded from
   ``market.stock_st`` so stocks already under ST before the event backfill
   window are not allowed until a later recovery event.
@@ -307,9 +307,18 @@ class TradingCalendar:
         return prev
 
 
-def _load_stock_basic(conn: Any, *, active_only: bool = False) -> list[StockRow]:
+def _load_stock_basic(conn: Any, *, active_only: bool = False, active_as_of: dt.date | None = None) -> list[StockRow]:
     with conn.cursor(cursor_factory=pgx.RealDictCursor) as cur:
-        status_filter = "AND COALESCE(list_status, '') = 'L'" if active_only else ""
+        status_filter = ""
+        params: list[Any] = []
+        if active_only and active_as_of is not None:
+            status_filter = """
+               AND (list_date IS NULL OR list_date::date <= %s)
+               AND (delist_date IS NULL OR delist_date::date > %s)
+            """
+            params.extend([active_as_of, active_as_of])
+        elif active_only:
+            status_filter = "AND COALESCE(list_status, '') = 'L'"
         cur.execute(
             f"""
             SELECT ts_code, name, exchange, list_status, list_date::date, delist_date::date
@@ -318,7 +327,8 @@ def _load_stock_basic(conn: Any, *, active_only: bool = False) -> list[StockRow]
                AND (ts_code LIKE '%%.SH' OR ts_code LIKE '%%.SZ')
                {status_filter}
              ORDER BY ts_code
-            """
+            """,
+            tuple(params),
         )
         rows = []
         for row in cur.fetchall():
@@ -422,12 +432,22 @@ def _load_initial_st_events(
     start_date: dt.date,
     *,
     active_only: bool = False,
+    active_as_of: dt.date | None = None,
 ) -> list[EventRow]:
     action_date = calendar.on_or_after(start_date)
     if action_date is None:
         return []
     with conn.cursor(cursor_factory=pgx.RealDictCursor) as cur:
-        status_filter = "AND COALESCE(b.list_status, '') = 'L'" if active_only else ""
+        status_filter = ""
+        params: list[Any] = [start_date]
+        if active_only and active_as_of is not None:
+            status_filter = """
+               AND (b.list_date IS NULL OR b.list_date::date <= %s)
+               AND (b.delist_date IS NULL OR b.delist_date::date > %s)
+            """
+            params.extend([active_as_of, active_as_of])
+        elif active_only:
+            status_filter = "AND COALESCE(b.list_status, '') = 'L'"
         cur.execute(
             f"""
             SELECT DISTINCT s.ts_code
@@ -436,10 +456,10 @@ def _load_initial_st_events(
              WHERE s.ann_date = %s
                AND b.exchange IN ('SSE', 'SZSE')
                AND (s.ts_code LIKE '%%.SH' OR s.ts_code LIKE '%%.SZ')
-               {status_filter}
+                {status_filter}
              ORDER BY s.ts_code
             """,
-            (start_date,),
+            tuple(params),
         )
         return [
             EventRow(
@@ -492,7 +512,7 @@ def _stock_basic_terminal_events(stocks: Iterable[StockRow], calendar: TradingCa
     return events
 
 
-def _load_stock_basic_scope_counts(conn: Any) -> dict[str, int]:
+def _load_stock_basic_scope_counts(conn: Any, *, active_as_of: dt.date | None = None) -> dict[str, int]:
     with conn.cursor(cursor_factory=pgx.RealDictCursor) as cur:
         cur.execute(
             """
@@ -504,12 +524,35 @@ def _load_stock_basic_scope_counts(conn: Any) -> dict[str, int]:
             """
         )
         counts = {str(row["list_status"] or "UNKNOWN"): int(row["cnt"]) for row in cur.fetchall()}
+        asof_counts: dict[str, int] = {}
+        if active_as_of is not None:
+            cur.execute(
+                """
+                SELECT
+                    COUNT(*) FILTER (
+                        WHERE (list_date IS NULL OR list_date::date <= %(active_as_of)s)
+                          AND (delist_date IS NULL OR delist_date::date > %(active_as_of)s)
+                    ) AS active_asof,
+                    COUNT(*) FILTER (WHERE delist_date IS NOT NULL AND delist_date::date <= %(active_as_of)s)
+                        AS delisted_asof
+                  FROM market.stock_basic
+                 WHERE exchange IN ('SSE', 'SZSE')
+                   AND (ts_code LIKE '%%.SH' OR ts_code LIKE '%%.SZ')
+                """,
+                {"active_as_of": active_as_of},
+            )
+            row = dict(cur.fetchone() or {})
+            asof_counts = {
+                "active_asof": int(row.get("active_asof") or 0),
+                "delisted_asof": int(row.get("delisted_asof") or 0),
+            }
     return {
         "active_l": counts.get("L", 0),
         "delisted_d": counts.get("D", 0),
         "paused_p": counts.get("P", 0),
         "other": sum(v for k, v in counts.items() if k not in {"L", "D", "P"}),
         "total": sum(counts.values()),
+        **asof_counts,
     }
 
 
@@ -676,66 +719,148 @@ def _write_results(
     with conn.cursor() as cur:
         cur.execute("DELETE FROM market.stock_universe_pit_spans WHERE universe_key = %s", (universe_key,))
         cur.execute("DELETE FROM market.stock_universe_pit_events WHERE universe_key = %s", (universe_key,))
-        if events:
-            pgx.execute_values(
-                cur,
-                """
-                INSERT INTO market.stock_universe_pit_events (
-                    universe_key, ts_code, event_kind, action_date, source,
-                    source_pub_date, source_imp_date, source_effective_date,
-                    st_type, st_reason, st_explain, terminal, rule_version, metadata
-                ) VALUES %s
-                """,
-                [
-                    (
-                        universe_key,
-                        e.ts_code,
-                        e.event_kind,
-                        e.action_date,
-                        e.source,
-                        e.source_pub_date,
-                        e.source_imp_date,
-                        e.source_effective_date,
-                        e.st_type,
-                        e.st_reason,
-                        e.st_explain,
-                        e.terminal,
-                        rule_version,
-                        pgx.Json(e.metadata or {}),
-                    )
-                    for e in events
-                ],
+        _insert_events(cur, universe_key=universe_key, rule_version=rule_version, events=events)
+        _insert_spans(cur, rule_version=rule_version, spans=spans)
+
+
+def _insert_events(
+    cur: Any,
+    *,
+    universe_key: str,
+    rule_version: str,
+    events: list[EventRow],
+) -> None:
+    if not events:
+        return
+    pgx.execute_values(
+        cur,
+        """
+        INSERT INTO market.stock_universe_pit_events (
+            universe_key, ts_code, event_kind, action_date, source,
+            source_pub_date, source_imp_date, source_effective_date,
+            st_type, st_reason, st_explain, terminal, rule_version, metadata
+        ) VALUES %s
+        """,
+        [
+            (
+                universe_key,
+                e.ts_code,
+                e.event_kind,
+                e.action_date,
+                e.source,
+                e.source_pub_date,
+                e.source_imp_date,
+                e.source_effective_date,
+                e.st_type,
+                e.st_reason,
+                e.st_explain,
+                e.terminal,
+                rule_version,
+                pgx.Json(e.metadata or {}),
             )
-        if spans:
-            pgx.execute_values(
-                cur,
-                """
-                INSERT INTO market.stock_universe_pit_spans (
-                    universe_key, ts_code, eligible_start, eligible_end,
-                    entry_reason, exit_reason, base_list_date, ipo_eligible_date,
-                    entry_event_date, exit_event_date, terminal_exit,
-                    rule_version, metadata
-                ) VALUES %s
-                """,
-                [
-                    (
-                        s.universe_key,
-                        s.ts_code,
-                        s.eligible_start,
-                        s.eligible_end,
-                        s.entry_reason,
-                        s.exit_reason,
-                        s.base_list_date,
-                        s.ipo_eligible_date,
-                        s.entry_event_date,
-                        s.exit_event_date,
-                        s.terminal_exit,
-                        rule_version,
-                        pgx.Json(s.metadata or {}),
-                    )
-                    for s in spans
-                ],
+            for e in events
+        ],
+    )
+
+
+def _insert_spans(
+    cur: Any,
+    *,
+    rule_version: str,
+    spans: list[SpanRow],
+) -> None:
+    if not spans:
+        return
+    pgx.execute_values(
+        cur,
+        """
+        INSERT INTO market.stock_universe_pit_spans (
+            universe_key, ts_code, eligible_start, eligible_end,
+            entry_reason, exit_reason, base_list_date, ipo_eligible_date,
+            entry_event_date, exit_event_date, terminal_exit,
+            rule_version, metadata
+        ) VALUES %s
+        ON CONFLICT (universe_key, ts_code, eligible_start, eligible_end) DO UPDATE
+            SET entry_reason = EXCLUDED.entry_reason,
+                exit_reason = EXCLUDED.exit_reason,
+                base_list_date = EXCLUDED.base_list_date,
+                ipo_eligible_date = EXCLUDED.ipo_eligible_date,
+                entry_event_date = EXCLUDED.entry_event_date,
+                exit_event_date = EXCLUDED.exit_event_date,
+                terminal_exit = EXCLUDED.terminal_exit,
+                rule_version = EXCLUDED.rule_version,
+                generated_at = NOW(),
+                metadata = EXCLUDED.metadata
+        """,
+        [
+            (
+                s.universe_key,
+                s.ts_code,
+                s.eligible_start,
+                s.eligible_end,
+                s.entry_reason,
+                s.exit_reason,
+                s.base_list_date,
+                s.ipo_eligible_date,
+                s.entry_event_date,
+                s.exit_event_date,
+                s.terminal_exit,
+                rule_version,
+                pgx.Json(s.metadata or {}),
             )
+            for s in spans
+        ],
+    )
+
+
+def _write_incremental_extension(
+    conn: Any,
+    *,
+    universe_key: str,
+    rule_version: str,
+    spans: list[SpanRow],
+    events: list[EventRow],
+    incremental_from: dt.date,
+) -> dict[str, int]:
+    """Extend an existing PIT universe without deleting historical coverage."""
+    previous_end = incremental_from - dt.timedelta(days=1)
+    delta_spans = [
+        span
+        for span in spans
+        if span.eligible_end >= incremental_from
+        or (span.exit_event_date is not None and span.exit_event_date >= incremental_from)
+    ]
+    delta_events = [event for event in events if event.action_date >= incremental_from]
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM market.stock_universe_pit_spans
+             WHERE universe_key = %s
+               AND (
+                    eligible_start >= %s
+                    OR (exit_reason = 'generation_end' AND eligible_end = %s)
+               )
+            """,
+            (universe_key, incremental_from, previous_end),
+        )
+        deleted_spans = cur.rowcount
+        cur.execute(
+            """
+            DELETE FROM market.stock_universe_pit_events
+             WHERE universe_key = %s
+               AND action_date >= %s
+            """,
+            (universe_key, incremental_from),
+        )
+        deleted_events = cur.rowcount
+        _insert_events(cur, universe_key=universe_key, rule_version=rule_version, events=delta_events)
+        _insert_spans(cur, rule_version=rule_version, spans=delta_spans)
+    return {
+        "deleted_spans": int(deleted_spans),
+        "deleted_events": int(deleted_events),
+        "inserted_or_updated_spans": len(delta_spans),
+        "inserted_events": len(delta_events),
+    }
 
 
 def _write_report(report_path: Path, summary: dict[str, Any]) -> None:
@@ -755,10 +880,19 @@ def _write_all_txt(path: Path, spans: Iterable[SpanRow]) -> None:
 def build(args: argparse.Namespace) -> dict[str, Any]:
     start_date = _parse_date(args.start_date)
     end_date = _parse_date(args.end_date) or dt.date.today()
+    write_mode = getattr(args, "write_mode", "replace") or "replace"
+    incremental_from = _parse_date(getattr(args, "incremental_from", None))
     if start_date is None:
         raise RuntimeError("--start-date is required")
     if start_date > end_date:
         raise RuntimeError("--start-date must be <= --end-date")
+    if write_mode not in {"replace", "incremental"}:
+        raise RuntimeError(f"unsupported write_mode: {write_mode}")
+    if write_mode == "incremental":
+        if incremental_from is None:
+            raise RuntimeError("--incremental-from is required when write_mode=incremental")
+        if incremental_from < start_date or incremental_from > end_date:
+            raise RuntimeError("--incremental-from must be within [--start-date, --end-date]")
     rule_version = args.rule_version or DEFAULT_RULE_VERSION
     scope = getattr(args, "scope", DEFAULT_SCOPE) or DEFAULT_SCOPE
     if scope not in SUPPORTED_SCOPES:
@@ -773,9 +907,15 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             end_date + dt.timedelta(days=31),
         )
         calendar = TradingCalendar(calendar_days)
-        scope_counts = _load_stock_basic_scope_counts(conn)
-        stocks = _load_stock_basic(conn, active_only=st_only_active)
-        initial_st_events = _load_initial_st_events(conn, calendar, start_date, active_only=st_only_active)
+        scope_counts = _load_stock_basic_scope_counts(conn, active_as_of=end_date)
+        stocks = _load_stock_basic(conn, active_only=st_only_active, active_as_of=end_date)
+        initial_st_events = _load_initial_st_events(
+            conn,
+            calendar,
+            start_date,
+            active_only=st_only_active,
+            active_as_of=end_date,
+        )
         st_events = _load_st_events(conn, calendar, end_date, terminal_as_negative=st_only_active)
         terminal_events = [] if st_only_active else _stock_basic_terminal_events(stocks, calendar)
         events = sorted(
@@ -817,18 +957,20 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             "start_date": start_date.isoformat(),
             "end_date": end_date.isoformat(),
             "ipo_filter_days": args.ipo_filter_days,
+            "write_mode": write_mode,
+            "incremental_from": incremental_from.isoformat() if incremental_from else None,
             "st_pit": True,
             "delist_pit": not st_only_active,
             "pause_pit": not st_only_active,
             "survivorship_bias": (
-                "current D/P stocks excluded by ST-only active universe scope; delisting PIT is not implemented"
+                "D/P stocks as of generation end are excluded by ST-only active universe scope; delisting PIT is not implemented"
                 if st_only_active
                 else "legacy delist/pause PIT terminal events enabled"
             ),
             "counts": {
                 "stock_basic_shsz": len(stocks),
                 "stock_basic_scope_counts": scope_counts,
-                "current_D_P_excluded_count": (
+                "asof_D_P_excluded_count": (
                     scope_counts["delisted_d"] + scope_counts["paused_p"] if st_only_active else 0
                 ),
                 "events": len(events),
@@ -842,13 +984,29 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             "samples": {"multi_span_instruments": sample_multi_span},
         }
         if not args.dry_run:
-            _write_results(
-                conn,
-                universe_key=args.universe_key,
-                rule_version=rule_version,
-                spans=spans,
-                events=events,
-            )
+            if write_mode == "incremental":
+                summary["write_delta"] = _write_incremental_extension(
+                    conn,
+                    universe_key=args.universe_key,
+                    rule_version=rule_version,
+                    spans=spans,
+                    events=events,
+                    incremental_from=incremental_from,
+                )
+            else:
+                _write_results(
+                    conn,
+                    universe_key=args.universe_key,
+                    rule_version=rule_version,
+                    spans=spans,
+                    events=events,
+                )
+                summary["write_delta"] = {
+                    "deleted_spans": "all",
+                    "deleted_events": "all",
+                    "inserted_or_updated_spans": len(spans),
+                    "inserted_events": len(events),
+                }
             conn.commit()
             with conn.cursor() as cur:
                 cur.execute("SELECT market.refresh_data_stats();")
@@ -878,6 +1036,8 @@ def main() -> None:
     parser.add_argument("--reports-dir", default=str(PROJECT_ROOT / "reports" / "stock_universe_pit"))
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--write-all-txt", action="store_true")
+    parser.add_argument("--write-mode", choices=["replace", "incremental"], default="replace")
+    parser.add_argument("--incremental-from")
     args = parser.parse_args()
 
     summary = build(args)

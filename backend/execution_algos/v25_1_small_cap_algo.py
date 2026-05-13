@@ -277,9 +277,14 @@ class V25_1SmallCapAlgo(V25TwoStageAlgo):
                 return None
             reason = f"V25_1_SMALL_CAP bucket {state.step + 1}/{horizon}"
 
+        step_qty = self._legalize_step_qty(step_qty, remaining, stock_id, side)
         state.step += 1
         if step_qty <= 0:
             self._last_no_fill_reason = self._last_no_fill_reason or "v25_1_zero_qty"
+            self._last_no_fill_context = self._last_no_fill_context or {
+                "cur_step": cur_step,
+                "remaining": remaining,
+            }
             return None
 
         state.executed_quantity += step_qty

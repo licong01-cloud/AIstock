@@ -105,6 +105,7 @@ class PreparedInferenceWorkspace:
     dynamic_factors: list[str]
     model_source_path: Path
     model_candidate_count: int
+    dataset_processor_path: Path | None = None
     # Provenance of the params.pkl used for this workspace. 'node' = downloaded
     # from the QE node API (the only origin allowed by default); 'cache' = local
     # StrategyPackage cache fallback (requires explicit allow_cache_fallback=True
@@ -506,11 +507,57 @@ class QEExperimentRuntimeAssetResolver:
                 raise StrategyPackageValidationError("QE experiment source_id is required for live inference")
             return self.load_source(normalized_source_id)
 
+        if normalized_type == "candidate_strategy_package":
+            if not normalized_source_id:
+                raise StrategyPackageValidationError("Candidate StrategyPackage source_id is required for live inference")
+            candidate = self._load_candidate_strategy_package_source(normalized_source_id)
+            candidate_source_type = str(candidate.get("source_type") or "").strip()
+            if candidate_source_type == "qe_evolution_loop":
+                qe_task_id = str(candidate.get("source_task_id") or "").strip()
+                qe_loop_id = self._normalize_candidate_qe_loop_id(
+                    qe_task_id=qe_task_id,
+                    source_loop_id=str(candidate.get("source_loop_id") or "").strip(),
+                    source_id=str(candidate.get("source_id") or "").strip(),
+                )
+                if not qe_task_id or not qe_loop_id:
+                    raise DataUnavailableError(
+                        "Candidate StrategyPackage is missing qe_task_id/qe_loop_id for live inference",
+                        context={"candidate_id": normalized_source_id, "candidate_source": candidate},
+                    )
+                row = self._load_experiment_row_by_task_loop(qe_task_id=qe_task_id, qe_loop_id=qe_loop_id)
+                return self._source_from_experiment_row(
+                    row,
+                    source_lookup={
+                        "source_type": normalized_type,
+                        "source_id": normalized_source_id,
+                        "candidate_source_type": candidate_source_type,
+                        "qe_task_id": qe_task_id,
+                        "qe_loop_id": qe_loop_id,
+                        "run_id": str(candidate.get("source_experiment_id") or "") or normalized_run_id or None,
+                    },
+                )
+            if candidate_source_type == "qe_experiment":
+                experiment_id = str(candidate.get("source_experiment_id") or candidate.get("source_id") or "").strip()
+                if not experiment_id:
+                    raise DataUnavailableError(
+                        "Candidate StrategyPackage is missing experiment_id for live inference",
+                        context={"candidate_id": normalized_source_id, "candidate_source": candidate},
+                    )
+                return self.load_source(experiment_id)
+            raise StrategyPackageValidationError(
+                "unsupported Candidate StrategyPackage source_type for live inference",
+                context={
+                    "candidate_id": normalized_source_id,
+                    "candidate_source_type": candidate_source_type,
+                    "supported": ["qe_experiment", "qe_evolution_loop"],
+                },
+            )
+
         raise StrategyPackageValidationError(
             "unsupported StrategyPackage source_type for live inference",
             context={
                 "source_type": normalized_type,
-                "supported": ["qe_experiment", "qe_evolution_loop"],
+                "supported": ["qe_experiment", "qe_evolution_loop", "candidate_strategy_package"],
             },
         )
 
@@ -856,6 +903,42 @@ class QEExperimentRuntimeAssetResolver:
             )
         return dict(row)
 
+    def _load_candidate_strategy_package_source(self, candidate_id: str) -> dict[str, Any]:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT candidate_id, source_type, source_id, source_task_id,
+                           source_loop_id, source_experiment_id, status
+                    FROM strategy_pkg.candidate_strategy_package
+                    WHERE candidate_id = %s
+                    """,
+                    (candidate_id,),
+                )
+                row = cur.fetchone()
+        if not row:
+            raise DataUnavailableError(
+                "Candidate StrategyPackage does not exist for live inference",
+                context={"candidate_id": candidate_id},
+            )
+        if str(row.get("status") or "").upper() != "ACTIVE":
+            raise StrategyPackageValidationError(
+                "Candidate StrategyPackage must be ACTIVE for live inference",
+                context={"candidate_id": candidate_id, "status": row.get("status")},
+            )
+        return dict(row)
+
+    @staticmethod
+    def _normalize_candidate_qe_loop_id(*, qe_task_id: str, source_loop_id: str, source_id: str) -> str:
+        for value in (source_loop_id, source_id):
+            if not value:
+                continue
+            if qe_task_id and value.startswith(f"{qe_task_id}_"):
+                return value[len(qe_task_id) + 1 :]
+            if value.startswith("Loop"):
+                return value
+        return source_loop_id
+
     def _source_from_experiment_row(
         self,
         row: dict[str, Any],
@@ -970,6 +1053,16 @@ class QEExperimentRuntimeAssetResolver:
         model_code_source = source.asset_workspace_path / "model.py"
         if model_code_source.exists() and model_code_source.is_file():
             shutil.copy2(model_code_source, workspace_path / "model" / "model.py")
+        dataset_processor_source = self._resolve_dataset_processor_path(
+            source=source,
+            model_source_path=model_source_path,
+        )
+        dataset_processor_relpath: str | None = None
+        dataset_processor_dest: Path | None = None
+        if dataset_processor_source is not None:
+            dataset_processor_dest = workspace_path / "model" / "dataset"
+            shutil.copy2(dataset_processor_source, dataset_processor_dest)
+            dataset_processor_relpath = "model/dataset"
 
         factor_order_path = workspace_path / "factor_order.json"
         factor_order_path.write_text(
@@ -1019,10 +1112,12 @@ class QEExperimentRuntimeAssetResolver:
                     "primary_assets": {
                         "model_weight_relpath": "model/params.pkl",
                         "factor_entry_relpath": "strategy_package_factor_entry.py",
+                        "dataset_processor_relpath": dataset_processor_relpath,
                     },
                     "assets": {
                         "model_weight": "model/params.pkl",
                         "factor_entry": "strategy_package_factor_entry.py",
+                        "dataset_processor": dataset_processor_relpath,
                         "factor_order": "factor_order.json",
                         "factors_count": len(factor_order_resolution.factor_order),
                     },
@@ -1037,6 +1132,7 @@ class QEExperimentRuntimeAssetResolver:
                         "model_source_path": str(model_source_path),
                         "model_candidate_count": model_candidate_count,
                         "model_params_origin": source.model_params_origin,
+                        "dataset_processor_source_path": str(dataset_processor_source) if dataset_processor_source else None,
                     },
                 },
                 ensure_ascii=False,
@@ -1058,6 +1154,7 @@ class QEExperimentRuntimeAssetResolver:
             dynamic_factors=factor_order_resolution.dynamic_factors,
             model_source_path=model_source_path,
             model_candidate_count=model_candidate_count,
+            dataset_processor_path=dataset_processor_dest,
             model_params_origin=source.model_params_origin,
         )
 
@@ -1656,6 +1753,25 @@ class QEExperimentRuntimeAssetResolver:
             )
         candidates.sort(key=lambda item: (item.stat().st_mtime, str(item).lower()), reverse=True)
         return candidates[0], len(candidates)
+
+    def _resolve_dataset_processor_path(
+        self,
+        *,
+        source: QEExperimentRuntimeSource,
+        model_source_path: Path,
+    ) -> Path | None:
+        """Locate the fitted Qlib dataset artifact that owns infer processors."""
+        sibling = model_source_path.parent / "dataset"
+        if sibling.exists() and sibling.is_file():
+            return sibling
+        root = source.asset_workspace_path
+        if not root.exists():
+            return None
+        candidates = [path for path in root.glob("**/artifacts/dataset") if path.exists() and path.is_file()]
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: (item.stat().st_mtime, str(item).lower()), reverse=True)
+        return candidates[0]
 
     def _build_factor_entry_source(
         self,

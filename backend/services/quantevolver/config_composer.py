@@ -889,6 +889,7 @@ class ConfigComposer:
             start_date=DEFAULT_ST_PIT_START_DATE,
             end_date=backtest_end,
             strict=profile.strict_data_ready,
+            refresh_policy="coverage",
         )
 
         with get_conn() as conn:
