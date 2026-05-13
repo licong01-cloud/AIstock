@@ -114,7 +114,8 @@ jobs:
           python -m pip install \
             nox \
             fastapi 'uvicorn[standard]' pydantic 'pydantic-settings' python-dotenv \
-            httpx 'httpx-sse' requests aiofiles openai reportlab schedule yfinance \
+            httpx 'httpx-sse' requests aiofiles openai reportlab schedule \
+            yfinance akshare ta pywencai \
             sqlalchemy alembic psycopg2-binary 'asyncpg' \
             pyyaml 'orjson' \
             pytest 'pytest-cov' 'pytest-asyncio' 'pytest-mock' \
