@@ -69,6 +69,51 @@ export type StrategyPackage = {
   updated_at?: string;
   metrics_summary?: MetricsSummary;
   manifest?: JsonObject;
+  runtime_config_contract?: JsonObject;
+};
+
+export type CandidateStrategyPackage = {
+  candidate_id: string;
+  candidate_version: number;
+  source_type: "qe_experiment" | "qe_evolution_loop" | "candidate_strategy_package" | string;
+  source_id: string;
+  source_task_id?: string | null;
+  source_loop_id?: string | null;
+  source_experiment_id?: string | null;
+  archive_run_id?: string | null;
+  display_name: string;
+  status: "ACTIVE" | "DELETED" | string;
+  snapshot_config: JsonObject;
+  factor_manifest: JsonObject;
+  model_manifest: JsonObject;
+  strategy_manifest: JsonObject;
+  metric_snapshot: JsonObject;
+  artifact_refs: JsonObject;
+  completeness: JsonObject;
+  eligibility: JsonObject;
+  audit_context: JsonObject;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  deleted_by?: string | null;
+  deleted_at?: string | null;
+  delete_reason?: string | null;
+};
+
+export type CandidateStrategyPackageInput = {
+  created_by?: string;
+  display_name?: string | null;
+  archive_run_id?: string | null;
+  snapshot_config?: JsonObject;
+  factor_manifest?: JsonObject;
+  model_manifest?: JsonObject;
+  strategy_manifest?: JsonObject;
+  metric_snapshot?: JsonObject;
+  artifact_refs?: JsonObject;
+  completeness?: JsonObject;
+  eligibility?: JsonObject;
+  audit_context?: JsonObject;
+  manual_action?: boolean;
 };
 
 export type QEPackagingSource = {

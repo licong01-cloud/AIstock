@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 class SourceType(str, Enum):
     QE_EXPERIMENT = "qe_experiment"
     QE_EVOLUTION_LOOP = "qe_evolution_loop"
+    CANDIDATE_STRATEGY_PACKAGE = "candidate_strategy_package"
 
 
 class AlphaMode(str, Enum):

@@ -3221,6 +3221,45 @@ class ConfigComposer:
             factor_path.write_text(code, encoding="utf-8")
             logger.info(f"写入因子文件: {factor_path}")
 
+    def _resolve_factor_cache_universe_metadata(
+        self,
+        *,
+        start_date: str,
+        end_date: str,
+    ) -> Dict[str, Any]:
+        """Return official ST PIT metadata that generated factor caches must match."""
+
+        from .factor_universe_mask_service import (
+            OFFICIAL_FACTOR_COVERAGE_SEMANTICS,
+            OFFICIAL_FACTOR_INDEX_POLICY,
+            OFFICIAL_FACTOR_UNIVERSE_KEY,
+            OFFICIAL_FACTOR_UNIVERSE_RULE_VERSION,
+            FactorUniverseMaskService,
+        )
+
+        fallback = {
+            "universe_key": OFFICIAL_FACTOR_UNIVERSE_KEY,
+            "universe_rule_version": OFFICIAL_FACTOR_UNIVERSE_RULE_VERSION,
+            "universe_fingerprint_sha256": "",
+            "index_policy": OFFICIAL_FACTOR_INDEX_POLICY,
+            "coverage_semantics": OFFICIAL_FACTOR_COVERAGE_SEMANTICS,
+        }
+        try:
+            metadata = FactorUniverseMaskService().metadata(
+                start_date=start_date,
+                end_date=end_date,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Unable to resolve ST PIT universe fingerprint for prepare_factors.py; "
+                "generated script will disable factor-cache hits unless "
+                "FACTOR_CACHE_EXPECTED_UNIVERSE_FINGERPRINT_SHA256 is provided: %s",
+                exc,
+            )
+            return fallback
+
+        return {key: metadata.get(key) if metadata.get(key) is not None else fallback[key] for key in fallback}
+
     def _compose_prepare_factors(
         self,
         factors_info: List[Dict],
@@ -3246,6 +3285,10 @@ class ConfigComposer:
             return None
 
         factor_names = [f["factor_name"] for f in custom_factors]
+        factor_cache_universe_metadata = self._resolve_factor_cache_universe_metadata(
+            start_date=train_start,
+            end_date=test_end,
+        )
 
         lines: list[str] = []
         lines.append('"""')
@@ -3286,6 +3329,46 @@ class ConfigComposer:
         lines.append("    FACTOR_CACHE_META = ''")
         lines.append(f"TRAIN_START = '{train_start}'")
         lines.append(f"TEST_END = '{test_end}'")
+        lines.append(
+            "FACTOR_CACHE_EXPECTED_UNIVERSE_META = "
+            + repr(
+                {
+                    key: factor_cache_universe_metadata.get(key)
+                    for key in (
+                        "universe_key",
+                        "universe_rule_version",
+                        "universe_fingerprint_sha256",
+                        "index_policy",
+                        "coverage_semantics",
+                    )
+                }
+            )
+        )
+        lines.append("")
+        lines.append("")
+        lines.append("def _expected_universe_meta():")
+        lines.append("    meta = dict(FACTOR_CACHE_EXPECTED_UNIVERSE_META)")
+        lines.append("    env_map = {")
+        lines.append("        'universe_key': 'FACTOR_CACHE_EXPECTED_UNIVERSE_KEY',")
+        lines.append("        'universe_rule_version': 'FACTOR_CACHE_EXPECTED_UNIVERSE_RULE_VERSION',")
+        lines.append("        'universe_fingerprint_sha256': 'FACTOR_CACHE_EXPECTED_UNIVERSE_FINGERPRINT_SHA256',")
+        lines.append("        'index_policy': 'FACTOR_CACHE_EXPECTED_INDEX_POLICY',")
+        lines.append("        'coverage_semantics': 'FACTOR_CACHE_EXPECTED_COVERAGE_SEMANTICS',")
+        lines.append("    }")
+        lines.append("    for key, env_name in env_map.items():")
+        lines.append("        value = os.environ.get(env_name)")
+        lines.append("        if value:")
+        lines.append("            meta[key] = value")
+        lines.append("    return meta")
+        lines.append("")
+        lines.append("")
+        lines.append("def _cache_universe_mismatch(entry, expected):")
+        lines.append("    if not expected.get('universe_fingerprint_sha256'):")
+        lines.append("        return 'universe_fingerprint_missing_expected'")
+        lines.append("    for key in ('universe_key', 'universe_fingerprint_sha256', 'index_policy'):")
+        lines.append("        if expected.get(key) and entry.get(key) != expected.get(key):")
+        lines.append("            return key")
+        lines.append("    return ''")
         lines.append("")
         lines.append("")
         lines.append("def _try_cache_hit(factor_name, factor_code):")
@@ -3304,6 +3387,11 @@ class ConfigComposer:
         lines.append("        logger.warning(f'  {factor_name}: cache meta read failed: {e}')")
         lines.append("        return None")
         lines.append("    entry = meta.get('factors', {}).get(factor_name, {})")
+        lines.append("    expected_universe = _expected_universe_meta()")
+        lines.append("    universe_mismatch = _cache_universe_mismatch(entry, expected_universe)")
+        lines.append("    if universe_mismatch:")
+        lines.append("        logger.info(f'  {factor_name}: cache universe mismatch ({universe_mismatch})')")
+        lines.append("        return None")
         lines.append("    cached_hash = entry.get('source_hash_raw')")
         lines.append("    if cached_hash != code_hash:")
         lines.append("        logger.info(f'  {factor_name}: cache hash mismatch (cached={cached_hash}, current={code_hash})')")
@@ -3357,6 +3445,7 @@ class ConfigComposer:
         lines.append("                logger.warning(f'  {factor_name}: cache meta read failed before write, skip cache write: {e}')")
         lines.append("                return")
         lines.append("        factors = meta.get('factors', {})")
+        lines.append("        universe_meta = _expected_universe_meta()")
         lines.append("        dates = result_df.index.get_level_values(0)")
         lines.append("        d_min = str(dates.min().date())")
         lines.append("        d_max = str(dates.max().date())")
@@ -3369,7 +3458,11 @@ class ConfigComposer:
         lines.append("            'window_train_start': TRAIN_START,")
         lines.append("            'window_backtest_end': TEST_END,")
         lines.append("        }")
+        lines.append("        factors[factor_name].update(universe_meta)")
         lines.append("        meta['factors'] = factors")
+        lines.append("        for _k, _v in universe_meta.items():")
+        lines.append("            if _v is not None:")
+        lines.append("                meta[_k] = _v")
         lines.append("        tmp_fd, tmp_path = _tmpf.mkstemp(dir=os.path.dirname(FACTOR_CACHE_META), suffix='.json')")
 
         lines.append("        with os.fdopen(tmp_fd, 'w', encoding='utf-8') as f:")

@@ -86,28 +86,28 @@ def test_legacy_sota_leaderboard_read_path_still_uses_registry() -> None:
 
     assert "FROM qe_sota_registry" in source
     assert "JOIN qe_evolution_loops" in source
-    assert "automatic_candidates" in source
-    assert "AUTO_CANDIDATE" in source
     assert "approved_sota" in source
-    assert "FALSE AS approved_sota" in source
     assert "leaderboard" in source
 
 
-def test_sota_leaderboard_candidates_include_promotion_review_state() -> None:
+def test_sota_leaderboard_does_not_create_automatic_candidate_state() -> None:
     source = inspect.getsource(quantevolver_evolution.get_sota_leaderboard)
 
-    assert "LEFT JOIN strategy_pkg.promotion_review pr" in source
-    assert "pr.source_type = 'qe_evolution_loop'" in source
-    assert "COALESCE(pr.status, 'AUTO_CANDIDATE')" in source
     assert "TRUE AS approved_sota" in source
-    assert "FALSE AS approved_sota" in source
-    assert "review_id" in source
+    assert "AUTO_CANDIDATE" not in source
+    assert "automatic_candidates" not in source
+    assert "LEFT JOIN strategy_pkg.promotion_review pr" not in source
+    assert "Candidate StrategyPackages are now created by explicit user action" in source
 
 
-def test_sota_page_uses_governance_leaderboard_without_legacy_silent_fallback() -> None:
+def test_sota_page_is_candidate_strategy_package_console_without_legacy_fallback() -> None:
     page = Path("frontend/src/app/quantevolver/evolution/sota/page.tsx").read_text(encoding="utf-8")
 
-    assert "/quantevolver/evolution/leaderboard" in page
+    assert "candidateList" in page
+    assert "createFromCandidate" in page
+    assert "deleteCandidate" in page
+    assert "候选策略包" in page
+    assert "/quantevolver/evolution/leaderboard" not in page
     assert "/quantevolver/evolution/sota" not in page
-    assert "REVIEW_PENDING created" in page
-    assert "Pending review" in page
+    assert "Manual review" not in page
+    assert "promotion-review" not in page

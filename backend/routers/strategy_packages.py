@@ -9,11 +9,17 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from backend.db.pg_pool import get_conn
+from backend.services.strategy_package.candidate import (
+    CandidateStrategyPackageRecord,
+    CandidateStrategyPackageService,
+    CandidateStrategyPackageStatus,
+)
 from backend.services.strategy_package.metrics_summary import metrics_summary_from_record
 from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.package_asset import StrategyPackageAssetType
 from backend.services.strategy_package.qe_source_resolver import QEExperimentSourceResolver
 from backend.services.strategy_package.repository import StrategyPackageRecord
+from backend.services.strategy_package.runtime_config import build_default_runtime_config_bundle
 from backend.services.strategy_package.runtime_variant import RuntimeVariantKind, RuntimeVariantValidationStatus
 from backend.services.strategy_package.selection_artifact import StrategyPackageSelectionArtifactService
 from backend.services.strategy_package.service import StrategyPackageService
@@ -44,6 +50,61 @@ class CreateFromQEEvolutionLoopRequest(BaseModel):
     qe_task_id: str = Field(min_length=1)
     qe_loop_id: str = Field(min_length=1)
     resolve_runtime_assets: bool = False
+
+
+class CreateFromCandidateStrategyPackageRequest(BaseModel):
+    manifest_json: dict[str, Any] | None = None
+
+
+class CreateCandidateFromQEExperimentRequest(BaseModel):
+    experiment_id: str = Field(min_length=1)
+    created_by: str = Field(default="aistock_api", min_length=1)
+    display_name: str | None = None
+    archive_run_id: str | None = None
+    snapshot_config: dict[str, Any] = Field(default_factory=dict)
+    factor_manifest: dict[str, Any] = Field(default_factory=dict)
+    model_manifest: dict[str, Any] = Field(default_factory=dict)
+    strategy_manifest: dict[str, Any] = Field(default_factory=dict)
+    metric_snapshot: dict[str, Any] = Field(default_factory=dict)
+    artifact_refs: dict[str, Any] = Field(default_factory=dict)
+    completeness: dict[str, Any] = Field(default_factory=dict)
+    eligibility: dict[str, Any] = Field(default_factory=dict)
+    audit_context: dict[str, Any] = Field(default_factory=dict)
+    manual_action: bool = True
+
+
+class CreateCandidateFromQELoopRequest(BaseModel):
+    qe_task_id: str = Field(min_length=1)
+    qe_loop_id: str = Field(min_length=1)
+    experiment_id: str | None = None
+    created_by: str = Field(default="aistock_api", min_length=1)
+    display_name: str | None = None
+    archive_run_id: str | None = None
+    snapshot_config: dict[str, Any] = Field(default_factory=dict)
+    factor_manifest: dict[str, Any] = Field(default_factory=dict)
+    model_manifest: dict[str, Any] = Field(default_factory=dict)
+    strategy_manifest: dict[str, Any] = Field(default_factory=dict)
+    metric_snapshot: dict[str, Any] = Field(default_factory=dict)
+    artifact_refs: dict[str, Any] = Field(default_factory=dict)
+    completeness: dict[str, Any] = Field(default_factory=dict)
+    eligibility: dict[str, Any] = Field(default_factory=dict)
+    audit_context: dict[str, Any] = Field(default_factory=dict)
+    manual_action: bool = True
+
+
+class CloneCandidateStrategyPackageRequest(BaseModel):
+    created_by: str = Field(default="aistock_api", min_length=1)
+    display_name: str | None = None
+    overrides: dict[str, Any] = Field(default_factory=dict)
+
+
+class DeleteCandidateStrategyPackageRequest(BaseModel):
+    deleted_by: str = Field(default="aistock_api", min_length=1)
+    delete_reason: str | None = None
+
+
+class RefreshCandidateStrategyPackageRequest(BaseModel):
+    refreshed_by: str = Field(default="aistock_api", min_length=1)
 
 
 class TransitionStatusRequest(BaseModel):
@@ -149,6 +210,7 @@ def _raise_http(exc: TradingCoreError) -> None:
 
 
 def _record_payload(record: StrategyPackageRecord) -> dict[str, Any]:
+    manifest = record.current_manifest()
     return {
         "package_id": record.package_id,
         "package_name": record.package_name,
@@ -163,8 +225,13 @@ def _record_payload(record: StrategyPackageRecord) -> dict[str, Any]:
         "created_at": record.created_at.isoformat(),
         "updated_at": record.updated_at.isoformat(),
         "metrics_summary": metrics_summary_from_record(record).model_dump(mode="json"),
-        "manifest": record.current_manifest().model_dump(mode="json"),
+        "manifest": manifest.model_dump(mode="json"),
+        "runtime_config_contract": build_default_runtime_config_bundle(manifest),
     }
+
+
+def _candidate_payload(record: CandidateStrategyPackageRecord) -> dict[str, Any]:
+    return record.model_dump(mode="json")
 
 
 def _execution_policy_payload(policy) -> dict[str, Any]:
@@ -248,6 +315,21 @@ def create_package_from_qe_evolution_loop(req: CreateFromQEEvolutionLoopRequest)
         _raise_http(exc)
 
 
+@router.post("/from-candidate/{candidate_id}")
+def create_package_from_candidate(
+    candidate_id: str,
+    req: CreateFromCandidateStrategyPackageRequest,
+) -> dict[str, Any]:
+    try:
+        record = StrategyPackageService().create_from_candidate(
+            candidate_id,
+            manifest_json=req.manifest_json,
+        )
+        return {"ok": True, "package": _record_payload(record)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
 @router.get("")
 def list_strategy_packages(status: PackageStatus | None = None, limit: int = 100) -> dict[str, Any]:
     try:
@@ -265,6 +347,125 @@ def list_qe_strategy_package_sources(source_kind: str = "all", limit: int = 200)
             limit=limit,
         )
         return {"ok": True, "sources": sources}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/candidates/from-qe-experiment")
+def create_candidate_from_qe_experiment(req: CreateCandidateFromQEExperimentRequest) -> dict[str, Any]:
+    try:
+        record = CandidateStrategyPackageService().create_from_qe_experiment(
+            experiment_id=req.experiment_id,
+            created_by=req.created_by,
+            display_name=req.display_name,
+            archive_run_id=req.archive_run_id,
+            snapshot_config=req.snapshot_config,
+            factor_manifest=req.factor_manifest,
+            model_manifest=req.model_manifest,
+            strategy_manifest=req.strategy_manifest,
+            metric_snapshot=req.metric_snapshot,
+            artifact_refs=req.artifact_refs,
+            completeness=req.completeness,
+            eligibility=req.eligibility,
+            audit_context=req.audit_context,
+            manual_action=req.manual_action,
+        )
+        return {"ok": True, "candidate": _candidate_payload(record)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/candidates/from-qe-loop")
+def create_candidate_from_qe_loop(req: CreateCandidateFromQELoopRequest) -> dict[str, Any]:
+    try:
+        record = CandidateStrategyPackageService().create_from_qe_loop(
+            task_id=req.qe_task_id,
+            loop_id=req.qe_loop_id,
+            experiment_id=req.experiment_id,
+            created_by=req.created_by,
+            display_name=req.display_name,
+            archive_run_id=req.archive_run_id,
+            snapshot_config=req.snapshot_config,
+            factor_manifest=req.factor_manifest,
+            model_manifest=req.model_manifest,
+            strategy_manifest=req.strategy_manifest,
+            metric_snapshot=req.metric_snapshot,
+            artifact_refs=req.artifact_refs,
+            completeness=req.completeness,
+            eligibility=req.eligibility,
+            audit_context=req.audit_context,
+            manual_action=req.manual_action,
+        )
+        return {"ok": True, "candidate": _candidate_payload(record)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/candidates")
+def list_candidate_strategy_packages(
+    status: CandidateStrategyPackageStatus | None = CandidateStrategyPackageStatus.ACTIVE,
+    limit: int = 100,
+) -> dict[str, Any]:
+    try:
+        records = CandidateStrategyPackageService().list_candidates(status=status, limit=limit)
+        return {"ok": True, "candidates": [_candidate_payload(record) for record in records]}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/candidates/{candidate_id}")
+def get_candidate_strategy_package(candidate_id: str) -> dict[str, Any]:
+    try:
+        record = CandidateStrategyPackageService().get_candidate(candidate_id)
+        return {"ok": True, "candidate": _candidate_payload(record)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/candidates/{candidate_id}/clone")
+def clone_candidate_strategy_package(
+    candidate_id: str,
+    req: CloneCandidateStrategyPackageRequest,
+) -> dict[str, Any]:
+    try:
+        record = CandidateStrategyPackageService().clone_candidate(
+            source_candidate_id=candidate_id,
+            created_by=req.created_by,
+            display_name=req.display_name,
+            overrides=req.overrides,
+        )
+        return {"ok": True, "candidate": _candidate_payload(record)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/candidates/{candidate_id}/refresh-snapshot")
+def refresh_candidate_strategy_package_snapshot(
+    candidate_id: str,
+    req: RefreshCandidateStrategyPackageRequest,
+) -> dict[str, Any]:
+    try:
+        record = CandidateStrategyPackageService().refresh_snapshot_from_source(
+            candidate_id=candidate_id,
+            refreshed_by=req.refreshed_by,
+        )
+        return {"ok": True, "candidate": _candidate_payload(record)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.delete("/candidates/{candidate_id}")
+def delete_candidate_strategy_package(
+    candidate_id: str,
+    req: DeleteCandidateStrategyPackageRequest,
+) -> dict[str, Any]:
+    try:
+        record = CandidateStrategyPackageService().delete_candidate(
+            candidate_id=candidate_id,
+            deleted_by=req.deleted_by,
+            delete_reason=req.delete_reason,
+        )
+        return {"ok": True, "candidate": _candidate_payload(record)}
     except TradingCoreError as exc:
         _raise_http(exc)
 

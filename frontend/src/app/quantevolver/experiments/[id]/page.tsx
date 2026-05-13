@@ -6,6 +6,8 @@ import dynamic from "next/dynamic";
 import { AllStocksTable } from "../../components/AllStocksTable";
 import { FactorAnalysisPanel } from "../../components/FactorAnalysisPanel";
 import { StrategyConfigCard } from "../../components/StrategyConfigCard";
+import { PaperV2ApiError, strategyPackageApi } from "@/lib/paper-v2/api";
+import type { JsonObject } from "@/lib/paper-v2/types";
 
 const IcSeriesChart = dynamic(() => import("../../components/charts/IcSeriesChart"), { ssr: false });
 const ReturnCurveChart = dynamic(() => import("../../components/charts/ReturnCurveChart"), { ssr: false });
@@ -31,6 +33,12 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
+function apiErrorMessage(error: unknown): string {
+  if (error instanceof PaperV2ApiError) return error.message;
+  if (error instanceof Error) return error.message;
+  return String(error || "unknown error");
+}
+
 export default function ExperimentDetailPage({ params }: { params: { id: string } }) {
   const experimentId = params.id;
 
@@ -40,6 +48,8 @@ export default function ExperimentDetailPage({ params }: { params: { id: string 
   const [error, setError] = useState<string | null>(null);
 
   const [enhancedError, setEnhancedError] = useState<string | null>(null);
+  const [candidateBusy, setCandidateBusy] = useState(false);
+  const [candidateMessage, setCandidateMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (!experimentId) return;
@@ -137,6 +147,76 @@ export default function ExperimentDetailPage({ params }: { params: { id: string 
     return v.toFixed(2) + "元";
   };
 
+  const factorNames: string[] = Array.isArray(exp.factor_names) ? exp.factor_names : [];
+
+  const addToCandidatePackages = async () => {
+    setCandidateBusy(true);
+    setCandidateMessage(null);
+    try {
+      const candidate = await strategyPackageApi.createCandidateFromQEExperiment({
+        experiment_id: experimentId,
+        created_by: "quantevolver_experiment_detail",
+        display_name: exp.experiment_name ?? experimentId,
+        archive_run_id: exp.archive_run_id ?? exp.run_id ?? null,
+        snapshot_config: {
+          source_ui: "quantevolver_experiment_detail",
+          experiment_id: experimentId,
+          experiment: exp,
+          enhanced_summary: summary,
+        } as JsonObject,
+        factor_manifest: {
+          factor_names: factorNames,
+          factor_count: factorNames.length,
+        },
+        model_manifest: {
+          model_id: exp.model_id ?? null,
+          model_config: exp.model_config ?? null,
+          training_config: exp.training_config ?? null,
+          missing_reproducibility_items: exp.seed == null ? ["seed"] : [],
+        },
+        strategy_manifest: {
+          strategy_id: exp.strategy_id ?? null,
+          daily_strategy_config: exp.daily_strategy_config ?? null,
+          minute_execution_config: exp.minute_execution_config ?? null,
+          tail_handling_config: exp.tail_handling_config ?? null,
+          platform_runtime_boundary: "HMM/ST/PIT/event signals are Paper v2 platform capabilities, not package assets",
+        },
+        metric_snapshot: {
+          ...summary,
+          experiment_ic: exp.ic ?? null,
+          experiment_rank_ic: exp.rank_ic ?? null,
+          experiment_sharpe: exp.sharpe ?? null,
+        } as JsonObject,
+        artifact_refs: {
+          enhanced_metrics_available: Boolean(enhanced),
+          enhanced_metrics_endpoint: `/quantevolver/experiments/${experimentId}/enhanced-metrics`,
+        },
+        completeness: {
+          candidate_snapshot_created: true,
+          strategy_package_manifest_available: Boolean(exp.strategy_package_manifest),
+          missing_items: exp.strategy_package_manifest ? [] : ["strategy_package_manifest"],
+        },
+        eligibility: {
+          candidate_only: true,
+          can_enter_selection_or_paper_after_package_validation: true,
+          live_approval_reserved: false,
+        },
+        audit_context: {
+          manual_action: true,
+          ui_route: `/quantevolver/experiments/${experimentId}`,
+          design_doc: "docs/architecture/paper_v2_qe_candidate_strategy_warehouse_design_20260512.md",
+          created_at: new Date().toISOString(),
+        },
+        manual_action: true,
+      });
+      setCandidateMessage(`已加入候选策略包: ${candidate.candidate_id}`);
+    } catch (e) {
+      setCandidateMessage(`加入候选策略包失败: ${apiErrorMessage(e)}`);
+    } finally {
+      setCandidateBusy(false);
+    }
+  };
+
   return (
     <div style={{ minHeight: "100vh", backgroundColor: "#f1f5f9", padding: "24px 32px" }}>
       {/* Header */}
@@ -158,9 +238,21 @@ export default function ExperimentDetailPage({ params }: { params: { id: string 
           {exp.status}
         </span>
         {exp.created_at && <span style={{ fontSize: 12, color: "#94a3b8" }}>{new Date(exp.created_at).toLocaleString("zh-CN")}</span>}
+        <button
+          disabled={candidateBusy}
+          onClick={addToCandidatePackages}
+          style={{ marginLeft: "auto", padding: "7px 12px", borderRadius: 8, border: "1px solid #2563eb", background: "#eff6ff", color: "#1d4ed8", cursor: candidateBusy ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 700 }}
+        >
+          {candidateBusy ? "加入中..." : "加入候选策略包"}
+        </button>
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 20, maxWidth: 1200 }}>
+        {candidateMessage && (
+          <div style={{ padding: "10px 16px", backgroundColor: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 8, fontSize: 12, color: "#334155" }}>
+            {candidateMessage}
+          </div>
+        )}
         {/* 增强指标加载警告 */}
         {enhancedError && (
           <div style={{ padding: "10px 16px", backgroundColor: "#fffbeb", border: "1px solid #f59e0b", borderRadius: 8, fontSize: 12, color: "#92400e" }}>
