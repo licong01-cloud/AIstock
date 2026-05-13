@@ -92,7 +92,10 @@ def _parse_date(value: str | None) -> dt.date | None:
 
 
 def _db_config() -> dict[str, Any]:
-    load_dotenv(PROJECT_ROOT / ".env", override=True)
+    # Keep explicit caller-provided DB targets intact. DEV/side-port validation
+    # sets TDX_DB_* before importing this builder; overriding here can redirect
+    # a safe validation rebuild back to the default production .env.
+    load_dotenv(PROJECT_ROOT / ".env", override=False)
     return {
         "host": os.getenv("TDX_DB_HOST", "localhost"),
         "port": int(os.getenv("TDX_DB_PORT", "5432")),

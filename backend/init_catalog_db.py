@@ -343,6 +343,10 @@ def init_database():
                         as_of_date        DATE NOT NULL DEFAULT CURRENT_DATE,
                         data_window_days  INTEGER NOT NULL DEFAULT 252,
                         computed_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        universe          TEXT,
+                        universe_rule_version TEXT,
+                        universe_fingerprint_sha256 TEXT,
+                        index_policy      TEXT,
                         CONSTRAINT chk_factor_order CHECK (factor_a_id < factor_b_id),
                         CONSTRAINT uq_factor_pair   UNIQUE (factor_a_id, factor_b_id)
                     );
@@ -356,6 +360,10 @@ def init_database():
                         avg_correlation DOUBLE PRECISION,
                         computation_time_sec DOUBLE PRECISION,
                         hdf5_path TEXT,
+                        universe TEXT,
+                        universe_rule_version TEXT,
+                        universe_fingerprint_sha256 TEXT,
+                        index_policy TEXT,
                         created_at TIMESTAMPTZ DEFAULT NOW(),
                         UNIQUE(as_of_date)
                     );
@@ -725,6 +733,16 @@ def init_database():
                         top_excess_annual_return DOUBLE PRECISION,
                         benchmark_annual_return DOUBLE PRECISION,
                         turnover DOUBLE PRECISION,
+                        coverage DOUBLE PRECISION,
+                        coverage_numerator BIGINT,
+                        coverage_denominator BIGINT,
+                        coverage_semantics TEXT,
+                        universe_rule_version TEXT,
+                        universe_fingerprint_sha256 TEXT,
+                        index_policy TEXT,
+                        eligible_sample_count BIGINT,
+                        suspended_excluded_count BIGINT,
+                        st_pit_excluded_count BIGINT,
                         ic_decay_half_life INTEGER,
                         group_return_monotonicity DOUBLE PRECISION,
                         best_holding_period TEXT,

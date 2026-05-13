@@ -211,6 +211,7 @@ def plan_factor_action(
     *,
     incremental: bool,
     force: bool,
+    expected_universe_metadata: Optional[dict[str, Any]] = None,
 ) -> dict:
     parquet_path = SINGLE_DIR / f"{name}.parquet"
     entry = meta.get("factors", {}).get(name, {})
@@ -228,12 +229,16 @@ def plan_factor_action(
     except Exception as e:
         return {"action": "full_rebuild", "reason": f"parse_error: {e}", "entry": entry}
 
+    expected_universe_metadata = expected_universe_metadata or {}
     start_ok, start_reason = factor_cache_covers_window(
         cache_start_date=cached_start,
         cache_end_date=cached_end,
         target_start=target_start,
         target_end=None,
         entry=entry,
+        expected_universe_key=expected_universe_metadata.get("universe_key"),
+        expected_universe_fingerprint_sha256=expected_universe_metadata.get("universe_fingerprint_sha256"),
+        expected_index_policy=expected_universe_metadata.get("index_policy"),
     )
     end_ok = cached_end >= target_end
 
@@ -258,7 +263,11 @@ def plan_factor_action(
     if not start_ok:
         return {
             "action": "full_rebuild",
-            "reason": f"need_earlier ({cached_start} > {target_start})",
+            "reason": start_reason if start_reason in {
+                "universe_mismatch",
+                "universe_fingerprint_changed",
+                "index_policy_mismatch",
+            } else f"need_earlier ({cached_start} > {target_start})",
             "cached_start": cached_start,
             "cached_end": cached_end,
             "entry": entry,
@@ -790,6 +799,7 @@ def main():
             meta,
             incremental=args.incremental,
             force=args.force,
+            expected_universe_metadata=universe_metadata or None,
         )
         action_counts[plan["action"]] = action_counts.get(plan["action"], 0) + 1
         if plan["action"] == "skip":
