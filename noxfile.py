@@ -191,6 +191,30 @@ def paper_v2_backend(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def paper_v2_qe_candidate_devdb_e2e(session: nox.Session) -> None:
+    """Run the guarded DEV-DB QE candidate -> Paper v2 cross-module E2E gate."""
+    session.run(
+        "python",
+        "-m",
+        "compileall",
+        "scripts/dev_db/seed_paper_v2_qe_candidate_flow.py",
+        "backend/tests/e2e/test_paper_v2_qe_candidate_platform_devdb.py",
+        external=True,
+    )
+    session.run(
+        "python",
+        "-m",
+        "pytest",
+        "backend/tests/e2e/test_paper_v2_qe_candidate_platform_devdb.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        env=_env({"AISTOCK_DEV_DB_E2E": "1"}),
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
 def paper_v2_data_quality(session: nox.Session) -> None:
     """Run read-only Paper v2 + Selection Center data-quality smoke checks."""
     args = [

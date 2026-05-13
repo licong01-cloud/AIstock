@@ -77,6 +77,12 @@ DDL: list[str] = [
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """,
+    "ALTER TABLE strategy_pkg.package DROP CONSTRAINT IF EXISTS package_source_type_check",
+    """
+    ALTER TABLE strategy_pkg.package
+        ADD CONSTRAINT package_source_type_check
+        CHECK (source_type IN ('qe_experiment', 'qe_evolution_loop', 'candidate_strategy_package'))
+    """,
     """
     CREATE TABLE IF NOT EXISTS strategy_pkg.candidate_strategy_package (
         candidate_id TEXT PRIMARY KEY,
@@ -106,6 +112,12 @@ DDL: list[str] = [
         delete_reason TEXT,
         UNIQUE (source_type, source_id, candidate_version)
     )
+    """,
+    "ALTER TABLE strategy_pkg.candidate_strategy_package DROP CONSTRAINT IF EXISTS candidate_strategy_package_source_type_check",
+    """
+    ALTER TABLE strategy_pkg.candidate_strategy_package
+        ADD CONSTRAINT candidate_strategy_package_source_type_check
+        CHECK (source_type IN ('qe_experiment', 'qe_evolution_loop', 'candidate_strategy_package'))
     """,
     """
     CREATE INDEX IF NOT EXISTS idx_strategy_pkg_candidate_source
@@ -332,6 +344,21 @@ DDL: list[str] = [
             OR (broker_backend = 'minqmt_sim' AND data_source = 'MINIQMT_REALTIME')
         )
     )
+    """,
+    "ALTER TABLE paper_v2.portfolio ADD COLUMN IF NOT EXISTS broker_backend VARCHAR(32) NOT NULL DEFAULT 'local_sim'",
+    "ALTER TABLE paper_v2.portfolio DROP CONSTRAINT IF EXISTS portfolio_broker_backend_check",
+    """
+    ALTER TABLE paper_v2.portfolio
+        ADD CONSTRAINT portfolio_broker_backend_check
+        CHECK (broker_backend IN ('local_sim', 'minqmt_sim'))
+    """,
+    "ALTER TABLE paper_v2.portfolio DROP CONSTRAINT IF EXISTS portfolio_broker_market_source_check",
+    """
+    ALTER TABLE paper_v2.portfolio
+        ADD CONSTRAINT portfolio_broker_market_source_check CHECK (
+            (broker_backend = 'local_sim' AND data_source IN ('TDX_REALTIME', 'DB_HISTORICAL'))
+            OR (broker_backend = 'minqmt_sim' AND data_source = 'MINIQMT_REALTIME')
+        )
     """,
     """
     CREATE TABLE IF NOT EXISTS paper_v2.execution_policy_activation (

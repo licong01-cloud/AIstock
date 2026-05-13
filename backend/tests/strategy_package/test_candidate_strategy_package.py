@@ -415,6 +415,8 @@ def test_trading_core_schema_declares_durable_candidate_tables_without_qe_cascad
     assert "CREATE TABLE IF NOT EXISTS strategy_pkg.candidate_strategy_package" in ddl
     assert "CREATE TABLE IF NOT EXISTS strategy_pkg.candidate_strategy_package_audit" in ddl
     assert "'candidate_strategy_package'" in ddl
+    assert "DROP CONSTRAINT IF EXISTS package_source_type_check" in ddl
+    assert "DROP CONSTRAINT IF EXISTS candidate_strategy_package_source_type_check" in ddl
     assert "source_id TEXT NOT NULL" in ddl
     assert "archive_run_id TEXT" in ddl
     assert "ON DELETE CASCADE" not in ddl
