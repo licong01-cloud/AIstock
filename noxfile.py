@@ -38,6 +38,10 @@ def _run_pytest(session: nox.Session, *args: str) -> None:
     )
 
 
+def _hosted_ci() -> bool:
+    return os.environ.get("GITHUB_ACTIONS") == "true" or os.environ.get("AISTOCK_HOSTED_CI") == "1"
+
+
 def _is_port_open(port: str) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.settimeout(0.3)
@@ -189,11 +193,25 @@ def guardrail_changed_files(session: nox.Session) -> None:
 @nox.session(venv_backend="none")
 def paper_v2_backend(session: nox.Session) -> None:
     """Run Paper v2 + Selection Center backend regression tests."""
-    _run_pytest(
-        session,
+    args = [
         "backend/tests/paper_trading_v2",
         "backend/tests/selection_center",
         "backend/tests/strategy_package",
+    ]
+    if _hosted_ci():
+        # Hosted Linux runners have an ephemeral DB, not the pre-seeded local
+        # Windows dev DB required by these integration modules.
+        args.extend(
+            [
+                "--ignore-glob=backend/tests/paper_trading_v2/*dev_db*.py",
+                "--ignore=backend/tests/paper_trading_v2/test_runtime_enable_paper_compat.py",
+                "-k",
+                "not test_model_asset_resolver_uses_aistock_cache_without_wsl_unc_probe",
+            ]
+        )
+    _run_pytest(
+        session,
+        *args,
         "-q",
         "-p",
         "no:cacheprovider",
