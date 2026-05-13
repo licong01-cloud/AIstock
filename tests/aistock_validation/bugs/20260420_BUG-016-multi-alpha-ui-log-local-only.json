@@ -1,53 +1,55 @@
 {
-  "schema_version": "aistock_validation_bug_v1",
-  "bug_id": "BUG-016",
-  "title": "多Alpha UI 日志只显示本地节点 — 无法看到远端节点运行状态",
-  "description": "多Alpha UI 日志面板只显示本地（主节点）的日志流，远端节点（如 rdagent-node 192.168.50.215）的训练日志无法在 UI 中观察。当前需要 SSH 远端节点查看，调试效率低。修复方向：(a) 远端节点通过 Results API push 日志 chunk 到主节点；(b) 主节点 WebSocket fan-out 多节点日志流；(c) UI 增加节点过滤器。从 MEMORY pending_fixes.md 提取。",
-  "module": "rdagent",
-  "severity": "P0",
-  "risk_area": "observability",
-  "status": "open",
-  "trigger_condition": {
-    "scenario": "multi_alpha_remote_node_running_no_ui_visibility"
-  },
-  "reproduce_command": "open frontend multi-alpha logs page during remote training run",
-  "failing_run_id": null,
-  "evidence_uris": [
-    "memory:project_multi_alpha_progress.md",
-    "memory:rdagent_multi_node_architecture.md"
-  ],
-  "fingerprint": "rdagent::multi_alpha::ui_log_local_only_remote_invisible",
-  "assigned_agent": null,
-  "fix_branch": null,
-  "fix_commit": null,
-  "verification_run_id": null,
-  "created_at": "2026-04-20T00:00:00Z",
-  "first_seen_at": "2026-04-20T00:00:00Z",
-  "last_seen_at": "2026-04-20T00:00:00Z",
-  "fixed_at": null,
-  "submitted_at": null,
-  "closed_at": null,
   "allowed_write_scope": [
     "rdagent/scenarios/qlib/factor_experiment/remote_log_relay.py",
     "frontend/src/components/multi-alpha/LogStream.tsx"
   ],
-  "suspected_modules": [
-    "rdagent/scenarios/qlib/",
-    "frontend/src/components/multi-alpha/"
-  ],
-  "required_verification": [
-    "UI shows live log lines tagged with node_id during remote run"
-  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-016",
+  "closed_at": null,
   "closure_requirements": [
     "Multi-node log architecture documented",
     "UI node filter active"
   ],
+  "created_at": "2026-04-20T00:00:00Z",
+  "description": "多Alpha UI 日志面板只显示本地（主节点）的日志流，远端节点（如 rdagent-node 192.168.50.215）的训练日志无法在 UI 中观察。当前需要 SSH 远端节点查看，调试效率低。修复方向：(a) 远端节点通过 Results API push 日志 chunk 到主节点；(b) 主节点 WebSocket fan-out 多节点日志流；(c) UI 增加节点过滤器。从 MEMORY pending_fixes.md 提取。",
   "events": [
     {
-      "timestamp": "2026-04-20T00:00:00Z",
-      "actor": "claude_code",
       "action": "discovered",
-      "note": "Multi-alpha master-slave architecture commissioning - observability gap"
+      "actor": "claude_code",
+      "note": "Multi-alpha master-slave architecture commissioning - observability gap",
+      "timestamp": "2026-04-20T00:00:00Z"
     }
-  ]
+  ],
+  "evidence_uris": [
+    "memory:project_multi_alpha_progress.md",
+    "memory:rdagent_multi_node_architecture.md"
+  ],
+  "failing_run_id": null,
+  "fingerprint": "rdagent::multi_alpha::ui_log_local_only_remote_invisible",
+  "first_seen_at": "2026-04-20T00:00:00Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 7,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/7",
+  "last_seen_at": "2026-05-13T07:03:20Z",
+  "module": "rdagent",
+  "reproduce_command": "open frontend multi-alpha logs page during remote training run",
+  "required_verification": [
+    "UI shows live log lines tagged with node_id during remote run"
+  ],
+  "risk_area": "observability",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "submitted_at": null,
+  "suspected_modules": [
+    "rdagent/scenarios/qlib/",
+    "frontend/src/components/multi-alpha/"
+  ],
+  "title": "多Alpha UI 日志只显示本地节点 — 无法看到远端节点运行状态",
+  "trigger_condition": {
+    "scenario": "multi_alpha_remote_node_running_no_ui_visibility"
+  },
+  "verification_run_id": null
 }

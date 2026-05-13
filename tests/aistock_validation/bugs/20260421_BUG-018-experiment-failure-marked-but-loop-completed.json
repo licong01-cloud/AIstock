@@ -1,52 +1,54 @@
 {
-  "schema_version": "aistock_validation_bug_v1",
-  "bug_id": "BUG-018",
-  "title": "实验标记 '执行失败' 但 Loop1 实际完成 — 状态判断逻辑有误",
-  "description": "多Alpha 实验在 Loop1 实际成功完成后被错误标记为 '执行失败'，导致 UI 状态与底层数据不一致。Loop1 产物（模型 / 回测结果）已正常生成。根因可能：(a) status writer 在 Loop1 末尾未更新 success；(b) 主从节点 status sync 误把临时未上报状态识别为 fail；(c) timeout 阈值过严。从 MEMORY pending_fixes.md 提取。",
-  "module": "rdagent",
-  "severity": "P1",
-  "risk_area": "observability",
-  "status": "open",
-  "trigger_condition": {
-    "scenario": "multi_alpha_loop1_completes_successfully_but_marked_failed"
-  },
-  "reproduce_command": "rdagent app fin_factor --multi-alpha; check experiment status vs loop1 artifacts",
-  "failing_run_id": null,
-  "evidence_uris": [
-    "memory:pending_fixes.md",
-    "memory:project_multi_alpha_progress.md"
-  ],
-  "fingerprint": "rdagent::multi_alpha::status_misclassified_as_failed",
-  "assigned_agent": null,
-  "fix_branch": null,
-  "fix_commit": null,
-  "verification_run_id": null,
-  "created_at": "2026-04-21T00:00:00Z",
-  "first_seen_at": "2026-04-21T00:00:00Z",
-  "last_seen_at": "2026-04-21T00:00:00Z",
-  "fixed_at": null,
-  "submitted_at": null,
-  "closed_at": null,
   "allowed_write_scope": [
     "rdagent/scenarios/qlib/factor_experiment/status_writer.py",
     "rdagent/app/fin_factor/multi_alpha_scheduler.py"
   ],
-  "suspected_modules": [
-    "rdagent/scenarios/qlib/factor_experiment/"
-  ],
-  "required_verification": [
-    "Loop1 success → status=success in DB and UI"
-  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-018",
+  "closed_at": null,
   "closure_requirements": [
     "Status writer protocol documented",
     "Regression test for partial-completion vs full-completion paths"
   ],
+  "created_at": "2026-04-21T00:00:00Z",
+  "description": "多Alpha 实验在 Loop1 实际成功完成后被错误标记为 '执行失败'，导致 UI 状态与底层数据不一致。Loop1 产物（模型 / 回测结果）已正常生成。根因可能：(a) status writer 在 Loop1 末尾未更新 success；(b) 主从节点 status sync 误把临时未上报状态识别为 fail；(c) timeout 阈值过严。从 MEMORY pending_fixes.md 提取。",
   "events": [
     {
-      "timestamp": "2026-04-21T00:00:00Z",
-      "actor": "claude_code",
       "action": "discovered",
-      "note": "Found during multi-alpha master-slave commissioning"
+      "actor": "claude_code",
+      "note": "Found during multi-alpha master-slave commissioning",
+      "timestamp": "2026-04-21T00:00:00Z"
     }
-  ]
+  ],
+  "evidence_uris": [
+    "memory:pending_fixes.md",
+    "memory:project_multi_alpha_progress.md"
+  ],
+  "failing_run_id": null,
+  "fingerprint": "rdagent::multi_alpha::status_misclassified_as_failed",
+  "first_seen_at": "2026-04-21T00:00:00Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 12,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/12",
+  "last_seen_at": "2026-05-13T07:03:20Z",
+  "module": "rdagent",
+  "reproduce_command": "rdagent app fin_factor --multi-alpha; check experiment status vs loop1 artifacts",
+  "required_verification": [
+    "Loop1 success → status=success in DB and UI"
+  ],
+  "risk_area": "observability",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "submitted_at": null,
+  "suspected_modules": [
+    "rdagent/scenarios/qlib/factor_experiment/"
+  ],
+  "title": "实验标记 '执行失败' 但 Loop1 实际完成 — 状态判断逻辑有误",
+  "trigger_condition": {
+    "scenario": "multi_alpha_loop1_completes_successfully_but_marked_failed"
+  },
+  "verification_run_id": null
 }

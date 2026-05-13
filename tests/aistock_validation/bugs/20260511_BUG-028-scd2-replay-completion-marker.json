@@ -1,18 +1,33 @@
 {
-  "schema_version": "aistock_validation_bug_v1",
+  "allowed_write_scope": [
+    "backend/db/init_qe_archive_paper_v2_extension_20260510.sql",
+    "backend/services/qe_archive/handlers/paper_v2_archive_handler.py",
+    "backend/tests/qe_archive/test_paper_v2_archive_handler.py"
+  ],
+  "assigned_agent": "claude_code",
   "bug_id": "BUG-028",
-  "title": "PaperV2ArchiveHandler SCD2 replay short-circuit too broad - permanent partial archive risk",
+  "closed_at": null,
+  "closure_requirements": [
+    "T14b/c fix round 3 commit + ALTER TABLE applied",
+    "Codex round-3 review PASS",
+    "Worker registration + smoke verifies retry recovery scenario"
+  ],
+  "created_at": "2026-05-11T00:00:00Z",
   "description": "_handle_run_completed returns success/replay_skipped whenever qe_archive.paper_v2_run row exists for run_id, before checking whether the previous archive was complete. If the first run.completed transaction committed a paper_v2_run row but crashed/failed before all 17 child mirrors completed (or a manual partial row exists), every later retry will skip all mirror steps forever and leave incomplete archive data. The archive table has no completion marker beyond paper_v2_run existence. Codex T14b/c fix round 2 review P1 (drawer de61c45a). Round 3 fix dispatched (task #33): add archive_complete + archive_completed_at columns to qe_archive.paper_v2_run; handler short-circuits only when archive_complete=true; UPDATE archive_complete=true at end of full mirror flow; ALTER TABLE applied to dev DB.",
-  "module": "qe_archive",
-  "severity": "P1",
-  "risk_area": "data_integrity",
-  "status": "in_progress",
-  "trigger_condition": {
-    "scenario": "partial_archive_then_replay",
-    "preconditions": ["paper_v2_run.run_id exists in qe_archive", "child mirror failed before completion", "event re-emitted for retry"]
-  },
-  "reproduce_command": "pytest backend/tests/qe_archive/test_paper_v2_archive_handler.py::test_replay_partial_archive_retries_complete_mirror -q",
-  "failing_run_id": null,
+  "events": [
+    {
+      "action": "discovered",
+      "actor": "codex_app",
+      "note": "T14b/c fix round 2 review P1 - SCD2 replay short-circuit too broad (drawer de61c45a)",
+      "timestamp": "2026-05-11T00:43:21Z"
+    },
+    {
+      "action": "dispatched",
+      "actor": "claude_code_strategy",
+      "note": "T14b/c fix round 3 dispatched to dw-foundation Lead via docs/cross_tool/20260511_strategy_to_dw_foundation_DISPATCH_t14bc_fix_round_3.md",
+      "timestamp": "2026-05-11T01:00:00Z"
+    }
+  ],
   "evidence_uris": [
     "drawer:cross-tool/codex-claude-coord/de61c45a1c2dbc1de36758ae",
     "drawer:cross-tool/codex-claude-coord/525dca9f77ca5a16d962187f",
@@ -20,48 +35,39 @@
     "commit:a77a7d8",
     "file:backend/services/qe_archive/handlers/paper_v2_archive_handler.py"
   ],
+  "failing_run_id": null,
   "fingerprint": "qe_archive::paper_v2_archive_handler::scd2_replay_no_completion_marker",
-  "assigned_agent": "claude_code",
+  "first_seen_at": "2026-05-11T00:43:21Z",
   "fix_branch": "claude/dw-foundation-20260510",
   "fix_commit": null,
-  "verification_run_id": null,
-  "created_at": "2026-05-11T00:00:00Z",
-  "first_seen_at": "2026-05-11T00:43:21Z",
-  "last_seen_at": "2026-05-11T00:43:21Z",
   "fixed_at": null,
-  "submitted_at": "2026-05-11T01:30:00Z",
-  "closed_at": null,
-  "allowed_write_scope": [
-    "backend/db/init_qe_archive_paper_v2_extension_20260510.sql",
-    "backend/services/qe_archive/handlers/paper_v2_archive_handler.py",
-    "backend/tests/qe_archive/test_paper_v2_archive_handler.py"
-  ],
-  "suspected_modules": [
-    "backend/services/qe_archive/handlers/paper_v2_archive_handler.py"
-  ],
+  "github_issue_number": 13,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/13",
+  "last_seen_at": "2026-05-13T07:03:20Z",
+  "module": "qe_archive",
+  "reproduce_command": "pytest backend/tests/qe_archive/test_paper_v2_archive_handler.py::test_replay_partial_archive_retries_complete_mirror -q",
   "required_verification": [
     "test_replay_partial_archive_retries_complete_mirror",
     "test_replay_complete_archive_skips_mirror",
     "ALTER TABLE qe_archive.paper_v2_run added archive_complete + archive_completed_at columns on dev DB",
     "Codex round-3 review pass"
   ],
-  "closure_requirements": [
-    "T14b/c fix round 3 commit + ALTER TABLE applied",
-    "Codex round-3 review PASS",
-    "Worker registration + smoke verifies retry recovery scenario"
+  "risk_area": "data_integrity",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "in_progress",
+  "submitted_at": "2026-05-11T01:30:00Z",
+  "suspected_modules": [
+    "backend/services/qe_archive/handlers/paper_v2_archive_handler.py"
   ],
-  "events": [
-    {
-      "timestamp": "2026-05-11T00:43:21Z",
-      "actor": "codex_app",
-      "action": "discovered",
-      "note": "T14b/c fix round 2 review P1 - SCD2 replay short-circuit too broad (drawer de61c45a)"
-    },
-    {
-      "timestamp": "2026-05-11T01:00:00Z",
-      "actor": "claude_code_strategy",
-      "action": "dispatched",
-      "note": "T14b/c fix round 3 dispatched to dw-foundation Lead via docs/cross_tool/20260511_strategy_to_dw_foundation_DISPATCH_t14bc_fix_round_3.md"
-    }
-  ]
+  "title": "PaperV2ArchiveHandler SCD2 replay short-circuit too broad - permanent partial archive risk",
+  "trigger_condition": {
+    "preconditions": [
+      "paper_v2_run.run_id exists in qe_archive",
+      "child mirror failed before completion",
+      "event re-emitted for retry"
+    ],
+    "scenario": "partial_archive_then_replay"
+  },
+  "verification_run_id": null
 }

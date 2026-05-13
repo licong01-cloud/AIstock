@@ -1,54 +1,56 @@
 {
-  "schema_version": "aistock_validation_bug_v1",
-  "bug_id": "BUG-012",
-  "title": "HMM系数覆盖不全 — qe_20260415 因 000008.SZ 缺失 HMM 系数 KeyError 失败",
-  "description": "QE 演进运行 qe_20260415 在 HMM 后置阶段因股票 000008.SZ 缺失 HMM 系数引发 KeyError 中断。HMM viterbi forward filter 修复（JSON/参数名）已完成，但系数覆盖率 bug 仍未解决——少数股票在某些时间窗内没有训练好的 HMM 系数。当前默认行为是 KeyError 直接抛出（按 no_silent_errors 政策），导致回测无法完成。需修复方向：(a) 增加系数训练覆盖度补齐脚本；(b) 在 viterbi 推断时对缺失系数返回中性 regime 而非 KeyError；(c) 在数据准备阶段过滤无系数的 stock_id。从 MEMORY hmm_viterbi_forward_filter_fix.md 提取。",
-  "module": "rdagent",
-  "severity": "P1",
-  "risk_area": "data_correctness",
-  "status": "open",
-  "trigger_condition": {
-    "scenario": "QE_evolution_run_with_hmm_post_stage",
-    "missing_coefficient_for": "000008.SZ"
-  },
-  "reproduce_command": "rdagent app fin_factor --backtest --strategy_id qe_20260415  # KeyError surfaces in HMM viterbi step",
-  "failing_run_id": "qe_20260415",
-  "evidence_uris": [
-    "memory:hmm_viterbi_forward_filter_fix.md"
-  ],
-  "fingerprint": "rdagent::hmm_viterbi::missing_coefficient_keyerror",
-  "assigned_agent": null,
-  "fix_branch": null,
-  "fix_commit": null,
-  "verification_run_id": null,
-  "created_at": "2026-04-15T00:00:00Z",
-  "first_seen_at": "2026-04-15T00:00:00Z",
-  "last_seen_at": "2026-04-15T00:00:00Z",
-  "fixed_at": null,
-  "submitted_at": null,
-  "closed_at": null,
   "allowed_write_scope": [
     "rdagent/scenarios/qlib/factor_experiment/qlib_factor_runner.py",
     "scripts/regime_train_hmm_coefficients.py"
   ],
-  "suspected_modules": [
-    "rdagent/scenarios/qlib/",
-    "scripts/regime_*"
-  ],
-  "required_verification": [
-    "Re-run qe_20260415 to completion without KeyError",
-    "Coverage report shows >= 99% stock-id coverage for active universe"
-  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-012",
+  "closed_at": null,
   "closure_requirements": [
     "Decision recorded for missing-coefficient policy (compute / fallback / filter)",
     "Regression test covering 000008.SZ case"
   ],
+  "created_at": "2026-04-15T00:00:00Z",
+  "description": "QE 演进运行 qe_20260415 在 HMM 后置阶段因股票 000008.SZ 缺失 HMM 系数引发 KeyError 中断。HMM viterbi forward filter 修复（JSON/参数名）已完成，但系数覆盖率 bug 仍未解决——少数股票在某些时间窗内没有训练好的 HMM 系数。当前默认行为是 KeyError 直接抛出（按 no_silent_errors 政策），导致回测无法完成。需修复方向：(a) 增加系数训练覆盖度补齐脚本；(b) 在 viterbi 推断时对缺失系数返回中性 regime 而非 KeyError；(c) 在数据准备阶段过滤无系数的 stock_id。从 MEMORY hmm_viterbi_forward_filter_fix.md 提取。",
   "events": [
     {
-      "timestamp": "2026-04-15T00:00:00Z",
-      "actor": "claude_code",
       "action": "discovered",
-      "note": "HMM viterbi forward filter fix landed; coefficient coverage bug remained open"
+      "actor": "claude_code",
+      "note": "HMM viterbi forward filter fix landed; coefficient coverage bug remained open",
+      "timestamp": "2026-04-15T00:00:00Z"
     }
-  ]
+  ],
+  "evidence_uris": [
+    "memory:hmm_viterbi_forward_filter_fix.md"
+  ],
+  "failing_run_id": "qe_20260415",
+  "fingerprint": "rdagent::hmm_viterbi::missing_coefficient_keyerror",
+  "first_seen_at": "2026-04-15T00:00:00Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4",
+  "last_seen_at": "2026-05-13T07:03:20Z",
+  "module": "rdagent",
+  "reproduce_command": "rdagent app fin_factor --backtest --strategy_id qe_20260415  # KeyError surfaces in HMM viterbi step",
+  "required_verification": [
+    "Re-run qe_20260415 to completion without KeyError",
+    "Coverage report shows >= 99% stock-id coverage for active universe"
+  ],
+  "risk_area": "data_correctness",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "submitted_at": null,
+  "suspected_modules": [
+    "rdagent/scenarios/qlib/",
+    "scripts/regime_*"
+  ],
+  "title": "HMM系数覆盖不全 — qe_20260415 因 000008.SZ 缺失 HMM 系数 KeyError 失败",
+  "trigger_condition": {
+    "missing_coefficient_for": "000008.SZ",
+    "scenario": "QE_evolution_run_with_hmm_post_stage"
+  },
+  "verification_run_id": null
 }

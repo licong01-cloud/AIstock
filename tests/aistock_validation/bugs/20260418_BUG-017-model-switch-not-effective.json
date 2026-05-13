@@ -1,52 +1,54 @@
 {
-  "schema_version": "aistock_validation_bug_v1",
-  "bug_id": "BUG-017",
-  "title": "model_switch 未实际切换模型 — ModelAgent 无法从 DB 选择不同模型",
-  "description": "QE 演进管线的 model_switch 决策（ModelAgent 输出）未实际生效。期望：ModelAgent 决定切换到候选模型 X 后，下一轮训练加载模型 X 的代码。实际：训练继续用上一轮基线模型，model_switch 决策只在 DB 中记录但未读取。根因可能在 ConfigComposer 不读 DB 中的 model_switch 字段，或 model_pool 不暴露切换接口。从 MEMORY pending_fixes.md 提取。",
-  "module": "rdagent",
-  "severity": "P1",
-  "risk_area": "feature_gap",
-  "status": "open",
-  "trigger_condition": {
-    "scenario": "qe_evolution_model_agent_recommends_switch"
-  },
-  "reproduce_command": "rdagent app fin_factor --evolve --strategy_id <existing>  # observe ModelAgent decision vs actual training model",
-  "failing_run_id": null,
-  "evidence_uris": [
-    "memory:pending_fixes.md",
-    "memory:rdagent_config.md"
-  ],
-  "fingerprint": "rdagent::model_switch::decision_not_applied",
-  "assigned_agent": null,
-  "fix_branch": null,
-  "fix_commit": null,
-  "verification_run_id": null,
-  "created_at": "2026-04-18T00:00:00Z",
-  "first_seen_at": "2026-04-18T00:00:00Z",
-  "last_seen_at": "2026-04-18T00:00:00Z",
-  "fixed_at": null,
-  "submitted_at": null,
-  "closed_at": null,
   "allowed_write_scope": [
     "rdagent/scenarios/qlib/factor_experiment/config_composer.py",
     "rdagent/scenarios/qlib/factor_experiment/model_pool.py"
   ],
-  "suspected_modules": [
-    "rdagent/scenarios/qlib/factor_experiment/"
-  ],
-  "required_verification": [
-    "End-to-end run with ModelAgent recommending switch confirms next loop uses recommended model code"
-  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-017",
+  "closed_at": null,
   "closure_requirements": [
     "Decision recorded for model_switch protocol",
     "Regression test covering switch happy path"
   ],
+  "created_at": "2026-04-18T00:00:00Z",
+  "description": "QE 演进管线的 model_switch 决策（ModelAgent 输出）未实际生效。期望：ModelAgent 决定切换到候选模型 X 后，下一轮训练加载模型 X 的代码。实际：训练继续用上一轮基线模型，model_switch 决策只在 DB 中记录但未读取。根因可能在 ConfigComposer 不读 DB 中的 model_switch 字段，或 model_pool 不暴露切换接口。从 MEMORY pending_fixes.md 提取。",
   "events": [
     {
-      "timestamp": "2026-04-18T00:00:00Z",
-      "actor": "claude_code",
       "action": "discovered",
-      "note": "Found during QE evolution observability review"
+      "actor": "claude_code",
+      "note": "Found during QE evolution observability review",
+      "timestamp": "2026-04-18T00:00:00Z"
     }
-  ]
+  ],
+  "evidence_uris": [
+    "memory:pending_fixes.md",
+    "memory:rdagent_config.md"
+  ],
+  "failing_run_id": null,
+  "fingerprint": "rdagent::model_switch::decision_not_applied",
+  "first_seen_at": "2026-04-18T00:00:00Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6",
+  "last_seen_at": "2026-05-13T07:03:20Z",
+  "module": "rdagent",
+  "reproduce_command": "rdagent app fin_factor --evolve --strategy_id <existing>  # observe ModelAgent decision vs actual training model",
+  "required_verification": [
+    "End-to-end run with ModelAgent recommending switch confirms next loop uses recommended model code"
+  ],
+  "risk_area": "feature_gap",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "submitted_at": null,
+  "suspected_modules": [
+    "rdagent/scenarios/qlib/factor_experiment/"
+  ],
+  "title": "model_switch 未实际切换模型 — ModelAgent 无法从 DB 选择不同模型",
+  "trigger_condition": {
+    "scenario": "qe_evolution_model_agent_recommends_switch"
+  },
+  "verification_run_id": null
 }
