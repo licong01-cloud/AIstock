@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -398,12 +399,53 @@ def test_cli_bidirectional_dry_run_uses_issue_snapshot(tmp_path: Path, capsys: p
     assert payload["issues_to_json_summary"] == {"create_json": 1}
 
 
-def test_cli_apply_json_to_issues_requires_token_even_with_snapshot(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_cli_apply_json_to_issues_requires_token_even_with_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     _write_bug(tmp_path, bug_id="BUG-921", severity="P1")
     snapshot = tmp_path / "issues.json"
     snapshot.write_text(json.dumps({"issues": []}), encoding="utf-8")
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setenv("AISTOCK_GITHUB_DISABLE_GH_CLI_TOKEN", "1")
 
     code = sync.main(["--bugs-dir", str(tmp_path), "--issues-snapshot", str(snapshot), "--apply", "--repo", "owner/repo"])
 
     assert code == 2
     assert "--apply requires --token" in capsys.readouterr().err
+
+
+def test_local_env_loader_sets_github_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env_file = tmp_path / ".env.github-issues-local"
+    env_file.write_text(
+        "GITHUB_REPOSITORY=owner/repo\n"
+        "HTTPS_PROXY=socks5://127.0.0.1:1080\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    monkeypatch.delenv("HTTPS_PROXY", raising=False)
+
+    sync._load_local_github_env()
+
+    assert sync.os.environ["GITHUB_REPOSITORY"] == "owner/repo"
+    assert sync.os.environ["HTTPS_PROXY"] == "socks5://127.0.0.1:1080"
+
+
+def test_github_token_default_uses_gh_cli_only_when_remote_needed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("AISTOCK_GITHUB_DISABLE_GH_CLI_TOKEN", raising=False)
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **_kwargs: object) -> SimpleNamespace:
+        calls.append(args)
+        return SimpleNamespace(returncode=0, stdout="pytest-token\n")
+
+    monkeypatch.setattr(sync.subprocess, "run", fake_run)
+
+    assert sync._github_token_default(remote_needed=False) is None
+    assert sync._github_token_default(remote_needed=True) == "pytest-token"
+    assert calls == [["gh", "auth", "token"]]

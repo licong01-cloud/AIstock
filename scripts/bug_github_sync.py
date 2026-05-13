@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -23,10 +24,61 @@ BODY_BUG_FIELD_RE = re.compile(
 P0_P1 = {"P0", "P1"}
 CLOSED_BUG_STATUSES = {"fixed", "closed", "resolved", "verified"}
 OPEN_BUG_STATUSES = {"open", "reopened", "triaged", "in_progress", "in-progress", "blocked"}
+LOCAL_ENV_FILE = ".env.github-issues-local"
 
 
 class BugGitHubSyncError(RuntimeError):
     pass
+
+
+def _load_local_github_env() -> None:
+    """Load local GitHub sync defaults without overriding explicit process env."""
+    if os.environ.get("AISTOCK_GITHUB_SKIP_ENV_FILE"):
+        return
+
+    roots: list[Path] = []
+    for root in (Path.cwd(), Path(__file__).resolve().parents[1]):
+        resolved = root.resolve()
+        if resolved not in roots:
+            roots.append(resolved)
+
+    for root in roots:
+        path = root / LOCAL_ENV_FILE
+        if not path.is_file():
+            continue
+        for line in path.read_text(encoding="utf-8-sig").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            key, value = stripped.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+
+
+def _github_token_from_gh_cli() -> str | None:
+    if os.environ.get("AISTOCK_GITHUB_DISABLE_GH_CLI_TOKEN"):
+        return None
+    try:
+        completed = subprocess.run(
+            ["gh", "auth", "token"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    token = completed.stdout.strip()
+    return token if completed.returncode == 0 and token else None
+
+
+def _github_token_default(*, remote_needed: bool) -> str | None:
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token or not remote_needed:
+        return token
+    return _github_token_from_gh_cli()
 
 
 @dataclass(frozen=True)
@@ -600,10 +652,11 @@ def run(config: SyncConfig) -> dict[str, Any]:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    _load_local_github_env()
     parser = argparse.ArgumentParser(description="Offline-first AIstock bugs JSON to GitHub Issues sync helper")
     parser.add_argument("--bugs-dir", type=Path, default=BUGS_DIR, help="Directory containing AIstock bug JSON files")
     parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY"), help="GitHub repo in owner/name form")
-    parser.add_argument("--token", default=os.environ.get("GITHUB_TOKEN"), help="GitHub token; required only with --apply")
+    parser.add_argument("--token", default=None, help="GitHub token; required only with --apply")
     parser.add_argument("--issues-snapshot", type=Path, help="Offline JSON snapshot of existing GitHub issues for idempotency planning")
     parser.add_argument("--historical-import", action="store_true", help="Add the import:historical label to planned issues")
     parser.add_argument("--p0-p1-only", action="store_true", help="Only plan P0/P1 bugs; use for auto-file/import flows")
@@ -618,12 +671,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     p0_p1_only = args.p0_p1_only and not args.all_severities
+    directions = {"json-to-issues"} if args.direction == "json-to-issues" else {"issues-to-json"} if args.direction == "issues-to-json" else {"json-to-issues", "issues-to-json"}
+    remote_needed = (args.apply and "json-to-issues" in directions) or (args.issues_snapshot is None and "issues-to-json" in directions)
+    token = args.token if args.token is not None else _github_token_default(remote_needed=remote_needed)
     try:
         payload = run(
             SyncConfig(
                 bugs_dir=args.bugs_dir,
                 repo=args.repo,
-                token=args.token,
+                token=token,
                 apply=args.apply,
                 historical_import=args.historical_import,
                 p0_p1_only=p0_p1_only,

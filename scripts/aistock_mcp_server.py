@@ -29,9 +29,11 @@ from __future__ import annotations
 
 import datetime as _dt
 import hashlib
+import importlib.util
 import json
 import os
 import re
+import subprocess
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
@@ -61,6 +63,7 @@ GITHUB_SOURCE_VALUES = {"local", "github", "both"}
 GITHUB_CLOSED_STATUSES = {"closed", "fixed", "resolved", "verified", "wontfix"}
 GITHUB_MARKER_RE = re.compile(r"<!--\s*aistock-bug-id:\s*([^>\s]+)\s*-->", re.I)
 TITLE_PREFIX_RE = re.compile(r"^\[([^\]]+)\]")
+LOCAL_ENV_FILE = ".env.github-issues-local"
 
 
 def _sanitize_identifier(value: Any, name: str) -> str:
@@ -91,6 +94,61 @@ def _assert_loopback_url(url: str) -> str:
             f"({sorted(LOOPBACK_HOSTS)}); got host={host!r} url={url!r}"
         )
     return url
+
+
+def _load_local_github_env() -> None:
+    """Load local GitHub issue defaults without overriding explicit process env."""
+    if os.environ.get("AISTOCK_GITHUB_SKIP_ENV_FILE"):
+        return
+
+    roots: list[Path] = []
+    for root in (Path.cwd(), Path(__file__).resolve().parents[1]):
+        resolved = root.resolve()
+        if resolved not in roots:
+            roots.append(resolved)
+
+    for root in roots:
+        path = root / LOCAL_ENV_FILE
+        if not path.is_file():
+            continue
+        for line in path.read_text(encoding="utf-8-sig").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            key, value = stripped.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+
+
+def _github_token_from_gh_cli() -> str | None:
+    if os.environ.get("AISTOCK_GITHUB_DISABLE_GH_CLI_TOKEN"):
+        return None
+    try:
+        completed = subprocess.run(
+            ["gh", "auth", "token"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    token = completed.stdout.strip()
+    return token if completed.returncode == 0 and token else None
+
+
+def _httpx_trust_env_for_github() -> bool:
+    proxy_keys = ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy")
+    for key in proxy_keys:
+        value = os.environ.get(key, "").strip().lower()
+        if value.startswith(("socks://", "socks4://", "socks5://", "socks5h://")):
+            return importlib.util.find_spec("socksio") is not None
+    return True
+
+
+_load_local_github_env()
 
 
 def _resolve_repo_root() -> Path:
@@ -138,6 +196,7 @@ class ValidationCenterClient:
             base_url=self.base_url,
             timeout=self.timeout,
             transport=self._transport,
+            trust_env=False,
         )
 
     def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
@@ -604,6 +663,7 @@ class GitHubIssueClient:
             base_url=f"{GITHUB_API_BASE}/repos/{self.repo}",
             timeout=self.timeout,
             transport=self._transport,
+            trust_env=_httpx_trust_env_for_github(),
             headers={
                 "Accept": "application/vnd.github+json",
                 "Authorization": f"Bearer {self.token}",
@@ -668,7 +728,7 @@ _github_client_factory: Callable[..., GitHubIssueClient] = GitHubIssueClient
 
 def _github_issue_client_from_env() -> GitHubIssueClient:
     repo = os.environ.get("GITHUB_REPOSITORY")
-    token = os.environ.get("GH_TOKEN")
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or _github_token_from_gh_cli()
     missing = [name for name, value in (("GH_TOKEN", token), ("GITHUB_REPOSITORY", repo)) if not value]
     if missing:
         raise ValueError(

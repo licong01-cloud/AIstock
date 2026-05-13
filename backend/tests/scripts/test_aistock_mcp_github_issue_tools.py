@@ -4,6 +4,7 @@ import importlib
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -13,7 +14,10 @@ import pytest
 def mcp_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("AISTOCK_REPO_ROOT", str(tmp_path))
     monkeypatch.setenv("AISTOCK_VALIDATION_BASE_URL", "http://127.0.0.1/api/v1/validation")
+    monkeypatch.setenv("AISTOCK_GITHUB_SKIP_ENV_FILE", "1")
+    monkeypatch.setenv("AISTOCK_GITHUB_DISABLE_GH_CLI_TOKEN", "1")
     monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
     sys.modules.pop("scripts.aistock_mcp_server", None)
     module = importlib.import_module("scripts.aistock_mcp_server")
@@ -121,6 +125,49 @@ def test_github_issue_create_live_requires_explicit_env(mcp_module):
             body="Live GitHub is opt-in.",
             create_github=True,
         )
+
+
+def test_github_issue_client_uses_gh_cli_token_fallback(mcp_module, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("AISTOCK_GITHUB_DISABLE_GH_CLI_TOKEN", raising=False)
+
+    def fake_run(args: list[str], **_kwargs: object) -> SimpleNamespace:
+        assert args == ["gh", "auth", "token"]
+        return SimpleNamespace(returncode=0, stdout="pytest-token\n")
+
+    monkeypatch.setattr(mcp_module.subprocess, "run", fake_run)
+
+    client = mcp_module._github_issue_client_from_env()
+
+    assert client.repo == "owner/repo"
+    assert client.token == "pytest-token"
+
+
+def test_validation_client_ignores_proxy_env_for_loopback(mcp_module, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("HTTPS_PROXY", "socks5://127.0.0.1:1080")
+
+    client = mcp_module.ValidationCenterClient(base_url="http://127.0.0.1/api/v1/validation")
+
+    with client._client() as http_client:
+        assert http_client._trust_env is False
+
+
+def test_github_client_skips_unsupported_socks_proxy_env(mcp_module, monkeypatch: pytest.MonkeyPatch):
+    original_find_spec = mcp_module.importlib.util.find_spec
+    monkeypatch.setenv("HTTPS_PROXY", "socks5://127.0.0.1:1080")
+
+    def fake_find_spec(name: str, *args: object, **kwargs: object) -> object:
+        if name == "socksio":
+            return None
+        return original_find_spec(name, *args, **kwargs)
+
+    monkeypatch.setattr(mcp_module.importlib.util, "find_spec", fake_find_spec)
+    client = mcp_module.GitHubIssueClient(repo="owner/repo", token="pytest-token")
+
+    with client._client() as http_client:
+        assert http_client._trust_env is False
 
 
 def test_github_issue_create_live_path_is_mockable(mcp_module, monkeypatch: pytest.MonkeyPatch):
