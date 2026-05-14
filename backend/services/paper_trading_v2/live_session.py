@@ -29,6 +29,7 @@ from backend.services.trading_core.errors import (
     ExecutionAlgoError,
     InvalidStateTransitionError,
     SessionConfigError,
+    StrategyPackageValidationError,
     TradingCoreError,
 )
 from backend.services.trading_core.execution_algo_capabilities import require_execution_algo_supports_mode
@@ -115,11 +116,74 @@ class PaperTradingLiveMinuteExecutor:
         now = as_of_time or datetime.now()
         if session.mode == PaperSessionMode.CATCHUP_THEN_LIVE:
             session = self._run_historical_catchup(session, as_of_time=now)
-        return self._tick_live_intraday(session, as_of_time=now)
+        try:
+            return self._tick_live_intraday(session, as_of_time=now)
+        except DataUnavailableError as exc:
+            if self._is_retryable_live_minute_fetch_error(exc):
+                return self._record_retryable_live_minute_fetch_error(session, exc, as_of_time=now)
+            raise
 
     @staticmethod
     def _manual_tick_only(session: PaperTradingSession) -> bool:
         return bool((session.runtime_config.get("paper_v2_session") or {}).get("manual_tick_only"))
+
+    @staticmethod
+    def _is_retryable_live_minute_fetch_error(exc: DataUnavailableError) -> bool:
+        return exc.message == "TDX minute data fetch failed"
+
+    def _record_retryable_live_minute_fetch_error(
+        self,
+        session: PaperTradingSession,
+        exc: DataUnavailableError,
+        *,
+        as_of_time: datetime,
+    ) -> PaperSessionProgress:
+        local_as_of = self._local_session_time(as_of_time)
+        raw_trade_date = exc.context.get("trade_date")
+        try:
+            trade_date = date.fromisoformat(str(raw_trade_date)) if raw_trade_date else local_as_of.date()
+        except ValueError:
+            trade_date = local_as_of.date()
+        run = self.repository.get_run_by_portfolio_date(session.portfolio_id, trade_date)
+        existing_day = next(
+            (item for item in self.repository.list_session_days(session.session_id) if item.trade_date == trade_date),
+            None,
+        )
+        self.repository.save_session_day(
+            PaperSessionDay(
+                session_id=session.session_id,
+                portfolio_id=session.portfolio_id,
+                trade_date=trade_date,
+                run_id=run.run_id if run else (existing_day.run_id if existing_day else None),
+                status=PaperSessionStatus.PAUSED if self._manual_tick_only(session) else PaperSessionStatus.LIVE_WAITING_FOR_BAR,
+                phase=PaperSessionPhase.LIVE_INTRADAY,
+                data_source=session.live_data_source or MinuteDataSource.TDX_REALTIME,
+                expected_bar_count=existing_day.expected_bar_count if existing_day else None,
+                latest_available_bar_time=existing_day.latest_available_bar_time if existing_day else None,
+                last_processed_bar_time=existing_day.last_processed_bar_time if existing_day else None,
+            )
+        )
+        self.repository.save_session_event(
+            session_id=session.session_id,
+            run_id=run.run_id if run else None,
+            event_type="LIVE_DATA_FETCH_RETRYABLE",
+            message="paper v2 live tick is waiting for TDX minute data fetch to recover",
+            context={
+                "trade_date": trade_date.isoformat(),
+                "as_of_time": local_as_of.isoformat(),
+                "retryable": True,
+                "reason": exc.to_dict(),
+            },
+        )
+        self.repository.update_portfolio_status(session.portfolio_id, PortfolioStatus.RUNNING)
+        updated = self.repository.update_session_status(
+            session.session_id,
+            status=PaperSessionStatus.PAUSED if self._manual_tick_only(session) else PaperSessionStatus.LIVE_WAITING_FOR_BAR,
+            phase=PaperSessionPhase.LIVE_INTRADAY,
+            started_at=session.started_at or datetime.now(UTC),
+            last_error=exc.to_dict(),
+        )
+        return self._progress(updated.session_id)
 
     def _run_historical_catchup(
         self,
@@ -444,8 +508,49 @@ class PaperTradingLiveMinuteExecutor:
             data_source=session.live_data_source or MinuteDataSource.TDX_REALTIME,
             runtime_config=config,
         )
+        latest_prepared_bar_time = self._latest_available_time_for_symbols(
+            symbols=[intent.symbol for intent in intents],
+            trade_date=trade_date,
+            live_data_source=session.live_data_source,
+            as_of_time=as_of_time,
+        ) if intents else None
+        strict_live_start_bar_time = self._live_causality_cursor(as_of_time) if intents else None
         self.repository.create_run(run)
         self.repository.update_portfolio_status(portfolio.portfolio_id, PortfolioStatus.RUNNING)
+        self.repository.save_run_event(
+            run_id=run.run_id,
+            event_type="TARGETS_GENERATED",
+            message="live target positions generated from signal snapshot",
+            context={
+                "target_count": len(targets),
+                "targets": [
+                    {
+                        "symbol": target.symbol,
+                        "target_quantity": target.target_quantity,
+                        "target_weight": target.target_weight,
+                        "rank": target.rank,
+                    }
+                    for target in targets
+                ],
+            },
+        )
+        self.repository.save_run_event(
+            run_id=run.run_id,
+            event_type="ORDER_INTENTS_GENERATED",
+            message="live order intents generated from target/current position diff",
+            context={
+                "order_intent_count": len(intents),
+                "intents": [
+                    {
+                        "intent_id": intent.intent_id,
+                        "symbol": intent.symbol,
+                        "side": intent.side.value,
+                        "quantity": intent.quantity,
+                    }
+                    for intent in intents
+                ],
+            },
+        )
         self.repository.save_run_event(
             run_id=run.run_id,
             event_type="LIVE_RUN_PREPARED",
@@ -465,6 +570,9 @@ class PaperTradingLiveMinuteExecutor:
                 "live_data_source": run.data_source.value,
                 "algo_code": execution_policy_json.get("algo_code"),
                 "live_step_mode": capability.live_step_mode,
+                "latest_prepared_bar_time": latest_prepared_bar_time.isoformat() if latest_prepared_bar_time else None,
+                "strict_live_start_bar_time": strict_live_start_bar_time.isoformat() if strict_live_start_bar_time else None,
+                "live_causality_mode": "strict_no_backfill",
             },
         )
         if not intents:
@@ -549,10 +657,14 @@ class PaperTradingLiveMinuteExecutor:
                         "executed_quantity": 0,
                         "step": 0,
                         "is_complete": False,
+                        "live_causality_mode": "strict_no_backfill",
+                        "order_created_at": order.created_at.isoformat(),
+                        "strict_live_start_bar_time": strict_live_start_bar_time.isoformat() if strict_live_start_bar_time else None,
                     },
                     filled_quantity=0,
                     remaining_quantity=order.quantity,
                     status=order.status.value,
+                    last_processed_bar_time=strict_live_start_bar_time,
                 )
             )
         self.repository.save_session_day(
@@ -564,6 +676,8 @@ class PaperTradingLiveMinuteExecutor:
                 status=PaperSessionStatus.LIVE_WAITING_FOR_BAR,
                 phase=PaperSessionPhase.LIVE_INTRADAY,
                 data_source=run.data_source,
+                latest_available_bar_time=strict_live_start_bar_time,
+                last_processed_bar_time=strict_live_start_bar_time,
             )
         )
         self.repository.save_session_event(
@@ -692,7 +806,15 @@ class PaperTradingLiveMinuteExecutor:
         active_states = [state for state in states if state.status not in FINAL_ORDER_STATUSES and state.remaining_quantity > 0]
         latest_available = self._latest_available_time_for_states(active_states or states, session.live_data_source, as_of_time)
         if not active_states:
-            self._save_live_day_cursor(session, run, latest_available=latest_available, last_processed=self._max_processed(states))
+            latest_available, last_processed = self._mark_to_market_without_active_orders(
+                session,
+                run,
+                portfolio=portfolio,
+                latest_available=latest_available,
+                current_last_processed=self._max_processed(states),
+                as_of_time=as_of_time,
+            )
+            self._save_live_day_cursor(session, run, latest_available=latest_available, last_processed=last_processed)
             return self._progress(session.session_id)
 
         latest_cash = self.repository.load_latest_cash(portfolio, run.trade_date)
@@ -724,7 +846,7 @@ class PaperTradingLiveMinuteExecutor:
             new_bars = [
                 bar
                 for bar in market_input.minute_bars
-                if state.last_processed_bar_time is None or bar.bar_time > state.last_processed_bar_time
+                if self._bar_after_cursor(bar.bar_time, state.last_processed_bar_time)
             ]
             if not new_bars:
                 continue
@@ -745,6 +867,7 @@ class PaperTradingLiveMinuteExecutor:
                 algo_config=algo_config,
                 market_context=market_context,
             )
+            updated_state = self._preserve_live_causality_metadata(state, updated_state)
             # T6.1 capture wiring: intended_price from Order.limit_price
             # (inherited from the original OrderIntent; None for MARKET orders).
             # fill_market_context is the augmented dict actually fed to the
@@ -1051,6 +1174,72 @@ class PaperTradingLiveMinuteExecutor:
             known_prices={},
         )
 
+    def _mark_to_market_without_active_orders(
+        self,
+        session: PaperTradingSession,
+        run: PaperRun,
+        *,
+        portfolio,
+        latest_available: datetime | None,
+        current_last_processed: datetime | None,
+        as_of_time: datetime,
+    ) -> tuple[datetime | None, datetime | None]:
+        current_positions = self.repository.load_latest_positions(portfolio.portfolio_id, run.trade_date)
+        if not current_positions:
+            return latest_available, current_last_processed
+        latest_available = self._latest_available_time_for_symbols(
+            symbols=list(current_positions),
+            trade_date=run.trade_date,
+            live_data_source=session.live_data_source,
+            as_of_time=as_of_time,
+        )
+        if latest_available is None:
+            return None, current_last_processed
+        if current_last_processed is not None and latest_available <= current_last_processed:
+            return latest_available, current_last_processed
+        latest_cash = self.repository.load_latest_cash(portfolio, run.trade_date)
+        prices = self._snapshot_prices_for_positions(
+            symbols=list(current_positions),
+            trade_date=run.trade_date,
+            as_of_time=latest_available,
+            live_data_source=session.live_data_source,
+            known_prices={},
+        )
+        self.repository.save_positions(
+            run_id=run.run_id,
+            trade_date=run.trade_date,
+            positions=list(current_positions.values()),
+            prices=prices,
+        )
+        market_value = sum(position.quantity * prices[position.symbol] for position in current_positions.values())
+        self.repository.save_intraday_snapshot(
+            IntradaySnapshot(
+                session_id=session.session_id,
+                run_id=run.run_id,
+                portfolio_id=portfolio.portfolio_id,
+                trade_date=run.trade_date,
+                snapshot_time=latest_available,
+                cash=latest_cash,
+                market_value=market_value,
+                nav=latest_cash + market_value,
+                positions=[item.model_dump(mode="json") for item in current_positions.values()],
+                source=session.live_data_source.value if session.live_data_source else "TDX_REALTIME",
+            )
+        )
+        self.repository.save_session_event(
+            session_id=session.session_id,
+            run_id=run.run_id,
+            event_type="LIVE_MARK_TO_MARKET_SNAPSHOT",
+            message="paper v2 live mark-to-market snapshot recorded without active orders",
+            context={
+                "trade_date": run.trade_date.isoformat(),
+                "snapshot_time": latest_available.isoformat(),
+                "position_count": len(current_positions),
+                "nav": latest_cash + market_value,
+            },
+        )
+        return latest_available, latest_available
+
     def _snapshot_prices_for_positions(
         self,
         *,
@@ -1094,6 +1283,59 @@ class PaperTradingLiveMinuteExecutor:
             source=live_data_source or MinuteDataSource.TDX_REALTIME,
             as_of_time=as_of_time,
         )
+
+    def _latest_available_time_for_symbols(
+        self,
+        *,
+        symbols: list[str],
+        trade_date: date,
+        live_data_source: MinuteDataSource | None,
+        as_of_time: datetime,
+    ) -> datetime | None:
+        normalized = sorted({str(symbol or "").strip() for symbol in symbols if str(symbol or "").strip()})
+        if not normalized:
+            return None
+        return self.market_data_provider.latest_available_bar_time(
+            symbols=normalized,
+            trade_date=trade_date,
+            source=live_data_source or MinuteDataSource.TDX_REALTIME,
+            as_of_time=as_of_time,
+        )
+
+    @staticmethod
+    def _live_causality_cursor(as_of_time: datetime) -> datetime:
+        """Use the order creation tick as the strict lower bound for live fills."""
+
+        if as_of_time.tzinfo is None:
+            return as_of_time
+        return as_of_time.astimezone(LIVE_SESSION_TZ).replace(tzinfo=None)
+
+    @staticmethod
+    def _bar_after_cursor(bar_time: datetime, cursor: datetime | None) -> bool:
+        if cursor is None:
+            return True
+        lhs = bar_time.replace(tzinfo=None) if bar_time.tzinfo is not None else bar_time
+        rhs = cursor.replace(tzinfo=None) if cursor.tzinfo is not None else cursor
+        return lhs > rhs
+
+    @staticmethod
+    def _preserve_live_causality_metadata(
+        previous_state: OrderExecutionState,
+        updated_state: OrderExecutionState,
+    ) -> OrderExecutionState:
+        preserved_keys = {
+            "live_causality_mode",
+            "order_created_at",
+            "strict_live_start_bar_time",
+        }
+        preserved = {
+            key: value
+            for key, value in (previous_state.algo_state or {}).items()
+            if key in preserved_keys
+        }
+        if not preserved:
+            return updated_state
+        return updated_state.model_copy(update={"algo_state": {**updated_state.algo_state, **preserved}})
 
     @staticmethod
     def _max_processed(states: list[OrderExecutionState]) -> datetime | None:

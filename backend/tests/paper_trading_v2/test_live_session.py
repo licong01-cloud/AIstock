@@ -22,8 +22,9 @@ from backend.services.paper_trading_v2.session import PaperTradingSessionRunner,
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
+from backend.services.strategy_package.service import StrategyPackageService
 from backend.services.trading_core.errors import DataUnavailableError
-from backend.services.trading_core.models import MinuteBar, OrderIntent, OrderSide, RunStatus
+from backend.services.trading_core.models import MinuteBar, OrderIntent, OrderSide, PositionLot, RunStatus
 from backend.services.trading_core.oms import OMS
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
@@ -140,11 +141,99 @@ class FakeLiveMarket:
         return max(times) if times else None
 
 
+class FakeTdxFetchFailureMarket:
+    def _raise(self, symbol: str, trade_date: date) -> None:
+        raise DataUnavailableError(
+            "TDX minute data fetch failed",
+            context={"symbol": symbol, "trade_date": trade_date.isoformat()},
+        )
+
+    def load_observed_intraday(
+        self,
+        *,
+        symbol,
+        trade_date,
+        source,
+        until_time,
+        require_suspend_status=False,
+        require_day_features=False,
+    ):
+        self._raise(symbol, trade_date)
+
+    def latest_available_bar_time(self, *, symbols, trade_date, source, as_of_time):
+        self._raise(symbols[0], trade_date)
+
+
+class FakeTradabilityFilter:
+    def filter_candidates(self, *, candidates, trade_date, top_k, package_id, manifest_sha256, enabled=True, industry_blacklist=None):
+        return candidates[:top_k], []
+
+
+class FakeRuntime:
+    def __init__(self, candidates: list[dict] | None = None) -> None:
+        self.candidates = candidates or [
+            {"symbol": "000001.SZ", "score": 0.9, "rank": 1, "target_weight": 0.5, "reference_price": 10.0},
+        ]
+
+    def build_signal_snapshot(self, *, manifest, trade_date, data_source, runtime_config):
+        from backend.services.selection_center.models import SelectionCandidate, SignalSnapshot
+
+        return SignalSnapshot(
+            package_id=manifest.package_id,
+            manifest_sha256=manifest.manifest_sha256 or "",
+            trade_date=trade_date,
+            data_source=data_source,
+            candidates=[SelectionCandidate(**item) for item in self.candidates],
+            runtime_config=runtime_config,
+        )
+
+
+class FakeTargetEngine:
+    def build_targets(self, *, snapshot, total_equity, top_k, manifest=None, current_positions=None, current_prices=None):
+        from backend.services.selection_center.models import TargetPosition
+
+        candidate = snapshot.candidates[0]
+        return [
+            TargetPosition(
+                symbol=candidate.symbol,
+                target_quantity=600,
+                target_weight=0.5,
+                reference_price=candidate.reference_price,
+                score=candidate.score,
+                rank=candidate.rank,
+                reason="test_live_target",
+            )
+        ]
+
+
+class FakeRefreshAuditOk:
+    def require_success(self, **kwargs):
+        return {"status": "ok", **kwargs}
+
+
+class FakeRiskPolicyService:
+    def evaluate(self, *, symbols, trade_date, profile, current_positions):
+        return {}
+
+    def apply_to_candidates(self, *, candidates, decisions, trade_date, top_k, package_id, manifest_sha256, allow_empty=False):
+        return candidates, []
+
+    def forced_exit_targets(self, *, decisions, current_positions, trade_date, package_id, manifest_sha256, existing_target_symbols):
+        return []
+
+
 def make_portfolio_repo(*, data_source: MinuteDataSource = MinuteDataSource.TDX_REALTIME) -> tuple[InMemoryPaperTradingV2Repository, str]:
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = freeze_manifest(make_manifest().model_copy(update={"package_status": PackageStatus.PAPER_ENABLED}))
     package_repo.save_manifest(manifest)
+    policy_json = manifest.minute_execution_policy.model_dump(mode="json")
+    policy_json["data_requirements"] = {
+        "requires_minute_bar": True,
+        "requires_limit_price": True,
+        "requires_trade_calendar": True,
+        "requires_suspend_status": True,
+    }
     portfolio = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,
@@ -154,6 +243,14 @@ def make_portfolio_repo(*, data_source: MinuteDataSource = MinuteDataSource.TDX_
         initial_cash=100_000,
         start_date=date(2024, 1, 2),
         data_source=data_source,
+        execution_policy={"validated_execution_policy_id": StrategyPackageService(repository=package_repo).create_execution_policy(
+            package_id=manifest.package_id,
+            policy_name="live_session_test_policy",
+            policy_json=policy_json,
+            source_backtest_id="bt_live_session_test",
+            source_backtest_status="BACKTEST_VALIDATED",
+            paper_enabled=True,
+        ).policy_id},
     )
     return paper_repo, portfolio.portfolio_id
 
@@ -442,3 +539,250 @@ def test_catchup_then_live_replays_previous_days_and_processes_current_live_bar(
     assert live_days[-1].last_processed_bar_time == datetime(2024, 1, 4, 9, 31)
     assert progress.session.status == PaperSessionStatus.LIVE_WAITING_FOR_BAR
     assert len(fills) == 1
+
+def test_live_prepare_seeds_order_cursor_after_existing_completed_bars() -> None:
+    paper_repo, portfolio_id = make_portfolio_repo()
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+    )
+    bars = [
+        bar.model_copy(update={"bar_time": datetime(2024, 1, 2, 9, 31) + timedelta(minutes=i)})
+        for i, bar in enumerate(make_bars() * 5)
+    ]
+    live_executor = PaperTradingLiveMinuteExecutor(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=FakeLiveMarket(bars),
+        runtime=FakeRuntime(),
+        target_engine=FakeTargetEngine(),
+        refresh_audit=FakeRefreshAuditOk(),
+        risk_policy_service=FakeRiskPolicyService(),
+        tradability_filter=FakeTradabilityFilter(),
+    )
+
+    progress = PaperTradingSessionRunner(repository=paper_repo, live_executor=live_executor).tick(
+        session.session_id,
+        as_of_time=datetime(2024, 1, 2, 9, 39, 43),
+    )
+
+    run = paper_repo.get_run_by_portfolio_date(portfolio_id, date(2024, 1, 2))
+    assert run is not None
+    states = paper_repo.list_order_execution_states(session_id=session.session_id, run_id=run.run_id)
+    events = paper_repo.list_run_events(portfolio_id, run_id=run.run_id)
+    assert progress.last_processed_bar_time == datetime(2024, 1, 2, 9, 39, 43)
+    assert states[0].last_processed_bar_time == datetime(2024, 1, 2, 9, 39, 43)
+    assert states[0].algo_state["live_causality_mode"] == "strict_no_backfill"
+    assert states[0].algo_state["strict_live_start_bar_time"] == "2024-01-02T09:39:43"
+    assert paper_repo.list_fills_for_run(run.run_id) == []
+    assert [item["event_type"] for item in events[:2]] == ["TARGETS_GENERATED", "ORDER_INTENTS_GENERATED"]
+    assert events[2]["context"]["latest_prepared_bar_time"] == "2024-01-02T09:39:00"
+    assert events[2]["context"]["strict_live_start_bar_time"] == "2024-01-02T09:39:43"
+
+
+def test_live_tick_never_backfills_prepared_order_with_existing_bars() -> None:
+    paper_repo, portfolio_id = make_portfolio_repo()
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+    )
+    bars = [
+        bar.model_copy(update={"bar_time": datetime(2024, 1, 2, 9, 31) + timedelta(minutes=i)})
+        for i, bar in enumerate(make_bars() * 6)
+    ]
+    live_executor = PaperTradingLiveMinuteExecutor(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=FakeLiveMarket(bars),
+        runtime=FakeRuntime(),
+        target_engine=FakeTargetEngine(),
+        refresh_audit=FakeRefreshAuditOk(),
+        risk_policy_service=FakeRiskPolicyService(),
+        tradability_filter=FakeTradabilityFilter(),
+    )
+
+    PaperTradingSessionRunner(repository=paper_repo, live_executor=live_executor).tick(
+        session.session_id,
+        as_of_time=datetime(2024, 1, 2, 9, 39, 43),
+    )
+    run = paper_repo.get_run_by_portfolio_date(portfolio_id, date(2024, 1, 2))
+    assert run is not None
+    assert paper_repo.list_fills_for_run(run.run_id) == []
+
+    progress = PaperTradingSessionRunner(repository=paper_repo, live_executor=live_executor).tick(
+        session.session_id,
+        as_of_time=datetime(2024, 1, 2, 9, 40, 0),
+    )
+
+    fills = paper_repo.list_fills_for_run(run.run_id)
+    assert progress.last_processed_bar_time == datetime(2024, 1, 2, 9, 40, 0)
+    assert len(fills) == 1
+    assert fills[0]["trade_time"] == "2024-01-02T09:40:00"
+    state = paper_repo.list_order_execution_states(session_id=session.session_id, run_id=run.run_id)[0]
+    assert datetime.fromisoformat(fills[0]["trade_time"]) > datetime.fromisoformat(state.algo_state["strict_live_start_bar_time"])
+    assert all(datetime.fromisoformat(fill["trade_time"]).minute >= 40 for fill in fills)
+
+
+def test_live_mark_to_market_continues_after_orders_filled() -> None:
+    paper_repo, portfolio_id = make_portfolio_repo()
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+    )
+    run = paper_repo.create_run(
+        PaperRun(
+            portfolio_id=portfolio_id,
+            trade_date=date(2024, 1, 2),
+            status=RunStatus.RUNNING,
+            data_source=MinuteDataSource.TDX_REALTIME,
+            runtime_config={
+                "validated_execution_policy": {
+                    "policy_json": {"algo_code": "TWAP", "algo_config": {"split_count": 1, "allow_partial_fill": True}},
+                }
+            },
+        )
+    )
+    order = OMS().create_order(
+        OrderIntent(
+            package_id="pkg_test",
+            portfolio_id=portfolio_id,
+            symbol="000001.SZ",
+            side=OrderSide.BUY,
+            quantity=600,
+            target_trade_date=date(2024, 1, 2),
+        )
+    ).model_copy(update={"status": "FILLED", "filled_quantity": 600, "avg_fill_price": 10.1})
+    paper_repo.save_order(run.run_id, order)
+    paper_repo.save_order_execution_state(
+        OrderExecutionState(
+            session_id=session.session_id,
+            run_id=run.run_id,
+            order_id=order.order_id,
+            symbol=order.symbol,
+            trade_date=run.trade_date,
+            algo_code="TWAP",
+            filled_quantity=600,
+            remaining_quantity=0,
+            status="FILLED",
+            last_processed_bar_time=datetime(2024, 1, 2, 9, 31),
+        )
+    )
+    paper_repo.save_positions(
+        run_id=run.run_id,
+        trade_date=run.trade_date,
+        positions=[
+            PositionLot(
+                portfolio_id=portfolio_id,
+                symbol="000001.SZ",
+                quantity=600,
+                available_quantity=600,
+                avg_cost=10.1,
+                trade_date=run.trade_date,
+            )
+        ],
+        prices={"000001.SZ": 10.1},
+    )
+    bars = [
+        make_bars()[0].model_copy(update={"bar_time": datetime(2024, 1, 2, 9, 31), "close": 10.1}),
+        make_bars()[0].model_copy(update={"bar_time": datetime(2024, 1, 2, 9, 32), "close": 10.5}),
+    ]
+    live_executor = PaperTradingLiveMinuteExecutor(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=FakeLiveMarket(bars),
+    )
+
+    progress = PaperTradingSessionRunner(repository=paper_repo, live_executor=live_executor).tick(
+        session.session_id,
+        as_of_time=datetime(2024, 1, 2, 9, 32),
+    )
+
+    snapshots = paper_repo.list_intraday_snapshots(session_id=session.session_id)
+    assert progress.last_processed_bar_time == datetime(2024, 1, 2, 9, 32)
+    assert len(snapshots) == 1
+    assert snapshots[0]["snapshot_time"] == "2024-01-02T09:32:00"
+    assert snapshots[0]["market_value"] == pytest.approx(6300.0)
+    assert snapshots[0]["nav"] == pytest.approx(106300.0)
+    events = paper_repo.list_session_events(session.session_id)
+    assert events[-1]["event_type"] == "LIVE_MARK_TO_MARKET_SNAPSHOT"
+
+
+def test_live_tdx_fetch_failure_waits_without_failing_session() -> None:
+    paper_repo, portfolio_id = make_portfolio_repo()
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+    )
+    run = paper_repo.create_run(
+        PaperRun(
+            portfolio_id=portfolio_id,
+            trade_date=date(2024, 1, 2),
+            status=RunStatus.RUNNING,
+            data_source=MinuteDataSource.TDX_REALTIME,
+            runtime_config={
+                "validated_execution_policy": {
+                    "policy_json": {"algo_code": "TWAP", "algo_config": {"split_count": 1, "allow_partial_fill": True}},
+                }
+            },
+        )
+    )
+    order = OMS().create_order(
+        OrderIntent(
+            package_id="pkg_test",
+            portfolio_id=portfolio_id,
+            symbol="000001.SZ",
+            side=OrderSide.BUY,
+            quantity=600,
+            target_trade_date=date(2024, 1, 2),
+        )
+    )
+    paper_repo.save_order(run.run_id, order)
+    paper_repo.save_order_execution_state(
+        OrderExecutionState(
+            session_id=session.session_id,
+            run_id=run.run_id,
+            order_id=order.order_id,
+            symbol=order.symbol,
+            trade_date=run.trade_date,
+            algo_code="TWAP",
+            filled_quantity=0,
+            remaining_quantity=order.quantity,
+            status=order.status.value,
+            last_processed_bar_time=datetime(2024, 1, 2, 9, 31),
+        )
+    )
+    live_executor = PaperTradingLiveMinuteExecutor(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=FakeTdxFetchFailureMarket(),
+    )
+
+    progress = PaperTradingSessionRunner(repository=paper_repo, live_executor=live_executor).tick(
+        session.session_id,
+        as_of_time=datetime(2024, 1, 2, 10, 0),
+    )
+
+    assert progress.session.status == PaperSessionStatus.LIVE_WAITING_FOR_BAR
+    assert progress.session.last_error is not None
+    assert progress.session.last_error["message"] == "TDX minute data fetch failed"
+    assert paper_repo.get_run(run.run_id).status == RunStatus.RUNNING
+    assert paper_repo.get_portfolio(portfolio_id).status == PortfolioStatus.RUNNING
+    assert paper_repo.list_errors(portfolio_id) == []
+    events = paper_repo.list_session_events(session.session_id)
+    assert events[-1]["event_type"] == "LIVE_DATA_FETCH_RETRYABLE"
+    assert events[-1]["context"]["retryable"] is True
+    days = paper_repo.list_session_days(session.session_id)
+    assert days[-1].run_id == run.run_id
+    assert days[-1].last_processed_bar_time is None
