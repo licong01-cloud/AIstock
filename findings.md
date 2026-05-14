@@ -304,3 +304,26 @@
 - `FactorValuePipeline` had ST PIT cache-index logic but missed `_UNIVERSE_META_KEYS` and `_do_compute_factor_values(..., cache_index, cache_metadata)` parameters; py_compile caught and repairs were applied.
 - `qe_eval_v2_metric_engine` needed `FactorUniverseMaskService` imports and `_pit_coverage_stats_from_masks`; unit tests now verify denominator/numerator semantics.
 - The migration file initially had a UTF-8 BOM that PostgreSQL rejected; it was rewritten as UTF-8 without BOM before applying.
+
+---
+
+# Findings Addendum: Paper v2 remaining design implementation (2026-05-14)
+
+Pending discovery.
+
+## Findings Addendum: Paper v2 remaining design implementation results (2026-05-14)
+- Implementable without trading-semantics changes: UI wording, sortable candidate display, target/rebalance labeling, realtime NAV visualization, scheduler warning, and read-only stock-name enrichment.
+- Stock names are now display-only API enrichment from market.stock_basic with market.symbol_dim fallback; missing names fail open and never filter or alter orders.
+- Durable DB-column persistence of stock_name is still a separate migration decision; this patch avoids breaking existing Paper v2 tables that do not yet have stock_name columns.
+- Frontend global lint/build is not a clean merge gate yet because unrelated legacy pages have react/no-unescaped-entities and hook-rule errors; changed Paper v2 files pass targeted eslint and TypeScript compile.
+
+## Findings Addendum: Paper v2 stock_name persistence and validation (2026-05-14)
+- Earlier display-only enrichment is now superseded by DEV DB persistence: `stock_name` is a nullable field on Paper v2 order/fill/cash/position persistence tables, with API enrichment kept as fallback.
+- The field is display/audit-only. It must not be used by selection, scoring, order generation, execution, matching, or risk logic.
+- DEV DB was migrated and backfilled only. Production DB migration remains a separate operator decision during merge/release.
+- Full frontend lint/build became green after fixing unrelated legacy lint errors that blocked the global gate; remaining lint output is warnings only.
+- Real-flow Playwright validation now asserts stock_name is present on order/fill/position/cash-ledger API payloads when rows exist.
+
+## Findings Addendum: Paper v2 validation refresh (2026-05-14)
+- DEV DB was initially missing suspend_d audit rows and HMM sector/index prerequisites, so the real-flow harness failed before reaching stock-name UI/API assertions. Seeding DEV-only fixture rows resolved the harness gap without changing production DB or trading semantics.
+- The refreshed side-port smoke confirms persisted/API-enriched stock_name is visible on orders, fills, cash ledger, and positions; the field remains display/audit-only.

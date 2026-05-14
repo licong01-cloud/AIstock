@@ -114,7 +114,7 @@ export default function PaperV2OverviewPage() {
       <div className="pv2-grid pv2-grid-4">
         <MetricCard label="可用策略包" value={readyPackages} hint={`共 ${packages.length} 个策略包`} tone="success" />
         <MetricCard label="可选策略包" value={selectable.length} hint={`${staleModels} 个模型过期提醒`} tone={staleModels ? "warning" : "success"} />
-        <MetricCard label="运行/暂停组合" value={activeTotal} hint="RUNNING / PAUSED，READY 显示为未就绪" tone="info" />
+        <MetricCard label="运行/暂停模拟盘" value={activeTotal} hint="RUNNING / PAUSED，READY 显示为未就绪" tone="info" />
         <MetricCard label="本页阻断错误" value={blockingErrors} hint="当前页 fail-fast 问题" tone={blockingErrors ? "danger" : "success"} />
       </div>
 
@@ -124,7 +124,7 @@ export default function PaperV2OverviewPage() {
         <div className="pv2-grid pv2-grid-4">
           <MetricCard label="1. 策略包已启用" value={readyPackages} hint="可进入选股/模拟盘" />
           <MetricCard label="2. 选股可执行" value={selectable.length} hint="策略包选股中心" />
-          <MetricCard label="3. 组合已就绪" value={activeTotal} hint="后端分页统计" />
+          <MetricCard label="3. 模拟盘已就绪" value={activeTotal} hint="后端分页统计" />
           <MetricCard label="4. 本页运行记录" value={latestRuns} hint="最近运行/回放" />
         </div>
       </SectionCard>
@@ -135,7 +135,7 @@ export default function PaperV2OverviewPage() {
         </NoticePanel>
         <PaperTable
           rows={rows.slice(0, 6)}
-          empty="暂无正在运行或待运行的模拟盘组合。"
+          empty="暂无正在运行或待运行的模拟盘。"
           columns={[
             { key: "name", header: "模拟盘", render: ({ portfolio }) => <Link href={`/paper-v2/portfolios/${portfolio.portfolio_id}`}>{portfolio.portfolio_name}</Link> },
             { key: "status", header: "状态", render: ({ portfolio }) => <StatusBadge status={portfolio.status} /> },
@@ -147,14 +147,14 @@ export default function PaperV2OverviewPage() {
         />
       </SectionCard>
 
-      <SectionCard title="运行/暂停模拟组合" eyebrow={loading ? "加载中" : `${pageStart}-${pageEnd} / ${pagination?.total || 0} 个组合`} action={<button className="pv2-button" onClick={load} disabled={loading} type="button">刷新</button>}>
+      <SectionCard title="运行/暂停模拟盘" eyebrow={loading ? "加载中" : `${pageStart}-${pageEnd} / ${pagination?.total || 0} 个模拟盘`} action={<button className="pv2-button" onClick={load} disabled={loading} type="button">刷新</button>}>
         <div className="pv2-card pv2-filter-card">
           <div className="pv2-form-grid">
             <div className="pv2-field"><label>状态筛选</label><select className="pv2-select" value={statusFilter} onChange={(event) => resetPage(() => setStatusFilter(event.target.value))}>{RUNNING_STATUS_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></div>
             <div className="pv2-field"><label>排序字段</label><select className="pv2-select" value={sortBy} onChange={(event) => resetPage(() => setSortBy(event.target.value as RunningSummarySortBy))}>{RUNNING_SORT_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></div>
             <div className="pv2-field"><label>排序方向</label><select className="pv2-select" value={sortDir} onChange={(event) => resetPage(() => setSortDir(event.target.value as RunningSummarySortDir))}><option value="desc">降序</option><option value="asc">升序</option></select></div>
             <div className="pv2-field"><label>筛选字段</label><select className="pv2-select" value={searchField} onChange={(event) => resetPage(() => setSearchField(event.target.value))}>{RUNNING_SEARCH_FIELD_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></div>
-            <div className="pv2-field"><label>字段关键字</label><input className="pv2-input" value={search} placeholder="支持组合ID、策略包、状态、数据源等" onChange={(event) => resetPage(() => setSearch(event.target.value))} /></div>
+            <div className="pv2-field"><label>字段关键字</label><input className="pv2-input" value={search} placeholder="支持模拟盘ID、策略包、状态、数据源等" onChange={(event) => resetPage(() => setSearch(event.target.value))} /></div>
             <div className="pv2-field"><label>每页数量</label><select className="pv2-select" value={pageSize} onChange={(event) => resetPage(() => setPageSize(Number(event.target.value)))}><option value={20}>20</option><option value={30}>30</option><option value={50}>50</option></select></div>
             <div className="pv2-field"><label>初始资金下限</label><input className="pv2-input" type="number" min={0} value={minCash} onChange={(event) => resetPage(() => setMinCash(event.target.value))} /></div>
             <div className="pv2-field"><label>初始资金上限</label><input className="pv2-input" type="number" min={0} value={maxCash} onChange={(event) => resetPage(() => setMaxCash(event.target.value))} /></div>
@@ -162,9 +162,9 @@ export default function PaperV2OverviewPage() {
         </div>
         <PaperTable
           rows={rows}
-          empty="暂无符合条件的 Paper v2 活跃组合。"
+          empty="暂无符合条件的 Paper v2 活跃模拟盘。"
           columns={[
-            { key: "name", header: "组合", render: ({ portfolio }) => <Link href={`/paper-v2/portfolios/${portfolio.portfolio_id}`}>{portfolio.portfolio_name}</Link> },
+            { key: "name", header: "模拟盘", render: ({ portfolio }) => <Link href={`/paper-v2/portfolios/${portfolio.portfolio_id}`}>{portfolio.portfolio_name}</Link> },
             { key: "status", header: "状态", render: ({ portfolio }) => <StatusBadge status={portfolio.status} /> },
             { key: "package", header: "策略包", render: ({ portfolio }) => {
               const pkg = packages.find((item) => item.package_id === portfolio.package_id);

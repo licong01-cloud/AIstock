@@ -23,15 +23,11 @@ export default React.memo(function LossCurveChart({
   overfit_ratio,
   convergence_ratio,
 }: LossCurveChartProps) {
-  if (!train_loss_curve || train_loss_curve.length === 0) {
-    return (
-      <div style={{ color: "#94a3b8", textAlign: "center", padding: 24 }}>
-        暂无训练过程数据
-      </div>
-    );
-  }
+  const hasTrainLoss = Boolean(train_loss_curve && train_loss_curve.length > 0);
 
   const traces = useMemo(() => {
+    if (!train_loss_curve || train_loss_curve.length === 0) return [];
+
     const epochs = train_loss_curve.map((_, i) => i + 1);
     const t: any[] = [];
 
@@ -78,6 +74,14 @@ export default React.memo(function LossCurveChart({
     legend: { orientation: "h" as const, y: 1.12 },
     font: { size: 11 },
   }), []);
+
+  if (!hasTrainLoss) {
+    return (
+      <div style={{ color: "#94a3b8", textAlign: "center", padding: 24 }}>
+        暂无训练过程数据
+      </div>
+    );
+  }
 
   return (
     <div>

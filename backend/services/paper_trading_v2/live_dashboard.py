@@ -13,6 +13,8 @@ from backend.services.strategy_package.selection_artifact import (
 )
 from backend.services.trading_core.errors import DataUnavailableError
 
+from .symbol_names import PaperV2SymbolNameResolver
+
 
 TERMINAL_SESSION_STATUSES = {
     PaperSessionStatus.SUCCEEDED,
@@ -41,9 +43,11 @@ class PaperTradingLiveDashboardService:
         *,
         repository: PaperTradingV2Repository | Any | None = None,
         artifact_repository: StrategyPackageSelectionArtifactRepository | Any | None = None,
+        symbol_name_resolver: PaperV2SymbolNameResolver | Any | None = None,
     ) -> None:
         self.repository = repository or PaperTradingV2Repository()
         self.artifact_repository = artifact_repository or StrategyPackageSelectionArtifactRepository()
+        self.symbol_name_resolver = symbol_name_resolver
 
     def get_dashboard(
         self,
@@ -103,7 +107,7 @@ class PaperTradingLiveDashboardService:
         if current_run is None:
             warnings.append({"code": "NO_CURRENT_RUN", "message": "当前日期或会话尚未产生 run，无法展示信号到订单链路"})
 
-        return {
+        dashboard = {
             "portfolio": portfolio.model_dump(mode="json"),
             "package": self._package_context(portfolio),
             "active_session": active_session.model_dump(mode="json") if active_session else None,
@@ -129,6 +133,7 @@ class PaperTradingLiveDashboardService:
             "daily_snapshots": daily_snapshots,
             "warnings": warnings,
         }
+        return self._enrich_display_names(dashboard)
 
     def list_intraday_snapshots(
         self,
@@ -319,6 +324,63 @@ class PaperTradingLiveDashboardService:
             return []
         latest_date = max(str(item.get("trade_date") or "") for item in rows)
         return [item for item in rows if str(item.get("trade_date") or "") == latest_date]
+
+    def _enrich_display_names(self, dashboard: dict[str, Any]) -> dict[str, Any]:
+        resolver = self.symbol_name_resolver
+        if resolver is None:
+            return dashboard
+
+        row_groups = [
+            dashboard.get("orders") or [],
+            dashboard.get("fills") or [],
+            dashboard.get("positions") or [],
+            ((dashboard.get("daily_signal") or {}).get("top_candidates") or []),
+            ((dashboard.get("target_rebalance") or {}).get("targets") or []),
+            ((dashboard.get("target_rebalance") or {}).get("order_intents") or []),
+            ((dashboard.get("minute_execution") or {}).get("timeline") or []),
+        ]
+        symbols = [
+            str(row.get("symbol") or "").strip()
+            for rows in row_groups
+            for row in rows
+            if isinstance(row, dict) and str(row.get("symbol") or "").strip()
+        ]
+        try:
+            names = resolver.resolve(symbols)
+        except Exception:
+            return dashboard
+
+        def enrich(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            enriched: list[dict[str, Any]] = []
+            for row in rows:
+                copied = dict(row)
+                symbol = str(copied.get("symbol") or "").strip()
+                metadata = copied.get("metadata")
+                metadata_name = metadata.get("stock_name") if isinstance(metadata, dict) else None
+                name = copied.get("stock_name") or copied.get("symbol_name") or metadata_name or names.get(symbol)
+                if name:
+                    copied["stock_name"] = str(name)
+                    copied["symbol_name"] = str(name)
+                enriched.append(copied)
+            return enriched
+
+        dashboard["orders"] = enrich(dashboard.get("orders") or [])
+        dashboard["fills"] = enrich(dashboard.get("fills") or [])
+        dashboard["positions"] = enrich(dashboard.get("positions") or [])
+
+        daily_signal = dict(dashboard.get("daily_signal") or {})
+        daily_signal["top_candidates"] = enrich(daily_signal.get("top_candidates") or [])
+        dashboard["daily_signal"] = daily_signal
+
+        target_rebalance = dict(dashboard.get("target_rebalance") or {})
+        target_rebalance["targets"] = enrich(target_rebalance.get("targets") or [])
+        target_rebalance["order_intents"] = enrich(target_rebalance.get("order_intents") or [])
+        dashboard["target_rebalance"] = target_rebalance
+
+        minute_execution = dict(dashboard.get("minute_execution") or {})
+        minute_execution["timeline"] = enrich(minute_execution.get("timeline") or [])
+        dashboard["minute_execution"] = minute_execution
+        return dashboard
 
     @staticmethod
     def _scheduler_status() -> dict[str, Any]:

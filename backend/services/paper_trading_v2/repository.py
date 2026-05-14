@@ -36,6 +36,7 @@ from .models import (
     RuntimeProfileStatus,
     RuntimeProfileValidationStatus,
 )
+from .symbol_names import PaperV2SymbolNameResolver
 
 ConnFactory = Callable[[], Iterator[Any]]
 
@@ -66,8 +67,22 @@ RUNNING_SUMMARY_SEARCH_COLUMNS = {
 
 
 class PaperTradingV2Repository:
-    def __init__(self, conn_factory: ConnFactory | None = None) -> None:
+    def __init__(
+        self,
+        conn_factory: ConnFactory | None = None,
+        *,
+        symbol_name_resolver: PaperV2SymbolNameResolver | Any | None = None,
+    ) -> None:
         self._conn_factory = conn_factory or get_conn
+        self._symbol_name_resolver = symbol_name_resolver or PaperV2SymbolNameResolver(self._conn_factory)
+
+    def _resolve_stock_names(self, symbols: list[str | None] | tuple[str | None, ...]) -> dict[str, str]:
+        try:
+            return self._symbol_name_resolver.resolve(symbols)
+        except Exception:
+            # Stock names are display/audit metadata only; trading writes must
+            # never fail because a reference-table lookup failed.
+            return {}
 
     @contextmanager
     def session_tick_lock(self, session_id: str) -> Iterator[None]:
@@ -1390,19 +1405,21 @@ class PaperTradingV2Repository:
         )
 
     def save_order(self, run_id: str, order: Order) -> None:
+        stock_name = self._resolve_stock_names([order.symbol]).get(order.symbol)
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     INSERT INTO paper_v2.orders (
                         order_id, run_id, portfolio_id, package_id, intent_id, symbol,
-                        side, quantity, order_type, limit_price, status,
+                        stock_name, side, quantity, order_type, limit_price, status,
                         filled_quantity, avg_fill_price, metadata, created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT(order_id) DO UPDATE SET
                         status = EXCLUDED.status,
                         filled_quantity = EXCLUDED.filled_quantity,
                         avg_fill_price = EXCLUDED.avg_fill_price,
+                        stock_name = COALESCE(orders.stock_name, EXCLUDED.stock_name),
                         updated_at = EXCLUDED.updated_at
                     """,
                     (
@@ -1412,6 +1429,7 @@ class PaperTradingV2Repository:
                         order.package_id,
                         order.intent_id,
                         order.symbol,
+                        stock_name,
                         order.side.value,
                         order.quantity,
                         order.order_type.value,
@@ -1473,17 +1491,18 @@ class PaperTradingV2Repository:
                 intended_price = fill.metadata.get("intended_price")
             if fill_market_context is None:
                 fill_market_context = fill.metadata.get("fill_market_context")
+        stock_name = self._resolve_stock_names([fill.symbol]).get(fill.symbol)
         now = datetime.now(UTC)
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     INSERT INTO paper_v2.fills (
-                        fill_id, run_id, order_id, symbol, side, quantity, price,
+                        fill_id, run_id, order_id, symbol, stock_name, side, quantity, price,
                         trade_time, bar_time, reason, metadata,
                         created_at, updated_at, intended_price, fill_market_context
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                              %s, %s, %s, %s)
+                              %s, %s, %s, %s, %s)
                     ON CONFLICT(fill_id) DO NOTHING
                     """,
                     (
@@ -1491,6 +1510,7 @@ class PaperTradingV2Repository:
                         run_id,
                         fill.order_id,
                         fill.symbol,
+                        stock_name,
                         fill.side.value,
                         fill.quantity,
                         fill.price,
@@ -1564,14 +1584,15 @@ class PaperTradingV2Repository:
                 )
 
     def save_cash_entry(self, run_id: str, entry: CashLedgerEntry) -> None:
+        stock_name = self._resolve_stock_names([entry.symbol]).get(entry.symbol)
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     INSERT INTO paper_v2.cash_ledger (
-                        run_id, portfolio_id, fill_id, trade_date, symbol, side,
+                        run_id, portfolio_id, fill_id, trade_date, symbol, stock_name, side,
                         notional, fee, cash_delta, cash_after
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         run_id,
@@ -1579,6 +1600,7 @@ class PaperTradingV2Repository:
                         entry.fill_id,
                         entry.trade_date,
                         entry.symbol,
+                        stock_name,
                         entry.side.value,
                         entry.notional,
                         entry.fee,
@@ -1591,6 +1613,7 @@ class PaperTradingV2Repository:
         # T5: created_at / updated_at watermark fields for DW ETL. Passed
         # explicitly via now() so InMemory parity is preserved.
         now = datetime.now(UTC)
+        stock_names = self._resolve_stock_names([position.symbol for position in positions])
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM paper_v2.positions WHERE run_id = %s", (run_id,))
@@ -1599,16 +1622,17 @@ class PaperTradingV2Repository:
                     cur.execute(
                         """
                         INSERT INTO paper_v2.positions (
-                            run_id, portfolio_id, trade_date, symbol, quantity,
+                            run_id, portfolio_id, trade_date, symbol, stock_name, quantity,
                             available_quantity, avg_cost, market_price, market_value, metadata,
                             created_at, updated_at
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         (
                             run_id,
                             position.portfolio_id,
                             trade_date,
                             position.symbol,
+                            stock_names.get(position.symbol),
                             position.quantity,
                             position.available_quantity,
                             position.avg_cost,

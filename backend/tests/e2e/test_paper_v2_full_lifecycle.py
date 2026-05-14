@@ -296,11 +296,14 @@ class TestPaperV2FullLifecycleHappyPath:
         # Step 8: governance_eligibility lookup (graceful skip)
         # ==========================================================
         try:
+            from backend.services.strategy_package.repository import StrategyPackageRepository
             from backend.services.strategy_package.service import StrategyPackageService
         except Exception as e:
             assertions["A12_governance_skip_reason"] = f"import: {e}"
         else:
-            service = StrategyPackageService()
+            service = StrategyPackageService(
+                repository=StrategyPackageRepository(conn_factory=dev_conn_provider)
+            )
             # The dispatch references service.governance_eligibility() but that
             # API may not be wired yet (Codex Phase 1 work). Check defensively.
             elig_fn = getattr(service, "governance_eligibility", None)
@@ -532,19 +535,27 @@ class TestPaperV2GovernanceNotReadyPath:
             err_msg = str(err)
             err_context = getattr(err, "context", None) or {}
 
-            # Strict assertions on the validator's specific diagnostic
-            assert "not approved for paper trading" in err_msg.lower(), \
-                f"err message must match validator's 'not approved' diagnostic: {err_msg!r}"
+            lower_msg = err_msg.lower()
+            assert (
+                "not approved for paper trading" in lower_msg
+                or "governance eligibility must be paper_ready" in lower_msg
+            ), f"unexpected validation diagnostic: {err_msg!r}"
 
-            # Validator context shape: {package_id, package_status}
+            # Validator context shape: either direct {package_id, package_status}
+            # or the newer governance eligibility payload carrying those fields.
             assert err_context.get("package_id") == not_ready_package_id, \
                 f"package_id mismatch: expected {not_ready_package_id!r}, " \
                 f"got {err_context.get('package_id')!r}"
             assert err_context.get("package_status") == "PAPER_RUNNING", (
                 f"package_status in context must be 'PAPER_RUNNING' (the not-ready "
                 f"signal); got {err_context.get('package_status')!r}. "
-                f"If this fails the validator path was bypassed."
+                f"If this fails the not-ready gate was bypassed."
             )
+            if "governance eligibility" in lower_msg:
+                blockers = err_context.get("blockers") or []
+                assert any("package_status=PAPER_RUNNING" in str(item) for item in blockers), (
+                    f"governance context should carry package_status blocker; got {blockers!r}"
+                )
         finally:
             # Restore the package status FIRST (before env teardown so we
             # still have dev pool to do the UPDATE).

@@ -55,6 +55,11 @@ def _portfolio(repo: InMemoryPaperTradingV2Repository) -> tuple[PaperPortfolio, 
     return portfolio, manifest.manifest_sha256 or ""
 
 
+class StaticSymbolNameResolver:
+    def resolve(self, symbols: list[str]) -> dict[str, str]:
+        return {"000001.SZ": "平安银行"}
+
+
 def test_live_dashboard_aggregates_signal_minute_execution_and_snapshots() -> None:
     repo = InMemoryPaperTradingV2Repository()
     portfolio, manifest_sha = _portfolio(repo)
@@ -186,11 +191,18 @@ def test_live_dashboard_aggregates_signal_minute_execution_and_snapshots() -> No
         )
     )
 
-    dashboard = PaperTradingLiveDashboardService(repository=repo, artifact_repository=artifact_repo).get_dashboard(portfolio.portfolio_id)
+    dashboard = PaperTradingLiveDashboardService(
+        repository=repo,
+        artifact_repository=artifact_repo,
+        symbol_name_resolver=StaticSymbolNameResolver(),
+    ).get_dashboard(portfolio.portfolio_id)
 
     assert dashboard["daily_signal"]["status"] == "AVAILABLE"
     assert dashboard["daily_signal"]["cutoff_date"] == "2024-01-02"
+    assert dashboard["daily_signal"]["top_candidates"][0]["stock_name"] == "平安银行"
     assert dashboard["target_rebalance"]["targets"][0]["symbol"] == "000001.SZ"
+    assert dashboard["target_rebalance"]["targets"][0]["stock_name"] == "平安银行"
     assert dashboard["minute_execution"]["summary"]["no_fill_count"] == 1
+    assert dashboard["minute_execution"]["timeline"][0]["stock_name"] == "平安银行"
     assert dashboard["minute_execution"]["timeline"][0]["reason_label"] == "本分钟计划量不足 A 股最小交易单位，不能成交"
     assert dashboard["intraday_nav"]["status"] == "AVAILABLE"

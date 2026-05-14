@@ -1926,12 +1926,12 @@ export default function StrategiesPage() {
                     <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>
                       {formStrategyType === "MA_CROSS" && (
                         <span>
-                          示例: {"{"}"ma_short": 5, "ma_long": 20, "period": "15m", "symbols": ["600519.SH"], "position_size": 0.1, "price_type": "LIMIT"{"}"}
+                          示例: <code>{'{"ma_short": 5, "ma_long": 20, "period": "15m", "symbols": ["600519.SH"], "position_size": 0.1, "price_type": "LIMIT"}'}</code>
                         </span>
                       )}
                       {formStrategyType === "TREND_FOLLOWING" && (
                         <span>
-                          示例: {"{"}"ma_period": 20, "volume_ratio": 1.5, "period": "15m", "symbols": ["600519.SH"], "position_size": 0.1, "price_type": "LIMIT"{"}"}
+                          示例: <code>{'{"ma_period": 20, "volume_ratio": 1.5, "period": "15m", "symbols": ["600519.SH"], "position_size": 0.1, "price_type": "LIMIT"}'}</code>
                         </span>
                       )}
                     </div>
@@ -1955,7 +1955,7 @@ export default function StrategiesPage() {
                       调度配置 (JSON)
                     </label>
                     <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>
-                      示例: {"{"}"type": "daily", "time": "09:30"{"}"} 或 {"{"}"type": "realtime"{"}"} 或 {"{"}"type": "minute", "interval": 15{"}"}
+                      示例: <code>{'{"type": "daily", "time": "09:30"}'}</code> 或 <code>{'{"type": "realtime"}'}</code> 或 <code>{'{"type": "minute", "interval": 15}'}</code>
                     </div>
                     <textarea
                       value={formScheduleConfig}

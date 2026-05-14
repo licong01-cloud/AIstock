@@ -33,12 +33,12 @@ export function Dialog({ open, onOpenChange, children }: DialogProps) {
 }
 
 export function DialogContent({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  const { open } = useDialog();
+  const { open, onOpenChange } = useDialog();
   if (!open) return null;
   
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="fixed inset-0 bg-black/50" onClick={() => useDialog().onOpenChange(false)} />
+      <div className="fixed inset-0 bg-black/50" onClick={() => onOpenChange(false)} />
       <div className={`relative z-50 w-full max-w-lg rounded-lg border border-gray-200 bg-white p-6 shadow-lg ${className}`}>
         {children}
       </div>

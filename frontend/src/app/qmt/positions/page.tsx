@@ -1182,7 +1182,7 @@ export default function QMTPositionsPage() {
                       }}
                     />
                     <p style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
-                      示例: {"{"}"600000.SH":{"{"}"max_daily_loss":{""}-500{""},"max_position_loss":{""}-2000{""}{"}"}{"}"}
+                      示例: <code>{'{"600000.SH":{"max_daily_loss":-500,"max_position_loss":-2000}}'}</code>
                     </p>
                   </div>
                 </div>

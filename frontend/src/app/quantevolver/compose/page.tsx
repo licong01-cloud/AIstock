@@ -1525,7 +1525,7 @@ export default function ComposePage() {
 
                   {!corrAnalyzed ? (
                     <div style={{ color: "#94a3b8", fontSize: 13, textAlign: "center", padding: "40px 0" }}>
-                      点击"检查相关性"查看已选因子间的相关性矩阵
+                      点击&quot;检查相关性&quot;查看已选因子间的相关性矩阵
                     </div>
                   ) : (
                     <div style={{ maxHeight: "280px", overflowY: "auto" }}>

@@ -24,7 +24,7 @@ export const RUNNING_STATUS_OPTIONS = [
 
 export const RUNNING_SEARCH_FIELD_OPTIONS = [
   { value: "all", label: "全部字段" },
-  { value: "portfolio_id", label: "组合ID" },
+  { value: "portfolio_id", label: "模拟盘ID" },
   { value: "package_id", label: "策略包ID" },
   { value: "status", label: "状态" },
   { value: "data_source", label: "数据源" },
@@ -40,7 +40,7 @@ export const RUNNING_SORT_OPTIONS = [
   { value: "initial_cash", label: "初始资金" },
   { value: "updated_at", label: "更新时间" },
   { value: "created_at", label: "创建时间" },
-  { value: "portfolio_name", label: "组合名" },
+  { value: "portfolio_name", label: "模拟盘名称" },
 ];
 
 export function n(value: unknown): number {

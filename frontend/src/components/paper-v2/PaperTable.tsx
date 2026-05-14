@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 
 export type PaperColumn<T> = {
   key: string;
-  header: string;
+  header: ReactNode;
   render: (row: T, index: number) => ReactNode;
 };
 
