@@ -1,11 +1,31 @@
 {
-  "_comment": "Project-level MCP server registration. Each developer enables it in their own .claude/settings.local.json via 'enabledMcpjsonServers': ['aistock-validation']. Paths are repo-relative so multi-worktree setups all resolve correctly. The python interpreter must have the mcp + httpx packages available; on this project that means activating the AIstock conda env (or any venv with `pip install mcp httpx`).",
+  "_comment": "Project-level MCP server registration. Servers are opt-in per developer/client. QE MCP servers default to dev backend 8011 and must stay loopback-only.",
   "mcpServers": {
     "aistock-validation": {
       "command": "python",
-      "args": ["scripts/aistock_mcp_server.py"],
+      "args": [
+        "scripts/aistock_mcp_server.py"
+      ],
       "env": {
         "AISTOCK_VALIDATION_BASE_URL": "http://127.0.0.1:8011/api/v1/validation"
+      }
+    },
+    "aistock-qe-experiment": {
+      "command": "python",
+      "args": [
+        "scripts/aistock_qe_experiment_mcp_server.py"
+      ],
+      "env": {
+        "AISTOCK_QE_EXPERIMENT_BASE_URL": "http://127.0.0.1:8011/api/v1"
+      }
+    },
+    "aistock-qe-archive": {
+      "command": "python",
+      "args": [
+        "scripts/aistock_qe_archive_mcp_server.py"
+      ],
+      "env": {
+        "AISTOCK_QE_ARCHIVE_BASE_URL": "http://127.0.0.1:8011/api/v1/qe-archive"
       }
     }
   }

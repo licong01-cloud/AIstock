@@ -12,10 +12,14 @@ from backend.db.pg_pool import get_conn
 from .models import (
     AccountSummaryRecord,
     ArchiveJobRecord,
+    BackfillRunItemRecord,
+    BackfillRunRecord,
+    BootstrapMarkerRecord,
     ClaimedOutboxEvent,
     CurveRecord,
     DataContextRecord,
     ExecutionEventRecord,
+    IngestHistoryRecord,
     MetricRecord,
     OutboxEventRecord,
     RawPayloadRecord,
@@ -23,6 +27,7 @@ from .models import (
     RunFactorRecord,
     RunConfigRecord,
     RunSourceRecord,
+    SkipRegistryRecord,
     SymbolSummaryRecord,
     TradeRecord,
     canonical_json_dumps,
@@ -294,6 +299,95 @@ EXECUTION_EVENT_COLUMNS = (
     "metadata",
 )
 
+SKIP_REGISTRY_COLUMNS = (
+    "skip_id",
+    "source_system",
+    "source_type",
+    "source_id",
+    "source_sub_id",
+    "event_type",
+    "archive_policy",
+    "archive_policy_source",
+    "skip_reason",
+    "allow_override",
+    "override_required_token",
+    "trigger_reason",
+    "payload_sha256",
+    "runtime_config_sha256",
+    "created_by",
+    "metadata",
+)
+
+INGEST_HISTORY_COLUMNS = (
+    "history_id",
+    "run_id",
+    "logical_experiment_id",
+    "event_id",
+    "job_id",
+    "backfill_run_id",
+    "source_system",
+    "source_type",
+    "source_id",
+    "source_sub_id",
+    "trigger_reason",
+    "archive_policy",
+    "ingest_status",
+    "attempt_no",
+    "payload_sha256",
+    "runtime_config_sha256",
+    "result_fingerprint",
+    "anomaly",
+    "anomaly_reason",
+    "stats",
+    "error_message",
+    "created_by",
+)
+
+BACKFILL_RUN_COLUMNS = (
+    "backfill_run_id",
+    "source_mode",
+    "mode",
+    "status",
+    "request_payload",
+    "force_rebackfill",
+    "confirm_token_used",
+    "requested_by",
+    "candidate_count",
+    "processed_count",
+    "ingested_count",
+    "skipped_count",
+    "failed_count",
+    "last_cursor",
+    "error_message",
+)
+
+BACKFILL_RUN_ITEM_COLUMNS = (
+    "item_id",
+    "backfill_run_id",
+    "source_system",
+    "source_type",
+    "source_id",
+    "source_sub_id",
+    "archive_policy",
+    "status",
+    "run_id",
+    "skip_id",
+    "error_message",
+    "stats",
+)
+
+BOOTSTRAP_MARKER_COLUMNS = (
+    "source_type",
+    "status",
+    "mode",
+    "backfill_run_id",
+    "operator",
+    "ingested_count",
+    "skipped_count",
+    "failed_count",
+    "stats",
+)
+
 
 JSON_COLUMNS = {
     "canonical_config",
@@ -322,6 +416,8 @@ JSON_COLUMNS = {
     "payload_json",
     "metadata",
     "stats",
+    "request_payload",
+    "last_cursor",
     "factor_classification",
     "independent_metrics_snapshot",
     "official_rating_snapshot",
@@ -811,6 +907,281 @@ class QEArchiveRepository:
                     (error, self._adapt_value("stats", stats) if stats is not None else None, job_id),
                 )
 
+    def upsert_skip_registry(self, record: SkipRegistryRecord | Mapping[str, Any]) -> str:
+        if isinstance(record, Mapping):
+            record = SkipRegistryRecord(**dict(record))
+        row = self._prepare_record(record, SKIP_REGISTRY_COLUMNS)
+        self._require(
+            row,
+            ("skip_id", "source_system", "source_type", "source_id", "archive_policy", "archive_policy_source", "skip_reason", "trigger_reason"),
+        )
+        columns = list(row.keys())
+        assignments = ", ".join(
+            f"{column} = EXCLUDED.{column}"
+            for column in columns
+            if column not in {"skip_id", "created_by"}
+        )
+        sql = f"""
+            INSERT INTO qe_archive.skip_registry ({", ".join(columns)})
+            VALUES ({", ".join(["%s"] * len(columns))})
+            ON CONFLICT (source_system, source_type, source_id, (COALESCE(source_sub_id, ''))) DO UPDATE SET
+                {assignments},
+                last_seen_at = NOW()
+            RETURNING skip_id
+        """
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, [self._adapt_value(col, row.get(col)) for col in columns])
+                result = cur.fetchone()
+        return str(result[0]) if result else str(row["skip_id"])
+
+    def list_skips(
+        self,
+        *,
+        archive_policy: str | None = None,
+        source_type: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit or 100), 500))
+        filters: list[str] = []
+        params: list[Any] = []
+        if archive_policy:
+            filters.append("archive_policy = %s")
+            params.append(archive_policy)
+        if source_type:
+            filters.append("source_type = %s")
+            params.append(source_type)
+        params.append(limit)
+        where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT skip_id, source_system, source_type, source_id, source_sub_id,
+                           event_type, archive_policy, archive_policy_source, skip_reason,
+                           allow_override, trigger_reason, payload_sha256,
+                           runtime_config_sha256, created_by, metadata, created_at, last_seen_at
+                    FROM qe_archive.skip_registry
+                    {where_sql}
+                    ORDER BY last_seen_at DESC, created_at DESC
+                    LIMIT %s
+                    """,
+                    params,
+                )
+                return self._fetch_dicts(cur)
+
+    def insert_ingest_history(self, record: IngestHistoryRecord | Mapping[str, Any]) -> str:
+        if isinstance(record, Mapping):
+            record = IngestHistoryRecord(**dict(record))
+        row = self._prepare_record(record, INGEST_HISTORY_COLUMNS)
+        self._require(
+            row,
+            ("history_id", "source_system", "source_type", "source_id", "trigger_reason", "ingest_status"),
+        )
+        if self._detect_ingest_anomaly(row):
+            row["anomaly"] = True
+            row.setdefault("anomaly_reason", "source_fingerprint_changed")
+        columns = list(row.keys())
+        sql = f"""
+            INSERT INTO qe_archive.ingest_history ({", ".join(columns)})
+            VALUES ({", ".join(["%s"] * len(columns))})
+            RETURNING history_id
+        """
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, [self._adapt_value(col, row.get(col)) for col in columns])
+                result = cur.fetchone()
+        return str(result[0]) if result else str(row["history_id"])
+
+    def _detect_ingest_anomaly(self, row: Mapping[str, Any]) -> bool:
+        payload_sha = row.get("payload_sha256")
+        runtime_sha = row.get("runtime_config_sha256")
+        result_fp = row.get("result_fingerprint")
+        if not (payload_sha or runtime_sha or result_fp):
+            return False
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT payload_sha256, runtime_config_sha256, result_fingerprint
+                    FROM qe_archive.ingest_history
+                    WHERE source_system = %s
+                      AND source_type = %s
+                      AND source_id = %s
+                      AND COALESCE(source_sub_id, '') = COALESCE(%s, '')
+                      AND ingest_status IN ('completed','skipped','manual_only')
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (row.get("source_system"), row.get("source_type"), row.get("source_id"), row.get("source_sub_id")),
+                )
+                existing = cur.fetchone()
+        if not existing:
+            return False
+        old_payload, old_runtime, old_result = existing
+        return any(
+            new and old and new != old
+            for new, old in ((payload_sha, old_payload), (runtime_sha, old_runtime), (result_fp, old_result))
+        )
+
+    def upsert_backfill_run(self, record: BackfillRunRecord | Mapping[str, Any]) -> str:
+        if isinstance(record, Mapping):
+            record = BackfillRunRecord(**dict(record))
+        row = self._prepare_record(record, BACKFILL_RUN_COLUMNS)
+        self._require(row, ("backfill_run_id", "source_mode", "mode", "status"))
+        columns = list(row.keys())
+        assignments = ", ".join(f"{column} = EXCLUDED.{column}" for column in columns if column != "backfill_run_id")
+        sql = f"""
+            INSERT INTO qe_archive.backfill_run ({", ".join(columns)})
+            VALUES ({", ".join(["%s"] * len(columns))})
+            ON CONFLICT (backfill_run_id) DO UPDATE SET
+                {assignments},
+                updated_at = NOW()
+            RETURNING backfill_run_id
+        """
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, [self._adapt_value(col, row.get(col)) for col in columns])
+                result = cur.fetchone()
+        return str(result[0]) if result else str(row["backfill_run_id"])
+
+    def update_backfill_run_status(
+        self,
+        backfill_run_id: str,
+        *,
+        status: str,
+        processed_count: int | None = None,
+        ingested_count: int | None = None,
+        skipped_count: int | None = None,
+        failed_count: int | None = None,
+        candidate_count: int | None = None,
+        error_message: str | None = None,
+        last_cursor: Mapping[str, Any] | None = None,
+    ) -> None:
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE qe_archive.backfill_run
+                    SET status = %s,
+                        processed_count = COALESCE(%s, processed_count),
+                        ingested_count = COALESCE(%s, ingested_count),
+                        skipped_count = COALESCE(%s, skipped_count),
+                        failed_count = COALESCE(%s, failed_count),
+                        candidate_count = COALESCE(%s, candidate_count),
+                        error_message = COALESCE(%s, error_message),
+                        last_cursor = COALESCE(%s, last_cursor),
+                        started_at = COALESCE(started_at, NOW()),
+                        completed_at = CASE WHEN %s IN ('completed','failed','partial') THEN NOW() ELSE completed_at END,
+                        updated_at = NOW()
+                    WHERE backfill_run_id = %s
+                    """,
+                    (
+                        status,
+                        processed_count,
+                        ingested_count,
+                        skipped_count,
+                        failed_count,
+                        candidate_count,
+                        error_message,
+                        self._adapt_value("last_cursor", last_cursor) if last_cursor is not None else None,
+                        status,
+                        backfill_run_id,
+                    ),
+                )
+
+    def upsert_backfill_run_item(self, record: BackfillRunItemRecord | Mapping[str, Any]) -> str:
+        if isinstance(record, Mapping):
+            record = BackfillRunItemRecord(**dict(record))
+        row = self._prepare_record(record, BACKFILL_RUN_ITEM_COLUMNS)
+        self._require(row, ("item_id", "backfill_run_id", "source_system", "source_type", "source_id", "status"))
+        columns = list(row.keys())
+        assignments = ", ".join(f"{column} = EXCLUDED.{column}" for column in columns if column != "item_id")
+        sql = f"""
+            INSERT INTO qe_archive.backfill_run_item ({", ".join(columns)})
+            VALUES ({", ".join(["%s"] * len(columns))})
+            ON CONFLICT (item_id) DO UPDATE SET
+                {assignments},
+                updated_at = NOW()
+            RETURNING item_id
+        """
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, [self._adapt_value(col, row.get(col)) for col in columns])
+                result = cur.fetchone()
+        return str(result[0]) if result else str(row["item_id"])
+
+    def list_backfill_runs(self, *, status: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit or 50), 500))
+        params: list[Any] = []
+        where_sql = ""
+        if status:
+            where_sql = "WHERE status = %s"
+            params.append(status)
+        params.append(limit)
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT *
+                    FROM qe_archive.backfill_run
+                    {where_sql}
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    params,
+                )
+                return self._fetch_dicts(cur)
+
+    def get_backfill_run(self, backfill_run_id: str) -> dict[str, Any] | None:
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM qe_archive.backfill_run WHERE backfill_run_id = %s", (backfill_run_id,))
+                rows = self._fetch_dicts(cur)
+                if not rows:
+                    return None
+                run = rows[0]
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM qe_archive.backfill_run_item
+                    WHERE backfill_run_id = %s
+                    ORDER BY created_at ASC
+                    """,
+                    (backfill_run_id,),
+                )
+                run["items"] = self._fetch_dicts(cur)
+                return run
+
+    def upsert_bootstrap_marker(self, record: BootstrapMarkerRecord | Mapping[str, Any]) -> str:
+        if isinstance(record, Mapping):
+            record = BootstrapMarkerRecord(**dict(record))
+        row = self._prepare_record(record, BOOTSTRAP_MARKER_COLUMNS)
+        self._require(row, ("source_type", "status", "mode", "backfill_run_id"))
+        columns = list(row.keys())
+        assignments = ", ".join(f"{column} = EXCLUDED.{column}" for column in columns if column != "source_type")
+        sql = f"""
+            INSERT INTO qe_archive.bootstrap_marker ({", ".join(columns)})
+            VALUES ({", ".join(["%s"] * len(columns))})
+            ON CONFLICT (source_type) DO UPDATE SET
+                {assignments},
+                updated_at = NOW(),
+                completed_at = CASE WHEN EXCLUDED.status IN ('completed','failed') THEN NOW() ELSE qe_archive.bootstrap_marker.completed_at END
+            RETURNING source_type
+        """
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, [self._adapt_value(col, row.get(col)) for col in columns])
+                result = cur.fetchone()
+        return str(result[0]) if result else str(row["source_type"])
+
+    def get_bootstrap_marker(self, source_type: str) -> dict[str, Any] | None:
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM qe_archive.bootstrap_marker WHERE source_type = %s", (source_type,))
+                rows = self._fetch_dicts(cur)
+                return rows[0] if rows else None
+
     def list_outbox_events(self, *, status: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
         """Return recent outbox events for UI/API monitoring."""
 
@@ -975,6 +1346,36 @@ class QEArchiveRepository:
                 archive_job_status_counts = {str(status): int(count) for status, count in cur.fetchall()}
                 cur.execute("SELECT MAX(archived_at) FROM qe_archive.run")
                 latest_archived_at = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM qe_archive.skip_registry WHERE archive_policy = 'SKIP'")
+                skip_count = int(cur.fetchone()[0])
+                cur.execute("SELECT COUNT(*) FROM qe_archive.skip_registry WHERE archive_policy = 'MANUAL_ONLY'")
+                manual_only_count = int(cur.fetchone()[0])
+                cur.execute(
+                    """
+                    SELECT ingest_status, COUNT(*)
+                    FROM qe_archive.ingest_history
+                    GROUP BY ingest_status
+                    ORDER BY ingest_status
+                    """
+                )
+                ingest_history_status_counts = {str(status): int(count) for status, count in cur.fetchall()}
+                cur.execute(
+                    """
+                    SELECT status, COUNT(*)
+                    FROM qe_archive.backfill_run
+                    GROUP BY status
+                    ORDER BY status
+                    """
+                )
+                backfill_run_status_counts = {str(status): int(count) for status, count in cur.fetchall()}
+                cur.execute(
+                    """
+                    SELECT source_type, status, mode, backfill_run_id, updated_at
+                    FROM qe_archive.bootstrap_marker
+                    ORDER BY updated_at DESC
+                    """
+                )
+                bootstrap_marker_status = self._fetch_dicts(cur)
         return {
             "run_count": run_count,
             "research_valid_counts": research_valid_counts,
@@ -982,6 +1383,11 @@ class QEArchiveRepository:
             "outbox_status_counts": outbox_status_counts,
             "archive_job_status_counts": archive_job_status_counts,
             "latest_archived_at": latest_archived_at,
+            "skip_count": skip_count,
+            "manual_only_count": manual_only_count,
+            "ingest_history_status_counts": ingest_history_status_counts,
+            "backfill_run_status_counts": backfill_run_status_counts,
+            "bootstrap_marker_status": bootstrap_marker_status,
         }
 
     def get_run_quality_summary(self, run_id: str) -> dict[str, Any]:
@@ -1055,6 +1461,136 @@ class QEArchiveRepository:
             "manifest_missing_item_count": int(manifest_row[2]) if manifest_row else None,
             **counts,
         }
+
+    def query_factor_usage(self, *, limit: int = 50, min_runs: int = 1) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit or 50), 500))
+        min_runs = max(1, int(min_runs or 1))
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        f.factor_name,
+                        COUNT(DISTINCT f.run_id) AS run_count,
+                        MAX(r.completed_at) AS latest_completed_at,
+                        AVG(r.score_total) AS avg_score_total,
+                        SUM(CASE WHEN r.research_valid THEN 1 ELSE 0 END) AS research_valid_count
+                    FROM qe_archive.run_factor f
+                    JOIN qe_archive.run r ON r.run_id = f.run_id
+                    GROUP BY f.factor_name
+                    HAVING COUNT(DISTINCT f.run_id) >= %s
+                    ORDER BY run_count DESC, avg_score_total DESC NULLS LAST
+                    LIMIT %s
+                    """,
+                    (min_runs, limit),
+                )
+                return self._fetch_dicts(cur)
+
+    def query_model_trials(self, *, model_type: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit or 50), 500))
+        params: list[Any] = []
+        where_sql = ""
+        if model_type:
+            where_sql = "WHERE r.model_type = %s OR t.model_type = %s"
+            params.extend([model_type, model_type])
+        params.append(limit)
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT
+                        r.run_id,
+                        r.task_id,
+                        r.loop_index,
+                        r.experiment_id,
+                        COALESCE(t.model_type, r.model_type) AS model_type,
+                        t.trial_id,
+                        t.params,
+                        t.objective_name,
+                        t.objective_value,
+                        r.score_total,
+                        r.research_valid,
+                        r.completed_at
+                    FROM qe_archive.run r
+                    LEFT JOIN qe_archive.run_model_trial t ON t.run_id = r.run_id
+                    {where_sql}
+                    ORDER BY r.completed_at DESC NULLS LAST, r.archived_at DESC NULLS LAST
+                    LIMIT %s
+                    """,
+                    params,
+                )
+                return self._fetch_dicts(cur)
+
+    def query_seed_trials(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit or 50), 500))
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        r.run_id,
+                        r.task_id,
+                        r.loop_index,
+                        r.experiment_id,
+                        repro.random_seed,
+                        r.model_type,
+                        r.score_total,
+                        r.research_valid,
+                        r.completed_at
+                    FROM qe_archive.run r
+                    JOIN qe_archive.run_reproducibility_manifest repro ON repro.run_id = r.run_id
+                    WHERE repro.random_seed IS NOT NULL
+                    ORDER BY r.completed_at DESC NULLS LAST
+                    LIMIT %s
+                    """,
+                    (limit,),
+                )
+                return self._fetch_dicts(cur)
+
+    def query_hyperparam_history(
+        self,
+        *,
+        model_type: str | None = None,
+        param_key: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit or 50), 500))
+        params: list[Any] = []
+        filters: list[str] = []
+        if model_type:
+            filters.append("r.model_type = %s")
+            params.append(model_type)
+        if param_key:
+            filters.append("(c.model_params ? %s OR t.params ? %s)")
+            params.extend([param_key, param_key])
+        where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
+        params.append(limit)
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT
+                        r.run_id,
+                        r.task_id,
+                        r.loop_index,
+                        r.experiment_id,
+                        r.model_type,
+                        c.model_params,
+                        t.params AS trial_params,
+                        t.objective_name,
+                        t.objective_value,
+                        r.score_total,
+                        r.completed_at
+                    FROM qe_archive.run r
+                    LEFT JOIN qe_archive.run_config c ON c.run_id = r.run_id
+                    LEFT JOIN qe_archive.run_model_trial t ON t.run_id = r.run_id
+                    {where_sql}
+                    ORDER BY r.completed_at DESC NULLS LAST, r.archived_at DESC NULLS LAST
+                    LIMIT %s
+                    """,
+                    params,
+                )
+                return self._fetch_dicts(cur)
 
     def upsert_metric_batch(
         self,

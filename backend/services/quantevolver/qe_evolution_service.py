@@ -4632,6 +4632,7 @@ class AutoEvolutionScheduler:
         node_parallelism: Optional[Dict[str, int]] = None,
         engine_mode: str = "unified",
         clone_from_task_id: Optional[str] = None,
+        auto_start: bool = True,
     ) -> str:
         """
         创建自定义演进任务。每个 Loop 都可以完全自定义因子、模型、策略配置，
@@ -4750,11 +4751,12 @@ class AutoEvolutionScheduler:
             f"共 {len(loops_config)} 个 Loop, 执行方式={execution_mode}"
         )
 
-        # 异步启动批量调度
-        bg_task = asyncio.create_task(self.submit_custom_evo_all_loops(new_task_id))
-        bg_task.add_done_callback(
-            lambda t: logger.error(f"submit_custom_evo_all_loops failed: {t.exception()}") if t.exception() else None
-        )
+        # Template materialization can create the DB task without starting execution.
+        if auto_start:
+            bg_task = asyncio.create_task(self.submit_custom_evo_all_loops(new_task_id))
+            bg_task.add_done_callback(
+                lambda t: logger.error(f"submit_custom_evo_all_loops failed: {t.exception()}") if t.exception() else None
+            )
 
         return new_task_id
 

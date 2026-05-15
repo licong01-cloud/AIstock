@@ -8,7 +8,9 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from backend.services.qe_archive.backfill_service import (
+    BACKFILL_CONFIRM_TEXT,
     QEArchiveBackfillOptions,
+    QEArchiveBackfillRunOptions,
     QEArchiveBackfillService,
     WRITE_CONFIRM_TEXT,
 )
@@ -48,6 +50,34 @@ class QEArchiveWorkerRunRequest(BaseModel):
     limit: int = Field(10, ge=1, le=100)
     worker_id: str = Field("qe_archive_api_worker", min_length=1, max_length=128)
     confirm_run: str = ""
+
+
+class QEArchiveBackfillRunRequest(BaseModel):
+    source_mode: Literal[
+        "completed_single_experiments",
+        "completed_custom_evo_loops",
+        "all_completed_qe_sources",
+        "specific_ids",
+    ] = "completed_custom_evo_loops"
+    experiment_ids: list[str] = Field(default_factory=list)
+    task_ids: list[str] = Field(default_factory=list)
+    loop_ids: list[str] = Field(default_factory=list)
+    task_id: str | None = None
+    loop_index: int | None = Field(None, ge=1)
+    status: str = "completed"
+    limit: int = Field(20, ge=1, le=500)
+    include_archived: bool = False
+    validate_after_write: bool = True
+    min_metrics: int = Field(0, ge=0)
+    min_curves: int = Field(0, ge=0)
+    min_factors: int = Field(0, ge=0)
+    require_account_summary: bool = False
+    confirm_backfill: str = ""
+    force_rebackfill: str = ""
+    requested_by: str = "ui_or_mcp"
+
+    def to_options(self) -> QEArchiveBackfillRunOptions:
+        return QEArchiveBackfillRunOptions(**self.model_dump())
 
 
 def get_backfill_service() -> QEArchiveBackfillService:
@@ -110,6 +140,72 @@ def list_qe_archive_jobs(
         "status": "success",
         "data": get_repository().list_archive_jobs(status=status, limit=limit),
     }
+
+
+@router.get("/skips", summary="QE archive policy skip registry")
+def list_qe_archive_skips(
+    archive_policy: str | None = Query(None, description="SKIP or MANUAL_ONLY"),
+    source_type: str | None = Query(None, description="loop or experiment"),
+    limit: int = Query(100, ge=1, le=500),
+):
+    return {
+        "status": "success",
+        "data": get_repository().list_skips(
+            archive_policy=archive_policy,
+            source_type=source_type,
+            limit=limit,
+        ),
+    }
+
+
+@router.post("/backfill/preview", summary="Preview historical QE archive backfill")
+def preview_qe_archive_backfill(request: QEArchiveBackfillRunRequest):
+    try:
+        return {"status": "success", "data": get_backfill_service().preview_backfill(request.to_options())}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/backfill/execute", summary="Execute confirmed historical QE archive backfill")
+def execute_qe_archive_backfill(request: QEArchiveBackfillRunRequest):
+    if request.confirm_backfill != BACKFILL_CONFIRM_TEXT:
+        raise HTTPException(
+            status_code=400,
+            detail=f"execute requires confirm_backfill={BACKFILL_CONFIRM_TEXT}",
+        )
+    try:
+        return {"status": "success", "data": get_backfill_service().execute_backfill(request.to_options())}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/backfill/runs", summary="List QE archive backfill runs")
+def list_qe_archive_backfill_runs(
+    status: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=500),
+):
+    return {"status": "success", "data": get_repository().list_backfill_runs(status=status, limit=limit)}
+
+
+@router.get("/backfill/runs/{backfill_run_id}", summary="Get QE archive backfill run detail")
+def get_qe_archive_backfill_run(backfill_run_id: str):
+    run = get_repository().get_backfill_run(backfill_run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"backfill run not found: {backfill_run_id}")
+    return {"status": "success", "data": run}
+
+
+@router.post("/backfill/runs/{backfill_run_id}/resume", summary="Resume a failed or partial QE archive backfill")
+def resume_qe_archive_backfill_run(backfill_run_id: str, request: QEArchiveBackfillRunRequest):
+    if request.confirm_backfill != BACKFILL_CONFIRM_TEXT:
+        raise HTTPException(
+            status_code=400,
+            detail=f"resume requires confirm_backfill={BACKFILL_CONFIRM_TEXT}",
+        )
+    try:
+        return {"status": "success", "data": get_backfill_service().resume_backfill_run(backfill_run_id)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/runs", summary="Recent archived QE runs")
@@ -188,3 +284,36 @@ def get_qe_archive_run_quality(run_id: str):
     if not quality.get("exists"):
         raise HTTPException(status_code=404, detail=f"run_id not found: {run_id}")
     return {"status": "success", "data": quality}
+
+
+@router.get("/query/factor-usage", summary="QE archive factor usage aggregation")
+def query_qe_archive_factor_usage(
+    limit: int = Query(50, ge=1, le=500),
+    min_runs: int = Query(1, ge=1, le=1000),
+):
+    return {"status": "success", "data": get_repository().query_factor_usage(limit=limit, min_runs=min_runs)}
+
+
+@router.get("/query/model-trials", summary="QE archive model trial history")
+def query_qe_archive_model_trials(
+    model_type: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=500),
+):
+    return {"status": "success", "data": get_repository().query_model_trials(model_type=model_type, limit=limit)}
+
+
+@router.get("/query/seed-trials", summary="QE archive seed trial history")
+def query_qe_archive_seed_trials(limit: int = Query(50, ge=1, le=500)):
+    return {"status": "success", "data": get_repository().query_seed_trials(limit=limit)}
+
+
+@router.get("/query/hyperparams", summary="QE archive hyperparameter history")
+def query_qe_archive_hyperparams(
+    model_type: str | None = Query(None),
+    param_key: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=500),
+):
+    return {
+        "status": "success",
+        "data": get_repository().query_hyperparam_history(model_type=model_type, param_key=param_key, limit=limit),
+    }

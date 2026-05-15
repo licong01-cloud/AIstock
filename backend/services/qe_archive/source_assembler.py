@@ -603,6 +603,14 @@ class QEArchiveSourceAssembler:
         task_id = loop.get("task_id") or task.get("task_id")
         loop_id = loop.get("loop_id")
         runtime_flags = _ensure_mapping(config_json.get("runtime_flags") or config_json.get("custom_params") or {})
+        strategy_params = _ensure_mapping(config_json.get("strategy_params"))
+        model_params = _ensure_mapping(config_json.get("model_params"))
+        for key in ("archive_policy", "archive_reason", "archive_allow_override"):
+            if key not in runtime_flags:
+                if key in strategy_params:
+                    runtime_flags[key] = strategy_params[key]
+                elif key in model_params:
+                    runtime_flags[key] = model_params[key]
         if runtime_contract_missing(runtime_flags):
             runtime_flags = merge_qe_minute_runtime_contract(
                 runtime_flags,

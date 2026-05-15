@@ -1039,6 +1039,7 @@ class CustomEvolutionCreateRequest(BaseModel):
     node_parallelism: Optional[Dict[str, int]] = Field(None, description="Per-node parallelism, default 1, max 4")
     engine_mode: str = Field("unified", description="引擎模式: only unified is supported")
 
+    auto_start: bool = Field(True, description="Create and immediately submit loops; template materialization sets false")
     clone_from_task_id: Optional[str] = Field(None, description="Optional source custom_evo task id for clone provenance")
 
 
@@ -1058,6 +1059,11 @@ class CustomEvoAppendRequest(BaseModel):
     node_parallelism: Optional[Dict[str, int]] = Field(None, description="Per-node parallelism")
     engine_mode: str = Field("unified", description="Only unified is supported")
     ack_failed_loop_warning: bool = Field(False, description="Caller acknowledged existing failed/cancelled loops")
+
+
+class CustomEvoRunRequest(BaseModel):
+    confirm_custom_evo: str = Field("", description="Must equal QE_CUSTOM_EVO_RUN")
+    force_full_train: bool = Field(False, description="Force full training when submitting a pending custom_evo task")
 
 
 async def _prepare_custom_evo_loop_configs(
@@ -1259,6 +1265,7 @@ async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, backgr
             node_parallelism=node_parallelism,
             engine_mode="unified",
             clone_from_task_id=req.clone_from_task_id,
+            auto_start=req.auto_start,
         )
 
         return {
@@ -1291,6 +1298,37 @@ async def get_custom_evo_config(task_id: str):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to read custom_evo config for {task_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/tasks/{task_id}/custom-evo/run", summary="Submit a materialized custom_evo task")
+async def run_custom_evo_task(task_id: str, req: CustomEvoRunRequest, background_tasks: BackgroundTasks):
+    if req.confirm_custom_evo != "QE_CUSTOM_EVO_RUN":
+        raise HTTPException(status_code=400, detail="confirm_custom_evo must equal QE_CUSTOM_EVO_RUN")
+    try:
+        config = await scheduler.get_custom_evo_editable_config(task_id)
+        if config.get("task_type") != "custom_evo":
+            raise HTTPException(status_code=400, detail=f"task {task_id} is not a custom_evo task")
+        if config.get("status") == "running":
+            raise HTTPException(status_code=409, detail=f"custom_evo task {task_id} is already running")
+        background_tasks.add_task(
+            scheduler.submit_custom_evo_all_loops,
+            task_id,
+            force_full_train=req.force_full_train,
+        )
+        return {
+            "status": "success",
+            "task_id": task_id,
+            "submitted": True,
+            "force_full_train": req.force_full_train,
+            "message": "custom_evo task submitted through canonical backend executor",
+        }
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to run custom_evo task {task_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
