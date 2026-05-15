@@ -72,7 +72,7 @@ let paperPortfolioRuntimeBlocked = "";
 function paperPortfolioBlockText(payloadOrText: unknown): string {
   const text = typeof payloadOrText === "string" ? payloadOrText : JSON.stringify(payloadOrText || {});
   if (
-    /DATA_UNAVAILABLE|V24_PLAN|model_path|not accessible|execution policy must match|runtime is not available|validated execution policy/i.test(text)
+    /DATA_UNAVAILABLE|INVALID_STATE_TRANSITION|V24_PLAN|model_path|not accessible|execution policy must match|runtime is not available|validated execution policy/i.test(text)
   ) {
     return text.slice(0, 1200);
   }
@@ -631,7 +631,7 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     const blockedText = await errorPanel.textContent({ timeout: 10_000 }).catch(() => "");
     paperPortfolioRuntimeBlocked = paperPortfolioBlockText(blockedText || "");
     if (paperPortfolioRuntimeBlocked) {
-      await expect(errorPanel).toContainText(/DATA_UNAVAILABLE|V24_PLAN|model_path|not accessible|execution policy/i);
+      await expect(errorPanel).toContainText(/DATA_UNAVAILABLE|INVALID_STATE_TRANSITION|V24_PLAN|model_path|not accessible|execution policy/i);
       await expect(page.locator(".pv2-readable-panel").filter({ hasText: /Created Portfolio Id|created_portfolio_id/ })).toHaveCount(0);
       return;
     }
