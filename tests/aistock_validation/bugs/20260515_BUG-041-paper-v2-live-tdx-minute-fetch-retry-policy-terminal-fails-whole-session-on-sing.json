@@ -6,7 +6,7 @@
   "module": "paper_v2",
   "severity": "P1",
   "risk_area": "paper_v2_live_data_resilience",
-  "status": "open",
+  "status": "verified",
   "trigger_condition": {
     "scenario": "single_tdx_minute_fetch_failure_terminal_failed_live_session",
     "portfolio_id": "paper_8f9b5368e86344ba8d699b4995ae665e",
@@ -26,12 +26,12 @@
   "fingerprint": "d0bccd515a7c6886",
   "assigned_agent": null,
   "fix_branch": null,
-  "fix_commit": null,
-  "verification_run_id": null,
+  "fix_commit": "1ce3bef",
+  "verification_run_id": "local-pytest-paper-v2-live-20260515",
   "created_at": "2026-05-15T05:18:36Z",
   "first_seen_at": "2026-05-15T05:18:36Z",
   "last_seen_at": "2026-05-15T05:18:36Z",
-  "fixed_at": null,
+  "fixed_at": "2026-05-15T07:37:13Z",
   "submitted_at": "2026-05-15T05:18:36Z",
   "closed_at": null,
   "allowed_write_scope": [
@@ -67,6 +67,12 @@
       "actor": "codex-app",
       "action": "discovered",
       "note": "Created from production Paper v2 live-session diagnostic after 2026-05-14 live simulation failure."
+    },
+    {
+      "timestamp": "2026-05-15T07:37:13Z",
+      "actor": "codex-app",
+      "action": "verified",
+      "note": "Verified locally in commit 1ce3bef with targeted backend tests."
     }
   ]
 }
