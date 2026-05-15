@@ -753,3 +753,153 @@ Codex 或用户创建 QE 模板
 ```
 
 特殊实验可以选择 `archive_policy=SKIP`，宽泛历史 backfill 默认不会导入这些实验。
+
+## 15. Claude Code 建议（基于澄清后修订）
+
+本章节是在用户提供以下关键约束后，对前文设计的补充与修订。这些约束应作为后续实现的硬假设，先于一切其他建议生效。
+
+### 15.1 运行假设
+
+- 回测使用固定时间段，不依赖实时行情，无论当天/隔天均无影响。
+- 仅使用因子缓存值，不消费任何实盘数据。
+- ST pit 数据、涨跌停字段、因子缓存在 task 创建前已就绪。
+- 验证、审阅、提交期间不存在数据漂移面。
+- WSL 当前并发上限 = 2 loops，是软限制，未来扩内存后可手工调节。
+- 历史实验入仓的回补只做一次，不应在每次新任务执行时重复触发。
+- QE 前端目前已可保证实验执行成功。
+- MCP 必须复用与 UI 一致的执行路径，不允许独立写一套校验或执行逻辑。
+- MCP 生成的实验模板必须保持可编辑：用户在执行前后均可修改并发度或其他配置后继续执行，不得在 submit 后锁死。
+
+### 15.2 修订后的设计原则
+
+#### 15.2.1 MCP 是 UI 的程序化入口，不是新世界
+
+- 单次实验：MCP `qe_template_submit_confirmed` 必须调用 `/api/v1/quantevolver/experiments/{id}/run`，与 UI 完全相同。
+- 自定义演进：MCP submit 必须调用现有 `/api/v1/quantevolver/evolution/...` 入口，复用 `submit_custom_evo_all_loops` 链路。
+- 禁止 MCP 自行拼装 RD-Agent 调用、绕过 service 层、或重写一份"MCP 专用执行流"。
+- MCP `validate` 只做 schema/类型/枚举级校验（沿用后端 pydantic schema），不做数据完整性扫描，不做并发预算硬校验。
+
+#### 15.2.2 模板是可编辑草稿，不是不可变契约
+
+- 模板 submit 后 materialize 到 runtime（`qe_experiments` 或 `qe_evolution_tasks`），用户可继续在 UI 编辑 runtime 配置（并发度、loop 数、factor_keys、strategy_params 等）后再次执行。
+- runtime 编辑不强制 supersede 模板，也不锁定模板。
+- `config_sha256` 仅用于创建期去重，不用于执行期一致性校验。
+- 取消前文若干"submit 后转 read-only / 修改必须 supersede"类设想。
+
+#### 15.2.3 并发=2 是软限制，不写死
+
+- 不在 MCP/template 层做硬拒绝。
+- 后端配置项 `AISTOCK_QE_BACKTEST_CONCURRENCY` 默认 2，运维可手工调高。
+- 调度器层按当前配额排队，不影响模板可提交性。
+- MCP 只读工具可返回"当前 running loops 数 + 配置上限"，让 agent 自行决定是否排队，但不在 submit 路径上强制拒绝。
+
+### 15.3 取消的早期建议
+
+| 取消项 | 理由 |
+|---|---|
+| validate 强制 ≤ 2 loops 并发 | 软限制 + 调度器已处理；UI 不做 MCP 也不做 |
+| validate 期间扫描因子缓存/ST pit 完整性 | 数据前置条件保证就绪；UI 不扫 MCP 也不扫 |
+| 模板 submit 后转 read-only | 与"运行时可编辑"约束直接冲突 |
+| 修改 runtime 必须走 supersede | 同上 |
+| validate 阶段拒绝 research_valid=false 配置 | 数据前置条件已保证；该标识由 archive 阶段填，不作为 validate 门禁 |
+| validate→submit 之间冻结 data snapshot | 数据无漂移面 |
+
+### 15.4 保留并强化的建议
+
+#### 15.4.1 一次性历史 backfill 协议（Phase 1 上线前必做）
+
+- 新增 `qe_archive.bootstrap_marker(source_type, completed_at, ingested_count, mode, operator)`。
+- **per source_type 一行**：`single_experiment` 与 `custom_evo_loop` 各自独立标记，便于程序根据不同实验类型选择合理处理方式（如不同的 payload extractor、不同的有效性规则）。
+- 同一 source_type 已存在 marker 时，broad backfill 直接拒绝；只有显式 `force_rebackfill=QE_ARCHIVE_REBOOTSTRAP` token 才允许重做。
+- 稳态路径完全依赖 realtime hook + outbox worker，新任务永不触发宽泛 backfill。
+
+#### 15.4.2 outbox latest-wins + ingest_history 子表
+
+- `qe_archive.run` 表对同一 logical key 采用 latest-wins 覆盖。
+- 新增 `qe_archive.ingest_history` 子表，保留每次入仓快照（trigger_reason: realtime / backfill / retry / manual / rebootstrap）。
+- 由于回测时间段固定 + 因子缓存确定性 + 数据无漂移，多次入仓在正常情况下结果应一致；任何差异本身就是诊断信号。
+
+#### 15.4.3 archive worker 单 leader
+
+- outbox 表新增 `claimed_by`、`claimed_at`、`claim_token` 字段。
+- worker 使用 `SELECT ... FOR UPDATE SKIP LOCKED` 或 PG advisory lock。
+- uvicorn 多 worker 部署下不会重复消费同一 outbox event。
+
+#### 15.4.4 模板 lineage 与 runtime diff（支持 post-run learning）
+
+由于 runtime 可编辑，必须同时记录"提案配置"与"实测配置"两份指纹：
+
+新增字段：
+- `parent_template_id`：上一版模板（agent 迭代提案时填）。
+- `proposed_metrics_json`：模板创建时 agent 给出的预期 IC/Sharpe/PA 区间。
+- `actual_metrics_json`：archive worker 入仓时回填的实测指标。
+- `metric_delta_json`：自动计算差异。
+- `runtime_config_sha256`：实测时 runtime config 的 hash（可与 `config_sha256` 不同）。
+- `runtime_diff_json`：runtime 配置相对模板 `config_json` 的差异（用户/agent 改了什么）。
+
+这套字段同时支持："agent 提案命中率统计"、"用户对模板的常见修改模式"、"修改后是否更优"三类分析。
+
+#### 15.4.5 created_by 结构化
+
+- `created_by_kind` enum：`user` / `codex` / `claude` / `other_agent` / `ui`。
+- `created_by_id`：agent session id 或用户名。
+- `created_by_version`：agent/客户端版本，便于评估不同 agent 版本提案质量。
+
+#### 15.4.6 数据版本归档字段（仅 audit，不作门禁）
+
+模板与 runtime 都记录引用的数据版本：
+
+```
+data_versions = {
+  "factor_lib_version":  "...",
+  "st_pit_version":      "...",
+  "limit_price_version": "..."
+}
+```
+
+archive 入仓时一并归档，支持"同一模板在不同因子库版本上的效果对比"。submit 阶段不做版本一致性校验，因约束保证一致。
+
+### 15.5 待审阅决策（修订与确认）
+
+1. 模板 submit 后是否锁配置：**已确认不锁**。runtime 保持可编辑，模板记录 runtime diff。
+2. bootstrap_marker 是否区分 source_type：**已确认区分**。`single_experiment` 与 `custom_evo_loop` 各自一行 marker，程序按类型选择处理路径。
+3. WSL 并发上限：**已确认为软限制**。`AISTOCK_QE_BACKTEST_CONCURRENCY=2` 作为后端配置项，运维手工调，不在 MCP/template 层强制。
+4. MCP 与 UI 是否同源：**已确认必须同源**。MCP submit/validate 必须复用 UI 同一后端 endpoint。
+
+### 15.6 修订后的 Phase 实施清单
+
+**Phase 1 必做（Archive 自动入仓）**
+- bootstrap_marker per source_type + broad backfill 拒重复（15.4.1）
+- outbox latest-wins + ingest_history 子表（15.4.2）
+- archive worker 单 leader 锁（15.4.3）
+- effective archive policy resolver（前文 §6.4 不变）
+
+**Phase 3 必做（模板/提案后端）**
+- 模板 lineage 字段：parent_template_id / proposed_metrics / actual_metrics / runtime_config_sha256 / runtime_diff（15.4.4）
+- created_by 结构化（15.4.5）
+- 数据版本归档字段（15.4.6）
+- 明确"materialize 后 runtime 仍可编辑"，不在代码或 UI 中加锁
+
+**Phase 4 必做（MCP servers）**
+- MCP submit 工具直接调用 UI 同一后端 endpoint（15.2.1）
+- MCP validate 工具仅做 schema 级校验
+- MCP 只读工具暴露当前 running loops 数与 `AISTOCK_QE_BACKTEST_CONCURRENCY`，作为信息返回，不作硬拒绝
+- MCP 之间不互调；共享路径只能是后端 API
+
+**Phase 5 增量（UI）**
+- UI 文案三态对齐：AUTO / MANUAL_ONLY / SKIP
+- 模板详情页展示 `runtime_diff_json`，让用户直观看到自己改了什么
+
+**取消项（不再实现）**
+- validate 阶段强制并发上限校验
+- validate 阶段数据完整性扫描
+- 模板提交后 read-only 锁定
+- runtime 修改必须 supersede
+
+### 15.7 文档头部建议追加的"运行假设"段
+
+建议在 §1 目标之后、§2 当前事实与约束之前，加一段简短的"运行假设"，把 15.1 的关键三条压缩为读者第一眼能看到的前置条件：
+
+> 本设计依赖以下运行假设：回测时间段固定且仅消费因子缓存（无实时行情面）；ST pit/涨跌停/因子缓存在 task 前置条件中已就绪；WSL 并发为软限制（默认 2 loops，可手工调）；历史 backfill 仅做一次；MCP 必须复用 UI 同源后端 endpoint；模板生成的配置在 submit 后仍可由用户编辑并继续执行。
+
+把这段话前置可以让后续 reviewer 立即对齐边界，避免重复讨论已经被排除的早期设想。

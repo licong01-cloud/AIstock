@@ -1,0 +1,101 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-043",
+  "title": "QE 通用列表与演进看板缺少加入候选策略包入口",
+  "description": "按 Paper v2 / QE 候选策略包设计，每个独立 QE 实验或演进 loop 都需要提供用户显式的“加入候选策略包”动作，点击后将当前实验或 loop 快照写入候选策略包池，未来 Paper v2 可从候选策略包中选择策略包执行选股和模拟盘。当前后台候选策略包链路已经存在：StrategyPackage router 提供 from-qe-experiment/from-qe-loop 的 candidate 创建与列表 API，CandidateStrategyPackageService 也已实现实验和 loop 来源快照创建，数据库 schema 已包含 strategy_pkg.candidate_strategy_package。\n\n实际缺口集中在前端入口覆盖不完整：实验详情页和单独 loop 详情页已有“加入候选策略包”按钮，但用户最常使用的 QE 实验列表、实验列表内展开的子 loop 操作区、演进任务手风琴/LoopDetailPanel 仍没有候选策略包动作；导航仍显示 SOTA 殿堂，容易让用户认为候选策略包入口未完成或只能从隐藏详情页进入。\n\n定性：P1 / UX + workflow integration issue。它不是新的后端能力缺失，也不应被当作全新 feature；原因是核心后端 API、service、schema 和 detail-page button 已落地，但关键用户路径没有把已有能力暴露出来，导致设计要求中的“一键加入候选策略包”在常用 QE 页面不可发现、不可直接执行。",
+  "module": "quantevolver_strategy_package",
+  "severity": "P1",
+  "risk_area": "qe_to_paper_v2_workflow_blocker",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "qe_experiment_or_loop_common_page_missing_add_to_candidate_strategy_package_action",
+    "expected_behavior": "每个独立 QE experiment 和 QE evolution loop 的常用查看/操作入口都能直接点击加入候选策略包",
+    "observed_behavior": "backend 和部分 detail 页已支持，但 QE 实验列表、子 loop 展开区、演进任务手风琴/LoopDetailPanel 未暴露该按钮",
+    "classification": "not_backend_missing; frontend_entry_wiring_gap"
+  },
+  "reproduce_command": "rg -n \"createCandidate|加入候选策略包\" frontend/src/app/quantevolver/experiments/page.tsx frontend/src/app/quantevolver/evolution/components/LoopDetailPanel.tsx frontend/src/app/quantevolver/evolution/[taskId]/page.tsx",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "backend/routers/strategy_packages.py:354 POST /strategy-packages/candidates/from-qe-experiment exists",
+    "backend/routers/strategy_packages.py:378 POST /strategy-packages/candidates/from-qe-loop exists",
+    "backend/routers/strategy_packages.py:404 GET /strategy-packages/candidates exists",
+    "backend/services/strategy_package/candidate.py:682 create_from_qe_experiment exists",
+    "backend/services/strategy_package/candidate.py:700 create_from_qe_loop exists",
+    "backend/services/strategy_package/service.py:126 create_from_candidate exists",
+    "backend/migrations/strategy_pkg_candidate_strategy_package_20260513.sql:17 candidate_strategy_package table exists",
+    "backend/migrations/trading_core_v2_schema.sql:61 candidate_strategy_package table exists",
+    "frontend/src/app/quantevolver/experiments/[id]/page.tsx:156 detail page calls createCandidateFromQEExperiment",
+    "frontend/src/app/quantevolver/experiments/[id]/page.tsx:246 detail page shows 加入候选策略包",
+    "frontend/src/app/quantevolver/evolution/[taskId]/loops/[loopIndex]/page.tsx:142 loop detail calls createCandidateFromQELoop",
+    "frontend/src/app/quantevolver/evolution/[taskId]/loops/[loopIndex]/page.tsx:232 loop detail shows 加入候选策略包",
+    "frontend/src/app/quantevolver/experiments/page.tsx:632 experiment list operation area lacks candidate action",
+    "frontend/src/app/quantevolver/experiments/page.tsx:803 child loop operation area only links detail action; no candidate action",
+    "frontend/src/app/quantevolver/evolution/components/LoopDetailPanel.tsx:160 completed-loop action area has fork/sync actions but no candidate action",
+    "frontend/src/app/quantevolver/evolution/[taskId]/page.tsx:198 expanded loop detail has no candidate action",
+    "frontend/src/lib/navigation/nav-groups.ts:27 navigation still labels route as SOTA 殿堂",
+    "frontend/src/app/quantevolver/evolution/sota/page.tsx:154 page title already says 候选策略包, showing naming drift between page and nav",
+    "docs/architecture/paper_v2_qe_candidate_strategy_warehouse_design_20260512.md:345 only user click creates candidate",
+    "docs/architecture/paper_v2_qe_candidate_strategy_warehouse_design_20260512.md:522-524 requires experiment detail, loop detail, and SOTA Hall rename",
+    "docs/architecture/paper_v2_qe_candidate_strategy_warehouse_design_20260512.md:616-619 lists this as P1 UI/API work"
+  ],
+  "fingerprint": "6bd35dbc62b0eba7",
+  "assigned_agent": null,
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-15T09:00:00Z",
+  "first_seen_at": "2026-05-15T09:00:00Z",
+  "last_seen_at": "2026-05-15T09:00:00Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-15T09:00:00Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "frontend/src/app/quantevolver/experiments/page.tsx",
+    "frontend/src/app/quantevolver/evolution/[taskId]/page.tsx",
+    "frontend/src/app/quantevolver/evolution/components/LoopDetailPanel.tsx",
+    "frontend/src/lib/navigation/nav-groups.ts",
+    "frontend/src/lib/paper-v2/api.ts",
+    "frontend/tests/",
+    "tests/aistock_validation/bugs/"
+  ],
+  "suspected_modules": [
+    "frontend/src/app/quantevolver/experiments/page.tsx",
+    "frontend/src/app/quantevolver/evolution/[taskId]/page.tsx",
+    "frontend/src/app/quantevolver/evolution/components/LoopDetailPanel.tsx",
+    "frontend/src/lib/navigation/nav-groups.ts"
+  ],
+  "required_verification": [
+    "QE 实验列表每条独立实验的常用操作区可直接点击加入候选策略包，并调用 createCandidateFromQEExperiment 或等价 API。",
+    "QE 实验列表展开的每个子 loop、演进任务手风琴/LoopDetailPanel 的每个可归档 loop 可直接点击加入候选策略包，并调用 createCandidateFromQELoop 或等价 API。",
+    "按钮应有 busy/error/success 反馈；重复候选、缺少归档资产、后端校验失败时向用户展示可操作错误，不静默吞错。",
+    "导航和页面文案统一为候选策略包，不再把该入口显示为 SOTA 自动晋升语义。",
+    "修复后运行 python -m pytest backend/tests/strategy_package/test_candidate_strategy_package.py backend/tests/strategy_package/test_sota_promotion_review.py -q -p no:cacheprovider。",
+    "修复后运行 npm --prefix frontend run lint，并对 /quantevolver/experiments、/quantevolver/evolution/{taskId}、/quantevolver/evolution/sota 做浏览器冒烟检查。"
+  ],
+  "closure_requirements": [
+    "常用 QE 实验/loop 页面不需要先跳隐藏详情页即可创建候选策略包。",
+    "候选策略包创建仍保持用户显式点击，不引入 QE 自动晋升或自动写入 candidate。",
+    "Paper v2 后续可从候选策略包池选择策略包的前置入口闭环清晰可发现。",
+    "后端 candidate API、schema、service 不因前端补入口而发生不兼容变更。"
+  ],
+  "non_goals": [
+    "不新增自动 SOTA 晋升或自动 candidate 创建逻辑。",
+    "不改变 Paper v2 执行、vn.py、trading_core runtime 语义。",
+    "不触碰生产 8001/3000 或生产数据库。",
+    "不要求本 issue 完成 StrategyPackage 正式审批、live-ready 或 miniQMT 实盘接入。"
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-15T09:00:00Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Created from user-reported QE candidate strategy package button gap and read-only code/design inspection. Classified as P1 UX + workflow integration issue."
+    },
+    {
+      "timestamp": "2026-05-15T09:00:00Z",
+      "actor": "codex-app",
+      "action": "triaged",
+      "note": "Backend route/service/schema exist; button exists on less-common detail pages; missing coverage is common QE list/dashboard entry wiring and SOTA naming drift."
+    }
+  ]
+}
