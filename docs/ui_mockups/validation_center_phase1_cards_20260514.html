@@ -1,0 +1,204 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AIstock 流水线中心卡片化设计稿</title>
+  <style>
+    :root {
+      --ink: #10212f;
+      --muted: #6f8191;
+      --line: #dce7ef;
+      --panel: rgba(255,255,255,.88);
+      --paper: #f7fbf9;
+      --nav: #0d2b36;
+      --nav-2: #153d49;
+      --green: #1e9b63;
+      --green-soft: #e8f7ee;
+      --yellow: #b88312;
+      --yellow-soft: #fff4d8;
+      --orange: #d36828;
+      --orange-soft: #fff0e6;
+      --red: #c83f3f;
+      --red-soft: #ffe9e9;
+      --blue: #216f93;
+      --blue-soft: #e8f5fb;
+      --shadow: 0 22px 60px rgba(14, 41, 51, .12);
+      --radius: 24px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: "Segoe UI", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+      background:
+        radial-gradient(circle at 12% 8%, rgba(32, 132, 115, .13), transparent 30%),
+        radial-gradient(circle at 92% 16%, rgba(220, 104, 42, .10), transparent 26%),
+        linear-gradient(135deg, #f3faf6 0%, #eef6f9 52%, #fbf7ef 100%);
+    }
+    .shell { display: grid; grid-template-columns: 248px 1fr; min-height: 100vh; }
+    .sidebar {
+      background: linear-gradient(180deg, var(--nav) 0%, #071b23 100%);
+      color: #e8f5f3;
+      padding: 28px 18px;
+      position: relative;
+      overflow: hidden;
+    }
+    .sidebar:before {
+      content: ""; position: absolute; inset: auto -55px 80px auto; width: 180px; height: 180px;
+      background: rgba(59, 182, 136, .18); border-radius: 50%; filter: blur(3px);
+    }
+    .brand { position: relative; display: flex; gap: 12px; align-items: center; margin-bottom: 30px; }
+    .brand-mark { width: 42px; height: 42px; border-radius: 15px; background: linear-gradient(135deg,#42bd84,#f0b54d); display: grid; place-items: center; color:#09222b; font-weight: 900; box-shadow: 0 12px 30px rgba(0,0,0,.24); }
+    .brand strong { display:block; font-size: 19px; letter-spacing: .2px; }
+    .brand span { color:#a9c5c5; font-size: 12px; }
+    .nav-group { position: relative; margin: 22px 0; }
+    .nav-title { color:#80a8a8; font-size: 12px; text-transform: uppercase; letter-spacing: .12em; margin: 0 0 10px 12px; }
+    .nav-item { display:flex; align-items:center; gap:10px; padding: 12px 12px; border-radius: 14px; color:#c8dddd; font-size: 14px; margin: 4px 0; }
+    .nav-item.active { background: rgba(255,255,255,.13); color:#fff; box-shadow: inset 3px 0 0 #44c586; }
+    .dot { width: 9px; height: 9px; border-radius: 999px; background:#6d8990; box-shadow:0 0 0 4px rgba(255,255,255,.04); }
+    .active .dot { background:#44c586; }
+    .main { padding: 30px 34px 44px; overflow: hidden; }
+    .topbar { display:flex; align-items:flex-start; justify-content:space-between; gap:22px; margin-bottom: 24px; }
+    .eyebrow { color: var(--blue); font-weight: 800; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; }
+    h1 { margin: 8px 0 8px; font-size: 36px; letter-spacing: -1px; line-height: 1.12; }
+    .sub { color: var(--muted); line-height:1.55; max-width: 760px; font-size: 15px; }
+    .status-strip { display:flex; gap:10px; align-items:center; background: rgba(255,255,255,.72); border:1px solid var(--line); border-radius: 18px; padding: 12px 14px; box-shadow: var(--shadow); white-space: nowrap; }
+    .pill { display:inline-flex; align-items:center; gap:7px; border-radius: 999px; padding: 7px 10px; font-size: 12px; font-weight: 800; border:1px solid transparent; }
+    .pill.green { background: var(--green-soft); color: var(--green); border-color: rgba(30,155,99,.18); }
+    .pill.yellow { background: var(--yellow-soft); color: var(--yellow); border-color: rgba(184,131,18,.18); }
+    .pill.orange { background: var(--orange-soft); color: var(--orange); border-color: rgba(211,104,40,.18); }
+    .pill.red { background: var(--red-soft); color: var(--red); border-color: rgba(200,63,63,.18); }
+    .hero-grid { display:grid; grid-template-columns: 1.4fr .8fr; gap: 18px; margin-bottom: 20px; }
+    .hero-card { background: linear-gradient(135deg, rgba(255,255,255,.92), rgba(234,247,244,.92)); border:1px solid var(--line); border-radius: var(--radius); padding: 22px; box-shadow: var(--shadow); position: relative; overflow:hidden; }
+    .hero-card:after { content:""; position:absolute; right:-70px; top:-85px; width:220px; height:220px; border-radius:50%; background: rgba(33,111,147,.08); }
+    .score { display:flex; align-items:center; gap:18px; position:relative; z-index:1; }
+    .score-ring { width: 116px; height: 116px; border-radius: 50%; background: conic-gradient(var(--green) 0 72%, var(--yellow) 72% 84%, #dbe8ed 84% 100%); display:grid; place-items:center; box-shadow: inset 0 0 0 12px rgba(255,255,255,.8); }
+    .score-ring strong { font-size: 30px; }
+    .score-copy h2 { margin:0 0 8px; font-size: 22px; }
+    .score-copy p { margin:0; color:var(--muted); line-height:1.55; }
+    .mini-metrics { display:grid; grid-template-columns: repeat(3,1fr); gap:12px; margin-top:20px; position:relative; z-index:1; }
+    .mini { background:rgba(255,255,255,.78); border:1px solid var(--line); border-radius:18px; padding:13px; }
+    .mini b { display:block; font-size:22px; }
+    .mini span { color:var(--muted); font-size:12px; }
+    .activity { background: var(--panel); border:1px solid var(--line); border-radius: var(--radius); padding: 20px; box-shadow: var(--shadow); }
+    .activity h3, .section-head h2 { margin:0; font-size:18px; }
+    .activity ul { list-style:none; padding:0; margin:16px 0 0; display:grid; gap:12px; }
+    .activity li { display:grid; grid-template-columns:auto 1fr auto; gap:10px; align-items:center; padding:10px; border-radius:14px; background:#f8fbfb; border:1px solid #e7eff2; font-size:13px; }
+    .cards { display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap:16px; margin-top: 16px; }
+    .module-card { background: var(--panel); border:1px solid var(--line); border-radius: 22px; padding: 18px; box-shadow: 0 14px 34px rgba(14, 41, 51, .09); position:relative; min-height: 210px; overflow:hidden; }
+    .module-card:before { content:""; position:absolute; inset:0 auto 0 0; width:6px; background:var(--tone); }
+    .module-top { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; margin-bottom:14px; }
+    .icon { width:42px; height:42px; border-radius:15px; background:var(--tone-soft); color:var(--tone); display:grid; place-items:center; font-size:21px; font-weight:900; }
+    .module-title { font-size:18px; font-weight:900; margin:0; }
+    .module-desc { color:var(--muted); font-size:13px; line-height:1.45; margin:5px 0 0; }
+    .card-green { --tone: var(--green); --tone-soft: var(--green-soft); }
+    .card-yellow { --tone: var(--yellow); --tone-soft: var(--yellow-soft); }
+    .card-orange { --tone: var(--orange); --tone-soft: var(--orange-soft); }
+    .card-red { --tone: var(--red); --tone-soft: var(--red-soft); }
+    .card-blue { --tone: var(--blue); --tone-soft: var(--blue-soft); }
+    .card-metrics { display:grid; grid-template-columns: repeat(3, 1fr); gap:8px; margin:16px 0; }
+    .card-metrics div { border-radius:14px; background:#f8fbfb; border:1px solid #e6eff1; padding:10px 8px; }
+    .card-metrics b { display:block; font-size:18px; }
+    .card-metrics span { color:var(--muted); font-size:11px; white-space:nowrap; }
+    .card-footer { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:auto; }
+    .route { color:var(--muted); font-size:12px; font-family: Consolas, monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .btn { border:0; background:var(--ink); color:white; padding:10px 13px; border-radius:13px; font-weight:900; font-size:12px; box-shadow: 0 10px 22px rgba(16,33,47,.18); }
+    .section-head { display:flex; align-items:end; justify-content:space-between; margin-top: 24px; gap:20px; }
+    .section-head p { color:var(--muted); margin:6px 0 0; font-size:13px; }
+    .wire-note { color: var(--muted); font-size: 12px; text-align:right; max-width:420px; }
+    .detail-layout { display:grid; grid-template-columns: 310px 1fr; gap:18px; margin-top:18px; }
+    .filter-panel, .detail-panel { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); box-shadow: var(--shadow); padding:18px; }
+    .filter-title { font-size:16px; font-weight:900; margin:0 0 12px; }
+    .filter-chip { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:12px; border:1px solid #e4edf0; border-radius:15px; margin:8px 0; background:#fbfdfd; font-size:13px; font-weight:800; }
+    .filter-chip.active { border-color:rgba(33,111,147,.35); background:var(--blue-soft); color:var(--blue); }
+    .table { width:100%; border-collapse:separate; border-spacing:0 9px; font-size:13px; }
+    .table th { color:var(--muted); font-size:12px; text-align:left; padding:0 12px 4px; font-weight:800; }
+    .table td { background:#fbfdfd; border-top:1px solid #e4edf0; border-bottom:1px solid #e4edf0; padding:13px 12px; vertical-align:top; }
+    .table td:first-child { border-left:1px solid #e4edf0; border-radius:14px 0 0 14px; font-weight:900; }
+    .table td:last-child { border-right:1px solid #e4edf0; border-radius:0 14px 14px 0; }
+    .progress { height:9px; background:#e6eef0; border-radius:999px; overflow:hidden; margin-top:7px; }
+    .bar { height:100%; border-radius:999px; background:var(--green); width:70%; }
+    .bar.warn { background:var(--yellow); width:48%; }
+    .bar.bad { background:var(--red); width:24%; }
+    .page { width: 1440px; min-height: 1024px; margin:0 auto; background: transparent; }
+    .detail-page { padding-top:0; }
+    @media (max-width: 900px) {
+      .shell { grid-template-columns: 1fr; }
+      .sidebar { display:none; }
+      .main { padding:20px; }
+      .hero-grid, .detail-layout { grid-template-columns:1fr; }
+      .cards { grid-template-columns:1fr; }
+      h1 { font-size:28px; }
+    }
+  </style>
+</head>
+<body>
+  <section class="page" id="home-page">
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand"><div class="brand-mark">A</div><div><strong>AIstock</strong><span>Validation Center</span></div></div>
+        <div class="nav-group"><p class="nav-title">流水线中心</p>
+          <div class="nav-item active"><span class="dot"></span>总览卡片</div>
+          <div class="nav-item"><span class="dot"></span>流水线测试</div>
+          <div class="nav-item"><span class="dot"></span>功能验证</div>
+          <div class="nav-item"><span class="dot"></span>模块质量</div>
+        </div>
+        <div class="nav-group"><p class="nav-title">协作治理</p>
+          <div class="nav-item"><span class="dot"></span>GitHub Issues</div>
+          <div class="nav-item"><span class="dot"></span>分支与 PR</div>
+          <div class="nav-item"><span class="dot"></span>历史遗留问题</div>
+          <div class="nav-item"><span class="dot"></span>MCP 自动化</div>
+        </div>
+      </aside>
+      <main class="main">
+        <div class="topbar">
+          <div><div class="eyebrow">Phase 1 · Card based pipeline center</div><h1>流水线中心</h1><p class="sub">先把测试、功能验证、GitHub Issue、分支 PR、模块质量和历史问题拆成独立入口；入口页只做摘要，不再一页堆满所有表格。</p></div>
+          <div class="status-strip"><span class="pill green">● API linked 14</span><span class="pill orange">● Open issues 14</span><span class="pill yellow">● Branch ahead 10</span></div>
+        </div>
+        <div class="hero-grid">
+          <div class="hero-card"><div class="score"><div class="score-ring"><strong>76</strong></div><div class="score-copy"><h2>整体状态：可用但需要治理</h2><p>GitHub issue 链路已接入，P0/P1 聚合问题已归档；下一步重点是减少未合入分支和历史 guardrail debt。</p></div></div><div class="mini-metrics"><div class="mini"><b>39</b><span>BUG JSON</span></div><div class="mini"><b>14</b><span>已同步 GitHub</span></div><div class="mini"><b>6</b><span>主卡片入口</span></div></div></div>
+          <div class="activity"><h3>今天需要关注</h3><ul><li><span class="pill red">P1</span><span>BUG-038 保持 in_progress，拆 child BUG</span><b>#19</b></li><li><span class="pill orange">PR</span><span>当前生产目录分支 ahead，需要明确是否推送</span><b>10</b></li><li><span class="pill yellow">UI</span><span>功能验证页需要展示真实 proof</span><b>待补</b></li></ul></div>
+        </div>
+        <div class="section-head"><div><h2>卡片入口</h2><p>每个卡片进入独立详情页，阶段 2 可复用相同 health_tone / risk_score 做驾驶舱节点。</p></div><div class="wire-note">不引入图数据库；只新增摘要模型和页面拆分。</div></div>
+        <div class="cards">
+          <article class="module-card card-green"><div class="module-top"><div><p class="module-title">流水线测试</p><p class="module-desc">CI、nox、backend matrix、frontend typecheck、guardrail scan。</p></div><div class="icon">✓</div></div><div class="card-metrics"><div><b>8</b><span>通过</span></div><div><b>0</b><span>失败</span></div><div><b>1</b><span>跳过</span></div></div><div class="card-footer"><span class="route">/validation-center/pipeline</span><button class="btn">进入</button></div></article>
+          <article class="module-card card-yellow"><div class="module-top"><div><p class="module-title">功能验证</p><p class="module-desc">按菜单栏显示功能测试、API proof、UI smoke、业务证据。</p></div><div class="icon">▦</div></div><div class="card-metrics"><div><b>42</b><span>页面</span></div><div><b>27</b><span>有证据</span></div><div><b>15</b><span>缺 proof</span></div></div><div class="card-footer"><span class="route">/validation-center/features</span><button class="btn">进入</button></div></article>
+          <article class="module-card card-orange"><div class="module-top"><div><p class="module-title">GitHub Issues</p><p class="module-desc">BUG JSON 与 GitHub issue link 同步、P0/P1、聚合 issue。</p></div><div class="icon">#</div></div><div class="card-metrics"><div><b>15</b><span>Issues</span></div><div><b>14</b><span>Open</span></div><div><b>11</b><span>未同步</span></div></div><div class="card-footer"><span class="route">/validation-center/github</span><button class="btn">进入</button></div></article>
+          <article class="module-card card-orange"><div class="module-top"><div><p class="module-title">分支与 PR</p><p class="module-desc">当前分支、ahead/behind、open PR、未合入 branch、dirty files。</p></div><div class="icon">⑂</div></div><div class="card-metrics"><div><b>1</b><span>当前分支</span></div><div><b>10</b><span>Ahead</span></div><div><b>0</b><span>Dirty</span></div></div><div class="card-footer"><span class="route">/validation-center/branches</span><button class="btn">进入</button></div></article>
+          <article class="module-card card-yellow"><div class="module-top"><div><p class="module-title">模块质量</p><p class="module-desc">覆盖率、findings、bugs、workspace changes、最近提交。</p></div><div class="icon">◇</div></div><div class="card-metrics"><div><b>18</b><span>模块</span></div><div><b>5</b><span>需验证</span></div><div><b>3</b><span>高风险</span></div></div><div class="card-footer"><span class="route">/validation-center/modules</span><button class="btn">进入</button></div></article>
+          <article class="module-card card-red"><div class="module-top"><div><p class="module-title">历史遗留问题</p><p class="module-desc">WSL 路径、硬编码、silent fallback、legacy fields、误报治理。</p></div><div class="icon">!</div></div><div class="card-metrics"><div><b>195</b><span>新增指纹</span></div><div><b>44</b><span>P0/P1</span></div><div><b>3</b><span>聚合</span></div></div><div class="card-footer"><span class="route">/validation-center/legacy</span><button class="btn">进入</button></div></article>
+        </div>
+      </main>
+    </div>
+  </section>
+
+  <section class="page detail-page" id="detail-page">
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand"><div class="brand-mark">A</div><div><strong>AIstock</strong><span>Validation Center</span></div></div>
+        <div class="nav-group"><p class="nav-title">详情页面</p>
+          <div class="nav-item active"><span class="dot"></span>GitHub Issues</div>
+          <div class="nav-item"><span class="dot"></span>分支与 PR</div>
+          <div class="nav-item"><span class="dot"></span>模块质量</div>
+          <div class="nav-item"><span class="dot"></span>历史问题</div>
+        </div>
+      </aside>
+      <main class="main">
+        <div class="topbar"><div><div class="eyebrow">Detail page mockup</div><h1>GitHub Issues 与分支治理</h1><p class="sub">从入口卡片进入后，只显示本主题相关内容。左侧筛选范围，右侧用表格和小卡片追溯 issue、PR、分支、未同步 BUG。</p></div><div class="status-strip"><span class="pill orange">● Sync gap 11</span><span class="pill green">● Worktree clean</span></div></div>
+        <div class="detail-layout">
+          <aside class="filter-panel"><p class="filter-title">筛选视图</p><div class="filter-chip active"><span>全部 GitHub Issues</span><b>15</b></div><div class="filter-chip"><span>P0 / P1</span><b>14</b></div><div class="filter-chip"><span>未同步 BUG JSON</span><b>11</b></div><div class="filter-chip"><span>历史聚合 Issue</span><b>3</b></div><div class="filter-chip"><span>Open PR</span><b>0</b></div><div class="filter-chip"><span>未合入分支</span><b>1</b></div><div class="filter-chip"><span>Dirty files</span><b>0</b></div></aside>
+          <section class="detail-panel"><div class="section-head" style="margin-top:0"><div><h2>同步状态列表</h2><p>显示 BUG JSON 是否已有 GitHub 链接，以及是否需要人工确认导入。</p></div><span class="pill yellow">source of truth: bugs JSON</span></div><table class="table"><thead><tr><th>对象</th><th>状态</th><th>模块/分类</th><th>关联</th><th>下一步</th></tr></thead><tbody><tr><td>BUG-038</td><td><span class="pill orange">in_progress</span></td><td>guardrail delta triage</td><td>#19 · PR #21</td><td>拆 backend/db child BUG</td></tr><tr><td>BUG-036</td><td><span class="pill yellow">open</span></td><td>WSL/local asset path debt</td><td>#17</td><td>按路径债务分组处理</td></tr><tr><td>BUG-037</td><td><span class="pill yellow">open</span></td><td>factor metrics legacy fields</td><td>#18</td><td>确认 factor owner</td></tr><tr><td>P2/P3 BUGs</td><td><span class="pill yellow">not synced</span></td><td>paper_v2 / regime label</td><td>No GitHub link yet</td><td>需要导入策略确认</td></tr><tr><td>当前生产分支</td><td><span class="pill green">clean</span></td><td>codex/paper-v2-live-smoke-fixes</td><td>ahead 10</td><td>确认是否推送或仅本地使用</td></tr></tbody></table></section>
+        </div>
+        <div class="section-head"><div><h2>模块质量详情片段</h2><p>同一套卡片模型可复用于 modules / pipeline / legacy 独立页面。</p></div></div>
+        <div class="cards" style="grid-template-columns:repeat(4,1fr)">
+          <article class="module-card card-green" style="min-height:170px"><p class="module-title">Validation Center</p><p class="module-desc">API + UI target catalog 正常</p><div class="progress"><div class="bar"></div></div><div class="card-metrics"><div><b>71%</b><span>Line</span></div><div><b>0</b><span>P0</span></div><div><b>0</b><span>Dirty</span></div></div></article>
+          <article class="module-card card-orange" style="min-height:170px"><p class="module-title">GitHub/MCP</p><p class="module-desc">闭环可用，P2/P3 导入待定</p><div class="progress"><div class="bar warn"></div></div><div class="card-metrics"><div><b>14</b><span>Linked</span></div><div><b>11</b><span>Gap</span></div><div><b>0</b><span>PR</span></div></div></article>
+          <article class="module-card card-red" style="min-height:170px"><p class="module-title">Legacy Guardrail</p><p class="module-desc">44 个 P0/P1 已分类未修复</p><div class="progress"><div class="bar bad"></div></div><div class="card-metrics"><div><b>44</b><span>P0/P1</span></div><div><b>3</b><span>Child</span></div><div><b>1</b><span>Owner?</span></div></div></article>
+          <article class="module-card card-yellow" style="min-height:170px"><p class="module-title">Feature Proof</p><p class="module-desc">部分菜单仍缺少真实业务证据</p><div class="progress"><div class="bar warn"></div></div><div class="card-metrics"><div><b>42</b><span>Routes</span></div><div><b>27</b><span>Proof</span></div><div><b>15</b><span>Missing</span></div></div></article>
+        </div>
+      </main>
+    </div>
+  </section>
+</body>
+</html>
