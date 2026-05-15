@@ -14,6 +14,7 @@ from backend.services.paper_trading_v2.models import (
     PaperSessionPhase,
     PaperSessionStatus,
     PaperTradingSession,
+    PortfolioStatus,
 )
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.strategy_package.manifest import freeze_manifest
@@ -206,3 +207,51 @@ def test_live_dashboard_aggregates_signal_minute_execution_and_snapshots() -> No
     assert dashboard["minute_execution"]["timeline"][0]["stock_name"] == "平安银行"
     assert dashboard["minute_execution"]["timeline"][0]["reason_label"] == "本分钟计划量不足 A 股最小交易单位，不能成交"
     assert dashboard["intraday_nav"]["status"] == "AVAILABLE"
+
+
+def test_live_dashboard_flags_running_portfolio_without_operable_session() -> None:
+    repo = InMemoryPaperTradingV2Repository()
+    portfolio, _manifest_sha = _portfolio(repo)
+    repo.update_portfolio_status(portfolio.portfolio_id, PortfolioStatus.RUNNING)
+    session = PaperTradingSession(
+        session_id="psess_failed_dash",
+        portfolio_id=portfolio.portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        status=PaperSessionStatus.FAILED,
+        phase=PaperSessionPhase.LIVE_INTRADAY,
+        start_date=date(2024, 1, 3),
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+    )
+    repo.create_session(session)
+    run = PaperRun(
+        run_id="prun_failed_dash",
+        portfolio_id=portfolio.portfolio_id,
+        trade_date=date(2024, 1, 3),
+        status=RunStatus.FAILED,
+        data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config={},
+    )
+    repo.create_run(run)
+    repo.save_session_day(
+        PaperSessionDay(
+            session_id=session.session_id,
+            portfolio_id=portfolio.portfolio_id,
+            trade_date=run.trade_date,
+            run_id=run.run_id,
+            status=PaperSessionStatus.FAILED,
+            phase=PaperSessionPhase.LIVE_INTRADAY,
+            data_source=MinuteDataSource.TDX_REALTIME,
+        )
+    )
+
+    dashboard = PaperTradingLiveDashboardService(
+        repository=repo,
+        artifact_repository=InMemorySelectionScoreArtifactRepository(),
+    ).get_dashboard(portfolio.portfolio_id)
+    assert dashboard["operability"]["no_operable_session"] is True
+    assert dashboard["operability"]["tickable_session_count"] == 0
+    assert {item["code"] for item in dashboard["warnings"]} >= {"NO_ACTIVE_SESSION", "NO_OPERABLE_SESSION"}
+
+    summary_page = repo.list_running_summaries_page(statuses=["RUNNING"])
+    assert summary_page["summaries"][0]["operability"]["no_operable_session"] is True

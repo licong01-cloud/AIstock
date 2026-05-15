@@ -4,6 +4,7 @@ export type RunningPortfolioSummary = {
   portfolio: PaperPortfolio;
   latestRun?: PaperRun;
   latestSession?: PaperSession;
+  operability?: JsonObject;
   counts: { orders: number; fills: number; positions: number; errors: number };
   latestSnapshot?: JsonObject | null;
   recentSnapshots: JsonObject[];
@@ -62,6 +63,7 @@ export function parseRunningSummaryItem(item: JsonObject): RunningPortfolioSumma
     portfolio: item.portfolio as PaperPortfolio,
     latestRun: isObject(item.latest_run) ? item.latest_run as PaperRun : undefined,
     latestSession: isObject(item.latest_session) ? item.latest_session as PaperSession : undefined,
+    operability: isObject(item.operability) ? item.operability : undefined,
     counts: {
       orders: n(counts.orders),
       fills: n(counts.fills),
@@ -96,6 +98,13 @@ export function packageSource(portfolio: PaperPortfolio): string {
 
 export function runningScenario(row: RunningPortfolioSummary): { label: string; hint: string } {
   const status = String(row.portfolio.status || "").toUpperCase();
+  const operability = isObject(row.operability) ? row.operability : {};
+  if (operability.no_operable_session) {
+    return {
+      label: "NO_OPERABLE_SESSION",
+      hint: String(operability.remediation_hint || "Portfolio is active but no scheduler-tickable live/replay session exists."),
+    };
+  }
   const session = row.latestSession;
   const mode = String(session?.mode || "").toUpperCase();
   const sessionStatus = String(session?.status || "").toUpperCase();

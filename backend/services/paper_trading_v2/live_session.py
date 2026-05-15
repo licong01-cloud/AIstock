@@ -175,6 +175,19 @@ class PaperTradingLiveMinuteExecutor:
                 "reason": exc.to_dict(),
             },
         )
+        if run:
+            self.repository.save_run_event(
+                run_id=run.run_id,
+                event_type="LIVE_DATA_FETCH_RETRYABLE",
+                message="paper v2 live run is waiting for TDX minute data fetch to recover",
+                context={
+                    "session_id": session.session_id,
+                    "trade_date": trade_date.isoformat(),
+                    "as_of_time": local_as_of.isoformat(),
+                    "retryable": True,
+                    "reason": exc.to_dict(),
+                },
+            )
         self.repository.update_portfolio_status(session.portfolio_id, PortfolioStatus.RUNNING)
         updated = self.repository.update_session_status(
             session.session_id,

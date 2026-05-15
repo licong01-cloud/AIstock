@@ -783,6 +783,9 @@ def test_live_tdx_fetch_failure_waits_without_failing_session() -> None:
     events = paper_repo.list_session_events(session.session_id)
     assert events[-1]["event_type"] == "LIVE_DATA_FETCH_RETRYABLE"
     assert events[-1]["context"]["retryable"] is True
+    run_events = paper_repo.list_run_events(portfolio_id, run_id=run.run_id)
+    assert run_events[-1]["event_type"] == "LIVE_DATA_FETCH_RETRYABLE"
+    assert run_events[-1]["context"]["retryable"] is True
     days = paper_repo.list_session_days(session.session_id)
     assert days[-1].run_id == run.run_id
     assert days[-1].last_processed_bar_time is None

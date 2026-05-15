@@ -44,6 +44,16 @@ RUNNING_SUMMARY_ACTIVE_STATUSES = (
     PortfolioStatus.RUNNING.value,
     PortfolioStatus.PAUSED.value,
 )
+RUNNING_SUMMARY_TICKABLE_SESSION_STATUSES = {
+    PaperSessionStatus.CREATED.value,
+    PaperSessionStatus.PREFLIGHTING.value,
+    PaperSessionStatus.REPLAYING.value,
+    PaperSessionStatus.CATCHING_UP.value,
+    PaperSessionStatus.SWITCHING_TO_LIVE.value,
+    PaperSessionStatus.LIVE_RUNNING.value,
+    PaperSessionStatus.LIVE_WAITING_FOR_BAR.value,
+    PaperSessionStatus.LIVE_WAITING_NEXT_TRADING_DAY.value,
+}
 RUNNING_SUMMARY_SORT_COLUMNS = {
     "portfolio_name": "portfolio_name",
     "status": "status",
@@ -64,6 +74,37 @@ RUNNING_SUMMARY_SEARCH_COLUMNS = {
     "latest_run_trade_date": "lr.trade_date",
     "latest_run_time": "COALESCE(lr.started_at, lr.completed_at)",
 }
+
+
+def _running_summary_operability(
+    *,
+    portfolio_status: PortfolioStatus,
+    latest_session: PaperTradingSession | None,
+    tickable_session_count: int,
+) -> dict[str, Any]:
+    no_operable = portfolio_status in {PortfolioStatus.RUNNING, PortfolioStatus.PAUSED} and tickable_session_count == 0
+    latest_status = latest_session.status.value if latest_session else None
+    latest_mode = latest_session.mode.value if latest_session else None
+    latest_terminal = latest_status in {
+        PaperSessionStatus.SUCCEEDED.value,
+        PaperSessionStatus.FAILED.value,
+        PaperSessionStatus.STOPPED.value,
+    } if latest_status else False
+    hint = None
+    if no_operable:
+        hint = (
+            "Portfolio status is active but no scheduler-tickable live/replay session exists. "
+            "Review the latest terminal session, then create or resume a session outside the 09:15-15:00 state-change block."
+        )
+    return {
+        "tickable_session_count": tickable_session_count,
+        "has_tickable_session": tickable_session_count > 0,
+        "latest_session_status": latest_status,
+        "latest_session_mode": latest_mode,
+        "latest_session_is_terminal": latest_terminal,
+        "no_operable_session": no_operable,
+        "remediation_hint": hint,
+    }
 
 
 class PaperTradingV2Repository:
@@ -371,6 +412,21 @@ class PaperTradingV2Repository:
 
                 cur.execute(
                     """
+                    SELECT portfolio_id, COUNT(*) AS tickable_session_count
+                    FROM paper_v2.trade_session
+                    WHERE portfolio_id = ANY(%s)
+                      AND status = ANY(%s)
+                    GROUP BY portfolio_id
+                    """,
+                    (portfolio_ids, sorted(RUNNING_SUMMARY_TICKABLE_SESSION_STATUSES)),
+                )
+                tickable_session_counts = {
+                    row["portfolio_id"]: int(row["tickable_session_count"] or 0)
+                    for row in cur.fetchall()
+                }
+
+                cur.execute(
+                    """
                     SELECT p.portfolio_id,
                            COALESCE(o.order_count, 0) AS order_count,
                            COALESCE(f.fill_count, 0) AS fill_count,
@@ -466,6 +522,11 @@ class PaperTradingV2Repository:
                     "portfolio": portfolio,
                     "latest_run": latest_runs.get(portfolio_id),
                     "latest_session": latest_sessions.get(portfolio_id),
+                    "operability": _running_summary_operability(
+                        portfolio_status=portfolio.status,
+                        latest_session=latest_sessions.get(portfolio_id),
+                        tickable_session_count=tickable_session_counts.get(portfolio_id, 0),
+                    ),
                     "latest_snapshot": recent_snapshots[0] if recent_snapshots else None,
                     "recent_snapshots": recent_snapshots,
                     "latest_positions": latest_positions,
@@ -2214,7 +2275,13 @@ class InMemoryPaperTradingV2Repository:
         active = {PortfolioStatus(status) for status in status_values}
         for portfolio in [item for item in self.list_portfolios(limit=10_000) if item.status in active]:
             runs = self.list_runs(portfolio.portfolio_id, limit=1)
-            sessions = self.list_sessions(portfolio.portfolio_id, limit=1)
+            all_sessions = self.list_sessions(portfolio.portfolio_id, limit=10_000)
+            sessions = all_sessions[:1]
+            tickable_session_count = sum(
+                1
+                for session in all_sessions
+                if session.status.value in RUNNING_SUMMARY_TICKABLE_SESSION_STATUSES
+            )
             snapshots = self.list_daily_snapshots(portfolio.portfolio_id, limit=snapshot_limit)
             latest_trade_date = snapshots[0]["trade_date"] if snapshots else None
             positions = self.list_positions(portfolio.portfolio_id, limit=10_000)
@@ -2228,6 +2295,11 @@ class InMemoryPaperTradingV2Repository:
                     "portfolio": portfolio,
                     "latest_run": runs[0] if runs else None,
                     "latest_session": sessions[0] if sessions else None,
+                    "operability": _running_summary_operability(
+                        portfolio_status=portfolio.status,
+                        latest_session=sessions[0] if sessions else None,
+                        tickable_session_count=tickable_session_count,
+                    ),
                     "latest_snapshot": snapshots[0] if snapshots else None,
                     "recent_snapshots": snapshots,
                     "latest_positions": latest_positions,

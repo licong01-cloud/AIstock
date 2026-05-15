@@ -26,6 +26,7 @@ from backend.services.trading_core.errors import (
 from backend.services.trading_core.execution_algo_capabilities import (
     require_execution_algo_supports_mode,
 )
+from backend.services.trading_core.models import RunStatus
 from backend.services.strategy_package.backtest_contract import validate_execution_policy_matches_manifest
 
 from .market_data import MinuteDataSource, TradeCalendarProvider
@@ -860,6 +861,7 @@ class PaperTradingSessionRunner:
 
     def _mark_failed(self, session: PaperTradingSession, exc: TradingCoreError) -> None:
         error = exc.to_dict()
+        self._mark_current_live_run_failed(session, error)
         self.repository.update_session_status(
             session.session_id,
             status=PaperSessionStatus.FAILED,
@@ -873,3 +875,55 @@ class PaperTradingSessionRunner:
             context=error["context"],
         )
         self.repository.save_error(run_id=None, portfolio_id=session.portfolio_id, error=error)
+
+    def _mark_current_live_run_failed(self, session: PaperTradingSession, error: dict[str, Any]) -> None:
+        if session.mode == PaperSessionMode.REPLAY_ONLY:
+            return
+        run = self._resolve_current_live_run_for_failure(session, error)
+        if run is None or run.status != RunStatus.RUNNING:
+            return
+        context = dict(error.get("context") or {})
+        context.setdefault("session_id", session.session_id)
+        context.setdefault("portfolio_id", session.portfolio_id)
+        self.repository.save_error(run_id=run.run_id, portfolio_id=session.portfolio_id, error=error)
+        self.repository.update_run_status(run, RunStatus.FAILED, error=error)
+        self.repository.save_run_event(
+            run_id=run.run_id,
+            event_type="RUN_FAILED",
+            message=str(error.get("message") or "paper v2 live run failed with its session"),
+            context=context,
+        )
+
+    def _resolve_current_live_run_for_failure(
+        self,
+        session: PaperTradingSession,
+        error: dict[str, Any],
+    ):
+        for day in reversed(self.repository.list_session_days(session.session_id)):
+            if not day.run_id:
+                continue
+            try:
+                run = self.repository.get_run(day.run_id)
+            except TradingCoreError:
+                continue
+            if run.status == RunStatus.RUNNING:
+                return run
+        raw_trade_date = (error.get("context") or {}).get("trade_date")
+        if raw_trade_date:
+            try:
+                run = self.repository.get_run_by_portfolio_date(
+                    session.portfolio_id,
+                    date.fromisoformat(str(raw_trade_date)),
+                )
+            except (TradingCoreError, ValueError):
+                run = None
+            if run is not None and run.status == RunStatus.RUNNING:
+                return run
+        for row in self.repository.list_runs(session.portfolio_id, limit=20):
+            if str(row.get("status") or "").upper() != RunStatus.RUNNING.value:
+                continue
+            try:
+                return self.repository.get_run(str(row["run_id"]))
+            except TradingCoreError:
+                continue
+        return None

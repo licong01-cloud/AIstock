@@ -358,6 +358,7 @@ export type PaperLiveDashboard = {
   session_days?: JsonObject[];
   current_run?: PaperRun | null;
   scheduler?: JsonObject;
+  operability?: JsonObject;
   data_freshness?: JsonObject;
   daily_signal?: JsonObject;
   target_rebalance?: JsonObject;

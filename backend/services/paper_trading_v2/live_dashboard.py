@@ -21,6 +21,16 @@ TERMINAL_SESSION_STATUSES = {
     PaperSessionStatus.FAILED,
     PaperSessionStatus.STOPPED,
 }
+TICKABLE_SESSION_STATUSES = {
+    PaperSessionStatus.CREATED,
+    PaperSessionStatus.PREFLIGHTING,
+    PaperSessionStatus.REPLAYING,
+    PaperSessionStatus.CATCHING_UP,
+    PaperSessionStatus.SWITCHING_TO_LIVE,
+    PaperSessionStatus.LIVE_RUNNING,
+    PaperSessionStatus.LIVE_WAITING_FOR_BAR,
+    PaperSessionStatus.LIVE_WAITING_NEXT_TRADING_DAY,
+}
 
 
 NO_FILL_REASON_LABELS = {
@@ -58,11 +68,20 @@ class PaperTradingLiveDashboardService:
     ) -> dict[str, Any]:
         portfolio = self.repository.get_portfolio(portfolio_id)
         sessions = self.repository.list_sessions(portfolio_id, limit=100)
+        tickable_sessions = [session for session in sessions if session.status in TICKABLE_SESSION_STATUSES]
         active_sessions = [session for session in sessions if session.status not in TERMINAL_SESSION_STATUSES]
         active_session = active_sessions[0] if active_sessions else (sessions[0] if sessions else None)
         session_days = self.repository.list_session_days(active_session.session_id) if active_session else []
         selected_day = self._select_session_day(session_days, trade_date=trade_date)
         current_run = self._resolve_current_run(portfolio_id, selected_day, trade_date=trade_date)
+        scheduler = self._scheduler_status()
+        operability = self._operability(
+            portfolio=portfolio,
+            sessions=sessions,
+            tickable_sessions=tickable_sessions,
+            active_session=active_session,
+            scheduler=scheduler,
+        )
         if trade_date is not None:
             selected_trade_date = trade_date
         elif selected_day is not None:
@@ -104,6 +123,8 @@ class PaperTradingLiveDashboardService:
             warnings.append({"code": "NO_ACTIVE_SESSION", "message": "当前没有正在推进的运行会话，展示最近会话的只读结果"})
         if len(active_sessions) > 1:
             warnings.append({"code": "MULTIPLE_ACTIVE_SESSIONS", "message": "同一模拟盘存在多个未结束会话，请检查调度范围"})
+        if operability["no_operable_session"]:
+            warnings.append({"code": "NO_OPERABLE_SESSION", "message": operability["remediation_hint"]})
         if current_run is None:
             warnings.append({"code": "NO_CURRENT_RUN", "message": "当前日期或会话尚未产生 run，无法展示信号到订单链路"})
 
@@ -114,7 +135,8 @@ class PaperTradingLiveDashboardService:
             "other_active_sessions": [item.model_dump(mode="json") for item in active_sessions[1:]],
             "session_days": [item.model_dump(mode="json") for item in session_days],
             "current_run": current_run.model_dump(mode="json") if current_run else None,
-            "scheduler": self._scheduler_status(),
+            "scheduler": scheduler,
+            "operability": operability,
             "data_freshness": self._data_freshness(selected_day, active_session),
             "daily_signal": self._daily_signal(portfolio, current_run),
             "target_rebalance": self._target_rebalance(run_events),
@@ -134,6 +156,38 @@ class PaperTradingLiveDashboardService:
             "warnings": warnings,
         }
         return self._enrich_display_names(dashboard)
+
+    @staticmethod
+    def _operability(
+        *,
+        portfolio: Any,
+        sessions: list[PaperTradingSession],
+        tickable_sessions: list[PaperTradingSession],
+        active_session: PaperTradingSession | None,
+        scheduler: dict[str, Any],
+    ) -> dict[str, Any]:
+        portfolio_status = getattr(portfolio.status, "value", str(portfolio.status))
+        latest_status = active_session.status.value if active_session else None
+        latest_mode = active_session.mode.value if active_session else None
+        latest_terminal = bool(active_session and active_session.status in TERMINAL_SESSION_STATUSES)
+        no_operable = portfolio_status in {"RUNNING", "PAUSED"} and not tickable_sessions
+        hint = None
+        if no_operable:
+            hint = (
+                "Portfolio status is active but no scheduler-tickable live/replay session exists. "
+                "Review the latest terminal session, then create or resume a session outside the 09:15-15:00 state-change block."
+            )
+        return {
+            "has_sessions": bool(sessions),
+            "tickable_session_count": len(tickable_sessions),
+            "has_tickable_session": bool(tickable_sessions),
+            "latest_session_status": latest_status,
+            "latest_session_mode": latest_mode,
+            "latest_session_is_terminal": latest_terminal,
+            "no_operable_session": no_operable,
+            "scheduler_running": bool(scheduler.get("running")),
+            "remediation_hint": hint,
+        }
 
     def list_intraday_snapshots(
         self,
