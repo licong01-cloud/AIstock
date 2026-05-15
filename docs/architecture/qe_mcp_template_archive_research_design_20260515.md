@@ -1,6 +1,6 @@
 # QE MCP、实验模板与数仓自动归档设计方案
 
-更新时间：2026-05-15
+更新时间：2026-05-16
 
 ## 1. 目标
 
@@ -33,6 +33,9 @@
 - MCP 执行类工具必须要求显式确认 token；只读查询工具不需要确认。
 - QE archive 失败不能改变 QE 实验、任务或 loop 的源状态。
 - 新增 DB 表和字段必须有 PostgreSQL `COMMENT ON TABLE` / `COMMENT ON COLUMN`，并纳入 schema 注释检查。
+- 开发前必须同时设计验证方案、预期效果、自动化流水线入口和验收门禁；不得开发完成后再临时补测试。
+- 开发完成后必须通过现有自动化流水线/Validation MCP 执行完整验收，保留 run record 和证据路径。
+- 开发分支完成验证后只提交 feature 分支；未经用户明确确认不得合入 `main`。
 - 不触碰生产 `8001`/`3000` runtime，开发和验证使用 dev 端口。
 
 ## 3. 当前事实与约束
@@ -980,7 +983,86 @@ MCP 生成新实验模板时，应至少记录：
 - MCP 证据工具可以在无任意 SQL 的情况下生成候选分析。
 - 基于历史数仓生成的新模板能记录 source archive runs、预期指标和风险。
 
-## 15. 待审阅决策
+## 15. 开发验证与交付门禁
+
+### 15.1 验证方案必须前置
+
+本项目属于 QE 执行、数仓、MCP、UI/API parity 和自动化流水线联动的高风险功能，验证方案必须在开发阶段同步设计，而不是开发完成后临时补测试。每个开发 slice 在开始编码前必须明确：
+
+- 业务目标：该 slice 证明哪一个 QE/MCP/Archive 能力真实可用。
+- 预期效果：API 返回、DB 状态、outbox/job 状态、MCP tool 响应、UI 状态或日志应该出现什么确定结果。
+- 失败判定：哪些现象必须视为失败，例如静默 fallback、空结果伪成功、MCP 绕过后端、archive 失败影响 QE 状态、skip 实验被错误入仓。
+- 自动化入口：对应 nox、pytest、Playwright、validation MCP 或 smoke script。
+- 证据记录：必须落地到 `tests/aistock_validation/history/` 的 run record，包含命令、端口、环境变量、样本 id、API/DB/UI/log 证据和残余风险。
+
+### 15.2 验证分层
+
+建议按 L0-L5 分层设计并执行：
+
+| 层级 | 目标 | 本方案中的验收重点 |
+|---|---|---|
+| L0 静态门禁 | 防止明显越界和低级错误 | 无 secret、无任意 SQL MCP、无 worker workspace 直读、无生产端口依赖、schema 注释完整。 |
+| L1 单元测试 | 验证核心服务函数 | archive policy resolver、template validator、runtime diff、bootstrap marker、skip registry、outbox 幂等、MCP 参数校验。 |
+| L2 后端/API 集成 | 验证后端业务状态 | 模板保存/物化/执行、custom_evo `auto_start=false`、run endpoint 同源调用、archive hook/outbox/worker/backfill/status。 |
+| L3 UI/MCP 端到端 | 验证用户和智能体入口 | 现有 QE UI 功能不回归；MCP tool 调用与 UI endpoint parity；确认 token 生效；错误信息可读。 |
+| L4 跨模块链路 | 验证 QE -> Archive -> Evidence -> Template 闭环 | 实验完成自动入仓、数仓查询生成新模板、模板再次物化和执行前可审阅。 |
+| L5 发布候选验收 | 验证分支可交付 | 自动化流水线通过、run record 完整、残余风险可接受、feature 分支提交完成但不合入 `main`。 |
+
+### 15.3 自动化流水线与 Validation MCP
+
+开发完成后必须调用现有自动化流水线能力完成验收。推荐顺序：
+
+1. 使用 Validation MCP 或仓库脚本创建本次验证 run record，记录模块为 `qe_mcp` / `qe_archive` / `qe_templates`。
+2. 执行 L0 静态门禁：diff 范围、secret、worker path、任意 SQL、生产端口、schema comment 检查。
+3. 执行 QE Archive 既有入口：
+   - `python -m nox -s qe_archive_backend`
+   - `python -m nox -s qe_archive_data_quality`
+4. 执行 QE 既有 read/mutation 边界测试，覆盖 custom_evo retry/rerun/append/fork/clone 不直读 worker workspace。
+5. 对新增模板/API/MCP server 执行新增单元和 API 测试。
+6. 如 UI scope 进入本期，使用 dev backend `8011`/`8012` 和 dev frontend `3011`/`3012` 执行 Playwright L3；禁止重启生产 `8001`。
+7. 使用 Validation MCP 汇总自动化流水线结果，生成或更新 run record。
+8. 所有失败必须修复后重跑失败项及相邻链路；不得用人工解释替代失败测试。
+
+如果 Validation MCP 当时缺少某个专用工具，则允许通过 `scripts/aistock_validate.py`、`nox` 或显式 pytest/Playwright 命令完成同等验证，但 run record 仍必须由自动化流水线能力归档。
+
+### 15.4 功能级验收矩阵
+
+| 功能组 | 必须验证的预期效果 |
+|---|---|
+| QE MCP 基础 | tool list 可加载；loopback backend URL 强制生效；非法 id 被拒绝；错误响应保留后端上下文。 |
+| 执行链路同源 | MCP 执行单次实验时调用 QE 后端 `/experiments/{id}/run` 或后端同源入口；MCP 不 import scheduler、不直调 RD-Agent。 |
+| 自定义演进 | MCP 可查询、物化、启动 custom_evo；支持 loop retry、rerun、append、fork、clone；执行类工具必须带确认 token。 |
+| 模板层 | 创建模板不创建 runtime；materialize 创建 runtime 但不执行；run 才执行；runtime 可编辑；runtime diff 可追踪。 |
+| 节点能力 | 本地/WSL/远端 node_id 和 node_parallelism 可传递；WSL 支持全类型实验；远端 CPU-only 只作为 warning/软限制。 |
+| 入仓策略 | `AUTO` 自动 outbox；`SKIP` 不入仓但写 skip registry；`MANUAL_ONLY` 不自动入仓但支持定向 backfill。 |
+| 自动入仓 | completion hook 写 outbox；worker 自动消费；archive 失败不改变 QE source 状态；pending outbox 可回到 0。 |
+| 历史 backfill | preview 不写入；execute 需要确认；per source_type marker 防重复；rebootstrap 需要强确认 token。 |
+| 数仓查询 | 默认 `research_valid=true`；invalid/skipped 需显式过滤；因子/模型/seed/超参基础查询可用于生成模板建议。 |
+| UI 不回归 | 现有 QE direct-run UI、自定义演进 UI、archive health/backfill UI 仍能执行原有流程。 |
+
+### 15.5 必须产出的验证证据
+
+开发完成后的交付包必须包含：
+
+- feature 分支名、提交 hash、变更文件清单。
+- 自动化流水线 run record 路径。
+- 执行过的 exact commands 和环境变量。
+- dev backend/frontend 端口，明确说明未触碰生产 `8001` / `3000`。
+- API 样本：模板创建、materialize、run、custom_evo 操作、archive health/backfill/status。
+- DB 样本：template、runtime provenance、outbox、archive run、skip registry、bootstrap marker、ingest history。
+- MCP 样本：tool list、只读查询、确认执行、错误输入拒绝。
+- UI 证据：如本期包含 UI，则保存 Playwright trace/report/screenshot。
+- 失败、修复、重跑记录。
+- 未实现能力和残余风险，特别是自动演进 LLM 决策、多 alpha 调度、远端 CPU-only 软限制精细化。
+
+### 15.6 分支与合入规则
+
+- 开发必须从干净的 feature 分支或独立 worktree 开始，不在污染的共享 `main` 上直接开发。
+- 每个并行开发 worker 必须有明确 write scope，避免多人同时修改同一文件族。
+- 集成者负责合并各 worker 结果、解决冲突、运行自动化流水线和提交最终 feature 分支。
+- 完成开发和验证后，只提交 feature 分支；未经用户明确确认，不合入 `main`，不 push 生产同步分支，不重启生产服务。
+
+## 16. 待审阅决策
 
 1. QE MCP server 拆分：建议确认拆成 `aistock-qe-experiment` 与 `aistock-qe-archive`，权限边界更清楚。
 2. `MANUAL_ONLY` 是否保留：建议保留，支持敏感实验后续按需定向入仓。
@@ -990,7 +1072,7 @@ MCP 生成新实验模板时，应至少记录：
 6. clone 语义：建议定义为“从已有 custom_evo config 复制生成新模板/新任务”，并补 UI/MCP 共用 endpoint。
 7. 远端机 CPU-only 软限制：建议先 warning，不做 MCP 硬拒绝；后续由节点能力 catalog 精细化。
 
-## 16. 非目标
+## 17. 非目标
 
 - 不让 MCP 调度 RD-Agent。
 - 不新增 MCP 专用执行链路。
@@ -1003,7 +1085,7 @@ MCP 生成新实验模板时，应至少记录：
 - 不实现多 alpha 架构实验调度。
 - 不基于回顾性 OOS 指标宣称无偏自动因子选择。
 
-## 17. 预期最终流程
+## 18. 预期最终流程
 
 实施完成后，普通流程为：
 
