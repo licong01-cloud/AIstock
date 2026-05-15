@@ -1,7 +1,7 @@
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 export type JsonObject = Record<string, unknown>;
 
-export type DataSource = "DB_HISTORICAL" | "TDX_REALTIME";
+export type DataSource = "DB_HISTORICAL" | "TDX_REALTIME" | "MINIQMT_REALTIME";
 export type SelectionMode = "single_package" | "intersection" | "union" | "weighted_fusion";
 export type PaperSessionMode = "REPLAY_ONLY" | "LIVE_ONLY" | "CATCHUP_THEN_LIVE";
 
@@ -223,6 +223,7 @@ export type PaperPortfolio = {
   initial_cash: number;
   start_date: string;
   data_source: DataSource | string;
+  broker_backend?: "local_sim" | "minqmt_sim" | string;
   fee_policy?: JsonObject;
   risk_policy?: JsonObject;
   execution_policy?: JsonObject;

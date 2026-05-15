@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Any
+from typing import Any, Callable
 
 from backend.services.data_refresh_audit import DataRefreshAuditRepository, DatasetRefreshStatus
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
@@ -22,6 +22,7 @@ from backend.services.strategy_package.validators import StrategyPackageValidato
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, StrategyPackageValidationError
 from backend.services.trading_core.models import PositionLot
 
+from .broker import MiniQMTSimBackend
 from .models import PaperDayReadinessResult, PaperReadinessCheck, PortfolioStatus
 from .repository import PaperTradingV2Repository
 from .risk_targets import overlay_risk_forced_exit_targets
@@ -51,6 +52,7 @@ class PaperTradingReadinessService:
         refresh_audit: DataRefreshAuditRepository | Any | None = None,
         selection_artifact_service: StrategyPackageSelectionArtifactService | Any | None = None,
         risk_policy_service: StockRiskPolicyService | Any | None = None,
+        minqmt_broker_factory: Callable[..., MiniQMTSimBackend] | None = None,
     ) -> None:
         self.repository = repository or PaperTradingV2Repository()
         self.calendar_provider = calendar_provider or TradeCalendarProvider()
@@ -65,6 +67,7 @@ class PaperTradingReadinessService:
             artifact_repository=getattr(self.runtime, "artifact_repository", None),
         )
         self.risk_policy_service = risk_policy_service or StockRiskPolicyService()
+        self.minqmt_broker_factory = minqmt_broker_factory or MiniQMTSimBackend
 
     def check_day(
         self,
@@ -146,33 +149,46 @@ class PaperTradingReadinessService:
             )
         checks.append(PaperReadinessCheck(check_name="run_date_available", context={"trade_date": trade_date.isoformat()}))
 
-        requirements = PaperTradingDayRunner._data_requirements_for_policy(
-            execution_policy_json,
-            package_id=manifest.package_id,
-        )
-        if requirements["requires_suspend_status"] or runtime_profile.tradability.exclude_suspended:
-            status = self.refresh_audit.require_success(dataset="suspend_d", trade_date=trade_date)
-            checks.append(self._audit_check("suspend_d_refresh", status))
-        if requirements["requires_limit_price"]:
-            status = self.refresh_audit.require_success(dataset="stk_limit", trade_date=trade_date)
-            checks.append(self._audit_check("stk_limit_refresh", status))
+        if portfolio.broker_backend == "minqmt_sim":
+            checks.extend(
+                self._prepare_minqmt_authority_state(
+                    portfolio=portfolio,
+                    manifest=manifest,
+                    trade_date=trade_date,
+                    runtime_config=config,
+                )
+            )
+            current_positions = config.pop("_miniqmt_current_positions")
+            latest_cash = float(config.pop("_miniqmt_latest_cash"))
+            total_equity = float(config.pop("_miniqmt_total_equity"))
+        else:
+            requirements = PaperTradingDayRunner._data_requirements_for_policy(
+                execution_policy_json,
+                package_id=manifest.package_id,
+            )
+            if requirements["requires_suspend_status"] or runtime_profile.tradability.exclude_suspended:
+                status = self.refresh_audit.require_success(dataset="suspend_d", trade_date=trade_date)
+                checks.append(self._audit_check("suspend_d_refresh", status))
+            if requirements["requires_limit_price"]:
+                status = self.refresh_audit.require_success(dataset="stk_limit", trade_date=trade_date)
+                checks.append(self._audit_check("stk_limit_refresh", status))
 
-        current_positions = self.repository.load_latest_positions(portfolio_id, trade_date)
-        price_check = self._ensure_current_prices_for_existing_positions(
-            config=config,
-            current_positions=current_positions,
-            trade_date=trade_date,
-            data_source=portfolio.data_source,
-        )
-        if price_check is not None:
-            checks.append(price_check)
-        latest_cash = self.repository.load_latest_cash(portfolio, trade_date)
-        total_equity = self._resolve_total_equity(
-            latest_cash=latest_cash,
-            current_positions=current_positions,
-            runtime_config=config,
-            portfolio_id=portfolio_id,
-        )
+            current_positions = self.repository.load_latest_positions(portfolio_id, trade_date)
+            price_check = self._ensure_current_prices_for_existing_positions(
+                config=config,
+                current_positions=current_positions,
+                trade_date=trade_date,
+                data_source=portfolio.data_source,
+            )
+            if price_check is not None:
+                checks.append(price_check)
+            latest_cash = self.repository.load_latest_cash(portfolio, trade_date)
+            total_equity = self._resolve_total_equity(
+                latest_cash=latest_cash,
+                current_positions=current_positions,
+                runtime_config=config,
+                portfolio_id=portfolio_id,
+            )
         checks.append(
             PaperReadinessCheck(
                 check_name="portfolio_state",
@@ -184,6 +200,7 @@ class PaperTradingReadinessService:
             )
         )
 
+        selection_data_source = PaperTradingDayRunner._selection_data_source(portfolio, config)
         artifact_runner = PaperTradingDayRunner(
             repository=self.repository,
             calendar_provider=self.calendar_provider,
@@ -199,13 +216,13 @@ class PaperTradingReadinessService:
         artifact_runner._ensure_authoritative_selection_artifact(
             manifest=manifest,
             trade_date=trade_date,
-            data_source=portfolio.data_source.value,
+            data_source=selection_data_source,
             runtime_config=config,
         )
         snapshot = self.runtime.build_signal_snapshot(
             manifest=manifest,
             trade_date=trade_date,
-            data_source=portfolio.data_source.value,
+            data_source=selection_data_source,
             runtime_config=config,
         )
         if snapshot.valid_no_candidate and not (current_positions and runtime_profile.risk_policy.enabled):
@@ -290,41 +307,54 @@ class PaperTradingReadinessService:
         )
         checks.append(PaperReadinessCheck(check_name="rebalance", context={"target_count": len(targets), "order_intent_count": len(intents)}))
 
-        required_bars = PaperTradingDayRunner._required_minute_bars_for_policy(
-            execution_policy_json,
-            package_id=manifest.package_id,
-        )
-        require_day_features = PaperTradingDayRunner._policy_requires_day_features(execution_policy_json)
         checked_symbols = sorted(set(current_positions) | {intent.symbol for intent in intents})
-        if not checked_symbols:
-            raise StrategyPackageValidationError(
-                "paper readiness produced no symbols to check",
-                context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat()},
-            )
-        for symbol in checked_symbols:
-            market_input = self.market_data_provider.load_symbol_input(
-                symbol=symbol,
-                trade_date=trade_date,
-                source=portfolio.data_source,
-                min_bars=required_bars,
-                require_suspend_status=True,
-                require_day_features=require_day_features,
-            )
-            if not market_input.minute_bars:
-                raise DataUnavailableError(
-                    "market data provider returned no minute bars",
-                    context={"portfolio_id": portfolio_id, "symbol": symbol, "trade_date": trade_date.isoformat()},
+        if portfolio.broker_backend == "minqmt_sim":
+            checks.append(
+                PaperReadinessCheck(
+                    check_name="miniqmt_execution_authority",
+                    context={
+                        "symbol_count": len(checked_symbols),
+                        "order_intent_count": len(intents),
+                        "minute_market_data_check": "skipped",
+                        "authority_source": "MINIQMT",
+                    },
                 )
-        checks.append(
-            PaperReadinessCheck(
-                check_name="minute_market_data",
-                context={
-                    "symbol_count": len(checked_symbols),
-                    "min_required_bars": required_bars,
-                    "require_day_features": require_day_features,
-                },
             )
-        )
+        else:
+            required_bars = PaperTradingDayRunner._required_minute_bars_for_policy(
+                execution_policy_json,
+                package_id=manifest.package_id,
+            )
+            require_day_features = PaperTradingDayRunner._policy_requires_day_features(execution_policy_json)
+            if not checked_symbols:
+                raise StrategyPackageValidationError(
+                    "paper readiness produced no symbols to check",
+                    context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat()},
+                )
+            for symbol in checked_symbols:
+                market_input = self.market_data_provider.load_symbol_input(
+                    symbol=symbol,
+                    trade_date=trade_date,
+                    source=portfolio.data_source,
+                    min_bars=required_bars,
+                    require_suspend_status=True,
+                    require_day_features=require_day_features,
+                )
+                if not market_input.minute_bars:
+                    raise DataUnavailableError(
+                        "market data provider returned no minute bars",
+                        context={"portfolio_id": portfolio_id, "symbol": symbol, "trade_date": trade_date.isoformat()},
+                    )
+            checks.append(
+                PaperReadinessCheck(
+                    check_name="minute_market_data",
+                    context={
+                        "symbol_count": len(checked_symbols),
+                        "min_required_bars": required_bars,
+                        "require_day_features": require_day_features,
+                    },
+                )
+            )
 
         return PaperDayReadinessResult(
             portfolio_id=portfolio_id,
@@ -339,6 +369,64 @@ class PaperTradingReadinessService:
             checked_symbols=checked_symbols,
             runtime_config_keys=sorted(str(key) for key in config),
         )
+
+    def _prepare_minqmt_authority_state(
+        self,
+        *,
+        portfolio: Any,
+        manifest: Any,
+        trade_date: date,
+        runtime_config: dict[str, Any],
+    ) -> list[PaperReadinessCheck]:
+        checks: list[PaperReadinessCheck] = [
+            PaperReadinessCheck(
+                check_name="miniqmt_account_query_required",
+                context={
+                    "trade_date": trade_date.isoformat(),
+                    "data_source": MinuteDataSource.MINIQMT_REALTIME.value,
+                    "broker_backend": "minqmt_sim",
+                },
+            )
+        ]
+        runtime_profile = parse_selection_runtime_profile(runtime_config)
+        if runtime_profile.tradability.exclude_suspended:
+            status = self.refresh_audit.require_success(dataset="suspend_d", trade_date=trade_date)
+            checks.append(self._audit_check("suspend_d_refresh", status))
+
+        broker = self.minqmt_broker_factory(
+            portfolio_id=portfolio.portfolio_id,
+            package_id=manifest.package_id,
+            data_source=MinuteDataSource.MINIQMT_REALTIME,
+            strategy_slot_id=portfolio.portfolio_id,
+        )
+        try:
+            account = broker.query_account()
+            current_positions, current_prices = broker.query_position_marks()
+        finally:
+            broker.shutdown()
+
+        runtime_config["_miniqmt_current_positions"] = current_positions
+        runtime_config["_miniqmt_latest_cash"] = float(account.cash)
+        runtime_config["_miniqmt_total_equity"] = float(account.nav)
+        if current_prices:
+            runtime_config["current_prices"] = current_prices
+            runtime_config["current_price_context"] = {
+                symbol: {"price": price, "source": "MINIQMT_QUERY", "basis": "broker_position_mark"}
+                for symbol, price in current_prices.items()
+            }
+        checks.append(
+            PaperReadinessCheck(
+                check_name="miniqmt_broker_authority",
+                context={
+                    "cash": float(account.cash),
+                    "nav": float(account.nav),
+                    "position_count": len(current_positions),
+                    "position_mark_count": len(current_prices),
+                    "authority_source": "MINIQMT_QUERY",
+                },
+            )
+        )
+        return checks
 
     @staticmethod
     def _audit_check(check_name: str, status: DatasetRefreshStatus | None) -> PaperReadinessCheck:

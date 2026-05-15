@@ -7,8 +7,7 @@ backend-agnostic.
 Concrete backends:
   - LocalSimBackend  : in-process matching against TDX/DB minute bars
                        (today's paper_trading_v2 default)
-  - MiniQMTSimBackend: routes OrderIntent to miniQMT 仿真账户 (PR-005, not yet
-                       implemented in this round)
+  - MiniQMTSimBackend: routes OrderIntent to MiniQMT SIM account (PR-005)
 """
 
 from .base import (
@@ -24,6 +23,7 @@ from .base import (
     SubscriptionHandle,
 )
 from .localsim import LocalSimBackend
+from .minqmtsim import MiniQMTSimBackend
 
 __all__ = [
     "BrokerAccountSnapshot",
@@ -32,6 +32,7 @@ __all__ = [
     "CancelAck",
     "FillEvent",
     "LocalSimBackend",
+    "MiniQMTSimBackend",
     "MarketDataChannel",
     "OrderHandle",
     "OrderHandleStatus",

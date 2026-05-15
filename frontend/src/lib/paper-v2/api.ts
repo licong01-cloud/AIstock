@@ -350,7 +350,7 @@ export const paperV2Api = {
       },
     };
   },
-  async createPortfolio(payload: { package_id: string; portfolio_name: string; initial_cash: number; start_date: string; data_source: DataSource; fee_policy?: JsonObject; risk_policy?: JsonObject; execution_policy?: JsonObject }): Promise<PaperPortfolio> {
+  async createPortfolio(payload: { package_id: string; portfolio_name: string; initial_cash: number; start_date: string; data_source: DataSource; broker_backend?: "local_sim" | "minqmt_sim"; fee_policy?: JsonObject; risk_policy?: JsonObject; execution_policy?: JsonObject }): Promise<PaperPortfolio> {
     const data = await apiFetch<{ portfolio: PaperPortfolio }>("/paper-v2/portfolios", body(payload));
     return data.portfolio;
   },
@@ -563,6 +563,45 @@ export const paperV2Api = {
   async errors(portfolioId: string): Promise<JsonObject[]> {
     const data = await apiFetch<{ errors: JsonObject[] }>(`/paper-v2/portfolios/${portfolioId}/errors`);
     return data.errors || [];
+  },
+};
+
+export type QmtStatus = {
+  enabled?: boolean;
+  connected?: boolean;
+  mode?: string;
+  account_id?: string | null;
+  provider?: string;
+  userdata_path?: string | null;
+  session_id?: number | null;
+  last_error?: string | null;
+  pid?: number;
+  client_class?: string;
+  [key: string]: unknown;
+};
+
+export const qmtApi = {
+  async status(): Promise<QmtStatus> {
+    return apiFetch<QmtStatus>("/qmt/status");
+  },
+  async connect(): Promise<JsonObject> {
+    return apiFetch<JsonObject>("/qmt/connect", { method: "POST" });
+  },
+  async account(): Promise<JsonObject> {
+    return apiFetch<JsonObject>("/qmt/account");
+  },
+  async positions(): Promise<JsonObject[]> {
+    return apiFetch<JsonObject[]>("/qmt/positions");
+  },
+  async orders(cancelableOnly = false): Promise<JsonObject[]> {
+    const qs = new URLSearchParams({ cancelable_only: String(cancelableOnly) });
+    return apiFetch<JsonObject[]>(`/qmt/orders?${qs.toString()}`);
+  },
+  async trades(): Promise<JsonObject[]> {
+    return apiFetch<JsonObject[]>("/qmt/trades");
+  },
+  async monitorStrategies(): Promise<JsonObject> {
+    return apiFetch<JsonObject>("/qmt/monitor/strategies");
   },
 };
 

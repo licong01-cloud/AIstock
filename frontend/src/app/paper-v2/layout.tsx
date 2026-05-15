@@ -11,6 +11,7 @@ const TABS = [
   { href: "/paper-v2/selection", label: "选股中心", exact: false },
   { href: "/paper-v2/running", label: "运行监控", exact: false },
   { href: "/paper-v2/portfolios", label: "模拟盘实例", exact: false },
+  { href: "/paper-v2/miniqmt-sim", label: "MiniQMT", exact: false },
   { href: "/paper-v2/model-hmm", label: "模型与 HMM", exact: false },
   { href: "/paper-v2/settings", label: "设置", exact: false },
 ];
@@ -24,12 +25,12 @@ export default function PaperV2Layout({ children }: { children: ReactNode }) {
           <div>
             <div className="pv2-kicker">StrategyPackage 权威入口</div>
             <h1>模拟盘 v2</h1>
-            <p>基于策略包的分钟级模拟盘控制台，覆盖就绪检查、订单、成交、账本、历史回放和模型维护。</p>
+            <p>基于策略包的分钟级模拟盘控制台，覆盖就绪检查、订单、成交、账本、历史回放、MiniQMT 权威撮合和模型维护。</p>
           </div>
           <div className="pv2-chip-row">
             <span className="pv2-chip">禁止静默兜底</span>
-            <span className="pv2-chip">仅分钟线交易</span>
-            <span className="pv2-chip">仅回测验证策略</span>
+            <span className="pv2-chip">LocalSim 独立</span>
+            <span className="pv2-chip">MiniQMT 权威交易</span>
           </div>
         </div>
         <nav className="pv2-tabs">
