@@ -11,6 +11,7 @@ from backend.services.validation.history_store import ValidationHistoryStore
 from backend.services.validation.models import ValidationResponse
 from backend.services.validation.module_quality import ModuleQualityService
 from backend.services.validation.plan_catalog import ValidationCatalogError, ValidationPlanCatalog
+from backend.services.validation.pipeline_center import ValidationPipelineCenterService
 from backend.services.validation.ui_target_catalog import (
     ValidationUiTargetCatalog,
     ValidationUiTargetCatalogError,
@@ -50,6 +51,26 @@ def get_module_quality_service() -> ModuleQualityService:
 
 def get_ui_target_catalog() -> ValidationUiTargetCatalog:
     return ValidationUiTargetCatalog()
+
+
+def get_pipeline_center_service(
+    history_store: ValidationHistoryStore = Depends(get_history_store),
+    plan_catalog: ValidationPlanCatalog = Depends(get_plan_catalog),
+    finding_store: ValidationFindingStore = Depends(get_finding_store),
+    execution_runner: ValidationExecutionRunner = Depends(get_execution_runner),
+    git_status_provider: GitWorkspaceStatusProvider = Depends(get_git_status_provider),
+    module_quality_service: ModuleQualityService = Depends(get_module_quality_service),
+    ui_target_catalog: ValidationUiTargetCatalog = Depends(get_ui_target_catalog),
+) -> ValidationPipelineCenterService:
+    return ValidationPipelineCenterService(
+        history_store=history_store,
+        plan_catalog=plan_catalog,
+        finding_store=finding_store,
+        execution_runner=execution_runner,
+        git_status_provider=git_status_provider,
+        module_quality_service=module_quality_service,
+        ui_target_catalog=ui_target_catalog,
+    )
 
 
 class ValidationExecutionStartRequest(BaseModel):
@@ -258,6 +279,205 @@ def get_validation_module_quality_summary(
         return _success(module_quality_service.module_quality_summary(commit_limit=commit_limit))
     except (GitActivityProviderError, GitStatusProviderError) as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/cards/summary", response_model=ValidationResponse, summary="Get phase-1 pipeline card summary")
+def get_validation_cards_summary(
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+):
+    return _success(pipeline_center.cards_summary())
+
+
+@router.get("/merge-gate/summary", response_model=ValidationResponse, summary="Get read-only merge gate summary")
+def get_validation_merge_gate_summary(
+    branch: str | None = Query(None),
+    target: str = Query("main"),
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+):
+    return _success(pipeline_center.merge_gate_summary(branch=branch, target=target))
+
+
+@router.get("/merge-gate/detail", response_model=ValidationResponse, summary="Get read-only merge gate detail")
+def get_validation_merge_gate_detail(
+    branch: str | None = Query(None),
+    target: str = Query("main"),
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+):
+    return _success(pipeline_center.merge_gate_detail(branch=branch, target=target))
+
+
+@router.get("/issues/workflow/summary", response_model=ValidationResponse, summary="Summarize issue repair workflow")
+def get_validation_issue_workflow_summary(
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+):
+    return _success(pipeline_center.issue_workflow_summary())
+
+
+@router.get("/issues/workflow", response_model=ValidationResponse, summary="List issue repair workflow records")
+def list_validation_issue_workflow(
+    module: str | None = Query(None),
+    severity: str | None = Query(None),
+    workflow_state: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+):
+    return _success(
+        pipeline_center.issue_workflow_items(
+            module=module,
+            severity=severity,
+            workflow_state=workflow_state,
+            page=page,
+            page_size=page_size,
+        )
+    )
+
+
+@router.get("/issues/{bug_id}/workflow", response_model=ValidationResponse, summary="Get issue repair workflow detail")
+def get_validation_issue_workflow(
+    bug_id: str,
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+):
+    detail = pipeline_center.issue_workflow_detail(bug_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail=f"validation bug not found: {bug_id}")
+    return _success(detail)
+
+
+@router.get("/modules/detail-summary", response_model=ValidationResponse, summary="Get module quality detail summary")
+def get_validation_modules_detail_summary(
+    include: str | None = Query(None),
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+):
+    _ = include
+    return _success(pipeline_center.modules_detail_summary())
+
+
+@router.get("/pipeline/tests/summary", response_model=ValidationResponse, summary="Summarize pipeline tests")
+def get_validation_pipeline_tests_summary(
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+):
+    return _success(pipeline_center.pipeline_tests_summary())
+
+
+@router.get("/pipeline/tests", response_model=ValidationResponse, summary="List pipeline tests")
+def list_validation_pipeline_tests(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+):
+    return _success(pipeline_center.pipeline_tests(page=page, page_size=page_size))
+
+
+@router.get("/pipeline/tests/{test_id}", response_model=ValidationResponse, summary="Get pipeline test detail")
+def get_validation_pipeline_test(
+    test_id: str,
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+):
+    detail = pipeline_center.pipeline_test_detail(test_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail=f"pipeline test not found: {test_id}")
+    return _success(detail)
+
+
+@router.get("/features/summary", response_model=ValidationResponse, summary="Summarize feature validation")
+def get_validation_features_summary(
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+):
+    return _success(pipeline_center.features_summary())
+
+
+@router.get("/features", response_model=ValidationResponse, summary="List feature validation targets")
+def list_validation_features(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+):
+    return _success(pipeline_center.features(page=page, page_size=page_size))
+
+
+@router.get("/features/{route_id}", response_model=ValidationResponse, summary="Get feature validation detail")
+def get_validation_feature(
+    route_id: str,
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+):
+    detail = pipeline_center.feature_detail(route_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail=f"validation feature not found: {route_id}")
+    return _success(detail)
+
+
+@router.get("/github/issues/summary", response_model=ValidationResponse, summary="Summarize GitHub issue sync state")
+def get_validation_github_issues_summary(
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+):
+    return _success(pipeline_center.github_issues_summary())
+
+
+@router.get("/github/issues", response_model=ValidationResponse, summary="List GitHub issue sync records")
+def list_validation_github_issues(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+):
+    return _success(pipeline_center.github_issues(page=page, page_size=page_size))
+
+
+@router.get("/git/branches/detail-summary", response_model=ValidationResponse, summary="Get branch and worktree detail summary")
+def get_validation_git_branches_detail_summary(
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+):
+    return _success(pipeline_center.git_branches_detail_summary())
+
+
+@router.get("/github/prs/summary", response_model=ValidationResponse, summary="Summarize GitHub pull requests")
+def get_validation_github_prs_summary(
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+):
+    return _success(pipeline_center.github_prs_summary())
+
+
+@router.get("/github/prs", response_model=ValidationResponse, summary="List GitHub pull requests")
+def list_validation_github_prs(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+):
+    return _success(pipeline_center.github_prs(page=page, page_size=page_size))
+
+
+@router.get("/legacy-debt/summary", response_model=ValidationResponse, summary="Summarize legacy debt")
+def get_validation_legacy_debt_summary(
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+):
+    return _success(pipeline_center.legacy_debt_summary())
+
+
+@router.get("/legacy-debt/groups", response_model=ValidationResponse, summary="List legacy debt groups")
+def list_validation_legacy_debt_groups(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+):
+    return _success(pipeline_center.legacy_debt_groups(page=page, page_size=page_size))
+
+
+@router.get("/legacy-debt/groups/{debt_group_id}", response_model=ValidationResponse, summary="Get legacy debt group detail")
+def get_validation_legacy_debt_group(
+    debt_group_id: str,
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+):
+    detail = pipeline_center.legacy_debt_group_detail(debt_group_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail=f"legacy debt group not found: {debt_group_id}")
+    return _success(detail)
+
+
+@router.get("/automation/summary", response_model=ValidationResponse, summary="Summarize MCP and automation readiness")
+def get_validation_automation_summary(
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+):
+    return _success(pipeline_center.automation_summary())
 
 
 @router.get("/ui-targets", response_model=ValidationResponse, summary="List route-level validation UI targets")

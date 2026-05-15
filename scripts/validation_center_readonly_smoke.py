@@ -240,6 +240,96 @@ def run_smoke(
             failures.append("/validation/plans plans must be a list")
         counts["plan_count"] = len(plan_items) if isinstance(plan_items, list) else None
 
+    cards = _extract_data(_append_endpoint(endpoints, _call(api_base, "/validation/cards/summary", timeout=timeout)), failures)
+    if cards:
+        if not isinstance(cards.get("cards"), list):
+            failures.append("/validation/cards/summary cards must be a list")
+        counts["cards"] = len(cards.get("cards") or [])
+
+    merge_gate = _extract_data(_append_endpoint(endpoints, _call(api_base, "/validation/merge-gate/summary", timeout=timeout)), failures)
+    if merge_gate and merge_gate.get("decision") not in {"pass", "warning", "blocked", "need_confirm", "unknown"}:
+        failures.append("/validation/merge-gate/summary decision is invalid")
+    merge_gate_detail = _extract_data(_append_endpoint(endpoints, _call(api_base, "/validation/merge-gate/detail", timeout=timeout)), failures)
+    if merge_gate_detail and not _is_object(merge_gate_detail.get("detail")):
+        failures.append("/validation/merge-gate/detail detail must be an object")
+
+    issue_workflow_summary = _extract_data(
+        _append_endpoint(endpoints, _call(api_base, "/validation/issues/workflow/summary", timeout=timeout)),
+        failures,
+    )
+    if issue_workflow_summary and not isinstance(issue_workflow_summary.get("missing_scope_count"), int):
+        failures.append("/validation/issues/workflow/summary missing_scope_count must be an integer")
+    issue_workflow_page = _check_page(api_base, "/validation/issues/workflow", "issue_workflow", endpoints, failures, counts, timeout, page_size)
+    bug_id = _first_id(issue_workflow_page or {}, "bug_id")
+    if bug_id:
+        issue_detail = _extract_data(
+            _append_endpoint(endpoints, _call(api_base, f"/validation/issues/{_quote(bug_id)}/workflow", timeout=timeout)),
+            failures,
+        )
+        if issue_detail and issue_detail.get("bug_id") != bug_id:
+            failures.append("/validation/issues/{bug_id}/workflow returned mismatched bug_id")
+
+    module_detail_summary = _extract_data(_append_endpoint(endpoints, _call(api_base, "/validation/modules/detail-summary", timeout=timeout)), failures)
+    if module_detail_summary and not isinstance(module_detail_summary.get("modules"), list):
+        failures.append("/validation/modules/detail-summary modules must be a list")
+
+    pipeline_summary = _extract_data(_append_endpoint(endpoints, _call(api_base, "/validation/pipeline/tests/summary", timeout=timeout)), failures)
+    if pipeline_summary and not isinstance(pipeline_summary.get("test_count"), int):
+        failures.append("/validation/pipeline/tests/summary test_count must be an integer")
+    pipeline_page = _check_page(api_base, "/validation/pipeline/tests", "pipeline_tests", endpoints, failures, counts, timeout, page_size)
+    test_id = _first_id(pipeline_page or {}, "test_id")
+    if test_id:
+        test_detail = _extract_data(
+            _append_endpoint(endpoints, _call(api_base, f"/validation/pipeline/tests/{_quote(test_id)}", timeout=timeout)),
+            failures,
+        )
+        if test_detail and test_detail.get("test_id") != test_id:
+            failures.append("/validation/pipeline/tests/{test_id} returned mismatched test_id")
+
+    feature_summary = _extract_data(_append_endpoint(endpoints, _call(api_base, "/validation/features/summary", timeout=timeout)), failures)
+    if feature_summary and not isinstance(feature_summary.get("target_count"), int):
+        failures.append("/validation/features/summary target_count must be an integer")
+    feature_page = _check_page(api_base, "/validation/features", "features", endpoints, failures, counts, timeout, page_size)
+    route_id = _first_id(feature_page or {}, "route_id")
+    if route_id:
+        feature_detail = _extract_data(
+            _append_endpoint(endpoints, _call(api_base, f"/validation/features/{_quote(route_id)}", timeout=timeout)),
+            failures,
+        )
+        if feature_detail and not _is_object(feature_detail.get("target")):
+            failures.append("/validation/features/{route_id} target must be an object")
+
+    github_issue_summary = _extract_data(_append_endpoint(endpoints, _call(api_base, "/validation/github/issues/summary", timeout=timeout)), failures)
+    if github_issue_summary and not isinstance(github_issue_summary.get("bug_count"), int):
+        failures.append("/validation/github/issues/summary bug_count must be an integer")
+    _check_page(api_base, "/validation/github/issues", "github_issues", endpoints, failures, counts, timeout, page_size)
+
+    branch_detail = _extract_data(_append_endpoint(endpoints, _call(api_base, "/validation/git/branches/detail-summary", timeout=timeout)), failures)
+    if branch_detail and not isinstance(branch_detail.get("worktree_count"), int):
+        failures.append("/validation/git/branches/detail-summary worktree_count must be an integer")
+
+    pr_summary = _extract_data(_append_endpoint(endpoints, _call(api_base, "/validation/github/prs/summary", timeout=timeout)), failures)
+    if pr_summary and pr_summary.get("data_state") not in {"complete", "unavailable"}:
+        failures.append("/validation/github/prs/summary data_state is invalid")
+    _check_page(api_base, "/validation/github/prs", "github_prs", endpoints, failures, counts, timeout, page_size)
+
+    legacy_summary = _extract_data(_append_endpoint(endpoints, _call(api_base, "/validation/legacy-debt/summary", timeout=timeout)), failures)
+    if legacy_summary and not isinstance(legacy_summary.get("debt_count"), int):
+        failures.append("/validation/legacy-debt/summary debt_count must be an integer")
+    legacy_page = _check_page(api_base, "/validation/legacy-debt/groups", "legacy_debt", endpoints, failures, counts, timeout, page_size)
+    group_id = _first_id(legacy_page or {}, "debt_group_id")
+    if group_id:
+        group_detail = _extract_data(
+            _append_endpoint(endpoints, _call(api_base, f"/validation/legacy-debt/groups/{_quote(group_id)}", timeout=timeout)),
+            failures,
+        )
+        if group_detail and not _is_object(group_detail.get("group")):
+            failures.append("/validation/legacy-debt/groups/{debt_group_id} group must be an object")
+
+    automation = _extract_data(_append_endpoint(endpoints, _call(api_base, "/validation/automation/summary", timeout=timeout)), failures)
+    if automation and not _is_object(automation.get("summary")):
+        failures.append("/validation/automation/summary summary must be an object")
+
     run_page = _check_page(api_base, "/validation/runs", "runs", endpoints, failures, counts, timeout, page_size)
     run_id = _first_id(run_page or {}, "run_id")
     if run_id:

@@ -705,6 +705,116 @@ test("Validation Center UI uses mocked APIs and controlled runner POST", async (
       return respond({ status: "success", data: moduleQuality });
     }
 
+    if (path.endsWith("/api/v1/validation/cards/summary")) {
+      return respond({
+        status: "success",
+        data: {
+          schema_version: "aistock_validation_cards_v2",
+          repo: { current_branch: "codex/validation-center-phase1" },
+          cards: [
+            { card_id: "merge_gate", title: "合入门禁", health_tone: "yellow", risk_score: 35, summary: { decision: "warning" } },
+            { card_id: "issue_workflow", title: "Issue 修复流程", health_tone: "yellow", risk_score: 20, summary: { open_count: 1 } },
+            { card_id: "pipeline_tests", title: "流水线测试", health_tone: "green", risk_score: 8, summary: { test_count: 2 } },
+            { card_id: "features", title: "功能验证", health_tone: "yellow", risk_score: 10, summary: { target_count: 1 } },
+            { card_id: "modules", title: "模块质量", health_tone: "orange", risk_score: 42, summary: { module_count: 1 } },
+            { card_id: "github_issues", title: "GitHub 议题", health_tone: "green", risk_score: 5, summary: { bug_count: 1 } },
+            { card_id: "branches_prs", title: "分支与 PR", health_tone: "green", risk_score: 4, summary: { worktree_count: 1 } },
+            { card_id: "legacy_debt", title: "历史遗留问题", health_tone: "yellow", risk_score: 12, summary: { debt_count: 1 } },
+            { card_id: "automation", title: "MCP 自动化", health_tone: "green", risk_score: 8, summary: { gh_authenticated: true } },
+          ],
+        },
+      });
+    }
+
+    if (path.endsWith("/api/v1/validation/merge-gate/summary") || path.endsWith("/api/v1/validation/merge-gate/detail")) {
+      return respond({
+        status: "success",
+        data: {
+          schema_version: "aistock_merge_gate_v1",
+          decision: "warning",
+          decision_label: "可人工确认后合入",
+          source_branch: "codex/validation-center-phase1",
+          target_branch: "main",
+          head_commit: "abcdef1",
+          base_commit: "main123",
+          change_class: "frontend_targeted",
+          changed_files: ["frontend/src/app/validation-center/page.tsx"],
+          touched_modules: ["validation.center"],
+          checks: [{ check_id: "workspace_clean", title: "工作区干净", status: "pass", reason_codes: [] }],
+          blocking_reasons: [],
+          warnings: ["historical_p2_p3_debt_exists"],
+          manual_confirmations: ["merge_to_main_requires_user_confirmation"],
+          recommended_next_actions: ["确认 warning 后创建 PR"],
+          risk_score: 35,
+          detail: {},
+        },
+      });
+    }
+
+    if (path.endsWith("/api/v1/validation/issues/workflow/summary")) {
+      return respond({ status: "success", data: { open_count: 1, in_progress_count: 0, review_ready_count: 0, missing_scope_count: 0, missing_required_verification_count: 1, triage_only_count: 0, by_workflow_state: { open: 1 } } });
+    }
+
+    if (path.endsWith("/api/v1/validation/issues/workflow")) {
+      return respond({ status: "success", data: { items: [{ bug_id: bugId, title: "Demo validation failure", workflow_state: "open", severity: "P2", module_id: "validation_center", gate_state: "triage_required", next_action: "完成分诊", allowed_write_scope_state: "complete", required_verification_state: "pending", closure_requirements_state: "pending", github_issue_url: "https://github.com/example/aistock/issues/1" }], total: 1, page: 1, page_size: 20, has_more: false } });
+    }
+
+    if (path.endsWith(`/api/v1/validation/issues/${bugId}/workflow`)) {
+      return respond({ status: "success", data: { bug_id: bugId, workflow_state: "open", gate_state: "triage_required" } });
+    }
+
+    if (path.endsWith("/api/v1/validation/modules/detail-summary")) {
+      return respond({ status: "success", data: { ...moduleQuality, summary: { ...moduleQuality.summary, touched_module_count: 1, blocking_module_count: 0, warning_module_count: 1, max_risk_score: 42 }, modules: moduleQuality.modules.map((item) => ({ ...item, owned_paths: ["frontend/src/app/validation-center/**"], shared_paths: [], touched_by_current_branch: true, merge_gate_state: "warning", blocking_issue_count_for_current_branch: 0, historical_issue_count: 1, risk_score: 42, health_tone: "orange", reason_codes: ["touched_by_current_branch"], coverage_threshold: { strict_for_merge: false, line_percent_min: 60 }, coverage: { ...item.coverage, coverage_state: "valid" } })) } });
+    }
+
+    if (path.endsWith("/api/v1/validation/pipeline/tests/summary")) {
+      return respond({ status: "success", data: { test_count: 2, blocking_count: 1, failed_count: 0, missing_evidence_count: 0, by_status: { passed: 1 } } });
+    }
+
+    if (path.endsWith("/api/v1/validation/pipeline/tests")) {
+      return respond({ status: "success", data: { items: [{ test_id: "validation_center_backend", title: "Validation Center backend contract", module: "validation_center", level: "L2", test_level: "blocking", status: "passed", nox_session: "validation_center_backend", fast_path_eligible: true, evidence_bundle_id: evidenceId, rerun_cost_level: "medium", recommended_command: "python -m nox -s validation_center_backend" }], total: 1, page: 1, page_size: 20, has_more: false } });
+    }
+
+    if (path.endsWith("/api/v1/validation/features/summary")) {
+      return respond({ status: "success", data: uiTargetSummary });
+    }
+
+    if (path.endsWith("/api/v1/validation/features")) {
+      return respond({ status: "success", data: uiTargetPage });
+    }
+
+    if (path.endsWith("/api/v1/validation/github/issues/summary")) {
+      return respond({ status: "success", data: { bug_count: 1, linked_count: 1, missing_link_count: 0, workflow_mismatch_count: 0, by_sync_state: { linked: 1 } } });
+    }
+
+    if (path.endsWith("/api/v1/validation/github/issues")) {
+      return respond({ status: "success", data: { items: [{ bug_id: bugId, title: "Demo validation failure", module_id: "validation_center", severity: "P2", workflow_state: "open", sync_state: "linked", github_issue_url: "https://github.com/example/aistock/issues/1", next_action: "保持同步" }], total: 1, page: 1, page_size: 20, has_more: false } });
+    }
+
+    if (path.endsWith("/api/v1/validation/git/branches/detail-summary")) {
+      return respond({ status: "success", data: { current_branch: "codex/validation-center-phase1", head_commit: "abcdef1", branch_count: 2, worktree_count: 1, branches: [], worktrees: [{ path: "F:/Dev/AIstock_worktrees/validation-center-phase1", branch: "codex/validation-center-phase1", worktree_state: "feature_worktree", bound_task_state: "feature_or_integration_bound" }], data_state: "complete" } });
+    }
+
+    if (path.endsWith("/api/v1/validation/github/prs/summary")) {
+      return respond({ status: "success", data: { pr_count: 1, open_count: 1, by_state: { OPEN: 1 }, data_state: "complete" } });
+    }
+
+    if (path.endsWith("/api/v1/validation/github/prs")) {
+      return respond({ status: "success", data: { items: [{ number: 21, title: "Validation phase1", head_ref: "codex/validation-center-phase1", base_ref: "main", state: "OPEN", merge_state_status: "CLEAN" }], total: 1, page: 1, page_size: 20, has_more: false } });
+    }
+
+    if (path.endsWith("/api/v1/validation/legacy-debt/summary")) {
+      return respond({ status: "success", data: { group_count: 1, debt_count: 1, p0_p1_count: 0, reason_codes: ["legacy_debt_exists"] } });
+    }
+
+    if (path.endsWith("/api/v1/validation/legacy-debt/groups")) {
+      return respond({ status: "success", data: { items: [{ debt_group_id: "validation:legacy", module: "validation.center", category: "legacy", baseline_state: "baseline_existing", count: 1, p0_p1_count: 0, sample_items: [{ finding_id: "legacy_1" }] }], total: 1, page: 1, page_size: 20, has_more: false } });
+    }
+
+    if (path.endsWith("/api/v1/validation/automation/summary")) {
+      return respond({ status: "success", data: { summary: { gh_authenticated: true, script_count: 3 }, github_data_state: "complete", gh_auth_status: "ok", scripts: { mcp_server: true }, mcp_policy: { dry_run_allowed: true }, actions: [{ level: "L0", action_type: "read_only_check", default_policy: "auto_allowed", enabled: true }] } });
+    }
+
     if (path.endsWith("/api/v1/validation/ui-targets/summary")) {
       return respond({ status: "success", data: uiTargetSummary });
     }
@@ -855,27 +965,29 @@ test("Validation Center UI uses mocked APIs and controlled runner POST", async (
   });
 
   await page.goto("/validation-center");
-  const pipelineGroup = page.locator(".sidebar-group-title", { hasText: "自动化流水线" });
-  await expect(pipelineGroup).toBeVisible();
-  await pipelineGroup.click();
-  await expect(page.getByRole("link", { name: /流水线中心/ })).toHaveAttribute("href", "/validation-center");
-  await expect(page.getByRole("heading", { name: "自动化测试流水线中心" })).toBeVisible();
-  await expect(page.getByText("只读 API")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Git 工作区状态" })).toBeVisible();
-  await expect(page.getByText("未提交文件", { exact: true })).toBeVisible();
-  await expect(page.getByText("未归属文件", { exact: true })).toBeVisible();
-  await expect(page.getByText("本地未推送", { exact: true })).toBeVisible();
+  await expect(page.getByText("Validation Center / Read Only")).toBeVisible();
+  await expect(page.getByText("Bug Registry", { exact: true })).toBeVisible();
+
+  const phaseTabs = page.locator(".pv2-phase-tab");
+  await expect(phaseTabs).toHaveCount(10);
+
+  await phaseTabs.nth(1).click();
+  await expect(page.getByText("frontend_targeted")).toBeVisible();
+  await expect(page.getByText("codex/validation-center-phase1")).toBeVisible();
+  await expect(page.getByText("frontend/src/app/validation-center/page.tsx")).toBeVisible();
+
+  await phaseTabs.nth(7).click();
+  await expect(page.getByText("Open PR", { exact: true })).toBeVisible();
   await expect(page.getByText("root_tmp.py")).toBeVisible();
-  await expect(page.getByText("validation.center").first()).toBeVisible();
   await expect(page.getByText("read_only_allowlist").first()).toBeVisible();
   await expect(page.getByText("add_file_ownership_mapping_before_commit")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "模块质量优先级" })).toBeVisible();
-  await expect(page.getByText("近期 Commit", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("需要验证模块", { exact: true })).toBeVisible();
-  await expect(page.getByText("按文件归属自动聚合")).toBeVisible();
+
+  await phaseTabs.nth(5).click();
+  await expect(page.getByText("validation_module_registry_l0")).toBeVisible();
   await expect(page.getByText("feat(validation): show git workspace status").first()).toBeVisible();
   await expect(page.getByText("unmapped_workspace_files_present")).toBeVisible();
-  await expect(page.getByText("validation_module_registry_l0")).toBeVisible();
+
+  await phaseTabs.nth(4).click();
   await expect(page.getByRole("heading", { name: "UI Target Route Coverage" })).toBeVisible();
   await expect(page.getByText("Catalog: tests/aistock_validation/catalog/ui_targets.yaml")).toBeVisible();
   await expect(page.getByText("Route coverage boundary")).toBeVisible();
@@ -888,54 +1000,65 @@ test("Validation Center UI uses mocked APIs and controlled runner POST", async (
   await expect(routeDetailPanel.getByText("Open Validation Center")).toBeVisible();
   await expect(routeDetailPanel.getByText("Line 81.35% / Branch 64.35%")).toBeVisible();
   await expect(routeDetailPanel.getByText(passedRunId)).toBeVisible();
-  await expect(page.getByText("受控 Runner：allowlist only")).toBeVisible();
-  await expect(page.getByText("Validation Center backend contract")).toBeVisible();
-  await expect(page.getByText("Runner 执行队列")).toBeVisible();
+
+  await phaseTabs.nth(3).click();
+  await expect(page.getByText("Validation Center backend contract").first()).toBeVisible();
   await expect(page.getByText("tmp/validation/runner/jobs/valjob_20260504_210000_mocked.log")).toBeVisible();
   await expect(page.getByText("tests/aistock_validation/history/validation_center/20260504_l2_validation-center-backend-runner-validation.md")).toBeVisible();
   await page.getByRole("button", { name: "run validation plan validation_center_backend" }).click();
-  await expect(page.getByText("Runner 已提交")).toBeVisible();
-  await expect(page.getByText("状态=passed")).toBeVisible();
   await page.getByRole("button", { name: "Open Runner detail" }).click();
   await expect(page.getByRole("heading", { name: "Runner Detail" })).toBeVisible();
   await expect(page.getByText("api runner ok")).toBeVisible();
   await expect(page.getByText("aistock_validation_evidence_manifest_v1")).toBeVisible();
   await expect(page.getByText("Validation API Run").first()).toBeVisible();
-  await expect(page.getByText("质量发现与 Bug Registry")).toBeVisible();
-  await expect(page.getByText("No silent fallback")).toBeVisible();
-  await expect(page.getByText("Demo validation failure")).toBeVisible();
-  await expect(page.getByLabel("validation run pagination status")).toContainText("共 2 条");
 
-  await page.getByRole("button", { name: "查看详情" }).first().click();
+  const passedRunRow = page.locator("tr", { hasText: "Validation API Run" }).first();
+  await passedRunRow.locator("button").first().click();
   await expect(page.getByText("read validation history")).toBeVisible();
   await expect(page.getByText("mock_api_used")).toBeVisible();
   await expect(page.getByText("positive_business_success")).toBeVisible();
   await expect(page.getByText("Validation Center read-only API coverage")).toBeVisible();
   await expect(page.getByText("Validation Center read-only API evidence")).toBeVisible();
 
-  await page.getByRole("button", { name: "查看快照" }).click();
+  const coverageRow = page.locator("tr", { hasText: "Validation Center read-only API coverage" }).first();
+  await coverageRow.locator("button").first().click();
   await expect(page.getByText("branch_percent")).toBeVisible();
   await expect(page.getByText("71.74", { exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "查看证据" }).click();
+  const evidenceRow = page.locator("tr", { hasText: "Validation Center read-only API evidence" }).first();
+  await evidenceRow.locator("button").first().click();
   await expect(page.getByText("evidence_count")).toBeVisible();
   await expect(page.getByText("missing_count", { exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "查看发现" }).click();
+  await page.locator("#validation-search").fill("Markdown");
+  await expect(page.getByText("Markdown Only", { exact: true })).toBeVisible();
+  await expect(page.getByText(/metadata_missing/).first()).toBeVisible();
+  const markdownRunRow = page.locator("tr", { hasText: "Markdown Only" }).first();
+  await markdownRunRow.locator("button").first().click();
+  await expect(page.getByText(/coverage_missing/).first()).toBeVisible();
+
+  await phaseTabs.nth(2).click();
+  await expect(page.getByText("Demo validation failure").first()).toBeVisible();
+  await expect(page.getByText("No silent fallback")).toBeVisible();
+  const findingRow = page.locator("tr", { hasText: "No silent fallback" }).first();
+  await findingRow.locator("button").first().click();
   await expect(page.getByText("quality_finding", { exact: true })).toBeVisible();
   await expect(page.getByText("python scripts/aistock_guardrail_scan.py backend/services/demo.py --fail-on-severity NONE")).toBeVisible();
-
-  await page.getByRole("button", { name: "查看 Bug" }).click();
+  const bugRow = page.locator("tr", { hasText: "Demo validation failure" }).last();
+  await bugRow.locator("button").first().click();
   await expect(page.getByText("bug", { exact: true })).toBeVisible();
   await expect(page.getByText("python -m nox -s validation_center_backend").first()).toBeVisible();
   await expect(page.getByText("verification_run_id required").first()).toBeVisible();
 
-  await page.locator("#validation-search").fill("Markdown");
-  await expect(page.getByText("Markdown Only", { exact: true })).toBeVisible();
-  await expect(page.getByText("metadata_missing：缺少 JSON run metadata")).toBeVisible();
-  await page.getByRole("button", { name: "查看详情" }).first().click();
-  await expect(page.getByText("未记录 / 未证明")).toBeVisible();
-  await expect(page.getByText("coverage_missing：未发现覆盖率快照").first()).toBeVisible();
+  await phaseTabs.nth(6).click();
+  await expect(page.getByText("https://github.com/example/aistock/issues/1").first()).toBeVisible();
+  await expect(page.getByText("No synced GitHub issue link yet")).toHaveCount(0);
+
+  await phaseTabs.nth(8).click();
+  await expect(page.getByText("validation:legacy")).toBeVisible();
+
+  await phaseTabs.nth(9).click();
+  await expect(page.getByText("auto_allowed")).toBeVisible();
 
   await expect(page.getByText("aistock_validation_run_v1")).toHaveCount(0);
   expect(writeMethods).toEqual(["POST /api/v1/validation/executions"]);

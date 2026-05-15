@@ -660,6 +660,164 @@ export type ValidationUiTargetQuery = {
   page_size?: number;
 };
 
+export type ValidationPhase1Card = JsonObject & {
+  card_id: string;
+  title?: string;
+  primary_route?: string;
+  health_tone?: string;
+  risk_score?: number;
+  summary?: JsonObject;
+  reason_codes?: string[];
+};
+
+export type ValidationPhase1CardsSummary = JsonObject & {
+  schema_version?: string;
+  generated_at?: string;
+  repo?: JsonObject;
+  cards?: ValidationPhase1Card[];
+  data_state?: string;
+  production_8001_touched?: boolean;
+};
+
+export type ValidationMergeGate = JsonObject & {
+  decision?: string;
+  decision_label?: string;
+  source_branch?: string | null;
+  target_branch?: string;
+  head_commit?: string | null;
+  base_commit?: string | null;
+  change_class?: string;
+  changed_files?: string[];
+  touched_modules?: string[];
+  checks?: JsonObject[];
+  blocking_reasons?: string[];
+  warnings?: string[];
+  manual_confirmations?: string[];
+  recommended_next_actions?: string[];
+  evidence_bundles?: string[];
+  risk_score?: number;
+  health_tone?: string;
+  data_state?: string;
+  detail?: JsonObject;
+};
+
+export type ValidationIssueWorkflowItem = JsonObject & {
+  bug_id: string;
+  title?: string;
+  workflow_state?: string;
+  severity?: string;
+  module_id?: string;
+  gate_state?: string;
+  next_action?: string;
+  allowed_write_scope_state?: string;
+  required_verification_state?: string;
+  closure_requirements_state?: string;
+  github_issue_url?: string | null;
+};
+
+export type ValidationIssueWorkflowSummary = JsonObject & {
+  open_count?: number;
+  triaged_count?: number;
+  triage_only_count?: number;
+  in_progress_count?: number;
+  review_ready_count?: number;
+  missing_scope_count?: number;
+  missing_required_verification_count?: number;
+  by_workflow_state?: Record<string, number>;
+  reason_codes?: string[];
+};
+
+export type ValidationPipelineTestItem = JsonObject & {
+  test_id: string;
+  title?: string;
+  module?: string;
+  level?: string;
+  test_level?: string;
+  status?: string;
+  nox_session?: string;
+  fast_path_eligible?: boolean;
+  evidence_bundle_id?: string | null;
+  rerun_cost_level?: string;
+  recommended_command?: string | null;
+};
+
+export type ValidationPipelineTestSummary = JsonObject & {
+  test_count?: number;
+  blocking_count?: number;
+  failed_count?: number;
+  missing_evidence_count?: number;
+  by_status?: Record<string, number>;
+  reason_codes?: string[];
+};
+
+export type ValidationGithubIssueSync = JsonObject & {
+  bug_id: string;
+  title?: string;
+  module_id?: string;
+  severity?: string;
+  workflow_state?: string;
+  github_issue_number?: number | null;
+  github_issue_url?: string | null;
+  sync_state?: string;
+  next_action?: string;
+};
+
+export type ValidationBranchDetailSummary = JsonObject & {
+  current_branch?: string | null;
+  head_commit?: string | null;
+  branch_count?: number;
+  worktree_count?: number;
+  branches?: JsonObject[];
+  worktrees?: JsonObject[];
+  reason_codes?: string[];
+  data_state?: string;
+};
+
+export type ValidationGithubPrSummary = JsonObject & {
+  pr_count?: number;
+  open_count?: number;
+  by_state?: Record<string, number>;
+  data_state?: string;
+  reason_codes?: string[];
+};
+
+export type ValidationGithubPr = JsonObject & {
+  number?: number;
+  title?: string;
+  head_ref?: string;
+  base_ref?: string;
+  state?: string;
+  url?: string;
+  merge_state_status?: string;
+};
+
+export type ValidationLegacyDebtSummary = JsonObject & {
+  group_count?: number;
+  debt_count?: number;
+  p0_p1_count?: number;
+  reason_codes?: string[];
+};
+
+export type ValidationLegacyDebtGroup = JsonObject & {
+  debt_group_id: string;
+  module?: string;
+  category?: string;
+  baseline_state?: string;
+  count?: number;
+  p0_p1_count?: number;
+  sample_items?: JsonObject[];
+};
+
+export type ValidationAutomationSummary = JsonObject & {
+  summary?: JsonObject;
+  github_data_state?: string;
+  gh_auth_status?: string;
+  scripts?: JsonObject;
+  actions?: JsonObject[];
+  mcp_policy?: JsonObject;
+  reason_codes?: string[];
+};
+
 const API_BASE = (process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1").replace(/\/+$/, "");
 
 export class ValidationApiError extends Error {
@@ -784,6 +942,63 @@ export const validationApi = {
   },
   moduleQualitySummary(commitLimit = 50): Promise<ValidationModuleQualitySummary> {
     return unwrap<ValidationModuleQualitySummary>(appendQuery("/validation/modules/quality-summary", { commit_limit: commitLimit }));
+  },
+  cardsSummary(): Promise<ValidationPhase1CardsSummary> {
+    return unwrap<ValidationPhase1CardsSummary>("/validation/cards/summary");
+  },
+  mergeGateSummary(): Promise<ValidationMergeGate> {
+    return unwrap<ValidationMergeGate>("/validation/merge-gate/summary");
+  },
+  mergeGateDetail(): Promise<ValidationMergeGate> {
+    return unwrap<ValidationMergeGate>("/validation/merge-gate/detail");
+  },
+  issueWorkflowSummary(): Promise<ValidationIssueWorkflowSummary> {
+    return unwrap<ValidationIssueWorkflowSummary>("/validation/issues/workflow/summary");
+  },
+  issueWorkflow(query: ValidationListQuery & { severity?: string; workflow_state?: string } = {}): Promise<ValidationPage<ValidationIssueWorkflowItem>> {
+    return unwrap<ValidationPage<ValidationIssueWorkflowItem>>(appendQuery("/validation/issues/workflow", query));
+  },
+  issueWorkflowDetail(bugId: string): Promise<ValidationIssueWorkflowItem> {
+    return unwrap<ValidationIssueWorkflowItem>(`/validation/issues/${encodeURIComponent(bugId)}/workflow`);
+  },
+  moduleDetailSummary(): Promise<ValidationModuleQualitySummary> {
+    return unwrap<ValidationModuleQualitySummary>("/validation/modules/detail-summary");
+  },
+  pipelineTestsSummary(): Promise<ValidationPipelineTestSummary> {
+    return unwrap<ValidationPipelineTestSummary>("/validation/pipeline/tests/summary");
+  },
+  pipelineTests(query: { page?: number; page_size?: number } = {}): Promise<ValidationPage<ValidationPipelineTestItem>> {
+    return unwrap<ValidationPage<ValidationPipelineTestItem>>(appendQuery("/validation/pipeline/tests", query));
+  },
+  featuresSummary(): Promise<ValidationUiTargetSummary> {
+    return unwrap<ValidationUiTargetSummary>("/validation/features/summary");
+  },
+  features(query: { page?: number; page_size?: number } = {}): Promise<ValidationUiTargetPage> {
+    return unwrap<ValidationUiTargetPage>(appendQuery("/validation/features", query));
+  },
+  githubIssuesSummary(): Promise<JsonObject> {
+    return unwrap<JsonObject>("/validation/github/issues/summary");
+  },
+  githubIssues(query: { page?: number; page_size?: number } = {}): Promise<ValidationPage<ValidationGithubIssueSync>> {
+    return unwrap<ValidationPage<ValidationGithubIssueSync>>(appendQuery("/validation/github/issues", query));
+  },
+  branchDetailSummary(): Promise<ValidationBranchDetailSummary> {
+    return unwrap<ValidationBranchDetailSummary>("/validation/git/branches/detail-summary");
+  },
+  githubPrsSummary(): Promise<ValidationGithubPrSummary> {
+    return unwrap<ValidationGithubPrSummary>("/validation/github/prs/summary");
+  },
+  githubPrs(query: { page?: number; page_size?: number } = {}): Promise<ValidationPage<ValidationGithubPr>> {
+    return unwrap<ValidationPage<ValidationGithubPr>>(appendQuery("/validation/github/prs", query));
+  },
+  legacyDebtSummary(): Promise<ValidationLegacyDebtSummary> {
+    return unwrap<ValidationLegacyDebtSummary>("/validation/legacy-debt/summary");
+  },
+  legacyDebtGroups(query: { page?: number; page_size?: number } = {}): Promise<ValidationPage<ValidationLegacyDebtGroup>> {
+    return unwrap<ValidationPage<ValidationLegacyDebtGroup>>(appendQuery("/validation/legacy-debt/groups", query));
+  },
+  automationSummary(): Promise<ValidationAutomationSummary> {
+    return unwrap<ValidationAutomationSummary>("/validation/automation/summary");
   },
   uiTargets(query: ValidationUiTargetQuery = {}): Promise<ValidationUiTargetPage> {
     return unwrap<ValidationUiTargetPage>(appendQuery("/validation/ui-targets", query));

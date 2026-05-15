@@ -24,10 +24,24 @@ import {
   type ValidationGitCommitActivity,
   type ValidationGitWorkspaceStatus,
   type ValidationHealth,
+  type ValidationAutomationSummary,
+  type ValidationBranchDetailSummary,
+  type ValidationGithubIssueSync,
+  type ValidationGithubPr,
+  type ValidationGithubPrSummary,
+  type ValidationIssueWorkflowItem,
+  type ValidationIssueWorkflowSummary,
+  type ValidationLegacyDebtGroup,
+  type ValidationLegacyDebtSummary,
+  type ValidationMergeGate,
   type ValidationModuleQualityItem,
   type ValidationModuleQualitySummary,
   type ValidationPage,
   type ValidationPassScope,
+  type ValidationPhase1Card,
+  type ValidationPhase1CardsSummary,
+  type ValidationPipelineTestItem,
+  type ValidationPipelineTestSummary,
   type ValidationPlan,
   type ValidationQualityFinding,
   type ValidationRunDetail,
@@ -121,6 +135,270 @@ function CountChips({ counts }: { counts?: Record<string, number> }) {
   const entries = Object.entries(counts || {});
   if (!entries.length) return <span className="pv2-muted">无统计</span>;
   return <div className="pv2-chip-row">{entries.map(([key, count]) => <span className="pv2-chip" key={key}>{key}: {count}</span>)}</div>;
+}
+
+const PHASE1_SECTIONS = [
+  { id: "overview", label: "总览", hint: "关键卡片" },
+  { id: "merge_gate", label: "合入门禁", hint: "是否可合入" },
+  { id: "issue_workflow", label: "Issue 修复流程", hint: "生命周期" },
+  { id: "pipeline_tests", label: "流水线测试", hint: "计划/证据" },
+  { id: "features", label: "功能验证", hint: "菜单/路由" },
+  { id: "modules", label: "模块质量", hint: "覆盖率/Issue" },
+  { id: "github_issues", label: "GitHub 议题", hint: "同步状态" },
+  { id: "branches_prs", label: "分支与 PR", hint: "工作树/PR" },
+  { id: "legacy_debt", label: "历史遗留", hint: "基线债务" },
+  { id: "automation", label: "MCP 自动化", hint: "动作分级" },
+];
+
+function cardSummaryText(card?: ValidationPhase1Card): string {
+  const summary = isObject(card?.summary) ? card?.summary : {};
+  const decision = summary?.decision;
+  const total = summary?.test_count ?? summary?.bug_count ?? summary?.debt_count ?? summary?.worktree_count ?? summary?.target_count ?? summary?.module_count;
+  if (decision) return `裁决 ${display(decision)}`;
+  if (total !== undefined) return `数量 ${display(total)}`;
+  return card?.health_tone ? `状态 ${display(card.health_tone)}` : "点击查看";
+}
+
+function Phase1TopNav({
+  cardsSummary,
+  activeSection,
+  onSelect,
+}: {
+  cardsSummary?: ValidationPhase1CardsSummary | null;
+  activeSection: string;
+  onSelect: (section: string) => void;
+}) {
+  const cardsById = new Map((cardsSummary?.cards || []).map((card) => [card.card_id, card]));
+  return (
+    <nav className="pv2-phase-nav" aria-label="流水线中心页面导航">
+      {PHASE1_SECTIONS.map((section) => {
+        const card = cardsById.get(section.id);
+        const active = activeSection === section.id;
+        const tone = card?.health_tone || (section.id === "overview" ? "green" : "gray");
+        return (
+          <button
+            className={`pv2-phase-tab pv2-phase-tab-${tone} ${active ? "pv2-phase-tab-active" : ""}`}
+            key={section.id}
+            onClick={() => onSelect(section.id)}
+            type="button"
+          >
+            <span className="pv2-phase-tab-title">{section.label}</span>
+            <span className="pv2-phase-tab-meta">{cardSummaryText(card) || section.hint}</span>
+            <span className="pv2-phase-tab-risk">risk {display(card?.risk_score ?? "-")}</span>
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
+function MergeGatePanel({ mergeGate }: { mergeGate?: ValidationMergeGate | null }) {
+  return (
+    <SectionCard title="合入门禁" eyebrow="read-only merge gate / no merge action" action={<StatusBadge status={mergeGate?.decision || "unknown"} />}>
+      <div className="pv2-grid pv2-grid-4">
+        <MetricCard label="门禁裁决" value={display(mergeGate?.decision_label || mergeGate?.decision)} hint={display(mergeGate?.change_class)} tone={mergeGate?.decision === "blocked" ? "danger" : mergeGate?.decision === "pass" ? "success" : "warning"} />
+        <MetricCard label="阻塞原因" value={arrayCount(mergeGate?.blocking_reasons)} hint="blocking" tone={arrayCount(mergeGate?.blocking_reasons) ? "danger" : "success"} />
+        <MetricCard label="警告项" value={arrayCount(mergeGate?.warnings)} hint="warning" tone={arrayCount(mergeGate?.warnings) ? "warning" : "success"} />
+        <MetricCard label="人工确认" value={arrayCount(mergeGate?.manual_confirmations)} hint="merge/main/生产动作" tone="info" />
+      </div>
+      <KeyValuePanel rows={[
+        ["source_branch", mergeGate?.source_branch],
+        ["target_branch", mergeGate?.target_branch],
+        ["head_commit", mergeGate?.head_commit],
+        ["base_commit", mergeGate?.base_commit],
+        ["touched_modules", mergeGate?.touched_modules],
+        ["changed_files", mergeGate?.changed_files],
+      ]} />
+      <div className="pv2-grid pv2-grid-2" style={{ marginTop: 12 }}>
+        <div><h3 className="pv2-subtitle">检查项</h3><div className="pv2-readable-list">{(mergeGate?.checks || []).map((check, index) => <div className="pv2-readable-item" key={`${display(check.check_id)}-${index}`}><strong>{display(check.title)}</strong><br /><StatusBadge status={check.status} /> <span className="pv2-muted">{display(check.reason_codes)}</span></div>)}</div></div>
+        <div><h3 className="pv2-subtitle">下一步建议</h3><BadgeList items={mergeGate?.recommended_next_actions} empty="暂无建议" /></div>
+      </div>
+    </SectionCard>
+  );
+}
+
+function IssueWorkflowPanel({ summary, items, onOpenBug }: { summary?: ValidationIssueWorkflowSummary | null; items?: ValidationPage<ValidationIssueWorkflowItem> | null; onOpenBug: (bugId: string) => void }) {
+  return (
+    <SectionCard title="Issue 修复流程" eyebrow="Open / Triaged / In Progress / Review Ready / Fixed / Verified">
+      <div className="pv2-grid pv2-grid-4">
+        <MetricCard label="Open" value={summary?.open_count ?? 0} hint={`triage only ${display(summary?.triage_only_count ?? 0)}`} tone={(summary?.open_count || 0) ? "warning" : "success"} />
+        <MetricCard label="In Progress" value={summary?.in_progress_count ?? 0} hint={`review ready ${display(summary?.review_ready_count ?? 0)}`} tone="info" />
+        <MetricCard label="缺少 Scope" value={summary?.missing_scope_count ?? 0} hint="不允许编码" tone={(summary?.missing_scope_count || 0) ? "danger" : "success"} />
+        <MetricCard label="缺少验证" value={summary?.missing_required_verification_count ?? 0} hint="不能关闭" tone={(summary?.missing_required_verification_count || 0) ? "warning" : "success"} />
+      </div>
+      <div style={{ marginBottom: 12 }}><CountChips counts={summary?.by_workflow_state} /></div>
+      <div className="pv2-table-wrap">
+        <table className="pv2-table">
+          <thead><tr><th>Issue</th><th>状态</th><th>模块/级别</th><th>Scope/验证</th><th>下一步</th><th>操作</th></tr></thead>
+          <tbody>
+            {(items?.items || []).length ? (items?.items || []).map((item) => (
+              <tr key={item.bug_id}>
+                <td><strong>{display(item.title || item.bug_id)}</strong><br /><span className="pv2-muted pv2-mono">{item.bug_id}</span></td>
+                <td><StatusBadge status={item.workflow_state} /><br /><StatusBadge status={item.gate_state} /></td>
+                <td>{display(item.module_id)}<br /><StatusBadge status={item.severity} /></td>
+                <td>scope {display(item.allowed_write_scope_state)}<br />verify {display(item.required_verification_state)}<br />close {display(item.closure_requirements_state)}</td>
+                <td>{display(item.next_action)}<br /><span className="pv2-muted">{display(item.github_issue_url)}</span></td>
+                <td><button className="pv2-link-button" type="button" onClick={() => onOpenBug(item.bug_id)}>展开 BUG 详情</button></td>
+              </tr>
+            )) : <tr><td className="pv2-empty-cell" colSpan={6}>暂无 Issue workflow 数据</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </SectionCard>
+  );
+}
+
+function ModuleDetailSummaryPanel({ detail }: { detail?: ValidationModuleQualitySummary | null }) {
+  const modules = detail?.modules || [];
+  const touchedModuleCount = Number(detail?.summary?.touched_module_count ?? 0);
+  const blockingModuleCount = Number(detail?.summary?.blocking_module_count ?? 0);
+  const maxRiskScore = Number(detail?.summary?.max_risk_score ?? 0);
+  return (
+    <SectionCard title="模块质量详情" eyebrow="coverage / issues / touched modules / merge gate">
+      <div className="pv2-grid pv2-grid-4">
+        <MetricCard label="模块数" value={detail?.summary?.module_count ?? modules.length} hint="registry" tone="info" />
+        <MetricCard label="触达模块" value={touchedModuleCount} hint="current branch" tone={touchedModuleCount ? "warning" : "success"} />
+        <MetricCard label="阻塞模块" value={blockingModuleCount} hint="merge gate" tone={blockingModuleCount ? "danger" : "success"} />
+        <MetricCard label="最高风险分" value={maxRiskScore} hint="risk score" tone={maxRiskScore >= 70 ? "danger" : "info"} />
+      </div>
+      <div className="pv2-table-wrap">
+        <table className="pv2-table">
+          <thead><tr><th>模块</th><th>覆盖率</th><th>Issue/发现</th><th>当前分支</th><th>门禁</th><th>详情</th></tr></thead>
+          <tbody>
+            {modules.length ? modules.slice(0, 30).map((item) => (
+              <tr key={item.module_id}>
+                <td><strong>{display(item.display_name || item.module_id)}</strong><br /><span className="pv2-muted pv2-mono">{item.module_id}</span></td>
+                <td><StatusBadge status={item.coverage?.coverage_state || item.coverage?.status || "missing"} /><br />Line {pct(item.coverage?.line_percent)}<br /><span className="pv2-muted">{display(item.coverage?.stale_reason)}</span></td>
+                <td>Bug {display(item.quality?.bug_count ?? item.historical_issue_count ?? 0)} / Finding {display(item.quality?.finding_count ?? 0)}<br /><CountChips counts={item.quality?.by_severity} /></td>
+                <td><StatusBadge status={item.touched_by_current_branch ? "touched" : "background"} /><br />workspace {display(item.workspace?.changed_file_count ?? 0)}</td>
+                <td><StatusBadge status={item.merge_gate_state || "unknown"} /><br />阻塞 {display(item.blocking_issue_count_for_current_branch ?? 0)}</td>
+                <td><details className="pv2-readable-item"><summary>展开路径/建议</summary><KeyValuePanel rows={[["owned_paths", item.owned_paths], ["shared_paths", item.shared_paths], ["coverage_threshold", item.coverage_threshold], ["reason_codes", item.reason_codes]]} /></details></td>
+              </tr>
+            )) : <tr><td className="pv2-empty-cell" colSpan={6}>暂无模块质量详情</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </SectionCard>
+  );
+}
+
+function PipelineTestsPhase1Panel({ summary, tests }: { summary?: ValidationPipelineTestSummary | null; tests?: ValidationPage<ValidationPipelineTestItem> | null }) {
+  return (
+    <SectionCard title="流水线测试概览" eyebrow="blocking / fast path / evidence bundles">
+      <div className="pv2-grid pv2-grid-4">
+        <MetricCard label="测试数" value={summary?.test_count ?? 0} hint="plans" tone="info" />
+        <MetricCard label="阻塞级" value={summary?.blocking_count ?? 0} hint="blocking" tone="warning" />
+        <MetricCard label="失败" value={summary?.failed_count ?? 0} hint="failed/error" tone={(summary?.failed_count || 0) ? "danger" : "success"} />
+        <MetricCard label="缺证据" value={summary?.missing_evidence_count ?? 0} hint="evidence bundle" tone={(summary?.missing_evidence_count || 0) ? "warning" : "success"} />
+      </div>
+      <div className="pv2-table-wrap">
+        <table className="pv2-table">
+          <thead><tr><th>测试</th><th>状态</th><th>模块/级别</th><th>快速路径</th><th>证据</th><th>重跑命令</th></tr></thead>
+          <tbody>
+            {(tests?.items || []).length ? (tests?.items || []).map((item) => (
+              <tr key={item.test_id}>
+                <td><strong>{display(item.title || item.test_id)}</strong><br /><span className="pv2-muted pv2-mono">{item.test_id}</span></td>
+                <td><StatusBadge status={item.status || "missing"} /><br /><span className="pv2-muted">{display(item.test_level)}</span></td>
+                <td>{display(item.module)} / {display(item.level)}</td>
+                <td>{display(item.fast_path_eligible)}<br />cost {display(item.rerun_cost_level)}</td>
+                <td>{display(item.evidence_bundle_id)}</td>
+                <td><span className="pv2-mono">{display(item.recommended_command)}</span></td>
+              </tr>
+            )) : <tr><td className="pv2-empty-cell" colSpan={6}>暂无流水线测试</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </SectionCard>
+  );
+}
+
+function GithubSyncPanel({ summary, issues }: { summary?: JsonObject | null; issues?: ValidationPage<ValidationGithubIssueSync> | null }) {
+  const bugCount = Number(summary?.bug_count ?? 0);
+  const linkedCount = Number(summary?.linked_count ?? 0);
+  const missingLinkCount = Number(summary?.missing_link_count ?? 0);
+  const workflowMismatchCount = Number(summary?.workflow_mismatch_count ?? 0);
+  return (
+    <SectionCard title="GitHub 议题同步" eyebrow="BUG JSON source of truth / GitHub mirror">
+      <div className="pv2-grid pv2-grid-4">
+        <MetricCard label="BUG 数" value={bugCount} hint="local registry" tone="info" />
+        <MetricCard label="已链接" value={linkedCount} hint="linked" tone="success" />
+        <MetricCard label="缺链接" value={missingLinkCount} hint="missing link" tone={missingLinkCount ? "warning" : "success"} />
+        <MetricCard label="不同步" value={workflowMismatchCount} hint="workflow mismatch" tone={workflowMismatchCount ? "danger" : "success"} />
+      </div>
+      <div style={{ marginBottom: 12 }}><CountChips counts={summary?.by_sync_state as Record<string, number>} /></div>
+      <div className="pv2-table-wrap">
+        <table className="pv2-table">
+          <thead><tr><th>BUG</th><th>同步状态</th><th>模块/级别</th><th>GitHub</th><th>下一步</th></tr></thead>
+          <tbody>
+            {(issues?.items || []).length ? (issues?.items || []).map((item) => (
+              <tr key={item.bug_id}>
+                <td><strong>{display(item.title || item.bug_id)}</strong><br /><span className="pv2-muted pv2-mono">{item.bug_id}</span></td>
+                <td><StatusBadge status={item.sync_state || "unknown"} /><br />workflow {display(item.workflow_state)}</td>
+                <td>{display(item.module_id)}<br /><StatusBadge status={item.severity} /></td>
+                <td>{item.github_issue_url ? <a href={item.github_issue_url}>{item.github_issue_url}</a> : <span className="pv2-muted">No synced GitHub issue link yet</span>}</td>
+                <td>{display(item.next_action)}</td>
+              </tr>
+            )) : <tr><td className="pv2-empty-cell" colSpan={5}>暂无 GitHub 议题同步记录</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </SectionCard>
+  );
+}
+
+function BranchPrPanel({ branchDetail, prSummary, prs }: { branchDetail?: ValidationBranchDetailSummary | null; prSummary?: ValidationGithubPrSummary | null; prs?: ValidationPage<ValidationGithubPr> | null }) {
+  return (
+    <SectionCard title="分支与 PR" eyebrow="local branches / worktrees / GitHub PRs">
+      <div className="pv2-grid pv2-grid-4">
+        <MetricCard label="当前分支" value={display(branchDetail?.current_branch)} hint={display(branchDetail?.head_commit)} tone="info" />
+        <MetricCard label="本地分支" value={branchDetail?.branch_count ?? 0} hint="branches" tone="info" />
+        <MetricCard label="Worktree" value={branchDetail?.worktree_count ?? 0} hint="feature isolation" tone={(branchDetail?.worktree_count || 0) > 20 ? "warning" : "success"} />
+        <MetricCard label="Open PR" value={prSummary?.open_count ?? 0} hint={display(prSummary?.data_state)} tone={prSummary?.data_state === "unavailable" ? "warning" : "info"} />
+      </div>
+      <div className="pv2-grid pv2-grid-2">
+        <div className="pv2-table-wrap"><table className="pv2-table"><thead><tr><th>Worktree</th><th>分支</th><th>状态</th></tr></thead><tbody>{(branchDetail?.worktrees || []).slice(0, 20).map((item, index) => <tr key={`${display(item.path)}-${index}`}><td>{display(item.path)}</td><td>{display(item.branch)}</td><td><StatusBadge status={item.worktree_state} /><br />{display(item.bound_task_state)}</td></tr>)}</tbody></table></div>
+        <div className="pv2-table-wrap"><table className="pv2-table"><thead><tr><th>PR</th><th>分支</th><th>状态</th></tr></thead><tbody>{(prs?.items || []).length ? (prs?.items || []).map((item) => <tr key={display(item.number)}><td><strong>{display(item.title)}</strong><br />#{display(item.number)}</td><td>{display(item.head_ref)} → {display(item.base_ref)}</td><td><StatusBadge status={item.state} /><br />{display(item.merge_state_status)}</td></tr>) : <tr><td className="pv2-empty-cell" colSpan={3}>暂无 PR 或 GitHub 数据不可用</td></tr>}</tbody></table></div>
+      </div>
+    </SectionCard>
+  );
+}
+
+function LegacyDebtPanel({ summary, groups }: { summary?: ValidationLegacyDebtSummary | null; groups?: ValidationPage<ValidationLegacyDebtGroup> | null }) {
+  return (
+    <SectionCard title="历史遗留问题" eyebrow="baseline debt / not blocking unrelated merge">
+      <div className="pv2-grid pv2-grid-3">
+        <MetricCard label="遗留组" value={summary?.group_count ?? 0} hint="groups" tone="info" />
+        <MetricCard label="遗留项" value={summary?.debt_count ?? 0} hint="baseline existing" tone={(summary?.debt_count || 0) ? "warning" : "success"} />
+        <MetricCard label="P0/P1" value={summary?.p0_p1_count ?? 0} hint="priority debt" tone={(summary?.p0_p1_count || 0) ? "danger" : "success"} />
+      </div>
+      <div className="pv2-table-wrap">
+        <table className="pv2-table">
+          <thead><tr><th>遗留组</th><th>模块</th><th>类别</th><th>数量</th><th>样例</th></tr></thead>
+          <tbody>{(groups?.items || []).length ? (groups?.items || []).map((group) => <tr key={group.debt_group_id}><td><strong>{group.debt_group_id}</strong><br /><StatusBadge status={group.baseline_state} /></td><td>{display(group.module)}</td><td>{display(group.category)}</td><td>{display(group.count)} / P0P1 {display(group.p0_p1_count)}</td><td><details className="pv2-readable-item"><summary>展开样例</summary><KeyValuePanel rows={[["sample_items", group.sample_items]]} /></details></td></tr>) : <tr><td className="pv2-empty-cell" colSpan={5}>暂无历史遗留记录</td></tr>}</tbody>
+        </table>
+      </div>
+    </SectionCard>
+  );
+}
+
+function AutomationPanel({ automation }: { automation?: ValidationAutomationSummary | null }) {
+  return (
+    <SectionCard title="MCP 自动化" eyebrow="read-only / dry-run / protected actions" action={<StatusBadge status={automation?.gh_auth_status || "unknown"} />}>
+      <KeyValuePanel rows={[
+        ["summary", automation?.summary],
+        ["github_data_state", automation?.github_data_state],
+        ["scripts", automation?.scripts],
+        ["mcp_policy", automation?.mcp_policy],
+        ["reason_codes", automation?.reason_codes],
+      ]} />
+      <div className="pv2-table-wrap" style={{ marginTop: 12 }}>
+        <table className="pv2-table">
+          <thead><tr><th>等级</th><th>动作</th><th>默认策略</th><th>启用</th></tr></thead>
+          <tbody>{(automation?.actions || []).map((item) => <tr key={display(item.level)}><td><strong>{display(item.level)}</strong></td><td>{display(item.action_type)}</td><td>{display(item.default_policy)}</td><td>{display(item.enabled)}</td></tr>)}</tbody>
+        </table>
+      </div>
+    </SectionCard>
+  );
 }
 
 function UiTargetCoveragePanel({ uiTargets, uiTargetSummary }: { uiTargets?: ValidationUiTargetPage | null; uiTargetSummary?: ValidationUiTargetSummary | null }) {
@@ -481,6 +759,21 @@ export default function ValidationCenterPage() {
   const [branchStatus, setBranchStatus] = useState<ValidationGitBranchStatus | null>(null);
   const [commitActivity, setCommitActivity] = useState<ValidationGitCommitActivity | null>(null);
   const [moduleQuality, setModuleQuality] = useState<ValidationModuleQualitySummary | null>(null);
+  const [phase1Cards, setPhase1Cards] = useState<ValidationPhase1CardsSummary | null>(null);
+  const [mergeGate, setMergeGate] = useState<ValidationMergeGate | null>(null);
+  const [issueWorkflowSummary, setIssueWorkflowSummary] = useState<ValidationIssueWorkflowSummary | null>(null);
+  const [issueWorkflow, setIssueWorkflow] = useState<ValidationPage<ValidationIssueWorkflowItem>>(emptyPage<ValidationIssueWorkflowItem>());
+  const [moduleDetailSummary, setModuleDetailSummary] = useState<ValidationModuleQualitySummary | null>(null);
+  const [pipelineTestSummary, setPipelineTestSummary] = useState<ValidationPipelineTestSummary | null>(null);
+  const [pipelineTests, setPipelineTests] = useState<ValidationPage<ValidationPipelineTestItem>>(emptyPage<ValidationPipelineTestItem>());
+  const [githubIssueSummary, setGithubIssueSummary] = useState<JsonObject | null>(null);
+  const [githubIssues, setGithubIssues] = useState<ValidationPage<ValidationGithubIssueSync>>(emptyPage<ValidationGithubIssueSync>());
+  const [branchDetailSummary, setBranchDetailSummary] = useState<ValidationBranchDetailSummary | null>(null);
+  const [githubPrSummary, setGithubPrSummary] = useState<ValidationGithubPrSummary | null>(null);
+  const [githubPrs, setGithubPrs] = useState<ValidationPage<ValidationGithubPr>>(emptyPage<ValidationGithubPr>());
+  const [legacyDebtSummary, setLegacyDebtSummary] = useState<ValidationLegacyDebtSummary | null>(null);
+  const [legacyDebtGroups, setLegacyDebtGroups] = useState<ValidationPage<ValidationLegacyDebtGroup>>(emptyPage<ValidationLegacyDebtGroup>());
+  const [automationSummary, setAutomationSummary] = useState<ValidationAutomationSummary | null>(null);
   const [uiTargets, setUiTargets] = useState<ValidationUiTargetPage | null>(null);
   const [uiTargetSummary, setUiTargetSummary] = useState<ValidationUiTargetSummary | null>(null);
   const [plans, setPlans] = useState<ValidationPlan[]>([]);
@@ -504,6 +797,7 @@ export default function ValidationCenterPage() {
   const [error, setError] = useState<string | null>(null);
   const [executionBusy, setExecutionBusy] = useState<string | null>(null);
   const [executionMessage, setExecutionMessage] = useState<string | null>(null);
+  const [activeSection, setActiveSection] = useState("overview");
   const [executionFilters, setExecutionFilters] = useState({ status: "", planKey: "", module: "", page: 1, pageSize: 10 });
   const [filters, setFilters] = useState({ module: "", level: "", status: "", search: "", includeMarkdownOnly: true, page: 1, pageSize: DEFAULT_PAGE_SIZE });
   const [qualityFilters, setQualityFilters] = useState({ findingSource: "", findingSeverity: "", findingStatus: "", findingSearch: "", findingPage: 1, bugSeverity: "", bugStatus: "", bugSearch: "", bugPage: 1, pageSize: DEFAULT_PAGE_SIZE });
@@ -512,7 +806,37 @@ export default function ValidationCenterPage() {
     setLoading(true);
     setError(null);
     try {
-      const [healthData, summaryData, planCatalog, coverageData, evidenceData, executionData, findingSummaryData, bugSummaryData, workspaceData, branchData, commitData, moduleQualityData, uiTargetsData, uiTargetSummaryData] = await Promise.all([
+      const [
+        healthData,
+        summaryData,
+        planCatalog,
+        coverageData,
+        evidenceData,
+        executionData,
+        findingSummaryData,
+        bugSummaryData,
+        workspaceData,
+        branchData,
+        commitData,
+        moduleQualityData,
+        uiTargetsData,
+        uiTargetSummaryData,
+        cardsData,
+        mergeGateData,
+        issueWorkflowSummaryData,
+        issueWorkflowData,
+        moduleDetailData,
+        pipelineTestSummaryData,
+        pipelineTestsData,
+        githubIssueSummaryData,
+        githubIssuesData,
+        branchDetailData,
+        githubPrSummaryData,
+        githubPrData,
+        legacyDebtSummaryData,
+        legacyDebtGroupsData,
+        automationData,
+      ] = await Promise.all([
         validationApi.health(),
         validationApi.summary(),
         validationApi.plans(),
@@ -527,6 +851,21 @@ export default function ValidationCenterPage() {
         validationApi.moduleQualitySummary(50),
         validationApi.uiTargets({ page: 1, page_size: 100 }),
         validationApi.uiTargetSummary(),
+        validationApi.cardsSummary(),
+        validationApi.mergeGateSummary(),
+        validationApi.issueWorkflowSummary(),
+        validationApi.issueWorkflow({ page: 1, page_size: 20 }),
+        validationApi.moduleDetailSummary(),
+        validationApi.pipelineTestsSummary(),
+        validationApi.pipelineTests({ page: 1, page_size: 20 }),
+        validationApi.githubIssuesSummary(),
+        validationApi.githubIssues({ page: 1, page_size: 20 }),
+        validationApi.branchDetailSummary(),
+        validationApi.githubPrsSummary(),
+        validationApi.githubPrs({ page: 1, page_size: 20 }),
+        validationApi.legacyDebtSummary(),
+        validationApi.legacyDebtGroups({ page: 1, page_size: 20 }),
+        validationApi.automationSummary(),
       ]);
       setHealth(healthData);
       setSummary(summaryData);
@@ -542,6 +881,21 @@ export default function ValidationCenterPage() {
       setModuleQuality(moduleQualityData);
       setUiTargets(uiTargetsData);
       setUiTargetSummary(uiTargetSummaryData);
+      setPhase1Cards(cardsData);
+      setMergeGate(mergeGateData);
+      setIssueWorkflowSummary(issueWorkflowSummaryData);
+      setIssueWorkflow(issueWorkflowData || emptyPage<ValidationIssueWorkflowItem>());
+      setModuleDetailSummary(moduleDetailData);
+      setPipelineTestSummary(pipelineTestSummaryData);
+      setPipelineTests(pipelineTestsData || emptyPage<ValidationPipelineTestItem>());
+      setGithubIssueSummary(githubIssueSummaryData);
+      setGithubIssues(githubIssuesData || emptyPage<ValidationGithubIssueSync>());
+      setBranchDetailSummary(branchDetailData);
+      setGithubPrSummary(githubPrSummaryData);
+      setGithubPrs(githubPrData || emptyPage<ValidationGithubPr>());
+      setLegacyDebtSummary(legacyDebtSummaryData);
+      setLegacyDebtGroups(legacyDebtGroupsData || emptyPage<ValidationLegacyDebtGroup>());
+      setAutomationSummary(automationData);
     } catch (err) {
       setError(errorText(err));
     } finally {
@@ -772,21 +1126,48 @@ export default function ValidationCenterPage() {
       {error ? <div className="pv2-error-panel"><div className="pv2-error-kicker">Validation Center Error</div><div className="pv2-error-main">{error}</div></div> : null}
       {loading ? <div className="pv2-notice pv2-notice-info"><div className="pv2-notice-title">加载中</div><div className="pv2-notice-body">正在读取本地验证历史索引和质量问题索引。</div></div> : null}
 
-      <section className="pv2-grid pv2-grid-4">
+      <Phase1TopNav cardsSummary={phase1Cards} activeSection={activeSection} onSelect={setActiveSection} />
+
+      {activeSection === "overview" ? <section className="pv2-grid pv2-grid-4">
         <MetricCard label="历史 Run" value={summary?.run_count ?? health?.history?.run_count ?? "-"} hint={health?.history?.history_root || "tests/aistock_validation/history"} tone="info" />
         <MetricCard label="覆盖率快照" value={summary?.coverage_snapshot_count ?? health?.history?.coverage_snapshot_count ?? "-"} hint={`最新行覆盖 ${pct(latestCoverageTotals.line_percent)}`} tone="success" />
         <MetricCard label="质量发现" value={findingSummary?.finding_count ?? summary?.quality?.finding_count ?? health?.quality?.finding_count ?? "-"} hint="guardrail / legacy inventory" tone="warning" />
         <MetricCard label="Bug Registry" value={bugSummary?.bug_count ?? summary?.quality?.bug_count ?? health?.quality?.bug_count ?? "-"} hint={health?.production_8001_touched ? "异常：触碰 8001" : "read_only / agent-context"} tone={health?.production_8001_touched ? "danger" : "success"} />
-      </section>
+      </section> : null}
 
-      <GitHubIssuesPanel bugSummary={bugSummary} bugs={bugs.items} />
+      {activeSection === "merge_gate" ? <MergeGatePanel mergeGate={mergeGate} /> : null}
 
-      <GitWorkspacePanel workspaceStatus={workspaceStatus} branchStatus={branchStatus} />
+      {activeSection === "issue_workflow" ? (
+        <>
+          <IssueWorkflowPanel summary={issueWorkflowSummary} items={issueWorkflow} onOpenBug={(bugId) => void openBug(bugId)} />
+        </>
+      ) : null}
 
-      <GitModuleQualityPanel commitActivity={commitActivity} moduleQuality={moduleQuality} />
-      <UiTargetCoveragePanel uiTargets={uiTargets} uiTargetSummary={uiTargetSummary} />
+      {activeSection === "github_issues" ? (
+        <>
+          <GithubSyncPanel summary={githubIssueSummary} issues={githubIssues} />
+          <GitHubIssuesPanel bugSummary={bugSummary} bugs={bugs.items} />
+        </>
+      ) : null}
 
-      <SectionCard
+      {activeSection === "branches_prs" ? (
+        <>
+          <BranchPrPanel branchDetail={branchDetailSummary} prSummary={githubPrSummary} prs={githubPrs} />
+          <GitWorkspacePanel workspaceStatus={workspaceStatus} branchStatus={branchStatus} />
+        </>
+      ) : null}
+
+      {activeSection === "modules" ? (
+        <>
+          <ModuleDetailSummaryPanel detail={moduleDetailSummary} />
+          <GitModuleQualityPanel commitActivity={commitActivity} moduleQuality={moduleQuality} />
+        </>
+      ) : null}
+      {activeSection === "features" ? <UiTargetCoveragePanel uiTargets={uiTargets} uiTargetSummary={uiTargetSummary} /> : null}
+      {activeSection === "legacy_debt" ? <LegacyDebtPanel summary={legacyDebtSummary} groups={legacyDebtGroups} /> : null}
+      {activeSection === "automation" ? <AutomationPanel automation={automationSummary} /> : null}
+
+      {activeSection === "pipeline_tests" ? <><PipelineTestsPhase1Panel summary={pipelineTestSummary} tests={pipelineTests} /><SectionCard
         title="测试计划目录"
         eyebrow="allowlisted nox entrypoints"
         action={<span className="pv2-chip">受控 Runner：allowlist only</span>}
@@ -920,9 +1301,9 @@ export default function ValidationCenterPage() {
           </table>
         </div>
         <Pagination page={runs} label="validation run pagination" onPageChange={(page) => updateFilter("page", page)} />
-      </SectionCard>
+      </SectionCard></> : null}
 
-      <SectionCard title="质量发现与 Bug Registry" eyebrow="guardrail / legacy inventory / bug agent-context">
+      {activeSection === "issue_workflow" ? <SectionCard title="质量发现与 Bug Registry" eyebrow="guardrail / legacy inventory / bug agent-context">
         <div className="pv2-grid pv2-grid-2">
           <div>
             <div className="pv2-notice pv2-notice-info">
@@ -1019,9 +1400,9 @@ export default function ValidationCenterPage() {
             <AgentContextPanel context={selectedAgentContext} />
           </SectionCard>
         </div>
-      </SectionCard>
+      </SectionCard> : null}
 
-      <div className="pv2-grid pv2-grid-main">
+      {activeSection === "pipeline_tests" ? <div className="pv2-grid pv2-grid-main">
         <SectionCard title="Run 详情" eyebrow="metadata / markdown / evidence links">
           {detailLoading ? <p className="pv2-muted">读取详情中...</p> : null}
           {selectedRun ? (
@@ -1104,7 +1485,7 @@ export default function ValidationCenterPage() {
             ]} /> : null}
           </SectionCard>
         </div>
-      </div>
+      </div> : null}
     </main>
   );
 }
