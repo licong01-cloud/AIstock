@@ -267,5 +267,3 @@ aistock-qe-archive
 2. `C:\Users\lc999\.codex\config.json`：新增同名 MCP server，供 Codex App 兼容读取。
 3. `F:\Dev\AIstock_worktrees\qe-mcp-template-archive-20260516\.mcp.json`：项目级 MCP 定义改为生产端口 `8001`。
 4. 修改前已自动备份 Codex CLI 配置，备份文件位于 `C:\Users\lc999\.codex\config.toml.bak_*_qe_mcp_prod`。
-
-
