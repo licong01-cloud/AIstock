@@ -70,3 +70,38 @@ git diff --check
 - `qe_archive_data_quality` 显示 schema version 为 `qe_archive_v2_20260516`，所有期望表和列存在且有 COMMENT。
 - 如果存在 pending outbox，仅作为 read-only smoke informational warning，不阻断本次提交。
 - 提交 feature 分支前保留中文 run record，并明确记录 dev DB schema bootstrap、生产端口影响和剩余风险。
+
+## QE 待执行实验 UI 管理台验证补充
+
+### 目标
+
+补齐 MCP 创建 QE 单次实验和自定义演进模板后的人工审查 UI。UI 必须显示所有 MCP 创建的待执行模板，允许人工打开完整配置、修改并保存到数据库；保存不得执行。只有点击执行后，才通过现有 QE 单次实验或自定义演进执行层正式运行。
+
+### 范围
+
+- 必须支持：QE 单次实验、自定义演进。
+- 暂不支持：多 alpha 架构调度、自动演进 LLM 决策调度。
+- 已有多 alpha 和自动演进研发内容可以保留，但不纳入本次 MCP UI 执行入口。
+
+### UI 验证命令
+
+```powershell
+C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m nox -s qe_template_ui -- 8011 3011
+```
+
+### L3 验证命令
+
+```powershell
+C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m nox -s qe_mcp_l3 -- 8011 3011
+```
+
+### 验收标准
+
+- `/quantevolver/templates` 能展示 MCP 创建的单次实验和自定义演进模板。
+- `/quantevolver/templates/[templateId]` 能展示和修改模板详情。
+- 保存配置只更新 `qe_execution_templates`，不创建或执行实验。
+- 修改配置后旧校验、旧审批和旧物化结果必须失效。
+- 点击执行必须依次调用保存、校验、审批、物化、执行。
+- 单次实验执行后进入现有实验历史，自定义演进执行后进入现有自动演进页面。
+- 不新增执行链路，不直接调用 scheduler，不直接写 DB。
+- 流水线通过后才能提交本地和 GitHub feature 分支。

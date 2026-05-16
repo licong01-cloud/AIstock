@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
@@ -18,6 +19,40 @@ router = APIRouter(prefix="/qe-templates", tags=["qe-templates"])
 TEMPLATE_MATERIALIZE_CONFIRM = "QE_TEMPLATE_MATERIALIZE"
 QE_EXPERIMENT_RUN_CONFIRM = "QE_EXPERIMENT_RUN"
 QE_CUSTOM_EVO_RUN_CONFIRM = "QE_CUSTOM_EVO_RUN"
+
+EDITABLE_TEMPLATE_STATUSES = {"draft", "ready_for_review", "approved"}
+CONFIG_MUTATION_FIELDS = {"config_json", "archive_policy", "archive_reason", "data_versions_json"}
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _template_update_payload(existing: dict[str, Any], request: "QETemplateUpdateRequest") -> dict[str, Any]:
+    updates = request.model_dump(exclude_unset=True)
+    if "status" in updates:
+        raise ValueError("template status must be changed through validate/approve/materialize/run/supersede endpoints")
+    if not updates:
+        return {}
+    current_status = str(existing.get("status") or "draft")
+    if current_status not in EDITABLE_TEMPLATE_STATUSES:
+        raise ValueError(f"template status does not allow editing: {current_status}")
+    if CONFIG_MUTATION_FIELDS.intersection(updates):
+        # Any operator config change invalidates prior review and runtime materialization.
+        updates.update(
+            {
+                "status": "draft",
+                "validation_json": {},
+                "approval_json": {},
+                "submitted_experiment_id": None,
+                "submitted_task_id": None,
+                "runtime_config_sha256": None,
+                "runtime_diff_json": {},
+                "actual_metrics_json": {},
+                "metric_delta_json": {},
+            }
+        )
+    return updates
 
 
 class QETemplateCreateRequest(BaseModel):
@@ -76,9 +111,22 @@ def _repo() -> QETemplateRepository:
 def list_qe_templates(
     status: str | None = Query(None),
     template_kind: str | None = Query(None),
+    created_by_type: str | None = Query(None),
+    search: str | None = Query(None),
     limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ):
-    return {"status": "success", "data": _repo().list(status=status, template_kind=template_kind, limit=limit)}
+    return {
+        "status": "success",
+        "data": _repo().list(
+            status=status,
+            template_kind=template_kind,
+            created_by_type=created_by_type,
+            search=search,
+            limit=limit,
+            offset=offset,
+        ),
+    }
 
 
 @router.post("")
@@ -102,8 +150,12 @@ def get_qe_template(template_id: str):
 @router.put("/{template_id}")
 def update_qe_template(template_id: str, request: QETemplateUpdateRequest):
     try:
-        updates = {k: v for k, v in request.model_dump().items() if v is not None}
-        return {"status": "success", "data": _repo().update(template_id, updates)}
+        repo = _repo()
+        existing = repo.get(template_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail=f"template not found: {template_id}")
+        updates = _template_update_payload(existing, request)
+        return {"status": "success", "data": repo.update(template_id, updates)}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -121,7 +173,15 @@ def validate_qe_template(template_id: str):
 @router.post("/{template_id}/approve")
 def approve_qe_template(template_id: str, request: QETemplateApprovalRequest):
     try:
-        row = _repo().update(template_id, {"status": "approved", "approval_json": request.model_dump()})
+        repo = _repo()
+        existing = repo.get(template_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail=f"template not found: {template_id}")
+        validation = validate_template_payload(str(existing.get("template_kind")), existing.get("config_json") or {})
+        if not validation["valid"]:
+            raise ValueError("template validation failed: " + "; ".join(validation["errors"]))
+        approval = {**request.model_dump(), "approved_at": _utc_now_iso(), "review_channel": "ui_or_api"}
+        row = repo.update(template_id, {"status": "approved", "validation_json": validation, "approval_json": approval})
         return {"status": "success", "data": row}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

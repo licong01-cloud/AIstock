@@ -1303,6 +1303,56 @@ def qe_archive_l3(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def qe_template_ui(session: nox.Session) -> None:
+    """Run QE template management UI tests on non-production dev ports."""
+    test_dir = ROOT / "frontend" / "tests" / "qe-templates"
+    if not test_dir.exists():
+        session.skip("QE template UI tests are not implemented yet.")
+    backend_port = session.posargs[0] if session.posargs else os.environ.get("BACKEND_PORT", "8011")
+    frontend_port = session.posargs[1] if len(session.posargs) > 1 else os.environ.get("FRONTEND_PORT", "3011")
+    session.run(
+        "python",
+        "scripts/aistock_validate.py",
+        "ports",
+        "--allow-occupied",
+        backend_port,
+        frontend_port,
+        external=True,
+    )
+    old_cwd = Path.cwd()
+    os.chdir(ROOT / "frontend")
+    try:
+        session.run(
+            "npm",
+            "exec",
+            "tsc",
+            "--",
+            "--noEmit",
+            "--incremental",
+            "false",
+            external=True,
+        )
+        session.run(
+            "npm",
+            "run",
+            "test:e2e",
+            "--",
+            "tests/qe-templates",
+            env=_env(
+                {
+                    "BACKEND_PORT": backend_port,
+                    "FRONTEND_PORT": frontend_port,
+                    "NEXT_PUBLIC_API_BASE": f"http://127.0.0.1:{backend_port}/api/v1",
+                    "PLAYWRIGHT_SKIP_WEBSERVER": "1" if _is_port_open(frontend_port) else "0",
+                }
+            ),
+            external=True,
+        )
+    finally:
+        os.chdir(old_cwd)
+
+
+@nox.session(venv_backend="none")
 def qe_mcp_l3(session: nox.Session) -> None:
     """Run QE MCP v1 local validation gates on non-production dev ports."""
     backend_port = session.posargs[0] if session.posargs else os.environ.get("BACKEND_PORT", "8011")
@@ -1345,6 +1395,9 @@ def qe_mcp_l3(session: nox.Session) -> None:
         "backend/tests/test_aistock_qe_mcp_servers.py",
         "backend/tests/test_qe_execution_templates_schema.py",
         "backend/tests/qe_templates",
+        "frontend/src/app/quantevolver/templates",
+        "frontend/src/lib/qe-templates",
+        "frontend/tests/qe-templates",
         "noxfile.py",
         "--fail-on",
         "HIGH",
@@ -1352,6 +1405,8 @@ def qe_mcp_l3(session: nox.Session) -> None:
     )
     session.notify("qe_mcp_backend")
     session.notify("qe_archive_backend")
+    if os.environ.get("QE_MCP_L3_SKIP_TEMPLATE_UI") != "1":
+        session.notify("qe_template_ui")
     session.run(
         "python",
         "scripts/aistock_validate.py",

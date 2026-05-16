@@ -109,6 +109,6 @@ class QETemplateMaterializer:
         template = self._repository.get(template_id)
         if not template:
             raise ValueError(f"template not found: {template_id}")
-        if template.get("status") not in {"approved", "ready_for_review", "draft", "materialized"}:
-            raise ValueError(f"template status does not allow materialize: {template.get('status')}")
+        if template.get("status") not in {"approved", "materialized"}:
+            raise ValueError(f"template status does not allow materialize before approval: {template.get('status')}")
         return template

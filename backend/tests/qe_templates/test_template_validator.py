@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import pytest
 
 from backend.services.qe_templates.models import QETemplateRecord
@@ -97,3 +98,59 @@ def test_single_template_materializer_surfaces_existing_generate_config_errors(m
                 "config_json": {"factor_names": ["f1"], "model_id": "bad"},
             }
         )
+
+
+def test_template_update_resets_review_when_config_changes() -> None:
+    from backend.routers.qe_templates import QETemplateUpdateRequest, _template_update_payload
+
+    updates = _template_update_payload(
+        {
+            "template_id": "qet_1",
+            "status": "approved",
+            "submitted_experiment_id": "qe_old",
+            "submitted_task_id": None,
+        },
+        QETemplateUpdateRequest(config_json={"factor_names": ["f2"], "model_id": "catboost"}),
+    )
+
+    assert updates["status"] == "draft"
+    assert updates["validation_json"] == {}
+    assert updates["approval_json"] == {}
+    assert updates["submitted_experiment_id"] is None
+    assert updates["runtime_diff_json"] == {}
+
+
+def test_template_update_rejects_executed_or_materialized_rows() -> None:
+    from backend.routers.qe_templates import QETemplateUpdateRequest, _template_update_payload
+
+    with pytest.raises(ValueError, match="does not allow editing"):
+        _template_update_payload(
+            {"template_id": "qet_1", "status": "materialized"},
+            QETemplateUpdateRequest(config_json={"factor_names": ["f2"], "model_id": "catboost"}),
+        )
+
+
+def test_template_update_rejects_direct_status_mutation() -> None:
+    from backend.routers.qe_templates import QETemplateUpdateRequest, _template_update_payload
+
+    with pytest.raises(ValueError, match="status must be changed"):
+        _template_update_payload(
+            {"template_id": "qet_1", "status": "draft"},
+            QETemplateUpdateRequest(status="approved"),
+        )
+
+
+def test_materializer_requires_manual_approval_before_materialize() -> None:
+    class FakeRepository:
+        def get(self, template_id):  # type: ignore[no-untyped-def]
+            return {
+                "template_id": template_id,
+                "template_kind": "single_experiment",
+                "title": "draft smoke",
+                "status": "ready_for_review",
+                "archive_policy": "AUTO",
+                "config_json": {"factor_names": ["f1"], "model_id": "lgb"},
+            }
+
+    with pytest.raises(ValueError, match="before approval"):
+        asyncio.run(QETemplateMaterializer(repository=FakeRepository()).materialize("qet_1"))  # type: ignore[arg-type]

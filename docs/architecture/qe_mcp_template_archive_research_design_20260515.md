@@ -1108,3 +1108,171 @@ Codex 或用户查询 QE archive 历史证据
 ```
 
 特殊实验可以选择 `archive_policy=SKIP`，宽泛历史 backfill 默认不会导入这些实验；但 skip registry 会保留原因，便于后续解释。
+
+## 17. QE 待执行实验 UI 管理台补充设计（2026-05-16）
+
+### 17.1 补充背景
+
+QE MCP v1 已经具备通过数据库模板保存单次实验和自定义演进实验配置的能力，但如果只通过 MCP 或 API 操作，人工审查入口不够清晰。为满足“由 MCP 创建实验方案、人工在 UI 中检查和修改、确认后再正式执行”的要求，需要新增一个统一 UI 管理台。该 UI 不创建新的执行链路，只管理 `qe_execution_templates` 中的待执行模板。
+
+### 17.2 本期必须支持的实验类型
+
+本期 UI 与 MCP 只支持两类 QE 实验：
+
+1. QE 单次实验：模板配置必须与现有人工单次实验配置兼容，物化时继续复用现有 `GenerateConfigRequest` / `generate_config` 路径，执行时复用现有 `run_experiment` 统一执行层。
+2. 自定义演进：模板配置必须与现有 `CustomEvolutionCreateRequest` 兼容，物化时强制 `auto_start=false`，人工点击执行后复用现有 `run_custom_evo_task` 统一执行层。
+
+本期明确不实现：
+
+1. 多 alpha 架构实验调度。已有多 alpha 相关研发和页面可以保留，但不接入本次 QE MCP UI 执行链路。
+2. 自动演进 LLM 决策调度。已有自动演进页面可以继续使用，但 MCP 暂不具备让 LLM 自动决定演进方向并直接调度的能力。
+
+未来当多 alpha 架构和自动演进模块完成统一配置层、统一执行层和完整验证后，再通过同一模板管理框架接入 MCP。
+
+### 17.3 产品目标
+
+新增 `QE 待执行实验管理台`，让操作者可以：
+
+1. 查看所有 MCP 创建的 QE 单次实验和自定义演进待执行模板。
+2. 打开模板详情，查看 MCP 给出的分析摘要、风险说明、数仓策略和完整配置。
+3. 像人工创建实验一样修改所有实验配置：页面提供关键字段表单，同时提供完整 `config_json` 编辑区覆盖所有配置字段。
+4. 点击“保存配置”时只更新数据库模板，不创建实验、不启动训练、不写运行任务。
+5. 点击“保存并执行”时，先保存当前配置，再校验、审批、物化，最后调用现有 QE 执行层。
+6. 执行后的单次实验进入现有实验历史页面，自定义演进进入现有自动演进任务页面，与人工配置实验显示一致。
+
+### 17.4 数据和状态约束
+
+MCP 创建的实验模板必须存储在 `qe_execution_templates` 表。UI 只通过 `/api/v1/qe-templates` API 读取和修改模板，不直接写数据库，不直接调用 scheduler。
+
+模板状态机保持如下边界：
+
+```text
+draft -> ready_for_review -> approved -> materialized -> run_requested
+```
+
+编辑规则：
+
+1. `draft`、`ready_for_review`、`approved` 允许人工编辑。
+2. 修改 `config_json`、`archive_policy`、`archive_reason` 或数据版本后，必须重置为 `draft`，清空旧校验、旧审批、旧物化结果和旧运行关联。
+3. `materialized`、`run_requested`、`running`、`completed`、`failed`、`cancelled`、`superseded`、`expired` 不允许原地修改配置。
+4. 已执行或已物化模板如需修改，应创建新的待执行模板，不能改写历史运行配置。
+5. 前端保存配置时不执行，执行必须由显式按钮触发。
+
+### 17.5 UI 页面设计
+
+新增页面：
+
+1. `/quantevolver/templates`：QE 待执行实验列表。
+2. `/quantevolver/templates/[templateId]`：模板详情与配置编辑。
+
+列表页能力：
+
+1. 按状态、实验类型、来源、关键字筛选模板。
+2. 展示模板 ID、标题、描述、类型、状态、数仓策略、创建来源、更新时间、已关联的实验 ID 或演进 task ID。
+3. 对已执行模板提供跳转到现有实验历史或自动演进详情的入口。
+
+详情页能力：
+
+1. 显示人工审查信息：标题、描述、MCP 分析摘要、风险说明、数仓策略和来源。
+2. 对 QE 单次实验显示实验名、模型 ID、策略 ID、label horizon、节点、因子列表等关键字段。
+3. 对自定义演进显示任务名、基础实验、节点并行度、目标描述和 loop 列表。
+4. 提供完整 `config_json` 编辑区，确保任何人工实验配置字段都可以修改。
+5. 提供“保存配置”“校验模板”“保存并执行”“废弃模板”操作。
+6. 执行成功后提供跳转现有运行详情页面的入口。
+
+### 17.6 后端接口补强
+
+`/api/v1/qe-templates` 需要支持 UI 管理台使用：
+
+1. `GET /qe-templates` 支持 `status`、`template_kind`、`created_by_type`、`search`、`limit`、`offset` 筛选。
+2. `PUT /qe-templates/{template_id}` 只允许编辑未物化、未执行的模板。
+3. 配置修改后必须自动撤销旧校验、旧审批和旧物化结果。
+4. `POST /qe-templates/{template_id}/approve` 必须基于当前配置重新校验，通过后才能审批。
+5. `POST /qe-templates/{template_id}/materialize` 必须要求模板已审批。
+6. `POST /qe-templates/{template_id}/run` 必须继续使用现有 QE 单次实验或自定义演进执行层。
+
+### 17.7 验证方案
+
+本次新增功能必须在提交前完成以下验证。所有验证只允许使用开发端口 `8011/3011` 或 `8012/3012`，禁止触碰生产 `8001/3000`。
+
+#### 17.7.1 后端单元与合约验证
+
+命令：
+
+```powershell
+C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m nox -s qe_mcp_backend
+C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m pytest backend/tests/qe_templates -q -p no:cacheprovider
+```
+
+验收标准：
+
+1. MCP 创建模板后只保存到数据库，不直接执行。
+2. 配置更新会重置 `status= draft`、清空 `validation_json`、`approval_json`、`submitted_experiment_id`、`submitted_task_id` 和 runtime diff。
+3. 已物化或已执行模板不可原地修改。
+4. 直接修改状态必须被拒绝，状态只能通过 validate/approve/materialize/run/supersede 端点变化。
+5. 未审批模板不能物化。
+6. 多 alpha 模板继续被拒绝，自定义演进空 loop 继续被拒绝。
+
+#### 17.7.2 前端类型与 UI E2E 验证
+
+命令：
+
+```powershell
+C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m nox -s qe_template_ui -- 8011 3011
+```
+
+验收标准：
+
+1. `/quantevolver/templates` 可以展示 MCP 创建的 QE 单次实验和自定义演进模板。
+2. 列表页可以按状态、类型、来源、搜索关键字筛选。
+3. `/quantevolver/templates/[templateId]` 可以打开完整详情。
+4. 单次实验模板可以修改模型、因子、策略、label horizon、节点和完整 JSON 配置。
+5. 自定义演进模板可以查看 loop 列表，并通过完整 JSON 修改所有 loop 配置。
+6. 点击“保存配置”只调用模板更新接口，不调用执行接口。
+7. 点击“保存并执行”按顺序调用保存、校验、审批、物化、执行。
+8. 单次实验执行请求使用 `QE_EXPERIMENT_RUN` 确认 token。
+9. 自定义演进执行请求使用 `QE_CUSTOM_EVO_RUN` 确认 token。
+10. 页面无 console error、page error 和意外 4xx/5xx。
+
+#### 17.7.3 L3 流水线验证
+
+命令：
+
+```powershell
+C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m nox -s qe_mcp_l3 -- 8011 3011
+```
+
+验收标准：
+
+1. guardrail 扫描新增后端、MCP、UI、测试和文档，无 HIGH 级问题。
+2. `qe_mcp_backend` 通过。
+3. `qe_archive_backend` 通过。
+4. `qe_template_ui` 通过。
+5. 验证记录写入 `tests/aistock_validation/history/qe_mcp/`。
+6. 验证期间不重启、不停止、不调用生产 `8001/3000`。
+
+#### 17.7.4 提交和远端一致性验证
+
+提交前必须执行：
+
+```powershell
+git diff --check
+git status -sb
+```
+
+提交和推送后必须执行：
+
+```powershell
+git fetch origin codex/qe-mcp-template-archive-20260516
+git rev-parse HEAD
+git rev-parse origin/codex/qe-mcp-template-archive-20260516
+git status -sb
+```
+
+验收标准：
+
+1. 本地工作区干净。
+2. 本地 feature 分支与 GitHub 远端 feature 分支 HEAD 完全一致。
+3. 不合入 main。
+4. 不修改 root 工作区或其他分支的非本任务文件。
+5. 中文设计方案、验证矩阵和验证记录随代码一起提交。

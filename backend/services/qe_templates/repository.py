@@ -51,8 +51,18 @@ class QETemplateRepository:
                 cur.execute(sql, [self._adapt(col, row.get(col)) for col in columns])
                 return self._row(cur)
 
-    def list(self, *, status: str | None = None, template_kind: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+    def list(
+        self,
+        *,
+        status: str | None = None,
+        template_kind: str | None = None,
+        created_by_type: str | None = None,
+        search: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
         limit = max(1, min(int(limit or 100), 500))
+        offset = max(0, int(offset or 0))
         filters: list[str] = []
         params: list[Any] = []
         if status:
@@ -61,11 +71,27 @@ class QETemplateRepository:
         if template_kind:
             filters.append("template_kind = %s")
             params.append(template_kind)
+        if created_by_type:
+            filters.append("created_by_type = %s")
+            params.append(created_by_type)
+        if search:
+            like = f"%{search.strip()}%"
+            filters.append(
+                "("
+                "template_id ILIKE %s OR title ILIKE %s OR COALESCE(description, '') ILIKE %s "
+                "OR COALESCE(created_by_name, '') ILIKE %s OR COALESCE(submitted_experiment_id, '') ILIKE %s "
+                "OR COALESCE(submitted_task_id, '') ILIKE %s"
+                ")"
+            )
+            params.extend([like, like, like, like, like, like])
         where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
-        params.append(limit)
+        params.extend([limit, offset])
         with self._connection_provider() as conn:
             with conn.cursor() as cur:
-                cur.execute(f"SELECT * FROM qe_execution_templates {where_sql} ORDER BY updated_at DESC LIMIT %s", params)
+                cur.execute(
+                    f"SELECT * FROM qe_execution_templates {where_sql} ORDER BY updated_at DESC LIMIT %s OFFSET %s",
+                    params,
+                )
                 return self._rows(cur)
 
     def get(self, template_id: str) -> dict[str, Any] | None:
