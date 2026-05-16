@@ -1,5 +1,5 @@
 {
-  "_comment": "Project-level MCP server registration. Servers are opt-in per developer/client. QE MCP servers default to dev backend 8011 and must stay loopback-only.",
+  "_comment": "项目级 MCP server 注册文件。当前按用户要求默认指向本机生产后端 8001；各客户端仍需显式启用。QE MCP 只能使用 loopback 地址。",
   "mcpServers": {
     "aistock-validation": {
       "command": "python",
@@ -7,7 +7,7 @@
         "scripts/aistock_mcp_server.py"
       ],
       "env": {
-        "AISTOCK_VALIDATION_BASE_URL": "http://127.0.0.1:8011/api/v1/validation"
+        "AISTOCK_VALIDATION_BASE_URL": "http://127.0.0.1:8001/api/v1/validation"
       }
     },
     "aistock-qe-experiment": {
@@ -16,7 +16,7 @@
         "scripts/aistock_qe_experiment_mcp_server.py"
       ],
       "env": {
-        "AISTOCK_QE_EXPERIMENT_BASE_URL": "http://127.0.0.1:8011/api/v1"
+        "AISTOCK_QE_EXPERIMENT_BASE_URL": "http://127.0.0.1:8001/api/v1"
       }
     },
     "aistock-qe-archive": {
@@ -25,7 +25,7 @@
         "scripts/aistock_qe_archive_mcp_server.py"
       ],
       "env": {
-        "AISTOCK_QE_ARCHIVE_BASE_URL": "http://127.0.0.1:8011/api/v1/qe-archive"
+        "AISTOCK_QE_ARCHIVE_BASE_URL": "http://127.0.0.1:8001/api/v1/qe-archive"
       }
     }
   }
