@@ -1,0 +1,128 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-044",
+  "title": "QE MCP servers fail stdio startup when launched by direct script path",
+  "description": "Expected: Codex/Codex App MCP startup should initialize both aistock-qe-experiment and aistock-qe-archive successfully and expose their FastMCP tools when the configured cwd is the AIstock repo/worktree.\nActual: Both MCP clients close during initialize. Direct reproduction shows scripts/aistock_qe_experiment_mcp_server.py and scripts/aistock_qe_archive_mcp_server.py crash before FastMCP handshake with ModuleNotFoundError: No module named 'scripts.aistock_mcp_common'. The direct script launch puts the scripts directory, not the repo root, on sys.path, so absolute imports from scripts.* fail.",
+  "module": "qe_mcp",
+  "severity": "P1",
+  "risk_area": "unspecified",
+  "status": "in_progress",
+  "trigger_condition": {
+    "scenario": "reported_via_mcp",
+    "files": [
+      "scripts/aistock_qe_experiment_mcp_server.py",
+      "scripts/aistock_qe_archive_mcp_server.py",
+      "scripts/aistock_mcp_common.py",
+      ".mcp.json",
+      "docs/process/qe_mcp_server_setup_20260516.md"
+    ]
+  },
+  "reproduce_command": "C:/Users/lc999/miniconda3/envs/AIstock/python.exe F:/Dev/AIstock_worktrees/qe-mcp-template-archive-20260516/scripts/aistock_qe_experiment_mcp_server.py",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:scripts/aistock_qe_experiment_mcp_server.py",
+    "file:scripts/aistock_qe_archive_mcp_server.py",
+    "file:scripts/aistock_mcp_common.py",
+    "file:.mcp.json",
+    "file:docs/process/qe_mcp_server_setup_20260516.md"
+  ],
+  "fingerprint": "716b4c0f7e2db065",
+  "assigned_agent": "codex-app",
+  "fix_branch": "bug/BUG-044-qe-mcp-stdio-startup",
+  "fix_commit": null,
+  "verification_run_id": "local-20260516-qe-mcp-stdio-startup",
+  "created_at": "2026-05-16T11:23:43Z",
+  "first_seen_at": "2026-05-16T11:23:43Z",
+  "last_seen_at": "2026-05-16T11:26:43Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-16T11:23:43Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "scripts/aistock_qe_experiment_mcp_server.py",
+    "scripts/aistock_qe_archive_mcp_server.py",
+    "scripts/aistock_mcp_common.py",
+    ".mcp.json",
+    "docs/process/qe_mcp_server_setup_20260516.md",
+    "backend/tests/test_aistock_qe_mcp_servers.py",
+    "tests/aistock_validation/bugs/20260516_BUG-044-qe-mcp-servers-fail-stdio-startup-when-launched-by-direct-sc.json"
+  ],
+  "suspected_modules": [
+    "scripts/aistock_qe_experiment_mcp_server.py",
+    "scripts/aistock_qe_archive_mcp_server.py",
+    "scripts/aistock_mcp_common.py",
+    ".mcp.json",
+    "docs/process/qe_mcp_server_setup_20260516.md",
+    "backend/tests/test_aistock_qe_mcp_servers.py",
+    "tests/aistock_validation/bugs/20260516_BUG-044-qe-mcp-servers-fail-stdio-startup-when-launched-by-direct-sc.json"
+  ],
+  "required_verification": [
+    "python -m py_compile scripts/aistock_qe_experiment_mcp_server.py scripts/aistock_qe_archive_mcp_server.py scripts/aistock_mcp_common.py",
+    "python -m pytest backend/tests/test_aistock_qe_mcp_servers.py -q -p no:cacheprovider",
+    "MCP stdio direct-script initialize/list_tools self-test for aistock-qe-experiment and aistock-qe-archive",
+    "MCP stdio module-mode initialize/list_tools self-test for aistock-qe-experiment and aistock-qe-archive"
+  ],
+  "closure_requirements": [
+    "Both QE MCP servers initialize successfully when launched by direct script path from config.toml/config.json style args.",
+    "Both QE MCP servers still initialize successfully with python -m scripts.<server> module args.",
+    "No production FastAPI 8001 restart, production DB write, or QE runtime execution is required for this fix.",
+    "GitHub Issue #26 and local BUG-044 registry entry are updated with fix and verification evidence."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-16T11:23:43Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Reported via aistock_mcp_server.report_bug. Comments: 4"
+    },
+    {
+      "timestamp": "2026-05-16T11:23:43Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Observed startup warning: MCP startup incomplete (failed: aistock-qe-archive, aistock-qe-experiment)."
+    },
+    {
+      "timestamp": "2026-05-16T11:23:43Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "MCP client self-test with direct script args reproduced connection closed during initialize for both servers."
+    },
+    {
+      "timestamp": "2026-05-16T11:23:43Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Module startup works: python -m scripts.aistock_qe_experiment_mcp_server exposes 22 tools and python -m scripts.aistock_qe_archive_mcp_server exposes 15 tools."
+    },
+    {
+      "timestamp": "2026-05-16T11:23:43Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Production FastAPI port 8001 and production DB were not restarted or touched during diagnosis."
+    },
+    {
+      "timestamp": "2026-05-16T11:26:43Z",
+      "actor": "codex-app",
+      "action": "assigned",
+      "note": "GitHub mirror manually created as https://github.com/licong01-cloud/AIstock/issues/26 because MCP live GitHub sync lacked GITHUB_REPOSITORY in its environment. Starting issue-flow fix in dedicated worktree/branch."
+    },
+    {
+      "timestamp": "2026-05-16T11:26:56Z",
+      "actor": "codex-app",
+      "action": "github_sync",
+      "note": "Manual GitHub mirror created with gh CLI after MCP sync failed because GITHUB_REPOSITORY was unavailable in MCP environment."
+    },
+    {
+      "timestamp": "2026-05-16T11:29:32Z",
+      "actor": "codex-app",
+      "action": "scope_updated",
+      "note": "Added targeted QE MCP server test file and BUG-044 registry file to allowed_write_scope; recorded required verification and closure requirements."
+    },
+    {
+      "timestamp": "2026-05-16T11:31:34Z",
+      "actor": "codex-app",
+      "action": "verification_passed",
+      "note": "py_compile passed for both QE MCP servers and common helper; backend/tests/test_aistock_qe_mcp_servers.py passed 13 tests; direct-script and module-mode MCP initialize/list_tools self-test passed for both servers."
+    }
+  ],
+  "github_issue_number": 26,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/26"
+}

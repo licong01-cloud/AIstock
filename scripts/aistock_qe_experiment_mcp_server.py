@@ -7,7 +7,14 @@ QE schedulers, backend DB repositories, or RD-Agent worker paths.
 from __future__ import annotations
 
 import os
+import sys
+from pathlib import Path
 from typing import Any
+
+if __package__ in {None, ""}:
+    repo_root = str(Path(__file__).resolve().parents[1])
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
 
 try:
     from mcp.server.fastmcp import FastMCP
