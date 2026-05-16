@@ -127,8 +127,16 @@
       "actor": "codex-app",
       "action": "status_changed",
       "note": "Fixed in dedicated worktree F:/Dev/AIstock_worktrees/bug-044-qe-mcp-stdio-startup. Direct script and module-mode MCP initialize/list_tools self-tests passed for both QE MCP servers; pytest passed 13 tests. GitHub mirror #26 updated separately via gh CLI."
+    },
+    {
+      "timestamp": "2026-05-16T11:34:42Z",
+      "actor": "codex-app",
+      "action": "pr_created",
+      "note": "Created GitHub PR #27 for BUG-044 fix branch; PR links GitHub Issue #26 and remains unmerged pending review."
     }
   ],
   "github_issue_number": 26,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/26"
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/26",
+  "github_pr_number": 27,
+  "github_pr_url": "https://github.com/licong01-cloud/AIstock/pull/27"
 }
