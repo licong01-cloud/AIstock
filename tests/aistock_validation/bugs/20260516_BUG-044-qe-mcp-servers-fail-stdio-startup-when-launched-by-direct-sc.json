@@ -6,7 +6,7 @@
   "module": "qe_mcp",
   "severity": "P1",
   "risk_area": "unspecified",
-  "status": "in_progress",
+  "status": "fixed",
   "trigger_condition": {
     "scenario": "reported_via_mcp",
     "files": [
@@ -29,12 +29,12 @@
   "fingerprint": "716b4c0f7e2db065",
   "assigned_agent": "codex-app",
   "fix_branch": "bug/BUG-044-qe-mcp-stdio-startup",
-  "fix_commit": null,
+  "fix_commit": "bf24029",
   "verification_run_id": "local-20260516-qe-mcp-stdio-startup",
   "created_at": "2026-05-16T11:23:43Z",
   "first_seen_at": "2026-05-16T11:23:43Z",
-  "last_seen_at": "2026-05-16T11:26:43Z",
-  "fixed_at": null,
+  "last_seen_at": "2026-05-16T11:32:11Z",
+  "fixed_at": "2026-05-16T11:32:11Z",
   "submitted_at": "2026-05-16T11:23:43Z",
   "closed_at": null,
   "allowed_write_scope": [
@@ -121,6 +121,12 @@
       "actor": "codex-app",
       "action": "verification_passed",
       "note": "py_compile passed for both QE MCP servers and common helper; backend/tests/test_aistock_qe_mcp_servers.py passed 13 tests; direct-script and module-mode MCP initialize/list_tools self-test passed for both servers."
+    },
+    {
+      "timestamp": "2026-05-16T11:32:11Z",
+      "actor": "codex-app",
+      "action": "status_changed",
+      "note": "Fixed in dedicated worktree F:/Dev/AIstock_worktrees/bug-044-qe-mcp-stdio-startup. Direct script and module-mode MCP initialize/list_tools self-tests passed for both QE MCP servers; pytest passed 13 tests. GitHub mirror #26 updated separately via gh CLI."
     }
   ],
   "github_issue_number": 26,
