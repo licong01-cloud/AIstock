@@ -13,12 +13,15 @@
 
 | 决策 | 选择 | 理由 |
 |------|------|------|
-| MCP 入口 | **统一网关（1 个进程）** | 50MB vs 8×50MB；共享 client/confirm/sanitize |
-| 模块加载 | **动态按需（--profile/--modules）** | Token 只含已加载模块（1.4%~7.5% context） |
-| 代码组织 | **`backend/mcp/` 统一模块** | 集中管理，统一测试 |
-| 研究流水线 | **AIstock 一级服务模块** | 与 QE/Archive/Selection 同级 |
-| 资产库 | **合并在 research MCP 模块中** | 研究产出的自然下游 |
-| 代码 vs 资产 | **严格分离** | 代码进 git，资产进 DB + 文件存储 |
+| MCP 平台 | **统一平台骨架 + 可选统一 gateway + 旧入口并存过渡** | 新模块原生使用平台，旧模块稳定后再迁移 |
+| 首期入口 | **Research MCP 独立暴露（`--modules=research`）** | 不影响现有 3 个稳定 MCP |
+| 模块加载 | **动态按需（--profile/--modules）** | Token 只含已加载模块 |
+| 代码组织 | **`backend/mcp/` 统一模块** | Research 从第一天就在平台上，避免二次迁移 |
+| 研究流水线 | **研究编排层，不是执行引擎或资产库** | 通过现有 service/API 执行，引用现有资产库 |
+| 资产引用 | **引用现有 factor_catalog / model_registry / qe_archive** | 不新建平行资产库 |
+| QE 验证 | **通过 qe_templates + 标准 QE 后端执行** | 不自建 QE 执行链路 |
+| 旧 MCP 迁移 | **首期不迁移，等 Research 稳定后逐个迁移** | 不把新平台风险传递给稳定路径 |
+| Paper Trading | **不纳入首期** | 避免跨入 Paper v2 / trading_core 敏感边界 |
 
 ### 1.2 系统架构图
 
@@ -71,8 +74,8 @@ backend/mcp/                              ← MCP 统一网关模块
 │   ├── validation_helpers.py             ← 迁移：bug lifecycle + github sync
 │   ├── qe_experiment.py                  ← 迁移自 scripts/aistock_qe_experiment_mcp_server.py
 │   ├── qe_archive.py                     ← 迁移自 scripts/aistock_qe_archive_mcp_server.py
-│   ├── research.py                       ← 新增：研究流水线 + 资产库
-│   └── paper_trading.py                  ← Phase 3 新增
+│   ├── research.py                       ← 新增：研究流水线（首期唯一新模块）
+│   └── paper_trading.py                  ← 后续独立 issue，不纳入首期
 ├── tests/
 │   ├── __init__.py
 │   ├── conftest.py                       ← 共享 fixtures（mock registry/client）
@@ -413,116 +416,72 @@ def register(registry: ModuleRegistry):
 
 ## 4. 现有 MCP Server 迁移方案
 
-### 4.1 迁移对照表
+### 4.1 首期策略：不迁移，只新增
 
-| 现有文件 | 迁移目标 | 改动量 | 兼容策略 |
-|---------|---------|--------|---------|
-| `scripts/aistock_mcp_common.py` (110行) | `backend/mcp/common.py` | 重写（增强） | 旧文件保留，import 新模块 |
-| `scripts/aistock_mcp_server.py` (1675行) | `backend/mcp/modules/validation.py` + `validation_helpers.py` | 拆分 | 旧文件改为薄入口 |
-| `scripts/aistock_qe_experiment_mcp_server.py` (191行) | `backend/mcp/modules/qe_experiment.py` | 1:1 迁移 | 旧文件改为薄入口 |
-| `scripts/aistock_qe_archive_mcp_server.py` (122行) | `backend/mcp/modules/qe_archive.py` | 1:1 迁移 | 旧文件改为薄入口 |
-
-### 4.2 迁移步骤（保证零停机）
-
-**Phase 1: 并行运行（新旧共存）**
+**首期（Phase 1-5）不迁移任何现有 MCP server。** 现有 3 个 server 继续使用当前已验证脚本：
 
 ```
-Step 1: 创建 backend/mcp/ 目录结构
-Step 2: 实现 gateway.py + registry.py + common.py
-Step 3: 实现 research 模块（新功能）
-Step 4: 创建 scripts/aistock_mcp_gateway.py 薄入口
-Step 5: 在 .mcp.json 中添加 aistock-research（新 server，独立入口）
-Step 6: 验证新 research server 工作正常
+aistock-validation      → scripts/aistock_mcp_server.py          (不动)
+aistock-qe-experiment   → scripts/aistock_qe_experiment_mcp_server.py  (不动)
+aistock-qe-archive      → scripts/aistock_qe_archive_mcp_server.py    (不动)
+aistock-research        → python -m backend.mcp.gateway --modules=research  (新增)
 ```
 
-此时 `.mcp.json` 有 4 个 server（3 旧 + 1 新），互不影响。
+Research MCP 从第一天就开发在 `backend/mcp/` 统一平台上，但只以独立入口暴露。
 
-**Phase 2: 迁移现有模块**
+### 4.2 后续迁移顺序（Phase 6-8，独立 issue）
 
-```
-Step 7: 将 qe_experiment 逻辑迁移到 backend/mcp/modules/qe_experiment.py
-Step 8: 将 qe_archive 逻辑迁移到 backend/mcp/modules/qe_archive.py
-Step 9: 将 validation 逻辑迁移到 backend/mcp/modules/validation.py + helpers
-Step 10: 验证所有模块通过 gateway 加载后行为一致
-Step 11: 更新 .mcp.json 为统一入口
-Step 12: 旧 scripts/ 文件改为 fallback 入口（import 新模块）
-```
+等 Research Pipeline + QE shadow 闭环稳定后，逐个迁移：
 
-**Phase 3: 清理**
+| Phase | 迁移目标 | 理由 |
+|-------|---------|------|
+| 6 | `qe_archive` → `backend/mcp/modules/qe_archive.py` | 最简单（15 tools，无复杂 helper） |
+| 7 | `qe_experiment` → `backend/mcp/modules/qe_experiment.py` | 中等（22 tools，有 confirm） |
+| 8 | `validation` → `backend/mcp/modules/validation.py` + `validation_helpers.py` | 最复杂（19 tools + 48 helpers） |
 
-```
-Step 13: 确认所有用户/Codex 已切换到新入口
-Step 14: 删除旧 scripts/ 中的 MCP 实现代码（保留薄入口）
-Step 15: 更新文档和测试
-```
+每个迁移必须：
+- 独立 issue + 独立分支
+- 保留旧入口作为 fallback（至少一个版本周期）
+- 通过 tool schema parity 测试（名称、参数、行为完全一致）
+- 通过 MCP stdio contract 测试（initialize、list_tools）
 
-### 4.3 旧文件 Fallback 入口（迁移期间保留）
+### 4.3 `.mcp.json` 首期形态
 
-```python
-# scripts/aistock_qe_experiment_mcp_server.py（迁移后）
-"""Fallback 入口 — 实际逻辑已迁移到 backend/mcp/modules/qe_experiment.py"""
-from backend.mcp.gateway import create_gateway
-mcp = create_gateway(["qe_experiment"])
-if __name__ == "__main__":
-    mcp.run()
-```
-
-### 4.4 `.mcp.json` 演进
-
-**Phase 1（新旧共存）：**
 ```json
 {
   "mcpServers": {
-    "aistock-validation": {"command": "python", "args": ["scripts/aistock_mcp_server.py"]},
-    "aistock-qe-experiment": {"command": "python", "args": ["scripts/aistock_qe_experiment_mcp_server.py"]},
-    "aistock-qe-archive": {"command": "python", "args": ["scripts/aistock_qe_archive_mcp_server.py"]},
-    "aistock-research": {"command": "python", "args": ["-m", "backend.mcp.gateway", "--modules=research"]}
-  }
-}
-```
-
-**Phase 2（统一入口）：**
-```json
-{
-  "mcpServers": {
-    "aistock": {
+    "aistock-validation": {
       "command": "python",
-      "args": ["-m", "backend.mcp.gateway", "--profile=full"],
+      "args": ["scripts/aistock_mcp_server.py"],
+      "env": {"AISTOCK_VALIDATION_BASE_URL": "http://127.0.0.1:8001/api/v1/validation"}
+    },
+    "aistock-qe-experiment": {
+      "command": "python",
+      "args": ["scripts/aistock_qe_experiment_mcp_server.py"],
+      "env": {"AISTOCK_QE_EXPERIMENT_BASE_URL": "http://127.0.0.1:8001/api/v1"}
+    },
+    "aistock-qe-archive": {
+      "command": "python",
+      "args": ["scripts/aistock_qe_archive_mcp_server.py"],
+      "env": {"AISTOCK_QE_ARCHIVE_BASE_URL": "http://127.0.0.1:8001/api/v1/qe-archive"}
+    },
+    "aistock-research": {
+      "command": "python",
+      "args": ["scripts/aistock_mcp_gateway.py", "--modules=research"],
       "env": {"AISTOCK_BASE_URL": "http://127.0.0.1:8001/api/v1"}
     }
   }
 }
 ```
 
-### 4.5 Validation Server 特殊处理
+### 4.4 统一 API Client 设计要点
 
-Validation server 有 48 个 private helper（bug lifecycle + GitHub sync），是最复杂的迁移：
-
-```
-scripts/aistock_mcp_server.py (1675 行)
-  ├── 19 个 @mcp.tool() 函数（~300 行）→ backend/mcp/modules/validation.py
-  ├── ValidationCenterClient（~50 行）→ 用 AIstockApiClient(unwrap_data=True) 替代
-  ├── Bug lifecycle helpers（~800 行）→ backend/mcp/modules/validation_helpers.py
-  └── GitHub sync helpers（~500 行）→ backend/mcp/modules/validation_helpers.py
-```
-
-**关键兼容点**：
-- `ValidationCenterClient` 会解包 `{"data": ...}` envelope → 在 `AIstockApiClient` 中用 `unwrap_data=True` 参数实现
-- Bug 文件写入路径 `tests/aistock_validation/bugs/` → 保持不变
-- GitHub token 从环境变量读取 → 保持不变
-
-### 4.6 迁移验证清单
-
-| # | 验证项 | 方法 |
-|---|--------|------|
-| V1 | 所有 56 个现有 tool 在新 gateway 中可调用 | 逐个 smoke test |
-| V2 | Tool 函数签名完全不变 | 对比旧/新 tool schema |
-| V3 | 确认机制行为一致 | 测试 confirm token 拒绝/通过 |
-| V4 | Bug 文件写入路径不变 | 写入后检查文件位置 |
-| V5 | GitHub Issue 同步正常 | 创建测试 issue |
-| V6 | QE 任务提交/停止正常 | 提交+停止一个测试任务 |
-| V7 | Archive 查询正常 | 查询历史 runs |
-| V8 | 旧入口 fallback 可用 | 用旧 scripts/ 启动验证 |
+`AIstockApiClient` 必须支持：
+- 不同 response envelope 策略（validation 返回 `{"data":...}`，QE 返回混合形态）
+- `trust_env=False` + loopback-only 强制
+- 可注入 `httpx.MockTransport` 用于测试
+- env_name 友好错误提示
+- `scripts/aistock_mcp_gateway.py` 薄入口包含 repo-root bootstrap（避免 import 失败）
 
 ---
 
@@ -625,46 +584,48 @@ CREATE INDEX idx_rp_log_exp_time ON research_pipeline.execution_log(experiment_i
 ### 5.2 领域流水线（Phase 1: HMM + 事件信号）
 
 **HMM Risk Gate Pipeline stages:**
-1. `artifact_gen` — 调用 `precompute_hmm_risk_gate.py` 生成 artifact
-2. `offline_validation` — 调用 `validate_hmm_risk_gate.py` 验证前向收益
+1. `artifact_gen` — 通过 HMM training service API 生成 risk gate artifact
+2. `offline_validation` — 调用验证脚本，计算前向收益 spread
 3. `portfolio_simulation` — 运行组合模拟对比
-4. `qe_shadow` — 提交 QE 4-arm 任务，等待结果
-5. `promotion` — 人工确认晋升（需 issue_url）
+4. `qe_shadow` — 通过 `qe_templates` 创建受控 QE 模板 → materialize → run
+5. `comparison` — 从 `qe_archive` 读取结果，与 baseline 对比，写 verdict
+6. `promotion` — 人工确认晋升（需 issue_url）
 
 **Event Signal Pipeline stages:**
-1. `signal_compute` — 计算事件信号因子
-2. `ic_validation` — IC/RankIC 独立验证
-3. `qe_overlay` — QE overlay 回测
-4. `promotion` — 人工确认晋升
+1. `signal_compute` — 通过 event_signal service 计算信号因子
+2. `ic_validation` — 复用现有 IC 计算服务
+3. `qe_overlay` — 通过 `qe_templates` 提交 overlay 回测
+4. `comparison` — 从 `qe_archive` 读取结果
+5. `promotion` — 人工确认晋升
+
+**关键原则**：
+- 所有执行类动作走现有 FastAPI endpoint（不自建执行链路）
+- QE shadow 通过 `qe_templates` API（与 UI 同源）
+- 结果从 `qe_archive` 读取（不直接查远端节点）
+- 不直接调 RD-Agent 或 QE scheduler
 
 ### 5.3 Research MCP 模块 Tools
 
 ```python
-# backend/mcp/modules/research.py — 18 tools
+# backend/mcp/modules/research.py — 12 tools
+# Research Pipeline 是编排层，不自建资产库。
+# 因子/模型/算法的注册通过现有 QE/model_registry API 完成。
 
 # 实验管理 (6)
 research_create_experiment      # 创建实验
 research_list_experiments       # 列表
-research_get_experiment         # 详情
-research_run_stage              # 执行 stage
-research_promote                # 晋升
+research_get_experiment         # 详情（含 stages/artifacts/comparisons）
+research_run_stage              # 执行 stage（需 confirm）
+research_promote                # 晋升（需 issue_url + confirm）
 research_reject                 # 拒绝
 
-# 资产库 (6)
-research_factor_register        # 因子入库
-research_factor_query           # 因子查询
-research_model_register         # 模型入库
-research_model_query            # 模型查询
-research_algo_register          # 执行算法入库
-research_algo_query             # 执行算法查询
-
 # 辅助 (6)
-research_get_stage_result       # Stage 结果
+research_get_stage_result       # Stage 结果和指标
 research_compare_baseline       # 基线对比
-research_create_issue           # 创建 GitHub Issue
-research_list_artifacts         # 资产列表
-research_retry_stage            # 重试 stage
-research_get_pipeline_types     # 可用流水线类型
+research_create_issue           # 从发现创建 GitHub Issue
+research_list_artifacts         # 资产引用列表
+research_retry_stage            # 重试失败 stage
+research_get_pipeline_types     # 可用流水线类型和默认 criteria
 ```
 
 ---
@@ -677,7 +638,7 @@ research_get_pipeline_types     # 可用流水线类型
 
 ```
 分支名: feature/mcp-gateway-research-pipeline-20260518
-基于: main (ca2cc42)
+基于: main (d4b0b61)
 ```
 
 **分支内容**（全部在此分支完成）：
@@ -740,9 +701,9 @@ research/factor/momentum-decay-20260610
 
 | # | 项目 |
 |---|------|
-| F1 | Gateway 启动正常，`--profile=full` 加载所有模块 |
-| F2 | 所有 56 个现有 tool 在新 gateway 中行为一致 |
-| F3 | Research 模块 18 个 tools 可调用 |
+| F1 | Gateway 启动正常，`--modules=research` 加载 research 模块 |
+| F2 | Research 模块 tools 可调用（通过 MCP stdio contract） |
+| F3 | 现有 3 个 MCP server 不受影响（未修改） |
 | F4 | 实验状态机正确流转 |
 | F5 | Stage 执行引擎按序调度 |
 | F6 | 自动验收判断正确 |
@@ -788,16 +749,20 @@ research/factor/momentum-decay-20260610
 
 ## 8. 实施计划
 
-| Phase | 天数 | 内容 | 产出 |
-|-------|------|------|------|
-| 1a | 2 | gateway + registry + common + profiles | MCP 基础设施 |
-| 1b | 3 | research 模块 + research_pipeline 服务 | 研究流水线核心 |
-| 1c | 2 | HMM + event signal pipeline 实现 | 两个领域流水线 |
-| 1d | 2 | API router + 测试 + dogfooding | 验收通过 |
-| 2a | 2 | 迁移 qe_experiment + qe_archive 模块 | 2 个模块迁移 |
-| 2b | 3 | 迁移 validation 模块（最复杂） | validation 迁移 |
-| 2c | 1 | 更新 .mcp.json 为统一入口 | 切换完成 |
-| 3 | 2 | paper_trading 模块 + 清理旧文件 | 全功能 |
+| Phase | 目标 | 范围 | 明确不做 |
+|-------|------|------|----------|
+| 0 | 设计确认 + 基线 | 更新 main、确认 write scope、生产影响声明 | 不写业务代码 |
+| 1 | MCP 平台骨架 | `backend/mcp/common.py`、`registry.py`、`gateway.py`、`profiles.py`、`scripts/aistock_mcp_gateway.py` | 不迁移旧 MCP |
+| 2 | Research MCP 独立入口 | `backend/mcp/modules/research.py`、`.mcp.json` 新增 `aistock-research` | 不替换现有 MCP |
+| 3 | Research Pipeline 后端 | `backend/services/research_pipeline/`、`backend/routers/research_pipeline.py`、DB schema | 不自建平行资产库 |
+| 4 | Offline dogfooding | HMM/event_signal 离线 stage、artifact_ref、comparison | 不跑生产 QE |
+| 5 | QE shadow 闭环 | 调 `qe_templates`、运行 QE dev/shadow、查询 `qe_archive`、写 verdict | 不直接调 RD-Agent |
+| 6 | 旧 MCP 迁移试点 | 迁移 `qe_archive` module 到 gateway，保留旧入口 | 不迁移 validation |
+| 7 | 旧 MCP 全量迁移 | 迁移 `qe_experiment`，最后迁移 `validation` | 未通过 parity 前不切默认 |
+| 8 | 默认统一入口 | `.mcp.json` 推荐 `aistock --profile=...` | 旧入口至少保留一个版本周期 |
+
+**首期合入范围**：Phase 0-5（Research Pipeline 完整可用）
+**后续独立 issue**：Phase 6-8（旧 MCP 迁移）
 
 **总计**: Phase 1 约 9 天，Phase 2 约 6 天，Phase 3 约 2 天。
 
@@ -1038,260 +1003,3 @@ Layer 5: 迁移回归测试（对比新旧 MCP 行为）
 □ 关闭 GitHub Issue
 □ 合入后验证: API 200 + MCP 启动 + 旧入口可用
 ```
-
----
-
-## 12. Codex App 审查补充：折中落地方案与待整合修订点
-
-> 本节为 2026-05-18 Codex App 基于当前 AIstock 代码状态做出的设计审查补充，供后续由 Claude Code 重新整合正文。目标不是推翻统一 MCP 平台方向，而是把“统一平台”和“旧 MCP 迁移”解耦，避免 Research Pipeline 首期与现有稳定 MCP 路径互相放大风险。
-
-### 12.1 总体结论
-
-当前方案的战略方向可以保留：AIstock 最终应有统一 MCP 平台、统一工具注册、统一 loopback HTTP client、统一 confirm/sanitize/error 策略，并让 Research Pipeline 通过 QE 实验和 qe_archive 形成可复现验证闭环。
-
-但实施顺序建议调整为：
-
-1. **先统一平台骨架，不先统一所有入口**。
-2. **Research Pipeline MCP 从第一天就开发在未来统一平台上**，作为 `backend/mcp/modules/research.py` 的正式模块。
-3. **Research MCP 运行入口先独立暴露**，例如 `aistock-research -> python -m backend.mcp.gateway --modules=research`。
-4. **现有 MCP server 暂不迁移**，`aistock-validation`、`aistock-qe-experiment`、`aistock-qe-archive` 继续使用当前已验证脚本。
-5. **统一 gateway 的 `full/research/operations` profile 首期只作为 contract test 和未来切换目标**，不作为默认客户端入口。
-6. **等 Research MCP + Research Pipeline + QE shadow + qe_archive 闭环稳定后**，再逐个迁移现有 MCP。
-
-因此推荐的首期形态不是“全部独立 MCP”，也不是“一次性合并所有 MCP”，而是：
-
-```text
-代码实现：统一平台内
-backend/mcp/
-  common.py
-  registry.py
-  gateway.py
-  profiles.py
-  modules/research.py
-
-运行入口：先独立隔离
-aistock-research
-  -> python -m backend.mcp.gateway --modules=research
-
-现有稳定入口：保持不变
-aistock-validation
-  -> scripts/aistock_mcp_server.py
-aistock-qe-experiment
-  -> scripts/aistock_qe_experiment_mcp_server.py
-aistock-qe-archive
-  -> scripts/aistock_qe_archive_mcp_server.py
-```
-
-这样 Research MCP 不会变成临时实现，未来切换统一入口时不需要重写；同时旧 MCP 的稳定性也不会被新平台首期风险影响。
-
-### 12.2 推荐最终架构
-
-最终合理架构应是“逻辑统一，物理可拆，profile 控制暴露面”：
-
-```text
-Claude Code / Codex App
-        |
-        v
-AIstock MCP Control Plane
-  - shared common client
-  - loopback-only policy
-  - confirm token policy
-  - sanitize / schema / error policy
-  - module registry
-  - profile-based tool loading
-        |
-        +-- validation module       -> /api/v1/validation/*
-        +-- qe_experiment module    -> /api/v1/quantevolver/* + /api/v1/qe-templates/*
-        +-- qe_archive module       -> /api/v1/qe-archive/*
-        +-- research module         -> /api/v1/research-pipeline/*
-        +-- paper module            -> later only, after Paper v2 boundary is stable
-```
-
-部署和客户端注册上，长期可以有：
-
-```text
-aistock --profile=research      # research + qe_experiment + qe_archive
-aistock --profile=operations    # validation + qe_experiment + selected ops tools
-aistock --profile=full          # full tool set, mainly for trusted local sessions
-```
-
-但旧入口应保留至少一个版本周期作为 fallback。统一入口成为推荐入口前，必须通过旧新 tool schema parity、direct-script startup、MCP initialize/list_tools、confirm 行为、错误响应、loopback enforcement 的完整验证。
-
-### 12.3 Research MCP 与 QE 验证闭环
-
-Research MCP 不应自己执行 QE、不应绕过 QE 后端、不应直接调 RD-Agent、不应直接写 QE runtime 表。它的职责是编排研究过程，并把需要组合表现验证的结论送入标准 QE 验证链路。
-
-推荐闭环：
-
-```text
-research_create_experiment
-  -> 创建研究假设和 stage 计划
-
-offline stage
-  -> HMM / event_signal / factor 的离线验证
-  -> 记录 artifact_ref、metrics、verdict
-
-qe_shadow stage
-  -> 调用 qe_templates 创建受控 QE 模板
-  -> 用户或 confirm token 后 materialize/run
-  -> QE 后端执行实验
-  -> qe_archive 入仓
-
-comparison stage
-  -> 读取 qe_archive run/task/loop 结果
-  -> 与 baseline 比较
-  -> 写 comparison/verdict
-
-promotion stage
-  -> 需要人工 issue/review/confirm
-  -> 只产出 promoted/rejected/blocked 决策
-  -> 不直接推生产 runtime
-```
-
-也就是说，并非所有 Research MCP 操作都必须跑 QE；创建假设、离线研究、artifact 注册可以不跑 QE。但任何声称“可提升组合表现、可进入候选策略、可进入后续生产路径”的研究结论，必须经过 QE shadow 和 qe_archive 证据闭环。
-
-### 12.4 对当前正文的关键修订建议
-
-后续整合正文时，建议修改以下设计点：
-
-1. **核心决策表修订**
-   - “MCP 入口 = 统一网关（1 个进程）”建议改为“统一 MCP 平台 + 可选统一 gateway + 旧入口并存过渡”。
-   - “Research MCP”应作为统一平台第一个模块上线，但只以 `aistock-research` 独立入口暴露。
-   - “paper_trading module”不纳入首期，避免 Paper v2 / trading_core / runtime 边界混入 Research Pipeline 首期。
-
-2. **MCP 迁移方案修订**
-   - Phase 1 不迁移 `scripts/aistock_mcp_server.py`、`scripts/aistock_qe_experiment_mcp_server.py`、`scripts/aistock_qe_archive_mcp_server.py`。
-   - Phase 1 只新增 `backend/mcp/` 平台骨架和 `research` module。
-   - `.mcp.json` Phase 1 只新增 `aistock-research`，不替换现有 3 个 server。
-   - 旧 MCP 迁移作为独立后续 Phase：先 `qe_archive`，再 `qe_experiment`，最后 `validation`。
-   - 每个旧 MCP 迁移都必须保留 fallback 入口，并通过 tool schema diff 和行为 parity 测试。
-
-3. **统一 API client 修订**
-   - `AIstockApiClient` 需要支持不同 response envelope 策略，例如 `unwrap_data=True/False`。
-   - Validation Center 当前返回 `{"data": ...}` 并由现有 client 解包；QE/archive 多数返回 `{"status": "success", "data": ...}` 或其他混合形态，不能强制统一解包。
-   - 需要保留 `trust_env=False`、loopback-only、env_name 友好错误、timeout、可注入 `httpx.MockTransport` 的测试能力。
-   - `scripts/aistock_mcp_gateway.py` 薄入口需要包含 repo-root bootstrap，避免直接脚本启动时 `backend` 或 `scripts.*` import 失败。
-
-4. **Research Pipeline 数据模型修订**
-   - 当前 `stage_execution` 只有 `UNIQUE (experiment_id, stage_name)`，不适合 retry 和多次 attempt。建议拆出 `stage_attempt` 或增加 `attempt_no`，保留每次执行历史。
-   - 增加外部任务引用表或字段组：`system_type`、`template_id`、`qe_task_id`、`qe_loop_id`、`qe_run_id`、`archive_run_id`、`validation_run_id`。
-   - `artifact` 表建议改为 `artifact_ref`，记录引用而非自建通用资产库；字段应包含 `domain_type`、`domain_id`、`uri`、`sha256`、`storage_backend`、`metadata`。
-   - 需要补充 idempotency key、stage lock/lease、cancel/timeout 状态、updated_at trigger、表和关键列 COMMENT。
-   - `execution_log.experiment_id` 应加 FK；日志量大时可考虑只存关键事件，长日志引用外部文件或 validation history。
-
-5. **资产库边界修订**
-   - Research Pipeline 不应新建平行 factor/model/algo registry。
-   - 因子继续引用 `aistock_factor_catalog` / QE factor metrics。
-   - 模型继续引用 `model_registry`。
-   - 策略包和生产候选继续引用 `strategy_pkg`。
-   - QE 历史证据继续引用 `qe_archive`。
-   - Research Pipeline 只保存研究编排、stage 结果、artifact reference、comparison、promotion decision。
-
-6. **领域 pipeline 修订**
-   - HMM pipeline 不应只描述为直接调用脚本；应优先通过现有 service/API 或新增 UI/MCP 共用后端入口执行。
-   - Event Signal pipeline 应复用既有 `market.event_signal_policy_profile`、`market.event_signal_validation_result`、overlay validation 服务和报告输出。
-   - QE shadow stage 应通过 `qe_templates` 和现有 QE 后端同源执行入口实现，不由 Research MCP 自建 QE 执行链路。
-
-7. **Scheduler 和生产边界修订**
-   - Research scheduler 必须默认关闭，显式 env 开启。
-   - 任何重型研究任务默认不得在生产 `8001` 自动执行。
-   - 合入前验证应优先使用 dev backend/dev DB/临时端口；生产 `8001` 的重启或启用必须由用户单独确认。
-
-8. **测试与验收修订**
-   - 增加 MCP stdio contract：direct-script `initialize`、`list_tools`、tool schema snapshot。
-   - 增加新旧 MCP tool schema parity：name、description、input_schema、confirm/error 行为。
-   - 增加 profile visibility 测试：`--modules=research` 不暴露 validation/QE 写工具；`--profile=research` 只暴露研究所需工具。
-   - 测试命令应兼容 Windows/PowerShell，不应只使用 Unix `find`/`grep`。
-   - 新增 `nox -s research_pipeline_backend`、`nox -s research_mcp_contract`，并复用现有 `qe_mcp_backend`、`qe_archive_backend`、`validation_center_backend`。
-
-### 12.5 建议重新分期
-
-推荐将正文 §8 的实施计划改为以下阶段：
-
-| Phase | 目标 | 范围 | 明确不做 |
-|-------|------|------|----------|
-| 0 | 设计修订和基线确认 | 更新 main/origin/main、dirty worktree、allowed write scope、生产影响声明 | 不写业务代码 |
-| 1 | 统一 MCP 平台骨架 | `backend/mcp/common.py`、`registry.py`、`gateway.py`、`profiles.py`、`scripts/aistock_mcp_gateway.py` | 不迁移旧 MCP |
-| 2 | Research MCP 独立入口 | `backend/mcp/modules/research.py`、`.mcp.json` 新增 `aistock-research` | 不替换现有 MCP |
-| 3 | Research Pipeline 后端 | `backend/services/research_pipeline/`、`backend/routers/research_pipeline.py`、DB schema | 不自建平行资产库 |
-| 4 | Offline dogfooding | HMM/event_signal 离线 stage、artifact_ref、comparison | 不跑生产 QE |
-| 5 | QE shadow 闭环 | 调 `qe_templates`、运行 QE dev/shadow、查询 `qe_archive`、写 verdict | 不直接调 RD-Agent 或 QE scheduler |
-| 6 | 旧 MCP 迁移试点 | 先迁移 `qe_archive` module 到 gateway，保留旧入口 | 不迁移 validation |
-| 7 | 旧 MCP 全量迁移 | 迁移 `qe_experiment`，最后迁移 `validation` | 未通过 parity 前不切默认 |
-| 8 | 默认统一入口 | `.mcp.json` 推荐 `aistock --profile=...` | 旧入口至少保留一个版本周期 |
-
-### 12.6 对 `.mcp.json` 的推荐演进
-
-首期推荐：
-
-```json
-{
-  "mcpServers": {
-    "aistock-validation": {
-      "command": "python",
-      "args": ["scripts/aistock_mcp_server.py"]
-    },
-    "aistock-qe-experiment": {
-      "command": "python",
-      "args": ["scripts/aistock_qe_experiment_mcp_server.py"]
-    },
-    "aistock-qe-archive": {
-      "command": "python",
-      "args": ["scripts/aistock_qe_archive_mcp_server.py"]
-    },
-    "aistock-research": {
-      "command": "python",
-      "args": ["scripts/aistock_mcp_gateway.py", "--modules=research"]
-    }
-  }
-}
-```
-
-平台稳定后的推荐目标：
-
-```json
-{
-  "mcpServers": {
-    "aistock": {
-      "command": "python",
-      "args": ["scripts/aistock_mcp_gateway.py", "--profile=research"]
-    },
-    "aistock-validation-legacy": {
-      "command": "python",
-      "args": ["scripts/aistock_mcp_server.py"]
-    },
-    "aistock-qe-experiment-legacy": {
-      "command": "python",
-      "args": ["scripts/aistock_qe_experiment_mcp_server.py"]
-    },
-    "aistock-qe-archive-legacy": {
-      "command": "python",
-      "args": ["scripts/aistock_qe_archive_mcp_server.py"]
-    }
-  }
-}
-```
-
-最终是否删除 legacy 入口，应以实际使用者全部切换、回归窗口结束、旧新 parity 证据完整为前提，不应在 Research Pipeline 首期完成时立即删除。
-
-### 12.7 当前文档中的需更正事实
-
-当前正文中写到的仓库前置状态需要在整合时重新核验和更新：
-
-- `main` / `origin/main` 的实际 commit 需要重新确认，不应继续依赖旧的 `ca2cc42`。
-- 工作目录是否干净需要重新确认；如存在 `.codex_tmp/` 或其他未跟踪文件，应在实施前明确忽略、清理或纳入 allowed scope。
-- `backend/mcp/`、`backend/services/research_pipeline/`、`backend/routers/research_pipeline.py` 当前属于新增内容，不能假设已存在。
-- 生产 `8001` 是否需要重启、是否需要 DB migration、是否启用 `aistock-research` MCP，都必须作为单独人工确认项。
-
-### 12.8 最终整合原则
-
-后续 Claude Code 整合方案时，建议坚持以下原则：
-
-1. **Research MCP 原生使用统一平台实现，避免未来二次迁移**。
-2. **旧 MCP 首期不迁移，避免把新平台风险传递给 validation/QE/archive 稳定路径**。
-3. **Research Pipeline 是研究编排层，不是新的资产库或执行引擎**。
-4. **所有执行类动作走现有或新增的 UI/MCP 共用 FastAPI endpoint**。
-5. **QE 是研究结论进入候选/晋升前的标准验证路径**。
-6. **qe_archive 是 Research Pipeline 的主要历史证据来源**。
-7. **Paper Trading MCP 不进入首期，避免跨入 Paper v2 / trading_core runtime 敏感边界**。
-8. **统一入口是最终目标，不是首期强制切换动作**。
