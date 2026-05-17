@@ -133,8 +133,471 @@ CREATE INDEX idx_rp_stage_status ON research_pipeline.stage_execution(status);
 
 COMMENT ON TABLE research_pipeline.stage_execution IS 'Stage 执行记录，每个实验每个 stage 最多一条（重试覆盖）';
 
--- ── 资产注册表 ──
-CREATE TABLE research_pipeline.artifact (
+---
+
+## 15. 资产库 MCP Server 设计
+
+### 15.1 设计动机
+
+研究流水线产出的因子、模型、执行算法需要统一入库管理。当前这些资产分散在：
+- 因子：`factors/` 目录 + DB `factor_metrics` 表
+- 模型：`backend/data/hmm_models/` + DB `model_train_*` 表
+- 执行算法：`qe_strategies/` + DB `execution_algorithms` 表
+
+需要一个统一的 MCP 接口，让 Claude/Codex 在研究完成后自动入库、计算指标、触发验证。
+
+### 15.2 MCP Server 合并策略
+
+**不新增独立 MCP server，而是扩展现有 server + 新增 1 个研究 MCP。**
+
+理由见 §16 性能分析。最终 MCP 布局：
+
+| MCP Server | 职责 | Tools 数量 |
+|------------|------|-----------|
+| `aistock-validation` | 验证框架 | 19（现有） |
+| `aistock-qe-experiment` | QE 实验管理 | 22（现有）+ 3（资产入库） |
+| `aistock-qe-archive` | 数仓查询 | 15（现有） |
+| `aistock-research` | **研究流水线 + 资产库**（新增） | ~18 |
+
+**关键决策**：因子库/模型库/执行算法库的 MCP tools 合并到 `aistock-research` 中，而不是各自独立 server。原因：
+1. 这些操作都是研究流水线的下游动作（研究通过 → 入库）
+2. 减少 MCP server 数量（性能考虑）
+3. 统一 confirm token 和审计机制
+
+### 15.3 资产库 Tools（在 `aistock-research` MCP 中）
+
+```python
+# ── 因子库 ──
+@mcp.tool()
+def factor_library_register(
+    factor_name: str,
+    source_code: str,
+    source_type: str,           # 'manual' / 'rdagent_task_sync' / 'research_pipeline'
+    experiment_id: str | None,  # 关联研究实验
+    confirm: str = "",
+) -> dict:
+    """注册新因子到因子库（含编译验证）。"""
+
+@mcp.tool()
+def factor_library_compute_metrics(
+    factor_name: str,
+    metrics: list[str] | None = None,  # ['ic', 'rank_ic', 'ic_decay', 'turnover']
+) -> dict:
+    """计算因子独立指标（IC/RankIC/衰减/换手）。"""
+
+@mcp.tool()
+def factor_library_query(
+    status: str | None = None,
+    source_type: str | None = None,
+    min_ic: float | None = None,
+    limit: int = 50,
+) -> dict:
+    """查询因子库（按状态/来源/IC 筛选）。"""
+
+@mcp.tool()
+def factor_library_deprecate(
+    factor_name: str,
+    reason: str,
+    confirm: str = "",
+) -> dict:
+    """下架因子（标记为 deprecated，不删除）。"""
+
+# ── 模型库 ──
+@mcp.tool()
+def model_library_register(
+    model_type: str,            # 'hmm_risk_gate' / 'lgbm' / 'nn'
+    artifact_path: str,
+    config: dict,
+    experiment_id: str | None,
+    confirm: str = "",
+) -> dict:
+    """注册模型 artifact 到模型库。"""
+
+@mcp.tool()
+def model_library_query(
+    model_type: str | None = None,
+    status: str | None = None,
+    limit: int = 20,
+) -> dict:
+    """查询模型库。"""
+
+@mcp.tool()
+def model_library_promote(
+    model_id: str,
+    target: str,  # 'qe_selectable' / 'selection_center' / 'paper_trading'
+    confirm: str = "",
+) -> dict:
+    """晋升模型到指定消费方。"""
+
+# ── 执行算法库 ──
+@mcp.tool()
+def execution_algo_register(
+    algo_code: str,
+    algo_name: str,
+    source_code: str,
+    version: str,
+    experiment_id: str | None,
+    confirm: str = "",
+) -> dict:
+    """注册执行算法到算法库。"""
+
+@mcp.tool()
+def execution_algo_analyze(
+    algo_code: str,
+    analysis_type: str = "pa_attribution",  # 'pa_attribution' / 'slippage' / 'fill_rate'
+) -> dict:
+    """分析执行算法性能指标。"""
+
+@mcp.tool()
+def execution_algo_query(
+    status: str | None = None,
+    limit: int = 20,
+) -> dict:
+    """查询执行算法库。"""
+```
+
+### 15.4 入库流程（与研究流水线集成）
+
+```
+研究流水线 promotion stage:
+  1. 实验 validated
+  2. 用户确认晋升（提供 issue_url）
+  3. 自动调用对应的 library_register tool:
+     - HMM 实验 → model_library_register(model_type="hmm_risk_gate", ...)
+     - 因子实验 → factor_library_register(factor_name=..., source_type="research_pipeline")
+     - 执行算法实验 → execution_algo_register(algo_code=..., ...)
+  4. 注册成功后更新 experiment.status = 'promoted'
+  5. 触发数仓归档
+```
+
+---
+
+## 16. MCP Server 数量与性能分析
+
+### 16.1 Token 消耗机制
+
+MCP server 对 Claude/Codex 的 token 影响来自两个方面：
+
+**A. Tool Schema 注入（固定开销）**
+
+每个 MCP server 连接时，其所有 tool 的 schema（名称 + 参数 + 描述）会注入到 system prompt 中。
+
+当前 3 个 server 的 tool 数量：
+- aistock-validation: 19 tools
+- aistock-qe-experiment: 22 tools
+- aistock-qe-archive: 15 tools
+- **合计: 56 tools**
+
+每个 tool schema 约 100-200 tokens（名称 + 参数类型 + 描述），56 tools ≈ **8,000-11,000 tokens 固定开销**。
+
+**B. Tool 调用（按需开销）**
+
+实际调用时的 input/output tokens 与 server 数量无关，只与调用次数和返回数据量有关。
+
+### 16.2 新增 MCP 的影响评估
+
+| 方案 | 新增 Tools | 总 Tools | 额外 Token 开销 | 评估 |
+|------|-----------|---------|----------------|------|
+| 方案 A: 每个库独立 server（4 个新 server） | ~40 | ~96 | +6,000-8,000 | ❌ 过多 |
+| **方案 B: 合并为 1 个 research server** | ~18 | ~74 | +2,500-3,500 | ✅ 可接受 |
+| 方案 C: 全部合并到 1 个 mega server | 0 新 server | ~74 | 同 B | ⚠️ 维护困难 |
+
+**推荐方案 B**：新增 1 个 `aistock-research` MCP server，包含研究流水线 + 资产库 tools。
+
+### 16.3 性能优化措施
+
+1. **Tool 描述精简** — 每个 tool 描述控制在 1 行（<50 字），参数用 type hint 自解释
+2. **按需连接** — Claude Code 只在需要时连接 MCP server（不是所有 session 都加载）
+3. **Lazy tool loading** — 资产库 tools 只在 research pipeline 相关对话中激活
+4. **合并同类 tools** — 用 `action` 参数区分操作，减少 tool 总数：
+   ```python
+   # 不推荐：3 个 tools
+   factor_library_register()
+   factor_library_query()
+   factor_library_deprecate()
+   
+   # 推荐：1 个 tool + action 参数
+   factor_library(action="register|query|deprecate", ...)
+   ```
+
+### 16.4 最终 MCP 布局（4 个 server，~74 tools）
+
+```json
+{
+  "mcpServers": {
+    "aistock-validation": {
+      "command": "python",
+      "args": ["scripts/aistock_mcp_server.py"],
+      "tools": 19
+    },
+    "aistock-qe-experiment": {
+      "command": "python",
+      "args": ["scripts/aistock_qe_experiment_mcp_server.py"],
+      "tools": 22
+    },
+    "aistock-qe-archive": {
+      "command": "python",
+      "args": ["scripts/aistock_qe_archive_mcp_server.py"],
+      "tools": 15
+    },
+    "aistock-research": {
+      "command": "python",
+      "args": ["scripts/aistock_research_mcp_server.py"],
+      "tools": 18
+    }
+  }
+}
+```
+
+Token 预算：~74 tools × 150 tokens/tool ≈ **11,100 tokens 固定开销**（约占 200K context 的 5.5%）。可接受。
+
+---
+
+## 17. 分支策略分析
+
+### 17.1 HMM 研究的历史分支使用情况
+
+```
+main 上的 HMM commits (2026-04 以来): 10 个
+独立分支上的 HMM commits: 12 个
+
+独立分支列表（8 个）：
+  codex/hmm-evo-baseline-20260506
+  codex/hmm-qe-autoretry-20260509
+  codex/hmm-rd-20260511
+  codex/hmm-sector-regime-20260509
+  codex/qe-hmm-hotfix-handoff-20260508
+  codex/qe-hmm-hotfix-integration-20260508
+  codex/qe-hmm-hotfix-validation-20260508
+  feature/hmm-risk-gate-20260517
+```
+
+**问题**：
+- 部分 HMM 研究直接 commit 到 main（10 个），没有走分支
+- 分支命名不统一（`codex/hmm-*` vs `feature/hmm-*`）
+- 多个分支并行但没有统一的实验追踪
+
+### 17.2 事件信号的历史分支使用情况
+
+```
+main 上的 event signal commits: 2 个
+独立分支上的 event signal commits: 4 个
+
+独立分支列表（6 个）：
+  codex/event-signal-policy-20260507
+  codex/event-signal-st-llm-design-20260506
+  codex/financial-distress-multiloop-20260508
+  codex/financial-distress-qe-overlay-20260508
+  codex/financial-distress-rerank-20260508
+  codex/financial-distress-sizebucket-20260508
+```
+
+**问题**：
+- 同一研究方向拆成了 6 个分支（每个 QE 变体一个分支）
+- 分支之间没有关联关系
+- 无法从分支名看出实验结果（通过/失败）
+
+### 17.3 未来分支策略
+
+**规则：每个研究方向使用 1 个长期分支，实验迭代在分支内进行。**
+
+```
+命名规范：
+  research/{pipeline_type}/{experiment_short_name}-{start_date}
+
+示例：
+  research/hmm/risk-gate-transition-20260517
+  research/event-signal/financial-distress-20260507
+  research/factor/momentum-decay-20260520
+  research/execution/v26-adaptive-20260601
+```
+
+**生命周期**：
+
+```
+创建分支（从 main）
+  → 实验代码开发（脚本、配置）
+  → 流水线执行（artifact 生成、验证、QE）
+  → 实验通过 → 创建 PR 合入 main
+  → 实验失败 → 分支保留（归档），不合入
+  → 分支上发现 bug → 创建独立 issue 分支修复，合入 main 后 rebase 研究分支
+```
+
+**与研究流水线的关系**：
+
+| 操作 | 在研究分支上？ | 说明 |
+|------|--------------|------|
+| 编写预计算脚本 | ✅ | 研究代码 |
+| 修改策略模板 | ✅ | 研究代码 |
+| 生成 artifact | ✅（文件不进 git） | 资产不进 git |
+| 运行验证脚本 | ✅ | 在分支上执行 |
+| 提交 QE 实验 | ✅（通过 API） | 不需要合入 main |
+| 修改 ConfigComposer | ⚠️ 需要合入 main | 走 issue 流程 |
+| 修改 backend 核心代码 | ❌ 独立 issue 分支 | 不在研究分支修复 |
+
+**关键区分**：
+- **研究代码**（脚本、配置、领域逻辑）→ 在研究分支上开发
+- **基础设施代码**（ConfigComposer、MCP server、DB schema）→ 独立 issue 分支，先合入 main
+- **资产**（模型文件、artifact）→ 不进 git，通过 DB 管理
+
+### 17.4 是否需要统一到一个分支？
+
+**不需要。** 不同研究方向应保持独立分支，原因：
+
+1. **隔离性** — HMM 研究失败不影响事件信号研究
+2. **可追溯** — 每个分支对应一个实验，清晰的因果关系
+3. **并行性** — 多个 Claude/Codex 窗口可以同时在不同分支工作
+4. **清理简单** — 失败的实验分支可以直接归档，不污染其他分支
+
+但需要**统一管理**：
+- 研究流水线 DB 记录所有实验（无论哪个分支）
+- UI 看板展示所有活跃研究分支
+- 分支命名规范强制执行
+
+### 17.5 分支与流水线的绑定
+
+```sql
+-- experiment 表中记录分支信息
+ALTER TABLE research_pipeline.experiment ADD COLUMN
+    git_branch TEXT;  -- 'research/hmm/risk-gate-transition-20260517'
+
+-- 创建实验时自动记录当前分支
+-- 流水线 UI 可以按分支筛选实验
+```
+
+---
+
+## 18. MCP 互调架构（补充 §9）
+
+### 18.1 架构图
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Claude / Codex                                                  │
+│                                                                  │
+│  可以同时使用多个 MCP server:                                     │
+│  ├── aistock-research: 驱动研究流水线                             │
+│  ├── aistock-qe-experiment: 直接操作 QE（细粒度检查）             │
+│  ├── aistock-qe-archive: 查询数仓历史                            │
+│  └── aistock-validation: 触发验证                                │
+└─────────────────────────────────────────────────────────────────┘
+         │                    │                    │
+         ▼                    ▼                    ▼
+┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
+│ aistock-research │  │ aistock-qe-exp  │  │ aistock-archive │
+│ MCP Server       │  │ MCP Server      │  │ MCP Server      │
+└────────┬────────┘  └────────┬────────┘  └────────┬────────┘
+         │                    │                    │
+         │  LoopbackApiClient │  LoopbackApiClient │  LoopbackApiClient
+         │                    │                    │
+         ▼                    ▼                    ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  AIstock Backend (FastAPI, port 8001)                             │
+│                                                                  │
+│  /api/v1/research-pipeline/*    ← research MCP 调用              │
+│  /api/v1/quantevolver/*         ← research MCP 内部也调用（编排） │
+│  /api/v1/qe-archive/*           ← research MCP 内部也调用（归档） │
+│  /api/v1/validation/*           ← research MCP 内部也调用（验证） │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 18.2 研究 MCP 内部编排（不直接调用其他 MCP，而是调用同一个 HTTP API）
+
+```python
+class ResearchStageExecutor:
+    """通过 LoopbackApiClient 调用后端 API。
+    
+    与 QE MCP server 使用完全相同的 HTTP 端点，
+    保证行为一致性和审计完整性。
+    """
+    
+    def __init__(self):
+        self._api = LoopbackApiClient(
+            base_url=os.environ.get("AISTOCK_RESEARCH_BASE_URL", "http://127.0.0.1:8001/api/v1")
+        )
+    
+    # ── QE 操作（与 qe_custom_evo_* MCP tools 相同端点） ──
+    
+    async def create_qe_task(self, payload: dict) -> str:
+        resp = self._api.post("/quantevolver/evolution/custom-tasks", payload)
+        return resp["data"]["task_id"]
+    
+    async def get_qe_task_status(self, task_id: str) -> dict:
+        return self._api.get(f"/quantevolver/evolution/tasks/{task_id}")
+    
+    async def get_qe_loop_metrics(self, task_id: str, loop_index: int) -> dict:
+        return self._api.get(
+            f"/quantevolver/evolution/tasks/{task_id}/loops/{loop_index}/enhanced-metrics"
+        )
+    
+    # ── 数仓操作（与 qe_archive_* MCP tools 相同端点） ──
+    
+    async def query_archive_runs(self, filters: dict) -> dict:
+        return self._api.get("/qe-archive/runs", params=filters)
+    
+    async def trigger_archive(self, batch_size: int = 10) -> dict:
+        return self._api.post("/qe-archive/worker/run", {"batch_size": batch_size})
+    
+    # ── 资产库操作 ──
+    
+    async def register_factor(self, factor_data: dict) -> dict:
+        return self._api.post("/quantevolver/factors/manual", factor_data)
+    
+    async def register_model(self, model_data: dict) -> dict:
+        return self._api.post("/quantevolver/model-registry/specs", model_data)
+```
+
+### 18.3 HMM 验证场景的完整 MCP 协作
+
+```
+Claude 对话：
+
+1. Claude 调用 research MCP:
+   research_run_stage(experiment_id="xxx", stage_name="qe_shadow")
+   
+   → 研究流水线内部：
+     a. 构建 QE payload（4-arm: no-HMM / old covfix / risk gate / risk gate+P30）
+     b. POST /quantevolver/evolution/custom-tasks  ← 与 qe_custom_evo_create 相同
+     c. 轮询 GET /quantevolver/evolution/tasks/{id}  ← 与 qe_custom_evo_get_task 相同
+     d. 完成后 GET .../loops/{i}/enhanced-metrics  ← 与 qe_experiment_get_enhanced_metrics 相同
+     e. 计算 delta，写入 comparison 表
+     f. POST /qe-archive/trigger  ← 与 qe_archive_trigger_worker 相同
+   → 返回 StageResult
+
+2. Claude 想看更多细节，直接调用 QE MCP:
+   qe_custom_evo_get_task("qe_20260517_...")
+   qe_experiment_get_enhanced_metrics("qe_20260517_..._Loop4")
+   
+3. Claude 想查历史对比，调用 Archive MCP:
+   qe_archive_query_runs(pipeline_type="hmm_risk_gate")
+   
+4. Claude 确认晋升，调用 research MCP:
+   research_promote(experiment_id="xxx", issue_url="https://github.com/.../issues/32")
+   → 内部自动调用 model_library_register
+```
+
+---
+
+## 19. 更新后的验收标准（补充）
+
+### 19.1 MCP 互调验收
+
+| # | 验收项 | 验证方式 |
+|---|--------|---------|
+| M1 | research MCP 的 qe_shadow stage 通过 HTTP API 成功提交 QE 任务 | 任务 ID 返回且状态为 running |
+| M2 | research MCP 的 qe_shadow stage 能轮询并获取 QE 结果 | enhanced-metrics 正确返回 |
+| M3 | research MCP 的 promotion 能自动调用资产库注册 | artifact 表 + 对应库表有记录 |
+| M4 | Claude 可以混合使用 research + QE + archive MCP | 同一对话中三个 server 都可调用 |
+| M5 | 资产库 tools 的 confirm token 机制正常 | 无 token 时拒绝执行 |
+
+### 19.2 分支策略验收
+
+| # | 验收项 | 验证方式 |
+|---|--------|---------|
+| B1 | 研究流水线模块在独立分支开发 | `research/pipeline/core-20260517` |
+| B2 | 实验记录中包含 git_branch 字段 | DB 查询确认 |
+| B3 | 基础设施修改（ConfigComposer 等）走独立 issue | GitHub Issue 存在 |
+| B4 | 研究分支不包含 artifact 文件 | `git status` 无 .json/.pkl 模型文件 |
     artifact_id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     experiment_id       UUID NOT NULL REFERENCES research_pipeline.experiment(experiment_id) ON DELETE CASCADE,
     artifact_type       TEXT NOT NULL,
