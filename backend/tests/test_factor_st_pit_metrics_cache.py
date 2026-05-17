@@ -1,4 +1,6 @@
-﻿from __future__ import annotations
+from __future__ import annotations
+
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -147,3 +149,24 @@ def test_factor_value_loader_rejects_merged_cache_universe_mismatch(tmp_path) ->
 
     assert panel is None
     assert not merged.exists()
+
+
+def test_fresh_schema_initializers_include_st_pit_metadata_columns() -> None:
+    root = Path(__file__).resolve().parents[2]
+    init_catalog = (root / "backend" / "init_catalog_db.py").read_text(encoding="utf-8")
+    init_quant = (root / "backend" / "db" / "init_quant_schema.py").read_text(encoding="utf-8")
+
+    required = [
+        "coverage_denominator",
+        "coverage_semantics",
+        "universe_rule_version",
+        "universe_fingerprint_sha256",
+        "index_policy",
+        "eligible_sample_count",
+        "suspended_excluded_count",
+        "st_pit_excluded_count",
+    ]
+
+    for column in required:
+        assert column in init_catalog
+        assert column in init_quant

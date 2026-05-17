@@ -67,10 +67,10 @@ function paperCapability(
       : policyCount > 0
         ? "已有执行策略，但尚未启用用于模拟盘；创建时仍会 fail-fast 校验。"
         : "尚未列出执行策略；创建时会尝试导入并校验 manifest 默认策略。";
-    return { ok: true, title: "可以创建模拟组合", detail: policyText };
+    return { ok: true, title: "可以创建模拟盘实例", detail: policyText };
   }
   if (PAPER_MARKABLE_STATUSES.has(status)) {
-    return { ok: false, title: "未完成模拟盘准入", detail: "先点击“标记可用于模拟盘”，再创建具体模拟组合。" };
+    return { ok: false, title: "未完成模拟盘准入", detail: "先点击“标记可用于模拟盘”，再创建具体模拟盘。" };
   }
   return { ok: false, title: "不可新建模拟盘", detail: "需要至少达到“回测已批准”状态，并完成模拟盘准入。" };
 }
@@ -308,9 +308,9 @@ export default function PaperV2PackagesPage() {
                 <button className="pv2-button" onClick={() => transition("enableSelection")} disabled={busy || !canMarkSelection} type="button">标记可用于选股</button>
                 <button className="pv2-button" onClick={() => transition("enablePaper")} disabled={busy || !canMarkPaper} type="button">标记可用于模拟盘</button>
                 {canCreatePortfolio ? (
-                  <Link className="pv2-button-primary" href={`/paper-v2/portfolios?package_id=${selected.package_id}`}>用此包创建模拟组合</Link>
+                  <Link className="pv2-button-primary" href={`/paper-v2/portfolios?package_id=${selected.package_id}`}>用此包创建模拟盘</Link>
                 ) : (
-                  <button className="pv2-button-primary" disabled type="button">用此包创建模拟组合</button>
+                  <button className="pv2-button-primary" disabled type="button">用此包创建模拟盘</button>
                 )}
                 <ConfirmAction
                   label="退役策略包"
@@ -322,7 +322,7 @@ export default function PaperV2PackagesPage() {
                 />
               </div>
               <div className="pv2-help">
-                “标记”只推进策略包准入状态；“创建模拟组合”会进入组合创建页并冻结资金、日期、数据源和执行策略。退役不会删除历史，只会阻止新的准入使用。
+                “标记”只推进策略包准入状态；“创建模拟盘实例”会进入组合创建页并冻结资金、日期、数据源和执行策略。退役不会删除历史，只会阻止新的准入使用。
               </div>
             </div>
             <div className="pv2-grid pv2-grid-3">
@@ -333,7 +333,7 @@ export default function PaperV2PackagesPage() {
             <div className="pv2-chip-row" style={{ marginTop: 14 }}>
               <span className="pv2-chip">{packageDisplayLabel(selected)}</span>
               {selected.created_at ? <span className="pv2-chip">创建于 {String(selected.created_at).slice(0, 10)}</span> : null}
-              <span className="pv2-chip">模拟组合数: {selected.paper_portfolio_count || 0}</span>
+              <span className="pv2-chip">模拟盘数: {selected.paper_portfolio_count || 0}</span>
               <span className="pv2-chip">执行策略: {policies.length} 个 / 可模拟盘 {paperReadyPolicies.length} 个</span>
               <CopyChip label={`package_id ${shortHash(selected.package_id, 6)}`} value={selected.package_id} title={`完整 package_id：${selected.package_id}`} />
               <CopyChip label={`manifest ${shortHash(selected.manifest_sha256, 6)}`} value={selected.manifest_sha256} title={`完整 manifest_sha256：${selected.manifest_sha256}`} />

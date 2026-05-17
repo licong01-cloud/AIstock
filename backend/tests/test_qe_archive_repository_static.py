@@ -17,14 +17,18 @@ from backend.services.qe_archive.backfill_service import (
 from backend.services.qe_archive.models import (
     ArchiveJobRecord,
     ClaimedOutboxEvent,
+    IngestHistoryRecord,
     OutboxEventRecord,
     RunConfigRecord,
+    SkipRegistryRecord,
     build_factor_set_hash,
     canonical_json_dumps,
     sha256_json,
 )
 from backend.services.qe_archive.event_capture import QEArchiveEventCapture
 from backend.services.qe_archive.payload_extractor import QEArchivePayloadExtractor
+from backend.services.qe_archive.policy import resolve_archive_policy
+from backend.services.qe_archive import realtime_ingestion as realtime_ingestion_module
 from backend.services.qe_archive.realtime_ingestion import QEArchiveRealtimeIngestion
 from backend.services.qe_archive.repository import QEArchiveRepository
 from backend.services.qe_archive.source_assembler import QEArchiveSourceAssembler
@@ -42,12 +46,16 @@ QE_ARCHIVE_FILES = (
     REPO_ROOT / "backend" / "services" / "qe_archive" / "archive_service.py",
     REPO_ROOT / "backend" / "services" / "qe_archive" / "backfill_service.py",
     REPO_ROOT / "backend" / "services" / "qe_archive" / "event_capture.py",
+    REPO_ROOT / "backend" / "services" / "qe_archive" / "ingest_history.py",
     REPO_ROOT / "backend" / "services" / "qe_archive" / "models.py",
     REPO_ROOT / "backend" / "services" / "qe_archive" / "payload_extractor.py",
+    REPO_ROOT / "backend" / "services" / "qe_archive" / "policy.py",
     REPO_ROOT / "backend" / "services" / "qe_archive" / "realtime_ingestion.py",
     REPO_ROOT / "backend" / "services" / "qe_archive" / "repository.py",
+    REPO_ROOT / "backend" / "services" / "qe_archive" / "skip_registry.py",
     REPO_ROOT / "backend" / "services" / "qe_archive" / "source_assembler.py",
     REPO_ROOT / "backend" / "services" / "qe_archive" / "worker.py",
+    REPO_ROOT / "backend" / "services" / "qe_archive" / "worker_loop.py",
     REPO_ROOT / "backend" / "services" / "qe_archive" / "worker_service.py",
     REPO_ROOT / "backend" / "routers" / "qe_archive.py",
     REPO_ROOT / "scripts" / "qe_archive_backfill.py",
@@ -134,11 +142,48 @@ def test_repository_exposes_phase_one_write_methods() -> None:
         "list_runs",
         "get_archive_summary",
         "get_run_quality_summary",
+        "upsert_skip_registry",
+        "list_skips",
+        "insert_ingest_history",
+        "upsert_backfill_run",
+        "update_backfill_run_status",
+        "upsert_backfill_run_item",
+        "list_backfill_runs",
+        "get_backfill_run",
+        "upsert_bootstrap_marker",
+        "get_bootstrap_marker",
+        "query_factor_usage",
+        "query_model_trials",
+        "query_seed_trials",
+        "query_hyperparam_history",
     )
 
     for method_name in expected_methods:
         method = getattr(QEArchiveRepository, method_name)
         assert inspect.isfunction(method)
+
+
+def test_archive_policy_audit_records_have_stable_ids() -> None:
+    skip = SkipRegistryRecord(
+        source_system="qe",
+        source_type="loop",
+        source_id="task_1",
+        source_sub_id="loop_1",
+        archive_policy="SKIP",
+        archive_policy_source="unit",
+        skip_reason="unit skip",
+        trigger_reason="realtime",
+    )
+    hist = IngestHistoryRecord(
+        source_system="qe",
+        source_type="loop",
+        source_id="task_1",
+        source_sub_id="loop_1",
+        trigger_reason="realtime",
+        ingest_status="skipped",
+    )
+    assert skip.skip_id is not None and skip.skip_id.startswith("qear_skip_")
+    assert hist.history_id is not None and hist.history_id.startswith("qear_hist_")
 
 
 def test_archive_job_record_generates_id() -> None:
@@ -441,6 +486,35 @@ def test_source_assembler_builds_single_experiment_payload_without_worker_paths(
     assert payload["source_config_paths"] == {"worker_artifact_paths_omitted": True}
 
 
+def test_archive_policy_resolves_single_experiment_template_skip() -> None:
+    payload = QEArchiveSourceAssembler.build_experiment_payload(
+        {
+            "experiment_id": "qe_exp_skip",
+            "experiment_name": "single skip",
+            "status": "completed",
+            "factor_names": ["alpha_001"],
+            "model_id": "LGBModel",
+            "custom_params": {
+                "archive_policy": "SKIP",
+                "archive_reason": "operator opted out",
+            },
+        }
+    )
+
+    decision = resolve_archive_policy(
+        source_system=payload["source_system"],
+        source_type="experiment",
+        source_id=payload["source_id"],
+        payload=payload,
+        runtime_config=payload["config"],
+    )
+
+    assert decision.archive_policy == "SKIP"
+    assert decision.should_archive is False
+    assert decision.archive_policy_source == "runtime_config.runtime_flags"
+    assert decision.reason == "operator opted out"
+
+
 def test_source_assembler_builds_loop_payload_for_archive_service() -> None:
     payload = QEArchiveSourceAssembler.build_loop_payload(
         {
@@ -486,6 +560,41 @@ def test_source_assembler_builds_loop_payload_for_archive_service() -> None:
     assert extracted.data_contexts[0].backtest_start.isoformat() == "2025-01-02"
     assert extracted.data_contexts[0].backtest_end.isoformat() == "2025-01-02"
     assert any(curve.curve_key == "drawdown_series" for curve in extracted.curves)
+
+
+def test_archive_policy_resolves_custom_evo_strategy_params_manual_only() -> None:
+    payload = QEArchiveSourceAssembler.build_loop_payload(
+        {
+            "loop_id": "task_c_Loop1",
+            "task_id": "task_c",
+            "loop_index": 1,
+            "config_json": {
+                "factor_list": ["factor_a"],
+                "strategy_params": {
+                    "archive_policy": "MANUAL_ONLY",
+                    "archive_reason": "needs manual review",
+                },
+                "model_params": {"label_horizon": 3},
+            },
+            "metrics_json": {"IC": 0.01},
+            "status": "completed",
+        },
+        {"task_id": "task_c", "task_name": "custom evo"},
+    )
+    decision = resolve_archive_policy(
+        source_system=payload["source_system"],
+        source_type="loop",
+        source_id=payload["source_id"],
+        source_sub_id=payload["source_sub_id"],
+        payload=payload,
+        runtime_config=payload["config"],
+    )
+
+    assert payload["config"]["runtime_flags"]["archive_policy"] == "MANUAL_ONLY"
+    assert decision.archive_policy == "MANUAL_ONLY"
+    assert decision.should_archive is False
+    assert decision.is_manual_only is True
+    assert decision.archive_policy_source == "runtime_config.runtime_flags"
 
 
 def test_backfill_service_requires_confirmation_for_writes() -> None:
@@ -702,10 +811,58 @@ def test_realtime_ingestion_enabled_queues_outbox_by_default() -> None:
     assert result["queued"] is True
     assert result["mode"] == "outbox"
     assert result["event_id"] == "qear_evt_1"
-    assert capture.kwargs == {
-        "experiment_id": "qe_exp_1",
-        "payload": {"capture_reason": "qe_experiment_completed_hook"},
-    }
+    assert capture.kwargs["experiment_id"] == "qe_exp_1"
+    assert capture.kwargs["payload"]["capture_reason"] == "qe_experiment_completed_hook"
+    assert capture.kwargs["archive_policy"] == "AUTO"
+    assert capture.kwargs["trigger_reason"] == "realtime"
+
+
+def test_realtime_ingestion_skip_policy_records_skip_without_outbox(monkeypatch) -> None:
+    skips: list[str] = []
+    histories: list[str] = []
+
+    class FakeAssembler:
+        def assemble_experiment_payload(self, experiment_id):  # type: ignore[no-untyped-def]
+            return {
+                "source_system": "qe",
+                "source_id": experiment_id,
+                "experiment_id": experiment_id,
+                "config": {
+                    "runtime_flags": {
+                        "archive_policy": "SKIP",
+                        "archive_reason": "do not warehouse",
+                    }
+                },
+            }
+
+    class FakeEventCapture:
+        def enqueue_experiment_completed_result(self, **kwargs):  # type: ignore[no-untyped-def]
+            raise AssertionError("SKIP policy must not enqueue outbox events")
+
+    def fake_record_policy_skip(decision, **kwargs):  # type: ignore[no-untyped-def]
+        skips.append(decision.archive_policy)
+        return "skip_1"
+
+    def fake_record_decision_skip(decision, **kwargs):  # type: ignore[no-untyped-def]
+        histories.append(decision.reason)
+        return "hist_1"
+
+    monkeypatch.setattr(realtime_ingestion_module, "record_policy_skip", fake_record_policy_skip)
+    monkeypatch.setattr(realtime_ingestion_module, "record_decision_skip", fake_record_decision_skip)
+
+    ingestion = QEArchiveRealtimeIngestion(
+        event_capture=FakeEventCapture(),  # type: ignore[arg-type]
+        assembler=FakeAssembler(),  # type: ignore[arg-type]
+        enabled=True,
+    )
+
+    result = ingestion.archive_experiment_completed(experiment_id="qe_exp_skip")
+
+    assert result["queued"] is False
+    assert result["skipped_reason"] == "SKIP"
+    assert result["skip_id"] == "skip_1"
+    assert skips == ["SKIP"]
+    assert histories == ["do not warehouse"]
 
 
 def test_realtime_ingestion_direct_mode_calls_backfill_service() -> None:

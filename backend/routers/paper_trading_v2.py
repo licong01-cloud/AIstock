@@ -20,6 +20,7 @@ from backend.services.paper_trading_v2.repository import PaperTradingV2Repositor
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
 from backend.services.paper_trading_v2.session import PaperTradingSessionRunner, PaperTradingSessionService
 from backend.services.paper_trading_v2.models import BrokerBackendId, PaperSessionMode
+from backend.services.paper_trading_v2.symbol_names import PaperV2SymbolNameResolver
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, TradingCoreError, UnsupportedFeatureError
 
 router = APIRouter(prefix="/paper-v2", tags=["paper-v2"])
@@ -624,7 +625,9 @@ def get_portfolio_live_dashboard(
     try:
         return {
             "ok": True,
-            "dashboard": PaperTradingLiveDashboardService().get_dashboard(
+            "dashboard": PaperTradingLiveDashboardService(
+                symbol_name_resolver=PaperV2SymbolNameResolver(),
+            ).get_dashboard(
                 portfolio_id,
                 trade_date=trade_date,
                 event_limit=event_limit,
@@ -779,7 +782,8 @@ def create_coldstart_sentinel_order(req: ColdstartSentinelOrderRequest) -> dict[
 @router.get("/portfolios/{portfolio_id}/orders")
 def list_orders(portfolio_id: str, limit: int = 500) -> dict[str, Any]:
     try:
-        return {"ok": True, "orders": PaperTradingV2Repository().list_orders(portfolio_id, limit=limit)}
+        rows = PaperTradingV2Repository().list_orders(portfolio_id, limit=limit)
+        return {"ok": True, "orders": PaperV2SymbolNameResolver().enrich_rows(rows)}
     except TradingCoreError as exc:
         _raise_http(exc)
 
@@ -787,7 +791,8 @@ def list_orders(portfolio_id: str, limit: int = 500) -> dict[str, Any]:
 @router.get("/portfolios/{portfolio_id}/fills")
 def list_fills(portfolio_id: str, limit: int = 500) -> dict[str, Any]:
     try:
-        return {"ok": True, "fills": PaperTradingV2Repository().list_fills(portfolio_id, limit=limit)}
+        rows = PaperTradingV2Repository().list_fills(portfolio_id, limit=limit)
+        return {"ok": True, "fills": PaperV2SymbolNameResolver().enrich_rows(rows)}
     except TradingCoreError as exc:
         _raise_http(exc)
 
@@ -795,7 +800,8 @@ def list_fills(portfolio_id: str, limit: int = 500) -> dict[str, Any]:
 @router.get("/portfolios/{portfolio_id}/cash-ledger")
 def list_cash_ledger(portfolio_id: str, limit: int = 500) -> dict[str, Any]:
     try:
-        return {"ok": True, "cash_ledger": PaperTradingV2Repository().list_cash_ledger(portfolio_id, limit=limit)}
+        rows = PaperTradingV2Repository().list_cash_ledger(portfolio_id, limit=limit)
+        return {"ok": True, "cash_ledger": PaperV2SymbolNameResolver().enrich_rows(rows)}
     except TradingCoreError as exc:
         _raise_http(exc)
 
@@ -803,7 +809,8 @@ def list_cash_ledger(portfolio_id: str, limit: int = 500) -> dict[str, Any]:
 @router.get("/portfolios/{portfolio_id}/positions")
 def list_positions(portfolio_id: str, limit: int = 500) -> dict[str, Any]:
     try:
-        return {"ok": True, "positions": PaperTradingV2Repository().list_positions(portfolio_id, limit=limit)}
+        rows = PaperTradingV2Repository().list_positions(portfolio_id, limit=limit)
+        return {"ok": True, "positions": PaperV2SymbolNameResolver().enrich_rows(rows)}
     except TradingCoreError as exc:
         _raise_http(exc)
 

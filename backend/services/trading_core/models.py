@@ -13,6 +13,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from backend.execution_algos.board_lot import board_lot_rule
+
 
 class OrderSide(str, Enum):
     BUY = "BUY"
@@ -71,12 +73,10 @@ class OrderIntent(BaseModel):
             raise ValueError("symbol is required")
         return value
 
-    @field_validator("quantity")
-    @classmethod
-    def _quantity_must_be_round_lot(cls, value: int) -> int:
-        if value % 100 != 0:
-            raise ValueError("quantity must be a 100-share round lot")
-        return value
+    @model_validator(mode="after")
+    def _quantity_board_lot(self) -> "OrderIntent":
+        _validate_board_lot_quantity(self.symbol, self.side, self.quantity, "quantity")
+        return self
 
     @model_validator(mode="after")
     def _limit_price_required_for_limit(self) -> "OrderIntent":
@@ -106,6 +106,7 @@ class Order(BaseModel):
 
     @model_validator(mode="after")
     def _filled_cannot_exceed_quantity(self) -> "Order":
+        _validate_board_lot_quantity(self.symbol, self.side, self.quantity, "order quantity")
         if self.filled_quantity > self.quantity:
             raise ValueError("filled_quantity cannot exceed quantity")
         return self
@@ -129,12 +130,10 @@ class Fill(BaseModel):
     reason: str
     metadata: dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("quantity")
-    @classmethod
-    def _fill_quantity_round_lot(cls, value: int) -> int:
-        if value % 100 != 0:
-            raise ValueError("fill quantity must be a 100-share round lot")
-        return value
+    @model_validator(mode="after")
+    def _fill_quantity_board_lot(self) -> "Fill":
+        _validate_board_lot_quantity(self.symbol, self.side, self.quantity, "fill quantity")
+        return self
 
 
 class StepFill(BaseModel):
@@ -148,12 +147,24 @@ class StepFill(BaseModel):
     reason: str
     metadata: dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("quantity")
-    @classmethod
-    def _step_quantity_round_lot(cls, value: int) -> int:
-        if value % 100 != 0:
-            raise ValueError("step fill quantity must be a 100-share round lot")
-        return value
+    @model_validator(mode="after")
+    def _step_quantity_board_lot(self) -> "StepFill":
+        _validate_board_lot_quantity(self.symbol, self.side, self.quantity, "step fill quantity")
+        return self
+
+
+def _validate_board_lot_quantity(symbol: str, side: OrderSide, quantity: int, label: str) -> None:
+    min_qty, increment = board_lot_rule(symbol)
+    if quantity >= min_qty and quantity % increment == 0:
+        return
+    if side == OrderSide.SELL and 0 < quantity < min_qty:
+        # Exchange residual rule: odd-lot residual holdings may be flushed in
+        # one sell fill. Buy fills must still satisfy the board minimum.
+        return
+    raise ValueError(
+        f"{label} must follow board-lot rules for {symbol}: "
+        f"min_qty={min_qty}, increment={increment}"
+    )
 
 
 class OrderEvent(BaseModel):

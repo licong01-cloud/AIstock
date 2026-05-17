@@ -42,6 +42,11 @@ def test_qe_archive_schema_declares_required_tables() -> None:
         "qe_archive.agent_query_audit",
         "qe_archive.outbox_event",
         "qe_archive.archive_job",
+        "qe_archive.skip_registry",
+        "qe_archive.ingest_history",
+        "qe_archive.backfill_run",
+        "qe_archive.backfill_run_item",
+        "qe_archive.bootstrap_marker",
     )
 
     for table in required_tables:
@@ -152,8 +157,29 @@ def test_qe_archive_schema_keeps_daily_invalid_runs_filterable_and_score_compone
 
 
 def test_qe_archive_schema_version_is_explicit() -> None:
-    assert QE_ARCHIVE_SCHEMA_VERSION == "qe_archive_v1_20260502"
+    assert QE_ARCHIVE_SCHEMA_VERSION == "qe_archive_v2_20260516"
     assert "qe_archive.schema_version" in _ddl_text()
+
+
+def test_qe_archive_v2_tracks_policy_ingest_history_and_backfill_lifecycle() -> None:
+    ddl = _ddl_text()
+
+    required_fragments = (
+        "CREATE TABLE IF NOT EXISTS qe_archive.skip_registry",
+        "archive_policy TEXT NOT NULL",
+        "archive_policy IN ('SKIP','MANUAL_ONLY')",
+        "CREATE TABLE IF NOT EXISTS qe_archive.ingest_history",
+        "trigger_reason IN ('realtime','backfill','retry','manual','rebootstrap')",
+        "ingest_status IN ('queued','started','completed','failed','skipped','manual_only','noop')",
+        "CREATE TABLE IF NOT EXISTS qe_archive.backfill_run",
+        "source_mode IN ('completed_single_experiments','completed_custom_evo_loops','all_completed_qe_sources','specific_ids')",
+        "mode IN ('preview','execute','resume','rebootstrap')",
+        "CREATE TABLE IF NOT EXISTS qe_archive.backfill_run_item",
+        "CREATE TABLE IF NOT EXISTS qe_archive.bootstrap_marker",
+    )
+
+    for fragment in required_fragments:
+        assert fragment in ddl
 
 
 def test_qe_archive_every_table_and_column_has_database_comment() -> None:

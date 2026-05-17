@@ -1,4 +1,4 @@
-﻿"""DB schema bootstrap for Strategy Package, Selection Center, and Paper v2.
+"""DB schema bootstrap for Strategy Package, Selection Center, and Paper v2.
 
 This module is intentionally separate from business code. Runtime services should
 not create or alter tables implicitly; operators can run this bootstrap or the
@@ -65,7 +65,7 @@ DDL: list[str] = [
         package_id TEXT PRIMARY KEY,
         package_name TEXT NOT NULL,
         package_version TEXT NOT NULL,
-        source_type TEXT NOT NULL CHECK (source_type IN ('qe_experiment', 'qe_evolution_loop')),
+        source_type TEXT NOT NULL CHECK (source_type IN ('qe_experiment', 'qe_evolution_loop', 'candidate_strategy_package')),
         source_id TEXT NOT NULL,
         loop_id TEXT,
         run_id TEXT,
@@ -75,6 +75,66 @@ DDL: list[str] = [
         paper_portfolio_count INTEGER NOT NULL DEFAULT 0,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    "ALTER TABLE strategy_pkg.package DROP CONSTRAINT IF EXISTS package_source_type_check",
+    """
+    ALTER TABLE strategy_pkg.package
+        ADD CONSTRAINT package_source_type_check
+        CHECK (source_type IN ('qe_experiment', 'qe_evolution_loop', 'candidate_strategy_package'))
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS strategy_pkg.candidate_strategy_package (
+        candidate_id TEXT PRIMARY KEY,
+        candidate_version INTEGER NOT NULL DEFAULT 1 CHECK (candidate_version > 0),
+        source_type TEXT NOT NULL CHECK (source_type IN ('qe_experiment', 'qe_evolution_loop', 'candidate_strategy_package')),
+        source_id TEXT NOT NULL,
+        source_task_id TEXT,
+        source_loop_id TEXT,
+        source_experiment_id TEXT,
+        archive_run_id TEXT,
+        display_name TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'DELETED')),
+        snapshot_config_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        factor_manifest_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        model_manifest_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        strategy_manifest_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        metric_snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        artifact_refs_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        completeness_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        eligibility_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        audit_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_by TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        deleted_by TEXT,
+        deleted_at TIMESTAMPTZ,
+        delete_reason TEXT,
+        UNIQUE (source_type, source_id, candidate_version)
+    )
+    """,
+    "ALTER TABLE strategy_pkg.candidate_strategy_package DROP CONSTRAINT IF EXISTS candidate_strategy_package_source_type_check",
+    """
+    ALTER TABLE strategy_pkg.candidate_strategy_package
+        ADD CONSTRAINT candidate_strategy_package_source_type_check
+        CHECK (source_type IN ('qe_experiment', 'qe_evolution_loop', 'candidate_strategy_package'))
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_strategy_pkg_candidate_source
+        ON strategy_pkg.candidate_strategy_package(source_type, source_id, status)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_strategy_pkg_candidate_status
+        ON strategy_pkg.candidate_strategy_package(status, created_at DESC)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS strategy_pkg.candidate_strategy_package_audit (
+        audit_id BIGSERIAL PRIMARY KEY,
+        candidate_id TEXT NOT NULL REFERENCES strategy_pkg.candidate_strategy_package(candidate_id) ON DELETE RESTRICT,
+        action TEXT NOT NULL,
+        actor TEXT NOT NULL,
+        context JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """,
     """
@@ -285,6 +345,21 @@ DDL: list[str] = [
         )
     )
     """,
+    "ALTER TABLE paper_v2.portfolio ADD COLUMN IF NOT EXISTS broker_backend VARCHAR(32) NOT NULL DEFAULT 'local_sim'",
+    "ALTER TABLE paper_v2.portfolio DROP CONSTRAINT IF EXISTS portfolio_broker_backend_check",
+    """
+    ALTER TABLE paper_v2.portfolio
+        ADD CONSTRAINT portfolio_broker_backend_check
+        CHECK (broker_backend IN ('local_sim', 'minqmt_sim'))
+    """,
+    "ALTER TABLE paper_v2.portfolio DROP CONSTRAINT IF EXISTS portfolio_broker_market_source_check",
+    """
+    ALTER TABLE paper_v2.portfolio
+        ADD CONSTRAINT portfolio_broker_market_source_check CHECK (
+            (broker_backend = 'local_sim' AND data_source IN ('TDX_REALTIME', 'DB_HISTORICAL'))
+            OR (broker_backend = 'minqmt_sim' AND data_source = 'MINIQMT_REALTIME')
+        )
+    """,
     """
     CREATE TABLE IF NOT EXISTS paper_v2.execution_policy_activation (
         activation_id TEXT PRIMARY KEY,
@@ -477,6 +552,7 @@ DDL: list[str] = [
         package_id TEXT NOT NULL,
         intent_id TEXT NOT NULL,
         symbol TEXT NOT NULL,
+        stock_name TEXT,
         side TEXT NOT NULL,
         quantity INTEGER NOT NULL,
         order_type TEXT NOT NULL,
@@ -507,6 +583,7 @@ DDL: list[str] = [
         run_id TEXT NOT NULL REFERENCES paper_v2.run(run_id),
         order_id TEXT NOT NULL,
         symbol TEXT NOT NULL,
+        stock_name TEXT,
         side TEXT NOT NULL,
         quantity INTEGER NOT NULL,
         price DOUBLE PRECISION NOT NULL,
@@ -528,6 +605,7 @@ DDL: list[str] = [
         fill_id TEXT,
         trade_date DATE NOT NULL,
         symbol TEXT,
+        stock_name TEXT,
         side TEXT,
         notional NUMERIC(20, 6) NOT NULL,
         fee NUMERIC(20, 6) NOT NULL,
@@ -543,6 +621,7 @@ DDL: list[str] = [
         portfolio_id TEXT NOT NULL,
         trade_date DATE NOT NULL,
         symbol TEXT NOT NULL,
+        stock_name TEXT,
         quantity INTEGER NOT NULL,
         available_quantity INTEGER NOT NULL,
         avg_cost DOUBLE PRECISION NOT NULL,

@@ -20,6 +20,17 @@ function text(row: JsonObject, key: string): string {
   return String(value);
 }
 
+function symbolLabel(row: JsonObject) {
+  const symbol = text(row, "symbol");
+  const name = text(row, "stock_name") !== "-" ? text(row, "stock_name") : text(row, "symbol_name");
+  return (
+    <span>
+      <span className="pv2-mono">{symbol}</span>
+      {name !== "-" ? <><br /><span className="pv2-muted">{name}</span></> : null}
+    </span>
+  );
+}
+
 function compactJson(row: JsonObject, key: string): string {
   const value = row[key];
   if (!value || typeof value !== "object") return "-";
@@ -145,7 +156,7 @@ export default function PaperV2LedgerPage() {
           empty="暂无订单。请先执行就绪检查和单日运行。"
           columns={[
             { key: "date", header: "创建时间", render: (row) => text(row, "created_at").slice(0, 19).replace("T", " ") },
-            { key: "symbol", header: "股票代码", render: (row) => text(row, "symbol") },
+            { key: "symbol", header: "股票", render: (row) => symbolLabel(row) },
             { key: "package", header: "执行策略包", render: (row) => row.package_id === portfolio?.package_id ? packageName : shortHash(row.package_id) },
             { key: "side", header: "方向", render: (row) => <StatusBadge status={text(row, "side")} /> },
             { key: "qty", header: "数量", render: (row) => formatNumber(row.quantity, 0) },
@@ -181,7 +192,7 @@ export default function PaperV2LedgerPage() {
             empty="暂无成交。"
             columns={[
               { key: "time", header: "成交时间", render: (row) => text(row, "trade_time").slice(0, 19).replace("T", " ") },
-              { key: "symbol", header: "股票代码", render: (row) => text(row, "symbol") },
+              { key: "symbol", header: "股票", render: (row) => symbolLabel(row) },
               { key: "side", header: "方向", render: (row) => <StatusBadge status={text(row, "side")} /> },
               { key: "qty", header: "数量", render: (row) => formatNumber(row.quantity, 0) },
               { key: "price", header: "价格", render: (row) => formatNumber(row.price, 4) },
@@ -196,7 +207,7 @@ export default function PaperV2LedgerPage() {
             empty="暂无现金流水。"
             columns={[
               { key: "date", header: "日期", render: (row) => text(row, "trade_date") },
-              { key: "symbol", header: "股票代码", render: (row) => text(row, "symbol") },
+              { key: "symbol", header: "股票", render: (row) => symbolLabel(row) },
               { key: "side", header: "方向", render: (row) => <StatusBadge status={text(row, "side")} /> },
               { key: "notional", header: "成交金额", render: (row) => formatNumber(row.notional, 2) },
               { key: "fee", header: "费用", render: (row) => formatNumber(row.fee, 2) },
@@ -214,7 +225,7 @@ export default function PaperV2LedgerPage() {
             empty="暂无持仓。"
             columns={[
               { key: "date", header: "日期", render: (row) => text(row, "trade_date") },
-              { key: "symbol", header: "股票代码", render: (row) => text(row, "symbol") },
+              { key: "symbol", header: "股票", render: (row) => symbolLabel(row) },
               { key: "qty", header: "数量", render: (row) => formatNumber(row.quantity, 0) },
               { key: "avail", header: "可用数量", render: (row) => formatNumber(row.available_quantity, 0) },
               { key: "cost", header: "平均成本", render: (row) => formatNumber(row.avg_cost, 4) },

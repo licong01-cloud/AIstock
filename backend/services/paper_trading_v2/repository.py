@@ -36,6 +36,7 @@ from .models import (
     RuntimeProfileStatus,
     RuntimeProfileValidationStatus,
 )
+from .symbol_names import PaperV2SymbolNameResolver
 
 ConnFactory = Callable[[], Iterator[Any]]
 
@@ -43,6 +44,16 @@ RUNNING_SUMMARY_ACTIVE_STATUSES = (
     PortfolioStatus.RUNNING.value,
     PortfolioStatus.PAUSED.value,
 )
+RUNNING_SUMMARY_TICKABLE_SESSION_STATUSES = {
+    PaperSessionStatus.CREATED.value,
+    PaperSessionStatus.PREFLIGHTING.value,
+    PaperSessionStatus.REPLAYING.value,
+    PaperSessionStatus.CATCHING_UP.value,
+    PaperSessionStatus.SWITCHING_TO_LIVE.value,
+    PaperSessionStatus.LIVE_RUNNING.value,
+    PaperSessionStatus.LIVE_WAITING_FOR_BAR.value,
+    PaperSessionStatus.LIVE_WAITING_NEXT_TRADING_DAY.value,
+}
 RUNNING_SUMMARY_SORT_COLUMNS = {
     "portfolio_name": "portfolio_name",
     "status": "status",
@@ -65,9 +76,54 @@ RUNNING_SUMMARY_SEARCH_COLUMNS = {
 }
 
 
+def _running_summary_operability(
+    *,
+    portfolio_status: PortfolioStatus,
+    latest_session: PaperTradingSession | None,
+    tickable_session_count: int,
+) -> dict[str, Any]:
+    no_operable = portfolio_status in {PortfolioStatus.RUNNING, PortfolioStatus.PAUSED} and tickable_session_count == 0
+    latest_status = latest_session.status.value if latest_session else None
+    latest_mode = latest_session.mode.value if latest_session else None
+    latest_terminal = latest_status in {
+        PaperSessionStatus.SUCCEEDED.value,
+        PaperSessionStatus.FAILED.value,
+        PaperSessionStatus.STOPPED.value,
+    } if latest_status else False
+    hint = None
+    if no_operable:
+        hint = (
+            "Portfolio status is active but no scheduler-tickable live/replay session exists. "
+            "Review the latest terminal session, then create or resume a session outside the 09:15-15:00 state-change block."
+        )
+    return {
+        "tickable_session_count": tickable_session_count,
+        "has_tickable_session": tickable_session_count > 0,
+        "latest_session_status": latest_status,
+        "latest_session_mode": latest_mode,
+        "latest_session_is_terminal": latest_terminal,
+        "no_operable_session": no_operable,
+        "remediation_hint": hint,
+    }
+
+
 class PaperTradingV2Repository:
-    def __init__(self, conn_factory: ConnFactory | None = None) -> None:
+    def __init__(
+        self,
+        conn_factory: ConnFactory | None = None,
+        *,
+        symbol_name_resolver: PaperV2SymbolNameResolver | Any | None = None,
+    ) -> None:
         self._conn_factory = conn_factory or get_conn
+        self._symbol_name_resolver = symbol_name_resolver or PaperV2SymbolNameResolver(self._conn_factory)
+
+    def _resolve_stock_names(self, symbols: list[str | None] | tuple[str | None, ...]) -> dict[str, str]:
+        try:
+            return self._symbol_name_resolver.resolve(symbols)
+        except Exception:
+            # Stock names are display/audit metadata only; trading writes must
+            # never fail because a reference-table lookup failed.
+            return {}
 
     @contextmanager
     def session_tick_lock(self, session_id: str) -> Iterator[None]:
@@ -356,6 +412,21 @@ class PaperTradingV2Repository:
 
                 cur.execute(
                     """
+                    SELECT portfolio_id, COUNT(*) AS tickable_session_count
+                    FROM paper_v2.trade_session
+                    WHERE portfolio_id = ANY(%s)
+                      AND status = ANY(%s)
+                    GROUP BY portfolio_id
+                    """,
+                    (portfolio_ids, sorted(RUNNING_SUMMARY_TICKABLE_SESSION_STATUSES)),
+                )
+                tickable_session_counts = {
+                    row["portfolio_id"]: int(row["tickable_session_count"] or 0)
+                    for row in cur.fetchall()
+                }
+
+                cur.execute(
+                    """
                     SELECT p.portfolio_id,
                            COALESCE(o.order_count, 0) AS order_count,
                            COALESCE(f.fill_count, 0) AS fill_count,
@@ -451,6 +522,11 @@ class PaperTradingV2Repository:
                     "portfolio": portfolio,
                     "latest_run": latest_runs.get(portfolio_id),
                     "latest_session": latest_sessions.get(portfolio_id),
+                    "operability": _running_summary_operability(
+                        portfolio_status=portfolio.status,
+                        latest_session=latest_sessions.get(portfolio_id),
+                        tickable_session_count=tickable_session_counts.get(portfolio_id, 0),
+                    ),
                     "latest_snapshot": recent_snapshots[0] if recent_snapshots else None,
                     "recent_snapshots": recent_snapshots,
                     "latest_positions": latest_positions,
@@ -1390,19 +1466,21 @@ class PaperTradingV2Repository:
         )
 
     def save_order(self, run_id: str, order: Order) -> None:
+        stock_name = self._resolve_stock_names([order.symbol]).get(order.symbol)
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     INSERT INTO paper_v2.orders (
                         order_id, run_id, portfolio_id, package_id, intent_id, symbol,
-                        side, quantity, order_type, limit_price, status,
+                        stock_name, side, quantity, order_type, limit_price, status,
                         filled_quantity, avg_fill_price, metadata, created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT(order_id) DO UPDATE SET
                         status = EXCLUDED.status,
                         filled_quantity = EXCLUDED.filled_quantity,
                         avg_fill_price = EXCLUDED.avg_fill_price,
+                        stock_name = COALESCE(orders.stock_name, EXCLUDED.stock_name),
                         updated_at = EXCLUDED.updated_at
                     """,
                     (
@@ -1412,6 +1490,7 @@ class PaperTradingV2Repository:
                         order.package_id,
                         order.intent_id,
                         order.symbol,
+                        stock_name,
                         order.side.value,
                         order.quantity,
                         order.order_type.value,
@@ -1473,17 +1552,18 @@ class PaperTradingV2Repository:
                 intended_price = fill.metadata.get("intended_price")
             if fill_market_context is None:
                 fill_market_context = fill.metadata.get("fill_market_context")
+        stock_name = self._resolve_stock_names([fill.symbol]).get(fill.symbol)
         now = datetime.now(UTC)
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     INSERT INTO paper_v2.fills (
-                        fill_id, run_id, order_id, symbol, side, quantity, price,
+                        fill_id, run_id, order_id, symbol, stock_name, side, quantity, price,
                         trade_time, bar_time, reason, metadata,
                         created_at, updated_at, intended_price, fill_market_context
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                              %s, %s, %s, %s)
+                              %s, %s, %s, %s, %s)
                     ON CONFLICT(fill_id) DO NOTHING
                     """,
                     (
@@ -1491,6 +1571,7 @@ class PaperTradingV2Repository:
                         run_id,
                         fill.order_id,
                         fill.symbol,
+                        stock_name,
                         fill.side.value,
                         fill.quantity,
                         fill.price,
@@ -1564,14 +1645,15 @@ class PaperTradingV2Repository:
                 )
 
     def save_cash_entry(self, run_id: str, entry: CashLedgerEntry) -> None:
+        stock_name = self._resolve_stock_names([entry.symbol]).get(entry.symbol)
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     INSERT INTO paper_v2.cash_ledger (
-                        run_id, portfolio_id, fill_id, trade_date, symbol, side,
+                        run_id, portfolio_id, fill_id, trade_date, symbol, stock_name, side,
                         notional, fee, cash_delta, cash_after
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         run_id,
@@ -1579,6 +1661,7 @@ class PaperTradingV2Repository:
                         entry.fill_id,
                         entry.trade_date,
                         entry.symbol,
+                        stock_name,
                         entry.side.value,
                         entry.notional,
                         entry.fee,
@@ -1591,6 +1674,7 @@ class PaperTradingV2Repository:
         # T5: created_at / updated_at watermark fields for DW ETL. Passed
         # explicitly via now() so InMemory parity is preserved.
         now = datetime.now(UTC)
+        stock_names = self._resolve_stock_names([position.symbol for position in positions])
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM paper_v2.positions WHERE run_id = %s", (run_id,))
@@ -1599,16 +1683,17 @@ class PaperTradingV2Repository:
                     cur.execute(
                         """
                         INSERT INTO paper_v2.positions (
-                            run_id, portfolio_id, trade_date, symbol, quantity,
+                            run_id, portfolio_id, trade_date, symbol, stock_name, quantity,
                             available_quantity, avg_cost, market_price, market_value, metadata,
                             created_at, updated_at
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         (
                             run_id,
                             position.portfolio_id,
                             trade_date,
                             position.symbol,
+                            stock_names.get(position.symbol),
                             position.quantity,
                             position.available_quantity,
                             position.avg_cost,
@@ -2190,7 +2275,13 @@ class InMemoryPaperTradingV2Repository:
         active = {PortfolioStatus(status) for status in status_values}
         for portfolio in [item for item in self.list_portfolios(limit=10_000) if item.status in active]:
             runs = self.list_runs(portfolio.portfolio_id, limit=1)
-            sessions = self.list_sessions(portfolio.portfolio_id, limit=1)
+            all_sessions = self.list_sessions(portfolio.portfolio_id, limit=10_000)
+            sessions = all_sessions[:1]
+            tickable_session_count = sum(
+                1
+                for session in all_sessions
+                if session.status.value in RUNNING_SUMMARY_TICKABLE_SESSION_STATUSES
+            )
             snapshots = self.list_daily_snapshots(portfolio.portfolio_id, limit=snapshot_limit)
             latest_trade_date = snapshots[0]["trade_date"] if snapshots else None
             positions = self.list_positions(portfolio.portfolio_id, limit=10_000)
@@ -2204,6 +2295,11 @@ class InMemoryPaperTradingV2Repository:
                     "portfolio": portfolio,
                     "latest_run": runs[0] if runs else None,
                     "latest_session": sessions[0] if sessions else None,
+                    "operability": _running_summary_operability(
+                        portfolio_status=portfolio.status,
+                        latest_session=sessions[0] if sessions else None,
+                        tickable_session_count=tickable_session_count,
+                    ),
                     "latest_snapshot": snapshots[0] if snapshots else None,
                     "recent_snapshots": snapshots,
                     "latest_positions": latest_positions,

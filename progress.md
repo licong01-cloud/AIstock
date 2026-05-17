@@ -397,3 +397,53 @@
   - Loop3 retrained top/bottom gentle: annual return 37.39%, Sharpe/IR 1.640, max drawdown -16.88%.
   - Loop4 top/bottom stronger risk penalty: annual return 36.05%, Sharpe/IR 1.576, max drawdown -16.80%.
 - Conclusion: no-HMM is still best; Loop2 is the best HMM in this round but remains below the no-HMM control. Updated `docs/analysis/hmm_regime_redefinition_qe_handoff_20260510.md`.
+
+---
+
+# Progress Addendum: Paper v2 remaining design implementation (2026-05-14)
+
+- Started from clean branch `codex/paper-v2-live-smoke-fixes-20260513` at `3a32a60`.
+- Goal: implement remaining Paper v2 UI/display/name persistence items and validate before any main merge.
+- Existing P0 commits remain unmerged to main.
+
+### Paper v2 remaining design implementation progress (2026-05-14)
+- Implemented UI terminology cleanup from ambiguous ???? to ???/????? across Paper v2 nav, overview, running, package, settings, and portfolio pages.
+- Added date-based default simulated account names in portfolio creation while keeping the name field user-editable.
+- Updated live dashboard: candidate signal is explicitly a ????, candidate weight is labeled as preview only, final target/rebalance tables are separated, today signal supports field sorting, and realtime NAV is rendered as an SVG time-series curve with sample-insufficient state.
+- Added display-only stock-name resolver/enrichment for Paper v2 read APIs and live dashboard rows; symbol remains authoritative and names do not participate in selection/trading.
+- Validation: pytest backend/tests/paper_trading_v2 -> 189 passed, 1 skipped, 2 xfailed; targeted frontend eslint for changed Paper v2 files passed; npx tsc --noEmit passed; git diff --check passed. Full frontend lint/build still fail on unrelated legacy lint errors outside Paper v2 after repairing the stale next/typescript config reference.
+
+## Progress Addendum: Paper v2 stock_name DB persistence and full-flow validation (2026-05-14)
+- Implemented nullable display/audit-only `stock_name` persistence for `paper_v2.orders`, `paper_v2.fills`, `paper_v2.cash_ledger`, and `paper_v2.positions`.
+- Added migration `backend/db/add_paper_v2_stock_names_20260514.sql`, updated baseline schema files, and applied the migration/backfill only to DEV DB `127.0.0.1:5433/aistock_dev`.
+- Updated repository writes so new orders/fills/cash ledger rows/positions persist stock names from `market.stock_basic` with `market.symbol_dim` fallback. Lookup failure is fail-open and does not affect trading writes.
+- Kept API/dashboard enrichment as a backward-compatible fallback for older rows or empty persisted names.
+- Fixed legacy frontend lint blockers outside Paper v2 that prevented the full frontend lint/build gate from passing.
+- Updated Paper v2 real-flow Playwright checks for the new UI wording and stock_name fields.
+- Validation passed:
+  - `python -m pytest backend/tests/paper_trading_v2 -q -p no:cacheprovider` -> 191 passed, 1 skipped, 2 xfailed.
+  - `python -m pytest backend/tests/e2e/test_paper_v2_full_lifecycle.py -q -p no:cacheprovider` -> 4 passed.
+  - DEV DB migration/backfill -> all four columns exist; named/total counts at migration time: orders 2049/2049, fills 8243/8243, cash_ledger 8283/8283, positions 2119/2119.
+  - DEV DB write smoke -> inserted order/fill/cash/position test rows all persisted non-empty stock_name, then cleaned up.
+  - Side-port API smoke on backend `8011` using DEV DB -> orders/fills/positions/cash-ledger returned non-empty stock_name for an existing Paper v2 portfolio.
+  - `npm --prefix frontend run lint` -> passed with existing warnings only.
+  - `npm --prefix frontend run build` -> passed.
+  - `npx tsc --noEmit --pretty false` from `frontend/` -> passed.
+  - `PAPER_V2_API_BASE=http://127.0.0.1:8011/api/v1 PAPER_V2_FRONTEND_PORT=3011 PAPER_V2_E2E_SKIP_REALTIME=1 npx playwright test -c playwright.paper-v2.config.ts tests/paper-v2/paper-v2-real-flow.spec.ts` -> 7 passed, 3 skipped.
+  - `git diff --check` -> passed.
+- Boundaries preserved: no merge to `main`, no production DB migration, no production `8001/3000` restart, no tick-level execution semantic change.
+
+### Paper v2 side-port validation refresh (2026-05-14T23:30:26+08:00)
+- Re-ran merge-gate validation after seeding DEV-only prerequisites needed by the real-flow test harness:
+  - Copied `suspend_d` rows and `market.dataset_date_refresh_audit` rows for `2026-04-20..2026-05-14` from local production DB to DEV DB `127.0.0.1:5433/aistock_dev`.
+  - Copied current sector HMM config/snapshot/job metadata into DEV DB and copied one-day `market.sector_data`/`market.sw_daily` rows for `2026-04-24` so the HMM preview path can fail/preview through the same UI contract.
+  - These were DEV DB validation fixtures only; production DB was not modified.
+- Validation refresh passed:
+  - `python -m pytest backend/tests/paper_trading_v2 -q -p no:cacheprovider` -> 191 passed, 1 skipped, 2 xfailed.
+  - `python -m pytest backend/tests/e2e/test_paper_v2_full_lifecycle.py -q -p no:cacheprovider` -> 4 passed.
+  - `npm --prefix frontend run lint` -> passed with existing warnings only.
+  - `npm --prefix frontend run build` -> passed.
+  - `npx tsc --noEmit --pretty false` from `frontend/` -> passed.
+  - Side-port API smoke on `8011` using DEV DB -> selected portfolio returned 5/5 named rows for orders, fills, positions, and cash ledger.
+  - `PAPER_V2_API_BASE=http://127.0.0.1:8011/api/v1 PAPER_V2_FRONTEND_PORT=3011 PAPER_V2_E2E_SKIP_REALTIME=1 npx playwright test -c playwright.paper-v2.config.ts tests/paper-v2/paper-v2-real-flow.spec.ts` -> 7 passed, 3 skipped.
+- Cleaned up temporary validation servers; ports `8011` and `3011` are free.

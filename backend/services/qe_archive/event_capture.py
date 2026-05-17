@@ -63,10 +63,22 @@ class QEArchiveEventCapture:
         loop_id: str,
         loop_index: int | None = None,
         payload: Mapping[str, Any] | None = None,
+        archive_policy: str = "AUTO",
+        archive_policy_source: str = "default",
+        trigger_reason: str = "realtime",
+        payload_sha256: str | None = None,
+        runtime_config_sha256: str | None = None,
     ) -> dict[str, Any]:
         event_payload = dict(payload or {})
         event_payload.setdefault("task_id", task_id)
         event_payload.setdefault("loop_id", loop_id)
+        event_payload.setdefault("archive_policy", archive_policy)
+        event_payload.setdefault("archive_policy_source", archive_policy_source)
+        event_payload.setdefault("trigger_reason", trigger_reason)
+        if payload_sha256:
+            event_payload.setdefault("payload_sha256", payload_sha256)
+        if runtime_config_sha256:
+            event_payload.setdefault("runtime_config_sha256", runtime_config_sha256)
         if loop_index is not None:
             event_payload.setdefault("loop_index", loop_index)
         return self._insert_event_result(
@@ -95,9 +107,21 @@ class QEArchiveEventCapture:
         *,
         experiment_id: str,
         payload: Mapping[str, Any] | None = None,
+        archive_policy: str = "AUTO",
+        archive_policy_source: str = "default",
+        trigger_reason: str = "realtime",
+        payload_sha256: str | None = None,
+        runtime_config_sha256: str | None = None,
     ) -> dict[str, Any]:
         event_payload = dict(payload or {})
         event_payload.setdefault("experiment_id", experiment_id)
+        event_payload.setdefault("archive_policy", archive_policy)
+        event_payload.setdefault("archive_policy_source", archive_policy_source)
+        event_payload.setdefault("trigger_reason", trigger_reason)
+        if payload_sha256:
+            event_payload.setdefault("payload_sha256", payload_sha256)
+        if runtime_config_sha256:
+            event_payload.setdefault("runtime_config_sha256", runtime_config_sha256)
         return self._insert_event_result(
             event_type="qe.experiment.completed",
             source_system="qe",

@@ -454,6 +454,177 @@ class OutboxEventRecord:
 
 
 @dataclass(frozen=True)
+class ArchivePolicyDecision:
+    source_system: str
+    source_type: str
+    source_id: str
+    source_sub_id: str | None = None
+    archive_policy: str = "AUTO"
+    archive_policy_source: str = "default"
+    reason: str = "default_auto"
+    allow_override: bool = False
+    runtime_config: Mapping[str, Any] = field(default_factory=dict)
+    payload_sha256: str | None = None
+    runtime_config_sha256: str | None = None
+
+    @property
+    def should_archive(self) -> bool:
+        return self.archive_policy == "AUTO"
+
+    @property
+    def is_manual_only(self) -> bool:
+        return self.archive_policy == "MANUAL_ONLY"
+
+    @property
+    def is_skipped(self) -> bool:
+        return self.archive_policy in {"SKIP", "MANUAL_ONLY"}
+
+
+@dataclass
+class SkipRegistryRecord:
+    source_system: str
+    source_type: str
+    source_id: str
+    archive_policy: str
+    archive_policy_source: str
+    skip_reason: str
+    trigger_reason: str
+    source_sub_id: str | None = None
+    event_type: str | None = None
+    skip_id: str | None = None
+    allow_override: bool = False
+    override_required_token: str | None = None
+    payload_sha256: str | None = None
+    runtime_config_sha256: str | None = None
+    created_by: str | None = None
+    metadata: Mapping[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        self.metadata = _json_map(self.metadata)
+        if not self.skip_id:
+            fingerprint = {
+                "source_system": self.source_system,
+                "source_type": self.source_type,
+                "source_id": self.source_id,
+                "source_sub_id": self.source_sub_id,
+            }
+            self.skip_id = f"qear_skip_{sha256_json(fingerprint)[:24]}"
+
+
+@dataclass
+class IngestHistoryRecord:
+    source_system: str
+    source_type: str
+    source_id: str
+    trigger_reason: str
+    ingest_status: str
+    history_id: str | None = None
+    run_id: str | None = None
+    logical_experiment_id: str | None = None
+    event_id: str | None = None
+    job_id: str | None = None
+    backfill_run_id: str | None = None
+    source_sub_id: str | None = None
+    archive_policy: str | None = None
+    attempt_no: int = 1
+    payload_sha256: str | None = None
+    runtime_config_sha256: str | None = None
+    result_fingerprint: str | None = None
+    anomaly: bool = False
+    anomaly_reason: str | None = None
+    stats: Mapping[str, Any] | None = None
+    error_message: str | None = None
+    created_by: str | None = None
+
+    def __post_init__(self) -> None:
+        self.stats = _json_map(self.stats)
+        if not self.history_id:
+            fingerprint = {
+                "source_system": self.source_system,
+                "source_type": self.source_type,
+                "source_id": self.source_id,
+                "source_sub_id": self.source_sub_id,
+                "trigger_reason": self.trigger_reason,
+                "ingest_status": self.ingest_status,
+                "attempt_no": self.attempt_no,
+                "payload_sha256": self.payload_sha256,
+                "runtime_config_sha256": self.runtime_config_sha256,
+                "result_fingerprint": self.result_fingerprint,
+                "seed": uuid4().hex,
+            }
+            self.history_id = f"qear_hist_{sha256_json(fingerprint)[:24]}"
+
+
+@dataclass
+class BackfillRunRecord:
+    source_mode: str
+    mode: str
+    status: str = "pending"
+    backfill_run_id: str | None = None
+    request_payload: Mapping[str, Any] | None = None
+    force_rebackfill: bool = False
+    confirm_token_used: bool = False
+    requested_by: str | None = None
+    candidate_count: int = 0
+    processed_count: int = 0
+    ingested_count: int = 0
+    skipped_count: int = 0
+    failed_count: int = 0
+    last_cursor: Mapping[str, Any] | None = None
+    error_message: str | None = None
+
+    def __post_init__(self) -> None:
+        self.request_payload = _json_map(self.request_payload)
+        self.last_cursor = _json_map(self.last_cursor)
+        if not self.backfill_run_id:
+            self.backfill_run_id = f"qear_bf_{uuid4().hex}"
+
+
+@dataclass
+class BackfillRunItemRecord:
+    backfill_run_id: str
+    source_system: str
+    source_type: str
+    source_id: str
+    status: str = "candidate"
+    item_id: str | None = None
+    source_sub_id: str | None = None
+    archive_policy: str | None = None
+    run_id: str | None = None
+    skip_id: str | None = None
+    error_message: str | None = None
+    stats: Mapping[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        self.stats = _json_map(self.stats)
+        if not self.item_id:
+            fingerprint = {
+                "backfill_run_id": self.backfill_run_id,
+                "source_system": self.source_system,
+                "source_type": self.source_type,
+                "source_id": self.source_id,
+                "source_sub_id": self.source_sub_id,
+            }
+            self.item_id = f"qear_bfi_{sha256_json(fingerprint)[:24]}"
+
+
+@dataclass
+class BootstrapMarkerRecord:
+    source_type: str
+    mode: str
+    backfill_run_id: str
+    status: str = "running"
+    operator: str | None = None
+    ingested_count: int = 0
+    skipped_count: int = 0
+    failed_count: int = 0
+    stats: Mapping[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        self.stats = _json_map(self.stats)
+
+
+@dataclass(frozen=True)
 class ClaimedOutboxEvent:
     event_id: str
     event_type: str

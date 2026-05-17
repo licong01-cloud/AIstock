@@ -19,7 +19,7 @@ except ImportError:  # pragma: no cover - direct script execution convenience.
     from backend.db.pg_pool import get_conn
 
 
-QE_ARCHIVE_SCHEMA_VERSION = "qe_archive_v1_20260502"
+QE_ARCHIVE_SCHEMA_VERSION = "qe_archive_v2_20260516"
 
 
 BASE_DDL: list[str] = [
@@ -697,6 +697,141 @@ BASE_DDL: list[str] = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_qear_archive_job_status ON qe_archive.archive_job(status, level, created_at)",
     """
+    CREATE TABLE IF NOT EXISTS qe_archive.skip_registry (
+        skip_id TEXT PRIMARY KEY,
+        source_system TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        source_sub_id TEXT,
+        event_type TEXT,
+        archive_policy TEXT NOT NULL,
+        archive_policy_source TEXT NOT NULL,
+        skip_reason TEXT NOT NULL,
+        allow_override BOOLEAN NOT NULL DEFAULT FALSE,
+        override_required_token TEXT,
+        trigger_reason TEXT NOT NULL,
+        payload_sha256 TEXT,
+        runtime_config_sha256 TEXT,
+        created_by TEXT,
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT ck_qear_skip_policy CHECK (archive_policy IN ('SKIP','MANUAL_ONLY'))
+    )
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_qear_skip_source
+        ON qe_archive.skip_registry(source_system, source_type, source_id, COALESCE(source_sub_id, ''))
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_qear_skip_policy ON qe_archive.skip_registry(archive_policy, created_at DESC)",
+    """
+    CREATE TABLE IF NOT EXISTS qe_archive.ingest_history (
+        history_id TEXT PRIMARY KEY,
+        run_id TEXT REFERENCES qe_archive.run(run_id) ON DELETE SET NULL,
+        logical_experiment_id TEXT,
+        event_id TEXT REFERENCES qe_archive.outbox_event(event_id) ON DELETE SET NULL,
+        job_id TEXT REFERENCES qe_archive.archive_job(job_id) ON DELETE SET NULL,
+        backfill_run_id TEXT,
+        source_system TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        source_sub_id TEXT,
+        trigger_reason TEXT NOT NULL,
+        archive_policy TEXT,
+        ingest_status TEXT NOT NULL,
+        attempt_no INTEGER NOT NULL DEFAULT 1,
+        payload_sha256 TEXT,
+        runtime_config_sha256 TEXT,
+        result_fingerprint TEXT,
+        anomaly BOOLEAN NOT NULL DEFAULT FALSE,
+        anomaly_reason TEXT,
+        stats JSONB NOT NULL DEFAULT '{}'::jsonb,
+        error_message TEXT,
+        created_by TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        completed_at TIMESTAMPTZ,
+        CONSTRAINT ck_qear_ingest_trigger CHECK (trigger_reason IN ('realtime','backfill','retry','manual','rebootstrap')),
+        CONSTRAINT ck_qear_ingest_policy CHECK (archive_policy IS NULL OR archive_policy IN ('AUTO','SKIP','MANUAL_ONLY')),
+        CONSTRAINT ck_qear_ingest_status CHECK (ingest_status IN ('queued','started','completed','failed','skipped','manual_only','noop'))
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_qear_ingest_run ON qe_archive.ingest_history(run_id)",
+    "CREATE INDEX IF NOT EXISTS idx_qear_ingest_backfill ON qe_archive.ingest_history(backfill_run_id)",
+    """
+    CREATE INDEX IF NOT EXISTS idx_qear_ingest_source
+        ON qe_archive.ingest_history(source_system, source_type, source_id, COALESCE(source_sub_id, ''))
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_qear_ingest_status ON qe_archive.ingest_history(ingest_status, created_at DESC)",
+    """
+    CREATE TABLE IF NOT EXISTS qe_archive.backfill_run (
+        backfill_run_id TEXT PRIMARY KEY,
+        source_mode TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        request_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+        force_rebackfill BOOLEAN NOT NULL DEFAULT FALSE,
+        confirm_token_used BOOLEAN NOT NULL DEFAULT FALSE,
+        requested_by TEXT,
+        candidate_count INTEGER NOT NULL DEFAULT 0,
+        processed_count INTEGER NOT NULL DEFAULT 0,
+        ingested_count INTEGER NOT NULL DEFAULT 0,
+        skipped_count INTEGER NOT NULL DEFAULT 0,
+        failed_count INTEGER NOT NULL DEFAULT 0,
+        last_cursor JSONB NOT NULL DEFAULT '{}'::jsonb,
+        error_message TEXT,
+        started_at TIMESTAMPTZ,
+        completed_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT ck_qear_backfill_source_mode CHECK (
+            source_mode IN ('completed_single_experiments','completed_custom_evo_loops','all_completed_qe_sources','specific_ids')
+        ),
+        CONSTRAINT ck_qear_backfill_mode CHECK (mode IN ('preview','execute','resume','rebootstrap')),
+        CONSTRAINT ck_qear_backfill_status CHECK (status IN ('pending','running','completed','failed','partial'))
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_qear_backfill_run_status ON qe_archive.backfill_run(status, created_at DESC)",
+    """
+    CREATE TABLE IF NOT EXISTS qe_archive.backfill_run_item (
+        item_id TEXT PRIMARY KEY,
+        backfill_run_id TEXT NOT NULL REFERENCES qe_archive.backfill_run(backfill_run_id) ON DELETE CASCADE,
+        source_system TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        source_sub_id TEXT,
+        archive_policy TEXT,
+        status TEXT NOT NULL DEFAULT 'candidate',
+        run_id TEXT,
+        skip_id TEXT,
+        error_message TEXT,
+        stats JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT ck_qear_backfill_item_policy CHECK (archive_policy IS NULL OR archive_policy IN ('AUTO','SKIP','MANUAL_ONLY')),
+        CONSTRAINT ck_qear_backfill_item_status CHECK (status IN ('candidate','ingested','skipped','failed'))
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_qear_backfill_item_run ON qe_archive.backfill_run_item(backfill_run_id, status)",
+    """
+    CREATE TABLE IF NOT EXISTS qe_archive.bootstrap_marker (
+        source_type TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        backfill_run_id TEXT NOT NULL,
+        operator TEXT,
+        started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        completed_at TIMESTAMPTZ,
+        ingested_count INTEGER NOT NULL DEFAULT 0,
+        skipped_count INTEGER NOT NULL DEFAULT 0,
+        failed_count INTEGER NOT NULL DEFAULT 0,
+        stats JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT ck_qear_bootstrap_status CHECK (status IN ('running','completed','failed')),
+        CONSTRAINT ck_qear_bootstrap_mode CHECK (mode IN ('execute','rebootstrap'))
+    )
+    """,
+    """
     INSERT INTO qe_archive.schema_version(version, description)
     VALUES (%s, 'QE realtime experiment warehouse schema bootstrap')
     ON CONFLICT (version) DO NOTHING
@@ -732,6 +867,11 @@ TABLE_COMMENTS: dict[str, str] = {
     "qe_archive.agent_query_audit": "Audit log for LLM agent or tool read access to QE archive data.",
     "qe_archive.outbox_event": "Durable archive ingestion events written by QE completion paths or backfill jobs.",
     "qe_archive.archive_job": "Archive worker job state, retry, level, and processing statistics.",
+    "qe_archive.skip_registry": "Auditable records for QE runs intentionally excluded from automatic archive ingestion.",
+    "qe_archive.ingest_history": "Attempt-level archive ingestion history for realtime, retry, manual, and backfill flows.",
+    "qe_archive.backfill_run": "Durable lifecycle record for historical QE archive backfill preview, execute, resume, and rebootstrap operations.",
+    "qe_archive.backfill_run_item": "Per-source item state captured for one historical QE archive backfill run.",
+    "qe_archive.bootstrap_marker": "One-time broad historical backfill marker by QE source type.",
 }
 
 
@@ -1040,6 +1180,34 @@ COMMON_COLUMN_COMMENTS: dict[str, str] = {
     "job_type": "Archive job type.",
     "level": "Archive depth level such as A, B, or C.",
     "stats": "Structured job processing statistics.",
+    "skip_id": "Stable skip registry identifier for one source object.",
+    "archive_policy": "Archive policy selected by the experiment or template: AUTO, SKIP, or MANUAL_ONLY.",
+    "archive_policy_source": "Configuration layer that supplied the archive policy decision.",
+    "skip_reason": "Human or agent supplied reason for not automatically archiving the source.",
+    "allow_override": "Whether a later explicit backfill may override this skip decision.",
+    "override_required_token": "Confirmation token required to override a skip decision.",
+    "trigger_reason": "Reason the ingestion attempt was triggered, such as realtime or backfill.",
+    "runtime_config_sha256": "SHA256 hash of the runtime configuration used for anomaly detection.",
+    "history_id": "Stable ingestion history row identifier.",
+    "backfill_run_id": "Backfill run identifier for preview, execute, resume, or rebootstrap lifecycle.",
+    "ingest_status": "Status of one ingestion attempt.",
+    "result_fingerprint": "Stable fingerprint of the archived result used to detect changed repeats.",
+    "anomaly": "Whether this attempt differs from previous payload or runtime fingerprints.",
+    "anomaly_reason": "Explanation of the detected ingestion anomaly.",
+    "source_mode": "Source selection mode for a historical backfill run.",
+    "mode": "Backfill lifecycle mode such as preview, execute, resume, or rebootstrap.",
+    "request_payload": "Original API request payload for the backfill run.",
+    "force_rebackfill": "Whether the backfill run explicitly requested reprocessing already bootstrapped sources.",
+    "confirm_token_used": "Whether the caller supplied the required write confirmation token.",
+    "requested_by": "User, service, or agent identity that requested the backfill.",
+    "candidate_count": "Number of source candidates discovered for the backfill.",
+    "processed_count": "Number of source candidates processed by the backfill.",
+    "ingested_count": "Number of source candidates successfully archived.",
+    "skipped_count": "Number of source candidates skipped by policy or idempotency.",
+    "failed_count": "Number of source candidates that failed archive processing.",
+    "last_cursor": "Resume cursor or processing checkpoint for a backfill run.",
+    "item_id": "Backfill item identifier for a source candidate.",
+    "operator": "Operator or service identity for a bootstrap marker.",
 }
 
 

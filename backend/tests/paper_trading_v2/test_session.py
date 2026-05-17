@@ -109,6 +109,31 @@ class FakeLiveExecutor:
         return PaperSessionProgress(session=updated, day_count=0, events=self.repo.list_session_events(session.session_id))
 
 
+class FailingLiveExecutor:
+    def __init__(self, repo: InMemoryPaperTradingV2Repository, *, trade_date: date) -> None:
+        self.repo = repo
+        self.trade_date = trade_date
+
+    def tick(self, session, *, as_of_time=None):
+        run = PaperRun(
+            run_id="run_live_terminal_failure",
+            portfolio_id=session.portfolio_id,
+            trade_date=self.trade_date,
+            status=RunStatus.RUNNING,
+            data_source=MinuteDataSource.TDX_REALTIME,
+            runtime_config={},
+        )
+        self.repo.create_run(run)
+        raise DataUnavailableError(
+            "live data integrity failure",
+            context={
+                "session_id": session.session_id,
+                "trade_date": self.trade_date.isoformat(),
+                "symbol": "000001.SZ",
+            },
+        )
+
+
 class FakeTradingCalendar:
     def __init__(self, *, trading_day: bool = True) -> None:
         self.trading_day = trading_day
@@ -245,6 +270,35 @@ def test_live_session_create_and_tick_uses_incremental_executor() -> None:
 
     assert progress.session.status == PaperSessionStatus.LIVE_WAITING_FOR_BAR
     assert fake_live.calls[0]["mode"] == "LIVE_ONLY"
+
+
+def test_live_terminal_failure_marks_current_run_failed() -> None:
+    _package_repo, paper_repo, portfolio = make_portfolio(data_source=MinuteDataSource.TDX_REALTIME)
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio.portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+    )
+
+    with pytest.raises(DataUnavailableError, match="live data integrity failure"):
+        PaperTradingSessionRunner(
+            repository=paper_repo,
+            live_executor=FailingLiveExecutor(paper_repo, trade_date=date(2024, 1, 2)),  # type: ignore[arg-type]
+        ).tick(session.session_id)
+
+    failed_session = paper_repo.get_session(session.session_id)
+    failed_run = paper_repo.get_run("run_live_terminal_failure")
+    assert failed_session.status == PaperSessionStatus.FAILED
+    assert failed_run.status == RunStatus.FAILED
+    assert failed_run.completed_at is not None
+    assert failed_run.error is not None
+    assert failed_run.error["error_code"] == "DATA_UNAVAILABLE"
+    run_errors = [item for item in paper_repo.list_errors(portfolio.portfolio_id) if item.get("run_id") == failed_run.run_id]
+    assert run_errors and run_errors[0]["error"]["context"]["symbol"] == "000001.SZ"
+    run_events = paper_repo.list_run_events(portfolio.portfolio_id, run_id=failed_run.run_id)
+    assert run_events[-1]["event_type"] == "RUN_FAILED"
 
 
 def test_catchup_session_can_be_created_with_explicit_sources() -> None:

@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from ..services.stock_universe_pit_service import (
+    DEFAULT_ST_PIT_REFRESH_POLICY,
     DEFAULT_ST_PIT_RULE_VERSION,
     DEFAULT_ST_PIT_START_DATE,
     DEFAULT_ST_PIT_UNIVERSE_KEY,
@@ -25,6 +26,10 @@ class StPitEnsureRequest(BaseModel):
     rule_version: str = Field(DEFAULT_ST_PIT_RULE_VERSION)
     force: bool = Field(False)
     rebuild_if_stale: bool = Field(True)
+    refresh_policy: str = Field(
+        DEFAULT_ST_PIT_REFRESH_POLICY,
+        description="coverage reuses a valid PIT cache for the same covered date range; source_fingerprint forces source-change refresh.",
+    )
 
 
 class StPitRebuildRequest(BaseModel):
@@ -52,6 +57,7 @@ def ensure_st_pit_universe(body: StPitEnsureRequest) -> dict[str, Any]:
             force=body.force,
             strict=True,
             rebuild_if_stale=body.rebuild_if_stale,
+            refresh_policy=body.refresh_policy,
         )
     except StockUniversePitError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

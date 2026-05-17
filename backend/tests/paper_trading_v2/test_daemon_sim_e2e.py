@@ -296,13 +296,13 @@ def test_e2e_data_unavailable_raises_connectivity(tmp_path: Path) -> None:
         tmp_path=tmp_path,
         provider=_FakeProvider(
             symbol="600000.SH",
-            unknown_symbols=("NOPE.SH",),
+            unknown_symbols=("600001.SH",),
         ),
     )
     intent = _make_intent(
         portfolio_id=portfolio_id,
         package_id=backend._manifest.package_id,
-        symbol="NOPE.SH",
+        symbol="600001.SH",
     )
     with pytest.raises(BrokerConnectivityError):
         runner.run_intents([intent])

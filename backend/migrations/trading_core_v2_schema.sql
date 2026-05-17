@@ -1,4 +1,4 @@
-﻿-- Trading Core v2 / Strategy Package / Selection Center / Paper v2 schema.
+-- Trading Core v2 / Strategy Package / Selection Center / Paper v2 schema.
 -- Keep this migration explicit; business services must not run DDL implicitly.
 
 CREATE SCHEMA IF NOT EXISTS strategy_pkg;
@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS strategy_pkg.package (
     package_id TEXT PRIMARY KEY,
     package_name TEXT NOT NULL,
     package_version TEXT NOT NULL,
-    source_type TEXT NOT NULL CHECK (source_type IN ('qe_experiment', 'qe_evolution_loop')),
+    source_type TEXT NOT NULL CHECK (source_type IN ('qe_experiment', 'qe_evolution_loop', 'candidate_strategy_package')),
     source_id TEXT NOT NULL,
     loop_id TEXT,
     run_id TEXT,
@@ -56,6 +56,50 @@ CREATE TABLE IF NOT EXISTS strategy_pkg.package (
     paper_portfolio_count INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS strategy_pkg.candidate_strategy_package (
+    candidate_id TEXT PRIMARY KEY,
+    candidate_version INTEGER NOT NULL DEFAULT 1 CHECK (candidate_version > 0),
+    source_type TEXT NOT NULL CHECK (source_type IN ('qe_experiment', 'qe_evolution_loop', 'candidate_strategy_package')),
+    source_id TEXT NOT NULL,
+    source_task_id TEXT,
+    source_loop_id TEXT,
+    source_experiment_id TEXT,
+    archive_run_id TEXT,
+    display_name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'DELETED')),
+    snapshot_config_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    factor_manifest_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    model_manifest_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    strategy_manifest_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    metric_snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    artifact_refs_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    completeness_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    eligibility_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    audit_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_by TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_by TEXT,
+    deleted_at TIMESTAMPTZ,
+    delete_reason TEXT,
+    UNIQUE (source_type, source_id, candidate_version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_strategy_pkg_candidate_source
+    ON strategy_pkg.candidate_strategy_package(source_type, source_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_strategy_pkg_candidate_status
+    ON strategy_pkg.candidate_strategy_package(status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS strategy_pkg.candidate_strategy_package_audit (
+    audit_id BIGSERIAL PRIMARY KEY,
+    candidate_id TEXT NOT NULL REFERENCES strategy_pkg.candidate_strategy_package(candidate_id) ON DELETE RESTRICT,
+    action TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    context JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS strategy_pkg.package_status_event (
@@ -70,7 +114,7 @@ CREATE TABLE IF NOT EXISTS strategy_pkg.package_status_event (
 
 CREATE TABLE IF NOT EXISTS strategy_pkg.promotion_review (
     review_id TEXT PRIMARY KEY,
-    source_type TEXT NOT NULL CHECK (source_type IN ('qe_experiment', 'qe_evolution_loop')),
+    source_type TEXT NOT NULL CHECK (source_type IN ('qe_experiment', 'qe_evolution_loop', 'candidate_strategy_package')),
     source_id TEXT NOT NULL,
     task_id TEXT,
     loop_id TEXT,
@@ -466,6 +510,7 @@ CREATE TABLE IF NOT EXISTS paper_v2.orders (
     package_id TEXT NOT NULL,
     intent_id TEXT NOT NULL,
     symbol TEXT NOT NULL,
+    stock_name TEXT,
     side TEXT NOT NULL,
     quantity INTEGER NOT NULL,
     order_type TEXT NOT NULL,
@@ -494,6 +539,7 @@ CREATE TABLE IF NOT EXISTS paper_v2.fills (
     run_id TEXT NOT NULL REFERENCES paper_v2.run(run_id),
     order_id TEXT NOT NULL,
     symbol TEXT NOT NULL,
+    stock_name TEXT,
     side TEXT NOT NULL,
     quantity INTEGER NOT NULL,
     price DOUBLE PRECISION NOT NULL,
@@ -510,6 +556,7 @@ CREATE TABLE IF NOT EXISTS paper_v2.cash_ledger (
     fill_id TEXT,
     trade_date DATE NOT NULL,
     symbol TEXT,
+    stock_name TEXT,
     side TEXT,
     notional NUMERIC(20, 6) NOT NULL,
     fee NUMERIC(20, 6) NOT NULL,
@@ -524,6 +571,7 @@ CREATE TABLE IF NOT EXISTS paper_v2.positions (
     portfolio_id TEXT NOT NULL,
     trade_date DATE NOT NULL,
     symbol TEXT NOT NULL,
+    stock_name TEXT,
     quantity INTEGER NOT NULL,
     available_quantity INTEGER NOT NULL,
     avg_cost DOUBLE PRECISION NOT NULL,

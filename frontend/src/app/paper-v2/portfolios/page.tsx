@@ -27,6 +27,19 @@ const SESSION_MODE_OPTIONS: Array<{ value: PaperSessionMode; label: string; desc
 ];
 const LIVE_TICK_SETTLED_STATUSES = ["LIVE_WAITING_FOR_BAR", "LIVE_WAITING_NEXT_TRADING_DAY", "SUCCEEDED", "FAILED", "STOPPED"];
 
+function todayStamp(): string {
+  const now = new Date();
+  const yyyy = String(now.getFullYear());
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const dd = String(now.getDate()).padStart(2, "0");
+  return `${yyyy}${mm}${dd}`;
+}
+
+function defaultPortfolioName(packageName?: string): string {
+  const stamp = todayStamp();
+  return packageName ? `${packageName}-${stamp}-模拟盘` : `模拟盘-${stamp}`;
+}
+
 export default function PaperV2PortfoliosPage() {
   const [portfolios, setPortfolios] = useState<PaperPortfolio[]>([]);
   const [packages, setPackages] = useState<StrategyPackage[]>([]);
@@ -34,7 +47,7 @@ export default function PaperV2PortfoliosPage() {
   const [hmmConfigs, setHmmConfigs] = useState<HmmConfig[]>([]);
   const [hmmSnapshots, setHmmSnapshots] = useState<HmmSnapshot[]>([]);
   const [packageId, setPackageId] = useState("");
-  const [name, setName] = useState("模拟盘 v2 组合");
+  const [name, setName] = useState(() => defaultPortfolioName());
   const [initialCash, setInitialCash] = useState(1000000);
   const [sessionMode, setSessionMode] = useState<PaperSessionMode>("REPLAY_ONLY");
   const [startDate, setStartDate] = useState(todayIso());
@@ -75,7 +88,7 @@ export default function PaperV2PortfoliosPage() {
       const nextPackageId = packageId || initialPackage || packageRows[0]?.package_id || "";
       if (!packageId) setPackageId(nextPackageId);
       const pkg = packageRows.find((item) => item.package_id === nextPackageId);
-      if (pkg && name === "模拟盘 v2 组合") setName(`${pkg.package_name}-模拟盘`);
+      if (pkg && name === defaultPortfolioName()) setName(defaultPortfolioName(pkg.package_name || pkg.package_id));
       if (!hmmConfigId && configRows[0]) setHmmConfigId(configRows[0].config_id);
     } catch (exc) {
       setError(exc);
@@ -250,7 +263,7 @@ export default function PaperV2PortfoliosPage() {
         <SectionCard title="从单个策略包启动模拟盘" eyebrow="单包执行主链路" action={<button className="pv2-button" onClick={load} disabled={loading} type="button">刷新</button>}>
           <div className="pv2-form-grid">
             <div className="pv2-field"><label>StrategyPackage</label><select className="pv2-select" data-testid="portfolio-package" value={packageId} onChange={(event) => setPackageId(event.target.value)}>{packages.map((item) => <option value={item.package_id} key={item.package_id}>{item.package_name} / {item.package_status}</option>)}</select></div>
-            <div className="pv2-field"><label>组合名称</label><input className="pv2-input" data-testid="portfolio-name" value={name} onChange={(event) => setName(event.target.value)} /></div>
+            <div className="pv2-field"><label>模拟盘名称</label><input className="pv2-input" data-testid="portfolio-name" value={name} onChange={(event) => setName(event.target.value)} /></div>
             <div className="pv2-field"><label>初始资金</label><input className="pv2-input" data-testid="portfolio-initial-cash" type="number" min={1} value={initialCash} onChange={(event) => setInitialCash(Number(event.target.value))} /></div>
             <div className="pv2-field"><label>运行场景</label><select className="pv2-select" data-testid="portfolio-start-mode" value={sessionMode} onChange={(event) => setSessionMode(event.target.value as PaperSessionMode)}>{SESSION_MODE_OPTIONS.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}</select></div>
             <div className="pv2-field"><label>数据源</label><input className="pv2-input" data-testid="portfolio-data-source" value={dataSourceLabel(dataSource)} readOnly /></div>
@@ -304,7 +317,7 @@ export default function PaperV2PortfoliosPage() {
         </SectionCard>
       </div>
 
-      <SectionCard title="当前模拟盘组合" eyebrow={loading ? "加载中" : `${activePortfolios.length}/${portfolios.length} 个运行/暂停组合`} action={<button className="pv2-button" onClick={load} type="button">刷新</button>}>
+      <SectionCard title="当前模拟盘" eyebrow={loading ? "加载中" : `${activePortfolios.length}/${portfolios.length} 个运行/暂停模拟盘`} action={<button className="pv2-button" onClick={load} type="button">刷新</button>}>
         <PaperTable
           rows={portfolios}
           empty="暂无模拟盘 v2 组合。"

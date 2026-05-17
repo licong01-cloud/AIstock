@@ -284,7 +284,18 @@ class TestConfigComposerCommandGeneration:
         assert "python prepare_factors.py" in command
         assert "python qrun_limit_minute.py conf.yaml" in command
 
-    def test_compose_prepare_factors_generates_valid_python(self):
+    def test_compose_prepare_factors_generates_valid_python(self, monkeypatch):
+        monkeypatch.setattr(
+            ConfigComposer,
+            "_resolve_factor_cache_universe_metadata",
+            lambda self, *, start_date, end_date: {
+                "universe_key": "shsz_st_pit_active_v1",
+                "universe_rule_version": "rule_v1",
+                "universe_fingerprint_sha256": "fp-test",
+                "index_policy": "st_pit_buy_eligible_reindexed_v1",
+                "coverage_semantics": "st_pit_buy_eligible_suspend_excluded_non_warmup_v1",
+            },
+        )
         composer = ConfigComposer()
         script = composer._compose_prepare_factors(
             [
@@ -301,6 +312,8 @@ class TestConfigComposerCommandGeneration:
         assert "pd.Timestamp(TRAIN_START)" in script
         assert "_pd.Timestamp" not in script
         assert "factor_codes[\"quote'name\"]" in script or "factor_codes['quote\'name']" in script
+        assert "FACTOR_CACHE_EXPECTED_UNIVERSE_META" in script
+        assert "'universe_fingerprint_sha256': 'fp-test'" in script
 
 
     def test_timeseries_general_ptnn_uses_dynamic_d_feat_when_custom_factors_present(self):

@@ -1,0 +1,78 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-040",
+  "title": "Paper v2 live session failure leaves run in RUNNING state",
+  "description": "When a Paper v2 live session terminal-fails, the associated paper_v2.run can remain RUNNING. In the observed production diagnostic, session psess_4ae1b8aa651b46cd9f418989a328df74 is FAILED after a TDX minute data fetch failure, but run prun_2a12a2a5fd314f61b585f31e99fccd4e remains RUNNING with completed_at NULL and error_json NULL.\n\nImpact: monitoring, ledger checks, live dashboard, and future remediation cannot trust run/session state consistency. Scheduler does not continue this session because it filters by session status, but the run-level durable state is stale.",
+  "module": "paper_v2",
+  "severity": "P1",
+  "risk_area": "paper_v2_state_consistency",
+  "status": "verified",
+  "trigger_condition": {
+    "scenario": "live_session_terminal_failed_but_run_left_running",
+    "portfolio_id": "paper_8f9b5368e86344ba8d699b4995ae665e",
+    "session_id": "psess_4ae1b8aa651b46cd9f418989a328df74",
+    "run_id": "prun_2a12a2a5fd314f61b585f31e99fccd4e",
+    "trade_date": "2026-05-14",
+    "error_code": "DATA_UNAVAILABLE"
+  },
+  "reproduce_command": "Query production/dev Paper v2 DB after a live TDX minute fetch terminal failure: compare paper_v2.trade_session.status for psess_4ae1b8aa651b46cd9f418989a328df74 with paper_v2.run.status for prun_2a12a2a5fd314f61b585f31e99fccd4e.",
+  "failing_run_id": "prun_2a12a2a5fd314f61b585f31e99fccd4e",
+  "evidence_uris": [
+    "prod-db:paper_v2.trade_session session_id=psess_4ae1b8aa651b46cd9f418989a328df74 status=FAILED",
+    "prod-db:paper_v2.run run_id=prun_2a12a2a5fd314f61b585f31e99fccd4e status=RUNNING",
+    "prod-api:http://127.0.0.1:8001/api/v1/paper-v2/sessions/psess_4ae1b8aa651b46cd9f418989a328df74/progress",
+    "prod-api:http://127.0.0.1:8001/api/v1/paper-v2/portfolios/paper_8f9b5368e86344ba8d699b4995ae665e/errors?limit=20"
+  ],
+  "fingerprint": "45b53bc68cb7ac80",
+  "assigned_agent": null,
+  "fix_branch": null,
+  "fix_commit": "1ce3bef",
+  "verification_run_id": "local-pytest-paper-v2-live-20260515",
+  "created_at": "2026-05-15T05:18:36Z",
+  "first_seen_at": "2026-05-15T05:18:36Z",
+  "last_seen_at": "2026-05-15T05:18:36Z",
+  "fixed_at": "2026-05-15T07:37:13Z",
+  "submitted_at": "2026-05-15T05:18:36Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/live_session.py",
+    "backend/services/paper_trading_v2/repository.py",
+    "backend/tests/paper_trading_v2/test_live_session.py",
+    "backend/tests/paper_trading_v2/test_daemon_sim_e2e.py",
+    "scripts/",
+    "tests/aistock_validation/bugs/"
+  ],
+  "suspected_modules": [
+    "backend/services/paper_trading_v2/live_session.py",
+    "backend/services/paper_trading_v2/repository.py"
+  ],
+  "required_verification": [
+    "Regression test proves a terminal live-session failure also marks the current run FAILED with error_json and completed_at.",
+    "Regression test proves session_events and run_events/errors preserve the original DATA_UNAVAILABLE context.",
+    "Read-only audit script or management path identifies and optionally repairs historical session=FAILED/run=RUNNING mismatches."
+  ],
+  "closure_requirements": [
+    "No paper_v2.run remains RUNNING when its owning latest live session is terminal FAILED for the same trade date.",
+    "Data quality smoke either passes or reports no new run/session state divergence for the fixed scenario.",
+    "Production remediation is explicit and audited if historical rows are updated."
+  ],
+  "non_goals": [
+    "Do not silently mark successful partial live executions as SUCCEEDED.",
+    "Do not weaken strict live data fail-fast checks without BUG-041 policy changes.",
+    "Do not change scheduler tickable status filtering as part of this issue unless required by tests."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-15T05:18:36Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Created from production Paper v2 live-session diagnostic after 2026-05-14 live simulation failure."
+    },
+    {
+      "timestamp": "2026-05-15T07:37:13Z",
+      "actor": "codex-app",
+      "action": "verified",
+      "note": "Verified locally in commit 1ce3bef with targeted backend tests."
+    }
+  ]
+}

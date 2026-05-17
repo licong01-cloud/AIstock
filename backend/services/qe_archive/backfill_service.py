@@ -11,12 +11,24 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 from .archive_service import QEArchiveService
+from .bootstrap_marker import REBOOTSTRAP_CONFIRM_TEXT, assert_can_broad_backfill, mark_bootstrap
+from .ingest_history import record_ingest_history
+from .models import BackfillRunItemRecord, BackfillRunRecord
+from .policy import resolve_archive_policy
 from .repository import QEArchiveRepository
+from .skip_registry import record_policy_skip
 from .source_assembler import QEArchiveSourceAssembler
 
 
 WRITE_CONFIRM_TEXT = "QE_ARCHIVE_WRITE"
+BACKFILL_CONFIRM_TEXT = "QE_ARCHIVE_BACKFILL"
 SUPPORTED_SOURCES = {"experiment", "loop", "task", "all"}
+SOURCE_MODE_TO_SOURCE = {
+    "completed_single_experiments": "experiment",
+    "completed_custom_evo_loops": "loop",
+    "all_completed_qe_sources": "all",
+    "specific_ids": "all",
+}
 
 
 @dataclass(frozen=True)
@@ -39,6 +51,50 @@ class QEArchiveBackfillOptions:
     require_account_summary: bool = False
 
 
+@dataclass(frozen=True)
+class QEArchiveBackfillRunOptions:
+    source_mode: str = "completed_custom_evo_loops"
+    experiment_ids: Sequence[str] = ()
+    task_ids: Sequence[str] = ()
+    loop_ids: Sequence[str] = ()
+    task_id: str | None = None
+    loop_index: int | None = None
+    status: str = "completed"
+    limit: int = 20
+    include_archived: bool = False
+    validate_after_write: bool = True
+    min_metrics: int = 0
+    min_curves: int = 0
+    min_factors: int = 0
+    require_account_summary: bool = False
+    confirm_backfill: str = ""
+    force_rebackfill: str = ""
+    requested_by: str = "mcp_or_ui"
+
+    def to_legacy_options(self, *, write: bool) -> QEArchiveBackfillOptions:
+        source = SOURCE_MODE_TO_SOURCE.get(self.source_mode)
+        if source is None:
+            raise ValueError(f"unsupported source_mode: {self.source_mode}")
+        return QEArchiveBackfillOptions(
+            source=source,
+            experiment_ids=self.experiment_ids,
+            task_ids=self.task_ids,
+            loop_ids=self.loop_ids,
+            task_id=self.task_id,
+            loop_index=self.loop_index,
+            status=self.status,
+            limit=self.limit,
+            include_archived=self.include_archived or bool(self.force_rebackfill == REBOOTSTRAP_CONFIRM_TEXT),
+            write=write,
+            confirm_write=WRITE_CONFIRM_TEXT if write else "",
+            validate_after_write=self.validate_after_write,
+            min_metrics=self.min_metrics,
+            min_curves=self.min_curves,
+            min_factors=self.min_factors,
+            require_account_summary=self.require_account_summary,
+        )
+
+
 class QEArchiveBackfillService:
     """Assemble existing QE DB rows and archive them through one API path."""
 
@@ -52,6 +108,148 @@ class QEArchiveBackfillService:
         self._assembler = assembler or QEArchiveSourceAssembler()
         self._repository = repository or QEArchiveRepository()
         self._archive_service = archive_service or QEArchiveService(repository=self._repository)
+
+    def preview_backfill(self, options: QEArchiveBackfillRunOptions) -> dict[str, Any]:
+        legacy = options.to_legacy_options(write=False)
+        backfill_run_id = self._repository.upsert_backfill_run(
+            BackfillRunRecord(
+                source_mode=options.source_mode,
+                mode="preview",
+                status="completed",
+                request_payload=_options_to_dict(options),
+                requested_by=options.requested_by,
+            )
+        )
+        candidates = self._build_candidates(legacy, source=legacy.source)
+        results = [self._preview_candidate(candidate, backfill_run_id=backfill_run_id) for candidate in candidates]
+        self._repository.update_backfill_run_status(
+            backfill_run_id,
+            status="completed",
+            candidate_count=len(results),
+            processed_count=0,
+            ingested_count=0,
+            skipped_count=sum(1 for item in results if item.get("archive_policy") != "AUTO"),
+            failed_count=0,
+        )
+        return {
+            "dry_run": True,
+            "write_enabled": False,
+            "backfill_run_id": backfill_run_id,
+            "source_mode": options.source_mode,
+            "source": legacy.source,
+            "status": options.status,
+            "processed_count": len(results),
+            "results": results,
+        }
+
+    def execute_backfill(self, options: QEArchiveBackfillRunOptions) -> dict[str, Any]:
+        if options.confirm_backfill != BACKFILL_CONFIRM_TEXT:
+            raise ValueError(f"execute mode requires confirm_backfill={BACKFILL_CONFIRM_TEXT!r}")
+        legacy = options.to_legacy_options(write=True)
+        source_type = _source_type_for_mode(options.source_mode)
+        if options.source_mode != "specific_ids":
+            assert_can_broad_backfill(
+                source_type,
+                force_token=options.force_rebackfill,
+                repository=self._repository,
+            )
+        mode = "rebootstrap" if options.force_rebackfill == REBOOTSTRAP_CONFIRM_TEXT else "execute"
+        backfill_run_id = self._repository.upsert_backfill_run(
+            BackfillRunRecord(
+                source_mode=options.source_mode,
+                mode=mode,
+                status="running",
+                request_payload=_options_to_dict(options),
+                force_rebackfill=mode == "rebootstrap",
+                confirm_token_used=True,
+                requested_by=options.requested_by,
+            )
+        )
+        if options.source_mode != "specific_ids":
+            mark_bootstrap(
+                source_type=source_type,
+                mode=mode,
+                backfill_run_id=backfill_run_id,
+                status="running",
+                operator=options.requested_by,
+                repository=self._repository,
+            )
+        candidates = self._build_candidates(legacy, source=legacy.source)
+        results: list[dict[str, Any]] = []
+        failed_count = 0
+        for candidate in candidates:
+            try:
+                results.append(
+                    self._process_candidate(
+                        candidate,
+                        write=True,
+                        options=legacy,
+                        backfill_run_id=backfill_run_id,
+                    )
+                )
+            except Exception as exc:
+                failed_count += 1
+                payload = dict(candidate.get("payload") or {})
+                source_id = str(payload.get("source_id") or payload.get("task_id") or payload.get("experiment_id") or "unknown")
+                source_sub_id = payload.get("source_sub_id") or payload.get("loop_id")
+                self._repository.upsert_backfill_run_item(
+                    BackfillRunItemRecord(
+                        backfill_run_id=backfill_run_id,
+                        source_system=str(payload.get("source_system") or "qe"),
+                        source_type="loop" if candidate.get("event_type") == "qe.loop.completed" else "experiment",
+                        source_id=source_id,
+                        source_sub_id=str(source_sub_id) if source_sub_id else None,
+                        status="failed",
+                        error_message=f"{type(exc).__name__}: {exc}",
+                    )
+                )
+                results.append({"source_id": source_id, "source_sub_id": source_sub_id, "error": f"{type(exc).__name__}: {exc}"})
+        ingested_count = sum(1 for item in results if item.get("run_id") and not item.get("dry_run"))
+        skipped_count = sum(1 for item in results if item.get("skipped_reason"))
+        final_status = "completed" if failed_count == 0 else ("partial" if ingested_count or skipped_count else "failed")
+        self._repository.update_backfill_run_status(
+            backfill_run_id,
+            status=final_status,
+            candidate_count=len(candidates),
+            processed_count=len(results),
+            ingested_count=ingested_count,
+            skipped_count=skipped_count,
+            failed_count=failed_count,
+        )
+        if options.source_mode != "specific_ids":
+            mark_bootstrap(
+                source_type=source_type,
+                mode=mode,
+                backfill_run_id=backfill_run_id,
+                status="completed" if final_status in {"completed", "partial"} else "failed",
+                operator=options.requested_by,
+                ingested_count=ingested_count,
+                skipped_count=skipped_count,
+                failed_count=failed_count,
+                stats={"final_status": final_status},
+                repository=self._repository,
+            )
+        return {
+            "dry_run": False,
+            "write_enabled": True,
+            "backfill_run_id": backfill_run_id,
+            "source_mode": options.source_mode,
+            "source": legacy.source,
+            "status": options.status,
+            "processed_count": len(results),
+            "results": results,
+            "archive_summary": self._repository.get_archive_summary(),
+        }
+
+    def resume_backfill_run(self, backfill_run_id: str) -> dict[str, Any]:
+        record = self._repository.get_backfill_run(backfill_run_id)
+        if not record:
+            raise ValueError(f"backfill run not found: {backfill_run_id}")
+        if record.get("status") not in {"failed", "partial"}:
+            raise ValueError("only failed or partial backfill runs can be resumed")
+        payload = dict(record.get("request_payload") or {})
+        options = QEArchiveBackfillRunOptions(**payload, confirm_backfill=BACKFILL_CONFIRM_TEXT)
+        return self.execute_backfill(options)
 
     def process_backfill(self, options: QEArchiveBackfillOptions) -> dict[str, Any]:
         source = (options.source or "loop").strip().lower()
@@ -229,11 +427,70 @@ class QEArchiveBackfillService:
         *,
         write: bool,
         options: QEArchiveBackfillOptions,
+        backfill_run_id: str | None = None,
     ) -> dict[str, Any]:
         payload = dict(candidate["payload"])
+        event_type = str(candidate["event_type"])
+        source_type = "loop" if event_type == "qe.loop.completed" else "experiment"
+        source_id = str(payload.get("source_id") or payload.get("task_id") or payload.get("experiment_id"))
+        source_sub_id = payload.get("source_sub_id") or payload.get("loop_id")
+        decision = resolve_archive_policy(
+            source_system=str(payload.get("source_system") or "qe"),
+            source_type=source_type,
+            source_id=source_id,
+            source_sub_id=str(source_sub_id) if source_sub_id else None,
+            payload=payload,
+            runtime_config=payload.get("config") if isinstance(payload.get("config"), Mapping) else {},
+        )
+        if write and not decision.should_archive:
+            skip_id = record_policy_skip(
+                decision,
+                event_type=event_type,
+                trigger_reason="backfill",
+                repository=self._repository,
+            )
+            record_ingest_history(
+                source_system=decision.source_system,
+                source_type=source_type,
+                source_id=source_id,
+                source_sub_id=str(source_sub_id) if source_sub_id else None,
+                trigger_reason="backfill",
+                archive_policy=decision.archive_policy,
+                ingest_status="manual_only" if decision.is_manual_only else "skipped",
+                payload_sha256=decision.payload_sha256,
+                runtime_config_sha256=decision.runtime_config_sha256,
+                backfill_run_id=backfill_run_id,
+                stats={"archive_policy_source": decision.archive_policy_source, "reason": decision.reason},
+                repository=self._repository,
+                created_by="qe_archive_backfill",
+            )
+            if backfill_run_id:
+                self._repository.upsert_backfill_run_item(
+                    BackfillRunItemRecord(
+                        backfill_run_id=backfill_run_id,
+                        source_system=decision.source_system,
+                        source_type=source_type,
+                        source_id=source_id,
+                        source_sub_id=str(source_sub_id) if source_sub_id else None,
+                        archive_policy=decision.archive_policy,
+                        status="skipped",
+                        skip_id=skip_id,
+                        stats={"reason": decision.reason},
+                    )
+                )
+            return {
+                "dry_run": False,
+                "event_type": event_type,
+                "source_system": decision.source_system,
+                "source_id": source_id,
+                "source_sub_id": source_sub_id,
+                "archive_policy": decision.archive_policy,
+                "skipped_reason": decision.reason,
+                "skip_id": skip_id,
+            }
         result = self._archive_service.process_payload(
             payload,
-            event_type=str(candidate["event_type"]),
+            event_type=event_type,
             source_system=payload.get("source_system"),
             source_id=payload.get("source_id"),
             source_sub_id=payload.get("source_sub_id"),
@@ -246,11 +503,82 @@ class QEArchiveBackfillService:
             "source_system": payload.get("source_system"),
             "source_id": payload.get("source_id"),
             "source_sub_id": payload.get("source_sub_id"),
+            "archive_policy": decision.archive_policy,
             "stats": result.stats,
         }
         if write and options.validate_after_write:
             item["quality"] = self._validate_run(result.run_id, options)
+        if write:
+            record_ingest_history(
+                source_system=decision.source_system,
+                source_type=source_type,
+                source_id=source_id,
+                source_sub_id=str(source_sub_id) if source_sub_id else None,
+                trigger_reason="backfill",
+                archive_policy=decision.archive_policy,
+                ingest_status="completed",
+                run_id=result.run_id,
+                backfill_run_id=backfill_run_id,
+                payload_sha256=decision.payload_sha256,
+                runtime_config_sha256=decision.runtime_config_sha256,
+                result_fingerprint=result.run_id,
+                stats=result.stats,
+                repository=self._repository,
+                created_by="qe_archive_backfill",
+            )
+            if backfill_run_id:
+                self._repository.upsert_backfill_run_item(
+                    BackfillRunItemRecord(
+                        backfill_run_id=backfill_run_id,
+                        source_system=decision.source_system,
+                        source_type=source_type,
+                        source_id=source_id,
+                        source_sub_id=str(source_sub_id) if source_sub_id else None,
+                        archive_policy=decision.archive_policy,
+                        status="ingested",
+                        run_id=result.run_id,
+                        stats=result.stats,
+                    )
+                )
         return item
+
+    def _preview_candidate(self, candidate: Mapping[str, Any], *, backfill_run_id: str) -> dict[str, Any]:
+        payload = dict(candidate["payload"])
+        event_type = str(candidate["event_type"])
+        source_type = "loop" if event_type == "qe.loop.completed" else "experiment"
+        source_id = str(payload.get("source_id") or payload.get("task_id") or payload.get("experiment_id"))
+        source_sub_id = payload.get("source_sub_id") or payload.get("loop_id")
+        decision = resolve_archive_policy(
+            source_system=str(payload.get("source_system") or "qe"),
+            source_type=source_type,
+            source_id=source_id,
+            source_sub_id=str(source_sub_id) if source_sub_id else None,
+            payload=payload,
+            runtime_config=payload.get("config") if isinstance(payload.get("config"), Mapping) else {},
+        )
+        self._repository.upsert_backfill_run_item(
+            BackfillRunItemRecord(
+                backfill_run_id=backfill_run_id,
+                source_system=decision.source_system,
+                source_type=source_type,
+                source_id=source_id,
+                source_sub_id=str(source_sub_id) if source_sub_id else None,
+                archive_policy=decision.archive_policy,
+                status="candidate",
+                stats={"archive_policy_source": decision.archive_policy_source, "reason": decision.reason},
+            )
+        )
+        return {
+            "event_type": event_type,
+            "source_system": decision.source_system,
+            "source_id": source_id,
+            "source_sub_id": source_sub_id,
+            "archive_policy": decision.archive_policy,
+            "archive_policy_source": decision.archive_policy_source,
+            "reason": decision.reason,
+            "will_archive": decision.should_archive,
+            "dry_run": True,
+        }
 
     def _validate_run(self, run_id: str, options: QEArchiveBackfillOptions) -> dict[str, Any]:
         quality = self._repository.get_run_quality_summary(run_id)
@@ -280,3 +608,34 @@ def _dedupe_non_empty(values: Sequence[str]) -> list[str]:
         seen.add(text)
         result.append(text)
     return result
+
+
+def _source_type_for_mode(source_mode: str) -> str:
+    if source_mode == "completed_single_experiments":
+        return "experiment"
+    if source_mode == "completed_custom_evo_loops":
+        return "loop"
+    if source_mode == "all_completed_qe_sources":
+        return "all"
+    return "specific"
+
+
+def _options_to_dict(options: QEArchiveBackfillRunOptions) -> dict[str, Any]:
+    return {
+        "source_mode": options.source_mode,
+        "experiment_ids": list(options.experiment_ids or []),
+        "task_ids": list(options.task_ids or []),
+        "loop_ids": list(options.loop_ids or []),
+        "task_id": options.task_id,
+        "loop_index": options.loop_index,
+        "status": options.status,
+        "limit": options.limit,
+        "include_archived": options.include_archived,
+        "validate_after_write": options.validate_after_write,
+        "min_metrics": options.min_metrics,
+        "min_curves": options.min_curves,
+        "min_factors": options.min_factors,
+        "require_account_summary": options.require_account_summary,
+        "force_rebackfill": options.force_rebackfill,
+        "requested_by": options.requested_by,
+    }

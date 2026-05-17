@@ -167,3 +167,56 @@ POST /api/v1/selection-center/runs/{run_id}/add-to-watchlist
    - 打开 `/paper-v2/selection`，确认 Top20、HMM 下拉、历史记录点击、聚合按钮、自选按钮。
    - 打开 `/paper-v2/portfolios`，确认单包模拟盘启动表单和运行组合列表。
    - 对真实 QE 包 `qe_20260416_002701`、`qe_20260413_084216`、`qe_20260416_082012` 进行 DB_HISTORICAL 选股验证；若数据/模型缺失，记录后端 fail-fast 错误，不写兜底。
+
+<!-- paper-v2-ux-live-dashboard-addendum-20260514 -->
+
+## 2026-05-14 UI 语义与实时看板补充决策
+
+### 命名与导航
+
+1. Paper v2 不再设计独立左侧导航；AIstock 已有全局左侧导航，Paper v2 内部页面使用顶部横向二级导航。
+2. 当前数据库对象 `paper_v2.portfolio` 在产品语义上不是“多个策略包的投资组合”，而是一个由单个 StrategyPackage 驱动的模拟盘实例。
+3. UI 文案将“模拟盘组合”统一改为“模拟账户”或“模拟盘实例”；“策略组合”仅保留给未来多个策略包按权重组合后的新对象。
+4. 策略包和模拟盘实例必须提供人类可读名称：
+   - StrategyPackage 默认名示例：`2026-05-13 Loop1 小盘LSTM V25`
+   - 模拟账户默认名示例：`2026-05-14 LIVE模拟 - Loop1小盘策略`
+   - ID、manifest hash、artifact hash 只放在审计详情、复制按钮或高级信息中，不作为主标题。
+5. 历史 E2E / smoke / 临时记录默认从主列表隐藏或归档；清理必须先提供预览，不得误删当前 RUNNING 实例。
+
+### 今日信号排序
+
+1. “今日信号”表格必须支持按字段排序，至少覆盖：排名、股票、分数、参考价、候选预览权重、来源。
+2. 第一阶段可在前端对后端返回的 Top50 做 client-side sorting；后续当候选数较多时再升级为后端排序、分页和搜索。
+3. 排序只改变展示顺序，不改变选股结果、目标仓位或下单意图。
+
+### 信号候选权重与实际目标仓位必须分离
+
+1. “今日信号”显示的是 StrategyPackage selection artifact 的候选清单，`target_weight` 目前是 artifact 生成阶段的 TopK 等权预览字段。
+2. Paper v2 日频目标仓位不能以该字段作为真实持仓权重；当 manifest/runtime contract 为 `score_weighted_topk_v2` 时，真实目标仓位必须由 TargetPositionEngine 根据分数、`weight_method`、`min_weight`、`max_weight`、`max_position_ratio`、当前持仓和交易限制重新计算。
+3. UI 需要拆分两层含义：
+   - 今日信号：候选股票、实时 DB 推理分数、排名、参考价、风险/HMM 追踪字段。
+   - 目标仓位与调仓意图：TargetPositionEngine 生成的真实 `target_weight` / `target_quantity` / 买卖意图。
+4. 如果继续在今日信号表保留 `target_weight`，列名必须改为“候选等权预览”或“artifact 预览权重”，避免误导为实际持仓目标。
+5. “目标仓位与调仓意图”卡片必须使用 live 与 replay 一致的事件合约：`TARGETS_GENERATED` 和 `ORDER_INTENTS_GENERATED`，并展示真实 score-weighted 结果。
+
+### 实时看板事件合约
+
+1. replay/day-runner 已写入 `TARGETS_GENERATED` / `ORDER_INTENTS_GENERATED` 事件并携带数组；live runner 当前只写 `LIVE_RUN_PREPARED` 计数字段会导致看板卡片为空。
+2. LIVE `_prepare_live_run()` 在生成 `targets` 与 `intents` 后必须补写与 day-runner 相同的两个事件，或在看板聚合层显式兼容 `LIVE_RUN_PREPARED`；首选补写标准事件，保证 replay/live UI 合约一致。
+3. 该改造属于可观测性与 UI 合约修复，不得改变目标仓位计算、下单策略或撮合行为。
+
+### 实时资产曲线
+
+1. “实时资产曲线”应按分钟时间线展示 `paper_v2.intraday_snapshots`，横轴为 `snapshot_time`，纵轴为 NAV / 收益率，可叠加现金、市值和仓位数量。
+2. 当前一根柱状图不是业务预期，只是因为后端当前 run 仅持久化了 1 条 intraday snapshot，且前端使用 `pv2-sparkline` 柱状条而不是折线时间轴。
+3. LIVE tick 每处理到新的 completed minute bar 后应持续写入新的 intraday snapshot；若当天只有 1 条快照，UI 必须提示“样本不足，等待后续分钟快照”，而不是伪装成完整曲线。
+4. 前端应改为时间序列折线/面积图；当样本数少于 2 时显示单点状态卡和最近快照时间。
+5. 看板应暴露快照数量、首末时间、最新 NAV、最新收益率，便于判断是运行缺数据还是 UI 展示不足。
+
+### P0 LIVE 执行真实性修复
+
+1. LIVE_ONLY 严格禁止回填订单创建前的分钟线成交；订单创建时必须把已完成的 latest common minute bar 写入 `OrderExecutionState.last_processed_bar_time`。
+2. 后续 fill 的 `trade_time` 必须晚于订单创建时刻对应的 LIVE 起始边界；历史 replay/catchup 例外必须显式标记。
+3. 订单全部成交后仍需继续按每个新 completed minute bar 做持仓 mark-to-market，并写入 `intraday_snapshots`。
+4. 看板需要显示执行数据层级：`local_sim + TDX_REALTIME minute-close`、`minqmt_sim + MINIQMT_REALTIME broker-fill` 等，避免把分钟模拟误认为真实 tick 撮合。
+5. miniQMT 模拟盘不能假设天然无误差；它能把撮合交给 miniQMT 仿真账户，但仍需连接、拒单、撤单、时间因果、资产状态来源和事件幂等审查。

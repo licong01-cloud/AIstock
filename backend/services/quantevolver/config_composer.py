@@ -889,6 +889,7 @@ class ConfigComposer:
             start_date=DEFAULT_ST_PIT_START_DATE,
             end_date=backtest_end,
             strict=profile.strict_data_ready,
+            refresh_policy="coverage",
         )
 
         with get_conn() as conn:
@@ -1025,6 +1026,89 @@ class ConfigComposer:
             logger.info("Using precomputed HMM coefficients from source workspace")
             return content
         return self._precompute_hmm_coefficients(strategy_params, data_split)
+
+    def _resolve_hmm_risk_gate_json(
+        self,
+        strategy_params: Dict[str, Any],
+        data_split: Dict[str, str],
+    ) -> str:
+        """Resolve HMM risk gate artifact JSON for QE workspace injection.
+
+        Looks for a precomputed risk gate artifact in the HMM model directory,
+        matching the data_split window. Falls back to precomputed param if provided.
+        """
+        precomputed = strategy_params.get("precomputed_hmm_risk_gate_json")
+        if precomputed:
+            content = str(precomputed).strip()
+            self._validate_hmm_risk_gate_json(content)
+            logger.info("Using precomputed HMM risk gate from source workspace")
+            return content
+
+        model_path = strategy_params.get("sector_hmm_model_path")
+        snapshot_id = strategy_params.get("hmm_model_version_id")
+
+        if not model_path and snapshot_id:
+            try:
+                from ..hmm_training_service import HMMTrainingService
+                hmm_svc = HMMTrainingService()
+                snapshot = hmm_svc.get_snapshot(str(snapshot_id))
+                if snapshot:
+                    model_path = snapshot.get("model_path")
+            except Exception:
+                pass
+
+        if not model_path:
+            model_path = strategy_params.get(
+                "hmm_risk_gate_model_path",
+                "backend/data/hmm_models/b99c907b-873a-4173-a4ee-5eab266f8c49/2026-04-27/models.json",
+            )
+
+        test_start = data_split.get("test_start", "")
+        backtest_end = data_split.get("backtest_end", "")
+
+        model_dir = Path(model_path).parent
+        gate_pattern = f"hmm_risk_gate_*_{test_start}_{backtest_end}.json"
+        candidates = list(model_dir.glob(gate_pattern))
+
+        if not candidates:
+            gate_pattern_any = "hmm_risk_gate_*.json"
+            candidates = list(model_dir.glob(gate_pattern_any))
+
+        if not candidates:
+            project_root = Path(__file__).resolve().parents[3]
+            fallback = project_root / ".codex_tmp" / "hmm_risk_gate_validation" / "hmm_risk_gate_duration_5d.json"
+            if fallback.exists():
+                candidates = [fallback]
+
+        if not candidates:
+            raise RuntimeError(
+                f"HMM risk gate artifact not found. "
+                f"Searched: {model_dir}/{gate_pattern} and fallback paths. "
+                f"Run scripts/precompute_hmm_risk_gate.py to generate."
+            )
+
+        artifact_path = candidates[0]
+        content = artifact_path.read_text(encoding="utf-8")
+        self._validate_hmm_risk_gate_json(content)
+        logger.info("Loaded HMM risk gate artifact: %s (%d bytes)", artifact_path, len(content))
+        return content
+
+    @staticmethod
+    def _validate_hmm_risk_gate_json(content: str) -> None:
+        data = json.loads(content)
+        if data.get("artifact_type") != "hmm_risk_gate_v1":
+            raise RuntimeError(
+                f"Invalid HMM risk gate artifact_type: {data.get('artifact_type')}"
+            )
+        if "daily_gates" not in data or "stock_sector_map" not in data:
+            raise RuntimeError(
+                "HMM risk gate artifact missing required fields: "
+                f"keys={list(data.keys())}"
+            )
+        if not isinstance(data.get("daily_gates"), dict) or not data["daily_gates"]:
+            raise RuntimeError("HMM risk gate artifact contains no daily_gates")
+        if not isinstance(data.get("stock_sector_map"), dict) or not data["stock_sector_map"]:
+            raise RuntimeError("HMM risk gate artifact contains no stock_sector_map")
 
     def compose_experiment(
         self,
@@ -1491,6 +1575,15 @@ class ConfigComposer:
                     f"已支持 HMM 的策略: {', '.join(sorted(_hmm_supported_classes))}。"
                     f"请切换到支持 HMM 的策略或关闭 HMM。"
                 )
+
+        # 0b) HMM Risk Gate 预计算注入
+        if _cp.get("enable_hmm_risk_gate"):
+            risk_gate_json = self._resolve_hmm_risk_gate_json(_cp, data_split)
+            experiment_files["hmm_risk_gate.json"] = risk_gate_json
+            if custom_params is None:
+                custom_params = {}
+            custom_params["hmm_risk_gate_file"] = "hmm_risk_gate.json"
+            custom_params["enable_hmm_risk_gate"] = True
 
         custom_params, risk_policy_json = self._prepare_risk_policy_runtime(
             custom_params=custom_params,
@@ -3221,6 +3314,45 @@ class ConfigComposer:
             factor_path.write_text(code, encoding="utf-8")
             logger.info(f"写入因子文件: {factor_path}")
 
+    def _resolve_factor_cache_universe_metadata(
+        self,
+        *,
+        start_date: str,
+        end_date: str,
+    ) -> Dict[str, Any]:
+        """Return official ST PIT metadata that generated factor caches must match."""
+
+        from .factor_universe_mask_service import (
+            OFFICIAL_FACTOR_COVERAGE_SEMANTICS,
+            OFFICIAL_FACTOR_INDEX_POLICY,
+            OFFICIAL_FACTOR_UNIVERSE_KEY,
+            OFFICIAL_FACTOR_UNIVERSE_RULE_VERSION,
+            FactorUniverseMaskService,
+        )
+
+        fallback = {
+            "universe_key": OFFICIAL_FACTOR_UNIVERSE_KEY,
+            "universe_rule_version": OFFICIAL_FACTOR_UNIVERSE_RULE_VERSION,
+            "universe_fingerprint_sha256": "",
+            "index_policy": OFFICIAL_FACTOR_INDEX_POLICY,
+            "coverage_semantics": OFFICIAL_FACTOR_COVERAGE_SEMANTICS,
+        }
+        try:
+            metadata = FactorUniverseMaskService().metadata(
+                start_date=start_date,
+                end_date=end_date,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Unable to resolve ST PIT universe fingerprint for prepare_factors.py; "
+                "generated script will disable factor-cache hits unless "
+                "FACTOR_CACHE_EXPECTED_UNIVERSE_FINGERPRINT_SHA256 is provided: %s",
+                exc,
+            )
+            return fallback
+
+        return {key: metadata.get(key) if metadata.get(key) is not None else fallback[key] for key in fallback}
+
     def _compose_prepare_factors(
         self,
         factors_info: List[Dict],
@@ -3246,6 +3378,10 @@ class ConfigComposer:
             return None
 
         factor_names = [f["factor_name"] for f in custom_factors]
+        factor_cache_universe_metadata = self._resolve_factor_cache_universe_metadata(
+            start_date=train_start,
+            end_date=test_end,
+        )
 
         lines: list[str] = []
         lines.append('"""')
@@ -3286,6 +3422,46 @@ class ConfigComposer:
         lines.append("    FACTOR_CACHE_META = ''")
         lines.append(f"TRAIN_START = '{train_start}'")
         lines.append(f"TEST_END = '{test_end}'")
+        lines.append(
+            "FACTOR_CACHE_EXPECTED_UNIVERSE_META = "
+            + repr(
+                {
+                    key: factor_cache_universe_metadata.get(key)
+                    for key in (
+                        "universe_key",
+                        "universe_rule_version",
+                        "universe_fingerprint_sha256",
+                        "index_policy",
+                        "coverage_semantics",
+                    )
+                }
+            )
+        )
+        lines.append("")
+        lines.append("")
+        lines.append("def _expected_universe_meta():")
+        lines.append("    meta = dict(FACTOR_CACHE_EXPECTED_UNIVERSE_META)")
+        lines.append("    env_map = {")
+        lines.append("        'universe_key': 'FACTOR_CACHE_EXPECTED_UNIVERSE_KEY',")
+        lines.append("        'universe_rule_version': 'FACTOR_CACHE_EXPECTED_UNIVERSE_RULE_VERSION',")
+        lines.append("        'universe_fingerprint_sha256': 'FACTOR_CACHE_EXPECTED_UNIVERSE_FINGERPRINT_SHA256',")
+        lines.append("        'index_policy': 'FACTOR_CACHE_EXPECTED_INDEX_POLICY',")
+        lines.append("        'coverage_semantics': 'FACTOR_CACHE_EXPECTED_COVERAGE_SEMANTICS',")
+        lines.append("    }")
+        lines.append("    for key, env_name in env_map.items():")
+        lines.append("        value = os.environ.get(env_name)")
+        lines.append("        if value:")
+        lines.append("            meta[key] = value")
+        lines.append("    return meta")
+        lines.append("")
+        lines.append("")
+        lines.append("def _cache_universe_mismatch(entry, expected):")
+        lines.append("    if not expected.get('universe_fingerprint_sha256'):")
+        lines.append("        return 'universe_fingerprint_missing_expected'")
+        lines.append("    for key in ('universe_key', 'universe_fingerprint_sha256', 'index_policy'):")
+        lines.append("        if expected.get(key) and entry.get(key) != expected.get(key):")
+        lines.append("            return key")
+        lines.append("    return ''")
         lines.append("")
         lines.append("")
         lines.append("def _try_cache_hit(factor_name, factor_code):")
@@ -3304,6 +3480,11 @@ class ConfigComposer:
         lines.append("        logger.warning(f'  {factor_name}: cache meta read failed: {e}')")
         lines.append("        return None")
         lines.append("    entry = meta.get('factors', {}).get(factor_name, {})")
+        lines.append("    expected_universe = _expected_universe_meta()")
+        lines.append("    universe_mismatch = _cache_universe_mismatch(entry, expected_universe)")
+        lines.append("    if universe_mismatch:")
+        lines.append("        logger.info(f'  {factor_name}: cache universe mismatch ({universe_mismatch})')")
+        lines.append("        return None")
         lines.append("    cached_hash = entry.get('source_hash_raw')")
         lines.append("    if cached_hash != code_hash:")
         lines.append("        logger.info(f'  {factor_name}: cache hash mismatch (cached={cached_hash}, current={code_hash})')")
@@ -3357,6 +3538,7 @@ class ConfigComposer:
         lines.append("                logger.warning(f'  {factor_name}: cache meta read failed before write, skip cache write: {e}')")
         lines.append("                return")
         lines.append("        factors = meta.get('factors', {})")
+        lines.append("        universe_meta = _expected_universe_meta()")
         lines.append("        dates = result_df.index.get_level_values(0)")
         lines.append("        d_min = str(dates.min().date())")
         lines.append("        d_max = str(dates.max().date())")
@@ -3369,7 +3551,11 @@ class ConfigComposer:
         lines.append("            'window_train_start': TRAIN_START,")
         lines.append("            'window_backtest_end': TEST_END,")
         lines.append("        }")
+        lines.append("        factors[factor_name].update(universe_meta)")
         lines.append("        meta['factors'] = factors")
+        lines.append("        for _k, _v in universe_meta.items():")
+        lines.append("            if _v is not None:")
+        lines.append("                meta[_k] = _v")
         lines.append("        tmp_fd, tmp_path = _tmpf.mkstemp(dir=os.path.dirname(FACTOR_CACHE_META), suffix='.json')")
 
         lines.append("        with os.fdopen(tmp_fd, 'w', encoding='utf-8') as f:")

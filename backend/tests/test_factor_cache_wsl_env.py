@@ -240,7 +240,53 @@ def test_factor_cache_backfill_extends_forward_after_warmup(monkeypatch, tmp_pat
     assert plan["action"] == "extend_forward"
 
 
-def test_qe_prepare_factors_default_window_uses_current_signal_end_and_records_cache_window() -> None:
+def test_factor_cache_backfill_rebuilds_on_universe_mismatch(monkeypatch, tmp_path) -> None:
+    single_dir = tmp_path / "single"
+    single_dir.mkdir()
+    monkeypatch.setattr(backfill_factor_cache, "SINGLE_DIR", single_dir)
+    (single_dir / "PitFactor.parquet").write_bytes(b"PAR1")
+
+    plan = backfill_factor_cache.plan_factor_action(
+        "PitFactor",
+        "2018-08-01",
+        "2026-04-28",
+        {
+            "factors": {
+                "PitFactor": {
+                    "date_range": "2018-08-01~2026-04-28",
+                    "window_train_start": "2018-08-01",
+                    "window_backtest_end": "2026-04-28",
+                    "universe_key": "legacy_all",
+                    "universe_fingerprint_sha256": "old",
+                    "index_policy": "legacy_index",
+                }
+            }
+        },
+        incremental=True,
+        force=False,
+        expected_universe_metadata={
+            "universe_key": "shsz_st_pit_active_v1",
+            "universe_fingerprint_sha256": "new",
+            "index_policy": "st_pit_buy_eligible_reindexed_v1",
+        },
+    )
+
+    assert plan["action"] == "full_rebuild"
+    assert plan["reason"] == "universe_mismatch"
+
+
+def test_qe_prepare_factors_default_window_uses_current_signal_end_and_records_cache_window(monkeypatch) -> None:
+    monkeypatch.setattr(
+        ConfigComposer,
+        "_resolve_factor_cache_universe_metadata",
+        lambda self, *, start_date, end_date: {
+            "universe_key": "shsz_st_pit_active_v1",
+            "universe_rule_version": "rule_v1",
+            "universe_fingerprint_sha256": "fp-test",
+            "index_policy": "st_pit_buy_eligible_reindexed_v1",
+            "coverage_semantics": "st_pit_buy_eligible_suspend_excluded_non_warmup_v1",
+        },
+    )
     code = (
         "def calculate_DemoFactor(instruments, start_date, end_date):\n"
         "    import pandas as pd\n"
@@ -261,6 +307,11 @@ def test_qe_prepare_factors_default_window_uses_current_signal_end_and_records_c
     assert "open(FACTOR_CACHE_META, 'r', encoding='utf-8')" in script
     assert "os.makedirs(FACTOR_CACHE_SINGLE_DIR, exist_ok=True)" in script
     assert "os.fdopen(tmp_fd, 'w', encoding='utf-8')" in script
+    assert "FACTOR_CACHE_EXPECTED_UNIVERSE_META" in script
+    assert "'universe_fingerprint_sha256': 'fp-test'" in script
+    assert "_cache_universe_mismatch" in script
+    assert "cache universe mismatch" in script
+    assert "factors[factor_name].update(universe_meta)" in script
 
 
 def test_factor_cache_uses_error_only_when_no_valid_cache_exists(tmp_path) -> None:

@@ -32,6 +32,7 @@ from .routers import (
     portfolio,
     qmt,
     qe_archive,
+    qe_templates,
     quant,
     sector_strategy,
     settings,
@@ -364,6 +365,18 @@ async def _lifespan(app: FastAPI):
 
         qe_exp_scan_task = asyncio.create_task(_qe_experiment_scan_loop(shutdown_event))
 
+    qe_archive_worker_task = None
+    try:
+        from .services.qe_archive.worker_loop import autostart_enabled, run_archive_worker_loop
+
+        if autostart_enabled():
+            qe_archive_worker_task = asyncio.create_task(run_archive_worker_loop(shutdown_event))
+            logging.getLogger("aistock.qe_archive.worker_loop").info("QE archive worker autostart enabled")
+    except Exception as e:
+        logging.getLogger("aistock.qe_archive.worker_loop").warning(
+            "QE archive worker autostart setup failed: %s", e, exc_info=True
+        )
+
     try:
         yield  # ── 应用运行中 ──
     except asyncio.CancelledError:
@@ -381,6 +394,12 @@ async def _lifespan(app: FastAPI):
             qe_exp_scan_task.cancel()
             try:
                 await qe_exp_scan_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        if qe_archive_worker_task is not None:
+            qe_archive_worker_task.cancel()
+            try:
+                await qe_archive_worker_task
             except (asyncio.CancelledError, Exception):
                 pass
         # ── 先停所有后台线程（它们可能持有 DB 连接）──
@@ -489,6 +508,7 @@ def create_app() -> FastAPI:
     app.include_router(quantevolver_evolution.router, prefix="/api/v1")
     app.include_router(quantevolver_evolution.factor_metrics_router, prefix="/api/v1")
     app.include_router(qe_archive.router, prefix="/api/v1")
+    app.include_router(qe_templates.router, prefix="/api/v1")
     app.include_router(strategy_packages.router, prefix="/api/v1")
     app.include_router(selection_center.router, prefix="/api/v1")
     app.include_router(paper_trading_v2.router, prefix="/api/v1")

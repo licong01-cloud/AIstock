@@ -119,20 +119,20 @@ function openBugCount(summary: ValidationBugSummary | null | undefined, bugs: Va
 
 function moduleBuckets(summary: ValidationBugSummary | null | undefined, bugs: ValidationBug[]): ModuleIssueBucket[] {
   const buckets = new Map<string, ModuleIssueBucket>();
-  for (const [module, count] of Object.entries(summary?.by_module || {})) {
-    buckets.set(module || "unknown", { module: module || "unknown", localCount: Number(count || 0), openLinkedCount: 0, linkedCount: 0, bugs: [] });
+  for (const [moduleName, count] of Object.entries(summary?.by_module || {})) {
+    buckets.set(moduleName || "unknown", { module: moduleName || "unknown", localCount: Number(count || 0), openLinkedCount: 0, linkedCount: 0, bugs: [] });
   }
 
   for (const bug of bugs) {
-    const module = bug.module || "unknown";
-    const bucket = buckets.get(module) || { module, localCount: summary?.by_module ? 0 : 0, openLinkedCount: 0, linkedCount: 0, bugs: [] };
+    const moduleName = bug.module || "unknown";
+    const bucket = buckets.get(moduleName) || { module: moduleName, localCount: summary?.by_module ? 0 : 0, openLinkedCount: 0, linkedCount: 0, bugs: [] };
     if (!summary?.by_module) bucket.localCount += 1;
     if (hasIssueReference(bug)) {
       bucket.linkedCount += 1;
       if (!isClosedStatus(bug.status)) bucket.openLinkedCount += 1;
       bucket.bugs.push(bug);
     }
-    buckets.set(module, bucket);
+    buckets.set(moduleName, bucket);
   }
 
   return [...buckets.values()].sort((a, b) => (

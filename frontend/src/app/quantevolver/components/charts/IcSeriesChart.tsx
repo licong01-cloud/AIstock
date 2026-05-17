@@ -25,11 +25,11 @@ export default React.memo(function IcSeriesChart({
   ic_rolling_30d_std,
   ic_positive_ratio,
 }: IcSeriesChartProps) {
-  if (!dates || dates.length === 0) {
-    return <div style={{ color: "#94a3b8", textAlign: "center", padding: 24 }}>暂无 IC 数据</div>;
-  }
+  const hasDates = Boolean(dates && dates.length > 0);
 
   const traces = useMemo(() => {
+    if (!hasDates) return [];
+
     const t: any[] = [];
 
     if (ic_series) {
@@ -111,7 +111,7 @@ export default React.memo(function IcSeriesChart({
     });
 
     return t;
-  }, [dates, ic_series, rank_ic_series, ic_rolling_30d_mean, ic_rolling_30d_std]);
+  }, [dates, hasDates, ic_series, rank_ic_series, ic_rolling_30d_mean, ic_rolling_30d_std]);
 
   const layout = useMemo(() => ({
     height: 320,
@@ -121,6 +121,10 @@ export default React.memo(function IcSeriesChart({
     legend: { orientation: "h" as const, y: 1.12 },
     font: { size: 11 },
   }), []);
+
+  if (!hasDates) {
+    return <div style={{ color: "#94a3b8", textAlign: "center", padding: 24 }}>暂无 IC 数据</div>;
+  }
 
   return (
     <div>

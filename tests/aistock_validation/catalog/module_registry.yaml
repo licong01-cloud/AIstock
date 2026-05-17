@@ -6,7 +6,7 @@ modules:
     risk_level: high
     description: QuantEvolver experiment, evolution, factor, model, runtime, and archive workflows.
     description_zh: 覆盖 QuantEvolver 的实验创建、自动/自定义演进、因子模型组合、运行状态、增强指标与归档分析，是 AIstock 量化研究的核心入口。
-    ui_routes: [/quantevolver, /qe-archive]
+    ui_routes: [/quantevolver, /quantevolver/templates, /qe-archive]
     api_routes: [/api/v1/quantevolver/*, /api/v1/qe-archive/*]
     test_plans:
       required_on_change: [l0]
@@ -27,7 +27,7 @@ modules:
     risk_level: high
     description: QE one-off experiment creation, execution status, and detail display.
     description_zh: 覆盖 QE 单次实验的创建、配置快照、执行状态同步、详情展示和结果读取。
-    ui_routes: [/quantevolver, /quantevolver/compose, /quantevolver/experiments, /quantevolver/selection]
+    ui_routes: [/quantevolver, /quantevolver/compose, /quantevolver/experiments, /quantevolver/templates, /quantevolver/selection]
     api_routes: [/api/v1/quantevolver/*]
     test_plans:
       required_on_change: [l0, qe_read_l3]

@@ -13,6 +13,10 @@ from typing import Any
 
 from .backfill_service import QEArchiveBackfillService
 from .event_capture import QEArchiveEventCapture
+from .ingest_history import record_decision_skip, record_ingest_history
+from .policy import resolve_archive_policy
+from .skip_registry import record_policy_skip
+from .source_assembler import QEArchiveSourceAssembler
 
 
 QE_ARCHIVE_REALTIME_ENABLED_ENV = "QE_ARCHIVE_REALTIME_ENABLED"
@@ -38,11 +42,13 @@ class QEArchiveRealtimeIngestion:
         *,
         service: QEArchiveBackfillService | None = None,
         event_capture: QEArchiveEventCapture | None = None,
+        assembler: QEArchiveSourceAssembler | None = None,
         enabled: bool | None = None,
         mode: str | None = None,
     ) -> None:
         self._service = service or QEArchiveBackfillService()
         self._event_capture = event_capture or QEArchiveEventCapture(enabled=True)
+        self._assembler = assembler or QEArchiveSourceAssembler()
         self._enabled = enabled
         self._mode = mode
 
@@ -69,13 +75,67 @@ class QEArchiveRealtimeIngestion:
     ) -> dict[str, Any]:
         if not self.enabled:
             return {"archived": False, "skipped_reason": "disabled"}
+        try:
+            payload = self._assembler.assemble_loop_payload(loop_id=loop_id, task_id=task_id, loop_index=loop_index)
+        except Exception as exc:
+            logger.warning("QE archive loop policy payload assembly failed, using minimal payload: %s", exc)
+            payload = {
+                "source_system": "qe_evolution",
+                "source_id": task_id,
+                "source_sub_id": loop_id,
+                "task_id": task_id,
+                "loop_id": loop_id,
+                "loop_index": loop_index,
+            }
+        decision = resolve_archive_policy(
+            source_system=str(payload.get("source_system") or "qe_evolution"),
+            source_type="loop",
+            source_id=task_id,
+            source_sub_id=loop_id,
+            payload=payload,
+            runtime_config=payload.get("config") if isinstance(payload.get("config"), dict) else {},
+        )
+        if not decision.should_archive:
+            skip_id = record_policy_skip(decision, event_type="qe.loop.completed", trigger_reason="realtime")
+            history_id = record_decision_skip(decision, trigger_reason="realtime")
+            return {
+                "archived": False,
+                "queued": False,
+                "skipped_reason": decision.archive_policy,
+                "skip_id": skip_id,
+                "history_id": history_id,
+                "archive_policy_source": decision.archive_policy_source,
+                "reason": decision.reason,
+            }
         if self.mode == REALTIME_MODE_OUTBOX:
             result = self._event_capture.enqueue_loop_completed_result(
                 task_id=task_id,
                 loop_id=loop_id,
                 loop_index=loop_index,
-                payload={"capture_reason": "qe_loop_completed_hook"},
+                payload={**payload, "capture_reason": "qe_loop_completed_hook"},
+                archive_policy=decision.archive_policy,
+                archive_policy_source=decision.archive_policy_source,
+                trigger_reason="realtime",
+                payload_sha256=decision.payload_sha256,
+                runtime_config_sha256=decision.runtime_config_sha256,
             )
+            if result.get("inserted"):
+                try:
+                    record_ingest_history(
+                        source_system=decision.source_system,
+                        source_type="loop",
+                        source_id=task_id,
+                        source_sub_id=loop_id,
+                        trigger_reason="realtime",
+                        archive_policy=decision.archive_policy,
+                        ingest_status="queued",
+                        event_id=result.get("event_id"),
+                        payload_sha256=decision.payload_sha256,
+                        runtime_config_sha256=decision.runtime_config_sha256,
+                        created_by="qe_archive_realtime",
+                    )
+                except Exception as exc:
+                    logger.warning("QE archive loop ingest-history write failed: %s", exc, exc_info=True)
             return {"archived": False, "queued": bool(result.get("inserted")), "mode": self.mode, **result}
         return self._service.archive_loop_completed(
             task_id=task_id,
@@ -86,11 +146,60 @@ class QEArchiveRealtimeIngestion:
     def archive_experiment_completed(self, *, experiment_id: str) -> dict[str, Any]:
         if not self.enabled:
             return {"archived": False, "skipped_reason": "disabled"}
+        try:
+            payload = self._assembler.assemble_experiment_payload(experiment_id)
+        except Exception as exc:
+            logger.warning("QE archive experiment policy payload assembly failed, using minimal payload: %s", exc)
+            payload = {
+                "source_system": "qe",
+                "source_id": experiment_id,
+                "experiment_id": experiment_id,
+            }
+        decision = resolve_archive_policy(
+            source_system=str(payload.get("source_system") or "qe"),
+            source_type="experiment",
+            source_id=experiment_id,
+            payload=payload,
+            runtime_config=payload.get("config") if isinstance(payload.get("config"), dict) else {},
+        )
+        if not decision.should_archive:
+            skip_id = record_policy_skip(decision, event_type="qe.experiment.completed", trigger_reason="realtime")
+            history_id = record_decision_skip(decision, trigger_reason="realtime")
+            return {
+                "archived": False,
+                "queued": False,
+                "skipped_reason": decision.archive_policy,
+                "skip_id": skip_id,
+                "history_id": history_id,
+                "archive_policy_source": decision.archive_policy_source,
+                "reason": decision.reason,
+            }
         if self.mode == REALTIME_MODE_OUTBOX:
             result = self._event_capture.enqueue_experiment_completed_result(
                 experiment_id=experiment_id,
-                payload={"capture_reason": "qe_experiment_completed_hook"},
+                payload={**payload, "capture_reason": "qe_experiment_completed_hook"},
+                archive_policy=decision.archive_policy,
+                archive_policy_source=decision.archive_policy_source,
+                trigger_reason="realtime",
+                payload_sha256=decision.payload_sha256,
+                runtime_config_sha256=decision.runtime_config_sha256,
             )
+            if result.get("inserted"):
+                try:
+                    record_ingest_history(
+                        source_system=decision.source_system,
+                        source_type="experiment",
+                        source_id=experiment_id,
+                        trigger_reason="realtime",
+                        archive_policy=decision.archive_policy,
+                        ingest_status="queued",
+                        event_id=result.get("event_id"),
+                        payload_sha256=decision.payload_sha256,
+                        runtime_config_sha256=decision.runtime_config_sha256,
+                        created_by="qe_archive_realtime",
+                    )
+                except Exception as exc:
+                    logger.warning("QE archive experiment ingest-history write failed: %s", exc, exc_info=True)
             return {"archived": False, "queued": bool(result.get("inserted")), "mode": self.mode, **result}
         return self._service.archive_experiment_completed(experiment_id=experiment_id)
 

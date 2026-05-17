@@ -112,7 +112,7 @@ export default function PaperV2RunningPage() {
     <main>
       <ErrorPanel error={error} title="运行/追赶模拟盘汇总加载失败" />
       <div className="pv2-grid pv2-grid-4">
-        <MetricCard label="运行/暂停模拟盘" value={pagination?.total ?? rows.length} hint="不包含 READY 未就绪组合" tone="info" />
+        <MetricCard label="运行/暂停模拟盘" value={pagination?.total ?? rows.length} hint="不包含 READY 未就绪模拟盘" tone="info" />
         <MetricCard label="本页总净值" value={formatCompact(totals.nav)} hint={`初始资金 ${formatCompact(totals.initial)}`} tone="success" />
         <MetricCard label="本页累计收益" value={formatNumber(totals.pnl, 2)} hint={formatPercent(totals.returnRate)} tone={totals.pnl >= 0 ? "success" : "danger"} />
         <MetricCard label="本页阻断错误" value={totals.errors} hint={`${totals.fills} 条成交记录`} tone={totals.errors ? "danger" : "success"} />
@@ -122,14 +122,14 @@ export default function PaperV2RunningPage() {
         READY 显示为未就绪/未运行，不再归入正在运行；本页默认只展示 RUNNING / PAUSED。运行任务分为仅历史追赶、历史追赶后自动实时、完全实时三种场景，状态切换必须在非交易时间执行。
       </NoticePanel>
 
-      <SectionCard title="运行/追赶模拟盘列表" eyebrow={loading ? "加载中" : `${pageStart}-${pageEnd} / ${pagination?.total || 0} 个组合`} action={<button className="pv2-button" onClick={load} disabled={loading} type="button">刷新</button>}>
+      <SectionCard title="运行/追赶模拟盘列表" eyebrow={loading ? "加载中" : `${pageStart}-${pageEnd} / ${pagination?.total || 0} 个模拟盘`} action={<button className="pv2-button" onClick={load} disabled={loading} type="button">刷新</button>}>
         <div className="pv2-card pv2-filter-card">
           <div className="pv2-form-grid">
             <div className="pv2-field"><label>状态筛选</label><select className="pv2-select" value={statusFilter} onChange={(event) => resetPage(() => setStatusFilter(event.target.value))}>{RUNNING_STATUS_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></div>
             <div className="pv2-field"><label>排序字段</label><select className="pv2-select" value={sortBy} onChange={(event) => resetPage(() => setSortBy(event.target.value as RunningSummarySortBy))}>{RUNNING_SORT_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></div>
             <div className="pv2-field"><label>排序方向</label><select className="pv2-select" value={sortDir} onChange={(event) => resetPage(() => setSortDir(event.target.value as RunningSummarySortDir))}><option value="desc">降序</option><option value="asc">升序</option></select></div>
             <div className="pv2-field"><label>筛选字段</label><select className="pv2-select" value={searchField} onChange={(event) => resetPage(() => setSearchField(event.target.value))}>{RUNNING_SEARCH_FIELD_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></div>
-            <div className="pv2-field"><label>字段关键字</label><input className="pv2-input" value={search} placeholder="支持组合ID、策略包、状态、数据源等" onChange={(event) => resetPage(() => setSearch(event.target.value))} /></div>
+            <div className="pv2-field"><label>字段关键字</label><input className="pv2-input" value={search} placeholder="支持模拟盘ID、策略包、状态、数据源等" onChange={(event) => resetPage(() => setSearch(event.target.value))} /></div>
             <div className="pv2-field"><label>每页数量</label><select className="pv2-select" value={pageSize} onChange={(event) => resetPage(() => setPageSize(Number(event.target.value)))}><option value={20}>20</option><option value={30}>30</option><option value={50}>50</option></select></div>
             <div className="pv2-field"><label>初始资金下限</label><input className="pv2-input" type="number" min={0} value={minCash} onChange={(event) => resetPage(() => setMinCash(event.target.value))} /></div>
             <div className="pv2-field"><label>初始资金上限</label><input className="pv2-input" type="number" min={0} value={maxCash} onChange={(event) => resetPage(() => setMaxCash(event.target.value))} /></div>
@@ -137,11 +137,11 @@ export default function PaperV2RunningPage() {
         </div>
         <PaperTable
           rows={rows}
-          empty="暂无符合条件的 RUNNING / PAUSED Paper v2 模拟盘组合；READY 组合请手动选择未就绪状态筛选。"
+          empty="暂无符合条件的 RUNNING / PAUSED Paper v2 模拟盘；READY 组合请手动选择未就绪状态筛选。"
           columns={[
             { key: "name", header: "模拟盘", render: (row) => <><Link href={`/paper-v2/portfolios/${row.portfolio.portfolio_id}/live-dashboard`}>{row.portfolio.portfolio_name}</Link><br /><span className="pv2-muted pv2-mono">{shortHash(row.portfolio.portfolio_id)}</span></> },
             { key: "package", header: "策略包", render: (row) => <><Link href={`/paper-v2/portfolios/${row.portfolio.portfolio_id}/live-dashboard`}>{packageName(row.portfolio)}</Link><br /><span className="pv2-muted">{packageSource(row.portfolio)}</span></> },
-            { key: "status", header: "组合状态", render: (row) => <StatusBadge status={row.portfolio.status} /> },
+            { key: "status", header: "模拟盘状态", render: (row) => <StatusBadge status={row.portfolio.status} /> },
             { key: "scenario", header: "运行场景", render: (row) => { const scenario = runningScenario(row); return <>{scenario.label}<br /><span className="pv2-muted">{scenario.hint}</span></>; } },
             { key: "latest", header: "最近运行/会话", render: (row) => <>{row.latestRun ? <>{row.latestRun.trade_date} / <StatusBadge status={row.latestRun.status} /></> : "未运行"}<br /><span className="pv2-muted">{row.latestSession ? <><StatusBadge status={row.latestSession.mode} /> / <StatusBadge status={row.latestSession.status} /></> : "无会话"}</span></> },
             { key: "nav", header: "净值", render: (row) => formatNumber(latestSnapshot(row)?.nav || row.portfolio.initial_cash, 2) },

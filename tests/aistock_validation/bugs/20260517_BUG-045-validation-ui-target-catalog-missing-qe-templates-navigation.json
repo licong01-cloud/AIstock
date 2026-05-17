@@ -1,0 +1,106 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-045",
+  "title": "Validation UI target catalog missing QE templates navigation route",
+  "description": "Expected: Validation Center backend tests should pass because every frontend navigation href is represented in tests/aistock_validation/catalog/ui_targets.yaml.\nActual: validation_center_backend fails in CI and locally: test_default_ui_target_catalog_matches_frontend_nav_groups reports nav_hrefs - target_hrefs == {'/quantevolver/templates'}. The frontend navigation contains /quantevolver/templates, but the validation UI target catalog does not include a matching route entry.",
+  "module": "validation_center",
+  "severity": "P1",
+  "risk_area": "unspecified",
+  "status": "fixed",
+  "trigger_condition": {
+    "scenario": "reported_via_mcp",
+    "files": [
+      "tests/aistock_validation/catalog/ui_targets.yaml",
+      "tests/aistock_validation/catalog/module_registry.yaml",
+      "backend/tests/test_validation_ui_target_catalog.py",
+      "frontend/src/lib/navigation/nav-groups.ts"
+    ]
+  },
+  "reproduce_command": "C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m pytest backend/tests/test_validation_ui_target_catalog.py::test_default_ui_target_catalog_matches_frontend_nav_groups -q -p no:cacheprovider",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:tests/aistock_validation/catalog/ui_targets.yaml",
+    "file:tests/aistock_validation/catalog/module_registry.yaml",
+    "file:backend/tests/test_validation_ui_target_catalog.py",
+    "file:frontend/src/lib/navigation/nav-groups.ts"
+  ],
+  "fingerprint": "2bff732e68ed3881",
+  "assigned_agent": "codex-app",
+  "fix_branch": "bug/BUG-045-validation-ui-target-qe-templates",
+  "fix_commit": "3daba55",
+  "verification_run_id": "local-20260517-validation-ui-target-qe-templates",
+  "created_at": "2026-05-17T02:39:41Z",
+  "first_seen_at": "2026-05-17T02:39:41Z",
+  "last_seen_at": "2026-05-17T02:43:44Z",
+  "fixed_at": "2026-05-17T02:43:44Z",
+  "submitted_at": "2026-05-17T02:39:41Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "tests/aistock_validation/catalog/ui_targets.yaml",
+    "tests/aistock_validation/catalog/module_registry.yaml",
+    "backend/tests/test_validation_ui_target_catalog.py",
+    "frontend/src/lib/navigation/nav-groups.ts"
+  ],
+  "suspected_modules": [
+    "tests/aistock_validation/catalog/ui_targets.yaml",
+    "tests/aistock_validation/catalog/module_registry.yaml",
+    "backend/tests/test_validation_ui_target_catalog.py",
+    "frontend/src/lib/navigation/nav-groups.ts"
+  ],
+  "required_verification": [
+    "python -m pytest backend/tests/test_validation_ui_target_catalog.py::test_default_ui_target_catalog_matches_frontend_nav_groups -q -p no:cacheprovider",
+    "python -m pytest backend/tests/test_validation_ui_target_catalog.py -q -p no:cacheprovider",
+    "git diff --check"
+  ],
+  "closure_requirements": [
+    "/quantevolver/templates is present in tests/aistock_validation/catalog/ui_targets.yaml",
+    "module_registry.yaml ownership metadata includes /quantevolver/templates for QE routes",
+    "Validation UI target catalog tests pass locally and in CI"
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-17T02:39:41Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Reported via aistock_mcp_server.report_bug. Comments: 3"
+    },
+    {
+      "timestamp": "2026-05-17T02:39:41Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Found while preparing BUG-044 merge: PR #27 validation_center_backend failed because /quantevolver/templates was absent from UI target catalog."
+    },
+    {
+      "timestamp": "2026-05-17T02:39:41Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "This is a validation catalog coverage defect, not part of the QE MCP stdio startup code path."
+    },
+    {
+      "timestamp": "2026-05-17T02:39:41Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Production backend 8001 and production DB were not touched."
+    },
+    {
+      "timestamp": "2026-05-17T02:40:13Z",
+      "actor": "codex-app",
+      "action": "assigned",
+      "note": "GitHub mirror manually created as https://github.com/licong01-cloud/AIstock/issues/30. Fixing separate CI-blocking validation catalog issue before merging BUG-044."
+    },
+    {
+      "timestamp": "2026-05-17T02:42:52Z",
+      "actor": "codex-app",
+      "action": "github_sync",
+      "note": "Manual GitHub mirror created at https://github.com/licong01-cloud/AIstock/issues/30; MCP live sync unavailable in current environment."
+    },
+    {
+      "timestamp": "2026-05-17T02:43:44Z",
+      "actor": "codex-app",
+      "action": "status_changed",
+      "note": "Fixed in dedicated worktree F:/Dev/AIstock_worktrees/bug-045-validation-ui-target-qe-templates. Added /quantevolver/templates to UI target catalog and module registry; targeted and full validation UI target catalog tests passed locally."
+    }
+  ],
+  "github_issue_number": 30,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/30"
+}

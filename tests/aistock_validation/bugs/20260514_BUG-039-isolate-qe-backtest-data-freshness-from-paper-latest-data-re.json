@@ -1,0 +1,93 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-039",
+  "title": "Isolate QE backtest data freshness from Paper latest-data readiness",
+  "description": "QE/backtest factor cache validity must be isolated from Paper/Paper-v2/live latest-data readiness. QE historical backtests should validate data freshness against the requested backtest cutoff (for example 2026-04-30), while Paper/live paths must keep strict current trade-date readiness.\n\n## Observed Behavior\n- Current factor cache under `rdagent_assets/factor_values` has 575 parquet entries and all entries have `as_of_date=2026-04-30`.\n- The cache is ST PIT labeled (`universe_key=shsz_st_pit_active_v1`, `index_policy=st_pit_buy_eligible_reindexed_v1`) and covers the QE/backtest target window `2018-08-01..2026-04-30`.\n- A recent QE generated `prepare_factors.py` with empty `FACTOR_CACHE_EXPECTED_UNIVERSE_META.universe_fingerprint_sha256`, so every cache lookup was rejected with `universe_fingerprint_missing_expected` even though the factor source hash and date coverage were valid.\n- The false miss is caused by global ST PIT `dirty=true` being treated as not-ready by `FactorUniverseMaskService.metadata()`, despite `StockUniversePitService.ensure_st_pit_universe(..., end_date=2026-04-30, refresh_policy=\"coverage\")` correctly returning coverage-ready.\n\n## Required Policy Boundary\n- QE/backtest profile: historical coverage is sufficient; target end comes from QE `data_split.backtest_end` or the monthly backtest cutoff. It must not require data through the current trading day.\n- Paper/Paper-v2/live profile: latest trade-date readiness remains strict and fail-fast for datasets such as ST PIT, `stk_limit`, `suspend_d`, minute bars, and authoritative session inputs.\n- Shared services must take an explicit data freshness profile instead of relying on a global latest/dirty state.\n\n## Suspected Code Paths\n- `backend/services/quantevolver/factor_universe_mask_service.py`: `metadata()` rejects dirty global state even when the requested historical window is covered.\n- `backend/services/quantevolver/config_composer.py`: `_resolve_factor_cache_universe_metadata()` falls back to an empty fingerprint; generated `prepare_factors.py` rejects all cache hits on `universe_fingerprint_missing_expected`.\n- `scripts/backfill_factor_cache.py`: uses the same metadata path and may inherit the false latest-data restriction.\n- `frontend/src/app/quantevolver/compose/page.tsx` and `frontend/src/app/quantevolver/components/FactorList.tsx`: QE/factor-cache defaults should come from QE config, not Paper/live freshness assumptions or stale hard-coded dates.\n\n## Acceptance Criteria\n- QE cache checks for `2018-08-01..2026-04-30` pass when the historical ST PIT window is covered, even if global ST PIT is dirty due later source updates.\n- Paper/Paper-v2/live readiness remains strict and continues requiring the configured current/session trade date.\n- Generated `prepare_factors.py` no longer disables all cache hits solely because expected fingerprint is missing; it must use an explicit QE/backtest cache policy.\n- QE default signal/backtest cutoff can be configured independently from Paper/live defaults and supports monthly cutoff updates.\n- Regression tests prove QE and Paper/Paper-v2 data freshness profiles cannot accidentally share the same strict/latest policy.\n\n## Non-goals\n- Do not recompute all 575 factor caches just because current trade date is later than 2026-04-30.\n- Do not weaken Paper/Paper-v2/live fail-fast checks.\n- Do not touch production backend `8001`, frontend `3000`, or production DB as part of issue creation.",
+  "module": "quantevolver",
+  "severity": "P1",
+  "risk_area": "data_freshness_policy",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "qe_backtest_cache_false_miss_due_latest_data_readiness_policy",
+    "qe_cutoff": "2026-04-30",
+    "live_latest_date_example": "2026-05-14"
+  },
+  "reproduce_command": "Inspect QE prepare_factors.py/run.log for universe_fingerprint_missing_expected with factor cache as_of_date=2026-04-30; compare StockUniversePitService coverage policy vs FactorUniverseMaskService.metadata dirty rejection.",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/issues/23"
+  ],
+  "fingerprint": "257a0b2a6c2c5a3d",
+  "assigned_agent": "codex",
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-14T13:12:52Z",
+  "first_seen_at": "2026-05-14T13:12:52Z",
+  "last_seen_at": "2026-05-14T13:12:52Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-14T13:12:52Z",
+  "closed_at": null,
+  "allowed_write_scope": [],
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "required_verification": [
+    "QE/cache path: prove 2018-08-01..2026-04-30 ST PIT/factor cache is accepted under a historical coverage policy even when global ST PIT state is dirty from later data.",
+    "Paper/Paper-v2 path: prove latest/session trade-date readiness remains strict and fail-fast for live/replay inputs.",
+    "Generated prepare_factors.py: prove cache hits are not disabled solely by missing expected universe fingerprint when universe key/index policy/source hash/date coverage match the QE backtest policy."
+  ],
+  "closure_requirements": [
+    "QE and Paper/Paper-v2 data freshness profiles are configured separately and covered by regression tests.",
+    "No full 575-factor recompute is required solely because the current trade date is later than the QE cutoff.",
+    "Validation evidence is attached before merging to main; production 8001/3000 are not used as the proof path unless explicitly approved."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-14T13:12:52Z",
+      "actor": "codex",
+      "action": "discovered",
+      "note": "Reported via aistock_mcp_server.report_bug. Comments: 0"
+    },
+    {
+      "timestamp": "2026-05-14T13:12:59Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Mirrored bug registry entry to GitHub issue #23."
+    },
+    {
+      "timestamp": "2026-05-14T13:14:56Z",
+      "actor": "codex-app",
+      "action": "duplicate_github_issue_cleanup",
+      "note": "Closed accidental duplicate GitHub issue #22; canonical mirror is #23."
+    },
+    {
+      "timestamp": "2026-05-14T13:17:13Z",
+      "actor": "codex-app",
+      "action": "github_issue_synced",
+      "note": "Synced bug registry entry to GitHub issue #23."
+    },
+    {
+      "timestamp": "2026-05-14T13:19:56Z",
+      "actor": "codex-app",
+      "action": "registry_metadata_refined",
+      "note": "Set risk_area to data_freshness_policy and added verification/closure requirements before final GitHub sync."
+    },
+    {
+      "timestamp": "2026-05-14T13:20:01Z",
+      "actor": "codex-app",
+      "action": "github_issue_synced",
+      "note": "Synced bug registry entry to GitHub issue #23."
+    }
+  ],
+  "custom_github_labels": [
+    "qe",
+    "paper-v2",
+    "factor-cache",
+    "st-pit",
+    "data-freshness",
+    "architecture"
+  ],
+  "github_issue_number": 23,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/23"
+}

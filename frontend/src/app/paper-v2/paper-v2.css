@@ -175,6 +175,15 @@
 
 .pv2-sparkline { height: 150px; display: flex; align-items: flex-end; gap: 4px; padding: 12px; border-radius: 16px; background: linear-gradient(180deg, #fffaf1, #ede5d8); overflow-x: auto; }
 .pv2-spark-bar { flex: 0 0 10px; min-height: 8px; border-radius: 999px 999px 0 0; background: linear-gradient(180deg, #0f766e, #99f6e4); box-shadow: 0 4px 12px rgba(15,118,110,0.18); }
+.pv2-linechart { padding: 12px; border-radius: 16px; background: linear-gradient(180deg, #fffaf1, #ede5d8); border: 1px solid rgba(120, 113, 108, 0.18); }
+.pv2-linechart-svg { width: 100%; height: 150px; display: block; overflow: visible; }
+.pv2-linechart-area { fill: rgba(15, 118, 110, 0.12); stroke: none; }
+.pv2-linechart-line { fill: none; stroke: var(--pv2-teal); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 5px 9px rgba(15,118,110,0.16)); }
+.pv2-linechart-dot { fill: #fffaf1; stroke: var(--pv2-teal); stroke-width: 2; }
+.pv2-linechart-axis { display: flex; justify-content: space-between; gap: 12px; margin-top: 8px; color: var(--pv2-muted); font-size: 12px; font-family: "Cascadia Mono", "Consolas", monospace; }
+.pv2-sort-button { border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; font-weight: 900; padding: 0; white-space: nowrap; }
+.pv2-sort-button:hover, .pv2-sort-button-active { color: var(--pv2-teal-dark); text-decoration: underline; text-underline-offset: 3px; }
+.pv2-subsection-head { margin: 8px 0 10px; font-weight: 900; color: var(--pv2-teal-dark); letter-spacing: -0.01em; }
 
 .pv2-detail-nav { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
 .pv2-detail-nav a { color: var(--pv2-teal-dark); text-decoration: none; padding: 8px 10px; border: 1px solid var(--pv2-line); border-radius: 999px; background: rgba(255,253,248,0.75); font-weight: 800; font-size: 13px; }

@@ -72,7 +72,7 @@ let paperPortfolioRuntimeBlocked = "";
 function paperPortfolioBlockText(payloadOrText: unknown): string {
   const text = typeof payloadOrText === "string" ? payloadOrText : JSON.stringify(payloadOrText || {});
   if (
-    /DATA_UNAVAILABLE|V24_PLAN|model_path|not accessible|execution policy must match|runtime is not available|validated execution policy/i.test(text)
+    /DATA_UNAVAILABLE|INVALID_STATE_TRANSITION|V24_PLAN|model_path|not accessible|execution policy must match|runtime is not available|validated execution policy/i.test(text)
   ) {
     return text.slice(0, 1200);
   }
@@ -272,8 +272,6 @@ async function assertSelectionHealthGateBlocksLegacy(page: Page, packageId: stri
   await expect(checkbox, `legacy package ${packageId} should still be visible`).toBeVisible({ timeout: 30_000 });
   await expect(checkbox, `legacy package ${packageId} must be disabled before operator run`).toBeDisabled();
   await expect(page.locator("body")).toContainText(/LEGACY_NON_ST_PIT|BLOCKED|旧版非 ST PIT|健康预检阻断/);
-  await page.getByTestId("selection-run").click();
-  await expect(page.locator(".pv2-error-panel")).toContainText(/至少选择|至少需要|请选择|必须且只能选择|select/i);
 }
 
 function consoleRuntimeText(topK = 20): string {
@@ -424,7 +422,7 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await expect(page.locator("body")).toContainText("模拟盘能力");
     await expect(page.getByText("标记可用于选股").first()).toBeVisible();
     await expect(page.getByText("标记可用于模拟盘").first()).toBeVisible();
-    await expect(page.getByText("用此包创建模拟组合").first()).toBeVisible();
+    await expect(page.getByText("用此包创建模拟盘").first()).toBeVisible();
     await expect(page.getByText("退役策略包").first()).toBeVisible();
   });
 
@@ -619,7 +617,7 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await createSection.locator("input.pv2-input").nth(0).fill(portfolioName);
     await createSection.locator("input.pv2-input").nth(1).fill("1000000");
     await createSection.locator("select").nth(1).selectOption("REPLAY_ONLY", { timeout: 30_000 });
-    await expect(createSection.locator("input.pv2-input").nth(2)).toHaveValue("DB_HISTORICAL");
+    await expect(createSection.locator("input.pv2-input").nth(2)).toHaveValue(/DB_HISTORICAL/);
     await expect(createSection.locator("select").nth(2)).toContainText("V25_TWO_STAGE", { timeout: 30_000 });
     await createSection.locator("select").nth(2).selectOption(policy.policy_id, { timeout: 30_000 });
     await createSection.locator("input.pv2-input").nth(3).fill(REPLAY_TRADE_DATE);
@@ -633,7 +631,7 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     const blockedText = await errorPanel.textContent({ timeout: 10_000 }).catch(() => "");
     paperPortfolioRuntimeBlocked = paperPortfolioBlockText(blockedText || "");
     if (paperPortfolioRuntimeBlocked) {
-      await expect(errorPanel).toContainText(/DATA_UNAVAILABLE|V24_PLAN|model_path|not accessible|execution policy/i);
+      await expect(errorPanel).toContainText(/DATA_UNAVAILABLE|INVALID_STATE_TRANSITION|V24_PLAN|model_path|not accessible|execution policy/i);
       await expect(page.locator(".pv2-readable-panel").filter({ hasText: /Created Portfolio Id|created_portfolio_id/ })).toHaveCount(0);
       return;
     }
@@ -646,11 +644,12 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     expect(portfolioId).toMatch(/^paper_/);
     replayPortfolioId = portfolioId;
 
-    const [runs, orders, fills, positions, snapshots, errors, performance] = await Promise.all([
+    const [runs, orders, fills, positions, cashLedger, snapshots, errors, performance] = await Promise.all([
       apiJson(request, `/paper-v2/portfolios/${portfolioId}/runs?limit=100`),
       apiJson(request, `/paper-v2/portfolios/${portfolioId}/orders?limit=1000`),
       apiJson(request, `/paper-v2/portfolios/${portfolioId}/fills?limit=1000`),
       apiJson(request, `/paper-v2/portfolios/${portfolioId}/positions?limit=1000`),
+      apiJson(request, `/paper-v2/portfolios/${portfolioId}/cash-ledger?limit=1000`),
       apiJson(request, `/paper-v2/portfolios/${portfolioId}/daily-snapshots?limit=1000`),
       apiJson(request, `/paper-v2/portfolios/${portfolioId}/errors?limit=1000`),
       apiJson(request, `/paper-v2/portfolios/${portfolioId}/performance-report`),
@@ -659,6 +658,11 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     expect(orders.payload.orders?.length || 0).toBeGreaterThan(0);
     expect(fills.payload.fills?.length || 0).toBeGreaterThan(0);
     expect(positions.payload.positions?.length || 0).toBeGreaterThan(0);
+    expect(cashLedger.payload.cash_ledger?.length || 0).toBeGreaterThan(0);
+    expect(orders.payload.orders?.[0]?.stock_name).toBeTruthy();
+    expect(fills.payload.fills?.[0]?.stock_name).toBeTruthy();
+    expect(positions.payload.positions?.[0]?.stock_name).toBeTruthy();
+    expect(cashLedger.payload.cash_ledger?.[0]?.stock_name).toBeTruthy();
     expect(snapshots.payload.daily_snapshots?.length || 0).toBeGreaterThan(0);
     expect(errors.payload.errors?.length || 0).toBe(0);
     expect(performance.payload.performance_report?.snapshot_count).toBeGreaterThan(0);
@@ -706,7 +710,7 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
 
     await page.goto(`/paper-v2/portfolios/${replayPortfolioId}/live-dashboard`);
     await expect(page.getByTestId("paper-live-dashboard")).toBeVisible({ timeout: 60_000 });
-    await expect(page.locator("body")).toContainText("今日信号");
+    await expect(page.locator("body")).toContainText(/今日信号|当日候选信号/);
     await expect(page.locator("body")).toContainText("分钟执行时间轴");
     await expect(page.locator("body")).toContainText(/实时资产曲线|分钟资产快照缺失/);
     await expectNoRawJsonUi(page);

@@ -13,11 +13,23 @@ from backend.services.strategy_package.selection_artifact import (
 )
 from backend.services.trading_core.errors import DataUnavailableError
 
+from .symbol_names import PaperV2SymbolNameResolver
+
 
 TERMINAL_SESSION_STATUSES = {
     PaperSessionStatus.SUCCEEDED,
     PaperSessionStatus.FAILED,
     PaperSessionStatus.STOPPED,
+}
+TICKABLE_SESSION_STATUSES = {
+    PaperSessionStatus.CREATED,
+    PaperSessionStatus.PREFLIGHTING,
+    PaperSessionStatus.REPLAYING,
+    PaperSessionStatus.CATCHING_UP,
+    PaperSessionStatus.SWITCHING_TO_LIVE,
+    PaperSessionStatus.LIVE_RUNNING,
+    PaperSessionStatus.LIVE_WAITING_FOR_BAR,
+    PaperSessionStatus.LIVE_WAITING_NEXT_TRADING_DAY,
 }
 
 
@@ -41,9 +53,11 @@ class PaperTradingLiveDashboardService:
         *,
         repository: PaperTradingV2Repository | Any | None = None,
         artifact_repository: StrategyPackageSelectionArtifactRepository | Any | None = None,
+        symbol_name_resolver: PaperV2SymbolNameResolver | Any | None = None,
     ) -> None:
         self.repository = repository or PaperTradingV2Repository()
         self.artifact_repository = artifact_repository or StrategyPackageSelectionArtifactRepository()
+        self.symbol_name_resolver = symbol_name_resolver
 
     def get_dashboard(
         self,
@@ -54,11 +68,20 @@ class PaperTradingLiveDashboardService:
     ) -> dict[str, Any]:
         portfolio = self.repository.get_portfolio(portfolio_id)
         sessions = self.repository.list_sessions(portfolio_id, limit=100)
+        tickable_sessions = [session for session in sessions if session.status in TICKABLE_SESSION_STATUSES]
         active_sessions = [session for session in sessions if session.status not in TERMINAL_SESSION_STATUSES]
         active_session = active_sessions[0] if active_sessions else (sessions[0] if sessions else None)
         session_days = self.repository.list_session_days(active_session.session_id) if active_session else []
         selected_day = self._select_session_day(session_days, trade_date=trade_date)
         current_run = self._resolve_current_run(portfolio_id, selected_day, trade_date=trade_date)
+        scheduler = self._scheduler_status()
+        operability = self._operability(
+            portfolio=portfolio,
+            sessions=sessions,
+            tickable_sessions=tickable_sessions,
+            active_session=active_session,
+            scheduler=scheduler,
+        )
         if trade_date is not None:
             selected_trade_date = trade_date
         elif selected_day is not None:
@@ -100,17 +123,20 @@ class PaperTradingLiveDashboardService:
             warnings.append({"code": "NO_ACTIVE_SESSION", "message": "当前没有正在推进的运行会话，展示最近会话的只读结果"})
         if len(active_sessions) > 1:
             warnings.append({"code": "MULTIPLE_ACTIVE_SESSIONS", "message": "同一模拟盘存在多个未结束会话，请检查调度范围"})
+        if operability["no_operable_session"]:
+            warnings.append({"code": "NO_OPERABLE_SESSION", "message": operability["remediation_hint"]})
         if current_run is None:
             warnings.append({"code": "NO_CURRENT_RUN", "message": "当前日期或会话尚未产生 run，无法展示信号到订单链路"})
 
-        return {
+        dashboard = {
             "portfolio": portfolio.model_dump(mode="json"),
             "package": self._package_context(portfolio),
             "active_session": active_session.model_dump(mode="json") if active_session else None,
             "other_active_sessions": [item.model_dump(mode="json") for item in active_sessions[1:]],
             "session_days": [item.model_dump(mode="json") for item in session_days],
             "current_run": current_run.model_dump(mode="json") if current_run else None,
-            "scheduler": self._scheduler_status(),
+            "scheduler": scheduler,
+            "operability": operability,
             "data_freshness": self._data_freshness(selected_day, active_session),
             "daily_signal": self._daily_signal(portfolio, current_run),
             "target_rebalance": self._target_rebalance(run_events),
@@ -128,6 +154,39 @@ class PaperTradingLiveDashboardService:
             "errors": errors,
             "daily_snapshots": daily_snapshots,
             "warnings": warnings,
+        }
+        return self._enrich_display_names(dashboard)
+
+    @staticmethod
+    def _operability(
+        *,
+        portfolio: Any,
+        sessions: list[PaperTradingSession],
+        tickable_sessions: list[PaperTradingSession],
+        active_session: PaperTradingSession | None,
+        scheduler: dict[str, Any],
+    ) -> dict[str, Any]:
+        portfolio_status = getattr(portfolio.status, "value", str(portfolio.status))
+        latest_status = active_session.status.value if active_session else None
+        latest_mode = active_session.mode.value if active_session else None
+        latest_terminal = bool(active_session and active_session.status in TERMINAL_SESSION_STATUSES)
+        no_operable = portfolio_status in {"RUNNING", "PAUSED"} and not tickable_sessions
+        hint = None
+        if no_operable:
+            hint = (
+                "Portfolio status is active but no scheduler-tickable live/replay session exists. "
+                "Review the latest terminal session, then create or resume a session outside the 09:15-15:00 state-change block."
+            )
+        return {
+            "has_sessions": bool(sessions),
+            "tickable_session_count": len(tickable_sessions),
+            "has_tickable_session": bool(tickable_sessions),
+            "latest_session_status": latest_status,
+            "latest_session_mode": latest_mode,
+            "latest_session_is_terminal": latest_terminal,
+            "no_operable_session": no_operable,
+            "scheduler_running": bool(scheduler.get("running")),
+            "remediation_hint": hint,
         }
 
     def list_intraday_snapshots(
@@ -319,6 +378,63 @@ class PaperTradingLiveDashboardService:
             return []
         latest_date = max(str(item.get("trade_date") or "") for item in rows)
         return [item for item in rows if str(item.get("trade_date") or "") == latest_date]
+
+    def _enrich_display_names(self, dashboard: dict[str, Any]) -> dict[str, Any]:
+        resolver = self.symbol_name_resolver
+        if resolver is None:
+            return dashboard
+
+        row_groups = [
+            dashboard.get("orders") or [],
+            dashboard.get("fills") or [],
+            dashboard.get("positions") or [],
+            ((dashboard.get("daily_signal") or {}).get("top_candidates") or []),
+            ((dashboard.get("target_rebalance") or {}).get("targets") or []),
+            ((dashboard.get("target_rebalance") or {}).get("order_intents") or []),
+            ((dashboard.get("minute_execution") or {}).get("timeline") or []),
+        ]
+        symbols = [
+            str(row.get("symbol") or "").strip()
+            for rows in row_groups
+            for row in rows
+            if isinstance(row, dict) and str(row.get("symbol") or "").strip()
+        ]
+        try:
+            names = resolver.resolve(symbols)
+        except Exception:
+            return dashboard
+
+        def enrich(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            enriched: list[dict[str, Any]] = []
+            for row in rows:
+                copied = dict(row)
+                symbol = str(copied.get("symbol") or "").strip()
+                metadata = copied.get("metadata")
+                metadata_name = metadata.get("stock_name") if isinstance(metadata, dict) else None
+                name = copied.get("stock_name") or copied.get("symbol_name") or metadata_name or names.get(symbol)
+                if name:
+                    copied["stock_name"] = str(name)
+                    copied["symbol_name"] = str(name)
+                enriched.append(copied)
+            return enriched
+
+        dashboard["orders"] = enrich(dashboard.get("orders") or [])
+        dashboard["fills"] = enrich(dashboard.get("fills") or [])
+        dashboard["positions"] = enrich(dashboard.get("positions") or [])
+
+        daily_signal = dict(dashboard.get("daily_signal") or {})
+        daily_signal["top_candidates"] = enrich(daily_signal.get("top_candidates") or [])
+        dashboard["daily_signal"] = daily_signal
+
+        target_rebalance = dict(dashboard.get("target_rebalance") or {})
+        target_rebalance["targets"] = enrich(target_rebalance.get("targets") or [])
+        target_rebalance["order_intents"] = enrich(target_rebalance.get("order_intents") or [])
+        dashboard["target_rebalance"] = target_rebalance
+
+        minute_execution = dict(dashboard.get("minute_execution") or {})
+        minute_execution["timeline"] = enrich(minute_execution.get("timeline") or [])
+        dashboard["minute_execution"] = minute_execution
+        return dashboard
 
     @staticmethod
     def _scheduler_status() -> dict[str, Any]:

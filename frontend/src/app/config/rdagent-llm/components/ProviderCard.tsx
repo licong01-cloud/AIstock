@@ -119,7 +119,7 @@ export default function ProviderCard({
           <CardContent className="pt-0">
             {models.length === 0 ? (
               <div className="text-center py-8 text-gray-500">
-                暂无模型，点击"添加模型"开始配置
+                暂无模型，点击&quot;添加模型&quot;开始配置
               </div>
             ) : (
               <div className="space-y-2">

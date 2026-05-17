@@ -4,6 +4,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -20,6 +21,10 @@ DEFAULT_ST_PIT_UNIVERSE_KEY = "shsz_st_pit_active_v1"
 DEFAULT_ST_PIT_RULE_VERSION = "st_pub_next_trade_restore_active_l_v1"
 DEFAULT_ST_PIT_SCOPE = "st_only_active"
 DEFAULT_ST_PIT_START_DATE = dt.date(2018, 8, 1)
+DEFAULT_ST_PIT_REFRESH_POLICY = "coverage"
+SUPPORTED_ST_PIT_REFRESH_POLICIES = {"coverage", "source_fingerprint"}
+DEFAULT_ST_PIT_LOCK_WAIT_SECONDS = 180.0
+DEFAULT_ST_PIT_LOCK_POLL_SECONDS = 1.0
 
 
 class StockUniversePitError(RuntimeError):
@@ -32,6 +37,13 @@ def _json_dumps(data: Any) -> str:
 
 def _fingerprint_sha256(data: dict[str, Any]) -> str:
     return hashlib.sha256(_json_dumps(data).encode("utf-8")).hexdigest()
+
+
+def _normalize_refresh_policy(refresh_policy: str | None) -> str:
+    policy = (refresh_policy or DEFAULT_ST_PIT_REFRESH_POLICY).strip().lower()
+    if policy not in SUPPORTED_ST_PIT_REFRESH_POLICIES:
+        raise ValueError(f"unsupported ST PIT refresh_policy: {refresh_policy}")
+    return policy
 
 
 class StockUniversePitService:
@@ -74,7 +86,7 @@ class StockUniversePitService:
                 column_comments = {
                     "universe_key": "Logical universe id, e.g. shsz_st_pit_active_v1",
                     "rule_version": "ST PIT rule version used for current derived rows",
-                    "scope": "Universe scope; st_only_active excludes current D/P stocks and does not implement delisting PIT",
+                    "scope": "Universe scope; st_only_active uses requested-end active stocks and does not implement full delisting PIT",
                     "start_date": "Inclusive earliest date covered by derived PIT spans",
                     "end_date": "Inclusive latest date covered by derived PIT spans",
                     "status": "Build status: ready, dirty, building, or failed",
@@ -132,29 +144,41 @@ class StockUniversePitService:
             return row[0]
         return dt.date.today()
 
-    def compute_source_fingerprint(self) -> dict[str, Any]:
+    def compute_source_fingerprint(self, *, end_date: dt.date | None = None) -> dict[str, Any]:
+        fingerprint_end = end_date or self.resolve_default_end_date()
         with get_conn() as conn:
             with conn.cursor(cursor_factory=pgx.RealDictCursor) as cur:
                 cur.execute(
                     """
                     SELECT
-                        COUNT(*) FILTER (WHERE list_status = 'L') AS l_count,
-                        COUNT(*) FILTER (WHERE list_status = 'D') AS d_count,
-                        COUNT(*) FILTER (WHERE list_status = 'P') AS p_count,
-                        COUNT(*) AS total_count,
-                        MAX(list_date)::date AS max_list_date,
-                        MAX(delist_date)::date AS max_delist_date
+                        COUNT(*) FILTER (
+                            WHERE (list_date IS NULL OR list_date::date <= %(end_date)s)
+                              AND (delist_date IS NULL OR delist_date::date > %(end_date)s)
+                        ) AS active_asof_count,
+                        COUNT(*) FILTER (WHERE delist_date IS NOT NULL AND delist_date::date <= %(end_date)s)
+                            AS delisted_asof_count,
+                        COUNT(*) FILTER (WHERE list_date IS NULL OR list_date::date <= %(end_date)s)
+                            AS listed_asof_count,
+                        COUNT(*) AS total_known_count,
+                        MAX(list_date::date) FILTER (WHERE list_date IS NOT NULL AND list_date::date <= %(end_date)s)
+                            AS max_list_date_asof,
+                        MAX(delist_date::date) FILTER (
+                            WHERE delist_date IS NOT NULL AND delist_date::date <= %(end_date)s
+                        ) AS max_delist_date_asof
                       FROM market.stock_basic
                      WHERE exchange IN ('SSE', 'SZSE')
                        AND (ts_code LIKE '%%.SH' OR ts_code LIKE '%%.SZ')
-                    """
+                    """,
+                    {"end_date": fingerprint_end},
                 )
                 stock_basic = dict(cur.fetchone() or {})
                 cur.execute(
                     """
                     SELECT COUNT(*) AS row_count, MAX(ann_date)::date AS max_ann_date
                       FROM market.stock_st
-                    """
+                     WHERE ann_date::date <= %s
+                    """,
+                    (fingerprint_end,),
                 )
                 stock_st = dict(cur.fetchone() or {})
                 cur.execute(
@@ -164,7 +188,9 @@ class StockUniversePitService:
                         MAX(pub_date)::date AS max_pub_date,
                         MAX(imp_date)::date AS max_imp_date
                       FROM market.stock_st_events
-                    """
+                     WHERE pub_date::date <= %s
+                    """,
+                    (fingerprint_end,),
                 )
                 stock_st_events = dict(cur.fetchone() or {})
                 cur.execute(
@@ -172,11 +198,13 @@ class StockUniversePitService:
                     SELECT MAX(cal_date)::date AS max_trading_day
                       FROM market.trading_calendar
                      WHERE is_trading = TRUE
-                       AND cal_date <= CURRENT_DATE
-                    """
+                       AND cal_date <= %s
+                    """,
+                    (fingerprint_end,),
                 )
                 trading_calendar = dict(cur.fetchone() or {})
         return {
+            "fingerprint_end_date": fingerprint_end.isoformat(),
             "stock_basic": stock_basic,
             "stock_st": stock_st,
             "stock_st_events": stock_st_events,
@@ -226,7 +254,7 @@ class StockUniversePitService:
                     ON CONFLICT (universe_key) DO UPDATE
                         SET status = CASE
                                 WHEN market.stock_universe_pit_state.status = 'building' THEN 'building'
-                                ELSE 'dirty'
+                                ELSE market.stock_universe_pit_state.status
                             END,
                             dirty = TRUE,
                             last_build_summary = COALESCE(market.stock_universe_pit_state.last_build_summary, '{}'::jsonb)
@@ -255,13 +283,15 @@ class StockUniversePitService:
         end_date: dt.date,
         rule_version: str,
         source_sha: str,
+        refresh_policy: str = DEFAULT_ST_PIT_REFRESH_POLICY,
     ) -> tuple[bool, str]:
+        refresh_policy = _normalize_refresh_policy(refresh_policy)
         if state.get("status") == "missing":
             return True, "missing_state"
-        if state.get("status") != "ready":
+        if state.get("status") == "building":
+            return True, "status_building"
+        if state.get("status") not in {"ready", "dirty"}:
             return True, f"status_{state.get('status')}"
-        if bool(state.get("dirty")):
-            return True, "dirty"
         if state.get("rule_version") != rule_version:
             return True, "rule_version_changed"
         if state.get("scope") != DEFAULT_ST_PIT_SCOPE:
@@ -270,8 +300,6 @@ class StockUniversePitService:
             return True, "start_coverage_insufficient"
         if state.get("end_date") and state["end_date"] < end_date:
             return True, "end_coverage_insufficient"
-        if state.get("source_fingerprint_sha256") != source_sha:
-            return True, "source_fingerprint_changed"
         summary = state.get("last_build_summary") or {}
         validation = summary.get("validation") if isinstance(summary, dict) else {}
         if isinstance(validation, dict) and any(
@@ -279,7 +307,47 @@ class StockUniversePitService:
             for key in ["invalid_span_count", "overlap_error_count", "event_action_violation_count"]
         ):
             return True, "last_validation_failed"
+        if refresh_policy == "source_fingerprint":
+            if bool(state.get("dirty")):
+                return True, "dirty"
+            if state.get("source_fingerprint_sha256") != source_sha:
+                return True, "source_fingerprint_changed"
+            return False, "ready"
+        if bool(state.get("dirty")) or state.get("source_fingerprint_sha256") != source_sha:
+            return False, "coverage_ready_source_changed_ignored"
         return False, "ready"
+
+    def _wait_for_ready_state(
+        self,
+        *,
+        universe_key: str,
+        start_date: dt.date,
+        end_date: dt.date,
+        rule_version: str,
+        source_sha: str,
+        refresh_policy: str,
+        timeout_seconds: float,
+        poll_seconds: float = DEFAULT_ST_PIT_LOCK_POLL_SECONDS,
+    ) -> tuple[dict[str, Any] | None, str]:
+        deadline = time.monotonic() + max(timeout_seconds, 0.0)
+        last_reason = "not_checked"
+        while time.monotonic() <= deadline:
+            state = self.get_status(universe_key=universe_key)
+            needs_rebuild, reason = self._needs_rebuild(
+                state=state,
+                start_date=start_date,
+                end_date=end_date,
+                rule_version=rule_version,
+                source_sha=source_sha,
+                refresh_policy=refresh_policy,
+            )
+            last_reason = reason
+            if not needs_rebuild:
+                return state, reason
+            if reason != "status_building":
+                return None, reason
+            time.sleep(max(poll_seconds, 0.1))
+        return None, f"lock_wait_timeout:{last_reason}"
 
     def ensure_st_pit_universe(
         self,
@@ -291,10 +359,13 @@ class StockUniversePitService:
         force: bool = False,
         strict: bool = True,
         rebuild_if_stale: bool = True,
+        refresh_policy: str = DEFAULT_ST_PIT_REFRESH_POLICY,
+        lock_wait_seconds: float = DEFAULT_ST_PIT_LOCK_WAIT_SECONDS,
     ) -> dict[str, Any]:
+        refresh_policy = _normalize_refresh_policy(refresh_policy)
         self.ensure_tables()
         end = end_date or self.resolve_default_end_date()
-        source = self.compute_source_fingerprint()
+        source = self.compute_source_fingerprint(end_date=end)
         source_sha = _fingerprint_sha256(source)
         state = self.get_status(universe_key=universe_key)
         needs_rebuild, reason = self._needs_rebuild(
@@ -303,9 +374,29 @@ class StockUniversePitService:
             end_date=end,
             rule_version=rule_version,
             source_sha=source_sha,
+            refresh_policy=refresh_policy,
         )
         if force:
             needs_rebuild, reason = True, "force"
+        elif reason == "status_building":
+            peer_state, peer_reason = self._wait_for_ready_state(
+                universe_key=universe_key,
+                start_date=start_date,
+                end_date=end,
+                rule_version=rule_version,
+                source_sha=source_sha,
+                refresh_policy=refresh_policy,
+                timeout_seconds=lock_wait_seconds,
+            )
+            if peer_state is not None:
+                return {
+                    "universe_key": universe_key,
+                    "status": "ready",
+                    "rebuilt": False,
+                    "reason": f"built_by_peer:{peer_reason}",
+                    "source_fingerprint_sha256": source_sha,
+                    "state": peer_state,
+                }
         if not needs_rebuild:
             return {
                 "universe_key": universe_key,
@@ -320,6 +411,18 @@ class StockUniversePitService:
             if strict:
                 raise StockUniversePitError(message)
             return {"universe_key": universe_key, "status": "stale", "rebuilt": False, "reason": reason, "error": message}
+        write_mode = "replace"
+        incremental_from: dt.date | None = None
+        if (
+            reason == "end_coverage_insufficient"
+            and not force
+            and state.get("status") == "ready"
+            and state.get("start_date")
+            and state.get("end_date")
+            and state["start_date"] <= start_date
+        ):
+            write_mode = "incremental"
+            incremental_from = state["end_date"] + dt.timedelta(days=1)
         try:
             rebuilt = self.rebuild_st_pit_universe(
                 universe_key=universe_key,
@@ -328,6 +431,11 @@ class StockUniversePitService:
                 rule_version=rule_version,
                 source_fingerprint=source,
                 source_fingerprint_sha256=source_sha,
+                write_mode=write_mode,
+                incremental_from=incremental_from,
+                skip_if_ready=not force,
+                refresh_policy=refresh_policy,
+                lock_wait_seconds=lock_wait_seconds,
             )
             rebuilt["reason"] = reason
             return rebuilt
@@ -351,16 +459,65 @@ class StockUniversePitService:
         rule_version: str = DEFAULT_ST_PIT_RULE_VERSION,
         source_fingerprint: Optional[dict[str, Any]] = None,
         source_fingerprint_sha256: Optional[str] = None,
+        write_mode: str = "replace",
+        incremental_from: dt.date | None = None,
+        skip_if_ready: bool = False,
+        refresh_policy: str = DEFAULT_ST_PIT_REFRESH_POLICY,
+        lock_wait_seconds: float = DEFAULT_ST_PIT_LOCK_WAIT_SECONDS,
     ) -> dict[str, Any]:
+        refresh_policy = _normalize_refresh_policy(refresh_policy)
         self.ensure_tables()
         end = end_date or self.resolve_default_end_date()
-        source = source_fingerprint or self.compute_source_fingerprint()
+        source = source_fingerprint or self.compute_source_fingerprint(end_date=end)
         source_sha = source_fingerprint_sha256 or _fingerprint_sha256(source)
         lock_key = f"stock_universe_pit:{universe_key}"
         with get_conn() as lock_conn:
             with lock_conn.cursor() as cur:
-                cur.execute("SELECT pg_advisory_lock(hashtext(%s))", (lock_key,))
+                cur.execute("SELECT pg_try_advisory_lock(hashtext(%s))", (lock_key,))
+                locked = bool(cur.fetchone()[0])
+            if not locked:
+                peer_state, peer_reason = self._wait_for_ready_state(
+                    universe_key=universe_key,
+                    start_date=start_date,
+                    end_date=end,
+                    rule_version=rule_version,
+                    source_sha=source_sha,
+                    refresh_policy=refresh_policy,
+                    timeout_seconds=lock_wait_seconds,
+                )
+                if peer_state is not None:
+                    return {
+                        "universe_key": universe_key,
+                        "status": "ready",
+                        "rebuilt": False,
+                        "reason": f"built_by_peer:{peer_reason}",
+                        "source_fingerprint_sha256": source_sha,
+                        "state": peer_state,
+                    }
+                raise StockUniversePitError(
+                    "ST PIT rebuild is already running and did not become ready "
+                    f"within {lock_wait_seconds:.0f}s ({peer_reason})"
+                )
             try:
+                if skip_if_ready:
+                    state = self.get_status(universe_key=universe_key)
+                    needs_rebuild, reason = self._needs_rebuild(
+                        state=state,
+                        start_date=start_date,
+                        end_date=end,
+                        rule_version=rule_version,
+                        source_sha=source_sha,
+                        refresh_policy=refresh_policy,
+                    )
+                    if not needs_rebuild:
+                        return {
+                            "universe_key": universe_key,
+                            "status": "ready",
+                            "rebuilt": False,
+                            "reason": reason,
+                            "source_fingerprint_sha256": source_sha,
+                            "state": state,
+                        }
                 self._set_building(universe_key, start_date, end, rule_version, source, source_sha)
                 from scripts import build_stock_universe_pit_spans as pit_builder
 
@@ -374,6 +531,8 @@ class StockUniversePitService:
                     reports_dir=str(self.reports_dir),
                     dry_run=False,
                     write_all_txt=False,
+                    write_mode=write_mode,
+                    incremental_from=incremental_from.isoformat() if incremental_from else None,
                 )
                 summary = pit_builder.build(args)
                 validation = summary.get("validation") or {}
@@ -420,6 +579,8 @@ class StockUniversePitService:
                     "universe_key": universe_key,
                     "status": "ready",
                     "rebuilt": True,
+                    "write_mode": write_mode,
+                    "incremental_from": incremental_from.isoformat() if incremental_from else None,
                     "source_fingerprint_sha256": source_sha,
                     "summary": summary,
                 }

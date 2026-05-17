@@ -1,0 +1,82 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-042",
+  "title": "Paper v2 portfolio can show RUNNING while no tickable live session exists",
+  "description": "After restarting production services, Paper v2 scheduler is healthy but has no tickable sessions. The portfolio live_loop1_tdx_20260514_precreated remains portfolio status RUNNING, while its latest live session is terminal FAILED. The running-summary endpoint still returns a large running summary payload, which can mislead operators into thinking live simulation is active.\n\nImpact: operators may start the scheduler and assume the live portfolio is running, while scheduler run_once has session_count=0 and cannot process anything. The UI/API needs an explicit 'RUNNING portfolio without operable session' state and remediation guidance.",
+  "module": "paper_v2",
+  "severity": "P2",
+  "risk_area": "paper_v2_operator_observability",
+  "status": "verified",
+  "trigger_condition": {
+    "scenario": "running_portfolio_without_tickable_session_after_restart",
+    "portfolio_id": "paper_8f9b5368e86344ba8d699b4995ae665e",
+    "session_id": "psess_4ae1b8aa651b46cd9f418989a328df74",
+    "scheduler_running": false,
+    "tickable_session_count": 0
+  },
+  "reproduce_command": "Call /api/v1/paper-v2/session-scheduler/status and query paper_v2.trade_session tickable statuses after production restart: scheduler is healthy but tickable session count is 0 while portfolio paper_8f9b5368e86344ba8d699b4995ae665e status is RUNNING and latest session is FAILED.",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "prod-db:paper_v2.trade_session session_id=psess_4ae1b8aa651b46cd9f418989a328df74 status=FAILED",
+    "prod-db:paper_v2.run run_id=prun_2a12a2a5fd314f61b585f31e99fccd4e status=RUNNING",
+    "prod-api:http://127.0.0.1:8001/api/v1/paper-v2/sessions/psess_4ae1b8aa651b46cd9f418989a328df74/progress",
+    "prod-api:http://127.0.0.1:8001/api/v1/paper-v2/portfolios/paper_8f9b5368e86344ba8d699b4995ae665e/errors?limit=20"
+  ],
+  "fingerprint": "7d4ea4bc21400514",
+  "assigned_agent": null,
+  "fix_branch": null,
+  "fix_commit": "1ce3bef",
+  "verification_run_id": "local-pytest-paper-v2-live-20260515",
+  "created_at": "2026-05-15T05:18:36Z",
+  "first_seen_at": "2026-05-15T05:18:36Z",
+  "last_seen_at": "2026-05-15T05:18:36Z",
+  "fixed_at": "2026-05-15T07:37:13Z",
+  "submitted_at": "2026-05-15T05:18:36Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/live_dashboard.py",
+    "backend/services/paper_trading_v2/scheduler.py",
+    "backend/services/paper_trading_v2/repository.py",
+    "backend/routers/paper_trading_v2.py",
+    "frontend/src/app/paper-v2/running/page.tsx",
+    "frontend/src/app/paper-v2/portfolios/[portfolioId]/live-dashboard/page.tsx",
+    "frontend/src/lib/paper-v2/running-summary.ts",
+    "frontend/tests/paper-v2/",
+    "backend/tests/paper_trading_v2/test_live_dashboard.py",
+    "tests/aistock_validation/bugs/"
+  ],
+  "suspected_modules": [
+    "backend/services/paper_trading_v2/live_dashboard.py",
+    "backend/services/paper_trading_v2/scheduler.py",
+    "frontend/src/app/paper-v2/running/page.tsx"
+  ],
+  "required_verification": [
+    "API exposes an explicit no_operable_session or equivalent health flag for RUNNING/READY portfolios whose latest session is terminal.",
+    "UI clearly displays that scheduler has no tickable session and gives non-trading-window remediation guidance.",
+    "Regression/E2E test covers portfolio RUNNING plus latest session FAILED plus scheduler session_count=0."
+  ],
+  "closure_requirements": [
+    "Operators cannot confuse a RUNNING portfolio shell with an actively scheduled live session.",
+    "Scheduler status/run-once response and running page agree on tickable session count.",
+    "No automatic session creation occurs during the 09:15-15:00 blocked state-change window."
+  ],
+  "non_goals": [
+    "Do not auto-create or switch sessions during trading hours.",
+    "Do not hide failed sessions from the operator.",
+    "Do not change portfolio lifecycle semantics without a separate design decision."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-15T05:18:36Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Created from production Paper v2 live-session diagnostic after 2026-05-14 live simulation failure."
+    },
+    {
+      "timestamp": "2026-05-15T07:37:13Z",
+      "actor": "codex-app",
+      "action": "verified",
+      "note": "Verified locally in commit 1ce3bef with targeted backend tests."
+    }
+  ]
+}

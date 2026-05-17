@@ -48,6 +48,53 @@ class ScoreWeightedTopkStrategyV2(ScoreWeightedTopkStrategy):
     3. 补仓模式也卖出跌出 TopK 的持仓，避免现金枯竭死锁
     """
 
+    def _apply_hmm_risk_gate(self, pred_score: pd.Series, trade_date_str: str) -> pd.Series:
+        """Remove blocked stocks from candidate pool (transition-based risk gate)."""
+        if not getattr(self, "enable_hmm_risk_gate", False):
+            return pred_score
+        if pred_score is None or (hasattr(pred_score, "empty") and pred_score.empty):
+            return pred_score
+
+        if not hasattr(self, "_risk_gate_config") or self._risk_gate_config is None:
+            gate_file = getattr(self, "hmm_risk_gate_file", None)
+            if not gate_file:
+                raise RuntimeError("enable_hmm_risk_gate=True but hmm_risk_gate_file not set")
+            import json
+            with open(gate_file, "r", encoding="utf-8") as f:
+                self._risk_gate_config = json.load(f)
+            if self._risk_gate_config.get("artifact_type") != "hmm_risk_gate_v1":
+                raise RuntimeError(f"Invalid risk gate artifact type")
+            logger.info("Loaded HMM risk gate: %d sectors", self._risk_gate_config.get("sector_count", 0))
+
+        daily_gates = self._risk_gate_config.get("daily_gates", {})
+        stock_sector_map = self._risk_gate_config.get("stock_sector_map", {})
+        protect_top = self._risk_gate_config.get("gate_config", {}).get("protect_top", 30)
+
+        gates_today = daily_gates.get(trade_date_str)
+        if not gates_today:
+            return pred_score
+
+        blocked_sectors = {s for s, g in gates_today.items() if g.get("blocked", False)}
+        if not blocked_sectors:
+            return pred_score
+
+        sorted_scores = pred_score.sort_values(ascending=False)
+        protected = set(sorted_scores.head(protect_top).index)
+        current_holdings = set(self.trade_position.get_stock_list())
+
+        blocked = []
+        for sym in sorted_scores.index:
+            if sym in protected or sym in current_holdings:
+                continue
+            sector = stock_sector_map.get(sym)
+            if sector and sector in blocked_sectors:
+                blocked.append(sym)
+
+        if blocked:
+            logger.info("[RiskGate] date=%s blocked %d stocks from %d fading sectors",
+                       trade_date_str, len(blocked), len(blocked_sectors))
+            return pred_score.drop(blocked, errors="ignore")
+        return pred_score
 
     def _can_sell_under_hold_thresh(self, sid, trade_start_time):
         hold_thresh = float(getattr(self, "hold_thresh", 0) or 0)
@@ -92,6 +139,9 @@ class ScoreWeightedTopkStrategyV2(ScoreWeightedTopkStrategy):
         # 1.5 HMM 行业热度调整
         trade_date_str = str(trade_start_time)[:10]
         scores = self._apply_hmm_adjustment(scores, trade_date_str)
+
+        # 1.6 HMM Risk Gate: 阻止新买入 fading 行业的边界股票
+        scores = self._apply_hmm_risk_gate(scores, trade_date_str)
 
         # 2. 当前持仓
         current_holdings = list(self.trade_position.get_stock_list())

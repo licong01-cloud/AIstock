@@ -212,8 +212,8 @@ export function paperV2WorkflowSteps(signals: PaperV2WorkflowSignals, currentKey
     },
     {
       key: "portfolio",
-      label: "4. 创建模拟组合",
-      hint: "用 PAPER_ENABLED 策略包冻结组合",
+      label: "4. 创建模拟盘实例",
+      hint: "用 PAPER_ENABLED 策略包冻结模拟盘实例",
       href: "/paper-v2/portfolios",
       done: signals.hasPortfolio,
       reachable: signals.hasPaperEnabledPackage,

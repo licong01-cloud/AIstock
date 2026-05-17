@@ -1,8 +1,25 @@
-﻿import numpy as np
+import numpy as np
 import pandas as pd
 import pytest
+import pickle
 
 from backend import inference_engine
+
+
+class _FakeDataset:
+    def __init__(self, processors):
+        self.handler = _FakeHandler(processors)
+
+
+class _FakeHandler:
+    def __init__(self, processors):
+        self.infer_processors = processors
+
+
+class _FillFactorAProcessor:
+    def __call__(self, df):
+        df[("feature", "factor_a")] = df[("feature", "factor_a")].fillna(0.0)
+        return df
 
 
 def _feature_frame():
@@ -35,6 +52,23 @@ def test_strict_score_frame_uses_scored_subset_index(monkeypatch):
     assert inference_engine.LAST_STRICT_FEATURE_FILTER["input_rows"] == 3
     assert inference_engine.LAST_STRICT_FEATURE_FILTER["kept_rows"] == 1
     assert inference_engine.LAST_STRICT_FEATURE_FILTER["dropped_rows"] == 2
+    assert inference_engine.LAST_STRICT_FEATURE_FILTER["invalid_column_details"][0]["invalid_count"] == 1
+
+
+def test_saved_qe_infer_processors_apply_before_strict_filter(tmp_path):
+    processor_path = tmp_path / "model" / "dataset"
+    processor_path.parent.mkdir()
+    processor_path.write_bytes(pickle.dumps(_FakeDataset([_FillFactorAProcessor()])))
+
+    features = _feature_frame().iloc[:2].copy()
+    processed = inference_engine._apply_saved_qe_infer_processors(
+        features,
+        task_dir=tmp_path,
+        primary_assets={"dataset_processor_relpath": "model/dataset"},
+    )
+
+    assert processed.loc[features.index[1], "factor_a"] == 0.0
+    assert list(processed.columns) == ["factor_a", "factor_b"]
 
 
 def test_score_frame_rejects_length_mismatch_after_filtering(monkeypatch):

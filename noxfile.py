@@ -219,6 +219,30 @@ def paper_v2_backend(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def paper_v2_qe_candidate_devdb_e2e(session: nox.Session) -> None:
+    """Run the guarded DEV-DB QE candidate -> Paper v2 cross-module E2E gate."""
+    session.run(
+        "python",
+        "-m",
+        "compileall",
+        "scripts/dev_db/seed_paper_v2_qe_candidate_flow.py",
+        "backend/tests/e2e/test_paper_v2_qe_candidate_platform_devdb.py",
+        external=True,
+    )
+    session.run(
+        "python",
+        "-m",
+        "pytest",
+        "backend/tests/e2e/test_paper_v2_qe_candidate_platform_devdb.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        env=_env({"AISTOCK_DEV_DB_E2E": "1"}),
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
 def paper_v2_data_quality(session: nox.Session) -> None:
     """Run read-only Paper v2 + Selection Center data-quality smoke checks."""
     args = [
@@ -503,11 +527,17 @@ def qe_archive_backend(session: nox.Session) -> None:
     """
     compileall_targets = [
         "backend/db/init_qe_archive_schema.py",
+        "backend/db/init_qe_execution_templates_schema.py",
         "backend/routers/qe_archive.py",
+        "backend/routers/qe_templates.py",
         "backend/routers/quantevolver.py",
         "backend/services/qe_archive",
+        "backend/services/qe_templates",
         "backend/services/quantevolver/completion_contract.py",
         "backend/services/quantevolver/qe_evolution_service.py",
+        "scripts/aistock_mcp_common.py",
+        "scripts/aistock_qe_experiment_mcp_server.py",
+        "scripts/aistock_qe_archive_mcp_server.py",
         "scripts/qe_archive_backfill.py",
         "scripts/qe_archive_data_quality_smoke.py",
     ]
@@ -523,7 +553,10 @@ def qe_archive_backend(session: nox.Session) -> None:
     )
     pytest_targets = [
         "backend/tests/test_qe_archive_schema.py",
+        "backend/tests/test_qe_execution_templates_schema.py",
         "backend/tests/test_qe_archive_repository_static.py",
+        "backend/tests/qe_templates/test_template_validator.py",
+        "backend/tests/test_aistock_qe_mcp_servers.py",
         "backend/tests/unified_engine/test_qe_completion_contract.py",
     ]
     handler_contract_test = ROOT / "backend" / "tests" / "qe_archive" / "test_handler_contract.py"
@@ -532,6 +565,32 @@ def qe_archive_backend(session: nox.Session) -> None:
     _run_pytest(
         session,
         *pytest_targets,
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
+def qe_mcp_backend(session: nox.Session) -> None:
+    """Run QE MCP/template/archive backend contract tests without services."""
+    session.run(
+        "python",
+        "-m",
+        "compileall",
+        "backend/db/init_qe_execution_templates_schema.py",
+        "backend/routers/qe_templates.py",
+        "backend/services/qe_templates",
+        "scripts/aistock_mcp_common.py",
+        "scripts/aistock_qe_experiment_mcp_server.py",
+        "scripts/aistock_qe_archive_mcp_server.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/test_qe_execution_templates_schema.py",
+        "backend/tests/qe_templates/test_template_validator.py",
+        "backend/tests/test_aistock_qe_mcp_servers.py",
         "-q",
         "-p",
         "no:cacheprovider",
@@ -1242,6 +1301,122 @@ def qe_archive_l3(session: nox.Session) -> None:
     session.notify("data_quality_deep")
     if os.environ.get("QE_ARCHIVE_L3_SKIP_UI") != "1":
         session.notify("qe_archive_ui")
+
+
+@nox.session(venv_backend="none")
+def qe_template_ui(session: nox.Session) -> None:
+    """Run QE template management UI tests on non-production dev ports."""
+    test_dir = ROOT / "frontend" / "tests" / "qe-templates"
+    if not test_dir.exists():
+        session.skip("QE template UI tests are not implemented yet.")
+    backend_port = session.posargs[0] if session.posargs else os.environ.get("BACKEND_PORT", "8011")
+    frontend_port = session.posargs[1] if len(session.posargs) > 1 else os.environ.get("FRONTEND_PORT", "3011")
+    session.run(
+        "python",
+        "scripts/aistock_validate.py",
+        "ports",
+        "--allow-occupied",
+        backend_port,
+        frontend_port,
+        external=True,
+    )
+    old_cwd = Path.cwd()
+    os.chdir(ROOT / "frontend")
+    try:
+        session.run(
+            "npm",
+            "exec",
+            "tsc",
+            "--",
+            "--noEmit",
+            "--incremental",
+            "false",
+            external=True,
+        )
+        session.run(
+            "npm",
+            "run",
+            "test:e2e",
+            "--",
+            "tests/qe-templates",
+            env=_env(
+                {
+                    "BACKEND_PORT": backend_port,
+                    "FRONTEND_PORT": frontend_port,
+                    "NEXT_PUBLIC_API_BASE": f"http://127.0.0.1:{backend_port}/api/v1",
+                    "PLAYWRIGHT_SKIP_WEBSERVER": "1" if _is_port_open(frontend_port) else "0",
+                }
+            ),
+            external=True,
+        )
+    finally:
+        os.chdir(old_cwd)
+
+
+@nox.session(venv_backend="none")
+def qe_mcp_l3(session: nox.Session) -> None:
+    """Run QE MCP v1 local validation gates on non-production dev ports."""
+    backend_port = session.posargs[0] if session.posargs else os.environ.get("BACKEND_PORT", "8011")
+    frontend_port = session.posargs[1] if len(session.posargs) > 1 else os.environ.get("FRONTEND_PORT", "3011")
+    session.run(
+        "python",
+        "scripts/aistock_validate.py",
+        "record",
+        "--module",
+        "qe_mcp",
+        "--level",
+        "L3",
+        "--title",
+        "QE MCP v1 backend and MCP contract validation",
+        external=True,
+    )
+    _validate_in_tree_codex_skill(session, ".codex/skills/verify-aistock-feature")
+    session.run(
+        "python",
+        ".codex/skills/verify-aistock-feature/scripts/scan_quality_guardrails.py",
+        "backend/db/init_qe_execution_templates_schema.py",
+        "backend/routers/qe_templates.py",
+        "backend/routers/qe_archive.py",
+        "backend/routers/quantevolver_evolution.py",
+        "backend/services/qe_archive/backfill_service.py",
+        "backend/services/qe_archive/bootstrap_marker.py",
+        "backend/services/qe_archive/event_capture.py",
+        "backend/services/qe_archive/ingest_history.py",
+        "backend/services/qe_archive/models.py",
+        "backend/services/qe_archive/policy.py",
+        "backend/services/qe_archive/realtime_ingestion.py",
+        "backend/services/qe_archive/repository.py",
+        "backend/services/qe_archive/skip_registry.py",
+        "backend/services/qe_archive/worker_loop.py",
+        "backend/services/qe_archive/worker_service.py",
+        "backend/services/qe_templates",
+        "scripts/aistock_mcp_common.py",
+        "scripts/aistock_qe_experiment_mcp_server.py",
+        "scripts/aistock_qe_archive_mcp_server.py",
+        "backend/tests/test_aistock_qe_mcp_servers.py",
+        "backend/tests/test_qe_execution_templates_schema.py",
+        "backend/tests/qe_templates",
+        "frontend/src/app/quantevolver/templates",
+        "frontend/src/lib/qe-templates",
+        "frontend/tests/qe-templates",
+        "noxfile.py",
+        "--fail-on",
+        "HIGH",
+        external=True,
+    )
+    session.notify("qe_mcp_backend")
+    session.notify("qe_archive_backend")
+    if os.environ.get("QE_MCP_L3_SKIP_TEMPLATE_UI") != "1":
+        session.notify("qe_template_ui")
+    session.run(
+        "python",
+        "scripts/aistock_validate.py",
+        "ports",
+        "--allow-occupied",
+        backend_port,
+        frontend_port,
+        external=True,
+    )
 
 
 @nox.session(venv_backend="none")

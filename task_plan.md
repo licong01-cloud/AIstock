@@ -579,3 +579,71 @@ Phase 4: validation and API smoke
 | Snapshots use window union, caches use daily eligible index | Preserves enough raw data while metrics/cache samples are PIT-correct per date. |
 | Correlation validates universe metadata | Prevents merged cache or old single cache from being silently mixed into current official correlation. |
 | Root worktree edits are not reverted in this task | They may be user/parallel-session state; only the isolated task worktree is committed. |
+
+---
+
+# Task Plan Addendum: Paper v2 remaining design implementation (2026-05-14)
+
+## Goal
+Complete the remaining non-merge Paper v2 design items on branch `codex/paper-v2-live-smoke-fixes-20260513` before merging to main: improve UI semantics/display accuracy, persist/show stock names where feasible, preserve LIVE execution semantics, then validate through backend and frontend pipelines.
+
+## Current Phase
+Phase P2-3 validation completed with residual frontend global-lint blockers outside Paper v2
+
+## Phases
+
+### Phase P2-1: Gap scan
+- [x] Compare design docs with current Paper v2 frontend/backend contracts.
+- [x] Identify implementable items that do not alter trading semantics.
+- [x] Record deferred items that require DB migration, miniQMT, or product decision.
+
+### Phase P2-2: Implementation
+- [x] Update Paper v2 UI labels/navigation/display semantics.
+- [x] Fix target/rebalance and daily signal display inaccuracies.
+- [x] Add sortable today signal UI if current page supports it.
+- [x] Add stock-name read-API/display enrichment without using names in selection/trading logic; DB-column persistence remains deferred until migration decision.
+
+### Phase P2-3: Validation
+- [x] Run targeted Paper v2 backend tests.
+- [x] Run Paper v2 backend suite.
+- [x] Run frontend type/lint pipeline: targeted Paper v2 lint and tsc passed; full lint/build reached unrelated legacy lint blockers.
+- [x] Keep main untouched until user confirms merge.
+
+## Boundaries
+- Do not merge to `main` in this phase.
+- Do not touch production 8001/3000 or production DB.
+- Do not change live selection/scoring to use backtest artifacts.
+- Do not change V25.1 minute execution semantics to tick-level execution in this phase.
+- miniQMT remains a separate branch/worktree milestone.
+
+---
+
+# Task Plan: Paper v2 stock_name persistence and merge-gate validation (2026-05-14)
+
+## Goal
+Persist stock-name display metadata in DEV DB for Paper Trading v2 records, keep it out of trading semantics, and run enough backend/frontend/full-flow validation for the user to decide whether to merge to `main`.
+
+## Current Phase
+Complete; awaiting user merge decision.
+
+## Phases
+- [x] Confirm branch and DEV DB boundary.
+- [x] Add nullable stock_name schema/migration and repository write persistence.
+- [x] Apply/backfill DEV DB only, with guard target `127.0.0.1:5433/aistock_dev`.
+- [x] Fix full frontend lint/build blockers.
+- [x] Run backend Paper v2 tests, E2E archive lifecycle, frontend lint/build/type checks, side-port API smoke, and Playwright Paper v2 real-flow.
+- [ ] Commit and/or merge to `main` only after user confirmation.
+
+## Decisions Made
+| Decision | Rationale |
+|----------|-----------|
+| stock_name is nullable and display/audit-only | Names are useful in UI/records but must not affect trading logic |
+| API enrichment remains | Backward compatibility for old rows or lookup gaps |
+| DEV DB migration now, production DB later | User requested production schema change only at merge/release decision time |
+| Fix unrelated lint blockers minimally | Full pipeline needed a green global frontend lint/build gate |
+
+## Validation Refresh (2026-05-14)
+- [x] Re-ran backend Paper v2 suite and lifecycle E2E after DEV DB validation fixture seeding.
+- [x] Re-ran frontend lint/build/type checks.
+- [x] Re-ran side-port API smoke and Paper v2 Playwright real-flow on 8011/3011 with realtime skipped.
+- [x] Stopped temporary validation servers and confirmed side ports are free.
