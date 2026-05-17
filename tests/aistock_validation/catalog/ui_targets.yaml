@@ -148,6 +148,25 @@ targets:
   - Review Experiment History state
   - Validate Experiment History primary workflow
   coverage_status: planned
+- route_id: qe.templates
+  href: /quantevolver/templates
+  label: QE Pending Templates
+  nav_group: QuantEvolver
+  primary_module: qe.single_experiment
+  impact_modules:
+  - qe.custom_evolution
+  - qe.core
+  risk_level: high
+  required_test_plans:
+  - l0
+  - qe_read_l3
+  recommended_test_plans:
+  - qe_data_contract_backend
+  business_operations:
+  - Open QE Pending Templates
+  - Review saved experiment templates
+  - Validate template save-before-run workflow
+  coverage_status: partial
 - route_id: qe.archive
   href: /qe-archive
   label: QE Archive Warehouse
