@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib
+import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -116,3 +118,26 @@ def test_qe_mcp_scripts_do_not_import_runtime_execution_paths() -> None:
         text = Path(rel).read_text(encoding="utf-8")
         for token in banned:
             assert token not in text, f"{rel} must not contain {token}"
+
+
+def test_qe_mcp_direct_script_entrypoints_start_without_import_error() -> None:
+    env = os.environ.copy()
+    env.update(
+        {
+            "AISTOCK_QE_EXPERIMENT_BASE_URL": "http://127.0.0.1/api/v1",
+            "AISTOCK_QE_ARCHIVE_BASE_URL": "http://127.0.0.1/api/v1/qe-archive",
+        }
+    )
+    for rel in ("scripts/aistock_qe_experiment_mcp_server.py", "scripts/aistock_qe_archive_mcp_server.py"):
+        completed = subprocess.run(
+            [sys.executable, rel],
+            input=b"",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            timeout=10,
+            check=False,
+        )
+        stderr = completed.stderr.decode("utf-8", errors="replace")
+        assert completed.returncode == 0, stderr
+        assert "ModuleNotFoundError" not in stderr
