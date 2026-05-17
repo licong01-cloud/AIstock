@@ -135,7 +135,286 @@ COMMENT ON TABLE research_pipeline.stage_execution IS 'Stage 执行记录，每�
 
 ---
 
-## 20. MCP 统一管理分析
+## 21. AIstock MCP 最优架构（长期规划）
+
+### 21.1 AIstock 功能域全景
+
+| 功能域 | 核心服务 | 路由大小 | 是否需要 MCP | 理由 |
+|--------|---------|---------|-------------|------|
+| **QuantEvolver** | 因子/模型/策略演进 | 550K | ✅ 已有 | 核心研究入口 |
+| **QE Archive** | 实验数仓 | 12K | ✅ 已有 | 历史查询 |
+| **Validation** | 验证框架 + Bug | 18K | ✅ 已有 | 质量保障 |
+| **Research Pipeline** | 研究流水线 | 新增 | ✅ 规划中 | 实验管理 |
+| **Paper Trading v2** | 模拟盘 | 33K | ✅ 需要 | 实盘验证 |
+| **Selection Center** | 选股中心 | 8K | ⚠️ 可选 | 运行时调试 |
+| **HMM Training** | HMM 模型管理 | 16K | ⚠️ 可选 | 模型操作 |
+| **Strategy Package** | 策略包管理 | 37K | ⚠️ 可选 | 部署管理 |
+| **Data Ingestion** | 数据采集 | 114K | ❌ 不需要 | 后台自动 |
+| **RDAgent** | 远端节点管理 | 62K | ❌ 不需要 | 内部调度 |
+| **Monitor/Analysis** | 监控分析 | 15K | ❌ 不需要 | UI 为主 |
+| **Trading Core** | 交易核心 | — | ❌ 不需要 | 底层基础设施 |
+
+**需要 MCP 的功能域**：6-8 个（当前 3 个 + 规划 1 个 + 未来 2-4 个）
+
+### 21.2 三种架构方案对比
+
+#### 方案 A：每个功能域一个独立 MCP Server（当前模式的延伸）
+
+```
+.mcp.json:
+  aistock-validation        → scripts/aistock_mcp_server.py
+  aistock-qe-experiment     → scripts/aistock_qe_experiment_mcp_server.py
+  aistock-qe-archive        → scripts/aistock_qe_archive_mcp_server.py
+  aistock-research          → scripts/aistock_research_mcp_server.py
+  aistock-paper-trading     → scripts/aistock_paper_trading_mcp_server.py
+  aistock-selection         → scripts/aistock_selection_mcp_server.py
+  aistock-hmm              → scripts/aistock_hmm_mcp_server.py
+  aistock-strategy-package  → scripts/aistock_strategy_package_mcp_server.py
+```
+
+| 优点 | 缺点 |
+|------|------|
+| 进程隔离，故障不传播 | 8 个进程，内存开销 ~400MB |
+| 按需启用 | Tool schema 膨胀（8×15=120+ tools） |
+| 职责清晰 | 管理复杂（8 个入口文件） |
+| | Token 开销 ~18,000（占 context 9%） |
+
+#### 方案 B：统一网关 + 领域路由（推荐）
+
+```
+.mcp.json:
+  aistock → scripts/aistock_mcp_gateway.py
+
+内部结构：
+  aistock_mcp_gateway.py
+    ├── 加载所有领域模块
+    ├── 统一 tool 注册
+    ├── 统一 confirm/sanitize
+    └── 按 prefix 路由到领域 handler
+```
+
+| 优点 | 缺点 |
+|------|------|
+| 1 个进程，~50MB 内存 | 单点故障 |
+| 1 个入口，管理简单 | 所有 tools 一次性加载 |
+| 共享 client/confirm/sanitize | 无法按需启用子集 |
+| Tool 命名自带 namespace | 大 server 启动慢 |
+
+#### 方案 C：统一网关 + 动态加载（最优）
+
+```
+.mcp.json:
+  aistock → scripts/aistock_mcp_gateway.py --modules=validation,qe,research
+
+内部结构：
+  backend/mcp/
+    ├── gateway.py              ← 统一入口，动态加载模块
+    ├── common.py               ← 共享 client/confirm/sanitize
+    ├── registry.py             ← Tool 注册表（自动发现）
+    ├── modules/
+    │   ├── __init__.py
+    │   ├── validation.py       ← @module("validation") 装饰器
+    │   ├── qe_experiment.py    ← @module("qe")
+    │   ├── qe_archive.py       ← @module("archive")
+    │   ├── research.py         ← @module("research")
+    │   ├── paper_trading.py    ← @module("paper")
+    │   ├── selection.py        ← @module("selection")
+    │   └── hmm.py              ← @module("hmm")
+    └── tests/
+```
+
+| 优点 | 缺点 |
+|------|------|
+| 1 个进程，按需加载模块 | 实现稍复杂 |
+| `--modules` 参数控制加载哪些 | 需要模块注册机制 |
+| 共享所有基础设施 | — |
+| 可以按场景配置不同 profile | — |
+| Token 只包含已加载模块的 tools | — |
+| 统一管理，统一测试 | — |
+
+### 21.3 推荐方案：C（统一网关 + 动态加载）
+
+**核心设计**：
+
+```python
+# backend/mcp/gateway.py
+"""AIstock 统一 MCP Gateway。
+
+通过 --modules 参数动态加载功能模块，每个模块注册自己的 tools。
+单进程运行，共享 HTTP client、confirm 机制、sanitize 逻辑。
+
+Usage:
+  python -m backend.mcp.gateway --modules=validation,qe,archive,research
+  python -m backend.mcp.gateway --modules=all
+  python -m backend.mcp.gateway --profile=research  # 预定义 profile
+"""
+import argparse
+import importlib
+from mcp.server.fastmcp import FastMCP
+
+from backend.mcp.common import AIstockApiClient
+from backend.mcp.registry import ModuleRegistry
+
+# 预定义 profile（常用组合）
+PROFILES = {
+    "full": ["validation", "qe_experiment", "qe_archive", "research", "paper_trading"],
+    "research": ["qe_experiment", "qe_archive", "research"],
+    "operations": ["validation", "paper_trading", "selection"],
+    "minimal": ["validation"],
+}
+
+def create_gateway(modules: list[str]) -> FastMCP:
+    mcp = FastMCP("aistock")
+    registry = ModuleRegistry(mcp)
+
+    for module_name in modules:
+        mod = importlib.import_module(f"backend.mcp.modules.{module_name}")
+        mod.register(registry)
+
+    return mcp
+```
+
+**模块注册模式**：
+
+```python
+# backend/mcp/modules/qe_experiment.py
+"""QE 实验管理模块。"""
+from backend.mcp.registry import ModuleRegistry
+
+def register(registry: ModuleRegistry):
+    mcp = registry.mcp
+    client = registry.client("/quantevolver")
+
+    @mcp.tool()
+    def qe_experiment_list(limit: int = 50, offset: int = 0) -> dict:
+        """列出 QE 实验。"""
+        return client.get("/experiments", params={"limit": limit, "offset": offset})
+
+    @mcp.tool()
+    def qe_experiment_get(experiment_id: str) -> dict:
+        """获取 QE 实验详情。"""
+        return client.get(f"/experiments/{registry.sanitize(experiment_id)}")
+
+    # ... 其他 tools
+```
+
+**Registry 提供共享能力**：
+
+```python
+# backend/mcp/registry.py
+class ModuleRegistry:
+    """为每个模块提供共享基础设施。"""
+
+    def __init__(self, mcp: FastMCP):
+        self.mcp = mcp
+        self._base_client = AIstockApiClient(base_url=os.environ.get("AISTOCK_BASE_URL", "http://127.0.0.1:8001/api/v1"))
+
+    def client(self, path_prefix: str = "") -> AIstockApiClient:
+        """返回带 path prefix 的 client。"""
+        return self._base_client.with_prefix(path_prefix)
+
+    def sanitize(self, value: str, name: str = "id") -> str:
+        """统一的标识符验证。"""
+        return sanitize_identifier(value, name)
+
+    def require_confirm(self, token: str, expected: str, param: str):
+        """统一的确认机制。"""
+        if token != expected:
+            raise ConfirmationRequired(expected, param)
+```
+
+### 21.4 `.mcp.json` 最终形态
+
+```json
+{
+  "_comment": "AIstock 统一 MCP Gateway。通过 profile 控制加载模块。",
+  "mcpServers": {
+    "aistock": {
+      "command": "python",
+      "args": ["-m", "backend.mcp.gateway", "--profile=full"],
+      "env": {
+        "AISTOCK_BASE_URL": "http://127.0.0.1:8001/api/v1"
+      }
+    }
+  }
+}
+```
+
+**按场景切换 profile**：
+- 日常开发：`--profile=minimal`（只加载 validation，17 tools）
+- 研究工作：`--profile=research`（qe + archive + research，55 tools）
+- 全功能：`--profile=full`（所有模块，~80 tools）
+- 自定义：`--modules=validation,research,paper_trading`
+
+### 21.5 入口独立 vs 程序共享
+
+| 层面 | 独立 | 共享 |
+|------|------|------|
+| **进程入口** | ❌ 统一为 1 个 gateway | — |
+| **模块代码** | ✅ 每个模块独立文件 | 共享 registry/client/confirm |
+| **HTTP Client** | — | ✅ 统一 `AIstockApiClient` |
+| **确认机制** | — | ✅ 统一 `require_confirm` |
+| **输入验证** | — | ✅ 统一 `sanitize_*` |
+| **错误处理** | — | ✅ 统一异常类型 |
+| **测试** | ✅ 每个模块独立测试文件 | 共享 test fixtures |
+| **Tool 命名** | ✅ 模块前缀（`qe_*`, `research_*`） | — |
+
+### 21.6 迁移路径
+
+```
+当前状态（3 个独立 server）
+    │
+    ▼ Phase 1（研究流水线开发期间）
+创建 backend/mcp/ 模块结构
+新增 research 模块
+保持现有 3 个 server 不变（兼容）
+    │
+    ▼ Phase 2（研究流水线稳定后）
+实现 gateway.py + registry.py
+迁移现有 3 个 server 到 modules/
+更新 .mcp.json 为统一入口
+保留旧 scripts/ 入口作为 fallback
+    │
+    ▼ Phase 3（全功能扩展）
+新增 paper_trading / selection / hmm 模块
+删除旧 scripts/ 入口
+统一测试框架
+```
+
+### 21.7 Token 预算对比
+
+| 配置 | Tools 加载 | Token 开销 | 占 200K context |
+|------|-----------|-----------|----------------|
+| `--profile=minimal` | 19 | ~2,850 | 1.4% |
+| `--profile=research` | 55 | ~8,250 | 4.1% |
+| `--profile=full` | 80 | ~12,000 | 6.0% |
+| 上限（所有模块） | 100 | ~15,000 | 7.5% |
+
+**关键优势**：动态加载意味着不需要的模块不占 token。研究场景只加载 research profile，日常只加载 minimal。
+
+### 21.8 与 Codex App 的兼容
+
+Codex App 使用相同的 `.mcp.json`，但可以通过环境变量覆盖 profile：
+
+```json
+{
+  "mcpServers": {
+    "aistock": {
+      "command": "python",
+      "args": ["-m", "backend.mcp.gateway", "--profile=${AISTOCK_MCP_PROFILE:-full}"],
+      "env": {
+        "AISTOCK_BASE_URL": "http://127.0.0.1:8001/api/v1",
+        "AISTOCK_MCP_PROFILE": "full"
+      }
+    }
+  }
+}
+```
+
+Codex 多 agent 场景：每个 agent 可以用不同 profile：
+- PM agent: `--profile=minimal`
+- Research agent: `--profile=research`
+- QA agent: `--profile=operations`
 
 ### 20.1 现有 MCP 现状
 
