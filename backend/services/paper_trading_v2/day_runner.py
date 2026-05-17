@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Callable
 
 from backend.services.data_refresh_audit import DataRefreshAuditRepository
 from backend.services.paper_trading_v2.market_data import MinuteDataSource, PaperV2MinuteMarketDataProvider, TradeCalendarProvider
@@ -29,9 +29,10 @@ from backend.services.trading_core.errors import DataUnavailableError, InvalidSt
 from backend.services.trading_core.execution_algo_capabilities import required_minute_bars_for_policy
 from backend.services.trading_core.ledger import FeeModel, InMemoryLedger
 from backend.services.trading_core.minute_execution import MinuteExecutionEngine
-from backend.services.trading_core.models import PositionLot, RunStatus
+from backend.services.trading_core.models import AccountSnapshot, OrderStatus, PositionLot, RunStatus
 from backend.services.trading_core.oms import OMS
 
+from .broker import MiniQMTSimBackend
 from .models import PaperDayRunResult, PaperRun, PortfolioStatus
 from .repository import PaperTradingV2Repository
 from .risk_targets import overlay_risk_forced_exit_targets
@@ -57,6 +58,7 @@ class PaperTradingDayRunner:
         refresh_audit: DataRefreshAuditRepository | Any | None = None,
         selection_artifact_service: StrategyPackageSelectionArtifactService | Any | None = None,
         risk_policy_service: StockRiskPolicyService | Any | None = None,
+        minqmt_broker_factory: Callable[..., MiniQMTSimBackend] | None = None,
     ) -> None:
         self.repository = repository or PaperTradingV2Repository()
         self.calendar_provider = calendar_provider or TradeCalendarProvider()
@@ -73,6 +75,7 @@ class PaperTradingDayRunner:
             artifact_repository=getattr(self.runtime, "artifact_repository", None),
         )
         self.risk_policy_service = risk_policy_service or StockRiskPolicyService()
+        self.minqmt_broker_factory = minqmt_broker_factory or MiniQMTSimBackend
 
     def run_day(
         self,
@@ -160,45 +163,82 @@ class PaperTradingDayRunner:
         self.repository.update_portfolio_status(portfolio_id, PortfolioStatus.RUNNING)
         self.repository.save_run_event(run_id=run.run_id, event_type="RUN_STARTED", message="paper v2 day run started")
 
+        minqmt_broker: MiniQMTSimBackend | None = None
         try:
-            data_ready = self._require_data_ready(
-                manifest=manifest,
-                trade_date=trade_date,
-                runtime_config=config,
-                execution_policy_json=execution_policy_json,
-            )
+            if portfolio.broker_backend == "minqmt_sim":
+                data_ready = self._require_minqmt_data_ready(
+                    trade_date=trade_date,
+                    runtime_config=config,
+                )
+            else:
+                data_ready = self._require_data_ready(
+                    manifest=manifest,
+                    trade_date=trade_date,
+                    runtime_config=config,
+                    execution_policy_json=execution_policy_json,
+                )
             self.repository.save_run_event(
                 run_id=run.run_id,
                 event_type="DATA_READY",
                 message="required paper v2 datasets are ready",
                 context={"datasets": data_ready},
             )
-            current_positions = self.repository.load_latest_positions(portfolio_id, trade_date)
-            latest_cash = self.repository.load_latest_cash(portfolio, trade_date)
-            if self._ensure_current_prices_for_existing_positions(
-                config=config,
-                current_positions=current_positions,
-                trade_date=trade_date,
-                data_source=portfolio.data_source,
-                run_id=run.run_id,
-            ):
-                run = self.repository.update_run_runtime_config(run, config)
-            total_equity = self._resolve_total_equity(
-                latest_cash=latest_cash,
-                current_positions=current_positions,
-                runtime_config=config,
-                portfolio_id=portfolio_id,
-            )
+            if portfolio.broker_backend == "minqmt_sim":
+                minqmt_broker = self.minqmt_broker_factory(
+                    portfolio_id=portfolio.portfolio_id,
+                    package_id=manifest.package_id,
+                    data_source=MinuteDataSource.MINIQMT_REALTIME,
+                    strategy_slot_id=portfolio.portfolio_id,
+                )
+                broker_account = minqmt_broker.query_account()
+                current_positions, current_prices = minqmt_broker.query_position_marks()
+                latest_cash = float(broker_account.cash)
+                total_equity = float(broker_account.nav)
+                if current_prices:
+                    config["current_prices"] = current_prices
+                    config["current_price_context"] = {
+                        symbol: {"price": price, "source": "MINIQMT_QUERY", "basis": "broker_position_mark"}
+                        for symbol, price in current_prices.items()
+                    }
+                    run = self.repository.update_run_runtime_config(run, config)
+                self.repository.save_run_event(
+                    run_id=run.run_id,
+                    event_type="MINIQMT_ACCOUNT_SNAPSHOT_LOADED",
+                    message="MiniQMT account and positions loaded as broker authority",
+                    context={
+                        "cash": latest_cash,
+                        "nav": total_equity,
+                        "position_count": len(current_positions),
+                    },
+                )
+            else:
+                current_positions = self.repository.load_latest_positions(portfolio_id, trade_date)
+                latest_cash = self.repository.load_latest_cash(portfolio, trade_date)
+                if self._ensure_current_prices_for_existing_positions(
+                    config=config,
+                    current_positions=current_positions,
+                    trade_date=trade_date,
+                    data_source=portfolio.data_source,
+                    run_id=run.run_id,
+                ):
+                    run = self.repository.update_run_runtime_config(run, config)
+                total_equity = self._resolve_total_equity(
+                    latest_cash=latest_cash,
+                    current_positions=current_positions,
+                    runtime_config=config,
+                    portfolio_id=portfolio_id,
+                )
+            selection_data_source = self._selection_data_source(portfolio, config)
             self._ensure_authoritative_selection_artifact(
                 manifest=manifest,
                 trade_date=trade_date,
-                data_source=portfolio.data_source.value,
+                data_source=selection_data_source,
                 runtime_config=config,
             )
             snapshot = self.runtime.build_signal_snapshot(
                 manifest=manifest,
                 trade_date=trade_date,
-                data_source=portfolio.data_source.value,
+                data_source=selection_data_source,
                 runtime_config=config,
             )
             raw_candidate_count = len(snapshot.candidates)
@@ -362,6 +402,15 @@ class PaperTradingDayRunner:
                     ],
                 },
             )
+            if portfolio.broker_backend == "minqmt_sim":
+                return self._run_minqmt_sim_orders(
+                    portfolio=portfolio,
+                    run=run,
+                    manifest=manifest,
+                    trade_date=trade_date,
+                    intents=intents,
+                    broker=minqmt_broker,
+                )
 
             ledger = InMemoryLedger(
                 portfolio_id=portfolio_id,
@@ -562,6 +611,8 @@ class PaperTradingDayRunner:
                 account_snapshot=account_snapshot,
             )
         except TradingCoreError as exc:
+            if minqmt_broker is not None:
+                minqmt_broker.shutdown()
             error = exc.to_dict()
             self.repository.save_error(run_id=run.run_id, portfolio_id=portfolio_id, error=error)
             failed = self.repository.update_run_status(run, RunStatus.FAILED, error=error)
@@ -570,6 +621,8 @@ class PaperTradingDayRunner:
             run = failed
             raise
         except Exception as exc:
+            if minqmt_broker is not None:
+                minqmt_broker.shutdown()
             error = {"error_code": "PAPER_V2_RUN_ERROR", "message": str(exc), "context": {"portfolio_id": portfolio_id, "run_id": run.run_id}}
             self.repository.save_error(run_id=run.run_id, portfolio_id=portfolio_id, error=error)
             self.repository.update_run_status(run, RunStatus.FAILED, error=error)
@@ -598,6 +651,36 @@ class PaperTradingDayRunner:
             status = self.refresh_audit.require_success(dataset="stk_limit", trade_date=trade_date)
             ready.append(self._refresh_status_context("stk_limit", status))
         return ready
+
+    def _require_minqmt_data_ready(
+        self,
+        *,
+        trade_date: date,
+        runtime_config: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        ready: list[dict[str, Any]] = [
+            {
+                "dataset": "miniqmt_account",
+                "trade_date": trade_date.isoformat(),
+                "data_source": MinuteDataSource.MINIQMT_REALTIME.value,
+                "status": "broker_query_required",
+            }
+        ]
+        runtime_profile = parse_selection_runtime_profile(runtime_config)
+        if runtime_profile.tradability.exclude_suspended:
+            status = self.refresh_audit.require_success(dataset="suspend_d", trade_date=trade_date)
+            ready.append(self._refresh_status_context("suspend_d", status))
+        return ready
+
+    @staticmethod
+    def _selection_data_source(portfolio: Any, runtime_config: dict[str, Any]) -> str:
+        if portfolio.broker_backend == "minqmt_sim":
+            return str(
+                (runtime_config.get("selection_artifact_config") or {}).get("signal_data_source")
+                or runtime_config.get("signal_data_source")
+                or MinuteDataSource.DB_HISTORICAL.value
+            )
+        return portfolio.data_source.value
 
     def _ensure_authoritative_selection_artifact(
         self,
@@ -863,6 +946,185 @@ class PaperTradingDayRunner:
                 context={"package_id": package_id, "algo_code": policy_json.get("algo_code"), "missing_keys": missing},
             )
         return {key: bool(requirements.get(key)) for key in required_keys}
+
+    def _run_minqmt_sim_orders(
+        self,
+        *,
+        portfolio: Any,
+        run: PaperRun,
+        manifest: Any,
+        trade_date: date,
+        intents: list[Any],
+        broker: MiniQMTSimBackend | None = None,
+    ) -> PaperDayRunResult:
+        broker = broker or self.minqmt_broker_factory(
+            portfolio_id=portfolio.portfolio_id,
+            package_id=manifest.package_id,
+            data_source=MinuteDataSource.MINIQMT_REALTIME,
+            strategy_slot_id=portfolio.portfolio_id,
+        )
+        orders = []
+        events = []
+        try:
+            if not intents:
+                self.repository.save_run_event(
+                    run_id=run.run_id,
+                    event_type="MINIQMT_NO_ORDER_INTENTS",
+                    message="no order intents generated; MiniQMT account snapshot will be reconciled without local fills",
+                    context={
+                        "portfolio_id": portfolio.portfolio_id,
+                        "trade_date": trade_date.isoformat(),
+                        "broker_backend": "minqmt_sim",
+                    },
+                )
+            for intent in intents:
+                order = self.oms.create_order(intent)
+                try:
+                    handle = broker.submit_order_intent(intent)
+                    native = broker.order_context(handle)
+                    status = broker.query_status(handle)
+                except TradingCoreError as exc:
+                    final_order, event = self.oms.reject_order(order, exc.message)
+                    metadata = dict(final_order.metadata or {})
+                    metadata.update(
+                        {
+                            "broker_backend": "minqmt_sim",
+                            "authority_source": "MINIQMT",
+                            "broker_error": exc.to_dict(),
+                        }
+                    )
+                    final_order = final_order.model_copy(update={"metadata": metadata})
+                    self.repository.save_order(run.run_id, final_order)
+                    self.repository.save_order_event(run.run_id, event)
+                    orders.append(final_order)
+                    events.append(event)
+                    raise
+
+                metadata = dict(order.metadata or {})
+                metadata.update(
+                    {
+                        "broker_backend": "minqmt_sim",
+                        "authority_source": "MINIQMT",
+                        "broker_handle_id": handle.handle_id,
+                        "broker_status": status.state,
+                        **native,
+                    }
+                )
+                state = OrderStatus.SUBMITTED
+                if status.state == "rejected":
+                    state = OrderStatus.REJECTED
+                elif status.state == "cancelled":
+                    state = OrderStatus.CANCELLED
+                elif status.state == "filled":
+                    state = OrderStatus.FILLED
+                elif status.state == "partial_filled":
+                    state = OrderStatus.PARTIALLY_FILLED
+                final_order = order.model_copy(
+                    update={
+                        "metadata": metadata,
+                        "status": state,
+                        "filled_quantity": status.filled_quantity,
+                        "avg_fill_price": float(status.avg_fill_price) if status.avg_fill_price is not None else None,
+                    }
+                )
+                self.repository.save_order(run.run_id, final_order)
+                orders.append(final_order)
+                self.repository.save_run_event(
+                    run_id=run.run_id,
+                    event_type="MINIQMT_ORDER_SUBMITTED",
+                    message="order intent submitted to MiniQMT broker authority",
+                    context={
+                        "order_id": final_order.order_id,
+                        "intent_id": intent.intent_id,
+                        "symbol": intent.symbol,
+                        "side": intent.side.value,
+                        "quantity": intent.quantity,
+                        "broker_handle_id": handle.handle_id,
+                        "miniqmt_order_id": native["miniqmt_order_id"],
+                        "broker_status": status.state,
+                    },
+                )
+
+            return self._persist_minqmt_authority_snapshot(
+                portfolio=portfolio,
+                run=run,
+                trade_date=trade_date,
+                broker=broker,
+                orders=orders,
+                events=events,
+            )
+        finally:
+            if broker is not None:
+                broker.shutdown()
+
+    def _persist_minqmt_authority_snapshot(
+        self,
+        *,
+        portfolio: Any,
+        run: PaperRun,
+        trade_date: date,
+        broker: MiniQMTSimBackend,
+        orders: list[Any],
+        events: list[Any],
+    ) -> PaperDayRunResult:
+        account = broker.query_account()
+        positions, prices = broker.query_position_marks()
+        position_list = list(positions.values())
+        for position in position_list:
+            if position.symbol not in prices:
+                raise DataUnavailableError(
+                    "MiniQMT position mark price is missing",
+                    context={"portfolio_id": portfolio.portfolio_id, "symbol": position.symbol, "source": "MINIQMT"},
+                )
+        market_value = sum(position.quantity * prices[position.symbol] for position in position_list)
+        snapshot = AccountSnapshot(
+            portfolio_id=portfolio.portfolio_id,
+            cash=float(account.cash),
+            market_value=float(market_value),
+            nav=float(account.nav),
+            snapshot_time=account.as_of,
+        )
+        self.repository.save_positions(
+            run_id=run.run_id,
+            trade_date=trade_date,
+            positions=position_list,
+            prices=prices,
+        )
+        self.repository.save_daily_snapshot(
+            run_id=run.run_id,
+            trade_date=trade_date,
+            snapshot=snapshot,
+            metadata={
+                "position_count": len(position_list),
+                "order_count": len(orders),
+                "fill_count": 0,
+                "broker_backend": "minqmt_sim",
+                "authority_source": "MINIQMT_QUERY",
+                "miniqmt_no_local_fills": True,
+            },
+        )
+        succeeded = self.repository.update_run_status(run, RunStatus.SUCCEEDED)
+        ready_portfolio = self.repository.update_portfolio_status(portfolio.portfolio_id, PortfolioStatus.READY)
+        self.repository.save_run_event(
+            run_id=run.run_id,
+            event_type="MINIQMT_RUN_RECONCILED",
+            message="MiniQMT broker-authoritative snapshots persisted without LocalSim fills",
+            context={
+                "order_count": len(orders),
+                "position_count": len(position_list),
+                "cash": float(account.cash),
+                "nav": float(account.nav),
+            },
+        )
+        return PaperDayRunResult(
+            portfolio=ready_portfolio,
+            run=succeeded,
+            orders=orders,
+            fills=[],
+            events=events,
+            positions=position_list,
+            account_snapshot=snapshot,
+        )
 
     @staticmethod
     def _reject_raw_execution_overrides(runtime_config: dict[str, Any]) -> None:

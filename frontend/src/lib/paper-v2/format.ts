@@ -139,6 +139,7 @@ export function dataSourceLabel(source: unknown): string {
   const raw = String(source || "");
   if (raw === "DB_HISTORICAL") return "历史分钟线库（DB_HISTORICAL）";
   if (raw === "TDX_REALTIME") return "TDX 实时分钟线（TDX_REALTIME）";
+  if (raw === "MINIQMT_REALTIME") return "MiniQMT 权威实时通道（MINIQMT_REALTIME）";
   return raw || "-";
 }
 
