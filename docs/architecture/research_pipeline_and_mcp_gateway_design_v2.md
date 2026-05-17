@@ -671,12 +671,66 @@ research_get_pipeline_types     # 可用流水线类型
 
 ## 6. 分支策略
 
-每个研究方向 1 个长期分支：`research/{type}/{name}-{date}`
+### 6.1 MCP 网关 + 研究流水线开发分支
 
-- 研究代码在研究分支开发
-- 基础设施修改走独立 issue 分支先合入 main
-- 资产不进 git（DB + 文件存储）
-- 实验中发现 bug → `research_create_issue` → 独立修复
+**本模块使用单一独立分支开发**：
+
+```
+分支名: feature/mcp-gateway-research-pipeline-20260518
+基于: main (ca2cc42)
+```
+
+**分支内容**（全部在此分支完成）：
+- `backend/mcp/` 统一网关模块（gateway + registry + common + modules）
+- `backend/services/research_pipeline/` 研究流水线服务
+- `backend/routers/research_pipeline.py` API 路由
+- `backend/db/init_research_pipeline.sql` DB Schema
+- 现有 3 个 MCP server 的迁移（到 `backend/mcp/modules/`）
+- 测试
+- 文档更新
+
+**不在此分支做的事**：
+- 修复现有 QE/HMM/Selection Center 的 bug（走独立 issue 分支）
+- 修改不相关的功能代码
+- 生成实验 artifact（资产不进 git）
+
+### 6.2 仓库前置状态（已确认）
+
+```
+✅ main 与 origin/main 同步
+✅ 工作目录干净
+✅ HMM 研究分支已全部合入或归档:
+   - feature/hmm-risk-gate-20260517 → 已合入 main
+   - codex/hmm-rd-20260511 → 已归档 (archive/)
+   - codex/hmm-sector-regime-20260509 → 已归档 (archive/)
+   - codex/hmm-evo-baseline-20260506 → 已合入 main（已删除分支）
+   - codex/hmm-qe-autoretry-20260509 → 已合入 main（已删除分支）
+✅ 事件信号研究分支已全部合入或归档:
+   - codex/event-signal-policy-20260507 → 已合入 main（已删除分支）
+   - codex/financial-distress-*-20260508 → 已合入 main（已删除分支）
+   - codex/unified-event-signal-*-20260506 → 已归档 (archive/)
+   - codex/financial-distress-rerank-20260508 → 已归档 (archive/)
+✅ 无未合入的研究分支阻塞开发
+```
+
+### 6.3 合入条件
+
+此分支合入 main 前必须满足 §7 全部验收标准（F1-F10, D1-D5, M1-M8, R1-R5）。
+
+### 6.4 未来研究分支规范
+
+MCP 网关合入后，所有研究工作使用研究流水线管理，分支命名：
+
+```
+research/{pipeline_type}/{experiment_name}-{date}
+```
+
+示例：
+```
+research/hmm/risk-gate-v2-20260601
+research/event-signal/sector-distress-20260605
+research/factor/momentum-decay-20260610
+```
 
 ---
 
