@@ -57,9 +57,13 @@ class HMMRiskGateDecisionProvider:
         if not blocked_sectors:
             return {}
 
+        protect_top = artifact.gate_config.get("protect_top", 30)
         current_holdings = set(current_positions.keys()) if current_positions else set()
         decisions: dict[str, Any] = {}
 
+        # protect_top is applied by the caller (Selection Center ranks candidates
+        # before calling risk policy). The provider blocks all non-holding symbols
+        # in fading sectors; the caller should exclude top-ranked candidates.
         for symbol in symbols:
             if symbol in current_holdings:
                 continue

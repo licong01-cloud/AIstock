@@ -8,7 +8,8 @@ Usage in strategy code:
 
     if self.enable_hmm_risk_gate:
         pred_score, blocked = apply_hmm_risk_gate(
-            pred_score, trade_date_str, self._risk_gate_config, current_holdings
+            pred_score, trade_date_str, self._risk_gate_config,
+            current_holdings, protect_top=30
         )
 """
 from __future__ import annotations
@@ -39,14 +40,17 @@ def apply_hmm_risk_gate(
     trade_date_str: str,
     risk_gate_artifact: dict[str, Any],
     current_holdings: set[str] | None = None,
+    protect_top: int = 30,
 ) -> tuple[pd.Series, list[str]]:
-    """Filter out stocks in blocked sectors (new buys only).
+    """Filter out stocks in blocked sectors (new buys only, with alpha protection).
 
     Args:
         pred_score: Series indexed by stock symbol with prediction scores
         trade_date_str: ISO date string (YYYY-MM-DD)
         risk_gate_artifact: Loaded risk gate artifact dict
         current_holdings: Set of currently held stock symbols (protected from gate)
+        protect_top: Number of top-ranked stocks to protect from gate (default 30).
+            These stocks are never blocked regardless of sector state.
 
     Returns:
         (filtered_pred_score, blocked_symbols)
@@ -69,10 +73,15 @@ def apply_hmm_risk_gate(
         return pred_score, []
 
     holdings = current_holdings or set()
-    blocked_symbols = []
 
-    for symbol in pred_score.index:
+    sorted_scores = pred_score.sort_values(ascending=False)
+    protected_symbols = set(sorted_scores.head(protect_top).index) if protect_top > 0 else set()
+
+    blocked_symbols = []
+    for symbol in sorted_scores.index:
         if symbol in holdings:
+            continue
+        if symbol in protected_symbols:
             continue
         sector = stock_sector_map.get(symbol)
         if sector and sector in blocked_sectors:

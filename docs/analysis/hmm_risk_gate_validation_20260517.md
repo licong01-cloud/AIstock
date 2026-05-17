@@ -122,3 +122,38 @@ Final NAV                 3.8577       3.8918        +0.0341
 - 本模拟使用 `qe_20260502_193154_17a2` Loop1 的 pred.pkl，不是最强 QE 模型
 - 简化的等权 5D rebalance 不包含 n_drop、持仓路径、分钟执行
 - 最终验证仍需完整 QE 分钟线回测确认
+
+## 更强 QE 模型验证（qe_20260508_060509_1268 Loop2）
+
+使用更新的 QE 模型 pred.pkl（2256997 行，443 天）重新验证 Top30 保护版本：
+
+```
+Rebalance periods: 88
+Avg blocked from Top50 per rebal: 2.03
+
+Metric                    No-Gate      Gate+P30      Delta
+Total Return              240.34%      246.91%       +6.56%
+Annualized Return         101.67%      103.89%       +2.22%
+Max Drawdown              -17.23%      -17.14%       +0.09% (改善)
+Sharpe Ratio              2.3553       2.3909        +0.0356
+Final NAV                 3.4034       3.4691        +0.0656
+```
+
+**结论**：在更强的 QE 模型上效果更显著 — 年化 +2.22%，Sharpe +0.036，回撤也微幅改善。
+
+## 最终推荐配置
+
+```json
+{
+  "trigger_duration_days": 5,
+  "protect_top": 30,
+  "confidence_scale": 0.30,
+  "gate_type": "transition_based"
+}
+```
+
+验收标准全部通过：
+- 年化收益提升（+1.09% ~ +2.22%）> 0 ✓
+- 最大回撤不恶化或改善 ✓
+- Sharpe 提升 ✓
+- 干预稀疏（~2 只/次）✓

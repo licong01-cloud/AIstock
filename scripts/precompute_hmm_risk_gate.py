@@ -127,6 +127,7 @@ def main() -> None:
     parser.add_argument("--confidence-threshold", type=float, default=None)
     parser.add_argument("--trigger-confidence-threshold", type=float, default=None)
     parser.add_argument("--trigger-duration-days", type=int, default=None)
+    parser.add_argument("--protect-top", type=int, default=None)
     args, _ = parser.parse_known_args()
 
     params = parse_stdin()
@@ -142,6 +143,7 @@ def main() -> None:
     trigger_duration_days = (
         args.trigger_duration_days or params.get("trigger_duration_days", 5)
     )
+    protect_top = args.protect_top if args.protect_top is not None else params.get("protect_top", 30)
 
     db_host = params.get("db_host", "127.0.0.1")
     db_port = params.get("db_port", 5432)
@@ -352,6 +354,7 @@ def main() -> None:
             "confidence_scale": confidence_scale,
             "fading_state_label": "fading",
             "block_new_buys_only": True,
+            "protect_top": protect_top,
             "soft_gate_multiplier": None,
             "trigger_confidence_threshold": trigger_confidence_threshold,
             "trigger_duration_days": trigger_duration_days,
