@@ -135,39 +135,50 @@ test("Validation Center Git and module quality panels work against real dev port
 
   try {
     await page.goto(`${frontendBase}/validation-center`, { waitUntil: "domcontentloaded", timeout: 30_000 });
-    await expect(page.getByRole("heading", { name: labels.title })).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByRole("heading", { name: labels.gitWorkspace })).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByRole("heading", { name: labels.moduleQuality })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText("Validation Center / Read Only")).toBeVisible({ timeout: 30_000 });
+    const phaseTabs = page.locator(".pv2-phase-tab");
+    await expect(phaseTabs).toHaveCount(10, { timeout: 30_000 });
+
+    await phaseTabs.nth(7).click();
+    await expect(page.getByText("read_only_allowlist").first()).toBeVisible({ timeout: 30_000 });
+
+    await phaseTabs.nth(5).click();
+    await expect(page.getByText("validation.center").first()).toBeVisible({ timeout: 30_000 });
+
+    await phaseTabs.nth(4).click();
     await expect(page.getByRole("heading", { name: labels.navigationSource })).toBeVisible({ timeout: 30_000 });
     const validationRouteRow = page.locator("tr", { hasText: labels.pipelineCenter }).filter({ hasText: labels.validationCenterRoute }).first();
     await expect(validationRouteRow).toBeVisible({ timeout: 30_000 });
     await validationRouteRow.getByRole("button", { name: labels.viewCoverage }).click();
     await expect(page.getByRole("heading", { name: labels.routeDetail })).toBeVisible({ timeout: 30_000 });
-    await page.waitForFunction((text) => document.body.innerText.includes(text), labels.needsValidation, {
-      timeout: 30_000,
-    });
+
     await waitForCollectedResponse(summary.validation_responses, "/git/commit-activity");
     await waitForCollectedResponse(summary.validation_responses, "/modules/quality-summary");
+    await waitForCollectedResponse(summary.validation_responses, "/modules/detail-summary");
     await waitForCollectedResponse(summary.validation_responses, "/ui-targets");
+    await waitForCollectedResponse(summary.validation_responses, "/cards/summary");
 
     const body = await page.locator("body").innerText();
     summary.assertions = {
-      has_title: body.includes(labels.title),
-      has_git_workspace_panel: body.includes(labels.gitWorkspace),
-      has_module_quality_panel: body.includes(labels.moduleQuality),
-      has_needs_validation_metric: body.includes(labels.needsValidation),
-      has_commit_activity_panel:
-        body.includes(labels.commitActivityUpper) || body.includes(labels.commitActivityTitle),
-      has_file_ownership_aggregation_text: body.includes(labels.fileOwnershipAggregation),
+      has_title: await page.getByText("Validation Center / Read Only").isVisible(),
+      has_phase_tabs: await phaseTabs.count() === 10,
+      has_git_workspace_panel_response: summary.validation_responses.some(
+        (line) => line.startsWith("200 ") && line.includes("/git/workspace-status"),
+      ),
+      has_module_quality_panel_response: summary.validation_responses.some(
+        (line) => line.startsWith("200 ") && line.includes("/modules/quality-summary"),
+      ),
+      has_module_detail_panel_response: summary.validation_responses.some(
+        (line) => line.startsWith("200 ") && line.includes("/modules/detail-summary"),
+      ),
       has_navigation_source_panel: body.includes(labels.navigationSource),
-      has_navigation_shared_source_text: body.includes(labels.navigationSharedSource),
       has_route_detail_panel: body.includes(labels.routeDetail),
       has_validation_center_route: body.includes(labels.validationCenterRoute),
+      has_cards_endpoint_response: summary.validation_responses.some(
+        (line) => line.startsWith("200 ") && line.includes("/cards/summary"),
+      ),
       has_commit_activity_endpoint_response: summary.validation_responses.some(
         (line) => line.startsWith("200 ") && line.includes("/git/commit-activity"),
-      ),
-      has_module_quality_endpoint_response: summary.validation_responses.some(
-        (line) => line.startsWith("200 ") && line.includes("/modules/quality-summary"),
       ),
       has_ui_target_endpoint_response: summary.validation_responses.some(
         (line) => line.startsWith("200 ") && line.includes("/ui-targets"),
