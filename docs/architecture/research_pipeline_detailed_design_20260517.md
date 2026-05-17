@@ -135,7 +135,190 @@ COMMENT ON TABLE research_pipeline.stage_execution IS 'Stage 执行记录，每�
 
 ---
 
-## 15. 资产库 MCP Server 设计
+## 20. MCP 统一管理分析
+
+### 20.1 现有 MCP 现状
+
+| Server | 文件 | 行数 | Tools | 职责 |
+|--------|------|------|-------|------|
+| `aistock-validation` | `scripts/aistock_mcp_server.py` | 1,675 | 19 | 验证框架 + Bug 生命周期 + GitHub Issue 同步 |
+| `aistock-qe-experiment` | `scripts/aistock_qe_experiment_mcp_server.py` | 191 | 22 | QE 实验管理 + 模板 |
+| `aistock-qe-archive` | `scripts/aistock_qe_archive_mcp_server.py` | 122 | 15 | 数仓查询 + 归档控制 |
+| 共享工具 | `scripts/aistock_mcp_common.py` | 110 | — | LoopbackApiClient + sanitize + confirm |
+
+**共计**: 3 server, 56 tools, ~2,100 行代码
+
+**架构模式**: 所有 server 都是 thin HTTP wrapper，通过 `LoopbackApiClient` 调用 `127.0.0.1:8001` 后端 API。
+
+### 20.2 是否需要合并到一个专用模块？
+
+**结论：不合并 server 进程，但统一管理代码结构。**
+
+#### 不合并进程的理由
+
+1. **进程隔离** — validation server 有 48 个 private helper（bug 生命周期），与 QE 无关。合并会导致单个 server 过于臃肿
+2. **按需加载** — Claude Code 的 `settings.local.json` 只启用了 `aistock-validation`，其他按需。合并后无法按需
+3. **故障隔离** — 一个 server crash 不影响其他
+4. **已有 BUG** — `BUG-044` 记录了 MCP server 启动问题，合并会增加排查难度
+
+#### 统一管理代码结构的方案
+
+将所有 MCP 相关代码从 `scripts/` 散落文件迁移到专用模块：
+
+```
+backend/mcp/                          ← 新模块（统一管理）
+├── __init__.py
+├── common.py                         ← 从 scripts/aistock_mcp_common.py 迁移
+├── base.py                           ← 新增：共享基类和装饰器
+├── servers/
+│   ├── __init__.py
+│   ├── validation.py                 ← 从 scripts/aistock_mcp_server.py 迁移
+│   ├── qe_experiment.py              ← 从 scripts/aistock_qe_experiment_mcp_server.py 迁移
+│   ├── qe_archive.py                 ← 从 scripts/aistock_qe_archive_mcp_server.py 迁移
+│   └── research.py                   ← 新增：研究流水线 + 资产库
+├── helpers/
+│   ├── __init__.py
+│   ├── bug_lifecycle.py              ← 从 validation server 提取的 48 个 helper
+│   ├── github_sync.py                ← GitHub Issue 同步逻辑
+│   └── confirmation.py               ← confirm token 管理
+└── tests/
+    ├── test_common.py
+    ├── test_validation.py
+    ├── test_qe_experiment.py
+    ├── test_qe_archive.py
+    └── test_research.py
+```
+
+**入口脚本保留在 `scripts/`**（因为 `.mcp.json` 引用它们）：
+
+```python
+# scripts/aistock_mcp_server.py（精简为入口）
+from backend.mcp.servers.validation import mcp
+if __name__ == "__main__":
+    mcp.run()
+```
+
+### 20.3 共享基类设计 (`backend/mcp/base.py`)
+
+```python
+"""AIstock MCP Server 共享基础设施。"""
+from __future__ import annotations
+from typing import Any, Callable
+from functools import wraps
+
+class AIstockMCPBase:
+    """所有 AIstock MCP server 的共享能力。"""
+
+    @staticmethod
+    def confirmed_tool(confirmation_string: str):
+        """装饰器：要求 confirm 参数匹配才执行。"""
+        def decorator(func: Callable) -> Callable:
+            @wraps(func)
+            def wrapper(*args, confirm: str = "", **kwargs) -> dict[str, Any]:
+                if confirm != confirmation_string:
+                    return {
+                        "error": f"Confirmation required. Pass confirm='{confirmation_string}' to proceed.",
+                        "required_confirm": confirmation_string,
+                    }
+                return func(*args, **kwargs)
+            return wrapper
+        return decorator
+
+    @staticmethod
+    def validate_params(**validators: Callable):
+        """装饰器：参数验证。"""
+        def decorator(func: Callable) -> Callable:
+            @wraps(func)
+            def wrapper(**kwargs) -> dict[str, Any]:
+                for param_name, validator in validators.items():
+                    if param_name in kwargs:
+                        kwargs[param_name] = validator(kwargs[param_name], param_name)
+                return func(**kwargs)
+            return wrapper
+        return decorator
+```
+
+### 20.4 统一 API Client (`backend/mcp/common.py`)
+
+```python
+"""统一 HTTP Client，支持两种 envelope 模式。"""
+
+class AIstockApiClient:
+    """统一 API Client，替代 LoopbackApiClient + ValidationCenterClient。"""
+
+    def __init__(self, base_url: str, unwrap_data: bool = False):
+        """
+        Args:
+            base_url: 后端 API base URL
+            unwrap_data: True = 自动解包 {"data": ...} envelope（validation 模式）
+                         False = 返回原始 response（qe/archive 模式）
+        """
+        self._base_url = base_url
+        self._unwrap = unwrap_data
+
+    def get(self, path: str, params: dict | None = None) -> dict:
+        ...
+
+    def post(self, path: str, json_body: dict | None = None, params: dict | None = None) -> dict:
+        ...
+
+    def delete(self, path: str) -> dict:
+        ...
+```
+
+### 20.5 迁移计划
+
+| 阶段 | 动作 | 影响 |
+|------|------|------|
+| Phase 1 | 创建 `backend/mcp/` 模块结构 | 无影响（新增文件） |
+| Phase 1 | 新增 `research.py` server | 无影响（新增） |
+| Phase 2 | 迁移 common.py → `backend/mcp/common.py` | 更新 import |
+| Phase 2 | 迁移 3 个现有 server 到 `backend/mcp/servers/` | 更新 scripts/ 入口 |
+| Phase 2 | 提取 bug_lifecycle helpers | 重构 validation server |
+| Phase 3 | 统一 API Client | 替换 2 种 client |
+
+**Phase 1 与研究流水线同步实施，Phase 2/3 作为后续治理 issue。**
+
+### 20.6 `.mcp.json` 更新（Phase 1 后）
+
+```json
+{
+  "_comment": "AIstock MCP servers. 所有 server 通过 loopback 调用 backend 8001。",
+  "mcpServers": {
+    "aistock-validation": {
+      "command": "python",
+      "args": ["scripts/aistock_mcp_server.py"],
+      "env": {"AISTOCK_VALIDATION_BASE_URL": "http://127.0.0.1:8001/api/v1/validation"}
+    },
+    "aistock-qe-experiment": {
+      "command": "python",
+      "args": ["scripts/aistock_qe_experiment_mcp_server.py"],
+      "env": {"AISTOCK_QE_EXPERIMENT_BASE_URL": "http://127.0.0.1:8001/api/v1"}
+    },
+    "aistock-qe-archive": {
+      "command": "python",
+      "args": ["scripts/aistock_qe_archive_mcp_server.py"],
+      "env": {"AISTOCK_QE_ARCHIVE_BASE_URL": "http://127.0.0.1:8001/api/v1/qe-archive"}
+    },
+    "aistock-research": {
+      "command": "python",
+      "args": ["scripts/aistock_research_mcp_server.py"],
+      "env": {"AISTOCK_RESEARCH_BASE_URL": "http://127.0.0.1:8001/api/v1/research-pipeline"}
+    }
+  }
+}
+```
+
+### 20.7 Tool 总量控制
+
+| 阶段 | Servers | Tools | Token 开销 | 评估 |
+|------|---------|-------|-----------|------|
+| 当前 | 3 | 56 | ~8,400 | 基线 |
+| Phase 1（+research） | 4 | 74 | ~11,100 | +32%，可接受 |
+| Phase 2（+因子/模型/执行） | 4 | 74（合并在 research 中） | ~11,100 | 不增加 |
+| 上限建议 | 4-5 | <100 | <15,000 | 占 context 7.5% |
+
+**硬性约束**：总 tools 不超过 100，否则 tool schema 占用过多 context。如果未来需要更多 tools，应通过 `action` 参数合并同类操作。
 
 ### 15.1 设计动机
 
