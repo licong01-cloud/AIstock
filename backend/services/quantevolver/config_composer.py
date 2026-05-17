@@ -1027,6 +1027,89 @@ class ConfigComposer:
             return content
         return self._precompute_hmm_coefficients(strategy_params, data_split)
 
+    def _resolve_hmm_risk_gate_json(
+        self,
+        strategy_params: Dict[str, Any],
+        data_split: Dict[str, str],
+    ) -> str:
+        """Resolve HMM risk gate artifact JSON for QE workspace injection.
+
+        Looks for a precomputed risk gate artifact in the HMM model directory,
+        matching the data_split window. Falls back to precomputed param if provided.
+        """
+        precomputed = strategy_params.get("precomputed_hmm_risk_gate_json")
+        if precomputed:
+            content = str(precomputed).strip()
+            self._validate_hmm_risk_gate_json(content)
+            logger.info("Using precomputed HMM risk gate from source workspace")
+            return content
+
+        model_path = strategy_params.get("sector_hmm_model_path")
+        snapshot_id = strategy_params.get("hmm_model_version_id")
+
+        if not model_path and snapshot_id:
+            try:
+                from ..hmm_training_service import HMMTrainingService
+                hmm_svc = HMMTrainingService()
+                snapshot = hmm_svc.get_snapshot(str(snapshot_id))
+                if snapshot:
+                    model_path = snapshot.get("model_path")
+            except Exception:
+                pass
+
+        if not model_path:
+            model_path = strategy_params.get(
+                "hmm_risk_gate_model_path",
+                "backend/data/hmm_models/b99c907b-873a-4173-a4ee-5eab266f8c49/2026-04-27/models.json",
+            )
+
+        test_start = data_split.get("test_start", "")
+        backtest_end = data_split.get("backtest_end", "")
+
+        model_dir = Path(model_path).parent
+        gate_pattern = f"hmm_risk_gate_*_{test_start}_{backtest_end}.json"
+        candidates = list(model_dir.glob(gate_pattern))
+
+        if not candidates:
+            gate_pattern_any = "hmm_risk_gate_*.json"
+            candidates = list(model_dir.glob(gate_pattern_any))
+
+        if not candidates:
+            project_root = Path(__file__).resolve().parents[3]
+            fallback = project_root / ".codex_tmp" / "hmm_risk_gate_validation" / "hmm_risk_gate_duration_5d.json"
+            if fallback.exists():
+                candidates = [fallback]
+
+        if not candidates:
+            raise RuntimeError(
+                f"HMM risk gate artifact not found. "
+                f"Searched: {model_dir}/{gate_pattern} and fallback paths. "
+                f"Run scripts/precompute_hmm_risk_gate.py to generate."
+            )
+
+        artifact_path = candidates[0]
+        content = artifact_path.read_text(encoding="utf-8")
+        self._validate_hmm_risk_gate_json(content)
+        logger.info("Loaded HMM risk gate artifact: %s (%d bytes)", artifact_path, len(content))
+        return content
+
+    @staticmethod
+    def _validate_hmm_risk_gate_json(content: str) -> None:
+        data = json.loads(content)
+        if data.get("artifact_type") != "hmm_risk_gate_v1":
+            raise RuntimeError(
+                f"Invalid HMM risk gate artifact_type: {data.get('artifact_type')}"
+            )
+        if "daily_gates" not in data or "stock_sector_map" not in data:
+            raise RuntimeError(
+                "HMM risk gate artifact missing required fields: "
+                f"keys={list(data.keys())}"
+            )
+        if not isinstance(data.get("daily_gates"), dict) or not data["daily_gates"]:
+            raise RuntimeError("HMM risk gate artifact contains no daily_gates")
+        if not isinstance(data.get("stock_sector_map"), dict) or not data["stock_sector_map"]:
+            raise RuntimeError("HMM risk gate artifact contains no stock_sector_map")
+
     def compose_experiment(
         self,
         factor_names: List[str],
@@ -1492,6 +1575,15 @@ class ConfigComposer:
                     f"已支持 HMM 的策略: {', '.join(sorted(_hmm_supported_classes))}。"
                     f"请切换到支持 HMM 的策略或关闭 HMM。"
                 )
+
+        # 0b) HMM Risk Gate 预计算注入
+        if _cp.get("enable_hmm_risk_gate"):
+            risk_gate_json = self._resolve_hmm_risk_gate_json(_cp, data_split)
+            experiment_files["hmm_risk_gate.json"] = risk_gate_json
+            if custom_params is None:
+                custom_params = {}
+            custom_params["hmm_risk_gate_file"] = "hmm_risk_gate.json"
+            custom_params["enable_hmm_risk_gate"] = True
 
         custom_params, risk_policy_json = self._prepare_risk_policy_runtime(
             custom_params=custom_params,
