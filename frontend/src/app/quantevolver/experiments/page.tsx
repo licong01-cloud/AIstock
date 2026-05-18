@@ -5,6 +5,8 @@ import dynamic from "next/dynamic";
 import { useExperimentSSE } from "../components/useExperimentSSE";
 import LogTerminal from "../components/LogTerminal";
 import MetricsSummary from "../components/MetricsSummary";
+import { PaperV2ApiError, strategyPackageApi } from "@/lib/paper-v2/api";
+import type { JsonObject } from "@/lib/paper-v2/types";
 
 const IcSeriesChart = dynamic(() => import("../components/charts/IcSeriesChart"), { ssr: false });
 const LossCurveChart = dynamic(() => import("../components/charts/LossCurveChart"), { ssr: false });
@@ -41,6 +43,15 @@ type Experiment = {
   alpha_mode?: string;
   created_at?: string;
   updated_at?: string;
+  archive_run_id?: string | null;
+  run_id?: string | null;
+  model_config?: any;
+  training_config?: any;
+  daily_strategy_config?: any;
+  minute_execution_config?: any;
+  tail_handling_config?: any;
+  strategy_package_manifest?: any;
+  seed?: number | string | null;
 };
 
 function parseCustomParams(exp: Experiment): Record<string, any> {
@@ -125,6 +136,27 @@ function getMetrics(exp: Experiment): Record<string, any> {
   if (m["sharpe"] == null && m["information_ratio"] != null) m["sharpe"] = m["information_ratio"];
 
   return m;
+}
+
+function apiErrorMessage(error: unknown): string {
+  if (error instanceof PaperV2ApiError) return error.message;
+  if (error instanceof Error) return error.message;
+  return String(error || "unknown error");
+}
+
+function getCandidateLoopId(exp: Experiment): string | null {
+  if (exp.qe_loop_id) {
+    const raw = String(exp.qe_loop_id);
+    const match = raw.match(/(?:^|_)Loop(\d+)$/i);
+    return match ? `Loop${match[1]}` : raw;
+  }
+  if (exp.loop_index != null) return `Loop${exp.loop_index}`;
+  const match = String(exp.experiment_id || "").match(/(?:_Loop|_L)(\d+)$/i);
+  return match ? `Loop${match[1]}` : null;
+}
+
+function candidateDisplayName(exp: Experiment, fallback: string): string {
+  return exp.experiment_name || exp.experiment_id || fallback;
 }
 
 export default function ExperimentsPage() {
@@ -323,6 +355,153 @@ export default function ExperimentsPage() {
     }
     setActionId(null);
     setActionType("");
+  }
+
+  async function addExperimentToCandidatePackages(exp: Experiment, event?: { stopPropagation: () => void; preventDefault: () => void }) {
+    event?.stopPropagation();
+    event?.preventDefault();
+    setActionId(exp.experiment_id);
+    setActionType("candidate");
+    try {
+      const metrics = getMetrics(exp);
+      const factorNames = Array.isArray(exp.factor_names) ? exp.factor_names : [];
+      const candidate = await strategyPackageApi.createCandidateFromQEExperiment({
+        experiment_id: exp.experiment_id,
+        created_by: "quantevolver_experiments_list",
+        display_name: candidateDisplayName(exp, exp.experiment_id),
+        archive_run_id: exp.archive_run_id ?? exp.run_id ?? null,
+        snapshot_config: {
+          source_ui: "quantevolver_experiments_list",
+          experiment_id: exp.experiment_id,
+          experiment: exp,
+        } as JsonObject,
+        factor_manifest: {
+          factor_names: factorNames,
+          factor_count: factorNames.length,
+        },
+        model_manifest: {
+          model_id: exp.model_id ?? null,
+          model_config: exp.model_config ?? null,
+          training_config: exp.training_config ?? null,
+          missing_reproducibility_items: exp.seed == null ? ["seed"] : [],
+        },
+        strategy_manifest: {
+          strategy_id: exp.strategy_id ?? null,
+          daily_strategy_config: exp.daily_strategy_config ?? null,
+          minute_execution_config: exp.minute_execution_config ?? null,
+          tail_handling_config: exp.tail_handling_config ?? null,
+          platform_runtime_boundary: "HMM/ST/PIT/event signals are Paper v2 platform capabilities, not package assets",
+        },
+        metric_snapshot: metrics as JsonObject,
+        artifact_refs: {
+          experiment_detail_route: `/quantevolver/experiments/${exp.experiment_id}`,
+        },
+        completeness: {
+          candidate_snapshot_created: true,
+          strategy_package_manifest_available: Boolean(exp.strategy_package_manifest),
+          missing_items: exp.strategy_package_manifest ? [] : ["strategy_package_manifest"],
+        },
+        eligibility: {
+          candidate_only: true,
+          can_enter_selection_or_paper_after_package_validation: true,
+          live_approval_reserved: false,
+        },
+        audit_context: {
+          manual_action: true,
+          ui_route: "/quantevolver/experiments",
+          source_card: "experiment",
+          design_doc: "docs/architecture/paper_v2_qe_candidate_strategy_warehouse_design_20260512.md",
+          created_at: new Date().toISOString(),
+        },
+        manual_action: true,
+      });
+      showToast(`已加入候选策略包: ${candidate.candidate_id}`, true);
+    } catch (e) {
+      showToast(`加入候选策略包失败: ${apiErrorMessage(e)}`, false);
+    } finally {
+      setActionId(null);
+      setActionType("");
+    }
+  }
+
+  async function addLoopToCandidatePackages(child: Experiment, parent: Experiment, event?: { stopPropagation: () => void; preventDefault: () => void }) {
+    event?.stopPropagation();
+    event?.preventDefault();
+    const qeTaskId = child.qe_task_id || parent.qe_task_id;
+    const qeLoopId = getCandidateLoopId(child);
+    if (!qeTaskId || !qeLoopId) {
+      showToast("加入候选策略包失败: 缺少 QE task_id 或 loop_id，无法定位归档 Loop", false);
+      return;
+    }
+
+    setActionId(child.experiment_id);
+    setActionType("candidate");
+    try {
+      const metrics = getMetrics(child);
+      const factorNames = Array.isArray(child.factor_names) ? child.factor_names : [];
+      const candidate = await strategyPackageApi.createCandidateFromQELoop({
+        qe_task_id: qeTaskId,
+        qe_loop_id: qeLoopId,
+        experiment_id: child.experiment_id ?? null,
+        created_by: "quantevolver_experiments_list",
+        display_name: `${candidateDisplayName(parent, qeTaskId)} / ${qeLoopId}`,
+        archive_run_id: child.archive_run_id ?? child.run_id ?? null,
+        snapshot_config: {
+          source_ui: "quantevolver_experiments_list_child_loop",
+          qe_task_id: qeTaskId,
+          qe_loop_id: qeLoopId,
+          parent_experiment_id: parent.experiment_id,
+          loop_experiment: child,
+          parent_experiment: parent,
+        } as JsonObject,
+        factor_manifest: {
+          factor_names: factorNames,
+          factor_count: factorNames.length,
+        },
+        model_manifest: {
+          model_id: child.model_id ?? null,
+          model_config: child.model_config ?? null,
+          training_config: child.training_config ?? null,
+          missing_reproducibility_items: child.seed == null ? ["seed"] : [],
+        },
+        strategy_manifest: {
+          strategy_id: child.strategy_id ?? null,
+          daily_strategy_config: child.daily_strategy_config ?? null,
+          minute_execution_config: child.minute_execution_config ?? null,
+          tail_handling_config: child.tail_handling_config ?? null,
+          platform_runtime_boundary: "HMM/ST/PIT/event signals are Paper v2 platform capabilities, not package assets",
+        },
+        metric_snapshot: metrics as JsonObject,
+        artifact_refs: {
+          experiment_detail_route: `/quantevolver/experiments/${child.experiment_id}`,
+          evolution_task_route: `/quantevolver/evolution/${qeTaskId}`,
+        },
+        completeness: {
+          candidate_snapshot_created: true,
+          strategy_package_manifest_available: Boolean(child.strategy_package_manifest),
+          missing_items: child.strategy_package_manifest ? [] : ["strategy_package_manifest"],
+        },
+        eligibility: {
+          candidate_only: true,
+          can_enter_selection_or_paper_after_package_validation: true,
+          live_approval_reserved: false,
+        },
+        audit_context: {
+          manual_action: true,
+          ui_route: "/quantevolver/experiments",
+          source_card: "child_loop",
+          design_doc: "docs/architecture/paper_v2_qe_candidate_strategy_warehouse_design_20260512.md",
+          created_at: new Date().toISOString(),
+        },
+        manual_action: true,
+      });
+      showToast(`已加入候选策略包: ${candidate.candidate_id}`, true);
+    } catch (e) {
+      showToast(`加入候选策略包失败: ${apiErrorMessage(e)}`, false);
+    } finally {
+      setActionId(null);
+      setActionType("");
+    }
   }
 
   // Group experiments: main experiments + their child loops
@@ -674,6 +853,11 @@ export default function ExperimentsPage() {
                         style={{ padding: "4px 10px", fontSize: 11, cursor: "pointer", borderRadius: 4, border: "1px solid #3b82f6", background: "#eff6ff", color: "#3b82f6", fontWeight: 600 }}>
                         查看详情
                       </button>
+                      <button data-testid="qe-exp-add-candidate" onClick={(e) => addExperimentToCandidatePackages(exp, e)}
+                        disabled={isActioning}
+                        style={{ padding: "4px 10px", fontSize: 11, cursor: isActioning ? "not-allowed" : "pointer", borderRadius: 4, border: "1px solid #2563eb", background: "#eff6ff", color: "#1d4ed8", fontWeight: 700 }}>
+                        {isActioning && actionType === "candidate" ? "加入中..." : "加入候选策略包"}
+                      </button>
                       {exp.alpha_mode === "multi" && (
                         <button onClick={() => window.open(`/quantevolver/multi-alpha/diagnostics/${exp.experiment_id}`, '_blank')}
                           style={{ padding: "4px 10px", fontSize: 11, cursor: "pointer", borderRadius: 4, border: "1px solid #8b5cf6", background: "#f5f3ff", color: "#7c3aed", fontWeight: 600 }}>
@@ -714,6 +898,7 @@ export default function ExperimentsPage() {
                   <div style={{ marginLeft: 20, marginTop: 4 }}>
                     {/* 折叠摘要条 */}
                     <div
+                      data-testid={`qe-experiment-loops-toggle-${exp.experiment_id}`}
                       onClick={() => setLoopsExpandedIds(prev => {
                         const next = new Set(prev);
                         if (next.has(exp.experiment_id)) next.delete(exp.experiment_id); else next.add(exp.experiment_id);
@@ -801,6 +986,11 @@ export default function ExperimentsPage() {
                                     <button onClick={() => window.open(`/quantevolver/experiments/${child.experiment_id}`, '_blank')}
                                       style={{ padding: "3px 8px", fontSize: 10, cursor: "pointer", borderRadius: 4, border: "1px solid #3b82f6", background: "#eff6ff", color: "#3b82f6", fontWeight: 600 }}>
                                       详情
+                                    </button>
+                                    <button data-testid="qe-child-loop-add-candidate" onClick={(e) => addLoopToCandidatePackages(child, exp, e)}
+                                      disabled={actionId === child.experiment_id}
+                                      style={{ padding: "3px 8px", fontSize: 10, cursor: actionId === child.experiment_id ? "not-allowed" : "pointer", borderRadius: 4, border: "1px solid #2563eb", background: "#eff6ff", color: "#1d4ed8", fontWeight: 700 }}>
+                                      {actionId === child.experiment_id && actionType === "candidate" ? "加入中..." : "加入候选策略包"}
                                     </button>
                                     <button onClick={() => syncResult(child.experiment_id)}
                                       disabled={actionId === child.experiment_id}

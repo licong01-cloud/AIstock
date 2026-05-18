@@ -6,6 +6,8 @@ import dynamic from "next/dynamic";
 import { AllStocksTable } from "../../components/AllStocksTable";
 import { FactorAnalysisPanel } from "../../components/FactorAnalysisPanel";
 import { StrategyConfigCard } from "../../components/StrategyConfigCard";
+import { PaperV2ApiError, strategyPackageApi } from "@/lib/paper-v2/api";
+import type { JsonObject } from "@/lib/paper-v2/types";
 
 const IcSeriesChart = dynamic(() => import("../../components/charts/IcSeriesChart"), { ssr: false });
 const ReturnCurveChart = dynamic(() => import("../../components/charts/ReturnCurveChart"), { ssr: false });
@@ -48,6 +50,21 @@ const ACTION_COLORS: Record<string, string> = {
   factor_model_joint: "#ec4899",
 };
 
+function apiErrorMessage(error: unknown): string {
+  if (error instanceof PaperV2ApiError) return error.message;
+  if (error instanceof Error) return error.message;
+  return String(error || "unknown error");
+}
+
+function getLoopPathId(loop: Loop): string {
+  if (loop.loop_id) {
+    const raw = String(loop.loop_id);
+    const match = raw.match(/(?:^|_)Loop(\d+)$/i);
+    return match ? `Loop${match[1]}` : raw;
+  }
+  return `Loop${loop.loop_index}`;
+}
+
 interface Loop {
   loop_id: string;
   loop_index: number;
@@ -56,6 +73,8 @@ interface Loop {
   action_type?: string;
   config_json?: any;
   metrics_json?: any;
+  experiment_id?: string | null;
+  archive_run_id?: string | null;
 }
 
 export default function EvolutionDetailPage({ params }: { params: { taskId: string } }) {
@@ -68,32 +87,8 @@ export default function EvolutionDetailPage({ params }: { params: { taskId: stri
   const [loadingLoops, setLoadingLoops] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!taskId) return;
-    setLoading(true);
-    fetch(`${API}/quantevolver/evolution/tasks/${taskId}`)
-      .then(r => {
-        if (!r.ok) throw new Error(`任务 API 错误: HTTP ${r.status}`);
-        return r.json();
-      })
-      .then(res => {
-        if (res?.status === "success" && res.data) {
-          setTask(res.data.task ?? res.data);
-          setLoops(res.data.loops ?? []);
-          const sotaLoop = (res.data.loops ?? []).find((l: Loop) => l.is_sota);
-          if (sotaLoop) {
-            setExpandedLoops(new Set([sotaLoop.loop_index]));
-            fetchEnhancedDirect(sotaLoop.loop_id);
-          }
-        } else {
-          setError(res?.message ?? "任务不存在");
-        }
-      })
-      .catch(e => setError(String(e?.message ?? "加载失败，请重试")))
-      .finally(() => setLoading(false));
-  }, [taskId]);
-
+  const [candidateActionId, setCandidateActionId] = useState<string | null>(null);
+  const [candidateMessage, setCandidateMessage] = useState<{ loopId: string; msg: string; ok: boolean } | null>(null);
   const [enhancedErrors, setEnhancedErrors] = useState<Record<string, string>>({});
 
   const fetchEnhancedDirect = useCallback((loopId: string) => {
@@ -118,10 +113,114 @@ export default function EvolutionDetailPage({ params }: { params: { taskId: stri
       .finally(() => setLoadingLoops(prev => { const n = new Set(prev); n.delete(loopId); return n; }));
   }, [taskId]);
 
+  useEffect(() => {
+    if (!taskId) return;
+    setLoading(true);
+    fetch(`${API}/quantevolver/evolution/tasks/${taskId}`)
+      .then(r => {
+        if (!r.ok) throw new Error(`任务 API 错误: HTTP ${r.status}`);
+        return r.json();
+      })
+      .then(res => {
+        if (res?.status === "success" && res.data) {
+          setTask(res.data.task ?? res.data);
+          setLoops(res.data.loops ?? []);
+          const sotaLoop = (res.data.loops ?? []).find((l: Loop) => l.is_sota);
+          if (sotaLoop) {
+            setExpandedLoops(new Set([sotaLoop.loop_index]));
+            fetchEnhancedDirect(sotaLoop.loop_id);
+          }
+        } else {
+          setError(res?.message ?? "任务不存在");
+        }
+      })
+      .catch(e => setError(String(e?.message ?? "加载失败，请重试")))
+      .finally(() => setLoading(false));
+  }, [taskId, fetchEnhancedDirect]);
+
   const fetchEnhanced = useCallback((loopId: string) => {
     if (enhancedCache[loopId] || loadingLoops.has(loopId)) return;
     fetchEnhancedDirect(loopId);
-  }, [taskId, enhancedCache, loadingLoops, fetchEnhancedDirect]);
+  }, [enhancedCache, loadingLoops, fetchEnhancedDirect]);
+
+  const addLoopToCandidatePackages = async (loop: Loop, event: React.MouseEvent) => {
+    event.stopPropagation();
+    const loopPathId = getLoopPathId(loop);
+    setCandidateActionId(loop.loop_id);
+    setCandidateMessage(null);
+    try {
+      const config = loop.config_json || {};
+      const metrics = loop.metrics_json || {};
+      const enhanced = enhancedCache[loop.loop_id];
+      const factorList = Array.isArray(config.factor_list) ? config.factor_list : [];
+      const candidate = await strategyPackageApi.createCandidateFromQELoop({
+        qe_task_id: taskId,
+        qe_loop_id: loopPathId,
+        experiment_id: loop.experiment_id ?? null,
+        created_by: "quantevolver_evolution_task_detail",
+        display_name: `${task.task_name ?? taskId} / ${loopPathId}`,
+        archive_run_id: loop.archive_run_id ?? null,
+        snapshot_config: {
+          source_ui: "quantevolver_evolution_task_detail",
+          qe_task_id: taskId,
+          qe_loop_id: loopPathId,
+          loop_index: loop.loop_index,
+          loop_data: loop,
+          loop_config: config,
+          enhanced_summary: enhanced?.summary ?? null,
+        } as JsonObject,
+        factor_manifest: {
+          factor_list: factorList,
+          factor_count: factorList.length,
+        },
+        model_manifest: {
+          model_id: config.model_id ?? null,
+          model_config: config.model_config ?? null,
+          training_config: config.training_config ?? null,
+          missing_reproducibility_items: config.seed == null ? ["seed"] : [],
+        },
+        strategy_manifest: {
+          strategy_id: config.strategy_id ?? null,
+          action_type: loop.action_type ?? null,
+          daily_strategy_config: config.daily_strategy_config ?? null,
+          minute_execution_config: config.minute_execution_config ?? null,
+          tail_handling_config: config.tail_handling_config ?? null,
+          platform_runtime_boundary: "HMM/ST/PIT/event signals are Paper v2 platform capabilities, not package assets",
+        },
+        metric_snapshot: {
+          ...metrics,
+          enhanced_summary: enhanced?.summary ?? null,
+        } as JsonObject,
+        artifact_refs: {
+          enhanced_metrics_available: Boolean(enhanced),
+          enhanced_metrics_endpoint: `/quantevolver/evolution/tasks/${taskId}/loops/${loopPathId}/enhanced-metrics`,
+          evolution_task_route: `/quantevolver/evolution/${taskId}`,
+        },
+        completeness: {
+          candidate_snapshot_created: true,
+          strategy_package_manifest_available: Boolean(config.strategy_package_manifest),
+          missing_items: config.strategy_package_manifest ? [] : ["strategy_package_manifest"],
+        },
+        eligibility: {
+          candidate_only: true,
+          can_enter_selection_or_paper_after_package_validation: true,
+          live_approval_reserved: false,
+        },
+        audit_context: {
+          manual_action: true,
+          ui_route: `/quantevolver/evolution/${taskId}`,
+          design_doc: "docs/architecture/paper_v2_qe_candidate_strategy_warehouse_design_20260512.md",
+          created_at: new Date().toISOString(),
+        },
+        manual_action: true,
+      });
+      setCandidateMessage({ loopId: loop.loop_id, ok: true, msg: `已加入候选策略包: ${candidate.candidate_id}` });
+    } catch (e) {
+      setCandidateMessage({ loopId: loop.loop_id, ok: false, msg: `加入候选策略包失败: ${apiErrorMessage(e)}` });
+    } finally {
+      setCandidateActionId(null);
+    }
+  };
 
   const toggleLoop = (loopIndex: number, loopId: string) => {
     setExpandedLoops(prev => {
@@ -188,6 +287,16 @@ export default function EvolutionDetailPage({ params }: { params: { taskId: stri
                 <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600, backgroundColor: actionColor + "18", color: actionColor }}>{actionType}</span>
                 {loop.is_sota && <Star size={14} color="#f59e0b" fill="#f59e0b" />}
                 <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600, backgroundColor: loop.status === "completed" ? "#f0fdf4" : loop.status === "failed" ? "#fef2f2" : "#fffbeb", color: loop.status === "completed" ? "#22c55e" : loop.status === "failed" ? "#ef4444" : "#f59e0b" }}>{loop.status}</span>
+                {loop.status === "completed" && (
+                  <button
+                    data-testid="qe-task-loop-add-candidate"
+                    onClick={(e) => addLoopToCandidatePackages(loop, e)}
+                    disabled={candidateActionId === loop.loop_id}
+                    style={{ padding: "4px 10px", fontSize: 11, cursor: candidateActionId === loop.loop_id ? "not-allowed" : "pointer", borderRadius: 4, border: "1px solid #2563eb", background: "#eff6ff", color: "#1d4ed8", fontWeight: 700 }}
+                  >
+                    {candidateActionId === loop.loop_id ? "加入中..." : "加入候选策略包"}
+                  </button>
+                )}
                 <div style={{ flex: 1 }} />
                 <MetricBadge label="IC" value={fmtNum(m.ic)} />
                 <MetricBadge label="Sharpe" value={fmtNum(m.information_ratio ?? m.sharpe, 2)} />
@@ -203,6 +312,12 @@ export default function EvolutionDetailPage({ params }: { params: { taskId: stri
                   {!isLoading && enhancedErrors[loop.loop_id] && (
                     <div style={{ padding: "10px 16px", backgroundColor: "#fef2f2", border: "1px solid #ef4444", borderRadius: 8, fontSize: 12, color: "#991b1b" }}>
                       增强指标加载失败: {enhancedErrors[loop.loop_id]}
+                    </div>
+                  )}
+
+                  {candidateMessage?.loopId === loop.loop_id && (
+                    <div style={{ padding: "10px 16px", backgroundColor: candidateMessage.ok ? "#f0fdf4" : "#fef2f2", border: `1px solid ${candidateMessage.ok ? "#22c55e" : "#ef4444"}`, borderRadius: 8, fontSize: 12, color: candidateMessage.ok ? "#166534" : "#991b1b" }}>
+                      {candidateMessage.msg}
                     </div>
                   )}
 
