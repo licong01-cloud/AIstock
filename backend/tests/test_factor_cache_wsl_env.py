@@ -314,6 +314,37 @@ def test_qe_prepare_factors_default_window_uses_current_signal_end_and_records_c
     assert "factors[factor_name].update(universe_meta)" in script
 
 
+def test_qe_prepare_factors_keeps_cache_hits_when_expected_fingerprint_missing(monkeypatch) -> None:
+    monkeypatch.setattr(
+        ConfigComposer,
+        "_resolve_factor_cache_universe_metadata",
+        lambda self, *, start_date, end_date: {
+            "data_freshness_profile": "qe_backtest_coverage",
+            "universe_key": "shsz_st_pit_active_v1",
+            "universe_rule_version": "rule_v1",
+            "universe_fingerprint_sha256": "",
+            "index_policy": "st_pit_buy_eligible_reindexed_v1",
+            "coverage_semantics": "st_pit_buy_eligible_suspend_excluded_non_warmup_v1",
+        },
+    )
+    script = ConfigComposer()._compose_prepare_factors(
+        [
+            {
+                "factor_name": "DemoFactor",
+                "code_text": "def calculate_DemoFactor(instruments, start_date, end_date):\n    return None\n",
+            }
+        ],
+        factor_data_dir="/tmp/factor_data",
+        data_split=dict(RDAGENT_DEFAULT_DATA_SPLIT),
+    )
+
+    assert script is not None
+    assert "'data_freshness_profile': 'qe_backtest_coverage'" in script
+    assert "universe_fingerprint_missing_expected" not in script
+    assert "expected_fp = expected.get('universe_fingerprint_sha256')" in script
+    assert "return 'universe_fingerprint_sha256'" in script
+
+
 def test_factor_cache_uses_error_only_when_no_valid_cache_exists(tmp_path) -> None:
     qe_router._invalidate_cache_meta()
     specs = _cache_source_specs(tmp_path)

@@ -3327,10 +3327,12 @@ class ConfigComposer:
             OFFICIAL_FACTOR_INDEX_POLICY,
             OFFICIAL_FACTOR_UNIVERSE_KEY,
             OFFICIAL_FACTOR_UNIVERSE_RULE_VERSION,
+            QE_BACKTEST_FRESHNESS_PROFILE,
             FactorUniverseMaskService,
         )
 
         fallback = {
+            "data_freshness_profile": QE_BACKTEST_FRESHNESS_PROFILE,
             "universe_key": OFFICIAL_FACTOR_UNIVERSE_KEY,
             "universe_rule_version": OFFICIAL_FACTOR_UNIVERSE_RULE_VERSION,
             "universe_fingerprint_sha256": "",
@@ -3341,12 +3343,14 @@ class ConfigComposer:
             metadata = FactorUniverseMaskService().metadata(
                 start_date=start_date,
                 end_date=end_date,
+                refresh_policy="coverage",
             )
         except Exception as exc:
             logger.warning(
-                "Unable to resolve ST PIT universe fingerprint for prepare_factors.py; "
-                "generated script will disable factor-cache hits unless "
-                "FACTOR_CACHE_EXPECTED_UNIVERSE_FINGERPRINT_SHA256 is provided: %s",
+                "Unable to resolve ST PIT universe fingerprint for QE prepare_factors.py; "
+                "generated script will continue with the explicit QE backtest coverage "
+                "cache policy and validate universe key/index/date coverage without a "
+                "fingerprint: %s",
                 exc,
             )
             return fallback
@@ -3428,6 +3432,7 @@ class ConfigComposer:
                 {
                     key: factor_cache_universe_metadata.get(key)
                     for key in (
+                        "data_freshness_profile",
                         "universe_key",
                         "universe_rule_version",
                         "universe_fingerprint_sha256",
@@ -3456,11 +3461,13 @@ class ConfigComposer:
         lines.append("")
         lines.append("")
         lines.append("def _cache_universe_mismatch(entry, expected):")
-        lines.append("    if not expected.get('universe_fingerprint_sha256'):")
-        lines.append("        return 'universe_fingerprint_missing_expected'")
-        lines.append("    for key in ('universe_key', 'universe_fingerprint_sha256', 'index_policy'):")
+        lines.append("    required_keys = ('universe_key', 'index_policy')")
+        lines.append("    for key in required_keys:")
         lines.append("        if expected.get(key) and entry.get(key) != expected.get(key):")
         lines.append("            return key")
+        lines.append("    expected_fp = expected.get('universe_fingerprint_sha256')")
+        lines.append("    if expected_fp and entry.get('universe_fingerprint_sha256') != expected_fp:")
+        lines.append("        return 'universe_fingerprint_sha256'")
         lines.append("    return ''")
         lines.append("")
         lines.append("")

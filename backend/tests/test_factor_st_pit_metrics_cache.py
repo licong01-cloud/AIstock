@@ -36,6 +36,65 @@ def test_factor_universe_mask_service_builds_mask_from_spans(monkeypatch: pytest
     assert not mask[:, 2].any()
 
 
+def test_factor_universe_metadata_accepts_dirty_covered_qe_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = FactorUniverseMaskService()
+    captured: dict[str, object] = {}
+
+    def fake_ensure_ready(**kwargs):
+        captured.update(kwargs)
+        return {
+            "status": "ready",
+            "reason": "coverage_ready_source_changed_ignored",
+            "state": {
+                "status": "ready",
+                "dirty": True,
+                "rule_version": "rule_v1",
+                "scope": "st_only_active",
+                "source_fingerprint_sha256": "fp-historical",
+                "start_date": "2018-08-01",
+                "end_date": "2026-04-30",
+                "generated_at": "2026-05-01T00:00:00Z",
+                "last_build_summary": {"validation": {"overlap_error_count": 0}},
+            },
+        }
+
+    monkeypatch.setattr(service, "ensure_ready", fake_ensure_ready)
+
+    meta = service.metadata(start_date="2018-08-01", end_date="2026-04-30")
+
+    assert captured["refresh_policy"] == "coverage"
+    assert meta["universe_fingerprint_sha256"] == "fp-historical"
+    assert meta["universe_end_date"] == "2026-04-30"
+
+
+def test_factor_universe_metadata_keeps_paper_live_policy_strict(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = FactorUniverseMaskService()
+
+    def fake_ensure_ready(**_kwargs):
+        return {
+            "status": "ready",
+            "state": {
+                "status": "ready",
+                "dirty": True,
+                "rule_version": "rule_v1",
+                "scope": "st_only_active",
+                "source_fingerprint_sha256": "fp-stale",
+                "start_date": "2018-08-01",
+                "end_date": "2026-04-30",
+                "last_build_summary": {"validation": {"overlap_error_count": 0}},
+            },
+        }
+
+    monkeypatch.setattr(service, "ensure_ready", fake_ensure_ready)
+
+    with pytest.raises(RuntimeError, match="ST PIT universe is not ready"):
+        service.metadata(
+            start_date="2018-08-01",
+            end_date="2026-04-30",
+            refresh_policy="source_fingerprint",
+        )
+
+
 def test_pit_coverage_denominator_uses_st_pit_eligible_mask() -> None:
     f_arr = np.array([[1.0, 2.0], [3.0, 4.0], [np.nan, 6.0]])
     market_valid = np.ones_like(f_arr, dtype=bool)
