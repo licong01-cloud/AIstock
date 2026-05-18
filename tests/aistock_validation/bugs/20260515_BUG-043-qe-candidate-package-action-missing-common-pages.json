@@ -41,12 +41,12 @@
   "fingerprint": "6bd35dbc62b0eba7",
   "assigned_agent": "codex-app",
   "fix_branch": "bug/BUG-043-qe-candidate-actions",
-  "fix_commit": null,
-  "verification_run_id": "local-BUG-043-20260519T0030",
+  "fix_commit": "689bee8",
+  "verification_run_id": "local-BUG-043-20260519T-final",
   "created_at": "2026-05-15T09:00:00Z",
   "first_seen_at": "2026-05-15T09:00:00Z",
-  "last_seen_at": "2026-05-19T00:30:00Z",
-  "fixed_at": "2026-05-19T00:30:00Z",
+  "last_seen_at": "2026-05-19T01:05:00Z",
+  "fixed_at": "2026-05-19T01:05:00Z",
   "submitted_at": "2026-05-15T09:00:00Z",
   "closed_at": null,
   "allowed_write_scope": [
@@ -114,6 +114,12 @@
       "actor": "codex-app",
       "action": "github_issue_created",
       "note": "Mirrored BUG-043 to GitHub issue #37 for PR/review tracking. Registry remains source of truth; PR merge waits for user approval."
+    },
+    {
+      "timestamp": "2026-05-19T01:05:00Z",
+      "actor": "codex-app",
+      "action": "verification_completed",
+      "note": "Final validation after adding stable data-testid locators passed: git diff --check; npm run lint; npx tsc -p tsconfig.json --noEmit --pretty false --incremental false; backend strategy_package pytest 22 passed; Playwright QE candidate actions 3 passed. Fix implementation commit 689bee8."
     }
   ],
   "github_issue_number": 37,
