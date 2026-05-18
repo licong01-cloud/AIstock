@@ -741,6 +741,23 @@ targets:
   - Review QMT Strategies state
   - Validate QMT Strategies primary workflow
   coverage_status: planned
+- route_id: qmt.virtual_strategies
+  href: /qmt/virtual-strategies
+  label: QMT Virtual Strategy Ledger
+  nav_group: QMT Sim Trading
+  primary_module: qmt
+  impact_modules:
+  - strategy_package
+  - paper_v2
+  risk_level: critical
+  required_test_plans:
+  - l0
+  recommended_test_plans: []
+  business_operations:
+  - Open QMT Virtual Strategy Ledger
+  - Review virtual strategy ledger summary
+  - Validate QMT virtual strategy primary workflow
+  coverage_status: planned
 - route_id: paper_v2.overview
   href: /paper-v2
   label: Paper v2 Overview
