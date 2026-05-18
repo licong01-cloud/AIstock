@@ -6,7 +6,7 @@
   "module": "strategy_package",
   "severity": "P1",
   "risk_area": "unspecified",
-  "status": "fixed",
+  "status": "verified",
   "trigger_condition": {
     "scenario": "reported_via_mcp",
     "files": [
@@ -22,19 +22,20 @@
     "file:backend/inference_engine.py",
     "file:backend/tests/test_inference_strict_scoring_alignment.py",
     "pr:https://github.com/licong01-cloud/AIstock/pull/33",
-    "issue:https://github.com/licong01-cloud/AIstock/issues/34"
+    "issue:https://github.com/licong01-cloud/AIstock/issues/34",
+    "commit:4e8dacdf0b838370ad0ea1fbbca9a3c45b513f5b"
   ],
   "fingerprint": "fc77e8ef67f41946",
   "assigned_agent": "codex-app",
   "fix_branch": "codex/bug-047-factor-lookback-window-20260518",
-  "fix_commit": "cdd7503",
-  "verification_run_id": "tests/aistock_validation/history/strategy_package/20260518_120258_l0_bug-047-factor-lookback-inference-window.md",
+  "fix_commit": "4e8dacdf0b838370ad0ea1fbbca9a3c45b513f5b",
+  "verification_run_id": "github-pr-33-ci-success-and-local-20260518-l0",
   "created_at": "2026-05-18T03:47:34Z",
   "first_seen_at": "2026-05-18T03:47:34Z",
-  "last_seen_at": "2026-05-18T04:10:28Z",
+  "last_seen_at": "2026-05-18T04:56:56Z",
   "fixed_at": "2026-05-18T04:10:28Z",
   "submitted_at": "2026-05-18T03:47:34Z",
-  "closed_at": null,
+  "closed_at": "2026-05-18T04:56:56Z",
   "allowed_write_scope": [
     "backend/data_service/preprocessor.py",
     "backend/inference_engine.py",
@@ -85,10 +86,16 @@
       "note": "Fixed in dedicated worktree. Implemented factor-name lookback inference for dynamic 120d/250d factors, trading-calendar start-date resolution, and cache window revalidation. Validation: pytest backend/tests/test_inference_strict_scoring_alignment.py = 10 passed; py_compile and git diff --check passed. Production 8001/3000 untouched."
     },
     {
-      "timestamp": "2026-05-18T12:14:00Z",
+      "timestamp": "2026-05-18T04:56:56Z",
       "actor": "codex-app",
-      "action": "github_sync",
-      "note": "Manual GitHub Issue #34 and PR #33 created because MCP live sync lacked GITHUB_REPOSITORY."
+      "action": "status_changed",
+      "note": "PR #33 merged to GitHub main at merge commit 4e8dacd after all GitHub checks passed. Local main F:/Dev/AIstock fast-forwarded to origin/main. Verification: PR CI success, local pytest 10 passed, py_compile passed, git diff --check passed. Production 8001/3000 untouched."
+    },
+    {
+      "timestamp": "2026-05-18T04:56:56Z",
+      "actor": "codex-app",
+      "action": "verified",
+      "note": "PR #33 merged to GitHub main at merge commit 4e8dacd after all GitHub checks passed. Local main F:/Dev/AIstock fast-forwarded to origin/main. Verification: PR CI success, local pytest 10 passed, py_compile passed, git diff --check passed. Production 8001/3000 untouched."
     }
   ],
   "github_issue_number": 34,
