@@ -16,8 +16,8 @@ from backend.mcp.gateway import DEFAULT_BASE_URL, run_gateway
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the AIstock MCP gateway")
-    parser.add_argument("--profile", default="research", help="Phase 1 allows only: research")
-    parser.add_argument("--modules", default=None, help="Comma-separated modules; Phase 1 allows only: research")
+    parser.add_argument("--profile", default="research", help="Phase 0-5 allows only: research")
+    parser.add_argument("--modules", default=None, help="Comma-separated modules; Phase 0-5 allows only: research")
     parser.add_argument(
         "--base-url",
         default=None,

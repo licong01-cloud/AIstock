@@ -599,7 +599,7 @@ def qe_mcp_backend(session: nox.Session) -> None:
 
 @nox.session(venv_backend="none")
 def research_mcp_contract(session: nox.Session) -> None:
-    """Run Phase 1 Research MCP gateway skeleton contract tests."""
+    """Run Research MCP gateway contract tests for the phased platform."""
     session.run(
         "python",
         "-m",

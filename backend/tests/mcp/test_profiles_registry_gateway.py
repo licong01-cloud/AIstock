@@ -64,13 +64,13 @@ def _registry_tool_counts(registry: ModuleRegistry) -> dict[str, int]:
     return counts() if callable(counts) else dict(counts)
 
 
-def test_research_profile_is_phase1_only_module() -> None:
+def test_research_profile_is_only_current_module() -> None:
     assert resolve_modules(profile="research") == ["research"]
 
 
 @pytest.mark.parametrize("profile", ["full", "operations", "research_with_qe", "paper_trading"])
-def test_future_profiles_are_banned_in_phase1(profile: str) -> None:
-    with pytest.raises(ValueError, match="future|Phase 0-5|Phase 1|not available|Unknown"):
+def test_future_profiles_are_banned_in_phase0_5(profile: str) -> None:
+    with pytest.raises(ValueError, match="future|Phase 0-5|not available|Unknown"):
         resolve_modules(profile=profile)
 
 
@@ -101,7 +101,7 @@ def test_registry_exposes_common_sanitize_and_confirm_helpers() -> None:
 def test_gateway_dynamically_registers_fake_module(monkeypatch) -> None:
     from backend.mcp import gateway
 
-    fake_module = types.ModuleType("backend.mcp.modules.fake_phase1")
+    fake_module = types.ModuleType("backend.mcp.modules.fake_current")
     fake_module.TOOL_COUNT = 2
 
     def register(registry: ModuleRegistry) -> None:
@@ -113,23 +113,23 @@ def test_gateway_dynamically_registers_fake_module(monkeypatch) -> None:
         def fake_beta() -> dict[str, bool]:
             return {"ok": True}
 
-        registry.register_tool_count("fake_phase1", fake_module.TOOL_COUNT)
+        registry.register_tool_count("fake_current", fake_module.TOOL_COUNT)
 
     fake_module.register = register
-    monkeypatch.setitem(sys.modules, "backend.mcp.modules.fake_phase1", fake_module)
-    monkeypatch.setattr(gateway, "resolve_modules", lambda **_kwargs: ["fake_phase1"])
+    monkeypatch.setitem(sys.modules, "backend.mcp.modules.fake_current", fake_module)
+    monkeypatch.setattr(gateway, "resolve_modules", lambda **_kwargs: ["fake_current"])
 
     _mcp, registry = gateway.create_gateway(
-        modules=["fake_phase1"],
+        modules=["fake_current"],
         base_url="http://127.0.0.1:8001/api/v1",
         env_name="test",
     )
 
-    assert registry.tool_count("fake_phase1") == 2
+    assert registry.tool_count("fake_current") == 2
     assert registry.total_tool_count() == 2
 
 
-def test_gateway_loads_phase1_research_placeholder() -> None:
+def test_gateway_loads_phase2_research_tools() -> None:
     from backend.mcp import gateway
 
     _mcp, registry = gateway.create_gateway(
@@ -138,14 +138,14 @@ def test_gateway_loads_phase1_research_placeholder() -> None:
         env_name="test",
     )
 
-    assert registry.tool_count("research") == 0
-    assert registry.total_tool_count() == 0
+    assert registry.tool_count("research") == 12
+    assert registry.total_tool_count() == 12
 
 
 def test_gateway_rejects_banned_future_profile_before_loading_modules() -> None:
     from backend.mcp import gateway
 
-    with pytest.raises(ValueError, match="future|Phase 1"):
+    with pytest.raises(ValueError, match="future|Phase 0-5"):
         gateway.create_gateway(
             profile="full",
             base_url="http://127.0.0.1:8001/api/v1",
