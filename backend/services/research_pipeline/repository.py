@@ -196,6 +196,15 @@ class ResearchPipelineRepository:
             record = StageAttemptRecord(**dict(record))
         return self._insert("research_pipeline.stage_attempt", STAGE_ATTEMPT_COLUMNS, record.model_dump())
 
+    def update_stage_attempt(self, stage_attempt_id: str, updates: Mapping[str, Any]) -> dict[str, Any]:
+        return self._update(
+            "research_pipeline.stage_attempt",
+            "stage_attempt_id",
+            stage_attempt_id,
+            STAGE_ATTEMPT_COLUMNS,
+            updates,
+        )
+
     def list_stage_attempts(self, experiment_id: str, stage_name: str | None = None) -> list[dict[str, Any]]:
         if stage_name is None:
             return self._query(

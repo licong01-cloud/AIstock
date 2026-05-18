@@ -62,6 +62,13 @@ class FakeResearchPipelineRepository:
         self.attempts.append(row)
         return row
 
+    def update_stage_attempt(self, stage_attempt_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        for row in self.attempts:
+            if row["stage_attempt_id"] == stage_attempt_id:
+                row.update(updates)
+                return row
+        raise ValueError(stage_attempt_id)
+
     def list_stage_attempts(self, experiment_id: str, stage_name: str | None = None) -> list[dict[str, Any]]:
         rows = [row for row in self.attempts if row["experiment_id"] == experiment_id]
         if stage_name is not None:
@@ -205,3 +212,110 @@ def test_promote_only_records_request() -> None:
     assert result["promotion_request"]["event_type"] == "promotion_requested"
     assert result["promotion_request"]["payload_json"]["issue_url"].startswith("https://")
     assert len(repo.events) >= 2
+
+
+def test_offline_hmm_stage_passes_criteria_records_artifact_and_comparison() -> None:
+    repo = FakeResearchPipelineRepository()
+    service = ResearchPipelineService(repo)
+    experiment = service.create_experiment(
+        pipeline_type="hmm_research",
+        title="Offline HMM",
+        criteria_json={
+            "stage_criteria": {
+                "offline_validation": {
+                    "min_metrics": {"sharpe": 1.0},
+                    "max_metrics": {"max_drawdown": 0.2},
+                }
+            }
+        },
+        baseline_ref_json={"metrics_json": {"sharpe": 0.8, "max_drawdown": 0.25}},
+    )
+    experiment_id = experiment["experiment_id"]
+
+    result = service.complete_offline_stage(
+        experiment_id,
+        "offline_validation",
+        {
+            "metrics_json": {"sharpe": 1.2, "max_drawdown": 0.12},
+            "candidate_ref_json": {
+                "domain_type": "hmm_artifact",
+                "domain_id": "hmm_candidate_1",
+                "artifact_uri": "artifacts/hmm_candidate_1.json",
+                "artifact_sha256": "abc123",
+            },
+            "artifact_status": "validated",
+        },
+    )
+
+    assert result["attempt"]["status"] == "passed"
+    assert result["stage"]["status"] == "passed"
+    assert result["comparison"]["verdict"] == "pass"
+    assert result["artifact_refs"][0]["domain_type"] == "hmm_artifact"
+    assert repo.artifacts[0]["stage_attempt_id"] == result["attempt"]["stage_attempt_id"]
+    assert repo.events[-1]["event_type"] == "offline_stage_completed"
+    assert any(event["event_type"] == "offline_stage_evaluated" for event in repo.events)
+
+
+def test_offline_event_signal_stage_failure_preserves_attempt_history() -> None:
+    repo = FakeResearchPipelineRepository()
+    service = ResearchPipelineService(repo)
+    experiment = service.create_experiment(
+        pipeline_type="event_signal_research",
+        title="Event signal",
+        criteria_json={"stage_criteria": {"ic_validation": {"min_metrics": {"rank_ic": 0.03}}}},
+    )
+    experiment_id = experiment["experiment_id"]
+
+    first = service.complete_offline_stage(
+        experiment_id,
+        "ic_validation",
+        {"metrics_json": {"rank_ic": 0.01}, "candidate_ref_json": {"domain_type": "event_signal", "domain_id": "sig_1"}},
+    )
+    second = service.complete_offline_stage(
+        experiment_id,
+        "ic_validation",
+        {"metrics_json": {"rank_ic": 0.05}, "candidate_ref_json": {"domain_type": "event_signal", "domain_id": "sig_1"}},
+    )
+
+    assert first["attempt"]["attempt_no"] == 1
+    assert first["attempt"]["status"] == "failed"
+    assert first["comparison"]["verdict"] == "fail"
+    assert second["attempt"]["attempt_no"] == 2
+    assert second["attempt"]["status"] == "passed"
+    assert [attempt["attempt_no"] for attempt in repo.attempts if attempt["stage_name"] == "ic_validation"] == [1, 2]
+    assert repo.experiments[experiment_id]["status"] == "validated"
+
+
+def test_offline_artifact_gen_records_candidate_without_numeric_criteria() -> None:
+    repo = FakeResearchPipelineRepository()
+    service = ResearchPipelineService(repo)
+    experiment = service.create_experiment(pipeline_type="hmm_research", title="Artifact stage")
+
+    result = service.complete_offline_stage(
+        experiment["experiment_id"],
+        "artifact_gen",
+        {
+            "candidate_ref_json": {
+                "domain_type": "hmm_artifact",
+                "domain_id": "hmm_candidate_2",
+                "artifact_uri": "artifacts/hmm_candidate_2.json",
+            }
+        },
+    )
+
+    assert result["attempt"]["status"] == "passed"
+    assert result["comparison"] is None
+    assert result["artifact_refs"][0]["status"] == "validated"
+
+
+def test_offline_completion_rejects_qe_shadow_until_phase5() -> None:
+    repo = FakeResearchPipelineRepository()
+    service = ResearchPipelineService(repo)
+    experiment = service.create_experiment(pipeline_type="hmm_research", title="No QE in phase4")
+
+    try:
+        service.complete_offline_stage(experiment["experiment_id"], "qe_shadow", {"metrics_json": {"sharpe": 1.0}})
+    except ValueError as exc:
+        assert "offline completion" in str(exc)
+    else:
+        raise AssertionError("qe_shadow offline completion should be rejected in Phase 4")

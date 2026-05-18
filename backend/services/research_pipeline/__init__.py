@@ -12,6 +12,7 @@ from .models import (
     StageAttemptRecord,
     StagePlanRecord,
 )
+from .offline import evaluate_criteria, evaluate_offline_stage
 from .service import ResearchPipelineService
 
 __all__ = [
@@ -26,4 +27,6 @@ __all__ = [
     "ResearchPipelineService",
     "StageAttemptRecord",
     "StagePlanRecord",
+    "evaluate_criteria",
+    "evaluate_offline_stage",
 ]

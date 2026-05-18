@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any, Mapping, Protocol
 
 from .models import (
     PIPELINE_TYPES,
@@ -16,6 +16,7 @@ from .models import (
     sanitize_identifier,
     utc_now,
 )
+from .offline import evaluate_criteria, evaluate_offline_stage, is_offline_completion_requested, is_offline_dogfood_stage
 from .repository import ResearchPipelineRepository
 
 
@@ -41,6 +42,7 @@ class ResearchPipelineRepositoryProtocol(Protocol):
     def get_stage_plan(self, experiment_id: str, stage_name: str) -> dict[str, Any] | None: ...
     def update_stage_plan(self, stage_id: str, updates: dict[str, Any]) -> dict[str, Any]: ...
     def create_stage_attempt(self, record: StageAttemptRecord) -> dict[str, Any]: ...
+    def update_stage_attempt(self, stage_attempt_id: str, updates: Mapping[str, Any]) -> dict[str, Any]: ...
     def list_stage_attempts(self, experiment_id: str, stage_name: str | None = None) -> list[dict[str, Any]]: ...
     def next_attempt_no(self, experiment_id: str, stage_name: str) -> int: ...
     def create_external_run_link(self, record: ExternalRunLinkRecord) -> dict[str, Any]: ...
@@ -161,6 +163,21 @@ class ResearchPipelineService:
             event_type="stage_retry_requested",
         )
 
+    def complete_offline_stage(
+        self,
+        experiment_id: str,
+        stage_name: str,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        data = dict(payload or {})
+        data["complete_offline"] = True
+        return self._start_stage_attempt(
+            experiment_id=experiment_id,
+            stage_name=stage_name,
+            payload=data,
+            event_type="offline_stage_completed",
+        )
+
     def get_stage_result(self, experiment_id: str, stage_name: str) -> dict[str, Any]:
         experiment_id, stage_name = self._safe_stage_key(experiment_id, stage_name)
         stage = self._require_stage(experiment_id, stage_name)
@@ -171,9 +188,18 @@ class ResearchPipelineService:
 
     def compare_baseline(self, experiment_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         experiment_id = sanitize_identifier(experiment_id, "experiment_id")
-        self._require_experiment(experiment_id)
+        experiment = self._require_experiment(experiment_id)
         data = dict(payload or {})
-        verdict = str(data.get("verdict") or "inconclusive")
+        verdict = str(data.get("verdict") or "")
+        if not verdict or verdict == "auto":
+            criteria_eval = evaluate_criteria(
+                metrics_json=data.get("metrics_json") or data.get("metrics") or {},
+                criteria_json=data.get("criteria_json") or experiment.get("criteria_json") or {},
+                baseline_ref_json=data.get("baseline_ref_json") or data.get("baseline") or experiment.get("baseline_ref_json") or {},
+            )
+            verdict = criteria_eval.verdict
+            data.setdefault("reason_md", criteria_eval.reason_md)
+            data.setdefault("criteria_evaluation", criteria_eval.details)
         comparison = self._repo.create_comparison(
             ComparisonRecord(
                 experiment_id=experiment_id,
@@ -192,13 +218,17 @@ class ResearchPipelineService:
             "fail": {"status": "stage_failed"},
             "blocked": {"status": "blocked", "blocked_at": utc_now(), "blocked_reason": data.get("reason_md") or data.get("reason")},
         }.get(verdict)
-        if status_updates:
+        if status_updates and data.get("update_experiment", True) is not False:
             self._repo.update_experiment(experiment_id, status_updates)
         self._record_event(
             experiment_id,
             event_type="comparison_recorded",
             message=f"Comparison recorded with verdict={verdict}",
-            payload={"comparison_id": comparison["comparison_id"], "verdict": verdict},
+            payload={
+                "comparison_id": comparison["comparison_id"],
+                "verdict": verdict,
+                "criteria_evaluation": data.get("criteria_evaluation"),
+            },
             stage_attempt_id=data.get("stage_attempt_id"),
             created_by=data.get("created_by") or "codex",
         )
@@ -291,8 +321,10 @@ class ResearchPipelineService:
         event_type: str,
     ) -> dict[str, Any]:
         experiment_id, stage_name = self._safe_stage_key(experiment_id, stage_name)
-        self._require_experiment(experiment_id)
+        experiment = self._require_experiment(experiment_id)
         stage = self._require_stage(experiment_id, stage_name)
+        if is_offline_completion_requested(payload) and not is_offline_dogfood_stage(str(experiment["pipeline_type"]), stage_name):
+            raise ResearchPipelineError(f"stage {stage_name!r} does not support Phase 4 offline completion")
         attempt_no = self._repo.next_attempt_no(experiment_id, stage_name)
         attempt = self._repo.create_stage_attempt(
             StageAttemptRecord(
@@ -307,6 +339,57 @@ class ResearchPipelineService:
         )
         self._repo.update_stage_plan(str(stage["stage_id"]), {"status": "running", "latest_attempt_no": attempt_no})
         self._repo.update_experiment(experiment_id, {"status": "running"})
+        evaluation = evaluate_offline_stage(
+            pipeline_type=str(experiment["pipeline_type"]),
+            stage_name=stage_name,
+            payload=payload,
+            experiment=experiment,
+            stage=stage,
+            attempt=attempt,
+        )
+        artifacts: list[dict[str, Any]] = []
+        comparison: dict[str, Any] | None = None
+        if evaluation is not None:
+            completed_at = utc_now()
+            attempt = self._repo.update_stage_attempt(
+                str(attempt["stage_attempt_id"]),
+                {
+                    "status": evaluation.attempt_status,
+                    "result_json": evaluation.result_json,
+                    "error_message": evaluation.error_message,
+                    "completed_at": completed_at,
+                },
+            )
+            self._repo.update_stage_plan(
+                str(stage["stage_id"]),
+                {"status": evaluation.stage_status, "latest_attempt_no": attempt_no},
+            )
+            if evaluation.experiment_status:
+                updates: dict[str, Any] = {"status": evaluation.experiment_status}
+                if evaluation.experiment_status == "stage_failed":
+                    updates["blocked_reason"] = None
+                if evaluation.experiment_status == "blocked":
+                    updates.update({"blocked_at": utc_now(), "blocked_reason": evaluation.error_message})
+                self._repo.update_experiment(experiment_id, updates)
+            elif self._all_required_offline_stages_passed(experiment_id, str(experiment["pipeline_type"])):
+                self._repo.update_experiment(experiment_id, {"status": "validated", "validated_at": completed_at})
+            for artifact_payload in evaluation.artifact_refs:
+                artifacts.append(
+                    self.record_artifact_ref(
+                        experiment_id,
+                        {**artifact_payload, "stage_attempt_id": str(attempt["stage_attempt_id"])},
+                    )
+                )
+            if evaluation.comparison_payload is not None:
+                comparison = self.compare_baseline(experiment_id, evaluation.comparison_payload)
+            self._record_event(
+                experiment_id,
+                stage_attempt_id=str(attempt["stage_attempt_id"]),
+                event_type="offline_stage_evaluated",
+                message=f"Offline stage {stage_name} attempt {attempt_no} evaluated",
+                payload=evaluation.event_payload,
+                created_by=str(payload.get("created_by") or "codex"),
+            )
         self._record_event(
             experiment_id,
             stage_attempt_id=str(attempt["stage_attempt_id"]),
@@ -315,7 +398,12 @@ class ResearchPipelineService:
             payload=payload,
             created_by=str(payload.get("created_by") or "codex"),
         )
-        return {"stage": self._repo.get_stage_plan(experiment_id, stage_name), "attempt": attempt}
+        return {
+            "stage": self._repo.get_stage_plan(experiment_id, stage_name),
+            "attempt": attempt,
+            "artifact_refs": artifacts,
+            "comparison": comparison,
+        }
 
     def _require_experiment(self, experiment_id: str) -> dict[str, Any]:
         experiment = self._repo.get_experiment(experiment_id)
@@ -328,6 +416,17 @@ class ResearchPipelineService:
         if not stage:
             raise ResearchPipelineNotFoundError(f"stage not found: {experiment_id}/{stage_name}")
         return stage
+
+    def _all_required_offline_stages_passed(self, experiment_id: str, pipeline_type: str) -> bool:
+        required = {
+            "hmm_research": {"offline_validation", "portfolio_simulation"},
+            "event_signal_research": {"ic_validation"},
+        }.get(pipeline_type, set())
+        if not required:
+            return False
+        stages = self._repo.list_stage_plans(experiment_id)
+        statuses = {str(stage["stage_name"]): stage.get("status") for stage in stages}
+        return all(statuses.get(stage_name) == "passed" for stage_name in required)
 
     @staticmethod
     def _safe_stage_key(experiment_id: str, stage_name: str) -> tuple[str, str]:
