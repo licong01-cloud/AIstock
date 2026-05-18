@@ -1,0 +1,48 @@
+# AIstock Guardrail Baseline Scan
+
+- Generated at: 2026-05-18T15:09:57.009377+00:00
+- Mode: `paths`
+- Files scanned: 80
+- Total findings: 6
+
+## Summary By Baseline Status
+
+| Status | Count |
+|---|---:|
+| `baseline` | 3 |
+| `new` | 3 |
+
+## Summary By Severity
+
+| Severity | Count |
+|---|---:|
+| P0 | 1 |
+| P1 | 1 |
+| P2 | 4 |
+| P3 | 0 |
+
+## Summary By Rule
+
+| Rule | Count |
+|---|---:|
+| `ALGO-COMPLEXITY-001` | 1 |
+| `SCRIPT-LOCATION-001` | 1 |
+| `TRADING-FALLBACK-001` | 1 |
+| `UI-RAWJSON-001` | 3 |
+
+## Interpretation
+
+This is a read-only baseline report. It does not mean all historical findings must be fixed immediately.
+New or changed P0/P1 findings should be blocked after the changed-files gate is enabled.
+Historical findings should be triaged by module and burned down with regression tests.
+
+## First 6 Findings
+
+| Severity | Status | Rule | File | Line | Remediation |
+|---|---|---|---|---:|---|
+| P0 | `baseline` | `TRADING-FALLBACK-001` | `backend/services/quantevolver/completion_contract.py` | 145 | Make downgrade explicit, audited, tested, and UI-visible; otherwise fail fast. |
+| P2 | `new` | `UI-RAWJSON-001` | `frontend/src/app/validation-center/page.tsx` | 1425 | Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only. |
+| P2 | `new` | `UI-RAWJSON-001` | `frontend/src/lib/validation/api.ts` | 845 | Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only. |
+| P2 | `new` | `UI-RAWJSON-001` | `frontend/src/lib/validation/api.ts` | 1027 | Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only. |
+| P1 | `baseline` | `SCRIPT-LOCATION-001` | `noxfile.py` | 1 | Put one-off diagnostics under debug_tools/<module>/<date_or_issue>; reusable business scripts need parameters and tests under scripts. |
+| P2 | `baseline` | `ALGO-COMPLEXITY-001` | `scripts/aistock_data_quality_smoke.py` | 145 | Document row-count bounds, join keys, row-explosion risk, and batching/vectorization strategy for large quant workloads. |
