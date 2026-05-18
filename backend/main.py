@@ -33,6 +33,7 @@ from .routers import (
     qmt,
     qe_archive,
     qe_templates,
+    research_pipeline,
     quant,
     sector_strategy,
     settings,
@@ -509,6 +510,7 @@ def create_app() -> FastAPI:
     app.include_router(quantevolver_evolution.factor_metrics_router, prefix="/api/v1")
     app.include_router(qe_archive.router, prefix="/api/v1")
     app.include_router(qe_templates.router, prefix="/api/v1")
+    app.include_router(research_pipeline.router, prefix="/api/v1")
     app.include_router(strategy_packages.router, prefix="/api/v1")
     app.include_router(selection_center.router, prefix="/api/v1")
     app.include_router(paper_trading_v2.router, prefix="/api/v1")

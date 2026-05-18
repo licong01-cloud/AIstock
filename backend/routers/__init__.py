@@ -10,6 +10,7 @@ from . import settings
 from . import config_env
 from . import qmt
 from . import qe_archive
+from . import research_pipeline
 from . import smart_monitor
 from . import rdagent
 from . import rdagent_templates
@@ -28,6 +29,7 @@ __all__ = [
     "config_env",
     "qmt",
     "qe_archive",
+    "research_pipeline",
     "smart_monitor",
     "rdagent",
     "rdagent_templates",

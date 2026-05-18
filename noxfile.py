@@ -598,6 +598,27 @@ def qe_mcp_backend(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def research_pipeline_backend(session: nox.Session) -> None:
+    """Run Research Pipeline backend/schema/router tests without services."""
+    session.run(
+        "python",
+        "-m",
+        "compileall",
+        "backend/db/init_research_pipeline_schema.py",
+        "backend/services/research_pipeline",
+        "backend/routers/research_pipeline.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/research_pipeline",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
 def research_mcp_contract(session: nox.Session) -> None:
     """Run Research MCP gateway contract tests for the phased platform."""
     session.run(
