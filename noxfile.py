@@ -598,6 +598,26 @@ def qe_mcp_backend(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def research_mcp_contract(session: nox.Session) -> None:
+    """Run Phase 1 Research MCP gateway skeleton contract tests."""
+    session.run(
+        "python",
+        "-m",
+        "compileall",
+        "backend/mcp",
+        "scripts/aistock_mcp_gateway.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/mcp",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
 def model_registry_backend(session: nox.Session) -> None:
     """Run Model Registry backend regression tests without starting services.
 
