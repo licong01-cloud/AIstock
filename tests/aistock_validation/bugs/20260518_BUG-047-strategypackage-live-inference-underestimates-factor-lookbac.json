@@ -20,7 +20,9 @@
   "evidence_uris": [
     "file:backend/data_service/preprocessor.py",
     "file:backend/inference_engine.py",
-    "file:backend/tests/test_inference_strict_scoring_alignment.py"
+    "file:backend/tests/test_inference_strict_scoring_alignment.py",
+    "pr:https://github.com/licong01-cloud/AIstock/pull/33",
+    "issue:https://github.com/licong01-cloud/AIstock/issues/34"
   ],
   "fingerprint": "fc77e8ef67f41946",
   "assigned_agent": "codex-app",
@@ -81,6 +83,14 @@
       "actor": "codex-app",
       "action": "status_changed",
       "note": "Fixed in dedicated worktree. Implemented factor-name lookback inference for dynamic 120d/250d factors, trading-calendar start-date resolution, and cache window revalidation. Validation: pytest backend/tests/test_inference_strict_scoring_alignment.py = 10 passed; py_compile and git diff --check passed. Production 8001/3000 untouched."
+    },
+    {
+      "timestamp": "2026-05-18T12:14:00Z",
+      "actor": "codex-app",
+      "action": "github_sync",
+      "note": "Manual GitHub Issue #34 and PR #33 created because MCP live sync lacked GITHUB_REPOSITORY."
     }
-  ]
+  ],
+  "github_issue_number": 34,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/34"
 }
