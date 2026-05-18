@@ -554,6 +554,49 @@ class InferenceEngine:
             raise ValueError(f"strict inference found no trading calendar date <= {target_date.date()}")
         return target_date
 
+    def _resolve_inference_start_date(
+        self,
+        actual_date: datetime,
+        required_window: int,
+        buffer_days: int = 5,
+    ) -> tuple[datetime, str]:
+        """按交易日历反推推理读取起点，避免节假日压缩交易日窗口。"""
+
+        required_trading_days = required_window + buffer_days
+        if required_trading_days <= 0:
+            raise ValueError("required_window + buffer_days must be positive")
+
+        sql = """
+            SELECT cal_date
+            FROM market.trading_calendar
+            WHERE cal_date <= %s AND is_trading = TRUE
+            ORDER BY cal_date DESC
+            OFFSET %s LIMIT 1
+        """
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(sql, (actual_date.date(), required_trading_days - 1))
+                    row = cur.fetchone()
+                    if row:
+                        return datetime.combine(row[0], datetime.min.time()), "trading_calendar"
+        except Exception as e:
+            if _strict_inference_enabled():
+                raise ValueError(
+                    "strict inference requires trading-calendar start-date resolution: "
+                    f"actual_date={actual_date.date()}, required_trading_days={required_trading_days}, error={e}"
+                ) from e
+            logger.warning(f"按交易日历反推推理起点失败，将使用自然日估算: {e}")
+
+        if _strict_inference_enabled():
+            raise ValueError(
+                "strict inference found insufficient trading-calendar history: "
+                f"actual_date={actual_date.date()}, required_trading_days={required_trading_days}"
+            )
+
+        natural_days_needed = _inference_natural_days_needed(required_window)
+        return actual_date - timedelta(days=natural_days_needed), "natural_days_fallback"
+
     def _validate_data_freshness(self, df_history: pd.DataFrame, requested_date: datetime, actual_date: datetime) -> None:
         """验证数据时效性，确保数据不滞后
         
@@ -1323,11 +1366,16 @@ class InferenceEngine:
         # 4.1 检查因子所需的数据窗口
         # factor_order 已在步骤2中通过 _infer_expected_features 获取
         required_window = get_required_data_window(factor_order)
-        # 将交易日转换为自然日；StrategyPackage 严格推理可通过环境变量扩大窗口。
-        natural_days_needed = _inference_natural_days_needed(required_window)
-        start_date = actual_date - timedelta(days=natural_days_needed)
+        start_date, start_date_source = self._resolve_inference_start_date(
+            actual_date, required_window, buffer_days=5
+        )
 
-        logger.info(f"因子所需数据窗口: {required_window}交易日, 加载{natural_days_needed}自然日数据")
+        logger.info(
+            "因子所需数据窗口: %s交易日 + 5日安全余量, start_date=%s, source=%s",
+            required_window,
+            start_date.date(),
+            start_date_source,
+        )
 
         # 4.2 尝试从缓存获取数据
         cache = get_selection_data_cache()
@@ -1335,9 +1383,21 @@ class InferenceEngine:
 
         if cached_data is not None:
             df_history, df_fund_raw = cached_data
-            logger.info(f"✓ 从缓存获取数据: df_history={df_history.shape}, df_fund_raw={df_fund_raw.shape}")
-        else:
-            # 4.3 缓存未命中，从数据库获取
+            cached_ok, cached_days, cached_msg = check_data_window_sufficient(
+                df_history, required_window, buffer_days=5
+            )
+            if cached_ok:
+                logger.info(f"✓ 从缓存获取数据: df_history={df_history.shape}, df_fund_raw={df_fund_raw.shape}")
+            else:
+                logger.info(
+                    "缓存数据窗口不足，将按当前策略包窗口重新加载: actual_days=%s, msg=%s",
+                    cached_days,
+                    cached_msg,
+                )
+                cached_data = None
+
+        if cached_data is None:
+            # 4.3 缓存未命中或窗口不足，从数据库获取
             df_history = get_history_window(
                 universe=universe,
                 start=start_date,

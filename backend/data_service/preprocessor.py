@@ -19,6 +19,7 @@ between RD-Agent model training and AIstock online inference.
 """
 
 import logging
+import re
 from typing import Any, List, Optional
 
 import numpy as np
@@ -254,6 +255,36 @@ def validate_precomputed_factors(df: pd.DataFrame) -> tuple[bool, List[str]]:
     return is_valid, missing
 
 
+# Alpha158因子的窗口需求。ROC60 需要 t 和 t-60 两端价格，因此是 61 个交易日。
+_ALPHA158_FACTOR_WINDOWS = {
+    "ROC60": 61,
+    "RSQR60": 60,
+    "CORR60": 60,
+    "CORD60": 60,
+    "WVMA60": 60,
+    "RESI60": 60,
+}
+
+# 动态因子常见命名：m_turnover_percentile_250d、PriceStrength_120D、roc120d。
+_LOOKBACK_DAY_PATTERN = re.compile(r"(?<!\d)(\d{1,4})[dD](?![A-Za-z0-9])")
+
+
+def infer_factor_lookback_days(factor_name: str) -> int:
+    """从因子名称推断该因子需要的最小交易日窗口。"""
+
+    factor_text = str(factor_name or "").strip()
+    factor_upper = factor_text.upper()
+    for alpha_name, window in _ALPHA158_FACTOR_WINDOWS.items():
+        if alpha_name in factor_upper:
+            return window
+
+    lookbacks = [int(match.group(1)) for match in _LOOKBACK_DAY_PATTERN.finditer(factor_text)]
+    if lookbacks:
+        return max(20, max(lookbacks))
+
+    return 20
+
+
 def get_required_data_window(factor_order: Optional[List[str]] = None) -> int:
     """
     根据因子列表计算所需的最小数据窗口（交易日数）
@@ -264,32 +295,11 @@ def get_required_data_window(factor_order: Optional[List[str]] = None) -> int:
     Returns:
         所需的最小交易日数
     """
-    # 默认窗口需求
-    base_window = 20  # 20日滚动聚合
+    # 如果没有指定因子列表，保持历史默认值，覆盖已知 Alpha158 最大窗口。
+    if not factor_order:
+        return 61
 
-    # Alpha158因子的窗口需求
-    alpha158_windows = {
-        'ROC60': 61,
-        'RSQR60': 60,
-        'CORR60': 60,
-        'CORD60': 60,
-        'WVMA60': 60,
-        'RESI60': 60,
-    }
-
-    max_window = base_window
-
-    if factor_order:
-        for factor in factor_order:
-            factor_upper = factor.upper()
-            for alpha_name, window in alpha158_windows.items():
-                if alpha_name in factor_upper:
-                    max_window = max(max_window, window)
-    else:
-        # 如果没有指定因子列表，使用最大窗口
-        max_window = 61
-
-    return max_window
+    return max(infer_factor_lookback_days(factor) for factor in factor_order)
 
 
 def check_data_window_sufficient(
@@ -324,7 +334,7 @@ def check_data_window_sufficient(
         message = (
             f"⚠️ 数据窗口不足：实际 {actual_days} 天 < 所需 {required_with_buffer} 天 "
             f"(因子需要 {required_window} 天 + 安全余量 {buffer_days} 天)。"
-            f"建议扩大数据加载窗口到 {required_with_buffer + 30} 自然日。"
+            f"建议按交易日历加载至少 {required_with_buffer} 个交易日的数据。"
         )
         logger.warning(message)
 

@@ -1,0 +1,96 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-047",
+  "title": "StrategyPackage live inference underestimates factor lookback for 120d/250d factors",
+  "description": "Expected: StrategyPackage local live inference should infer the required lookback from factor names or metadata, including 120d/250d rolling factors, then load enough trading days before scoring. A package containing factors such as m_turnover_percentile_250d or m_atr_percentile_250d should fail fast only when the database truly lacks those trading days, not because inference hard-codes a short default window.\nActual: Local live inference only recognizes a small Alpha158 60-day alias set and otherwise derives a short required data window. Packages containing 120d/250d dynamic factors load about 65 trading days, causing factor computation errors such as m_turnover_percentile_250d returned empty result or actual 65 days < required 66 days even when historical database data exists.",
+  "module": "strategy_package",
+  "severity": "P1",
+  "risk_area": "unspecified",
+  "status": "fixed",
+  "trigger_condition": {
+    "scenario": "reported_via_mcp",
+    "files": [
+      "backend/data_service/preprocessor.py",
+      "backend/inference_engine.py",
+      "backend/tests/test_inference_strict_scoring_alignment.py"
+    ]
+  },
+  "reproduce_command": "C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m pytest backend/tests/test_inference_strict_scoring_alignment.py -q -p no:cacheprovider",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:backend/data_service/preprocessor.py",
+    "file:backend/inference_engine.py",
+    "file:backend/tests/test_inference_strict_scoring_alignment.py",
+    "pr:https://github.com/licong01-cloud/AIstock/pull/33",
+    "issue:https://github.com/licong01-cloud/AIstock/issues/34"
+  ],
+  "fingerprint": "fc77e8ef67f41946",
+  "assigned_agent": "codex-app",
+  "fix_branch": "codex/bug-047-factor-lookback-window-20260518",
+  "fix_commit": "cdd7503",
+  "verification_run_id": "tests/aistock_validation/history/strategy_package/20260518_120258_l0_bug-047-factor-lookback-inference-window.md",
+  "created_at": "2026-05-18T03:47:34Z",
+  "first_seen_at": "2026-05-18T03:47:34Z",
+  "last_seen_at": "2026-05-18T04:10:28Z",
+  "fixed_at": "2026-05-18T04:10:28Z",
+  "submitted_at": "2026-05-18T03:47:34Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/data_service/preprocessor.py",
+    "backend/inference_engine.py",
+    "backend/tests/test_inference_strict_scoring_alignment.py"
+  ],
+  "suspected_modules": [
+    "backend/data_service/preprocessor.py",
+    "backend/inference_engine.py",
+    "backend/tests/test_inference_strict_scoring_alignment.py"
+  ],
+  "required_verification": [],
+  "closure_requirements": [],
+  "events": [
+    {
+      "timestamp": "2026-05-18T03:47:34Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Reported via aistock_mcp_server.report_bug. Comments: 3"
+    },
+    {
+      "timestamp": "2026-05-18T03:47:34Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Root cause: get_required_data_window only recognizes a limited Alpha158 60-day set and does not parse dynamic lookback suffixes such as 120d/250d."
+    },
+    {
+      "timestamp": "2026-05-18T03:47:34Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Fix scope should avoid increasing a global natural-day multiplier; strict local inference should use factor-level lookback and trade-calendar based start-date resolution."
+    },
+    {
+      "timestamp": "2026-05-18T03:47:34Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Production backend 8001 and frontend 3000 must not be restarted for this fix."
+    },
+    {
+      "timestamp": "2026-05-18T03:47:52Z",
+      "actor": "mcp_agent",
+      "action": "assigned",
+      "note": "Using dedicated worktree F:/Dev/AIstock_worktrees/bug-046-factor-lookback-window (clean branch renamed to BUG-047 before editing). Allowed scope: backend/data_service/preprocessor.py, backend/inference_engine.py, backend/tests/test_inference_strict_scoring_alignment.py, BUG-047 registry JSON, validation history if needed. Production 8001/3000 will not be touched."
+    },
+    {
+      "timestamp": "2026-05-18T04:10:28Z",
+      "actor": "codex-app",
+      "action": "status_changed",
+      "note": "Fixed in dedicated worktree. Implemented factor-name lookback inference for dynamic 120d/250d factors, trading-calendar start-date resolution, and cache window revalidation. Validation: pytest backend/tests/test_inference_strict_scoring_alignment.py = 10 passed; py_compile and git diff --check passed. Production 8001/3000 untouched."
+    },
+    {
+      "timestamp": "2026-05-18T12:14:00Z",
+      "actor": "codex-app",
+      "action": "github_sync",
+      "note": "Manual GitHub Issue #34 and PR #33 created because MCP live sync lacked GITHUB_REPOSITORY."
+    }
+  ],
+  "github_issue_number": 34,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/34"
+}
