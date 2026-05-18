@@ -25,7 +25,7 @@
   "verification_run_id": "qe-data-completeness_20260518_151108_l2_qe-data-contract-backend_208be9d7_runner-validation__0eeac31c24",
   "created_at": "2026-05-14T13:12:52Z",
   "first_seen_at": "2026-05-14T13:12:52Z",
-  "last_seen_at": "2026-05-18T15:29:52Z",
+  "last_seen_at": "2026-05-18T15:32:17Z",
   "fixed_at": "2026-05-18T15:27:49Z",
   "submitted_at": "2026-05-14T13:12:52Z",
   "closed_at": null,
@@ -103,6 +103,18 @@
       "actor": "codex-app",
       "action": "pull_request_opened",
       "note": "Opened PR #35 for BUG-039 fix and validation evidence; main is not merged."
+    },
+    {
+      "timestamp": "2026-05-18T15:31:10Z",
+      "actor": "codex-app",
+      "action": "github_issue_synced",
+      "note": "Synced bug registry entry to GitHub issue #23."
+    },
+    {
+      "timestamp": "2026-05-18T15:32:17Z",
+      "actor": "codex-app",
+      "action": "github_issue_reopened_for_pr_review",
+      "note": "Reopened GitHub issue #23 after syncing fixed metadata so it remains visible until PR #35 is reviewed, merged, and verified on main."
     }
   ],
   "custom_github_labels": [
