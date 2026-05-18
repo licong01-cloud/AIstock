@@ -158,6 +158,33 @@ class AutoEvolutionScheduler:
                 exc_info=True,
             )
 
+    def _record_research_backtest_best_effort(
+        self,
+        task_id: str,
+        loop_id: str,
+        loop_index: int | None = None,
+        experiment_id: str | None = None,
+    ) -> None:
+        """Best-effort Research Pipeline hook; failures must not affect QE status."""
+
+        try:
+            from backend.services.research_pipeline.realtime_ingestion import safe_record_hmm_backtest_completed
+
+            safe_record_hmm_backtest_completed(
+                task_id=task_id,
+                loop_id=loop_id,
+                loop_index=loop_index,
+                experiment_id=experiment_id,
+            )
+        except Exception as exc:  # pragma: no cover - defensive isolation.
+            logger.warning(
+                "Research Pipeline realtime hook failed without changing QE status: task=%s loop=%s error=%s",
+                task_id,
+                loop_id,
+                exc,
+                exc_info=True,
+            )
+
     def _ensure_log_stream_state(self) -> None:
         """Initialize log-stream bookkeeping for tests that construct via __new__."""
         if not hasattr(self, "_log_stream_lock"):
@@ -2190,6 +2217,7 @@ class AutoEvolutionScheduler:
 
             # Optuna 反馈：param_tune 方向时将 IC 反馈给 Optuna
             self._archive_completed_loop_best_effort(task_id, evolution_loop_db_id, loop_index)
+            self._record_research_backtest_best_effort(task_id, evolution_loop_db_id, loop_index)
 
             if decided_action_type == "param_tune":
                 _optuna_trial = next_config_draft.get("_optuna_trial") if next_config_draft else None
@@ -4540,6 +4568,7 @@ class AutoEvolutionScheduler:
                     task_row = cur.fetchone()
 
             self._archive_completed_loop_best_effort(task_id, evolution_loop_db_id, loop_index)
+            self._record_research_backtest_best_effort(task_id, evolution_loop_db_id, loop_index)
 
             current_loop = task_row.get("current_loop", 0) if task_row else 0
             max_loops = task_row.get("max_loops", 0) if task_row else 0

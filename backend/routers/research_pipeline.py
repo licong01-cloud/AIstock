@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from backend.services.research_pipeline import (
+    RESEARCH_HMM_BACKFILL_EXECUTE_CONFIRM,
     RESEARCH_PROMOTE_CONFIRM,
     RESEARCH_RETRY_STAGE_CONFIRM,
     RESEARCH_RUN_STAGE_CONFIRM,
@@ -106,6 +107,37 @@ class RejectRequest(BaseModel):
     reason: str = Field(..., min_length=1)
     created_by: str = "codex"
     metadata_json: dict[str, Any] = Field(default_factory=dict)
+
+
+class HMMBackfillPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    source_mode: str = "historical_file"
+    source_scope: dict[str, Any] = Field(default_factory=dict)
+    policy: dict[str, Any] = Field(default_factory=dict)
+    created_by: str = "codex"
+
+    def payload(self) -> dict[str, Any]:
+        data = self.model_dump()
+        data.update(getattr(self, "model_extra", None) or {})
+        return data
+
+
+class HMMBackfillExecuteRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    preview_id: str | None = None
+    source_mode: str = "historical_file"
+    source_scope: dict[str, Any] = Field(default_factory=dict)
+    policy: dict[str, Any] = Field(default_factory=dict)
+    dry_run: bool = True
+    confirm: str = ""
+    created_by: str = "codex"
+
+    def payload(self) -> dict[str, Any]:
+        data = self.model_dump()
+        data.update(getattr(self, "model_extra", None) or {})
+        return data
 
 
 def get_research_pipeline_service() -> ResearchPipelineService:
@@ -240,6 +272,86 @@ def list_artifact_refs(
 ) -> ResearchPipelineResponse:
     try:
         return _success(service.list_artifact_refs(experiment_id, domain_type=domain_type, status=status, limit=limit))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.get("/experiments/{experiment_id}/backtest-records", response_model=ResearchPipelineResponse)
+def list_backtest_records(
+    experiment_id: str,
+    research_domain: str | None = Query("hmm"),
+    dedup_status: str | None = Query(None),
+    qe_archive_representative: bool | None = Query(None),
+    source_task_id: str | None = Query(None),
+    hmm_config_sig: str | None = Query(None),
+    non_hmm_config_sig: str | None = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    service: ResearchPipelineService = Depends(get_research_pipeline_service),
+) -> ResearchPipelineResponse:
+    try:
+        return _success(
+            service.list_backtest_records(
+                experiment_id,
+                research_domain=research_domain,
+                dedup_status=dedup_status,
+                qe_archive_representative=qe_archive_representative,
+                source_task_id=source_task_id,
+                hmm_config_sig=hmm_config_sig,
+                non_hmm_config_sig=non_hmm_config_sig,
+                limit=limit,
+                offset=offset,
+            )
+        )
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.get("/experiments/{experiment_id}/backfill-runs", response_model=ResearchPipelineResponse)
+def list_backfill_runs(
+    experiment_id: str,
+    limit: int = Query(50, ge=1, le=200),
+    service: ResearchPipelineService = Depends(get_research_pipeline_service),
+) -> ResearchPipelineResponse:
+    try:
+        return _success(service.list_backfill_runs(experiment_id, limit=limit))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.post("/experiments/{experiment_id}/hmm-backtests/backfill-preview", response_model=ResearchPipelineResponse)
+def hmm_backfill_preview(
+    experiment_id: str,
+    request: HMMBackfillPreviewRequest,
+    service: ResearchPipelineService = Depends(get_research_pipeline_service),
+) -> ResearchPipelineResponse:
+    try:
+        return _success(service.preview_hmm_backfill(experiment_id, request.payload()))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.post("/experiments/{experiment_id}/hmm-backtests/backfill-execute", response_model=ResearchPipelineResponse)
+def hmm_backfill_execute(
+    experiment_id: str,
+    request: HMMBackfillExecuteRequest,
+    service: ResearchPipelineService = Depends(get_research_pipeline_service),
+) -> ResearchPipelineResponse:
+    if request.confirm != RESEARCH_HMM_BACKFILL_EXECUTE_CONFIRM:
+        raise HTTPException(status_code=400, detail=f"confirm must equal {RESEARCH_HMM_BACKFILL_EXECUTE_CONFIRM}")
+    try:
+        return _success(service.execute_hmm_backfill(experiment_id, request.payload()))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.get("/backfill-runs/{backfill_run_id}", response_model=ResearchPipelineResponse)
+def get_backfill_run(
+    backfill_run_id: str,
+    service: ResearchPipelineService = Depends(get_research_pipeline_service),
+) -> ResearchPipelineResponse:
+    try:
+        return _success(service.get_backfill_run(backfill_run_id))
     except Exception as exc:
         raise _map_error(exc) from exc
 

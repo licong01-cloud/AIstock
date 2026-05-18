@@ -12,13 +12,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 RESEARCH_RUN_STAGE_CONFIRM = "RESEARCH_RUN_STAGE"
 RESEARCH_RETRY_STAGE_CONFIRM = "RESEARCH_RETRY_STAGE"
 RESEARCH_PROMOTE_CONFIRM = "RESEARCH_PROMOTE"
+RESEARCH_HMM_BACKFILL_EXECUTE_CONFIRM = "RESEARCH_HMM_BACKFILL_EXECUTE"
 
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 PIPELINE_TYPES = {
     "hmm_research": {
         "display_name": "HMM Research",
-        "stages": ["artifact_gen", "offline_validation", "portfolio_simulation", "qe_shadow"],
+        "stages": ["artifact_gen", "offline_validation", "portfolio_simulation", "backtest_recording", "qe_shadow"],
         "default_criteria": {
             "verdict_policy": "criteria_based",
             "required_checks": ["offline_validation", "comparison"],
@@ -221,6 +222,76 @@ class PipelineEventRecord(StrictModel):
     created_at: datetime = Field(default_factory=utc_now)
 
     @field_validator("event_id", "experiment_id", "stage_attempt_id")
+    @classmethod
+    def _validate_optional_identifiers(cls, value: str | None, info) -> str | None:  # type: ignore[no-untyped-def]
+        if value is None:
+            return value
+        return sanitize_identifier(value, info.field_name)
+
+
+class BacktestRecord(StrictModel):
+    record_id: str = Field(default_factory=lambda: new_id("rp_bt"))
+    experiment_id: str
+    stage_attempt_id: str | None = None
+    pipeline_type: str = "hmm_research"
+    research_domain: str = "hmm"
+    source_type: Literal["qe_loop", "historical_file", "manual_repair"] = "qe_loop"
+    source_task_id: str
+    source_loop_id: str
+    source_loop_index: int | None = None
+    source_experiment_id: str | None = None
+    source_created_at: datetime | None = None
+    record_version: str = "hmm_backtest_record_v1"
+    record_key_sha256: str
+    non_hmm_config_sig: str | None = None
+    hmm_config_sig: str | None = None
+    strict_family_sig: str | None = None
+    archive_family_sig: str | None = None
+    dedup_status: Literal["primary", "duplicate_same_config", "hmm_variant", "excluded"] = "primary"
+    qe_archive_eligible: bool = False
+    qe_archive_representative: bool = False
+    rejection_reason: str | None = None
+    ann: float | None = None
+    mdd: float | None = None
+    ir: float | None = None
+    ic: float | None = None
+    rank_ic: float | None = None
+    sharpe: float | None = None
+    turnover: float | None = None
+    metrics_json: dict[str, Any] = Field(default_factory=dict)
+    hmm_config_summary_json: dict[str, Any] = Field(default_factory=dict)
+    config_summary_json: dict[str, Any] = Field(default_factory=dict)
+    source_payload_json: dict[str, Any] = Field(default_factory=dict)
+    recorded_by: str = "auto_hook"
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+    @field_validator("record_id", "experiment_id", "stage_attempt_id")
+    @classmethod
+    def _validate_optional_identifiers(cls, value: str | None, info) -> str | None:  # type: ignore[no-untyped-def]
+        if value is None:
+            return value
+        return sanitize_identifier(value, info.field_name)
+
+
+class BackfillRunRecord(StrictModel):
+    backfill_run_id: str = Field(default_factory=lambda: new_id("rp_bf"))
+    experiment_id: str
+    backfill_type: str = "hmm_backtest_timeline"
+    status: Literal["previewed", "running", "completed", "failed", "cancelled"] = "previewed"
+    dry_run: bool = True
+    source_scope_json: dict[str, Any] = Field(default_factory=dict)
+    source_fingerprint_json: dict[str, Any] = Field(default_factory=dict)
+    counts_json: dict[str, Any] = Field(default_factory=dict)
+    stage_attempt_id: str | None = None
+    error_message: str | None = None
+    created_by: str = "codex"
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+    @field_validator("backfill_run_id", "experiment_id", "stage_attempt_id")
     @classmethod
     def _validate_optional_identifiers(cls, value: str | None, info) -> str | None:  # type: ignore[no-untyped-def]
         if value is None:

@@ -11,11 +11,14 @@ from .models import (
     ExperimentRecord,
     ExternalRunLinkRecord,
     PipelineEventRecord,
+    BackfillRunRecord,
+    BacktestRecord,
     StageAttemptRecord,
     StagePlanRecord,
     sanitize_identifier,
     utc_now,
 )
+from .hmm_backtest_recorder import HMMBacktestRecorder
 from .offline import evaluate_criteria, evaluate_offline_stage, is_offline_completion_requested, is_offline_dogfood_stage
 from .repository import ResearchPipelineRepository
 
@@ -53,6 +56,12 @@ class ResearchPipelineRepositoryProtocol(Protocol):
     def list_comparisons(self, experiment_id: str) -> list[dict[str, Any]]: ...
     def create_pipeline_event(self, record: PipelineEventRecord) -> dict[str, Any]: ...
     def list_pipeline_events(self, experiment_id: str) -> list[dict[str, Any]]: ...
+    def upsert_backtest_record(self, record: BacktestRecord) -> dict[str, Any]: ...
+    def list_backtest_records(self, experiment_id: str, **kwargs: Any) -> list[dict[str, Any]]: ...
+    def create_backfill_run(self, record: BackfillRunRecord) -> dict[str, Any]: ...
+    def update_backfill_run(self, backfill_run_id: str, updates: Mapping[str, Any]) -> dict[str, Any]: ...
+    def get_backfill_run(self, backfill_run_id: str) -> dict[str, Any] | None: ...
+    def list_backfill_runs(self, experiment_id: str, *, limit: int = 50) -> list[dict[str, Any]]: ...
 
 
 class ResearchPipelineService:
@@ -146,6 +155,67 @@ class ResearchPipelineService:
             "comparisons": self._repo.list_comparisons(experiment_id),
             "events": self._repo.list_pipeline_events(experiment_id),
         }
+
+    def list_backtest_records(
+        self,
+        experiment_id: str,
+        *,
+        research_domain: str | None = None,
+        dedup_status: str | None = None,
+        qe_archive_representative: bool | None = None,
+        source_task_id: str | None = None,
+        hmm_config_sig: str | None = None,
+        non_hmm_config_sig: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        experiment_id = sanitize_identifier(experiment_id, "experiment_id")
+        self._require_experiment(experiment_id)
+        return self._repo.list_backtest_records(
+            experiment_id,
+            research_domain=research_domain,
+            dedup_status=dedup_status,
+            qe_archive_representative=qe_archive_representative,
+            source_task_id=source_task_id,
+            hmm_config_sig=hmm_config_sig,
+            non_hmm_config_sig=non_hmm_config_sig,
+            limit=limit,
+            offset=offset,
+        )
+
+    def list_backfill_runs(self, experiment_id: str, *, limit: int = 50) -> list[dict[str, Any]]:
+        experiment_id = sanitize_identifier(experiment_id, "experiment_id")
+        self._require_experiment(experiment_id)
+        return self._repo.list_backfill_runs(experiment_id, limit=limit)
+
+    def get_backfill_run(self, backfill_run_id: str) -> dict[str, Any]:
+        backfill_run_id = sanitize_identifier(backfill_run_id, "backfill_run_id")
+        run = self._repo.get_backfill_run(backfill_run_id)
+        if not run:
+            raise ResearchPipelineNotFoundError(f"backfill run not found: {backfill_run_id}")
+        return run
+
+    def preview_hmm_backfill(self, experiment_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        experiment_id = sanitize_identifier(experiment_id, "experiment_id")
+        self._require_experiment(experiment_id)
+        data = dict(payload or {})
+        recorder = HMMBacktestRecorder(self._repo)
+        return recorder.create_backfill_preview(
+            experiment_id,
+            data,
+            created_by=str(data.get("created_by") or "codex"),
+        )
+
+    def execute_hmm_backfill(self, experiment_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        experiment_id = sanitize_identifier(experiment_id, "experiment_id")
+        self._require_experiment(experiment_id)
+        data = dict(payload or {})
+        recorder = HMMBacktestRecorder(self._repo)
+        return recorder.execute_backfill(
+            experiment_id,
+            data,
+            created_by=str(data.get("created_by") or "codex"),
+        )
 
     def run_stage(self, experiment_id: str, stage_name: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         return self._start_stage_attempt(

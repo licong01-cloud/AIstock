@@ -55,11 +55,11 @@ def _registry_with_capture() -> tuple[ModuleRegistry, FakeMCP, list[dict[str, An
     return registry, mcp, calls
 
 
-def test_research_module_registers_exactly_12_tools() -> None:
+def test_research_module_registers_exactly_16_tools() -> None:
     registry, mcp, _calls = _registry_with_capture()
 
-    assert registry.tool_count("research") == 12
-    assert registry.total_tool_count() == 12
+    assert registry.tool_count("research") == 16
+    assert registry.total_tool_count() == 16
     assert set(mcp.tools) == {
         "research_create_experiment",
         "research_list_experiments",
@@ -69,6 +69,10 @@ def test_research_module_registers_exactly_12_tools() -> None:
         "research_get_stage_result",
         "research_compare_baseline",
         "research_list_artifact_refs",
+        "research_list_backtest_records",
+        "research_hmm_backfill_preview",
+        "research_hmm_backfill_execute",
+        "research_get_backfill_run",
         "research_get_pipeline_types",
         "research_create_issue",
         "research_promote",
@@ -152,6 +156,81 @@ def test_research_tools_call_expected_http_contracts() -> None:
         "body": {},
     }
 
+    tools["research_list_backtest_records"](
+        "exp_1",
+        research_domain="hmm",
+        dedup_status="primary",
+        qe_archive_representative=True,
+        source_task_id="task_1",
+        hmm_config_sig="hmm_sig",
+        non_hmm_config_sig="base_sig",
+        limit=9,
+        offset=2,
+    )
+    assert calls[-1] == {
+        "method": "GET",
+        "path": "/api/v1/research-pipeline/experiments/exp_1/backtest-records",
+        "query": {
+            "research_domain": "hmm",
+            "dedup_status": "primary",
+            "qe_archive_representative": "true",
+            "source_task_id": "task_1",
+            "hmm_config_sig": "hmm_sig",
+            "non_hmm_config_sig": "base_sig",
+            "limit": "9",
+            "offset": "2",
+        },
+        "body": {},
+    }
+
+    tools["research_hmm_backfill_preview"](
+        "exp_1",
+        {
+            "source_mode": "historical_file",
+            "source_scope": {"path": "research/hmm", "source_file": "docs/archive.json"},
+            "policy": {"dedup": "strict"},
+            "created_by": "codex",
+        },
+    )
+    assert calls[-1] == {
+        "method": "POST",
+        "path": "/api/v1/research-pipeline/experiments/exp_1/hmm-backtests/backfill-preview",
+        "query": {},
+        "body": {
+            "source_mode": "historical_file",
+            "source_scope": {"path": "research/hmm", "source_file": "docs/archive.json"},
+            "policy": {"dedup": "strict"},
+            "created_by": "codex",
+        },
+    }
+
+    tools["research_hmm_backfill_execute"](
+        "exp_1",
+        payload={"preview_id": "preview_1", "dry_run": False},
+        confirm=research.RESEARCH_HMM_BACKFILL_EXECUTE_CONFIRM,
+    )
+    assert calls[-1] == {
+        "method": "POST",
+        "path": "/api/v1/research-pipeline/experiments/exp_1/hmm-backtests/backfill-execute",
+        "query": {},
+        "body": {
+            "preview_id": "preview_1",
+            "dry_run": False,
+            "confirm": research.RESEARCH_HMM_BACKFILL_EXECUTE_CONFIRM,
+        },
+    }
+
+    tools["research_hmm_backfill_execute"](
+        "exp_1",
+        payload={"confirm": "WRONG", "dry_run": True},
+        confirm=research.RESEARCH_HMM_BACKFILL_EXECUTE_CONFIRM,
+    )
+    assert calls[-1]["body"] == {"confirm": research.RESEARCH_HMM_BACKFILL_EXECUTE_CONFIRM, "dry_run": True}
+
+    tools["research_get_backfill_run"]("rp_bf_1")
+    assert calls[-1]["method"] == "GET"
+    assert calls[-1]["path"] == "/api/v1/research-pipeline/backfill-runs/rp_bf_1"
+
     tools["research_get_pipeline_types"]()
     assert calls[-1]["method"] == "GET"
     assert calls[-1]["path"] == "/api/v1/research-pipeline/pipeline-types"
@@ -211,6 +290,12 @@ def test_research_tools_call_expected_http_contracts() -> None:
             {},
             research.RESEARCH_PROMOTE_CONFIRM,
         ),
+        (
+            "research_hmm_backfill_execute",
+            ("exp_1",),
+            {},
+            research.RESEARCH_HMM_BACKFILL_EXECUTE_CONFIRM,
+        ),
     ],
 )
 def test_confirmed_research_tools_reject_before_http(
@@ -238,6 +323,14 @@ def test_confirmed_research_tools_reject_before_http(
             {"confirm": research.RESEARCH_RUN_STAGE_CONFIRM},
         ),
         ("research_list_artifact_refs", ("exp 1",), {}),
+        ("research_list_backtest_records", ("exp/1",), {}),
+        ("research_hmm_backfill_preview", ("../exp_1",), {}),
+        (
+            "research_hmm_backfill_execute",
+            ("exp 1",),
+            {"confirm": research.RESEARCH_HMM_BACKFILL_EXECUTE_CONFIRM},
+        ),
+        ("research_get_backfill_run", ("rp_bf/1",), {}),
     ],
 )
 def test_research_tools_reject_unsafe_path_fragments_before_http(
@@ -251,6 +344,26 @@ def test_research_tools_reject_unsafe_path_fragments_before_http(
         mcp.tools[tool_name](*args, **kwargs)
 
     assert calls == []
+
+
+def test_research_backfill_tools_reject_source_file_outside_project_before_http() -> None:
+    _registry, mcp, calls = _registry_with_capture()
+
+    with pytest.raises(ValueError, match="source_file"):
+        mcp.tools["research_hmm_backfill_preview"](
+            "exp_1",
+            {"source_scope": {"source_file": "C:/outside/archive.json"}},
+        )
+
+    with pytest.raises(ValueError, match="source_file"):
+        mcp.tools["research_hmm_backfill_execute"](
+            "exp_1",
+            payload={"source_scope": {"source_file": "C:/outside/archive.json"}},
+            confirm=research.RESEARCH_HMM_BACKFILL_EXECUTE_CONFIRM,
+        )
+
+    assert calls == []
+
 
 
 def test_research_promote_requires_issue_url_before_http() -> None:

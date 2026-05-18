@@ -20,7 +20,7 @@ except ImportError:  # pragma: no cover - direct script execution convenience.
     from backend.db.pg_pool import get_conn
 
 
-RESEARCH_PIPELINE_SCHEMA_VERSION = "research_pipeline_v1_20260518"
+RESEARCH_PIPELINE_SCHEMA_VERSION = "research_pipeline_v2_20260519_hmm_backtest"
 
 RESEARCH_PIPELINE_TABLES: tuple[str, ...] = (
     "research_pipeline.schema_version",
@@ -31,6 +31,8 @@ RESEARCH_PIPELINE_TABLES: tuple[str, ...] = (
     "research_pipeline.artifact_ref",
     "research_pipeline.comparison",
     "research_pipeline.pipeline_event",
+    "research_pipeline.backtest_record",
+    "research_pipeline.backfill_run",
 )
 
 BASE_DDL: list[str] = [
@@ -190,6 +192,77 @@ BASE_DDL: list[str] = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_rp_pipeline_event_experiment_created ON research_pipeline.pipeline_event(experiment_id, created_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_rp_pipeline_event_attempt_created ON research_pipeline.pipeline_event(stage_attempt_id, created_at DESC)",
+
+    """
+    CREATE TABLE IF NOT EXISTS research_pipeline.backtest_record (
+        record_id TEXT PRIMARY KEY,
+        experiment_id TEXT NOT NULL REFERENCES research_pipeline.experiment(experiment_id) ON DELETE CASCADE,
+        stage_attempt_id TEXT REFERENCES research_pipeline.stage_attempt(stage_attempt_id) ON DELETE SET NULL,
+        pipeline_type TEXT NOT NULL DEFAULT 'hmm_research',
+        research_domain TEXT NOT NULL DEFAULT 'hmm',
+        source_type TEXT NOT NULL,
+        source_task_id TEXT NOT NULL,
+        source_loop_id TEXT NOT NULL,
+        source_loop_index INTEGER,
+        source_experiment_id TEXT,
+        source_created_at TIMESTAMPTZ,
+        record_version TEXT NOT NULL DEFAULT 'hmm_backtest_record_v1',
+        record_key_sha256 TEXT NOT NULL,
+        non_hmm_config_sig TEXT,
+        hmm_config_sig TEXT,
+        strict_family_sig TEXT,
+        archive_family_sig TEXT,
+        dedup_status TEXT NOT NULL DEFAULT 'primary',
+        qe_archive_eligible BOOLEAN NOT NULL DEFAULT FALSE,
+        qe_archive_representative BOOLEAN NOT NULL DEFAULT FALSE,
+        rejection_reason TEXT,
+        ann DOUBLE PRECISION,
+        mdd DOUBLE PRECISION,
+        ir DOUBLE PRECISION,
+        ic DOUBLE PRECISION,
+        rank_ic DOUBLE PRECISION,
+        sharpe DOUBLE PRECISION,
+        turnover DOUBLE PRECISION,
+        metrics_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        hmm_config_summary_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        config_summary_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        source_payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        recorded_by TEXT NOT NULL DEFAULT 'auto_hook',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT uq_rp_backtest_record_source UNIQUE (source_type, source_task_id, source_loop_id, source_loop_index, record_version),
+        CONSTRAINT uq_rp_backtest_record_key UNIQUE (record_key_sha256),
+        CONSTRAINT ck_rp_backtest_source_type CHECK (source_type IN ('qe_loop','historical_file','manual_repair')),
+        CONSTRAINT ck_rp_backtest_dedup_status CHECK (dedup_status IN ('primary','duplicate_same_config','hmm_variant','excluded'))
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_rp_backtest_experiment_created ON research_pipeline.backtest_record(experiment_id, source_created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_rp_backtest_non_hmm_family ON research_pipeline.backtest_record(experiment_id, non_hmm_config_sig)",
+    "CREATE INDEX IF NOT EXISTS idx_rp_backtest_hmm_family ON research_pipeline.backtest_record(experiment_id, hmm_config_sig)",
+    "CREATE INDEX IF NOT EXISTS idx_rp_backtest_archive_family ON research_pipeline.backtest_record(experiment_id, archive_family_sig)",
+    "CREATE INDEX IF NOT EXISTS idx_rp_backtest_representative ON research_pipeline.backtest_record(experiment_id, qe_archive_representative)",
+    "CREATE INDEX IF NOT EXISTS idx_rp_backtest_source_task_loop ON research_pipeline.backtest_record(source_task_id, source_loop_index)",
+    """
+    CREATE TABLE IF NOT EXISTS research_pipeline.backfill_run (
+        backfill_run_id TEXT PRIMARY KEY,
+        experiment_id TEXT NOT NULL REFERENCES research_pipeline.experiment(experiment_id) ON DELETE CASCADE,
+        backfill_type TEXT NOT NULL DEFAULT 'hmm_backtest_timeline',
+        status TEXT NOT NULL DEFAULT 'previewed',
+        dry_run BOOLEAN NOT NULL DEFAULT TRUE,
+        source_scope_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        source_fingerprint_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        counts_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        stage_attempt_id TEXT REFERENCES research_pipeline.stage_attempt(stage_attempt_id) ON DELETE SET NULL,
+        error_message TEXT,
+        created_by TEXT NOT NULL DEFAULT 'codex',
+        started_at TIMESTAMPTZ,
+        completed_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT ck_rp_backfill_status CHECK (status IN ('previewed','running','completed','failed','cancelled'))
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_rp_backfill_experiment_created ON research_pipeline.backfill_run(experiment_id, created_at DESC)",
     """
     INSERT INTO research_pipeline.schema_version(version, description)
     VALUES (%s, 'Research Pipeline metadata schema bootstrap')
@@ -206,6 +279,8 @@ TABLE_COMMENTS: dict[str, str] = {
     "research_pipeline.artifact_ref": "References to candidate or validated artifacts without taking ownership of asset registries.",
     "research_pipeline.comparison": "Baseline versus candidate metrics, criteria, verdict, and explanation.",
     "research_pipeline.pipeline_event": "Audit event stream for experiment, stage, comparison, issue, and promotion decisions.",
+    "research_pipeline.backtest_record": "Queryable HMM backtest timeline records captured by Research Pipeline.",
+    "research_pipeline.backfill_run": "Historical backfill preview and execution audit records for Research Pipeline.",
 }
 
 COLUMN_COMMENTS: dict[str, dict[str, str]] = {
@@ -307,6 +382,61 @@ COLUMN_COMMENTS: dict[str, dict[str, str]] = {
         "payload_json": "Structured event payload for audit and UI display.",
         "created_by": "Actor that created the event.",
         "created_at": "Timestamp when the event row was created.",
+    },
+
+    "research_pipeline.backtest_record": {
+        "record_id": "Stable Research Pipeline backtest record identifier.",
+        "experiment_id": "Owning Research Pipeline experiment identifier.",
+        "stage_attempt_id": "Optional backtest_recording stage attempt that wrote this record.",
+        "pipeline_type": "Research pipeline type, currently hmm_research.",
+        "research_domain": "Research domain, currently hmm.",
+        "source_type": "Source kind such as qe_loop, historical_file, or manual_repair.",
+        "source_task_id": "Source QE task identifier.",
+        "source_loop_id": "Source QE loop identifier.",
+        "source_loop_index": "Source QE loop index.",
+        "source_experiment_id": "Source QE experiment identifier when available.",
+        "source_created_at": "Timestamp from the source loop or task when available.",
+        "record_version": "Version of the normalized HMM backtest record payload.",
+        "record_key_sha256": "Idempotency key hash for safe automatic and backfill writes.",
+        "non_hmm_config_sig": "Signature of factor, model, strategy, execution, stock pool, and label horizon configuration.",
+        "hmm_config_sig": "Signature of HMM-specific configuration.",
+        "strict_family_sig": "Strict full-family signature for duplicate detection.",
+        "archive_family_sig": "QE Archive representative-family signature excluding HMM-only sweep fields.",
+        "dedup_status": "Timeline dedup classification.",
+        "qe_archive_eligible": "Whether this record is eligible for QE Archive consideration.",
+        "qe_archive_representative": "Whether this record was selected as the QE Archive representative for its family.",
+        "rejection_reason": "Reason this record was excluded or not selected for QE Archive.",
+        "ann": "Annualized return metric.",
+        "mdd": "Maximum drawdown metric.",
+        "ir": "Information ratio or sharpe-like metric.",
+        "ic": "IC metric.",
+        "rank_ic": "RankIC metric.",
+        "sharpe": "Sharpe metric when separately available.",
+        "turnover": "Turnover metric when available.",
+        "metrics_json": "Additional normalized metrics.",
+        "hmm_config_summary_json": "HMM configuration summary for timeline display.",
+        "config_summary_json": "Non-HMM investment configuration summary.",
+        "source_payload_json": "Small source payload fragment used for audit and repair.",
+        "recorded_by": "Recorder actor such as auto_hook or backfill.",
+        "created_at": "Timestamp when the backtest record was created.",
+        "updated_at": "Timestamp when the backtest record was last updated.",
+    },
+    "research_pipeline.backfill_run": {
+        "backfill_run_id": "Stable Research Pipeline backfill run identifier.",
+        "experiment_id": "Target Research Pipeline experiment identifier.",
+        "backfill_type": "Backfill type such as hmm_backtest_timeline.",
+        "status": "Backfill lifecycle status.",
+        "dry_run": "Whether the run only previewed changes.",
+        "source_scope_json": "Source selection scope for the backfill.",
+        "source_fingerprint_json": "Source file or query fingerprint for reproducibility.",
+        "counts_json": "Inserted, updated, skipped, duplicate, and excluded counters.",
+        "stage_attempt_id": "Backtest recording stage attempt created by execute mode.",
+        "error_message": "Failure message if the backfill failed.",
+        "created_by": "Actor that requested the backfill.",
+        "started_at": "Timestamp when execution started.",
+        "completed_at": "Timestamp when execution completed.",
+        "created_at": "Timestamp when the backfill row was created.",
+        "updated_at": "Timestamp when the backfill row was last updated.",
     },
 }
 

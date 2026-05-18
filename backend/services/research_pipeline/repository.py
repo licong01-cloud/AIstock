@@ -16,6 +16,8 @@ from .models import (
     ExperimentRecord,
     ExternalRunLinkRecord,
     PipelineEventRecord,
+    BacktestRecord,
+    BackfillRunRecord,
     StageAttemptRecord,
     StagePlanRecord,
 )
@@ -105,6 +107,56 @@ PIPELINE_EVENT_COLUMNS = (
     "payload_json",
     "created_by",
 )
+BACKTEST_RECORD_COLUMNS = (
+    "record_id",
+    "experiment_id",
+    "stage_attempt_id",
+    "pipeline_type",
+    "research_domain",
+    "source_type",
+    "source_task_id",
+    "source_loop_id",
+    "source_loop_index",
+    "source_experiment_id",
+    "source_created_at",
+    "record_version",
+    "record_key_sha256",
+    "non_hmm_config_sig",
+    "hmm_config_sig",
+    "strict_family_sig",
+    "archive_family_sig",
+    "dedup_status",
+    "qe_archive_eligible",
+    "qe_archive_representative",
+    "rejection_reason",
+    "ann",
+    "mdd",
+    "ir",
+    "ic",
+    "rank_ic",
+    "sharpe",
+    "turnover",
+    "metrics_json",
+    "hmm_config_summary_json",
+    "config_summary_json",
+    "source_payload_json",
+    "recorded_by",
+)
+BACKFILL_RUN_COLUMNS = (
+    "backfill_run_id",
+    "experiment_id",
+    "backfill_type",
+    "status",
+    "dry_run",
+    "source_scope_json",
+    "source_fingerprint_json",
+    "counts_json",
+    "stage_attempt_id",
+    "error_message",
+    "created_by",
+    "started_at",
+    "completed_at",
+)
 JSON_COLUMNS = {
     "criteria_json",
     "baseline_ref_json",
@@ -115,6 +167,12 @@ JSON_COLUMNS = {
     "candidate_ref_json",
     "metrics_json",
     "payload_json",
+    "hmm_config_summary_json",
+    "config_summary_json",
+    "source_payload_json",
+    "source_scope_json",
+    "source_fingerprint_json",
+    "counts_json",
 }
 
 
@@ -315,6 +373,109 @@ class ResearchPipelineRepository:
         return self._query(
             "SELECT * FROM research_pipeline.pipeline_event WHERE experiment_id = %s ORDER BY created_at DESC",
             (experiment_id,),
+        )
+
+
+    def upsert_backtest_record(self, record: BacktestRecord | Mapping[str, Any]) -> dict[str, Any]:
+        if isinstance(record, Mapping):
+            record = BacktestRecord(**dict(record))
+        return self._insert(
+            "research_pipeline.backtest_record",
+            BACKTEST_RECORD_COLUMNS,
+            record.model_dump(),
+            on_conflict=(
+                "ON CONFLICT (record_key_sha256) DO UPDATE SET "
+                "stage_attempt_id = COALESCE(EXCLUDED.stage_attempt_id, research_pipeline.backtest_record.stage_attempt_id), "
+                "dedup_status = EXCLUDED.dedup_status, "
+                "qe_archive_eligible = EXCLUDED.qe_archive_eligible, "
+                "qe_archive_representative = EXCLUDED.qe_archive_representative, "
+                "rejection_reason = EXCLUDED.rejection_reason, "
+                "ann = EXCLUDED.ann, mdd = EXCLUDED.mdd, ir = EXCLUDED.ir, ic = EXCLUDED.ic, "
+                "rank_ic = EXCLUDED.rank_ic, sharpe = EXCLUDED.sharpe, turnover = EXCLUDED.turnover, "
+                "metrics_json = EXCLUDED.metrics_json, "
+                "hmm_config_summary_json = EXCLUDED.hmm_config_summary_json, "
+                "config_summary_json = EXCLUDED.config_summary_json, "
+                "source_payload_json = EXCLUDED.source_payload_json, "
+                "recorded_by = EXCLUDED.recorded_by, updated_at = NOW()"
+            ),
+        )
+
+    def list_backtest_records(
+        self,
+        experiment_id: str,
+        *,
+        research_domain: str | None = None,
+        dedup_status: str | None = None,
+        qe_archive_representative: bool | None = None,
+        source_task_id: str | None = None,
+        hmm_config_sig: str | None = None,
+        non_hmm_config_sig: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit or 100), 500))
+        offset = max(0, int(offset or 0))
+        filters = ["experiment_id = %s"]
+        params: list[Any] = [experiment_id]
+        if research_domain:
+            filters.append("research_domain = %s")
+            params.append(research_domain)
+        if dedup_status:
+            filters.append("dedup_status = %s")
+            params.append(dedup_status)
+        if qe_archive_representative is not None:
+            filters.append("qe_archive_representative = %s")
+            params.append(bool(qe_archive_representative))
+        if source_task_id:
+            filters.append("source_task_id = %s")
+            params.append(source_task_id)
+        if hmm_config_sig:
+            filters.append("hmm_config_sig = %s")
+            params.append(hmm_config_sig)
+        if non_hmm_config_sig:
+            filters.append("non_hmm_config_sig = %s")
+            params.append(non_hmm_config_sig)
+        params.extend([limit, offset])
+        return self._query(
+            f"""
+            SELECT * FROM research_pipeline.backtest_record
+            WHERE {' AND '.join(filters)}
+            ORDER BY source_created_at NULLS LAST, source_task_id ASC, source_loop_index ASC NULLS LAST
+            LIMIT %s OFFSET %s
+            """,
+            tuple(params),
+        )
+
+    def create_backfill_run(self, record: BackfillRunRecord | Mapping[str, Any]) -> dict[str, Any]:
+        if isinstance(record, Mapping):
+            record = BackfillRunRecord(**dict(record))
+        return self._insert("research_pipeline.backfill_run", BACKFILL_RUN_COLUMNS, record.model_dump())
+
+    def update_backfill_run(self, backfill_run_id: str, updates: Mapping[str, Any]) -> dict[str, Any]:
+        return self._update(
+            "research_pipeline.backfill_run",
+            "backfill_run_id",
+            backfill_run_id,
+            BACKFILL_RUN_COLUMNS,
+            updates,
+        )
+
+    def get_backfill_run(self, backfill_run_id: str) -> dict[str, Any] | None:
+        return self._get_one(
+            "SELECT * FROM research_pipeline.backfill_run WHERE backfill_run_id = %s",
+            (backfill_run_id,),
+        )
+
+    def list_backfill_runs(self, experiment_id: str, *, limit: int = 50) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit or 50), 200))
+        return self._query(
+            """
+            SELECT * FROM research_pipeline.backfill_run
+            WHERE experiment_id = %s
+            ORDER BY created_at DESC
+            LIMIT %s
+            """,
+            (experiment_id, limit),
         )
 
     def _insert(

@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from backend.routers import research_pipeline
 from backend.services.research_pipeline import (
+    RESEARCH_HMM_BACKFILL_EXECUTE_CONFIRM,
     RESEARCH_PROMOTE_CONFIRM,
     RESEARCH_RETRY_STAGE_CONFIRM,
     RESEARCH_RUN_STAGE_CONFIRM,
@@ -59,6 +60,29 @@ class FakeResearchPipelineService:
     def list_artifact_refs(self, experiment_id: str, **kwargs: Any) -> list[dict[str, Any]]:
         self._record("list_artifact_refs", experiment_id, **kwargs)
         return [{"experiment_id": experiment_id, "domain_type": kwargs.get("domain_type") or "model"}]
+
+
+    def list_backtest_records(self, experiment_id: str, **kwargs: Any) -> list[dict[str, Any]]:
+        self._record("list_backtest_records", experiment_id, **kwargs)
+        return [{"experiment_id": experiment_id, "source_task_id": kwargs.get("source_task_id") or "task_1"}]
+
+    def list_backfill_runs(self, experiment_id: str, *, limit: int = 50) -> list[dict[str, Any]]:
+        self._record("list_backfill_runs", experiment_id, limit=limit)
+        return [{"experiment_id": experiment_id, "backfill_run_id": "rp_bf_1", "status": "completed"}]
+
+    def preview_hmm_backfill(self, experiment_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        self._record("preview_hmm_backfill", experiment_id, payload)
+        return {"preview_id": "rp_bf_preview", "counts": {"would_insert": 1}}
+
+    def execute_hmm_backfill(self, experiment_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        self._record("execute_hmm_backfill", experiment_id, payload)
+        return {"backfill_run_id": "rp_bf_exec", "status": "completed", "counts": {"inserted": 1}}
+
+    def get_backfill_run(self, backfill_run_id: str) -> dict[str, Any]:
+        self._record("get_backfill_run", backfill_run_id)
+        if backfill_run_id == "missing":
+            raise ResearchPipelineNotFoundError("backfill run not found: missing")
+        return {"backfill_run_id": backfill_run_id, "status": "completed"}
 
     def get_pipeline_types(self) -> dict[str, Any]:
         self._record("get_pipeline_types")
@@ -182,6 +206,11 @@ def test_request_validation_returns_422(client: TestClient, method: str, path: s
             {"issue_url": "https://github.com/example/repo/issues/1", "payload": {"target": "candidate"}, "confirm": "WRONG"},
             RESEARCH_PROMOTE_CONFIRM,
         ),
+        (
+            "/api/v1/research-pipeline/experiments/exp_1/hmm-backtests/backfill-execute",
+            {"source_scope": {"source_file": "archive.json"}, "dry_run": False, "confirm": "WRONG"},
+            RESEARCH_HMM_BACKFILL_EXECUTE_CONFIRM,
+        ),
     ],
 )
 def test_confirm_guard_rejects_run_retry_promote_before_service_call(
@@ -217,6 +246,17 @@ def test_phase2_mcp_route_paths_are_accepted_by_router(client: TestClient) -> No
         client.get("/api/v1/research-pipeline/experiments/exp_1/stages/qe_shadow"),
         client.post("/api/v1/research-pipeline/experiments/exp_1/compare", json={"baseline": "v25_1", "verdict": "pass"}),
         client.get("/api/v1/research-pipeline/experiments/exp_1/artifact-refs"),
+        client.get("/api/v1/research-pipeline/experiments/exp_1/backtest-records", params={"source_task_id": "task_1"}),
+        client.get("/api/v1/research-pipeline/experiments/exp_1/backfill-runs"),
+        client.post(
+            "/api/v1/research-pipeline/experiments/exp_1/hmm-backtests/backfill-preview",
+            json={"source_scope": {"source_file": "archive.json"}},
+        ),
+        client.post(
+            "/api/v1/research-pipeline/experiments/exp_1/hmm-backtests/backfill-execute",
+            json={"source_scope": {"source_file": "archive.json"}, "dry_run": True, "confirm": RESEARCH_HMM_BACKFILL_EXECUTE_CONFIRM},
+        ),
+        client.get("/api/v1/research-pipeline/backfill-runs/rp_bf_exec"),
         client.get("/api/v1/research-pipeline/pipeline-types"),
         client.post("/api/v1/research-pipeline/issues", json={"title": "Research blocked"}),
         client.post(

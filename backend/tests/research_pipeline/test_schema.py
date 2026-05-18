@@ -15,7 +15,7 @@ def _ddl_text() -> str:
 def test_research_pipeline_schema_declares_core_tables() -> None:
     ddl = _ddl_text()
 
-    assert RESEARCH_PIPELINE_SCHEMA_VERSION == "research_pipeline_v1_20260518"
+    assert RESEARCH_PIPELINE_SCHEMA_VERSION == "research_pipeline_v2_20260519_hmm_backtest"
     assert "CREATE SCHEMA IF NOT EXISTS research_pipeline" in ddl
     for table in (
         "research_pipeline.schema_version",
@@ -26,6 +26,8 @@ def test_research_pipeline_schema_declares_core_tables() -> None:
         "research_pipeline.artifact_ref",
         "research_pipeline.comparison",
         "research_pipeline.pipeline_event",
+        "research_pipeline.backtest_record",
+        "research_pipeline.backfill_run",
     ):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in ddl
     assert "CREATE TABLE IF NOT EXISTS public." not in ddl
@@ -42,6 +44,11 @@ def test_research_pipeline_schema_has_required_status_and_reference_constraints(
     assert "domain_type IN ('factor','model','strategy_pkg','qe_archive','event_signal','hmm_artifact','file')" in ddl
     assert "status IN ('candidate','validated','superseded','deleted')" in ddl
     assert "verdict IN ('pass','fail','inconclusive','blocked')" in ddl
+    assert "source_type IN ('qe_loop','historical_file','manual_repair')" in ddl
+    assert "dedup_status IN ('primary','duplicate_same_config','hmm_variant','excluded')" in ddl
+    assert "status IN ('previewed','running','completed','failed','cancelled')" in ddl
+    assert "UNIQUE (source_type, source_task_id, source_loop_id, source_loop_index, record_version)" in ddl
+    assert "UNIQUE (record_key_sha256)" in ddl
 
 
 def test_research_pipeline_schema_has_required_indexes() -> None:
@@ -55,6 +62,11 @@ def test_research_pipeline_schema_has_required_indexes() -> None:
         "idx_rp_artifact_ref_experiment_domain_status",
         "idx_rp_comparison_experiment_created",
         "idx_rp_pipeline_event_experiment_created",
+        "idx_rp_backtest_experiment_created",
+        "idx_rp_backtest_non_hmm_family",
+        "idx_rp_backtest_hmm_family",
+        "idx_rp_backtest_archive_family",
+        "idx_rp_backfill_experiment_created",
     ):
         assert index_fragment in ddl
 

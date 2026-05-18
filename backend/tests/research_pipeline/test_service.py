@@ -8,6 +8,8 @@ from backend.services.research_pipeline.models import (
     ExperimentRecord,
     ExternalRunLinkRecord,
     PipelineEventRecord,
+    BackfillRunRecord,
+    BacktestRecord,
     StageAttemptRecord,
     StagePlanRecord,
 )
@@ -23,6 +25,8 @@ class FakeResearchPipelineRepository:
         self.links: list[dict[str, Any]] = []
         self.comparisons: list[dict[str, Any]] = []
         self.events: list[dict[str, Any]] = []
+        self.backtest_records: dict[str, dict[str, Any]] = {}
+        self.backfill_runs: dict[str, dict[str, Any]] = {}
 
     def create_experiment(self, record: ExperimentRecord) -> dict[str, Any]:
         row = record.model_dump()
@@ -132,6 +136,42 @@ class FakeResearchPipelineRepository:
     def list_pipeline_events(self, experiment_id: str) -> list[dict[str, Any]]:
         return [row for row in self.events if row.get("experiment_id") == experiment_id]
 
+    def upsert_backtest_record(self, record: BacktestRecord) -> dict[str, Any]:
+        row = record.model_dump()
+        existing = self.backtest_records.get(row["record_key_sha256"])
+        if existing:
+            existing.update(row)
+            return existing
+        self.backtest_records[row["record_key_sha256"]] = row
+        return row
+
+    def list_backtest_records(self, experiment_id: str, **kwargs: Any) -> list[dict[str, Any]]:
+        rows = [row for row in self.backtest_records.values() if row["experiment_id"] == experiment_id]
+        for key in ("research_domain", "dedup_status", "source_task_id", "hmm_config_sig", "non_hmm_config_sig"):
+            if kwargs.get(key):
+                rows = [row for row in rows if row.get(key) == kwargs[key]]
+        if kwargs.get("qe_archive_representative") is not None:
+            rows = [row for row in rows if row.get("qe_archive_representative") is bool(kwargs["qe_archive_representative"])]
+        offset = int(kwargs.get("offset") or 0)
+        limit = int(kwargs.get("limit") or 100)
+        return rows[offset : offset + limit]
+
+    def create_backfill_run(self, record: BackfillRunRecord) -> dict[str, Any]:
+        row = record.model_dump()
+        self.backfill_runs[row["backfill_run_id"]] = row
+        return row
+
+    def update_backfill_run(self, backfill_run_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        self.backfill_runs[backfill_run_id].update(updates)
+        return self.backfill_runs[backfill_run_id]
+
+    def get_backfill_run(self, backfill_run_id: str) -> dict[str, Any] | None:
+        return self.backfill_runs.get(backfill_run_id)
+
+    def list_backfill_runs(self, experiment_id: str, *, limit: int = 50) -> list[dict[str, Any]]:
+        rows = [row for row in self.backfill_runs.values() if row["experiment_id"] == experiment_id]
+        return rows[:limit]
+
 
 def test_create_experiment_defaults_to_draft_and_stage_plan() -> None:
     repo = FakeResearchPipelineRepository()
@@ -145,6 +185,7 @@ def test_create_experiment_defaults_to_draft_and_stage_plan() -> None:
         "artifact_gen",
         "offline_validation",
         "portfolio_simulation",
+        "backtest_recording",
         "qe_shadow",
     ]
     assert repo.events[-1]["event_type"] == "experiment_created"
@@ -319,3 +360,43 @@ def test_offline_completion_rejects_qe_shadow_until_phase5() -> None:
         assert "offline completion" in str(exc)
     else:
         raise AssertionError("qe_shadow offline completion should be rejected in Phase 4")
+
+
+def test_backtest_records_and_backfill_runs_are_queryable() -> None:
+    repo = FakeResearchPipelineRepository()
+    service = ResearchPipelineService(repo)
+    experiment = service.create_experiment(pipeline_type="hmm_research", title="HMM timeline")
+    experiment_id = experiment["experiment_id"]
+
+    record = repo.upsert_backtest_record(
+        BacktestRecord(
+            experiment_id=experiment_id,
+            source_type="qe_loop",
+            source_task_id="task_1",
+            source_loop_id="loop_1",
+            source_loop_index=1,
+            record_key_sha256="key_1",
+            non_hmm_config_sig="family_a",
+            hmm_config_sig="hmm_a",
+            dedup_status="primary",
+            qe_archive_representative=True,
+            ann=0.42,
+        )
+    )
+    run = repo.create_backfill_run(BackfillRunRecord(experiment_id=experiment_id, counts_json={"would_insert": 1}))
+
+    assert service.list_backtest_records(experiment_id, qe_archive_representative=True) == [record]
+    assert service.list_backfill_runs(experiment_id) == [run]
+    assert service.get_backfill_run(run["backfill_run_id"]) == run
+
+
+def test_get_backfill_run_missing_raises_not_found() -> None:
+    repo = FakeResearchPipelineRepository()
+    service = ResearchPipelineService(repo)
+
+    try:
+        service.get_backfill_run("rp_bf_missing")
+    except ValueError as exc:
+        assert "backfill run not found" in str(exc)
+    else:
+        raise AssertionError("missing backfill run should raise")
