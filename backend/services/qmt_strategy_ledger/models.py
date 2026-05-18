@@ -7,9 +7,11 @@ connect to MiniQMT, submit orders, or persist database rows.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Any
+from uuid import uuid4
 
 BUY_ORDER_TYPE = 23
 SELL_ORDER_TYPE = 24
@@ -43,6 +45,51 @@ class AnomalyType(str, Enum):
     TRADE_STRATEGY_MISMATCH = "TRADE_STRATEGY_MISMATCH"
     SELL_WITHOUT_AVAILABLE_LOT = "SELL_WITHOUT_AVAILABLE_LOT"
     UNKNOWN_ORDER_STATUS = "UNKNOWN_ORDER_STATUS"
+
+
+class VirtualAccountStatus(str, Enum):
+    DRAFT = "DRAFT"
+    ENABLED = "ENABLED"
+    PAUSED = "PAUSED"
+    DISABLED = "DISABLED"
+    ARCHIVED = "ARCHIVED"
+
+
+class BindingStatus(str, Enum):
+    ACTIVE = "ACTIVE"
+    PAUSED = "PAUSED"
+    RETIRED = "RETIRED"
+
+
+class IntentPreflightStatus(str, Enum):
+    PENDING = "PENDING"
+    PASSED = "PASSED"
+    FAILED = "FAILED"
+
+
+class IntentSubmitStatus(str, Enum):
+    CREATED = "CREATED"
+    SUBMITTED = "SUBMITTED"
+    ACCEPTED = "ACCEPTED"
+    REJECTED = "REJECTED"
+    CANCELLED = "CANCELLED"
+
+
+class PositionLotStatus(str, Enum):
+    OPEN = "OPEN"
+    PARTIALLY_CLOSED = "PARTIALLY_CLOSED"
+    CLOSED = "CLOSED"
+
+
+class CashEntryType(str, Enum):
+    INITIAL_ALLOCATE = "INITIAL_ALLOCATE"
+    FREEZE_BUY = "FREEZE_BUY"
+    UNFREEZE_CANCEL = "UNFREEZE_CANCEL"
+    UNFREEZE_REJECT = "UNFREEZE_REJECT"
+    BUY_FILL = "BUY_FILL"
+    SELL_FILL = "SELL_FILL"
+    FEE = "FEE"
+    MANUAL_ADJUST = "MANUAL_ADJUST"
 
 
 @dataclass(frozen=True)
@@ -277,6 +324,239 @@ class StrategyLedgerSnapshot:
             "order_lifecycle_counts": dict(sorted(lifecycle_counts.items())),
             "overlap_symbols": list(self.overlap_symbols),
         }
+
+
+@dataclass(frozen=True)
+class VirtualAccount:
+    strategy_id: str
+    strategy_name: str
+    display_name: str
+    account_id: str
+    mode: str
+    initial_cash: Decimal
+    cash: Decimal
+    frozen_cash: Decimal = Decimal("0")
+    market_value: Decimal = Decimal("0")
+    realized_pnl: Decimal = Decimal("0")
+    unrealized_pnl: Decimal = Decimal("0")
+    status: VirtualAccountStatus = VirtualAccountStatus.DRAFT
+    risk_config: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass(frozen=True)
+class StrategyPackageBinding:
+    binding_id: str
+    strategy_id: str
+    package_id: str
+    manifest_sha256: str
+    selection_run_id: str | None = None
+    trade_date: date | None = None
+    target_weight: Decimal | None = None
+    top_k: int | None = None
+    binding_status: BindingStatus = BindingStatus.ACTIVE
+    runtime_config: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass(frozen=True)
+class OrderIntentRecord:
+    intent_id: str
+    strategy_id: str
+    strategy_name: str
+    symbol: str
+    side: str
+    order_type: int
+    quantity: int
+    price_type: int
+    order_remark: str
+    account_id: str
+    trade_date: date
+    batch_id: str | None = None
+    package_id: str | None = None
+    selection_run_id: str | None = None
+    limit_price: Decimal | None = None
+    target_weight: Decimal | None = None
+    estimated_notional: Decimal | None = None
+    estimated_fee: Decimal | None = None
+    preflight_status: IntentPreflightStatus = IntentPreflightStatus.PASSED
+    submit_status: IntentSubmitStatus = IntentSubmitStatus.CREATED
+    metadata: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    submitted_at: datetime | None = None
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass(frozen=True)
+class OrderLedgerRecord:
+    intent_id: str
+    strategy_id: str
+    strategy_name: str
+    qmt_order_id: str
+    symbol: str
+    order_type: int
+    order_volume: int
+    traded_volume: int
+    order_status: int | None
+    account_id: str
+    trade_date: date
+    qmt_order_sysid: str | None = None
+    price_type: int | None = None
+    price: Decimal = Decimal("0")
+    traded_price: Decimal = Decimal("0")
+    status_msg: str = ""
+    order_remark: str = ""
+    raw_json: dict[str, Any] = field(default_factory=dict)
+    last_synced_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass(frozen=True)
+class OrderStatusEventRecord:
+    event_id: str
+    intent_id: str | None
+    qmt_order_id: str | None
+    event_type: str
+    event_time: datetime
+    account_id: str
+    qmt_order_sysid: str | None = None
+    qmt_order_status: int | None = None
+    status_msg: str | None = None
+    raw_json: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class TradeLedgerRecord:
+    trade_id: str
+    intent_id: str
+    strategy_id: str
+    qmt_order_id: str
+    symbol: str
+    side: str
+    price: Decimal
+    quantity: int
+    amount: Decimal
+    trade_date: date
+    account_id: str
+    qmt_order_sysid: str | None = None
+    commission: Decimal = Decimal("0")
+    trade_time: datetime | None = None
+    order_remark: str = ""
+    raw_json: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class PositionLotRecord:
+    lot_id: str
+    strategy_id: str
+    symbol: str
+    open_trade_id: str
+    open_date: date
+    quantity: int
+    available_quantity: int
+    remaining_quantity: int
+    avg_cost: Decimal
+    cost_amount: Decimal
+    account_id: str
+    open_time: datetime | None = None
+    realized_pnl: Decimal = Decimal("0")
+    status: PositionLotStatus = PositionLotStatus.OPEN
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class CashLedgerEntry:
+    cash_id: str
+    strategy_id: str
+    entry_type: CashEntryType
+    cash_delta: Decimal
+    cash_after: Decimal
+    account_id: str
+    trade_date: date
+    frozen_delta: Decimal = Decimal("0")
+    frozen_after: Decimal = Decimal("0")
+    intent_id: str | None = None
+    trade_id: str | None = None
+    symbol: str | None = None
+    reason: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass(frozen=True)
+class DailySnapshotRecord:
+    snapshot_id: str
+    strategy_id: str
+    account_id: str
+    trade_date: date
+    cash: Decimal
+    frozen_cash: Decimal
+    market_value: Decimal
+    realized_pnl: Decimal
+    unrealized_pnl: Decimal
+    total_equity: Decimal
+    positions_json: list[dict[str, Any]] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass(frozen=True)
+class ReconciliationRunRecord:
+    run_id: str
+    account_id: str
+    trade_date: date
+    status: str
+    started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    completed_at: datetime | None = None
+    summary_json: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ReconciliationIssueRecord:
+    issue_id: str
+    run_id: str
+    issue_type: str
+    severity: str
+    message: str
+    strategy_id: str | None = None
+    symbol: str | None = None
+    qmt_order_id: str | None = None
+    trade_id: str | None = None
+    context: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass(frozen=True)
+class UnattributedOrderRecord:
+    unattributed_id: str
+    account_id: str
+    trade_date: date
+    qmt_order_id: str
+    symbol: str
+    reason: str
+    order_remark: str = ""
+    raw_json: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass(frozen=True)
+class UnattributedTradeRecord:
+    unattributed_id: str
+    account_id: str
+    trade_date: date
+    trade_id: str
+    qmt_order_id: str
+    symbol: str
+    reason: str
+    order_remark: str = ""
+    raw_json: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+def new_id(prefix: str) -> str:
+    return f"{prefix}_{uuid4().hex}"
 
 
 def classify_order_lifecycle(order_status: int | None) -> OrderLifecycle:
