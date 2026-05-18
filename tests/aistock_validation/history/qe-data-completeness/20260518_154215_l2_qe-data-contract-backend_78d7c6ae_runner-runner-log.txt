@@ -1,0 +1,6 @@
+nox > Running session qe_data_contract_backend
+nox > python -m compileall scripts/aistock_validate.py backend/services/quantevolver/completion_contract.py
+nox > python -m pytest backend/tests/test_aistock_validate_metadata.py backend/tests/test_aistock_validate_coverage.py backend/tests/unified_engine/test_qe_completion_contract.py -q -p no:cacheprovider
+.................                                                        [100%]
+17 passed in 0.58s
+nox > Session qe_data_contract_backend was successful in a second.

@@ -6,7 +6,7 @@
   "module": "quantevolver",
   "severity": "P1",
   "risk_area": "data_freshness_policy",
-  "status": "fixed",
+  "status": "verified",
   "trigger_condition": {
     "scenario": "qe_backtest_cache_false_miss_due_latest_data_readiness_policy",
     "qe_cutoff": "2026-04-30",
@@ -21,14 +21,14 @@
   "fingerprint": "257a0b2a6c2c5a3d",
   "assigned_agent": "codex-app",
   "fix_branch": "bug/BUG-039-qe-data-freshness-profile",
-  "fix_commit": "a35ad89",
-  "verification_run_id": "qe-data-completeness_20260518_151108_l2_qe-data-contract-backend_208be9d7_runner-validation__0eeac31c24",
+  "fix_commit": "99c09add846bbf166bc4d8ae285b427dd11ab059",
+  "verification_run_id": "qe-data-completeness_20260518_154215_l2_qe-data-contract-backend_78d7c6ae_runner-validation__067387d595",
   "created_at": "2026-05-14T13:12:52Z",
   "first_seen_at": "2026-05-14T13:12:52Z",
-  "last_seen_at": "2026-05-18T15:32:17Z",
+  "last_seen_at": "2026-05-18T15:43:30Z",
   "fixed_at": "2026-05-18T15:27:49Z",
   "submitted_at": "2026-05-14T13:12:52Z",
-  "closed_at": null,
+  "closed_at": "2026-05-18T15:43:30Z",
   "allowed_write_scope": [],
   "suspected_modules": [
     "quantevolver"
@@ -115,6 +115,12 @@
       "actor": "codex-app",
       "action": "github_issue_reopened_for_pr_review",
       "note": "Reopened GitHub issue #23 after syncing fixed metadata so it remains visible until PR #35 is reviewed, merged, and verified on main."
+    },
+    {
+      "timestamp": "2026-05-18T15:43:30Z",
+      "actor": "codex-app",
+      "action": "status_changed",
+      "note": "PR #35 was merged to main as 99c09add846bbf166bc4d8ae285b427dd11ab059. Local main fast-forwarded to origin/main. Post-merge verification passed: targeted QE/cache pytest, Paper/Paper-v2 targeted pytest, py_compile, git diff --check, nox l0, and MCP qe_data_contract_backend. Production 8001/3000 and production DB were not touched."
     }
   ],
   "custom_github_labels": [
