@@ -1,0 +1,211 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import date
+from decimal import Decimal
+
+import pytest
+
+from backend.services.qmt_strategy_ledger.models import (
+    BindingStatus,
+    PositionLotRecord,
+    StrategyPackageBinding,
+    VirtualAccount,
+    VirtualAccountStatus,
+)
+from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyLedgerRepository
+from backend.services.qmt_strategy_ledger.selection_order_builder import SelectionOrderBuilder, SelectionOrderBuildConfig
+from backend.services.selection_center.models import SelectionCandidate, SelectionMode, SelectionRun, SelectionRunStatus
+from backend.services.trading_core.errors import DataUnavailableError
+
+
+ACCOUNT_ID = "62266303"
+TRADE_DATE = date(2026, 5, 18)
+
+
+@dataclass
+class FakeSelectionReader:
+    run: SelectionRun
+
+    def get_run(self, run_id: str) -> SelectionRun:
+        assert run_id == self.run.run_id
+        return self.run
+
+
+def _repo() -> InMemoryQmtStrategyLedgerRepository:
+    repo = InMemoryQmtStrategyLedgerRepository()
+    repo.create_virtual_account(
+        VirtualAccount(
+            strategy_id="strat_a",
+            strategy_name="poc_strategy_a",
+            display_name="POC Strategy A",
+            account_id=ACCOUNT_ID,
+            mode="SIM",
+            initial_cash=Decimal("10000000"),
+            cash=Decimal("10000000"),
+            status=VirtualAccountStatus.ENABLED,
+        )
+    )
+    return repo
+
+
+def _binding(target_weight: Decimal | None = Decimal("0.02"), top_k: int | None = None) -> StrategyPackageBinding:
+    return StrategyPackageBinding(
+        binding_id="bind_a",
+        strategy_id="strat_a",
+        package_id="pkg_a",
+        manifest_sha256="sha_a",
+        selection_run_id="sel_a",
+        trade_date=TRADE_DATE,
+        target_weight=target_weight,
+        top_k=top_k,
+        binding_status=BindingStatus.ACTIVE,
+    )
+
+
+def _selection_run(candidates: list[SelectionCandidate], *, status: SelectionRunStatus = SelectionRunStatus.SUCCEEDED) -> SelectionRun:
+    return SelectionRun(
+        run_id="sel_a",
+        mode=SelectionMode.SINGLE_PACKAGE,
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        package_ids=["pkg_a"],
+        status=status,
+        package_results={"pkg_a": candidates},
+        manifest_sha256_by_package={"pkg_a": "sha_a"},
+        completed_at=None,
+    )
+
+
+def test_selection_order_builder_uses_candidate_target_quantity_first() -> None:
+    repo = _repo()
+    binding = repo.create_package_binding(_binding(target_weight=Decimal("0.02")))
+    run = _selection_run(
+        [
+            SelectionCandidate(
+                symbol="300604.SZ",
+                score=0.9,
+                rank=1,
+                target_quantity=1000,
+                target_weight=0.02,
+                reference_price=123.45,
+            )
+        ]
+    )
+
+    result = SelectionOrderBuilder(repository=repo, selection_reader=FakeSelectionReader(run)).build_for_binding(
+        binding=binding
+    )
+
+    assert len(result.requests) == 1
+    request = result.requests[0]
+    assert request.quantity == 1000
+    assert request.order_type == 23
+    assert request.package_id == "pkg_a"
+    assert request.selection_run_id == "sel_a"
+    assert request.order_remark.startswith("qmtpkg_poc_strategy_a_a_300604SZ")
+
+
+def test_selection_order_builder_sizes_from_target_weight_and_board_lot() -> None:
+    repo = _repo()
+    binding = repo.create_package_binding(_binding(target_weight=Decimal("0.02")))
+    run = _selection_run(
+        [
+            SelectionCandidate(
+                symbol="300604.SZ",
+                score=0.9,
+                rank=1,
+                target_weight=0.02,
+                reference_price=26.31,
+            )
+        ]
+    )
+
+    result = SelectionOrderBuilder(repository=repo, selection_reader=FakeSelectionReader(run)).build_for_binding(
+        binding=binding
+    )
+
+    assert result.requests[0].quantity == 7600
+    assert result.requests[0].price == Decimal("26.310000")
+
+
+def test_selection_order_builder_uses_current_lots_to_build_sell_delta() -> None:
+    repo = _repo()
+    repo.create_position_lot(
+        PositionLotRecord(
+            lot_id="lot_a",
+            strategy_id="strat_a",
+            symbol="300604.SZ",
+            open_trade_id="trade_a",
+            open_date=TRADE_DATE,
+            quantity=1500,
+            available_quantity=1500,
+            remaining_quantity=1500,
+            avg_cost=Decimal("10"),
+            cost_amount=Decimal("15000"),
+            account_id=ACCOUNT_ID,
+        )
+    )
+    binding = repo.create_package_binding(_binding(target_weight=None))
+    run = _selection_run(
+        [
+            SelectionCandidate(
+                symbol="300604.SZ",
+                score=0.9,
+                rank=1,
+                target_quantity=1000,
+                reference_price=10,
+            )
+        ]
+    )
+
+    result = SelectionOrderBuilder(repository=repo, selection_reader=FakeSelectionReader(run)).build_for_binding(
+        binding=binding
+    )
+
+    assert result.requests[0].side == "SELL"
+    assert result.requests[0].order_type == 24
+    assert result.requests[0].quantity == 500
+
+
+def test_selection_order_builder_honors_top_k_without_broker_call() -> None:
+    repo = _repo()
+    binding = repo.create_package_binding(_binding(target_weight=Decimal("0.02"), top_k=2))
+    run = _selection_run(
+        [
+            SelectionCandidate(symbol="300604.SZ", score=0.9, rank=1, target_weight=0.02, reference_price=20),
+            SelectionCandidate(symbol="300054.SZ", score=0.8, rank=2, target_weight=0.02, reference_price=25),
+            SelectionCandidate(symbol="300371.SZ", score=0.7, rank=3, target_weight=0.02, reference_price=30),
+        ]
+    )
+
+    result = SelectionOrderBuilder(repository=repo, selection_reader=FakeSelectionReader(run)).build_for_binding(
+        binding=binding
+    )
+
+    assert [request.symbol for request in result.requests] == ["300604.SZ", "300054.SZ"]
+
+
+def test_selection_order_builder_fails_fast_without_price_or_succeeded_run() -> None:
+    repo = _repo()
+    binding = repo.create_package_binding(_binding(target_weight=Decimal("0.02")))
+    missing_price = _selection_run(
+        [SelectionCandidate(symbol="300604.SZ", score=0.9, rank=1, target_weight=0.02, reference_price=10)]
+    )
+    missing_price.package_results["pkg_a"][0] = missing_price.package_results["pkg_a"][0].model_copy(
+        update={"reference_price": None}
+    )
+
+    with pytest.raises(DataUnavailableError, match="reference_price is required"):
+        SelectionOrderBuilder(repository=repo, selection_reader=FakeSelectionReader(missing_price)).build_for_binding(
+            binding=binding
+        )
+
+    failed_run = _selection_run(
+        [SelectionCandidate(symbol="300604.SZ", score=0.9, rank=1, target_weight=0.02, reference_price=10)],
+        status=SelectionRunStatus.FAILED,
+    )
+    with pytest.raises(DataUnavailableError, match="selection run is not succeeded"):
+        SelectionOrderBuilder(repository=repo, selection_reader=FakeSelectionReader(failed_run)).build_for_binding(
+            binding=binding
+        )

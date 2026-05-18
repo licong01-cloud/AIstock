@@ -92,6 +92,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/qmt/positions", label: "\u{1F4BC} \u6301\u4ED3\u7BA1\u7406" },
       { href: "/qmt/strategies", label: "\u{1F4CA} \u7B56\u7565\u7BA1\u7406" },
+      { href: "/qmt/virtual-strategies", label: "\u{1F9EE} \u865A\u62DF\u7B56\u7565\u5206\u4ED3" },
     ],
   },
   {
