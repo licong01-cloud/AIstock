@@ -121,6 +121,12 @@
       "actor": "codex-app",
       "action": "status_changed",
       "note": "PR #35 was merged to main as 99c09add846bbf166bc4d8ae285b427dd11ab059. Local main fast-forwarded to origin/main. Post-merge verification passed: targeted QE/cache pytest, Paper/Paper-v2 targeted pytest, py_compile, git diff --check, nox l0, and MCP qe_data_contract_backend. Production 8001/3000 and production DB were not touched."
+    },
+    {
+      "timestamp": "2026-05-18T15:44:02Z",
+      "actor": "codex-app",
+      "action": "github_issue_synced",
+      "note": "Synced bug registry entry to GitHub issue #23."
     }
   ],
   "custom_github_labels": [
