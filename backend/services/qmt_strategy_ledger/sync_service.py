@@ -335,4 +335,3 @@ def _order_event_id(account_id: str, order_id: str, order_status: int | None) ->
 
 def _lot_id(account_id: str, trade_date: date, trade_id: str) -> str:
     return f"lot_{account_id}_{trade_date.isoformat()}_{trade_id}"
-

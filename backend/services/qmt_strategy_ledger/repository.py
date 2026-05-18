@@ -522,7 +522,7 @@ class QmtStrategyLedgerRepository:
                     SELECT *
                     FROM qmt_strategy.cash_ledger
                     WHERE strategy_id = %s
-                    ORDER BY created_at, cash_id
+                    ORDER BY cash_sequence
                     """,
                     (strategy_id,),
                 )
@@ -752,6 +752,8 @@ class InMemoryQmtStrategyLedgerRepository:
         self._trade_ledgers: dict[tuple[str, date, str], TradeLedgerRecord] = {}
         self._position_lots: dict[str, PositionLotRecord] = {}
         self._cash_entries: dict[str, CashLedgerEntry] = {}
+        self._cash_entry_sequence: dict[str, int] = {}
+        self._next_cash_entry_sequence = 0
         self._daily_snapshots: dict[tuple[str, date], DailySnapshotRecord] = {}
         self._reconciliation_runs: dict[str, ReconciliationRunRecord] = {}
         self._reconciliation_issues: dict[str, ReconciliationIssueRecord] = {}
@@ -887,11 +889,13 @@ class InMemoryQmtStrategyLedgerRepository:
         if entry.cash_id in self._cash_entries:
             raise ValueError(f"cash ledger entry already exists: {entry.cash_id}")
         self._cash_entries[entry.cash_id] = entry
+        self._cash_entry_sequence[entry.cash_id] = self._next_cash_entry_sequence
+        self._next_cash_entry_sequence += 1
         return entry
 
     def list_cash_entries(self, strategy_id: str) -> list[CashLedgerEntry]:
         entries = [entry for entry in self._cash_entries.values() if entry.strategy_id == strategy_id]
-        return sorted(entries, key=lambda entry: (entry.created_at, entry.cash_id))
+        return sorted(entries, key=lambda entry: (self._cash_entry_sequence.get(entry.cash_id, 0), entry.created_at, entry.cash_id))
 
     def create_daily_snapshot(self, snapshot: DailySnapshotRecord) -> DailySnapshotRecord:
         key = (snapshot.strategy_id, snapshot.trade_date)

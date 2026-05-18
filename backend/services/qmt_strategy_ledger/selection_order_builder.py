@@ -238,4 +238,3 @@ def _order_remark(prefix: str, strategy_name: str, selection_run_id: str, symbol
     safe_run = selection_run_id.replace("sel_", "")[:10]
     safe_symbol = symbol.replace(".", "")
     return f"{prefix}_{safe_strategy}_{safe_run}_{safe_symbol}"
-

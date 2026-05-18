@@ -366,6 +366,7 @@ COMMENT ON COLUMN qmt_strategy.position_lot.updated_at IS 'UTC timestamp when th
 
 CREATE TABLE IF NOT EXISTS qmt_strategy.cash_ledger (
     cash_id TEXT PRIMARY KEY,
+    cash_sequence BIGSERIAL NOT NULL,
     strategy_id TEXT NOT NULL REFERENCES qmt_strategy.virtual_account(strategy_id),
     account_id TEXT NOT NULL,
     trade_date DATE NOT NULL,
@@ -386,10 +387,11 @@ CREATE TABLE IF NOT EXISTS qmt_strategy.cash_ledger (
 );
 
 CREATE INDEX IF NOT EXISTS ix_qmt_strategy_cash_ledger_strategy_date
-    ON qmt_strategy.cash_ledger(strategy_id, trade_date, created_at);
+    ON qmt_strategy.cash_ledger(strategy_id, trade_date, cash_sequence);
 
 COMMENT ON TABLE qmt_strategy.cash_ledger IS 'Append-only strategy cash and frozen-cash movement ledger.';
 COMMENT ON COLUMN qmt_strategy.cash_ledger.cash_id IS 'Stable cash ledger entry identifier.';
+COMMENT ON COLUMN qmt_strategy.cash_ledger.cash_sequence IS 'Append-only monotonically increasing sequence used to display cash movements in insertion order.';
 COMMENT ON COLUMN qmt_strategy.cash_ledger.strategy_id IS 'Virtual strategy account that owns this cash movement.';
 COMMENT ON COLUMN qmt_strategy.cash_ledger.account_id IS 'MiniQMT broker account used for the underlying broker action.';
 COMMENT ON COLUMN qmt_strategy.cash_ledger.trade_date IS 'Exchange trade date associated with this cash movement.';

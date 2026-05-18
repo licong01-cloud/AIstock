@@ -621,4 +621,3 @@ GET /api/v1/qmt/virtual-strategies/{strategy_id}/trades
 3. Phase 3 托管下单入口必须在调用 MiniQMT 前完成：非空策略名校验、`order_remark` 唯一校验、策略可用资金校验、策略 lot 可卖数量校验、MiniQMT 总账户可卖数量校验。
 4. 批量下单需要“逐笔状态 + 批次状态”双层模型；批次成功不代表所有子订单成功。
 5. 原始 `/api/v1/qmt/order` 与 `/api/v1/qmt/order/batch` 在生产多策略模式下不得作为普通策略入口，只能作为管理员诊断/POC 入口。
-
