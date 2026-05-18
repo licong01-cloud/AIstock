@@ -734,6 +734,7 @@ def main():
             start_date=start_date,
             end_date=end_date,
             universe_key=args.universe_key,
+            refresh_policy="coverage",
         )
         if args.universe_rule_version and universe_metadata.get("universe_rule_version") != args.universe_rule_version:
             raise RuntimeError("universe rule version mismatch")

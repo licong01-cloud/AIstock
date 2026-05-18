@@ -13,6 +13,7 @@ from ..stock_universe_pit_service import (
     DEFAULT_ST_PIT_RULE_VERSION,
     DEFAULT_ST_PIT_START_DATE,
     DEFAULT_ST_PIT_UNIVERSE_KEY,
+    DEFAULT_ST_PIT_REFRESH_POLICY,
     StockUniversePitService,
 )
 
@@ -22,6 +23,8 @@ OFFICIAL_FACTOR_UNIVERSE_RULE_VERSION = DEFAULT_ST_PIT_RULE_VERSION
 OFFICIAL_FACTOR_SNAPSHOT_UNIVERSE_MODE = "st_pit_window_union_v1"
 OFFICIAL_FACTOR_INDEX_POLICY = "st_pit_buy_eligible_reindexed_v1"
 OFFICIAL_FACTOR_COVERAGE_SEMANTICS = "st_pit_buy_eligible_suspend_excluded_non_warmup_v1"
+QE_BACKTEST_FRESHNESS_PROFILE = "qe_backtest_coverage"
+PAPER_LIVE_FRESHNESS_PROFILE = "paper_live_latest"
 
 
 def _as_date(value: str | dt.date | pd.Timestamp | None) -> dt.date:
@@ -86,6 +89,7 @@ class FactorUniverseMaskService:
         end_date: str | dt.date,
         universe_key: str = OFFICIAL_FACTOR_UNIVERSE_KEY,
         strict: bool = True,
+        refresh_policy: str = DEFAULT_ST_PIT_REFRESH_POLICY,
     ) -> dict[str, Any]:
         return self._pit_service.ensure_st_pit_universe(
             universe_key=universe_key,
@@ -94,6 +98,7 @@ class FactorUniverseMaskService:
             rule_version=OFFICIAL_FACTOR_UNIVERSE_RULE_VERSION,
             strict=strict,
             rebuild_if_stale=True,
+            refresh_policy=refresh_policy,
         )
 
     def get_state(
@@ -110,11 +115,29 @@ class FactorUniverseMaskService:
         end_date: str | dt.date,
         universe_key: str = OFFICIAL_FACTOR_UNIVERSE_KEY,
         ensure: bool = True,
+        refresh_policy: str = DEFAULT_ST_PIT_REFRESH_POLICY,
     ) -> dict[str, Any]:
+        start = _as_date(start_date)
+        end = _as_date(end_date)
+        ensure_result: dict[str, Any] | None = None
         if ensure:
-            self.ensure_ready(start_date=start_date, end_date=end_date, universe_key=universe_key)
-        state = self.get_state(universe_key=universe_key)
-        if state.get("status") != "ready" or state.get("dirty"):
+            ensure_result = self.ensure_ready(
+                start_date=start,
+                end_date=end,
+                universe_key=universe_key,
+                refresh_policy=refresh_policy,
+            )
+        state = (
+            ensure_result.get("state")
+            if isinstance(ensure_result, dict) and isinstance(ensure_result.get("state"), dict)
+            else self.get_state(universe_key=universe_key)
+        )
+        if not self._metadata_state_is_usable(
+            state,
+            start_date=start,
+            end_date=end,
+            refresh_policy=refresh_policy,
+        ):
             raise RuntimeError(f"ST PIT universe is not ready: {state}")
         meta = FactorUniverseMetadata(
             universe_key=universe_key,
@@ -130,6 +153,43 @@ class FactorUniverseMaskService:
             universe_generated_at=str(state.get("generated_at")) if state.get("generated_at") else None,
         )
         return meta.as_dict()
+
+    @staticmethod
+    def _metadata_state_is_usable(
+        state: dict[str, Any],
+        *,
+        start_date: dt.date,
+        end_date: dt.date,
+        refresh_policy: str,
+    ) -> bool:
+        status = state.get("status")
+        if refresh_policy == "source_fingerprint":
+            if status != "ready" or bool(state.get("dirty")):
+                return False
+        elif status not in {"ready", "dirty"}:
+            return False
+
+        try:
+            state_start = _as_date(state.get("start_date"))
+            state_end = _as_date(state.get("end_date"))
+        except Exception:
+            return False
+        if state_start > start_date or state_end < end_date:
+            return False
+
+        summary = state.get("last_build_summary") or {}
+        validation = summary.get("validation") if isinstance(summary, dict) else {}
+        if not isinstance(validation, dict):
+            return True
+        return not any(
+            int(validation.get(key, 0) or 0) > 0
+            for key in [
+                "invalid_span_count",
+                "overlap_error_count",
+                "event_action_violation_count",
+                "terminal_reentry_violation_count",
+            ]
+        )
 
     def get_window_union_instruments(
         self,
