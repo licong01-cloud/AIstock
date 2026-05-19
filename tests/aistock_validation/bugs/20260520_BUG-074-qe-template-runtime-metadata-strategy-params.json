@@ -6,7 +6,7 @@
   "module": "qe",
   "severity": "P1",
   "risk_area": "runtime_contract",
-  "status": "in_progress",
+  "status": "fixed",
   "trigger_condition": {
     "scenario": "qe_template_custom_evo_run_v2_strategy_with_runtime_metadata",
     "strategy_class": "SuspendFilterScoreWeightedTopkStrategyV2",
@@ -35,12 +35,12 @@
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/91",
   "assigned_agent": "codex-app",
   "fix_branch": "bug/BUG-074-qe-template-runtime-metadata",
-  "fix_commit": null,
-  "verification_run_id": null,
+  "fix_commit": "1928a09",
+  "verification_run_id": "local-20260520-qe-mcp-l3",
   "created_at": "2026-05-19T17:27:06Z",
   "first_seen_at": "2026-05-19T17:27:06Z",
-  "last_seen_at": "2026-05-20T01:30:00Z",
-  "fixed_at": null,
+  "last_seen_at": "2026-05-19T17:52:10Z",
+  "fixed_at": "2026-05-19T17:52:10Z",
   "submitted_at": "2026-05-19T17:27:06Z",
   "closed_at": null,
   "allowed_write_scope": [
@@ -105,6 +105,12 @@
       "actor": "codex-app",
       "action": "fix_started",
       "note": "Fix branch bug/BUG-074-qe-template-runtime-metadata in dedicated worktree F:/Dev/AIstock_worktrees/bug-074-qe-template-runtime-metadata-20260520."
+    },
+    {
+      "timestamp": "2026-05-19T17:52:10Z",
+      "actor": "codex-app",
+      "action": "fixed",
+      "note": "Implemented runtime metadata hoisting/stripping and validated targeted pytest, qe_mcp_backend, qe_archive_backend, qe_mcp_l3, py_compile, ports, and diff checks on the fix branch."
     }
   ]
 }
