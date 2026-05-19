@@ -1,0 +1,133 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-053",
+  "title": "MiniQMT StrategyPackage binding cannot roll over to next-day selection runs",
+  "description": "Expected: A virtual miniQMT strategy should support an explicit package-binding lifecycle for daily operation: keep historical bindings auditable, retire/pause/replace the previous ACTIVE binding when a new trade_date or selection_run_id is activated, enforce one ACTIVE binding at a time, and expose clear operator/API behavior for idempotent same-day rebinding versus next-day rollover.\nActual: QmtStrategyPackageBindingService.bind() always creates a new binding with binding_status=ACTIVE. The repository and migration enforce only one ACTIVE binding per strategy, but no service/API path retires or replaces the existing active binding. After one strategy is bound for 2026-05-19, a normal next-day run that needs a new selection_run_id/trade_date can fail on duplicate active binding or require manual database manipulation.",
+  "module": "qmt_strategy_ledger",
+  "severity": "P0",
+  "risk_area": "trading_binding_lifecycle",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "reported_via_mcp",
+    "files": [
+      "backend/services/qmt_strategy_ledger/package_binding.py",
+      "backend/services/qmt_strategy_ledger/repository.py",
+      "backend/services/qmt_strategy_ledger/models.py",
+      "backend/routers/qmt_strategy_ledger.py",
+      "backend/migrations/qmt_strategy_ledger_20260518.sql",
+      "backend/tests/qmt_strategy_ledger/test_package_binding.py",
+      "backend/tests/qmt_strategy_ledger/test_router_summary.py"
+    ]
+  },
+  "reproduce_command": "rg -n \"create_package_binding|get_active_package_binding|BindingStatus.ACTIVE|active package binding already exists|ux_qmt_strategy_active_binding|package-bindings\" backend/services/qmt_strategy_ledger backend/routers/qmt_strategy_ledger.py backend/migrations/qmt_strategy_ledger_20260518.sql backend/tests/qmt_strategy_ledger -S",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:backend/services/qmt_strategy_ledger/package_binding.py",
+    "file:backend/services/qmt_strategy_ledger/repository.py",
+    "file:backend/services/qmt_strategy_ledger/models.py",
+    "file:backend/routers/qmt_strategy_ledger.py",
+    "file:backend/migrations/qmt_strategy_ledger_20260518.sql",
+    "file:backend/tests/qmt_strategy_ledger/test_package_binding.py",
+    "file:backend/tests/qmt_strategy_ledger/test_router_summary.py"
+  ],
+  "fingerprint": "d67f8f48c280686d",
+  "assigned_agent": "codex-app",
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-19T04:44:05Z",
+  "first_seen_at": "2026-05-19T04:44:05Z",
+  "last_seen_at": "2026-05-19T04:44:05Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-19T04:44:05Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/qmt_strategy_ledger/package_binding.py",
+    "backend/services/qmt_strategy_ledger/repository.py",
+    "backend/services/qmt_strategy_ledger/models.py",
+    "backend/routers/qmt_strategy_ledger.py",
+    "backend/migrations/qmt_strategy_ledger_20260518.sql",
+    "backend/tests/qmt_strategy_ledger/test_package_binding.py",
+    "backend/tests/qmt_strategy_ledger/test_router_summary.py"
+  ],
+  "suspected_modules": [
+    "backend/services/qmt_strategy_ledger/package_binding.py",
+    "backend/services/qmt_strategy_ledger/repository.py",
+    "backend/services/qmt_strategy_ledger/models.py",
+    "backend/routers/qmt_strategy_ledger.py",
+    "backend/migrations/qmt_strategy_ledger_20260518.sql",
+    "backend/tests/qmt_strategy_ledger/test_package_binding.py",
+    "backend/tests/qmt_strategy_ledger/test_router_summary.py"
+  ],
+  "required_verification": [
+    "Unit test: binding the same strategy/package/selection_run idempotently does not create duplicate ACTIVE rows.",
+    "Unit test: replacing an ACTIVE binding with a new trade_date or selection_run retires or pauses the old binding and activates the new one.",
+    "Unit test: historical bindings remain queryable after rollover and active-binding lookup returns only the current binding.",
+    "Router/API test: operator can request explicit replace/rollover behavior and receives actionable errors for unsafe duplicate binding.",
+    "Migration/repository test: active binding uniqueness remains enforced while lifecycle transitions are supported."
+  ],
+  "closure_requirements": [
+    "Daily miniQMT strategy operation does not require manual SQL to bind the next selection run.",
+    "The active binding lifecycle has explicit ACTIVE/PAUSED/RETIRED or equivalent transitions with audit metadata.",
+    "Order preview/build uses the current active binding only.",
+    "The lifecycle behavior is documented in validation evidence before declaring next-day readiness."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-19T04:44:05Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Reported via aistock_mcp_server.report_bug. Comments: 5"
+    },
+    {
+      "timestamp": "2026-05-19T04:44:05Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Root cause hypothesis: binding service implements create-only active binding semantics; lifecycle transition operations are absent."
+    },
+    {
+      "timestamp": "2026-05-19T04:44:05Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Business impact: P0 for multi-day miniQMT strategy simulation because tomorrow's strategy package/selection evidence needs a clean rollover path before the market opens."
+    },
+    {
+      "timestamp": "2026-05-19T04:44:05Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Expected design: same package + same selection_run may be idempotent; new selection_run/trade_date must either replace active binding with audit event or fail with actionable API requiring explicit retire/replace confirmation."
+    },
+    {
+      "timestamp": "2026-05-19T04:44:05Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Required verification: same-day idempotent bind does not create duplicate active rows, next-day replace retires prior active binding, historical bindings remain queryable, and order preview uses the current active binding only."
+    },
+    {
+      "timestamp": "2026-05-19T04:44:05Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Required verification: migration/repository comments and tests reflect the lifecycle semantics; no direct DB edits are needed for daily operation."
+    },
+    {
+      "timestamp": "2026-05-19T04:50:16Z",
+      "actor": "codex-app",
+      "action": "triaged",
+      "note": "Expanded from miniQMT issue coverage audit with explicit verification and closure requirements before code fixes."
+    },
+    {
+      "timestamp": "2026-05-19T04:52:16Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Mirrored BUG-053 to GitHub issue #56 via gh CLI from miniQMT issue coverage audit."
+    },
+    {
+      "timestamp": "2026-05-19T05:31:30Z",
+      "actor": "codex-app",
+      "action": "github_sync_verified",
+      "note": "Confirmed GitHub issue #56 is OPEN and label-synced (bug, status:open, P0, severity:p0, module:qmt_strategy_ledger, risk:trading_binding_lifecycle) before fix worktree creation."
+    }
+  ],
+  "github_issue_number": 56,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/56"
+}

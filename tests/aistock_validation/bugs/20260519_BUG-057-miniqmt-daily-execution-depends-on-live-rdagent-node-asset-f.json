@@ -1,0 +1,137 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-057",
+  "title": "MiniQMT daily execution depends on live RDAgent node asset fetch instead of frozen runnable package assets",
+  "description": "Expected: Once a StrategyPackage is enabled or bound for miniQMT execution, AIstock should have a frozen, locally runnable runtime asset set with manifest hash/provenance. Daily miniQMT selection/execution should validate the frozen assets and current market data, not require the RDAgent node 9000 mlruns-params endpoint to be available during the pre-open execution window. If a node fetch is required, it should occur during package preparation/binding and fail before the trading deadline.\nActual: StrategyPackage live_inference intentionally calls _materialize_runtime_source_from_node(... allow_cache_fallback=False), and node download_mlruns_params failures such as mlruns-params 404 fail hard. This no-silent-cache behavior is correct for reproducibility, but when the same path is used in daily miniQMT pre-open execution it can make a previously selected strategy operationally depend on remote node availability at the worst time. Operators observed RDAgent 9000 mlruns-params returning 404 during asset preflight analysis.",
+  "module": "strategy_package",
+  "severity": "P1",
+  "risk_area": "strategy_package_asset_authority",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "reported_via_mcp",
+    "files": [
+      "backend/services/strategy_package/live_inference.py",
+      "backend/services/selection_center/package_health.py",
+      "backend/services/qmt_strategy_ledger/package_binding.py",
+      "backend/services/qmt_strategy_ledger/selection_order_builder.py",
+      "backend/routers/qmt_strategy_ledger.py",
+      "backend/tests/strategy_package/test_live_inference.py",
+      "backend/tests/qmt_strategy_ledger/test_package_binding.py",
+      "docs/architecture/miniqmt_multi_strategy_execution_implementation_plan_20260518.md"
+    ]
+  },
+  "reproduce_command": "rg -n \"allow_cache_fallback=False|download_mlruns_params|mlruns|source_resolution|_source_from_experiment_row|package_health|package_bindings\" backend/services/strategy_package/live_inference.py backend/services/selection_center/package_health.py backend/services/qmt_strategy_ledger backend/tests -S",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:backend/services/strategy_package/live_inference.py",
+    "file:backend/services/selection_center/package_health.py",
+    "file:backend/services/qmt_strategy_ledger/package_binding.py",
+    "file:backend/services/qmt_strategy_ledger/selection_order_builder.py",
+    "file:backend/routers/qmt_strategy_ledger.py",
+    "file:backend/tests/strategy_package/test_live_inference.py",
+    "file:backend/tests/qmt_strategy_ledger/test_package_binding.py",
+    "file:docs/architecture/miniqmt_multi_strategy_execution_implementation_plan_20260518.md"
+  ],
+  "fingerprint": "aa694384bdba4b3c",
+  "assigned_agent": "codex-app",
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-19T04:45:14Z",
+  "first_seen_at": "2026-05-19T04:45:14Z",
+  "last_seen_at": "2026-05-19T04:45:14Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-19T04:45:14Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/strategy_package/live_inference.py",
+    "backend/services/selection_center/package_health.py",
+    "backend/services/qmt_strategy_ledger/package_binding.py",
+    "backend/services/qmt_strategy_ledger/selection_order_builder.py",
+    "backend/routers/qmt_strategy_ledger.py",
+    "backend/tests/strategy_package/test_live_inference.py",
+    "backend/tests/qmt_strategy_ledger/test_package_binding.py",
+    "docs/architecture/miniqmt_multi_strategy_execution_implementation_plan_20260518.md"
+  ],
+  "suspected_modules": [
+    "backend/services/strategy_package/live_inference.py",
+    "backend/services/selection_center/package_health.py",
+    "backend/services/qmt_strategy_ledger/package_binding.py",
+    "backend/services/qmt_strategy_ledger/selection_order_builder.py",
+    "backend/routers/qmt_strategy_ledger.py",
+    "backend/tests/strategy_package/test_live_inference.py",
+    "backend/tests/qmt_strategy_ledger/test_package_binding.py",
+    "docs/architecture/miniqmt_multi_strategy_execution_implementation_plan_20260518.md"
+  ],
+  "required_verification": [
+    "Unit/integration test: after package materialization, simulated RDAgent mlruns-params failure does not block daily miniQMT preflight when frozen runnable assets exist and hashes match.",
+    "Unit/integration test: missing or corrupt frozen runnable asset fails fast before the trading deadline with actionable provenance context.",
+    "Regression test: no silent cache fallback is introduced; any fallback or local asset usage records explicit origin/provenance.",
+    "Package binding test: miniQMT binding captures manifest hash, runtime asset hash/provenance, and trade-date selection evidence.",
+    "Operational validation: daily miniQMT run path distinguishes package preparation/materialization failures from current-day market data readiness failures."
+  ],
+  "closure_requirements": [
+    "StrategyPackage enable/binding stage materializes and verifies runnable assets before daily execution.",
+    "Daily miniQMT execution uses frozen AIstock-managed assets by hash instead of depending on live RDAgent node availability.",
+    "No-silent-fallback reproducibility behavior is preserved.",
+    "Operator-facing errors clearly state whether the blocker is package asset preparation, current market data, or broker readiness."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-19T04:45:14Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Reported via aistock_mcp_server.report_bug. Comments: 5"
+    },
+    {
+      "timestamp": "2026-05-19T04:45:14Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "This issue should preserve no-silent-fallback semantics. It should not silently use stale cache when node fetch fails."
+    },
+    {
+      "timestamp": "2026-05-19T04:45:14Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Business impact: P1 because node availability or mlruns-params 404 can block morning miniQMT execution even when the operator expects an already prepared StrategyPackage to run."
+    },
+    {
+      "timestamp": "2026-05-19T04:45:14Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Expected design: separate package preparation/materialization from daily execution. The binding or enable step should freeze and verify runtime assets; the daily miniQMT runner should use those assets by hash and fail only if the frozen assets are missing/corrupt or current market data is not ready."
+    },
+    {
+      "timestamp": "2026-05-19T04:45:14Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Relationship to BUG-047: BUG-047 fixed factor lookback window sizing; this issue is about operational asset authority and RDAgent node dependency, not factor window length."
+    },
+    {
+      "timestamp": "2026-05-19T04:45:14Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Required verification: simulate node mlruns-params failure after package materialization and prove daily miniQMT preflight can run from frozen AIstock-managed assets with provenance; simulate missing frozen asset and prove fail-fast before trading deadline."
+    },
+    {
+      "timestamp": "2026-05-19T04:50:16Z",
+      "actor": "codex-app",
+      "action": "triaged",
+      "note": "Expanded from miniQMT issue coverage audit with explicit verification and closure requirements before code fixes."
+    },
+    {
+      "timestamp": "2026-05-19T04:52:26Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Mirrored BUG-057 to GitHub issue #60 via gh CLI from miniQMT issue coverage audit."
+    },
+    {
+      "timestamp": "2026-05-19T05:31:30Z",
+      "actor": "codex-app",
+      "action": "github_sync_verified",
+      "note": "Confirmed GitHub issue #60 is OPEN and label-synced (bug, P1, severity:p1, status:open, architecture, risk:strategy_package_asset_authority, module:strategy_package) before fix worktree creation."
+    }
+  ],
+  "github_issue_number": 60,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/60"
+}

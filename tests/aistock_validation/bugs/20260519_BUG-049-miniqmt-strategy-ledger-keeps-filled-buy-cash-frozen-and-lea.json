@@ -1,0 +1,132 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-049",
+  "title": "MiniQMT strategy ledger keeps filled buy cash frozen and leaves strategy market_value zero",
+  "description": "Expected: After MiniQMT fills are synchronized, AIstock strategy ledger must settle buy fills exactly once: reduce or release the corresponding frozen cash, record actual fill cash movement/fees, create or update lot positions, compute strategy-level market_value/unrealized_pnl from lots and latest prices, and expose accurate per-strategy cash/equity/PnL. Filled buy notional must not remain indefinitely in frozen_cash.\nActual: 2026-05-19 MiniQMT SIM Strategy A has 20 accepted buy orders, 165 BUY fills, total traded quantity 134,600 and amount 3,979,087.54. qmt_strategy.trade_ledger has 165 rows and qmt_strategy.position_lot has 165 OPEN lots, but qmt_strategy.virtual_account for strategy_id=qmt_pocD_A2a9_132553 still shows cash=6,028,220.000000, frozen_cash=3,971,780.000000, market_value=0.000000, realized_pnl=0, unrealized_pnl=0. qmt_strategy.cash_ledger contains only 20 FREEZE_BUY rows and no fill-settlement/unfreeze rows. This means filled buys remain virtually frozen and strategy-level market value/PnL are not updated after broker fills are synchronized.",
+  "module": "qmt_strategy_ledger",
+  "severity": "P0",
+  "risk_area": "trading_ledger_correctness",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "reported_via_mcp",
+    "files": [
+      "backend/services/qmt_strategy_ledger/sync_service.py",
+      "backend/services/qmt_strategy_ledger/order_service.py",
+      "backend/services/qmt_strategy_ledger/repository.py",
+      "backend/services/qmt_strategy_ledger/models.py",
+      "backend/routers/qmt_strategy_ledger.py",
+      "backend/tests/qmt_strategy_ledger/test_sync_service.py",
+      "backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py"
+    ]
+  },
+  "reproduce_command": "GET /api/v1/qmt/status && GET /api/v1/qmt/trades && POST /api/v1/qmt/virtual-strategies/sync-snapshot with {\"account_id\":\"62266303\",\"trade_date\":\"2026-05-19\"}; then query qmt_strategy.virtual_account, qmt_strategy.cash_ledger, qmt_strategy.trade_ledger and qmt_strategy.position_lot for strategy_id='qmt_pocD_A2a9_132553'.",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:backend/services/qmt_strategy_ledger/sync_service.py",
+    "file:backend/services/qmt_strategy_ledger/order_service.py",
+    "file:backend/services/qmt_strategy_ledger/repository.py",
+    "file:backend/services/qmt_strategy_ledger/models.py",
+    "file:backend/routers/qmt_strategy_ledger.py",
+    "file:backend/tests/qmt_strategy_ledger/test_sync_service.py",
+    "file:backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py"
+  ],
+  "fingerprint": "3e2777dcfba04896",
+  "assigned_agent": "codex-app",
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-19T02:31:57Z",
+  "first_seen_at": "2026-05-19T02:31:57Z",
+  "last_seen_at": "2026-05-19T02:31:57Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-19T02:31:57Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/qmt_strategy_ledger/sync_service.py",
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/services/qmt_strategy_ledger/repository.py",
+    "backend/services/qmt_strategy_ledger/models.py",
+    "backend/routers/qmt_strategy_ledger.py",
+    "backend/tests/qmt_strategy_ledger/test_sync_service.py",
+    "backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py"
+  ],
+  "suspected_modules": [
+    "backend/services/qmt_strategy_ledger/sync_service.py",
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/services/qmt_strategy_ledger/repository.py",
+    "backend/services/qmt_strategy_ledger/models.py",
+    "backend/routers/qmt_strategy_ledger.py",
+    "backend/tests/qmt_strategy_ledger/test_sync_service.py",
+    "backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py"
+  ],
+  "required_verification": [
+    "Unit tests cover full-fill, partial-fill, cancel/reject, and repeated sync idempotency for cash settlement.",
+    "After sync, filled BUY notional no longer remains indefinitely in frozen_cash.",
+    "Strategy summary total_equity, cash, frozen_cash, market_value, realized_pnl, and unrealized_pnl match lot ledger and cash ledger.",
+    "Same-symbol multi-strategy holdings are computed from strategy lots, not duplicated from MiniQMT account-level merged positions."
+  ],
+  "closure_requirements": [
+    "Filled BUY orders create auditable cash settlement entries or equivalent canonical cash ledger events.",
+    "Open and partially filled orders keep only the truly unfilled amount frozen.",
+    "Rejected or cancelled BUY orders release remaining frozen cash exactly once.",
+    "Regression tests prevent cash/market_value/PnL from staying at pre-fill values after sync."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-19T02:31:57Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Reported via aistock_mcp_server.report_bug. Comments: 5"
+    },
+    {
+      "timestamp": "2026-05-19T02:31:57Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Evidence: API /qmt/trades summary has 165 BUY fills for strategy_name=pocD_A2a9_132553, total volume 134600, amount 3979087.54."
+    },
+    {
+      "timestamp": "2026-05-19T02:31:57Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Evidence: DB qmt_strategy.order_intent/order_ledger/trade_ledger/position_lot counts for qmt_pocD_A2a9_132553 are 20/20/165/165."
+    },
+    {
+      "timestamp": "2026-05-19T02:31:57Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Evidence: DB qmt_strategy.virtual_account for qmt_pocD_A2a9_132553 still has frozen_cash=3971780 and market_value=0 after sync."
+    },
+    {
+      "timestamp": "2026-05-19T02:31:57Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Risk: blocks accurate independent per-strategy PnL/cash, may incorrectly block later buys or mislead multi-strategy validation."
+    },
+    {
+      "timestamp": "2026-05-19T02:31:57Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "This is separate from BUG-048 board-lot preflight; fixing board-lot validation alone does not correct cash/position/PnL settlement."
+    },
+    {
+      "timestamp": "2026-05-19T02:41:15Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Mirrored BUG-049 to GitHub issue #50 via gh CLI because MCP live sync lacked GITHUB_REPOSITORY in this session."
+    },
+    {
+      "timestamp": "2026-05-19T02:41:41Z",
+      "actor": "codex-app",
+      "action": "triaged",
+      "note": "Classified as P0 trading ledger correctness issue and added settlement/idempotency verification requirements."
+    },
+    {
+      "timestamp": "2026-05-19T05:31:30Z",
+      "actor": "codex-app",
+      "action": "github_sync_verified",
+      "note": "Confirmed GitHub issue #50 is OPEN and label-synced (bug, status:open, P0, severity:p0, module:qmt_strategy_ledger, risk:trading_ledger_correctness) before fix worktree creation."
+    }
+  ],
+  "github_issue_number": 50,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/50"
+}

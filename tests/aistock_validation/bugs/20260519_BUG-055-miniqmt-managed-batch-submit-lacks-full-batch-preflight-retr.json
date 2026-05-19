@@ -1,0 +1,137 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-055",
+  "title": "MiniQMT managed batch submit lacks full-batch preflight retry and compensation workflow",
+  "description": "Expected: Before submitting a multi-order miniQMT strategy batch, AIstock should run a full-batch preflight that validates every item, aggregate cash/can-sell constraints, duplicate symbols/order_remark collisions, and idempotent retry semantics. If any item fails before broker submit, no broker orders should be sent. If broker submission partially succeeds, the API must persist a clear batch status and provide explicit compensation/cancel workflow rather than only a textual hint.\nActual: QmtManagedOrderService.submit_batch() currently executes submit_order sequentially. If some orders succeed and a later order fails, broker orders already exist and the result only sets compensation_required with hint 'review accepted broker orders; no automatic cancel was issued'. Raw batch endpoint is also non-atomic. This behavior is documented as residual POC risk, but it is not sufficient for stable multi-strategy strategy-package execution.",
+  "module": "qmt_strategy_ledger",
+  "severity": "P1",
+  "risk_area": "trading_batch_submission_safety",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "reported_via_mcp",
+    "files": [
+      "backend/services/qmt_strategy_ledger/order_service.py",
+      "backend/services/qmt_strategy_ledger/repository.py",
+      "backend/services/qmt_strategy_ledger/models.py",
+      "backend/routers/qmt_strategy_ledger.py",
+      "backend/routers/qmt.py",
+      "backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py",
+      "backend/tests/qmt_strategy_ledger/test_router_managed_orders_guard.py",
+      "docs/architecture/miniqmt_multi_strategy_execution_implementation_plan_20260518.md"
+    ]
+  },
+  "reproduce_command": "rg -n \"def submit_batch|compensation_required|no automatic cancel|orders/batch|order_batch|batch_status|partial\" backend/services/qmt_strategy_ledger backend/routers/qmt_strategy_ledger.py backend/routers/qmt.py backend/tests/qmt_strategy_ledger docs/architecture/miniqmt_multi_strategy_execution_implementation_plan_20260518.md -S",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:backend/services/qmt_strategy_ledger/order_service.py",
+    "file:backend/services/qmt_strategy_ledger/repository.py",
+    "file:backend/services/qmt_strategy_ledger/models.py",
+    "file:backend/routers/qmt_strategy_ledger.py",
+    "file:backend/routers/qmt.py",
+    "file:backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py",
+    "file:backend/tests/qmt_strategy_ledger/test_router_managed_orders_guard.py",
+    "file:docs/architecture/miniqmt_multi_strategy_execution_implementation_plan_20260518.md"
+  ],
+  "fingerprint": "ffa70e9a013bb0e3",
+  "assigned_agent": "codex-app",
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-19T04:44:38Z",
+  "first_seen_at": "2026-05-19T04:44:38Z",
+  "last_seen_at": "2026-05-19T04:44:38Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-19T04:44:38Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/services/qmt_strategy_ledger/repository.py",
+    "backend/services/qmt_strategy_ledger/models.py",
+    "backend/routers/qmt_strategy_ledger.py",
+    "backend/routers/qmt.py",
+    "backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py",
+    "backend/tests/qmt_strategy_ledger/test_router_managed_orders_guard.py",
+    "docs/architecture/miniqmt_multi_strategy_execution_implementation_plan_20260518.md"
+  ],
+  "suspected_modules": [
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/services/qmt_strategy_ledger/repository.py",
+    "backend/services/qmt_strategy_ledger/models.py",
+    "backend/routers/qmt_strategy_ledger.py",
+    "backend/routers/qmt.py",
+    "backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py",
+    "backend/tests/qmt_strategy_ledger/test_router_managed_orders_guard.py",
+    "docs/architecture/miniqmt_multi_strategy_execution_implementation_plan_20260518.md"
+  ],
+  "required_verification": [
+    "Unit test: if any item fails full-batch preflight, zero broker place_order calls occur.",
+    "Unit test: full-batch preflight aggregates cash, duplicate order_remark, same-symbol sell availability, and broker can_sell constraints where applicable.",
+    "Unit test: broker partial success persists batch PARTIAL state and exposes compensation/cancel actions or explicit operator instructions.",
+    "Unit test: idempotent retry of the same batch does not create duplicate order_intent or duplicate broker orders.",
+    "Router/API test: batch response clearly separates preflight failure, broker partial success, and completed success."
+  ],
+  "closure_requirements": [
+    "Batch submit uses a two-phase plan: validate all requests before broker submission, then submit with auditable item status.",
+    "Partial broker success has persisted state and an explicit compensation workflow.",
+    "Duplicate retry semantics are defined and tested.",
+    "The implementation does not claim impossible broker-side atomicity, but prevents avoidable pre-broker partial submission."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-19T04:44:38Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Reported via aistock_mcp_server.report_bug. Comments: 5"
+    },
+    {
+      "timestamp": "2026-05-19T04:44:38Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Root cause hypothesis: batch service was implemented as sequential single-order submissions with post-hoc partial success reporting, not as a two-phase full-batch preflight plus explicit broker-submit plan."
+    },
+    {
+      "timestamp": "2026-05-19T04:44:38Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Business impact: P1 because partial broker success can leave account and strategy ledger in a state that requires manual compensation, especially when running 20+ symbols per strategy."
+    },
+    {
+      "timestamp": "2026-05-19T04:44:38Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "This issue should not promise impossible broker atomicity. The product requirement is deterministic pre-broker all-or-nothing validation, persisted batch state, idempotent retry, and explicit operator compensation for broker-side partial success."
+    },
+    {
+      "timestamp": "2026-05-19T04:44:38Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Required verification: preflight failure in any item causes zero broker calls; successful preflight submits all items; broker partial success persists batch PARTIAL state and exposes cancel/compensation actions."
+    },
+    {
+      "timestamp": "2026-05-19T04:44:38Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Required verification: duplicate order_remark/idempotent retry behavior is defined and tested for same batch reruns."
+    },
+    {
+      "timestamp": "2026-05-19T04:50:16Z",
+      "actor": "codex-app",
+      "action": "triaged",
+      "note": "Expanded from miniQMT issue coverage audit with explicit verification and closure requirements before code fixes."
+    },
+    {
+      "timestamp": "2026-05-19T04:52:21Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Mirrored BUG-055 to GitHub issue #58 via gh CLI from miniQMT issue coverage audit."
+    },
+    {
+      "timestamp": "2026-05-19T05:31:30Z",
+      "actor": "codex-app",
+      "action": "github_sync_verified",
+      "note": "Confirmed GitHub issue #58 is OPEN and label-synced (bug, P1, severity:p1, status:open, module:qmt_strategy_ledger, risk:trading_batch_submission_safety) before fix worktree creation."
+    }
+  ],
+  "github_issue_number": 58,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/58"
+}

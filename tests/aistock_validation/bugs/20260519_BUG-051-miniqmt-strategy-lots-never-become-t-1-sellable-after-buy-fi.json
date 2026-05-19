@@ -1,0 +1,133 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-051",
+  "title": "MiniQMT strategy lots never become T+1 sellable after buy fills",
+  "description": "Expected: BUY fills synchronized into qmt_strategy.position_lot should become sellable on the next valid A-share trading day. AIstock must update or derive strategy lot available_quantity from open_date/trading calendar/pending sells, so next-day rebalance can generate and submit legal SELL intents subject to broker can_sell and market-state checks.\nActual: QmtStrategyLedgerSyncService creates every BUY PositionLotRecord with available_quantity=0. Code search shows no rollover/settlement path that changes existing lots to available after T+1. QmtManagedOrderService preview/submit uses sum(lot.available_quantity) as the strategy-level sell preflight, so even after BUG-050 generates SELL intents, next-day strategy sells can be blocked forever at the AIstock layer despite MiniQMT broker can_sell being available.",
+  "module": "qmt_strategy_ledger",
+  "severity": "P0",
+  "risk_area": "trading_sellability_tplus1",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "reported_via_mcp",
+    "files": [
+      "backend/services/qmt_strategy_ledger/sync_service.py",
+      "backend/services/qmt_strategy_ledger/order_service.py",
+      "backend/services/qmt_strategy_ledger/repository.py",
+      "backend/services/qmt_strategy_ledger/models.py",
+      "backend/routers/qmt_strategy_ledger.py",
+      "backend/tests/qmt_strategy_ledger/test_sync_service.py",
+      "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py"
+    ]
+  },
+  "reproduce_command": "rg -n \"available_quantity=0|available_quantity|list_position_lots|INSUFFICIENT_STRATEGY_AVAILABLE_SELL|PositionLotRecord\" backend/services/qmt_strategy_ledger backend/tests/qmt_strategy_ledger -S",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:backend/services/qmt_strategy_ledger/sync_service.py",
+    "file:backend/services/qmt_strategy_ledger/order_service.py",
+    "file:backend/services/qmt_strategy_ledger/repository.py",
+    "file:backend/services/qmt_strategy_ledger/models.py",
+    "file:backend/routers/qmt_strategy_ledger.py",
+    "file:backend/tests/qmt_strategy_ledger/test_sync_service.py",
+    "file:backend/tests/qmt_strategy_ledger/test_order_service_preflight.py"
+  ],
+  "fingerprint": "1d3c5921520605e1",
+  "assigned_agent": "codex-app",
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-19T04:43:32Z",
+  "first_seen_at": "2026-05-19T04:43:32Z",
+  "last_seen_at": "2026-05-19T04:43:32Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-19T04:43:32Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/qmt_strategy_ledger/sync_service.py",
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/services/qmt_strategy_ledger/repository.py",
+    "backend/services/qmt_strategy_ledger/models.py",
+    "backend/routers/qmt_strategy_ledger.py",
+    "backend/tests/qmt_strategy_ledger/test_sync_service.py",
+    "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py"
+  ],
+  "suspected_modules": [
+    "backend/services/qmt_strategy_ledger/sync_service.py",
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/services/qmt_strategy_ledger/repository.py",
+    "backend/services/qmt_strategy_ledger/models.py",
+    "backend/routers/qmt_strategy_ledger.py",
+    "backend/tests/qmt_strategy_ledger/test_sync_service.py",
+    "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py"
+  ],
+  "required_verification": [
+    "Unit test: BUY fill on trade date T creates a lot that is unavailable on T but becomes available on the next valid A-share trading day.",
+    "Unit test: weekends/non-trading days do not unlock lots before the next valid trading day.",
+    "Unit test: pending SELL intents reduce strategy available sell quantity without changing remaining_quantity until fill.",
+    "Integration test: QmtManagedOrderService SELL preview accepts a prior-day strategy lot when MiniQMT broker can_sell is sufficient.",
+    "Regression test: same-symbol lots across two strategies unlock independently by strategy_id and are not merged at AIstock strategy level."
+  ],
+  "closure_requirements": [
+    "Strategy lot availability is derived or updated from open_date, trading calendar, pending sells, and broker can_sell without manual DB edits.",
+    "Next-day rebalance can generate and preflight legal SELL orders for prior-day holdings.",
+    "T+1 availability behavior is documented in the qmt_strategy_ledger validation record.",
+    "No simplified always-zero or always-available lot fallback remains in the sell preflight path."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-19T04:43:32Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Reported via aistock_mcp_server.report_bug. Comments: 5"
+    },
+    {
+      "timestamp": "2026-05-19T04:43:32Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Root cause hypothesis: sync_service.py materializes buy lots with available_quantity=0 and no daily lot availability rollover service exists."
+    },
+    {
+      "timestamp": "2026-05-19T04:43:32Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Business impact: P0 because tomorrow or any later rebalance needs to sell prior-day holdings; if strategy-level available_quantity remains zero, AIstock can block all legitimate sells even when miniQMT broker can_sell is positive."
+    },
+    {
+      "timestamp": "2026-05-19T04:43:32Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "This is separate from BUG-050. BUG-050 covers generating SELL intents for dropped/overweight holdings; this issue covers whether previously bought lots become eligible for those SELL intents under T+1."
+    },
+    {
+      "timestamp": "2026-05-19T04:43:32Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Required verification: create a buy lot on T day, run availability rollover or derived-availability check on T+1 trading day, verify SELL preview sees available quantity and non-trading days do not unlock early."
+    },
+    {
+      "timestamp": "2026-05-19T04:43:32Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Required verification: same-symbol lots across multiple strategies must unlock independently by strategy lot and pending sells must reduce available quantity without changing remaining quantity until fill."
+    },
+    {
+      "timestamp": "2026-05-19T04:50:16Z",
+      "actor": "codex-app",
+      "action": "triaged",
+      "note": "Expanded from miniQMT issue coverage audit with explicit verification and closure requirements before code fixes."
+    },
+    {
+      "timestamp": "2026-05-19T04:52:09Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Mirrored BUG-051 to GitHub issue #54 via gh CLI from miniQMT issue coverage audit."
+    },
+    {
+      "timestamp": "2026-05-19T05:31:30Z",
+      "actor": "codex-app",
+      "action": "github_sync_verified",
+      "note": "Confirmed GitHub issue #54 is OPEN and label-synced (bug, status:open, P0, severity:p0, module:qmt_strategy_ledger, risk:trading_sellability_tplus1) before fix worktree creation."
+    }
+  ],
+  "github_issue_number": 54,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/54"
+}
