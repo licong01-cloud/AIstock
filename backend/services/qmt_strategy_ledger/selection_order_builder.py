@@ -4,15 +4,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from backend.execution_algos.board_lot import round_to_board_lot
 from backend.services.selection_center.models import SelectionCandidate, SelectionRun, SelectionRunStatus
 from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
 
-from .models import BUY_ORDER_TYPE, SELL_ORDER_TYPE, StrategyPackageBinding
+from .models import BUY_ORDER_TYPE, SELL_ORDER_TYPE, StrategyPackageBinding, VirtualAccount
 from .order_service import ManagedOrderRequest
+
+LATEST_PRICE_TYPE = 5
 
 
 @dataclass(frozen=True)
@@ -55,11 +57,22 @@ class SelectionOrderBuildResult:
                     "target_weight": float(request.target_weight) if request.target_weight is not None else None,
                     "package_id": request.package_id,
                     "selection_run_id": request.selection_run_id,
+                    "metadata": request.metadata,
                 }
                 for request in self.requests
             ],
             "skipped": list(self.skipped),
         }
+
+
+@dataclass(frozen=True)
+class _PositionSummary:
+    symbol: str
+    remaining_quantity: int
+    available_quantity: int
+    lot_count: int
+    reference_price: Decimal | None = None
+    reference_price_source: str | None = None
 
 
 class SelectionOrderBuilder:
@@ -110,25 +123,48 @@ class SelectionOrderBuilder:
 
         requests: list[ManagedOrderRequest] = []
         skipped: list[dict[str, Any]] = []
-        current_quantities = self._current_quantities(account.strategy_id)
+        position_summaries = self._position_summaries(account.strategy_id)
+        target_symbols: set[str] = set()
         for candidate in candidates:
+            target_symbols.add(candidate.symbol)
             target_quantity = self._target_quantity(candidate, account.initial_cash, binding, config)
-            current_quantity = current_quantities.get(candidate.symbol, 0)
+            current_position = position_summaries.get(candidate.symbol)
+            current_quantity = current_position.remaining_quantity if current_position is not None else 0
+            available_quantity = current_position.available_quantity if current_position is not None else 0
             delta = target_quantity - current_quantity
             if delta == 0:
-                skipped.append({"symbol": candidate.symbol, "reason": "ALREADY_AT_TARGET", "target_quantity": target_quantity})
-                continue
-            side = "BUY" if delta > 0 else "SELL"
-            order_type = BUY_ORDER_TYPE if delta > 0 else SELL_ORDER_TYPE
-            raw_quantity = abs(delta)
-            quantity = round_to_board_lot(raw_quantity, candidate.symbol, side=side)
-            if quantity <= 0:
                 skipped.append(
                     {
                         "symbol": candidate.symbol,
-                        "reason": "BOARD_LOT_ROUNDED_TO_ZERO",
-                        "raw_quantity": raw_quantity,
+                        "reason": "ALREADY_AT_TARGET",
+                        "target_quantity": target_quantity,
+                        "current_quantity": current_quantity,
+                        "available_quantity": available_quantity,
                     }
+                )
+                continue
+            if delta < 0 and available_quantity <= 0:
+                self._append_sell_request(
+                    requests,
+                    skipped,
+                    account=account,
+                    binding=binding,
+                    selection_run=selection_run,
+                    config=config,
+                    symbol=candidate.symbol,
+                    requested_quantity=abs(delta),
+                    available_quantity=available_quantity,
+                    current_quantity=current_quantity,
+                    target_quantity=target_quantity,
+                    price=Decimal("0"),
+                    price_source="not_required_no_available_lot",
+                    target_weight=_candidate_weight(candidate, binding, config),
+                    metadata={
+                        "rank": candidate.rank,
+                        "score": candidate.score,
+                        "rebalance_reason": "REDUCE_TO_TARGET",
+                    },
+                    no_available_reason="NO_AVAILABLE_LOT",
                 )
                 continue
             if candidate.reference_price is None or candidate.reference_price <= 0:
@@ -136,34 +172,103 @@ class SelectionOrderBuilder:
                     "reference_price is required to build managed order request",
                     context={"symbol": candidate.symbol, "selection_run_id": selection_run.run_id},
                 )
-            price = _price_with_slippage(
-                Decimal(str(candidate.reference_price)),
-                config.buy_price_slippage_bps if side == "BUY" else config.sell_price_slippage_bps,
-                side,
-            )
-            requests.append(
-                ManagedOrderRequest(
-                    account_id=account.account_id,
-                    strategy_name=account.strategy_name,
-                    symbol=candidate.symbol,
-                    side=side,
-                    order_type=order_type,
-                    quantity=quantity,
-                    price_type=config.price_type,
-                    price=price,
-                    order_remark=_order_remark(config.order_remark_prefix, account.strategy_name, selection_run.run_id, candidate.symbol),
-                    trade_date=selection_run.trade_date,
-                    mode=config.mode,
-                    package_id=binding.package_id,
-                    selection_run_id=selection_run.run_id,
-                    target_weight=_candidate_weight(candidate, binding, config),
-                    metadata={
-                        "rank": candidate.rank,
-                        "score": candidate.score,
-                        "target_quantity": target_quantity,
-                        "current_quantity": current_quantity,
-                    },
+            if delta > 0:
+                self._append_buy_request(
+                    requests,
+                    skipped,
+                    account=account,
+                    binding=binding,
+                    selection_run=selection_run,
+                    candidate=candidate,
+                    config=config,
+                    raw_quantity=delta,
+                    target_quantity=target_quantity,
+                    current_quantity=current_quantity,
                 )
+                continue
+
+            price = _price_with_slippage(Decimal(str(candidate.reference_price)), config.sell_price_slippage_bps, "SELL")
+            self._append_sell_request(
+                requests,
+                skipped,
+                account=account,
+                binding=binding,
+                selection_run=selection_run,
+                config=config,
+                symbol=candidate.symbol,
+                requested_quantity=abs(delta),
+                available_quantity=available_quantity,
+                current_quantity=current_quantity,
+                target_quantity=target_quantity,
+                price=price,
+                price_source="selection_reference_price",
+                target_weight=_candidate_weight(candidate, binding, config),
+                metadata={
+                    "rank": candidate.rank,
+                    "score": candidate.score,
+                    "rebalance_reason": "REDUCE_TO_TARGET",
+                },
+                no_available_reason="NO_AVAILABLE_LOT",
+            )
+
+        for position in sorted(position_summaries.values(), key=lambda item: item.symbol):
+            if position.symbol in target_symbols or position.remaining_quantity <= 0:
+                continue
+            if position.available_quantity <= 0:
+                self._append_sell_request(
+                    requests,
+                    skipped,
+                    account=account,
+                    binding=binding,
+                    selection_run=selection_run,
+                    config=config,
+                    symbol=position.symbol,
+                    requested_quantity=position.remaining_quantity,
+                    available_quantity=position.available_quantity,
+                    current_quantity=position.remaining_quantity,
+                    target_quantity=0,
+                    price=Decimal("0"),
+                    price_source="not_required_no_available_lot",
+                    target_weight=None,
+                    metadata={
+                        "rebalance_reason": "DROPPED_FROM_SELECTION",
+                        "lot_count": position.lot_count,
+                    },
+                    no_available_reason="NO_AVAILABLE_LOT_FOR_DROPPED_HOLDING",
+                )
+                continue
+            price, price_source = self._dropped_sell_price(position, config)
+            if price is None:
+                skipped.append(
+                    {
+                        "symbol": position.symbol,
+                        "reason": "MISSING_REFERENCE_PRICE_FOR_DROPPED_HOLDING",
+                        "current_quantity": position.remaining_quantity,
+                        "available_quantity": position.available_quantity,
+                        "price_type": config.price_type,
+                    }
+                )
+                continue
+            self._append_sell_request(
+                requests,
+                skipped,
+                account=account,
+                binding=binding,
+                selection_run=selection_run,
+                config=config,
+                symbol=position.symbol,
+                requested_quantity=position.remaining_quantity,
+                available_quantity=position.available_quantity,
+                current_quantity=position.remaining_quantity,
+                target_quantity=0,
+                price=price,
+                price_source=price_source,
+                target_weight=None,
+                metadata={
+                    "rebalance_reason": "DROPPED_FROM_SELECTION",
+                    "lot_count": position.lot_count,
+                },
+                no_available_reason="NO_AVAILABLE_LOT_FOR_DROPPED_HOLDING",
             )
 
         return SelectionOrderBuildResult(
@@ -185,11 +290,235 @@ class SelectionOrderBuilder:
             return sorted(selection_run.aggregate_results, key=lambda candidate: candidate.rank)
         return sorted(selection_run.package_results.get(binding.package_id, []), key=lambda candidate: candidate.rank)
 
-    def _current_quantities(self, strategy_id: str) -> dict[str, int]:
-        quantities: dict[str, int] = {}
+    def _position_summaries(self, strategy_id: str) -> dict[str, _PositionSummary]:
+        summaries: dict[str, _PositionSummary] = {}
         for lot in self._repository.list_position_lots(strategy_id):
-            quantities[lot.symbol] = quantities.get(lot.symbol, 0) + lot.remaining_quantity
-        return quantities
+            existing = summaries.get(lot.symbol)
+            lot_reference_price, lot_reference_price_source = _lot_reference_price(lot)
+            remaining_quantity = max(int(lot.remaining_quantity), 0)
+            available_quantity = min(max(int(lot.available_quantity), 0), remaining_quantity)
+            if existing is None:
+                summaries[lot.symbol] = _PositionSummary(
+                    symbol=lot.symbol,
+                    remaining_quantity=remaining_quantity,
+                    available_quantity=available_quantity,
+                    lot_count=1,
+                    reference_price=lot_reference_price,
+                    reference_price_source=lot_reference_price_source,
+                )
+                continue
+            summaries[lot.symbol] = _PositionSummary(
+                symbol=lot.symbol,
+                remaining_quantity=existing.remaining_quantity + remaining_quantity,
+                available_quantity=existing.available_quantity + available_quantity,
+                lot_count=existing.lot_count + 1,
+                reference_price=existing.reference_price or lot_reference_price,
+                reference_price_source=existing.reference_price_source or lot_reference_price_source,
+            )
+        return summaries
+
+    def _append_buy_request(
+        self,
+        requests: list[ManagedOrderRequest],
+        skipped: list[dict[str, Any]],
+        *,
+        account: VirtualAccount,
+        binding: StrategyPackageBinding,
+        selection_run: SelectionRun,
+        candidate: SelectionCandidate,
+        config: SelectionOrderBuildConfig,
+        raw_quantity: int,
+        target_quantity: int,
+        current_quantity: int,
+    ) -> None:
+        quantity = round_to_board_lot(raw_quantity, candidate.symbol, side="BUY")
+        if quantity <= 0:
+            skipped.append(
+                {
+                    "symbol": candidate.symbol,
+                    "reason": "BOARD_LOT_ROUNDED_TO_ZERO",
+                    "side": "BUY",
+                    "raw_quantity": raw_quantity,
+                    "target_quantity": target_quantity,
+                    "current_quantity": current_quantity,
+                }
+            )
+            return
+        if quantity < raw_quantity:
+            skipped.append(
+                {
+                    "symbol": candidate.symbol,
+                    "reason": "BUY_BOARD_LOT_RESIDUAL_NOT_EMITTED",
+                    "raw_quantity": raw_quantity,
+                    "emitted_quantity": quantity,
+                    "residual_quantity": raw_quantity - quantity,
+                }
+            )
+        price = _price_with_slippage(Decimal(str(candidate.reference_price)), config.buy_price_slippage_bps, "BUY")
+        requests.append(
+            self._managed_order_request(
+                account=account,
+                binding=binding,
+                selection_run=selection_run,
+                config=config,
+                symbol=candidate.symbol,
+                side="BUY",
+                order_type=BUY_ORDER_TYPE,
+                quantity=quantity,
+                price=price,
+                target_weight=_candidate_weight(candidate, binding, config),
+                metadata={
+                    "rank": candidate.rank,
+                    "score": candidate.score,
+                    "target_quantity": target_quantity,
+                    "current_quantity": current_quantity,
+                    "requested_quantity": raw_quantity,
+                    "price_source": "selection_reference_price",
+                },
+            )
+        )
+
+    def _append_sell_request(
+        self,
+        requests: list[ManagedOrderRequest],
+        skipped: list[dict[str, Any]],
+        *,
+        account: VirtualAccount,
+        binding: StrategyPackageBinding,
+        selection_run: SelectionRun,
+        config: SelectionOrderBuildConfig,
+        symbol: str,
+        requested_quantity: int,
+        available_quantity: int,
+        current_quantity: int,
+        target_quantity: int,
+        price: Decimal,
+        price_source: str,
+        target_weight: Decimal | None,
+        metadata: dict[str, Any],
+        no_available_reason: str,
+    ) -> None:
+        if available_quantity <= 0:
+            skipped.append(
+                {
+                    "symbol": symbol,
+                    "reason": no_available_reason,
+                    "side": "SELL",
+                    "requested_quantity": requested_quantity,
+                    "current_quantity": current_quantity,
+                    "target_quantity": target_quantity,
+                    "available_quantity": available_quantity,
+                }
+            )
+            return
+
+        raw_quantity = min(requested_quantity, available_quantity)
+        if raw_quantity < requested_quantity:
+            skipped.append(
+                {
+                    "symbol": symbol,
+                    "reason": "SELL_QUANTITY_CAPPED_BY_AVAILABLE_LOT",
+                    "requested_quantity": requested_quantity,
+                    "emittable_quantity": raw_quantity,
+                    "blocked_quantity": requested_quantity - raw_quantity,
+                    "current_quantity": current_quantity,
+                    "target_quantity": target_quantity,
+                    "available_quantity": available_quantity,
+                }
+            )
+
+        quantity = round_to_board_lot(raw_quantity, symbol, side="SELL")
+        if quantity <= 0:
+            skipped.append(
+                {
+                    "symbol": symbol,
+                    "reason": "BOARD_LOT_ROUNDED_TO_ZERO",
+                    "side": "SELL",
+                    "raw_quantity": raw_quantity,
+                    "target_quantity": target_quantity,
+                    "current_quantity": current_quantity,
+                }
+            )
+            return
+        if quantity < raw_quantity:
+            skipped.append(
+                {
+                    "symbol": symbol,
+                    "reason": "SELL_BOARD_LOT_RESIDUAL_DEFERRED",
+                    "raw_quantity": raw_quantity,
+                    "emitted_quantity": quantity,
+                    "residual_quantity": raw_quantity - quantity,
+                }
+            )
+
+        requests.append(
+            self._managed_order_request(
+                account=account,
+                binding=binding,
+                selection_run=selection_run,
+                config=config,
+                symbol=symbol,
+                side="SELL",
+                order_type=SELL_ORDER_TYPE,
+                quantity=quantity,
+                price=price,
+                target_weight=target_weight,
+                metadata={
+                    **metadata,
+                    "target_quantity": target_quantity,
+                    "current_quantity": current_quantity,
+                    "available_quantity": available_quantity,
+                    "requested_quantity": requested_quantity,
+                    "price_source": price_source,
+                },
+            )
+        )
+
+    def _managed_order_request(
+        self,
+        *,
+        account: VirtualAccount,
+        binding: StrategyPackageBinding,
+        selection_run: SelectionRun,
+        config: SelectionOrderBuildConfig,
+        symbol: str,
+        side: str,
+        order_type: int,
+        quantity: int,
+        price: Decimal,
+        target_weight: Decimal | None,
+        metadata: dict[str, Any],
+    ) -> ManagedOrderRequest:
+        return ManagedOrderRequest(
+            account_id=account.account_id,
+            strategy_name=account.strategy_name,
+            symbol=symbol,
+            side=side,
+            order_type=order_type,
+            quantity=quantity,
+            price_type=config.price_type,
+            price=price,
+            order_remark=_order_remark(config.order_remark_prefix, account.strategy_name, selection_run.run_id, symbol),
+            trade_date=selection_run.trade_date,
+            mode=config.mode,
+            package_id=binding.package_id,
+            selection_run_id=selection_run.run_id,
+            target_weight=target_weight,
+            metadata=metadata,
+        )
+
+    def _dropped_sell_price(
+        self,
+        position: _PositionSummary,
+        config: SelectionOrderBuildConfig,
+    ) -> tuple[Decimal | None, str]:
+        if position.reference_price is not None:
+            return _price_with_slippage(position.reference_price, config.sell_price_slippage_bps, "SELL"), (
+                position.reference_price_source or "position_metadata"
+            )
+        if config.price_type == LATEST_PRICE_TYPE:
+            return Decimal("0"), "latest_price_type"
+        return None, "missing"
 
     def _target_quantity(
         self,
@@ -231,6 +560,25 @@ def _price_with_slippage(price: Decimal, slippage_bps: Decimal, side: str) -> De
     sign = Decimal("1") if side == "BUY" else Decimal("-1")
     multiplier = Decimal("1") + sign * (slippage_bps / Decimal("10000"))
     return (price * multiplier).quantize(Decimal("0.000001"))
+
+
+def _lot_reference_price(lot: Any) -> tuple[Decimal | None, str | None]:
+    metadata = getattr(lot, "metadata", None) or {}
+    for key in ("reference_price", "last_price", "market_price", "close_price"):
+        price = _positive_decimal(metadata.get(key))
+        if price is not None:
+            return price, f"position_lot.metadata.{key}"
+    return None, None
+
+
+def _positive_decimal(value: Any) -> Decimal | None:
+    if value is None or value == "":
+        return None
+    try:
+        price = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+    return price if price > 0 else None
 
 
 def _order_remark(prefix: str, strategy_name: str, selection_run_id: str, symbol: str) -> str:
