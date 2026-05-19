@@ -1,0 +1,133 @@
+﻿{
+    "schema_version":  "aistock_validation_bug_v1",
+    "bug_id":  "BUG-052",
+    "title":  "MiniQMT strategy ledger does not apply SELL fills to lots cash and realized PnL",
+    "description":  "Expected: When MiniQMT SELL fills are synchronized, AIstock must match the fill to the owning strategy intent, close strategy position lots using a deterministic policy such as FIFO, decrease remaining/available quantities, append SELL_FILL cash ledger entries, update virtual account cash, realized_pnl, market_value, unrealized_pnl, and keep the operation idempotent across repeated syncs.\nActual: QmtStrategyLedgerSyncService only creates PositionLotRecord rows for BUY fills. There is no SELL branch that consumes existing lots, no SELL_FILL cash entry, no realized PnL calculation, and no virtual account valuation refresh. Therefore after BUG-050 begins generating SELL intents, filled sells can be recorded in trade_ledger but strategy lot/cash/PnL state will remain incorrect.",
+    "module":  "qmt_strategy_ledger",
+    "severity":  "P0",
+    "risk_area":  "trading_ledger_correctness",
+    "status":  "fixed",
+    "trigger_condition":  {
+                              "scenario":  "reported_via_mcp",
+                              "files":  [
+                                            "backend/services/qmt_strategy_ledger/sync_service.py",
+                                            "backend/services/qmt_strategy_ledger/repository.py",
+                                            "backend/services/qmt_strategy_ledger/models.py",
+                                            "backend/services/qmt_strategy_ledger/order_service.py",
+                                            "backend/routers/qmt_strategy_ledger.py",
+                                            "backend/tests/qmt_strategy_ledger/test_sync_service.py",
+                                            "backend/tests/qmt_strategy_ledger/test_repository.py"
+                                        ]
+                          },
+    "reproduce_command":  "rg -n \"SELL_FILL|BUY_FILL|if trade.order_type == BUY_ORDER_TYPE|create_position_lot|remaining_quantity|realized_pnl\" backend/services/qmt_strategy_ledger backend/tests/qmt_strategy_ledger -S",
+    "failing_run_id":  null,
+    "evidence_uris":  [
+                          "file:backend/services/qmt_strategy_ledger/sync_service.py",
+                          "file:backend/services/qmt_strategy_ledger/repository.py",
+                          "file:backend/services/qmt_strategy_ledger/models.py",
+                          "file:backend/services/qmt_strategy_ledger/order_service.py",
+                          "file:backend/routers/qmt_strategy_ledger.py",
+                          "file:backend/tests/qmt_strategy_ledger/test_sync_service.py",
+                          "file:backend/tests/qmt_strategy_ledger/test_repository.py"
+                      ],
+    "fingerprint":  "90139ccdd09e859d",
+    "assigned_agent":  "codex-app",
+    "fix_branch":  "bug/BUG-052-miniqmt-sell-fill-ledger",
+    "fix_commit":  null,
+    "verification_run_id":  "tests/aistock_validation/history/qmt_strategy_ledger/20260520_l3_bug-052-miniqmt-sell-fill-ledger.md",
+    "created_at":  "2026-05-19T04:43:48Z",
+    "first_seen_at":  "2026-05-19T04:43:48Z",
+    "last_seen_at":  "2026-05-19T04:43:48Z",
+    "fixed_at":  "2026-05-19T17:40:12Z",
+    "submitted_at":  "2026-05-19T04:43:48Z",
+    "closed_at":  null,
+    "allowed_write_scope":  [
+                                "backend/services/qmt_strategy_ledger/sync_service.py",
+                                "backend/services/qmt_strategy_ledger/repository.py",
+                                "backend/tests/qmt_strategy_ledger/test_sync_service.py",
+                                "tests/aistock_validation/bugs/20260519_BUG-052-miniqmt-strategy-ledger-does-not-apply-sell-fills-to-lots-ca.json",
+                                "tests/aistock_validation/history/qmt_strategy_ledger/20260520_l3_bug-052-miniqmt-sell-fill-ledger.md"
+                            ],
+    "suspected_modules":  [
+                              "backend/services/qmt_strategy_ledger/sync_service.py",
+                              "backend/services/qmt_strategy_ledger/repository.py",
+                              "backend/tests/qmt_strategy_ledger/test_sync_service.py"
+                          ],
+    "required_verification":  [
+                                  "Unit test: full SELL fill closes FIFO lots and appends exactly one SELL_FILL cash ledger entry.",
+                                  "Unit test: partial SELL fill partially closes lots, leaves remaining_quantity correct, and records realized_pnl.",
+                                  "Unit test: repeated sync of the same SELL trade is idempotent and does not double-count cash or PnL.",
+                                  "Unit test: same-symbol multi-strategy sell only closes lots owned by the selling strategy intent/order_remark.",
+                                  "Integration check: strategy summary cash, market_value, realized_pnl, unrealized_pnl, and total_equity match lots after SELL fills."
+                              ],
+    "closure_requirements":  [
+                                 "SELL fills update position_lot remaining/available quantities and lifecycle status.",
+                                 "SELL fills update strategy cash ledger and virtual account realized PnL exactly once.",
+                                 "Lot closure policy is deterministic and auditable from trade_ledger/order_intent/order_remark.",
+                                 "BUY and SELL settlement tests both pass together so per-strategy returns are trustworthy."
+                             ],
+    "events":  [
+                   {
+                       "timestamp":  "2026-05-19T04:43:48Z",
+                       "actor":  "codex-app",
+                       "action":  "discovered",
+                       "note":  "Reported via aistock_mcp_server.report_bug. Comments: 5"
+                   },
+                   {
+                       "timestamp":  "2026-05-19T04:43:48Z",
+                       "actor":  "codex-app",
+                       "action":  "comment",
+                       "note":  "Root cause hypothesis: sync_service.py handles trade insertion and BUY lot creation only; SELL fill accounting is not implemented although CashEntryType.SELL_FILL exists."
+                   },
+                   {
+                       "timestamp":  "2026-05-19T04:43:48Z",
+                       "actor":  "codex-app",
+                       "action":  "comment",
+                       "note":  "Business impact: P0 because a strategy that can sell must have correct realized PnL/cash/lot closure; otherwise per-strategy returns and further position sizing are wrong."
+                   },
+                   {
+                       "timestamp":  "2026-05-19T04:43:48Z",
+                       "actor":  "codex-app",
+                       "action":  "comment",
+                       "note":  "This is related to BUG-049 but should remain separate: BUG-049 covers BUY fill settlement/frozen cash/market value; this issue covers SELL fill settlement and lot closure."
+                   },
+                   {
+                       "timestamp":  "2026-05-19T04:43:48Z",
+                       "actor":  "codex-app",
+                       "action":  "comment",
+                       "note":  "Required verification: full SELL fill closes FIFO lots, partial SELL fill partially closes lots, repeated sync is idempotent, and SELL fill creates auditable cash/PnL entries exactly once."
+                   },
+                   {
+                       "timestamp":  "2026-05-19T04:43:48Z",
+                       "actor":  "codex-app",
+                       "action":  "comment",
+                       "note":  "Required verification: same-symbol multi-strategy sells only close lots owned by the selling strategy intent/order_remark."
+                   },
+                   {
+                       "timestamp":  "2026-05-19T04:50:16Z",
+                       "actor":  "codex-app",
+                       "action":  "triaged",
+                       "note":  "Expanded from miniQMT issue coverage audit with explicit verification and closure requirements before code fixes."
+                   },
+                   {
+                       "timestamp":  "2026-05-19T04:52:12Z",
+                       "actor":  "codex-app",
+                       "action":  "github_issue_created",
+                       "note":  "Mirrored BUG-052 to GitHub issue #55 via gh CLI from miniQMT issue coverage audit."
+                   },
+                   {
+                       "timestamp":  "2026-05-19T05:31:30Z",
+                       "actor":  "codex-app",
+                       "action":  "github_sync_verified",
+                       "note":  "Confirmed GitHub issue #55 is OPEN and label-synced (bug, status:open, P0, severity:p0, module:qmt_strategy_ledger, risk:trading_ledger_correctness) before fix worktree creation."
+                   },
+                   {
+                       "timestamp":  "2026-05-19T17:40:12Z",
+                       "actor":  "codex-app",
+                       "action":  "fixed_local",
+                       "note":  "Implemented MiniQMT SELL fill settlement: FIFO lot closure, SELL_FILL cash ledger, realized PnL/account update, idempotent sync, and same-symbol multi-strategy isolation. Interim validation: sync tests 12 passed; qmt_strategy_ledger suite 61 passed."
+                   }
+               ],
+    "github_issue_number":  55,
+    "github_issue_url":  "https://github.com/licong01-cloud/AIstock/issues/55"
+}

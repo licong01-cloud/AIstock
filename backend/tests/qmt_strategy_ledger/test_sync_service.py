@@ -6,10 +6,12 @@ from decimal import Decimal
 from backend.services.qmt_strategy_ledger.lot_availability import StaticTradingCalendarProvider
 from backend.services.qmt_strategy_ledger.models import (
     BUY_ORDER_TYPE,
+    SELL_ORDER_TYPE,
     CashEntryType,
     IntentSubmitStatus,
     OrderIntentRecord,
     PositionLotRecord,
+    PositionLotStatus,
     VirtualAccount,
     VirtualAccountStatus,
 )
@@ -82,6 +84,59 @@ def _repo_with_strategy() -> InMemoryQmtStrategyLedgerRepository:
 
 def _apply_buy_freeze(repo: InMemoryQmtStrategyLedgerRepository, *, amount: Decimal, intent_id: str = "intent_a") -> None:
     _freeze_account(repo, strategy_id="strat_a", amount=amount, intent_id=intent_id)
+
+
+def _sell_intent(
+    repo: InMemoryQmtStrategyLedgerRepository,
+    *,
+    intent_id: str = "intent_sell",
+    strategy_id: str = "strat_a",
+    strategy_name: str = "poc_strategy_a",
+    symbol: str = "300604.SZ",
+    quantity: int = 1000,
+    order_remark: str = "remark_sell",
+) -> None:
+    repo.create_order_intent(
+        OrderIntentRecord(
+            intent_id=intent_id,
+            strategy_id=strategy_id,
+            strategy_name=strategy_name,
+            symbol=symbol,
+            side="SELL",
+            order_type=SELL_ORDER_TYPE,
+            quantity=quantity,
+            price_type=5,
+            order_remark=order_remark,
+            account_id=ACCOUNT_ID,
+            trade_date=NEXT_TRADE_DATE,
+        )
+    )
+
+
+def _position_lot(
+    repo: InMemoryQmtStrategyLedgerRepository,
+    *,
+    lot_id: str,
+    strategy_id: str = "strat_a",
+    symbol: str = "300604.SZ",
+    quantity: int = 1000,
+    avg_cost: Decimal = Decimal("10"),
+) -> None:
+    repo.create_position_lot(
+        PositionLotRecord(
+            lot_id=lot_id,
+            strategy_id=strategy_id,
+            symbol=symbol,
+            open_trade_id=f"trade_{lot_id}",
+            open_date=TRADE_DATE,
+            quantity=quantity,
+            available_quantity=quantity,
+            remaining_quantity=quantity,
+            avg_cost=avg_cost,
+            cost_amount=avg_cost * Decimal(quantity),
+            account_id=ACCOUNT_ID,
+        )
+    )
 
 
 def _freeze_account(
@@ -491,6 +546,210 @@ def test_sync_service_values_same_symbol_by_strategy_lots_independently() -> Non
     assert repo.get_virtual_account("strat_b").market_value == Decimal("6000.000000")
     assert repo.get_virtual_account("strat_a").frozen_cash == Decimal("0.000000")
     assert repo.get_virtual_account("strat_b").frozen_cash == Decimal("0.000000")
+
+
+def test_sync_service_full_sell_fill_closes_fifo_lot_and_records_cash_pnl_once() -> None:
+    repo = _repo_with_strategy()
+    _position_lot(repo, lot_id="lot_sell_full", quantity=1000, avg_cost=Decimal("10"))
+    _sell_intent(repo, quantity=1000)
+    client = FakeReadOnlyQmtClient(
+        orders=[
+            {
+                "order_id": "order_sell",
+                "stock_code": "300604.SZ",
+                "order_type": SELL_ORDER_TYPE,
+                "order_volume": 1000,
+                "price_type": 5,
+                "price": 12,
+                "traded_volume": 1000,
+                "traded_price": 12,
+                "order_status": 56,
+                "strategy_name": "poc_strategy_a",
+                "order_remark": "remark_sell",
+            }
+        ],
+        trades=[
+            {
+                "traded_id": "trade_sell",
+                "stock_code": "300604.SZ",
+                "order_type": SELL_ORDER_TYPE,
+                "traded_time": "103000",
+                "traded_price": 12,
+                "traded_volume": 1000,
+                "traded_amount": 12000,
+                "order_id": "order_sell",
+                "commission": 6,
+                "strategy_name": "poc_strategy_a",
+                "order_remark": "remark_sell",
+            }
+        ],
+        positions=[],
+    )
+
+    summary = QmtStrategyLedgerSyncService(
+        repository=repo,
+        qmt_client=client,
+        account_id=ACCOUNT_ID,
+        trade_date=NEXT_TRADE_DATE,
+        calendar_provider=CALENDAR,
+    ).sync_snapshot()
+
+    lot = repo.list_position_lots("strat_a", "300604.SZ")[0]
+    account = repo.get_virtual_account("strat_a")
+    entries = repo.list_cash_entries("strat_a")
+    assert summary.trades_inserted == 1
+    assert summary.cash_entries_appended == 1
+    assert summary.sell_fill_received_amount == Decimal("11994.000000")
+    assert summary.sell_fill_fee_amount == Decimal("6.000000")
+    assert summary.sell_fill_realized_pnl == Decimal("1994.000000")
+    assert lot.remaining_quantity == 0
+    assert lot.available_quantity == 0
+    assert lot.status == PositionLotStatus.CLOSED
+    assert lot.realized_pnl == Decimal("1994.000000")
+    assert account.cash == Decimal("10011994.000000")
+    assert account.realized_pnl == Decimal("1994.000000")
+    assert account.market_value == Decimal("0.000000")
+    assert entries[-1].entry_type == CashEntryType.SELL_FILL
+    assert entries[-1].cash_delta == Decimal("11994.000000")
+    assert entries[-1].metadata["lot_closures"][0]["lot_id"] == "lot_sell_full"
+
+    idempotent = QmtStrategyLedgerSyncService(
+        repository=repo,
+        qmt_client=client,
+        account_id=ACCOUNT_ID,
+        trade_date=NEXT_TRADE_DATE,
+        calendar_provider=CALENDAR,
+    ).sync_snapshot()
+    assert idempotent.trades_existing == 1
+    assert idempotent.cash_entries_appended == 0
+    assert repo.get_virtual_account("strat_a") == account
+    assert repo.list_position_lots("strat_a", "300604.SZ")[0] == lot
+
+
+def test_sync_service_partial_sell_fill_partially_closes_fifo_lot() -> None:
+    repo = _repo_with_strategy()
+    _position_lot(repo, lot_id="lot_sell_partial", quantity=1000, avg_cost=Decimal("10"))
+    _sell_intent(repo, quantity=400)
+    client = FakeReadOnlyQmtClient(
+        orders=[
+            {
+                "order_id": "order_sell_partial",
+                "stock_code": "300604.SZ",
+                "order_type": SELL_ORDER_TYPE,
+                "order_volume": 400,
+                "price": 11,
+                "traded_volume": 400,
+                "traded_price": 11,
+                "order_status": 56,
+                "strategy_name": "poc_strategy_a",
+                "order_remark": "remark_sell",
+            }
+        ],
+        trades=[
+            {
+                "traded_id": "trade_sell_partial",
+                "stock_code": "300604.SZ",
+                "order_type": SELL_ORDER_TYPE,
+                "traded_time": "103000",
+                "traded_price": 11,
+                "traded_volume": 400,
+                "traded_amount": 4400,
+                "order_id": "order_sell_partial",
+                "commission": 2,
+                "strategy_name": "poc_strategy_a",
+                "order_remark": "remark_sell",
+            }
+        ],
+        positions=[{"stock_code": "300604.SZ", "quantity": 600, "can_sell": 600}],
+    )
+
+    summary = QmtStrategyLedgerSyncService(
+        repository=repo,
+        qmt_client=client,
+        account_id=ACCOUNT_ID,
+        trade_date=NEXT_TRADE_DATE,
+        calendar_provider=CALENDAR,
+    ).sync_snapshot()
+
+    lot = repo.list_position_lots("strat_a", "300604.SZ")[0]
+    account = repo.get_virtual_account("strat_a")
+    assert summary.sell_fill_realized_pnl == Decimal("398.000000")
+    assert lot.remaining_quantity == 600
+    assert lot.available_quantity == 600
+    assert lot.cost_amount == Decimal("6000.000000")
+    assert lot.status == PositionLotStatus.PARTIALLY_CLOSED
+    assert lot.realized_pnl == Decimal("398.000000")
+    assert account.cash == Decimal("10004398.000000")
+    assert account.realized_pnl == Decimal("398.000000")
+    assert account.market_value == Decimal("6000.000000")
+
+
+def test_sync_service_same_symbol_sell_closes_only_selling_strategy_lots() -> None:
+    repo = _repo_with_strategy()
+    repo.create_virtual_account(
+        VirtualAccount(
+            strategy_id="strat_b",
+            strategy_name="poc_strategy_b",
+            display_name="POC Strategy B",
+            account_id=ACCOUNT_ID,
+            mode="SIM",
+            initial_cash=Decimal("10000000"),
+            cash=Decimal("10000000"),
+            status=VirtualAccountStatus.ENABLED,
+        )
+    )
+    _position_lot(repo, lot_id="lot_a_sell", strategy_id="strat_a", quantity=1000, avg_cost=Decimal("10"))
+    _position_lot(repo, lot_id="lot_b_keep", strategy_id="strat_b", quantity=1000, avg_cost=Decimal("20"))
+    _sell_intent(repo, quantity=500)
+    client = FakeReadOnlyQmtClient(
+        orders=[
+            {
+                "order_id": "order_sell_a",
+                "stock_code": "300604.SZ",
+                "order_type": SELL_ORDER_TYPE,
+                "order_volume": 500,
+                "price": 12,
+                "traded_volume": 500,
+                "traded_price": 12,
+                "order_status": 56,
+                "strategy_name": "poc_strategy_a",
+                "order_remark": "remark_sell",
+            }
+        ],
+        trades=[
+            {
+                "traded_id": "trade_sell_a",
+                "stock_code": "300604.SZ",
+                "order_type": SELL_ORDER_TYPE,
+                "traded_time": "103000",
+                "traded_price": 12,
+                "traded_volume": 500,
+                "traded_amount": 6000,
+                "order_id": "order_sell_a",
+                "commission": 3,
+                "strategy_name": "poc_strategy_a",
+                "order_remark": "remark_sell",
+            }
+        ],
+        positions=[{"stock_code": "300604.SZ", "quantity": 1500, "can_sell": 1500}],
+    )
+
+    QmtStrategyLedgerSyncService(
+        repository=repo,
+        qmt_client=client,
+        account_id=ACCOUNT_ID,
+        trade_date=NEXT_TRADE_DATE,
+        calendar_provider=CALENDAR,
+    ).sync_snapshot()
+
+    lot_a = repo.list_position_lots("strat_a", "300604.SZ")[0]
+    lot_b = repo.list_position_lots("strat_b", "300604.SZ")[0]
+    assert lot_a.remaining_quantity == 500
+    assert lot_a.realized_pnl == Decimal("997.000000")
+    assert lot_b.remaining_quantity == 1000
+    assert lot_b.realized_pnl == Decimal("0")
+    assert repo.get_virtual_account("strat_a").realized_pnl == Decimal("997.000000")
+    assert repo.get_virtual_account("strat_b").realized_pnl == Decimal("0")
 
 
 def test_sync_service_unlocks_prior_trading_day_lot_on_tplus1_idempotently() -> None:
