@@ -231,7 +231,7 @@ def _make_runner(*, gh_available: bool = True, runner_online: bool = False):
 
 def test_platform_health_surfaces_nightly_and_runner_state(tmp_path: Path) -> None:
     _write_repo_fixture(tmp_path)
-    service = ValidationPlatformHealthService(repo_root=tmp_path, command_runner=_make_runner())
+    service = ValidationPlatformHealthService(repo_root=tmp_path, env={}, command_runner=_make_runner())
 
     payload = service.summary()
 
@@ -252,7 +252,7 @@ def test_platform_health_surfaces_nightly_and_runner_state(tmp_path: Path) -> No
 
 def test_platform_health_degrades_without_github_token(tmp_path: Path) -> None:
     _write_repo_fixture(tmp_path)
-    service = ValidationPlatformHealthService(repo_root=tmp_path, command_runner=_make_runner(gh_available=False))
+    service = ValidationPlatformHealthService(repo_root=tmp_path, env={}, command_runner=_make_runner(gh_available=False))
 
     payload = service.summary()
 
@@ -285,7 +285,7 @@ def test_platform_health_blocks_dirty_repo_without_500(tmp_path: Path) -> None:
             return 1, "", "gh: not logged in"
         return 1, "", f"unexpected command: {args}"
 
-    service = ValidationPlatformHealthService(repo_root=tmp_path, command_runner=runner)
+    service = ValidationPlatformHealthService(repo_root=tmp_path, env={}, command_runner=runner)
 
     payload = service.summary()
 
