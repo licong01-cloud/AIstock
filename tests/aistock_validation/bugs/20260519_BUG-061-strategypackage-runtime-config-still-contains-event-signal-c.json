@@ -27,7 +27,7 @@
   "verification_run_id": null,
   "created_at": "2026-05-19T08:08:12Z",
   "first_seen_at": "2026-05-19T08:08:12Z",
-  "last_seen_at": "2026-05-19T08:08:12Z",
+  "last_seen_at": "2026-05-19T11:35:00Z",
   "fixed_at": null,
   "submitted_at": "2026-05-19T08:08:12Z",
   "closed_at": null,
@@ -79,6 +79,14 @@
       "actor": "codex-app",
       "action": "queued",
       "note": "User confirmed #61 was input error and should be ignored. This bug remains in the queue as event_signal/StrategyPackage/Paper v2 ownership cleanup."
+    },
+    {
+      "timestamp": "2026-05-19T11:35:00Z",
+      "actor": "codex-app",
+      "action": "github_synced",
+      "note": "Mirrored to GitHub issue #70; user confirmed unrelated GitHub #61 is input error and ignored."
     }
-  ]
+  ],
+  "github_issue_number": 70,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/70"
 }
