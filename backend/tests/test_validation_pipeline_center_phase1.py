@@ -209,3 +209,37 @@ def test_phase1_cards_include_all_top_navigation_domains() -> None:
         "legacy_debt",
         "automation",
     }.issubset(card_ids)
+
+
+def test_automation_summary_blocks_github_write_without_repo_target(monkeypatch) -> None:
+    service = _service()
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    service._gh_auth_state = lambda: (True, "gh ok")  # type: ignore[method-assign]
+    service._github_repo_from_env_file = lambda: None  # type: ignore[method-assign]
+    service._git_one = lambda _args, default=None: default  # type: ignore[method-assign]
+
+    payload = service.automation_summary()
+    github_write = next(item for item in payload["actions"] if item["action_type"] == "github_issue_write")
+
+    assert payload["summary"]["gh_authenticated"] is True
+    assert payload["summary"]["github_repository_configured"] is False
+    assert payload["summary"]["github_issue_write_ready"] is False
+    assert github_write["enabled"] is False
+    assert "github_repository_unconfigured" in payload["reason_codes"]
+
+
+def test_automation_summary_enables_github_write_with_auth_and_repo(monkeypatch) -> None:
+    service = _service()
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    service._gh_auth_state = lambda: (True, "gh ok")  # type: ignore[method-assign]
+    service._github_repo_from_env_file = lambda: "owner/repo"  # type: ignore[method-assign]
+
+    payload = service.automation_summary()
+    github_write = next(item for item in payload["actions"] if item["action_type"] == "github_issue_write")
+
+    assert payload["summary"]["gh_authenticated"] is True
+    assert payload["summary"]["github_repository_configured"] is True
+    assert payload["summary"]["github_issue_write_ready"] is True
+    assert payload["github_repository"] == "owner/repo"
+    assert github_write["enabled"] is True
+    assert payload["reason_codes"] == []

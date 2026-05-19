@@ -31,19 +31,64 @@ class BugGitHubSyncError(RuntimeError):
     pass
 
 
+def _dedupe_paths(paths: list[Path]) -> list[Path]:
+    seen: set[str] = set()
+    result: list[Path] = []
+    for path in paths:
+        try:
+            resolved = path.resolve()
+        except OSError:
+            resolved = path
+        key = str(resolved).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(resolved)
+    return result
+
+
+def _git_toplevel(path: Path) -> Path | None:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    value = completed.stdout.strip()
+    return Path(value).resolve() if value else None
+
+
+def _candidate_repo_roots() -> list[Path]:
+    roots: list[Path] = []
+    explicit = os.environ.get("AISTOCK_REPO_ROOT")
+    if explicit:
+        roots.append(Path(explicit))
+    roots.extend([Path.cwd(), Path(__file__).resolve().parents[1]])
+    for root in list(roots):
+        top = _git_toplevel(root)
+        if top is not None:
+            roots.append(top)
+    return _dedupe_paths(roots)
+
+
 def _load_local_github_env() -> None:
     """Load local GitHub sync defaults without overriding explicit process env."""
     if os.environ.get("AISTOCK_GITHUB_SKIP_ENV_FILE"):
         return
 
-    roots: list[Path] = []
-    for root in (Path.cwd(), Path(__file__).resolve().parents[1]):
-        resolved = root.resolve()
-        if resolved not in roots:
-            roots.append(resolved)
+    env_paths: list[Path] = []
+    explicit_file = os.environ.get("AISTOCK_GITHUB_ENV_FILE")
+    if explicit_file:
+        env_paths.append(Path(explicit_file))
+    env_paths.extend(root / LOCAL_ENV_FILE for root in _candidate_repo_roots())
 
-    for root in roots:
-        path = root / LOCAL_ENV_FILE
+    for path in _dedupe_paths(env_paths):
         if not path.is_file():
             continue
         for line in path.read_text(encoding="utf-8-sig").splitlines():
@@ -55,6 +100,55 @@ def _load_local_github_env() -> None:
             value = value.strip().strip('"').strip("'")
             if key and key not in os.environ:
                 os.environ[key] = value
+
+
+def _github_repo_from_remote_url(url: str) -> str | None:
+    raw = url.strip()
+    if not raw:
+        return None
+    patterns = (
+        r"^git@github\.com:([^/]+)/(.+?)(?:\.git)?$",
+        r"^ssh://git@github\.com/([^/]+)/(.+?)(?:\.git)?$",
+        r"^https://github\.com/([^/]+)/(.+?)(?:\.git)?/?$",
+        r"^http://github\.com/([^/]+)/(.+?)(?:\.git)?/?$",
+    )
+    for pattern in patterns:
+        match = re.match(pattern, raw, flags=re.I)
+        if match:
+            owner, name = match.group(1), match.group(2)
+            name = name[:-4] if name.endswith(".git") else name
+            if owner and name and "/" not in name:
+                return f"{owner}/{name}"
+    return None
+
+
+def _github_repo_from_git_remote(root: Path) -> str | None:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(root), "remote", "get-url", "origin"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    return _github_repo_from_remote_url(completed.stdout.strip())
+
+
+def _github_repo_default() -> str | None:
+    _load_local_github_env()
+    repo = os.environ.get("GITHUB_REPOSITORY")
+    if repo:
+        return repo
+    for root in _candidate_repo_roots():
+        repo = _github_repo_from_git_remote(root)
+        if repo:
+            os.environ.setdefault("GITHUB_REPOSITORY", repo)
+            return repo
+    return None
 
 
 def _github_token_from_gh_cli() -> str | None:
@@ -632,16 +726,18 @@ def summarize_plan(plan: list[dict[str, Any]]) -> dict[str, int]:
 def run(config: SyncConfig) -> dict[str, Any]:
     directions = {"json-to-issues"} if config.direction == "json-to-issues" else {"issues-to-json"} if config.direction == "issues-to-json" else {"json-to-issues", "issues-to-json"}
     github_remote_needed = (config.apply and "json-to-issues" in directions) or (config.issues_snapshot is None and "issues-to-json" in directions)
-    if config.apply and "json-to-issues" in directions and not config.token:
-        raise BugGitHubSyncError("--apply requires --token or GITHUB_TOKEN; dry-run is the default offline mode")
-    if github_remote_needed and not config.token:
-        raise BugGitHubSyncError("live GitHub issue sync requires --token or GITHUB_TOKEN; use --issues-snapshot for offline planning")
-    if github_remote_needed and not config.repo:
-        raise BugGitHubSyncError("--apply requires --repo owner/name or GITHUB_REPOSITORY")
+    repo = config.repo or (_github_repo_default() if github_remote_needed else None)
+    token = config.token if config.token is not None else _github_token_default(remote_needed=github_remote_needed)
+    if config.apply and "json-to-issues" in directions and not token:
+        raise BugGitHubSyncError("--apply requires --token, GITHUB_TOKEN/GH_TOKEN, or gh auth token; dry-run is the default offline mode")
+    if github_remote_needed and not token:
+        raise BugGitHubSyncError("live GitHub issue sync requires --token, GITHUB_TOKEN/GH_TOKEN, or gh auth token; use --issues-snapshot for offline planning")
+    if github_remote_needed and not repo:
+        raise BugGitHubSyncError("--apply requires --repo owner/name, GITHUB_REPOSITORY, .env.github-issues-local, or a GitHub origin remote")
 
     bugs = load_bug_files(config.bugs_dir)
     if github_remote_needed:
-        client = GitHubClient(repo=str(config.repo), token=str(config.token))
+        client = GitHubClient(repo=str(repo), token=str(token))
         existing = client.list_issues()
     else:
         client = None
@@ -664,7 +760,7 @@ def run(config: SyncConfig) -> dict[str, Any]:
         "dry_run": not config.apply,
         "direction": config.direction,
         "bugs_dir": str(config.bugs_dir),
-        "repo": config.repo,
+        "repo": repo,
         "historical_import": config.historical_import,
         "p0_p1_only": config.p0_p1_only,
         "summary": summarize_plan(plan),
@@ -681,10 +777,9 @@ def run(config: SyncConfig) -> dict[str, Any]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    _load_local_github_env()
     parser = argparse.ArgumentParser(description="Offline-first AIstock bugs JSON to GitHub Issues sync helper")
     parser.add_argument("--bugs-dir", type=Path, default=BUGS_DIR, help="Directory containing AIstock bug JSON files")
-    parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY"), help="GitHub repo in owner/name form")
+    parser.add_argument("--repo", default=_github_repo_default(), help="GitHub repo in owner/name form")
     parser.add_argument("--token", default=None, help="GitHub token; required only with --apply")
     parser.add_argument("--issues-snapshot", type=Path, help="Offline JSON snapshot of existing GitHub issues for idempotency planning")
     parser.add_argument("--historical-import", action="store_true", help="Add the import:historical label to planned issues")

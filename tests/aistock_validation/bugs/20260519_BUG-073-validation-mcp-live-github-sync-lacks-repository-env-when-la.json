@@ -1,0 +1,128 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-073",
+  "title": "Validation MCP live GitHub sync lacks repository env when launched from stale worktree",
+  "description": "Expected: Validation MCP live GitHub issue sync should work after the user has authenticated GitHub CLI and configured the AIstock repository. The MCP process should reliably know the target repository (licong01-cloud/AIstock), load the local GitHub issue settings from the production repo root, or infer the repository safely from the active git remote. Pipeline GitHub readiness should require both auth and target repository availability before showing GitHub issue write capability as ready.\nActual: The pipeline can authenticate to GitHub through gh CLI, but Validation MCP live sync fails with: live GitHub issue calls require env GITHUB_REPOSITORY. The active Codex MCP config launches aistock-validation from F:/Dev/AIstock_worktrees/qe-mcp-template-archive-20260516, whose env only contains AISTOCK_VALIDATION_BASE_URL and whose worktree lacks .env.github-issues-local. The production repo root F:/Dev/AIstock has .env.github-issues-local with GITHUB_REPOSITORY=licong01-cloud/AIstock, but the MCP process does not load it. As a result, local BUG JSON can be created while GitHub sync requires manual gh CLI fallback.",
+  "module": "validation",
+  "severity": "P1",
+  "risk_area": "unspecified",
+  "status": "fixed",
+  "trigger_condition": {
+    "scenario": "reported_via_mcp",
+    "files": [
+      "scripts/aistock_mcp_server.py",
+      "scripts/bug_github_sync.py",
+      "backend/services/validation/pipeline_center.py",
+      ".mcp.json"
+    ]
+  },
+  "reproduce_command": "Use Validation MCP mcp_github_issue_sync_bug or mcp_github_issue_search(source='both') while aistock-validation is launched from F:/Dev/AIstock_worktrees/qe-mcp-template-archive-20260516 without GITHUB_REPOSITORY in MCP env; observe ValueError: live GitHub issue calls require env GITHUB_REPOSITORY.",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:scripts/aistock_mcp_server.py",
+    "file:scripts/bug_github_sync.py",
+    "file:backend/services/validation/pipeline_center.py",
+    "file:.mcp.json"
+  ],
+  "fingerprint": "aa2412f47816b261",
+  "assigned_agent": "codex-app",
+  "fix_branch": "bug/BUG-073-validation-mcp-github-env",
+  "fix_commit": "16e4af9",
+  "verification_run_id": null,
+  "created_at": "2026-05-19T16:27:34Z",
+  "first_seen_at": "2026-05-19T16:27:34Z",
+  "last_seen_at": "2026-05-19T16:27:34Z",
+  "fixed_at": "2026-05-19T17:23:26Z",
+  "submitted_at": "2026-05-19T16:27:34Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "scripts/aistock_mcp_server.py",
+    "scripts/bug_github_sync.py",
+    "backend/services/validation/pipeline_center.py",
+    ".mcp.json",
+    "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+    "backend/tests/scripts/test_bug_github_sync.py",
+    "backend/tests/test_validation_pipeline_center_phase1.py",
+    "tests/aistock_validation/bugs/20260519_BUG-073-validation-mcp-live-github-sync-lacks-repository-env-when-la.json"
+  ],
+  "suspected_modules": [
+    "scripts/aistock_mcp_server.py",
+    "scripts/bug_github_sync.py",
+    "backend/services/validation/pipeline_center.py",
+    ".mcp.json",
+    "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+    "backend/tests/scripts/test_bug_github_sync.py",
+    "backend/tests/test_validation_pipeline_center_phase1.py"
+  ],
+  "required_verification": [
+    "python -m py_compile scripts/aistock_mcp_server.py scripts/bug_github_sync.py backend/services/validation/pipeline_center.py",
+    "python -m pytest backend/tests/scripts/test_aistock_mcp_github_issue_tools.py backend/tests/scripts/test_bug_github_sync.py backend/tests/test_validation_pipeline_center_phase1.py -q",
+    "git diff --check"
+  ],
+  "closure_requirements": [
+    "BUG JSON remains linked to GitHub issue #88",
+    "MCP live GitHub issue client can infer repository from env file or git origin without storing a token",
+    "Validation automation readiness differentiates gh auth from repository target availability",
+    "Fix branch is committed and pushed for review; main merge requires user confirmation"
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-19T16:27:34Z",
+      "actor": "codex",
+      "action": "discovered",
+      "note": "Reported via aistock_mcp_server.report_bug. Comments: 4"
+    },
+    {
+      "timestamp": "2026-05-19T16:27:34Z",
+      "actor": "codex",
+      "action": "comment",
+      "note": "This is not a GitHub login/token problem: gh auth status succeeds and scripts can obtain a token through gh auth token."
+    },
+    {
+      "timestamp": "2026-05-19T16:27:34Z",
+      "actor": "codex",
+      "action": "comment",
+      "note": "The root cause is repository-target configuration drift between the production repo .env.github-issues-local and the active MCP server process/worktree env."
+    },
+    {
+      "timestamp": "2026-05-19T16:27:34Z",
+      "actor": "codex",
+      "action": "comment",
+      "note": "Fix should avoid storing raw tokens; use gh CLI token fallback plus an explicit or inferred GITHUB_REPOSITORY."
+    },
+    {
+      "timestamp": "2026-05-19T16:27:34Z",
+      "actor": "codex",
+      "action": "comment",
+      "note": "Acceptance: MCP live sync works without manual gh issue create fallback; readiness differentiates gh auth from full issue-write readiness."
+    },
+    {
+      "timestamp": "2026-05-19T16:28:56Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Mirrored BUG-073 to GitHub issue #88 via gh CLI because this bug is the Validation MCP missing GITHUB_REPOSITORY live-sync failure."
+    },
+    {
+      "timestamp": "2026-05-19T16:40:03Z",
+      "actor": "codex-app",
+      "action": "assigned",
+      "note": "Claimed BUG-073 in dedicated worktree/branch and expanded allowed_write_scope to include focused regression tests and the BUG registry record."
+    },
+    {
+      "timestamp": "2026-05-19T16:47:15Z",
+      "actor": "codex-app",
+      "action": "validated",
+      "note": "Verified py_compile for changed Python entrypoints, 50 focused pytest cases, git diff --check, and local MCP GitHub client repo/token smoke without printing token."
+    },
+    {
+      "timestamp": "2026-05-19T17:23:26Z",
+      "actor": "codex-app",
+      "action": "fixed_pending_main_merge",
+      "note": "PR #90 validated successfully; marking BUG-073 fixed before main merge so registry and GitHub issue lifecycle stay consistent."
+    }
+  ],
+  "github_issue_number": 88,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/88",
+  "worktree_path": "F:\\Dev\\AIstock_worktrees\\bug-073-validation-mcp-github-env",
+  "integration_owner": "codex-app"
+}
