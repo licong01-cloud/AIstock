@@ -2549,6 +2549,13 @@ def get_ingestion_auto_range(
         audit_max_date = audit_rows[0].get("mx") if audit_rows else None
 
     current_max_date = audit_max_date or table_max_date
+    audit_seed_required = bool(use_refresh_audit_cursor and audit_max_date is None and table_max_date is not None)
+    if audit_max_date is not None:
+        cursor_source = "refresh_audit"
+    elif audit_seed_required:
+        cursor_source = "table_pending_audit_seed"
+    else:
+        cursor_source = "table"
 
     if use_calendar_dates:
         latest_date: Optional[dt.date] = dt.date.today()
@@ -2603,7 +2610,8 @@ def get_ingestion_auto_range(
         "latest_date_kind": "calendar" if use_calendar_dates else "trading",
         "current_max_date": current_max_date.isoformat() if isinstance(current_max_date, dt.date) else None,
         "data_max_date": table_max_date.isoformat() if isinstance(table_max_date, dt.date) else None,
-        "cursor_source": "refresh_audit" if audit_max_date else "table",
+        "cursor_source": cursor_source,
+        "audit_seed_required": audit_seed_required,
         "has_data": has_data,
         "has_cursor": current_max_date is not None,
         "up_to_date": up_to_date,

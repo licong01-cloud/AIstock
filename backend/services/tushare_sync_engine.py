@@ -60,6 +60,14 @@ class SyncResult:
         }
 
 
+@dataclass
+class AuditSeedResult:
+    max_table_date: dt.date
+    safe_cursor: dt.date
+    success_dates: int = 0
+    failed_gap_dates: int = 0
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -377,22 +385,13 @@ class TushareSyncEngine:
                 conn.autocommit = previous_autocommit
 
     def _get_incremental_cursor(self, conn, spec: DatasetSpec) -> Optional[dt.date]:
-        """Return max(date_column) from target table, or None if empty."""
+        """Return the safe incremental cursor without treating missing audit as cold start."""
         if spec.incremental_cursor_from_audit:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT MAX(trade_date)
-                      FROM market.dataset_date_refresh_audit
-                     WHERE dataset = %s
-                       AND status = 'success'
-                    """,
-                    (spec.name,),
-                )
-                row = cur.fetchone()
-                if row and row[0] is not None:
-                    return row[0]
-            return None
+            cursor = self._get_safe_audit_cursor(conn, spec)
+            if cursor is not None:
+                return cursor
+            seed = self._seed_refresh_audit_from_physical_table(conn, spec)
+            return seed.safe_cursor if seed is not None else None
         sql = f"SELECT max({spec.date_column}) FROM {spec.target_table}"
         with conn.cursor() as cur:
             cur.execute(sql)
@@ -400,6 +399,148 @@ class TushareSyncEngine:
             if not row or row[0] is None:
                 return None
             return row[0]
+
+    def _get_safe_audit_cursor(self, conn, spec: DatasetSpec) -> Optional[dt.date]:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT trade_date::date AS trade_date,
+                       BOOL_OR(status = 'success') AS has_success
+                  FROM market.dataset_date_refresh_audit
+                 WHERE dataset = %s
+                 GROUP BY trade_date::date
+                 ORDER BY trade_date::date
+                """,
+                (spec.name,),
+            )
+            rows = cur.fetchall()
+        success_dates = {row[0] for row in rows if row and row[0] is not None and bool(row[1])}
+        if not success_dates:
+            return None
+
+        max_success = max(success_dates)
+        can_infer_gaps = spec.query_mode == QueryMode.BY_DATE and spec.name not in ZERO_ROW_VALID_DATASETS
+        if not can_infer_gaps:
+            return max_success
+
+        min_success = min(success_dates)
+        target_dates = self._date_sequence_for_by_date(conn, spec, min_success, max_success)
+        if not target_dates:
+            return max_success
+        previous_date: Optional[dt.date] = None
+        for trade_date in target_dates:
+            if trade_date in success_dates:
+                previous_date = trade_date
+                continue
+            return previous_date
+        return max_success
+
+    def _seed_refresh_audit_from_physical_table(
+        self,
+        conn,
+        spec: DatasetSpec,
+    ) -> Optional[AuditSeedResult]:
+        """Seed missing audit rows from existing target data before cold-starting.
+
+        Audit-backed datasets use ``dataset_date_refresh_audit`` as the
+        readiness/cursor authority. If that table is empty but the physical
+        target table already contains rows, this method records those rows as
+        physical audit evidence and returns a cursor derived from that evidence.
+        Only truly empty physical tables are allowed to fall through to the
+        dataset bootstrap start date.
+        """
+
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT {spec.date_column}::date AS trade_date,
+                       COUNT(*)::bigint AS row_count
+                  FROM {spec.target_table}
+                 WHERE {spec.date_column} IS NOT NULL
+                 GROUP BY {spec.date_column}::date
+                 ORDER BY {spec.date_column}::date
+                """
+            )
+            rows = cur.fetchall()
+        if not rows:
+            return None
+
+        row_counts = {row[0]: int(row[1] or 0) for row in rows if row and row[0] is not None}
+        if not row_counts:
+            return None
+
+        present_dates = sorted(row_counts)
+        min_date = present_dates[0]
+        max_date = present_dates[-1]
+        can_infer_gaps = spec.query_mode == QueryMode.BY_DATE and spec.name not in ZERO_ROW_VALID_DATASETS
+        if can_infer_gaps:
+            target_dates = self._date_sequence_for_by_date(conn, spec, min_date, max_date)
+        else:
+            target_dates = present_dates
+        if not target_dates:
+            target_dates = present_dates
+
+        metadata = {
+            "tushare_api": spec.tushare_api,
+            "mode": spec.query_mode.value,
+            "audit_seed_from_target_table": True,
+            "seed_reason": "audit_cursor_missing",
+            "table": spec.target_table,
+            "date_column": spec.date_column,
+        }
+        success_dates = 0
+        failed_gap_dates = 0
+        first_missing: Optional[dt.date] = None
+        previous_date: Optional[dt.date] = None
+        cursor_before_first_missing: Optional[dt.date] = None
+
+        for trade_date in target_dates:
+            row_count = int(row_counts.get(trade_date, 0))
+            if row_count > 0:
+                if first_missing is not None and can_infer_gaps:
+                    continue
+                self._refresh_audit.record_success(
+                    dataset=spec.name,
+                    trade_date=trade_date,
+                    row_count=row_count,
+                    job_id=None,
+                    data_source="physical_audit_seed",
+                    metadata=metadata,
+                    written_rows=row_count,
+                    quality_status="ok",
+                    conn=conn,
+                )
+                success_dates += 1
+                previous_date = trade_date
+                continue
+
+            if first_missing is None:
+                first_missing = trade_date
+                cursor_before_first_missing = previous_date
+            failed_gap_dates += 1
+            self._refresh_audit.record_failure(
+                dataset=spec.name,
+                trade_date=trade_date,
+                error_message=(
+                    f"{spec.name} audit seed found no rows in {spec.target_table} "
+                    f"for expected date {trade_date}"
+                ),
+                job_id=None,
+                data_source="physical_audit_seed",
+                metadata=metadata,
+                written_rows=0,
+                quality_status="empty_invalid",
+                failure_category="physical_gap",
+                conn=conn,
+            )
+
+        safe_cursor = cursor_before_first_missing if cursor_before_first_missing is not None else max_date
+        return AuditSeedResult(
+            max_table_date=max_date,
+            safe_cursor=safe_cursor,
+            success_dates=success_dates,
+            failed_gap_dates=failed_gap_dates,
+        )
 
     def _resolve_bootstrap_start_date(self, conn, spec: DatasetSpec, end_date: dt.date) -> dt.date:
         if spec.bootstrap_start_date:

@@ -53,6 +53,7 @@ UPDATE market.data_stats_config
                     || jsonb_build_object(
                         'cursor_source', 'refresh_audit',
                         'bootstrap_start_date', '2018-01-01',
+                        'cursor_bootstrap_policy', 'physical_audit_seed_before_bootstrap',
                         'source_api', 'tushare.cyq_perf'
                     )
  WHERE data_kind = 'cyq_perf';

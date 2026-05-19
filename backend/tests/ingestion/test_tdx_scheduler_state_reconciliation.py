@@ -266,7 +266,7 @@ def test_final_blocked_targets_alert_only_after_dataset_deadline(monkeypatch):
     assert alert_call[1][0]["status"] == "final_blocked"
 
 
-def test_compute_auto_range_bootstraps_cyq_perf_when_table_and_audit_empty():
+def test_compute_auto_range_bootstraps_cyq_perf_when_audit_resolver_has_no_cursor():
     scheduler = TDXScheduler.__new__(TDXScheduler)
     calls = []
 
@@ -283,24 +283,54 @@ def test_compute_auto_range_bootstraps_cyq_perf_when_table_and_audit_empty():
                     },
                 }
             ]
-        if "MAX(trade_date)::date AS mx FROM market.cyq_perf" in sql:
-            return [{"mx": None}]
-        if "FROM market.dataset_date_refresh_audit" in sql:
-            return [{"mx": None}]
         if "MAX(cal_date) AS latest" in sql:
             return [{"latest": dt.date(2026, 5, 18)}]
         raise AssertionError(sql)
 
     scheduler._fetchall = _fetchall
+    scheduler._resolve_refresh_audit_cursor = lambda dataset: None
 
     start_date, end_date = scheduler._compute_auto_range("cyq_perf")
 
     assert start_date == dt.date(2018, 1, 1)
     assert end_date == dt.date(2026, 5, 18)
-    assert any("dataset_date_refresh_audit" in sql for sql, _params in calls)
+    assert all("dataset_date_refresh_audit" not in sql for sql, _params in calls)
 
 
-def test_compute_auto_range_ignores_legacy_physical_rows_when_audit_cursor_missing():
+def test_compute_auto_range_seeds_audit_from_physical_rows_before_bootstrap():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    resolver_calls = []
+
+    def _fetchall(sql, params=()):
+        if "FROM market.data_stats_config" in sql:
+            return [
+                {
+                    "table_name": "market.cyq_perf",
+                    "date_column": "trade_date",
+                    "extra_info": {
+                        "cursor_source": "refresh_audit",
+                        "bootstrap_start_date": "2018-01-01",
+                    },
+                }
+            ]
+        if "MAX(cal_date) AS latest" in sql:
+            return [{"latest": dt.date(2026, 5, 18)}]
+        raise AssertionError(sql)
+
+    def _resolve(dataset):
+        resolver_calls.append(dataset)
+        return dt.date(2026, 5, 18)
+
+    scheduler._fetchall = _fetchall
+    scheduler._resolve_refresh_audit_cursor = _resolve
+
+    start_date, end_date = scheduler._compute_auto_range("cyq_perf")
+
+    assert (start_date, end_date) == (None, None)
+    assert resolver_calls == ["cyq_perf"]
+
+
+def test_compute_auto_range_resumes_from_seed_safe_cursor_before_gap():
     scheduler = TDXScheduler.__new__(TDXScheduler)
 
     def _fetchall(sql, params=()):
@@ -315,20 +345,46 @@ def test_compute_auto_range_ignores_legacy_physical_rows_when_audit_cursor_missi
                     },
                 }
             ]
-        if "FROM market.dataset_date_refresh_audit" in sql:
-            return [{"mx": None}]
         if "MAX(cal_date) AS latest" in sql:
             return [{"latest": dt.date(2026, 5, 18)}]
-        if "MAX(trade_date)::date AS mx FROM market.cyq_perf" in sql:
-            raise AssertionError("physical cyq_perf cursor must not drive audit-first bootstrap")
+        if "SELECT MIN(cal_date) AS nxt" in sql:
+            assert params == (dt.date(2026, 5, 14),)
+            return [{"nxt": dt.date(2026, 5, 15)}]
         raise AssertionError(sql)
 
     scheduler._fetchall = _fetchall
+    scheduler._resolve_refresh_audit_cursor = lambda _dataset: dt.date(2026, 5, 14)
 
     start_date, end_date = scheduler._compute_auto_range("cyq_perf")
 
-    assert start_date == dt.date(2018, 1, 1)
+    assert start_date == dt.date(2026, 5, 15)
     assert end_date == dt.date(2026, 5, 18)
+
+
+def test_scheduler_refresh_audit_cursor_delegates_to_tushare_engine(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls = []
+    fake_conn = object()
+
+    class _ConnCtx:
+        def __enter__(self):
+            return fake_conn
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _Engine:
+        def _get_incremental_cursor(self, conn, spec):
+            calls.append((conn, spec.name))
+            return dt.date(2026, 5, 18)
+
+    monkeypatch.setattr(scheduler_module, "_get_conn", lambda _db_cfg: _ConnCtx())
+    monkeypatch.setattr(scheduler_module, "TushareSyncEngine", _Engine)
+
+    cursor = scheduler._resolve_refresh_audit_cursor("cyq_perf")
+
+    assert cursor == dt.date(2026, 5, 18)
+    assert calls == [(fake_conn, "cyq_perf")]
 
 
 def test_refresh_schedules_reconciles_due_sync_targets():

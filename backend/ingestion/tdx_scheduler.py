@@ -392,6 +392,25 @@ class TDXScheduler:
         )
         return rows[0].get("start_date") if rows else None
 
+    def _resolve_refresh_audit_cursor(self, dataset: str) -> Optional[dt.date]:
+        """Resolve audit-backed cursor through the unified Tushare engine policy."""
+
+        dataset_key = (dataset or "").strip().lower()
+        spec = DATASET_REGISTRY.get(dataset_key)
+        if spec is None:
+            audit_rows = self._fetchall(
+                """
+                SELECT MAX(trade_date)::date AS mx
+                  FROM market.dataset_date_refresh_audit
+                 WHERE dataset = %s
+                   AND status = 'success'
+                """,
+                (dataset_key,),
+            )
+            return audit_rows[0].get("mx") if audit_rows and audit_rows[0].get("mx") else None
+        with _get_conn(getattr(self, "_db_cfg", DEFAULT_DB_CFG)) as conn:
+            return TushareSyncEngine()._get_incremental_cursor(conn, spec)
+
     def _execute(self, sql: str, params: Tuple[Any, ...] = ()) -> None:
         t0 = time.time()
         with _get_conn(self._db_cfg) as conn:
@@ -877,16 +896,7 @@ class TDXScheduler:
 
         current_max: Optional[dt.date] = None
         if use_refresh_audit_cursor:
-            audit_rows = self._fetchall(
-                """
-                SELECT MAX(trade_date)::date AS mx
-                  FROM market.dataset_date_refresh_audit
-                 WHERE dataset = %s
-                   AND status = 'success'
-                """,
-                (dataset,),
-            )
-            current_max = audit_rows[0].get("mx") if audit_rows and audit_rows[0].get("mx") else None
+            current_max = self._resolve_refresh_audit_cursor(dataset)
         else:
             rows = self._fetchall(f"SELECT MAX({date_column})::date AS mx FROM {table_name}")
             current_max = rows[0].get("mx") if rows and rows[0].get("mx") else None

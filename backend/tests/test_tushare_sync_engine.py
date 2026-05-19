@@ -223,6 +223,13 @@ def test_cyq_perf_incremental_cursor_uses_audit_not_physical_table():
             super().__init__(conn)
             self._row = (dt.date(2026, 5, 18),)
 
+        def execute(self, sql, params=None):
+            self._conn.executed.append((sql, params))
+            if "FROM market.dataset_date_refresh_audit" in sql:
+                self._rows = [(dt.date(2026, 5, 18), True)]
+            else:
+                self._rows = []
+
         def fetchone(self):
             return self._row
 
@@ -239,7 +246,38 @@ def test_cyq_perf_incremental_cursor_uses_audit_not_physical_table():
     assert all("market.cyq_perf" not in sql for sql, _params in conn.executed)
 
 
-def test_cyq_perf_bootstrap_incremental_uses_full_start_when_audit_cursor_missing(monkeypatch):
+def test_cyq_perf_audit_cursor_stops_before_unresolved_audit_gap():
+    class _Cursor(_FakeCursor):
+        def execute(self, sql, params=None):
+            self._conn.executed.append((sql, params))
+            if "FROM market.dataset_date_refresh_audit" in sql:
+                self._rows = [
+                    (dt.date(2026, 5, 14), True),
+                    (dt.date(2026, 5, 15), False),
+                    (dt.date(2026, 5, 18), True),
+                ]
+            elif "FROM market.trading_calendar" in sql:
+                self._rows = [
+                    (dt.date(2026, 5, 14),),
+                    (dt.date(2026, 5, 15),),
+                    (dt.date(2026, 5, 18),),
+                ]
+            else:
+                self._rows = []
+
+    class _Conn(_FakeConn):
+        def cursor(self):
+            return _Cursor(self)
+
+    conn = _Conn()
+
+    cursor = TushareSyncEngine()._get_incremental_cursor(conn, CYQ_PERF)
+
+    assert cursor == dt.date(2026, 5, 14)
+    assert all("market.cyq_perf" not in sql for sql, _params in conn.executed)
+
+
+def test_cyq_perf_bootstrap_incremental_uses_full_start_only_when_audit_and_table_empty(monkeypatch):
     class _Cursor(_FakeCursor):
         def __init__(self, conn):
             super().__init__(conn)
@@ -277,6 +315,145 @@ def test_cyq_perf_bootstrap_incremental_uses_full_start_when_audit_cursor_missin
     assert result.ok is True
     assert captured["start_date"] == dt.date(2018, 1, 1)
     assert captured["end_date"] == dt.date(2026, 5, 18)
+
+
+def test_cyq_perf_audit_cursor_missing_seeds_from_physical_table_before_bootstrap():
+    class _Cursor(_FakeCursor):
+        def __init__(self, conn):
+            super().__init__(conn)
+            self._row = (None,)
+
+        def execute(self, sql, params=None):
+            self._conn.executed.append((sql, params))
+            if "FROM market.dataset_date_refresh_audit" in sql:
+                self._row = (None,)
+                self._rows = []
+            elif "FROM market.cyq_perf" in sql and "GROUP BY" in sql:
+                self._rows = [(dt.date(2026, 5, 18), 32961)]
+            elif "FROM market.trading_calendar" in sql:
+                start_date, end_date = params
+                self._rows = [(start_date,)] if start_date == end_date else []
+            else:
+                self._rows = []
+
+        def fetchone(self):
+            return self._row
+
+    class _Conn(_FakeConn):
+        def cursor(self):
+            return _Cursor(self)
+
+    conn = _Conn()
+
+    cursor = TushareSyncEngine()._get_incremental_cursor(conn, CYQ_PERF)
+
+    assert cursor == dt.date(2026, 5, 18)
+    audit_rows = [
+        params
+        for sql, params in conn.executed
+        if "INSERT INTO market.dataset_date_refresh_audit" in sql
+    ]
+    assert audit_rows
+    assert audit_rows[-1][0] == "cyq_perf"
+    assert audit_rows[-1][1] == dt.date(2026, 5, 18)
+    assert audit_rows[-1][2] == "physical_audit_seed"
+    assert audit_rows[-1][4] == "success"
+
+
+def test_cyq_perf_audit_seed_returns_safe_cursor_before_physical_gap():
+    class _Cursor(_FakeCursor):
+        def __init__(self, conn):
+            super().__init__(conn)
+            self._row = (None,)
+
+        def execute(self, sql, params=None):
+            self._conn.executed.append((sql, params))
+            if "FROM market.dataset_date_refresh_audit" in sql:
+                self._row = (None,)
+                self._rows = []
+            elif "FROM market.cyq_perf" in sql and "GROUP BY" in sql:
+                self._rows = [
+                    (dt.date(2026, 5, 14), 32000),
+                    (dt.date(2026, 5, 18), 32961),
+                ]
+            elif "FROM market.trading_calendar" in sql:
+                self._rows = [
+                    (dt.date(2026, 5, 14),),
+                    (dt.date(2026, 5, 15),),
+                    (dt.date(2026, 5, 18),),
+                ]
+            else:
+                self._rows = []
+
+        def fetchone(self):
+            return self._row
+
+    class _Conn(_FakeConn):
+        def cursor(self):
+            return _Cursor(self)
+
+    conn = _Conn()
+
+    cursor = TushareSyncEngine()._get_incremental_cursor(conn, CYQ_PERF)
+
+    assert cursor == dt.date(2026, 5, 14)
+    audit_rows = [
+        params
+        for sql, params in conn.executed
+        if "INSERT INTO market.dataset_date_refresh_audit" in sql
+    ]
+    assert [row[1] for row in audit_rows] == [dt.date(2026, 5, 14), dt.date(2026, 5, 15)]
+    assert audit_rows[1][4] == "failed"
+    assert audit_rows[1][13] == "physical_gap"
+
+
+def test_all_audit_cursor_specs_seed_from_existing_physical_table_when_audit_missing():
+    class _Cursor(_FakeCursor):
+        def __init__(self, conn):
+            super().__init__(conn)
+            self._row = (None,)
+
+        def execute(self, sql, params=None):
+            self._conn.executed.append((sql, params))
+            if "FROM market.dataset_date_refresh_audit" in sql:
+                self._row = (None,)
+                self._rows = []
+            elif "GROUP BY" in sql:
+                self._rows = [(dt.date(2026, 5, 18), 7)]
+            elif "FROM market.trading_calendar" in sql:
+                self._rows = [(dt.date(2026, 5, 18),)]
+            else:
+                self._rows = []
+
+        def fetchone(self):
+            return self._row
+
+    class _Conn(_FakeConn):
+        def cursor(self):
+            return _Cursor(self)
+
+    audit_cursor_datasets = [
+        "stock_st_events",
+        "cyq_perf",
+        "tushare_forecast_raw",
+        "tushare_express_raw",
+        "tushare_fina_indicator_raw",
+    ]
+
+    for name in audit_cursor_datasets:
+        conn = _Conn()
+        spec = DATASET_REGISTRY[name]
+        cursor = TushareSyncEngine()._get_incremental_cursor(conn, spec)
+
+        assert cursor == dt.date(2026, 5, 18)
+        assert any(spec.target_table in sql and "GROUP BY" in sql for sql, _params in conn.executed)
+        audit_rows = [
+            params
+            for sql, params in conn.executed
+            if "INSERT INTO market.dataset_date_refresh_audit" in sql
+        ]
+        assert audit_rows[-1][0] == name
+        assert audit_rows[-1][2] == "physical_audit_seed"
 
 
 def test_by_date_sync_records_provider_contract_error_for_wrong_trade_date(monkeypatch):

@@ -172,3 +172,4 @@ def test_data_sync_autonomy_schema_comments_are_declared():
     assert "uq_data_sync_targets_dataset_date" in migration
     assert "cursor_source', 'refresh_audit'" in migration
     assert "bootstrap_start_date', '2018-01-01'" in migration
+    assert "cursor_bootstrap_policy', 'physical_audit_seed_before_bootstrap'" in migration

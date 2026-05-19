@@ -296,6 +296,29 @@ stats_success_physical_missing
 4. 同步完成后触发 `data_stats` 针对性刷新或标记 cache stale。
 5. Reconciliation worker 能识别历史“物理表有数据但 audit 缺失”的日期，并自动补写 audit 或创建受控 backfill target。
 
+### 6.3 audit 为空时的强制审计优先规则
+
+本轮复核修正一条关键原则：`dataset_date_refresh_audit` 为空不能直接解释为“该数据集需要从历史起点全量同步”。audit 为空只代表“readiness 账本未知”，必须先审计实际物理表。
+
+统一规则如下：
+
+1. 对 `incremental_cursor_from_audit=true` 的 Tushare 数据集，增量 cursor 解析顺序必须是：先读 audit success 最大日期；若 audit 为空，先从物理表按日期统计并种子化 audit；只有 audit 和物理表都为空时，才允许进入 cold-start/bootstrap。
+2. 物理表有数据时，系统写入 `data_source='physical_audit_seed'` 的 audit evidence，metadata 必须包含 `audit_seed_from_target_table=true`、`table`、`date_column`、`seed_reason='audit_cursor_missing'`。
+3. 对 `cyq_perf` 这类非稀疏日频数据，物理审计发现交易日缺口时，不能把 cursor 推到物理最大日期；safe cursor 必须停在第一个缺口之前，让下一轮自动同步补齐缺口。
+4. 对 `cyq_perf` 这类非稀疏日频数据，audit 账本中如果存在未被后续 success 覆盖的失败/缺失日期，即使后面日期已有 success，也不能用 `MAX(success_date)` 直接跳过；safe cursor 同样必须停在缺口之前。
+5. 对 `stock_st_events`、`tushare_forecast_raw`、`tushare_express_raw`、`tushare_fina_indicator_raw` 这类稀疏/公告数据，物理表没有某日记录不能被反推为失败；只能为已有物理行的日期种子化 success，未来日期仍由真实 API 同步写入 `empty_valid` 或失败状态。
+6. scheduler 的 `_compute_auto_range()` 与 `TushareSyncEngine._get_incremental_cursor()` 必须使用同一语义：audit missing -> physical audit seed -> cold start。任何路径都不得绕过物理表直接使用 `bootstrap_start_date`。
+
+当前 audit-cursor Tushare 数据集复核结果：
+
+| 数据集 | 查询模式 | 物理表 | 日期列 | audit 为空时处理 |
+|---|---|---|---|---|
+| `cyq_perf` | `BY_DATE` | `market.cyq_perf` | `trade_date` | 先从物理表按交易日种子化；物理表为空才从 `2018-01-01` cold start |
+| `stock_st_events` | `BY_DATE` | `market.stock_st_events` | `pub_date` | 先为已有事件日期种子化；不能把无事件日反推为失败 |
+| `tushare_forecast_raw` | `BY_PERIOD` | `market.tushare_forecast_raw` | `ann_date` | 先为已有公告日期种子化；空公告日必须由真实同步确认 |
+| `tushare_express_raw` | `BY_PERIOD` | `market.tushare_express_raw` | `ann_date` | 先为已有公告日期种子化；空公告日必须由真实同步确认 |
+| `tushare_fina_indicator_raw` | `BY_PERIOD` | `market.tushare_fina_indicator_raw` | `ann_date` | 先为已有公告日期种子化；空公告日必须由真实同步确认 |
+
 ## 7. 数据看板改造
 
 ### 7.1 UI 展示字段
@@ -403,6 +426,12 @@ UI 不得只显示 job success。若 job success 但 audit 缺失，应显示：
 | DS-AUTO-028 | 下游依赖缺失 | `sector_data` 依赖未 ready | `blocked_by_dependency`，优先补依赖 | 否 |
 | DS-AUTO-029 | freshness check 早于 auto retry | 22:00 stale，23:00 可补齐 | 22:00 不写 alert，只写 target/summary | 否 |
 | DS-AUTO-030 | data_stats 重建失败 | audit ready，缓存刷新异常 | 业务 ready，UI cache error，后台重建 | 否 |
+| DS-AUTO-031 | audit 为空但物理表已有 `cyq_perf` 最新日期 | audit max NULL，`market.cyq_perf` max=T | 先写 `physical_audit_seed` audit，auto range 返回无需从 `2018-01-01` 全量重拉 | 否 |
+| DS-AUTO-032 | audit 为空且 `cyq_perf` 物理表存在中间交易日缺口 | 物理表有 T-2/T，但缺 T-1 | 种子化已有日期 success、缺口 failed，safe cursor 停在 T-2，下一轮从 T-1 补齐 | 否 |
+| DS-AUTO-033 | audit 为空且物理表也为空 | audit max NULL，physical row 0 | 才允许使用 catalog `bootstrap_start_date` 或 cold-start 日期 | 否 |
+| DS-AUTO-034 | 所有 audit-cursor Tushare 数据集复核 | `stock_st_events`、`cyq_perf`、3 个财务 raw | 任一数据集 audit 为空但 physical 有行时均先物理审计，不直接 bootstrap | 否 |
+| DS-AUTO-035 | 稀疏/公告数据物理审计 | `stock_st_events` 或财务 raw 某些日期无物理行 | 不能把无事件日直接记为失败，只能为已有事件日期种子化 success；未来空日由 API 同步确认 `empty_valid` | 否 |
+| DS-AUTO-036 | audit 中间日期失败但后续日期成功 | `cyq_perf` audit 有 T-2 success、T-1 failed、T success | safe cursor 停在 T-2，不得用 `MAX(success)=T` 跳过 T-1 | 否 |
 
 ### 9.3 结果数据验证方式
 
@@ -494,15 +523,17 @@ ORDER BY severity DESC, dataset;
 
 1. L0-L5 测试矩阵全部通过并保存验证记录。
 2. `cyq_perf` 覆盖 job success + audit missing + data_stats stale 的自动恢复路径。
-3. 首次同步失败后 `data_sync_targets` 能自动补齐并去重。
-4. `stk_limit`、`suspend_d`、`margin_detail` 覆盖 release/T+1/deadline 策略。
-5. 只有 final blocked 或不可控故障产生 `market.data_alerts`。
-6. API/UI 同时展示 `ready_date`、`physical_max_date`、`stats_max_date`、`cache_state`、`next_retry_at`、`operator_action_required`。
-7. Paper v2 / Selection Center 只消费 audit-backed readiness。
-8. DB schema comment、migration、回滚策略、run evidence 完整。
-9. 并发触发、旧 job 晚完成、非交易日、交易日历缺失、provider 修正、依赖阻塞、cache rebuild failed 均有自动化测试。
-10. 第一版实现仅新增必要状态源，优先使用 `data_sync_targets` + `data_sync_attempts`，不得再引入互相重复的 readiness 表。
-11. 自动化流水线通过后，由用户确认是否合入 Main。
+3. 所有 `incremental_cursor_from_audit=true` 的 Tushare 数据集都覆盖 audit missing -> physical audit seed -> cold start 的顺序，且物理表有数据时不得直接从历史起点全量同步。
+4. 非稀疏日频数据的物理缺口能让 safe cursor 停在缺口前；稀疏/公告数据不能把无物理行日期误判为失败。
+5. 首次同步失败后 `data_sync_targets` 能自动补齐并去重。
+6. `stk_limit`、`suspend_d`、`margin_detail` 覆盖 release/T+1/deadline 策略。
+7. 只有 final blocked 或不可控故障产生 `market.data_alerts`。
+8. API/UI 同时展示 `ready_date`、`physical_max_date`、`stats_max_date`、`cache_state`、`next_retry_at`、`operator_action_required`。
+9. Paper v2 / Selection Center 只消费 audit-backed readiness。
+10. DB schema comment、migration、回滚策略、run evidence 完整。
+11. 并发触发、旧 job 晚完成、非交易日、交易日历缺失、provider 修正、依赖阻塞、cache rebuild failed 均有自动化测试。
+12. 第一版实现仅新增必要状态源，优先使用 `data_sync_targets` + `data_sync_attempts`，不得再引入互相重复的 readiness 表。
+13. 自动化流水线通过后，由用户确认是否合入 Main。
 
 ## 11. 分阶段实施计划
 
@@ -521,6 +552,8 @@ ORDER BY severity DESC, dataset;
 ### Phase 2：`cyq_perf` 接入统一 readiness
 
 - 统一写入 `dataset_date_refresh_audit`。
+- audit cursor 缺失时先从物理表种子化 audit；物理表为空才进入 cold start。
+- 对 `cyq_perf` 交易日缺口使用 safe cursor 回退，确保下一轮自动补齐缺口。
 - 同步后刷新或标记 `data_stats`。
 - 支持物理表/audit/data_stats reconciliation。
 
