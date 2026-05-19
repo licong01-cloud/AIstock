@@ -731,6 +731,63 @@ def test_backfill_service_task_ids_expand_to_unarchived_completed_loops_by_defau
     assert [item["source_sub_id"] for item in result["results"]] == ["loop_3"]
 
 
+def test_backfill_service_task_loop_indices_expand_selected_loops() -> None:
+    class FakeAssembler:
+        def __init__(self) -> None:
+            self.refs_args = None
+            self.loop_ids: list[str] = []
+
+        def list_loop_refs_for_task_indices(self, task_id, loop_indices, *, status, include_archived):  # type: ignore[no-untyped-def]
+            self.refs_args = {
+                "task_id": task_id,
+                "loop_indices": list(loop_indices),
+                "status": status,
+                "include_archived": include_archived,
+            }
+            return [
+                {"task_id": "task_1", "loop_id": "loop_1", "loop_index": 1},
+                {"task_id": "task_1", "loop_id": "loop_3", "loop_index": 3},
+            ]
+
+        def assemble_loop_payload(self, *, loop_id=None, task_id=None, loop_index=None):  # type: ignore[no-untyped-def]
+            self.loop_ids.append(loop_id)
+            return {
+                "source_system": "qe_evolution",
+                "source_id": task_id,
+                "source_sub_id": loop_id,
+            }
+
+    class FakeArchiveService:
+        def process_payload(self, payload, *, event_type, source_system, source_id, source_sub_id, dry_run):  # type: ignore[no-untyped-def]
+            return SimpleNamespace(run_id=f"run_{source_sub_id}", stats={"written": not dry_run})
+
+    assembler = FakeAssembler()
+    result = QEArchiveBackfillService(
+        assembler=assembler,  # type: ignore[arg-type]
+        archive_service=FakeArchiveService(),  # type: ignore[arg-type]
+        repository=SimpleNamespace(get_archive_summary=lambda: {"run_count": 2}),
+    ).process_backfill(
+        QEArchiveBackfillOptions(
+            source="loop",
+            task_id="task_1",
+            loop_indices=[1, 3, 3, 99],
+            write=False,
+        )
+    )
+
+    assert assembler.refs_args == {
+        "task_id": "task_1",
+        "loop_indices": [1, 3, 99],
+        "status": "completed",
+        "include_archived": False,
+    }
+    assert assembler.loop_ids == ["loop_1", "loop_3"]
+    assert result["processed_count"] == 3
+    assert [item["source_sub_id"] for item in result["results"][:2]] == ["loop_1", "loop_3"]
+    assert result["results"][2]["source_sub_id"] == "Loop99"
+    assert result["results"][2]["skipped_reason"] == "loop_not_found_or_filtered"
+
+
 def test_backfill_service_candidate_listing_uses_page_and_page_size() -> None:
     class FakeAssembler:
         def list_backfill_candidates(self, *, status, limit, offset, include_archived):  # type: ignore[no-untyped-def]
@@ -911,6 +968,7 @@ def test_qe_archive_backfill_api_returns_service_report(monkeypatch) -> None:
     class FakeService:
         def process_backfill(self, options):  # type: ignore[no-untyped-def]
             assert options.loop_ids == ["loop_1"]
+            assert options.loop_indices == [1, 3]
             assert options.include_archived is False
             assert options.write is False
             return {"processed_count": 1, "results": [{"run_id": "run_loop_1"}]}
@@ -922,7 +980,7 @@ def test_qe_archive_backfill_api_returns_service_report(monkeypatch) -> None:
 
     response = client.post(
         "/api/v1/qe-archive/backfill",
-        json={"source": "loop", "loop_ids": ["loop_1"], "write": False, "include_archived": False},
+        json={"source": "loop", "loop_ids": ["loop_1"], "loop_indices": [1, 3], "write": False, "include_archived": False},
     )
 
     assert response.status_code == 200
@@ -930,6 +988,35 @@ def test_qe_archive_backfill_api_returns_service_report(monkeypatch) -> None:
     assert body["status"] == "success"
     assert body["data"]["processed_count"] == 1
     assert body["data"]["results"][0]["run_id"] == "run_loop_1"
+
+
+def test_qe_archive_source_status_api_returns_coverage(monkeypatch) -> None:
+    class FakeService:
+        def get_source_status(self, *, experiment_ids, task_ids, loop_ids, include_recommendation):  # type: ignore[no-untyped-def]
+            assert experiment_ids == ["qe_exp_1"]
+            assert task_ids == ["task_1"]
+            assert loop_ids == ["loop_1"]
+            assert include_recommendation is True
+            return {
+                "experiments": {"qe_exp_1": {"archive_status": "archived", "run_ids": ["run_1"]}},
+                "tasks": {"task_1": {"archive_status": "partially_archived", "archived_loop_count": 1}},
+                "loops": {"loop_1": {"archive_status": "archived", "run_ids": ["run_1"]}},
+            }
+
+    monkeypatch.setattr(qe_archive_router, "get_backfill_service", lambda: FakeService())
+    app = FastAPI()
+    app.include_router(qe_archive_router.router, prefix="/api/v1")
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/v1/qe-archive/source-status",
+        json={"experiment_ids": ["qe_exp_1"], "task_ids": ["task_1"], "loop_ids": ["loop_1"]},
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["experiments"]["qe_exp_1"]["archive_status"] == "archived"
+    assert data["tasks"]["task_1"]["archive_status"] == "partially_archived"
 
 
 def test_qe_archive_backfill_candidates_api_returns_selectable_sources(monkeypatch) -> None:

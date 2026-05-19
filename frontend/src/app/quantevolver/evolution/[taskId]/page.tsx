@@ -8,12 +8,14 @@ import { FactorAnalysisPanel } from "../../components/FactorAnalysisPanel";
 import { StrategyConfigCard } from "../../components/StrategyConfigCard";
 import { PaperV2ApiError, strategyPackageApi } from "@/lib/paper-v2/api";
 import type { JsonObject } from "@/lib/paper-v2/types";
+import { qeArchiveApi, type ArchiveSourceItemStatus, type ArchiveSourceStatus, type BackfillReport } from "@/lib/qe-archive/api";
 
 const IcSeriesChart = dynamic(() => import("../../components/charts/IcSeriesChart"), { ssr: false });
 const ReturnCurveChart = dynamic(() => import("../../components/charts/ReturnCurveChart"), { ssr: false });
 const LossCurveChart = dynamic(() => import("../../components/charts/LossCurveChart"), { ssr: false });
 
 const API = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8001/api/v1";
+const QE_ARCHIVE_WRITE_CONFIRM = "QE_ARCHIVE_WRITE";
 
 function MetricBadge({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
@@ -65,6 +67,63 @@ function getLoopPathId(loop: Loop): string {
   return `Loop${loop.loop_index}`;
 }
 
+function getArchiveLoopId(taskId: string, loop: Loop): string {
+  if (loop.loop_id) return String(loop.loop_id);
+  return `${taskId}_Loop${loop.loop_index}`;
+}
+
+function archiveStatusLabel(status?: string): string {
+  switch (status) {
+    case "archived": return "已入仓";
+    case "fully_archived": return "全部入仓";
+    case "partially_archived": return "部分入仓";
+    case "eligible": return "可入仓";
+    case "not_recommended": return "不建议";
+    case "manual_only": return "人工判断";
+    case "skipped": return "已跳过";
+    case "not_archived":
+    default:
+      return "未入仓";
+  }
+}
+
+function archiveStatusStyle(status?: string): React.CSSProperties {
+  const palette: Record<string, { bg: string; fg: string; border: string }> = {
+    archived: { bg: "#ecfdf5", fg: "#047857", border: "#a7f3d0" },
+    fully_archived: { bg: "#ecfdf5", fg: "#047857", border: "#a7f3d0" },
+    partially_archived: { bg: "#fffbeb", fg: "#b45309", border: "#fde68a" },
+    eligible: { bg: "#eff6ff", fg: "#1d4ed8", border: "#bfdbfe" },
+    not_recommended: { bg: "#f8fafc", fg: "#64748b", border: "#cbd5e1" },
+    manual_only: { bg: "#f5f3ff", fg: "#6d28d9", border: "#ddd6fe" },
+    skipped: { bg: "#f8fafc", fg: "#64748b", border: "#cbd5e1" },
+    not_archived: { bg: "#fef2f2", fg: "#b91c1c", border: "#fecaca" },
+  };
+  const colors = palette[status || "not_archived"] || palette.not_archived;
+  return {
+    padding: "2px 8px",
+    borderRadius: 999,
+    fontSize: 10,
+    fontWeight: 700,
+    backgroundColor: colors.bg,
+    color: colors.fg,
+    border: `1px solid ${colors.border}`,
+    whiteSpace: "nowrap",
+  };
+}
+
+function ArchiveBadge({ status }: { status?: ArchiveSourceItemStatus }) {
+  const archiveStatus = status?.archive_status || "not_archived";
+  return <span title={status?.run_ids?.join(", ") || status?.reason || ""} style={archiveStatusStyle(archiveStatus)}>{archiveStatusLabel(archiveStatus)}</span>;
+}
+
+function summarizeBackfillReport(report: BackfillReport): string {
+  const rows = report.results || [];
+  const willArchive = rows.filter((item) => item.will_archive !== false && !item.skipped_reason && !item.error).length;
+  const skipped = rows.filter((item) => item.skipped_reason || item.error).length;
+  const written = rows.filter((item) => item.run_id && !item.dry_run).length;
+  return `候选 ${rows.length} 条，可入仓 ${willArchive} 条，已写入 ${written} 条，跳过/失败 ${skipped} 条`;
+}
+
 interface Loop {
   loop_id: string;
   loop_index: number;
@@ -90,6 +149,29 @@ export default function EvolutionDetailPage({ params }: { params: { taskId: stri
   const [candidateActionId, setCandidateActionId] = useState<string | null>(null);
   const [candidateMessage, setCandidateMessage] = useState<{ loopId: string; msg: string; ok: boolean } | null>(null);
   const [enhancedErrors, setEnhancedErrors] = useState<Record<string, string>>({});
+  const [archiveStatus, setArchiveStatus] = useState<ArchiveSourceStatus | null>(null);
+  const [archiveStatusLoading, setArchiveStatusLoading] = useState(false);
+  const [selectedLoopIndices, setSelectedLoopIndices] = useState<Set<number>>(new Set());
+  const [archiveActionLoading, setArchiveActionLoading] = useState<"preview" | "execute" | null>(null);
+  const [archiveMessage, setArchiveMessage] = useState<{ msg: string; ok: boolean } | null>(null);
+
+  const loadArchiveStatus = useCallback(async (nextLoops: Loop[]) => {
+    if (!taskId) return;
+    const loopIds = nextLoops.map((loop) => getArchiveLoopId(taskId, loop)).filter(Boolean);
+    setArchiveStatusLoading(true);
+    try {
+      const nextStatus = await qeArchiveApi.sourceStatus({
+        task_ids: [taskId],
+        loop_ids: loopIds,
+        include_recommendation: true,
+      });
+      setArchiveStatus(nextStatus);
+    } catch (exc) {
+      setArchiveMessage({ ok: false, msg: `数仓状态读取失败: ${apiErrorMessage(exc)}` });
+    } finally {
+      setArchiveStatusLoading(false);
+    }
+  }, [taskId]);
 
   const fetchEnhancedDirect = useCallback((loopId: string) => {
     setLoadingLoops(prev => new Set(prev).add(loopId));
@@ -123,9 +205,12 @@ export default function EvolutionDetailPage({ params }: { params: { taskId: stri
       })
       .then(res => {
         if (res?.status === "success" && res.data) {
+          const nextLoops = res.data.loops ?? [];
           setTask(res.data.task ?? res.data);
-          setLoops(res.data.loops ?? []);
-          const sotaLoop = (res.data.loops ?? []).find((l: Loop) => l.is_sota);
+          setLoops(nextLoops);
+          setSelectedLoopIndices(new Set());
+          void loadArchiveStatus(nextLoops);
+          const sotaLoop = nextLoops.find((l: Loop) => l.is_sota);
           if (sotaLoop) {
             setExpandedLoops(new Set([sotaLoop.loop_index]));
             fetchEnhancedDirect(sotaLoop.loop_id);
@@ -136,7 +221,7 @@ export default function EvolutionDetailPage({ params }: { params: { taskId: stri
       })
       .catch(e => setError(String(e?.message ?? "加载失败，请重试")))
       .finally(() => setLoading(false));
-  }, [taskId, fetchEnhancedDirect]);
+  }, [taskId, fetchEnhancedDirect, loadArchiveStatus]);
 
   const fetchEnhanced = useCallback((loopId: string) => {
     if (enhancedCache[loopId] || loadingLoops.has(loopId)) return;
@@ -222,6 +307,87 @@ export default function EvolutionDetailPage({ params }: { params: { taskId: stri
     }
   };
 
+  const archiveStatusForLoop = useCallback((loop: Loop): ArchiveSourceItemStatus | undefined => {
+    const loopId = getArchiveLoopId(taskId, loop);
+    return archiveStatus?.loops?.[loopId];
+  }, [archiveStatus, taskId]);
+
+  const canSelectArchiveLoop = useCallback((loop: Loop): boolean => {
+    const status = archiveStatusForLoop(loop)?.archive_status || "not_archived";
+    return loop.status === "completed" && status !== "archived";
+  }, [archiveStatusForLoop]);
+
+  const toggleArchiveSelection = (loop: Loop, checked?: boolean) => {
+    if (!canSelectArchiveLoop(loop)) return;
+    setSelectedLoopIndices(prev => {
+      const next = new Set(prev);
+      const shouldSelect = checked ?? !next.has(loop.loop_index);
+      if (shouldSelect) next.add(loop.loop_index);
+      else next.delete(loop.loop_index);
+      return next;
+    });
+  };
+
+  const selectedArchiveIndices = () => Array.from(selectedLoopIndices)
+    .filter(index => loops.some(loop => loop.loop_index === index && canSelectArchiveLoop(loop)))
+    .sort((a, b) => a - b);
+
+  const previewArchiveSelection = async (indices?: number[]) => {
+    const loopIndices = indices && indices.length ? indices : selectedArchiveIndices();
+    if (!loopIndices.length) {
+      setArchiveMessage({ ok: false, msg: "请先选择至少一个已完成且未入仓的 Loop" });
+      return;
+    }
+    setArchiveActionLoading("preview");
+    setArchiveMessage(null);
+    try {
+      const report = await qeArchiveApi.previewSelection({
+        source: "loop",
+        task_id: taskId,
+        loop_indices: loopIndices,
+        status: "completed",
+        include_archived: false,
+        validate_after_write: true,
+      });
+      setArchiveMessage({ ok: true, msg: `预览完成：${summarizeBackfillReport(report)}` });
+      void loadArchiveStatus(loops);
+    } catch (exc) {
+      setArchiveMessage({ ok: false, msg: `预览失败: ${apiErrorMessage(exc)}` });
+    } finally {
+      setArchiveActionLoading(null);
+    }
+  };
+
+  const executeArchiveSelection = async (indices?: number[]) => {
+    const loopIndices = indices && indices.length ? indices : selectedArchiveIndices();
+    if (!loopIndices.length) {
+      setArchiveMessage({ ok: false, msg: "请先选择至少一个已完成且未入仓的 Loop" });
+      return;
+    }
+    const ok = window.confirm(`确认将 ${loopIndices.length} 个 Loop 写入 QE Archive 数仓？此操作会写数据库，但不会删除原始 QE 实验。`);
+    if (!ok) return;
+    setArchiveActionLoading("execute");
+    setArchiveMessage(null);
+    try {
+      const report = await qeArchiveApi.executeSelection({
+        source: "loop",
+        task_id: taskId,
+        loop_indices: loopIndices,
+        status: "completed",
+        include_archived: false,
+        validate_after_write: true,
+        confirm_write: QE_ARCHIVE_WRITE_CONFIRM,
+      });
+      setArchiveMessage({ ok: true, msg: `入仓完成：${summarizeBackfillReport(report)}` });
+      setSelectedLoopIndices(new Set());
+      void loadArchiveStatus(loops);
+    } catch (exc) {
+      setArchiveMessage({ ok: false, msg: `入仓失败: ${apiErrorMessage(exc)}` });
+    } finally {
+      setArchiveActionLoading(null);
+    }
+  };
+
   const toggleLoop = (loopIndex: number, loopId: string) => {
     setExpandedLoops(prev => {
       const next = new Set(prev);
@@ -247,6 +413,10 @@ export default function EvolutionDetailPage({ params }: { params: { taskId: stri
 
   const sotaCount = loops.filter(l => l.is_sota).length;
   const completedCount = loops.filter(l => l.status === "completed").length;
+  const taskArchiveStatus = archiveStatus?.tasks?.[taskId];
+  const archivedLoopCount = taskArchiveStatus?.archived_loop_count ?? loops.filter(loop => archiveStatusForLoop(loop)?.archive_status === "archived").length;
+  const pendingArchiveCount = taskArchiveStatus?.pending_loop_count ?? loops.filter(canSelectArchiveLoop).length;
+  const selectedArchiveCount = selectedArchiveIndices().length;
 
   return (
     <div style={{ minHeight: "100vh", backgroundColor: "#f1f5f9", padding: "24px 32px" }}>
@@ -262,6 +432,66 @@ export default function EvolutionDetailPage({ params }: { params: { taskId: stri
           {task.status}
         </span>
         <span style={{ fontSize: 12, color: "#64748b" }}>共 {loops.length} Loops | 完成 {completedCount} | SOTA {sotaCount}</span>
+        <span style={{ fontSize: 12, color: "#64748b" }}>数仓 已入仓 {archivedLoopCount} | 待入仓 {pendingArchiveCount}</span>
+        {taskArchiveStatus && <span style={archiveStatusStyle(taskArchiveStatus.archive_status)}>{archiveStatusLabel(taskArchiveStatus.archive_status)}</span>}
+      </div>
+
+      <div style={{ maxWidth: 1200, marginBottom: 12, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, padding: 12, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <strong style={{ fontSize: 13, color: "#0f172a" }}>QE Archive 手动入仓</strong>
+          <span style={{ fontSize: 12, color: "#64748b" }}>选择已完成且未入仓的 Loop，先预览再确认写入。不会自动入仓，也不会删除原始实验。</span>
+          {archiveStatusLoading && <span style={{ fontSize: 12, color: "#2563eb" }}>状态刷新中...</span>}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={() => {
+              const selectable = loops.filter(canSelectArchiveLoop).map(loop => loop.loop_index);
+              setSelectedLoopIndices(new Set(selectable));
+            }}
+            disabled={!pendingArchiveCount || Boolean(archiveActionLoading)}
+            style={{ padding: "5px 10px", fontSize: 11, borderRadius: 6, border: "1px solid #cbd5e1", background: "#f8fafc", color: "#334155", cursor: pendingArchiveCount ? "pointer" : "not-allowed", fontWeight: 700 }}
+          >
+            选择待入仓
+          </button>
+          <button
+            type="button"
+            onClick={() => setSelectedLoopIndices(new Set())}
+            disabled={!selectedArchiveCount || Boolean(archiveActionLoading)}
+            style={{ padding: "5px 10px", fontSize: 11, borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", color: "#334155", cursor: selectedArchiveCount ? "pointer" : "not-allowed" }}
+          >
+            清空选择
+          </button>
+          <button
+            type="button"
+            onClick={() => void previewArchiveSelection()}
+            disabled={!selectedArchiveCount || Boolean(archiveActionLoading)}
+            style={{ padding: "5px 10px", fontSize: 11, borderRadius: 6, border: "1px solid #2563eb", background: "#eff6ff", color: "#1d4ed8", cursor: selectedArchiveCount ? "pointer" : "not-allowed", fontWeight: 700 }}
+          >
+            {archiveActionLoading === "preview" ? "预览中..." : `预览入仓(${selectedArchiveCount})`}
+          </button>
+          <button
+            type="button"
+            onClick={() => void executeArchiveSelection()}
+            disabled={!selectedArchiveCount || Boolean(archiveActionLoading)}
+            style={{ padding: "5px 10px", fontSize: 11, borderRadius: 6, border: "1px solid #059669", background: "#ecfdf5", color: "#047857", cursor: selectedArchiveCount ? "pointer" : "not-allowed", fontWeight: 700 }}
+          >
+            {archiveActionLoading === "execute" ? "写入中..." : `确认入仓(${selectedArchiveCount})`}
+          </button>
+          <button
+            type="button"
+            onClick={() => void loadArchiveStatus(loops)}
+            disabled={archiveStatusLoading}
+            style={{ padding: "5px 10px", fontSize: 11, borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", color: "#334155", cursor: archiveStatusLoading ? "not-allowed" : "pointer" }}
+          >
+            刷新数仓状态
+          </button>
+        </div>
+        {archiveMessage && (
+          <div style={{ width: "100%", padding: "8px 10px", borderRadius: 6, fontSize: 12, color: archiveMessage.ok ? "#166534" : "#991b1b", backgroundColor: archiveMessage.ok ? "#f0fdf4" : "#fef2f2", border: `1px solid ${archiveMessage.ok ? "#bbf7d0" : "#fecaca"}` }}>
+            {archiveMessage.msg}
+          </div>
+        )}
       </div>
 
       {/* Loop 手风琴 */}
@@ -271,6 +501,9 @@ export default function EvolutionDetailPage({ params }: { params: { taskId: stri
           const m = loop.metrics_json ?? {};
           const actionType = loop.action_type ?? m.action_type ?? "initial";
           const actionColor = ACTION_COLORS[actionType] ?? "#64748b";
+          const loopArchiveStatus = archiveStatusForLoop(loop);
+          const loopSelectable = canSelectArchiveLoop(loop);
+          const loopSelected = selectedLoopIndices.has(loop.loop_index) && loopSelectable;
           const em = enhancedCache[loop.loop_id];
           const isLoading = loadingLoops.has(loop.loop_id);
           const td = em?.trade_diagnostics ?? {};
@@ -283,10 +516,20 @@ export default function EvolutionDetailPage({ params }: { params: { taskId: stri
                 style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", cursor: "pointer", userSelect: "none" }}
               >
                 {isExpanded ? <ChevronDown size={16} color="#64748b" /> : <ChevronRight size={16} color="#64748b" />}
+                <input
+                  aria-label={`选择 Loop ${loop.loop_index} 入仓`}
+                  type="checkbox"
+                  checked={loopSelected}
+                  disabled={!loopSelectable || Boolean(archiveActionLoading)}
+                  onClick={e => e.stopPropagation()}
+                  onChange={e => toggleArchiveSelection(loop, e.target.checked)}
+                  style={{ width: 14, height: 14, accentColor: "#059669", cursor: loopSelectable ? "pointer" : "not-allowed" }}
+                />
                 <span style={{ fontWeight: 700, fontSize: 13, color: "#0f172a", minWidth: 60 }}>Loop {loop.loop_index}</span>
                 <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600, backgroundColor: actionColor + "18", color: actionColor }}>{actionType}</span>
                 {loop.is_sota && <Star size={14} color="#f59e0b" fill="#f59e0b" />}
                 <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600, backgroundColor: loop.status === "completed" ? "#f0fdf4" : loop.status === "failed" ? "#fef2f2" : "#fffbeb", color: loop.status === "completed" ? "#22c55e" : loop.status === "failed" ? "#ef4444" : "#f59e0b" }}>{loop.status}</span>
+                <ArchiveBadge status={loopArchiveStatus} />
                 {loop.status === "completed" && (
                   <button
                     data-testid="qe-task-loop-add-candidate"
@@ -296,6 +539,26 @@ export default function EvolutionDetailPage({ params }: { params: { taskId: stri
                   >
                     {candidateActionId === loop.loop_id ? "加入中..." : "加入候选策略包"}
                   </button>
+                )}
+                {loopSelectable && (
+                  <>
+                    <button
+                      data-testid="qe-task-loop-archive-preview"
+                      onClick={(e) => { e.stopPropagation(); void previewArchiveSelection([loop.loop_index]); }}
+                      disabled={Boolean(archiveActionLoading)}
+                      style={{ padding: "4px 10px", fontSize: 11, cursor: archiveActionLoading ? "not-allowed" : "pointer", borderRadius: 4, border: "1px solid #2563eb", background: "#eff6ff", color: "#1d4ed8", fontWeight: 700 }}
+                    >
+                      预览入仓
+                    </button>
+                    <button
+                      data-testid="qe-task-loop-archive-execute"
+                      onClick={(e) => { e.stopPropagation(); void executeArchiveSelection([loop.loop_index]); }}
+                      disabled={Boolean(archiveActionLoading)}
+                      style={{ padding: "4px 10px", fontSize: 11, cursor: archiveActionLoading ? "not-allowed" : "pointer", borderRadius: 4, border: "1px solid #059669", background: "#ecfdf5", color: "#047857", fontWeight: 700 }}
+                    >
+                      入仓
+                    </button>
+                  </>
                 )}
                 <div style={{ flex: 1 }} />
                 <MetricBadge label="IC" value={fmtNum(m.ic)} />

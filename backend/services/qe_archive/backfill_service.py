@@ -39,6 +39,7 @@ class QEArchiveBackfillOptions:
     loop_ids: Sequence[str] = ()
     task_id: str | None = None
     loop_index: int | None = None
+    loop_indices: Sequence[int] = ()
     status: str = "completed"
     limit: int = 20
     include_archived: bool = False
@@ -59,6 +60,7 @@ class QEArchiveBackfillRunOptions:
     loop_ids: Sequence[str] = ()
     task_id: str | None = None
     loop_index: int | None = None
+    loop_indices: Sequence[int] = ()
     status: str = "completed"
     limit: int = 20
     include_archived: bool = False
@@ -82,6 +84,7 @@ class QEArchiveBackfillRunOptions:
             loop_ids=self.loop_ids,
             task_id=self.task_id,
             loop_index=self.loop_index,
+            loop_indices=self.loop_indices,
             status=self.status,
             limit=self.limit,
             include_archived=self.include_archived or bool(self.force_rebackfill == REBOOTSTRAP_CONFIRM_TEXT),
@@ -304,6 +307,21 @@ class QEArchiveBackfillService:
             "candidates": page_candidates,
         }
 
+    def get_source_status(
+        self,
+        *,
+        experiment_ids: Sequence[str] = (),
+        task_ids: Sequence[str] = (),
+        loop_ids: Sequence[str] = (),
+        include_recommendation: bool = True,
+    ) -> dict[str, Any]:
+        return self._assembler.get_source_archive_status(
+            experiment_ids=experiment_ids,
+            task_ids=task_ids,
+            loop_ids=loop_ids,
+            include_recommendation=include_recommendation,
+        )
+
     def archive_loop_completed(
         self,
         *,
@@ -344,10 +362,23 @@ class QEArchiveBackfillService:
 
     def _build_candidates(self, options: QEArchiveBackfillOptions, *, source: str) -> list[dict[str, Any]]:
         candidates: list[dict[str, Any]] = []
+        seen_sources: set[tuple[str, str | None, str | None]] = set()
+
+        def append_candidate(candidate: dict[str, Any]) -> None:
+            payload = dict(candidate.get("payload") or {})
+            key = (
+                str(candidate.get("event_type") or ""),
+                str(payload.get("source_id") or payload.get("task_id") or payload.get("experiment_id") or ""),
+                str(payload.get("source_sub_id") or payload.get("loop_id") or payload.get("loop_index") or ""),
+            )
+            if key in seen_sources:
+                return
+            seen_sources.add(key)
+            candidates.append(candidate)
 
         for experiment_id in _dedupe_non_empty(options.experiment_ids):
             payload = self._assembler.assemble_experiment_payload(experiment_id)
-            candidates.append({"event_type": "qe.experiment.completed", "payload": payload})
+            append_candidate({"event_type": "qe.experiment.completed", "payload": payload})
 
         task_ids = _dedupe_non_empty(options.task_ids)
         if task_ids:
@@ -361,18 +392,37 @@ class QEArchiveBackfillService:
                     task_id=ref.get("task_id"),
                     loop_index=ref.get("loop_index"),
                 )
-                candidates.append({"event_type": "qe.loop.completed", "payload": payload})
+                append_candidate({"event_type": "qe.loop.completed", "payload": payload})
 
         for loop_id in _dedupe_non_empty(options.loop_ids):
             payload = self._assembler.assemble_loop_payload(loop_id=loop_id)
-            candidates.append({"event_type": "qe.loop.completed", "payload": payload})
+            append_candidate({"event_type": "qe.loop.completed", "payload": payload})
 
-        if options.task_id and options.loop_index is not None and not options.loop_ids:
-            payload = self._assembler.assemble_loop_payload(
-                task_id=options.task_id,
-                loop_index=options.loop_index,
+        requested_indices = _dedupe_positive_ints([
+            *(options.loop_indices or ()),
+            *([options.loop_index] if options.loop_index is not None else []),
+        ])
+        if options.task_id and requested_indices:
+            refs = self._assembler.list_loop_refs_for_task_indices(
+                options.task_id,
+                requested_indices,
+                status=options.status,
+                include_archived=options.include_archived,
             )
-            candidates.append({"event_type": "qe.loop.completed", "payload": payload})
+            found_indices: set[int] = set()
+            for ref in refs:
+                loop_index = _int_or_none(ref.get("loop_index"))
+                if loop_index is not None:
+                    found_indices.add(loop_index)
+                payload = self._assembler.assemble_loop_payload(
+                    loop_id=ref.get("loop_id"),
+                    task_id=ref.get("task_id"),
+                    loop_index=ref.get("loop_index"),
+                )
+                append_candidate({"event_type": "qe.loop.completed", "payload": payload})
+            for missing_index in requested_indices:
+                if missing_index not in found_indices:
+                    append_candidate(_missing_loop_candidate(options.task_id, missing_index))
 
         if candidates:
             return candidates
@@ -385,7 +435,7 @@ class QEArchiveBackfillService:
                 include_archived=options.include_archived,
             ):
                 payload = self._assembler.assemble_experiment_payload(experiment_id)
-                candidates.append({"event_type": "qe.experiment.completed", "payload": payload})
+                append_candidate({"event_type": "qe.experiment.completed", "payload": payload})
         if source in {"loop", "all"}:
             for ref in self._assembler.list_loop_refs(
                 status=options.status,
@@ -397,7 +447,7 @@ class QEArchiveBackfillService:
                     task_id=ref.get("task_id"),
                     loop_index=ref.get("loop_index"),
                 )
-                candidates.append({"event_type": "qe.loop.completed", "payload": payload})
+                append_candidate({"event_type": "qe.loop.completed", "payload": payload})
         if source == "task":
             candidate_task_ids = [
                 str(row["task_id"])
@@ -418,7 +468,7 @@ class QEArchiveBackfillService:
                     task_id=ref.get("task_id"),
                     loop_index=ref.get("loop_index"),
                 )
-                candidates.append({"event_type": "qe.loop.completed", "payload": payload})
+                append_candidate({"event_type": "qe.loop.completed", "payload": payload})
         return candidates
 
     def _process_candidate(
@@ -430,6 +480,8 @@ class QEArchiveBackfillService:
         backfill_run_id: str | None = None,
     ) -> dict[str, Any]:
         payload = dict(candidate["payload"])
+        if candidate.get("missing"):
+            return _missing_loop_result(payload, dry_run=not write)
         event_type = str(candidate["event_type"])
         source_type = "loop" if event_type == "qe.loop.completed" else "experiment"
         source_id = str(payload.get("source_id") or payload.get("task_id") or payload.get("experiment_id"))
@@ -544,6 +596,8 @@ class QEArchiveBackfillService:
 
     def _preview_candidate(self, candidate: Mapping[str, Any], *, backfill_run_id: str) -> dict[str, Any]:
         payload = dict(candidate["payload"])
+        if candidate.get("missing"):
+            return _missing_loop_result(payload, dry_run=True)
         event_type = str(candidate["event_type"])
         source_type = "loop" if event_type == "qe.loop.completed" else "experiment"
         source_id = str(payload.get("source_id") or payload.get("task_id") or payload.get("experiment_id"))
@@ -610,6 +664,54 @@ def _dedupe_non_empty(values: Sequence[str]) -> list[str]:
     return result
 
 
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _dedupe_positive_ints(values: Sequence[int | None]) -> list[int]:
+    seen: set[int] = set()
+    result: list[int] = []
+    for value in values or []:
+        parsed = _int_or_none(value)
+        if parsed is None or parsed < 1 or parsed in seen:
+            continue
+        seen.add(parsed)
+        result.append(parsed)
+    return result
+
+
+def _missing_loop_candidate(task_id: str, loop_index: int) -> dict[str, Any]:
+    return {
+        "event_type": "qe.loop.missing",
+        "missing": True,
+        "payload": {
+            "source_system": "qe_evolution",
+            "source_id": task_id,
+            "source_sub_id": f"Loop{loop_index}",
+            "task_id": task_id,
+            "loop_index": loop_index,
+            "missing": True,
+            "missing_reason": "loop_not_found_or_filtered",
+        },
+    }
+
+
+def _missing_loop_result(payload: Mapping[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    return {
+        "dry_run": dry_run,
+        "event_type": "qe.loop.missing",
+        "source_system": payload.get("source_system") or "qe_evolution",
+        "source_id": payload.get("source_id") or payload.get("task_id"),
+        "source_sub_id": payload.get("source_sub_id"),
+        "loop_index": payload.get("loop_index"),
+        "will_archive": False,
+        "skipped_reason": payload.get("missing_reason") or "loop_not_found_or_filtered",
+    }
+
+
 def _source_type_for_mode(source_mode: str) -> str:
     if source_mode == "completed_single_experiments":
         return "experiment"
@@ -628,6 +730,7 @@ def _options_to_dict(options: QEArchiveBackfillRunOptions) -> dict[str, Any]:
         "loop_ids": list(options.loop_ids or []),
         "task_id": options.task_id,
         "loop_index": options.loop_index,
+        "loop_indices": list(options.loop_indices or []),
         "status": options.status,
         "limit": options.limit,
         "include_archived": options.include_archived,

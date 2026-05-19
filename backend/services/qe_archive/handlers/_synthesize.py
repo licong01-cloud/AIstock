@@ -18,7 +18,7 @@ These helpers are pure functions (no DB access), so unit-testable in isolation.
 """
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
 
 # enum value catalogs (kept here so tests + handlers reference one source)
@@ -39,7 +39,7 @@ def _to_decimal(x: Any) -> Decimal | None:
         return x
     try:
         return Decimal(str(x))
-    except Exception:
+    except (InvalidOperation, TypeError, ValueError):
         return None
 
 

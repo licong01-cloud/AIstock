@@ -11,6 +11,7 @@ import PaperTable from "@/components/paper-v2/PaperTable";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import { formatCompact, formatNumber, shortHash } from "@/lib/paper-v2/format";
+import { qeArchiveApi, type ArchiveSourceStatus } from "@/lib/qe-archive/api";
 import {
   type JsonObject,
   type ResearchArtifactRef,
@@ -113,6 +114,17 @@ function metricFrom(record: ResearchBacktestRecord, key: "ann" | "mdd" | "ir" | 
 function sourceLabel(record: ResearchBacktestRecord): string {
   const loop = record.source_loop_index !== null && record.source_loop_index !== undefined ? ` loop ${record.source_loop_index}` : "";
   return `${record.source_type || "-"} / ${compactText(record.source_task_id)}${loop}`;
+}
+
+function archiveStatusLabel(status?: string): string {
+  switch (status) {
+    case "archived": return "已入仓";
+    case "fully_archived": return "全部入仓";
+    case "partially_archived": return "部分入仓";
+    case "not_archived":
+    default:
+      return "未入仓";
+  }
 }
 
 function StageTimeline({ stages, attempts }: { stages: ResearchStagePlan[]; attempts: ResearchStageAttempt[] }) {
@@ -219,6 +231,7 @@ export default function ResearchPipelineExperimentPage() {
   const [dedupStatus, setDedupStatus] = useState("");
   const [representative, setRepresentative] = useState("");
   const [sourceTaskId, setSourceTaskId] = useState("");
+  const [archiveStatus, setArchiveStatus] = useState<ArchiveSourceStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
@@ -244,6 +257,20 @@ export default function ResearchPipelineExperimentPage() {
       setArtifactRefs(nextArtifacts);
       setBacktestRecords(nextBacktests);
       setBackfillRuns(nextBackfills);
+      const taskIds = Array.from(new Set(nextBacktests.map((row) => row.source_task_id).filter((value): value is string => Boolean(value))));
+      const loopIds = Array.from(new Set(nextBacktests.map((row) => row.source_loop_id).filter((value): value is string => Boolean(value))));
+      const experimentIds = Array.from(new Set(nextBacktests.map((row) => row.source_experiment_id).filter((value): value is string => Boolean(value))));
+      if (taskIds.length || loopIds.length || experimentIds.length) {
+        const nextArchiveStatus = await qeArchiveApi.sourceStatus({
+          task_ids: taskIds,
+          loop_ids: loopIds,
+          experiment_ids: experimentIds,
+          include_recommendation: true,
+        });
+        setArchiveStatus(nextArchiveStatus);
+      } else {
+        setArchiveStatus(null);
+      }
     } catch (exc) {
       setError(exc);
     } finally {
@@ -266,6 +293,7 @@ export default function ResearchPipelineExperimentPage() {
   );
   const representativeCount = backtestRecords.filter((row) => row.qe_archive_representative).length;
   const eligibleCount = backtestRecords.filter((row) => row.qe_archive_eligible).length;
+  const archivedBacktestCount = backtestRecords.filter((row) => archiveStatus?.loops?.[row.source_loop_id]?.archive_status === "archived").length;
   const failedStages = stages.filter((stage) => ["failed", "timeout", "cancelled"].includes(String(stage.status))).length;
   const latestBackfill = backfillRuns[0];
 
@@ -278,7 +306,7 @@ export default function ResearchPipelineExperimentPage() {
             <h1>{experiment?.title || experimentId || "Research Experiment"}</h1>
             <p>
               Inspect stages, retry attempts, artifact refs, HMM backtest records, and backfill runs.
-              This page does not expose write or execute actions.
+              This page does not expose write or execute actions; QE Archive status is read-only for 手动入仓决策。
             </p>
             <div className="pv2-chip-row">
               <span className="pv2-chip pv2-mono">{experimentId}</span>
@@ -298,7 +326,7 @@ export default function ResearchPipelineExperimentPage() {
       <div className="pv2-grid pv2-grid-4">
         <MetricCard label="Experiment Status" value={experiment?.status || "unknown"} hint={experiment?.blocked_reason || `updated ${formatDateTime(experiment?.updated_at)}`} tone={experiment?.status === "validated" ? "success" : experiment?.status === "blocked" || experiment?.status === "stage_failed" ? "danger" : "info"} />
         <MetricCard label="Stages" value={formatCompact(stages.length, 0)} hint={failedStages ? `${failedStages} failed/timeout/cancelled` : `${attempts.length} attempts`} tone={failedStages ? "danger" : "success"} />
-        <MetricCard label="HMM Backtests" value={formatCompact(backtestRecords.length, 0)} hint={`eligible ${eligibleCount} / representative ${representativeCount}`} tone={backtestRecords.length ? "info" : "warning"} />
+        <MetricCard label="HMM Backtests" value={formatCompact(backtestRecords.length, 0)} hint={`eligible ${eligibleCount} / representative ${representativeCount} / archived ${archivedBacktestCount}`} tone={backtestRecords.length ? "info" : "warning"} />
         <MetricCard label="Backfill Runs" value={formatCompact(backfillRuns.length, 0)} hint={latestBackfill ? `${latestBackfill.status} ${formatDateTime(latestBackfill.created_at)}` : "No backfill history"} tone={latestBackfill?.status === "failed" ? "danger" : backfillRuns.length ? "success" : "neutral"} />
       </div>
 
@@ -366,6 +394,12 @@ export default function ResearchPipelineExperimentPage() {
             { key: "time", header: "Timeline", render: (row) => <><div>{formatDateTime(row.source_created_at || row.created_at)}</div><span className="pv2-muted pv2-mono">{compactText(row.record_id)}</span></> },
             { key: "source", header: "Source", render: (row) => <><div>{sourceLabel(row)}</div><span className="pv2-muted pv2-mono">loop {compactText(row.source_loop_id)}</span></> },
             { key: "dedup", header: "Dedup / Archive", render: (row) => <><StatusBadge status={row.dedup_status || "unknown"} /><br /><span className="pv2-muted">eligible {display(row.qe_archive_eligible)} / repr {display(row.qe_archive_representative)}</span>{row.rejection_reason ? <><br /><span className="pv2-muted">{row.rejection_reason}</span></> : null}</> },
+            { key: "archive_status", header: "QE Archive", render: (row) => {
+              const loopStatus = archiveStatus?.loops?.[row.source_loop_id];
+              const taskStatus = archiveStatus?.tasks?.[row.source_task_id];
+              const status = loopStatus?.archive_status || "not_archived";
+              return <><StatusBadge status={archiveStatusLabel(status)} /><br /><span className="pv2-muted">task {archiveStatusLabel(taskStatus?.archive_status)}</span><br /><span className="pv2-muted pv2-mono">{(loopStatus?.run_ids || []).map((item) => compactText(item)).join(" / ") || "-"}</span></>;
+            } },
             { key: "metrics", header: "Core Metrics", render: (row) => <><div>ann {metricFrom(row, "ann")} / mdd {metricFrom(row, "mdd")}</div><span className="pv2-muted">ir {metricFrom(row, "ir")} / ic {metricFrom(row, "ic")} / rank_ic {metricFrom(row, "rank_ic")}</span></> },
             { key: "hmm", header: "HMM / Config", render: (row) => <><div className="pv2-mono">hmm {compactText(row.hmm_config_sig)}</div><span className="pv2-muted pv2-mono">non-hmm {compactText(row.non_hmm_config_sig)}</span><br /><span className="pv2-muted pv2-mono">archive {compactText(row.archive_family_sig)}</span></> },
             { key: "detail", header: "Detail", render: (row) => <details className="pv2-readable-item"><summary>payload / summaries</summary><JsonPanel value={{ metrics_json: row.metrics_json || {}, hmm_config_summary_json: row.hmm_config_summary_json || {}, config_summary_json: row.config_summary_json || {}, source_payload_json: row.source_payload_json || {} }} /></details> },

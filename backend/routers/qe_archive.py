@@ -31,6 +31,7 @@ class QEArchiveBackfillRequest(BaseModel):
     loop_ids: list[str] = Field(default_factory=list)
     task_id: str | None = None
     loop_index: int | None = Field(None, ge=1)
+    loop_indices: list[int] = Field(default_factory=list)
     status: str = "completed"
     limit: int = Field(20, ge=1, le=500)
     include_archived: bool = Field(
@@ -64,6 +65,7 @@ class QEArchiveBackfillRunRequest(BaseModel):
     loop_ids: list[str] = Field(default_factory=list)
     task_id: str | None = None
     loop_index: int | None = Field(None, ge=1)
+    loop_indices: list[int] = Field(default_factory=list)
     status: str = "completed"
     limit: int = Field(20, ge=1, le=500)
     include_archived: bool = False
@@ -78,6 +80,13 @@ class QEArchiveBackfillRunRequest(BaseModel):
 
     def to_options(self) -> QEArchiveBackfillRunOptions:
         return QEArchiveBackfillRunOptions(**self.model_dump())
+
+
+class QEArchiveSourceStatusRequest(BaseModel):
+    experiment_ids: list[str] = Field(default_factory=list)
+    task_ids: list[str] = Field(default_factory=list)
+    loop_ids: list[str] = Field(default_factory=list)
+    include_recommendation: bool = True
 
 
 def get_backfill_service() -> QEArchiveBackfillService:
@@ -154,6 +163,19 @@ def list_qe_archive_skips(
             archive_policy=archive_policy,
             source_type=source_type,
             limit=limit,
+        ),
+    }
+
+
+@router.post("/source-status", summary="QE archive source coverage status")
+def get_qe_archive_source_status(request: QEArchiveSourceStatusRequest):
+    return {
+        "status": "success",
+        "data": get_backfill_service().get_source_status(
+            experiment_ids=request.experiment_ids,
+            task_ids=request.task_ids,
+            loop_ids=request.loop_ids,
+            include_recommendation=request.include_recommendation,
         ),
     }
 
@@ -244,6 +266,7 @@ def run_qe_archive_backfill(request: QEArchiveBackfillRequest):
             loop_ids=request.loop_ids,
             task_id=request.task_id,
             loop_index=request.loop_index,
+            loop_indices=request.loop_indices,
             status=request.status,
             limit=request.limit,
             include_archived=request.include_archived,
