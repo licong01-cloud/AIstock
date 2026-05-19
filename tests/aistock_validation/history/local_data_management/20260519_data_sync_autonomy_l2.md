@@ -24,9 +24,13 @@
 
 | Command | Result |
 |---|---|
-| `python -m pytest backend/tests/test_tushare_sync_engine.py backend/tests/test_data_sync_targets.py backend/tests/test_dataset_refresh_audit.py backend/tests/test_validation_center_api.py backend/tests/test_validation_execution_runner.py backend/tests/test_ingestion_data_stats_readiness_api.py backend/tests/ingestion/test_tdx_scheduler_cyq_engine_routing.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -q -p no:cacheprovider` | PASS, `58 passed in 27.64s` |
-| `python -m nox -s data_sync_autonomy_backend` | PASS, compileall + `52 passed in 14.59s`; session successful in 17s |
-| `python -m nox -s local_data_management_audit` | PASS, repository/schema tests `7 passed in 0.31s`; DB connection unavailable in this worktree, so static DDL/comment review ran with one `offline_schema_review` warning and all schema-comment checks passed |
+| `python -m compileall scripts/aistock_data_quality_smoke.py noxfile.py backend/services/validation/plan_catalog.py` | PASS |
+| `python -m pytest backend/tests/test_validation_center_api.py backend/tests/test_validation_execution_runner.py backend/tests/test_data_quality_smoke_env.py backend/tests/test_data_sync_targets.py backend/tests/test_dataset_refresh_audit.py -q -p no:cacheprovider` | PASS, `30 passed in 1.78s` |
+| `python -m pytest backend/tests/test_tushare_sync_engine.py backend/tests/test_data_sync_targets.py backend/tests/test_dataset_refresh_audit.py backend/tests/test_validation_center_api.py backend/tests/test_validation_execution_runner.py backend/tests/test_data_quality_smoke_env.py backend/tests/test_ingestion_data_stats_readiness_api.py backend/tests/ingestion/test_tdx_scheduler_cyq_engine_routing.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -q -p no:cacheprovider` | PASS, `64 passed in 6.92s` |
+| `python -m nox -s data_sync_autonomy_backend` | PASS, compileall + `64 passed in 7.03s`; session successful in 9s |
+| `python scripts/aistock_data_quality_smoke.py --scope local_data_management --audit-schema-only --use-dev-db --output tmp/local_data_management_audit_smoke.json --json` | PASS, connected to `TDX_DB_DEV_*` target `127.0.0.1:5433/aistock_dev`, `warning_count=0`, `failure_count=0` |
+| `python -m nox -s local_data_management_audit` | PASS, repository/schema tests `11 passed in 0.47s`; DB smoke loaded the root `.env`, mapped `TDX_DB_DEV_*`, and verified `dataset_date_refresh_audit`, `data_sync_targets`, and `data_sync_attempts` comments in the dev DB |
+| `python -c "from backend.services.validation.plan_catalog import ValidationPlanCatalog; p=ValidationPlanCatalog().get_plan('data_sync_autonomy_backend'); print({k:p[k] for k in ['plan_key','command_key','nox_session','runner_enabled','requires_backend','writes_business_state']})"` | PASS, default catalog returns `command_key='nox_data_sync_autonomy_backend'` and `nox_session='data_sync_autonomy_backend'` |
 | `git diff --check` | PASS; only line-ending conversion warnings were emitted |
 
 ## Test Coverage Mapping
@@ -36,20 +40,24 @@
 - `backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py`: stale queued job repair, schedule refresh retry-target reconciliation, delayed retry persistence, target retry finalization, China-local deadline, and before-deadline alert deferral.
 - `backend/tests/test_ingestion_data_stats_readiness_api.py`: `/api/data-stats` audit overlay/cache state, final/provider-contract operator-action flags, preset physical fallback display-only semantics, and auto-range audit-missing reconciliation response.
 - `backend/tests/test_data_sync_targets.py`: target key idempotency, target/attempt lifecycle status compatibility, migration/bootstrap comments.
+- `backend/tests/test_data_quality_smoke_env.py`: explicit env loading, missing env fail-fast, safe `TDX_DB_DEV_*` to runtime DB mapping, and refusal to target non-dev DB names/ports.
 - `backend/tests/test_dataset_refresh_audit.py`: enhanced audit fields and fail-fast rejection for unusable quality status.
-- `backend/tests/test_validation_center_api.py` and `backend/tests/test_validation_execution_runner.py`: Validation Center plan catalog allowlist and execution-runner regressions.
+- `backend/tests/test_validation_center_api.py` and `backend/tests/test_validation_execution_runner.py`: Validation Center default catalog allowlist and controlled runner regressions for `data_sync_autonomy_backend`.
 
 ## Evidence Files
 
 - Design document: `docs/architecture/data_sync_autonomous_control_plane_design_20260519.md`
 - Validation matrix: `tests/aistock_validation/modules/local_data_management.md`
 - Validation plan catalog: `tests/aistock_validation/catalog/test_plans.yaml`
-- Offline schema evidence: `tmp/local_data_management_audit_smoke.json` (temporary, not staged)
+- Dev DB schema evidence: `tmp/local_data_management_audit_smoke.json` (temporary, not staged)
+- GitHub issue: `https://github.com/licong01-cloud/AIstock/issues/93`
 
 ## Residual Risks And Rollout Notes
 
-- This validation did not connect to the local PostgreSQL instance because this worktree lacks DB credentials (`fe_sendauth: no password supplied`). Static DDL/comment review passed, but DB migration application must be verified in the deployment environment before runtime activation.
+- Root cause correction: the earlier `fe_sendauth: no password supplied` failure was not a missing local DB password; the independent worktree/nox process had not loaded the root `.env`, so `pg_pool` saw empty `TDX_DB_PASSWORD`.
+- Current verification connected to the dev DB through `TDX_DB_DEV_*` (`127.0.0.1:5433/aistock_dev`) after loading the root `.env`. The passive `data_sync_targets_20260519.sql` migration was applied to the dev DB for validation only; production DB was not touched.
 - Production services were not restarted, so code changes are not active on production port `8001` until the user explicitly approves deployment/restart.
+- Production/runtime rollout still needs the reviewed migration applied to the production DB through the normal operator-controlled path before scheduler code that reads `market.data_sync_targets` is activated there.
 - `cyq_chips` remains intentionally outside unified readiness; future BY_CODE/per-date audit policy must be designed before engine migration.
 - UI frontend E2E was not run because this slice changes backend/API/data-pipeline logic and does not start dev backend/frontend ports.
 

@@ -351,6 +351,18 @@ def test_plan_catalog_allows_data_sync_autonomy_backend_plan(tmp_path) -> None:
     assert plan["writes_business_state"] is False
 
 
+def test_default_plan_catalog_loads_data_sync_autonomy_backend_plan() -> None:
+    plan = ValidationPlanCatalog().get_plan("data_sync_autonomy_backend")
+
+    assert plan is not None
+    assert plan["command_key"] == "nox_data_sync_autonomy_backend"
+    assert plan["nox_session"] == "data_sync_autonomy_backend"
+    assert plan["runner_enabled"] is True
+    assert plan["requires_backend"] is False
+    assert plan["allowed_backend_ports"] == []
+    assert plan["writes_business_state"] is False
+
+
 def test_validation_health_and_plans_are_read_only(client: TestClient) -> None:
     health = client.get("/api/v1/validation/health").json()["data"]
     assert health["mode"] == "read_only"

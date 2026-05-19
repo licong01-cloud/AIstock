@@ -53,6 +53,7 @@ A data-sync autonomy branch can be proposed for Main only when all of these are 
 
 - Backend unit tests pass for TushareSyncEngine audit reconciliation, missing-table fail-fast, data_sync_targets lifecycle, scheduler routing/retry target persistence, final-deadline alert deferral, data-stats readiness overlay, preset-stats/auto-range audit semantics, dataset audit schema, and Validation Center catalog allowlist.
 - `python -m nox -s data_sync_autonomy_backend` passes and is listed in `tests/aistock_validation/catalog/test_plans.yaml` with no production ports and no business-state writes.
-- `python -m nox -s local_data_management_audit` passes or records an `offline_schema_review` warning only when this worktree cannot connect to the local DB; the static DDL/comment review must still pass for `dataset_date_refresh_audit`, `data_sync_targets`, and `data_sync_attempts`.
+- `python -m nox -s local_data_management_audit` must first load the configured `.env` and target the local dev DB via `TDX_DB_DEV_*`; it may record an `offline_schema_review` warning only on CI/fresh hosts where no local dev DB is available. A normal workstation with the root `.env` present must not silently treat missing worktree-local `.env` as a missing DB password.
+- The static DDL/comment review must still pass for `dataset_date_refresh_audit`, `data_sync_targets`, and `data_sync_attempts` whenever the DB path is unavailable.
 - `git diff --check` is clean, `.coverage` and other temporary artifacts are not staged, and a validation run record exists under `tests/aistock_validation/history/local_data_management/`.
 - Production backend `8001`, frontend `3000`, and production DB runtime are not restarted or mutated during validation unless the user explicitly approves it.
