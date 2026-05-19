@@ -8,6 +8,7 @@ import pytest
 
 from backend.services.qmt_strategy_ledger.lot_availability import StaticTradingCalendarProvider
 from backend.services.qmt_strategy_ledger.models import (
+    BUY_ORDER_TYPE,
     BindingStatus,
     IntentSubmitStatus,
     SELL_ORDER_TYPE,
@@ -18,6 +19,7 @@ from backend.services.qmt_strategy_ledger.models import (
     VirtualAccountStatus,
 )
 from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyLedgerRepository
+from backend.services.qmt_strategy_ledger.order_service import QmtManagedOrderService
 from backend.services.qmt_strategy_ledger.selection_order_builder import SelectionOrderBuilder, SelectionOrderBuildConfig
 from backend.services.selection_center.models import SelectionCandidate, SelectionMode, SelectionRun, SelectionRunStatus
 from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
@@ -217,6 +219,31 @@ def test_selection_order_builder_preserves_star_market_increment_after_minimum()
 
     assert result.requests[0].quantity == 2706
     assert result.requests[0].price == Decimal("73.890000")
+
+
+def test_selection_order_builder_star_buy_is_accepted_by_managed_order_preflight() -> None:
+    repo = _repo()
+    binding = repo.create_package_binding(_binding(target_weight=Decimal("0.02")))
+    run = _selection_run(
+        [
+            SelectionCandidate(
+                symbol="688379.SH",
+                score=0.9,
+                rank=1,
+                target_weight=0.02,
+                reference_price=73.89,
+            )
+        ]
+    )
+
+    result = _builder(repo, run).build_for_binding(binding=binding)
+    request = result.requests[0]
+    preflight = QmtManagedOrderService(repository=repo, calendar_provider=CALENDAR).preview_order(request)
+
+    assert request.order_type == BUY_ORDER_TYPE
+    assert request.quantity == 2706
+    assert preflight.allowed is True
+    assert preflight.errors == ()
 
 
 def test_selection_order_builder_uses_current_lots_to_build_sell_delta() -> None:

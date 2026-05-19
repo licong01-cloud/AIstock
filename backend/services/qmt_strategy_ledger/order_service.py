@@ -112,9 +112,18 @@ class OrderPreflightResult:
     pending_sell_quantity: int | None = None
     broker_can_sell: int | None = None
 
+    @property
+    def primary_error(self) -> OrderPreflightError | None:
+        """Stable operator-facing blocker; full errors remain for diagnostics."""
+
+        return self.errors[0] if self.errors else None
+
     def to_dict(self) -> dict[str, Any]:
+        primary_error = self.primary_error
         return {
             "allowed": self.allowed,
+            "primary_error": primary_error.to_dict() if primary_error is not None else None,
+            "primary_error_code": primary_error.code if primary_error is not None else None,
             "errors": [error.to_dict() for error in self.errors],
             "strategy_id": self.strategy_id,
             "estimated_notional": float(self.estimated_notional),

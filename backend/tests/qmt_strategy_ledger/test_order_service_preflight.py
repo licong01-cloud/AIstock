@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import re
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
@@ -25,6 +27,7 @@ NEXT_TRADE_DATE = date(2026, 5, 19)
 WEEKEND_DATE = date(2026, 5, 23)
 MONDAY_TRADE_DATE = date(2026, 5, 25)
 CALENDAR = StaticTradingCalendarProvider([TRADE_DATE, NEXT_TRADE_DATE, MONDAY_TRADE_DATE])
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 class CountingBroker:
@@ -174,6 +177,17 @@ def test_preview_accepts_star_market_buy_quantity_after_minimum() -> None:
     assert service.preview_order(_buy_request(symbol="689009.SH", quantity=2706)).allowed is True
 
 
+def test_preview_response_exposes_single_primary_error_for_operator_action() -> None:
+    result = _service(_repo(cash=Decimal("100"))).preview_order(_buy_request(quantity=101))
+
+    payload = result.to_dict()
+
+    assert result.primary_error is result.errors[0]
+    assert payload["primary_error_code"] == "BUY_BOARD_LOT"
+    assert payload["primary_error"] == payload["errors"][0]
+    assert {"BUY_BOARD_LOT", "INSUFFICIENT_CASH"} <= {error["code"] for error in payload["errors"]}
+
+
 def test_preview_rejects_star_market_buy_quantity_below_minimum() -> None:
     result = _service(_repo()).preview_order(_buy_request(symbol="688379.SH", quantity=199))
 
@@ -199,6 +213,55 @@ def test_preview_rejects_main_board_and_chinext_non_100_share_buys() -> None:
         assert error.context["min_quantity"] == 100
         assert error.context["increment"] == 100
         assert error.context["canonical_quantity"] == 100
+
+
+def test_miniqmt_preflight_does_not_reintroduce_hard_coded_100_share_lot_gate() -> None:
+    scanned_files = [
+        REPO_ROOT / "backend/services/qmt_strategy_ledger/order_service.py",
+        REPO_ROOT / "backend/services/qmt_strategy_ledger/selection_order_builder.py",
+        REPO_ROOT / "backend/routers/qmt_strategy_ledger.py",
+        REPO_ROOT / "backend/routers/qmt.py",
+    ]
+    forbidden_patterns = [
+        re.compile(r"\b(?:quantity|order_volume|qty)\s*%\s*100\b"),
+        re.compile(r"\b100\s*%\s*(?:quantity|order_volume|qty)\b"),
+    ]
+
+    violations: list[str] = []
+    for path in scanned_files:
+        text = path.read_text(encoding="utf-8")
+        for pattern in forbidden_patterns:
+            if pattern.search(text):
+                violations.append(f"{path.relative_to(REPO_ROOT)} matches {pattern.pattern}")
+
+    assert violations == []
+
+
+def test_preview_accepts_sell_residuals_allowed_by_canonical_board_lot() -> None:
+    repo = _repo()
+    repo.create_position_lot(
+        PositionLotRecord(
+            lot_id="lot_star_residual",
+            strategy_id="strat_a",
+            symbol="688379.SH",
+            open_trade_id="trade_star_residual",
+            open_date=TRADE_DATE,
+            quantity=199,
+            available_quantity=199,
+            remaining_quantity=199,
+            avg_cost=Decimal("10"),
+            cost_amount=Decimal("1990"),
+            account_id=ACCOUNT_ID,
+        )
+    )
+    broker = CountingBroker(positions=[{"stock_code": "688379.SH", "quantity": 199, "can_sell": 199}])
+
+    result = _service(repo, broker).submit_order(_sell_request(symbol="688379.SH", quantity=199))
+
+    assert result.success is True
+    assert result.preflight.allowed is True
+    assert result.preflight.errors == ()
+    assert broker.place_order_calls == 1
 
 
 def test_preview_rejects_t1_strategy_lot_shortage() -> None:

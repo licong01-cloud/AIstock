@@ -1,0 +1,182 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-056",
+  "title": "MiniQMT execution gates are duplicated across layers without a canonical preflight contract",
+  "description": "Expected: MiniQMT strategy-package execution should have one canonical readiness/preflight contract that normalizes trade date, data readiness, StrategyPackage runtime assets, target portfolio, market-state/tradability, board-lot, cash, lot availability, broker can_sell, idempotency, and SIM/LIVE mode. Later layers may assert the canonical decision and broker authority, but must not reimplement different simplified business rules.\nActual: The current flow spreads checks across preopen runner/data readiness, SelectionPackageHealthService, package_binding, SelectionOrderBuilder, QmtManagedOrderService preview/submit, raw QMT routes, broker checks, sync_service attribution, and reconciliation. BUG-048 proves this architecture can generate legal STAR-market quantities in the builder and then reject them with an inconsistent simplified 100-share rule in order_service. Operators also observed excessive repeated gates around StrategyPackage assets and daily simulation readiness.",
+  "module": "qmt_strategy_ledger",
+  "severity": "P1",
+  "risk_area": "trading_preflight_architecture",
+  "status": "in_progress",
+  "trigger_condition": {
+    "scenario": "reported_via_mcp",
+    "files": [
+      "backend/services/qmt_strategy_ledger/selection_order_builder.py",
+      "backend/services/qmt_strategy_ledger/order_service.py",
+      "backend/services/qmt_strategy_ledger/package_binding.py",
+      "backend/services/qmt_strategy_ledger/sync_service.py",
+      "backend/services/selection_center/package_health.py",
+      "backend/services/strategy_package/live_inference.py",
+      "backend/routers/qmt_strategy_ledger.py",
+      "backend/routers/qmt.py",
+      "backend/execution_algos/board_lot.py",
+      "docs/architecture/miniqmt_multi_strategy_execution_implementation_plan_20260518.md",
+      "docs/architecture/miniqmt_multi_strategy_virtual_account_poc_design_20260518.md"
+    ]
+  },
+  "reproduce_command": "rg -n \"preflight|readiness|require_runnable|board_lot|round_to_board_lot|quantity % 100|strategy package|can_sell|available_quantity|daily_basic|stk_limit|suspend_d\" backend/services/qmt_strategy_ledger backend/services/selection_center backend/services/strategy_package backend/routers/qmt_strategy_ledger.py backend/routers/qmt.py backend/execution_algos/board_lot.py docs/architecture/miniqmt_multi_strategy_execution_implementation_plan_20260518.md -S",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:backend/services/qmt_strategy_ledger/selection_order_builder.py",
+    "file:backend/services/qmt_strategy_ledger/order_service.py",
+    "file:backend/services/qmt_strategy_ledger/package_binding.py",
+    "file:backend/services/qmt_strategy_ledger/sync_service.py",
+    "file:backend/services/selection_center/package_health.py",
+    "file:backend/services/strategy_package/live_inference.py",
+    "file:backend/routers/qmt_strategy_ledger.py",
+    "file:backend/routers/qmt.py",
+    "file:backend/execution_algos/board_lot.py",
+    "file:docs/architecture/miniqmt_multi_strategy_execution_implementation_plan_20260518.md",
+    "file:docs/architecture/miniqmt_multi_strategy_virtual_account_poc_design_20260518.md",
+    "file:backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
+    "file:backend/tests/qmt_strategy_ledger/test_selection_order_builder.py",
+    "file:backend/tests/selection_center/test_runtime_selection.py",
+    "file:tests/aistock_validation/bugs/20260519_BUG-056-miniqmt-execution-gates-are-duplicated-across-layers-without.json",
+    "file:tests/aistock_validation/history/qmt_strategy_ledger/20260520_l3_bug-056-miniqmt-canonical-preflight.md"
+  ],
+  "fingerprint": "2c216b49e589729c",
+  "assigned_agent": "codex-app",
+  "fix_branch": "bug/BUG-056-miniqmt-canonical-preflight",
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-19T04:44:55Z",
+  "first_seen_at": "2026-05-19T04:44:55Z",
+  "last_seen_at": "2026-05-19T04:44:55Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-19T04:44:55Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/qmt_strategy_ledger/selection_order_builder.py",
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/services/qmt_strategy_ledger/package_binding.py",
+    "backend/services/qmt_strategy_ledger/sync_service.py",
+    "backend/services/selection_center/package_health.py",
+    "backend/services/strategy_package/live_inference.py",
+    "backend/routers/qmt_strategy_ledger.py",
+    "backend/routers/qmt.py",
+    "backend/execution_algos/board_lot.py",
+    "docs/architecture/miniqmt_multi_strategy_execution_implementation_plan_20260518.md",
+    "docs/architecture/miniqmt_multi_strategy_virtual_account_poc_design_20260518.md",
+    "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
+    "backend/tests/qmt_strategy_ledger/test_selection_order_builder.py",
+    "backend/tests/selection_center/test_runtime_selection.py",
+    "tests/aistock_validation/bugs/20260519_BUG-056-miniqmt-execution-gates-are-duplicated-across-layers-without.json",
+    "tests/aistock_validation/history/qmt_strategy_ledger/20260520_l3_bug-056-miniqmt-canonical-preflight.md"
+  ],
+  "suspected_modules": [
+    "backend/services/qmt_strategy_ledger/selection_order_builder.py",
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/services/qmt_strategy_ledger/package_binding.py",
+    "backend/services/qmt_strategy_ledger/sync_service.py",
+    "backend/services/selection_center/package_health.py",
+    "backend/services/strategy_package/live_inference.py",
+    "backend/routers/qmt_strategy_ledger.py",
+    "backend/routers/qmt.py",
+    "backend/execution_algos/board_lot.py",
+    "docs/architecture/miniqmt_multi_strategy_execution_implementation_plan_20260518.md",
+    "docs/architecture/miniqmt_multi_strategy_virtual_account_poc_design_20260518.md",
+    "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
+    "backend/tests/qmt_strategy_ledger/test_selection_order_builder.py",
+    "backend/tests/selection_center/test_runtime_selection.py",
+    "tests/aistock_validation/bugs/20260519_BUG-056-miniqmt-execution-gates-are-duplicated-across-layers-without.json",
+    "tests/aistock_validation/history/qmt_strategy_ledger/20260520_l3_bug-056-miniqmt-canonical-preflight.md"
+  ],
+  "required_verification": [
+    "Design record: canonical miniQMT readiness/preflight contract lists every gate owner, input, output, blocking semantics, and UI/API error code.",
+    "Regression test: SelectionOrderBuilder and QmtManagedOrderService accept/reject identical BUY/SELL board-lot quantities, including STAR-market 688/689 cases.",
+    "Regression test: daily_basic is not used as a pre-open miniQMT execution gate; pre-open gates use datasets actually available before open such as stk_limit/suspend_d where required.",
+    "Regression test: package/data/tradability/lot/cash/broker gates return a single actionable reason instead of conflicting layer errors.",
+    "Guardrail or test prevents adding a second hard-coded board-lot/tradability implementation outside the canonical rule source."
+  ],
+  "closure_requirements": [
+    "Necessary safety gates remain, but duplicate inconsistent business-rule implementations are removed or downgraded to invariant assertions.",
+    "Board-lot, tradability, package health, data readiness, cash, lot availability, and SIM/LIVE checks have clear canonical ownership.",
+    "The miniQMT execution flow is simpler to reason about and documented for future POC/live operation.",
+    "BUG-048 class split-brain validation cannot recur under the new contract."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-19T04:44:55Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Reported via aistock_mcp_server.report_bug. Comments: 6"
+    },
+    {
+      "timestamp": "2026-05-19T04:44:55Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "This is a design/refactor issue, not a request to remove safety checks. The goal is to keep necessary gates but remove duplicate inconsistent implementations."
+    },
+    {
+      "timestamp": "2026-05-19T04:44:55Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Business impact: P1 because duplicated gates increase complexity and bug risk in trading code; BUG-048 is the concrete failure example."
+    },
+    {
+      "timestamp": "2026-05-19T04:44:55Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Expected design output: a miniQMT canonical readiness/preflight contract document or module with each gate's owner, input, output, blocking semantics, and test oracle."
+    },
+    {
+      "timestamp": "2026-05-19T04:44:55Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Expected implementation output: board-lot/tradability/data/package checks have one source of truth; downstream layers consume canonical decisions or assert invariants instead of recalculating simplified rules."
+    },
+    {
+      "timestamp": "2026-05-19T04:44:55Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Required verification: regression proving builder and order_service accept/reject the same BUY/SELL quantities; daily_basic is not a pre-open miniQMT execution gate; gate failures expose a single actionable reason in UI/API."
+    },
+    {
+      "timestamp": "2026-05-19T04:44:55Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Non-goal: do not weaken broker/miniQMT final validation, SIM/LIVE guard, strategy ledger attribution, or no-silent-fallback asset checks."
+    },
+    {
+      "timestamp": "2026-05-19T04:50:16Z",
+      "actor": "codex-app",
+      "action": "triaged",
+      "note": "Expanded from miniQMT issue coverage audit with explicit verification and closure requirements before code fixes."
+    },
+    {
+      "timestamp": "2026-05-19T04:52:24Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Mirrored BUG-056 to GitHub issue #59 via gh CLI from miniQMT issue coverage audit."
+    },
+    {
+      "timestamp": "2026-05-19T05:31:30Z",
+      "actor": "codex-app",
+      "action": "github_sync_verified",
+      "note": "Confirmed GitHub issue #59 is OPEN and label-synced (bug, P1, severity:p1, status:open, architecture, module:qmt_strategy_ledger, risk:trading_preflight_architecture) before fix worktree creation."
+    },
+    {
+      "timestamp": "2026-05-19T19:50:00Z",
+      "actor": "codex-app",
+      "action": "fix_started",
+      "note": "Started in isolated worktree F:\\Dev\\AIstock_worktrees\\bug-056-miniqmt-canonical-preflight after BUG-055 merge."
+    },
+    {
+      "timestamp": "2026-05-19T20:14:53Z",
+      "actor": "codex-app",
+      "action": "scope_updated",
+      "note": "Added regression tests and validation history file to allowed_write_scope for BUG-056 canonical preflight verification."
+    }
+  ],
+  "github_issue_number": 59,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/59"
+}
