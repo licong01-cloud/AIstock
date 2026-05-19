@@ -382,6 +382,10 @@ rules:
     baseline_policy: block_new_only
     remediation: Print structured diagnostic context and exit non-zero; do not hide failure in one-off scripts.
 manual_review_controls:
+  - control_id: ISSUE-GITHUB-SYNC-001
+    standard_ref: docs/standards/aistock_development_standard_v1.2_20260519.md#rule-issue-github-sync-001
+    severity: P1
+    title: New BUG or Issue records must be synchronized to GitHub and include github_issue_number and github_issue_url before merge.
   - control_id: DESIGN-MAIN-001
     standard_ref: docs/standards/aistock_development_standard_v1.2_20260519.md#rule-design-main-001
     severity: P1

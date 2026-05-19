@@ -75,6 +75,7 @@
 14. 大数据处理、回测、因子计算、分钟线处理、模型训练不得无边界加载或持有全量数据；必须有分块、范围限制、内存评估或明确容量说明。
 15. 不得引入明显会导致内存暴涨、资源不释放、行数爆炸或不可控 O(N²/O(N³)) 复杂度的实现。
 16. 已完成的详细设计方案必须包含严格测试用例、测试方案、结果数据验证方式和可合入 Main 的验收标准；设计交付本身验证通过后应自动提交并推送 `origin/main`，但代码实现仍按功能开发流程走独立分支、自动化流水线和用户确认。
+17. 新增 BUG / Issue 必须在同一流程同步 GitHub Issue 与本地 BUG JSON；不得把缺少 `github_issue_number` / `github_issue_url` 的新 BUG JSON 提交进 main。
 
 ## 6. 机器可读规则映射
 
@@ -217,6 +218,16 @@ QE/RD-Agent/Qlib 产物不得只保存文件路径。manifest 至少应包含：
 - 一次性脚本可以轻量，但不得 `except Exception: pass` 或失败后继续输出成功。
 - 诊断脚本失败必须输出错误上下文、输入参数摘要、建议复现命令，并以非零退出码结束。
 - destructive 或写入型诊断脚本必须支持 dry-run 和确认文本。
+
+<a id="rule-issue-github-sync-001"></a>
+### 6.16 [ISSUE-GITHUB-SYNC-001] Issue 创建必须同步 GitHub
+
+- 严重等级：P1。
+- 适用范围：Validation Center、MCP、Codex/Claude Code、脚本、人工流程创建的所有新 BUG / Issue。
+- 必须做法：创建 issue 时同时创建或同步 GitHub Issue，并在 BUG JSON 回填 `github_issue_number`、`github_issue_url`。
+- 禁止做法：只写入 `tests/aistock_validation/bugs/*.json` 后提交，或让 GitHub Issue 状态、label、severity 与本地 BUG JSON 长期不一致。
+- 如果 GitHub 暂时不可用：只能保留未提交 triage 草稿；不得把本地-only BUG JSON 合入 main。
+- 历史遗留未链接 BUG 必须通过专门 cleanup/backfill 分支补链、关闭或迁移，不得作为新增 issue 的例外。
 
 ## 7. 项目目录结构和文件归属规范
 
