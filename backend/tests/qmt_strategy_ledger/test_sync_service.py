@@ -3,11 +3,13 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
+from backend.services.qmt_strategy_ledger.lot_availability import StaticTradingCalendarProvider
 from backend.services.qmt_strategy_ledger.models import (
     BUY_ORDER_TYPE,
     CashEntryType,
     IntentSubmitStatus,
     OrderIntentRecord,
+    PositionLotRecord,
     VirtualAccount,
     VirtualAccountStatus,
 )
@@ -17,6 +19,8 @@ from backend.services.qmt_strategy_ledger.sync_service import QmtStrategyLedgerS
 
 ACCOUNT_ID = "62266303"
 TRADE_DATE = date(2026, 5, 18)
+NEXT_TRADE_DATE = date(2026, 5, 19)
+CALENDAR = StaticTradingCalendarProvider([TRADE_DATE, NEXT_TRADE_DATE])
 
 
 class FakeReadOnlyQmtClient:
@@ -150,6 +154,7 @@ def test_sync_service_upserts_attributed_order_trade_and_lot_without_broker_subm
         qmt_client=client,
         account_id=ACCOUNT_ID,
         trade_date=TRADE_DATE,
+        calendar_provider=CALENDAR,
     ).sync_snapshot()
 
     assert summary.orders_seen == 1
@@ -180,6 +185,7 @@ def test_sync_service_upserts_attributed_order_trade_and_lot_without_broker_subm
         qmt_client=client,
         account_id=ACCOUNT_ID,
         trade_date=TRADE_DATE,
+        calendar_provider=CALENDAR,
     ).sync_snapshot()
     assert idempotent.trades_inserted == 0
     assert idempotent.trades_existing == 1
@@ -228,6 +234,7 @@ def test_sync_service_settles_unmanaged_buy_fill_against_cash_without_freeze() -
         qmt_client=client,
         account_id=ACCOUNT_ID,
         trade_date=TRADE_DATE,
+        calendar_provider=CALENDAR,
     ).sync_snapshot()
 
     assert summary.cash_entries_appended == 1
@@ -248,6 +255,7 @@ def test_sync_service_settles_unmanaged_buy_fill_against_cash_without_freeze() -
         qmt_client=client,
         account_id=ACCOUNT_ID,
         trade_date=TRADE_DATE,
+        calendar_provider=CALENDAR,
     ).sync_snapshot()
     assert idempotent.cash_entries_appended == 0
     assert repo.get_virtual_account("strat_a") == account
@@ -298,6 +306,7 @@ def test_sync_service_settles_cheaper_fill_and_releases_cancelled_residual_once(
         qmt_client=client,
         account_id=ACCOUNT_ID,
         trade_date=TRADE_DATE,
+        calendar_provider=CALENDAR,
     ).sync_snapshot()
 
     assert summary.cash_entries_appended == 2
@@ -319,6 +328,7 @@ def test_sync_service_settles_cheaper_fill_and_releases_cancelled_residual_once(
         qmt_client=client,
         account_id=ACCOUNT_ID,
         trade_date=TRADE_DATE,
+        calendar_provider=CALENDAR,
     ).sync_snapshot()
     assert idempotent.cash_entries_appended == 0
     assert repo.get_virtual_account("strat_a") == account
@@ -352,6 +362,7 @@ def test_sync_service_releases_rejected_buy_freeze_once() -> None:
         qmt_client=client,
         account_id=ACCOUNT_ID,
         trade_date=TRADE_DATE,
+        calendar_provider=CALENDAR,
     ).sync_snapshot()
 
     assert summary.cash_entries_appended == 1
@@ -370,6 +381,7 @@ def test_sync_service_releases_rejected_buy_freeze_once() -> None:
         qmt_client=client,
         account_id=ACCOUNT_ID,
         trade_date=TRADE_DATE,
+        calendar_provider=CALENDAR,
     ).sync_snapshot()
     assert idempotent.cash_entries_appended == 0
     assert repo.get_virtual_account("strat_a") == account
@@ -471,6 +483,7 @@ def test_sync_service_values_same_symbol_by_strategy_lots_independently() -> Non
         qmt_client=client,
         account_id=ACCOUNT_ID,
         trade_date=TRADE_DATE,
+        calendar_provider=CALENDAR,
     ).sync_snapshot()
 
     assert summary.positions_seen == 1
@@ -478,6 +491,131 @@ def test_sync_service_values_same_symbol_by_strategy_lots_independently() -> Non
     assert repo.get_virtual_account("strat_b").market_value == Decimal("6000.000000")
     assert repo.get_virtual_account("strat_a").frozen_cash == Decimal("0.000000")
     assert repo.get_virtual_account("strat_b").frozen_cash == Decimal("0.000000")
+
+
+def test_sync_service_unlocks_prior_trading_day_lot_on_tplus1_idempotently() -> None:
+    repo = _repo_with_strategy()
+    repo.create_position_lot(
+        PositionLotRecord(
+            lot_id="lot_prior",
+            strategy_id="strat_a",
+            symbol="300604.SZ",
+            open_trade_id="trade_prior",
+            open_date=TRADE_DATE,
+            quantity=1000,
+            available_quantity=0,
+            remaining_quantity=1000,
+            avg_cost=Decimal("10"),
+            cost_amount=Decimal("10000"),
+            account_id=ACCOUNT_ID,
+        )
+    )
+    client = FakeReadOnlyQmtClient(orders=[], trades=[], positions=[{"stock_code": "300604.SZ", "can_sell": 1000}])
+
+    same_day = QmtStrategyLedgerSyncService(
+        repository=repo,
+        qmt_client=client,
+        account_id=ACCOUNT_ID,
+        trade_date=TRADE_DATE,
+        calendar_provider=CALENDAR,
+    ).sync_snapshot()
+    tplus1 = QmtStrategyLedgerSyncService(
+        repository=repo,
+        qmt_client=client,
+        account_id=ACCOUNT_ID,
+        trade_date=NEXT_TRADE_DATE,
+        calendar_provider=CALENDAR,
+    ).sync_snapshot()
+    rerun = QmtStrategyLedgerSyncService(
+        repository=repo,
+        qmt_client=client,
+        account_id=ACCOUNT_ID,
+        trade_date=NEXT_TRADE_DATE,
+        calendar_provider=CALENDAR,
+    ).sync_snapshot()
+
+    lot = repo.list_position_lots("strat_a", "300604.SZ")[0]
+    assert same_day.lots_unlocked == 0
+    assert tplus1.lots_unlocked == 1
+    assert rerun.lots_unlocked == 0
+    assert lot.available_quantity == 1000
+    assert lot.metadata["tplus1_available_as_of"] == NEXT_TRADE_DATE.isoformat()
+
+
+def test_sync_service_keeps_same_symbol_strategy_lot_unlocks_independent() -> None:
+    repo = _repo_with_strategy()
+    repo.create_virtual_account(
+        VirtualAccount(
+            strategy_id="strat_b",
+            strategy_name="poc_strategy_b",
+            display_name="POC Strategy B",
+            account_id=ACCOUNT_ID,
+            mode="SIM",
+            initial_cash=Decimal("10000000"),
+            cash=Decimal("10000000"),
+            status=VirtualAccountStatus.ENABLED,
+        )
+    )
+    for strategy_id, lot_id, quantity in (("strat_a", "lot_a_t1", 1000), ("strat_b", "lot_b_t1", 600)):
+        repo.create_position_lot(
+            PositionLotRecord(
+                lot_id=lot_id,
+                strategy_id=strategy_id,
+                symbol="300604.SZ",
+                open_trade_id=f"trade_{lot_id}",
+                open_date=TRADE_DATE,
+                quantity=quantity,
+                available_quantity=0,
+                remaining_quantity=quantity,
+                avg_cost=Decimal("10"),
+                cost_amount=Decimal(quantity * 10),
+                account_id=ACCOUNT_ID,
+            )
+        )
+
+    summary = QmtStrategyLedgerSyncService(
+        repository=repo,
+        qmt_client=FakeReadOnlyQmtClient(orders=[], trades=[], positions=[]),
+        account_id=ACCOUNT_ID,
+        trade_date=NEXT_TRADE_DATE,
+        calendar_provider=CALENDAR,
+    ).sync_snapshot()
+
+    assert summary.lots_unlocked == 2
+    assert repo.list_position_lots("strat_a", "300604.SZ")[0].available_quantity == 1000
+    assert repo.list_position_lots("strat_b", "300604.SZ")[0].available_quantity == 600
+
+
+def test_sync_service_does_not_unlock_on_non_trading_day() -> None:
+    weekend = date(2026, 5, 23)
+    calendar = StaticTradingCalendarProvider([TRADE_DATE, NEXT_TRADE_DATE])
+    repo = _repo_with_strategy()
+    repo.create_position_lot(
+        PositionLotRecord(
+            lot_id="lot_weekend",
+            strategy_id="strat_a",
+            symbol="300604.SZ",
+            open_trade_id="trade_weekend",
+            open_date=TRADE_DATE,
+            quantity=1000,
+            available_quantity=0,
+            remaining_quantity=1000,
+            avg_cost=Decimal("10"),
+            cost_amount=Decimal("10000"),
+            account_id=ACCOUNT_ID,
+        )
+    )
+
+    summary = QmtStrategyLedgerSyncService(
+        repository=repo,
+        qmt_client=FakeReadOnlyQmtClient(orders=[], trades=[], positions=[]),
+        account_id=ACCOUNT_ID,
+        trade_date=weekend,
+        calendar_provider=calendar,
+    ).sync_snapshot()
+
+    assert summary.lots_unlocked == 0
+    assert repo.list_position_lots("strat_a", "300604.SZ")[0].available_quantity == 0
 
 
 def test_sync_service_routes_blank_strategy_duplicate_remark_and_unknown_trade_to_unattributed() -> None:
@@ -543,6 +681,7 @@ def test_sync_service_routes_blank_strategy_duplicate_remark_and_unknown_trade_t
         qmt_client=client,
         account_id=ACCOUNT_ID,
         trade_date=TRADE_DATE,
+        calendar_provider=CALENDAR,
     ).sync_snapshot()
 
     assert summary.orders_seen == 3

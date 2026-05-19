@@ -12,6 +12,11 @@ from datetime import UTC, date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Protocol
 
+from .lot_availability import (
+    DbTradingCalendarProvider,
+    TradingCalendarProvider,
+    effective_lot_available_quantity,
+)
 from .models import (
     BUY_ORDER_TYPE,
     SELL_ORDER_TYPE,
@@ -64,6 +69,7 @@ class SyncSummary:
     buy_freeze_released_amount: Decimal
     accounts_revalued: int
     positions_seen: int
+    lots_unlocked: int = 0
     raw_positions: tuple[dict[str, Any], ...] = field(default_factory=tuple)
 
     def to_dict(self) -> dict[str, Any]:
@@ -85,6 +91,7 @@ class SyncSummary:
             "buy_freeze_released_amount": float(self.buy_freeze_released_amount),
             "accounts_revalued": self.accounts_revalued,
             "positions_seen": self.positions_seen,
+            "lots_unlocked": self.lots_unlocked,
             "raw_positions": list(self.raw_positions),
         }
 
@@ -97,11 +104,13 @@ class QmtStrategyLedgerSyncService:
         qmt_client: ReadOnlyQmtClient,
         account_id: str,
         trade_date: date,
+        calendar_provider: TradingCalendarProvider | None = None,
     ) -> None:
         self._repository = repository
         self._qmt_client = qmt_client
         self._account_id = account_id
         self._trade_date = trade_date
+        self._calendar_provider = calendar_provider or DbTradingCalendarProvider()
 
     def sync_snapshot(self) -> SyncSummary:
         orders = self._qmt_client.get_orders(cancelable_only=False)
@@ -112,6 +121,7 @@ class QmtStrategyLedgerSyncService:
             account.strategy_name: account.strategy_id
             for account in self._repository.list_virtual_accounts(account_id=self._account_id)
         }
+        lots_unlocked = self._unlock_tplus1_lots(strategy_id_by_name.values())
 
         orders_by_id = {RawQmtOrder.from_dict(payload).order_id: RawQmtOrder.from_dict(payload) for payload in orders}
         seen_remarks: dict[str, int] = {}
@@ -323,8 +333,30 @@ class QmtStrategyLedgerSyncService:
             buy_freeze_released_amount=buy_freeze_released_amount,
             accounts_revalued=len(changed_strategy_ids),
             positions_seen=len(positions),
+            lots_unlocked=lots_unlocked,
             raw_positions=tuple(dict(item) for item in positions),
         )
+
+    def _unlock_tplus1_lots(self, strategy_ids: Any) -> int:
+        unlocked = 0
+        for strategy_id in strategy_ids:
+            for lot in self._repository.list_position_lots(strategy_id):
+                target_available = effective_lot_available_quantity(lot, self._trade_date, self._calendar_provider)
+                if target_available <= lot.available_quantity:
+                    continue
+                self._repository.update_position_lot(
+                    replace(
+                        lot,
+                        available_quantity=target_available,
+                        metadata={
+                            **lot.metadata,
+                            "tplus1_available_as_of": self._trade_date.isoformat(),
+                            "availability_source": "trading_calendar_tplus1",
+                        },
+                    )
+                )
+                unlocked += 1
+        return unlocked
 
     def _settle_buy_fill_once(
         self,

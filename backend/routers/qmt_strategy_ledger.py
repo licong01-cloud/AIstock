@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException
 from backend.infra.qmt_client import QMTNotAvailableError, get_qmt_client_singleton
 from backend.services.selection_center.repository import SelectionCenterRepository
 from backend.services.strategy_package.repository import StrategyPackageRepository
+from backend.services.qmt_strategy_ledger.lot_availability import DbTradingCalendarProvider
 from backend.services.qmt_strategy_ledger.order_service import (
     QmtManagedOrderService,
     cancel_request_from_payload,
@@ -29,6 +30,7 @@ _repository_factory: Callable[[], Any] = QmtStrategyLedgerRepository
 _client_factory: Callable[[], Any] = get_qmt_client_singleton
 _package_reader_factory: Callable[[], Any] = StrategyPackageRepository
 _selection_reader_factory: Callable[[], Any] = SelectionCenterRepository
+_calendar_provider_factory: Callable[[], Any] = DbTradingCalendarProvider
 
 
 def configure_dependencies(
@@ -37,10 +39,11 @@ def configure_dependencies(
     client_factory: Callable[[], Any] | None = None,
     package_reader_factory: Callable[[], Any] | None = None,
     selection_reader_factory: Callable[[], Any] | None = None,
+    calendar_provider_factory: Callable[[], Any] | None = None,
 ) -> None:
     """Override dependencies for tests without touching the production singleton."""
 
-    global _repository_factory, _client_factory, _package_reader_factory, _selection_reader_factory
+    global _repository_factory, _client_factory, _package_reader_factory, _selection_reader_factory, _calendar_provider_factory
     if repository_factory is not None:
         _repository_factory = repository_factory
     if client_factory is not None:
@@ -49,6 +52,8 @@ def configure_dependencies(
         _package_reader_factory = package_reader_factory
     if selection_reader_factory is not None:
         _selection_reader_factory = selection_reader_factory
+    if calendar_provider_factory is not None:
+        _calendar_provider_factory = calendar_provider_factory
 
 
 @router.post("/package-bindings", summary="Bind StrategyPackage and Selection Run to a virtual strategy")
@@ -147,12 +152,16 @@ def preview_orders_from_binding(binding_id: str, payload: dict[str, Any]) -> dic
     repository = _repository_factory()
     binding = repository.get_package_binding(binding_id)
     config = _selection_order_build_config(payload)
-    result = SelectionOrderBuilder(repository=repository, selection_reader=_selection_reader_factory()).build_for_binding(
+    result = SelectionOrderBuilder(
+        repository=repository,
+        selection_reader=_selection_reader_factory(),
+        calendar_provider=_calendar_provider_factory(),
+    ).build_for_binding(
         binding=binding,
         config=config,
     )
     preflights = [
-        QmtManagedOrderService(repository=repository).preview_order(request).to_dict()
+        QmtManagedOrderService(repository=repository, calendar_provider=_calendar_provider_factory()).preview_order(request).to_dict()
         for request in result.requests
     ]
     return {"success": True, "order_build": result.to_dict(), "preflights": preflights}
@@ -162,7 +171,7 @@ def preview_orders_from_binding(binding_id: str, payload: dict[str, Any]) -> dic
 def preview_order(payload: dict[str, Any]) -> dict[str, Any]:
     repository = _repository_factory()
     request = request_from_payload(payload)
-    result = QmtManagedOrderService(repository=repository).preview_order(request)
+    result = QmtManagedOrderService(repository=repository, calendar_provider=_calendar_provider_factory()).preview_order(request)
     return {"success": True, "preflight": result.to_dict()}
 
 
@@ -172,7 +181,11 @@ def submit_order(payload: dict[str, Any]) -> dict[str, Any]:
     repository = _repository_factory()
     request = request_from_payload(payload)
     _require_request_mode_allowed(request.mode)
-    result = QmtManagedOrderService(repository=repository, broker=_client_factory()).submit_order(request)
+    result = QmtManagedOrderService(
+        repository=repository,
+        broker=_client_factory(),
+        calendar_provider=_calendar_provider_factory(),
+    ).submit_order(request)
     return {"success": result.success, "result": result.to_dict()}
 
 
@@ -183,7 +196,11 @@ def submit_order_batch(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(orders, list) or not orders:
         raise HTTPException(status_code=400, detail="orders must be a non-empty list")
     repository = _repository_factory()
-    service = QmtManagedOrderService(repository=repository, broker=_client_factory())
+    service = QmtManagedOrderService(
+        repository=repository,
+        broker=_client_factory(),
+        calendar_provider=_calendar_provider_factory(),
+    )
     requests = [request_from_payload(item) for item in orders]
     for request in requests:
         _require_request_mode_allowed(request.mode)
@@ -218,6 +235,7 @@ def sync_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
             qmt_client=client,
             account_id=account_id,
             trade_date=trade_date,
+            calendar_provider=_calendar_provider_factory(),
         ).sync_snapshot()
     except QMTNotAvailableError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

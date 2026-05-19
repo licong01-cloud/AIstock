@@ -7,9 +7,11 @@ import pytest
 
 from backend.services.qmt_strategy_ledger.models import (
     BUY_ORDER_TYPE,
+    SELL_ORDER_TYPE,
     BindingStatus,
     CashEntryType,
     CashLedgerEntry,
+    IntentSubmitStatus,
     OrderIntentRecord,
     PositionLotRecord,
     StrategyPackageBinding,
@@ -199,3 +201,51 @@ def test_in_memory_repository_keeps_cash_entries_append_only_and_lots_filterable
 
     with pytest.raises(ValueError, match="cash ledger entry already exists"):
         repo.append_cash_entry(entry_a)
+
+    updated_lot = repo.update_position_lot(
+        PositionLotRecord(
+            **{
+                **lot_a.__dict__,
+                "available_quantity": 800,
+            }
+        )
+    )
+    assert updated_lot.available_quantity == 800
+    assert repo.list_position_lots("strat_a", symbol="300604.SZ")[0].available_quantity == 800
+
+
+def test_in_memory_repository_lists_open_sell_intents_by_strategy_symbol_and_date() -> None:
+    repo = InMemoryQmtStrategyLedgerRepository()
+    repo.create_virtual_account(_account("strat_a", "poc_strategy_a"))
+    repo.create_virtual_account(_account("strat_b", "poc_strategy_b"))
+
+    def sell_intent(
+        intent_id: str,
+        strategy_id: str,
+        symbol: str,
+        trade_date: date,
+        status: IntentSubmitStatus,
+    ) -> OrderIntentRecord:
+        return OrderIntentRecord(
+            intent_id=intent_id,
+            strategy_id=strategy_id,
+            strategy_name="poc_strategy_a" if strategy_id == "strat_a" else "poc_strategy_b",
+            symbol=symbol,
+            side="SELL",
+            order_type=SELL_ORDER_TYPE,
+            quantity=100,
+            price_type=5,
+            order_remark=intent_id,
+            account_id=ACCOUNT_ID,
+            trade_date=trade_date,
+            submit_status=status,
+        )
+
+    repo.create_order_intent(sell_intent("open_a", "strat_a", "300604.SZ", TRADE_DATE, IntentSubmitStatus.ACCEPTED))
+    repo.create_order_intent(sell_intent("closed_a", "strat_a", "300604.SZ", TRADE_DATE, IntentSubmitStatus.CANCELLED))
+    repo.create_order_intent(sell_intent("other_symbol", "strat_a", "300054.SZ", TRADE_DATE, IntentSubmitStatus.CREATED))
+    repo.create_order_intent(sell_intent("other_strategy", "strat_b", "300604.SZ", TRADE_DATE, IntentSubmitStatus.ACCEPTED))
+
+    pending = repo.list_open_sell_intents("strat_a", symbol="300604.SZ", trade_date=TRADE_DATE)
+
+    assert [item.intent_id for item in pending] == ["open_a"]

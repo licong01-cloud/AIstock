@@ -3,9 +3,13 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
+import pytest
+
+from backend.services.qmt_strategy_ledger.lot_availability import StaticTradingCalendarProvider
 from backend.services.qmt_strategy_ledger.models import (
     BUY_ORDER_TYPE,
     SELL_ORDER_TYPE,
+    IntentSubmitStatus,
     OrderIntentRecord,
     PositionLotRecord,
     VirtualAccount,
@@ -17,6 +21,10 @@ from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyL
 
 ACCOUNT_ID = "62266303"
 TRADE_DATE = date(2026, 5, 18)
+NEXT_TRADE_DATE = date(2026, 5, 19)
+WEEKEND_DATE = date(2026, 5, 23)
+MONDAY_TRADE_DATE = date(2026, 5, 25)
+CALENDAR = StaticTradingCalendarProvider([TRADE_DATE, NEXT_TRADE_DATE, MONDAY_TRADE_DATE])
 
 
 class CountingBroker:
@@ -37,7 +45,13 @@ class CountingBroker:
         return True, "cancelled"
 
 
-def _repo(cash: Decimal = Decimal("10000000"), available_lot: int = 0) -> InMemoryQmtStrategyLedgerRepository:
+def _repo(
+    cash: Decimal = Decimal("10000000"),
+    available_lot: int = 0,
+    *,
+    open_date: date = TRADE_DATE,
+    stored_available_quantity: int | None = None,
+) -> InMemoryQmtStrategyLedgerRepository:
     repo = InMemoryQmtStrategyLedgerRepository()
     repo.create_virtual_account(
         VirtualAccount(
@@ -52,15 +66,16 @@ def _repo(cash: Decimal = Decimal("10000000"), available_lot: int = 0) -> InMemo
         )
     )
     if available_lot:
+        stored_available = available_lot if stored_available_quantity is None else stored_available_quantity
         repo.create_position_lot(
             PositionLotRecord(
                 lot_id="lot_a",
                 strategy_id="strat_a",
                 symbol="300604.SZ",
                 open_trade_id="trade_a",
-                open_date=TRADE_DATE,
+                open_date=open_date,
                 quantity=available_lot,
-                available_quantity=available_lot,
+                available_quantity=stored_available,
                 remaining_quantity=available_lot,
                 avg_cost=Decimal("10"),
                 cost_amount=Decimal(available_lot * 10),
@@ -68,6 +83,10 @@ def _repo(cash: Decimal = Decimal("10000000"), available_lot: int = 0) -> InMemo
             )
         )
     return repo
+
+
+def _service(repo: InMemoryQmtStrategyLedgerRepository, broker: CountingBroker | None = None) -> QmtManagedOrderService:
+    return QmtManagedOrderService(repository=repo, broker=broker or CountingBroker(), calendar_provider=CALENDAR)
 
 
 def _buy_request(**overrides) -> ManagedOrderRequest:
@@ -108,7 +127,7 @@ def _sell_request(**overrides) -> ManagedOrderRequest:
 
 def test_preview_rejects_blank_strategy_without_broker_call() -> None:
     broker = CountingBroker()
-    result = QmtManagedOrderService(repository=_repo(), broker=broker).preview_order(_buy_request(strategy_name=" "))
+    result = _service(_repo(), broker).preview_order(_buy_request(strategy_name=" "))
 
     assert result.allowed is False
     assert [error.code for error in result.errors] == ["BLANK_STRATEGY_NAME"]
@@ -134,7 +153,7 @@ def test_preview_rejects_duplicate_remark_without_broker_call() -> None:
     )
     broker = CountingBroker()
 
-    result = QmtManagedOrderService(repository=repo, broker=broker).preview_order(_buy_request())
+    result = _service(repo, broker).preview_order(_buy_request())
 
     assert result.allowed is False
     assert "DUPLICATE_ORDER_REMARK" in {error.code for error in result.errors}
@@ -142,25 +161,21 @@ def test_preview_rejects_duplicate_remark_without_broker_call() -> None:
 
 
 def test_preview_rejects_insufficient_cash_and_buy_board_lot() -> None:
-    result = QmtManagedOrderService(repository=_repo(cash=Decimal("100")), broker=CountingBroker()).preview_order(
-        _buy_request(quantity=101)
-    )
+    result = _service(_repo(cash=Decimal("100"))).preview_order(_buy_request(quantity=101))
 
     assert result.allowed is False
     assert {"BUY_BOARD_LOT", "INSUFFICIENT_CASH"} <= {error.code for error in result.errors}
 
 
 def test_preview_accepts_star_market_buy_quantity_after_minimum() -> None:
-    service = QmtManagedOrderService(repository=_repo(), broker=CountingBroker())
+    service = _service(_repo())
 
     assert service.preview_order(_buy_request(symbol="688379.SH", quantity=201)).allowed is True
     assert service.preview_order(_buy_request(symbol="689009.SH", quantity=2706)).allowed is True
 
 
 def test_preview_rejects_star_market_buy_quantity_below_minimum() -> None:
-    result = QmtManagedOrderService(repository=_repo(), broker=CountingBroker()).preview_order(
-        _buy_request(symbol="688379.SH", quantity=199)
-    )
+    result = _service(_repo()).preview_order(_buy_request(symbol="688379.SH", quantity=199))
 
     assert result.allowed is False
     [error] = result.errors
@@ -172,7 +187,7 @@ def test_preview_rejects_star_market_buy_quantity_below_minimum() -> None:
 
 
 def test_preview_rejects_main_board_and_chinext_non_100_share_buys() -> None:
-    service = QmtManagedOrderService(repository=_repo(), broker=CountingBroker())
+    service = _service(_repo())
 
     for symbol in ("600000.SH", "000001.SZ", "300604.SZ"):
         result = service.preview_order(_buy_request(symbol=symbol, quantity=101))
@@ -187,18 +202,66 @@ def test_preview_rejects_main_board_and_chinext_non_100_share_buys() -> None:
 
 
 def test_preview_rejects_t1_strategy_lot_shortage() -> None:
-    result = QmtManagedOrderService(repository=_repo(available_lot=0), broker=CountingBroker()).preview_order(
-        _sell_request(quantity=1000)
-    )
+    result = _service(_repo(available_lot=0)).preview_order(_sell_request(quantity=1000))
 
     assert result.allowed is False
     assert [error.code for error in result.errors] == ["INSUFFICIENT_STRATEGY_AVAILABLE_LOT"]
 
 
+def test_preview_derives_prior_day_lot_sellable_on_next_trading_day() -> None:
+    result = _service(_repo(available_lot=1000, stored_available_quantity=0)).preview_order(
+        _sell_request(trade_date=NEXT_TRADE_DATE)
+    )
+
+    assert result.allowed is True
+    assert result.strategy_available_sell_quantity == 1000
+
+
+def test_preview_keeps_same_day_and_non_trading_day_lot_locked() -> None:
+    service = _service(_repo(available_lot=1000, stored_available_quantity=0))
+
+    same_day = service.preview_order(_sell_request(trade_date=TRADE_DATE, order_remark="same_day_sell"))
+    weekend = service.preview_order(_sell_request(trade_date=WEEKEND_DATE, order_remark="weekend_sell"))
+
+    assert same_day.allowed is False
+    assert weekend.allowed is False
+    assert same_day.strategy_available_sell_quantity == 0
+    assert weekend.strategy_available_sell_quantity == 0
+
+
+def test_preview_reserves_pending_sell_intents_without_changing_lot_quantity() -> None:
+    repo = _repo(available_lot=1000, stored_available_quantity=0)
+    repo.create_order_intent(
+        OrderIntentRecord(
+            intent_id="intent_pending_sell",
+            strategy_id="strat_a",
+            strategy_name="poc_strategy_a",
+            symbol="300604.SZ",
+            side="SELL",
+            order_type=SELL_ORDER_TYPE,
+            quantity=400,
+            price_type=5,
+            order_remark="pending_sell",
+            account_id=ACCOUNT_ID,
+            trade_date=NEXT_TRADE_DATE,
+            submit_status=IntentSubmitStatus.ACCEPTED,
+        )
+    )
+
+    result = _service(repo).preview_order(
+        _sell_request(trade_date=NEXT_TRADE_DATE, quantity=700, order_remark="next_sell")
+    )
+
+    assert result.allowed is False
+    assert result.strategy_available_sell_quantity == 600
+    assert result.pending_sell_quantity == 400
+    assert repo.list_position_lots("strat_a", "300604.SZ")[0].remaining_quantity == 1000
+
+
 def test_submit_rejects_broker_can_sell_shortage_before_order_call() -> None:
     broker = CountingBroker(positions=[{"stock_code": "300604.SZ", "quantity": 1000, "can_sell": 0}])
 
-    result = QmtManagedOrderService(repository=_repo(available_lot=1000), broker=broker).submit_order(_sell_request())
+    result = _service(_repo(available_lot=1000), broker).submit_order(_sell_request())
 
     assert result.success is False
     assert result.broker_called is False
