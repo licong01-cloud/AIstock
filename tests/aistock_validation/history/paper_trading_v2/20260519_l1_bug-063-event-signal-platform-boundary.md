@@ -1,4 +1,4 @@
-﻿# BUG-063 event_signal platform capability boundary
+# BUG-063 event_signal platform capability boundary
 
 - Module: paper_v2 / strategy_package / selection_center
 - Level: L1
@@ -49,7 +49,3 @@ git diff --check
 - Remaining risks: event_signal provider/data consumption is not implemented in this slice; this only defines ownership and fail-fast boundaries.
 - Need production backend restart: not during validation; no production port was touched.
 - Need dev service restart: no dev service was started.
-
-
-
-
