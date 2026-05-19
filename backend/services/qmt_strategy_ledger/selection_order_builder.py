@@ -115,6 +115,7 @@ class SelectionOrderBuilder:
                 "package binding is not ACTIVE",
                 context={"binding_id": binding.binding_id, "binding_status": binding.binding_status.value},
             )
+        self._require_frozen_runtime_asset(binding)
         account = self._repository.get_virtual_account(binding.strategy_id)
         selection_run: SelectionRun = self._selection_reader.get_run(binding.selection_run_id)
         if selection_run.status != SelectionRunStatus.SUCCEEDED:
@@ -306,6 +307,36 @@ class SelectionOrderBuilder:
         if selection_run.aggregate_results:
             return sorted(selection_run.aggregate_results, key=lambda candidate: candidate.rank)
         return sorted(selection_run.package_results.get(binding.package_id, []), key=lambda candidate: candidate.rank)
+
+    def _require_frozen_runtime_asset(self, binding: StrategyPackageBinding) -> None:
+        evidence = (binding.runtime_config or {}).get("frozen_runtime_asset")
+        if evidence is None:
+            return
+        if not isinstance(evidence, dict):
+            raise StrategyPackageValidationError(
+                "frozen MiniQMT runtime asset evidence must be an object",
+                context={"binding_id": binding.binding_id, "evidence_type": type(evidence).__name__},
+            )
+        missing = [
+            key
+            for key in ("artifact_id", "artifact_sha256", "manifest_sha256", "runtime_config_hash", "source_type", "authority_scope")
+            if not evidence.get(key)
+        ]
+        if missing:
+            raise DataUnavailableError(
+                "frozen MiniQMT runtime asset evidence is incomplete; rebind the StrategyPackage before daily execution",
+                context={"binding_id": binding.binding_id, "missing": missing, "asset_stage": "daily_order_build"},
+            )
+        if evidence.get("manifest_sha256") != binding.manifest_sha256:
+            raise DataUnavailableError(
+                "frozen MiniQMT runtime asset manifest hash does not match active binding",
+                context={
+                    "binding_id": binding.binding_id,
+                    "binding_manifest_sha256": binding.manifest_sha256,
+                    "asset_manifest_sha256": evidence.get("manifest_sha256"),
+                    "asset_stage": "daily_order_build",
+                },
+            )
 
     def _position_summaries(self, strategy_id: str, trade_date: date) -> dict[str, _PositionSummary]:
         summaries: dict[str, _PositionSummary] = {}

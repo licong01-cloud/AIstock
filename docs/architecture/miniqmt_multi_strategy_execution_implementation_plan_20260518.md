@@ -752,6 +752,46 @@ Regression coverage:
   proves `daily_basic` is not a MiniQMT pre-open gate; `suspend_d` / `stk_limit`
   are the active readiness datasets for this path.
 
+### 10.6 MiniQMT frozen StrategyPackage asset authority
+
+BUG-057 separates package asset preparation from the daily MiniQMT execution
+window. If a StrategyPackage needs QE node assets, the node fetch and runnable
+workspace preparation must happen before binding or artifact generation, not
+during the pre-open order-building path.
+
+Daily MiniQMT execution uses the authoritative `strategy_pkg.selection_score_artifact`
+row as the frozen local asset contract:
+
+- The artifact must match `package_id`, `manifest_sha256`, `trade_date`,
+  `data_source`, and `selection_artifact_runtime_hash(runtime_config)`.
+- The artifact must be `SUCCEEDED`, contain scores, and declare
+  `metadata.source_type=live_qe_model_inference_v1` plus
+  `metadata.authority_scope=authoritative_selection`.
+- `QmtStrategyPackageBindingService` stores the frozen evidence under
+  `binding.runtime_config.frozen_runtime_asset`, including artifact id, artifact
+  hash, manifest hash, runtime-config hash, trade date, data source, source
+  type, authority scope, score count, and top symbol.
+- `SelectionPackageHealthService` no longer calls QE source resolution when the
+  requested frozen authoritative artifact already exists. A later RDAgent
+  `mlruns-params` 404 therefore does not block the daily MiniQMT preflight.
+- `SelectionOrderBuilder` treats frozen asset evidence as an invariant: if the
+  evidence is corrupt or does not match the active binding manifest hash, it
+  fails fast with `asset_stage=daily_order_build`.
+
+This does not introduce silent cache fallback. `live_inference.py` still keeps
+`allow_cache_fallback=False` on the default node materialization path; cache
+reuse is legal only when a caller explicitly opts in and records
+`model_params_origin=cache` in generated artifact provenance.
+
+Operationally the error classes are distinct:
+
+| Stage | Blocker example | Expected operator action |
+|---|---|---|
+| Package preparation / binding | missing or diagnostic-only frozen artifact | generate/re-generate authoritative selection artifact and rebind before trading |
+| Daily order build | corrupt `frozen_runtime_asset` evidence or manifest mismatch | rebind the StrategyPackage, do not manually patch order payloads |
+| Current-day market data readiness | missing `suspend_d` / `stk_limit` audit where required | wait for or repair market data sync |
+| Broker readiness | MiniQMT disconnected, insufficient cash, insufficient `can_sell` | fix MiniQMT/account state before submit |
+
 ## 11. 分支拆分建议
 
 当前分支只承载方案。后续实现建议拆分为以下独立分支，降低交易相关风险：

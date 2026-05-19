@@ -56,9 +56,24 @@ class SelectionPackageHealthService:
         legacy_non_st_pit = bool(contract["context"].get("legacy_non_st_pit"))
 
         checks.append(self._latest_artifact_check(manifest))
+        requested_artifact: dict[str, Any] | None = None
         if trade_date is not None and data_source:
-            checks.append(self._requested_artifact_check(manifest, trade_date, data_source, config))
-        if self._auto_generate(config):
+            requested_artifact = self._requested_artifact_check(manifest, trade_date, data_source, config)
+            checks.append(requested_artifact)
+        if requested_artifact and requested_artifact.get("status") == PASS and requested_artifact.get("context", {}).get("artifact_id"):
+            checks.append(
+                {
+                    "name": "source_resolves",
+                    "status": PASS,
+                    "message": "frozen authoritative selection artifact exists; live QE source resolution is not required for this daily run",
+                    "context": {
+                        "artifact_id": requested_artifact["context"].get("artifact_id"),
+                        "runtime_config_hash": requested_artifact["context"].get("runtime_config_hash"),
+                        "asset_authority": "frozen_selection_score_artifact",
+                    },
+                }
+            )
+        elif self._auto_generate(config):
             checks.append(self._source_resolution_check(record))
         else:
             checks.append(
@@ -237,14 +252,14 @@ class SelectionPackageHealthService:
         data_source: str,
         runtime_config: dict[str, Any],
     ) -> dict[str, Any]:
-        if self._auto_generate(runtime_config):
-            return {
-                "name": "requested_selection_artifact",
-                "status": PASS,
-                "message": "live artifact auto-generation is enabled for this request",
-                "context": {"trade_date": trade_date.isoformat(), "data_source": data_source},
-            }
         if self.artifact_repository is None or not hasattr(self.artifact_repository, "get"):
+            if self._auto_generate(runtime_config):
+                return {
+                    "name": "requested_selection_artifact",
+                    "status": PASS,
+                    "message": "live artifact auto-generation is enabled for this request",
+                    "context": {"trade_date": trade_date.isoformat(), "data_source": data_source},
+                }
             return {
                 "name": "requested_selection_artifact",
                 "status": UNKNOWN,
@@ -260,6 +275,15 @@ class SelectionPackageHealthService:
                 runtime_config_hash=selection_artifact_runtime_hash(runtime_config),
             )
         except DataUnavailableError as exc:
+            if self._auto_generate(runtime_config):
+                context = dict(exc.context)
+                context["auto_generate"] = True
+                return {
+                    "name": "requested_selection_artifact",
+                    "status": PASS,
+                    "message": "requested artifact is missing; live artifact auto-generation is enabled",
+                    "context": context,
+                }
             return {"name": "requested_selection_artifact", "status": BLOCKED, "message": exc.message, "context": exc.context}
         metadata = artifact.metadata or {}
         if metadata.get("source_type") != AUTHORITATIVE_SELECTION_SOURCE_TYPE:
@@ -273,7 +297,16 @@ class SelectionPackageHealthService:
             "name": "requested_selection_artifact",
             "status": PASS,
             "message": "requested authoritative selection artifact exists",
-            "context": {"artifact_id": artifact.artifact_id, "score_count": artifact.score_count},
+            "context": {
+                "artifact_id": artifact.artifact_id,
+                "artifact_sha256": artifact.artifact_sha256,
+                "score_count": artifact.score_count,
+                "source_type": metadata.get("source_type"),
+                "authority_scope": metadata.get("authority_scope"),
+                "runtime_config_hash": artifact.runtime_config_hash,
+                "trade_date": artifact.trade_date.isoformat(),
+                "data_source": artifact.data_source,
+            },
         }
 
     def _source_resolution_check(self, record: Any) -> dict[str, Any]:

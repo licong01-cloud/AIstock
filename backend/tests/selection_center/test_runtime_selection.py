@@ -681,6 +681,100 @@ def test_selection_center_pit_mode_resolves_previous_trading_day_and_passes_cuto
     assert [item.symbol for item in run.aggregate_results] == ["000001.SZ", "000002.SZ"]
 
 
+def test_selection_center_uses_frozen_artifact_when_node_preflight_fails() -> None:
+    class FailingResolver:
+        def __init__(self) -> None:
+            self.preflight_calls = 0
+            self.source_calls = 0
+
+        def load_source(self, _experiment_id: str):
+            self.source_calls += 1
+            raise DataUnavailableError("node mlruns params endpoint returned 404")
+
+        def require_preflight_or_raise(self, **_kwargs):
+            self.preflight_calls += 1
+            raise DataUnavailableError("node mlruns params endpoint returned 404")
+
+    class ProviderShouldNotRun:
+        backend_name = "should_not_run"
+
+        def run(self, **_kwargs):
+            raise AssertionError("daily selection must reuse frozen artifact instead of live inference")
+
+    package_repo = InMemoryStrategyPackageRepository()
+    manifest = freeze_manifest(
+        make_manifest().model_copy(
+            update={
+                "package_status": PackageStatus.SELECTION_ENABLED,
+                "strategy_config": {"strategy_id": "pkg_frozen_artifact"},
+            }
+        )
+    )
+    package_repo.save_manifest(manifest)
+    artifact_repo = InMemorySelectionScoreArtifactRepository()
+    runtime_config = {
+        "selection_artifact_config": {"auto_generate": True, "cutoff_date": "2024-01-01"},
+        "runtime_profile": {"selection": {"top_k": 1}, "tradability": {"exclude_suspended": False}},
+    }
+    artifact_repo.save(
+        SelectionScoreArtifact(
+            package_id=manifest.package_id,
+            manifest_sha256=manifest.manifest_sha256 or "",
+            trade_date=date(2024, 1, 2),
+            data_source="DB_HISTORICAL",
+            runtime_config_hash=selection_artifact_runtime_hash(runtime_config),
+            scores_json=[
+                {
+                    "symbol": "000001.SZ",
+                    "score": 0.9,
+                    "rank": 1,
+                    "target_weight": 0.03,
+                    "reference_price": 10.0,
+                }
+            ],
+            score_count=1,
+            universe_count=1,
+            top_score_symbol="000001.SZ",
+            metadata={
+                "source_type": AUTHORITATIVE_SELECTION_SOURCE_TYPE,
+                "authority_scope": AUTHORITATIVE_SELECTION_SCOPE,
+                "runtime_workspace": "F:/AIstock/runtime_cache/pkg_frozen_artifact/sha",
+            },
+        )
+    )
+    resolver = FailingResolver()
+    artifact_service = StrategyPackageSelectionArtifactService(
+        package_repository=package_repo,
+        artifact_repository=artifact_repo,
+        runtime_asset_resolver=resolver,
+        live_inference_provider=ProviderShouldNotRun(),
+    )
+    service = SelectionCenterService(
+        package_repository=package_repo,
+        repository=InMemorySelectionCenterRepository(),
+        runtime=StrategyPackageRuntime(artifact_repository=artifact_repo),
+        selection_artifact_service=artifact_service,
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+    )
+
+    run = service.run_single_package(
+        package_id=manifest.package_id,
+        trade_date=date(2024, 1, 2),
+        data_source="DB_HISTORICAL",
+        runtime_config=runtime_config,
+    )
+
+    assert run.status == SelectionRunStatus.SUCCEEDED
+    assert [item.symbol for item in run.aggregate_results] == ["000001.SZ"]
+    assert resolver.preflight_calls == 0
+    assert resolver.source_calls == 0
+    health_checks = run.runtime_config["package_health"][manifest.package_id]["checks"]
+    source_check = next(item for item in health_checks if item["name"] == "source_resolves")
+    assert source_check["status"] == "PASS"
+    assert source_check["context"]["asset_authority"] == "frozen_selection_score_artifact"
+
+
 def test_live_inference_factor_order_uses_static_dataloader_schema(tmp_path) -> None:
     workspace = tmp_path / "safe_assets" / "qe_static_schema"
     factors_dir = workspace / "factors"
@@ -936,6 +1030,57 @@ def test_live_inference_materialize_uses_cached_params_when_node_mlruns_params_4
     copied = list(source_dir.glob("**/artifacts/params.pkl"))
     assert len(copied) == 1
     assert copied[0].read_bytes() == b"cached model params"
+
+
+def test_live_inference_materialize_requires_explicit_cache_opt_in(tmp_path, monkeypatch) -> None:
+    cache_root = tmp_path / "runtime_cache"
+    package_cache = cache_root / "pkg_cached" / "manifest_hash"
+    (package_cache / "model").mkdir(parents=True)
+    (package_cache / "model" / "params.pkl").write_bytes(b"cached model params")
+    (package_cache / "manifest.json").write_text(
+        json.dumps({"diagnostics": {"qe_experiment_id": "qe_no_fallback"}}),
+        encoding="utf-8",
+    )
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def download_workspace_file_bytes(self, task_id, loop_id, file_path):
+            if file_path == "conf.yaml":
+                return b"data_handler_config: {}\n"
+            if file_path == "factors/factor_a.py":
+                return b"def calculate():\n    return None\n"
+            if file_path == "model.py":
+                raise QEWorkspaceFileNotFound(
+                    task_id,
+                    loop_id,
+                    file_path,
+                    "http://node/files/model.py",
+                )
+            raise AssertionError(f"unexpected workspace file request: {file_path}")
+
+        async def download_mlruns_params(self, task_id, loop_id):
+            raise RuntimeError("node mlruns params endpoint returned 404")
+
+    monkeypatch.setattr(QEWorkspaceClient, "for_node", staticmethod(lambda _node_id: FakeClient()))
+
+    resolver = QEExperimentRuntimeAssetResolver(cache_root=cache_root)
+    with pytest.raises(DataUnavailableError, match="failed to materialize QE runtime assets") as exc_info:
+        resolver._materialize_runtime_source_from_node(
+            experiment_id="qe_no_fallback",
+            qe_task_id="qe_task_node",
+            qe_loop_id="Loop1",
+            execution_node_id="node-1",
+            factor_names=["factor_a"],
+            custom_params={"disable_alpha158": True},
+            data_split={},
+        )
+
+    assert "node mlruns params endpoint returned 404" in exc_info.value.context["error"]
 
 
 def test_live_inference_load_source_materializes_via_node_api_not_db_workspace(tmp_path, monkeypatch) -> None:
