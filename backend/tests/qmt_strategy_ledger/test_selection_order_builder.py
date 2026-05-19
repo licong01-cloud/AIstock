@@ -604,3 +604,30 @@ def test_selection_order_builder_rejects_historical_retired_binding() -> None:
 
     with pytest.raises(StrategyPackageValidationError, match="not ACTIVE"):
         _builder(repo, run).build_for_binding(binding=retired_binding)
+
+
+def test_selection_order_builder_fails_fast_on_corrupt_frozen_asset_evidence() -> None:
+    repo = _repo()
+    binding = repo.create_package_binding(
+        StrategyPackageBinding(
+            **{
+                **_binding().__dict__,
+                "runtime_config": {
+                    "frozen_runtime_asset": {
+                        "artifact_id": "ssa_bad",
+                        "manifest_sha256": "sha_other",
+                        "runtime_config_hash": "runtime_hash",
+                        "source_type": "live_qe_model_inference_v1",
+                        "authority_scope": "authoritative_selection",
+                    }
+                },
+            }
+        )
+    )
+    run = _selection_run([SelectionCandidate(symbol="300604.SZ", score=0.9, rank=1, reference_price=10)])
+
+    with pytest.raises(DataUnavailableError, match="runtime asset evidence is incomplete") as exc_info:
+        _builder(repo, run).build_for_binding(binding=binding)
+
+    assert exc_info.value.context["asset_stage"] == "daily_order_build"
+    assert "artifact_sha256" in exc_info.value.context["missing"]

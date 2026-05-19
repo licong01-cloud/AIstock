@@ -10,7 +10,13 @@ from backend.services.qmt_strategy_ledger.models import VirtualAccount, VirtualA
 from backend.services.qmt_strategy_ledger.package_binding import PackageBindingRequest, QmtStrategyPackageBindingService
 from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyLedgerRepository
 from backend.services.selection_center.models import SelectionMode, SelectionRun, SelectionRunStatus
+from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELECTION_SCOPE, AUTHORITATIVE_SELECTION_SOURCE_TYPE
 from backend.services.strategy_package.models import PackageStatus
+from backend.services.strategy_package.selection_artifact import (
+    InMemorySelectionScoreArtifactRepository,
+    SelectionScoreArtifact,
+    selection_artifact_runtime_hash,
+)
 from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
 from backend.services.trading_core.errors import InvalidStateTransitionError
 
@@ -80,6 +86,37 @@ def _run(
     )
 
 
+def _artifact_repo(
+    *,
+    source_type: str = AUTHORITATIVE_SELECTION_SOURCE_TYPE,
+    authority_scope: str = AUTHORITATIVE_SELECTION_SCOPE,
+    runtime_config: dict | None = None,
+    scores: list[dict] | None = None,
+) -> InMemorySelectionScoreArtifactRepository:
+    repo = InMemorySelectionScoreArtifactRepository()
+    rows = scores or [{"symbol": "300604.SZ", "score": 0.9, "rank": 1, "target_weight": 0.02, "reference_price": 10.0}]
+    repo.save(
+        SelectionScoreArtifact(
+            package_id="pkg_a",
+            manifest_sha256="sha_a",
+            trade_date=TRADE_DATE,
+            data_source="DB_HISTORICAL",
+            runtime_config_hash=selection_artifact_runtime_hash(runtime_config or {}),
+            scores_json=rows,
+            score_count=len(rows),
+            universe_count=len(rows),
+            top_score_symbol=rows[0]["symbol"] if rows else None,
+            metadata={
+                "source_type": source_type,
+                "authority_scope": authority_scope,
+                "runtime_workspace": "F:/AIstock/runtime_cache/pkg_a/sha_a",
+                "model_params_origin": "node",
+            },
+        )
+    )
+    return repo
+
+
 def test_package_binding_creates_active_binding_with_manifest_evidence() -> None:
     repo = _repo()
     service = QmtStrategyPackageBindingService(
@@ -102,6 +139,62 @@ def test_package_binding_creates_active_binding_with_manifest_evidence() -> None
     assert binding.manifest_sha256 == "sha_a"
     assert binding.trade_date == TRADE_DATE
     assert repo.get_active_package_binding("strat_a") == binding
+
+
+def test_package_binding_captures_frozen_selection_asset_evidence() -> None:
+    repo = _repo()
+    runtime_config = {"selection_artifact_config": {"cutoff_date": "2026-05-17"}}
+    service = QmtStrategyPackageBindingService(
+        repository=repo,
+        package_reader=FakePackageReader(FakePackageRecord("pkg_a", PackageStatus.SELECTION_ENABLED, "sha_a")),
+        selection_reader=FakeSelectionReader(_run()),
+        artifact_repository=_artifact_repo(runtime_config=runtime_config),
+    )
+
+    binding = service.bind(
+        PackageBindingRequest(
+            strategy_id="strat_a",
+            package_id="pkg_a",
+            selection_run_id="sel_a",
+            runtime_config=runtime_config,
+        )
+    )
+
+    evidence = binding.runtime_config["frozen_runtime_asset"]
+    assert evidence["asset_authority"] == "frozen_selection_score_artifact"
+    assert evidence["manifest_sha256"] == "sha_a"
+    assert evidence["selection_run_id"] == "sel_a"
+    assert evidence["trade_date"] == TRADE_DATE.isoformat()
+    assert evidence["runtime_config_hash"] == selection_artifact_runtime_hash(runtime_config)
+    assert evidence["source_type"] == AUTHORITATIVE_SELECTION_SOURCE_TYPE
+    assert evidence["authority_scope"] == AUTHORITATIVE_SELECTION_SCOPE
+    assert evidence["artifact_sha256"]
+
+
+def test_package_binding_fails_fast_when_frozen_asset_missing_or_not_authoritative() -> None:
+    repo = _repo()
+    service = QmtStrategyPackageBindingService(
+        repository=repo,
+        package_reader=FakePackageReader(FakePackageRecord("pkg_a", PackageStatus.SELECTION_ENABLED, "sha_a")),
+        selection_reader=FakeSelectionReader(_run()),
+        artifact_repository=InMemorySelectionScoreArtifactRepository(),
+    )
+
+    with pytest.raises(DataUnavailableError, match="frozen MiniQMT selection artifact is missing") as missing:
+        service.bind(PackageBindingRequest(strategy_id="strat_a", package_id="pkg_a", selection_run_id="sel_a"))
+    assert missing.value.context["asset_stage"] == "package_binding"
+    assert missing.value.context["runtime_config_hash"] == selection_artifact_runtime_hash({})
+
+    service = QmtStrategyPackageBindingService(
+        repository=repo,
+        package_reader=FakePackageReader(FakePackageRecord("pkg_a", PackageStatus.SELECTION_ENABLED, "sha_a")),
+        selection_reader=FakeSelectionReader(_run()),
+        artifact_repository=_artifact_repo(source_type="qe_mlruns_pred_pkl_v1", authority_scope="diagnostic_backtest_only"),
+    )
+
+    with pytest.raises(DataUnavailableError, match="not authoritative") as not_authoritative:
+        service.bind(PackageBindingRequest(strategy_id="strat_a", package_id="pkg_a", selection_run_id="sel_a"))
+    assert not_authoritative.value.context["required_source_type"] == AUTHORITATIVE_SELECTION_SOURCE_TYPE
 
 
 def test_package_binding_same_selection_is_idempotent_without_duplicate_active_row() -> None:

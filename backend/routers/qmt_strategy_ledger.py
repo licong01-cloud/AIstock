@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException
 from backend.infra.qmt_client import QMTNotAvailableError, get_qmt_client_singleton
 from backend.services.selection_center.repository import SelectionCenterRepository
 from backend.services.strategy_package.repository import StrategyPackageRepository
+from backend.services.strategy_package.selection_artifact import StrategyPackageSelectionArtifactRepository
 from backend.services.qmt_strategy_ledger.lot_availability import DbTradingCalendarProvider
 from backend.services.qmt_strategy_ledger.order_service import (
     QmtManagedOrderService,
@@ -37,6 +38,7 @@ _client_factory: Callable[[], Any] = get_qmt_client_singleton
 _package_reader_factory: Callable[[], Any] = StrategyPackageRepository
 _selection_reader_factory: Callable[[], Any] = SelectionCenterRepository
 _calendar_provider_factory: Callable[[], Any] = DbTradingCalendarProvider
+_artifact_repository_factory: Callable[[], Any] | None = None
 
 
 def configure_dependencies(
@@ -46,10 +48,12 @@ def configure_dependencies(
     package_reader_factory: Callable[[], Any] | None = None,
     selection_reader_factory: Callable[[], Any] | None = None,
     calendar_provider_factory: Callable[[], Any] | None = None,
+    artifact_repository_factory: Callable[[], Any] | None = None,
 ) -> None:
     """Override dependencies for tests without touching the production singleton."""
 
     global _repository_factory, _client_factory, _package_reader_factory, _selection_reader_factory, _calendar_provider_factory
+    global _artifact_repository_factory
     if repository_factory is not None:
         _repository_factory = repository_factory
     if client_factory is not None:
@@ -60,11 +64,19 @@ def configure_dependencies(
         _selection_reader_factory = selection_reader_factory
     if calendar_provider_factory is not None:
         _calendar_provider_factory = calendar_provider_factory
+    _artifact_repository_factory = artifact_repository_factory
 
 
 @router.post("/package-bindings", summary="Bind StrategyPackage and Selection Run to a virtual strategy")
 def bind_package(payload: dict[str, Any]) -> dict[str, Any]:
     repository = _repository_factory()
+    artifact_repository = (
+        _artifact_repository_factory()
+        if _artifact_repository_factory is not None
+        else StrategyPackageSelectionArtifactRepository()
+        if isinstance(repository, QmtStrategyLedgerRepository)
+        else None
+    )
     request = PackageBindingRequest(
         strategy_id=str(payload.get("strategy_id") or "").strip(),
         package_id=str(payload.get("package_id") or "").strip(),
@@ -81,6 +93,7 @@ def bind_package(payload: dict[str, Any]) -> dict[str, Any]:
             repository=repository,
             package_reader=_package_reader_factory(),
             selection_reader=_selection_reader_factory(),
+            artifact_repository=artifact_repository,
         ).bind_with_result(request)
     except TradingCoreError as exc:
         _raise_trading_core_http(exc)

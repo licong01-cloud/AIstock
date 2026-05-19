@@ -19,7 +19,13 @@ from backend.services.qmt_strategy_ledger.models import (
 )
 from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyLedgerRepository
 from backend.services.selection_center.models import SelectionMode, SelectionRun, SelectionRunStatus
+from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELECTION_SCOPE, AUTHORITATIVE_SELECTION_SOURCE_TYPE
 from backend.services.strategy_package.models import PackageStatus
+from backend.services.strategy_package.selection_artifact import (
+    InMemorySelectionScoreArtifactRepository,
+    SelectionScoreArtifact,
+    selection_artifact_runtime_hash,
+)
 
 
 ACCOUNT_ID = "62266303"
@@ -61,6 +67,28 @@ def _selection_run(run_id: str, trade_date: date = TRADE_DATE) -> SelectionRun:
         status=SelectionRunStatus.SUCCEEDED,
         manifest_sha256_by_package={"pkg_a": "sha_a"},
     )
+
+
+def _artifact_repo(trade_date: date) -> InMemorySelectionScoreArtifactRepository:
+    repo = InMemorySelectionScoreArtifactRepository()
+    repo.save(
+        SelectionScoreArtifact(
+            package_id="pkg_a",
+            manifest_sha256="sha_a",
+            trade_date=trade_date,
+            data_source="DB_HISTORICAL",
+            runtime_config_hash=selection_artifact_runtime_hash({}),
+            scores_json=[{"symbol": "300604.SZ", "score": 0.9, "rank": 1}],
+            score_count=1,
+            universe_count=1,
+            top_score_symbol="300604.SZ",
+            metadata={
+                "source_type": AUTHORITATIVE_SELECTION_SOURCE_TYPE,
+                "authority_scope": AUTHORITATIVE_SELECTION_SCOPE,
+            },
+        )
+    )
+    return repo
 
 
 def _account(strategy_id: str, strategy_name: str) -> VirtualAccount:
@@ -173,6 +201,7 @@ def test_package_binding_router_requires_explicit_replace_and_rolls_over_active_
         client_factory=lambda: object(),
         package_reader_factory=lambda: FakePackageReader(FakePackageRecord("pkg_a", PackageStatus.SELECTION_ENABLED, "sha_a")),
         selection_reader_factory=lambda: FakeSelectionReader(_selection_run("sel_b", date(2026, 5, 19))),
+        artifact_repository_factory=lambda: _artifact_repo(date(2026, 5, 19)),
     )
     app = FastAPI()
     app.include_router(qmt_strategy_ledger.router, prefix="/api/v1")
@@ -202,4 +231,6 @@ def test_package_binding_router_requires_explicit_replace_and_rolls_over_active_
     assert body["binding"]["trade_date"] == "2026-05-19"
     assert body["replaced_binding"]["binding_id"] == "bind_a"
     assert body["replaced_binding"]["binding_status"] == "RETIRED"
-    assert repo.get_active_package_binding("strat_a").selection_run_id == "sel_b"
+    active = repo.get_active_package_binding("strat_a")
+    assert active.selection_run_id == "sel_b"
+    assert active.runtime_config["frozen_runtime_asset"]["artifact_sha256"]
