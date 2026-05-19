@@ -76,18 +76,24 @@
 3. 写 readiness：只有通过校验后才写 `market.dataset_date_refresh_audit(status='success')`。
 4. 重建缓存：以 audit 为主、物理表为校验来源刷新 `market.data_stats`。
 5. 对账修复：定期比较 target、job、audit、physical、data_stats。
-6. 自动补齐：所有可恢复缺口进入 retry queue，直到成功或 final deadline。
+6. 自动补齐：所有可恢复缺口进入 `data_sync_targets` 的 retry 状态，依靠 `next_retry_at` 推进，直到成功或 final deadline。
 7. 报警门控：只有不可控故障或 deadline 后仍无法恢复的 final blocked 才报警。
 
-### 3.2 成功判定
+### 3.2 Readiness 成功判定和非门禁项
 
-一个 dataset/date 只有同时满足以下条件，才可以对业务声明 ready：
+一个 dataset/date 的业务 ready 只由以下四项决定：
 
 - 已到该数据集 release window，且不早于 provider 合理发布时间。
 - 物理表存在该日期数据，或 catalog 明确允许该日期空结果为合法。
 - 数据行通过 schema、主键、日期、关键字段、合理行数、重复行校验。
 - `market.dataset_date_refresh_audit` 写入 `status='success'`，并记录 `row_count`、`written_rows`、`expected_rows`、`coverage_ratio`、`quality_status`、`failure_category`、`job_id`。
-- `market.data_stats` 已刷新或被标记为 stale 并安排重建。
+
+以下都不是业务 ready 门禁，不能重复阻断业务：
+
+- `market.data_stats` 刷新：它是 UI/cache 后置动作。audit ready 但 cache stale 时，业务仍 ready，UI 显示缓存刷新中。
+- `market.ingestion_jobs.status='success'`：它只是 attempt 过程证据，不能替代 audit success。
+- alert acknowledged/resolved：报警闭环状态不能反向决定数据是否 ready。
+- UI 首屏加载结果：UI 只展示 readiness，不重新定义 readiness。
 
 ### 3.3 业务流程决策表
 
@@ -129,6 +135,19 @@ db_unavailable / provider_contract_error
 - `cache_stale` 不得阻断已经 audit ready 的业务消费，但必须在 UI 中提示缓存正在重建。
 - `job success` 不属于 readiness 状态，只能作为 attempt 证据。
 - `not_required` 只适用于非交易日、未上市区间、明确不需要刷新或 catalog 标注的非每日数据。
+
+### 3.5 运行时门禁唯一职责
+
+为避免重复检查和重复阻断，第一版只保留四个运行时门禁，每个门禁只有一个 owner：
+
+| 门禁 | 唯一 owner | 可以读取的证据 | 不允许做的事 |
+|---|---|---|---|
+| Readiness Gate | Policy Engine + Audit Writer | release policy、物理表校验、audit row | 不读取 `data_stats` 来判定 ready |
+| Retry Gate | `data_sync_targets` worker | target 状态、attempt 结果、next_retry_at、deadline | 不写 `data_alerts` |
+| Alert Gate | Alert Gate | target final state、failure_category、attempt history | 不重新拉取数据、不重复做质量校验 |
+| Cache Gate | Data Stats Builder | audit ready、physical summary | 不阻断业务 readiness |
+
+重复检查处理原则：质量校验只在 Ingestion Adapter 写 audit 前完整执行一次；Reconciliation 只做轻量对账（日期、行数、hash、状态），发现不一致才触发重新同步，不再常规重复扫描大表。
 
 ## 4. 数据集分层和 deadline policy
 
@@ -229,7 +248,7 @@ audit_success_stats_stale
 stats_success_physical_missing
 ```
 
-这些状态不能直接报警，必须先进入 reconciliation 和 retry queue。
+这些状态不能直接报警，必须先进入 reconciliation，并更新 `data_sync_targets` 的 retry 状态。
 
 ### 5.3 冲突消解规则
 
@@ -254,7 +273,7 @@ stats_success_physical_missing
 
 1. `market.dataset_date_refresh_audit` 继续作为 readiness 权威，不另建第二套 readiness 表。
 2. `market.data_stats` 继续作为看板缓存，不直接参与业务阻断。
-3. 新增 `market.data_sync_targets` 承担 target、状态、retry queue、next_retry_at、deadline、dependency block 的职责。
+3. 新增 `market.data_sync_targets` 承担 target、状态、next_retry_at、deadline、dependency block 和 retry 计数的职责。
 4. 新增 `market.data_sync_attempts` 记录每次尝试；不单独新增 `data_sync_retry_queue`，除非后续证明 target 表无法承载队列。
 5. release/deadline policy 第一阶段可用代码/YAML catalog 管理；只有需要 UI 动态配置时再落库为 `market.dataset_release_policy`。
 6. Alert Gate 是唯一写 `market.data_alerts` 的组件；其它任务只写 summary、target 或 attempt。
@@ -312,7 +331,7 @@ UI 不得只显示 job success。若 job success 但 audit 缺失，应显示：
 
 第一阶段建议新增：
 
-- `market.data_sync_targets`：每日目标、当前状态、deadline、next_retry_at、retry_count、dependency block、operator_action_required。该表同时承担 retry queue，不再单独新增 `data_sync_retry_queue`。
+- `market.data_sync_targets`：每日目标、当前状态、deadline、next_retry_at、retry_count、dependency block、operator_action_required。该表同时承担队列推进职责，不再单独新增 `data_sync_retry_queue`。
 - `market.data_sync_attempts`：每次尝试的执行记录，包括 source response、job_id、row_count、错误分类、耗时、payload hash。
 
 暂不强制新增：
@@ -345,7 +364,7 @@ UI 不得只显示 job success。若 job success 但 audit 缺失，应显示：
 |---|---|---|
 | L0 静态/契约 | YAML、schema、guardrail、DB comment、路径归属 | YAML 可解析，规则引用有效，无新增 P0/P1 |
 | L1 单元 | policy engine、target generator、alert gate、zero-row 判定 | release/T+1/deadline/failure_category 全覆盖 |
-| L2 集成 | 临时 DB + mocked source + scheduler | job/audit/physical/data_stats/retry_queue 一致 |
+| L2 集成 | 临时 DB + mocked source + scheduler | job/audit/physical/data_stats/target 状态一致 |
 | L3 API/UI | 本地 dev backend/frontend | 看板状态、readiness API、Paper v2 readiness 一致 |
 | L4 跨模块 | 数据同步 + Selection/Paper/QE 只读链路 | 真实业务依赖按 audit ready 判定 |
 | L5 长跑/夜间 | 市场日自动同步全链路 | 次日无需人工干预，只有 final blocked 报警 |
@@ -475,7 +494,7 @@ ORDER BY severity DESC, dataset;
 
 1. L0-L5 测试矩阵全部通过并保存验证记录。
 2. `cyq_perf` 覆盖 job success + audit missing + data_stats stale 的自动恢复路径。
-3. 首次同步失败后 retry queue 能自动补齐并去重。
+3. 首次同步失败后 `data_sync_targets` 能自动补齐并去重。
 4. `stk_limit`、`suspend_d`、`margin_detail` 覆盖 release/T+1/deadline 策略。
 5. 只有 final blocked 或不可控故障产生 `market.data_alerts`。
 6. API/UI 同时展示 `ready_date`、`physical_max_date`、`stats_max_date`、`cache_state`、`next_retry_at`、`operator_action_required`。
@@ -505,9 +524,9 @@ ORDER BY severity DESC, dataset;
 - 同步后刷新或标记 `data_stats`。
 - 支持物理表/audit/data_stats reconciliation。
 
-### Phase 3：持久化 retry queue + watchdog
+### Phase 3：持久化 target state + watchdog
 
-- 增加 retry queue 和 attempts。
+- 增强 `data_sync_targets` retry 状态和 `data_sync_attempts` attempt 记录。
 - scheduler 重启后恢复未完成 target。
 - job success 但 readiness 缺失时自动补齐。
 
@@ -539,6 +558,27 @@ ORDER BY severity DESC, dataset;
 - 不手工长期补库替代程序化 reconciliation。
 - 不把长期代码修复直接混入本次 Main 文档提交。
 
+## 14. 重复门禁复核结论
+
+本方案经过复核后，后续实现必须避免以下重复：
+
+1. 不重复建立 readiness：只认 `market.dataset_date_refresh_audit`，不再新增第二张 readiness 表。
+2. 不重复建立队列：第一版只用 `market.data_sync_targets` 推进重试，不再单独建 `data_sync_retry_queue`。
+3. 不重复报警：`_data_freshness_check`、reconciliation、retry worker 都不直接报警，只有 Alert Gate 写 `market.data_alerts`。
+4. 不重复质量校验：Ingestion Adapter 写 audit 前做完整校验；reconciliation 默认只做轻量对账，发现不一致才触发重新同步。
+5. 不重复业务阻断：`data_stats`、UI 首屏、alert ack 状态都不能反向阻断 audit-backed readiness。
+6. 不重复扫描大表：看板使用 `data_stats`，readiness 使用 audit，只有 reconciliation 或验证任务需要抽样/按日期查物理表。
+
+因此第一版最小闭环是：
+
+```text
+Dataset Catalog -> data_sync_targets -> Ingestion Adapter -> dataset_date_refresh_audit
+       -> Data Stats Builder -> Readiness API/UI
+       -> Alert Gate 只处理 final_blocked
+```
+
+如果后续实现需要新增任何门禁或状态表，必须先证明上述四个门禁无法承载，否则视为重复设计。
+
 ## 13. 核心结论
 
 | 问题 | 结论 |
@@ -546,7 +586,7 @@ ORDER BY severity DESC, dataset;
 | readiness 权威 | `market.dataset_date_refresh_audit` |
 | 缓存表价值 | `market.data_stats` 用于 UI 快速加载和 gap 摘要，但可 stale、可重建 |
 | `cyq_perf` 根因 | 旧脚本路径写物理表和 job，不写 audit |
-| 首次失败自动补齐 | 通过持久化 target/retry queue + watchdog + reconciliation |
+| 首次失败自动补齐 | 通过 `data_sync_targets` + watchdog + reconciliation |
 | 准确更新情况 | 同时返回 physical/audit/stats/retry/alert 状态 |
 | 报警策略 | 只对 final blocked 和不可控故障报警 |
 | 合入 Main | 文档和规范可本次合入；代码实现必须独立分支、流水线通过、用户确认 |
