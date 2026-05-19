@@ -1,0 +1,132 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-066",
+  "title": "Paper v2 StrategyPackage contract freezes platform/backtest data instead of allowing mutable Paper runtime configuration",
+  "description": "Expected: StrategyPackage must bind only the strategy factors and trained model needed to reproduce score generation. HMM and ST PIT are platform functions and must never be bound to StrategyPackage. Other permitted settings may change only through auditable package versions/variants/activations while preserving the frozen initial QE package. Backtest-period HMM models, factor caches, selection artifacts, ST PIT snapshots/contracts, and other backtest data must not enter or constrain Paper v2 runtime.\nActual: Paper v2, Selection Center, and StrategyPackage code still use a frozen QE backtest contract as runtime authority. build_backtest_runtime_contract() reads strategy_config.custom_params into runtime_features.hmm, tradability, industry_blacklist, and risk_policy. normalize_runtime_config_with_backtest_contract() then applies that contract across Selection Center and Paper v2 service/day_runner/readiness/live_session paths. Selection Center st_pit_authoritative mode requires a ST PIT risk_policy in the frozen QE contract and can block packages via health preflight.",
+  "module": "paper_v2",
+  "severity": "P0",
+  "risk_area": "platform_data_boundary",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "reported_via_codex_app_read_only_scan_20260519",
+    "files": [
+      "backend/services/strategy_package/backtest_contract.py",
+      "backend/services/strategy_package/runtime_config.py",
+      "backend/services/strategy_package/live_inference.py",
+      "backend/services/strategy_package/selection_artifact.py",
+      "backend/services/selection_center/service.py",
+      "backend/services/selection_center/package_health.py",
+      "backend/services/selection_center/risk_policy.py",
+      "backend/services/paper_trading_v2/service.py",
+      "backend/services/paper_trading_v2/day_runner.py",
+      "backend/services/paper_trading_v2/readiness.py",
+      "backend/services/paper_trading_v2/live_session.py",
+      "frontend/src/app/paper-v2/selection/page.tsx",
+      "backend/tests/strategy_package/test_backtest_contract.py",
+      "backend/tests/strategy_package/test_runtime_config_contract.py",
+      "backend/tests/selection_center/test_runtime_selection.py"
+    ]
+  },
+  "reproduce_command": "rg -n \"build_backtest_runtime_contract|normalize_runtime_config_with_backtest_contract|validate_runtime_profile_matches_backtest_contract|risk_policy|st_pit_authoritative|enforce_st_pit_contract|runtime_config_hash|selection_artifact_config|factor_order|factor_entry|model_params_path|mlruns|cache|point_in_time_context|cutoff_date\" backend/services/paper_trading_v2 backend/services/strategy_package backend/services/selection_center frontend/src/app/paper-v2 -S",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:backend/services/strategy_package/backtest_contract.py",
+    "file:backend/services/strategy_package/runtime_config.py",
+    "file:backend/services/strategy_package/live_inference.py",
+    "file:backend/services/strategy_package/selection_artifact.py",
+    "file:backend/services/selection_center/service.py",
+    "file:backend/services/selection_center/package_health.py",
+    "file:backend/services/selection_center/risk_policy.py",
+    "file:backend/services/paper_trading_v2/service.py",
+    "file:backend/services/paper_trading_v2/day_runner.py",
+    "file:backend/services/paper_trading_v2/readiness.py",
+    "file:backend/services/paper_trading_v2/live_session.py",
+    "file:frontend/src/app/paper-v2/selection/page.tsx",
+    "file:backend/tests/strategy_package/test_backtest_contract.py",
+    "file:backend/tests/strategy_package/test_runtime_config_contract.py",
+    "file:backend/tests/selection_center/test_runtime_selection.py"
+  ],
+  "fingerprint": "11c121a040d96f1a",
+  "github_issue_number": 77,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/77",
+  "assigned_agent": "paper_v2_team",
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-19T16:07:33Z",
+  "first_seen_at": "2026-05-19T16:07:33Z",
+  "last_seen_at": "2026-05-19T16:07:33Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-19T16:07:33Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/strategy_package/backtest_contract.py",
+    "backend/services/strategy_package/runtime_config.py",
+    "backend/services/strategy_package/live_inference.py",
+    "backend/services/strategy_package/selection_artifact.py",
+    "backend/services/selection_center/service.py",
+    "backend/services/selection_center/package_health.py",
+    "backend/services/selection_center/risk_policy.py",
+    "backend/services/paper_trading_v2/service.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/paper_trading_v2/readiness.py",
+    "backend/services/paper_trading_v2/live_session.py",
+    "frontend/src/app/paper-v2/selection/page.tsx",
+    "backend/tests/strategy_package/test_backtest_contract.py",
+    "backend/tests/strategy_package/test_runtime_config_contract.py",
+    "backend/tests/selection_center/test_runtime_selection.py"
+  ],
+  "suspected_modules": [
+    "backend/services/strategy_package/backtest_contract.py",
+    "backend/services/strategy_package/runtime_config.py",
+    "backend/services/strategy_package/live_inference.py",
+    "backend/services/strategy_package/selection_artifact.py",
+    "backend/services/selection_center/service.py",
+    "backend/services/selection_center/package_health.py",
+    "backend/services/selection_center/risk_policy.py",
+    "backend/services/paper_trading_v2/service.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/paper_trading_v2/readiness.py",
+    "backend/services/paper_trading_v2/live_session.py",
+    "frontend/src/app/paper-v2/selection/page.tsx",
+    "backend/tests/strategy_package/test_backtest_contract.py",
+    "backend/tests/strategy_package/test_runtime_config_contract.py",
+    "backend/tests/selection_center/test_runtime_selection.py"
+  ],
+  "required_verification": [
+    "Tests prove HMM and ST PIT cannot be saved, normalized, or validated as StrategyPackage-bound contract fields.",
+    "Tests prove top_k/display_top_n, ordinary risk/tradability/blacklist, and execution policy changes are accepted only through auditable versions/variants/activations.",
+    "Selection and Paper runtime reject QE backtest-era factor caches, selection artifacts, HMM coefficient files, and cached params as runtime authority unless re-materialized as current platform evidence with provenance."
+  ],
+  "closure_requirements": [
+    "HMM/ST PIT are platform-only across Selection Center, Paper v2, and StrategyPackage tests.",
+    "All non-core mutable settings have a versioned/audited update path and old versions remain immutable.",
+    "Backtest data artifacts are not consumed as Paper v2 runtime authority."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-19T16:07:33Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Registered by Codex App from Paper v2 StrategyPackage/HMM/ST PIT read-only audit; no runtime code changed."
+    },
+    {
+      "timestamp": "2026-05-19T16:07:33Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Clarified product rule: HMM and ST PIT are fully forbidden from StrategyPackage binding; other settings are mutable only through StrategyPackage/runtime versioning with history."
+    },
+    {
+      "timestamp": "2026-05-19T16:07:33Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Business impact: P0 because Paper v2 basic selection is blocked by incorrect contract ownership and historical runtime artifacts."
+    },
+    {
+      "timestamp": "2026-05-19T16:07:33Z",
+      "actor": "codex-app",
+      "action": "github_sync_verified",
+      "note": "Confirmed GitHub issue #77 is OPEN and linked for Paper v2 team repair."
+    }
+  ]
+}

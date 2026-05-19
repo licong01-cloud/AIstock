@@ -1,0 +1,136 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-074",
+  "title": "Paper v2 MiniQMT route inherits forbidden StrategyPackage QE backtest contract before MiniQMT execution authority",
+  "description": "Expected: Paper v2 broker_backend=minqmt_sim should not inherit or validate HMM, ST PIT, ordinary runtime profile, or execution-policy changes from the StrategyPackage QE backtest runtime contract before entering MiniQMT execution. MiniQMT should be the broker/execution authority for acceptance, fills, cash, positions, and order status, while HMM/ST PIT remain platform runtime functions and ordinary configuration changes use auditable package/runtime versions or activations. The route must be explicitly verified for HMM disabled, new platform HMM snapshot, platform ST PIT data, and a versioned execution-policy activation.\nActual: The miniQMT UI creates an ordinary Paper v2 portfolio with data_source=MINIQMT_REALTIME and broker_backend=minqmt_sim, but the backend still runs the common Paper v2 StrategyPackage/QE backtest contract path before the minqmt_sim branch. create_portfolio resolves execution policy through validate_execution_policy_matches_manifest(); readiness and day_runner call normalize_runtime_config_with_backtest_contract(), validate_execution_policy_matches_manifest(), and validate_runtime_profile_matches_backtest_contract() before branching into minqmt_sim handling. Therefore a miniQMT Paper v2 run can still be blocked by the same forbidden HMM/ST PIT/execution-policy binding defects even though current miniQMT testing may not have reached this layer yet.",
+  "module": "paper_v2",
+  "severity": "P0",
+  "risk_area": "miniqmt_runtime_contract",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "reported_via_codex_app_read_only_miniqmt_route_scan_20260520",
+    "files": [
+      "frontend/src/app/paper-v2/miniqmt-sim/page.tsx",
+      "backend/services/paper_trading_v2/service.py",
+      "backend/services/paper_trading_v2/readiness.py",
+      "backend/services/paper_trading_v2/day_runner.py",
+      "backend/services/paper_trading_v2/live_session.py",
+      "backend/services/paper_trading_v2/session.py",
+      "backend/services/paper_trading_v2/broker/minqmtsim.py",
+      "backend/services/strategy_package/backtest_contract.py",
+      "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+      "backend/tests/paper_trading_v2/test_portfolio_broker_backend.py",
+      "backend/tests/paper_trading_v2/test_day_runner.py",
+      "backend/tests/paper_trading_v2/test_runtime_config_contract.py"
+    ]
+  },
+  "reproduce_command": "rg -n 'normalize_runtime_config_with_backtest_contract|validate_runtime_profile_matches_backtest_contract|validate_execution_policy_matches_manifest|broker_backend == \"minqmt_sim\"|minqmt_sim|MINIQMT_REALTIME' backend/services/paper_trading_v2 backend/services/strategy_package/backtest_contract.py frontend/src/app/paper-v2/miniqmt-sim backend/tests/paper_trading_v2 -S",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:frontend/src/app/paper-v2/miniqmt-sim/page.tsx",
+    "file:backend/services/paper_trading_v2/service.py",
+    "file:backend/services/paper_trading_v2/readiness.py",
+    "file:backend/services/paper_trading_v2/day_runner.py",
+    "file:backend/services/paper_trading_v2/live_session.py",
+    "file:backend/services/paper_trading_v2/session.py",
+    "file:backend/services/paper_trading_v2/broker/minqmtsim.py",
+    "file:backend/services/strategy_package/backtest_contract.py",
+    "file:backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+    "file:backend/tests/paper_trading_v2/test_portfolio_broker_backend.py",
+    "file:backend/tests/paper_trading_v2/test_day_runner.py",
+    "file:backend/tests/paper_trading_v2/test_runtime_config_contract.py"
+  ],
+  "fingerprint": "ef59a8777199cd2a",
+  "github_issue_number": 89,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/89",
+  "assigned_agent": "paper_v2_team",
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-19T16:30:28Z",
+  "first_seen_at": "2026-05-19T16:30:28Z",
+  "last_seen_at": "2026-05-19T16:31:06Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-19T16:30:28Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "frontend/src/app/paper-v2/miniqmt-sim/page.tsx",
+    "backend/services/paper_trading_v2/service.py",
+    "backend/services/paper_trading_v2/readiness.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/paper_trading_v2/live_session.py",
+    "backend/services/paper_trading_v2/session.py",
+    "backend/services/paper_trading_v2/broker/minqmtsim.py",
+    "backend/services/strategy_package/backtest_contract.py",
+    "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+    "backend/tests/paper_trading_v2/test_portfolio_broker_backend.py",
+    "backend/tests/paper_trading_v2/test_day_runner.py",
+    "backend/tests/paper_trading_v2/test_runtime_config_contract.py"
+  ],
+  "suspected_modules": [
+    "frontend/src/app/paper-v2/miniqmt-sim/page.tsx",
+    "backend/services/paper_trading_v2/service.py",
+    "backend/services/paper_trading_v2/readiness.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/paper_trading_v2/live_session.py",
+    "backend/services/paper_trading_v2/session.py",
+    "backend/services/paper_trading_v2/broker/minqmtsim.py",
+    "backend/services/strategy_package/backtest_contract.py",
+    "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+    "backend/tests/paper_trading_v2/test_portfolio_broker_backend.py",
+    "backend/tests/paper_trading_v2/test_day_runner.py",
+    "backend/tests/paper_trading_v2/test_runtime_config_contract.py"
+  ],
+  "required_verification": [
+    "Regression test: broker_backend=minqmt_sim with runtime_profile.hmm.enabled=false preserves HMM disabled through readiness and day_runner and does not re-inject StrategyPackage QE HMM fields.",
+    "Regression test: broker_backend=minqmt_sim can use a newly trained platform HMM snapshot when coefficients cover the trade date, without matching the StrategyPackage QE backtest snapshot.",
+    "Regression test: broker_backend=minqmt_sim consumes platform ST PIT/risk data and does not require a ST PIT/risk_policy snapshot embedded in StrategyPackage backtest custom_params.",
+    "Regression test: broker_backend=minqmt_sim can activate and run a different validated execution-policy version through Paper v2 activation history, while rejecting raw ad-hoc runtime_config execution overrides.",
+    "Integration test: MiniQMT-specific authority branch is reached only after runtime/platform checks that comply with the product rule; no forbidden QE backtest contract gate remains on the path.",
+    "Coverage check: existing miniQMT adapter tests are extended beyond broker/data-source matching to exercise Paper v2 readiness/day_runner with HMM/ST PIT/execution-policy versioning inputs."
+  ],
+  "closure_requirements": [
+    "Paper v2 miniQMT portfolios no longer fail or silently override runtime settings because of StrategyPackage QE HMM/ST PIT/runtime contract state.",
+    "The minqmt_sim route uses MiniQMT for execution authority while using current platform HMM/ST PIT services, not StrategyPackage-bound platform data.",
+    "The fix is linked with BUG-065/#76, BUG-066/#77, BUG-071/#84, and BUG-072/#85, and all five closure suites pass together.",
+    "No production backend 8001, frontend 3000, or production DB is used as the proof path unless explicitly approved."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-19T16:30:28Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Registered from direct read-only miniQMT route scan; no runtime code changed."
+    },
+    {
+      "timestamp": "2026-05-19T16:30:28Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Reason for separate issue: BUG-072 covers generic execution-policy activation, but this issue makes the miniQMT route-specific blocker explicit so current miniQMT repair work cannot declare readiness without exercising this path."
+    },
+    {
+      "timestamp": "2026-05-19T16:30:28Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Code evidence: minqmt_sim branching in readiness.py/day_runner.py happens after normalize_runtime_config_with_backtest_contract, validate_execution_policy_matches_manifest, and validate_runtime_profile_matches_backtest_contract."
+    },
+    {
+      "timestamp": "2026-05-19T16:30:28Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "qmt_strategy_ledger virtual-strategy route did not directly call the backtest_contract validators in read-only scan, but it can still be indirectly polluted by a Selection Center selection_run produced under the forbidden contract."
+    },
+    {
+      "timestamp": "2026-05-19T16:31:06Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Mirrored BUG-074 to GitHub issue #89 via gh CLI for Paper v2 miniQMT route repair."
+    },
+    {
+      "timestamp": "2026-05-19T16:31:06Z",
+      "actor": "codex-app",
+      "action": "github_sync_verified",
+      "note": "Confirmed GitHub issue #89 is OPEN and label-synced after creation."
+    }
+  ]
+}

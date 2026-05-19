@@ -1,0 +1,131 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-071",
+  "title": "StrategyPackage mutable configuration versioning is incomplete and not connected to Paper v2/Selection runtime",
+  "description": "Expected: StrategyPackage should keep the initial QE backtest-derived package version frozen, while any non-core runtime/configuration changes after packaging must create a new auditable StrategyPackage version or validated runtime variant. Operators should be able to create a new version/variant for strategy_config, portfolio_policy/top_k, execution_policy, minute_execution_policy, ordinary risk/tradability/blacklist settings, and Selection Center/Paper v2 should explicitly consume the selected version/variant. HMM and ST PIT are platform functions and must not be represented as StrategyPackage-bound variants or package contract fields at all.\nActual: runtime_variant.py defines STRATEGY_CONFIG, EXECUTION_POLICY, RISK_POLICY, HMM_OVERLAY, and COMBINED variants and router APIs expose create/list/mark-validation operations, but read-only scan found no Paper v2/Selection Center runtime path that accepts or consumes runtime_variant_id/paper_candidate when running selection or paper portfolios. Existing normalization still applies the frozen QE backtest contract from the initial manifest instead of a selected mutable package version/variant. The existing HMM_OVERLAY/hmm_overlay variant kind is also invalid because HMM must be provided by the platform runtime and never bound to StrategyPackage.",
+  "module": "paper_v2",
+  "severity": "P0",
+  "risk_area": "strategy_package_versioning",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "reported_via_codex_app_read_only_scan_20260519",
+    "files": [
+      "backend/services/strategy_package/runtime_variant.py",
+      "backend/routers/strategy_packages.py",
+      "backend/services/strategy_package/service.py",
+      "backend/services/strategy_package/repository.py",
+      "backend/services/strategy_package/validation_run.py",
+      "backend/services/paper_trading_v2/service.py",
+      "backend/services/paper_trading_v2/day_runner.py",
+      "backend/services/paper_trading_v2/readiness.py",
+      "backend/services/selection_center/service.py",
+      "frontend/src/app/paper-v2/selection/page.tsx",
+      "backend/tests/strategy_package/test_runtime_variant.py",
+      "backend/tests/selection_center/test_runtime_selection.py",
+      "backend/tests/paper_trading_v2/test_day_runner.py"
+    ]
+  },
+  "reproduce_command": "rg -n \"runtime_variant_id|paper_candidate|RuntimeVariantKind|HMM_OVERLAY|hmm_overlay|create_runtime_variant|mark_runtime_variant_validation|normalize_runtime_config_with_backtest_contract\" backend/services/strategy_package backend/routers/strategy_packages.py backend/services/paper_trading_v2 backend/services/selection_center frontend/src/app/paper-v2 backend/tests -S",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:backend/services/strategy_package/runtime_variant.py",
+    "file:backend/routers/strategy_packages.py",
+    "file:backend/services/strategy_package/service.py",
+    "file:backend/services/strategy_package/repository.py",
+    "file:backend/services/strategy_package/validation_run.py",
+    "file:backend/services/paper_trading_v2/service.py",
+    "file:backend/services/paper_trading_v2/day_runner.py",
+    "file:backend/services/paper_trading_v2/readiness.py",
+    "file:backend/services/selection_center/service.py",
+    "file:frontend/src/app/paper-v2/selection/page.tsx",
+    "file:backend/tests/strategy_package/test_runtime_variant.py",
+    "file:backend/tests/selection_center/test_runtime_selection.py",
+    "file:backend/tests/paper_trading_v2/test_day_runner.py"
+  ],
+  "fingerprint": "bcddb25b6f0248bc",
+  "github_issue_number": 84,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/84",
+  "assigned_agent": "paper_v2_team",
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-19T16:07:33Z",
+  "first_seen_at": "2026-05-19T16:07:33Z",
+  "last_seen_at": "2026-05-19T16:08:20Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-19T16:07:33Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/strategy_package/runtime_variant.py",
+    "backend/routers/strategy_packages.py",
+    "backend/services/strategy_package/service.py",
+    "backend/services/strategy_package/repository.py",
+    "backend/services/strategy_package/validation_run.py",
+    "backend/services/paper_trading_v2/service.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/paper_trading_v2/readiness.py",
+    "backend/services/selection_center/service.py",
+    "frontend/src/app/paper-v2/selection/page.tsx",
+    "backend/tests/strategy_package/test_runtime_variant.py",
+    "backend/tests/selection_center/test_runtime_selection.py",
+    "backend/tests/paper_trading_v2/test_day_runner.py"
+  ],
+  "suspected_modules": [
+    "backend/services/strategy_package/runtime_variant.py",
+    "backend/routers/strategy_packages.py",
+    "backend/services/strategy_package/service.py",
+    "backend/services/strategy_package/repository.py",
+    "backend/services/strategy_package/validation_run.py",
+    "backend/services/paper_trading_v2/service.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/paper_trading_v2/readiness.py",
+    "backend/services/selection_center/service.py",
+    "frontend/src/app/paper-v2/selection/page.tsx",
+    "backend/tests/strategy_package/test_runtime_variant.py",
+    "backend/tests/selection_center/test_runtime_selection.py",
+    "backend/tests/paper_trading_v2/test_day_runner.py"
+  ],
+  "required_verification": [
+    "Selection Center and Paper v2 can select and run a non-HMM/ST-PIT config version/variant different from the initial package while preserving full version history.",
+    "Tests fail if HMM_OVERLAY/hmm_overlay or any ST PIT snapshot/risk snapshot can be saved as a StrategyPackage-bound variant.",
+    "runtime_variant_id/paper_candidate or the replacement versioning mechanism is actually wired into Selection Center and Paper v2, not just exposed as unused CRUD APIs.",
+    "The initial QE package version remains immutable and auditable after each later config change."
+  ],
+  "closure_requirements": [
+    "Every permitted non-core config change creates a traceable package version/variant/hash/activation.",
+    "No StrategyPackage or runtime variant schema admits HMM or ST PIT as bound package state.",
+    "Selection Center and Paper v2 consume the selected version/variant and persist which version drove each run."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-19T16:07:33Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Registered by Codex App from Paper v2 StrategyPackage/HMM/ST PIT read-only audit; no runtime code changed."
+    },
+    {
+      "timestamp": "2026-05-19T16:07:33Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Business impact: P0 because Paper v2 operators cannot safely evolve package configuration after QE packaging; they either mutate runtime intent without durable package history or are blocked by the frozen initial backtest contract."
+    },
+    {
+      "timestamp": "2026-05-19T16:07:33Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Hard boundary: StrategyPackage core binding is factors plus trained strategy model; HMM/ST PIT are platform-only and must be removed from package/variant semantics entirely."
+    },
+    {
+      "timestamp": "2026-05-19T16:08:20Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Mirrored BUG-071 to GitHub issue #84 via gh CLI for Paper v2 team repair."
+    },
+    {
+      "timestamp": "2026-05-19T16:08:20Z",
+      "actor": "codex-app",
+      "action": "github_sync_verified",
+      "note": "Confirmed GitHub issue #84 is OPEN and label-synced after creation."
+    }
+  ]
+}
