@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import uuid
+import logging
 from dataclasses import asdict
 from typing import Any, Dict, List
 
@@ -25,6 +26,7 @@ from ..data_service.dataset_stats_service import DatasetStatsService
 
 
 router = APIRouter(prefix="/qmt", tags=["qmt"])
+logger = logging.getLogger(__name__)
 
 # 数据集统计服务实例
 _dataset_stats_service: DatasetStatsService | None = None
@@ -38,6 +40,30 @@ def _verify_trade_password(password: str | None) -> None:
     expected = _get_trade_password()
     if not password or password != expected:
         raise HTTPException(status_code=403, detail="交易密码错误")
+
+
+RAW_ORDER_DIAGNOSTIC_ENV = "AISTOCK_ALLOW_QMT_RAW_ORDER_DIAGNOSTICS"
+RAW_ORDER_DIAGNOSTIC_WARNING = (
+    "raw MiniQMT order APIs are administrator/POC diagnostics only; normal "
+    "multi-strategy execution must use /api/v1/qmt/virtual-strategies/orders "
+    "so AIstock can create order_intent, cash, lot, and attribution records "
+    "before broker submission"
+)
+
+
+def _raw_order_diagnostics_enabled() -> bool:
+    return (os.getenv(RAW_ORDER_DIAGNOSTIC_ENV) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _require_raw_order_diagnostics_enabled() -> None:
+    if not _raw_order_diagnostics_enabled():
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"{RAW_ORDER_DIAGNOSTIC_WARNING}; set {RAW_ORDER_DIAGNOSTIC_ENV}=1 "
+                "explicitly only for controlled administrator/POC diagnostics"
+            ),
+        )
 
 
 def get_dataset_stats_service() -> DatasetStatsService:
@@ -85,8 +111,8 @@ def reload_client() -> Dict[str, Any]:
         old_client = _get_client()
         try:
             old_client.disconnect()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("QMT disconnect during reload failed; rebuilding singleton anyway: %r", exc, exc_info=True)
 
         reset_qmt_client_singleton()
         client = _get_client()
@@ -191,9 +217,13 @@ def get_trades() -> List[Dict[str, Any]]:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
-@router.post("/order", summary="股票下单")
+@router.post("/order", summary="Admin/POC raw MiniQMT order diagnostic")
 def place_order(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """股票下单接口
+    """Raw administrator/POC order endpoint.
+
+    Normal multi-strategy execution must use `/qmt/virtual-strategies/orders`.
+    This route is disabled by default and only opens when
+    AISTOCK_ALLOW_QMT_RAW_ORDER_DIAGNOSTICS=1 is set explicitly.
     
     参数：
     - stock_code: 股票代码，如 '600000.SH' 或 '000001.SZ'
@@ -206,6 +236,7 @@ def place_order(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     try:
         _verify_trade_password(payload.get("trade_password"))
+        _require_raw_order_diagnostics_enabled()
 
         stock_code = payload.get("stock_code", "").strip()
         order_type = payload.get("order_type")
@@ -238,7 +269,10 @@ def place_order(payload: Dict[str, Any]) -> Dict[str, Any]:
             "success": order_id > 0,
             "order_id": order_id,
             "message": message,
+            "diagnostic_warning": RAW_ORDER_DIAGNOSTIC_WARNING,
         }
+    except HTTPException:
+        raise
     except QMTNotAvailableError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
@@ -346,15 +380,20 @@ def cancel_order(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"撤单失败: {e!r}") from e
 
 
-@router.post("/order/batch", summary="批量下单")
+@router.post("/order/batch", summary="Admin/POC raw MiniQMT batch order diagnostic")
 def batch_place_order(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """批量下单接口
+    """Raw administrator/POC batch order endpoint.
+
+    Normal multi-strategy execution must use `/qmt/virtual-strategies/orders/batch`.
+    This route is disabled by default and only opens when
+    AISTOCK_ALLOW_QMT_RAW_ORDER_DIAGNOSTICS=1 is set explicitly.
     
     参数：
     - orders: 订单列表，每个订单包含下单接口的所有参数
     """
     try:
         _verify_trade_password(payload.get("trade_password"))
+        _require_raw_order_diagnostics_enabled()
 
         orders = payload.get("orders", [])
         if not isinstance(orders, list) or len(orders) == 0:
@@ -409,7 +448,10 @@ def batch_place_order(payload: Dict[str, Any]) -> Dict[str, Any]:
             "succeeded": success_count,
             "failed": len(results) - success_count,
             "results": results,
+            "diagnostic_warning": RAW_ORDER_DIAGNOSTIC_WARNING,
         }
+    except HTTPException:
+        raise
     except QMTNotAvailableError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
@@ -606,8 +648,8 @@ def get_task_progress(task_id: str) -> Dict[str, Any]:
             progress = _get_client().get_task_progress(task_id)
             if progress:
                 return progress
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("QMT in-memory task progress lookup failed; checking ingestion jobs: %r", exc, exc_info=True)
 
         # Fallback: 从 ingestion_jobs 表查询（Tushare 数据集补齐任务）
         from ..db.pg_pool import get_conn
@@ -665,8 +707,8 @@ def get_task_progress(task_id: str) -> Dict[str, Any]:
                             "job_id": str(job_id),
                             "source": "ingestion_job",
                         }
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("ingestion_jobs task progress lookup failed: %r", exc, exc_info=True)
 
         raise HTTPException(status_code=404, detail="任务不存在或已过期")
     except HTTPException as e:

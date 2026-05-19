@@ -362,7 +362,7 @@ POST /api/v1/qmt/virtual-strategies/orders/batch
 POST /api/v1/qmt/virtual-strategies/{strategy_id}/cancel
 ```
 
-后续应将多策略生产入口收敛到这些托管 API。原始 `/api/v1/qmt/order/batch` 只保留为管理员/POC 低层通道。
+后续应将多策略生产入口收敛到这些托管 API。原始 `/api/v1/qmt/order` 与 `/api/v1/qmt/order/batch` 只保留为管理员/POC 低层诊断通道，并且必须默认关闭；只有显式设置 `AISTOCK_ALLOW_QMT_RAW_ORDER_DIAGNOSTICS=1` 时才允许调用。该开关不能作为常规策略执行配置使用，因为原始接口不会创建 `order_intent`、不会冻结/释放虚拟资金、不会校验 `order_remark` 唯一性，也不会在 broker 调用前完成策略 lot 归因。
 
 ### 7.4 成交同步与对账
 
@@ -620,4 +620,4 @@ GET /api/v1/qmt/virtual-strategies/{strategy_id}/trades
 2. Phase 2 表结构必须包含 `order_status_history` 或等价事件表，不能只保存最终订单状态。
 3. Phase 3 托管下单入口必须在调用 MiniQMT 前完成：非空策略名校验、`order_remark` 唯一校验、策略可用资金校验、策略 lot 可卖数量校验、MiniQMT 总账户可卖数量校验。
 4. 批量下单需要“逐笔状态 + 批次状态”双层模型；批次成功不代表所有子订单成功。
-5. 原始 `/api/v1/qmt/order` 与 `/api/v1/qmt/order/batch` 在生产多策略模式下不得作为普通策略入口，只能作为管理员诊断/POC 入口。
+5. 原始 `/api/v1/qmt/order` 与 `/api/v1/qmt/order/batch` 在生产多策略模式下不得作为普通策略入口，只能作为管理员诊断/POC 入口；代码层面必须通过 `AISTOCK_ALLOW_QMT_RAW_ORDER_DIAGNOSTICS=1` 显式打开，默认返回 403，并在响应中提示改用 `/api/v1/qmt/virtual-strategies/orders` 或 `/api/v1/qmt/virtual-strategies/orders/batch`。
