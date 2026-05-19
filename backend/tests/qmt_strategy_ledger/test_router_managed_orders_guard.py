@@ -209,3 +209,57 @@ def test_managed_submit_records_intent_before_broker_call(monkeypatch) -> None:
     assert intent.submit_status == IntentSubmitStatus.ACCEPTED
     assert fake_client.place_order_calls[0]["strategy_name"] == "poc_strategy_a"
     assert fake_client.place_order_calls[0]["order_remark"] == "remark_router"
+
+
+def test_managed_batch_submit_returns_batch_preflight_contract(monkeypatch) -> None:
+    monkeypatch.setenv("AISTOCK_ALLOW_MINIQMT_MANAGED_ORDERS", "1")
+    fake_client = FakeQmtClient()
+    repo = _repo()
+    qmt_strategy_ledger.configure_dependencies(repository_factory=lambda: repo, client_factory=lambda: fake_client)
+    app = FastAPI()
+    app.include_router(qmt_strategy_ledger.router, prefix="/api/v1")
+
+    payload = {
+        "orders": [
+            {**_payload(), "order_remark": "remark_batch_a"},
+            {**_payload(), "stock_code": "300054.SZ", "order_remark": "remark_batch_b"},
+        ]
+    }
+    response = TestClient(app).post("/api/v1/qmt/virtual-strategies/orders/batch", json=payload)
+
+    assert response.status_code == 200
+    result = response.json()["result"]
+    assert result["success"] is True
+    assert result["batch_id"].startswith("qmtbatch_")
+    assert result["batch_status"] == "SUCCEEDED"
+    assert result["preflight_passed"] is True
+    assert result["retry_of_batch_id"] is None
+    assert result["compensation_actions"] == []
+    assert len(fake_client.place_order_calls) == 2
+    batch = repo.get_order_batch(result["batch_id"])
+    assert batch is not None
+    assert batch.batch_status.value == "SUCCEEDED"
+
+
+def test_managed_batch_submit_preflight_failure_skips_broker(monkeypatch) -> None:
+    monkeypatch.setenv("AISTOCK_ALLOW_MINIQMT_MANAGED_ORDERS", "1")
+    fake_client = FakeQmtClient()
+    repo = _repo()
+    qmt_strategy_ledger.configure_dependencies(repository_factory=lambda: repo, client_factory=lambda: fake_client)
+    app = FastAPI()
+    app.include_router(qmt_strategy_ledger.router, prefix="/api/v1")
+
+    payload = {"orders": [{**_payload(), "order_remark": "dup"}, {**_payload(), "order_remark": "dup"}]}
+    response = TestClient(app).post("/api/v1/qmt/virtual-strategies/orders/batch", json=payload)
+
+    assert response.status_code == 200
+    result = response.json()["result"]
+    assert result["success"] is False
+    assert result["batch_status"] == "PREFLIGHT_FAILED"
+    assert result["preflight_passed"] is False
+    assert fake_client.place_order_calls == []
+    assert "BATCH_DUPLICATE_ORDER_REMARK" in {
+        error["code"]
+        for item in result["results"]
+        for error in item["preflight"]["errors"]
+    }

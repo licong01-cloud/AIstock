@@ -580,9 +580,10 @@ backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py
 
 1. `orders/preview` 只生成风控结果和估算冻结，不调用 broker。
 2. `orders` 在风控通过后创建 intent、冻结资金、调用 QMT、回写 order id。
-3. `orders/batch` 采用逐笔事务；一个子订单失败不污染其他子订单状态。
-4. 对 batch 部分成功提供补偿建议，不默认自动撤单。
-5. `cancel` 必须同时调用 broker 撤单和写本地冻结释放事件。
+3. `orders/batch` 必须先做全批次预检：逐笔基础规则、批内 `order_remark` 去重、买入现金汇总、同策略同股卖出可用数量汇总、账户级同股 `can_sell` 汇总；预检任一失败时不得调用 broker。
+4. 预检通过后再逐笔提交 broker；broker 侧部分成功时记录 batch `PARTIAL`，返回可执行的托管撤单补偿动作，不默认自动撤单，也不宣称 broker 原子性。
+5. 相同归一化批次的重复提交必须按 `batch_id` 幂等返回既有结果，不得重复创建 `order_intent` 或重复调用 broker。
+6. `cancel` 必须同时调用 broker 撤单和写本地冻结释放事件。
 
 强制预检：
 
@@ -599,7 +600,9 @@ backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py
 - 空 `strategy_name` 在本地 400，不能到 broker。
 - 重复 `order_remark` 在本地 409，不能到 broker。
 - T+1 不足在本地 409，不能到 broker。
-- fake QMT 返回部分成功时，batch 与 item 状态正确。
+- 任一批内预检失败时 broker 调用次数为 0，batch 状态为 `PREFLIGHT_FAILED`。
+- fake QMT 返回部分成功时，batch 状态为 `PARTIAL`，item 状态正确，并暴露托管撤单补偿动作。
+- 同一批次重试只返回已持久化结果，不重复下单。
 - 真实下单测试必须通过显式环境变量，例如 `AISTOCK_ALLOW_MINIQMT_SUBMIT_TEST=1`，默认跳过。
 
 ### Phase 5：StrategyPackage / Selection Center 接入

@@ -75,6 +75,15 @@ class IntentSubmitStatus(str, Enum):
     CANCELLED = "CANCELLED"
 
 
+class OrderBatchStatus(str, Enum):
+    CREATED = "CREATED"
+    PREFLIGHT_FAILED = "PREFLIGHT_FAILED"
+    SUBMITTING = "SUBMITTING"
+    SUCCEEDED = "SUCCEEDED"
+    PARTIAL = "PARTIAL"
+    FAILED = "FAILED"
+
+
 class PositionLotStatus(str, Enum):
     OPEN = "OPEN"
     PARTIALLY_CLOSED = "PARTIALLY_CLOSED"
@@ -360,6 +369,22 @@ class StrategyPackageBinding:
     runtime_config: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass(frozen=True)
+class OrderBatchRecord:
+    batch_id: str
+    account_id: str
+    mode: str
+    batch_status: OrderBatchStatus
+    strategy_id: str | None = None
+    requested_by: str | None = None
+    request_json: dict[str, Any] = field(default_factory=dict)
+    result_json: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    submitted_at: datetime | None = None
+    completed_at: datetime | None = None
 
 
 @dataclass(frozen=True)
