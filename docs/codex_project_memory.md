@@ -90,10 +90,10 @@ Important directories:
 
 ## Multi-Codex Parallel Development Guardrails - 2026-05-06
 
-These rules are mandatory for all future Codex windows to avoid losing work when multiple agents develop AIstock in parallel:
+These rules are mandatory for all future Codex windows to avoid losing work when multiple agents develop AIstock in parallel. 2026-05-19 user reaffirmation: every future new feature, bugfix, or non-trivial documentation task must default to a new branch plus a separate worktree created from latest `origin/main`; do not develop in a physical directory that another window is using, and do not switch the branch of a shared worktree to start unrelated work.
 
 - Treat the root worktree `F:\Dev\AIstock` / branch `main` as a sync and rescue baseline, not a normal development workspace. Do not start new feature work on a dirty `main`.
-- Each Codex window must use its own branch and, preferably, its own worktree under a path such as `F:\Dev\AIstock_worktrees\<task-name>`, created from the latest `origin/main` with a `codex/<module-task-date>` branch name.
+- Each Codex or Claude Code window must use its own branch and its own worktree under a path such as `F:\Dev\AIstock_worktrees\<task-name>`, created from the latest `origin/main`; use `feature/<short-task>-YYYYMMDD` for features, `bug/BUG-XXX-<short-slug>` for bugfixes, and a short `docs/<short-task>-YYYYMMDD` or temporary main worktree for documentation-only updates.
 - At task start, run a Git preflight: `git status --short --branch`, `git branch --show-current`, and `git log --oneline -5`. If the branch is `main`, has `M`/`MM`/`??` changes, or is ahead/behind unexpectedly, stop and create a clean worktree or make a rescue backup before editing.
 - Never run `git pull --rebase`, `git merge origin/main`, `git reset --hard`, `git checkout -- .`, or `git clean -fd` in a dirty shared worktree unless the user explicitly approves that exact destructive/synchronizing action after a backup.
 - Keep one task per branch and one feature per commit series. Do not mix QE runtime changes, Paper v2 changes, HMM experiments, validation-center work, and local-data UI changes in the same commit unless the user explicitly requests a single integrated change.
@@ -111,7 +111,7 @@ The 2026-05-06 production/GitHub reconciliation is documented in `docs/operation
 Mandatory future rules:
 
 - `F:\Dev\AIstock` is the production runtime/sync target, not a normal development worktree. Do not perform feature development there.
-- Start every new coding task from a clean worktree created from latest `origin/main`, for example `F:\Dev\AIstock_worktrees\<task-name>` on branch `codex/<module-task-date>`.
+- Start every new coding task, feature, bugfix, or substantial documentation update from a clean worktree created from latest `origin/main`, for example `F:\Dev\AIstock_worktrees\<task-name>` on branch `feature/<short-task>-YYYYMMDD`, `bug/BUG-XXX-<short-slug>`, or another task-scoped branch.
 - Before editing, always run `git status --short --branch`, `git branch --show-current`, and `git log --oneline -5`. If the worktree is dirty, on `main`, or diverged, create a backup or clean worktree before editing.
 - Never leave developed functionality as untracked files. New frontend pages, backend modules, scripts, configs, migrations, tests, docs, and validation records must be committed, or explicitly classified as temporary artifacts with a backup path.
 - Before synchronizing `F:\Dev\AIstock` to GitHub, classify local-only files first. Functional local-only files must be copied into a clean reconcile branch and committed before `F:\Dev\AIstock` is reset or cleaned.
