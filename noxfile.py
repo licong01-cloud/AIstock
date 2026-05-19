@@ -866,6 +866,33 @@ def validation_module_registry_l0(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def validation_catalog_integrity(session: nox.Session) -> None:
+    """Validate cross-catalog plan/module/UI/resource consistency."""
+    session.run(
+        sys.executable,
+        "-m",
+        "compileall",
+        "backend/services/validation/catalog_integrity.py",
+        "scripts/aistock_validation_catalog_integrity.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/test_validation_catalog_integrity.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_validation_catalog_integrity.py",
+        "--output-json",
+        "tmp/validation/catalog/integrity_report.json",
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
 def validation_center_backend(session: nox.Session) -> None:
     """Run Validation Center API, coverage, and controlled-runner contract tests."""
     coverage_dir = ROOT / "tmp" / "validation" / "coverage"
@@ -881,6 +908,8 @@ def validation_center_backend(session: nox.Session) -> None:
         "backend/services/validation",
         "scripts/aistock_validate.py",
         "scripts/aistock_mcp_server.py",
+        "scripts/aistock_validation_catalog_integrity.py",
+        "scripts/validation_failure_event_to_bug.py",
         "scripts/validation_center_readonly_smoke.py",
         "scripts/validation_center_runner_smoke.py",
         external=True,
@@ -890,8 +919,10 @@ def validation_center_backend(session: nox.Session) -> None:
         "-m",
         "pytest",
         "backend/tests/test_validation_center_api.py",
+        "backend/tests/test_validation_catalog_integrity.py",
         "backend/tests/test_validation_center_readonly_smoke.py",
         "backend/tests/test_validation_pipeline_center_phase1.py",
+        "backend/tests/test_validation_platform_health.py",
         "backend/tests/test_validation_center_runner_smoke.py",
         "backend/tests/test_validation_execution_runner.py",
         "backend/tests/test_validation_git_activity_provider.py",
@@ -902,6 +933,8 @@ def validation_center_backend(session: nox.Session) -> None:
         "backend/tests/test_aistock_validate_coverage.py",
         "backend/tests/test_aistock_mcp_server.py",
         "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+        "backend/tests/scripts/test_validation_failure_event_to_bug.py",
+        "backend/tests/scripts/test_bug_github_sync.py",
         "--cov=backend.services.validation",
         "--cov=backend.routers.validation",
         "--cov=scripts.aistock_mcp_server",

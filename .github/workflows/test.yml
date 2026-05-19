@@ -50,6 +50,9 @@ jobs:
       - name: nox -s validation_module_registry_l0
         run: python -m nox -s validation_module_registry_l0
 
+      - name: nox -s validation_catalog_integrity
+        run: python -m nox -s validation_catalog_integrity
+
       - name: Upload guardrail evidence
         if: always()
         uses: actions/upload-artifact@v4

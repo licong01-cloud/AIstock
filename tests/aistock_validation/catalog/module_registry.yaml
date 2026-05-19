@@ -286,7 +286,7 @@ modules:
     description: Controlled nox runner, plan catalog, execution records, and evidence archive.
     description_zh: 覆盖受控 nox runner、测试计划白名单、执行记录、日志和自动归档。
     test_plans:
-      required_on_change: [l0, validation_center_backend]
+      required_on_change: [l0, validation_catalog_integrity, validation_center_backend]
   - module_id: validation.coverage
     display_name: Validation coverage
     parent_module: validation

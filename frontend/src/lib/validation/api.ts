@@ -883,6 +883,21 @@ export const validationApi = {
   health(): Promise<ValidationHealth> {
     return unwrap<ValidationHealth>("/validation/health");
   },
+  platformHealth(): Promise<ValidationHealth> {
+    return unwrap<ValidationHealth>("/validation/platform/health");
+  },
+  catalogIntegrity(): Promise<JsonObject> {
+    return unwrap<JsonObject>("/validation/catalog/integrity");
+  },
+  nightlySummary(): Promise<JsonObject> {
+    return unwrap<JsonObject>("/validation/nightly/summary");
+  },
+  nightlyRuns(query: { limit?: number } = {}): Promise<ValidationPage<JsonObject>> {
+    return unwrap<ValidationPage<JsonObject>>(appendQuery("/validation/nightly/runs", query));
+  },
+  nightlyRunnerHealth(): Promise<JsonObject> {
+    return unwrap<JsonObject>("/validation/nightly/runner-health");
+  },
   plans(): Promise<ValidationPlanCatalog> {
     return unwrap<ValidationPlanCatalog>("/validation/plans");
   },

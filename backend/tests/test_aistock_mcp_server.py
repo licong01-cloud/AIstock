@@ -15,11 +15,41 @@ functions and the underlying ``ValidationCenterClient`` directly.
 from __future__ import annotations
 
 import json
+import sys
+import types
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
+
+
+class StubFastMCP:
+    def __init__(self, _name: str) -> None:
+        self.tools: dict[str, object] = {}
+
+    def tool(self, name: str | None = None, **_kwargs):
+        def decorator(func):
+            self.tools[name or func.__name__] = func
+            return func
+
+        return decorator
+
+    def run(self, **_kwargs) -> None:
+        return None
+
+
+def _install_stub_fastmcp() -> None:
+    """Force the MCP import path to use the lightweight test stub."""
+    mcp_module = types.ModuleType("mcp")
+    server_module = types.ModuleType("mcp.server")
+    fastmcp_module = types.ModuleType("mcp.server.fastmcp")
+    fastmcp_module.FastMCP = StubFastMCP
+    mcp_module.server = server_module
+    server_module.fastmcp = fastmcp_module
+    sys.modules["mcp"] = mcp_module
+    sys.modules["mcp.server"] = server_module
+    sys.modules["mcp.server.fastmcp"] = fastmcp_module
 
 
 @pytest.fixture
@@ -32,7 +62,7 @@ def mcp_module(tmp_path, monkeypatch):
     monkeypatch.setenv("AISTOCK_REPO_ROOT", str(tmp_path))
     monkeypatch.setenv("AISTOCK_VALIDATION_BASE_URL", "http://127.0.0.1/api/v1/validation")
     import importlib
-    import sys
+    _install_stub_fastmcp()
     sys.modules.pop("scripts.aistock_mcp_server", None)
     module = importlib.import_module("scripts.aistock_mcp_server")
     expected_bug_root = (tmp_path / "tests" / "aistock_validation" / "bugs").resolve()
