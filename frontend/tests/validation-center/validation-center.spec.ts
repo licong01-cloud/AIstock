@@ -614,6 +614,41 @@ test("Validation Center UI uses mocked APIs and controlled runner POST", async (
       });
     }
 
+    if (path.endsWith("/api/v1/validation/platform/health")) {
+      return respond({
+        status: "success",
+        data: {
+          schema_version: "aistock_validation_platform_health_v1",
+          state: "healthy",
+          data_state: "complete",
+          repo_context: {
+            state: "healthy",
+            repo_root: "F:/Dev/AIstock_worktrees/validation-center-phase1",
+            branch: "codex/validation-center-phase1",
+            commit: "abcdef1",
+            baseline_ref: "origin/main",
+          },
+          catalog_integrity: {
+            state: "healthy",
+            plan_count: 12,
+            runner_enabled_plan_count: 4,
+            finding_count: 0,
+          },
+          runner_health: {
+            state: "healthy",
+            github_runner: { state: "healthy", matching_runner_count: 1, online_count: 1 },
+          },
+          nightly_summary: {
+            state: "healthy",
+            latest_run: { run_id: 26059234354, status: "completed", conclusion: "success" },
+          },
+          github_connectivity: { state: "healthy", data_state: "complete" },
+          reason_codes: [],
+          production_8001_touched: false,
+        },
+      });
+    }
+
     if (path.endsWith("/api/v1/validation/summary")) {
       return respond({
         status: "success",
@@ -966,26 +1001,30 @@ test("Validation Center UI uses mocked APIs and controlled runner POST", async (
 
   await page.goto("/validation-center");
   await expect(page.getByText("Validation Center / Read Only")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "流水线入口" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "打开平台健康卡片" })).toBeVisible();
+  await expect(page.getByText("展开平台健康概要")).toBeVisible();
+  await expect(page.getByRole("button", { name: "打开Nightly / Runner卡片" })).toBeVisible();
   await expect(page.getByText("Bug Registry", { exact: true })).toBeVisible();
 
   const phaseTabs = page.locator(".pv2-phase-tab");
   await expect(phaseTabs).toHaveCount(10);
 
   await phaseTabs.nth(1).click();
-  await expect(page.getByText("frontend_targeted")).toBeVisible();
-  await expect(page.getByText("codex/validation-center-phase1")).toBeVisible();
-  await expect(page.getByText("frontend/src/app/validation-center/page.tsx")).toBeVisible();
+  await expect(page.getByText("frontend_targeted").first()).toBeVisible();
+  await expect(page.getByText("codex/validation-center-phase1").first()).toBeVisible();
+  await expect(page.getByText("frontend/src/app/validation-center/page.tsx").first()).toBeVisible();
 
   await phaseTabs.nth(7).click();
   await expect(page.getByText("Open PR", { exact: true })).toBeVisible();
-  await expect(page.getByText("root_tmp.py")).toBeVisible();
+  await expect(page.getByText("root_tmp.py").first()).toBeVisible();
   await expect(page.getByText("read_only_allowlist").first()).toBeVisible();
-  await expect(page.getByText("add_file_ownership_mapping_before_commit")).toBeVisible();
+  await expect(page.getByText("add_file_ownership_mapping_before_commit").first()).toBeVisible();
 
   await phaseTabs.nth(5).click();
-  await expect(page.getByText("validation_module_registry_l0")).toBeVisible();
+  await expect(page.getByText("validation_module_registry_l0").first()).toBeVisible();
   await expect(page.getByText("feat(validation): show git workspace status").first()).toBeVisible();
-  await expect(page.getByText("unmapped_workspace_files_present")).toBeVisible();
+  await expect(page.getByText("unmapped_workspace_files_present").first()).toBeVisible();
 
   await phaseTabs.nth(4).click();
   await expect(page.getByRole("heading", { name: "UI Target Route Coverage" })).toBeVisible();
@@ -1027,7 +1066,7 @@ test("Validation Center UI uses mocked APIs and controlled runner POST", async (
 
   const evidenceRow = page.locator("tr", { hasText: "Validation Center read-only API evidence" }).first();
   await evidenceRow.locator("button").first().click();
-  await expect(page.getByText("evidence_count")).toBeVisible();
+  await expect(page.getByText("evidence_count", { exact: true })).toBeVisible();
   await expect(page.getByText("missing_count", { exact: true })).toBeVisible();
 
   await page.locator("#validation-search").fill("Markdown");
@@ -1058,7 +1097,7 @@ test("Validation Center UI uses mocked APIs and controlled runner POST", async (
   await expect(page.getByText("validation:legacy")).toBeVisible();
 
   await phaseTabs.nth(9).click();
-  await expect(page.getByText("auto_allowed")).toBeVisible();
+  await expect(page.getByText("auto_allowed").first()).toBeVisible();
 
   await expect(page.getByText("aistock_validation_run_v1")).toHaveCount(0);
   expect(writeMethods).toEqual(["POST /api/v1/validation/executions"]);

@@ -14,6 +14,7 @@ from backend.services.validation.git_status_provider import GitWorkspaceStatusPr
 from backend.services.validation.history_store import ValidationHistoryStore
 from backend.services.validation.module_quality import ModuleQualityService
 from backend.services.validation.module_registry import REPO_ROOT, ModuleRegistry
+from backend.services.validation.platform_health import ValidationPlatformHealthService
 from backend.services.validation.plan_catalog import ValidationPlanCatalog
 from backend.services.validation.ui_target_catalog import ValidationUiTargetCatalog
 
@@ -624,6 +625,25 @@ class ValidationPipelineCenterService:
             "data_state": "complete",
             "production_8001_touched": False,
         }
+
+    def platform_health_summary(self) -> dict[str, Any]:
+        return ValidationPlatformHealthService(repo_root=self.repo_root).summary()
+
+    def catalog_integrity_summary(self) -> dict[str, Any]:
+        return ValidationPlatformHealthService(repo_root=self.repo_root).catalog_integrity()
+
+    def nightly_summary(self) -> dict[str, Any]:
+        return ValidationPlatformHealthService(repo_root=self.repo_root).nightly_summary()
+
+    def nightly_runs(self, *, limit: int = 10) -> dict[str, Any]:
+        summary = self.nightly_summary()
+        items = []
+        if summary.get("latest_run"):
+            items.append(summary["latest_run"])
+        return {**_page(items[:limit], page=1, page_size=limit), "schema_version": summary.get("schema_version"), "data_state": summary.get("data_state"), "reason_codes": summary.get("reason_codes") or []}
+
+    def nightly_runner_health(self) -> dict[str, Any]:
+        return ValidationPlatformHealthService(repo_root=self.repo_root).runner_health()
 
     @staticmethod
     def _card(card_id: str, title: str, route: str, tone: str, score: int, summary: dict[str, Any]) -> dict[str, Any]:

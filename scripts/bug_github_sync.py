@@ -151,6 +151,33 @@ def issue_labels_for_bug(bug: dict[str, Any], *, historical_import: bool = False
     return sorted(dict.fromkeys(labels))
 
 
+def _issue_body_validation_failure_metadata(bug: dict[str, Any]) -> dict[str, Any] | None:
+    value = bug.get("validation_failure")
+    if not isinstance(value, dict):
+        return None
+    stable_keys = (
+        "event_id",
+        "source",
+        "plan_key",
+        "run_url",
+        "dedupe_key",
+        "first_seen_commit",
+        "last_seen_commit",
+        "failure_count",
+    )
+    metadata = {key: value.get(key) for key in stable_keys if value.get(key) not in (None, "", [])}
+    return metadata or None
+
+
+def _issue_body_github_sync_metadata(bug: dict[str, Any]) -> dict[str, Any] | None:
+    value = bug.get("github_sync")
+    if not isinstance(value, dict):
+        return None
+    stable_keys = ("status", "reason", "dry_run", "tool", "recommended_command")
+    metadata = {key: value.get(key) for key in stable_keys if value.get(key) not in (None, "", [])}
+    return metadata or None
+
+
 def issue_body_for_bug(bug: dict[str, Any]) -> str:
     compact_fields = {
         "bug_id": bug.get("bug_id"),
@@ -160,6 +187,8 @@ def issue_body_for_bug(bug: dict[str, Any]) -> str:
         "status": bug.get("status"),
         "fingerprint": bug.get("fingerprint"),
         "reproduce_command": bug.get("reproduce_command"),
+        "validation_failure": _issue_body_validation_failure_metadata(bug),
+        "github_sync": _issue_body_github_sync_metadata(bug),
         "source_path": bug.get("_source_path"),
     }
     description = str(bug.get("description") or "").strip()

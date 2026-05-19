@@ -3,11 +3,40 @@ from __future__ import annotations
 import importlib
 import json
 import sys
+import types
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+
+
+class StubFastMCP:
+    def __init__(self, _name: str) -> None:
+        self.tools: dict[str, object] = {}
+
+    def tool(self, name: str | None = None, **_kwargs):
+        def decorator(func):
+            self.tools[name or func.__name__] = func
+            return func
+
+        return decorator
+
+    def run(self, **_kwargs) -> None:
+        return None
+
+
+def _install_stub_fastmcp() -> None:
+    """Force tests to import the MCP server without the external runtime."""
+    mcp_module = types.ModuleType("mcp")
+    server_module = types.ModuleType("mcp.server")
+    fastmcp_module = types.ModuleType("mcp.server.fastmcp")
+    fastmcp_module.FastMCP = StubFastMCP
+    mcp_module.server = server_module
+    server_module.fastmcp = fastmcp_module
+    sys.modules["mcp"] = mcp_module
+    sys.modules["mcp.server"] = server_module
+    sys.modules["mcp.server.fastmcp"] = fastmcp_module
 
 
 @pytest.fixture()
@@ -19,6 +48,7 @@ def mcp_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("GH_TOKEN", raising=False)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    _install_stub_fastmcp()
     sys.modules.pop("scripts.aistock_mcp_server", None)
     module = importlib.import_module("scripts.aistock_mcp_server")
     yield module

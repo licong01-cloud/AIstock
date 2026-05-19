@@ -111,6 +111,42 @@ def get_validation_health(
     )
 
 
+@router.get("/platform/health", response_model=ValidationResponse, summary="Validation Center platform health and nightly summary")
+def get_validation_platform_health(
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+):
+    return _success(pipeline_center.platform_health_summary())
+
+
+@router.get("/catalog/integrity", response_model=ValidationResponse, summary="Validation catalog integrity report")
+def get_validation_catalog_integrity(
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+):
+    return _success(pipeline_center.catalog_integrity_summary())
+
+
+@router.get("/nightly/summary", response_model=ValidationResponse, summary="Summarize nightly validation readiness")
+def get_validation_nightly_summary(
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+):
+    return _success(pipeline_center.nightly_summary())
+
+
+@router.get("/nightly/runs", response_model=ValidationResponse, summary="List recent nightly validation runs")
+def list_validation_nightly_runs(
+    limit: int = Query(10, ge=1, le=50),
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+):
+    return _success(pipeline_center.nightly_runs(limit=limit))
+
+
+@router.get("/nightly/runner-health", response_model=ValidationResponse, summary="Summarize nightly runner health")
+def get_validation_nightly_runner_health(
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+):
+    return _success(pipeline_center.nightly_runner_health())
+
+
 @router.get("/plans", response_model=ValidationResponse, summary="List validation test plans")
 def list_validation_plans(
     plan_catalog: ValidationPlanCatalog = Depends(get_plan_catalog),

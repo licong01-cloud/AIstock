@@ -6,6 +6,7 @@ import MetricCard from "@/components/paper-v2/MetricCard";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import GitHubIssuesPanel from "@/components/validation/GitHubIssuesPanel";
+import PipelineOverviewCards from "@/components/validation/PipelineOverviewCards";
 import {
   type JsonObject,
   type ValidationAgentContext,
@@ -38,7 +39,6 @@ import {
   type ValidationModuleQualitySummary,
   type ValidationPage,
   type ValidationPassScope,
-  type ValidationPhase1Card,
   type ValidationPhase1CardsSummary,
   type ValidationPipelineTestItem,
   type ValidationPipelineTestSummary,
@@ -135,61 +135,6 @@ function CountChips({ counts }: { counts?: Record<string, number> }) {
   const entries = Object.entries(counts || {});
   if (!entries.length) return <span className="pv2-muted">无统计</span>;
   return <div className="pv2-chip-row">{entries.map(([key, count]) => <span className="pv2-chip" key={key}>{key}: {count}</span>)}</div>;
-}
-
-const PHASE1_SECTIONS = [
-  { id: "overview", label: "总览", hint: "关键卡片" },
-  { id: "merge_gate", label: "合入门禁", hint: "是否可合入" },
-  { id: "issue_workflow", label: "Issue 修复流程", hint: "生命周期" },
-  { id: "pipeline_tests", label: "流水线测试", hint: "计划/证据" },
-  { id: "features", label: "功能验证", hint: "菜单/路由" },
-  { id: "modules", label: "模块质量", hint: "覆盖率/Issue" },
-  { id: "github_issues", label: "GitHub 议题", hint: "同步状态" },
-  { id: "branches_prs", label: "分支与 PR", hint: "工作树/PR" },
-  { id: "legacy_debt", label: "历史遗留", hint: "基线债务" },
-  { id: "automation", label: "MCP 自动化", hint: "动作分级" },
-];
-
-function cardSummaryText(card?: ValidationPhase1Card): string {
-  const summary = isObject(card?.summary) ? card?.summary : {};
-  const decision = summary?.decision;
-  const total = summary?.test_count ?? summary?.bug_count ?? summary?.debt_count ?? summary?.worktree_count ?? summary?.target_count ?? summary?.module_count;
-  if (decision) return `裁决 ${display(decision)}`;
-  if (total !== undefined) return `数量 ${display(total)}`;
-  return card?.health_tone ? `状态 ${display(card.health_tone)}` : "点击查看";
-}
-
-function Phase1TopNav({
-  cardsSummary,
-  activeSection,
-  onSelect,
-}: {
-  cardsSummary?: ValidationPhase1CardsSummary | null;
-  activeSection: string;
-  onSelect: (section: string) => void;
-}) {
-  const cardsById = new Map((cardsSummary?.cards || []).map((card) => [card.card_id, card]));
-  return (
-    <nav className="pv2-phase-nav" aria-label="流水线中心页面导航">
-      {PHASE1_SECTIONS.map((section) => {
-        const card = cardsById.get(section.id);
-        const active = activeSection === section.id;
-        const tone = card?.health_tone || (section.id === "overview" ? "green" : "gray");
-        return (
-          <button
-            className={`pv2-phase-tab pv2-phase-tab-${tone} ${active ? "pv2-phase-tab-active" : ""}`}
-            key={section.id}
-            onClick={() => onSelect(section.id)}
-            type="button"
-          >
-            <span className="pv2-phase-tab-title">{section.label}</span>
-            <span className="pv2-phase-tab-meta">{cardSummaryText(card) || section.hint}</span>
-            <span className="pv2-phase-tab-risk">risk {display(card?.risk_score ?? "-")}</span>
-          </button>
-        );
-      })}
-    </nav>
-  );
 }
 
 function MergeGatePanel({ mergeGate }: { mergeGate?: ValidationMergeGate | null }) {
@@ -383,9 +328,14 @@ function LegacyDebtPanel({ summary, groups }: { summary?: ValidationLegacyDebtSu
 
 function AutomationPanel({ automation }: { automation?: ValidationAutomationSummary | null }) {
   return (
-    <SectionCard title="MCP 自动化" eyebrow="read-only / dry-run / protected actions" action={<StatusBadge status={automation?.gh_auth_status || "unknown"} />}>
+    <SectionCard title="Nightly / Runner 自动化" eyebrow="read-only / dry-run / protected actions" action={<StatusBadge status={automation?.gh_auth_status || "unknown"} />}>
+      <div className="pv2-notice pv2-notice-info">
+        <div className="pv2-notice-title">夜间验证边界</div>
+        <div className="pv2-notice-body">第一阶段仅展示 Nightly / Runner / MCP 状态和手动命令提示，不从 UI 触发 GitHub workflow，不向前端暴露 GitHub token。</div>
+      </div>
       <KeyValuePanel rows={[
         ["summary", automation?.summary],
+        ["nightly", automation?.nightly || "未接入 /validation/nightly/summary 时显示 unknown"],
         ["github_data_state", automation?.github_data_state],
         ["scripts", automation?.scripts],
         ["mcp_policy", automation?.mcp_policy],
@@ -752,6 +702,7 @@ function GitModuleQualityPanel({ commitActivity, moduleQuality }: { commitActivi
 
 export default function ValidationCenterPage() {
   const [health, setHealth] = useState<ValidationHealth | null>(null);
+  const [platformHealth, setPlatformHealth] = useState<ValidationHealth | null>(null);
   const [summary, setSummary] = useState<ValidationSummary | null>(null);
   const [findingSummary, setFindingSummary] = useState<ValidationFindingSummary | null>(null);
   const [bugSummary, setBugSummary] = useState<ValidationBugSummary | null>(null);
@@ -795,6 +746,7 @@ export default function ValidationCenterPage() {
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [optionalApiWarnings, setOptionalApiWarnings] = useState<Record<string, string>>({});
   const [executionBusy, setExecutionBusy] = useState<string | null>(null);
   const [executionMessage, setExecutionMessage] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState("overview");
@@ -805,9 +757,19 @@ export default function ValidationCenterPage() {
   const loadStatic = useCallback(async () => {
     setLoading(true);
     setError(null);
+    const optionalWarnings: Record<string, string> = {};
+    const optional = async <T,>(key: string, request: () => Promise<T>, fallback: T): Promise<T> => {
+      try {
+        return await request();
+      } catch (err) {
+        optionalWarnings[key] = errorText(err);
+        return fallback;
+      }
+    };
     try {
       const [
         healthData,
+        platformHealthData,
         summaryData,
         planCatalog,
         coverageData,
@@ -838,6 +800,7 @@ export default function ValidationCenterPage() {
         automationData,
       ] = await Promise.all([
         validationApi.health(),
+        optional("platform/health", () => validationApi.platformHealth(), null as ValidationHealth | null),
         validationApi.summary(),
         validationApi.plans(),
         validationApi.coverage({ page: 1, page_size: 10 }),
@@ -845,29 +808,30 @@ export default function ValidationCenterPage() {
         validationApi.executions({ page: 1, page_size: 10 }),
         validationApi.findingSummary(),
         validationApi.bugSummary(),
-        validationApi.workspaceStatus(),
-        validationApi.branchStatus(),
-        validationApi.commitActivity(50),
-        validationApi.moduleQualitySummary(50),
-        validationApi.uiTargets({ page: 1, page_size: 100 }),
-        validationApi.uiTargetSummary(),
-        validationApi.cardsSummary(),
-        validationApi.mergeGateSummary(),
-        validationApi.issueWorkflowSummary(),
-        validationApi.issueWorkflow({ page: 1, page_size: 20 }),
-        validationApi.moduleDetailSummary(),
-        validationApi.pipelineTestsSummary(),
-        validationApi.pipelineTests({ page: 1, page_size: 20 }),
-        validationApi.githubIssuesSummary(),
-        validationApi.githubIssues({ page: 1, page_size: 20 }),
-        validationApi.branchDetailSummary(),
-        validationApi.githubPrsSummary(),
-        validationApi.githubPrs({ page: 1, page_size: 20 }),
-        validationApi.legacyDebtSummary(),
-        validationApi.legacyDebtGroups({ page: 1, page_size: 20 }),
-        validationApi.automationSummary(),
+        optional("git/workspace-status", () => validationApi.workspaceStatus(), null as ValidationGitWorkspaceStatus | null),
+        optional("git/branch-status", () => validationApi.branchStatus(), null as ValidationGitBranchStatus | null),
+        optional("git/commit-activity", () => validationApi.commitActivity(50), null as ValidationGitCommitActivity | null),
+        optional("modules/quality-summary", () => validationApi.moduleQualitySummary(50), null as ValidationModuleQualitySummary | null),
+        optional("ui-targets", () => validationApi.uiTargets({ page: 1, page_size: 100 }), null as ValidationUiTargetPage | null),
+        optional("ui-targets/summary", () => validationApi.uiTargetSummary(), null as ValidationUiTargetSummary | null),
+        optional("cards/summary", () => validationApi.cardsSummary(), null as ValidationPhase1CardsSummary | null),
+        optional("merge-gate/summary", () => validationApi.mergeGateSummary(), null as ValidationMergeGate | null),
+        optional("issues/workflow/summary", () => validationApi.issueWorkflowSummary(), null as ValidationIssueWorkflowSummary | null),
+        optional("issues/workflow", () => validationApi.issueWorkflow({ page: 1, page_size: 20 }), emptyPage<ValidationIssueWorkflowItem>()),
+        optional("modules/detail-summary", () => validationApi.moduleDetailSummary(), null as ValidationModuleQualitySummary | null),
+        optional("pipeline/tests/summary", () => validationApi.pipelineTestsSummary(), null as ValidationPipelineTestSummary | null),
+        optional("pipeline/tests", () => validationApi.pipelineTests({ page: 1, page_size: 20 }), emptyPage<ValidationPipelineTestItem>()),
+        optional("github/issues/summary", () => validationApi.githubIssuesSummary(), null as JsonObject | null),
+        optional("github/issues", () => validationApi.githubIssues({ page: 1, page_size: 20 }), emptyPage<ValidationGithubIssueSync>()),
+        optional("git/branches/detail-summary", () => validationApi.branchDetailSummary(), null as ValidationBranchDetailSummary | null),
+        optional("github/prs/summary", () => validationApi.githubPrsSummary(), null as ValidationGithubPrSummary | null),
+        optional("github/prs", () => validationApi.githubPrs({ page: 1, page_size: 20 }), emptyPage<ValidationGithubPr>()),
+        optional("legacy-debt/summary", () => validationApi.legacyDebtSummary(), null as ValidationLegacyDebtSummary | null),
+        optional("legacy-debt/groups", () => validationApi.legacyDebtGroups({ page: 1, page_size: 20 }), emptyPage<ValidationLegacyDebtGroup>()),
+        optional("automation/summary", () => validationApi.automationSummary(), null as ValidationAutomationSummary | null),
       ]);
       setHealth(healthData);
+      setPlatformHealth(platformHealthData);
       setSummary(summaryData);
       setPlans(planCatalog.plans || []);
       setCoverage(coverageData || emptyPage<ValidationCoverageSummary>(10));
@@ -896,7 +860,9 @@ export default function ValidationCenterPage() {
       setLegacyDebtSummary(legacyDebtSummaryData);
       setLegacyDebtGroups(legacyDebtGroupsData || emptyPage<ValidationLegacyDebtGroup>());
       setAutomationSummary(automationData);
+      setOptionalApiWarnings(optionalWarnings);
     } catch (err) {
+      setOptionalApiWarnings(optionalWarnings);
       setError(errorText(err));
     } finally {
       setLoading(false);
@@ -1126,7 +1092,27 @@ export default function ValidationCenterPage() {
       {error ? <div className="pv2-error-panel"><div className="pv2-error-kicker">Validation Center Error</div><div className="pv2-error-main">{error}</div></div> : null}
       {loading ? <div className="pv2-notice pv2-notice-info"><div className="pv2-notice-title">加载中</div><div className="pv2-notice-body">正在读取本地验证历史索引和质量问题索引。</div></div> : null}
 
-      <Phase1TopNav cardsSummary={phase1Cards} activeSection={activeSection} onSelect={setActiveSection} />
+      <PipelineOverviewCards
+        activeSection={activeSection}
+        automationSummary={automationSummary}
+        branchDetailSummary={branchDetailSummary}
+        cardsSummary={phase1Cards}
+        executions={executions}
+        githubIssueSummary={githubIssueSummary}
+        githubPrSummary={githubPrSummary}
+        health={platformHealth || health}
+        issueWorkflowSummary={issueWorkflowSummary}
+        legacyDebtSummary={legacyDebtSummary}
+        mergeGate={mergeGate}
+        moduleDetailSummary={moduleDetailSummary}
+        moduleQuality={moduleQuality}
+        onSelect={(section) => setActiveSection(section)}
+        optionalApiWarnings={optionalApiWarnings}
+        pipelineTestSummary={pipelineTestSummary}
+        plans={plans}
+        uiTargetSummary={uiTargetSummary}
+        validationSummary={summary}
+      />
 
       {activeSection === "overview" ? <section className="pv2-grid pv2-grid-4">
         <MetricCard label="历史 Run" value={summary?.run_count ?? health?.history?.run_count ?? "-"} hint={health?.history?.history_root || "tests/aistock_validation/history"} tone="info" />
