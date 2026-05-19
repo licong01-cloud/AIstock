@@ -53,18 +53,21 @@ class RuntimeRiskScoreOverlayProfile(BaseModel):
 
 
 class RuntimeRiskPolicyProfile(BaseModel):
-    """Event-risk policy profile shared by Selection Center, Paper v2, and QE.
+    """Platform risk policy profile shared by Selection Center and Paper v2.
 
-    The first provider is the current ST PIT universe. Announcement providers
-    are schema-compatible here but remain explicitly disabled unless requested.
+    The current provider is ST PIT. Future event-signal consumption must be
+    expressed by this platform profile instead of StrategyPackage runtime_config.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
-    policy_version: str = "stock_event_risk_policy_v1"
-    providers: list[Literal["st_pit", "announcement_risk"]] = Field(default_factory=lambda: ["st_pit"])
+    policy_version: str = "platform_risk_policy_v1"
+    providers: list[Literal["st_pit", "announcement_risk", "event_signal_policy"]] = Field(default_factory=lambda: ["st_pit"])
     st_universe_key: str = "shsz_st_pit_active_v1"
+    event_signal_profile_id: str | None = None
+    event_signal_asof_policy: Literal["disabled", "effective_trade_date"] = "disabled"
+    event_signal_merge_policy: Literal["disabled", "block_first"] = "disabled"
     hard_actions: list[Literal["block_buy", "force_exit"]] = Field(
         default_factory=lambda: ["block_buy", "force_exit"]
     )
@@ -72,9 +75,11 @@ class RuntimeRiskPolicyProfile(BaseModel):
     strict_data_ready: bool = True
     score_overlay: RuntimeRiskScoreOverlayProfile = Field(default_factory=RuntimeRiskScoreOverlayProfile)
 
-    @field_validator("policy_version", "st_universe_key")
+    @field_validator("policy_version", "st_universe_key", "event_signal_profile_id")
     @classmethod
-    def _strip_required_text(cls, value: str) -> str:
+    def _strip_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         value = str(value or "").strip()
         if not value:
             raise ValueError("risk policy text fields cannot be empty")
@@ -205,13 +210,24 @@ def parse_selection_runtime_profile(runtime_config: dict[str, Any] | None) -> Se
             context={"runtime_profile": profile.model_dump(mode="json")},
         )
     if "announcement_risk" in profile.risk_policy.providers and profile.risk_policy.enabled:
-        # The schema is reserved now so the announcement pipeline can be added
-        # without changing Selection/Paper contracts. Runtime use must fail
-        # until the provider is explicitly implemented.
         raise StrategyPackageValidationError(
-            "announcement_risk provider is not implemented yet",
+            "announcement_risk provider is not implemented yet; use platform event_signal_policy when ready",
             context={"runtime_profile": profile.model_dump(mode="json")},
         )
+    if "event_signal_policy" in profile.risk_policy.providers and profile.risk_policy.enabled:
+        if not profile.risk_policy.event_signal_profile_id:
+            raise StrategyPackageValidationError(
+                "event_signal_policy provider requires event_signal_profile_id when enabled",
+                context={"runtime_profile": profile.model_dump(mode="json")},
+            )
+        if (
+            profile.risk_policy.event_signal_asof_policy == "disabled"
+            or profile.risk_policy.event_signal_merge_policy == "disabled"
+        ):
+            raise StrategyPackageValidationError(
+                "event_signal_policy provider requires enabled as-of and merge policies",
+                context={"runtime_profile": profile.model_dump(mode="json")},
+            )
     return profile
 
 

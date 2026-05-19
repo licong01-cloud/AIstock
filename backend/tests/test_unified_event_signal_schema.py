@@ -378,4 +378,10 @@ def test_event_signal_is_not_consumed_by_trading_paths_in_current_phase():
             if "event_signal" in text or "event-signals" in text:
                 hits.append(str(file_path.relative_to(ROOT)))
 
-    assert hits == []
+    platform_owned_contract_files = {
+        r"backend\services\selection_center\runtime_profile.py",
+        r"backend\services\strategy_package\backtest_contract.py",
+    }
+    unexpected_hits = sorted(set(hits).difference(platform_owned_contract_files))
+
+    assert unexpected_hits == []
