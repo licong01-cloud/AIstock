@@ -31,7 +31,11 @@ from psycopg2.extras import RealDictCursor, execute_values
 
 from ..services.quantevolver.factor_eligibility_service import FactorEligibilityService
 from ..services.quantevolver.evaluation_universe_service import EvaluationUniverseService
-from ..services.quantevolver.experiment_config import ensure_qe_risk_policy, normalize_label_horizon
+from ..services.quantevolver.experiment_config import (
+    ensure_qe_risk_policy,
+    normalize_label_horizon,
+    split_qe_runtime_metadata,
+)
 from ..services.quantevolver.factor_official_evaluation_service import CALC_ENGINE
 from ..services.quantevolver.label_horizon_schema import ensure_qe_label_horizon_schema
 from ..services.quantevolver.node_execution import (
@@ -131,6 +135,20 @@ def _reject_nested_runtime_flags(strategy_params: Optional[Dict[str, Any]], cont
                 f"not {context}: {sorted(duplicate_keys)}"
             ),
         )
+
+
+def _hoist_runtime_metadata_from_strategy_params(cfg_dict: Dict[str, Any]) -> None:
+    """Move archive/seed metadata out of strategy_params at the API boundary."""
+
+    strategy_params, runtime_metadata = split_qe_runtime_metadata(
+        cfg_dict.get("strategy_params") or {}
+    )
+    cfg_dict["strategy_params"] = strategy_params
+    if runtime_metadata:
+        runtime_flags = dict(cfg_dict.get("runtime_flags") or {})
+        for key, value in runtime_metadata.items():
+            runtime_flags.setdefault(key, value)
+        cfg_dict["runtime_flags"] = runtime_flags
 
 
 def _normalize_qe_execution_algo_for_request(execution_algo: Optional[str], context: str) -> Optional[str]:
@@ -859,6 +877,7 @@ class StrategyLoopConfig(BaseModel):
     label: Optional[str] = Field(None, description="Loop 标签/描述")
     loop_index: Optional[int] = Field(None, description="Loop 索引（自动填充）")
     strategy_params: Dict[str, Any] = Field(..., description="策略参数: topk, n_drop, hold_thresh, risk_degree 等")
+    runtime_flags: Optional[Dict[str, Any]] = Field(None, description="Runtime-only archive/seed/provenance flags")
     strategy_id: Optional[str] = Field(None, description="交易策略ID，None=继承源Loop")
     execution_algo: Optional[str] = Field(None, description="日内执行算法code")
     execution_algo_params: Optional[Dict[str, Any]] = Field(None, description="执行算法参数")
@@ -900,6 +919,7 @@ async def strategy_fork_task(task_id: str, req: StrategyEvolutionForkRequest):
                 cfg_dict.get("strategy_params"),
                 f"strategy_loop[{i}].strategy_params",
             )
+            _hoist_runtime_metadata_from_strategy_params(cfg_dict)
             cfg_dict["loop_index"] = i
             cfg_dict["execution_algo"] = _normalize_qe_execution_algo_for_request(
                 cfg_dict.get("execution_algo"),
@@ -1010,6 +1030,7 @@ class CustomEvoLoopConfig(BaseModel):
     model_id: str = Field(..., description="模型 ID")
     strategy_id: Optional[str] = Field(None, description="交易策略ID，None=使用默认 TopkDropoutStrategy")
     strategy_params: Optional[Dict[str, Any]] = Field(None, description="策略参数: topk, n_drop, hold_thresh, risk_degree 等")
+    runtime_flags: Optional[Dict[str, Any]] = Field(None, description="Runtime-only archive/seed/provenance flags")
     execution_algo: Optional[str] = Field(None, description="日内执行算法code")
     execution_algo_params: Optional[Dict[str, Any]] = Field(None, description="执行算法参数")
     filter_suspended_on_signal: bool = Field(False, description="生成日频选股信号时使用 suspend_d 过滤已停牌股票")
@@ -1146,6 +1167,7 @@ async def _prepare_custom_evo_loop_configs(
             cfg_dict.get("strategy_params"),
             f"custom_loop[{pos}].strategy_params",
         )
+        _hoist_runtime_metadata_from_strategy_params(cfg_dict)
         cfg_dict["strategy_params"] = ensure_qe_risk_policy(
             cfg_dict.get("strategy_params") or {},
             source=f"custom_loop[{pos}].strategy_params",

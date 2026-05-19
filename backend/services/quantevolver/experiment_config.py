@@ -36,6 +36,35 @@ _QE_RISK_POLICY_RUNTIME_KEYS = {
     "quote_universe_codes",
 }
 
+QE_RUNTIME_METADATA_KEYS = frozenset(
+    {
+        "archive_policy",
+        "archive_reason",
+        "archive_allow_override",
+        "random_seed",
+    }
+)
+
+
+def split_qe_runtime_metadata(params: dict[str, Any] | None) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Split runtime-only metadata from executable strategy/model params."""
+
+    clean: dict[str, Any] = {}
+    metadata: dict[str, Any] = {}
+    for key, value in dict(params or {}).items():
+        if key in QE_RUNTIME_METADATA_KEYS:
+            metadata[key] = value
+        else:
+            clean[key] = value
+    return clean, metadata
+
+
+def strip_qe_runtime_metadata(params: dict[str, Any] | None) -> dict[str, Any]:
+    """Return params without metadata that must not reach Qlib strategies."""
+
+    clean, _ = split_qe_runtime_metadata(params)
+    return clean
+
 
 def default_qe_risk_policy() -> dict[str, Any]:
     """Return the mandatory ST PIT event-risk policy for new QE runs."""
@@ -205,6 +234,10 @@ class ExperimentConfig(BaseModel):
     # Also merged into custom_params (minus initial_cash).
     strategy_params: dict[str, Any] | None = None
 
+    # Runtime-only archive/seed/provenance metadata. Never pass this to Qlib
+    # strategy constructors.
+    runtime_flags: dict[str, Any] | None = None
+
     # ── Model hyperparameters base ─────────────────────────────────────────────
     # For paths that start from model_params (Paths 2 & 3).
     # Merged into custom_params before strategy_params overlay.
@@ -257,7 +290,7 @@ class ExperimentConfig(BaseModel):
 
         # 2. Strategy params overlay (Path 4 starts here; Paths 2 & 3 merge on top)
         if self.strategy_params:
-            params.update(self.strategy_params)
+            params.update(strip_qe_runtime_metadata(self.strategy_params))
 
         # 3. HMM keys
         if self.hmm and self.hmm.enable_sector_hmm:
@@ -304,7 +337,7 @@ class ExperimentConfig(BaseModel):
 
         # 10. Extra catch-all params
         if self.extra_params:
-            extra_params = dict(self.extra_params)
+            extra_params = strip_qe_runtime_metadata(self.extra_params)
             if "label_horizon" in extra_params:
                 extra_horizon = normalize_label_horizon(
                     extra_params["label_horizon"],
@@ -320,8 +353,20 @@ class ExperimentConfig(BaseModel):
 
         # 11. initial_cash must NOT flow into custom_params
         params.pop("initial_cash", None)
+        for runtime_key in QE_RUNTIME_METADATA_KEYS:
+            params.pop(runtime_key, None)
 
         return ensure_qe_risk_policy(params, source="ExperimentConfig.build_custom_params")
+
+    def build_runtime_flags(self) -> dict[str, Any]:
+        """Return archive/seed metadata separated from executable parameters."""
+
+        flags = dict(self.runtime_flags or {})
+        for source in (self.model_params_base, self.strategy_params, self.extra_params):
+            _, metadata = split_qe_runtime_metadata(source)
+            for key, value in metadata.items():
+                flags.setdefault(key, value)
+        return flags
 
     def build_strategy_params(self) -> dict[str, Any]:
         """Return the strategy_params dict for compose_experiment_in_memory().
@@ -330,7 +375,7 @@ class ExperimentConfig(BaseModel):
         initial_cash is intentionally kept here — it belongs in strategy_params,
         not in custom_params.
         """
-        return dict(self.strategy_params) if self.strategy_params else {}
+        return strip_qe_runtime_metadata(self.strategy_params)
 
 
 # ── Multi-Alpha Architecture: Phase 3 Data Models ─────────────────────────

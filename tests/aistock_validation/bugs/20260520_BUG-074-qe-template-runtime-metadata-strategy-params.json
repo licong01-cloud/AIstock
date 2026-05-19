@@ -1,0 +1,110 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-074",
+  "title": "QE template/custom_evo runtime metadata leaks into strategy_params and fails V2 strategy whitelist",
+  "description": "Expected: QE template/custom_evo archive_policy, archive_reason, archive_allow_override, and random_seed are runtime metadata stored in runtime_flags or explicit metadata fields, and never passed to Qlib strategy constructors. QE MCP-created custom_evo templates using SuspendFilterScoreWeightedTopkStrategyV2 should materialize and run without strategy whitelist failures.\nActual: the custom_evo template materializer injected template archive policy into each loop's strategy_params. Caller-supplied random_seed could also remain inside strategy_params. The unified config composer merged these values into strategy kwargs and raised ValueError for unsupported parameters ['archive_policy', 'random_seed']. This is a QE backend runtime-contract bug, not an MCP wrapper bug.",
+  "module": "qe",
+  "severity": "P1",
+  "risk_area": "runtime_contract",
+  "status": "in_progress",
+  "trigger_condition": {
+    "scenario": "qe_template_custom_evo_run_v2_strategy_with_runtime_metadata",
+    "strategy_class": "SuspendFilterScoreWeightedTopkStrategyV2",
+    "unsupported_keys": [
+      "archive_policy",
+      "random_seed"
+    ],
+    "entrypoint": "QE MCP qe_template_create/materialize/run -> /qe-templates -> custom_evo unified loop"
+  },
+  "reproduce_command": "Create a custom_evo QE execution template with archive_policy=AUTO and a loop using SuspendFilterScoreWeightedTopkStrategyV2. Put random_seed in loop.strategy_params. Approve, materialize, and run it; before the fix config_composer raised ValueError for unsupported strategy params ['archive_policy', 'random_seed'].",
+  "evidence_uris": [
+    "file:backend/services/qe_templates/materializer.py",
+    "file:backend/services/qe_templates/validator.py",
+    "file:backend/routers/quantevolver_evolution.py",
+    "file:backend/services/quantevolver/experiment_config.py",
+    "file:backend/services/quantevolver/experiment_config_builders.py",
+    "file:backend/services/quantevolver/qe_evolution_service.py",
+    "file:backend/services/quantevolver/config_composer.py",
+    "file:backend/tests/qe_templates/test_template_validator.py",
+    "file:backend/tests/unified_engine/test_experiment_config.py",
+    "file:backend/tests/unified_engine/test_qe_config_truth.py",
+    "file:scripts/aistock_qe_experiment_mcp_server.py"
+  ],
+  "fingerprint": "643a8bf1b378c6b0",
+  "github_issue_number": 91,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/91",
+  "assigned_agent": "codex-app",
+  "fix_branch": "bug/BUG-074-qe-template-runtime-metadata",
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-19T17:27:06Z",
+  "first_seen_at": "2026-05-19T17:27:06Z",
+  "last_seen_at": "2026-05-20T01:30:00Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-19T17:27:06Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/qe_templates/materializer.py",
+    "backend/services/qe_templates/validator.py",
+    "backend/routers/quantevolver_evolution.py",
+    "backend/services/quantevolver/experiment_config.py",
+    "backend/services/quantevolver/experiment_config_builders.py",
+    "backend/services/quantevolver/qe_evolution_service.py",
+    "backend/services/quantevolver/config_composer.py",
+    "backend/tests/qe_templates/test_template_validator.py",
+    "backend/tests/unified_engine/test_experiment_config.py",
+    "backend/tests/unified_engine/test_qe_config_truth.py",
+    "tests/aistock_validation/bugs/20260520_BUG-074-qe-template-runtime-metadata-strategy-params.json"
+  ],
+  "suspected_modules": [
+    "backend/services/qe_templates/materializer.py",
+    "backend/services/qe_templates/validator.py",
+    "backend/routers/quantevolver_evolution.py",
+    "backend/services/quantevolver/experiment_config.py",
+    "backend/services/quantevolver/experiment_config_builders.py",
+    "backend/services/quantevolver/config_composer.py"
+  ],
+  "required_verification": [
+    "python -m pytest backend/tests/qe_templates/test_template_validator.py backend/tests/unified_engine/test_experiment_config.py backend/tests/unified_engine/test_qe_config_truth.py -q",
+    "python -m pytest backend/tests/test_aistock_qe_mcp_servers.py -q",
+    "python -m pytest backend/tests/unified_engine/test_custom_evo_mutation_routes.py -q",
+    "python -m nox -s qe_mcp_backend",
+    "python -m nox -s qe_archive_backend",
+    "python -m nox -s qe_mcp_l3",
+    "python -m py_compile scripts/aistock_qe_experiment_mcp_server.py scripts/aistock_qe_archive_mcp_server.py",
+    "git diff --check"
+  ],
+  "closure_requirements": [
+    "template custom_evo materializer writes archive metadata to runtime_flags, not strategy_params",
+    "strategy_params archive/seed metadata is hoisted or stripped before executable config composition",
+    "V2 strategy whitelist remains strict and is not broadened to hide metadata leaks",
+    "runtime_flags preserve archive/seed metadata for QE Archive and Research Pipeline visibility",
+    "GitHub issue #91 is updated with branch, commit, PR, and validation evidence"
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-19T17:27:06Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Claude Code QE MCP-created template/custom_evo run failed when runtime metadata reached V2 strategy kwargs. Classified as QE backend contract bug, not MCP wrapper bug."
+    },
+    {
+      "timestamp": "2026-05-19T17:27:06Z",
+      "actor": "codex-app",
+      "action": "dedupe_checked",
+      "note": "Compared with BUG-044 MCP stdio startup and BUG-070 PIT stock_pool issues; no overlap found."
+    },
+    {
+      "timestamp": "2026-05-19T17:27:06Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Mirrored to GitHub issue #91."
+    },
+    {
+      "timestamp": "2026-05-20T01:30:00Z",
+      "actor": "codex-app",
+      "action": "fix_started",
+      "note": "Fix branch bug/BUG-074-qe-template-runtime-metadata in dedicated worktree F:/Dev/AIstock_worktrees/bug-074-qe-template-runtime-metadata-20260520."
+    }
+  ]
+}
