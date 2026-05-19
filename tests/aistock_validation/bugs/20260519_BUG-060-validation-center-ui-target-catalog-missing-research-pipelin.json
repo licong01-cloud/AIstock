@@ -1,0 +1,88 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-060",
+  "title": "Validation Center UI target catalog missing /research-pipeline nav route",
+  "description": "Expected: Validation Center UI target catalog should include every frontend navigation href, including /research-pipeline, or the nav/catalog contract should be updated so validation_center_backend passes independently of unrelated miniQMT fixes.\nActual: GitHub PR #62 CI failed in Backend tests (validation_center_backend). The failing test is backend/tests/test_validation_ui_target_catalog.py::test_default_ui_target_catalog_matches_frontend_nav_groups, with AssertionError because nav_hrefs - target_hrefs == {'/research-pipeline'} instead of empty set. Local rerun in BUG-048 worktree reproduced the same failure: 1 failed, 100 passed in validation_center_backend. PR #62 changed only qmt_strategy_ledger board-lot files, BUG-048 JSON, and a qmt_strategy_ledger validation record; it did not touch frontend/src/lib/navigation/nav-groups.ts, tests/aistock_validation/catalog/ui_targets.yaml, or validation center code.",
+  "module": "validation_center",
+  "severity": "P1",
+  "risk_area": "unspecified",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "reported_via_mcp",
+    "files": [
+      "frontend/src/lib/navigation/nav-groups.ts",
+      "tests/aistock_validation/catalog/ui_targets.yaml",
+      "backend/tests/test_validation_ui_target_catalog.py"
+    ]
+  },
+  "reproduce_command": "conda run -n AIstock python -m nox -s validation_center_backend",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:frontend/src/lib/navigation/nav-groups.ts",
+    "file:tests/aistock_validation/catalog/ui_targets.yaml",
+    "file:backend/tests/test_validation_ui_target_catalog.py"
+  ],
+  "fingerprint": "66b07797aa804237",
+  "assigned_agent": "unassigned",
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-19T06:03:28Z",
+  "first_seen_at": "2026-05-19T06:03:28Z",
+  "last_seen_at": "2026-05-19T06:03:28Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-19T06:03:28Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "frontend/src/lib/navigation/nav-groups.ts",
+    "tests/aistock_validation/catalog/ui_targets.yaml",
+    "backend/tests/test_validation_ui_target_catalog.py"
+  ],
+  "suspected_modules": [
+    "frontend/src/lib/navigation/nav-groups.ts",
+    "tests/aistock_validation/catalog/ui_targets.yaml",
+    "backend/tests/test_validation_ui_target_catalog.py"
+  ],
+  "required_verification": [],
+  "closure_requirements": [],
+  "events": [
+    {
+      "timestamp": "2026-05-19T06:03:28Z",
+      "actor": "unassigned",
+      "action": "discovered",
+      "note": "Reported via aistock_mcp_server.report_bug. Comments: 4"
+    },
+    {
+      "timestamp": "2026-05-19T06:03:28Z",
+      "actor": "unassigned",
+      "action": "comment",
+      "note": "Discovered while validating PR #62 for BUG-048; appears unrelated to BUG-048 because the PR diff does not touch navigation or validation catalog files."
+    },
+    {
+      "timestamp": "2026-05-19T06:03:28Z",
+      "actor": "unassigned",
+      "action": "comment",
+      "note": "GitHub failing job: https://github.com/licong01-cloud/AIstock/actions/runs/26079230663/job/76676754207"
+    },
+    {
+      "timestamp": "2026-05-19T06:03:28Z",
+      "actor": "unassigned",
+      "action": "comment",
+      "note": "Failure text: AssertionError: assert {'/research-pipeline'} == set(), extra item '/research-pipeline'."
+    },
+    {
+      "timestamp": "2026-05-19T06:03:28Z",
+      "actor": "unassigned",
+      "action": "comment",
+      "note": "Local rerun in F:\\Dev\\AIstock_worktrees\\bug-048-miniqmt-board-lot reproduced the same validation_center_backend failure."
+    },
+    {
+      "timestamp": "2026-05-19T06:06:00Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Mirrored BUG-060 to GitHub issue #64 via gh CLI after validation_center_backend CI failure on PR #62."
+    }
+  ],
+  "github_issue_number": 64,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/64"
+}
