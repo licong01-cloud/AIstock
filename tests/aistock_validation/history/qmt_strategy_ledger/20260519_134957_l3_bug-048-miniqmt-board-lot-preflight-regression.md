@@ -92,4 +92,3 @@ git diff --check
   - `C:\Users\lc999\miniconda3\envs\AIstock\python.exe -m nox -s guardrail_changed_files` -> passed with no staged-file findings at rerun time.
   - `C:\Users\lc999\miniconda3\envs\AIstock\python.exe -m nox -s l0` -> passed; existing baseline/raw-JSON warnings remain non-blocking.
   - `C:\Users\lc999\miniconda3\envs\AIstock\python.exe -m nox -s validation_center_backend` -> 101 passed, coverage line 80.19%, branch 60.52%.
-
