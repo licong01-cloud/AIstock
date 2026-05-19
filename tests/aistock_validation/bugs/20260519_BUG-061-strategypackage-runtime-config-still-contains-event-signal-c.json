@@ -6,7 +6,7 @@
   "module": "strategy_package",
   "severity": "P3",
   "risk_area": "strategy_package_runtime_contract",
-  "status": "in_progress",
+  "status": "fixed",
   "trigger_condition": {
     "scenario": "reported_via_mcp",
     "files": [
@@ -24,12 +24,12 @@
   "fingerprint": "b16c1b2a05d8b0b3",
   "assigned_agent": "codex-app",
   "fix_branch": "bug/BUG-061-event-signal-runtime-config",
-  "fix_commit": null,
-  "verification_run_id": null,
+  "fix_commit": "b8febdc",
+  "verification_run_id": "tests/aistock_validation/history/strategy_package/20260519_l0_bug-061-event-signal-runtime-config.md",
   "created_at": "2026-05-19T08:08:12Z",
   "first_seen_at": "2026-05-19T08:08:12Z",
-  "last_seen_at": "2026-05-19T11:55:00Z",
-  "fixed_at": null,
+  "last_seen_at": "2026-05-19T11:58:00Z",
+  "fixed_at": "2026-05-19T11:58:00Z",
   "submitted_at": "2026-05-19T08:08:12Z",
   "closed_at": null,
   "allowed_write_scope": [
@@ -98,6 +98,12 @@
       "actor": "codex-app",
       "action": "validation_passed",
       "note": "Targeted validation passed: unified event-signal schema + StrategyPackage runtime config contract tests (13 passed), diff check clean, reserved-field rg scan clean."
+    },
+    {
+      "timestamp": "2026-05-19T11:58:00Z",
+      "actor": "codex-app",
+      "action": "fixed",
+      "note": "Fixed on branch bug/BUG-061-event-signal-runtime-config at commit b8febdc; validation record added under strategy_package history."
     }
   ],
   "github_issue_number": 70,
