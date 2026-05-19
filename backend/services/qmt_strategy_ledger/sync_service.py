@@ -29,6 +29,7 @@ from .models import (
     OrderLedgerRecord,
     OrderStatusEventRecord,
     PositionLotRecord,
+    PositionLotStatus,
     RawQmtOrder,
     RawQmtTrade,
     TradeLedgerRecord,
@@ -66,6 +67,9 @@ class SyncSummary:
     cash_entries_appended: int
     buy_fill_settled_amount: Decimal
     buy_fill_fee_amount: Decimal
+    sell_fill_received_amount: Decimal
+    sell_fill_fee_amount: Decimal
+    sell_fill_realized_pnl: Decimal
     buy_freeze_released_amount: Decimal
     accounts_revalued: int
     positions_seen: int
@@ -88,6 +92,9 @@ class SyncSummary:
             "cash_entries_appended": self.cash_entries_appended,
             "buy_fill_settled_amount": float(self.buy_fill_settled_amount),
             "buy_fill_fee_amount": float(self.buy_fill_fee_amount),
+            "sell_fill_received_amount": float(self.sell_fill_received_amount),
+            "sell_fill_fee_amount": float(self.sell_fill_fee_amount),
+            "sell_fill_realized_pnl": float(self.sell_fill_realized_pnl),
             "buy_freeze_released_amount": float(self.buy_freeze_released_amount),
             "accounts_revalued": self.accounts_revalued,
             "positions_seen": self.positions_seen,
@@ -226,6 +233,9 @@ class QmtStrategyLedgerSyncService:
         cash_entries_appended = 0
         buy_fill_settled_amount = Decimal("0")
         buy_fill_fee_amount = Decimal("0")
+        sell_fill_received_amount = Decimal("0")
+        sell_fill_fee_amount = Decimal("0")
+        sell_fill_realized_pnl = Decimal("0")
         buy_freeze_released_amount = Decimal("0")
         changed_strategy_ids: set[str] = set()
         for payload in trades:
@@ -302,6 +312,14 @@ class QmtStrategyLedgerSyncService:
                     buy_fill_settled_amount += abs(fill_entry.frozen_delta)
                     buy_fill_fee_amount += _money(ledger_trade.commission)
                     changed_strategy_ids.add(strategy_id)
+            elif trade.order_type == SELL_ORDER_TYPE:
+                sell_entry, inserted_cash, realized_pnl = self._settle_sell_fill_once(strategy_id, intent.intent_id, ledger_trade)
+                if inserted_cash:
+                    cash_entries_appended += 1
+                    sell_fill_received_amount += sell_entry.cash_delta
+                    sell_fill_fee_amount += _money(ledger_trade.commission)
+                    sell_fill_realized_pnl += realized_pnl
+                    changed_strategy_ids.add(strategy_id)
             _ = ledger_trade
 
         for order, strategy_id, intent_id in terminal_buy_orders:
@@ -330,6 +348,9 @@ class QmtStrategyLedgerSyncService:
             cash_entries_appended=cash_entries_appended,
             buy_fill_settled_amount=buy_fill_settled_amount,
             buy_fill_fee_amount=buy_fill_fee_amount,
+            sell_fill_received_amount=sell_fill_received_amount,
+            sell_fill_fee_amount=sell_fill_fee_amount,
+            sell_fill_realized_pnl=sell_fill_realized_pnl,
             buy_freeze_released_amount=buy_freeze_released_amount,
             accounts_revalued=len(changed_strategy_ids),
             positions_seen=len(positions),
@@ -403,6 +424,110 @@ class QmtStrategyLedgerSyncService:
         )
         _, inserted = self._repository.apply_cash_entry_once(entry, updated)
         return entry, inserted
+
+    def _settle_sell_fill_once(
+        self,
+        strategy_id: str,
+        intent_id: str,
+        trade: TradeLedgerRecord,
+    ) -> tuple[CashLedgerEntry, bool, Decimal]:
+        cash_id = _cash_event_id(self._account_id, self._trade_date, "sell_fill", trade.trade_id)
+        if self._repository.get_cash_entry(cash_id) is not None:
+            existing = self._repository.get_cash_entry(cash_id)
+            return existing, False, _money(Decimal(str(existing.metadata.get("realized_pnl", "0"))))
+
+        fill_amount = _money(trade.amount)
+        fee_amount = _money(trade.commission)
+        realized_pnl, lot_closures, updated_lots = self._close_lots_fifo(strategy_id, trade)
+        account = self._repository.get_virtual_account(strategy_id)
+        cash_delta = fill_amount - fee_amount
+        updated = replace(
+            account,
+            cash=account.cash + cash_delta,
+            realized_pnl=account.realized_pnl + realized_pnl,
+            updated_at=datetime.now(UTC),
+        )
+        entry = CashLedgerEntry(
+            cash_id=cash_id,
+            strategy_id=strategy_id,
+            entry_type=CashEntryType.SELL_FILL,
+            cash_delta=cash_delta,
+            cash_after=updated.cash,
+            frozen_delta=Decimal("0"),
+            frozen_after=updated.frozen_cash,
+            account_id=self._account_id,
+            trade_date=self._trade_date,
+            intent_id=intent_id,
+            trade_id=trade.trade_id,
+            symbol=trade.symbol,
+            reason=CashEntryType.SELL_FILL.value,
+            metadata={
+                "source": "miniqmt_sync",
+                "fill_amount": str(fill_amount),
+                "commission": str(fee_amount),
+                "realized_pnl": str(realized_pnl),
+                "qmt_order_id": trade.qmt_order_id,
+                "lot_closures": lot_closures,
+            },
+        )
+        _, inserted = self._repository.apply_cash_entry_and_lots_once(entry, updated, updated_lots)
+        return entry, inserted, realized_pnl if inserted else Decimal("0")
+
+    def _close_lots_fifo(self, strategy_id: str, trade: TradeLedgerRecord) -> tuple[Decimal, list[dict[str, Any]], list[PositionLotRecord]]:
+        remaining_to_close = int(trade.quantity)
+        realized_pnl = Decimal("0")
+        lot_closures: list[dict[str, Any]] = []
+        updated_lots: list[PositionLotRecord] = []
+        for lot in self._repository.list_position_lots(strategy_id, symbol=trade.symbol):
+            if remaining_to_close <= 0:
+                break
+            lot_remaining = max(int(lot.remaining_quantity), 0)
+            if lot_remaining <= 0:
+                continue
+            close_quantity = min(remaining_to_close, lot_remaining)
+            close_cost = _money(lot.avg_cost * Decimal(close_quantity))
+            gross_proceeds = _money(trade.price * Decimal(close_quantity))
+            proportional_fee = _proportional_fee(trade.commission, close_quantity, trade.quantity)
+            lot_realized_pnl = _money(gross_proceeds - close_cost - proportional_fee)
+            new_remaining = lot_remaining - close_quantity
+            new_available = min(max(int(lot.available_quantity), 0), new_remaining)
+            new_cost_amount = _money(lot.avg_cost * Decimal(new_remaining))
+            new_status = PositionLotStatus.CLOSED if new_remaining == 0 else PositionLotStatus.PARTIALLY_CLOSED
+            updated_lot = replace(
+                lot,
+                available_quantity=new_available,
+                remaining_quantity=new_remaining,
+                cost_amount=new_cost_amount,
+                realized_pnl=lot.realized_pnl + lot_realized_pnl,
+                status=new_status,
+                metadata={
+                    **lot.metadata,
+                    "last_close_trade_id": trade.trade_id,
+                    "last_close_trade_date": self._trade_date.isoformat(),
+                },
+            )
+            updated_lots.append(updated_lot)
+            realized_pnl += lot_realized_pnl
+            remaining_to_close -= close_quantity
+            lot_closures.append(
+                {
+                    "lot_id": lot.lot_id,
+                    "closed_quantity": close_quantity,
+                    "remaining_quantity": new_remaining,
+                    "avg_cost": str(lot.avg_cost),
+                    "close_price": str(trade.price),
+                    "gross_proceeds": str(gross_proceeds),
+                    "cost": str(close_cost),
+                    "commission": str(proportional_fee),
+                    "realized_pnl": str(lot_realized_pnl),
+                }
+            )
+        if remaining_to_close > 0:
+            raise ValueError(
+                f"strategy lots are insufficient for SELL fill: strategy_id={strategy_id} "
+                f"symbol={trade.symbol} trade_id={trade.trade_id} missing_quantity={remaining_to_close}"
+            )
+        return _money(realized_pnl), lot_closures, updated_lots
 
     def _release_terminal_buy_freeze_once(
         self,
@@ -567,6 +692,12 @@ def _cash_event_id(account_id: str, trade_date: date, event_type: str, row_id: s
 def _reserved_fill_amount(order: RawQmtOrder, trade: TradeLedgerRecord) -> Decimal:
     reserve_price = order.price if order.price > Decimal("0") else trade.price
     return _money(reserve_price * Decimal(trade.quantity))
+
+
+def _proportional_fee(total_fee: Decimal, quantity: int, total_quantity: int) -> Decimal:
+    if total_quantity <= 0:
+        return Decimal("0")
+    return _money(Decimal(total_fee) * Decimal(quantity) / Decimal(total_quantity))
 
 
 def _money(value: Decimal) -> Decimal:

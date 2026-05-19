@@ -523,34 +523,37 @@ class QmtStrategyLedgerRepository:
             raise ValueError("position lot available_quantity cannot exceed remaining_quantity")
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE qmt_strategy.position_lot
-                    SET available_quantity = %s,
-                        remaining_quantity = %s,
-                        avg_cost = %s,
-                        cost_amount = %s,
-                        realized_pnl = %s,
-                        status = %s,
-                        metadata = %s,
-                        updated_at = %s
-                    WHERE lot_id = %s
-                    """,
-                    (
-                        lot.available_quantity,
-                        lot.remaining_quantity,
-                        lot.avg_cost,
-                        lot.cost_amount,
-                        lot.realized_pnl,
-                        _enum_value(lot.status),
-                        _json(lot.metadata),
-                        datetime.now(UTC),
-                        lot.lot_id,
-                    ),
-                )
-                if cur.rowcount == 0:
-                    raise DataUnavailableError("qmt strategy position lot does not exist", context={"lot_id": lot.lot_id})
+                self._update_position_lot_with_cursor(cur, lot)
         return lot
+
+    def _update_position_lot_with_cursor(self, cur: Any, lot: PositionLotRecord) -> None:
+        cur.execute(
+            """
+            UPDATE qmt_strategy.position_lot
+            SET available_quantity = %s,
+                remaining_quantity = %s,
+                avg_cost = %s,
+                cost_amount = %s,
+                realized_pnl = %s,
+                status = %s,
+                metadata = %s,
+                updated_at = %s
+            WHERE lot_id = %s
+            """,
+            (
+                lot.available_quantity,
+                lot.remaining_quantity,
+                lot.avg_cost,
+                lot.cost_amount,
+                lot.realized_pnl,
+                _enum_value(lot.status),
+                _json(lot.metadata),
+                datetime.now(UTC),
+                lot.lot_id,
+            ),
+        )
+        if cur.rowcount == 0:
+            raise DataUnavailableError("qmt strategy position lot does not exist", context={"lot_id": lot.lot_id})
 
     def append_cash_entry(self, entry: CashLedgerEntry) -> CashLedgerEntry:
         self._insert_cash_entry(entry, ignore_conflict=False)
@@ -567,6 +570,39 @@ class QmtStrategyLedgerRepository:
                 inserted = self._insert_cash_entry_with_cursor(cur, entry, ignore_conflict=True)
                 if inserted:
                     self._update_virtual_account_with_cursor(cur, account)
+        return entry, inserted
+
+    def apply_cash_entry_and_lots_once(
+        self,
+        entry: CashLedgerEntry,
+        account: VirtualAccount,
+        lots: list[PositionLotRecord],
+    ) -> tuple[CashLedgerEntry, bool]:
+        """Apply a cash event, account update, and lot updates as one DB transaction."""
+
+        _validate_virtual_account(account)
+        with self._conn_factory() as conn:
+            previous_autocommit = getattr(conn, "autocommit", None)
+            if previous_autocommit is not None:
+                conn.autocommit = False
+            try:
+                with conn.cursor() as cur:
+                    inserted = self._insert_cash_entry_with_cursor(cur, entry, ignore_conflict=True)
+                    if inserted:
+                        self._update_virtual_account_with_cursor(cur, account)
+                        for lot in lots:
+                            if lot.available_quantity > lot.remaining_quantity:
+                                raise ValueError("position lot available_quantity cannot exceed remaining_quantity")
+                            self._update_position_lot_with_cursor(cur, lot)
+                if hasattr(conn, "commit"):
+                    conn.commit()
+            except Exception:
+                if hasattr(conn, "rollback"):
+                    conn.rollback()
+                raise
+            finally:
+                if previous_autocommit is not None:
+                    conn.autocommit = previous_autocommit
         return entry, inserted
 
     def _insert_cash_entry(self, entry: CashLedgerEntry, *, ignore_conflict: bool) -> bool:
@@ -619,6 +655,13 @@ class QmtStrategyLedgerRepository:
                 )
                 rows = cur.fetchall()
         return [_row_to_cash_entry(row) for row in rows]
+
+    def get_cash_entry(self, cash_id: str) -> CashLedgerEntry | None:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("SELECT * FROM qmt_strategy.cash_ledger WHERE cash_id = %s", (cash_id,))
+                row = cur.fetchone()
+        return _row_to_cash_entry(row) if row else None
 
     def create_daily_snapshot(self, snapshot: DailySnapshotRecord) -> DailySnapshotRecord:
         with self._conn_factory() as conn:
@@ -1032,6 +1075,33 @@ class InMemoryQmtStrategyLedgerRepository:
         self._virtual_accounts[account.strategy_id] = account
         return entry, True
 
+    def apply_cash_entry_and_lots_once(
+        self,
+        entry: CashLedgerEntry,
+        account: VirtualAccount,
+        lots: list[PositionLotRecord],
+    ) -> tuple[CashLedgerEntry, bool]:
+        if entry.cash_id in self._cash_entries:
+            return self._cash_entries[entry.cash_id], False
+        _validate_virtual_account(account)
+        original = self._virtual_accounts.get(account.strategy_id)
+        if original is None:
+            raise DataUnavailableError("qmt strategy virtual account does not exist", context={"strategy_id": account.strategy_id})
+        if (original.account_id, original.strategy_name) != (account.account_id, account.strategy_name):
+            raise ValueError("account_id and strategy_name are immutable for virtual account updates")
+        for lot in lots:
+            if lot.lot_id not in self._position_lots:
+                raise DataUnavailableError("qmt strategy position lot does not exist", context={"lot_id": lot.lot_id})
+            if lot.quantity < 0 or lot.available_quantity < 0 or lot.remaining_quantity < 0:
+                raise ValueError("position lot quantities must be non-negative")
+            if lot.available_quantity > lot.remaining_quantity:
+                raise ValueError("position lot available_quantity cannot exceed remaining_quantity")
+        self._append_cash_entry(entry)
+        self._virtual_accounts[account.strategy_id] = account
+        for lot in lots:
+            self._position_lots[lot.lot_id] = lot
+        return entry, True
+
     def _append_cash_entry(self, entry: CashLedgerEntry) -> None:
         self._cash_entries[entry.cash_id] = entry
         self._cash_entry_sequence[entry.cash_id] = self._next_cash_entry_sequence
@@ -1040,6 +1110,9 @@ class InMemoryQmtStrategyLedgerRepository:
     def list_cash_entries(self, strategy_id: str) -> list[CashLedgerEntry]:
         entries = [entry for entry in self._cash_entries.values() if entry.strategy_id == strategy_id]
         return sorted(entries, key=lambda entry: (self._cash_entry_sequence.get(entry.cash_id, 0), entry.created_at, entry.cash_id))
+
+    def get_cash_entry(self, cash_id: str) -> CashLedgerEntry | None:
+        return self._cash_entries.get(cash_id)
 
     def create_daily_snapshot(self, snapshot: DailySnapshotRecord) -> DailySnapshotRecord:
         key = (snapshot.strategy_id, snapshot.trade_date)
