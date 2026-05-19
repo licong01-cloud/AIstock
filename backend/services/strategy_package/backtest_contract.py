@@ -106,6 +106,7 @@ def build_backtest_runtime_contract(manifest: StrategyPackageManifest) -> dict[s
             "industry_blacklist": _industry_blacklist_contract(custom_params),
             "tradability": _tradability_contract(custom_params),
             "risk_policy": _risk_policy_contract(custom_params),
+            "event_signal_policy": _event_signal_policy_contract(custom_params),
         },
         "minute_execution_policy": manifest.minute_execution_policy.model_dump(mode="json"),
     }
@@ -236,17 +237,62 @@ def validate_runtime_profile_matches_backtest_contract(
         )
 
     risk_contract = features["risk_policy"]
+    event_signal_contract = features.get("event_signal_policy", {"enabled": False, "policy": {}})
+    event_signal_enabled = bool(event_signal_contract["enabled"])
     if risk_contract["enabled"] and not runtime_profile.risk_policy.enabled:
         raise StrategyPackageValidationError(
             "QE backtest enabled risk_policy but Paper v2 runtime profile did not enable it",
             context={**(context or {}), "package_id": manifest.package_id, "risk_policy_contract": risk_contract},
         )
-    if not risk_contract["enabled"] and runtime_profile.risk_policy.enabled:
+    if not risk_contract["enabled"] and not event_signal_enabled and runtime_profile.risk_policy.enabled:
         raise StrategyPackageValidationError(
             "Paper v2 cannot enable risk_policy because the QE backtest contract did not enable it",
             context={**(context or {}), "package_id": manifest.package_id},
         )
+    _validate_event_signal_policy_contract(
+        runtime_profile.risk_policy.model_dump(mode="json"),
+        event_signal_contract,
+        context={**(context or {}), "package_id": manifest.package_id},
+    )
     return contract
+
+
+def _validate_event_signal_policy_contract(
+    risk_policy: dict[str, Any],
+    contract: dict[str, Any],
+    *,
+    context: dict[str, Any],
+) -> None:
+    providers = risk_policy.get("providers") or []
+    runtime_enabled = "event_signal_policy" in providers
+    if runtime_enabled and not contract["enabled"]:
+        raise StrategyPackageValidationError(
+            "Paper v2 cannot enable event_signal_policy because the QE backtest contract did not enable it",
+            context={**context, "event_signal_policy_contract": contract},
+        )
+    if not contract["enabled"]:
+        return
+    policy = dict(contract.get("policy") or {})
+    expected_profile_id = policy.get("event_signal_profile_id")
+    expected_asof_policy = policy.get("asof_policy") or "effective_trade_date"
+    expected_merge_policy = policy.get("signal_merge_policy") or "block_first"
+    if not runtime_enabled:
+        raise StrategyPackageValidationError(
+            "QE backtest enabled event_signal_policy but Paper v2 runtime profile did not enable it",
+            context={**context, "event_signal_policy_contract": contract},
+        )
+    checks = {
+        "event_signal_profile_id": expected_profile_id,
+        "event_signal_asof_policy": expected_asof_policy,
+        "event_signal_merge_policy": expected_merge_policy,
+    }
+    for key, expected in checks.items():
+        actual = risk_policy.get(key)
+        if actual != expected:
+            raise StrategyPackageValidationError(
+                f"Paper v2 {key} must match the QE backtest event_signal_policy contract",
+                context={**context, f"expected_{key}": expected, f"runtime_{key}": actual},
+            )
 
 
 def normalize_runtime_config_with_backtest_contract(
@@ -308,6 +354,7 @@ def normalize_runtime_config_with_backtest_contract(
         profile_payload=profile_payload,
         config=config,
         contract=contract["runtime_features"]["risk_policy"],
+        event_signal_contract=contract["runtime_features"]["event_signal_policy"],
         context={**(context or {}), "package_id": manifest.package_id},
     )
 
@@ -422,6 +469,13 @@ def _tradability_contract(custom_params: dict[str, Any]) -> dict[str, Any]:
 
 def _risk_policy_contract(custom_params: dict[str, Any]) -> dict[str, Any]:
     policy = custom_params.get("risk_policy")
+    if not isinstance(policy, dict):
+        return {"enabled": False, "policy": {}}
+    return {"enabled": bool(policy.get("enabled", False)), "policy": policy}
+
+
+def _event_signal_policy_contract(custom_params: dict[str, Any]) -> dict[str, Any]:
+    policy = custom_params.get("event_signal_policy")
     if not isinstance(policy, dict):
         return {"enabled": False, "policy": {}}
     return {"enabled": bool(policy.get("enabled", False)), "policy": policy}
@@ -594,6 +648,7 @@ def _apply_risk_policy_contract(
     profile_payload: dict[str, Any],
     config: dict[str, Any],
     contract: dict[str, Any],
+    event_signal_contract: dict[str, Any],
     context: dict[str, Any],
 ) -> None:
     risk_payload = dict(profile_payload.get("risk_policy") or {})
@@ -603,7 +658,9 @@ def _apply_risk_policy_contract(
         merged = dict(config["risk_policy"])
         merged.update(risk_payload)
         risk_payload = merged
-    expected_enabled = bool(contract["enabled"])
+    _apply_event_signal_policy_contract(risk_payload=risk_payload, contract=event_signal_contract, context=context)
+
+    expected_enabled = bool(contract["enabled"] or event_signal_contract["enabled"])
     if "enabled" in risk_payload and bool(risk_payload["enabled"]) != expected_enabled:
         raise StrategyPackageValidationError(
             "Paper v2 risk_policy enabled flag must match the QE backtest contract",
@@ -613,14 +670,74 @@ def _apply_risk_policy_contract(
                 "runtime_risk_policy_enabled": risk_payload["enabled"],
             },
         )
-    if expected_enabled:
+    if contract["enabled"]:
         expected_policy = dict(contract.get("policy") or {})
         expected_policy["enabled"] = True
         expected_policy.update({key: value for key, value in risk_payload.items() if key not in expected_policy})
         risk_payload = expected_policy
     else:
-        risk_payload["enabled"] = False
+        risk_payload["enabled"] = expected_enabled
     profile_payload["risk_policy"] = risk_payload
+
+
+def _apply_event_signal_policy_contract(
+    *,
+    risk_payload: dict[str, Any],
+    contract: dict[str, Any],
+    context: dict[str, Any],
+) -> None:
+    providers = list(risk_payload.get("providers") or ["st_pit"])
+    has_runtime_provider = "event_signal_policy" in providers
+    if has_runtime_provider and not contract["enabled"]:
+        raise StrategyPackageValidationError(
+            "Paper v2 cannot enable event_signal_policy because the QE backtest contract did not enable it",
+            context={**context, "event_signal_policy_contract": contract},
+        )
+    if not contract["enabled"]:
+        return
+
+    policy = dict(contract.get("policy") or {})
+    expected_profile_id = policy.get("event_signal_profile_id")
+    expected_asof_policy = policy.get("asof_policy") or "effective_trade_date"
+    expected_merge_policy = policy.get("signal_merge_policy") or "block_first"
+    missing = [
+        key
+        for key, value in {
+            "event_signal_profile_id": expected_profile_id,
+            "asof_policy": expected_asof_policy,
+            "signal_merge_policy": expected_merge_policy,
+        }.items()
+        if not value
+    ]
+    if missing:
+        raise StrategyPackageValidationError(
+            "QE event_signal_policy contract is missing fields required by Paper v2 runtime",
+            context={**context, "missing_contract_fields": missing, "event_signal_policy_contract": contract},
+        )
+    if "event_signal_policy" not in providers:
+        providers.append("event_signal_policy")
+    risk_payload["providers"] = providers
+    _set_or_match(
+        risk_payload,
+        "event_signal_profile_id",
+        expected_profile_id,
+        "Paper v2 event_signal_profile_id must match the QE backtest event_signal_policy contract",
+        context,
+    )
+    _set_or_match(
+        risk_payload,
+        "event_signal_asof_policy",
+        expected_asof_policy,
+        "Paper v2 event_signal_asof_policy must match the QE backtest event_signal_policy contract",
+        context,
+    )
+    _set_or_match(
+        risk_payload,
+        "event_signal_merge_policy",
+        expected_merge_policy,
+        "Paper v2 event_signal_merge_policy must match the QE backtest event_signal_policy contract",
+        context,
+    )
 
 
 def _set_or_match(

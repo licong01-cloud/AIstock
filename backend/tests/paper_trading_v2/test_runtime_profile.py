@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import date
 
@@ -26,10 +26,10 @@ from backend.tests.paper_trading_v2.test_day_runner import (
 )
 
 
-def _portfolio_fixture():
+def _portfolio_fixture(*, custom_params: dict | None = None):
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
-    manifest = make_paper_enabled_manifest(topk=2)
+    manifest = make_paper_enabled_manifest(topk=2, custom_params=custom_params)
     package_repo.save_manifest(manifest)
     service = PaperTradingV2PortfolioService(
         package_repository=package_repo,
@@ -66,9 +66,12 @@ def test_runtime_profile_version_hash_and_audit_are_persisted() -> None:
             "selection": {"top_k": 2},
             "risk_policy": {
                 "enabled": False,
-                "policy_version": "stock_event_risk_policy_v1",
+                "policy_version": "platform_risk_policy_v1",
                 "providers": ["st_pit"],
                 "st_universe_key": "shsz_st_pit_active_v1",
+                "event_signal_profile_id": None,
+                "event_signal_asof_policy": "disabled",
+                "event_signal_merge_policy": "disabled",
                 "hard_actions": ["block_buy", "force_exit"],
                 "visible_time_mode": "next_trading_session",
                 "strict_data_ready": True,
@@ -194,4 +197,61 @@ def test_runtime_profile_activation_replace_and_late_change_are_rejected() -> No
             profile_version_id=version.profile_version_id,
             replace_existing=True,
             reason="too late",
+        )
+
+
+def test_runtime_profile_accepts_platform_owned_event_signal_policy() -> None:
+    _package_repo, paper_repo, service, _manifest, portfolio = _portfolio_fixture(custom_params={
+        "event_signal_policy": {
+            "enabled": True,
+            "event_signal_profile_id": "evt_profile_001",
+            "asof_policy": "effective_trade_date",
+            "signal_merge_policy": "block_first",
+        }
+    })
+    config_json = {
+        "runtime_profile": {
+            "risk_policy": {
+                "enabled": True,
+                "providers": ["st_pit", "event_signal_policy"],
+                "event_signal_profile_id": "evt_profile_001",
+                "event_signal_asof_policy": "effective_trade_date",
+                "event_signal_merge_policy": "block_first",
+            }
+        }
+    }
+
+    profile, version = service.create_runtime_profile(
+        portfolio_id=portfolio.portfolio_id,
+        profile_name="event-signal platform profile",
+        config_json=config_json,
+        created_by="unit_test",
+    )
+
+    risk_policy = version.config_json["runtime_profile"]["risk_policy"]
+    assert profile.current_version_id == version.profile_version_id
+    assert risk_policy["providers"] == ["st_pit", "event_signal_policy"]
+    assert risk_policy["event_signal_profile_id"] == "evt_profile_001"
+    assert risk_policy["event_signal_asof_policy"] == "effective_trade_date"
+    assert risk_policy["event_signal_merge_policy"] == "block_first"
+    assert paper_repo.list_config_change_audit(portfolio.portfolio_id)[0].object_type == "runtime_profile"
+
+
+def test_runtime_profile_rejects_event_signal_policy_without_platform_profile_id() -> None:
+    _package_repo, _paper_repo, service, _manifest, portfolio = _portfolio_fixture(
+        custom_params={"event_signal_policy": {"enabled": True}}
+    )
+
+    with pytest.raises(StrategyPackageValidationError, match="missing fields required"):
+        service.create_runtime_profile(
+            portfolio_id=portfolio.portfolio_id,
+            profile_name="bad event-signal profile",
+            config_json={
+                "runtime_profile": {
+                    "risk_policy": {
+                        "enabled": True,
+                        "providers": ["st_pit", "event_signal_policy"],
+                    }
+                }
+            },
         )
