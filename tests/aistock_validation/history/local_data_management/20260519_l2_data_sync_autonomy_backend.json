@@ -9,7 +9,7 @@
   "status": "PASS",
   "started_at": "2026-05-19T12:15:00+08:00",
   "finished_at": "2026-05-19T12:45:00+08:00",
-  "git_commit": "pending_before_final_local_commit",
+  "git_commit": "8455ce3",
   "operator": "codex",
   "markdown_path": "tests/aistock_validation/history/local_data_management/20260519_l2_data_sync_autonomy_backend.md",
   "metadata_path": "tests/aistock_validation/history/local_data_management/20260519_l2_data_sync_autonomy_backend.json",
@@ -56,3 +56,4 @@
     "Frontend local-data page has pre-existing raw-json and garbled-text P2 findings outside this task scope."
   ]
 }
+
