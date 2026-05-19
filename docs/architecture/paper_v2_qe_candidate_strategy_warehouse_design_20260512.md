@@ -680,3 +680,12 @@ QE 配置 -> QE 执行 -> QE 数仓 -> 候选策略包 -> StrategyPackage -> 选
 ```
 
 任何实现如果让 StrategyPackage 携带 HMM/ST/PIT/事件信号数据本体、让 SOTA 自动晋升、让 QE 删除破坏候选/包/数仓、或让 QE 与 Paper v2 使用不同策略执行语义，均视为偏离本文边界。
+
+## 18. BUG-063 event_signal platform boundary - 2026-05-19
+
+- `event_signal` is a platform runtime capability, not a StrategyPackage runtime_config reserved field.
+- StrategyPackage must not define `event_signal_enabled`, `event_signals`, or `PlatformSignalCapability` in current-phase runtime_config.
+- Paper v2 / Selection runtime profile owns future event-signal consumption through `risk_policy.providers=["event_signal_policy"]`.
+- Future enablement requires a QE/candidate contract with `event_signal_profile_id`, `asof_policy`, and `signal_merge_policy`, plus Paper v2 runtime profile activation and audit.
+- StrategyPackage may reference a profile or policy id, but must not carry event-signal data payloads or silently enable trading consumption.
+- Until a real consumer is explicitly enabled and tested, the current isolation test remains the gate that trading paths do not consume event_signal.

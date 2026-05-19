@@ -1,0 +1,132 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-063",
+  "title": "Paper v2 should own event_signal platform capability instead of StrategyPackage runtime_config",
+  "description": "Expected: `event_signal` should be represented as a platform capability owned by the Paper v2 / simulation runtime boundary, while StrategyPackage runtime config stays limited to strategy semantics, adapter-neutral hashes, and reusable execution contract fields. Current-phase isolation tests should pass without needing a whitelist exception for `backend/services/strategy_package`.\nActual: `backend/services/strategy_package/runtime_config.py` currently defines `PlatformSignalCapability` and nests it in `PlatformCapabilities` as `event_signals`, which leaks `event_signal` into StrategyPackage namespace and causes `backend/tests/test_unified_event_signal_schema.py::test_event_signal_is_not_consumed_by_trading_paths_in_current_phase` to fail.",
+  "module": "paper_v2",
+  "severity": "P3",
+  "risk_area": "paper_v2_platform_capability_boundary",
+  "status": "verified",
+  "trigger_condition": {
+    "scenario": "reported_via_mcp",
+    "files": [
+      "backend/services/strategy_package/runtime_config.py",
+      "backend/tests/test_unified_event_signal_schema.py",
+      "backend/tests/strategy_package/test_runtime_config_contract.py",
+      "docs/architecture/paper_v2_qe_candidate_strategy_warehouse_design_20260512.md"
+    ]
+  },
+  "reproduce_command": "python -m pytest -q backend/tests/test_unified_event_signal_schema.py -p no:cacheprovider && rg -n \"event_signal_enabled|event_signals|PlatformSignalCapability\" backend/services/strategy_package backend/tests -S",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:backend/services/strategy_package/runtime_config.py",
+    "file:backend/tests/test_unified_event_signal_schema.py",
+    "file:backend/tests/strategy_package/test_runtime_config_contract.py",
+    "file:docs/architecture/paper_v2_qe_candidate_strategy_warehouse_design_20260512.md",
+    "file:tests/aistock_validation/history/paper_trading_v2/20260519_l1_bug-063-event-signal-platform-boundary.md"
+  ],
+  "fingerprint": "a1834bedd52d23c5",
+  "assigned_agent": "paper_v2",
+  "fix_branch": "bug/BUG-061-063-event-signal-integration",
+  "fix_commit": "08aeda9fe4657e9885e36b24a6ae1754e64ef1e0",
+  "verification_run_id": "tests/aistock_validation/history/paper_trading_v2/20260519_l1_bug-063-event-signal-platform-boundary.md",
+  "created_at": "2026-05-19T09:09:37Z",
+  "first_seen_at": "2026-05-19T09:09:37Z",
+  "last_seen_at": "2026-05-19T12:56:04Z",
+  "fixed_at": "2026-05-19T12:56:01Z",
+  "submitted_at": "2026-05-19T09:09:37Z",
+  "closed_at": "2026-05-19T12:56:04Z",
+  "allowed_write_scope": [
+    "backend/services/strategy_package/runtime_config.py",
+    "backend/tests/test_unified_event_signal_schema.py",
+    "backend/tests/strategy_package/test_runtime_config_contract.py",
+    "docs/architecture/paper_v2_qe_candidate_strategy_warehouse_design_20260512.md"
+  ],
+  "suspected_modules": [
+    "backend/services/strategy_package/runtime_config.py",
+    "backend/tests/test_unified_event_signal_schema.py",
+    "backend/tests/strategy_package/test_runtime_config_contract.py",
+    "docs/architecture/paper_v2_qe_candidate_strategy_warehouse_design_20260512.md"
+  ],
+  "required_verification": [
+    "Document or test that event_signal platform capability is not owned by StrategyPackage runtime_config.",
+    "If a future consumer is needed, define it under Paper v2/platform runtime profile rather than StrategyPackage.",
+    "Verify no current Paper v2, Selection, QMT, or StrategyPackage runtime path consumes event_signal in this phase."
+  ],
+  "closure_requirements": [
+    "Ownership decision is encoded in tests/docs so future event_signal consumption lands in Paper v2/platform layer.",
+    "BUG-061 concrete test failure is either fixed by removing reserved fields or superseded by a Paper v2-owned capability contract.",
+    "GitHub issue contains fix branch, validation evidence, and whether the chosen outcome was remove-now or rehome-later."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-19T09:09:37Z",
+      "actor": "paper_v2",
+      "action": "discovered",
+      "note": "Reported via aistock_mcp_server.report_bug. Comments: 4"
+    },
+    {
+      "timestamp": "2026-05-19T09:09:37Z",
+      "actor": "paper_v2",
+      "action": "comment",
+      "note": "Recommendation: do not just whitelist the test. If there is no current consumer, delete the pre-reserved `event_signal` capability from StrategyPackage. If a future consumer is needed, reintroduce it in a Paper v2/platform config owned by the runtime consumer, not by StrategyPackage."
+    },
+    {
+      "timestamp": "2026-05-19T09:09:37Z",
+      "actor": "paper_v2",
+      "action": "comment",
+      "note": "Ownership recommendation: let the Paper v2 team drive the boundary cleanup because this field affects the shared runtime contract for paper/simulation/miniQMT consumers, even though the current code smell appears in StrategyPackage."
+    },
+    {
+      "timestamp": "2026-05-19T09:09:37Z",
+      "actor": "paper_v2",
+      "action": "comment",
+      "note": "Suggested outcome: keep StrategyPackage focused on strategy semantics and adapter-independent hashes; move any event-signal capability to a platform-layer config or remove it entirely until a real consumer exists."
+    },
+    {
+      "timestamp": "2026-05-19T09:09:37Z",
+      "actor": "paper_v2",
+      "action": "comment",
+      "note": "This issue is separate from the legacy paper-trading cleanup and from any active event_signal generation work."
+    },
+    {
+      "timestamp": "2026-05-19T11:20:00Z",
+      "actor": "codex-app",
+      "action": "queued",
+      "note": "User confirmed #61 was input error and should be ignored. This bug remains in the queue as event_signal/StrategyPackage/Paper v2 ownership cleanup."
+    },
+    {
+      "timestamp": "2026-05-19T11:35:00Z",
+      "actor": "codex-app",
+      "action": "github_synced",
+      "note": "Mirrored to GitHub issue #71; user confirmed unrelated GitHub #61 is input error and ignored."
+    },
+    {
+      "timestamp": "2026-05-19T12:35:00Z",
+      "actor": "codex-app",
+      "action": "fix_started",
+      "note": "Started dedicated worktree/branch; platform-owned event_signal_policy modeled in runtime profile/backtest contract, while StrategyPackage runtime_config reserved fields are removed."
+    },
+    {
+      "timestamp": "2026-05-19T12:45:00Z",
+      "actor": "codex-app",
+      "action": "validation_passed",
+      "note": "Combined validation passed: unified event-signal schema, StrategyPackage runtime/backtest contracts, and Paper v2 runtime profile tests (25 passed); py_compile and diff check passed."
+    },
+    {
+      "timestamp": "2026-05-19T12:50:00Z",
+      "actor": "codex-app",
+      "action": "fixed",
+      "note": "Fixed on branch bug/BUG-063-paper-v2-event-signal-boundary at commit 44a4b82; validation record added under paper_trading_v2 history."
+    },
+    {
+      "timestamp": "2026-05-19T12:56:04Z",
+      "actor": "codex-app",
+      "action": "merged_verified",
+      "note": "PR #74 merged into main with merge commit 08aeda9fe4657e9885e36b24a6ae1754e64ef1e0. GitHub checks were green, issue #71 auto-closed, and local targeted validation passed: unified event-signal schema, StrategyPackage runtime/backtest contracts, Paper v2 runtime profile tests (25 passed), py_compile, and git diff --check."
+    }
+  ],
+  "github_issue_number": 71,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/71",
+  "worktree_path": "F:/Dev/AIstock_worktrees/bug-061-063-event-signal-integration"
+}
