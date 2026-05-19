@@ -150,6 +150,42 @@ def test_preview_rejects_insufficient_cash_and_buy_board_lot() -> None:
     assert {"BUY_BOARD_LOT", "INSUFFICIENT_CASH"} <= {error.code for error in result.errors}
 
 
+def test_preview_accepts_star_market_buy_quantity_after_minimum() -> None:
+    service = QmtManagedOrderService(repository=_repo(), broker=CountingBroker())
+
+    assert service.preview_order(_buy_request(symbol="688379.SH", quantity=201)).allowed is True
+    assert service.preview_order(_buy_request(symbol="689009.SH", quantity=2706)).allowed is True
+
+
+def test_preview_rejects_star_market_buy_quantity_below_minimum() -> None:
+    result = QmtManagedOrderService(repository=_repo(), broker=CountingBroker()).preview_order(
+        _buy_request(symbol="688379.SH", quantity=199)
+    )
+
+    assert result.allowed is False
+    [error] = result.errors
+    assert error.code == "BUY_BOARD_LOT"
+    assert error.context["symbol"] == "688379.SH"
+    assert error.context["min_quantity"] == 200
+    assert error.context["increment"] == 1
+    assert error.context["canonical_quantity"] == 0
+
+
+def test_preview_rejects_main_board_and_chinext_non_100_share_buys() -> None:
+    service = QmtManagedOrderService(repository=_repo(), broker=CountingBroker())
+
+    for symbol in ("600000.SH", "000001.SZ", "300604.SZ"):
+        result = service.preview_order(_buy_request(symbol=symbol, quantity=101))
+
+        assert result.allowed is False
+        [error] = result.errors
+        assert error.code == "BUY_BOARD_LOT"
+        assert error.context["symbol"] == symbol
+        assert error.context["min_quantity"] == 100
+        assert error.context["increment"] == 100
+        assert error.context["canonical_quantity"] == 100
+
+
 def test_preview_rejects_t1_strategy_lot_shortage() -> None:
     result = QmtManagedOrderService(repository=_repo(available_lot=0), broker=CountingBroker()).preview_order(
         _sell_request(quantity=1000)

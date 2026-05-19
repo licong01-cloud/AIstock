@@ -12,6 +12,8 @@ from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 
+from backend.execution_algos.board_lot import board_lot_rule, round_to_board_lot
+
 from .models import (
     BUY_ORDER_TYPE,
     SELL_ORDER_TYPE,
@@ -198,8 +200,10 @@ class QmtManagedOrderService:
             errors.append(OrderPreflightError("SIDE_TYPE_MISMATCH", "side does not match MiniQMT order_type"))
         if request.quantity <= 0:
             errors.append(OrderPreflightError("INVALID_QUANTITY", "quantity must be positive"))
-        if request.order_type == BUY_ORDER_TYPE and request.quantity % 100 != 0:
-            errors.append(OrderPreflightError("BUY_BOARD_LOT", "buy quantity must be a multiple of 100"))
+        if request.order_type == BUY_ORDER_TYPE and request.quantity > 0:
+            board_lot_error = self._buy_board_lot_error(request)
+            if board_lot_error is not None:
+                errors.append(board_lot_error)
         if request.order_type == BUY_ORDER_TYPE and request.price <= 0:
             errors.append(OrderPreflightError("PRICE_REQUIRED_FOR_FREEZE", "buy order requires a positive price for cash freeze"))
         if not request.order_remark.strip():
@@ -406,6 +410,31 @@ class QmtManagedOrderService:
             if account.strategy_name == strategy_name:
                 return account
         return None
+
+    def _buy_board_lot_error(self, request: ManagedOrderRequest) -> OrderPreflightError | None:
+        try:
+            min_quantity, increment = board_lot_rule(request.symbol)
+            canonical_quantity = round_to_board_lot(request.quantity, request.symbol, side="BUY")
+        except ValueError as exc:
+            return OrderPreflightError(
+                "BUY_BOARD_LOT",
+                "buy quantity does not match the canonical A-share board-lot rule",
+                {"symbol": request.symbol, "quantity": request.quantity, "reason": str(exc)},
+            )
+
+        if canonical_quantity == request.quantity:
+            return None
+        return OrderPreflightError(
+            "BUY_BOARD_LOT",
+            "buy quantity does not match the canonical A-share board-lot rule",
+            {
+                "symbol": request.symbol,
+                "quantity": request.quantity,
+                "min_quantity": min_quantity,
+                "increment": increment,
+                "canonical_quantity": canonical_quantity,
+            },
+        )
 
     def _create_intent(
         self,
