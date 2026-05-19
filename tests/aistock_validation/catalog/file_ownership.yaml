@@ -32,6 +32,15 @@ rules:
     layer: validation_history
     risk_level: medium
     ownership_reason: Validation evidence and module matrices are read by Validation Center.
+  - rule_id: validation_bug_registry
+    priority: 70
+    include:
+      - tests/aistock_validation/bugs/**
+    primary_module: validation.center
+    impact_modules: [validation.module_quality, tests.validation_history]
+    layer: validation_bug_registry
+    risk_level: high
+    ownership_reason: Local bug JSON records are the Validation Center source of truth and GitHub issue mirror input.
   - rule_id: validation_services
     priority: 100
     include:

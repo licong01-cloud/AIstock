@@ -506,7 +506,8 @@ targets:
   nav_group: Validation Pipeline
   primary_module: research_pipeline
   impact_modules:
-  - qe
+  - qe.core
+  - qe.archive
   - hmm
   - validation.center
   risk_level: high
@@ -517,7 +518,8 @@ targets:
   - research_mcp_contract
   business_operations:
   - Open Research Pipeline
-  - Review pipeline experiment state
+  - Review research experiment timeline
+  - Inspect research artifacts, external links, and verdict state
   - Validate Research Pipeline read-only workflow
   coverage_status: partial
 - route_id: system.config
