@@ -63,6 +63,7 @@ export type BackfillRequest = {
   loop_ids?: string[];
   task_id?: string | null;
   loop_index?: number | null;
+  loop_indices?: number[];
   status?: string;
   limit?: number;
   include_archived?: boolean;
@@ -101,6 +102,38 @@ export type BackfillCandidate = {
   completed_at?: string | null;
   updated_at?: string | null;
   archive_action?: string | null;
+};
+
+export type ArchiveSourceItemStatus = {
+  archive_status: string;
+  run_ids?: string[];
+  run_count?: number;
+  eligible?: boolean;
+  recommended?: boolean;
+  reason?: string;
+};
+
+export type ArchiveTaskStatus = {
+  archive_status: string;
+  loop_count?: number;
+  archived_loop_count?: number;
+  eligible_loop_count?: number;
+  pending_loop_count?: number;
+  run_ids?: string[];
+};
+
+export type ArchiveSourceStatus = {
+  experiments?: Record<string, ArchiveSourceItemStatus>;
+  tasks?: Record<string, ArchiveTaskStatus>;
+  loops?: Record<string, ArchiveSourceItemStatus>;
+  include_recommendation?: boolean;
+};
+
+export type ArchiveSourceStatusRequest = {
+  experiment_ids?: string[];
+  task_ids?: string[];
+  loop_ids?: string[];
+  include_recommendation?: boolean;
 };
 
 export type ArchivedRunListItem = {
@@ -148,6 +181,14 @@ export type BackfillResultItem = {
   source_system?: string | null;
   source_id?: string | null;
   source_sub_id?: string | null;
+  archive_policy?: string | null;
+  archive_policy_source?: string | null;
+  reason?: string | null;
+  will_archive?: boolean;
+  skipped_reason?: string | null;
+  skip_id?: string | null;
+  loop_index?: number | null;
+  error?: string | null;
   stats?: JsonObject;
   quality?: RunQuality;
 };
@@ -276,6 +317,16 @@ export const qeArchiveApi = {
   },
   async backfill(payload: BackfillRequest): Promise<BackfillReport> {
     const response = await apiFetch<{ status: string; data: BackfillReport }>("/qe-archive/backfill", body(payload));
+    return response.data;
+  },
+  async previewSelection(payload: Omit<BackfillRequest, "write" | "confirm_write">): Promise<BackfillReport> {
+    return this.backfill({ ...payload, write: false });
+  },
+  async executeSelection(payload: Omit<BackfillRequest, "write"> & { confirm_write: string }): Promise<BackfillReport> {
+    return this.backfill({ ...payload, write: true });
+  },
+  async sourceStatus(payload: ArchiveSourceStatusRequest): Promise<ArchiveSourceStatus> {
+    const response = await apiFetch<{ status: string; data: ArchiveSourceStatus }>("/qe-archive/source-status", body(payload));
     return response.data;
   },
   async runWorkerOnce(payload: { limit: number; worker_id?: string; confirm_run: string }): Promise<WorkerRunReport> {

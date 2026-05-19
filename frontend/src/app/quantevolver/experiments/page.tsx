@@ -1,18 +1,21 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import type { CSSProperties } from "react";
 import dynamic from "next/dynamic";
 import { useExperimentSSE } from "../components/useExperimentSSE";
 import LogTerminal from "../components/LogTerminal";
 import MetricsSummary from "../components/MetricsSummary";
 import { PaperV2ApiError, strategyPackageApi } from "@/lib/paper-v2/api";
 import type { JsonObject } from "@/lib/paper-v2/types";
+import { qeArchiveApi, type ArchiveSourceItemStatus, type ArchiveSourceStatus, type ArchiveTaskStatus, type BackfillReport } from "@/lib/qe-archive/api";
 
 const IcSeriesChart = dynamic(() => import("../components/charts/IcSeriesChart"), { ssr: false });
 const LossCurveChart = dynamic(() => import("../components/charts/LossCurveChart"), { ssr: false });
 const ReturnCurveChart = dynamic(() => import("../components/charts/ReturnCurveChart"), { ssr: false });
 
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
+const QE_ARCHIVE_WRITE_CONFIRM = "QE_ARCHIVE_WRITE";
 
 type Experiment = {
   experiment_id: string;
@@ -159,6 +162,68 @@ function candidateDisplayName(exp: Experiment, fallback: string): string {
   return exp.experiment_name || exp.experiment_id || fallback;
 }
 
+function getArchiveLoopId(exp: Experiment, fallbackTaskId?: string | null): string | null {
+  const rawLoopId = exp.qe_loop_id ? String(exp.qe_loop_id) : "";
+  if (rawLoopId && !/^Loop\d+$/i.test(rawLoopId)) return rawLoopId;
+  const taskId = exp.qe_task_id || fallbackTaskId || "";
+  if (taskId && exp.loop_index != null) return `${taskId}_Loop${exp.loop_index}`;
+  if (rawLoopId) return rawLoopId;
+  const match = String(exp.experiment_id || "").match(/(?:_Loop|_L)(\d+)$/i);
+  return taskId && match ? `${taskId}_Loop${match[1]}` : null;
+}
+
+function archiveStatusLabel(status?: string): string {
+  switch (status) {
+    case "archived": return "已入仓";
+    case "fully_archived": return "全部入仓";
+    case "partially_archived": return "部分入仓";
+    case "eligible": return "可入仓";
+    case "not_recommended": return "不建议";
+    case "manual_only": return "人工判断";
+    case "skipped": return "已跳过";
+    case "not_archived":
+    default:
+      return "未入仓";
+  }
+}
+
+function archiveStatusStyle(status?: string): CSSProperties {
+  const palette: Record<string, { bg: string; fg: string; border: string }> = {
+    archived: { bg: "#ecfdf5", fg: "#047857", border: "#a7f3d0" },
+    fully_archived: { bg: "#ecfdf5", fg: "#047857", border: "#a7f3d0" },
+    partially_archived: { bg: "#fffbeb", fg: "#b45309", border: "#fde68a" },
+    eligible: { bg: "#eff6ff", fg: "#1d4ed8", border: "#bfdbfe" },
+    not_recommended: { bg: "#f8fafc", fg: "#64748b", border: "#cbd5e1" },
+    manual_only: { bg: "#f5f3ff", fg: "#6d28d9", border: "#ddd6fe" },
+    skipped: { bg: "#f8fafc", fg: "#64748b", border: "#cbd5e1" },
+    not_archived: { bg: "#fef2f2", fg: "#b91c1c", border: "#fecaca" },
+  };
+  const colors = palette[status || "not_archived"] || palette.not_archived;
+  return {
+    padding: "2px 7px",
+    borderRadius: 999,
+    fontSize: 10,
+    fontWeight: 700,
+    backgroundColor: colors.bg,
+    color: colors.fg,
+    border: `1px solid ${colors.border}`,
+    whiteSpace: "nowrap",
+  };
+}
+
+function ArchiveBadge({ status }: { status?: ArchiveSourceItemStatus | ArchiveTaskStatus }) {
+  const archiveStatus = status?.archive_status || "not_archived";
+  return <span title={status?.run_ids?.join(", ") || ""} style={archiveStatusStyle(archiveStatus)}>{archiveStatusLabel(archiveStatus)}</span>;
+}
+
+function summarizeBackfillReport(report: BackfillReport): string {
+  const rows = report.results || [];
+  const willArchive = rows.filter((item) => item.will_archive !== false && !item.skipped_reason && !item.error).length;
+  const skipped = rows.filter((item) => item.skipped_reason || item.error).length;
+  const written = rows.filter((item) => item.run_id && !item.dry_run).length;
+  return `候选 ${rows.length} 条，可入仓 ${willArchive} 条，已写入 ${written} 条，跳过/失败 ${skipped} 条`;
+}
+
 export default function ExperimentsPage() {
   const [experiments, setExperiments] = useState<Experiment[]>([]);
   const [total, setTotal] = useState(0);
@@ -171,6 +236,10 @@ export default function ExperimentsPage() {
   const [actionId, setActionId] = useState<string | null>(null);
   const [actionType, setActionType] = useState<string>("");
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
+  const [archiveStatus, setArchiveStatus] = useState<ArchiveSourceStatus | null>(null);
+  const [archiveStatusLoading, setArchiveStatusLoading] = useState(false);
+  const [selectedArchiveKeys, setSelectedArchiveKeys] = useState<Set<string>>(new Set());
+  const [archiveActionLoading, setArchiveActionLoading] = useState<"preview" | "execute" | null>(null);
 
   // 分页状态
   const [currentPage, setCurrentPage] = useState(1);
@@ -189,6 +258,44 @@ export default function ExperimentsPage() {
     setTimeout(() => setToast(null), 3500);
   }, []);
 
+  async function loadArchiveStatusForExperiments(items: Experiment[]) {
+    const byId = new Map(items.map(exp => [exp.experiment_id, exp]));
+    const experimentIds = Array.from(new Set(
+      items
+        .filter(exp => !exp.parent_experiment_id && !exp.qe_task_id)
+        .map(exp => exp.experiment_id)
+        .filter(Boolean)
+    ));
+    const taskIds = Array.from(new Set(
+      items
+        .map(exp => exp.qe_task_id)
+        .filter((value): value is string => Boolean(value))
+    ));
+    const loopIds = Array.from(new Set(
+      items
+        .map(exp => getArchiveLoopId(exp, byId.get(exp.parent_experiment_id || "")?.qe_task_id))
+        .filter((value): value is string => Boolean(value))
+    ));
+    if (!experimentIds.length && !taskIds.length && !loopIds.length) {
+      setArchiveStatus(null);
+      return;
+    }
+    setArchiveStatusLoading(true);
+    try {
+      const nextStatus = await qeArchiveApi.sourceStatus({
+        experiment_ids: experimentIds,
+        task_ids: taskIds,
+        loop_ids: loopIds,
+        include_recommendation: true,
+      });
+      setArchiveStatus(nextStatus);
+    } catch (exc) {
+      showToast(`数仓状态读取失败: ${apiErrorMessage(exc)}`, false);
+    } finally {
+      setArchiveStatusLoading(false);
+    }
+  }
+
   async function loadExperiments(page?: number) {
     setLoading(true);
     setError(null);
@@ -200,6 +307,8 @@ export default function ExperimentsPage() {
       const items = data.items || [];
       setExperiments(items);
       setTotal(data.total || 0);
+      setSelectedArchiveKeys(new Set());
+      void loadArchiveStatusForExperiments(items);
       if (page !== undefined) setCurrentPage(page);
       const runningIds = items
         .filter((exp: Experiment) => exp.status === "running")
@@ -504,6 +613,121 @@ export default function ExperimentsPage() {
     }
   }
 
+  function experimentArchiveStatus(exp: Experiment): ArchiveSourceItemStatus | undefined {
+    return archiveStatus?.experiments?.[exp.experiment_id];
+  }
+
+  function taskArchiveStatus(exp: Experiment): ArchiveTaskStatus | undefined {
+    return exp.qe_task_id ? archiveStatus?.tasks?.[exp.qe_task_id] : undefined;
+  }
+
+  function loopArchiveStatus(exp: Experiment, fallbackTaskId?: string | null): ArchiveSourceItemStatus | undefined {
+    const loopId = getArchiveLoopId(exp, fallbackTaskId);
+    return loopId ? archiveStatus?.loops?.[loopId] : undefined;
+  }
+
+  function archiveKeyForExperiment(exp: Experiment): string {
+    return `exp:${exp.experiment_id}`;
+  }
+
+  function archiveKeyForLoop(exp: Experiment, fallbackTaskId?: string | null): string | null {
+    const loopId = getArchiveLoopId(exp, fallbackTaskId);
+    return loopId ? `loop:${loopId}` : null;
+  }
+
+  function canSelectExperimentForArchive(exp: Experiment): boolean {
+    const archived = experimentArchiveStatus(exp)?.archive_status === "archived";
+    return exp.status === "completed" && !exp.parent_experiment_id && !exp.qe_task_id && !archived;
+  }
+
+  function canSelectLoopForArchive(exp: Experiment, fallbackTaskId?: string | null): boolean {
+    const archived = loopArchiveStatus(exp, fallbackTaskId)?.archive_status === "archived";
+    return exp.status === "completed" && Boolean(getArchiveLoopId(exp, fallbackTaskId)) && !archived;
+  }
+
+  function toggleArchiveKey(key: string | null, checked?: boolean) {
+    if (!key) return;
+    setSelectedArchiveKeys(prev => {
+      const next = new Set(prev);
+      const shouldSelect = checked ?? !next.has(key);
+      if (shouldSelect) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  }
+
+  function buildArchiveSelectionPayload(keys = selectedArchiveKeys) {
+    const experiment_ids: string[] = [];
+    const loop_ids: string[] = [];
+    for (const key of keys) {
+      if (key.startsWith("exp:")) experiment_ids.push(key.slice(4));
+      if (key.startsWith("loop:")) loop_ids.push(key.slice(5));
+    }
+    return {
+      source: experiment_ids.length && !loop_ids.length ? "experiment" as const : loop_ids.length && !experiment_ids.length ? "loop" as const : "all" as const,
+      experiment_ids,
+      loop_ids,
+      status: "completed",
+      include_archived: false,
+      validate_after_write: true,
+    };
+  }
+
+  async function previewArchiveSelection() {
+    const payload = buildArchiveSelectionPayload();
+    if (!payload.experiment_ids.length && !payload.loop_ids.length) {
+      showToast("请先选择至少一个已完成且未入仓的实验或 Loop", false);
+      return;
+    }
+    setArchiveActionLoading("preview");
+    try {
+      const report = await qeArchiveApi.previewSelection(payload);
+      showToast(`入仓预览完成：${summarizeBackfillReport(report)}`, true);
+      void loadArchiveStatusForExperiments(experiments);
+    } catch (exc) {
+      showToast(`入仓预览失败: ${apiErrorMessage(exc)}`, false);
+    } finally {
+      setArchiveActionLoading(null);
+    }
+  }
+
+  async function executeArchiveSelection() {
+    const payload = buildArchiveSelectionPayload();
+    const totalSelected = payload.experiment_ids.length + payload.loop_ids.length;
+    if (!totalSelected) {
+      showToast("请先选择至少一个已完成且未入仓的实验或 Loop", false);
+      return;
+    }
+    const ok = window.confirm(`确认将 ${totalSelected} 个 QE 实验/Loop 写入 QE Archive 数仓？此操作会写数据库，但不会删除原始 QE 实验。`);
+    if (!ok) return;
+    setArchiveActionLoading("execute");
+    try {
+      const report = await qeArchiveApi.executeSelection({
+        ...payload,
+        confirm_write: QE_ARCHIVE_WRITE_CONFIRM,
+      });
+      showToast(`入仓完成：${summarizeBackfillReport(report)}`, true);
+      setSelectedArchiveKeys(new Set());
+      void loadArchiveStatusForExperiments(experiments);
+    } catch (exc) {
+      showToast(`入仓失败: ${apiErrorMessage(exc)}`, false);
+    } finally {
+      setArchiveActionLoading(null);
+    }
+  }
+
+  function selectPendingArchiveRows(rows: Array<Experiment & { childLoops?: Experiment[] }>) {
+    const next = new Set<string>();
+    for (const exp of rows) {
+      if (canSelectExperimentForArchive(exp)) next.add(archiveKeyForExperiment(exp));
+      for (const child of exp.childLoops || []) {
+        const key = archiveKeyForLoop(child, exp.qe_task_id);
+        if (key && canSelectLoopForArchive(child, exp.qe_task_id)) next.add(key);
+      }
+    }
+    setSelectedArchiveKeys(next);
+  }
+
   // Group experiments: main experiments + their child loops
   const groupedExperiments = useMemo(() => {
     const mainExps = experiments.filter(e => !e.parent_experiment_id);
@@ -528,6 +752,12 @@ export default function ExperimentsPage() {
       };
     });
   }, [experiments]);
+  const selectedArchiveCount = selectedArchiveKeys.size;
+  const visiblePendingArchiveCount = groupedExperiments.reduce((count, exp) => {
+    const self = canSelectExperimentForArchive(exp) ? 1 : 0;
+    const childCount = exp.childLoops.filter(child => canSelectLoopForArchive(child, exp.qe_task_id)).length;
+    return count + self + childCount;
+  }, 0);
 
   return (
     <main style={{ padding: 24 }}>
@@ -594,6 +824,51 @@ export default function ExperimentsPage() {
               (每{refreshInterval}秒自动刷新)
             </span>
           )}
+          <span style={{ width: 1, height: 16, background: "#e5e7eb" }} />
+          <span style={{ fontSize: 12, color: "#475569" }}>
+            数仓待入仓 {visiblePendingArchiveCount} | 已选 {selectedArchiveCount}
+          </span>
+          {archiveStatusLoading && <span style={{ fontSize: 11, color: "#2563eb", fontWeight: 600 }}>数仓状态刷新中...</span>}
+          <button
+            type="button"
+            onClick={() => selectPendingArchiveRows(groupedExperiments)}
+            disabled={!visiblePendingArchiveCount || Boolean(archiveActionLoading)}
+            style={{ padding: "4px 9px", fontSize: 11, cursor: visiblePendingArchiveCount ? "pointer" : "not-allowed", borderRadius: 6, border: "1px solid #cbd5e1", background: "#f8fafc", color: "#334155", fontWeight: 700 }}
+          >
+            选择本页待入仓
+          </button>
+          <button
+            type="button"
+            onClick={() => setSelectedArchiveKeys(new Set())}
+            disabled={!selectedArchiveCount || Boolean(archiveActionLoading)}
+            style={{ padding: "4px 9px", fontSize: 11, cursor: selectedArchiveCount ? "pointer" : "not-allowed", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", color: "#334155" }}
+          >
+            清空选择
+          </button>
+          <button
+            type="button"
+            onClick={() => void previewArchiveSelection()}
+            disabled={!selectedArchiveCount || Boolean(archiveActionLoading)}
+            style={{ padding: "4px 9px", fontSize: 11, cursor: selectedArchiveCount ? "pointer" : "not-allowed", borderRadius: 6, border: "1px solid #2563eb", background: "#eff6ff", color: "#1d4ed8", fontWeight: 700 }}
+          >
+            {archiveActionLoading === "preview" ? "预览中..." : `预览入仓(${selectedArchiveCount})`}
+          </button>
+          <button
+            type="button"
+            onClick={() => void executeArchiveSelection()}
+            disabled={!selectedArchiveCount || Boolean(archiveActionLoading)}
+            style={{ padding: "4px 9px", fontSize: 11, cursor: selectedArchiveCount ? "pointer" : "not-allowed", borderRadius: 6, border: "1px solid #059669", background: "#ecfdf5", color: "#047857", fontWeight: 700 }}
+          >
+            {archiveActionLoading === "execute" ? "写入中..." : `确认入仓(${selectedArchiveCount})`}
+          </button>
+          <button
+            type="button"
+            onClick={() => void loadArchiveStatusForExperiments(experiments)}
+            disabled={archiveStatusLoading}
+            style={{ padding: "4px 9px", fontSize: 11, cursor: archiveStatusLoading ? "not-allowed" : "pointer", borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", color: "#334155" }}
+          >
+            刷新数仓状态
+          </button>
         </div>
         {error && <div style={{ marginTop: 8, padding: 8, background: "#fee2e2", borderRadius: 6, fontSize: 12, color: "#991b1b" }}>{error}</div>}
       </section>
@@ -608,6 +883,11 @@ export default function ExperimentsPage() {
           const isActioning = actionId === exp.experiment_id;
           const isShowingLogs = logsExpId === exp.experiment_id;
           const canRun = exp.status !== "completed" && exp.status !== "running";
+          const parentTaskArchiveStatus = exp.childLoops.length > 0 ? taskArchiveStatus(exp) : undefined;
+          const selfArchiveStatus = experimentArchiveStatus(exp);
+          const selfArchiveSelectable = canSelectExperimentForArchive(exp);
+          const selfArchiveKey = archiveKeyForExperiment(exp);
+          const selfArchiveSelected = selectedArchiveKeys.has(selfArchiveKey) && selfArchiveSelectable;
 
           let ic: number | undefined;
           if (metrics["IC"] != null) ic = typeof metrics["IC"] === "number" ? metrics["IC"] : parseFloat(metrics["IC"]);
@@ -635,7 +915,18 @@ export default function ExperimentsPage() {
               >
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                   <div>
-                    <div style={{ fontWeight: 700, fontSize: 14 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700, fontSize: 14 }}>
+                      {!exp.childLoops.length && (
+                        <input
+                          aria-label={`选择实验 ${exp.experiment_id} 入仓`}
+                          type="checkbox"
+                          checked={selfArchiveSelected}
+                          disabled={!selfArchiveSelectable || Boolean(archiveActionLoading)}
+                          onClick={e => e.stopPropagation()}
+                          onChange={e => toggleArchiveKey(selfArchiveKey, e.target.checked)}
+                          style={{ width: 14, height: 14, accentColor: "#059669", cursor: selfArchiveSelectable ? "pointer" : "not-allowed" }}
+                        />
+                      )}
                       {exp.experiment_id}
                     </div>
                     <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>
@@ -652,6 +943,7 @@ export default function ExperimentsPage() {
                     <span style={{ fontSize: 11, background: `${sm.color}15`, color: sm.color, padding: "2px 8px", borderRadius: 12, fontWeight: 600 }}>
                       {sm.label}
                     </span>
+                    {parentTaskArchiveStatus ? <ArchiveBadge status={parentTaskArchiveStatus} /> : <ArchiveBadge status={selfArchiveStatus} />}
                     {exp.alpha_mode === "multi" && (
                       <span style={{ fontSize: 10, background: "#8b5cf615", color: "#8b5cf6", padding: "2px 6px", borderRadius: 12, fontWeight: 600 }}>
                         多Alpha
@@ -918,6 +1210,11 @@ export default function ExperimentsPage() {
                             SOTA: Loop {exp.sotaLoop.loop_index}
                           </span>
                         )}
+                        {parentTaskArchiveStatus && (
+                          <span style={{ fontSize: 10, background: "#ecfdf5", color: "#047857", padding: "1px 6px", borderRadius: 10, fontWeight: 600 }}>
+                            数仓 {parentTaskArchiveStatus.archived_loop_count || 0}/{parentTaskArchiveStatus.eligible_loop_count || exp.childLoops.length}，待 {parentTaskArchiveStatus.pending_loop_count || 0}
+                          </span>
+                        )}
                       </div>
                       {exp.sotaLoop && (
                         <div style={{ display: "flex", gap: 8 }}>
@@ -935,6 +1232,10 @@ export default function ExperimentsPage() {
                           const childSm = STATUS_MAP[child.status] || { label: child.status, color: "#6b7280", border: "4px solid #e5e7eb" };
                           const childMetrics = getMetrics(child);
                           const childExpanded = expandedId === child.experiment_id;
+                          const childArchiveStatus = loopArchiveStatus(child, exp.qe_task_id);
+                          const childArchiveSelectable = canSelectLoopForArchive(child, exp.qe_task_id);
+                          const childArchiveKey = archiveKeyForLoop(child, exp.qe_task_id);
+                          const childArchiveSelected = Boolean(childArchiveKey && selectedArchiveKeys.has(childArchiveKey) && childArchiveSelectable);
                           let childIc: number | undefined;
                           if (childMetrics["IC"] != null) childIc = typeof childMetrics["IC"] === "number" ? childMetrics["IC"] : parseFloat(childMetrics["IC"]);
                           let childAnnRet: number | undefined;
@@ -953,6 +1254,15 @@ export default function ExperimentsPage() {
                             >
                               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                  <input
+                                    aria-label={`选择 Loop ${child.loop_index || "?"} 入仓`}
+                                    type="checkbox"
+                                    checked={childArchiveSelected}
+                                    disabled={!childArchiveSelectable || Boolean(archiveActionLoading)}
+                                    onClick={e => e.stopPropagation()}
+                                    onChange={e => toggleArchiveKey(childArchiveKey, e.target.checked)}
+                                    style={{ width: 13, height: 13, accentColor: "#059669", cursor: childArchiveSelectable ? "pointer" : "not-allowed" }}
+                                  />
                                   <span style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>
                                     Loop {child.loop_index || "?"}
                                   </span>
@@ -968,6 +1278,7 @@ export default function ExperimentsPage() {
                                   <span style={{ fontSize: 10, background: `${childSm.color}15`, color: childSm.color, padding: "1px 6px", borderRadius: 10, fontWeight: 600 }}>
                                     {childSm.label}
                                   </span>
+                                  <ArchiveBadge status={childArchiveStatus} />
                                 </div>
                               </div>
 

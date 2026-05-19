@@ -84,8 +84,8 @@ test("dashboard renders empty state when warehouse has no records", async ({ pag
   await page.goto("/qe-archive");
   await expect(page.getByText("QE Archive Warehouse")).toBeVisible();
   await expect(page.getByText("暂无可补录的 QE 实验")).toBeVisible();
-  await expect(page.getByText("暂无 outbox 事件")).toBeVisible();
-  await expect(page.getByText("暂无 worker job")).toBeVisible();
+  await expect(page.getByText("暂无 outbox 事件").first()).toBeVisible();
+  await expect(page.getByText("暂无 worker job").first()).toBeVisible();
 });
 
 test("status filter selector forwards selection to backfill candidates API", async ({ page }) => {
@@ -114,7 +114,7 @@ test("include_archived toggle propagates to backfill candidates request", async 
   });
   await page.goto("/qe-archive");
   await expect(page.getByText("QE Archive Warehouse")).toBeVisible();
-  await page.locator("select.pv2-select").nth(2).selectOption("yes");
+  await page.locator("label").filter({ hasText: "已入库项" }).locator("select").selectOption("yes");
   await expect.poll(() => includeFlags).toContain("true");
 });
 

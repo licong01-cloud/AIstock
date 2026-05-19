@@ -24,6 +24,7 @@ from scripts.aistock_mcp_common import LoopbackApiClient, require_confirm, sanit
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8011/api/v1/qe-archive"
 QE_ARCHIVE_BACKFILL_CONFIRM = "QE_ARCHIVE_BACKFILL"
+QE_ARCHIVE_WRITE_CONFIRM = "QE_ARCHIVE_WRITE"
 QE_ARCHIVE_WORKER_CONFIRM = "QE_ARCHIVE_WORKER_RUN"
 
 mcp = FastMCP("aistock-qe-archive")
@@ -77,6 +78,124 @@ def qe_archive_backfill_preview(source_mode: str = "completed_custom_evo_loops",
 def qe_archive_backfill_execute_confirmed(source_mode: str = "completed_custom_evo_loops", limit: int = 20, include_archived: bool = False, confirm_backfill: str | None = None) -> dict[str, Any]:
     require_confirm(confirm_backfill, QE_ARCHIVE_BACKFILL_CONFIRM, "confirm_backfill")
     return _client().post("/backfill/execute", {"source_mode": source_mode, "limit": limit, "include_archived": include_archived, "confirm_backfill": QE_ARCHIVE_BACKFILL_CONFIRM})
+
+
+def _sanitize_ids(values: list[str] | None, field_name: str) -> list[str]:
+    return [sanitize_identifier(value, field_name) for value in (values or []) if str(value or "").strip()]
+
+
+def _positive_indices(values: list[int] | None) -> list[int]:
+    result: list[int] = []
+    seen: set[int] = set()
+    for value in values or []:
+        parsed = int(value)
+        if parsed < 1 or parsed in seen:
+            continue
+        seen.add(parsed)
+        result.append(parsed)
+    return result
+
+
+def _selection_payload(
+    *,
+    experiment_ids: list[str] | None,
+    task_ids: list[str] | None,
+    loop_ids: list[str] | None,
+    task_id: str | None,
+    loop_indices: list[int] | None,
+    status: str,
+    include_archived: bool,
+    write: bool,
+    confirm_write: str = "",
+) -> dict[str, Any]:
+    safe_task_id = sanitize_identifier(task_id, "task_id") if task_id else None
+    return {
+        "source": "all",
+        "experiment_ids": _sanitize_ids(experiment_ids, "experiment_id"),
+        "task_ids": _sanitize_ids(task_ids, "task_id"),
+        "loop_ids": _sanitize_ids(loop_ids, "loop_id"),
+        "task_id": safe_task_id,
+        "loop_indices": _positive_indices(loop_indices),
+        "status": status,
+        "include_archived": include_archived,
+        "write": write,
+        "confirm_write": confirm_write,
+    }
+
+
+@mcp.tool()
+def qe_archive_backfill_selection_preview(
+    experiment_ids: list[str] | None = None,
+    task_ids: list[str] | None = None,
+    loop_ids: list[str] | None = None,
+    task_id: str | None = None,
+    loop_indices: list[int] | None = None,
+    status: str = "completed",
+    include_archived: bool = False,
+) -> dict[str, Any]:
+    """Preview an explicit experiment/task/loop selection without writing."""
+
+    return _client().post(
+        "/backfill",
+        _selection_payload(
+            experiment_ids=experiment_ids,
+            task_ids=task_ids,
+            loop_ids=loop_ids,
+            task_id=task_id,
+            loop_indices=loop_indices,
+            status=status,
+            include_archived=include_archived,
+            write=False,
+        ),
+    )
+
+
+@mcp.tool()
+def qe_archive_backfill_selection_execute_confirmed(
+    experiment_ids: list[str] | None = None,
+    task_ids: list[str] | None = None,
+    loop_ids: list[str] | None = None,
+    task_id: str | None = None,
+    loop_indices: list[int] | None = None,
+    status: str = "completed",
+    include_archived: bool = False,
+    confirm_write: str | None = None,
+) -> dict[str, Any]:
+    """Write an explicit experiment/task/loop selection after confirmation."""
+
+    require_confirm(confirm_write, QE_ARCHIVE_WRITE_CONFIRM, "confirm_write")
+    return _client().post(
+        "/backfill",
+        _selection_payload(
+            experiment_ids=experiment_ids,
+            task_ids=task_ids,
+            loop_ids=loop_ids,
+            task_id=task_id,
+            loop_indices=loop_indices,
+            status=status,
+            include_archived=include_archived,
+            write=True,
+            confirm_write=QE_ARCHIVE_WRITE_CONFIRM,
+        ),
+    )
+
+
+@mcp.tool()
+def qe_archive_get_source_status(
+    experiment_ids: list[str] | None = None,
+    task_ids: list[str] | None = None,
+    loop_ids: list[str] | None = None,
+    include_recommendation: bool = True,
+) -> dict[str, Any]:
+    return _client().post(
+        "/source-status",
+        {
+            "experiment_ids": _sanitize_ids(experiment_ids, "experiment_id"),
+            "task_ids": _sanitize_ids(task_ids, "task_id"),
+            "loop_ids": _sanitize_ids(loop_ids, "loop_id"),
+            "include_recommendation": include_recommendation,
+        },
+    )
 
 
 @mcp.tool()
