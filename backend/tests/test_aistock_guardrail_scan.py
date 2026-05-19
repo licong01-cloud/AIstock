@@ -8,7 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = ROOT / "scripts" / "aistock_guardrail_scan.py"
-CATALOG_PATH = ROOT / "docs" / "standards" / "aistock_development_standard_v1.1_20260504.yaml"
+CATALOG_PATH = ROOT / "docs" / "standards" / "aistock_development_standard_v1.2_20260519.yaml"
 
 
 def _load_module():
@@ -40,13 +40,17 @@ def test_catalog_references_current_human_readable_standard() -> None:
     standard_path = ROOT / catalog["source_standard"]
     standard_text = standard_path.read_text(encoding="utf-8")
 
-    assert catalog["source_version"] == "1.1"
-    assert standard_path.name == "aistock_development_standard_v1.1_20260504.md"
+    assert catalog["source_version"] == "1.2"
+    assert standard_path.name == "aistock_development_standard_v1.2_20260519.md"
     for rule in catalog["rules"]:
         if not rule.get("enabled", True):
             continue
         assert rule.get("standard_ref", "").startswith(catalog["source_standard"])
         assert rule["rule_id"] in standard_text
+    for control in catalog.get("manual_review_controls", []):
+        assert control.get("standard_ref", "").startswith(catalog["source_standard"])
+        control_ref = control["standard_ref"].split("#", 1)[1]
+        assert control_ref in standard_text
 
 
 def test_scanner_detects_silent_fallback_in_runtime_code(tmp_path: Path) -> None:

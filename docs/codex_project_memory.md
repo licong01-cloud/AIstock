@@ -766,8 +766,8 @@ Mandatory future rules:
 
 ## Development Standards / Guardrails Framework - 2026-05-04
 
-- Canonical project development standard: `docs/standards/aistock_development_standard_v1.1_20260504.md`. This is the human-readable authority for Python engineering, quant/trading engineering, QE/warehouse completeness, UI, testing, agent workflow, and documentation placement.
-- Same-version machine-readable standard: `docs/standards/aistock_development_standard_v1.1_20260504.yaml`. Every enabled rule must reference the human standard with `standard_ref`; old machine rules are archived under `docs/standards/archive`.
+- Current canonical project development standard as of 2026-05-19: `docs/standards/aistock_development_standard_v1.2_20260519.md`. This is the human-readable authority for Python engineering, quant/trading engineering, QE/warehouse completeness, UI, testing, agent workflow, documentation placement, and detailed-design delivery governance.
+- Same-version machine-readable standard: `docs/standards/aistock_development_standard_v1.2_20260519.yaml`. Every enabled rule and manual review control must reference the human standard with `standard_ref`; old machine rules are archived under `docs/standards/archive`.
 - Guardrail framework design document: `docs/architecture/aistock_development_standards_and_guardrails_20260504.md`. It is implementation design only, not a competing standards source; if it conflicts with `docs/standards`, `docs/standards` wins.
 - Required implementation path: update the human standard first, update the same-version YAML in the same change, run a read-only full-repo baseline scan, save the human summary to `docs/analysis/aistock_guardrail_baseline_YYYYMMDD.md`, then make `nox -s l0` block new/changed P0/P1 violations after rule calibration.
 - Historical AIstock code is expected to contain many legacy violations from exploratory multi-tool development. Do not try to fix all historical findings in one large change; treat them as baseline/backlog, prioritize P0 workspace/production/fail-fast risks first, and burn down by module with regression tests.
@@ -776,17 +776,25 @@ Mandatory future rules:
 
 ## Development Standards Phase 1 Execution - 2026-05-04
 
-- Canonical project development standard is `docs/standards/aistock_development_standard_v1.1_20260504.md`. It intentionally combines Python engineering rules and quant/trading engineering rules into one implementation-facing document, so future developers and agents do not need to reconcile two separate standards. Future standard revisions must create new versioned files and move the previous version to `docs/standards/archive`.
-- Added machine-readable guardrail catalog `docs/standards/aistock_development_standard_v1.1_20260504.yaml` and scanner `scripts/aistock_guardrail_scan.py`. The scanner supports regex, path_regex, loop-window DataFrame checks, tracked baseline scan, changed-files scan, JSON output, Markdown summary, and severity fail thresholds.
+- Canonical project development standard is now `docs/standards/aistock_development_standard_v1.2_20260519.md`. It intentionally combines Python engineering rules, quant/trading engineering rules, documentation delivery governance, and detailed-design Main-submission rules into one implementation-facing document. Future standard revisions must create new versioned files and move the previous version to `docs/standards/archive`.
+- The current machine-readable guardrail catalog is `docs/standards/aistock_development_standard_v1.2_20260519.yaml`; `scripts/aistock_guardrail_scan.py` defaults to it. The scanner supports regex, path_regex, loop-window DataFrame checks, tracked baseline scan, changed-files scan, JSON output, Markdown summary, and severity fail thresholds.
 - Added scanner tests in `backend/tests/test_aistock_guardrail_scan.py`. Verified catalog loading, regex compilation, silent-fallback detection, test-path exclusions, JSON/Markdown output, and compileall.
 - First read-only tracked-files baseline report is `docs/analysis/aistock_guardrail_baseline_20260504.md`; full local JSON is `tmp/validation/guardrails/baseline_20260504.json` and should not be committed. After v1.1 standards update, the current baseline scans 1,039 tracked files and finds 1,632 review findings: P0=341, P1=109, P2=1,182, P3=0. Treat this as historical baseline, not immediate full-repo blocking.
 - Do not wire changed-files blocking into `nox -s l0` until the baseline and first false positives are reviewed. Next recommended step is rule calibration, then changed-files P0/P1 gate with baseline suppression.
 
 ## Development Standards Phase 1.1 Update - 2026-05-04
 
-- Active project development standard moved to `docs/standards/aistock_development_standard_v1.1_20260504.md` with machine-readable YAML `docs/standards/aistock_development_standard_v1.1_20260504.yaml`; v1.0 files are archived under `docs/standards/archive`.
+- Historical note: v1.1 previously lived at `docs/standards/aistock_development_standard_v1.1_20260504.md` with machine-readable YAML `docs/standards/aistock_development_standard_v1.1_20260504.yaml`; as of 2026-05-19 both are archived under `docs/standards/archive` and v1.2 is active.
 - v1.1 adds project directory/root-pollution rules, `debug_tools/` as the required location for one-off test/diagnostic scripts, document location rules, Python fail-fast expectations for scripts, DataFrame/big-file memory bounds, resource cleanup, and algorithm complexity review.
-- `scripts/aistock_guardrail_scan.py` defaults to the v1.1 YAML and supports `path_regex` rules for path/location checks such as root pollution and one-off script placement, plus a bounded loop-window checker for DataFrame concat patterns without catastrophic regex backtracking.
+- `scripts/aistock_guardrail_scan.py` now defaults to the v1.2 YAML and supports `path_regex` rules for path/location checks such as root pollution and one-off script placement, plus a bounded loop-window checker for DataFrame concat patterns without catastrophic regex backtracking.
+
+## Data Sync Autonomy Design and Development Standard v1.2 - 2026-05-19
+
+- Detailed design document: `docs/architecture/data_sync_autonomous_control_plane_design_20260519.md`. It records the local data-management root cause for `cyq_perf`, the autonomous daily data-sync control plane, release/deadline policy, persistent retry queue, reconciliation, alert gate, dashboard cache semantics, strict L0-L5 test plan, result-data validation SQL, and Main acceptance criteria.
+- `cyq_perf` root cause: the scheduler still routes `cyq_perf` / `cyq_chips` through `scripts/ingest_tushare_cyq.py`; that legacy path writes the physical table and job/log/progress rows but does not write `market.dataset_date_refresh_audit`, while the dashboard reads cached `market.data_stats`. Job `success` therefore does not equal audit-backed readiness.
+- `market.dataset_date_refresh_audit` is the readiness authority for daily data; `market.data_stats` is a dashboard/gap-query cache that may be stale and must be rebuilt or marked stale from audit/physical reconciliation. Do not treat `data_stats.max_date` or `ingestion_jobs.success` as the final business-ready signal.
+- Development standard upgraded to `docs/standards/aistock_development_standard_v1.2_20260519.md` with machine catalog `docs/standards/aistock_development_standard_v1.2_20260519.yaml`; v1.1 is archived under `docs/standards/archive`. The guardrail scanner default catalog and tests now point to v1.2.
+- New governance rule: completed detailed design deliverables must include strict test cases, test plan, result-data validation method, and Main acceptance criteria, then be validated, committed, and pushed to `origin/main` unless the user explicitly exempts them. This rule covers documentation/design delivery only; runtime code, DB migrations, schedulers, production data repair, and strategy assets still require an independent development branch, automated pipeline validation, and user confirmation before Main merge.
 
 ## Tushare ST Events Local Dataset - 2026-05-04
 

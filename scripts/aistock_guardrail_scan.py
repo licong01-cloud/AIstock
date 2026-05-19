@@ -13,7 +13,7 @@ from typing import Any, Iterable
 import yaml
 
 
-DEFAULT_CATALOG = Path("docs/standards/aistock_development_standard_v1.1_20260504.yaml")
+DEFAULT_CATALOG = Path("docs/standards/aistock_development_standard_v1.2_20260519.yaml")
 SEVERITY_RANK = {"P3": 1, "P2": 2, "P1": 3, "P0": 4, "NONE": 99}
 
 

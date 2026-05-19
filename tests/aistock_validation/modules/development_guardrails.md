@@ -4,7 +4,7 @@ This matrix covers the development-standard guardrail gate that protects new AIs
 
 ## Scope
 
-- Standards authority remains `docs/standards/aistock_development_standard_v1.1_20260504.md` and its same-version YAML catalog.
+- Standards authority remains `docs/standards/aistock_development_standard_v1.2_20260519.md` and its same-version YAML catalog.
 - The scanner entry point is `scripts/aistock_guardrail_scan.py`.
 - The first machine baseline is local `tmp/validation/guardrails/baseline_20260504.json`; the human summary is `docs/analysis/aistock_guardrail_baseline_20260504.md`.
 - Historical findings are not silently ignored: they are classified as `baseline` and stay visible in JSON/Markdown output.
