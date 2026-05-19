@@ -31,11 +31,11 @@
   "fingerprint": "0a1230eed3010127",
   "assigned_agent": "codex-app",
   "fix_branch": "bug/BUG-050-miniqmt-rebalance-sell-dropped",
-  "fix_commit": "f3367e1",
+  "fix_commit": "f322723a9431b5e534fe42cdaa6edbe6122ef77b",
   "verification_run_id": "tests/aistock_validation/history/qmt_strategy_ledger/20260519_l3_bug-050-miniqmt-rebalance-sell-dropped.md",
   "created_at": "2026-05-19T03:10:54Z",
   "first_seen_at": "2026-05-19T03:10:54Z",
-  "last_seen_at": "2026-05-19T16:13:56Z",
+  "last_seen_at": "2026-05-19T16:29:10Z",
   "fixed_at": "2026-05-19T16:13:56Z",
   "submitted_at": "2026-05-19T03:10:54Z",
   "closed_at": null,
@@ -110,9 +110,18 @@
       "actor": "codex-app",
       "action": "local_commit",
       "note": "Committed BUG-050 local fix as f3367e1 on branch bug/BUG-050-miniqmt-rebalance-sell-dropped after local validation passed."
+    },
+    {
+      "timestamp": "2026-05-19T16:29:10Z",
+      "actor": "codex-app",
+      "action": "merged_fixed",
+      "note": "PR #86 merged into main with merge commit f322723a9431b5e534fe42cdaa6edbe6122ef77b after GitHub CI checks passed. GitHub issue #53 is closed by the PR; local registry remains fixed until runtime MiniQMT SIM POC verifies broker submit/fill or rejection path."
     }
   ],
   "github_issue_number": 53,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/53",
-  "worktree_path": "F:/Dev/AIstock_worktrees/bug-050-miniqmt-rebalance-sell-dropped"
+  "worktree_path": "F:/Dev/AIstock_worktrees/bug-050-miniqmt-rebalance-sell-dropped",
+  "github_pr_number": 86,
+  "github_pr_url": "https://github.com/licong01-cloud/AIstock/pull/86",
+  "merge_commit": "f322723a9431b5e534fe42cdaa6edbe6122ef77b"
 }
