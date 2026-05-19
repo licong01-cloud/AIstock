@@ -95,19 +95,11 @@ class PlatformUniverseCapability(BaseModel):
     generated_at: str | None = None
 
 
-class PlatformSignalCapability(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    event_signal_enabled: bool = False
-    namespaces: list[str] = Field(default_factory=list)
-
-
 class PlatformCapabilities(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     hmm: PlatformHMMCapability = Field(default_factory=PlatformHMMCapability)
     universe: PlatformUniverseCapability = Field(default_factory=PlatformUniverseCapability)
-    event_signals: PlatformSignalCapability = Field(default_factory=PlatformSignalCapability)
 
 
 class RuntimeAdapterConfig(BaseModel):
