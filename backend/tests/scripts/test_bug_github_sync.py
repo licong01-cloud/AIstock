@@ -440,6 +440,45 @@ def test_local_env_loader_sets_github_defaults(tmp_path: Path, monkeypatch: pyte
     assert sync.os.environ["HTTPS_PROXY"] == "socks5://127.0.0.1:1080"
 
 
+def test_run_infers_repo_from_git_remote_for_live_sync(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_bug(tmp_path, bug_id="BUG-922", severity="P1")
+    captured: dict[str, object] = {}
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+
+    def fake_run(args: list[str], **_kwargs: object) -> SimpleNamespace:
+        if args[:3] == ["git", "-C", str(tmp_path)] and args[3:] == ["rev-parse", "--show-toplevel"]:
+            return SimpleNamespace(returncode=0, stdout=f"{tmp_path}\n")
+        if args[:3] == ["git", "-C", str(tmp_path)] and args[3:] == ["remote", "get-url", "origin"]:
+            return SimpleNamespace(returncode=0, stdout="https://github.com/owner/repo.git\n")
+        return SimpleNamespace(returncode=1, stdout="", stderr="not a test repo")
+
+    class FakeGitHubClient:
+        def __init__(self, *, repo: str, token: str) -> None:
+            captured["repo"] = repo
+            captured["token"] = token
+
+        def list_issues(self) -> list[dict[str, object]]:
+            return []
+
+        def create_issue(self, desired: dict[str, object]) -> dict[str, object]:
+            captured["created_title"] = desired["title"]
+            return {"number": 922, "html_url": "https://github.example/issues/922"}
+
+        def update_issue(self, number: int, changes: dict[str, object]) -> dict[str, object]:
+            raise AssertionError("unexpected update")
+
+    monkeypatch.setattr(sync.subprocess, "run", fake_run)
+    monkeypatch.setattr(sync, "GitHubClient", FakeGitHubClient)
+
+    payload = sync.run(sync.SyncConfig(bugs_dir=tmp_path, apply=True, token="pytest-token"))
+
+    assert payload["repo"] == "owner/repo"
+    assert captured["repo"] == "owner/repo"
+    assert captured["token"] == "pytest-token"
+    assert captured["created_title"] == "[BUG-922] Synthetic validation failure"
+
+
 def test_github_token_default_uses_gh_cli_only_when_remote_needed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GH_TOKEN", raising=False)

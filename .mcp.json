@@ -7,7 +7,8 @@
         "scripts/aistock_mcp_server.py"
       ],
       "env": {
-        "AISTOCK_VALIDATION_BASE_URL": "http://127.0.0.1:8001/api/v1/validation"
+        "AISTOCK_VALIDATION_BASE_URL": "http://127.0.0.1:8001/api/v1/validation",
+        "GITHUB_REPOSITORY": "licong01-cloud/AIstock"
       }
     },
     "aistock-qe-experiment": {

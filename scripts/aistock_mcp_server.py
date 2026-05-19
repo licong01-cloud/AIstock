@@ -21,8 +21,8 @@ Environment:
     AISTOCK_VALIDATION_BASE_URL  default http://127.0.0.1:8001/api/v1/validation
     AISTOCK_REPO_ROOT            default the parent of this script's directory
     AISTOCK_HTTP_TIMEOUT         default 30 seconds
-    GH_TOKEN                     required only for live GitHub issue calls
-    GITHUB_REPOSITORY            required only for live GitHub issue calls (owner/name)
+    GH_TOKEN                     optional for live GitHub issue calls; falls back to gh auth token
+    GITHUB_REPOSITORY            optional for live GitHub issue calls; falls back to env file or git origin
 """
 
 from __future__ import annotations
@@ -97,19 +97,64 @@ def _assert_loopback_url(url: str) -> str:
     return url
 
 
+def _dedupe_paths(paths: list[Path]) -> list[Path]:
+    seen: set[str] = set()
+    result: list[Path] = []
+    for path in paths:
+        try:
+            resolved = path.resolve()
+        except OSError:
+            resolved = path
+        key = str(resolved).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(resolved)
+    return result
+
+
+def _git_toplevel(path: Path) -> Path | None:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    value = completed.stdout.strip()
+    return Path(value).resolve() if value else None
+
+
+def _candidate_repo_roots() -> list[Path]:
+    roots: list[Path] = []
+    explicit = os.environ.get("AISTOCK_REPO_ROOT")
+    if explicit:
+        roots.append(Path(explicit))
+    roots.extend([Path.cwd(), Path(__file__).resolve().parents[1]])
+    for root in list(roots):
+        top = _git_toplevel(root)
+        if top is not None:
+            roots.append(top)
+    return _dedupe_paths(roots)
+
+
 def _load_local_github_env() -> None:
     """Load local GitHub issue defaults without overriding explicit process env."""
     if os.environ.get("AISTOCK_GITHUB_SKIP_ENV_FILE"):
         return
 
-    roots: list[Path] = []
-    for root in (Path.cwd(), Path(__file__).resolve().parents[1]):
-        resolved = root.resolve()
-        if resolved not in roots:
-            roots.append(resolved)
+    env_paths: list[Path] = []
+    explicit_file = os.environ.get("AISTOCK_GITHUB_ENV_FILE")
+    if explicit_file:
+        env_paths.append(Path(explicit_file))
+    env_paths.extend(root / LOCAL_ENV_FILE for root in _candidate_repo_roots())
 
-    for root in roots:
-        path = root / LOCAL_ENV_FILE
+    for path in _dedupe_paths(env_paths):
         if not path.is_file():
             continue
         for line in path.read_text(encoding="utf-8-sig").splitlines():
@@ -121,6 +166,55 @@ def _load_local_github_env() -> None:
             value = value.strip().strip('"').strip("'")
             if key and key not in os.environ:
                 os.environ[key] = value
+
+
+def _github_repo_from_remote_url(url: str) -> str | None:
+    raw = url.strip()
+    if not raw:
+        return None
+    patterns = (
+        r"^git@github\.com:([^/]+)/(.+?)(?:\.git)?$",
+        r"^ssh://git@github\.com/([^/]+)/(.+?)(?:\.git)?$",
+        r"^https://github\.com/([^/]+)/(.+?)(?:\.git)?/?$",
+        r"^http://github\.com/([^/]+)/(.+?)(?:\.git)?/?$",
+    )
+    for pattern in patterns:
+        match = re.match(pattern, raw, flags=re.I)
+        if match:
+            owner, name = match.group(1), match.group(2)
+            name = name[:-4] if name.endswith(".git") else name
+            if owner and name and "/" not in name:
+                return f"{owner}/{name}"
+    return None
+
+
+def _github_repo_from_git_remote(root: Path) -> str | None:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(root), "remote", "get-url", "origin"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    return _github_repo_from_remote_url(completed.stdout.strip())
+
+
+def _github_repo_default() -> str | None:
+    _load_local_github_env()
+    repo = os.environ.get("GITHUB_REPOSITORY")
+    if repo:
+        return repo
+    for root in _candidate_repo_roots():
+        repo = _github_repo_from_git_remote(root)
+        if repo:
+            os.environ.setdefault("GITHUB_REPOSITORY", repo)
+            return repo
+    return None
 
 
 def _github_token_from_gh_cli() -> str | None:
@@ -799,9 +893,16 @@ _github_client_factory: Callable[..., GitHubIssueClient] = GitHubIssueClient
 
 
 def _github_issue_client_from_env() -> GitHubIssueClient:
-    repo = os.environ.get("GITHUB_REPOSITORY")
+    repo = _github_repo_default()
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or _github_token_from_gh_cli()
-    missing = [name for name, value in (("GH_TOKEN", token), ("GITHUB_REPOSITORY", repo)) if not value]
+    missing = [
+        name
+        for name, value in (
+            ("GH_TOKEN/GITHUB_TOKEN/gh auth token", token),
+            ("GITHUB_REPOSITORY/env file/git origin remote", repo),
+        )
+        if not value
+    ]
     if missing:
         raise ValueError(
             "live GitHub issue calls require env "
@@ -1294,7 +1395,8 @@ def mcp_github_issue_list(
     """List AIstock GitHub-issue mirrors, defaulting to the local bugs JSON registry.
 
     ``source`` can be ``local`` (default), ``github``, or ``both``. Live GitHub
-    reads are opt-in and require ``GH_TOKEN`` + ``GITHUB_REPOSITORY``.
+    reads are opt-in and use explicit env, local env-file defaults, git origin
+    inference, and the gh CLI token fallback.
     """
     source_norm = _normalize_source(source)
     state_norm = _normalize_github_state(state)
@@ -1388,7 +1490,8 @@ def mcp_github_issue_create(
     """Create a source-of-truth bugs JSON record and optionally mirror to GitHub.
 
     Live GitHub creation is disabled by default. Set ``create_github=True`` only
-    when ``GH_TOKEN`` and ``GITHUB_REPOSITORY`` are present.
+    when GitHub CLI authentication is available and the repository can be
+    resolved from env, the local env file, or git origin.
     """
     if not isinstance(title, str) or not title.strip():
         raise ValueError("title must be a non-empty string")
@@ -1479,8 +1582,8 @@ def assign_bug(
     """Claim/assign a bug and move it to ``in_progress`` in the JSON registry.
 
     Set ``sync_github=True`` to mirror the updated assignment/status labels to
-    the linked GitHub Issue. Live GitHub sync requires ``GH_TOKEN`` and
-    ``GITHUB_REPOSITORY``.
+    the linked GitHub Issue. Live GitHub sync uses explicit env, local env-file
+    defaults, git origin inference, and the gh CLI token fallback.
     """
     if not isinstance(assigned_agent, str) or not assigned_agent.strip():
         raise ValueError("assigned_agent must be a non-empty string")

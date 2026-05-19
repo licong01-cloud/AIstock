@@ -176,6 +176,29 @@ def test_github_issue_client_uses_gh_cli_token_fallback(mcp_module, monkeypatch:
     assert client.token == "pytest-token"
 
 
+def test_github_issue_client_infers_repo_from_git_remote(
+    mcp_module,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    monkeypatch.setenv("GH_TOKEN", "pytest-token")
+
+    def fake_run(args: list[str], **_kwargs: object) -> SimpleNamespace:
+        if args[:3] == ["git", "-C", str(tmp_path)] and args[3:] == ["rev-parse", "--show-toplevel"]:
+            return SimpleNamespace(returncode=0, stdout=f"{tmp_path}\n")
+        if args[:3] == ["git", "-C", str(tmp_path)] and args[3:] == ["remote", "get-url", "origin"]:
+            return SimpleNamespace(returncode=0, stdout="git@github.com:owner/repo.git\n")
+        return SimpleNamespace(returncode=1, stdout="", stderr="not a test repo")
+
+    monkeypatch.setattr(mcp_module.subprocess, "run", fake_run)
+
+    client = mcp_module._github_issue_client_from_env()
+
+    assert client.repo == "owner/repo"
+    assert client.token == "pytest-token"
+
+
 def test_validation_client_ignores_proxy_env_for_loopback(mcp_module, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("HTTPS_PROXY", "socks5://127.0.0.1:1080")
 

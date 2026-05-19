@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import subprocess
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
@@ -30,6 +32,7 @@ BRANCH_DETAIL_SCHEMA = "aistock_git_branch_detail_v1"
 PR_SCHEMA = "aistock_github_prs_v1"
 LEGACY_DEBT_SCHEMA = "aistock_legacy_debt_v1"
 AUTOMATION_SCHEMA = "aistock_validation_automation_v1"
+LOCAL_GITHUB_ENV_FILE = ".env.github-issues-local"
 
 HIGH_CONFLICT_PATHS = (
     "backend/main.py",
@@ -66,6 +69,26 @@ def _repo_display(path: Path) -> str:
         return str(path.resolve()).replace("\\", "/")
     except OSError:
         return str(path).replace("\\", "/")
+
+
+def _github_repo_from_remote_url(url: str) -> str | None:
+    raw = url.strip()
+    if not raw:
+        return None
+    patterns = (
+        r"^git@github\.com:([^/]+)/(.+?)(?:\.git)?$",
+        r"^ssh://git@github\.com/([^/]+)/(.+?)(?:\.git)?$",
+        r"^https://github\.com/([^/]+)/(.+?)(?:\.git)?/?$",
+        r"^http://github\.com/([^/]+)/(.+?)(?:\.git)?/?$",
+    )
+    for pattern in patterns:
+        match = re.match(pattern, raw, flags=re.I)
+        if match:
+            owner, name = match.group(1), match.group(2)
+            name = name[:-4] if name.endswith(".git") else name
+            if owner and name and "/" not in name:
+                return f"{owner}/{name}"
+    return None
 
 
 def _norm_path(value: Any) -> str:
@@ -596,7 +619,9 @@ class ValidationPipelineCenterService:
         return None
 
     def automation_summary(self) -> dict[str, Any]:
-        gh_ok, gh_message = self._gh_auth_state()
+        gh_auth_ok, gh_auth_message = self._gh_auth_state()
+        gh_repo_ok, gh_repo_message, gh_repo = self._github_repo_state()
+        gh_ok = gh_auth_ok and gh_repo_ok
         scripts = {
             "mcp_server": (self.repo_root / "scripts" / "aistock_mcp_server.py").exists(),
             "bug_github_sync": (self.repo_root / "scripts" / "bug_github_sync.py").exists(),
@@ -614,14 +639,24 @@ class ValidationPipelineCenterService:
         return {
             "schema_version": AUTOMATION_SCHEMA,
             "generated_at": _now_iso(),
-            "summary": {"gh_authenticated": gh_ok, "script_count": sum(1 for ok in scripts.values() if ok), "action_level_count": len(actions), "write_actions_require_confirmation": True},
+            "summary": {
+                "gh_authenticated": gh_auth_ok,
+                "github_repository_configured": gh_repo_ok,
+                "github_issue_write_ready": gh_ok,
+                "script_count": sum(1 for ok in scripts.values() if ok),
+                "action_level_count": len(actions),
+                "write_actions_require_confirmation": True,
+            },
             "github_data_state": "complete" if gh_ok else "unavailable",
-            "gh_auth_status": "ok" if gh_ok else "unavailable",
-            "gh_status_message": gh_message,
+            "gh_auth_status": "ok" if gh_auth_ok else "unavailable",
+            "gh_status_message": gh_auth_message,
+            "github_repository_status": "ok" if gh_repo_ok else "unavailable",
+            "github_repository": gh_repo,
+            "github_repository_message": gh_repo_message,
             "scripts": scripts,
             "actions": actions,
             "mcp_policy": {"read_only_allowed": True, "dry_run_allowed": True, "github_write_requires_dry_run": True, "merge_and_production_requires_user_confirmation": True, "secret_values_redacted": True},
-            "reason_codes": [] if gh_ok else ["gh_auth_unavailable_or_offline"],
+            "reason_codes": [] if gh_ok else [*([] if gh_auth_ok else ["gh_auth_unavailable_or_offline"]), *([] if gh_repo_ok else ["github_repository_unconfigured"])],
             "data_state": "complete",
             "production_8001_touched": False,
         }
@@ -1020,3 +1055,35 @@ class ValidationPipelineCenterService:
         if code == 0:
             return True, "gh auth status ok; token value redacted"
         return False, (err or out or "gh auth status unavailable").strip()
+
+    def _github_repo_state(self) -> tuple[bool, str, str | None]:
+        env_repo = os.environ.get("GITHUB_REPOSITORY")
+        if env_repo:
+            return env_repo.count("/") == 1, "GITHUB_REPOSITORY env configured" if env_repo.count("/") == 1 else "GITHUB_REPOSITORY must be owner/name", env_repo
+
+        file_repo = self._github_repo_from_env_file()
+        if file_repo:
+            return file_repo.count("/") == 1, f"{LOCAL_GITHUB_ENV_FILE} configured" if file_repo.count("/") == 1 else f"{LOCAL_GITHUB_ENV_FILE} GITHUB_REPOSITORY must be owner/name", file_repo
+
+        remote_url = self._git_one(["remote", "get-url", "origin"], default=None)
+        remote_repo = _github_repo_from_remote_url(remote_url or "")
+        if remote_repo:
+            return True, "inferred from git origin remote", remote_repo
+        return False, f"missing GITHUB_REPOSITORY, {LOCAL_GITHUB_ENV_FILE}, or GitHub origin remote", None
+
+    def _github_repo_from_env_file(self) -> str | None:
+        path = self.repo_root / LOCAL_GITHUB_ENV_FILE
+        if not path.is_file():
+            return None
+        try:
+            lines = path.read_text(encoding="utf-8-sig").splitlines()
+        except OSError:
+            return None
+        for line in lines:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            key, value = stripped.split("=", 1)
+            if key.strip() == "GITHUB_REPOSITORY":
+                return value.strip().strip('"').strip("'") or None
+        return None
