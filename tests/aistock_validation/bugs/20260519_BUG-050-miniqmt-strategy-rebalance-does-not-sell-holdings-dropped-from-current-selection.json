@@ -31,7 +31,7 @@
   "fingerprint": "0a1230eed3010127",
   "assigned_agent": "codex-app",
   "fix_branch": "bug/BUG-050-miniqmt-rebalance-sell-dropped",
-  "fix_commit": null,
+  "fix_commit": "f3367e1",
   "verification_run_id": "tests/aistock_validation/history/qmt_strategy_ledger/20260519_l3_bug-050-miniqmt-rebalance-sell-dropped.md",
   "created_at": "2026-05-19T03:10:54Z",
   "first_seen_at": "2026-05-19T03:10:54Z",
@@ -104,6 +104,12 @@
       "actor": "codex-app",
       "action": "fixed_in_progress",
       "note": "Implemented complete MiniQMT StrategyPackage rebalance sell generation in SelectionOrderBuilder: dropped holdings emit SELL intents, overweight sells cap to T+1 available quantity with explicit skip reasons, same-symbol multi-strategy lots stay isolated. Local validation passed: targeted selection builder tests 12 passed, qmt_strategy_ledger suite 49 passed, compileall, diff checks, validation_module_registry_l0, guardrail_changed_files, and l0."
+    },
+    {
+      "timestamp": "2026-05-19T16:21:40Z",
+      "actor": "codex-app",
+      "action": "local_commit",
+      "note": "Committed BUG-050 local fix as f3367e1 on branch bug/BUG-050-miniqmt-rebalance-sell-dropped after local validation passed."
     }
   ],
   "github_issue_number": 53,
