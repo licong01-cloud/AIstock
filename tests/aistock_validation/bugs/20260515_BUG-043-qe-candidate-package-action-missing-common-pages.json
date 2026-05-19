@@ -6,7 +6,7 @@
   "module": "quantevolver_strategy_package",
   "severity": "P1",
   "risk_area": "qe_to_paper_v2_workflow_blocker",
-  "status": "fixed",
+  "status": "verified",
   "trigger_condition": {
     "scenario": "qe_experiment_or_loop_common_page_missing_add_to_candidate_strategy_package_action",
     "expected_behavior": "每个独立 QE experiment 和 QE evolution loop 的常用查看/操作入口都能直接点击加入候选策略包",
@@ -42,13 +42,13 @@
   "assigned_agent": "codex-app",
   "fix_branch": "bug/BUG-043-qe-candidate-actions",
   "fix_commit": "689bee8",
-  "verification_run_id": "local-BUG-043-20260519T-final",
+  "verification_run_id": "github-pr-39-green-20260519",
   "created_at": "2026-05-15T09:00:00Z",
   "first_seen_at": "2026-05-15T09:00:00Z",
   "last_seen_at": "2026-05-19T01:05:00Z",
   "fixed_at": "2026-05-19T01:05:00Z",
   "submitted_at": "2026-05-15T09:00:00Z",
-  "closed_at": null,
+  "closed_at": "2026-05-19T01:04:57Z",
   "allowed_write_scope": [
     "frontend/src/app/quantevolver/experiments/page.tsx",
     "frontend/src/app/quantevolver/evolution/[taskId]/page.tsx",
@@ -120,6 +120,12 @@
       "actor": "codex-app",
       "action": "verification_completed",
       "note": "Final validation after adding stable data-testid locators passed: git diff --check; npm run lint; npx tsc -p tsconfig.json --noEmit --pretty false --incremental false; backend strategy_package pytest 22 passed; Playwright QE candidate actions 3 passed. Fix implementation commit 689bee8."
+    },
+    {
+      "timestamp": "2026-05-19T01:04:57Z",
+      "actor": "codex-app",
+      "action": "merged_verified",
+      "note": "PR #39 merged into main with merge commit 6fb9f2919c2981dc13bf069498862b7a413cc21d. GitHub checks passed and issue #37 was closed as verified."
     }
   ],
   "github_issue_number": 37,
