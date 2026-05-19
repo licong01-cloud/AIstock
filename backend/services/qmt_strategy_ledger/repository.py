@@ -16,7 +16,7 @@ from typing import Any, Callable, Iterator
 import psycopg2.extras
 
 from backend.db.pg_pool import get_conn
-from backend.services.trading_core.errors import DataUnavailableError
+from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError
 
 from .models import (
     BUY_ORDER_TYPE,
@@ -162,30 +162,108 @@ class QmtStrategyLedgerRepository:
         _validate_package_binding(binding)
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO qmt_strategy.strategy_package_binding (
-                        binding_id, strategy_id, package_id, manifest_sha256,
-                        selection_run_id, trade_date, target_weight, top_k,
-                        binding_status, runtime_config, created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        binding.binding_id,
-                        binding.strategy_id,
-                        binding.package_id,
-                        binding.manifest_sha256,
-                        binding.selection_run_id,
-                        binding.trade_date,
-                        binding.target_weight,
-                        binding.top_k,
-                        _enum_value(binding.binding_status),
-                        _json(binding.runtime_config),
-                        binding.created_at,
-                        binding.updated_at,
-                    ),
-                )
+                self._insert_package_binding_with_cursor(cur, binding)
         return binding
+
+    def replace_active_package_binding(
+        self,
+        binding: StrategyPackageBinding,
+        *,
+        replaced_binding_id: str,
+        reason: str,
+    ) -> StrategyPackageBinding:
+        _validate_package_binding(binding)
+        previous_autocommit = None
+        now = datetime.now(UTC)
+        with self._conn_factory() as conn:
+            previous_autocommit = getattr(conn, "autocommit", None)
+            if previous_autocommit is not None:
+                conn.autocommit = False
+            try:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(
+                        """
+                        SELECT *
+                        FROM qmt_strategy.strategy_package_binding
+                        WHERE binding_id = %s AND strategy_id = %s AND binding_status = 'ACTIVE'
+                        FOR UPDATE
+                        """,
+                        (replaced_binding_id, binding.strategy_id),
+                    )
+                    existing = cur.fetchone()
+                    if existing is None:
+                        raise DataUnavailableError(
+                            "active package binding to replace does not exist",
+                            context={"binding_id": replaced_binding_id, "strategy_id": binding.strategy_id},
+                        )
+                    cur.execute(
+                        """
+                        UPDATE qmt_strategy.strategy_package_binding
+                        SET binding_status = %s,
+                            runtime_config = jsonb_set(
+                                COALESCE(runtime_config, '{}'::jsonb),
+                                '{binding_lifecycle}',
+                                (COALESCE(runtime_config->'binding_lifecycle', '{}'::jsonb)
+                                    || jsonb_build_object(
+                                        'replaced_by_binding_id', %s,
+                                        'replace_reason', %s,
+                                        'replaced_at', %s
+                                    )),
+                                true
+                            ),
+                            updated_at = %s
+                        WHERE binding_id = %s
+                        """,
+                        (
+                            BindingStatus.RETIRED.value,
+                            binding.binding_id,
+                            reason,
+                            now.isoformat(),
+                            now,
+                            replaced_binding_id,
+                        ),
+                    )
+                    if cur.rowcount != 1:
+                        raise InvalidStateTransitionError(
+                            "failed to retire active package binding",
+                            context={"binding_id": replaced_binding_id, "strategy_id": binding.strategy_id},
+                        )
+                    self._insert_package_binding_with_cursor(cur, binding)
+                if hasattr(conn, "commit"):
+                    conn.commit()
+            except Exception:
+                if hasattr(conn, "rollback"):
+                    conn.rollback()
+                raise
+            finally:
+                if previous_autocommit is not None:
+                    conn.autocommit = previous_autocommit
+        return binding
+
+    def _insert_package_binding_with_cursor(self, cur: Any, binding: StrategyPackageBinding) -> None:
+        cur.execute(
+            """
+            INSERT INTO qmt_strategy.strategy_package_binding (
+                binding_id, strategy_id, package_id, manifest_sha256,
+                selection_run_id, trade_date, target_weight, top_k,
+                binding_status, runtime_config, created_at, updated_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                binding.binding_id,
+                binding.strategy_id,
+                binding.package_id,
+                binding.manifest_sha256,
+                binding.selection_run_id,
+                binding.trade_date,
+                binding.target_weight,
+                binding.top_k,
+                _enum_value(binding.binding_status),
+                _json(binding.runtime_config),
+                binding.created_at,
+                binding.updated_at,
+            ),
+        )
 
     def get_active_package_binding(self, strategy_id: str) -> StrategyPackageBinding | None:
         with self._conn_factory() as conn:
@@ -202,6 +280,21 @@ class QmtStrategyLedgerRepository:
                 )
                 row = cur.fetchone()
         return _row_to_package_binding(row) if row else None
+
+    def list_package_bindings(self, strategy_id: str) -> list[StrategyPackageBinding]:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM qmt_strategy.strategy_package_binding
+                    WHERE strategy_id = %s
+                    ORDER BY created_at, binding_id
+                    """,
+                    (strategy_id,),
+                )
+                rows = cur.fetchall()
+        return [_row_to_package_binding(row) for row in rows]
 
     def get_package_binding(self, binding_id: str) -> StrategyPackageBinding:
         with self._conn_factory() as conn:
@@ -939,9 +1032,51 @@ class InMemoryQmtStrategyLedgerRepository:
             self._active_bindings[binding.strategy_id] = binding.binding_id
         return binding
 
+    def replace_active_package_binding(
+        self,
+        binding: StrategyPackageBinding,
+        *,
+        replaced_binding_id: str,
+        reason: str,
+    ) -> StrategyPackageBinding:
+        _validate_package_binding(binding)
+        self.get_virtual_account(binding.strategy_id)
+        if binding.binding_id in self._bindings:
+            raise ValueError(f"package binding already exists: {binding.binding_id}")
+        active_id = self._active_bindings.get(binding.strategy_id)
+        if active_id != replaced_binding_id:
+            raise DataUnavailableError(
+                "active package binding to replace does not exist",
+                context={"binding_id": replaced_binding_id, "strategy_id": binding.strategy_id},
+            )
+        active = self._bindings[replaced_binding_id]
+        self._bindings[replaced_binding_id] = replace(
+            active,
+            binding_status=BindingStatus.RETIRED,
+            runtime_config={
+                **dict(active.runtime_config or {}),
+                "binding_lifecycle": {
+                    **dict((active.runtime_config or {}).get("binding_lifecycle") or {}),
+                    "replaced_by_binding_id": binding.binding_id,
+                    "replace_reason": reason,
+                    "replaced_at": datetime.now(UTC).isoformat(),
+                },
+            },
+            updated_at=datetime.now(UTC),
+        )
+        self._bindings[binding.binding_id] = binding
+        self._active_bindings[binding.strategy_id] = binding.binding_id
+        return binding
+
     def get_active_package_binding(self, strategy_id: str) -> StrategyPackageBinding | None:
         binding_id = self._active_bindings.get(strategy_id)
         return self._bindings[binding_id] if binding_id else None
+
+    def list_package_bindings(self, strategy_id: str) -> list[StrategyPackageBinding]:
+        return sorted(
+            [binding for binding in self._bindings.values() if binding.strategy_id == strategy_id],
+            key=lambda binding: (binding.created_at, binding.binding_id),
+        )
 
     def get_package_binding(self, binding_id: str) -> StrategyPackageBinding:
         binding = self._bindings.get(binding_id)

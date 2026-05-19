@@ -98,6 +98,39 @@ def test_in_memory_repository_enforces_one_active_binding_per_strategy() -> None
         )
 
 
+def test_in_memory_repository_replaces_active_binding_and_keeps_history() -> None:
+    repo = InMemoryQmtStrategyLedgerRepository()
+    repo.create_virtual_account(_account())
+    active = repo.create_package_binding(
+        StrategyPackageBinding(
+            binding_id="bind_a",
+            strategy_id="strat_a",
+            package_id="pkg_a",
+            manifest_sha256="sha_a",
+            selection_run_id="sel_a",
+            trade_date=TRADE_DATE,
+            binding_status=BindingStatus.ACTIVE,
+        )
+    )
+    replacement = StrategyPackageBinding(
+        binding_id="bind_b",
+        strategy_id="strat_a",
+        package_id="pkg_a",
+        manifest_sha256="sha_a",
+        selection_run_id="sel_b",
+        trade_date=date(2026, 5, 19),
+        binding_status=BindingStatus.ACTIVE,
+    )
+
+    repo.replace_active_package_binding(replacement, replaced_binding_id=active.binding_id, reason="next_day")
+
+    retired = repo.get_package_binding("bind_a")
+    assert retired.binding_status == BindingStatus.RETIRED
+    assert retired.runtime_config["binding_lifecycle"]["replaced_by_binding_id"] == "bind_b"
+    assert repo.get_active_package_binding("strat_a") == replacement
+    assert [binding.binding_id for binding in repo.list_package_bindings("strat_a")] == ["bind_a", "bind_b"]
+
+
 def test_in_memory_repository_enforces_unique_order_remark_per_account() -> None:
     repo = InMemoryQmtStrategyLedgerRepository()
     repo.create_virtual_account(_account())

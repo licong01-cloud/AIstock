@@ -23,6 +23,12 @@ from backend.services.qmt_strategy_ledger.reconciliation import QmtStrategyLedge
 from backend.services.qmt_strategy_ledger.repository import QmtStrategyLedgerRepository
 from backend.services.qmt_strategy_ledger.selection_order_builder import SelectionOrderBuilder, SelectionOrderBuildConfig
 from backend.services.qmt_strategy_ledger.sync_service import QmtStrategyLedgerSyncService
+from backend.services.trading_core.errors import (
+    DataUnavailableError,
+    InvalidStateTransitionError,
+    StrategyPackageValidationError,
+    TradingCoreError,
+)
 
 router = APIRouter(prefix="/qmt/virtual-strategies", tags=["qmt-virtual-strategies"])
 
@@ -67,14 +73,21 @@ def bind_package(payload: dict[str, Any]) -> dict[str, Any]:
         target_weight=_optional_decimal(payload.get("target_weight")),
         top_k=int(payload["top_k"]) if payload.get("top_k") not in (None, "") else None,
         runtime_config=dict(payload.get("runtime_config") or {}),
+        replace_active=_parse_bool(payload.get("replace_active")),
+        replacement_reason=str(payload.get("replacement_reason") or "").strip() or None,
     )
-    binding = QmtStrategyPackageBindingService(
-        repository=repository,
-        package_reader=_package_reader_factory(),
-        selection_reader=_selection_reader_factory(),
-    ).bind(request)
+    try:
+        result = QmtStrategyPackageBindingService(
+            repository=repository,
+            package_reader=_package_reader_factory(),
+            selection_reader=_selection_reader_factory(),
+        ).bind_with_result(request)
+    except TradingCoreError as exc:
+        _raise_trading_core_http(exc)
+    binding = result.binding
     return {
         "success": True,
+        "action": result.action,
         "binding": {
             "binding_id": binding.binding_id,
             "strategy_id": binding.strategy_id,
@@ -86,6 +99,7 @@ def bind_package(payload: dict[str, Any]) -> dict[str, Any]:
             "top_k": binding.top_k,
             "binding_status": binding.binding_status.value,
         },
+        "replaced_binding": _package_binding_to_dict(result.replaced_binding) if result.replaced_binding else None,
     }
 
 
@@ -278,6 +292,25 @@ def _parse_optional_trade_date(value: Any) -> date | None:
     if value is None or str(value).strip() == "":
         return None
     return _parse_trade_date(value)
+
+
+def _raise_trading_core_http(exc: TradingCoreError) -> None:
+    status_code = 400
+    if isinstance(exc, DataUnavailableError):
+        status_code = 404
+    elif isinstance(exc, InvalidStateTransitionError):
+        status_code = 409
+    elif isinstance(exc, StrategyPackageValidationError):
+        status_code = 422
+    raise HTTPException(status_code=status_code, detail=exc.to_dict()) from exc
+
+
+def _parse_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def _decimal_to_float(value: Decimal) -> float:

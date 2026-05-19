@@ -72,7 +72,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_qmt_strategy_active_binding
     ON qmt_strategy.strategy_package_binding(strategy_id)
     WHERE binding_status = 'ACTIVE';
 
-COMMENT ON TABLE qmt_strategy.strategy_package_binding IS 'Evidence linking a virtual strategy account to the StrategyPackage manifest used for intents.';
+COMMENT ON TABLE qmt_strategy.strategy_package_binding IS 'Auditable lifecycle evidence linking a virtual strategy account to the active or historical StrategyPackage manifest used for intents.';
 COMMENT ON COLUMN qmt_strategy.strategy_package_binding.binding_id IS 'Stable package binding identifier.';
 COMMENT ON COLUMN qmt_strategy.strategy_package_binding.strategy_id IS 'Virtual account that owns this package binding.';
 COMMENT ON COLUMN qmt_strategy.strategy_package_binding.package_id IS 'StrategyPackage identifier selected for this virtual strategy.';
@@ -81,8 +81,8 @@ COMMENT ON COLUMN qmt_strategy.strategy_package_binding.selection_run_id IS 'Opt
 COMMENT ON COLUMN qmt_strategy.strategy_package_binding.trade_date IS 'Trade date for the selection evidence when the binding is date-specific.';
 COMMENT ON COLUMN qmt_strategy.strategy_package_binding.target_weight IS 'Optional portfolio target weight assigned to this package binding.';
 COMMENT ON COLUMN qmt_strategy.strategy_package_binding.top_k IS 'Optional top-k symbol count used by the strategy binding.';
-COMMENT ON COLUMN qmt_strategy.strategy_package_binding.binding_status IS 'Binding lifecycle status; only one ACTIVE binding is allowed per strategy.';
-COMMENT ON COLUMN qmt_strategy.strategy_package_binding.runtime_config IS 'JSON runtime parameters captured with the binding.';
+COMMENT ON COLUMN qmt_strategy.strategy_package_binding.binding_status IS 'Binding lifecycle status; only one ACTIVE binding is allowed per strategy, while RETIRED bindings preserve rollover history.';
+COMMENT ON COLUMN qmt_strategy.strategy_package_binding.runtime_config IS 'JSON runtime parameters captured with the binding, including binding_lifecycle rollover metadata when replaced.';
 COMMENT ON COLUMN qmt_strategy.strategy_package_binding.created_at IS 'UTC timestamp when the binding was created.';
 COMMENT ON COLUMN qmt_strategy.strategy_package_binding.updated_at IS 'UTC timestamp when the binding was last updated.';
 
