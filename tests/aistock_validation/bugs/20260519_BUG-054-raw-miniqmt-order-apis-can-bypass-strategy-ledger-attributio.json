@@ -1,0 +1,149 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-054",
+  "title": "Raw MiniQMT order APIs can bypass strategy ledger attribution controls",
+  "description": "Expected: In multi-strategy miniQMT operation, normal strategy execution must enter through /api/v1/qmt/virtual-strategies managed order APIs so every broker order has a registered virtual strategy, unique order_remark, local order_intent, cash/lot preflight, and sync attribution. Raw /api/v1/qmt/order and /api/v1/qmt/order/batch should be restricted to explicit administrator/POC diagnostics with strong warnings or separate switches.\nActual: backend/routers/qmt.py exposes raw /order and /order/batch endpoints that accept optional strategy_name and order_remark and call miniQMT directly. 2026-05-18 POC showed blank strategy_name raw orders are accepted by the raw endpoint and then become unattributed or hard to reconcile. This bypasses the managed ledger design and can silently pollute multi-strategy accounting if used outside controlled POC.",
+  "module": "qmt_strategy_ledger",
+  "severity": "P1",
+  "risk_area": "trading_attribution_safety",
+  "status": "fixed",
+  "trigger_condition": {
+    "scenario": "reported_via_mcp",
+    "files": [
+      "backend/routers/qmt.py",
+      "backend/infra/qmt_client.py",
+      "backend/services/qmt_strategy_ledger/reconciliation.py",
+      "backend/services/qmt_strategy_ledger/sync_service.py",
+      "backend/tests/qmt_strategy_ledger/test_router_managed_orders_guard.py",
+      "backend/tests/qmt_strategy_ledger/test_reconciliation.py",
+      "docs/architecture/miniqmt_multi_strategy_virtual_account_poc_design_20260518.md"
+    ]
+  },
+  "reproduce_command": "rg -n \"@router.post\\(\\\"/order|@router.post\\(\\\"/order/batch|strategy_name = payload|get\\(\\\"strategy_name\\\"|order_remark\" backend/routers/qmt.py docs/architecture/miniqmt_multi_strategy_virtual_account_poc_design_20260518.md .codex_tmp/miniqmt_poc_monitor -S",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:backend/routers/qmt.py",
+    "file:backend/infra/qmt_client.py",
+    "file:backend/services/qmt_strategy_ledger/reconciliation.py",
+    "file:backend/services/qmt_strategy_ledger/sync_service.py",
+    "file:backend/tests/qmt_strategy_ledger/test_router_managed_orders_guard.py",
+    "file:backend/tests/qmt_strategy_ledger/test_reconciliation.py",
+    "file:docs/architecture/miniqmt_multi_strategy_virtual_account_poc_design_20260518.md"
+  ],
+  "fingerprint": "364e404a187cca06",
+  "assigned_agent": "codex-app",
+  "fix_branch": "bug/BUG-054-miniqmt-raw-order-guard",
+  "fix_commit": null,
+  "verification_run_id": "tests/aistock_validation/history/qmt_strategy_ledger/20260520_024529_l3_bug-054-miniqmt-raw-order-diagnostics-guard.md",
+  "created_at": "2026-05-19T04:44:22Z",
+  "first_seen_at": "2026-05-19T04:44:22Z",
+  "last_seen_at": "2026-05-19T04:44:22Z",
+  "fixed_at": "2026-05-20T03:04:00Z",
+  "submitted_at": "2026-05-19T04:44:22Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/routers/qmt.py",
+    "backend/infra/qmt_client.py",
+    "backend/services/qmt_strategy_ledger/reconciliation.py",
+    "backend/services/qmt_strategy_ledger/sync_service.py",
+    "backend/tests/qmt_strategy_ledger/test_router_managed_orders_guard.py",
+    "backend/tests/qmt_strategy_ledger/test_reconciliation.py",
+    "docs/architecture/miniqmt_multi_strategy_virtual_account_poc_design_20260518.md",
+    "tests/aistock_validation/bugs/20260519_BUG-054-raw-miniqmt-order-apis-can-bypass-strategy-ledger-attributio.json",
+    "tests/aistock_validation/history/qmt_strategy_ledger/20260520_024529_l3_bug-054-miniqmt-raw-order-diagnostics-guard.md"
+  ],
+  "suspected_modules": [
+    "backend/routers/qmt.py",
+    "backend/infra/qmt_client.py",
+    "backend/services/qmt_strategy_ledger/reconciliation.py",
+    "backend/services/qmt_strategy_ledger/sync_service.py",
+    "backend/tests/qmt_strategy_ledger/test_router_managed_orders_guard.py",
+    "backend/tests/qmt_strategy_ledger/test_reconciliation.py",
+    "docs/architecture/miniqmt_multi_strategy_virtual_account_poc_design_20260518.md",
+    "tests/aistock_validation/bugs/20260519_BUG-054-raw-miniqmt-order-apis-can-bypass-strategy-ledger-attributio.json",
+    "tests/aistock_validation/history/qmt_strategy_ledger/20260520_024529_l3_bug-054-miniqmt-raw-order-diagnostics-guard.md"
+  ],
+  "required_verification": [
+    "Router test: raw /api/v1/qmt/order rejects or requires an explicit admin/POC switch for blank strategy_name in multi-strategy mode.",
+    "Router test: raw /api/v1/qmt/order/batch rejects or requires an explicit admin/POC switch for blank strategy_name/order_remark in multi-strategy mode.",
+    "Regression test: managed /api/v1/qmt/virtual-strategies/orders remains the normal strategy path and records order_intent before broker call.",
+    "Reconciliation test: external/manual MiniQMT operations still become unattributed issues instead of silent strategy assignment.",
+    "Documentation/UI copy clearly marks raw endpoints as administrator/POC diagnostics only."
+  ],
+  "closure_requirements": [
+    "Normal multi-strategy execution cannot bypass the AIstock managed ledger by accident.",
+    "Raw endpoint access policy is explicit, tested, and documented.",
+    "Unattributed raw/manual broker activity remains visible through reconciliation.",
+    "No existing diagnostic capability is silently removed without a replacement/admin path."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-19T04:44:22Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Reported via aistock_mcp_server.report_bug. Comments: 5"
+    },
+    {
+      "timestamp": "2026-05-19T04:44:22Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "POC evidence: .codex_tmp/miniqmt_poc_monitor/poc_scenario_matrix_summary_20260518_140844.md records that raw /api/v1/qmt/order and /order/batch accepted blank strategy_name and must not be normal multi-strategy production entrypoints."
+    },
+    {
+      "timestamp": "2026-05-19T04:44:22Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Business impact: P1 because it can create unattributed broker orders/trades and invalidate strategy-level cash/PnL; it is less urgent than P0 ledger correctness only because it can be mitigated operationally by not using raw endpoints."
+    },
+    {
+      "timestamp": "2026-05-19T04:44:22Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Expected fix may be feature flag / admin-only route guard / UI warning / route-level deprecation for multi-strategy mode, not removal of diagnostic capability."
+    },
+    {
+      "timestamp": "2026-05-19T04:44:22Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Required verification: raw endpoint requires explicit admin/POC switch or rejects blank strategy_name in multi-strategy mode; managed endpoint remains the only documented normal strategy path."
+    },
+    {
+      "timestamp": "2026-05-19T04:44:22Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Required verification: reconciliation still records truly external/manual miniQMT operations as unattributed issues instead of silently assigning them."
+    },
+    {
+      "timestamp": "2026-05-19T04:50:16Z",
+      "actor": "codex-app",
+      "action": "triaged",
+      "note": "Expanded from miniQMT issue coverage audit with explicit verification and closure requirements before code fixes."
+    },
+    {
+      "timestamp": "2026-05-19T04:52:19Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Mirrored BUG-054 to GitHub issue #57 via gh CLI from miniQMT issue coverage audit."
+    },
+    {
+      "timestamp": "2026-05-19T05:31:30Z",
+      "actor": "codex-app",
+      "action": "github_sync_verified",
+      "note": "Confirmed GitHub issue #57 is OPEN and label-synced (bug, P1, severity:p1, status:open, module:qmt_strategy_ledger, risk:trading_attribution_safety) before fix worktree creation."
+    },
+    {
+      "timestamp": "2026-05-20T02:45:29Z",
+      "actor": "codex-app",
+      "action": "fix_started",
+      "note": "Fix work started on bug/BUG-054-miniqmt-raw-order-guard; validation record opened for raw MiniQMT diagnostic guard."
+    },
+    {
+      "timestamp": "2026-05-20T03:04:00Z",
+      "actor": "codex-app",
+      "action": "fixed_local",
+      "note": "Implemented raw MiniQMT diagnostic guard: default 403 for /api/v1/qmt/order and /api/v1/qmt/order/batch unless AISTOCK_ALLOW_QMT_RAW_ORDER_DIAGNOSTICS=1; managed virtual-strategy order route remains the normal execution path. Local validation: raw guard tests 8 passed, sync/reconciliation focus 14 passed, full qmt_strategy_ledger 71 passed, compileall passed, diff checks and nox validation_module_registry_l0/validation_catalog_integrity/guardrail_changed_files/l0 passed."
+    }
+  ],
+  "github_issue_number": 57,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/57"
+}
