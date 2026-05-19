@@ -129,6 +129,29 @@ def test_selection_order_builder_sizes_from_target_weight_and_board_lot() -> Non
     assert result.requests[0].price == Decimal("26.310000")
 
 
+def test_selection_order_builder_preserves_star_market_increment_after_minimum() -> None:
+    repo = _repo()
+    binding = repo.create_package_binding(_binding(target_weight=Decimal("0.02")))
+    run = _selection_run(
+        [
+            SelectionCandidate(
+                symbol="688379.SH",
+                score=0.9,
+                rank=1,
+                target_weight=0.02,
+                reference_price=73.89,
+            )
+        ]
+    )
+
+    result = SelectionOrderBuilder(repository=repo, selection_reader=FakeSelectionReader(run)).build_for_binding(
+        binding=binding
+    )
+
+    assert result.requests[0].quantity == 2706
+    assert result.requests[0].price == Decimal("73.890000")
+
+
 def test_selection_order_builder_uses_current_lots_to_build_sell_delta() -> None:
     repo = _repo()
     repo.create_position_lot(

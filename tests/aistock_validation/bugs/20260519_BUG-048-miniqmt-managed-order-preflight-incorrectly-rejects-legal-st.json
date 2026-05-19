@@ -1,123 +1,172 @@
-﻿{
-    "schema_version":  "aistock_validation_bug_v1",
-    "bug_id":  "BUG-048",
-    "title":  "MiniQMT managed order preflight incorrectly rejects legal STAR-market buy quantities",
-    "description":  "Expected: AIstock MiniQMT managed-order preflight must use the same stock-aware board-lot rule as the order builder and execution algorithms. For STAR-market symbols 688xxx/689xxx, BUY quantity must be at least 200 shares and may then increase by 1 share. A legal order such as 688379.SH quantity 2706 must pass AIstock preflight and be submitted to miniQMT SIM/LIVE subject to broker/account checks.\nActual: backend/services/qmt_strategy_ledger/order_service.py still applies a hard-coded BUY quantity check request.quantity % 100 != 0 for every symbol. This contradicts backend/execution_algos/board_lot.py and backend/services/qmt_strategy_ledger/selection_order_builder.py, which already use stock-aware board_lot_rule()/round_to_board_lot(). During the 2026-05-19 miniQMT SIM POC, StrategyPackage output generated legal STAR-market quantities, but AIstock preflight rejected them with BUY_BOARD_LOT before broker submission. This caused the automated two-strategy runner to fail after backend restart and forced an emergency manual workaround for strategy A; strategy B submission was paused to avoid expanding the workaround.",
-    "module":  "qmt_strategy_ledger",
-    "severity":  "P0",
-    "risk_area":  "unspecified",
-    "status":  "open",
-    "trigger_condition":  {
-                              "scenario":  "reported_via_mcp",
-                              "files":  [
-                                            "backend/services/qmt_strategy_ledger/order_service.py",
-                                            "backend/services/qmt_strategy_ledger/selection_order_builder.py",
-                                            "backend/execution_algos/board_lot.py",
-                                            "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
-                                            "backend/tests/qmt_strategy_ledger/test_selection_order_builder.py",
-                                            ".codex_tmp/miniqmt_preopen_0914/preopen_20260519.jsonl"
-                                        ]
-                          },
-    "reproduce_command":  "git blame -L 190,210 -- backend/services/qmt_strategy_ledger/order_service.py \u0026\u0026 rg -n \"BUY_BOARD_LOT|request\\.quantity % 100|board_lot_rule|round_to_board_lot\" backend/services/qmt_strategy_ledger backend/execution_algos/board_lot.py backend/tests/qmt_strategy_ledger -S",
-    "failing_run_id":  null,
-    "evidence_uris":  [
-                          "drawer:cross-tool/codex-claude-coord/cross-tool/codex-claude-coord",
-                          "file:backend/services/qmt_strategy_ledger/order_service.py",
-                          "file:backend/services/qmt_strategy_ledger/selection_order_builder.py",
-                          "file:backend/execution_algos/board_lot.py",
-                          "file:backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
-                          "file:backend/tests/qmt_strategy_ledger/test_selection_order_builder.py",
-                          "file:.codex_tmp/miniqmt_preopen_0914/preopen_20260519.jsonl"
-                      ],
-    "fingerprint":  "6bb4c47175c4a7d6",
-    "assigned_agent":  "codex-app",
-    "fix_branch":  null,
-    "fix_commit":  null,
-    "verification_run_id":  null,
-    "created_at":  "2026-05-19T01:48:30Z",
-    "first_seen_at":  "2026-05-19T01:48:30Z",
-    "last_seen_at":  "2026-05-19T01:48:30Z",
-    "fixed_at":  null,
-    "submitted_at":  "2026-05-19T01:48:30Z",
-    "closed_at":  null,
-    "allowed_write_scope":  [
-                                "backend/services/qmt_strategy_ledger/order_service.py",
-                                "backend/services/qmt_strategy_ledger/selection_order_builder.py",
-                                "backend/execution_algos/board_lot.py",
-                                "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
-                                "backend/tests/qmt_strategy_ledger/test_selection_order_builder.py",
-                                ".codex_tmp/miniqmt_preopen_0914/preopen_20260519.jsonl"
-                            ],
-    "suspected_modules":  [
-                              "backend/services/qmt_strategy_ledger/order_service.py",
-                              "backend/services/qmt_strategy_ledger/selection_order_builder.py",
-                              "backend/execution_algos/board_lot.py",
-                              "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
-                              "backend/tests/qmt_strategy_ledger/test_selection_order_builder.py",
-                              ".codex_tmp/miniqmt_preopen_0914/preopen_20260519.jsonl"
-                          ],
-    "required_verification":  [
-
-                              ],
-    "closure_requirements":  [
-
-                             ],
-    "events":  [
-                   {
-                       "timestamp":  "2026-05-19T01:48:30Z",
-                       "actor":  "codex-app",
-                       "action":  "discovered",
-                       "note":  "Reported via aistock_mcp_server.report_bug. Comments: 7"
-                   },
-                   {
-                       "timestamp":  "2026-05-19T01:48:30Z",
-                       "actor":  "codex-app",
-                       "action":  "comment",
-                       "note":  "Root cause introduction: git blame shows the hard-coded BUY_BOARD_LOT check was introduced by commit d15376dd (2026-05-18 23:31:58 +0800), commit message \"feat(qmt): add miniqmt multi-strategy ledger workflow\". This is not an old legacy file from months ago; it was introduced with the new qmt_strategy_ledger managed-order workflow."
-                   },
-                   {
-                       "timestamp":  "2026-05-19T01:48:30Z",
-                       "actor":  "codex-app",
-                       "action":  "comment",
-                       "note":  "Why orders pass multiple checks: there are separate layers by design: SelectionOrderBuilder converts StrategyPackage/Selection candidates into managed order requests; QmtManagedOrderService.preview_order performs AIstock local account/risk/idempotency preflight before broker call; broker submit then lets miniQMT/xtquant enforce broker/exchange/account rules. The layering is reasonable for safety, but it is only safe if all layers depend on one canonical rule source."
-                   },
-                   {
-                       "timestamp":  "2026-05-19T01:48:30Z",
-                       "actor":  "codex-app",
-                       "action":  "comment",
-                       "note":  "Why no unified rule: order_service.py duplicated a simplified 100-share A-share rule instead of reusing backend.execution_algos.board_lot.board_lot_rule or round_to_board_lot. This created a rule split: builder accepts legal STAR quantities while preflight rejects them."
-                   },
-                   {
-                       "timestamp":  "2026-05-19T01:48:30Z",
-                       "actor":  "codex-app",
-                       "action":  "comment",
-                       "note":  "Observed evidence on 2026-05-19: preopen runner log contains runner_failed with BUY_BOARD_LOT for qmtbind_2d87c917ec2f4e23a8fa822fee544156 after successful QMT SIM connection and selection artifact generation. Example candidate 688379.SH had reference_price 73.89, target_weight 0.02, and legal STAR quantity 2706, but AIstock preflight requires 100-share multiple."
-                   },
-                   {
-                       "timestamp":  "2026-05-19T01:48:30Z",
-                       "actor":  "codex-app",
-                       "action":  "comment",
-                       "note":  "Business impact: P0 because it blocks or distorts real miniQMT multi-strategy SIM/LIVE execution and can lead operators to submit altered quantities that differ from strategy/package sizing. It also contradicts the platform fail-fast/no-fake-success trading rule and affects trading execution correctness."
-                   },
-                   {
-                       "timestamp":  "2026-05-19T01:48:30Z",
-                       "actor":  "codex-app",
-                       "action":  "comment",
-                       "note":  "Fix expectation: remove hard-coded request.quantity % 100 check from order_service.py and validate BUY/SELL quantities using the canonical board-lot helper. Add regression tests proving 688/689 BUY quantity 201/2706 passes, 688 BUY 199 fails, 300/600/00 non-100 BUY fails, and SelectionOrderBuilder plus QmtManagedOrderService use identical rules."
-                   },
-                   {
-                       "timestamp":  "2026-05-19T01:48:30Z",
-                       "actor":  "codex-app",
-                       "action":  "comment",
-                       "note":  "Operational note: Strategy A was emergency-submitted after 100-share downward normalization to start SIM validation; strategy B was paused until this P0 is fixed or explicitly overridden. Future remediation must reconcile/record the emergency workaround in validation evidence."
-                   },
-                   {
-                       "timestamp":  "2026-05-19T01:52:00Z",
-                       "actor":  "codex-app",
-                       "action":  "github_issue_created",
-                       "note":  "Mirrored BUG-048 to GitHub issue #46 via gh CLI because MCP live sync lacked GITHUB_REPOSITORY in this session."
-                   }
-               ],
-    "github_issue_number":  46,
-    "github_issue_url":  "https://github.com/licong01-cloud/AIstock/issues/46"
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-048",
+  "title": "MiniQMT managed order preflight incorrectly rejects legal STAR-market buy quantities",
+  "description": "Expected: AIstock MiniQMT managed-order preflight must use the same stock-aware board-lot rule as the order builder and execution algorithms. For STAR-market symbols 688xxx/689xxx, BUY quantity must be at least 200 shares and may then increase by 1 share. A legal order such as 688379.SH quantity 2706 must pass AIstock preflight and be submitted to miniQMT SIM/LIVE subject to broker/account checks.\nActual: backend/services/qmt_strategy_ledger/order_service.py still applies a hard-coded BUY quantity check request.quantity % 100 != 0 for every symbol. This contradicts backend/execution_algos/board_lot.py and backend/services/qmt_strategy_ledger/selection_order_builder.py, which already use stock-aware board_lot_rule()/round_to_board_lot(). During the 2026-05-19 miniQMT SIM POC, StrategyPackage output generated legal STAR-market quantities, but AIstock preflight rejected them with BUY_BOARD_LOT before broker submission. This caused the automated two-strategy runner to fail after backend restart and forced an emergency manual workaround for strategy A; strategy B submission was paused to avoid expanding the workaround.",
+  "module": "qmt_strategy_ledger",
+  "severity": "P0",
+  "risk_area": "trading_board_lot",
+  "status": "fixed",
+  "trigger_condition": {
+    "scenario": "reported_via_mcp",
+    "files": [
+      "backend/services/qmt_strategy_ledger/order_service.py",
+      "backend/services/qmt_strategy_ledger/selection_order_builder.py",
+      "backend/execution_algos/board_lot.py",
+      "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
+      "backend/tests/qmt_strategy_ledger/test_selection_order_builder.py",
+      ".codex_tmp/miniqmt_preopen_0914/preopen_20260519.jsonl"
+    ]
+  },
+  "reproduce_command": "git blame -L 190,210 -- backend/services/qmt_strategy_ledger/order_service.py && rg -n \"BUY_BOARD_LOT|request\\.quantity % 100|board_lot_rule|round_to_board_lot\" backend/services/qmt_strategy_ledger backend/execution_algos/board_lot.py backend/tests/qmt_strategy_ledger -S",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "drawer:cross-tool/codex-claude-coord/cross-tool/codex-claude-coord",
+    "file:backend/services/qmt_strategy_ledger/order_service.py",
+    "file:backend/services/qmt_strategy_ledger/selection_order_builder.py",
+    "file:backend/execution_algos/board_lot.py",
+    "file:backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
+    "file:backend/tests/qmt_strategy_ledger/test_selection_order_builder.py",
+    "file:.codex_tmp/miniqmt_preopen_0914/preopen_20260519.jsonl"
+  ],
+  "fingerprint": "6bb4c47175c4a7d6",
+  "assigned_agent": "codex-app",
+  "fix_branch": "bug/BUG-048-miniqmt-board-lot",
+  "fix_commit": "dff0002",
+  "verification_run_id": "local-20260519-bug048-main-sync-validation",
+  "created_at": "2026-05-19T01:48:30Z",
+  "first_seen_at": "2026-05-19T01:48:30Z",
+  "last_seen_at": "2026-05-19T10:55:55Z",
+  "fixed_at": "2026-05-19T05:55:53Z",
+  "submitted_at": "2026-05-19T01:48:30Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/services/qmt_strategy_ledger/selection_order_builder.py",
+    "backend/execution_algos/board_lot.py",
+    "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
+    "backend/tests/qmt_strategy_ledger/test_selection_order_builder.py",
+    ".codex_tmp/miniqmt_preopen_0914/preopen_20260519.jsonl"
+  ],
+  "suspected_modules": [
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/services/qmt_strategy_ledger/selection_order_builder.py",
+    "backend/execution_algos/board_lot.py",
+    "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
+    "backend/tests/qmt_strategy_ledger/test_selection_order_builder.py",
+    ".codex_tmp/miniqmt_preopen_0914/preopen_20260519.jsonl"
+  ],
+  "required_verification": [
+    "Regression test: STAR-market 688/689 BUY quantities 201 and 2706 pass AIstock managed-order preflight.",
+    "Regression test: STAR-market BUY quantity below 200 fails with BUY_BOARD_LOT and actionable context.",
+    "Regression test: main-board/ChiNext BUY quantities that are not 100-share multiples fail, while legal 100-share multiples pass.",
+    "Regression test: SelectionOrderBuilder and QmtManagedOrderService use the same canonical board-lot helper for BUY sizing/preflight.",
+    "Pipeline check: qmt_strategy_ledger backend tests and repository L0/validation guardrails pass after the fix."
+  ],
+  "closure_requirements": [
+    "No hard-coded request.quantity % 100 BUY preflight remains in QmtManagedOrderService.",
+    "Managed-order preflight imports and uses the canonical stock-aware board-lot rule source.",
+    "Legal STAR-market strategy-package quantities can reach miniQMT broker validation instead of being rejected by AIstock.",
+    "BUG-048 GitHub issue and bug JSON record contain fix branch, fix commit, and validation evidence before closure."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-19T01:48:30Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Reported via aistock_mcp_server.report_bug. Comments: 7"
+    },
+    {
+      "timestamp": "2026-05-19T01:48:30Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Root cause introduction: git blame shows the hard-coded BUY_BOARD_LOT check was introduced by commit d15376dd (2026-05-18 23:31:58 +0800), commit message \"feat(qmt): add miniqmt multi-strategy ledger workflow\". This is not an old legacy file from months ago; it was introduced with the new qmt_strategy_ledger managed-order workflow."
+    },
+    {
+      "timestamp": "2026-05-19T01:48:30Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Why orders pass multiple checks: there are separate layers by design: SelectionOrderBuilder converts StrategyPackage/Selection candidates into managed order requests; QmtManagedOrderService.preview_order performs AIstock local account/risk/idempotency preflight before broker call; broker submit then lets miniQMT/xtquant enforce broker/exchange/account rules. The layering is reasonable for safety, but it is only safe if all layers depend on one canonical rule source."
+    },
+    {
+      "timestamp": "2026-05-19T01:48:30Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Why no unified rule: order_service.py duplicated a simplified 100-share A-share rule instead of reusing backend.execution_algos.board_lot.board_lot_rule or round_to_board_lot. This created a rule split: builder accepts legal STAR quantities while preflight rejects them."
+    },
+    {
+      "timestamp": "2026-05-19T01:48:30Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Observed evidence on 2026-05-19: preopen runner log contains runner_failed with BUY_BOARD_LOT for qmtbind_2d87c917ec2f4e23a8fa822fee544156 after successful QMT SIM connection and selection artifact generation. Example candidate 688379.SH had reference_price 73.89, target_weight 0.02, and legal STAR quantity 2706, but AIstock preflight requires 100-share multiple."
+    },
+    {
+      "timestamp": "2026-05-19T01:48:30Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Business impact: P0 because it blocks or distorts real miniQMT multi-strategy SIM/LIVE execution and can lead operators to submit altered quantities that differ from strategy/package sizing. It also contradicts the platform fail-fast/no-fake-success trading rule and affects trading execution correctness."
+    },
+    {
+      "timestamp": "2026-05-19T01:48:30Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Fix expectation: remove hard-coded request.quantity % 100 check from order_service.py and validate BUY/SELL quantities using the canonical board-lot helper. Add regression tests proving 688/689 BUY quantity 201/2706 passes, 688 BUY 199 fails, 300/600/00 non-100 BUY fails, and SelectionOrderBuilder plus QmtManagedOrderService use identical rules."
+    },
+    {
+      "timestamp": "2026-05-19T01:48:30Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Operational note: Strategy A was emergency-submitted after 100-share downward normalization to start SIM validation; strategy B was paused until this P0 is fixed or explicitly overridden. Future remediation must reconcile/record the emergency workaround in validation evidence."
+    },
+    {
+      "timestamp": "2026-05-19T01:52:00Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Mirrored BUG-048 to GitHub issue #46 via gh CLI because MCP live sync lacked GITHUB_REPOSITORY in this session."
+    },
+    {
+      "timestamp": "2026-05-19T05:26:46Z",
+      "actor": "codex-app",
+      "action": "triaged",
+      "note": "Completed issue metadata normalization: risk_area, required_verification, and closure_requirements now match the miniQMT board-lot P0 scope."
+    },
+    {
+      "timestamp": "2026-05-19T05:31:30Z",
+      "actor": "codex-app",
+      "action": "github_sync_verified",
+      "note": "Confirmed GitHub issue #46 is OPEN and label-synced (bug, status:open, P0, severity:p0, module:qmt_strategy_ledger, risk:trading_board_lot) before fix worktree creation."
+    },
+    {
+      "timestamp": "2026-05-19T05:55:00Z",
+      "actor": "codex-app",
+      "action": "assigned",
+      "note": "Claimed BUG-048 in isolated worktree F:\\Dev\\AIstock_worktrees\\bug-048-miniqmt-board-lot on branch bug/BUG-048-miniqmt-board-lot."
+    },
+    {
+      "timestamp": "2026-05-19T05:55:00Z",
+      "actor": "codex-app",
+      "action": "fixed_in_progress",
+      "note": "Implemented canonical board-lot preflight reuse in QmtManagedOrderService and added STAR-market/main-board/ChiNext regression tests. Validation still in progress."
+    },
+    {
+      "timestamp": "2026-05-19T05:52:03Z",
+      "actor": "codex-app",
+      "action": "validation_passed",
+      "note": "Local validation passed: targeted tests 14 passed, qmt_strategy_ledger suite 39 passed, nox l0 passed, validation_module_registry_l0 passed, compileall passed, git diff --check passed. Evidence recorded in tests/aistock_validation/history/qmt_strategy_ledger/20260519_134957_l3_bug-048-miniqmt-board-lot-preflight-regression.md."
+    },
+    {
+      "timestamp": "2026-05-19T05:55:53Z",
+      "actor": "codex-app",
+      "action": "fixed",
+      "note": "Fixed in rebased local commit dff0002 on branch bug/BUG-048-miniqmt-board-lot. Local validation passed: targeted tests 14 passed, qmt_strategy_ledger suite 39 passed, nox l0 passed, validation_module_registry_l0 passed, compileall passed, git diff --check passed."
+    },
+    {
+      "timestamp": "2026-05-19T10:55:55Z",
+      "actor": "codex-app",
+      "action": "main_sync_validation",
+      "note": "Rebased BUG-048 branch onto origin/main ea1efcd after BUG-060 merge; dropped duplicate BUG-060 branch commit; reran targeted qmt_strategy_ledger tests, full qmt_strategy_ledger suite, compileall, diff check, validation_module_registry_l0, guardrail_changed_files, l0, and validation_center_backend successfully."
+    }
+  ],
+  "github_issue_number": 46,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/46"
 }
