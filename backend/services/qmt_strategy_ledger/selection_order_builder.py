@@ -16,7 +16,7 @@ from .lot_availability import (
     TradingCalendarProvider,
     effective_strategy_available_sell_quantity,
 )
-from .models import BUY_ORDER_TYPE, SELL_ORDER_TYPE, StrategyPackageBinding, VirtualAccount
+from .models import BUY_ORDER_TYPE, SELL_ORDER_TYPE, BindingStatus, StrategyPackageBinding, VirtualAccount
 from .order_service import ManagedOrderRequest
 
 LATEST_PRICE_TYPE = 5
@@ -110,6 +110,11 @@ class SelectionOrderBuilder:
         config: SelectionOrderBuildConfig | None = None,
     ) -> SelectionOrderBuildResult:
         config = config or SelectionOrderBuildConfig()
+        if binding.binding_status != BindingStatus.ACTIVE:
+            raise StrategyPackageValidationError(
+                "package binding is not ACTIVE",
+                context={"binding_id": binding.binding_id, "binding_status": binding.binding_status.value},
+            )
         account = self._repository.get_virtual_account(binding.strategy_id)
         selection_run: SelectionRun = self._selection_reader.get_run(binding.selection_run_id)
         if selection_run.status != SelectionRunStatus.SUCCEEDED:

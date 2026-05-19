@@ -20,7 +20,7 @@ from backend.services.qmt_strategy_ledger.models import (
 from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyLedgerRepository
 from backend.services.qmt_strategy_ledger.selection_order_builder import SelectionOrderBuilder, SelectionOrderBuildConfig
 from backend.services.selection_center.models import SelectionCandidate, SelectionMode, SelectionRun, SelectionRunStatus
-from backend.services.trading_core.errors import DataUnavailableError
+from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
 
 
 ACCOUNT_ID = "62266303"
@@ -560,3 +560,20 @@ def test_selection_order_builder_fails_fast_without_price_or_succeeded_run() -> 
         _builder(repo, failed_run).build_for_binding(
             binding=binding
         )
+
+
+def test_selection_order_builder_rejects_historical_retired_binding() -> None:
+    repo = _repo()
+    binding = _binding()
+    retired_binding = repo.create_package_binding(
+        StrategyPackageBinding(
+            **{
+                **binding.__dict__,
+                "binding_status": BindingStatus.RETIRED,
+            }
+        )
+    )
+    run = _selection_run([SelectionCandidate(symbol="300604.SZ", score=0.9, rank=1, reference_price=10)])
+
+    with pytest.raises(StrategyPackageValidationError, match="not ACTIVE"):
+        _builder(repo, run).build_for_binding(binding=retired_binding)

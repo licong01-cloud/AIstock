@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
@@ -17,10 +18,49 @@ from backend.services.qmt_strategy_ledger.models import (
     VirtualAccountStatus,
 )
 from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyLedgerRepository
+from backend.services.selection_center.models import SelectionMode, SelectionRun, SelectionRunStatus
+from backend.services.strategy_package.models import PackageStatus
 
 
 ACCOUNT_ID = "62266303"
 TRADE_DATE = date(2026, 5, 18)
+
+
+@dataclass
+class FakePackageRecord:
+    package_id: str
+    package_status: PackageStatus
+    manifest_sha256: str
+
+
+@dataclass
+class FakePackageReader:
+    record: FakePackageRecord
+
+    def get(self, package_id: str) -> FakePackageRecord:
+        assert package_id == self.record.package_id
+        return self.record
+
+
+@dataclass
+class FakeSelectionReader:
+    run: SelectionRun
+
+    def get_run(self, run_id: str) -> SelectionRun:
+        assert run_id == self.run.run_id
+        return self.run
+
+
+def _selection_run(run_id: str, trade_date: date = TRADE_DATE) -> SelectionRun:
+    return SelectionRun(
+        run_id=run_id,
+        mode=SelectionMode.SINGLE_PACKAGE,
+        trade_date=trade_date,
+        data_source="DB_HISTORICAL",
+        package_ids=["pkg_a"],
+        status=SelectionRunStatus.SUCCEEDED,
+        manifest_sha256_by_package={"pkg_a": "sha_a"},
+    )
 
 
 def _account(strategy_id: str, strategy_name: str) -> VirtualAccount:
@@ -124,3 +164,42 @@ def test_virtual_strategy_summary_exposes_accounts_lots_and_overlap() -> None:
             "lot_count": 1,
         }
     ]
+
+
+def test_package_binding_router_requires_explicit_replace_and_rolls_over_active_binding() -> None:
+    repo = _repo()
+    qmt_strategy_ledger.configure_dependencies(
+        repository_factory=lambda: repo,
+        client_factory=lambda: object(),
+        package_reader_factory=lambda: FakePackageReader(FakePackageRecord("pkg_a", PackageStatus.SELECTION_ENABLED, "sha_a")),
+        selection_reader_factory=lambda: FakeSelectionReader(_selection_run("sel_b", date(2026, 5, 19))),
+    )
+    app = FastAPI()
+    app.include_router(qmt_strategy_ledger.router, prefix="/api/v1")
+    client = TestClient(app)
+    payload = {
+        "strategy_id": "strat_a",
+        "package_id": "pkg_a",
+        "selection_run_id": "sel_b",
+        "trade_date": "2026-05-19",
+        "target_weight": "0.02",
+        "top_k": 20,
+    }
+
+    rejected = client.post("/api/v1/qmt/virtual-strategies/package-bindings", json=payload)
+    assert rejected.status_code == 409
+    assert rejected.json()["detail"]["error_code"] == "INVALID_STATE_TRANSITION"
+
+    replaced = client.post(
+        "/api/v1/qmt/virtual-strategies/package-bindings",
+        json={**payload, "replace_active": True, "replacement_reason": "next_day"},
+    )
+
+    body = replaced.json()
+    assert replaced.status_code == 200
+    assert body["action"] == "replaced_active"
+    assert body["binding"]["selection_run_id"] == "sel_b"
+    assert body["binding"]["trade_date"] == "2026-05-19"
+    assert body["replaced_binding"]["binding_id"] == "bind_a"
+    assert body["replaced_binding"]["binding_status"] == "RETIRED"
+    assert repo.get_active_package_binding("strat_a").selection_run_id == "sel_b"

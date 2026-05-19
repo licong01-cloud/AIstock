@@ -12,6 +12,7 @@ from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyL
 from backend.services.selection_center.models import SelectionMode, SelectionRun, SelectionRunStatus
 from backend.services.strategy_package.models import PackageStatus
 from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
+from backend.services.trading_core.errors import InvalidStateTransitionError
 
 
 ACCOUNT_ID = "62266303"
@@ -62,14 +63,16 @@ def _repo() -> InMemoryQmtStrategyLedgerRepository:
 
 def _run(
     *,
+    run_id: str = "sel_a",
     package_ids: list[str] | None = None,
     manifest_sha: str = "sha_a",
     status: SelectionRunStatus = SelectionRunStatus.SUCCEEDED,
+    trade_date: date = TRADE_DATE,
 ) -> SelectionRun:
     return SelectionRun(
-        run_id="sel_a",
+        run_id=run_id,
         mode=SelectionMode.SINGLE_PACKAGE,
-        trade_date=TRADE_DATE,
+        trade_date=trade_date,
         data_source="DB_HISTORICAL",
         package_ids=package_ids or ["pkg_a"],
         status=status,
@@ -99,6 +102,61 @@ def test_package_binding_creates_active_binding_with_manifest_evidence() -> None
     assert binding.manifest_sha256 == "sha_a"
     assert binding.trade_date == TRADE_DATE
     assert repo.get_active_package_binding("strat_a") == binding
+
+
+def test_package_binding_same_selection_is_idempotent_without_duplicate_active_row() -> None:
+    repo = _repo()
+    service = QmtStrategyPackageBindingService(
+        repository=repo,
+        package_reader=FakePackageReader(FakePackageRecord("pkg_a", PackageStatus.SELECTION_ENABLED, "sha_a")),
+        selection_reader=FakeSelectionReader(_run()),
+    )
+
+    first = service.bind(PackageBindingRequest(strategy_id="strat_a", package_id="pkg_a", selection_run_id="sel_a"))
+    second = service.bind(PackageBindingRequest(strategy_id="strat_a", package_id="pkg_a", selection_run_id="sel_a"))
+
+    assert second == first
+    assert repo.get_active_package_binding("strat_a") == first
+    assert repo.list_package_bindings("strat_a") == [first]
+
+
+def test_package_binding_requires_explicit_rollover_for_different_selection() -> None:
+    repo = _repo()
+    first = QmtStrategyPackageBindingService(
+        repository=repo,
+        package_reader=FakePackageReader(FakePackageRecord("pkg_a", PackageStatus.SELECTION_ENABLED, "sha_a")),
+        selection_reader=FakeSelectionReader(_run()),
+    ).bind(PackageBindingRequest(strategy_id="strat_a", package_id="pkg_a", selection_run_id="sel_a"))
+    rollover_service = QmtStrategyPackageBindingService(
+        repository=repo,
+        package_reader=FakePackageReader(FakePackageRecord("pkg_a", PackageStatus.SELECTION_ENABLED, "sha_a")),
+        selection_reader=FakeSelectionReader(_run(run_id="sel_b", trade_date=date(2026, 5, 19))),
+    )
+
+    with pytest.raises(InvalidStateTransitionError, match="replace_active=true"):
+        rollover_service.bind(PackageBindingRequest(strategy_id="strat_a", package_id="pkg_a", selection_run_id="sel_b"))
+
+    result = rollover_service.bind_with_result(
+        PackageBindingRequest(
+            strategy_id="strat_a",
+            package_id="pkg_a",
+            selection_run_id="sel_b",
+            replace_active=True,
+            replacement_reason="next_trading_day_selection",
+        )
+    )
+
+    historical = repo.list_package_bindings("strat_a")
+    retired = repo.get_package_binding(first.binding_id)
+    assert result.action == "replaced_active"
+    assert result.replaced_binding == retired
+    assert result.binding.selection_run_id == "sel_b"
+    assert result.binding.trade_date == date(2026, 5, 19)
+    assert result.binding.runtime_config["binding_lifecycle"]["replaces_binding_id"] == first.binding_id
+    assert retired.binding_status.value == "RETIRED"
+    assert retired.runtime_config["binding_lifecycle"]["replaced_by_binding_id"] == result.binding.binding_id
+    assert repo.get_active_package_binding("strat_a") == result.binding
+    assert [binding.binding_status.value for binding in historical] == ["RETIRED", "ACTIVE"]
 
 
 def test_package_binding_rejects_unavailable_package_selection_and_manifest_mismatch() -> None:
