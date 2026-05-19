@@ -50,6 +50,15 @@ class NoopRefreshAudit:
         return None
 
 
+class RecordingRefreshAudit:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def require_success(self, **kwargs):
+        self.calls.append(kwargs)
+        return None
+
+
 class FakeSuspendLookup:
     def __init__(self, suspended: set[str] | None = None) -> None:
         self.suspended = suspended or set()
@@ -1524,6 +1533,51 @@ def test_selection_center_filters_suspended_and_backfills_by_raw_rank() -> None:
     assert [item.rank for item in run.aggregate_results] == [1, 2]
     assert run.excluded_results[manifest.package_id][0].symbol == "000001.SZ"
     assert run.excluded_results[manifest.package_id][0].reason == "suspended_by_suspend_d"
+
+
+def test_selection_center_preopen_readiness_does_not_require_daily_basic_gate() -> None:
+    package_repo = InMemoryStrategyPackageRepository()
+    manifest = ready_manifest_with_score_rows(
+        "pkg_preopen_data_gate",
+        [
+            {"symbol": "000001.SZ", "score": 0.99, "rank": 1, "target_weight": 0.03, "reference_price": 10.0},
+            {"symbol": "000002.SZ", "score": 0.88, "rank": 2, "target_weight": 0.03, "reference_price": 10.0},
+        ],
+    )
+    runtime_config = {
+        "selection_artifact_config": {
+            "cutoff_date": "2024-01-02",
+            "required_cutoff_audit_datasets": ["stk_limit"],
+        },
+        "runtime_profile": {"selection": {"top_k": 1}},
+    }
+    seed_test_authoritative_artifact(
+        manifest,
+        [
+            {"symbol": "000001.SZ", "score": 0.99, "rank": 1, "target_weight": 0.03, "reference_price": 10.0},
+            {"symbol": "000002.SZ", "score": 0.88, "rank": 2, "target_weight": 0.03, "reference_price": 10.0},
+        ],
+        trade_dates=[date(2024, 1, 3)],
+        runtime_config=runtime_config,
+    )
+    package_repo.save_manifest(manifest)
+    refresh_audit = RecordingRefreshAudit()
+    service = SelectionCenterService(
+        package_repository=package_repo,
+        repository=InMemorySelectionCenterRepository(),
+        runtime=StrategyPackageRuntime(),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=refresh_audit,
+    )
+
+    service.run_single_package(
+        package_id=manifest.package_id,
+        trade_date=date(2024, 1, 3),
+        data_source="DB_HISTORICAL",
+        runtime_config=runtime_config,
+    )
+
+    assert [call["dataset"] for call in refresh_audit.calls] == ["suspend_d", "stk_limit"]
 
 
 def test_selection_center_runtime_profile_industry_blacklist_backfills() -> None:
