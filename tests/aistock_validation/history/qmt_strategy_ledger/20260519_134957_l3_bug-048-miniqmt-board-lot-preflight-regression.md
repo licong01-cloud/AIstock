@@ -3,8 +3,8 @@
 - Module: qmt_strategy_ledger
 - Level: L3
 - Date: 2026-05-19T13:49:57+08:00
-- Git base: 733be35 origin/main
-- Fix commit: 03b49f8
+- Git base: ea1efcd origin/main after BUG-060 merge
+- Fix commit: dff0002
 - Branch: bug/BUG-048-miniqmt-board-lot
 - Worktree: F:\Dev\AIstock_worktrees\bug-048-miniqmt-board-lot
 - Operator: codex-app
@@ -77,4 +77,19 @@ git diff --check
 - Need production backend restart: yes after merge/deploy for runtime effect, but not performed by Codex.
 - Need dev service restart: not required for tests; required only if manually testing the HTTP endpoint in a running backend.
 - Production impact: no production `8001/3000`, broker order placement, or DB writes used during validation.
+
+## Main Sync Rerun - 2026-05-19 18:52 CST
+
+- Reason: PR #62 previously failed `validation_center_backend` because BUG-060 was not yet merged into `main`.
+- Action: rebased the BUG-048 branch onto `origin/main` at `ea1efcd` and dropped the duplicate BUG-060 reporting commit from this PR scope.
+- Backup: preserved the old remote branch head as local `backup/bug-048-before-main-sync-20260519-185244`.
+- Rerun result:
+  - `conda run -n AIstock python -m pytest backend/tests/qmt_strategy_ledger/test_order_service_preflight.py backend/tests/qmt_strategy_ledger/test_selection_order_builder.py -q` -> 14 passed.
+  - `conda run -n AIstock python -m pytest backend/tests/qmt_strategy_ledger -q` -> 39 passed.
+  - `conda run -n AIstock python -m compileall backend/services/qmt_strategy_ledger/order_service.py backend/services/qmt_strategy_ledger/selection_order_builder.py backend/execution_algos/board_lot.py` -> passed.
+  - `git diff --check` -> passed.
+  - `C:\Users\lc999\miniconda3\envs\AIstock\python.exe -m nox -s validation_module_registry_l0` -> 8 passed.
+  - `C:\Users\lc999\miniconda3\envs\AIstock\python.exe -m nox -s guardrail_changed_files` -> passed with no staged-file findings at rerun time.
+  - `C:\Users\lc999\miniconda3\envs\AIstock\python.exe -m nox -s l0` -> passed; existing baseline/raw-JSON warnings remain non-blocking.
+  - `C:\Users\lc999\miniconda3\envs\AIstock\python.exe -m nox -s validation_center_backend` -> 101 passed, coverage line 80.19%, branch 60.52%.
 
