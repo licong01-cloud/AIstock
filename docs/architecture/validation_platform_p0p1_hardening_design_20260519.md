@@ -610,3 +610,159 @@ flowchart TD
 ## 15. 建议结论
 
 建议立即按阶段 A 开始实现，因为它直接解决流水线平台可信度问题。阶段 A 完成后，再实现夜间可用性展示和失败自动 BUG 闭环。这样可以在不牺牲开发效率的前提下，让 AIstock 流水线从“有很多测试入口”升级为“能够自证健康、自动发现目录问题、自动形成缺陷闭环”的平台。
+
+## 16. 生产相邻功能的隔离验证设计补充
+
+### 16.1 背景
+
+AIstock 中有大量功能天然接近生产环境：模拟盘、Paper v2、MiniQMT、QE 实验、RDAgent、数据同步、Qlib/H5/Bin 数据生成、DR 备份、实盘前数据检查等。这些功能如果只做 mock 测试，无法证明真实业务链路可用；但如果直接在生产数据、生产账户或生产路径上验证，又会带来不可接受的污染和交易风险。
+
+因此，流水线需要支持“可清理的真实验证”，而不是在“完全 mock”和“直接动生产”之间二选一。
+
+### 16.2 分层验证策略
+
+| 层级 | 目标 | 允许资源 | 禁止事项 | 合入关系 |
+|---|---|---|---|---|
+| L0/L1 静态与单元 | 快速发现目录、类型、纯函数问题 | 本地文件、mock、内存 fake | 访问生产 DB、启动交易、长任务 | PR 必过 |
+| L2 后端契约 | 验证服务、schema、API contract | 临时 DB、fixture、小样本、dry-run | 写生产 DB、依赖交易时段 | PR 必过或按模块必过 |
+| L3 隔离集成 | 验证 dev port / dev DB / UI / API | dev DB、临时 portfolio、临时 experiment、mock worker | 写生产账户、改生产 Qlib 路径 | 合入前强建议，高风险模块必过 |
+| L4 夜间真实小样本 | 验证真实依赖的小规模闭环 | self-hosted runner、dev DB、临时命名空间、小样本真实数据 | 生产表无标记写入、不可清理写入 | 可先合入但标记 `L4 pending`；生产启用前必须过 |
+| L5 发布前候选 | 验证长耗时/准生产链路 | 显式批准的候选数据、备份、生产相同路径的影子副本 | 未批准替换生产数据 | 生产启用或数据替换前必须过 |
+
+### 16.3 隔离资源命名规范
+
+所有可清理验证资源必须有统一命名和 TTL：
+
+```text
+validation_<plan_key>_<run_id>_<yyyymmddhhmmss>
+```
+
+示例：
+
+- Paper portfolio：`validation_paper_v2_l3_26073670429_202605190307`
+- QE experiment：`validation_qe_smoke_26073670429_202605190307`
+- Data sync job：`validation_data_sync_autonomy_26073670429_202605190307`
+- Qlib candidate path：`F:/Dev/AIstock/qlib_candidates/validation_<run_id>/...`
+- Temporary DB schema：`validation_<run_id>` 或表内 `validation_run_id` 字段。
+
+每个资源必须记录：
+
+- `validation_run_id`
+- `plan_key`
+- `created_at`
+- `ttl_hours`
+- `cleanup_command`
+- `owner`：`ci` / `nightly` / `mcp` / `manual`
+- `business_state_write=false|isolated|prod_approved`
+
+### 16.4 写入隔离规则
+
+| 场景 | 推荐方式 | 清理方式 |
+|---|---|---|
+| Paper v2 / 模拟盘 | 创建独立 validation portfolio/account/session，禁止复用生产 portfolio | 按 `validation_run_id` 删除 session/portfolio 或标记 archived |
+| MiniQMT 模拟 | 使用 `miniqmt_sim` broker backend 与专用 validation account | 删除/归档 validation account ledger 与 orders |
+| QE 实验 | 使用 `validation_*` experiment/task id，限制 loop、seed、股票池、日期范围 | 通过 archive/job cleanup 标记 validation artifact，可保留摘要 evidence |
+| RDAgent / worker | 使用独立 workspace root，禁止写真实 worker production workspace | 删除 workspace 或保留 manifest 后压缩归档 |
+| 数据同步 | 使用 dev DB、shadow schema、small symbol/date window、dry-run plan | 按 run_id 删除 shadow rows 或 drop schema |
+| Qlib/H5/Bin 生成 | 生成 candidate path，不覆盖 `/home/lc999/data/qlib_bin` 等生产路径 | 删除 candidate path 或保留 manifest |
+| DR snapshot | 只读生产 DB，输出到受控备份目录 | 按 retention 策略清理旧备份 |
+
+### 16.5 正向业务验证要求
+
+高风险模块不能只依赖 fail-fast 负向测试，还需要至少一个正向成功路径：
+
+- Paper v2：能创建 validation portfolio，生成 target，执行一个隔离 day run，产出 ledger/session evidence。
+- QE 实验：能创建小样本 validation experiment，完成至少一个轻量 loop 或 replay，产出 metrics/artifact manifest。
+- 数据同步：能对少量 symbol/date 做 dry-run + shadow write + reconciliation，证明不会写错生产表。
+- Research Pipeline：能读取/回填一个小样本 HMM backtest timeline，证明 artifact-ref/backtest-record 链路可查。
+- Qlib candidate：能在非生产路径初始化 provider，读取样本 calendar/instrument/features，并跑一个 mini backtest smoke。
+
+### 16.6 清理与审计
+
+新增建议：
+
+- `scripts/validation_resource_cleanup.py`
+- `tests/aistock_validation/catalog/resource_policies.yaml`
+- `tmp/validation/resources/<run_id>.json`
+
+资源清单示例：
+
+```json
+{
+  "schema_version": "aistock_validation_resources_v1",
+  "run_id": "26073670429",
+  "plan_key": "paper_v2_l3",
+  "resources": [
+    {
+      "resource_type": "paper_portfolio",
+      "resource_id": "validation_paper_v2_l3_26073670429_202605190307",
+      "storage": "dev_db",
+      "ttl_hours": 72,
+      "cleanup_command": "python scripts/validation_resource_cleanup.py --run-id 26073670429 --apply",
+      "state": "created"
+    }
+  ]
+}
+```
+
+清理策略：
+
+- L2/L3 临时资源默认 TTL 24-72 小时。
+- L4/L5 可保留摘要 evidence 和 manifest，但清理大文件、临时 DB 行、临时 workspace。
+- 清理失败必须生成 P1/P2 BUG，不能静默忽略。
+
+### 16.7 流水线目录扩展建议
+
+为了让“可清理真实验证”进入平台目录，应在 `test_plans.yaml` 中扩展字段：
+
+```yaml
+resource_policy:
+  business_state_write: isolated
+  allowed_db_targets: [dev_db, shadow_schema]
+  forbidden_db_targets: [prod_db]
+  creates_validation_resources: true
+  cleanup_required: true
+  ttl_hours: 72
+  max_runtime_minutes: 30
+  max_sample_symbols: 20
+  max_date_window_days: 5
+  production_promotion_required: false
+```
+
+新增 catalog integrity 校验：
+
+- `writes_business_state=true` 但没有 `resource_policy`，必须失败。
+- `resource_policy.cleanup_required=true` 但没有 cleanup command，必须失败。
+- `allowed_db_targets` 包含 prod 时，必须要求人工批准字段。
+- L4/L5 计划必须声明 timeout、样本规模和 artifact 上限。
+
+### 16.8 近期功能接入流水线的现状判断
+
+按当前 main 快照观察：
+
+- Validation Center、QE archive、QE read、Paper v2、model registry、market regime、RL execution、data quality、DR 已有测试计划或 nox session。
+- Research Pipeline 已有 `research_pipeline_backend` nox session，但尚未完整进入 `test_plans.yaml` / `plan_catalog.py` / `ui_targets.yaml`，因此当前 CI 已能发现 `/research-pipeline` route 缺登记。这说明门禁有效，但该新功能的流水线目录接入还不完整。
+- QE MCP / QE template 已有 nox session：`qe_mcp_backend`、`qe_template_ui`、`qe_mcp_l3`，但是否进入 test_plans allowlist 需要单独补齐，否则不能被 Validation Center/MCP 统一调度。
+- Data Sync Autonomy 在开发分支中已经开始加入 `data_sync_autonomy_backend`，但需要确保 `noxfile.py`、`plan_catalog.py`、`test_plans.yaml` 三者一起合入，并补 resource policy，避免被视为半注册计划。
+- MiniQMT / 模拟盘迁移相关 bug 和设计较多，但目前更偏专项验证与 issue 修复流程，建议新增独立 `miniqmt_sim_backend` / `miniqmt_strategy_ledger_l3` 测试计划，并明确使用 validation account，不触碰真实账户。
+
+### 16.9 建议新增的高优先级测试计划
+
+| plan_key | 模块 | 层级 | 目的 | 资源策略 |
+|---|---|---|---|---|
+| `research_pipeline_backend` | research_pipeline | L2 | 验证 research pipeline schema/service/API contract | 无业务写入或临时 fixture |
+| `research_pipeline_ui` | research_pipeline | L2/L3 | 验证页面只读 API 和 route coverage | mock API / dev backend |
+| `data_sync_autonomy_backend` | local_data | L2 | 验证数据同步状态机、dry-run、reconciliation | dev DB / shadow schema |
+| `data_sync_autonomy_shadow_l3` | local_data | L3 | 小样本真实 sync 到 shadow schema | cleanup required |
+| `qe_mcp_backend` | qe_mcp | L2 | 验证 MCP template/archive/tool contract | 不写生产 DB |
+| `qe_mcp_l3` | qe_mcp | L3 | 验证受控 MCP + backend/dev port | artifact cleanup |
+| `qe_smoke_validation_experiment_l4` | qe | L4 | 夜间创建小样本 validation QE 实验 | validation experiment + cleanup |
+| `miniqmt_sim_backend` | qmt | L2 | 验证 sim broker / ledger / order preflight | 内存或 dev DB validation account |
+| `miniqmt_strategy_ledger_l3` | qmt | L3 | 验证少量模拟盘 order/fill/ledger 闭环 | validation account + cleanup |
+| `qlib_candidate_smoke_l4` | qlib_data | L4 | 验证非生产 Qlib candidate 可用 | candidate path + manifest |
+
+### 16.10 结论
+
+可以实现对模拟盘、QE 实验、数据同步这类生产相邻功能的验证，关键不是完全禁止写入，而是把写入限制在可识别、可清理、可审计、非生产的 validation namespace 中。流水线应把“是否创建资源、是否清理、是否触碰生产、是否需要人工批准”作为测试计划的一等字段，而不是靠口头约定。
+
+近期新功能已经有一部分加入了 nox 或测试目录，但还没有全部进入统一 Validation Center catalog。下一步应把 Research Pipeline、Data Sync Autonomy、QE MCP、MiniQMT simulation、Qlib candidate smoke 按上述 resource policy 方式补入流水线。
