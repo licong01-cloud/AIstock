@@ -1,0 +1,159 @@
+{
+  "coverage": {
+    "schema_version": "aistock_validation_coverage_snapshot_v1",
+    "status": "passed",
+    "line": 80.19,
+    "branch": 60.52,
+    "diff_line": null,
+    "diff_branch": null,
+    "snapshot_path": "tmp/validation/coverage/validation_center_backend_snapshot.json",
+    "quality_gates": [
+      {
+        "metric": "line",
+        "threshold": 75,
+        "actual": 80.19,
+        "status": "passed"
+      },
+      {
+        "metric": "branch",
+        "threshold": 55,
+        "actual": 60.52,
+        "status": "passed"
+      }
+    ]
+  },
+  "environment": {
+    "backend_port": null,
+    "frontend_port": null,
+    "next_public_api_base": null,
+    "paper_v2_api_base": null,
+    "paper_v2_skip_realtime": null,
+    "qe_api_base": null,
+    "qe_archive_api_base": null,
+    "qe_archive_l3_skip_ui": null,
+    "qe_read_l3_skip_ui": null,
+    "tdx_http_port": null
+  },
+  "evidence": [
+    {
+      "kind": "coverage",
+      "path": "tmp/validation/coverage/validation_center_backend_snapshot.json"
+    },
+    {
+      "kind": "module_ownership_json",
+      "path": "tmp/validation/module_ownership/l0_paths.json"
+    },
+    {
+      "kind": "module_ownership_markdown",
+      "path": "tmp/validation/module_ownership/l0_paths.md"
+    },
+    {
+      "kind": "guardrail_l0_json",
+      "path": "tmp/validation/guardrails/l0_paths.json"
+    },
+    {
+      "kind": "guardrail_l0_markdown",
+      "path": "tmp/validation/guardrails/l0_paths.md"
+    },
+    {
+      "kind": "evidence_manifest",
+      "path": "tests/aistock_validation/history/validation_center/20260519_152612_l2_bug-060-research-pipeline-ui-target-catalog.evidence.json"
+    },
+    {
+      "kind": "changed_files_guardrail_json",
+      "path": "tmp/validation/guardrails/changed_files.json"
+    },
+    {
+      "kind": "changed_files_guardrail_markdown",
+      "path": "tmp/validation/guardrails/changed_files.md"
+    },
+    {
+      "kind": "changed_files_module_ownership_json",
+      "path": "tmp/validation/module_ownership/changed_files.json"
+    },
+    {
+      "kind": "changed_files_module_ownership_markdown",
+      "path": "tmp/validation/module_ownership/changed_files.md"
+    }
+  ],
+  "finished_at": "2026-05-19T15:26:12",
+  "git_commit": "733be35",
+  "level": "L2",
+  "level_slug": "l2",
+  "markdown_path": "tests/aistock_validation/history/validation_center/20260519_152612_l2_bug-060-research-pipeline-ui-target-catalog.md",
+  "metadata_path": "tests/aistock_validation/history/validation_center/20260519_152612_l2_bug-060-research-pipeline-ui-target-catalog.json",
+  "module": "validation_center",
+  "module_slug": "validation_center",
+  "operator": "lc999",
+  "quality_gates": [
+    {
+      "name": "validation_center_backend",
+      "status": "passed"
+    },
+    {
+      "name": "validation_module_registry_l0",
+      "status": "passed"
+    },
+    {
+      "name": "l0",
+      "status": "passed"
+    },
+    {
+      "name": "git_diff_check",
+      "status": "passed"
+    },
+    {
+      "name": "guardrail_changed_files",
+      "status": "passed"
+    }
+  ],
+  "residual_risks": [
+    "/research-pipeline remains coverage_status=planned; this issue does not validate the route-level real business UI flow.",
+    "Existing non-blocking P2 raw-JSON guardrail findings reported by L0 are outside BUG-060 scope."
+  ],
+  "schema_version": "aistock_validation_run_v1",
+  "started_at": "2026-05-19T15:26:12",
+  "status": "passed",
+  "steps": [
+    {
+      "name": "targeted_catalog_regression",
+      "command": "conda run -n AIstock python -m pytest backend/tests/test_validation_ui_target_catalog.py::test_default_ui_target_catalog_matches_frontend_nav_groups -q",
+      "status": "passed",
+      "result": "1 passed in 0.48s"
+    },
+    {
+      "name": "validation_center_backend",
+      "command": "conda run -n AIstock python -m nox -s validation_center_backend",
+      "status": "passed",
+      "result": "101 passed; coverage line=80.19 branch=60.52 status=passed"
+    },
+    {
+      "name": "validation_module_registry_l0",
+      "command": "C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m nox -s validation_module_registry_l0",
+      "status": "passed",
+      "result": "8 passed; module ownership files=12 mapped=12 unmapped=0 ambiguous=0"
+    },
+    {
+      "name": "guardrail_changed_files",
+      "command": "C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m nox -s guardrail_changed_files",
+      "status": "passed",
+      "result": "staged files=4 findings=0 blocking=0; module ownership mapped=4 unmapped=0 ambiguous=0"
+    },
+    {
+      "name": "l0",
+      "command": "C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m nox -s l0",
+      "status": "passed",
+      "result": "L0 successful; no blocking new P1 findings"
+    },
+    {
+      "name": "diff_check",
+      "command": "git diff --check",
+      "status": "passed",
+      "result": "no diff whitespace errors"
+    }
+  ],
+  "title": "BUG-060 research pipeline UI target catalog",
+  "title_slug": "bug-060-research-pipeline-ui-target-catalog",
+  "pass_scope": "L2 catalog contract fix for BUG-060; no runtime/API/UI behavior changes",
+  "business_assertion": "Validation Center catalog now maps the official /research-pipeline nav route, so validation_center_backend no longer fails unrelated PRs on nav/catalog drift."
+}

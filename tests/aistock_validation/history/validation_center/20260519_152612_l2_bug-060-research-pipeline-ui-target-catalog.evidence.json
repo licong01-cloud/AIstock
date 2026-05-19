@@ -1,0 +1,143 @@
+{
+  "environment": {
+    "backend_port": null,
+    "frontend_port": null,
+    "next_public_api_base": null,
+    "paper_v2_api_base": null,
+    "paper_v2_skip_realtime": null,
+    "qe_api_base": null,
+    "qe_archive_api_base": null,
+    "qe_archive_l3_skip_ui": null,
+    "qe_read_l3_skip_ui": null,
+    "tdx_http_port": null
+  },
+  "evidence": [
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "catalog",
+      "path": "tests/aistock_validation/catalog/ui_targets.yaml",
+      "sha256": "136c13eaf122aca19e948d379c569c541ff146114aea9c14081d7d865d252ba9",
+      "size_bytes": 25574
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "ownership_catalog",
+      "path": "tests/aistock_validation/catalog/file_ownership.yaml",
+      "sha256": "e084965e702b0edadec438c435e6f8803c5349b973723f6e766c35de258f3bf1",
+      "size_bytes": 17054
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "bug_record",
+      "path": "tests/aistock_validation/bugs/20260519_BUG-060-validation-center-ui-target-catalog-missing-research-pipelin.json",
+      "sha256": "e63ddb45fe5a27240e00c82a4b6658443cb38a096b72e3a17ea28656235cf66b",
+      "size_bytes": 6410
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "validation_record",
+      "path": "tests/aistock_validation/history/validation_center/20260519_152612_l2_bug-060-research-pipeline-ui-target-catalog.md",
+      "sha256": "364feb2edbe71b11d486103b207ccb8b9eb499d5bc755befb61ef6c5af5ace55",
+      "size_bytes": 5694
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "module_ownership_json",
+      "path": "tmp/validation/module_ownership/l0_paths.json",
+      "sha256": "665fa76fbb9dfb63e2c16c2c0b07714069a4ffdc824d0a285173f4eff95856e7",
+      "size_bytes": 6829
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "module_ownership_md",
+      "path": "tmp/validation/module_ownership/l0_paths.md",
+      "sha256": "abc8d4d21e76988b44781ebb73d903b9aaa87fde7eb8544f518ea0fc28524bb1",
+      "size_bytes": 290
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "changed_files_module_ownership_json",
+      "path": "tmp/validation/module_ownership/changed_files.json",
+      "sha256": "c04ef4aeb6292fe5fa7c478cecc87375e8c95afc88a4e8c284fa009873c6ec19",
+      "size_bytes": 2705
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "changed_files_module_ownership_md",
+      "path": "tmp/validation/module_ownership/changed_files.md",
+      "sha256": "efd43d87b1834eb0e245e25eaaa1f277a614bbcb9295f6d61bd0a3f49ef3dd9e",
+      "size_bytes": 295
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "guardrail_l0_json",
+      "path": "tmp/validation/guardrails/l0_paths.json",
+      "sha256": "6a924ad30a98b0d3bb87c915dc4e5e31cff5909a3f29aa89e82ba18ff4222057",
+      "size_bytes": 4569
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "guardrail_l0_md",
+      "path": "tmp/validation/guardrails/l0_paths.md",
+      "sha256": "843284fdb34dc64aa76ac2ff5a9d03fd8426d26465350ff8f6527e52da064d49",
+      "size_bytes": 2111
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "changed_files_guardrail_json",
+      "path": "tmp/validation/guardrails/changed_files.json",
+      "sha256": "446220cdb6b60df6d7f2fd123d2e356aede974fcac5fa49600de42e876aeaf92",
+      "size_bytes": 565
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "changed_files_guardrail_md",
+      "path": "tmp/validation/guardrails/changed_files.md",
+      "sha256": "86a3051be43ef1362af9ab13272f810daddb7f49dbf31c11def949776dcb0388",
+      "size_bytes": 800
+    },
+    {
+      "child_count": null,
+      "exists": true,
+      "is_dir": false,
+      "kind": "coverage",
+      "path": "tmp/validation/coverage/validation_center_backend_snapshot.json",
+      "sha256": "d801a25a3e6aca3ffea017a8976e95f45b2a2cc3f54dc38a94c11e22cc7a5f9c",
+      "size_bytes": 123837
+    }
+  ],
+  "generated_at": "2026-05-19T15:37:19",
+  "git_commit": "733be35",
+  "level": "L2",
+  "missing": [],
+  "missing_count": 0,
+  "module": "validation_center",
+  "operator": "lc999",
+  "run_id": "20260519_152612_l2_bug-060-research-pipeline-ui-target-catalog",
+  "schema_version": "aistock_validation_evidence_manifest_v1",
+  "title": "BUG-060 research pipeline UI target catalog"
+}
