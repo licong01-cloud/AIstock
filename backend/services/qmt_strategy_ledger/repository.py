@@ -115,45 +115,48 @@ class QmtStrategyLedgerRepository:
         _validate_virtual_account(account)
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE qmt_strategy.virtual_account
-                    SET display_name = %s,
-                        mode = %s,
-                        initial_cash = %s,
-                        cash = %s,
-                        frozen_cash = %s,
-                        market_value = %s,
-                        realized_pnl = %s,
-                        unrealized_pnl = %s,
-                        status = %s,
-                        risk_config = %s,
-                        metadata = %s,
-                        updated_at = %s
-                    WHERE strategy_id = %s
-                    """,
-                    (
-                        account.display_name,
-                        account.mode,
-                        account.initial_cash,
-                        account.cash,
-                        account.frozen_cash,
-                        account.market_value,
-                        account.realized_pnl,
-                        account.unrealized_pnl,
-                        _enum_value(account.status),
-                        _json(account.risk_config),
-                        _json(account.metadata),
-                        account.updated_at,
-                        account.strategy_id,
-                    ),
-                )
-                if cur.rowcount == 0:
-                    raise DataUnavailableError(
-                        "qmt strategy virtual account does not exist",
-                        context={"strategy_id": account.strategy_id},
-                    )
+                self._update_virtual_account_with_cursor(cur, account)
         return account
+
+    def _update_virtual_account_with_cursor(self, cur: Any, account: VirtualAccount) -> None:
+        cur.execute(
+            """
+            UPDATE qmt_strategy.virtual_account
+            SET display_name = %s,
+                mode = %s,
+                initial_cash = %s,
+                cash = %s,
+                frozen_cash = %s,
+                market_value = %s,
+                realized_pnl = %s,
+                unrealized_pnl = %s,
+                status = %s,
+                risk_config = %s,
+                metadata = %s,
+                updated_at = %s
+            WHERE strategy_id = %s
+            """,
+            (
+                account.display_name,
+                account.mode,
+                account.initial_cash,
+                account.cash,
+                account.frozen_cash,
+                account.market_value,
+                account.realized_pnl,
+                account.unrealized_pnl,
+                _enum_value(account.status),
+                _json(account.risk_config),
+                _json(account.metadata),
+                account.updated_at,
+                account.strategy_id,
+            ),
+        )
+        if cur.rowcount == 0:
+            raise DataUnavailableError(
+                "qmt strategy virtual account does not exist",
+                context={"strategy_id": account.strategy_id},
+            )
 
     def create_package_binding(self, binding: StrategyPackageBinding) -> StrategyPackageBinding:
         _validate_package_binding(binding)
@@ -484,35 +487,57 @@ class QmtStrategyLedgerRepository:
         return [_row_to_position_lot(row) for row in rows]
 
     def append_cash_entry(self, entry: CashLedgerEntry) -> CashLedgerEntry:
+        self._insert_cash_entry(entry, ignore_conflict=False)
+        return entry
+
+    def append_cash_entry_once(self, entry: CashLedgerEntry) -> tuple[CashLedgerEntry, bool]:
+        inserted = self._insert_cash_entry(entry, ignore_conflict=True)
+        return entry, inserted
+
+    def apply_cash_entry_once(self, entry: CashLedgerEntry, account: VirtualAccount) -> tuple[CashLedgerEntry, bool]:
+        _validate_virtual_account(account)
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO qmt_strategy.cash_ledger (
-                        cash_id, strategy_id, account_id, trade_date, entry_type,
-                        cash_delta, cash_after, frozen_delta, frozen_after, intent_id,
-                        trade_id, symbol, reason, metadata, created_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        entry.cash_id,
-                        entry.strategy_id,
-                        entry.account_id,
-                        entry.trade_date,
-                        _enum_value(entry.entry_type),
-                        entry.cash_delta,
-                        entry.cash_after,
-                        entry.frozen_delta,
-                        entry.frozen_after,
-                        entry.intent_id,
-                        entry.trade_id,
-                        entry.symbol,
-                        entry.reason,
-                        _json(entry.metadata),
-                        entry.created_at,
-                    ),
-                )
-        return entry
+                inserted = self._insert_cash_entry_with_cursor(cur, entry, ignore_conflict=True)
+                if inserted:
+                    self._update_virtual_account_with_cursor(cur, account)
+        return entry, inserted
+
+    def _insert_cash_entry(self, entry: CashLedgerEntry, *, ignore_conflict: bool) -> bool:
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                return self._insert_cash_entry_with_cursor(cur, entry, ignore_conflict=ignore_conflict)
+
+    def _insert_cash_entry_with_cursor(self, cur: Any, entry: CashLedgerEntry, *, ignore_conflict: bool) -> bool:
+        conflict_clause = "ON CONFLICT (cash_id) DO NOTHING RETURNING cash_id" if ignore_conflict else "RETURNING cash_id"
+        cur.execute(
+            f"""
+            INSERT INTO qmt_strategy.cash_ledger (
+                cash_id, strategy_id, account_id, trade_date, entry_type,
+                cash_delta, cash_after, frozen_delta, frozen_after, intent_id,
+                trade_id, symbol, reason, metadata, created_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            {conflict_clause}
+            """,
+            (
+                entry.cash_id,
+                entry.strategy_id,
+                entry.account_id,
+                entry.trade_date,
+                _enum_value(entry.entry_type),
+                entry.cash_delta,
+                entry.cash_after,
+                entry.frozen_delta,
+                entry.frozen_after,
+                entry.intent_id,
+                entry.trade_id,
+                entry.symbol,
+                entry.reason,
+                _json(entry.metadata),
+                entry.created_at,
+            ),
+        )
+        return cur.fetchone() is not None
 
     def list_cash_entries(self, strategy_id: str) -> list[CashLedgerEntry]:
         with self._conn_factory() as conn:
@@ -888,10 +913,32 @@ class InMemoryQmtStrategyLedgerRepository:
     def append_cash_entry(self, entry: CashLedgerEntry) -> CashLedgerEntry:
         if entry.cash_id in self._cash_entries:
             raise ValueError(f"cash ledger entry already exists: {entry.cash_id}")
+        self._append_cash_entry(entry)
+        return entry
+
+    def append_cash_entry_once(self, entry: CashLedgerEntry) -> tuple[CashLedgerEntry, bool]:
+        if entry.cash_id in self._cash_entries:
+            return self._cash_entries[entry.cash_id], False
+        self._append_cash_entry(entry)
+        return entry, True
+
+    def apply_cash_entry_once(self, entry: CashLedgerEntry, account: VirtualAccount) -> tuple[CashLedgerEntry, bool]:
+        if entry.cash_id in self._cash_entries:
+            return self._cash_entries[entry.cash_id], False
+        _validate_virtual_account(account)
+        original = self._virtual_accounts.get(account.strategy_id)
+        if original is None:
+            raise DataUnavailableError("qmt strategy virtual account does not exist", context={"strategy_id": account.strategy_id})
+        if (original.account_id, original.strategy_name) != (account.account_id, account.strategy_name):
+            raise ValueError("account_id and strategy_name are immutable for virtual account updates")
+        self._append_cash_entry(entry)
+        self._virtual_accounts[account.strategy_id] = account
+        return entry, True
+
+    def _append_cash_entry(self, entry: CashLedgerEntry) -> None:
         self._cash_entries[entry.cash_id] = entry
         self._cash_entry_sequence[entry.cash_id] = self._next_cash_entry_sequence
         self._next_cash_entry_sequence += 1
-        return entry
 
     def list_cash_entries(self, strategy_id: str) -> list[CashLedgerEntry]:
         entries = [entry for entry in self._cash_entries.values() if entry.strategy_id == strategy_id]
