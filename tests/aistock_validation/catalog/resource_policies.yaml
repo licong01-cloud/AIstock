@@ -1,0 +1,122 @@
+﻿schema_version: aistock_validation_resource_policies_v1
+status: design_draft
+updated_at: '2026-05-19'
+description: >-
+  Design-stage catalog for validation resource isolation policies. These policies
+  define how production-adjacent validation plans may create small, auditable,
+  cleanup-safe resources without touching production business state.
+policies:
+  no_resource:
+    description: No external validation resource is created.
+    resource_mode: none
+    business_state_write: none
+    cleanup_required: false
+  readonly:
+    description: Read-only validation against mocks, fixtures, local files, or dev endpoints.
+    resource_mode: readonly
+    business_state_write: none
+    cleanup_required: false
+  isolated_dev_db:
+    description: Writes are allowed only in dev DB or temporary test DB with validation namespace.
+    resource_mode: isolated_write
+    business_state_write: isolated
+    allowed_db_targets: [dev_db, temp_db]
+    forbidden_db_targets: [prod_db]
+    validation_namespace_required: true
+    validation_run_id_required: true
+    cleanup_required: true
+    default_ttl_hours: 72
+  shadow_schema_small_sample:
+    description: Small-sample writes into shadow schema with validation_run_id and bounded scope.
+    resource_mode: isolated_write
+    business_state_write: isolated
+    allowed_db_targets: [shadow_schema]
+    forbidden_db_targets: [prod_db]
+    validation_namespace_required: true
+    validation_run_id_required: true
+    cleanup_required: true
+    max_sample_symbols: 20
+    max_date_window_days: 5
+    default_ttl_hours: 72
+  validation_paper_account:
+    description: Isolated paper portfolio/account/session for Paper v2 or MiniQMT simulation validation.
+    resource_mode: isolated_write
+    business_state_write: isolated
+    resource_types: [paper_portfolio, paper_session, paper_order, paper_fill, paper_ledger, validation_account]
+    allowed_db_targets: [dev_db]
+    forbidden_db_targets: [prod_db]
+    validation_namespace_required: true
+    validation_run_id_required: true
+    cleanup_required: true
+    default_ttl_hours: 72
+  validation_qe_experiment:
+    description: Bounded QE validation experiment with limited loop, seed, universe, date range, and artifact size.
+    resource_mode: isolated_write
+    business_state_write: isolated
+    resource_types: [qe_experiment, qe_workspace, qe_artifact]
+    allowed_db_targets: [dev_db]
+    forbidden_db_targets: [prod_db]
+    validation_namespace_required: true
+    validation_run_id_required: true
+    cleanup_required: true
+    max_sample_symbols: 50
+    max_date_window_days: 120
+    max_runtime_minutes: 60
+    default_ttl_hours: 168
+  qlib_candidate_path:
+    description: Non-production Qlib/H5/Bin candidate path validation and mini backtest smoke.
+    resource_mode: candidate_write
+    business_state_write: none
+    resource_types: [qlib_candidate_path, qlib_report]
+    forbidden_db_targets: [prod_db]
+    forbidden_paths:
+      - /home/lc999/data/qlib_bin
+      - /home/lc999/data/qlib_minute_bin
+      - /home/lc999/data/factor_data
+    validation_namespace_required: true
+    validation_run_id_required: true
+    cleanup_required: false
+    production_promotion_required: true
+    default_ttl_hours: 168
+  prod_db_readonly:
+    description: Read-only production DB validation such as DR, freshness, and schema-diff checks.
+    resource_mode: prod_readonly
+    business_state_write: prod_readonly
+    allowed_db_targets: [prod_readonly]
+    forbidden_operations: [insert, update, delete, truncate, drop, alter]
+    cleanup_required: false
+    manual_approval_required: false
+  prod_approved_write:
+    description: Reserved for explicitly approved production write or promotion operations. Not allowed in PR CI or MCP runner by default.
+    resource_mode: prod_approved_write
+    business_state_write: prod_approved
+    allowed_db_targets: [prod_db]
+    manual_approval_required: true
+    production_promotion_required: true
+    runner_enabled_allowed: false
+    cleanup_required: manual_review
+catalog_integrity_rules:
+  - rule_id: RESOURCE-001
+    severity: P0
+    condition: writes_business_state=true requires resource_policy
+  - rule_id: RESOURCE-002
+    severity: P0
+    condition: creates_validation_resources=true requires resource_types
+  - rule_id: RESOURCE-003
+    severity: P0
+    condition: cleanup_required=true requires cleanup_command or cleanup_policy
+  - rule_id: RESOURCE-004
+    severity: P0
+    condition: prod_approved_write requires manual_approval_required=true
+  - rule_id: RESOURCE-005
+    severity: P0
+    condition: production-adjacent write plans must forbid prod_db unless explicitly approved
+  - rule_id: RESOURCE-006
+    severity: P1
+    condition: L4/L5 plans require runtime timeout and evidence policy
+  - rule_id: RESOURCE-007
+    severity: P1
+    condition: candidate path policies require forbidden production paths
+  - rule_id: RESOURCE-008
+    severity: P1
+    condition: small-sample write plans require bounded sample size or date window

@@ -766,3 +766,11 @@ resource_policy:
 可以实现对模拟盘、QE 实验、数据同步这类生产相邻功能的验证，关键不是完全禁止写入，而是把写入限制在可识别、可清理、可审计、非生产的 validation namespace 中。流水线应把“是否创建资源、是否清理、是否触碰生产、是否需要人工批准”作为测试计划的一等字段，而不是靠口头约定。
 
 近期新功能已经有一部分加入了 nox 或测试目录，但还没有全部进入统一 Validation Center catalog。下一步应把 Research Pipeline、Data Sync Autonomy、QE MCP、MiniQMT simulation、Qlib candidate smoke 按上述 resource policy 方式补入流水线。
+
+## 17. 测试计划与资源策略设计引用
+
+测试计划目录 schema、`resource_policy`、`runtime_policy`、`cleanup_policy`、近期功能测试计划草案和 catalog integrity 扩展规则，详见独立设计文档：
+
+- `docs/architecture/validation_test_plan_resource_policy_design_20260519.md`
+
+实施顺序上，先以该文档完成目录 schema 与资源策略约束，再进入 P0/P1 平台功能开发。这样可以避免功能开发先行后出现测试计划半注册、生产相邻资源不可清理、L4/L5 计划无法被平台审计的问题。
