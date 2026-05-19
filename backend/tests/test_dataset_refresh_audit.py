@@ -129,3 +129,46 @@ def test_dataset_refresh_audit_schema_comments_are_declared_in_migrations():
         needle = f"COMMENT ON COLUMN market.dataset_date_refresh_audit.{column}"
         assert needle in migration
         assert needle in init_schema
+
+
+def test_data_sync_autonomy_schema_comments_are_declared():
+    root = Path(__file__).resolve().parents[2]
+    migration = (root / "backend/migrations/data_sync_autonomy_20260519.sql").read_text(encoding="utf-8")
+
+    required_columns = {
+        "data_sync_targets": {
+            "target_id",
+            "dataset",
+            "target_date",
+            "status",
+            "source",
+            "reason",
+            "failure_category",
+            "next_retry_at",
+            "final_deadline_at",
+            "metadata",
+            "fingerprint",
+            "created_at",
+            "updated_at",
+        },
+        "data_sync_attempts": {
+            "attempt_id",
+            "target_id",
+            "job_id",
+            "status",
+            "started_at",
+            "finished_at",
+            "inserted_rows",
+            "error_message",
+            "metadata",
+            "created_at",
+        },
+    }
+
+    for table, columns in required_columns.items():
+        assert f"COMMENT ON TABLE market.{table}" in migration
+        for column in columns:
+            assert f"COMMENT ON COLUMN market.{table}.{column}" in migration
+    assert "uq_data_sync_targets_dataset_date" in migration
+    assert "cursor_source', 'refresh_audit'" in migration
+    assert "bootstrap_start_date', '2018-01-01'" in migration

@@ -315,6 +315,41 @@ def test_plan_catalog_allows_real_port_ui_smoke_plan(tmp_path) -> None:
     assert plan["writes_business_state"] is False
 
 
+def test_plan_catalog_allows_data_sync_autonomy_backend_plan(tmp_path) -> None:
+    catalog_path = tmp_path / "plans.yaml"
+    _write_json(
+        catalog_path,
+        {
+            "schema_version": "aistock_validation_plans_v1",
+            "plans": [
+                {
+                    "plan_key": "data_sync_autonomy_backend",
+                    "title": "Autonomous local data sync backend regression",
+                    "module": "local_data_management",
+                    "level": "L2",
+                    "command_key": "nox_data_sync_autonomy_backend",
+                    "nox_session": "data_sync_autonomy_backend",
+                    "requires_backend": False,
+                    "requires_frontend": False,
+                    "allowed_backend_ports": [],
+                    "allowed_frontend_ports": [],
+                    "writes_database": False,
+                    "writes_artifacts": False,
+                    "writes_business_state": False,
+                    "runner_enabled": True,
+                }
+            ],
+        },
+    )
+
+    plan = ValidationPlanCatalog(catalog_path).get_plan("data_sync_autonomy_backend")
+
+    assert plan is not None
+    assert plan["nox_session"] == "data_sync_autonomy_backend"
+    assert plan["runner_enabled"] is True
+    assert plan["writes_business_state"] is False
+
+
 def test_validation_health_and_plans_are_read_only(client: TestClient) -> None:
     health = client.get("/api/v1/validation/health").json()["data"]
     assert health["mode"] == "read_only"

@@ -97,6 +97,10 @@ def _date_range(d0: dt.date, d1: dt.date) -> List[dt.date]:
     return out
 
 
+def _to_ymd(value: dt.date) -> str:
+    return value.strftime("%Y%m%d")
+
+
 def _json_dump(data: Any) -> str:
     return json.dumps(data, ensure_ascii=False, default=str)
 
@@ -203,25 +207,21 @@ class TushareSyncEngine:
 
     # -- data fetch / upsert ------------------------------------------------
 
-    def _fetch_from_tushare(self, spec: DatasetSpec, params: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Call Tushare API with rate limiting and retry."""
-        col_names = list(spec.columns.keys())
-        # Build reverse map: db_col -> tushare_field (defaults to same name)
-        db_to_api = {c: spec.api_field_map.get(c, c) for c in col_names}
-        api_fields = [db_to_api[c] for c in col_names]
-        # Reverse: tushare_field -> db_col (for reading DataFrame)
-        api_to_db = {v: k for k, v in db_to_api.items()}
-
-        fields = ",".join(api_fields)
-        merged = {**spec.api_params, **params, "fields": fields}
-
+    def _fetch_one_tushare_page(
+        self,
+        spec: DatasetSpec,
+        params: Dict[str, Any],
+        api_fields: List[str],
+        api_to_db: Dict[str, str],
+    ) -> List[Dict[str, Any]]:
+        """Call one Tushare page with rate limiting and retry."""
         limiter = get_limiter(spec.tushare_api, spec.rate_per_minute)
         last_exc: Optional[Exception] = None
         for attempt in range(3):
             limiter.acquire()
             try:
                 api_fn = getattr(self.pro, spec.tushare_api)
-                df = api_fn(**merged)
+                df = api_fn(**params)
                 if df is None or df.empty:
                     return []
                 rows: List[Dict[str, Any]] = []
@@ -233,6 +233,74 @@ class TushareSyncEngine:
                 if attempt < 2:
                     time.sleep(2 ** attempt)
         raise RuntimeError(f"Tushare {spec.tushare_api} failed after 3 retries: {last_exc}")
+
+    def _fetch_from_tushare(self, spec: DatasetSpec, params: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Call Tushare API with rate limiting, optional pagination, and retry."""
+        col_names = list(spec.columns.keys())
+        # Build reverse map: db_col -> tushare_field (defaults to same name)
+        db_to_api = {c: spec.api_field_map.get(c, c) for c in col_names}
+        api_fields = [db_to_api[c] for c in col_names]
+        # Reverse: tushare_field -> db_col (for reading DataFrame)
+        api_to_db = {v: k for k, v in db_to_api.items()}
+
+        fields = ",".join(api_fields)
+        base_params = {**spec.api_params, **params, "fields": fields}
+
+        if spec.page_limit <= 0:
+            return self._fetch_one_tushare_page(spec, base_params, api_fields, api_to_db)
+
+        all_rows: List[Dict[str, Any]] = []
+        for page in range(max(spec.max_pages, 1)):
+            page_params = {
+                **base_params,
+                "limit": spec.page_limit,
+                "offset": page * spec.page_limit,
+            }
+            rows = self._fetch_one_tushare_page(spec, page_params, api_fields, api_to_db)
+            all_rows.extend(rows)
+            if len(rows) < spec.page_limit:
+                return all_rows
+            if spec.batch_sleep > 0:
+                time.sleep(spec.batch_sleep)
+        raise RuntimeError(
+            f"{spec.name} reached max_pages={spec.max_pages} with page_limit={spec.page_limit}; "
+            "narrow date range or increase pagination policy"
+        )
+
+    def _validate_rows_for_date(
+        self,
+        spec: DatasetSpec,
+        rows: List[Dict[str, Any]],
+        trade_date: dt.date,
+    ) -> None:
+        """Fail fast on provider contract drift before writing audit success."""
+
+        if not rows:
+            return
+        required = set(spec.primary_keys)
+        required.add(spec.date_column)
+        missing = sorted(
+            column
+            for column in required
+            if any(row.get(column) in (None, "") for row in rows)
+        )
+        if missing:
+            raise RuntimeError(
+                f"{spec.name} provider_contract_error missing required fields {missing} "
+                f"for {trade_date.isoformat()}"
+            )
+        if spec.query_mode == QueryMode.BY_DATE:
+            requested = _to_ymd(trade_date)
+            mismatched = [
+                row.get(spec.date_column)
+                for row in rows[:10]
+                if _to_ymd(_parse_ymd(row.get(spec.date_column)) or dt.date.min) != requested
+            ]
+            if mismatched:
+                raise RuntimeError(
+                    f"{spec.name} provider_contract_error returned date outside request "
+                    f"{requested}: {mismatched[:3]}"
+                )
 
     def _upsert_batch(self, conn, spec: DatasetSpec, rows: List[Dict[str, Any]]) -> int:
         """Upsert rows into target table using execute_values + ON CONFLICT."""
@@ -324,6 +392,7 @@ class TushareSyncEngine:
                 row = cur.fetchone()
                 if row and row[0] is not None:
                     return row[0]
+            return None
         sql = f"SELECT max({spec.date_column}) FROM {spec.target_table}"
         with conn.cursor() as cur:
             cur.execute(sql)
@@ -332,6 +401,25 @@ class TushareSyncEngine:
                 return None
             return row[0]
 
+    def _resolve_bootstrap_start_date(self, conn, spec: DatasetSpec, end_date: dt.date) -> dt.date:
+        if spec.bootstrap_start_date:
+            return dt.date.fromisoformat(spec.bootstrap_start_date)
+        if spec.query_mode == QueryMode.BY_DATE:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT MIN(cal_date)
+                      FROM market.trading_calendar
+                     WHERE is_trading = TRUE
+                       AND cal_date <= %s
+                    """,
+                    (end_date,),
+                )
+                row = cur.fetchone()
+                if row and row[0] is not None:
+                    return row[0]
+        return end_date
+
     # -- sync strategies ----------------------------------------------------
 
     def _sync_by_date(
@@ -339,7 +427,7 @@ class TushareSyncEngine:
         start_date: dt.date, end_date: dt.date,
         job_id: uuid.UUID,
     ) -> SyncResult:
-        days = _date_range(start_date, end_date)
+        days = self._date_sequence_for_by_date(conn, spec, start_date, end_date)
         result = SyncResult(dataset=spec.name, mode="sync", job_id=job_id,
                             total_batches=len(days))
 
@@ -347,6 +435,7 @@ class TushareSyncEngine:
             ymd = d.strftime("%Y%m%d")
             try:
                 rows = self._fetch_from_tushare(spec, {spec.date_param_name: ymd})
+                self._validate_rows_for_date(spec, rows, d)
                 if spec.row_limit > 0 and len(rows) >= spec.row_limit:
                     raise RuntimeError(
                         f"{spec.name} {spec.date_param_name}={ymd} returned {len(rows)} rows; "
@@ -387,7 +476,13 @@ class TushareSyncEngine:
                         data_source="tushare",
                         metadata={"tushare_api": spec.tushare_api, "mode": spec.query_mode.value},
                         quality_status="empty_invalid" if "0 rows" in str(exc) else "error",
-                        failure_category="empty_invalid" if "0 rows" in str(exc) else "provider_or_persistence_error",
+                        failure_category=(
+                            "empty_invalid"
+                            if "0 rows" in str(exc)
+                            else "provider_contract_error"
+                            if "provider_contract_error" in str(exc)
+                            else "provider_or_persistence_error"
+                        ),
                         conn=conn,
                     )
                 except Exception as audit_exc:
@@ -557,6 +652,17 @@ class TushareSyncEngine:
             )
             return [row[0] for row in cur.fetchall()]
 
+    def _date_sequence_for_by_date(
+        self,
+        conn,
+        spec: DatasetSpec,
+        start_date: dt.date,
+        end_date: dt.date,
+    ) -> List[dt.date]:
+        if str(getattr(spec, "date_sequence", "calendar")).strip().lower() in {"trading", "trade"}:
+            return self._trading_dates_between(conn, start_date, end_date)
+        return _date_range(start_date, end_date)
+
     def _table_row_counts_by_date(
         self,
         conn,
@@ -667,7 +773,7 @@ class TushareSyncEngine:
                 if cursor is not None:
                     start_date = cursor + dt.timedelta(days=1)
                 else:
-                    start_date = end_date  # no data yet → fetch today only
+                    start_date = self._resolve_bootstrap_start_date(conn, spec, end_date)
 
             if start_date is not None and start_date > end_date:
                 print(f"[INFO] {spec.name} up to date; nothing to do")

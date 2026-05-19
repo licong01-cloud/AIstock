@@ -1,0 +1,58 @@
+﻿{
+  "schema_version": "aistock_validation_run_v1",
+  "module": "local_data_management",
+  "module_slug": "local_data_management",
+  "level": "L2",
+  "level_slug": "l2",
+  "title": "Autonomous local data sync implementation validation",
+  "title_slug": "data-sync-autonomy-backend",
+  "status": "PASS",
+  "started_at": "2026-05-19T12:15:00+08:00",
+  "finished_at": "2026-05-19T12:45:00+08:00",
+  "git_commit": "pending_before_final_local_commit",
+  "operator": "codex",
+  "markdown_path": "tests/aistock_validation/history/local_data_management/20260519_l2_data_sync_autonomy_backend.md",
+  "metadata_path": "tests/aistock_validation/history/local_data_management/20260519_l2_data_sync_autonomy_backend.json",
+  "coverage": {
+    "schema_version": "aistock_validation_coverage_snapshot_v1",
+    "status": "not_collected",
+    "line": null,
+    "branch": null,
+    "diff_line": null,
+    "diff_branch": null,
+    "quality_gates": [],
+    "snapshot_path": null
+  },
+  "environment": {
+    "backend_port": null,
+    "frontend_port": null,
+    "tdx_http_port": null,
+    "next_public_api_base": null,
+    "paper_v2_api_base": null
+  },
+  "steps": [
+    {"name": "compileall changed backend modules", "status": "PASS"},
+    {"name": "targeted pytest data sync suite", "status": "PASS", "detail": "51 passed"},
+    {"name": "nox data_sync_autonomy_backend", "status": "PASS", "detail": "compileall + 40 tests + frontend tsc"},
+    {"name": "nox local_data_management_audit", "status": "PASS", "detail": "40 tests + audit schema smoke"},
+    {"name": "scoped nox l0", "status": "PASS_WITH_NON_BLOCKING_P2"},
+    {"name": "frontend tsc", "status": "PASS"},
+    {"name": "frontend lint", "status": "PASS_WITH_EXISTING_WARNINGS"},
+    {"name": "frontend build", "status": "PASS"},
+    {"name": "git diff --check", "status": "PASS_WITH_LINE_ENDING_WARNINGS"}
+  ],
+  "evidence": [
+    {"kind": "pytest", "path": "backend/tests/test_data_sync_autonomy.py", "exists": true},
+    {"kind": "pytest", "path": "backend/tests/test_tushare_sync_engine.py", "exists": true},
+    {"kind": "pytest", "path": "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py", "exists": true},
+    {"kind": "db_smoke", "path": "tmp/local_data_management_audit_smoke.json", "exists": true},
+    {"kind": "guardrail", "path": "tmp/validation/guardrails/l0_paths.md", "exists": true}
+  ],
+  "quality_gates": [],
+  "residual_risks": [
+    "Migration was not applied to production DB during validation.",
+    "Production backend 8001 and frontend 3000 were not restarted or touched.",
+    "Live Tushare/API data completeness must be verified after migration/runtime activation.",
+    "Frontend local-data page has pre-existing raw-json and garbled-text P2 findings outside this task scope."
+  ]
+}

@@ -34,12 +34,16 @@ class DatasetSpec:
     date_column: str = "trade_date"        # cursor column for incremental
     code_source_sql: str = ""              # SQL to fetch ts_code list for BY_CODE mode
     row_limit: int = 0                     # if >0, fail when single API call returns >= this many rows
+    page_limit: int = 0                    # BY_DATE pagination page size for APIs that support limit/offset
+    max_pages: int = 1                     # maximum pages to fetch when page_limit is enabled
     code_param_name: str = "ts_code"       # BY_CODE: API parameter name for the code value
     skip_date_params: bool = False         # True = don't pass start_date/end_date to API
     replace_existing_dates: bool = False   # True = replace one date window instead of append-only upsert
     rate_per_minute: int = 500             # per-API 频率限制，默认 500/min (10000积分)
     date_param_name: str = "trade_date"    # BY_DATE: API date parameter name
     incremental_cursor_from_audit: bool = False  # sparse BY_DATE datasets can advance through successful empty-date refreshes
+    bootstrap_start_date: Optional[str] = None  # first incremental range when neither audit nor table cursor exists
+    date_sequence: str = "calendar"        # BY_DATE range expansion: "calendar" or "trading"
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +255,34 @@ MARGIN_DETAIL = DatasetSpec(
     },
     batch_sleep=0.2,
     rate_per_minute=500,
+)
+
+CYQ_PERF = DatasetSpec(
+    name="cyq_perf",
+    tushare_api="cyq_perf",
+    target_table="market.cyq_perf",
+    primary_keys=["trade_date", "ts_code"],
+    query_mode=QueryMode.BY_DATE,
+    columns={
+        "trade_date": "date",
+        "ts_code": "text",
+        "his_low": "numeric",
+        "his_high": "numeric",
+        "cost_5pct": "numeric",
+        "cost_15pct": "numeric",
+        "cost_50pct": "numeric",
+        "cost_85pct": "numeric",
+        "cost_95pct": "numeric",
+        "weight_avg": "numeric",
+        "winner_rate": "numeric",
+    },
+    batch_sleep=0.2,
+    rate_per_minute=300,
+    page_limit=4900,
+    max_pages=3,
+    incremental_cursor_from_audit=True,
+    bootstrap_start_date="2018-01-01",
+    date_sequence="trading",
 )
 
 STK_LIMIT = DatasetSpec(
@@ -471,6 +503,7 @@ DATASET_REGISTRY: Dict[str, DatasetSpec] = {
         TUSHARE_EXPRESS_RAW,
         TUSHARE_FINA_INDICATOR_RAW,
         MARGIN_DETAIL,
+        CYQ_PERF,
         SW_INDEX_CLASSIFY,
         SW_INDEX_MEMBER,
         SW_DAILY,

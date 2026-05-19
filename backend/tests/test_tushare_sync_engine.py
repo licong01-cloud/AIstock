@@ -6,13 +6,14 @@ from types import SimpleNamespace
 import backend.services.tushare_sync_engine as sync_engine
 import backend.services.event_signal.tushare_event_raw_sync as raw_sync_module
 import backend.services.stock_universe_pit_service as pit_service
-from backend.services.tushare_dataset_specs import DATASET_REGISTRY, QueryMode, SUSPEND_D, TUSHARE_FORECAST_RAW
+from backend.services.tushare_dataset_specs import CYQ_PERF, DATASET_REGISTRY, QueryMode, SUSPEND_D, TUSHARE_FORECAST_RAW
 from backend.services.tushare_sync_engine import TushareSyncEngine
 
 
 class _FakeCursor:
     def __init__(self, conn):
         self._conn = conn
+        self._rows = []
 
     def __enter__(self):
         return self
@@ -22,6 +23,20 @@ class _FakeCursor:
 
     def execute(self, sql, params=None):
         self._conn.executed.append((sql, params))
+        if "FROM market.trading_calendar" in sql:
+            start_date, end_date = params
+            rows = []
+            cur = start_date
+            while cur <= end_date:
+                if cur.weekday() < 5:
+                    rows.append((cur,))
+                cur += dt.timedelta(days=1)
+            self._rows = rows
+        else:
+            self._rows = []
+
+    def fetchall(self):
+        return self._rows
 
 
 class _FakeConn:
@@ -104,6 +119,193 @@ def test_sync_by_date_uses_upsert_only_when_replace_existing_dates_is_disabled(m
     assert any("dataset_date_refresh_audit" in sql for sql, _params in conn.executed)
     assert upserted == [rows]
     assert conn.commits == 0
+
+
+def test_cyq_perf_dataset_spec_is_engine_managed_by_date():
+    spec = DATASET_REGISTRY["cyq_perf"]
+
+    assert spec is CYQ_PERF
+    assert spec.query_mode == QueryMode.BY_DATE
+    assert spec.tushare_api == "cyq_perf"
+    assert spec.target_table == "market.cyq_perf"
+    assert spec.primary_keys == ["trade_date", "ts_code"]
+    assert spec.page_limit == 4900
+    assert spec.incremental_cursor_from_audit is True
+    assert spec.bootstrap_start_date == "2018-01-01"
+    assert spec.date_sequence == "trading"
+
+
+def test_cyq_perf_by_date_sync_writes_refresh_audit(monkeypatch):
+    engine = TushareSyncEngine()
+    conn = _FakeConn()
+    trade_date = dt.date(2026, 5, 18)
+    rows = [
+        {
+            "trade_date": "20260518",
+            "ts_code": "000001.SZ",
+            "his_low": 1,
+            "his_high": 2,
+            "cost_5pct": 1,
+            "cost_15pct": 1,
+            "cost_50pct": 1,
+            "cost_85pct": 1,
+            "cost_95pct": 1,
+            "weight_avg": 1,
+            "winner_rate": 50,
+        }
+    ]
+
+    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda spec, params: rows)
+    monkeypatch.setattr(engine, "_upsert_batch", lambda conn, spec, rows: len(rows))
+    monkeypatch.setattr(engine, "_update_progress", lambda conn, job_id, result: None)
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda seconds: None)
+
+    result = engine._sync_by_date(conn, CYQ_PERF, trade_date, trade_date, uuid.uuid4())
+
+    assert result.ok is True
+    assert result.inserted_rows == 1
+    audit_rows = [
+        params
+        for sql, params in conn.executed
+        if "INSERT INTO market.dataset_date_refresh_audit" in sql
+    ]
+    assert audit_rows
+    assert audit_rows[-1][0] == "cyq_perf"
+    assert audit_rows[-1][1] == trade_date
+    assert audit_rows[-1][4] == "success"
+    assert audit_rows[-1][12] == "ok"
+
+
+def test_cyq_perf_by_date_sync_skips_non_trading_dates(monkeypatch):
+    engine = TushareSyncEngine()
+    conn = _FakeConn()
+    fetched_dates = []
+
+    def _fetch(_spec, params):
+        fetched_dates.append(params["trade_date"])
+        return [
+            {
+                "trade_date": params["trade_date"],
+                "ts_code": "000001.SZ",
+                "his_low": 1,
+                "his_high": 2,
+                "cost_5pct": 1,
+                "cost_15pct": 1,
+                "cost_50pct": 1,
+                "cost_85pct": 1,
+                "cost_95pct": 1,
+                "weight_avg": 1,
+                "winner_rate": 50,
+            }
+        ]
+
+    monkeypatch.setattr(engine, "_fetch_from_tushare", _fetch)
+    monkeypatch.setattr(engine, "_upsert_batch", lambda conn, spec, rows: len(rows))
+    monkeypatch.setattr(engine, "_update_progress", lambda conn, job_id, result: None)
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda seconds: None)
+
+    result = engine._sync_by_date(
+        conn,
+        CYQ_PERF,
+        dt.date(2026, 5, 16),
+        dt.date(2026, 5, 18),
+        uuid.uuid4(),
+    )
+
+    assert result.ok is True
+    assert result.total_batches == 1
+    assert fetched_dates == ["20260518"]
+
+
+def test_cyq_perf_incremental_cursor_uses_audit_not_physical_table():
+    class _Cursor(_FakeCursor):
+        def __init__(self, conn):
+            super().__init__(conn)
+            self._row = (dt.date(2026, 5, 18),)
+
+        def fetchone(self):
+            return self._row
+
+    class _Conn(_FakeConn):
+        def cursor(self):
+            return _Cursor(self)
+
+    conn = _Conn()
+
+    cursor = TushareSyncEngine()._get_incremental_cursor(conn, CYQ_PERF)
+
+    assert cursor == dt.date(2026, 5, 18)
+    assert any("market.dataset_date_refresh_audit" in sql for sql, _params in conn.executed)
+    assert all("market.cyq_perf" not in sql for sql, _params in conn.executed)
+
+
+def test_cyq_perf_bootstrap_incremental_uses_full_start_when_audit_cursor_missing(monkeypatch):
+    class _Cursor(_FakeCursor):
+        def __init__(self, conn):
+            super().__init__(conn)
+            self._row = (None,)
+
+        def fetchone(self):
+            return self._row
+
+    class _Conn(_FakeConn):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return _Cursor(self)
+
+    conn = _Conn()
+    engine = TushareSyncEngine()
+    captured = {}
+
+    monkeypatch.setattr(sync_engine, "get_conn", lambda: conn)
+    monkeypatch.setattr(
+        engine,
+        "_sync_by_date",
+        lambda _conn, spec, start_date, end_date, job_id: captured.update(
+            {"start_date": start_date, "end_date": end_date, "job_id": job_id}
+        )
+        or sync_engine.SyncResult(dataset=spec.name, mode="sync", job_id=job_id),
+    )
+
+    result = engine.sync(CYQ_PERF, mode="incremental", end_date=dt.date(2026, 5, 18))
+
+    assert result.ok is True
+    assert captured["start_date"] == dt.date(2018, 1, 1)
+    assert captured["end_date"] == dt.date(2026, 5, 18)
+
+
+def test_by_date_sync_records_provider_contract_error_for_wrong_trade_date(monkeypatch):
+    engine = TushareSyncEngine()
+    conn = _FakeConn()
+    trade_date = dt.date(2026, 5, 18)
+    rows = [
+        {
+            "trade_date": "20260517",
+            "ts_code": "000001.SZ",
+        }
+    ]
+
+    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda spec, params: rows)
+    monkeypatch.setattr(engine, "_update_progress", lambda conn, job_id, result: None)
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda seconds: None)
+
+    result = engine._sync_by_date(conn, CYQ_PERF, trade_date, trade_date, uuid.uuid4())
+
+    assert result.failed_batches == 1
+    audit_rows = [
+        params
+        for sql, params in conn.executed
+        if "INSERT INTO market.dataset_date_refresh_audit" in sql
+    ]
+    assert audit_rows
+    assert audit_rows[-1][4] == "failed"
+    assert audit_rows[-1][12] == "error"
+    assert audit_rows[-1][13] == "provider_contract_error"
 
 
 def test_financial_event_raw_dataset_specs_use_period_vip_sync_mode():

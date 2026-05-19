@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS market.data_alerts (
     severity     TEXT NOT NULL CHECK (severity IN ('info','warning','error','critical')),
     dataset      TEXT,
     alert_type   TEXT NOT NULL CHECK (alert_type IN (
-        'stale','low_coverage','gap','zero_rows','api_failure','retry_exhausted'
+        'stale','low_coverage','gap','zero_rows','api_failure','retry_exhausted','final_blocked'
     )),
     title        TEXT NOT NULL,
     message      TEXT NOT NULL,

@@ -30,7 +30,8 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, Future
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from zoneinfo import ZoneInfo
 
 import psycopg2
 import psycopg2.extras as pgx
@@ -44,7 +45,12 @@ from ..services.tushare_sync_engine import TushareSyncEngine
 from ..services.audit_backed_data_health import AuditBackedDataHealthChecker
 from ..services.data_completeness import DATASET_TABLE_MAP
 from ..services.data_refresh_audit import DataRefreshAuditRepository
-from ..services.data_health_alerter import DataHealthAlerter, classify_retry_alert
+from ..services.data_sync_autonomy import (
+    DataSyncAlertGate,
+    DataSyncPolicyEngine,
+    DataSyncTargetRepository,
+    SyncTargetInput,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -67,6 +73,7 @@ _AUTO_RETRY_CHECK_ALIASES = {
 }
 _SCHEDULE_ERROR_CLEAR_STATUSES = frozenset({"success"})
 _STALE_QUEUED_JOB_MINUTES = 10
+_CN_TZ = ZoneInfo("Asia/Shanghai")
 
 # TDX datasets whose incremental mode should go through Go backend API (not ingest_incremental.py)
 _GO_INCREMENTAL_DATASETS: Dict[str, Dict[str, str]] = {
@@ -350,6 +357,40 @@ class TDXScheduler:
                     cost_ms, threading.current_thread().name, preview, params,
                 )
         return rows
+
+    def _next_trading_day_after(self, current_max: dt.date) -> Optional[dt.date]:
+        rows = self._fetchall(
+            "SELECT MIN(cal_date) AS nxt FROM market.trading_calendar WHERE is_trading = TRUE AND cal_date > %s",
+            (current_max,),
+        )
+        return rows[0].get("nxt") if rows else None
+
+    def _bootstrap_start_date_for_dataset(
+        self,
+        dataset: str,
+        *,
+        use_calendar_dates: bool,
+        latest_date: dt.date,
+        extra_info: Dict[str, Any],
+    ) -> Optional[dt.date]:
+        bootstrap = extra_info.get("bootstrap_start_date")
+        if not bootstrap:
+            spec = DATASET_REGISTRY.get((dataset or "").strip().lower())
+            bootstrap = getattr(spec, "bootstrap_start_date", None) if spec else None
+        if bootstrap:
+            return dt.date.fromisoformat(str(bootstrap))
+        if use_calendar_dates:
+            return latest_date
+        rows = self._fetchall(
+            """
+            SELECT MIN(cal_date) AS start_date
+              FROM market.trading_calendar
+             WHERE is_trading = TRUE
+               AND cal_date <= %s
+            """,
+            (latest_date,),
+        )
+        return rows[0].get("start_date") if rows else None
 
     def _execute(self, sql: str, params: Tuple[Any, ...] = ()) -> None:
         t0 = time.time()
@@ -636,6 +677,10 @@ class TDXScheduler:
             """
         )
         self._update_jobs(testing, ingestion)
+        try:
+            self._reconcile_due_data_sync_targets()
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("data sync target reconciliation failed: %s", exc)
 
     def _update_jobs(
         self, testing_rows: Iterable[Dict[str, Any]], ingestion_rows: Iterable[Dict[str, Any]]
@@ -830,8 +875,7 @@ class TDXScheduler:
         if not table_name:
             return None, None
 
-        rows = self._fetchall(f"SELECT MAX({date_column})::date AS mx FROM {table_name}")
-        current_max: Optional[dt.date] = rows[0].get("mx") if rows and rows[0].get("mx") else None
+        current_max: Optional[dt.date] = None
         if use_refresh_audit_cursor:
             audit_rows = self._fetchall(
                 """
@@ -842,9 +886,10 @@ class TDXScheduler:
                 """,
                 (dataset,),
             )
-            audit_max = audit_rows[0].get("mx") if audit_rows else None
-            if audit_max is not None:
-                current_max = audit_max
+            current_max = audit_rows[0].get("mx") if audit_rows and audit_rows[0].get("mx") else None
+        else:
+            rows = self._fetchall(f"SELECT MAX({date_column})::date AS mx FROM {table_name}")
+            current_max = rows[0].get("mx") if rows and rows[0].get("mx") else None
 
         if use_calendar_dates:
             latest_date: Optional[dt.date] = dt.date.today()
@@ -857,7 +902,15 @@ class TDXScheduler:
             return None, None
 
         if current_max is None:
-            return None, None
+            start_date = self._bootstrap_start_date_for_dataset(
+                dataset,
+                use_calendar_dates=use_calendar_dates,
+                latest_date=latest_date,
+                extra_info=extra_info or {},
+            )
+            if start_date is None or start_date > latest_date:
+                return None, None
+            return start_date, latest_date
 
         if current_max >= latest_date:
             return None, None
@@ -865,11 +918,7 @@ class TDXScheduler:
         if use_calendar_dates:
             start_date = current_max + dt.timedelta(days=1)
         else:
-            next_rows = self._fetchall(
-                "SELECT MIN(cal_date) AS nxt FROM market.trading_calendar WHERE is_trading = TRUE AND cal_date > %s",
-                (current_max,),
-            )
-            start_date = next_rows[0].get("nxt") if next_rows else None
+            start_date = self._next_trading_day_after(current_max)
         if start_date is None or start_date > latest_date:
             return None, None
 
@@ -1155,7 +1204,115 @@ class TDXScheduler:
             self._tracker.remove(key)
 
         future.add_done_callback(_cleanup)
+        target_id = str(options.get("data_sync_target_id") or "").strip()
+        if target_id and target_id != "00000000-0000-0000-0000-000000000000":
+            future.add_done_callback(
+                lambda done: self._finalize_data_sync_target_retry(
+                    done,
+                    target_id=target_id,
+                    dataset=ds_lower,
+                    mode=mode_lower,
+                    options=dict(options),
+                )
+            )
         return run_id
+
+    def _finalize_data_sync_target_retry(
+        self,
+        future: Future,
+        *,
+        target_id: str,
+        dataset: str,
+        mode: str,
+        options: Dict[str, Any],
+    ) -> None:
+        """Close or reschedule a persisted sync target after its retry job ends."""
+
+        repo = DataSyncTargetRepository()
+        now = _now()
+        error_message: str | None = None
+        try:
+            exc = future.exception()
+            if exc is not None:
+                error_message = str(exc)
+        except Exception as exc:  # noqa: BLE001
+            error_message = str(exc)
+
+        target_date = self._target_date_for_retry(dataset, options)
+        final_deadline_at = self._final_deadline_for_target(dataset, target_date) if target_date else None
+        recovered = False
+        failure_category = "not_ready_after_retry"
+        try:
+            readiness = self._check_dataset_recovered(dataset)
+            if readiness is not None and getattr(readiness, "status", None) == "ok":
+                recovered = True
+            elif readiness is not None and getattr(readiness, "failure_category", None):
+                failure_category = str(getattr(readiness, "failure_category"))
+        except Exception as exc:  # noqa: BLE001
+            error_message = error_message or str(exc)
+            failure_category = "readiness_check_failed"
+
+        metadata = {
+            "mode": mode,
+            "job_id": options.get("job_id"),
+            "triggered_by": options.get("triggered_by"),
+            "finalizer": "data_sync_target_retry",
+        }
+        try:
+            if recovered:
+                repo.update_target_status(
+                    target_id=target_id,
+                    status="success",
+                    metadata=metadata,
+                    clear_failure=True,
+                    clear_retry=True,
+                )
+                repo.record_attempt(
+                    target_id=target_id,
+                    job_id=options.get("job_id"),
+                    status="success",
+                    finished_at=now,
+                    metadata=metadata,
+                )
+                return
+
+            after_deadline = final_deadline_at is not None and now >= final_deadline_at
+            status = "final_blocked" if after_deadline else "retry_waiting"
+            next_retry_at = None if after_deadline else now + dt.timedelta(minutes=_AUTO_RETRY_DELAY_MINUTES)
+            repo.update_target_status(
+                target_id=target_id,
+                status=status,
+                failure_category=failure_category,
+                next_retry_at=next_retry_at,
+                final_deadline_at=final_deadline_at,
+                metadata={**metadata, "error_message": error_message},
+                clear_retry=after_deadline,
+            )
+            repo.record_attempt(
+                target_id=target_id,
+                job_id=options.get("job_id"),
+                status="failed" if error_message else status,
+                finished_at=now,
+                error_message=error_message,
+                metadata=metadata,
+            )
+            if status == "final_blocked":
+                DataSyncAlertGate().flush_final_alerts(
+                    [
+                        {
+                            "target_id": target_id,
+                            "dataset": dataset,
+                            "target_date": target_date,
+                            "status": status,
+                            "failure_category": failure_category,
+                            "final_deadline_at": final_deadline_at,
+                            "source": options.get("triggered_by"),
+                            "reason": "retry_finalizer",
+                        }
+                    ]
+                )
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("target retry: failed to finalize %s/%s target %s: %s", dataset, mode, target_id, exc)
 
     def _schedule_delayed_retry(
         self,
@@ -1165,14 +1322,35 @@ class TDXScheduler:
         reason: str,
         options: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Schedule a one-shot ingestion retry after a delay.
+        """Schedule a one-shot ingestion retry and persist the retry target.
 
-        Uses threading.Timer — lightweight, no persistence needed.
-        If the scheduler is restarted before the timer fires, the retry is lost.
-        Auto-retry at 23:00 acts as the safety net.
+        The in-process timer is a fast path only. ``data_sync_targets`` keeps the
+        due retry recoverable after scheduler restart.
         """
         opts = dict(options or {})
         retry_key = f"{(dataset or '').strip().lower()}:{(mode or '').strip().lower()}"
+        next_retry_at = _now() + dt.timedelta(minutes=max(int(delay_minutes), 0))
+        try:
+            target_date = self._target_date_for_retry(dataset, opts)
+            if target_date is not None:
+                DataSyncTargetRepository().upsert_target(
+                    SyncTargetInput(
+                        dataset=(dataset or "").strip().lower(),
+                        target_date=target_date,
+                        status="retry_waiting",
+                        source=str(opts.get("triggered_by") or "delayed_retry"),
+                        reason=reason,
+                        next_retry_at=next_retry_at,
+                        final_deadline_at=self._final_deadline_for_target(dataset, target_date),
+                        metadata={
+                            "mode": mode,
+                            "delay_minutes": max(int(delay_minutes), 0),
+                            "options": opts,
+                        },
+                    )
+                )
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("delayed_retry: failed to persist target for %s/%s: %s", dataset, mode, exc)
         if retry_key in self._delayed_retry_keys:
             _logger.info("delayed_retry: %s already scheduled, skipping duplicate", retry_key)
             return
@@ -1290,8 +1468,10 @@ class TDXScheduler:
             return DEFAULT_INGEST_TUSHARE_ANNS_D
         if dataset == "anns_metadata" and mode in {"init", "incremental"}:
             return DEFAULT_SYNC_ANNS_METADATA
-        # Tushare cyq_perf 和 cyq_chips 筹码数据使用独立脚本（两种模式共用）
-        if dataset in {"cyq_perf", "cyq_chips"} and mode in {"init", "incremental"}:
+        # cyq_perf is engine-managed so each date writes dataset_date_refresh_audit.
+        # cyq_chips remains on the legacy BY_CODE script until a per-date audit
+        # policy is defined for its cross-window stock loop.
+        if dataset == "cyq_chips" and mode in {"init", "incremental"}:
             return DEFAULT_INGEST_TUSHARE_CYQ
         # 公告 PDF 下载任务 anns_pdf：使用独立脚本，mode 目前仅使用 init 语义（单次扫描批处理）
         if dataset == "anns_pdf" and mode in {"init", "incremental"}:
@@ -1425,8 +1605,8 @@ class TDXScheduler:
                     args += ["--job-id", str(options["job_id"])]
             elif dataset == "anns_metadata":
                 add_anns_metadata_args("incremental")
-            elif dataset in {"cyq_perf", "cyq_chips"}:
-                # Tushare cyq_perf / cyq_chips 增量：起止日期 + job_id + 可选 batch_sleep
+            elif dataset == "cyq_chips":
+                # Tushare cyq_chips 增量：起止日期 + job_id + 可选 batch_sleep
                 args += ["--mode", "incremental", "--dataset", dataset]
                 if options.get("start_date"):
                     args += ["--start-date", str(options["start_date"])]
@@ -1499,11 +1679,11 @@ class TDXScheduler:
                     args += ["--job-id", str(options["job_id"])]
             elif dataset == "anns_metadata":
                 add_anns_metadata_args("init")
-            elif dataset in {"stock_st", "bak_basic", "daily_basic", "anns_d", "cyq_perf", "cyq_chips"}:
-                # Tushare stock_st / bak_basic / daily_basic / anns_d / cyq_perf / cyq_chips 全量：需要起止日期 + 可选 truncate/batch_sleep + job_id
+            elif dataset in {"stock_st", "bak_basic", "daily_basic", "anns_d", "cyq_chips"}:
+                # Tushare stock_st / bak_basic / daily_basic / anns_d / cyq_chips 全量：需要起止日期 + 可选 truncate/batch_sleep + job_id
                 args += ["--mode", "init"]
-                # cyq_perf 和 cyq_chips 需要显式指定 --dataset
-                if dataset in {"cyq_perf", "cyq_chips"}:
+                # cyq_chips 需要显式指定 --dataset
+                if dataset == "cyq_chips":
                     args += ["--dataset", dataset]
                 if options.get("start_date"):
                     args += ["--start-date", str(options["start_date"])]
@@ -1649,10 +1829,10 @@ class TDXScheduler:
         # Append session-level bulk tuning flag by default unless explicitly disabled。
         # 对于部分与数据库批量写入无关的辅助脚本（例如 anns_pdf 的文件下载，
         # 以及无需会话级调优的简单全量任务 index_basic / index_daily），不需要也不支持该参数，
-        # cyq_perf 和 cyq_chips 也不支持该参数。
+        # cyq_chips 也不支持该参数。
         # 这里显式跳过。
         use_bulk = options.get("bulk_session_tune")
-        if dataset not in {"anns_pdf", "index_basic", "index_daily", "cyq_perf", "cyq_chips"}:
+        if dataset not in {"anns_pdf", "index_basic", "index_daily", "cyq_chips"}:
             if use_bulk is None or bool(use_bulk):
                 args.append("--bulk-session-tune")
         
@@ -2267,15 +2447,37 @@ class TDXScheduler:
                     except Exception as exc:
                         _logger.error("unexpected error: %s", exc)
 
-            # 5. 生成报警
             try:
-                alerter = DataHealthAlerter(self._db_cfg)
-                alerts = alerter.generate(check_results, stage="freshness_check")
-                if alerts:
-                    counts = alerter.flush(alerts)
-                    _logger.info("freshness_check: generated %d alerts: %s", sum(counts.values()), counts)
-            except Exception as alert_exc:
-                _logger.error("freshness_check: alert generation failed: %s", alert_exc)
+                target_repo = DataSyncTargetRepository()
+                for r in check_results:
+                    if r.status == "ok" or r.expected_date is None:
+                        continue
+                    target_repo.upsert_target(
+                        SyncTargetInput(
+                            dataset=r.dataset,
+                            target_date=r.expected_date,
+                            status="queued",
+                            source="freshness_check",
+                            reason=r.failure_category or "audit_not_ready",
+                            failure_category=r.failure_category,
+                            metadata={
+                                "health_status": r.status,
+                                "max_date": str(r.max_date) if r.max_date else None,
+                                "quality_status": r.quality_status,
+                                "job_id": str(job_id) if job_id else None,
+                            },
+                        )
+                    )
+            except Exception as target_exc:
+                _logger.warning("freshness_check: data_sync target persistence skipped: %s", target_exc)
+
+            # Freshness check is a readiness summary only. Alert Gate is owned
+            # by auto-retry/final-blocked handling, so recoverable stale states
+            # do not page operators before automated catch-up has a chance.
+            _logger.info(
+                "freshness_check: summary only; stale=%d, alerts_deferred_to=alert_gate",
+                len(stale),
+            )
 
         except Exception as exc:
             job_status = "failed"
@@ -2293,6 +2495,212 @@ class TDXScheduler:
             self._update_ingestion_schedule(
                 schedule_id, last_run=start_ts, last_status=job_status, last_error=None,
             )
+
+    def _target_date_for_retry(self, dataset: str, options: Optional[Dict[str, Any]] = None) -> Optional[dt.date]:
+        opts = options or {}
+        for key in ("target_date", "end_date", "latest_trading_date"):
+            if opts.get(key):
+                return dt.date.fromisoformat(str(opts[key]))
+        try:
+            start_d, end_d = self._compute_auto_range(dataset)
+            return end_d or start_d
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("failed to resolve target date for %s retry: %s", dataset, exc)
+            return None
+
+    def _final_deadline_for_target(self, dataset: str, target_date: dt.date) -> Optional[dt.datetime]:
+        dataset = (dataset or "").strip().lower()
+        if dataset == "stk_limit":
+            return dt.datetime.combine(target_date, dt.time(9, 15), tzinfo=_CN_TZ).astimezone(dt.timezone.utc)
+        if dataset == "margin_detail":
+            return dt.datetime.combine(
+                target_date + dt.timedelta(days=1),
+                dt.time(12, 0),
+                tzinfo=_CN_TZ,
+            ).astimezone(dt.timezone.utc)
+        if dataset in {"cyq_perf", "sw_daily", "bak_basic"}:
+            return dt.datetime.combine(target_date, dt.time(23, 30), tzinfo=_CN_TZ).astimezone(dt.timezone.utc)
+        return dt.datetime.combine(target_date, dt.time(23, 59), tzinfo=_CN_TZ).astimezone(dt.timezone.utc)
+
+    def _mark_final_blocked_targets(
+        self,
+        report_rows: List[Dict[str, Any]],
+        latest_trading: Optional[dt.date],
+    ) -> None:
+        if latest_trading is None:
+            return
+        now = _now()
+        policy = DataSyncPolicyEngine()
+        target_repo = DataSyncTargetRepository()
+        alert_gate = DataSyncAlertGate()
+        final_targets: List[Dict[str, Any]] = []
+        for entry in report_rows:
+            if entry.get("is_fresh"):
+                continue
+            dataset = str(entry.get("dataset") or "")
+            if not dataset or _is_auto_retry_excluded_dataset(dataset):
+                continue
+            target_date = latest_trading
+            deadline = self._final_deadline_for_target(dataset, target_date)
+            decision = policy.decide(
+                now=now,
+                release_at=None,
+                final_deadline_at=deadline,
+                current_status=str(entry.get("retry_status") or entry.get("health_status") or "retry_waiting"),
+                zero_rows=_is_zero_update_success(entry.get("today_job_status", ""), entry.get("inserted_rows")),
+                attempts_exhausted=entry.get("retry_status") == "exhausted",
+                failure_category=entry.get("failure_category") or entry.get("health_status"),
+            )
+            if not decision.should_alert:
+                continue
+            target_id = target_repo.upsert_target(
+                SyncTargetInput(
+                    dataset=dataset,
+                    target_date=target_date,
+                    status=decision.state,
+                    source="auto_retry",
+                    reason=decision.failure_category or "retry_exhausted",
+                    failure_category=decision.failure_category,
+                    final_deadline_at=decision.final_deadline_at,
+                    metadata={"report_entry": entry},
+                )
+            )
+            final_targets.append(
+                {
+                    "target_id": target_id,
+                    "dataset": dataset,
+                    "target_date": target_date,
+                    "status": decision.state,
+                    "failure_category": decision.failure_category,
+                    "final_deadline_at": decision.final_deadline_at,
+                    "source": "auto_retry",
+                    "reason": decision.failure_category or "retry_exhausted",
+                }
+            )
+        if final_targets:
+            alert_gate.flush_final_alerts(final_targets)
+
+    def _schedule_map_for_enabled_datasets(self) -> Dict[str, Dict[str, Any]]:
+        active_schedules = self._fetchall(
+            "SELECT schedule_id, dataset, mode FROM market.ingestion_schedules WHERE enabled = TRUE"
+        )
+        return {
+            (r["dataset"] or "").strip().lower(): {
+                "schedule_id": r["schedule_id"],
+                "mode": (r.get("mode") or "incremental").strip().lower(),
+            }
+            for r in active_schedules
+            if (r.get("dataset") or "").strip()
+            and not _is_auto_retry_excluded_dataset(str(r.get("dataset")))
+        }
+
+    def _enqueue_target_retry(
+        self,
+        *,
+        entry: Dict[str, Any],
+        schedule_map: Dict[str, Dict[str, Any]],
+        triggered_by: str,
+        attempt: int,
+    ) -> Optional[uuid.UUID]:
+        ds = str(entry["dataset"])
+        sched = schedule_map.get(ds)
+        if not sched:
+            entry["action"] = "skip_no_schedule"
+            return None
+        retry_mode = sched.get("mode") or "incremental"
+        retry_opts: Dict[str, Any] = {"triggered_by": triggered_by}
+        target_id = str(entry.get("target_id") or "").strip()
+        if target_id and target_id != "00000000-0000-0000-0000-000000000000":
+            retry_opts["data_sync_target_id"] = target_id
+            try:
+                DataSyncTargetRepository().update_target_status(
+                    target_id=target_id,
+                    status="running",
+                    metadata={"triggered_by": triggered_by, "attempt": attempt},
+                    clear_retry=True,
+                )
+            except Exception as exc:  # noqa: BLE001
+                _logger.warning("target retry: failed to mark target running for %s: %s", ds, exc)
+        try:
+            ar_start, ar_end = self._compute_auto_range(ds)
+            if ar_start is not None and ar_end is not None:
+                retry_opts["start_date"] = ar_start.isoformat()
+                retry_opts["end_date"] = ar_end.isoformat()
+        except Exception as ar_exc:  # noqa: BLE001
+            _logger.warning("target retry: auto-range failed for %s: %s", ds, ar_exc)
+
+        retry_job_id = uuid.uuid4()
+        self._execute(
+            """INSERT INTO market.ingestion_jobs
+                   (job_id, job_type, status, created_at, summary)
+               VALUES (%s, %s, 'queued', NOW(), %s)""",
+            (
+                retry_job_id,
+                retry_mode,
+                _json_dump(
+                    {
+                        "dataset": ds,
+                        "mode": retry_mode,
+                        "triggered_by": triggered_by,
+                        "attempt": attempt,
+                    }
+                ),
+            ),
+        )
+        retry_opts["job_id"] = str(retry_job_id)
+        try:
+            DataSyncTargetRepository().record_attempt(
+                target_id=target_id,
+                job_id=str(retry_job_id),
+                status="queued",
+                metadata={"triggered_by": triggered_by, "attempt": attempt, "options": retry_opts},
+            )
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("target retry: failed to record attempt for %s: %s", ds, exc)
+        self._submit_ingestion(str(sched["schedule_id"]), ds, retry_mode, triggered_by, retry_opts)
+        return retry_job_id
+
+    def _reconcile_due_data_sync_targets(self, schedule_map: Optional[Dict[str, Dict[str, Any]]] = None) -> list[str]:
+        """Resume persisted retry targets that survived scheduler restart."""
+
+        try:
+            due_targets = DataSyncTargetRepository().list_due_targets(limit=100)
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("target retry: due-target scan skipped: %s", exc)
+            return []
+        if not due_targets:
+            return []
+        schedule_map = schedule_map or self._schedule_map_for_enabled_datasets()
+        submitted: list[str] = []
+        seen: Set[str] = set()
+        for target in due_targets:
+            ds = str(target.get("dataset") or "").strip().lower()
+            if not ds or ds in seen or _is_auto_retry_excluded_dataset(ds):
+                continue
+            seen.add(ds)
+            if ds not in schedule_map:
+                continue
+            retry_mode = schedule_map[ds].get("mode") or "incremental"
+            if self._recent_dataset_submission_exists(ds, retry_mode):
+                continue
+            entry = {
+                "dataset": ds,
+                "target_id": str(target.get("target_id")),
+                "data_max_date": None,
+                "today_job_status": "target_due",
+                "action": "retry",
+            }
+            try:
+                self._enqueue_target_retry(
+                    entry=entry,
+                    schedule_map=schedule_map,
+                    triggered_by="data_sync_target_due",
+                    attempt=1,
+                )
+                submitted.append(ds)
+            except Exception as exc:  # noqa: BLE001
+                _logger.warning("target retry: submit failed for %s: %s", ds, exc)
+        return submitted
 
     # ------------------------------------------------------------------
     def _run_auto_retry_stale(
@@ -2368,6 +2776,7 @@ class TDXScheduler:
                     "is_fresh": r.status == "ok",
                     "coverage_pct": r.coverage_pct,
                     "gaps": list(r.gaps or []),
+                    "failure_category": r.failure_category,
                 }
                 check_map[r.dataset] = item
                 alias = next((k for k, v in _AUTO_RETRY_CHECK_ALIASES.items() if v == r.dataset), None)
@@ -2412,18 +2821,10 @@ class TDXScheduler:
 
             # Phase 3: report only real datasets. Internal schedules are excluded
             # so they never create fake stale rows or retry_exhausted alerts.
-            active_schedules = self._fetchall(
-                "SELECT schedule_id, dataset, mode FROM market.ingestion_schedules WHERE enabled = TRUE"
-            )
-            schedule_map = {
-                (r["dataset"] or "").strip().lower(): {
-                    "schedule_id": r["schedule_id"],
-                    "mode": (r.get("mode") or "incremental").strip().lower(),
-                }
-                for r in active_schedules
-                if (r.get("dataset") or "").strip()
-                and not _is_auto_retry_excluded_dataset(str(r.get("dataset")))
-            }
+            schedule_map = self._schedule_map_for_enabled_datasets()
+            resumed_targets = self._reconcile_due_data_sync_targets(schedule_map)
+            if resumed_targets:
+                delayed.extend(resumed_targets)
             all_report_datasets = sorted(set(check_map.keys()) | set(job_map.keys()) | set(schedule_map.keys()))
 
             for ds in all_report_datasets:
@@ -2440,6 +2841,8 @@ class TDXScheduler:
                 entry["data_max_date"] = str(mx) if mx else None
                 entry["health_status"] = check_info.get("status") if check_info else "not_checked"
                 entry["is_fresh"] = True if check_info is None else bool(check_info.get("is_fresh"))
+                if check_info and check_info.get("failure_category"):
+                    entry["failure_category"] = check_info["failure_category"]
                 if check_info and check_info.get("source_dataset"):
                     entry["source_dataset"] = check_info["source_dataset"]
 
@@ -2497,9 +2900,6 @@ class TDXScheduler:
             _MAX_RETRY_ATTEMPTS = 3
             _RETRY_BACKOFF_MINUTES = [1, 3, 7]  # after 1st failure, after 2nd failure
 
-            # Alerter for retry-outcome alerts
-            alerter = DataHealthAlerter(self._db_cfg)
-
             for layer_idx, layer in enumerate(layers, 1):
                 if not layer:
                     continue
@@ -2513,7 +2913,6 @@ class TDXScheduler:
                         _log.warning("auto-retry: %s has no active schedule, skipping", ds)
                         entry["action"] = "skip_no_schedule"
                         continue
-                    sid = sched["schedule_id"]
                     retry_mode = sched.get("mode") or "incremental"
 
                     attempt = 0
@@ -2524,39 +2923,41 @@ class TDXScheduler:
                                   layer_idx, ds, attempt + 1, _MAX_RETRY_ATTEMPTS,
                                   entry["today_job_status"], entry["data_max_date"])
 
-                        # Submit ingestion
-                        retry_opts: Dict[str, Any] = {"triggered_by": "auto_retry"}
                         if self._recent_dataset_submission_exists(ds, retry_mode):
                             _log.info("auto-retry L%d: skip %s because a recent job already exists", layer_idx, ds)
                             entry["retry_status"] = "skipped_duplicate_recent"
                             break
                         try:
-                            ar_start, ar_end = self._compute_auto_range(ds)
-                            if ar_start is not None and ar_end is not None:
-                                retry_opts["start_date"] = ar_start.isoformat()
-                                retry_opts["end_date"] = ar_end.isoformat()
-                        except Exception as ar_exc:
-                            _log.warning("auto-retry L%d: auto-range failed for %s: %s",
-                                        layer_idx, ds, ar_exc)
-
-                        # Create job record
-                        retry_job_id = uuid.uuid4()
-                        try:
-                            self._execute(
-                                """INSERT INTO market.ingestion_jobs
-                                       (job_id, job_type, status, created_at, summary)
-                                   VALUES (%s, %s, 'queued', NOW(), %s)""",
-                                (retry_job_id, retry_mode,
-                                 _json_dump({"dataset": ds, "mode": retry_mode,
-                                             "triggered_by": "auto_retry",
-                                             "attempt": attempt + 1})),
+                            target_date = self._target_date_for_retry(ds)
+                            target_id = DataSyncTargetRepository().upsert_target(
+                                SyncTargetInput(
+                                    dataset=ds,
+                                    target_date=target_date or latest_trading,
+                                    status="queued",
+                                    source="auto_retry",
+                                    reason=entry.get("failure_category") or entry.get("health_status") or "not_ready",
+                                    failure_category=entry.get("failure_category"),
+                                    final_deadline_at=(
+                                        self._final_deadline_for_target(ds, target_date or latest_trading)
+                                        if (target_date or latest_trading)
+                                        else None
+                                    ),
+                                    metadata={"report_entry": entry, "attempt": attempt + 1},
+                                )
                             )
-                            retry_opts["job_id"] = str(retry_job_id)
-                        except Exception as jr_exc:
-                            _log.warning("auto-retry L%d: failed to create job record for %s: %s",
-                                        layer_idx, ds, jr_exc)
+                        except Exception as target_exc:
+                            _log.warning("auto-retry L%d: failed to persist target for %s: %s",
+                                         layer_idx, ds, target_exc)
+                            target_id = "00000000-0000-0000-0000-000000000000"
 
-                        self._submit_ingestion(sid, ds, retry_mode, "auto_retry", retry_opts)
+                        retry_job_id = self._enqueue_target_retry(
+                            entry={**entry, "target_id": target_id},
+                            schedule_map=schedule_map,
+                            triggered_by="auto_retry",
+                            attempt=attempt + 1,
+                        )
+                        if retry_job_id is None:
+                            break
 
                         # Wait for this job to complete (10 min timeout)
                         key = f"ingestion:{ds}:{retry_mode}"
@@ -2578,6 +2979,18 @@ class TDXScheduler:
                                     recovered = True
                                     _log.info("auto-retry L%d: %s RECOVERED on attempt %d",
                                               layer_idx, ds, attempt + 1)
+                                    try:
+                                        if target_id != "00000000-0000-0000-0000-000000000000":
+                                            DataSyncTargetRepository().update_target_status(
+                                                target_id=target_id,
+                                                status="success",
+                                                metadata={"triggered_by": "auto_retry", "attempt": attempt + 1},
+                                                clear_failure=True,
+                                                clear_retry=True,
+                                            )
+                                    except Exception as target_exc:  # noqa: BLE001
+                                        _log.warning("auto-retry: failed to close recovered target for %s: %s",
+                                                     ds, target_exc)
                                     # Auto-acknowledge original alerts for this dataset today
                                     try:
                                         self._execute(
@@ -2639,14 +3052,6 @@ class TDXScheduler:
                     if not recovered:
                         _log.error("auto-retry L%d: %s EXHAUSTED after %d attempts",
                                    layer_idx, ds, _MAX_RETRY_ATTEMPTS)
-                        # Generate error alert for exhausted retries
-                        try:
-                            exhausted_alert = classify_retry_alert(
-                                ds, "exhausted",
-                                original_status=entry.get("today_job_status", "unknown"))
-                            alerter.flush([exhausted_alert])
-                        except Exception as alert_exc:
-                            _log.error("auto-retry: exhausted alert failed: %s", alert_exc)
                         errors.append({
                             "dataset": ds,
                             "error": f"exhausted after {_MAX_RETRY_ATTEMPTS} attempts",
@@ -2678,6 +3083,11 @@ class TDXScheduler:
         except Exception as exc:
             _log.exception("auto-retry scan error: %s", exc)
             errors.append({"dataset": "_scan", "error": str(exc)})
+
+        try:
+            self._mark_final_blocked_targets(report_rows, latest_trading)
+        except Exception as alert_exc:
+            _log.error("auto-retry: final Alert Gate failed: %s", alert_exc)
 
         # ── 写入报告 ────────────────────────────────────────────────
         overall = "ok" if not errors and not retried and not delayed else ("partial" if (retried or delayed) else "failed")
@@ -2754,6 +3164,7 @@ class TDXScheduler:
             # 1) Run completeness check
             checker = AuditBackedDataHealthChecker(self._db_cfg)
             results = checker.check_all()
+            latest_trading = results[0].expected_date if results else None
 
             stale_or_low = [r for r in results if r.status not in ("ok", "error")]
             _log.info("weekend_compensation: %d datasets need attention: %s",
@@ -2814,16 +3225,47 @@ class TDXScheduler:
                         for r in still_bad
                     )
 
-            # 5) Generate alerts
+            # 5) Generate final alerts only after weekend retries are exhausted.
             try:
-                alerter = DataHealthAlerter(self._db_cfg)
-                all_results = results + (results2 if retried else [])
-                alerts = alerter.generate(
-                    all_results, stage="weekend_compensation",
-                )
-                if alerts:
-                    alerter.flush(alerts)
-                    _log.info("weekend_compensation: generated %d alerts", len(alerts))
+                if still_failed:
+                    alert_gate = DataSyncAlertGate()
+                    target_repo = DataSyncTargetRepository()
+                    targets = []
+                    for item in still_failed:
+                        target_date = item.get("target_date") or item.get("expected_date") or latest_trading
+                        target_id = None
+                        if target_date is not None:
+                            target_id = target_repo.upsert_target(
+                                SyncTargetInput(
+                                    dataset=str(item.get("dataset") or ""),
+                                    target_date=target_date,
+                                    status="final_blocked",
+                                    source="weekend_compensation",
+                                    reason=item.get("error") or item.get("status") or "post_retry_not_ready",
+                                    failure_category=(
+                                        item.get("failure_category")
+                                        or item.get("status")
+                                        or "weekend_compensation_failed"
+                                    ),
+                                    final_deadline_at=_now(),
+                                    metadata={"weekend_compensation": item},
+                                )
+                            )
+                        targets.append(
+                            {
+                                "target_id": target_id,
+                                "dataset": item.get("dataset"),
+                                "target_date": target_date,
+                                "status": "final_blocked",
+                                "failure_category": item.get("failure_category") or item.get("status") or "weekend_compensation_failed",
+                                "final_deadline_at": _now(),
+                                "source": "weekend_compensation",
+                                "reason": item.get("error") or item.get("status") or "post_retry_not_ready",
+                            }
+                        )
+                    counts = alert_gate.flush_final_alerts(targets)
+                    if counts:
+                        _log.info("weekend_compensation: generated final alerts: %s", counts)
             except Exception as exc:
                 _log.error("weekend_compensation: alert generation failed: %s", exc)
 

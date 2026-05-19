@@ -64,6 +64,16 @@ def _uses_refresh_audit_cursor(extra_info: Any) -> bool:
     return str(info.get("cursor_source") or "").strip().lower() in {"refresh_audit", "audit"}
 
 
+def _date_iso(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, dt.datetime):
+        return value.date().isoformat()
+    if isinstance(value, dt.date):
+        return value.isoformat()
+    return str(value)
+
+
 def _isoformat(value: Optional[dt.datetime]) -> Optional[str]:
     if value is None:
         return None
@@ -325,6 +335,7 @@ def _infer_source(dataset: Optional[str]) -> Optional[str]:
         "stk_limit",
         "suspend_d",
         "margin_detail",
+        "cyq_perf",
         *FINANCIAL_EVENT_RAW_DATASETS,
     }:
         return "tushare"
@@ -2068,20 +2079,108 @@ def refresh_data_stats() -> Dict[str, Any]:
 def list_data_stats() -> Dict[str, Any]:
     rows = _fetchall(
         """
-        SELECT data_kind,
-               table_name,
-               min_date,
-               max_date,
-               row_count,
-               table_bytes,
-               index_bytes,
-               last_updated_at,
-               stat_generated_at,
-               extra_info
-          FROM market.data_stats
-         ORDER BY data_kind
+        WITH latest_audit AS (
+            SELECT DISTINCT ON (dataset)
+                   dataset,
+                   trade_date AS audit_ready_date,
+                   row_count AS audit_row_count,
+                   refreshed_at AS audit_refreshed_at,
+                   quality_status AS audit_quality_status
+              FROM market.dataset_date_refresh_audit
+             WHERE status = 'success'
+             ORDER BY dataset, trade_date DESC, refreshed_at DESC
+        )
+        SELECT ds.data_kind,
+               ds.table_name,
+               ds.min_date,
+               ds.max_date,
+               ds.row_count,
+               ds.table_bytes,
+               ds.index_bytes,
+               ds.last_updated_at,
+               ds.stat_generated_at,
+               ds.extra_info,
+               la.audit_ready_date,
+               la.audit_row_count,
+               la.audit_refreshed_at,
+               la.audit_quality_status
+          FROM market.data_stats ds
+          LEFT JOIN latest_audit la ON la.dataset = ds.data_kind
+         ORDER BY ds.data_kind
         """,
     )
+    for row in rows:
+        audit_ready_date = row.get("audit_ready_date")
+        stats_max_date = row.get("max_date")
+        cache_state = "unknown"
+        if audit_ready_date and stats_max_date:
+            cache_state = "fresh" if stats_max_date >= audit_ready_date else "stale"
+        elif audit_ready_date and not stats_max_date:
+            cache_state = "stale"
+        elif stats_max_date and not audit_ready_date:
+            cache_state = "audit_missing"
+        sync_status = str(row.get("sync_status") or "").lower()
+        failure_category = str(row.get("failure_category") or "").lower()
+        operator_action_required = sync_status in {
+            "final_blocked",
+            "db_unavailable",
+            "provider_contract_error",
+        } or failure_category in {
+            "db_unavailable",
+            "provider_contract_error",
+        }
+        row["ready_date"] = _date_iso(audit_ready_date)
+        row["audit_ready_date"] = _date_iso(audit_ready_date)
+        row["stats_max_date"] = _date_iso(stats_max_date)
+        row["physical_max_date"] = _date_iso(stats_max_date)
+        row["cache_state"] = cache_state
+        row["readiness_source"] = "dataset_date_refresh_audit"
+        row["operator_action_required"] = operator_action_required
+        row["audit_refreshed_at"] = _isoformat(row.get("audit_refreshed_at"))
+        row["next_retry_at"] = _isoformat(row.get("next_retry_at"))
+        row["final_deadline_at"] = _isoformat(row.get("final_deadline_at"))
+        row["target_updated_at"] = _isoformat(row.get("target_updated_at"))
+        if row.get("sync_target_date") is not None:
+            row["sync_target_date"] = _date_iso(row.get("sync_target_date"))
+    try:
+        target_rows = _fetchall(
+            """
+            SELECT DISTINCT ON (dataset)
+                   dataset,
+                   target_date,
+                   status AS sync_status,
+                   failure_category,
+                   next_retry_at,
+                   final_deadline_at,
+                   updated_at AS target_updated_at
+              FROM market.data_sync_targets
+             WHERE status NOT IN ('success', 'not_required')
+             ORDER BY dataset, target_date DESC, updated_at DESC
+            """
+        )
+        targets = {str(r.get("dataset")): r for r in target_rows}
+        for row in rows:
+            target = targets.get(str(row.get("data_kind")))
+            if not target:
+                continue
+            row["sync_target_date"] = _date_iso(target.get("target_date"))
+            row["sync_status"] = target.get("sync_status")
+            row["failure_category"] = target.get("failure_category")
+            row["next_retry_at"] = _isoformat(target.get("next_retry_at"))
+            row["final_deadline_at"] = _isoformat(target.get("final_deadline_at"))
+            row["target_updated_at"] = _isoformat(target.get("target_updated_at"))
+            target_sync_status = str(target.get("sync_status") or "").lower()
+            target_failure_category = str(target.get("failure_category") or "").lower()
+            row["operator_action_required"] = target_sync_status in {
+                "final_blocked",
+                "db_unavailable",
+                "provider_contract_error",
+            } or target_failure_category in {
+                "db_unavailable",
+                "provider_contract_error",
+            }
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).warning("data_stats target overlay unavailable: %s", exc)
     return {"items": rows}
 
 @router.get("/data-stats/gaps")

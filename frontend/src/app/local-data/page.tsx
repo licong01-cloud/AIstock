@@ -155,6 +155,36 @@ interface IncrementalPrefill {
   hasData?: boolean;
 }
 
+interface DataStatsItem {
+  data_kind?: string;
+  kind?: string;
+  label?: string;
+  description?: string;
+  table_name?: string;
+  table?: string;
+  row_count?: number;
+  rows?: number;
+  min_date?: string | null;
+  max_date?: string | null;
+  date_min?: string | null;
+  date_max?: string | null;
+  start_date?: string | null;
+  end_date?: string | null;
+  last_updated_at?: string | null;
+  last_check_at?: string | null;
+  last_check_result?: unknown;
+  extra_info?: Record<string, unknown> | null;
+  ready_date?: string | null;
+  audit_ready_date?: string | null;
+  cache_state?: string | null;
+  sync_status?: string | null;
+  sync_target_date?: string | null;
+  failure_category?: string | null;
+  next_retry_at?: string | null;
+  final_deadline_at?: string | null;
+  operator_action_required?: boolean;
+}
+
 function classNames(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(" ");
 }
@@ -378,7 +408,7 @@ export default function LocalDataPage() {
             <div className={styles.textMuted}>
               启动命令示例：
               <code className={styles.codeChip}>
-                uvicorn backend.main:app --host 0.0.0.0 --port 8001
+                uvicorn backend.main:app --host 0.0.0.0 --port 8012
               </code>
             </div>
           </div>
@@ -3854,7 +3884,7 @@ function DataStatsTab({
     currentMaxDate?: string | null,
   ) => void;
 }) {
-  const [items, setItems] = useState<any[]>([]);
+  const [items, setItems] = useState<DataStatsItem[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [gapLoadingKind, setGapLoadingKind] = useState<string | null>(null);
@@ -3875,6 +3905,51 @@ function DataStatsTab({
     xtquant: "xtquant 财务数据",
     sector: "申万行业板块",
     other: "其他",
+  };
+
+  const CACHE_STATE_LABELS: Record<string, string> = {
+    fresh: "缓存已刷新",
+    stale: "缓存滞后",
+    audit_missing: "审计缺失",
+    unknown: "缓存未知",
+  };
+
+  const SYNC_STATUS_LABELS: Record<string, string> = {
+    planned: "已计划",
+    waiting_release: "等待上游发布",
+    queued: "等待补齐",
+    running: "正在同步",
+    retry_waiting: "等待自动重试",
+    success: "同步完成",
+    empty_valid: "合法空数据",
+    final_blocked: "自动补齐失败，需人工处理",
+    db_unavailable: "数据库不可用",
+    provider_contract_error: "接口返回结构异常",
+  };
+
+  const FAILURE_CATEGORY_LABELS: Record<string, string> = {
+    empty_invalid: "\u7a7a\u6570\u636e\u4e0d\u53ef\u63a5\u53d7",
+    retry_exhausted: "\u81ea\u52a8\u91cd\u8bd5\u5df2\u8017\u5c3d",
+    provider_unavailable: "\u4e0a\u6e38\u63a5\u53e3\u4e0d\u53ef\u7528",
+    provider_contract_error: "\u4e0a\u6e38\u8fd4\u56de\u7ed3\u6784\u5f02\u5e38",
+    db_unavailable: "\u6570\u636e\u5e93\u4e0d\u53ef\u7528",
+    not_ready_after_retry: "\u91cd\u8bd5\u540e\u4ecd\u672a\u8fbe\u5230\u4e1a\u52a1\u5c31\u7eea",
+    readiness_check_failed: "\u91cd\u8bd5\u540e\u5c31\u7eea\u68c0\u67e5\u5931\u8d25",
+  };
+
+  const labelCacheState = (state?: string | null): string => {
+    if (!state) return "";
+    return CACHE_STATE_LABELS[state] || state;
+  };
+
+  const labelSyncStatus = (status?: string | null): string => {
+    if (!status) return "";
+    return SYNC_STATUS_LABELS[status] || status;
+  };
+
+  const labelFailureCategory = (category?: string | null): string => {
+    if (!category) return "";
+    return FAILURE_CATEGORY_LABELS[category] || category;
   };
 
   const getCategoryKey = (kind: string): "market" | "basic" | "xtquant" | "sector" | "other" => {
@@ -4312,6 +4387,43 @@ function DataStatsTab({
                     const lastCheckAt = it.last_check_at
                       ? formatDateTime(String(it.last_check_at))
                       : "—";
+                    const readinessParts: string[] = [];
+                    if (it.ready_date || it.audit_ready_date) {
+                      readinessParts.push(
+                        `\u4e1a\u52a1ready: ${it.ready_date || it.audit_ready_date}`,
+                      );
+                    }
+                    if (it.sync_target_date) {
+                      readinessParts.push(`\u76ee\u6807\u65e5\u671f: ${it.sync_target_date}`);
+                    }
+                    if (it.cache_state && it.cache_state !== "fresh") {
+                      readinessParts.push(`\u7f13\u5b58: ${labelCacheState(it.cache_state)}`);
+                    }
+                    if (it.failure_category) {
+                      readinessParts.push(
+                        `\u5931\u8d25\u539f\u56e0: ${labelFailureCategory(it.failure_category)}`,
+                      );
+                    }
+                    if (it.sync_status && !(it.operator_action_required === true && it.failure_category)) {
+                      readinessParts.push(`\u540c\u6b65: ${labelSyncStatus(it.sync_status)}`);
+                    }
+                    if (it.operator_action_required === true) {
+                      readinessParts.push(
+                        it.failure_category
+                          ? `\u9700\u4eba\u5de5\u5904\u7406: ${labelFailureCategory(it.failure_category)}`
+                          : "\u9700\u4eba\u5de5\u5904\u7406",
+                      );
+                    }
+                    if (it.next_retry_at && it.operator_action_required !== true) {
+                      readinessParts.push(
+                        `\u4e0b\u6b21\u91cd\u8bd5: ${formatDateTime(String(it.next_retry_at))}`,
+                      );
+                    }
+                    if (it.final_deadline_at) {
+                      readinessParts.push(
+                        `\u6700\u7ec8\u622a\u6b62: ${formatDateTime(String(it.final_deadline_at))}`,
+                      );
+                    }
                     let checkSummary = "";
                     if (it.last_check_result) {
                       try {
@@ -4387,6 +4499,22 @@ function DataStatsTab({
                               style={{ color: "#666" }}
                             >
                               {checkSummary}
+                            </div>
+                          )}
+                          {readinessParts.length > 0 && (
+                            <div
+                              className={styles.statsCheckInfo}
+                              style={{
+                                color:
+                                  it.operator_action_required === true
+                                    ? "#b91c1c"
+                                    : it.cache_state === "stale" ||
+                                        it.cache_state === "audit_missing"
+                                      ? "#92400e"
+                                      : "#047857",
+                              }}
+                            >
+                              {readinessParts.join(" · ")}
                             </div>
                           )}
                         </td>

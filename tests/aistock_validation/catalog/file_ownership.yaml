@@ -228,6 +228,7 @@ rules:
     priority: 70
     include:
       - backend/data_service/**
+      - backend/ingestion/**
       - backend/services/*data*.py
       - backend/routers/local_data*.py
       - frontend/src/app/local-data/**

@@ -289,6 +289,24 @@ plans:
     writes_business_state: false
     max_duration_seconds: 1200
     evidence_kinds: [pytest, db_smoke, playwright]
+  - plan_key: data_sync_autonomy_backend
+    title: Autonomous local data sync backend and dashboard regression
+    module: local_data_management
+    level: L2
+    command_key: nox_data_sync_autonomy_backend
+    nox_session: data_sync_autonomy_backend
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: false
+    writes_business_state: false
+    runner_enabled: true
+    max_duration_seconds: 300
+    evidence_kinds: [pytest, compile, schema_review, frontend_typecheck]
+    coverage_required: false
   - plan_key: model_registry_backend
     title: Model Registry backend tests
     module: model_registry

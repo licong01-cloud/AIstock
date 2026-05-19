@@ -107,9 +107,17 @@ def l0(session: nox.Session) -> None:
         "scripts/aistock_data_quality_smoke.py",
         "scripts/paper_v2_live_validation.py",
         "backend/services/audit_backed_data_health.py",
+        "backend/services/data_sync_autonomy.py",
         "backend/services/data_refresh_audit.py",
+        "backend/services/tushare_dataset_specs.py",
+        "backend/services/tushare_sync_engine.py",
+        "backend/ingestion/tdx_scheduler.py",
         "backend/services/quantevolver/completion_contract.py",
         "backend/tests/test_dataset_refresh_audit.py",
+        "backend/tests/test_data_sync_autonomy.py",
+        "backend/tests/test_tushare_sync_engine.py",
+        "backend/tests/test_ingestion_data_stats_readiness_api.py",
+        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
         "backend/tests/test_aistock_validate_metadata.py",
         "backend/tests/test_aistock_validate_coverage.py",
         "backend/tests/test_aistock_guardrail_scan.py",
@@ -259,10 +267,14 @@ def paper_v2_data_quality(session: nox.Session) -> None:
 
 @nox.session(venv_backend="none")
 def local_data_management_audit(session: nox.Session) -> None:
-    """Run local data-management audit schema and repository checks."""
+    """Run local data-management audit schema, sync autonomy, and repository checks."""
     _run_pytest(
         session,
         "backend/tests/test_dataset_refresh_audit.py",
+        "backend/tests/test_data_sync_autonomy.py",
+        "backend/tests/test_tushare_sync_engine.py",
+        "backend/tests/test_ingestion_data_stats_readiness_api.py",
+        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
         "-q",
         "-p",
         "no:cacheprovider",
@@ -278,6 +290,49 @@ def local_data_management_audit(session: nox.Session) -> None:
         env=_env(),
         external=True,
     )
+
+
+@nox.session(venv_backend="none")
+def data_sync_autonomy_backend(session: nox.Session) -> None:
+    """Run backend regression tests for autonomous daily data sync."""
+    session.run(
+        "python",
+        "-m",
+        "compileall",
+        "backend/services/data_sync_autonomy.py",
+        "backend/services/tushare_dataset_specs.py",
+        "backend/services/tushare_sync_engine.py",
+        "backend/ingestion/tdx_scheduler.py",
+        "backend/routers/ingestion.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/test_data_sync_autonomy.py",
+        "backend/tests/test_dataset_refresh_audit.py",
+        "backend/tests/test_tushare_sync_engine.py",
+        "backend/tests/test_ingestion_data_stats_readiness_api.py",
+        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+    old_cwd = Path.cwd()
+    os.chdir(ROOT / "frontend")
+    try:
+        session.run(
+            "npm",
+            "exec",
+            "tsc",
+            "--",
+            "--noEmit",
+            "--incremental",
+            "false",
+            env=_env(),
+            external=True,
+        )
+    finally:
+        os.chdir(old_cwd)
 
 
 @nox.session(venv_backend="none")
