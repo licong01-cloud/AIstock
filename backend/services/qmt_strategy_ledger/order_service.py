@@ -14,6 +14,11 @@ from typing import Any, Protocol
 
 from backend.execution_algos.board_lot import board_lot_rule, round_to_board_lot
 
+from .lot_availability import (
+    DbTradingCalendarProvider,
+    TradingCalendarProvider,
+    effective_strategy_available_sell_quantity,
+)
 from .models import (
     BUY_ORDER_TYPE,
     SELL_ORDER_TYPE,
@@ -100,6 +105,7 @@ class OrderPreflightResult:
     freeze_amount: Decimal
     available_cash: Decimal | None
     strategy_available_sell_quantity: int | None = None
+    pending_sell_quantity: int | None = None
     broker_can_sell: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -112,6 +118,7 @@ class OrderPreflightResult:
             "freeze_amount": float(self.freeze_amount),
             "available_cash": float(self.available_cash) if self.available_cash is not None else None,
             "strategy_available_sell_quantity": self.strategy_available_sell_quantity,
+            "pending_sell_quantity": self.pending_sell_quantity,
             "broker_can_sell": self.broker_can_sell,
         }
 
@@ -177,9 +184,16 @@ class ManagedCancelResult:
 
 
 class QmtManagedOrderService:
-    def __init__(self, *, repository: Any, broker: ManagedOrderBroker | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        repository: Any,
+        broker: ManagedOrderBroker | None = None,
+        calendar_provider: TradingCalendarProvider | None = None,
+    ) -> None:
         self._repository = repository
         self._broker = broker
+        self._calendar_provider = calendar_provider or DbTradingCalendarProvider()
 
     def preview_order(self, request: ManagedOrderRequest) -> OrderPreflightResult:
         errors: list[OrderPreflightError] = []
@@ -189,6 +203,7 @@ class QmtManagedOrderService:
         freeze_amount = estimated_notional + estimated_fee if request.order_type == BUY_ORDER_TYPE else Decimal("0")
         available_cash = account.cash if account else None
         strategy_available_sell_quantity: int | None = None
+        pending_sell_quantity_value: int | None = None
 
         if not request.symbol.strip():
             errors.append(OrderPreflightError("BLANK_SYMBOL", "symbol is required"))
@@ -220,16 +235,29 @@ class QmtManagedOrderService:
                 )
             )
         if account and request.order_type == SELL_ORDER_TYPE:
-            strategy_available_sell_quantity = sum(
-                lot.available_quantity
-                for lot in self._repository.list_position_lots(account.strategy_id, symbol=request.symbol)
+            lots = self._repository.list_position_lots(account.strategy_id, symbol=request.symbol)
+            pending_intents = self._repository.list_open_sell_intents(
+                account.strategy_id,
+                symbol=request.symbol,
+                trade_date=request.trade_date,
+            )
+            pending_sell_quantity_value = sum(max(int(intent.quantity), 0) for intent in pending_intents)
+            strategy_available_sell_quantity = effective_strategy_available_sell_quantity(
+                lots=lots,
+                pending_sell_intents=pending_intents,
+                as_of_date=request.trade_date,
+                calendar=self._calendar_provider,
             )
             if strategy_available_sell_quantity < request.quantity:
                 errors.append(
                     OrderPreflightError(
                         "INSUFFICIENT_STRATEGY_AVAILABLE_LOT",
                         "strategy T+1 available lot quantity is insufficient",
-                        {"available_quantity": strategy_available_sell_quantity, "requested_quantity": request.quantity},
+                        {
+                            "available_quantity": strategy_available_sell_quantity,
+                            "pending_sell_quantity": pending_sell_quantity_value,
+                            "requested_quantity": request.quantity,
+                        },
                     )
                 )
 
@@ -242,6 +270,7 @@ class QmtManagedOrderService:
             freeze_amount=freeze_amount,
             available_cash=available_cash,
             strategy_available_sell_quantity=strategy_available_sell_quantity,
+            pending_sell_quantity=pending_sell_quantity_value,
         )
 
     def submit_order(self, request: ManagedOrderRequest) -> ManagedOrderSubmitResult:

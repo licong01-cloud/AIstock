@@ -11,6 +11,11 @@ from backend.execution_algos.board_lot import round_to_board_lot
 from backend.services.selection_center.models import SelectionCandidate, SelectionRun, SelectionRunStatus
 from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
 
+from .lot_availability import (
+    DbTradingCalendarProvider,
+    TradingCalendarProvider,
+    effective_strategy_available_sell_quantity,
+)
 from .models import BUY_ORDER_TYPE, SELL_ORDER_TYPE, StrategyPackageBinding, VirtualAccount
 from .order_service import ManagedOrderRequest
 
@@ -76,9 +81,16 @@ class _PositionSummary:
 
 
 class SelectionOrderBuilder:
-    def __init__(self, *, repository: Any, selection_reader: Any) -> None:
+    def __init__(
+        self,
+        *,
+        repository: Any,
+        selection_reader: Any,
+        calendar_provider: TradingCalendarProvider | None = None,
+    ) -> None:
         self._repository = repository
         self._selection_reader = selection_reader
+        self._calendar_provider = calendar_provider or DbTradingCalendarProvider()
 
     def build_for_active_binding(
         self,
@@ -123,7 +135,7 @@ class SelectionOrderBuilder:
 
         requests: list[ManagedOrderRequest] = []
         skipped: list[dict[str, Any]] = []
-        position_summaries = self._position_summaries(account.strategy_id)
+        position_summaries = self._position_summaries(account.strategy_id, selection_run.trade_date)
         target_symbols: set[str] = set()
         for candidate in candidates:
             target_symbols.add(candidate.symbol)
@@ -290,13 +302,28 @@ class SelectionOrderBuilder:
             return sorted(selection_run.aggregate_results, key=lambda candidate: candidate.rank)
         return sorted(selection_run.package_results.get(binding.package_id, []), key=lambda candidate: candidate.rank)
 
-    def _position_summaries(self, strategy_id: str) -> dict[str, _PositionSummary]:
+    def _position_summaries(self, strategy_id: str, trade_date: date) -> dict[str, _PositionSummary]:
         summaries: dict[str, _PositionSummary] = {}
+        pending_sell_intents_by_symbol: dict[str, list[Any]] = {}
         for lot in self._repository.list_position_lots(strategy_id):
             existing = summaries.get(lot.symbol)
             lot_reference_price, lot_reference_price_source = _lot_reference_price(lot)
             remaining_quantity = max(int(lot.remaining_quantity), 0)
-            available_quantity = min(max(int(lot.available_quantity), 0), remaining_quantity)
+            if remaining_quantity <= 0:
+                continue
+            if lot.symbol not in pending_sell_intents_by_symbol:
+                pending_sell_intents_by_symbol[lot.symbol] = self._repository.list_open_sell_intents(
+                    strategy_id,
+                    symbol=lot.symbol,
+                    trade_date=trade_date,
+                )
+            available_quantity = effective_strategy_available_sell_quantity(
+                lots=[lot],
+                pending_sell_intents=pending_sell_intents_by_symbol[lot.symbol],
+                as_of_date=trade_date,
+                calendar=self._calendar_provider,
+            )
+            pending_sell_intents_by_symbol[lot.symbol] = []
             if existing is None:
                 summaries[lot.symbol] = _PositionSummary(
                     symbol=lot.symbol,

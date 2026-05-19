@@ -285,6 +285,38 @@ class QmtStrategyLedgerRepository:
                 row = cur.fetchone()
         return _row_to_order_intent(row) if row else None
 
+    def list_open_sell_intents(
+        self,
+        strategy_id: str,
+        symbol: str | None = None,
+        trade_date: date | None = None,
+    ) -> list[OrderIntentRecord]:
+        filters = [
+            "strategy_id = %s",
+            "side = 'SELL'",
+            "submit_status IN ('CREATED', 'SUBMITTED', 'ACCEPTED')",
+        ]
+        params: list[Any] = [strategy_id]
+        if symbol is not None:
+            filters.append("symbol = %s")
+            params.append(symbol)
+        if trade_date is not None:
+            filters.append("trade_date = %s")
+            params.append(trade_date)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    f"""
+                    SELECT *
+                    FROM qmt_strategy.order_intent
+                    WHERE {' AND '.join(filters)}
+                    ORDER BY created_at, intent_id
+                    """,
+                    tuple(params),
+                )
+                rows = cur.fetchall()
+        return [_row_to_order_intent(row) for row in rows]
+
     def set_order_intent_submit_status(
         self,
         intent_id: str,
@@ -485,6 +517,40 @@ class QmtStrategyLedgerRepository:
                     )
                 rows = cur.fetchall()
         return [_row_to_position_lot(row) for row in rows]
+
+    def update_position_lot(self, lot: PositionLotRecord) -> PositionLotRecord:
+        if lot.available_quantity > lot.remaining_quantity:
+            raise ValueError("position lot available_quantity cannot exceed remaining_quantity")
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE qmt_strategy.position_lot
+                    SET available_quantity = %s,
+                        remaining_quantity = %s,
+                        avg_cost = %s,
+                        cost_amount = %s,
+                        realized_pnl = %s,
+                        status = %s,
+                        metadata = %s,
+                        updated_at = %s
+                    WHERE lot_id = %s
+                    """,
+                    (
+                        lot.available_quantity,
+                        lot.remaining_quantity,
+                        lot.avg_cost,
+                        lot.cost_amount,
+                        lot.realized_pnl,
+                        _enum_value(lot.status),
+                        _json(lot.metadata),
+                        datetime.now(UTC),
+                        lot.lot_id,
+                    ),
+                )
+                if cur.rowcount == 0:
+                    raise DataUnavailableError("qmt strategy position lot does not exist", context={"lot_id": lot.lot_id})
+        return lot
 
     def append_cash_entry(self, entry: CashLedgerEntry) -> CashLedgerEntry:
         self._insert_cash_entry(entry, ignore_conflict=False)
@@ -862,6 +928,25 @@ class InMemoryQmtStrategyLedgerRepository:
         intent_id = self._order_remark_index.get((account_id, order_remark))
         return self._order_intents[intent_id] if intent_id else None
 
+    def list_open_sell_intents(
+        self,
+        strategy_id: str,
+        symbol: str | None = None,
+        trade_date: date | None = None,
+    ) -> list[OrderIntentRecord]:
+        intents = [
+            intent
+            for intent in self._order_intents.values()
+            if intent.strategy_id == strategy_id
+            and intent.side == "SELL"
+            and intent.submit_status in {IntentSubmitStatus.CREATED, IntentSubmitStatus.SUBMITTED, IntentSubmitStatus.ACCEPTED}
+        ]
+        if symbol is not None:
+            intents = [intent for intent in intents if intent.symbol == symbol]
+        if trade_date is not None:
+            intents = [intent for intent in intents if intent.trade_date == trade_date]
+        return sorted(intents, key=lambda intent: (intent.created_at, intent.intent_id))
+
     def set_order_intent_submit_status(
         self,
         intent_id: str,
@@ -901,6 +986,8 @@ class InMemoryQmtStrategyLedgerRepository:
             raise ValueError(f"position lot already exists: {lot.lot_id}")
         if lot.quantity < 0 or lot.available_quantity < 0 or lot.remaining_quantity < 0:
             raise ValueError("position lot quantities must be non-negative")
+        if lot.available_quantity > lot.remaining_quantity:
+            raise ValueError("position lot available_quantity cannot exceed remaining_quantity")
         self._position_lots[lot.lot_id] = lot
         return lot
 
@@ -909,6 +996,16 @@ class InMemoryQmtStrategyLedgerRepository:
         if symbol is not None:
             lots = [lot for lot in lots if lot.symbol == symbol]
         return sorted(lots, key=lambda lot: (lot.open_date, lot.lot_id))
+
+    def update_position_lot(self, lot: PositionLotRecord) -> PositionLotRecord:
+        if lot.lot_id not in self._position_lots:
+            raise DataUnavailableError("qmt strategy position lot does not exist", context={"lot_id": lot.lot_id})
+        if lot.quantity < 0 or lot.available_quantity < 0 or lot.remaining_quantity < 0:
+            raise ValueError("position lot quantities must be non-negative")
+        if lot.available_quantity > lot.remaining_quantity:
+            raise ValueError("position lot available_quantity cannot exceed remaining_quantity")
+        self._position_lots[lot.lot_id] = lot
+        return lot
 
     def append_cash_entry(self, entry: CashLedgerEntry) -> CashLedgerEntry:
         if entry.cash_id in self._cash_entries:

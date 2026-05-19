@@ -6,8 +6,12 @@ from decimal import Decimal
 
 import pytest
 
+from backend.services.qmt_strategy_ledger.lot_availability import StaticTradingCalendarProvider
 from backend.services.qmt_strategy_ledger.models import (
     BindingStatus,
+    IntentSubmitStatus,
+    SELL_ORDER_TYPE,
+    OrderIntentRecord,
     PositionLotRecord,
     StrategyPackageBinding,
     VirtualAccount,
@@ -21,6 +25,21 @@ from backend.services.trading_core.errors import DataUnavailableError
 
 ACCOUNT_ID = "62266303"
 TRADE_DATE = date(2026, 5, 18)
+NEXT_TRADE_DATE = date(2026, 5, 19)
+CALENDAR = StaticTradingCalendarProvider(
+    [
+        TRADE_DATE,
+        NEXT_TRADE_DATE,
+        date(2026, 5, 20),
+        date(2026, 5, 21),
+        date(2026, 5, 22),
+        date(2026, 5, 25),
+        date(2026, 5, 26),
+        date(2026, 5, 27),
+        date(2026, 5, 28),
+        date(2026, 5, 29),
+    ]
+)
 
 
 @dataclass
@@ -76,11 +95,16 @@ def _binding(target_weight: Decimal | None = Decimal("0.02"), top_k: int | None 
     )
 
 
-def _selection_run(candidates: list[SelectionCandidate], *, status: SelectionRunStatus = SelectionRunStatus.SUCCEEDED) -> SelectionRun:
+def _selection_run(
+    candidates: list[SelectionCandidate],
+    *,
+    status: SelectionRunStatus = SelectionRunStatus.SUCCEEDED,
+    trade_date: date = TRADE_DATE,
+) -> SelectionRun:
     return SelectionRun(
         run_id="sel_a",
         mode=SelectionMode.SINGLE_PACKAGE,
-        trade_date=TRADE_DATE,
+        trade_date=trade_date,
         data_source="DB_HISTORICAL",
         package_ids=["pkg_a"],
         status=status,
@@ -88,6 +112,10 @@ def _selection_run(candidates: list[SelectionCandidate], *, status: SelectionRun
         manifest_sha256_by_package={"pkg_a": "sha_a"},
         completed_at=None,
     )
+
+
+def _builder(repo: InMemoryQmtStrategyLedgerRepository, run: SelectionRun) -> SelectionOrderBuilder:
+    return SelectionOrderBuilder(repository=repo, selection_reader=FakeSelectionReader(run), calendar_provider=CALENDAR)
 
 
 def _lot(
@@ -132,7 +160,7 @@ def test_selection_order_builder_uses_candidate_target_quantity_first() -> None:
         ]
     )
 
-    result = SelectionOrderBuilder(repository=repo, selection_reader=FakeSelectionReader(run)).build_for_binding(
+    result = _builder(repo, run).build_for_binding(
         binding=binding
     )
 
@@ -160,7 +188,7 @@ def test_selection_order_builder_sizes_from_target_weight_and_board_lot() -> Non
         ]
     )
 
-    result = SelectionOrderBuilder(repository=repo, selection_reader=FakeSelectionReader(run)).build_for_binding(
+    result = _builder(repo, run).build_for_binding(
         binding=binding
     )
 
@@ -183,7 +211,7 @@ def test_selection_order_builder_preserves_star_market_increment_after_minimum()
         ]
     )
 
-    result = SelectionOrderBuilder(repository=repo, selection_reader=FakeSelectionReader(run)).build_for_binding(
+    result = _builder(repo, run).build_for_binding(
         binding=binding
     )
 
@@ -221,7 +249,7 @@ def test_selection_order_builder_uses_current_lots_to_build_sell_delta() -> None
         ]
     )
 
-    result = SelectionOrderBuilder(repository=repo, selection_reader=FakeSelectionReader(run)).build_for_binding(
+    result = _builder(repo, run).build_for_binding(
         binding=binding
     )
 
@@ -254,7 +282,7 @@ def test_selection_order_builder_sells_dropped_holding_with_available_lot() -> N
         ]
     )
 
-    result = SelectionOrderBuilder(repository=repo, selection_reader=FakeSelectionReader(run)).build_for_binding(
+    result = _builder(repo, run).build_for_binding(
         binding=binding
     )
 
@@ -294,7 +322,7 @@ def test_selection_order_builder_skips_dropped_holding_without_available_lot() -
         ]
     )
 
-    result = SelectionOrderBuilder(repository=repo, selection_reader=FakeSelectionReader(run)).build_for_binding(
+    result = _builder(repo, run).build_for_binding(
         binding=binding
     )
 
@@ -303,6 +331,31 @@ def test_selection_order_builder_skips_dropped_holding_without_available_lot() -
     assert skip["reason"] == "NO_AVAILABLE_LOT_FOR_DROPPED_HOLDING"
     assert skip["requested_quantity"] == 1000
     assert skip["available_quantity"] == 0
+
+
+def test_selection_order_builder_derives_dropped_holding_sellable_on_tplus1() -> None:
+    repo = _repo()
+    repo.create_position_lot(
+        _lot(
+            lot_id="lot_t1",
+            symbol="300604.SZ",
+            quantity=1000,
+            available_quantity=0,
+            metadata={"reference_price": "12.34"},
+        )
+    )
+    binding = repo.create_package_binding(_binding(target_weight=None))
+    run = _selection_run(
+        [SelectionCandidate(symbol="300054.SZ", score=0.9, rank=1, target_quantity=1000, reference_price=20)],
+        trade_date=NEXT_TRADE_DATE,
+    )
+
+    result = _builder(repo, run).build_for_binding(binding=binding)
+
+    dropped_sell = next(request for request in result.requests if request.symbol == "300604.SZ")
+    assert dropped_sell.side == "SELL"
+    assert dropped_sell.quantity == 1000
+    assert dropped_sell.metadata["available_quantity"] == 1000
 
 
 def test_selection_order_builder_skips_dropped_fixed_price_sell_without_reference_price() -> None:
@@ -323,7 +376,7 @@ def test_selection_order_builder_skips_dropped_fixed_price_sell_without_referenc
         ]
     )
 
-    result = SelectionOrderBuilder(repository=repo, selection_reader=FakeSelectionReader(run)).build_for_binding(
+    result = _builder(repo, run).build_for_binding(
         binding=binding,
         config=SelectionOrderBuildConfig(price_type=11),
     )
@@ -352,7 +405,7 @@ def test_selection_order_builder_caps_overweight_sell_to_available_quantity() ->
         ]
     )
 
-    result = SelectionOrderBuilder(repository=repo, selection_reader=FakeSelectionReader(run)).build_for_binding(
+    result = _builder(repo, run).build_for_binding(
         binding=binding
     )
 
@@ -362,6 +415,48 @@ def test_selection_order_builder_caps_overweight_sell_to_available_quantity() ->
     assert result.requests[0].metadata["available_quantity"] == 500
     skip = next(item for item in result.skipped if item["reason"] == "SELL_QUANTITY_CAPPED_BY_AVAILABLE_LOT")
     assert skip["blocked_quantity"] == 1000
+
+
+def test_selection_order_builder_reserves_pending_sell_intents_before_emit() -> None:
+    repo = _repo()
+    repo.create_position_lot(
+        _lot(
+            lot_id="lot_pending",
+            symbol="300604.SZ",
+            quantity=1000,
+            available_quantity=0,
+            metadata={"reference_price": "12.34"},
+        )
+    )
+    repo.create_order_intent(
+        OrderIntentRecord(
+            intent_id="intent_pending_sell",
+            strategy_id="strat_a",
+            strategy_name="poc_strategy_a",
+            symbol="300604.SZ",
+            side="SELL",
+            order_type=SELL_ORDER_TYPE,
+            quantity=400,
+            price_type=5,
+            order_remark="pending_sell",
+            account_id=ACCOUNT_ID,
+            trade_date=NEXT_TRADE_DATE,
+            submit_status=IntentSubmitStatus.ACCEPTED,
+        )
+    )
+    binding = repo.create_package_binding(_binding(target_weight=None))
+    run = _selection_run(
+        [SelectionCandidate(symbol="300054.SZ", score=0.9, rank=1, target_quantity=1000, reference_price=20)],
+        trade_date=NEXT_TRADE_DATE,
+    )
+
+    result = _builder(repo, run).build_for_binding(binding=binding)
+
+    dropped_sell = next(request for request in result.requests if request.symbol == "300604.SZ")
+    assert dropped_sell.quantity == 600
+    assert dropped_sell.metadata["available_quantity"] == 600
+    skip = next(item for item in result.skipped if item["reason"] == "SELL_QUANTITY_CAPPED_BY_AVAILABLE_LOT")
+    assert skip["blocked_quantity"] == 400
 
 
 def test_selection_order_builder_equal_target_skips_and_below_target_buys_with_board_lot() -> None:
@@ -380,7 +475,7 @@ def test_selection_order_builder_equal_target_skips_and_below_target_buys_with_b
         ]
     )
 
-    result = SelectionOrderBuilder(repository=repo, selection_reader=FakeSelectionReader(run)).build_for_binding(
+    result = _builder(repo, run).build_for_binding(
         binding=binding
     )
 
@@ -413,7 +508,7 @@ def test_selection_order_builder_ignores_other_strategy_same_symbol_lots() -> No
         ]
     )
 
-    result = SelectionOrderBuilder(repository=repo, selection_reader=FakeSelectionReader(run)).build_for_binding(
+    result = _builder(repo, run).build_for_binding(
         binding=binding
     )
 
@@ -435,7 +530,7 @@ def test_selection_order_builder_honors_top_k_without_broker_call() -> None:
         ]
     )
 
-    result = SelectionOrderBuilder(repository=repo, selection_reader=FakeSelectionReader(run)).build_for_binding(
+    result = _builder(repo, run).build_for_binding(
         binding=binding
     )
 
@@ -453,7 +548,7 @@ def test_selection_order_builder_fails_fast_without_price_or_succeeded_run() -> 
     )
 
     with pytest.raises(DataUnavailableError, match="reference_price is required"):
-        SelectionOrderBuilder(repository=repo, selection_reader=FakeSelectionReader(missing_price)).build_for_binding(
+        _builder(repo, missing_price).build_for_binding(
             binding=binding
         )
 
@@ -462,6 +557,6 @@ def test_selection_order_builder_fails_fast_without_price_or_succeeded_run() -> 
         status=SelectionRunStatus.FAILED,
     )
     with pytest.raises(DataUnavailableError, match="selection run is not succeeded"):
-        SelectionOrderBuilder(repository=repo, selection_reader=FakeSelectionReader(failed_run)).build_for_binding(
+        _builder(repo, failed_run).build_for_binding(
             binding=binding
         )
