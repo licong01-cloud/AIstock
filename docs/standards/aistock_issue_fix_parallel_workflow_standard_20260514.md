@@ -1,10 +1,10 @@
 # AIstock Issue 修复与并行开发隔离规范
 
-> 版本：v1.0  
-> 更新日期：2026-05-14  
-> 状态：规范草案；先作为人工执行规范落地，不创建治理 issue  
-> 适用范围：AIstock 所有 BUG / GitHub Issue / MCP issue / 并行 Codex 或 Claude Code 开发窗口  
-> 规范位置：`docs/standards/aistock_issue_fix_parallel_workflow_standard_20260514.md`  
+> 版本：v1.1
+> 更新日期：2026-05-19
+> 状态：规范草案；先作为人工执行规范落地，不创建治理 issue
+> 适用范围：AIstock 所有 BUG / GitHub Issue / MCP issue / 并行 Codex 或 Claude Code 开发窗口
+> 规范位置：`docs/standards/aistock_issue_fix_parallel_workflow_standard_20260514.md`
 
 ## 1. 目的
 
@@ -19,7 +19,7 @@ AIstock 经常有多个窗口同时开发不同模块。为了避免 issue 修�
 
 ## 2. 基本原则
 
-1. **bugs JSON 是 source of truth**：GitHub Issue 是 workflow/UI mirror，不能替代本地 bug registry。
+1. **GitHub Issue 与 BUG JSON 必须同源同步**：新增 issue 必须在同一流程创建/同步 GitHub Issue；BUG JSON 是本地可读索引和 Validation Center 缓存，不允许把未链接 GitHub 的 BUG JSON 提交进主线。
 2. **一 issue 一分支一 worktree**：修复必须在独立 worktree 中完成，不得在脏的 `F:\Dev\AIstock` 生产/同步目录直接开发。
 3. **先 scope 后编码**：任何修复前必须声明 `allowed_write_scope`，未声明文件默认不可改。
 4. **同文件不并行写**：多个窗口需要改同一文件时，必须指定唯一实现者；其他窗口只做 review、测试或非重叠文件。
@@ -44,6 +44,17 @@ AIstock 经常有多个窗口同时开发不同模块。为了避免 issue 修�
 ## 4. Issue 生命周期
 
 ### 4.1 Open
+
+创建 BUG JSON 和 GitHub Issue 时必须同步完成。推荐入口为 `mcp_github_issue_create`，或 `report_bug` 后立即执行 `mcp_github_issue_sync_bug(apply=true)` / 等价 Validation API 同步；禁止只写本地 `tests/aistock_validation/bugs/*.json` 后提交。
+
+提交仓库前，BUG JSON 必须包含并通过只读校验：
+
+- `github_issue_number`
+- `github_issue_url`
+- 与 GitHub label/status 一致的 `severity`、`status`、`module`
+- 至少一条 `events` 记录说明创建、同步或状态更新来源
+
+如果 GitHub 不可用，只能保留为未提交的临时 triage 草稿；不得把本地-only BUG JSON 合入 main。历史遗留本地-only BUG 只能通过专门的 backfill/cleanup 分支补链或关闭，不得作为新模式延续。
 
 创建 BUG JSON 和 GitHub Issue 时必须包含：
 
@@ -80,7 +91,7 @@ Triage 完成后必须补齐：
 
 1. 从最新 `origin/main` 创建独立 worktree。
 2. 创建 issue 专属 branch。
-3. 写入 `assigned_agent`、`fix_branch`、`worktree_path`、`integration_owner`。
+3. 写入 `assigned_agent`、`fix_branch`、`worktree_path`、`integration_owner`，并确认 GitHub Issue 链接仍存在。
 4. 确认 `allowed_write_scope` 非空。
 5. 在 cross-tool channel 发 `[INFO]` 或 `[ACK]`，说明认领范围和不触碰范围。
 
@@ -100,6 +111,7 @@ branch:   bug/BUG-039-qe-data-freshness
 - 所有改动文件都在 `allowed_write_scope` 内，或 issue 已更新 scope 并记录原因。
 - 已运行 issue 要求的测试。
 - PR title/body 引用 `BUG-NNN` 和 GitHub Issue。
+- BUG JSON 中的 `github_issue_number` / `github_issue_url` 与 PR 引用的 GitHub Issue 一致。
 - 明确声明是否触碰生产 `8001/3000`、DB 写入、migration、QMT、Paper live runtime。
 
 ### 4.5 Fixed
@@ -129,7 +141,7 @@ PR 合入后，BUG 可以标记为 `fixed`，但不能直接视为 `verified`。
 关闭前必须满足：
 
 - closure requirements 全部完成。
-- GitHub Issue 与 BUG JSON 状态同步。
+- GitHub Issue 与 BUG JSON 状态同步；若两边不一致，先修复同步状态再关闭。
 - 无未提交的 source-of-truth JSON 修改。
 - 如果需要生产同步，已明确由谁执行、何时执行、是否完成。
 
@@ -267,6 +279,9 @@ MCP server 应逐步支持以下字段和校验。本文先定义目标规范；
 
 `mcp_github_issue_create` 应支持并持久化：
 
+- `github_issue_number`
+- `github_issue_url`
+- `github_sync_state`
 - `allowed_write_scope`
 - `non_goals`
 - `required_verification`
@@ -281,6 +296,8 @@ MCP server 应逐步支持以下字段和校验。本文先定义目标规范；
   "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
 }
 ```
+
+若 GitHub Issue 创建或同步失败，工具必须 fail-fast 返回错误；不得把未链接的 BUG JSON 当作已登记 issue 提交。
 
 ### 7.2 认领 issue
 
@@ -335,6 +352,7 @@ MCP server 应逐步支持以下字段和校验。本文先定义目标规范；
 - 修改 DB schema 但缺少 comments 或 migration evidence。
 - 修改 Paper live / trading / QE runtime 但无对应测试。
 - 关闭 issue 前缺少验证记录。
+- 新建 BUG JSON 缺少 `github_issue_number` / `github_issue_url`，或 GitHub Issue 与本地状态不一致。
 
 ## 9. 生产同步边界
 

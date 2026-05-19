@@ -43,6 +43,8 @@
 | `fix_branch` | string\|null | 修复分支 |
 | `fix_commit` | string\|null | 修复 commit SHA |
 | `verification_run_id` | string\|null | verify 运行 ID |
+| `github_issue_number` | number\|null | 对应 GitHub Issue 编号；新增 BUG 提交前必填 |
+| `github_issue_url` | string\|null | 对应 GitHub Issue URL；新增 BUG 提交前必填 |
 | `created_at` | ISO datetime | 入库时间 |
 | `first_seen_at` | ISO datetime | 首次观察时间 |
 | `last_seen_at` | ISO datetime | 最近观察时间 |
@@ -74,12 +76,14 @@ open -> in_progress -> fixed -> verified
 ## Discover → Close Workflow
 
 1. **Discover** — 任何来源 (Codex review / nox 失败 / 用户报告 / 监控告警 / cross-tool drawer)
-2. **Register** — 写入本目录 `*.json` (`status=open`)，必要时 `git add` 提交到 main
+2. **Register + GitHub Sync** — 通过 `mcp_github_issue_create` 创建 GitHub Issue，或写入本目录 `*.json` 后立即执行 `mcp_github_issue_sync_bug(apply=true)`；提交前必须回填 `github_issue_number` / `github_issue_url`
 3. **Assign** — `assigned_agent` 写入 + `status=in_progress`
 4. **Fix** — 修复 commit 推送 → 状态 `fixed`，`fix_commit` 必填
 5. **Verify** — 独立的 reviewer (Codex / Claude / 人) 跑 `required_verification` 通过
    → `status=verified`，`verification_run_id` 必填
 6. **Close** — `closed_at` 填写。`verified` / `wontfix` 都视为关闭态
+
+禁止把新建的本地-only BUG JSON 提交进 main。若 GitHub 暂时不可用，只能保留为未提交草稿或临时 triage 记录，等 GitHub 同步成功并回填链接后再提交。历史遗留未链接记录需要通过专门 cleanup/backfill 分支补齐 GitHub 链接或确认关闭。
 
 ## AI Agent Integration
 
@@ -99,10 +103,14 @@ closure_requirements，可直接喂给 Claude Code 或 Codex App 作为修复任
 
 (占位 — Stage 3 MCP server 上线后填充)
 
-Codex review 发现的 finding 通过 MCP `report_bug` 入库 → 自动写入本目录 →
-mempalace cross-tool drawer 通知。
+Codex review 发现的 finding 通过 MCP 创建时必须同时同步 GitHub：
 
-当前阶段 (Stage 1)：人工/AI 直接 Write 文件 + git commit 入库。
+1. 优先调用 `mcp_github_issue_create(create_github=true)` 或等价 Validation API。
+2. 如果先调用 `report_bug` 写入本地 registry，必须立刻调用 `mcp_github_issue_sync_bug(apply=true)`。
+3. 返回结果必须写回 `github_issue_number` / `github_issue_url`，否则本次 issue 只能视为未完成草稿，不得提交。
+4. mempalace cross-tool drawer 只作为通知渠道，不替代 GitHub Issue 链接。
+
+当前阶段 (Stage 1)：人工/AI 可以直接写文件，但必须在同一工作流完成 GitHub 同步和链接回填后才能 git commit 入库。
 
 ## 修复责任 + Verify 双轮 Review
 
