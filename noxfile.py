@@ -108,14 +108,25 @@ def l0(session: nox.Session) -> None:
         "scripts/paper_v2_live_validation.py",
         "backend/services/audit_backed_data_health.py",
         "backend/services/data_refresh_audit.py",
+        "backend/services/data_sync_targets.py",
+        "backend/services/tushare_dataset_specs.py",
+        "backend/services/tushare_sync_engine.py",
+        "backend/ingestion/tdx_scheduler.py",
+        "backend/routers/ingestion.py",
         "backend/services/quantevolver/completion_contract.py",
         "backend/tests/test_dataset_refresh_audit.py",
+        "backend/tests/test_data_sync_targets.py",
+        "backend/tests/test_tushare_sync_engine.py",
+        "backend/tests/ingestion/test_tdx_scheduler_cyq_engine_routing.py",
+        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+        "backend/tests/test_ingestion_data_stats_readiness_api.py",
         "backend/tests/test_aistock_validate_metadata.py",
         "backend/tests/test_aistock_validate_coverage.py",
         "backend/tests/test_aistock_guardrail_scan.py",
         "backend/tests/test_validation_git_status_provider.py",
         "backend/tests/test_validation_module_ownership.py",
         "backend/tests/test_validation_center_api.py",
+        "backend/services/validation/plan_catalog.py",
         "backend/tests/unified_engine/test_qe_completion_contract.py",
         "backend/tests/paper_trading_v2",
         "backend/tests/selection_center",
@@ -126,6 +137,8 @@ def l0(session: nox.Session) -> None:
         "frontend/tests/validation-center",
         "frontend/tests/paper-v2",
         "tests/aistock_validation/catalog/module_registry.yaml",
+        "tests/aistock_validation/catalog/test_plans.yaml",
+        "tests/aistock_validation/modules/local_data_management.md",
         "tests/aistock_validation/catalog/file_ownership.yaml",
         "tests/aistock_validation/modules/development_guardrails.md",
     ]
@@ -263,6 +276,7 @@ def local_data_management_audit(session: nox.Session) -> None:
     _run_pytest(
         session,
         "backend/tests/test_dataset_refresh_audit.py",
+        "backend/tests/test_data_sync_targets.py",
         "-q",
         "-p",
         "no:cacheprovider",
@@ -273,10 +287,44 @@ def local_data_management_audit(session: nox.Session) -> None:
         "--scope",
         "local_data_management",
         "--audit-schema-only",
+        "--allow-offline-schema-review",
         "--output",
         "tmp/local_data_management_audit_smoke.json",
         env=_env(),
         external=True,
+    )
+
+
+@nox.session(venv_backend="none")
+def data_sync_autonomy_backend(session: nox.Session) -> None:
+    """Run backend regression for autonomous local data sync control-plane changes."""
+    session.run(
+        "python",
+        "-m",
+        "compileall",
+        "backend/services/tushare_sync_engine.py",
+        "backend/services/tushare_dataset_specs.py",
+        "backend/services/data_sync_targets.py",
+        "backend/ingestion/tdx_scheduler.py",
+        "backend/routers/ingestion.py",
+        "scripts/seed_dataset_refresh_audit.py",
+        "scripts/aistock_data_quality_smoke.py",
+        "backend/services/validation/plan_catalog.py",
+        "noxfile.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/test_tushare_sync_engine.py",
+        "backend/tests/test_data_sync_targets.py",
+        "backend/tests/ingestion/test_tdx_scheduler_cyq_engine_routing.py",
+        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+        "backend/tests/test_ingestion_data_stats_readiness_api.py",
+        "backend/tests/test_dataset_refresh_audit.py",
+        "backend/tests/test_validation_center_api.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
     )
 
 

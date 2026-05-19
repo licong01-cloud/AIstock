@@ -72,6 +72,12 @@ SPECS = {
         table_name="market.index_daily",
         date_column="trade_date",
     ),
+    "cyq_perf": AuditSeedSpec(
+        dataset="cyq_perf",
+        table_name="market.cyq_perf",
+        date_column="trade_date",
+        data_source="tushare",
+    ),
 }
 
 
