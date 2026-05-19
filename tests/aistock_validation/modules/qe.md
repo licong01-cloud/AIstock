@@ -118,7 +118,6 @@ Playwright must:
 # Start dev backend separately with all schedulers/scanners disabled.
 $env:DISABLE_INGESTION_SCHEDULER='1'
 $env:DISABLE_STRATEGY_SCHEDULER='1'
-$env:DISABLE_PAPER_TRADING_SCHEDULER='1'
 $env:ENABLE_PAPER_TRADING_V2_SCHEDULER='0'
 $env:DISABLE_NODE_HEALTH_SCHEDULER='1'
 $env:DISABLE_HMM_SCHEDULER='1'
