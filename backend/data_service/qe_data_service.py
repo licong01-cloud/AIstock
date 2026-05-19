@@ -1,5 +1,5 @@
 """
-实验选股（QuantEvolver）专用数据服务层
+QuantEvolver data service layer
 
 与 task 选股（qlib_exporter/db_reader.py）完全隔离，互不干扰。
 

@@ -68,7 +68,7 @@ def test_research_profile_is_only_current_module() -> None:
     assert resolve_modules(profile="research") == ["research"]
 
 
-@pytest.mark.parametrize("profile", ["full", "operations", "research_with_qe", "paper_trading"])
+@pytest.mark.parametrize("profile", ["full", "operations", "research_with_qe", "paper_v2"])
 def test_future_profiles_are_banned_in_phase0_5(profile: str) -> None:
     with pytest.raises(ValueError, match="future|Phase 0-5|not available|Unknown"):
         resolve_modules(profile=profile)

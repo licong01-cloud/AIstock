@@ -360,7 +360,6 @@ def test_event_signal_is_not_consumed_by_trading_paths_in_current_phase():
     forbidden_paths = [
         ROOT / "backend/services/quantevolver",
         ROOT / "backend/services/selection_center",
-        ROOT / "backend/services/paper_trading",
         ROOT / "backend/services/paper_trading_v2",
         ROOT / "backend/services/strategy_package",
         ROOT / "backend/infra/qmt_client.py",

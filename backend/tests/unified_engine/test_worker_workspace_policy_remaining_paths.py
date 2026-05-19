@@ -1,14 +1,11 @@
 ﻿import json
 import zipfile
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 from backend.routers import rdagent as rdagent_router
 from backend.routers import rdagent_sync_admin
-from backend.services.paper_trading import db_selection_service as db_selection
-from backend.services.paper_trading import training_service as paper_training
 from backend.services.rdagent_task_sync_service import RDAgentTaskSyncService
 from backend.services import rdagent_task_sync_service as task_sync_module
 from backend.services import rdagent_catalog_etl_service as catalog_etl
@@ -24,100 +21,6 @@ from backend.services.strategy_package.workspace_policy import (
 from backend.services.trading_core.errors import StrategyPackageValidationError
 
 
-class _OneRowConn:
-    def __init__(self, row):
-        self.row = row
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        return False
-
-    def cursor(self, *args, **kwargs):
-        return self
-
-    def execute(self, *args, **kwargs):
-        return None
-
-    def fetchone(self):
-        return self.row
-
-
-def test_paper_db_selection_qe_paths_use_node_api_resolver_not_workspace_path() -> None:
-    source = Path(db_selection.__file__).read_text(encoding="utf-8")
-    relevant = source[source.index("def check_factor_readiness"): source.index("# ============================================================\n# Main entry point")]
-
-    assert "SELECT workspace_path FROM qe_experiments" not in relevant
-    assert "Path(row[0])" not in relevant
-    assert "_load_experiment_manifest" not in relevant
-    assert "_prepare_qe_runtime_workspace_for_db_selection" in relevant
-
-
-def test_paper_db_selection_prepare_materializes_qe_assets_with_resolver(tmp_path, monkeypatch) -> None:
-    workspace = tmp_path / "runtime_workspace"
-    workspace.mkdir()
-    manifest_path = workspace / "manifest.json"
-    manifest_path.write_text(json.dumps({"primary_assets": {}, "assets": {}}), encoding="utf-8")
-
-    class FakeResolver:
-        def __init__(self, cache_root):
-            self.cache_root = Path(cache_root)
-
-        def load_source(self, experiment_id):
-            return SimpleNamespace(
-                qe_task_id="task-a",
-                qe_loop_id="Loop1",
-                execution_node_id="node-a",
-            )
-
-        def prepare_workspace(self, *, package_id, manifest_sha256, source):
-            assert package_id.startswith("legacy_db_selection_qe_unit")
-            assert manifest_sha256
-            return SimpleNamespace(workspace_path=workspace, manifest_path=manifest_path)
-
-    monkeypatch.setattr(db_selection, "QEExperimentRuntimeAssetResolver", FakeResolver)
-
-    task_dir, manifest = db_selection._prepare_qe_runtime_workspace_for_db_selection("qe_unit")
-
-    assert task_dir == workspace
-    assert manifest == {"primary_assets": {}, "assets": {}}
-
-
-def test_paper_db_selection_factor_code_refuses_worker_path(tmp_path, monkeypatch) -> None:
-    worker_root = tmp_path / "worker_qe_workspace"
-    worker_root.mkdir()
-    worker_code = worker_root / "factor.py"
-    worker_code.write_text("x = 1", encoding="utf-8")
-    monkeypatch.setenv("QE_WORKSPACE_WIN", str(worker_root))
-    monkeypatch.setattr(db_selection, "get_conn", lambda: _OneRowConn((str(worker_code), None)))
-
-    with pytest.raises(StrategyPackageValidationError, match="direct worker workspace"):
-        db_selection._load_factor_code("bad_factor")
-
-
-def test_paper_training_source_config_refuses_worker_path(tmp_path, monkeypatch) -> None:
-    worker_root = tmp_path / "worker_rdagent"
-    worker_config = worker_root / "task-a" / "conf.yaml"
-    worker_config.parent.mkdir(parents=True)
-    worker_config.write_text("task: {}", encoding="utf-8")
-    monkeypatch.setenv("RDAGENT_WORKSPACE_WIN", str(worker_root))
-
-    with pytest.raises(StrategyPackageValidationError, match="direct worker workspace"):
-        paper_training.TrainingService._load_source_config({"source_config_path": str(worker_config)})
-
-
-def test_paper_training_catalog_workspace_path_is_metadata_only(tmp_path, monkeypatch) -> None:
-    worker_root = tmp_path / "worker_rdagent"
-    worker_workspace = worker_root / "task-a" / "loop1"
-    worker_workspace.mkdir(parents=True)
-    monkeypatch.setenv("RDAGENT_WORKSPACE_WIN", str(worker_root))
-    monkeypatch.setattr(paper_training, "get_conn", lambda: _OneRowConn((None, None, str(worker_workspace))))
-
-    with pytest.raises(StrategyPackageValidationError, match="direct worker workspace"):
-        paper_training.TrainingService._load_source_config(
-            {"signal_source": "rdagent_task", "signal_source_id": "task-a", "signal_loop_id": 1}
-        )
 
 
 def test_worker_policy_allows_wsl_mounted_aistock_runtime_cache(monkeypatch) -> None:

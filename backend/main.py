@@ -62,7 +62,6 @@ from .routers import (
     hmm_training,
 )
 from .routers import llm_config
-from .routers import paper_trading
 try:
     from .routers import rl_execution
 except ImportError as _rl_execution_import_exc:
@@ -269,17 +268,11 @@ async def _lifespan(app: FastAPI):
     if disable_scheduler not in {"1", "true", "yes", "y", "on"}:
         refresh_interval = int((os.getenv("AISTOCK_INGESTION_SCHEDULE_REFRESH_INTERVAL_SEC") or "30").strip() or "30")
         ingestion_scheduler.start(refresh_interval=refresh_interval)
-        logging.getLogger("uvicorn.error").info("TDX 数据调度器已启动 (REQ-SCHEDULER-P3-001)")
 
     disable_strategy_scheduler = (os.getenv("DISABLE_STRATEGY_SCHEDULER") or "").strip().lower()
     if disable_strategy_scheduler not in {"1", "true", "yes", "y", "on"}:
         strategy_scheduler.start()
 
-    # 实盘演练调度器
-    disable_pt = (os.getenv("DISABLE_PAPER_TRADING_SCHEDULER") or "").strip().lower()
-    if disable_pt not in {"1", "true", "yes", "y", "on"}:
-        from .services.paper_trading.scheduler import paper_trading_scheduler
-        paper_trading_scheduler.start()
 
     # Paper Trading v2 session scheduler is opt-in so development ports do not
     # accidentally advance durable v2 sessions while production 8001 is running.
@@ -434,11 +427,6 @@ async def _lifespan(app: FastAPI):
         except Exception:
             pass
         try:
-            from .services.paper_trading.scheduler import paper_trading_scheduler
-            paper_trading_scheduler.shutdown(wait=False)
-        except Exception:
-            pass
-        try:
             from .services.paper_trading_v2.scheduler import paper_trading_v2_scheduler
             paper_trading_v2_scheduler.shutdown(wait=False)
         except Exception:
@@ -520,7 +508,6 @@ def create_app() -> FastAPI:
     app.include_router(prometheus_admin.router, prefix="/api/v1")
     app.include_router(hmm_training.router, prefix="/api/v1")
     app.include_router(llm_config.router)
-    app.include_router(paper_trading.router, prefix="/api/v1")
     app.include_router(dispatch.router, prefix="/api/v1")
     if rl_execution is not None:
         app.include_router(rl_execution.router, prefix="/api/v1")

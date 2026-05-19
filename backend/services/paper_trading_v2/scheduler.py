@@ -51,7 +51,7 @@ class PaperTradingV2SessionScheduler:
             self._stop_event.clear()
             self._thread = threading.Thread(
                 target=self._run_loop,
-                name="paper-trading-v2-session-scheduler",
+                name="paper-v2-session-scheduler",
                 daemon=True,
             )
             self._thread.start()

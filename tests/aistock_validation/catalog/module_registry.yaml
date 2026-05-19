@@ -27,7 +27,7 @@ modules:
     risk_level: high
     description: QE one-off experiment creation, execution status, and detail display.
     description_zh: 覆盖 QE 单次实验的创建、配置快照、执行状态同步、详情展示和结果读取。
-    ui_routes: [/quantevolver, /quantevolver/compose, /quantevolver/experiments, /quantevolver/templates, /quantevolver/selection]
+    ui_routes: [/quantevolver, /quantevolver/compose, /quantevolver/experiments, /quantevolver/templates]
     api_routes: [/api/v1/quantevolver/*]
     test_plans:
       required_on_change: [l0, qe_read_l3]
@@ -100,7 +100,7 @@ modules:
     risk_level: high
     description: Package-based selection, fusion, tradability filtering, and HMM-adjusted selection.
     description_zh: 覆盖策略包选股、融合排序、可交易过滤、行业/HMM 调整和结果追踪。
-    ui_routes: [/paper-v2/selection, /paper-trading/selection]
+    ui_routes: [/paper-v2/selection]
     api_routes: [/api/v1/selection-center/*]
     test_plans:
       required_on_change: [l0, paper_v2_backend]
@@ -216,15 +216,6 @@ modules:
     description: Portfolio analysis, smart monitor, and realtime monitor UI workflows.
     description_zh: Covers portfolio analysis, smart monitor, and realtime portfolio monitoring.
     ui_routes: [/portfolio, /smart-monitor, /monitor]
-    test_plans:
-      required_on_change: [l0]
-  - module_id: paper_trading_legacy
-    display_name: Paper trading legacy
-    module_type: product_feature
-    risk_level: high
-    description: Legacy paper-trading selection, training, config, monitor, and reports pages.
-    description_zh: Covers legacy paper-trading selection, training, config, monitor, and reports pages.
-    ui_routes: [/paper-trading/selection, /paper-trading/training, /paper-trading/config, /paper-trading/monitor, /paper-trading/reports]
     test_plans:
       required_on_change: [l0]
   - module_id: qmt
