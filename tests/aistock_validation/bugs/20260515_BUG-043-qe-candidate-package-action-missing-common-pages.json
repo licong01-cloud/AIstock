@@ -6,7 +6,7 @@
   "module": "quantevolver_strategy_package",
   "severity": "P1",
   "risk_area": "qe_to_paper_v2_workflow_blocker",
-  "status": "open",
+  "status": "fixed",
   "trigger_condition": {
     "scenario": "qe_experiment_or_loop_common_page_missing_add_to_candidate_strategy_package_action",
     "expected_behavior": "每个独立 QE experiment 和 QE evolution loop 的常用查看/操作入口都能直接点击加入候选策略包",
@@ -39,14 +39,14 @@
     "docs/architecture/paper_v2_qe_candidate_strategy_warehouse_design_20260512.md:616-619 lists this as P1 UI/API work"
   ],
   "fingerprint": "6bd35dbc62b0eba7",
-  "assigned_agent": null,
-  "fix_branch": null,
-  "fix_commit": null,
-  "verification_run_id": null,
+  "assigned_agent": "codex-app",
+  "fix_branch": "bug/BUG-043-qe-candidate-actions",
+  "fix_commit": "689bee8",
+  "verification_run_id": "local-BUG-043-20260519T-final",
   "created_at": "2026-05-15T09:00:00Z",
   "first_seen_at": "2026-05-15T09:00:00Z",
-  "last_seen_at": "2026-05-15T09:00:00Z",
-  "fixed_at": null,
+  "last_seen_at": "2026-05-19T01:05:00Z",
+  "fixed_at": "2026-05-19T01:05:00Z",
   "submitted_at": "2026-05-15T09:00:00Z",
   "closed_at": null,
   "allowed_write_scope": [
@@ -96,6 +96,32 @@
       "actor": "codex-app",
       "action": "triaged",
       "note": "Backend route/service/schema exist; button exists on less-common detail pages; missing coverage is common QE list/dashboard entry wiring and SOTA naming drift."
+    },
+    {
+      "timestamp": "2026-05-18T16:27:25Z",
+      "actor": "codex-app",
+      "action": "assigned",
+      "note": "Starting BUG-043 full issue-flow fix in dedicated worktree F:/Dev/AIstock_worktrees/bug-043-qe-candidate-actions. Will create PR and wait for user approval before merging main."
+    },
+    {
+      "timestamp": "2026-05-19T00:30:00Z",
+      "actor": "codex-app",
+      "action": "fixed_pending_pr",
+      "note": "Implemented common QE list, child loop, task detail, and LoopDetailPanel candidate strategy package actions; renamed nav entry. Validation passed: git diff --check; frontend lint; frontend tsc --noEmit; backend strategy_package pytest 22 passed; Playwright QE candidate actions 3 passed. No production 8001/3000 touched; no production DB writes."
+    },
+    {
+      "timestamp": "2026-05-19T00:38:00Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Mirrored BUG-043 to GitHub issue #37 for PR/review tracking. Registry remains source of truth; PR merge waits for user approval."
+    },
+    {
+      "timestamp": "2026-05-19T01:05:00Z",
+      "actor": "codex-app",
+      "action": "verification_completed",
+      "note": "Final validation after adding stable data-testid locators passed: git diff --check; npm run lint; npx tsc -p tsconfig.json --noEmit --pretty false --incremental false; backend strategy_package pytest 22 passed; Playwright QE candidate actions 3 passed. Fix implementation commit 689bee8."
     }
-  ]
+  ],
+  "github_issue_number": 37,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/37"
 }

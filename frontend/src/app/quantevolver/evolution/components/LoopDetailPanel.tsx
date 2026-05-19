@@ -19,10 +19,32 @@ import { AllStocksTable } from "../../components/AllStocksTable";
 import { FactorAnalysisPanel } from "../../components/FactorAnalysisPanel";
 import { StrategyConfigCard } from "../../components/StrategyConfigCard";
 import EvolutionTrajectory from "../../components/EvolutionTrajectory";
+import { PaperV2ApiError, strategyPackageApi } from "@/lib/paper-v2/api";
+import type { JsonObject } from "@/lib/paper-v2/types";
 
 const IcSeriesChart = dynamic(() => import("../../components/charts/IcSeriesChart"), { ssr: false });
 const LossCurveChart = dynamic(() => import("../../components/charts/LossCurveChart"), { ssr: false });
 const ReturnCurveChart = dynamic(() => import("../../components/charts/ReturnCurveChart"), { ssr: false });
+
+function apiErrorMessage(error: unknown): string {
+  if (error instanceof PaperV2ApiError) return error.message;
+  if (error instanceof Error) return error.message;
+  return String(error || "unknown error");
+}
+
+function getLoopPathId(loop: Loop): string {
+  if (loop.loop_id) {
+    const raw = String(loop.loop_id);
+    const match = raw.match(/(?:^|_)Loop(\d+)$/i);
+    return match ? `Loop${match[1]}` : raw;
+  }
+  return `Loop${loop.loop_index}`;
+}
+
+function getLoopFactorList(loop: Loop): string[] {
+  const factors = loop.config_json?.factor_list;
+  return Array.isArray(factors) ? factors : [];
+}
 
 export function getTaskStatusInfo(status: string): { color: string; bgColor: string; label: string } {
   switch (status) {
@@ -121,6 +143,92 @@ export default React.memo(function LoopDetailPanel({
   loops,
   onLoopSelect,
 }: LoopDetailPanelProps) {
+  const [candidateBusy, setCandidateBusy] = React.useState(false);
+  const [candidateMessage, setCandidateMessage] = React.useState<{ msg: string; ok: boolean } | null>(null);
+
+  const addToCandidatePackages = React.useCallback(async () => {
+    if (!activeLoopData || !activeTaskId) {
+      setCandidateMessage({ ok: false, msg: "加入候选策略包失败: 缺少任务或 Loop 上下文" });
+      return;
+    }
+
+    const loopPathId = getLoopPathId(activeLoopData);
+    const factorList = getLoopFactorList(activeLoopData);
+    setCandidateBusy(true);
+    setCandidateMessage(null);
+    try {
+      const candidate = await strategyPackageApi.createCandidateFromQELoop({
+        qe_task_id: activeTaskId,
+        qe_loop_id: loopPathId,
+        experiment_id: activeLoopData.experiment_id ?? null,
+        created_by: "quantevolver_loop_detail_panel",
+        display_name: `${activeTaskId} / ${loopPathId}`,
+        snapshot_config: {
+          source_ui: "quantevolver_loop_detail_panel",
+          qe_task_id: activeTaskId,
+          qe_loop_id: loopPathId,
+          loop_index: activeLoopData.loop_index,
+          loop_data: activeLoopData,
+          loop_config: activeLoopData.config_json ?? {},
+          enhanced_summary: enhancedMetrics?.summary ?? null,
+        } as JsonObject,
+        factor_manifest: {
+          factor_list: factorList,
+          factor_count: factorList.length,
+        },
+        model_manifest: {
+          model_id: activeLoopData.config_json?.model_id ?? null,
+          model_config: activeLoopData.config_json?.model_config ?? null,
+          training_config: activeLoopData.config_json?.training_config ?? null,
+          missing_reproducibility_items: activeLoopData.config_json?.seed == null ? ["seed"] : [],
+        },
+        strategy_manifest: {
+          strategy_id: activeLoopData.config_json?.strategy_id ?? activeTask?.strategy_id ?? null,
+          action_type: activeLoopData.action_type ?? null,
+          daily_strategy_config: activeLoopData.config_json?.daily_strategy_config ?? null,
+          minute_execution_config: activeLoopData.config_json?.minute_execution_config ?? null,
+          tail_handling_config: activeLoopData.config_json?.tail_handling_config ?? null,
+          platform_runtime_boundary: "HMM/ST/PIT/event signals are Paper v2 platform capabilities, not package assets",
+        },
+        metric_snapshot: {
+          ...(activeLoopData.metrics_json || {}),
+          enhanced_summary: enhancedMetrics?.summary ?? null,
+        } as JsonObject,
+        artifact_refs: {
+          enhanced_metrics_available: Boolean(enhancedMetrics),
+          enhanced_metrics_endpoint: `/quantevolver/evolution/tasks/${activeTaskId}/loops/${loopPathId}/enhanced-metrics`,
+        },
+        completeness: {
+          candidate_snapshot_created: true,
+          strategy_package_manifest_available: Boolean(activeLoopData.config_json?.strategy_package_manifest),
+          missing_items: activeLoopData.config_json?.strategy_package_manifest ? [] : ["strategy_package_manifest"],
+        },
+        eligibility: {
+          candidate_only: true,
+          can_enter_selection_or_paper_after_package_validation: true,
+          live_approval_reserved: false,
+        },
+        audit_context: {
+          manual_action: true,
+          ui_route: "/quantevolver/evolution",
+          source_panel: "LoopDetailPanel",
+          design_doc: "docs/architecture/paper_v2_qe_candidate_strategy_warehouse_design_20260512.md",
+          created_at: new Date().toISOString(),
+        },
+        manual_action: true,
+      });
+      setCandidateMessage({ ok: true, msg: `已加入候选策略包: ${candidate.candidate_id}` });
+    } catch (e) {
+      setCandidateMessage({ ok: false, msg: `加入候选策略包失败: ${apiErrorMessage(e)}` });
+    } finally {
+      setCandidateBusy(false);
+    }
+  }, [activeLoopData, activeTaskId, activeTask?.strategy_id, enhancedMetrics]);
+
+  React.useEffect(() => {
+    setCandidateMessage(null);
+    setCandidateBusy(false);
+  }, [activeLoopData?.loop_id]);
 
   // 策略演进任务：隐藏训练过程 Tab 和相关内容
   const isStrategyEvo = taskType === "strategy_evo";
@@ -167,6 +275,17 @@ export default React.memo(function LoopDetailPanel({
                   <GitBranch size={14} /> 以此为基础演进
                 </button>
               )}
+              {activeLoopData.status === "completed" && (
+                <button data-testid="qe-loop-panel-add-candidate" onClick={addToCandidatePackages}
+                  disabled={candidateBusy}
+                  style={{
+                    padding: "5px 12px", backgroundColor: "#2563eb", color: "#fff", border: "none", borderRadius: "6px",
+                    fontSize: "12px", fontWeight: 600, cursor: candidateBusy ? "not-allowed" : "pointer", display: "flex", alignItems: "center", gap: "4px",
+                    boxShadow: "0 2px 4px rgba(37, 99, 235, 0.2)",
+                  }}>
+                  {candidateBusy ? "加入中..." : "加入候选策略包"}
+                </button>
+              )}
               <button onClick={() => onSyncAssets(activeLoopData.loop_index)}
                 style={{
                   padding: "5px 12px", backgroundColor: "#10b981", color: "#fff", border: "none", borderRadius: "6px",
@@ -201,6 +320,12 @@ export default React.memo(function LoopDetailPanel({
         </div>
       ) : activeLoopData ? (
         <>
+          {candidateMessage && (
+            <div style={{ margin: "12px 20px 0", padding: "10px 12px", backgroundColor: candidateMessage.ok ? "#f0fdf4" : "#fef2f2", border: `1px solid ${candidateMessage.ok ? "#22c55e" : "#ef4444"}`, borderRadius: 8, fontSize: 12, color: candidateMessage.ok ? "#166534" : "#991b1b" }}>
+              {candidateMessage.msg}
+            </div>
+          )}
+
           {/* Tab bar */}
           <div style={{
             display: "flex", gap: "4px", padding: "8px 20px", borderBottom: "1px solid #e2e8f0",
