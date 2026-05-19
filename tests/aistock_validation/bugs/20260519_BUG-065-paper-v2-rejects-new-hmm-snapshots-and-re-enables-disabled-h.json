@@ -1,0 +1,120 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-065",
+  "title": "Paper v2 rejects new HMM snapshots and re-enables disabled HMM from frozen StrategyPackage backtest contract",
+  "description": "Expected: Paper v2 and Selection Center must treat HMM as a platform runtime capability, not as a StrategyPackage-bound backtest artifact. A StrategyPackage may bind only factors and the trained strategy model. Operators must be able to enable a newly trained completed HMM snapshot for Paper v2 selection, or disable HMM entirely, without the frozen StrategyPackage manifest forcing the QE-era HMM snapshot/preset back into runtime_config. Backtest-era HMM snapshots, coefficient files, model paths, or selection artifacts must not be required for current Paper v2 selection.\nActual: For StrategyPackage pkg_cfa3c5b4068d4db1ad06db352bfece93, manifest strategy_config.custom_params carries QE-era HMM fields. backtest_contract.py builds runtime_features.hmm from those custom_params and normalize/validate paths require Paper v2 runtime_profile.hmm.model_snapshot_id to match the QE backtest contract. Selecting a newly trained completed snapshot raises STRATEGY_PACKAGE_VALIDATION_ERROR: Paper v2 HMM model_snapshot_id must match the QE backtest contract. Disabling HMM also does not work in ST PIT authoritative Selection Center because the disabled flag can be stripped and the frozen contract re-injects enabled=true and the old snapshot.",
+  "module": "paper_v2",
+  "severity": "P0",
+  "risk_area": "runtime_contract",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "reported_via_codex_app_read_only_scan_20260519",
+    "files": [
+      "backend/services/strategy_package/backtest_contract.py",
+      "backend/services/selection_center/service.py",
+      "backend/services/selection_center/package_health.py",
+      "backend/services/selection_center/runtime_profile.py",
+      "backend/services/selection_center/hmm_runtime.py",
+      "backend/services/paper_trading_v2/service.py",
+      "backend/services/paper_trading_v2/day_runner.py",
+      "backend/services/paper_trading_v2/readiness.py",
+      "backend/services/paper_trading_v2/live_session.py",
+      "frontend/src/app/paper-v2/selection/page.tsx",
+      "backend/tests/strategy_package/test_backtest_contract.py",
+      "backend/tests/selection_center/test_runtime_selection.py"
+    ]
+  },
+  "reproduce_command": "rg -n \"def _hmm_contract|_apply_hmm_contract|model_snapshot_id must match|_contract_input_with_display_top_n|runtime_profile.*hmm\" backend/services/strategy_package/backtest_contract.py backend/services/selection_center/service.py frontend/src/app/paper-v2/selection/page.tsx -S",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:backend/services/strategy_package/backtest_contract.py",
+    "file:backend/services/selection_center/service.py",
+    "file:backend/services/selection_center/package_health.py",
+    "file:backend/services/selection_center/runtime_profile.py",
+    "file:backend/services/selection_center/hmm_runtime.py",
+    "file:backend/services/paper_trading_v2/service.py",
+    "file:backend/services/paper_trading_v2/day_runner.py",
+    "file:backend/services/paper_trading_v2/readiness.py",
+    "file:backend/services/paper_trading_v2/live_session.py",
+    "file:frontend/src/app/paper-v2/selection/page.tsx",
+    "file:backend/tests/strategy_package/test_backtest_contract.py",
+    "file:backend/tests/selection_center/test_runtime_selection.py"
+  ],
+  "fingerprint": "68d70b4efbb83043",
+  "github_issue_number": 76,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/76",
+  "assigned_agent": "paper_v2_team",
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-19T16:07:33Z",
+  "first_seen_at": "2026-05-19T16:07:33Z",
+  "last_seen_at": "2026-05-19T16:07:33Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-19T16:07:33Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/strategy_package/backtest_contract.py",
+    "backend/services/selection_center/service.py",
+    "backend/services/selection_center/package_health.py",
+    "backend/services/selection_center/runtime_profile.py",
+    "backend/services/selection_center/hmm_runtime.py",
+    "backend/services/paper_trading_v2/service.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/paper_trading_v2/readiness.py",
+    "backend/services/paper_trading_v2/live_session.py",
+    "frontend/src/app/paper-v2/selection/page.tsx",
+    "backend/tests/strategy_package/test_backtest_contract.py",
+    "backend/tests/selection_center/test_runtime_selection.py"
+  ],
+  "suspected_modules": [
+    "backend/services/strategy_package/backtest_contract.py",
+    "backend/services/selection_center/service.py",
+    "backend/services/selection_center/package_health.py",
+    "backend/services/selection_center/runtime_profile.py",
+    "backend/services/selection_center/hmm_runtime.py",
+    "backend/services/paper_trading_v2/service.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/paper_trading_v2/readiness.py",
+    "backend/services/paper_trading_v2/live_session.py",
+    "frontend/src/app/paper-v2/selection/page.tsx",
+    "backend/tests/strategy_package/test_backtest_contract.py",
+    "backend/tests/selection_center/test_runtime_selection.py"
+  ],
+  "required_verification": [
+    "Selection Center and Paper v2 with HMM disabled preserve runtime_profile.hmm.enabled=false after every normalization path and never run HMM artifact preflight.",
+    "Selection Center and Paper v2 with a newly completed platform HMM snapshot succeed when coefficients cover the trade date, independent of StrategyPackage historical QE custom_params.",
+    "Regression tests fail if normalize_runtime_config_with_backtest_contract or any Paper v2 path re-injects historical HMM fields from StrategyPackage manifest custom_params."
+  ],
+  "closure_requirements": [
+    "HMM snapshots, presets, coefficients, and model paths are removed from StrategyPackage runtime contract authority.",
+    "Operators can switch HMM on/off in Paper v2 without creating package-bound HMM state.",
+    "The failing package pkg_cfa3c5b4068d4db1ad06db352bfece93 can run selection with HMM disabled and with the current platform HMM snapshot."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-19T16:07:33Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Registered by Codex App from Paper v2 StrategyPackage/HMM/ST PIT read-only audit; no runtime code changed."
+    },
+    {
+      "timestamp": "2026-05-19T16:07:33Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Business impact: P0 because the basic Paper v2 selection flow cannot run reliably; operators cannot use newly trained HMM and cannot turn HMM off for packages that carry old QE HMM custom_params."
+    },
+    {
+      "timestamp": "2026-05-19T16:07:33Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Hard product rule: HMM is platform data and must never be bound to StrategyPackage; StrategyPackage binds only factors and trained strategy model."
+    },
+    {
+      "timestamp": "2026-05-19T16:07:33Z",
+      "actor": "codex-app",
+      "action": "github_sync_verified",
+      "note": "Confirmed GitHub issue #76 is OPEN and linked for Paper v2 team repair."
+    }
+  ]
+}

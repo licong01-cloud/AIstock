@@ -1,0 +1,101 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-069",
+  "title": "Paper v2 validation tests encode forbidden QE backtest runtime binding as expected behavior",
+  "description": "Expected: Paper v2 validation must enforce that StrategyPackage binds only strategy factors and the trained prediction/model artifact. Tests must fail if Paper v2 or Selection Center binds HMM snapshots, HMM coefficients, ST PIT data, factor caches, selection artifacts, or other QE backtest runtime data into the StrategyPackage contract. Tests must also verify ordinary config changes use auditable versioning rather than direct mutation.\nActual: Current tests assert that normalize_runtime_config_with_backtest_contract() populates runtime_profile.hmm from QE custom_params, rejects runtime top_k mismatch, rejects HMM model_snapshot_id mismatch, populates blacklist/tradability from the backtest contract, and rejects blacklist changes. This made forbidden behavior pass validation and explains why the runtime defects in BUG-065/066 shipped.",
+  "module": "paper_v2",
+  "severity": "P0",
+  "risk_area": "validation_coverage",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "reported_via_codex_app_read_only_scan_20260519",
+    "files": [
+      "backend/tests/strategy_package/test_backtest_contract.py",
+      "backend/tests/strategy_package/test_runtime_config_contract.py",
+      "backend/tests/selection_center/test_runtime_selection.py",
+      "backend/tests/paper_trading_v2/test_day_runner.py",
+      "backend/services/strategy_package/backtest_contract.py",
+      "backend/services/selection_center/service.py",
+      "backend/services/paper_trading_v2/service.py"
+    ]
+  },
+  "reproduce_command": "rg -n \"test_backtest_contract_populates_hmm_runtime_from_qe_config|test_backtest_contract_rejects_runtime_topk_and_hmm_mismatch|test_backtest_contract_populates_blacklist_and_rejects_conflict|HMM model_snapshot_id must match|top_k must match|industry blacklist must match|platform_hmm_and_st_pit_snapshots_are_not_locked\" backend/tests/strategy_package/test_backtest_contract.py backend/tests/strategy_package/test_runtime_config_contract.py backend/tests/selection_center/test_runtime_selection.py backend/tests/paper_trading_v2/test_day_runner.py -S",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:backend/tests/strategy_package/test_backtest_contract.py",
+    "file:backend/tests/strategy_package/test_runtime_config_contract.py",
+    "file:backend/tests/selection_center/test_runtime_selection.py",
+    "file:backend/tests/paper_trading_v2/test_day_runner.py",
+    "file:backend/services/strategy_package/backtest_contract.py",
+    "file:backend/services/selection_center/service.py",
+    "file:backend/services/paper_trading_v2/service.py"
+  ],
+  "fingerprint": "71416cf369ccd61e",
+  "github_issue_number": 80,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/80",
+  "assigned_agent": "paper_v2_team",
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-19T16:07:33Z",
+  "first_seen_at": "2026-05-19T16:07:33Z",
+  "last_seen_at": "2026-05-19T16:07:33Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-19T16:07:33Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/tests/strategy_package/test_backtest_contract.py",
+    "backend/tests/strategy_package/test_runtime_config_contract.py",
+    "backend/tests/selection_center/test_runtime_selection.py",
+    "backend/tests/paper_trading_v2/test_day_runner.py",
+    "backend/services/strategy_package/backtest_contract.py",
+    "backend/services/selection_center/service.py",
+    "backend/services/paper_trading_v2/service.py"
+  ],
+  "suspected_modules": [
+    "backend/tests/strategy_package/test_backtest_contract.py",
+    "backend/tests/strategy_package/test_runtime_config_contract.py",
+    "backend/tests/selection_center/test_runtime_selection.py",
+    "backend/tests/paper_trading_v2/test_day_runner.py",
+    "backend/services/strategy_package/backtest_contract.py",
+    "backend/services/selection_center/service.py",
+    "backend/services/paper_trading_v2/service.py"
+  ],
+  "required_verification": [
+    "Remove/replace tests that assert HMM, ST PIT, top_k, tradability, and blacklist must match the QE backtest runtime contract.",
+    "Add regression tests proving HMM disabled/new-platform-snapshot paths work without StrategyPackage-bound HMM.",
+    "Add regression tests proving ST PIT is platform-provided and never package-bound.",
+    "Add tests proving allowed non-core config changes are versioned/audited rather than directly mutating old versions."
+  ],
+  "closure_requirements": [
+    "Validation suite fails for the old forbidden runtime-binding behavior.",
+    "BUG-065 and BUG-066 cannot regress through tests that encode the old contract as expected behavior.",
+    "Paper v2 team documents which tests are product-contract tests versus legacy compatibility tests."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-19T16:07:33Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Registered by Codex App from Paper v2 StrategyPackage/HMM/ST PIT read-only audit; no runtime code changed."
+    },
+    {
+      "timestamp": "2026-05-19T16:07:33Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Impact: P0 validation gap; the tests explain how a Paper v2 implementation that cannot run basic Selection Center with mutable HMM/runtime configuration passed validation."
+    },
+    {
+      "timestamp": "2026-05-19T16:07:33Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Related runtime defects: BUG-065/GitHub #76 and BUG-066/GitHub #77."
+    },
+    {
+      "timestamp": "2026-05-19T16:07:33Z",
+      "actor": "codex-app",
+      "action": "github_sync_verified",
+      "note": "Confirmed GitHub issue #80 is OPEN and linked for Paper v2 team repair."
+    }
+  ]
+}

@@ -1,0 +1,132 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-072",
+  "title": "Paper v2 execution policy activation is versioned but still locked to initial QE manifest minute_execution_policy",
+  "description": "Expected: Paper v2 should support auditable execution-policy changes after StrategyPackage creation by creating/activating validated execution-policy versions for future trade dates. The initial QE backtest execution policy can remain frozen as the initial version, but Paper v2 must be able to activate a different validated minute execution policy/version when the operator explicitly changes execution behavior. This change must preserve version history and must not directly edit the old package version.\nActual: PaperExecutionPolicyActivation and validated execution-policy APIs exist, but create/enable/activate/readiness/day_runner/session paths still call validate_execution_policy_matches_manifest(), which requires the active policy JSON to equal manifest.minute_execution_policy from the original QE package. Therefore the versioned activation model is effectively unusable for changing execution behavior. The Paper v2 minqmt_sim path is also affected because readiness/day_runner perform this manifest equality check before branching into MiniQMT-specific execution authority.",
+  "module": "paper_v2",
+  "severity": "P0",
+  "risk_area": "execution_policy_versioning",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "reported_via_codex_app_read_only_scan_20260519",
+    "files": [
+      "backend/services/strategy_package/backtest_contract.py",
+      "backend/services/strategy_package/service.py",
+      "backend/services/strategy_package/execution_policy.py",
+      "backend/routers/strategy_packages.py",
+      "backend/services/paper_trading_v2/models.py",
+      "backend/services/paper_trading_v2/service.py",
+      "backend/services/paper_trading_v2/day_runner.py",
+      "backend/services/paper_trading_v2/readiness.py",
+      "backend/services/paper_trading_v2/session.py",
+      "backend/services/paper_trading_v2/broker/minqmtsim.py",
+      "backend/tests/paper_trading_v2/test_day_runner.py",
+      "backend/tests/paper_trading_v2/test_runtime_config_contract.py",
+      "backend/tests/strategy_package/test_backtest_contract.py"
+    ]
+  },
+  "reproduce_command": "rg -n \"PaperExecutionPolicyActivation|activate_execution_policy|validated_execution_policy|validate_execution_policy_matches_manifest|manifest.minute_execution_policy|broker_backend == \\\"minqmt_sim\\\"|minqmt_sim\" backend/services/strategy_package backend/services/paper_trading_v2 backend/routers/strategy_packages.py backend/routers/paper_trading_v2.py backend/tests -S",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:backend/services/strategy_package/backtest_contract.py",
+    "file:backend/services/strategy_package/service.py",
+    "file:backend/services/strategy_package/execution_policy.py",
+    "file:backend/routers/strategy_packages.py",
+    "file:backend/services/paper_trading_v2/models.py",
+    "file:backend/services/paper_trading_v2/service.py",
+    "file:backend/services/paper_trading_v2/day_runner.py",
+    "file:backend/services/paper_trading_v2/readiness.py",
+    "file:backend/services/paper_trading_v2/session.py",
+    "file:backend/services/paper_trading_v2/broker/minqmtsim.py",
+    "file:backend/tests/paper_trading_v2/test_day_runner.py",
+    "file:backend/tests/paper_trading_v2/test_runtime_config_contract.py",
+    "file:backend/tests/strategy_package/test_backtest_contract.py"
+  ],
+  "fingerprint": "b8daed080109d77b",
+  "github_issue_number": 85,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/85",
+  "assigned_agent": "paper_v2_team",
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-19T16:07:33Z",
+  "first_seen_at": "2026-05-19T16:07:33Z",
+  "last_seen_at": "2026-05-19T16:08:20Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-19T16:07:33Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/strategy_package/backtest_contract.py",
+    "backend/services/strategy_package/service.py",
+    "backend/services/strategy_package/execution_policy.py",
+    "backend/routers/strategy_packages.py",
+    "backend/services/paper_trading_v2/models.py",
+    "backend/services/paper_trading_v2/service.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/paper_trading_v2/readiness.py",
+    "backend/services/paper_trading_v2/session.py",
+    "backend/services/paper_trading_v2/broker/minqmtsim.py",
+    "backend/tests/paper_trading_v2/test_day_runner.py",
+    "backend/tests/paper_trading_v2/test_runtime_config_contract.py",
+    "backend/tests/strategy_package/test_backtest_contract.py"
+  ],
+  "suspected_modules": [
+    "backend/services/strategy_package/backtest_contract.py",
+    "backend/services/strategy_package/service.py",
+    "backend/services/strategy_package/execution_policy.py",
+    "backend/routers/strategy_packages.py",
+    "backend/services/paper_trading_v2/models.py",
+    "backend/services/paper_trading_v2/service.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/paper_trading_v2/readiness.py",
+    "backend/services/paper_trading_v2/session.py",
+    "backend/services/paper_trading_v2/broker/minqmtsim.py",
+    "backend/tests/paper_trading_v2/test_day_runner.py",
+    "backend/tests/paper_trading_v2/test_runtime_config_contract.py",
+    "backend/tests/strategy_package/test_backtest_contract.py"
+  ],
+  "required_verification": [
+    "Creating and activating a validated execution-policy version with different algo_code/algo_config succeeds when explicitly versioned and future-dated, while the original manifest version remains unchanged.",
+    "Readiness, day_runner, live_session/session capability checks consume the active validated policy version rather than requiring equality to manifest.minute_execution_policy.",
+    "Tests keep rejecting raw ad-hoc execution overrides in runtime_config, but allow approved versioned execution-policy activation.",
+    "Paper v2 archive/audit records the active execution-policy activation used for each run/session so historical behavior remains reproducible.",
+    "broker_backend=minqmt_sim portfolio readiness/day_runner routes are covered because the current manifest equality check runs before MiniQMT-specific authority handling."
+  ],
+  "closure_requirements": [
+    "Paper v2 can activate and run a different validated execution-policy version without mutating the initial package version.",
+    "The active execution policy is date-versioned and audit-visible for LocalSim and minqmt_sim paths.",
+    "validate_execution_policy_matches_manifest is no longer used to block approved versioned execution-policy changes."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-19T16:07:33Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Registered by Codex App from Paper v2 StrategyPackage/HMM/ST PIT read-only audit; no runtime code changed."
+    },
+    {
+      "timestamp": "2026-05-19T16:07:33Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Business impact: P0 because Paper v2 advertises versioned execution-policy activation, but the active execution route remains bound to the original QE manifest and cannot change execution strategy for simulation/live-like operation."
+    },
+    {
+      "timestamp": "2026-05-19T16:07:33Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "MiniQMT impact: Paper v2 broker_backend=minqmt_sim skips LocalSim minute-bar execution later, but it still passes through the same manifest equality validation first."
+    },
+    {
+      "timestamp": "2026-05-19T16:08:20Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Mirrored BUG-072 to GitHub issue #85 via gh CLI for Paper v2 team repair."
+    },
+    {
+      "timestamp": "2026-05-19T16:08:20Z",
+      "actor": "codex-app",
+      "action": "github_sync_verified",
+      "note": "Confirmed GitHub issue #85 is OPEN and label-synced after creation."
+    }
+  ]
+}
