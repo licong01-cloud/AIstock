@@ -6,7 +6,7 @@
   "module": "qmt_strategy_ledger",
   "severity": "P1",
   "risk_area": "trading_batch_submission_safety",
-  "status": "in_progress",
+  "status": "fixed",
   "trigger_condition": {
     "scenario": "reported_via_mcp",
     "files": [
@@ -36,12 +36,12 @@
   "fingerprint": "ffa70e9a013bb0e3",
   "assigned_agent": "codex-app",
   "fix_branch": "bug/BUG-055-miniqmt-batch-preflight",
-  "fix_commit": null,
+  "fix_commit": "e75c37cb6231bd70f7e43310863ba7f22ff03c1e",
   "verification_run_id": "20260520_l3_bug-055-miniqmt-batch-preflight",
   "created_at": "2026-05-19T04:44:38Z",
   "first_seen_at": "2026-05-19T04:44:38Z",
   "last_seen_at": "2026-05-19T04:44:38Z",
-  "fixed_at": null,
+  "fixed_at": "2026-05-19T19:49:05Z",
   "submitted_at": "2026-05-19T04:44:38Z",
   "closed_at": null,
   "allowed_write_scope": [
@@ -144,6 +144,12 @@
       "actor": "codex-app",
       "action": "fixed_local",
       "note": "Implemented full-batch preflight, deterministic batch_id idempotency, persisted order_batch lifecycle, and managed cancel compensation actions; local targeted and full qmt_strategy_ledger pytest passed."
+    },
+    {
+      "timestamp": "2026-05-19T19:49:05Z",
+      "actor": "codex-app",
+      "action": "merged_to_main",
+      "note": "Merged PR #98 to main with merge commit e75c37cb6231bd70f7e43310863ba7f22ff03c1e after GitHub CI success."
     }
   ],
   "github_issue_number": 58,
