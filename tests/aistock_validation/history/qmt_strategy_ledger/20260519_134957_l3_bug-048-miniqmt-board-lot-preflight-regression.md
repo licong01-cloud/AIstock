@@ -1,10 +1,10 @@
-# BUG-048 MiniQMT board-lot preflight regression
+﻿# BUG-048 MiniQMT board-lot preflight regression
 
 - Module: qmt_strategy_ledger
 - Level: L3
 - Date: 2026-05-19T13:49:57+08:00
 - Git base: 733be35 origin/main
-- Fix commit: c8e4c74
+- Fix commit: 03b49f8
 - Branch: bug/BUG-048-miniqmt-board-lot
 - Worktree: F:\Dev\AIstock_worktrees\bug-048-miniqmt-board-lot
 - Operator: codex-app
@@ -77,3 +77,4 @@ git diff --check
 - Need production backend restart: yes after merge/deploy for runtime effect, but not performed by Codex.
 - Need dev service restart: not required for tests; required only if manually testing the HTTP endpoint in a running backend.
 - Production impact: no production `8001/3000`, broker order placement, or DB writes used during validation.
+
