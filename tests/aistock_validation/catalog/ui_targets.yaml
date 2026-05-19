@@ -500,6 +500,25 @@ targets:
   - Review Validation Center state
   - Validate Validation Center primary workflow
   coverage_status: partial
+- route_id: research.pipeline
+  href: /research-pipeline
+  label: Research Pipeline
+  nav_group: Validation Pipeline
+  primary_module: platform.api
+  impact_modules:
+  - qe.core
+  - qe.archive
+  - hmm
+  - validation.center
+  risk_level: high
+  required_test_plans:
+  - l0
+  recommended_test_plans: []
+  business_operations:
+  - Open Research Pipeline
+  - Review research experiment timeline
+  - Inspect research artifacts, external links, and verdict state
+  coverage_status: planned
 - route_id: system.config
   href: /config
   label: Environment Config
