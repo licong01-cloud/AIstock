@@ -1,0 +1,112 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-050",
+  "title": "MiniQMT strategy rebalance does not sell holdings dropped from current selection",
+  "description": "Expected: When a miniQMT virtual strategy runs a StrategyPackage rebalance, AIstock must build a complete target portfolio from the current selection and compare it against all existing strategy-attributed holdings. Holdings that are absent from the new target universe, or whose target quantity is lower than current quantity, must generate SELL intents subject to T+1 available quantity, suspension/limit/can-sell checks, and broker/account constraints. A strategy must not silently keep retired/dropped symbols forever and must not degrade into buy-only behavior.\nActual: Current MiniQMT strategy order generation only iterates over symbols present in the current selection_run candidates. Existing strategy holdings that are no longer selected are never visited, so no SELL intent is generated for retired/dropped holdings. During the 2026-05-19 miniQMT SIM POC, BUY fills were observed for strategy A, but no SELL fills or automated sell intents were validated. Code inspection points to backend/services/qmt_strategy_ledger/selection_order_builder.py build_for_binding(): it loads current quantities but computes deltas only inside the current candidate loop, making the workflow an add/adjust-selected-symbols path rather than a complete rebalance path.",
+  "module": "qmt_strategy_ledger",
+  "severity": "P0",
+  "risk_area": "trading_rebalance_correctness",
+  "status": "fixed",
+  "trigger_condition": {
+    "scenario": "miniqmt_sim_poc_20260519_and_code_inspection",
+    "files": [
+      "backend/services/qmt_strategy_ledger/selection_order_builder.py",
+      "backend/services/qmt_strategy_ledger/order_service.py",
+      "backend/services/qmt_strategy_ledger/repository.py",
+      "backend/services/qmt_strategy_ledger/models.py",
+      "backend/tests/qmt_strategy_ledger/test_selection_order_builder.py",
+      "backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py"
+    ]
+  },
+  "reproduce_command": "rg -n \"build_for_binding|selection_run|current_quantities|target_qty|SELL|BUY\" backend/services/qmt_strategy_ledger/selection_order_builder.py backend/tests/qmt_strategy_ledger -S && pytest backend/tests/qmt_strategy_ledger/test_selection_order_builder.py",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:backend/services/qmt_strategy_ledger/selection_order_builder.py",
+    "file:backend/services/qmt_strategy_ledger/order_service.py",
+    "file:backend/services/qmt_strategy_ledger/repository.py",
+    "file:backend/services/qmt_strategy_ledger/models.py",
+    "file:backend/tests/qmt_strategy_ledger/test_selection_order_builder.py",
+    "file:backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py"
+  ],
+  "fingerprint": "0a1230eed3010127",
+  "assigned_agent": "codex-app",
+  "fix_branch": "bug/BUG-050-miniqmt-rebalance-sell-dropped",
+  "fix_commit": null,
+  "verification_run_id": "tests/aistock_validation/history/qmt_strategy_ledger/20260519_l3_bug-050-miniqmt-rebalance-sell-dropped.md",
+  "created_at": "2026-05-19T03:10:54Z",
+  "first_seen_at": "2026-05-19T03:10:54Z",
+  "last_seen_at": "2026-05-19T16:13:56Z",
+  "fixed_at": "2026-05-19T16:13:56Z",
+  "submitted_at": "2026-05-19T03:10:54Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/qmt_strategy_ledger/selection_order_builder.py",
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/services/qmt_strategy_ledger/repository.py",
+    "backend/services/qmt_strategy_ledger/models.py",
+    "backend/tests/qmt_strategy_ledger/test_selection_order_builder.py",
+    "backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py"
+  ],
+  "suspected_modules": [
+    "backend/services/qmt_strategy_ledger/selection_order_builder.py",
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/services/qmt_strategy_ledger/repository.py",
+    "backend/services/qmt_strategy_ledger/models.py"
+  ],
+  "required_verification": [
+    "Regression test: existing strategy holding absent from the new selection target generates a SELL intent for available shares.",
+    "Regression test: existing strategy holding still selected but above target generates a partial SELL intent.",
+    "Regression test: existing strategy holding equal to target is skipped and below target generates BUY using the canonical board-lot rule.",
+    "Regression test: T+1 unavailable or broker can-sell unavailable shares do not generate illegal SELL orders and produce an explicit skip/reason.",
+    "Integration check: same-symbol holdings across multiple strategies remain isolated by strategy lot attribution and order_remark/strategy_name.",
+    "miniQMT SIM POC: run a rebalance where at least one previously held stock is dropped and verify AIstock creates/submits the SELL intent and records the fill or broker rejection."
+  ],
+  "closure_requirements": [
+    "SelectionOrderBuilder or its replacement implements complete rebalance semantics from full target map versus all strategy-attributed holdings.",
+    "Removed holdings and overweight holdings are not silently carried unless blocked by a recorded T+1/suspend/limit/can-sell reason.",
+    "BUY and SELL order generation uses one canonical board-lot/tradability rule source instead of duplicated simplified checks.",
+    "Strategy-level ledger, cash, positions, and PnL remain auditable after sell intents and fills are synchronized.",
+    "No simplified buy-only fallback path remains in the miniQMT strategy execution flow."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-19T03:10:54Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Raised from 2026-05-19 miniQMT SIM POC and user confirmation that strategy buy-only behavior is a severe P0 defect."
+    },
+    {
+      "timestamp": "2026-05-19T03:10:54Z",
+      "actor": "codex-app",
+      "action": "triaged",
+      "note": "Classified as P0 trading rebalance correctness: a strategy that only buys and never sells can accumulate stale holdings, fail daily rebalance decisions, distort risk exposure, and make SIM/LIVE validation untrustworthy."
+    },
+    {
+      "timestamp": "2026-05-19T03:10:54Z",
+      "actor": "codex-app",
+      "action": "root_cause_hypothesis",
+      "note": "selection_order_builder.py build_for_binding() iterates only current selection candidates and computes deltas only for those symbols; existing holdings absent from the target universe are not compared and therefore do not produce SELL intents."
+    },
+    {
+      "timestamp": "2026-05-19T03:11:44Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Mirrored BUG-050 to GitHub issue #53 via gh CLI."
+    },
+    {
+      "timestamp": "2026-05-19T05:31:30Z",
+      "actor": "codex-app",
+      "action": "github_sync_verified",
+      "note": "Confirmed GitHub issue #53 is OPEN and label-synced (bug, status:open, P0, severity:p0, module:qmt_strategy_ledger, risk:trading_rebalance_correctness) before fix worktree creation."
+    },
+    {
+      "timestamp": "2026-05-19T16:13:56Z",
+      "actor": "codex-app",
+      "action": "fixed_in_progress",
+      "note": "Implemented complete MiniQMT StrategyPackage rebalance sell generation in SelectionOrderBuilder: dropped holdings emit SELL intents, overweight sells cap to T+1 available quantity with explicit skip reasons, same-symbol multi-strategy lots stay isolated. Local validation passed: targeted selection builder tests 12 passed, qmt_strategy_ledger suite 49 passed, compileall, diff checks, validation_module_registry_l0, guardrail_changed_files, and l0."
+    }
+  ],
+  "github_issue_number": 53,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/53",
+  "worktree_path": "F:/Dev/AIstock_worktrees/bug-050-miniqmt-rebalance-sell-dropped"
+}
