@@ -6,6 +6,7 @@ not connect to MiniQMT, submit orders, cancel orders, or run schema DDL.
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -27,6 +28,8 @@ from .models import (
     DailySnapshotRecord,
     IntentPreflightStatus,
     IntentSubmitStatus,
+    OrderBatchRecord,
+    OrderBatchStatus,
     OrderIntentRecord,
     OrderLedgerRecord,
     OrderStatusEventRecord,
@@ -308,6 +311,53 @@ class QmtStrategyLedgerRepository:
             raise DataUnavailableError("qmt strategy package binding does not exist", context={"binding_id": binding_id})
         return _row_to_package_binding(row)
 
+    def upsert_order_batch(self, batch: OrderBatchRecord) -> OrderBatchRecord:
+        _validate_order_batch(batch)
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO qmt_strategy.order_batch (
+                        batch_id, strategy_id, account_id, mode, batch_status,
+                        requested_by, request_json, result_json, metadata,
+                        created_at, submitted_at, completed_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (batch_id) DO UPDATE SET
+                        strategy_id = EXCLUDED.strategy_id,
+                        account_id = EXCLUDED.account_id,
+                        mode = EXCLUDED.mode,
+                        batch_status = EXCLUDED.batch_status,
+                        requested_by = EXCLUDED.requested_by,
+                        request_json = EXCLUDED.request_json,
+                        result_json = EXCLUDED.result_json,
+                        metadata = EXCLUDED.metadata,
+                        submitted_at = EXCLUDED.submitted_at,
+                        completed_at = EXCLUDED.completed_at
+                    """,
+                    (
+                        batch.batch_id,
+                        batch.strategy_id,
+                        batch.account_id,
+                        batch.mode,
+                        _enum_value(batch.batch_status),
+                        batch.requested_by,
+                        _json(batch.request_json),
+                        _json(batch.result_json),
+                        _json(batch.metadata),
+                        batch.created_at,
+                        batch.submitted_at,
+                        batch.completed_at,
+                    ),
+                )
+        return batch
+
+    def get_order_batch(self, batch_id: str) -> OrderBatchRecord | None:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("SELECT * FROM qmt_strategy.order_batch WHERE batch_id = %s", (batch_id,))
+                row = cur.fetchone()
+        return _row_to_order_batch(row) if row else None
+
     def create_order_intent(self, intent: OrderIntentRecord) -> OrderIntentRecord:
         _validate_order_intent(intent)
         with self._conn_factory() as conn:
@@ -363,6 +413,21 @@ class QmtStrategyLedgerRepository:
         if not row:
             raise DataUnavailableError("qmt strategy order intent does not exist", context={"intent_id": intent_id})
         return _row_to_order_intent(row)
+
+    def list_order_intents_by_batch(self, batch_id: str) -> list[OrderIntentRecord]:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM qmt_strategy.order_intent
+                    WHERE batch_id = %s
+                    ORDER BY created_at, intent_id
+                    """,
+                    (batch_id,),
+                )
+                rows = cur.fetchall()
+        return [_row_to_order_intent(row) for row in rows]
 
     def get_order_intent_by_remark(self, account_id: str, order_remark: str) -> OrderIntentRecord | None:
         with self._conn_factory() as conn:
@@ -972,6 +1037,7 @@ class InMemoryQmtStrategyLedgerRepository:
         self._virtual_account_names: dict[tuple[str, str], str] = {}
         self._bindings: dict[str, StrategyPackageBinding] = {}
         self._active_bindings: dict[str, str] = {}
+        self._order_batches: dict[str, OrderBatchRecord] = {}
         self._order_intents: dict[str, OrderIntentRecord] = {}
         self._order_remark_index: dict[tuple[str, str], str] = {}
         self._order_ledgers: dict[tuple[str, str], OrderLedgerRecord] = {}
@@ -1084,6 +1150,14 @@ class InMemoryQmtStrategyLedgerRepository:
             raise DataUnavailableError("qmt strategy package binding does not exist", context={"binding_id": binding_id})
         return binding
 
+    def upsert_order_batch(self, batch: OrderBatchRecord) -> OrderBatchRecord:
+        _validate_order_batch(batch)
+        self._order_batches[batch.batch_id] = batch
+        return batch
+
+    def get_order_batch(self, batch_id: str) -> OrderBatchRecord | None:
+        return self._order_batches.get(batch_id)
+
     def create_order_intent(self, intent: OrderIntentRecord) -> OrderIntentRecord:
         _validate_order_intent(intent)
         self.get_virtual_account(intent.strategy_id)
@@ -1101,6 +1175,12 @@ class InMemoryQmtStrategyLedgerRepository:
         if intent is None:
             raise DataUnavailableError("qmt strategy order intent does not exist", context={"intent_id": intent_id})
         return intent
+
+    def list_order_intents_by_batch(self, batch_id: str) -> list[OrderIntentRecord]:
+        return sorted(
+            [intent for intent in self._order_intents.values() if intent.batch_id == batch_id],
+            key=lambda intent: (intent.created_at, intent.intent_id),
+        )
 
     def get_order_intent_by_remark(self, account_id: str, order_remark: str) -> OrderIntentRecord | None:
         intent_id = self._order_remark_index.get((account_id, order_remark))
@@ -1331,6 +1411,16 @@ def _validate_package_binding(binding: StrategyPackageBinding) -> None:
         raise ValueError("top_k must be positive")
 
 
+def _validate_order_batch(batch: OrderBatchRecord) -> None:
+    _require_text(batch.batch_id, "batch_id")
+    _require_text(batch.account_id, "account_id")
+    _require_text(batch.mode, "mode")
+    if batch.mode not in {"SIM", "LIVE"}:
+        raise ValueError("mode must be SIM or LIVE")
+    if not isinstance(batch.batch_status, OrderBatchStatus):
+        OrderBatchStatus(str(batch.batch_status))
+
+
 def _validate_order_intent(intent: OrderIntentRecord) -> None:
     _require_text(intent.intent_id, "intent_id")
     _require_text(intent.strategy_id, "strategy_id")
@@ -1364,7 +1454,11 @@ def _enum_value(value: Any) -> str:
 
 
 def _json(value: Any) -> psycopg2.extras.Json:
-    return psycopg2.extras.Json(value if value is not None else {})
+    return psycopg2.extras.Json(value if value is not None else {}, dumps=_json_dumps)
+
+
+def _json_dumps(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
 
 
 def _row_to_virtual_account(row: dict[str, Any]) -> VirtualAccount:
@@ -1402,6 +1496,23 @@ def _row_to_package_binding(row: dict[str, Any]) -> StrategyPackageBinding:
         runtime_config=row["runtime_config"] or {},
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+    )
+
+
+def _row_to_order_batch(row: dict[str, Any]) -> OrderBatchRecord:
+    return OrderBatchRecord(
+        batch_id=row["batch_id"],
+        strategy_id=row["strategy_id"],
+        account_id=row["account_id"],
+        mode=row["mode"],
+        batch_status=OrderBatchStatus(row["batch_status"]),
+        requested_by=row["requested_by"],
+        request_json=row["request_json"] or {},
+        result_json=row["result_json"] or {},
+        metadata=row["metadata"] or {},
+        created_at=row["created_at"],
+        submitted_at=row["submitted_at"],
+        completed_at=row["completed_at"],
     )
 
 
