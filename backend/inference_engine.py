@@ -1264,8 +1264,8 @@ class InferenceEngine:
         """执行完整的推理流程
         
         支持两种模式：
-        1. TASK选股模式：使用task_run_id + loop_id，从rdagent_assets加载
-        2. QE experiment selection mode: experiment_id + AIstock-owned runtime cache workspace_path.
+        1. TASK runtime mode: use task_run_id + loop_id, load from rdagent_assets
+        2. QE runtime cache mode: experiment_id + AIstock-owned runtime cache workspace_path.
         """
         target_date = trade_date
         if cutoff_date and target_date.date() > cutoff_date.date():
@@ -1283,16 +1283,16 @@ class InferenceEngine:
         )
         
         # 核心逻辑：加载本地同步后的 v2 资产
-        # 区分TASK选股和QE实验选股
+        # Separate TASK runtime mode from QE runtime cache mode
         if experiment_id and workspace_path:
-            # QE实验选股模式：从实验工作目录加载
+            # QE runtime cache mode: load from experiment workspace
             task_id = experiment_id
             task_dir = _validate_qe_runtime_workspace_path(workspace_path)
             manifest = self._load_experiment_manifest(str(task_dir))
             if not manifest:
                 raise ValueError(f"未找到实验资产 manifest: {experiment_id} at {workspace_path}")
         else:
-            # TASK选股模式：从rdagent_assets加载
+            # TASK runtime mode: load from rdagent_assets
             task_id = task_run_id or strategy_id
             manifest = self._load_task_manifest(task_id)
             if not manifest:

@@ -99,7 +99,7 @@ L2 trigger：trading_core 内部多组件协作；DB 持久化；API 暴露。
 - pass：现有 `test_subscribe_returns_handle_and_unsubscribe_releases` + `test_unsubscribe_unknown_handle_is_silent_noop` 通过
 
 ### L2-F4：errors API 暴露 / 持久化
-- 抛出的 typed error 写入 `errors` 表；API `/api/v1/paper-trading-v2/errors` 可读
+- 抛出的 typed error 写入 `errors` 表；API `/api/v1/paper-v2/errors` 可读
 - error.context 完整持久化（不丢字段）
 - pass：error 写入 + 读取一致；context 字段不被截断
 

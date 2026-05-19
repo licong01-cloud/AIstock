@@ -37,10 +37,7 @@ QE experiment pages must display accurate task, loop, and metric data obtained t
 
 These checks cover non-create, non-retry, non-resume paths remediated after the initial QE read and cleanup phases.
 
-- Legacy Paper Trading DB selection for `qe_experiment` and `qe_evolution` materializes QE runtime assets through `QEExperimentRuntimeAssetResolver`; it must not query `qe_experiments.workspace_path` or call `_load_experiment_manifest` on DB paths.
 - `InferenceEngine._load_experiment_manifest` accepts only AIstock-owned runtime caches and refuses worker paths even if an old caller passes `workspace_path`.
-- Transformed factor file fallbacks in DB selection refuse worker paths before `os.path.isfile` or `open`.
-- Legacy Paper Trading retraining source-config loading may read explicit local configs or API-synced asset bundles only; RD-Agent `workspace_path` is remote metadata and must not be scanned for `conf*.yaml`.
 - RD-Agent task manifest text, task selection asset status, and local asset audit read only guarded AIstock-owned `rdagent_assets/rdagent_tasks` cache files; worker manifest paths return explicit policy errors.
 - RD-Agent production bundle cache must stay under AIstock-owned artifact roots and must refuse worker base directories before extracting or reading bundle files.
 - RD-Agent production bundle cache must reject path traversal in bundle ids, downloaded zip members, workspace ids, and manifest relative paths before any local read/write/extract operation.

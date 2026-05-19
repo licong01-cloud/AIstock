@@ -27,7 +27,6 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/quantevolver/multi-alpha/evolve-wizard", label: "\u{1F9EC} \u591AAlpha \u6F14\u8FDB" },
       { href: "/quantevolver/evolution/sota", label: "\u{1F4E6} \u5019\u9009\u7B56\u7565\u5305" },
       { href: "/quantevolver/model-training", label: "\u{1F9E0} \u6A21\u578B\u8BAD\u7EC3" },
-      { href: "/quantevolver/selection", label: "\u{1F680} \u5B9E\u9A8C\u9009\u80A1" },
       { href: "/quantevolver/prompts", label: "\u{1F4DD} \u63D0\u793A\u8BCD\u914D\u7F6E" },
     ],
   },
@@ -107,16 +106,6 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/paper-v2/selection", label: "\u{1F3AF} \u7EDF\u4E00\u9009\u80A1\u4E2D\u5FC3" },
       { href: "/paper-v2/portfolios", label: "\u{1F4BC} \u6A21\u62DF\u76D8\u7EC4\u5408" },
       { href: "/paper-v2/model-hmm", label: "\u{1F9E0} \u6A21\u578B\u4E0E HMM" },
-    ],
-  },
-  {
-    title: "\u{1F4CA} \u5B9E\u76D8\u6F14\u7EC3",
-    items: [
-      { href: "/paper-trading/selection", label: "\u{1F50D} \u5B9E\u76D8\u9009\u80A1" },
-      { href: "/paper-trading/training", label: "\u{1F527} \u6A21\u578B\u8BAD\u7EC3" },
-      { href: "/paper-trading/config", label: "\u2699\uFE0F \u6A21\u62DF\u76D8\u914D\u7F6E" },
-      { href: "/paper-trading/monitor", label: "\u{1F4C8} \u6A21\u62DF\u76D8\u76D1\u63A7" },
-      { href: "/paper-trading/reports", label: "\u{1F4CB} \u62A5\u8868\u5206\u6790" },
     ],
   },
 ];

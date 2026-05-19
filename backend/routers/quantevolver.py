@@ -3200,41 +3200,6 @@ def regenerate_experiment(experiment_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-class ExperimentSelectionRequest(BaseModel):
-    trade_date: Optional[str] = Field(None, description="推理日期 YYYY-MM-DD，默认当日")
-    cutoff_date: Optional[str] = Field(None, description="数据截止日期 YYYY-MM-DD；若设置，则推理取数不得晚于该日期")
-    top_k: int = Field(50, ge=1, le=500, description="返回候选数量，默认 50")
-
-
-@router.post("/experiments/{experiment_id}/selection")
-def trigger_experiment_selection(experiment_id: str, req: ExperimentSelectionRequest):
-    """
-    基于QE实验进行实盘选股（完全参考TASK选股架构）
-    
-    重要说明：
-    1. 使用实盘最新数据从数据库获取，禁止使用回测历史数据
-    2. 仅从实验中获取：模型权重、特征序列
-    3. 重新计算所有股票的评分（使用实盘数据）
-    4. 参考TASK选股逻辑，生成所需数据集（h5文件、static_factors.parquet等）
-    5. 共用数据服务层，不干扰TASK选股功能
-    """
-    try:
-        from ..services.quantevolver.qe_selection_service import build_experiment_selection
-        
-        result = build_experiment_selection(
-            experiment_id=experiment_id,
-            trade_date=req.trade_date,
-            cutoff_date=req.cutoff_date,
-            top_k=req.top_k
-        )
-        return result
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.exception(f"实验选股失败: experiment_id={experiment_id}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 # ============================================================
 # 因子值缓存管理 (Factor Value Cache)
 # ============================================================
