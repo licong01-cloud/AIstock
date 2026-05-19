@@ -6,7 +6,7 @@
   "module": "validation",
   "severity": "P1",
   "risk_area": "unspecified",
-  "status": "in_progress",
+  "status": "fixed",
   "trigger_condition": {
     "scenario": "reported_via_mcp",
     "files": [
@@ -27,12 +27,12 @@
   "fingerprint": "aa2412f47816b261",
   "assigned_agent": "codex-app",
   "fix_branch": "bug/BUG-073-validation-mcp-github-env",
-  "fix_commit": null,
+  "fix_commit": "16e4af9",
   "verification_run_id": null,
   "created_at": "2026-05-19T16:27:34Z",
   "first_seen_at": "2026-05-19T16:27:34Z",
   "last_seen_at": "2026-05-19T16:27:34Z",
-  "fixed_at": null,
+  "fixed_at": "2026-05-19T17:23:26Z",
   "submitted_at": "2026-05-19T16:27:34Z",
   "closed_at": null,
   "allowed_write_scope": [
@@ -113,6 +113,12 @@
       "actor": "codex-app",
       "action": "validated",
       "note": "Verified py_compile for changed Python entrypoints, 50 focused pytest cases, git diff --check, and local MCP GitHub client repo/token smoke without printing token."
+    },
+    {
+      "timestamp": "2026-05-19T17:23:26Z",
+      "actor": "codex-app",
+      "action": "fixed_pending_main_merge",
+      "note": "PR #90 validated successfully; marking BUG-073 fixed before main merge so registry and GitHub issue lifecycle stay consistent."
     }
   ],
   "github_issue_number": 88,
