@@ -89,6 +89,47 @@
 - `market.dataset_date_refresh_audit` 写入 `status='success'`，并记录 `row_count`、`written_rows`、`expected_rows`、`coverage_ratio`、`quality_status`、`failure_category`、`job_id`。
 - `market.data_stats` 已刷新或被标记为 stale 并安排重建。
 
+### 3.3 业务流程决策表
+
+每日流程必须按同一张决策表运行，避免“健康检查、自动重试、看板、业务 readiness”各自判断导致冲突。
+
+| 阶段 | 输入 | 判断 | 输出 | 是否报警 |
+|---|---|---|---|---|
+| 目标生成 | 交易日历、dataset catalog、依赖 DAG | 今天是否需要该 dataset/date | `planned` 或 `not_required` | 否 |
+| 发布时间判断 | release window、T+1 策略、当前北京时间 | 未到发布时间 | `waiting_release` | 否 |
+| 同步执行 | target、source adapter、last success | 可运行且无同 target 锁 | `running` + attempt | 否 |
+| 源端返回空 | 0 行、zero-row policy、deadline | 合法稀疏空结果 | `empty_valid` + audit success | 否 |
+| 源端返回空 | 0 行、zero-row policy、deadline | 未到 final deadline | `pending_publish` + next_retry_at | 否 |
+| 源端返回空 | 0 行、zero-row policy、deadline | 已过 final deadline | `final_blocked/provider_data_missing` | 是 |
+| 写入成功 | physical rows、schema、主键、日期 | 质量校验通过 | audit success + refresh data_stats | 否 |
+| 写入成功但缓存落后 | audit ready、data_stats stale | 缓存可重建 | `cache_state='stale'` + rebuild | 否 |
+| job 成功但 audit 缺失 | job summary、physical rows、audit missing | 可对账修复 | `job_success_audit_missing` + reconcile | 否 |
+| audit 成功但物理表缺行 | audit、physical count | 数据不可信 | invalidate/retry target | final 后才报警 |
+| provider/API 不可用 | exception、timeout、HTTP 5xx、rate limit | 不可由业务逻辑修复但可能恢复 | retry 到 deadline；若仍失败 final blocked | final 后 |
+| DB 不可用 | 连接失败、事务失败、写入失败 | 同步系统不可用 | `db_unavailable` | 是 |
+| provider contract 错误 | 缺字段、日期错位、类型错误 | 自动重试无意义或风险高 | `provider_contract_error` | 是 |
+
+### 3.4 单一状态优先级
+
+所有 API、UI、调度器、健康检查和业务 readiness 必须按同一优先级解释状态：
+
+```text
+db_unavailable / provider_contract_error
+  > final_blocked
+  > running
+  > retry_waiting / pending_publish / waiting_release
+  > cache_stale
+  > ready
+  > not_required
+```
+
+含义：
+
+- 高优先级状态覆盖低优先级状态。例如 `data_stats` fresh 但 audit final_blocked 时，最终仍是 final_blocked。
+- `cache_stale` 不得阻断已经 audit ready 的业务消费，但必须在 UI 中提示缓存正在重建。
+- `job success` 不属于 readiness 状态，只能作为 attempt 证据。
+- `not_required` 只适用于非交易日、未上市区间、明确不需要刷新或 catalog 标注的非每日数据。
+
 ## 4. 数据集分层和 deadline policy
 
 ### 4.1 优先级
@@ -123,6 +164,15 @@
 - 重试次数耗尽且 deadline 已过。
 - reconciliation 发现 job/audit/physical/data_stats 无法自动修复。
 
+为避免误报，`_data_freshness_check` 只能产生 readiness summary 和待补齐 target，不应在自动补齐前直接写 `market.data_alerts`。所有告警必须经过 Alert Gate，由 Alert Gate 在以下条件同时成立时写入：
+
+1. target 已到 final deadline。
+2. 当前没有 running attempt 或未到期 delayed retry。
+3. reconciliation 已尝试或确认不可自动修复。
+4. 同一 dataset/date/failure_category 当日未存在未关闭告警。
+
+恢复后必须自动关闭或标记 resolved，不能要求人工手动清理已恢复告警。
+
 ## 5. 控制平面架构
 
 ### 5.1 核心组件
@@ -132,7 +182,7 @@
 | Dataset Catalog | 描述数据集日期策略、主键、源接口、发布窗口、空结果策略、依赖关系、质量阈值 |
 | Target Generator | 生成每日必须完成的 `dataset/date` target |
 | Policy Engine | 判断是否可尝试、是否 pending_publish、是否 final_blocked |
-| Retry Queue | 持久化待补齐目标、attempt、next_retry_at、last_error、failure_category |
+| Target Queue | 由 `data_sync_targets` 持久化待补齐目标、next_retry_at、deadline、last_error、failure_category |
 | Ingestion Adapter | 统一封装 Tushare/TDX 调用、字段校验、分页、限流、幂等写入 |
 | Audit Writer | 写入 `market.dataset_date_refresh_audit`，作为 readiness 权威 |
 | Reconciliation Worker | 对账 job、audit、physical、data_stats，并自动修复可修复差异 |
@@ -180,6 +230,36 @@ stats_success_physical_missing
 ```
 
 这些状态不能直接报警，必须先进入 reconciliation 和 retry queue。
+
+### 5.3 冲突消解规则
+
+后续实现必须显式处理以下冲突场景，避免流程互相打架：
+
+| 冲突场景 | 统一处理 |
+|---|---|
+| 定时任务和手动 UI 同时触发同一 dataset/date | `data_sync_targets(dataset, trade_date)` 加唯一键；同一 target 只允许一个 running attempt，其它触发合并为 duplicate_recent |
+| `_data_freshness_check` 发现 stale，但 `_auto_retry_stale` 即将执行 | 只生成 target 和 summary，不写告警 |
+| `_auto_retry_stale` 正在重试，UI 再点“增量同步” | UI 显示 running/next_retry_at；除非用户选择 force，不再创建重复 job |
+| 旧 job 晚于新 job 完成 | audit 以 target date + attempt started_at/finished_at 判定；旧 attempt 不能覆盖更新 attempt 的 success |
+| provider 晚发布后又修正同一日期数据 | 允许同 target 多次 success revision，记录 `source_payload_hash` / `data_max_at`，刷新 physical 和 data_stats |
+| audit ready 但 data_stats 刷新失败 | 业务 readiness 仍按 audit ready；UI 标记 `cache_state='error'`，后台重建缓存，不报警到数据缺失 |
+| 非交易日或节假日 | target generator 不生成交易日数据 target；自然日/公告类按 calendar policy 生成 |
+| 交易日历缺失或系统时间错误 | 归类为 `calendar_unavailable` 或 `clock_skew`，这是系统基础故障，不伪装为数据集缺失 |
+| 上游依赖未 ready | 下游 target 保持 `blocked_by_dependency`，优先补依赖，不对下游重复报警 |
+| 数据集改名或别名不一致 | catalog 维护 canonical name 和 alias，例如 `sw_sector` / `sw_daily` 必须只落到一个 canonical dataset |
+
+### 5.4 最简稳定落地原则
+
+为提高效率并降低长期维护复杂度，第一版实现不应引入过多表和过多状态源：
+
+1. `market.dataset_date_refresh_audit` 继续作为 readiness 权威，不另建第二套 readiness 表。
+2. `market.data_stats` 继续作为看板缓存，不直接参与业务阻断。
+3. 新增 `market.data_sync_targets` 承担 target、状态、retry queue、next_retry_at、deadline、dependency block 的职责。
+4. 新增 `market.data_sync_attempts` 记录每次尝试；不单独新增 `data_sync_retry_queue`，除非后续证明 target 表无法承载队列。
+5. release/deadline policy 第一阶段可用代码/YAML catalog 管理；只有需要 UI 动态配置时再落库为 `market.dataset_release_policy`。
+6. Alert Gate 是唯一写 `market.data_alerts` 的组件；其它任务只写 summary、target 或 attempt。
+
+这样第一阶段核心新增状态源只有 `data_sync_targets` 和 `data_sync_attempts` 两张表，既能满足自动补齐，又避免“表越多、状态越容易不一致”。
 
 ## 6. `cyq_perf` 专项修复设计
 
@@ -230,12 +310,14 @@ UI 不得只显示 job success。若 job success 但 audit 缺失，应显示：
 
 ### 8.1 新增或扩展表
 
-建议新增：
+第一阶段建议新增：
 
-- `market.data_sync_targets`：每日目标和状态。
-- `market.data_sync_attempts`：每次尝试的执行记录。
-- `market.data_sync_retry_queue`：持久化重试队列。
-- `market.dataset_release_policy`：数据集发布时间、deadline、空结果策略。
+- `market.data_sync_targets`：每日目标、当前状态、deadline、next_retry_at、retry_count、dependency block、operator_action_required。该表同时承担 retry queue，不再单独新增 `data_sync_retry_queue`。
+- `market.data_sync_attempts`：每次尝试的执行记录，包括 source response、job_id、row_count、错误分类、耗时、payload hash。
+
+暂不强制新增：
+
+- `market.dataset_release_policy`：第一阶段可由代码/YAML catalog 管理，等需要 UI 动态编辑 release window 时再落库。
 
 建议扩展：
 
@@ -292,6 +374,16 @@ UI 不得只显示 job success。若 job success 但 audit 缺失，应显示：
 | DS-AUTO-018 | gap cache 过期 | `last_check_at` 超 TTL | 自动失效并重算 gap | 否 |
 | DS-AUTO-019 | 报警恢复闭环 | stale alert 存在且 retry 成功 | 自动标记 resolved/ack source | 否 |
 | DS-AUTO-020 | 全天 provider outage | API 持续不可用 | 只在 final blocked 后产生一条去重报警 | 是 |
+| DS-AUTO-021 | 非交易日 | 周末/节假日 | 不生成交易日 target；公告类按 calendar policy 运行 | 否 |
+| DS-AUTO-022 | 手动同步和定时同步冲突 | 同一 dataset/date 两个触发 | 唯一 target 合并，只有一个 running attempt | 否 |
+| DS-AUTO-023 | 旧 job 晚完成 | attempt A 早于 attempt B，但 A 晚结束 | A 不覆盖 B 的 audit success | 否 |
+| DS-AUTO-024 | provider 返回旧日期 | 请求 T，返回 T-1 或空日期 | `provider_contract_error` 或 `pending_publish`，不得写 T success | 视分类 |
+| DS-AUTO-025 | 系统时间/时区错误 | mock 北京时间漂移 | 标记 `clock_skew`，不误判数据缺失 | 是 |
+| DS-AUTO-026 | 交易日历缺失 | latest trading day 查询失败 | `calendar_unavailable`，不生成错误 target | 是 |
+| DS-AUTO-027 | provider 后续修正 | 同一 trade_date payload hash 变化 | 记录 revision，刷新 physical/audit/data_stats | 否 |
+| DS-AUTO-028 | 下游依赖缺失 | `sector_data` 依赖未 ready | `blocked_by_dependency`，优先补依赖 | 否 |
+| DS-AUTO-029 | freshness check 早于 auto retry | 22:00 stale，23:00 可补齐 | 22:00 不写 alert，只写 target/summary | 否 |
+| DS-AUTO-030 | data_stats 重建失败 | audit ready，缓存刷新异常 | 业务 ready，UI cache error，后台重建 | 否 |
 
 ### 9.3 结果数据验证方式
 
@@ -389,7 +481,9 @@ ORDER BY severity DESC, dataset;
 6. API/UI 同时展示 `ready_date`、`physical_max_date`、`stats_max_date`、`cache_state`、`next_retry_at`、`operator_action_required`。
 7. Paper v2 / Selection Center 只消费 audit-backed readiness。
 8. DB schema comment、migration、回滚策略、run evidence 完整。
-9. 自动化流水线通过后，由用户确认是否合入 Main。
+9. 并发触发、旧 job 晚完成、非交易日、交易日历缺失、provider 修正、依赖阻塞、cache rebuild failed 均有自动化测试。
+10. 第一版实现仅新增必要状态源，优先使用 `data_sync_targets` + `data_sync_attempts`，不得再引入互相重复的 readiness 表。
+11. 自动化流水线通过后，由用户确认是否合入 Main。
 
 ## 11. 分阶段实施计划
 
