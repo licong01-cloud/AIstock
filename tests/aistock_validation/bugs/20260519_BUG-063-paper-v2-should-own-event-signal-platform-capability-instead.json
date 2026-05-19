@@ -6,7 +6,7 @@
   "module": "paper_v2",
   "severity": "P3",
   "risk_area": "paper_v2_platform_capability_boundary",
-  "status": "fixed",
+  "status": "verified",
   "trigger_condition": {
     "scenario": "reported_via_mcp",
     "files": [
@@ -27,15 +27,15 @@
   ],
   "fingerprint": "a1834bedd52d23c5",
   "assigned_agent": "paper_v2",
-  "fix_branch": "bug/BUG-063-paper-v2-event-signal-boundary",
-  "fix_commit": "44a4b82",
+  "fix_branch": "bug/BUG-061-063-event-signal-integration",
+  "fix_commit": "08aeda9fe4657e9885e36b24a6ae1754e64ef1e0",
   "verification_run_id": "tests/aistock_validation/history/paper_trading_v2/20260519_l1_bug-063-event-signal-platform-boundary.md",
   "created_at": "2026-05-19T09:09:37Z",
   "first_seen_at": "2026-05-19T09:09:37Z",
-  "last_seen_at": "2026-05-19T12:50:00Z",
-  "fixed_at": "2026-05-19T12:50:00Z",
+  "last_seen_at": "2026-05-19T12:56:04Z",
+  "fixed_at": "2026-05-19T12:56:01Z",
   "submitted_at": "2026-05-19T09:09:37Z",
-  "closed_at": null,
+  "closed_at": "2026-05-19T12:56:04Z",
   "allowed_write_scope": [
     "backend/services/strategy_package/runtime_config.py",
     "backend/tests/test_unified_event_signal_schema.py",
@@ -118,9 +118,15 @@
       "actor": "codex-app",
       "action": "fixed",
       "note": "Fixed on branch bug/BUG-063-paper-v2-event-signal-boundary at commit 44a4b82; validation record added under paper_trading_v2 history."
+    },
+    {
+      "timestamp": "2026-05-19T12:56:04Z",
+      "actor": "codex-app",
+      "action": "merged_verified",
+      "note": "PR #74 merged into main with merge commit 08aeda9fe4657e9885e36b24a6ae1754e64ef1e0. GitHub checks were green, issue #71 auto-closed, and local targeted validation passed: unified event-signal schema, StrategyPackage runtime/backtest contracts, Paper v2 runtime profile tests (25 passed), py_compile, and git diff --check."
     }
   ],
   "github_issue_number": 71,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/71",
-  "worktree_path": "F:/Dev/AIstock_worktrees/bug-063-paper-v2-event-signal-boundary"
+  "worktree_path": "F:/Dev/AIstock_worktrees/bug-061-063-event-signal-integration"
 }
