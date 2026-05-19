@@ -1,8 +1,8 @@
 ﻿# 旧实盘演练与 QE 实验选股代码退休验证记录
 
-日期：2026-05-19  
-模块：development_guardrails / legacy_cleanup  
-级别：L3  
+日期：2026-05-19
+模块：development_guardrails / legacy_cleanup
+级别：L3
 状态：passed（代码清理分支首轮验证通过；尚未提交、推送或合并）
 
 ## 范围
