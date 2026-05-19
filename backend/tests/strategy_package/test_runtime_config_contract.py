@@ -209,3 +209,9 @@ def test_default_runtime_config_bundle_exposes_cross_module_equivalence() -> Non
     assert bundle["paper_v2"]["adapter"]["kind"] == "paper_v2_db"
     assert bundle["equivalence"]["strategy_semantics_shared"] is True
     assert bundle["equivalence"]["adapter_specific_runtime_hashes"] is True
+
+
+def test_platform_capabilities_do_not_expose_reserved_event_signal_fields() -> None:
+    payload = PlatformCapabilities().model_dump(mode="json")
+
+    assert set(payload) == {"hmm", "universe"}
