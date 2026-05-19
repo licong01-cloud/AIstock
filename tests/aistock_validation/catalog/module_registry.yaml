@@ -245,6 +245,17 @@ modules:
     ui_routes: [/rdagent, /rd-agent, /rdagent/dispatch, /scheduler, /rdagent/tasks-sync, /rdagent/tasks, /rdagent/task-selection, /config/rdagent-llm]
     test_plans:
       required_on_change: [l0]
+  - module_id: research_pipeline
+    display_name: Research Pipeline
+    module_type: product_feature
+    risk_level: high
+    description: Research Pipeline workflow, HMM backtest records, QE shadow stages, artifacts, and promotion gates.
+    description_zh: 覆盖 Research Pipeline 页面、HMM 回测记录、QE shadow 阶段、产物引用、回填和候选晋级门禁。
+    ui_routes: [/research-pipeline]
+    api_routes: [/api/v1/research-pipeline/*]
+    test_plans:
+      required_on_change: [l0, research_pipeline_backend]
+      recommended: [research_mcp_contract]
   - module_id: validation
     display_name: Validation Center
     module_type: cross_cutting
