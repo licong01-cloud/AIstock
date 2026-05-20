@@ -20,6 +20,24 @@ def test_custom_evo_requires_loops() -> None:
     assert "custom_evo config requires non-empty loops" in result["errors"]
 
 
+def test_custom_evo_warns_when_runtime_metadata_is_nested_in_strategy_params() -> None:
+    result = validate_template_payload(
+        "custom_evo",
+        {
+            "loops": [
+                {
+                    "factor_keys": ["Alpha001||alpha158"],
+                    "model_id": "model_lgbm_v1",
+                    "strategy_params": {"topk": 20, "archive_policy": "SKIP", "random_seed": 42},
+                }
+            ]
+        },
+    )
+
+    assert result["valid"] is True
+    assert any("runtime metadata" in warning for warning in result["warnings"])
+
+
 def test_template_record_hashes_config_and_normalizes_archive_policy() -> None:
     record = QETemplateRecord(
         template_kind="single_experiment",
@@ -98,6 +116,64 @@ def test_single_template_materializer_surfaces_existing_generate_config_errors(m
                 "config_json": {"factor_names": ["f1"], "model_id": "bad"},
             }
         )
+
+
+def test_custom_evo_materializer_keeps_archive_policy_out_of_strategy_params(monkeypatch) -> None:
+    calls = {}
+
+    async def fake_prepare(loop_models, *, request_node_id, node_parallelism_payload):  # type: ignore[no-untyped-def]
+        loop = loop_models[0].model_dump() if hasattr(loop_models[0], "model_dump") else loop_models[0].dict()
+        loop["strategy_params"] = {"topk": 20}
+        loop["runtime_flags"] = {"random_seed": 42}
+        calls["prepare"] = {
+            "request_node_id": request_node_id,
+            "node_parallelism_payload": node_parallelism_payload,
+        }
+        return [loop], "local", {}
+
+    class FakeScheduler:
+        async def create_custom_evo_task(self, **kwargs):  # type: ignore[no-untyped-def]
+            calls["task_kwargs"] = kwargs
+            return "qe_template_task"
+
+    class FakeRepository:
+        def get(self, template_id):  # type: ignore[no-untyped-def]
+            return {
+                "template_id": template_id,
+                "template_kind": "custom_evo",
+                "title": "custom template smoke",
+                "description": "unit",
+                "status": "approved",
+                "archive_policy": "MANUAL_ONLY",
+                "archive_reason": "unit manual",
+                "config_json": {
+                    "task_name": "custom task",
+                    "loops": [
+                        {
+                            "factor_keys": ["Alpha001||alpha158"],
+                            "model_id": "model_lgbm_v1",
+                            "strategy_params": {"topk": 20},
+                        }
+                    ],
+                },
+            }
+
+        def mark_materialized(self, template_id, **kwargs):  # type: ignore[no-untyped-def]
+            calls["mark"] = {"template_id": template_id, **kwargs}
+            return {"template_id": template_id, "status": "materialized"}
+
+    monkeypatch.setattr("backend.routers.quantevolver_evolution._prepare_custom_evo_loop_configs", fake_prepare)
+    monkeypatch.setattr("backend.routers.quantevolver_evolution.scheduler", FakeScheduler())
+
+    result = asyncio.run(QETemplateMaterializer(repository=FakeRepository()).materialize("qet_custom"))  # type: ignore[arg-type]
+
+    loop = calls["task_kwargs"]["loops_config"][0]
+    assert result["materialized"]["task_id"] == "qe_template_task"
+    assert loop["strategy_params"] == {"topk": 20}
+    assert loop["runtime_flags"]["random_seed"] == 42
+    assert loop["runtime_flags"]["archive_policy"] == "MANUAL_ONLY"
+    assert loop["runtime_flags"]["archive_reason"] == "unit manual"
+    assert "archive_policy" not in loop["strategy_params"]
 
 
 def test_template_update_resets_review_when_config_changes() -> None:

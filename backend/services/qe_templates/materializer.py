@@ -80,11 +80,11 @@ class QETemplateMaterializer:
             node_parallelism_payload=config.get("node_parallelism"),
         )
         for cfg in loops_config:
-            strategy_params = dict(cfg.get("strategy_params") or {})
-            strategy_params["archive_policy"] = template.get("archive_policy") or "AUTO"
+            runtime_flags = dict(cfg.get("runtime_flags") or {})
+            runtime_flags["archive_policy"] = template.get("archive_policy") or "AUTO"
             if template.get("archive_reason"):
-                strategy_params["archive_reason"] = template.get("archive_reason")
-            cfg["strategy_params"] = strategy_params
+                runtime_flags["archive_reason"] = template.get("archive_reason")
+            cfg["runtime_flags"] = runtime_flags
         task_id = await scheduler.create_custom_evo_task(
             task_name=config.get("task_name") or template.get("title"),
             target_desc=config.get("target_desc") or template.get("description") or "",

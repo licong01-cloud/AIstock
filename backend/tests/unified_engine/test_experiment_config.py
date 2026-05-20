@@ -138,6 +138,35 @@ class TestExperimentConfig:
         sp = cfg.build_strategy_params()
         assert sp["initial_cash"] == 1_000_000
 
+    def test_runtime_metadata_is_not_executable_strategy_params(self):
+        cfg = ExperimentConfig(
+            factor_names=["f1"],
+            model_id="lgbm",
+            strategy_params={
+                "topk": 50,
+                "archive_policy": "SKIP",
+                "archive_reason": "unit",
+                "archive_allow_override": True,
+                "random_seed": 42,
+            },
+        )
+
+        custom_params = cfg.build_custom_params()
+        strategy_params = cfg.build_strategy_params()
+        runtime_flags = cfg.build_runtime_flags()
+
+        assert custom_params["topk"] == 50
+        assert strategy_params == {"topk": 50}
+        for key in ("archive_policy", "archive_reason", "archive_allow_override", "random_seed"):
+            assert key not in custom_params
+            assert key not in strategy_params
+        assert runtime_flags == {
+            "archive_policy": "SKIP",
+            "archive_reason": "unit",
+            "archive_allow_override": True,
+            "random_seed": 42,
+        }
+
     def test_build_custom_params_hmm(self):
         hmm = HmmConfig(
             enable_sector_hmm=True,
@@ -426,6 +455,23 @@ class TestBuildConfigFromCustomEvoLoop:
         assert cfg.multi_alpha_config is not None
         assert params["enable_sector_hmm"] is True
         assert params["hmm_model_version_id"] == "hmm_snap_001"
+
+    def test_custom_loop_runtime_flags_preserve_archive_and_seed_metadata(self):
+        loop = {
+            **CUSTOM_EVO_LOOP_MINIMAL,
+            "strategy_params": {"topk": 20, "archive_policy": "MANUAL_ONLY", "random_seed": 2024},
+            "runtime_flags": {"archive_reason": "manual unit"},
+        }
+
+        cfg = build_config_from_custom_evo_loop(loop, CUSTOM_EVO_TASK)
+
+        assert cfg.build_strategy_params() == {"topk": 20}
+        assert cfg.build_custom_params()["topk"] == 20
+        assert cfg.build_runtime_flags() == {
+            "archive_reason": "manual unit",
+            "archive_policy": "MANUAL_ONLY",
+            "random_seed": 2024,
+        }
 
     def test_hmm_config_resolves_hidden_snapshot_config(self):
         svc = MagicMock()
