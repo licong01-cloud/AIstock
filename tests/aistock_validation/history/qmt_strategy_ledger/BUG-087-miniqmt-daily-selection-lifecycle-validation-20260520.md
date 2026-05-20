@@ -41,7 +41,7 @@ python -m pytest backend/tests/selection_center backend/tests/strategy_package -
 
 python -m nox -s paper_v2_backend
 # Pre-rebase run: 443 passed, 1 skipped, 2 xfailed in 30.95s; session successful.
-# Post-rebase run on origin/main 3b7164c: failed in backend/tests/strategy_package/test_candidate_strategy_package.py::test_trading_core_schema_declares_durable_candidate_tables_without_qe_cascade because origin/main backend/db/init_trading_core_v2_schema.py contains ON DELETE CASCADE at line 96. This file is outside BUG-087 allowed_write_scope and is tracked as a baseline validation blocker for a separate issue.
+# Post-rebase run on origin/main 0c5a353: failed in backend/tests/strategy_package/test_candidate_strategy_package.py::test_trading_core_schema_declares_durable_candidate_tables_without_qe_cascade because origin/main backend/db/init_trading_core_v2_schema.py contains ON DELETE CASCADE at line 96. This file is outside BUG-087 allowed_write_scope and is tracked as a baseline validation blocker for a separate issue.
 
 python scripts/aistock_guardrail_scan.py $(git diff --name-only origin/main...HEAD) --baseline-json tests/aistock_validation/guardrails_baseline_20260511.json --fail-new-only --fail-on-severity P1
 # Branch-file guardrail scan: files=13, findings=5, blocking=0; P2 ALGO-COMPLEXITY warnings recorded for changed qmt files.
@@ -50,7 +50,7 @@ python scripts/aistock_module_ownership_scan.py $(git diff --name-only origin/ma
 # Branch-file module ownership scan: files=13, mapped=13, unmapped=0, ambiguous=0.
 
 python -m nox -s l0
-# Pre-rebase run: session successful. Post-rebase run on origin/main 3b7164c failed before BUG-087 code paths because origin/main introduced HIGH SILENT_EMPTY_SUCCESS findings in local-data/ingestion files outside BUG-087 scope: scripts/aistock_data_quality_smoke.py:231, backend/services/tushare_sync_engine.py:673, backend/services/tushare_sync_engine.py:699, backend/ingestion/tdx_scheduler.py:1247.
+# Pre-rebase run: session successful. Post-rebase run on origin/main 0c5a353 failed before BUG-087 code paths because origin/main introduced HIGH SILENT_EMPTY_SUCCESS findings in local-data/ingestion files outside BUG-087 scope: scripts/aistock_data_quality_smoke.py:231, backend/services/tushare_sync_engine.py:673, backend/services/tushare_sync_engine.py:699, backend/ingestion/tdx_scheduler.py:1247.
 
 git diff --check
 # Passed; only CRLF normalization warnings.
@@ -68,4 +68,4 @@ git diff --check
 - The migration `backend/migrations/qmt_strategy_ledger_20260518.sql` now includes `qmt_strategy.strategy_binding_selection_evidence`; DB-backed runtime needs this migration before this branch can be used against a database.
 - Existing legacy active bindings with only `selection_run_id/trade_date` columns will not silently trade. They must record current-day daily selection evidence through the package-binding flow or an equivalent resolver.
 - No production service was restarted and no production database change was applied by this validation.
-- Post-rebase full pipeline is not globally green because current origin/main has unrelated baseline failures in StrategyPackage DDL and local-data/ingestion guardrails. BUG-087 branch-specific tests and branch-file guardrails pass; the baseline blockers need separate issues/worktrees before declaring full main merge readiness.
+- Post-rebase full pipeline is still not globally green only because `paper_v2_backend` fails on an unrelated current `origin/main` StrategyPackage DDL assertion (`backend/db/init_trading_core_v2_schema.py:96` contains `ON DELETE CASCADE`). BUG-087 branch-specific tests, branch-file guardrails, `l0`, and diff checks pass; the remaining baseline blocker needs a separate issue/worktree before declaring full main merge readiness.
