@@ -231,6 +231,83 @@ assistant_app_adapters/
 AIstock 第一阶段不需要完整产品化，但代码组织必须避免把所有逻辑写死在 QE/HMM 页面中。通用核心应尽量独立，AIstock 专属逻辑放在 adapter。
 
 
+### 4.4 远期驾驶舱与 AIstock 架构图规划
+
+远期主控页面应采用驾驶舱模式，但不作为 Phase 1 必做范围。驾驶舱的定位是“全局态势感知”，不是替代具体工作台。
+
+驾驶舱应展示：
+
+| 区域 | 内容 | 数据来源 | 阶段 |
+|---|---|---|---|
+| 当前任务态势 | 正在运行、等待确认、失败、阻塞、今日完成任务 | `agent_task_events` / task ledger | Phase 1/2 |
+| Research Streams | HMM 演进、QE 实验演进、因子研发、事件处理、Validation 探测 | `research_streams` | Phase 2 |
+| QE / HMM / 因子运行状态 | 是否正在运行、loop/实验进度、资源占用、最新报告 | 各 MCP + task events | Phase 2 |
+| 主机资源监控 | CPU、内存、磁盘、GPU、远程节点、DB 连接、队列长度 | Host metrics MCP / Prometheus / psutil / nvidia-smi adapter | Phase 2/3 |
+| MCP 能力地图 | 当前可用 MCP server、tool 数量、风险等级、健康状态 | `mcp_tool_registry` | Phase 1/2 |
+| AIstock 架构图 | 数据、QE、HMM、因子、策略包、Paper v2、Validation、GitHub 的模块关系 | Architecture Memory + MCP registry + docs index | Phase 3 |
+| 问题热区 | 哪些模块 issue 多、测试覆盖低、最近失败多 | Validation Center + GitHub + Memory | Phase 3 |
+
+远期可视化目标：
+
+```mermaid
+flowchart TD
+    Cockpit["研究助理驾驶舱"] --> Tasks["任务态势"]
+    Cockpit --> Streams["HMM/QE/因子/事件 Streams"]
+    Cockpit --> Resources["主机与远程资源"]
+    Cockpit --> MCPMap["MCP 能力地图"]
+    Cockpit --> ArchGraph["AIstock 架构图"]
+    ArchGraph --> Data["数据/数仓"]
+    ArchGraph --> QE["QE 实验"]
+    ArchGraph --> HMM["HMM 演进"]
+    ArchGraph --> Factor["因子研发"]
+    ArchGraph --> Strategy["策略包/选股"]
+    ArchGraph --> Validation["流水线/Issue"]
+```
+
+实现原则：
+
+1. Phase 1 不做复杂图形化，只做基础卡片和列表。
+2. Phase 2 增加资源监控和 Research Stream 总览。
+3. Phase 3 再做 AIstock 架构图和健康颜色映射。
+4. 架构图的数据不应手工硬编码，应从 Architecture Memory、MCP registry、Validation module catalog 和设计文档索引生成。
+5. 图形化只能展示状态，不能绕过审批执行高风险动作。
+
+### 4.5 股票分析 MCP 规划
+
+未来需要为 AIstock 现有股票分析功能新增 `aistock-stock-analysis` MCP，使用户可以随时输入股票代码，由研究助理生成结构化股票分析报告。
+
+目标能力：
+
+| 能力 | 说明 |
+|---|---|
+| 单股票分析 | 输入 A 股代码，返回基本面、行情、资金、事件、技术面、风险摘要 |
+| 多股票对比 | 对比多只股票的估值、趋势、资金、行业位置、风险 |
+| 行业/主题分析 | 基于股票所属行业和最新搜索结果生成行业背景 |
+| 数据来源说明 | 报告必须列出 AIstock 内部数据、外部搜索、行情来源和时间 |
+| 证据绑定 | 每个关键结论绑定数据字段、图表、新闻或搜索来源 |
+| 记忆沉淀 | 用户关注的股票、分析结论、后续跟踪计划可写入 task/roadmap memory |
+
+MCP 工具草案：
+
+```text
+aistock-stock-analysis
+  stock_analysis_get_profile(symbol)
+  stock_analysis_get_market_snapshot(symbol, as_of)
+  stock_analysis_get_financial_summary(symbol)
+  stock_analysis_get_factor_snapshot(symbol)
+  stock_analysis_get_event_risk(symbol, lookback_days)
+  stock_analysis_get_news_context(symbol, query_profile)
+  stock_analysis_generate_report(symbol, report_profile, confirm_generation)
+```
+
+边界：
+
+1. 该 MCP 复用 AIstock 现有股票分析功能，不在第一阶段重写股票分析引擎。
+2. 报告不是投资建议，必须标注数据时间和不确定性。
+3. 如果需要最新新闻或国际因素影响，必须走搜索/学术/新闻工具并保存来源。
+4. 不允许研究助理基于报告直接触发交易。
+
+
 ## 5. 智能体角色定义
 
 ### 5.1 角色名称
@@ -860,6 +937,72 @@ research_web_sources
 
 ---
 
+### 10.4 实时搜索与外部分析工具接入
+
+用户要求行业新闻、期货行情、国际局势、前沿论文和 ML 模型应用分析必须基于实时搜索和可追溯来源，不能只是 LLM 自己总结。因此本方案采用“搜索证据优先”的设计：
+
+```mermaid
+flowchart TD
+    Query["用户问题"] --> Planner["搜索计划"]
+    Planner --> Search["搜索/学术/行情 MCP"]
+    Search --> Fetch["抓取网页/论文/数据"]
+    Fetch --> Rank["去重/可信度评分/时间过滤"]
+    Rank --> Evidence["保存来源证据"]
+    Evidence --> Summary["LLM 基于来源总结"]
+    Summary --> Report["报告 + 引用 + 风险提示"]
+    Report --> MemoryCandidate["必要时进入记忆候选"]
+```
+
+候选开源/可接入工具：
+
+| 工具 | 类型 | 可用能力 | 建议 |
+|---|---|---|---|
+| SearXNG | 开源元搜索引擎 | 聚合多个搜索引擎，适合自托管搜索入口 | 推荐作为基础搜索 provider 候选 |
+| Perplexica | 开源 AI 搜索引擎 | 类 Perplexity 的搜索 + 引用回答，通常可接 SearXNG | 可作为自托管搜索问答候选 |
+| Firecrawl MCP | 开源/可托管网页抓取与搜索 MCP | search、crawl、scrape、extract、deep research | 推荐评估为网页抓取和资料抽取工具 |
+| mcp-omnisearch | MCP 聚合搜索 | 聚合 Tavily、Brave、Kagi、Perplexity、Jina AI 等 | 可作为多 provider 搜索适配参考 |
+| arXiv MCP Server | 学术论文 MCP | 搜索、下载、阅读 arXiv 论文 | 推荐用于因子、ML、HMM、事件研究论文 |
+| Semantic Scholar MCP | 学术搜索 MCP | 论文搜索、引用、作者、相关论文 | 推荐用于前沿技术和论文关系分析 |
+| Paper Search MCP | 学术聚合 MCP | arXiv、PubMed、Semantic Scholar 等聚合 | 可作为学术搜索聚合候选 |
+| Alpha Vantage MCP | 金融/宏观/行情 MCP | 股票、外汇、加密、商品、经济指标等 API | 可作为国际行情/宏观补充数据源候选 |
+| Yahoo Finance MCP | 金融数据 MCP | 股票行情、图表、新闻等 | 可作为海外市场/对照数据候选 |
+
+接入原则：
+
+1. 优先接入成熟 MCP 或自托管搜索工具，不优先自研搜索引擎。
+2. 搜索、抓取、摘要必须分层，LLM 只能基于已保存来源生成结论。
+3. 所有来源必须保存 URL、标题、发布时间/抓取时间、provider、可信度评分。
+4. 当前性问题必须重新搜索，不能只使用长期记忆。
+5. 行情和期货数据必须标注数据延迟和来源，不得伪装为实时交易行情。
+6. 学术分析必须优先使用论文、官方文档、GitHub、会议页面等高可信来源。
+7. 对国际局势、政策、宏观影响等不确定主题，报告必须列出多来源观点和风险，不输出单一确定结论。
+
+### 10.5 搜索工具选择建议
+
+Phase 1 不建议一次接入所有工具。推荐路线：
+
+1. **第一优先：Firecrawl MCP 或 SearXNG/Perplexica 二选一**，解决网页搜索和来源保存。
+2. **第二优先：arXiv MCP + Semantic Scholar MCP**，解决论文和前沿技术资料。
+3. **第三优先：Alpha Vantage MCP / Yahoo Finance MCP**，作为海外行情、商品、宏观指标补充。
+4. **AIstock 内部股票分析 MCP** 负责本地股票数据和业务解释，外部搜索只补充新闻、行业、国际影响。
+
+工具使用必须通过 `external_research_policy` 控制：
+
+```text
+external_research_policy
+  provider_name
+  provider_type              -- search / academic / finance / news / crawler
+  allowed_domains
+  blocked_domains
+  freshness_required
+  max_results
+  citation_required
+  cache_ttl_seconds
+  approval_required_for_paid_api
+  enabled
+```
+
+
 ## 11. 候选 Issue 与正式 Issue
 
 研究助理可以生成候选 Issue，但不能直接无审批入库。
@@ -904,6 +1047,8 @@ issue_candidates
 /research-assistant/mcp-tools
 /research-assistant/approvals
 /research-assistant/reports
+/research-assistant/cockpit          # Phase 2/3
+/research-assistant/stock-analysis    # Phase 2
 /research-assistant/settings
 ```
 
@@ -1100,7 +1245,10 @@ assistant_voice_events
 8. MCP 与 Skill 的边界是否清晰，Skill 是否不会绕过 MCP 和审批。
 9. OpenClaw 参考是否只作为 gateway/channel/skill/product 形态参考，没有引入核心安全风险。
 10. 独立产品化抽象是否足以支持其他 MCP 应用接入，同时不削弱 AIstock 首期交付。
-11. Phase 1 范围是否足够小，可以先交付可用闭环。
+11. 股票分析 MCP 是否能复用现有 AIstock 股票分析能力，且不会触发交易动作。
+12. 搜索/学术 MCP 接入是否满足来源可追溯、当前性和不自研优先原则。
+13. 驾驶舱远期规划是否不会挤压 Phase 1 交付范围。
+14. Phase 1 范围是否足够小，可以先交付可用闭环。
 
 ---
 
@@ -1112,7 +1260,10 @@ assistant_voice_events
 4. 通过后新建实现分支：`feature/research-agent-console-20260521`。
 5. Phase 1 只做：MCP 执行工作台 + 原生长期记忆 MVP + Skill Registry 基础治理 + 任务事件流 + 审批中心。
 6. Phase 2 再做：多窗口、多 Stream、对话确认、Mem0/Graphiti adapter PoC。
-7. Phase 2/3 评估把通用核心抽离为独立产品包，AIstock 仅作为首个领域 adapter。
+7. Phase 2 增加股票分析 MCP 和基础驾驶舱卡片。
+8. Phase 2/3 评估搜索/学术 MCP 工具接入，优先选择成熟开源工具。
+9. Phase 3 再做 AIstock 架构图、资源监控和健康颜色映射。
+10. Phase 2/3 评估把通用核心抽离为独立产品包，AIstock 仅作为首个领域 adapter。
 
 ---
 
@@ -1135,3 +1286,12 @@ assistant_voice_events
 - OpenClaw What is OpenClaw：`https://openclawdoc.com/docs/getting-started/what-is-openclaw/`
 - OpenClaw Agents Overview：`https://openclawdoc.com/docs/agents/overview/`
 - OpenClaw Architecture：`https://openclawlab.com/en/docs/start/architecture/`
+- SearXNG：`https://docs.searxng.org/`
+- Perplexica GitHub：`https://github.com/ItzCrazyKns/Perplexica`
+- Firecrawl MCP Server：`https://docs.firecrawl.dev/mcp-server`
+- mcp-omnisearch GitHub：`https://github.com/spences10/mcp-omnisearch`
+- arXiv MCP Server GitHub：`https://github.com/blazickjp/arxiv-mcp-server`
+- Semantic Scholar MCP Server GitHub：`https://github.com/awwaiid/semantic-scholar-mcp-server`
+- Paper Search MCP Server GitHub：`https://github.com/openags/paper-search-mcp`
+- Alpha Vantage MCP Server：`https://github.com/calvernaz/alphavantage`
+- Yahoo Finance MCP Server GitHub：`https://github.com/AgentX-ai/yahoo-finance-server`
