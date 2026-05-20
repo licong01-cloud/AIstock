@@ -13,6 +13,7 @@ from backend.infra.qmt_client import QMTNotAvailableError, get_qmt_client_single
 from backend.services.selection_center.repository import SelectionCenterRepository
 from backend.services.strategy_package.repository import StrategyPackageRepository
 from backend.services.strategy_package.selection_artifact import StrategyPackageSelectionArtifactRepository
+from backend.services.strategy_package.service import StrategyPackageService
 from backend.services.qmt_strategy_ledger.lot_availability import DbTradingCalendarProvider
 from backend.services.qmt_strategy_ledger.order_service import (
     QmtManagedOrderService,
@@ -39,6 +40,7 @@ _package_reader_factory: Callable[[], Any] = StrategyPackageRepository
 _selection_reader_factory: Callable[[], Any] = SelectionCenterRepository
 _calendar_provider_factory: Callable[[], Any] = DbTradingCalendarProvider
 _artifact_repository_factory: Callable[[], Any] | None = None
+_live_approval_service_factory: Callable[[], Any] = StrategyPackageService
 
 
 def configure_dependencies(
@@ -49,11 +51,12 @@ def configure_dependencies(
     selection_reader_factory: Callable[[], Any] | None = None,
     calendar_provider_factory: Callable[[], Any] | None = None,
     artifact_repository_factory: Callable[[], Any] | None = None,
+    live_approval_service_factory: Callable[[], Any] | None = None,
 ) -> None:
     """Override dependencies for tests without touching the production singleton."""
 
     global _repository_factory, _client_factory, _package_reader_factory, _selection_reader_factory, _calendar_provider_factory
-    global _artifact_repository_factory
+    global _artifact_repository_factory, _live_approval_service_factory
     if repository_factory is not None:
         _repository_factory = repository_factory
     if client_factory is not None:
@@ -64,6 +67,8 @@ def configure_dependencies(
         _selection_reader_factory = selection_reader_factory
     if calendar_provider_factory is not None:
         _calendar_provider_factory = calendar_provider_factory
+    if live_approval_service_factory is not None:
+        _live_approval_service_factory = live_approval_service_factory
     _artifact_repository_factory = artifact_repository_factory
 
 
@@ -207,7 +212,7 @@ def submit_order(payload: dict[str, Any]) -> dict[str, Any]:
     _require_real_managed_orders_enabled()
     repository = _repository_factory()
     request = request_from_payload(payload)
-    _require_request_mode_allowed(request.mode)
+    _require_request_mode_allowed(request)
     result = QmtManagedOrderService(
         repository=repository,
         broker=_client_factory(),
@@ -230,7 +235,7 @@ def submit_order_batch(payload: dict[str, Any]) -> dict[str, Any]:
     )
     requests = [request_from_payload(item) for item in orders]
     for request in requests:
-        _require_request_mode_allowed(request.mode)
+        _require_request_mode_allowed(request)
     result = service.submit_batch(requests)
     return {"success": result.success, "result": result.to_dict()}
 
@@ -444,13 +449,52 @@ def _live_managed_orders_enabled() -> bool:
     return (os.getenv("AISTOCK_ALLOW_MINIQMT_LIVE_MANAGED_ORDERS") or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _require_request_mode_allowed(mode: str) -> None:
-    normalized = str(mode or "").strip().upper()
+def _require_request_mode_allowed(request_or_mode: Any) -> None:
+    if isinstance(request_or_mode, str):
+        normalized = str(request_or_mode or "").strip().upper()
+        request = None
+    else:
+        request = request_or_mode
+        normalized = str(getattr(request, "mode", "") or "").strip().upper()
     if normalized == "SIM":
         return
     if normalized == "LIVE" and _live_managed_orders_enabled():
+        if request is not None:
+            _require_live_approval_for_managed_order(request)
         return
     raise HTTPException(
         status_code=403,
         detail="managed order submission currently allows SIM only unless AISTOCK_ALLOW_MINIQMT_LIVE_MANAGED_ORDERS=1",
     )
+
+
+def _require_live_approval_for_managed_order(request: Any) -> None:
+    metadata = dict(getattr(request, "metadata", {}) or {})
+    package_id = str(getattr(request, "package_id", "") or "").strip()
+    approval_id = str(metadata.get("live_approval_id") or "").strip()
+    runtime_release_sha256 = str(metadata.get("runtime_release_sha256") or "").strip()
+    if not package_id or not approval_id or not runtime_release_sha256:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "MINIQMT_LIVE_APPROVAL_REQUIRED",
+                "message": (
+                    "LIVE managed MiniQMT order submission requires package_id, "
+                    "metadata.live_approval_id, and metadata.runtime_release_sha256"
+                ),
+                "context": {
+                    "package_id_present": bool(package_id),
+                    "live_approval_id_present": bool(approval_id),
+                    "runtime_release_sha256_present": bool(runtime_release_sha256),
+                },
+            },
+        )
+    try:
+        _live_approval_service_factory().require_live_approval(
+            package_id=package_id,
+            approval_id=approval_id,
+            runtime_release_sha256=runtime_release_sha256,
+            target_broker_backend="minqmt_live",
+        )
+    except TradingCoreError as exc:
+        raise HTTPException(status_code=403, detail=exc.to_dict()) from exc

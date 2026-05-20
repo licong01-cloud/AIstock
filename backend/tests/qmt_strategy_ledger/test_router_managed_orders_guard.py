@@ -14,7 +14,7 @@ from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyL
 ACCOUNT_ID = "62266303"
 
 
-def _repo() -> InMemoryQmtStrategyLedgerRepository:
+def _repo(*, mode: str = "SIM") -> InMemoryQmtStrategyLedgerRepository:
     repo = InMemoryQmtStrategyLedgerRepository()
     repo.create_virtual_account(
         VirtualAccount(
@@ -22,7 +22,7 @@ def _repo() -> InMemoryQmtStrategyLedgerRepository:
             strategy_name="poc_strategy_a",
             display_name="POC Strategy A",
             account_id=ACCOUNT_ID,
-            mode="SIM",
+            mode=mode,
             initial_cash=Decimal("10000000"),
             cash=Decimal("10000000"),
             status=VirtualAccountStatus.ENABLED,
@@ -31,8 +31,21 @@ def _repo() -> InMemoryQmtStrategyLedgerRepository:
     return repo
 
 
-def _client(repo: InMemoryQmtStrategyLedgerRepository) -> TestClient:
-    qmt_strategy_ledger.configure_dependencies(repository_factory=lambda: repo, client_factory=lambda: object())
+class _UnexpectedLiveApprovalService:
+    def require_live_approval(self, **_kwargs):
+        raise AssertionError("SIM managed order path must not call live approval service")
+
+
+def _client(
+    repo: InMemoryQmtStrategyLedgerRepository,
+    *,
+    live_approval_service_factory=lambda: _UnexpectedLiveApprovalService(),
+) -> TestClient:
+    qmt_strategy_ledger.configure_dependencies(
+        repository_factory=lambda: repo,
+        client_factory=lambda: object(),
+        live_approval_service_factory=live_approval_service_factory,
+    )
     app = FastAPI()
     app.include_router(qmt_strategy_ledger.router, prefix="/api/v1")
     return TestClient(app)
@@ -45,6 +58,15 @@ class FakeQmtClient:
     def place_order(self, **kwargs) -> tuple[int, str]:
         self.place_order_calls.append(kwargs)
         return 10001, "accepted"
+
+
+class FakeLiveApprovalService:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def require_live_approval(self, **kwargs):
+        self.calls.append(kwargs)
+        return object()
 
 
 def _raw_client(fake_client: FakeQmtClient, monkeypatch) -> TestClient:
@@ -112,6 +134,67 @@ def test_submit_router_blocks_live_mode_even_when_sim_switch_is_enabled(monkeypa
 
     assert response.status_code == 403
     assert "allows SIM only" in response.json()["detail"]
+
+
+def test_submit_router_blocks_live_mode_without_approval_metadata(monkeypatch) -> None:
+    monkeypatch.setenv("AISTOCK_ALLOW_MINIQMT_MANAGED_ORDERS", "1")
+    monkeypatch.setenv("AISTOCK_ALLOW_MINIQMT_LIVE_MANAGED_ORDERS", "1")
+    payload = _payload()
+    payload["mode"] = "LIVE"
+    fake_service = FakeLiveApprovalService()
+
+    response = _client(
+        _repo(mode="LIVE"),
+        live_approval_service_factory=lambda: fake_service,
+    ).post("/api/v1/qmt/virtual-strategies/orders", json=payload)
+
+    assert response.status_code == 403
+    detail = response.json()["detail"]
+    assert detail["code"] == "MINIQMT_LIVE_APPROVAL_REQUIRED"
+    assert detail["context"] == {
+        "package_id_present": False,
+        "live_approval_id_present": False,
+        "runtime_release_sha256_present": False,
+    }
+    assert fake_service.calls == []
+
+
+def test_submit_router_allows_live_mode_only_after_live_approval_gate(monkeypatch) -> None:
+    monkeypatch.setenv("AISTOCK_ALLOW_MINIQMT_MANAGED_ORDERS", "1")
+    monkeypatch.setenv("AISTOCK_ALLOW_MINIQMT_LIVE_MANAGED_ORDERS", "1")
+    fake_client = FakeQmtClient()
+    fake_service = FakeLiveApprovalService()
+    repo = _repo(mode="LIVE")
+    qmt_strategy_ledger.configure_dependencies(
+        repository_factory=lambda: repo,
+        client_factory=lambda: fake_client,
+        live_approval_service_factory=lambda: fake_service,
+    )
+    app = FastAPI()
+    app.include_router(qmt_strategy_ledger.router, prefix="/api/v1")
+    payload = {
+        **_payload(),
+        "mode": "LIVE",
+        "package_id": "pkg_live_unit_test",
+        "metadata": {
+            "live_approval_id": "liveappr_unit_test",
+            "runtime_release_sha256": "sha256:runtime-release-unit-test",
+        },
+    }
+
+    response = TestClient(app).post("/api/v1/qmt/virtual-strategies/orders", json=payload)
+
+    assert response.status_code == 200
+    assert response.json()["result"]["broker_called"] is True
+    assert fake_service.calls == [
+        {
+            "package_id": "pkg_live_unit_test",
+            "approval_id": "liveappr_unit_test",
+            "runtime_release_sha256": "sha256:runtime-release-unit-test",
+            "target_broker_backend": "minqmt_live",
+        }
+    ]
+    assert fake_client.place_order_calls[0]["strategy_name"] == "poc_strategy_a"
 
 
 def test_raw_order_router_is_disabled_by_default_and_does_not_call_broker(monkeypatch) -> None:

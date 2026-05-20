@@ -13,9 +13,10 @@ from backend.services.strategy_package.execution_policy import (
     ensure_policy_can_enter_paper,
     normalize_execution_policy_json,
 )
+from backend.services.strategy_package.models import StrategyPackageLiveApproval
 from backend.services.strategy_package.repository import StrategyPackageRepository
 from backend.services.strategy_package.runtime import apply_runtime_variant_config
-from backend.services.strategy_package.runtime_variant import RuntimeVariantValidationStatus
+from backend.services.strategy_package.runtime_variant import RuntimeVariantValidationStatus, derive_locked_core_hash
 from backend.services.strategy_package.service import StrategyPackageService
 from backend.services.strategy_package.validators import StrategyPackageValidator
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, StrategyPackageValidationError
@@ -778,6 +779,165 @@ class PaperTradingV2PortfolioService:
     ) -> list[PaperConfigChangeAudit]:
         return self.repository.list_config_change_audit(portfolio_id, limit=limit)
 
+    def create_live_approval_candidate(
+        self,
+        *,
+        portfolio_id: str,
+        trade_date: date,
+        target_broker_backend: str,
+        sim_validation_evidence: dict[str, Any],
+        broker_compatibility: dict[str, Any],
+        broker_account_id: str | None = None,
+        requested_by: str | None = None,
+        risk_note: str | None = None,
+        rollback_plan: str | None = None,
+    ) -> StrategyPackageLiveApproval:
+        portfolio = self.repository.get_portfolio(portfolio_id)
+        runtime_activation = self.repository.get_active_runtime_config_activation(portfolio_id, trade_date)
+        if runtime_activation is None:
+            raise StrategyPackageValidationError(
+                "live approval candidate requires an active runtime profile activation for the trade_date",
+                context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat()},
+            )
+        runtime_version = self.repository.get_runtime_profile_version(runtime_activation.profile_version_id)
+        runtime_profile = self.repository.get_runtime_profile(runtime_version.profile_id)
+        execution_activation = self.repository.get_active_execution_policy_activation(portfolio_id, trade_date)
+        if execution_activation is None:
+            raise StrategyPackageValidationError(
+                "live approval candidate requires an active execution policy activation for the trade_date",
+                context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat()},
+            )
+        tail_policy = self._tail_policy_snapshot(execution_activation.policy_json)
+        tail_policy_sha256 = compute_runtime_config_sha256(tail_policy)
+        runtime_release_id = (
+            f"live_release_{portfolio_id}_{trade_date.isoformat()}_"
+            f"{runtime_activation.activation_id}_{execution_activation.activation_id}"
+        )
+        runtime_release_payload = {
+            "portfolio_id": portfolio_id,
+            "package_id": portfolio.package_id,
+            "manifest_sha256": portfolio.manifest_sha256,
+            "trade_date": trade_date.isoformat(),
+            "runtime_profile_id": runtime_profile.profile_id,
+            "runtime_profile_version_id": runtime_version.profile_version_id,
+            "runtime_profile_sha256": runtime_version.config_sha256,
+            "runtime_config_activation_id": runtime_activation.activation_id,
+            "execution_policy_activation_id": execution_activation.activation_id,
+            "execution_policy_id": execution_activation.policy_id,
+            "execution_policy_sha256": execution_activation.policy_sha256,
+            "tail_policy_id": tail_policy["tail_policy_id"],
+            "tail_policy_sha256": tail_policy_sha256,
+            "target_broker_backend": target_broker_backend,
+            "broker_account_id": broker_account_id,
+        }
+        compatibility = {
+            "target_broker_backend": target_broker_backend,
+            **dict(broker_compatibility or {}),
+        }
+        return StrategyPackageService(repository=self.package_repository, validator=self.validator).create_live_approval_candidate(
+            package_id=portfolio.package_id,
+            manifest_sha256=portfolio.manifest_sha256,
+            alpha_core_sha256=derive_locked_core_hash(portfolio.frozen_manifest),
+            portfolio_id=portfolio_id,
+            runtime_release_id=runtime_release_id,
+            runtime_release_sha256=compute_runtime_config_sha256(runtime_release_payload),
+            runtime_profile_id=runtime_profile.profile_id,
+            runtime_profile_version_id=runtime_version.profile_version_id,
+            runtime_profile_sha256=runtime_version.config_sha256 or "",
+            execution_policy_id=execution_activation.policy_id,
+            execution_policy_sha256=execution_activation.policy_sha256,
+            tail_policy_id=tail_policy["tail_policy_id"],
+            tail_policy_sha256=tail_policy_sha256,
+            target_broker_backend=target_broker_backend,
+            broker_account_id=broker_account_id,
+            sim_validation_evidence=sim_validation_evidence,
+            broker_compatibility=compatibility,
+            requested_by=requested_by,
+            risk_note=risk_note,
+            rollback_plan=rollback_plan,
+            audit_json={
+                "source": "paper_v2_live_approval_candidate",
+                "runtime_release": runtime_release_payload,
+            },
+        )
+
+    def submit_live_approval(
+        self,
+        *,
+        package_id: str,
+        approval_id: str,
+        requested_by: str,
+        risk_note: str,
+        rollback_plan: str,
+    ) -> StrategyPackageLiveApproval:
+        return StrategyPackageService(repository=self.package_repository, validator=self.validator).submit_live_approval(
+            package_id=package_id,
+            approval_id=approval_id,
+            requested_by=requested_by,
+            risk_note=risk_note,
+            rollback_plan=rollback_plan,
+        )
+
+    def approve_live_approval(
+        self,
+        *,
+        package_id: str,
+        approval_id: str,
+        approved_by: str,
+        risk_note: str | None = None,
+        rollback_plan: str | None = None,
+    ) -> StrategyPackageLiveApproval:
+        return StrategyPackageService(repository=self.package_repository, validator=self.validator).approve_live_approval(
+            package_id=package_id,
+            approval_id=approval_id,
+            approved_by=approved_by,
+            risk_note=risk_note,
+            rollback_plan=rollback_plan,
+        )
+
+    def reject_live_approval(
+        self,
+        *,
+        package_id: str,
+        approval_id: str,
+        rejected_by: str,
+        rejection_reason: str,
+    ) -> StrategyPackageLiveApproval:
+        return StrategyPackageService(repository=self.package_repository, validator=self.validator).reject_live_approval(
+            package_id=package_id,
+            approval_id=approval_id,
+            rejected_by=rejected_by,
+            rejection_reason=rejection_reason,
+        )
+
+    def retire_live_approval(
+        self,
+        *,
+        package_id: str,
+        approval_id: str,
+        retired_by: str,
+        retirement_reason: str,
+    ) -> StrategyPackageLiveApproval:
+        return StrategyPackageService(repository=self.package_repository, validator=self.validator).retire_live_approval(
+            package_id=package_id,
+            approval_id=approval_id,
+            retired_by=retired_by,
+            retirement_reason=retirement_reason,
+        )
+
+    def list_live_approvals(
+        self,
+        *,
+        package_id: str | None = None,
+        portfolio_id: str | None = None,
+        limit: int = 100,
+    ) -> list[StrategyPackageLiveApproval]:
+        return StrategyPackageService(repository=self.package_repository, validator=self.validator).list_live_approvals(
+            package_id=package_id,
+            portfolio_id=portfolio_id,
+            limit=limit,
+        )
+
     @staticmethod
     def _config_without_runtime_variant_selector(config: dict[str, Any]) -> dict[str, Any]:
         cleaned = dict(config)
@@ -1073,6 +1233,16 @@ class PaperTradingV2PortfolioService:
             source_backtest_status="BACKTEST_VALIDATED",
             paper_enabled=True,
         )
+
+    @staticmethod
+    def _tail_policy_snapshot(policy_json: dict[str, Any]) -> dict[str, Any]:
+        algo_code = str(policy_json.get("algo_code") or "").strip().upper() or "UNKNOWN"
+        return {
+            "tail_policy_id": f"tail_policy:{algo_code}",
+            "unfilled_handler": policy_json.get("unfilled_handler") or "default_fail_fast",
+            "unfilled_handler_params": dict(policy_json.get("unfilled_handler_params") or {}),
+            "fallback_policy": dict(policy_json.get("fallback_policy") or {}),
+        }
 
     @staticmethod
     def _paper_execution_policy_payload(policy: ValidatedExecutionPolicy) -> dict[str, Any]:
