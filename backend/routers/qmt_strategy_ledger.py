@@ -181,21 +181,23 @@ def preview_orders_from_binding(binding_id: str, payload: dict[str, Any]) -> dic
     binding = repository.get_package_binding(binding_id)
     config = _selection_order_build_config(payload)
     trade_date = _parse_trade_date(payload.get("trade_date"))
-    result = SelectionOrderBuilder(
-        repository=repository,
-        selection_reader=_selection_reader_factory(),
-        calendar_provider=_calendar_provider_factory(),
-    ).build_for_binding(
-        binding=binding,
-        trade_date=trade_date,
-        config=config,
-    )
+    try:
+        result = SelectionOrderBuilder(
+            repository=repository,
+            selection_reader=_selection_reader_factory(),
+            calendar_provider=_calendar_provider_factory(),
+        ).build_for_binding(
+            binding=binding,
+            trade_date=trade_date,
+            config=config,
+        )
+    except TradingCoreError as exc:
+        _raise_trading_core_http(exc)
     preflights = [
         QmtManagedOrderService(repository=repository, calendar_provider=_calendar_provider_factory()).preview_order(request).to_dict()
         for request in result.requests
     ]
     return {"success": True, "order_build": result.to_dict(), "preflights": preflights}
-
 
 @router.post("/orders/preview", summary="Preview managed MiniQMT order without broker submission")
 def preview_order(payload: dict[str, Any]) -> dict[str, Any]:

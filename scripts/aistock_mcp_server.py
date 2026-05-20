@@ -353,7 +353,7 @@ def _scan_existing_bug_ids() -> set[int]:
         if match:
             ids.add(int(match.group(1)))
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
         except (OSError, json.JSONDecodeError):
             continue
         bug_id = str(payload.get("bug_id") or "")
@@ -379,7 +379,7 @@ def _existing_bug_for_fingerprint(fingerprint: str) -> dict[str, Any] | None:
         return None
     for path in BUG_ROOT.glob("*.json"):
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
         except (OSError, json.JSONDecodeError):
             continue
         if payload.get("fingerprint") == fingerprint:
@@ -498,7 +498,7 @@ def _load_bug_records() -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for path in sorted(BUG_ROOT.glob("*.json")):
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
         except (OSError, json.JSONDecodeError) as exc:
             raise RuntimeError(f"Failed to read bug JSON registry entry {path}: {exc}") from exc
         if not isinstance(payload, dict) or not payload.get("bug_id"):
@@ -516,7 +516,7 @@ def _load_bug_record_by_id(bug_id: str) -> tuple[dict[str, Any], Path]:
     matches: list[tuple[dict[str, Any], Path]] = []
     for path in sorted(BUG_ROOT.glob("*.json")):
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
         except (OSError, json.JSONDecodeError) as exc:
             raise RuntimeError(f"Failed to read bug JSON registry entry {path}: {exc}") from exc
         if isinstance(payload, dict) and str(payload.get("bug_id") or "") == safe_bug_id:

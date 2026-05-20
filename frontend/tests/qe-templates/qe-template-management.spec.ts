@@ -18,10 +18,27 @@ const singleTemplate: Template = {
   config_json: {
     experiment_name: "mcp_single_demo",
     factor_names: ["alpha_mom", "alpha_vol"],
+    factor_sources: { alpha_mom: "sota", alpha_vol: "sota" },
     model_id: "lgbm_v1",
     strategy_id: "topk",
     label_horizon: 5,
     node_id: "wsl",
+    data_split: {
+      train_start: "2018-01-01",
+      train_end: "2022-12-31",
+      valid_start: "2023-01-01",
+      valid_end: "2023-12-31",
+      test_start: "2024-01-01",
+      test_end: "2024-12-31",
+      backtest_end: "2024-12-31",
+    },
+    custom_params: {
+      topk: 50,
+      n_drop: 5,
+      execution_algo: "TWAP",
+      execution_algo_params: { participation_rate: 0.2 },
+      label_horizon: 5,
+    },
   },
   archive_policy: "AUTO",
   created_by_type: "agent",
@@ -44,8 +61,29 @@ const customTemplate: Template = {
     base_experiment_id: "qe_base_1",
     node_parallelism: 2,
     loops: [
-      { label: "Loop A", factor_keys: ["alpha_mom"], model_id: "catboost", node_id: "wsl", seed: 7 },
-      { label: "Loop B", factor_keys: ["alpha_mom", "alpha_size"], model_id: "lgbm", node_id: "local", seed: 11 },
+      {
+        label: "Loop A",
+        factor_keys: ["alpha_mom"],
+        model_id: "catboost",
+        strategy_id: "topk",
+        strategy_params: { topk: 50 },
+        execution_algo: "TWAP",
+        execution_algo_params: { participation_rate: 0.2 },
+        node_id: "wsl",
+        seed: 7,
+        label_horizon: 5,
+      },
+      {
+        label: "Loop B",
+        factor_keys: ["alpha_mom", "alpha_size"],
+        model_id: "lgbm",
+        strategy_id: "topk",
+        strategy_params: { topk: 30 },
+        execution_algo: "CLOSE_PRICE",
+        node_id: "local",
+        seed: 11,
+        label_horizon: 3,
+      },
     ],
   },
   archive_policy: "MANUAL_ONLY",
@@ -65,6 +103,53 @@ async function installTemplateMocks(page: import("@playwright/test").Page) {
   let currentSingle = clone(singleTemplate);
   let currentCustom = clone(customTemplate);
   const calls: string[] = [];
+  const updates: Record<string, unknown>[] = [];
+
+  await page.route("**/api/v1/quantevolver/strategies**", async (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      ok: true,
+      items: [
+        {
+          strategy_id: "topk",
+          display_name: "TopK 策略",
+          default_kwargs: { topk: 50, n_drop: 5 },
+          param_schema: [
+            { name: "topk", type: "int", default: 50, min: 1, max: 200, title: "topk" },
+            { name: "n_drop", type: "int", default: 5, min: 0, max: 50, title: "n_drop" },
+          ],
+        },
+      ],
+    }),
+  }));
+  await page.route("**/api/v1/quantevolver/execution-algorithms**", async (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      ok: true,
+      items: [
+        {
+          algo_code: "TWAP",
+          algo_name: "TWAP",
+          qe_supported: true,
+          default_config: { participation_rate: 0.2 },
+          param_schema: [{ name: "participation_rate", type: "float", default: 0.2, min: 0.01, max: 1 }],
+        },
+        { algo_code: "CLOSE_PRICE", algo_name: "Close Price", qe_supported: true, default_config: {} },
+      ],
+    }),
+  }));
+  await page.route("**/api/v1/dispatch/nodes**", async (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify([{ node_id: "wsl", display_name: "WSL" }, { node_id: "local", display_name: "Local" }]),
+  }));
+  await page.route("**/api/v1/hmm-training/configs**", async (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify([{ config_id: "hmm_cfg_1", display_name: "Sector HMM" }]),
+  }));
 
   await page.route("**/api/v1/qe-templates**", async (route) => {
     const request = route.request();
@@ -91,6 +176,7 @@ async function installTemplateMocks(page: import("@playwright/test").Page) {
     if (method === "PUT" && path.endsWith(`/qe-templates/${id}`)) {
       calls.push("update");
       const body = request.postDataJSON() as Record<string, unknown>;
+      updates.push(body);
       if (id === currentCustom.template_id) currentCustom = { ...currentCustom, ...body, status: "draft" } as Template;
       else currentSingle = { ...currentSingle, ...body, status: "draft" } as Template;
       return respond({ status: "success", data: id === currentCustom.template_id ? currentCustom : currentSingle });
@@ -140,7 +226,7 @@ async function installTemplateMocks(page: import("@playwright/test").Page) {
     return respond({ detail: `unexpected route ${method} ${path}` }, 404);
   });
 
-  return { calls };
+  return { calls, updates };
 }
 
 test("QE templates list shows MCP single and custom evolution templates", async ({ page }) => {
@@ -166,26 +252,50 @@ test("operator can edit, save, validate and execute a single experiment template
   page.on("dialog", (dialog) => dialog.accept());
 
   await page.goto("/quantevolver/templates/qet_single_demo");
-  await expect(page.getByText("统一配置层编辑")).toBeVisible();
+  await expect(page.getByText("结构化配置编辑")).toBeVisible();
+  await expect(page.getByLabel("full template config json")).toHaveCount(0);
+  await expect(page.getByText("完整配置 JSON")).toHaveCount(0);
   await page.getByLabel("single model id").fill("catboost_v2");
+  await page.getByLabel("single execution algo").fill("CLOSE_PRICE");
+  await page.getByLabel("single factor names").fill("alpha_new\nalpha_quality");
   await page.getByRole("button", { name: "保存配置" }).click();
   await expect(page.getByText("模板配置已保存，尚未执行")).toBeVisible();
+  const updatePayload = mock.updates.at(-1);
+  expect(updatePayload).toBeTruthy();
+  const config = updatePayload?.config_json as Record<string, unknown>;
+  expect(config.model_id).toBe("catboost_v2");
+  expect(config.factor_names).toEqual(["alpha_new", "alpha_quality"]);
+  expect((config.custom_params as Record<string, unknown>).execution_algo).toBe("CLOSE_PRICE");
   await page.getByRole("button", { name: "保存并执行" }).click();
   await expect(page.getByText(/执行请求已提交/)).toBeVisible();
   await expect(page.getByRole("link", { name: "查看运行详情" })).toBeVisible();
   expect(mock.calls).toEqual(["update", "validate", "approve", "materialize", "run"]);
 });
 
-test("custom evolution template exposes loop details and executes through custom confirm token", async ({ page }) => {
+test("custom evolution template edits loop details and executes through custom confirm token", async ({ page }) => {
   const mock = await installTemplateMocks(page);
   page.on("dialog", (dialog) => dialog.accept());
 
   await page.goto("/quantevolver/templates/qet_custom_demo");
-  await expect(page.getByRole("cell", { name: "Loop A" })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "Loop B" })).toBeVisible();
+  await expect(page.getByText("Loop 1: Loop A")).toBeVisible();
+  await expect(page.getByText("Loop 2: Loop B")).toBeVisible();
+  await expect(page.getByLabel("full template config json")).toHaveCount(0);
+  await expect(page.getByText("完整配置 JSON")).toHaveCount(0);
   await expect(page.getByText("现有自动演进页面")).toBeVisible();
+  await page.getByLabel("loop 1 label", { exact: true }).fill("Loop A patched");
+  await page.getByLabel("loop 1 model id").fill("xgb_v2");
+  await page.getByLabel("loop 1 factor keys").fill("alpha_mom\nalpha_quality");
+  await page.getByRole("button", { name: "保存配置" }).click();
+  await expect(page.getByText("模板配置已保存，尚未执行")).toBeVisible();
+  const updatePayload = mock.updates.at(-1);
+  expect(updatePayload).toBeTruthy();
+  const config = updatePayload?.config_json as Record<string, unknown>;
+  const loops = config.loops as Record<string, unknown>[];
+  expect(loops[0].label).toBe("Loop A patched");
+  expect(loops[0].model_id).toBe("xgb_v2");
+  expect(loops[0].factor_keys).toEqual(["alpha_mom", "alpha_quality"]);
   await page.getByRole("button", { name: "保存并执行" }).click();
   await expect(page.getByText(/执行请求已提交/)).toBeVisible();
   await expect(page.getByRole("link", { name: "查看运行详情" })).toBeVisible();
-  expect(mock.calls).toEqual(["validate", "approve", "materialize", "run"]);
+  expect(mock.calls).toEqual(["update", "validate", "approve", "materialize", "run"]);
 });

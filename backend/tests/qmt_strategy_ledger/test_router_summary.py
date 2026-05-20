@@ -244,3 +244,15 @@ def test_package_binding_router_records_daily_selection_without_replacing_active
     evidence = repo.get_binding_selection_evidence(active.binding_id, date(2026, 5, 19))
     assert evidence.selection_run_id == "sel_b"
     assert evidence.artifact_sha256
+
+
+def test_package_binding_order_preview_fails_fast_until_minqmt_execution_bridge_exists() -> None:
+    repo = _repo()
+    response = _client(repo).post("/api/v1/qmt/virtual-strategies/package-bindings/bind_a/orders/preview", json={})
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["error_code"] == "UNSUPPORTED_FEATURE"
+    assert detail["context"]["issue"] == "BUG-077"
+    assert detail["context"]["disabled_path"] == "SelectionRun -> SelectionOrderBuilder -> ManagedOrderRequest"
+    assert "validated execution policy" in detail["context"]["required_path"]

@@ -1,4 +1,6 @@
-﻿# MiniQMT 多策略分仓执行详细实施方案（基于 2026-05-18 POC）
+# MiniQMT 多策略分仓执行详细实施方案（基于 2026-05-18 POC）
+
+> **2026-05-20 边界更新**：本文的 MiniQMT 分仓、lot 级账本、成交归因和对账设计仍保留；但任何将 `SelectionOrderBuilder` 作为最终 StrategyPackage 执行路径的描述，均被 `docs/architecture/strategy_package_platform_boundary_contract_20260520.md` 取代。MiniQMT 只能作为 broker authority；日频策略、分钟线执行、尾盘处理必须由平台 runtime profile / validated execution policy / unified strategy engine 产生，不能由 SelectionRun 直接转 broker order 绕过执行策略。
 
 ## 1. 方案定位
 

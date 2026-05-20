@@ -11,7 +11,7 @@ from backend.execution_algos.board_lot import round_to_board_lot
 from backend.services.selection_center.models import SelectionCandidate, SelectionRun, SelectionRunStatus
 from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELECTION_SCOPE, AUTHORITATIVE_SELECTION_SOURCE_TYPE
 from backend.services.strategy_package.selection_artifact import selection_artifact_runtime_hash
-from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
+from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError, UnsupportedFeatureError
 
 from .lot_availability import (
     DbTradingCalendarProvider,
@@ -100,10 +100,12 @@ class SelectionOrderBuilder:
         repository: Any,
         selection_reader: Any,
         calendar_provider: TradingCalendarProvider | None = None,
+        allow_legacy_direct_order_generation: bool = False,
     ) -> None:
         self._repository = repository
         self._selection_reader = selection_reader
         self._calendar_provider = calendar_provider or DbTradingCalendarProvider()
+        self._allow_legacy_direct_order_generation = allow_legacy_direct_order_generation
 
     def build_for_active_binding(
         self,
@@ -129,6 +131,8 @@ class SelectionOrderBuilder:
         config: SelectionOrderBuildConfig | None = None,
     ) -> SelectionOrderBuildResult:
         config = config or SelectionOrderBuildConfig()
+        if not self._allow_legacy_direct_order_generation:
+            self._raise_execution_bridge_required(binding)
         if binding.binding_status != BindingStatus.ACTIVE:
             raise StrategyPackageValidationError(
                 "package binding is not ACTIVE",
@@ -442,6 +446,25 @@ class SelectionOrderBuilder:
                 },
             )
 
+    def _raise_execution_bridge_required(self, binding: StrategyPackageBinding) -> None:
+        raise UnsupportedFeatureError(
+            "MiniQMT StrategyPackage execution bridge is required; "
+            "SelectionOrderBuilder direct broker-order generation is disabled",
+            context={
+                "issue": "BUG-077",
+                "binding_id": binding.binding_id,
+                "strategy_id": binding.strategy_id,
+                "package_id": binding.package_id,
+                "selection_run_id": binding.selection_run_id,
+                "trade_date": binding.trade_date.isoformat() if binding.trade_date else None,
+                "disabled_path": "SelectionRun -> SelectionOrderBuilder -> ManagedOrderRequest",
+                "required_path": (
+                    "StrategyPackage alpha core -> daily target/rebalance intent -> "
+                    "validated execution policy -> MiniQMT execution bridge -> ManagedOrderRequest"
+                ),
+                "reason": "selection_order_builder_bypasses_validated_execution_policy",
+            },
+        )
     def _position_summaries(self, strategy_id: str, trade_date: date) -> dict[str, _PositionSummary]:
         summaries: dict[str, _PositionSummary] = {}
         pending_sell_intents_by_symbol: dict[str, list[Any]] = {}

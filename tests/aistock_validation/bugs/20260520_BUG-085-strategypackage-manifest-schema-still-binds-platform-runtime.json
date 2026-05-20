@@ -1,0 +1,111 @@
+{
+  "bug_id": "BUG-085",
+  "schema_version": "aistock_validation_bug_v1",
+  "title": "StrategyPackage manifest schema still binds platform runtime policies instead of alpha core only",
+  "description": "Expected: StrategyPackage frozen manifest should bind only factor/model alpha core: factor set/order/schema, model spec/weights/training evidence, source lineage, and artifact hashes. Daily strategy, portfolio top_k, universe/ST PIT, minute execution, tail handling, risk/event/HMM, broker, account, and approval state should live in platform runtime profile, validated execution policy, release/binding version, or activation records. Old docs must be superseded by docs/architecture/strategy_package_platform_boundary_contract_20260520.md.\nActual: backend/services/strategy_package/models.py still requires strategy_config, universe_policy, portfolio_policy, execution_policy, minute_execution_policy, and risk_policy in StrategyPackageManifest. backend/services/strategy_package/qe_source_resolver.py still copies QE custom_params, stock_pool, topk/n_drop, execution/backtest frequency, and minute_execution_policy into the frozen manifest. This keeps platform runtime decisions inside the StrategyPackage boundary and causes later Selection/Paper/MiniQMT paths to treat package metadata as executable runtime authority.",
+  "module": "strategy_package",
+  "severity": "P0",
+  "risk_area": "strategy_package_alpha_core_boundary",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "reported_via_codex_app_strategy_platform_boundary_audit_20260520",
+    "boundary_contract": "docs/architecture/strategy_package_platform_boundary_contract_20260520.md",
+    "files": [
+      "backend/services/strategy_package/models.py",
+      "backend/services/strategy_package/qe_source_resolver.py",
+      "backend/services/strategy_package/manifest.py",
+      "backend/services/strategy_package/validators.py",
+      "backend/services/strategy_package/service.py",
+      "backend/services/selection_center/service.py",
+      "backend/services/paper_trading_v2/day_runner.py",
+      "backend/services/paper_trading_v2/service.py",
+      "docs/contracts/strategy_package_manifest_v1.md",
+      "docs/architecture/strategy_package_platform_boundary_contract_20260520.md",
+      "backend/tests/strategy_package/test_manifest_alpha_core_boundary.py"
+    ]
+  },
+  "reproduce_command": "rg -n \"strategy_config|universe_policy|portfolio_policy|execution_policy|minute_execution_policy|risk_policy|_build_minute_execution_policy|stock_pool|topk|n_drop\" backend/services/strategy_package docs/contracts/strategy_package_manifest_v1.md -S",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:backend/services/strategy_package/models.py",
+    "file:backend/services/strategy_package/qe_source_resolver.py",
+    "file:backend/services/strategy_package/manifest.py",
+    "file:backend/services/strategy_package/validators.py",
+    "file:backend/services/strategy_package/service.py",
+    "file:backend/services/selection_center/service.py",
+    "file:backend/services/paper_trading_v2/day_runner.py",
+    "file:backend/services/paper_trading_v2/service.py",
+    "file:docs/contracts/strategy_package_manifest_v1.md",
+    "file:docs/architecture/strategy_package_platform_boundary_contract_20260520.md",
+    "file:backend/tests/strategy_package/test_manifest_alpha_core_boundary.py"
+  ],
+  "fingerprint": "af4d43566474a837",
+  "github_issue_number": 107,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/107",
+  "assigned_agent": "codex-app",
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-20T04:32:40Z",
+  "first_seen_at": "2026-05-20T04:32:40Z",
+  "last_seen_at": "2026-05-20T04:32:40Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-20T04:32:40Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/strategy_package/models.py",
+    "backend/services/strategy_package/qe_source_resolver.py",
+    "backend/services/strategy_package/manifest.py",
+    "backend/services/strategy_package/validators.py",
+    "backend/services/strategy_package/service.py",
+    "backend/services/selection_center/service.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/paper_trading_v2/service.py",
+    "docs/contracts/strategy_package_manifest_v1.md",
+    "docs/architecture/strategy_package_platform_boundary_contract_20260520.md",
+    "backend/tests/strategy_package/test_manifest_alpha_core_boundary.py"
+  ],
+  "suspected_modules": [
+    "backend/services/strategy_package/models.py",
+    "backend/services/strategy_package/qe_source_resolver.py",
+    "backend/services/strategy_package/manifest.py",
+    "backend/services/strategy_package/validators.py",
+    "backend/services/strategy_package/service.py",
+    "backend/services/selection_center/service.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/paper_trading_v2/service.py",
+    "docs/contracts/strategy_package_manifest_v1.md",
+    "docs/architecture/strategy_package_platform_boundary_contract_20260520.md",
+    "backend/tests/strategy_package/test_manifest_alpha_core_boundary.py"
+  ],
+  "required_verification": [
+    "New or migrated StrategyPackage contract tests prove platform runtime policies are not required fields for the alpha-core manifest.",
+    "QE source resolution persists daily/execution/HMM/ST PIT/risk context as source evidence or platform release references, not frozen manifest authority.",
+    "Selection/Paper/MiniQMT tests use platform profile/policy references for runtime behavior while preserving package alpha-core immutability."
+  ],
+  "closure_requirements": [
+    "StrategyPackage alpha-core manifest no longer expands platform runtime policy fields for new development.",
+    "Legacy manifest v1 remains marked legacy and does not drive new platform runtime behavior.",
+    "All affected code paths either consume a PackageRuntimeRelease/platform profile or fail fast with a migration-required error."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-20T04:32:40Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Created from 2026-05-20 StrategyPackage/platform boundary audit; no runtime code changed in this issue creation step."
+    },
+    {
+      "timestamp": "2026-05-20T04:32:40Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Mirrored BUG-085 to GitHub issue #107 in the same flow."
+    },
+    {
+      "timestamp": "2026-05-20T04:32:40Z",
+      "actor": "codex-app",
+      "action": "github_sync_verified",
+      "note": "GitHub issue #107 URL recorded in local BUG JSON."
+    }
+  ]
+}

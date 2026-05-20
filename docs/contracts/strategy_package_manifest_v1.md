@@ -1,5 +1,7 @@
 # Strategy Package Manifest v1 Contract
 
+> **2026-05-20 Legacy Notice**：本文是 legacy manifest v1 契约，只能用于理解历史实现。新开发和修复必须以 `docs/architecture/strategy_package_platform_boundary_contract_20260520.md` 为准。新版边界规定 StrategyPackage frozen manifest 只绑定因子和模型 alpha core；`strategy_config`、`universe_policy`、`portfolio_policy`、`execution_policy`、`minute_execution_policy`、`risk_policy` 不得作为新 StrategyPackage 边界继续扩展，应迁移到平台 runtime profile / validated execution policy / release 或 activation。
+
 > Status: draft frozen by `docs/adr/0001-ai-stock-trading-core-direction.md`.
 > Scope: QE result -> Strategy Package -> Selection Center -> Paper Trading v2.
 > Out of scope: QMT, Shadow Trading, live trading, broker direct integration.

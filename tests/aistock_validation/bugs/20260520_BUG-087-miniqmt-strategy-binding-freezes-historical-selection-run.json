@@ -119,8 +119,16 @@
       "actor": "codex-app",
       "action": "latest_base_validation_green",
       "note": "After rebasing onto origin/main 08ab7fe, qmt_strategy_ledger tests pass, paper_v2_backend passes, l0 passes, branch-file guardrails have blocking=0, module ownership passes, and git diff origin/main...HEAD --check passes."
+    },
+    {
+      "timestamp": "2026-05-20T16:35:00Z",
+      "actor": "codex-app",
+      "action": "pull_request_opened",
+      "note": "Opened PR #128 for BUG-087 daily MiniQMT selection lifecycle fix; branch merged latest origin/main after BUG-077 and HMM runtime PRs landed."
     }
   ],
   "github_issue_number": 109,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/109"
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/109",
+  "github_pr_number": 128,
+  "github_pr_url": "https://github.com/licong01-cloud/AIstock/pull/128"
 }

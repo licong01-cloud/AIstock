@@ -25,7 +25,7 @@ from backend.services.qmt_strategy_ledger.order_service import QmtManagedOrderSe
 from backend.services.qmt_strategy_ledger.selection_order_builder import SelectionOrderBuilder, SelectionOrderBuildConfig
 from backend.services.selection_center.models import SelectionCandidate, SelectionMode, SelectionRun, SelectionRunStatus
 from backend.services.strategy_package.selection_artifact import selection_artifact_runtime_hash
-from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
+from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError, UnsupportedFeatureError
 
 
 ACCOUNT_ID = "62266303"
@@ -132,6 +132,7 @@ def _builder(repo: InMemoryQmtStrategyLedgerRepository, run: SelectionRun) -> An
                 repository=repo,
                 selection_reader=FakeSelectionReader(run),
                 calendar_provider=CALENDAR,
+                allow_legacy_direct_order_generation=True,
             ).build_for_binding(binding=binding, trade_date=run.trade_date, config=config)
 
     return _BuilderHarness()
