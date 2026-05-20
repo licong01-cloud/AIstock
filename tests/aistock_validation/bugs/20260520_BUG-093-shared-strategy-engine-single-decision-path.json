@@ -1,0 +1,103 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-093",
+  "title": "Shared strategy engine is not the single decision path across Selection Paper and MiniQMT",
+  "description": "Expected: QE, Selection Center, Paper v2, MiniQMT SIM, and future live adapters should share one strategy decision core for daily target/rebalance intents. Given the same package alpha core, score frame, runtime release/profile, current positions, and seed, the system should produce the same OrderIntent sequence before broker adapter differences. LocalSim and MiniQMT adapter differences should only affect order submission, fills, NAV, and reconciliation. Actual: Paper v2 day_runner/live_session uses StrategyPackageRuntime plus TargetPositionEngine/RebalanceEngine. MiniQMT qmt_strategy_ledger uses SelectionOrderBuilder directly from SelectionRun and virtual lot state. These are separate decision paths with different target sizing, sell/reduce behavior, top_k sources, board-lot application, and execution-policy handling.",
+  "module": "paper_v2",
+  "severity": "P1",
+  "risk_area": "strategy_engine_decision_consistency",
+  "status": "fixed",
+  "github_issue_number": 112,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/112",
+  "trigger_condition": {
+    "scenario": "strategy_package_platform_boundary_audit_20260520",
+    "files": [
+      "backend/services/strategy_package/runtime.py",
+      "backend/services/paper_trading_v2/day_runner.py",
+      "backend/services/paper_trading_v2/live_session.py",
+      "backend/services/paper_trading_v2/readiness.py",
+      "backend/services/qmt_strategy_ledger/selection_order_builder.py",
+      "backend/services/qmt_strategy_ledger/order_service.py",
+      "backend/services/trading_core",
+      "backend/tests/paper_trading_v2",
+      "backend/tests/qmt_strategy_ledger",
+      "docs/architecture/strategy_engine_design_20260508.md"
+    ]
+  },
+  "reproduce_command": "rg -n \"class TargetPositionEngine|class RebalanceEngine|class SelectionOrderBuilder|build_order_intents|build_for_active_binding|build_targets|Strategy Engine|OrderIntent\" backend/services/strategy_package backend/services/paper_trading_v2 backend/services/qmt_strategy_ledger docs/architecture/strategy_engine_design_20260508.md -S",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "github:https://github.com/licong01-cloud/AIstock/issues/112",
+    "file:tests/aistock_validation/history/paper_trading_v2/20260520_l3_bug-093-shared-strategy-engine-single-decision-path-validation.md",
+    "git:83e297815533acc27ef19aa330ac7dc747e4e766"
+  ],
+  "fingerprint": "paper_v2::strategy_engine::not_single_decision_path",
+  "assigned_agent": "codex-app",
+  "fix_branch": "bug/BUG-093-shared-strategy-engine-single-decision-path",
+  "worktree_path": "F:/Dev/AIstock_worktrees/bug-093-shared-strategy-engine-single-decision-path",
+  "fix_commit": "83e297815533acc27ef19aa330ac7dc747e4e766",
+  "verification_run_id": "tests/aistock_validation/history/paper_trading_v2/20260520_l3_bug-093-shared-strategy-engine-single-decision-path-validation.md",
+  "created_at": "2026-05-20T17:12:08Z",
+  "first_seen_at": "2026-05-20T04:32:58Z",
+  "last_seen_at": "2026-05-20T18:21:10Z",
+  "fixed_at": "2026-05-20T18:21:10Z",
+  "submitted_at": "2026-05-20T17:12:08Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/strategy_package/runtime.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/paper_trading_v2/live_session.py",
+    "backend/services/paper_trading_v2/readiness.py",
+    "backend/services/qmt_strategy_ledger/selection_order_builder.py",
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/services/trading_core/**",
+    "backend/tests/paper_trading_v2/**",
+    "backend/tests/qmt_strategy_ledger/**",
+    "docs/architecture/strategy_engine_design_20260508.md",
+    "tests/aistock_validation/bugs/20260520_BUG-093-shared-strategy-engine-single-decision-path.json",
+    "tests/aistock_validation/history/paper_trading_v2/20260520_l3_bug-093-shared-strategy-engine-single-decision-path-validation.md"
+  ],
+  "suspected_modules": [
+    "backend/services/strategy_package/runtime.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/paper_trading_v2/live_session.py",
+    "backend/services/paper_trading_v2/readiness.py",
+    "backend/services/qmt_strategy_ledger/selection_order_builder.py",
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/services/trading_core"
+  ],
+  "required_verification": [
+    "Cross-adapter tests prove the same score frame/current positions/runtime release produce the same decision-layer OrderIntent sequence.",
+    "MiniQMT ledger no longer contains an independent final strategy decision algorithm outside the shared engine.",
+    "Adapter differences are limited to order submission, broker state, fills, NAV, and reconciliation."
+  ],
+  "closure_requirements": [
+    "A single decision engine or explicitly equivalent shared core is used by Selection/Paper/MiniQMT execution paths.",
+    "SelectionOrderBuilder is removed, reduced to a legacy adapter, or fail-fast guarded from StrategyPackage execution.",
+    "GitHub issue #112 and local BUG-093 registry stay linked and status-synced."
+  ],
+  "non_goals": [
+    "Do not touch production backend 8001, frontend 3000, production DB, MiniQMT runtime, or strategy assets during local validation.",
+    "Do not implement a simplified or POC-only replacement for the approved shared decision path."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-20T04:32:58Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Initial GitHub issue was drafted as BUG-090 from a stale registry context."
+    },
+    {
+      "timestamp": "2026-05-20T17:12:08Z",
+      "actor": "codex-app",
+      "action": "renumbered_and_assigned",
+      "note": "Renumbered to BUG-093 because origin/main already contains an unrelated BUG-090 data-sync registry record; started dedicated worktree fix branch."
+    },
+    {
+      "timestamp": "2026-05-20T18:21:10Z",
+      "actor": "codex-app",
+      "action": "fixed_pending_review",
+      "note": "Code fix commit routes MiniQMT SelectionOrderBuilder through shared TargetPositionEngine/RebalanceEngine. Validation passed: qmt_strategy_ledger 86 passed; broad paper/qmt/strategy/selection 357 passed, 1 skipped, 2 xfailed; paper_v2_backend 443 passed, 1 skipped, 2 xfailed; compileall, diff check, L0, module ownership, and guardrails passed with blocking=0. GitHub issue #112 to be labeled status:fixed-pending-review."
+    }
+  ]
+}
