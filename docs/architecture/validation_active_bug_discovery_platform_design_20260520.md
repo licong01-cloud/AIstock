@@ -119,6 +119,32 @@ flowchart TD
   O --> K
 ```
 
+### 5.1 可扩展性判断与设计边界
+
+当前架构不是难以扩展的单体流水线，关键扩展点已经具备：
+
+| 扩展点 | 现有设计位置 | 可扩展方式 | 不允许的方式 |
+|---|---|---|---|
+| 发现器 | `detector_registry.py` | 新增 detector adapter，统一输出 `IssueCandidate` | 每个工具各自创建 Issue |
+| 工具执行 | `e2e_probe_runner.py`、`llm_agent_gateway.py` | 新增 tool adapter，统一输出 `ToolRunResult` 和 `EvidenceManifest` | 让外部工具直接写 BUG JSON |
+| Agent 执行 | MCP Agent Task | Codex/Claude Code claim task 后回传结果 | Agent 绕过候选池直接关闭或创建正式 Issue |
+| 调度 | `discovery_scheduler.py` | 固定夜间、变更驱动、手工专项共用 task schema | 每类任务各自维护独立状态机 |
+| 证据 | `EvidenceManifest` | 文件、日志、截图、trace、API/MCP 响应统一入 evidence store | 把证据散落在日志和聊天记录中 |
+| 门禁 | `morning_review.py` + 合入门禁 | 只读取已审核、高置信、影响当前变更的 P0/P1 | 未审核 LLM draft 直接阻断合入 |
+
+因此不需要替换现有 Validation Center。正确路线是增加一个“工具适配层”：
+
+```text
+外部成熟工具 / LLM Agent
+  -> Tool Adapter
+  -> ToolRunResult
+  -> EvidenceManifest
+  -> IssueCandidate / IssueCandidateDraft
+  -> 审核 / GitHub Issue 同步
+```
+
+这个边界吸收 Google Tricorder、OSS-Fuzz、SRE 和成熟开源测试平台的工程经验，但保留 AIstock 自己的业务对象、Issue 规则、生产库资源策略和 UI。
+
 ## 6. 确定性发现器设计
 
 确定性发现器是平台主体，必须先于 LLM 建立。所有发现器输出统一的 `IssueCandidate`。
@@ -327,6 +353,90 @@ qe_template_materialize + RuntimeError + stock_pool_sync.py + missing_filtered_p
 | UI/API 对账 | API 有 open issue 但 UI 显示 0 |
 | cleanup 对账 | TTL 过期 validation resource 未清理 |
 
+### 6.7 工具增强型发现器
+
+行业最佳实践不应只作为参考资料，而应变成可执行 detector。建议把成熟工具接入为以下 adapter：
+
+| Adapter | 借鉴实践 | 输入 | 输出 | 首批落地目标 |
+|---|---|---|---|---|
+| `semgrep_business_rule_adapter` | Google Tricorder 的“低噪音静态分析生态” | 代码、规则、设计契约 | 规则命中 + 文件证据 | 把 AIstock 业务规则写成 Semgrep 规则 |
+| `schemathesis_api_fuzz_adapter` | OSS-Fuzz 的持续边界输入思想 | OpenAPI、认证配置、endpoint allowlist | API 500、schema 不一致、参数校验缺失 | 扫 Validation/QE/StrategyPackage/Selection API |
+| `playwright_trace_probe_adapter` | 测试金字塔中的少量高价值 E2E | `ui_targets.yaml`、业务探针 | trace、截图、ARIA 快照、失败步骤 | 夜间跑关键页面和核心业务链路 |
+| `contract_alignment_adapter` | Consumer-driven contract testing | OpenAPI、前端 client、MCP schema | contract drift candidate | 防止 API/MCP/UI 字段漂移 |
+| `otel_trace_collector_adapter` | SRE 的可观测性和 trace-first 调试 | run_id、API/MCP/LLM 调用日志 | trace id、span、latency、error fingerprint | 串联一次夜间发现全过程 |
+
+#### 6.7.1 Semgrep 业务规则落地
+
+Semgrep 不只做安全扫描，更适合把 AIstock 近期真实 Bug 固化成可执行规则：
+
+```text
+tests/aistock_validation/discovery_rules/semgrep/
+  qe_backtest_fixed_pool.yaml
+  github_issue_sync_required.yaml
+  strategy_package_runtime_boundary.yaml
+  ui_target_registration_required.yaml
+```
+
+首批规则：
+
+- QE 回测路径不得默认引用最新 PIT 股票池。
+- 新 BUG JSON 必须包含 GitHub issue linkage，或同一流程中完成同步。
+- StrategyPackage 不得绑定 Selection Center / Paper v2 平台健康状态。
+- 新增前端 route 必须登记到 `ui_targets.yaml` 或声明为非流水线页面。
+- MCP tool 新增后必须有后端 API、测试计划或明确的非 API 说明。
+
+输出统一转成 `IssueCandidate`，并保留 Semgrep rule id、文件、行号和匹配片段 hash。
+
+#### 6.7.2 Schemathesis API 探测落地
+
+Schemathesis 用于 OpenAPI 驱动的 property-based API 探测，重点发现人工用例覆盖不到的参数边界：
+
+```text
+tests/aistock_validation/discovery_rules/api_fuzz_targets.yaml
+```
+
+建议 schema：
+
+```yaml
+targets:
+  - target_id: validation_discovery_api
+    openapi_url: http://127.0.0.1:${PORT}/openapi.json
+    include:
+      - /api/v1/validation/*
+      - /api/v1/qe-templates/*
+      - /api/v1/strategy-packages/*
+    exclude:
+      - /api/v1/*/delete*
+    mode: dry_run_or_readonly
+    max_examples: 50
+    timeout_seconds: 120
+```
+
+首批只允许 L0/L1/L2 只读或 dry-run endpoint；任何写入 endpoint 必须绑定 `resource_policy_id` 和 cleanup。
+
+#### 6.7.3 Playwright Trace 探针落地
+
+Playwright 不是只做“页面能打开”，而要输出可审查证据：
+
+- trace zip。
+- screenshot。
+- ARIA snapshot。
+- console/network error。
+- 用户可读失败步骤。
+
+夜间报告 UI 只展示摘要，详情展开后再显示 trace 链接和人类可读步骤，避免把原始日志堆在卡片上。
+
+#### 6.7.4 Contract Alignment 落地
+
+Pact/OpenAPI contract 的思想应先以轻量方式落地，不必立即引入独立 Pact Broker：
+
+- 后端 OpenAPI endpoint 必须有前端 client 或明确 `internal_only`。
+- MCP tool 参数必须能映射到后端 API 或本地受控 runner。
+- 前端展示字段必须覆盖高风险状态字段：`status`、`error_message`、`github_issue_url`、`validation_run_id`、`cleanup_status`。
+- breaking change 必须生成变更驱动验证任务。
+
+后续如果跨服务契约增多，再考虑引入 Pact Broker；当前阶段先在 Validation Center 内实现 contract diff。
+
 ## 7. LLM 辅助探索层设计
 
 ### 7.1 定位
@@ -449,6 +559,82 @@ LLM 输出必须经过确定性验证器补证据后才能进入正式候选池�
 - token、API key、DB 密码等敏感信息不得进入 LLM context pack 或报告。
 
 这样可以支持 DeepSeek、GLM/Zhipu、DashScope、OpenAI-compatible、本地 vLLM 等不同供应商，同时避免主动发现页面重复实现密钥管理。
+
+### 7.6 LLM 探索式测试工具链整合
+
+行业内 LLM 探索式测试还没有像 JUnit/Playwright 那样完全标准化，但已经有可借鉴的成熟方向：浏览器 Agent、Prompt/模型评测、LLM trace 观测、人工审核式候选机制。AIstock 的落地方式不是把这些工具单独部署成新平台，而是作为 MCP Agent Task 或 LLM Gateway 的 adapter。
+
+| 能力 | 可借鉴工具 | 在 AIstock 中的执行位置 | 输出如何进入流水线 |
+|---|---|---|---|
+| 浏览器自然语言探索 | browser-use、Playwright MCP、TestZeus Hercules 思路 | Codex/Claude Code MCP Agent 或受控 nightly sandbox | `IssueCandidateDraft` + Playwright trace/evidence |
+| Prompt/模型回归评测 | promptfoo | CI/nightly 的 LLM eval job | `LlmEvalReport`，评估 prompt 是否稳定发现历史 Bug |
+| LLM 调用观测 | Langfuse / Arize Phoenix 思路 | 可选观测后端，或先实现轻量 trace schema | prompt/version/model/cost/latency/hash |
+| 设计一致性推理 | DeepSeek、GLM、OpenAI-compatible 模型 | `llm_agent_gateway.py` 或 Codex/Claude 外部调用 | draft candidate + deterministic verification request |
+
+#### 7.6.1 LLM 浏览器探索边界
+
+LLM 浏览器探索适合发现“UI 功能缺失、文案不可理解、业务流程断点、错误提示不可读”等人类体验问题，但不适合作为最终 Bug 判定。标准流程：
+
+1. 任务计划器生成探索 charter，例如“检查 QE 模板从创建到 materialize 的页面路径是否完整”。
+2. Codex/Claude Code 通过 MCP 领取任务。
+3. Agent 使用 Playwright MCP 或 browser-use 类工具执行探索。
+4. 输出用户步骤、截图、trace、失败点、关联设计规则。
+5. 平台生成 `IssueCandidateDraft`，再由确定性 detector 补证据。
+
+不允许：
+
+- LLM 浏览器 Agent 直接执行高风险写入。
+- LLM 仅凭“看起来不对”创建正式 GitHub Issue。
+- 把浏览器探索日志原样塞进 UI，必须先摘要成可读步骤。
+
+#### 7.6.2 Promptfoo 式 LLM 发现能力评测
+
+为了避免 LLM 探测变成不可控的“聊天式测试”，必须给 LLM Agent 建立回归评测集：
+
+```text
+tests/aistock_validation/llm_eval/
+  historical_bug_cases.yaml
+  design_consistency_cases.yaml
+  ui_missing_feature_cases.yaml
+  promptfoo.config.yaml
+```
+
+评测样本来自历史真实问题：
+
+- QE 回测误用最新 PIT 股票池。
+- StrategyPackage 被 Selection Center health preflight 阻断。
+- BUG JSON 缺 GitHub Issue 链接。
+- UI 页面没有展示 GitHub sync 状态。
+
+验收口径：
+
+- LLM 至少指出设计规则和疑似代码区域。
+- LLM 不得建议直接合入、关闭 Issue 或绕过审核。
+- 对已知历史 Bug 的召回率和误报率进入夜间报告。
+- Prompt 版本变更必须跑一次 LLM eval dry-run。
+
+#### 7.6.3 LLM Trace 与成本观测
+
+先实现轻量内置 trace schema，后续再决定是否接入 Langfuse/Phoenix：
+
+```json
+{
+  "llm_trace_id": "llmt_20260521_001",
+  "task_id": "disc_task_20260521_001",
+  "provider_id": "deepseek",
+  "model_id": "deepseek-chat",
+  "prompt_id": "validation_discovery_design_consistency",
+  "prompt_version": 4,
+  "input_hash": "...",
+  "output_hash": "...",
+  "latency_ms": 21800,
+  "token_usage": {"input": 18000, "output": 2400},
+  "cost_estimate": null,
+  "candidate_ids": ["ic_20260521_001"]
+}
+```
+
+夜间报告只展示 provider/model/prompt_version、耗时、token、候选数量和错误；原始输入输出默认折叠，敏感信息必须脱敏。
 
 ## 8. 设计文档到验证契约
 
@@ -765,8 +951,15 @@ backend/services/validation/active_discovery/
   log_exception_scanner.py
   data_consistency_scanner.py
   e2e_probe_runner.py
+  tool_adapters/
+    semgrep_adapter.py
+    schemathesis_adapter.py
+    playwright_trace_adapter.py
+    contract_alignment_adapter.py
   llm_agent_gateway.py
   llm_profile_resolver.py
+  llm_eval_runner.py
+  trace_store.py
   nightly_report_store.py
   discovery_scheduler.py
   change_task_planner.py
@@ -800,6 +993,11 @@ GET  /api/v1/validation/discovery/llm-profiles
 POST /api/v1/validation/discovery/llm-profiles
 GET  /api/v1/validation/discovery/contracts
 GET  /api/v1/validation/discovery/rules
+GET  /api/v1/validation/discovery/tool-adapters
+POST /api/v1/validation/discovery/tool-adapters/{adapter_id}/dry-run
+GET  /api/v1/validation/discovery/llm-evals
+POST /api/v1/validation/discovery/llm-evals/run
+GET  /api/v1/validation/discovery/traces/{trace_id}
 GET  /api/v1/validation/discovery/resources
 POST /api/v1/validation/discovery/resources/cleanup
 ```
@@ -826,6 +1024,10 @@ validation_discovery_get_agent_context_pack
 validation_discovery_submit_agent_result
 validation_discovery_attach_agent_evidence
 validation_discovery_complete_agent_task
+validation_discovery_list_tool_adapters
+validation_discovery_run_tool_adapter
+validation_discovery_run_llm_eval
+validation_discovery_get_trace
 ```
 
 MCP 限制：
@@ -836,6 +1038,7 @@ MCP 限制：
 - LLM profile 只能引用已存在的 provider/model/prompt，不允许 MCP 传入明文 token。
 - 手工部署专项任务必须写入 `requested_by`、`reason`、`resource_policy_id` 和预期 cleanup 策略。
 - Codex、Claude Code 或其他 Agent 通过 MCP 执行探测时，必须先 claim task，再取 context pack，最后提交结构化结果和证据包，不能绕过候选池直接创建正式 Issue。
+- tool adapter 默认 dry-run；执行写入型 adapter 必须显式指定 allowlist、resource policy、TTL 和 cleanup。
 
 ### 13.4 调度策略：固定基线 + 变更驱动 + 手工专项
 
@@ -1072,9 +1275,15 @@ flowchart LR
 ```text
 tests/aistock_validation/contracts/*.yaml
 tests/aistock_validation/discovery_rules/*.yaml
+tests/aistock_validation/discovery_rules/semgrep/*.yaml
+tests/aistock_validation/discovery_rules/api_fuzz_targets.yaml
+tests/aistock_validation/llm_eval/*.yaml
 tests/aistock_validation/issue_candidates/*.json
 tests/aistock_validation/history/discovery/YYYYMMDD/*.md
 tmp/validation/discovery/<run_id>/*
+tmp/validation/discovery/<run_id>/traces/*
+tmp/validation/discovery/<run_id>/playwright/*
+tmp/validation/discovery/<run_id>/llm_traces/*
 ```
 
 后续可增加 DB 表，但第一阶段不依赖新 schema，降低开发风险。
@@ -1119,6 +1328,7 @@ tmp/validation/discovery/<run_id>/*
 - 主动发现 UI 信息架构，含夜间测试汇报专用页面。
 - DiscoveryAgentProfile schema，明确复用 `/quantevolver/prompts` 和 `/config/rdagent-llm`。
 - 三层调度矩阵：固定夜间基线、变更驱动任务、人工 MCP 专项任务。
+- Tool adapter schema：Semgrep、Schemathesis、Playwright trace、contract alignment、LLM eval。
 - QE/Paper 全链路探针 runbook。
 
 验收：
@@ -1128,6 +1338,7 @@ tmp/validation/discovery/<run_id>/*
 - 确定 P0/P1 首批规则。
 - 明确 LLM 输出只进入 draft/candidate，不直接创建正式 Issue。
 - 明确高风险任务必须通过 resource policy 和人工确认。
+- 明确外部成熟工具只通过 adapter 接入，统一进入 evidence/candidate，不替换现有流水线状态机。
 
 ### 阶段 1：确定性发现器 MVP，5-8 天
 
@@ -1141,6 +1352,8 @@ tmp/validation/discovery/<run_id>/*
 - Morning review Markdown。
 - 夜间报告数据结构和基础 API。
 - 变更驱动任务计划器 dry-run。
+- Semgrep business rule adapter MVP。
+- Schemathesis API fuzz adapter dry-run MVP。
 
 验收：
 
@@ -1149,6 +1362,8 @@ tmp/validation/discovery/<run_id>/*
 - 能从候选晋级为 BUG JSON + GitHub Issue。
 - 能生成一份不依赖 LLM 的夜间报告。
 - 能基于变更清单生成待执行任务建议。
+- 能用 Semgrep 发现至少 2 类历史业务规则问题。
+- 能用 Schemathesis 在只读 endpoint 上发现或确认无 API 500/schema 漂移。
 
 ### 阶段 2：日志异常与数据一致性，1-2 周
 
@@ -1160,6 +1375,9 @@ tmp/validation/discovery/<run_id>/*
 - 流水线 UI 主动发现页面。
 - 夜间测试汇报专用页面 MVP。
 - MCP 专项任务部署和取消接口。
+- Playwright trace probe adapter。
+- OpenTelemetry 风格 trace schema 和 trace 查询 API。
+- contract alignment adapter MVP。
 
 验收：
 
@@ -1168,6 +1386,8 @@ tmp/validation/discovery/<run_id>/*
 - Paper session/run 状态不一致可被发现。
 - UI 能展示夜间运行、候选、证据、cleanup 和 GitHub 同步状态。
 - MCP 能创建手工专项任务，但高风险任务需要 confirm。
+- UI 探针失败时能生成截图、trace、ARIA 快照和用户可读失败步骤。
+- API/MCP/UI contract drift 能进入候选池。
 
 ### 阶段 3：LLM 辅助探索，1-2 周
 
@@ -1180,6 +1400,8 @@ tmp/validation/discovery/<run_id>/*
 - DiscoveryAgentProfile 管理页面。
 - MCP 外部 Agent 执行接口：claim、context pack、submit result、attach evidence、complete。
 - Codex/Claude Code 作为可审计 Agent runtime 的任务回传协议。
+- promptfoo 风格 LLM eval runner，用历史 Bug 样本评估不同模型和 Prompt。
+- LLM trace store，用于记录模型、Prompt、token、latency、candidate 映射。
 - LLM 输出 draft candidate。
 - 确定性补证据流程。
 - 每日审核包。
@@ -1193,6 +1415,7 @@ tmp/validation/discovery/<run_id>/*
 - 页面不保存 LLM token 或 API key。
 - Codex 或 Claude Code 可通过 MCP 领取任务并提交结构化发现，但不能绕过候选池直接创建正式 Issue。
 - 外部 Agent 调用其他 LLM API 的结果可被接收，但必须带模型声明、Prompt 版本、context pack id 和证据 manifest。
+- Prompt 版本变更后能运行 LLM eval dry-run，并在夜间报告展示召回率、误报率和成本。
 
 ### 阶段 4：QE/Paper 全链路最小探针，2-3 周
 
@@ -1267,6 +1490,8 @@ tmp/validation/discovery/<run_id>/*
 - 能展示 LLM provider/model/prompt_version/context_pack，并跳转到既有 Prompt 和模型配置页面。
 - 能通过 UI/MCP 创建手工专项任务，并区分固定夜间基线、变更驱动任务和人工任务。
 - 能支持 Codex/Claude Code 通过 MCP 领取 LLM 探测任务、回传发现和证据包。
+- 能运行 Semgrep、Schemathesis、Playwright trace 三类 adapter，并统一输出 Evidence Manifest。
+- 能运行一次 promptfoo 风格 LLM eval dry-run，比较至少两个 Prompt 或模型配置。
 
 ### 21.2 业务能力验收
 
@@ -1294,10 +1519,16 @@ tests/aistock_validation/contracts/strategy_package_boundary_contract.yaml
 tests/aistock_validation/contracts/paper_v2_runtime_contract.yaml
 tests/aistock_validation/contracts/qe_backtest_validation_contract.yaml
 tests/aistock_validation/discovery_rules/active_discovery_rules_v1.yaml
+tests/aistock_validation/discovery_rules/api_fuzz_targets.yaml
+tests/aistock_validation/discovery_rules/semgrep/qe_backtest_fixed_pool.yaml
+tests/aistock_validation/discovery_rules/semgrep/github_issue_sync_required.yaml
+tests/aistock_validation/discovery_rules/semgrep/strategy_package_runtime_boundary.yaml
 tests/aistock_validation/discovery_rules/discovery_agent_profiles.example.yaml
 tests/aistock_validation/discovery_rules/nightly_baseline_tasks.yaml
+tests/aistock_validation/llm_eval/historical_bug_cases.yaml
+tests/aistock_validation/llm_eval/promptfoo.config.yaml
 docs/operations/validation_active_discovery_morning_review_runbook_20260520.md
 docs/operations/validation_active_discovery_nightly_report_ui_runbook_20260520.md
 ```
 
-随后进入阶段 1 开发。阶段 1 不需要直接跑生产库写入，只实现候选池、规则扫描、UI 覆盖扫描、夜间报告数据结构和 morning review，先把“能发现问题并受控进入审核”的闭环建立起来。
+随后进入阶段 1 开发。阶段 1 不需要直接跑生产库写入，只实现候选池、业务规则扫描、UI 覆盖扫描、Semgrep/Schemathesis 只读 adapter、夜间报告数据结构和 morning review，先把“能发现问题并受控进入审核”的闭环建立起来。
