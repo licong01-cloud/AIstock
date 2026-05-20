@@ -1,15 +1,14 @@
 {
-  "bug_id": "BUG-086",
   "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-086",
   "title": "Selection and Paper runtime_config can still change trading behavior without mandatory version activation",
-  "description": "Expected: Any runtime choice that can affect selected stocks, target positions, order intents, fills, cash, holdings, NAV, or performance must be represented by a versioned platform runtime profile, validated execution policy activation, tail policy version, or PackageRuntimeRelease/PortfolioBindingVersion. Selection Center, Paper v2, and MiniQMT must persist the exact version/hash used for every run and should reject unversioned raw runtime_config behavior changes outside explicitly diagnostic/read-only preview paths.\nActual: Selection Center still accepts arbitrary runtime_config in run_packages and normalizes it directly when st_pit_authoritative is not enabled. PaperTradingV2PortfolioService.resolve_runtime_config_for_date still accepts runtime_config directly and normalizes it when no active runtime profile activation exists. Legacy top-level keys such as top_k, exclude_suspended, enable_sector_hmm, hmm_model_version_id, and risk_policy can alter selection/runtime behavior without a mandatory profile version or activation. Runtime variants are package-scoped and only partially wired, which further blurs the boundary.",
+  "description": "Expected: Any runtime choice that can affect selected stocks, target positions, order intents, fills, cash, holdings, NAV, or performance must be represented by a versioned platform runtime profile, validated execution policy activation, tail policy version, or PackageRuntimeRelease/PortfolioBindingVersion. Selection Center, Paper v2, and MiniQMT must persist the exact version/hash used for every run and should reject unversioned raw runtime_config behavior changes outside explicitly diagnostic/read-only preview paths. Actual: Selection Center and Paper v2 can still accept raw runtime_config/top-level legacy keys that alter behavior without requiring a profile version/activation.",
   "module": "paper_v2",
   "severity": "P0",
   "risk_area": "runtime_profile_activation_boundary",
-  "status": "open",
+  "status": "fixed_pending_review",
   "trigger_condition": {
-    "scenario": "reported_via_codex_app_strategy_platform_boundary_audit_20260520",
-    "boundary_contract": "docs/architecture/strategy_package_platform_boundary_contract_20260520.md",
+    "scenario": "github_issue_108_missing_local_registry_record",
     "files": [
       "backend/services/selection_center/runtime_profile.py",
       "backend/services/selection_center/service.py",
@@ -27,30 +26,22 @@
   "reproduce_command": "rg -n \"runtime_config|normalize_selection_runtime_config|normalize_runtime_config_with_backtest_contract|runtime_variant_id|RUNTIME_PROFILE_INPUT_KEYS|top_k|enable_sector_hmm|exclude_suspended|risk_policy\" backend/services/selection_center backend/services/paper_trading_v2 backend/services/strategy_package -S",
   "failing_run_id": null,
   "evidence_uris": [
-    "file:backend/services/selection_center/runtime_profile.py",
-    "file:backend/services/selection_center/service.py",
-    "file:backend/services/paper_trading_v2/service.py",
-    "file:backend/services/paper_trading_v2/day_runner.py",
-    "file:backend/services/paper_trading_v2/readiness.py",
-    "file:backend/services/paper_trading_v2/live_session.py",
-    "file:backend/services/strategy_package/runtime_variant.py",
-    "file:backend/services/strategy_package/runtime.py",
-    "file:backend/services/strategy_package/backtest_contract.py",
-    "file:backend/tests/selection_center/test_runtime_selection.py",
-    "file:backend/tests/paper_trading_v2/test_runtime_config_contract.py"
+    "github:https://github.com/licong01-cloud/AIstock/issues/108",
+    "github:https://github.com/licong01-cloud/AIstock/pull/131",
+    "file:tests/aistock_validation/history/paper_v2/BUG-086-runtime-config-activation-boundary-validation-20260520.md"
   ],
-  "fingerprint": "79541e8b6bb48c0d",
+  "fingerprint": "github-108-bug-086",
   "github_issue_number": 108,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/108",
   "assigned_agent": "codex-app",
-  "fix_branch": null,
-  "fix_commit": null,
-  "verification_run_id": null,
-  "created_at": "2026-05-20T04:32:40Z",
-  "first_seen_at": "2026-05-20T04:32:40Z",
-  "last_seen_at": "2026-05-20T04:32:40Z",
-  "fixed_at": null,
-  "submitted_at": "2026-05-20T04:32:40Z",
+  "fix_branch": "bug/BUG-086-runtime-config-activation-boundary",
+  "fix_commit": "8428a6e",
+  "verification_run_id": "tests/aistock_validation/history/paper_v2/BUG-086-runtime-config-activation-boundary-validation-20260520.md",
+  "created_at": "2026-05-20T10:09:55Z",
+  "first_seen_at": "2026-05-20T10:09:55Z",
+  "last_seen_at": "2026-05-20T21:10:00Z",
+  "fixed_at": "2026-05-20T10:50:00Z",
+  "submitted_at": "2026-05-20T10:09:55Z",
   "closed_at": null,
   "allowed_write_scope": [
     "backend/services/selection_center/runtime_profile.py",
@@ -63,7 +54,9 @@
     "backend/services/strategy_package/runtime.py",
     "backend/services/strategy_package/backtest_contract.py",
     "backend/tests/selection_center/test_runtime_selection.py",
-    "backend/tests/paper_trading_v2/test_runtime_config_contract.py"
+    "backend/tests/paper_trading_v2/test_runtime_config_contract.py",
+    "tests/aistock_validation/bugs/20260520_BUG-086-selection-and-paper-runtime-config-can-still-change-trading.json",
+    "tests/aistock_validation/history/paper_v2/BUG-086-runtime-config-activation-boundary-validation-20260520.md"
   ],
   "suspected_modules": [
     "backend/services/selection_center/runtime_profile.py",
@@ -89,22 +82,36 @@
   ],
   "events": [
     {
-      "timestamp": "2026-05-20T04:32:40Z",
+      "timestamp": "2026-05-20T10:09:55Z",
       "actor": "codex-app",
-      "action": "discovered",
-      "note": "Created from 2026-05-20 StrategyPackage/platform boundary audit; no runtime code changed in this issue creation step."
+      "action": "created_local_registry_from_github",
+      "note": "GitHub #108 existed without local registry in this worktree; created local BUG-086 JSON before code edits and assigned independent branch/worktree."
     },
     {
-      "timestamp": "2026-05-20T04:32:40Z",
+      "timestamp": "2026-05-20T10:50:00Z",
       "actor": "codex-app",
-      "action": "github_issue_created",
-      "note": "Mirrored BUG-086 to GitHub issue #108 in the same flow."
+      "action": "fixed_pending_review",
+      "note": "Enforced versioned runtime profile boundary across Selection Center, Paper v2 day/readiness/session/live paths, and MiniQMT tests. Validation: 125 focused tests passed; paper_v2_backend 447 passed, 1 skipped, 2 xfailed; guardrail_changed_files/l0/git diff --check passed."
     },
     {
-      "timestamp": "2026-05-20T04:32:40Z",
+      "timestamp": "2026-05-20T10:55:00Z",
       "actor": "codex-app",
-      "action": "github_sync_verified",
-      "note": "GitHub issue #108 URL recorded in local BUG JSON."
+      "action": "committed_fix",
+      "note": "Committed BUG-086 code/validation fix locally as 8428a6e on bug/BUG-086-runtime-config-activation-boundary; registry correction follows in this branch."
+    },
+    {
+      "timestamp": "2026-05-20T20:05:00Z",
+      "actor": "codex-app",
+      "action": "merge_refresh_pending_checks",
+      "note": "Resolved BUG JSON add/add conflict after origin/main advanced; PR #131 remains the review vehicle. Production runtime not touched."
+    },
+    {
+      "timestamp": "2026-05-20T21:10:00Z",
+      "actor": "codex-app",
+      "action": "ci_refresh_fixed",
+      "note": "Fixed PR #131 paper_v2_backend CI regression by moving platform-default runtime_profile_binding hash generation after package-contract normalization; refreshed validation passed with paper_v2_backend 453 passed, 1 skipped, 2 xfailed and git diff origin/main...HEAD --check passed."
     }
-  ]
+  ],
+  "github_pr_number": 131,
+  "github_pr_url": "https://github.com/licong01-cloud/AIstock/pull/131"
 }

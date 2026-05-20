@@ -28,7 +28,7 @@ from .model_state import (
     StrategyPackageModelRetrainJob,
     StrategyPackageModelState,
 )
-from .models import PackageStatus, StrategyPackageManifest
+from .models import LiveApprovalStatus, PackageStatus, StrategyPackageLiveApproval, StrategyPackageManifest
 from .package_asset import StrategyPackageAssetRecord, StrategyPackageAssetType
 from .runtime_variant import (
     RuntimeVariantKind,
@@ -493,6 +493,166 @@ class StrategyPackageRepository:
                 )
         return self.get_execution_policy(package_id, policy_id)
 
+    def save_live_approval(self, approval: StrategyPackageLiveApproval) -> StrategyPackageLiveApproval:
+        self.get(approval.package_id)
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO strategy_pkg.live_approval (
+                        approval_id, package_id, manifest_sha256, alpha_core_sha256,
+                        portfolio_id, runtime_release_id, runtime_release_sha256,
+                        runtime_profile_id, runtime_profile_version_id, runtime_profile_sha256,
+                        execution_policy_id, execution_policy_sha256, tail_policy_id,
+                        tail_policy_sha256, target_broker_backend, broker_account_id,
+                        approval_status, sim_validation_evidence, broker_compatibility,
+                        risk_note, rollback_plan, requested_by, requested_at, approved_by,
+                        approved_at, rejected_by, rejected_at, rejection_reason, retired_by,
+                        retired_at, retirement_reason, audit_json, created_at, updated_at
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s
+                    )
+                    """,
+                    (
+                        approval.approval_id,
+                        approval.package_id,
+                        approval.manifest_sha256,
+                        approval.alpha_core_sha256,
+                        approval.portfolio_id,
+                        approval.runtime_release_id,
+                        approval.runtime_release_sha256,
+                        approval.runtime_profile_id,
+                        approval.runtime_profile_version_id,
+                        approval.runtime_profile_sha256,
+                        approval.execution_policy_id,
+                        approval.execution_policy_sha256,
+                        approval.tail_policy_id,
+                        approval.tail_policy_sha256,
+                        approval.target_broker_backend,
+                        approval.broker_account_id,
+                        approval.approval_status.value,
+                        psycopg2.extras.Json(approval.sim_validation_evidence),
+                        psycopg2.extras.Json(approval.broker_compatibility),
+                        approval.risk_note,
+                        approval.rollback_plan,
+                        approval.requested_by,
+                        approval.requested_at,
+                        approval.approved_by,
+                        approval.approved_at,
+                        approval.rejected_by,
+                        approval.rejected_at,
+                        approval.rejection_reason,
+                        approval.retired_by,
+                        approval.retired_at,
+                        approval.retirement_reason,
+                        psycopg2.extras.Json(approval.audit_json),
+                        approval.created_at,
+                        approval.updated_at,
+                    ),
+                )
+        return self.get_live_approval(approval.package_id, approval.approval_id)
+
+    def get_live_approval(self, package_id: str, approval_id: str) -> StrategyPackageLiveApproval:
+        self.get(package_id)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM strategy_pkg.live_approval
+                    WHERE package_id = %s AND approval_id = %s
+                    """,
+                    (package_id, approval_id),
+                )
+                row = cur.fetchone()
+        if not row:
+            raise DataUnavailableError(
+                "strategy package live approval does not exist",
+                context={"package_id": package_id, "approval_id": approval_id},
+            )
+        return self._live_approval_from_row(dict(row))
+
+    def list_live_approvals(
+        self,
+        *,
+        package_id: str | None = None,
+        portfolio_id: str | None = None,
+        status: LiveApprovalStatus | None = None,
+        limit: int = 100,
+    ) -> list[StrategyPackageLiveApproval]:
+        if limit <= 0:
+            raise StrategyPackageValidationError("limit must be positive")
+        where: list[str] = []
+        params: list[Any] = []
+        if package_id is not None:
+            self.get(package_id)
+            where.append("package_id = %s")
+            params.append(package_id)
+        if portfolio_id is not None:
+            where.append("portfolio_id = %s")
+            params.append(portfolio_id)
+        if status is not None:
+            where.append("approval_status = %s")
+            params.append(status.value)
+        sql = "SELECT * FROM strategy_pkg.live_approval"
+        if where:
+            sql += f" WHERE {' AND '.join(where)}"
+        sql += " ORDER BY updated_at DESC, created_at DESC, approval_id DESC LIMIT %s"
+        params.append(limit)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(sql, tuple(params))
+                rows = cur.fetchall()
+        return [self._live_approval_from_row(dict(row)) for row in rows]
+
+    def update_live_approval(self, approval: StrategyPackageLiveApproval) -> StrategyPackageLiveApproval:
+        self.get_live_approval(approval.package_id, approval.approval_id)
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE strategy_pkg.live_approval
+                    SET approval_status = %s,
+                        risk_note = %s,
+                        rollback_plan = %s,
+                        requested_by = %s,
+                        requested_at = %s,
+                        approved_by = %s,
+                        approved_at = %s,
+                        rejected_by = %s,
+                        rejected_at = %s,
+                        rejection_reason = %s,
+                        retired_by = %s,
+                        retired_at = %s,
+                        retirement_reason = %s,
+                        audit_json = %s,
+                        updated_at = %s
+                    WHERE package_id = %s AND approval_id = %s
+                    """,
+                    (
+                        approval.approval_status.value,
+                        approval.risk_note,
+                        approval.rollback_plan,
+                        approval.requested_by,
+                        approval.requested_at,
+                        approval.approved_by,
+                        approval.approved_at,
+                        approval.rejected_by,
+                        approval.rejected_at,
+                        approval.rejection_reason,
+                        approval.retired_by,
+                        approval.retired_at,
+                        approval.retirement_reason,
+                        psycopg2.extras.Json(approval.audit_json),
+                        approval.updated_at,
+                        approval.package_id,
+                        approval.approval_id,
+                    ),
+                )
+        return self.get_live_approval(approval.package_id, approval.approval_id)
+
     def get_model_state(self, package_id: str) -> StrategyPackageModelState | None:
         self.get(package_id)
         with self._conn_factory() as conn:
@@ -902,6 +1062,45 @@ class StrategyPackageRepository:
         )
 
     @staticmethod
+    def _live_approval_from_row(row: dict[str, Any]) -> StrategyPackageLiveApproval:
+        return StrategyPackageLiveApproval(
+            approval_id=row["approval_id"],
+            package_id=row["package_id"],
+            manifest_sha256=row["manifest_sha256"],
+            alpha_core_sha256=row["alpha_core_sha256"],
+            portfolio_id=row["portfolio_id"],
+            runtime_release_id=row["runtime_release_id"],
+            runtime_release_sha256=row["runtime_release_sha256"],
+            runtime_profile_id=row["runtime_profile_id"],
+            runtime_profile_version_id=row["runtime_profile_version_id"],
+            runtime_profile_sha256=row["runtime_profile_sha256"],
+            execution_policy_id=row["execution_policy_id"],
+            execution_policy_sha256=row["execution_policy_sha256"],
+            tail_policy_id=row["tail_policy_id"],
+            tail_policy_sha256=row["tail_policy_sha256"],
+            target_broker_backend=row["target_broker_backend"],
+            broker_account_id=row["broker_account_id"],
+            approval_status=LiveApprovalStatus(row["approval_status"]),
+            sim_validation_evidence=row["sim_validation_evidence"] or {},
+            broker_compatibility=row["broker_compatibility"] or {},
+            risk_note=row["risk_note"],
+            rollback_plan=row["rollback_plan"],
+            requested_by=row["requested_by"],
+            requested_at=row["requested_at"],
+            approved_by=row["approved_by"],
+            approved_at=row["approved_at"],
+            rejected_by=row["rejected_by"],
+            rejected_at=row["rejected_at"],
+            rejection_reason=row["rejection_reason"],
+            retired_by=row["retired_by"],
+            retired_at=row["retired_at"],
+            retirement_reason=row["retirement_reason"],
+            audit_json=row["audit_json"] or {},
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    @staticmethod
     def _package_asset_from_row(row: dict[str, Any]) -> StrategyPackageAssetRecord:
         return StrategyPackageAssetRecord(
             asset_id=row["asset_id"],
@@ -1009,6 +1208,7 @@ class InMemoryStrategyPackageRepository:
         self.records: dict[str, StrategyPackageRecord] = {}
         self.events: list[PackageStatusEvent] = []
         self.execution_policies: dict[str, ValidatedExecutionPolicy] = {}
+        self.live_approvals: dict[str, StrategyPackageLiveApproval] = {}
         self.package_assets: dict[tuple[str, StrategyPackageAssetType, str], StrategyPackageAssetRecord] = {}
         self._next_package_asset_id = 1
         self.model_states: dict[str, StrategyPackageModelState] = {}
@@ -1168,6 +1368,53 @@ class InMemoryStrategyPackageRepository:
         updated = policy.model_copy(update={"paper_enabled": paper_enabled, "updated_at": datetime.now(timezone.utc)})
         self.execution_policies[policy_id] = updated
         return updated
+
+    def save_live_approval(self, approval: StrategyPackageLiveApproval) -> StrategyPackageLiveApproval:
+        self.get(approval.package_id)
+        if approval.approval_id in self.live_approvals:
+            raise InvalidStateTransitionError(
+                "strategy package live approval already exists",
+                context={"package_id": approval.package_id, "approval_id": approval.approval_id},
+            )
+        self.live_approvals[approval.approval_id] = approval
+        return approval
+
+    def get_live_approval(self, package_id: str, approval_id: str) -> StrategyPackageLiveApproval:
+        self.get(package_id)
+        approval = self.live_approvals.get(approval_id)
+        if approval is None or approval.package_id != package_id:
+            raise DataUnavailableError(
+                "strategy package live approval does not exist",
+                context={"package_id": package_id, "approval_id": approval_id},
+            )
+        return approval
+
+    def list_live_approvals(
+        self,
+        *,
+        package_id: str | None = None,
+        portfolio_id: str | None = None,
+        status: LiveApprovalStatus | None = None,
+        limit: int = 100,
+    ) -> list[StrategyPackageLiveApproval]:
+        if limit <= 0:
+            raise StrategyPackageValidationError("limit must be positive")
+        if package_id is not None:
+            self.get(package_id)
+        rows = list(self.live_approvals.values())
+        if package_id is not None:
+            rows = [item for item in rows if item.package_id == package_id]
+        if portfolio_id is not None:
+            rows = [item for item in rows if item.portfolio_id == portfolio_id]
+        if status is not None:
+            rows = [item for item in rows if item.approval_status == status]
+        rows.sort(key=lambda item: (item.updated_at, item.created_at, item.approval_id), reverse=True)
+        return rows[:limit]
+
+    def update_live_approval(self, approval: StrategyPackageLiveApproval) -> StrategyPackageLiveApproval:
+        self.get_live_approval(approval.package_id, approval.approval_id)
+        self.live_approvals[approval.approval_id] = approval
+        return approval
 
     def get_model_state(self, package_id: str) -> StrategyPackageModelState | None:
         self.get(package_id)
