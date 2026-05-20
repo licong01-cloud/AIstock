@@ -1149,6 +1149,62 @@ sequenceDiagram
 | 业务探针 | `/validation/business-probes` | QE/Paper/Selection 等链路探针状态 |
 | LLM 配置引用 | `/validation/discovery-llm-profiles` | 只管理 Discovery profile 引用，跳转到 QE Prompt 和 RDAgent 模型配置 |
 
+### 14.0 UI 方案 1 技术路线与开发边界
+
+本阶段明确采用方案 1：`shadcn/ui` 风格组件 + `TanStack Table` + `React Flow` + `Recharts/Plotly`。本阶段只用于流水线和主动发现页面，不启动 AIstock 全站 UI 替换；但组件抽象必须能为未来工程健康驾驶舱和全站统一风格复用。
+
+| 能力 | 选型 | 在本阶段的用途 | 未来驾驶舱复用方式 |
+|---|---|---|---|
+| 页面骨架和基础组件 | shadcn/ui 风格、Radix、Tailwind | 顶部 tab、卡片、按钮、弹窗、抽屉、状态徽章 | 形成 AIstock Design System 基础组件 |
+| 复杂表格 | TanStack Table | 候选 Issue、夜间任务、LLM profile、证据清单 | 全站统一表格交互和筛选体验 |
+| 流程图/模块图 | React Flow | 业务探针链路、任务执行链路、证据流转图 | 工程健康驾驶舱模块拓扑图 |
+| 趋势图/指标图 | Recharts；已有 Plotly 可继续用于复杂图 | 夜间发现趋势、失败率、LLM 成本和召回率 | 全局健康趋势、模块质量趋势 |
+| 详情和证据展示 | 统一 Evidence Drawer | 展示日志、截图、API/MCP 响应、trace | 全站统一问题复盘体验 |
+
+本阶段不做以下工作：
+
+- 不替换 AIstock 全局左侧导航。
+- 不重写 QE、Paper v2、Selection、数据同步等存量页面。
+- 不引入新的大型 UI 框架替代现有前端。
+- 不把 Grafana、Backstage、Ant Design Pro 作为整站外壳。
+
+本阶段必须提前做好以下复用设计：
+
+- 所有新 UI 组件放在 `frontend/src/components/validation/discovery/` 或同等专用目录，避免散落在页面文件内。
+- 业务无关的通用组件应抽到 `frontend/src/components/aistock-ui/` 或后续统一目录。
+- 所有状态颜色使用统一 token：`healthy=green`、`warning=amber`、`critical=red`、`unknown=slate`、`running=blue`。
+- 所有页面必须支持概要卡片 + 展开详情，不允许把原始 JSON/日志直接铺满页面。
+- 所有表格必须支持筛选、排序、搜索、状态过滤、详情抽屉和空状态说明。
+- 所有图形必须支持点击钻取，不能只有静态展示。
+
+#### 14.0.1 统一组件清单
+
+| 组件 | 职责 | 必须支持的字段/交互 | 验收指标 |
+|---|---|---|---|
+| `ValidationDiscoveryShell` | 主动发现页面框架 | 顶部 tab、run selector、时间范围、刷新状态 | 5 个 tab 可切换；刷新后状态不丢失；移动端不遮挡内容 |
+| `MetricSummaryCard` | 顶部概要指标 | 标题、数值、环比、状态色、点击跳转 | 所有指标有解释 tooltip；点击能过滤下方列表 |
+| `NightlyRunHeader` | 夜间运行摘要 | run_id、branch、commit、开始/结束时间、整体状态 | 能复制 run_id/commit；状态与 API 字段一致 |
+| `ModuleResultCard` | 模块级结果 | 模块、覆盖率、候选数、P0/P1、测试状态、趋势 | 每个模块可展开详情；不能只显示汇总数字 |
+| `IssueCandidateTable` | 候选 Issue 表格 | severity、module、source、confidence、evidence、review_status、github_url | 支持搜索、排序、分组、批量选择、详情抽屉 |
+| `EvidenceDrawer` | 证据详情 | 截图、trace、日志、API/MCP 响应、DB 查询、复现命令 | 每类证据可折叠；敏感字段脱敏；可复制复现命令 |
+| `ExecutionTimeline` | 任务执行链路 | baseline/change/manual、步骤、耗时、失败点 | 失败步骤红色定位；点击打开证据 |
+| `BusinessProbeFlow` | 业务链路图 | QE、Archive、StrategyPackage、Selection、Paper v2、DW | 节点颜色反映状态；点击节点显示测试和 issue |
+| `LlmReportPanel` | LLM 探索报告 | provider、model、prompt_version、context_pack、draft、补证据状态 | LLM draft 与确定性证据分区显示；不得直接提供创建正式 Issue 按钮 |
+| `AgentTaskPanel` | MCP Agent 任务 | task_id、agent_runtime、claim 状态、结果、证据 | Codex/Claude 任务状态可追踪；失败显示下一步建议 |
+| `CleanupRiskPanel` | 资源清理风险 | validation resource、TTL、cleanup_status、失败原因 | 逾期资源明确标红；只能展示 validation namespace |
+
+#### 14.0.2 禁止简化版规则
+
+完成开发后必须按本文逐项验收。以下情况不得标记为完成：
+
+1. 只有 mock 数据，没有接真实 API 或明确的文件数据源。
+2. 只显示概要卡片，没有详情展开和证据抽屉。
+3. 只显示 LLM 文本，没有 provider/model/prompt/context pack 和确定性补证据状态。
+4. 只显示候选列表，没有审核、去重、GitHub 同步状态和复现证据。
+5. 只画静态流程图，节点不能点击，颜色不绑定真实状态。
+6. 只实现 UI，不实现对应 API 类型、错误态、空态、加载态和权限/确认约束。
+7. 无法通过设计验收矩阵逐项对照。
+
 ### 14.1 主动发现页面
 
 顶部卡片：
@@ -1253,6 +1309,73 @@ flowchart LR
 - 红色：已确认 P0/P1。
 - 灰色：未运行或不可判断。
 
+### 14.5 页面级功能与验收指标
+
+以下矩阵是开发完成后的验收依据。任一 P0/P1 功能未完成时，不得报告“全部开发完成”，只能报告“部分完成”并列出缺口。
+
+#### 14.5.1 夜间汇报页 `/validation/nightly-reports`
+
+| 功能 | 必须实现 | 数据来源 | 验收指标 |
+|---|---|---|---|
+| Run 选择器 | 按日期、run_id、branch、commit 切换报告 | `/api/v1/validation/discovery/nightly-reports` | 至少能展示最近 7 次 run；切换后所有卡片同步刷新 |
+| 顶部状态卡 | 夜间状态、覆盖范围、新发现、LLM 探索、Issue 同步、资源清理 | nightly report summary | 每张卡有状态色、tooltip、点击过滤能力 |
+| 模块结果卡 | 每个模块独立展示覆盖率、测试、候选、Issue、失败任务 | module summary | 至少支持 validation、qe、strategy_package、selection、paper_v2；可展开详情 |
+| 执行链路 | baseline/change/manual 三类任务的执行树 | task run records | 失败节点能点击打开 evidence；展示耗时和失败 fingerprint |
+| LLM 报告 | LLM draft、模型、Prompt、context pack、补证据状态 | LLM trace + draft candidates | 每条 LLM 发现必须显示“未验证/已补证/验证失败/证据不足” |
+| 候选 Issue 汇总 | 待审核、证据不足、建议重开、已晋级 GitHub | candidate store | 点击任一分组跳转到候选 Issue 页并自动带过滤条件 |
+| 证据包入口 | 截图、trace、日志、API/MCP 响应、复现命令 | evidence manifest | 至少 5 类证据统一在 EvidenceDrawer 中展示 |
+| Cleanup 风险 | validation resource、TTL、cleanup 状态 | resource policy / cleanup run | 逾期资源标红；正式生产资源不出现在可清理列表 |
+
+#### 14.5.2 候选 Issue 页 `/validation/discovery-candidates`
+
+| 功能 | 必须实现 | 数据来源 | 验收指标 |
+|---|---|---|---|
+| 候选表格 | severity、module、source、confidence、evidence、review_status、github_url | candidate store | 支持搜索、排序、筛选、分页、详情抽屉 |
+| 去重状态 | open/closed GitHub Issue、历史 BUG JSON、重复候选 | GitHub/BUG sync + candidate index | 已有关联 Issue 时不能默认新建；展示建议重开或追加证据 |
+| 审核动作 | 接受、拒绝、追加证据、建议重开、晋级 GitHub Issue | review API/MCP | P0/P1 晋级必须要求 reviewer、证据 checklist、confirm |
+| GitHub 同步 | github_issue_number、github_issue_url、sync_status | GitHub sync API | 晋级成功后 UI 立即显示链接；失败时保留 candidate 不提交 BUG JSON |
+| 证据详情 | 设计规则、文件、日志、截图、API/MCP 响应、复现命令 | evidence manifest | 证据不足时按钮显示“追加探针”而非“创建 Issue” |
+
+#### 14.5.3 探测任务页 `/validation/discovery-tasks`
+
+| 功能 | 必须实现 | 数据来源 | 验收指标 |
+|---|---|---|---|
+| 任务列表 | nightly baseline、change-driven、manual MCP 分类 | task store | 三类任务可分别过滤；显示最近状态、耗时、触发源 |
+| 手工部署 | 创建专项任务，选择 detector、模块、risk level、resource policy | schedule task API/MCP | L4/L5 或写入任务必须二次确认并绑定 cleanup |
+| Agent claim 状态 | Codex/Claude/内置 runner 的 claim、running、submitted、completed | agent task API | 能看到 agent_runtime、workspace、branch、结果摘要 |
+| 任务结果 | ToolRunResult、LLM draft、evidence、candidate | task result store | 任务失败时展示下一步建议和可复制复现命令 |
+| 取消/重跑 | cancel、rerun dry-run、rerun with confirm | task API/MCP | 取消不会删除证据；重跑生成新 run_id |
+
+#### 14.5.4 业务探针页 `/validation/business-probes`
+
+| 功能 | 必须实现 | 数据来源 | 验收指标 |
+|---|---|---|---|
+| 链路流程图 | QE、Archive、StrategyPackage、Selection、Paper v2、DW 节点 | probe run summary | React Flow 节点颜色绑定真实状态；点击节点显示详情 |
+| 探针分层 | L3 只读、L4 最小写入、L5 生产相邻长流程 | resource policy + task store | UI 明确展示风险等级；L4/L5 不允许无确认启动 |
+| 步骤证据 | 每步 API/MCP 响应、日志、artifact、archive 状态 | evidence manifest | 任一步失败能定位到失败步骤和 fingerprint |
+| Cleanup | 创建资源、TTL、清理状态、清理日志 | cleanup runner | 所有测试资源能按 validation_run_id 查询 |
+
+#### 14.5.5 LLM 配置引用页 `/validation/discovery-llm-profiles`
+
+| 功能 | 必须实现 | 数据来源 | 验收指标 |
+|---|---|---|---|
+| Profile 列表 | agent_role、provider、model、prompt、nightly/manual 开关 | LLM profile API | 不展示 token；provider/model/prompt 均为引用 |
+| Prompt 跳转 | 跳转 `/quantevolver/prompts` 并筛选 `validation_discovery_*` | Prompt 管理模块 | 链接可用；显示 prompt_version |
+| 模型跳转 | 跳转 `/config/rdagent-llm` | 模型配置模块 | 链接可用；显示 provider/model 状态 |
+| 运行质量 | 最近成功率、候选命中率、误报率、成本估算 | LLM trace/eval | 至少显示最近 7 次或最近 30 天统计 |
+| Eval 结果 | promptfoo 风格历史 Bug 样本评测 | LLM eval runner | Prompt 变更后可运行 dry-run；报告召回率和误报率 |
+
+### 14.6 未来全站 UI 统一预留，但本阶段不实施
+
+本阶段只实现流水线主动发现 UI，但组件命名、状态色、卡片、表格、证据抽屉、流程图必须可复用到未来工程健康驾驶舱。未来全站统一 UI 的候选迁移对象包括 QE 实验、策略包、Selection Center、Paper v2、数据同步、LLM 配置等页面；这些迁移不属于本阶段验收范围。
+
+未来驾驶舱预留要求：
+
+- `BusinessProbeFlow` 和 `ModuleResultCard` 的数据结构应能扩展为全局模块拓扑。
+- 状态色必须与模块健康状态一致，不能页面各自定义。
+- 表格、抽屉、卡片组件不应绑定单一页面路径。
+- 夜间报告的 module summary 必须保留覆盖率、Issue、分支、未提交文件、测试状态字段，为未来驾驶舱汇总做准备。
+
 ## 15. 与合入门禁的关系
 
 主动发现和合入门禁必须分离。
@@ -1326,6 +1449,8 @@ tmp/validation/discovery/<run_id>/llm_traces/*
 - 首批 validation contracts 草案。
 - Issue Candidate schema。
 - 主动发现 UI 信息架构，含夜间测试汇报专用页面。
+- UI 方案 1 组件规范：shadcn/ui 风格 + TanStack Table + React Flow + Recharts/Plotly。
+- 页面级功能验收矩阵和禁止简化版规则。
 - DiscoveryAgentProfile schema，明确复用 `/quantevolver/prompts` 和 `/config/rdagent-llm`。
 - 三层调度矩阵：固定夜间基线、变更驱动任务、人工 MCP 专项任务。
 - Tool adapter schema：Semgrep、Schemathesis、Playwright trace、contract alignment、LLM eval。
@@ -1339,6 +1464,7 @@ tmp/validation/discovery/<run_id>/llm_traces/*
 - 明确 LLM 输出只进入 draft/candidate，不直接创建正式 Issue。
 - 明确高风险任务必须通过 resource policy 和人工确认。
 - 明确外部成熟工具只通过 adapter 接入，统一进入 evidence/candidate，不替换现有流水线状态机。
+- 明确本阶段不做全站 UI 替换，但新组件必须可复用于未来工程健康驾驶舱。
 
 ### 阶段 1：确定性发现器 MVP，5-8 天
 
@@ -1374,6 +1500,8 @@ tmp/validation/discovery/<run_id>/llm_traces/*
 - QE/Paper/BUG/GitHub 数据一致性扫描。
 - 流水线 UI 主动发现页面。
 - 夜间测试汇报专用页面 MVP。
+- `ValidationDiscoveryShell`、`MetricSummaryCard`、`IssueCandidateTable`、`EvidenceDrawer`、`ExecutionTimeline` 等核心 UI 组件。
+- 候选 Issue、探测任务、业务探针、LLM 配置引用 4 个页面的可用 MVP。
 - MCP 专项任务部署和取消接口。
 - Playwright trace probe adapter。
 - OpenTelemetry 风格 trace schema 和 trace 查询 API。
@@ -1385,6 +1513,7 @@ tmp/validation/discovery/<run_id>/llm_traces/*
 - BUG JSON/GitHub 状态不一致可被发现。
 - Paper session/run 状态不一致可被发现。
 - UI 能展示夜间运行、候选、证据、cleanup 和 GitHub 同步状态。
+- UI 逐项满足 14.5 页面级功能验收矩阵，缺任一 P0/P1 功能不得标记完成。
 - MCP 能创建手工专项任务，但高风险任务需要 confirm。
 - UI 探针失败时能生成截图、trace、ARIA 快照和用户可读失败步骤。
 - API/MCP/UI contract drift 能进入候选池。
@@ -1510,6 +1639,23 @@ tmp/validation/discovery/<run_id>/llm_traces/*
 - cleanup 只处理 validation namespace。
 - LLM API key、GitHub token、DB 密码不进入 LLM context pack、夜间报告或候选 Issue 证据文本。
 
+### 21.4 UI 完整性验收
+
+UI 完成标准以 14.5 页面级功能矩阵为准，不接受简化版替代。开发完成后必须逐项出具验收记录：
+
+| 验收项 | 通过标准 |
+|---|---|
+| 页面覆盖 | 5 个顶部 tab 对应页面均可访问，刷新后不丢失路由状态 |
+| 数据真实性 | 页面默认使用真实 API 或真实文件数据源；mock 只允许在测试中出现 |
+| 详情可读性 | 每个概要卡片都能展开详情或跳转详情页 |
+| 表格可用性 | 候选、任务、LLM profile 表格均支持搜索、排序、筛选、分页和空状态 |
+| 证据闭环 | EvidenceDrawer 能展示至少日志、API/MCP 响应、截图/trace、复现命令四类证据 |
+| LLM 透明性 | 所有 LLM 结果显示 provider、model、prompt_version、context_pack 和补证据状态 |
+| 操作安全 | P0/P1 晋级、L4/L5 任务、写入型 cleanup 均有确认和权限/状态提示 |
+| 图形交互 | React Flow 节点状态来自真实数据，节点可点击展开详情 |
+| 响应式 | 1366px 桌面、1920px 桌面、移动窄屏均不遮挡关键操作 |
+| 可验收报告 | 最终提交必须附设计验收矩阵，对每项标记 passed/failed/not_applicable，并说明证据 |
+
 ## 22. 后续建议
 
 建议下一步按阶段 0 完成以下文件：
@@ -1529,6 +1675,7 @@ tests/aistock_validation/llm_eval/historical_bug_cases.yaml
 tests/aistock_validation/llm_eval/promptfoo.config.yaml
 docs/operations/validation_active_discovery_morning_review_runbook_20260520.md
 docs/operations/validation_active_discovery_nightly_report_ui_runbook_20260520.md
+docs/operations/validation_active_discovery_ui_acceptance_matrix_20260520.md
 ```
 
 随后进入阶段 1 开发。阶段 1 不需要直接跑生产库写入，只实现候选池、业务规则扫描、UI 覆盖扫描、Semgrep/Schemathesis 只读 adapter、夜间报告数据结构和 morning review，先把“能发现问题并受控进入审核”的闭环建立起来。
