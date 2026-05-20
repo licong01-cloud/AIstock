@@ -52,7 +52,7 @@
   "verification_run_id": "tests/aistock_validation/history/paper_trading_v2/20260520_l3_bug-092-explicit-execution-policy-evidence-validation.md",
   "created_at": "2026-05-20T16:09:17Z",
   "first_seen_at": "2026-05-20T04:32:56Z",
-  "last_seen_at": "2026-05-20T17:03:11Z",
+  "last_seen_at": "2026-05-20T17:04:02Z",
   "fixed_at": "2026-05-20T16:56:18Z",
   "submitted_at": "2026-05-20T16:09:17Z",
   "closed_at": null,
@@ -135,6 +135,12 @@
       "actor": "codex-app",
       "action": "local_commit_created",
       "note": "Recorded implementation commit d4ff3e2 for BUG-092; this metadata-only follow-up keeps the registry aligned after commit hash finalization."
+    },
+    {
+      "timestamp": "2026-05-20T17:04:02Z",
+      "actor": "codex-app",
+      "action": "branch_pushed",
+      "note": "Pushed BUG-092 branch to origin/bug/BUG-092-paper-v2-explicit-execution-policy-evidence with implementation commit d4ff3e2 and registry commit 208cfdd."
     }
   ]
 }
