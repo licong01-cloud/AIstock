@@ -1,79 +1,90 @@
-﻿# AIstock 研究与实验综合助理控制台设计方案
+# AIstock 研究与实验综合助理控制台设计方案
 
-> 日期：2026-05-20  
-> 类型：详细设计方案  
-> 状态：设计稿，等待评审；本文档只定义方案，不实现代码  
-> 分支：`docs/research-agent-console-design-20260520`  
-> Worktree：`F:\Dev\AIstock_worktrees\research-agent-console-design-20260520`  
-> 范围：研究与实验综合助理、长期记忆、MCP 调度、人工确认、在线搜索、并行长期任务、操作展示区、语音能力预留  
-> 非目标：不赋予该助理编程、改代码、提交代码、合入 main、重启生产服务、直接执行实盘交易的能力
-
----
-
-## 1. 结论
-
-可以在 AIstock 上新增一个“研究与实验综合助理控制台”，把自定义 LLM、MCP 服务、研究任务、QE 实验、HMM 演进、事件处理演进、因子研发、数仓分析、在线搜索、任务进度记忆和长期规划统一管理起来。
-
-本方案建议把该能力定义为 **AIstock 研究助理智能体**，而不是简单聊天机器人。它的核心定位是：
-
-1. 作为量化研发助手，记住 AIstock 的架构、长期规划、任务进度、实验历史和用户偏好。
-2. 通过受控 MCP 工具执行研究、实验、验证、查询、报告生成等任务。
-3. 第一阶段所有可写或长耗时动作必须人工确认。
-4. 第二阶段支持用户在对话中确认后直接执行，无需打开 PowerShell 或手工调用脚本。
-5. 允许 Agent 执行测试、验证、实验和分析，但最终正式入库 Issue 必须由用户或 Codex 审核批准。
-6. 明确禁止该助理直接写代码、修改仓库、提交代码或合入 main；未来如果要增加编程能力，必须另开独立设计。
-
-1M 上下文模型可以提升长文档阅读与跨模块分析能力，但不能替代长期记忆系统。长期记忆必须落在可查询、可审计、可纠错、可权限控制的持久化存储中。
+> 日期：2026-05-21
+> 类型：详细设计方案 v2
+> 状态：设计稿，等待用户和 Claude Code 审核；本文档只定义方案，不实现代码
+> 分支：`docs/research-agent-console-design-20260520`
+> Worktree：`F:\Dev\AIstock_worktrees\research-agent-console-design-20260520`
+> 范围：研究与实验综合助理、长期记忆核心架构、MCP 执行工作台、人工/对话确认、多窗口并行研究、多模型可替换、在线搜索、语音能力预留
+> 非目标：不让该助理控制鼠标键盘，不让该助理编程、改代码、提交代码、合入 main、重启生产服务、绕过 GitHub Issue 审批或执行实盘交易
 
 ---
 
-## 2. 用户需求归纳
+## 1. 设计结论
+
+AIstock 应建设一个 **研究与实验综合助理控制台**，其核心形态不是“浏览器自动点击助手”，而是：
+
+> 对话式研究助理 + 长期记忆中枢 + MCP/API 执行工作台 + 实时任务进展展示 + 人工/对话确认门禁 + 多窗口并行研究调度。
+
+用户的新思路更加适合 AIstock：
+
+1. **所有业务操作优先通过 MCP/API 执行**，不让智能体控制鼠标键盘。
+2. **UI 只承担实时进度、配置预览、报告、审批和深链跳转**，不要求 Agent 识别页面和点击按钮。
+3. **长期记忆是核心架构能力**，必须入库、可索引、可审计、可迁移、可替换模型，不依赖某个 LLM 的上下文窗口。
+4. **多屏幕/多窗口并行是目标能力**，HMM 演进、QE 实验演进、因子研发、事件处理演进可以在不同窗口同步推进，由同一个研究助理统一调度、汇总和汇报。
+5. **Agent 可以执行测试、验证、实验草稿、dry-run、报告和候选 Issue**，但正式 Issue 入库、长时间实验、生产敏感写入仍需用户或 Codex 确认。
+6. **开源工具应作为可接入、可复用、可借鉴的组件库**，不替换 AIstock 原生主控台。AIstock 的领域任务账本、实验谱系、审批策略、GitHub 同步规则必须由 AIstock 自己掌握。
+
+---
+
+## 2. 新版用户需求归纳
 
 | 需求 | 设计结论 |
 |---|---|
-| 第一阶段人工确认执行 | 所有写操作、长任务、GitHub 写入、生产库写入、远程节点占用都进入审批中心 |
-| 后续对话确认后直接执行 | 增加 `chat_approval`，用户在对话中明确确认后，由控制台记录审批快照并执行 |
-| 长期记忆 | 建立 AIstock Memory Backbone，记录架构、任务、实验、用户规划、流程经验 |
-| 记住整个程序架构 | 通过架构索引、设计文档索引、模块边界图、MCP resource 和周期性扫描更新 |
-| 记住所有任务进度 | 所有任务进入统一任务账本，记录状态、阶段、证据、下一步、负责人 |
-| 成为量化研发助手 | 定义 Research Assistant 角色，支持 HMM、QE、事件、因子、策略包等研发任务 |
-| 能执行测试和验证 | 通过 Validation MCP、业务探针、Playwright/pytest/nox 计划执行，但不写代码 |
-| 提 Issue 必须正式批准 | LLM 只能生成候选 Issue；正式 GitHub Issue 由用户或 Codex 审批后创建 |
-| 不具备编程能力 | 工具权限层禁用文件写入、代码修改、Git commit、PR、merge 类工具 |
-| 未来语音 | 预留语音输入、语音播报、任务摘要播报接口 |
-| 操作展示区 | 第二阶段增加 Agent Workspace Panel，嵌入 QE/HMM/流水线等页面或任务可视化 |
-| 在线搜索 | 增加 Web Research Tool Adapter，搜索结果必须保留来源、时间、摘要和引用 |
-| 多长期任务并行 | 任务队列支持 HMM、事件、因子、QE 等并行 research streams |
-| 1M 上下文模型 | 用于大范围上下文分析；仍需检索式记忆和证据库控制成本与准确性 |
+| 一个窗口和智能体交流 | 新增 `/research-assistant/chat` 对话入口，所有任务从对话或任务模板发起 |
+| 不控制鼠标键盘 | 废弃默认“UI 点击执行”路线，改为 MCP/API 执行为主 |
+| 能看到实时进展 | 建立 `agent_task_events` 事件流，前端实时展示 MCP 调用、状态、日志、产物 |
+| 创建 QE 10 loop 实验 | Agent 通过 MCP 生成模板草稿、校验、展示配置、等待确认，再创建/物化/执行 |
+| 可对话修改配置 | 每次修改生成配置 diff、重新 preflight、保留配置版本 |
+| 确认后执行 | 第一阶段 UI 确认；第二阶段支持对话确认，保存确认原文和 plan digest |
+| 长期记忆入库 | 建设 AIstock Memory Backbone，按类型、作用域、时间、来源、置信度、审批状态索引 |
+| 模型可替换 | 记忆不绑定 LLM，上下文包由 Memory Router 动态装配，DeepSeek/GLM/OpenAI/本地模型可替换 |
+| 随时记住用户要求 | 支持 `remember this` 类记忆写入；关键偏好和流程规则需审批后成为核心记忆 |
+| 记录所有研究进展 | 每个 Research Stream 和 Task 自动写 episodic/task-state memory |
+| 多屏幕多窗口 | 设计 `assistant_windows` / `workspace_sessions`，多个窗口共享同一任务账本和事件流 |
+| 并行长期任务 | HMM、QE、因子、事件等 Research Streams 可并行，受资源预算和审批控制 |
+| 支持在线搜索 | 搜索结果落证据表，不直接写核心记忆；重要结论需审核 |
+| 让 Claude Code 审核方案 | 文末提供审核重点和风险清单 |
 
 ---
 
-## 3. 开源社区方案调研与取舍
+## 3. 开源方案调研与可复用性分析
 
-### 3.1 参考方案概览
+### 3.1 总体判断
 
-| 方案 | 主要能力 | 可借鉴点 | 是否建议直接作为 AIstock 核心 |
+目前开源社区已有不少接近能力，但没有一个可以直接替代 AIstock 的研究助理控制台。原因是 AIstock 需要强领域状态：QE 模板、QE Archive、HMM 演进、因子研发、Validation Center、GitHub Issue 强一致、生产数据边界、远程节点资源和长期研究流。
+
+因此最佳路线是：
+
+- **AIstock 原生实现主控台、任务账本、审批、MCP 工具目录、记忆索引和证据链。**
+- **参考或接入开源项目的局部能力。**
+- **所有外部组件通过 adapter 接入，不成为不可替换核心。**
+
+### 3.2 可参考/接入工具对比
+
+| 工具 | 当前能力 | 可复用/参考点 | AIstock 取舍 |
 |---|---|---|---|
-| Letta / MemGPT | 状态化 Agent、core memory、archival memory、runs/steps、MCP tools | 记忆分层、Agent 状态持久化、工具调用轨迹 | 不建议第一阶段整体嵌入；可借鉴记忆分层，后续评估作为 Agent runtime |
-| Mem0 OSS | 自托管记忆层、SDK/REST、用户/会话/Agent 记忆、pgvector、审计 | 可作为第二阶段可插拔长期记忆引擎 | 建议作为候选 memory adapter，不替代 AIstock 任务账本 |
-| LangGraph / LangMem | 长期记忆 store、semantic/episodic/procedural memory、后台记忆整理 | 适合 Python 任务编排、状态机和记忆工具 | 建议作为 Agent 工作流/记忆实现候选，优先做 adapter |
-| Langfuse | LLM tracing、prompt version、eval、annotation、成本和延迟观测 | 适合记录 LLM 调用、工具轨迹、评估和 prompt 版本 | 建议强烈借鉴；可先实现 AIstock 原生 trace，再评估接入 |
-| Dify | 可视化 agentic workflow、知识库、工具、MCP Server、API | 适合观察产品形态和 workflow UI | 不建议替代 AIstock；可借鉴 UI/流程编排概念 |
-| Flowise | AI Agent/Workflow 可视化、Human-in-the-loop、MCP client/server、日志 | 可借鉴 Agentflow、工具目录、可视化调试 | 不建议替代 AIstock；可借鉴控制台 UI 和调试体验 |
-| MCP 官方规范 | Tools、Resources、Prompts、human-in-the-loop、安全和审计 | 工具 schema、资源上下文、敏感操作确认 | 必须遵守；AIstock MCP 调度层按此设计 |
+| Mem0 OSS | 自托管记忆层，可作为库或 server；支持自有基础设施、dashboard、API key、audit log，默认 server 使用 Postgres + pgvector | 可作为 memory adapter 候选；借鉴 add/search/update/delete、用户/Agent/session 记忆 | Phase 1 不直接依赖；Phase 2 做 PoC adapter |
+| Letta | Stateful agent；Agent 包含 system prompt、memory blocks、messages、tools、runs/steps；支持 MCP tool schema | 借鉴 memory blocks、shared memory、runs/steps、工具轨迹 | 不替代 AIstock 任务编排；可参考 Agent runtime 结构 |
+| Zep/Graphiti | 开源 temporal knowledge graph，动态整合用户交互和业务数据，支持时间感知和混合检索 | 非常适合“架构事实、任务状态、实验关系随时间变化”的图谱记忆 | Phase 2/3 评估作为 memory graph adapter 或局部图谱引擎 |
+| LangGraph / LangMem | Store + checkpointer；支持跨 thread 长期记忆、状态持久化、human-in-the-loop、Postgres checkpointer | 适合作为复杂 Agent workflow / task-state runtime 参考 | 可用于后端状态机，但 AIstock 任务账本仍是事实源 |
+| Langfuse | LLM trace、session、agent graph、prompt management、eval、成本/延迟观测 | 适合 LLM 调用观测、prompt 版本、评估和成本分析 | 可选观测后端；Phase 1 先做 AIstock 原生 trace |
+| Open WebUI | Chat UI + MCP server 接入 + 工具调用 | 参考聊天 UI 和 MCP server 管理 | 不作为 AIstock 主控；可借鉴工具连接体验 |
+| Dify | Agent/Workflow 中使用 MCP tools；MCP 工具作为节点 | 参考 workflow UI 和工具参数固定/自动策略 | 不替换 AIstock；可参考低代码任务模板 |
+| Flowise | 开源 Agent/Workflow 平台，含 Human-in-the-loop、tracing、eval、API/SDK | 参考审批节点、Agentflow、多 Agent 可视化 | 不承载 AIstock 主状态 |
+| Langflow | Flow 可作为 MCP server 暴露；工具名称和描述影响 Agent 选择 | 可参考把工作流注册为 MCP 工具的方式 | 适合后续把 AIstock 任务模板导出为 MCP tool |
 
-### 3.2 推荐取舍
+### 3.3 最佳组合建议
 
-第一阶段不建议直接把 Dify、Flowise 或 Letta 作为 AIstock 的主控平台，因为 AIstock 已经有自己的后端、MCP server、QE 实验体系、Validation Center、GitHub Issue 闭环、生产数据边界和领域任务状态。直接引入完整第三方平台会造成状态分裂。
-
-推荐路线：
-
-1. **AIstock 原生控制台作为主控层**：任务、审批、MCP 调用、证据、Issue 候选、实验谱系全部落在 AIstock。
-2. **借鉴 LangGraph / LangMem 的 memory taxonomy**：把记忆分为 semantic、episodic、procedural，并区分 hot path 与 background 写入。
-3. **借鉴 Letta 的 stateful agent 设计**：Agent 需要 core memory、archival memory、runs/steps 和工具轨迹。
-4. **Mem0 OSS 作为第二阶段 memory adapter 候选**：如果希望快速获得自托管记忆 server、dashboard、API key、audit log，可以通过 adapter 接入。
-5. **Langfuse 作为可选观测后端**：第一阶段先实现 AIstock 原生 traces；若后续需要更成熟的 LLM observability，再导出到 Langfuse。
-6. **Dify/Flowise 作为 UI 和工作流设计参考**：不作为生产依赖。
+| 层 | 推荐实现 | 说明 |
+|---|---|---|
+| 主控台 | AIstock 原生 | 保证任务、审批、实验、Issue、生产边界一致 |
+| 长期记忆默认实现 | AIstock Postgres + pgvector + tsvector + 审计表 | 最可控、最贴合现有本地生产环境 |
+| 结构化关系记忆 | AIstock memory_edges；Phase 2 评估 Graphiti | Graphiti 适合动态事实和时间关系，但先 adapter 化 |
+| Agent 状态机 | AIstock task ledger；Phase 2 可评估 LangGraph | 避免第一阶段引入框架复杂度 |
+| 外部 memory adapter | Mem0 OSS / Graphiti / LangMem adapter | 用 adapter 接口隔离供应商和框架 |
+| LLM 观测 | AIstock 原生 trace；可导出 Langfuse | 先满足本项目审计，再考虑成熟观测平台 |
+| Chat/MCP UI 参考 | Open WebUI / Dify / Flowise | 只借鉴交互，不接管业务状态 |
 
 ---
 
@@ -81,38 +92,46 @@
 
 ```mermaid
 flowchart TD
-    User["用户 / Codex 审核者"] --> Console["AIstock 研究与实验综合助理控制台"]
-    Console --> Chat["对话与命令入口"]
-    Console --> Approval["审批中心"]
-    Console --> TaskLedger["统一任务账本"]
-    Console --> Memory["AIstock Memory Backbone"]
-    Console --> MCPRegistry["MCP 工具注册与权限目录"]
-    Console --> Workspace["Agent 操作展示区 Phase 2"]
-
-    Chat --> Agent["Research Assistant Agent"]
-    Agent --> Planner["计划生成器"]
-    Agent --> Search["在线搜索适配器"]
-    Agent --> Memory
-    Agent --> Orchestrator["任务编排中心"]
-
-    Planner --> Approval
-    Approval --> Orchestrator
-    Orchestrator --> Queue["队列 / 并发 / 定时调度"]
-    Queue --> MCPGateway["MCP 调用网关"]
+    User["用户"] --> Chat["对话窗口"]
+    Chat --> Assistant["AIstock 研究助理"]
+    Assistant --> MemoryRouter["Memory Router 上下文装配"]
+    MemoryRouter --> MemoryBackbone["AIstock Memory Backbone"]
+    Assistant --> Planner["计划生成与配置草稿"]
+    Planner --> Workbench["MCP 执行工作台"]
+    Workbench --> Approval["审批/对话确认"]
+    Approval --> Orchestrator["任务编排中心"]
+    Orchestrator --> Queue["任务队列/资源预算/并发控制"]
+    Queue --> MCPGateway["MCP/API 调用网关"]
 
     MCPGateway --> QEExp["QE Experiment MCP"]
     MCPGateway --> QEArchive["QE Archive MCP"]
     MCPGateway --> Validation["Validation MCP"]
-    MCPGateway --> GitHub["GitHub Issue MCP"]
-    MCPGateway --> Research["Research / HMM MCP"]
+    MCPGateway --> Github["GitHub Issue MCP"]
+    MCPGateway --> Research["Research/HMM MCP"]
     MCPGateway --> DataSync["Data Sync MCP"]
 
-    Orchestrator --> Evidence["证据库: logs / metrics / artifacts / screenshots"]
-    Evidence --> Report["研究报告 / 实验报告 / 验证报告"]
-    Report --> CandidateIssue["候选 Issue"]
-    CandidateIssue --> Approval
-    Approval --> GitHubIssue["正式 GitHub Issue"]
+    Queue --> Events["agent_task_events 实时事件流"]
+    Events --> UIProgress["多窗口进度展示"]
+    Events --> Evidence["证据库"]
+    Evidence --> Report["报告/晨报/候选Issue"]
+    Report --> MemoryBackbone
+    Workbench --> DeepLinks["业务页面深链/配置详情页"]
 ```
+
+### 4.1 MCP 执行优先原则
+
+1. 创建 QE 模板、物化实验、运行实验、查询数仓、执行验证、创建候选 Issue 等操作都通过 MCP/API。
+2. 页面只显示任务进度、配置详情、日志、报告、深链和审批按钮。
+3. 不使用鼠标键盘控制，不抢占用户当前操作。
+4. UI 自动化只作为测试探针或截图证据，不作为业务执行主路径。
+
+### 4.2 多窗口/多屏幕原则
+
+1. 每个窗口是一个 `assistant_window`，可以绑定一个 Research Stream 或 Task。
+2. 所有窗口共享同一个 task ledger、memory backbone、approval center 和 event stream。
+3. 一个窗口中确认的任务会同步到其他相关窗口。
+4. 助理可以在主窗口汇总所有窗口进展，也可以在专项窗口讨论单个任务。
+5. 任何高风险动作只允许一个审批来源最终生效，避免多窗口重复执行。
 
 ---
 
@@ -121,264 +140,454 @@ flowchart TD
 ### 5.1 角色名称
 
 推荐名称：**AIstock 研究助理**。
-
-英文内部标识：`research_assistant_agent`。
+内部标识：`research_assistant_agent`。
 
 ### 5.2 角色职责
 
-| 职责 | 是否允许 |
-|---|---|
-| 阅读设计文档、架构文档、任务记录 | 允许 |
-| 总结 AIstock 当前架构和模块边界 | 允许 |
-| 查询 QE 数仓、实验历史、模型试验、因子使用历史 | 允许 |
-| 提出 HMM / QE / 事件 / 因子研发计划 | 允许 |
-| 执行只读分析和 dry-run preflight | 允许自动执行 |
-| 执行测试、验证、业务流程探测 | 允许，但需记录证据 |
-| 创建 QE 测试实验或小规模实验 | 第一阶段需人工审批；第二阶段可对话确认 |
-| 启动长时间训练、占用远程节点 | 必须审批 |
-| 写生产库测试记录 | 必须审批且带 cleanup policy |
-| 创建候选 Issue | 允许 |
-| 创建正式 GitHub Issue | 必须用户或 Codex 审批 |
-| 修改代码、提交代码、合入 main | 禁止 |
-| 重启生产服务 | 禁止，除非另有人工授权流程 |
-| 执行实盘交易 | 禁止 |
-
-### 5.3 系统提示词边界
-
-Research Assistant 的 system prompt 必须包含以下硬边界：
-
-1. 你是研究和实验助理，不是代码开发者。
-2. 你可以调用已授权 MCP 工具，但不能绕过 AIstock 审批中心。
-3. 你不能修改仓库文件、创建 commit、创建 PR 或合入 main。
-4. 你发现的问题只能进入候选 Issue；正式 Issue 必须经用户或 Codex 审核。
-5. 你必须把每个结论绑定证据。
-6. 你必须区分回测、模拟盘、实盘、生产数据和测试数据。
-7. 你必须保留任务记忆、失败经验和下一步计划。
+| 职责 | 是否允许 | 说明 |
+|---|---:|---|
+| 读取架构、任务、实验、MCP 能力记忆 | 是 | 通过 Memory Router 和权限过滤 |
+| 查询 QE Archive、Validation、GitHub、Research Pipeline | 是 | 只读默认允许 |
+| 生成实验草稿和配置 diff | 是 | 写入前必须审批 |
+| 调用 MCP 执行 dry-run/preflight | 是 | L0/L1 可自动执行 |
+| 创建测试模板或测试实验 | 条件允许 | L2，需审批/对话确认 |
+| 启动长时间实验或远程节点任务 | 条件允许 | L3，需资源预算和审批 |
+| 生成候选 Issue | 是 | 不能直接成为正式 Issue |
+| 创建正式 GitHub Issue | 条件允许 | 需用户或 Codex 审批，并同步 GitHub |
+| 维护长期记忆 | 是 | 按记忆类型和审批规则执行 |
+| 修改代码、提交代码、合入 main | 否 | 不属于该助理能力 |
+| 控制鼠标键盘 | 否 | 默认路线明确禁止 |
+| 执行实盘交易 | 否 | 默认禁止 |
 
 ---
 
-## 6. 长期记忆设计
+## 6. 长期记忆核心架构
 
-### 6.1 记忆不是长上下文
+长期记忆是本项目最关键的核心能力。它决定 AIstock 研究助理是否能成为真正的长期研发助手，也决定未来更换模型时是否能保持连续性。
 
-1M 上下文模型适合一次性阅读大量资料，但不适合作为长期记忆的唯一方式。原因：
+### 6.1 基本原则
 
-- 成本高，延迟高。
-- 容易被旧信息干扰。
-- 无法自动判断事实是否过期。
-- 无法形成审计记录。
-- 无法进行权限控制和定向清理。
+1. **记忆必须模型无关**：不能依赖某个模型的上下文窗口或私有记忆能力。
+2. **记忆必须入库**：核心记忆、架构记忆、任务记忆、实验记忆、流程记忆都必须持久化。
+3. **记忆必须可索引**：支持按用户、项目、模块、任务、实验、时间、关系、语义检索。
+4. **记忆必须可审计**：谁写入、为什么写入、来源是什么、是否经审核、何时失效必须可追踪。
+5. **记忆必须可纠错**：支持 supersedes、invalidates、contradicts、valid_from、valid_to。
+6. **记忆必须可迁移**：支持导出 JSONL/Markdown/Parquet，未来可迁移到 Mem0、Graphiti、LangMem 或其他引擎。
+7. **记忆必须分层加载**：不能每次把所有记忆塞进上下文；应逐级检索、压缩、引用。
+8. **记忆必须有权限和风险等级**：用户偏好、生产规则、GitHub 凭据相关结论、实盘边界必须受保护。
 
-因此，1M 上下文只作为“大范围检索和总结能力”，长期记忆必须结构化落库。
+### 6.2 记忆分层模型
 
-### 6.2 记忆分层
+| 层级 | 名称 | 内容 | 写入方式 | 默认加载策略 |
+|---|---|---|---|---|
+| L0 | Identity/Core Memory | 助理身份、硬边界、用户关键偏好 | 用户确认或标准文档确认 | 每次加载摘要 |
+| L1 | Procedural Memory | 工作流程、Issue 流程、验证门禁、禁止事项 | 审核后写入 | 与任务类型匹配时加载 |
+| L2 | Architecture Memory | 模块边界、MCP 工具、API、数据表、业务流程 | 文档扫描 + 审核 | 按模块检索加载 |
+| L3 | Project Roadmap Memory | 长期规划、阶段目标、待办方向 | 用户确认 | 任务规划时加载 |
+| L4 | Task State Memory | 研究流和任务状态、下一步、阻塞点 | 自动写入，可人工修正 | 与 task/stream 绑定加载 |
+| L5 | Experiment Memory | QE/HMM/因子/事件实验配置、结果、失败经验 | 自动写入 | 相似实验检索加载 |
+| L6 | Episodic Memory | 对话事件、MCP 调用过程、日志摘要 | 自动写入 | 默认不加载，仅按需追溯 |
+| L7 | External Knowledge Memory | 在线搜索、论文、工具资料摘要 | 证据入库，结论需审核 | 当前性问题重新搜索 |
 
-| 记忆类型 | 内容 | 写入方式 | 示例 |
-|---|---|---|---|
-| Core Memory | 固定身份、边界、用户偏好、当前长期目标 | 人工批准或高置信更新 | “用户要求所有设计方案使用中文” |
-| Semantic Memory | AIstock 架构事实、模块职责、数据表、API、MCP 工具能力 | 文档扫描 + 审核 + 周期更新 | “QE 回测必须使用固定 PIT 股票池” |
-| Episodic Memory | 任务运行过程、实验尝试、失败原因、审批记录 | 自动写入 | “2026-05-20 创建 QE 模板失败，因为股票池缺失” |
-| Procedural Memory | 已验证的处理流程、Issue 流程、验证门禁 | 人工批准后写入 | “新 BUG 必须同步 GitHub Issue” |
-| Project Roadmap Memory | 长期规划、阶段目标、待办方向 | 人工确认后写入 | “第二阶段建设工程健康驾驶舱” |
-| Task State Memory | 长期任务状态、并行任务进度、下一步 | 自动写入，用户可编辑 | “HMM 事件处理演进处于方案设计阶段” |
-
-### 6.3 AIstock Memory Backbone
-
-建议新增 AIstock 原生记忆服务，而不是直接把第三方 memory server 作为唯一真相。
-
-核心表建议：
+### 6.3 记忆数据模型
 
 ```text
 research_memory_items
   id
-  memory_type              -- core / semantic / episodic / procedural / roadmap / task_state
-  namespace                -- user / project / module / task / agent
-  subject                  -- HMM / QE / Paper v2 / Validation / user-preference
+  memory_type                -- core / procedural / architecture / roadmap / task_state / experiment / episodic / external
+  namespace                  -- user / project / module / stream / task / experiment / tool
+  subject_key                -- qe, hmm, factor, validation, github_issue, user_preference 等
+  title
   content_json
-  source_type              -- conversation / mcp_result / doc_scan / manual / validation_run / github_issue
+  content_text
+  source_type                -- conversation / mcp_result / doc_scan / validation_run / github_issue / web_search / manual
   source_ref
-  confidence
+  source_timestamp
+  confidence                 -- 0-1
+  approval_status            -- draft / approved / rejected / expired / superseded
+  risk_level                 -- low / medium / high / production_sensitive
   valid_from
   valid_to
   supersedes_id
+  created_by                 -- user / assistant / codex / system
   approved_by
-  approval_status          -- draft / approved / rejected / expired
   embedding_ref
+  checksum
   created_at
   updated_at
 
 research_memory_edges
+  id
   source_memory_id
   target_memory_id
-  relation_type            -- depends_on / supersedes / contradicts / supports / derived_from
+  relation_type              -- supports / contradicts / supersedes / depends_on / derived_from / same_as / blocks
   confidence
+  created_at
+
+research_memory_indexes
+  id
+  memory_id
+  index_type                 -- vector / full_text / graph / time / module / task / experiment
+  index_key
+  index_payload
+  updated_at
 
 research_memory_access_log
   id
   memory_id
   task_id
+  stream_id
   agent_id
-  retrieved_at
+  window_id
   retrieval_reason
-  used_in_response
+  used_in_prompt             -- true/false
+  used_in_report             -- true/false
+  retrieved_at
 ```
 
-### 6.4 第三方 memory adapter
+### 6.4 记忆检索流程
 
-第一阶段实现 AIstock 原生接口即可，但设计上预留 adapter：
+```mermaid
+flowchart TD
+    Task["当前任务/对话"] --> Classifier["任务分类器"]
+    Classifier --> Scope["确定作用域: user/project/module/stream/task"]
+    Scope --> MustLoad["加载硬规则: Core + Procedural"]
+    Scope --> Semantic["语义检索: architecture/experiment/external"]
+    Scope --> Graph["关系检索: dependencies/conflicts/supersedes"]
+    Scope --> Time["时间检索: 当前有效/最近状态"]
+    MustLoad --> Pack["Context Pack"]
+    Semantic --> Rank["重排与去重"]
+    Graph --> Rank
+    Time --> Rank
+    Rank --> Pack
+    Pack --> TokenBudget["Token Budget 压缩"]
+    TokenBudget --> Agent["LLM 执行计划/回答"]
+    Agent --> MemoryWrite["记忆候选写入"]
+```
+
+### 6.5 Context Pack 结构
+
+每次 Agent 执行前，不直接读取全部记忆，而是生成一个 `context_pack`：
 
 ```text
-MemoryProvider
-  - aistock_postgres_pgvector        # 默认
-  - mem0_oss                         # 第二阶段候选
-  - letta_archival_memory            # 后续评估
-  - langgraph_store                  # 后续工作流引擎候选
+assistant_context_packs
+  id
+  task_id
+  agent_id
+  model_profile
+  token_budget
+  core_memory_refs
+  procedural_memory_refs
+  architecture_memory_refs
+  task_state_refs
+  experiment_memory_refs
+  external_source_refs
+  omitted_relevant_refs
+  pack_summary
+  created_at
 ```
 
-推荐优先级：
+Context Pack 必须可回放：未来换模型后，也可以知道当时 Agent 基于哪些记忆做了判断。
 
-1. **默认：AIstock Postgres + pgvector + tsvector**。和现有系统集成最稳，权限和审计可控。
-2. **第二阶段评估 Mem0 OSS**。适合快速获得 self-hosted server、dashboard、API key、audit log 和多信号检索。
-3. **后续评估 Letta**。适合需要完整 stateful agent runtime 时使用，但可能与 AIstock 编排层重叠。
-4. **LangGraph/LangMem**。适合把复杂多阶段任务做成 Python 状态机，并使用 semantic/episodic/procedural memory 工具。
+### 6.6 记忆写入流程
 
-### 6.5 记忆写入门禁
+| 写入来源 | 默认状态 | 审批规则 |
+|---|---|---|
+| 用户明确说“记住这个” | `approved` 或 `needs_review` | 低风险偏好可直接 approved；流程规则需确认 |
+| Agent 从对话自动提取 | `draft` | 用户或 Codex 审核后生效 |
+| 任务运行状态 | `approved` | 事实型自动写入，可人工修正 |
+| 实验配置和结果 | `approved` | 自动写入，绑定实验 ID 和证据 |
+| 失败经验 | `draft` | 重要流程性经验需审核成 procedural memory |
+| 在线搜索资料 | `external` | 作为证据保存；结论不自动变核心记忆 |
+| 设计文档扫描 | `draft` | 需要设计/架构审核后变 architecture memory |
 
-| 记忆类型 | 是否可自动写入 | 是否需审批 | 原因 |
-|---|---:|---:|---|
-| Episodic task log | 是 | 否 | 记录事实过程，不改变行为规则 |
-| Task state | 是 | 可人工修正 | 用于恢复任务进度 |
-| Semantic architecture fact | 可草稿 | 是 | 架构事实错误会长期误导 Agent |
-| Procedural workflow | 否 | 是 | 会改变 Agent 行为 |
-| Core user preference | 可建议 | 是 | 影响所有后续任务 |
-| Roadmap memory | 可建议 | 是 | 属于长期规划 |
+### 6.7 记忆冲突和过期
+
+必须支持：
+
+- `supersedes`：新规则替代旧规则。
+- `contradicts`：新事实与旧事实冲突，需要审核。
+- `valid_to`：过期时间。
+- `confidence_decay`：长期未使用或来源过旧时降低置信度。
+- `source_refresh_required`：对于软件版本、接口、法规、外部资料等易变信息，要求重新搜索或重新扫描。
+
+### 6.8 开源 memory adapter 策略
+
+AIstock 第一阶段必须有原生 memory backbone。开源工具作为 adapter：
+
+```text
+MemoryProviderAdapter
+  - aistock_native_postgres          # 默认事实源
+  - mem0_oss_adapter                 # Phase 2 PoC
+  - graphiti_temporal_graph_adapter  # Phase 2/3 PoC
+  - langgraph_store_adapter          # Phase 2 PoC
+  - letta_archival_memory_adapter    # 后续评估
+```
+
+Adapter 原则：
+
+1. AIstock 原生表是事实源。
+2. 外部 memory engine 可以作为检索增强、图谱增强或压缩增强。
+3. 外部返回的记忆必须带 provider、version、retrieval_score、source_ref。
+4. 外部组件不可直接修改 Core/Procedural 记忆；必须走 AIstock 审批。
+5. 任何 adapter 故障不能阻断 AIstock 原生任务账本和核心记忆读取。
+
+### 6.9 为什么优先考虑 Graphiti/Temporal KG
+
+AIstock 的记忆不是普通聊天偏好，而是大量“会随时间变化”的事实：
+
+- 某个 BUG 曾经 open，后来 fixed，再后来可能 reopened。
+- 某个 QE 实验配置在草稿、物化、执行、归档之间变化。
+- 某个 HMM 演进方向在不同阶段有不同结论。
+- 某个模块的测试覆盖率随每次合入变化。
+- 某个流程规则可能被后续标准替代。
+
+因此 temporal graph 非常适合中长期规划。第一阶段先用关系表表达；第二阶段评估 Graphiti 是否能增强以下能力：
+
+- 动态事实的时间范围。
+- 实验、模块、任务、Issue、文档之间的关系追踪。
+- 过期事实自动失效。
+- 混合检索：语义 + 关键词 + 图关系 + 时间。
+
+### 6.10 记忆安全边界
+
+1. 禁止把 API key、GitHub token、数据库密码写入记忆。
+2. 用户偏好、流程规则、生产边界属于高权重记忆，必须能追踪来源。
+3. Web 搜索内容默认不可信，只能作为外部证据。
+4. LLM 对记忆的总结不能替代原始 evidence。
+5. 记忆写入必须保留原始片段或 source_ref，避免不可解释。
+6. 支持导出“助理记忆审计报告”，给用户和 Claude Code 审核。
 
 ---
 
-## 7. 任务编排和人工确认
+## 7. MCP 执行工作台设计
 
-### 7.1 任务生命周期
+### 7.1 替代“浏览器点击”的设计
+
+新版方案将原 Phase 2 “操作展示区”升级为 **MCP 执行工作台**。
+
+它不要求 Agent 操作鼠标键盘，不要求识别页面 DOM，也不要求代替用户点击 UI。它只做：
+
+1. 展示 Agent 计划。
+2. 展示待执行配置。
+3. 展示 MCP/API 调用进度。
+4. 展示业务产物深链。
+5. 展示日志、报告和证据。
+6. 接收用户确认和对话修改。
+
+### 7.2 QE 10 loop 实验示例流程
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant A as 研究助理
+    participant M as Memory Router
+    participant W as MCP执行工作台
+    participant Q as QE MCP
+    participant E as 事件流
+
+    U->>A: 创建QE 10 loop实验，先不执行
+    A->>M: 检索QE规则、固定PIT池、历史实验、用户偏好
+    M-->>A: 返回Context Pack
+    A->>Q: 查询可用模板/股票池/节点/因子(dry-read)
+    Q-->>A: 返回候选资源
+    A->>W: 生成实验草稿和风险说明
+    W-->>U: 展示10个loop详细配置
+    U->>A: 修改loop 3和loop 7
+    A->>W: 生成配置diff并重新校验
+    U->>W: 确认创建模板
+    W->>Q: qe_template_create + validate
+    Q-->>E: tool_started/tool_completed/artifact_created
+    E-->>W: 实时刷新进度
+    W-->>U: 显示模板ID、配置详情、下一步审批
+```
+
+### 7.3 配置版本和 diff
+
+```text
+assistant_task_config_versions
+  id
+  task_id
+  version
+  config_json
+  diff_from_previous
+  generated_by
+  user_instruction_ref
+  validation_status
+  preflight_result_ref
+  created_at
+```
+
+### 7.4 事件流
+
+```text
+agent_task_events
+  id
+  task_id
+  stream_id
+  window_id
+  event_type              -- plan_started / memory_retrieved / tool_started / tool_completed / config_generated / approval_required / artifact_created / report_ready
+  stage
+  mcp_server
+  tool_name
+  tool_args_summary
+  status
+  message
+  artifact_ref
+  route_ref
+  evidence_ref
+  created_at
+```
+
+### 7.5 实时进展展示
+
+前端展示：
+
+- 当前阶段：计划、检索记忆、生成配置、校验、等待确认、执行、完成。
+- MCP 调用时间线。
+- 当前配置 JSON 的可读摘要。
+- 配置 diff。
+- 资源预算。
+- 风险等级。
+- 待确认动作。
+- 业务页面深链，例如 QE 模板详情、实验详情、Validation 报告。
+- 失败原因和可选修复建议。
+
+---
+
+## 8. 多屏幕与多窗口协同
+
+### 8.1 设计目标
+
+用户未来可能使用多个屏幕：
+
+- 屏幕 A：主对话和总览。
+- 屏幕 B：HMM 模型演进窗口。
+- 屏幕 C：QE 实验演进窗口。
+- 屏幕 D：因子研发窗口。
+- 屏幕 E：Validation/Issue 窗口。
+
+研究助理必须统一协调这些窗口，避免每个窗口成为孤立 Agent。
+
+### 8.2 数据模型
+
+```text
+assistant_workspace_sessions
+  id
+  user_id
+  title
+  status
+  active_window_id
+  created_at
+  updated_at
+
+assistant_windows
+  id
+  workspace_session_id
+  window_type              -- main_chat / hmm_stream / qe_stream / factor_stream / validation_stream / report
+  bound_stream_id
+  bound_task_id
+  route
+  display_name
+  last_seen_at
+  status
+
+assistant_window_events
+  id
+  window_id
+  task_event_id
+  sync_action              -- show / highlight / notify / require_attention
+  created_at
+```
+
+### 8.3 并行 Research Streams
+
+```text
+research_streams
+  id
+  stream_key               -- hmm_evolution / qe_evolution / factor_research / event_signal / validation_discovery
+  title
+  objective
+  priority
+  status                   -- active / paused / blocked / completed / archived
+  current_phase
+  owner_agent
+  resource_budget_json
+  latest_summary
+  next_actions_json
+  memory_namespace
+  created_at
+  updated_at
+```
+
+### 8.4 多窗口确认规则
+
+1. 同一高风险任务只能有一个 active approval。
+2. 任何窗口都可以发起讨论，但执行确认必须绑定 approval ID。
+3. 如果多个窗口同时修改同一实验配置，必须产生版本冲突提示。
+4. 主窗口总览必须显示所有 stream 的等待确认、失败和下一步。
+5. 研究助理每天生成跨 stream 晨报。
+
+---
+
+## 9. 任务编排和人工/对话确认
+
+### 9.1 任务生命周期
 
 ```mermaid
 stateDiagram-v2
     [*] --> Draft
-    Draft --> Planned: LLM 生成计划
-    Planned --> PreflightReady: 工具和资源预检查
-    PreflightReady --> WaitingApproval: 涉及写操作/长任务/外部写入
-    PreflightReady --> Running: 只读或自动白名单
+    Draft --> Planned: 生成计划
+    Planned --> ConfigPreview: 生成配置草稿
+    ConfigPreview --> PreflightReady: MCP dry-run/preflight
+    PreflightReady --> WaitingApproval: 需要确认
     WaitingApproval --> Running: UI确认或对话确认
-    WaitingApproval --> Cancelled: 用户取消
-    Running --> Paused: 需要进一步确认
-    Paused --> Running: 继续
+    Running --> Paused: 等待进一步输入
+    Paused --> ConfigPreview: 用户修改配置
     Running --> Succeeded
     Running --> Failed
     Failed --> Triage
-    Triage --> CandidateIssue: 确认疑似 Bug
+    Triage --> CandidateIssue
     CandidateIssue --> WaitingIssueApproval
-    WaitingIssueApproval --> GithubIssueSynced: 用户或Codex批准
-    WaitingIssueApproval --> Rejected
+    WaitingIssueApproval --> GithubIssueSynced: 用户/Codex批准
     Succeeded --> Reported
     GithubIssueSynced --> Reported
-    Reported --> [*]
+    Reported --> MemoryWritten
+    MemoryWritten --> [*]
 ```
 
-### 7.2 第一阶段人工确认
-
-第一阶段确认方式：
-
-- UI 审批中心按钮确认。
-- 对话中给出明确确认后，由控制台生成审批记录。
-- 审批记录必须保存：任务 ID、计划摘要、参数快照、风险等级、审批人、审批时间、确认原文。
-
-### 7.3 第二阶段对话确认直接执行
-
-第二阶段增加 `chat_approval_token`：
-
-1. Agent 生成待审批计划，并计算 `plan_digest`。
-2. UI 对话窗口显示“待确认执行”的摘要和风险等级。
-3. 用户在对话中明确回复，例如“确认执行这个 QE dry-run”或“确认创建这个测试实验”。
-4. 后端把对话内容绑定到 `approval_request_id`。
-5. 若计划、参数、风险等级未变化，则执行。
-6. 若计划发生变化，必须重新确认。
-
-高风险操作仍需更强确认：
-
-- 生产库大规模写入。
-- 远程训练资源占用超过阈值。
-- 创建正式 GitHub Issue。
-- 关闭 GitHub Issue。
-- 涉及实盘或交易相关动作。
-
-这些操作可以通过对话确认，但必须要求 Agent 明确复述影响范围。
-
----
-
-## 8. MCP 调度设计
-
-### 8.1 MCP 工具分级
-
-| 等级 | 含义 | 示例 | 默认策略 |
-|---|---|---|---|
-| L0 read_only | 只读查询 | 查询 QE 数仓、列出模板、查任务状态 | 可自动执行 |
-| L1 dry_run | 不写入的预检查 | QE materialize preflight、Validation plan preview | 可自动执行 |
-| L2 write_test_data | 写入可清理测试数据 | 创建测试 QE 实验、生成测试策略包 | 第一阶段审批；第二阶段可对话确认 |
-| L3 long_running_compute | 占用训练或远程节点 | HMM 演进、QE 多 loop 实验 | 必须审批和资源预算 |
-| L4 external_write | GitHub、远程服务写入 | 创建 GitHub Issue、更新 Issue 状态 | 必须审批 |
-| L5 production_sensitive | 生产数据、服务、交易边界 | 生产库大规模写入、重启服务、交易动作 | 默认禁止或专项审批 |
-
-### 8.2 MCP Tool Registry
-
-新增或扩展 MCP 工具目录：
+### 9.2 对话确认机制
 
 ```text
-mcp_tool_registry
+assistant_approval_requests
   id
-  server_name
-  tool_name
-  title
-  description
-  input_schema_json
-  output_schema_json
+  task_id
+  approval_type            -- create_template / materialize / run_experiment / github_issue / long_compute / production_write
   risk_level
-  module
-  requires_approval
-  supports_dry_run
-  timeout_seconds
-  max_concurrency
-  enabled
-  last_health_status
-  last_schema_hash
+  plan_digest
+  config_version_id
+  summary
+  required_confirmation_text
+  status                   -- pending / approved / rejected / expired
+  approved_by
+  approval_source          -- ui_button / chat_text / codex_review
+  approval_text
+  approved_at
 ```
 
-### 8.3 已有 MCP 模块接入建议
+确认规则：
 
-| 模块 | 接入用途 | 阶段 |
-|---|---|---|
-| `aistock-qe-experiment` | 创建/物化/运行/查询 QE 实验和模板 | Phase 1 |
-| `aistock-qe-archive` | 分析历史实验、模型 trials、因子使用、超参历史 | Phase 1 |
-| `aistock-validation` | 执行测试计划、创建/同步 GitHub Issue、查询流水线状态 | Phase 1 |
-| `aistock-research` | HMM / research pipeline 任务记录和状态 | Phase 1/2 |
-| data sync MCP | 数据同步健康、测试数据准备 | Phase 2 |
-| future paper/strategy MCP | 策略包、Selection Center、Paper v2 流程验证 | Phase 2/3 |
+1. 对话确认必须明确，例如“确认执行当前版本配置”。
+2. 如果配置版本变化，旧确认自动失效。
+3. 如果风险等级提升，必须重新确认。
+4. GitHub Issue 正式入库必须单独确认。
+5. 长时间任务必须展示资源预算后确认。
 
 ---
 
-## 9. 在线搜索与资料分析
+## 10. 在线搜索与外部资料记忆
 
-### 9.1 能力边界
-
-Research Assistant 可以进行在线搜索，用于：
-
-- 查询最新开源工具、论文、行业案例。
-- 查找某个模型、框架或算法资料。
-- 对比 HMM、事件处理、因子研发方法。
-- 帮助生成研究假设。
-
-但在线搜索结论不能直接写入长期事实记忆，除非经过审核。
-
-### 9.2 Search Evidence
-
-每次搜索必须保存：
+在线搜索是研究助理能力之一，但搜索结果不能直接污染核心记忆。
 
 ```text
 research_web_sources
@@ -390,186 +599,24 @@ research_web_sources
   publisher
   fetched_at
   summary
-  quoted_text_limited
-  relevance_score
+  source_type              -- docs / github / paper / blog / forum / news
+  reliability_rating
   used_in_report
+  memory_candidate_id
 ```
 
-### 9.3 搜索结果使用规则
+规则：
 
-1. 对“当前状态、版本、价格、接口、项目活跃度”必须重新搜索，不能依赖旧记忆。
-2. 对金融、法律、医疗等高风险结论必须标注来源和日期。
-3. 对开源项目要优先使用官方文档、GitHub、论文或项目主页。
-4. LLM 生成的资料总结必须和引用来源绑定。
-
----
-
-## 10. 并行长期任务设计
-
-### 10.1 Research Stream
-
-把 HMM、事件处理、因子研发、QE 组合优化等长期方向抽象为 `Research Stream`。
-
-```text
-research_streams
-  id
-  stream_key              -- hmm_evolution / event_signal / factor_research / qe_optimization
-  title
-  objective
-  owner
-  status                  -- active / paused / completed / archived
-  priority
-  current_phase
-  latest_summary
-  next_actions_json
-  memory_namespace
-  created_at
-  updated_at
-```
-
-### 10.2 支持的长期工作
-
-| Stream | Agent 可以长期做什么 | 需要确认的动作 |
-|---|---|---|
-| HMM 演进 | 汇总指标、找 regime 失败场景、提出演进假设、执行小规模验证 | 启动训练、写入实验记录、占用远程资源 |
-| 事件处理演进 | 分析事件信号表现、查误杀/漏判样本、提出规则或模型方向 | 创建新事件策略实验、进入 Paper v2 验证 |
-| 因子研发 | 分析因子库、找低相关高 IC 候选、提出组合 | 启动因子计算、大规模回测 |
-| QE 优化 | 查询 QE Archive、组合 loop、生成模板、评估失败实验 | 创建/运行 QE 实验 |
-| 流水线主动发现 | 每晚探测新功能、生成候选 Bug | 正式创建 GitHub Issue |
-
-### 10.3 并行执行模型
-
-- 每个 stream 有独立任务队列。
-- 全局资源预算控制远程节点、DB 连接、LLM token、实验数量。
-- Agent 每天可以自动推进 read-only 和 dry-run 任务。
-- 需要写入或长任务时进入审批中心。
-- 每个 stream 每天生成晨报，汇总完成、失败、等待确认和建议。
+1. 官方文档、GitHub、论文优先。
+2. 当前性问题必须重新搜索。
+3. 外部资料只能成为 evidence 或 draft memory。
+4. 成为 architecture/procedural memory 前必须审核。
 
 ---
 
-## 11. 操作展示区设计（Phase 2）
+## 11. 候选 Issue 与正式 Issue
 
-### 11.1 目标
-
-用户希望 Agent 执行 QE 实验时，页面上可以直接显示 QE 实验相关页面，不需要用户手动跳转。该能力建议设计为 **Agent Workspace Panel**。
-
-### 11.2 展示方式
-
-| 展示模式 | 说明 | 适用场景 |
-|---|---|---|
-| Embedded Route | 在控制台右侧嵌入 AIstock 内部页面 | QE 实验、提示词、Validation 报告 |
-| Task Timeline | 展示 Agent 当前 MCP 调用、日志、证据 | 长任务执行过程 |
-| Artifact Preview | 展示回测曲线、表格、截图、报告 | 实验结果分析 |
-| Browser Snapshot | 展示页面截图或 Playwright 录屏 | UI 验证和业务探测 |
-| Split View | 左侧对话，右侧操作页面 | 人机协作执行任务 |
-
-### 11.3 技术边界
-
-第一阶段不实现自动页面操作。第二阶段可以实现：
-
-1. Agent 根据任务类型自动打开相关 route。
-2. 页面右侧展示 `iframe` 或内部 React route preview。
-3. 对页面操作只限展示和跳转，不直接模拟用户点击危险按钮。
-4. 若需要自动 UI 操作，应通过 Playwright/Browser Probe 工具执行，并保存截图证据。
-
----
-
-## 12. UI 设计
-
-### 12.1 一级页面
-
-建议新增路由：
-
-```text
-/research-assistant
-/research-assistant/chat
-/research-assistant/tasks
-/research-assistant/streams
-/research-assistant/memory
-/research-assistant/mcp-tools
-/research-assistant/approvals
-/research-assistant/reports
-/research-assistant/workspace        # Phase 2
-/research-assistant/settings
-```
-
-### 12.2 页面职责
-
-| 页面 | 功能 |
-|---|---|
-| 总览页 | 今日任务、等待确认、失败任务、长期 stream 状态、最近报告 |
-| 对话页 | 与 Research Assistant 对话、生成计划、确认执行、查看引用记忆 |
-| 任务中心 | 所有任务列表、阶段、风险等级、MCP 调用、日志、证据 |
-| Research Streams | HMM、事件、因子、QE 等长期工作流状态 |
-| 记忆中心 | 查看 core/semantic/episodic/procedural/roadmap/task memory，支持审批和废弃 |
-| MCP 工具目录 | 工具列表、schema、风险等级、健康状态、dry-run 支持 |
-| 审批中心 | 待确认计划、风险影响、参数快照、确认/拒绝 |
-| 报告中心 | 夜间报告、研究报告、实验报告、候选 Issue 报告 |
-| 操作展示区 | Phase 2：嵌入 QE/HMM/流水线页面和任务可视化 |
-| 设置页 | LLM Provider、Agent Profile、Prompt、资源预算、自动化策略 |
-
-### 12.3 与现有提示词管理页面关系
-
-当前提示词管理页面位于：`/quantevolver/prompts`。
-
-建议重构为通用 Prompt Registry：
-
-```text
-/prompt-registry
-  - QE prompts
-  - Research Assistant prompts
-  - Validation discovery prompts
-  - HMM evolution prompts
-  - Event signal prompts
-  - Factor research prompts
-```
-
-短期可以继续复用现有 QE prompt 后端表和 UI 能力，但需要增加：
-
-- `module` 字段。
-- `agent_role` 字段。
-- `llm_provider_profile` 字段。
-- `approval_status` 字段。
-- `eval_score` 字段。
-- `prompt_version` 与 trace 绑定。
-
----
-
-## 13. LLM 配置与模型选择
-
-### 13.1 Provider
-
-第一阶段支持：
-
-- DeepSeek V4 Pro：使用现有 env 配置。
-- GLM 5.1：预留配置。
-- OpenAI / Claude / 本地模型：作为后续 provider。
-
-### 13.2 模型路由
-
-| 任务 | 推荐模型类型 |
-|---|---|
-| 简单任务分类 | 低成本模型 |
-| 长文档架构分析 | 1M 上下文模型 |
-| 实验结果分析 | 强推理模型 |
-| Issue 候选审核 | 强推理 + 证据约束 |
-| 在线资料搜索总结 | 支持引用和结构化输出的模型 |
-| prompt 自我改进 | 强推理模型，但需要人工审批 |
-
-### 13.3 密钥管理
-
-- API Key 只从 env 或安全配置读取。
-- UI 不展示明文 key。
-- Trace 中不得保存密钥。
-- Prompt 和 memory 中禁止写入 token。
-
----
-
-## 14. 候选 Issue 与正式 Issue 流程
-
-### 14.1 候选 Issue
-
-Agent 可以自动创建 `issue_candidate`：
+研究助理可以生成候选 Issue，但不能直接无审批入库。
 
 ```text
 issue_candidates
@@ -584,49 +631,102 @@ issue_candidates
   actual
   confidence
   dedupe_candidates
-  status -- draft / needs_review / approved / rejected / promoted
+  status                   -- draft / needs_review / approved / rejected / promoted
 ```
-
-### 14.2 正式 Issue 门禁
 
 正式入库规则：
 
-1. 必须经过用户或 Codex 审批。
+1. 必须经用户或 Codex 审批。
 2. 必须同步 GitHub Issue。
-3. 不能只创建本地 BUG JSON。
-4. 必须保存 GitHub issue number 和 URL。
-5. 必须与 Validation MCP / GitHub Issue MCP 状态一致。
-
-### 14.3 Agent 的限制
-
-Agent 不能自己决定“这个一定是 Bug 并入库”。它只能给出：
-
-- 问题摘要。
-- 证据。
-- 影响范围。
-- 复现步骤。
-- 严重级别建议。
-- 是否疑似重复。
+3. 不允许提交无 GitHub 链接的正式 BUG JSON。
+4. GitHub issue number 和 URL 必须回写。
+5. 本地状态和 GitHub 状态必须一致。
 
 ---
 
-## 15. 语音能力预留
+## 12. UI 页面设计
 
-语音不是第一阶段必要功能，但应预留接口。
+### 12.1 路由
 
-### 15.1 未来能力
+```text
+/research-assistant
+/research-assistant/chat
+/research-assistant/workbench
+/research-assistant/tasks
+/research-assistant/streams
+/research-assistant/memory
+/research-assistant/mcp-tools
+/research-assistant/approvals
+/research-assistant/reports
+/research-assistant/settings
+```
 
-- 语音输入：用户口述研究任务。
-- 语音播报：每日晨报、任务失败、等待审批提醒。
-- 语音确认：高风险操作不建议只靠语音，必须转文本并确认。
+### 12.2 页面职责
 
-### 15.2 数据模型预留
+| 页面 | 职责 |
+|---|---|
+| 总览 | 所有 stream 状态、等待确认、失败、今日报告 |
+| Chat | 对话、计划生成、配置讨论、文字/未来语音汇报 |
+| Workbench | MCP 执行进度、实验配置预览、配置 diff、业务深链 |
+| Tasks | 所有 Agent 任务和事件流 |
+| Streams | HMM/QE/因子/事件等长期研究流 |
+| Memory | 记忆搜索、审批、废弃、冲突处理、记忆审计 |
+| MCP Tools | MCP server/tool/schema/风险等级/健康状态 |
+| Approvals | 等待确认动作、风险、参数快照、确认原文 |
+| Reports | 晨报、研究报告、实验报告、候选 Issue 报告 |
+| Settings | LLM Provider、Prompt、资源预算、Memory Adapter |
+
+### 12.3 与提示词管理关系
+
+现有 `/quantevolver/prompts` 可短期复用，但长期应抽象为通用 Prompt Registry：
+
+- QE prompts。
+- Research Assistant prompts。
+- HMM evolution prompts。
+- Event signal prompts。
+- Factor research prompts。
+- Validation discovery prompts。
+
+Prompt 版本必须和 Agent trace、报告、任务配置绑定。
+
+---
+
+## 13. LLM 模型和可替换性
+
+### 13.1 模型路由
+
+| 场景 | 模型要求 |
+|---|---|
+| 简单状态汇报 | 低成本模型 |
+| 大文档/大架构分析 | 1M 上下文模型 |
+| 实验方案生成 | 强推理模型 |
+| Issue 候选审核 | 强推理 + 证据约束 |
+| 记忆整理 | 稳定结构化输出模型 |
+| 在线搜索总结 | 支持引用和可靠摘要的模型 |
+
+### 13.2 模型替换要求
+
+1. 记忆不依赖模型私有能力。
+2. 每次运行记录 model profile。
+3. Prompt、Context Pack、工具返回、最终报告都可回放。
+4. 更换模型只影响推理，不影响任务账本和记忆事实源。
+
+---
+
+## 14. 语音能力预留
+
+语音不是第一阶段功能，但架构需预留：
+
+- 语音输入转文本。
+- 研究晨报语音播报。
+- 等待确认提醒。
+- 高风险操作不能只用语音确认，必须转文本并绑定 approval。
 
 ```text
 assistant_voice_events
   id
   task_id
-  direction          -- input / output
+  direction
   transcript
   audio_ref
   confidence
@@ -636,168 +736,149 @@ assistant_voice_events
 
 ---
 
-## 16. 与现有模块的关系
+## 15. 阶段计划
 
-| 现有模块 | 关系 |
-|---|---|
-| Validation Center | 提供测试计划、验证执行、Issue 同步、质量状态 |
-| 主动发现流水线 UI | 作为 Research Assistant 的质量发现输入和夜间报告来源 |
-| QE Templates | Research Assistant 可基于审批创建模板或分析模板失败原因 |
-| QE Archive | 作为历史实验和数仓分析核心来源 |
-| Research Pipeline | 作为研究任务元数据和 HMM timeline 入口 |
-| Quantevolver Prompts | 短期复用，长期抽象为通用 Prompt Registry |
-| GitHub Issues Integration | 正式 Issue 同步必须走该闭环 |
-| Data Sync 自治控制平面 | 后续作为数据准备和数据健康工具来源 |
-| Paper v2 / Strategy Package | 第二阶段可作为验证目标，但不让 Agent 修改运行代码 |
+### Phase 0：文档评审
 
----
+- 完成本设计文档。
+- 用户评审。
+- Claude Code 审核。
+- 明确长期记忆方案是否采用“AIstock 原生 + adapter”。
 
-## 17. 阶段计划
+### Phase 1：MCP 执行工作台 + 原生长期记忆 MVP
 
-### Phase 0：设计与评审
+必须实现：
 
-交付物：
+1. Research Assistant 基础页面。
+2. MCP 工具目录。
+3. Task Ledger。
+4. Agent Task Event Stream。
+5. MCP 执行工作台。
+6. 原生 Memory Backbone 基础表和检索。
+7. Context Pack 生成。
+8. UI 审批中心。
+9. QE Archive 只读分析和 QE Template 草稿/校验流程。
+10. 候选 Issue 队列。
 
-- 本设计文档。
-- 开源方案取舍表。
-- 数据模型草案。
-- UI 页面清单。
-- 验收指标。
+明确不做：
 
-验收：
+- 不控制鼠标键盘。
+- 不自动创建正式 Issue。
+- 不自动运行长时间实验。
+- 不接入语音。
+- 不依赖外部 memory server。
 
-- 文档为中文。
-- 明确 Agent 非编程边界。
-- 明确人工确认和对话确认路径。
-- 明确长期记忆方案和第三方 adapter 选择。
+### Phase 2：对话确认、多窗口、多 Stream、Memory Adapter PoC
 
-### Phase 1：受控研究助理 MVP
+必须实现：
 
-功能：
+1. 对话确认执行。
+2. 多窗口 workspace session。
+3. HMM/QE/因子/事件 Research Streams。
+4. Mem0 OSS adapter PoC。
+5. Graphiti temporal graph adapter PoC。
+6. Langfuse 或原生 LLM trace 增强。
+7. 工作台支持 QE 10 loop 配置版本和 diff。
 
-1. 新增研究助理控制台总览页。
-2. 新增对话页，支持生成计划但默认不执行危险动作。
-3. 新增任务中心，记录 Agent task、MCP call、证据、报告。
-4. 新增审批中心，支持 UI 确认。
-5. 新增 MCP 工具目录，展示工具 schema、风险等级和健康状态。
-6. 新增 Memory Center，只实现 AIstock 原生 Postgres 记忆。
-7. 接入 DeepSeek V4 Pro env 配置。
-8. 支持 QE Archive 只读分析、Validation 只读查询、GitHub Issue 候选生成。
-9. 支持在线搜索，并保存来源。
-10. 生成研究报告。
+### Phase 3：长期自治研究助手
 
-不做：
+必须实现：
 
-- 不自动创建正式 GitHub Issue。
-- 不运行大规模训练。
-- 不嵌入操作展示区。
-- 不支持语音。
-- 不修改代码。
-
-### Phase 2：对话确认执行与操作展示区
-
-功能：
-
-1. 支持用户在对话中确认后执行审批项。
-2. 增加 Agent Workspace Panel。
-3. 支持嵌入 QE 实验页、QE Archive 页、Validation 报告页。
-4. 支持 QE 小规模测试实验和 dry-run 流程。
-5. 支持 HMM / 事件 / 因子 / QE Research Streams 并行任务。
-6. 支持资源预算、并发限制、任务暂停/恢复。
-7. 评估 Mem0 OSS adapter 或 LangGraph/LangMem adapter。
-
-### Phase 3：夜间自治和多 Agent 协作
-
-功能：
-
-1. 每晚自动推进白名单任务。
-2. 每天生成研究晨报和等待确认清单。
-3. 多 Agent 分工：研究、实验、验证、资料搜索、报告。
-4. 自动把候选问题提交到候选 Issue 队列。
-5. 引入 LLM trace/eval，可以接入 Langfuse 或 AIstock 原生观测。
+1. 每日晨报。
+2. 自动推进 read-only/dry-run 白名单任务。
+3. 多 Agent 分工。
+4. 长期记忆审计报告。
+5. 自动候选 Issue 生成和人工入库审批。
 6. 语音输入/播报试点。
 
 ---
 
-## 18. 开发验收指标
+## 16. 开发验收指标
 
-### 18.1 功能验收
-
-| 功能 | 验收指标 |
-|---|---|
-| 控制台总览 | 能显示任务数、等待审批数、失败数、长期 stream 状态、最近报告 |
-| 对话页 | 能提交任务目标，生成结构化计划，显示引用记忆和使用工具 |
-| 人工审批 | 写操作必须创建审批记录，未审批不得执行 |
-| 对话确认 | Phase 2 中用户确认原文必须绑定审批 ID 和 plan digest |
-| MCP 工具目录 | 至少展示 server、tool、schema、风险等级、健康状态 |
-| 任务中心 | 每个任务可展开查看阶段、MCP 调用、日志、证据、报告 |
-| Memory Center | 能按类型查看、搜索、审批、废弃记忆 |
-| 在线搜索 | 报告必须保存 URL、标题、抓取时间、摘要和使用位置 |
-| 候选 Issue | Agent 只能生成候选 Issue，正式 Issue 需审批 |
-| GitHub 同步 | 正式 Issue 必须返回 GitHub number 和 URL |
-| 操作展示区 | Phase 2 能在控制台内展示相关 AIstock 页面或截图证据 |
-| 长期任务并行 | 不同 stream 可并行排队，资源预算生效 |
-
-### 18.2 安全验收
+### 16.1 长期记忆验收
 
 | 项目 | 验收指标 |
 |---|---|
-| 无编程能力 | Agent 工具集中不存在文件写入、git commit、PR、merge 工具 |
-| 敏感工具确认 | L2 以上工具必须审批或对话确认 |
-| Token 安全 | 日志、trace、memory、report 不出现 API key 或 GitHub token |
-| 生产边界 | 默认不重启 `8001` / `3000`，不执行实盘交易 |
-| 证据绑定 | 每个重要结论至少绑定一个 evidence ref |
-| Issue 一致性 | 不允许提交无 GitHub 链接的正式 BUG JSON |
+| 记忆入库 | Core/Procedural/Architecture/Task/Experiment/Episodic 至少 6 类可写入 |
+| 分层检索 | 能按 user/project/module/stream/task/experiment 作用域检索 |
+| Context Pack | 每次 Agent 执行能生成可回放上下文包 |
+| 记忆审批 | Core/Procedural/Architecture 记忆支持 draft/approved/rejected/superseded |
+| 冲突处理 | 支持 supersedes/contradicts/valid_to |
+| 模型无关 | 更换模型不影响记忆查询和任务状态 |
+| 记忆审计 | 能导出记忆来源、使用记录、写入人、审批状态 |
+| 外部 adapter | Phase 2 至少完成 Mem0 或 Graphiti 的只读 PoC |
 
-### 18.3 质量验收
+### 16.2 MCP 执行工作台验收
 
 | 项目 | 验收指标 |
 |---|---|
-| 后端测试 | 新增 service/router 单元测试和权限分级测试 |
-| 前端测试 | 新增 Playwright 覆盖总览、任务、审批、记忆、MCP 工具页 |
-| 类型检查 | `frontend` typecheck 通过 |
-| Lint | 无新增 lint error |
-| 文档一致性 | 开发完成后必须提交设计符合矩阵 |
-| 回归保护 | 现有 Validation/QE MCP 测试不退化 |
+| 实时事件 | MCP 调用开始/完成/失败可实时显示 |
+| 配置预览 | QE 实验草稿能以卡片和 JSON 摘要展示 |
+| 配置 diff | 对话修改后能显示版本差异 |
+| 审批门禁 | 未审批不能执行 L2+ 操作 |
+| 深链跳转 | 能跳转到对应 QE/Validation/Issue 页面 |
+| 证据绑定 | 报告和候选 Issue 绑定 tool result/evidence ref |
 
----
+### 16.3 多窗口验收
 
-## 19. 主要风险与控制
-
-| 风险 | 控制措施 |
+| 项目 | 验收指标 |
 |---|---|
-| Agent 记忆错误长期污染判断 | 记忆分级、审批、置信度、过期机制、supersedes 链 |
-| LLM 幻觉生成错误实验方案 | 所有计划必须 MCP preflight 和 schema 校验 |
-| 长任务占用资源 | 资源预算、并发限制、超时、取消 |
-| 误创建 Issue | 候选 Issue 和正式 Issue 分离，正式入库审批 |
-| 搜索资料过期 | 保存 fetched_at，当前性问题必须重新搜索 |
-| 第三方 memory 工具引入复杂度 | 先做 AIstock 原生 memory，再 adapter 评估 |
-| UI 过于复杂 | 页面拆分，总览只显示摘要，详情按卡片展开 |
-| 与现有 QE Prompt 管理冲突 | 短期复用，长期抽象 Prompt Registry |
+| 多窗口会话 | 不同窗口能绑定不同 Research Stream |
+| 状态同步 | 任务状态、审批状态、事件流跨窗口同步 |
+| 冲突控制 | 同一配置多窗口修改能提示冲突 |
+| 总览汇总 | 主窗口能看到所有 stream 的进展和阻塞 |
+
+### 16.4 安全验收
+
+| 项目 | 验收指标 |
+|---|---|
+| 禁止鼠标键盘控制 | 默认工具集中不包含桌面控制能力 |
+| 禁止编程能力 | 不暴露文件写入、git commit、PR、merge 工具 |
+| Token 安全 | 记忆、trace、报告中不出现 token/API key |
+| Issue 同步 | 正式 Issue 必须有 GitHub URL |
+| 生产边界 | 默认不重启 `8001`/`3000`，不做实盘交易 |
 
 ---
 
-## 20. 推荐下一步
+## 17. 给 Claude Code 的审核重点
 
-1. 先评审本设计文档，确认 Research Assistant 的权限边界。
-2. 若确认，创建独立实现分支：`feature/research-agent-console-20260520`。
-3. Phase 1 只实现受控研究助理 MVP，不实现自动自治、不接入语音、不引入第三方 memory server。
-4. Phase 1 完成后用设计符合矩阵逐项验收。
-5. Phase 2 再实现对话确认执行、操作展示区、并行长期任务和 memory adapter 评估。
+请重点审核以下问题：
+
+1. 长期记忆表结构是否足以支持 AIstock 架构、任务、实验、流程规则和用户偏好长期演进。
+2. Memory Adapter 策略是否能避免 Mem0/Graphiti/Letta/LangGraph 造成事实源分裂。
+3. Context Pack 是否足以支持模型替换和任务回放。
+4. MCP 执行工作台是否完全避免了鼠标键盘控制路线。
+5. QE 10 loop 实验示例流程是否能覆盖配置草稿、diff、preflight、审批、物化、执行状态展示。
+6. 多窗口和多 Research Stream 是否有重复执行、重复审批、配置冲突风险。
+7. 候选 Issue 与正式 GitHub Issue 门禁是否符合 AIstock 现有规范。
+8. Phase 1 范围是否足够小，可以先交付可用闭环。
 
 ---
 
-## 21. 参考资料
+## 18. 推荐下一步
 
+1. 用户评审本文档。
+2. Claude Code 审核长期记忆和 MCP 工作台方案。
+3. 根据审核意见修订 v3。
+4. 通过后新建实现分支：`feature/research-agent-console-20260521`。
+5. Phase 1 只做：MCP 执行工作台 + 原生长期记忆 MVP + 任务事件流 + 审批中心。
+6. Phase 2 再做：多窗口、多 Stream、对话确认、Mem0/Graphiti adapter PoC。
+
+---
+
+## 19. 参考资料
+
+- Mem0 OSS：`https://docs.mem0.ai/open-source/overview`
 - Letta Stateful Agents：`https://docs.letta.com/guides/core-concepts/stateful-agents`
 - Letta Archival Memory：`https://docs.letta.com/guides/ade/archival-memory`
+- Zep / Graphiti Open Source：`https://www.getzep.com/product/open-source/`
+- Graphiti GitHub：`https://github.com/getzep/graphiti`
 - LangChain Long-term Memory：`https://docs.langchain.com/oss/python/langchain/long-term-memory`
-- LangGraph Memory Overview：`https://docs.langchain.com/oss/javascript/concepts/memory`
+- LangGraph Persistence：`https://docs.langchain.com/oss/python/langgraph/persistence`
 - LangMem GitHub：`https://github.com/langchain-ai/langmem`
-- Mem0 OSS：`https://docs.mem0.ai/open-source/overview`
-- Mem0 GitHub：`https://github.com/mem0ai/mem0`
 - Langfuse Docs：`https://langfuse.com/docs`
-- Dify Docs：`https://docs.dify.ai/en/use-dify/getting-started/introduction`
+- Open WebUI MCP：`https://docs.openwebui.com/features/mcp/`
+- Dify MCP Tools：`https://docs.dify.ai/en/use-dify/build/mcp`
 - Flowise Docs：`https://docs.flowiseai.com/`
+- Langflow MCP Server：`https://docs.langflow.org/mcp-server`
 - MCP Tools Specification：`https://modelcontextprotocol.io/specification/2025-06-18/server/tools`
-- MCP Resources Specification：`https://modelcontextprotocol.io/specification/2025-06-18/server/resources`
