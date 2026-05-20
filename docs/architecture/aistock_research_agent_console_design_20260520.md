@@ -88,6 +88,53 @@ AIstock 应建设一个 **研究与实验综合助理控制台**，其核心形�
 
 ---
 
+### 3.4 OpenClaw 参考架构与取舍
+
+OpenClaw 的产品形态与 AIstock 研究助理有较高参考价值：它强调多 channel、gateway、skills、memory、workspace、模型 provider 可替换等能力。这些方向与 AIstock 的“多窗口、多入口、长期记忆、技能库、MCP 工具执行”非常接近。
+
+可借鉴内容：
+
+| OpenClaw 思路 | AIstock 借鉴方式 |
+|---|---|
+| Gateway 统一接入 | 建设 `assistant_gateway`，接收 Web UI、未来 IM、语音、定时任务、MCP 事件 |
+| Channel 抽象 | Web 控制台、未来 Telegram/Slack/企业微信/邮件/桌面通知都作为 channel |
+| Session / Workspace | 映射为 `assistant_workspace_sessions` 和 `assistant_windows`，支持多屏幕并行 |
+| Skills 目录 | 借鉴为 `assistant_skill_registry`，但必须增加白名单、版本、checksum、审批和权限 |
+| Memory 能力 | 借鉴“助理必须有长期状态”的理念，但不照搬文件式记忆作为核心事实源 |
+| Model Provider 可替换 | 与 AIstock 的模型无关记忆和 Context Pack 设计一致 |
+
+不建议直接复用内容：
+
+1. 不建议把 OpenClaw gateway 作为 AIstock 主控。AIstock 的任务账本、审批、MCP 权限、GitHub 同步、实验谱系必须由 AIstock 原生掌握。
+2. 不建议把 OpenClaw 的文件式 memory 作为 AIstock 核心长期记忆。AIstock 的记忆需要数据库、索引、关系、时间有效性、审批和审计。
+3. 不建议直接接入公共 skill 市场。AIstock skill 必须本地白名单、版本锁定、checksum 校验和安全审查。
+4. 不建议默认开放主机控制工具。AIstock 研究助理默认不具备 shell、文件写入、git、桌面控制和鼠标键盘控制能力。
+5. 不建议让第三方框架决定生产敏感动作。所有 L2+ 操作必须经过 AIstock 审批中心。
+
+OpenClaw 对 AIstock 的主要价值不是“拿来替换”，而是证明 `Gateway + Channel + Skills + Memory + Workspace` 是一个合理产品形态。AIstock 应吸收该形态，但以原生方式实现核心控制面。
+
+### 3.5 即时通讯和外部入口参考
+
+未来 AIstock 研究助理可以支持即时通讯工具，但 IM 不应替代主控制台。
+
+建议入口分级：
+
+| 入口 | 适合能力 | 不适合能力 |
+|---|---|---|
+| AIstock Web 控制台 | 全量对话、配置预览、审批、进度展示、多窗口工作台 | 无 |
+| 桌面通知 | 任务完成、失败、等待确认、晨报提醒 | 参数复杂的审批 |
+| IM / 企业微信 / Slack / Telegram | 简短状态查询、晨报、低风险确认、让助理记忆事项 | 高风险实验、生产写入、正式 Issue 入库 |
+| 语音 | 快速输入、播报、提醒 | 单独完成高风险确认 |
+
+IM 入口必须遵守以下规则：
+
+1. 任何高风险动作都必须生成 `approval_request_id`。
+2. 用户确认文本必须与 `plan_digest`、配置版本、风险等级绑定。
+3. IM 只能作为确认来源之一，最终执行仍由 AIstock Orchestrator 完成。
+4. 所有 IM 消息必须写入事件流和审计日志。
+5. 不同 channel 的身份必须映射到 AIstock 用户身份，不能只依赖昵称。
+
+
 ## 4. 总体架构
 
 ```mermaid
@@ -134,6 +181,55 @@ flowchart TD
 5. 任何高风险动作只允许一个审批来源最终生效，避免多窗口重复执行。
 
 ---
+
+### 4.3 独立产品化架构预留
+
+本项目虽然首先在 AIstock 内实现，但架构上应把“研究助理控制台”设计为可独立发布的产品：
+
+> 任何具有 MCP/API 接口的传统应用，都可以通过该框架升级为“AI 助理式应用”。
+
+因此代码结构需要从第一阶段就区分通用核心和 AIstock 适配层。
+
+```text
+assistant_product_core/
+  gateway/                    # channel 接入、session 路由、事件分发
+  memory/                     # Memory Backbone 抽象、Context Pack、索引、审计
+  skills/                     # Skill Registry、skill loader、权限和版本治理
+  mcp/                        # MCP tool registry、risk policy、tool call trace
+  orchestration/              # task ledger、approval、resource budget、event stream
+  workbench/                  # 配置预览、实时进度、报告、深链协议
+  providers/                  # LLM provider、embedding provider、search provider
+  security/                   # 权限、身份、审计、secret redaction
+
+assistant_app_adapters/
+  aistock/                    # AIstock 模块、QE/HMM/Validation/GitHub/数仓适配
+  generic_mcp_app/            # 通用 MCP 应用适配模板
+  future_plugins/             # 其他应用适配器
+```
+
+产品化边界：
+
+| 层 | 是否通用 | AIstock 是否依赖 |
+|---|---:|---|
+| Assistant Gateway | 是 | 使用通用能力 |
+| Memory Backbone | 是 | AIstock 扩展领域 schema |
+| Skill Registry | 是 | AIstock 注册量化研发 skill |
+| MCP Tool Registry | 是 | AIstock 注册 QE/Validation/GitHub 等 MCP |
+| Task Ledger / Approval | 是 | AIstock 使用领域风险策略 |
+| Workbench | 是 | AIstock 增加 QE/HMM/因子配置视图 |
+| AIstock Domain Adapter | 否 | AIstock 专用 |
+
+独立产品需要支持：
+
+1. 应用注册：一个传统应用声明自己的 MCP server、业务模块、页面深链和风险等级。
+2. Skill 注册：应用可以注册自己的专业 skill，例如 CRM 助理、数据分析助理、运维助理、量化研究助理。
+3. Memory 命名空间：不同应用、用户、租户、项目的记忆隔离。
+4. 通用 Workbench：展示计划、配置、MCP 调用、审批、报告和深链。
+5. Adapter SDK：让其他应用实现少量 adapter 即可接入。
+6. 白标部署：AIstock 中叫“研究助理”，独立产品可叫“Agentic App Console”。
+
+AIstock 第一阶段不需要完整产品化，但代码组织必须避免把所有逻辑写死在 QE/HMM 页面中。通用核心应尽量独立，AIstock 专属逻辑放在 adapter。
+
 
 ## 5. 智能体角色定义
 
@@ -454,6 +550,156 @@ agent_task_events
 - 失败原因和可选修复建议。
 
 ---
+
+### 7.6 MCP 与 Skill 双接口架构
+
+AIstock 研究助理未来必须同时具备 MCP 和 Skill 两套接口。
+
+核心定义：
+
+- **MCP 是系统执行接口**：负责调用 AIstock 已有模块、读取事实状态、创建任务、运行实验、同步 GitHub、执行验证。
+- **Skill 是专业能力接口**：负责告诉 Agent 如何分析、如何研发、如何组织流程、如何生成方案、如何解释结果。
+
+一句话概括：
+
+> MCP 负责“做动作”，Skill 负责“会做事”。
+
+两者协同关系：
+
+```mermaid
+flowchart TD
+    User["用户任务"] --> Router["任务路由器"]
+    Router --> Skill["选择Skill: 方法/流程/分析"]
+    Skill --> NeedData["确定数据和工具需求"]
+    NeedData --> MCP["调用MCP读取状态或执行操作"]
+    MCP --> Result["结构化结果"]
+    Result --> Skill2["Skill分析/解释/生成建议"]
+    Skill2 --> Workbench["工作台展示配置/报告/风险"]
+    Workbench --> Approval["用户确认"]
+    Approval --> MCP2["MCP执行写操作"]
+    MCP2 --> Memory["写入任务状态和长期记忆"]
+```
+
+### 7.7 MCP 使用场景
+
+MCP 适合所有需要稳定、结构化、可审计、可回放的系统操作。
+
+| 场景 | 首选 MCP | 原因 |
+|---|---:|---|
+| 查询 QE 实验状态 | 是 | 后端事实源，结构化返回 |
+| 创建 QE 模板 | 是 | 有 schema、审批、任务 ID 和审计 |
+| 物化/运行 QE 实验 | 是 | 涉及数据库、远程节点和长任务 |
+| 查询 QE Archive | 是 | 数仓事实查询 |
+| 查询 HMM timeline | 是 | 研究任务事实源 |
+| 执行 Validation 计划 | 是 | 需要验证记录和 artifacts |
+| 创建/同步 GitHub Issue | 是 | 必须强一致和审计 |
+| 查询模块质量/覆盖率 | 是 | 来自 Validation Center |
+| 数据同步任务 | 是 | 涉及生产/准生产数据边界 |
+| 写长期任务状态 | 是 | 任务账本是事实源 |
+| 写长期记忆 | 是，通过 Memory API/MCP | 需要权限、索引和审计 |
+
+### 7.8 Skill 使用场景
+
+Skill 适合专业流程、方法论、研发范式、复杂分析步骤和可复用研究工作流。
+
+| 场景 | 首选 Skill | 说明 |
+|---|---:|---|
+| QE 实验结果诊断 | 是 | 需要指标解释、失败归因、稳定性分析 |
+| HMM 演进方案设计 | 是 | 需要研究经验、regime 分析、验证计划 |
+| 因子研发 | 是 | 需要因子设计、数据约束、IC/OOS 检验流程 |
+| 模型研发 | 是 | 需要训练、评估、泄漏检查、稳定性分析 |
+| 交易策略设计 | 是 | 需要交易逻辑、风控、回测、执行约束 |
+| 事件处理演进 | 是 | 需要误杀/漏判、事件定义、集成路径 |
+| Paper v2 业务流程审查 | 是 | 需要跨模块业务理解 |
+| 研究报告生成 | 是 | 需要固定结构和审查标准 |
+| Issue 修复流程说明 | 是 | 作为流程指导；创建 Issue 仍走 MCP |
+| 开发新代码 | Skill 只生成任务包 | 具体编码交给 Codex/Claude 开发流程 |
+
+现有 AIstock skill 应继续复用并纳入治理，例如：
+
+- `qe-evolution-diagnostics`
+- `analyze-factor-library`
+- `develop-factor`
+- `develop-minute-execution-algo`
+- `rdagent-task-analyzer`
+- `rdagent-data-doctor`
+- `tushare`
+- `add-tushare-dataset`
+
+这些 skill 是未来研究助理的专业能力来源，但必须进入统一 Skill Registry，不能作为无审计的临时提示词使用。
+
+### 7.9 Skill Registry 设计
+
+```text
+assistant_skill_registry
+  id
+  skill_key
+  title
+  version
+  description
+  domain                    -- qe / hmm / factor / model / strategy / validation / issue / generic
+  skill_type                -- analysis / research / development_plan / diagnostics / report / handoff
+  entrypoint_type           -- markdown / python / prompt_pack / external
+  entrypoint_ref
+  input_schema_json
+  output_schema_json
+  required_mcp_tools
+  allowed_side_effect_level -- none / read_only / draft_only / controlled_write
+  required_approval_level
+  owner
+  source_ref
+  checksum
+  status                    -- draft / approved / deprecated / blocked
+  created_at
+  updated_at
+```
+
+Skill 风险等级：
+
+| Skill 类型 | 风险 | 处理方式 |
+|---|---:|---|
+| 纯分析 skill | 低 | 可自动使用 |
+| 报告生成 skill | 低 | 可自动使用 |
+| 诊断 skill | 中 | 自动使用，但结论必须绑定证据 |
+| 实验设计 skill | 中 | 生成草稿，执行需审批 |
+| 因子/模型/策略开发 skill | 高 | 只生成任务包，不由研究助理直接写代码 |
+| 带脚本执行 skill | 高 | 必须白名单、审计、沙箱或 MCP controlled runner |
+| 第三方下载/安装 skill | 高 | 默认禁止，需安全审查 |
+
+### 7.10 Skill 安全治理
+
+1. Skill 必须本地白名单注册。
+2. Skill 必须版本锁定和 checksum 校验。
+3. Skill 不能绕过 MCP 写 AIstock 状态。
+4. Skill 不能直接创建正式 GitHub Issue。
+5. Skill 不能直接写代码、提交代码或合入 main；开发类 skill 只能生成任务包。
+6. Skill 使用必须写入 task trace，包括输入、输出、版本、checksum、使用的 MCP 工具和证据。
+7. Skill 产生的重要结论默认进入 memory candidate，需要按记忆类型审批。
+8. 公共 skill 生态只能作为参考，不能直接安装到生产助理。
+
+### 7.11 MCP + Skill + Memory + Workbench 四层能力
+
+AIstock 研究助理的最终能力栈：
+
+```text
+Memory
+  长期记忆、任务状态、架构事实、用户规划。
+
+Skills
+  方法论、研发流程、分析能力、诊断能力、报告模板。
+
+MCP
+  AIstock 模块操作、状态查询、实验执行、Issue 同步、验证执行。
+
+Workbench
+  实时进度、配置预览、审批、报告、深链、多窗口展示。
+```
+
+- Memory 让它“记得住”。
+- Skill 让它“懂方法”。
+- MCP 让它“能执行”。
+- Workbench 让用户“看得见、能确认、能干预”。
+
 
 ## 8. 多屏幕与多窗口协同
 
@@ -851,7 +1097,10 @@ assistant_voice_events
 5. QE 10 loop 实验示例流程是否能覆盖配置草稿、diff、preflight、审批、物化、执行状态展示。
 6. 多窗口和多 Research Stream 是否有重复执行、重复审批、配置冲突风险。
 7. 候选 Issue 与正式 GitHub Issue 门禁是否符合 AIstock 现有规范。
-8. Phase 1 范围是否足够小，可以先交付可用闭环。
+8. MCP 与 Skill 的边界是否清晰，Skill 是否不会绕过 MCP 和审批。
+9. OpenClaw 参考是否只作为 gateway/channel/skill/product 形态参考，没有引入核心安全风险。
+10. 独立产品化抽象是否足以支持其他 MCP 应用接入，同时不削弱 AIstock 首期交付。
+11. Phase 1 范围是否足够小，可以先交付可用闭环。
 
 ---
 
@@ -861,8 +1110,9 @@ assistant_voice_events
 2. Claude Code 审核长期记忆和 MCP 工作台方案。
 3. 根据审核意见修订 v3。
 4. 通过后新建实现分支：`feature/research-agent-console-20260521`。
-5. Phase 1 只做：MCP 执行工作台 + 原生长期记忆 MVP + 任务事件流 + 审批中心。
+5. Phase 1 只做：MCP 执行工作台 + 原生长期记忆 MVP + Skill Registry 基础治理 + 任务事件流 + 审批中心。
 6. Phase 2 再做：多窗口、多 Stream、对话确认、Mem0/Graphiti adapter PoC。
+7. Phase 2/3 评估把通用核心抽离为独立产品包，AIstock 仅作为首个领域 adapter。
 
 ---
 
@@ -882,3 +1132,6 @@ assistant_voice_events
 - Flowise Docs：`https://docs.flowiseai.com/`
 - Langflow MCP Server：`https://docs.langflow.org/mcp-server`
 - MCP Tools Specification：`https://modelcontextprotocol.io/specification/2025-06-18/server/tools`
+- OpenClaw What is OpenClaw：`https://openclawdoc.com/docs/getting-started/what-is-openclaw/`
+- OpenClaw Agents Overview：`https://openclawdoc.com/docs/agents/overview/`
+- OpenClaw Architecture：`https://openclawlab.com/en/docs/start/architecture/`
