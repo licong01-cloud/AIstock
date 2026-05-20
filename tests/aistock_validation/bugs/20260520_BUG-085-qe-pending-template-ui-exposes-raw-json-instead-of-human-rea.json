@@ -30,7 +30,7 @@
   "assigned_agent": "paper-v2-team",
   "fix_branch": "bug/BUG-085-qe-pending-template-ui",
   "fix_commit": "57fec9a",
-  "verification_run_id": "valjob_20260520_144828_b234cdb2;valjob_20260520_144829_2fad17ef;valjob_20260520_144828_bcd3ca6a;valjob_20260520_144900_871c89cb;valjob_20260520_144901_096d81fb;qe_mcp_l3_20260520_224953",
+  "verification_run_id": "qe_mcp_l3_20260520_224953;validation_mcp_branch_scope_blocked_20260520",
   "created_at": "2026-05-20T08:39:04Z",
   "first_seen_at": "2026-05-20T08:39:04Z",
   "last_seen_at": "2026-05-20T08:39:04Z",
@@ -111,8 +111,14 @@
     {
       "timestamp": "2026-05-20T14:51:54Z",
       "actor": "codex-app",
-      "action": "validation_mcp_verified",
-      "note": "Rebased onto origin/main 08ab7fe. Validation MCP controlled executions passed: guardrail_changed_files valjob_20260520_144828_b234cdb2, l0 valjob_20260520_144829_2fad17ef, qe_archive_backend valjob_20260520_144828_bcd3ca6a, validation_catalog_integrity valjob_20260520_144900_871c89cb, validation_module_registry_l0 valjob_20260520_144901_096d81fb. Supplemental local qe_mcp_l3 passed for UI coverage because Validation MCP catalog has no qe_mcp_l3/qe_template_ui runner plan."
+      "action": "validation_mcp_root_verified",
+      "note": "Validation MCP controlled executions passed in the MCP configured repo root, not the bug worktree: guardrail_changed_files valjob_20260520_144828_b234cdb2, l0 valjob_20260520_144829_2fad17ef, qe_archive_backend valjob_20260520_144828_bcd3ca6a, validation_catalog_integrity valjob_20260520_144900_871c89cb, validation_module_registry_l0 valjob_20260520_144901_096d81fb. Branch-local qe_mcp_l3 passed separately for the rebased bug worktree."
+    },
+    {
+      "timestamp": "2026-05-20T14:55:02Z",
+      "actor": "codex-app",
+      "action": "validation_mcp_scope_correction",
+      "note": "Validation MCP controlled runner is currently bound to its configured repo root (F:/Dev/AIstock) and has no cwd/worktree parameter; controlled jobs started from this thread did not validate the bug/BUG-085-qe-pending-template-ui worktree. Branch-local qe_mcp_l3 on the rebased worktree passed and remains the valid verification evidence until Validation MCP supports branch/worktree execution or the configured root is explicitly switched."
     }
   ],
   "github_issue_number": 113,
