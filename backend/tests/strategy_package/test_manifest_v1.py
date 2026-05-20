@@ -45,6 +45,7 @@ def make_manifest(algo_code: str = "TWAP") -> StrategyPackageManifest:
         ),
     )
     return StrategyPackageManifest(
+        manifest_version="1.0",
         package_name="qe_test",
         source=StrategyPackageSource(
             source_type=SourceType.QE_EXPERIMENT,

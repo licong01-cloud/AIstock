@@ -75,19 +75,30 @@ def build_backtest_runtime_contract(
     manifest: StrategyPackageManifest,
     runtime_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Normalize the QE strategy semantics needed by Paper v2 runtime."""
+    """Normalize package source evidence needed by Paper v2 runtime."""
 
     manifest = _effective_manifest_for_contract(manifest, runtime_config)
-    strategy_config = manifest.strategy_config or {}
-    custom_params = strategy_config.get("custom_params")
+    evidence = _runtime_evidence(manifest)
+    daily_strategy = evidence.get("daily_strategy") if isinstance(evidence.get("daily_strategy"), dict) else {}
+    custom_params = daily_strategy.get("custom_params") if isinstance(daily_strategy, dict) else None
     if not isinstance(custom_params, dict):
         custom_params = {}
+    strategy_config = manifest.strategy_config or {}
     strategy_marker = str(
         custom_params.get("strategy_class")
         or custom_params.get("strategy_id")
+        or daily_strategy.get("strategy_id")
         or strategy_config.get("strategy_id")
-        or ""
+        or "score_weighted_topk_v2"
     ).strip()
+    if strategy_marker not in (SCORE_WEIGHTED_V1_IDS | SCORE_WEIGHTED_V2_IDS | SCORE_WEIGHTED_V2_CAPACITY_V1_IDS):
+        if manifest.is_legacy_runtime_manifest:
+            strategy_marker = "score_weighted_topk_v2"
+        else:
+            raise UnsupportedFeatureError(
+                "Paper v2 does not support the StrategyPackage daily strategy contract yet",
+                context={"package_id": manifest.package_id, "strategy_marker": strategy_marker},
+            )
     strategy_family = _portfolio_strategy_family(strategy_marker)
     portfolio_params = _portfolio_strategy_params(
         strategy_family=strategy_family,
@@ -115,7 +126,11 @@ def build_backtest_runtime_contract(
             "event_signal_policy": _platform_feature_contract("event_signal_policy"),
             "variant": _runtime_variant_contract(runtime_config),
         },
-        "minute_execution_policy": manifest.minute_execution_policy.model_dump(mode="json"),
+        "execution_policy_reference": {
+            "authority": "validated_execution_policy",
+            "package_bound": False,
+            "source_execution_evidence": evidence.get("execution") or {},
+        },
     }
 
 
@@ -144,6 +159,7 @@ def normalize_runtime_config_with_backtest_contract(
     *,
     context: dict[str, Any] | None = None,
     include_contract: bool = False,
+    inherit_source_defaults: bool = True,
 ) -> dict[str, Any]:
     """Normalize a Paper v2 runtime config against the strategy contract.
 
@@ -158,6 +174,7 @@ def normalize_runtime_config_with_backtest_contract(
             context={**(context or {}), "runtime_config_type": type(runtime_config).__name__},
         )
     config = dict(runtime_config or {})
+    effective_manifest = _effective_manifest_for_contract(manifest, config)
     contract = build_backtest_runtime_contract(manifest, config)
     raw_profile = config.get("runtime_profile")
     if raw_profile is not None and not isinstance(raw_profile, dict):
@@ -166,6 +183,8 @@ def normalize_runtime_config_with_backtest_contract(
             context={**(context or {}), "runtime_profile_type": type(raw_profile).__name__},
         )
     profile_payload: dict[str, Any] = dict(raw_profile or {})
+    if inherit_source_defaults:
+        _apply_backtest_context_defaults(effective_manifest, profile_payload, config)
 
     _normalize_selection_profile(
         profile_payload=profile_payload,
@@ -215,8 +234,15 @@ def _portfolio_strategy_params(
         else SCORE_WEIGHTED_DEFAULTS
     )
     params = dict(defaults)
-    params["topk"] = int(custom_params.get("topk") or manifest.portfolio_policy.topk)
-    params["n_drop"] = int(custom_params.get("n_drop") or manifest.portfolio_policy.n_drop)
+    topk = custom_params.get("topk") or _runtime_topk(manifest)
+    n_drop = custom_params.get("n_drop") or _runtime_n_drop(manifest)
+    if topk is None:
+        raise StrategyPackageValidationError(
+            "runtime profile selection.top_k is required for alpha-core StrategyPackage contracts",
+            context={"package_id": manifest.package_id, "strategy_marker": strategy_marker},
+        )
+    params["topk"] = int(topk)
+    params["n_drop"] = int(n_drop or 0)
     for key in defaults:
         if key in custom_params:
             params[key] = custom_params[key]
@@ -229,6 +255,52 @@ def _portfolio_strategy_params(
     params["min_n_drop"] = int(params["min_n_drop"])
     params["hold_thresh"] = float(params.get("hold_thresh") or 0)
     return params
+
+
+def _runtime_evidence(manifest: StrategyPackageManifest) -> dict[str, Any]:
+    if manifest.backtest_context:
+        return manifest.backtest_context
+    strategy_config = manifest.strategy_config or {}
+    custom_params = strategy_config.get("custom_params") if isinstance(strategy_config, dict) else None
+    if not isinstance(custom_params, dict):
+        custom_params = {}
+    daily_strategy = {
+        "strategy_id": strategy_config.get("strategy_id") if isinstance(strategy_config, dict) else None,
+        "custom_params": custom_params,
+    }
+    if custom_params.get("topk") is not None:
+        daily_strategy["topk"] = custom_params["topk"]
+    elif manifest.portfolio_policy is not None:
+        daily_strategy["topk"] = manifest.portfolio_policy.topk
+    if custom_params.get("n_drop") is not None:
+        daily_strategy["n_drop"] = custom_params["n_drop"]
+    elif manifest.portfolio_policy is not None:
+        daily_strategy["n_drop"] = manifest.portfolio_policy.n_drop
+    return {
+        "schema_version": "legacy_manifest_runtime_context_v1",
+        "authority": "legacy_runtime_manifest_compatibility_only",
+        "daily_strategy": daily_strategy,
+        "selection_runtime": strategy_config.get("selection_runtime") if isinstance(strategy_config.get("selection_runtime"), dict) else {},
+        "execution": {},
+    }
+
+
+def _runtime_topk(manifest: StrategyPackageManifest) -> int | None:
+    daily_strategy = _runtime_evidence(manifest).get("daily_strategy")
+    if isinstance(daily_strategy, dict) and daily_strategy.get("topk") is not None:
+        return int(daily_strategy["topk"])
+    if manifest.is_legacy_runtime_manifest and manifest.portfolio_policy is not None:
+        return int(manifest.portfolio_policy.topk)
+    return None
+
+
+def _runtime_n_drop(manifest: StrategyPackageManifest) -> int | None:
+    daily_strategy = _runtime_evidence(manifest).get("daily_strategy")
+    if isinstance(daily_strategy, dict) and daily_strategy.get("n_drop") is not None:
+        return int(daily_strategy["n_drop"])
+    if manifest.is_legacy_runtime_manifest and manifest.portfolio_policy is not None:
+        return int(manifest.portfolio_policy.n_drop)
+    return None
 
 
 def _portfolio_capacity_profile(strategy_marker: str, strategy_family: str) -> str | None:
@@ -298,6 +370,26 @@ def _tradability_contract(custom_params: dict[str, Any]) -> dict[str, Any]:
         "suspend_filter_file": custom_params.get("suspend_filter_file"),
         "suspend_filter_strict": bool(custom_params.get("suspend_filter_strict", True)),
     }
+
+
+def _apply_backtest_context_defaults(
+    manifest: StrategyPackageManifest,
+    profile_payload: dict[str, Any],
+    config: dict[str, Any],
+) -> None:
+    selection_payload = dict(profile_payload.get("selection") or {})
+    daily_strategy = _runtime_evidence(manifest).get("daily_strategy")
+    if not isinstance(daily_strategy, dict):
+        daily_strategy = {}
+    if selection_payload.get("top_k") is None and "top_k" not in config and daily_strategy.get("topk") is not None:
+        selection_payload["top_k"] = daily_strategy.get("topk")
+    if selection_payload.get("daily_strategy_id") is None:
+        strategy_id = daily_strategy.get("strategy_id")
+        if strategy_id:
+            selection_payload["daily_strategy_id"] = strategy_id
+    if not selection_payload.get("daily_strategy_params") and isinstance(daily_strategy.get("custom_params"), dict):
+        selection_payload["daily_strategy_params"] = daily_strategy["custom_params"]
+    profile_payload["selection"] = selection_payload
 
 
 def _normalize_selection_profile(
