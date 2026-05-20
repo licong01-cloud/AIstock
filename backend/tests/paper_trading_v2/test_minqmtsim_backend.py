@@ -596,7 +596,28 @@ def test_minqmt_readiness_preserves_disabled_hmm_and_uses_platform_risk_profile(
         "hmm_signal_preset": "qe_preset",
         "risk_policy": {"enabled": True, "providers": ["st_pit"]},
     }
-    _package_repo, paper_repo, manifest, portfolio = _miniqmt_portfolio_fixture(custom_params=custom_params)
+    package_repo, paper_repo, manifest, portfolio = _miniqmt_portfolio_fixture(custom_params=custom_params)
+    runtime_config = {
+        "runtime_profile": {
+            "hmm": {"enabled": False},
+            "risk_policy": {"enabled": True},
+            "tradability": {"exclude_suspended": False},
+        }
+    }
+    profile_service = PaperTradingV2PortfolioService(package_repository=package_repo, repository=paper_repo)
+    _profile, version = profile_service.create_runtime_profile(
+        portfolio_id=portfolio.portfolio_id,
+        profile_name="miniqmt disabled hmm readiness",
+        config_json=runtime_config,
+        created_by="unit_test",
+    )
+    activation = profile_service.activate_runtime_config(
+        portfolio_id=portfolio.portfolio_id,
+        trade_date=TRADE_DATE,
+        profile_version_id=version.profile_version_id,
+        activated_by="unit_test",
+        reason="MiniQMT readiness runtime profile",
+    )
     risk_policy = RecordingRiskPolicyService()
 
     readiness = PaperTradingReadinessService(
@@ -610,15 +631,11 @@ def test_minqmt_readiness_preserves_disabled_hmm_and_uses_platform_risk_profile(
     ).check_day(
         portfolio_id=portfolio.portfolio_id,
         trade_date=TRADE_DATE,
-        runtime_config={
-            "runtime_profile": {
-                "hmm": {"enabled": False},
-                "risk_policy": {"enabled": True},
-                "tradability": {"exclude_suspended": False},
-            }
-        },
+        runtime_config={},
     )
 
+    assert "runtime_profile_activation" in readiness.runtime_config_keys
+    assert paper_repo.runtime_config_activations[activation.activation_id].profile_version_id == version.profile_version_id
     assert risk_policy.profile_seen is not None
     assert risk_policy.profile_seen.enabled is True
     selection_check = next(check for check in readiness.checks if check.check_name == "selection_runtime")
@@ -679,6 +696,20 @@ def test_minqmt_day_runner_uses_platform_hmm_snapshot_and_versioned_execution_po
             "tradability": {"exclude_suspended": False},
         }
     }
+    profile_service = PaperTradingV2PortfolioService(package_repository=package_repo, repository=paper_repo)
+    _profile, version = profile_service.create_runtime_profile(
+        portfolio_id=portfolio.portfolio_id,
+        profile_name="miniqmt platform hmm profile",
+        config_json=runtime_config,
+        created_by="unit_test",
+    )
+    runtime_activation = profile_service.activate_runtime_config(
+        portfolio_id=portfolio.portfolio_id,
+        trade_date=TRADE_DATE,
+        profile_version_id=version.profile_version_id,
+        activated_by="unit_test",
+        reason="MiniQMT HMM runtime profile",
+    )
     runtime = _runtime_with_artifact(
         manifest,
         runtime_config=runtime_config,
@@ -707,11 +738,11 @@ def test_minqmt_day_runner_uses_platform_hmm_snapshot_and_versioned_execution_po
     ).run_day(
         portfolio_id=portfolio.portfolio_id,
         trade_date=TRADE_DATE,
-        runtime_config=runtime_config,
     )
 
     context = result.run.runtime_config["validated_execution_policy"]
     assert result.run.status == RunStatus.SUCCEEDED
+    assert result.run.runtime_config["runtime_profile_activation"]["activation_id"] == runtime_activation.activation_id
     assert context["activation_id"] == activation.activation_id
     assert context["activation_source"] == "trade_date_activation"
     assert context["algo_code"] == "CLOSE_PRICE"

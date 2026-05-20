@@ -8,7 +8,10 @@ from typing import Any, Callable
 from backend.services.data_refresh_audit import DataRefreshAuditRepository
 from backend.services.paper_trading_v2.market_data import MinuteDataSource, PaperV2MinuteMarketDataProvider, TradeCalendarProvider
 from backend.services.selection_center.risk_policy import StockRiskPolicyService
-from backend.services.selection_center.runtime_profile import parse_selection_runtime_profile
+from backend.services.selection_center.runtime_profile import (
+    parse_selection_runtime_profile,
+    validate_runtime_profile_binding,
+)
 from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.strategy_package.backtest_contract import (
     normalize_runtime_config_with_backtest_contract,
@@ -140,6 +143,10 @@ class PaperTradingDayRunner:
             config,
             context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat(), "check": "day_runner"},
             include_contract=True,
+        )
+        validate_runtime_profile_binding(
+            config,
+            context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat(), "check": "day_runner"},
         )
         runtime_profile = parse_selection_runtime_profile(config)
         self._reject_raw_execution_overrides(config)
