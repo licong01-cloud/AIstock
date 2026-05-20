@@ -72,19 +72,67 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_qmt_strategy_active_binding
     ON qmt_strategy.strategy_package_binding(strategy_id)
     WHERE binding_status = 'ACTIVE';
 
-COMMENT ON TABLE qmt_strategy.strategy_package_binding IS 'Auditable lifecycle evidence linking a virtual strategy account to the active or historical StrategyPackage manifest used for intents.';
+COMMENT ON TABLE qmt_strategy.strategy_package_binding IS 'Auditable lifecycle binding between a virtual strategy account and a StrategyPackage identity/runtime profile; daily selection evidence is stored separately.';
 COMMENT ON COLUMN qmt_strategy.strategy_package_binding.binding_id IS 'Stable package binding identifier.';
 COMMENT ON COLUMN qmt_strategy.strategy_package_binding.strategy_id IS 'Virtual account that owns this package binding.';
 COMMENT ON COLUMN qmt_strategy.strategy_package_binding.package_id IS 'StrategyPackage identifier selected for this virtual strategy.';
 COMMENT ON COLUMN qmt_strategy.strategy_package_binding.manifest_sha256 IS 'Frozen StrategyPackage manifest hash used for audit and reproducibility.';
-COMMENT ON COLUMN qmt_strategy.strategy_package_binding.selection_run_id IS 'Optional Selection Center run that produced target symbols or weights.';
-COMMENT ON COLUMN qmt_strategy.strategy_package_binding.trade_date IS 'Trade date for the selection evidence when the binding is date-specific.';
+COMMENT ON COLUMN qmt_strategy.strategy_package_binding.selection_run_id IS 'Legacy nullable audit field only; active daily execution must use qmt_strategy.strategy_binding_selection_evidence instead of this field.';
+COMMENT ON COLUMN qmt_strategy.strategy_package_binding.trade_date IS 'Legacy nullable audit field only; active daily execution must resolve current trade_date evidence from qmt_strategy.strategy_binding_selection_evidence.';
 COMMENT ON COLUMN qmt_strategy.strategy_package_binding.target_weight IS 'Optional portfolio target weight assigned to this package binding.';
 COMMENT ON COLUMN qmt_strategy.strategy_package_binding.top_k IS 'Optional top-k symbol count used by the strategy binding.';
 COMMENT ON COLUMN qmt_strategy.strategy_package_binding.binding_status IS 'Binding lifecycle status; only one ACTIVE binding is allowed per strategy, while RETIRED bindings preserve rollover history.';
 COMMENT ON COLUMN qmt_strategy.strategy_package_binding.runtime_config IS 'JSON runtime parameters captured with the binding, including binding_lifecycle rollover metadata when replaced.';
 COMMENT ON COLUMN qmt_strategy.strategy_package_binding.created_at IS 'UTC timestamp when the binding was created.';
 COMMENT ON COLUMN qmt_strategy.strategy_package_binding.updated_at IS 'UTC timestamp when the binding was last updated.';
+
+CREATE TABLE IF NOT EXISTS qmt_strategy.strategy_binding_selection_evidence (
+    evidence_id TEXT PRIMARY KEY,
+    binding_id TEXT NOT NULL REFERENCES qmt_strategy.strategy_package_binding(binding_id),
+    strategy_id TEXT NOT NULL REFERENCES qmt_strategy.virtual_account(strategy_id),
+    package_id TEXT NOT NULL,
+    selection_run_id TEXT NOT NULL,
+    trade_date DATE NOT NULL,
+    data_source TEXT NOT NULL,
+    manifest_sha256 TEXT NOT NULL,
+    runtime_config_hash TEXT NOT NULL,
+    artifact_id TEXT,
+    artifact_sha256 TEXT,
+    source_type TEXT,
+    authority_scope TEXT,
+    score_count INTEGER,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT ck_qmt_strategy_selection_evidence_package CHECK (btrim(package_id) <> ''),
+    CONSTRAINT ck_qmt_strategy_selection_evidence_run CHECK (btrim(selection_run_id) <> ''),
+    CONSTRAINT ck_qmt_strategy_selection_evidence_data_source CHECK (btrim(data_source) <> ''),
+    CONSTRAINT ck_qmt_strategy_selection_evidence_manifest CHECK (btrim(manifest_sha256) <> ''),
+    CONSTRAINT ck_qmt_strategy_selection_evidence_runtime_hash CHECK (btrim(runtime_config_hash) <> ''),
+    CONSTRAINT ck_qmt_strategy_selection_evidence_score_count CHECK (score_count IS NULL OR score_count >= 0),
+    CONSTRAINT uq_qmt_strategy_selection_evidence_binding_date UNIQUE(binding_id, trade_date),
+    CONSTRAINT uq_qmt_strategy_selection_evidence_binding_run UNIQUE(binding_id, selection_run_id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_qmt_strategy_selection_evidence_strategy_date
+    ON qmt_strategy.strategy_binding_selection_evidence(strategy_id, trade_date);
+
+COMMENT ON TABLE qmt_strategy.strategy_binding_selection_evidence IS 'Current-day or historical SelectionRun evidence resolved for a MiniQMT StrategyPackage binding; order generation must use current trade_date rows from this table.';
+COMMENT ON COLUMN qmt_strategy.strategy_binding_selection_evidence.evidence_id IS 'Stable daily selection evidence identifier.';
+COMMENT ON COLUMN qmt_strategy.strategy_binding_selection_evidence.binding_id IS 'StrategyPackage binding identity that this daily SelectionRun evidence belongs to.';
+COMMENT ON COLUMN qmt_strategy.strategy_binding_selection_evidence.strategy_id IS 'Virtual strategy account owning the evidence, duplicated for query and audit.';
+COMMENT ON COLUMN qmt_strategy.strategy_binding_selection_evidence.package_id IS 'StrategyPackage identifier used by the SelectionRun evidence.';
+COMMENT ON COLUMN qmt_strategy.strategy_binding_selection_evidence.selection_run_id IS 'Selection Center run generated or resolved for this binding and trade_date.';
+COMMENT ON COLUMN qmt_strategy.strategy_binding_selection_evidence.trade_date IS 'Exchange trade date for which this SelectionRun evidence may drive MiniQMT order generation.';
+COMMENT ON COLUMN qmt_strategy.strategy_binding_selection_evidence.data_source IS 'Selection data source such as DB_HISTORICAL or paper_v2_realtime_db; must match the SelectionRun.';
+COMMENT ON COLUMN qmt_strategy.strategy_binding_selection_evidence.manifest_sha256 IS 'StrategyPackage manifest hash captured from the SelectionRun and matched against the active binding.';
+COMMENT ON COLUMN qmt_strategy.strategy_binding_selection_evidence.runtime_config_hash IS 'Canonical runtime/selection artifact hash used to detect runtime profile mismatch before order generation.';
+COMMENT ON COLUMN qmt_strategy.strategy_binding_selection_evidence.artifact_id IS 'Optional protected selection score artifact identifier backing this evidence.';
+COMMENT ON COLUMN qmt_strategy.strategy_binding_selection_evidence.artifact_sha256 IS 'Optional digest of the protected selection score artifact payload.';
+COMMENT ON COLUMN qmt_strategy.strategy_binding_selection_evidence.source_type IS 'Optional artifact source type; authoritative MiniQMT execution expects live inference output.';
+COMMENT ON COLUMN qmt_strategy.strategy_binding_selection_evidence.authority_scope IS 'Optional artifact authority scope; authoritative MiniQMT execution expects authoritative_selection.';
+COMMENT ON COLUMN qmt_strategy.strategy_binding_selection_evidence.score_count IS 'Optional number of candidate score rows in the protected artifact.';
+COMMENT ON COLUMN qmt_strategy.strategy_binding_selection_evidence.metadata IS 'JSON audit metadata for artifact authority, runtime profile, and evidence creation context.';
+COMMENT ON COLUMN qmt_strategy.strategy_binding_selection_evidence.created_at IS 'UTC timestamp when the daily selection evidence row was recorded.';
 
 CREATE TABLE IF NOT EXISTS qmt_strategy.order_batch (
     batch_id TEXT PRIMARY KEY,
