@@ -90,7 +90,11 @@ export type BackfillCandidate = {
   selected_run_count?: number;
   archived_run_count?: number;
   pending_run_count?: number;
+  recommended_run_count?: number;
+  manual_only_run_count?: number;
+  not_recommended_run_count?: number;
   is_fully_archived?: boolean;
+  loops?: BackfillCandidateLoop[];
   node_id?: string | null;
   model_id?: string | null;
   model_catalog_id?: number | null;
@@ -102,6 +106,31 @@ export type BackfillCandidate = {
   completed_at?: string | null;
   updated_at?: string | null;
   archive_action?: string | null;
+};
+
+export type BackfillCandidateLoop = {
+  task_id?: string | null;
+  loop_id?: string | null;
+  loop_index?: number | null;
+  status?: string | null;
+  action_type?: string | null;
+  experiment_id?: string | null;
+  is_sota?: boolean;
+  archive_status?: string;
+  eligible?: boolean;
+  recommended?: boolean;
+  reason?: string | null;
+  run_ids?: string[];
+  run_count?: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+  IC?: number | null;
+  ic?: number | null;
+  Rank_IC?: number | null;
+  rank_ic?: number | null;
+  annualized_return?: number | null;
+  max_drawdown?: number | null;
+  information_ratio?: number | null;
 };
 
 export type ArchiveSourceItemStatus = {
@@ -119,6 +148,9 @@ export type ArchiveTaskStatus = {
   archived_loop_count?: number;
   eligible_loop_count?: number;
   pending_loop_count?: number;
+  recommended_loop_count?: number;
+  manual_only_loop_count?: number;
+  not_recommended_loop_count?: number;
   run_ids?: string[];
 };
 

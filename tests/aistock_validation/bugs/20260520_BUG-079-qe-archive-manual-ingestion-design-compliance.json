@@ -1,0 +1,128 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-079",
+  "title": "QE Archive ??????????????",
+  "description": "Expected: QE Archive manual ingestion follows docs/architecture/qe_archive_manual_ingestion_selection_design_20260519.md end to end. Users can see experiment/task/loop archive source-status, recommendation, preview, and confirmed write actions from QE evolution, QE evolution task detail, QE experiment history, QE Archive UI, and QE Archive MCP. Actual: previously merged implementation was not validated item-by-item against the design; users reported that QE pages did not expose experiment-level and loop-level warehouse status, recommendations, or archive buttons. This is a DESIGN-COMPLIANCE-001 violation and must be repaired without a simplified subset delivery.",
+  "module": "qe_archive",
+  "severity": "P1",
+  "risk_area": "feature_gap",
+  "status": "fixed",
+  "trigger_condition": {
+    "scenario": "qe_archive_manual_ingestion_ui_and_mcp_design_gap",
+    "design_doc": "docs/architecture/qe_archive_manual_ingestion_selection_design_20260519.md",
+    "affected_routes": [
+      "/quantevolver/evolution",
+      "/quantevolver/evolution/{taskId}",
+      "/quantevolver/experiments",
+      "/qe-archive"
+    ],
+    "affected_mcp": [
+      "aistock-qe-archive",
+      "aistock-qe-experiment"
+    ]
+  },
+  "reproduce_command": "Compare docs/architecture/qe_archive_manual_ingestion_selection_design_20260519.md with the current QE Archive backend, MCP, and frontend pages; verify that /quantevolver/evolution, /quantevolver/evolution/{taskId}, /quantevolver/experiments, /qe-archive, and aistock-qe-archive expose source-status, recommendation, preview, confirmed write, and loop-level selection as specified.",
+  "evidence_uris": [
+    "file:docs/architecture/qe_archive_manual_ingestion_selection_design_20260519.md",
+    "file:backend/routers/qe_archive.py",
+    "file:backend/services/qe_archive/backfill_service.py",
+    "file:backend/services/qe_archive/source_assembler.py",
+    "file:scripts/aistock_qe_archive_mcp_server.py",
+    "file:frontend/src/lib/qe-archive/api.ts",
+    "file:frontend/src/app/qe-archive/page.tsx",
+    "file:frontend/src/app/quantevolver/evolution/page.tsx",
+    "file:frontend/src/app/quantevolver/evolution/[taskId]/page.tsx",
+    "file:frontend/src/app/quantevolver/experiments/page.tsx"
+  ],
+  "fingerprint": "qe_archive::manual_ingestion_design_compliance::20260520",
+  "github_issue_number": 106,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/106",
+  "assigned_agent": "codex-app",
+  "fix_branch": "bug/BUG-079-qe-archive-design-compliance",
+  "fix_commit": "a4c8ec2143e855e229ddf002dfb1127d480adfa1",
+  "verification_run_id": "qe_archive_l3_20260520_130302;qe_mcp_l3_20260520_125902",
+  "created_at": "2026-05-20T04:26:11Z",
+  "first_seen_at": "2026-05-20T04:26:11Z",
+  "last_seen_at": "2026-05-20T05:10:41Z",
+  "fixed_at": "2026-05-20T05:10:41Z",
+  "submitted_at": "2026-05-20T04:26:11Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260520_BUG-079-qe-archive-manual-ingestion-design-compliance.json",
+    "docs/architecture/qe_archive_manual_ingestion_selection_design_20260519.md",
+    "backend/routers/qe_archive.py",
+    "backend/services/qe_archive/",
+    "backend/tests/qe_archive/",
+    "backend/tests/test_aistock_qe_mcp_servers.py",
+    "scripts/aistock_qe_archive_mcp_server.py",
+    "scripts/aistock_qe_experiment_mcp_server.py",
+    "frontend/src/lib/qe-archive/",
+    "frontend/src/app/qe-archive/",
+    "frontend/src/app/quantevolver/evolution/page.tsx",
+    "frontend/src/app/quantevolver/evolution/[taskId]/",
+    "frontend/src/app/quantevolver/experiments/",
+    "frontend/tests/qe-archive/",
+    "frontend/tests/quantevolver/",
+    "tests/aistock_validation/history/qe_archive/",
+    "tests/aistock_validation/catalog/",
+    "tests/aistock_validation/modules/"
+  ],
+  "suspected_modules": [
+    "frontend/src/app/quantevolver/evolution/page.tsx",
+    "frontend/src/app/quantevolver/evolution/[taskId]/page.tsx",
+    "frontend/src/app/quantevolver/experiments/page.tsx",
+    "frontend/src/app/qe-archive/page.tsx",
+    "frontend/src/lib/qe-archive/api.ts",
+    "backend/routers/qe_archive.py",
+    "backend/services/qe_archive/backfill_service.py",
+    "backend/services/qe_archive/source_assembler.py",
+    "scripts/aistock_qe_archive_mcp_server.py"
+  ],
+  "required_verification": [
+    "python -m pytest backend/tests/qe_archive -q -p no:cacheprovider",
+    "python -m pytest backend/tests/test_aistock_qe_mcp_servers.py -q -p no:cacheprovider",
+    "python -m nox -s qe_archive_backend",
+    "python -m nox -s qe_mcp_backend",
+    "python -m nox -s qe_mcp_l3",
+    "python -m nox -s guardrail_changed_files -- --changed-only",
+    "python -m nox -s validation_module_registry_l0",
+    "python -m nox -s l0 -- <changed files>",
+    "frontend lint/typecheck or targeted frontend tests covering the changed QE Archive/QE pages",
+    "git diff --check"
+  ],
+  "closure_requirements": [
+    "DESIGN-COMPLIANCE-001 matrix maps every relevant design item to implementation references and validation evidence",
+    "source-status semantics include real archived/partial/recommended/not_recommended/manual/skip states for experiments, tasks, and loops",
+    "QE evolution main page, task detail page, experiment history page, and QE Archive page expose user-visible Chinese archive status/recommendation/action controls where required",
+    "experiment-level and loop-level archive preview and confirmed write actions use QE Archive API/MCP and require QE_ARCHIVE_WRITE for writes",
+    "loop_indices and explicit ID MCP tools work for preview and execute without scan-limit ambiguity",
+    "pages do not hide existing experiments or loops as a side effect of archive filtering",
+    "GitHub issue #106 and BUG-079 registry record are updated with branch, commit, PR/merge status, and validation evidence"
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-20T04:26:11Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "User reported that previously designed QE Archive manual ingestion UI/status/actions were not visible after merge, indicating a design-compliance gap rather than a validated full implementation."
+    },
+    {
+      "timestamp": "2026-05-20T04:26:11Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Mirrored to GitHub issue #106 via gh CLI because the live Validation MCP issue creation path still lacks GITHUB_REPOSITORY in this session."
+    },
+    {
+      "timestamp": "2026-05-20T04:26:11Z",
+      "actor": "codex-app",
+      "action": "fix_started",
+      "note": "Dedicated worktree F:/Dev/AIstock_worktrees/bug-079-qe-archive-design-compliance on branch bug/BUG-079-qe-archive-design-compliance."
+    },
+    {
+      "timestamp": "2026-05-20T05:10:41Z",
+      "actor": "codex-app",
+      "action": "fixed_pending_merge_review",
+      "note": "Implemented full design-compliance repair for QE Archive manual ingestion UI/API/MCP, added design matrix and validation evidence. Implementation commit a4c8ec2143e855e229ddf002dfb1127d480adfa1."
+    }
+  ]
+}

@@ -14,6 +14,7 @@ import {
   type ArchivedRunListItem,
   type ArchiveSummary,
   type BackfillCandidate,
+  type BackfillCandidateLoop,
   type BackfillReport,
   type OutboxEvent,
   type RunQuality,
@@ -51,6 +52,60 @@ function candidateTypeLabel(candidate: BackfillCandidate): string {
 
 function candidatePrimaryId(candidate: BackfillCandidate): string {
   return String(candidate.task_id || candidate.experiment_id || "-");
+}
+
+function archiveStatusLabel(status?: string): string {
+  switch (status) {
+    case "archived": return "已入仓";
+    case "fully_archived": return "全部入仓";
+    case "partially_archived": return "部分入仓";
+    case "recommended": return "推荐入仓";
+    case "eligible": return "可入仓";
+    case "manual_only": return "人工判断";
+    case "not_recommended": return "不建议";
+    case "skipped": return "已跳过";
+    case "not_archived":
+    default:
+      return "未入仓";
+  }
+}
+
+function archiveStatusStyle(status?: string) {
+  const palette: Record<string, { bg: string; fg: string; border: string }> = {
+    archived: { bg: "#ecfdf5", fg: "#047857", border: "#a7f3d0" },
+    fully_archived: { bg: "#ecfdf5", fg: "#047857", border: "#a7f3d0" },
+    partially_archived: { bg: "#fffbeb", fg: "#b45309", border: "#fde68a" },
+    recommended: { bg: "#eff6ff", fg: "#1d4ed8", border: "#bfdbfe" },
+    eligible: { bg: "#eff6ff", fg: "#1d4ed8", border: "#bfdbfe" },
+    manual_only: { bg: "#f5f3ff", fg: "#6d28d9", border: "#ddd6fe" },
+    skipped: { bg: "#f8fafc", fg: "#64748b", border: "#cbd5e1" },
+    not_recommended: { bg: "#f8fafc", fg: "#64748b", border: "#cbd5e1" },
+    not_archived: { bg: "#fef2f2", fg: "#b91c1c", border: "#fecaca" },
+  };
+  const colors = palette[status || "not_archived"] || palette.not_archived;
+  return {
+    display: "inline-flex",
+    padding: "2px 8px",
+    borderRadius: 999,
+    fontSize: 11,
+    fontWeight: 700,
+    backgroundColor: colors.bg,
+    color: colors.fg,
+    border: `1px solid ${colors.border}`,
+    whiteSpace: "nowrap" as const,
+  };
+}
+
+function ArchiveStatusPill({ status }: { status?: string }) {
+  return <span style={archiveStatusStyle(status)}>{archiveStatusLabel(status)}</span>;
+}
+
+function loopMetric(loop: BackfillCandidateLoop, keys: string[]): unknown {
+  for (const key of keys) {
+    const value = (loop as unknown as Record<string, unknown>)[key];
+    if (value !== undefined && value !== null && value !== "") return value;
+  }
+  return null;
 }
 
 function runListLabel(run: ArchivedRunListItem): string {
@@ -168,6 +223,8 @@ export default function QEArchivePage() {
   const [archivedRuns, setArchivedRuns] = useState<ArchivedRunListItem[]>([]);
   const [candidates, setCandidates] = useState<BackfillCandidate[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [expandedCandidateIds, setExpandedCandidateIds] = useState<Set<string>>(new Set());
+  const [selectedLoopIds, setSelectedLoopIds] = useState<Set<string>>(new Set());
   const [candidatePage, setCandidatePage] = useState(1);
   const [candidatePageSize, setCandidatePageSize] = useState(20);
   const [candidateHasMore, setCandidateHasMore] = useState(false);
@@ -202,6 +259,9 @@ export default function QEArchivePage() {
       setCandidates(nextCandidates.candidates || []);
       setCandidateHasMore(Boolean(nextCandidates.has_more));
       setSelectedIds((previous) => new Set([...previous].filter((id) => (nextCandidates.candidates || []).some((item) => item.candidate_id === id))));
+      const visibleLoopIds = new Set((nextCandidates.candidates || []).flatMap((item) => (item.loops || []).map((loop) => String(loop.loop_id || ""))));
+      setSelectedLoopIds((previous) => new Set([...previous].filter((id) => visibleLoopIds.has(id))));
+      setExpandedCandidateIds((previous) => new Set([...previous].filter((id) => (nextCandidates.candidates || []).some((item) => item.candidate_id === id))));
     } catch (err) {
       setError(err);
     } finally {
@@ -236,11 +296,19 @@ export default function QEArchivePage() {
   const selectedCandidates = useMemo(() => candidates.filter((item) => selectedIds.has(item.candidate_id)), [candidates, selectedIds]);
   const selectedTaskIds = selectedCandidates.filter((item) => item.candidate_type === "evolution_task" && item.task_id).map((item) => String(item.task_id));
   const selectedExperimentIds = selectedCandidates.filter((item) => item.candidate_type === "single_experiment" && item.experiment_id).map((item) => String(item.experiment_id));
-  const selectedRunCount = selectedCandidates.reduce((sum, item) => sum + n(item.pending_run_count), 0);
+  const selectedLoopList = useMemo(
+    () => candidates
+      .flatMap((candidate) => candidate.loops || [])
+      .filter((loop) => loop.loop_id && selectedLoopIds.has(String(loop.loop_id)) && !selectedTaskIds.includes(String(loop.task_id || ""))),
+    [candidates, selectedLoopIds, selectedTaskIds],
+  );
+  const selectedLoopIdList = selectedLoopList.map((loop) => String(loop.loop_id));
+  const selectedRunCount = selectedCandidates.reduce((sum, item) => sum + n(item.pending_run_count), 0) + selectedLoopIdList.length;
   const pendingCandidateCount = candidates.filter((item) => n(item.pending_run_count) > 0).length;
+  const selectionCount = selectedCandidates.length + selectedLoopIdList.length;
   const writeDisabledReason = backfillBusy
     ? "补录处理中"
-    : selectedCandidates.length === 0
+    : selectionCount === 0
       ? "请先选择待入库候选"
       : writeConfirm !== WRITE_CONFIRM_TEXT
         ? `请先填入确认文本 ${WRITE_CONFIRM_TEXT}`
@@ -255,12 +323,45 @@ export default function QEArchivePage() {
     });
   }
 
+  function toggleCandidateExpanded(candidateId: string) {
+    setExpandedCandidateIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(candidateId)) next.delete(candidateId);
+      else next.add(candidateId);
+      return next;
+    });
+  }
+
+  function selectableLoop(loop: BackfillCandidateLoop): boolean {
+    return Boolean(loop.loop_id && loop.eligible && loop.archive_status !== "archived");
+  }
+
+  function toggleLoop(loop: BackfillCandidateLoop, checked?: boolean) {
+    if (!loop.loop_id || !selectableLoop(loop)) return;
+    const loopId = String(loop.loop_id);
+    setSelectedLoopIds((previous) => {
+      const next = new Set(previous);
+      const shouldSelect = checked ?? !next.has(loopId);
+      if (shouldSelect) next.add(loopId);
+      else next.delete(loopId);
+      return next;
+    });
+  }
+
+  function selectCandidateLoops(candidate: BackfillCandidate, mode: "recommended" | "eligible") {
+    const loopIds = (candidate.loops || [])
+      .filter((loop) => selectableLoop(loop) && (mode === "eligible" || loop.recommended))
+      .map((loop) => String(loop.loop_id));
+    setSelectedLoopIds((previous) => new Set([...previous, ...loopIds]));
+    setExpandedCandidateIds((previous) => new Set(previous).add(candidate.candidate_id));
+  }
+
   function selectPendingCandidates() {
     setSelectedIds(new Set(candidates.filter((item) => n(item.pending_run_count) > 0).map((item) => item.candidate_id)));
   }
 
   async function runBackfill(write: boolean) {
-    if (!selectedCandidates.length) {
+    if (!selectionCount) {
       setError(new Error("请先在候选列表中选择需要写入数仓的 QE 实验或任务。"));
       return;
     }
@@ -271,6 +372,7 @@ export default function QEArchivePage() {
         source: "all",
         task_ids: selectedTaskIds,
         experiment_ids: selectedExperimentIds,
+        loop_ids: selectedLoopIdList,
         status: candidateStatus,
         include_archived: false,
         write,
@@ -285,6 +387,67 @@ export default function QEArchivePage() {
     } finally {
       setBackfillBusy(false);
     }
+  }
+
+  function renderCandidateLoopControls(row: BackfillCandidate) {
+    const loops = row.loops || [];
+    const expanded = expandedCandidateIds.has(row.candidate_id);
+    if (row.candidate_type !== "evolution_task") {
+      return (
+        <>
+          <div>{formatNumber(row.archived_run_count || 0, 0)} / {formatNumber(row.selected_run_count || 0, 0)}</div>
+          <div className="pv2-muted">单实验，待入库 {formatNumber(row.pending_run_count || 0, 0)}</div>
+        </>
+      );
+    }
+    return (
+      <div style={{ display: "grid", gap: 8 }}>
+        <div>
+          <div>{formatNumber(row.archived_run_count || 0, 0)} / {formatNumber(row.selected_run_count || 0, 0)}</div>
+          <div className="pv2-muted">
+            总 loop {formatNumber(row.loop_count || 0, 0)}，待入库 {formatNumber(row.pending_run_count || 0, 0)}，推荐 {formatNumber(row.recommended_run_count || 0, 0)}
+          </div>
+        </div>
+        <div className="pv2-row-actions">
+          <button className="pv2-button-ghost" type="button" onClick={() => toggleCandidateExpanded(row.candidate_id)}>
+            {expanded ? "收起 loop" : "展开 loop"}
+          </button>
+          <button className="pv2-button-ghost" type="button" onClick={() => selectCandidateLoops(row, "recommended")} disabled={!loops.some((loop) => selectableLoop(loop) && loop.recommended)}>
+            选推荐 loop
+          </button>
+          <button className="pv2-button-ghost" type="button" onClick={() => selectCandidateLoops(row, "eligible")} disabled={!loops.some(selectableLoop)}>
+            选全部有效 loop
+          </button>
+        </div>
+        {expanded && (
+          <div style={{ display: "grid", gap: 6, padding: 8, border: "1px solid #e2e8f0", borderRadius: 8, background: "#f8fafc" }}>
+            {loops.length ? loops.map((loop) => {
+              const loopId = String(loop.loop_id || "");
+              const selectable = selectableLoop(loop);
+              const selected = selectable && selectedLoopIds.has(loopId);
+              const icValue = loopMetric(loop, ["IC", "ic"]);
+              const retValue = loopMetric(loop, ["annualized_return"]);
+              return (
+                <label key={loopId || `${row.task_id}-${loop.loop_index}`} style={{ display: "grid", gridTemplateColumns: "18px 58px 1fr auto", gap: 8, alignItems: "center", fontSize: 12 }}>
+                  <input
+                    type="checkbox"
+                    checked={selected}
+                    disabled={!selectable}
+                    onChange={(event) => toggleLoop(loop, event.target.checked)}
+                    aria-label={`选择 ${row.task_id} Loop ${loop.loop_index} 入仓`}
+                  />
+                  <span className="pv2-mono">Loop {loop.loop_index ?? "-"}</span>
+                  <span className="pv2-muted">
+                    {loop.action_type || "-"} / IC {icValue == null ? "-" : Number(icValue).toFixed(4)} / 年化 {retValue == null ? "-" : `${(Number(retValue) * 100).toFixed(2)}%`}
+                  </span>
+                  <ArchiveStatusPill status={loop.archive_status} />
+                </label>
+              );
+            }) : <div className="pv2-muted">暂无 loop 明细</div>}
+          </div>
+        )}
+      </div>
+    );
   }
 
   async function runWorkerOnce() {
@@ -381,8 +544,8 @@ export default function QEArchivePage() {
         </div>
         <div className="pv2-row-actions" style={{ marginTop: 12, marginBottom: 12 }}>
           <button className="pv2-button" type="button" onClick={selectPendingCandidates}>选择全部待入库</button>
-          <button className="pv2-button-ghost" type="button" onClick={() => setSelectedIds(new Set())}>清空选择</button>
-          <span className="pv2-help">已选择 {selectedCandidates.length} 个候选，预计展开 {selectedRunCount} 个 run；演进任务会自动包含其全部符合状态的 loop。</span>
+          <button className="pv2-button-ghost" type="button" onClick={() => { setSelectedIds(new Set()); setSelectedLoopIds(new Set()); }}>清空选择</button>
+          <span className="pv2-help">已选择 {selectedCandidates.length} 个候选、{selectedLoopIdList.length} 个精确 loop，预计写入 {selectedRunCount} 个 run；可展开 task 后只选推荐或指定 loop。</span>
         </div>
         <div className="pv2-row-actions" style={{ marginTop: 8, marginBottom: 12 }}>
           <button className="pv2-button-ghost" type="button" aria-label="previous candidate page" onClick={() => setCandidatePage((page) => Math.max(1, page - 1))} disabled={candidatePage <= 1 || loading}>上一页</button>
@@ -396,8 +559,8 @@ export default function QEArchivePage() {
             { key: "select", header: "选择", render: (row) => <input type="checkbox" checked={selectedIds.has(row.candidate_id)} disabled={n(row.pending_run_count) === 0} onChange={() => toggleCandidate(row.candidate_id)} aria-label={`选择 ${row.display_name || row.candidate_id}`} /> },
             { key: "type", header: "实验类型", render: (row) => <><div>{candidateTypeLabel(row)}</div><div className="pv2-muted">{row.experiment_type || "-"}</div></> },
             { key: "name", header: "实验说明", render: (row) => <><div>{row.display_name || "-"}</div><div className="pv2-muted pv2-mono">{shortHash(candidatePrimaryId(row))}</div><div className="pv2-muted">{row.description || "-"}</div></> },
-            { key: "loops", header: "Loop / 入库", render: (row) => <><div>{formatNumber(row.archived_run_count || 0, 0)} / {formatNumber(row.selected_run_count || 0, 0)}</div><div className="pv2-muted">总 loop {formatNumber(row.loop_count || 0, 0)}，待入库 {formatNumber(row.pending_run_count || 0, 0)}</div></> },
-            { key: "status", header: "状态", render: (row) => <><StatusBadge status={row.status} /><div className="pv2-muted">{row.is_fully_archived ? "已完整入库" : "待入库"}</div></> },
+            { key: "loops", header: "Loop / 入库", render: (row) => renderCandidateLoopControls(row) },
+            { key: "status", header: "状态", render: (row) => <><StatusBadge status={row.status} /><div style={{ marginTop: 4 }}><ArchiveStatusPill status={row.is_fully_archived ? "fully_archived" : n(row.recommended_run_count) > 0 ? "recommended" : n(row.pending_run_count) > 0 ? "eligible" : "not_archived"} /></div></> },
             { key: "meta", header: "模型/因子", render: (row) => <><div>{row.model_id || row.model_catalog_id || "-"}</div><div className="pv2-muted">horizon {row.label_horizon ?? "-"} / 因子 {row.factor_count ?? "-"}</div></> },
             { key: "time", header: "执行时间", render: (row) => <><div>开始 {formatDateTime(row.started_at || row.created_at)}</div><div className="pv2-muted">结束 {formatDateTime(row.completed_at || row.updated_at)}</div></> },
           ]}
@@ -414,7 +577,7 @@ export default function QEArchivePage() {
             <input className="pv2-input" value={writeConfirm} onChange={(event) => setWriteConfirm(event.target.value)} placeholder={WRITE_CONFIRM_TEXT} />
           </label>
           <div className="pv2-field"><span>&nbsp;</span><button className="pv2-button-ghost" type="button" aria-label="fill archive write confirm" onClick={() => setWriteConfirm(WRITE_CONFIRM_TEXT)}>填入确认文本</button></div>
-          <div className="pv2-field"><span>&nbsp;</span><button className="pv2-button" type="button" onClick={() => void runBackfill(false)} disabled={backfillBusy || selectedCandidates.length === 0}>dry-run 预览选中项</button></div>
+          <div className="pv2-field"><span>&nbsp;</span><button className="pv2-button" type="button" onClick={() => void runBackfill(false)} disabled={backfillBusy || selectionCount === 0}>dry-run 预览选中项</button></div>
           <div className="pv2-field"><span>&nbsp;</span><button className="pv2-button-danger" type="button" aria-label="write selected candidates to archive" onClick={() => void runBackfill(true)} disabled={Boolean(writeDisabledReason)}>写入数仓</button></div>
         </div>
         {writeDisabledReason ? <div className="pv2-help" aria-label="archive write disabled reason">{writeDisabledReason}</div> : <div className="pv2-help">已满足正式入库条件，点击“写入数仓”会执行 confirmed write。</div>}

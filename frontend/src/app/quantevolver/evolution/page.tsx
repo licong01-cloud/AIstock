@@ -16,11 +16,13 @@ import SectorBlacklistPanel from "../components/SectorBlacklistPanel";
 import TopologyPanel from "./components/TopologyPanel";
 import LoopDetailPanel, { getTaskStatusInfo } from "./components/LoopDetailPanel";
 import type { Loop } from "./components/TopologyPanel";
+import { qeArchiveApi, type ArchiveSourceStatus, type ArchiveTaskStatus, type BackfillReport } from "@/lib/qe-archive/api";
 
 const FactorList = dynamic(() => import("../components/FactorList"), { ssr: false });
 const ModelList = dynamic(() => import("../components/ModelList"), { ssr: false });
 
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
+const QE_ARCHIVE_WRITE_CONFIRM = "QE_ARCHIVE_WRITE";
 const TERMINAL_LOG_STATUSES = new Set([
   "completed",
   "failed",
@@ -32,6 +34,63 @@ const TERMINAL_LOG_STATUSES = new Set([
   "stopped",
 ]);
 const ACTIVE_POLL_STATUSES = new Set(["running", "processing"]);
+
+function archiveStatusLabel(status?: string): string {
+  switch (status) {
+    case "archived": return "已入仓";
+    case "fully_archived": return "全部入仓";
+    case "partially_archived": return "部分入仓";
+    case "recommended": return "推荐入仓";
+    case "eligible": return "可入仓";
+    case "manual_only": return "人工判断";
+    case "not_recommended": return "不建议";
+    case "skipped": return "已跳过";
+    case "not_archived":
+    default:
+      return "未入仓";
+  }
+}
+
+function archiveStatusStyle(status?: string): React.CSSProperties {
+  const palette: Record<string, { bg: string; fg: string; border: string }> = {
+    archived: { bg: "#ecfdf5", fg: "#047857", border: "#a7f3d0" },
+    fully_archived: { bg: "#ecfdf5", fg: "#047857", border: "#a7f3d0" },
+    partially_archived: { bg: "#fffbeb", fg: "#b45309", border: "#fde68a" },
+    recommended: { bg: "#eff6ff", fg: "#1d4ed8", border: "#bfdbfe" },
+    eligible: { bg: "#eff6ff", fg: "#1d4ed8", border: "#bfdbfe" },
+    manual_only: { bg: "#f5f3ff", fg: "#6d28d9", border: "#ddd6fe" },
+    skipped: { bg: "#f8fafc", fg: "#64748b", border: "#cbd5e1" },
+    not_recommended: { bg: "#f8fafc", fg: "#64748b", border: "#cbd5e1" },
+    not_archived: { bg: "#fef2f2", fg: "#b91c1c", border: "#fecaca" },
+  };
+  const colors = palette[status || "not_archived"] || palette.not_archived;
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "2px 8px",
+    borderRadius: 999,
+    fontSize: 10,
+    fontWeight: 700,
+    backgroundColor: colors.bg,
+    color: colors.fg,
+    border: `1px solid ${colors.border}`,
+    whiteSpace: "nowrap",
+  };
+}
+
+function archiveSummaryText(status?: ArchiveTaskStatus): string {
+  if (!status) return "状态未加载";
+  return `已 ${status.archived_loop_count || 0}/${status.eligible_loop_count || 0}，待 ${status.pending_loop_count || 0}，推荐 ${status.recommended_loop_count || 0}`;
+}
+
+function summarizeArchiveReport(report: BackfillReport): string {
+  const rows = report.results || [];
+  const willArchive = rows.filter((item) => item.will_archive !== false && !item.skipped_reason && !item.error).length;
+  const written = rows.filter((item) => item.run_id && !item.dry_run).length;
+  const skipped = rows.filter((item) => item.skipped_reason || item.error).length;
+  return `候选 ${rows.length} 条，可入仓 ${willArchive} 条，已写入 ${written} 条，跳过/失败 ${skipped} 条`;
+}
 
 // 模块级样式常量 — 避免每次渲染重新创建对象
 const cardStyle: React.CSSProperties = {
@@ -85,6 +144,9 @@ interface Task {
 
 export default function EvolutionDashboard() {
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [archiveStatus, setArchiveStatus] = useState<ArchiveSourceStatus | null>(null);
+  const [archiveStatusLoading, setArchiveStatusLoading] = useState(false);
+  const [archiveActionTaskId, setArchiveActionTaskId] = useState<string | null>(null);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [loops, setLoops] = useState<Loop[]>([]);
   const [activeLoopIndex, setActiveLoopIndex] = useState<number | null>(null);
@@ -750,18 +812,40 @@ export default function EvolutionDashboard() {
     };
   }, []);
 
+  const loadArchiveStatusForTasks = useCallback(async (nextTasks: Task[]) => {
+    const taskIds = Array.from(new Set(nextTasks.map((task) => task.task_id).filter(Boolean)));
+    if (!taskIds.length) {
+      setArchiveStatus(null);
+      return;
+    }
+    setArchiveStatusLoading(true);
+    try {
+      const nextStatus = await qeArchiveApi.sourceStatus({
+        task_ids: taskIds,
+        include_recommendation: true,
+      });
+      setArchiveStatus(nextStatus);
+    } catch (e) {
+      console.error("Failed to fetch QE archive source status:", e);
+    } finally {
+      setArchiveStatusLoading(false);
+    }
+  }, []);
+
   // 获取任务列表
   const fetchTasks = useCallback(async () => {
     try {
       const res = await fetch(`${API}/quantevolver/evolution/tasks`);
       const data = await res.json();
       if (data.status === "success" && data.data) {
-        setTasks(data.data);
+        const nextTasks = data.data as Task[];
+        setTasks(nextTasks);
+        void loadArchiveStatusForTasks(nextTasks);
       }
     } catch (e) {
       console.error("Failed to fetch tasks:", e);
     }
-  }, []);
+  }, [loadArchiveStatusForTasks]);
 
   // 动态轮询: 仅当存在 active 任务时自动刷新；无 running/processing 时完全停止自动轮询
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -2020,6 +2104,54 @@ export default function EvolutionDashboard() {
     }
   };
 
+  const previewArchiveTask = async (task: Task, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setArchiveActionTaskId(task.task_id);
+    try {
+      const report = await qeArchiveApi.previewSelection({
+        source: "task",
+        task_ids: [task.task_id],
+        status: "completed",
+        include_archived: false,
+        validate_after_write: true,
+      });
+      alert(`QE Archive 预览完成：${summarizeArchiveReport(report)}`);
+      await loadArchiveStatusForTasks(tasks);
+    } catch (err: any) {
+      alert(`QE Archive 预览失败: ${err?.message || "网络错误"}`);
+    } finally {
+      setArchiveActionTaskId(null);
+    }
+  };
+
+  const executeArchiveTask = async (task: Task, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const status = archiveStatus?.tasks?.[task.task_id];
+    const pending = status?.pending_loop_count || 0;
+    if (!pending) {
+      alert("该任务当前没有待入仓的已完成 loop。");
+      return;
+    }
+    if (!confirm(`确认将任务 ${task.task_id} 的 ${pending} 个待入仓 loop 写入 QE Archive 数仓？\n该操作只写入数仓，不会删除原始 QE 实验。`)) return;
+    setArchiveActionTaskId(task.task_id);
+    try {
+      const report = await qeArchiveApi.executeSelection({
+        source: "task",
+        task_ids: [task.task_id],
+        status: "completed",
+        include_archived: false,
+        validate_after_write: true,
+        confirm_write: QE_ARCHIVE_WRITE_CONFIRM,
+      });
+      alert(`QE Archive 入仓完成：${summarizeArchiveReport(report)}`);
+      await loadArchiveStatusForTasks(tasks);
+    } catch (err: any) {
+      alert(`QE Archive 入仓失败: ${err?.message || "网络错误"}`);
+    } finally {
+      setArchiveActionTaskId(null);
+    }
+  };
+
   // ── 性能优化: useCallback 稳定引用（传给 React.memo 子组件） ──
   const handleSelectLoop = useCallback((idx: number) => setActiveLoopIndex(idx), []);
   const handleToggleLogs = useCallback(() => setLogsCollapsed(prev => !prev), []);
@@ -2104,6 +2236,7 @@ export default function EvolutionDashboard() {
                     <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, color: "#475569", fontSize: "12px", width: "80px" }}>来源</th>
                     <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, color: "#475569", fontSize: "12px", width: "80px" }}>状态</th>
                     <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, color: "#475569", fontSize: "12px", width: "80px" }}>Loop</th>
+                    <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, color: "#475569", fontSize: "12px", width: "150px" }}>数仓</th>
                     <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, color: "#475569", fontSize: "12px", width: "130px" }}>创建时间</th>
                     <th style={{ padding: "10px 12px", textAlign: "center", fontWeight: 700, color: "#475569", fontSize: "12px", width: "220px" }}>操作</th>
                   </tr>
@@ -2111,7 +2244,7 @@ export default function EvolutionDashboard() {
                 <tbody>
                   {tasks.length === 0 ? (
                     <tr>
-                      <td colSpan={8} style={{ padding: "24px", textAlign: "center", color: "#94a3b8" }}>暂无演进任务</td>
+                      <td colSpan={9} style={{ padding: "24px", textAlign: "center", color: "#94a3b8" }}>暂无演进任务</td>
                     </tr>
                   ) : tasks.map(task => {
                     const isActive = activeTaskId === task.task_id;
@@ -2122,6 +2255,9 @@ export default function EvolutionDashboard() {
                     const isCustomEvoTask = task.task_type === "custom_evo";
                     const canContinueCustomEvo = isCustomEvoTask && task.status !== "running";
                     const sourceType = task.source_type;
+                    const taskArchiveStatus = archiveStatus?.tasks?.[task.task_id];
+                    const archivePending = taskArchiveStatus?.pending_loop_count || 0;
+                    const archiveBusy = archiveActionTaskId === task.task_id;
                     return (
                       <React.Fragment key={task.task_id}>
                       <tr
@@ -2179,6 +2315,15 @@ export default function EvolutionDashboard() {
                         <td style={{ padding: "10px 12px", textAlign: "center", fontFamily: "monospace", fontSize: "12px", color: "#475569" }}>
                           {task.current_loop}/{task.max_loops}
                         </td>
+                        <td style={{ padding: "10px 12px", textAlign: "center", fontSize: "11px", color: "#475569" }}>
+                          <div style={{ display: "grid", gap: 4, justifyItems: "center" }}>
+                            <span style={archiveStatusStyle(taskArchiveStatus?.archive_status)}>
+                              {archiveStatusLabel(taskArchiveStatus?.archive_status)}
+                            </span>
+                            <span style={{ color: "#64748b" }}>{archiveSummaryText(taskArchiveStatus)}</span>
+                            {archiveStatusLoading && <span style={{ color: "#2563eb" }}>刷新中...</span>}
+                          </div>
+                        </td>
                         <td style={{ padding: "10px 12px", textAlign: "center", fontSize: "11px", color: "#64748b", whiteSpace: "nowrap" }}>
                           {task.created_at ? new Date(task.created_at).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "-"}
                         </td>
@@ -2188,6 +2333,24 @@ export default function EvolutionDashboard() {
                               title="独立详情页"
                               style={{ padding: "4px 8px", border: "1px solid #3b82f6", borderRadius: "4px", backgroundColor: "#eff6ff", color: "#3b82f6", fontSize: "11px", fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: "3px" }}>
                               详情
+                            </button>
+                            <button
+                              data-testid="qe-evolution-task-archive-preview"
+                              onClick={(e) => void previewArchiveTask(task, e)}
+                              disabled={!archivePending || archiveBusy}
+                              title="预览该任务全部待入仓 completed loop"
+                              style={{ padding: "4px 8px", border: "1px solid #2563eb", borderRadius: "4px", backgroundColor: "#eff6ff", color: "#1d4ed8", fontSize: "11px", fontWeight: 600, cursor: archivePending && !archiveBusy ? "pointer" : "not-allowed", display: "flex", alignItems: "center", gap: "3px" }}
+                            >
+                              预览入仓
+                            </button>
+                            <button
+                              data-testid="qe-evolution-task-archive-execute"
+                              onClick={(e) => void executeArchiveTask(task, e)}
+                              disabled={!archivePending || archiveBusy}
+                              title="确认写入该任务全部待入仓 completed loop"
+                              style={{ padding: "4px 8px", border: "1px solid #059669", borderRadius: "4px", backgroundColor: "#ecfdf5", color: "#047857", fontSize: "11px", fontWeight: 600, cursor: archivePending && !archiveBusy ? "pointer" : "not-allowed", display: "flex", alignItems: "center", gap: "3px" }}
+                            >
+                              {archiveBusy ? "入仓中" : "入仓"}
                             </button>
                             {canStop && (
                               <button onClick={(e) => handleStopTask(task.task_id, e)}
@@ -2305,7 +2468,7 @@ export default function EvolutionDashboard() {
                               </div>
                             </div>
                           </td>
-                          <td colSpan={5} style={{ padding: "8px 12px 10px 12px", backgroundColor: "#eff6ff", borderBottom: "2px solid #bfdbfe", verticalAlign: "top" }}>
+                          <td colSpan={6} style={{ padding: "8px 12px 10px 12px", backgroundColor: "#eff6ff", borderBottom: "2px solid #bfdbfe", verticalAlign: "top" }}>
                             <button
                                 onClick={(e) => {
                                   e.stopPropagation();

@@ -135,6 +135,24 @@ test("QE dashboard stops automatic polling when task list has no active task", a
       }),
     });
   });
+  await page.route(/\/api\/v1\/qe-archive\/source-status$/, async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        status: "success",
+        data: {
+          tasks: {
+            [mockTaskId]: { archive_status: "recommended", loop_count: 1, archived_loop_count: 0, eligible_loop_count: 1, pending_loop_count: 1, recommended_loop_count: 1, run_ids: [] },
+          },
+          loops: {
+            [mockLoopId]: { archive_status: "recommended", eligible: true, recommended: true, run_ids: [], run_count: 0 },
+          },
+          include_recommendation: true,
+        },
+      }),
+    });
+  });
 
   await page.goto("/quantevolver/evolution");
   const taskCell = page.getByText(mockTaskId, { exact: true }).first();
