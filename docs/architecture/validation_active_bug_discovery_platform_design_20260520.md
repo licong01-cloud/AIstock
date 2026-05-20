@@ -400,6 +400,56 @@ LLM 只能输出 `IssueCandidateDraft`：
 
 LLM 输出必须经过确定性验证器补证据后才能进入正式候选池。
 
+### 7.5 LLM 配置与提示词管理复用
+
+主动发现平台不新建一套孤立的模型和 Prompt 管理系统，应复用 AIstock 已有的 QE/RDAgent 配置能力：
+
+| 配置对象 | 复用入口 | 主动发现平台使用方式 |
+|---|---|---|
+| Agent Prompt | `http://localhost:3000/quantevolver/prompts` | 新增 `validation_discovery_*` prompt 分类，按 Agent 角色引用 `prompt_id` 和 `prompt_version` |
+| LLM Provider / Model | `/config/rdagent-llm` | 引用已配置的 provider/model，不在主动发现页面保存 token |
+| 模型调用参数 | 现有模型配置 + Discovery profile 覆盖 | 记录 `temperature`、`max_tokens`、`timeout_seconds`、`budget`、`rate_limit` |
+| Prompt 审计 | Prompt 版本历史 | 每次夜间运行固化 Prompt 版本，避免第二天复核时 Prompt 已变化 |
+
+建议新增 `DiscoveryAgentProfile`，只保存引用关系和运行策略：
+
+```json
+{
+  "schema_version": "aistock_discovery_agent_profile_v1",
+  "profile_id": "validation_design_consistency_glm51",
+  "agent_role": "design_consistency_checker",
+  "provider_id": "zhipu",
+  "model_id": "glm-5.1",
+  "prompt_id": "validation_discovery_design_consistency",
+  "prompt_version": 3,
+  "temperature": 0.2,
+  "max_tokens": 12000,
+  "context_pack_policy": "design_doc_plus_diff_plus_contracts",
+  "enabled_for_nightly": true,
+  "enabled_for_manual_mcp": true
+}
+```
+
+首批 Agent 角色建议：
+
+| Agent 角色 | 主要职责 | 推荐模型特征 | 输出 |
+|---|---|---|---|
+| `contract_extractor` | 从设计文档抽取验证契约草案 | 长上下文、中文理解 | `ValidationContractDraft` |
+| `design_consistency_checker` | 比对设计要求、代码实现、UI 入口是否一致 | 强推理、低温度 | `IssueCandidateDraft` |
+| `cross_module_explorer` | 发现 QE、策略包、Selection、Paper v2 跨模块断点 | 强业务推理 | 探索 charter + 候选疑点 |
+| `llm_report_summarizer` | 汇总夜间 LLM 发现、确定性证据差异、待人工审核项 | 中文报告能力 | `NightlyLlmReport` |
+| `candidate_deduper` | 与历史 BUG/GitHub Issue 去重、建议重开或新建 | 结构化输出稳定 | 去重建议 |
+
+运行记录必须固化以下字段，保证早晨审核可复盘：
+
+- `provider_id`、`model_id`、`model_version` 或调用时返回的模型标识。
+- `prompt_id`、`prompt_version`、Prompt 内容摘要 hash。
+- `context_pack_id`、输入文件清单、输入摘要 hash。
+- `llm_output_path`、结构化解析状态、确定性补证据状态。
+- token、API key、DB 密码等敏感信息不得进入 LLM context pack 或报告。
+
+这样可以支持 DeepSeek、GLM/Zhipu、DashScope、OpenAI-compatible、本地 vLLM 等不同供应商，同时避免主动发现页面重复实现密钥管理。
+
 ## 8. 设计文档到验证契约
 
 ### 8.1 验证契约 Schema
@@ -716,6 +766,10 @@ backend/services/validation/active_discovery/
   data_consistency_scanner.py
   e2e_probe_runner.py
   llm_agent_gateway.py
+  llm_profile_resolver.py
+  nightly_report_store.py
+  discovery_scheduler.py
+  change_task_planner.py
   morning_review.py
   cleanup.py
 ```
@@ -724,12 +778,21 @@ backend/services/validation/active_discovery/
 
 ```text
 GET  /api/v1/validation/discovery/summary
+GET  /api/v1/validation/discovery/nightly-reports
+GET  /api/v1/validation/discovery/nightly-reports/{report_id}
+GET  /api/v1/validation/discovery/nightly-reports/{report_id}/llm
 GET  /api/v1/validation/discovery/candidates
 GET  /api/v1/validation/discovery/candidates/{candidate_id}
 POST /api/v1/validation/discovery/candidates/{candidate_id}/review
 POST /api/v1/validation/discovery/candidates/{candidate_id}/promote
 POST /api/v1/validation/discovery/run
 GET  /api/v1/validation/discovery/runs
+GET  /api/v1/validation/discovery/tasks
+POST /api/v1/validation/discovery/tasks
+POST /api/v1/validation/discovery/tasks/{task_id}/run
+POST /api/v1/validation/discovery/tasks/{task_id}/cancel
+GET  /api/v1/validation/discovery/llm-profiles
+POST /api/v1/validation/discovery/llm-profiles
 GET  /api/v1/validation/discovery/contracts
 GET  /api/v1/validation/discovery/rules
 GET  /api/v1/validation/discovery/resources
@@ -747,6 +810,12 @@ validation_discovery_promote_candidate_to_issue
 validation_discovery_run_e2e_probe
 validation_discovery_cleanup_resources
 validation_discovery_generate_morning_review
+validation_discovery_list_nightly_reports
+validation_discovery_get_nightly_report
+validation_discovery_schedule_task
+validation_discovery_run_task
+validation_discovery_cancel_task
+validation_discovery_list_llm_profiles
 ```
 
 MCP 限制：
@@ -754,10 +823,55 @@ MCP 限制：
 - `promote_candidate_to_issue` 必须要求 `confirm_promote`。
 - P0/P1 promotion 必须要求 reviewer 和 evidence checklist。
 - L4/L5 e2e probe 默认不可由普通 UI 启动，需 allowlist 和 resource policy。
+- LLM profile 只能引用已存在的 provider/model/prompt，不允许 MCP 传入明文 token。
+- 手工部署专项任务必须写入 `requested_by`、`reason`、`resource_policy_id` 和预期 cleanup 策略。
+
+### 13.4 调度策略：固定基线 + 变更驱动 + 手工专项
+
+主动发现任务不应依赖每天人工安排全部内容。建议采用三层调度：
+
+| 调度层 | 是否自动 | 触发源 | 适合任务 | 风险控制 |
+|---|---|---|---|---|
+| 固定夜间基线 | 自动，每晚运行 | nightly schedule | L0/L1/L2/L3 扫描、日志异常、BUG/GitHub 一致性、UI/API/MCP 对齐、轻量业务探针 | 默认只读或轻量写入 |
+| 变更/新功能驱动 | 自动生成建议，低风险可自动运行 | PR、分支、合入记录、模块质量记录、设计文档变更、test plan 变更 | 新增页面 smoke、新 API contract、新 MCP tool 对齐、设计契约验证 | 高风险任务先进入待审核计划 |
+| 手工专项任务 | 人工通过 UI/MCP 部署 | 用户、Codex、Claude Code、审查结论 | 指定 QE 实验、Selection/Paper 链路、生产库 validation namespace 写入、长耗时探针 | 需要 `resource_policy`、白名单、confirm 字段 |
+
+变更驱动任务的输入建议：
+
+- `git diff --name-only origin/main...HEAD` 和合入后的 commit 变更清单。
+- `tests/aistock_validation/catalog/test_plans.yaml`、`ui_targets.yaml`、`module_registry`。
+- PR 描述、设计文档、Issue closure requirements。
+- 流水线历史记录中的新增 API、MCP tool、前端 route、后端服务模块。
+
+自动生成任务时应先产出 `DiscoveryTaskPlan`：
+
+```json
+{
+  "schema_version": "aistock_discovery_task_plan_v1",
+  "task_id": "disc_task_20260521_strategy_package_selection_probe",
+  "source": "change_driven",
+  "trigger_ref": "commit_or_pr_ref",
+  "module": "strategy_package",
+  "risk_level": "L3",
+  "recommended_detectors": ["api_mcp_alignment", "ui_coverage", "e2e_probe_readonly"],
+  "requires_manual_approval": false,
+  "resource_policy_id": "validation_readonly_default"
+}
+```
+
+L4/L5、长时间训练、回测、QE materialize/run、生产库写入类任务可以由计划器提出，但默认不直接执行；需要 UI 或 MCP 显式确认后进入队列。
 
 ## 14. 前端 UI 设计
 
-在现有流水线中心顶部导航中新增或扩展两个页面。
+在现有 AIstock 左侧全局导航不变的前提下，流水线内部使用页面顶部二级导航，避免再增加左侧导航层级。建议在流水线中心新增一个“主动发现”一级页面，并在页面顶部拆分为以下 tab：
+
+| 顶部 Tab | 建议路由 | 主要用途 |
+|---|---|---|
+| 夜间汇报 | `/validation/nightly-reports` | 每天早晨查看自动发现结果、LLM 报告、候选 Issue 和 cleanup 状态 |
+| 候选 Issue | `/validation/discovery-candidates` | 审核、去重、晋级、拒绝、重开 |
+| 探测任务 | `/validation/discovery-tasks` | 查看固定夜间任务、变更驱动任务、人工 MCP 专项任务 |
+| 业务探针 | `/validation/business-probes` | QE/Paper/Selection 等链路探针状态 |
+| LLM 配置引用 | `/validation/discovery-llm-profiles` | 只管理 Discovery profile 引用，跳转到 QE Prompt 和 RDAgent 模型配置 |
 
 ### 14.1 主动发现页面
 
@@ -793,7 +907,48 @@ MCP 限制：
 - 确定性验证结果。
 - 审核按钮：接受、追加证据、重开、拒绝、设计确认。
 
-### 14.2 业务探针页面
+### 14.2 夜间测试汇报专用页面
+
+这是第一阶段必须优先补齐的 UI 页面，面向“每天早上检查进度和问题”的工作流。
+
+页面顶部汇总卡片：
+
+| 卡片 | 字段 |
+|---|---|
+| 夜间运行状态 | `report_id`、开始/结束时间、commit、branch、运行环境、整体状态 |
+| 覆盖范围 | 覆盖模块数、运行 detector 数、运行 test plan 数、跳过任务数 |
+| 新发现 | 新候选 Issue 数、P0/P1 建议数、高置信数、重复数、证据不足数 |
+| LLM 探索 | LLM 任务数、成功/失败、使用 provider/model、Prompt 版本、token/成本摘要 |
+| Issue 同步 | 已晋级 GitHub Issue 数、待审核数、同步失败数、重开建议数 |
+| 资源清理 | validation 资源数、cleanup 成功/失败、逾期资源数 |
+
+主体区域采用“概要 + 可展开详情”的卡片设计：
+
+1. **执行链路卡片**：显示 nightly baseline、change-driven、manual MCP 三类任务的运行树；每个节点可展开日志、耗时、输入、输出。
+2. **模块结果卡片**：按模块列出 detector 命中、测试结果、覆盖变化、关联 Issue；点击模块进入详情，不只显示汇总。
+3. **LLM 报告卡片**：展示 LLM 发现的设计不一致、跨模块疑点、建议补充测试；每条必须显示 `provider/model/prompt_version/context_pack`。
+4. **候选 Issue 卡片**：按待审核、证据不足、建议重开、已拒绝、已晋级 GitHub 分组；支持一键跳转候选详情。
+5. **证据包卡片**：展示截图、API 响应、MCP 响应、日志 fingerprint、DB 查询结果、回放命令。
+6. **清理和风险卡片**：列出未清理 validation 资源、失败 cleanup、被跳过的高风险任务。
+
+LLM 报告详情必须突出“LLM 只是辅助”：
+
+- LLM 原始输出作为 draft，不直接等同 Bug。
+- 每条 LLM 发现都显示确定性补证据状态：未验证、验证通过、验证失败、证据不足。
+- 审核按钮不直接创建 Issue，而是进入候选审核或追加探针。
+- 正式晋级必须走 `promote_candidate_to_issue`，并同步 GitHub Issue 和 BUG JSON。
+
+### 14.3 LLM 配置引用页面
+
+主动发现平台只提供“引用和绑定”能力，不重复做 Provider、API key、Prompt 编辑：
+
+- Prompt 编辑入口跳转到 `http://localhost:3000/quantevolver/prompts`，并默认筛选 `validation_discovery_*` 分类。
+- 模型服务商和模型配置跳转到 `/config/rdagent-llm`。
+- 本页维护 `DiscoveryAgentProfile`：Agent 角色、provider/model、prompt、运行参数、是否参与 nightly、是否允许 MCP 手工调用。
+- 每个 profile 显示最近一次运行成功率、平均耗时、候选命中率、误报率、成本估算。
+- 禁止在本页录入 token；token 只归属于已有模型配置模块。
+
+### 14.4 业务探针页面
 
 卡片：
 
@@ -888,7 +1043,9 @@ tmp/validation/discovery/<run_id>/*
 - 本设计文档。
 - 首批 validation contracts 草案。
 - Issue Candidate schema。
-- 主动发现 UI 信息架构。
+- 主动发现 UI 信息架构，含夜间测试汇报专用页面。
+- DiscoveryAgentProfile schema，明确复用 `/quantevolver/prompts` 和 `/config/rdagent-llm`。
+- 三层调度矩阵：固定夜间基线、变更驱动任务、人工 MCP 专项任务。
 - QE/Paper 全链路探针 runbook。
 
 验收：
@@ -896,6 +1053,8 @@ tmp/validation/discovery/<run_id>/*
 - 文档通过 review。
 - 明确第一阶段不直接运行生产写入。
 - 确定 P0/P1 首批规则。
+- 明确 LLM 输出只进入 draft/candidate，不直接创建正式 Issue。
+- 明确高风险任务必须通过 resource policy 和人工确认。
 
 ### 阶段 1：确定性发现器 MVP，5-8 天
 
@@ -907,12 +1066,16 @@ tmp/validation/discovery/<run_id>/*
 - API/MCP/前端对齐扫描器。
 - GitHub/BUG 去重查询。
 - Morning review Markdown。
+- 夜间报告数据结构和基础 API。
+- 变更驱动任务计划器 dry-run。
 
 验收：
 
 - 能发现至少 5 类历史已知问题模式。
 - 能生成候选而非直接创建 Issue。
 - 能从候选晋级为 BUG JSON + GitHub Issue。
+- 能生成一份不依赖 LLM 的夜间报告。
+- 能基于变更清单生成待执行任务建议。
 
 ### 阶段 2：日志异常与数据一致性，1-2 周
 
@@ -922,19 +1085,26 @@ tmp/validation/discovery/<run_id>/*
 - Validation failure event 接入 candidate。
 - QE/Paper/BUG/GitHub 数据一致性扫描。
 - 流水线 UI 主动发现页面。
+- 夜间测试汇报专用页面 MVP。
+- MCP 专项任务部署和取消接口。
 
 验收：
 
 - 后端 500 可以生成候选。
 - BUG JSON/GitHub 状态不一致可被发现。
 - Paper session/run 状态不一致可被发现。
+- UI 能展示夜间运行、候选、证据、cleanup 和 GitHub 同步状态。
+- MCP 能创建手工专项任务，但高风险任务需要 confirm。
 
 ### 阶段 3：LLM 辅助探索，1-2 周
 
 实现：
 
 - LLM context pack。
-- DeepSeek/GLM Agent adapter。
+- 复用 `/quantevolver/prompts` 的 Prompt 版本。
+- 复用 `/config/rdagent-llm` 的 provider/model 配置。
+- DeepSeek/GLM/Zhipu/DashScope/OpenAI-compatible Agent adapter。
+- DiscoveryAgentProfile 管理页面。
 - LLM 输出 draft candidate。
 - 确定性补证据流程。
 - 每日审核包。
@@ -944,6 +1114,8 @@ tmp/validation/discovery/<run_id>/*
 - LLM 只能创建 draft candidate。
 - 高风险候选必须经过确定性证据补齐。
 - Morning review 可展示 LLM 建议和确定性证据差异。
+- 夜间报告能显示 provider/model/prompt_version/context_pack。
+- 页面不保存 LLM token 或 API key。
 
 ### 阶段 4：QE/Paper 全链路最小探针，2-3 周
 
@@ -971,12 +1143,15 @@ tmp/validation/discovery/<run_id>/*
 - UI 趋势图。
 - 已审核 P0/P1 与合入门禁联动。
 - 历史发现率统计。
+- 固定基线、变更驱动、手工 MCP 三类调度全部可追踪。
 
 验收：
 
 - 每天自动生成 morning review。
 - 已审核 P0/P1 可影响合入门禁。
 - 未审核候选不直接阻断 PR。
+- 新功能或新页面合入后，能自动生成对应的低风险验证任务建议。
+- 手工专项任务可以由 UI 或 MCP 部署，并在夜间报告中归档。
 
 ## 19. 首批落地规则清单
 
@@ -1009,9 +1184,11 @@ tmp/validation/discovery/<run_id>/*
 
 - 能运行确定性发现器并生成候选。
 - 能运行 LLM draft 但不直接建 Issue。
-- 能生成 morning review。
+- 能生成 morning review 和夜间测试汇报专用页面数据。
 - 能将审核通过候选晋级为 BUG JSON + GitHub Issue。
 - 能在 UI 展示候选、证据、审核状态、GitHub 同步状态。
+- 能展示 LLM provider/model/prompt_version/context_pack，并跳转到既有 Prompt 和模型配置页面。
+- 能通过 UI/MCP 创建手工专项任务，并区分固定夜间基线、变更驱动任务和人工任务。
 
 ### 21.2 业务能力验收
 
@@ -1019,6 +1196,7 @@ tmp/validation/discovery/<run_id>/*
 - 能发现至少一个设计实现不一致候选。
 - 能发现至少一个 BUG/GitHub 状态不一致候选。
 - 能运行一次只读 QE/Paper 链路检查。
+- 新功能合入或新增页面后，能自动生成至少一个低风险验证任务建议。
 - 能运行一次 validation resource cleanup dry-run。
 
 ### 21.3 安全验收
@@ -1027,6 +1205,7 @@ tmp/validation/discovery/<run_id>/*
 - L4/L5 写入任务默认不在 PR CI 运行。
 - 生产库测试资源全部可按 validation_run_id 查询。
 - cleanup 只处理 validation namespace。
+- LLM API key、GitHub token、DB 密码不进入 LLM context pack、夜间报告或候选 Issue 证据文本。
 
 ## 22. 后续建议
 
@@ -1037,7 +1216,10 @@ tests/aistock_validation/contracts/strategy_package_boundary_contract.yaml
 tests/aistock_validation/contracts/paper_v2_runtime_contract.yaml
 tests/aistock_validation/contracts/qe_backtest_validation_contract.yaml
 tests/aistock_validation/discovery_rules/active_discovery_rules_v1.yaml
+tests/aistock_validation/discovery_rules/discovery_agent_profiles.example.yaml
+tests/aistock_validation/discovery_rules/nightly_baseline_tasks.yaml
 docs/operations/validation_active_discovery_morning_review_runbook_20260520.md
+docs/operations/validation_active_discovery_nightly_report_ui_runbook_20260520.md
 ```
 
-随后进入阶段 1 开发。阶段 1 不需要直接跑生产库写入，只实现候选池、规则扫描、UI 覆盖扫描和 morning review，先把“能发现问题并受控进入审核”的闭环建立起来。
+随后进入阶段 1 开发。阶段 1 不需要直接跑生产库写入，只实现候选池、规则扫描、UI 覆盖扫描、夜间报告数据结构和 morning review，先把“能发现问题并受控进入审核”的闭环建立起来。
