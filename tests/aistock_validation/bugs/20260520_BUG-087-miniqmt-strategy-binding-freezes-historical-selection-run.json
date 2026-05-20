@@ -29,7 +29,7 @@
   "assigned_agent": "codex-app",
   "fix_branch": "bug/BUG-087-miniqmt-daily-selection-lifecycle",
   "worktree_path": "F:/Dev/AIstock_worktrees/bug-087-miniqmt-daily-selection-lifecycle",
-  "fix_commit": "5bfe0896a0d7b947af4131a42d142a12f7136118",
+  "fix_commit": "5bfe08935a51478c9e8f2ec8d8c65e2998320684",
   "verification_run_id": "tests/aistock_validation/history/qmt_strategy_ledger/BUG-087-miniqmt-daily-selection-lifecycle-validation-20260520.md",
   "created_at": "2026-05-20T00:00:00Z",
   "first_seen_at": "2026-05-20T00:00:00Z",
@@ -107,6 +107,12 @@
       "actor": "codex-app",
       "action": "rebased_on_latest_origin_main",
       "note": "Branch rebased onto origin/main 0c5a353. qmt_strategy_ledger tests pass, l0 passes, branch-file guardrails blocking=0, and git diff check passes. Full paper_v2_backend still fails on unrelated origin/main StrategyPackage DDL ON DELETE CASCADE assertion outside BUG-087 scope."
+    },
+    {
+      "timestamp": "2026-05-20T00:00:00Z",
+      "actor": "codex-app",
+      "action": "fix_commit_hash_corrected",
+      "note": "Corrected BUG-087 fix_commit to the exact post-rebase commit hash."
     }
   ],
   "github_issue_number": 109,
