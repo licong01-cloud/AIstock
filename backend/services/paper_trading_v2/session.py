@@ -27,7 +27,8 @@ from backend.services.trading_core.execution_algo_capabilities import (
     require_execution_algo_supports_mode,
 )
 from backend.services.trading_core.models import RunStatus
-from backend.services.strategy_package.repository import StrategyPackageRepository
+from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository, StrategyPackageRepository
+from backend.services.selection_center.runtime_profile import validate_runtime_profile_binding
 
 from .market_data import MinuteDataSource, TradeCalendarProvider
 from .models import (
@@ -183,13 +184,23 @@ class PaperTradingSessionService:
                 },
             )
 
+        package_repository = self.package_repository
+        if package_repository is None and hasattr(self.repository, "portfolios"):
+            package_repository = InMemoryStrategyPackageRepository()
+            portfolio_manifest = getattr(portfolio, "frozen_manifest", None)
+            if portfolio_manifest is not None:
+                package_repository.save_manifest(portfolio_manifest)
         config = PaperTradingV2PortfolioService(
-            package_repository=self.package_repository,
+            package_repository=package_repository,
             repository=self.repository,
         ).resolve_runtime_config_for_date(
             portfolio=portfolio,
             trade_date=start_date,
             runtime_config=runtime_config or {},
+        )
+        validate_runtime_profile_binding(
+            config,
+            context={"portfolio_id": portfolio_id, "trade_date": start_date.isoformat(), "check": "session_create"},
         )
         self._reject_raw_execution_overrides(config)
         policy_context = self._portfolio_policy_context(portfolio.execution_policy, portfolio_id=portfolio_id)
@@ -532,8 +543,11 @@ class PaperTradingSessionService:
     def _has_running_run(self, portfolio_id: str) -> bool:
         try:
             return any(str(row.get("status") or "").upper() == "RUNNING" for row in self.repository.list_runs(portfolio_id, limit=10_000))
-        except Exception:
-            return True
+        except (DataUnavailableError, TradingCoreError) as exc:
+            raise SessionConfigError(
+                "paper v2 session could not verify running day-run state",
+                context={"portfolio_id": portfolio_id, "cause": str(exc)},
+            ) from exc
 
     @staticmethod
     def _portfolio_policy_context(execution_policy: dict[str, Any], *, portfolio_id: str) -> dict[str, Any]:

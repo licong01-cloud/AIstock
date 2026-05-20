@@ -1,4 +1,4 @@
-﻿"""Paper Trading v2 portfolio lifecycle service."""
+"""Paper Trading v2 portfolio lifecycle service."""
 
 from __future__ import annotations
 
@@ -20,7 +20,14 @@ from backend.services.strategy_package.service import StrategyPackageService
 from backend.services.strategy_package.validators import StrategyPackageValidator
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, StrategyPackageValidationError
 from backend.services.trading_core.ledger import FeeModel
-from backend.services.selection_center.runtime_profile import normalize_selection_runtime_config
+from backend.services.selection_center.runtime_profile import (
+    attach_activation_runtime_profile_binding,
+    attach_default_runtime_profile_binding,
+    ensure_runtime_config_version_boundary,
+    normalize_selection_runtime_config,
+    runtime_behavior_keys,
+    validate_runtime_profile_binding,
+)
 from backend.services.strategy_package.backtest_contract import (
     normalize_runtime_config_with_backtest_contract,
 )
@@ -48,8 +55,8 @@ from .models import (
 from .repository import PaperTradingV2Repository
 
 # Allowed broker_backend values at the Paper v2 portfolio creation API.
-# minqmt_live is intentionally excluded — live admission goes through main
-# design §11 flow, not the Paper v2 router.
+# minqmt_live is intentionally excluded - live admission goes through main
+# design section 11 flow, not the Paper v2 router.
 PAPER_V2_CREATABLE_BROKER_BACKENDS: frozenset[str] = frozenset({"local_sim", "minqmt_sim"})
 
 
@@ -134,9 +141,9 @@ class PaperTradingV2PortfolioService:
                 context={"package_id": package_id},
             )
         # R-Q9 D1/D3: validate broker_backend up-front (typed error, fail-fast).
-        # Engine §3.6.4 strong binding is re-checked inside PaperPortfolio model
+        # Engine section 3.6.4 strong binding is re-checked inside PaperPortfolio model
         # validator; this layer additionally restricts to Paper-v2-creatable
-        # backends (minqmt_live is admission-flow only, see main design §11).
+        # backends (minqmt_live is admission-flow only, see main design section 11).
         if broker_backend not in PAPER_V2_CREATABLE_BROKER_BACKENDS:
             raise StrategyPackageValidationError(
                 "broker_backend not allowed for paper v2 portfolio creation",
@@ -146,7 +153,7 @@ class PaperTradingV2PortfolioService:
                 },
             )
         assert_broker_market_source_match(broker_backend, data_source)
-        # OPEN-EXT-3 stub — broker_compatibility manifest field not yet
+        # OPEN-EXT-3 stub - broker_compatibility manifest field not yet
         # implemented in Codex schema. Once available, this gate will block
         # portfolios whose backend is incompatible with the package.
         self._validate_broker_compatibility(manifest=manifest, broker_backend=broker_backend)
@@ -185,7 +192,7 @@ class PaperTradingV2PortfolioService:
     def _validate_broker_compatibility(*, manifest: Any, broker_backend: BrokerBackendId) -> None:
         """Stub for OPEN-EXT-3 broker_compatibility manifest gate.
 
-        Strategy Engine design §3.6.5 (R-Q9 D4) defines a manifest field
+        Strategy Engine design section 3.6.5 (R-Q9 D4) defines a manifest field
         ``broker_compatible`` Literal["LocalSim_only", "MiniQMTSim_only", "both"].
         The schema upgrade is part of the Codex main design double-PR flow
         (OPEN-EXT-3) and is NOT yet landed; treating absence as "both" today
@@ -199,7 +206,7 @@ class PaperTradingV2PortfolioService:
                 raise BrokerCompatibilityMismatchError(...)
         """
 
-        # OPEN-EXT-3 stub — intentionally a no-op. Do not silently approve in
+        # OPEN-EXT-3 stub - intentionally a no-op. Do not silently approve in
         # the future schema; replace with the typed check above when landed.
         return None
 
@@ -801,26 +808,66 @@ class PaperTradingV2PortfolioService:
         config = dict(runtime_config or {})
         runtime_variant = self._resolve_runtime_variant_for_portfolio(portfolio, config)
         config = self._config_without_runtime_variant_selector(apply_runtime_variant_config(config, runtime_variant))
+        ensure_runtime_config_version_boundary(
+            config,
+            context={
+                "portfolio_id": portfolio.portfolio_id,
+                "trade_date": trade_date.isoformat(),
+                "broker_backend": portfolio.broker_backend,
+                "path": "paper_v2.resolve_runtime_config_for_date",
+            },
+        )
         if config.get("runtime_profile_activation"):
-            return normalize_runtime_config_with_backtest_contract(
+            config = attach_activation_runtime_profile_binding(
+                config,
+                activation=dict(config["runtime_profile_activation"]),
+            )
+            normalized = normalize_runtime_config_with_backtest_contract(
                 portfolio.frozen_manifest,
                 config,
                 context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat()},
             )
+            validate_runtime_profile_binding(
+                normalized,
+                context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat()},
+            )
+            return normalized
         session_opts = config.get("paper_v2_session") if isinstance(config.get("paper_v2_session"), dict) else {}
         if session_opts.get("freeze_runtime_profile"):
-            return normalize_runtime_config_with_backtest_contract(
+            normalized = normalize_runtime_config_with_backtest_contract(
                 portfolio.frozen_manifest,
                 config,
                 context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat()},
             )
+            validate_runtime_profile_binding(
+                normalized,
+                context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat()},
+            )
+            return normalized
         activation = self.repository.get_active_runtime_config_activation(portfolio.portfolio_id, trade_date)
         if activation is None:
-            return normalize_runtime_config_with_backtest_contract(
+            behavior_keys = runtime_behavior_keys(config)
+            if behavior_keys:
+                raise StrategyPackageValidationError(
+                    "runtime_config changes trading behavior without an active runtime profile activation",
+                    context={
+                        "portfolio_id": portfolio.portfolio_id,
+                        "trade_date": trade_date.isoformat(),
+                        "broker_backend": portfolio.broker_backend,
+                        "behavior_keys": behavior_keys,
+                    },
+                )
+            normalized = normalize_runtime_config_with_backtest_contract(
                 portfolio.frozen_manifest,
                 config,
                 context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat()},
             )
+            normalized = attach_default_runtime_profile_binding(normalized)
+            validate_runtime_profile_binding(
+                normalized,
+                context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat()},
+            )
+            return normalized
         conflicting = sorted(key for key in config if key in RUNTIME_PROFILE_INPUT_KEYS)
         if conflicting:
             raise StrategyPackageValidationError(
@@ -857,11 +904,20 @@ class PaperTradingV2PortfolioService:
             "activated_by": activation.activated_by,
             "reason": activation.reason,
         }
-        return normalize_runtime_config_with_backtest_contract(
+        effective = attach_activation_runtime_profile_binding(
+            effective,
+            activation=effective["runtime_profile_activation"],
+        )
+        normalized = normalize_runtime_config_with_backtest_contract(
             portfolio.frozen_manifest,
             effective,
             context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat()},
         )
+        validate_runtime_profile_binding(
+            normalized,
+            context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat()},
+        )
+        return normalized
 
     def _resolve_runtime_variant_for_portfolio(self, portfolio: PaperPortfolio, config: dict[str, Any]) -> Any | None:
         raw_id = config.get("runtime_variant_id")

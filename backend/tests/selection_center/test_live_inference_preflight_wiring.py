@@ -39,6 +39,7 @@ from backend.services.strategy_package.selection_artifact import (
 from backend.tests.selection_center.test_runtime_selection import (
     FakeSuspendLookup,
     NoopRefreshAudit,
+    versioned_selection_runtime_config,
 )
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
@@ -225,7 +226,7 @@ def test_selection_run_skips_preflight_when_auto_generate_disabled() -> None:
         selection_artifact_runtime_hash,
     )
     runtime_hash = selection_artifact_runtime_hash(
-        {"runtime_profile": {"selection": {"top_k": 1}}}
+        versioned_selection_runtime_config({"runtime_profile": {"selection": {"top_k": 1}}})
     )
     artifact_repo.save(
         SelectionScoreArtifact(
@@ -251,9 +252,9 @@ def test_selection_run_skips_preflight_when_auto_generate_disabled() -> None:
         package_id=manifest.package_id,
         trade_date=date(2024, 1, 3),
         data_source="DB_HISTORICAL",
-        runtime_config={
+        runtime_config=versioned_selection_runtime_config({
             "runtime_profile": {"selection": {"top_k": 1}},
-        },
+        }),
     )
     assert resolver.calls == []  # preflight NOT invoked
     assert provider.calls == []  # live inference NOT invoked
@@ -268,7 +269,7 @@ def test_selection_run_invokes_preflight_when_auto_generate_enabled() -> None:
         package_id=manifest.package_id,
         trade_date=date(2024, 1, 3),
         data_source="DB_HISTORICAL",
-        runtime_config={
+        runtime_config=versioned_selection_runtime_config({
             "selection_artifact_config": {
                 "auto_generate": True,
                 "inference_backend": "local",
@@ -276,7 +277,7 @@ def test_selection_run_invokes_preflight_when_auto_generate_enabled() -> None:
                 "pit_mode": "NONE",
             },
             "runtime_profile": {"selection": {"top_k": 1}},
-        },
+        }),
     )
 
     assert len(resolver.calls) == 1
@@ -297,7 +298,7 @@ def test_selection_run_fails_fast_when_preflight_blocks() -> None:
             package_id=manifest.package_id,
             trade_date=date(2024, 1, 3),
             data_source="DB_HISTORICAL",
-            runtime_config={
+            runtime_config=versioned_selection_runtime_config({
                 "selection_artifact_config": {
                     "auto_generate": True,
                     "inference_backend": "local",
@@ -305,7 +306,7 @@ def test_selection_run_fails_fast_when_preflight_blocks() -> None:
                     "pit_mode": "NONE",
                 },
                 "runtime_profile": {"selection": {"top_k": 1}},
-            },
+            }),
         )
 
     err = exc_info.value
@@ -342,7 +343,7 @@ def test_selection_run_preflight_failure_carries_strategy_package_source_identit
             package_id=manifest.package_id,
             trade_date=date(2024, 1, 3),
             data_source="DB_HISTORICAL",
-            runtime_config={
+            runtime_config=versioned_selection_runtime_config({
                 "selection_artifact_config": {
                     "auto_generate": True,
                     "inference_backend": "local",
@@ -350,7 +351,7 @@ def test_selection_run_preflight_failure_carries_strategy_package_source_identit
                     "pit_mode": "NONE",
                 },
                 "runtime_profile": {"selection": {"top_k": 1}},
-            },
+            }),
         )
     ctx = exc_info.value.context
     assert ctx["source_type"] == manifest.source.source_type.value

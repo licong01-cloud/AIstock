@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
@@ -459,6 +459,8 @@ def test_db_historical_day_runner_loads_real_minute_price_for_existing_position_
         ],
         prices={"000001.SZ": 10.0},
     )
+
+
     provider = FakeDbMinuteProvider()
 
     result = PaperTradingDayRunner(
@@ -526,6 +528,21 @@ def test_day_runner_risk_policy_blocks_buy_and_forces_existing_position_exit() -
         ],
         prices={"000001.SZ": 10.0},
     )
+    runtime_config = {"runtime_profile": {"risk_policy": {"enabled": True}}}
+    profile_service = PaperTradingV2PortfolioService(package_repository=package_repo, repository=paper_repo)
+    _profile, version = profile_service.create_runtime_profile(
+        portfolio_id=portfolio.portfolio_id,
+        profile_name="risk policy active",
+        config_json=runtime_config,
+        created_by="unit_test",
+    )
+    activation = profile_service.activate_runtime_config(
+        portfolio_id=portfolio.portfolio_id,
+        trade_date=date(2024, 1, 3),
+        profile_version_id=version.profile_version_id,
+        activated_by="unit_test",
+        reason="risk policy forced exit test",
+    )
     provider = FakeDbMinuteProvider()
 
     result = PaperTradingDayRunner(
@@ -557,9 +574,9 @@ def test_day_runner_risk_policy_blocks_buy_and_forces_existing_position_exit() -
     ).run_day(
         portfolio_id=portfolio.portfolio_id,
         trade_date=date(2024, 1, 3),
-        runtime_config={"runtime_profile": {"risk_policy": {"enabled": True}}},
     )
 
+    assert result.run.runtime_config["runtime_profile_activation"]["activation_id"] == activation.activation_id
     orders = paper_repo.orders[result.run.run_id]
     sell_orders = [order for order in orders if order.symbol == "000001.SZ" and order.side.value == "SELL"]
     buy_orders = [order for order in orders if order.symbol == "000001.SZ" and order.side.value == "BUY"]

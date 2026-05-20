@@ -8,11 +8,83 @@ and must resolve to authoritative live/latest-data selection artifacts.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend.services.trading_core.errors import StrategyPackageValidationError
+
+
+RUNTIME_CONFIG_SCOPE_KEY = "runtime_config_scope"
+RUNTIME_PROFILE_BINDING_KEY = "runtime_profile_binding"
+RUNTIME_PROFILE_ACTIVATION_KEY = "runtime_profile_activation"
+DEFAULT_RUNTIME_PROFILE_VERSION_ID = "platform_default_runtime_profile_v1"
+NON_TRADING_RUNTIME_SCOPES = frozenset({"diagnostic_preview", "non_trading_preview", "read_only_preview"})
+TRADING_RUNTIME_SCOPES = frozenset({"trading", "paper_trading", "miniqmt_sim", "live_trading"})
+RUNTIME_PROFILE_BINDING_SOURCES = frozenset(
+    {
+        "platform_default",
+        "runtime_profile_version",
+        "selection_runtime_profile_version",
+        "paper_runtime_profile_version",
+        "runtime_config_activation",
+        "package_runtime_release",
+        "portfolio_binding_version",
+        "ad_hoc_non_trading_preview",
+    }
+)
+
+# These caller-provided keys can change selection, targets, orders, holdings or
+# NAV. Trading paths must therefore use a versioned runtime profile activation
+# (or another explicit binding carrying a version/hash) instead of ad-hoc input.
+BEHAVIOR_CHANGING_RUNTIME_CONFIG_KEYS = frozenset(
+    {
+        "runtime_profile",
+        "runtime_variant_id",
+        "top_k",
+        "exclude_suspended",
+        "industry_blacklist",
+        "sector_blacklist",
+        "hmm",
+        "enable_sector_hmm",
+        "hmm_model_snapshot_id",
+        "hmm_model_version_id",
+        "hmm_signal_preset",
+        "hmm_coefficients_path",
+        "hmm_coefficients_file",
+        "risk_policy",
+        "package_weights",
+        "st_pit_authoritative",
+        "enforce_st_pit_contract",
+        "display_top_n",
+        "total_equity",
+    }
+)
+
+_PROFILE_HASH_EXCLUDED_KEYS = frozenset(
+    {
+        RUNTIME_CONFIG_SCOPE_KEY,
+        RUNTIME_PROFILE_BINDING_KEY,
+        RUNTIME_PROFILE_ACTIVATION_KEY,
+        "paper_v2_session",
+        "paper_v2_replay",
+        "selection_source",
+        "point_in_time_context",
+        "package_runtime_configs",
+        "package_health",
+        "validated_execution_policy",
+        "qe_backtest_runtime_contract",
+        "current_prices",
+        "current_price_context",
+        "valid_no_candidate",
+        "no_candidate_reason",
+        "_miniqmt_current_positions",
+        "_miniqmt_latest_cash",
+        "_miniqmt_total_equity",
+    }
+)
 
 
 class RuntimeHMMProfile(BaseModel):
@@ -250,3 +322,258 @@ def normalize_selection_runtime_config(runtime_config: dict[str, Any] | None) ->
     profile = parse_selection_runtime_profile(config)
     config["runtime_profile"] = profile.model_dump(mode="json")
     return config
+
+
+def runtime_behavior_keys(runtime_config: dict[str, Any] | None) -> list[str]:
+    """Return behavior-changing keys provided by the caller.
+
+    The check is intentionally shallow at the top-level plus per-package dicts:
+    those are the API shapes accepted by Selection Center and Paper v2. Generated
+    runtime metadata is excluded by checking the raw caller config before later
+    normalization adds a default ``runtime_profile``.
+    """
+
+    config = runtime_config or {}
+    if not isinstance(config, dict):
+        return []
+    keys: set[str] = set()
+    for key, value in config.items():
+        text_key = str(key)
+        if text_key in BEHAVIOR_CHANGING_RUNTIME_CONFIG_KEYS:
+            keys.add(text_key)
+        if isinstance(value, dict):
+            nested = set(str(nested_key) for nested_key in value)
+            if nested.intersection(BEHAVIOR_CHANGING_RUNTIME_CONFIG_KEYS):
+                keys.add(f"{text_key}.*")
+    return sorted(keys)
+
+
+def runtime_config_has_version_binding(runtime_config: dict[str, Any] | None) -> bool:
+    config = runtime_config or {}
+    if not isinstance(config, dict):
+        return False
+    activation = config.get(RUNTIME_PROFILE_ACTIVATION_KEY)
+    if isinstance(activation, dict) and activation.get("profile_version_id") and activation.get("config_sha256"):
+        return True
+    binding = config.get(RUNTIME_PROFILE_BINDING_KEY)
+    return bool(
+        isinstance(binding, dict)
+        and binding.get("profile_version_id")
+        and binding.get("config_sha256")
+        and binding.get("source")
+    )
+
+
+def runtime_config_scope(runtime_config: dict[str, Any] | None) -> str | None:
+    raw = (runtime_config or {}).get(RUNTIME_CONFIG_SCOPE_KEY) if isinstance(runtime_config or {}, dict) else None
+    if raw is None:
+        return None
+    scope = str(raw).strip()
+    return scope or None
+
+
+def is_non_trading_runtime_config(runtime_config: dict[str, Any] | None) -> bool:
+    return runtime_config_scope(runtime_config) in NON_TRADING_RUNTIME_SCOPES
+
+
+def ensure_runtime_config_version_boundary(
+    runtime_config: dict[str, Any] | None,
+    *,
+    context: dict[str, Any] | None = None,
+    allow_non_trading_preview: bool = False,
+) -> None:
+    """Fail fast when ad-hoc runtime choices enter a trading execution path."""
+
+    config = runtime_config or {}
+    if not isinstance(config, dict):
+        raise StrategyPackageValidationError(
+            "runtime_config must be an object",
+            context={**(context or {}), "runtime_config_type": type(config).__name__},
+        )
+    keys = runtime_behavior_keys(config)
+    if not keys:
+        return
+    scope = runtime_config_scope(config)
+    if allow_non_trading_preview and scope in NON_TRADING_RUNTIME_SCOPES:
+        return
+    if runtime_config_has_version_binding(config):
+        binding = validate_runtime_profile_binding(
+            config,
+            context=context,
+            require_trade_enabled=scope not in NON_TRADING_RUNTIME_SCOPES,
+        )
+        if binding["source"] == "platform_default":
+            raise StrategyPackageValidationError(
+                "platform default runtime profile cannot bind caller-provided behavior-changing runtime_config",
+                context={**(context or {}), "behavior_keys": keys, "runtime_profile_binding": binding},
+            )
+        return
+    raise StrategyPackageValidationError(
+        "runtime_config changes trading behavior without a versioned runtime profile activation",
+        context={
+            **(context or {}),
+            "behavior_keys": keys,
+            "runtime_config_scope": scope,
+            "required": {
+                RUNTIME_PROFILE_ACTIVATION_KEY: ["profile_version_id", "config_sha256"],
+                RUNTIME_PROFILE_BINDING_KEY: ["source", "profile_version_id", "config_sha256"],
+            },
+            "preview_scopes": sorted(NON_TRADING_RUNTIME_SCOPES),
+        },
+    )
+
+
+def mark_non_trading_preview_runtime_config(
+    runtime_config: dict[str, Any],
+    *,
+    reason: str,
+) -> dict[str, Any]:
+    config = dict(runtime_config)
+    config[RUNTIME_CONFIG_SCOPE_KEY] = "non_trading_preview"
+    binding = dict(config.get(RUNTIME_PROFILE_BINDING_KEY) or {})
+    if not binding:
+        binding = {
+            "source": "ad_hoc_non_trading_preview",
+            "profile_version_id": "unversioned_preview_runtime_profile",
+            "config_sha256": runtime_profile_config_sha256(config),
+            "trade_enabled": False,
+            "reason": reason,
+        }
+    else:
+        binding["trade_enabled"] = False
+        binding.setdefault("reason", reason)
+    config[RUNTIME_PROFILE_BINDING_KEY] = binding
+    return config
+
+
+def attach_default_runtime_profile_binding(runtime_config: dict[str, Any]) -> dict[str, Any]:
+    """Attach an auditable platform-default profile binding to default runs."""
+
+    config = dict(runtime_config)
+    if runtime_config_has_version_binding(config):
+        return config
+    config[RUNTIME_PROFILE_BINDING_KEY] = {
+        "source": "platform_default",
+        "profile_version_id": DEFAULT_RUNTIME_PROFILE_VERSION_ID,
+        "config_sha256": runtime_profile_config_sha256(config),
+        "trade_enabled": True,
+    }
+    return config
+
+
+def attach_activation_runtime_profile_binding(
+    runtime_config: dict[str, Any],
+    *,
+    activation: dict[str, Any],
+) -> dict[str, Any]:
+    config = dict(runtime_config)
+    required = ("profile_version_id", "config_sha256")
+    missing = [key for key in required if not activation.get(key)]
+    if missing:
+        raise StrategyPackageValidationError(
+            "runtime profile activation snapshot is missing version/hash fields",
+            context={"missing_fields": missing, "activation": activation},
+        )
+    config[RUNTIME_PROFILE_BINDING_KEY] = {
+        "source": "runtime_config_activation",
+        "activation_id": activation.get("activation_id"),
+        "profile_id": activation.get("profile_id"),
+        "profile_name": activation.get("profile_name"),
+        "profile_version_id": activation["profile_version_id"],
+        "version_no": activation.get("version_no"),
+        "config_sha256": activation["config_sha256"],
+        "trade_enabled": True,
+    }
+    return config
+
+
+def validate_runtime_profile_binding(
+    runtime_config: dict[str, Any] | None,
+    *,
+    context: dict[str, Any] | None = None,
+    require_trade_enabled: bool = True,
+) -> dict[str, Any]:
+    config = runtime_config or {}
+    if not isinstance(config, dict):
+        raise StrategyPackageValidationError(
+            "runtime_config must be an object",
+            context={**(context or {}), "runtime_config_type": type(config).__name__},
+        )
+    binding = config.get(RUNTIME_PROFILE_BINDING_KEY)
+    if not isinstance(binding, dict):
+        raise StrategyPackageValidationError(
+            "runtime_config requires runtime_profile_binding for trading execution",
+            context={**(context or {}), "binding_key": RUNTIME_PROFILE_BINDING_KEY},
+        )
+    source = str(binding.get("source") or "").strip()
+    version_id = str(binding.get("profile_version_id") or "").strip()
+    config_hash = str(binding.get("config_sha256") or "").strip()
+    if source not in RUNTIME_PROFILE_BINDING_SOURCES:
+        raise StrategyPackageValidationError(
+            "runtime_profile_binding source is not an approved version source",
+            context={
+                **(context or {}),
+                "runtime_profile_binding": binding,
+                "allowed_sources": sorted(RUNTIME_PROFILE_BINDING_SOURCES),
+            },
+        )
+    if not source or not version_id or not config_hash:
+        raise StrategyPackageValidationError(
+            "runtime_profile_binding requires source, profile_version_id and config_sha256",
+            context={**(context or {}), "runtime_profile_binding": binding},
+        )
+    if source == "ad_hoc_non_trading_preview" and binding.get("trade_enabled") is not False:
+        raise StrategyPackageValidationError(
+            "ad-hoc preview runtime_profile_binding must be marked trade_enabled=false",
+            context={**(context or {}), "runtime_profile_binding": binding},
+        )
+    if require_trade_enabled and binding.get("trade_enabled") is False:
+        raise StrategyPackageValidationError(
+            "non-trading runtime_config cannot enter Paper v2 or MiniQMT execution",
+            context={**(context or {}), "runtime_profile_binding": binding},
+        )
+    activation = config.get(RUNTIME_PROFILE_ACTIVATION_KEY)
+    if source == "runtime_config_activation":
+        if not isinstance(activation, dict):
+            raise StrategyPackageValidationError(
+                "runtime_config_activation binding requires activation snapshot",
+                context={**(context or {}), "runtime_profile_binding": binding},
+            )
+        if activation.get("profile_version_id") != version_id or activation.get("config_sha256") != config_hash:
+            raise StrategyPackageValidationError(
+                "runtime_config_activation binding does not match activation snapshot",
+                context={
+                    **(context or {}),
+                    "runtime_profile_binding": binding,
+                    "runtime_profile_activation": activation,
+                },
+            )
+    if source == "platform_default":
+        expected = runtime_profile_config_sha256(config)
+        if version_id != DEFAULT_RUNTIME_PROFILE_VERSION_ID or config_hash != expected:
+            raise StrategyPackageValidationError(
+                "platform default runtime profile binding hash mismatch",
+                context={
+                    **(context or {}),
+                    "profile_version_id": version_id,
+                    "config_sha256": config_hash,
+                    "expected_profile_version_id": DEFAULT_RUNTIME_PROFILE_VERSION_ID,
+                    "expected_config_sha256": expected,
+                },
+            )
+    return binding
+
+
+def runtime_profile_config_sha256(runtime_config: dict[str, Any] | None) -> str:
+    config = {
+        key: value
+        for key, value in dict(runtime_config or {}).items()
+        if key not in _PROFILE_HASH_EXCLUDED_KEYS and not str(key).startswith("_")
+    }
+    normalized = normalize_selection_runtime_config(config)
+    payload: dict[str, Any] = {"runtime_profile": normalized["runtime_profile"]}
+    for key in ("runtime_variant", "selection_artifact_config", "selection_artifact", "model", "metadata"):
+        if key in normalized:
+            payload[key] = normalized[key]
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()

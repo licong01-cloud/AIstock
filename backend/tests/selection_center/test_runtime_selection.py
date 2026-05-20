@@ -18,6 +18,7 @@ from backend.services.selection_center.industry_provider import IndustryInfo
 from backend.services.selection_center.models import SelectionMode, SelectionRunStatus
 from backend.services.selection_center.repository import InMemorySelectionCenterRepository
 from backend.services.selection_center.risk_policy import RiskDecision, StockRiskPolicyService
+from backend.services.selection_center.runtime_profile import runtime_profile_config_sha256
 from backend.services.selection_center.service import SelectionCenterService
 from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.strategy_package.manifest import freeze_manifest
@@ -103,6 +104,29 @@ class FakeHMMSnapshotProvider:
 
 
 TEST_ARTIFACT_REPO = InMemorySelectionScoreArtifactRepository()
+
+
+def versioned_selection_runtime_config(
+    config: dict | None = None,
+    *,
+    version_id: str | None = None,
+) -> dict:
+    payload = dict(config or {})
+    if version_id is None:
+        version_id = f"unit_runtime_profile_{runtime_profile_config_sha256(payload)[:12]}"
+    payload["runtime_profile_binding"] = {
+        "source": "selection_runtime_profile_version",
+        "profile_version_id": version_id,
+        "config_sha256": runtime_profile_config_sha256(payload),
+        "trade_enabled": True,
+    }
+    return payload
+
+
+def non_trading_preview_runtime_config(config: dict | None = None) -> dict:
+    payload = dict(config or {})
+    payload["runtime_config_scope"] = "non_trading_preview"
+    return payload
 
 
 @pytest.fixture(autouse=True)
@@ -389,7 +413,7 @@ def test_selection_artifact_service_generates_qe_prediction_as_diagnostic_only(t
             package_id=manifest.package_id,
             trade_date=date(2024, 1, 2),
             data_source="DB_HISTORICAL",
-            runtime_config={"runtime_profile": {"selection": {"top_k": 2}}},
+            runtime_config=versioned_selection_runtime_config({"runtime_profile": {"selection": {"top_k": 2}}}),
         )
 
 
@@ -483,7 +507,7 @@ def test_selection_artifact_service_generates_live_inference_artifact_without_ex
         package_id=manifest.package_id,
         trade_date=date(2024, 1, 2),
         data_source="DB_HISTORICAL",
-        runtime_config={"runtime_profile": {"selection": {"top_k": 2}}},
+        runtime_config=versioned_selection_runtime_config({"runtime_profile": {"selection": {"top_k": 2}}}),
     )
 
     assert run.status == SelectionRunStatus.SUCCEEDED
@@ -561,6 +585,65 @@ def test_selection_artifact_service_resolves_qe_evolution_loop_source(tmp_path) 
             "run_id": "qe_task_L1",
         }
     ]
+
+
+def test_selection_center_rejects_unversioned_trading_runtime_config() -> None:
+    package_repo = InMemoryStrategyPackageRepository()
+    manifest = ready_manifest_with_scores("pkg_runtime_boundary", "000001.SZ", 0.9, 1)
+    package_repo.save_manifest(manifest)
+    service = SelectionCenterService(
+        package_repository=package_repo,
+        repository=InMemorySelectionCenterRepository(),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+    )
+
+    with pytest.raises(StrategyPackageValidationError, match="versioned runtime profile activation") as exc_info:
+        service.run_single_package(
+            package_id=manifest.package_id,
+            trade_date=date(2024, 1, 2),
+            data_source="DB_HISTORICAL",
+            runtime_config={"top_k": 1},
+        )
+
+    assert exc_info.value.context["behavior_keys"] == ["top_k"]
+
+
+def test_selection_center_non_trading_preview_is_marked_and_cannot_create_paper_portfolio() -> None:
+    package_repo = InMemoryStrategyPackageRepository()
+    paper_repo = InMemoryPaperTradingV2Repository()
+    manifest = ready_manifest_with_scores("pkg_preview_boundary", "000001.SZ", 0.9, 1)
+    package_repo.save_manifest(manifest)
+    service = SelectionCenterService(
+        package_repository=package_repo,
+        repository=InMemorySelectionCenterRepository(),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+        paper_portfolio_service=PaperTradingV2PortfolioService(
+            package_repository=package_repo,
+            repository=paper_repo,
+        ),
+    )
+
+    run = service.run_single_package(
+        package_id=manifest.package_id,
+        trade_date=date(2024, 1, 2),
+        data_source="DB_HISTORICAL",
+        runtime_config=non_trading_preview_runtime_config({"top_k": 1}),
+    )
+
+    assert run.status == SelectionRunStatus.SUCCEEDED
+    assert run.runtime_config["runtime_config_scope"] == "non_trading_preview"
+    assert run.runtime_config["runtime_profile_binding"]["source"] == "ad_hoc_non_trading_preview"
+    assert run.runtime_config["runtime_profile_binding"]["trade_enabled"] is False
+    with pytest.raises(StrategyPackageValidationError, match="non-trading"):
+        service.create_paper_portfolio_from_run(
+            run_id=run.run_id,
+            portfolio_name="preview should not trade",
+            initial_cash=100_000,
+            start_date=date(2024, 1, 3),
+            data_source=MinuteDataSource.DB_HISTORICAL,
+        )
 
 
 def test_selection_center_pit_mode_resolves_previous_trading_day_and_passes_cutoff(tmp_path) -> None:
@@ -664,15 +747,17 @@ def test_selection_center_pit_mode_resolves_previous_trading_day_and_passes_cuto
         package_id=manifest.package_id,
         trade_date=date(2024, 1, 3),
         data_source="DB_HISTORICAL",
-        runtime_config={
-            "selection_artifact_config": {
-                "auto_generate": True,
-                "inference_backend": "local",
-                "include_reference_price": False,
-                "pit_mode": "PREVIOUS_TRADING_DAY_CLOSE",
-            },
-            "runtime_profile": {"selection": {"top_k": 2}},
-        },
+        runtime_config=versioned_selection_runtime_config(
+            {
+                "selection_artifact_config": {
+                    "auto_generate": True,
+                    "inference_backend": "local",
+                    "include_reference_price": False,
+                    "pit_mode": "PREVIOUS_TRADING_DAY_CLOSE",
+                },
+                "runtime_profile": {"selection": {"top_k": 2}},
+            }
+        ),
     )
 
     assert run.status == SelectionRunStatus.SUCCEEDED
@@ -714,10 +799,12 @@ def test_selection_center_uses_frozen_artifact_when_node_preflight_fails() -> No
     )
     package_repo.save_manifest(manifest)
     artifact_repo = InMemorySelectionScoreArtifactRepository()
-    runtime_config = {
-        "selection_artifact_config": {"auto_generate": True, "cutoff_date": "2024-01-01"},
-        "runtime_profile": {"selection": {"top_k": 1}, "tradability": {"exclude_suspended": False}},
-    }
+    runtime_config = versioned_selection_runtime_config(
+        {
+            "selection_artifact_config": {"auto_generate": True, "cutoff_date": "2024-01-01"},
+            "runtime_profile": {"selection": {"top_k": 1}, "tradability": {"exclude_suspended": False}},
+        }
+    )
     artifact_repo.save(
         SelectionScoreArtifact(
             package_id=manifest.package_id,
@@ -1293,14 +1380,16 @@ def test_selection_center_authoritative_mode_uses_platform_risk_policy_and_displ
         package_id=manifest.package_id,
         trade_date=date(2024, 1, 2),
         data_source="DB_HISTORICAL",
-        runtime_config={
-            "st_pit_authoritative": True,
-            "top_k": 1,
-            "runtime_profile": {
-                "selection": {"top_k": 1},
-                "risk_policy": {"enabled": True},
-            },
-        },
+        runtime_config=versioned_selection_runtime_config(
+            {
+                "st_pit_authoritative": True,
+                "top_k": 1,
+                "runtime_profile": {
+                    "selection": {"top_k": 1},
+                    "risk_policy": {"enabled": True},
+                },
+            }
+        ),
     )
 
     package_config = run.runtime_config["package_runtime_configs"][manifest.package_id]
@@ -1349,7 +1438,7 @@ def test_selection_center_consumes_validated_runtime_variant_candidate() -> None
         package_id=manifest.package_id,
         trade_date=date(2024, 1, 2),
         data_source="DB_HISTORICAL",
-        runtime_config={"runtime_variant_id": variant.variant_id},
+        runtime_config=versioned_selection_runtime_config({"runtime_variant_id": variant.variant_id}),
     )
 
     package_config = run.runtime_config["package_runtime_configs"][manifest.package_id]
@@ -1362,11 +1451,13 @@ def test_selection_center_consumes_validated_runtime_variant_candidate() -> None
         package_id=manifest.package_id,
         trade_date=date(2024, 1, 3),
         data_source="DB_HISTORICAL",
-        runtime_config={
-            "runtime_variant_id": variant.variant_id,
-            "st_pit_authoritative": True,
-            "runtime_profile": {"risk_policy": {"enabled": True}},
-        },
+        runtime_config=versioned_selection_runtime_config(
+            {
+                "runtime_variant_id": variant.variant_id,
+                "st_pit_authoritative": True,
+                "runtime_profile": {"risk_policy": {"enabled": True}},
+            }
+        ),
     )
     st_pit_config = st_pit_run.runtime_config["package_runtime_configs"][manifest.package_id]
     assert st_pit_config["qe_backtest_runtime_contract"]["runtime_features"]["variant"]["variant_id"] == variant.variant_id
@@ -1404,7 +1495,7 @@ def test_selection_center_authoritative_mode_requires_platform_st_pit_profile() 
             package_id=manifest.package_id,
             trade_date=date(2024, 1, 2),
             data_source="DB_HISTORICAL",
-            runtime_config={"st_pit_authoritative": True},
+            runtime_config=versioned_selection_runtime_config({"st_pit_authoritative": True}),
         )
     st_check = next(item for item in exc_info.value.context["checks"] if item["name"] == "st_pit_runtime_profile")
     assert st_check["status"] == "BLOCKED"
@@ -1460,17 +1551,19 @@ def test_selection_center_health_blocks_hmm_missing_stock_sector_map_before_infe
             package_id=manifest.package_id,
             trade_date=date(2024, 1, 2),
             data_source="DB_HISTORICAL",
-            runtime_config={
-                "st_pit_authoritative": True,
-                "runtime_profile": {
-                    "risk_policy": {"enabled": True},
-                    "hmm": {
-                        "enabled": True,
-                        "model_snapshot_id": "hmm_001",
-                        "signal_preset": "preset_A",
-                    }
-                },
-            },
+            runtime_config=versioned_selection_runtime_config(
+                {
+                    "st_pit_authoritative": True,
+                    "runtime_profile": {
+                        "risk_policy": {"enabled": True},
+                        "hmm": {
+                            "enabled": True,
+                            "model_snapshot_id": "hmm_001",
+                            "signal_preset": "preset_A",
+                        }
+                    },
+                }
+            ),
         )
 
     checks = exc_info.value.context["checks"]
@@ -1528,17 +1621,19 @@ def test_selection_center_health_passes_hmm_artifact_preflight(tmp_path) -> None
         package_id=manifest.package_id,
         trade_date=date(2024, 1, 2),
         data_source="DB_HISTORICAL",
-        runtime_config={
-            "st_pit_authoritative": True,
-            "runtime_profile": {
-                "risk_policy": {"enabled": True},
-                "hmm": {
-                    "enabled": True,
-                    "model_snapshot_id": "hmm_001",
-                    "signal_preset": "preset_A",
-                }
-            },
-        },
+        runtime_config=versioned_selection_runtime_config(
+            {
+                "st_pit_authoritative": True,
+                "runtime_profile": {
+                    "risk_policy": {"enabled": True},
+                    "hmm": {
+                        "enabled": True,
+                        "model_snapshot_id": "hmm_001",
+                        "signal_preset": "preset_A",
+                    }
+                },
+            }
+        ),
     )
 
     hmm_check = next(
@@ -1583,7 +1678,7 @@ def test_selection_center_weighted_fusion_uses_rank_normalized_scores() -> None:
         mode=SelectionMode.WEIGHTED_FUSION,
         trade_date=date(2024, 1, 2),
         data_source="DB_HISTORICAL",
-        runtime_config={"package_weights": {manifest_a.package_id: 0.25, manifest_b.package_id: 0.75}},
+        runtime_config=versioned_selection_runtime_config({"package_weights": {manifest_a.package_id: 0.25, manifest_b.package_id: 0.75}}),
     )
 
     assert run.status == SelectionRunStatus.SUCCEEDED
@@ -1646,7 +1741,7 @@ def test_selection_center_aggregates_existing_single_package_runs() -> None:
     aggregate = service.aggregate_existing_runs(
         source_run_ids=[run_a.run_id, run_b.run_id],
         mode=SelectionMode.WEIGHTED_FUSION,
-        runtime_config={"package_weights": {manifest_a.package_id: 0.4, manifest_b.package_id: 0.6}},
+        runtime_config=versioned_selection_runtime_config({"package_weights": {manifest_a.package_id: 0.4, manifest_b.package_id: 0.6}}),
     )
 
     assert aggregate.status == SelectionRunStatus.SUCCEEDED
@@ -1713,7 +1808,7 @@ def test_selection_center_weighted_fusion_requires_exact_positive_weights() -> N
             mode=SelectionMode.WEIGHTED_FUSION,
             trade_date=date(2024, 1, 2),
             data_source="DB_HISTORICAL",
-            runtime_config={"package_weights": {manifest_a.package_id: 1.0, manifest_b.package_id: 0.0}},
+            runtime_config=versioned_selection_runtime_config({"package_weights": {manifest_a.package_id: 1.0, manifest_b.package_id: 0.0}}),
         )
 
 
@@ -1740,7 +1835,7 @@ def test_selection_center_filters_suspended_and_backfills_by_raw_rank() -> None:
         package_id=manifest.package_id,
         trade_date=date(2024, 1, 2),
         data_source="DB_HISTORICAL",
-        runtime_config={"top_k": 2},
+        runtime_config=versioned_selection_runtime_config({"top_k": 2}),
     )
 
     assert [item.symbol for item in run.aggregate_results] == ["000002.SZ", "000003.SZ"]
@@ -1758,13 +1853,15 @@ def test_selection_center_preopen_readiness_does_not_require_daily_basic_gate() 
             {"symbol": "000002.SZ", "score": 0.88, "rank": 2, "target_weight": 0.03, "reference_price": 10.0},
         ],
     )
-    runtime_config = {
-        "selection_artifact_config": {
-            "cutoff_date": "2024-01-02",
-            "required_cutoff_audit_datasets": ["stk_limit"],
-        },
-        "runtime_profile": {"selection": {"top_k": 1}},
-    }
+    runtime_config = versioned_selection_runtime_config(
+        {
+            "selection_artifact_config": {
+                "cutoff_date": "2024-01-02",
+                "required_cutoff_audit_datasets": ["stk_limit"],
+            },
+            "runtime_profile": {"selection": {"top_k": 1}},
+        }
+    )
     seed_test_authoritative_artifact(
         manifest,
         [
@@ -1840,7 +1937,7 @@ def test_selection_center_runtime_profile_industry_blacklist_backfills() -> None
         package_id=manifest.package_id,
         trade_date=date(2024, 1, 2),
         data_source="DB_HISTORICAL",
-        runtime_config={"runtime_profile": {"industry_blacklist": ["Bank"], "selection": {"top_k": 2}}},
+        runtime_config=versioned_selection_runtime_config({"runtime_profile": {"industry_blacklist": ["Bank"], "selection": {"top_k": 2}}}),
     )
 
     assert [item.symbol for item in run.aggregate_results] == ["000002.SZ", "000003.SZ"]
@@ -1871,7 +1968,7 @@ def test_selection_center_industry_blacklist_requires_industry_metadata() -> Non
             package_id=manifest.package_id,
             trade_date=date(2024, 1, 2),
             data_source="DB_HISTORICAL",
-            runtime_config={"runtime_profile": {"industry_blacklist": ["Bank"]}},
+            runtime_config=versioned_selection_runtime_config({"runtime_profile": {"industry_blacklist": ["Bank"]}}),
         )
 
 
@@ -1916,7 +2013,7 @@ def test_selection_center_industry_blacklist_matches_pit_l2_code() -> None:
         package_id=manifest.package_id,
         trade_date=date(2024, 1, 2),
         data_source="DB_HISTORICAL",
-        runtime_config={"runtime_profile": {"industry_blacklist": ["801783.SI"], "selection": {"top_k": 1}}},
+        runtime_config=versioned_selection_runtime_config({"runtime_profile": {"industry_blacklist": ["801783.SI"], "selection": {"top_k": 1}}}),
     )
 
     assert [item.symbol for item in run.aggregate_results] == ["000002.SZ"]
@@ -1948,7 +2045,7 @@ def test_selection_center_industry_provider_failure_propagates() -> None:
             package_id=manifest.package_id,
             trade_date=date(2024, 1, 2),
             data_source="DB_HISTORICAL",
-            runtime_config={"runtime_profile": {"industry_blacklist": ["银行"]}},
+            runtime_config=versioned_selection_runtime_config({"runtime_profile": {"industry_blacklist": ["银行"]}}),
         )
 
 
@@ -1968,14 +2065,14 @@ def test_selection_center_hmm_runtime_profile_fails_fast() -> None:
             package_id=manifest.package_id,
             trade_date=date(2024, 1, 2),
             data_source="DB_HISTORICAL",
-            runtime_config={"runtime_profile": {"hmm": {"enabled": True}}},
+            runtime_config=versioned_selection_runtime_config({"runtime_profile": {"hmm": {"enabled": True}}}),
         )
     with pytest.raises(StrategyPackageValidationError, match="signal_preset"):
         service.run_single_package(
             package_id=manifest.package_id,
             trade_date=date(2024, 1, 2),
             data_source="DB_HISTORICAL",
-            runtime_config={"runtime_profile": {"hmm": {"enabled": True, "model_snapshot_id": "hmm_001"}}},
+            runtime_config=versioned_selection_runtime_config({"runtime_profile": {"hmm": {"enabled": True, "model_snapshot_id": "hmm_001"}}}),
         )
 
 

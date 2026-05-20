@@ -40,7 +40,17 @@ from .models import SelectionCandidate, SelectionMode, SelectionPaperPortfolioLi
 from .package_health import SelectionPackageHealthService
 from .repository import SelectionCenterRepository
 from .risk_policy import StockRiskPolicyService
-from .runtime_profile import normalize_selection_runtime_config, parse_selection_runtime_profile
+from .runtime_profile import (
+    RUNTIME_PROFILE_BINDING_KEY,
+    attach_default_runtime_profile_binding,
+    ensure_runtime_config_version_boundary,
+    is_non_trading_runtime_config,
+    mark_non_trading_preview_runtime_config,
+    normalize_selection_runtime_config,
+    parse_selection_runtime_profile,
+    runtime_config_scope,
+    validate_runtime_profile_binding,
+)
 from .tradability import TradabilityFilter
 
 
@@ -104,7 +114,31 @@ class SelectionCenterService:
         data_source: str,
         runtime_config: dict[str, Any] | None = None,
     ) -> SelectionRun:
-        config = normalize_selection_runtime_config(runtime_config or {})
+        raw_config = dict(runtime_config or {})
+        behavior_context = {
+            "trade_date": trade_date.isoformat(),
+            "data_source": data_source,
+            "mode": mode.value,
+            "path": "selection_center.run_packages",
+        }
+        ensure_runtime_config_version_boundary(
+            raw_config,
+            context=behavior_context,
+            allow_non_trading_preview=True,
+        )
+        if is_non_trading_runtime_config(raw_config):
+            raw_config = mark_non_trading_preview_runtime_config(
+                raw_config,
+                reason="selection center non-trading preview",
+            )
+        else:
+            raw_config = attach_default_runtime_profile_binding(raw_config)
+        config = normalize_selection_runtime_config(raw_config)
+        validate_runtime_profile_binding(
+            config,
+            context=behavior_context,
+            require_trade_enabled=not is_non_trading_runtime_config(config),
+        )
         config = self._apply_point_in_time_selection_config(config, trade_date=trade_date)
         if not package_ids:
             raise StrategyPackageValidationError("selection run requires package_ids")
@@ -370,6 +404,8 @@ class SelectionCenterService:
         if isinstance(package_config, dict):
             merged = dict(config)
             merged.update(package_config)
+            if RUNTIME_PROFILE_BINDING_KEY in config and RUNTIME_PROFILE_BINDING_KEY not in package_config:
+                merged[RUNTIME_PROFILE_BINDING_KEY] = config[RUNTIME_PROFILE_BINDING_KEY]
             return merged
         return config
 
@@ -733,7 +769,30 @@ class SelectionCenterService:
         mode: SelectionMode,
         runtime_config: dict[str, Any] | None = None,
     ) -> SelectionRun:
-        config = dict(runtime_config or {})
+        raw_config = dict(runtime_config or {})
+        behavior_context = {
+            "source_run_ids": source_run_ids,
+            "mode": mode.value,
+            "path": "selection_center.aggregate_existing_runs",
+        }
+        ensure_runtime_config_version_boundary(
+            raw_config,
+            context=behavior_context,
+            allow_non_trading_preview=True,
+        )
+        if is_non_trading_runtime_config(raw_config):
+            raw_config = mark_non_trading_preview_runtime_config(
+                raw_config,
+                reason="selection center existing-run non-trading preview",
+            )
+        else:
+            raw_config = attach_default_runtime_profile_binding(raw_config)
+        config = normalize_selection_runtime_config(raw_config)
+        validate_runtime_profile_binding(
+            config,
+            context=behavior_context,
+            require_trade_enabled=not is_non_trading_runtime_config(config),
+        )
         if len(source_run_ids) < 2:
             raise StrategyPackageValidationError("aggregate existing runs requires at least two source_run_ids")
         if len(set(source_run_ids)) != len(source_run_ids):
@@ -879,6 +938,20 @@ class SelectionCenterService:
             raise UnsupportedFeatureError(
                 "creating a paper portfolio from multi-package selection requires a combined StrategyPackage",
                 context={"run_id": run_id, "mode": run.mode.value, "package_ids": run.package_ids},
+            )
+        validate_runtime_profile_binding(
+            run.runtime_config,
+            context={"run_id": run_id, "path": "selection_center.create_paper_portfolio_from_run"},
+            require_trade_enabled=True,
+        )
+        if is_non_trading_runtime_config(run.runtime_config):
+            raise StrategyPackageValidationError(
+                "non-trading selection preview cannot create a Paper v2 portfolio",
+                context={
+                    "run_id": run_id,
+                    "runtime_config_scope": runtime_config_scope(run.runtime_config),
+                    "runtime_profile_binding": run.runtime_config.get(RUNTIME_PROFILE_BINDING_KEY),
+                },
             )
         package_id = run.package_ids[0]
         record = self.package_repository.get(package_id)
@@ -1095,6 +1168,11 @@ class SelectionCenterService:
 
     @staticmethod
     def _paper_runtime_config_from_selection_run(run: SelectionRun) -> dict[str, Any]:
+        binding = validate_runtime_profile_binding(
+            run.runtime_config,
+            context={"run_id": run.run_id, "path": "selection_center.paper_runtime_config_from_selection_run"},
+            require_trade_enabled=True,
+        )
         return {
             "selection_source": {
                 "run_id": run.run_id,
@@ -1107,6 +1185,7 @@ class SelectionCenterService:
                 "note": "Paper v2 must generate authoritative live selection artifacts for each trading day; "
                 "selection run scores are trace-only and are not reused as signal input.",
             },
+            "selection_runtime_profile_binding": dict(binding),
         }
 
     def _aggregate(
