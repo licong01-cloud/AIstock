@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock
 
 from backend.routers.quantevolver_evolution import (
     EvolutionLoopRetryRequest,
+    _hoist_runtime_metadata_from_strategy_params,
     _merge_strategy_runtime_flags,
     _reject_nested_runtime_flags,
 )
@@ -1013,6 +1014,30 @@ def test_score_weighted_capacity_strategy_suspend_filter_uses_capacity_wrapper()
     assert "max_single_order_value: 1000000000.0" in yaml_text
 
 
+def test_score_weighted_v2_filters_archive_seed_metadata_from_strategy_kwargs():
+    yaml_text = _base_yaml(
+        strategy_info={
+            "strategy_id": "score_weighted_topk_v2",
+            "source_code": "class ScoreWeightedTopkStrategyV2:\\n    pass\\n",
+            "portfolio_config": {"class": "ScoreWeightedTopkStrategyV2", "kwargs": {}},
+        },
+        custom_params={
+            "topk": 20,
+            "archive_policy": "AUTO",
+            "archive_reason": "unit",
+            "archive_allow_override": True,
+            "random_seed": 42,
+        },
+    )
+
+    assert "class: ScoreWeightedTopkStrategyV2" in yaml_text
+    assert "topk: 20" in yaml_text
+    assert "archive_policy" not in yaml_text
+    assert "archive_reason" not in yaml_text
+    assert "archive_allow_override" not in yaml_text
+    assert "random_seed" not in yaml_text
+
+
 def test_suspend_runtime_flags_reject_nested_conflicts():
     merged = _merge_strategy_runtime_flags({"topk": 10}, True, False)
     assert merged["filter_suspended_on_signal"] is True
@@ -1022,6 +1047,19 @@ def test_suspend_runtime_flags_reject_nested_conflicts():
         _merge_strategy_runtime_flags({"filter_suspended_on_signal": True}, False, True)
     with pytest.raises(HTTPException, match="strategy_loop"):
         _reject_nested_runtime_flags({"suspend_filter_strict": False}, "strategy_loop[1].strategy_params")
+
+
+def test_strategy_params_runtime_metadata_is_hoisted_to_runtime_flags():
+    cfg = {
+        "strategy_params": {"topk": 10, "archive_policy": "SKIP", "random_seed": 2024},
+        "runtime_flags": {"archive_policy": "AUTO"},
+    }
+
+    _hoist_runtime_metadata_from_strategy_params(cfg)
+
+    assert cfg["strategy_params"] == {"topk": 10}
+    assert cfg["runtime_flags"]["archive_policy"] == "AUTO"
+    assert cfg["runtime_flags"]["random_seed"] == 2024
 
 
 def test_qe_suspend_filter_symbol_aliases_and_strict_missing_date(tmp_path):

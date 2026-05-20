@@ -2710,6 +2710,10 @@ class ConfigComposer:
             "bar_freq",
             "runtime_contract_version",
             "runtime_contract_source",
+            "archive_policy",        # QE Archive policy metadata, not a strategy kwarg
+            "archive_reason",
+            "archive_allow_override",
+            "random_seed",           # Seed/provenance metadata; strategies do not consume it
             "backtest_freq",        # 回测频率（已在上层提取）
             "execution_algo",       # 执行算法（已在上层提取到 inner_strategy）
             "execution_algo_params",  # 执行算法参数（已在上层提取到 inner_strategy）

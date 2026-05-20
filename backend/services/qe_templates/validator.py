@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from backend.services.quantevolver.experiment_config import QE_RUNTIME_METADATA_KEYS
+
 
 def validate_template_payload(template_kind: str, config_json: Mapping[str, Any]) -> dict[str, Any]:
     errors: list[str] = []
@@ -30,6 +32,14 @@ def validate_template_payload(template_kind: str, config_json: Mapping[str, Any]
                     errors.append(f"Loop {idx} requires factor_keys")
                 if not loop.get("model_id"):
                     errors.append(f"Loop {idx} requires model_id")
+                strategy_params = loop.get("strategy_params")
+                if isinstance(strategy_params, Mapping):
+                    reserved = sorted(set(strategy_params).intersection(QE_RUNTIME_METADATA_KEYS))
+                    if reserved:
+                        warnings.append(
+                            f"Loop {idx}: runtime metadata {reserved} belongs in runtime_flags, "
+                            "not strategy_params; materialization will hoist it before execution"
+                        )
                 node_id = str(loop.get("node_id") or config.get("node_id") or "")
                 model_id = str(loop.get("model_id") or "").lower()
                 if node_id and node_id not in {"local", "wsl", "wsl2-5080"} and any(token in model_id for token in ("lstm", "gru", "transformer", "alstm")):

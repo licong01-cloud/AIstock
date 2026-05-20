@@ -540,6 +540,9 @@ def build_config_from_custom_evo_loop(
     strategy_params: dict[str, Any] = dict(
         _parse_json_field(loop_config.get("strategy_params") or {})
     )
+    runtime_flags: dict[str, Any] = dict(
+        _parse_json_field(loop_config.get("runtime_flags") or {})
+    )
     execution_algo: str | None = loop_config.get("execution_algo")
     execution_algo_params: dict[str, Any] = dict(
         _parse_json_field(loop_config.get("execution_algo_params") or {})
@@ -617,6 +620,7 @@ def build_config_from_custom_evo_loop(
         unfilled_handler=unfilled_handler,
         unfilled_handler_params=unfilled_handler_params or None,
         strategy_params=strategy_params or None,
+        runtime_flags=runtime_flags or None,
         backtest_only=backtest_only,
         model_source_task_id=model_source_task_id,
         model_source_loop_index=model_source_loop_index,

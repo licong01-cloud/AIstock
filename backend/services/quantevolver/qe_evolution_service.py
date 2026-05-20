@@ -5462,6 +5462,7 @@ class AutoEvolutionScheduler:
                 "model_id": cfg.model_id,
                 "strategy_id": cfg.strategy_id,
                 "strategy_params": cfg.build_strategy_params(),
+                "runtime_flags": cfg.build_runtime_flags(),
                 "execution_algo": cfg.execution_algo,
                 "execution_algo_params": cfg.execution_algo_params,
                 "disable_alpha158": bool(loop_config.get("disable_alpha158", False)),
