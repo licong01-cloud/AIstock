@@ -1,4 +1,4 @@
-﻿# BUG-085 StrategyPackage alpha-core boundary validation
+# BUG-085 StrategyPackage alpha-core boundary validation
 
 - Module: strategy_package / paper_v2 / selection_center
 - Level: L3 backend + guardrail
@@ -131,6 +131,4 @@ git diff --check
 ## Result
 
 - Final local validation status: PASS for BUG-085 pre-commit backend/guardrail evidence.
-- Recommended issue state after commit: fixed-pending-review / GitHub label `status:fixed-pending-review`.
-
-
+- Recommended issue state after commit: fixed-pending-review / GitHub label `status:fixed-pending-review`.\n
