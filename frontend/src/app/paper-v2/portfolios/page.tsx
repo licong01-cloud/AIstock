@@ -12,6 +12,7 @@ import StatusBadge from "@/components/paper-v2/StatusBadge";
 import WorkflowStepper from "@/components/paper-v2/WorkflowStepper";
 import { hmmTrainingApi, paperV2Api, strategyPackageApi } from "@/lib/paper-v2/api";
 import { dataSourceLabel, formatCompact, hmmSnapshotLabel, packageDisplayLabel, paperV2WorkflowSteps, shortHash, todayIso } from "@/lib/paper-v2/format";
+import { artifactCoverageLabel, artifactCoversDateRange, selectCoveredHmmSnapshot } from "@/lib/paper-v2/hmm-runtime";
 import type { DataSource, ExecutionPolicy, HmmConfig, HmmSnapshot, JsonObject, PaperPortfolio, PaperSessionMode, PaperSessionProgress, RuntimeProfileVersion, StrategyPackage } from "@/lib/paper-v2/types";
 
 function daysAgoIso(days: number): string {
@@ -71,6 +72,13 @@ export default function PaperV2PortfoliosPage() {
 
   const selectedPackage = useMemo(() => packages.find((item) => item.package_id === packageId), [packages, packageId]);
   const activePortfolios = useMemo(() => portfolios.filter((item) => ["RUNNING", "PAUSED"].includes(item.status)), [portfolios]);
+  const hmmCoverageStartDate = sessionMode === "LIVE_ONLY" ? startDate : replayStart;
+  const hmmCoverageEndDate = sessionMode === "LIVE_ONLY" ? startDate : replayEnd;
+  const selectedHmmSnapshot = useMemo(() => hmmSnapshots.find((item) => item.snapshot_id === hmmSnapshotId) || null, [hmmSnapshotId, hmmSnapshots]);
+  const selectedHmmArtifact = useMemo(
+    () => selectedHmmSnapshot ? artifactCoversDateRange(selectedHmmSnapshot, hmmPreset, hmmCoverageStartDate, hmmCoverageEndDate) : null,
+    [hmmCoverageEndDate, hmmCoverageStartDate, hmmPreset, selectedHmmSnapshot],
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -150,6 +158,15 @@ export default function PaperV2PortfoliosPage() {
     return () => { alive = false; };
   }, [hmmConfigId]);
 
+  useEffect(() => {
+    if (!hmmEnabled || !hmmSnapshots.length) return;
+    const current = hmmSnapshots.find((item) => item.snapshot_id === hmmSnapshotId);
+    if (current && artifactCoversDateRange(current, hmmPreset, hmmCoverageStartDate, hmmCoverageEndDate)) return;
+    const firstCovered = selectCoveredHmmSnapshot(hmmSnapshots, hmmPreset, hmmCoverageStartDate, hmmCoverageEndDate);
+    const nextSnapshotId = firstCovered?.snapshot_id || "";
+    if (nextSnapshotId !== hmmSnapshotId) setHmmSnapshotId(nextSnapshotId);
+  }, [hmmCoverageEndDate, hmmCoverageStartDate, hmmEnabled, hmmPreset, hmmSnapshotId, hmmSnapshots]);
+
   function runtimeProfileConfig(): JsonObject {
     const blacklist = industryBlacklist.split(",").map((item) => item.trim()).filter(Boolean);
     return {
@@ -163,13 +180,17 @@ export default function PaperV2PortfoliosPage() {
           enabled: hmmEnabled,
           model_snapshot_id: hmmEnabled ? hmmSnapshotId : null,
           signal_preset: hmmEnabled ? hmmPreset : null,
+          coefficients_path: hmmEnabled ? selectedHmmArtifact?.path || null : null,
         },
       },
     };
   }
 
   function sessionRuntimeConfig(): JsonObject {
-    return { paper_v2_session: { signal_data_source: "DB_HISTORICAL", manual_tick_only: false } };
+    return {
+      ...runtimeProfileConfig(),
+      paper_v2_session: { signal_data_source: "DB_HISTORICAL", manual_tick_only: false },
+    };
   }
 
   async function createPortfolio() {
@@ -182,6 +203,7 @@ export default function PaperV2PortfoliosPage() {
       if (!packageId) throw new Error("请先选择 StrategyPackage。");
       if (topK < 1 || topK > 50) throw new Error("TopK 必须在 1 到 50 之间。");
       if (hmmEnabled && (!hmmConfigId || !hmmSnapshotId)) throw new Error("启用 HMM 时必须选择模型版本和已完成快照。");
+      if (hmmEnabled && !selectedHmmArtifact) throw new Error(`HMM coefficient artifact does not cover ${hmmCoverageStartDate}~${hmmCoverageEndDate} / ${hmmPreset}; create portfolio/session is blocked before backend submission.`);
       if (sessionMode !== "LIVE_ONLY" && dataSource !== "DB_HISTORICAL") throw new Error(`历史追赶必须使用「${dataSourceLabel("DB_HISTORICAL")}」数据源。`);
       const isReplayOnly = sessionMode === "REPLAY_ONLY";
       const isCatchupThenLive = sessionMode === "CATCHUP_THEN_LIVE";
@@ -284,10 +306,11 @@ export default function PaperV2PortfoliosPage() {
               <div className="pv2-field"><label>TopK</label><input className="pv2-input" data-testid="portfolio-top-k" type="number" min={1} max={50} value={topK} onChange={(event) => setTopK(Number(event.target.value))} /></div>
               <div className="pv2-field"><label>行业黑名单</label><input className="pv2-input" data-testid="portfolio-industry-blacklist" value={industryBlacklist} placeholder="银行, 房地产" onChange={(event) => setIndustryBlacklist(event.target.value)} /></div>
               <div className="pv2-field"><label>停牌处理</label><label className="pv2-chip"><input data-testid="portfolio-exclude-suspended" type="checkbox" checked={excludeSuspended} onChange={(event) => setExcludeSuspended(event.target.checked)} /> 剔除并补位</label></div>
-              <div className="pv2-field"><label>HMM</label><label className="pv2-chip"><input data-testid="portfolio-hmm-enabled" type="checkbox" checked={hmmEnabled} onChange={(event) => setHmmEnabled(event.target.checked)} /> 启用 HMM</label></div>
-              <div className="pv2-field"><label>HMM 模型版本</label><select className="pv2-select" data-testid="portfolio-hmm-config" value={hmmConfigId} disabled={!hmmEnabled} onChange={(event) => setHmmConfigId(event.target.value)}><option value="">选择模型版本</option>{hmmConfigs.map((item) => <option value={item.config_id} key={item.config_id}>{item.display_name} / {item.model_type}</option>)}</select></div>
-              <div className="pv2-field"><label>HMM 快照</label><select className="pv2-select" data-testid="portfolio-hmm-snapshot" value={hmmSnapshotId} disabled={!hmmEnabled || !hmmConfigId} onChange={(event) => setHmmSnapshotId(event.target.value)}><option value="">选择已完成快照</option>{hmmSnapshots.map((item) => <option value={item.snapshot_id} key={item.snapshot_id}>{hmmSnapshotLabel(item)}</option>)}</select></div>
+              <div className="pv2-field"><label>HMM</label><label className="pv2-chip"><input data-testid="portfolio-hmm-enabled" type="checkbox" checked={hmmEnabled} onChange={(event) => setHmmEnabled(event.target.checked)} /> Enable HMM</label></div>
+              <div className="pv2-field"><label>HMM Config</label><select className="pv2-select" data-testid="portfolio-hmm-config" value={hmmConfigId} disabled={!hmmEnabled} onChange={(event) => setHmmConfigId(event.target.value)}><option value="">Select HMM config</option>{hmmConfigs.map((item) => <option value={item.config_id} key={item.config_id}>{item.display_name} / {item.model_type}</option>)}</select></div>
+              <div className="pv2-field"><label>HMM Snapshot</label><select className="pv2-select" data-testid="portfolio-hmm-snapshot" value={hmmSnapshotId} disabled={!hmmEnabled || !hmmConfigId} onChange={(event) => setHmmSnapshotId(event.target.value)}><option value="">Select covered snapshot</option>{hmmSnapshots.map((item) => { const artifact = artifactCoversDateRange(item, hmmPreset, hmmCoverageStartDate, hmmCoverageEndDate); return <option value={item.snapshot_id} key={item.snapshot_id} disabled={hmmEnabled && !artifact}>{hmmSnapshotLabel(item)} / {artifact ? `covers ${artifact.start_date}~${artifact.end_date}` : artifactCoverageLabel(item, hmmPreset)}</option>; })}</select></div>
               <div className="pv2-field"><label>HMM Preset</label><select className="pv2-select" data-testid="portfolio-hmm-preset" value={hmmPreset} disabled={!hmmEnabled} onChange={(event) => setHmmPreset(event.target.value)}><option value="preset_A">preset_A</option><option value="preset_B">preset_B</option></select></div>
+              {hmmEnabled ? <div className="pv2-field" data-testid="portfolio-hmm-coverage"><label>HMM Coefficients</label><NoticePanel title={selectedHmmArtifact ? "HMM coefficient coverage confirmed" : "HMM coefficient coverage missing"} tone={selectedHmmArtifact ? "success" : "warning"}>{selectedHmmArtifact ? `Session/profile will carry coefficients_path=${selectedHmmArtifact.path} for ${hmmCoverageStartDate}~${hmmCoverageEndDate}.` : `No completed ${hmmPreset} coefficient artifact covers ${hmmCoverageStartDate}~${hmmCoverageEndDate}; create is blocked before API submission.`}</NoticePanel></div> : null}
             </div>
           </div>
 

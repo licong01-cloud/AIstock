@@ -8,16 +8,23 @@ from __future__ import annotations
 import datetime as dt
 import importlib
 import json
+import logging
 import os
 import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+import psycopg2
 import psycopg2.extras as pgx
 
 from ..db.pg_pool import get_conn
 from .data_refresh_audit import DataRefreshAuditRepository
+from .data_sync_targets import (
+    DataSyncAttemptRecord,
+    DataSyncTargetRecord,
+    DataSyncTargetRepository,
+)
 from .tushare_rate_limiter import get_limiter
 from .tushare_dataset_specs import DatasetSpec, QueryMode
 
@@ -28,6 +35,7 @@ FINANCIAL_EVENT_RAW_DATASETS = {
     "tushare_fina_indicator_raw": "fina_indicator",
 }
 ZERO_ROW_VALID_DATASETS = {"suspend_d", "stock_st", "stock_st_events", *FINANCIAL_EVENT_RAW_DATASETS}
+_logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -58,6 +66,14 @@ class SyncResult:
             "error": self.error,
             "periods": self.periods or [],
         }
+
+
+@dataclass
+class AuditSeedResult:
+    max_table_date: dt.date
+    safe_cursor: dt.date
+    success_dates: int = 0
+    failed_gap_dates: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -97,8 +113,20 @@ def _date_range(d0: dt.date, d1: dt.date) -> List[dt.date]:
     return out
 
 
+def _to_ymd(value: dt.date) -> str:
+    return value.strftime("%Y%m%d")
+
+
 def _json_dump(data: Any) -> str:
     return json.dumps(data, ensure_ascii=False, default=str)
+
+
+def _is_missing_relation_error(exc: Exception) -> bool:
+    pg_undefined_table = getattr(pgx, "UndefinedTable", None)
+    if pg_undefined_table is not None and isinstance(exc, pg_undefined_table):
+        return True
+    message = str(exc).lower()
+    return "does not exist" in message and ("relation" in message or "table" in message)
 
 
 # ---------------------------------------------------------------------------
@@ -107,9 +135,10 @@ def _json_dump(data: Any) -> str:
 
 class TushareSyncEngine:
 
-    def __init__(self):
+    def __init__(self, target_repository: DataSyncTargetRepository | None = None):
         self._pro = None  # lazy
         self._refresh_audit = DataRefreshAuditRepository()
+        self._target_repo = target_repository
 
     @property
     def pro(self):
@@ -204,35 +233,55 @@ class TushareSyncEngine:
     # -- data fetch / upsert ------------------------------------------------
 
     def _fetch_from_tushare(self, spec: DatasetSpec, params: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Call Tushare API with rate limiting and retry."""
+        """Call Tushare API with rate limiting, retry, and optional pagination."""
         col_names = list(spec.columns.keys())
-        # Build reverse map: db_col -> tushare_field (defaults to same name)
         db_to_api = {c: spec.api_field_map.get(c, c) for c in col_names}
         api_fields = [db_to_api[c] for c in col_names]
-        # Reverse: tushare_field -> db_col (for reading DataFrame)
         api_to_db = {v: k for k, v in db_to_api.items()}
 
         fields = ",".join(api_fields)
-        merged = {**spec.api_params, **params, "fields": fields}
+        merged_base = {**spec.api_params, **spec.fetch_params, **params, "fields": fields}
+        page_limit = int(merged_base.get("limit") or 0)
+        paginated = page_limit > 0 and "offset" not in params
+        max_pages = int(merged_base.pop("max_pages", 500) or 500)
 
-        limiter = get_limiter(spec.tushare_api, spec.rate_per_minute)
-        last_exc: Optional[Exception] = None
-        for attempt in range(3):
-            limiter.acquire()
-            try:
-                api_fn = getattr(self.pro, spec.tushare_api)
-                df = api_fn(**merged)
-                if df is None or df.empty:
-                    return []
-                rows: List[Dict[str, Any]] = []
-                for _, row in df.iterrows():
-                    rows.append({api_to_db.get(f, f): row.get(f) for f in api_fields})
-                return rows
-            except Exception as exc:
-                last_exc = exc
-                if attempt < 2:
-                    time.sleep(2 ** attempt)
-        raise RuntimeError(f"Tushare {spec.tushare_api} failed after 3 retries: {last_exc}")
+        def _fetch_once(merged: Dict[str, Any]) -> List[Dict[str, Any]]:
+            limiter = get_limiter(spec.tushare_api, spec.rate_per_minute)
+            last_exc: Optional[Exception] = None
+            for attempt in range(3):
+                limiter.acquire()
+                try:
+                    api_fn = getattr(self.pro, spec.tushare_api)
+                    df = api_fn(**merged)
+                    if df is None or df.empty:
+                        return []
+                    rows: List[Dict[str, Any]] = []
+                    for _, row in df.iterrows():
+                        rows.append({api_to_db.get(f, f): row.get(f) for f in api_fields})
+                    return rows
+                except Exception as exc:
+                    last_exc = exc
+                    if attempt < 2:
+                        time.sleep(2 ** attempt)
+            raise RuntimeError(f"Tushare {spec.tushare_api} failed after 3 retries: {last_exc}")
+
+        if not paginated:
+            return _fetch_once(merged_base)
+
+        all_rows: List[Dict[str, Any]] = []
+        offset = int(merged_base.get("offset") or 0)
+        for page in range(max_pages):
+            merged = dict(merged_base)
+            merged["offset"] = offset
+            rows = _fetch_once(merged)
+            all_rows.extend(rows)
+            if len(rows) < page_limit:
+                return all_rows
+            offset += page_limit
+        raise RuntimeError(
+            f"{spec.name} pagination reached max_pages={max_pages}; "
+            "provider may ignore offset or return more data than expected"
+        )
 
     def _upsert_batch(self, conn, spec: DatasetSpec, rows: List[Dict[str, Any]]) -> int:
         """Upsert rows into target table using execute_values + ON CONFLICT."""
@@ -267,6 +316,40 @@ class TushareSyncEngine:
         with conn.cursor() as cur:
             pgx.execute_values(cur, sql, values)
         return len(values)
+
+    def _validate_rows_for_date(
+        self,
+        spec: DatasetSpec,
+        rows: List[Dict[str, Any]],
+        trade_date: dt.date,
+    ) -> None:
+        """Fail fast on provider contract drift before writing audit success."""
+        if not rows:
+            return
+        required = set(spec.primary_keys)
+        required.add(spec.date_column)
+        missing = sorted(
+            column
+            for column in required
+            if any(row.get(column) in (None, "") for row in rows)
+        )
+        if missing:
+            raise RuntimeError(
+                f"{spec.name} provider_contract_error missing required fields {missing} "
+                f"for {trade_date.isoformat()}"
+            )
+        if spec.query_mode == QueryMode.BY_DATE:
+            requested = _to_ymd(trade_date)
+            mismatched = [
+                row.get(spec.date_column)
+                for row in rows[:10]
+                if _to_ymd(_parse_ymd(row.get(spec.date_column)) or dt.date.min) != requested
+            ]
+            if mismatched:
+                raise RuntimeError(
+                    f"{spec.name} provider_contract_error returned date outside request "
+                    f"{requested}: {mismatched[:3]}"
+                )
 
     def _replace_date_batch(
         self,
@@ -309,21 +392,70 @@ class TushareSyncEngine:
                 conn.autocommit = previous_autocommit
 
     def _get_incremental_cursor(self, conn, spec: DatasetSpec) -> Optional[dt.date]:
-        """Return max(date_column) from target table, or None if empty."""
+        """Return the safe incremental cursor without treating missing audit as cold start."""
         if spec.incremental_cursor_from_audit:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT MAX(trade_date)
-                      FROM market.dataset_date_refresh_audit
-                     WHERE dataset = %s
-                       AND status = 'success'
-                    """,
-                    (spec.name,),
-                )
-                row = cur.fetchone()
-                if row and row[0] is not None:
-                    return row[0]
+            cursor = self._get_safe_audit_cursor(conn, spec)
+            if cursor is not None:
+                return cursor
+            seed = self._seed_refresh_audit_from_physical_table(conn, spec)
+            return seed.safe_cursor if seed is not None else None
+        return self._get_physical_cursor(conn, spec)
+
+    def _physical_table_exists(self, conn, spec: DatasetSpec) -> bool:
+        schema, _, table = spec.target_table.partition(".")
+        if not table:
+            schema, table = "public", schema
+        with conn.cursor() as cur:
+            cur.execute("SELECT to_regclass(%s)", (f"{schema}.{table}",))
+            row = cur.fetchone()
+            return bool(row and row[0])
+
+    def _ensure_target_table_exists(self, conn, spec: DatasetSpec) -> None:
+        if self._physical_table_exists(conn, spec):
+            return
+        hint = (
+            f"; run {spec.create_table_script} before syncing {spec.name}"
+            if spec.create_table_script
+            else ""
+        )
+        raise RuntimeError(f"{spec.name} target table {spec.target_table} is missing{hint}")
+
+    def _get_safe_audit_cursor(self, conn, spec: DatasetSpec) -> Optional[dt.date]:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT trade_date::date AS trade_date,
+                       BOOL_OR(status = 'success') AS has_success
+                  FROM market.dataset_date_refresh_audit
+                 WHERE dataset = %s
+                 GROUP BY trade_date::date
+                 ORDER BY trade_date::date
+                """,
+                (spec.name,),
+            )
+            rows = cur.fetchall()
+        success_dates = {row[0] for row in rows if row and row[0] is not None and bool(row[1])}
+        if not success_dates:
+            return None
+
+        max_success = max(success_dates)
+        can_infer_gaps = spec.query_mode == QueryMode.BY_DATE and spec.name not in ZERO_ROW_VALID_DATASETS
+        if not can_infer_gaps:
+            return max_success
+
+        min_success = min(success_dates)
+        target_dates = self._date_sequence_for_by_date(conn, spec, min_success, max_success)
+        if not target_dates:
+            return max_success
+        previous_date: Optional[dt.date] = None
+        for trade_date in target_dates:
+            if trade_date in success_dates:
+                previous_date = trade_date
+                continue
+            return previous_date
+        return max_success
+
+    def _get_physical_cursor(self, conn, spec: DatasetSpec) -> Optional[dt.date]:
         sql = f"SELECT max({spec.date_column}) FROM {spec.target_table}"
         with conn.cursor() as cur:
             cur.execute(sql)
@@ -332,6 +464,336 @@ class TushareSyncEngine:
                 return None
             return row[0]
 
+    def _get_physical_date_bounds(
+        self,
+        conn,
+        spec: DatasetSpec,
+        start_date: dt.date,
+        end_date: dt.date,
+    ) -> tuple[Optional[dt.date], Optional[dt.date]]:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT MIN({spec.date_column})::date, MAX({spec.date_column})::date
+                FROM {spec.target_table}
+                WHERE {spec.date_column} >= %s
+                  AND {spec.date_column} < %s
+                """,
+                (start_date, end_date + dt.timedelta(days=1)),
+            )
+            row = cur.fetchone()
+        if not row or row[0] is None or row[1] is None:
+            return None, None
+        return row[0], row[1]
+
+    def _get_initial_start_date(self, spec: DatasetSpec) -> Optional[dt.date]:
+        return _parse_ymd(spec.initial_start_date) if spec.initial_start_date else None
+
+    def _date_sequence_for_by_date(
+        self,
+        conn,
+        spec: DatasetSpec,
+        start_date: dt.date,
+        end_date: dt.date,
+    ) -> List[dt.date]:
+        if spec.trading_day_only:
+            return self._trading_dates_between(conn, start_date, end_date)
+        return _date_range(start_date, end_date)
+
+    def _iter_sync_dates(self, conn, spec: DatasetSpec, start_date: dt.date, end_date: dt.date) -> List[dt.date]:
+        return self._date_sequence_for_by_date(conn, spec, start_date, end_date)
+
+    def _next_sync_date_after(
+        self,
+        conn,
+        spec: DatasetSpec,
+        cursor: dt.date,
+        end_date: dt.date,
+    ) -> dt.date:
+        if cursor >= end_date:
+            return end_date + dt.timedelta(days=1)
+        candidates = self._date_sequence_for_by_date(conn, spec, cursor + dt.timedelta(days=1), end_date)
+        if not candidates:
+            return end_date + dt.timedelta(days=1)
+        return candidates[0]
+
+    def _first_missing_success_audit_date(
+        self,
+        conn,
+        spec: DatasetSpec,
+        start_date: dt.date,
+        end_date: dt.date,
+    ) -> Optional[dt.date]:
+        target_dates = self._iter_sync_dates(conn, spec, start_date, end_date)
+        if not target_dates:
+            return None
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT trade_date
+                  FROM market.dataset_date_refresh_audit
+                 WHERE dataset = %s
+                   AND data_source = 'tushare'
+                   AND status = 'success'
+                   AND trade_date >= %s
+                   AND trade_date <= %s
+                """,
+                (spec.name, start_date, end_date),
+            )
+            ready_dates = {row[0] for row in cur.fetchall()}
+        for trade_date in target_dates:
+            if trade_date not in ready_dates:
+                return trade_date
+        return None
+
+    def _seed_refresh_audit_from_physical_table(
+        self,
+        conn,
+        spec: DatasetSpec,
+    ) -> Optional[AuditSeedResult]:
+        """Seed missing audit rows from physical rows before any cold start.
+
+        This records only dates with rows as success. For dense BY_DATE datasets
+        it records inferred physical gaps as failures and returns the safe cursor
+        before the first gap, so max-success cannot jump across unresolved gaps.
+        """
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT {spec.date_column}::date AS trade_date,
+                       COUNT(*)::bigint AS row_count
+                  FROM {spec.target_table}
+                 WHERE {spec.date_column} IS NOT NULL
+                 GROUP BY {spec.date_column}::date
+                 ORDER BY {spec.date_column}::date
+                """
+            )
+            rows = cur.fetchall()
+        if not rows:
+            return None
+
+        row_counts = {row[0]: int(row[1] or 0) for row in rows if row and row[0] is not None}
+        if not row_counts:
+            return None
+
+        present_dates = sorted(row_counts)
+        min_date = present_dates[0]
+        max_date = present_dates[-1]
+        can_infer_gaps = spec.query_mode == QueryMode.BY_DATE and spec.name not in ZERO_ROW_VALID_DATASETS
+        target_dates = self._date_sequence_for_by_date(conn, spec, min_date, max_date) if can_infer_gaps else present_dates
+        if not target_dates:
+            target_dates = present_dates
+
+        metadata = {
+            "tushare_api": spec.tushare_api,
+            "mode": spec.query_mode.value,
+            "audit_seed_from_target_table": True,
+            "seed_reason": "audit_cursor_missing",
+            "table": spec.target_table,
+            "date_column": spec.date_column,
+        }
+        success_dates = 0
+        failed_gap_dates = 0
+        first_missing: Optional[dt.date] = None
+        previous_date: Optional[dt.date] = None
+        cursor_before_first_missing: Optional[dt.date] = None
+
+        for trade_date in target_dates:
+            row_count = int(row_counts.get(trade_date, 0))
+            if row_count > 0:
+                if first_missing is not None and can_infer_gaps:
+                    continue
+                self._refresh_audit.record_success(
+                    dataset=spec.name,
+                    trade_date=trade_date,
+                    row_count=row_count,
+                    job_id=None,
+                    data_source="physical_audit_seed",
+                    metadata=metadata,
+                    written_rows=row_count,
+                    quality_status="ok",
+                    conn=conn,
+                )
+                success_dates += 1
+                previous_date = trade_date
+                continue
+
+            if first_missing is None:
+                first_missing = trade_date
+                cursor_before_first_missing = previous_date
+            failed_gap_dates += 1
+            self._refresh_audit.record_failure(
+                dataset=spec.name,
+                trade_date=trade_date,
+                error_message=(
+                    f"{spec.name} audit seed found no rows in {spec.target_table} "
+                    f"for expected date {trade_date}"
+                ),
+                job_id=None,
+                data_source="physical_audit_seed",
+                metadata=metadata,
+                written_rows=0,
+                quality_status="empty_invalid",
+                failure_category="physical_gap",
+                conn=conn,
+            )
+
+        safe_cursor = cursor_before_first_missing if cursor_before_first_missing is not None else max_date
+        return AuditSeedResult(
+            max_table_date=max_date,
+            safe_cursor=safe_cursor,
+            success_dates=success_dates,
+            failed_gap_dates=failed_gap_dates,
+        )
+
+    def _resolve_incremental_start_date(
+        self,
+        conn,
+        spec: DatasetSpec,
+        end_date: dt.date,
+    ) -> tuple[dt.date, Dict[str, Any]]:
+        """Resolve incremental start from safe audit cursor plus physical seeding."""
+        metadata: Dict[str, Any] = {}
+        cursor = self._get_incremental_cursor(conn, spec)
+        if cursor is not None:
+            metadata["safe_audit_cursor_date"] = cursor.isoformat()
+            next_start = self._next_sync_date_after(conn, spec, cursor, end_date)
+            if next_start > end_date:
+                metadata["audit_reconciled_to_end_date"] = True
+            return next_start, metadata
+
+        initial_start = self._get_initial_start_date(spec)
+        if initial_start is not None:
+            metadata["initial_fill_from_floor"] = initial_start.isoformat()
+        return initial_start or end_date, metadata
+
+    def _target_repo_or_none(self) -> DataSyncTargetRepository | None:
+        if self._target_repo is not None:
+            return self._target_repo
+        self._target_repo = DataSyncTargetRepository()
+        return self._target_repo
+
+    def _upsert_sync_target(
+        self,
+        spec: DatasetSpec,
+        target_date: dt.date,
+        *,
+        required_before: Optional[dt.datetime] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> str | None:
+        repo = self._target_repo_or_none()
+        if repo is None:
+            return None
+        try:
+            row = repo.upsert_target(
+                DataSyncTargetRecord(
+                    dataset=spec.name,
+                    data_source="tushare",
+                    target_date=target_date,
+                    target_scope={"query_mode": spec.query_mode.value},
+                    required_before=required_before,
+                    metadata={"tushare_api": spec.tushare_api, **(metadata or {})},
+                )
+            )
+            return str(row.get("target_id") or "") or None
+        except (psycopg2.Error, RuntimeError, ValueError) as exc:
+            _logger.warning("data sync target: failed to persist target for %s/%s: %s", spec.name, target_date, exc)
+            return None
+
+    def _record_sync_attempt(
+        self,
+        target_id: str | None,
+        status: str,
+        *,
+        job_id: Optional[uuid.UUID],
+        rows_written: Optional[int] = None,
+        rows_observed: Optional[int] = None,
+        error_message: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if not target_id:
+            return
+        repo = self._target_repo_or_none()
+        if repo is None:
+            return
+        try:
+            repo.record_attempt(
+                DataSyncAttemptRecord(
+                    target_id=target_id,
+                    status=status,
+                    trigger_source="tushare_sync_engine",
+                    job_id=str(job_id) if job_id else None,
+                    finished_at=dt.datetime.now(dt.timezone.utc),
+                    rows_written=rows_written,
+                    rows_observed=rows_observed,
+                    error_message=error_message,
+                    context_json=context or {},
+                )
+            )
+        except (psycopg2.Error, RuntimeError, ValueError) as exc:
+            _logger.warning("data sync target: failed to record attempt for %s: %s", target_id, exc)
+            return
+
+    def _seed_missing_audit_from_physical(
+        self,
+        conn,
+        spec: DatasetSpec,
+        start_date: dt.date,
+        end_date: dt.date,
+        *,
+        job_id: Optional[uuid.UUID] = None,
+        data_source: str = "tushare",
+        only_missing: bool = True,
+    ) -> int:
+        """Seed readiness audit rows from existing physical rows for recovery.
+
+        This never fabricates success for empty dates; it only records dates that
+        already have usable rows in the target table.
+        """
+        if start_date > end_date:
+            return 0
+        rows = self._table_row_counts_by_date(conn, spec, start_date, end_date)
+        if not rows:
+            return 0
+        existing: set[dt.date] = set()
+        if only_missing:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT trade_date
+                      FROM market.dataset_date_refresh_audit
+                     WHERE dataset = %s
+                       AND data_source = %s
+                       AND trade_date >= %s
+                       AND trade_date <= %s
+                    """,
+                    (spec.name, data_source, start_date, end_date),
+                )
+                existing = {row[0] for row in cur.fetchall()}
+        count = 0
+        metadata = {
+            "tushare_api": spec.tushare_api,
+            "mode": "physical_audit_seed",
+            "audit_from_target_table": True,
+            "table": spec.target_table,
+        }
+        for trade_date, row_count in sorted(rows.items()):
+            if row_count <= 0 or trade_date in existing:
+                continue
+            self._refresh_audit.record_success(
+                dataset=spec.name,
+                trade_date=trade_date,
+                row_count=row_count,
+                job_id=str(job_id) if job_id else None,
+                data_source=data_source,
+                metadata=metadata,
+                written_rows=row_count,
+                quality_status="ok",
+                conn=conn,
+            )
+            count += 1
+        return count
+
     # -- sync strategies ----------------------------------------------------
 
     def _sync_by_date(
@@ -339,15 +801,17 @@ class TushareSyncEngine:
         start_date: dt.date, end_date: dt.date,
         job_id: uuid.UUID,
     ) -> SyncResult:
-        days = _date_range(start_date, end_date)
+        days = self._iter_sync_dates(conn, spec, start_date, end_date)
         result = SyncResult(dataset=spec.name, mode="sync", job_id=job_id,
                             total_batches=len(days))
 
         for d in days:
             ymd = d.strftime("%Y%m%d")
+            target_id = self._upsert_sync_target(spec, d, metadata={"job_id": str(job_id)})
             try:
                 rows = self._fetch_from_tushare(spec, {spec.date_param_name: ymd})
-                if spec.row_limit > 0 and len(rows) >= spec.row_limit:
+                self._validate_rows_for_date(spec, rows, d)
+                if spec.row_limit > 0 and len(rows) >= spec.row_limit and not spec.fetch_params.get("limit"):
                     raise RuntimeError(
                         f"{spec.name} {spec.date_param_name}={ymd} returned {len(rows)} rows; "
                         f"row_limit={spec.row_limit} may indicate truncated Tushare data"
@@ -373,12 +837,27 @@ class TushareSyncEngine:
                     quality_status=quality_status,
                     conn=conn,
                 )
+                self._record_sync_attempt(
+                    target_id,
+                    "reconciled",
+                    job_id=job_id,
+                    rows_written=inserted,
+                    rows_observed=inserted,
+                    context={"quality_status": quality_status},
+                )
                 result.inserted_rows += inserted
                 result.success_batches += 1
             except Exception as exc:
                 result.failed_batches += 1
                 self._log(conn, job_id, "error", f"{spec.name} {d} failed: {exc}")
                 try:
+                    failure_category = (
+                        "empty_invalid"
+                        if "0 rows" in str(exc)
+                        else "provider_contract_error"
+                        if "provider_contract_error" in str(exc)
+                        else "provider_or_persistence_error"
+                    )
                     self._refresh_audit.record_failure(
                         dataset=spec.name,
                         trade_date=d,
@@ -387,8 +866,17 @@ class TushareSyncEngine:
                         data_source="tushare",
                         metadata={"tushare_api": spec.tushare_api, "mode": spec.query_mode.value},
                         quality_status="empty_invalid" if "0 rows" in str(exc) else "error",
-                        failure_category="empty_invalid" if "0 rows" in str(exc) else "provider_or_persistence_error",
+                        failure_category=failure_category,
                         conn=conn,
+                    )
+                    self._record_sync_attempt(
+                        target_id,
+                        "retry",
+                        job_id=job_id,
+                        rows_written=0,
+                        rows_observed=0,
+                        error_message=str(exc),
+                        context={"failure_category": failure_category},
                     )
                 except Exception as audit_exc:
                     self._log(conn, job_id, "error", f"{spec.name} {d} refresh audit failed: {audit_exc}")
@@ -659,43 +1147,58 @@ class TushareSyncEngine:
         if end_date is None:
             end_date = today
 
-        # Phase 1: 短连接做 cursor 解析 + job 创建
-        with get_conn() as conn:
-            # Resolve incremental cursor
-            if mode == "incremental" and start_date is None:
-                cursor = self._get_incremental_cursor(conn, spec)
-                if cursor is not None:
-                    start_date = cursor + dt.timedelta(days=1)
+        cursor_metadata: Dict[str, Any] = {}
+
+        # Phase 1: resolve cursor and create or start the job with short DB scope.
+        try:
+            with get_conn() as conn:
+                self._ensure_target_table_exists(conn, spec)
+                if mode == "incremental" and start_date is None:
+                    start_date, cursor_metadata = self._resolve_incremental_start_date(conn, spec, end_date)
+
+                if start_date is not None and start_date > end_date:
+                    print(f"[INFO] {spec.name} up to date; nothing to do")
+                    # Still create a job record so the caller gets a valid job_id
+                    if job_id is None:
+                        job_id = self._create_job(conn, mode, {
+                            "dataset": spec.name, "mode": mode, "skipped": True,
+                        })
+                    else:
+                        self._start_existing_job(conn, job_id, {
+                            "dataset": spec.name, "mode": mode, "skipped": True,
+                        })
+                    self._finish_job(conn, job_id, "success", {"skipped": True})
+                    return SyncResult(dataset=spec.name, mode=mode, job_id=job_id)
+
+                # Job tracking
+                summary = {
+                    "dataset": spec.name, "mode": mode,
+                    "start_date": str(start_date) if start_date else None,
+                    "end_date": str(end_date),
+                    **cursor_metadata,
+                }
+                if job_id is not None:
+                    self._start_existing_job(conn, job_id, summary)
                 else:
-                    start_date = end_date  # no data yet → fetch today only
+                    job_id = self._create_job(conn, mode, summary)
 
-            if start_date is not None and start_date > end_date:
-                print(f"[INFO] {spec.name} up to date; nothing to do")
-                # Still create a job record so the caller gets a valid job_id
-                if job_id is None:
-                    job_id = self._create_job(conn, mode, {
-                        "dataset": spec.name, "mode": mode, "skipped": True,
-                    })
-                else:
-                    self._start_existing_job(conn, job_id, {
-                        "dataset": spec.name, "mode": mode, "skipped": True,
-                    })
-                self._finish_job(conn, job_id, "success", {"skipped": True})
-                return SyncResult(dataset=spec.name, mode=mode, job_id=job_id)
-
-            # Job tracking
-            summary = {
-                "dataset": spec.name, "mode": mode,
-                "start_date": str(start_date) if start_date else None,
-                "end_date": str(end_date),
-            }
-            if job_id is not None:
-                self._start_existing_job(conn, job_id, summary)
-            else:
-                job_id = self._create_job(conn, mode, summary)
-
-            self._log(conn, job_id, "info",
-                      f"start tushare {spec.name} {mode} {start_date} -> {end_date}")
+                self._log(conn, job_id, "info",
+                          f"start tushare {spec.name} {mode} {start_date} -> {end_date}")
+        except Exception as exc:
+            if job_id is None:
+                try:
+                    with get_conn() as conn:
+                        job_id = self._create_job(conn, mode, {"dataset": spec.name, "mode": mode})
+                except (psycopg2.Error, RuntimeError, ValueError) as job_exc:
+                    _logger.warning("tushare sync: failed to create failure job for %s: %s", spec.name, job_exc)
+                    job_id = uuid.uuid4()
+            try:
+                with get_conn() as conn:
+                    self._finish_job(conn, job_id, "failed", {"error": str(exc)})
+            except (psycopg2.Error, RuntimeError, ValueError) as finish_exc:
+                _logger.warning("tushare sync: failed to mark failure job %s for %s: %s", job_id, spec.name, finish_exc)
+            print(f"[ERROR] {spec.name} failed before sync: {exc}")
+            return SyncResult(dataset=spec.name, mode=mode, job_id=job_id, error=str(exc))
 
         # Phase 2: 按模式执行同步（BY_CODE 使用分批连接）
         try:

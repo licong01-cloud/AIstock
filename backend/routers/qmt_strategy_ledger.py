@@ -179,14 +179,14 @@ def preview_orders_from_binding(binding_id: str, payload: dict[str, Any]) -> dic
     repository = _repository_factory()
     binding = repository.get_package_binding(binding_id)
     config = _selection_order_build_config(payload)
-    result = SelectionOrderBuilder(
-        repository=repository,
-        selection_reader=_selection_reader_factory(),
-        calendar_provider=_calendar_provider_factory(),
-    ).build_for_binding(
-        binding=binding,
-        config=config,
-    )
+    try:
+        result = SelectionOrderBuilder(
+            repository=repository,
+            selection_reader=_selection_reader_factory(),
+            calendar_provider=_calendar_provider_factory(),
+        ).build_for_binding(binding=binding, config=config)
+    except TradingCoreError as exc:
+        _raise_trading_core_http(exc)
     preflights = [
         QmtManagedOrderService(repository=repository, calendar_provider=_calendar_provider_factory()).preview_order(request).to_dict()
         for request in result.requests

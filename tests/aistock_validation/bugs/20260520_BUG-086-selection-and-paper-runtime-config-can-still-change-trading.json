@@ -26,7 +26,9 @@
   "reproduce_command": "rg -n \"runtime_config|normalize_selection_runtime_config|normalize_runtime_config_with_backtest_contract|runtime_variant_id|RUNTIME_PROFILE_INPUT_KEYS|top_k|enable_sector_hmm|exclude_suspended|risk_policy\" backend/services/selection_center backend/services/paper_trading_v2 backend/services/strategy_package -S",
   "failing_run_id": null,
   "evidence_uris": [
-    "github:https://github.com/licong01-cloud/AIstock/issues/108"
+    "github:https://github.com/licong01-cloud/AIstock/issues/108",
+    "github:https://github.com/licong01-cloud/AIstock/pull/131",
+    "file:tests/aistock_validation/history/paper_v2/BUG-086-runtime-config-activation-boundary-validation-20260520.md"
   ],
   "fingerprint": "github-108-bug-086",
   "github_issue_number": 108,
@@ -96,6 +98,14 @@
       "actor": "codex-app",
       "action": "committed_fix",
       "note": "Committed BUG-086 code/validation fix locally as 8428a6e on bug/BUG-086-runtime-config-activation-boundary; registry correction follows in this branch."
+    },
+    {
+      "timestamp": "2026-05-20T20:05:00Z",
+      "actor": "codex-app",
+      "action": "merge_refresh_pending_checks",
+      "note": "Resolved BUG JSON add/add conflict after origin/main advanced; PR #131 remains the review vehicle. Production runtime not touched."
     }
-  ]
+  ],
+  "github_pr_number": 131,
+  "github_pr_url": "https://github.com/licong01-cloud/AIstock/pull/131"
 }

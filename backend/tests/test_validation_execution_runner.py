@@ -73,6 +73,30 @@ def _write_backend_catalog(path: Path) -> None:
     )
 
 
+def _write_data_sync_catalog(path: Path) -> None:
+    path.write_text(
+        "schema_version: aistock_validation_plans_v1\n"
+        "plans:\n"
+        "  - plan_key: data_sync_autonomy_backend\n"
+        "    title: Data sync autonomy backend regression\n"
+        "    module: local_data_management\n"
+        "    level: L2\n"
+        "    command_key: nox_data_sync_autonomy_backend\n"
+        "    nox_session: data_sync_autonomy_backend\n"
+        "    enabled: true\n"
+        "    requires_backend: false\n"
+        "    requires_frontend: false\n"
+        "    allowed_backend_ports: []\n"
+        "    allowed_frontend_ports: []\n"
+        "    writes_database: false\n"
+        "    writes_artifacts: true\n"
+        "    writes_business_state: false\n"
+        "    runner_enabled: true\n"
+        "    max_duration_seconds: 300\n",
+        encoding="utf-8",
+    )
+
+
 def test_plan_catalog_rejects_runner_enabled_business_state(tmp_path: Path) -> None:
     catalog_path = tmp_path / "plans.yaml"
     _write_catalog(catalog_path, runner_enabled=True, writes_business_state=True)
@@ -246,6 +270,36 @@ def test_runner_rejects_non_runner_plan_and_forbidden_port(tmp_path: Path) -> No
     )
     with pytest.raises(ValueError, match="forbidden production backend port"):
         backend_runner.start_job(plan_key="qe_read_l3", backend_port=8001, frontend_port=3011)
+
+
+def test_runner_executes_data_sync_autonomy_allowlisted_nox_session(tmp_path: Path) -> None:
+    catalog_path = tmp_path / "plans.yaml"
+    _write_data_sync_catalog(catalog_path)
+    calls: list[list[str]] = []
+
+    def fake_executor(command, _env, _cwd, _timeout_seconds):
+        calls.append(command)
+        return RunnerResult(return_code=0, output="data sync nox ok\n")
+
+    runner = ValidationExecutionRunner(
+        plan_catalog=ValidationPlanCatalog(catalog_path),
+        execution_root=tmp_path / "jobs",
+        history_root=tmp_path / "history",
+        repo_root=tmp_path,
+        executor=fake_executor,
+        run_inline=True,
+    )
+
+    job = runner.start_job(
+        plan_key="data_sync_autonomy_backend",
+        requested_by="pytest",
+        timeout_seconds=300,
+    )
+
+    assert job["status"] == "passed"
+    assert job["command_key"] == "nox_data_sync_autonomy_backend"
+    assert calls[0][-2:] == ["-s", "data_sync_autonomy_backend"]
+    assert job["production_8001_touched"] is False
 
 
 def test_validation_execution_api_starts_and_lists_job(tmp_path: Path) -> None:

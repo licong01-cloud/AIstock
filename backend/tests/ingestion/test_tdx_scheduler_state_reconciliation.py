@@ -1,5 +1,8 @@
 import uuid
+import datetime as dt
+from types import SimpleNamespace
 
+import backend.ingestion.tdx_scheduler as scheduler_module
 from backend.ingestion.tdx_scheduler import TDXScheduler
 
 
@@ -109,3 +112,184 @@ def test_script_ingestion_job_started_at_uses_database_clock(monkeypatch):
     first_sql, first_params = calls[0]
     assert "started_at=COALESCE(started_at, NOW())" in first_sql
     assert first_params == (job_id,)
+
+
+
+def test_refresh_schedules_reconciles_due_sync_targets():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls = []
+
+    scheduler._reconcile_stale_queued_ingestion_jobs = lambda: calls.append("stale")
+    scheduler._fetchall = lambda sql, params=(): []
+    scheduler._update_jobs = lambda testing, ingestion: calls.append(("jobs", list(testing), list(ingestion)))
+    scheduler._reconcile_due_data_sync_targets = lambda: calls.append("due")
+
+    scheduler.refresh_schedules()
+
+    assert calls == ["stale", ("jobs", [], []), "due"]
+
+
+def test_finalize_data_sync_target_retry_closes_recovered_target(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls = []
+
+    class _Future:
+        def exception(self):
+            return None
+
+    class _TargetRepo:
+        def mark_reconciled(self, target_id, **kwargs):
+            calls.append(("target", target_id, kwargs))
+
+        def record_attempt(self, record):
+            calls.append(("attempt", record.status, record.target_id))
+            return {"attempt_id": "attempt-1"}
+
+    monkeypatch.setattr(scheduler_module, "DataSyncTargetRepository", lambda: _TargetRepo())
+    scheduler._target_date_for_retry = lambda _dataset, _options=None: dt.date(2026, 5, 18)
+    scheduler._final_deadline_for_target = lambda _dataset, _target_date: dt.datetime(
+        2026, 5, 18, 23, 30, tzinfo=dt.timezone.utc
+    )
+    scheduler._check_dataset_recovered = lambda _dataset: SimpleNamespace(status="ok")
+
+    scheduler._finalize_data_sync_target_retry(
+        _Future(),
+        target_id="target-1",
+        dataset="cyq_perf",
+        mode="incremental",
+        options={"job_id": str(uuid.uuid4()), "triggered_by": "unit"},
+    )
+
+    assert calls[0][0] == "target"
+    assert calls[0][1] == "target-1"
+    assert calls[0][2]["context"]["finalizer"] == "data_sync_target_retry"
+    assert calls[1] == ("attempt", "reconciled", "target-1")
+
+
+def test_delayed_retry_persists_target_before_timer(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._delayed_retry_keys = set()
+    calls = []
+
+    class _Timer:
+        def __init__(self, delay_seconds, fn):
+            calls.append(("timer", delay_seconds))
+            self.daemon = False
+
+        def start(self):
+            calls.append(("timer_start",))
+
+    monkeypatch.setattr(scheduler_module.threading, "Timer", _Timer)
+    scheduler._target_date_for_retry = lambda _dataset, _opts=None: dt.date(2026, 5, 18)
+    scheduler._final_deadline_for_target = lambda _dataset, _target_date: dt.datetime(
+        2026, 5, 18, 23, 30, tzinfo=dt.timezone.utc
+    )
+    scheduler._record_retry_target = lambda dataset, target_date, **kwargs: calls.append(
+        ("target", dataset, target_date, kwargs["target_status"], kwargs["next_retry_at"], kwargs["required_before"])
+    ) or "target-1"
+
+    scheduler._schedule_delayed_retry(
+        "cyq_perf",
+        "incremental",
+        delay_minutes=60,
+        reason="success_without_data_update",
+        options={"triggered_by": "unit"},
+    )
+
+    target_call = calls[0]
+    assert target_call[0] == "target"
+    assert target_call[1] == "cyq_perf"
+    assert target_call[3] == "retry"
+    assert target_call[4] is not None
+    assert target_call[5] is not None
+    assert ("timer", 3600) in calls
+
+
+def test_final_deadline_uses_china_local_time():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+
+    deadline = scheduler._final_deadline_for_target("cyq_perf", dt.date(2026, 5, 18))
+
+    assert deadline == dt.datetime(2026, 5, 18, 15, 30, tzinfo=dt.timezone.utc)
+
+
+def test_auto_retry_exhaustion_before_final_deadline_marks_retry_not_alert(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls = []
+
+    class _Repo:
+        def mark_retry(self, target_id, **kwargs):
+            calls.append(("retry", target_id, kwargs))
+
+        def mark_final_blocked(self, target_id, **kwargs):
+            calls.append(("final", target_id, kwargs))
+
+    monkeypatch.setattr(scheduler_module, "DataSyncTargetRepository", lambda: _Repo())
+    monkeypatch.setattr(
+        scheduler_module,
+        "_now",
+        lambda: dt.datetime(2026, 5, 18, 12, 0, tzinfo=dt.timezone.utc),
+    )
+    scheduler._target_date_for_retry = lambda _dataset: dt.date(2026, 5, 18)
+    scheduler._final_deadline_for_target = lambda _dataset, _target_date: dt.datetime(
+        2026, 5, 18, 15, 30, tzinfo=dt.timezone.utc
+    )
+    scheduler._flush_final_data_sync_alerts = lambda targets: calls.append(("alert", targets))
+    scheduler._schedule_delayed_retry = lambda *args, **kwargs: calls.append(("delayed", args, kwargs))
+    scheduler._recent_dataset_submission_exists = lambda *_args, **_kwargs: False
+    scheduler._compute_auto_range = lambda _dataset: (dt.date(2026, 5, 18), dt.date(2026, 5, 18))
+    scheduler._submit_ingestion = lambda *args, **kwargs: None
+    scheduler._check_dataset_recovered = lambda _dataset: SimpleNamespace(
+        status="stale",
+        coverage_pct=0,
+    )
+    scheduler._job_update_outcome = lambda _job_id: {"status": "failed", "inserted_rows": 0}
+    scheduler._fetchall = lambda sql, params=(): []
+    scheduler._schedule_map_for_enabled_datasets = lambda: {
+        "cyq_perf": {"schedule_id": "schedule-1", "mode": "incremental"}
+    }
+    scheduler._record_retry_target = lambda *args, **kwargs: "target-1"
+    scheduler._execute = lambda sql, params=(): None
+    scheduler._tracker = SimpleNamespace(get_future=lambda key: None)
+
+    scheduler._db_cfg = {}
+
+    def _fake_check_datasets(_datasets):
+        return [
+            SimpleNamespace(
+                dataset="cyq_perf",
+                status="stale",
+                is_fresh=False,
+                max_date=dt.date(2026, 5, 17),
+                failure_category="audit_missing",
+                source_dataset=None,
+            )
+        ]
+
+    class _Checker:
+        def __init__(self, _db_cfg):
+            pass
+
+        def check_all(self):
+            result = _fake_check_datasets(["cyq_perf"])[0]
+            result.expected_date = dt.date(2026, 5, 18)
+            result.coverage_pct = 0
+            result.gaps = []
+            return [result]
+
+        def check_datasets(self, datasets):
+            return _fake_check_datasets(datasets)
+
+    monkeypatch.setattr(scheduler_module, "AuditBackedDataHealthChecker", _Checker)
+    monkeypatch.setattr(scheduler_module.time, "sleep", lambda _seconds: None)
+
+    scheduler._run_auto_retry_stale(
+        run_id=uuid.uuid4(),
+        schedule_id=None,
+        triggered_by="unit",
+        options={"datasets": ["cyq_perf"]},
+    )
+
+    assert any(call[0] == "retry" for call in calls)
+    assert not any(call[0] == "final" for call in calls)
+    assert not any(call[0] == "alert" for call in calls)

@@ -6,7 +6,13 @@ from types import SimpleNamespace
 import backend.services.tushare_sync_engine as sync_engine
 import backend.services.event_signal.tushare_event_raw_sync as raw_sync_module
 import backend.services.stock_universe_pit_service as pit_service
-from backend.services.tushare_dataset_specs import DATASET_REGISTRY, QueryMode, SUSPEND_D, TUSHARE_FORECAST_RAW
+from backend.services.tushare_dataset_specs import (
+    CYQ_PERF,
+    DATASET_REGISTRY,
+    QueryMode,
+    SUSPEND_D,
+    TUSHARE_FORECAST_RAW,
+)
 from backend.services.tushare_sync_engine import TushareSyncEngine
 
 
@@ -30,6 +36,12 @@ class _FakeConn:
         self.executed = []
         self.commits = 0
         self.rollbacks = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
 
     def cursor(self):
         return _FakeCursor(self)
@@ -202,3 +214,330 @@ def test_stock_basic_success_hook_also_ensures(monkeypatch):
     assert calls[0][0] == "mark_dirty"
     assert calls[0][1]["source_dataset"] == "stock_basic"
     assert calls[1] == ("ensure", {"strict": False})
+
+
+class _RowsCursor(_FakeCursor):
+    def __init__(self, conn):
+        super().__init__(conn)
+        self._rows = []
+
+    def execute(self, sql, params=None):
+        super().execute(sql, params)
+        self._rows = self._conn.query_results.pop(0) if self._conn.query_results else []
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self):
+        return self._rows
+
+
+class _RowsConn(_FakeConn):
+    def __init__(self, query_results=None):
+        super().__init__()
+        self.query_results = list(query_results or [])
+
+    def cursor(self, *args, **kwargs):
+        return _RowsCursor(self)
+
+
+def test_cyq_dataset_specs_are_registered_with_independent_tables_and_limits():
+    assert DATASET_REGISTRY["cyq_perf"] is CYQ_PERF
+    assert "cyq_chips" not in DATASET_REGISTRY
+    assert CYQ_PERF.query_mode == QueryMode.BY_DATE
+    assert CYQ_PERF.target_table == "market.cyq_perf"
+    assert CYQ_PERF.primary_keys == ["trade_date", "ts_code"]
+    assert CYQ_PERF.initial_start_date == "2018-01-01"
+    assert CYQ_PERF.fetch_params["limit"] == 4900
+    assert CYQ_PERF.fetch_params["max_pages"] == 3
+    assert CYQ_PERF.incremental_cursor_from_audit is True
+    assert CYQ_PERF.trading_day_only is True
+
+
+def test_fetch_from_tushare_paginates_when_limit_is_configured(monkeypatch):
+    class _FakeDf:
+        def __init__(self, rows):
+            self._rows = rows
+            self.empty = not bool(rows)
+
+        def iterrows(self):
+            return iter(enumerate(self._rows))
+
+        def __len__(self):
+            return len(self._rows)
+
+    calls = []
+
+    class _FakePro:
+        def cyq_perf(self, **kwargs):
+            calls.append(kwargs)
+            offset = int(kwargs.get("offset") or 0)
+            if offset == 0:
+                return _FakeDf([
+                    {"trade_date": "20260518", "ts_code": "000001.SZ", "his_low": 1, "his_high": 2,
+                     "cost_5pct": 1, "cost_15pct": 1, "cost_50pct": 1, "cost_85pct": 1,
+                     "cost_95pct": 1, "weight_avg": 1, "winner_rate": 1}
+                    for _ in range(4900)
+                ])
+            return _FakeDf([
+                {"trade_date": "20260518", "ts_code": "000002.SZ", "his_low": 1, "his_high": 2,
+                 "cost_5pct": 1, "cost_15pct": 1, "cost_50pct": 1, "cost_85pct": 1,
+                 "cost_95pct": 1, "weight_avg": 1, "winner_rate": 1}
+            ])
+
+    class _NoopLimiter:
+        def acquire(self):
+            return None
+
+    monkeypatch.setattr(sync_engine, "get_limiter", lambda *_args, **_kwargs: _NoopLimiter())
+    engine = TushareSyncEngine()
+    engine._pro = _FakePro()
+
+    rows = engine._fetch_from_tushare(CYQ_PERF, {"trade_date": "20260518"})
+
+    assert len(rows) == 4901
+    assert calls[0]["limit"] == 4900
+    assert calls[0]["offset"] == 0
+    assert calls[1]["offset"] == 4900
+
+
+def test_incremental_cursor_from_audit_does_not_fall_back_to_physical_cursor():
+    engine = TushareSyncEngine()
+    conn = _RowsConn([
+        [],  # audit cursor missing
+        [],  # physical table also empty
+    ])
+
+    cursor = engine._get_incremental_cursor(conn, CYQ_PERF)
+
+    assert cursor is None
+    assert not any("SELECT max" in sql.lower() and "market.cyq_perf" in sql for sql, _params in conn.executed)
+
+
+def test_resolve_incremental_start_seeds_physical_rows_then_uses_first_gap():
+    engine = TushareSyncEngine()
+    conn = _RowsConn([
+        [],  # no audit rows
+        [(dt.date(2026, 5, 15), 42), (dt.date(2026, 5, 18), 43)],  # physical row counts
+        [(dt.date(2026, 5, 15),), (dt.date(2026, 5, 18),)],  # trading-date sequence
+        [],  # INSERT for 2026-05-15 audit row
+        [],  # INSERT for 2026-05-18 audit row
+    ])
+
+    start, metadata = engine._resolve_incremental_start_date(conn, CYQ_PERF, dt.date(2026, 5, 18))
+
+    assert start == dt.date(2026, 5, 19)
+    assert metadata["safe_audit_cursor_date"] == "2026-05-18"
+    assert metadata["audit_reconciled_to_end_date"] is True
+    audit_params = [params for sql, params in conn.executed if "INSERT INTO market.dataset_date_refresh_audit" in sql]
+    assert len(audit_params) == 2
+    assert {params[1] for params in audit_params} == {dt.date(2026, 5, 15), dt.date(2026, 5, 18)}
+
+
+def test_seed_missing_audit_does_not_fabricate_empty_success():
+    engine = TushareSyncEngine()
+    conn = _RowsConn([
+        [],  # no physical row counts
+    ])
+
+    seeded = engine._seed_missing_audit_from_physical(
+        conn, CYQ_PERF, dt.date(2026, 5, 16), dt.date(2026, 5, 16)
+    )
+
+    assert seeded == 0
+    assert not any("INSERT INTO market.dataset_date_refresh_audit" in sql for sql, _params in conn.executed)
+
+
+def test_physical_audit_seed_records_gap_failure_and_stops_safe_cursor(monkeypatch):
+    engine = TushareSyncEngine()
+    conn = _RowsConn([
+        [(dt.date(2026, 5, 14), 10), (dt.date(2026, 5, 18), 11)],  # physical rows
+        [],  # seed 2026-05-14 success
+        [],  # seed 2026-05-15 gap failure
+    ])
+    monkeypatch.setattr(
+        engine,
+        "_date_sequence_for_by_date",
+        lambda _conn, _spec, start, end: [
+            day
+            for day in [dt.date(2026, 5, 14), dt.date(2026, 5, 15), dt.date(2026, 5, 18)]
+            if start <= day <= end
+        ],
+    )
+
+    seeded = engine._seed_refresh_audit_from_physical_table(conn, CYQ_PERF)
+
+    assert seeded is not None
+    assert seeded.safe_cursor == dt.date(2026, 5, 14)
+    assert seeded.max_table_date == dt.date(2026, 5, 18)
+    assert seeded.success_dates == 1
+    assert seeded.failed_gap_dates == 1
+    assert any(
+        "market.dataset_date_refresh_audit" in sql and params[1] == dt.date(2026, 5, 15) and params[13] == "physical_gap"
+        for sql, params in conn.executed
+    )
+
+
+def test_resolve_incremental_start_reconciles_physical_rows_then_uses_first_gap(monkeypatch):
+    engine = TushareSyncEngine()
+    conn = _RowsConn([
+        [],  # no audit rows
+        [(dt.date(2026, 5, 14), 10), (dt.date(2026, 5, 15), 11)],  # physical row counts
+        [],  # INSERT for seeded 2026-05-14 audit row
+        [],  # INSERT for seeded 2026-05-15 audit row
+    ])
+    monkeypatch.setattr(
+        engine,
+        "_date_sequence_for_by_date",
+        lambda _conn, _spec, start, end: [
+            day
+            for day in [dt.date(2026, 5, 14), dt.date(2026, 5, 15), dt.date(2026, 5, 18)]
+            if start <= day <= end
+        ],
+    )
+
+    start, metadata = engine._resolve_incremental_start_date(conn, CYQ_PERF, dt.date(2026, 5, 18))
+
+    assert start == dt.date(2026, 5, 18)
+    assert metadata["safe_audit_cursor_date"] == "2026-05-15"
+
+
+def test_resolve_incremental_start_skips_when_physical_and_audit_cover_end(monkeypatch):
+    engine = TushareSyncEngine()
+    conn = _RowsConn([
+        [(dt.date(2026, 5, 18), True)],  # audit rows cover end date
+        [(dt.date(2026, 5, 18),)],  # trading-date sequence
+    ])
+    monkeypatch.setattr(
+        engine,
+        "_date_sequence_for_by_date",
+        lambda _conn, _spec, start, end: [dt.date(2026, 5, 18)],
+    )
+
+    start, metadata = engine._resolve_incremental_start_date(conn, CYQ_PERF, dt.date(2026, 5, 18))
+
+    assert start == dt.date(2026, 5, 19)
+    assert metadata["audit_reconciled_to_end_date"] is True
+
+
+def test_sync_incremental_reconciles_audit_before_fetching_first_gap(monkeypatch):
+    engine = TushareSyncEngine(target_repository=None)
+    conn = _RowsConn([
+        [],  # audit cursor absent
+        [(dt.date(2026, 5, 14), 10), (dt.date(2026, 5, 15), 11)],  # physical row counts
+        [],  # seed 2026-05-14
+        [],  # seed 2026-05-15
+        [],  # create ingestion job
+        [],  # write start log
+        [],  # finish job select summary
+        [],  # finish job update
+    ])
+    created_job = uuid.uuid4()
+    sync_calls = []
+    finish_calls = []
+    summaries = []
+
+    monkeypatch.setattr(sync_engine, "get_conn", lambda: conn)
+    monkeypatch.setattr(engine, "_ensure_target_table_exists", lambda _conn, _spec: None)
+    monkeypatch.setattr(
+        engine,
+        "_date_sequence_for_by_date",
+        lambda _conn, _spec, start, end: [
+            day
+            for day in [dt.date(2026, 5, 14), dt.date(2026, 5, 15), dt.date(2026, 5, 18)]
+            if start <= day <= end
+        ],
+    )
+
+    def _create_job(_conn, job_type, summary):
+        summaries.append((job_type, summary))
+        return created_job
+
+    def _sync_by_date(_conn, spec, start_date, end_date, job_id):
+        sync_calls.append((spec.name, start_date, end_date, job_id))
+        return sync_engine.SyncResult(
+            dataset=spec.name,
+            mode="sync",
+            job_id=job_id,
+            total_batches=1,
+            success_batches=1,
+            inserted_rows=7,
+        )
+
+    monkeypatch.setattr(engine, "_create_job", _create_job)
+    monkeypatch.setattr(engine, "_sync_by_date", _sync_by_date)
+    monkeypatch.setattr(engine, "_finish_job", lambda _conn, job_id, status, summary: finish_calls.append((job_id, status, summary)))
+
+    result = engine.sync(CYQ_PERF, mode="incremental", end_date=dt.date(2026, 5, 18))
+
+    assert result.ok is True
+    assert sync_calls == [("cyq_perf", dt.date(2026, 5, 18), dt.date(2026, 5, 18), created_job)]
+    assert summaries[0][1]["start_date"] == "2026-05-18"
+    assert summaries[0][1]["safe_audit_cursor_date"] == "2026-05-15"
+    assert finish_calls[0][1] == "success"
+    audit_params = [
+        params
+        for sql, params in conn.executed
+        if "INSERT INTO market.dataset_date_refresh_audit" in sql
+    ]
+    assert len(audit_params) == 2
+    assert {params[1] for params in audit_params} == {dt.date(2026, 5, 14), dt.date(2026, 5, 15)}
+
+
+def test_sync_by_date_rejects_provider_contract_date_mismatch(monkeypatch):
+    engine = TushareSyncEngine()
+    conn = _RowsConn([
+        [(dt.date(2026, 5, 18),)],  # trading days
+        [],  # create target swallowed by repo fallback
+        [],  # audit failure insert
+        [],  # progress update
+    ])
+    job_id = uuid.uuid4()
+    rows = [{
+        "trade_date": "20260517",
+        "ts_code": "000001.SZ",
+        "his_low": 1,
+        "his_high": 2,
+        "cost_5pct": 1,
+        "cost_15pct": 1,
+        "cost_50pct": 1,
+        "cost_85pct": 1,
+        "cost_95pct": 1,
+        "weight_avg": 1,
+        "winner_rate": 1,
+    }]
+    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda _spec, _params: rows)
+    monkeypatch.setattr(engine, "_upsert_batch", lambda *_args, **_kwargs: 1)
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda seconds: None)
+
+    result = engine._sync_by_date(conn, CYQ_PERF, dt.date(2026, 5, 18), dt.date(2026, 5, 18), job_id)
+
+    assert result.failed_batches == 1
+    audit_params = [
+        params
+        for sql, params in conn.executed
+        if "INSERT INTO market.dataset_date_refresh_audit" in sql
+    ]
+    assert audit_params[-1][13] == "provider_contract_error"
+    assert not any("INSERT INTO market.cyq_perf" in sql for sql, _params in conn.executed)
+
+
+def test_sync_fails_fast_when_physical_table_is_missing_before_cold_floor(monkeypatch):
+    engine = TushareSyncEngine()
+    conn = _RowsConn([
+        [(None,)],  # to_regclass(target table) says physical table is absent
+        [],  # create failed job
+        [],  # finish failed job select summary
+        [],  # finish failed job update
+    ])
+    created_job = uuid.uuid4()
+
+    monkeypatch.setattr(sync_engine, "get_conn", lambda: conn)
+    monkeypatch.setattr(engine, "_create_job", lambda _conn, _mode, _summary: created_job)
+
+    result = engine.sync(CYQ_PERF, mode="incremental", end_date=dt.date(2026, 5, 18))
+
+    assert result.ok is False
+    assert "target table market.cyq_perf is missing" in (result.error or "")
+    assert "scripts/create_cyq_tables.py" in (result.error or "")
+    assert not any("dataset_date_refresh_audit" in sql for sql, _params in conn.executed)

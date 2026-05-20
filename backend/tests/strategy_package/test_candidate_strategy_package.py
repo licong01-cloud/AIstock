@@ -64,6 +64,7 @@ def _make_manifest() -> StrategyPackageManifest:
         score_direction="higher_better",
     )
     manifest = StrategyPackageManifest(
+        manifest_version="1.0",
         package_name="candidate_test",
         source=StrategyPackageSource(source_type=SourceType.QE_EXPERIMENT, source_id="qe_exp"),
         alpha_mode=AlphaMode.SINGLE_ALPHA,
@@ -171,7 +172,8 @@ def test_candidate_from_qe_experiment_assembles_strategy_manifest_snapshot() -> 
     assert candidate.completeness["ui_payload"] is True
     assert candidate.factor_manifest["factor_ids"] == ["factor_a"]
     assert candidate.model_manifest["model_asset"]["model_id"] == "model_1"
-    assert candidate.strategy_manifest["minute_execution_policy"]["algo_code"] == "TWAP"
+    assert candidate.strategy_manifest["runtime_authority"] == "platform_profile_or_validated_policy_not_candidate_snapshot"
+    assert "minute_execution_policy" not in candidate.strategy_manifest
     assert candidate.metric_snapshot["backtest_summary"]["ic"] == 0.05
     assert candidate.eligibility["can_create_strategy_package"] is True
     assert candidate.audit_context["snapshot_assembler"] == "QEExperimentSourceResolver"

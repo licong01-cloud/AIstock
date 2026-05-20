@@ -1,0 +1,73 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-090",
+  "title": "data_sync_attempts cascade breaks paper_v2_backend schema gate",
+  "description": "GitHub Actions paper_v2_backend failed because data_sync_attempts added ON DELETE CASCADE to the combined trading-core bootstrap DDL, violating the existing durable candidate no-cascade schema gate.",
+  "module": "local_data_management",
+  "severity": "P1",
+  "risk_area": "schema_guardrail",
+  "status": "verified",
+  "github_issue_number": 120,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/120",
+  "trigger_condition": {
+    "scenario": "post_main_merge_ci_failure",
+    "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/26168279936",
+    "head_sha": "0c5a353602e4e5afebd2aabd6ab93ddcee88f2a8",
+    "files": [
+      "backend/migrations/data_sync_targets_20260519.sql",
+      "backend/db/init_trading_core_v2_schema.py"
+    ]
+  },
+  "reproduce_command": "python -m nox -s paper_v2_backend",
+  "failing_run_id": "https://github.com/licong01-cloud/AIstock/actions/runs/26168279936",
+  "evidence_uris": [
+    "file:backend/migrations/data_sync_targets_20260519.sql",
+    "file:backend/db/init_trading_core_v2_schema.py"
+  ],
+  "fingerprint": "paper-v2-backend-data-sync-cascade-20260520",
+  "assigned_agent": "codex-app",
+  "fix_branch": "main",
+  "fix_commit": "60d30e1",
+  "verification_run_id": "local-main-paper-v2-backend-data-sync-autonomy-local-data-management-l0",
+  "created_at": "2026-05-20T14:19:16Z",
+  "first_seen_at": "2026-05-20T14:19:16Z",
+  "last_seen_at": "2026-05-20T14:21:20Z",
+  "fixed_at": "2026-05-20T14:21:20Z",
+  "submitted_at": "2026-05-20T14:19:16Z",
+  "closed_at": "2026-05-20T14:21:20Z",
+  "allowed_write_scope": [
+    "backend/migrations/data_sync_targets_20260519.sql",
+    "backend/db/init_trading_core_v2_schema.py",
+    "tests/aistock_validation/bugs/20260520_BUG-090-data-sync-attempts-cascade-breaks-paper-v2-backend-schema-gate.json"
+  ],
+  "suspected_modules": [
+    "backend/migrations/data_sync_targets_20260519.sql",
+    "backend/db/init_trading_core_v2_schema.py"
+  ],
+  "required_verification": [
+    "python -m nox -s paper_v2_backend",
+    "python -m nox -s data_sync_autonomy_backend",
+    "python -m nox -s local_data_management_audit",
+    "python -m nox -s l0",
+    "git diff --check"
+  ],
+  "closure_requirements": [
+    "paper_v2_backend passes after removing cascade semantics from the data-sync attempt ledger DDL.",
+    "Data-sync schema/comment tests still pass.",
+    "GitHub issue #120 receives fix commit and verification evidence."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-20T14:19:16Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Discovered from GitHub Actions AIstock CI run 26168279936 on main."
+    },
+    {
+      "timestamp": "2026-05-20T14:21:20Z",
+      "actor": "codex-app",
+      "action": "verified",
+      "note": "Fixed by 60d30e1 and verified with paper_v2_backend, data_sync_autonomy_backend, local_data_management_audit, l0, and git diff --check on local main."
+    }
+  ]
+}

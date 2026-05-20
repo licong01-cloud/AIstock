@@ -114,6 +114,16 @@ class RuntimeSelectionProfile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     top_k: int | None = Field(default=None, gt=0, le=50)
+    daily_strategy_id: str | None = None
+    daily_strategy_params: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("daily_strategy_id")
+    @classmethod
+    def _strip_daily_strategy_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
 
 
 class RuntimeRiskScoreOverlayProfile(BaseModel):
@@ -225,6 +235,10 @@ def parse_selection_runtime_profile(runtime_config: dict[str, Any] | None) -> Se
     selection_payload = dict(payload.get("selection") or {})
     if "top_k" in config and "top_k" not in selection_payload:
         selection_payload["top_k"] = config["top_k"]
+    if "daily_strategy_id" in config and "daily_strategy_id" not in selection_payload:
+        selection_payload["daily_strategy_id"] = config["daily_strategy_id"]
+    if "daily_strategy_params" in config and "daily_strategy_params" not in selection_payload:
+        selection_payload["daily_strategy_params"] = config["daily_strategy_params"]
     payload["selection"] = selection_payload
 
     hmm_payload = dict(payload.get("hmm") or {})

@@ -443,7 +443,7 @@ class PaperTradingLiveMinuteExecutor:
             data_source=signal_data_source,
             runtime_config=config,
         )
-        top_k = int(runtime_profile.selection.top_k or manifest.portfolio_policy.topk)
+        top_k = self._require_runtime_top_k(runtime_profile, manifest)
         raw_candidate_count = len(snapshot.candidates)
         risk_decisions = self.risk_policy_service.evaluate(
             symbols=sorted(set(item.symbol for item in snapshot.candidates) | set(current_positions)),
@@ -723,6 +723,16 @@ class PaperTradingLiveMinuteExecutor:
             started_at=session.started_at or datetime.now(UTC),
         )
         return run
+
+    @staticmethod
+    def _require_runtime_top_k(runtime_profile: Any, manifest: Any) -> int:
+        top_k = runtime_profile.selection.top_k
+        if top_k is None:
+            raise StrategyPackageValidationError(
+                "Paper v2 live session requires runtime_profile.selection.top_k; StrategyPackage manifest cannot provide runtime top_k",
+                context={"package_id": manifest.package_id, "manifest_version": getattr(manifest, "manifest_version", None)},
+            )
+        return int(top_k)
 
     def _wait_for_preopen_stk_limit_if_needed(
         self,

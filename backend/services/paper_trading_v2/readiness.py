@@ -248,7 +248,7 @@ class PaperTradingReadinessService:
             )
         raw_candidate_count = len(snapshot.candidates)
         excluded_count = 0
-        top_k = int(runtime_profile.selection.top_k or manifest.portfolio_policy.topk)
+        top_k = self._require_runtime_top_k(runtime_profile, manifest)
         risk_decisions = self.risk_policy_service.evaluate(
             symbols=sorted(set(item.symbol for item in snapshot.candidates) | set(current_positions)),
             trade_date=trade_date,
@@ -385,6 +385,16 @@ class PaperTradingReadinessService:
             checked_symbols=checked_symbols,
             runtime_config_keys=sorted(str(key) for key in config),
         )
+
+    @staticmethod
+    def _require_runtime_top_k(runtime_profile: Any, manifest: Any) -> int:
+        top_k = runtime_profile.selection.top_k
+        if top_k is None:
+            raise StrategyPackageValidationError(
+                "Paper v2 readiness requires runtime_profile.selection.top_k; StrategyPackage manifest cannot provide runtime top_k",
+                context={"package_id": manifest.package_id, "manifest_version": getattr(manifest, "manifest_version", None)},
+            )
+        return int(top_k)
 
     def _prepare_minqmt_authority_state(
         self,

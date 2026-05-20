@@ -30,17 +30,13 @@ from .models import (
     AlphaMode,
     AssetCheck,
     BacktestSummary,
-    ExecutionPolicy,
     FactorAsset,
     MetricsSnapshot,
-    MinuteExecutionPolicy,
     ModelAsset,
     PackageStatus,
-    PortfolioPolicy,
     SourceType,
     StrategyPackageManifest,
     StrategyPackageSource,
-    UniversePolicy,
 )
 
 ConnFactory = Callable[[], Iterator[Any]]
@@ -134,9 +130,9 @@ class QEExperimentSourceResolver:
         record = self._load_experiment(experiment_id)
         manifest = self._build_manifest(record)
         if resolve_runtime_assets:
-            manifest = self._model_asset_resolver.resolve_manifest_assets(
-                manifest,
-                copy_missing=True,
+            raise StrategyPackageValidationError(
+                "alpha-core StrategyPackage does not resolve execution runtime assets into the frozen manifest",
+                context={"experiment_id": experiment_id},
             )
         frozen = freeze_manifest(manifest)
         return frozen
@@ -159,9 +155,9 @@ class QEExperimentSourceResolver:
             run_id=record.get("experiment_id"),
         )
         if resolve_runtime_assets:
-            manifest = self._model_asset_resolver.resolve_manifest_assets(
-                manifest,
-                copy_missing=True,
+            raise StrategyPackageValidationError(
+                "alpha-core StrategyPackage does not resolve execution runtime assets into the frozen manifest",
+                context={"qe_task_id": qe_task_id, "qe_loop_id": qe_loop_id},
             )
         return freeze_manifest(manifest)
 
@@ -339,23 +335,6 @@ class QEExperimentSourceResolver:
                 context={"experiment_id": experiment_id},
             )
 
-        alpha_mode = _normalize_alpha_mode(record.get("alpha_mode"))
-        components = self._build_alpha_components(
-            alpha_mode=alpha_mode,
-            experiment_id=experiment_id,
-            factor_names=factor_names,
-            model_id=record.get("model_id"),
-            metrics=metrics,
-        )
-        combination_policy = self._build_combination_policy(alpha_mode, components)
-        minute_policy = self._build_minute_execution_policy(custom_params, experiment_id)
-        asset_checks = self._build_asset_checks(record, factor_names)
-        package_status = (
-            PackageStatus.BACKTEST_APPROVED
-            if all(check.passed for check in asset_checks)
-            else PackageStatus.DRAFT
-        )
-
         model_id = str(record.get("model_id") or "").strip()
         strategy_id = str(record.get("strategy_id") or "").strip()
         if not model_id:
@@ -369,11 +348,31 @@ class QEExperimentSourceResolver:
                 context={"experiment_id": experiment_id},
             )
 
-        topk = int(custom_params.get("topk") or 50)
-        n_drop = int(custom_params.get("n_drop") or 0)
-        stock_pool = str(custom_params.get("stock_pool") or "unknown")
+        alpha_mode = _normalize_alpha_mode(record.get("alpha_mode"))
+        components = self._build_alpha_components(
+            alpha_mode=alpha_mode,
+            experiment_id=experiment_id,
+            factor_names=factor_names,
+            model_id=model_id,
+            metrics=metrics,
+        )
+        combination_policy = self._build_combination_policy(alpha_mode, components)
+        backtest_context = self._build_backtest_context(custom_params, data_split, experiment_id, strategy_id=strategy_id)
+        source_evidence = self._build_source_evidence(
+            record=record,
+            custom_params=custom_params,
+            data_split=data_split,
+            backtest_context=backtest_context,
+        )
+        asset_checks = self._build_asset_checks(record, factor_names)
+        package_status = (
+            PackageStatus.BACKTEST_APPROVED
+            if all(check.passed for check in asset_checks)
+            else PackageStatus.DRAFT
+        )
 
         return StrategyPackageManifest(
+            manifest_version="alpha_core_v1",
             package_name=str(record.get("experiment_name") or experiment_id),
             source=StrategyPackageSource(
                 source_type=source_type,
@@ -389,17 +388,8 @@ class QEExperimentSourceResolver:
                 FactorAsset(factor_id=str(name), factor_name=str(name)) for name in factor_names
             ],
             model_asset=ModelAsset(model_id=model_id),
-            strategy_config={
-                "strategy_id": strategy_id,
-                "custom_params": custom_params,
-                "data_split": data_split,
-            },
-            universe_policy=UniversePolicy(stock_pool=stock_pool),
-            portfolio_policy=PortfolioPolicy(topk=topk, n_drop=n_drop),
-            execution_policy=ExecutionPolicy(
-                backtest_freq=self._normalize_backtest_freq(custom_params, experiment_id)
-            ),
-            minute_execution_policy=minute_policy,
+            source_evidence=source_evidence,
+            backtest_context=backtest_context,
             backtest_summary=self._build_backtest_summary(metrics, data_split),
             asset_checks=asset_checks,
             package_status=package_status,
@@ -523,7 +513,69 @@ class QEExperimentSourceResolver:
         weights = {component.alpha_id: component.component_weight for component in components}
         return AlphaCombinationPolicy(method="weighted_score", weights=weights)
 
-    def _normalize_backtest_freq(self, custom_params: dict[str, Any], experiment_id: str) -> str:
+    def _build_source_evidence(
+        self,
+        *,
+        record: dict[str, Any],
+        custom_params: dict[str, Any],
+        data_split: dict[str, Any],
+        backtest_context: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "schema_version": "strategy_package_source_evidence_v1",
+            "source_kind": "qe_experiment",
+            "experiment_id": str(record.get("experiment_id") or ""),
+            "strategy_id": str(record.get("strategy_id") or ""),
+            "qe_task_id": str(record.get("qe_task_id") or ""),
+            "qe_loop_id": str(record.get("qe_loop_id") or ""),
+            "workspace_path": str(record.get("workspace_path") or ""),
+            "custom_params": custom_params,
+            "data_split": data_split,
+            "backtest_context_ref": backtest_context.get("schema_version"),
+            "authority": "audit_only_not_runtime_authority",
+        }
+
+    def _build_backtest_context(
+        self,
+        custom_params: dict[str, Any],
+        data_split: dict[str, Any],
+        experiment_id: str,
+        *,
+        strategy_id: str,
+    ) -> dict[str, Any]:
+        execution_algo_params = custom_params.get("execution_algo_params") or {}
+        if execution_algo_params is not None and not isinstance(execution_algo_params, dict):
+            raise StrategyPackageValidationError(
+                "execution_algo_params must be an object",
+                context={"experiment_id": experiment_id},
+            )
+        backtest_freq = self._normalize_backtest_freq(custom_params, experiment_id, required=False)
+        execution_algo = str(custom_params.get("execution_algo") or "").strip().upper() or None
+        return {
+            "schema_version": "qe_backtest_context_v1",
+            "authority": "source_evidence_not_runtime_authority",
+            "daily_strategy": {
+                "strategy_id": str(custom_params.get("strategy_id") or custom_params.get("strategy_class") or strategy_id or "").strip() or None,
+                "topk": _optional_int(custom_params.get("topk")),
+                "n_drop": _optional_int(custom_params.get("n_drop")),
+                "stock_pool": str(custom_params.get("stock_pool") or "").strip() or None,
+                "custom_params": custom_params,
+            },
+            "execution": {
+                "backtest_freq": backtest_freq,
+                "execution_algo": execution_algo,
+                "execution_algo_params": execution_algo_params or {},
+            },
+            "data_split": data_split,
+        }
+
+    def _normalize_backtest_freq(
+        self,
+        custom_params: dict[str, Any],
+        experiment_id: str,
+        *,
+        required: bool = True,
+    ) -> str | None:
         freq = str(custom_params.get("backtest_freq") or "").strip().lower()
         if freq in {"1min", "1m", "minute"}:
             return "1min"
@@ -531,37 +583,14 @@ class QEExperimentSourceResolver:
             return "5min"
         if freq == "day":
             raise UnsupportedFeatureError(
-                "daily backtest frequency is not allowed for Strategy Package v1",
+                "daily backtest frequency is not allowed for Strategy Package alpha-core evidence",
                 context={"experiment_id": experiment_id, "backtest_freq": freq},
             )
+        if not required:
+            return None
         raise StrategyPackageValidationError(
             "QE experiment must declare minute backtest_freq",
             context={"experiment_id": experiment_id, "backtest_freq": freq},
-        )
-
-    def _build_minute_execution_policy(
-        self,
-        custom_params: dict[str, Any],
-        experiment_id: str,
-    ) -> MinuteExecutionPolicy:
-        self._normalize_backtest_freq(custom_params, experiment_id)
-        algo_code = str(custom_params.get("execution_algo") or "").strip().upper()
-        if not algo_code:
-            raise StrategyPackageValidationError(
-                "QE experiment must declare execution_algo",
-                context={"experiment_id": experiment_id},
-            )
-        algo_config = custom_params.get("execution_algo_params") or {}
-        if not isinstance(algo_config, dict):
-            raise StrategyPackageValidationError(
-                "execution_algo_params must be an object",
-                context={"experiment_id": experiment_id},
-            )
-        return MinuteExecutionPolicy(
-            bar_freq="1m",
-            algo_code=algo_code,
-            algo_config=algo_config,
-            fallback_algo_code=None,
         )
 
     def _build_backtest_summary(
@@ -626,6 +655,12 @@ class QEExperimentSourceResolver:
             )
         ]
         return checks
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    return int(value)
 
 
 @contextmanager
