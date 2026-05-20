@@ -9,6 +9,7 @@ from backend.services.paper_trading_v2.market_data import MinuteDataSource
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
 from backend.services.selection_center.repository import InMemorySelectionCenterRepository
+from backend.services.selection_center.runtime_profile import runtime_profile_config_sha256
 from backend.services.selection_center.service import SelectionCenterService
 from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.strategy_package.manifest import freeze_manifest
@@ -271,11 +272,19 @@ def test_selection_center_uses_runtime_profile_or_source_evidence_not_manifest_r
         refresh_audit=NoopRefreshAudit(),
     )
 
+    runtime_config = {"runtime_profile": {"selection": {"top_k": 1}}}
+    runtime_config["runtime_profile_binding"] = {
+        "source": "selection_runtime_profile_version",
+        "profile_version_id": "unit_selection_profile_v1",
+        "config_sha256": runtime_profile_config_sha256(runtime_config),
+        "trade_enabled": True,
+    }
+
     run = service.run_single_package(
         package_id=manifest.package_id,
         trade_date=date(2024, 1, 2),
         data_source="DB_HISTORICAL",
-        runtime_config={"runtime_profile": {"selection": {"top_k": 1}}},
+        runtime_config=runtime_config,
     )
 
     package_config = run.runtime_config["package_runtime_configs"][manifest.package_id]
