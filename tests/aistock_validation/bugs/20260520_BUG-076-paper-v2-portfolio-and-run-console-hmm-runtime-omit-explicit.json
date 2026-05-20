@@ -1,0 +1,109 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-076",
+  "title": "Paper v2 portfolio and run-console HMM runtime omit explicit coefficients_path",
+  "description": "Expected: Paper v2 Selection, portfolio creation, run-console, historical replay, and live session should use the same platform HMM coefficient artifact selection contract. When HMM is enabled, the runtime config should either carry an explicit coefficients_path or persist a backend-resolved coefficient artifact so Selection and Paper v2 execution use the same HMM coefficients. HMM must remain platform runtime state and must not be bound into StrategyPackage.\nActual: Selection page explicitly passes runtime_profile.hmm.coefficients_path and documents that this avoids stale/ambiguous coefficient use, but portfolio creation only sends model_snapshot_id/signal_preset and run-console only sends coefficients_path when manually typed. Backend HMM runtime can fail when multiple coefficient artifacts cover a trade_date and explicit coefficients_path is missing, or Paper v2 may use a different coefficient artifact than Selection.",
+  "module": "paper_v2",
+  "severity": "P1",
+  "risk_area": "paper_v2_hmm_runtime_artifact_consistency",
+  "status": "in_progress",
+  "trigger_condition": {
+    "scenario": "reported_via_mcp",
+    "files": [
+      "frontend/src/app/paper-v2/selection/page.tsx",
+      "frontend/src/app/paper-v2/portfolios/page.tsx",
+      "frontend/src/app/paper-v2/portfolios/[portfolioId]/run-console/page.tsx",
+      "backend/services/selection_center/hmm_runtime.py"
+    ]
+  },
+  "reproduce_command": "rg -n \"coefficients_path|selectedHmmArtifact|runtimeProfileConfig|runtimeHmmCoefficientsPath|multiple HMM coefficient artifacts cover trade_date\" frontend/src/app/paper-v2/selection/page.tsx frontend/src/app/paper-v2/portfolios/page.tsx frontend/src/app/paper-v2/portfolios/[portfolioId]/run-console/page.tsx backend/services/selection_center/hmm_runtime.py -S",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:frontend/src/app/paper-v2/selection/page.tsx",
+    "file:frontend/src/app/paper-v2/portfolios/page.tsx",
+    "file:frontend/src/app/paper-v2/portfolios/[portfolioId]/run-console/page.tsx",
+    "file:backend/services/selection_center/hmm_runtime.py"
+  ],
+  "fingerprint": "dea153a77dd69c19",
+  "assigned_agent": "codex-app",
+  "fix_branch": "bug/BUG-076-paper-v2-hmm-coefficients-path",
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-20T02:36:13Z",
+  "first_seen_at": "2026-05-20T02:36:13Z",
+  "last_seen_at": "2026-05-20T02:36:13Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-20T02:36:13Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "frontend/src/lib/paper-v2/hmm-runtime.ts",
+    "frontend/src/app/paper-v2/selection/page.tsx",
+    "frontend/src/app/paper-v2/portfolios/page.tsx",
+    "frontend/src/app/paper-v2/portfolios/[portfolioId]/run-console/page.tsx",
+    "frontend/tests/paper-v2/paper-v2-hmm-runtime-coefficients.spec.ts",
+    "tests/aistock_validation/bugs/20260520_BUG-076-paper-v2-portfolio-and-run-console-hmm-runtime-omit-explicit.json",
+    "tests/aistock_validation/history/paper_v2/20260520_l3_bug-076-hmm-coefficients-path.md"
+  ],
+  "suspected_modules": [
+    "frontend/src/app/paper-v2/selection/page.tsx",
+    "frontend/src/app/paper-v2/portfolios/page.tsx",
+    "frontend/src/app/paper-v2/portfolios/[portfolioId]/run-console/page.tsx",
+    "frontend/src/lib/paper-v2/hmm-runtime.ts",
+    "backend/services/selection_center/hmm_runtime.py"
+  ],
+  "required_verification": [
+    "Regression test: Selection, portfolio creation, run-console readiness/day-run, replay, live session, and runtime-profile save all send or persist runtime_profile.hmm.coefficients_path when HMM is enabled and a covering coefficient artifact exists.",
+    "Regression test: HMM enabled with no coefficient artifact covering the relevant trade date or replay date range fails before API submission with a readable UI error; backend ambiguous auto-resolution is not used as the normal Paper v2 UI path.",
+    "Regression test: historical replay date ranges validate coefficient artifact coverage for the full requested range, not only the first date, when covered_trade_dates are available.",
+    "Regression test: HMM remains platform runtime configuration and is not written into StrategyPackage frozen manifest or StrategyPackage-bound runtime state.",
+    "Frontend validation: TypeScript and affected Playwright/API payload checks pass without relying on mock-only success as the sole proof for the business path.",
+    "Design-compliance review: produce a DESIGN-COMPLIANCE-001 matrix mapping issue expectations to implementation refs and test/evidence refs before marking BUG-076 fixed."
+  ],
+  "closure_requirements": [
+    "BUG-076 local JSON and GitHub issue #103 remain synchronized for status, fix branch, labels, verification evidence, and closure comments.",
+    "No root worktree pollution: all BUG-076 code, tests, validation records, and BUG registry edits are committed on bug/BUG-076-paper-v2-hmm-coefficients-path or an explicitly approved integration branch.",
+    "No simplified/subset/POC/placeholder/mock-only implementation is claimed complete; all issue-required Paper v2 paths are either fully implemented and verified or explicitly reported as blockers before merge.",
+    "A validation record under tests/aistock_validation/history/paper_v2 records commands, results, residual risks, production-port impact, and the design-compliance matrix.",
+    "Production backend 8001, frontend 3000, production DB, HMM snapshots, StrategyPackage manifests, and protected model artifacts are not modified during validation unless explicitly approved."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-20T02:36:13Z",
+      "actor": "paper_v2_team",
+      "action": "discovered",
+      "note": "Reported via aistock_mcp_server.report_bug. Comments: 3"
+    },
+    {
+      "timestamp": "2026-05-20T02:36:13Z",
+      "actor": "paper_v2_team",
+      "action": "comment",
+      "note": "QA-only finding by Codex App; no code fix performed in this window."
+    },
+    {
+      "timestamp": "2026-05-20T02:36:13Z",
+      "actor": "paper_v2_team",
+      "action": "comment",
+      "note": "Related to BUG-065/#76 but split as a concrete P1 UI/runtime consistency defect so Paper v2 repair can close it independently."
+    },
+    {
+      "timestamp": "2026-05-20T02:36:13Z",
+      "actor": "paper_v2_team",
+      "action": "comment",
+      "note": "Do not fix by saving HMM into StrategyPackage; HMM remains platform runtime state."
+    },
+    {
+      "timestamp": "2026-05-20T05:47:06Z",
+      "actor": "codex-app",
+      "action": "process_gap_confirmed",
+      "note": "Confirmed BUG-076 was GitHub-only plus a stale local draft in qe-mcp-template-archive; origin/main and the dedicated BUG-076 worktree did not contain the canonical BUG registry record before this correction."
+    },
+    {
+      "timestamp": "2026-05-20T05:47:06Z",
+      "actor": "codex-app",
+      "action": "assigned_in_dedicated_worktree",
+      "note": "Created canonical in-progress BUG registry record on bug/BUG-076-paper-v2-hmm-coefficients-path with GitHub issue #103 linkage and DESIGN-COMPLIANCE-001 closure requirements."
+    }
+  ],
+  "github_issue_number": 103,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/103"
+}
