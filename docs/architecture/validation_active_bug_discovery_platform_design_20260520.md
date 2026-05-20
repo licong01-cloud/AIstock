@@ -791,6 +791,11 @@ GET  /api/v1/validation/discovery/tasks
 POST /api/v1/validation/discovery/tasks
 POST /api/v1/validation/discovery/tasks/{task_id}/run
 POST /api/v1/validation/discovery/tasks/{task_id}/cancel
+POST /api/v1/validation/discovery/agent-tasks/{task_id}/claim
+GET  /api/v1/validation/discovery/agent-tasks/{task_id}/context-pack
+POST /api/v1/validation/discovery/agent-tasks/{task_id}/results
+POST /api/v1/validation/discovery/agent-tasks/{task_id}/evidence
+POST /api/v1/validation/discovery/agent-tasks/{task_id}/complete
 GET  /api/v1/validation/discovery/llm-profiles
 POST /api/v1/validation/discovery/llm-profiles
 GET  /api/v1/validation/discovery/contracts
@@ -816,6 +821,11 @@ validation_discovery_schedule_task
 validation_discovery_run_task
 validation_discovery_cancel_task
 validation_discovery_list_llm_profiles
+validation_discovery_claim_agent_task
+validation_discovery_get_agent_context_pack
+validation_discovery_submit_agent_result
+validation_discovery_attach_agent_evidence
+validation_discovery_complete_agent_task
 ```
 
 MCP 限制：
@@ -825,6 +835,7 @@ MCP 限制：
 - L4/L5 e2e probe 默认不可由普通 UI 启动，需 allowlist 和 resource policy。
 - LLM profile 只能引用已存在的 provider/model/prompt，不允许 MCP 传入明文 token。
 - 手工部署专项任务必须写入 `requested_by`、`reason`、`resource_policy_id` 和预期 cleanup 策略。
+- Codex、Claude Code 或其他 Agent 通过 MCP 执行探测时，必须先 claim task，再取 context pack，最后提交结构化结果和证据包，不能绕过候选池直接创建正式 Issue。
 
 ### 13.4 调度策略：固定基线 + 变更驱动 + 手工专项
 
@@ -860,6 +871,68 @@ MCP 限制：
 ```
 
 L4/L5、长时间训练、回测、QE materialize/run、生产库写入类任务可以由计划器提出，但默认不直接执行；需要 UI 或 MCP 显式确认后进入队列。
+
+### 13.5 MCP 驱动的 Agent 执行模式
+
+基于 LLM 的流水线必须支持“平台内置执行”和“MCP 外部 Agent 执行”两种模式。原因是夜间自动化需要稳定、可复现的服务端执行；而 Codex、Claude Code 或其他 Agent 更适合临时专项探测、复杂代码阅读、跨工具验证和人工监督下的深度分析。
+
+| 执行模式 | LLM 调用位置 | 适用场景 | 关键约束 |
+|---|---|---|---|
+| 平台内置 LLM Gateway | 后端按 `DiscoveryAgentProfile` 调用既有 provider/model | nightly baseline、固定 prompt、稳定输出、可统计成本 | provider/model/prompt 必须来自配置中心 |
+| Codex MCP Agent | Codex 通过 MCP 领取任务、取 context pack、执行探测、回传结果 | 代码级定位、设计一致性复核、人工早晨审核前补证据 | Codex 不能直接晋级 Issue，必须提交 candidate/evidence |
+| Claude Code MCP Agent | Claude Code 通过 MCP 执行 Paper v2、QE、前端等指定范围探测 | 需要 Claude Code 所在窗口或专属能力的模块复核 | 必须记录 agent_name、workspace、branch、模型声明 |
+| BYO LLM Client | Codex/Claude Code 本地调用 DeepSeek、GLM、DashScope、OpenAI-compatible 等 API 后回传结果 | 临时比较不同 LLM 的分析质量、使用外部模型做二次意见 | token 留在调用方环境，不进入 MCP payload 或报告 |
+
+标准流程：
+
+```mermaid
+sequenceDiagram
+  participant UI as 流水线 UI/MCP
+  participant API as Active Discovery API
+  participant AG as Codex/Claude Agent
+  participant LLM as 可选外部 LLM
+  participant Store as Candidate/Evidence Store
+
+  UI->>API: schedule_task / run_task
+  AG->>API: claim_agent_task(task_id)
+  AG->>API: get_agent_context_pack(task_id)
+  AG->>LLM: 可选调用 DeepSeek/GLM/其他 LLM
+  AG->>API: submit_agent_result(structured_output)
+  AG->>API: attach_agent_evidence(log/screenshot/api/mcp/db)
+  API->>Store: 写入 draft/candidate/evidence
+  AG->>API: complete_agent_task
+```
+
+`AgentTaskResult` 最少应记录：
+
+```json
+{
+  "schema_version": "aistock_agent_task_result_v1",
+  "task_id": "disc_task_20260521_selection_probe",
+  "agent_runtime": "codex",
+  "agent_name": "codex-app",
+  "workspace": "F:/Dev/AIstock_worktrees/...",
+  "branch": "docs/active-bug-discovery-design-20260520",
+  "llm_provider_declared": "deepseek",
+  "llm_model_declared": "deepseek-chat",
+  "prompt_id": "validation_discovery_cross_module_explorer",
+  "prompt_version": 2,
+  "context_pack_id": "ctx_20260521_001",
+  "result_type": "issue_candidate_draft",
+  "confidence": 0.72,
+  "evidence_manifest_id": "evid_20260521_001",
+  "requires_deterministic_verification": true
+}
+```
+
+安全和质量边界：
+
+1. MCP 是任务编排和证据回传通道，不是无限制远程执行入口。
+2. 外部 Agent 可以调用其他 LLM API，但必须回传模型声明、Prompt 版本、context pack id 和输出 hash。
+3. 如果外部 Agent 无法提供可复现证据，只能进入 `draft` 或 `needs_evidence`，不能进入可晋级候选。
+4. 所有正式 Issue 晋级仍由 `validation_discovery_promote_candidate_to_issue` 完成，并沿用 GitHub/BUG JSON 同步规则。
+5. 高风险生产库写入、QE 实验、训练、回测任务仍受 `resource_policy`、allowlist、confirm 字段和 cleanup 策略约束。
+6. LLM API key、GitHub token、DB 密码不得通过 MCP task payload、context pack 或 evidence 文本传递。
 
 ## 14. 前端 UI 设计
 
@@ -1105,6 +1178,8 @@ tmp/validation/discovery/<run_id>/*
 - 复用 `/config/rdagent-llm` 的 provider/model 配置。
 - DeepSeek/GLM/Zhipu/DashScope/OpenAI-compatible Agent adapter。
 - DiscoveryAgentProfile 管理页面。
+- MCP 外部 Agent 执行接口：claim、context pack、submit result、attach evidence、complete。
+- Codex/Claude Code 作为可审计 Agent runtime 的任务回传协议。
 - LLM 输出 draft candidate。
 - 确定性补证据流程。
 - 每日审核包。
@@ -1116,6 +1191,8 @@ tmp/validation/discovery/<run_id>/*
 - Morning review 可展示 LLM 建议和确定性证据差异。
 - 夜间报告能显示 provider/model/prompt_version/context_pack。
 - 页面不保存 LLM token 或 API key。
+- Codex 或 Claude Code 可通过 MCP 领取任务并提交结构化发现，但不能绕过候选池直接创建正式 Issue。
+- 外部 Agent 调用其他 LLM API 的结果可被接收，但必须带模型声明、Prompt 版本、context pack id 和证据 manifest。
 
 ### 阶段 4：QE/Paper 全链路最小探针，2-3 周
 
@@ -1189,6 +1266,7 @@ tmp/validation/discovery/<run_id>/*
 - 能在 UI 展示候选、证据、审核状态、GitHub 同步状态。
 - 能展示 LLM provider/model/prompt_version/context_pack，并跳转到既有 Prompt 和模型配置页面。
 - 能通过 UI/MCP 创建手工专项任务，并区分固定夜间基线、变更驱动任务和人工任务。
+- 能支持 Codex/Claude Code 通过 MCP 领取 LLM 探测任务、回传发现和证据包。
 
 ### 21.2 业务能力验收
 
