@@ -48,11 +48,11 @@
   "fingerprint": "paper_v2::execution_policy::manifest_default_without_durable_evidence",
   "assigned_agent": "codex-app",
   "fix_branch": "bug/BUG-092-paper-v2-explicit-execution-policy-evidence",
-  "fix_commit": "8fcc6ee",
+  "fix_commit": "d4ff3e2",
   "verification_run_id": "tests/aistock_validation/history/paper_trading_v2/20260520_l3_bug-092-explicit-execution-policy-evidence-validation.md",
   "created_at": "2026-05-20T16:09:17Z",
   "first_seen_at": "2026-05-20T04:32:56Z",
-  "last_seen_at": "2026-05-20T17:02:08Z",
+  "last_seen_at": "2026-05-20T17:03:11Z",
   "fixed_at": "2026-05-20T16:56:18Z",
   "submitted_at": "2026-05-20T16:09:17Z",
   "closed_at": null,
@@ -131,10 +131,10 @@
       "note": "Local validation passed: focused pytest, paper_v2 module pytest, strategy_package+paper_v2 pytest, selection-center focused pytest, compileall, frontend lint, nox paper_v2_backend, nox validation_module_registry_l0, nox guardrail_changed_files, nox l0, and git diff --check."
     },
     {
-      "timestamp": "2026-05-20T17:02:08Z",
+      "timestamp": "2026-05-20T17:03:11Z",
       "actor": "codex-app",
       "action": "local_commit_created",
-      "note": "Committed BUG-092 fix locally as 8fcc6ee."
+      "note": "Recorded implementation commit d4ff3e2 for BUG-092; this metadata-only follow-up keeps the registry aligned after commit hash finalization."
     }
   ]
 }
