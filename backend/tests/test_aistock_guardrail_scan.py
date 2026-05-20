@@ -8,7 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = ROOT / "scripts" / "aistock_guardrail_scan.py"
-CATALOG_PATH = ROOT / "docs" / "standards" / "aistock_development_standard_v1.2_20260519.yaml"
+CATALOG_PATH = ROOT / "docs" / "standards" / "aistock_development_standard_v1.3_20260520.yaml"
 
 
 def _load_module():
@@ -40,8 +40,8 @@ def test_catalog_references_current_human_readable_standard() -> None:
     standard_path = ROOT / catalog["source_standard"]
     standard_text = standard_path.read_text(encoding="utf-8")
 
-    assert catalog["source_version"] == "1.2"
-    assert standard_path.name == "aistock_development_standard_v1.2_20260519.md"
+    assert catalog["source_version"] == "1.3"
+    assert standard_path.name == "aistock_development_standard_v1.3_20260520.md"
     for rule in catalog["rules"]:
         if not rule.get("enabled", True):
             continue
@@ -147,16 +147,16 @@ def test_git_changed_files_uses_utf8_for_unicode_paths(tmp_path: Path, monkeypat
         assert kwargs["encoding"] == "utf-8"
         assert kwargs["errors"] == "replace"
         if args[:3] == ["git", "diff", "--name-only"]:
-            return "docs/分析报告.md\n"
-        return "scripts/测试脚本.py\n"
+            return "docs/鍒嗘瀽鎶ュ憡.md\n"
+        return "scripts/娴嬭瘯鑴氭湰.py\n"
 
     monkeypatch.setattr(scanner.subprocess, "check_output", fake_check_output)
 
     paths = scanner.git_changed_files(tmp_path)
 
     assert [path.relative_to(tmp_path).as_posix() for path in paths] == [
-        "docs/分析报告.md",
-        "scripts/测试脚本.py",
+        "docs/鍒嗘瀽鎶ュ憡.md",
+        "scripts/娴嬭瘯鑴氭湰.py",
     ]
 
 

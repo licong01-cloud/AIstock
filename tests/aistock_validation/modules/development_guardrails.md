@@ -4,7 +4,7 @@ This matrix covers the development-standard guardrail gate that protects new AIs
 
 ## Scope
 
-- Standards authority remains `docs/standards/aistock_development_standard_v1.2_20260519.md` and its same-version YAML catalog.
+- Standards authority remains `docs/standards/aistock_development_standard_v1.3_20260520.md` and its same-version YAML catalog.
 - The scanner entry point is `scripts/aistock_guardrail_scan.py`.
 - The first machine baseline is local `tmp/validation/guardrails/baseline_20260504.json`; the human summary is `docs/analysis/aistock_guardrail_baseline_20260504.md`.
 - Historical findings are not silently ignored: they are classified as `baseline` and stay visible in JSON/Markdown output.
@@ -37,6 +37,7 @@ python -m nox -s guardrail_changed_files -- --changed-only
 
 - Catalog loads and enabled regex/path rules compile.
 - Human-readable standard and YAML catalog remain synchronized by rule id/reference.
+- DESIGN-COMPLIANCE-001 exists as a P0 manual review control, and completion reports include the required design acceptance matrix.
 - Silent fallback, root pollution, and DataFrame concat-in-loop patterns are detected.
 - Test paths and `debug_tools` one-off script locations are excluded where required.
 - Git changed/staged file discovery uses UTF-8 with replacement for Unicode paths.

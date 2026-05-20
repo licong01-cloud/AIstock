@@ -27,6 +27,7 @@ AIstock 经常有多个窗口同时开发不同模块。为了避免 issue 修�
 6. **代码合入与运行时激活分离**：PR 合入不等于生产生效；生产 checkout 同步、`8001/3000` 重启必须另行确认。
 7. **验证不能依赖生产服务**：默认使用测试命令或临时 dev port，例如 backend `8013`，不把生产 `8001` 当作唯一证明路径。
 8. **禁止 sweeping commit**：只 stage 当前 issue 的文件；不得把无关 Paper、QE、frontend build cache、test-results 等混入。
+9. **禁止简化交付**：任何基于设计方案、Issue 验收标准或用户明确需求的修复/功能，合入前必须按 DESIGN-COMPLIANCE-001 逐条复核；未经用户批准的简化版、子集版、POC 版、占位版、mock-only 或部分功能不得标记完成。
 
 ## 3. 角色定义
 
@@ -110,6 +111,7 @@ branch:   bug/BUG-039-qe-data-freshness
 - `git diff --check` 通过。
 - 所有改动文件都在 `allowed_write_scope` 内，或 issue 已更新 scope 并记录原因。
 - 已运行 issue 要求的测试。
+- 若 issue 或修复来源于设计方案，已提交设计验收矩阵：`design_item -> implementation_refs -> test_or_evidence -> status -> gap_or_exception`；缺项未获用户批准时不得进入 Review Ready。
 - PR title/body 引用 `BUG-NNN` 和 GitHub Issue。
 - BUG JSON 中的 `github_issue_number` / `github_issue_url` 与 PR 引用的 GitHub Issue 一致。
 - 明确声明是否触碰生产 `8001/3000`、DB 写入、migration、QMT、Paper live runtime。
@@ -141,6 +143,7 @@ PR 合入后，BUG 可以标记为 `fixed`，但不能直接视为 `verified`。
 关闭前必须满足：
 
 - closure requirements 全部完成。
+- 已复核 DESIGN-COMPLIANCE-001，没有未经用户批准的简化、子集、POC、占位、mock-only 或部分功能交付。
 - GitHub Issue 与 BUG JSON 状态同步；若两边不一致，先修复同步状态再关闭。
 - 无未提交的 source-of-truth JSON 修改。
 - 如果需要生产同步，已明确由谁执行、何时执行、是否完成。

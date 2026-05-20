@@ -298,6 +298,17 @@ rules:
     layer: frontend_common
     risk_level: medium
     ownership_reason: Shared frontend files affect multiple UI modules.
+  - rule_id: codex_project_instructions
+    priority: 85
+    include:
+      - AGENTS.override.md
+      - docs/codex_project_memory.md
+      - .codex/skills/verify-aistock-feature/**
+    primary_module: docs.standards
+    impact_modules: [validation.guardrails, validation.module_quality]
+    layer: docs
+    risk_level: medium
+    ownership_reason: Codex project instructions and validation skills make development standards discoverable to Codex App and CLI sessions.
   - rule_id: docs_architecture
     priority: 50
     include:

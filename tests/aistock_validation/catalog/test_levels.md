@@ -19,3 +19,5 @@ required and must not be treated as business-validation authority.
 - Historical L3/L4 records are reference evidence only. High-risk changes must rerun relevant paths on the current commit and current controlled assets.
 - Run metadata should include `pass_scope` and `business_assertion`; when they are absent, Validation Center must show the success scope as unproven rather than infer it.
 - Production backend `8001` must not be restarted or touched by validation unless the user explicitly authorizes a production validation window.
+
+- Passing L0-L5 does not prove design completeness by itself. Design-driven work needs an item-by-item design compliance matrix with real evidence for every approved requirement; missing coverage is a validation gap, not a pass.

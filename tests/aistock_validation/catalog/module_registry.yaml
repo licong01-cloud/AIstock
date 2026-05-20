@@ -292,8 +292,8 @@ modules:
     parent_module: validation
     module_type: cross_cutting
     risk_level: high
-    description: Development standards guardrails, changed-file gates, and baseline scans.
-    description_zh: 覆盖开发规范 guardrail、变更文件扫描、基线问题识别和高风险规则阻断。
+    description: Development standards guardrails, design-compliance review controls, changed-file gates, and baseline scans.
+    description_zh: 覆盖开发规范 guardrail、设计方案完整实现复核、变更文件扫描、基线问题识别和高风险规则阻断。
     test_plans:
       required_on_change: [l0, guardrail_changed_files]
   - module_id: validation.module_quality
@@ -376,8 +376,8 @@ modules:
     parent_module: docs
     module_type: docs
     risk_level: medium
-    description: Human-readable and machine-readable development standards.
-    description_zh: 覆盖人类可读和机器可读开发规范、目录规范、guardrail 规则和历史版本。
+    description: Human-readable and machine-readable development standards, including design-compliance delivery rules.
+    description_zh: 覆盖人类可读和机器可读开发规范、设计方案完整实现复核、目录规范、guardrail 规则和历史版本。
   - module_id: docs.analysis
     display_name: Analysis docs
     parent_module: docs
