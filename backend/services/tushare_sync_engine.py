@@ -8,12 +8,14 @@ from __future__ import annotations
 import datetime as dt
 import importlib
 import json
+import logging
 import os
 import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+import psycopg2
 import psycopg2.extras as pgx
 
 from ..db.pg_pool import get_conn
@@ -33,6 +35,7 @@ FINANCIAL_EVENT_RAW_DATASETS = {
     "tushare_fina_indicator_raw": "fina_indicator",
 }
 ZERO_ROW_VALID_DATASETS = {"suspend_d", "stock_st", "stock_st_events", *FINANCIAL_EVENT_RAW_DATASETS}
+_logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -667,11 +670,8 @@ class TushareSyncEngine:
     def _target_repo_or_none(self) -> DataSyncTargetRepository | None:
         if self._target_repo is not None:
             return self._target_repo
-        try:
-            self._target_repo = DataSyncTargetRepository()
-            return self._target_repo
-        except Exception:
-            return None
+        self._target_repo = DataSyncTargetRepository()
+        return self._target_repo
 
     def _upsert_sync_target(
         self,
@@ -696,7 +696,8 @@ class TushareSyncEngine:
                 )
             )
             return str(row.get("target_id") or "") or None
-        except Exception:
+        except (psycopg2.Error, RuntimeError, ValueError) as exc:
+            _logger.warning("data sync target: failed to persist target for %s/%s: %s", spec.name, target_date, exc)
             return None
 
     def _record_sync_attempt(
@@ -729,7 +730,8 @@ class TushareSyncEngine:
                     context_json=context or {},
                 )
             )
-        except Exception:
+        except (psycopg2.Error, RuntimeError, ValueError) as exc:
+            _logger.warning("data sync target: failed to record attempt for %s: %s", target_id, exc)
             return
 
     def _seed_missing_audit_from_physical(
@@ -1187,13 +1189,14 @@ class TushareSyncEngine:
                 try:
                     with get_conn() as conn:
                         job_id = self._create_job(conn, mode, {"dataset": spec.name, "mode": mode})
-                except Exception:
+                except (psycopg2.Error, RuntimeError, ValueError) as job_exc:
+                    _logger.warning("tushare sync: failed to create failure job for %s: %s", spec.name, job_exc)
                     job_id = uuid.uuid4()
             try:
                 with get_conn() as conn:
                     self._finish_job(conn, job_id, "failed", {"error": str(exc)})
-            except Exception:
-                pass
+            except (psycopg2.Error, RuntimeError, ValueError) as finish_exc:
+                _logger.warning("tushare sync: failed to mark failure job %s for %s: %s", job_id, spec.name, finish_exc)
             print(f"[ERROR] {spec.name} failed before sync: {exc}")
             return SyncResult(dataset=spec.name, mode=mode, job_id=job_id, error=str(exc))
 

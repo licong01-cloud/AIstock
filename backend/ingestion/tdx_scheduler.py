@@ -574,7 +574,7 @@ class TDXScheduler:
                     continue
                 try:
                     uuid.UUID(str(schedule_id))
-                except Exception:
+                except ValueError:
                     continue
                 try:
                     self._execute(
@@ -1233,7 +1233,7 @@ class TDXScheduler:
             if raw:
                 try:
                     return dt.date.fromisoformat(str(raw))
-                except Exception:
+                except ValueError:
                     continue
         rows = self._fetchall(
             "SELECT MAX(cal_date) AS latest FROM market.trading_calendar WHERE is_trading = TRUE AND cal_date <= CURRENT_DATE"
@@ -1244,7 +1244,7 @@ class TDXScheduler:
         if value:
             try:
                 return dt.date.fromisoformat(str(value))
-            except Exception:
+            except ValueError:
                 return None
         return None
 

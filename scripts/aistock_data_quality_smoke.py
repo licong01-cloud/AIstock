@@ -228,7 +228,7 @@ def _git_common_env_candidates(repo_root: Path) -> list[Path]:
             text=True,
             encoding="utf-8",
         ).strip()
-    except Exception:
+    except (subprocess.CalledProcessError, OSError, UnicodeError):
         return []
     common_dir = Path(output)
     if common_dir.name == ".git":

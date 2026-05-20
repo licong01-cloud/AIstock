@@ -1,0 +1,69 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-089",
+  "title": "CI l0 guardrail blocks data-sync autonomy main merge",
+  "description": "GitHub Actions AIstock CI failed after the data-sync autonomy main merge because nox -s l0 reported HIGH SILENT_EMPTY_SUCCESS findings in data-sync env/retry helper code.",
+  "module": "validation_center",
+  "severity": "P1",
+  "risk_area": "ci_guardrail",
+  "status": "in_progress",
+  "github_issue_number": 118,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/118",
+  "trigger_condition": {
+    "scenario": "post_main_merge_ci_failure",
+    "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/26167818685",
+    "head_sha": "3b7164ce6e91f1737d9efea6b9cb4e2b02ac5687",
+    "files": [
+      "scripts/aistock_data_quality_smoke.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/ingestion/tdx_scheduler.py"
+    ]
+  },
+  "reproduce_command": "python -m nox -s l0",
+  "failing_run_id": "https://github.com/licong01-cloud/AIstock/actions/runs/26167818685",
+  "evidence_uris": [
+    "file:scripts/aistock_data_quality_smoke.py",
+    "file:backend/services/tushare_sync_engine.py",
+    "file:backend/ingestion/tdx_scheduler.py"
+  ],
+  "fingerprint": "ci-l0-data-sync-silent-empty-success-20260520",
+  "assigned_agent": "codex-app",
+  "fix_branch": "main",
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-20T14:09:34Z",
+  "first_seen_at": "2026-05-20T14:09:34Z",
+  "last_seen_at": "2026-05-20T14:09:34Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-20T14:09:34Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "scripts/aistock_data_quality_smoke.py",
+    "backend/services/tushare_sync_engine.py",
+    "backend/ingestion/tdx_scheduler.py",
+    "tests/aistock_validation/bugs/20260520_BUG-089-ci-l0-guardrail-blocks-data-sync-autonomy-main-merge.json"
+  ],
+  "suspected_modules": [
+    "scripts/aistock_data_quality_smoke.py",
+    "backend/services/tushare_sync_engine.py",
+    "backend/ingestion/tdx_scheduler.py"
+  ],
+  "required_verification": [
+    "python -m nox -s l0",
+    "python -m nox -s data_sync_autonomy_backend",
+    "python -m nox -s local_data_management_audit",
+    "git diff --check"
+  ],
+  "closure_requirements": [
+    "GitHub Actions AIstock CI no longer fails on HIGH SILENT_EMPTY_SUCCESS findings from the data-sync autonomy merge.",
+    "GitHub issue #118 receives fix commit and validation evidence."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-20T14:09:34Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Discovered from GitHub Actions AIstock CI run 26167818685 after pushing main merge 3b7164c."
+    }
+  ]
+}
