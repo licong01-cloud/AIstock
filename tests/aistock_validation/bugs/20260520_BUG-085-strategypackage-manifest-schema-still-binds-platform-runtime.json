@@ -65,11 +65,11 @@
     "github_issue_url":  "https://github.com/licong01-cloud/AIstock/issues/107",
     "assigned_agent":  "codex-app",
     "fix_branch":  "bug/BUG-085-strategy-package-alpha-core",
-    "fix_commit":  null,
+    "fix_commit":  "101501040070c8f720016dfc28a597b1743bd896",
     "verification_run_id":  "tests/aistock_validation/history/paper_v2/BUG-085-strategy-package-alpha-core-validation-20260520.md",
     "created_at":  "2026-05-20T04:32:40Z",
     "first_seen_at":  "2026-05-20T04:32:40Z",
-    "last_seen_at":  "2026-05-20T09:55:45Z",
+    "last_seen_at":  "2026-05-20T10:00:26Z",
     "fixed_at":  "2026-05-20T09:55:45Z",
     "submitted_at":  "2026-05-20T04:32:40Z",
     "closed_at":  null,
@@ -187,6 +187,12 @@
                        "actor":  "codex-app",
                        "action":  "fixed_pending_review",
                        "note":  "Implemented alpha-core manifest boundary and completed local backend/guardrail validation; evidence recorded at tests/aistock_validation/history/paper_v2/BUG-085-strategy-package-alpha-core-validation-20260520.md."
+                   },
+                   {
+                       "timestamp":  "2026-05-20T10:00:26Z",
+                       "actor":  "codex-app",
+                       "action":  "fix_commit_recorded",
+                       "note":  "Fix committed locally as 101501040070c8f720016dfc28a597b1743bd896 on branch bug/BUG-085-strategy-package-alpha-core after backend/guardrail validation."
                    }
                ]
 }
