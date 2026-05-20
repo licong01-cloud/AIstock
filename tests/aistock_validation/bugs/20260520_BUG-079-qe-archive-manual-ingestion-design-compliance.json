@@ -6,7 +6,7 @@
   "module": "qe_archive",
   "severity": "P1",
   "risk_area": "feature_gap",
-  "status": "open",
+  "status": "fixed",
   "trigger_condition": {
     "scenario": "qe_archive_manual_ingestion_ui_and_mcp_design_gap",
     "design_doc": "docs/architecture/qe_archive_manual_ingestion_selection_design_20260519.md",
@@ -39,12 +39,12 @@
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/106",
   "assigned_agent": "codex-app",
   "fix_branch": "bug/BUG-079-qe-archive-design-compliance",
-  "fix_commit": null,
-  "verification_run_id": null,
+  "fix_commit": "a4c8ec2143e855e229ddf002dfb1127d480adfa1",
+  "verification_run_id": "qe_archive_l3_20260520_130302;qe_mcp_l3_20260520_125902",
   "created_at": "2026-05-20T04:26:11Z",
   "first_seen_at": "2026-05-20T04:26:11Z",
-  "last_seen_at": "2026-05-20T04:26:11Z",
-  "fixed_at": null,
+  "last_seen_at": "2026-05-20T05:10:41Z",
+  "fixed_at": "2026-05-20T05:10:41Z",
   "submitted_at": "2026-05-20T04:26:11Z",
   "closed_at": null,
   "allowed_write_scope": [
@@ -117,6 +117,12 @@
       "actor": "codex-app",
       "action": "fix_started",
       "note": "Dedicated worktree F:/Dev/AIstock_worktrees/bug-079-qe-archive-design-compliance on branch bug/BUG-079-qe-archive-design-compliance."
+    },
+    {
+      "timestamp": "2026-05-20T05:10:41Z",
+      "actor": "codex-app",
+      "action": "fixed_pending_merge_review",
+      "note": "Implemented full design-compliance repair for QE Archive manual ingestion UI/API/MCP, added design matrix and validation evidence. Implementation commit a4c8ec2143e855e229ddf002dfb1127d480adfa1."
     }
   ]
 }

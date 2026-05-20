@@ -1,8 +1,8 @@
 ﻿# BUG-079 QE Archive 手动入仓设计符合性复核矩阵
 
-日期：2026-05-20  
-分支：`bug/BUG-079-qe-archive-design-compliance`  
-设计文档：`docs/architecture/qe_archive_manual_ingestion_selection_design_20260519.md`  
+日期：2026-05-20
+分支：`bug/BUG-079-qe-archive-design-compliance`
+设计文档：`docs/architecture/qe_archive_manual_ingestion_selection_design_20260519.md`
 治理规则：`DESIGN-COMPLIANCE-001`，禁止简化版、子集版、POC 版或仅后端占位交付。
 
 ## 1. 设计项到实现证据
