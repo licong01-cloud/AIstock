@@ -6,7 +6,7 @@
   "module": "qmt_strategy_ledger",
   "severity": "P0",
   "risk_area": "trading_daily_selection_lifecycle",
-  "status": "in_progress",
+  "status": "fixed",
   "trigger_condition": {
     "scenario": "paper_v2_boundary_audit_20260520_and_github_issue_109",
     "files": [
@@ -29,12 +29,12 @@
   "assigned_agent": "codex-app",
   "fix_branch": "bug/BUG-087-miniqmt-daily-selection-lifecycle",
   "worktree_path": "F:/Dev/AIstock_worktrees/bug-087-miniqmt-daily-selection-lifecycle",
-  "fix_commit": null,
-  "verification_run_id": null,
+  "fix_commit": "c38b7d057d7cb22805247b29e80182e0156a4d13",
+  "verification_run_id": "tests/aistock_validation/history/qmt_strategy_ledger/BUG-087-miniqmt-daily-selection-lifecycle-validation-20260520.md",
   "created_at": "2026-05-20T00:00:00Z",
   "first_seen_at": "2026-05-20T00:00:00Z",
   "last_seen_at": "2026-05-20T00:00:00Z",
-  "fixed_at": null,
+  "fixed_at": "2026-05-20T00:00:00Z",
   "submitted_at": "2026-05-20T00:00:00Z",
   "closed_at": null,
   "allowed_write_scope": [
@@ -83,6 +83,12 @@
       "actor": "codex-app",
       "action": "claimed",
       "note": "Claimed in independent worktree F:/Dev/AIstock_worktrees/bug-087-miniqmt-daily-selection-lifecycle on branch bug/BUG-087-miniqmt-daily-selection-lifecycle. MCP BUG sync is blocked by unrelated BOM JSON in another worktree, so GitHub CLI is used for live issue sync."
+    },
+    {
+      "timestamp": "2026-05-20T00:00:00Z",
+      "actor": "codex-app",
+      "action": "fixed_local",
+      "note": "Implemented daily MiniQMT selection evidence table/repository lifecycle and order-build fail-fast checks. Validation passed: qmt_strategy_ledger 89 passed; minqmt/runtime focused 67 passed; selection_center+strategy_package 221 passed; nox paper_v2_backend 443 passed, 1 skipped, 2 xfailed; guardrail_changed_files and l0 successful; git diff --check passed with CRLF warnings only."
     }
   ],
   "github_issue_number": 109,
