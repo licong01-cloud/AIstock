@@ -1,0 +1,110 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-075",
+  "title": "Validation Center data_sync_autonomy_backend plan can fail when runtime catalog lacks matching allowlist entry",
+  "description": "Expected: Validation Center should only expose runnable plans whose command_key exists in the runtime backend allowlist, and the data_sync_autonomy_backend plan added by this feature must load without a non-allowlisted command_key error after deployment.\nActual: Validation Center page shows: Validation Center Error: Validation plan data_sync_autonomy_backend uses non-allowlisted command_key='nox_data_sync_autonomy_backend'. The plan was introduced by the data-sync autonomy feature, so a mixed deployment or missing runtime allowlist blocks the Validation Center page.",
+  "module": "local_data_management",
+  "severity": "P1",
+  "risk_area": "unspecified",
+  "status": "fixed",
+  "trigger_condition": {
+    "scenario": "reported_via_mcp",
+    "files": [
+      "backend/services/validation/plan_catalog.py",
+      "tests/aistock_validation/catalog/test_plans.yaml",
+      "backend/tests/test_validation_center_api.py",
+      "backend/tests/test_validation_execution_runner.py",
+      "tests/aistock_validation/modules/local_data_management.md"
+    ]
+  },
+  "reproduce_command": "Open Validation Center against a runtime checkout that includes tests/aistock_validation/catalog/test_plans.yaml plan_key=data_sync_autonomy_backend but whose loaded backend/services/validation/plan_catalog.py lacks ALLOWED_COMMAND_KEYS['nox_data_sync_autonomy_backend']; or start the validation API and request /api/v1/validation/plans.",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:backend/services/validation/plan_catalog.py",
+    "file:tests/aistock_validation/catalog/test_plans.yaml",
+    "file:backend/tests/test_validation_center_api.py",
+    "file:backend/tests/test_validation_execution_runner.py",
+    "file:tests/aistock_validation/modules/local_data_management.md"
+  ],
+  "fingerprint": "93ed0c9a9d6222c7",
+  "assigned_agent": "codex-app",
+  "fix_branch": "feature/data-sync-autonomy-20260519-impl",
+  "fix_commit": "88451e0",
+  "verification_run_id": "tests/aistock_validation/history/local_data_management/20260519_data_sync_autonomy_l2.md",
+  "created_at": "2026-05-19T17:28:03Z",
+  "first_seen_at": "2026-05-19T17:28:03Z",
+  "last_seen_at": "2026-05-19T18:18:51Z",
+  "fixed_at": "2026-05-19T18:18:51Z",
+  "submitted_at": "2026-05-19T17:28:03Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/validation/plan_catalog.py",
+    "tests/aistock_validation/catalog/test_plans.yaml",
+    "backend/tests/test_validation_center_api.py",
+    "backend/tests/test_validation_execution_runner.py",
+    "tests/aistock_validation/modules/local_data_management.md",
+    "scripts/aistock_data_quality_smoke.py",
+    "noxfile.py",
+    "backend/tests/test_data_quality_smoke_env.py",
+    "tests/aistock_validation/history/local_data_management/20260519_data_sync_autonomy_l2.md"
+  ],
+  "suspected_modules": [
+    "backend/services/validation/plan_catalog.py",
+    "tests/aistock_validation/catalog/test_plans.yaml",
+    "backend/tests/test_validation_center_api.py",
+    "backend/tests/test_validation_execution_runner.py",
+    "tests/aistock_validation/modules/local_data_management.md",
+    "scripts/aistock_data_quality_smoke.py",
+    "noxfile.py",
+    "backend/tests/test_data_quality_smoke_env.py",
+    "tests/aistock_validation/history/local_data_management/20260519_data_sync_autonomy_l2.md"
+  ],
+  "required_verification": [
+    "python -m compileall scripts/aistock_data_quality_smoke.py noxfile.py backend/services/validation/plan_catalog.py",
+    "python -m pytest backend/tests/test_validation_center_api.py backend/tests/test_validation_execution_runner.py backend/tests/test_data_quality_smoke_env.py backend/tests/test_data_sync_targets.py backend/tests/test_dataset_refresh_audit.py -q -p no:cacheprovider",
+    "python -m nox -s data_sync_autonomy_backend",
+    "python -m nox -s local_data_management_audit",
+    "git diff --check",
+    "git merge-tree --write-tree origin/main HEAD"
+  ],
+  "closure_requirements": [
+    "Default ValidationPlanCatalog loads data_sync_autonomy_backend without non-allowlisted command_key errors.",
+    "ValidationExecutionRunner only executes the allowlisted nox session for data_sync_autonomy_backend and never arbitrary shell.",
+    "Independent worktree validation loads configured .env and uses TDX_DB_DEV_* for read-only dev DB smoke; offline fallback is only a CI/fresh-host fallback.",
+    "GitHub issue #93 receives the fix commit and validation evidence before Main merge review."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-19T17:28:03Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Reported via aistock_mcp_server.report_bug. Comments: 2"
+    },
+    {
+      "timestamp": "2026-05-19T17:28:03Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Related to current feature branch feature/data-sync-autonomy-20260519-impl. The branch already contains the allowlist mapping, but the observed page error is directly related to the newly introduced data_sync_autonomy_backend plan and must be tracked before Main review."
+    },
+    {
+      "timestamp": "2026-05-19T17:28:03Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Fix should preserve the Validation Center no-arbitrary-shell contract: never run command_key values not present in backend ALLOWED_COMMAND_KEYS."
+    },
+    {
+      "timestamp": "2026-05-19T17:28:10Z",
+      "actor": "codex-app",
+      "action": "assigned",
+      "note": "Fixing in the existing data-sync autonomy feature worktree because the issue is directly introduced by the new plan/allowlist slice."
+    },
+    {
+      "timestamp": "2026-05-19T18:18:51Z",
+      "actor": "codex-app",
+      "action": "fixed",
+      "note": "Fixed by commit 88451e0: default catalog regression, controlled runner regression, env/dev-DB smoke loading, nox coverage, dev DB schema verification, and merge-tree preview all passed."
+    }
+  ],
+  "github_issue_number": 93,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/93"
+}

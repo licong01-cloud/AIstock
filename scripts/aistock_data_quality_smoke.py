@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, time, timedelta
@@ -14,6 +15,14 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+DEV_DB_KEYS = {
+    "TDX_DB_DEV_HOST": "TDX_DB_HOST",
+    "TDX_DB_DEV_PORT": "TDX_DB_PORT",
+    "TDX_DB_DEV_NAME": "TDX_DB_NAME",
+    "TDX_DB_DEV_USER": "TDX_DB_USER",
+    "TDX_DB_DEV_PASSWORD": "TDX_DB_PASSWORD",
+}
 
 DATASET_CLOSE_READY_AFTER = time(20, 0)
 DATASET_AUDIT_REQUIRED_COLUMNS = {
@@ -34,6 +43,53 @@ DATASET_AUDIT_REQUIRED_COLUMNS = {
     "failure_category",
 }
 
+DATA_SYNC_SCHEMA_REQUIRED_COLUMNS = {
+    "data_sync_targets": {
+        "target_id",
+        "dataset",
+        "data_source",
+        "target_date",
+        "target_scope",
+        "target_key_sha256",
+        "target_status",
+        "priority",
+        "required_before",
+        "next_retry_at",
+        "expected_rows",
+        "observed_rows",
+        "data_max_at",
+        "attempt_count",
+        "last_attempt_id",
+        "last_attempt_status",
+        "last_error_message",
+        "metadata",
+        "created_at",
+        "updated_at",
+        "reconciled_at",
+        "blocked_at",
+    },
+    "data_sync_attempts": {
+        "attempt_id",
+        "target_id",
+        "attempt_no",
+        "status",
+        "trigger_source",
+        "worker_id",
+        "run_id",
+        "job_id",
+        "started_at",
+        "finished_at",
+        "rows_written",
+        "rows_observed",
+        "coverage_ratio",
+        "data_max_at",
+        "error_message",
+        "retry_after",
+        "context_json",
+        "created_at",
+    },
+}
+
 
 @dataclass
 class CheckResult:
@@ -47,14 +103,143 @@ class CheckResult:
         return self.status in {"PASS", "WARN"}
 
 
+def _read_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8", errors="ignore")
+
+
+def _comment_review_result(
+    *,
+    name: str,
+    table: str,
+    required_columns: set[str],
+    sources: list[Path],
+) -> CheckResult:
+    missing_fragments: list[str] = []
+    for source in sources:
+        text = _read_text(source)
+        if f"COMMENT ON TABLE {table}" not in text:
+            missing_fragments.append(f"{source.relative_to(ROOT)}:COMMENT ON TABLE {table}")
+        for column in sorted(required_columns):
+            needle = f"COMMENT ON COLUMN {table}.{column}"
+            if needle not in text:
+                missing_fragments.append(f"{source.relative_to(ROOT)}:{needle}")
+
+    context = {
+        "table": table,
+        "required_columns": sorted(required_columns),
+        "sources": [str(source.relative_to(ROOT)) for source in sources],
+        "missing_fragments": missing_fragments,
+    }
+    if missing_fragments:
+        return CheckResult(
+            name=name,
+            status="FAIL",
+            message=f"{table} static DDL/comment review failed",
+            context=context,
+        )
+    return CheckResult(
+        name=name,
+        status="PASS",
+        message=f"{table} static DDL/comment review passed",
+        context=context,
+    )
+
+
+def run_static_audit_schema_review(db_error: str | None = None) -> list[CheckResult]:
+    """Validate schema/comment intent from reviewed DDL without touching a DB."""
+
+    results: list[CheckResult] = []
+    if db_error:
+        results.append(
+            CheckResult(
+                name="offline_schema_review",
+                status="WARN",
+                message="database schema smoke was unavailable; using static DDL review without connecting to the database",
+                context={"db_error": db_error},
+            )
+        )
+    init_schema = ROOT / "backend/db/init_trading_core_v2_schema.py"
+    results.append(
+        _comment_review_result(
+            name="dataset_refresh_audit_static_schema",
+            table="market.dataset_date_refresh_audit",
+            required_columns=DATASET_AUDIT_REQUIRED_COLUMNS,
+            sources=[
+                ROOT / "backend/migrations/dataset_refresh_audit_enhancement_20260505.sql",
+                init_schema,
+            ],
+        )
+    )
+    for table_name, required_columns in DATA_SYNC_SCHEMA_REQUIRED_COLUMNS.items():
+        results.append(
+            _comment_review_result(
+                name=f"{table_name}_static_schema",
+                table=f"market.{table_name}",
+                required_columns=required_columns,
+                sources=[
+                    ROOT / "backend/migrations/data_sync_targets_20260519.sql",
+                    init_schema,
+                ],
+            )
+        )
+    return results
+
+
+def _is_db_unavailable_error(exc: BaseException) -> bool:
+    if any(cls.__name__ == "OperationalError" for cls in type(exc).mro()):
+        return True
+    message = str(exc).lower()
+    return any(
+        marker in message
+        for marker in (
+            "connection refused",
+            "could not connect",
+            "fe_sendauth",
+            "no password supplied",
+            "server closed the connection",
+        )
+    )
+
 class SmokeFailure(RuntimeError):
     pass
 
 
-def _load_dotenv() -> None:
-    env_path = ROOT / ".env"
-    if not env_path.exists():
-        return
+def _discover_env_file(explicit_path: Path | None = None) -> Path | None:
+    if explicit_path is not None:
+        candidate = explicit_path.expanduser()
+        if not candidate.exists():
+            raise SmokeFailure(f"explicit env file does not exist: {candidate}")
+        return candidate
+    env_file = os.getenv("AISTOCK_ENV_FILE")
+    if env_file:
+        candidate = Path(env_file).expanduser()
+        if not candidate.exists():
+            raise SmokeFailure(f"AISTOCK_ENV_FILE does not exist: {candidate}")
+        return candidate
+    candidates = [ROOT / ".env", *_git_common_env_candidates(ROOT)]
+    return next((candidate for candidate in candidates if candidate.exists()), None)
+
+
+def _git_common_env_candidates(repo_root: Path) -> list[Path]:
+    try:
+        output = subprocess.check_output(
+            ["git", "-C", str(repo_root), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+        ).strip()
+    except Exception:
+        return []
+    common_dir = Path(output)
+    if common_dir.name == ".git":
+        return [common_dir.parent / ".env"]
+    return []
+
+
+def _load_dotenv(env_file: Path | None = None) -> Path | None:
+    env_path = _discover_env_file(env_file)
+    if env_path is None:
+        return None
     for raw_line in env_path.read_text(encoding="utf-8", errors="ignore").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
@@ -62,8 +247,41 @@ def _load_dotenv() -> None:
         key, value = line.split("=", 1)
         key = key.strip()
         value = value.strip().strip('"').strip("'")
-        if key and key not in os.environ:
+        if key and (key not in os.environ or os.environ.get(key) == ""):
             os.environ[key] = value
+    return env_path
+
+
+def _db_target_context(*, source: str, env_file: Path | None = None) -> dict[str, Any]:
+    return {
+        "source": source,
+        "env_file": str(env_file) if env_file else None,
+        "host": os.getenv("TDX_DB_HOST") or None,
+        "port": os.getenv("TDX_DB_PORT") or None,
+        "dbname": os.getenv("TDX_DB_NAME") or None,
+        "user": os.getenv("TDX_DB_USER") or None,
+        "password_configured": bool(os.getenv("TDX_DB_PASSWORD")),
+    }
+
+
+def _apply_dev_db_env(env_file: Path | None = None) -> dict[str, Any]:
+    missing = [key for key in DEV_DB_KEYS if not os.getenv(key)]
+    if missing:
+        raise SmokeFailure(
+            "dev DB environment is incomplete; missing "
+            + ", ".join(missing)
+            + ". Set AISTOCK_ENV_FILE or pass --env-file so TDX_DB_DEV_* can be loaded."
+        )
+    port = int(os.environ["TDX_DB_DEV_PORT"])
+    dbname = os.environ["TDX_DB_DEV_NAME"]
+    if port != 5433 or "dev" not in dbname.lower():
+        raise SmokeFailure(
+            "refusing to map TDX_DB_DEV_* to TDX_DB_* because the target is not the local dev DB "
+            f"(port={port}, dbname={dbname!r})"
+        )
+    for dev_key, runtime_key in DEV_DB_KEYS.items():
+        os.environ[runtime_key] = os.environ[dev_key]
+    return _db_target_context(source="tdx_db_dev", env_file=env_file)
 
 
 def _json_safe(value: Any) -> Any:
@@ -86,8 +304,15 @@ class DataQualitySmoke:
         portfolio_ids: list[str] | None = None,
         strict_history: bool = False,
         audit_schema_only: bool = False,
+        env_file: Path | None = None,
+        use_dev_db: bool = False,
     ) -> None:
-        _load_dotenv()
+        self.loaded_env_file = _load_dotenv(env_file)
+        self.db_target = (
+            _apply_dev_db_env(self.loaded_env_file)
+            if use_dev_db
+            else _db_target_context(source="tdx_db", env_file=self.loaded_env_file)
+        )
         from backend.db.pg_pool import get_conn
 
         self._get_conn = get_conn
@@ -104,6 +329,7 @@ class DataQualitySmoke:
             with conn.cursor() as cur:
                 if self.audit_schema_only:
                     self._check_dataset_audit_schema(cur)
+                    self._check_data_sync_target_schema(cur)
                     return self.results
                 self._check_required_tables(cur)
                 self._check_dataset_audit_schema(cur)
@@ -246,11 +472,99 @@ class DataQualitySmoke:
             "missing_columns": missing,
             "uncommented_columns": uncommented,
             "has_table_comment": bool(table_comment),
+            "db_target": self.db_target,
         }
         if missing or uncommented or not table_comment:
             self._fail("dataset_refresh_audit_schema", "dataset refresh audit table is missing required fields or comments", context)
         else:
             self._pass("dataset_refresh_audit_schema", "dataset refresh audit table has required fields and comments", context)
+
+    def _data_sync_tables_exist(self, cur: Any) -> bool:
+        cur.execute(
+            """
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = 'market'
+              AND table_name = ANY(%s)
+            """,
+            (sorted(DATA_SYNC_SCHEMA_REQUIRED_COLUMNS),),
+        )
+        present = {row[0] for row in cur.fetchall()}
+        missing = sorted(set(DATA_SYNC_SCHEMA_REQUIRED_COLUMNS) - present)
+        if missing:
+            self._warn(
+                "data_sync_target_schema_pending_migration",
+                "data sync target tables are not installed in this database yet; migration review is required before runtime rollout",
+                {"missing_tables": [f"market.{table}" for table in missing], "db_target": self.db_target},
+            )
+            return False
+        return True
+
+    def _check_data_sync_target_schema(self, cur: Any) -> None:
+        if not self._data_sync_tables_exist(cur):
+            return
+        for table_name, required_columns in DATA_SYNC_SCHEMA_REQUIRED_COLUMNS.items():
+            cur.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'market'
+                  AND table_name = %s
+                """,
+                (table_name,),
+            )
+            present = {row[0] for row in cur.fetchall()}
+            missing = sorted(required_columns - present)
+            cur.execute(
+                """
+                SELECT c.column_name, d.description
+                FROM information_schema.columns c
+                LEFT JOIN pg_catalog.pg_class cls
+                  ON cls.relname = c.table_name
+                LEFT JOIN pg_catalog.pg_namespace ns
+                  ON ns.oid = cls.relnamespace
+                 AND ns.nspname = c.table_schema
+                LEFT JOIN pg_catalog.pg_attribute a
+                  ON a.attrelid = cls.oid
+                 AND a.attname = c.column_name
+                LEFT JOIN pg_catalog.pg_description d
+                  ON d.objoid = cls.oid
+                 AND d.objsubid = a.attnum
+                WHERE c.table_schema = 'market'
+                  AND c.table_name = %s
+                """,
+                (table_name,),
+            )
+            column_comments = {row[0]: row[1] for row in cur.fetchall()}
+            uncommented = sorted(col for col in required_columns if not column_comments.get(col))
+            cur.execute(
+                """
+                SELECT d.description
+                FROM pg_catalog.pg_class cls
+                JOIN pg_catalog.pg_namespace ns ON ns.oid = cls.relnamespace
+                LEFT JOIN pg_catalog.pg_description d
+                  ON d.objoid = cls.oid
+                 AND d.objsubid = 0
+                WHERE ns.nspname = 'market'
+                  AND cls.relname = %s
+                """,
+                (table_name,),
+            )
+            row = cur.fetchone()
+            table_comment = row[0] if row else None
+            context = {
+                "table": f"market.{table_name}",
+                "required_columns": sorted(required_columns),
+                "missing_columns": missing,
+                "uncommented_columns": uncommented,
+                "has_table_comment": bool(table_comment),
+                "db_target": self.db_target,
+            }
+            check_name = f"{table_name}_schema"
+            if missing or uncommented or not table_comment:
+                self._fail(check_name, f"market.{table_name} is missing required fields or comments", context)
+            else:
+                self._pass(check_name, f"market.{table_name} has required fields and comments", context)
 
     def _latest_trading_day(self, cur: Any) -> date:
         as_of_date = self._latest_completed_market_date()
@@ -557,6 +871,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--portfolio-id", action="append", dest="portfolio_ids", help="Only inspect Paper v2 runs for this portfolio_id; repeatable. Ledger violations are fatal in this scoped mode.")
     parser.add_argument("--strict-history", action="store_true", help="Treat historical ledger consistency warnings as failures.")
     parser.add_argument("--audit-schema-only", action="store_true", help="Only validate market.dataset_date_refresh_audit fields/comments.")
+    parser.add_argument("--offline-schema-review", action="store_true", help="Validate reviewed DDL/comments without opening a database connection.")
+    parser.add_argument("--env-file", help="Explicit .env path to load before reading DB variables.")
+    parser.add_argument("--use-dev-db", action="store_true", help="Use TDX_DB_DEV_* from the loaded env as the read-only DB target.")
+    parser.add_argument("--allow-offline-schema-review", action="store_true", help="Fall back to static DDL/comment review when audit-schema-only cannot connect to the database.")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     parser.add_argument("--output", help="Optional JSON output path for validation evidence.")
     return parser
@@ -564,15 +882,25 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
-    smoke = DataQualitySmoke(
-        max_recent_runs=args.max_recent_runs,
-        since_hours=args.since_hours,
-        portfolio_name_prefix=args.portfolio_name_prefix,
-        portfolio_ids=args.portfolio_ids,
-        strict_history=args.strict_history,
-        audit_schema_only=args.audit_schema_only,
-    )
-    results = smoke.run()
+    if args.offline_schema_review:
+        results = run_static_audit_schema_review()
+    else:
+        try:
+            smoke = DataQualitySmoke(
+                max_recent_runs=args.max_recent_runs,
+                since_hours=args.since_hours,
+                portfolio_name_prefix=args.portfolio_name_prefix,
+                portfolio_ids=args.portfolio_ids,
+                strict_history=args.strict_history,
+                audit_schema_only=args.audit_schema_only,
+                env_file=Path(args.env_file) if args.env_file else None,
+                use_dev_db=args.use_dev_db,
+            )
+            results = smoke.run()
+        except Exception as exc:
+            if not (args.audit_schema_only and args.allow_offline_schema_review and _is_db_unavailable_error(exc)):
+                raise
+            results = run_static_audit_schema_review(db_error=str(exc))
     payload = {
         "ok": all(item.passed for item in results),
         "scope": args.scope,
