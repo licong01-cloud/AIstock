@@ -818,6 +818,241 @@ export type ValidationAutomationSummary = JsonObject & {
   reason_codes?: string[];
 };
 
+export type ValidationDiscoverySummaryCard = JsonObject & {
+  card_id: string;
+  title: string;
+  value?: string | number | boolean | null;
+  hint?: string;
+  tone?: string;
+  filter?: string;
+};
+
+export type ValidationDiscoveryRun = JsonObject & {
+  run_id?: string;
+  title?: string;
+  branch?: string | null;
+  commit?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  status?: string | null;
+};
+
+export type ValidationDiscoveryModule = JsonObject & {
+  module_id: string;
+  display_name?: string;
+  status?: string;
+  coverage?: JsonObject;
+  candidate_count?: number;
+  p0_p1_count?: number;
+  issue_count?: number;
+  finding_count?: number;
+  workspace_changed_file_count?: number;
+  test_plans?: JsonObject;
+  candidates?: ValidationDiscoveryCandidate[];
+};
+
+export type ValidationDiscoveryTask = JsonObject & {
+  task_id: string;
+  title?: string;
+  source?: string;
+  module?: string;
+  risk_level?: string;
+  status?: string;
+  detectors?: string[];
+  resource_policy_id?: string;
+  requested_by?: string;
+  reason?: string;
+  cleanup_required?: boolean;
+  cleanup_status?: string;
+  created_at?: string;
+  updated_at?: string;
+  duration_ms?: number;
+  evidence_manifest_id?: string;
+  agent_runtime?: string;
+  agent_name?: string;
+  workspace?: string;
+  branch?: string;
+  result?: JsonObject;
+};
+
+export type ValidationDiscoveryExecutionNode = JsonObject & {
+  node_id: string;
+  label?: string;
+  status?: string;
+  duration_ms?: number;
+  children?: ValidationDiscoveryTask[];
+};
+
+export type ValidationDiscoveryCandidate = JsonObject & {
+  candidate_id: string;
+  source?: string;
+  source_id?: string;
+  title?: string;
+  module?: string;
+  severity?: string;
+  confidence?: number;
+  review_status?: string;
+  evidence_status?: string;
+  deterministic_status?: string;
+  github_issue_url?: string | null;
+  github_issue_number?: number | null;
+  evidence_types?: string[];
+  evidence_manifest_id?: string;
+  reproduce_command?: string | null;
+  recommended_action?: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+  llm_provider_declared?: string | null;
+  llm_model_declared?: string | null;
+  prompt_id?: string | null;
+  prompt_version?: string | number | null;
+  context_pack_id?: string | null;
+};
+
+export type ValidationDiscoveryNightlyReport = JsonObject & {
+  schema_version?: string;
+  report_id: string;
+  generated_at?: string;
+  run?: ValidationDiscoveryRun;
+  summary_cards?: ValidationDiscoverySummaryCard[];
+  modules?: ValidationDiscoveryModule[];
+  execution_tree?: ValidationDiscoveryExecutionNode[];
+  llm_summary?: JsonObject;
+  candidate_summary?: JsonObject & {
+    total?: number;
+    by_severity?: Record<string, number>;
+    by_review_status?: Record<string, number>;
+    needs_review?: number;
+  };
+  issue_sync?: JsonObject;
+  cleanup?: JsonObject;
+  evidence_manifest_id?: string;
+};
+
+export type ValidationDiscoveryNightlyReportSummary = JsonObject & {
+  report_id: string;
+  generated_at?: string;
+  run?: ValidationDiscoveryRun;
+  candidate_summary?: ValidationDiscoveryNightlyReport["candidate_summary"];
+  llm_summary?: JsonObject;
+  cleanup?: JsonObject;
+};
+
+export type ValidationDiscoveryLlmProfile = JsonObject & {
+  profile_id: string;
+  agent_role?: string;
+  provider_id?: string;
+  provider_status?: string;
+  model_id?: string;
+  prompt_id?: string;
+  prompt_version?: string | number | null;
+  prompt_management_url?: string;
+  model_config_url?: string;
+  temperature?: number;
+  max_tokens?: number;
+  enabled_for_nightly?: boolean;
+  enabled_for_manual_mcp?: boolean;
+  last_7_runs?: JsonObject;
+  secret_visible?: boolean;
+};
+
+export type ValidationDiscoveryLlmReport = JsonObject & {
+  report_id: string;
+  generated_at?: string;
+  profiles?: ValidationDiscoveryLlmProfile[];
+  traces?: JsonObject[];
+  draft_candidates?: ValidationDiscoveryCandidate[];
+  eval_summary?: JsonObject;
+  sensitive_payload_policy?: string;
+};
+
+export type ValidationDiscoveryEvidenceManifest = JsonObject & {
+  manifest_id?: string;
+  trace_id?: string;
+  task_id?: string;
+  generated_at?: string;
+  artifacts?: JsonObject[];
+  logs?: JsonObject[];
+  api_responses?: JsonObject[];
+  mcp_responses?: JsonObject[];
+  screenshots?: JsonObject[];
+  reproduce_command?: string | null;
+  sensitive_payload_policy?: string;
+};
+
+export type ValidationDiscoveryToolAdapter = JsonObject & {
+  adapter_id: string;
+  title?: string;
+  kind?: string;
+  status?: string;
+  config_path?: string;
+  dry_run_supported?: boolean;
+  writes_production?: boolean;
+  requires_confirm_for_write?: boolean;
+};
+
+export type ValidationDiscoveryReviewRequest = {
+  action: string;
+  reviewer?: string;
+  comment?: string;
+  evidence_checklist?: string[];
+};
+
+export type ValidationDiscoveryPromoteRequest = {
+  confirm_promote: string;
+  reviewer?: string;
+  comment?: string;
+  evidence_checklist?: string[];
+};
+
+export type ValidationDiscoveryTaskRequest = {
+  task_id?: string;
+  title?: string;
+  source?: string;
+  module?: string;
+  risk_level?: string;
+  detectors?: string[];
+  resource_policy_id?: string;
+  requested_by?: string;
+  reason?: string;
+  cleanup_required?: boolean;
+  confirm_schedule?: string;
+};
+
+export type ValidationDiscoveryRunTaskRequest = {
+  dry_run?: boolean;
+  confirm_run?: string;
+};
+
+export type ValidationDiscoveryAgentTaskRequest = {
+  agent_runtime?: string;
+  agent_name?: string;
+  workspace?: string;
+  branch?: string;
+  llm_provider_declared?: string;
+  llm_model_declared?: string;
+  prompt_id?: string;
+  prompt_version?: number;
+  context_pack_id?: string;
+  result_id?: string;
+  candidate_title?: string;
+  summary?: string;
+  confidence?: number;
+  requires_deterministic_verification?: boolean;
+  evidence_manifest_id?: string;
+  status?: string;
+};
+
+export type ValidationDiscoveryEvidenceRequest = {
+  evidence_manifest_id?: string;
+  artifacts?: JsonObject[];
+  logs?: JsonObject[];
+  api_responses?: JsonObject[];
+  mcp_responses?: JsonObject[];
+  screenshots?: JsonObject[];
+  reproduce_command?: string;
+};
+
 const API_BASE = (process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1").replace(/\/+$/, "");
 
 export class ValidationApiError extends Error {
@@ -1014,6 +1249,108 @@ export const validationApi = {
   },
   automationSummary(): Promise<ValidationAutomationSummary> {
     return unwrap<ValidationAutomationSummary>("/validation/automation/summary");
+  },
+  discoverySummary(): Promise<JsonObject> {
+    return unwrap<JsonObject>("/validation/discovery/summary");
+  },
+  discoveryNightlyReports(query: { limit?: number } = {}): Promise<ValidationPage<ValidationDiscoveryNightlyReportSummary>> {
+    return unwrap<ValidationPage<ValidationDiscoveryNightlyReportSummary>>(appendQuery("/validation/discovery/nightly-reports", query));
+  },
+  discoveryNightlyReport(reportId = "current"): Promise<ValidationDiscoveryNightlyReport> {
+    return unwrap<ValidationDiscoveryNightlyReport>(`/validation/discovery/nightly-reports/${encodeURIComponent(reportId)}`);
+  },
+  discoveryNightlyLlmReport(reportId = "current"): Promise<ValidationDiscoveryLlmReport> {
+    return unwrap<ValidationDiscoveryLlmReport>(`/validation/discovery/nightly-reports/${encodeURIComponent(reportId)}/llm`);
+  },
+  discoveryCandidates(query: { module?: string; severity?: string; review_status?: string; source?: string; search?: string; page?: number; page_size?: number } = {}): Promise<ValidationPage<ValidationDiscoveryCandidate>> {
+    return unwrap<ValidationPage<ValidationDiscoveryCandidate>>(appendQuery("/validation/discovery/candidates", query));
+  },
+  discoveryCandidate(candidateId: string): Promise<ValidationDiscoveryCandidate> {
+    return unwrap<ValidationDiscoveryCandidate>(`/validation/discovery/candidates/${encodeURIComponent(candidateId)}`);
+  },
+  reviewDiscoveryCandidate(candidateId: string, request: ValidationDiscoveryReviewRequest): Promise<JsonObject> {
+    return apiFetch<ValidationEnvelope<JsonObject>>(`/validation/discovery/candidates/${encodeURIComponent(candidateId)}/review`, {
+      method: "POST",
+      body: JSON.stringify(request),
+    }).then((response) => response.data);
+  },
+  promoteDiscoveryCandidate(candidateId: string, request: ValidationDiscoveryPromoteRequest): Promise<JsonObject> {
+    return apiFetch<ValidationEnvelope<JsonObject>>(`/validation/discovery/candidates/${encodeURIComponent(candidateId)}/promote`, {
+      method: "POST",
+      body: JSON.stringify(request),
+    }).then((response) => response.data);
+  },
+  discoveryTasks(query: { source?: string; status?: string; page?: number; page_size?: number } = {}): Promise<ValidationPage<ValidationDiscoveryTask>> {
+    return unwrap<ValidationPage<ValidationDiscoveryTask>>(appendQuery("/validation/discovery/tasks", query));
+  },
+  scheduleDiscoveryTask(request: ValidationDiscoveryTaskRequest): Promise<ValidationDiscoveryTask> {
+    return apiFetch<ValidationEnvelope<ValidationDiscoveryTask>>("/validation/discovery/tasks", {
+      method: "POST",
+      body: JSON.stringify(request),
+    }).then((response) => response.data);
+  },
+  runDiscoveryTask(taskId: string, request: ValidationDiscoveryRunTaskRequest): Promise<ValidationDiscoveryTask> {
+    return apiFetch<ValidationEnvelope<ValidationDiscoveryTask>>(`/validation/discovery/tasks/${encodeURIComponent(taskId)}/run`, {
+      method: "POST",
+      body: JSON.stringify(request),
+    }).then((response) => response.data);
+  },
+  cancelDiscoveryTask(taskId: string, reason?: string): Promise<ValidationDiscoveryTask> {
+    return apiFetch<ValidationEnvelope<ValidationDiscoveryTask>>(`/validation/discovery/tasks/${encodeURIComponent(taskId)}/cancel`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    }).then((response) => response.data);
+  },
+  claimDiscoveryAgentTask(taskId: string, request: ValidationDiscoveryAgentTaskRequest): Promise<ValidationDiscoveryTask> {
+    return apiFetch<ValidationEnvelope<ValidationDiscoveryTask>>(`/validation/discovery/agent-tasks/${encodeURIComponent(taskId)}/claim`, {
+      method: "POST",
+      body: JSON.stringify(request),
+    }).then((response) => response.data);
+  },
+  discoveryAgentContextPack(taskId: string): Promise<JsonObject> {
+    return unwrap<JsonObject>(`/validation/discovery/agent-tasks/${encodeURIComponent(taskId)}/context-pack`);
+  },
+  submitDiscoveryAgentResult(taskId: string, request: ValidationDiscoveryAgentTaskRequest): Promise<JsonObject> {
+    return apiFetch<ValidationEnvelope<JsonObject>>(`/validation/discovery/agent-tasks/${encodeURIComponent(taskId)}/results`, {
+      method: "POST",
+      body: JSON.stringify(request),
+    }).then((response) => response.data);
+  },
+  attachDiscoveryAgentEvidence(taskId: string, request: ValidationDiscoveryEvidenceRequest): Promise<ValidationDiscoveryEvidenceManifest> {
+    return apiFetch<ValidationEnvelope<ValidationDiscoveryEvidenceManifest>>(`/validation/discovery/agent-tasks/${encodeURIComponent(taskId)}/evidence`, {
+      method: "POST",
+      body: JSON.stringify(request),
+    }).then((response) => response.data);
+  },
+  completeDiscoveryAgentTask(taskId: string, request: ValidationDiscoveryAgentTaskRequest): Promise<ValidationDiscoveryTask> {
+    return apiFetch<ValidationEnvelope<ValidationDiscoveryTask>>(`/validation/discovery/agent-tasks/${encodeURIComponent(taskId)}/complete`, {
+      method: "POST",
+      body: JSON.stringify(request),
+    }).then((response) => response.data);
+  },
+  discoveryLlmProfiles(): Promise<ValidationPage<ValidationDiscoveryLlmProfile> & { prompt_management_url?: string; model_config_url?: string }> {
+    return unwrap<ValidationPage<ValidationDiscoveryLlmProfile> & { prompt_management_url?: string; model_config_url?: string }>("/validation/discovery/llm-profiles");
+  },
+  discoveryToolAdapters(): Promise<ValidationPage<ValidationDiscoveryToolAdapter>> {
+    return unwrap<ValidationPage<ValidationDiscoveryToolAdapter>>("/validation/discovery/tool-adapters");
+  },
+  runDiscoveryToolAdapter(adapterId: string, request: { dry_run?: boolean; confirm_run?: string; profiles?: string[] } = { dry_run: true }): Promise<JsonObject> {
+    return apiFetch<ValidationEnvelope<JsonObject>>(`/validation/discovery/tool-adapters/${encodeURIComponent(adapterId)}/dry-run`, {
+      method: "POST",
+      body: JSON.stringify(request),
+    }).then((response) => response.data);
+  },
+  discoveryLlmEvals(): Promise<JsonObject> {
+    return unwrap<JsonObject>("/validation/discovery/llm-evals");
+  },
+  runDiscoveryLlmEval(request: { dry_run?: boolean; profiles?: string[] } = { dry_run: true }): Promise<JsonObject> {
+    return apiFetch<ValidationEnvelope<JsonObject>>("/validation/discovery/llm-evals/run", {
+      method: "POST",
+      body: JSON.stringify(request),
+    }).then((response) => response.data);
+  },
+  discoveryTrace(traceId: string): Promise<ValidationDiscoveryEvidenceManifest> {
+    return unwrap<ValidationDiscoveryEvidenceManifest>(`/validation/discovery/traces/${encodeURIComponent(traceId)}`);
   },
   uiTargets(query: ValidationUiTargetQuery = {}): Promise<ValidationUiTargetPage> {
     return unwrap<ValidationUiTargetPage>(appendQuery("/validation/ui-targets", query));

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from backend.services.validation.active_discovery import ActiveDiscoveryService
 from backend.services.validation.execution_runner import ValidationExecutionRunner, ValidationRunnerError
 from backend.services.validation.finding_store import ValidationFindingStore
 from backend.services.validation.git_activity_provider import GitActivityProviderError, GitCommitActivityProvider
@@ -73,6 +76,24 @@ def get_pipeline_center_service(
     )
 
 
+def get_active_discovery_service(
+    history_store: ValidationHistoryStore = Depends(get_history_store),
+    finding_store: ValidationFindingStore = Depends(get_finding_store),
+    execution_runner: ValidationExecutionRunner = Depends(get_execution_runner),
+    module_quality_service: ModuleQualityService = Depends(get_module_quality_service),
+    ui_target_catalog: ValidationUiTargetCatalog = Depends(get_ui_target_catalog),
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+) -> ActiveDiscoveryService:
+    return ActiveDiscoveryService(
+        history_store=history_store,
+        finding_store=finding_store,
+        execution_runner=execution_runner,
+        module_quality_service=module_quality_service,
+        ui_target_catalog=ui_target_catalog,
+        pipeline_center=pipeline_center,
+    )
+
+
 class ValidationExecutionStartRequest(BaseModel):
     plan_key: str = Field(..., min_length=1)
     requested_by: str = Field("operator", min_length=1, max_length=80)
@@ -80,6 +101,78 @@ class ValidationExecutionStartRequest(BaseModel):
     frontend_port: int | None = None
     timeout_seconds: int | None = Field(None, gt=0)
     confirm_text: str | None = None
+
+
+class ValidationDiscoveryReviewRequest(BaseModel):
+    action: str = Field(..., min_length=1, max_length=80)
+    reviewer: str = Field("operator", min_length=1, max_length=80)
+    comment: str | None = None
+    evidence_checklist: list[str] = Field(default_factory=list)
+
+
+class ValidationDiscoveryPromoteRequest(BaseModel):
+    confirm_promote: str = Field(..., min_length=1)
+    reviewer: str | None = None
+    comment: str | None = None
+    evidence_checklist: list[str] = Field(default_factory=list)
+
+
+class ValidationDiscoveryTaskRequest(BaseModel):
+    task_id: str | None = None
+    title: str | None = None
+    source: str | None = None
+    module: str | None = None
+    risk_level: str | None = None
+    detectors: list[str] = Field(default_factory=list)
+    resource_policy_id: str | None = None
+    requested_by: str | None = None
+    reason: str | None = None
+    cleanup_required: bool | None = None
+    confirm_schedule: str | None = None
+
+
+class ValidationDiscoveryRunTaskRequest(BaseModel):
+    dry_run: bool = True
+    confirm_run: str | None = None
+
+
+class ValidationDiscoveryCancelTaskRequest(BaseModel):
+    reason: str | None = None
+
+
+class ValidationDiscoveryAgentTaskRequest(BaseModel):
+    agent_runtime: str | None = None
+    agent_name: str | None = None
+    workspace: str | None = None
+    branch: str | None = None
+    llm_provider_declared: str | None = None
+    llm_model_declared: str | None = None
+    prompt_id: str | None = None
+    prompt_version: int | None = None
+    context_pack_id: str | None = None
+    result_id: str | None = None
+    candidate_title: str | None = None
+    summary: str | None = None
+    confidence: float | None = None
+    requires_deterministic_verification: bool = True
+    evidence_manifest_id: str | None = None
+    status: str | None = None
+
+
+class ValidationDiscoveryEvidenceRequest(BaseModel):
+    evidence_manifest_id: str | None = None
+    artifacts: list[dict[str, Any]] = Field(default_factory=list)
+    logs: list[dict[str, Any]] = Field(default_factory=list)
+    api_responses: list[dict[str, Any]] = Field(default_factory=list)
+    mcp_responses: list[dict[str, Any]] = Field(default_factory=list)
+    screenshots: list[dict[str, Any]] = Field(default_factory=list)
+    reproduce_command: str | None = None
+
+
+class ValidationDiscoveryAdapterRunRequest(BaseModel):
+    dry_run: bool = True
+    confirm_run: str | None = None
+    profiles: list[str] = Field(default_factory=list)
 
 
 def _success(data):
@@ -514,6 +607,247 @@ def get_validation_automation_summary(
     pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
 ):
     return _success(pipeline_center.automation_summary())
+
+
+@router.get("/discovery/summary", response_model=ValidationResponse, summary="Summarize active bug discovery")
+def get_validation_discovery_summary(
+    discovery: ActiveDiscoveryService = Depends(get_active_discovery_service),
+):
+    return _success(discovery.summary())
+
+
+@router.get("/discovery/nightly-reports", response_model=ValidationResponse, summary="List active discovery nightly reports")
+def list_validation_discovery_nightly_reports(
+    limit: int = Query(7, ge=1, le=30),
+    discovery: ActiveDiscoveryService = Depends(get_active_discovery_service),
+):
+    return _success(discovery.list_nightly_reports(limit=limit))
+
+
+@router.get("/discovery/nightly-reports/{report_id}", response_model=ValidationResponse, summary="Get active discovery nightly report")
+def get_validation_discovery_nightly_report(
+    report_id: str,
+    discovery: ActiveDiscoveryService = Depends(get_active_discovery_service),
+):
+    return _success(discovery.get_nightly_report(report_id))
+
+
+@router.get("/discovery/nightly-reports/{report_id}/llm", response_model=ValidationResponse, summary="Get active discovery LLM report")
+def get_validation_discovery_nightly_llm_report(
+    report_id: str,
+    discovery: ActiveDiscoveryService = Depends(get_active_discovery_service),
+):
+    return _success(discovery.get_nightly_llm_report(report_id))
+
+
+@router.get("/discovery/candidates", response_model=ValidationResponse, summary="List active discovery issue candidates")
+def list_validation_discovery_candidates(
+    module: str | None = Query(None),
+    severity: str | None = Query(None),
+    review_status: str | None = Query(None),
+    source: str | None = Query(None),
+    search: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    discovery: ActiveDiscoveryService = Depends(get_active_discovery_service),
+):
+    return _success(
+        discovery.list_candidates(
+            module=module,
+            severity=severity,
+            review_status=review_status,
+            source=source,
+            search=search,
+            page=page,
+            page_size=page_size,
+        )
+    )
+
+
+@router.get("/discovery/candidates/{candidate_id}", response_model=ValidationResponse, summary="Get active discovery issue candidate")
+def get_validation_discovery_candidate(
+    candidate_id: str,
+    discovery: ActiveDiscoveryService = Depends(get_active_discovery_service),
+):
+    candidate = discovery.get_candidate(candidate_id)
+    if candidate is None:
+        raise HTTPException(status_code=404, detail=f"active discovery candidate not found: {candidate_id}")
+    return _success(candidate)
+
+
+@router.post("/discovery/candidates/{candidate_id}/review", response_model=ValidationResponse, summary="Review active discovery candidate")
+def review_validation_discovery_candidate(
+    candidate_id: str,
+    request: ValidationDiscoveryReviewRequest,
+    discovery: ActiveDiscoveryService = Depends(get_active_discovery_service),
+):
+    try:
+        return _success(discovery.review_candidate(candidate_id, request.model_dump()))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"active discovery candidate not found: {candidate_id}") from exc
+
+
+@router.post("/discovery/candidates/{candidate_id}/promote", response_model=ValidationResponse, summary="Request active discovery candidate promotion")
+def promote_validation_discovery_candidate(
+    candidate_id: str,
+    request: ValidationDiscoveryPromoteRequest,
+    discovery: ActiveDiscoveryService = Depends(get_active_discovery_service),
+):
+    try:
+        return _success(discovery.promote_candidate(candidate_id, request.model_dump()))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"active discovery candidate not found: {candidate_id}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/discovery/tasks", response_model=ValidationResponse, summary="List active discovery tasks")
+def list_validation_discovery_tasks(
+    source: str | None = Query(None),
+    status: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    discovery: ActiveDiscoveryService = Depends(get_active_discovery_service),
+):
+    return _success(discovery.list_tasks(source=source, status=status, page=page, page_size=page_size))
+
+
+@router.post("/discovery/tasks", response_model=ValidationResponse, summary="Schedule active discovery task")
+def schedule_validation_discovery_task(
+    request: ValidationDiscoveryTaskRequest,
+    discovery: ActiveDiscoveryService = Depends(get_active_discovery_service),
+):
+    try:
+        return _success(discovery.schedule_task(request.model_dump(exclude_none=True)))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/discovery/tasks/{task_id}/run", response_model=ValidationResponse, summary="Run active discovery task")
+def run_validation_discovery_task(
+    task_id: str,
+    request: ValidationDiscoveryRunTaskRequest,
+    discovery: ActiveDiscoveryService = Depends(get_active_discovery_service),
+):
+    try:
+        return _success(discovery.run_task(task_id, request.model_dump()))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"active discovery task not found: {task_id}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/discovery/tasks/{task_id}/cancel", response_model=ValidationResponse, summary="Cancel active discovery task")
+def cancel_validation_discovery_task(
+    task_id: str,
+    request: ValidationDiscoveryCancelTaskRequest,
+    discovery: ActiveDiscoveryService = Depends(get_active_discovery_service),
+):
+    try:
+        return _success(discovery.cancel_task(task_id, request.model_dump(exclude_none=True)))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"active discovery task not found: {task_id}") from exc
+
+
+@router.post("/discovery/agent-tasks/{task_id}/claim", response_model=ValidationResponse, summary="Claim active discovery agent task")
+def claim_validation_discovery_agent_task(
+    task_id: str,
+    request: ValidationDiscoveryAgentTaskRequest,
+    discovery: ActiveDiscoveryService = Depends(get_active_discovery_service),
+):
+    return _success(discovery.claim_agent_task(task_id, request.model_dump(exclude_none=True)))
+
+
+@router.get("/discovery/agent-tasks/{task_id}/context-pack", response_model=ValidationResponse, summary="Get active discovery agent context pack")
+def get_validation_discovery_agent_context_pack(
+    task_id: str,
+    discovery: ActiveDiscoveryService = Depends(get_active_discovery_service),
+):
+    return _success(discovery.get_agent_context_pack(task_id))
+
+
+@router.post("/discovery/agent-tasks/{task_id}/results", response_model=ValidationResponse, summary="Submit active discovery agent result")
+def submit_validation_discovery_agent_result(
+    task_id: str,
+    request: ValidationDiscoveryAgentTaskRequest,
+    discovery: ActiveDiscoveryService = Depends(get_active_discovery_service),
+):
+    return _success(discovery.submit_agent_result(task_id, request.model_dump(exclude_none=True)))
+
+
+@router.post("/discovery/agent-tasks/{task_id}/evidence", response_model=ValidationResponse, summary="Attach active discovery agent evidence")
+def attach_validation_discovery_agent_evidence(
+    task_id: str,
+    request: ValidationDiscoveryEvidenceRequest,
+    discovery: ActiveDiscoveryService = Depends(get_active_discovery_service),
+):
+    return _success(discovery.attach_agent_evidence(task_id, request.model_dump(exclude_none=True)))
+
+
+@router.post("/discovery/agent-tasks/{task_id}/complete", response_model=ValidationResponse, summary="Complete active discovery agent task")
+def complete_validation_discovery_agent_task(
+    task_id: str,
+    request: ValidationDiscoveryAgentTaskRequest,
+    discovery: ActiveDiscoveryService = Depends(get_active_discovery_service),
+):
+    try:
+        return _success(discovery.complete_agent_task(task_id, request.model_dump(exclude_none=True)))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"active discovery task not found: {task_id}") from exc
+
+
+@router.get("/discovery/llm-profiles", response_model=ValidationResponse, summary="List active discovery LLM profiles")
+def list_validation_discovery_llm_profiles(
+    discovery: ActiveDiscoveryService = Depends(get_active_discovery_service),
+):
+    return _success(discovery.list_llm_profiles())
+
+
+@router.get("/discovery/tool-adapters", response_model=ValidationResponse, summary="List active discovery tool adapters")
+def list_validation_discovery_tool_adapters(
+    discovery: ActiveDiscoveryService = Depends(get_active_discovery_service),
+):
+    return _success(discovery.list_tool_adapters())
+
+
+@router.post("/discovery/tool-adapters/{adapter_id}/dry-run", response_model=ValidationResponse, summary="Dry-run active discovery tool adapter")
+def run_validation_discovery_tool_adapter(
+    adapter_id: str,
+    request: ValidationDiscoveryAdapterRunRequest,
+    discovery: ActiveDiscoveryService = Depends(get_active_discovery_service),
+):
+    try:
+        return _success(discovery.run_tool_adapter(adapter_id, request.model_dump()))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"active discovery adapter not found: {adapter_id}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/discovery/llm-evals", response_model=ValidationResponse, summary="Get active discovery LLM eval summary")
+def get_validation_discovery_llm_evals(
+    discovery: ActiveDiscoveryService = Depends(get_active_discovery_service),
+):
+    return _success(discovery.run_llm_eval({"dry_run": True}))
+
+
+@router.post("/discovery/llm-evals/run", response_model=ValidationResponse, summary="Run active discovery LLM eval dry-run")
+def run_validation_discovery_llm_eval(
+    request: ValidationDiscoveryAdapterRunRequest,
+    discovery: ActiveDiscoveryService = Depends(get_active_discovery_service),
+):
+    return _success(discovery.run_llm_eval(request.model_dump()))
+
+
+@router.get("/discovery/traces/{trace_id}", response_model=ValidationResponse, summary="Get active discovery trace/evidence")
+def get_validation_discovery_trace(
+    trace_id: str,
+    discovery: ActiveDiscoveryService = Depends(get_active_discovery_service),
+):
+    trace = discovery.get_trace(trace_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail=f"active discovery trace not found: {trace_id}")
+    return _success(trace)
 
 
 @router.get("/ui-targets", response_model=ValidationResponse, summary="List route-level validation UI targets")
