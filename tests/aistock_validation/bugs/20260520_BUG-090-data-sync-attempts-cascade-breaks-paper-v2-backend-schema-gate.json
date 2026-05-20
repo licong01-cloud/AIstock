@@ -6,7 +6,7 @@
   "module": "local_data_management",
   "severity": "P1",
   "risk_area": "schema_guardrail",
-  "status": "in_progress",
+  "status": "verified",
   "github_issue_number": 120,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/120",
   "trigger_condition": {
@@ -27,14 +27,14 @@
   "fingerprint": "paper-v2-backend-data-sync-cascade-20260520",
   "assigned_agent": "codex-app",
   "fix_branch": "main",
-  "fix_commit": null,
-  "verification_run_id": null,
+  "fix_commit": "60d30e1",
+  "verification_run_id": "local-main-paper-v2-backend-data-sync-autonomy-local-data-management-l0",
   "created_at": "2026-05-20T14:19:16Z",
   "first_seen_at": "2026-05-20T14:19:16Z",
-  "last_seen_at": "2026-05-20T14:19:16Z",
-  "fixed_at": null,
+  "last_seen_at": "2026-05-20T14:21:20Z",
+  "fixed_at": "2026-05-20T14:21:20Z",
   "submitted_at": "2026-05-20T14:19:16Z",
-  "closed_at": null,
+  "closed_at": "2026-05-20T14:21:20Z",
   "allowed_write_scope": [
     "backend/migrations/data_sync_targets_20260519.sql",
     "backend/db/init_trading_core_v2_schema.py",
@@ -62,6 +62,12 @@
       "actor": "codex-app",
       "action": "discovered",
       "note": "Discovered from GitHub Actions AIstock CI run 26168279936 on main."
+    },
+    {
+      "timestamp": "2026-05-20T14:21:20Z",
+      "actor": "codex-app",
+      "action": "verified",
+      "note": "Fixed by 60d30e1 and verified with paper_v2_backend, data_sync_autonomy_backend, local_data_management_audit, l0, and git diff --check on local main."
     }
   ]
 }
