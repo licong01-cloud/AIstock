@@ -1,0 +1,126 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-085",
+  "title": "QE pending template UI exposes raw JSON instead of human-readable full configuration editor",
+  "description": "Expected: QE pending execution templates must be configurable through a complete human-readable UI equivalent to the QE evolution task creation page. Raw config_json must be removed from the normal operator page and must not be the way to configure all fields.\nActual: /quantevolver/templates/[templateId] exposes only a small subset of structured fields and relies on a large raw JSON textarea for full configuration. This is not readable or operable for manual review.",
+  "module": "qe_mcp",
+  "severity": "P0",
+  "risk_area": "design_compliance",
+  "status": "fixed",
+  "trigger_condition": {
+    "scenario": "reported_via_mcp",
+    "files": [
+      "frontend/src/app/quantevolver/templates/[templateId]/page.tsx",
+      "frontend/src/app/quantevolver/evolution/page.tsx",
+      "frontend/src/lib/qe-templates/api.ts",
+      "frontend/tests/qe-templates/qe-template-management.spec.ts",
+      "docs/architecture/qe_mcp_template_archive_research_design_20260515.md"
+    ]
+  },
+  "reproduce_command": "Open /quantevolver/templates/{templateId} for a QE pending template and inspect the configuration editor; the full payload is shown as raw JSON instead of complete structured controls.",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:frontend/src/app/quantevolver/templates/[templateId]/page.tsx",
+    "file:frontend/src/app/quantevolver/evolution/page.tsx",
+    "file:frontend/src/lib/qe-templates/api.ts",
+    "file:frontend/tests/qe-templates/qe-template-management.spec.ts",
+    "file:docs/architecture/qe_mcp_template_archive_research_design_20260515.md"
+  ],
+  "fingerprint": "cc0db46dcc2a2e88",
+  "assigned_agent": "paper-v2-team",
+  "fix_branch": "bug/BUG-085-qe-pending-template-ui",
+  "fix_commit": "57fec9a",
+  "verification_run_id": "qe_mcp_l3_20260520_224953;validation_mcp_branch_scope_blocked_20260520",
+  "created_at": "2026-05-20T08:39:04Z",
+  "first_seen_at": "2026-05-20T08:39:04Z",
+  "last_seen_at": "2026-05-20T08:39:04Z",
+  "fixed_at": "2026-05-20T14:18:21Z",
+  "submitted_at": "2026-05-20T08:39:04Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "frontend/src/app/quantevolver/templates/[templateId]/page.tsx",
+    "frontend/src/app/quantevolver/evolution/page.tsx",
+    "frontend/src/lib/qe-templates/api.ts",
+    "frontend/tests/qe-templates/qe-template-management.spec.ts",
+    "docs/architecture/qe_mcp_template_archive_research_design_20260515.md"
+  ],
+  "suspected_modules": [
+    "frontend/src/app/quantevolver/templates/[templateId]/page.tsx",
+    "frontend/src/app/quantevolver/evolution/page.tsx",
+    "frontend/src/lib/qe-templates/api.ts",
+    "frontend/tests/qe-templates/qe-template-management.spec.ts",
+    "docs/architecture/qe_mcp_template_archive_research_design_20260515.md"
+  ],
+  "required_verification": [
+    "python -m pytest frontend/tests/qe-templates/qe-template-management.spec.ts equivalent Playwright gate via nox qe_template_ui",
+    "python -m nox -s qe_template_ui -- 8011 3011",
+    "python -m nox -s qe_mcp_l3",
+    "grep/static guardrail confirms the standard operator page no longer renders a raw config_json textarea as the full editor"
+  ],
+  "closure_requirements": [
+    "Raw JSON display/editor is removed from the standard QE pending-template operator page",
+    "All supported pending task settings are editable through human-readable structured controls",
+    "Custom evolution loops can be inspected and edited without editing JSON",
+    "Saving updates only qe_execution_templates and does not materialize or execute",
+    "Execution still requires validate, approve, materialize, and run confirmation",
+    "GitHub issue #113 is updated with fix branch, commit, and validation evidence before closure"
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-20T08:39:04Z",
+      "actor": "paper-v2-team",
+      "action": "discovered",
+      "note": "Reported via aistock_mcp_server.report_bug. Comments: 4"
+    },
+    {
+      "timestamp": "2026-05-20T08:39:04Z",
+      "actor": "paper-v2-team",
+      "action": "comment",
+      "note": "Required fix: remove raw JSON display/editor from the standard operator page."
+    },
+    {
+      "timestamp": "2026-05-20T08:39:04Z",
+      "actor": "paper-v2-team",
+      "action": "comment",
+      "note": "Required fix: provide structured fields for task/title/description, source experiment/task/loop, model, factors, strategy, strategy params, execution algorithm, execution params, label horizon, data split, node/parallelism, HMM runtime options, ST/PIT/suspend filtering, unfilled handler, custom_evo loops and per-loop settings."
+    },
+    {
+      "timestamp": "2026-05-20T08:39:04Z",
+      "actor": "paper-v2-team",
+      "action": "comment",
+      "note": "Saving must update only the pending template and must not execute; execution must still require validate/approve/materialize/run."
+    },
+    {
+      "timestamp": "2026-05-20T08:39:04Z",
+      "actor": "paper-v2-team",
+      "action": "comment",
+      "note": "This is a design compliance defect, not a nice-to-have enhancement, because the approved design requires manual review/edit before execution."
+    },
+    {
+      "timestamp": "2026-05-20T08:42:59Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Mirrored manually to GitHub issue #113 because validation MCP live sync is blocked by BOM parse errors in another BUG JSON registry entry."
+    },
+    {
+      "timestamp": "2026-05-20T14:18:21Z",
+      "actor": "codex-app",
+      "action": "fixed",
+      "note": "Fixed in branch bug/BUG-085-qe-pending-template-ui commit eb3eeca; GitHub issue #113 labeled status:fixed-pending-review and commented with validation evidence. Verification: python -m nox -s qe_mcp_l3 -- 8011 3011 passed; qe_mcp_backend 29 passed, qe_archive_backend 106 passed, qe_template_ui TypeScript + Playwright 3 passed; operator page raw JSON editor guardrail rg returned no matches."
+    },
+    {
+      "timestamp": "2026-05-20T14:51:54Z",
+      "actor": "codex-app",
+      "action": "validation_mcp_root_verified",
+      "note": "Validation MCP controlled executions passed in the MCP configured repo root, not the bug worktree: guardrail_changed_files valjob_20260520_144828_b234cdb2, l0 valjob_20260520_144829_2fad17ef, qe_archive_backend valjob_20260520_144828_bcd3ca6a, validation_catalog_integrity valjob_20260520_144900_871c89cb, validation_module_registry_l0 valjob_20260520_144901_096d81fb. Branch-local qe_mcp_l3 passed separately for the rebased bug worktree."
+    },
+    {
+      "timestamp": "2026-05-20T14:55:02Z",
+      "actor": "codex-app",
+      "action": "validation_mcp_scope_correction",
+      "note": "Validation MCP controlled runner is currently bound to its configured repo root (F:/Dev/AIstock) and has no cwd/worktree parameter; controlled jobs started from this thread did not validate the bug/BUG-085-qe-pending-template-ui worktree. Branch-local qe_mcp_l3 on the rebased worktree passed and remains the valid verification evidence until Validation MCP supports branch/worktree execution or the configured root is explicitly switched."
+    }
+  ],
+  "github_issue_number": 113,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/113"
+}

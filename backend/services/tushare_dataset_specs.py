@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 class QueryMode(str, Enum):
@@ -40,6 +40,10 @@ class DatasetSpec:
     rate_per_minute: int = 500             # per-API 频率限制，默认 500/min (10000积分)
     date_param_name: str = "trade_date"    # BY_DATE: API date parameter name
     incremental_cursor_from_audit: bool = False  # sparse BY_DATE datasets can advance through successful empty-date refreshes
+    initial_start_date: str | None = None          # historical floor used when both audit and physical cursors are empty
+    fetch_params: Dict[str, Any] = field(default_factory=dict)  # fixed request params such as Tushare limit/offset defaults
+    trading_day_only: bool = False              # BY_DATE datasets that should iterate market trading days only
+    create_table_script: Optional[str] = None    # operator-run DDL helper; engine never creates tables implicitly
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +255,35 @@ MARGIN_DETAIL = DatasetSpec(
     },
     batch_sleep=0.2,
     rate_per_minute=500,
+)
+
+CYQ_PERF = DatasetSpec(
+    name="cyq_perf",
+    tushare_api="cyq_perf",
+    target_table="market.cyq_perf",
+    primary_keys=["trade_date", "ts_code"],
+    query_mode=QueryMode.BY_DATE,
+    columns={
+        "trade_date": "date",
+        "ts_code": "text",
+        "his_low": "numeric",
+        "his_high": "numeric",
+        "cost_5pct": "numeric",
+        "cost_15pct": "numeric",
+        "cost_50pct": "numeric",
+        "cost_85pct": "numeric",
+        "cost_95pct": "numeric",
+        "weight_avg": "numeric",
+        "winner_rate": "numeric",
+    },
+    batch_sleep=0.2,
+    rate_per_minute=500,
+    row_limit=5000,
+    incremental_cursor_from_audit=True,
+    initial_start_date="2018-01-01",
+    fetch_params={"limit": 4900, "max_pages": 3},
+    trading_day_only=True,
+    create_table_script="scripts/create_cyq_tables.py",
 )
 
 STK_LIMIT = DatasetSpec(
@@ -471,6 +504,7 @@ DATASET_REGISTRY: Dict[str, DatasetSpec] = {
         TUSHARE_EXPRESS_RAW,
         TUSHARE_FINA_INDICATOR_RAW,
         MARGIN_DETAIL,
+        CYQ_PERF,
         SW_INDEX_CLASSIFY,
         SW_INDEX_MEMBER,
         SW_DAILY,

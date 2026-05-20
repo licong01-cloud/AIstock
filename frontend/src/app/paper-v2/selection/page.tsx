@@ -9,26 +9,11 @@ import StatusBadge from "@/components/paper-v2/StatusBadge";
 import WorkflowStepper from "@/components/paper-v2/WorkflowStepper";
 import { hmmTrainingApi, paperV2Api, selectionCenterApi } from "@/lib/paper-v2/api";
 import { asText, dataSourceLabel, formatNumber, formatPercent, hmmSnapshotLabel, paperV2WorkflowSteps, selectionRunLabel, shortHash, statusLabel, todayIso } from "@/lib/paper-v2/format";
+import { artifactCoverageLabel, artifactCoversTradeDate } from "@/lib/paper-v2/hmm-runtime";
 import type { DataSource, HmmConfig, HmmSnapshot, JsonObject, SelectablePackage, SelectionMode, SelectionRun, SelectionWatchlistImportResult } from "@/lib/paper-v2/types";
 
 function runLabel(run: SelectionRun): string {
   return `${run.trade_date} / ${statusLabel(run.mode)} / ${run.package_ids.map((item) => shortHash(item, 5)).join(", ")}`;
-}
-
-function artifactCoversTradeDate(snapshot: HmmSnapshot, preset: string, tradeDate: string) {
-  return (snapshot.coefficient_artifacts || []).find((artifact) => {
-    if (artifact.parse_error) return false;
-    if (artifact.preset !== preset) return false;
-    const dates = artifact.covered_trade_dates || [];
-    if (dates.length) return dates.includes(tradeDate);
-    return Boolean(artifact.start_date && artifact.end_date && artifact.start_date <= tradeDate && tradeDate <= artifact.end_date);
-  });
-}
-
-function artifactCoverageLabel(snapshot: HmmSnapshot, preset: string) {
-  const artifacts = (snapshot.coefficient_artifacts || []).filter((artifact) => artifact.preset === preset && !artifact.parse_error);
-  if (!artifacts.length) return `${preset} 无系数文件`;
-  return artifacts.map((artifact) => `${artifact.start_date || "?"}~${artifact.end_date || "?"} (${artifact.date_count || 0}日)`).join("; ");
 }
 
 function packageHealth(packageRow: SelectablePackage): JsonObject {

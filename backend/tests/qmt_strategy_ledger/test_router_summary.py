@@ -234,3 +234,15 @@ def test_package_binding_router_requires_explicit_replace_and_rolls_over_active_
     active = repo.get_active_package_binding("strat_a")
     assert active.selection_run_id == "sel_b"
     assert active.runtime_config["frozen_runtime_asset"]["artifact_sha256"]
+
+
+def test_package_binding_order_preview_fails_fast_until_minqmt_execution_bridge_exists() -> None:
+    repo = _repo()
+    response = _client(repo).post("/api/v1/qmt/virtual-strategies/package-bindings/bind_a/orders/preview", json={})
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["error_code"] == "UNSUPPORTED_FEATURE"
+    assert detail["context"]["issue"] == "BUG-077"
+    assert detail["context"]["disabled_path"] == "SelectionRun -> SelectionOrderBuilder -> ManagedOrderRequest"
+    assert "validated execution policy" in detail["context"]["required_path"]

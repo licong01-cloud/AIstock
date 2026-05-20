@@ -72,6 +72,16 @@ def _isoformat(value: Optional[dt.datetime]) -> Optional[str]:
     return value.astimezone(dt.timezone.utc).isoformat()
 
 
+def _date_iso(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, dt.datetime):
+        return value.date().isoformat()
+    if isinstance(value, dt.date):
+        return value.isoformat()
+    return str(value)
+
+
 def _fetchall(sql: str, params: tuple = ()) -> List[Dict[str, Any]]:
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -1390,6 +1400,10 @@ def get_preset_stats() -> Dict[str, Any]:
         )
         if not cfg:
             entry["current_max_date"] = None
+            entry["ready_date"] = None
+            entry["readiness_source"] = "dataset_date_refresh_audit"
+            entry["audit_missing"] = True
+            entry["stats_source"] = "none"
             entry["error"] = "no config"
             results.append(entry)
             continue
@@ -1408,7 +1422,10 @@ def get_preset_stats() -> Dict[str, Any]:
         if audit_row:
             audit_trade_date = audit_row.get("trade_date")
             entry["current_max_date"] = audit_trade_date.isoformat() if audit_trade_date else None
+            entry["ready_date"] = entry["current_max_date"]
             entry["stats_source"] = "refresh_audit"
+            entry["readiness_source"] = "dataset_date_refresh_audit"
+            entry["audit_missing"] = False
             entry["audit_refreshed_at"] = _isoformat(audit_row.get("refreshed_at"))
             entry["row_count"] = audit_row.get("row_count")
             entry["written_rows"] = audit_row.get("written_rows")
@@ -1429,9 +1446,18 @@ def get_preset_stats() -> Dict[str, Any]:
                     cur.execute(f"SELECT MAX({date_column})::date FROM {table_name}")
                     row = cur.fetchone()
                     mx = row[0] if row else None
-            entry["current_max_date"] = mx.isoformat() if mx else None
+            entry["current_max_date"] = None
+            entry["ready_date"] = None
+            entry["physical_max_date"] = mx.isoformat() if mx else None
+            entry["stats_source"] = "physical_fallback_display_only"
+            entry["readiness_source"] = "dataset_date_refresh_audit"
+            entry["audit_missing"] = True
+            entry["cache_state"] = "audit_missing"
         except Exception as exc:
             entry["current_max_date"] = None
+            entry["ready_date"] = None
+            entry["readiness_source"] = "dataset_date_refresh_audit"
+            entry["audit_missing"] = True
             entry["error"] = str(exc)
         results.append(entry)
     return {"items": results}
@@ -2068,20 +2094,94 @@ def refresh_data_stats() -> Dict[str, Any]:
 def list_data_stats() -> Dict[str, Any]:
     rows = _fetchall(
         """
-        SELECT data_kind,
-               table_name,
-               min_date,
-               max_date,
-               row_count,
-               table_bytes,
-               index_bytes,
-               last_updated_at,
-               stat_generated_at,
-               extra_info
-          FROM market.data_stats
-         ORDER BY data_kind
+        WITH latest_audit AS (
+            SELECT DISTINCT ON (dataset)
+                   dataset,
+                   trade_date AS audit_ready_date,
+                   row_count AS audit_row_count,
+                   refreshed_at AS audit_refreshed_at,
+                   quality_status AS audit_quality_status
+              FROM market.dataset_date_refresh_audit
+             WHERE status = 'success'
+             ORDER BY dataset, trade_date DESC, refreshed_at DESC
+        )
+        SELECT ds.data_kind,
+               ds.table_name,
+               ds.min_date,
+               ds.max_date,
+               ds.row_count,
+               ds.table_bytes,
+               ds.index_bytes,
+               ds.last_updated_at,
+               ds.stat_generated_at,
+               ds.extra_info,
+               la.audit_ready_date,
+               la.audit_row_count,
+               la.audit_refreshed_at,
+               la.audit_quality_status
+          FROM market.data_stats ds
+          LEFT JOIN latest_audit la ON la.dataset = ds.data_kind
+         ORDER BY ds.data_kind
         """,
     )
+    for row in rows:
+        audit_ready_date = row.get("audit_ready_date")
+        stats_max_date = row.get("max_date")
+        if audit_ready_date and stats_max_date:
+            cache_state = "fresh" if stats_max_date >= audit_ready_date else "stale"
+        elif audit_ready_date and not stats_max_date:
+            cache_state = "stale"
+        elif stats_max_date and not audit_ready_date:
+            cache_state = "audit_missing"
+        else:
+            cache_state = "unknown"
+        row["ready_date"] = _date_iso(audit_ready_date)
+        row["audit_ready_date"] = _date_iso(audit_ready_date)
+        row["stats_max_date"] = _date_iso(stats_max_date)
+        row["physical_max_date"] = _date_iso(stats_max_date)
+        row["cache_state"] = cache_state
+        row["readiness_source"] = "dataset_date_refresh_audit"
+        row["operator_action_required"] = False
+        row["audit_refreshed_at"] = _isoformat(row.get("audit_refreshed_at"))
+    try:
+        target_rows = _fetchall(
+            """
+            SELECT DISTINCT ON (dataset)
+                   dataset,
+                   target_date,
+                   target_status AS sync_status,
+                   last_error_message AS failure_category,
+                   next_retry_at,
+                   required_before AS final_deadline_at,
+                   updated_at AS target_updated_at
+              FROM market.data_sync_targets
+             WHERE target_status NOT IN ('reconciled')
+             ORDER BY dataset, target_date DESC NULLS LAST, updated_at DESC
+            """
+        )
+        targets = {str(r.get("dataset")): r for r in target_rows}
+        for row in rows:
+            target = targets.get(str(row.get("data_kind")))
+            if not target:
+                continue
+            row["sync_target_date"] = _date_iso(target.get("target_date"))
+            row["sync_status"] = target.get("sync_status")
+            row["failure_category"] = target.get("failure_category")
+            row["next_retry_at"] = _isoformat(target.get("next_retry_at"))
+            row["final_deadline_at"] = _isoformat(target.get("final_deadline_at"))
+            row["target_updated_at"] = _isoformat(target.get("target_updated_at"))
+            target_sync_status = str(target.get("sync_status") or "").lower()
+            target_failure_category = str(target.get("failure_category") or "").lower()
+            row["operator_action_required"] = target_sync_status in {
+                "final_blocked",
+                "db_unavailable",
+                "provider_contract_error",
+            } or target_failure_category in {
+                "db_unavailable",
+                "provider_contract_error",
+            }
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).warning("data_stats target overlay unavailable: %s", exc)
     return {"items": rows}
 
 @router.get("/data-stats/gaps")
@@ -2449,7 +2549,27 @@ def get_ingestion_auto_range(
         )
         audit_max_date = audit_rows[0].get("mx") if audit_rows else None
 
-    current_max_date = audit_max_date or table_max_date
+    audit_required = use_refresh_audit_cursor or data_kind in DATASET_REGISTRY
+    if audit_required and audit_max_date is None and table_max_date is not None:
+        return {
+            "data_kind": data_kind,
+            "table_name": table_name,
+            "start_date": None,
+            "latest_date": None,
+            "latest_trading_date": None,
+            "latest_date_kind": "calendar" if use_calendar_dates else "trading",
+            "current_max_date": None,
+            "data_max_date": table_max_date.isoformat() if isinstance(table_max_date, dt.date) else None,
+            "cursor_source": "refresh_audit_missing",
+            "readiness_source": "dataset_date_refresh_audit",
+            "audit_missing": True,
+            "needs_reconcile": True,
+            "has_data": True,
+            "has_cursor": False,
+            "up_to_date": False,
+        }
+
+    current_max_date = audit_max_date or (None if audit_required else table_max_date)
 
     if use_calendar_dates:
         latest_date: Optional[dt.date] = dt.date.today()
@@ -2473,7 +2593,10 @@ def get_ingestion_auto_range(
                 status_code=503,
                 detail=f"[{data_kind}] cannot query MAX date; check database before retrying auto catch-up",
             )
-        start_date = dt.date(1990, 1, 1)
+        initial_start = None
+        if data_kind in DATASET_REGISTRY:
+            initial_start = DATASET_REGISTRY[data_kind].initial_start_date
+        start_date = dt.date.fromisoformat(initial_start) if initial_start else dt.date(1990, 1, 1)
         has_data = False
     else:
         up_to_date = current_max_date >= latest_date
@@ -2504,7 +2627,10 @@ def get_ingestion_auto_range(
         "latest_date_kind": "calendar" if use_calendar_dates else "trading",
         "current_max_date": current_max_date.isoformat() if isinstance(current_max_date, dt.date) else None,
         "data_max_date": table_max_date.isoformat() if isinstance(table_max_date, dt.date) else None,
-        "cursor_source": "refresh_audit" if audit_max_date else "table",
+        "cursor_source": "refresh_audit" if audit_max_date else ("none" if audit_required else "table"),
+        "readiness_source": "dataset_date_refresh_audit" if audit_required else "table",
+        "audit_missing": audit_required and audit_max_date is None,
+        "needs_reconcile": audit_required and audit_max_date is None and table_max_date is not None,
         "has_data": has_data,
         "has_cursor": current_max_date is not None,
         "up_to_date": up_to_date,

@@ -1,4 +1,4 @@
-﻿{
+{
     "bug_id":  "BUG-085",
     "schema_version":  "aistock_validation_bug_v1",
     "title":  "StrategyPackage manifest schema still binds platform runtime policies instead of alpha core only",

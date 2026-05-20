@@ -1,4 +1,6 @@
-﻿# Paper v2 QE Runtime Contract Enforcement
+# Paper v2 QE Runtime Contract Enforcement
+
+> **2026-05-20 Legacy Notice**：本文记录的是 2026-05-05 的旧运行契约，已不再作为新实现依据。HMM、ST PIT、event_signal、日频策略、分钟执行、尾盘处理和 ordinary runtime profile 均按 `docs/architecture/strategy_package_platform_boundary_contract_20260520.md` 处理为平台运行能力；不得再要求 Paper/MiniQMT runtime 与 StrategyPackage QE backtest contract 中的 HMM/ST PIT/risk/minute policy 做冻结相等匹配。
 
 Date: 2026-05-05
 Status: implemented

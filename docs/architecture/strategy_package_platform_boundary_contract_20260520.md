@@ -1,4 +1,4 @@
-﻿# StrategyPackage 与平台运行能力边界契约（2026-05-20）
+# StrategyPackage 与平台运行能力边界契约（2026-05-20）
 
 **状态**：权威边界契约 v2.0
 **适用范围**：QE、候选策略包、StrategyPackage、Selection Center、Paper Trading v2、MiniQMT SIM、多策略分仓、未来实盘准入
