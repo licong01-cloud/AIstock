@@ -1,0 +1,169 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-077",
+  "title": "MiniQMT strategy execution bypasses StrategyPackage minute_execution_policy and uses SelectionOrderBuilder to emit broker orders",
+  "description": "Expected: MiniQMT simulated/live-like strategy execution must follow the StrategyPackage contract: daily strategy produces selection signals and target portfolio/rebalance intent; the configured execution policy such as V25_1_SMALL_CAP generates executable child orders; QmtManagedOrderService only preflights/submits orders to MiniQMT. A package with minute_execution_policy must never silently bypass that policy. For current daily long-only rebalance semantics, selected holdings should not be partially reduced just because target_quantity recomputation is below current holdings; dropped holdings should be sold according to the strategy rebalance rule.\nActual: The current MiniQMT virtual strategy POC path uses backend/services/qmt_strategy_ledger/selection_order_builder.py. It converts SelectionRun plus virtual position lots directly into ManagedOrderRequest objects and submits/preview-preflights those orders through QmtManagedOrderService. This bypasses StrategyPackage.minute_execution_policy and does not invoke V25_1_SMALL_CAP. It also treats target_quantity - current_quantity as a direct rebalance delta and emits REDUCE_TO_TARGET sell orders for still-selected stocks, producing invalid partial-reduce behavior such as 688193.SH SELL 73 when the strategy should follow backtest-style daily selection/rebalance semantics.",
+  "module": "qmt_strategy_ledger",
+  "severity": "P0",
+  "risk_area": "strategy_package_runtime_contract",
+  "status": "fixed",
+  "trigger_condition": {
+    "scenario": "reported_via_mcp",
+    "files": [
+      "backend/services/qmt_strategy_ledger/selection_order_builder.py",
+      "backend/routers/qmt_strategy_ledger.py",
+      "backend/services/qmt_strategy_ledger/order_service.py",
+      "backend/execution_algos/v25_1_small_cap_algo.py",
+      "backend/services/trading_core/execution_algo_capabilities.py",
+      "backend/tests/qmt_strategy_ledger/test_selection_order_builder.py"
+    ]
+  },
+  "reproduce_command": "rg -n \"SelectionOrderBuilder|minute_execution_policy|V25_1_SMALL_CAP|REDUCE_TO_TARGET|target_quantity - current_quantity|delta = target_quantity\" backend/services/qmt_strategy_ledger backend/routers/qmt_strategy_ledger.py backend/execution_algos backend/services/trading_core -S",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:backend/services/qmt_strategy_ledger/selection_order_builder.py",
+    "file:backend/routers/qmt_strategy_ledger.py",
+    "file:backend/services/qmt_strategy_ledger/order_service.py",
+    "file:backend/execution_algos/v25_1_small_cap_algo.py",
+    "file:backend/services/trading_core/execution_algo_capabilities.py",
+    "file:backend/tests/qmt_strategy_ledger/test_selection_order_builder.py",
+    "file:backend/tests/qmt_strategy_ledger/test_router_summary.py",
+    "tests/aistock_validation/history/qmt_strategy_ledger/20260520_l3_bug-077-miniqmt-strategy-execution-boundary.md"
+  ],
+  "fingerprint": "cb4a78bb6226c42d",
+  "assigned_agent": "codex-app",
+  "fix_branch": "bug/BUG-077-miniqmt-strategy-execution-boundary",
+  "fix_commit": "6de7d16",
+  "verification_run_id": "qmt_strategy_ledger/20260520_l3_bug-077-miniqmt-strategy-execution-boundary",
+  "created_at": "2026-05-20T03:15:14Z",
+  "first_seen_at": "2026-05-20T03:15:14Z",
+  "last_seen_at": "2026-05-20T03:15:14Z",
+  "fixed_at": "2026-05-20T05:23:33Z",
+  "submitted_at": "2026-05-20T03:15:14Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/qmt_strategy_ledger/selection_order_builder.py",
+    "backend/routers/qmt_strategy_ledger.py",
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/execution_algos/v25_1_small_cap_algo.py",
+    "backend/services/trading_core/execution_algo_capabilities.py",
+    "backend/tests/qmt_strategy_ledger/test_selection_order_builder.py",
+    "backend/tests/qmt_strategy_ledger/test_router_summary.py",
+    "tests/aistock_validation/bugs/20260520_BUG-077-miniqmt-strategy-execution-bypasses-strategypackage-minute-e.json",
+    "tests/aistock_validation/history/qmt_strategy_ledger/20260520_l3_bug-077-miniqmt-strategy-execution-boundary.md"
+  ],
+  "suspected_modules": [
+    "backend/services/qmt_strategy_ledger/selection_order_builder.py",
+    "backend/routers/qmt_strategy_ledger.py",
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/execution_algos/v25_1_small_cap_algo.py",
+    "backend/services/trading_core/execution_algo_capabilities.py",
+    "backend/tests/qmt_strategy_ledger/test_selection_order_builder.py",
+    "backend/tests/qmt_strategy_ledger/test_router_summary.py"
+  ],
+  "required_verification": [
+    "MiniQMT strategy-package execution fails fast when the validated MiniQMT execution bridge is missing.",
+    "SelectionOrderBuilder direct broker-order generation is disabled by default for StrategyPackage execution.",
+    "Regression tests cover the 688193-like REDUCE_TO_TARGET failure shape through the disabled direct path and preserve legacy calculator tests behind an explicit test-only flag.",
+    "Managed manual order preview/submit remains available through QmtManagedOrderService and does not use SelectionOrderBuilder."
+  ],
+  "closure_requirements": [
+    "The /package-bindings/{binding_id}/orders/preview endpoint no longer returns broker-order requests from SelectionOrderBuilder for active StrategyPackage bindings.",
+    "Operators receive a structured UNSUPPORTED_FEATURE fail-fast response that names BUG-077 and the required validated execution-policy bridge.",
+    "Future implementation of the MiniQMT execution bridge must consume StrategyPackage alpha core, daily target/rebalance intent, and validated execution policy before broker submission."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-20T03:15:14Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Reported via aistock_mcp_server.report_bug. Comments: 6"
+    },
+    {
+      "timestamp": "2026-05-20T03:15:14Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Evidence: SelectionOrderBuilder was introduced by commit d15376d feat(qmt): add miniqmt multi-strategy ledger workflow, not by MiniQMT/xtquant."
+    },
+    {
+      "timestamp": "2026-05-20T03:15:14Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Observed POC path: Selection Run -> SelectionOrderBuilder -> QmtManagedOrderService -> MiniQMT."
+    },
+    {
+      "timestamp": "2026-05-20T03:15:14Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Expected path: StrategyPackage -> daily selection/target rebalance intent -> V25_1_SMALL_CAP minute execution plan -> child orders -> QmtManagedOrderService -> MiniQMT."
+    },
+    {
+      "timestamp": "2026-05-20T03:15:14Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Observed invalid order evidence from 2026-05-20 POC: order_remark D0520A_S03_688193SH, 688193.SH SELL 73, metadata rebalance_reason=REDUCE_TO_TARGET, target_quantity=3527, current_quantity=3600, available_quantity=3600, requested_quantity=73."
+    },
+    {
+      "timestamp": "2026-05-20T03:15:14Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Business impact: the most basic StrategyPackage execution promise is violated; current MiniQMT POC validates ledger/order attribution/broker submit/sync only, not true strategy-package execution."
+    },
+    {
+      "timestamp": "2026-05-20T03:15:14Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Required fix: fail-fast when a package declares minute_execution_policy but no MiniQMT execution bridge exists, or implement the bridge so configured V25_1_SMALL_CAP generates broker child orders. Remove/disable direct broker-order generation from SelectionOrderBuilder for strategy-package execution."
+    },
+    {
+      "timestamp": "2026-05-20T03:19:00Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Mirrored BUG-077 to GitHub issue #104 via gh CLI after MCP sync lacked GITHUB_REPOSITORY."
+    },
+    {
+      "timestamp": "2026-05-20T03:19:00Z",
+      "actor": "codex-app",
+      "action": "github_sync_verified",
+      "note": "Confirmed GitHub issue #104 is open and label-synced."
+    },
+    {
+      "timestamp": "2026-05-20T05:03:08Z",
+      "actor": "codex-app",
+      "action": "in_progress",
+      "note": "Fix branch bug/BUG-077-miniqmt-strategy-execution-boundary disables SelectionOrderBuilder direct broker-order generation by default and adds fail-fast regression coverage."
+    },
+    {
+      "timestamp": "2026-05-20T05:19:07Z",
+      "actor": "codex-app",
+      "action": "verification",
+      "note": "Targeted BUG-077 tests passed: pytest backend/tests/qmt_strategy_ledger/test_selection_order_builder.py backend/tests/qmt_strategy_ledger/test_router_summary.py -q -p no:cacheprovider -> 21 passed in 9.43s."
+    },
+    {
+      "timestamp": "2026-05-20T05:19:07Z",
+      "actor": "codex-app",
+      "action": "verification",
+      "note": "Full qmt_strategy_ledger suite passed: pytest backend/tests/qmt_strategy_ledger -q -p no:cacheprovider -> 86 passed in 9.01s."
+    },
+    {
+      "timestamp": "2026-05-20T05:19:07Z",
+      "actor": "codex-app",
+      "action": "verification",
+      "note": "Trading-core related regression passed: pytest backend/tests/trading_core backend/tests/unified_engine/test_qe_config_truth.py -q -p no:cacheprovider -> 126 passed in 10.45s."
+    },
+    {
+      "timestamp": "2026-05-20T05:19:07Z",
+      "actor": "codex-app",
+      "action": "verification",
+      "note": "compileall, validation_module_registry_l0, l0, git diff --check, and git diff --cached --check passed; production 8001/3000, DB, and MiniQMT broker runtime were not touched."
+    },
+    {
+      "timestamp": "2026-05-20T05:23:33Z",
+      "actor": "codex-app",
+      "action": "fixed",
+      "note": "Fix committed locally as 6de7d16 fix(qmt): block legacy selection order strategy execution; branch passed targeted, module, trading-core, compile, guardrail, l0, and diff checks."
+    }
+  ],
+  "github_issue_number": 104,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/104"
+}
