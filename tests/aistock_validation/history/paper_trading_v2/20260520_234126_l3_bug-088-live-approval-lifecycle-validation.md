@@ -4,9 +4,10 @@
 - Level: L3
 - Date: 2026-05-20T23:41:26+08:00
 - Git branch: bug/BUG-088-paper-v2-live-approval-lifecycle
-- Base commit: origin/main 08ab7fe
+- Base commit after rebase: origin/main d31bd75
 - Operator: codex-app
 - Validation focus: BUG-088 / GitHub #110
+- Fix commit after rebase: 9d29465
 
 ## Scope
 
@@ -64,6 +65,8 @@ python scripts/aistock_module_ownership_scan.py --changed-only --fail-on-unmappe
 
 git diff origin/main --check
 # PASS; only CRLF conversion warnings from existing Windows git settings
+
+# Post-rebase validation on origin/main d31bd75 repeated the focused pytest, branch guardrail/ownership scans, nox paper_v2_backend, nox l0, and git diff --check with the same PASS results.
 ```
 
 ## Evidence
