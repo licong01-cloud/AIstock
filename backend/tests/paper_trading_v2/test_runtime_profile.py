@@ -11,6 +11,7 @@ from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2R
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
 from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
+from backend.services.selection_center.runtime_profile import runtime_profile_config_sha256
 from backend.services.trading_core.errors import InvalidStateTransitionError, StrategyPackageValidationError
 from backend.services.trading_core.models import RunStatus
 
@@ -21,6 +22,7 @@ from backend.tests.paper_trading_v2.test_day_runner import (
     FakeSuspendProvider,
     NoopRefreshAudit,
     make_paper_enabled_manifest,
+    save_manifest_with_default_execution_policy,
     make_raw_bars,
     runtime_with_authoritative_scores,
 )
@@ -30,7 +32,7 @@ def _portfolio_fixture(*, custom_params: dict | None = None):
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_enabled_manifest(topk=2, custom_params=custom_params)
-    package_repo.save_manifest(manifest)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
     service = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,
@@ -255,3 +257,77 @@ def test_runtime_profile_rejects_event_signal_policy_without_platform_profile_id
                 }
             },
         )
+
+
+def test_default_runtime_profile_binding_hash_is_post_contract_normalized() -> None:
+    _package_repo, _paper_repo, service, _manifest, portfolio = _portfolio_fixture()
+
+    runtime_config = service.resolve_runtime_config_for_date(
+        portfolio=portfolio,
+        trade_date=date(2024, 1, 2),
+        runtime_config={},
+    )
+
+    binding = runtime_config["runtime_profile_binding"]
+    assert binding["source"] == "platform_default"
+    assert binding["profile_version_id"] == "platform_default_runtime_profile_v1"
+    assert binding["config_sha256"] == runtime_profile_config_sha256(runtime_config)
+    assert runtime_config["runtime_profile"]["selection"]["top_k"] == 2
+
+
+def test_paper_day_runner_rejects_unversioned_runtime_profile_override() -> None:
+    _package_repo, paper_repo, _service, manifest, portfolio = _portfolio_fixture()
+
+    with pytest.raises(StrategyPackageValidationError, match="versioned runtime profile activation") as exc_info:
+        PaperTradingDayRunner(
+            repository=paper_repo,
+            calendar_provider=FakeCalendar(),
+            market_data_provider=PaperV2MinuteMarketDataProvider(
+                limit_price_provider=FakeLimitProvider(),
+                suspend_status_provider=FakeSuspendProvider(),
+                tdx_fetcher=lambda _symbol, _trade_date: make_raw_bars(),
+            ),
+            runtime=runtime_with_authoritative_scores(manifest, data_source=MinuteDataSource.TDX_REALTIME.value),
+            tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+            refresh_audit=NoopRefreshAudit(),
+        ).run_day(
+            portfolio_id=portfolio.portfolio_id,
+            trade_date=date(2024, 1, 2),
+            runtime_config={"runtime_profile": {"selection": {"top_k": 1}}},
+        )
+
+    assert exc_info.value.context["behavior_keys"] == ["runtime_profile"]
+    assert not paper_repo.runs
+
+
+def test_paper_day_runner_rejects_platform_default_binding_for_behavior_override() -> None:
+    _package_repo, paper_repo, _service, manifest, portfolio = _portfolio_fixture()
+    raw_config = {
+        "runtime_profile": {"selection": {"top_k": 1}},
+        "runtime_profile_binding": {
+            "source": "platform_default",
+            "profile_version_id": "platform_default_runtime_profile_v1",
+            "config_sha256": "not_allowed_for_behavior_change",
+            "trade_enabled": True,
+        },
+    }
+
+    with pytest.raises(StrategyPackageValidationError, match="platform default runtime profile"):
+        PaperTradingDayRunner(
+            repository=paper_repo,
+            calendar_provider=FakeCalendar(),
+            market_data_provider=PaperV2MinuteMarketDataProvider(
+                limit_price_provider=FakeLimitProvider(),
+                suspend_status_provider=FakeSuspendProvider(),
+                tdx_fetcher=lambda _symbol, _trade_date: make_raw_bars(),
+            ),
+            runtime=runtime_with_authoritative_scores(manifest, data_source=MinuteDataSource.TDX_REALTIME.value),
+            tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+            refresh_audit=NoopRefreshAudit(),
+        ).run_day(
+            portfolio_id=portfolio.portfolio_id,
+            trade_date=date(2024, 1, 2),
+            runtime_config=raw_config,
+        )
+
+    assert not paper_repo.runs

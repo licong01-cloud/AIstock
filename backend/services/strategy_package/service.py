@@ -4,19 +4,20 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import psycopg2.extras
 
 from backend.db.pg_pool import get_conn
-from backend.services.trading_core.errors import StrategyPackageValidationError
+from backend.services.trading_core.errors import InvalidStateTransitionError, StrategyPackageValidationError
 
 from .candidate import (
     CandidateStrategyPackageService,
     CandidateStrategyPackageStatus,
 )
 from .execution_policy import (
+    BACKTEST_SUCCESS_STATUSES,
     ExecutionPolicyValidationStatus,
     ValidatedExecutionPolicy,
     ensure_policy_can_enter_paper,
@@ -32,7 +33,7 @@ from .model_state import (
     StrategyPackageModelState,
     evaluate_model_staleness,
 )
-from .models import PackageStatus, SourceType, StrategyPackageManifest
+from .models import LiveApprovalStatus, PackageStatus, SourceType, StrategyPackageLiveApproval, StrategyPackageManifest
 from .package_asset import StrategyPackageAssetRecord, StrategyPackageAssetType
 from .qe_source_resolver import QEExperimentSourceResolver
 from .repository import PackageStatusEvent, StrategyPackageRecord, StrategyPackageRepository
@@ -41,6 +42,7 @@ from .runtime_variant import (
     RuntimeVariantValidationStatus,
     StrategyPackageRuntimeVariant,
     build_runtime_variant,
+    derive_locked_core_hash,
 )
 from .validation_run import (
     PackageValidationRetrainMode,
@@ -76,6 +78,25 @@ STATUS_TRANSITIONS: dict[PackageStatus, set[PackageStatus]] = {
         PackageStatus.PAPER_FAILED,
     },
 }
+
+LIVE_APPROVAL_STATUS_TRANSITIONS: dict[LiveApprovalStatus, set[LiveApprovalStatus]] = {
+    LiveApprovalStatus.LIVE_APPROVAL_PENDING: {LiveApprovalStatus.LIVE_CANDIDATE},
+    LiveApprovalStatus.LIVE_APPROVED: {LiveApprovalStatus.LIVE_APPROVAL_PENDING},
+    LiveApprovalStatus.LIVE_REJECTED: {
+        LiveApprovalStatus.LIVE_CANDIDATE,
+        LiveApprovalStatus.LIVE_APPROVAL_PENDING,
+    },
+    LiveApprovalStatus.LIVE_RETIRED: {
+        LiveApprovalStatus.LIVE_CANDIDATE,
+        LiveApprovalStatus.LIVE_APPROVAL_PENDING,
+        LiveApprovalStatus.LIVE_APPROVED,
+        LiveApprovalStatus.LIVE_REJECTED,
+    },
+}
+
+SIM_VALIDATION_SUCCESS_STATUSES = {"PASSED", "SUCCEEDED", "VERIFIED", "PASS", "SUCCESS"}
+REQUIRED_LIVE_SIM_VALIDATION_KEYS = {"paper_v2", "miniqmt_sim"}
+BROKER_COMPATIBILITY_SUCCESS_STATUSES = {"PASSED", "VERIFIED", "COMPATIBLE"}
 
 PAPER_READY_GOVERNANCE_LIMIT = 10_000
 
@@ -461,13 +482,24 @@ class StrategyPackageService:
     ) -> ValidatedExecutionPolicy:
         record = self.repository.get(package_id)
         normalized = normalize_execution_policy_json(policy_json)
+        normalized_status = source_backtest_status.strip().upper()
+        if normalized_status not in BACKTEST_SUCCESS_STATUSES:
+            raise StrategyPackageValidationError(
+                "execution policy source backtest must have explicit successful evidence",
+                context={
+                    "package_id": package_id,
+                    "source_backtest_id": source_backtest_id,
+                    "source_backtest_status": source_backtest_status,
+                    "allowed_source_backtest_statuses": sorted(BACKTEST_SUCCESS_STATUSES),
+                },
+            )
         policy = ValidatedExecutionPolicy(
             package_id=package_id,
             manifest_sha256=record.manifest_sha256,
             policy_name=policy_name,
             policy_json=normalized,
             source_backtest_id=source_backtest_id,
-            source_backtest_status=source_backtest_status,
+            source_backtest_status=normalized_status,
             validation_status=ExecutionPolicyValidationStatus.BACKTEST_VALIDATED,
             paper_enabled=paper_enabled,
         )
@@ -745,6 +777,211 @@ class StrategyPackageService:
             limit=limit,
         )
 
+    def create_live_approval_candidate(
+        self,
+        *,
+        package_id: str,
+        manifest_sha256: str,
+        alpha_core_sha256: str,
+        runtime_release_id: str,
+        runtime_release_sha256: str,
+        runtime_profile_id: str,
+        runtime_profile_version_id: str,
+        runtime_profile_sha256: str,
+        execution_policy_id: str,
+        execution_policy_sha256: str,
+        tail_policy_id: str,
+        tail_policy_sha256: str,
+        target_broker_backend: str,
+        sim_validation_evidence: dict[str, Any],
+        broker_compatibility: dict[str, Any],
+        portfolio_id: str | None = None,
+        broker_account_id: str | None = None,
+        risk_note: str | None = None,
+        rollback_plan: str | None = None,
+        requested_by: str | None = None,
+        audit_json: dict[str, Any] | None = None,
+    ) -> StrategyPackageLiveApproval:
+        record = self.repository.get(package_id)
+        expected_alpha_core = derive_locked_core_hash(record.current_manifest())
+        self._require_live_identity_match(
+            record=record,
+            manifest_sha256=manifest_sha256,
+            alpha_core_sha256=alpha_core_sha256,
+            expected_alpha_core=expected_alpha_core,
+        )
+        approval = StrategyPackageLiveApproval(
+            package_id=package_id,
+            manifest_sha256=manifest_sha256,
+            alpha_core_sha256=alpha_core_sha256,
+            portfolio_id=portfolio_id,
+            runtime_release_id=runtime_release_id,
+            runtime_release_sha256=runtime_release_sha256,
+            runtime_profile_id=runtime_profile_id,
+            runtime_profile_version_id=runtime_profile_version_id,
+            runtime_profile_sha256=runtime_profile_sha256,
+            execution_policy_id=execution_policy_id,
+            execution_policy_sha256=execution_policy_sha256,
+            tail_policy_id=tail_policy_id,
+            tail_policy_sha256=tail_policy_sha256,
+            target_broker_backend=target_broker_backend,
+            broker_account_id=broker_account_id,
+            sim_validation_evidence=sim_validation_evidence,
+            broker_compatibility=broker_compatibility,
+            risk_note=risk_note,
+            rollback_plan=rollback_plan,
+            requested_by=requested_by,
+            audit_json={
+                "created_by": requested_by,
+                "approval_lifecycle": "candidate_created",
+                **(audit_json or {}),
+            },
+        )
+        self._validate_live_approval_evidence(approval)
+        return self.repository.save_live_approval(approval)
+
+    def get_live_approval(self, package_id: str, approval_id: str) -> StrategyPackageLiveApproval:
+        return self.repository.get_live_approval(package_id, approval_id)
+
+    def list_live_approvals(
+        self,
+        *,
+        package_id: str | None = None,
+        portfolio_id: str | None = None,
+        status: LiveApprovalStatus | None = None,
+        limit: int = 100,
+    ) -> list[StrategyPackageLiveApproval]:
+        return self.repository.list_live_approvals(
+            package_id=package_id,
+            portfolio_id=portfolio_id,
+            status=status,
+            limit=limit,
+        )
+
+    def submit_live_approval(
+        self,
+        *,
+        package_id: str,
+        approval_id: str,
+        requested_by: str,
+        risk_note: str,
+        rollback_plan: str,
+    ) -> StrategyPackageLiveApproval:
+        approval = self.repository.get_live_approval(package_id, approval_id)
+        return self._transition_live_approval(
+            approval,
+            to_status=LiveApprovalStatus.LIVE_APPROVAL_PENDING,
+            updates={
+                "requested_by": requested_by,
+                "requested_at": datetime.now(timezone.utc),
+                "risk_note": risk_note,
+                "rollback_plan": rollback_plan,
+            },
+            action="submit_live_approval",
+        )
+
+    def approve_live_approval(
+        self,
+        *,
+        package_id: str,
+        approval_id: str,
+        approved_by: str,
+        risk_note: str | None = None,
+        rollback_plan: str | None = None,
+    ) -> StrategyPackageLiveApproval:
+        approval = self.repository.get_live_approval(package_id, approval_id)
+        return self._transition_live_approval(
+            approval,
+            to_status=LiveApprovalStatus.LIVE_APPROVED,
+            updates={
+                "approved_by": approved_by,
+                "approved_at": datetime.now(timezone.utc),
+                "risk_note": risk_note or approval.risk_note,
+                "rollback_plan": rollback_plan or approval.rollback_plan,
+            },
+            action="approve_live_approval",
+        )
+
+    def reject_live_approval(
+        self,
+        *,
+        package_id: str,
+        approval_id: str,
+        rejected_by: str,
+        rejection_reason: str,
+    ) -> StrategyPackageLiveApproval:
+        approval = self.repository.get_live_approval(package_id, approval_id)
+        return self._transition_live_approval(
+            approval,
+            to_status=LiveApprovalStatus.LIVE_REJECTED,
+            updates={
+                "rejected_by": rejected_by,
+                "rejected_at": datetime.now(timezone.utc),
+                "rejection_reason": rejection_reason,
+            },
+            action="reject_live_approval",
+        )
+
+    def retire_live_approval(
+        self,
+        *,
+        package_id: str,
+        approval_id: str,
+        retired_by: str,
+        retirement_reason: str,
+    ) -> StrategyPackageLiveApproval:
+        approval = self.repository.get_live_approval(package_id, approval_id)
+        return self._transition_live_approval(
+            approval,
+            to_status=LiveApprovalStatus.LIVE_RETIRED,
+            updates={
+                "retired_by": retired_by,
+                "retired_at": datetime.now(timezone.utc),
+                "retirement_reason": retirement_reason,
+            },
+            action="retire_live_approval",
+        )
+
+    def require_live_approval(
+        self,
+        *,
+        package_id: str,
+        approval_id: str,
+        manifest_sha256: str | None = None,
+        runtime_release_sha256: str | None = None,
+        target_broker_backend: str | None = None,
+    ) -> StrategyPackageLiveApproval:
+        approval = self.repository.get_live_approval(package_id, approval_id)
+        blockers: list[str] = []
+        if approval.approval_status != LiveApprovalStatus.LIVE_APPROVED:
+            blockers.append(f"approval_status={approval.approval_status.value}")
+        if manifest_sha256 is not None and approval.manifest_sha256 != manifest_sha256:
+            blockers.append("manifest_sha256_mismatch")
+        if runtime_release_sha256 is not None and approval.runtime_release_sha256 != runtime_release_sha256:
+            blockers.append("runtime_release_sha256_mismatch")
+        if target_broker_backend is not None and approval.target_broker_backend != target_broker_backend:
+            blockers.append("target_broker_backend_mismatch")
+        try:
+            self._validate_live_approval_evidence(approval)
+        except StrategyPackageValidationError as exc:
+            blockers.append("approval_evidence_invalid")
+            evidence_context = exc.context
+        else:
+            evidence_context = {}
+        if blockers:
+            raise StrategyPackageValidationError(
+                "live execution requires an approved StrategyPackage live approval record",
+                context={
+                    "package_id": package_id,
+                    "approval_id": approval_id,
+                    "blockers": blockers,
+                    "approval_status": approval.approval_status.value,
+                    "runtime_release_sha256": approval.runtime_release_sha256,
+                    **evidence_context,
+                },
+            )
+        return approval
+
     def summarize_validation_stability(
         self,
         package_id: str,
@@ -822,6 +1059,123 @@ class StrategyPackageService:
             "governance eligibility must be paper_ready before enabling Paper",
             context=eligibility,
         )
+
+    @staticmethod
+    def _require_live_identity_match(
+        *,
+        record: StrategyPackageRecord,
+        manifest_sha256: str,
+        alpha_core_sha256: str,
+        expected_alpha_core: str,
+    ) -> None:
+        blockers: list[str] = []
+        if record.manifest_sha256 != manifest_sha256:
+            blockers.append("manifest_sha256_mismatch")
+        if expected_alpha_core != alpha_core_sha256:
+            blockers.append("alpha_core_sha256_mismatch")
+        if blockers:
+            raise StrategyPackageValidationError(
+                "live approval identity must match immutable StrategyPackage alpha core",
+                context={
+                    "package_id": record.package_id,
+                    "blockers": blockers,
+                    "current_manifest_sha256": record.manifest_sha256,
+                    "provided_manifest_sha256": manifest_sha256,
+                    "expected_alpha_core_sha256": expected_alpha_core,
+                    "provided_alpha_core_sha256": alpha_core_sha256,
+                },
+            )
+
+    @staticmethod
+    def _validate_live_approval_evidence(approval: StrategyPackageLiveApproval) -> None:
+        missing_sim_keys = sorted(REQUIRED_LIVE_SIM_VALIDATION_KEYS.difference(approval.sim_validation_evidence))
+        failing_sim_keys: list[str] = []
+        for key in sorted(REQUIRED_LIVE_SIM_VALIDATION_KEYS.intersection(approval.sim_validation_evidence)):
+            value = approval.sim_validation_evidence.get(key)
+            status = ""
+            if isinstance(value, dict):
+                status = str(value.get("status") or value.get("validation_status") or "").strip().upper()
+            else:
+                status = str(value or "").strip().upper()
+            if status not in SIM_VALIDATION_SUCCESS_STATUSES:
+                failing_sim_keys.append(key)
+        broker_status = str(
+            approval.broker_compatibility.get("status")
+            or approval.broker_compatibility.get("compatibility_status")
+            or ""
+        ).strip().upper()
+        broker_backend = str(
+            approval.broker_compatibility.get("target_broker_backend")
+            or approval.broker_compatibility.get("broker_backend")
+            or ""
+        ).strip()
+        blockers: list[str] = []
+        if missing_sim_keys:
+            blockers.append("missing_sim_validation_evidence")
+        if failing_sim_keys:
+            blockers.append("failed_sim_validation_evidence")
+        if broker_status not in BROKER_COMPATIBILITY_SUCCESS_STATUSES:
+            blockers.append("broker_compatibility_not_verified")
+        if broker_backend != approval.target_broker_backend:
+            blockers.append("broker_backend_mismatch")
+        if blockers:
+            raise StrategyPackageValidationError(
+                "live approval requires Paper/MiniQMT SIM validation evidence and broker compatibility verification",
+                context={
+                    "package_id": approval.package_id,
+                    "approval_id": approval.approval_id,
+                    "blockers": blockers,
+                    "missing_sim_validation_keys": missing_sim_keys,
+                    "failing_sim_validation_keys": failing_sim_keys,
+                    "broker_status": broker_status,
+                    "broker_backend": broker_backend,
+                    "target_broker_backend": approval.target_broker_backend,
+                },
+            )
+
+    def _transition_live_approval(
+        self,
+        approval: StrategyPackageLiveApproval,
+        *,
+        to_status: LiveApprovalStatus,
+        updates: dict[str, Any],
+        action: str,
+    ) -> StrategyPackageLiveApproval:
+        allowed_from = LIVE_APPROVAL_STATUS_TRANSITIONS.get(to_status, set())
+        if approval.approval_status not in allowed_from:
+            raise InvalidStateTransitionError(
+                "invalid live approval lifecycle transition",
+                context={
+                    "package_id": approval.package_id,
+                    "approval_id": approval.approval_id,
+                    "from_status": approval.approval_status.value,
+                    "to_status": to_status.value,
+                    "allowed_from": sorted(item.value for item in allowed_from),
+                },
+            )
+        self._validate_live_approval_evidence(approval)
+        now = datetime.now(timezone.utc)
+        audit_json = dict(approval.audit_json or {})
+        events = list(audit_json.get("events") or [])
+        events.append(
+            {
+                "action": action,
+                "from_status": approval.approval_status.value,
+                "to_status": to_status.value,
+                "created_at": now.isoformat(),
+            }
+        )
+        audit_json["events"] = events
+        updated = approval.model_copy(
+            update={
+                **updates,
+                "approval_status": to_status,
+                "audit_json": audit_json,
+                "updated_at": now,
+            }
+        )
+        updated = StrategyPackageLiveApproval.model_validate(updated.model_dump())
+        return self.repository.update_live_approval(updated)
 
     def _manifest_identity_gate(self, record: StrategyPackageRecord, manifest: StrategyPackageManifest) -> dict[str, Any]:
         blockers: list[str] = []

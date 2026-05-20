@@ -29,6 +29,7 @@ from backend.services.trading_core.errors import (
     SessionSourceUnsupportedError,
 )
 from backend.services.trading_core.models import RunStatus
+from backend.tests.paper_trading_v2.test_day_runner import save_manifest_with_default_execution_policy
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
 
@@ -46,7 +47,7 @@ def make_portfolio(*, data_source: MinuteDataSource = MinuteDataSource.DB_HISTOR
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_manifest()
-    package_repo.save_manifest(manifest)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
     portfolio = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,
@@ -144,15 +145,28 @@ class FakeTradingCalendar:
 
 
 def test_replay_only_session_create_tick_and_progress() -> None:
-    _package_repo, paper_repo, portfolio = make_portfolio(data_source=MinuteDataSource.DB_HISTORICAL)
-    service = PaperTradingSessionService(repository=paper_repo)
+    package_repo, paper_repo, portfolio = make_portfolio(data_source=MinuteDataSource.DB_HISTORICAL)
+    portfolio_service = PaperTradingV2PortfolioService(package_repository=package_repo, repository=paper_repo)
+    profile, version = portfolio_service.create_runtime_profile(
+        portfolio_id=portfolio.portfolio_id,
+        profile_name="session top20 profile",
+        config_json={"runtime_profile": {"selection": {"top_k": 20}}},
+        created_by="unit_test",
+    )
+    activation = portfolio_service.activate_runtime_config(
+        portfolio_id=portfolio.portfolio_id,
+        trade_date=date(2024, 1, 2),
+        profile_version_id=version.profile_version_id,
+        activated_by="unit_test",
+        reason="session replay runtime profile",
+    )
+    service = PaperTradingSessionService(repository=paper_repo, package_repository=package_repo)
     session = service.create_session(
         portfolio_id=portfolio.portfolio_id,
         mode=PaperSessionMode.REPLAY_ONLY,
         start_date=date(2024, 1, 2),
         end_date=date(2024, 1, 3),
         historical_data_source=MinuteDataSource.DB_HISTORICAL,
-        runtime_config={"runtime_profile": {"selection": {"top_k": 20}}},
         created_by="unit_test",
     )
 
@@ -166,6 +180,8 @@ def test_replay_only_session_create_tick_and_progress() -> None:
     assert progress.session.status == PaperSessionStatus.SUCCEEDED
     assert progress.day_count == 2
     assert fake_replay.calls[0]["rerun_policy"] == "reject_existing"
+    assert session.runtime_config["runtime_profile_activation"]["activation_id"] == activation.activation_id
+    assert session.runtime_config["runtime_profile_activation"]["config_sha256"] == version.config_sha256
     assert fake_replay.calls[0]["runtime_config"]["runtime_profile"]["selection"]["top_k"] == 20
     event_types = [event["event_type"] for event in paper_repo.list_session_events(session.session_id)]
     assert event_types == ["SESSION_CREATED", "SESSION_REPLAY_STARTED", "SESSION_REPLAY_SUCCEEDED"]

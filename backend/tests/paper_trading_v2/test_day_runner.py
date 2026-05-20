@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
@@ -198,13 +198,49 @@ def make_paper_enabled_manifest(
     return freeze_manifest(manifest)
 
 
+def save_manifest_with_default_execution_policy(
+    package_repo: InMemoryStrategyPackageRepository,
+    manifest,
+):
+    package_repo.save_manifest(manifest)
+    return StrategyPackageService(repository=package_repo).create_execution_policy(
+        package_id=manifest.package_id,
+        policy_name="unit_default_manifest_policy",
+        policy_json=manifest.minute_execution_policy.model_dump(mode="json"),
+        source_backtest_id="unit_default_manifest_policy_backtest",
+        source_backtest_status="COMPLETED",
+        paper_enabled=True,
+    )
+
+
+def test_create_portfolio_requires_explicit_validated_policy_evidence() -> None:
+    package_repo = InMemoryStrategyPackageRepository()
+    paper_repo = InMemoryPaperTradingV2Repository()
+    manifest = make_paper_enabled_manifest()
+    package_repo.save_manifest(manifest)
+
+    with pytest.raises(StrategyPackageValidationError, match="explicit validated execution policy"):
+        PaperTradingV2PortfolioService(
+            package_repository=package_repo,
+            repository=paper_repo,
+        ).create_portfolio(
+            package_id=manifest.package_id,
+            portfolio_name="missing policy evidence",
+            initial_cash=100_000,
+            start_date=date(2024, 1, 2),
+            data_source=MinuteDataSource.DB_HISTORICAL,
+        )
+
+    assert not package_repo.list_execution_policies(manifest.package_id)
+
+
 def test_create_portfolio_accepts_requested_validated_policy_that_differs_from_manifest() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = freeze_manifest(
         make_manifest(algo_code="V24_PLAN").model_copy(update={"package_status": PackageStatus.PAPER_ENABLED})
     )
-    package_repo.save_manifest(manifest)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
     policy_json = {
         "execution_level": "minute",
         "bar_freq": "1m",
@@ -255,7 +291,7 @@ def test_create_portfolio_accepts_requested_policy_matching_qe_contract() -> Non
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_enabled_manifest()
-    package_repo.save_manifest(manifest)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
     policy = StrategyPackageService(repository=package_repo).create_execution_policy(
         package_id=manifest.package_id,
         policy_name="requested_manifest_policy",
@@ -324,7 +360,7 @@ def test_paper_trading_day_runner_persists_full_day_path() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_enabled_manifest()
-    package_repo.save_manifest(manifest)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
     portfolio = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,
@@ -425,7 +461,7 @@ def test_db_historical_day_runner_loads_real_minute_price_for_existing_position_
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_enabled_manifest()
-    package_repo.save_manifest(manifest)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
     portfolio = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,
@@ -459,6 +495,8 @@ def test_db_historical_day_runner_loads_real_minute_price_for_existing_position_
         ],
         prices={"000001.SZ": 10.0},
     )
+
+
     provider = FakeDbMinuteProvider()
 
     result = PaperTradingDayRunner(
@@ -492,7 +530,7 @@ def test_day_runner_risk_policy_blocks_buy_and_forces_existing_position_exit() -
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_enabled_manifest(custom_params={"risk_policy": {"enabled": True}})
-    package_repo.save_manifest(manifest)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
     portfolio = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,
@@ -526,6 +564,21 @@ def test_day_runner_risk_policy_blocks_buy_and_forces_existing_position_exit() -
         ],
         prices={"000001.SZ": 10.0},
     )
+    runtime_config = {"runtime_profile": {"risk_policy": {"enabled": True}}}
+    profile_service = PaperTradingV2PortfolioService(package_repository=package_repo, repository=paper_repo)
+    _profile, version = profile_service.create_runtime_profile(
+        portfolio_id=portfolio.portfolio_id,
+        profile_name="risk policy active",
+        config_json=runtime_config,
+        created_by="unit_test",
+    )
+    activation = profile_service.activate_runtime_config(
+        portfolio_id=portfolio.portfolio_id,
+        trade_date=date(2024, 1, 3),
+        profile_version_id=version.profile_version_id,
+        activated_by="unit_test",
+        reason="risk policy forced exit test",
+    )
     provider = FakeDbMinuteProvider()
 
     result = PaperTradingDayRunner(
@@ -557,9 +610,9 @@ def test_day_runner_risk_policy_blocks_buy_and_forces_existing_position_exit() -
     ).run_day(
         portfolio_id=portfolio.portfolio_id,
         trade_date=date(2024, 1, 3),
-        runtime_config={"runtime_profile": {"risk_policy": {"enabled": True}}},
     )
 
+    assert result.run.runtime_config["runtime_profile_activation"]["activation_id"] == activation.activation_id
     orders = paper_repo.orders[result.run.run_id]
     sell_orders = [order for order in orders if order.symbol == "000001.SZ" and order.side.value == "SELL"]
     buy_orders = [order for order in orders if order.symbol == "000001.SZ" and order.side.value == "BUY"]
@@ -615,7 +668,7 @@ def test_paper_trading_day_runner_rejects_raw_execution_policy_override() -> Non
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_enabled_manifest()
-    package_repo.save_manifest(manifest)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
     portfolio = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,
@@ -649,7 +702,7 @@ def test_paper_trading_day_runner_fails_when_symbol_is_suspended() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_enabled_manifest()
-    package_repo.save_manifest(manifest)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
     portfolio = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,
@@ -689,7 +742,7 @@ def test_paper_trading_day_runner_rejects_duplicate_portfolio_trade_date() -> No
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_enabled_manifest()
-    package_repo.save_manifest(manifest)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
     portfolio = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,
@@ -729,7 +782,7 @@ def test_paper_execution_policy_activation_accepts_versioned_policy_that_differs
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_enabled_manifest()
-    package_repo.save_manifest(manifest)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
     portfolio_service = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,
@@ -774,7 +827,7 @@ def test_paper_execution_policy_activation_matching_qe_contract_is_used_for_trad
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_enabled_manifest()
-    package_repo.save_manifest(manifest)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
     portfolio_service = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,
@@ -831,7 +884,7 @@ def test_day_runner_consumes_validated_runtime_variant_candidate() -> None:
             "max_weight": 0.05,
         },
     )
-    package_repo.save_manifest(manifest)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
     package_service = StrategyPackageService(repository=package_repo)
     variant = package_service.create_runtime_variant(
         manifest.package_id,
@@ -905,7 +958,7 @@ def test_paper_execution_policy_activation_rejects_existing_run() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_enabled_manifest()
-    package_repo.save_manifest(manifest)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
     portfolio_service = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,
@@ -940,7 +993,7 @@ def test_paper_execution_policy_activation_replace_requires_explicit_reason() ->
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_enabled_manifest()
-    package_repo.save_manifest(manifest)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
     portfolio_service = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,
@@ -990,7 +1043,7 @@ def test_paper_portfolio_lifecycle_blocks_paused_runs_until_resumed() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_enabled_manifest()
-    package_repo.save_manifest(manifest)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
     service = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,
@@ -1033,7 +1086,7 @@ def test_paper_trading_readiness_checks_rebalance_and_market_data() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_enabled_manifest()
-    package_repo.save_manifest(manifest)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
     portfolio = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,
@@ -1080,7 +1133,7 @@ def test_readiness_loads_db_price_for_existing_position_equity() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_enabled_manifest()
-    package_repo.save_manifest(manifest)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
     portfolio = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,
@@ -1143,7 +1196,7 @@ def test_readiness_risk_policy_forced_exit_overrides_score_sell_target_once() ->
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_enabled_manifest(custom_params={"risk_policy": {"enabled": True}})
-    package_repo.save_manifest(manifest)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
     portfolio = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,
@@ -1250,7 +1303,7 @@ def test_historical_replay_runs_paper_day_runner_over_trading_days() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_enabled_manifest()
-    package_repo.save_manifest(manifest)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
     portfolio = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,
@@ -1284,7 +1337,7 @@ def test_historical_replay_rejects_existing_runs_before_partial_replay() -> None
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_enabled_manifest()
-    package_repo.save_manifest(manifest)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
     portfolio = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,
@@ -1324,7 +1377,7 @@ def test_historical_replay_reset_requires_explicit_confirmation() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_enabled_manifest()
-    package_repo.save_manifest(manifest)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
     portfolio = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,
@@ -1367,7 +1420,7 @@ def test_historical_replay_reset_deletes_existing_runs_before_replay() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_enabled_manifest()
-    package_repo.save_manifest(manifest)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
     portfolio = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,

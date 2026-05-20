@@ -1,4 +1,4 @@
-"""Strategy Package manifest v1 models."""
+﻿"""Strategy Package manifest v1 models."""
 
 from __future__ import annotations
 
@@ -307,4 +307,115 @@ class StrategyPackageManifest(BaseModel):
                     "alpha_core_v1 manifest cannot bind platform runtime policy fields: "
                     + ", ".join(bound_fields)
                 )
+        return self
+
+class LiveApprovalStatus(str, Enum):
+    LIVE_CANDIDATE = "LIVE_CANDIDATE"
+    LIVE_APPROVAL_PENDING = "LIVE_APPROVAL_PENDING"
+    LIVE_APPROVED = "LIVE_APPROVED"
+    LIVE_REJECTED = "LIVE_REJECTED"
+    LIVE_RETIRED = "LIVE_RETIRED"
+
+
+class StrategyPackageLiveApproval(BaseModel):
+    """Auditable live-admission record for a package plus platform runtime release."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    approval_id: str = Field(default_factory=lambda: f"liveappr_{uuid4().hex}")
+    package_id: str
+    manifest_sha256: str
+    alpha_core_sha256: str
+    portfolio_id: str | None = None
+    runtime_release_id: str
+    runtime_release_sha256: str
+    runtime_profile_id: str
+    runtime_profile_version_id: str
+    runtime_profile_sha256: str
+    execution_policy_id: str
+    execution_policy_sha256: str
+    tail_policy_id: str
+    tail_policy_sha256: str
+    target_broker_backend: str
+    broker_account_id: str | None = None
+    approval_status: LiveApprovalStatus = LiveApprovalStatus.LIVE_CANDIDATE
+    sim_validation_evidence: dict[str, Any]
+    broker_compatibility: dict[str, Any]
+    risk_note: str | None = None
+    rollback_plan: str | None = None
+    requested_by: str | None = None
+    requested_at: datetime | None = None
+    approved_by: str | None = None
+    approved_at: datetime | None = None
+    rejected_by: str | None = None
+    rejected_at: datetime | None = None
+    rejection_reason: str | None = None
+    retired_by: str | None = None
+    retired_at: datetime | None = None
+    retirement_reason: str | None = None
+    audit_json: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @field_validator(
+        "approval_id",
+        "package_id",
+        "manifest_sha256",
+        "alpha_core_sha256",
+        "runtime_release_id",
+        "runtime_release_sha256",
+        "runtime_profile_id",
+        "runtime_profile_version_id",
+        "runtime_profile_sha256",
+        "execution_policy_id",
+        "execution_policy_sha256",
+        "tail_policy_id",
+        "tail_policy_sha256",
+        "target_broker_backend",
+    )
+    @classmethod
+    def _required_text(cls, value: str) -> str:
+        value = str(value or "").strip()
+        if not value:
+            raise ValueError("field is required")
+        return value
+
+    @field_validator(
+        "portfolio_id",
+        "broker_account_id",
+        "risk_note",
+        "rollback_plan",
+        "requested_by",
+        "approved_by",
+        "rejected_by",
+        "rejection_reason",
+        "retired_by",
+        "retirement_reason",
+    )
+    @classmethod
+    def _optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = str(value).strip()
+        return value or None
+
+    @model_validator(mode="after")
+    def _status_evidence_is_complete(self) -> "StrategyPackageLiveApproval":
+        if self.approval_status in {
+            LiveApprovalStatus.LIVE_APPROVAL_PENDING,
+            LiveApprovalStatus.LIVE_APPROVED,
+        }:
+            if not self.requested_by or self.requested_at is None:
+                raise ValueError("pending or approved live approval requires requester and requested_at")
+            if not self.risk_note or not self.rollback_plan:
+                raise ValueError("pending or approved live approval requires risk_note and rollback_plan")
+        if self.approval_status == LiveApprovalStatus.LIVE_APPROVED:
+            if not self.approved_by or self.approved_at is None:
+                raise ValueError("approved live approval requires approver and approved_at")
+        if self.approval_status == LiveApprovalStatus.LIVE_REJECTED:
+            if not self.rejected_by or self.rejected_at is None or not self.rejection_reason:
+                raise ValueError("rejected live approval requires reviewer, rejected_at, and rejection_reason")
+        if self.approval_status == LiveApprovalStatus.LIVE_RETIRED:
+            if not self.retired_by or self.retired_at is None or not self.retirement_reason:
+                raise ValueError("retired live approval requires reviewer, retired_at, and retirement_reason")
         return self
