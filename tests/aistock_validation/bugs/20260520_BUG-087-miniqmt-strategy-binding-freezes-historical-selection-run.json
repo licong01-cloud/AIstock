@@ -1,0 +1,98 @@
+{
+  "bug_id": "BUG-087",
+  "schema_version": "aistock_validation_bug_v1",
+  "title": "MiniQMT strategy binding freezes historical selection_run instead of enforcing daily selection generation",
+  "description": "Expected: A MiniQMT virtual strategy should bind a StrategyPackage alpha core plus platform runtime release/profile references. Each trading day must generate or resolve the current trade_date SelectionRun from the package alpha core and platform runtime versions before order generation. Historical SelectionRun records should be audit/replay evidence only and must not be the long-lived active binding that drives future order generation.\nActual: QmtStrategyPackageBindingService.bind_with_result requires request.selection_run_id, verifies that run, stores selection_run_id/trade_date/top_k/target_weight/runtime_config in qmt_strategy.strategy_package_binding, and SelectionOrderBuilder later reads the active binding stored selection_run_id to build orders. This design can reuse stale signals unless another layer manually rolls the binding every day, and it mixes strategy identity, runtime params, and daily signal evidence in one binding record.",
+  "module": "qmt_strategy_ledger",
+  "severity": "P0",
+  "risk_area": "trading_daily_selection_lifecycle",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "reported_via_codex_app_strategy_platform_boundary_audit_20260520",
+    "boundary_contract": "docs/architecture/strategy_package_platform_boundary_contract_20260520.md",
+    "files": [
+      "backend/services/qmt_strategy_ledger/package_binding.py",
+      "backend/services/qmt_strategy_ledger/selection_order_builder.py",
+      "backend/services/qmt_strategy_ledger/models.py",
+      "backend/services/qmt_strategy_ledger/repository.py",
+      "backend/migrations/qmt_strategy_ledger_20260518.sql",
+      "backend/routers/qmt_strategy_ledger.py",
+      "backend/tests/qmt_strategy_ledger/test_package_binding.py",
+      "backend/tests/qmt_strategy_ledger/test_selection_order_builder.py"
+    ]
+  },
+  "reproduce_command": "rg -n \"selection_run_id|strategy_package_binding|bind_with_result|get_active_package_binding|build_for_active_binding|SelectionOrderBuilder|trade_date|target_weight|top_k\" backend/services/qmt_strategy_ledger backend/migrations/qmt_strategy_ledger_20260518.sql backend/routers/qmt_strategy_ledger.py -S",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:backend/services/qmt_strategy_ledger/package_binding.py",
+    "file:backend/services/qmt_strategy_ledger/selection_order_builder.py",
+    "file:backend/services/qmt_strategy_ledger/models.py",
+    "file:backend/services/qmt_strategy_ledger/repository.py",
+    "file:backend/migrations/qmt_strategy_ledger_20260518.sql",
+    "file:backend/routers/qmt_strategy_ledger.py",
+    "file:backend/tests/qmt_strategy_ledger/test_package_binding.py",
+    "file:backend/tests/qmt_strategy_ledger/test_selection_order_builder.py"
+  ],
+  "fingerprint": "d98dcc73ddef7f8b",
+  "github_issue_number": 109,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/109",
+  "assigned_agent": "codex-app",
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-20T04:32:40Z",
+  "first_seen_at": "2026-05-20T04:32:40Z",
+  "last_seen_at": "2026-05-20T04:32:40Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-20T04:32:40Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/qmt_strategy_ledger/package_binding.py",
+    "backend/services/qmt_strategy_ledger/selection_order_builder.py",
+    "backend/services/qmt_strategy_ledger/models.py",
+    "backend/services/qmt_strategy_ledger/repository.py",
+    "backend/migrations/qmt_strategy_ledger_20260518.sql",
+    "backend/routers/qmt_strategy_ledger.py",
+    "backend/tests/qmt_strategy_ledger/test_package_binding.py",
+    "backend/tests/qmt_strategy_ledger/test_selection_order_builder.py"
+  ],
+  "suspected_modules": [
+    "backend/services/qmt_strategy_ledger/package_binding.py",
+    "backend/services/qmt_strategy_ledger/selection_order_builder.py",
+    "backend/services/qmt_strategy_ledger/models.py",
+    "backend/services/qmt_strategy_ledger/repository.py",
+    "backend/migrations/qmt_strategy_ledger_20260518.sql",
+    "backend/routers/qmt_strategy_ledger.py",
+    "backend/tests/qmt_strategy_ledger/test_package_binding.py",
+    "backend/tests/qmt_strategy_ledger/test_selection_order_builder.py"
+  ],
+  "required_verification": [
+    "Active MiniQMT strategy binding stores package/runtime references separately from daily selection evidence.",
+    "Daily execution fails fast when current trade_date selection evidence is missing, stale, failed, or generated with mismatched runtime version/hash.",
+    "Historical selection_run remains available for audit/replay but cannot drive future trading days by default."
+  ],
+  "closure_requirements": [
+    "MiniQMT daily execution enforces current-day selection generation or explicit current-day resolution.",
+    "Binding rollover no longer requires making a historical selection_run the long-lived strategy identity."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-20T04:32:40Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Created from 2026-05-20 StrategyPackage/platform boundary audit; no runtime code changed in this issue creation step."
+    },
+    {
+      "timestamp": "2026-05-20T04:32:40Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Mirrored BUG-087 to GitHub issue #109 in the same flow."
+    },
+    {
+      "timestamp": "2026-05-20T04:32:40Z",
+      "actor": "codex-app",
+      "action": "github_sync_verified",
+      "note": "GitHub issue #109 URL recorded in local BUG JSON."
+    }
+  ]
+}

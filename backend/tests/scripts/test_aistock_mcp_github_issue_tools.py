@@ -82,6 +82,13 @@ def _write_bug(tmp_path: Path, bug_id: str, **overrides: Any) -> Path:
     return path
 
 
+def _write_bug_with_encoding(tmp_path: Path, bug_id: str, *, encoding: str, **overrides: Any) -> Path:
+    path = _write_bug(tmp_path, bug_id, **overrides)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding=encoding)
+    return path
+
+
 def test_github_issue_list_defaults_to_local_registry(mcp_module, tmp_path: Path):
     _write_bug(tmp_path, "BUG-101", title="Open QE bug", module="qe", severity="P1", status="open")
     _write_bug(tmp_path, "BUG-102", title="Fixed UI bug", module="frontend", severity="P2", status="fixed")
@@ -117,6 +124,24 @@ def test_github_issue_search_uses_local_registry_without_env(mcp_module, tmp_pat
     assert result["source"] == "local"
     assert result["total"] == 1
     assert result["items"][0]["bug_id"] == "BUG-201"
+
+
+def test_github_issue_search_tolerates_bom_encoded_registry_file(mcp_module, tmp_path: Path):
+    _write_bug_with_encoding(
+        tmp_path,
+        "BUG-211",
+        encoding="utf-8-sig",
+        title="BOM encoded registry issue",
+        description="Needle appears in a BOM encoded local source-of-truth record.",
+        module="validation_center",
+    )
+    _write_bug(tmp_path, "BUG-212", title="Other issue", description="No match here.", module="frontend")
+
+    result = mcp_module.mcp_github_issue_search("needle", module="validation_center")
+
+    assert result["source"] == "local"
+    assert result["total"] == 1
+    assert result["items"][0]["bug_id"] == "BUG-211"
 
 
 def test_github_issue_create_writes_registry_and_dedupes_without_github_env(mcp_module):
@@ -402,6 +427,57 @@ def test_sync_bug_json_to_github_creates_issue_and_backfills_link(
     assert payload["github_issue_number"] == 403
     assert payload["github_issue_url"] == "https://github.example/issues/403"
     assert payload["events"][-1]["action"] == "github_issue_created"
+
+
+def test_sync_bug_tolerates_unrelated_bom_encoded_registry_file(
+    mcp_module,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _write_bug_with_encoding(
+        tmp_path,
+        "BUG-405",
+        encoding="utf-8-sig",
+        title="Unrelated BOM issue",
+        module="mcp",
+    )
+    path = _write_bug(tmp_path, "BUG-406", title="Target sync issue", module="mcp", severity="P1")
+    captured: dict[str, Any] = {}
+
+    class FakeGitHubClient:
+        def __init__(self, *, repo: str, token: str) -> None:
+            captured["repo"] = repo
+            captured["token"] = token
+
+        def list_issues(self, *, state: str = "open", labels: list[str] | None = None) -> list[dict[str, Any]]:
+            captured["list"] = {"state": state, "labels": labels}
+            return []
+
+        def create_issue(self, *, title: str, body: str, labels: list[str]) -> dict[str, Any]:
+            captured["created"] = {"title": title, "body": body, "labels": labels}
+            return {
+                "number": 406,
+                "title": title,
+                "body": body,
+                "state": "open",
+                "labels": [{"name": label} for label in labels],
+                "html_url": "https://github.example/issues/406",
+            }
+
+        def update_issue(self, number: int, changes: dict[str, Any]) -> dict[str, Any]:
+            raise AssertionError("open issue creation should not need a follow-up update")
+
+    monkeypatch.setenv("GH_TOKEN", "pytest-token")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setattr(mcp_module, "_github_client_factory", FakeGitHubClient)
+
+    result = mcp_module.mcp_github_issue_sync_bug("BUG-406", apply=True, actor="pytest")
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert result["results"][0]["action"] == "create"
+    assert captured["created"]["title"] == "[BUG-406] Target sync issue"
+    assert payload["github_issue_number"] == 406
+    assert payload["github_issue_url"] == "https://github.example/issues/406"
 
 
 def test_sync_github_to_json_backfills_status_label_and_link(

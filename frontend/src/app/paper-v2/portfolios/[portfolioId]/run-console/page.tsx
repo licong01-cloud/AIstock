@@ -12,11 +12,14 @@ import PaperTable from "@/components/paper-v2/PaperTable";
 import ReadinessFailureCard from "@/components/paper-v2/ReadinessFailureCard";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
-import { paperV2Api } from "@/lib/paper-v2/api";
-import { dataSourceLabel, shortHash, todayIso } from "@/lib/paper-v2/format";
+import { hmmTrainingApi, paperV2Api } from "@/lib/paper-v2/api";
+import { dataSourceLabel, hmmSnapshotLabel, shortHash, todayIso } from "@/lib/paper-v2/format";
+import { artifactCoverageLabel, artifactCoversDateRange, selectCoveredHmmSnapshot } from "@/lib/paper-v2/hmm-runtime";
 import type {
   Activation,
   ExecutionPolicy,
+  HmmConfig,
+  HmmSnapshot,
   JsonObject,
   PaperPortfolio,
   PaperRun,
@@ -34,7 +37,8 @@ import type {
 
 function splitList(text: string): string[] {
   return text
-    .split(/[\n,，]/)
+    .replace(/\r?\n/g, ",")
+    .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
 }
@@ -107,10 +111,12 @@ export default function PaperV2RunConsolePage() {
   const [runtimeTopK, setRuntimeTopK] = useState(20);
   const [runtimeExcludeSuspended, setRuntimeExcludeSuspended] = useState(true);
   const [runtimeIndustryBlacklist, setRuntimeIndustryBlacklist] = useState("");
+  const [runtimeHmmConfigs, setRuntimeHmmConfigs] = useState<HmmConfig[]>([]);
+  const [runtimeHmmSnapshots, setRuntimeHmmSnapshots] = useState<HmmSnapshot[]>([]);
   const [runtimeHmmEnabled, setRuntimeHmmEnabled] = useState(false);
+  const [runtimeHmmConfigId, setRuntimeHmmConfigId] = useState("");
   const [runtimeHmmSnapshotId, setRuntimeHmmSnapshotId] = useState("");
   const [runtimeHmmPreset, setRuntimeHmmPreset] = useState("preset_A");
-  const [runtimeHmmCoefficientsPath, setRuntimeHmmCoefficientsPath] = useState("");
   const [readiness, setReadiness] = useState<ReadinessResult | null>(null);
   const [runResult, setRunResult] = useState<JsonObject | null>(null);
   const [replayResult, setReplayResult] = useState<ReplayResult | null>(null);
@@ -143,38 +149,68 @@ export default function PaperV2RunConsolePage() {
   const catchupBlocked = Boolean(catchupCapability && !catchupCapability.can_start);
   const sessionModeBlocked = sessionMode === "REPLAY_ONLY" ? replayBlocked : sessionMode === "CATCHUP_THEN_LIVE" ? catchupBlocked : liveBlocked;
   const switchModeBlocked = switchMode === "REPLAY_ONLY" ? replayBlocked : switchMode === "CATCHUP_THEN_LIVE" ? catchupBlocked : liveBlocked;
-  const runtimeConfig = useMemo<JsonObject>(() => {
+  const selectedRuntimeHmmSnapshot = useMemo(
+    () => runtimeHmmSnapshots.find((item) => item.snapshot_id === runtimeHmmSnapshotId) || null,
+    [runtimeHmmSnapshotId, runtimeHmmSnapshots],
+  );
+  const runtimeHmmPreviewArtifact = useMemo(
+    () => selectedRuntimeHmmSnapshot ? artifactCoversDateRange(selectedRuntimeHmmSnapshot, runtimeHmmPreset, tradeDate, tradeDate) : null,
+    [runtimeHmmPreset, selectedRuntimeHmmSnapshot, tradeDate],
+  );
+  function buildRuntimeConfigForRange(startDate: string, endDate?: string | null, manualTickOnly = false, strict = true): JsonObject {
     const safeTopK = Number.isFinite(runtimeTopK) ? Math.min(50, Math.max(1, Math.trunc(runtimeTopK))) : 20;
-    const hmm: JsonObject = {
-      enabled: runtimeHmmEnabled,
-      model_snapshot_id: runtimeHmmEnabled ? runtimeHmmSnapshotId || null : null,
-      signal_preset: runtimeHmmEnabled ? runtimeHmmPreset || null : null,
-    };
-    if (runtimeHmmEnabled && runtimeHmmCoefficientsPath.trim()) {
-      hmm.coefficients_path = runtimeHmmCoefficientsPath.trim();
+    const selectedSnapshot = runtimeHmmSnapshots.find((item) => item.snapshot_id === runtimeHmmSnapshotId) || null;
+    const selectedArtifact = selectedSnapshot ? artifactCoversDateRange(selectedSnapshot, runtimeHmmPreset, startDate, endDate || startDate) : null;
+    if (runtimeHmmEnabled) {
+      if (strict && !runtimeHmmConfigId) throw new Error("HMM config is required before submitting Paper v2 runtime config.");
+      if (strict && !runtimeHmmSnapshotId) throw new Error(`No completed HMM snapshot covers ${startDate}~${endDate || startDate} / ${runtimeHmmPreset}.`);
+      if (strict && !selectedArtifact) throw new Error(`HMM coefficient artifact does not cover ${startDate}~${endDate || startDate} / ${runtimeHmmPreset}; request is blocked before API submission.`);
     }
     return {
-      paper_v2_session: { signal_data_source: "DB_HISTORICAL" },
+      paper_v2_session: { signal_data_source: "DB_HISTORICAL", manual_tick_only: manualTickOnly },
       selection_artifact_config: { auto_generate: true, inference_backend: "wsl" },
       runtime_profile: {
         selection: { top_k: safeTopK },
         tradability: { exclude_suspended: runtimeExcludeSuspended },
         industry_blacklist: splitList(runtimeIndustryBlacklist),
-        hmm,
+        hmm: {
+          enabled: runtimeHmmEnabled,
+          model_snapshot_id: runtimeHmmEnabled ? runtimeHmmSnapshotId || null : null,
+          signal_preset: runtimeHmmEnabled ? runtimeHmmPreset || null : null,
+          coefficients_path: runtimeHmmEnabled ? selectedArtifact?.path || null : null,
+        },
       },
     };
-  }, [runtimeExcludeSuspended, runtimeHmmCoefficientsPath, runtimeHmmEnabled, runtimeHmmPreset, runtimeHmmSnapshotId, runtimeIndustryBlacklist, runtimeTopK]);
-  const runtimeProfileConfig = useMemo<JsonObject>(() => {
-    const { paper_v2_session: _session, paper_v2_replay: _replay, ...profile } = runtimeConfig;
+  }
+
+  function buildRuntimeProfileConfigForDate(profileDate: string): JsonObject {
+    const { paper_v2_session: _session, paper_v2_replay: _replay, ...profile } = buildRuntimeConfigForRange(profileDate, profileDate, false, true);
     return profile;
-  }, [runtimeConfig]);
-  const sessionRuntimeConfig = useCallback((manualTickOnly = false): JsonObject => ({
-    ...runtimeConfig,
-    paper_v2_session: {
-      ...((runtimeConfig.paper_v2_session as JsonObject | undefined) || {}),
-      manual_tick_only: manualTickOnly,
-    },
-  }), [runtimeConfig]);
+  }
+
+  function buildSessionRuntimeConfig(startDate: string, endDate?: string | null, manualTickOnly = false): JsonObject {
+    return buildRuntimeConfigForRange(startDate, endDate || startDate, manualTickOnly, true);
+  }
+
+  const runtimeConfig = useMemo<JsonObject>(() => {
+    const safeTopK = Number.isFinite(runtimeTopK) ? Math.min(50, Math.max(1, Math.trunc(runtimeTopK))) : 20;
+    const previewHmm: JsonObject = {
+      enabled: runtimeHmmEnabled,
+      model_snapshot_id: runtimeHmmEnabled ? runtimeHmmSnapshotId || null : null,
+      signal_preset: runtimeHmmEnabled ? runtimeHmmPreset || null : null,
+      coefficients_path: runtimeHmmEnabled ? runtimeHmmPreviewArtifact?.path || null : null,
+    };
+    return {
+      paper_v2_session: { signal_data_source: "DB_HISTORICAL", manual_tick_only: false },
+      selection_artifact_config: { auto_generate: true, inference_backend: "wsl" },
+      runtime_profile: {
+        selection: { top_k: safeTopK },
+        tradability: { exclude_suspended: runtimeExcludeSuspended },
+        industry_blacklist: splitList(runtimeIndustryBlacklist),
+        hmm: previewHmm,
+      },
+    };
+  }, [runtimeExcludeSuspended, runtimeHmmEnabled, runtimeHmmPreset, runtimeHmmPreviewArtifact, runtimeHmmSnapshotId, runtimeIndustryBlacklist, runtimeTopK]);
 
   const load = useCallback(async () => {
     setError(null);
@@ -192,6 +228,7 @@ export default function PaperV2RunConsolePage() {
         runtimeProfileRows,
         runtimeActivationRows,
         auditRows,
+        hmmConfigRows,
       ] = await Promise.all([
         paperV2Api.getPortfolio(portfolioId),
         paperV2Api.runs(portfolioId),
@@ -205,6 +242,7 @@ export default function PaperV2RunConsolePage() {
         paperV2Api.runtimeProfiles(portfolioId),
         paperV2Api.runtimeConfigActivations(portfolioId),
         paperV2Api.configChangeAudit(portfolioId),
+        hmmTrainingApi.configs(),
       ]);
       setPortfolio(portfolioRow);
       setRuns(runRows);
@@ -218,6 +256,8 @@ export default function PaperV2RunConsolePage() {
       setRuntimeProfiles(runtimeProfileRows);
       setRuntimeActivations(runtimeActivationRows);
       setConfigAudit(auditRows);
+      setRuntimeHmmConfigs(hmmConfigRows);
+      setRuntimeHmmConfigId((current) => current || hmmConfigRows[0]?.config_id || "");
       if (!policyId) {
         const defaultPolicy = policyRows.find((item) => item.is_portfolio_default) || policyRows.find((item) => item.paper_enabled);
         setPolicyId(defaultPolicy ? executionPolicyId(defaultPolicy) : "");
@@ -231,6 +271,32 @@ export default function PaperV2RunConsolePage() {
   }, [portfolioId, policyId, runtimeActivationDate, runtimeProfileId]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (!runtimeHmmConfigId) {
+      setRuntimeHmmSnapshots([]);
+      setRuntimeHmmSnapshotId("");
+      return;
+    }
+    let alive = true;
+    hmmTrainingApi.snapshots(runtimeHmmConfigId).then((rows) => {
+      if (!alive) return;
+      const ready = rows.filter((item) => ["completed", "ready", "success", "succeeded"].includes(String(item.status || "").toLowerCase()));
+      setRuntimeHmmSnapshots(ready);
+      setRuntimeHmmSnapshotId((current) => (ready.find((item) => item.snapshot_id === current) ? current : ready[0]?.snapshot_id || ""));
+    }).catch((exc) => {
+      if (alive) setError(exc);
+    });
+    return () => { alive = false; };
+  }, [runtimeHmmConfigId]);
+
+  useEffect(() => {
+    if (!runtimeHmmEnabled || !runtimeHmmSnapshots.length) return;
+    const current = runtimeHmmSnapshots.find((item) => item.snapshot_id === runtimeHmmSnapshotId);
+    if (current && artifactCoversDateRange(current, runtimeHmmPreset, tradeDate, tradeDate)) return;
+    const firstCovered = selectCoveredHmmSnapshot(runtimeHmmSnapshots, runtimeHmmPreset, tradeDate, tradeDate);
+    const nextSnapshotId = firstCovered?.snapshot_id || "";
+    if (nextSnapshotId !== runtimeHmmSnapshotId) setRuntimeHmmSnapshotId(nextSnapshotId);
+  }, [runtimeHmmConfigId, runtimeHmmEnabled, runtimeHmmPreset, runtimeHmmSnapshotId, runtimeHmmSnapshots, tradeDate]);
   useEffect(() => {
     if (!runtimeProfileId) {
       setRuntimeVersions([]);
@@ -259,7 +325,7 @@ export default function PaperV2RunConsolePage() {
     setError(null);
     setReadiness(null);
     try {
-      const result = await paperV2Api.readiness(portfolioId, { trade_date: tradeDate, runtime_config: runtimeConfig });
+      const result = await paperV2Api.readiness(portfolioId, { trade_date: tradeDate, runtime_config: buildRuntimeConfigForRange(tradeDate, tradeDate) });
       setReadiness(result);
     } catch (exc) {
       setError(exc);
@@ -273,7 +339,7 @@ export default function PaperV2RunConsolePage() {
     setError(null);
     setRunResult(null);
     try {
-      const result = await paperV2Api.runDay(portfolioId, { trade_date: tradeDate, runtime_config: runtimeConfig });
+      const result = await paperV2Api.runDay(portfolioId, { trade_date: tradeDate, runtime_config: buildRuntimeConfigForRange(tradeDate, tradeDate) });
       setRunResult(result);
       await load();
     } catch (exc) {
@@ -297,7 +363,7 @@ export default function PaperV2RunConsolePage() {
         end_date: isReplayOnly || isCatchupThenLive ? replayEnd : null,
         historical_data_source: isReplayOnly || isCatchupThenLive ? "DB_HISTORICAL" : null,
         live_data_source: isCatchupThenLive || sessionMode === "LIVE_ONLY" ? "TDX_REALTIME" : null,
-        runtime_config: sessionRuntimeConfig(false),
+        runtime_config: buildSessionRuntimeConfig(sessionMode === "LIVE_ONLY" ? liveStartDate : replayStart, isReplayOnly || isCatchupThenLive ? replayEnd : liveStartDate, false),
         rerun_policy: rerunPolicy,
         auto_switch_to_live: false,
         confirm_reset: rerunPolicy === "reset_portfolio",
@@ -329,7 +395,7 @@ export default function PaperV2RunConsolePage() {
         mode: "LIVE_ONLY",
         start_date: liveStartDate,
         live_data_source: "TDX_REALTIME",
-        runtime_config: sessionRuntimeConfig(false),
+        runtime_config: buildSessionRuntimeConfig(liveStartDate, liveStartDate, false),
         rerun_policy: "reject_existing",
         created_by: "paper_v2_ui",
       });
@@ -394,7 +460,7 @@ export default function PaperV2RunConsolePage() {
         end_date: isReplayOnly || isCatchupThenLive ? switchEnd : null,
         historical_data_source: isReplayOnly || isCatchupThenLive ? "DB_HISTORICAL" : null,
         live_data_source: isCatchupThenLive || switchMode === "LIVE_ONLY" ? "TDX_REALTIME" : null,
-        runtime_config: sessionRuntimeConfig(false),
+        runtime_config: buildSessionRuntimeConfig(switchMode === "LIVE_ONLY" ? liveStartDate : switchStart, isReplayOnly || isCatchupThenLive ? switchEnd : liveStartDate, false),
         rerun_policy: "reject_existing",
         created_by: "paper_v2_ui",
       });
@@ -451,7 +517,7 @@ export default function PaperV2RunConsolePage() {
     try {
       const saved = await paperV2Api.createRuntimeProfile(portfolioId, {
         profile_name: runtimeProfileName,
-        config_json: runtimeProfileConfig,
+        config_json: buildRuntimeProfileConfigForDate(runtimeActivationDate),
         created_by: "paper_v2_ui",
         reason: runtimeActivationReason,
       });
@@ -471,7 +537,7 @@ export default function PaperV2RunConsolePage() {
     try {
       if (!runtimeProfileId) throw new Error("请先选择运行配置 Profile。");
       const version = await paperV2Api.createRuntimeProfileVersion(portfolioId, runtimeProfileId, {
-        config_json: runtimeProfileConfig,
+        config_json: buildRuntimeProfileConfigForDate(runtimeActivationDate),
         created_by: "paper_v2_ui",
         reason: runtimeActivationReason,
       });
@@ -554,24 +620,41 @@ export default function PaperV2RunConsolePage() {
             </div>
             <div className="pv2-form-grid" style={{ marginTop: 12 }}>
               <div className="pv2-field">
-                <label>HMM 调整</label>
-                <label className="pv2-chip"><input data-testid="console-runtime-hmm-enabled" type="checkbox" checked={runtimeHmmEnabled} onChange={(event) => setRuntimeHmmEnabled(event.target.checked)} /> 启用 HMM</label>
+                <label className="pv2-chip"><input data-testid="console-runtime-hmm-enabled" type="checkbox" checked={runtimeHmmEnabled} onChange={(event) => setRuntimeHmmEnabled(event.target.checked)} /> Enable HMM</label>
               </div>
               <div className="pv2-field">
-                <label>HMM 快照 ID</label>
-                <input className="pv2-input" data-testid="console-runtime-hmm-snapshot" disabled={!runtimeHmmEnabled} value={runtimeHmmSnapshotId} onChange={(event) => setRuntimeHmmSnapshotId(event.target.value)} placeholder="选择或粘贴已完成快照 ID" />
+                <label>HMM Config</label>
+                <select className="pv2-select" data-testid="console-runtime-hmm-config" disabled={!runtimeHmmEnabled} value={runtimeHmmConfigId} onChange={(event) => setRuntimeHmmConfigId(event.target.value)}>
+                  <option value="">Select HMM config</option>
+                  {runtimeHmmConfigs.map((item) => <option value={item.config_id} key={item.config_id}>{item.display_name} / {item.model_type}</option>)}
+                </select>
               </div>
               <div className="pv2-field">
-                <label>HMM 信号预设</label>
+                <label>HMM Snapshot</label>
+                <select className="pv2-select" data-testid="console-runtime-hmm-snapshot" disabled={!runtimeHmmEnabled || !runtimeHmmConfigId} value={runtimeHmmSnapshotId} onChange={(event) => setRuntimeHmmSnapshotId(event.target.value)}>
+                  <option value="">Select covered snapshot</option>
+                  {runtimeHmmSnapshots.map((item) => {
+                    const artifact = artifactCoversDateRange(item, runtimeHmmPreset, tradeDate, tradeDate);
+                    return <option value={item.snapshot_id} key={item.snapshot_id} disabled={runtimeHmmEnabled && !artifact}>{hmmSnapshotLabel(item)} / {artifact ? `covers ${artifact.start_date}~${artifact.end_date}` : artifactCoverageLabel(item, runtimeHmmPreset)}</option>;
+                  })}
+                </select>
+              </div>
+              <div className="pv2-field">
+                <label>HMM Preset</label>
                 <select className="pv2-select" data-testid="console-runtime-hmm-preset" disabled={!runtimeHmmEnabled} value={runtimeHmmPreset} onChange={(event) => setRuntimeHmmPreset(event.target.value)}>
                   <option value="preset_A">preset_A</option>
                   <option value="preset_B">preset_B</option>
                 </select>
               </div>
             </div>
-            <div className="pv2-field" style={{ marginTop: 12 }}>
-              <label>HMM 系数文件路径（可选，必须来自已审计快照）</label>
-              <input className="pv2-input" data-testid="console-runtime-hmm-coefficients" disabled={!runtimeHmmEnabled} value={runtimeHmmCoefficientsPath} onChange={(event) => setRuntimeHmmCoefficientsPath(event.target.value)} placeholder="不填写时由后端按快照和交易日严格校验" />
+            <div className="pv2-field" style={{ marginTop: 12 }} data-testid="console-runtime-hmm-coverage">
+              <label>HMM Coefficients</label>
+              <input className="pv2-input" data-testid="console-runtime-hmm-coefficients" disabled={!runtimeHmmEnabled} value={runtimeHmmPreviewArtifact?.path || ""} readOnly placeholder="Selected snapshot must provide a covering audited coefficients_path" />
+              {runtimeHmmEnabled ? (
+                <NoticePanel title={runtimeHmmPreviewArtifact ? "HMM coefficient coverage confirmed" : "HMM coefficient coverage missing"} tone={runtimeHmmPreviewArtifact ? "success" : "warning"}>
+                  {runtimeHmmPreviewArtifact ? `Readiness/day-run preview carries coefficients_path for ${tradeDate}. Replay/live actions validate their own date ranges before submission.` : `No completed ${runtimeHmmPreset} coefficient artifact covers preview date ${tradeDate}; affected actions are blocked before API submission.`}
+                </NoticePanel>
+              ) : null}
             </div>
             <JsonPanel value={runtimeConfig} />
           </div>

@@ -1,4 +1,4 @@
-"""Strategy Package manifest v1 models."""
+﻿"""Strategy Package manifest v1 models."""
 
 from __future__ import annotations
 
@@ -162,17 +162,6 @@ class MinuteFallbackPolicy(BaseModel):
     on_algo_error: Literal["fail"] = "fail"
 
 
-MINUTE_DATA_REQUIREMENTS_FIELD = Field(MinuteDataRequirements())
-MINUTE_FAIL_FAST_POLICY_FIELD = Field(MinuteFallbackPolicy())
-MINUTE_QUALITY_REPORT_FIELD = Field(
-    {
-        "record_slippage": True,
-        "record_participation_rate": True,
-        "record_unfilled_reason": True,
-    }
-)
-
-
 class MinuteExecutionPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -181,9 +170,15 @@ class MinuteExecutionPolicy(BaseModel):
     algo_code: str
     algo_config: dict[str, Any] = Field(default_factory=dict)
     fallback_algo_code: None = None
-    data_requirements: MinuteDataRequirements = MINUTE_DATA_REQUIREMENTS_FIELD
-    quality_report: dict[str, bool] = MINUTE_QUALITY_REPORT_FIELD
-    fallback_policy: MinuteFallbackPolicy = MINUTE_FAIL_FAST_POLICY_FIELD
+    data_requirements: MinuteDataRequirements = Field(default_factory=MinuteDataRequirements)
+    quality_report: dict[str, bool] = Field(
+        default_factory=lambda: {
+            "record_slippage": True,
+            "record_participation_rate": True,
+            "record_unfilled_reason": True,
+        }
+    )
+    fallback_policy: MinuteFallbackPolicy = Field(default_factory=MinuteFallbackPolicy)
 
     @field_validator("algo_code")
     @classmethod

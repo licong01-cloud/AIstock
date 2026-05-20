@@ -6,7 +6,7 @@
   "module": "paper_v2",
   "severity": "P1",
   "risk_area": "live_approval_governance",
-  "status": "fixed",
+  "status": "fixed_pending_review",
   "github_issue_number": 110,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/110",
   "trigger_condition": {
@@ -24,7 +24,9 @@
   "failing_run_id": null,
   "evidence_uris": [
     "https://github.com/licong01-cloud/AIstock/issues/110",
-    "file:docs/architecture/strategy_package_platform_boundary_contract_20260520.md"
+    "file:docs/architecture/strategy_package_platform_boundary_contract_20260520.md",
+    "https://github.com/licong01-cloud/AIstock/pull/132",
+    "file:tests/aistock_validation/history/paper_trading_v2/20260520_234126_l3_bug-088-live-approval-lifecycle-validation.md"
   ],
   "fingerprint": "paper-v2-live-approval-lifecycle-missing-20260520",
   "assigned_agent": "codex-app",
@@ -86,6 +88,12 @@
   ],
   "events": [
     {
+      "timestamp": "2026-05-20T04:32:40Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Origin/main registry created BUG-088 from StrategyPackage/platform boundary audit and synced GitHub issue #110."
+    },
+    {
       "timestamp": "2026-05-20T14:38:51Z",
       "actor": "codex-app",
       "action": "assigned",
@@ -102,11 +110,19 @@
       "actor": "codex-app",
       "action": "fixed",
       "note": "Implemented live approval lifecycle and qmt_strategy_ledger LIVE approval gate in commit 9d29465; ready for fixed-pending-review GitHub sync."
+    },
+    {
+      "timestamp": "2026-05-20T20:20:00Z",
+      "actor": "codex-app",
+      "action": "merge_refresh_pending_checks",
+      "note": "Resolved merge conflicts after origin/main advanced; PR #132 remains the review vehicle. Production runtime not touched."
     }
   ],
   "non_goals": [
     "Do not enable real MiniQMT live trading.",
     "Do not touch production backend 8001, frontend 3000, production database, or live MiniQMT runtime.",
     "Do not treat this as a simplified or documentation-only placeholder."
-  ]
+  ],
+  "github_pr_number": 132,
+  "github_pr_url": "https://github.com/licong01-cloud/AIstock/pull/132"
 }

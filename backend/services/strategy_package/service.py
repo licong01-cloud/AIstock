@@ -1296,7 +1296,9 @@ class StrategyPackageService:
     @staticmethod
     def _initial_model_state(record: StrategyPackageRecord) -> StrategyPackageModelState:
         manifest = record.current_manifest()
-        data_split = manifest.strategy_config.get("data_split") if isinstance(manifest.strategy_config, dict) else None
+        data_split = manifest.source_evidence.get("data_split") if isinstance(manifest.source_evidence, dict) else None
+        if data_split is None and manifest.is_legacy_runtime_manifest:
+            data_split = manifest.strategy_config.get("data_split") if isinstance(manifest.strategy_config, dict) else None
         data_split = data_split if isinstance(data_split, dict) else {}
         train_start = StrategyPackageService._parse_date(data_split.get("train_start") or data_split.get("data_start"))
         train_end = StrategyPackageService._parse_date(data_split.get("train_end") or data_split.get("backtest_end") or data_split.get("test_end"))

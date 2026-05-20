@@ -263,7 +263,7 @@ class PaperTradingDayRunner:
                     "valid_no_candidate": snapshot.valid_no_candidate,
                 },
             )
-            top_k = int(runtime_profile.selection.top_k or manifest.portfolio_policy.topk)
+            top_k = self._require_runtime_top_k(runtime_profile, manifest)
             risk_decisions = self.risk_policy_service.evaluate(
                 symbols=sorted(set(item.symbol for item in snapshot.candidates) | set(current_positions)),
                 trade_date=trade_date,
@@ -648,8 +648,13 @@ class PaperTradingDayRunner:
         execution_policy_json: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         ready: list[dict[str, Any]] = []
+        if execution_policy_json is None:
+            raise StrategyPackageValidationError(
+                "Paper v2 data readiness requires a validated execution policy snapshot",
+                context={"package_id": manifest.package_id, "manifest_version": getattr(manifest, "manifest_version", None)},
+            )
         requirements = self._data_requirements_for_policy(
-            execution_policy_json or manifest.minute_execution_policy.model_dump(mode="json"),
+            execution_policy_json,
             package_id=manifest.package_id,
         )
         runtime_profile = parse_selection_runtime_profile(runtime_config)
@@ -680,6 +685,16 @@ class PaperTradingDayRunner:
             status = self.refresh_audit.require_success(dataset="suspend_d", trade_date=trade_date)
             ready.append(self._refresh_status_context("suspend_d", status))
         return ready
+
+    @staticmethod
+    def _require_runtime_top_k(runtime_profile: Any, manifest: Any) -> int:
+        top_k = runtime_profile.selection.top_k
+        if top_k is None:
+            raise StrategyPackageValidationError(
+                "Paper v2 runtime_profile.selection.top_k is required; StrategyPackage manifest cannot provide runtime top_k",
+                context={"package_id": manifest.package_id, "manifest_version": getattr(manifest, "manifest_version", None)},
+            )
+        return int(top_k)
 
     @staticmethod
     def _selection_data_source(portfolio: Any, runtime_config: dict[str, Any]) -> str:
@@ -921,9 +936,9 @@ class PaperTradingDayRunner:
 
     @staticmethod
     def _required_minute_bars_for_manifest(manifest) -> int:
-        return PaperTradingDayRunner._required_minute_bars_for_policy(
-            manifest.minute_execution_policy.model_dump(mode="json"),
-            package_id=manifest.package_id,
+        raise StrategyPackageValidationError(
+            "Paper v2 requires a validated execution policy snapshot; manifest minute policy is not runtime authority",
+            context={"package_id": manifest.package_id, "manifest_version": getattr(manifest, "manifest_version", None)},
         )
 
     @staticmethod

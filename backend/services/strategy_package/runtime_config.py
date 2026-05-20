@@ -56,13 +56,8 @@ class StrategySemanticsConfig(BaseModel):
     factor_set: list[dict[str, Any]]
     model_assets: list[dict[str, Any]]
     model_weight_policy: ModelWeightPolicy = Field(default_factory=ModelWeightPolicy)
-    strategy_config: dict[str, Any]
-    universe_policy: dict[str, Any]
-    portfolio_policy: dict[str, Any]
-    execution_policy: dict[str, Any]
-    minute_execution_policy: dict[str, Any]
-    tail_handling_policy: TailHandlingPolicy = Field(default_factory=TailHandlingPolicy)
-    risk_policy: dict[str, Any]
+    source_lineage: dict[str, Any] = Field(default_factory=dict)
+    training_evidence: dict[str, Any] = Field(default_factory=dict)
     hmm_usage_policy: HMMUsagePolicy = Field(default_factory=HMMUsagePolicy)
 
     @model_validator(mode="after")
@@ -71,8 +66,6 @@ class StrategySemanticsConfig(BaseModel):
             raise ValueError("strategy semantics require at least one factor")
         if not self.model_assets:
             raise ValueError("strategy semantics require at least one model asset")
-        if not self.minute_execution_policy.get("algo_code"):
-            raise ValueError("strategy semantics require minute execution algo_code")
         return self
 
 
@@ -191,8 +184,12 @@ def build_unified_runtime_config_from_manifest(
     hmm_usage_policy: HMMUsagePolicy | None = None,
 ) -> UnifiedStrategyRuntimeConfig:
     model_assets = manifest.model_asset if isinstance(manifest.model_asset, list) else [manifest.model_asset]
-    strategy_config = strip_historical_platform_keys(dict(manifest.strategy_config))
-    universe_policy = strip_historical_platform_keys(manifest.universe_policy.model_dump(mode="json"))
+    source_lineage = manifest.source.model_dump(mode="json")
+    training_evidence = {
+        "backtest_summary": manifest.backtest_summary.model_dump(mode="json"),
+        "source_evidence_schema_version": (manifest.source_evidence or {}).get("schema_version"),
+        "backtest_context_schema_version": (manifest.backtest_context or {}).get("schema_version"),
+    }
 
     config = UnifiedStrategyRuntimeConfig(
         strategy_semantics=StrategySemanticsConfig(
@@ -202,12 +199,8 @@ def build_unified_runtime_config_from_manifest(
             factor_set=[factor.model_dump(mode="json") for factor in manifest.factor_set],
             model_assets=[asset.model_dump(mode="json") for asset in model_assets],
             model_weight_policy=model_weight_policy or ModelWeightPolicy(),
-            strategy_config=strategy_config,
-            universe_policy=universe_policy,
-            portfolio_policy=manifest.portfolio_policy.model_dump(mode="json"),
-            execution_policy=manifest.execution_policy.model_dump(mode="json"),
-            minute_execution_policy=manifest.minute_execution_policy.model_dump(mode="json"),
-            risk_policy=manifest.risk_policy.model_dump(mode="json"),
+            source_lineage=source_lineage,
+            training_evidence=training_evidence,
             hmm_usage_policy=hmm_usage_policy or HMMUsagePolicy(),
         ),
         platform_capabilities=platform_capabilities or PlatformCapabilities(),

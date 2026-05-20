@@ -1,0 +1,90 @@
+{
+  "bug_id": "BUG-089",
+  "schema_version": "aistock_validation_bug_v1",
+  "title": "Paper v2 auto-creates manifest minute policy as BACKTEST_VALIDATED execution policy without explicit evidence",
+  "description": "Expected: ValidatedExecutionPolicy records should be created from explicit backtest or simulation evidence and should not be automatically synthesized from StrategyPackage manifest runtime fields. A policy can be activated for Paper/MiniQMT only when policy_json, source_backtest_id, validation evidence, validation_status, and paper_enabled have been explicitly reviewed and persisted. The initial QE execution config may be imported as evidence only when the source artifact proves the backtest succeeded with that exact policy.\nActual: PaperTradingV2PortfolioService._ensure_default_manifest_execution_policy normalizes manifest.minute_execution_policy, creates manifest_default_execution_policy when no policy exists, and sets source_backtest_status='BACKTEST_VALIDATED' with paper_enabled=True. This reinforces manifest-bound execution policy and may create a validated policy without a durable proof object beyond the package source id.",
+  "module": "paper_v2",
+  "severity": "P1",
+  "risk_area": "execution_policy_validation_evidence",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "reported_via_codex_app_strategy_platform_boundary_audit_20260520",
+    "boundary_contract": "docs/architecture/strategy_package_platform_boundary_contract_20260520.md",
+    "files": [
+      "backend/services/paper_trading_v2/service.py",
+      "backend/services/strategy_package/execution_policy.py",
+      "backend/services/strategy_package/service.py",
+      "backend/services/strategy_package/repository.py",
+      "backend/tests/paper_trading_v2/test_runtime_config_contract.py",
+      "backend/tests/strategy_package/test_execution_policy.py"
+    ]
+  },
+  "reproduce_command": "rg -n \"_ensure_default_manifest_execution_policy|manifest_default_execution_policy|source_backtest_status=\\\"BACKTEST_VALIDATED\\\"|paper_enabled=True|manifest.minute_execution_policy|create_execution_policy\" backend/services/paper_trading_v2/service.py backend/services/strategy_package -S",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:backend/services/paper_trading_v2/service.py",
+    "file:backend/services/strategy_package/execution_policy.py",
+    "file:backend/services/strategy_package/service.py",
+    "file:backend/services/strategy_package/repository.py",
+    "file:backend/tests/paper_trading_v2/test_runtime_config_contract.py",
+    "file:backend/tests/strategy_package/test_execution_policy.py"
+  ],
+  "fingerprint": "f884f5e50a3d003f",
+  "github_issue_number": 111,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/111",
+  "assigned_agent": "codex-app",
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-20T04:32:40Z",
+  "first_seen_at": "2026-05-20T04:32:40Z",
+  "last_seen_at": "2026-05-20T04:32:40Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-20T04:32:40Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/service.py",
+    "backend/services/strategy_package/execution_policy.py",
+    "backend/services/strategy_package/service.py",
+    "backend/services/strategy_package/repository.py",
+    "backend/tests/paper_trading_v2/test_runtime_config_contract.py",
+    "backend/tests/strategy_package/test_execution_policy.py"
+  ],
+  "suspected_modules": [
+    "backend/services/paper_trading_v2/service.py",
+    "backend/services/strategy_package/execution_policy.py",
+    "backend/services/strategy_package/service.py",
+    "backend/services/strategy_package/repository.py",
+    "backend/tests/paper_trading_v2/test_runtime_config_contract.py",
+    "backend/tests/strategy_package/test_execution_policy.py"
+  ],
+  "required_verification": [
+    "Creating a paper portfolio without an explicit validated execution policy no longer auto-synthesizes BACKTEST_VALIDATED evidence unless a durable source proof is available.",
+    "Tests still reject raw paper-only execution overrides and unknown fallback algos.",
+    "Runs persist the validated policy id/hash/json and source evidence used."
+  ],
+  "closure_requirements": [
+    "ValidatedExecutionPolicy creation requires explicit evidence or a verified import path.",
+    "Manifest minute policy is not treated as automatic paper-approved execution authority."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-20T04:32:40Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Created from 2026-05-20 StrategyPackage/platform boundary audit; no runtime code changed in this issue creation step."
+    },
+    {
+      "timestamp": "2026-05-20T04:32:40Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Mirrored BUG-089 to GitHub issue #111 in the same flow."
+    },
+    {
+      "timestamp": "2026-05-20T04:32:40Z",
+      "actor": "codex-app",
+      "action": "github_sync_verified",
+      "note": "GitHub issue #111 URL recorded in local BUG JSON."
+    }
+  ]
+}
