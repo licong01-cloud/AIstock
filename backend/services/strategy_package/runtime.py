@@ -184,9 +184,7 @@ class StrategyPackageRuntime:
                 "generate an authoritative live selection artifact first",
                 context={"package_id": manifest.package_id, "trade_date": trade_date.isoformat()},
             )
-        selection_runtime = manifest.strategy_config.get("selection_runtime")
-        if not isinstance(selection_runtime, dict):
-            selection_runtime = {}
+        selection_runtime = _selection_runtime_evidence(manifest)
         runtime_hashes = _candidate_selection_artifact_runtime_hashes(config)
         artifact_error: DataUnavailableError | None = None
         artifact = None
@@ -285,8 +283,21 @@ class StrategyPackageRuntime:
 
     @staticmethod
     def _has_multi_alpha_runtime(manifest: StrategyPackageManifest, config: dict[str, Any]) -> bool:
-        runtime = manifest.strategy_config.get("selection_runtime")
+        runtime = _selection_runtime_evidence(manifest)
         return bool(config.get("multi_alpha_component_scores") or (isinstance(runtime, dict) and runtime.get("component_scores")))
+
+
+def _selection_runtime_evidence(manifest: StrategyPackageManifest) -> dict[str, Any]:
+    source_evidence = manifest.source_evidence or {}
+    selection_runtime = source_evidence.get("selection_runtime")
+    if isinstance(selection_runtime, dict):
+        return selection_runtime
+    if manifest.is_legacy_runtime_manifest:
+        strategy_config = manifest.strategy_config or {}
+        legacy_runtime = strategy_config.get("selection_runtime") if isinstance(strategy_config, dict) else None
+        if isinstance(legacy_runtime, dict):
+            return legacy_runtime
+    return {}
 
 
 class TargetPositionEngine:
