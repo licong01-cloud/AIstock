@@ -427,3 +427,38 @@ def test_quality_findings_and_bug_agent_context(client: TestClient) -> None:
     agent_context = client.get("/api/v1/validation/bugs/bug_demo_001/agent-context").json()["data"]
     assert agent_context["reproduce_command"] == "python -m nox -s validation_center_backend"
     assert agent_context["closure_requirements"] == ["verification_run_id required"]
+
+
+def test_finding_store_accepts_bom_encoded_bug_json_and_preserves_invalid_json_diagnostics(tmp_path: Path) -> None:
+    roots = _write_quality_inputs(tmp_path)
+    bug_root = roots["bug_root"]
+    bom_bug = {
+        "schema_version": BUG_SCHEMA,
+        "bug_id": "BUG-BOM",
+        "title": "BOM encoded registry entry",
+        "description": "Valid BUG JSON encoded with UTF-8 BOM.",
+        "module": "validation_center",
+        "severity": "P1",
+        "risk_area": "github_sync_blocker",
+        "status": "open",
+        "reproduce_command": "pytest backend/tests/test_validation_center_api.py",
+        "evidence_uris": [],
+        "fingerprint": "bug_bom_fp",
+        "created_at": "2026-05-20T09:00:00Z",
+    }
+    (bug_root / "20260520_BUG-BOM.json").write_text(json.dumps(bom_bug), encoding="utf-8-sig")
+    invalid_path = bug_root / "20260520_invalid.json"
+    invalid_path.write_text("{bad json", encoding="utf-8")
+
+    store = ValidationFindingStore(
+        repo_root=tmp_path,
+        guardrail_root=roots["guardrail_root"],
+        legacy_root=roots["legacy_root"],
+        bug_root=bug_root,
+    )
+
+    bugs = store.list_bugs(page_size=20)
+    assert {item["bug_id"] for item in bugs["items"]} == {"bug_demo_001", "BUG-BOM"}
+    parse_errors = store.health()["parse_errors"]
+    assert any(item["path"].endswith("20260520_invalid.json") for item in parse_errors)
+    assert not any(item["path"].endswith("20260520_BUG-BOM.json") for item in parse_errors)
