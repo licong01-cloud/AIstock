@@ -5,7 +5,7 @@
 - Date: 2026-05-20T17:55:00+08:00
 - Branch: bug/BUG-085-strategy-package-alpha-core
 - Worktree: F:\Dev\AIstock_worktrees\bug-085-strategy-package-alpha-core
-- Git commit: pre-commit validation record; final commit hash will be written back after commit
+- Git commit: 1015010 (fix commit), e7afe39 (BUG JSON fix_commit record), 9cb3ac7 (merge origin/main into branch), 78b529d (post-merge validation record before push)
 - Operator: codex-app
 
 ## Scope
@@ -98,8 +98,28 @@ git diff --check
 
 - Legacy `manifest_version="1.0"` compatibility remains intentionally parseable; old helper paths such as `paper_trading_v2/runner.py`, `broker/localsim.py`, and daemon demo/test utilities still read legacy `manifest.minute_execution_policy`. They are not the current Paper v2 Selection/MiniQMT portfolio path, but they should be revisited under a separate deprecation/legacy-path issue if product policy requires removing all legacy manifest execution reads.
 - UI E2E, production API smoke, and live MiniQMT submit/cancel were not run because this issue is backend contract/manifest boundary work and production ports were not touched.
-- Branch is behind latest `origin/main` by two unrelated BUG-079/QE archive commits at validation time; touched files do not overlap those commits based on `git log --stat HEAD..origin/main`.
+- Branch was merged with latest `origin/main` after the initial validation; post-merge rerun passed `backend/tests/strategy_package`, `nox -s paper_v2_backend`, `nox -s l0`, `nox -s guardrail_changed_files`, and `git diff --check`.
 
+## Post-Merge Rerun
+
+After commit `1015010` and BUG JSON update `e7afe39`, the branch merged latest `origin/main` as `9cb3ac7`. Post-merge rerun evidence:
+
+```bash
+python -m pytest backend/tests/strategy_package -q
+# 172 passed in 12.48s
+
+python -m nox -s paper_v2_backend
+# 448 passed, 1 skipped, 2 xfailed in 18.94s; session successful in 22 seconds
+
+python -m nox -s l0
+# session successful; blocking=0
+
+python -m nox -s guardrail_changed_files
+# staged-only after clean commit; files=0, findings=0, blocking=0; ownership unmapped=0, ambiguous=0
+
+git diff --check
+# passed
+```
 ## Production Impact
 
 - Production backend `8001`: not started or restarted.
@@ -112,3 +132,5 @@ git diff --check
 
 - Final local validation status: PASS for BUG-085 pre-commit backend/guardrail evidence.
 - Recommended issue state after commit: fixed-pending-review / GitHub label `status:fixed-pending-review`.
+
+
