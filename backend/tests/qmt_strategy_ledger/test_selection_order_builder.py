@@ -22,7 +22,9 @@ from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyL
 from backend.services.qmt_strategy_ledger.order_service import QmtManagedOrderService
 from backend.services.qmt_strategy_ledger.selection_order_builder import SelectionOrderBuilder, SelectionOrderBuildConfig
 from backend.services.selection_center.models import SelectionCandidate, SelectionMode, SelectionRun, SelectionRunStatus
+from backend.services.strategy_package.runtime import RebalanceEngine, TargetPositionEngine
 from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
+from backend.services.trading_core.models import OrderSide
 
 
 ACCOUNT_ID = "62266303"
@@ -561,7 +563,111 @@ def test_selection_order_builder_honors_top_k_without_broker_call() -> None:
         binding=binding
     )
 
-    assert [request.symbol for request in result.requests] == ["300604.SZ", "300054.SZ"]
+    assert {request.symbol for request in result.requests} == {"300604.SZ", "300054.SZ"}
+
+
+def test_selection_order_builder_uses_shared_rebalance_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = _repo()
+    binding = repo.create_package_binding(_binding(target_weight=None))
+    run = _selection_run(
+        [
+            SelectionCandidate(
+                symbol="300604.SZ",
+                score=0.9,
+                rank=1,
+                target_quantity=1000,
+                reference_price=10,
+            )
+        ]
+    )
+    calls: list[dict] = []
+    original = RebalanceEngine.build_order_intents
+
+    def spy(self: RebalanceEngine, **kwargs):
+        calls.append(kwargs)
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(RebalanceEngine, "build_order_intents", spy)
+
+    result = _builder(repo, run).build_for_binding(binding=binding)
+
+    assert len(calls) == 1
+    assert calls[0]["package_id"] == "pkg_a"
+    assert calls[0]["portfolio_id"] == "strat_a"
+    assert len(result.requests) == 1
+    assert result.requests[0].metadata["decision_engine"] == "RebalanceEngine"
+    assert result.requests[0].metadata["shared_order_intent_id"].startswith("intent_")
+
+
+def test_selection_order_builder_preserves_shared_decision_intent_sequence() -> None:
+    repo = _repo()
+    repo.create_position_lot(
+        _lot(
+            lot_id="lot_drop",
+            symbol="300001.SZ",
+            quantity=900,
+            available_quantity=900,
+            metadata={"reference_price": "8.00"},
+        )
+    )
+    repo.create_position_lot(
+        _lot(lot_id="lot_reduce", symbol="300604.SZ", quantity=1500, available_quantity=1500)
+    )
+    binding = repo.create_package_binding(_binding(target_weight=None))
+    run = _selection_run(
+        [
+            SelectionCandidate(symbol="300604.SZ", score=0.9, rank=1, target_quantity=1000, reference_price=10),
+            SelectionCandidate(symbol="300054.SZ", score=0.8, rank=2, target_quantity=1200, reference_price=20),
+        ]
+    )
+    builder = _builder(repo, run)
+
+    result = builder.build_for_binding(binding=binding)
+    paper_like_intents = RebalanceEngine().build_order_intents(
+        package_id=binding.package_id,
+        portfolio_id="strat_a",
+        trade_date=run.trade_date,
+        current_positions=builder._trading_core_positions(
+            "strat_a",
+            run.trade_date,
+            builder._position_summaries("strat_a", run.trade_date),
+        ),
+        target_positions=TargetPositionEngine().build_targets(
+            snapshot=builder._signal_snapshot_for_binding(run, binding, builder._candidates_for_binding(run, binding)),
+            total_equity=10_000_000,
+            top_k=2,
+        ),
+    )
+
+    intent_tuples = [
+        (
+            intent.symbol,
+            intent.side.value,
+            intent.quantity,
+            intent.metadata["target_quantity"],
+            intent.metadata["current_quantity"],
+            intent.metadata["rebalance_reason"],
+        )
+        for intent in paper_like_intents
+    ]
+    request_tuples = [
+        (
+            request.symbol,
+            request.side,
+            request.quantity,
+            request.metadata["target_quantity"],
+            request.metadata["current_quantity"],
+            request.metadata["rebalance_reason"],
+        )
+        for request in result.requests
+    ]
+
+    assert request_tuples == intent_tuples
+    assert request_tuples == [
+        ("300001.SZ", OrderSide.SELL.value, 900, 0, 900, "DROPPED_FROM_SELECTION"),
+        ("300054.SZ", OrderSide.BUY.value, 1200, 1200, 0, "selection_target"),
+        ("300604.SZ", OrderSide.SELL.value, 500, 1000, 1500, "selection_target"),
+    ]
 
 
 def test_selection_order_builder_fails_fast_without_price_or_succeeded_run() -> None:

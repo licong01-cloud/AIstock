@@ -301,6 +301,7 @@ class TargetPositionEngine:
         manifest: StrategyPackageManifest | None = None,
         current_positions: dict[str, PositionLot] | None = None,
         current_prices: dict[str, float] | None = None,
+        default_target_weight: float | None = None,
     ) -> list[TargetPosition]:
         if snapshot.valid_no_candidate:
             raise StrategyPackageValidationError(
@@ -325,28 +326,37 @@ class TargetPositionEngine:
         targets: list[TargetPosition] = []
         for candidate in selected:
             if candidate.target_quantity is not None:
-                if candidate.reference_price is None:
+                if candidate.target_quantity < 0:
+                    raise StrategyPackageValidationError(
+                        "candidate target_quantity must be non-negative",
+                        context={"package_id": snapshot.package_id, "symbol": candidate.symbol},
+                    )
+                if candidate.target_quantity > 0 and candidate.reference_price is None:
                     raise DataUnavailableError(
                         "target_quantity requires reference_price for traceability",
                         context={"package_id": snapshot.package_id, "symbol": candidate.symbol},
                     )
                 quantity = candidate.target_quantity
-                target_weight = candidate.target_weight
+                target_weight = candidate.target_weight if quantity > 0 else None
             else:
                 if candidate.target_weight is None:
-                    raise StrategyPackageValidationError(
-                        "candidate is missing target position information",
-                        context={"package_id": snapshot.package_id, "symbol": candidate.symbol},
-                    )
+                    if default_target_weight is None:
+                        raise StrategyPackageValidationError(
+                            "candidate is missing target position information",
+                            context={"package_id": snapshot.package_id, "symbol": candidate.symbol},
+                        )
+                    candidate_weight = default_target_weight
+                else:
+                    candidate_weight = candidate.target_weight
                 if candidate.reference_price is None:
                     raise DataUnavailableError(
                         "candidate reference_price is required to compute target quantity",
                         context={"package_id": snapshot.package_id, "symbol": candidate.symbol},
                     )
-                raw_quantity = int(total_equity * candidate.target_weight / candidate.reference_price)
-                quantity = (raw_quantity // 100) * 100
-                target_weight = candidate.target_weight
-            if quantity <= 0:
+                raw_quantity = int(total_equity * candidate_weight / candidate.reference_price)
+                quantity = round_to_board_lot(raw_quantity, candidate.symbol, side="BUY")
+                target_weight = candidate_weight
+            if quantity <= 0 and candidate.target_quantity is None:
                 raise StrategyPackageValidationError(
                     "target position rounds to zero shares",
                     context={"package_id": snapshot.package_id, "symbol": candidate.symbol},
@@ -773,11 +783,29 @@ class RebalanceEngine:
             if delta == 0:
                 continue
             side = OrderSide.BUY if delta > 0 else OrderSide.SELL
-            quantity = abs(delta)
-            if round_to_board_lot(quantity, symbol, side=side.value) != quantity:
-                raise StrategyPackageValidationError(
-                    "rebalance quantity does not follow board-lot rules",
-                    context={"package_id": package_id, "symbol": symbol, "quantity": quantity},
+            requested_quantity = abs(delta)
+            quantity = round_to_board_lot(requested_quantity, symbol, side=side.value)
+            if quantity <= 0:
+                continue
+            rebalance_reason = (
+                target_by_symbol[symbol].reason if symbol in target_by_symbol else "DROPPED_FROM_SELECTION"
+            )
+            metadata = {
+                "target_quantity": target_qty,
+                "current_quantity": current_qty,
+                "target_weight": target_by_symbol[symbol].target_weight if symbol in target_by_symbol else None,
+                "requested_quantity": requested_quantity,
+                "rebalance_reason": rebalance_reason,
+                "target_metadata": target_by_symbol[symbol].metadata
+                if symbol in target_by_symbol
+                else {},
+            }
+            if quantity < requested_quantity:
+                metadata.update(
+                    {
+                        "emitted_quantity": quantity,
+                        "residual_quantity": requested_quantity - quantity,
+                    }
                 )
             intents.append(
                 OrderIntent(
@@ -787,16 +815,7 @@ class RebalanceEngine:
                     side=side,
                     quantity=quantity,
                     target_trade_date=trade_date,
-                    metadata={
-                        "target_quantity": target_qty,
-                        "current_quantity": current_qty,
-                        "rebalance_reason": target_by_symbol[symbol].reason
-                        if symbol in target_by_symbol
-                        else "target_position_diff",
-                        "target_metadata": target_by_symbol[symbol].metadata
-                        if symbol in target_by_symbol
-                        else {},
-                    },
+                    metadata=metadata,
                 )
             )
         return intents
