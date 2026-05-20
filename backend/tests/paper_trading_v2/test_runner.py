@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
@@ -11,7 +11,7 @@ from backend.services.paper_trading_v2.market_data import (
 )
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import PackageStatus
-from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
+from backend.services.trading_core.errors import DataUnavailableError, ExecutionAlgoError, StrategyPackageValidationError
 from backend.services.trading_core.limit_price_provider import DailyLimitPrice
 from backend.services.trading_core.models import MinuteBar, OrderIntent, OrderSide, OrderStatus
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
@@ -217,7 +217,7 @@ def test_runner_fails_for_v24_model_unavailable() -> None:
         target_trade_date=date(2024, 1, 2),
     )
 
-    with pytest.raises(DataUnavailableError, match="model_path"):
+    with pytest.raises(ExecutionAlgoError, match="authoritative minute execution") as exc_info:
         PaperTradingV2Runner().run_single_order(
             manifest=manifest,
             portfolio_id="paper_1",
@@ -228,3 +228,4 @@ def test_runner_fails_for_v24_model_unavailable() -> None:
             snapshot_prices={"000001.SZ": 10.2},
             snapshot_time=datetime(2024, 1, 2, 15, 0),
         )
+    assert "model_path" in exc_info.value.context["reason"]

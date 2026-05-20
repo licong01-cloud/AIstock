@@ -13,10 +13,14 @@ from backend.services.selection_center.runtime_profile import parse_selection_ru
 from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.strategy_package.backtest_contract import (
     normalize_runtime_config_with_backtest_contract,
-    validate_execution_policy_matches_manifest,
     validate_runtime_profile_matches_backtest_contract,
 )
-from backend.services.strategy_package.runtime import RebalanceEngine, StrategyPackageRuntime, TargetPositionEngine
+from backend.services.strategy_package.runtime import (
+    RebalanceEngine,
+    StrategyPackageRuntime,
+    TargetPositionEngine,
+    apply_runtime_variant_to_manifest,
+)
 from backend.services.strategy_package.selection_artifact import StrategyPackageSelectionArtifactService
 from backend.services.strategy_package.validators import StrategyPackageValidator
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, StrategyPackageValidationError
@@ -48,6 +52,7 @@ class PaperTradingReadinessService:
         target_engine: TargetPositionEngine | None = None,
         rebalance_engine: RebalanceEngine | None = None,
         validator: StrategyPackageValidator | None = None,
+        package_repository: Any | None = None,
         tradability_filter: TradabilityFilter | Any | None = None,
         refresh_audit: DataRefreshAuditRepository | Any | None = None,
         selection_artifact_service: StrategyPackageSelectionArtifactService | Any | None = None,
@@ -61,6 +66,7 @@ class PaperTradingReadinessService:
         self.target_engine = target_engine or TargetPositionEngine()
         self.rebalance_engine = rebalance_engine or RebalanceEngine()
         self.validator = validator or StrategyPackageValidator()
+        self.package_repository = package_repository
         self.tradability_filter = tradability_filter or TradabilityFilter()
         self.refresh_audit = refresh_audit or DataRefreshAuditRepository()
         self.selection_artifact_service = selection_artifact_service or StrategyPackageSelectionArtifactService(
@@ -99,7 +105,10 @@ class PaperTradingReadinessService:
             )
 
         checks: list[PaperReadinessCheck] = []
-        config = PaperTradingV2PortfolioService(repository=self.repository).resolve_runtime_config_for_date(
+        config = PaperTradingV2PortfolioService(
+            package_repository=self.package_repository,
+            repository=self.repository,
+        ).resolve_runtime_config_for_date(
             portfolio=portfolio,
             trade_date=trade_date,
             runtime_config=runtime_config or {},
@@ -119,17 +128,16 @@ class PaperTradingReadinessService:
         self.validator.validate_execution_policy_for_paper(
             package_id=manifest.package_id,
             policy_json=execution_policy_json,
-        )
-        validate_execution_policy_matches_manifest(
-            manifest,
-            execution_policy_json,
-            context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat(), "check": "readiness"},
+            instantiate_runtime=False,
+            require_runtime_assets=False,
         )
         runtime_contract = validate_runtime_profile_matches_backtest_contract(
             manifest,
             runtime_profile,
+            runtime_config=config,
             context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat(), "check": "readiness"},
         )
+        effective_manifest = apply_runtime_variant_to_manifest(manifest, config)
         config["qe_backtest_runtime_contract"] = runtime_contract
         checks.append(PaperReadinessCheck(check_name="strategy_package_manifest", context={"package_id": manifest.package_id}))
 
@@ -209,6 +217,7 @@ class PaperTradingReadinessService:
             target_engine=self.target_engine,
             rebalance_engine=self.rebalance_engine,
             validator=self.validator,
+            package_repository=self.package_repository,
             tradability_filter=self.tradability_filter,
             refresh_audit=self.refresh_audit,
             selection_artifact_service=self.selection_artifact_service,
@@ -281,7 +290,7 @@ class PaperTradingReadinessService:
                 snapshot=snapshot,
                 total_equity=total_equity,
                 top_k=top_k,
-                manifest=manifest,
+                manifest=effective_manifest,
                 current_positions=current_positions,
                 current_prices=config.get("current_prices") or {},
             )

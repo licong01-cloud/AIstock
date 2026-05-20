@@ -1,0 +1,109 @@
+{
+  "coverage": {
+    "branch": null,
+    "diff_branch": null,
+    "diff_line": null,
+    "line": null,
+    "quality_gates": [],
+    "schema_version": "aistock_validation_coverage_snapshot_v1",
+    "snapshot_path": null,
+    "status": "not_collected"
+  },
+  "environment": {
+    "backend_port": null,
+    "frontend_port": null,
+    "next_public_api_base": null,
+    "paper_v2_api_base": null,
+    "paper_v2_skip_realtime": null,
+    "qe_api_base": null,
+    "qe_archive_api_base": null,
+    "qe_archive_l3_skip_ui": null,
+    "qe_read_l3_skip_ui": null,
+    "tdx_http_port": null
+  },
+  "evidence": [
+    "tests/aistock_validation/history/paper_v2/20260520_070726_l3_paper-v2-platform-runtime-contract-fixes.md",
+    "tmp/validation/catalog/integrity_report.json",
+    "tmp/validation/guardrails/l0_paths.json",
+    "tmp/validation/module_ownership/l0_paths.json"
+  ],
+  "finished_at": "2026-05-20T08:58:00",
+  "git_commit": "14d4ce1-pre-commit-final-commit-pending",
+  "level": "L3",
+  "level_slug": "l3",
+  "markdown_path": "tests/aistock_validation/history/paper_v2/20260520_070726_l3_paper-v2-platform-runtime-contract-fixes.md",
+  "metadata_path": "tests/aistock_validation/history/paper_v2/20260520_070726_l3_paper-v2-platform-runtime-contract-fixes.json",
+  "module": "paper_v2",
+  "module_slug": "paper_v2",
+  "operator": "lc999",
+  "quality_gates": [
+    "compileall",
+    "git diff --check",
+    "pytest targeted",
+    "pytest backend module regression",
+    "nox validation_module_registry_l0",
+    "nox validation_catalog_integrity",
+    "nox l0",
+    "nox paper_v2_backend"
+  ],
+  "residual_risks": [
+    "UI E2E not run for backend-only change",
+    "No production 8001/3000 restart",
+    "No real MiniQMT submit/cancel or production DB write"
+  ],
+  "schema_version": "aistock_validation_run_v1",
+  "started_at": "2026-05-20T07:07:26",
+  "status": "passed",
+  "steps": [
+    {
+      "result": "2 passed",
+      "command": "python -m pytest backend/tests/paper_trading_v2/test_runner.py::test_runner_fails_for_v24_model_unavailable backend/tests/strategy_package/test_manifest_v1.py::test_paper_readiness_fails_when_v24_model_is_unavailable -q"
+    },
+    {
+      "result": "2 passed",
+      "command": "python -m pytest backend/tests/paper_trading_v2/test_minqmtsim_backend.py::test_minqmt_readiness_preserves_disabled_hmm_and_uses_platform_risk_profile backend/tests/paper_trading_v2/test_minqmtsim_backend.py::test_minqmt_day_runner_uses_platform_hmm_snapshot_and_versioned_execution_policy -q"
+    },
+    {
+      "command": "python -m pytest backend/tests/selection_center/test_runtime_selection.py::test_selection_center_consumes_validated_runtime_variant_candidate -q",
+      "result": "1 passed"
+    },
+    {
+      "command": "python -m pytest backend/tests/paper_trading_v2/test_day_runner.py::test_day_runner_consumes_validated_runtime_variant_candidate backend/tests/selection_center/test_runtime_selection.py::test_selection_center_consumes_validated_runtime_variant_candidate -q",
+      "result": "2 passed"
+    },
+    {
+      "result": "109 passed",
+      "command": "python -m pytest backend/tests/strategy_package/test_backtest_contract.py backend/tests/strategy_package/test_runtime_variants.py backend/tests/paper_trading_v2/test_runtime_profile.py backend/tests/paper_trading_v2/test_day_runner.py backend/tests/paper_trading_v2/test_minqmtsim_backend.py backend/tests/selection_center/test_runtime_selection.py -q"
+    },
+    {
+      "result": "443 passed, 1 skipped, 2 xfailed in 15.76s",
+      "command": "python -m pytest backend/tests/paper_trading_v2 backend/tests/selection_center backend/tests/strategy_package -q"
+    },
+    {
+      "result": "passed, including paper_trading_v2/replay.py",
+      "command": "python -m compileall changed service modules"
+    },
+    {
+      "result": "passed",
+      "command": "git diff --check"
+    },
+    {
+      "result": "8 passed and ownership scan passed",
+      "command": "nox -s validation_module_registry_l0"
+    },
+    {
+      "result": "3 passed and integrity report passed",
+      "command": "nox -s validation_catalog_integrity"
+    },
+    {
+      "result": "passed; no blocking new P1/P0 findings",
+      "command": "nox -s l0"
+    },
+    {
+      "result": "443 passed, 1 skipped, 2 xfailed in 15.55s",
+      "command": "nox -s paper_v2_backend"
+    }
+  ],
+  "title": "Paper v2 platform runtime contract fixes",
+  "title_slug": "paper-v2-platform-runtime-contract-fixes"
+}

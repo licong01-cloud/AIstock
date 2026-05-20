@@ -24,12 +24,14 @@ from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import PackageStatus, PortfolioPolicy, SourceType, StrategyPackageSource
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.strategy_package.runtime import StrategyPackageRuntime, TargetPositionEngine
+from backend.services.strategy_package.runtime_variant import RuntimeVariantKind, RuntimeVariantValidationStatus
 from backend.services.strategy_package.selection_artifact import (
     InMemorySelectionScoreArtifactRepository,
     SelectionScoreArtifact,
     StrategyPackageSelectionArtifactService,
     selection_artifact_runtime_hash,
 )
+from backend.services.strategy_package.service import StrategyPackageService
 from backend.services.strategy_package.live_inference import (
     AUTHORITATIVE_SELECTION_SCOPE,
     AUTHORITATIVE_SELECTION_SOURCE_TYPE,
@@ -1259,7 +1261,7 @@ def test_selection_center_lists_selectable_packages_with_metrics_and_latest_run(
     assert packages[0]["latest_selection_run"]["run_id"] == run.run_id
 
 
-def test_selection_center_authoritative_mode_inherits_backtest_risk_policy_and_uses_display_top_n() -> None:
+def test_selection_center_authoritative_mode_uses_platform_risk_policy_and_display_top_n() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     manifest = st_pit_manifest_with_score_rows(
         "pkg_st_pit_contract",
@@ -1294,22 +1296,84 @@ def test_selection_center_authoritative_mode_inherits_backtest_risk_policy_and_u
         runtime_config={
             "st_pit_authoritative": True,
             "top_k": 1,
-            "runtime_profile": {"selection": {"top_k": 1}},
+            "runtime_profile": {
+                "selection": {"top_k": 1},
+                "risk_policy": {"enabled": True},
+            },
         },
     )
 
     package_config = run.runtime_config["package_runtime_configs"][manifest.package_id]
     assert package_config["display_top_n"] == 1
-    assert package_config["runtime_profile"]["selection"]["top_k"] == 2
+    assert package_config["runtime_profile"]["selection"]["top_k"] is None
     assert package_config["runtime_profile"]["risk_policy"]["enabled"] is True
-    assert package_config["qe_backtest_runtime_contract"]["runtime_features"]["risk_policy"]["enabled"] is True
+    assert package_config["qe_backtest_runtime_contract"]["runtime_features"]["risk_policy"]["package_bound"] is False
     assert risk_policy.profile_seen is not None
     assert risk_policy.profile_seen.enabled is True
     assert [item.symbol for item in run.package_results[manifest.package_id]] == ["000002.SZ"]
     assert run.excluded_results[manifest.package_id][0].reason == "risk_policy_block_buy"
 
 
-def test_selection_center_authoritative_mode_blocks_legacy_non_st_pit_package() -> None:
+def test_selection_center_consumes_validated_runtime_variant_candidate() -> None:
+    package_repo = InMemoryStrategyPackageRepository()
+    rows = [
+        {"symbol": "000001.SZ", "score": 0.99, "rank": 1, "target_weight": 0.03, "reference_price": 10.0},
+        {"symbol": "000002.SZ", "score": 0.98, "rank": 2, "target_weight": 0.03, "reference_price": 10.0},
+    ]
+    manifest = st_pit_manifest_with_score_rows("pkg_variant_selection", rows, topk=2)
+    package_repo.save_manifest(manifest)
+    package_service = StrategyPackageService(repository=package_repo)
+    variant = package_service.create_runtime_variant(
+        manifest.package_id,
+        variant_name="selection top1 variant",
+        variant_kind=RuntimeVariantKind.STRATEGY_CONFIG,
+        variant_config={"strategy_config": {"custom_params": {"strategy_id": "score_weighted_topk_v2", "topk": 1}}},
+        created_by="unit_test",
+    )
+    variant = package_service.mark_runtime_variant_validation(
+        manifest.package_id,
+        variant.variant_id,
+        validation_status=RuntimeVariantValidationStatus.VALIDATION_PASSED,
+        paper_candidate=True,
+        validation_evidence={"validation_run_id": "vr_selection_variant", "status": "passed"},
+    )
+    service = SelectionCenterService(
+        package_repository=package_repo,
+        repository=InMemorySelectionCenterRepository(),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+        risk_policy_service=RecordingRiskPolicyService(),
+    )
+
+    run = service.run_single_package(
+        package_id=manifest.package_id,
+        trade_date=date(2024, 1, 2),
+        data_source="DB_HISTORICAL",
+        runtime_config={"runtime_variant_id": variant.variant_id},
+    )
+
+    package_config = run.runtime_config["package_runtime_configs"][manifest.package_id]
+    assert package_config["runtime_variant"]["variant_id"] == variant.variant_id
+    assert package_config["runtime_variant"]["paper_candidate"] is True
+    assert package_config["runtime_variant"]["variant_config"]["strategy_config"]["custom_params"]["topk"] == 1
+    assert [item.symbol for item in run.package_results[manifest.package_id]] == ["000001.SZ"]
+
+    st_pit_run = service.run_single_package(
+        package_id=manifest.package_id,
+        trade_date=date(2024, 1, 3),
+        data_source="DB_HISTORICAL",
+        runtime_config={
+            "runtime_variant_id": variant.variant_id,
+            "st_pit_authoritative": True,
+            "runtime_profile": {"risk_policy": {"enabled": True}},
+        },
+    )
+    st_pit_config = st_pit_run.runtime_config["package_runtime_configs"][manifest.package_id]
+    assert st_pit_config["qe_backtest_runtime_contract"]["runtime_features"]["variant"]["variant_id"] == variant.variant_id
+    assert st_pit_config["qe_backtest_runtime_contract"]["portfolio_strategy"]["params"]["topk"] == 1
+
+
+def test_selection_center_authoritative_mode_requires_platform_st_pit_profile() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     manifest = freeze_manifest(
         make_manifest().model_copy(
@@ -1335,13 +1399,16 @@ def test_selection_center_authoritative_mode_blocks_legacy_non_st_pit_package() 
         refresh_audit=NoopRefreshAudit(),
     )
 
-    with pytest.raises(StrategyPackageValidationError, match="health preflight"):
+    with pytest.raises(StrategyPackageValidationError, match="health preflight") as exc_info:
         service.run_single_package(
             package_id=manifest.package_id,
             trade_date=date(2024, 1, 2),
             data_source="DB_HISTORICAL",
             runtime_config={"st_pit_authoritative": True},
         )
+    st_check = next(item for item in exc_info.value.context["checks"] if item["name"] == "st_pit_runtime_profile")
+    assert st_check["status"] == "BLOCKED"
+    assert "runtime_profile.risk_policy.enabled=true" in st_check["message"]
 
 
 def test_selection_center_health_blocks_hmm_missing_stock_sector_map_before_inference(tmp_path) -> None:
@@ -1396,6 +1463,7 @@ def test_selection_center_health_blocks_hmm_missing_stock_sector_map_before_infe
             runtime_config={
                 "st_pit_authoritative": True,
                 "runtime_profile": {
+                    "risk_policy": {"enabled": True},
                     "hmm": {
                         "enabled": True,
                         "model_snapshot_id": "hmm_001",
@@ -1463,6 +1531,7 @@ def test_selection_center_health_passes_hmm_artifact_preflight(tmp_path) -> None
         runtime_config={
             "st_pit_authoritative": True,
             "runtime_profile": {
+                "risk_policy": {"enabled": True},
                 "hmm": {
                     "enabled": True,
                     "model_snapshot_id": "hmm_001",
@@ -2011,6 +2080,7 @@ def test_strategy_package_runtime_hmm_requires_stock_sector_map(tmp_path) -> Non
             data_source="DB_HISTORICAL",
             runtime_config={
                 "runtime_profile": {
+                    "risk_policy": {"enabled": True},
                     "hmm": {
                         "enabled": True,
                         "model_snapshot_id": "hmm_001",

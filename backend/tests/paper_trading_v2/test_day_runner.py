@@ -23,6 +23,7 @@ from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELEC
 from backend.services.strategy_package.models import PackageStatus, PortfolioPolicy
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.strategy_package.runtime import StrategyPackageRuntime
+from backend.services.strategy_package.runtime_variant import RuntimeVariantKind, RuntimeVariantValidationStatus
 from backend.services.strategy_package.selection_artifact import (
     InMemorySelectionScoreArtifactRepository,
     SelectionScoreArtifact,
@@ -197,7 +198,7 @@ def make_paper_enabled_manifest(
     return freeze_manifest(manifest)
 
 
-def test_create_portfolio_rejects_requested_policy_that_differs_from_qe_contract() -> None:
+def test_create_portfolio_accepts_requested_validated_policy_that_differs_from_manifest() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = freeze_manifest(
@@ -224,37 +225,30 @@ def test_create_portfolio_rejects_requested_policy_that_differs_from_qe_contract
         },
     }
 
-    with pytest.raises(StrategyPackageValidationError, match="must match the QE backtest"):
-        StrategyPackageService(repository=package_repo).create_execution_policy(
-            package_id=manifest.package_id,
-            policy_name="requested_twappolicy",
-            policy_json=policy_json,
-            source_backtest_id="unit_twappolicy_backtest",
-            source_backtest_status="BACKTEST_VALIDATED",
-            paper_enabled=True,
-        )
-
     policy = StrategyPackageService(repository=package_repo).create_execution_policy(
         package_id=manifest.package_id,
         policy_name="requested_twappolicy",
         policy_json=policy_json,
         source_backtest_id="unit_twappolicy_backtest",
         source_backtest_status="BACKTEST_VALIDATED",
-        paper_enabled=False,
+        paper_enabled=True,
     )
 
-    with pytest.raises(DataUnavailableError, match="V24_PLAN requires config.model_path"):
-        PaperTradingV2PortfolioService(
-            package_repository=package_repo,
-            repository=paper_repo,
-        ).create_portfolio(
-            package_id=manifest.package_id,
-            portfolio_name="requested policy paper",
-            initial_cash=100_000,
-            start_date=date(2024, 1, 2),
-            data_source=MinuteDataSource.DB_HISTORICAL,
-            execution_policy={"validated_execution_policy_id": policy.policy_id},
-        )
+    portfolio = PaperTradingV2PortfolioService(
+        package_repository=package_repo,
+        repository=paper_repo,
+    ).create_portfolio(
+        package_id=manifest.package_id,
+        portfolio_name="requested policy paper",
+        initial_cash=100_000,
+        start_date=date(2024, 1, 2),
+        data_source=MinuteDataSource.DB_HISTORICAL,
+        execution_policy={"validated_execution_policy_id": policy.policy_id},
+    )
+
+    assert portfolio.execution_policy["validated_execution_policy_id"] == policy.policy_id
+    assert portfolio.execution_policy["algo_code"] == "TWAP"
+    assert manifest.minute_execution_policy.algo_code == "V24_PLAN"
 
 
 def test_create_portfolio_accepts_requested_policy_matching_qe_contract() -> None:
@@ -293,6 +287,7 @@ def runtime_with_authoritative_scores(
     trade_date: date = date(2024, 1, 2),
     data_source: str = "TDX_REALTIME",
     rows: list[dict] | None = None,
+    runtime_config: dict | None = None,
 ) -> StrategyPackageRuntime:
     score_rows = rows or [
         {
@@ -310,7 +305,7 @@ def runtime_with_authoritative_scores(
             manifest_sha256=manifest.manifest_sha256 or "",
             trade_date=trade_date,
             data_source=data_source,
-            runtime_config_hash=selection_artifact_runtime_hash({}),
+            runtime_config_hash=selection_artifact_runtime_hash(runtime_config or {}),
             scores_json=score_rows,
             score_count=len(score_rows),
             universe_count=len(score_rows),
@@ -730,7 +725,7 @@ def test_paper_trading_day_runner_rejects_duplicate_portfolio_trade_date() -> No
         )
 
 
-def test_paper_execution_policy_activation_rejects_policy_that_differs_from_qe_contract() -> None:
+def test_paper_execution_policy_activation_accepts_versioned_policy_that_differs_from_manifest() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_enabled_manifest()
@@ -760,17 +755,19 @@ def test_paper_execution_policy_activation_rejects_policy_that_differs_from_qe_c
     listed = portfolio_service.list_execution_policies(portfolio.portfolio_id)
     listed_policy = next(item for item in listed if item["validated_execution_policy_id"] == policy.policy_id)
     assert listed_policy["can_enter_paper"] is False
-    assert "must match the QE backtest" in listed_policy["paper_check_error"]["message"]
+    assert "not enabled for paper" in listed_policy["paper_check_error"]["message"]
     package_repo.execution_policies[policy.policy_id] = policy.model_copy(update={"paper_enabled": True})
 
-    with pytest.raises(StrategyPackageValidationError, match="must match the QE backtest"):
-        portfolio_service.activate_execution_policy(
-            portfolio_id=portfolio.portfolio_id,
-            trade_date=date(2024, 1, 2),
-            policy_id=policy.policy_id,
-            activated_by="unit_test",
-            reason="validate activation path",
-        )
+    activation = portfolio_service.activate_execution_policy(
+        portfolio_id=portfolio.portfolio_id,
+        trade_date=date(2024, 1, 2),
+        policy_id=policy.policy_id,
+        activated_by="unit_test",
+        reason="validate activation path",
+    )
+
+    assert activation.policy_id == policy.policy_id
+    assert activation.policy_json["algo_code"] == "CLOSE_PRICE"
 
 
 def test_paper_execution_policy_activation_matching_qe_contract_is_used_for_trade_date_run() -> None:
@@ -820,6 +817,88 @@ def test_paper_execution_policy_activation_matching_qe_contract_is_used_for_trad
     assert context["validated_execution_policy_id"] == policy_id
     assert context["algo_code"] == manifest.minute_execution_policy.algo_code
     assert paper_repo.list_execution_policy_activations(portfolio.portfolio_id)[0].activation_id == activation.activation_id
+
+
+def test_day_runner_consumes_validated_runtime_variant_candidate() -> None:
+    package_repo = InMemoryStrategyPackageRepository()
+    paper_repo = InMemoryPaperTradingV2Repository()
+    manifest = make_paper_enabled_manifest(
+        topk=2,
+        custom_params={
+            "strategy_id": "score_weighted_topk_v2",
+            "topk": 2,
+            "max_single_order_value": 5_000_000.0,
+            "max_weight": 0.05,
+        },
+    )
+    package_repo.save_manifest(manifest)
+    package_service = StrategyPackageService(repository=package_repo)
+    variant = package_service.create_runtime_variant(
+        manifest.package_id,
+        variant_name="validated high-cap top1",
+        variant_kind=RuntimeVariantKind.COMBINED,
+        variant_config={
+            "strategy_config": {
+                "custom_params": {
+                    "strategy_id": "score_weighted_topk_v2",
+                    "topk": 1,
+                    "max_single_order_value": 10_000.0,
+                    "max_weight": 1.0,
+                    "max_position_ratio": 1.0,
+                }
+            }
+        },
+        created_by="unit_test",
+    )
+    variant = package_service.mark_runtime_variant_validation(
+        manifest.package_id,
+        variant.variant_id,
+        validation_status=RuntimeVariantValidationStatus.VALIDATION_PASSED,
+        paper_candidate=True,
+        validation_evidence={"validation_run_id": "vr_runtime_variant_day_runner", "status": "passed"},
+    )
+    portfolio = PaperTradingV2PortfolioService(
+        package_repository=package_repo,
+        repository=paper_repo,
+    ).create_portfolio(
+        package_id=manifest.package_id,
+        portfolio_name="paper runtime variant",
+        initial_cash=100_000,
+        start_date=date(2024, 1, 2),
+        data_source=MinuteDataSource.TDX_REALTIME,
+    )
+    runtime_config = {"runtime_variant_id": variant.variant_id}
+
+    result = PaperTradingDayRunner(
+        repository=paper_repo,
+        package_repository=package_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=PaperV2MinuteMarketDataProvider(
+            limit_price_provider=FakeLimitProvider(),
+            suspend_status_provider=FakeSuspendProvider(),
+            tdx_fetcher=lambda _symbol, _trade_date: make_raw_bars(),
+        ),
+        runtime=runtime_with_authoritative_scores(
+            manifest,
+            data_source=MinuteDataSource.TDX_REALTIME.value,
+            runtime_config=runtime_config,
+        ),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+    ).run_day(
+        portfolio_id=portfolio.portfolio_id,
+        trade_date=date(2024, 1, 2),
+        runtime_config=runtime_config,
+    )
+
+    stored_config = result.run.runtime_config
+    assert stored_config["runtime_variant"]["variant_id"] == variant.variant_id
+    assert stored_config["runtime_variant"]["paper_candidate"] is True
+    assert stored_config["qe_backtest_runtime_contract"]["portfolio_strategy"]["params"]["topk"] == 1
+    assert stored_config["qe_backtest_runtime_contract"]["portfolio_strategy"]["params"]["max_single_order_value"] == 10_000.0
+    assert stored_config["validated_execution_policy"]["activation_source"] == "portfolio_default"
+    assert len(result.orders) == 1
+    assert result.orders[0].quantity == 1000
 
 
 def test_paper_execution_policy_activation_rejects_existing_run() -> None:

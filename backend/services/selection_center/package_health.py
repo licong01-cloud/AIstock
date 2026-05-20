@@ -12,7 +12,7 @@ from typing import Any
 
 from backend.services.strategy_package.backtest_contract import build_backtest_runtime_contract
 from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELECTION_SOURCE_TYPE
-from backend.services.strategy_package.selection_artifact import selection_artifact_runtime_hash
+from backend.services.strategy_package.runtime import _candidate_selection_artifact_runtime_hashes
 from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError, TradingCoreError
 
 from .runtime_profile import parse_selection_runtime_profile
@@ -53,7 +53,7 @@ class SelectionPackageHealthService:
         contract = self._contract_check(manifest)
         checks.append(contract)
         st_pit_contract_status = contract["status"]
-        legacy_non_st_pit = bool(contract["context"].get("legacy_non_st_pit"))
+        legacy_non_st_pit = False
 
         checks.append(self._latest_artifact_check(manifest))
         requested_artifact: dict[str, Any] | None = None
@@ -89,15 +89,9 @@ class SelectionPackageHealthService:
         blocked = [item for item in checks if item["status"] == BLOCKED]
         extra_checks: list[dict[str, Any]] = []
         st_pit_authoritative = bool(config.get("st_pit_authoritative") or config.get("enforce_st_pit_contract"))
-        if st_pit_authoritative and legacy_non_st_pit:
-            extra_checks.append(
-                self._blocked_check(
-                    "st_pit_contract_required",
-                    "ST PIT authoritative selection requires a StrategyPackage created from a ST PIT QE backtest",
-                    {"package_id": manifest.package_id},
-                )
-            )
-            blocked.extend(extra_checks)
+        if st_pit_authoritative:
+            extra_checks.append(self._st_pit_runtime_profile_check(manifest, config))
+            blocked.extend(item for item in extra_checks if item["status"] == BLOCKED)
 
         if blocked:
             status = BLOCKED
@@ -173,20 +167,33 @@ class SelectionPackageHealthService:
                 "context": {"package_id": manifest.package_id},
             }
 
-        policy = risk_contract.get("policy") or {}
-        providers = set(policy.get("providers") or [])
-        hard_actions = set(policy.get("hard_actions") or [])
-        if not risk_contract.get("enabled"):
+        return {
+            "name": "strategy_runtime_contract_status",
+            "status": PASS,
+            "message": "StrategyPackage contract is limited to strategy semantics; platform ST PIT/HMM checks use runtime profile",
+            "context": {
+                "package_id": manifest.package_id,
+                "legacy_non_st_pit": False,
+                "platform_features": contract.get("runtime_features", {}),
+                "contract": contract,
+            },
+        }
+
+    @staticmethod
+    def _st_pit_runtime_profile_check(manifest: Any, runtime_config: dict[str, Any]) -> dict[str, Any]:
+        try:
+            profile = parse_selection_runtime_profile(runtime_config)
+        except TradingCoreError as exc:
+            return {"name": "st_pit_runtime_profile", "status": BLOCKED, "message": exc.message, "context": exc.context}
+        if not profile.risk_policy.enabled:
             return {
-                "name": "st_pit_contract_status",
-                "status": WARN,
-                "message": "legacy package: frozen QE backtest contract did not enable ST PIT risk policy",
-                "context": {
-                    "package_id": manifest.package_id,
-                    "legacy_non_st_pit": True,
-                    "contract": contract,
-                },
+                "name": "st_pit_runtime_profile",
+                "status": BLOCKED,
+                "message": "ST PIT authoritative selection requires runtime_profile.risk_policy.enabled=true",
+                "context": {"package_id": manifest.package_id},
             }
+        providers = set(profile.risk_policy.providers or [])
+        hard_actions = set(profile.risk_policy.hard_actions or [])
         missing = []
         if "st_pit" not in providers:
             missing.append("providers.st_pit")
@@ -195,16 +202,21 @@ class SelectionPackageHealthService:
                 missing.append(f"hard_actions.{action}")
         if missing:
             return {
-                "name": "st_pit_contract_status",
+                "name": "st_pit_runtime_profile",
                 "status": BLOCKED,
-                "message": "risk_policy contract is enabled but incomplete",
-                "context": {"package_id": manifest.package_id, "missing": missing, "contract": contract},
+                "message": "ST PIT runtime risk policy profile is incomplete",
+                "context": {"package_id": manifest.package_id, "missing": missing},
             }
         return {
-            "name": "st_pit_contract_status",
+            "name": "st_pit_runtime_profile",
             "status": PASS,
-            "message": "frozen QE backtest contract contains ST PIT risk policy",
-            "context": {"package_id": manifest.package_id, "contract": contract},
+            "message": "platform ST PIT runtime profile is enabled",
+            "context": {
+                "package_id": manifest.package_id,
+                "policy_version": profile.risk_policy.policy_version,
+                "providers": profile.risk_policy.providers,
+                "hard_actions": profile.risk_policy.hard_actions,
+            },
         }
 
     def _latest_artifact_check(self, manifest: Any) -> dict[str, Any]:
@@ -266,17 +278,23 @@ class SelectionPackageHealthService:
                 "message": "selection artifact repository is not available to the health service",
                 "context": {"trade_date": trade_date.isoformat(), "data_source": data_source},
             }
-        try:
-            artifact = self.artifact_repository.get(
-                package_id=manifest.package_id,
-                manifest_sha256=manifest.manifest_sha256,
-                trade_date=trade_date,
-                data_source=data_source,
-                runtime_config_hash=selection_artifact_runtime_hash(runtime_config),
-            )
-        except DataUnavailableError as exc:
+        artifact = None
+        last_error: DataUnavailableError | None = None
+        for runtime_hash in _candidate_selection_artifact_runtime_hashes(runtime_config):
+            try:
+                artifact = self.artifact_repository.get(
+                    package_id=manifest.package_id,
+                    manifest_sha256=manifest.manifest_sha256,
+                    trade_date=trade_date,
+                    data_source=data_source,
+                    runtime_config_hash=runtime_hash,
+                )
+                break
+            except DataUnavailableError as exc:
+                last_error = exc
+        if artifact is None:
             if self._auto_generate(runtime_config):
-                context = dict(exc.context)
+                context = dict(last_error.context if last_error else {})
                 context["auto_generate"] = True
                 return {
                     "name": "requested_selection_artifact",
@@ -284,7 +302,9 @@ class SelectionPackageHealthService:
                     "message": "requested artifact is missing; live artifact auto-generation is enabled",
                     "context": context,
                 }
-            return {"name": "requested_selection_artifact", "status": BLOCKED, "message": exc.message, "context": exc.context}
+            message = last_error.message if last_error else "requested selection artifact does not exist"
+            context = last_error.context if last_error else {}
+            return {"name": "requested_selection_artifact", "status": BLOCKED, "message": message, "context": context}
         metadata = artifact.metadata or {}
         if metadata.get("source_type") != AUTHORITATIVE_SELECTION_SOURCE_TYPE:
             return {
