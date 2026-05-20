@@ -642,6 +642,7 @@ def test_selection_order_builder_requires_current_day_selection_evidence() -> No
             repository=repo,
             selection_reader=FakeSelectionReader(run),
             calendar_provider=CALENDAR,
+            allow_legacy_direct_order_generation=True,
         ).build_for_binding(binding=binding, trade_date=TRADE_DATE)
 
 
@@ -668,6 +669,7 @@ def test_selection_order_builder_rejects_stale_selection_evidence_for_future_day
             repository=repo,
             selection_reader=FakeSelectionReader(run),
             calendar_provider=CALENDAR,
+            allow_legacy_direct_order_generation=True,
         ).build_for_binding(binding=binding, trade_date=NEXT_TRADE_DATE)
 
 
@@ -694,6 +696,7 @@ def test_selection_order_builder_rejects_runtime_hash_mismatched_daily_evidence(
             repository=repo,
             selection_reader=FakeSelectionReader(run),
             calendar_provider=CALENDAR,
+            allow_legacy_direct_order_generation=True,
         ).build_for_binding(binding=binding, trade_date=TRADE_DATE)
 
     assert exc_info.value.context["asset_stage"] == "daily_order_build"
