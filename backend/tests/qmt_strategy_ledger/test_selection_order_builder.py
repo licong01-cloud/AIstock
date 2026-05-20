@@ -22,7 +22,7 @@ from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyL
 from backend.services.qmt_strategy_ledger.order_service import QmtManagedOrderService
 from backend.services.qmt_strategy_ledger.selection_order_builder import SelectionOrderBuilder, SelectionOrderBuildConfig
 from backend.services.selection_center.models import SelectionCandidate, SelectionMode, SelectionRun, SelectionRunStatus
-from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
+from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError, UnsupportedFeatureError
 
 
 ACCOUNT_ID = "62266303"
@@ -117,7 +117,12 @@ def _selection_run(
 
 
 def _builder(repo: InMemoryQmtStrategyLedgerRepository, run: SelectionRun) -> SelectionOrderBuilder:
-    return SelectionOrderBuilder(repository=repo, selection_reader=FakeSelectionReader(run), calendar_provider=CALENDAR)
+    return SelectionOrderBuilder(
+        repository=repo,
+        selection_reader=FakeSelectionReader(run),
+        calendar_provider=CALENDAR,
+        allow_legacy_direct_order_generation=True,
+    )
 
 
 def _lot(
@@ -173,6 +178,31 @@ def test_selection_order_builder_uses_candidate_target_quantity_first() -> None:
     assert request.package_id == "pkg_a"
     assert request.selection_run_id == "sel_a"
     assert request.order_remark.startswith("qmtpkg_poc_strategy_a_a_300604SZ")
+
+
+def test_selection_order_builder_rejects_strategy_package_direct_order_generation_by_default() -> None:
+    repo = _repo()
+    binding = repo.create_package_binding(_binding(target_weight=Decimal("0.02")))
+    run = _selection_run(
+        [
+            SelectionCandidate(
+                symbol="300604.SZ",
+                score=0.9,
+                rank=1,
+                target_quantity=1000,
+                target_weight=0.02,
+                reference_price=123.45,
+            )
+        ]
+    )
+
+    builder = SelectionOrderBuilder(repository=repo, selection_reader=FakeSelectionReader(run), calendar_provider=CALENDAR)
+    with pytest.raises(UnsupportedFeatureError, match="execution bridge is required") as exc_info:
+        builder.build_for_binding(binding=binding)
+
+    assert exc_info.value.context["issue"] == "BUG-077"
+    assert exc_info.value.context["disabled_path"] == "SelectionRun -> SelectionOrderBuilder -> ManagedOrderRequest"
+    assert "validated execution policy" in exc_info.value.context["required_path"]
 
 
 def test_selection_order_builder_sizes_from_target_weight_and_board_lot() -> None:
