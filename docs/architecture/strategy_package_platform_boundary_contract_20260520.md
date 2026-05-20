@@ -1,4 +1,4 @@
-# StrategyPackage 与平台运行能力边界契约（2026-05-20）
+﻿# StrategyPackage 与平台运行能力边界契约（2026-05-20）
 
 **状态**：权威边界契约 v2.0
 **适用范围**：QE、候选策略包、StrategyPackage、Selection Center、Paper Trading v2、MiniQMT SIM、多策略分仓、未来实盘准入
@@ -158,6 +158,26 @@ MiniQMT SIM / Live 只负责接受订单、撮合/成交、返回账户/订单/�
 5. 审批记录完整：审批人、审批时间、审批版本、风险说明、回滚方案。
 6. broker compatibility 已验证：LocalSim/MiniQMTSim/MiniQMTLive 差异仅限 adapter/fill/NAV，不改变策略决策。
 
+### 6.1 BUG-088 已落地的 live approval 生命周期
+
+BUG-088 将“未来 MiniQMT Live 启用前必须审批”的要求落地为独立平台生命周期，而不是 StrategyPackage 状态扩展：
+
+- `strategy_pkg.live_approval` 是实盘准入账本，状态为 `LIVE_CANDIDATE`、`LIVE_APPROVAL_PENDING`、`LIVE_APPROVED`、`LIVE_REJECTED`、`LIVE_RETIRED`。
+- live approval 必须绑定不可变 `manifest_sha256`、`alpha_core_sha256`、`runtime_release_sha256`、`runtime_profile_sha256`、`execution_policy_sha256`、`tail_policy_sha256`。
+- 创建 candidate 前必须有 Paper v2 runtime profile activation、validated execution policy activation、Paper v2 + MiniQMT SIM 验证证据、broker compatibility 证据。
+- 提交和批准必须记录 `requested_by/requested_at`、`approved_by/approved_at`、`risk_note`、`rollback_plan`；拒绝、退役和回滚必须记录责任人、时间和原因。
+- `PAPER_ENABLED`、`PAPER_RUNNING`、`PAPER_PASSED` 等 StrategyPackage/Paper 状态不具备实盘资格含义，不能绕过 live approval。
+- qmt_strategy_ledger 的 `LIVE` managed order 路径即使设置 `AISTOCK_ALLOW_MINIQMT_LIVE_MANAGED_ORDERS=1`，仍必须提供 `package_id`、`metadata.live_approval_id`、`metadata.runtime_release_sha256`，并通过 `LIVE_APPROVED` 校验；未批准、hash 不匹配、broker backend 不匹配均 fail-fast。
+- 本次落地只建立未来实盘准入门禁，不启用真实 MiniQMT Live 下单，不触碰生产 `8001/3000` 或生产数据库。
+
+当前 API 入口：
+
+- `POST /api/v1/paper-v2/portfolios/{portfolio_id}/live-approval-candidates`：从已激活的 runtime/execution 版本创建候选。
+- `GET /api/v1/paper-v2/portfolios/{portfolio_id}/live-approvals`：按 portfolio/package 查询审批记录。
+- `POST /api/v1/paper-v2/live-approvals/{approval_id}/submit`：提交人工审批，要求风险说明和回滚方案。
+- `POST /api/v1/paper-v2/live-approvals/{approval_id}/approve`：人工批准。
+- `POST /api/v1/paper-v2/live-approvals/{approval_id}/reject`：拒绝。
+- `POST /api/v1/paper-v2/live-approvals/{approval_id}/retire`：退役/回滚。
 ## 7. 旧文档处理规则
 
 旧文档不建议删除，因为它们记录历史决策和迁移背景；但必须在旧文档顶部增加“已被本文取代/部分取代”的醒目标注，避免后续实现继续引用旧边界。
@@ -179,7 +199,7 @@ MiniQMT SIM / Live 只负责接受订单、撮合/成交、返回账户/订单/�
 4. P0：StrategyPackage manifest / QE resolver 去除运行时平台配置绑定，迁移到平台 profile/release 引用。
 5. P0：Selection/Paper/MiniQMT 运行时配置必须走 version/activation；禁止 raw runtime_config 改变业务行为。
 6. P1：execution policy 必须有真实 backtest/sim evidence；禁止自动把 manifest minute policy 标记为 `BACKTEST_VALIDATED`。
-7. P1：补齐 live approval 生命周期和 broker compatibility gate。
+7. P1：补齐 live approval 生命周期和 broker compatibility gate（BUG-088 已落地核心生命周期；后续实盘接入前仍需按审批策略补充更长周期验证门槛）。
 8. P1：整理重复门禁，保留 broker/account/ledger/idempotency 安全断言，删除业务规则重复实现。
 
 ## 9. 验收标准

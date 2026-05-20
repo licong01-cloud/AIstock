@@ -86,6 +86,43 @@ class ActivateRuntimeConfigRequest(BaseModel):
     replace_existing: bool = False
 
 
+class CreateLiveApprovalCandidateRequest(BaseModel):
+    trade_date: date
+    target_broker_backend: str = Field(default="minqmt_live", min_length=1)
+    broker_account_id: str | None = None
+    sim_validation_evidence: dict[str, Any] = Field(default_factory=dict)
+    broker_compatibility: dict[str, Any] = Field(default_factory=dict)
+    requested_by: str | None = None
+    risk_note: str | None = None
+    rollback_plan: str | None = None
+
+
+class SubmitLiveApprovalRequest(BaseModel):
+    package_id: str = Field(min_length=1)
+    requested_by: str = Field(min_length=1)
+    risk_note: str = Field(min_length=1)
+    rollback_plan: str = Field(min_length=1)
+
+
+class ApproveLiveApprovalRequest(BaseModel):
+    package_id: str = Field(min_length=1)
+    approved_by: str = Field(min_length=1)
+    risk_note: str | None = None
+    rollback_plan: str | None = None
+
+
+class RejectLiveApprovalRequest(BaseModel):
+    package_id: str = Field(min_length=1)
+    rejected_by: str = Field(min_length=1)
+    rejection_reason: str = Field(min_length=1)
+
+
+class RetireLiveApprovalRequest(BaseModel):
+    package_id: str = Field(min_length=1)
+    retired_by: str = Field(min_length=1)
+    retirement_reason: str = Field(min_length=1)
+
+
 class CreateSessionRequest(BaseModel):
     mode: PaperSessionMode
     start_date: date
@@ -542,6 +579,99 @@ def list_portfolio_config_change_audit(portfolio_id: str, limit: int = 200) -> d
     try:
         rows = PaperTradingV2PortfolioService().list_config_change_audit(portfolio_id, limit=limit)
         return {"ok": True, "audit": [row.model_dump(mode="json") for row in rows]}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/portfolios/{portfolio_id}/live-approval-candidates")
+def create_portfolio_live_approval_candidate(
+    portfolio_id: str,
+    req: CreateLiveApprovalCandidateRequest,
+) -> dict[str, Any]:
+    try:
+        approval = PaperTradingV2PortfolioService().create_live_approval_candidate(
+            portfolio_id=portfolio_id,
+            trade_date=req.trade_date,
+            target_broker_backend=req.target_broker_backend,
+            broker_account_id=req.broker_account_id,
+            sim_validation_evidence=req.sim_validation_evidence,
+            broker_compatibility=req.broker_compatibility,
+            requested_by=req.requested_by,
+            risk_note=req.risk_note,
+            rollback_plan=req.rollback_plan,
+        )
+        return {"ok": True, "approval": approval.model_dump(mode="json")}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/portfolios/{portfolio_id}/live-approvals")
+def list_portfolio_live_approvals(portfolio_id: str, package_id: str | None = None, limit: int = 100) -> dict[str, Any]:
+    try:
+        approvals = PaperTradingV2PortfolioService().list_live_approvals(
+            package_id=package_id,
+            portfolio_id=portfolio_id,
+            limit=limit,
+        )
+        return {"ok": True, "approvals": [approval.model_dump(mode="json") for approval in approvals]}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/live-approvals/{approval_id}/submit")
+def submit_live_approval(approval_id: str, req: SubmitLiveApprovalRequest) -> dict[str, Any]:
+    try:
+        approval = PaperTradingV2PortfolioService().submit_live_approval(
+            package_id=req.package_id,
+            approval_id=approval_id,
+            requested_by=req.requested_by,
+            risk_note=req.risk_note,
+            rollback_plan=req.rollback_plan,
+        )
+        return {"ok": True, "approval": approval.model_dump(mode="json")}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/live-approvals/{approval_id}/approve")
+def approve_live_approval(approval_id: str, req: ApproveLiveApprovalRequest) -> dict[str, Any]:
+    try:
+        approval = PaperTradingV2PortfolioService().approve_live_approval(
+            package_id=req.package_id,
+            approval_id=approval_id,
+            approved_by=req.approved_by,
+            risk_note=req.risk_note,
+            rollback_plan=req.rollback_plan,
+        )
+        return {"ok": True, "approval": approval.model_dump(mode="json")}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/live-approvals/{approval_id}/reject")
+def reject_live_approval(approval_id: str, req: RejectLiveApprovalRequest) -> dict[str, Any]:
+    try:
+        approval = PaperTradingV2PortfolioService().reject_live_approval(
+            package_id=req.package_id,
+            approval_id=approval_id,
+            rejected_by=req.rejected_by,
+            rejection_reason=req.rejection_reason,
+        )
+        return {"ok": True, "approval": approval.model_dump(mode="json")}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/live-approvals/{approval_id}/retire")
+def retire_live_approval(approval_id: str, req: RetireLiveApprovalRequest) -> dict[str, Any]:
+    try:
+        approval = PaperTradingV2PortfolioService().retire_live_approval(
+            package_id=req.package_id,
+            approval_id=approval_id,
+            retired_by=req.retired_by,
+            retirement_reason=req.retirement_reason,
+        )
+        return {"ok": True, "approval": approval.model_dump(mode="json")}
     except TradingCoreError as exc:
         _raise_http(exc)
 
