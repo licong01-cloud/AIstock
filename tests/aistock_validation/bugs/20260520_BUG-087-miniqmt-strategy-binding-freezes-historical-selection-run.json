@@ -1,0 +1,90 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-087",
+  "title": "MiniQMT strategy binding freezes historical selection_run instead of enforcing daily selection generation",
+  "description": "Expected: A MiniQMT virtual strategy should bind StrategyPackage alpha core plus platform runtime release/profile references. Each trading day must generate or resolve the current trade_date SelectionRun from the package alpha core and platform runtime versions before order generation. Historical SelectionRun records are audit/replay evidence only and must not be the long-lived active binding that drives future order generation. Actual: QmtStrategyPackageBindingService.bind_with_result requires selection_run_id and stores selection_run_id/trade_date/top_k/target_weight/runtime_config in qmt_strategy.strategy_package_binding; SelectionOrderBuilder then reads that active binding selection_run_id, risking stale future orders and mixing strategy identity with daily signal evidence.",
+  "module": "qmt_strategy_ledger",
+  "severity": "P0",
+  "risk_area": "trading_daily_selection_lifecycle",
+  "status": "in_progress",
+  "trigger_condition": {
+    "scenario": "paper_v2_boundary_audit_20260520_and_github_issue_109",
+    "files": [
+      "backend/services/qmt_strategy_ledger/package_binding.py",
+      "backend/services/qmt_strategy_ledger/selection_order_builder.py",
+      "backend/services/qmt_strategy_ledger/models.py",
+      "backend/services/qmt_strategy_ledger/repository.py",
+      "backend/migrations/qmt_strategy_ledger_20260518.sql",
+      "backend/routers/qmt_strategy_ledger.py",
+      "backend/tests/qmt_strategy_ledger/test_package_binding.py",
+      "backend/tests/qmt_strategy_ledger/test_selection_order_builder.py"
+    ]
+  },
+  "reproduce_command": "rg -n \"selection_run_id|strategy_package_binding|bind_with_result|get_active_package_binding|build_for_active_binding|SelectionOrderBuilder|trade_date|target_weight|top_k\" backend/services/qmt_strategy_ledger backend/migrations/qmt_strategy_ledger_20260518.sql backend/routers/qmt_strategy_ledger.py backend/tests/qmt_strategy_ledger -S",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/issues/109"
+  ],
+  "fingerprint": "BUG-087-20260520-miniqmt-daily-selection-lifecycle",
+  "assigned_agent": "codex-app",
+  "fix_branch": "bug/BUG-087-miniqmt-daily-selection-lifecycle",
+  "worktree_path": "F:/Dev/AIstock_worktrees/bug-087-miniqmt-daily-selection-lifecycle",
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-20T00:00:00Z",
+  "first_seen_at": "2026-05-20T00:00:00Z",
+  "last_seen_at": "2026-05-20T00:00:00Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-20T00:00:00Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/qmt_strategy_ledger/package_binding.py",
+    "backend/services/qmt_strategy_ledger/selection_order_builder.py",
+    "backend/services/qmt_strategy_ledger/models.py",
+    "backend/services/qmt_strategy_ledger/repository.py",
+    "backend/migrations/qmt_strategy_ledger_20260518.sql",
+    "backend/routers/qmt_strategy_ledger.py",
+    "backend/tests/qmt_strategy_ledger/test_package_binding.py",
+    "backend/tests/qmt_strategy_ledger/test_selection_order_builder.py",
+    "tests/aistock_validation/bugs/20260520_BUG-087-miniqmt-strategy-binding-freezes-historical-selection-run.json",
+    "tests/aistock_validation/history/qmt_strategy_ledger/BUG-087-miniqmt-daily-selection-lifecycle-validation-20260520.md"
+  ],
+  "suspected_modules": [
+    "backend/services/qmt_strategy_ledger/package_binding.py",
+    "backend/services/qmt_strategy_ledger/selection_order_builder.py",
+    "backend/services/qmt_strategy_ledger/models.py",
+    "backend/services/qmt_strategy_ledger/repository.py",
+    "backend/routers/qmt_strategy_ledger.py",
+    "backend/migrations/qmt_strategy_ledger_20260518.sql"
+  ],
+  "required_verification": [
+    "Active MiniQMT strategy binding stores package/runtime references separately from daily selection evidence.",
+    "Daily execution fails fast when current trade_date selection evidence is missing, stale, failed, or generated with mismatched runtime version/hash.",
+    "Historical selection_run remains available for audit/replay but cannot drive future trading days by default."
+  ],
+  "closure_requirements": [
+    "MiniQMT daily execution enforces current-day selection generation or explicit current-day resolution.",
+    "Binding rollover no longer requires making a historical selection_run the long-lived strategy identity.",
+    "DESIGN-COMPLIANCE-001 evidence maps each required behavior to implementation references and automated verification."
+  ],
+  "non_goals": [
+    "Do not modify production runtime, production DB, port 8001, frontend port 3000, or live MiniQMT session.",
+    "Do not redesign Selection Center or Paper v2 beyond the qmt_strategy_ledger daily selection lifecycle needed for this defect."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-20T00:00:00Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "BUG-087 mirrored to GitHub issue #109 before this fix branch was claimed."
+    },
+    {
+      "timestamp": "2026-05-20T00:00:00Z",
+      "actor": "codex-app",
+      "action": "claimed",
+      "note": "Claimed in independent worktree F:/Dev/AIstock_worktrees/bug-087-miniqmt-daily-selection-lifecycle on branch bug/BUG-087-miniqmt-daily-selection-lifecycle. MCP BUG sync is blocked by unrelated BOM JSON in another worktree, so GitHub CLI is used for live issue sync."
+    }
+  ],
+  "github_issue_number": 109,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/109"
+}

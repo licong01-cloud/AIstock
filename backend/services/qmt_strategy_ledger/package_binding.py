@@ -13,7 +13,7 @@ from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.selection_artifact import selection_artifact_runtime_hash
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, StrategyPackageValidationError
 
-from .models import BindingStatus, StrategyPackageBinding, new_id
+from .models import BindingStatus, StrategyBindingSelectionEvidence, StrategyPackageBinding, new_id
 
 
 class StrategyPackageReader(Protocol):
@@ -30,7 +30,7 @@ class SelectionRunReader(Protocol):
 class PackageBindingRequest:
     strategy_id: str
     package_id: str
-    selection_run_id: str
+    selection_run_id: str | None = None
     trade_date: date | None = None
     target_weight: Decimal | None = None
     top_k: int | None = None
@@ -44,6 +44,7 @@ class PackageBindingResult:
     binding: StrategyPackageBinding
     action: str
     replaced_binding: StrategyPackageBinding | None = None
+    selection_evidence: StrategyBindingSelectionEvidence | None = None
 
 
 class QmtStrategyPackageBindingService:
@@ -75,12 +76,93 @@ class QmtStrategyPackageBindingService:
     def bind_with_result(self, request: PackageBindingRequest) -> PackageBindingResult:
         account = self._repository.get_virtual_account(request.strategy_id)
         package_record = self._package_reader.get(request.package_id)
-        selection_run = self._selection_reader.get_run(request.selection_run_id)
         if package_record.package_status not in self._ALLOWED_PACKAGE_STATUSES:
             raise StrategyPackageValidationError(
                 "strategy package is not enabled for selection or paper usage",
                 context={"package_id": request.package_id, "status": package_record.package_status.value},
             )
+        runtime_config = dict(request.runtime_config or {})
+        selection_run = self._resolve_selection_run(request, package_record) if request.selection_run_id else None
+        binding = StrategyPackageBinding(
+            binding_id=new_id("qmtbind"),
+            strategy_id=account.strategy_id,
+            package_id=request.package_id,
+            manifest_sha256=package_record.manifest_sha256,
+            selection_run_id=None,
+            trade_date=None,
+            target_weight=request.target_weight,
+            top_k=request.top_k,
+            binding_status=BindingStatus.ACTIVE,
+            runtime_config=runtime_config,
+        )
+        active = self._repository.get_active_package_binding(account.strategy_id)
+        if active is None:
+            created = self._repository.create_package_binding(binding)
+            selection_evidence = None
+            if selection_run is not None:
+                selection_evidence = self._record_daily_selection_evidence(
+                    created,
+                    package_record=package_record,
+                    selection_run=selection_run,
+                    trade_date=request.trade_date or selection_run.trade_date,
+                    runtime_config=runtime_config,
+                )
+            return PackageBindingResult(binding=created, action="created", selection_evidence=selection_evidence)
+        if _same_binding_identity(active, binding):
+            if selection_run is not None:
+                selection_evidence = self._record_daily_selection_evidence(
+                    active,
+                    package_record=package_record,
+                    selection_run=selection_run,
+                    trade_date=request.trade_date or selection_run.trade_date,
+                    runtime_config=runtime_config,
+                )
+                return PackageBindingResult(
+                    binding=active,
+                    action="daily_selection_recorded",
+                    selection_evidence=selection_evidence,
+                )
+            return PackageBindingResult(binding=active, action="idempotent_existing")
+        if not request.replace_active:
+            raise InvalidStateTransitionError(
+                "active package binding identity already exists; set replace_active=true to replace strategy identity",
+                context={
+                    "strategy_id": account.strategy_id,
+                    "active_binding_id": active.binding_id,
+                    "active_package_id": active.package_id,
+                    "active_selection_run_id": active.selection_run_id,
+                    "active_trade_date": active.trade_date.isoformat() if active.trade_date else None,
+                    "requested_package_id": binding.package_id,
+                    "requested_selection_run_id": binding.selection_run_id,
+                    "requested_trade_date": binding.trade_date.isoformat() if binding.trade_date else None,
+                },
+            )
+
+        reason = (request.replacement_reason or "package_binding_rollover").strip() or "package_binding_rollover"
+        binding = replace_runtime_lifecycle(binding, replaces_binding_id=active.binding_id, reason=reason)
+        replaced = self._repository.replace_active_package_binding(
+            binding,
+            replaced_binding_id=active.binding_id,
+            reason=reason,
+        )
+        selection_evidence = None
+        if selection_run is not None:
+            selection_evidence = self._record_daily_selection_evidence(
+                replaced,
+                package_record=package_record,
+                selection_run=selection_run,
+                trade_date=request.trade_date or selection_run.trade_date,
+                runtime_config=runtime_config,
+            )
+        return PackageBindingResult(
+            binding=replaced,
+            action="replaced_active",
+            replaced_binding=self._repository.get_package_binding(active.binding_id),
+            selection_evidence=selection_evidence,
+        )
+
+    def _resolve_selection_run(self, request: PackageBindingRequest, package_record: Any) -> Any:
+        selection_run = self._selection_reader.get_run(str(request.selection_run_id))
         if selection_run.status != SelectionRunStatus.SUCCEEDED:
             raise DataUnavailableError(
                 "selection run is not succeeded",
@@ -101,85 +183,54 @@ class QmtStrategyPackageBindingService:
                     "package_manifest_sha256": package_record.manifest_sha256,
                 },
             )
-        runtime_config = dict(request.runtime_config or {})
-        binding = StrategyPackageBinding(
-            binding_id=new_id("qmtbind"),
-            strategy_id=account.strategy_id,
-            package_id=request.package_id,
-            manifest_sha256=package_record.manifest_sha256,
-            selection_run_id=request.selection_run_id,
-            trade_date=request.trade_date or selection_run.trade_date,
-            target_weight=request.target_weight,
-            top_k=request.top_k,
-            binding_status=BindingStatus.ACTIVE,
-            runtime_config=runtime_config,
-        )
-        active = self._repository.get_active_package_binding(account.strategy_id)
-        if active is None:
-            binding = self._with_frozen_asset_evidence(
-                binding,
-                package_record=package_record,
-                selection_run=selection_run,
-                runtime_config=runtime_config,
-            )
-            return PackageBindingResult(
-                binding=self._repository.create_package_binding(binding),
-                action="created",
-            )
-        if _same_binding(active, binding):
-            return PackageBindingResult(binding=active, action="idempotent_existing")
-        if not request.replace_active:
-            raise InvalidStateTransitionError(
-                "active package binding already exists; set replace_active=true to roll over",
-                context={
-                    "strategy_id": account.strategy_id,
-                    "active_binding_id": active.binding_id,
-                    "active_package_id": active.package_id,
-                    "active_selection_run_id": active.selection_run_id,
-                    "active_trade_date": active.trade_date.isoformat() if active.trade_date else None,
-                    "requested_package_id": binding.package_id,
-                    "requested_selection_run_id": binding.selection_run_id,
-                    "requested_trade_date": binding.trade_date.isoformat() if binding.trade_date else None,
-                },
-            )
+        return selection_run
 
-        reason = (request.replacement_reason or "package_binding_rollover").strip() or "package_binding_rollover"
-        binding = self._with_frozen_asset_evidence(
-            binding,
-            package_record=package_record,
-            selection_run=selection_run,
-            runtime_config=runtime_config,
-        )
-        binding = replace_runtime_lifecycle(binding, replaces_binding_id=active.binding_id, reason=reason)
-        return PackageBindingResult(
-            binding=self._repository.replace_active_package_binding(
-                binding,
-                replaced_binding_id=active.binding_id,
-                reason=reason,
-            ),
-            action="replaced_active",
-            replaced_binding=self._repository.get_package_binding(active.binding_id),
-        )
-
-    def _with_frozen_asset_evidence(
+    def _record_daily_selection_evidence(
         self,
         binding: StrategyPackageBinding,
         *,
         package_record: Any,
         selection_run: Any,
+        trade_date: date,
         runtime_config: dict[str, Any],
-    ) -> StrategyPackageBinding:
+    ) -> StrategyBindingSelectionEvidence:
         frozen_asset_evidence = self._frozen_asset_evidence(
             package_record=package_record,
             selection_run=selection_run,
-            trade_date=binding.trade_date or selection_run.trade_date,
+            trade_date=trade_date,
             runtime_config=runtime_config,
         )
-        if frozen_asset_evidence is None:
-            return binding
-        updated_runtime_config = dict(runtime_config)
-        updated_runtime_config["frozen_runtime_asset"] = frozen_asset_evidence
-        return replace(binding, runtime_config=updated_runtime_config, updated_at=datetime.now(UTC))
+        runtime_config_hash = (
+            frozen_asset_evidence.get("runtime_config_hash")
+            if frozen_asset_evidence is not None
+            else selection_artifact_runtime_hash(runtime_config)
+        )
+        metadata = {
+            "asset_authority": "frozen_selection_score_artifact" if frozen_asset_evidence else "selection_run_runtime_hash",
+            "selection_run_created_at": selection_run.created_at.isoformat() if getattr(selection_run, "created_at", None) else None,
+            "selection_run_completed_at": selection_run.completed_at.isoformat() if getattr(selection_run, "completed_at", None) else None,
+        }
+        if frozen_asset_evidence is not None:
+            metadata["artifact"] = dict(frozen_asset_evidence)
+        return self._repository.record_binding_selection_evidence(
+            StrategyBindingSelectionEvidence(
+                evidence_id=new_id("qmtsel"),
+                binding_id=binding.binding_id,
+                strategy_id=binding.strategy_id,
+                package_id=binding.package_id,
+                selection_run_id=selection_run.run_id,
+                trade_date=trade_date,
+                data_source=selection_run.data_source,
+                manifest_sha256=package_record.manifest_sha256,
+                runtime_config_hash=str(runtime_config_hash),
+                artifact_id=frozen_asset_evidence.get("artifact_id") if frozen_asset_evidence else None,
+                artifact_sha256=frozen_asset_evidence.get("artifact_sha256") if frozen_asset_evidence else None,
+                source_type=frozen_asset_evidence.get("source_type") if frozen_asset_evidence else None,
+                authority_scope=frozen_asset_evidence.get("authority_scope") if frozen_asset_evidence else None,
+                score_count=frozen_asset_evidence.get("score_count") if frozen_asset_evidence else None,
+                metadata=metadata,
+            )
+        )
 
     def _frozen_asset_evidence(
         self,
@@ -268,13 +319,12 @@ def replace_runtime_lifecycle(
     return replace(binding, runtime_config=runtime_config, updated_at=datetime.now(UTC))
 
 
-def _same_binding(left: StrategyPackageBinding, right: StrategyPackageBinding) -> bool:
+def _same_binding_identity(left: StrategyPackageBinding, right: StrategyPackageBinding) -> bool:
     return (
         left.strategy_id == right.strategy_id
         and left.package_id == right.package_id
         and left.manifest_sha256 == right.manifest_sha256
-        and left.selection_run_id == right.selection_run_id
-        and left.trade_date == right.trade_date
         and left.target_weight == right.target_weight
         and left.top_k == right.top_k
+        and dict(left.runtime_config or {}) == dict(right.runtime_config or {})
     )
