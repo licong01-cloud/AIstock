@@ -155,13 +155,6 @@ class MinuteDataRequirements(BaseModel):
     requires_suspend_status: Literal[True] = True
 
 
-class MinuteFallbackPolicy(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    on_missing_minute_bar: Literal["fail"] = "fail"
-    on_algo_error: Literal["fail"] = "fail"
-
-
 class MinuteExecutionPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -171,6 +164,9 @@ class MinuteExecutionPolicy(BaseModel):
     algo_config: dict[str, Any] = Field(default_factory=dict)
     fallback_algo_code: None = None
     data_requirements: MinuteDataRequirements = Field(default_factory=MinuteDataRequirements)
+    fallback_policy: dict[str, Literal["fail"]] = Field(
+        default_factory=lambda: {"on_missing_minute_bar": "fail", "on_algo_error": "fail"}
+    )
     quality_report: dict[str, bool] = Field(
         default_factory=lambda: {
             "record_slippage": True,
@@ -178,7 +174,6 @@ class MinuteExecutionPolicy(BaseModel):
             "record_unfilled_reason": True,
         }
     )
-    fallback_policy: MinuteFallbackPolicy = Field(default_factory=MinuteFallbackPolicy)
 
     @field_validator("algo_code")
     @classmethod
@@ -239,7 +234,7 @@ class AssetCheck(BaseModel):
 class StrategyPackageManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    manifest_version: Literal["1.0"] = "1.0"
+    manifest_version: Literal["1.0", "alpha_core_v1"] = "alpha_core_v1"
     package_id: str = Field(default_factory=lambda: f"pkg_{uuid4().hex}")
     package_name: str
     package_version: str = "1.0.0"
@@ -249,16 +244,26 @@ class StrategyPackageManifest(BaseModel):
     alpha_combination_policy: AlphaCombinationPolicy
     factor_set: list[FactorAsset]
     model_asset: ModelAsset | list[ModelAsset]
-    strategy_config: dict[str, Any]
-    universe_policy: UniversePolicy
-    portfolio_policy: PortfolioPolicy
-    execution_policy: ExecutionPolicy
-    minute_execution_policy: MinuteExecutionPolicy
-    risk_policy: RiskPolicy = Field(default_factory=RiskPolicy)
+    source_evidence: dict[str, Any] = Field(default_factory=dict)
+    backtest_context: dict[str, Any] = Field(default_factory=dict)
+    strategy_config: dict[str, Any] = Field(default_factory=dict)
+    universe_policy: UniversePolicy | None = None
+    portfolio_policy: PortfolioPolicy | None = None
+    execution_policy: ExecutionPolicy | None = None
+    minute_execution_policy: MinuteExecutionPolicy | None = None
+    risk_policy: RiskPolicy | None = None
     backtest_summary: BacktestSummary
     asset_checks: list[AssetCheck] = Field(default_factory=list)
     manifest_sha256: str | None = None
     package_status: PackageStatus = PackageStatus.DRAFT
+
+    @property
+    def is_alpha_core_manifest(self) -> bool:
+        return self.manifest_version == "alpha_core_v1"
+
+    @property
+    def is_legacy_runtime_manifest(self) -> bool:
+        return self.manifest_version == "1.0"
 
     @model_validator(mode="after")
     def _validate_alpha_shape(self) -> "StrategyPackageManifest":
@@ -286,8 +291,23 @@ class StrategyPackageManifest(BaseModel):
             expected = {only_component.alpha_id: 1.0}
             if self.alpha_combination_policy.weights != expected:
                 raise ValueError("single_alpha combination weights must be exactly 1.0")
-        return self
 
+        if self.is_alpha_core_manifest:
+            runtime_fields = {
+                "strategy_config": bool(self.strategy_config),
+                "universe_policy": self.universe_policy is not None,
+                "portfolio_policy": self.portfolio_policy is not None,
+                "execution_policy": self.execution_policy is not None,
+                "minute_execution_policy": self.minute_execution_policy is not None,
+                "risk_policy": self.risk_policy is not None,
+            }
+            bound_fields = sorted(key for key, present in runtime_fields.items() if present)
+            if bound_fields:
+                raise ValueError(
+                    "alpha_core_v1 manifest cannot bind platform runtime policy fields: "
+                    + ", ".join(bound_fields)
+                )
+        return self
 
 class LiveApprovalStatus(str, Enum):
     LIVE_CANDIDATE = "LIVE_CANDIDATE"
