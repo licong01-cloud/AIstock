@@ -6,7 +6,7 @@
   "module": "paper_v2",
   "severity": "P0",
   "risk_area": "miniqmt_runtime_contract",
-  "status": "open",
+  "status": "fixed",
   "trigger_condition": {
     "scenario": "reported_via_codex_app_read_only_miniqmt_route_scan_20260520",
     "files": [
@@ -38,19 +38,23 @@
     "file:backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
     "file:backend/tests/paper_trading_v2/test_portfolio_broker_backend.py",
     "file:backend/tests/paper_trading_v2/test_day_runner.py",
-    "file:backend/tests/paper_trading_v2/test_runtime_config_contract.py"
+    "file:backend/tests/paper_trading_v2/test_runtime_config_contract.py",
+    "file:tests/aistock_validation/history/paper_v2/20260520_070726_l3_paper-v2-platform-runtime-contract-fixes.md",
+    "git:0e4ef23",
+    "github-pr:https://github.com/licong01-cloud/AIstock/pull/102",
+    "git:790cb9c9707b3151b822f3ecf56d7c0cfe62d0f7"
   ],
   "fingerprint": "ef59a8777199cd2a",
   "github_issue_number": 89,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/89",
   "assigned_agent": "codex-app",
   "fix_branch": "bug/BUG-065-paper-v2-hmm-platform-runtime",
-  "fix_commit": null,
+  "fix_commit": "0e4ef23",
   "verification_run_id": "tests/aistock_validation/history/paper_v2/20260520_070726_l3_paper-v2-platform-runtime-contract-fixes.md",
   "created_at": "2026-05-19T16:30:28Z",
   "first_seen_at": "2026-05-19T16:30:28Z",
-  "last_seen_at": "2026-05-19T16:31:06Z",
-  "fixed_at": null,
+  "last_seen_at": "2026-05-20T01:12:10Z",
+  "fixed_at": "2026-05-20T01:12:10Z",
   "submitted_at": "2026-05-19T16:30:28Z",
   "closed_at": null,
   "allowed_write_scope": [
@@ -137,6 +141,15 @@
       "actor": "codex-app",
       "action": "fixed_pending_review",
       "note": "Implemented on bug/BUG-065-paper-v2-hmm-platform-runtime; local validation evidence recorded at tests/aistock_validation/history/paper_v2/20260520_070726_l3_paper-v2-platform-runtime-contract-fixes.md."
+    },
+    {
+      "timestamp": "2026-05-20T01:12:10Z",
+      "actor": "codex-app",
+      "action": "fixed",
+      "note": "Fixed by 0e4ef23 and merged to main by PR #102 (790cb9c9707b3151b822f3ecf56d7c0cfe62d0f7); validation evidence: tests/aistock_validation/history/paper_v2/20260520_070726_l3_paper-v2-platform-runtime-contract-fixes.md."
     }
-  ]
+  ],
+  "github_pr_number": 102,
+  "github_pr_url": "https://github.com/licong01-cloud/AIstock/pull/102",
+  "merge_commit": "790cb9c9707b3151b822f3ecf56d7c0cfe62d0f7"
 }
