@@ -29,8 +29,8 @@
   "fingerprint": "cc0db46dcc2a2e88",
   "assigned_agent": "paper-v2-team",
   "fix_branch": "bug/BUG-085-qe-pending-template-ui",
-  "fix_commit": "eb3eeca",
-  "verification_run_id": "qe_mcp_l3_20260520_221451",
+  "fix_commit": "57fec9a",
+  "verification_run_id": "valjob_20260520_144828_b234cdb2;valjob_20260520_144829_2fad17ef;valjob_20260520_144828_bcd3ca6a;valjob_20260520_144900_871c89cb;valjob_20260520_144901_096d81fb;qe_mcp_l3_20260520_224953",
   "created_at": "2026-05-20T08:39:04Z",
   "first_seen_at": "2026-05-20T08:39:04Z",
   "last_seen_at": "2026-05-20T08:39:04Z",
@@ -107,6 +107,12 @@
       "actor": "codex-app",
       "action": "fixed",
       "note": "Fixed in branch bug/BUG-085-qe-pending-template-ui commit eb3eeca; GitHub issue #113 labeled status:fixed-pending-review and commented with validation evidence. Verification: python -m nox -s qe_mcp_l3 -- 8011 3011 passed; qe_mcp_backend 29 passed, qe_archive_backend 106 passed, qe_template_ui TypeScript + Playwright 3 passed; operator page raw JSON editor guardrail rg returned no matches."
+    },
+    {
+      "timestamp": "2026-05-20T14:51:54Z",
+      "actor": "codex-app",
+      "action": "validation_mcp_verified",
+      "note": "Rebased onto origin/main 08ab7fe. Validation MCP controlled executions passed: guardrail_changed_files valjob_20260520_144828_b234cdb2, l0 valjob_20260520_144829_2fad17ef, qe_archive_backend valjob_20260520_144828_bcd3ca6a, validation_catalog_integrity valjob_20260520_144900_871c89cb, validation_module_registry_l0 valjob_20260520_144901_096d81fb. Supplemental local qe_mcp_l3 passed for UI coverage because Validation MCP catalog has no qe_mcp_l3/qe_template_ui runner plan."
     }
   ],
   "github_issue_number": 113,
