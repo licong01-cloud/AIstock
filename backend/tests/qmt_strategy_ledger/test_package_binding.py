@@ -137,8 +137,13 @@ def test_package_binding_creates_active_binding_with_manifest_evidence() -> None
 
     assert binding.package_id == "pkg_a"
     assert binding.manifest_sha256 == "sha_a"
-    assert binding.trade_date == TRADE_DATE
+    assert binding.selection_run_id is None
+    assert binding.trade_date is None
     assert repo.get_active_package_binding("strat_a") == binding
+    evidence = repo.get_binding_selection_evidence(binding.binding_id, TRADE_DATE)
+    assert evidence.selection_run_id == "sel_a"
+    assert evidence.trade_date == TRADE_DATE
+    assert evidence.manifest_sha256 == "sha_a"
 
 
 def test_package_binding_captures_frozen_selection_asset_evidence() -> None:
@@ -160,15 +165,15 @@ def test_package_binding_captures_frozen_selection_asset_evidence() -> None:
         )
     )
 
-    evidence = binding.runtime_config["frozen_runtime_asset"]
-    assert evidence["asset_authority"] == "frozen_selection_score_artifact"
-    assert evidence["manifest_sha256"] == "sha_a"
-    assert evidence["selection_run_id"] == "sel_a"
-    assert evidence["trade_date"] == TRADE_DATE.isoformat()
-    assert evidence["runtime_config_hash"] == selection_artifact_runtime_hash(runtime_config)
-    assert evidence["source_type"] == AUTHORITATIVE_SELECTION_SOURCE_TYPE
-    assert evidence["authority_scope"] == AUTHORITATIVE_SELECTION_SCOPE
-    assert evidence["artifact_sha256"]
+    evidence = repo.get_binding_selection_evidence(binding.binding_id, TRADE_DATE)
+    assert evidence.metadata["asset_authority"] == "frozen_selection_score_artifact"
+    assert evidence.manifest_sha256 == "sha_a"
+    assert evidence.selection_run_id == "sel_a"
+    assert evidence.trade_date == TRADE_DATE
+    assert evidence.runtime_config_hash == selection_artifact_runtime_hash(runtime_config)
+    assert evidence.source_type == AUTHORITATIVE_SELECTION_SOURCE_TYPE
+    assert evidence.authority_scope == AUTHORITATIVE_SELECTION_SCOPE
+    assert evidence.artifact_sha256
 
 
 def test_package_binding_fails_fast_when_frozen_asset_missing_or_not_authoritative() -> None:
@@ -211,9 +216,10 @@ def test_package_binding_same_selection_is_idempotent_without_duplicate_active_r
     assert second == first
     assert repo.get_active_package_binding("strat_a") == first
     assert repo.list_package_bindings("strat_a") == [first]
+    assert [item.selection_run_id for item in repo.list_binding_selection_evidence(first.binding_id)] == ["sel_a"]
 
 
-def test_package_binding_requires_explicit_rollover_for_different_selection() -> None:
+def test_package_binding_records_next_day_selection_without_replacing_strategy_identity() -> None:
     repo = _repo()
     first = QmtStrategyPackageBindingService(
         repository=repo,
@@ -226,30 +232,70 @@ def test_package_binding_requires_explicit_rollover_for_different_selection() ->
         selection_reader=FakeSelectionReader(_run(run_id="sel_b", trade_date=date(2026, 5, 19))),
     )
 
-    with pytest.raises(InvalidStateTransitionError, match="replace_active=true"):
-        rollover_service.bind(PackageBindingRequest(strategy_id="strat_a", package_id="pkg_a", selection_run_id="sel_b"))
-
     result = rollover_service.bind_with_result(
         PackageBindingRequest(
             strategy_id="strat_a",
             package_id="pkg_a",
             selection_run_id="sel_b",
-            replace_active=True,
-            replacement_reason="next_trading_day_selection",
         )
     )
 
     historical = repo.list_package_bindings("strat_a")
+    assert result.action == "daily_selection_recorded"
+    assert result.binding == first
+    assert repo.get_active_package_binding("strat_a") == first
+    assert historical == [first]
+    evidence = repo.list_binding_selection_evidence(first.binding_id)
+    assert [(item.selection_run_id, item.trade_date) for item in evidence] == [
+        ("sel_a", TRADE_DATE),
+        ("sel_b", date(2026, 5, 19)),
+    ]
+
+
+def test_package_binding_still_requires_explicit_replace_for_changed_strategy_identity() -> None:
+    repo = _repo()
+    first = QmtStrategyPackageBindingService(
+        repository=repo,
+        package_reader=FakePackageReader(FakePackageRecord("pkg_a", PackageStatus.SELECTION_ENABLED, "sha_a")),
+        selection_reader=FakeSelectionReader(_run()),
+    ).bind(PackageBindingRequest(strategy_id="strat_a", package_id="pkg_a", selection_run_id="sel_a"))
+    replace_service = QmtStrategyPackageBindingService(
+        repository=repo,
+        package_reader=FakePackageReader(FakePackageRecord("pkg_a", PackageStatus.SELECTION_ENABLED, "sha_a")),
+        selection_reader=FakeSelectionReader(_run(run_id="sel_b", trade_date=date(2026, 5, 19))),
+    )
+
+    with pytest.raises(InvalidStateTransitionError, match="replace_active=true"):
+        replace_service.bind(
+            PackageBindingRequest(
+                strategy_id="strat_a",
+                package_id="pkg_a",
+                selection_run_id="sel_b",
+                target_weight=Decimal("0.03"),
+            )
+        )
+
+    result = replace_service.bind_with_result(
+        PackageBindingRequest(
+            strategy_id="strat_a",
+            package_id="pkg_a",
+            selection_run_id="sel_b",
+            target_weight=Decimal("0.03"),
+            replace_active=True,
+            replacement_reason="target_weight_change",
+        )
+    )
+
     retired = repo.get_package_binding(first.binding_id)
     assert result.action == "replaced_active"
     assert result.replaced_binding == retired
-    assert result.binding.selection_run_id == "sel_b"
-    assert result.binding.trade_date == date(2026, 5, 19)
+    assert result.binding.selection_run_id is None
+    assert result.binding.trade_date is None
     assert result.binding.runtime_config["binding_lifecycle"]["replaces_binding_id"] == first.binding_id
     assert retired.binding_status.value == "RETIRED"
     assert retired.runtime_config["binding_lifecycle"]["replaced_by_binding_id"] == result.binding.binding_id
     assert repo.get_active_package_binding("strat_a") == result.binding
-    assert [binding.binding_status.value for binding in historical] == ["RETIRED", "ACTIVE"]
+    assert repo.get_binding_selection_evidence(result.binding.binding_id, date(2026, 5, 19)).selection_run_id == "sel_b"
 
 
 def test_package_binding_rejects_unavailable_package_selection_and_manifest_mismatch() -> None:

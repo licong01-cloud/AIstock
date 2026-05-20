@@ -67,7 +67,7 @@ def configure_dependencies(
     _artifact_repository_factory = artifact_repository_factory
 
 
-@router.post("/package-bindings", summary="Bind StrategyPackage and Selection Run to a virtual strategy")
+@router.post("/package-bindings", summary="Bind StrategyPackage identity and optional daily Selection Run to a virtual strategy")
 def bind_package(payload: dict[str, Any]) -> dict[str, Any]:
     repository = _repository_factory()
     artifact_repository = (
@@ -113,6 +113,7 @@ def bind_package(payload: dict[str, Any]) -> dict[str, Any]:
             "binding_status": binding.binding_status.value,
         },
         "replaced_binding": _package_binding_to_dict(result.replaced_binding) if result.replaced_binding else None,
+        "daily_selection_evidence": _selection_evidence_to_dict(result.selection_evidence) if result.selection_evidence else None,
     }
 
 
@@ -179,12 +180,17 @@ def preview_orders_from_binding(binding_id: str, payload: dict[str, Any]) -> dic
     repository = _repository_factory()
     binding = repository.get_package_binding(binding_id)
     config = _selection_order_build_config(payload)
+    trade_date = _parse_trade_date(payload.get("trade_date"))
     try:
         result = SelectionOrderBuilder(
             repository=repository,
             selection_reader=_selection_reader_factory(),
             calendar_provider=_calendar_provider_factory(),
-        ).build_for_binding(binding=binding, config=config)
+        ).build_for_binding(
+            binding=binding,
+            trade_date=trade_date,
+            config=config,
+        )
     except TradingCoreError as exc:
         _raise_trading_core_http(exc)
     preflights = [
@@ -192,7 +198,6 @@ def preview_orders_from_binding(binding_id: str, payload: dict[str, Any]) -> dic
         for request in result.requests
     ]
     return {"success": True, "order_build": result.to_dict(), "preflights": preflights}
-
 
 @router.post("/orders/preview", summary="Preview managed MiniQMT order without broker submission")
 def preview_order(payload: dict[str, Any]) -> dict[str, Any]:
@@ -344,6 +349,27 @@ def _package_binding_to_dict(binding: Any) -> dict[str, Any]:
         "runtime_config": binding.runtime_config,
         "created_at": binding.created_at.isoformat(),
         "updated_at": binding.updated_at.isoformat(),
+    }
+
+
+def _selection_evidence_to_dict(evidence: Any) -> dict[str, Any]:
+    return {
+        "evidence_id": evidence.evidence_id,
+        "binding_id": evidence.binding_id,
+        "strategy_id": evidence.strategy_id,
+        "package_id": evidence.package_id,
+        "selection_run_id": evidence.selection_run_id,
+        "trade_date": evidence.trade_date.isoformat(),
+        "data_source": evidence.data_source,
+        "manifest_sha256": evidence.manifest_sha256,
+        "runtime_config_hash": evidence.runtime_config_hash,
+        "artifact_id": evidence.artifact_id,
+        "artifact_sha256": evidence.artifact_sha256,
+        "source_type": evidence.source_type,
+        "authority_scope": evidence.authority_scope,
+        "score_count": evidence.score_count,
+        "metadata": evidence.metadata,
+        "created_at": evidence.created_at.isoformat(),
     }
 
 

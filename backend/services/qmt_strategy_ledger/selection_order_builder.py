@@ -9,6 +9,8 @@ from typing import Any
 
 from backend.execution_algos.board_lot import round_to_board_lot
 from backend.services.selection_center.models import SelectionCandidate, SelectionRun, SelectionRunStatus
+from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELECTION_SCOPE, AUTHORITATIVE_SELECTION_SOURCE_TYPE
+from backend.services.strategy_package.selection_artifact import selection_artifact_runtime_hash
 from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError, UnsupportedFeatureError
 
 from .lot_availability import (
@@ -16,7 +18,14 @@ from .lot_availability import (
     TradingCalendarProvider,
     effective_strategy_available_sell_quantity,
 )
-from .models import BUY_ORDER_TYPE, SELL_ORDER_TYPE, BindingStatus, StrategyPackageBinding, VirtualAccount
+from .models import (
+    BUY_ORDER_TYPE,
+    SELL_ORDER_TYPE,
+    BindingStatus,
+    StrategyBindingSelectionEvidence,
+    StrategyPackageBinding,
+    VirtualAccount,
+)
 from .order_service import ManagedOrderRequest
 
 LATEST_PRICE_TYPE = 5
@@ -40,6 +49,8 @@ class SelectionOrderBuildResult:
     package_id: str
     selection_run_id: str
     trade_date: date
+    daily_selection_evidence_id: str
+    runtime_config_hash: str
     requests: tuple[ManagedOrderRequest, ...]
     skipped: tuple[dict[str, Any], ...] = field(default_factory=tuple)
 
@@ -50,6 +61,8 @@ class SelectionOrderBuildResult:
             "package_id": self.package_id,
             "selection_run_id": self.selection_run_id,
             "trade_date": self.trade_date.isoformat(),
+            "daily_selection_evidence_id": self.daily_selection_evidence_id,
+            "runtime_config_hash": self.runtime_config_hash,
             "requests": [
                 {
                     "symbol": request.symbol,
@@ -92,26 +105,29 @@ class SelectionOrderBuilder:
         self._repository = repository
         self._selection_reader = selection_reader
         self._calendar_provider = calendar_provider or DbTradingCalendarProvider()
-        # BUG-077: this legacy calculator may be exercised by historical unit
-        # tests, but production StrategyPackage execution must use a validated
-        # MiniQMT execution bridge rather than emit broker orders directly.
         self._allow_legacy_direct_order_generation = allow_legacy_direct_order_generation
 
     def build_for_active_binding(
         self,
         *,
         strategy_id: str,
+        trade_date: date | None = None,
         config: SelectionOrderBuildConfig | None = None,
     ) -> SelectionOrderBuildResult:
         binding = self._repository.get_active_package_binding(strategy_id)
         if binding is None:
             raise DataUnavailableError("active package binding does not exist", context={"strategy_id": strategy_id})
-        return self.build_for_binding(binding=binding, config=config or SelectionOrderBuildConfig())
+        return self.build_for_binding(
+            binding=binding,
+            trade_date=trade_date,
+            config=config or SelectionOrderBuildConfig(),
+        )
 
     def build_for_binding(
         self,
         *,
         binding: StrategyPackageBinding,
+        trade_date: date | None = None,
         config: SelectionOrderBuildConfig | None = None,
     ) -> SelectionOrderBuildResult:
         config = config or SelectionOrderBuildConfig()
@@ -122,19 +138,11 @@ class SelectionOrderBuilder:
                 "package binding is not ACTIVE",
                 context={"binding_id": binding.binding_id, "binding_status": binding.binding_status.value},
             )
-        self._require_frozen_runtime_asset(binding)
+        requested_trade_date = trade_date or date.today()
         account = self._repository.get_virtual_account(binding.strategy_id)
-        selection_run: SelectionRun = self._selection_reader.get_run(binding.selection_run_id)
-        if selection_run.status != SelectionRunStatus.SUCCEEDED:
-            raise DataUnavailableError(
-                "selection run is not succeeded",
-                context={"selection_run_id": binding.selection_run_id, "status": selection_run.status.value},
-            )
-        if binding.package_id not in selection_run.package_ids:
-            raise StrategyPackageValidationError(
-                "selection run does not contain active binding package",
-                context={"package_id": binding.package_id, "selection_run_id": selection_run.run_id},
-            )
+        evidence = self._repository.get_binding_selection_evidence(binding.binding_id, requested_trade_date)
+        selection_run: SelectionRun = self._selection_run_from_evidence(binding, evidence, requested_trade_date)
+        self._require_daily_selection_evidence_asset(binding, evidence)
 
         candidates = self._candidates_for_binding(selection_run, binding)
         top_k = config.top_k or binding.top_k
@@ -302,9 +310,95 @@ class SelectionOrderBuilder:
             package_id=binding.package_id,
             selection_run_id=selection_run.run_id,
             trade_date=selection_run.trade_date,
+            daily_selection_evidence_id=evidence.evidence_id,
+            runtime_config_hash=evidence.runtime_config_hash,
             requests=tuple(requests),
             skipped=tuple(skipped),
         )
+
+    def _selection_run_from_evidence(
+        self,
+        binding: StrategyPackageBinding,
+        evidence: StrategyBindingSelectionEvidence,
+        requested_trade_date: date,
+    ) -> SelectionRun:
+        if evidence.binding_id != binding.binding_id:
+            raise StrategyPackageValidationError(
+                "daily selection evidence does not belong to active binding",
+                context={"binding_id": binding.binding_id, "evidence_binding_id": evidence.binding_id},
+            )
+        if evidence.strategy_id != binding.strategy_id or evidence.package_id != binding.package_id:
+            raise StrategyPackageValidationError(
+                "daily selection evidence strategy/package identity does not match active binding",
+                context={
+                    "binding_id": binding.binding_id,
+                    "evidence_strategy_id": evidence.strategy_id,
+                    "binding_strategy_id": binding.strategy_id,
+                    "evidence_package_id": evidence.package_id,
+                    "binding_package_id": binding.package_id,
+                },
+            )
+        if evidence.trade_date != requested_trade_date:
+            raise DataUnavailableError(
+                "daily selection evidence trade_date does not match requested trade_date",
+                context={
+                    "binding_id": binding.binding_id,
+                    "requested_trade_date": requested_trade_date.isoformat(),
+                    "evidence_trade_date": evidence.trade_date.isoformat(),
+                },
+            )
+        selection_run = self._selection_reader.get_run(evidence.selection_run_id)
+        if selection_run.status != SelectionRunStatus.SUCCEEDED:
+            raise DataUnavailableError(
+                "selection run is not succeeded",
+                context={"selection_run_id": evidence.selection_run_id, "status": selection_run.status.value},
+            )
+        if selection_run.trade_date != requested_trade_date:
+            raise DataUnavailableError(
+                "selection run is stale for requested trade_date",
+                context={
+                    "selection_run_id": selection_run.run_id,
+                    "selection_trade_date": selection_run.trade_date.isoformat(),
+                    "requested_trade_date": requested_trade_date.isoformat(),
+                },
+            )
+        if selection_run.data_source != evidence.data_source:
+            raise DataUnavailableError(
+                "selection run data_source does not match daily evidence",
+                context={
+                    "selection_run_id": selection_run.run_id,
+                    "selection_data_source": selection_run.data_source,
+                    "evidence_data_source": evidence.data_source,
+                },
+            )
+        if binding.package_id not in selection_run.package_ids:
+            raise StrategyPackageValidationError(
+                "selection run does not contain active binding package",
+                context={"package_id": binding.package_id, "selection_run_id": selection_run.run_id},
+            )
+        selection_manifest = selection_run.manifest_sha256_by_package.get(binding.package_id)
+        if selection_manifest != binding.manifest_sha256 or evidence.manifest_sha256 != binding.manifest_sha256:
+            raise StrategyPackageValidationError(
+                "selection run manifest hash does not match active binding",
+                context={
+                    "package_id": binding.package_id,
+                    "binding_manifest_sha256": binding.manifest_sha256,
+                    "selection_manifest_sha256": selection_manifest,
+                    "evidence_manifest_sha256": evidence.manifest_sha256,
+                },
+            )
+        selection_runtime_hash = selection_artifact_runtime_hash(selection_run.runtime_config)
+        if selection_runtime_hash != evidence.runtime_config_hash:
+            raise DataUnavailableError(
+                "selection run runtime hash does not match daily evidence",
+                context={
+                    "selection_run_id": selection_run.run_id,
+                    "selection_runtime_config_hash": selection_runtime_hash,
+                    "evidence_runtime_config_hash": evidence.runtime_config_hash,
+                    "asset_stage": "daily_order_build",
+                },
+            )
+        return selection_run
 
     def _candidates_for_binding(
         self,
@@ -315,32 +409,39 @@ class SelectionOrderBuilder:
             return sorted(selection_run.aggregate_results, key=lambda candidate: candidate.rank)
         return sorted(selection_run.package_results.get(binding.package_id, []), key=lambda candidate: candidate.rank)
 
-    def _require_frozen_runtime_asset(self, binding: StrategyPackageBinding) -> None:
-        evidence = (binding.runtime_config or {}).get("frozen_runtime_asset")
-        if evidence is None:
+    def _require_daily_selection_evidence_asset(
+        self,
+        binding: StrategyPackageBinding,
+        evidence: StrategyBindingSelectionEvidence,
+    ) -> None:
+        if not any((evidence.artifact_id, evidence.artifact_sha256, evidence.source_type, evidence.authority_scope)):
             return
-        if not isinstance(evidence, dict):
-            raise StrategyPackageValidationError(
-                "frozen MiniQMT runtime asset evidence must be an object",
-                context={"binding_id": binding.binding_id, "evidence_type": type(evidence).__name__},
-            )
-        missing = [
-            key
-            for key in ("artifact_id", "artifact_sha256", "manifest_sha256", "runtime_config_hash", "source_type", "authority_scope")
-            if not evidence.get(key)
-        ]
+        missing = [key for key in ("artifact_id", "artifact_sha256", "runtime_config_hash", "source_type", "authority_scope") if not getattr(evidence, key)]
         if missing:
             raise DataUnavailableError(
-                "frozen MiniQMT runtime asset evidence is incomplete; rebind the StrategyPackage before daily execution",
+                "frozen MiniQMT daily selection evidence is incomplete; resolve current-day SelectionRun before daily execution",
                 context={"binding_id": binding.binding_id, "missing": missing, "asset_stage": "daily_order_build"},
             )
-        if evidence.get("manifest_sha256") != binding.manifest_sha256:
+        if evidence.manifest_sha256 != binding.manifest_sha256:
             raise DataUnavailableError(
-                "frozen MiniQMT runtime asset manifest hash does not match active binding",
+                "frozen MiniQMT daily selection evidence manifest hash does not match active binding",
                 context={
                     "binding_id": binding.binding_id,
                     "binding_manifest_sha256": binding.manifest_sha256,
-                    "asset_manifest_sha256": evidence.get("manifest_sha256"),
+                    "asset_manifest_sha256": evidence.manifest_sha256,
+                    "asset_stage": "daily_order_build",
+                },
+            )
+        if evidence.source_type != AUTHORITATIVE_SELECTION_SOURCE_TYPE or evidence.authority_scope != AUTHORITATIVE_SELECTION_SCOPE:
+            raise DataUnavailableError(
+                "frozen MiniQMT daily selection evidence is not authoritative live inference output",
+                context={
+                    "binding_id": binding.binding_id,
+                    "evidence_id": evidence.evidence_id,
+                    "source_type": evidence.source_type,
+                    "authority_scope": evidence.authority_scope,
+                    "required_source_type": AUTHORITATIVE_SELECTION_SOURCE_TYPE,
+                    "required_authority_scope": AUTHORITATIVE_SELECTION_SCOPE,
                     "asset_stage": "daily_order_build",
                 },
             )
@@ -364,7 +465,6 @@ class SelectionOrderBuilder:
                 "reason": "selection_order_builder_bypasses_validated_execution_policy",
             },
         )
-
     def _position_summaries(self, strategy_id: str, trade_date: date) -> dict[str, _PositionSummary]:
         summaries: dict[str, _PositionSummary] = {}
         pending_sell_intents_by_symbol: dict[str, list[Any]] = {}

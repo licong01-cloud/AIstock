@@ -37,6 +37,7 @@ from .models import (
     PositionLotStatus,
     ReconciliationIssueRecord,
     ReconciliationRunRecord,
+    StrategyBindingSelectionEvidence,
     StrategyPackageBinding,
     TradeLedgerRecord,
     UnattributedOrderRecord,
@@ -310,6 +311,106 @@ class QmtStrategyLedgerRepository:
         if not row:
             raise DataUnavailableError("qmt strategy package binding does not exist", context={"binding_id": binding_id})
         return _row_to_package_binding(row)
+
+    def record_binding_selection_evidence(
+        self,
+        evidence: StrategyBindingSelectionEvidence,
+    ) -> StrategyBindingSelectionEvidence:
+        _validate_binding_selection_evidence(evidence)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM qmt_strategy.strategy_binding_selection_evidence
+                    WHERE binding_id = %s AND trade_date = %s
+                    FOR UPDATE
+                    """,
+                    (evidence.binding_id, evidence.trade_date),
+                )
+                existing = cur.fetchone()
+                if existing is not None:
+                    stored = _row_to_binding_selection_evidence(dict(existing))
+                    if _same_daily_selection_evidence(stored, evidence):
+                        return stored
+                    raise InvalidStateTransitionError(
+                        "daily selection evidence already exists for binding and trade_date",
+                        context={
+                            "binding_id": evidence.binding_id,
+                            "trade_date": evidence.trade_date.isoformat(),
+                            "existing_selection_run_id": stored.selection_run_id,
+                            "requested_selection_run_id": evidence.selection_run_id,
+                            "existing_runtime_config_hash": stored.runtime_config_hash,
+                            "requested_runtime_config_hash": evidence.runtime_config_hash,
+                        },
+                    )
+                cur.execute(
+                    """
+                    INSERT INTO qmt_strategy.strategy_binding_selection_evidence (
+                        evidence_id, binding_id, strategy_id, package_id,
+                        selection_run_id, trade_date, data_source, manifest_sha256,
+                        runtime_config_hash, artifact_id, artifact_sha256,
+                        source_type, authority_scope, score_count, metadata, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        evidence.evidence_id,
+                        evidence.binding_id,
+                        evidence.strategy_id,
+                        evidence.package_id,
+                        evidence.selection_run_id,
+                        evidence.trade_date,
+                        evidence.data_source,
+                        evidence.manifest_sha256,
+                        evidence.runtime_config_hash,
+                        evidence.artifact_id,
+                        evidence.artifact_sha256,
+                        evidence.source_type,
+                        evidence.authority_scope,
+                        evidence.score_count,
+                        _json(evidence.metadata),
+                        evidence.created_at,
+                    ),
+                )
+        return evidence
+
+    def get_binding_selection_evidence(
+        self,
+        binding_id: str,
+        trade_date: date,
+    ) -> StrategyBindingSelectionEvidence:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM qmt_strategy.strategy_binding_selection_evidence
+                    WHERE binding_id = %s AND trade_date = %s
+                    """,
+                    (binding_id, trade_date),
+                )
+                row = cur.fetchone()
+        if not row:
+            raise DataUnavailableError(
+                "current-day MiniQMT selection evidence is missing; generate or resolve today's SelectionRun before order build",
+                context={"binding_id": binding_id, "trade_date": trade_date.isoformat()},
+            )
+        return _row_to_binding_selection_evidence(dict(row))
+
+    def list_binding_selection_evidence(self, binding_id: str) -> list[StrategyBindingSelectionEvidence]:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM qmt_strategy.strategy_binding_selection_evidence
+                    WHERE binding_id = %s
+                    ORDER BY trade_date, created_at, evidence_id
+                    """,
+                    (binding_id,),
+                )
+                rows = cur.fetchall()
+        return [_row_to_binding_selection_evidence(dict(row)) for row in rows]
 
     def upsert_order_batch(self, batch: OrderBatchRecord) -> OrderBatchRecord:
         _validate_order_batch(batch)
@@ -1037,6 +1138,7 @@ class InMemoryQmtStrategyLedgerRepository:
         self._virtual_account_names: dict[tuple[str, str], str] = {}
         self._bindings: dict[str, StrategyPackageBinding] = {}
         self._active_bindings: dict[str, str] = {}
+        self._binding_selection_evidence: dict[tuple[str, date], StrategyBindingSelectionEvidence] = {}
         self._order_batches: dict[str, OrderBatchRecord] = {}
         self._order_intents: dict[str, OrderIntentRecord] = {}
         self._order_remark_index: dict[tuple[str, str], str] = {}
@@ -1149,6 +1251,52 @@ class InMemoryQmtStrategyLedgerRepository:
         if binding is None:
             raise DataUnavailableError("qmt strategy package binding does not exist", context={"binding_id": binding_id})
         return binding
+
+    def record_binding_selection_evidence(
+        self,
+        evidence: StrategyBindingSelectionEvidence,
+    ) -> StrategyBindingSelectionEvidence:
+        _validate_binding_selection_evidence(evidence)
+        binding = self.get_package_binding(evidence.binding_id)
+        if binding.strategy_id != evidence.strategy_id or binding.package_id != evidence.package_id:
+            raise ValueError("daily selection evidence must match binding strategy_id and package_id")
+        key = (evidence.binding_id, evidence.trade_date)
+        existing = self._binding_selection_evidence.get(key)
+        if existing is not None:
+            if _same_daily_selection_evidence(existing, evidence):
+                return existing
+            raise InvalidStateTransitionError(
+                "daily selection evidence already exists for binding and trade_date",
+                context={
+                    "binding_id": evidence.binding_id,
+                    "trade_date": evidence.trade_date.isoformat(),
+                    "existing_selection_run_id": existing.selection_run_id,
+                    "requested_selection_run_id": evidence.selection_run_id,
+                    "existing_runtime_config_hash": existing.runtime_config_hash,
+                    "requested_runtime_config_hash": evidence.runtime_config_hash,
+                },
+            )
+        self._binding_selection_evidence[key] = evidence
+        return evidence
+
+    def get_binding_selection_evidence(
+        self,
+        binding_id: str,
+        trade_date: date,
+    ) -> StrategyBindingSelectionEvidence:
+        evidence = self._binding_selection_evidence.get((binding_id, trade_date))
+        if evidence is None:
+            raise DataUnavailableError(
+                "current-day MiniQMT selection evidence is missing; generate or resolve today's SelectionRun before order build",
+                context={"binding_id": binding_id, "trade_date": trade_date.isoformat()},
+            )
+        return evidence
+
+    def list_binding_selection_evidence(self, binding_id: str) -> list[StrategyBindingSelectionEvidence]:
+        return sorted(
+            [item for (stored_binding_id, _), item in self._binding_selection_evidence.items() if stored_binding_id == binding_id],
+            key=lambda item: (item.trade_date, item.created_at, item.evidence_id),
+        )
 
     def upsert_order_batch(self, batch: OrderBatchRecord) -> OrderBatchRecord:
         _validate_order_batch(batch)
@@ -1411,6 +1559,40 @@ def _validate_package_binding(binding: StrategyPackageBinding) -> None:
         raise ValueError("top_k must be positive")
 
 
+def _validate_binding_selection_evidence(evidence: StrategyBindingSelectionEvidence) -> None:
+    _require_text(evidence.evidence_id, "evidence_id")
+    _require_text(evidence.binding_id, "binding_id")
+    _require_text(evidence.strategy_id, "strategy_id")
+    _require_text(evidence.package_id, "package_id")
+    _require_text(evidence.selection_run_id, "selection_run_id")
+    _require_text(evidence.data_source, "data_source")
+    _require_text(evidence.manifest_sha256, "manifest_sha256")
+    _require_text(evidence.runtime_config_hash, "runtime_config_hash")
+    if evidence.score_count is not None and evidence.score_count < 0:
+        raise ValueError("score_count must be non-negative")
+
+
+def _same_daily_selection_evidence(
+    left: StrategyBindingSelectionEvidence,
+    right: StrategyBindingSelectionEvidence,
+) -> bool:
+    return (
+        left.binding_id == right.binding_id
+        and left.strategy_id == right.strategy_id
+        and left.package_id == right.package_id
+        and left.selection_run_id == right.selection_run_id
+        and left.trade_date == right.trade_date
+        and left.data_source == right.data_source
+        and left.manifest_sha256 == right.manifest_sha256
+        and left.runtime_config_hash == right.runtime_config_hash
+        and left.artifact_id == right.artifact_id
+        and left.artifact_sha256 == right.artifact_sha256
+        and left.source_type == right.source_type
+        and left.authority_scope == right.authority_scope
+        and left.score_count == right.score_count
+    )
+
+
 def _validate_order_batch(batch: OrderBatchRecord) -> None:
     _require_text(batch.batch_id, "batch_id")
     _require_text(batch.account_id, "account_id")
@@ -1496,6 +1678,27 @@ def _row_to_package_binding(row: dict[str, Any]) -> StrategyPackageBinding:
         runtime_config=row["runtime_config"] or {},
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+    )
+
+
+def _row_to_binding_selection_evidence(row: dict[str, Any]) -> StrategyBindingSelectionEvidence:
+    return StrategyBindingSelectionEvidence(
+        evidence_id=row["evidence_id"],
+        binding_id=row["binding_id"],
+        strategy_id=row["strategy_id"],
+        package_id=row["package_id"],
+        selection_run_id=row["selection_run_id"],
+        trade_date=row["trade_date"],
+        data_source=row["data_source"],
+        manifest_sha256=row["manifest_sha256"],
+        runtime_config_hash=row["runtime_config_hash"],
+        artifact_id=row["artifact_id"],
+        artifact_sha256=row["artifact_sha256"],
+        source_type=row["source_type"],
+        authority_scope=row["authority_scope"],
+        score_count=row["score_count"],
+        metadata=row["metadata"] or {},
+        created_at=row["created_at"],
     )
 
 
