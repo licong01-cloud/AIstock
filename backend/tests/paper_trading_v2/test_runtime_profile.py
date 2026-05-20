@@ -11,6 +11,7 @@ from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2R
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
 from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
+from backend.services.selection_center.runtime_profile import runtime_profile_config_sha256
 from backend.services.trading_core.errors import InvalidStateTransitionError, StrategyPackageValidationError
 from backend.services.trading_core.models import RunStatus
 
@@ -255,6 +256,22 @@ def test_runtime_profile_rejects_event_signal_policy_without_platform_profile_id
                 }
             },
         )
+
+
+def test_default_runtime_profile_binding_hash_is_post_contract_normalized() -> None:
+    _package_repo, _paper_repo, service, _manifest, portfolio = _portfolio_fixture()
+
+    runtime_config = service.resolve_runtime_config_for_date(
+        portfolio=portfolio,
+        trade_date=date(2024, 1, 2),
+        runtime_config={},
+    )
+
+    binding = runtime_config["runtime_profile_binding"]
+    assert binding["source"] == "platform_default"
+    assert binding["profile_version_id"] == "platform_default_runtime_profile_v1"
+    assert binding["config_sha256"] == runtime_profile_config_sha256(runtime_config)
+    assert runtime_config["runtime_profile"]["selection"]["top_k"] == 2
 
 
 def test_paper_day_runner_rejects_unversioned_runtime_profile_override() -> None:

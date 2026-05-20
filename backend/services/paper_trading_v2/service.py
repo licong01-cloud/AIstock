@@ -857,12 +857,12 @@ class PaperTradingV2PortfolioService:
                         "behavior_keys": behavior_keys,
                     },
                 )
-            config = attach_default_runtime_profile_binding(config)
             normalized = normalize_runtime_config_with_backtest_contract(
                 portfolio.frozen_manifest,
                 config,
                 context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat()},
             )
+            normalized = attach_default_runtime_profile_binding(normalized)
             validate_runtime_profile_binding(
                 normalized,
                 context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat()},
