@@ -1,0 +1,101 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-086",
+  "title": "Selection and Paper runtime_config can still change trading behavior without mandatory version activation",
+  "description": "Expected: Any runtime choice that can affect selected stocks, target positions, order intents, fills, cash, holdings, NAV, or performance must be represented by a versioned platform runtime profile, validated execution policy activation, tail policy version, or PackageRuntimeRelease/PortfolioBindingVersion. Selection Center, Paper v2, and MiniQMT must persist the exact version/hash used for every run and should reject unversioned raw runtime_config behavior changes outside explicitly diagnostic/read-only preview paths. Actual: Selection Center and Paper v2 can still accept raw runtime_config/top-level legacy keys that alter behavior without requiring a profile version/activation.",
+  "module": "paper_v2",
+  "severity": "P0",
+  "risk_area": "runtime_profile_activation_boundary",
+  "status": "fixed_pending_review",
+  "trigger_condition": {
+    "scenario": "github_issue_108_missing_local_registry_record",
+    "files": [
+      "backend/services/selection_center/runtime_profile.py",
+      "backend/services/selection_center/service.py",
+      "backend/services/paper_trading_v2/service.py",
+      "backend/services/paper_trading_v2/day_runner.py",
+      "backend/services/paper_trading_v2/readiness.py",
+      "backend/services/paper_trading_v2/live_session.py",
+      "backend/services/strategy_package/runtime_variant.py",
+      "backend/services/strategy_package/runtime.py",
+      "backend/services/strategy_package/backtest_contract.py",
+      "backend/tests/selection_center/test_runtime_selection.py",
+      "backend/tests/paper_trading_v2/test_runtime_config_contract.py"
+    ]
+  },
+  "reproduce_command": "rg -n \"runtime_config|normalize_selection_runtime_config|normalize_runtime_config_with_backtest_contract|runtime_variant_id|RUNTIME_PROFILE_INPUT_KEYS|top_k|enable_sector_hmm|exclude_suspended|risk_policy\" backend/services/selection_center backend/services/paper_trading_v2 backend/services/strategy_package -S",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "github:https://github.com/licong01-cloud/AIstock/issues/108"
+  ],
+  "fingerprint": "github-108-bug-086",
+  "github_issue_number": 108,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/108",
+  "assigned_agent": "codex-app",
+  "fix_branch": "bug/BUG-086-runtime-config-activation-boundary",
+  "fix_commit": "fa2e54b",
+  "verification_run_id": "tests/aistock_validation/history/paper_v2/BUG-086-runtime-config-activation-boundary-validation-20260520.md",
+  "created_at": "2026-05-20T10:09:55Z",
+  "first_seen_at": "2026-05-20T10:09:55Z",
+  "last_seen_at": "2026-05-20T10:50:00Z",
+  "fixed_at": "2026-05-20T10:50:00Z",
+  "submitted_at": "2026-05-20T10:09:55Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/selection_center/runtime_profile.py",
+    "backend/services/selection_center/service.py",
+    "backend/services/paper_trading_v2/service.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/paper_trading_v2/readiness.py",
+    "backend/services/paper_trading_v2/live_session.py",
+    "backend/services/strategy_package/runtime_variant.py",
+    "backend/services/strategy_package/runtime.py",
+    "backend/services/strategy_package/backtest_contract.py",
+    "backend/tests/selection_center/test_runtime_selection.py",
+    "backend/tests/paper_trading_v2/test_runtime_config_contract.py",
+    "tests/aistock_validation/bugs/20260520_BUG-086-selection-and-paper-runtime-config-can-still-change-trading.json",
+    "tests/aistock_validation/history/paper_v2/BUG-086-runtime-config-activation-boundary-validation-20260520.md"
+  ],
+  "suspected_modules": [
+    "backend/services/selection_center/runtime_profile.py",
+    "backend/services/selection_center/service.py",
+    "backend/services/paper_trading_v2/service.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/paper_trading_v2/readiness.py",
+    "backend/services/paper_trading_v2/live_session.py",
+    "backend/services/strategy_package/runtime_variant.py",
+    "backend/services/strategy_package/runtime.py",
+    "backend/services/strategy_package/backtest_contract.py",
+    "backend/tests/selection_center/test_runtime_selection.py",
+    "backend/tests/paper_trading_v2/test_runtime_config_contract.py"
+  ],
+  "required_verification": [
+    "Production-like Selection/Paper/MiniQMT execution paths reject unversioned runtime_config keys that change trading behavior.",
+    "Versioned runtime profile activation records are persisted and copied into every selection/paper run context.",
+    "Preview/diagnostic flows, if any, are explicitly marked non-trading and cannot submit orders or mutate durable ledgers."
+  ],
+  "closure_requirements": [
+    "Runtime behavior changes require profile/policy/release version references and hashes.",
+    "Legacy top-level runtime keys cannot silently bypass activation in trading execution paths."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-20T10:09:55Z",
+      "actor": "codex-app",
+      "action": "created_local_registry_from_github",
+      "note": "GitHub #108 existed without local registry in this worktree; created local BUG-086 JSON before code edits and assigned independent branch/worktree."
+    },
+    {
+      "timestamp": "2026-05-20T10:50:00Z",
+      "actor": "codex-app",
+      "action": "fixed_pending_review",
+      "note": "Enforced versioned runtime profile boundary across Selection Center, Paper v2 day/readiness/session/live paths, and MiniQMT tests. Validation: 125 focused tests passed; paper_v2_backend 447 passed, 1 skipped, 2 xfailed; guardrail_changed_files/l0/git diff --check passed."
+    },
+    {
+      "timestamp": "2026-05-20T10:55:00Z",
+      "actor": "codex-app",
+      "action": "committed_fix",
+      "note": "Committed BUG-086 fix locally as fa2e54b on bug/BUG-086-runtime-config-activation-boundary."
+    }
+  ]
+}
