@@ -93,7 +93,7 @@ DDL: list[str] = [
     """
     CREATE TABLE IF NOT EXISTS market.data_sync_attempts (
         attempt_id TEXT PRIMARY KEY,
-        target_id TEXT NOT NULL REFERENCES market.data_sync_targets(target_id) ON DELETE CASCADE,
+        target_id TEXT NOT NULL REFERENCES market.data_sync_targets(target_id),
         attempt_no INTEGER NOT NULL CHECK (attempt_no > 0),
         status TEXT NOT NULL
             CHECK (status IN ('started', 'failed', 'retry', 'final_blocked', 'reconciled')),
