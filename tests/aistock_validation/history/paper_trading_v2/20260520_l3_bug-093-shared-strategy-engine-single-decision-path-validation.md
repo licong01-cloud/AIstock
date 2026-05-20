@@ -23,7 +23,7 @@
 |---|---|---|---|---|
 | Single decision engine or explicitly equivalent shared core is used before broker adapters | `backend/services/qmt_strategy_ledger/selection_order_builder.py:96`, `backend/services/qmt_strategy_ledger/selection_order_builder.py:97`, `backend/services/qmt_strategy_ledger/selection_order_builder.py:147`, `backend/services/qmt_strategy_ledger/selection_order_builder.py:155`, `backend/services/qmt_strategy_ledger/selection_order_builder.py:169` | `test_selection_order_builder_uses_shared_rebalance_engine`; `python -m pytest backend/tests/qmt_strategy_ledger -q -p no:cacheprovider` => 86 passed | Pass | None |
 | `SelectionOrderBuilder` is adapter-only, not a separate final strategy algorithm | Removed local `_target_quantity`; builder converts SelectionRun to `SignalSnapshot`, `PositionLot`, shared targets/intents, then to `ManagedOrderRequest`: `backend/services/qmt_strategy_ledger/selection_order_builder.py:272`, `backend/services/qmt_strategy_ledger/selection_order_builder.py:291`, `backend/services/qmt_strategy_ledger/selection_order_builder.py:347` | `rg _target_quantity backend/services/qmt_strategy_ledger/selection_order_builder.py` returns no independent target-sizing helper; qmt ledger suite 86 passed | Pass | None |
-| Cross-adapter decision equivalence is covered for same score/positions/runtime inputs | Shared output is compared against MiniQMT request tuples in `backend/tests/qmt_strategy_ledger/test_selection_order_builder.py:602` | `test_selection_order_builder_preserves_shared_decision_intent_sequence`; broad Paper/Selection/Strategy/QMT regression => 357 passed, 1 skipped, 2 xfailed | Pass | None |
+| Cross-adapter decision equivalence is covered for same score/positions/runtime inputs | Shared output is compared against MiniQMT request tuples in `backend/tests/qmt_strategy_ledger/test_selection_order_builder.py:602` | `test_selection_order_builder_preserves_shared_decision_intent_sequence`; broad Paper/Selection/Strategy/QMT regression => 373 passed, 1 skipped, 2 xfailed after refresh | Pass | None |
 | MiniQMT-specific differences remain submission/availability/price/metadata adapter concerns | T+1 sell cap and pending availability stay in adapter metadata: `backend/services/qmt_strategy_ledger/selection_order_builder.py:410`, `backend/services/qmt_strategy_ledger/selection_order_builder.py:494`, `backend/services/qmt_strategy_ledger/selection_order_builder.py:582` | qmt ledger suite 86 passed; no production MiniQMT runtime touched | Pass | Runtime callback/fill behavior intentionally out of this bug scope |
 | Shared engine uses canonical board-lot rules and records residuals instead of hard-coded 100-share assumptions | `backend/services/strategy_package/runtime.py:357`, `backend/services/strategy_package/runtime.py:787`, `backend/services/strategy_package/runtime.py:797`, `backend/services/strategy_package/runtime.py:807` | strategy package + qmt broad regression => 357 passed, 1 skipped, 2 xfailed; `paper_v2_backend` => 443 passed, 1 skipped, 2 xfailed | Pass | None |
 | Dropped holdings / reduce-to-target sells are emitted by shared `RebalanceEngine` | `backend/services/strategy_package/runtime.py:791`; adapter consumes sell intents in `backend/services/qmt_strategy_ledger/selection_order_builder.py:385` | cross-adapter test expects `DROPPED_FROM_SELECTION` sell and reduce sell | Pass | None |
@@ -63,19 +63,19 @@ Result: `443 passed, 1 skipped, 2 xfailed in 14.79s`; nox session successful.
 python -m compileall backend/services/strategy_package/runtime.py backend/services/qmt_strategy_ledger/selection_order_builder.py backend/tests/qmt_strategy_ledger/test_selection_order_builder.py
 ```
 
-Result: PASS.
+Initial result: PASS. Refresh after merging latest origin/main: PASS.
 
 ```bash
 git diff HEAD --check
 ```
 
-Result: PASS.
+Initial result: PASS. Refresh after merging latest origin/main: PASS.
 
 ```bash
 python -m nox -s guardrail_changed_files -- --changed-only
 ```
 
-Result: nox successful for current uncommitted change set; after code commit only BUG registry was untracked, so this did not rescan committed code diff.
+Refresh result: nox successful after latest-main merge; changed-file guardrail reported one non-blocking P2 complexity finding and blocking=0.
 
 ```bash
 python scripts/aistock_guardrail_scan.py backend/services/qmt_strategy_ledger/selection_order_builder.py backend/services/strategy_package/runtime.py backend/tests/qmt_strategy_ledger/test_selection_order_builder.py --baseline-json tests/aistock_validation/guardrails_baseline_20260511.json --fail-new-only --fail-on-severity P1 --output-json tmp/validation/guardrails/bug093_explicit_files.json --summary-md tmp/validation/guardrails/bug093_explicit_files.md
@@ -100,6 +100,22 @@ python -m nox -s l0
 ```
 
 Result: nox session successful. Repository-level guardrail output still reports baseline/non-blocking findings: existing raw-JSON UI medium findings, P2 complexity findings in unrelated ingestion/data-sync files, one baseline P0 in `completion_contract.py`, and one baseline P1 `SCRIPT-LOCATION-001` in `noxfile.py`; blocking count was 0.
+
+## Refresh Validation After Latest Main
+
+After BUG-086, BUG-088, and BUG-092 were merged to origin/main, this branch was merged with origin/main at c96f326051299f3f8b0ffa30f5ed26c0ce9bde12. The refreshed branch preserved BUG-077, BUG-087, BUG-086, BUG-088, BUG-092, and BUG-093 behavior. Additional cleanup removed accidental UTF-8 BOM markers and trailing blank lines from the two Python files before final push.
+
+Refresh commands passed:
+
+`ash
+python -m pytest backend/tests/qmt_strategy_ledger -q -p no:cacheprovider
+python -m pytest backend/tests/paper_trading_v2 backend/tests/qmt_strategy_ledger backend/tests/strategy_package/test_rebalance_runtime.py backend/tests/strategy_package/test_score_weighted_capacity_contract.py backend/tests/selection_center/test_runtime_selection.py -q -p no:cacheprovider
+python -m nox -s paper_v2_backend
+python -m compileall backend/services/strategy_package/runtime.py backend/services/qmt_strategy_ledger/selection_order_builder.py backend/tests/qmt_strategy_ledger/test_selection_order_builder.py
+python -m nox -s guardrail_changed_files -- --changed-only
+`
+
+Refresh results: qmt strategy ledger 94 passed; broad Paper/QMT/Strategy/Selection 373 passed, 1 skipped, 2 xfailed; paper_v2_backend 461 passed, 1 skipped, 2 xfailed; compileall PASS; changed-file guardrail blocking=0.
 
 ## Business Outcomes Verified
 

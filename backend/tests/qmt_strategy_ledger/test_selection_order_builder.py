@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
@@ -862,8 +862,3 @@ def test_selection_order_builder_fails_fast_on_corrupt_frozen_asset_evidence() -
 
     assert exc_info.value.context["asset_stage"] == "daily_order_build"
     assert "artifact_sha256" in exc_info.value.context["missing"]
-
-
-
-
-
