@@ -46,6 +46,7 @@ def test_qmt_strategy_migration_comments_every_table_and_column() -> None:
         "position_lot",
         "reconciliation_issue",
         "reconciliation_run",
+        "strategy_binding_selection_evidence",
         "strategy_package_binding",
         "trade_ledger",
         "unattributed_order",
@@ -63,6 +64,8 @@ def test_qmt_strategy_migration_has_required_uniqueness_guards() -> None:
     sql = _migration_sql()
 
     assert "ux_qmt_strategy_active_binding" in sql
+    assert "uq_qmt_strategy_selection_evidence_binding_date" in sql
+    assert "uq_qmt_strategy_selection_evidence_binding_run" in sql
     assert "UNIQUE(account_id, order_remark)" in sql
     assert "UNIQUE(account_id, qmt_order_id)" in sql
     assert "UNIQUE(account_id, trade_date, trade_id)" in sql

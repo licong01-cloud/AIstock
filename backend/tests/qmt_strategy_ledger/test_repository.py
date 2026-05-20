@@ -14,6 +14,7 @@ from backend.services.qmt_strategy_ledger.models import (
     IntentSubmitStatus,
     OrderIntentRecord,
     PositionLotRecord,
+    StrategyBindingSelectionEvidence,
     StrategyPackageBinding,
     TradeLedgerRecord,
     VirtualAccount,
@@ -129,6 +130,41 @@ def test_in_memory_repository_replaces_active_binding_and_keeps_history() -> Non
     assert retired.runtime_config["binding_lifecycle"]["replaced_by_binding_id"] == "bind_b"
     assert repo.get_active_package_binding("strat_a") == replacement
     assert [binding.binding_id for binding in repo.list_package_bindings("strat_a")] == ["bind_a", "bind_b"]
+
+
+def test_in_memory_repository_records_daily_selection_evidence_idempotently() -> None:
+    repo = InMemoryQmtStrategyLedgerRepository()
+    repo.create_virtual_account(_account())
+    binding = repo.create_package_binding(
+        StrategyPackageBinding(
+            binding_id="bind_a",
+            strategy_id="strat_a",
+            package_id="pkg_a",
+            manifest_sha256="sha_a",
+            binding_status=BindingStatus.ACTIVE,
+        )
+    )
+    evidence = StrategyBindingSelectionEvidence(
+        evidence_id="ev_a",
+        binding_id=binding.binding_id,
+        strategy_id="strat_a",
+        package_id="pkg_a",
+        selection_run_id="sel_a",
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        manifest_sha256="sha_a",
+        runtime_config_hash="runtime_hash",
+    )
+
+    first = repo.record_binding_selection_evidence(evidence)
+    second = repo.record_binding_selection_evidence(
+        StrategyBindingSelectionEvidence(**{**evidence.__dict__, "evidence_id": "ev_duplicate"})
+    )
+
+    assert first == evidence
+    assert second == evidence
+    assert repo.get_binding_selection_evidence(binding.binding_id, TRADE_DATE) == evidence
+    assert repo.list_binding_selection_evidence(binding.binding_id) == [evidence]
 
 
 def test_in_memory_repository_enforces_unique_order_remark_per_account() -> None:
