@@ -6,7 +6,7 @@
   "module": "paper_v2",
   "severity": "P1",
   "risk_area": "paper_v2_hmm_runtime_artifact_consistency",
-  "status": "in_progress",
+  "status": "fixed_pending_review",
   "trigger_condition": {
     "scenario": "reported_via_mcp",
     "files": [
@@ -22,17 +22,18 @@
     "file:frontend/src/app/paper-v2/selection/page.tsx",
     "file:frontend/src/app/paper-v2/portfolios/page.tsx",
     "file:frontend/src/app/paper-v2/portfolios/[portfolioId]/run-console/page.tsx",
-    "file:backend/services/selection_center/hmm_runtime.py"
+    "file:backend/services/selection_center/hmm_runtime.py",
+    "file:tests/aistock_validation/history/paper_v2/20260520_l3_bug-076-hmm-coefficients-path.md"
   ],
   "fingerprint": "dea153a77dd69c19",
   "assigned_agent": "codex-app",
   "fix_branch": "bug/BUG-076-paper-v2-hmm-coefficients-path",
-  "fix_commit": null,
-  "verification_run_id": null,
+  "fix_commit": "60de2e0",
+  "verification_run_id": "tests/aistock_validation/history/paper_v2/20260520_l3_bug-076-hmm-coefficients-path.md",
   "created_at": "2026-05-20T02:36:13Z",
   "first_seen_at": "2026-05-20T02:36:13Z",
-  "last_seen_at": "2026-05-20T02:36:13Z",
-  "fixed_at": null,
+  "last_seen_at": "2026-05-20T07:23:37Z",
+  "fixed_at": "2026-05-20T07:23:37Z",
   "submitted_at": "2026-05-20T02:36:13Z",
   "closed_at": null,
   "allowed_write_scope": [
@@ -102,6 +103,12 @@
       "actor": "codex-app",
       "action": "assigned_in_dedicated_worktree",
       "note": "Created canonical in-progress BUG registry record on bug/BUG-076-paper-v2-hmm-coefficients-path with GitHub issue #103 linkage and DESIGN-COMPLIANCE-001 closure requirements."
+    },
+    {
+      "timestamp": "2026-05-20T07:23:37Z",
+      "actor": "codex-app",
+      "action": "fixed_pending_review",
+      "note": "Implemented shared HMM coefficient coverage helper and explicit coefficients_path propagation for Selection, portfolio creation, run-console day/replay/live/switch, and runtime profile actions. Validation record: tests/aistock_validation/history/paper_v2/20260520_l3_bug-076-hmm-coefficients-path.md; fix commit 60de2e0."
     }
   ],
   "github_issue_number": 103,
