@@ -510,11 +510,11 @@ class CandidateStrategyPackageService:
         }
         strategy_manifest = {
             **dict(snapshot.get("strategy_manifest") or {}),
-            "strategy_config": manifest.strategy_config,
-            "execution_policy": manifest.execution_policy.model_dump(mode="json"),
-            "minute_execution_policy": manifest.minute_execution_policy.model_dump(mode="json"),
-            "portfolio_policy": manifest.portfolio_policy.model_dump(mode="json"),
-            "universe_policy": manifest.universe_policy.model_dump(mode="json"),
+            "alpha_core_manifest_sha256": manifest.manifest_sha256,
+            "manifest_version": manifest.manifest_version,
+            "source_evidence": manifest.source_evidence,
+            "backtest_context": manifest.backtest_context,
+            "runtime_authority": "platform_profile_or_validated_policy_not_candidate_snapshot",
         }
         metric_snapshot = {
             **dict(snapshot.get("metric_snapshot") or {}),

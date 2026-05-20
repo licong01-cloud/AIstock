@@ -1,10 +1,34 @@
 # Strategy Package Manifest v1 Contract
 
-> **2026-05-20 Legacy Notice**：本文是 legacy manifest v1 契约，只能用于理解历史实现。新开发和修复必须以 `docs/architecture/strategy_package_platform_boundary_contract_20260520.md` 为准。新版边界规定 StrategyPackage frozen manifest 只绑定因子和模型 alpha core；`strategy_config`、`universe_policy`、`portfolio_policy`、`execution_policy`、`minute_execution_policy`、`risk_policy` 不得作为新 StrategyPackage 边界继续扩展，应迁移到平台 runtime profile / validated execution policy / release 或 activation。
+> Status: legacy contract. This document is retained only for historical v1
+> manifest compatibility and migration context.
+> Superseded-by: `docs/architecture/strategy_package_platform_boundary_contract_20260520.md`.
+> Current rule: new StrategyPackage manifests must use `manifest_version:
+> "alpha_core_v1"` and must not bind platform runtime policies such as
+> `strategy_config`, `universe_policy`, `portfolio_policy`,
+> `execution_policy`, `minute_execution_policy`, or `risk_policy`.
+> Scope of this document after 2026-05-20: reading old v1 manifests only; it is
+> not the implementation authority for new Selection Center, Paper Trading v2,
+> MiniQMT SIM, or future live-trading runtime behavior.
 
-> Status: draft frozen by `docs/adr/0001-ai-stock-trading-core-direction.md`.
-> Scope: QE result -> Strategy Package -> Selection Center -> Paper Trading v2.
-> Out of scope: QMT, Shadow Trading, live trading, broker direct integration.
+## 0. Legacy Notice
+
+The original v1 contract required StrategyPackage to carry daily strategy,
+portfolio, universe, minute execution, and risk settings. That boundary is now
+deprecated because those settings are platform runtime capabilities, not
+alpha-core assets. New development must follow the alpha-core boundary:
+
+- StrategyPackage owns factor/model alpha core, source lineage, hashes, and
+  training/backtest evidence.
+- RuntimeProfile owns mutable daily selection settings, HMM, ST PIT, risk and
+  tradability choices.
+- ValidatedExecutionPolicy owns minute execution algorithm and tail/unfilled
+  handling references.
+- Paper v2 and MiniQMT must consume platform runtime/profile/policy versions or
+  fail fast; they must not auto-promote manifest minute policy into a validated
+  execution policy.
+
+The sections below describe the legacy v1 shape only.
 
 ## 1. Purpose
 

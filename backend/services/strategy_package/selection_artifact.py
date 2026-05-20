@@ -21,6 +21,7 @@ import psycopg2.extras
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend.db.pg_pool import get_conn
+from backend.services.selection_center.runtime_profile import parse_selection_runtime_profile
 from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
 
 from .live_inference import (
@@ -381,6 +382,7 @@ class StrategyPackageSelectionArtifactService:
                 context={"package_id": package_id},
             )
         runtime_hash = selection_artifact_runtime_hash(runtime_config)
+        topk = self._runtime_top_k(manifest, runtime_config)
         source_loader = getattr(self.runtime_asset_resolver, "load_source_for_strategy_package", None)
         if callable(source_loader):
             source = source_loader(
@@ -413,7 +415,7 @@ class StrategyPackageSelectionArtifactService:
                 package_id=package_id,
                 manifest_sha256=manifest.manifest_sha256,
                 trade_date=score_trade_date,
-                topk=int(manifest.portfolio_policy.topk),
+                topk=topk,
                 include_reference_price=include_reference_price,
             )
             artifact = SelectionScoreArtifact(
@@ -446,7 +448,7 @@ class StrategyPackageSelectionArtifactService:
                     if manifest.alpha_components
                     else "higher_better",
                     "target_weight_policy": "equal_weight_topk",
-                    "topk": int(manifest.portfolio_policy.topk),
+                    "topk": topk,
                     "trade_date_requested": current_date.isoformat(),
                     "cutoff_date": cutoff_date.isoformat() if cutoff_date else None,
                     "score_trade_date": score_trade_date.isoformat(),
@@ -522,6 +524,7 @@ class StrategyPackageSelectionArtifactService:
             )
 
         runtime_hash = selection_artifact_runtime_hash(runtime_config)
+        topk = self._runtime_top_k(manifest, runtime_config)
         artifacts: list[SelectionScoreArtifact] = []
         for current_date in unique_dates:
             scores = self._scores_for_date(
@@ -529,7 +532,7 @@ class StrategyPackageSelectionArtifactService:
                 package_id=package_id,
                 manifest_sha256=manifest.manifest_sha256,
                 trade_date=current_date,
-                topk=int(manifest.portfolio_policy.topk),
+                topk=topk,
                 include_reference_price=include_reference_price,
             )
             artifact = SelectionScoreArtifact(
@@ -552,11 +555,26 @@ class StrategyPackageSelectionArtifactService:
                     if manifest.alpha_components
                     else "higher_better",
                     "target_weight_policy": "equal_weight_topk",
-                    "topk": int(manifest.portfolio_policy.topk),
+                    "topk": topk,
                 },
             )
             artifacts.append(self.artifact_repository.save(artifact))
         return artifacts
+
+    @staticmethod
+    def _runtime_top_k(manifest: Any, runtime_config: dict[str, Any] | None) -> int:
+        profile = parse_selection_runtime_profile(runtime_config or {})
+        if profile.selection.top_k is not None:
+            return int(profile.selection.top_k)
+        daily_strategy = (manifest.backtest_context or {}).get("daily_strategy")
+        if isinstance(daily_strategy, dict) and daily_strategy.get("topk") is not None:
+            return int(daily_strategy["topk"])
+        if getattr(manifest, "is_legacy_runtime_manifest", False) and manifest.portfolio_policy is not None:
+            return int(manifest.portfolio_policy.topk)
+        raise StrategyPackageValidationError(
+            "selection artifact generation requires runtime_profile.selection.top_k; StrategyPackage manifest cannot provide runtime top_k",
+            context={"package_id": manifest.package_id, "manifest_version": getattr(manifest, "manifest_version", None)},
+        )
 
     def list_artifacts(self, package_id: str, *, limit: int = 100) -> list[SelectionScoreArtifact]:
         record = self.package_repository.get(package_id)

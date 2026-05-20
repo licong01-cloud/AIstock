@@ -60,6 +60,16 @@ class ModelAssetResolver:
         path must be covered by the manifest hash.
         """
 
+        if manifest.is_alpha_core_manifest:
+            raise StrategyPackageValidationError(
+                "alpha-core StrategyPackage cannot rewrite execution model assets inside the frozen manifest; use a validated execution policy artifact instead",
+                context={"package_id": manifest.package_id, "manifest_version": manifest.manifest_version},
+            )
+        if manifest.minute_execution_policy is None:
+            raise StrategyPackageValidationError(
+                "legacy runtime asset resolution requires manifest.minute_execution_policy",
+                context={"package_id": manifest.package_id, "manifest_version": manifest.manifest_version},
+            )
         algo_code = manifest.minute_execution_policy.algo_code.upper()
         asset_keys = required_runtime_asset_keys(algo_code)
         if not asset_keys:
@@ -113,6 +123,11 @@ class ModelAssetResolver:
         config_key: str,
         copy_missing: bool = True,
     ) -> ResolvedModelAsset:
+        if manifest.minute_execution_policy is None:
+            raise StrategyPackageValidationError(
+                "runtime asset resolution requires manifest.minute_execution_policy",
+                context={"package_id": manifest.package_id, "manifest_version": manifest.manifest_version},
+            )
         algo_code = manifest.minute_execution_policy.algo_code.upper()
         config = manifest.minute_execution_policy.algo_config
         original_path = str(
