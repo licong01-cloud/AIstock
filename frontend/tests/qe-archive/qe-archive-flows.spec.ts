@@ -21,6 +21,7 @@ function mockArchiveBase(
     jobs?: unknown[];
     candidates?: CandidateOverrides;
     candidateAssertions?: (params: URLSearchParams) => void;
+    backfillRequests?: unknown[];
     healthCallCounter?: { count: number };
   } = {},
 ) {
@@ -71,6 +72,22 @@ function mockArchiveBase(
           count: (overrides.candidates ?? []).length,
           has_more: overrides.has_more ?? false,
           candidates: overrides.candidates ?? [],
+        },
+      });
+    }
+
+    if (url.endsWith("/api/v1/qe-archive/backfill")) {
+      const payload = route.request().postDataJSON() as Record<string, any>;
+      options.backfillRequests?.push(payload);
+      return respond({
+        status: "success",
+        data: {
+          dry_run: !payload.write,
+          write_enabled: Boolean(payload.write),
+          source: payload.source,
+          status: payload.status,
+          processed_count: (payload.loop_ids || []).length + (payload.task_ids || []).length + (payload.experiment_ids || []).length,
+          results: [],
         },
       });
     }
@@ -137,4 +154,71 @@ test("refresh button triggers a fresh health request", async ({ page }) => {
   const before = counter.count;
   await page.getByRole("button", { name: /刷新候选/ }).click();
   await expect.poll(() => counter.count).toBeGreaterThan(before);
+});
+
+test("candidate task can expand loops and preview selected loop ids only", async ({ page }) => {
+  const backfillRequests: unknown[] = [];
+  await mockArchiveBase(page, {
+    backfillRequests,
+    candidates: {
+      candidates: [
+        {
+          candidate_id: "task:qe_archive_task",
+          candidate_type: "evolution_task",
+          source: "task",
+          task_id: "qe_archive_task",
+          display_name: "QE Archive loop selection task",
+          status: "completed",
+          loop_count: 2,
+          selected_run_count: 2,
+          archived_run_count: 0,
+          pending_run_count: 2,
+          recommended_run_count: 1,
+          is_fully_archived: false,
+          loops: [
+            {
+              task_id: "qe_archive_task",
+              loop_id: "qe_archive_task_Loop1",
+              loop_index: 1,
+              status: "completed",
+              action_type: "baseline",
+              archive_status: "recommended",
+              eligible: true,
+              recommended: true,
+              IC: 0.12,
+              annualized_return: 0.18,
+            },
+            {
+              task_id: "qe_archive_task",
+              loop_id: "qe_archive_task_Loop2",
+              loop_index: 2,
+              status: "completed",
+              action_type: "variant",
+              archive_status: "eligible",
+              eligible: true,
+              recommended: false,
+              IC: 0.08,
+              annualized_return: 0.11,
+            },
+          ],
+        },
+      ],
+    },
+  });
+
+  await page.goto("/qe-archive");
+  await expect(page.getByText("QE Archive loop selection task")).toBeVisible();
+  await page.getByRole("button", { name: "展开 loop" }).click();
+  await expect(page.getByText("推荐入仓").first()).toBeVisible();
+  await page.getByRole("button", { name: "选推荐 loop" }).click();
+  await page.getByRole("button", { name: /dry-run 预览选中项/ }).click();
+
+  await expect.poll(() => backfillRequests.length).toBeGreaterThan(0);
+  expect(backfillRequests[backfillRequests.length - 1]).toMatchObject({
+    source: "all",
+    task_ids: [],
+    experiment_ids: [],
+    loop_ids: ["qe_archive_task_Loop1"],
+    write: false,
+  });
 });

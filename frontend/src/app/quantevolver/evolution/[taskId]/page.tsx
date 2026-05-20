@@ -77,6 +77,7 @@ function archiveStatusLabel(status?: string): string {
     case "archived": return "已入仓";
     case "fully_archived": return "全部入仓";
     case "partially_archived": return "部分入仓";
+    case "recommended": return "推荐入仓";
     case "eligible": return "可入仓";
     case "not_recommended": return "不建议";
     case "manual_only": return "人工判断";
@@ -92,6 +93,7 @@ function archiveStatusStyle(status?: string): React.CSSProperties {
     archived: { bg: "#ecfdf5", fg: "#047857", border: "#a7f3d0" },
     fully_archived: { bg: "#ecfdf5", fg: "#047857", border: "#a7f3d0" },
     partially_archived: { bg: "#fffbeb", fg: "#b45309", border: "#fde68a" },
+    recommended: { bg: "#eff6ff", fg: "#1d4ed8", border: "#bfdbfe" },
     eligible: { bg: "#eff6ff", fg: "#1d4ed8", border: "#bfdbfe" },
     not_recommended: { bg: "#f8fafc", fg: "#64748b", border: "#cbd5e1" },
     manual_only: { bg: "#f5f3ff", fg: "#6d28d9", border: "#ddd6fe" },
@@ -416,6 +418,7 @@ export default function EvolutionDetailPage({ params }: { params: { taskId: stri
   const taskArchiveStatus = archiveStatus?.tasks?.[taskId];
   const archivedLoopCount = taskArchiveStatus?.archived_loop_count ?? loops.filter(loop => archiveStatusForLoop(loop)?.archive_status === "archived").length;
   const pendingArchiveCount = taskArchiveStatus?.pending_loop_count ?? loops.filter(canSelectArchiveLoop).length;
+  const recommendedArchiveCount = taskArchiveStatus?.recommended_loop_count ?? loops.filter(loop => archiveStatusForLoop(loop)?.recommended).length;
   const selectedArchiveCount = selectedArchiveIndices().length;
 
   return (
@@ -432,7 +435,7 @@ export default function EvolutionDetailPage({ params }: { params: { taskId: stri
           {task.status}
         </span>
         <span style={{ fontSize: 12, color: "#64748b" }}>共 {loops.length} Loops | 完成 {completedCount} | SOTA {sotaCount}</span>
-        <span style={{ fontSize: 12, color: "#64748b" }}>数仓 已入仓 {archivedLoopCount} | 待入仓 {pendingArchiveCount}</span>
+        <span style={{ fontSize: 12, color: "#64748b" }}>数仓 已入仓 {archivedLoopCount} | 推荐 {recommendedArchiveCount} | 待入仓 {pendingArchiveCount}</span>
         {taskArchiveStatus && <span style={archiveStatusStyle(taskArchiveStatus.archive_status)}>{archiveStatusLabel(taskArchiveStatus.archive_status)}</span>}
       </div>
 
@@ -443,6 +446,17 @@ export default function EvolutionDetailPage({ params }: { params: { taskId: stri
           {archiveStatusLoading && <span style={{ fontSize: 12, color: "#2563eb" }}>状态刷新中...</span>}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={() => {
+              const selectable = loops.filter(loop => canSelectArchiveLoop(loop) && archiveStatusForLoop(loop)?.recommended).map(loop => loop.loop_index);
+              setSelectedLoopIndices(new Set(selectable));
+            }}
+            disabled={!recommendedArchiveCount || Boolean(archiveActionLoading)}
+            style={{ padding: "5px 10px", fontSize: 11, borderRadius: 6, border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", cursor: recommendedArchiveCount ? "pointer" : "not-allowed", fontWeight: 700 }}
+          >
+            选择推荐 loop
+          </button>
           <button
             type="button"
             onClick={() => {

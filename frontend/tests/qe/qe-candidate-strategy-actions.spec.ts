@@ -5,6 +5,7 @@ test("QE experiment list exposes candidate strategy package actions", async ({ p
   const childExperimentId = "qe_candidate_parent_Loop1";
   const taskId = "qe_candidate_task";
   const candidatePosts: any[] = [];
+  const archivePosts: any[] = [];
 
   await page.route(/\/api\/v1\/quantevolver\/experiments\?.*/, async route => {
     await route.fulfill({
@@ -45,6 +46,28 @@ test("QE experiment list exposes candidate strategy package actions", async ({ p
     });
   });
 
+  await page.route(/\/api\/v1\/qe-archive\/source-status$/, async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        status: "success",
+        data: {
+          experiments: {
+            [parentExperimentId]: { archive_status: "recommended", eligible: true, recommended: true, run_ids: [], run_count: 0 },
+          },
+          tasks: {
+            [taskId]: { archive_status: "recommended", loop_count: 1, archived_loop_count: 0, eligible_loop_count: 1, pending_loop_count: 1, recommended_loop_count: 1, run_ids: [] },
+          },
+          loops: {
+            [`${taskId}_Loop1`]: { archive_status: "recommended", eligible: true, recommended: true, run_ids: [], run_count: 0 },
+          },
+          include_recommendation: true,
+        },
+      }),
+    });
+  });
+
   await page.route(/\/api\/v1\/strategy-packages\/candidates\/from-qe-experiment$/, async route => {
     candidatePosts.push(await route.request().postDataJSON());
     await route.fulfill({
@@ -60,6 +83,15 @@ test("QE experiment list exposes candidate strategy package actions", async ({ p
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({ ok: true, candidate: { candidate_id: "csp_from_loop" } }),
+    });
+  });
+
+  await page.route(/\/api\/v1\/qe-archive\/backfill$/, async route => {
+    archivePosts.push(await route.request().postDataJSON());
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ status: "success", data: { dry_run: true, results: [{ will_archive: true, dry_run: true }] } }),
     });
   });
 
@@ -84,6 +116,14 @@ test("QE experiment list exposes candidate strategy package actions", async ({ p
     experiment_id: childExperimentId,
     created_by: "quantevolver_experiments_list",
     manual_action: true,
+  });
+
+  await page.getByTestId("qe-child-loop-archive-preview").click();
+  await expect.poll(() => archivePosts.length).toBe(1);
+  expect(archivePosts[0]).toMatchObject({
+    source: "loop",
+    loop_ids: [`${taskId}_Loop1`],
+    write: false,
   });
 });
 
@@ -121,6 +161,25 @@ test("QE evolution task detail posts completed loop candidate action", async ({ 
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({ status: "success", data: { summary: { ic: 0.055 } } }),
+    });
+  });
+
+  await page.route(/\/api\/v1\/qe-archive\/source-status$/, async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        status: "success",
+        data: {
+          tasks: {
+            [taskId]: { archive_status: "recommended", loop_count: 1, archived_loop_count: 0, eligible_loop_count: 1, pending_loop_count: 1, recommended_loop_count: 1, run_ids: [] },
+          },
+          loops: {
+            [`${taskId}_Loop1`]: { archive_status: "recommended", eligible: true, recommended: true, run_ids: [], run_count: 0 },
+          },
+          include_recommendation: true,
+        },
+      }),
     });
   });
 
@@ -219,6 +278,25 @@ test("QE evolution LoopDetailPanel exposes candidate action with feedback", asyn
     });
   });
 
+  await page.route(/\/api\/v1\/qe-archive\/source-status$/, async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        status: "success",
+        data: {
+          tasks: {
+            [taskId]: { archive_status: "recommended", loop_count: 1, archived_loop_count: 0, eligible_loop_count: 1, pending_loop_count: 1, recommended_loop_count: 1, run_ids: [] },
+          },
+          loops: {
+            [`${taskId}_Loop1`]: { archive_status: "recommended", eligible: true, recommended: true, run_ids: [], run_count: 0 },
+          },
+          include_recommendation: true,
+        },
+      }),
+    });
+  });
+
   await page.route(/\/api\/v1\/strategy-packages\/candidates\/from-qe-loop$/, async route => {
     candidatePayload = await route.request().postDataJSON();
     await route.fulfill({
@@ -239,5 +317,75 @@ test("QE evolution LoopDetailPanel exposes candidate action with feedback", asyn
     experiment_id: `${taskId}_exp_L1`,
     created_by: "quantevolver_loop_detail_panel",
     manual_action: true,
+  });
+});
+
+test("QE evolution main page previews task-level archive selection through QE Archive API", async ({ page }) => {
+  const taskId = "qe_archive_main_task";
+  const backfillPosts: any[] = [];
+
+  await page.route(/\/api\/v1\/quantevolver\/evolution\/tasks$/, async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        status: "success",
+        data: [
+          {
+            task_id: taskId,
+            task_name: "Archive main task",
+            target_desc: "mock archive main task",
+            max_loops: 2,
+            current_loop: 2,
+            status: "completed",
+            source_type: "custom_evo",
+            task_type: "custom_evo",
+            evolution_mode: "auto",
+            created_at: "2026-05-18T09:00:00+08:00",
+            updated_at: "2026-05-18T09:10:00+08:00",
+          },
+        ],
+      }),
+    });
+  });
+
+  await page.route(/\/api\/v1\/qe-archive\/source-status$/, async route => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        status: "success",
+        data: {
+          tasks: {
+            [taskId]: { archive_status: "recommended", loop_count: 2, archived_loop_count: 0, eligible_loop_count: 2, pending_loop_count: 2, recommended_loop_count: 1, run_ids: [] },
+          },
+          include_recommendation: true,
+        },
+      }),
+    });
+  });
+
+  await page.route(/\/api\/v1\/qe-archive\/backfill$/, async route => {
+    backfillPosts.push(await route.request().postDataJSON());
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ status: "success", data: { dry_run: true, results: [{ will_archive: true, dry_run: true }] } }),
+    });
+  });
+
+  page.on("dialog", dialog => dialog.accept());
+  await page.goto("/quantevolver/evolution");
+  await expect(page.getByText(taskId, { exact: true })).toBeVisible();
+  await expect(page.getByText("推荐入仓").first()).toBeVisible();
+  await page.getByTestId("qe-evolution-task-archive-preview").click();
+
+  await expect.poll(() => backfillPosts.length).toBe(1);
+  expect(backfillPosts[0]).toMatchObject({
+    source: "task",
+    task_ids: [taskId],
+    status: "completed",
+    include_archived: false,
+    write: false,
   });
 });

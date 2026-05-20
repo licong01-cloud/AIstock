@@ -177,6 +177,7 @@ function archiveStatusLabel(status?: string): string {
     case "archived": return "已入仓";
     case "fully_archived": return "全部入仓";
     case "partially_archived": return "部分入仓";
+    case "recommended": return "推荐入仓";
     case "eligible": return "可入仓";
     case "not_recommended": return "不建议";
     case "manual_only": return "人工判断";
@@ -192,6 +193,7 @@ function archiveStatusStyle(status?: string): CSSProperties {
     archived: { bg: "#ecfdf5", fg: "#047857", border: "#a7f3d0" },
     fully_archived: { bg: "#ecfdf5", fg: "#047857", border: "#a7f3d0" },
     partially_archived: { bg: "#fffbeb", fg: "#b45309", border: "#fde68a" },
+    recommended: { bg: "#eff6ff", fg: "#1d4ed8", border: "#bfdbfe" },
     eligible: { bg: "#eff6ff", fg: "#1d4ed8", border: "#bfdbfe" },
     not_recommended: { bg: "#f8fafc", fg: "#64748b", border: "#cbd5e1" },
     manual_only: { bg: "#f5f3ff", fg: "#6d28d9", border: "#ddd6fe" },
@@ -673,8 +675,8 @@ export default function ExperimentsPage() {
     };
   }
 
-  async function previewArchiveSelection() {
-    const payload = buildArchiveSelectionPayload();
+  async function previewArchiveSelection(keys?: Set<string>) {
+    const payload = buildArchiveSelectionPayload(keys);
     if (!payload.experiment_ids.length && !payload.loop_ids.length) {
       showToast("请先选择至少一个已完成且未入仓的实验或 Loop", false);
       return;
@@ -691,8 +693,8 @@ export default function ExperimentsPage() {
     }
   }
 
-  async function executeArchiveSelection() {
-    const payload = buildArchiveSelectionPayload();
+  async function executeArchiveSelection(keys?: Set<string>) {
+    const payload = buildArchiveSelectionPayload(keys);
     const totalSelected = payload.experiment_ids.length + payload.loop_ids.length;
     if (!totalSelected) {
       showToast("请先选择至少一个已完成且未入仓的实验或 Loop", false);
@@ -1150,6 +1152,20 @@ export default function ExperimentsPage() {
                         style={{ padding: "4px 10px", fontSize: 11, cursor: isActioning ? "not-allowed" : "pointer", borderRadius: 4, border: "1px solid #2563eb", background: "#eff6ff", color: "#1d4ed8", fontWeight: 700 }}>
                         {isActioning && actionType === "candidate" ? "加入中..." : "加入候选策略包"}
                       </button>
+                      {selfArchiveSelectable && (
+                        <>
+                          <button data-testid="qe-exp-archive-preview" onClick={() => void previewArchiveSelection(new Set([selfArchiveKey]))}
+                            disabled={Boolean(archiveActionLoading)}
+                            style={{ padding: "4px 10px", fontSize: 11, cursor: archiveActionLoading ? "not-allowed" : "pointer", borderRadius: 4, border: "1px solid #2563eb", background: "#eff6ff", color: "#1d4ed8", fontWeight: 700 }}>
+                            预览入仓
+                          </button>
+                          <button data-testid="qe-exp-archive-execute" onClick={() => void executeArchiveSelection(new Set([selfArchiveKey]))}
+                            disabled={Boolean(archiveActionLoading)}
+                            style={{ padding: "4px 10px", fontSize: 11, cursor: archiveActionLoading ? "not-allowed" : "pointer", borderRadius: 4, border: "1px solid #059669", background: "#ecfdf5", color: "#047857", fontWeight: 700 }}>
+                            入仓
+                          </button>
+                        </>
+                      )}
                       {exp.alpha_mode === "multi" && (
                         <button onClick={() => window.open(`/quantevolver/multi-alpha/diagnostics/${exp.experiment_id}`, '_blank')}
                           style={{ padding: "4px 10px", fontSize: 11, cursor: "pointer", borderRadius: 4, border: "1px solid #8b5cf6", background: "#f5f3ff", color: "#7c3aed", fontWeight: 600 }}>
@@ -1303,6 +1319,20 @@ export default function ExperimentsPage() {
                                       style={{ padding: "3px 8px", fontSize: 10, cursor: actionId === child.experiment_id ? "not-allowed" : "pointer", borderRadius: 4, border: "1px solid #2563eb", background: "#eff6ff", color: "#1d4ed8", fontWeight: 700 }}>
                                       {actionId === child.experiment_id && actionType === "candidate" ? "加入中..." : "加入候选策略包"}
                                     </button>
+                                    {childArchiveSelectable && childArchiveKey && (
+                                      <>
+                                        <button data-testid="qe-child-loop-archive-preview" onClick={() => void previewArchiveSelection(new Set([childArchiveKey]))}
+                                          disabled={Boolean(archiveActionLoading)}
+                                          style={{ padding: "3px 8px", fontSize: 10, cursor: archiveActionLoading ? "not-allowed" : "pointer", borderRadius: 4, border: "1px solid #2563eb", background: "#eff6ff", color: "#1d4ed8", fontWeight: 700 }}>
+                                          预览入仓
+                                        </button>
+                                        <button data-testid="qe-child-loop-archive-execute" onClick={() => void executeArchiveSelection(new Set([childArchiveKey]))}
+                                          disabled={Boolean(archiveActionLoading)}
+                                          style={{ padding: "3px 8px", fontSize: 10, cursor: archiveActionLoading ? "not-allowed" : "pointer", borderRadius: 4, border: "1px solid #059669", background: "#ecfdf5", color: "#047857", fontWeight: 700 }}>
+                                          入仓
+                                        </button>
+                                      </>
+                                    )}
                                     <button onClick={() => syncResult(child.experiment_id)}
                                       disabled={actionId === child.experiment_id}
                                       style={{ padding: "3px 8px", fontSize: 10, cursor: "pointer", borderRadius: 4, border: "1px solid #d1d5db", background: "#fff" }}>

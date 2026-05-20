@@ -17,6 +17,8 @@ from backend.services.quantevolver.runtime_contract import (
     runtime_contract_missing,
 )
 
+from .policy import resolve_archive_policy
+
 
 ConnectionProvider = Callable[[], Any]
 
@@ -375,17 +377,18 @@ class QEArchiveSourceAssembler:
     def _experiment_archive_status(self, experiment_ids: Sequence[str]) -> dict[str, Any]:
         result = {
             experiment_id: {
-                "archive_status": "not_archived",
+                "archive_status": "not_recommended",
                 "run_ids": [],
                 "run_count": 0,
                 "eligible": False,
                 "recommended": False,
-                "reason": "not_archived",
+                "reason": "source_not_found",
             }
             for experiment_id in experiment_ids
         }
         if not experiment_ids:
             return result
+        archived: dict[str, list[str]] = {}
         with self._connection_provider() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -398,31 +401,53 @@ class QEArchiveSourceAssembler:
                     (list(experiment_ids),),
                 )
                 for experiment_id, run_ids in cur.fetchall():
-                    ids = [str(item) for item in (run_ids or [])]
-                    result[str(experiment_id)] = {
-                        "archive_status": "archived" if ids else "not_archived",
-                        "run_ids": ids,
-                        "run_count": len(ids),
-                        "eligible": not ids,
-                        "recommended": not ids,
-                        "reason": "archived" if ids else "single_completed",
-                    }
+                    archived[str(experiment_id)] = [str(item) for item in (run_ids or [])]
+
+                available = self._available_columns(cur, "qe_experiments")
+                columns = [col for col in EXPERIMENT_COLUMNS if col in available]
+                if "experiment_id" not in columns:
+                    return result
+                cur.execute(
+                    f"""
+                    SELECT {", ".join(columns)}
+                    FROM qe_experiments
+                    WHERE experiment_id = ANY(%s)
+                    """,
+                    (list(experiment_ids),),
+                )
+                for row in cur.fetchall():
+                    source_row = dict(zip(columns, row))
+                    experiment_id = str(source_row.get("experiment_id"))
+                    run_ids = archived.get(experiment_id, [])
+                    payload = self.build_experiment_payload(source_row) if not run_ids else {}
+                    result[experiment_id] = _archive_status_from_policy(
+                        source_type="experiment",
+                        source_id=experiment_id,
+                        source_sub_id=None,
+                        source_status=str(source_row.get("status") or ""),
+                        payload=payload,
+                        run_ids=run_ids,
+                    )
+        for experiment_id, run_ids in archived.items():
+            if run_ids and experiment_id in result and result[experiment_id].get("archive_status") != "archived":
+                result[experiment_id] = _archived_status(run_ids)
         return result
 
     def _loop_archive_status(self, loop_ids: Sequence[str]) -> dict[str, Any]:
         result = {
             loop_id: {
-                "archive_status": "not_archived",
+                "archive_status": "not_recommended",
                 "run_ids": [],
                 "run_count": 0,
                 "eligible": False,
                 "recommended": False,
-                "reason": "not_archived",
+                "reason": "source_not_found",
             }
             for loop_id in loop_ids
         }
         if not loop_ids:
             return result
+        archived: dict[str, list[str]] = {}
         with self._connection_provider() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -435,15 +460,44 @@ class QEArchiveSourceAssembler:
                     (list(loop_ids),),
                 )
                 for loop_id, run_ids in cur.fetchall():
-                    ids = [str(item) for item in (run_ids or [])]
-                    result[str(loop_id)] = {
-                        "archive_status": "archived" if ids else "not_archived",
-                        "run_ids": ids,
-                        "run_count": len(ids),
-                        "eligible": not ids,
-                        "recommended": not ids,
-                        "reason": "archived" if ids else "loop_completed",
-                    }
+                    archived[str(loop_id)] = [str(item) for item in (run_ids or [])]
+
+                loop_available = self._available_columns(cur, "qe_evolution_loops")
+                task_available = self._available_columns(cur, "qe_evolution_tasks")
+                loop_cols = [col for col in LOOP_COLUMNS if col in loop_available]
+                task_cols = [col for col in TASK_COLUMNS if col in task_available]
+                if "loop_id" not in loop_cols:
+                    return result
+                select_cols = [f"l.{col} AS loop__{col}" for col in loop_cols]
+                select_cols.extend(f"t.{col} AS task__{col}" for col in task_cols)
+                cur.execute(
+                    f"""
+                    SELECT {", ".join(select_cols)}
+                    FROM qe_evolution_loops l
+                    LEFT JOIN qe_evolution_tasks t ON t.task_id = l.task_id
+                    WHERE l.loop_id = ANY(%s)
+                    """,
+                    (list(loop_ids),),
+                )
+                descriptions = [desc[0] for desc in cur.description or []]
+                for row in cur.fetchall():
+                    joined = dict(zip(descriptions, row))
+                    loop_row = {key.removeprefix("loop__"): value for key, value in joined.items() if key.startswith("loop__")}
+                    task_row = {key.removeprefix("task__"): value for key, value in joined.items() if key.startswith("task__")}
+                    loop_id = str(loop_row.get("loop_id"))
+                    run_ids = archived.get(loop_id, [])
+                    payload = self.build_loop_payload(loop_row, task_row) if not run_ids else {}
+                    result[loop_id] = _archive_status_from_policy(
+                        source_type="loop",
+                        source_id=str(loop_row.get("task_id") or loop_id),
+                        source_sub_id=loop_id,
+                        source_status=str(loop_row.get("status") or ""),
+                        payload=payload,
+                        run_ids=run_ids,
+                    )
+        for loop_id, run_ids in archived.items():
+            if run_ids and loop_id in result and result[loop_id].get("archive_status") != "archived":
+                result[loop_id] = _archived_status(run_ids)
         return result
 
     def _task_archive_status(self, task_ids: Sequence[str]) -> dict[str, Any]:
@@ -454,6 +508,9 @@ class QEArchiveSourceAssembler:
                 "archived_loop_count": 0,
                 "eligible_loop_count": 0,
                 "pending_loop_count": 0,
+                "recommended_loop_count": 0,
+                "manual_only_loop_count": 0,
+                "not_recommended_loop_count": 0,
                 "run_ids": [],
             }
             for task_id in task_ids
@@ -466,40 +523,152 @@ class QEArchiveSourceAssembler:
                     """
                     SELECT
                         l.task_id,
-                        COUNT(DISTINCT l.loop_id) AS loop_count,
-                        COUNT(DISTINCT CASE WHEN l.status = 'completed' THEN l.loop_id END) AS eligible_loop_count,
-                        COUNT(DISTINCT r.loop_id) AS archived_loop_count,
+                        l.loop_id,
+                        l.loop_index,
+                        l.status,
+                        l.config_json,
                         array_remove(array_agg(DISTINCT r.run_id), NULL) AS run_ids
                     FROM qe_evolution_loops l
                     LEFT JOIN qe_archive.run r
                       ON r.task_id = l.task_id
                      AND r.loop_id = l.loop_id
                     WHERE l.task_id = ANY(%s)
-                    GROUP BY l.task_id
+                    GROUP BY l.task_id, l.loop_id, l.loop_index, l.status, l.config_json
+                    ORDER BY l.task_id ASC, l.loop_index ASC NULLS LAST
                     """,
                     (list(task_ids),),
                 )
-                for row in cur.fetchall():
-                    task_id = str(row[0])
-                    loop_count = int(row[1] or 0)
-                    eligible = int(row[2] or 0)
-                    archived = int(row[3] or 0)
-                    pending = max(0, eligible - archived)
-                    if eligible and archived >= eligible:
-                        status = "fully_archived"
-                    elif archived:
-                        status = "partially_archived"
-                    else:
-                        status = "not_archived"
-                    result[task_id] = {
-                        "archive_status": status,
-                        "loop_count": loop_count,
-                        "archived_loop_count": archived,
-                        "eligible_loop_count": eligible,
-                        "pending_loop_count": pending,
-                        "run_ids": [str(item) for item in (row[4] or [])],
-                    }
+                rows = self._fetch_dicts(cur)
+
+        grouped: dict[str, list[dict[str, Any]]] = {task_id: [] for task_id in task_ids}
+        for row in rows:
+            grouped.setdefault(str(row.get("task_id")), []).append(row)
+
+        for task_id, task_loops in grouped.items():
+            loop_count = len(task_loops)
+            completed = 0
+            archived = 0
+            eligible = 0
+            recommended = 0
+            manual_only = 0
+            not_recommended = 0
+            run_ids: list[str] = []
+            for row in task_loops:
+                row_run_ids = [str(item) for item in (row.get("run_ids") or [])]
+                run_ids.extend(row_run_ids)
+                if str(row.get("status") or "").lower() == "completed":
+                    completed += 1
+                loop_status = _loop_row_archive_status(row, run_ids=row_run_ids)
+                if loop_status["archive_status"] == "archived":
+                    archived += 1
+                    continue
+                if loop_status.get("eligible"):
+                    eligible += 1
+                if loop_status.get("recommended"):
+                    recommended += 1
+                if loop_status["archive_status"] == "manual_only":
+                    manual_only += 1
+                if loop_status["archive_status"] in {"not_recommended", "skipped"}:
+                    not_recommended += 1
+            pending = max(0, completed - archived)
+            if completed and archived >= completed:
+                status = "fully_archived"
+            elif archived:
+                status = "partially_archived"
+            elif recommended:
+                status = "recommended"
+            elif eligible:
+                status = "eligible"
+            elif loop_count:
+                status = "not_recommended"
+            else:
+                status = "not_archived"
+            result[task_id] = {
+                "archive_status": status,
+                "loop_count": loop_count,
+                "archived_loop_count": archived,
+                "eligible_loop_count": completed,
+                "pending_loop_count": pending,
+                "recommended_loop_count": recommended,
+                "manual_only_loop_count": manual_only,
+                "not_recommended_loop_count": not_recommended,
+                "run_ids": sorted(set(run_ids)),
+            }
         return result
+
+    def _list_task_loop_items(
+        self,
+        task_ids: Sequence[str],
+    ) -> dict[str, list[dict[str, Any]]]:
+        task_ids = _dedupe_non_empty(task_ids)
+        if not task_ids:
+            return {}
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        l.task_id,
+                        l.loop_id,
+                        l.loop_index,
+                        l.status,
+                        l.action_type,
+                        l.experiment_id,
+                        l.is_sota,
+                        l.metrics_json,
+                        l.config_json,
+                        l.created_at,
+                        l.updated_at,
+                        array_remove(array_agg(DISTINCT r.run_id), NULL) AS run_ids
+                    FROM qe_evolution_loops l
+                    LEFT JOIN qe_archive.run r
+                      ON r.task_id = l.task_id
+                     AND r.loop_id = l.loop_id
+                    WHERE l.task_id = ANY(%s)
+                    GROUP BY
+                        l.task_id,
+                        l.loop_id,
+                        l.loop_index,
+                        l.status,
+                        l.action_type,
+                        l.experiment_id,
+                        l.is_sota,
+                        l.metrics_json,
+                        l.config_json,
+                        l.created_at,
+                        l.updated_at
+                    ORDER BY l.task_id ASC, l.loop_index ASC NULLS LAST, l.updated_at ASC NULLS LAST
+                    """,
+                    (task_ids,),
+                )
+                rows = self._fetch_dicts(cur)
+
+        grouped: dict[str, list[dict[str, Any]]] = {task_id: [] for task_id in task_ids}
+        for row in rows:
+            status = _loop_row_archive_status(row, run_ids=[str(item) for item in (row.get("run_ids") or [])])
+            item = {
+                "task_id": row.get("task_id"),
+                "loop_id": row.get("loop_id"),
+                "loop_index": row.get("loop_index"),
+                "status": row.get("status"),
+                "action_type": row.get("action_type"),
+                "experiment_id": row.get("experiment_id"),
+                "is_sota": bool(row.get("is_sota")),
+                "archive_status": status["archive_status"],
+                "eligible": status["eligible"],
+                "recommended": status["recommended"],
+                "reason": status["reason"],
+                "run_ids": status["run_ids"],
+                "run_count": status["run_count"],
+                "created_at": _jsonable(row.get("created_at")),
+                "updated_at": _jsonable(row.get("updated_at")),
+            }
+            metrics = _ensure_mapping(row.get("metrics_json"))
+            for key in ("IC", "ic", "Rank_IC", "rank_ic", "annualized_return", "max_drawdown", "information_ratio"):
+                if key in metrics:
+                    item[key] = metrics.get(key)
+            grouped.setdefault(str(row.get("task_id")), []).append(item)
+        return grouped
 
     def _list_evolution_task_candidates(
         self,
@@ -562,11 +731,16 @@ class QEArchiveSourceAssembler:
                 )
                 rows = self._fetch_dicts(cur)
 
+        task_loops = self._list_task_loop_items([str(row.get("task_id")) for row in rows if row.get("task_id")])
         result: list[dict[str, Any]] = []
         for row in rows:
             selected = int(row.get("selected_loop_count") or 0)
             archived = int(row.get("archived_loop_count") or 0)
             pending = max(0, selected - archived)
+            loops = task_loops.get(str(row.get("task_id")), [])
+            recommended = sum(1 for loop in loops if loop.get("recommended") and loop.get("archive_status") != "archived")
+            manual_only = sum(1 for loop in loops if loop.get("archive_status") == "manual_only")
+            not_recommended = sum(1 for loop in loops if loop.get("archive_status") in {"not_recommended", "skipped"})
             result.append(
                 {
                     "candidate_id": f"task:{row.get('task_id')}",
@@ -582,7 +756,11 @@ class QEArchiveSourceAssembler:
                     "selected_run_count": selected,
                     "archived_run_count": archived,
                     "pending_run_count": pending,
+                    "recommended_run_count": recommended,
+                    "manual_only_run_count": manual_only,
+                    "not_recommended_run_count": not_recommended,
                     "is_fully_archived": pending == 0,
+                    "loops": loops,
                     "node_id": row.get("node_id"),
                     "model_id": row.get("model_id"),
                     "model_catalog_id": row.get("model_catalog_id"),
@@ -904,6 +1082,101 @@ class QEArchiveSourceAssembler:
             return []
         columns = [desc[0] for desc in cur.description or []]
         return [dict(zip(columns, row)) for row in rows]
+
+
+def _archived_status(run_ids: Sequence[str]) -> dict[str, Any]:
+    ids = [str(item) for item in (run_ids or [])]
+    return {
+        "archive_status": "archived",
+        "run_ids": ids,
+        "run_count": len(ids),
+        "eligible": False,
+        "recommended": False,
+        "reason": "archived",
+    }
+
+
+def _archive_status_from_policy(
+    *,
+    source_type: str,
+    source_id: str,
+    source_sub_id: str | None,
+    source_status: str,
+    payload: Mapping[str, Any],
+    run_ids: Sequence[str],
+) -> dict[str, Any]:
+    ids = [str(item) for item in (run_ids or [])]
+    if ids:
+        return _archived_status(ids)
+
+    normalized_status = str(source_status or "").strip().lower()
+    if normalized_status != "completed":
+        return {
+            "archive_status": "not_recommended",
+            "run_ids": [],
+            "run_count": 0,
+            "eligible": False,
+            "recommended": False,
+            "reason": f"source_status:{normalized_status or 'unknown'}",
+            "source_status": normalized_status or None,
+        }
+
+    decision = resolve_archive_policy(
+        source_system=str(payload.get("source_system") or "qe"),
+        source_type=source_type,
+        source_id=source_id,
+        source_sub_id=source_sub_id,
+        payload=payload,
+        runtime_config=payload.get("config") if isinstance(payload.get("config"), Mapping) else {},
+    )
+    if decision.archive_policy == "AUTO":
+        status = "recommended"
+        eligible = True
+        recommended = True
+    elif decision.archive_policy == "MANUAL_ONLY":
+        status = "manual_only"
+        eligible = True
+        recommended = False
+    else:
+        status = "skipped"
+        eligible = False
+        recommended = False
+    return {
+        "archive_status": status,
+        "run_ids": [],
+        "run_count": 0,
+        "eligible": eligible,
+        "recommended": recommended,
+        "reason": decision.reason,
+        "archive_policy": decision.archive_policy,
+        "archive_policy_source": decision.archive_policy_source,
+        "source_status": normalized_status,
+    }
+
+
+def _loop_row_archive_status(row: Mapping[str, Any], *, run_ids: Sequence[str]) -> dict[str, Any]:
+    task_id = str(row.get("task_id") or "")
+    loop_id = str(row.get("loop_id") or "")
+    config = _ensure_mapping(row.get("config_json"))
+    payload = {
+        "source_system": "qe_evolution",
+        "source_id": task_id,
+        "source_sub_id": loop_id,
+        "task_id": task_id,
+        "loop_id": loop_id,
+        "loop_index": row.get("loop_index"),
+        "status": row.get("status"),
+        "config": config,
+        "raw_config": {"loop_config_json": config},
+    }
+    return _archive_status_from_policy(
+        source_type="loop",
+        source_id=task_id or loop_id,
+        source_sub_id=loop_id or None,
+        source_status=str(row.get("status") or ""),
+        payload=payload,
+        run_ids=run_ids,
+    )
 
 
 def _ensure_mapping(value: Any) -> dict[str, Any]:
