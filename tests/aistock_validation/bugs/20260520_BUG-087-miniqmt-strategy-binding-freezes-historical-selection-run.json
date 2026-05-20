@@ -95,6 +95,12 @@
       "actor": "codex-app",
       "action": "rebased_on_origin_main",
       "note": "Branch rebased onto origin/main 3b7164c; BUG-087 fix commit hash refreshed after rebase."
+    },
+    {
+      "timestamp": "2026-05-20T00:00:00Z",
+      "actor": "codex-app",
+      "action": "post_rebase_validation_blocked_by_baseline",
+      "note": "After rebasing onto origin/main 3b7164c, BUG-087 branch-specific qmt tests pass and branch-file guardrails have blocking=0, but full nox paper_v2_backend and l0 fail on unrelated origin/main baseline issues outside BUG-087 allowed_write_scope: strategy_package candidate DDL ON DELETE CASCADE and local-data/ingestion HIGH silent-empty-success guardrails."
     }
   ],
   "github_issue_number": 109,
