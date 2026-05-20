@@ -1,5 +1,7 @@
 # QE SOTA 殿堂、StrategyPackage 资产治理、Seed 可复现性与模型库设计
 
+> **2026-05-20 边界更新**：本文中“不可变 Alpha Core”的定义仍保留；但关于 StrategyPackage 吸收组合策略、风控策略、执行策略、HMM runtime variant 的描述已被 `docs/architecture/strategy_package_platform_boundary_contract_20260520.md` 取代。新版边界要求 StrategyPackage 只绑定因子和模型 alpha core；日频/分钟/尾盘/HMM/ST PIT/event/risk/broker 通过平台 profile/policy/version/activation 管理。
+
 日期：2026-05-08
 状态：实施前设计草案
 范围：QuantEvolver / QE、SOTA 殿堂、StrategyPackage、模型库、QE 数仓、Paper Trading v2、未来实盘候选治理
