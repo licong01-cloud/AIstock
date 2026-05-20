@@ -42,7 +42,12 @@ from backend.services.trading_core.errors import (
     BrokerSubmitError,
 )
 from backend.services.trading_core.models import OrderIntent, OrderSide, OrderType, PositionLot, RunStatus
-from backend.tests.paper_trading_v2.test_day_runner import FakeCalendar, FakeSuspendLookup, make_paper_enabled_manifest
+from backend.tests.paper_trading_v2.test_day_runner import (
+    FakeCalendar,
+    FakeSuspendLookup,
+    make_paper_enabled_manifest,
+    save_manifest_with_default_execution_policy,
+)
 
 
 TRADE_DATE = date(2024, 1, 2)
@@ -533,7 +538,7 @@ def _miniqmt_portfolio_fixture(*, custom_params: dict | None = None):
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_enabled_manifest(custom_params=custom_params)
-    package_repo.save_manifest(manifest)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
     portfolio = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,

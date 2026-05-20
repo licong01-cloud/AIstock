@@ -1274,12 +1274,12 @@ class PaperTradingV2PortfolioService:
                 raise StrategyPackageValidationError("validated_execution_policy_id is required")
             policy = self.package_repository.get_execution_policy(package_id, str(policy_id))
         else:
-            if manifest.is_alpha_core_manifest or manifest_execution_policy is None:
+            if manifest_execution_policy is None:
                 raise StrategyPackageValidationError(
-                    "alpha-core StrategyPackage requires an explicit backtest-validated execution policy id for Paper v2",
+                    "Paper v2 requires an explicit backtest-validated execution policy id",
                     context={"package_id": package_id, "manifest_sha256": manifest_sha256},
                 )
-            policy = self._ensure_default_manifest_execution_policy(
+            policy = self._select_default_manifest_execution_policy(
                 package_id=package_id,
                 manifest_execution_policy=manifest_execution_policy,
             )
@@ -1307,7 +1307,7 @@ class PaperTradingV2PortfolioService:
         )
         return policy
 
-    def _ensure_default_manifest_execution_policy(
+    def _select_default_manifest_execution_policy(
         self,
         *,
         package_id: str,
@@ -1317,21 +1317,18 @@ class PaperTradingV2PortfolioService:
         digest = compute_execution_policy_sha256(normalized_policy)
         for policy in self.package_repository.list_execution_policies(package_id):
             if policy.policy_sha256 == digest:
-                if not policy.paper_enabled:
-                    policy = StrategyPackageService(repository=self.package_repository).enable_execution_policy_for_paper(
-                        package_id,
-                        policy.policy_id,
-                    )
                 return policy
-        record = self.package_repository.get(package_id)
-        source_backtest_id = record.run_id or record.source_id
-        return StrategyPackageService(repository=self.package_repository).create_execution_policy(
-            package_id=package_id,
-            policy_name="manifest_default_execution_policy",
-            policy_json=normalized_policy,
-            source_backtest_id=source_backtest_id,
-            source_backtest_status="BACKTEST_VALIDATED",
-            paper_enabled=True,
+        raise StrategyPackageValidationError(
+            "paper portfolio requires an explicit validated execution policy",
+            context={
+                "package_id": package_id,
+                "required_field": "execution_policy.validated_execution_policy_id",
+                "manifest_policy_sha256": digest,
+                "reason": (
+                    "Paper v2 does not auto-create BACKTEST_VALIDATED execution-policy evidence "
+                    "from StrategyPackage manifest.minute_execution_policy"
+                ),
+            },
         )
 
     @staticmethod
