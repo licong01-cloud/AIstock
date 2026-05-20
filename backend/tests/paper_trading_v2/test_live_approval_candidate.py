@@ -12,6 +12,7 @@ from backend.services.strategy_package.models import LiveApprovalStatus, Package
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.strategy_package.runtime_variant import derive_locked_core_hash
 from backend.services.trading_core.errors import StrategyPackageValidationError
+from backend.tests.paper_trading_v2.test_day_runner import save_manifest_with_default_execution_policy
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
 
@@ -27,7 +28,7 @@ def _service_fixture() -> tuple[
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = freeze_manifest(make_manifest().model_copy(update={"package_status": PackageStatus.PAPER_ENABLED}))
-    package_repo.save_manifest(manifest)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
     service = PaperTradingV2PortfolioService(package_repository=package_repo, repository=paper_repo)
     return service, package_repo, paper_repo, manifest
 
