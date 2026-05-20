@@ -21,6 +21,7 @@ from backend.tests.paper_trading_v2.test_day_runner import (
     FakeSuspendProvider,
     NoopRefreshAudit,
     make_paper_enabled_manifest,
+    save_manifest_with_default_execution_policy,
     make_raw_bars,
     runtime_with_authoritative_scores,
 )
@@ -30,7 +31,7 @@ def _portfolio_fixture(*, custom_params: dict | None = None):
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_enabled_manifest(topk=2, custom_params=custom_params)
-    package_repo.save_manifest(manifest)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
     service = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,

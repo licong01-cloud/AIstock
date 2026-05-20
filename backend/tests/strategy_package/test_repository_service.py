@@ -518,6 +518,22 @@ def test_strategy_package_execution_policy_rejects_unknown_fields() -> None:
         )
 
 
+def test_strategy_package_execution_policy_requires_successful_source_evidence() -> None:
+    repo = InMemoryStrategyPackageRepository()
+    manifest = freeze_manifest(make_manifest())
+    repo.save_manifest(manifest)
+    service = StrategyPackageService(repository=repo)
+
+    with pytest.raises(StrategyPackageValidationError, match="explicit successful evidence"):
+        service.create_execution_policy(
+            package_id=manifest.package_id,
+            policy_name="failed source policy",
+            policy_json=manifest.minute_execution_policy.model_dump(mode="json"),
+            source_backtest_id="bt_failed",
+            source_backtest_status="FAILED",
+        )
+
+
 def test_strategy_package_execution_policy_accepts_registered_v25_contract_without_paper_runtime() -> None:
     repo = InMemoryStrategyPackageRepository()
     manifest = freeze_manifest(make_manifest())

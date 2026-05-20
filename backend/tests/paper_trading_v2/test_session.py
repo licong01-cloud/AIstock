@@ -29,6 +29,7 @@ from backend.services.trading_core.errors import (
     SessionSourceUnsupportedError,
 )
 from backend.services.trading_core.models import RunStatus
+from backend.tests.paper_trading_v2.test_day_runner import save_manifest_with_default_execution_policy
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
 
@@ -46,7 +47,7 @@ def make_portfolio(*, data_source: MinuteDataSource = MinuteDataSource.DB_HISTOR
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_manifest()
-    package_repo.save_manifest(manifest)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
     portfolio = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,

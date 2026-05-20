@@ -46,6 +46,7 @@ from backend.tests.paper_trading_v2.test_day_runner import (
     FakeSuspendProvider,
     RecordingRefreshAudit,
     make_paper_enabled_manifest,
+    save_manifest_with_default_execution_policy,
     make_raw_bars,
     runtime_with_authoritative_scores,
 )
@@ -86,7 +87,7 @@ def _run_day_with_recording_repo() -> tuple[RecordingInMemoryRepo, str]:
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = RecordingInMemoryRepo()
     manifest = make_paper_enabled_manifest()
-    package_repo.save_manifest(manifest)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
     portfolio = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,

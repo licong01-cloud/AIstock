@@ -27,13 +27,16 @@ from backend.services.trading_core.errors import (
     StrategyPackageValidationError,
 )
 
-from backend.tests.paper_trading_v2.test_day_runner import make_paper_enabled_manifest
+from backend.tests.paper_trading_v2.test_day_runner import (
+    make_paper_enabled_manifest,
+    save_manifest_with_default_execution_policy,
+)
 
 
 def _seed_paper_enabled_package() -> tuple[InMemoryStrategyPackageRepository, Any]:  # type: ignore[name-defined]
     package_repo = InMemoryStrategyPackageRepository()
     manifest = make_paper_enabled_manifest()
-    package_repo.save_manifest(manifest)
+    save_manifest_with_default_execution_policy(package_repo, manifest)
     return package_repo, manifest
 
 

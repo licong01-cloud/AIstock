@@ -9,7 +9,7 @@ import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import { paperV2Api, qmtApi, strategyPackageApi, type QmtStatus } from "@/lib/paper-v2/api";
 import { asText, dataSourceLabel, formatCompact } from "@/lib/paper-v2/format";
-import type { JsonObject, PaperPortfolio, StrategyPackage } from "@/lib/paper-v2/types";
+import type { ExecutionPolicy, JsonObject, PaperPortfolio, StrategyPackage } from "@/lib/paper-v2/types";
 
 function numberValue(row: JsonObject | null | undefined, key: string): number | null {
   const raw = row?.[key];
@@ -47,7 +47,9 @@ export default function PaperV2MiniQMTSimPage() {
   const [trades, setTrades] = useState<JsonObject[]>([]);
   const [portfolios, setPortfolios] = useState<PaperPortfolio[]>([]);
   const [packages, setPackages] = useState<StrategyPackage[]>([]);
+  const [policies, setPolicies] = useState<ExecutionPolicy[]>([]);
   const [packageId, setPackageId] = useState("");
+  const [policyId, setPolicyId] = useState("");
   const [portfolioName, setPortfolioName] = useState(`MiniQMT-${todayIso()}`);
   const [initialCash, setInitialCash] = useState(100000);
   const [loading, setLoading] = useState(false);
@@ -110,6 +112,30 @@ export default function PaperV2MiniQMTSimPage() {
     }
   }, [eligiblePackages, packageId]);
 
+  useEffect(() => {
+    if (!packageId) {
+      setPolicies([]);
+      setPolicyId("");
+      return;
+    }
+    let alive = true;
+    strategyPackageApi.executionPolicies(packageId).then((rows) => {
+      if (!alive) return;
+      setPolicies(rows);
+      setPolicyId((current) => {
+        const currentPolicy = rows.find((item) => item.policy_id === current && item.paper_enabled);
+        if (currentPolicy) return current;
+        return rows.find((item) => item.paper_enabled)?.policy_id || "";
+      });
+    }).catch((exc) => {
+      if (!alive) return;
+      setPolicies([]);
+      setPolicyId("");
+      setError(exc);
+    });
+    return () => { alive = false; };
+  }, [packageId]);
+
   async function connect() {
     setConnecting(true);
     setError(null);
@@ -128,6 +154,7 @@ export default function PaperV2MiniQMTSimPage() {
     setError(null);
     try {
       if (!packageId) throw new Error("请先选择可用于模拟盘的策略包。");
+      if (!policyId) throw new Error("Select a paper-enabled validated execution policy before creating MiniQMT portfolio.");
       await paperV2Api.createPortfolio({
         package_id: packageId,
         portfolio_name: portfolioName.trim() || `MiniQMT-${todayIso()}`,
@@ -135,6 +162,7 @@ export default function PaperV2MiniQMTSimPage() {
         start_date: todayIso(),
         data_source: "MINIQMT_REALTIME",
         broker_backend: "minqmt_sim",
+        execution_policy: { validated_execution_policy_id: policyId },
       });
       await load();
     } catch (exc) {
@@ -158,9 +186,10 @@ export default function PaperV2MiniQMTSimPage() {
         AIstock 只生成买卖方向、代码、数量和提交时间；MiniQMT 是唯一委托、拒单、成交、资金和持仓权威。本页面不会用 TDX、DB、tick 或 LocalSim 补成交，也不会展示每策略真实资金池。
       </NoticePanel>
 
-      <SectionCard title="创建 MiniQMT 独占账号组合" eyebrow="exclusive account only" action={<button className="pv2-button-primary" onClick={createExclusivePortfolio} disabled={creating || !connected || !simMode || !packageId} type="button">{creating ? "创建中..." : "创建组合"}</button>}>
+      <SectionCard title="创建 MiniQMT 独占账号组合" eyebrow="exclusive account only" action={<button className="pv2-button-primary" onClick={createExclusivePortfolio} disabled={creating || !connected || !simMode || !packageId || !policyId} type="button">{creating ? "创建中..." : "创建组合"}</button>}>
         <div className="pv2-form-grid">
           <div className="pv2-field"><label>策略包</label><select className="pv2-select" value={packageId} onChange={(event) => setPackageId(event.target.value)}>{eligiblePackages.map((item) => <option value={item.package_id} key={item.package_id}>{item.package_name} / {item.package_status}</option>)}</select></div>
+          <div className="pv2-field"><label>Validated execution policy</label><select className="pv2-select" value={policyId} onChange={(event) => setPolicyId(event.target.value)}><option value="">Required paper-enabled policy</option>{policies.map((item) => <option value={item.policy_id} key={item.policy_id} disabled={!item.paper_enabled}>{item.policy_name || item.policy_id} / {item.algo_code} / {item.paper_enabled ? "paper_enabled" : "disabled"}</option>)}</select></div>
           <div className="pv2-field"><label>组合名称</label><input className="pv2-input" value={portfolioName} onChange={(event) => setPortfolioName(event.target.value)} /></div>
           <div className="pv2-field"><label>本地兼容资金字段</label><input className="pv2-input" type="number" min={1} value={initialCash} onChange={(event) => setInitialCash(Number(event.target.value))} /></div>
           <div className="pv2-field"><label>Broker / 数据通道</label><input className="pv2-input" value="minqmt_sim / MINIQMT_REALTIME" readOnly /></div>

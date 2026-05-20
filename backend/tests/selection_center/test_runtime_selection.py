@@ -2099,6 +2099,14 @@ def test_selection_center_creates_single_package_paper_portfolio_with_trace_link
         [{"symbol": "000001.SZ", "score": 0.99, "rank": 1, "target_weight": 0.03, "reference_price": 10.0}],
     )
     package_repo.save_manifest(manifest)
+    StrategyPackageService(repository=package_repo).create_execution_policy(
+        package_id=manifest.package_id,
+        policy_name="selection_link_default_policy",
+        policy_json=manifest.minute_execution_policy.model_dump(mode="json"),
+        source_backtest_id="selection_link_backtest",
+        source_backtest_status="COMPLETED",
+        paper_enabled=True,
+    )
     selection_repo = InMemorySelectionCenterRepository()
     service = SelectionCenterService(
         package_repository=package_repo,

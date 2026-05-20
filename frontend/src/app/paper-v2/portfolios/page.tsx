@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import ErrorPanel from "@/components/paper-v2/ErrorPanel";
-import JsonPanel from "@/components/paper-v2/JsonPanel";
 import NoticePanel from "@/components/paper-v2/NoticePanel";
 import PaperTable from "@/components/paper-v2/PaperTable";
 import SectionCard from "@/components/paper-v2/SectionCard";
@@ -182,6 +181,7 @@ export default function PaperV2PortfoliosPage() {
       if (!packageId) throw new Error("请先选择 StrategyPackage。");
       if (topK < 1 || topK > 50) throw new Error("TopK 必须在 1 到 50 之间。");
       if (hmmEnabled && (!hmmConfigId || !hmmSnapshotId)) throw new Error("启用 HMM 时必须选择模型版本和已完成快照。");
+      if (!policyId) throw new Error("Select a paper-enabled validated execution policy before creating portfolio.");
       if (sessionMode !== "LIVE_ONLY" && dataSource !== "DB_HISTORICAL") throw new Error(`历史追赶必须使用「${dataSourceLabel("DB_HISTORICAL")}」数据源。`);
       const isReplayOnly = sessionMode === "REPLAY_ONLY";
       const isCatchupThenLive = sessionMode === "CATCHUP_THEN_LIVE";
@@ -267,7 +267,7 @@ export default function PaperV2PortfoliosPage() {
             <div className="pv2-field"><label>初始资金</label><input className="pv2-input" data-testid="portfolio-initial-cash" type="number" min={1} value={initialCash} onChange={(event) => setInitialCash(Number(event.target.value))} /></div>
             <div className="pv2-field"><label>运行场景</label><select className="pv2-select" data-testid="portfolio-start-mode" value={sessionMode} onChange={(event) => setSessionMode(event.target.value as PaperSessionMode)}>{SESSION_MODE_OPTIONS.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}</select></div>
             <div className="pv2-field"><label>数据源</label><input className="pv2-input" data-testid="portfolio-data-source" value={dataSourceLabel(dataSource)} readOnly /></div>
-            <div className="pv2-field"><label>已验证执行策略</label><select className="pv2-select" data-testid="portfolio-policy" value={policyId} onChange={(event) => setPolicyId(event.target.value)}><option value="">Manifest 默认策略（后端会导入并校验）</option>{policies.map((item) => <option value={item.policy_id} key={item.policy_id}>{item.policy_name || item.policy_id} / {item.algo_code} / {item.paper_enabled ? "可用于模拟盘" : "未启用"}</option>)}</select></div>
+            <div className="pv2-field"><label>已验证执行策略</label><select className="pv2-select" data-testid="portfolio-policy" value={policyId} onChange={(event) => setPolicyId(event.target.value)}><option value="">Select paper-enabled validated policy (required; no manifest auto-import)</option>{policies.map((item) => <option value={item.policy_id} key={item.policy_id}>{item.policy_name || item.policy_id} / {item.algo_code} / {item.paper_enabled ? "可用于模拟盘" : "未启用"}</option>)}</select></div>
             {sessionMode !== "LIVE_ONLY" ? <>
               <div className="pv2-field"><label>历史追赶开始</label><input className="pv2-input" data-testid="portfolio-replay-start" type="date" value={replayStart} onChange={(event) => setReplayStart(event.target.value)} /></div>
               <div className="pv2-field"><label>历史追赶结束</label><input className="pv2-input" data-testid="portfolio-replay-end" type="date" value={replayEnd} onChange={(event) => setReplayEnd(event.target.value)} /></div>
@@ -302,8 +302,15 @@ export default function PaperV2PortfoliosPage() {
               {selectedPackage?.manifest_sha256 ? <CopyChip label={`manifest ${shortHash(selectedPackage.manifest_sha256, 6)}`} value={selectedPackage.manifest_sha256} title={`完整 manifest_sha256：${selectedPackage.manifest_sha256}`} /> : null}
             </div>
           </div>
-          <button className="pv2-button-primary" data-testid="portfolio-create" onClick={createPortfolio} disabled={busy} type="button">{busy ? "处理中..." : sessionMode === "LIVE_ONLY" ? "创建完全实时模拟盘" : sessionMode === "CATCHUP_THEN_LIVE" ? "创建并追赶后自动实时" : "创建并仅历史追赶"}</button>
-          {created ? <JsonPanel value={{ created_portfolio_id: created.portfolio_id, package_id: created.package_id, manifest_sha256: created.manifest_sha256, runtime_profile_version: createdRuntimeVersion, session_progress: sessionProgress }} /> : null}
+          <button className="pv2-button-primary" data-testid="portfolio-create" onClick={createPortfolio} disabled={busy || !policyId} type="button">{busy ? "处理中..." : sessionMode === "LIVE_ONLY" ? "创建完全实时模拟盘" : sessionMode === "CATCHUP_THEN_LIVE" ? "创建并追赶后自动实时" : "创建并仅历史追赶"}</button>
+          {created ? (
+            <NoticePanel title="模拟盘组合已创建" tone="success">
+              组合 {created.portfolio_name} 已绑定策略包 {shortHash(created.package_id, 7)}
+              ，manifest {shortHash(created.manifest_sha256, 7)}
+              ，运行配置版本 {createdRuntimeVersion?.profile_version_id ? shortHash(createdRuntimeVersion.profile_version_id, 7) : "-"}
+              ，会话状态 {sessionProgress?.session_status ?? "-"}。
+            </NoticePanel>
+          ) : null}
         </SectionCard>
 
         <SectionCard title="组合生命周期规则" eyebrow="防止假成功">

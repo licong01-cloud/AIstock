@@ -17,6 +17,7 @@ from .candidate import (
     CandidateStrategyPackageStatus,
 )
 from .execution_policy import (
+    BACKTEST_SUCCESS_STATUSES,
     ExecutionPolicyValidationStatus,
     ValidatedExecutionPolicy,
     ensure_policy_can_enter_paper,
@@ -461,13 +462,24 @@ class StrategyPackageService:
     ) -> ValidatedExecutionPolicy:
         record = self.repository.get(package_id)
         normalized = normalize_execution_policy_json(policy_json)
+        normalized_status = source_backtest_status.strip().upper()
+        if normalized_status not in BACKTEST_SUCCESS_STATUSES:
+            raise StrategyPackageValidationError(
+                "execution policy source backtest must have explicit successful evidence",
+                context={
+                    "package_id": package_id,
+                    "source_backtest_id": source_backtest_id,
+                    "source_backtest_status": source_backtest_status,
+                    "allowed_source_backtest_statuses": sorted(BACKTEST_SUCCESS_STATUSES),
+                },
+            )
         policy = ValidatedExecutionPolicy(
             package_id=package_id,
             manifest_sha256=record.manifest_sha256,
             policy_name=policy_name,
             policy_json=normalized,
             source_backtest_id=source_backtest_id,
-            source_backtest_status=source_backtest_status,
+            source_backtest_status=normalized_status,
             validation_status=ExecutionPolicyValidationStatus.BACKTEST_VALIDATED,
             paper_enabled=paper_enabled,
         )

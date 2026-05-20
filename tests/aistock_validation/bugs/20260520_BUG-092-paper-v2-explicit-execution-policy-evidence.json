@@ -1,0 +1,140 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-092",
+  "title": "Paper v2 auto-creates manifest minute policy as BACKTEST_VALIDATED execution policy without explicit evidence",
+  "description": "ValidatedExecutionPolicy records must be created from explicit backtest or simulation evidence. PaperTradingV2PortfolioService._ensure_default_manifest_execution_policy currently normalizes manifest.minute_execution_policy, creates manifest_default_execution_policy when no policy exists, and marks it source_backtest_status=BACKTEST_VALIDATED with paper_enabled=True. This can convert manifest runtime fields into paper-approved execution authority without a durable proof object.",
+  "module": "paper_v2",
+  "severity": "P1",
+  "risk_area": "execution_policy_validation_evidence",
+  "status": "fixed",
+  "github_issue_number": 111,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/111",
+  "trigger_condition": {
+    "scenario": "strategy_package_platform_boundary_audit_20260520",
+    "files": [
+      "backend/services/paper_trading_v2/service.py",
+      "backend/services/strategy_package/service.py",
+      "backend/tests/paper_trading_v2/test_day_runner.py",
+      "backend/tests/paper_trading_v2/test_capture_field_wiring.py",
+      "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+      "backend/tests/paper_trading_v2/test_portfolio_broker_backend.py",
+      "backend/tests/paper_trading_v2/test_runtime_profile.py",
+      "backend/tests/paper_trading_v2/test_session.py",
+      "backend/tests/strategy_package/test_repository_service.py",
+      "frontend/src/app/paper-v2/portfolios/page.tsx",
+      "frontend/src/app/paper-v2/miniqmt-sim/page.tsx",
+      "backend/tests/selection_center/test_runtime_selection.py",
+      "tests/aistock_validation/history/paper_trading_v2/20260520_l3_bug-092-explicit-execution-policy-evidence-validation.md"
+    ]
+  },
+  "reproduce_command": "rg -n \"_ensure_default_manifest_execution_policy|manifest_default_execution_policy|source_backtest_status=\\\"BACKTEST_VALIDATED\\\"|paper_enabled=True|manifest.minute_execution_policy|create_execution_policy\" backend/services/paper_trading_v2/service.py backend/services/strategy_package -S",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:backend/services/paper_trading_v2/service.py",
+    "file:backend/services/strategy_package/service.py",
+    "file:backend/tests/paper_trading_v2/test_day_runner.py",
+    "file:backend/tests/paper_trading_v2/test_capture_field_wiring.py",
+    "file:backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+    "file:backend/tests/paper_trading_v2/test_portfolio_broker_backend.py",
+    "file:backend/tests/paper_trading_v2/test_runtime_profile.py",
+    "file:backend/tests/paper_trading_v2/test_session.py",
+    "file:backend/tests/strategy_package/test_repository_service.py",
+    "file:frontend/src/app/paper-v2/portfolios/page.tsx",
+    "file:frontend/src/app/paper-v2/miniqmt-sim/page.tsx",
+    "github:https://github.com/licong01-cloud/AIstock/issues/111",
+    "file:backend/tests/selection_center/test_runtime_selection.py",
+    "file:tests/aistock_validation/history/paper_trading_v2/20260520_l3_bug-092-explicit-execution-policy-evidence-validation.md"
+  ],
+  "fingerprint": "paper_v2::execution_policy::manifest_default_without_durable_evidence",
+  "assigned_agent": "codex-app",
+  "fix_branch": "bug/BUG-092-paper-v2-explicit-execution-policy-evidence",
+  "fix_commit": "8fcc6ee",
+  "verification_run_id": "tests/aistock_validation/history/paper_trading_v2/20260520_l3_bug-092-explicit-execution-policy-evidence-validation.md",
+  "created_at": "2026-05-20T16:09:17Z",
+  "first_seen_at": "2026-05-20T04:32:56Z",
+  "last_seen_at": "2026-05-20T17:02:08Z",
+  "fixed_at": "2026-05-20T16:56:18Z",
+  "submitted_at": "2026-05-20T16:09:17Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/service.py",
+    "backend/services/strategy_package/service.py",
+    "backend/tests/paper_trading_v2/test_day_runner.py",
+    "backend/tests/paper_trading_v2/test_capture_field_wiring.py",
+    "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+    "backend/tests/paper_trading_v2/test_portfolio_broker_backend.py",
+    "backend/tests/paper_trading_v2/test_runtime_profile.py",
+    "backend/tests/paper_trading_v2/test_session.py",
+    "backend/tests/strategy_package/test_repository_service.py",
+    "frontend/src/app/paper-v2/portfolios/page.tsx",
+    "frontend/src/app/paper-v2/miniqmt-sim/page.tsx",
+    "tests/aistock_validation/bugs/20260520_BUG-092-paper-v2-explicit-execution-policy-evidence.json",
+    "tests/aistock_validation/history/paper_trading_v2/20260520_l3_bug-092-explicit-execution-policy-evidence-validation.md"
+  ],
+  "suspected_modules": [
+    "backend/services/paper_trading_v2/service.py",
+    "backend/services/strategy_package/service.py",
+    "backend/tests/paper_trading_v2/test_day_runner.py",
+    "backend/tests/paper_trading_v2/test_capture_field_wiring.py",
+    "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+    "backend/tests/paper_trading_v2/test_portfolio_broker_backend.py",
+    "backend/tests/paper_trading_v2/test_runtime_profile.py",
+    "backend/tests/paper_trading_v2/test_session.py",
+    "backend/tests/strategy_package/test_repository_service.py",
+    "frontend/src/app/paper-v2/portfolios/page.tsx",
+    "frontend/src/app/paper-v2/miniqmt-sim/page.tsx",
+    "backend/tests/selection_center/test_runtime_selection.py"
+  ],
+  "required_verification": [
+    "Creating a paper portfolio without an explicit validated execution policy fails and does not create a manifest_default_execution_policy.",
+    "Creating Paper v2 / MiniQMTSim portfolios with an explicit paper_enabled validated execution policy still succeeds.",
+    "StrategyPackage execution-policy creation rejects unsuccessful source backtest evidence.",
+    "Tests still reject raw paper-only execution overrides and unknown fallback algos.",
+    "Runs persist the validated policy id/hash/json and source evidence used.",
+    "Frontend portfolio and MiniQMTSim create flows require a selected paper-enabled validated execution policy instead of relying on manifest auto-import.",
+    "Design-compliance matrix confirms manifest minute policy is not treated as automatic Paper/MiniQMT execution authority."
+  ],
+  "closure_requirements": [
+    "ValidatedExecutionPolicy creation requires explicit evidence or a verified import path.",
+    "Manifest minute policy is not treated as automatic paper-approved execution authority.",
+    "GitHub issue #111 and local BUG-092 registry stay linked and status-synced."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-20T04:32:56Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Initial GitHub issue was drafted as BUG-089 from a stale registry context."
+    },
+    {
+      "timestamp": "2026-05-20T16:09:17Z",
+      "actor": "codex-app",
+      "action": "renumbered_and_assigned",
+      "note": "Renumbered to BUG-092 because origin/main already contains BUG-089 and BUG-090 registry records; started dedicated worktree fix branch."
+    },
+    {
+      "timestamp": "2026-05-20T16:34:59Z",
+      "actor": "codex-app",
+      "action": "scope_updated",
+      "note": "Expanded scope to actual Paper v2 tests and UI create flows after implementation removed backend manifest auto-import."
+    },
+    {
+      "timestamp": "2026-05-20T16:56:18Z",
+      "actor": "codex-app",
+      "action": "implementation_completed",
+      "note": "Removed Paper v2 manifest auto-import, required explicit validated execution-policy evidence in backend/UI, and added regression coverage."
+    },
+    {
+      "timestamp": "2026-05-20T16:56:18Z",
+      "actor": "codex-app",
+      "action": "validation_passed",
+      "note": "Local validation passed: focused pytest, paper_v2 module pytest, strategy_package+paper_v2 pytest, selection-center focused pytest, compileall, frontend lint, nox paper_v2_backend, nox validation_module_registry_l0, nox guardrail_changed_files, nox l0, and git diff --check."
+    },
+    {
+      "timestamp": "2026-05-20T17:02:08Z",
+      "actor": "codex-app",
+      "action": "local_commit_created",
+      "note": "Committed BUG-092 fix locally as 8fcc6ee."
+    }
+  ]
+}
