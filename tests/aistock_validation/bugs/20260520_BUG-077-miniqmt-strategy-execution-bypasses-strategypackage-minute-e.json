@@ -6,7 +6,7 @@
   "module": "qmt_strategy_ledger",
   "severity": "P0",
   "risk_area": "strategy_package_runtime_contract",
-  "status": "in_progress",
+  "status": "fixed",
   "trigger_condition": {
     "scenario": "reported_via_mcp",
     "files": [
@@ -33,12 +33,12 @@
   "fingerprint": "cb4a78bb6226c42d",
   "assigned_agent": "codex-app",
   "fix_branch": "bug/BUG-077-miniqmt-strategy-execution-boundary",
-  "fix_commit": null,
+  "fix_commit": "6de7d16",
   "verification_run_id": "qmt_strategy_ledger/20260520_l3_bug-077-miniqmt-strategy-execution-boundary",
   "created_at": "2026-05-20T03:15:14Z",
   "first_seen_at": "2026-05-20T03:15:14Z",
   "last_seen_at": "2026-05-20T03:15:14Z",
-  "fixed_at": null,
+  "fixed_at": "2026-05-20T05:23:33Z",
   "submitted_at": "2026-05-20T03:15:14Z",
   "closed_at": null,
   "allowed_write_scope": [
@@ -156,6 +156,12 @@
       "actor": "codex-app",
       "action": "verification",
       "note": "compileall, validation_module_registry_l0, l0, git diff --check, and git diff --cached --check passed; production 8001/3000, DB, and MiniQMT broker runtime were not touched."
+    },
+    {
+      "timestamp": "2026-05-20T05:23:33Z",
+      "actor": "codex-app",
+      "action": "fixed",
+      "note": "Fix committed locally as 6de7d16 fix(qmt): block legacy selection order strategy execution; branch passed targeted, module, trading-core, compile, guardrail, l0, and diff checks."
     }
   ],
   "github_issue_number": 104,
