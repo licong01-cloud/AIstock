@@ -6,7 +6,7 @@
   "module": "local_data_management",
   "severity": "P1",
   "risk_area": "unspecified",
-  "status": "fixed",
+  "status": "verified",
   "trigger_condition": {
     "scenario": "reported_via_mcp",
     "files": [
@@ -33,10 +33,10 @@
   "verification_run_id": "tests/aistock_validation/history/local_data_management/20260519_data_sync_autonomy_l2.md",
   "created_at": "2026-05-19T17:28:03Z",
   "first_seen_at": "2026-05-19T17:28:03Z",
-  "last_seen_at": "2026-05-19T18:18:51Z",
+  "last_seen_at": "2026-05-20T14:04:53Z",
   "fixed_at": "2026-05-19T18:18:51Z",
   "submitted_at": "2026-05-19T17:28:03Z",
-  "closed_at": null,
+  "closed_at": "2026-05-20T14:04:53Z",
   "allowed_write_scope": [
     "backend/services/validation/plan_catalog.py",
     "tests/aistock_validation/catalog/test_plans.yaml",
@@ -103,6 +103,12 @@
       "actor": "codex-app",
       "action": "fixed",
       "note": "Fixed by commit 88451e0: default catalog regression, controlled runner regression, env/dev-DB smoke loading, nox coverage, dev DB schema verification, and merge-tree preview all passed."
+    },
+    {
+      "timestamp": "2026-05-20T14:04:53Z",
+      "actor": "codex-app",
+      "action": "verified",
+      "note": "Merged into local main with merge commit 47090dd and reran data_sync_autonomy_backend/local_data_management_audit successfully before pushing GitHub main."
     }
   ],
   "github_issue_number": 93,
