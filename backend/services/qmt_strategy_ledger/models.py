@@ -372,6 +372,26 @@ class StrategyPackageBinding:
 
 
 @dataclass(frozen=True)
+class StrategyBindingSelectionEvidence:
+    evidence_id: str
+    binding_id: str
+    strategy_id: str
+    package_id: str
+    selection_run_id: str
+    trade_date: date
+    data_source: str
+    manifest_sha256: str
+    runtime_config_hash: str
+    artifact_id: str | None = None
+    artifact_sha256: str | None = None
+    source_type: str | None = None
+    authority_scope: str | None = None
+    score_count: int | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass(frozen=True)
 class OrderBatchRecord:
     batch_id: str
     account_id: str

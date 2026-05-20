@@ -1,0 +1,106 @@
+{
+  "bug_id": "BUG-090",
+  "schema_version": "aistock_validation_bug_v1",
+  "title": "Shared strategy engine is not the single decision path across Selection Paper and MiniQMT",
+  "description": "Expected: QE, Selection Center, Paper v2, MiniQMT SIM, and future live adapters should share one strategy decision core for daily target/rebalance intents. Given the same package alpha core, score frame, runtime release/profile, current positions, and seed, the system should produce the same OrderIntent sequence before broker adapter differences. LocalSim and MiniQMT adapter differences should only affect order submission, fills, NAV, and reconciliation.\nActual: Paper v2 day_runner/live_session uses StrategyPackageRuntime plus TargetPositionEngine/RebalanceEngine. MiniQMT qmt_strategy_ledger uses SelectionOrderBuilder directly from SelectionRun and virtual lot state. These are separate decision paths with different target sizing, sell/reduce behavior, top_k sources, board-lot application, and execution-policy handling. The documented Strategy Engine design exists, but it is not the single enforced path.",
+  "module": "paper_v2",
+  "severity": "P1",
+  "risk_area": "strategy_engine_decision_consistency",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "reported_via_codex_app_strategy_platform_boundary_audit_20260520",
+    "boundary_contract": "docs/architecture/strategy_package_platform_boundary_contract_20260520.md",
+    "files": [
+      "backend/services/strategy_package/runtime.py",
+      "backend/services/paper_trading_v2/day_runner.py",
+      "backend/services/paper_trading_v2/live_session.py",
+      "backend/services/paper_trading_v2/readiness.py",
+      "backend/services/qmt_strategy_ledger/selection_order_builder.py",
+      "backend/services/qmt_strategy_ledger/order_service.py",
+      "backend/services/trading_core",
+      "backend/tests/paper_trading_v2",
+      "backend/tests/qmt_strategy_ledger",
+      "docs/architecture/strategy_engine_design_20260508.md"
+    ]
+  },
+  "reproduce_command": "rg -n \"class TargetPositionEngine|class RebalanceEngine|class SelectionOrderBuilder|build_order_intents|build_for_active_binding|build_targets|Strategy Engine|OrderIntent\" backend/services/strategy_package backend/services/paper_trading_v2 backend/services/qmt_strategy_ledger docs/architecture/strategy_engine_design_20260508.md -S",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:backend/services/strategy_package/runtime.py",
+    "file:backend/services/paper_trading_v2/day_runner.py",
+    "file:backend/services/paper_trading_v2/live_session.py",
+    "file:backend/services/paper_trading_v2/readiness.py",
+    "file:backend/services/qmt_strategy_ledger/selection_order_builder.py",
+    "file:backend/services/qmt_strategy_ledger/order_service.py",
+    "file:backend/services/trading_core",
+    "file:backend/tests/paper_trading_v2",
+    "file:backend/tests/qmt_strategy_ledger",
+    "file:docs/architecture/strategy_engine_design_20260508.md"
+  ],
+  "fingerprint": "8f34db5d07d77deb",
+  "github_issue_number": 112,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/112",
+  "assigned_agent": "codex-app",
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-20T04:32:40Z",
+  "first_seen_at": "2026-05-20T04:32:40Z",
+  "last_seen_at": "2026-05-20T04:32:40Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-20T04:32:40Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/strategy_package/runtime.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/paper_trading_v2/live_session.py",
+    "backend/services/paper_trading_v2/readiness.py",
+    "backend/services/qmt_strategy_ledger/selection_order_builder.py",
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/services/trading_core",
+    "backend/tests/paper_trading_v2",
+    "backend/tests/qmt_strategy_ledger",
+    "docs/architecture/strategy_engine_design_20260508.md"
+  ],
+  "suspected_modules": [
+    "backend/services/strategy_package/runtime.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/paper_trading_v2/live_session.py",
+    "backend/services/paper_trading_v2/readiness.py",
+    "backend/services/qmt_strategy_ledger/selection_order_builder.py",
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/services/trading_core",
+    "backend/tests/paper_trading_v2",
+    "backend/tests/qmt_strategy_ledger",
+    "docs/architecture/strategy_engine_design_20260508.md"
+  ],
+  "required_verification": [
+    "Cross-adapter tests prove the same score frame/current positions/runtime release produce the same decision-layer OrderIntent sequence.",
+    "MiniQMT ledger no longer contains an independent final strategy decision algorithm outside the shared engine.",
+    "Adapter differences are limited to order submission, broker state, fills, NAV, and reconciliation."
+  ],
+  "closure_requirements": [
+    "A single decision engine or explicitly equivalent shared core is used by Selection/Paper/MiniQMT execution paths.",
+    "SelectionOrderBuilder is removed, reduced to a legacy adapter, or fail-fast guarded from StrategyPackage execution."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-20T04:32:40Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Created from 2026-05-20 StrategyPackage/platform boundary audit; no runtime code changed in this issue creation step."
+    },
+    {
+      "timestamp": "2026-05-20T04:32:40Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Mirrored BUG-090 to GitHub issue #112 in the same flow."
+    },
+    {
+      "timestamp": "2026-05-20T04:32:40Z",
+      "actor": "codex-app",
+      "action": "github_sync_verified",
+      "note": "GitHub issue #112 URL recorded in local BUG JSON."
+    }
+  ]
+}

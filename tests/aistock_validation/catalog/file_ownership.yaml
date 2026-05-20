@@ -195,11 +195,12 @@ rules:
     include:
       - backend/services/strategy_package/**
       - backend/routers/strategy_package*.py
+      - docs/contracts/strategy_package*.md
     primary_module: strategy_package
     impact_modules: [paper_v2, selection_center, qe.single_experiment]
     layer: backend_service
     risk_level: high
-    ownership_reason: Strategy package manifests and assets bridge research and paper workflows.
+    ownership_reason: Strategy package manifests, contracts, and assets bridge research and paper workflows.
   - rule_id: execution_algos_runtime
     priority: 80
     include:

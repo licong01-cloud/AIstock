@@ -294,7 +294,12 @@ class SelectionCenterService:
         package_id: str,
     ) -> dict[str, Any]:
         if not self._st_pit_authoritative(runtime_config):
-            return normalize_selection_runtime_config(runtime_config)
+            return normalize_runtime_config_with_backtest_contract(
+                manifest,
+                runtime_config,
+                context={"package_id": package_id, "check": "selection_center"},
+                include_contract=True,
+            )
 
         contract_input, display_top_n = self._contract_input_with_display_top_n(runtime_config)
         normalized = normalize_runtime_config_with_backtest_contract(
@@ -302,6 +307,7 @@ class SelectionCenterService:
             contract_input,
             context={"package_id": package_id, "check": "selection_center"},
             include_contract=True,
+            inherit_source_defaults=False,
         )
         normalized["st_pit_authoritative"] = True
         if display_top_n is not None:
@@ -413,24 +419,32 @@ class SelectionCenterService:
     ) -> int:
         configured = package_profile.selection.top_k or global_profile.selection.top_k
         if configured is None:
-            variant = (package_config or {}).get("runtime_variant")
-            variant_config = variant.get("variant_config") if isinstance(variant, dict) else None
-            if isinstance(variant_config, dict):
-                strategy_config = variant_config.get("strategy_config")
-                if isinstance(strategy_config, dict):
-                    custom_params = strategy_config.get("custom_params")
-                    if isinstance(custom_params, dict) and custom_params.get("topk") is not None:
-                        configured = custom_params.get("topk")
-                portfolio_policy = variant_config.get("portfolio_policy")
-                if configured is None and isinstance(portfolio_policy, dict) and portfolio_policy.get("topk") is not None:
-                    configured = portfolio_policy.get("topk")
-        top_k = int(configured if configured is not None else manifest.portfolio_policy.topk)
+            configured = SelectionCenterService._contract_top_k(package_config)
+        if configured is None:
+            raise StrategyPackageValidationError(
+                "selection runtime_profile.selection.top_k is required; StrategyPackage manifest cannot provide runtime top_k",
+                context={"package_id": manifest.package_id, "manifest_version": getattr(manifest, "manifest_version", None)},
+            )
+        top_k = int(configured)
         if top_k <= 0 or top_k > 50:
             raise StrategyPackageValidationError(
                 "selection top_k must be between 1 and 50",
                 context={"package_id": manifest.package_id, "top_k": top_k, "max_top_k": 50},
             )
         return top_k
+
+    @staticmethod
+    def _contract_top_k(package_config: dict[str, Any] | None) -> int | None:
+        contract = (package_config or {}).get("qe_backtest_runtime_contract")
+        if not isinstance(contract, dict):
+            return None
+        strategy = contract.get("portfolio_strategy")
+        if not isinstance(strategy, dict):
+            return None
+        params = strategy.get("params")
+        if not isinstance(params, dict) or params.get("topk") is None:
+            return None
+        return int(params["topk"])
 
     def _ensure_authoritative_selection_artifact(
         self,
@@ -692,7 +706,7 @@ class SelectionCenterService:
                     "manifest_sha256": record.manifest_sha256,
                     "alpha_mode": manifest.alpha_mode.value,
                     "alpha_count": len(manifest.alpha_components),
-                    "portfolio_topk": manifest.portfolio_policy.topk,
+                    "portfolio_topk": self._display_portfolio_topk(manifest),
                     "created_at": record.created_at.isoformat(),
                     "updated_at": record.updated_at.isoformat(),
                     "metrics_summary": metrics_summary_from_record(record).model_dump(mode="json"),
@@ -702,6 +716,15 @@ class SelectionCenterService:
                 }
             )
         return items
+
+    @staticmethod
+    def _display_portfolio_topk(manifest: Any) -> int | None:
+        daily_strategy = (manifest.backtest_context or {}).get("daily_strategy")
+        if isinstance(daily_strategy, dict) and daily_strategy.get("topk") is not None:
+            return int(daily_strategy["topk"])
+        if getattr(manifest, "is_legacy_runtime_manifest", False) and manifest.portfolio_policy is not None:
+            return int(manifest.portfolio_policy.topk)
+        return None
 
     def aggregate_existing_runs(
         self,
