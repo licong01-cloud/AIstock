@@ -33,7 +33,7 @@
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/108",
   "assigned_agent": "codex-app",
   "fix_branch": "bug/BUG-086-runtime-config-activation-boundary",
-  "fix_commit": "fa2e54b",
+  "fix_commit": "8428a6e",
   "verification_run_id": "tests/aistock_validation/history/paper_v2/BUG-086-runtime-config-activation-boundary-validation-20260520.md",
   "created_at": "2026-05-20T10:09:55Z",
   "first_seen_at": "2026-05-20T10:09:55Z",
@@ -95,7 +95,7 @@
       "timestamp": "2026-05-20T10:55:00Z",
       "actor": "codex-app",
       "action": "committed_fix",
-      "note": "Committed BUG-086 fix locally as fa2e54b on bug/BUG-086-runtime-config-activation-boundary."
+      "note": "Committed BUG-086 code/validation fix locally as 8428a6e on bug/BUG-086-runtime-config-activation-boundary; registry correction follows in this branch."
     }
   ]
 }
