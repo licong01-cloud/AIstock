@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timezone
@@ -17,7 +17,7 @@ from backend.services.strategy_package.validation_run import (
     PackageValidationStatus,
     PackageValidationType,
 )
-from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, StrategyPackageValidationError, UnsupportedFeatureError
+from backend.services.trading_core.errors import InvalidStateTransitionError, StrategyPackageValidationError, UnsupportedFeatureError
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
 import pytest
@@ -535,8 +535,8 @@ def test_strategy_package_execution_policy_accepts_registered_v25_contract_witho
 
     assert policy.algo_code == "V25_TWO_STAGE"
 
-    with pytest.raises(DataUnavailableError, match="early_model_path"):
-        service.enable_execution_policy_for_paper(manifest.package_id, policy.policy_id)
+    enabled = service.enable_execution_policy_for_paper(manifest.package_id, policy.policy_id)
+    assert enabled.paper_enabled is True
 
 
 def test_strategy_package_rejects_v25_default_day_features_for_paper() -> None:

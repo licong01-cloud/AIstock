@@ -7,6 +7,7 @@ from typing import Any
 
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
 from backend.services.paper_trading_v2.market_data import MinuteDataSource, TradeCalendarProvider
+from backend.services.strategy_package.repository import StrategyPackageRepository
 from backend.services.trading_core.errors import StrategyPackageValidationError, UnsupportedFeatureError
 
 from .models import PaperReplayDayResult, PaperReplayResult
@@ -25,13 +26,16 @@ class PaperTradingHistoricalReplay:
         self,
         *,
         repository: PaperTradingV2Repository | Any | None = None,
+        package_repository: StrategyPackageRepository | Any | None = None,
         calendar_provider: TradeCalendarProvider | Any | None = None,
         day_runner: PaperTradingDayRunner | None = None,
     ) -> None:
         self.repository = repository or PaperTradingV2Repository()
+        self.package_repository = package_repository
         self.calendar_provider = calendar_provider or TradeCalendarProvider()
         self.day_runner = day_runner or PaperTradingDayRunner(
             repository=self.repository,
+            package_repository=self.package_repository,
             calendar_provider=self.calendar_provider,
         )
 

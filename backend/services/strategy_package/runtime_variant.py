@@ -20,7 +20,6 @@ class RuntimeVariantKind(str, Enum):
     STRATEGY_CONFIG = "strategy_config"
     EXECUTION_POLICY = "execution_policy"
     RISK_POLICY = "risk_policy"
-    HMM_OVERLAY = "hmm_overlay"
     COMBINED = "combined"
 
 
@@ -57,7 +56,6 @@ _ALLOWED_RUNTIME_KEYS = {
     "execution_policy",
     "minute_execution_policy",
     "risk_policy",
-    "hmm_overlay",
     "notes",
 }
 _FORBIDDEN_CORE_KEYS = {
@@ -127,6 +125,11 @@ def build_runtime_variant(
         raise StrategyPackageValidationError("runtime variant name is required")
     if not created_by.strip():
         raise StrategyPackageValidationError("runtime variant created_by is required")
+    if variant_kind.value == "hmm_overlay" or "hmm_overlay" in variant_config:
+        raise StrategyPackageValidationError(
+            "HMM is a platform runtime capability and cannot be saved as a StrategyPackage runtime variant",
+            context={"variant_kind": variant_kind.value, "variant_keys": sorted(variant_config)},
+        )
     validate_runtime_variant_config(variant_config)
     _validate_paper_candidate(validation_status=validation_status, paper_candidate=paper_candidate)
     locked_core_hash = derive_locked_core_hash(manifest)

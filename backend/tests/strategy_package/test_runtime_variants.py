@@ -171,13 +171,26 @@ def test_runtime_variant_paper_candidate_requires_passed_validation_and_evidence
     assert passed.validation_status == RuntimeVariantValidationStatus.VALIDATION_PASSED
 
 
+def test_runtime_variant_rejects_hmm_overlay_as_platform_runtime_state() -> None:
+    service, package_id = _service_with_manifest()
+
+    with pytest.raises(StrategyPackageValidationError, match="HMM is a platform runtime capability"):
+        service.create_runtime_variant(
+            package_id,
+            variant_name="bad hmm overlay",
+            variant_kind=RuntimeVariantKind.COMBINED,
+            variant_config={"hmm_overlay": {"enabled": True}},
+            created_by="unit_test",
+        )
+
+
 def test_runtime_variant_list_hides_retired_by_default() -> None:
     service, package_id = _service_with_manifest()
     variant = service.create_runtime_variant(
         package_id,
         variant_name="retire me",
-        variant_kind=RuntimeVariantKind.HMM_OVERLAY,
-        variant_config={"hmm_overlay": {"enabled": True}},
+        variant_kind=RuntimeVariantKind.RISK_POLICY,
+        variant_config={"risk_policy": {"max_position_weight": 0.04}},
         created_by="unit_test",
     )
 

@@ -242,7 +242,7 @@ def test_runtime_profile_rejects_event_signal_policy_without_platform_profile_id
         custom_params={"event_signal_policy": {"enabled": True}}
     )
 
-    with pytest.raises(StrategyPackageValidationError, match="missing fields required"):
+    with pytest.raises(StrategyPackageValidationError, match="event_signal_profile_id"):
         service.create_runtime_profile(
             portfolio_id=portfolio.portfolio_id,
             profile_name="bad event-signal profile",

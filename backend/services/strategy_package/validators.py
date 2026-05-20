@@ -43,10 +43,6 @@ class StrategyPackageValidator:
 
     def validate_for_paper_trading(self, manifest: StrategyPackageManifest) -> None:
         self.validate_manifest_identity_for_paper_trading(manifest)
-        self.validate_execution_policy_for_paper(
-            package_id=manifest.package_id,
-            policy_json=manifest.minute_execution_policy.model_dump(mode="json"),
-        )
 
     def validate_manifest_identity_for_paper_trading(self, manifest: StrategyPackageManifest) -> None:
         """Validate immutable package lineage/status without binding execution algo.
@@ -78,6 +74,7 @@ class StrategyPackageValidator:
         package_id: str,
         policy_json: dict,
         instantiate_runtime: bool = True,
+        require_runtime_assets: bool = True,
     ) -> None:
         normalized_policy = normalize_execution_policy_json(policy_json)
         algo_code = normalize_execution_algo_code(normalized_policy.get("algo_code"))
@@ -96,11 +93,13 @@ class StrategyPackageValidator:
                 "V25_TWO_STAGE allow_default_day_features is diagnostic-only and cannot enter Paper Trading v2",
                 context={"package_id": package_id, "algo_code": algo_code},
             )
-        asset_paths = validate_runtime_asset_paths(
-            algo_code=algo_code,
-            algo_config=algo_config,
-            package_id=package_id,
-        )
+        asset_paths = {}
+        if require_runtime_assets:
+            asset_paths = validate_runtime_asset_paths(
+                algo_code=algo_code,
+                algo_config=algo_config,
+                package_id=package_id,
+            )
         if not instantiate_runtime:
             return
         try:

@@ -27,7 +27,7 @@ from backend.services.trading_core.execution_algo_capabilities import (
     require_execution_algo_supports_mode,
 )
 from backend.services.trading_core.models import RunStatus
-from backend.services.strategy_package.backtest_contract import validate_execution_policy_matches_manifest
+from backend.services.strategy_package.repository import StrategyPackageRepository
 
 from .market_data import MinuteDataSource, TradeCalendarProvider
 from .models import (
@@ -95,10 +95,12 @@ class PaperTradingSessionService:
         self,
         *,
         repository: PaperTradingV2Repository | Any | None = None,
+        package_repository: StrategyPackageRepository | Any | None = None,
         calendar_provider: TradeCalendarProvider | Any | None = None,
         enforce_non_trading_window: bool = False,
     ) -> None:
         self.repository = repository or PaperTradingV2Repository()
+        self.package_repository = package_repository
         self.calendar_provider = calendar_provider
         self.enforce_non_trading_window = enforce_non_trading_window
 
@@ -181,18 +183,16 @@ class PaperTradingSessionService:
                 },
             )
 
-        config = PaperTradingV2PortfolioService(repository=self.repository).resolve_runtime_config_for_date(
+        config = PaperTradingV2PortfolioService(
+            package_repository=self.package_repository,
+            repository=self.repository,
+        ).resolve_runtime_config_for_date(
             portfolio=portfolio,
             trade_date=start_date,
             runtime_config=runtime_config or {},
         )
         self._reject_raw_execution_overrides(config)
         policy_context = self._portfolio_policy_context(portfolio.execution_policy, portfolio_id=portfolio_id)
-        validate_execution_policy_matches_manifest(
-            portfolio.frozen_manifest,
-            policy_context["policy_json"],
-            context={"portfolio_id": portfolio_id, "check": "create_session"},
-        )
         require_execution_algo_supports_mode(
             policy_context["policy_json"],
             mode="HISTORICAL" if session_mode == PaperSessionMode.REPLAY_ONLY else session_mode.value,
@@ -354,11 +354,6 @@ class PaperTradingSessionService:
         for mode in PaperSessionMode:
             mode_payload: dict[str, Any] = {"can_start": False, "errors": []}
             try:
-                validate_execution_policy_matches_manifest(
-                    portfolio.frozen_manifest,
-                    policy_json,
-                    context={"portfolio_id": portfolio_id, "mode": mode.value, "check": "session_capabilities"},
-                )
                 if mode == PaperSessionMode.REPLAY_ONLY:
                     self._validate_sources(
                         mode=mode,
@@ -705,12 +700,20 @@ class PaperTradingSessionRunner:
         self,
         *,
         repository: PaperTradingV2Repository | Any | None = None,
+        package_repository: StrategyPackageRepository | Any | None = None,
         replay_service: PaperTradingHistoricalReplay | None = None,
         live_executor: PaperTradingLiveMinuteExecutor | None = None,
     ) -> None:
         self.repository = repository or PaperTradingV2Repository()
-        self.replay_service = replay_service or PaperTradingHistoricalReplay(repository=self.repository)
-        self.live_executor = live_executor or PaperTradingLiveMinuteExecutor(repository=self.repository)
+        self.package_repository = package_repository
+        self.replay_service = replay_service or PaperTradingHistoricalReplay(
+            repository=self.repository,
+            package_repository=self.package_repository,
+        )
+        self.live_executor = live_executor or PaperTradingLiveMinuteExecutor(
+            repository=self.repository,
+            package_repository=self.package_repository,
+        )
 
     def tick(
         self,

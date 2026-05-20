@@ -19,10 +19,15 @@ from backend.services.selection_center.runtime_profile import parse_selection_ru
 from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.strategy_package.backtest_contract import (
     normalize_runtime_config_with_backtest_contract,
-    validate_execution_policy_matches_manifest,
     validate_runtime_profile_matches_backtest_contract,
 )
-from backend.services.strategy_package.runtime import RebalanceEngine, StrategyPackageRuntime, TargetPositionEngine
+from backend.services.strategy_package.repository import StrategyPackageRepository
+from backend.services.strategy_package.runtime import (
+    RebalanceEngine,
+    StrategyPackageRuntime,
+    TargetPositionEngine,
+    apply_runtime_variant_to_manifest,
+)
 from backend.services.strategy_package.validators import StrategyPackageValidator
 from backend.services.trading_core.errors import (
     DataUnavailableError,
@@ -76,12 +81,14 @@ class PaperTradingLiveMinuteExecutor:
         oms: OMS | None = None,
         execution_engine: MinuteExecutionEngine | None = None,
         validator: StrategyPackageValidator | None = None,
+        package_repository: StrategyPackageRepository | Any | None = None,
         tradability_filter: TradabilityFilter | Any | None = None,
         refresh_audit: DataRefreshAuditRepository | Any | None = None,
         replay_service: PaperTradingHistoricalReplay | None = None,
         risk_policy_service: StockRiskPolicyService | Any | None = None,
     ) -> None:
         self.repository = repository or PaperTradingV2Repository()
+        self.package_repository = package_repository
         self.calendar_provider = calendar_provider or TradeCalendarProvider()
         self.market_data_provider = market_data_provider or PaperV2MinuteMarketDataProvider()
         self.runtime = runtime or StrategyPackageRuntime()
@@ -103,13 +110,16 @@ class PaperTradingLiveMinuteExecutor:
             oms=self.oms,
             execution_engine=self.execution_engine,
             validator=self.validator,
+            package_repository=self.package_repository,
             tradability_filter=self.tradability_filter,
             refresh_audit=self.refresh_audit,
             risk_policy_service=self.risk_policy_service,
         )
         self.replay_service = replay_service or PaperTradingHistoricalReplay(
             repository=self.repository,
+            package_repository=self.package_repository,
             calendar_provider=self.calendar_provider,
+            day_runner=self.day_helper,
         )
 
     def tick(self, session: PaperTradingSession, *, as_of_time: datetime | None = None) -> PaperSessionProgress:
@@ -365,6 +375,8 @@ class PaperTradingLiveMinuteExecutor:
         self.validator.validate_execution_policy_for_paper(
             package_id=manifest.package_id,
             policy_json=execution_policy_json,
+            instantiate_runtime=False,
+            require_runtime_assets=False,
         )
         config = dict(session.runtime_config)
         config["validated_execution_policy"] = execution_policy_context
@@ -380,16 +392,13 @@ class PaperTradingLiveMinuteExecutor:
             include_contract=True,
         )
         runtime_profile = parse_selection_runtime_profile(config)
-        validate_execution_policy_matches_manifest(
-            manifest,
-            execution_policy_json,
-            context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat(), "check": "live_session"},
-        )
         runtime_contract = validate_runtime_profile_matches_backtest_contract(
             manifest,
             runtime_profile,
+            runtime_config=config,
             context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat(), "check": "live_session"},
         )
+        effective_manifest = apply_runtime_variant_to_manifest(manifest, config)
         config["qe_backtest_runtime_contract"] = runtime_contract
 
         ready = self.day_helper._require_data_ready(
@@ -490,7 +499,7 @@ class PaperTradingLiveMinuteExecutor:
                 snapshot=snapshot,
                 total_equity=total_equity,
                 top_k=top_k,
-                manifest=manifest,
+                manifest=effective_manifest,
                 current_positions=current_positions,
                 current_prices=current_prices,
             )

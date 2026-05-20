@@ -16,7 +16,9 @@ from backend.services.selection_center.hmm_runtime import SectorHMMRuntime
 from backend.services.selection_center.models import SelectionCandidate, SignalSnapshot, TargetPosition
 from backend.services.selection_center.runtime_profile import normalize_selection_runtime_config, parse_selection_runtime_profile
 from backend.services.strategy_package.backtest_contract import build_backtest_runtime_contract
+from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import AlphaMode, StrategyPackageManifest
+from backend.services.strategy_package.runtime_variant import StrategyPackageRuntimeVariant
 from backend.services.strategy_package.selection_artifact import (
     StrategyPackageSelectionArtifactRepository,
     selection_artifact_runtime_hash,
@@ -35,6 +37,64 @@ from backend.services.trading_core.models import OrderIntent, OrderSide, Positio
 
 
 SCORE_WEIGHTED_V2_LIKE_FAMILIES = {"score_weighted_topk_v2", "score_weighted_topk_v2_capacity_v1"}
+_VARIANT_CONFIG_KEYS_FOR_SELECTION_ARTIFACT_HASH = {
+    "portfolio_policy",
+    "strategy_config",
+    "execution_policy",
+    "minute_execution_policy",
+}
+
+
+def apply_runtime_variant_config(
+    runtime_config: dict[str, Any],
+    variant: StrategyPackageRuntimeVariant | None,
+) -> dict[str, Any]:
+    """Attach an audited StrategyPackage runtime variant to runtime config."""
+
+    if variant is None:
+        return dict(runtime_config or {})
+    config = dict(runtime_config or {})
+    if config.get("runtime_variant"):
+        raise StrategyPackageValidationError(
+            "runtime_config already contains runtime_variant metadata",
+            context={"runtime_variant_id": variant.variant_id},
+        )
+    for key in _VARIANT_CONFIG_KEYS_FOR_SELECTION_ARTIFACT_HASH:
+        if key in variant.variant_config:
+            config[key] = variant.variant_config[key]
+    config["runtime_variant"] = {
+        "variant_id": variant.variant_id,
+        "variant_hash": variant.variant_hash,
+        "variant_kind": variant.variant_kind.value,
+        "variant_name": variant.variant_name,
+        "manifest_sha256": variant.manifest_sha256,
+        "locked_core_hash": variant.locked_core_hash,
+        "variant_config": variant.variant_config,
+        "validation_status": variant.validation_status.value,
+        "paper_candidate": variant.paper_candidate,
+    }
+    return config
+
+
+def apply_runtime_variant_to_manifest(
+    manifest: StrategyPackageManifest,
+    runtime_config: dict[str, Any] | None,
+) -> StrategyPackageManifest:
+    """Materialize non-core variant strategy settings for runtime decisions."""
+
+    variant = (runtime_config or {}).get("runtime_variant")
+    if not isinstance(variant, dict):
+        return manifest
+    variant_config = variant.get("variant_config")
+    if not isinstance(variant_config, dict) or not variant_config:
+        return manifest
+    updates: dict[str, Any] = {}
+    for key in ("strategy_config", "portfolio_policy"):
+        if key in variant_config:
+            updates[key] = _merge_model_or_dict(getattr(manifest, key), variant_config[key])
+    if not updates:
+        return manifest
+    return freeze_manifest(manifest.model_copy(update=updates))
 
 
 class StrategyPackageRuntime:
@@ -127,19 +187,22 @@ class StrategyPackageRuntime:
         selection_runtime = manifest.strategy_config.get("selection_runtime")
         if not isinstance(selection_runtime, dict):
             selection_runtime = {}
-        runtime_hash = selection_artifact_runtime_hash(config)
+        runtime_hashes = _candidate_selection_artifact_runtime_hashes(config)
         artifact_error: DataUnavailableError | None = None
-        try:
-            artifact = self.artifact_repository.get(
-                package_id=manifest.package_id,
-                manifest_sha256=manifest.manifest_sha256 or "",
-                trade_date=trade_date,
-                data_source=data_source,
-                runtime_config_hash=runtime_hash,
-            )
-        except DataUnavailableError as exc:
-            artifact_error = exc
-        else:
+        artifact = None
+        for runtime_hash in runtime_hashes:
+            try:
+                artifact = self.artifact_repository.get(
+                    package_id=manifest.package_id,
+                    manifest_sha256=manifest.manifest_sha256 or "",
+                    trade_date=trade_date,
+                    data_source=data_source,
+                    runtime_config_hash=runtime_hash,
+                )
+                break
+            except DataUnavailableError as exc:
+                artifact_error = exc
+        if artifact is not None:
             if artifact.status.value != "SUCCEEDED":
                 raise DataUnavailableError(
                     "selection score artifact is not succeeded",
@@ -737,3 +800,65 @@ class RebalanceEngine:
                 )
             )
         return intents
+
+
+def _merge_model_or_dict(current: Any, overlay: Any) -> Any:
+    if hasattr(current, "model_copy"):
+        if not isinstance(overlay, dict):
+            raise StrategyPackageValidationError(
+                "runtime variant model overlays must be objects",
+                context={"overlay_type": type(overlay).__name__},
+            )
+        return current.model_copy(update=overlay)
+    if isinstance(current, dict):
+        if not isinstance(overlay, dict):
+            raise StrategyPackageValidationError(
+                "runtime variant dict overlays must be objects",
+                context={"overlay_type": type(overlay).__name__},
+            )
+        return _deep_merge_dicts(current, overlay)
+    return overlay
+
+
+def _deep_merge_dicts(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in overlay.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge_dicts(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _candidate_selection_artifact_runtime_hashes(config: dict[str, Any]) -> list[str]:
+    hashes: list[str] = []
+    seen: set[str] = set()
+    candidates = [config]
+    normalized = normalize_selection_runtime_config(config)
+    if normalized != config:
+        candidates.append(normalized)
+    profile = normalized.get("runtime_profile")
+    if isinstance(profile, dict):
+        stripped_profile = {
+            key: value
+            for key, value in profile.items()
+            if key not in {"hmm", "risk_policy", "tradability", "industry_blacklist"}
+        }
+        stripped = dict(normalized)
+        if stripped_profile:
+            stripped["runtime_profile"] = stripped_profile
+        else:
+            stripped.pop("runtime_profile", None)
+        candidates.append(stripped)
+        candidates.append({})
+    if "runtime_variant" in normalized:
+        stripped_variant = dict(normalized)
+        stripped_variant.pop("runtime_variant", None)
+        candidates.append(stripped_variant)
+        candidates.append({})
+    for candidate in candidates:
+        digest = selection_artifact_runtime_hash(candidate)
+        if digest not in seen:
+            hashes.append(digest)
+            seen.add(digest)
+    return hashes

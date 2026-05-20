@@ -8,6 +8,9 @@ import pytest
 
 from backend.infra.qmt_client import QMTStatus
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
+from backend.services.paper_trading_v2.readiness import PaperTradingReadinessService
+from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
+from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
 from backend.services.paper_trading_v2.models import PaperPortfolio, PaperRun, PortfolioStatus
 from backend.services.paper_trading_v2.broker import (
     BrokerAccountSnapshot,
@@ -20,6 +23,18 @@ from backend.services.paper_trading_v2.broker import (
     SubscriptionHandle,
 )
 from backend.services.paper_trading_v2.market_data import MinuteDataSource
+from backend.services.selection_center.hmm_runtime import SectorHMMRuntime
+from backend.services.selection_center.risk_policy import RiskDecision, StockRiskPolicyService
+from backend.services.selection_center.tradability import TradabilityFilter
+from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELECTION_SCOPE, AUTHORITATIVE_SELECTION_SOURCE_TYPE
+from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
+from backend.services.strategy_package.runtime import StrategyPackageRuntime
+from backend.services.strategy_package.selection_artifact import (
+    InMemorySelectionScoreArtifactRepository,
+    SelectionScoreArtifact,
+    selection_artifact_runtime_hash,
+)
+from backend.services.strategy_package.service import StrategyPackageService
 from backend.services.trading_core.errors import (
     BrokerConnectivityError,
     BrokerMarketSourceMismatchError,
@@ -27,7 +42,7 @@ from backend.services.trading_core.errors import (
     BrokerSubmitError,
 )
 from backend.services.trading_core.models import OrderIntent, OrderSide, OrderType, PositionLot, RunStatus
-from backend.tests.paper_trading_v2.test_day_runner import make_paper_enabled_manifest
+from backend.tests.paper_trading_v2.test_day_runner import FakeCalendar, FakeSuspendLookup, make_paper_enabled_manifest
 
 
 TRADE_DATE = date(2024, 1, 2)
@@ -114,6 +129,33 @@ class FakeQMTClient:
     def cancel_order(self, order_id: str):
         self.cancel_calls.append(str(order_id))
         return True, "cancel accepted"
+
+
+class NoopRefreshAudit:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def require_success(self, **kwargs):
+        self.calls.append(kwargs)
+        return None
+
+
+class RecordingRiskPolicyService(StockRiskPolicyService):
+    def __init__(self, decisions: dict[str, RiskDecision] | None = None) -> None:
+        self.decisions = decisions or {}
+        self.profile_seen = None
+
+    def evaluate(self, *, symbols, trade_date, profile, current_positions=None):  # type: ignore[override]
+        self.profile_seen = profile
+        return {symbol: self.decisions.get(symbol, RiskDecision(symbol=symbol)) for symbol in symbols}
+
+
+class FakeHMMSnapshotProvider:
+    def __init__(self, snapshots: dict[str, dict]) -> None:
+        self.snapshots = snapshots
+
+    def get_snapshot(self, snapshot_id: str) -> dict | None:
+        return self.snapshots.get(snapshot_id)
 
 
 def _backend(*, client: FakeQMTClient | None = None, auto_connect: bool = True) -> MiniQMTSimBackend:
@@ -345,6 +387,10 @@ def test_query_account_and_positions_map_miniqmt_authority_snapshots() -> None:
     assert prices["000001.SZ"] == 10.8
 
 
+def _portfolio_backend_factory(client: FakeQMTClient):
+    return lambda **kwargs: MiniQMTSimBackend(qmt_client=client, **kwargs)
+
+
 def test_query_status_from_native_reconciles_after_process_restart() -> None:
     client = FakeQMTClient()
     backend = _backend(client=client)
@@ -481,3 +527,196 @@ def test_day_runner_minqmt_no_intents_reconciles_broker_snapshot_without_fills()
     assert repository.snapshots[0]["metadata"]["authority_source"] == "MINIQMT_QUERY"
     assert repository.snapshots[0]["metadata"]["miniqmt_no_local_fills"] is True
     assert any(event["event_type"] == "MINIQMT_NO_ORDER_INTENTS" for event in repository.events)
+
+
+def _miniqmt_portfolio_fixture(*, custom_params: dict | None = None):
+    package_repo = InMemoryStrategyPackageRepository()
+    paper_repo = InMemoryPaperTradingV2Repository()
+    manifest = make_paper_enabled_manifest(custom_params=custom_params)
+    package_repo.save_manifest(manifest)
+    portfolio = PaperTradingV2PortfolioService(
+        package_repository=package_repo,
+        repository=paper_repo,
+    ).create_portfolio(
+        package_id=manifest.package_id,
+        portfolio_name="mini qmt runtime contract",
+        initial_cash=100_000,
+        start_date=TRADE_DATE,
+        data_source=MinuteDataSource.MINIQMT_REALTIME,
+        broker_backend="minqmt_sim",
+    )
+    return package_repo, paper_repo, manifest, portfolio
+
+
+def _runtime_with_artifact(manifest, *, runtime_config: dict | None = None, hmm_runtime=None) -> StrategyPackageRuntime:
+    artifact_repo = InMemorySelectionScoreArtifactRepository()
+    rows = [
+        {
+            "symbol": "000002.SZ",
+            "score": 0.92,
+            "rank": 1,
+            "target_weight": 0.03,
+            "reference_price": 10.0,
+        },
+        {
+            "symbol": "000003.SZ",
+            "score": 0.88,
+            "rank": 2,
+            "target_weight": 0.03,
+            "reference_price": 10.0,
+        },
+    ]
+    artifact_repo.save(
+        SelectionScoreArtifact(
+            package_id=manifest.package_id,
+            manifest_sha256=manifest.manifest_sha256 or "",
+            trade_date=TRADE_DATE,
+            data_source=MinuteDataSource.DB_HISTORICAL.value,
+            runtime_config_hash=selection_artifact_runtime_hash(runtime_config or {}),
+            scores_json=rows,
+            score_count=len(rows),
+            universe_count=len(rows),
+            top_score_symbol=rows[0]["symbol"],
+            metadata={
+                "source_type": AUTHORITATIVE_SELECTION_SOURCE_TYPE,
+                "authority_scope": AUTHORITATIVE_SELECTION_SCOPE,
+                "test_seeded": True,
+            },
+        )
+    )
+    return StrategyPackageRuntime(artifact_repository=artifact_repo, hmm_runtime=hmm_runtime)
+
+
+def test_minqmt_readiness_preserves_disabled_hmm_and_uses_platform_risk_profile() -> None:
+    custom_params = {
+        "strategy_id": "score_weighted_topk_v2",
+        "topk": 2,
+        "enable_sector_hmm": True,
+        "hmm_model_snapshot_id": "qe_hmm_snapshot_old",
+        "hmm_signal_preset": "qe_preset",
+        "risk_policy": {"enabled": True, "providers": ["st_pit"]},
+    }
+    _package_repo, paper_repo, manifest, portfolio = _miniqmt_portfolio_fixture(custom_params=custom_params)
+    risk_policy = RecordingRiskPolicyService()
+
+    readiness = PaperTradingReadinessService(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        runtime=_runtime_with_artifact(manifest),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+        risk_policy_service=risk_policy,
+        minqmt_broker_factory=_portfolio_backend_factory(FakeQMTClient(connected=True)),
+    ).check_day(
+        portfolio_id=portfolio.portfolio_id,
+        trade_date=TRADE_DATE,
+        runtime_config={
+            "runtime_profile": {
+                "hmm": {"enabled": False},
+                "risk_policy": {"enabled": True},
+                "tradability": {"exclude_suspended": False},
+            }
+        },
+    )
+
+    assert risk_policy.profile_seen is not None
+    assert risk_policy.profile_seen.enabled is True
+    selection_check = next(check for check in readiness.checks if check.check_name == "selection_runtime")
+    assert selection_check.context["runtime_profile"]["hmm"]["enabled"] is False
+    assert selection_check.context["runtime_profile"]["hmm"]["model_snapshot_id"] is None
+    assert {check.check_name for check in readiness.checks} >= {"miniqmt_broker_authority", "miniqmt_execution_authority"}
+    assert "minute_market_data" not in {check.check_name for check in readiness.checks}
+
+
+def test_minqmt_day_runner_uses_platform_hmm_snapshot_and_versioned_execution_policy(tmp_path) -> None:
+    model_path = tmp_path / "platform_hmm_model.json"
+    model_path.write_text("{}", encoding="utf-8")
+    (tmp_path / "coefficients_platform_preset_2024-01-01_2024-01-31.json").write_text(
+        (
+            '{"preset_key":"platform_preset",'
+            '"daily_coefficients":{"2024-01-02":{"801780.SI":1.2}},'
+            '"stock_sector_map":{"000002.SZ":"801780.SI","000003.SZ":"801780.SI"}}'
+        ),
+        encoding="utf-8",
+    )
+    custom_params = {
+        "strategy_id": "score_weighted_topk_v2",
+        "topk": 2,
+        "enable_sector_hmm": True,
+        "hmm_model_snapshot_id": "qe_hmm_snapshot_old",
+        "hmm_signal_preset": "qe_preset",
+        "risk_policy": {"enabled": True, "providers": ["st_pit"]},
+    }
+    package_repo, paper_repo, manifest, portfolio = _miniqmt_portfolio_fixture(custom_params=custom_params)
+    policy_json = manifest.minute_execution_policy.model_dump(mode="json")
+    policy_json["algo_code"] = "CLOSE_PRICE"
+    policy_json["algo_config"] = {}
+    policy = StrategyPackageService(repository=package_repo).create_execution_policy(
+        package_id=manifest.package_id,
+        policy_name="close price miniqmt activation",
+        policy_json=policy_json,
+        source_backtest_id="bt_close",
+        source_backtest_status="COMPLETED",
+        paper_enabled=True,
+    )
+    activation = PaperTradingV2PortfolioService(
+        package_repository=package_repo,
+        repository=paper_repo,
+    ).activate_execution_policy(
+        portfolio_id=portfolio.portfolio_id,
+        trade_date=TRADE_DATE,
+        policy_id=policy.policy_id,
+        activated_by="unit_test",
+        reason="MiniQMT uses versioned policy",
+    )
+    runtime_config = {
+        "runtime_profile": {
+            "hmm": {
+                "enabled": True,
+                "model_snapshot_id": "platform_hmm_snapshot_new",
+                "signal_preset": "platform_preset",
+            },
+            "tradability": {"exclude_suspended": False},
+        }
+    }
+    runtime = _runtime_with_artifact(
+        manifest,
+        runtime_config=runtime_config,
+        hmm_runtime=SectorHMMRuntime(
+            snapshot_provider=FakeHMMSnapshotProvider(
+                {
+                    "platform_hmm_snapshot_new": {
+                        "snapshot_id": "platform_hmm_snapshot_new",
+                        "model_path": str(model_path),
+                        "status": "completed",
+                    }
+                }
+            )
+        ),
+    )
+    client = FakeQMTClient()
+
+    result = PaperTradingDayRunner(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        runtime=runtime,
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+        risk_policy_service=RecordingRiskPolicyService(),
+        minqmt_broker_factory=_portfolio_backend_factory(client),
+    ).run_day(
+        portfolio_id=portfolio.portfolio_id,
+        trade_date=TRADE_DATE,
+        runtime_config=runtime_config,
+    )
+
+    context = result.run.runtime_config["validated_execution_policy"]
+    assert result.run.status == RunStatus.SUCCEEDED
+    assert context["activation_id"] == activation.activation_id
+    assert context["activation_source"] == "trade_date_activation"
+    assert context["algo_code"] == "CLOSE_PRICE"
+    assert result.run.runtime_config["runtime_profile"]["hmm"]["model_snapshot_id"] == "platform_hmm_snapshot_new"
+    assert result.run.runtime_config["qe_backtest_runtime_contract"]["runtime_features"]["hmm"]["package_bound"] is False
+    assert client.place_calls, "MiniQMT should receive broker-authoritative order submit"
+    assert result.orders[0].metadata["broker_backend"] == "minqmt_sim"
+    assert result.fills == []

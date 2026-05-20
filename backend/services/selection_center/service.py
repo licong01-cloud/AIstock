@@ -15,7 +15,8 @@ from backend.services.strategy_package.metrics_summary import metrics_summary_fr
 from backend.services.strategy_package.backtest_contract import normalize_runtime_config_with_backtest_contract
 from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.repository import StrategyPackageRepository
-from backend.services.strategy_package.runtime import StrategyPackageRuntime
+from backend.services.strategy_package.runtime import StrategyPackageRuntime, apply_runtime_variant_config
+from backend.services.strategy_package.runtime_variant import RuntimeVariantValidationStatus
 from backend.services.strategy_package.selection_artifact import (
     StrategyPackageSelectionArtifactService,
     selection_artifact_runtime_hash,
@@ -160,7 +161,7 @@ class SelectionCenterService:
                     package_results[package_id] = []
                     excluded_results[package_id] = []
                 else:
-                    top_k = self._top_k_for_package(manifest, package_profile, global_profile)
+                    top_k = self._top_k_for_package(manifest, package_profile, global_profile, package_config)
                     risk_decisions = self.risk_policy_service.evaluate(
                         symbols=[item.symbol for item in snapshot.candidates],
                         trade_date=trade_date,
@@ -266,6 +267,9 @@ class SelectionCenterService:
                 )
             manifest = record.current_manifest()
             raw_package_config = self._package_runtime_config(config, package_id)
+            variant = self._resolve_runtime_variant(record, raw_package_config)
+            raw_package_config = apply_runtime_variant_config(raw_package_config, variant)
+            raw_package_config.pop("runtime_variant_id", None)
             package_config = self._normalize_package_runtime_config(
                 manifest=manifest,
                 runtime_config=raw_package_config,
@@ -335,12 +339,6 @@ class SelectionCenterService:
             profile["selection"] = selection_payload
         else:
             profile.pop("selection", None)
-        risk_payload = profile.get("risk_policy")
-        if isinstance(risk_payload, dict) and risk_payload.get("enabled") is False and "risk_policy" not in config:
-            profile.pop("risk_policy", None)
-        hmm_payload = profile.get("hmm")
-        if isinstance(hmm_payload, dict) and hmm_payload.get("enabled") is False and "hmm" not in config:
-            profile.pop("hmm", None)
         config["runtime_profile"] = profile
         return config, display_top_n
 
@@ -369,13 +367,67 @@ class SelectionCenterService:
             return merged
         return config
 
-    @staticmethod
-    def _top_k_for_package(manifest: Any, package_profile: Any, global_profile: Any) -> int:
-        configured = package_profile.selection.top_k or global_profile.selection.top_k
-        top_k = int(configured if configured is not None else manifest.portfolio_policy.topk)
-        if top_k > 50:
+    def _resolve_runtime_variant(self, record: Any, runtime_config: dict[str, Any]) -> Any | None:
+        raw_id = runtime_config.get("runtime_variant_id")
+        if raw_id is None:
+            per_package = runtime_config.get(str(record.package_id))
+            if isinstance(per_package, dict):
+                raw_id = per_package.get("runtime_variant_id")
+        if raw_id is None:
+            return None
+        variant_id = str(raw_id).strip()
+        if not variant_id:
             raise StrategyPackageValidationError(
-                "selection top_k must not exceed 50",
+                "runtime_variant_id cannot be empty",
+                context={"package_id": record.package_id},
+            )
+        variant = self.package_repository.get_runtime_variant(record.package_id, variant_id)
+        if variant.validation_status != RuntimeVariantValidationStatus.VALIDATION_PASSED or not variant.paper_candidate:
+            raise StrategyPackageValidationError(
+                "runtime variant must be a validated paper candidate before Selection Center use",
+                context={
+                    "package_id": record.package_id,
+                    "runtime_variant_id": variant.variant_id,
+                    "validation_status": variant.validation_status.value,
+                    "paper_candidate": variant.paper_candidate,
+                },
+            )
+        if variant.manifest_sha256 != record.manifest_sha256:
+            raise StrategyPackageValidationError(
+                "runtime variant manifest hash does not match StrategyPackage",
+                context={
+                    "package_id": record.package_id,
+                    "runtime_variant_id": variant.variant_id,
+                    "variant_manifest_sha256": variant.manifest_sha256,
+                    "package_manifest_sha256": record.manifest_sha256,
+                },
+            )
+        return variant
+
+    @staticmethod
+    def _top_k_for_package(
+        manifest: Any,
+        package_profile: Any,
+        global_profile: Any,
+        package_config: dict[str, Any] | None = None,
+    ) -> int:
+        configured = package_profile.selection.top_k or global_profile.selection.top_k
+        if configured is None:
+            variant = (package_config or {}).get("runtime_variant")
+            variant_config = variant.get("variant_config") if isinstance(variant, dict) else None
+            if isinstance(variant_config, dict):
+                strategy_config = variant_config.get("strategy_config")
+                if isinstance(strategy_config, dict):
+                    custom_params = strategy_config.get("custom_params")
+                    if isinstance(custom_params, dict) and custom_params.get("topk") is not None:
+                        configured = custom_params.get("topk")
+                portfolio_policy = variant_config.get("portfolio_policy")
+                if configured is None and isinstance(portfolio_policy, dict) and portfolio_policy.get("topk") is not None:
+                    configured = portfolio_policy.get("topk")
+        top_k = int(configured if configured is not None else manifest.portfolio_policy.topk)
+        if top_k <= 0 or top_k > 50:
+            raise StrategyPackageValidationError(
+                "selection top_k must be between 1 and 50",
                 context={"package_id": manifest.package_id, "top_k": top_k, "max_top_k": 50},
             )
         return top_k

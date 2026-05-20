@@ -111,4 +111,7 @@ def test_fallback_algo_is_forbidden() -> None:
 def test_paper_readiness_fails_when_v24_model_is_unavailable() -> None:
     manifest = freeze_manifest(make_manifest(algo_code="V24_PLAN"))
     with pytest.raises(DataUnavailableError, match="model_path"):
-        StrategyPackageValidator().validate_for_paper_trading(manifest)
+        StrategyPackageValidator().validate_execution_policy_for_paper(
+            package_id=manifest.package_id,
+            policy_json=manifest.minute_execution_policy.model_dump(mode="json"),
+        )

@@ -33,10 +33,10 @@
   "fingerprint": "71416cf369ccd61e",
   "github_issue_number": 80,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/80",
-  "assigned_agent": "paper_v2_team",
-  "fix_branch": null,
+  "assigned_agent": "codex-app",
+  "fix_branch": "bug/BUG-065-paper-v2-hmm-platform-runtime",
   "fix_commit": null,
-  "verification_run_id": null,
+  "verification_run_id": "tests/aistock_validation/history/paper_v2/20260520_070726_l3_paper-v2-platform-runtime-contract-fixes.md",
   "created_at": "2026-05-19T16:07:33Z",
   "first_seen_at": "2026-05-19T16:07:33Z",
   "last_seen_at": "2026-05-19T16:07:33Z",
@@ -96,6 +96,12 @@
       "actor": "codex-app",
       "action": "github_sync_verified",
       "note": "Confirmed GitHub issue #80 is OPEN and linked for Paper v2 team repair."
+    },
+    {
+      "timestamp": "2026-05-20T00:34:37Z",
+      "actor": "codex-app",
+      "action": "fixed_pending_review",
+      "note": "Implemented on bug/BUG-065-paper-v2-hmm-platform-runtime; local validation evidence recorded at tests/aistock_validation/history/paper_v2/20260520_070726_l3_paper-v2-platform-runtime-contract-fixes.md."
     }
   ]
 }

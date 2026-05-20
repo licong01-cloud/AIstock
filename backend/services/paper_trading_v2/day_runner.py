@@ -12,10 +12,15 @@ from backend.services.selection_center.runtime_profile import parse_selection_ru
 from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.strategy_package.backtest_contract import (
     normalize_runtime_config_with_backtest_contract,
-    validate_execution_policy_matches_manifest,
     validate_runtime_profile_matches_backtest_contract,
 )
-from backend.services.strategy_package.runtime import RebalanceEngine, StrategyPackageRuntime, TargetPositionEngine
+from backend.services.strategy_package.runtime import (
+    RebalanceEngine,
+    StrategyPackageRuntime,
+    TargetPositionEngine,
+    _candidate_selection_artifact_runtime_hashes,
+    apply_runtime_variant_to_manifest,
+)
 from backend.services.strategy_package.selection_artifact import (
     StrategyPackageSelectionArtifactService,
     selection_artifact_runtime_hash,
@@ -54,6 +59,7 @@ class PaperTradingDayRunner:
         oms: OMS | None = None,
         execution_engine: MinuteExecutionEngine | None = None,
         validator: StrategyPackageValidator | None = None,
+        package_repository: Any | None = None,
         tradability_filter: TradabilityFilter | Any | None = None,
         refresh_audit: DataRefreshAuditRepository | Any | None = None,
         selection_artifact_service: StrategyPackageSelectionArtifactService | Any | None = None,
@@ -69,6 +75,7 @@ class PaperTradingDayRunner:
         self.oms = oms or OMS()
         self.execution_engine = execution_engine or MinuteExecutionEngine(oms=self.oms)
         self.validator = validator or StrategyPackageValidator()
+        self.package_repository = package_repository
         self.tradability_filter = tradability_filter or TradabilityFilter()
         self.refresh_audit = refresh_audit or DataRefreshAuditRepository()
         self.selection_artifact_service = selection_artifact_service or StrategyPackageSelectionArtifactService(
@@ -120,7 +127,10 @@ class PaperTradingDayRunner:
                 },
             )
 
-        config = PaperTradingV2PortfolioService(repository=self.repository).resolve_runtime_config_for_date(
+        config = PaperTradingV2PortfolioService(
+            package_repository=self.package_repository,
+            repository=self.repository,
+        ).resolve_runtime_config_for_date(
             portfolio=portfolio,
             trade_date=trade_date,
             runtime_config=runtime_config or {},
@@ -138,17 +148,16 @@ class PaperTradingDayRunner:
         self.validator.validate_execution_policy_for_paper(
             package_id=manifest.package_id,
             policy_json=execution_policy_json,
-        )
-        validate_execution_policy_matches_manifest(
-            manifest,
-            execution_policy_json,
-            context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat()},
+            instantiate_runtime=False,
+            require_runtime_assets=False,
         )
         runtime_contract = validate_runtime_profile_matches_backtest_contract(
             manifest,
             runtime_profile,
+            runtime_config=config,
             context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat()},
         )
+        effective_manifest = apply_runtime_variant_to_manifest(manifest, config)
         execution_algo_config = dict(execution_policy_json.get("algo_config") or {})
         config["validated_execution_policy"] = execution_policy_context
         config["qe_backtest_runtime_contract"] = runtime_contract
@@ -344,7 +353,7 @@ class PaperTradingDayRunner:
                     snapshot=snapshot,
                     total_equity=total_equity,
                     top_k=top_k,
-                    manifest=manifest,
+                    manifest=effective_manifest,
                     current_positions=current_positions,
                     current_prices=config.get("current_prices") or {},
                 )
@@ -696,28 +705,28 @@ class PaperTradingDayRunner:
         if not isinstance(artifact_config, dict) or not bool(artifact_config.get("auto_generate")):
             return
         cutoff_date = self._parse_selection_cutoff_date(artifact_config, trade_date=trade_date)
-        runtime_hash = selection_artifact_runtime_hash(runtime_config)
         force_regenerate = bool(artifact_config.get("force_regenerate"))
         artifact_repository = getattr(self.runtime, "artifact_repository", None)
         if artifact_repository is not None and not force_regenerate:
-            try:
-                artifact = artifact_repository.get(
-                    package_id=manifest.package_id,
-                    manifest_sha256=manifest.manifest_sha256 or "",
-                    trade_date=trade_date,
-                    data_source=data_source,
-                    runtime_config_hash=runtime_hash,
-                )
-                metadata = artifact.metadata or {}
-                if (
-                    artifact.status.value == "SUCCEEDED"
-                    and artifact.scores_json
-                    and metadata.get("source_type") == AUTHORITATIVE_SELECTION_SOURCE_TYPE
-                    and metadata.get("authority_scope") == AUTHORITATIVE_SELECTION_SCOPE
-                ):
-                    return
-            except DataUnavailableError:
-                pass
+            for runtime_hash in _candidate_selection_artifact_runtime_hashes(runtime_config):
+                try:
+                    artifact = artifact_repository.get(
+                        package_id=manifest.package_id,
+                        manifest_sha256=manifest.manifest_sha256 or "",
+                        trade_date=trade_date,
+                        data_source=data_source,
+                        runtime_config_hash=runtime_hash,
+                    )
+                    metadata = artifact.metadata or {}
+                    if (
+                        artifact.status.value == "SUCCEEDED"
+                        and artifact.scores_json
+                        and metadata.get("source_type") == AUTHORITATIVE_SELECTION_SOURCE_TYPE
+                        and metadata.get("authority_scope") == AUTHORITATIVE_SELECTION_SCOPE
+                    ):
+                        return
+                except DataUnavailableError:
+                    pass
         self.selection_artifact_service.generate_from_live_inference(
             package_id=manifest.package_id,
             trade_date=trade_date,
