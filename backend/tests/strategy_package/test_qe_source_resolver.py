@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -94,8 +94,14 @@ def test_qe_single_experiment_builds_package() -> None:
     assert manifest.alpha_mode == AlphaMode.SINGLE_ALPHA
     assert len(manifest.alpha_components) == 1
     assert manifest.alpha_components[0].factor_ids == ["factor_a", "factor_b"]
-    assert manifest.minute_execution_policy.algo_code == "TWAP"
-    assert manifest.minute_execution_policy.fallback_algo_code is None
+    assert manifest.manifest_version == "alpha_core_v1"
+    assert manifest.minute_execution_policy is None
+    assert manifest.execution_policy is None
+    assert manifest.portfolio_policy is None
+    assert manifest.risk_policy is None
+    assert manifest.source_evidence["authority"] == "audit_only_not_runtime_authority"
+    assert manifest.backtest_context["execution"]["execution_algo"] == "TWAP"
+    assert manifest.backtest_context["daily_strategy"]["topk"] == 50
     assert manifest.package_status == PackageStatus.BACKTEST_APPROVED
     assert {check.check_name for check in manifest.asset_checks} >= {
         "factor_names_present",
@@ -139,7 +145,9 @@ def test_qe_experiment_enriches_runtime_contract_from_loop_config() -> None:
 
     manifest = resolver.build_from_experiment("qe_unit_001")
 
-    assert manifest.execution_policy.backtest_freq == "1min"
-    assert manifest.minute_execution_policy.algo_code == "V25_TWO_STAGE"
-    assert manifest.minute_execution_policy.algo_config == {"early_model_path": "early.pt"}
-    assert manifest.strategy_config["custom_params"]["runtime_contract_source"] == "strategy_package_loop_config"
+    assert manifest.execution_policy is None
+    assert manifest.minute_execution_policy is None
+    assert manifest.backtest_context["execution"]["backtest_freq"] == "1min"
+    assert manifest.backtest_context["execution"]["execution_algo"] == "V25_TWO_STAGE"
+    assert manifest.backtest_context["execution"]["execution_algo_params"] == {"early_model_path": "early.pt"}
+    assert manifest.source_evidence["custom_params"]["runtime_contract_source"] == "strategy_package_loop_config"

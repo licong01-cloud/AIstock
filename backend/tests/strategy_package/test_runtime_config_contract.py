@@ -45,6 +45,7 @@ def _make_manifest() -> StrategyPackageManifest:
     )
     return freeze_manifest(
         StrategyPackageManifest(
+            manifest_version="1.0",
             package_name="runtime_contract_test",
             source=StrategyPackageSource(source_type=SourceType.QE_EXPERIMENT, source_id="qe_runtime_exp"),
             alpha_mode=AlphaMode.SINGLE_ALPHA,
@@ -102,11 +103,13 @@ def test_strategy_semantics_hash_is_shared_across_qe_and_paper_adapters() -> Non
 
     assert qe_config.config_sha256 == paper_config.config_sha256
     assert qe_config.runtime_config_sha256 != paper_config.runtime_config_sha256
-    assert qe_config.strategy_semantics.minute_execution_policy["algo_code"] == "TWAP"
-    assert paper_config.strategy_semantics.strategy_config["model_training"]["seed"] == 42
+    payload = qe_config.strategy_semantics.model_dump(mode="json")
+    assert "minute_execution_policy" not in payload
+    assert "strategy_config" not in payload
+    assert payload["source_lineage"]["source_id"] == "qe_runtime_exp"
 
 
-def test_strategy_semantics_hash_changes_when_strategy_changes() -> None:
+def test_strategy_semantics_hash_ignores_platform_runtime_policy_changes() -> None:
     manifest = _make_manifest()
     base_config = build_unified_runtime_config_from_manifest(manifest, adapter=_qe_adapter())
     changed_manifest = freeze_manifest(
@@ -120,8 +123,8 @@ def test_strategy_semantics_hash_changes_when_strategy_changes() -> None:
 
     changed_config = build_unified_runtime_config_from_manifest(changed_manifest, adapter=_qe_adapter())
 
-    assert changed_config.config_sha256 != base_config.config_sha256
-    assert changed_config.strategy_semantics.portfolio_policy["topk"] == 20
+    assert changed_config.config_sha256 == base_config.config_sha256
+    assert "portfolio_policy" not in changed_config.strategy_semantics.model_dump(mode="json")
 
 
 def test_platform_hmm_and_st_pit_snapshots_are_not_locked_into_strategy_semantics() -> None:
@@ -154,10 +157,11 @@ def test_platform_hmm_and_st_pit_snapshots_are_not_locked_into_strategy_semantic
         hmm_usage_policy=HMMUsagePolicy(enabled=True),
     )
 
-    assert "hmm_snapshot_id" not in config.strategy_semantics.strategy_config
-    assert "_precomputed_hmm_coefficients_json" not in config.strategy_semantics.strategy_config
-    assert "st_pit_snapshot_id" not in config.strategy_semantics.universe_policy
-    assert "st_pit_start_date" not in config.strategy_semantics.universe_policy
+    semantics_payload = config.strategy_semantics.model_dump(mode="json")
+    assert "strategy_config" not in semantics_payload
+    assert "universe_policy" not in semantics_payload
+    assert "portfolio_policy" not in semantics_payload
+    assert "minute_execution_policy" not in semantics_payload
     assert config.strategy_semantics.hmm_usage_policy.enabled is True
     assert config.platform_capabilities.hmm.active_model_version == "hmm_rt_v2"
     assert config.platform_capabilities.universe.source == "paper_v2_platform_latest"

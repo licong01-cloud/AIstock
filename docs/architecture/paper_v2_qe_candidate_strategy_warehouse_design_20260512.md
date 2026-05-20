@@ -1,5 +1,7 @@
 # Paper v2 / QE 候选策略包与数仓边界正式设计
 
+> **2026-05-20 边界更新**：本文中关于 HMM/ST PIT/事件信号平台化的方向保留；但凡写到 `StrategyPackage` 锁定日频策略、分钟线执行策略、尾盘处理策略、组合/风控配置的描述，均已被 `docs/architecture/strategy_package_platform_boundary_contract_20260520.md` 取代。新版边界规定：StrategyPackage 只绑定因子和模型 alpha core；日频策略、分钟执行、尾盘处理、HMM、ST PIT、event_signal、broker、模拟盘/实盘审批全部属于平台运行能力，必须通过版本化 profile/policy/activation 管理。
+
 **日期**: 2026-05-12
 **状态**: 正式边界替换稿
 **适用范围**: QE 实验、QE Loop、QE 数仓、候选策略包、Paper v2 StrategyPackage、选股、AIstock 模拟盘、未来 miniQMT 模拟盘/实盘适配

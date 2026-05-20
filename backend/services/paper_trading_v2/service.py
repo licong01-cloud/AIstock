@@ -68,6 +68,8 @@ RUNTIME_PROFILE_INPUT_KEYS = {
     "hmm_coefficients_path",
     "hmm_coefficients_file",
     "risk_policy",
+    "daily_strategy_id",
+    "daily_strategy_params",
     "selection_artifact_config",
     "selection_artifact",
     "model",
@@ -148,10 +150,15 @@ class PaperTradingV2PortfolioService:
         # implemented in Codex schema. Once available, this gate will block
         # portfolios whose backend is incompatible with the package.
         self._validate_broker_compatibility(manifest=manifest, broker_backend=broker_backend)
+        manifest_execution_policy = (
+            manifest.minute_execution_policy.model_dump(mode="json")
+            if manifest.minute_execution_policy is not None
+            else None
+        )
         validated_policy = self._resolve_validated_execution_policy(
             package_id=package_id,
             manifest_sha256=manifest.manifest_sha256,
-            manifest_execution_policy=manifest.minute_execution_policy.model_dump(mode="json"),
+            manifest_execution_policy=manifest_execution_policy,
             manifest=manifest,
             requested_policy=execution_policy,
         )
@@ -165,7 +172,7 @@ class PaperTradingV2PortfolioService:
             data_source=data_source,
             broker_backend=broker_backend,
             fee_policy=fee_policy or self._default_fee_policy(),
-            risk_policy=risk_policy or manifest.risk_policy.model_dump(mode="json"),
+            risk_policy=risk_policy or {},
             execution_policy=self._paper_execution_policy_payload(validated_policy),
             status=PortfolioStatus.READY,
         )
@@ -921,11 +928,13 @@ class PaperTradingV2PortfolioService:
                 manifest,
                 config_json,
                 context={"package_id": getattr(manifest, "package_id", None), "check": "runtime_profile_config"},
+                inherit_source_defaults=False,
             )
         else:
             normalized = normalize_selection_runtime_config(config_json)
         for legacy_key in RUNTIME_PROFILE_INPUT_KEYS.difference(RUNTIME_PROFILE_VERSION_ALLOWED_KEYS):
             normalized.pop(legacy_key, None)
+        self._drop_unset_daily_strategy_defaults(normalized, config_json)
         unknown_after = sorted(set(normalized).difference(RUNTIME_PROFILE_VERSION_ALLOWED_KEYS))
         if unknown_after:
             raise StrategyPackageValidationError(
@@ -937,6 +946,36 @@ class PaperTradingV2PortfolioService:
             )
         compute_runtime_config_sha256(normalized)
         return normalized
+
+    @staticmethod
+    def _drop_unset_daily_strategy_defaults(
+        normalized: dict[str, Any],
+        original_config: dict[str, Any],
+    ) -> None:
+        """Do not persist implicit daily-strategy placeholders on profile versions."""
+
+        profile = normalized.get("runtime_profile")
+        if not isinstance(profile, dict):
+            return
+        selection = profile.get("selection")
+        if not isinstance(selection, dict):
+            return
+        original_profile = original_config.get("runtime_profile")
+        original_selection = (
+            original_profile.get("selection")
+            if isinstance(original_profile, dict) and isinstance(original_profile.get("selection"), dict)
+            else {}
+        )
+        daily_id_explicit = (
+            "daily_strategy_id" in original_config or "daily_strategy_id" in original_selection
+        )
+        daily_params_explicit = (
+            "daily_strategy_params" in original_config or "daily_strategy_params" in original_selection
+        )
+        if not daily_id_explicit and selection.get("daily_strategy_id") is None:
+            selection.pop("daily_strategy_id", None)
+        if not daily_params_explicit and not selection.get("daily_strategy_params"):
+            selection.pop("daily_strategy_params", None)
 
     @staticmethod
     def _reject_runtime_profile_execution_overrides(config_json: dict[str, Any]) -> None:
@@ -1002,7 +1041,7 @@ class PaperTradingV2PortfolioService:
         *,
         package_id: str,
         manifest_sha256: str,
-        manifest_execution_policy: dict[str, Any],
+        manifest_execution_policy: dict[str, Any] | None,
         manifest: Any,
         requested_policy: dict[str, Any] | None,
     ) -> ValidatedExecutionPolicy:
@@ -1019,6 +1058,11 @@ class PaperTradingV2PortfolioService:
                 raise StrategyPackageValidationError("validated_execution_policy_id is required")
             policy = self.package_repository.get_execution_policy(package_id, str(policy_id))
         else:
+            if manifest.is_alpha_core_manifest or manifest_execution_policy is None:
+                raise StrategyPackageValidationError(
+                    "alpha-core StrategyPackage requires an explicit backtest-validated execution policy id for Paper v2",
+                    context={"package_id": package_id, "manifest_sha256": manifest_sha256},
+                )
             policy = self._ensure_default_manifest_execution_policy(
                 package_id=package_id,
                 manifest_execution_policy=manifest_execution_policy,
@@ -1051,7 +1095,7 @@ class PaperTradingV2PortfolioService:
         self,
         *,
         package_id: str,
-        manifest_execution_policy: dict[str, Any],
+        manifest_execution_policy: dict[str, Any] | None,
     ) -> ValidatedExecutionPolicy:
         normalized_policy = normalize_execution_policy_json(manifest_execution_policy)
         digest = compute_execution_policy_sha256(normalized_policy)

@@ -13,6 +13,7 @@ from backend.services.qmt_strategy_ledger.models import (
     CashEntryType,
     CashLedgerEntry,
     PositionLotRecord,
+    StrategyBindingSelectionEvidence,
     StrategyPackageBinding,
     VirtualAccount,
     VirtualAccountStatus,
@@ -141,17 +142,30 @@ def _repo() -> InMemoryQmtStrategyLedgerRepository:
             trade_date=TRADE_DATE,
         )
     )
-    repo.create_package_binding(
+    binding = repo.create_package_binding(
         StrategyPackageBinding(
             binding_id="bind_a",
             strategy_id="strat_a",
             package_id="pkg_a",
             manifest_sha256="sha_a",
-            selection_run_id="sel_a",
-            trade_date=TRADE_DATE,
+            selection_run_id=None,
+            trade_date=None,
             target_weight=Decimal("0.02"),
             top_k=20,
             binding_status=BindingStatus.ACTIVE,
+        )
+    )
+    repo.record_binding_selection_evidence(
+        StrategyBindingSelectionEvidence(
+            evidence_id="ev_a",
+            binding_id=binding.binding_id,
+            strategy_id=binding.strategy_id,
+            package_id=binding.package_id,
+            selection_run_id="sel_a",
+            trade_date=TRADE_DATE,
+            data_source="DB_HISTORICAL",
+            manifest_sha256="sha_a",
+            runtime_config_hash=selection_artifact_runtime_hash({}),
         )
     )
     return repo
@@ -179,7 +193,7 @@ def test_virtual_strategy_summary_exposes_accounts_lots_and_overlap() -> None:
 
     strat_a = next(row for row in summary["strategies"] if row["strategy_id"] == "strat_a")
     assert strat_a["active_binding"]["package_id"] == "pkg_a"
-    assert strat_a["active_binding"]["selection_run_id"] == "sel_a"
+    assert strat_a["active_binding"]["selection_run_id"] is None
     assert strat_a["positions"] == [
         {
             "symbol": "300604.SZ",
@@ -194,7 +208,7 @@ def test_virtual_strategy_summary_exposes_accounts_lots_and_overlap() -> None:
     ]
 
 
-def test_package_binding_router_requires_explicit_replace_and_rolls_over_active_binding() -> None:
+def test_package_binding_router_records_daily_selection_without_replacing_active_binding() -> None:
     repo = _repo()
     qmt_strategy_ledger.configure_dependencies(
         repository_factory=lambda: repo,
@@ -215,22 +229,30 @@ def test_package_binding_router_requires_explicit_replace_and_rolls_over_active_
         "top_k": 20,
     }
 
-    rejected = client.post("/api/v1/qmt/virtual-strategies/package-bindings", json=payload)
-    assert rejected.status_code == 409
-    assert rejected.json()["detail"]["error_code"] == "INVALID_STATE_TRANSITION"
+    recorded = client.post("/api/v1/qmt/virtual-strategies/package-bindings", json=payload)
 
-    replaced = client.post(
-        "/api/v1/qmt/virtual-strategies/package-bindings",
-        json={**payload, "replace_active": True, "replacement_reason": "next_day"},
-    )
-
-    body = replaced.json()
-    assert replaced.status_code == 200
-    assert body["action"] == "replaced_active"
-    assert body["binding"]["selection_run_id"] == "sel_b"
-    assert body["binding"]["trade_date"] == "2026-05-19"
-    assert body["replaced_binding"]["binding_id"] == "bind_a"
-    assert body["replaced_binding"]["binding_status"] == "RETIRED"
+    body = recorded.json()
+    assert recorded.status_code == 200
+    assert body["action"] == "daily_selection_recorded"
+    assert body["binding"]["selection_run_id"] is None
+    assert body["binding"]["trade_date"] is None
+    assert body["replaced_binding"] is None
+    assert body["daily_selection_evidence"]["selection_run_id"] == "sel_b"
+    assert body["daily_selection_evidence"]["trade_date"] == "2026-05-19"
     active = repo.get_active_package_binding("strat_a")
-    assert active.selection_run_id == "sel_b"
-    assert active.runtime_config["frozen_runtime_asset"]["artifact_sha256"]
+    assert active.binding_id == "bind_a"
+    evidence = repo.get_binding_selection_evidence(active.binding_id, date(2026, 5, 19))
+    assert evidence.selection_run_id == "sel_b"
+    assert evidence.artifact_sha256
+
+
+def test_package_binding_order_preview_fails_fast_until_minqmt_execution_bridge_exists() -> None:
+    repo = _repo()
+    response = _client(repo).post("/api/v1/qmt/virtual-strategies/package-bindings/bind_a/orders/preview", json={})
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["error_code"] == "UNSUPPORTED_FEATURE"
+    assert detail["context"]["issue"] == "BUG-077"
+    assert detail["context"]["disabled_path"] == "SelectionRun -> SelectionOrderBuilder -> ManagedOrderRequest"
+    assert "validated execution policy" in detail["context"]["required_path"]

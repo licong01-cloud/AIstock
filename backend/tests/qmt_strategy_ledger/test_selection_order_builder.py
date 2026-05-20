@@ -1,8 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
+from typing import Any
 
 import pytest
 
@@ -14,6 +15,7 @@ from backend.services.qmt_strategy_ledger.models import (
     SELL_ORDER_TYPE,
     OrderIntentRecord,
     PositionLotRecord,
+    StrategyBindingSelectionEvidence,
     StrategyPackageBinding,
     VirtualAccount,
     VirtualAccountStatus,
@@ -23,7 +25,8 @@ from backend.services.qmt_strategy_ledger.order_service import QmtManagedOrderSe
 from backend.services.qmt_strategy_ledger.selection_order_builder import SelectionOrderBuilder, SelectionOrderBuildConfig
 from backend.services.selection_center.models import SelectionCandidate, SelectionMode, SelectionRun, SelectionRunStatus
 from backend.services.strategy_package.runtime import RebalanceEngine, TargetPositionEngine
-from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
+from backend.services.strategy_package.selection_artifact import selection_artifact_runtime_hash
+from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError, UnsupportedFeatureError
 from backend.services.trading_core.models import OrderSide
 
 
@@ -91,8 +94,8 @@ def _binding(target_weight: Decimal | None = Decimal("0.02"), top_k: int | None 
         strategy_id="strat_a",
         package_id="pkg_a",
         manifest_sha256="sha_a",
-        selection_run_id="sel_a",
-        trade_date=TRADE_DATE,
+        selection_run_id=None,
+        trade_date=None,
         target_weight=target_weight,
         top_k=top_k,
         binding_status=BindingStatus.ACTIVE,
@@ -118,8 +121,52 @@ def _selection_run(
     )
 
 
-def _builder(repo: InMemoryQmtStrategyLedgerRepository, run: SelectionRun) -> SelectionOrderBuilder:
-    return SelectionOrderBuilder(repository=repo, selection_reader=FakeSelectionReader(run), calendar_provider=CALENDAR)
+def _builder(repo: InMemoryQmtStrategyLedgerRepository, run: SelectionRun) -> Any:
+    class _BuilderHarness:
+        def _builder(self) -> SelectionOrderBuilder:
+            return SelectionOrderBuilder(
+                repository=repo,
+                selection_reader=FakeSelectionReader(run),
+                calendar_provider=CALENDAR,
+                allow_legacy_direct_order_generation=True,
+            )
+
+        def __getattr__(self, name: str):
+            return getattr(self._builder(), name)
+        def build_for_binding(
+            self,
+            *,
+            binding: StrategyPackageBinding,
+            config: SelectionOrderBuildConfig | None = None,
+        ):
+            _ensure_evidence(repo, binding, run)
+            return self._builder().build_for_binding(binding=binding, trade_date=run.trade_date, config=config)
+    return _BuilderHarness()
+
+
+def _ensure_evidence(
+    repo: InMemoryQmtStrategyLedgerRepository,
+    binding: StrategyPackageBinding,
+    run: SelectionRun,
+) -> None:
+    try:
+        repo.get_binding_selection_evidence(binding.binding_id, run.trade_date)
+        return
+    except DataUnavailableError:
+        pass
+    repo.record_binding_selection_evidence(
+        StrategyBindingSelectionEvidence(
+            evidence_id=f"ev_{binding.binding_id}_{run.trade_date.isoformat()}",
+            binding_id=binding.binding_id,
+            strategy_id=binding.strategy_id,
+            package_id=binding.package_id,
+            selection_run_id=run.run_id,
+            trade_date=run.trade_date,
+            data_source=run.data_source,
+            manifest_sha256=binding.manifest_sha256,
+            runtime_config_hash=selection_artifact_runtime_hash(run.runtime_config),
+        )
+    )
 
 
 def _lot(
@@ -563,7 +610,7 @@ def test_selection_order_builder_honors_top_k_without_broker_call() -> None:
         binding=binding
     )
 
-    assert {request.symbol for request in result.requests} == {"300604.SZ", "300054.SZ"}
+    assert sorted(request.symbol for request in result.requests) == ["300054.SZ", "300604.SZ"]
 
 
 def test_selection_order_builder_uses_shared_rebalance_engine(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -670,6 +717,7 @@ def test_selection_order_builder_preserves_shared_decision_intent_sequence() -> 
     ]
 
 
+
 def test_selection_order_builder_fails_fast_without_price_or_succeeded_run() -> None:
     repo = _repo()
     binding = repo.create_package_binding(_binding(target_weight=Decimal("0.02")))
@@ -695,6 +743,76 @@ def test_selection_order_builder_fails_fast_without_price_or_succeeded_run() -> 
         )
 
 
+def test_selection_order_builder_requires_current_day_selection_evidence() -> None:
+    repo = _repo()
+    binding = repo.create_package_binding(_binding(target_weight=Decimal("0.02")))
+    run = _selection_run([SelectionCandidate(symbol="300604.SZ", score=0.9, rank=1, target_weight=0.02, reference_price=10)])
+
+    with pytest.raises(DataUnavailableError, match="current-day MiniQMT selection evidence is missing"):
+        SelectionOrderBuilder(
+            repository=repo,
+            selection_reader=FakeSelectionReader(run),
+            calendar_provider=CALENDAR,
+            allow_legacy_direct_order_generation=True,
+        ).build_for_binding(binding=binding, trade_date=TRADE_DATE)
+
+
+def test_selection_order_builder_rejects_stale_selection_evidence_for_future_day() -> None:
+    repo = _repo()
+    binding = repo.create_package_binding(_binding(target_weight=Decimal("0.02")))
+    run = _selection_run([SelectionCandidate(symbol="300604.SZ", score=0.9, rank=1, target_weight=0.02, reference_price=10)])
+    repo.record_binding_selection_evidence(
+        StrategyBindingSelectionEvidence(
+            evidence_id="ev_stale",
+            binding_id=binding.binding_id,
+            strategy_id=binding.strategy_id,
+            package_id=binding.package_id,
+            selection_run_id=run.run_id,
+            trade_date=NEXT_TRADE_DATE,
+            data_source=run.data_source,
+            manifest_sha256=binding.manifest_sha256,
+            runtime_config_hash=selection_artifact_runtime_hash(run.runtime_config),
+        )
+    )
+
+    with pytest.raises(DataUnavailableError, match="selection run is stale"):
+        SelectionOrderBuilder(
+            repository=repo,
+            selection_reader=FakeSelectionReader(run),
+            calendar_provider=CALENDAR,
+            allow_legacy_direct_order_generation=True,
+        ).build_for_binding(binding=binding, trade_date=NEXT_TRADE_DATE)
+
+
+def test_selection_order_builder_rejects_runtime_hash_mismatched_daily_evidence() -> None:
+    repo = _repo()
+    binding = repo.create_package_binding(_binding(target_weight=Decimal("0.02")))
+    run = _selection_run([SelectionCandidate(symbol="300604.SZ", score=0.9, rank=1, target_weight=0.02, reference_price=10)])
+    repo.record_binding_selection_evidence(
+        StrategyBindingSelectionEvidence(
+            evidence_id="ev_bad_hash",
+            binding_id=binding.binding_id,
+            strategy_id=binding.strategy_id,
+            package_id=binding.package_id,
+            selection_run_id=run.run_id,
+            trade_date=TRADE_DATE,
+            data_source=run.data_source,
+            manifest_sha256=binding.manifest_sha256,
+            runtime_config_hash="different_runtime_hash",
+        )
+    )
+
+    with pytest.raises(DataUnavailableError, match="runtime hash does not match daily evidence") as exc_info:
+        SelectionOrderBuilder(
+            repository=repo,
+            selection_reader=FakeSelectionReader(run),
+            calendar_provider=CALENDAR,
+            allow_legacy_direct_order_generation=True,
+        ).build_for_binding(binding=binding, trade_date=TRADE_DATE)
+
+    assert exc_info.value.context["asset_stage"] == "daily_order_build"
+
+
 def test_selection_order_builder_rejects_historical_retired_binding() -> None:
     repo = _repo()
     binding = _binding()
@@ -718,22 +836,34 @@ def test_selection_order_builder_fails_fast_on_corrupt_frozen_asset_evidence() -
         StrategyPackageBinding(
             **{
                 **_binding().__dict__,
-                "runtime_config": {
-                    "frozen_runtime_asset": {
-                        "artifact_id": "ssa_bad",
-                        "manifest_sha256": "sha_other",
-                        "runtime_config_hash": "runtime_hash",
-                        "source_type": "live_qe_model_inference_v1",
-                        "authority_scope": "authoritative_selection",
-                    }
-                },
             }
         )
     )
     run = _selection_run([SelectionCandidate(symbol="300604.SZ", score=0.9, rank=1, reference_price=10)])
+    repo.record_binding_selection_evidence(
+        StrategyBindingSelectionEvidence(
+            evidence_id="ev_bad",
+            binding_id=binding.binding_id,
+            strategy_id=binding.strategy_id,
+            package_id=binding.package_id,
+            selection_run_id=run.run_id,
+            trade_date=run.trade_date,
+            data_source=run.data_source,
+            manifest_sha256="sha_a",
+            runtime_config_hash=selection_artifact_runtime_hash(run.runtime_config),
+            artifact_id="ssa_bad",
+            source_type="live_qe_model_inference_v1",
+            authority_scope="authoritative_selection",
+        )
+    )
 
-    with pytest.raises(DataUnavailableError, match="runtime asset evidence is incomplete") as exc_info:
+    with pytest.raises(DataUnavailableError, match="daily selection evidence is incomplete") as exc_info:
         _builder(repo, run).build_for_binding(binding=binding)
 
     assert exc_info.value.context["asset_stage"] == "daily_order_build"
     assert "artifact_sha256" in exc_info.value.context["missing"]
+
+
+
+
+
