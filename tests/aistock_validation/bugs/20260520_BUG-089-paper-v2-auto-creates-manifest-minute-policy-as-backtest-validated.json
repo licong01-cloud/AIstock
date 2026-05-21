@@ -6,7 +6,7 @@
   "module": "paper_v2",
   "severity": "P1",
   "risk_area": "execution_policy_validation_evidence",
-  "status": "open",
+  "status": "wontfix",
   "trigger_condition": {
     "scenario": "reported_via_codex_app_strategy_platform_boundary_audit_20260520",
     "boundary_contract": "docs/architecture/strategy_package_platform_boundary_contract_20260520.md",
@@ -41,7 +41,7 @@
   "last_seen_at": "2026-05-20T04:32:40Z",
   "fixed_at": null,
   "submitted_at": "2026-05-20T04:32:40Z",
-  "closed_at": null,
+  "closed_at": "2026-05-21T00:00:00+08:00",
   "allowed_write_scope": [
     "backend/services/paper_trading_v2/service.py",
     "backend/services/strategy_package/execution_policy.py",
@@ -85,6 +85,13 @@
       "actor": "codex-app",
       "action": "github_sync_verified",
       "note": "GitHub issue #111 URL recorded in local BUG JSON."
+    },
+    {
+      "timestamp": "2026-05-21T00:00:00+08:00",
+      "actor": "codex-app",
+      "action": "registry_duplicate_closed",
+      "note": "Registry drift sync: this stale pre-renumber record is superseded by canonical BUG-092 linked to the same GitHub issue #111, which is closed after merge."
     }
-  ]
+  ],
+  "superseded_by_bug_id": "BUG-092"
 }

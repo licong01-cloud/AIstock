@@ -6,7 +6,7 @@
     "module":  "strategy_package",
     "severity":  "P1",
     "risk_area":  "strategy_package_asset_authority",
-    "status":  "in_progress",
+    "status":  "fixed",
     "trigger_condition":  {
                               "scenario":  "reported_via_mcp",
                               "files":  [
@@ -40,7 +40,7 @@
     "created_at":  "2026-05-19T04:45:14Z",
     "first_seen_at":  "2026-05-19T04:45:14Z",
     "last_seen_at":  "2026-05-19T04:45:14Z",
-    "fixed_at":  null,
+    "fixed_at":  "2026-05-19T21:21:14Z",
     "submitted_at":  "2026-05-19T04:45:14Z",
     "closed_at":  null,
     "allowed_write_scope":  [
@@ -145,6 +145,12 @@
                        "actor":  "codex-app",
                        "action":  "claimed",
                        "note":  "Fix work started in dedicated worktree F:\\Dev\\AIstock_worktrees\\bug-057-miniqmt-frozen-assets on branch bug/BUG-057-miniqmt-frozen-assets. Added actual test paths because repository uses test_live_inference_preflight.py rather than test_live_inference.py."
+                   },
+                   {
+                       "timestamp":  "2026-05-21T00:00:00+08:00",
+                       "actor":  "codex-app",
+                       "action":  "registry_status_sync",
+                       "note":  "Registry drift sync: GitHub issue #60 is closed with status:fixed after frozen runnable asset authority fix was merged; update local BUG status from in_progress to fixed."
                    }
                ],
     "github_issue_number":  60,

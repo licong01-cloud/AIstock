@@ -6,7 +6,7 @@
   "module": "paper_v2",
   "severity": "P0",
   "risk_area": "runtime_profile_activation_boundary",
-  "status": "fixed_pending_review",
+  "status": "fixed",
   "trigger_condition": {
     "scenario": "github_issue_108_missing_local_registry_record",
     "files": [
@@ -110,6 +110,12 @@
       "actor": "codex-app",
       "action": "ci_refresh_fixed",
       "note": "Fixed PR #131 paper_v2_backend CI regression by moving platform-default runtime_profile_binding hash generation after package-contract normalization; refreshed validation passed with paper_v2_backend 453 passed, 1 skipped, 2 xfailed and git diff origin/main...HEAD --check passed."
+    },
+    {
+      "timestamp": "2026-05-21T00:00:00+08:00",
+      "actor": "codex-app",
+      "action": "registry_status_sync",
+      "note": "Registry drift sync: GitHub issue #108 is closed after PR merge; replace transitional fixed_pending_review with fixed."
     }
   ],
   "github_pr_number": 131,
