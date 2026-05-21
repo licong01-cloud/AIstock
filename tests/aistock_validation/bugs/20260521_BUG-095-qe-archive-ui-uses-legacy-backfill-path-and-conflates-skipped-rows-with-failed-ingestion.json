@@ -6,7 +6,7 @@
   "module": "qe_archive",
   "severity": "P1",
   "risk_area": "warehouse_ui_audit_semantics",
-  "status": "in_progress",
+  "status": "fixed",
   "trigger_condition": {
     "scenario": "qe_archive_ui_legacy_write_and_summary_mismatch",
     "affected_routes": [
@@ -29,12 +29,12 @@
   "fingerprint": "qe_archive::ui_legacy_backfill_summary_semantics::20260521",
   "assigned_agent": "codex-app",
   "fix_branch": "bug/BUG-094-095-qe-archive-audit-semantics",
-  "fix_commit": null,
-  "verification_run_id": null,
+  "fix_commit": "b6889b5",
+  "verification_run_id": "qe_archive_backend;qe_mcp_backend;qe_mcp_l3;qe_archive_ui;qe_archive_l3;guardrail_changed_files;validation_catalog_integrity;validation_module_registry_l0",
   "created_at": "2026-05-21T04:40:43Z",
   "first_seen_at": "2026-05-21T04:40:43Z",
-  "last_seen_at": "2026-05-21T05:16:00Z",
-  "fixed_at": null,
+  "last_seen_at": "2026-05-21T05:25:23Z",
+  "fixed_at": "2026-05-21T05:25:23Z",
   "submitted_at": "2026-05-21T04:40:43Z",
   "closed_at": null,
   "github_issue_number": 139,
@@ -96,6 +96,12 @@
       "actor": "codex-app",
       "action": "fix_started",
       "note": "Dedicated worktree F:/Dev/AIstock_worktrees/bug-094-095-qe-archive-audit-semantics on branch bug/BUG-094-095-qe-archive-audit-semantics."
+    },
+    {
+      "timestamp": "2026-05-21T05:25:23Z",
+      "actor": "codex-app",
+      "action": "fixed_pending_user_merge_confirmation",
+      "note": "Implementation committed as b6889b5. Branch-local validation completed: python -m pytest backend/tests/test_qe_archive_repository_static.py backend/tests/test_aistock_qe_mcp_servers.py -q -p no:cacheprovider (57 passed); python -m nox -s qe_archive_backend (109 passed); python -m nox -s qe_mcp_backend (30 passed); python -m nox -s qe_mcp_l3 (success); python -m nox -s qe_archive_ui (7 Playwright passed); python -m nox -s qe_archive_l3 with guarded dev DB env 127.0.0.1:5433/aistock_dev (success; data_quality failures=[]); python -m nox -s validation_catalog_integrity validation_module_registry_l0 (success); python -m nox -s guardrail_changed_files -- --changed-only (success; blocking=0); git diff --check (pass)"
     }
   ]
 }
