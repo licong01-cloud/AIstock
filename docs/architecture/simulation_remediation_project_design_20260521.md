@@ -7,12 +7,14 @@
 
 ## 0. 结论
 
-本整改项目必须把 AIstock 模拟盘建设成一条统一的策略运行链路：
+本整改项目必须把 AIstock 的选股和模拟盘建设成一条统一的策略运行链路。选股功能是这条链路的前半段，只执行到 `Daily Selection Signal` / `Selection Evidence`，不继续做仓位分配、调仓、执行计划和交易；LocalSim 与 MiniQMT 模拟盘则在相同选股证据上继续向后执行。
 
 ```text
 StrategyPackage alpha core
   -> Platform Runtime Binding
   -> Daily Selection Signal
+       -> Selection-only result / Selection Center
+       -> Simulation continuation
   -> Target Position
   -> Rebalance Intent
   -> Validated Execution Plan
@@ -22,15 +24,16 @@ StrategyPackage alpha core
   -> Ledger / Reconciliation / Performance / Ops Console
 ```
 
-其中从 StrategyPackage 到 `Validated Execution Plan` 必须是共享能力，LocalSim 和 MiniQMT 只允许在最后的 broker 执行、成交回报、对账权威来源上分叉。任何把 LocalSim 和 MiniQMT 做成两套独立全流程、各自生成信号或各自解释策略配置的实现，均不满足本设计。
+其中从 StrategyPackage 到 `Daily Selection Signal` 必须同时被 Selection Center、LocalSim 和 MiniQMT 共享；从 `Daily Selection Signal` 到 `Validated Execution Plan` 必须被 LocalSim 和 MiniQMT 共享。LocalSim 和 MiniQMT 只允许在最后的 broker 执行、成交回报、对账权威来源上分叉。任何把选股、LocalSim、MiniQMT 做成三套独立全流程、各自解释策略包或各自生成不同信号的实现，均不满足本设计。
 
 整改完成后必须达到以下能力：
 
-1. LocalSim 路径可以从策略包开始，无值守完成多策略运行、盘前选股、目标仓位、订单生成、分钟线撮合、尾盘处理、快照和收益统计。
-2. MiniQMT 路径可以从同一策略包和同一运行配置开始，无值守完成多策略运行、盘前选股、目标仓位、订单计划、托管下单、状态同步、成交归因、策略分仓、对账和收益统计。
-3. 两条路径对同一个策略包、同一个 runtime profile、同一个 trade_date 的日频信号和目标仓位应产生一致的策略决策证据；实际成交差异只来自 broker 执行环境。
-4. 多策略分仓必须支持每个策略独立资金、独立收益、独立持仓 lot、独立风控和独立审计；同一股票被多个策略持有时，MiniQMT broker 侧可以是合并持仓，但 AIstock 必须能按策略清晰归因。
-5. 调度、重启恢复、异常处理、尾盘处理、数据门禁、实盘审批、UI 可观测性和流水线验证必须全部纳入验收，不得留为“后续补齐”的隐含缺口。
+1. Selection Center 只能做基于 StrategyPackage alpha core + 平台 runtime profile 的选股，输出 authoritative selection evidence；不得绑定仓位、调仓、broker、资金或交易门禁。
+2. LocalSim 路径可以从同一份 selection evidence 开始，无值守完成多策略运行、目标仓位、订单生成、分钟线撮合、尾盘处理、快照和收益统计。
+3. MiniQMT 路径可以从同一份 selection evidence 和同一运行配置开始，无值守完成多策略运行、目标仓位、订单计划、托管下单、状态同步、成交归因、策略分仓、对账和收益统计。
+4. Selection Center、LocalSim、MiniQMT 对同一个策略包、同一个 runtime profile、同一个 trade_date 的日频信号必须一致；LocalSim 和 MiniQMT 的目标仓位也必须一致；实际成交差异只来自 broker 执行环境。
+5. 多策略分仓必须支持每个策略独立资金、独立收益、独立持仓 lot、独立风控和独立审计；同一股票被多个策略持有时，MiniQMT broker 侧可以是合并持仓，但 AIstock 必须能按策略清晰归因。
+6. 调度、重启恢复、异常处理、尾盘处理、数据门禁、实盘审批、UI 可观测性和流水线验证必须全部纳入验收，不得留为“后续补齐”的隐含缺口。
 
 ## 1. 设计依据和现状约束
 
@@ -172,6 +175,7 @@ Layer F: Scheduler / Ops / Validation
 | 服务 | 职责 | 不允许做什么 |
 |---|---|---|
 | `SimulationRuntimeBindingService` | 解析 StrategyPackage + runtime profile + execution policy + broker binding，输出不可变 `SimulationReleaseBinding` | 不修改 StrategyPackage manifest |
+| `StrategyPackageSelectionService` | Selection Center、LocalSim、MiniQMT 共用的策略包选股入口；只消费 alpha core 和平台 runtime profile，生成 selection evidence / signal snapshot | 不做仓位分配、调仓、订单、broker 检查或资金检查 |
 | `DailySelectionSignalService` | 为 target trade_date 生成/加载 authoritative selection artifact 和 signal snapshot | 不读取 QE backtest pred.pkl 代替实时推理 |
 | `TradabilityDecisionService` | 统一处理停牌、ST/PIT、股票池、涨跌停可交易性、公告风险 | 不在 LocalSim/MiniQMT 内重复实现不同门禁 |
 | `TargetPositionService` | 根据 signal snapshot、daily strategy profile、资金和当前策略持仓生成目标仓位 | 不直接提交 broker order |
@@ -210,6 +214,45 @@ ExecutionPlan
 | 现金权威 | LocalSim ledger | AIstock 分仓现金 + broker 账户总额对账 |
 | 重启恢复 | run/order/fill state + minute cursor | intent/order_remark/qmt_order_id/trade_id + sync snapshot |
 | 收益展示 | portfolio/strategy ledger | virtual strategy ledger + reconciliation projection |
+
+### 3.4 Selection-only 路径
+
+Selection Center 必须使用与模拟盘完全相同的策略包选股入口，只在 `Daily Selection Signal` 后停止：
+
+```text
+StrategyPackage alpha core
+  -> Platform Runtime Binding
+  -> StrategyPackageSelectionService
+  -> DailySelectionEvidence
+  -> SignalSnapshot / ranked candidates / exclusion evidence
+  -> Selection Center result
+```
+
+Selection-only 路径的硬规则：
+
+1. 只允许从 StrategyPackage alpha core 和平台 runtime profile 生成选股结果。
+2. 不允许 Selection Center 读取或解释 broker、账户资金、仓位、T+1 可卖量、order_remark、strategy_name。
+3. 不允许 Selection Center 生成 target position、rebalance intent、execution plan 或 broker order。
+4. 不允许 Selection Center 使用与模拟盘不同的 HMM、ST/PIT、股票池、停牌、涨跌停、公告风险、industry blacklist 逻辑。
+5. Selection Center 输出的 `DailySelectionEvidence` 必须能被 LocalSim 和 MiniQMT 直接引用；模拟盘不得重新计算一套不一致的选股结果。
+6. 手动选股、批量选股、盘前自动选股、模拟盘盘前信号生成必须共用同一个服务和同一个 evidence schema。
+
+Selection-only 路径需要的门禁只包括：
+
+| 门禁 | 说明 |
+|---|---|
+| StrategyPackage alpha core 完整性 | 因子、模型、schema、artifact hash、manifest identity |
+| RuntimeProfile 激活和 hash | HMM / stock pool / tradability / risk 等平台选股能力版本 |
+| 数据 readiness | 仅选股所需数据；不得包含 broker、资金、持仓、execution policy、tail policy |
+| Authoritative inference artifact | 生成或加载 target_trade_date 对应 selection evidence |
+
+Selection-only 路径明确禁止的额外门禁：
+
+- broker 连接、MiniQMT 账户、LocalSim ledger、资金余额。
+- `ValidatedExecutionPolicy`、`TailHandlingPolicy`。
+- board-lot、T+1 可卖量、order quantity、cash freeze。
+- 历史 selection_run 作为未来交易日的长期绑定。
+- `daily_basic` 等盘后数据作为盘前选股硬门槛。
 
 ## 4. 关键数据模型
 
@@ -541,6 +584,7 @@ AIstock Virtual Strategy Ledger
 | 测试组 | 覆盖 |
 |---|---|
 | `test_simulation_runtime_binding.py` | binding version、hash、不可变、变更生成新版本 |
+| `test_strategy_package_selection_service.py` | Selection Center、LocalSim、MiniQMT 共用同一 selection service；Selection-only 不依赖仓位、资金、broker、execution policy |
 | `test_daily_selection_signal_service.py` | cutoff、target_trade_date、authoritative source、禁止 pred.pkl |
 | `test_target_rebalance_shared.py` | 同一 signal 在 LocalSim/MiniQMT 生成一致 targets/intents；淘汰股票 sell |
 | `test_trading_rule_service.py` | 主板/创业板/科创板 lot、T+1、涨跌停、价格 tick |
@@ -553,6 +597,7 @@ AIstock Virtual Strategy Ledger
 
 | 测试组 | 覆盖 |
 |---|---|
+| Selection Center shared selection | 策略包 -> runtime profile -> selection evidence；结果与 LocalSim/MiniQMT 前置信号一致 |
 | LocalSim full day | 策略包 -> selection -> target -> order -> fill -> snapshot |
 | LocalSim multi-strategy | 两个策略同日运行，资金/持仓/收益隔离 |
 | LocalSim catch-up/live | DB replay -> TDX live -> final snapshot |
@@ -569,6 +614,7 @@ AIstock Virtual Strategy Ledger
 - 创建 MiniQMT SIM session。
 - readiness 检查。
 - 手动生成 selection evidence。
+- 调用 Selection Center selection-only API 并确认只返回候选、排除原因、evidence hash，不返回 target/order/broker/cash 字段。
 - 手动 tick。
 - 查询 run events。
 - 查询 execution plan。
@@ -595,6 +641,8 @@ AIstock Virtual Strategy Ledger
 
 必须断言：
 
+- Selection-only API、LocalSim run、MiniQMT run 对同一 package/runtime/trade_date 生成相同 selection evidence hash。
+- Selection-only 结果不得包含 target position、rebalance intent、execution plan、broker order、cash、position、T+1 可卖量字段。
 - 每个 run 都能追溯 package_id、manifest_sha256、runtime_profile_hash、execution_policy_hash、tail_policy_hash。
 - 每个 order intent 都来自 execution plan。
 - 每个 fill 都能追溯到 order intent；MiniQMT 未归因 fill 必须列为 issue。
@@ -672,10 +720,12 @@ L5 不作为普通 CI 默认项，但作为合入前人工验收或实盘前审�
 | A-20 | 验证流水线覆盖 L0-L4，MiniQMT L5 有受控手工证据 | 必须 | 必须 | validation run records |
 | A-21 | 未来实盘准入必须引用模拟盘验证和审批 | 不适用 | 必须 | approval tests |
 | A-22 | 无简化版/POC 版残留 | 必须 | 必须 | guardrail scan + design compliance matrix |
+| A-23 | Selection Center、LocalSim、MiniQMT 共用同一 StrategyPackage selection service 和 evidence schema | 必须 | 必须 | selection/shared-service tests + dual backend oracle |
+| A-24 | Selection-only 路径只做选股，不做仓位、调仓、执行策略、broker、资金和交易门禁 | 必须 | 必须 | API contract + grep + negative tests |
 
 合入 `main` 的最低条件：
 
-- A-01 到 A-22 全部有 PASS 或用户批准的显式延期；核心链路 A-01 到 A-18 不允许延期。
+- A-01 到 A-24 全部有 PASS 或用户批准的显式延期；核心链路 A-01 到 A-18、A-23、A-24 不允许延期。
 - 至少通过 `simulation_core_l2`、`localsim_unattended_l3`、`miniqmt_sim_stub_l3`、`simulation_dual_backend_l4`。
 - MiniQMT 真实 SIM L5 如果因非交易时间无法执行，可以作为发布后交易时段验证项，但不得因此宣称实盘可用；实盘审批必须等待 L5 证据。
 
@@ -696,6 +746,7 @@ L5 不作为普通 CI 默认项，但作为合入前人工验收或实盘前审�
 ### Phase 1：共享决策核心整改
 
 - 抽出 `SimulationRuntimeBindingService`。
+- 抽出 `StrategyPackageSelectionService`，作为 Selection Center、LocalSim、MiniQMT 的唯一策略包选股入口。
 - 抽出 `DailySelectionSignalService`。
 - 抽出 `TargetPositionService` / `RebalanceIntentService` 共享入口。
 - 新增 `TradingRuleService`。
@@ -704,7 +755,9 @@ L5 不作为普通 CI 默认项，但作为合入前人工验收或实盘前审�
 验收：
 
 - LocalSim 和 MiniQMT 测试使用同一 signal/target/rebalance fixtures。
+- Selection Center、LocalSim 和 MiniQMT 使用同一 selection evidence fixtures；Selection-only 结果与模拟盘前置信号完全一致。
 - 禁止任何 broker router 生成策略目标仓位。
+- 禁止 Selection Center 引入仓位、资金、broker、execution policy、tail policy 等交易门禁。
 
 ### Phase 2：LocalSim 无值守补齐
 
@@ -795,13 +848,13 @@ L5 不作为普通 CI 默认项，但作为合入前人工验收或实盘前审�
 本项目只有在以下条件全部满足时，才能称为完成：
 
 1. LocalSim 和 MiniQMT 都能从 StrategyPackage 开始无值守运行完整交易日。
-2. 两条路径共享信号、目标仓位、调仓 intent、执行计划生成。
-3. MiniQMT 多策略共享账户分仓、同股持仓、独立收益、对账全部通过。
-4. 所有买卖逻辑与日频回测一致，淘汰股票必须卖出，不能只买不卖。
-5. 所有 execution/tail policy 都有版本和验证证据。
-6. 所有缺口在验收矩阵中有 PASS 证据。
-7. L0-L4 流水线通过；真实 MiniQMT SIM L5 在交易时段通过或明确标记为实盘前阻断项。
-8. 代码、DB、API、UI、测试、文档均完成设计合规矩阵。
-9. 未触碰生产服务，或触碰行为有用户明确授权和记录。
-10. 用户确认后才合入 `main`。
-
+2. Selection Center、LocalSim、MiniQMT 共享同一策略包选股服务和 evidence schema；Selection-only 路径只做选股，不做交易门禁。
+3. 两条模拟盘路径共享信号、目标仓位、调仓 intent、执行计划生成。
+4. MiniQMT 多策略共享账户分仓、同股持仓、独立收益、对账全部通过。
+5. 所有买卖逻辑与日频回测一致，淘汰股票必须卖出，不能只买不卖。
+6. 所有 execution/tail policy 都有版本和验证证据。
+7. 所有缺口在验收矩阵中有 PASS 证据。
+8. L0-L4 流水线通过；真实 MiniQMT SIM L5 在交易时段通过或明确标记为实盘前阻断项。
+9. 代码、DB、API、UI、测试、文档均完成设计合规矩阵。
+10. 未触碰生产服务，或触碰行为有用户明确授权和记录。
+11. 用户确认后才合入 `main`。
