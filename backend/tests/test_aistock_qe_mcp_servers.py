@@ -120,9 +120,9 @@ def test_qe_archive_selection_preview_posts_explicit_ids(archive_mcp):
 
     assert result["status"] == "success"
     assert captured["method"] == "POST"
-    assert captured["path"].endswith("/qe-archive/backfill")
+    assert captured["path"].endswith("/qe-archive/backfill/preview")
     assert captured["payload"] == {
-        "source": "all",
+        "source_mode": "specific_ids",
         "experiment_ids": ["qe_exp_1"],
         "task_ids": ["task_1"],
         "loop_ids": ["task_1_Loop1"],
@@ -130,8 +130,7 @@ def test_qe_archive_selection_preview_posts_explicit_ids(archive_mcp):
         "loop_indices": [1, 3],
         "status": "completed",
         "include_archived": False,
-        "write": False,
-        "confirm_write": "",
+        "requested_by": "qe_archive_mcp",
     }
 
 
@@ -147,6 +146,39 @@ def test_qe_archive_selection_execute_requires_confirm_before_http(archive_mcp):
     with pytest.raises(ValueError, match="confirm_write"):
         archive_mcp.qe_archive_backfill_selection_execute_confirmed(task_id="task_1", loop_indices=[1])
     assert called is False
+
+
+def test_qe_archive_selection_execute_posts_audited_execute_path(archive_mcp):
+    captured = {}
+
+    def handler(request: httpx.Request):
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["payload"] = json.loads(request.content.decode("utf-8"))
+        return {"status": "success", "data": {"backfill_run_id": "qear_bf_1"}}
+
+    _swap(archive_mcp, archive_mcp.LoopbackApiClient(base_url="http://127.0.0.1/api/v1/qe-archive", env_name="test", transport=_mock_transport(handler)))
+    result = archive_mcp.qe_archive_backfill_selection_execute_confirmed(
+        task_id="task_1",
+        loop_indices=[1],
+        confirm_write="QE_ARCHIVE_WRITE",
+    )
+
+    assert result["status"] == "success"
+    assert captured["method"] == "POST"
+    assert captured["path"].endswith("/qe-archive/backfill/execute")
+    assert captured["payload"] == {
+        "source_mode": "specific_ids",
+        "experiment_ids": [],
+        "task_ids": [],
+        "loop_ids": [],
+        "task_id": "task_1",
+        "loop_indices": [1],
+        "status": "completed",
+        "include_archived": False,
+        "requested_by": "qe_archive_mcp",
+        "confirm_backfill": "QE_ARCHIVE_BACKFILL",
+    }
 
 
 def test_qe_archive_get_source_status_posts_selection(archive_mcp):

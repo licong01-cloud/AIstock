@@ -129,15 +129,19 @@ function StatusCountStrip({ counts, empty }: { counts?: Record<string, number>; 
 }
 
 function ReportSummary({ report }: { report: BackfillReport | null }) {
-  if (!report) return <div className="pv2-help">请选择候选实验并先执行 dry-run 预览，确认后再写入数仓。</div>;
+  if (!report) return <div className="pv2-help">Select candidates, preview them, then confirm before writing to the warehouse.</div>;
   const rows = report.results || [];
+  const willArchive = rows.filter((row) => row.will_archive !== false && !row.skipped_reason && !row.error).length;
+  const written = report.ingested_count ?? rows.filter((row) => row.run_id && !row.dry_run && !row.error).length;
+  const skipped = report.skipped_count ?? rows.filter((row) => row.skipped_reason || row.will_archive === false).length;
+  const failed = report.failed_count ?? rows.filter((row) => row.error).length;
   return (
     <div className="pv2-readable-list">
       <div className="pv2-grid pv2-grid-4">
-        <MetricCard label="处理数量" value={formatCompact(report.processed_count || 0, 0)} hint={report.dry_run ? "dry-run 预览" : "已写入数仓"} tone={report.write_enabled ? "success" : "info"} />
-        <MetricCard label="来源" value={report.source || "-"} hint={`状态筛选 ${report.status || "completed"}`} />
-        <MetricCard label="模式" value={report.write_enabled ? "写入" : "预览"} hint={report.write_enabled ? "已触发持久化" : "未写数据库"} tone={report.write_enabled ? "warning" : "neutral"} />
-        <MetricCard label="涉及 run" value={formatCompact(rows.length, 0)} hint="展开 loop/experiment 后的数量" />
+        <MetricCard label={"\u5904\u7406\u6570"} value={formatCompact(report.processed_count || 0, 0)} hint={report.backfill_run_id ? `audit ${shortHash(report.backfill_run_id)}` : "legacy/no audit"} tone={report.write_enabled ? "success" : "info"} />
+        <MetricCard label={report.dry_run ? "\u53ef\u5165\u4ed3" : "\u5df2\u5199\u5165"} value={formatCompact(report.dry_run ? willArchive : written, 0)} hint={report.write_enabled ? "\u5df2\u5199\u5165\u6570\u4ed3" : "dry-run"} tone={report.write_enabled ? "success" : "neutral"} />
+        <MetricCard label={"\u8df3\u8fc7"} value={formatCompact(skipped, 0)} hint={"\u672a\u7b26\u5408\u5165\u4ed3\u6761\u4ef6\uff0c\u4e0d\u7b49\u4e8e\u5931\u8d25"} tone="warning" />
+        <MetricCard label={"\u5931\u8d25"} value={formatCompact(failed, 0)} hint={failed ? "\u9700\u8981\u5904\u7406\u7684\u5199\u5165\u9519\u8bef" : "\u65e0\u5199\u5165\u9519\u8bef"} tone={failed ? "danger" : "neutral"} />
       </div>
       <PaperTable
         rows={rows.slice(0, 40)}
@@ -368,18 +372,19 @@ export default function QEArchivePage() {
     setBackfillBusy(true);
     setError(null);
     try {
-      const report = await qeArchiveApi.backfill({
-        source: "all",
+      const payload = {
+        source: "all" as const,
         task_ids: selectedTaskIds,
         experiment_ids: selectedExperimentIds,
         loop_ids: selectedLoopIdList,
         status: candidateStatus,
         include_archived: false,
-        write,
-        confirm_write: write ? writeConfirm : "",
         validate_after_write: true,
         ...QUALITY_GATE,
-      });
+      };
+      const report = write
+        ? await qeArchiveApi.executeSelection({ ...payload, confirm_write: writeConfirm })
+        : await qeArchiveApi.previewSelection(payload);
       setBackfillReport(report);
       if (write) await load();
     } catch (err) {

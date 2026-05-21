@@ -76,17 +76,23 @@ function mockArchiveBase(
       });
     }
 
-    if (url.endsWith("/api/v1/qe-archive/backfill")) {
+    if (url.endsWith("/api/v1/qe-archive/backfill/preview") || url.endsWith("/api/v1/qe-archive/backfill/execute")) {
       const payload = route.request().postDataJSON() as Record<string, any>;
+      const write = url.endsWith("/execute");
       options.backfillRequests?.push(payload);
       return respond({
         status: "success",
         data: {
-          dry_run: !payload.write,
-          write_enabled: Boolean(payload.write),
-          source: payload.source,
+          dry_run: !write,
+          write_enabled: write,
+          backfill_run_id: "qear_bf_mock",
+          source_mode: payload.source_mode,
+          source: "all",
           status: payload.status,
           processed_count: (payload.loop_ids || []).length + (payload.task_ids || []).length + (payload.experiment_ids || []).length,
+          ingested_count: write ? (payload.loop_ids || []).length : 0,
+          skipped_count: 0,
+          failed_count: 0,
           results: [],
         },
       });
@@ -215,10 +221,9 @@ test("candidate task can expand loops and preview selected loop ids only", async
 
   await expect.poll(() => backfillRequests.length).toBeGreaterThan(0);
   expect(backfillRequests[backfillRequests.length - 1]).toMatchObject({
-    source: "all",
+    source_mode: "specific_ids",
     task_ids: [],
     experiment_ids: [],
     loop_ids: ["qe_archive_task_Loop1"],
-    write: false,
   });
 });

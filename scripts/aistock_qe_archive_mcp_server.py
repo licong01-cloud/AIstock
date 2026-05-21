@@ -105,12 +105,10 @@ def _selection_payload(
     loop_indices: list[int] | None,
     status: str,
     include_archived: bool,
-    write: bool,
-    confirm_write: str = "",
 ) -> dict[str, Any]:
     safe_task_id = sanitize_identifier(task_id, "task_id") if task_id else None
     return {
-        "source": "all",
+        "source_mode": "specific_ids",
         "experiment_ids": _sanitize_ids(experiment_ids, "experiment_id"),
         "task_ids": _sanitize_ids(task_ids, "task_id"),
         "loop_ids": _sanitize_ids(loop_ids, "loop_id"),
@@ -118,8 +116,7 @@ def _selection_payload(
         "loop_indices": _positive_indices(loop_indices),
         "status": status,
         "include_archived": include_archived,
-        "write": write,
-        "confirm_write": confirm_write,
+        "requested_by": "qe_archive_mcp",
     }
 
 
@@ -136,7 +133,7 @@ def qe_archive_backfill_selection_preview(
     """Preview an explicit experiment/task/loop selection without writing."""
 
     return _client().post(
-        "/backfill",
+        "/backfill/preview",
         _selection_payload(
             experiment_ids=experiment_ids,
             task_ids=task_ids,
@@ -145,7 +142,6 @@ def qe_archive_backfill_selection_preview(
             loop_indices=loop_indices,
             status=status,
             include_archived=include_archived,
-            write=False,
         ),
     )
 
@@ -164,19 +160,19 @@ def qe_archive_backfill_selection_execute_confirmed(
     """Write an explicit experiment/task/loop selection after confirmation."""
 
     require_confirm(confirm_write, QE_ARCHIVE_WRITE_CONFIRM, "confirm_write")
+    payload = _selection_payload(
+        experiment_ids=experiment_ids,
+        task_ids=task_ids,
+        loop_ids=loop_ids,
+        task_id=task_id,
+        loop_indices=loop_indices,
+        status=status,
+        include_archived=include_archived,
+    )
+    payload["confirm_backfill"] = QE_ARCHIVE_BACKFILL_CONFIRM
     return _client().post(
-        "/backfill",
-        _selection_payload(
-            experiment_ids=experiment_ids,
-            task_ids=task_ids,
-            loop_ids=loop_ids,
-            task_id=task_id,
-            loop_indices=loop_indices,
-            status=status,
-            include_archived=include_archived,
-            write=True,
-            confirm_write=QE_ARCHIVE_WRITE_CONFIRM,
-        ),
+        "/backfill/execute",
+        payload,
     )
 
 

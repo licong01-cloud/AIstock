@@ -1,6 +1,8 @@
 export type JsonObject = Record<string, unknown>;
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
+const QE_ARCHIVE_WRITE_CONFIRM_TEXT = "QE_ARCHIVE_WRITE";
+const QE_ARCHIVE_BACKFILL_CONFIRM_TEXT = "QE_ARCHIVE_BACKFILL";
 
 export class QEArchiveApiError extends Error {
   status: number;
@@ -74,6 +76,16 @@ export type BackfillRequest = {
   min_curves?: number;
   min_factors?: number;
   require_account_summary?: boolean;
+};
+
+export type BackfillRunRequest = Omit<BackfillRequest, "source" | "write" | "confirm_write"> & {
+  source_mode:
+    | "completed_single_experiments"
+    | "completed_custom_evo_loops"
+    | "all_completed_qe_sources"
+    | "specific_ids";
+  confirm_backfill?: string;
+  requested_by?: string;
 };
 
 export type BackfillCandidate = {
@@ -228,9 +240,15 @@ export type BackfillResultItem = {
 export type BackfillReport = {
   dry_run?: boolean;
   write_enabled?: boolean;
+  backfill_run_id?: string;
+  source_mode?: string;
   source?: string;
   status?: string;
+  candidate_count?: number;
   processed_count?: number;
+  ingested_count?: number;
+  skipped_count?: number;
+  failed_count?: number;
   results?: BackfillResultItem[];
   archive_summary?: ArchiveSummary | null;
 };
@@ -312,6 +330,27 @@ function body(payload: unknown): RequestInit {
   return { method: "POST", body: JSON.stringify(payload) };
 }
 
+function selectionToBackfillRun(payload: Omit<BackfillRequest, "write" | "confirm_write">): BackfillRunRequest {
+  return {
+    source_mode: "specific_ids",
+    experiment_ids: payload.experiment_ids || [],
+    task_ids: payload.task_ids || [],
+    loop_ids: payload.loop_ids || [],
+    task_id: payload.task_id,
+    loop_index: payload.loop_index,
+    loop_indices: payload.loop_indices || [],
+    status: payload.status || "completed",
+    limit: payload.limit,
+    include_archived: payload.include_archived,
+    validate_after_write: payload.validate_after_write,
+    min_metrics: payload.min_metrics,
+    min_curves: payload.min_curves,
+    min_factors: payload.min_factors,
+    require_account_summary: payload.require_account_summary,
+    requested_by: "qe_archive_ui",
+  };
+}
+
 export const qeArchiveApi = {
   async health(): Promise<ArchiveSummary> {
     const response = await apiFetch<{ status: string; data: ArchiveSummary }>("/qe-archive/health");
@@ -352,10 +391,25 @@ export const qeArchiveApi = {
     return response.data;
   },
   async previewSelection(payload: Omit<BackfillRequest, "write" | "confirm_write">): Promise<BackfillReport> {
-    return this.backfill({ ...payload, write: false });
+    const response = await apiFetch<{ status: string; data: BackfillReport }>(
+      "/qe-archive/backfill/preview",
+      body(selectionToBackfillRun(payload)),
+    );
+    return response.data;
   },
   async executeSelection(payload: Omit<BackfillRequest, "write"> & { confirm_write: string }): Promise<BackfillReport> {
-    return this.backfill({ ...payload, write: true });
+    const { confirm_write: _confirmWrite, ...selectionPayload } = payload;
+    if (_confirmWrite !== QE_ARCHIVE_WRITE_CONFIRM_TEXT) {
+      throw new Error(`write mode requires confirm_write=${QE_ARCHIVE_WRITE_CONFIRM_TEXT}`);
+    }
+    const response = await apiFetch<{ status: string; data: BackfillReport }>(
+      "/qe-archive/backfill/execute",
+      body({
+        ...selectionToBackfillRun(selectionPayload),
+        confirm_backfill: QE_ARCHIVE_BACKFILL_CONFIRM_TEXT,
+      }),
+    );
+    return response.data;
   },
   async sourceStatus(payload: ArchiveSourceStatusRequest): Promise<ArchiveSourceStatus> {
     const response = await apiFetch<{ status: string; data: ArchiveSourceStatus }>("/qe-archive/source-status", body(payload));

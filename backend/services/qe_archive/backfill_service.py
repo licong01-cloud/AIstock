@@ -125,13 +125,14 @@ class QEArchiveBackfillService:
         )
         candidates = self._build_candidates(legacy, source=legacy.source)
         results = [self._preview_candidate(candidate, backfill_run_id=backfill_run_id) for candidate in candidates]
+        counts = _result_counts(results, candidate_count=len(candidates))
         self._repository.update_backfill_run_status(
             backfill_run_id,
             status="completed",
-            candidate_count=len(results),
+            candidate_count=counts["candidate_count"],
             processed_count=0,
             ingested_count=0,
-            skipped_count=sum(1 for item in results if item.get("archive_policy") != "AUTO"),
+            skipped_count=counts["skipped_count"],
             failed_count=0,
         )
         return {
@@ -142,6 +143,7 @@ class QEArchiveBackfillService:
             "source": legacy.source,
             "status": options.status,
             "processed_count": len(results),
+            **counts,
             "results": results,
         }
 
@@ -207,8 +209,10 @@ class QEArchiveBackfillService:
                     )
                 )
                 results.append({"source_id": source_id, "source_sub_id": source_sub_id, "error": f"{type(exc).__name__}: {exc}"})
-        ingested_count = sum(1 for item in results if item.get("run_id") and not item.get("dry_run"))
-        skipped_count = sum(1 for item in results if item.get("skipped_reason"))
+        counts = _result_counts(results, candidate_count=len(candidates))
+        ingested_count = counts["ingested_count"]
+        skipped_count = counts["skipped_count"]
+        failed_count = counts["failed_count"]
         final_status = "completed" if failed_count == 0 else ("partial" if ingested_count or skipped_count else "failed")
         self._repository.update_backfill_run_status(
             backfill_run_id,
@@ -240,6 +244,7 @@ class QEArchiveBackfillService:
             "source": legacy.source,
             "status": options.status,
             "processed_count": len(results),
+            **counts,
             "results": results,
             "archive_summary": self._repository.get_archive_summary(),
         }
@@ -266,12 +271,14 @@ class QEArchiveBackfillService:
             self._process_candidate(candidate, write=options.write, options=options)
             for candidate in candidates
         ]
+        counts = _result_counts(results, candidate_count=len(candidates))
         return {
             "dry_run": not options.write,
             "write_enabled": options.write,
             "source": source,
             "status": options.status,
             "processed_count": len(results),
+            **counts,
             "results": results,
             "archive_summary": self._repository.get_archive_summary() if options.write else None,
         }
@@ -481,7 +488,20 @@ class QEArchiveBackfillService:
     ) -> dict[str, Any]:
         payload = dict(candidate["payload"])
         if candidate.get("missing"):
-            return _missing_loop_result(payload, dry_run=not write)
+            item = _missing_loop_result(payload, dry_run=not write)
+            if backfill_run_id:
+                self._repository.upsert_backfill_run_item(
+                    BackfillRunItemRecord(
+                        backfill_run_id=backfill_run_id,
+                        source_system=str(item.get("source_system") or "qe_evolution"),
+                        source_type="loop",
+                        source_id=str(item.get("source_id") or payload.get("task_id") or "unknown"),
+                        source_sub_id=str(item.get("source_sub_id")) if item.get("source_sub_id") else None,
+                        status="skipped",
+                        stats={"reason": item.get("skipped_reason"), "missing": True},
+                    )
+                )
+            return item
         event_type = str(candidate["event_type"])
         source_type = "loop" if event_type == "qe.loop.completed" else "experiment"
         source_id = str(payload.get("source_id") or payload.get("task_id") or payload.get("experiment_id"))
@@ -597,7 +617,19 @@ class QEArchiveBackfillService:
     def _preview_candidate(self, candidate: Mapping[str, Any], *, backfill_run_id: str) -> dict[str, Any]:
         payload = dict(candidate["payload"])
         if candidate.get("missing"):
-            return _missing_loop_result(payload, dry_run=True)
+            item = _missing_loop_result(payload, dry_run=True)
+            self._repository.upsert_backfill_run_item(
+                BackfillRunItemRecord(
+                    backfill_run_id=backfill_run_id,
+                    source_system=str(item.get("source_system") or "qe_evolution"),
+                    source_type="loop",
+                    source_id=str(item.get("source_id") or payload.get("task_id") or "unknown"),
+                    source_sub_id=str(item.get("source_sub_id")) if item.get("source_sub_id") else None,
+                    status="skipped",
+                    stats={"reason": item.get("skipped_reason"), "missing": True},
+                )
+            )
+            return item
         event_type = str(candidate["event_type"])
         source_type = "loop" if event_type == "qe.loop.completed" else "experiment"
         source_id = str(payload.get("source_id") or payload.get("task_id") or payload.get("experiment_id"))
@@ -709,6 +741,19 @@ def _missing_loop_result(payload: Mapping[str, Any], *, dry_run: bool) -> dict[s
         "loop_index": payload.get("loop_index"),
         "will_archive": False,
         "skipped_reason": payload.get("missing_reason") or "loop_not_found_or_filtered",
+    }
+
+
+def _result_counts(results: Sequence[Mapping[str, Any]], *, candidate_count: int | None = None) -> dict[str, int]:
+    return {
+        "candidate_count": len(results) if candidate_count is None else candidate_count,
+        "ingested_count": sum(1 for item in results if item.get("run_id") and not item.get("dry_run") and not item.get("error")),
+        "skipped_count": sum(
+            1
+            for item in results
+            if not item.get("error") and (item.get("skipped_reason") or item.get("will_archive") is False)
+        ),
+        "failed_count": sum(1 for item in results if item.get("error")),
     }
 
 
