@@ -10,7 +10,9 @@ from fastapi.testclient import TestClient
 from backend.routers import qe_archive as qe_archive_router
 from backend.services.qe_archive.archive_service import QEArchiveService
 from backend.services.qe_archive.backfill_service import (
+    BACKFILL_CONFIRM_TEXT,
     QEArchiveBackfillOptions,
+    QEArchiveBackfillRunOptions,
     QEArchiveBackfillService,
     WRITE_CONFIRM_TEXT,
 )
@@ -363,6 +365,7 @@ def test_archive_service_dry_run_does_not_write() -> None:
     )
 
     assert result.dry_run is True
+    assert result.extracted.run.archived_at is None
     assert result.stats["written"] is False
     assert result.stats["metric_count"] >= 6
     assert result.stats["curve_count"] >= 8
@@ -428,6 +431,9 @@ def test_archive_service_write_calls_repository_without_runtime_hooks() -> None:
 
     assert result.stats["written"] is True
     call_names = [name for name, _ in repository.calls]
+    run_call = repository.calls[call_names.index("upsert_run")]
+    assert run_call[1].archived_at is not None
+    assert run_call[1].archived_at.tzinfo is not None
     assert call_names[:6] == [
         "upsert_run",
         "upsert_run_source",
@@ -451,6 +457,46 @@ def test_archive_service_write_calls_repository_without_runtime_hooks() -> None:
     assert len(event_call[1]) >= 2
     raw_payload_call = repository.calls[call_names.index("replace_raw_payloads")]
     assert len(raw_payload_call[1]) == 3
+
+
+def test_repository_upsert_run_preserves_archived_at_when_incoming_value_is_null() -> None:
+    executed: list[tuple[str, list[object] | None]] = []
+
+    class FakeCursor:
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return False
+
+        def execute(self, sql, params=None):  # type: ignore[no-untyped-def]
+            executed.append((sql, params))
+
+    class FakeConnection:
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return False
+
+        def cursor(self):  # type: ignore[no-untyped-def]
+            return FakeCursor()
+
+    repository = QEArchiveRepository(connection_provider=lambda: FakeConnection())
+    repository.upsert_run(
+        {
+            "run_id": "run_archived_at_preserve",
+            "logical_experiment_id": "qe_exp_archived_at",
+            "source_system": "qe",
+            "run_type": "evolution_loop",
+            "status": "completed",
+            "is_latest_attempt": False,
+            "archived_at": None,
+        }
+    )
+
+    assert executed, "upsert_run should execute an INSERT ... ON CONFLICT statement"
+    assert "archived_at = COALESCE(EXCLUDED.archived_at, qe_archive.run.archived_at)" in executed[-1][0]
 
 
 def test_source_assembler_builds_single_experiment_payload_without_worker_paths() -> None:
@@ -786,6 +832,78 @@ def test_backfill_service_task_loop_indices_expand_selected_loops() -> None:
     assert [item["source_sub_id"] for item in result["results"][:2]] == ["loop_1", "loop_3"]
     assert result["results"][2]["source_sub_id"] == "Loop99"
     assert result["results"][2]["skipped_reason"] == "loop_not_found_or_filtered"
+
+
+def test_backfill_execute_records_audit_run_items_and_separate_counts() -> None:
+    class FakeAssembler:
+        def list_loop_refs_for_task_indices(self, task_id, loop_indices, *, status, include_archived):  # type: ignore[no-untyped-def]
+            assert task_id == "task_audit"
+            assert loop_indices == [1, 2]
+            return [{"task_id": "task_audit", "loop_id": "task_audit_Loop1", "loop_index": 1}]
+
+        def assemble_loop_payload(self, *, loop_id=None, task_id=None, loop_index=None):  # type: ignore[no-untyped-def]
+            return {
+                "source_system": "qe_evolution",
+                "source_id": task_id,
+                "source_sub_id": loop_id,
+                "task_id": task_id,
+                "loop_id": loop_id,
+                "loop_index": loop_index,
+                "status": "completed",
+                "config": {},
+            }
+
+    class FakeArchiveService:
+        def process_payload(self, payload, *, event_type, source_system, source_id, source_sub_id, dry_run):  # type: ignore[no-untyped-def]
+            return SimpleNamespace(run_id=f"run_{source_sub_id}", stats={"written": not dry_run})
+
+    class FakeRepository:
+        def __init__(self) -> None:
+            self.backfill_runs: list[object] = []
+            self.status_updates: list[dict[str, object]] = []
+            self.items: list[object] = []
+
+        def upsert_backfill_run(self, record):  # type: ignore[no-untyped-def]
+            self.backfill_runs.append(record)
+            return record.backfill_run_id
+
+        def update_backfill_run_status(self, backfill_run_id, **kwargs):  # type: ignore[no-untyped-def]
+            self.status_updates.append({"backfill_run_id": backfill_run_id, **kwargs})
+
+        def upsert_backfill_run_item(self, record):  # type: ignore[no-untyped-def]
+            self.items.append(record)
+            return record.item_id
+
+        def get_run_quality_summary(self, run_id):  # type: ignore[no-untyped-def]
+            return {"run_id": run_id, "exists": True}
+
+        def get_archive_summary(self):  # type: ignore[no-untyped-def]
+            return {"run_count": 1}
+
+    repository = FakeRepository()
+    result = QEArchiveBackfillService(
+        assembler=FakeAssembler(),  # type: ignore[arg-type]
+        archive_service=FakeArchiveService(),  # type: ignore[arg-type]
+        repository=repository,  # type: ignore[arg-type]
+    ).execute_backfill(
+        QEArchiveBackfillRunOptions(
+            source_mode="specific_ids",
+            task_id="task_audit",
+            loop_indices=[1, 2],
+            confirm_backfill=BACKFILL_CONFIRM_TEXT,
+        )
+    )
+
+    assert result["backfill_run_id"]
+    assert result["candidate_count"] == 2
+    assert result["processed_count"] == 2
+    assert result["ingested_count"] == 1
+    assert result["skipped_count"] == 1
+    assert result["failed_count"] == 0
+    assert [item.status for item in repository.items] == ["ingested", "skipped"]
+    assert repository.status_updates[-1]["ingested_count"] == 1
+    assert repository.status_updates[-1]["skipped_count"] == 1
+    assert repository.status_updates[-1]["failed_count"] == 0
 
 
 def test_backfill_service_candidate_listing_uses_page_and_page_size() -> None:

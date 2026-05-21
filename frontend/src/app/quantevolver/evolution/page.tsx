@@ -86,10 +86,12 @@ function archiveSummaryText(status?: ArchiveTaskStatus): string {
 
 function summarizeArchiveReport(report: BackfillReport): string {
   const rows = report.results || [];
+  const candidate = report.candidate_count ?? rows.length;
   const willArchive = rows.filter((item) => item.will_archive !== false && !item.skipped_reason && !item.error).length;
-  const written = rows.filter((item) => item.run_id && !item.dry_run).length;
-  const skipped = rows.filter((item) => item.skipped_reason || item.error).length;
-  return `候选 ${rows.length} 条，可入仓 ${willArchive} 条，已写入 ${written} 条，跳过/失败 ${skipped} 条`;
+  const written = report.ingested_count ?? rows.filter((item) => item.run_id && !item.dry_run && !item.error).length;
+  const skipped = report.skipped_count ?? rows.filter((item) => item.skipped_reason || item.will_archive === false).length;
+  const failed = report.failed_count ?? rows.filter((item) => item.error).length;
+  return `\u5019\u9009 ${candidate} \u6761\uff0c\u53ef\u5165\u4ed3 ${willArchive} \u6761\uff0c\u5df2\u5199\u5165 ${written} \u6761\uff0c\u8df3\u8fc7 ${skipped} \u6761\uff0c\u5931\u8d25 ${failed} \u6761`;
 }
 
 // 模块级样式常量 — 避免每次渲染重新创建对象

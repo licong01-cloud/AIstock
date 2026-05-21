@@ -133,36 +133,45 @@ test("QE archive dashboard uses mocked warehouse APIs", async ({ page }) => {
       });
     }
 
-    if (method === "POST" && url.includes("/backfill")) {
+    if (method === "POST" && (url.includes("/backfill/preview") || url.includes("/backfill/execute"))) {
+      const write = url.includes("/backfill/execute");
       const body = route.request().postDataJSON() as {
         task_ids?: string[];
         experiment_ids?: string[];
-        write?: boolean;
+        source_mode?: string;
+        confirm_backfill?: string;
         min_metrics?: number;
         min_curves?: number;
         min_factors?: number;
         include_archived?: boolean;
       };
+      expect(body.source_mode).toBe("specific_ids");
       expect(body.task_ids).toEqual(["qe_task_demo"]);
       expect(body.experiment_ids || []).toEqual([]);
       expect(body.include_archived).toBe(false);
       expect(body.min_metrics).toBe(60);
       expect(body.min_curves).toBe(3000);
       expect(body.min_factors).toBe(1);
+      if (write) expect(body.confirm_backfill).toBe("QE_ARCHIVE_BACKFILL");
       return response({
         status: "success",
         data: {
-          dry_run: !body.write,
-          write_enabled: Boolean(body.write),
+          dry_run: !write,
+          write_enabled: write,
+          backfill_run_id: "qear_bf_demo",
+          source_mode: "specific_ids",
           source: "all",
           status: "completed",
           processed_count: 1,
+          ingested_count: write ? 1 : 0,
+          skipped_count: 0,
+          failed_count: 0,
           results: [{
             run_id: "qear_run_demo",
             event_type: "qe.loop.completed",
             source_id: "qe_task_demo",
             source_sub_id: "qe_task_demo_Loop3",
-            quality: body.write ? {
+            quality: write ? {
               passed: true,
               metric_count: 81,
               curve_count: 3489,

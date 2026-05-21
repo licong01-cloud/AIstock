@@ -6,7 +6,8 @@ Callers must pass payloads that have already been collected from DB/API paths.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from .payload_extractor import ExtractedArchivePayload, QEArchivePayloadExtractor
@@ -71,6 +72,13 @@ class QEArchiveService:
         )
 
         if not dry_run:
+            extracted = replace(
+                extracted,
+                run=replace(
+                    extracted.run,
+                    archived_at=extracted.run.archived_at or datetime.now(timezone.utc),
+                ),
+            )
             self._write(extracted)
             stats["written"] = True
         else:

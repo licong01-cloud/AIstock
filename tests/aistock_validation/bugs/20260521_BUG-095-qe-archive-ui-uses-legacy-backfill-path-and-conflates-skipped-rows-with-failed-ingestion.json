@@ -1,0 +1,107 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-095",
+  "title": "QE Archive UI uses legacy backfill path and conflates skipped rows with failed ingestion",
+  "description": "Expected: QE Archive confirmed UI writes use the audited execute path and display distinct written, skipped, and failed counts. Actual: QE pages call the legacy /api/v1/qe-archive/backfill path, which writes without creating backfill_run/backfill_run_item audit records, while frontend summaries merge skipped_reason and error into a single skipped/failed count. Users can see partial-success/failure messages and later see source-status fully archived because source-status only checks archived run presence.",
+  "module": "qe_archive",
+  "severity": "P1",
+  "risk_area": "warehouse_ui_audit_semantics",
+  "status": "fixed",
+  "trigger_condition": {
+    "scenario": "qe_archive_ui_legacy_write_and_summary_mismatch",
+    "affected_routes": [
+      "/quantevolver/evolution",
+      "/quantevolver/evolution/{taskId}",
+      "/quantevolver/experiments"
+    ],
+    "legacy_api": "/api/v1/qe-archive/backfill",
+    "audited_api": "/api/v1/qe-archive/backfill/execute"
+  },
+  "reproduce_command": "Use a QE page confirmed archive/write action that includes already archived, filtered, or missing loops; observe the popup aggregates skipped_reason and error as skipped/failed while /api/v1/qe-archive/source-status can later report fully_archived and no backfill_run audit is created by the legacy write route.",
+  "evidence_uris": [
+    "file:frontend/src/lib/qe-archive/api.ts",
+    "file:frontend/src/app/quantevolver/evolution/page.tsx",
+    "file:frontend/src/app/quantevolver/evolution/[taskId]/page.tsx",
+    "file:frontend/src/app/quantevolver/experiments/page.tsx",
+    "file:backend/services/qe_archive/backfill_service.py",
+    "github:https://github.com/licong01-cloud/AIstock/issues/139"
+  ],
+  "fingerprint": "qe_archive::ui_legacy_backfill_summary_semantics::20260521",
+  "assigned_agent": "codex-app",
+  "fix_branch": "bug/BUG-094-095-qe-archive-audit-semantics",
+  "fix_commit": "b6889b5",
+  "verification_run_id": "qe_archive_backend;qe_mcp_backend;qe_mcp_l3;qe_archive_ui;qe_archive_l3;guardrail_changed_files;validation_catalog_integrity;validation_module_registry_l0",
+  "created_at": "2026-05-21T04:40:43Z",
+  "first_seen_at": "2026-05-21T04:40:43Z",
+  "last_seen_at": "2026-05-21T05:25:23Z",
+  "fixed_at": "2026-05-21T05:25:23Z",
+  "submitted_at": "2026-05-21T04:40:43Z",
+  "closed_at": null,
+  "github_issue_number": 139,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/139",
+  "allowed_write_scope": [
+    "backend/services/qe_archive/payload_extractor.py",
+    "backend/services/qe_archive/models.py",
+    "backend/services/qe_archive/repository.py",
+    "backend/services/qe_archive/backfill_service.py",
+    "backend/routers/qe_archive.py",
+    "backend/tests/qe_archive/",
+    "frontend/src/lib/qe-archive/api.ts",
+    "frontend/src/app/quantevolver/evolution/page.tsx",
+    "frontend/src/app/quantevolver/evolution/[taskId]/page.tsx",
+    "frontend/src/app/quantevolver/experiments/page.tsx",
+    "frontend/tests/qe-archive/",
+    "tests/aistock_validation/bugs/",
+    "frontend/src/app/qe-archive/page.tsx",
+    "frontend/tests/qe-archive/qe-archive-dashboard.spec.ts",
+    "frontend/tests/qe-archive/qe-archive-flows.spec.ts",
+    "scripts/aistock_qe_archive_mcp_server.py",
+    "backend/tests/test_aistock_qe_mcp_servers.py"
+  ],
+  "suspected_modules": [
+    "frontend/src/lib/qe-archive/api.ts",
+    "frontend/src/app/quantevolver/evolution/page.tsx",
+    "frontend/src/app/quantevolver/evolution/[taskId]/page.tsx",
+    "frontend/src/app/quantevolver/experiments/page.tsx",
+    "backend/services/qe_archive/backfill_service.py",
+    "backend/routers/qe_archive.py",
+    "frontend/tests/qe-archive/",
+    "frontend/src/app/qe-archive/page.tsx",
+    "scripts/aistock_qe_archive_mcp_server.py",
+    "backend/tests/test_aistock_qe_mcp_servers.py"
+  ],
+  "required_verification": [
+    "python -m pytest backend/tests/qe_archive -q -p no:cacheprovider",
+    "python -m nox -s qe_archive_backend",
+    "frontend targeted typecheck/tests for changed QE Archive pages",
+    "python -m nox -s guardrail_changed_files -- --changed-only",
+    "git diff --check"
+  ],
+  "closure_requirements": [
+    "QE Archive confirmed UI writes use audited execute path and create backfill_run/backfill_run_item records or equivalent audit.",
+    "Execution result summaries separately report ingested, skipped, and failed counts.",
+    "Skipped rows are not displayed as failed ingestion.",
+    "Real failures remain visible and are not masked by final success status.",
+    "GitHub issue #139 and BUG-095 registry record are updated with branch, commit, and validation evidence."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-21T04:40:43Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Mirrored manually to GitHub issue #139 via gh CLI because Validation MCP live GitHub creation lacks GITHUB_REPOSITORY in this session and local registry search is blocked by a BOM parse error in another BUG JSON."
+    },
+    {
+      "timestamp": "2026-05-21T04:40:43Z",
+      "actor": "codex-app",
+      "action": "fix_started",
+      "note": "Dedicated worktree F:/Dev/AIstock_worktrees/bug-094-095-qe-archive-audit-semantics on branch bug/BUG-094-095-qe-archive-audit-semantics."
+    },
+    {
+      "timestamp": "2026-05-21T05:25:23Z",
+      "actor": "codex-app",
+      "action": "fixed_pending_user_merge_confirmation",
+      "note": "Implementation committed as b6889b5. Branch-local validation completed: python -m pytest backend/tests/test_qe_archive_repository_static.py backend/tests/test_aistock_qe_mcp_servers.py -q -p no:cacheprovider (57 passed); python -m nox -s qe_archive_backend (109 passed); python -m nox -s qe_mcp_backend (30 passed); python -m nox -s qe_mcp_l3 (success); python -m nox -s qe_archive_ui (7 Playwright passed); python -m nox -s qe_archive_l3 with guarded dev DB env 127.0.0.1:5433/aistock_dev (success; data_quality failures=[]); python -m nox -s validation_catalog_integrity validation_module_registry_l0 (success); python -m nox -s guardrail_changed_files -- --changed-only (success; blocking=0); git diff --check (pass)"
+    }
+  ]
+}

@@ -440,11 +440,17 @@ class QEArchiveRepository:
 
         columns = list(record.keys())
         placeholders = ", ".join(["%s"] * len(columns))
-        assignments = ", ".join(
-            f"{column} = EXCLUDED.{column}"
-            for column in columns
-            if column not in {"run_id"}
-        )
+        assignment_parts: list[str] = []
+        for column in columns:
+            if column == "run_id":
+                continue
+            if column == "archived_at":
+                assignment_parts.append(
+                    "archived_at = COALESCE(EXCLUDED.archived_at, qe_archive.run.archived_at)"
+                )
+            else:
+                assignment_parts.append(f"{column} = EXCLUDED.{column}")
+        assignments = ", ".join(assignment_parts)
         sql = f"""
             INSERT INTO qe_archive.run ({", ".join(columns)})
             VALUES ({placeholders})

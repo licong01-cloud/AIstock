@@ -1,0 +1,93 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-094",
+  "title": "QE Archive run writes never populate archived_at",
+  "description": "Expected: every successful QE Archive confirmed write stamps qe_archive.run.archived_at with the actual archive/write timestamp and preserves any existing non-null archived_at during re-upsert. Actual: diagnosis on qe_20260520_133940_fdb2 showed 8 archived loop runs with completed ingest_history rows, but all 8 qe_archive.run.archived_at values were NULL; full-table diagnosis showed archived_at_present=0.",
+  "module": "qe_archive",
+  "severity": "P1",
+  "risk_area": "warehouse_audit_timestamp",
+  "status": "fixed",
+  "trigger_condition": {
+    "scenario": "qe_archive_confirmed_write_missing_archived_at",
+    "experiment_id": "qe_20260520_133940_fdb2",
+    "affected_table": "qe_archive.run",
+    "affected_field": "archived_at"
+  },
+  "reproduce_command": "Inspect qe_archive.run after manual/backfill ingestion for qe_20260520_133940_fdb2 or run SELECT count(*) total, count(*) FILTER (WHERE archived_at IS NULL) archived_at_null FROM qe_archive.run; observe every archived run has archived_at=NULL even though ingest_history is completed.",
+  "evidence_uris": [
+    "file:backend/services/qe_archive/payload_extractor.py",
+    "file:backend/services/qe_archive/repository.py",
+    "file:backend/services/qe_archive/backfill_service.py",
+    "github:https://github.com/licong01-cloud/AIstock/issues/138"
+  ],
+  "fingerprint": "qe_archive::run_archived_at_missing::20260521",
+  "assigned_agent": "codex-app",
+  "fix_branch": "bug/BUG-094-095-qe-archive-audit-semantics",
+  "fix_commit": "b6889b5",
+  "verification_run_id": "qe_archive_backend;qe_mcp_backend;qe_mcp_l3;qe_archive_ui;qe_archive_l3;guardrail_changed_files;validation_catalog_integrity;validation_module_registry_l0",
+  "created_at": "2026-05-21T04:40:43Z",
+  "first_seen_at": "2026-05-21T04:40:43Z",
+  "last_seen_at": "2026-05-21T05:25:23Z",
+  "fixed_at": "2026-05-21T05:25:23Z",
+  "submitted_at": "2026-05-21T04:40:43Z",
+  "closed_at": null,
+  "github_issue_number": 138,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/138",
+  "allowed_write_scope": [
+    "backend/services/qe_archive/payload_extractor.py",
+    "backend/services/qe_archive/models.py",
+    "backend/services/qe_archive/repository.py",
+    "backend/services/qe_archive/backfill_service.py",
+    "backend/routers/qe_archive.py",
+    "backend/tests/qe_archive/",
+    "frontend/src/lib/qe-archive/api.ts",
+    "frontend/src/app/quantevolver/evolution/page.tsx",
+    "frontend/src/app/quantevolver/evolution/[taskId]/page.tsx",
+    "frontend/src/app/quantevolver/experiments/page.tsx",
+    "frontend/tests/qe-archive/",
+    "tests/aistock_validation/bugs/",
+    "backend/tests/test_qe_archive_repository_static.py",
+    "backend/tests/test_aistock_qe_mcp_servers.py"
+  ],
+  "suspected_modules": [
+    "backend/services/qe_archive/payload_extractor.py",
+    "backend/services/qe_archive/repository.py",
+    "backend/services/qe_archive/backfill_service.py",
+    "backend/tests/qe_archive/",
+    "backend/tests/test_qe_archive_repository_static.py"
+  ],
+  "required_verification": [
+    "python -m pytest backend/tests/qe_archive -q -p no:cacheprovider",
+    "python -m pytest backend/tests/test_aistock_qe_mcp_servers.py -q -p no:cacheprovider",
+    "python -m nox -s qe_archive_backend",
+    "python -m nox -s guardrail_changed_files -- --changed-only",
+    "frontend targeted typecheck/tests for changed QE Archive pages",
+    "git diff --check"
+  ],
+  "closure_requirements": [
+    "New archive writes populate qe_archive.run.archived_at with archive/write timestamp.",
+    "Re-upsert preserves existing non-null archived_at when incoming payload has NULL.",
+    "Regression tests cover archived_at creation and preservation.",
+    "GitHub issue #138 and BUG-094 registry record are updated with branch, commit, and validation evidence."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-21T04:40:43Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Mirrored manually to GitHub issue #138 via gh CLI because Validation MCP live GitHub creation lacks GITHUB_REPOSITORY in this session and local registry search is blocked by a BOM parse error in another BUG JSON."
+    },
+    {
+      "timestamp": "2026-05-21T04:40:43Z",
+      "actor": "codex-app",
+      "action": "fix_started",
+      "note": "Dedicated worktree F:/Dev/AIstock_worktrees/bug-094-095-qe-archive-audit-semantics on branch bug/BUG-094-095-qe-archive-audit-semantics."
+    },
+    {
+      "timestamp": "2026-05-21T05:25:23Z",
+      "actor": "codex-app",
+      "action": "fixed_pending_user_merge_confirmation",
+      "note": "Implementation committed as b6889b5. Branch-local validation completed: python -m pytest backend/tests/test_qe_archive_repository_static.py backend/tests/test_aistock_qe_mcp_servers.py -q -p no:cacheprovider (57 passed); python -m nox -s qe_archive_backend (109 passed); python -m nox -s qe_mcp_backend (30 passed); python -m nox -s qe_mcp_l3 (success); python -m nox -s qe_archive_ui (7 Playwright passed); python -m nox -s qe_archive_l3 with guarded dev DB env 127.0.0.1:5433/aistock_dev (success; data_quality failures=[]); python -m nox -s validation_catalog_integrity validation_module_registry_l0 (success); python -m nox -s guardrail_changed_files -- --changed-only (success; blocking=0); git diff --check (pass)"
+    }
+  ]
+}
