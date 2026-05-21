@@ -1,5 +1,8 @@
 # MiniQMT 多策略分仓执行详细实施方案（基于 2026-05-18 POC）
 
+> **2026-05-21 作废/取代声明**：本文已不再作为 LocalSim / MiniQMT 模拟盘、Selection Center、Paper Trading v2 或未来实盘运行边界的实现依据。最新权威方案为 `docs/architecture/simulation_remediation_project_design_20260521.md`，并以 `StrategyPackage alpha core + StrategyRuntimeRelease（策略包运行版本）+ SimulationReleaseBinding` 为唯一边界。本文仅保留 MiniQMT 分仓、lot 账本、成交归因和对账思路；凡把 `SelectionOrderBuilder` 或 SelectionRun 直转订单作为最终执行链路的描述，均已作废。
+> 若本文与最新方案不一致，以 `simulation_remediation_project_design_20260521.md` 为准；旧描述只能作为历史背景或迁移参考，不能指导新开发。
+
 > **2026-05-20 边界更新**：本文的 MiniQMT 分仓、lot 级账本、成交归因和对账设计仍保留；但任何将 `SelectionOrderBuilder` 作为最终 StrategyPackage 执行路径的描述，均被 `docs/architecture/strategy_package_platform_boundary_contract_20260520.md` 取代。MiniQMT 只能作为 broker authority；日频策略、分钟线执行、尾盘处理必须由平台 runtime profile / validated execution policy / unified strategy engine 产生，不能由 SelectionRun 直接转 broker order 绕过执行策略。
 
 ## 1. 方案定位

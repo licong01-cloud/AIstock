@@ -1,5 +1,8 @@
 # Strategy Package Manifest v1 Contract
 
+> **2026-05-21 作废/取代声明**：本文已不再作为 LocalSim / MiniQMT 模拟盘、Selection Center、Paper Trading v2 或未来实盘运行边界的实现依据。最新权威方案为 `docs/architecture/simulation_remediation_project_design_20260521.md`，并以 `StrategyPackage alpha core + StrategyRuntimeRelease（策略包运行版本）+ SimulationReleaseBinding` 为唯一边界。本文仅用于读取历史 v1 manifest；不得作为新开发契约。新实现必须采用 StrategyPackage alpha core + StrategyRuntimeRelease + SimulationReleaseBinding 的分层。
+> 若本文与最新方案不一致，以 `simulation_remediation_project_design_20260521.md` 为准；旧描述只能作为历史背景或迁移参考，不能指导新开发。
+
 > Status: legacy contract. This document is retained only for historical v1
 > manifest compatibility and migration context.
 > Superseded-by: `docs/architecture/strategy_package_platform_boundary_contract_20260520.md`.

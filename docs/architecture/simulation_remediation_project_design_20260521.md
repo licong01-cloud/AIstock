@@ -1,8 +1,8 @@
 # AIstock LocalSim / MiniQMT 模拟盘整改项目详细设计（2026-05-21）
 
-> 状态：整改项目设计草案 v1.0  
-> 分支：`docs/sim-remediation-design-20260521`  
-> 适用范围：StrategyPackage、Selection Center、Paper Trading v2、LocalSim、MiniQMT SIM、多策略分仓、运行调度、验证流水线  
+> 状态：整改项目设计草案 v1.1
+> 分支：`docs/sim-remediation-design-20260521`
+> 适用范围：StrategyPackage、Selection Center、Paper Trading v2、LocalSim、MiniQMT SIM、多策略分仓、运行调度、验证流水线
 > 设计原则：不得用简化版、POC 版、mock-only 版冒充完成；所有功能项必须进入验收矩阵并在合入 `main` 前逐项验证。
 
 ## 0. 结论
@@ -11,7 +11,12 @@
 
 ```text
 StrategyPackage alpha core
-  -> Platform Runtime Binding
+  -> StrategyRuntimeRelease（策略包运行版本，broker-neutral）
+       -> RuntimeProfileVersion
+       -> DailyStrategyProfileVersion
+       -> ValidatedExecutionPolicyVersion
+       -> TailHandlingPolicyVersion
+  -> SimulationReleaseBinding / PortfolioBindingVersion（backend/account/capital）
   -> Daily Selection Signal
        -> Selection-only result / Selection Center
        -> Simulation continuation
@@ -24,16 +29,18 @@ StrategyPackage alpha core
   -> Ledger / Reconciliation / Performance / Ops Console
 ```
 
-其中从 StrategyPackage 到 `Daily Selection Signal` 必须同时被 Selection Center、LocalSim 和 MiniQMT 共享；从 `Daily Selection Signal` 到 `Validated Execution Plan` 必须被 LocalSim 和 MiniQMT 共享。LocalSim 和 MiniQMT 只允许在最后的 broker 执行、成交回报、对账权威来源上分叉。任何把选股、LocalSim、MiniQMT 做成三套独立全流程、各自解释策略包或各自生成不同信号的实现，均不满足本设计。
+其中 `StrategyPackage alpha core` 只提供不可变 alpha 资产；`StrategyRuntimeRelease`（产品上可称为“策略包运行版本”）把同一个 alpha core 与日频策略、分钟线执行策略、尾盘处理和平台 runtime profile 组合成不可变运行版本；`SimulationReleaseBinding` 再把运行版本绑定到 LocalSim 或 MiniQMT 的账户、资金、策略名和 order remark。
+
+从 StrategyPackage 到 `Daily Selection Signal` 必须同时被 Selection Center、LocalSim 和 MiniQMT 共享；从 `Daily Selection Signal` 到 `Validated Execution Plan` 必须被 LocalSim 和 MiniQMT 共享。LocalSim 和 MiniQMT 只允许在最后的 broker 执行、成交回报、对账权威来源上分叉。任何把选股、LocalSim、MiniQMT 做成三套独立全流程、各自解释策略包或各自生成不同信号的实现，均不满足本设计。
 
 整改完成后必须达到以下能力：
 
-1. Selection Center 只能做基于 StrategyPackage alpha core + 平台 runtime profile 的选股，输出 authoritative selection evidence；不得绑定仓位、调仓、broker、资金或交易门禁。
+1. Selection Center 只能做基于 StrategyPackage alpha core + `StrategyRuntimeRelease.runtime_profile_version_id` 的选股，输出 authoritative selection evidence；不得绑定仓位、调仓、broker、资金或交易门禁。
 2. LocalSim 路径可以从同一份 selection evidence 开始，无值守完成多策略运行、目标仓位、订单生成、分钟线撮合、尾盘处理、快照和收益统计。
-3. MiniQMT 路径可以从同一份 selection evidence 和同一运行配置开始，无值守完成多策略运行、目标仓位、订单计划、托管下单、状态同步、成交归因、策略分仓、对账和收益统计。
-4. Selection Center、LocalSim、MiniQMT 对同一个策略包、同一个 runtime profile、同一个 trade_date 的日频信号必须一致；LocalSim 和 MiniQMT 的目标仓位也必须一致；实际成交差异只来自 broker 执行环境。
+3. MiniQMT 路径可以从同一份 selection evidence、同一 `StrategyRuntimeRelease` 和各自 `SimulationReleaseBinding` 开始，无值守完成多策略运行、目标仓位、订单计划、托管下单、状态同步、成交归因、策略分仓、对账和收益统计。
+4. Selection Center、LocalSim、MiniQMT 对同一个策略包、同一个 `StrategyRuntimeRelease`、同一个 trade_date 的日频信号必须一致；LocalSim 和 MiniQMT 的目标仓位也必须一致；实际成交差异只来自 broker 执行环境和 binding 指定的账户/资金。
 5. 多策略分仓必须支持每个策略独立资金、独立收益、独立持仓 lot、独立风控和独立审计；同一股票被多个策略持有时，MiniQMT broker 侧可以是合并持仓，但 AIstock 必须能按策略清晰归因。
-6. 调度、重启恢复、异常处理、尾盘处理、数据门禁、实盘审批、UI 可观测性和流水线验证必须全部纳入验收，不得留为“后续补齐”的隐含缺口。
+6. 调度、重启恢复、异常处理、尾盘处理、数据门禁、运行版本变更、实盘审批、UI 可观测性和流水线验证必须全部纳入验收，不得留为“后续补齐”的隐含缺口。
 
 ## 1. 设计依据和现状约束
 
@@ -41,10 +48,14 @@ StrategyPackage alpha core
 
 本设计继承 `docs/architecture/strategy_package_platform_boundary_contract_20260520.md` 的边界：
 
-- StrategyPackage 只保存 alpha core：因子、feature schema、模型、权重、训练和验证证据、source lineage。
-- 日频策略、分钟线执行策略、尾盘处理策略、HMM、股票池/ST PIT、停牌/涨跌停、event_signal、broker adapter、MiniQMT 连接、资金账户、审批状态均属于平台运行能力。
-- RuntimeProfile、ValidatedExecutionPolicy、TailHandlingPolicy、BrokerCompatibility、PortfolioBinding 等平台运行配置必须版本化、可追溯、可回放。
+- StrategyPackage 只保存 alpha core：因子、feature schema、模型、权重、训练和验证证据、source lineage；进入模拟盘或平台运行后不得原地修改。
+- 因子集合、模型资产、alpha 组合方式等 alpha core 变更必须回到 QE 实验/演进流程，经过回测验证和人工审核后生成新的 StrategyPackage；不得通过模拟盘 runtime 配置直接改变。
+- 日频策略、分钟线执行策略、尾盘处理策略、HMM、股票池/ST PIT、停牌/涨跌停、event_signal、broker adapter、MiniQMT 连接、资金账户、审批状态均属于平台运行能力，不进入 StrategyPackage manifest。
+- 日频策略、分钟线执行策略、尾盘处理策略和 runtime profile 的行为变更必须创建新的 `StrategyRuntimeRelease`；HMM、黑名单、ST PIT、停牌/涨跌停等平台数据/风险策略可以按平台规则更新，但必须版本化、审计化，并且只影响未来 run。
+- RuntimeProfile、DailyStrategyProfile、ValidatedExecutionPolicy、TailHandlingPolicy、BrokerCompatibility、PortfolioBinding 等平台运行配置必须版本化、可追溯、可回放。
 - Selection Center、Paper v2、MiniQMT SIM、未来实盘必须使用同一套 runtime profile / execution policy / strategy engine 语义。
+
+后续 QE 团队需要另行设计“基于既有 StrategyPackage 创建自定义演进任务”的能力：把现有包作为 baseline，记录 `base_package_id`、`base_manifest_sha256`、`alpha_core_sha256` 和训练/验证证据，必要时也可记录来源 `release_id` 作为对照上下文；进入 QE loop 后可以像普通 QE 实验一样自由修改因子、模型和配置；只有回测通过并人工审核后，才能晋升为新的 StrategyPackage。该能力不属于本整改项目的实现范围，但本项目必须保证模拟盘侧不接收绕过 QE 的 alpha core 变更。
 
 ### 1.2 当前 LocalSim 能力和缺口
 
@@ -106,16 +117,18 @@ StrategyPackage alpha core
 ### 2.1 产品目标
 
 - 支持一个或多个 StrategyPackage 被绑定到模拟盘运行计划。
+- 支持为 StrategyPackage 创建不可变 `StrategyRuntimeRelease`（策略包运行版本），用于明确日频策略、分钟线执行策略、尾盘处理策略和平台 runtime profile 的组合。
 - 支持 LocalSim 和 MiniQMT 两种 broker backend，用户可以选择 backend，但不能改变前置策略决策链路。
 - 支持多策略同时运行，支持同一策略在不同 backend 独立运行，支持两个策略买入同一股票并独立展示收益。
 - 支持无人值守交易日流程：盘前准备、开盘后执行、盘中同步、尾盘处理、收盘快照、次日恢复。
 - 支持人工手动触发同一权威流程，不允许手动入口绕过 signal / target / execution policy。
-- 支持未来实盘审批：实盘之前必须绑定已通过模拟盘的 release/binding version、验证证据和审批记录。
+- 支持未来实盘审批：实盘之前必须绑定已通过模拟盘的 `StrategyRuntimeRelease`、`SimulationReleaseBinding`、验证证据和审批记录。
 
 ### 2.2 工程目标
 
 - 把共享链路抽象为稳定服务和数据模型，减少重复门禁和分散规则。
 - 把 broker 差异限制在 `BrokerExecutionBridge`、fill authority、position authority、reconciliation。
+- 把平台运行配置分为 broker-neutral 的 `StrategyRuntimeRelease` 和 broker/account/capital 相关的 `SimulationReleaseBinding`，避免把账户资金变更误认为策略逻辑变更。
 - 所有交易规则、lot 规则、涨跌停规则、T+1 可用量规则必须由统一规则服务提供，后续检查只能引用同一规则结果，不得重复实现不同逻辑。
 - 每个运行阶段都有 run event、context、hash、version、operator/source，可用于事后审计。
 - 所有新增 DDL 必须带 PostgreSQL `COMMENT ON TABLE` / `COMMENT ON COLUMN`。
@@ -126,6 +139,9 @@ StrategyPackage alpha core
 - 不在本项目中切换到 vn.py；AIstock 仍然是自研交易核心，可以参考 vn.py 概念。
 - 不在本项目中开发真实 MiniQMT live 实盘下单；本项目目标是 MiniQMT 模拟盘和未来实盘准入基础。
 - 不在本项目中追涨停板策略；涨停跳过、跌停挂单等是 execution/tail policy 行为，先满足真实模拟盘，不做专用打板策略。
+- 不在本项目中支持模拟盘内修改因子、模型或 alpha 组合；这类变更必须由 QE 实验/演进流程生成新的 StrategyPackage。
+- 不在本项目中实现“StrategyPackage 导入 QE 自定义演进”的完整 QE 功能；本项目只预留边界和审计引用。
+- 不允许把 `StrategyRuntimeRelease` 当成新的 StrategyPackage manifest；运行版本不得包含或覆盖因子、模型、训练资产等 alpha core 字段。
 - 不允许以 POC、demo、stub-only、单股票脚本或简化算法替代正式链路。
 
 ## 3. 统一架构
@@ -137,13 +153,19 @@ Layer A: StrategyPackage Alpha Core
   - package_id / manifest_sha256
   - factors / feature_schema / model / weights / lineage
 
-Layer B: Platform Runtime Binding
+Layer B: StrategyRuntimeRelease（策略包运行版本，broker-neutral）
+  - StrategyRuntimeRelease / release_hash
   - RuntimeProfileVersion
   - DailyStrategyProfileVersion
   - ValidatedExecutionPolicyVersion
   - TailHandlingPolicyVersion
+  - validation evidence / approval state
+
+Layer B2: SimulationReleaseBinding / PortfolioBindingVersion
+  - binding_id / binding_hash
   - BrokerCompatibility
-  - Portfolio / Strategy capital binding
+  - broker_backend / broker_account_id
+  - PortfolioBindingVersion / Strategy capital binding
 
 Layer C: Shared Decision Engine
   - authoritative daily selection artifact
@@ -174,8 +196,9 @@ Layer F: Scheduler / Ops / Validation
 
 | 服务 | 职责 | 不允许做什么 |
 |---|---|---|
-| `SimulationRuntimeBindingService` | 解析 StrategyPackage + runtime profile + execution policy + broker binding，输出不可变 `SimulationReleaseBinding` | 不修改 StrategyPackage manifest |
-| `StrategyPackageSelectionService` | Selection Center、LocalSim、MiniQMT 共用的策略包选股入口；只消费 alpha core 和平台 runtime profile，生成 selection evidence / signal snapshot | 不做仓位分配、调仓、订单、broker 检查或资金检查 |
+| `StrategyRuntimeReleaseService` | 创建、冻结、校验 `StrategyRuntimeRelease`；组合 StrategyPackage alpha core、runtime profile、daily strategy、execution policy、tail policy 和验证证据 | 不接收因子/模型/alpha 组合变更，不写 broker/account/capital |
+| `SimulationRuntimeBindingService` | 将 `StrategyRuntimeRelease` 绑定到 LocalSim 或 MiniQMT 的 backend、账户、资金、策略名、order remark，输出不可变 `SimulationReleaseBinding` | 不修改 StrategyPackage manifest，不修改 release 内的策略逻辑 |
+| `StrategyPackageSelectionService` | Selection Center、LocalSim、MiniQMT 共用的策略包选股入口；只消费 alpha core 和 `StrategyRuntimeRelease.runtime_profile_version_id`，生成 selection evidence / signal snapshot | 不做仓位分配、调仓、订单、broker 检查或资金检查 |
 | `DailySelectionSignalService` | 为 target trade_date 生成/加载 authoritative selection artifact 和 signal snapshot | 不读取 QE backtest pred.pkl 代替实时推理 |
 | `TradabilityDecisionService` | 统一处理停牌、ST/PIT、股票池、涨跌停可交易性、公告风险 | 不在 LocalSim/MiniQMT 内重复实现不同门禁 |
 | `TargetPositionService` | 根据 signal snapshot、daily strategy profile、资金和当前策略持仓生成目标仓位 | 不直接提交 broker order |
@@ -194,6 +217,8 @@ ExecutionPlan
   - plan_id
   - trade_date
   - strategy_id / portfolio_id / package_id
+  - release_id / release_hash
+  - binding_id / binding_hash
   - runtime_profile_hash
   - execution_policy_hash
   - tail_policy_hash
@@ -221,7 +246,7 @@ Selection Center 必须使用与模拟盘完全相同的策略包选股入口，
 
 ```text
 StrategyPackage alpha core
-  -> Platform Runtime Binding
+  -> StrategyRuntimeRelease（只取 runtime_profile_version_id）
   -> StrategyPackageSelectionService
   -> DailySelectionEvidence
   -> SignalSnapshot / ranked candidates / exclusion evidence
@@ -230,7 +255,7 @@ StrategyPackage alpha core
 
 Selection-only 路径的硬规则：
 
-1. 只允许从 StrategyPackage alpha core 和平台 runtime profile 生成选股结果。
+1. 只允许从 StrategyPackage alpha core 和 `StrategyRuntimeRelease.runtime_profile_version_id` 生成选股结果。
 2. 不允许 Selection Center 读取或解释 broker、账户资金、仓位、T+1 可卖量、order_remark、strategy_name。
 3. 不允许 Selection Center 生成 target position、rebalance intent、execution plan 或 broker order。
 4. 不允许 Selection Center 使用与模拟盘不同的 HMM、ST/PIT、股票池、停牌、涨跌停、公告风险、industry blacklist 逻辑。
@@ -242,6 +267,7 @@ Selection-only 路径需要的门禁只包括：
 | 门禁 | 说明 |
 |---|---|
 | StrategyPackage alpha core 完整性 | 因子、模型、schema、artifact hash、manifest identity |
+| StrategyRuntimeRelease 引用 | 只读取 release 中的 `package_id`、`manifest_sha256`、`runtime_profile_version_id` 和 release hash，不读取 broker binding |
 | RuntimeProfile 激活和 hash | HMM / stock pool / tradability / risk 等平台选股能力版本 |
 | 数据 readiness | 仅选股所需数据；不得包含 broker、资金、持仓、execution policy、tail policy |
 | Authoritative inference artifact | 生成或加载 target_trade_date 对应 selection evidence |
@@ -256,36 +282,87 @@ Selection-only 路径明确禁止的额外门禁：
 
 ## 4. 关键数据模型
 
-### 4.1 `SimulationReleaseBinding`
+### 4.1 `StrategyRuntimeRelease` 与 `SimulationReleaseBinding`
 
-用于绑定“策略包 alpha core + 平台运行能力”。建议作为新表或现有 portfolio/binding 的规范化版本：
+运行配置必须拆成两层，避免把策略逻辑、平台能力和账户资金混在同一个未版本化 `runtime_config` 中：
+
+- `StrategyRuntimeRelease` 是 broker-neutral 的“策略包运行版本”，用于把不可变 StrategyPackage alpha core 与平台运行策略组合为一个可验证、可审批、可回放的运行版本。
+- `SimulationReleaseBinding` / `PortfolioBindingVersion` 是 broker/account/capital 层绑定，用于把某个运行版本部署到 LocalSim 或 MiniQMT 的具体策略实例。
+- 两者都不可原地覆盖；任何影响未来选股、目标仓位、订单、成交、收益或审计的变更，都必须创建新版本并只影响未来 run。
+
+#### 4.1.1 `StrategyRuntimeRelease`
+
+| 字段 | 说明 |
+|---|---|
+| `release_id` | 不可变运行版本 ID |
+| `package_id` | StrategyPackage alpha core 引用 |
+| `manifest_sha256` | alpha core manifest hash |
+| `base_release_id` | 变更来源；用于追溯从哪个运行版本派生 |
+| `runtime_profile_version_id` | HMM / stock pool / ST PIT / tradability / risk / blacklist 等平台选股能力版本 |
+| `daily_strategy_profile_version_id` | 日频策略版本；定义选股到目标仓位的业务规则 |
+| `execution_policy_version_id` | 已通过回测/模拟盘验证的分钟线执行策略版本 |
+| `tail_policy_version_id` | 尾盘、未成交、撤单、次日延续处理策略版本 |
+| `release_config_json` | 只包含上述引用、验证引用和审批元数据的 canonical JSON |
+| `release_hash` | canonical JSON hash；所有 run/evidence/plan 必须引用 |
+| `validation_state` | `DRAFT` / `SIM_VALIDATING` / `SIM_PASSED` / `LIVE_APPROVAL_PENDING` / `LIVE_APPROVED` / `RETIRED` |
+| `validation_evidence` | 引用 LocalSim、MiniQMT SIM、dual-backend oracle、L5 手工验收等验证证据 |
+| `created_by` / `created_reason` | 创建人和变更原因 |
+| `effective_from` / `effective_to` | 可用于未来 run 的生效窗口；历史 run 永远引用当时 hash |
+
+硬规则：
+
+- `StrategyRuntimeRelease` 不得包含 `factor_set`、`model_asset`、`alpha_components`、`alpha_combination_policy` 等 alpha core 字段，也不得覆盖 StrategyPackage manifest。
+- 因子、模型、训练资产或 alpha 组合变更必须通过 QE 实验/演进生成新的 StrategyPackage；不能通过新运行版本绕过回测。
+- 日频策略、分钟线执行策略、尾盘处理策略变更必须创建新的 `StrategyRuntimeRelease`，并重新绑定验证证据。
+- HMM、黑名单、ST PIT、停牌/涨跌停、公告风险等平台能力属于 `RuntimeProfileVersion`；它们可以按平台政策更新，但必须有版本、hash、审计和生效窗口。
+- 同一 `package_id + manifest_sha256` 可以派生多个 release；release 变更代表运行策略组合变更，不代表 alpha core 变更。
+- selection、run、session、execution plan、order、fill、snapshot 都必须持久化 `release_id` 和 `release_hash`。
+- 未来实盘 approval 必须引用已通过 LocalSim / MiniQMT SIM 验证的 release hash。
+
+#### 4.1.2 `SimulationReleaseBinding`
+
+`SimulationReleaseBinding` 只描述某个运行版本如何部署到具体 broker/backend/account/capital；它不描述 alpha 逻辑和平台策略逻辑。
 
 | 字段 | 说明 |
 |---|---|
 | `binding_id` | 不可变绑定 ID |
 | `strategy_id` | 策略运行实例 ID；多策略分仓以此为主键 |
+| `release_id` | StrategyRuntimeRelease |
+| `release_hash` | StrategyRuntimeRelease canonical hash |
 | `package_id` | StrategyPackage |
 | `manifest_sha256` | alpha core hash |
-| `runtime_profile_version_id` | 平台 runtime profile |
-| `daily_strategy_profile_version_id` | 日频策略版本 |
-| `execution_policy_version_id` | validated execution policy |
-| `tail_policy_version_id` | tail/unfilled policy |
 | `broker_backend` | `local_sim` / `minqmt_sim` |
 | `broker_account_id` | MiniQMT 账户或 LocalSim 虚拟账户 |
-| `capital_allocation` | 初始/目标资金 |
-| `effective_from` / `effective_to` | 生效窗口 |
-| `approval_state` | 模拟盘/实盘准入状态 |
-| `release_hash` | canonical JSON hash |
+| `capital_allocation` | 初始/目标资金；收益滚动后也必须可追溯 |
+| `strategy_name` / `order_remark_prefix` | MiniQMT 策略名和托管订单归因前缀 |
+| `effective_from` / `effective_to` | 绑定生效窗口 |
+| `approval_state` | 模拟盘/未来实盘准入状态 |
+| `binding_hash` | canonical JSON hash |
 
-要求：
+硬规则：
 
-- 任何影响选股、仓位、订单、收益的变更必须创建新 binding/version，不得覆盖旧记录。
-- 已完成的 daily run 永远引用当时的 binding hash。
-- 未来实盘 approval 只能引用已完成模拟盘验证的 binding hash。
+- broker、账户、资金、策略名、order remark、有效期变更只创建新的 binding/version，不创建新的 `StrategyRuntimeRelease`。
+- 日频策略、执行策略、尾盘策略、runtime profile 变更不允许只改 binding，必须创建新的 `StrategyRuntimeRelease`。
+- 已完成 daily run 永远引用当时的 release hash 和 binding hash。
+- 未来实盘 approval 必须同时引用通过验证的 release hash 和对应 broker binding hash。
 
 ### 4.2 `SimulationDailyRun`
 
 统一记录一个 strategy/backend/trade_date 的日运行。
+
+最低字段：
+
+- `run_id`
+- `trade_date`
+- `strategy_id`
+- `broker_backend`
+- `package_id` / `manifest_sha256`
+- `release_id` / `release_hash`
+- `binding_id` / `binding_hash`
+- `selection_evidence_id` / `selection_artifact_hash`
+- `execution_plan_id` / `execution_plan_hash`
+- `status`
+- `created_at` / `updated_at`
 
 | 阶段 | 状态 |
 |---|---|
@@ -313,13 +390,16 @@ Selection-only 路径明确禁止的额外门禁：
 | `target_trade_date` | 目标交易日 |
 | `cutoff_date` | 推理使用的数据截止日，盘前通常为上一完成交易日 |
 | `package_id` / `manifest_sha256` | alpha core |
-| `runtime_profile_hash` | runtime profile |
+| `release_id` / `release_hash` | 生成选股证据时使用的 StrategyRuntimeRelease |
+| `runtime_profile_version_id` / `runtime_profile_hash` | runtime profile 版本和 hash |
 | `source_type` | authoritative live inference |
 | `data_source` | DB_HISTORICAL / other approved source |
 | `candidate_count` | 候选数量 |
 | `excluded_count` | 排除数量 |
 | `artifact_hash` | 结果 hash |
 | `created_at` / `created_by` | 审计 |
+
+`DailySelectionEvidence` 不保存 broker binding 作为生成条件。LocalSim/MiniQMT run 可以引用同一 evidence，并在各自 run/plan 中记录 `binding_id` / `binding_hash`。这样 Selection Center 不会因为账户、资金或 broker 状态变化而产生不同选股结果。
 
 ### 4.4 `ExecutionPlan` / `OrderIntent`
 
@@ -332,6 +412,8 @@ Selection-only 路径明确禁止的额外门禁：
 - `strategy_id`
 - `portfolio_id`
 - `package_id`
+- `release_id` / `release_hash`
+- `binding_id` / `binding_hash`
 - `symbol`
 - `side`
 - `target_quantity`
@@ -382,7 +464,7 @@ MiniQMT 路径必须保留 broker 合并持仓和 AIstock 策略分仓双视图�
 |---|---|---|
 | T-1 盘后 | 数据完整性和模型资产检查 | 只检查已完成交易日数据 |
 | T 日 08:50-09:10 | 交易日和数据 readiness | `trading_calendar`、`suspend_d`、`stk_limit` 等按各自契约检查；不得等待 `daily_basic` |
-| T 日 09:10-09:20 | 生成 target_trade_date=T 的 `DailySelectionEvidence` | cutoff 使用上一完成交易日或显式配置的 cutoff |
+| T 日 09:10-09:20 | 基于已激活 `StrategyRuntimeRelease` 生成 target_trade_date=T 的 `DailySelectionEvidence` | cutoff 使用上一完成交易日或显式配置的 cutoff；不得原地改 release |
 | T 日 09:20-09:25 | 生成 target / rebalance / execution plan | 输出所有 BUY/SELL/NOOP intent |
 | T 日 09:25 后 | 等待执行 policy 的首个可提交窗口 | 集合竞价、开盘后、分批、尾盘按 policy |
 
@@ -390,16 +472,16 @@ MiniQMT 路径必须保留 broker 合并持仓和 AIstock 策略分仓双视图�
 
 LocalSim：
 
-1. scheduler tick 获取 active LocalSim sessions；
-2. 对每个 strategy run 使用共享 `ExecutionPlan`；
+1. scheduler tick 获取 active LocalSim sessions 和对应 `SimulationReleaseBinding`；
+2. 对每个 strategy run 使用同一 `StrategyRuntimeRelease` 生成的共享 `ExecutionPlan`；
 3. `LocalSimExecutionBridge` 使用 `MinuteExecutionEngine` 增量执行；
 4. 生成 fills/events/snapshots；
 5. 无成交时按 no-fill event 和 tail policy 进入合法状态。
 
 MiniQMT：
 
-1. scheduler tick 获取 active MiniQMT strategies；
-2. `MiniQMTExecutionBridge` 读取 `ExecutionPlan`；
+1. scheduler tick 获取 active MiniQMT strategies、`StrategyRuntimeRelease` 和 `SimulationReleaseBinding`；
+2. `MiniQMTExecutionBridge` 读取由共享链路生成的 `ExecutionPlan`；
 3. 转换为 `ManagedOrderRequest`，写入 `strategy_name`、`order_remark`、`intent_id`；
 4. 下单前仅调用统一 `TradingRuleService` 的结果，不重复写 board-lot 规则；
 5. 提交 MiniQMT 后持久化 native order context；
@@ -436,6 +518,7 @@ Tail policy 必须是版本化平台能力：
 
 - scheduler 只从持久化 session/run/order state 恢复；
 - 不重复生成已成功的 selection evidence，除非显式 force regenerate 且创建新 evidence version；
+- 不允许通过重启或手工 tick 修改已进入运行的 `StrategyRuntimeRelease` 或 binding；需要变更时创建新 release/binding，并从下一 run 生效；
 - 不重复提交已有 `intent_id` 的 MiniQMT 托管订单；
 - 对未知 broker 状态先 sync/reconcile，再进入下一步；
 - 不能因为进程重启丢失策略分仓、冻结资金、未成交订单或收益归因。
@@ -449,7 +532,9 @@ Tail policy 必须是版本化平台能力：
 | 层级 | 允许检查 | 禁止检查 |
 |---|---|---|
 | Asset gate | StrategyPackage alpha core 是否完整、hash 是否匹配 | 检查日频策略/HMM/broker 作为 manifest 硬门槛 |
-| Runtime binding gate | runtime profile / execution policy / tail policy 是否已激活、版本是否存在 | 重新解释 StrategyPackage manifest |
+| Runtime release gate | `StrategyRuntimeRelease` 是否存在、hash 是否匹配、validation state 是否允许运行 | 接收临时未版本化配置覆盖策略逻辑，或重新解释 StrategyPackage manifest |
+| Runtime policy gate | runtime profile / daily strategy / execution policy / tail policy 是否已激活、版本是否存在 | 把平台 policy 写回 StrategyPackage manifest |
+| Broker binding gate | binding backend/account/capital/order remark 是否有效 | 修改 release 内的日频/执行/尾盘策略 |
 | Data readiness gate | 当日运行需要的数据源是否按契约 ready | 使用盘后数据如 `daily_basic` 阻塞盘前 |
 | Decision gate | signal/target/rebalance 是否生成且可追溯 | 由 broker router 临时生成目标仓位 |
 | Trading rule gate | 统一规则服务输出 order legality | 文件内重复写 `quantity % 100` 等旧逻辑 |
@@ -476,11 +561,27 @@ Tail policy 必须是版本化平台能力：
 
 科创板、创业板、主板、北交所等规则差异必须由同一个 rule set 表达。对于合法但 broker 仍可能拒绝的订单，记录 broker reject，不把平台规则写成更保守的错误规则。
 
+### 6.3 配置变更分层
+
+为避免再次出现“策略包过度绑定平台能力”和“多层门禁重复判断”的问题，所有配置变更必须按下表归类：
+
+| 变更类型 | 归属 | 处理方式 | 是否影响历史 run |
+|---|---|---|---|
+| 因子集合、feature schema、模型资产、权重、alpha 组合 | StrategyPackage alpha core | 必须回到 QE 实验/演进流程，回测通过并人工审核后生成新的 StrategyPackage | 否 |
+| 日频策略 profile | StrategyRuntimeRelease | 创建新 release，重新验证 selection/target/rebalance oracle | 否 |
+| 分钟线执行策略 / validated execution policy | StrategyRuntimeRelease | 创建新 release，绑定回测或模拟盘验证证据 | 否 |
+| 尾盘/未成交处理 policy | StrategyRuntimeRelease | 创建新 release，补 tail policy 验证 | 否 |
+| HMM、黑名单、ST PIT、股票池、停牌/涨跌停、公告风险 | RuntimeProfileVersion | 创建新 runtime profile version，再创建或激活引用它的新 release；平台数据刷新必须有审计 | 否 |
+| broker backend、账户、资金、策略名、order remark | SimulationReleaseBinding / PortfolioBindingVersion | 创建新 binding；如果 release 不变，不需要新 release | 否 |
+| 手工暂停、恢复、取消订单、reconcile issue 处理 | Run/ops event | 记录 operator、原因和影响对象，不改变 release/binding hash | 否 |
+
+模拟盘、Selection Center 和 UI 不得暴露未版本化 `runtime_config` 让用户直接改行为。UI 上任何“修改运行配置”的操作都必须明确显示将创建新的 StrategyRuntimeRelease 或 SimulationReleaseBinding，并展示新旧 hash、变更项、验证要求和生效日期。
+
 ## 7. LocalSim 路径设计
 
 ### 7.1 运行模型
 
-- 每个 LocalSim strategy/portfolio 有独立 ledger。
+- 每个 LocalSim strategy/portfolio 有独立 ledger，并引用不可变 `StrategyRuntimeRelease` 与 `SimulationReleaseBinding`。
 - 多策略运行是多个 strategy sessions 并行，由统一 orchestrator 批量驱动。
 - 使用 shared decision engine 输出的 `ExecutionPlan`。
 - LocalSim execution bridge 只负责把 plan 交给分钟执行引擎，不生成独立信号。
@@ -516,7 +617,7 @@ AIstock Virtual Strategy Ledger
 
 新增或重构 `MiniQMTExecutionBridge`：
 
-1. 输入共享 `ExecutionPlan`；
+1. 输入共享 `ExecutionPlan`，并校验 plan 上的 `release_hash` / `binding_hash` 与当前 session 一致；
 2. 校验 broker compatibility 和 live/sim safety flag；
 3. 读取 `TradingRuleDecision`；
 4. 生成 `ManagedOrderRequest`；
@@ -552,7 +653,8 @@ AIstock Virtual Strategy Ledger
 ### 9.1 必须展示
 
 - 模拟盘总览：LocalSim / MiniQMT active strategies、状态、下一步动作、错误。
-- 每策略详情：binding hash、package、runtime profile、execution policy、tail policy、capital、NAV、PnL、positions、orders、fills。
+- 运行版本详情：`StrategyRuntimeRelease`、release hash、package、manifest hash、runtime profile、daily strategy、execution policy、tail policy、validation state、验证证据和审批状态。
+- 每策略详情：binding hash、broker backend、account、capital、strategy_name、order_remark_prefix、NAV、PnL、positions、orders、fills。
 - 今日运行链路：precheck、selection evidence、targets、execution plan、broker orders、sync、reconciliation、snapshot。
 - MiniQMT 特有：broker account、merged positions、strategy lot projection、unattributed orders/trades、sync time、reconcile issues。
 - LocalSim 特有：minute cursor、active states、fills、no-fill events、tail handling。
@@ -563,6 +665,7 @@ AIstock Virtual Strategy Ledger
 允许：
 
 - 创建/暂停/恢复/停止 simulation session；
+- 创建新的 `StrategyRuntimeRelease` 草案并提交验证；创建新的 `SimulationReleaseBinding`；
 - 手动触发当日 readiness；
 - 手动触发 selection evidence 生成；
 - 手动触发一次 scheduler tick；
@@ -574,8 +677,9 @@ AIstock Virtual Strategy Ledger
 
 - UI 手写股票和数量绕过策略链路提交 MiniQMT order；
 - UI 用历史 selection snapshot 代替当日 selection evidence；
-- UI 修改 StrategyPackage manifest 来改变日频/执行策略；
-- UI 显示 raw JSON 作为主要操作信息。
+- UI 修改 StrategyPackage manifest 或未版本化 `runtime_config` 来改变日频/执行/尾盘策略；
+- UI 修改因子、模型、alpha 组合并直接用于模拟盘；这类需求只能跳转到 QE baseline evolution 方案；
+- UI 显示未加工 JSON 作为主要操作信息。
 
 ## 10. 测试方案
 
@@ -583,7 +687,8 @@ AIstock Virtual Strategy Ledger
 
 | 测试组 | 覆盖 |
 |---|---|
-| `test_simulation_runtime_binding.py` | binding version、hash、不可变、变更生成新版本 |
+| `test_strategy_runtime_release.py` | release version、hash、不可变、alpha core 字段禁止进入 release、日频/执行/尾盘策略变更生成新 release |
+| `test_simulation_runtime_binding.py` | binding version、hash、不可变、broker/account/capital 变更生成新 binding，不误改 release |
 | `test_strategy_package_selection_service.py` | Selection Center、LocalSim、MiniQMT 共用同一 selection service；Selection-only 不依赖仓位、资金、broker、execution policy |
 | `test_daily_selection_signal_service.py` | cutoff、target_trade_date、authoritative source、禁止 pred.pkl |
 | `test_target_rebalance_shared.py` | 同一 signal 在 LocalSim/MiniQMT 生成一致 targets/intents；淘汰股票 sell |
@@ -641,9 +746,9 @@ AIstock Virtual Strategy Ledger
 
 必须断言：
 
-- Selection-only API、LocalSim run、MiniQMT run 对同一 package/runtime/trade_date 生成相同 selection evidence hash。
+- Selection-only API、LocalSim run、MiniQMT run 对同一 package/release/trade_date 生成相同 selection evidence hash。
 - Selection-only 结果不得包含 target position、rebalance intent、execution plan、broker order、cash、position、T+1 可卖量字段。
-- 每个 run 都能追溯 package_id、manifest_sha256、runtime_profile_hash、execution_policy_hash、tail_policy_hash。
+- 每个 run 都能追溯 package_id、manifest_sha256、release_id、release_hash、binding_id、binding_hash、runtime_profile_hash、execution_policy_hash、tail_policy_hash。
 - 每个 order intent 都来自 execution plan。
 - 每个 fill 都能追溯到 order intent；MiniQMT 未归因 fill 必须列为 issue。
 - 每策略现金 = 初始资金 + 成交流水 + 已实现收益 - 费用 - 冻结释放差异。
@@ -651,6 +756,7 @@ AIstock Virtual Strategy Ledger
 - MiniQMT broker 合并持仓 = 所有策略 lot 汇总；允许因未归因订单产生明确 reconciliation issue。
 - `daily_basic` 不得出现在盘前 readiness 必须数据集中。
 - 无成交日不等于失败，除非 policy 明确要求成交。
+- 因子/模型/alpha 组合变更不会出现在 `StrategyRuntimeRelease` 或模拟盘未版本化 override 中；相关需求必须生成 QE baseline evolution 记录或被拒绝。
 
 ## 11. 验证方案和流水线
 
@@ -699,7 +805,7 @@ L5 不作为普通 CI 默认项，但作为合入前人工验收或实盘前审�
 | ID | 验收项 | LocalSim | MiniQMT | 证据要求 |
 |---|---|---|---|---|
 | A-01 | StrategyPackage 边界清晰，alpha core 不绑定平台能力 | 必须 | 必须 | 代码 grep + contract tests |
-| A-02 | runtime / daily / execution / tail policy 版本化 | 必须 | 必须 | DB/API tests + hash diff |
+| A-02 | `StrategyRuntimeRelease` 作为 broker-neutral 策略包运行版本，runtime / daily / execution / tail policy 版本化 | 必须 | 必须 | DB/API tests + hash diff |
 | A-03 | 每个交易日生成 authoritative selection evidence | 必须 | 必须 | selection evidence row + artifact hash |
 | A-04 | `daily_basic` 不作为盘前 readiness 条件 | 必须 | 必须 | readiness tests + grep |
 | A-05 | 同一 signal 生成一致 target positions | 必须 | 必须 | dual backend oracle |
@@ -722,30 +828,42 @@ L5 不作为普通 CI 默认项，但作为合入前人工验收或实盘前审�
 | A-22 | 无简化版/POC 版残留 | 必须 | 必须 | guardrail scan + design compliance matrix |
 | A-23 | Selection Center、LocalSim、MiniQMT 共用同一 StrategyPackage selection service 和 evidence schema | 必须 | 必须 | selection/shared-service tests + dual backend oracle |
 | A-24 | Selection-only 路径只做选股，不做仓位、调仓、执行策略、broker、资金和交易门禁 | 必须 | 必须 | API contract + grep + negative tests |
+| A-25 | 因子/模型/alpha 组合变更只能通过 QE 实验/演进生成新 StrategyPackage，不得通过模拟盘运行版本或未版本化 override 修改 | 必须 | 必须 | negative tests + API contract + grep |
+| A-26 | broker/account/capital/order remark 变更只创建 binding version，不创建或篡改 `StrategyRuntimeRelease` | 必须 | 必须 | DB/API tests + audit event |
 
 合入 `main` 的最低条件：
 
-- A-01 到 A-24 全部有 PASS 或用户批准的显式延期；核心链路 A-01 到 A-18、A-23、A-24 不允许延期。
+- A-01 到 A-26 全部有 PASS 或用户批准的显式延期；核心链路 A-01 到 A-18、A-23 到 A-26 不允许延期。
 - 至少通过 `simulation_core_l2`、`localsim_unattended_l3`、`miniqmt_sim_stub_l3`、`simulation_dual_backend_l4`。
 - MiniQMT 真实 SIM L5 如果因非交易时间无法执行，可以作为发布后交易时段验证项，但不得因此宣称实盘可用；实盘审批必须等待 L5 证据。
 
 ## 13. 实施阶段
 
-### Phase 0：设计冻结和缺口确认
+### Phase 0：设计冻结、旧方案作废和缺口确认
 
 - 本文档评审通过。
 - 建立 acceptance matrix 到 issue/project checklist。
-- 确认所有旧文档中冲突描述以 2026-05-20 边界契约和本文为准。
+- 确认所有旧文档中冲突描述以 2026-05-20 边界契约和本文为准；本文是 LocalSim / MiniQMT 模拟盘整改项目的最新权威方案。
+- 明确 `StrategyRuntimeRelease` 与 StrategyPackage、RuntimeProfileVersion、SimulationReleaseBinding 的命名和字段边界，旧文档如有未版本化 `runtime_config` 或策略包绑定平台能力的描述必须废弃或改写。
+- 以下旧文档必须在顶部标注“作废/取代声明”；只保留历史背景或部分可复用设计，不得作为新实现依据：
+  - `docs/architecture/paper_v2_qe_candidate_strategy_warehouse_design_20260512.md`
+  - `docs/contracts/strategy_package_manifest_v1.md`
+  - `docs/architecture/paper_trading_v2_qe_runtime_contract_enforcement_20260505.md`
+  - `docs/architecture/qe_sota_strategy_package_asset_governance_design_20260508.md`
+  - `docs/architecture/miniqmt_multi_strategy_execution_implementation_plan_20260518.md`
+  - `docs/architecture/miniqmt_limit_aware_execution_policy_design_20260519.md`
 
 验收：
 
 - 文档进入独立分支。
 - 无代码行为改变。
-- 旧文档冲突清单明确。
+- 上述旧文档已逐一标注作废/取代声明。
+- 旧文档冲突清单明确，且新开发必须引用本文。
 
 ### Phase 1：共享决策核心整改
 
 - 抽出 `SimulationRuntimeBindingService`。
+- 新增 `StrategyRuntimeReleaseService`，负责创建、冻结、校验和验证运行版本。
 - 抽出 `StrategyPackageSelectionService`，作为 Selection Center、LocalSim、MiniQMT 的唯一策略包选股入口。
 - 抽出 `DailySelectionSignalService`。
 - 抽出 `TargetPositionService` / `RebalanceIntentService` 共享入口。
@@ -758,6 +876,7 @@ L5 不作为普通 CI 默认项，但作为合入前人工验收或实盘前审�
 - Selection Center、LocalSim 和 MiniQMT 使用同一 selection evidence fixtures；Selection-only 结果与模拟盘前置信号完全一致。
 - 禁止任何 broker router 生成策略目标仓位。
 - 禁止 Selection Center 引入仓位、资金、broker、execution policy、tail policy 等交易门禁。
+- 禁止模拟盘 API 接收因子/模型/alpha 组合未版本化 override；这类变更必须被路由到 QE baseline evolution 方案。
 
 ### Phase 2：LocalSim 无值守补齐
 
@@ -835,6 +954,7 @@ L5 不作为普通 CI 默认项，但作为合入前人工验收或实盘前审�
 | 风险 | 控制 |
 |---|---|
 | 继续出现多层重复门禁 | 引入 TradingRuleService 和门禁分层矩阵，grep 禁止旧逻辑 |
+| 策略包和平台运行配置再次混淆 | 引入 `StrategyRuntimeRelease` / `SimulationReleaseBinding` 双层版本，negative tests 禁止 alpha core override |
 | LocalSim 与 MiniQMT 决策不一致 | dual backend oracle 强制比对 signal/target/intents |
 | MiniQMT 真实 broker 行为不可预测 | fake broker L3 覆盖确定性；真实 SIM L5 做交易时段验证 |
 | 后端重启重复下单 | intent idempotency + native order context + sync before submit |
@@ -842,6 +962,7 @@ L5 不作为普通 CI 默认项，但作为合入前人工验收或实盘前审�
 | 无成交被误判失败 | no-fill/no-trade 状态模型和测试 |
 | 旧文档导致边界模糊 | 本文和 2026-05-20 边界契约声明优先级 |
 | POC 被误报完成 | acceptance matrix + design compliance + L3/L4/L5 证据 |
+| QE baseline evolution 需求被误塞进模拟盘 | 本项目只保留引用和边界；新 QE 能力单独立项、单独设计、单独验收 |
 
 ## 16. 完成定义
 
@@ -852,9 +973,11 @@ L5 不作为普通 CI 默认项，但作为合入前人工验收或实盘前审�
 3. 两条模拟盘路径共享信号、目标仓位、调仓 intent、执行计划生成。
 4. MiniQMT 多策略共享账户分仓、同股持仓、独立收益、对账全部通过。
 5. 所有买卖逻辑与日频回测一致，淘汰股票必须卖出，不能只买不卖。
-6. 所有 execution/tail policy 都有版本和验证证据。
-7. 所有缺口在验收矩阵中有 PASS 证据。
-8. L0-L4 流水线通过；真实 MiniQMT SIM L5 在交易时段通过或明确标记为实盘前阻断项。
-9. 代码、DB、API、UI、测试、文档均完成设计合规矩阵。
-10. 未触碰生产服务，或触碰行为有用户明确授权和记录。
-11. 用户确认后才合入 `main`。
+6. 所有 runtime/daily/execution/tail policy 都通过 `StrategyRuntimeRelease` 版本化，并具备验证证据。
+7. StrategyPackage alpha core 不被模拟盘运行配置修改；因子、模型、alpha 组合变更只能通过 QE 生成新 StrategyPackage。
+8. broker/account/capital/order remark 变更只形成新的 `SimulationReleaseBinding`，不污染 `StrategyRuntimeRelease`。
+9. 所有缺口在验收矩阵中有 PASS 证据。
+10. L0-L4 流水线通过；真实 MiniQMT SIM L5 在交易时段通过或明确标记为实盘前阻断项。
+11. 代码、DB、API、UI、测试、文档均完成设计合规矩阵。
+12. 未触碰生产服务，或触碰行为有用户明确授权和记录。
+13. 用户确认后才合入 `main`。

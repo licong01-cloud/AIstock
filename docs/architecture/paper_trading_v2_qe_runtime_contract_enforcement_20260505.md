@@ -1,5 +1,8 @@
 # Paper v2 QE Runtime Contract Enforcement
 
+> **2026-05-21 作废/取代声明**：本文已不再作为 LocalSim / MiniQMT 模拟盘、Selection Center、Paper Trading v2 或未来实盘运行边界的实现依据。最新权威方案为 `docs/architecture/simulation_remediation_project_design_20260521.md`，并以 `StrategyPackage alpha core + StrategyRuntimeRelease（策略包运行版本）+ SimulationReleaseBinding` 为唯一边界。本文记录旧的 QE frozen runtime equality 契约；不得再作为 Paper v2、Selection Center、LocalSim、MiniQMT 或未来实盘实现依据。
+> 若本文与最新方案不一致，以 `simulation_remediation_project_design_20260521.md` 为准；旧描述只能作为历史背景或迁移参考，不能指导新开发。
+
 > **2026-05-20 Legacy Notice**：本文记录的是 2026-05-05 的旧运行契约，已不再作为新实现依据。HMM、ST PIT、event_signal、日频策略、分钟执行、尾盘处理和 ordinary runtime profile 均按 `docs/architecture/strategy_package_platform_boundary_contract_20260520.md` 处理为平台运行能力；不得再要求 Paper/MiniQMT runtime 与 StrategyPackage QE backtest contract 中的 HMM/ST PIT/risk/minute policy 做冻结相等匹配。
 
 Date: 2026-05-05

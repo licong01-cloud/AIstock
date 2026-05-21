@@ -1,5 +1,8 @@
 # miniQMT 普通策略涨跌停执行策略设计
 
+> **2026-05-21 作废/取代声明**：本文已不再作为 LocalSim / MiniQMT 模拟盘、Selection Center、Paper Trading v2 或未来实盘运行边界的实现依据。最新权威方案为 `docs/architecture/simulation_remediation_project_design_20260521.md`，并以 `StrategyPackage alpha core + StrategyRuntimeRelease（策略包运行版本）+ SimulationReleaseBinding` 为唯一边界。本文仅保留未来 limit-aware execution/tail policy 场景分析；实现时必须作为 StrategyRuntimeRelease 引用的平台 execution/tail policy，不得进入 StrategyPackage manifest。
+> 若本文与最新方案不一致，以 `simulation_remediation_project_design_20260521.md` 为准；旧描述只能作为历史背景或迁移参考，不能指导新开发。
+
 > **2026-05-20 边界更新**：本文作为未来 limit-aware execution/tail policy 设计保留；实现时必须遵守 `docs/architecture/strategy_package_platform_boundary_contract_20260520.md`。涨停跳过、跌停挂单、尾盘替代买入等规则属于平台 execution/tail policy，不得写入 StrategyPackage frozen manifest，也不得绕过 validated execution policy 和 MiniQMT ledger。
 
 日期：2026-05-19  
