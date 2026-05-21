@@ -247,6 +247,17 @@ modules:
     test_plans:
       required_on_change: [l0, research_pipeline_backend]
       recommended: [research_mcp_contract]
+  - module_id: research_assistant
+    display_name: Research Assistant Console
+    module_type: product_feature
+    risk_level: high
+    description: MCP/API-first research assistant console, task ledger, memory ledger, local skill catalog, approvals, issue candidates, and model routing.
+    description_zh: 覆盖研究与实验综合助理控制台、任务账本、长期记忆账本、本地 Skill 目录、MCP 预检查、审批中心、候选 Issue、模型路由和发现流。
+    ui_routes: [/research-assistant, /research-assistant/chat, /research-assistant/workbench, /research-assistant/tasks, /research-assistant/streams, /research-assistant/memory, /research-assistant/graph, /research-assistant/mcp-tools, /research-assistant/skills, /research-assistant/approvals, /research-assistant/reports, /research-assistant/models, /research-assistant/settings, /research-assistant/external-agents, /research-assistant/trace, /research-assistant/notifications, /research-assistant/issue-candidates]
+    api_routes: [/api/v1/research-assistant/*]
+    test_plans:
+      required_on_change: [l0, research_assistant_backend, research_assistant_mcp_contract]
+      recommended: [research_assistant_ui]
   - module_id: validation
     display_name: Validation Center
     module_type: cross_cutting

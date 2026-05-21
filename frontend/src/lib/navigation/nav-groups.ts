@@ -47,6 +47,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/validation-center", label: "\u{1F9EA} \u6D41\u6C34\u7EBF\u4E2D\u5FC3" },
       { href: "/research-pipeline", label: "Research Pipeline" },
+      { href: "/research-assistant", label: "\u{1F9E0} \u7814\u7A76\u52A9\u7406" },
     ],
   },
   {

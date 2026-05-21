@@ -4,6 +4,9 @@ from __future__ import annotations
 
 INITIAL_PROFILES: dict[str, list[str]] = {
     "research": ["research"],
+    "research_assistant": ["research_assistant"],
+    "assistant": ["research_assistant"],
+    "research_with_assistant": ["research", "research_assistant"],
 }
 
 FUTURE_PROFILES: dict[str, list[str]] = {
@@ -13,7 +16,7 @@ FUTURE_PROFILES: dict[str, list[str]] = {
     "full": ["research", "qe_archive", "qe_experiment", "validation"],
 }
 
-_PHASE0_5_MODULES = {"research"}
+_PHASE0_5_MODULES = {"research", "research_assistant"}
 
 
 def parse_modules(value: str | list[str] | tuple[str, ...] | None) -> list[str] | None:
@@ -40,8 +43,8 @@ def resolve_modules(
         future = [name for name in explicit_modules if name not in _PHASE0_5_MODULES]
         if future:
             raise ValueError(f"Modules {future!r} are future-only in Phase 0-5")
-        if explicit_modules != ["research"]:
-            raise ValueError("Phase 0-5 only allows --modules=research")
+        if not explicit_modules:
+            raise ValueError("At least one Phase 0-5 module is required")
         return explicit_modules
 
     selected = "research" if profile in {None, ""} else profile
@@ -49,4 +52,7 @@ def resolve_modules(
         return list(INITIAL_PROFILES[selected])
     if selected in FUTURE_PROFILES:
         raise ValueError(f"Profile {selected!r} is future-only in Phase 0-5")
-    raise ValueError(f"Unknown MCP profile {selected!r}; allowed Phase 0-5 profile: 'research'")
+    raise ValueError(
+        f"Unknown MCP profile {selected!r}; allowed Phase 0-5 profiles: "
+        "'research', 'research_assistant', 'assistant', 'research_with_assistant'"
+    )

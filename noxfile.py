@@ -691,6 +691,57 @@ def research_mcp_contract(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def research_assistant_backend(session: nox.Session) -> None:
+    """Run Research Assistant backend/schema/router tests without services."""
+    session.run(
+        "python",
+        "-m",
+        "compileall",
+        "-b",
+        "backend/db/init_research_assistant_schema_20260521.py",
+        "backend/services/research_assistant",
+        "backend/routers/research_assistant.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/research_assistant",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
+def research_assistant_mcp_contract(session: nox.Session) -> None:
+    """Run Research Assistant MCP gateway contract tests."""
+    session.run(
+        "python",
+        "-m",
+        "compileall",
+        "-b",
+        "backend/mcp",
+        "scripts/aistock_mcp_gateway.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/mcp/test_research_assistant_module.py",
+        "backend/tests/mcp/test_profiles_registry_gateway.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
+def research_assistant_ui(session: nox.Session) -> None:
+    """Run Research Assistant mocked UI regression."""
+    session.chdir("frontend")
+    session.run("npx", "playwright", "test", "tests/research-assistant/research-assistant.spec.ts", "--project", "chromium", external=True)
+
+
+@nox.session(venv_backend="none")
 def model_registry_backend(session: nox.Session) -> None:
     """Run Model Registry backend regression tests without starting services.
 

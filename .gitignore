@@ -124,6 +124,8 @@ rl_data/
 /rl_execution/
 scripts/rl_execution/
 reports/
+!frontend/src/app/research-assistant/reports/
+!frontend/src/app/research-assistant/reports/page.tsx
 stock_pools/
 dispatch_logs/
 temp/
