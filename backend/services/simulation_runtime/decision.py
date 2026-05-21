@@ -323,6 +323,7 @@ class RebalanceIntentService:
                         "requested_quantity": requested_quantity,
                         "delta_quantity": delta_quantity,
                         "target_weight": target.target_weight if target is not None else None,
+                        "target_reference_price": target.reference_price if target is not None else None,
                         "rebalance_reason": rebalance_reason,
                         "target_metadata": target.metadata if target is not None else {},
                         "trading_rule_decision_id": decision.decision_id,
@@ -384,6 +385,11 @@ class ExecutionPlanCompiler:
 
         seed_intents: list[dict[str, Any]] = []
         for intent in order_intents:
+            price_policy = {
+                "order_type": intent.order_type.value,
+                "limit_price": intent.limit_price,
+                "reference_price": intent.metadata.get("target_reference_price"),
+            }
             seed_intents.append(
                 {
                     "intent_id": intent.intent_id,
@@ -393,12 +399,17 @@ class ExecutionPlanCompiler:
                     "delta_quantity": int(intent.metadata.get("delta_quantity") or 0),
                     "order_quantity": intent.quantity,
                     "target_weight": intent.metadata.get("target_weight"),
+                    "reference_price": intent.metadata.get("target_reference_price"),
                     "current_quantity": int(intent.metadata.get("current_quantity") or 0),
                     "current_available_quantity": intent.metadata.get("current_available_quantity"),
                     "rebalance_reason": str(intent.metadata.get("rebalance_reason") or ""),
                     "trading_rule_decision_id": str(intent.metadata["trading_rule_decision_id"]),
                     "order_type": intent.order_type.value,
                     "limit_price": intent.limit_price,
+                    "schedule_window": schedule_window,
+                    "price_policy": price_policy,
+                    "risk_context": risk_context,
+                    "metadata": {"source_order_intent_id": intent.intent_id},
                 }
             )
         seed_intents.sort(key=lambda item: (item["symbol"], item["side"], item["intent_id"]))
@@ -426,6 +437,14 @@ class ExecutionPlanCompiler:
             },
             "intents": seed_intents,
             "trading_rule_decision_ids": sorted(decision_by_id),
+            "trading_rule_decisions": [
+                {
+                    **decision.canonical_payload(),
+                    "decision_id": decision.decision_id,
+                    "decision_hash": decision.decision_hash,
+                }
+                for decision in sorted(trading_rule_decisions, key=lambda item: item.decision_id)
+            ],
         }
         plan_hash = canonical_json_sha256(payload)
         plan_id = f"plan_{plan_hash[:16]}"
@@ -450,10 +469,10 @@ class ExecutionPlanCompiler:
                 current_available_quantity=item["current_available_quantity"],
                 rebalance_reason=item["rebalance_reason"],
                 trading_rule_decision_id=item["trading_rule_decision_id"],
-                schedule_window=schedule_window,
-                price_policy={"order_type": item["order_type"], "limit_price": item["limit_price"]},
-                risk_context=risk_context,
-                metadata={"source_order_intent_id": item["intent_id"]},
+                schedule_window=item["schedule_window"],
+                price_policy=item["price_policy"],
+                risk_context=item["risk_context"],
+                metadata=item["metadata"],
             )
             for item in seed_intents
         ]

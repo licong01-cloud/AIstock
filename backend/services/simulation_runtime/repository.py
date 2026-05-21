@@ -11,11 +11,14 @@ from backend.services.trading_core.errors import DataUnavailableError, InvalidSt
 
 from .models import (
     DailySelectionEvidence,
+    ExecutionPlan,
+    ExecutionPlanIntent,
     RuntimeReleaseValidationState,
     SimulationBindingApprovalState,
     SimulationBrokerBackend,
     SimulationReleaseBinding,
     StrategyRuntimeRelease,
+    TradingRuleDecision,
 )
 
 ConnFactory = Callable[[], Iterator[Any]]
@@ -256,6 +259,77 @@ class SimulationRuntimeRepository:
         )
         return self._evidence_from_row(rows[0]) if rows else None
 
+    def save_execution_plan(self, plan: ExecutionPlan) -> ExecutionPlan:
+        existing_by_hash = self.get_execution_plan_by_hash(plan.plan_hash)
+        if existing_by_hash is not None:
+            return existing_by_hash
+        self.get_strategy_runtime_release(plan.release_id)
+        self.get_simulation_release_binding(plan.binding_id)
+        self.get_daily_selection_evidence(plan.selection_evidence_id)
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                try:
+                    cur.execute(
+                        """
+                        INSERT INTO paper_v2.execution_plan (
+                            plan_id, strategy_id, portfolio_id, package_id, release_id, release_hash,
+                            binding_id, binding_hash, selection_evidence_id, selection_evidence_hash,
+                            target_trade_date, execution_policy_version_id, execution_policy_sha256,
+                            tail_policy_version_id, tail_policy_sha256, intent_count,
+                            trading_rule_decision_count, plan_payload_json, plan_hash, created_at
+                        ) VALUES (
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        )
+                        """,
+                        (
+                            plan.plan_id,
+                            plan.strategy_id,
+                            plan.portfolio_id,
+                            plan.package_id,
+                            plan.release_id,
+                            plan.release_hash,
+                            plan.binding_id,
+                            plan.binding_hash,
+                            plan.selection_evidence_id,
+                            plan.selection_evidence_hash,
+                            plan.target_trade_date,
+                            plan.execution_policy_version_id,
+                            plan.execution_policy_sha256,
+                            plan.tail_policy_version_id,
+                            plan.tail_policy_sha256,
+                            len(plan.intents),
+                            len(plan.trading_rule_decisions),
+                            psycopg2.extras.Json(plan.plan_payload_json),
+                            plan.plan_hash,
+                            plan.created_at,
+                        ),
+                    )
+                except psycopg2.IntegrityError as exc:
+                    raise InvalidStateTransitionError(
+                        "execution plan conflicts with an existing immutable plan",
+                        context={"plan_id": plan.plan_id, "plan_hash": plan.plan_hash},
+                    ) from exc
+        return plan
+
+    def get_execution_plan(self, plan_id: str) -> ExecutionPlan:
+        rows = self._fetch_rows(
+            "SELECT * FROM paper_v2.execution_plan WHERE plan_id = %s",
+            (plan_id,),
+        )
+        if not rows:
+            raise DataUnavailableError("execution plan does not exist", context={"plan_id": plan_id})
+        return self._execution_plan_from_row(rows[0])
+
+    def get_execution_plan_by_hash(self, plan_hash: str) -> ExecutionPlan | None:
+        if not plan_hash:
+            return None
+        rows = self._fetch_rows(
+            "SELECT * FROM paper_v2.execution_plan WHERE plan_hash = %s",
+            (plan_hash,),
+        )
+        return self._execution_plan_from_row(rows[0]) if rows else None
+
     def _fetch_rows(self, sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -336,6 +410,80 @@ class SimulationRuntimeRepository:
             updated_at=row["updated_at"],
         )
 
+    @staticmethod
+    def _execution_plan_from_row(row: dict[str, Any]) -> ExecutionPlan:
+        payload = row.get("plan_payload_json") or {}
+        intent_payloads = payload.get("intents") if isinstance(payload.get("intents"), list) else []
+        decisions_payloads = payload.get("trading_rule_decisions") if isinstance(payload.get("trading_rule_decisions"), list) else []
+        intents = [
+            ExecutionPlanIntent(
+                intent_id=item["intent_id"],
+                plan_id=row["plan_id"],
+                strategy_id=row["strategy_id"],
+                portfolio_id=row["portfolio_id"],
+                package_id=row["package_id"],
+                release_id=row["release_id"],
+                release_hash=row["release_hash"],
+                binding_id=row["binding_id"],
+                binding_hash=row["binding_hash"],
+                symbol=item["symbol"],
+                side=item["side"],
+                target_quantity=int(item.get("target_quantity") or 0),
+                delta_quantity=int(item.get("delta_quantity") or 0),
+                order_quantity=int(item.get("order_quantity") or item.get("quantity") or 0),
+                target_weight=item.get("target_weight"),
+                current_quantity=int(item.get("current_quantity") or 0),
+                current_available_quantity=item.get("current_available_quantity"),
+                rebalance_reason=str(item.get("rebalance_reason") or ""),
+                trading_rule_decision_id=str(item.get("trading_rule_decision_id") or ""),
+                schedule_window=item.get("schedule_window") if isinstance(item.get("schedule_window"), dict) else {},
+                price_policy=item.get("price_policy") if isinstance(item.get("price_policy"), dict) else {},
+                risk_context=item.get("risk_context") if isinstance(item.get("risk_context"), dict) else {},
+                metadata=item.get("metadata") if isinstance(item.get("metadata"), dict) else {},
+            )
+            for item in intent_payloads
+        ]
+        decisions = [
+            TradingRuleDecision(
+                decision_id=item["decision_id"],
+                symbol=item["symbol"],
+                market_board=item["market_board"],
+                side=item["side"],
+                requested_quantity=int(item.get("requested_quantity") or 0),
+                legal_quantity=int(item.get("legal_quantity") or 0),
+                lot_rule=item.get("lot_rule") if isinstance(item.get("lot_rule"), dict) else {},
+                price_limit_rule=item.get("price_limit_rule") if isinstance(item.get("price_limit_rule"), dict) else {},
+                tplus1_available_quantity=item.get("tplus1_available_quantity"),
+                decision=item["decision"],
+                reason_code=item["reason_code"],
+                source_version=item["source_version"],
+                decision_hash=item["decision_hash"],
+            )
+            for item in decisions_payloads
+        ]
+        return ExecutionPlan(
+            plan_id=row["plan_id"],
+            strategy_id=row["strategy_id"],
+            portfolio_id=row["portfolio_id"],
+            package_id=row["package_id"],
+            release_id=row["release_id"],
+            release_hash=row["release_hash"],
+            binding_id=row["binding_id"],
+            binding_hash=row["binding_hash"],
+            selection_evidence_id=row["selection_evidence_id"],
+            selection_evidence_hash=row["selection_evidence_hash"],
+            target_trade_date=row["target_trade_date"],
+            execution_policy_version_id=row["execution_policy_version_id"],
+            execution_policy_sha256=row["execution_policy_sha256"],
+            tail_policy_version_id=row["tail_policy_version_id"],
+            tail_policy_sha256=row["tail_policy_sha256"],
+            intents=intents,
+            trading_rule_decisions=decisions,
+            plan_payload_json=payload,
+            plan_hash=row["plan_hash"],
+            created_at=row["created_at"],
+        )
+
 
 class InMemorySimulationRuntimeRepository:
     def __init__(self) -> None:
@@ -345,6 +493,8 @@ class InMemorySimulationRuntimeRepository:
         self.binding_hash_index: dict[str, str] = {}
         self.daily_selection_evidences: dict[str, DailySelectionEvidence] = {}
         self.daily_selection_hash_index: dict[str, str] = {}
+        self.execution_plans: dict[str, ExecutionPlan] = {}
+        self.execution_plan_hash_index: dict[str, str] = {}
 
     def save_strategy_runtime_release(self, release: StrategyRuntimeRelease) -> StrategyRuntimeRelease:
         if release.release_hash in self.release_hash_index:
@@ -428,3 +578,31 @@ class InMemorySimulationRuntimeRepository:
     def get_daily_selection_evidence_by_hash(self, artifact_hash: str) -> DailySelectionEvidence | None:
         evidence_id = self.daily_selection_hash_index.get(artifact_hash)
         return self.daily_selection_evidences[evidence_id] if evidence_id else None
+
+    def save_execution_plan(self, plan: ExecutionPlan) -> ExecutionPlan:
+        self.get_strategy_runtime_release(plan.release_id)
+        self.get_simulation_release_binding(plan.binding_id)
+        self.get_daily_selection_evidence(plan.selection_evidence_id)
+        if plan.plan_hash in self.execution_plan_hash_index:
+            return self.execution_plans[self.execution_plan_hash_index[plan.plan_hash]]
+        if plan.plan_id in self.execution_plans:
+            existing = self.execution_plans[plan.plan_id]
+            if existing.plan_hash != plan.plan_hash:
+                raise InvalidStateTransitionError(
+                    "execution plan conflicts with an existing immutable plan",
+                    context={"plan_id": plan.plan_id, "plan_hash": plan.plan_hash},
+                )
+            return existing
+        self.execution_plans[plan.plan_id] = plan
+        self.execution_plan_hash_index[plan.plan_hash] = plan.plan_id
+        return plan
+
+    def get_execution_plan(self, plan_id: str) -> ExecutionPlan:
+        try:
+            return self.execution_plans[plan_id]
+        except KeyError as exc:
+            raise DataUnavailableError("execution plan does not exist", context={"plan_id": plan_id}) from exc
+
+    def get_execution_plan_by_hash(self, plan_hash: str) -> ExecutionPlan | None:
+        plan_id = self.execution_plan_hash_index.get(plan_hash)
+        return self.execution_plans[plan_id] if plan_id else None

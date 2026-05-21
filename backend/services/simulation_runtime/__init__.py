@@ -1,5 +1,6 @@
 """Simulation runtime release and binding services."""
 
+from .bridges import LocalSimExecutionBridge, LocalSimPlanSubmitResult, MiniQMTExecutionBridge, MiniQMTPlanPreviewResult
 from .decision import (
     ExecutionPlanCompiler,
     RebalanceIntentResult,
@@ -32,6 +33,10 @@ __all__ = [
     "ExecutionPlanCompiler",
     "ExecutionPlanIntent",
     "InMemorySimulationRuntimeRepository",
+    "LocalSimExecutionBridge",
+    "LocalSimPlanSubmitResult",
+    "MiniQMTExecutionBridge",
+    "MiniQMTPlanPreviewResult",
     "RebalanceIntentResult",
     "RebalanceIntentService",
     "RuntimeReleaseValidationState",

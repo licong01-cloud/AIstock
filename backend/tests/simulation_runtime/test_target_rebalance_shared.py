@@ -1,15 +1,30 @@
 from __future__ import annotations
 
 from datetime import date
+from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 
+from backend.services.paper_trading_v2.broker.base import OrderHandle
+from backend.services.qmt_strategy_ledger.models import (
+    PositionLotRecord,
+    PositionLotStatus,
+    VirtualAccount,
+    VirtualAccountStatus,
+    new_id,
+)
+from backend.services.qmt_strategy_ledger.lot_availability import StaticTradingCalendarProvider
+from backend.services.qmt_strategy_ledger.order_service import QmtManagedOrderService
+from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyLedgerRepository
 from backend.services.selection_center.models import SelectionCandidate, SignalSnapshot
 from backend.services.simulation_runtime import (
     DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID,
     DailySelectionEvidence,
     ExecutionPlanCompiler,
     InMemorySimulationRuntimeRepository,
+    LocalSimExecutionBridge,
+    MiniQMTExecutionBridge,
     RebalanceIntentService,
     SimulationBrokerBackend,
     StrategyRuntimeReleaseService,
@@ -50,6 +65,37 @@ def _release_and_binding(*, backend: SimulationBrokerBackend = SimulationBrokerB
         created_reason="shared target rebalance test",
     )
     return release, binding
+
+
+def _release_binding_repo(*, backend: SimulationBrokerBackend = SimulationBrokerBackend.LOCAL_SIM):
+    repo = InMemorySimulationRuntimeRepository()
+    service = StrategyRuntimeReleaseService(repository=repo)
+    release = service.create_release(
+        package_id="pkg_shared_decision",
+        manifest_sha256="manifest_shared_decision",
+        runtime_profile_id="runtime_profile_shared",
+        runtime_profile_version_id="runtime_profile_shared_v1",
+        runtime_profile_sha256="runtime_profile_hash_shared",
+        daily_strategy_profile_version_id=DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID,
+        execution_policy_version_id="exec_policy_v25_1_small_cap",
+        execution_policy_sha256="exec_policy_hash_v25_1_small_cap",
+        tail_policy_version_id="tail_policy_close_v1",
+        tail_policy_sha256="tail_policy_hash_close_v1",
+        created_by="unit-test",
+        created_reason="shared target rebalance test",
+    )
+    binding = service.create_binding(
+        strategy_id=f"strategy_{backend.value}",
+        release=release,
+        broker_backend=backend,
+        capital_allocation=100_000,
+        broker_account_id="QMT_SIM_ACCOUNT",
+        strategy_name=f"SharedDecision-{backend.value}",
+        order_remark_prefix=f"shared-{backend.value}",
+        created_by="unit-test",
+        created_reason="shared target rebalance test",
+    )
+    return release, binding, repo
 
 
 def _snapshot() -> SignalSnapshot:
@@ -218,7 +264,7 @@ def test_trading_rule_service_uses_single_a_share_board_lot_source() -> None:
 
 
 def test_execution_plan_compiler_links_release_binding_evidence_and_rule_decisions() -> None:
-    release, binding = _release_and_binding()
+    release, binding, runtime_repo = _release_binding_repo()
     evidence = _evidence(release)
     targets = TargetPositionService().build_target_positions(
         selection_evidence=evidence,
@@ -255,6 +301,9 @@ def test_execution_plan_compiler_links_release_binding_evidence_and_rule_decisio
     }
     assert [intent.symbol for intent in plan.intents] == ["000003.SZ", "688001.SH"]
     assert plan.plan_id == f"plan_{plan.plan_hash[:16]}"
+    runtime_repo.save_daily_selection_evidence(evidence)
+    persisted = runtime_repo.save_execution_plan(plan)
+    assert runtime_repo.get_execution_plan(persisted.plan_id).plan_hash == plan.plan_hash
 
 
 def test_execution_plan_compiler_rejects_paper_only_policy() -> None:
@@ -285,3 +334,126 @@ def test_execution_plan_compiler_rejects_paper_only_policy() -> None:
             portfolio_id="portfolio_shared",
             execution_policy_payload={"paper_only": True, "algo_code": "paper_only"},
         )
+
+
+class FakeLocalSimBroker:
+    def __init__(self) -> None:
+        self.submitted = []
+
+    def submit_order_intent(self, intent):
+        self.submitted.append(intent)
+        return OrderHandle(
+            handle_id=f"local_{len(self.submitted)}",
+            backend_id="local_sim",
+            submitted_at=datetime.now(UTC),
+            intent_id=intent.intent_id,
+        )
+
+
+class FakeManagedOrderBroker:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def get_positions(self):
+        return [{"stock_code": "000003.SZ", "can_sell": 1000}]
+
+    def place_order(self, **kwargs):
+        self.calls.append(kwargs)
+        return len(self.calls), "accepted"
+
+    def cancel_order(self, order_id: str):
+        return True, f"cancelled {order_id}"
+
+
+def _compiled_plan_for_bridge(*, backend: SimulationBrokerBackend):
+    release, binding, runtime_repo = _release_binding_repo(backend=backend)
+    evidence = _evidence(release)
+    runtime_repo.save_daily_selection_evidence(evidence)
+    targets = TargetPositionService().build_target_positions(
+        selection_evidence=evidence,
+        signal_snapshot=_snapshot(),
+        runtime_release=release,
+        binding=binding,
+        current_positions=_current_positions("portfolio_shared"),
+    )
+    rebalance = RebalanceIntentService().build_order_intents(
+        package_id=release.package_id,
+        portfolio_id="portfolio_shared",
+        strategy_id=binding.strategy_id,
+        trade_date=date(2026, 5, 21),
+        current_positions=_current_positions("portfolio_shared"),
+        target_positions=targets,
+    )
+    plan = ExecutionPlanCompiler().compile_plan(
+        runtime_release=release,
+        binding=binding,
+        selection_evidence=evidence,
+        order_intents=rebalance.order_intents,
+        trading_rule_decisions=rebalance.trading_rule_decisions,
+        portfolio_id="portfolio_shared",
+        execution_policy_payload={"algo_code": "V25_1_SMALL_CAP", "schedule_window": {"mode": "open_to_close"}},
+        tail_policy_payload={"policy": "cancel_unfilled_at_close"},
+    )
+    return release, binding, runtime_repo.save_execution_plan(plan)
+
+
+def test_localsim_execution_bridge_consumes_shared_execution_plan() -> None:
+    _, _, plan = _compiled_plan_for_bridge(backend=SimulationBrokerBackend.LOCAL_SIM)
+    broker = FakeLocalSimBroker()
+
+    result = LocalSimExecutionBridge().submit_plan(plan=plan, broker=broker)  # type: ignore[arg-type]
+
+    assert [intent.intent_id for intent in result.order_intents] == [intent.intent_id for intent in plan.intents]
+    assert [handle.intent_id for handle in result.handles] == [intent.intent_id for intent in plan.intents]
+    assert broker.submitted[0].metadata["source_execution_plan_id"] == plan.plan_id
+
+
+def test_miniqmt_execution_bridge_uses_managed_orders_and_strategy_attribution() -> None:
+    _, binding, plan = _compiled_plan_for_bridge(backend=SimulationBrokerBackend.MINIQMT_SIM)
+    qmt_repo = InMemoryQmtStrategyLedgerRepository()
+    qmt_repo.create_virtual_account(
+        VirtualAccount(
+            strategy_id=binding.strategy_id,
+            strategy_name=binding.strategy_name or binding.strategy_id,
+            display_name="Shared MiniQMT Strategy",
+            account_id=binding.broker_account_id or "QMT_SIM_ACCOUNT",
+            mode="SIM",
+            initial_cash=Decimal("100000"),
+            cash=Decimal("100000"),
+            status=VirtualAccountStatus.ENABLED,
+        )
+    )
+    qmt_repo.create_position_lot(
+        PositionLotRecord(
+            lot_id=new_id("lot"),
+            strategy_id=binding.strategy_id,
+            symbol="000003.SZ",
+            open_trade_id="trade_open_000003",
+            open_date=date(2026, 5, 20),
+            quantity=77,
+            available_quantity=77,
+            remaining_quantity=77,
+            avg_cost=Decimal("8.00"),
+            cost_amount=Decimal("616.00"),
+            account_id=binding.broker_account_id or "QMT_SIM_ACCOUNT",
+            status=PositionLotStatus.OPEN,
+        )
+    )
+    broker = FakeManagedOrderBroker()
+    calendar = StaticTradingCalendarProvider([date(2026, 5, 20), date(2026, 5, 21)])
+    bridge = MiniQMTExecutionBridge(
+        managed_order_service=QmtManagedOrderService(
+            repository=qmt_repo,
+            broker=broker,  # type: ignore[arg-type]
+            calendar_provider=calendar,
+        )
+    )
+
+    preview = bridge.preview_plan(plan=plan, binding=binding)
+    submitted = bridge.submit_plan(plan=plan, binding=binding)
+
+    assert all(item.allowed for item in preview.preflights)
+    assert submitted.success is True
+    assert [call["strategy_name"] for call in broker.calls] == [binding.strategy_name, binding.strategy_name]
+    assert preview.requests[0].metadata["source"] == "shared_execution_plan"
+    assert preview.requests[0].order_remark.startswith(binding.order_remark_prefix or "")
