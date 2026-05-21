@@ -8,7 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = ROOT / "scripts" / "aistock_guardrail_scan.py"
-CATALOG_PATH = ROOT / "docs" / "standards" / "aistock_development_standard_v1.3_20260520.yaml"
+CATALOG_PATH = ROOT / "docs" / "standards" / "aistock_development_standard_v1.4_20260521.yaml"
 
 
 def _load_module():
@@ -40,8 +40,8 @@ def test_catalog_references_current_human_readable_standard() -> None:
     standard_path = ROOT / catalog["source_standard"]
     standard_text = standard_path.read_text(encoding="utf-8")
 
-    assert catalog["source_version"] == "1.3"
-    assert standard_path.name == "aistock_development_standard_v1.3_20260520.md"
+    assert catalog["source_version"] == "1.4"
+    assert standard_path.name == "aistock_development_standard_v1.4_20260521.md"
     for rule in catalog["rules"]:
         if not rule.get("enabled", True):
             continue
@@ -173,6 +173,68 @@ def test_git_staged_files_uses_cached_diff_only(tmp_path: Path, monkeypatch) -> 
     paths = scanner.git_staged_files(tmp_path)
 
     assert [path.relative_to(tmp_path).as_posix() for path in paths] == ["backend/services/new_feature.py"]
+
+
+def test_changed_line_filter_ignores_unchanged_baseline_findings(tmp_path: Path) -> None:
+    scanner = _load_module()
+    findings = [
+        scanner.Finding(
+            rule_id="ERR-FALLBACK-001",
+            title="Broad exception handlers must not return fake success or defaults",
+            severity="P0",
+            category="error_handling",
+            file="backend/main.py",
+            line=90,
+            message="Broad exception handlers must not return fake success or defaults",
+            remediation="Fail fast.",
+            baseline_policy="block_new_only",
+            fingerprint="old90",
+        ),
+        scanner.Finding(
+            rule_id="ERR-FALLBACK-001",
+            title="Broad exception handlers must not return fake success or defaults",
+            severity="P0",
+            category="error_handling",
+            file="backend/main.py",
+            line=504,
+            message="Broad exception handlers must not return fake success or defaults",
+            remediation="Fail fast.",
+            baseline_policy="block_new_only",
+            fingerprint="new504",
+        ),
+    ]
+
+    filtered = scanner.filter_findings_to_changed_lines(
+        findings,
+        {"backend/main.py": {504}},
+    )
+
+    assert [finding.fingerprint for finding in filtered] == ["new504"]
+
+
+def test_changed_line_numbers_handles_pure_insertion_hunks(tmp_path: Path, monkeypatch) -> None:
+    scanner = _load_module()
+
+    def fake_git_output(args, root):
+        assert args[:3] == ["git", "diff", "--unified=0"]
+        return (
+            "diff --git a/backend/main.py b/backend/main.py\n"
+            "--- a/backend/main.py\n"
+            "+++ b/backend/main.py\n"
+            "@@ -506,0 +507,2 @@ def create_app() -> FastAPI:\n"
+            "+    app.include_router(paper_trading_v2.router, prefix=\"/api/v1\")\n"
+            "+    app.include_router(simulation_runtime.router, prefix=\"/api/v1\")\n"
+        )
+
+    monkeypatch.setattr(scanner, "_git_output", fake_git_output)
+
+    changed = scanner._changed_line_numbers(
+        tmp_path,
+        [tmp_path / "backend" / "main.py"],
+        staged=True,
+    )
+
+    assert changed == {"backend/main.py": {507, 508}}
 
 
 def test_baseline_status_and_new_only_blocking(tmp_path: Path) -> None:

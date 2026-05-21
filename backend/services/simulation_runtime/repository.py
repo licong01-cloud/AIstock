@@ -436,6 +436,49 @@ class SimulationRuntimeRepository:
         )
         return self._daily_run_from_row(rows[0]) if rows else None
 
+    def list_simulation_daily_runs(
+        self,
+        *,
+        trade_date: Any | None = None,
+        broker_backend: SimulationBrokerBackend | str | None = None,
+        strategy_id: str | None = None,
+        status: SimulationDailyRunStatus | str | None = None,
+        limit: int = 100,
+    ) -> list[SimulationDailyRun]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if trade_date is not None:
+            clauses.append("trade_date = %s")
+            params.append(trade_date)
+        if broker_backend is not None:
+            backend = (
+                broker_backend.value
+                if isinstance(broker_backend, SimulationBrokerBackend)
+                else str(broker_backend)
+            )
+            clauses.append("broker_backend = %s")
+            params.append(backend)
+        if strategy_id is not None:
+            clauses.append("strategy_id = %s")
+            params.append(strategy_id)
+        if status is not None:
+            status_value = status.value if isinstance(status, SimulationDailyRunStatus) else str(status)
+            clauses.append("status = %s")
+            params.append(status_value)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+        rows = self._fetch_rows(
+            f"""
+            SELECT *
+            FROM paper_v2.simulation_daily_run
+            {where}
+            ORDER BY trade_date DESC, updated_at DESC, created_at DESC, run_id
+            LIMIT %s
+            """,
+            tuple(params),
+        )
+        return [self._daily_run_from_row(row) for row in rows]
+
     def update_simulation_daily_run(
         self,
         run_id: str,
@@ -845,6 +888,29 @@ class InMemorySimulationRuntimeRepository:
     ) -> SimulationDailyRun | None:
         run_id = self.daily_run_key_index.get((strategy_id, binding_id, trade_date))
         return self.daily_runs[run_id] if run_id else None
+
+    def list_simulation_daily_runs(
+        self,
+        *,
+        trade_date: Any | None = None,
+        broker_backend: SimulationBrokerBackend | str | None = None,
+        strategy_id: str | None = None,
+        status: SimulationDailyRunStatus | str | None = None,
+        limit: int = 100,
+    ) -> list[SimulationDailyRun]:
+        rows = list(self.daily_runs.values())
+        if trade_date is not None:
+            rows = [row for row in rows if row.trade_date == trade_date]
+        if broker_backend is not None:
+            backend = broker_backend if isinstance(broker_backend, SimulationBrokerBackend) else SimulationBrokerBackend(str(broker_backend))
+            rows = [row for row in rows if row.broker_backend == backend]
+        if strategy_id is not None:
+            rows = [row for row in rows if row.strategy_id == strategy_id]
+        if status is not None:
+            expected = status if isinstance(status, SimulationDailyRunStatus) else SimulationDailyRunStatus(str(status))
+            rows = [row for row in rows if row.status == expected]
+        rows.sort(key=lambda item: (item.trade_date, item.updated_at, item.created_at, item.run_id), reverse=True)
+        return rows[:limit]
 
     def update_simulation_daily_run(
         self,

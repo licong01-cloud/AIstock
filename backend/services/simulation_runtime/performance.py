@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Mapping
 
 from backend.services.trading_core.errors import DataUnavailableError
@@ -21,6 +22,17 @@ class StrategyPositionProjection:
     market_value: float
     unrealized_pnl: float
 
+    def to_dict(self) -> dict[str, float | int | str]:
+        return {
+            "symbol": self.symbol,
+            "quantity": self.quantity,
+            "available_quantity": self.available_quantity,
+            "avg_cost": self.avg_cost,
+            "mark_price": self.mark_price,
+            "market_value": self.market_value,
+            "unrealized_pnl": self.unrealized_pnl,
+        }
+
 
 @dataclass(frozen=True)
 class StrategyPerformanceProjection:
@@ -36,6 +48,21 @@ class StrategyPerformanceProjection:
     nav: float
     positions: tuple[StrategyPositionProjection, ...]
 
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "strategy_id": self.strategy_id,
+            "broker_backend": self.broker_backend.value,
+            "initial_capital": self.initial_capital,
+            "cash": self.cash,
+            "frozen_cash": self.frozen_cash,
+            "market_value": self.market_value,
+            "realized_pnl": self.realized_pnl,
+            "unrealized_pnl": self.unrealized_pnl,
+            "total_equity": self.total_equity,
+            "nav": self.nav,
+            "positions": [row.to_dict() for row in self.positions],
+        }
+
 
 @dataclass(frozen=True)
 class MergedPositionReconciliation:
@@ -43,6 +70,14 @@ class MergedPositionReconciliation:
     strategy_quantity: int
     broker_quantity: int
     matched: bool
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "symbol": self.symbol,
+            "strategy_quantity": self.strategy_quantity,
+            "broker_quantity": self.broker_quantity,
+            "matched": self.matched,
+        }
 
 
 class StrategyPerformanceProjectionService:
@@ -99,6 +134,49 @@ class StrategyPerformanceProjectionService:
             total_equity=total_equity,
             nav=total_equity / float(initial_capital),
             positions=tuple(position_rows),
+        )
+
+    def project_from_qmt_strategy_ledger(
+        self,
+        *,
+        strategy_id: str,
+        repository: object,
+        marks: Mapping[str, float],
+    ) -> StrategyPerformanceProjection:
+        account = repository.get_virtual_account(strategy_id)  # type: ignore[attr-defined]
+        lots = repository.list_position_lots(strategy_id)  # type: ignore[attr-defined]
+        positions: dict[str, PositionLot] = {}
+        for lot in lots:
+            remaining = int(getattr(lot, "remaining_quantity", getattr(lot, "quantity", 0)))
+            if remaining <= 0:
+                continue
+            symbol = str(lot.symbol)
+            existing = positions.get(symbol)
+            quantity = remaining + (existing.quantity if existing else 0)
+            available_quantity = int(getattr(lot, "available_quantity", 0)) + (
+                existing.available_quantity if existing else 0
+            )
+            cost_amount = Decimal(str(getattr(lot, "avg_cost"))) * Decimal(str(remaining))
+            if existing:
+                cost_amount += Decimal(str(existing.avg_cost)) * Decimal(str(existing.quantity))
+            avg_cost = float(cost_amount / Decimal(str(quantity))) if quantity else 0.0
+            positions[symbol] = PositionLot(
+                portfolio_id=strategy_id,
+                symbol=symbol,
+                quantity=quantity,
+                available_quantity=available_quantity,
+                avg_cost=avg_cost,
+                trade_date=getattr(lot, "open_date"),
+            )
+        return self.project_strategy(
+            strategy_id=strategy_id,
+            broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+            initial_capital=float(account.initial_cash),
+            cash=float(account.cash),
+            frozen_cash=float(account.frozen_cash),
+            realized_pnl=float(account.realized_pnl),
+            positions=positions,
+            marks=marks,
         )
 
     @staticmethod

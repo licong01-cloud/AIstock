@@ -30,6 +30,10 @@ import type {
   SelectionWatchlistImportResult,
   SelectionMode,
   SelectionRun,
+  SimulationRuntimePlanSummary,
+  SimulationRuntimeRunDetail,
+  SimulationRuntimeRunsResponse,
+  SimulationRuntimeSchedulerStatus,
   StrategyPackage,
   TradingDayDefaults,
 } from "./types";
@@ -578,6 +582,47 @@ export type QmtStatus = {
   pid?: number;
   client_class?: string;
   [key: string]: unknown;
+};
+
+export const simulationRuntimeApi = {
+  async schedulerStatus(): Promise<SimulationRuntimeSchedulerStatus> {
+    const data = await apiFetch<{ scheduler: SimulationRuntimeSchedulerStatus }>("/simulation-runtime/scheduler/status");
+    return data.scheduler;
+  },
+  async listRuns(params: {
+    tradeDate?: string;
+    brokerBackend?: string;
+    strategyId?: string;
+    status?: string;
+    limit?: number;
+  } = {}): Promise<SimulationRuntimeRunsResponse> {
+    const qs = new URLSearchParams({ limit: String(params.limit || 100) });
+    if (params.tradeDate) qs.set("trade_date", params.tradeDate);
+    if (params.brokerBackend) qs.set("broker_backend", params.brokerBackend);
+    if (params.strategyId?.trim()) qs.set("strategy_id", params.strategyId.trim());
+    if (params.status) qs.set("status", params.status);
+    const data = await apiFetch<SimulationRuntimeRunsResponse>(`/simulation-runtime/runs?${qs.toString()}`);
+    return { summary: data.summary || {}, runs: data.runs || [] };
+  },
+  async getRun(runId: string): Promise<SimulationRuntimeRunDetail> {
+    return apiFetch(`/simulation-runtime/runs/${encodeURIComponent(runId)}`);
+  },
+  async getExecutionPlan(planId: string): Promise<SimulationRuntimePlanSummary> {
+    const data = await apiFetch<{ execution_plan: SimulationRuntimePlanSummary }>(`/simulation-runtime/execution-plans/${encodeURIComponent(planId)}`);
+    return data.execution_plan;
+  },
+  async liveAdmissionEvidence(params: {
+    paperV2RunId: string;
+    miniqmtSimRunId: string;
+    targetBrokerBackend?: string;
+  }): Promise<JsonObject> {
+    const qs = new URLSearchParams({
+      paper_v2_run_id: params.paperV2RunId,
+      miniqmt_sim_run_id: params.miniqmtSimRunId,
+      target_broker_backend: params.targetBrokerBackend || "minqmt_live",
+    });
+    return apiFetch<JsonObject>(`/simulation-runtime/live-admission/evidence?${qs.toString()}`);
+  },
 };
 
 export const qmtApi = {

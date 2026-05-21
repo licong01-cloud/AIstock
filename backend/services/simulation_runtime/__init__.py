@@ -30,16 +30,21 @@ from .performance import (
     StrategyPerformanceProjectionService,
     StrategyPositionProjection,
 )
+from .ops import SimulationRuntimeOpsService
 from .repository import InMemorySimulationRuntimeRepository, SimulationRuntimeRepository
 from .scheduler import (
+    SimulationLifecycleBackgroundScheduler,
     SimulationLifecycleScheduler,
     SimulationRunContext,
     SimulationSchedulerBindingResult,
     SimulationSchedulerRunOnceResult,
     StaticSimulationRunContextProvider,
+    simulation_lifecycle_background_scheduler,
+    simulation_lifecycle_scheduler,
 )
 from .selection import DailySelectionSignalService, StrategyPackageSelectionResult, StrategyPackageSelectionService
 from .service import StrategyRuntimeReleaseService
+from .tail import TailHandlingOrderResult, TailHandlingPolicyService, TailHandlingResult
 
 __all__ = [
     "DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID",
@@ -62,6 +67,7 @@ __all__ = [
     "SimulationDailyRun",
     "SimulationDailyRunStatus",
     "SimulationExecutionResult",
+    "SimulationLifecycleBackgroundScheduler",
     "SimulationLifecycleOrchestrator",
     "SimulationLifecycleScheduler",
     "SimulationRunContext",
@@ -69,6 +75,7 @@ __all__ = [
     "SimulationSchedulerRunOnceResult",
     "SimulationPlanBuildResult",
     "SimulationReleaseBinding",
+    "SimulationRuntimeOpsService",
     "SimulationRuntimeRepository",
     "StrategyRuntimeRelease",
     "StrategyRuntimeReleaseService",
@@ -79,7 +86,12 @@ __all__ = [
     "StrategyPositionProjection",
     "StaticSimulationRunContextProvider",
     "TargetPositionService",
+    "TailHandlingOrderResult",
+    "TailHandlingPolicyService",
+    "TailHandlingResult",
     "TradingRuleDecision",
     "TradingRuleService",
     "assert_selection_only_payload_boundary",
+    "simulation_lifecycle_background_scheduler",
+    "simulation_lifecycle_scheduler",
 ]

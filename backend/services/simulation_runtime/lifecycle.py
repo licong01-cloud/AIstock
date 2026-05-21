@@ -173,12 +173,34 @@ class SimulationLifecycleOrchestrator:
         mode: str = "SIM",
         price_by_symbol: dict[str, Any] | None = None,
     ) -> SimulationExecutionResult:
+        return self.submit_persisted_execution_plan(
+            run=build_result.run,
+            binding=build_result.binding,
+            execution_plan=build_result.execution_plan,
+            local_broker=local_broker,
+            managed_order_service=managed_order_service,
+            mode=mode,
+            price_by_symbol=price_by_symbol,
+        )
+
+    def submit_persisted_execution_plan(
+        self,
+        *,
+        run: SimulationDailyRun,
+        binding: SimulationReleaseBinding,
+        execution_plan: ExecutionPlan,
+        local_broker: BrokerBackend | None = None,
+        managed_order_service: QmtManagedOrderService | None = None,
+        mode: str = "SIM",
+        price_by_symbol: dict[str, Any] | None = None,
+    ) -> SimulationExecutionResult:
+        """Submit an already-persisted plan exactly once after restart recovery."""
         run = self.repository.update_simulation_daily_run(
-            build_result.run.run_id,
+            run.run_id,
             status=SimulationDailyRunStatus.SUBMITTING,
             payload_patch={"last_stage": "SUBMITTING"},
         )
-        plan = build_result.execution_plan
+        plan = execution_plan
         if not plan.intents:
             succeeded = self.repository.update_simulation_daily_run(
                 run.run_id,
@@ -188,13 +210,13 @@ class SimulationLifecycleOrchestrator:
             return SimulationExecutionResult(
                 run=succeeded,
                 execution_plan=plan,
-                broker_backend=build_result.binding.broker_backend,
+                broker_backend=binding.broker_backend,
                 status="NO_REBALANCE",
                 intent_count=0,
                 broker_result=None,
             )
 
-        if build_result.binding.broker_backend == SimulationBrokerBackend.LOCAL_SIM:
+        if binding.broker_backend == SimulationBrokerBackend.LOCAL_SIM:
             if local_broker is None:
                 raise StrategyPackageValidationError(
                     "LocalSim execution requires an injected LocalSim broker",
@@ -204,18 +226,25 @@ class SimulationLifecycleOrchestrator:
             succeeded = self.repository.update_simulation_daily_run(
                 run.run_id,
                 status=SimulationDailyRunStatus.INTRADAY_RUNNING,
-                payload_patch={"submitted_intents": len(local_result.order_intents), "last_stage": "INTRADAY_RUNNING"},
+                payload_patch={
+                    "broker_called": True,
+                    "submitted_intents": len(local_result.order_intents),
+                    "broker_order_handles": [
+                        handle.model_dump(mode="json") for handle in local_result.handles
+                    ],
+                    "last_stage": "INTRADAY_RUNNING",
+                },
             )
             return SimulationExecutionResult(
                 run=succeeded,
                 execution_plan=plan,
-                broker_backend=build_result.binding.broker_backend,
+                broker_backend=binding.broker_backend,
                 status="SUBMITTED",
                 intent_count=len(plan.intents),
                 broker_result=local_result,
             )
 
-        if build_result.binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM:
+        if binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM:
             if managed_order_service is None:
                 raise StrategyPackageValidationError(
                     "MiniQMT execution requires QmtManagedOrderService",
@@ -224,26 +253,30 @@ class SimulationLifecycleOrchestrator:
             bridge = MiniQMTExecutionBridge(managed_order_service=managed_order_service)
             qmt_result = bridge.submit_plan(
                 plan=plan,
-                binding=build_result.binding,
+                binding=binding,
                 mode=mode,
                 price_by_symbol=price_by_symbol,
             )
             next_status = SimulationDailyRunStatus.INTRADAY_RUNNING if qmt_result.success else SimulationDailyRunStatus.FAILED_RETRYABLE
+            broker_called = any(result.broker_called for result in qmt_result.results)
             updated = self.repository.update_simulation_daily_run(
                 run.run_id,
                 status=next_status,
                 payload_patch={
+                    "broker_called": broker_called,
                     "submitted_intents": qmt_result.succeeded,
                     "failed_intents": qmt_result.failed,
                     "qmt_batch_id": qmt_result.batch_id,
                     "qmt_batch_status": qmt_result.batch_status,
+                    "qmt_retry_of_batch_id": qmt_result.retry_of_batch_id,
+                    "qmt_batch_result": qmt_result.to_dict(),
                     "last_stage": next_status.value,
                 },
             )
             return SimulationExecutionResult(
                 run=updated,
                 execution_plan=plan,
-                broker_backend=build_result.binding.broker_backend,
+                broker_backend=binding.broker_backend,
                 status="SUBMITTED" if qmt_result.success else "BROKER_PRECHECK_FAILED",
                 intent_count=len(plan.intents),
                 broker_result=qmt_result,
@@ -251,7 +284,7 @@ class SimulationLifecycleOrchestrator:
 
         raise StrategyPackageValidationError(
             "unsupported simulation broker backend",
-            context={"broker_backend": build_result.binding.broker_backend.value},
+            context={"broker_backend": binding.broker_backend.value},
         )
 
     def _create_or_load_run(

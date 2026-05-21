@@ -1065,7 +1065,7 @@ def _result_from_dict(value: dict[str, Any]) -> ManagedOrderSubmitResult:
         qmt_order_id=value.get("qmt_order_id"),
         broker_message=str(value.get("broker_message") or "existing batch retry"),
         preflight=preflight,
-        broker_called=False,
+        broker_called=bool(value.get("broker_called")),
     )
 
 

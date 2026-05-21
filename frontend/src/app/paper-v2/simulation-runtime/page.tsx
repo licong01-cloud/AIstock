@@ -1,0 +1,330 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import ErrorPanel from "@/components/paper-v2/ErrorPanel";
+import MetricCard from "@/components/paper-v2/MetricCard";
+import NoticePanel from "@/components/paper-v2/NoticePanel";
+import PaperTable from "@/components/paper-v2/PaperTable";
+import SectionCard from "@/components/paper-v2/SectionCard";
+import StatusBadge from "@/components/paper-v2/StatusBadge";
+import { simulationRuntimeApi } from "@/lib/paper-v2/api";
+import { formatCompact, shortHash } from "@/lib/paper-v2/format";
+import type {
+  JsonObject,
+  SimulationRuntimePlanSummary,
+  SimulationRuntimeRunDetail,
+  SimulationRuntimeRunSummary,
+  SimulationRuntimeRunsResponse,
+  SimulationRuntimeSchedulerStatus,
+} from "@/lib/paper-v2/types";
+
+function todayIso(): string {
+  const now = new Date();
+  return new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+}
+
+function textValue(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "-";
+  return String(value);
+}
+
+function numberValue(value: unknown): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function mapCount(row: JsonObject | null | undefined, key: string): number {
+  if (!row) return 0;
+  return numberValue(row[key]);
+}
+
+function itemValue(row: JsonObject | null | undefined, key: string): unknown {
+  return row ? row[key] : undefined;
+}
+
+function arrayValue(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function objectValue(value: unknown): JsonObject | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : null;
+}
+
+function hashLabel(value: unknown, size = 10): string {
+  const text = textValue(value);
+  return text === "-" ? "-" : shortHash(text, size);
+}
+
+function stageSummary(row: SimulationRuntimeRunSummary): string {
+  const counts = row.stage_counts || {};
+  const target = mapCount(counts, "target_count");
+  const intents = mapCount(counts, "execution_plan_intent_count") || mapCount(counts, "order_intent_count");
+  const submitted = mapCount(counts, "submitted_intents");
+  const failed = mapCount(counts, "failed_intents");
+  return `targets ${target} / intents ${intents} / submitted ${submitted} / failed ${failed}`;
+}
+
+function brokerOrderCount(row: SimulationRuntimeRunSummary | null | undefined): number {
+  if (!row) return 0;
+  const handles = itemValue(row.broker_context, "broker_order_handles");
+  const batch = objectValue(itemValue(row.broker_context, "qmt_batch_result"));
+  const batchResults = batch ? arrayValue(batch.results) : [];
+  return arrayValue(handles).length + batchResults.length;
+}
+
+function reconciliationIssueCount(row: SimulationRuntimeRunSummary | null | undefined): number {
+  if (!row) return 0;
+  return numberValue(itemValue(row.reconciliation_context, "issue_count"));
+}
+
+function projectionRows(row: SimulationRuntimeRunSummary | null | undefined, key: "orders" | "fills" | "errors"): JsonObject[] {
+  if (!row) return [];
+  return arrayValue(row[key]).map(objectValue).filter((item): item is JsonObject => Boolean(item));
+}
+
+export default function SimulationRuntimeOpsPage() {
+  const [scheduler, setScheduler] = useState<SimulationRuntimeSchedulerStatus | null>(null);
+  const [runsPayload, setRunsPayload] = useState<SimulationRuntimeRunsResponse>({ summary: {}, runs: [] });
+  const [selectedRun, setSelectedRun] = useState<SimulationRuntimeRunDetail | null>(null);
+  const [selectedPlan, setSelectedPlan] = useState<SimulationRuntimePlanSummary | null>(null);
+  const [tradeDate, setTradeDate] = useState(todayIso());
+  const [brokerBackend, setBrokerBackend] = useState("");
+  const [status, setStatus] = useState("");
+  const [strategyId, setStrategyId] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [nextScheduler, nextRuns] = await Promise.all([
+        simulationRuntimeApi.schedulerStatus(),
+        simulationRuntimeApi.listRuns({
+          tradeDate: tradeDate || undefined,
+          brokerBackend: brokerBackend || undefined,
+          status: status || undefined,
+          strategyId: strategyId || undefined,
+          limit: 100,
+        }),
+      ]);
+      setScheduler(nextScheduler);
+      setRunsPayload(nextRuns);
+    } catch (exc) {
+      setError(exc);
+    } finally {
+      setLoading(false);
+    }
+  }, [brokerBackend, status, strategyId, tradeDate]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const runs = useMemo(() => runsPayload.runs || [], [runsPayload.runs]);
+  const summary = useMemo(() => runsPayload.summary || {}, [runsPayload.summary]);
+  const byStatus = useMemo(() => {
+    const raw = summary.by_status;
+    return raw && typeof raw === "object" && !Array.isArray(raw) ? raw as JsonObject : {};
+  }, [summary]);
+  const byBackend = useMemo(() => {
+    const raw = summary.by_broker_backend;
+    return raw && typeof raw === "object" && !Array.isArray(raw) ? raw as JsonObject : {};
+  }, [summary]);
+  const schedulerWindows = useMemo(
+    () => arrayValue(scheduler?.schedule_windows).map(objectValue).filter((item): item is JsonObject => Boolean(item)),
+    [scheduler],
+  );
+
+  async function showRun(row: SimulationRuntimeRunSummary) {
+    setDetailLoading(true);
+    setError(null);
+    try {
+      const detail = await simulationRuntimeApi.getRun(row.run_id);
+      setSelectedRun(detail);
+      setSelectedPlan(detail.execution_plan || null);
+    } catch (exc) {
+      setError(exc);
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  function clearSelectedRun() {
+    setSelectedRun(null);
+    setSelectedPlan(null);
+  }
+
+  return (
+    <main>
+      <ErrorPanel error={error} title="模拟盘运行态加载失败" />
+      <NoticePanel title="只读运维入口" tone="info">
+        本页只展示 StrategyRuntimeRelease、SimulationReleaseBinding、DailySelectionEvidence、ExecutionPlan 和 SimulationDailyRun 的真实后端状态；不会启动 scheduler tick，也不会向 LocalSim 或 MiniQMT 提交订单。
+      </NoticePanel>
+
+      <div className="pv2-grid pv2-grid-4">
+        <div data-testid="sim-runtime-total-runs"><MetricCard label="运行记录" value={numberValue(summary.run_count)} hint={`active ${numberValue(summary.active_run_count)} / terminal ${numberValue(summary.terminal_run_count)}`} tone="info" /></div>
+        <div data-testid="sim-runtime-local-count"><MetricCard label="LocalSim" value={mapCount(byBackend, "local_sim")} hint="按统一 execution plan 运行" tone="success" /></div>
+        <div data-testid="sim-runtime-miniqmt-count"><MetricCard label="MiniQMT SIM" value={mapCount(byBackend, "minqmt_sim")} hint="托管订单路径只读观测" tone="warning" /></div>
+        <div data-testid="sim-runtime-submit-default"><MetricCard label="Scheduler 默认提交" value={scheduler?.default_submit ? "ON" : "OFF"} hint={scheduler?.autostart ? "autostart enabled" : "autostart disabled"} tone={scheduler?.default_submit || scheduler?.autostart ? "danger" : "success"} /></div>
+      </div>
+
+      <SectionCard title="运行筛选" eyebrow="SimulationDailyRun" action={<button className="pv2-button" data-testid="sim-runtime-refresh" onClick={load} disabled={loading} type="button">{loading ? "刷新中..." : "刷新"}</button>}>
+        <div className="pv2-form-grid">
+          <div className="pv2-field"><label>交易日</label><input className="pv2-input" data-testid="sim-runtime-trade-date" type="date" value={tradeDate} onChange={(event) => { clearSelectedRun(); setTradeDate(event.target.value); }} /></div>
+          <div className="pv2-field"><label>Backend</label><select className="pv2-select" data-testid="sim-runtime-backend-filter" value={brokerBackend} onChange={(event) => { clearSelectedRun(); setBrokerBackend(event.target.value); }}><option value="">全部</option><option value="local_sim">LocalSim</option><option value="minqmt_sim">MiniQMT SIM</option></select></div>
+          <div className="pv2-field"><label>状态</label><select className="pv2-select" data-testid="sim-runtime-status-filter" value={status} onChange={(event) => { clearSelectedRun(); setStatus(event.target.value); }}><option value="">全部</option><option value="PLANNING_EXECUTION">计划已生成</option><option value="INTRADAY_RUNNING">盘中运行</option><option value="SUCCEEDED">成功/无调仓</option><option value="FAILED_RETRYABLE">可重试失败</option><option value="FAILED_TERMINAL">终止失败</option></select></div>
+          <div className="pv2-field"><label>strategy_id</label><input className="pv2-input" data-testid="sim-runtime-strategy-filter" value={strategyId} onChange={(event) => { clearSelectedRun(); setStrategyId(event.target.value); }} placeholder="可留空" /></div>
+        </div>
+      </SectionCard>
+
+      <SectionCard title="运行列表" eyebrow="release / binding / evidence / plan trace">
+        <PaperTable
+          rows={runs}
+          empty="暂无符合条件的统一模拟盘运行记录。"
+          columns={[
+            { key: "run", header: "运行", render: (row) => <span className="pv2-mono" title={row.run_id}>{hashLabel(row.run_id, 12)}</span> },
+            { key: "status", header: "状态", render: (row) => <StatusBadge status={row.status} /> },
+            { key: "backend", header: "Backend", render: (row) => row.broker_backend === "minqmt_sim" ? "MiniQMT SIM" : "LocalSim" },
+            { key: "strategy", header: "策略实例", render: (row) => <span className="pv2-mono">{row.strategy_id}</span> },
+            { key: "release", header: "运行版本", render: (row) => <span title={`${row.release_id} / ${row.release_hash}`}>{hashLabel(row.release_id)} / {hashLabel(row.release_hash)}</span> },
+            { key: "binding", header: "绑定版本", render: (row) => <span title={`${row.binding_id} / ${row.binding_hash}`}>{hashLabel(row.binding_id)} / {hashLabel(row.binding_hash)}</span> },
+            { key: "signal", header: "选股证据", render: (row) => <span title={textValue(row.selection_artifact_hash)}>{hashLabel(row.selection_evidence_id)} / {hashLabel(row.selection_artifact_hash)}</span> },
+            { key: "plan", header: "执行计划", render: (row) => <span title={textValue(row.execution_plan_hash)}>{hashLabel(row.execution_plan_id)} / {hashLabel(row.execution_plan_hash)}</span> },
+            { key: "counts", header: "阶段计数", render: (row) => stageSummary(row) },
+            { key: "action", header: "详情", render: (row) => <button className="pv2-link-button" data-testid={`sim-runtime-run-detail-${row.run_id}`} onClick={() => showRun(row)} disabled={detailLoading} type="button">查看链路</button> },
+          ]}
+        />
+      </SectionCard>
+
+      <div className="pv2-grid pv2-grid-2">
+        <SectionCard title="Scheduler 安全状态" eyebrow="read-only status">
+          <div className="pv2-readable-panel" data-testid="sim-runtime-scheduler-status">
+            <div className="pv2-readable-table">
+              <div className="pv2-readable-row"><div className="pv2-readable-key">调度器</div><div className="pv2-readable-value">{scheduler?.scheduler || "-"}</div></div>
+              <div className="pv2-readable-row"><div className="pv2-readable-key">自动启动</div><div className="pv2-readable-value"><StatusBadge status={scheduler?.autostart ? "ENABLED" : "DISABLED"} /></div></div>
+              <div className="pv2-readable-row"><div className="pv2-readable-key">默认提交订单</div><div className="pv2-readable-value"><StatusBadge status={scheduler?.default_submit ? "ENABLED" : "DISABLED"} /></div></div>
+              <div className="pv2-readable-row"><div className="pv2-readable-key">手动 tick API</div><div className="pv2-readable-value"><StatusBadge status={scheduler?.manual_tick_endpoint_enabled ? "ENABLED" : "DISABLED"} /></div></div>
+              <div className="pv2-readable-row"><div className="pv2-readable-key">Recovery mode</div><div className="pv2-readable-value" data-testid="sim-runtime-restart-recovery-mode">{scheduler?.restart_recovery_mode || "-"}</div></div>
+              <div className="pv2-readable-row"><div className="pv2-readable-key">准入状态</div><div className="pv2-readable-value">{(scheduler?.approval_states || []).join(", ") || "-"}</div></div>
+            </div>
+          </div>
+        </SectionCard>
+
+        <SectionCard title="状态分布" eyebrow="business summary">
+          <div className="pv2-readable-panel">
+            <div className="pv2-readable-table">
+              {Object.keys(byStatus).length ? Object.entries(byStatus).map(([key, value]) => (
+                <div className="pv2-readable-row" key={key}><div className="pv2-readable-key">{key}</div><div className="pv2-readable-value">{formatCompact(numberValue(value))}</div></div>
+              )) : <div className="pv2-readable-row"><div className="pv2-readable-key">状态</div><div className="pv2-readable-value">暂无记录</div></div>}
+            </div>
+          </div>
+        </SectionCard>
+      </div>
+
+      <SectionCard title="Scheduler Windows" eyebrow="unattended lifecycle windows">
+        <PaperTable
+          rows={schedulerWindows}
+          empty="Scheduler has not returned trading-window state."
+          columns={[
+            { key: "window", header: "Window", render: (row) => textValue(row.label || row.window_id) },
+            { key: "time", header: "Time", render: (row) => `${textValue(row.start)} - ${textValue(row.end)}` },
+            { key: "action", header: "Action", render: (row) => textValue(row.action) },
+            { key: "state", header: "State", render: (row) => <StatusBadge status={textValue(row.state)} /> },
+          ]}
+        />
+      </SectionCard>
+
+      <SectionCard title="选中运行链路" eyebrow="operator detail">
+        {selectedRun ? (
+          <div className="pv2-grid pv2-grid-2" data-testid="sim-runtime-selected-run">
+            <div>
+              <h3>业务摘要</h3>
+              <div className="pv2-readable-panel">
+                <div className="pv2-readable-table">
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">run</div><div className="pv2-readable-value pv2-mono" data-testid="sim-runtime-selected-run-id">{selectedRun.run.run_id}</div></div>
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">strategy</div><div className="pv2-readable-value pv2-mono">{selectedRun.run.strategy_id}</div></div>
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">backend</div><div className="pv2-readable-value">{selectedRun.run.broker_backend === "minqmt_sim" ? "MiniQMT SIM" : "LocalSim"}</div></div>
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">status</div><div className="pv2-readable-value"><StatusBadge status={selectedRun.run.status} /></div></div>
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">last stage</div><div className="pv2-readable-value">{selectedRun.run.last_stage || "-"}</div></div>
+                </div>
+              </div>
+            </div>
+            <div>
+              <h3>链路证据</h3>
+              <div className="pv2-readable-panel">
+                <div className="pv2-readable-table">
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">selection evidence</div><div className="pv2-readable-value pv2-mono" data-testid="sim-runtime-selected-evidence-id">{itemValue(selectedRun.selection_evidence, "evidence_id") ? String(itemValue(selectedRun.selection_evidence, "evidence_id")) : "-"}</div></div>
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">selection hash</div><div className="pv2-readable-value pv2-mono">{hashLabel(itemValue(selectedRun.selection_evidence, "artifact_hash") || selectedRun.run.selection_artifact_hash, 16)}</div></div>
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">execution plan</div><div className="pv2-readable-value pv2-mono" data-testid="sim-runtime-selected-plan-id">{selectedPlan?.plan_id || "-"}</div></div>
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">plan hash</div><div className="pv2-readable-value pv2-mono">{hashLabel(selectedPlan?.plan_hash || selectedRun.run.execution_plan_hash, 16)}</div></div>
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">release / binding</div><div className="pv2-readable-value pv2-mono">{hashLabel(selectedRun.run.release_id)} / {hashLabel(selectedRun.run.binding_id)}</div></div>
+                </div>
+              </div>
+            </div>
+            <div>
+              <h3>执行计划</h3>
+              <div className="pv2-readable-panel">
+                <div className="pv2-readable-table">
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">intent</div><div className="pv2-readable-value" data-testid="sim-runtime-selected-intent-counts">BUY {selectedPlan?.buy_intent_count ?? 0} / SELL {selectedPlan?.sell_intent_count ?? 0} / total {selectedPlan?.intent_count ?? 0}</div></div>
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">symbols</div><div className="pv2-readable-value">{(selectedPlan?.symbols || []).join(", ") || "-"}</div></div>
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">execution policy</div><div className="pv2-readable-value pv2-mono">{selectedPlan?.execution_policy_version_id || "-"} / {hashLabel(selectedPlan?.execution_policy_sha256)}</div></div>
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">tail policy</div><div className="pv2-readable-value pv2-mono">{selectedPlan?.tail_policy_version_id || "-"} / {hashLabel(selectedPlan?.tail_policy_sha256)}</div></div>
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">trading rule decisions</div><div className="pv2-readable-value">{selectedPlan?.trading_rule_decision_count ?? 0}</div></div>
+                </div>
+              </div>
+            </div>
+            <div>
+              <h3>Broker 与审计</h3>
+              <div className="pv2-readable-panel">
+                <div className="pv2-readable-table">
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">broker called</div><div className="pv2-readable-value"><StatusBadge status={itemValue(selectedRun.run.broker_context, "broker_called") ? "YES" : "NO"} /></div></div>
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">qmt batch</div><div className="pv2-readable-value pv2-mono">{textValue(itemValue(selectedRun.run.broker_context, "qmt_batch_id"))} / {textValue(itemValue(selectedRun.run.broker_context, "qmt_batch_status"))}</div></div>
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">orders / fills</div><div className="pv2-readable-value">{projectionRows(selectedRun.run, "orders").length || brokerOrderCount(selectedRun.run)} order records / {projectionRows(selectedRun.run, "fills").length} fill sync rows</div></div>
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">reconciliation</div><div className="pv2-readable-value">{textValue(itemValue(selectedRun.run.reconciliation_context, "status"))} / {reconciliationIssueCount(selectedRun.run)} issues</div></div>
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">stage counts</div><div className="pv2-readable-value">{stageSummary(selectedRun.run)}</div></div>
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">created / updated</div><div className="pv2-readable-value">{textValue(itemValue(selectedRun.run.audit, "created_at"))} / {textValue(itemValue(selectedRun.run.audit, "updated_at"))}</div></div>
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">candidate / excluded</div><div className="pv2-readable-value">{numberValue(itemValue(selectedRun.selection_evidence, "candidate_count"))} / {numberValue(itemValue(selectedRun.selection_evidence, "excluded_count"))}</div></div>
+                </div>
+              </div>
+            </div>
+            <div>
+              <h3>策略收益</h3>
+              <div className="pv2-readable-panel">
+                <div className="pv2-readable-table">
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">NAV</div><div className="pv2-readable-value" data-testid="sim-runtime-selected-nav">{textValue(itemValue(selectedRun.run.strategy_performance, "nav"))}</div></div>
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">total equity</div><div className="pv2-readable-value">{textValue(itemValue(selectedRun.run.strategy_performance, "total_equity"))}</div></div>
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">realized / unrealized</div><div className="pv2-readable-value">{textValue(itemValue(selectedRun.run.strategy_performance, "realized_pnl"))} / {textValue(itemValue(selectedRun.run.strategy_performance, "unrealized_pnl"))}</div></div>
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">market value / cash</div><div className="pv2-readable-value">{textValue(itemValue(selectedRun.run.strategy_performance, "market_value"))} / {textValue(itemValue(selectedRun.run.strategy_performance, "cash"))}</div></div>
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">positions</div><div className="pv2-readable-value">{arrayValue(itemValue(selectedRun.run.strategy_performance, "positions")).map((item) => textValue(itemValue(objectValue(item), "symbol"))).join(", ") || "-"}</div></div>
+                </div>
+              </div>
+            </div>
+            <div>
+              <h3>订单 / 成交 / 错误</h3>
+              <div className="pv2-readable-panel" data-testid="sim-runtime-selected-order-fill-errors">
+                <div className="pv2-readable-table">
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">orders</div><div className="pv2-readable-value">{projectionRows(selectedRun.run, "orders").slice(0, 5).map((order) => `${textValue(order.source)}:${textValue(order.intent_id || order.qmt_order_id || order.handle_id)}`).join(", ") || "-"}</div></div>
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">fills</div><div className="pv2-readable-value">{projectionRows(selectedRun.run, "fills").slice(0, 3).map((fill) => `trades ${textValue(fill.trades_seen)} / cash entries ${textValue(fill.cash_entries_appended)}`).join(", ") || "-"}</div></div>
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">errors</div><div className="pv2-readable-value">{projectionRows(selectedRun.run, "errors").slice(0, 5).map((err) => `${textValue(err.source)}:${textValue(err.code)}`).join(", ") || "-"}</div></div>
+                </div>
+              </div>
+            </div>
+            <div>
+              <h3>MiniQMT 对账</h3>
+              <div className="pv2-readable-panel">
+                <div className="pv2-readable-table">
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">同股多策略</div><div className="pv2-readable-value">{arrayValue(itemValue(selectedRun.run.reconciliation_context, "overlap_symbols")).map(String).join(", ") || "-"}</div></div>
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">未归因订单 / 成交</div><div className="pv2-readable-value">{textValue(itemValue(selectedRun.run.reconciliation_context, "unattributed_orders"))} / {textValue(itemValue(selectedRun.run.reconciliation_context, "unattributed_trades"))}</div></div>
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">broker symbols</div><div className="pv2-readable-value">{Object.keys(objectValue(itemValue(selectedRun.run.reconciliation_context, "broker_quantities")) || {}).join(", ") || "-"}</div></div>
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">issue preview</div><div className="pv2-readable-value">{arrayValue(itemValue(selectedRun.run.reconciliation_context, "issues")).slice(0, 3).map((issue) => textValue(itemValue(objectValue(issue), "issue_type"))).join(", ") || "-"}</div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <NoticePanel title="未选择运行记录" tone="info">点击运行列表中的“查看链路”，可查看当日 selection evidence、execution plan、intent 统计和审计字段。</NoticePanel>
+        )}
+      </SectionCard>
+    </main>
+  );
+}

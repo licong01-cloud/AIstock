@@ -31,6 +31,7 @@ ALLOWED_COMMAND_KEYS: dict[str, str] = {
     "nox_simulation_core_l2": "simulation_core_l2",
     "nox_localsim_unattended_l3": "localsim_unattended_l3",
     "nox_miniqmt_sim_stub_l3": "miniqmt_sim_stub_l3",
+    "nox_simulation_runtime_ops_ui": "simulation_runtime_ops_ui",
     "nox_simulation_dual_backend_l4": "simulation_dual_backend_l4",
     "nox_miniqmt_sim_trading_hours_l5": "miniqmt_sim_trading_hours_l5",
     "nox_model_registry_backend": "model_registry_backend",
