@@ -27,6 +27,8 @@ from backend.services.simulation_runtime import (
     MiniQMTExecutionBridge,
     RebalanceIntentService,
     SimulationBrokerBackend,
+    SimulationDailyRunStatus,
+    SimulationLifecycleOrchestrator,
     StrategyRuntimeReleaseService,
     TargetPositionService,
     TradingRuleService,
@@ -163,6 +165,60 @@ def _evidence(release) -> DailySelectionEvidence:
         source_type="live_inference",
         data_source="DB_HISTORICAL",
         candidate_count=2,
+        excluded_count=0,
+        artifact_hash=digest,
+        evidence_payload_json=payload,
+        created_by="unit-test",
+    )
+
+
+def _empty_snapshot() -> SignalSnapshot:
+    return SignalSnapshot(
+        package_id="pkg_shared_decision",
+        manifest_sha256="manifest_shared_decision",
+        trade_date=date(2026, 5, 21),
+        data_source="DB_HISTORICAL",
+        candidates=[],
+        runtime_config={"runtime_profile": {"selection": {"daily_strategy_id": DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID}}},
+        valid_no_candidate=True,
+        no_candidate_reason="unit test no candidate day",
+    )
+
+
+def _empty_evidence(release) -> DailySelectionEvidence:
+    payload = {
+        "schema_version": "daily_selection_evidence_v1",
+        "target_trade_date": "2026-05-21",
+        "cutoff_date": "2026-05-20",
+        "package_id": release.package_id,
+        "manifest_sha256": release.manifest_sha256,
+        "release_id": release.release_id,
+        "release_hash": release.release_hash,
+        "runtime_profile": {
+            "profile_version_id": release.runtime_profile_version_id,
+            "config_sha256": release.runtime_profile_sha256,
+        },
+        "source_type": "live_inference",
+        "data_source": "DB_HISTORICAL",
+        "candidates": [],
+        "exclusions": [],
+        "valid_no_candidate": True,
+        "no_candidate_reason": "unit test no candidate day",
+    }
+    digest = canonical_json_sha256(payload)
+    return DailySelectionEvidence(
+        evidence_id=f"dse_{digest[:16]}",
+        target_trade_date=date(2026, 5, 21),
+        cutoff_date=date(2026, 5, 20),
+        package_id=release.package_id,
+        manifest_sha256=release.manifest_sha256,
+        release_id=release.release_id,
+        release_hash=release.release_hash,
+        runtime_profile_version_id=release.runtime_profile_version_id,
+        runtime_profile_hash=release.runtime_profile_sha256,
+        source_type="live_inference",
+        data_source="DB_HISTORICAL",
+        candidate_count=0,
         excluded_count=0,
         artifact_hash=digest,
         evidence_payload_json=payload,
@@ -336,6 +392,51 @@ def test_execution_plan_compiler_rejects_paper_only_policy() -> None:
         )
 
 
+def test_empty_daily_signal_sells_dropped_positions_and_no_trade_is_legal() -> None:
+    release, binding, runtime_repo = _release_binding_repo()
+    evidence = _empty_evidence(release)
+    targets = TargetPositionService().build_target_positions(
+        selection_evidence=evidence,
+        signal_snapshot=_empty_snapshot(),
+        runtime_release=release,
+        binding=binding,
+        current_positions={"000003.SZ": _current_positions("portfolio_shared")["000003.SZ"]},
+    )
+    assert targets == []
+
+    sell_all = RebalanceIntentService().build_order_intents(
+        package_id=release.package_id,
+        portfolio_id="portfolio_shared",
+        strategy_id=binding.strategy_id,
+        trade_date=date(2026, 5, 21),
+        current_positions={"000003.SZ": _current_positions("portfolio_shared")["000003.SZ"]},
+        target_positions=targets,
+    )
+    assert [(item.symbol, item.side.value, item.quantity) for item in sell_all.order_intents] == [("000003.SZ", "SELL", 77)]
+    assert sell_all.order_intents[0].metadata["rebalance_reason"] == "DROPPED_FROM_SELECTION"
+
+    no_trade = RebalanceIntentService().build_order_intents(
+        package_id=release.package_id,
+        portfolio_id="portfolio_shared",
+        strategy_id=binding.strategy_id,
+        trade_date=date(2026, 5, 21),
+        current_positions={},
+        target_positions=targets,
+    )
+    plan = ExecutionPlanCompiler().compile_plan(
+        runtime_release=release,
+        binding=binding,
+        selection_evidence=evidence,
+        order_intents=no_trade.order_intents,
+        trading_rule_decisions=no_trade.trading_rule_decisions,
+        portfolio_id="portfolio_shared",
+    )
+    runtime_repo.save_daily_selection_evidence(evidence)
+    persisted = runtime_repo.save_execution_plan(plan)
+    assert persisted.intents == []
+    assert persisted.plan_payload_json["intents"] == []
+
+
 class FakeLocalSimBroker:
     def __init__(self) -> None:
         self.submitted = []
@@ -457,3 +558,84 @@ def test_miniqmt_execution_bridge_uses_managed_orders_and_strategy_attribution()
     assert [call["strategy_name"] for call in broker.calls] == [binding.strategy_name, binding.strategy_name]
     assert preview.requests[0].metadata["source"] == "shared_execution_plan"
     assert preview.requests[0].order_remark.startswith(binding.order_remark_prefix or "")
+
+
+def test_lifecycle_orchestrator_builds_dual_backend_plans_from_same_evidence_and_is_idempotent() -> None:
+    repo = InMemorySimulationRuntimeRepository()
+    service = StrategyRuntimeReleaseService(repository=repo)
+    release = service.create_release(
+        package_id="pkg_shared_decision",
+        manifest_sha256="manifest_shared_decision",
+        runtime_profile_id="runtime_profile_shared",
+        runtime_profile_version_id="runtime_profile_shared_v1",
+        runtime_profile_sha256="runtime_profile_hash_shared",
+        daily_strategy_profile_version_id=DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID,
+        execution_policy_version_id="exec_policy_v25_1_small_cap",
+        execution_policy_sha256="exec_policy_hash_v25_1_small_cap",
+        tail_policy_version_id="tail_policy_close_v1",
+        tail_policy_sha256="tail_policy_hash_close_v1",
+        created_by="unit-test",
+        created_reason="lifecycle dual backend test",
+    )
+    local_binding = service.create_binding(
+        strategy_id="strategy_local_shared",
+        release=release,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        capital_allocation=100_000,
+        created_by="unit-test",
+        created_reason="lifecycle dual backend test",
+    )
+    qmt_binding = service.create_binding(
+        strategy_id="strategy_qmt_shared",
+        release=release,
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        capital_allocation=100_000,
+        broker_account_id="QMT_SIM_ACCOUNT",
+        strategy_name="SharedDecisionQMT",
+        order_remark_prefix="shared-qmt",
+        created_by="unit-test",
+        created_reason="lifecycle dual backend test",
+    )
+    orchestrator = SimulationLifecycleOrchestrator(repository=repo)
+    common = {
+        "runtime_release": release,
+        "selection_evidence": _evidence(release),
+        "signal_snapshot": _snapshot(),
+        "current_positions": _current_positions("portfolio_shared"),
+        "portfolio_id": "portfolio_shared",
+        "execution_policy_payload": {"algo_code": "V25_1_SMALL_CAP", "schedule_window": {"mode": "open_to_close"}},
+    }
+
+    local = orchestrator.build_execution_plan(binding=local_binding, **common)
+    qmt = orchestrator.build_execution_plan(binding=qmt_binding, **common)
+    rerun = orchestrator.build_execution_plan(binding=local_binding, **common)
+
+    assert local.selection_evidence.artifact_hash == qmt.selection_evidence.artifact_hash
+    assert [(t.symbol, t.target_quantity) for t in local.target_positions] == [
+        (t.symbol, t.target_quantity) for t in qmt.target_positions
+    ]
+    assert [(i.symbol, i.side.value, i.order_quantity) for i in local.execution_plan.intents] == [
+        (i.symbol, i.side.value, i.order_quantity) for i in qmt.execution_plan.intents
+    ]
+    assert rerun.run.run_id == local.run.run_id
+    assert rerun.execution_plan.plan_hash == local.execution_plan.plan_hash
+
+
+def test_lifecycle_no_rebalance_does_not_call_broker_and_marks_success() -> None:
+    release, binding, repo = _release_binding_repo()
+    orchestrator = SimulationLifecycleOrchestrator(repository=repo)
+    build = orchestrator.build_execution_plan(
+        runtime_release=release,
+        binding=binding,
+        selection_evidence=_empty_evidence(release),
+        signal_snapshot=_empty_snapshot(),
+        current_positions={},
+        portfolio_id="portfolio_shared",
+    )
+
+    result = orchestrator.submit_execution_plan(build_result=build)
+
+    assert result.status == "NO_REBALANCE"
+    assert result.intent_count == 0
+    assert result.run.status == SimulationDailyRunStatus.SUCCEEDED
+    assert result.run.run_payload_json["no_rebalance_required"] is True

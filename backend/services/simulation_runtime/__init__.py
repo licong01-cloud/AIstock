@@ -8,6 +8,7 @@ from .decision import (
     TargetPositionService,
     TradingRuleService,
 )
+from .lifecycle import SimulationExecutionResult, SimulationLifecycleOrchestrator, SimulationPlanBuildResult
 from .models import (
     DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID,
     DailySelectionEvidence,
@@ -16,10 +17,18 @@ from .models import (
     RuntimeReleaseValidationState,
     SimulationBindingApprovalState,
     SimulationBrokerBackend,
+    SimulationDailyRun,
+    SimulationDailyRunStatus,
     SimulationReleaseBinding,
     StrategyRuntimeRelease,
     TradingRuleDecision,
     assert_selection_only_payload_boundary,
+)
+from .performance import (
+    MergedPositionReconciliation,
+    StrategyPerformanceProjection,
+    StrategyPerformanceProjectionService,
+    StrategyPositionProjection,
 )
 from .repository import InMemorySimulationRuntimeRepository, SimulationRuntimeRepository
 from .selection import DailySelectionSignalService, StrategyPackageSelectionResult, StrategyPackageSelectionService
@@ -37,17 +46,26 @@ __all__ = [
     "LocalSimPlanSubmitResult",
     "MiniQMTExecutionBridge",
     "MiniQMTPlanPreviewResult",
+    "MergedPositionReconciliation",
     "RebalanceIntentResult",
     "RebalanceIntentService",
     "RuntimeReleaseValidationState",
     "SimulationBindingApprovalState",
     "SimulationBrokerBackend",
+    "SimulationDailyRun",
+    "SimulationDailyRunStatus",
+    "SimulationExecutionResult",
+    "SimulationLifecycleOrchestrator",
+    "SimulationPlanBuildResult",
     "SimulationReleaseBinding",
     "SimulationRuntimeRepository",
     "StrategyRuntimeRelease",
     "StrategyRuntimeReleaseService",
+    "StrategyPerformanceProjection",
+    "StrategyPerformanceProjectionService",
     "StrategyPackageSelectionResult",
     "StrategyPackageSelectionService",
+    "StrategyPositionProjection",
     "TargetPositionService",
     "TradingRuleDecision",
     "TradingRuleService",

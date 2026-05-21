@@ -96,6 +96,26 @@ def test_runtime_release_and_binding_schema_are_commented_in_migration_and_boots
             "plan_hash",
             "created_at",
         ],
+        "paper_v2.simulation_daily_run": [
+            "run_id",
+            "trade_date",
+            "strategy_id",
+            "broker_backend",
+            "package_id",
+            "manifest_sha256",
+            "release_id",
+            "release_hash",
+            "binding_id",
+            "binding_hash",
+            "selection_evidence_id",
+            "selection_artifact_hash",
+            "execution_plan_id",
+            "execution_plan_hash",
+            "status",
+            "run_payload_json",
+            "created_at",
+            "updated_at",
+        ],
     }
 
     for ddl in (

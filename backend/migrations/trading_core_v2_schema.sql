@@ -1,4 +1,4 @@
--- Trading Core v2 / Strategy Package / Selection Center / Paper v2 schema.
+﻿-- Trading Core v2 / Strategy Package / Selection Center / Paper v2 schema.
 -- Keep this migration explicit; business services must not run DDL implicitly.
 
 CREATE SCHEMA IF NOT EXISTS strategy_pkg;
@@ -668,6 +668,51 @@ COMMENT ON COLUMN paper_v2.execution_plan.plan_payload_json IS 'Canonical JSON p
 COMMENT ON COLUMN paper_v2.execution_plan.plan_hash IS 'Canonical SHA-256 hash of plan_payload_json.';
 COMMENT ON COLUMN paper_v2.execution_plan.created_at IS 'Timestamp when the immutable execution plan row was created.';
 
+CREATE TABLE IF NOT EXISTS paper_v2.simulation_daily_run (
+    run_id TEXT PRIMARY KEY,
+    trade_date DATE NOT NULL,
+    strategy_id TEXT NOT NULL,
+    broker_backend TEXT NOT NULL CHECK (broker_backend IN ('local_sim', 'minqmt_sim')),
+    package_id TEXT NOT NULL,
+    manifest_sha256 TEXT NOT NULL,
+    release_id TEXT NOT NULL REFERENCES strategy_pkg.strategy_runtime_release(release_id),
+    release_hash TEXT NOT NULL,
+    binding_id TEXT NOT NULL REFERENCES paper_v2.simulation_release_binding(binding_id),
+    binding_hash TEXT NOT NULL,
+    selection_evidence_id TEXT REFERENCES selection.daily_selection_evidence(evidence_id),
+    selection_artifact_hash TEXT,
+    execution_plan_id TEXT REFERENCES paper_v2.execution_plan(plan_id),
+    execution_plan_hash TEXT,
+    status TEXT NOT NULL CHECK (status IN (
+        'CREATED', 'PRECHECKING', 'SIGNAL_GENERATING', 'TARGET_GENERATING', 'PLANNING_EXECUTION',
+        'SUBMITTING', 'INTRADAY_RUNNING', 'TAIL_HANDLING', 'RECONCILING', 'SUCCEEDED',
+        'FAILED_RETRYABLE', 'FAILED_TERMINAL', 'CANCELLED'
+    )),
+    run_payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(strategy_id, binding_id, trade_date)
+);
+
+COMMENT ON TABLE paper_v2.simulation_daily_run IS 'Unified SimulationDailyRun lifecycle row for one strategy, broker backend, binding and trade date; links daily selection evidence and shared execution plan before broker-specific execution.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.run_id IS 'Stable daily run id generated from strategy_id, binding_id, release hash, broker backend and trade_date.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.trade_date IS 'Trading date controlled by this lifecycle run.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.strategy_id IS 'Simulation strategy instance id used for multi-strategy attribution.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.broker_backend IS 'Execution backend selected by SimulationReleaseBinding; valid values are local_sim and minqmt_sim.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.package_id IS 'StrategyPackage package_id inherited from the runtime release.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.manifest_sha256 IS 'StrategyPackage manifest hash inherited from the runtime release.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.release_id IS 'StrategyRuntimeRelease id used for this daily run.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.release_hash IS 'Canonical StrategyRuntimeRelease hash denormalized for restart recovery and audit.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.binding_id IS 'SimulationReleaseBinding id supplying broker, account, capital and order attribution.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.binding_hash IS 'Canonical SimulationReleaseBinding hash denormalized for restart recovery and audit.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.selection_evidence_id IS 'DailySelectionEvidence id generated or loaded for this trade_date; NULL before signal generation.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.selection_artifact_hash IS 'DailySelectionEvidence artifact hash denormalized for dual-backend signal comparison.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.execution_plan_id IS 'Shared ExecutionPlan id compiled from selection evidence, target positions and rebalance intents; NULL before planning.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.execution_plan_hash IS 'Canonical ExecutionPlan hash denormalized for idempotency and restart recovery.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.status IS 'Lifecycle status from CREATED through SUCCEEDED/FAILED/CANCELLED, including no-trade/no-rebalance success states.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.run_payload_json IS 'Structured lifecycle metadata with schema_version, stage counts, operator/source and broker bridge context; must not override strategy alpha core.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.created_at IS 'Timestamp when the lifecycle row was created.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.updated_at IS 'Timestamp when lifecycle status or linked evidence/plan changed.';
 CREATE TABLE IF NOT EXISTS paper_v2.config_change_audit (
     audit_id BIGSERIAL PRIMARY KEY,
     portfolio_id TEXT,
@@ -933,6 +978,8 @@ CREATE INDEX IF NOT EXISTS idx_paper_v2_simulation_release_binding_strategy ON p
 CREATE INDEX IF NOT EXISTS idx_paper_v2_simulation_release_binding_release ON paper_v2.simulation_release_binding(release_id, broker_backend, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_paper_v2_execution_plan_binding_date ON paper_v2.execution_plan(binding_id, target_trade_date DESC, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_paper_v2_execution_plan_release_date ON paper_v2.execution_plan(release_id, selection_evidence_id, target_trade_date DESC);
+CREATE INDEX IF NOT EXISTS idx_paper_v2_simulation_daily_run_binding_date ON paper_v2.simulation_daily_run(binding_id, trade_date DESC, status);
+CREATE INDEX IF NOT EXISTS idx_paper_v2_simulation_daily_run_trade_date_status ON paper_v2.simulation_daily_run(trade_date DESC, broker_backend, status);
 CREATE INDEX IF NOT EXISTS idx_paper_v2_config_change_audit_portfolio ON paper_v2.config_change_audit(portfolio_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_paper_v2_run_portfolio_date ON paper_v2.run(portfolio_id, trade_date);
 CREATE INDEX IF NOT EXISTS idx_paper_v2_trade_session_portfolio ON paper_v2.trade_session(portfolio_id, status, created_at DESC);

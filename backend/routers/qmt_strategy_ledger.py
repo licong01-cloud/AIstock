@@ -25,6 +25,7 @@ from backend.services.qmt_strategy_ledger.reconciliation import QmtStrategyLedge
 from backend.services.qmt_strategy_ledger.repository import QmtStrategyLedgerRepository
 from backend.services.qmt_strategy_ledger.selection_order_builder import SelectionOrderBuilder, SelectionOrderBuildConfig
 from backend.services.qmt_strategy_ledger.sync_service import QmtStrategyLedgerSyncService
+from backend.services.simulation_runtime import MiniQMTExecutionBridge, SimulationBrokerBackend, SimulationRuntimeRepository
 from backend.services.trading_core.errors import (
     DataUnavailableError,
     InvalidStateTransitionError,
@@ -41,6 +42,7 @@ _selection_reader_factory: Callable[[], Any] = SelectionCenterRepository
 _calendar_provider_factory: Callable[[], Any] = DbTradingCalendarProvider
 _artifact_repository_factory: Callable[[], Any] | None = None
 _live_approval_service_factory: Callable[[], Any] = StrategyPackageService
+_simulation_runtime_repository_factory: Callable[[], Any] = SimulationRuntimeRepository
 
 
 def configure_dependencies(
@@ -52,11 +54,12 @@ def configure_dependencies(
     calendar_provider_factory: Callable[[], Any] | None = None,
     artifact_repository_factory: Callable[[], Any] | None = None,
     live_approval_service_factory: Callable[[], Any] | None = None,
+    simulation_runtime_repository_factory: Callable[[], Any] | None = None,
 ) -> None:
     """Override dependencies for tests without touching the production singleton."""
 
     global _repository_factory, _client_factory, _package_reader_factory, _selection_reader_factory, _calendar_provider_factory
-    global _artifact_repository_factory, _live_approval_service_factory
+    global _artifact_repository_factory, _live_approval_service_factory, _simulation_runtime_repository_factory
     if repository_factory is not None:
         _repository_factory = repository_factory
     if client_factory is not None:
@@ -69,6 +72,8 @@ def configure_dependencies(
         _calendar_provider_factory = calendar_provider_factory
     if live_approval_service_factory is not None:
         _live_approval_service_factory = live_approval_service_factory
+    if simulation_runtime_repository_factory is not None:
+        _simulation_runtime_repository_factory = simulation_runtime_repository_factory
     _artifact_repository_factory = artifact_repository_factory
 
 
@@ -203,6 +208,47 @@ def preview_orders_from_binding(binding_id: str, payload: dict[str, Any]) -> dic
         for request in result.requests
     ]
     return {"success": True, "order_build": result.to_dict(), "preflights": preflights}
+
+
+@router.post("/execution-plans/{plan_id}/orders/preview", summary="Preview MiniQMT managed orders from shared ExecutionPlan")
+def preview_orders_from_execution_plan(plan_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    simulation_repo = _simulation_runtime_repository_factory()
+    qmt_repository = _repository_factory()
+    plan = simulation_repo.get_execution_plan(plan_id)
+    binding = simulation_repo.get_simulation_release_binding(plan.binding_id)
+    if binding.broker_backend != SimulationBrokerBackend.MINIQMT_SIM:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "EXECUTION_PLAN_BACKEND_MISMATCH",
+                "message": "MiniQMT order preview requires a minqmt_sim SimulationReleaseBinding",
+                "context": {"plan_id": plan_id, "binding_id": binding.binding_id, "broker_backend": binding.broker_backend.value},
+            },
+        )
+    try:
+        preview = MiniQMTExecutionBridge(
+            managed_order_service=QmtManagedOrderService(repository=qmt_repository, calendar_provider=_calendar_provider_factory())
+        ).preview_plan(
+            plan=plan,
+            binding=binding,
+            mode=str(payload.get("mode") or "SIM").strip().upper(),
+            price_type=int(payload.get("price_type") or 5),
+            price_by_symbol=payload.get("price_by_symbol") if isinstance(payload.get("price_by_symbol"), dict) else None,
+        )
+    except TradingCoreError as exc:
+        _raise_trading_core_http(exc)
+    return {
+        "success": True,
+        "execution_plan": {
+            "plan_id": plan.plan_id,
+            "plan_hash": plan.plan_hash,
+            "binding_id": plan.binding_id,
+            "intent_count": len(plan.intents),
+        },
+        "requests": [_managed_request_to_dict(request) for request in preview.requests],
+        "preflights": [preflight.to_dict() for preflight in preview.preflights],
+    }
+
 
 @router.post("/orders/preview", summary="Preview managed MiniQMT order without broker submission")
 def preview_order(payload: dict[str, Any]) -> dict[str, Any]:
@@ -438,6 +484,25 @@ def _decimal(value: Any, default: Decimal = Decimal("0")) -> Decimal:
         return Decimal(str(value))
     except (InvalidOperation, ValueError) as exc:
         raise HTTPException(status_code=400, detail="decimal field is invalid") from exc
+
+
+def _managed_request_to_dict(request: Any) -> dict[str, Any]:
+    return {
+        "account_id": request.account_id,
+        "strategy_name": request.strategy_name,
+        "symbol": request.symbol,
+        "side": request.side,
+        "order_type": request.order_type,
+        "quantity": request.quantity,
+        "price_type": request.price_type,
+        "price": float(request.price),
+        "order_remark": request.order_remark,
+        "trade_date": request.trade_date.isoformat(),
+        "mode": request.mode,
+        "package_id": request.package_id,
+        "target_weight": float(request.target_weight) if request.target_weight is not None else None,
+        "metadata": request.metadata,
+    }
 
 
 def _selection_order_build_config(payload: dict[str, Any]) -> SelectionOrderBuildConfig:

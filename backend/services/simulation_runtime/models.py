@@ -145,6 +145,22 @@ class SimulationBrokerBackend(str, Enum):
     MINIQMT_SIM = "minqmt_sim"
 
 
+class SimulationDailyRunStatus(str, Enum):
+    CREATED = "CREATED"
+    PRECHECKING = "PRECHECKING"
+    SIGNAL_GENERATING = "SIGNAL_GENERATING"
+    TARGET_GENERATING = "TARGET_GENERATING"
+    PLANNING_EXECUTION = "PLANNING_EXECUTION"
+    SUBMITTING = "SUBMITTING"
+    INTRADAY_RUNNING = "INTRADAY_RUNNING"
+    TAIL_HANDLING = "TAIL_HANDLING"
+    RECONCILING = "RECONCILING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED_RETRYABLE = "FAILED_RETRYABLE"
+    FAILED_TERMINAL = "FAILED_TERMINAL"
+    CANCELLED = "CANCELLED"
+
+
 def canonical_json_sha256(payload: dict[str, Any] | list[Any]) -> str:
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
@@ -565,3 +581,53 @@ class ExecutionPlan(BaseModel):
             if intent.plan_id != self.plan_id:
                 raise ValueError("execution plan intent plan_id does not match plan_id")
         return self
+
+
+class SimulationDailyRun(BaseModel):
+    """Unified daily simulation lifecycle row for LocalSim and MiniQMT paths."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    trade_date: date
+    strategy_id: str
+    broker_backend: SimulationBrokerBackend
+    package_id: str
+    manifest_sha256: str
+    release_id: str
+    release_hash: str
+    binding_id: str
+    binding_hash: str
+    selection_evidence_id: str | None = None
+    selection_artifact_hash: str | None = None
+    execution_plan_id: str | None = None
+    execution_plan_hash: str | None = None
+    status: SimulationDailyRunStatus = SimulationDailyRunStatus.CREATED
+    run_payload_json: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @field_validator(
+        "run_id",
+        "strategy_id",
+        "package_id",
+        "manifest_sha256",
+        "release_id",
+        "release_hash",
+        "binding_id",
+        "binding_hash",
+    )
+    @classmethod
+    def _required_text(cls, value: str) -> str:
+        value = str(value or "").strip()
+        if not value:
+            raise ValueError("field is required")
+        return value
+
+    @field_validator("selection_evidence_id", "selection_artifact_hash", "execution_plan_id", "execution_plan_hash")
+    @classmethod
+    def _optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = str(value).strip()
+        return value or None

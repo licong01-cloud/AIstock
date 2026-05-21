@@ -16,6 +16,8 @@ from .models import (
     RuntimeReleaseValidationState,
     SimulationBindingApprovalState,
     SimulationBrokerBackend,
+    SimulationDailyRun,
+    SimulationDailyRunStatus,
     SimulationReleaseBinding,
     StrategyRuntimeRelease,
     TradingRuleDecision,
@@ -330,6 +332,132 @@ class SimulationRuntimeRepository:
         )
         return self._execution_plan_from_row(rows[0]) if rows else None
 
+    def save_simulation_daily_run(self, run: SimulationDailyRun) -> SimulationDailyRun:
+        existing = self.get_simulation_daily_run_by_key(
+            strategy_id=run.strategy_id,
+            binding_id=run.binding_id,
+            trade_date=run.trade_date,
+        )
+        if existing is not None:
+            return existing
+        self.get_strategy_runtime_release(run.release_id)
+        self.get_simulation_release_binding(run.binding_id)
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                try:
+                    cur.execute(
+                        """
+                        INSERT INTO paper_v2.simulation_daily_run (
+                            run_id, trade_date, strategy_id, broker_backend, package_id, manifest_sha256,
+                            release_id, release_hash, binding_id, binding_hash,
+                            selection_evidence_id, selection_artifact_hash, execution_plan_id,
+                            execution_plan_hash, status, run_payload_json, created_at, updated_at
+                        ) VALUES (
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, %s, %s, %s
+                        )
+                        """,
+                        (
+                            run.run_id,
+                            run.trade_date,
+                            run.strategy_id,
+                            run.broker_backend.value,
+                            run.package_id,
+                            run.manifest_sha256,
+                            run.release_id,
+                            run.release_hash,
+                            run.binding_id,
+                            run.binding_hash,
+                            run.selection_evidence_id,
+                            run.selection_artifact_hash,
+                            run.execution_plan_id,
+                            run.execution_plan_hash,
+                            run.status.value,
+                            psycopg2.extras.Json(run.run_payload_json),
+                            run.created_at,
+                            run.updated_at,
+                        ),
+                    )
+                except psycopg2.IntegrityError as exc:
+                    raise InvalidStateTransitionError(
+                        "simulation daily run conflicts with an existing run",
+                        context={"run_id": run.run_id, "strategy_id": run.strategy_id, "binding_id": run.binding_id},
+                    ) from exc
+        return run
+
+    def get_simulation_daily_run(self, run_id: str) -> SimulationDailyRun:
+        rows = self._fetch_rows(
+            "SELECT * FROM paper_v2.simulation_daily_run WHERE run_id = %s",
+            (run_id,),
+        )
+        if not rows:
+            raise DataUnavailableError("simulation daily run does not exist", context={"run_id": run_id})
+        return self._daily_run_from_row(rows[0])
+
+    def get_simulation_daily_run_by_key(
+        self,
+        *,
+        strategy_id: str,
+        binding_id: str,
+        trade_date: Any,
+    ) -> SimulationDailyRun | None:
+        rows = self._fetch_rows(
+            """
+            SELECT *
+            FROM paper_v2.simulation_daily_run
+            WHERE strategy_id = %s AND binding_id = %s AND trade_date = %s
+            """,
+            (strategy_id, binding_id, trade_date),
+        )
+        return self._daily_run_from_row(rows[0]) if rows else None
+
+    def update_simulation_daily_run(
+        self,
+        run_id: str,
+        *,
+        status: SimulationDailyRunStatus | None = None,
+        selection_evidence: DailySelectionEvidence | None = None,
+        execution_plan: ExecutionPlan | None = None,
+        payload_patch: dict[str, Any] | None = None,
+    ) -> SimulationDailyRun:
+        current = self.get_simulation_daily_run(run_id)
+        merged_payload = {**current.run_payload_json, **(payload_patch or {})}
+        updated = current.model_copy(
+            update={
+                "status": status or current.status,
+                "selection_evidence_id": selection_evidence.evidence_id if selection_evidence else current.selection_evidence_id,
+                "selection_artifact_hash": selection_evidence.artifact_hash if selection_evidence else current.selection_artifact_hash,
+                "execution_plan_id": execution_plan.plan_id if execution_plan else current.execution_plan_id,
+                "execution_plan_hash": execution_plan.plan_hash if execution_plan else current.execution_plan_hash,
+                "run_payload_json": merged_payload,
+            }
+        )
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE paper_v2.simulation_daily_run
+                    SET status = %s,
+                        selection_evidence_id = %s,
+                        selection_artifact_hash = %s,
+                        execution_plan_id = %s,
+                        execution_plan_hash = %s,
+                        run_payload_json = %s,
+                        updated_at = now()
+                    WHERE run_id = %s
+                    """,
+                    (
+                        updated.status.value,
+                        updated.selection_evidence_id,
+                        updated.selection_artifact_hash,
+                        updated.execution_plan_id,
+                        updated.execution_plan_hash,
+                        psycopg2.extras.Json(updated.run_payload_json),
+                        run_id,
+                    ),
+                )
+        return self.get_simulation_daily_run(run_id)
+
     def _fetch_rows(self, sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -484,6 +612,29 @@ class SimulationRuntimeRepository:
             created_at=row["created_at"],
         )
 
+    @staticmethod
+    def _daily_run_from_row(row: dict[str, Any]) -> SimulationDailyRun:
+        return SimulationDailyRun(
+            run_id=row["run_id"],
+            trade_date=row["trade_date"],
+            strategy_id=row["strategy_id"],
+            broker_backend=SimulationBrokerBackend(row["broker_backend"]),
+            package_id=row["package_id"],
+            manifest_sha256=row["manifest_sha256"],
+            release_id=row["release_id"],
+            release_hash=row["release_hash"],
+            binding_id=row["binding_id"],
+            binding_hash=row["binding_hash"],
+            selection_evidence_id=row.get("selection_evidence_id"),
+            selection_artifact_hash=row.get("selection_artifact_hash"),
+            execution_plan_id=row.get("execution_plan_id"),
+            execution_plan_hash=row.get("execution_plan_hash"),
+            status=SimulationDailyRunStatus(row["status"]),
+            run_payload_json=row.get("run_payload_json") or {},
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
 
 class InMemorySimulationRuntimeRepository:
     def __init__(self) -> None:
@@ -495,6 +646,8 @@ class InMemorySimulationRuntimeRepository:
         self.daily_selection_hash_index: dict[str, str] = {}
         self.execution_plans: dict[str, ExecutionPlan] = {}
         self.execution_plan_hash_index: dict[str, str] = {}
+        self.daily_runs: dict[str, SimulationDailyRun] = {}
+        self.daily_run_key_index: dict[tuple[str, str, Any], str] = {}
 
     def save_strategy_runtime_release(self, release: StrategyRuntimeRelease) -> StrategyRuntimeRelease:
         if release.release_hash in self.release_hash_index:
@@ -606,3 +759,68 @@ class InMemorySimulationRuntimeRepository:
     def get_execution_plan_by_hash(self, plan_hash: str) -> ExecutionPlan | None:
         plan_id = self.execution_plan_hash_index.get(plan_hash)
         return self.execution_plans[plan_id] if plan_id else None
+
+    def save_simulation_daily_run(self, run: SimulationDailyRun) -> SimulationDailyRun:
+        existing = self.get_simulation_daily_run_by_key(
+            strategy_id=run.strategy_id,
+            binding_id=run.binding_id,
+            trade_date=run.trade_date,
+        )
+        if existing is not None:
+            return existing
+        self.get_strategy_runtime_release(run.release_id)
+        self.get_simulation_release_binding(run.binding_id)
+        if run.run_id in self.daily_runs:
+            existing_by_id = self.daily_runs[run.run_id]
+            if (
+                existing_by_id.strategy_id,
+                existing_by_id.binding_id,
+                existing_by_id.trade_date,
+            ) != (run.strategy_id, run.binding_id, run.trade_date):
+                raise InvalidStateTransitionError(
+                    "simulation daily run conflicts with an existing run",
+                    context={"run_id": run.run_id, "strategy_id": run.strategy_id, "binding_id": run.binding_id},
+                )
+            return existing_by_id
+        self.daily_runs[run.run_id] = run
+        self.daily_run_key_index[(run.strategy_id, run.binding_id, run.trade_date)] = run.run_id
+        return run
+
+    def get_simulation_daily_run(self, run_id: str) -> SimulationDailyRun:
+        try:
+            return self.daily_runs[run_id]
+        except KeyError as exc:
+            raise DataUnavailableError("simulation daily run does not exist", context={"run_id": run_id}) from exc
+
+    def get_simulation_daily_run_by_key(
+        self,
+        *,
+        strategy_id: str,
+        binding_id: str,
+        trade_date: Any,
+    ) -> SimulationDailyRun | None:
+        run_id = self.daily_run_key_index.get((strategy_id, binding_id, trade_date))
+        return self.daily_runs[run_id] if run_id else None
+
+    def update_simulation_daily_run(
+        self,
+        run_id: str,
+        *,
+        status: SimulationDailyRunStatus | None = None,
+        selection_evidence: DailySelectionEvidence | None = None,
+        execution_plan: ExecutionPlan | None = None,
+        payload_patch: dict[str, Any] | None = None,
+    ) -> SimulationDailyRun:
+        current = self.get_simulation_daily_run(run_id)
+        updated = current.model_copy(
+            update={
+                "status": status or current.status,
+                "selection_evidence_id": selection_evidence.evidence_id if selection_evidence else current.selection_evidence_id,
+                "selection_artifact_hash": selection_evidence.artifact_hash if selection_evidence else current.selection_artifact_hash,
+                "execution_plan_id": execution_plan.plan_id if execution_plan else current.execution_plan_id,
+                "execution_plan_hash": execution_plan.plan_hash if execution_plan else current.execution_plan_hash,
+                "run_payload_json": {**current.run_payload_json, **(payload_patch or {})},
+            }
+        )
+        self.daily_runs[run_id] = updated
+        return updated

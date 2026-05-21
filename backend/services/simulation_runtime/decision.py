@@ -62,6 +62,8 @@ class TargetPositionService:
             signal_snapshot=signal_snapshot,
             runtime_release=runtime_release,
         )
+        if signal_snapshot.valid_no_candidate:
+            return []
         equity = float(total_equity if total_equity is not None else binding.capital_allocation if binding else 0)
         if equity <= 0:
             raise StrategyPackageValidationError(
@@ -256,7 +258,13 @@ class RebalanceIntentService:
         current_positions: dict[str, PositionLot],
         target_positions: list[TargetPosition],
     ) -> RebalanceIntentResult:
-        if not target_positions:
+        if not target_positions and not current_positions:
+            return RebalanceIntentResult(order_intents=[], trading_rule_decisions=[])
+        if not target_positions and current_positions:
+            # Empty daily targets are valid when the strategy must liquidate
+            # existing holdings that dropped out of the authoritative signal.
+            target_positions = []
+        elif not target_positions:
             raise StrategyPackageValidationError(
                 "RebalanceIntentService requires target positions",
                 context={"package_id": package_id, "portfolio_id": portfolio_id, "strategy_id": strategy_id},
@@ -352,11 +360,6 @@ class ExecutionPlanCompiler:
         tail_policy_payload: dict[str, Any] | None = None,
     ) -> ExecutionPlan:
         self._validate_identity(runtime_release=runtime_release, binding=binding, selection_evidence=selection_evidence)
-        if not order_intents:
-            raise StrategyPackageValidationError(
-                "ExecutionPlanCompiler requires at least one shared order intent",
-                context={"release_id": runtime_release.release_id, "binding_id": binding.binding_id},
-            )
         execution_policy = dict(execution_policy_payload or runtime_release.release_config_json.get("execution_policy") or {})
         tail_policy = dict(tail_policy_payload or runtime_release.release_config_json.get("tail_policy") or {})
         self._reject_paper_only_policy(execution_policy)
@@ -371,7 +374,7 @@ class ExecutionPlanCompiler:
                 "ExecutionPlanCompiler requires every intent to reference a TradingRuleDecision",
                 context={"missing_trading_rule_decision_ids": missing},
             )
-        effective_portfolio_id = str(portfolio_id or order_intents[0].portfolio_id or binding.strategy_id).strip()
+        effective_portfolio_id = str(portfolio_id or (order_intents[0].portfolio_id if order_intents else binding.strategy_id)).strip()
         if not effective_portfolio_id:
             raise StrategyPackageValidationError(
                 "ExecutionPlanCompiler requires portfolio_id",
