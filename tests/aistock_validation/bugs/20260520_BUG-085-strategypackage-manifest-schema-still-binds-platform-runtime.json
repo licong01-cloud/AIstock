@@ -6,7 +6,7 @@
   "module": "strategy_package",
   "severity": "P0",
   "risk_area": "strategy_package_alpha_core_boundary",
-  "status": "fixed_pending_review",
+  "status": "fixed",
   "trigger_condition": {
     "scenario": "reported_via_codex_app_strategy_platform_boundary_audit_20260520",
     "boundary_contract": "docs/architecture/strategy_package_platform_boundary_contract_20260520.md",
@@ -199,6 +199,12 @@
       "actor": "codex-app",
       "action": "pull_request_opened",
       "note": "Opened PR #127 for BUG-085 alpha-core manifest boundary fix; branch merged latest origin/main after boundary doc PR #125 landed."
+    },
+    {
+      "timestamp": "2026-05-21T00:00:00+08:00",
+      "actor": "codex-app",
+      "action": "registry_status_sync",
+      "note": "Registry drift sync: GitHub issue #107 is closed after PR merge; replace transitional fixed_pending_review with fixed."
     }
   ],
   "github_pr_number": 127,

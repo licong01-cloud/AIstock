@@ -6,7 +6,7 @@
   "module": "paper_v2",
   "severity": "P1",
   "risk_area": "paper_v2_hmm_runtime_artifact_consistency",
-  "status": "fixed_pending_review",
+  "status": "fixed",
   "trigger_condition": {
     "scenario": "reported_via_mcp",
     "files": [
@@ -109,6 +109,12 @@
       "actor": "codex-app",
       "action": "fixed_pending_review",
       "note": "Implemented shared HMM coefficient coverage helper and explicit coefficients_path propagation for Selection, portfolio creation, run-console day/replay/live/switch, and runtime profile actions. Validation record: tests/aistock_validation/history/paper_v2/20260520_l3_bug-076-hmm-coefficients-path.md; fix commit 60de2e0."
+    },
+    {
+      "timestamp": "2026-05-21T00:00:00+08:00",
+      "actor": "codex-app",
+      "action": "registry_status_sync",
+      "note": "Registry drift sync: GitHub issue #103 is closed after PR merge; replace transitional fixed_pending_review with fixed."
     }
   ],
   "github_issue_number": 103,

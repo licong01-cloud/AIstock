@@ -6,7 +6,7 @@
   "module": "paper_v2",
   "severity": "P1",
   "risk_area": "live_approval_governance",
-  "status": "fixed_pending_review",
+  "status": "fixed",
   "github_issue_number": 110,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/110",
   "trigger_condition": {
@@ -116,6 +116,12 @@
       "actor": "codex-app",
       "action": "merge_refresh_pending_checks",
       "note": "Resolved merge conflicts after origin/main advanced; PR #132 remains the review vehicle. Production runtime not touched."
+    },
+    {
+      "timestamp": "2026-05-21T00:00:00+08:00",
+      "actor": "codex-app",
+      "action": "registry_status_sync",
+      "note": "Registry drift sync: GitHub issue #110 is closed after PR merge; replace transitional fixed_pending_review with fixed."
     }
   ],
   "non_goals": [
