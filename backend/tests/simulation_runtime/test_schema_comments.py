@@ -55,6 +55,25 @@ def test_runtime_release_and_binding_schema_are_commented_in_migration_and_boots
             "created_at",
             "updated_at",
         ],
+        "selection.daily_selection_evidence": [
+            "evidence_id",
+            "target_trade_date",
+            "cutoff_date",
+            "package_id",
+            "manifest_sha256",
+            "release_id",
+            "release_hash",
+            "runtime_profile_version_id",
+            "runtime_profile_hash",
+            "source_type",
+            "data_source",
+            "candidate_count",
+            "excluded_count",
+            "artifact_hash",
+            "evidence_payload_json",
+            "created_at",
+            "created_by",
+        ],
     }
 
     for ddl in (

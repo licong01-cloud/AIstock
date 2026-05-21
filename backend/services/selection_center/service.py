@@ -11,6 +11,8 @@ from backend.services.data_refresh_audit import DataRefreshAuditRepository
 from backend.services.paper_trading_v2.market_data import MinuteDataSource
 from backend.services.paper_trading_v2.market_data import TradeCalendarProvider
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
+from backend.services.simulation_runtime import InMemorySimulationRuntimeRepository
+from backend.services.simulation_runtime.selection import StrategyPackageSelectionService
 from backend.services.strategy_package.metrics_summary import metrics_summary_from_record
 from backend.services.strategy_package.backtest_contract import normalize_runtime_config_with_backtest_contract
 from backend.services.strategy_package.models import PackageStatus
@@ -68,6 +70,7 @@ class SelectionCenterService:
         calendar_provider: TradeCalendarProvider | Any | None = None,
         risk_policy_service: StockRiskPolicyService | Any | None = None,
         package_health_service: SelectionPackageHealthService | Any | None = None,
+        strategy_selection_service: StrategyPackageSelectionService | Any | None = None,
     ) -> None:
         self.package_repository = package_repository or StrategyPackageRepository()
         self.repository = repository or SelectionCenterRepository()
@@ -87,6 +90,22 @@ class SelectionCenterService:
             artifact_repository=getattr(self.runtime, "artifact_repository", None),
             runtime_source_resolver=getattr(self.selection_artifact_service, "runtime_asset_resolver", None),
             hmm_runtime=getattr(self.runtime, "hmm_runtime", None),
+        )
+        selection_evidence_repository = (
+            InMemorySimulationRuntimeRepository()
+            if self.repository.__class__.__name__ == "InMemorySelectionCenterRepository"
+            else None
+        )
+        self.strategy_selection_service = strategy_selection_service or StrategyPackageSelectionService(
+            package_repository=self.package_repository,
+            runtime=self.runtime,
+            tradability_filter=self.tradability_filter,
+            refresh_audit=self.refresh_audit,
+            selection_artifact_service=self.selection_artifact_service,
+            calendar_provider=self.calendar_provider,
+            risk_policy_service=self.risk_policy_service,
+            package_health_service=self.package_health_service,
+            repository=selection_evidence_repository,
         )
 
     def run_single_package(
@@ -114,145 +133,32 @@ class SelectionCenterService:
         data_source: str,
         runtime_config: dict[str, Any] | None = None,
     ) -> SelectionRun:
-        raw_config = dict(runtime_config or {})
-        behavior_context = {
-            "trade_date": trade_date.isoformat(),
-            "data_source": data_source,
-            "mode": mode.value,
-            "path": "selection_center.run_packages",
-        }
-        ensure_runtime_config_version_boundary(
-            raw_config,
-            context=behavior_context,
-            allow_non_trading_preview=True,
-        )
-        if is_non_trading_runtime_config(raw_config):
-            raw_config = mark_non_trading_preview_runtime_config(
-                raw_config,
-                reason="selection center non-trading preview",
-            )
-        else:
-            raw_config = attach_default_runtime_profile_binding(raw_config)
-        config = normalize_selection_runtime_config(raw_config)
-        validate_runtime_profile_binding(
-            config,
-            context=behavior_context,
-            require_trade_enabled=not is_non_trading_runtime_config(config),
-        )
-        config = self._apply_point_in_time_selection_config(config, trade_date=trade_date)
-        if not package_ids:
-            raise StrategyPackageValidationError("selection run requires package_ids")
-        if len(set(package_ids)) != len(package_ids):
-            raise StrategyPackageValidationError("selection run package_ids must be unique")
-        if mode == SelectionMode.SINGLE_PACKAGE and len(package_ids) != 1:
-            raise StrategyPackageValidationError("single package selection requires exactly one package")
-        if mode in {SelectionMode.INTERSECTION, SelectionMode.UNION, SelectionMode.WEIGHTED_FUSION} and len(package_ids) < 2:
-            raise StrategyPackageValidationError("package aggregation requires at least two packages")
-        weights = self._package_weights(config, package_ids) if mode == SelectionMode.WEIGHTED_FUSION else None
-        records_by_id, package_configs, package_health = self._prepare_package_runtime_configs(
-            package_ids=package_ids,
-            config=config,
-            trade_date=trade_date,
-            data_source=data_source,
-        )
-        if package_configs:
-            config["package_runtime_configs"] = package_configs
-        if package_health:
-            config["package_health"] = package_health
-
         run = SelectionRun(
             mode=mode,
             trade_date=trade_date,
             data_source=data_source,
             package_ids=package_ids,
-            runtime_config=config,
+            runtime_config=dict(runtime_config or {}),
         )
         self.repository.create_run(run)
         try:
-            global_profile = parse_selection_runtime_profile(config)
-            self._require_data_ready(trade_date=trade_date, runtime_config=config)
-            package_results: dict[str, list[SelectionCandidate]] = {}
-            excluded_results = {}
-            manifest_sha: dict[str, str] = {}
-            for package_id in package_ids:
-                record = records_by_id[package_id]
-                manifest = record.current_manifest()
-                package_config = package_configs[package_id]
-                package_profile = parse_selection_runtime_profile(package_config)
-                self._ensure_authoritative_selection_artifact(
-                    record=record,
-                    trade_date=trade_date,
-                    data_source=data_source,
-                    runtime_config=package_config,
-                )
-                snapshot = self.runtime.build_signal_snapshot(
-                    manifest=manifest,
-                    trade_date=trade_date,
-                    data_source=data_source,
-                    runtime_config=package_config,
-                )
-                if snapshot.valid_no_candidate:
-                    package_results[package_id] = []
-                    excluded_results[package_id] = []
-                else:
-                    top_k = self._top_k_for_package(manifest, package_profile, global_profile, package_config)
-                    risk_decisions = self.risk_policy_service.evaluate(
-                        symbols=[item.symbol for item in snapshot.candidates],
-                        trade_date=trade_date,
-                        profile=package_profile.risk_policy,
-                    )
-                    risk_adjusted, risk_excluded = self.risk_policy_service.apply_to_candidates(
-                        candidates=snapshot.candidates,
-                        decisions=risk_decisions,
-                        trade_date=trade_date,
-                        top_k=top_k,
-                        package_id=manifest.package_id,
-                        manifest_sha256=snapshot.manifest_sha256,
-                    )
-                    if not (
-                        package_profile.tradability.exclude_suspended
-                        or package_profile.industry_blacklist
-                    ):
-                        package_results[package_id] = risk_adjusted[:top_k]
-                        excluded_results[package_id] = risk_excluded
-                        manifest_sha[package_id] = snapshot.manifest_sha256
-                        continue
-                    tradable, excluded = self.tradability_filter.filter_candidates(
-                        candidates=risk_adjusted,
-                        trade_date=trade_date,
-                        top_k=top_k,
-                        package_id=manifest.package_id,
-                        manifest_sha256=snapshot.manifest_sha256,
-                        enabled=package_profile.tradability.exclude_suspended,
-                        industry_blacklist=package_profile.industry_blacklist,
-                    )
-                    package_results[package_id] = tradable
-                    excluded_results[package_id] = [*risk_excluded, *excluded]
-                manifest_sha[package_id] = snapshot.manifest_sha256
-            aggregate = self._aggregate(mode=mode, package_results=package_results, package_weights=weights)
-            if not aggregate:
-                if config.get("valid_no_candidate"):
-                    completed = run.model_copy(
-                        update={
-                            "package_results": package_results,
-                            "aggregate_results": [],
-                            "excluded_results": excluded_results,
-                            "manifest_sha256_by_package": manifest_sha,
-                            "valid_no_candidate": True,
-                            "no_candidate_reason": str(config.get("no_candidate_reason") or "selection aggregation has no candidates"),
-                        }
-                    )
-                    return self.repository.complete_run(completed)
-                raise StrategyPackageValidationError(
-                    "selection aggregation produced no candidates",
-                    context={"mode": mode.value, "package_ids": package_ids},
-                )
+            selection = self.strategy_selection_service.run_selection(
+                package_ids=package_ids,
+                mode=mode,
+                trade_date=trade_date,
+                data_source=data_source,
+                runtime_config=runtime_config or {},
+                created_by="selection_center",
+            )
             completed = run.model_copy(
                 update={
-                    "package_results": package_results,
-                    "aggregate_results": aggregate,
-                    "excluded_results": excluded_results,
-                    "manifest_sha256_by_package": manifest_sha,
+                    "runtime_config": selection.runtime_config,
+                    "package_results": selection.package_results,
+                    "aggregate_results": selection.aggregate_results,
+                    "excluded_results": selection.excluded_results,
+                    "manifest_sha256_by_package": selection.manifest_sha256_by_package,
+                    "valid_no_candidate": selection.valid_no_candidate,
+                    "no_candidate_reason": selection.no_candidate_reason,
                 }
             )
             return self.repository.complete_run(completed)

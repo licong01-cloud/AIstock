@@ -10,6 +10,7 @@ from backend.db.pg_pool import get_conn
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError
 
 from .models import (
+    DailySelectionEvidence,
     RuntimeReleaseValidationState,
     SimulationBindingApprovalState,
     SimulationBrokerBackend,
@@ -192,6 +193,69 @@ class SimulationRuntimeRepository:
         )
         return [self._binding_from_row(row) for row in rows]
 
+    def save_daily_selection_evidence(self, evidence: DailySelectionEvidence) -> DailySelectionEvidence:
+        existing_by_hash = self.get_daily_selection_evidence_by_hash(evidence.artifact_hash)
+        if existing_by_hash is not None:
+            return existing_by_hash
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                try:
+                    cur.execute(
+                        """
+                        INSERT INTO selection.daily_selection_evidence (
+                            evidence_id, target_trade_date, cutoff_date, package_id, manifest_sha256,
+                            release_id, release_hash, runtime_profile_version_id, runtime_profile_hash,
+                            source_type, data_source, candidate_count, excluded_count, artifact_hash,
+                            evidence_payload_json, created_at, created_by
+                        ) VALUES (
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        )
+                        """,
+                        (
+                            evidence.evidence_id,
+                            evidence.target_trade_date,
+                            evidence.cutoff_date,
+                            evidence.package_id,
+                            evidence.manifest_sha256,
+                            evidence.release_id,
+                            evidence.release_hash,
+                            evidence.runtime_profile_version_id,
+                            evidence.runtime_profile_hash,
+                            evidence.source_type,
+                            evidence.data_source,
+                            evidence.candidate_count,
+                            evidence.excluded_count,
+                            evidence.artifact_hash,
+                            psycopg2.extras.Json(evidence.evidence_payload_json),
+                            evidence.created_at,
+                            evidence.created_by,
+                        ),
+                    )
+                except psycopg2.IntegrityError as exc:
+                    raise InvalidStateTransitionError(
+                        "daily selection evidence conflicts with an existing immutable evidence row",
+                        context={"evidence_id": evidence.evidence_id, "artifact_hash": evidence.artifact_hash},
+                    ) from exc
+        return evidence
+
+    def get_daily_selection_evidence(self, evidence_id: str) -> DailySelectionEvidence:
+        rows = self._fetch_rows(
+            "SELECT * FROM selection.daily_selection_evidence WHERE evidence_id = %s",
+            (evidence_id,),
+        )
+        if not rows:
+            raise DataUnavailableError("daily selection evidence does not exist", context={"evidence_id": evidence_id})
+        return self._evidence_from_row(rows[0])
+
+    def get_daily_selection_evidence_by_hash(self, artifact_hash: str) -> DailySelectionEvidence | None:
+        if not artifact_hash:
+            return None
+        rows = self._fetch_rows(
+            "SELECT * FROM selection.daily_selection_evidence WHERE artifact_hash = %s",
+            (artifact_hash,),
+        )
+        return self._evidence_from_row(rows[0]) if rows else None
+
     def _fetch_rows(self, sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -226,6 +290,28 @@ class SimulationRuntimeRepository:
         )
 
     @staticmethod
+    def _evidence_from_row(row: dict[str, Any]) -> DailySelectionEvidence:
+        return DailySelectionEvidence(
+            evidence_id=row["evidence_id"],
+            target_trade_date=row["target_trade_date"],
+            cutoff_date=row.get("cutoff_date"),
+            package_id=row["package_id"],
+            manifest_sha256=row["manifest_sha256"],
+            release_id=row.get("release_id"),
+            release_hash=row.get("release_hash"),
+            runtime_profile_version_id=row["runtime_profile_version_id"],
+            runtime_profile_hash=row["runtime_profile_hash"],
+            source_type=row["source_type"],
+            data_source=row["data_source"],
+            candidate_count=int(row["candidate_count"]),
+            excluded_count=int(row["excluded_count"]),
+            artifact_hash=row["artifact_hash"],
+            evidence_payload_json=row.get("evidence_payload_json") or {},
+            created_at=row["created_at"],
+            created_by=row.get("created_by"),
+        )
+
+    @staticmethod
     def _binding_from_row(row: dict[str, Any]) -> SimulationReleaseBinding:
         return SimulationReleaseBinding(
             binding_id=row["binding_id"],
@@ -257,6 +343,8 @@ class InMemorySimulationRuntimeRepository:
         self.release_hash_index: dict[str, str] = {}
         self.bindings: dict[str, SimulationReleaseBinding] = {}
         self.binding_hash_index: dict[str, str] = {}
+        self.daily_selection_evidences: dict[str, DailySelectionEvidence] = {}
+        self.daily_selection_hash_index: dict[str, str] = {}
 
     def save_strategy_runtime_release(self, release: StrategyRuntimeRelease) -> StrategyRuntimeRelease:
         if release.release_hash in self.release_hash_index:
@@ -323,3 +411,20 @@ class InMemorySimulationRuntimeRepository:
             rows = [row for row in rows if row.release_id == release_id]
         rows.sort(key=lambda item: (item.created_at, item.binding_id), reverse=True)
         return rows[:limit]
+
+    def save_daily_selection_evidence(self, evidence: DailySelectionEvidence) -> DailySelectionEvidence:
+        if evidence.artifact_hash in self.daily_selection_hash_index:
+            return self.daily_selection_evidences[self.daily_selection_hash_index[evidence.artifact_hash]]
+        self.daily_selection_evidences[evidence.evidence_id] = evidence
+        self.daily_selection_hash_index[evidence.artifact_hash] = evidence.evidence_id
+        return evidence
+
+    def get_daily_selection_evidence(self, evidence_id: str) -> DailySelectionEvidence:
+        try:
+            return self.daily_selection_evidences[evidence_id]
+        except KeyError as exc:
+            raise DataUnavailableError("daily selection evidence does not exist", context={"evidence_id": evidence_id}) from exc
+
+    def get_daily_selection_evidence_by_hash(self, artifact_hash: str) -> DailySelectionEvidence | None:
+        evidence_id = self.daily_selection_hash_index.get(artifact_hash)
+        return self.daily_selection_evidences[evidence_id] if evidence_id else None
