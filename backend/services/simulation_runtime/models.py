@@ -6,12 +6,13 @@ import hashlib
 import json
 from datetime import UTC, date, datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from backend.services.trading_core.errors import StrategyPackageValidationError
+from backend.services.trading_core.models import OrderSide
 
 
 DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID = "platform_default_daily_strategy_profile_v1"
@@ -392,4 +393,175 @@ class DailySelectionEvidence(BaseModel):
         expected_id = f"dse_{digest[:16]}"
         if self.evidence_id != expected_id:
             raise ValueError("evidence_id does not match artifact_hash")
+        return self
+
+
+class TradingRuleDecision(BaseModel):
+    """Single authoritative trading-rule decision for one intended order."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    decision_id: str
+    symbol: str
+    market_board: str
+    side: OrderSide
+    requested_quantity: int = Field(ge=0)
+    legal_quantity: int = Field(ge=0)
+    lot_rule: dict[str, Any]
+    price_limit_rule: dict[str, Any] = Field(default_factory=dict)
+    tplus1_available_quantity: int | None = Field(default=None, ge=0)
+    decision: Literal["EMIT", "ADJUST", "REJECT"]
+    reason_code: str
+    source_version: str
+    decision_hash: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @field_validator("decision_id", "symbol", "market_board", "reason_code", "source_version", "decision_hash")
+    @classmethod
+    def _required_text(cls, value: str) -> str:
+        value = str(value or "").strip()
+        if not value:
+            raise ValueError("field is required")
+        return value
+
+    @model_validator(mode="after")
+    def _decision_id_matches_payload(self) -> "TradingRuleDecision":
+        payload = self.canonical_payload()
+        digest = canonical_json_sha256(payload)
+        if self.decision_hash != digest:
+            raise ValueError("decision_hash does not match canonical payload")
+        expected_id = f"trd_{digest[:16]}"
+        if self.decision_id != expected_id:
+            raise ValueError("decision_id does not match decision_hash")
+        return self
+
+    def canonical_payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": "trading_rule_decision_v1",
+            "symbol": self.symbol,
+            "market_board": self.market_board,
+            "side": self.side.value,
+            "requested_quantity": self.requested_quantity,
+            "legal_quantity": self.legal_quantity,
+            "lot_rule": self.lot_rule,
+            "price_limit_rule": self.price_limit_rule,
+            "tplus1_available_quantity": self.tplus1_available_quantity,
+            "decision": self.decision,
+            "reason_code": self.reason_code,
+            "source_version": self.source_version,
+        }
+
+
+class ExecutionPlanIntent(BaseModel):
+    """Broker-neutral order instruction compiled from a shared rebalance intent."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    intent_id: str
+    plan_id: str
+    strategy_id: str
+    portfolio_id: str
+    package_id: str
+    release_id: str
+    release_hash: str
+    binding_id: str
+    binding_hash: str
+    symbol: str
+    side: OrderSide
+    target_quantity: int = Field(ge=0)
+    delta_quantity: int
+    order_quantity: int = Field(gt=0)
+    target_weight: float | None = Field(default=None, gt=0)
+    current_quantity: int = Field(ge=0)
+    current_available_quantity: int | None = Field(default=None, ge=0)
+    rebalance_reason: str
+    trading_rule_decision_id: str
+    schedule_window: dict[str, Any]
+    price_policy: dict[str, Any]
+    risk_context: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator(
+        "intent_id",
+        "plan_id",
+        "strategy_id",
+        "portfolio_id",
+        "package_id",
+        "release_id",
+        "release_hash",
+        "binding_id",
+        "binding_hash",
+        "symbol",
+        "rebalance_reason",
+        "trading_rule_decision_id",
+    )
+    @classmethod
+    def _required_text(cls, value: str) -> str:
+        value = str(value or "").strip()
+        if not value:
+            raise ValueError("field is required")
+        return value
+
+
+class ExecutionPlan(BaseModel):
+    """Shared execution plan consumed by LocalSim and MiniQMT broker bridges."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    plan_id: str
+    strategy_id: str
+    portfolio_id: str
+    package_id: str
+    release_id: str
+    release_hash: str
+    binding_id: str
+    binding_hash: str
+    selection_evidence_id: str
+    selection_evidence_hash: str
+    target_trade_date: date
+    execution_policy_version_id: str
+    execution_policy_sha256: str
+    tail_policy_version_id: str
+    tail_policy_sha256: str
+    intents: list[ExecutionPlanIntent]
+    trading_rule_decisions: list[TradingRuleDecision]
+    plan_payload_json: dict[str, Any]
+    plan_hash: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @field_validator(
+        "plan_id",
+        "strategy_id",
+        "portfolio_id",
+        "package_id",
+        "release_id",
+        "release_hash",
+        "binding_id",
+        "binding_hash",
+        "selection_evidence_id",
+        "selection_evidence_hash",
+        "execution_policy_version_id",
+        "execution_policy_sha256",
+        "tail_policy_version_id",
+        "tail_policy_sha256",
+        "plan_hash",
+    )
+    @classmethod
+    def _required_text(cls, value: str) -> str:
+        value = str(value or "").strip()
+        if not value:
+            raise ValueError("field is required")
+        return value
+
+    @model_validator(mode="after")
+    def _plan_hash_matches_payload(self) -> "ExecutionPlan":
+        digest = canonical_json_sha256(self.plan_payload_json)
+        if self.plan_hash != digest:
+            raise ValueError("plan_hash does not match plan_payload_json")
+        expected_id = f"plan_{digest[:16]}"
+        if self.plan_id != expected_id:
+            raise ValueError("plan_id does not match plan_hash")
+        for intent in self.intents:
+            if intent.plan_id != self.plan_id:
+                raise ValueError("execution plan intent plan_id does not match plan_id")
         return self
