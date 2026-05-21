@@ -8,7 +8,7 @@ This file is for Codex only.
 - Use docs/codex_project_memory.md as the Codex project memory for this repository.
 - Before architecture analysis, backend changes, frontend changes, data pipeline changes, or trading-related changes, read docs/codex_project_memory.md first.
 - Keep future Codex-specific notes in docs/codex_project_memory.md, not in AGENTS.md.
-- Before reporting a design-driven feature as complete, requesting merge, or closing an issue, perform the DESIGN-COMPLIANCE-001 item-by-item review from `docs/standards/aistock_development_standard_v1.3_20260520.md`; do not deliver unapproved simplified, subset, POC, placeholder, mock-only, or partial implementations as complete.
+- Before reporting a design-driven feature as complete, requesting merge, or closing an issue, perform the DESIGN-COMPLIANCE-001 item-by-item review from `docs/standards/aistock_development_standard_v1.4_20260521.md`; do not deliver unapproved simplified, subset, POC, placeholder, mock-only, or partial implementations as complete.
 
 ## Project Snapshot
 
