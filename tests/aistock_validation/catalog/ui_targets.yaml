@@ -504,6 +504,30 @@ targets:
   - Inspect research artifacts, external links, and verdict state
   - Validate Research Pipeline read-only workflow
   coverage_status: partial
+- route_id: research.assistant
+  href: /research-assistant
+  label: Research Assistant Console
+  nav_group: Validation Pipeline
+  primary_module: research_assistant
+  impact_modules:
+  - research_pipeline
+  - validation.center
+  - qe.core
+  - factor_library
+  - rdagent
+  risk_level: high
+  required_test_plans:
+  - l0
+  - research_assistant_backend
+  - research_assistant_mcp_contract
+  recommended_test_plans:
+  - research_assistant_ui
+  business_operations:
+  - Open Research Assistant Console
+  - Review task ledger, memory ledger, MCP tools, skills, approvals, reports and model routing
+  - Validate candidate Issue queue without formal GitHub creation
+  - Validate MCP preflight before high-risk execution
+  coverage_status: partial
 - route_id: system.config
   href: /config
   label: Environment Config

@@ -1,0 +1,133 @@
+from __future__ import annotations
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from backend.routers import research_assistant
+from backend.services.research_assistant.repository import InMemoryResearchAssistantRepository
+from backend.services.research_assistant.service import ASSISTANT_APPROVAL_CONFIRM, ResearchAssistantService
+
+
+def _client() -> TestClient:
+    repository = InMemoryResearchAssistantRepository()
+    service = ResearchAssistantService(repository=repository)
+    service.seed_catalogs()
+    app = FastAPI()
+    app.include_router(research_assistant.router, prefix="/api/v1")
+    app.dependency_overrides[research_assistant.get_research_assistant_service] = lambda: service
+    return TestClient(app)
+
+
+def test_research_assistant_api_phase1_smoke() -> None:
+    client = _client()
+
+    assert client.get("/api/v1/research-assistant/health").json()["data"]["status"] == "ok"
+    assert client.get("/api/v1/research-assistant/overview").status_code == 200
+
+    task_resp = client.post("/api/v1/research-assistant/tasks", json={"title": "API task", "idempotency_key": "api-idem"}).json()
+    task_id = task_resp["data"]["task_id"]
+    assert task_resp["data"]["status"] == "planned"
+    assert client.post(f"/api/v1/research-assistant/tasks/{task_id}/events", json={"event_type": "mcp_started", "message": "running"}).status_code == 200
+    detail = client.get(f"/api/v1/research-assistant/tasks/{task_id}").json()["data"]
+    assert detail["task"]["status"] == "running"
+    assert detail["events"]
+
+    memory_resp = client.post(
+        "/api/v1/research-assistant/memories",
+        json={"memory_type": "core", "subject_key": "api.memory", "title": "API Memory", "content_text": "fact", "source_ref": "api-test"},
+    ).json()
+    memory_id = memory_resp["data"]["memory_id"]
+    mem_approval = client.post(
+        "/api/v1/research-assistant/approvals",
+        json={
+            "approval_type": "memory.approve",
+            "plan_digest": "digest-memory-api",
+            "summary": "approve api.memory",
+            "required_confirmation_text": ASSISTANT_APPROVAL_CONFIRM,
+        },
+    ).json()["data"]
+    assert client.post(f"/api/v1/research-assistant/memories/{memory_id}/status", json={"status": "approved", "approved_by": "pytest"}).status_code == 400
+    assert client.post(
+        f"/api/v1/research-assistant/memories/{memory_id}/status",
+        json={"status": "approved", "approved_by": "pytest", "approval_id": mem_approval["approval_id"], "confirmation_text": ASSISTANT_APPROVAL_CONFIRM},
+    ).status_code == 200
+    context_resp = client.post("/api/v1/research-assistant/context-packs", json={"task_id": task_id, "token_budget": 4000}).json()
+    assert context_resp["data"]["context_pack_id"].startswith("ctx_")
+
+    preflight_resp = client.post(
+        "/api/v1/research-assistant/mcp/preflight",
+        json={"task_id": task_id, "server_key": "research-assistant", "tool_name": "assistant_create_issue_candidate", "payload_json": {"title": "bug"}},
+    ).json()
+    assert preflight_resp["data"]["approval_required"] is False
+    assert preflight_resp["data"]["passed"] is False
+    assert preflight_resp["data"]["failed_checks"][0]["check"] == "input_schema"
+    assert "github_formal_issue_blocked" in preflight_resp["data"]["preflight_checks"]
+
+    approval_resp = client.post(
+        "/api/v1/research-assistant/approvals",
+        json={
+            "task_id": task_id,
+            "approval_type": "mcp.high_risk",
+            "plan_digest": "digest-abcdef",
+            "summary": "approve",
+            "required_confirmation_text": ASSISTANT_APPROVAL_CONFIRM,
+        },
+    ).json()
+    approval_id = approval_resp["data"]["approval_id"]
+    assert client.post(f"/api/v1/research-assistant/approvals/{approval_id}/approve", json={"confirmation_text": "WRONG"}).status_code == 400
+    assert client.post(f"/api/v1/research-assistant/approvals/{approval_id}/approve", json={"confirmation_text": ASSISTANT_APPROVAL_CONFIRM}).json()["data"]["status"] == "approved"
+
+    issue_resp = client.post(
+        "/api/v1/research-assistant/issue-candidates",
+        json={"title": "Candidate", "severity": "P1", "problem_statement": "review first"},
+    ).json()
+    assert issue_resp["data"]["status"] == "needs_review"
+    assert issue_resp["data"]["github_sync_status"] == "not_requested"
+
+    assert client.get("/api/v1/research-assistant/skills").json()["data"]["total"] >= 5
+    assert client.get("/api/v1/research-assistant/mcp/tools").json()["data"]["total"] >= 6
+    assert client.get("/api/v1/research-assistant/models/profiles").json()["data"]["total"] >= 3
+    model_route = client.post("/api/v1/research-assistant/models/route", json={"role": "cheap_worker", "risk_level": "low"}).json()["data"]
+    assert model_route["route_status"] == "fallback_selected"
+    assert model_route["model_profile"]["status"] == "enabled"
+    assert client.post("/api/v1/research-assistant/temp-memories", json={"task_id": task_id, "content_text": "progress"}).status_code == 200
+    assert client.get("/api/v1/research-assistant/notifications/summary").json()["data"]["unread"] >= 1
+    entity_a = client.post("/api/v1/research-assistant/graph/entities", json={"entity_type": "module", "entity_key": "api.a", "title": "API A", "source_refs": ["doc#a"]}).json()["data"]
+    entity_b = client.post("/api/v1/research-assistant/graph/entities", json={"entity_type": "module", "entity_key": "api.b", "title": "API B", "source_refs": ["doc#b"]}).json()["data"]
+    rel = client.post(
+        "/api/v1/research-assistant/graph/relations",
+        json={"source_entity_id": entity_a["entity_id"], "target_entity_id": entity_b["entity_id"], "relation_type": "depends_on", "evidence_refs": ["doc#rel"]},
+    ).json()["data"]
+    assert client.get(f"/api/v1/research-assistant/graph/relations/{rel['relation_id']}").json()["data"]["relation_type"] == "depends_on"
+    path = client.post("/api/v1/research-assistant/graph/evolution-paths", json={"stream_id": "api", "objective": "test", "evidence_refs": ["doc#path"]}).json()["data"]
+    assert path["path_id"].startswith("evopath_")
+
+    assert client.post("/api/v1/research-assistant/skills/qe-evolution-diagnostics/disable").json()["data"]["status"] == "blocked"
+    assert client.post("/api/v1/research-assistant/skills/qe-evolution-diagnostics/enable").json()["data"]["status"] == "approved"
+    skill_event = client.post("/api/v1/research-assistant/skills/usage-events", json={"skill_key": "qe-evolution-diagnostics", "task_id": task_id}).json()["data"]
+    assert skill_event["skill_event_id"].startswith("skillev_")
+
+    session = client.post("/api/v1/research-assistant/external-agent/sessions", json={"agent_type": "codex", "agent_name": "api-worker"}).json()["data"]
+    external_event = client.post("/api/v1/research-assistant/external-agent/events", json={"session_id": session["session_id"], "event_type": "evidence_written", "evidence_refs": ["doc#e"]}).json()["data"]
+    assert external_event["external_event_id"].startswith("extev_")
+
+    trace = client.post("/api/v1/research-assistant/trace-events", json={"task_id": task_id, "event_type": "mcp", "component": "api", "status": "ok"}).json()["data"]
+    assert trace["trace_id"].startswith("trace_")
+    assert client.get("/api/v1/research-assistant/trace-events", params={"task_id": task_id}).json()["data"]["total"] >= 1
+
+    dry_run = client.post("/api/v1/research-assistant/workbench/dry-run-execute", json={"task_id": task_id, "server_key": "research-assistant", "tool_name": "assistant_create_task", "payload_json": {"title": "x"}}).json()["data"]
+    assert dry_run["tool_result"]["executed"] is False
+    assert client.get("/api/v1/research-assistant/mcp/tool-events", params={"task_id": task_id}).json()["data"]["total"] >= 1
+
+    sync = client.post(f"/api/v1/research-assistant/issue-candidates/{issue_resp['data']['candidate_id']}/github-sync", json={"mode": "formal"}).json()["data"]
+    assert sync["github_sync_status"] == "approval_required"
+    assert sync["github_sync_json"]["direct_github_create_performed"] is False
+
+    assert client.get("/api/v1/research-assistant/validation-discovery/summary").status_code == 200
+
+
+def test_research_assistant_api_errors_are_explicit() -> None:
+    client = _client()
+
+    assert client.get("/api/v1/research-assistant/tasks/rat_missing").status_code == 404
+    assert client.post("/api/v1/research-assistant/temp-memories", json={"content_text": "missing scope"}).status_code == 400

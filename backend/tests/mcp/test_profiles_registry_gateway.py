@@ -66,6 +66,8 @@ def _registry_tool_counts(registry: ModuleRegistry) -> dict[str, int]:
 
 def test_research_profile_is_only_current_module() -> None:
     assert resolve_modules(profile="research") == ["research"]
+    assert resolve_modules(profile="research_assistant") == ["research_assistant"]
+    assert resolve_modules(profile="research_with_assistant") == ["research", "research_assistant"]
 
 
 @pytest.mark.parametrize("profile", ["full", "operations", "research_with_qe", "paper_v2"])
@@ -140,6 +142,19 @@ def test_gateway_loads_phase2_research_tools() -> None:
 
     assert registry.tool_count("research") == 16
     assert registry.total_tool_count() == 16
+
+
+def test_gateway_loads_research_assistant_tools() -> None:
+    from backend.mcp import gateway
+
+    _mcp, registry = gateway.create_gateway(
+        profile="research_assistant",
+        base_url="http://127.0.0.1:8001/api/v1",
+        env_name="test",
+    )
+
+    assert registry.tool_count("research_assistant") == 10
+    assert registry.total_tool_count() == 10
 
 
 def test_gateway_rejects_banned_future_profile_before_loading_modules() -> None:
