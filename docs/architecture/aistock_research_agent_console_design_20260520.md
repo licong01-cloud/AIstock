@@ -1,408 +1,148 @@
-# AIstock 研究与实验综合助理控制台设计方案
+﻿# AIstock 研究与实验综合助理控制台设计方案
 
 > 日期：2026-05-21
-> 类型：详细设计方案 v2
-> 状态：设计稿，等待用户和 Claude Code 审核；本文档只定义方案，不实现代码
+> 类型：详细设计方案 v4
+> 状态：正式实施设计稿；本文档定义功能边界、阶段目标和开发验收矩阵，不实现代码
 > 分支：`docs/research-agent-console-design-20260520`
 > Worktree：`F:\Dev\AIstock_worktrees\research-agent-console-design-20260520`
-> 范围：研究与实验综合助理、长期记忆核心架构、MCP 执行工作台、人工/对话确认、多窗口并行研究、多模型可替换、在线搜索、语音能力预留
+> 范围：研究与实验综合助理、原生长期记忆、轻量知识图谱、MCP 执行工作台、本地 Skill Catalog、Validation/Pipeline Discovery Stream、External Agent Connector、多模型路由、UI 页面模板、阶段实施目标和开发验收矩阵
 > 非目标：不让该助理控制鼠标键盘，不让该助理编程、改代码、提交代码、合入 main、重启生产服务、绕过 GitHub Issue 审批或执行实盘交易
 
 ---
 
 ## 1. 设计结论
 
-AIstock 应建设一个 **研究与实验综合助理控制台**，其核心形态不是“浏览器自动点击助手”，而是：
+AIstock 应建设一个 **研究与实验综合助理控制台**。它不是浏览器点击助手，也不是独立于 AIstock 的另一个 Agent 系统，而是：
 
-> 对话式研究助理 + 长期记忆中枢 + MCP/API 执行工作台 + 实时任务进展展示 + 人工/对话确认门禁 + 多窗口并行研究调度。
+> 对话式研究助理 + 原生长期记忆事实源 + MCP/API 执行工作台 + 本地 Skill Catalog + 审批门禁 + 任务/实验/Issue/验证全链路记忆 + 可扩展 UI 控制台。
 
-用户的新思路更加适合 AIstock：
+核心结论：
 
-1. **所有业务操作优先通过 MCP/API 执行**，不让智能体控制鼠标键盘。
-2. **UI 只承担实时进度、配置预览、报告、审批和深链跳转**，不要求 Agent 识别页面和点击按钮。
-3. **长期记忆是核心架构能力**，必须入库、可索引、可审计、可迁移、可替换模型，不依赖某个 LLM 的上下文窗口。
-4. **多屏幕/多窗口并行是目标能力**，HMM 演进、QE 实验演进、因子研发、事件处理演进可以在不同窗口同步推进，由同一个研究助理统一调度、汇总和汇报。
-5. **Agent 可以执行测试、验证、实验草稿、dry-run、报告和候选 Issue**，但正式 Issue 入库、长时间实验、生产敏感写入仍需用户或 Codex 确认。
-6. **开源工具应作为可接入、可复用、可借鉴的组件库**，不替换 AIstock 原生主控台。AIstock 的领域任务账本、实验谱系、审批策略、GitHub 同步规则必须由 AIstock 自己掌握。
+1. **所有业务操作优先通过 MCP/API 执行**，不控制鼠标键盘，不做页面识别式自动点击。
+2. **长期记忆不是 RAG**。RAG/向量检索只能辅助召回，不能作为事实源、规则源、审批源或任务状态源。
+3. **长期记忆核心必须由 AIstock 原生自研**。Mem0、Graphiti、LangMem、Letta 等只能作为后续 adapter/PoC/增强能力，不替代 AIstock 原生事实源。
+4. **Phase 1 不引入图数据库**。轻量知识图谱先用 AIstock 原生关系表实现；Graphiti/Neo4j/FalkorDB/Kuzu 只作为后续增强候选。
+5. **流水线 AI Agent 不再单独设计**。并入研究助理，作为 `Validation / Pipeline Discovery Stream`。
+6. **Codex / Claude Code 可以接入助理**，甚至可作为外部主模型，但必须通过 External Agent Connector、MCP、审批、权限和审计，不能绕过风险操作门禁。
+7. **多模型路由必须支持成本控制**。国内模型如 DeepSeek、GLM、Qwen、Kimi 可作为 first-class provider；低价模型可写 task-scoped 临时记忆，由主模型审核后提升为长期记忆。
+8. **Skill Phase 1 只做本地 Skill Catalog**。不做公共市场、远程安装、多租户、评分发布；未来公共 skill 只能人工筛选、审查、版本锁定后本地导入。
+9. **UI 采用 AIstock Console Template**。保留现有 AIstock 左侧导航，研究助理内部使用顶部功能导航、卡片、表格、时间线、抽屉和审批工作台，避免未来驾驶舱扩展时重构。
+10. **允许分阶段实施，但禁止低完整度交付**。每个纳入阶段的功能都必须按设计完整实现、可验收、可扩展，不能用静态占位、脚本替代或简化版冒充完成。
 
 ---
 
-## 2. 新版用户需求归纳
+## 2. 用户需求归纳
 
 | 需求 | 设计结论 |
 |---|---|
-| 一个窗口和智能体交流 | 新增 `/research-assistant/chat` 对话入口，所有任务从对话或任务模板发起 |
-| 不控制鼠标键盘 | 废弃默认“UI 点击执行”路线，改为 MCP/API 执行为主 |
-| 能看到实时进展 | 建立 `agent_task_events` 事件流，前端实时展示 MCP 调用、状态、日志、产物 |
-| 创建 QE 10 loop 实验 | Agent 通过 MCP 生成模板草稿、校验、展示配置、等待确认，再创建/物化/执行 |
-| 可对话修改配置 | 每次修改生成配置 diff、重新 preflight、保留配置版本 |
-| 确认后执行 | 第一阶段 UI 确认；第二阶段支持对话确认，保存确认原文和 plan digest |
-| 长期记忆入库 | 建设 AIstock Memory Backbone，按类型、作用域、时间、来源、置信度、审批状态索引 |
-| 模型可替换 | 记忆不绑定 LLM，上下文包由 Memory Router 动态装配，DeepSeek/GLM/OpenAI/本地模型可替换 |
-| 随时记住用户要求 | 支持 `remember this` 类记忆写入；关键偏好和流程规则需审批后成为核心记忆 |
-| 记录所有研究进展 | 每个 Research Stream 和 Task 自动写 episodic/task-state memory |
-| 多屏幕多窗口 | 设计 `assistant_windows` / `workspace_sessions`，多个窗口共享同一任务账本和事件流 |
-| 并行长期任务 | HMM、QE、因子、事件等 Research Streams 可并行，受资源预算和审批控制 |
-| 支持在线搜索 | 搜索结果落证据表，不直接写核心记忆；重要结论需审核 |
-| 让 Claude Code 审核方案 | 文末提供审核重点和风险清单 |
+| 一个窗口和智能体交流 | 新增 `/research-assistant/chat` 主对话入口；其他窗口只展示状态 |
+| 不控制鼠标键盘 | 所有业务动作走 MCP/API；UI 只做展示、确认和深链 |
+| 看到实时进展 | 建立 `agent_task_events`，用 SSE/WebSocket 展示任务和 MCP 调用进展 |
+| 创建 QE 多 loop 实验 | 助理生成模板草稿、preflight、配置 diff、审批后调用 MCP 执行 |
+| 可讨论和修改配置 | 每次修改生成 config version 和 diff，旧审批自动失效 |
+| 确认后执行 | Phase 1 UI 审批；Phase 2 支持对话确认并绑定 plan digest |
+| 长期记忆准确可靠 | 结构化 Memory Ledger 为事实源，RAG 仅辅助召回 |
+| 记录所有研究进展 | 每个 Research Stream、Task、Experiment、Issue、Validation run 都写入任务账本和记忆 |
+| 流水线 AI 探测 | 并入 `Validation / Pipeline Discovery Stream`，不另建独立 Agent |
+| Codex / Claude Code 接入 | 通过 External Agent Connector 受控接入，可做外部主模型但不可越权 |
+| 低价模型降成本 | 多模型路由；低价模型做摘要、分类、重复任务，并写临时记忆 |
+| 支持国内模型 | DeepSeek、GLM、Qwen、Kimi 等作为可配置 provider |
+| 语音能力 | Phase 1 只预留；Phase 2/3 优先托管 Realtime 试点，保留本地 STT/TTS |
+| 外部搜索 | 中文搜索优先评估博查/秘塔/SearXNG；Firecrawl 降级为高质量抓取备用 |
+| UI 可扩展 | 控制台模板 + 顶部功能导航 + 卡片/表格/抽屉，后续驾驶舱不重构数据层 |
 
 ---
 
-## 3. 开源方案调研与可复用性分析
-
-### 3.1 总体判断
-
-目前开源社区已有不少接近能力，但没有一个可以直接替代 AIstock 的研究助理控制台。原因是 AIstock 需要强领域状态：QE 模板、QE Archive、HMM 演进、因子研发、Validation Center、GitHub Issue 强一致、生产数据边界、远程节点资源和长期研究流。
-
-因此最佳路线是：
-
-- **AIstock 原生实现主控台、任务账本、审批、MCP 工具目录、记忆索引和证据链。**
-- **参考或接入开源项目的局部能力。**
-- **所有外部组件通过 adapter 接入，不成为不可替换核心。**
-
-### 3.2 可参考/接入工具对比
-
-| 工具 | 当前能力 | 可复用/参考点 | AIstock 取舍 |
-|---|---|---|---|
-| Mem0 OSS | 自托管记忆层，可作为库或 server；支持自有基础设施、dashboard、API key、audit log，默认 server 使用 Postgres + pgvector | 可作为 memory adapter 候选；借鉴 add/search/update/delete、用户/Agent/session 记忆 | Phase 1 不直接依赖；Phase 2 做 PoC adapter |
-| Letta | Stateful agent；Agent 包含 system prompt、memory blocks、messages、tools、runs/steps；支持 MCP tool schema | 借鉴 memory blocks、shared memory、runs/steps、工具轨迹 | 不替代 AIstock 任务编排；可参考 Agent runtime 结构 |
-| Zep/Graphiti | 开源 temporal knowledge graph，动态整合用户交互和业务数据，支持时间感知和混合检索 | 非常适合“架构事实、任务状态、实验关系随时间变化”的图谱记忆 | Phase 2/3 评估作为 memory graph adapter 或局部图谱引擎 |
-| LangGraph / LangMem | Store + checkpointer；支持跨 thread 长期记忆、状态持久化、human-in-the-loop、Postgres checkpointer | 适合作为复杂 Agent workflow / task-state runtime 参考 | 可用于后端状态机，但 AIstock 任务账本仍是事实源 |
-| Langfuse | LLM trace、session、agent graph、prompt management、eval、成本/延迟观测 | 适合 LLM 调用观测、prompt 版本、评估和成本分析 | 可选观测后端；Phase 1 先做 AIstock 原生 trace |
-| Open WebUI | Chat UI + MCP server 接入 + 工具调用 | 参考聊天 UI 和 MCP server 管理 | 不作为 AIstock 主控；可借鉴工具连接体验 |
-| Dify | Agent/Workflow 中使用 MCP tools；MCP 工具作为节点 | 参考 workflow UI 和工具参数固定/自动策略 | 不替换 AIstock；可参考低代码任务模板 |
-| Flowise | 开源 Agent/Workflow 平台，含 Human-in-the-loop、tracing、eval、API/SDK | 参考审批节点、Agentflow、多 Agent 可视化 | 不承载 AIstock 主状态 |
-| Langflow | Flow 可作为 MCP server 暴露；工具名称和描述影响 Agent 选择 | 可参考把工作流注册为 MCP 工具的方式 | 适合后续把 AIstock 任务模板导出为 MCP tool |
-
-### 3.3 最佳组合建议
-
-| 层 | 推荐实现 | 说明 |
-|---|---|---|
-| 主控台 | AIstock 原生 | 保证任务、审批、实验、Issue、生产边界一致 |
-| 长期记忆默认实现 | AIstock Postgres + pgvector + tsvector + 审计表 | 最可控、最贴合现有本地生产环境 |
-| 结构化关系记忆 | AIstock memory_edges；Phase 2 评估 Graphiti | Graphiti 适合动态事实和时间关系，但先 adapter 化 |
-| Agent 状态机 | AIstock task ledger；Phase 2 可评估 LangGraph | 避免第一阶段引入框架复杂度 |
-| 外部 memory adapter | Mem0 OSS / Graphiti / LangMem adapter | 用 adapter 接口隔离供应商和框架 |
-| LLM 观测 | AIstock 原生 trace；可导出 Langfuse | 先满足本项目审计，再考虑成熟观测平台 |
-| Chat/MCP UI 参考 | Open WebUI / Dify / Flowise | 只借鉴交互，不接管业务状态 |
-
----
-
-### 3.4 OpenClaw 参考架构与取舍
-
-OpenClaw 的产品形态与 AIstock 研究助理有较高参考价值：它强调多 channel、gateway、skills、memory、workspace、模型 provider 可替换等能力。这些方向与 AIstock 的“多窗口、多入口、长期记忆、技能库、MCP 工具执行”非常接近。
-
-可借鉴内容：
-
-| OpenClaw 思路 | AIstock 借鉴方式 |
-|---|---|
-| Gateway 统一接入 | 建设 `assistant_gateway`，接收 Web UI、未来 IM、语音、定时任务、MCP 事件 |
-| Channel 抽象 | Web 控制台、未来 Telegram/Slack/企业微信/邮件/桌面通知都作为 channel |
-| Session / Workspace | 映射为 `assistant_workspace_sessions` 和 `assistant_windows`，支持多屏幕并行 |
-| Skills 目录 | 借鉴为 `assistant_skill_registry`，但必须增加白名单、版本、checksum、审批和权限 |
-| Memory 能力 | 借鉴“助理必须有长期状态”的理念，但不照搬文件式记忆作为核心事实源 |
-| Model Provider 可替换 | 与 AIstock 的模型无关记忆和 Context Pack 设计一致 |
-
-不建议直接复用内容：
-
-1. 不建议把 OpenClaw gateway 作为 AIstock 主控。AIstock 的任务账本、审批、MCP 权限、GitHub 同步、实验谱系必须由 AIstock 原生掌握。
-2. 不建议把 OpenClaw 的文件式 memory 作为 AIstock 核心长期记忆。AIstock 的记忆需要数据库、索引、关系、时间有效性、审批和审计。
-3. 不建议直接接入公共 skill 市场。AIstock skill 必须本地白名单、版本锁定、checksum 校验和安全审查。
-4. 不建议默认开放主机控制工具。AIstock 研究助理默认不具备 shell、文件写入、git、桌面控制和鼠标键盘控制能力。
-5. 不建议让第三方框架决定生产敏感动作。所有 L2+ 操作必须经过 AIstock 审批中心。
-
-OpenClaw 对 AIstock 的主要价值不是“拿来替换”，而是证明 `Gateway + Channel + Skills + Memory + Workspace` 是一个合理产品形态。AIstock 应吸收该形态，但以原生方式实现核心控制面。
-
-### 3.5 即时通讯和外部入口参考
-
-未来 AIstock 研究助理可以支持即时通讯工具，但 IM 不应替代主控制台。
-
-建议入口分级：
-
-| 入口 | 适合能力 | 不适合能力 |
-|---|---|---|
-| AIstock Web 控制台 | 全量对话、配置预览、审批、进度展示、多窗口工作台 | 无 |
-| 桌面通知 | 任务完成、失败、等待确认、晨报提醒 | 参数复杂的审批 |
-| IM / 企业微信 / Slack / Telegram | 简短状态查询、晨报、低风险确认、让助理记忆事项 | 高风险实验、生产写入、正式 Issue 入库 |
-| 语音 | 快速输入、播报、提醒 | 单独完成高风险确认 |
-
-IM 入口必须遵守以下规则：
-
-1. 任何高风险动作都必须生成 `approval_request_id`。
-2. 用户确认文本必须与 `plan_digest`、配置版本、风险等级绑定。
-3. IM 只能作为确认来源之一，最终执行仍由 AIstock Orchestrator 完成。
-4. 所有 IM 消息必须写入事件流和审计日志。
-5. 不同 channel 的身份必须映射到 AIstock 用户身份，不能只依赖昵称。
-
-
-## 4. 总体架构
+## 3. 总体架构
 
 ```mermaid
 flowchart TD
-    User["用户"] --> Chat["对话窗口"]
-    Chat --> Assistant["AIstock 研究助理"]
-    Assistant --> MemoryRouter["Memory Router 上下文装配"]
-    MemoryRouter --> MemoryBackbone["AIstock Memory Backbone"]
-    Assistant --> Planner["计划生成与配置草稿"]
-    Planner --> Workbench["MCP 执行工作台"]
-    Workbench --> Approval["审批/对话确认"]
-    Approval --> Orchestrator["任务编排中心"]
-    Orchestrator --> Queue["任务队列/资源预算/并发控制"]
-    Queue --> MCPGateway["MCP/API 调用网关"]
-
-    MCPGateway --> QEExp["QE Experiment MCP"]
-    MCPGateway --> QEArchive["QE Archive MCP"]
-    MCPGateway --> Validation["Validation MCP"]
-    MCPGateway --> Github["GitHub Issue MCP"]
-    MCPGateway --> Research["Research/HMM MCP"]
-    MCPGateway --> DataSync["Data Sync MCP"]
-
-    Queue --> Events["agent_task_events 实时事件流"]
-    Events --> UIProgress["多窗口进度展示"]
-    Events --> Evidence["证据库"]
-    Evidence --> Report["报告/晨报/候选Issue"]
-    Report --> MemoryBackbone
-    Workbench --> DeepLinks["业务页面深链/配置详情页"]
+    User["用户 / 主对话窗口"] --> UI["Research Assistant Console"]
+    UI --> Gateway["Assistant Gateway"]
+    Gateway --> Planner["Planner / Orchestrator"]
+    Planner --> ModelRouter["Model Router"]
+    Planner --> SkillCatalog["Local Skill Catalog"]
+    Planner --> MCPGateway["AIstock MCP/API Gateway"]
+    Planner --> Memory["Native Memory Ledger"]
+    Memory --> Graph["Lightweight Knowledge Graph"]
+    MCPGateway --> QE["QE / QE Archive"]
+    MCPGateway --> Validation["Validation Center"]
+    MCPGateway --> Github["GitHub Issue / PR"]
+    MCPGateway --> HMM["HMM / Factor / Research"]
+    SkillCatalog --> Planner
+    ModelRouter --> Planner
+    Planner --> Approval["Approval Center"]
+    Approval --> MCPGateway
+    Planner --> Reports["Reports / Morning Digest"]
 ```
 
-### 4.1 MCP 执行优先原则
+核心模块：
 
-1. 创建 QE 模板、物化实验、运行实验、查询数仓、执行验证、创建候选 Issue 等操作都通过 MCP/API。
-2. 页面只显示任务进度、配置详情、日志、报告、深链和审批按钮。
-3. 不使用鼠标键盘控制，不抢占用户当前操作。
-4. UI 自动化只作为测试探针或截图证据，不作为业务执行主路径。
-
-### 4.2 多窗口/多屏幕原则
-
-1. 每个窗口是一个 `assistant_window`，可以绑定一个 Research Stream 或 Task。
-2. 所有窗口共享同一个 task ledger、memory backbone、approval center 和 event stream。
-3. 一个窗口中确认的任务会同步到其他相关窗口。
-4. 助理可以在主窗口汇总所有窗口进展，也可以在专项窗口讨论单个任务。
-5. 任何高风险动作只允许一个审批来源最终生效，避免多窗口重复执行。
-
----
-
-### 4.3 独立产品化架构预留
-
-本项目虽然首先在 AIstock 内实现，但架构上应把“研究助理控制台”设计为可独立发布的产品：
-
-> 任何具有 MCP/API 接口的传统应用，都可以通过该框架升级为“AI 助理式应用”。
-
-因此代码结构需要从第一阶段就区分通用核心和 AIstock 适配层。
-
-```text
-assistant_product_core/
-  gateway/                    # channel 接入、session 路由、事件分发
-  memory/                     # Memory Backbone 抽象、Context Pack、索引、审计
-  skills/                     # Skill Registry、skill loader、权限和版本治理
-  mcp/                        # MCP tool registry、risk policy、tool call trace
-  orchestration/              # task ledger、approval、resource budget、event stream
-  workbench/                  # 配置预览、实时进度、报告、深链协议
-  providers/                  # LLM provider、embedding provider、search provider
-  security/                   # 权限、身份、审计、secret redaction
-
-assistant_app_adapters/
-  aistock/                    # AIstock 模块、QE/HMM/Validation/GitHub/数仓适配
-  generic_mcp_app/            # 通用 MCP 应用适配模板
-  future_plugins/             # 其他应用适配器
-```
-
-产品化边界：
-
-| 层 | 是否通用 | AIstock 是否依赖 |
-|---|---:|---|
-| Assistant Gateway | 是 | 使用通用能力 |
-| Memory Backbone | 是 | AIstock 扩展领域 schema |
-| Skill Registry | 是 | AIstock 注册量化研发 skill |
-| MCP Tool Registry | 是 | AIstock 注册 QE/Validation/GitHub 等 MCP |
-| Task Ledger / Approval | 是 | AIstock 使用领域风险策略 |
-| Workbench | 是 | AIstock 增加 QE/HMM/因子配置视图 |
-| AIstock Domain Adapter | 否 | AIstock 专用 |
-
-独立产品需要支持：
-
-1. 应用注册：一个传统应用声明自己的 MCP server、业务模块、页面深链和风险等级。
-2. Skill 注册：应用可以注册自己的专业 skill，例如 CRM 助理、数据分析助理、运维助理、量化研究助理。
-3. Memory 命名空间：不同应用、用户、租户、项目的记忆隔离。
-4. 通用 Workbench：展示计划、配置、MCP 调用、审批、报告和深链。
-5. Adapter SDK：让其他应用实现少量 adapter 即可接入。
-6. 白标部署：AIstock 中叫“研究助理”，独立产品可叫“Agentic App Console”。
-
-AIstock 第一阶段不需要完整产品化，但代码组织必须避免把所有逻辑写死在 QE/HMM 页面中。通用核心应尽量独立，AIstock 专属逻辑放在 adapter。
-
-
-### 4.4 远期驾驶舱与 AIstock 架构图规划
-
-远期主控页面应采用驾驶舱模式，但不作为 Phase 1 必做范围。驾驶舱的定位是“全局态势感知”，不是替代具体工作台。
-
-驾驶舱应展示：
-
-| 区域 | 内容 | 数据来源 | 阶段 |
-|---|---|---|---|
-| 当前任务态势 | 正在运行、等待确认、失败、阻塞、今日完成任务 | `agent_task_events` / task ledger | Phase 1/2 |
-| Research Streams | HMM 演进、QE 实验演进、因子研发、事件处理、Validation 探测 | `research_streams` | Phase 2 |
-| QE / HMM / 因子运行状态 | 是否正在运行、loop/实验进度、资源占用、最新报告 | 各 MCP + task events | Phase 2 |
-| 主机资源监控 | CPU、内存、磁盘、GPU、远程节点、DB 连接、队列长度 | Host metrics MCP / Prometheus / psutil / nvidia-smi adapter | Phase 2/3 |
-| MCP 能力地图 | 当前可用 MCP server、tool 数量、风险等级、健康状态 | `mcp_tool_registry` | Phase 1/2 |
-| AIstock 架构图 | 数据、QE、HMM、因子、策略包、Paper v2、Validation、GitHub 的模块关系 | Architecture Memory + MCP registry + docs index | Phase 3 |
-| 问题热区 | 哪些模块 issue 多、测试覆盖低、最近失败多 | Validation Center + GitHub + Memory | Phase 3 |
-
-远期可视化目标：
-
-```mermaid
-flowchart TD
-    Cockpit["研究助理驾驶舱"] --> Tasks["任务态势"]
-    Cockpit --> Streams["HMM/QE/因子/事件 Streams"]
-    Cockpit --> Resources["主机与远程资源"]
-    Cockpit --> MCPMap["MCP 能力地图"]
-    Cockpit --> ArchGraph["AIstock 架构图"]
-    ArchGraph --> Data["数据/数仓"]
-    ArchGraph --> QE["QE 实验"]
-    ArchGraph --> HMM["HMM 演进"]
-    ArchGraph --> Factor["因子研发"]
-    ArchGraph --> Strategy["策略包/选股"]
-    ArchGraph --> Validation["流水线/Issue"]
-```
-
-实现原则：
-
-1. Phase 1 不做复杂图形化，只做基础卡片和列表。
-2. Phase 2 增加资源监控和 Research Stream 总览。
-3. Phase 3 再做 AIstock 架构图和健康颜色映射。
-4. 架构图的数据不应手工硬编码，应从 Architecture Memory、MCP registry、Validation module catalog 和设计文档索引生成。
-5. 图形化只能展示状态，不能绕过审批执行高风险动作。
-
-### 4.5 股票分析 MCP 规划
-
-未来需要为 AIstock 现有股票分析功能新增 `aistock-stock-analysis` MCP，使用户可以随时输入股票代码，由研究助理生成结构化股票分析报告。
-
-目标能力：
-
-| 能力 | 说明 |
+| 模块 | 职责 |
 |---|---|
-| 单股票分析 | 输入 A 股代码，返回基本面、行情、资金、事件、技术面、风险摘要 |
-| 多股票对比 | 对比多只股票的估值、趋势、资金、行业位置、风险 |
-| 行业/主题分析 | 基于股票所属行业和最新搜索结果生成行业背景 |
-| 数据来源说明 | 报告必须列出 AIstock 内部数据、外部搜索、行情来源和时间 |
-| 证据绑定 | 每个关键结论绑定数据字段、图表、新闻或搜索来源 |
-| 记忆沉淀 | 用户关注的股票、分析结论、后续跟踪计划可写入 task/roadmap memory |
-
-MCP 工具草案：
-
-```text
-aistock-stock-analysis
-  stock_analysis_get_profile(symbol)
-  stock_analysis_get_market_snapshot(symbol, as_of)
-  stock_analysis_get_financial_summary(symbol)
-  stock_analysis_get_factor_snapshot(symbol)
-  stock_analysis_get_event_risk(symbol, lookback_days)
-  stock_analysis_get_news_context(symbol, query_profile)
-  stock_analysis_generate_report(symbol, report_profile, confirm_generation)
-```
-
-边界：
-
-1. 该 MCP 复用 AIstock 现有股票分析功能，不在第一阶段重写股票分析引擎。
-2. 报告不是投资建议，必须标注数据时间和不确定性。
-3. 如果需要最新新闻或国际因素影响，必须走搜索/学术/新闻工具并保存来源。
-4. 不允许研究助理基于报告直接触发交易。
-
-
-## 5. 智能体角色定义
-
-### 5.1 角色名称
-
-推荐名称：**AIstock 研究助理**。
-内部标识：`research_assistant_agent`。
-
-### 5.2 角色职责
-
-| 职责 | 是否允许 | 说明 |
-|---|---:|---|
-| 读取架构、任务、实验、MCP 能力记忆 | 是 | 通过 Memory Router 和权限过滤 |
-| 查询 QE Archive、Validation、GitHub、Research Pipeline | 是 | 只读默认允许 |
-| 生成实验草稿和配置 diff | 是 | 写入前必须审批 |
-| 调用 MCP 执行 dry-run/preflight | 是 | L0/L1 可自动执行 |
-| 创建测试模板或测试实验 | 条件允许 | L2，需审批/对话确认 |
-| 启动长时间实验或远程节点任务 | 条件允许 | L3，需资源预算和审批 |
-| 生成候选 Issue | 是 | 不能直接成为正式 Issue |
-| 创建正式 GitHub Issue | 条件允许 | 需用户或 Codex 审批，并同步 GitHub |
-| 维护长期记忆 | 是 | 按记忆类型和审批规则执行 |
-| 修改代码、提交代码、合入 main | 否 | 不属于该助理能力 |
-| 控制鼠标键盘 | 否 | 默认路线明确禁止 |
-| 执行实盘交易 | 否 | 默认禁止 |
+| Assistant Gateway | 统一接入 Web UI、未来语音/IM、Codex/Claude Connector |
+| Planner / Orchestrator | 生成计划、选择 Skill/MCP/模型、控制任务状态机 |
+| Model Router | 多模型路由、成本预算、风险等级、fallback |
+| Native Memory Ledger | 原生长期记忆事实源，非 RAG |
+| Lightweight Knowledge Graph | 模块、任务、实验、Issue、论文证据之间的关系 |
+| MCP/API Gateway | 调用 AIstock 后端、MCP server、Validation、GitHub、QE |
+| Local Skill Catalog | 本地专业能力目录，提供 QE/因子/实验诊断等方法能力 |
+| Approval Center | L2+ 操作审批、配置版本、plan digest、风险确认 |
+| Workbench | MCP 执行进度、配置预览、diff、日志、深链 |
+| Reports | 晨报、实验报告、候选 Issue 报告、审计报告 |
 
 ---
 
-## 6. 长期记忆核心架构
+## 4. 长期记忆核心架构
 
-长期记忆是本项目最关键的核心能力。它决定 AIstock 研究助理是否能成为真正的长期研发助手，也决定未来更换模型时是否能保持连续性。
+### 4.1 设计原则
 
-### 6.1 基本原则
+1. **原生事实源**：AIstock 数据库是长期记忆唯一事实源。
+2. **非 RAG**：RAG/向量检索只做辅助召回，不决定事实。
+3. **结构化优先**：任务、审批、Issue、实验、验证、用户规则必须结构化存储。
+4. **证据绑定**：关键结论必须有 `source_ref` 或 `evidence_refs`。
+5. **审批治理**：Core/Procedural/Architecture 记忆必须可审批、废弃、替代。
+6. **可回放**：每次助理回答和执行都能回放 Context Pack。
+7. **可迁移**：支持 JSONL/Markdown/Parquet 导出，外部工具只通过 adapter 接入。
 
-1. **记忆必须模型无关**：不能依赖某个模型的上下文窗口或私有记忆能力。
-2. **记忆必须入库**：核心记忆、架构记忆、任务记忆、实验记忆、流程记忆都必须持久化。
-3. **记忆必须可索引**：支持按用户、项目、模块、任务、实验、时间、关系、语义检索。
-4. **记忆必须可审计**：谁写入、为什么写入、来源是什么、是否经审核、何时失效必须可追踪。
-5. **记忆必须可纠错**：支持 supersedes、invalidates、contradicts、valid_from、valid_to。
-6. **记忆必须可迁移**：支持导出 JSONL/Markdown/Parquet，未来可迁移到 Mem0、Graphiti、LangMem 或其他引擎。
-7. **记忆必须分层加载**：不能每次把所有记忆塞进上下文；应逐级检索、压缩、引用。
-8. **记忆必须有权限和风险等级**：用户偏好、生产规则、GitHub 凭据相关结论、实盘边界必须受保护。
+### 4.2 记忆分层
 
-### 6.2 记忆分层模型
-
-| 层级 | 名称 | 内容 | 写入方式 | 默认加载策略 |
+| 层级 | 名称 | 内容 | 写入方式 | 加载策略 |
 |---|---|---|---|---|
-| L0 | Identity/Core Memory | 助理身份、硬边界、用户关键偏好 | 用户确认或标准文档确认 | 每次加载摘要 |
-| L1 | Procedural Memory | 工作流程、Issue 流程、验证门禁、禁止事项 | 审核后写入 | 与任务类型匹配时加载 |
-| L2 | Architecture Memory | 模块边界、MCP 工具、API、数据表、业务流程 | 文档扫描 + 审核 | 按模块检索加载 |
-| L3 | Project Roadmap Memory | 长期规划、阶段目标、待办方向 | 用户确认 | 任务规划时加载 |
-| L4 | Task State Memory | 研究流和任务状态、下一步、阻塞点 | 自动写入，可人工修正 | 与 task/stream 绑定加载 |
-| L5 | Experiment Memory | QE/HMM/因子/事件实验配置、结果、失败经验 | 自动写入 | 相似实验检索加载 |
-| L6 | Episodic Memory | 对话事件、MCP 调用过程、日志摘要 | 自动写入 | 默认不加载，仅按需追溯 |
-| L7 | External Knowledge Memory | 在线搜索、论文、工具资料摘要 | 证据入库，结论需审核 | 当前性问题重新搜索 |
+| L0 | Core Memory | 助理身份、用户硬规则、生产边界 | 用户确认/标准文档 | 每次必载 |
+| L1 | Procedural Memory | Issue 流程、验证门禁、工作规范 | 审批后写入 | 按任务类型必载 |
+| L2 | Architecture Memory | 模块边界、MCP、API、DB、UI route | 文档/代码扫描 + 审核 | 按模块加载 |
+| L3 | Roadmap Memory | 长期规划、阶段目标、研究方向 | 用户确认 | 规划时加载 |
+| L4 | Task State Memory | 任务状态、阻塞、下一步 | 自动写入 | 绑定 task/stream |
+| L5 | Experiment Memory | QE/HMM/因子实验配置、结果、失败经验 | 自动写入 + 审核 | 相似实验检索 |
+| L6 | Episodic Memory | 对话、MCP 调用、日志摘要 | 自动写入 | 按需追溯 |
+| L7 | External Evidence | 搜索、论文、网页、新闻、工具资料 | evidence 入库 | 结论需审核 |
+| L8 | Personal Agenda | 用户个人事项、提醒、晨报 | 用户确认/任务生成 | 今日事项加载 |
 
-### 6.3 记忆数据模型
+### 4.3 Memory Ledger 数据模型
 
 ```text
 research_memory_items
   id
-  memory_type                -- core / procedural / architecture / roadmap / task_state / experiment / episodic / external
-  namespace                  -- user / project / module / stream / task / experiment / tool
-  subject_key                -- qe, hmm, factor, validation, github_issue, user_preference 等
+  memory_type                -- core / procedural / architecture / roadmap / task_state / experiment / episodic / external / agenda
+  namespace                  -- personal / aistock / project / module / stream / task / experiment / tool
+  subject_key
   title
   content_json
   content_text
   source_type                -- conversation / mcp_result / doc_scan / validation_run / github_issue / web_search / manual
   source_ref
   source_timestamp
-  confidence                 -- 0-1
+  confidence
   approval_status            -- draft / approved / rejected / expired / superseded
   risk_level                 -- low / medium / high / production_sensitive
   valid_from
   valid_to
   supersedes_id
-  created_by                 -- user / assistant / codex / system
+  created_by
   approved_by
-  embedding_ref
   checksum
   created_at
-  updated_at
-
-research_memory_edges
-  id
-  source_memory_id
-  target_memory_id
-  relation_type              -- supports / contradicts / supersedes / depends_on / derived_from / same_as / blocks
-  confidence
-  created_at
-
-research_memory_indexes
-  id
-  memory_id
-  index_type                 -- vector / full_text / graph / time / module / task / experiment
-  index_key
-  index_payload
   updated_at
 
 research_memory_access_log
@@ -411,36 +151,63 @@ research_memory_access_log
   task_id
   stream_id
   agent_id
-  window_id
   retrieval_reason
-  used_in_prompt             -- true/false
-  used_in_report             -- true/false
+  used_in_prompt
+  used_in_report
   retrieved_at
 ```
 
-### 6.4 记忆检索流程
+### 4.4 长期记忆不是 RAG
 
-```mermaid
-flowchart TD
-    Task["当前任务/对话"] --> Classifier["任务分类器"]
-    Classifier --> Scope["确定作用域: user/project/module/stream/task"]
-    Scope --> MustLoad["加载硬规则: Core + Procedural"]
-    Scope --> Semantic["语义检索: architecture/experiment/external"]
-    Scope --> Graph["关系检索: dependencies/conflicts/supersedes"]
-    Scope --> Time["时间检索: 当前有效/最近状态"]
-    MustLoad --> Pack["Context Pack"]
-    Semantic --> Rank["重排与去重"]
-    Graph --> Rank
-    Time --> Rank
-    Rank --> Pack
-    Pack --> TokenBudget["Token Budget 压缩"]
-    TokenBudget --> Agent["LLM 执行计划/回答"]
-    Agent --> MemoryWrite["记忆候选写入"]
+不允许的架构：
+
+```text
+把对话和文档切 chunk -> embedding -> 查询时向量召回 -> 让 LLM 判断事实
 ```
 
-### 6.5 Context Pack 结构
+正确架构：
 
-每次 Agent 执行前，不直接读取全部记忆，而是生成一个 `context_pack`：
+```text
+Memory Ledger（事实源）
+  - research_memory_items
+  - research_memory_entities
+  - research_memory_relations
+  - research_evolution_paths
+  - assistant_approval_requests
+  - agent_tasks / agent_task_events
+  - issue_candidates / GitHub sync records
+  - source evidence tables
+
+Retrieval Layer（辅助）
+  - full-text search
+  - vector search
+  - graph traversal
+  - time filter
+  - module/task/stream scope filter
+  - rerank
+
+Context Pack Builder（确定性装配）
+  - 必载 Core/Procedural 硬规则
+  - approval_status 过滤
+  - valid_from / valid_to 过滤
+  - supersedes / contradicts 处理
+  - source_ref / evidence_refs 绑定
+  - omitted_relevant_refs 记录
+```
+
+| 事实类型 | 事实源 | 是否允许 RAG 决定 |
+|---|---|---|
+| 用户硬规则、生产边界 | approved Core/Procedural Memory | 不允许 |
+| GitHub Issue 状态 | GitHub API + 本地同步记录 | 不允许 |
+| QE/HMM/因子实验状态 | QE Archive / Task Ledger | 不允许 |
+| 验证结果 | Validation Center | 不允许 |
+| 审批状态 | Approval table | 不允许 |
+| 模块依赖 | 原生轻量图谱 + source refs | RAG 仅辅助查说明 |
+| 历史对话经验 | Memory Ledger + evidence | 可辅助召回，不能直接定论 |
+| 外部论文/网页资料 | evidence table | 可辅助召回，结论需审核 |
+| 相似实验经验 | Experiment Memory + graph relation | 可辅助候选召回，最终引用结构化记录 |
+
+### 4.5 Context Pack
 
 ```text
 assistant_context_packs
@@ -454,212 +221,110 @@ assistant_context_packs
   architecture_memory_refs
   task_state_refs
   experiment_memory_refs
+  graph_relation_refs
   external_source_refs
+  temp_memory_refs
   omitted_relevant_refs
   pack_summary
   created_at
 ```
 
-Context Pack 必须可回放：未来换模型后，也可以知道当时 Agent 基于哪些记忆做了判断。
+Context Pack 必须可回放：未来换模型后，也能知道当时助理基于哪些记忆、证据和规则做出判断。
 
-### 6.6 记忆写入流程
+---
 
-| 写入来源 | 默认状态 | 审批规则 |
-|---|---|---|
-| 用户明确说“记住这个” | `approved` 或 `needs_review` | 低风险偏好可直接 approved；流程规则需确认 |
-| Agent 从对话自动提取 | `draft` | 用户或 Codex 审核后生效 |
-| 任务运行状态 | `approved` | 事实型自动写入，可人工修正 |
-| 实验配置和结果 | `approved` | 自动写入，绑定实验 ID 和证据 |
-| 失败经验 | `draft` | 重要流程性经验需审核成 procedural memory |
-| 在线搜索资料 | `external` | 作为证据保存；结论不自动变核心记忆 |
-| 设计文档扫描 | `draft` | 需要设计/架构审核后变 architecture memory |
+## 5. 轻量知识图谱
 
-### 6.7 记忆冲突和过期
+### 5.1 Phase 1 不引入图数据库
 
-必须支持：
+Phase 1 不引入 Neo4j、FalkorDB、Kuzu、Amazon Neptune 或其他图数据库。原因：
 
-- `supersedes`：新规则替代旧规则。
-- `contradicts`：新事实与旧事实冲突，需要审核。
-- `valid_to`：过期时间。
-- `confidence_decay`：长期未使用或来源过旧时降低置信度。
-- `source_refresh_required`：对于软件版本、接口、法规、外部资料等易变信息，要求重新搜索或重新扫描。
+1. 当前瓶颈是事实源、审批、证据和任务回放，不是图查询性能。
+2. 新增图数据库会带来部署、备份、权限、健康检查和迁移成本。
+3. 图谱质量控制比图数据库能力更关键。
+4. 后续可把原生图谱镜像到 Graphiti，而不是反向依赖外部图引擎。
 
-### 6.8 开源 memory adapter 策略
-
-AIstock 第一阶段必须有原生 memory backbone。开源工具作为 adapter：
+### 5.2 图谱数据模型
 
 ```text
-MemoryProviderAdapter
-  - aistock_native_postgres          # 默认事实源
-  - mem0_oss_adapter                 # Phase 2 PoC
-  - graphiti_temporal_graph_adapter  # Phase 2/3 PoC
-  - langgraph_store_adapter          # Phase 2 PoC
-  - letta_archival_memory_adapter    # 后续评估
+research_memory_entities
+  id
+  entity_type              -- module / mcp_tool / skill / db_table / ui_route / experiment / factor / model / paper / issue / task / goal
+  entity_key
+  title
+  summary
+  namespace
+  source_refs
+  confidence
+  approval_status
+  valid_from
+  valid_to
+  created_at
+  updated_at
+
+research_memory_relations
+  id
+  source_entity_id
+  target_entity_id
+  relation_type            -- depends_on / exposes / reads / writes / validates / fixes / derived_from / supports / contradicts / next_candidate
+  evidence_refs
+  confidence
+  approval_status
+  valid_from
+  valid_to
+  created_at
+  updated_at
+
+research_evolution_paths
+  id
+  stream_id
+  objective
+  current_best_entity_id
+  rejected_entities_json
+  next_candidate_entities_json
+  supporting_paper_refs
+  decision_notes
+  updated_at
 ```
+
+### 5.3 Graphiti PoC 策略
+
+Phase 2 Graphiti PoC 已确认：
+
+1. 优先只读镜像 AIstock 原生图谱核心实体关系。
+2. 只读镜像实体：module、mcp_tool、skill、experiment、issue、validation_run、PR、branch。
+3. 只读镜像关系：exposes、requires、derived_from、blocks、fixes、verifies、supports。
+4. 论文/外部资料图谱作为补充，不作为首要 PoC。
+5. Graphiti 不回写 approved memory，不替代原生图谱。
+6. PoC 失败可以直接移除，不影响 AIstock 主系统。
+
+---
+
+## 6. 外部长期记忆工具策略
+
+长期记忆最终选型：**AIstock 原生事实源自研 + 外部工具 adapter 增强**。
+
+| 工具 | 可借鉴优点 | 不直接作为核心事实源的限制 |
+|---|---|---|
+| Mem0 | 自托管记忆服务、API、metadata filtering、reranker、dashboard、用户/Agent/session 记忆模型 | 偏通用对话/偏好记忆，不天然掌握 AIstock 任务账本、审批门禁、GitHub 强同步、实验谱系和生产边界 |
+| Graphiti | temporal knowledge graph、事实有效期、episode/provenance、hybrid retrieval、自定义 ontology | 需要图后端和图谱质量控制；LLM 抽取关系不能直接成为生产级架构事实 |
+| LangMem | semantic/episodic/procedural memory、hot path/background memory formation、namespace | 更适合作为 Agent memory primitive，不是 AIstock 领域事实库和审批系统 |
+| Letta | stateful agent、memory blocks、shared memory、runs/steps、tools/MCP/human-in-the-loop | 更像 Agent runtime；如果接管任务编排和记忆写入，会削弱 AIstock 原生治理边界 |
 
 Adapter 原则：
 
-1. AIstock 原生表是事实源。
-2. 外部 memory engine 可以作为检索增强、图谱增强或压缩增强。
-3. 外部返回的记忆必须带 provider、version、retrieval_score、source_ref。
-4. 外部组件不可直接修改 Core/Procedural 记忆；必须走 AIstock 审批。
-5. 任何 adapter 故障不能阻断 AIstock 原生任务账本和核心记忆读取。
-
-### 6.9 为什么优先考虑 Graphiti/Temporal KG
-
-AIstock 的记忆不是普通聊天偏好，而是大量“会随时间变化”的事实：
-
-- 某个 BUG 曾经 open，后来 fixed，再后来可能 reopened。
-- 某个 QE 实验配置在草稿、物化、执行、归档之间变化。
-- 某个 HMM 演进方向在不同阶段有不同结论。
-- 某个模块的测试覆盖率随每次合入变化。
-- 某个流程规则可能被后续标准替代。
-
-因此 temporal graph 非常适合中长期规划。第一阶段先用关系表表达；第二阶段评估 Graphiti 是否能增强以下能力：
-
-- 动态事实的时间范围。
-- 实验、模块、任务、Issue、文档之间的关系追踪。
-- 过期事实自动失效。
-- 混合检索：语义 + 关键词 + 图关系 + 时间。
-
-### 6.10 记忆安全边界
-
-1. 禁止把 API key、GitHub token、数据库密码写入记忆。
-2. 用户偏好、流程规则、生产边界属于高权重记忆，必须能追踪来源。
-3. Web 搜索内容默认不可信，只能作为外部证据。
-4. LLM 对记忆的总结不能替代原始 evidence。
-5. 记忆写入必须保留原始片段或 source_ref，避免不可解释。
-6. 支持导出“助理记忆审计报告”，给用户和 Claude Code 审核。
+1. 外部工具只做增强检索、图谱增强、用户偏好增强、迁移验证或效果对照。
+2. 外部工具不得直接写入 approved 记忆。
+3. 外部工具输出必须进入 `memory_candidate` 或 `assistant_temp_memories`。
+4. 外部 adapter 故障不能影响原生任务账本、审批、Issue 状态、实验谱系和核心规则。
 
 ---
 
-## 7. MCP 执行工作台设计
+## 7. MCP 执行工作台
 
-### 7.1 替代“浏览器点击”的设计
+### 7.1 MCP 优先原则
 
-新版方案将原 Phase 2 “操作展示区”升级为 **MCP 执行工作台**。
-
-它不要求 Agent 操作鼠标键盘，不要求识别页面 DOM，也不要求代替用户点击 UI。它只做：
-
-1. 展示 Agent 计划。
-2. 展示待执行配置。
-3. 展示 MCP/API 调用进度。
-4. 展示业务产物深链。
-5. 展示日志、报告和证据。
-6. 接收用户确认和对话修改。
-
-### 7.2 QE 10 loop 实验示例流程
-
-```mermaid
-sequenceDiagram
-    participant U as 用户
-    participant A as 研究助理
-    participant M as Memory Router
-    participant W as MCP执行工作台
-    participant Q as QE MCP
-    participant E as 事件流
-
-    U->>A: 创建QE 10 loop实验，先不执行
-    A->>M: 检索QE规则、固定PIT池、历史实验、用户偏好
-    M-->>A: 返回Context Pack
-    A->>Q: 查询可用模板/股票池/节点/因子(dry-read)
-    Q-->>A: 返回候选资源
-    A->>W: 生成实验草稿和风险说明
-    W-->>U: 展示10个loop详细配置
-    U->>A: 修改loop 3和loop 7
-    A->>W: 生成配置diff并重新校验
-    U->>W: 确认创建模板
-    W->>Q: qe_template_create + validate
-    Q-->>E: tool_started/tool_completed/artifact_created
-    E-->>W: 实时刷新进度
-    W-->>U: 显示模板ID、配置详情、下一步审批
-```
-
-### 7.3 配置版本和 diff
-
-```text
-assistant_task_config_versions
-  id
-  task_id
-  version
-  config_json
-  diff_from_previous
-  generated_by
-  user_instruction_ref
-  validation_status
-  preflight_result_ref
-  created_at
-```
-
-### 7.4 事件流
-
-```text
-agent_task_events
-  id
-  task_id
-  stream_id
-  window_id
-  event_type              -- plan_started / memory_retrieved / tool_started / tool_completed / config_generated / approval_required / artifact_created / report_ready
-  stage
-  mcp_server
-  tool_name
-  tool_args_summary
-  status
-  message
-  artifact_ref
-  route_ref
-  evidence_ref
-  created_at
-```
-
-### 7.5 实时进展展示
-
-前端展示：
-
-- 当前阶段：计划、检索记忆、生成配置、校验、等待确认、执行、完成。
-- MCP 调用时间线。
-- 当前配置 JSON 的可读摘要。
-- 配置 diff。
-- 资源预算。
-- 风险等级。
-- 待确认动作。
-- 业务页面深链，例如 QE 模板详情、实验详情、Validation 报告。
-- 失败原因和可选修复建议。
-
----
-
-### 7.6 MCP 与 Skill 双接口架构
-
-AIstock 研究助理未来必须同时具备 MCP 和 Skill 两套接口。
-
-核心定义：
-
-- **MCP 是系统执行接口**：负责调用 AIstock 已有模块、读取事实状态、创建任务、运行实验、同步 GitHub、执行验证。
-- **Skill 是专业能力接口**：负责告诉 Agent 如何分析、如何研发、如何组织流程、如何生成方案、如何解释结果。
-
-一句话概括：
-
-> MCP 负责“做动作”，Skill 负责“会做事”。
-
-两者协同关系：
-
-```mermaid
-flowchart TD
-    User["用户任务"] --> Router["任务路由器"]
-    Router --> Skill["选择Skill: 方法/流程/分析"]
-    Skill --> NeedData["确定数据和工具需求"]
-    NeedData --> MCP["调用MCP读取状态或执行操作"]
-    MCP --> Result["结构化结果"]
-    Result --> Skill2["Skill分析/解释/生成建议"]
-    Skill2 --> Workbench["工作台展示配置/报告/风险"]
-    Workbench --> Approval["用户确认"]
-    Approval --> MCP2["MCP执行写操作"]
-    MCP2 --> Memory["写入任务状态和长期记忆"]
-```
-
-### 7.7 MCP 使用场景
-
-MCP 适合所有需要稳定、结构化、可审计、可回放的系统操作。
+MCP 负责“做动作”，Skill 负责“会做事”。
 
 | 场景 | 首选 MCP | 原因 |
 |---|---:|---|
@@ -675,37 +340,84 @@ MCP 适合所有需要稳定、结构化、可审计、可回放的系统操作�
 | 写长期任务状态 | 是 | 任务账本是事实源 |
 | 写长期记忆 | 是，通过 Memory API/MCP | 需要权限、索引和审计 |
 
-### 7.8 Skill 使用场景
+### 7.2 QE 实验示例流程
 
-Skill 适合专业流程、方法论、研发范式、复杂分析步骤和可复用研究工作流。
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant A as 研究助理
+    participant S as Skill
+    participant M as MCP
+    participant W as Workbench
+    participant Mem as Memory Ledger
 
-| 场景 | 首选 Skill | 说明 |
-|---|---:|---|
-| QE 实验结果诊断 | 是 | 需要指标解释、失败归因、稳定性分析 |
-| HMM 演进方案设计 | 是 | 需要研究经验、regime 分析、验证计划 |
-| 因子研发 | 是 | 需要因子设计、数据约束、IC/OOS 检验流程 |
-| 模型研发 | 是 | 需要训练、评估、泄漏检查、稳定性分析 |
-| 交易策略设计 | 是 | 需要交易逻辑、风控、回测、执行约束 |
-| 事件处理演进 | 是 | 需要误杀/漏判、事件定义、集成路径 |
-| Paper v2 业务流程审查 | 是 | 需要跨模块业务理解 |
-| 研究报告生成 | 是 | 需要固定结构和审查标准 |
-| Issue 修复流程说明 | 是 | 作为流程指导；创建 Issue 仍走 MCP |
-| 开发新代码 | Skill 只生成任务包 | 具体编码交给 Codex/Claude 开发流程 |
+    U->>A: 设计 QE 10 loop 实验
+    A->>Mem: 读取 Core/Procedural/Experiment Memory
+    A->>S: 调用 QE 诊断/实验设计 Skill
+    S->>A: 返回实验设计草稿
+    A->>M: qe_template_validate / preflight
+    M->>A: 返回校验和风险
+    A->>W: 展示配置、diff、预算、风险
+    U->>W: 审批当前 config_version
+    W->>M: materialize / run confirmed
+    M->>W: 返回任务进度和事件
+    W->>Mem: 写入任务状态、实验记忆、证据
+```
 
-现有 AIstock skill 应继续复用并纳入治理，例如：
+### 7.3 任务事件流
 
-- `qe-evolution-diagnostics`
-- `analyze-factor-library`
-- `develop-factor`
-- `develop-minute-execution-algo`
-- `rdagent-task-analyzer`
-- `rdagent-data-doctor`
-- `tushare`
-- `add-tushare-dataset`
+```text
+agent_task_events
+  id
+  task_id
+  event_type              -- planned / mcp_started / mcp_done / mcp_failed / approval_required / approved / rejected / report_ready
+  severity
+  message
+  payload_json
+  evidence_refs
+  created_at
+```
 
-这些 skill 是未来研究助理的专业能力来源，但必须进入统一 Skill Registry，不能作为无审计的临时提示词使用。
+### 7.4 审批请求
 
-### 7.9 Skill Registry 设计
+```text
+assistant_approval_requests
+  id
+  task_id
+  approval_type            -- create_template / materialize / run_experiment / github_issue / long_compute / production_write
+  risk_level
+  plan_digest
+  config_version_id
+  summary
+  required_confirmation_text
+  status                   -- pending / approved / rejected / expired
+  approved_by
+  approval_source          -- ui_button / chat_text / codex_review
+  approval_text
+  approved_at
+```
+
+规则：
+
+1. L2+ 写操作必须先生成 plan digest、配置快照和 preflight。
+2. 配置版本变化后旧审批自动失效。
+3. GitHub Issue 正式入库必须单独确认。
+4. 长时间任务必须展示资源预算。
+5. 失败后进入 triage，不允许 Agent 自行重复高风险写操作。
+
+---
+
+## 8. 本地 Skill Catalog
+
+Phase 1 只做本地 Skill Catalog，不做公共市场、远程安装、多租户、评分发布。
+
+已确认首批 Skill：
+
+1. QE 诊断。
+2. 因子库分析。
+3. 因子研发任务包。
+4. RDAgent 任务分析。
+5. 数据健康检查。
 
 ```text
 assistant_skill_registry
@@ -731,311 +443,246 @@ assistant_skill_registry
   updated_at
 ```
 
-Skill 风险等级：
-
-| Skill 类型 | 风险 | 处理方式 |
-|---|---:|---|
-| 纯分析 skill | 低 | 可自动使用 |
-| 报告生成 skill | 低 | 可自动使用 |
-| 诊断 skill | 中 | 自动使用，但结论必须绑定证据 |
-| 实验设计 skill | 中 | 生成草稿，执行需审批 |
-| 因子/模型/策略开发 skill | 高 | 只生成任务包，不由研究助理直接写代码 |
-| 带脚本执行 skill | 高 | 必须白名单、审计、沙箱或 MCP controlled runner |
-| 第三方下载/安装 skill | 高 | 默认禁止，需安全审查 |
-
-### 7.10 Skill 安全治理
+安全规则：
 
 1. Skill 必须本地白名单注册。
 2. Skill 必须版本锁定和 checksum 校验。
 3. Skill 不能绕过 MCP 写 AIstock 状态。
 4. Skill 不能直接创建正式 GitHub Issue。
-5. Skill 不能直接写代码、提交代码或合入 main；开发类 skill 只能生成任务包。
-6. Skill 使用必须写入 task trace，包括输入、输出、版本、checksum、使用的 MCP 工具和证据。
-7. Skill 产生的重要结论默认进入 memory candidate，需要按记忆类型审批。
-8. 公共 skill 生态只能作为参考，不能直接安装到生产助理。
-
-### 7.11 MCP + Skill + Memory + Workbench 四层能力
-
-AIstock 研究助理的最终能力栈：
-
-```text
-Memory
-  长期记忆、任务状态、架构事实、用户规划。
-
-Skills
-  方法论、研发流程、分析能力、诊断能力、报告模板。
-
-MCP
-  AIstock 模块操作、状态查询、实验执行、Issue 同步、验证执行。
-
-Workbench
-  实时进度、配置预览、审批、报告、深链、多窗口展示。
-```
-
-- Memory 让它“记得住”。
-- Skill 让它“懂方法”。
-- MCP 让它“能执行”。
-- Workbench 让用户“看得见、能确认、能干预”。
-
-
-## 8. 多屏幕与多窗口协同
-
-### 8.1 设计目标
-
-用户未来可能使用多个屏幕：
-
-- 屏幕 A：主对话和总览。
-- 屏幕 B：HMM 模型演进窗口。
-- 屏幕 C：QE 实验演进窗口。
-- 屏幕 D：因子研发窗口。
-- 屏幕 E：Validation/Issue 窗口。
-
-研究助理必须统一协调这些窗口，避免每个窗口成为孤立 Agent。
-
-### 8.2 数据模型
-
-```text
-assistant_workspace_sessions
-  id
-  user_id
-  title
-  status
-  active_window_id
-  created_at
-  updated_at
-
-assistant_windows
-  id
-  workspace_session_id
-  window_type              -- main_chat / hmm_stream / qe_stream / factor_stream / validation_stream / report
-  bound_stream_id
-  bound_task_id
-  route
-  display_name
-  last_seen_at
-  status
-
-assistant_window_events
-  id
-  window_id
-  task_event_id
-  sync_action              -- show / highlight / notify / require_attention
-  created_at
-```
-
-### 8.3 并行 Research Streams
-
-```text
-research_streams
-  id
-  stream_key               -- hmm_evolution / qe_evolution / factor_research / event_signal / validation_discovery
-  title
-  objective
-  priority
-  status                   -- active / paused / blocked / completed / archived
-  current_phase
-  owner_agent
-  resource_budget_json
-  latest_summary
-  next_actions_json
-  memory_namespace
-  created_at
-  updated_at
-```
-
-### 8.4 多窗口确认规则
-
-1. 同一高风险任务只能有一个 active approval。
-2. 任何窗口都可以发起讨论，但执行确认必须绑定 approval ID。
-3. 如果多个窗口同时修改同一实验配置，必须产生版本冲突提示。
-4. 主窗口总览必须显示所有 stream 的等待确认、失败和下一步。
-5. 研究助理每天生成跨 stream 晨报。
+5. Skill 不能直接写代码、提交代码或合入 main。
+6. 公共 skill 未来只能人工筛选、人工审查、版本锁定后导入本地目录。
 
 ---
 
-## 9. 任务编排和人工/对话确认
+## 9. 流水线 AI Agent 与研究助理关系
 
-### 9.1 任务生命周期
+流水线 AI Agent 不再作为独立 Agent 系统设计。它并入研究助理，成为 `Validation / Pipeline Discovery Stream`。
 
-```mermaid
-stateDiagram-v2
-    [*] --> Draft
-    Draft --> Planned: 生成计划
-    Planned --> ConfigPreview: 生成配置草稿
-    ConfigPreview --> PreflightReady: MCP dry-run/preflight
-    PreflightReady --> WaitingApproval: 需要确认
-    WaitingApproval --> Running: UI确认或对话确认
-    Running --> Paused: 等待进一步输入
-    Paused --> ConfigPreview: 用户修改配置
-    Running --> Succeeded
-    Running --> Failed
-    Failed --> Triage
-    Triage --> CandidateIssue
-    CandidateIssue --> WaitingIssueApproval
-    WaitingIssueApproval --> GithubIssueSynced: 用户/Codex批准
-    Succeeded --> Reported
-    GithubIssueSynced --> Reported
-    Reported --> MemoryWritten
-    MemoryWritten --> [*]
-```
+| 组件 | 负责内容 |
+|---|---|
+| 流水线平台 | 测试计划、验证执行、覆盖率、质量数据、夜间任务结果、报告页面、Validation MCP |
+| 研究助理 | 跨模块推理、设计/实现一致性检查、夜间探索式测试调度、候选 Issue 归因、晨报、长期记忆沉淀 |
+| Issue/GitHub 治理 | 正式 Issue 入库、GitHub 同步、去重、审批和状态一致性 |
 
-### 9.2 对话确认机制
+约束：
+
+1. 流水线 AI 探测、LLM 夜间报告和候选 Issue 都使用同一套长期记忆、模型路由、审批和证据链。
+2. 流水线不另建独立长期记忆或独立 LLM 配置。
+3. Validation Stream 产生的问题先进入 `issue_candidates`，正式 Issue 仍需用户或 Codex 审批并同步 GitHub。
+4. 夜间测试报告既在流水线 UI 展示，也写入研究助理任务事件和晨报。
+
+---
+
+## 10. External Agent Connector
+
+Codex / Claude Code 可以通过 External Agent Connector 接入助理，甚至作为外部主模型执行完整助理功能，但不能绕过 AIstock 权限和 MCP 门禁。
 
 ```text
-assistant_approval_requests
+assistant_external_agent_sessions
+  id
+  agent_type              -- codex / claude_code / cli / other
+  agent_name
+  model_profile_id
+  auth_scope
+  bound_task_id
+  bound_stream_id
+  can_act_as_primary
+  status
+  created_at
+  last_seen_at
+
+assistant_external_agent_events
+  id
+  session_id
+  event_type              -- request_context / report_progress / attach_evidence / propose_issue / propose_memory / ask_decision
+  payload_json
+  evidence_refs
+  risk_level
+  created_at
+```
+
+允许能力：
+
+- 查询任务状态。
+- 获取 Context Pack。
+- 写入任务进度。
+- 附加证据。
+- 创建候选 Issue。
+- 提出记忆候选。
+- 请求用户/Codex 审核。
+
+禁止能力：
+
+- 绕过审批启动 L2+ 操作。
+- 直接写 approved Core/Procedural/Architecture 记忆。
+- 直接创建正式 GitHub Issue。
+- 直接合入 main。
+- 直接触碰生产服务/DB。
+
+---
+
+## 11. 多模型路由、国内模型与 Persona
+
+### 11.1 模型角色
+
+| 模型角色 | 适合任务 | 记忆权限 |
+|---|---|---|
+| primary_reasoner | 架构分析、复杂实验方案、跨模块判断、候选 Issue 审核 | 可写 memory candidate，approved 仍走审批 |
+| cheap_worker | 日志摘要、MCP 结果归纳、状态分类、重复性报告 | 可写 task-scoped 临时记忆 |
+| long_context | 大文档、大代码结构、长实验历史分析 | 可写 evidence summary 和 memory candidate |
+| structured | JSON 抽取、字段归一化、报告格式化 | 只写结构化中间结果 |
+| embedding / rerank | 检索和证据重排 | 不写业务记忆 |
+| reviewer | 候选 Issue、实验方案、研究结论复核 | 可写审核意见，不直接执行 |
+| external_agent | Codex / Claude Code 作为外部主模型或执行代理 | 通过 Connector 受控写入 |
+
+### 11.2 国内模型 provider
+
+| Provider | 适合角色 | 设计要求 |
+|---|---|---|
+| DeepSeek | 主推理、低价推理、代码/Agent 后端候选 | 支持 OpenAI-compatible 调用时复用统一 client |
+| 智谱 GLM | Agent、工具调用、结构化输出、MCP 场景 | 验证 function call、JSON 输出、长上下文和成本 |
+| Qwen / 阿里 Model Studio | 通用模型、长文本、批量低成本任务 | 适合批量摘要、结构化抽取、成本可控任务 |
+| Kimi / Moonshot | 长上下文、长文档、研究资料总结 | 适合大文档和论文资料分析 |
+| 其他国内模型 | 补充 provider | 按工具调用、稳定性、价格、上下文、隐私策略评估 |
+
+### 11.3 临时记忆
+
+```text
+assistant_temp_memories
   id
   task_id
-  approval_type            -- create_template / materialize / run_experiment / github_issue / long_compute / production_write
-  risk_level
-  plan_digest
-  config_version_id
-  summary
-  required_confirmation_text
-  status                   -- pending / approved / rejected / expired
-  approved_by
-  approval_source          -- ui_button / chat_text / codex_review
-  approval_text
-  approved_at
+  stream_id
+  model_profile_id
+  memory_type              -- progress / observation / log_summary / tool_result_summary / hypothesis
+  content_json
+  content_text
+  evidence_refs
+  confidence
+  expires_at
+  promoted_memory_id
+  created_at
 ```
 
-确认规则：
+规则：
 
-1. 对话确认必须明确，例如“确认执行当前版本配置”。
-2. 如果配置版本变化，旧确认自动失效。
-3. 如果风险等级提升，必须重新确认。
-4. GitHub Issue 正式入库必须单独确认。
-5. 长时间任务必须展示资源预算后确认。
+1. 低价模型可以写入 task-scoped 临时记忆。
+2. 临时记忆默认有过期时间，不进入全局长期记忆检索。
+3. 主模型可读取临时记忆并提升为 memory candidate。
+4. 低价模型不得写 approved 长期记忆。
+
+### 11.4 Persona
+
+Persona 只影响表达风格和报告结构，不能改变权限、审批、风险等级、MCP、实盘边界或记忆写入规则。
+
+| Persona | 适合场景 |
+|---|---|
+| 严谨审计型 | Issue 审核、合入前验证、风险分析 |
+| 量化研究员型 | QE/HMM/因子实验讨论 |
+| 项目经理型 | 今日事项、任务排期、晨报 |
+| 简洁执行型 | 状态查询、批量任务、日志摘要 |
+| 顾问教练型 | 长期规划、方案解释 |
+| 质疑评审型 | 设计审查、Bug 探测 |
 
 ---
 
-## 10. 在线搜索与外部资料记忆
+## 12. 外部搜索和资料证据
 
-在线搜索是研究助理能力之一，但搜索结果不能直接污染核心记忆。
+### 12.1 Provider 策略
+
+Firecrawl 价格偏高，不作为默认搜索入口。外部搜索采用多 provider、成本可控、证据优先策略。
+
+| 层级 | Provider | 用途 |
+|---|---|---|
+| L1 中文低成本搜索 | 博查 AI Search API、秘塔 API、SearXNG 自托管 | 中文财经、政策、行业新闻、国内资料 |
+| L2 学术/技术搜索 | arXiv MCP、Semantic Scholar MCP、Paper Search MCP、GitHub search | 因子、模型、HMM、事件研究论文和技术资料 |
+| L3 高质量抓取/抽取 | Firecrawl MCP、Jina Reader、自建 Playwright crawler | 复杂网页正文抽取、markdown、失败重试、PDF/网页深抓取 |
+| L4 金融/宏观补充 | Alpha Vantage、Yahoo Finance、其他行情/宏观 API | 海外市场、商品、宏观指标补充 |
+
+默认策略：
+
+1. 中文财经/政策/行业新闻优先博查/秘塔/SearXNG。
+2. 论文/模型/因子研究优先 arXiv/Semantic Scholar/Paper Search。
+3. Firecrawl 只在需要完整正文、复杂网页解析或其他 provider 失败时调用。
+4. 高频夜间任务默认不走 Firecrawl，除非预算允许或用户确认。
+5. 所有 provider 必须记录价格、调用次数、来源、抓取时间、可信度和预算。
+
+### 12.2 Firecrawl 使用边界
+
+Firecrawl 作为高质量网页抓取/抽取候选工具，不作为默认搜索入口。
+
+设计要求：
+
+1. 接入前必须读取官方 pricing，确认 credits、免费额度、额外包和预算上限。
+2. 每次调用记录 `creditsUsed`、query、source、task_id、model_profile。
+3. 必须支持 daily/monthly budget，超过预算自动暂停外部搜索任务。
+4. 中文搜索必须做 PoC，验证中文 query、中文网页抓取、正文抽取、发布时间和反爬稳定性。
+5. Firecrawl 结果默认 `untrusted evidence`，不能直接写 Core/Procedural/Architecture memory。
+
+### 12.3 自托管说明
+
+自托管是指把搜索/抓取服务部署在自己的机器或服务器上，由 AIstock 调用本地服务。
+
+优点：
+
+- 成本可控。
+- 数据更可控。
+- 可以针对中文财经网站优化。
+- 可减少对高价外部 API 的依赖。
+
+缺点：
+
+- 需要维护 Docker/Redis/Playwright/代理/升级/监控。
+- 搜索质量依赖上游搜索源。
+- 中文新闻和财经网页抽取需要调优。
+- 反爬和网络稳定性需要持续维护。
+
+### 12.4 证据管线
+
+```text
+query -> provider -> fetch/crawl -> source evidence -> trusted/untrusted 标记 -> summary -> memory candidate
+```
 
 ```text
 research_web_sources
   id
   task_id
+  provider
   query
   url
   title
   publisher
+  published_at
   fetched_at
   summary
+  raw_ref
   source_type              -- docs / github / paper / blog / forum / news
   reliability_rating
+  trust_level              -- trusted / untrusted / internal / official
+  cost_json
   used_in_report
   memory_candidate_id
 ```
 
-规则：
-
-1. 官方文档、GitHub、论文优先。
-2. 当前性问题必须重新搜索。
-3. 外部资料只能成为 evidence 或 draft memory。
-4. 成为 architecture/procedural memory 前必须审核。
-
 ---
 
-### 10.4 实时搜索与外部分析工具接入
+## 13. UI 页面设计
 
-用户要求行业新闻、期货行情、国际局势、前沿论文和 ML 模型应用分析必须基于实时搜索和可追溯来源，不能只是 LLM 自己总结。因此本方案采用“搜索证据优先”的设计：
+### 13.1 UI 模板选择
 
-```mermaid
-flowchart TD
-    Query["用户问题"] --> Planner["搜索计划"]
-    Planner --> Search["搜索/学术/行情 MCP"]
-    Search --> Fetch["抓取网页/论文/数据"]
-    Fetch --> Rank["去重/可信度评分/时间过滤"]
-    Rank --> Evidence["保存来源证据"]
-    Evidence --> Summary["LLM 基于来源总结"]
-    Summary --> Report["报告 + 引用 + 风险提示"]
-    Report --> MemoryCandidate["必要时进入记忆候选"]
-```
+研究助理 UI 采用 **AIstock Console Template**：保留 AIstock 现有左侧导航；研究助理页面内部采用 Ant Design Pro 风格业务控制台结构，结合现有 `SectionCard`、`MetricCard`、`PaperTable`、`StatusBadge` 和 `components/ui` 基础组件；对话区后续可评估 Ant Design X；驾驶舱图形化后续可评估 React Flow。
 
-候选开源/可接入工具：
-
-| 工具 | 类型 | 可用能力 | 建议 |
-|---|---|---|---|
-| SearXNG | 开源元搜索引擎 | 聚合多个搜索引擎，适合自托管搜索入口 | 推荐作为基础搜索 provider 候选 |
-| Perplexica | 开源 AI 搜索引擎 | 类 Perplexity 的搜索 + 引用回答，通常可接 SearXNG | 可作为自托管搜索问答候选 |
-| Firecrawl MCP | 开源/可托管网页抓取与搜索 MCP | search、crawl、scrape、extract、deep research | 推荐评估为网页抓取和资料抽取工具 |
-| mcp-omnisearch | MCP 聚合搜索 | 聚合 Tavily、Brave、Kagi、Perplexity、Jina AI 等 | 可作为多 provider 搜索适配参考 |
-| arXiv MCP Server | 学术论文 MCP | 搜索、下载、阅读 arXiv 论文 | 推荐用于因子、ML、HMM、事件研究论文 |
-| Semantic Scholar MCP | 学术搜索 MCP | 论文搜索、引用、作者、相关论文 | 推荐用于前沿技术和论文关系分析 |
-| Paper Search MCP | 学术聚合 MCP | arXiv、PubMed、Semantic Scholar 等聚合 | 可作为学术搜索聚合候选 |
-| Alpha Vantage MCP | 金融/宏观/行情 MCP | 股票、外汇、加密、商品、经济指标等 API | 可作为国际行情/宏观补充数据源候选 |
-| Yahoo Finance MCP | 金融数据 MCP | 股票行情、图表、新闻等 | 可作为海外市场/对照数据候选 |
-
-接入原则：
-
-1. 优先接入成熟 MCP 或自托管搜索工具，不优先自研搜索引擎。
-2. 搜索、抓取、摘要必须分层，LLM 只能基于已保存来源生成结论。
-3. 所有来源必须保存 URL、标题、发布时间/抓取时间、provider、可信度评分。
-4. 当前性问题必须重新搜索，不能只使用长期记忆。
-5. 行情和期货数据必须标注数据延迟和来源，不得伪装为实时交易行情。
-6. 学术分析必须优先使用论文、官方文档、GitHub、会议页面等高可信来源。
-7. 对国际局势、政策、宏观影响等不确定主题，报告必须列出多来源观点和风险，不输出单一确定结论。
-
-### 10.5 搜索工具选择建议
-
-Phase 1 不建议一次接入所有工具。推荐路线：
-
-1. **第一优先：Firecrawl MCP 或 SearXNG/Perplexica 二选一**，解决网页搜索和来源保存。
-2. **第二优先：arXiv MCP + Semantic Scholar MCP**，解决论文和前沿技术资料。
-3. **第三优先：Alpha Vantage MCP / Yahoo Finance MCP**，作为海外行情、商品、宏观指标补充。
-4. **AIstock 内部股票分析 MCP** 负责本地股票数据和业务解释，外部搜索只补充新闻、行业、国际影响。
-
-工具使用必须通过 `external_research_policy` 控制：
+### 13.2 页面结构
 
 ```text
-external_research_policy
-  provider_name
-  provider_type              -- search / academic / finance / news / crawler
-  allowed_domains
-  blocked_domains
-  freshness_required
-  max_results
-  citation_required
-  cache_ttl_seconds
-  approval_required_for_paid_api
-  enabled
+AIstock 全局 Sidebar
+  Research Assistant 页面
+    顶部 Page Header：标题、当前模型、任务状态、快速操作
+    顶部功能导航：总览 / 对话 / 工作台 / 任务 / 记忆 / 图谱 / MCP / Skill / 审批 / 报告 / 模型 / 设置
+    主内容区：卡片 + 表格 + 时间线 + 抽屉详情
+    右侧可选上下文栏：当前任务、等待审批、关联记忆、证据来源
 ```
 
-
-## 11. 候选 Issue 与正式 Issue
-
-研究助理可以生成候选 Issue，但不能直接无审批入库。
-
-```text
-issue_candidates
-  id
-  source_task_id
-  title
-  severity_suggestion
-  module_suggestion
-  evidence_refs
-  reproduction_steps
-  expected
-  actual
-  confidence
-  dedupe_candidates
-  status                   -- draft / needs_review / approved / rejected / promoted
-```
-
-正式入库规则：
-
-1. 必须经用户或 Codex 审批。
-2. 必须同步 GitHub Issue。
-3. 不允许提交无 GitHub 链接的正式 BUG JSON。
-4. GitHub issue number 和 URL 必须回写。
-5. 本地状态和 GitHub 状态必须一致。
-
----
-
-## 12. UI 页面设计
-
-### 12.1 路由
+### 13.3 路由
 
 ```text
 /research-assistant
@@ -1044,254 +691,287 @@ issue_candidates
 /research-assistant/tasks
 /research-assistant/streams
 /research-assistant/memory
+/research-assistant/graph
 /research-assistant/mcp-tools
+/research-assistant/skills
 /research-assistant/approvals
 /research-assistant/reports
+/research-assistant/models
+/research-assistant/settings
 /research-assistant/cockpit          # Phase 2/3
 /research-assistant/stock-analysis    # Phase 2
-/research-assistant/settings
 ```
 
-### 12.2 页面职责
+### 13.4 页面职责
 
-| 页面 | 职责 |
-|---|---|
-| 总览 | 所有 stream 状态、等待确认、失败、今日报告 |
-| Chat | 对话、计划生成、配置讨论、文字/未来语音汇报 |
-| Workbench | MCP 执行进度、实验配置预览、配置 diff、业务深链 |
-| Tasks | 所有 Agent 任务和事件流 |
-| Streams | HMM/QE/因子/事件等长期研究流 |
-| Memory | 记忆搜索、审批、废弃、冲突处理、记忆审计 |
-| MCP Tools | MCP server/tool/schema/风险等级/健康状态 |
-| Approvals | 等待确认动作、风险、参数快照、确认原文 |
-| Reports | 晨报、研究报告、实验报告、候选 Issue 报告 |
-| Settings | LLM Provider、Prompt、资源预算、Memory Adapter |
-
-### 12.3 与提示词管理关系
-
-现有 `/quantevolver/prompts` 可短期复用，但长期应抽象为通用 Prompt Registry：
-
-- QE prompts。
-- Research Assistant prompts。
-- HMM evolution prompts。
-- Event signal prompts。
-- Factor research prompts。
-- Validation discovery prompts。
-
-Prompt 版本必须和 Agent trace、报告、任务配置绑定。
-
----
-
-## 13. LLM 模型和可替换性
-
-### 13.1 模型路由
-
-| 场景 | 模型要求 |
-|---|---|
-| 简单状态汇报 | 低成本模型 |
-| 大文档/大架构分析 | 1M 上下文模型 |
-| 实验方案生成 | 强推理模型 |
-| Issue 候选审核 | 强推理 + 证据约束 |
-| 记忆整理 | 稳定结构化输出模型 |
-| 在线搜索总结 | 支持引用和可靠摘要的模型 |
-
-### 13.2 模型替换要求
-
-1. 记忆不依赖模型私有能力。
-2. 每次运行记录 model profile。
-3. Prompt、Context Pack、工具返回、最终报告都可回放。
-4. 更换模型只影响推理，不影响任务账本和记忆事实源。
+| 页面 | 职责 | Phase 1 状态 |
+|---|---|---|
+| 总览 | 所有 stream 状态、待确认、失败、今日报告、成本摘要 | 完整实现 |
+| Chat | 主对话、计划生成、配置讨论、文字汇报 | 完整实现主窗口 |
+| Workbench | MCP 执行进度、配置预览、diff、业务深链、失败 triage | 完整实现 |
+| Tasks | Agent 任务和事件流 | 完整实现 |
+| Memory | 记忆搜索、审批、废弃、冲突处理、审计 | 完整实现 |
+| Graph | 轻量知识图谱实体、关系、实验谱系 | 表格/列表/关系详情，不做复杂图形化 |
+| MCP Tools | MCP server/tool/schema/risk/health | 完整实现 |
+| Skills | 本地 Skill Catalog、版本、checksum、权限、使用记录 | 完整实现 |
+| Approvals | 待确认动作、风险、参数快照、确认原文 | 完整实现 |
+| Reports | 晨报、研究报告、实验报告、候选 Issue 报告 | 完整实现 |
+| Models | provider、profile、routing policy、成本规则 | 完整实现基础配置 |
+| Cockpit | 任务/实验/Issue/资源概览 | Phase 2/3 增强 |
 
 ---
 
 ## 14. 语音能力预留
 
-语音不是第一阶段功能，但架构需预留：
+语音不是 Phase 1 功能。Phase 2/3 优先托管 Realtime 语音模型做体验验证，再按隐私、成本和离线需求补充本地 STT/TTS。
 
-- 语音输入转文本。
-- 研究晨报语音播报。
-- 等待确认提醒。
-- 高风险操作不能只用语音确认，必须转文本并绑定 approval。
+| 子能力 | 作用 | 候选方案 |
+|---|---|---|
+| VAD | 判断用户是否正在说话 | Silero VAD、WebRTC VAD |
+| Wake Word | 本地唤醒词 | openWakeWord |
+| STT | 语音转文字 | OpenAI Speech-to-text、Whisper、whisper.cpp、Vosk、国内云 ASR |
+| TTS | 助理播报 | OpenAI TTS、Piper、Coqui TTS、国内云 TTS |
+| Realtime Voice Agent | 低延迟语音对话和打断 | OpenAI Realtime 或自建 STT + LLM + TTS |
 
-```text
-assistant_voice_events
-  id
-  task_id
-  direction
-  transcript
-  audio_ref
-  confidence
-  confirmed_text
-  created_at
-```
+安全规则：
+
+1. 高风险操作不能只靠语音确认，必须转成文本并绑定 approval request、plan digest 和 config version。
+2. 低置信度转写只能进入草稿或澄清，不得执行。
+3. 语音不能绕过 MCP、审批、记忆写入和实盘不可达边界。
 
 ---
 
-## 15. 阶段计划
+## 15. 通知和提醒
 
-### Phase 0：文档评审
+Phase 1 只实现 Web 内通知和通知数据模型；Phase 2 再接桌面通知、IM、邮件或语音提醒。
 
-- 完成本设计文档。
-- 用户评审。
-- Claude Code 审核。
-- 明确长期记忆方案是否采用“AIstock 原生 + adapter”。
+```text
+assistant_notifications
+  id
+  user_id
+  source_type          -- task / approval / report / reminder / issue_candidate
+  source_id
+  title
+  message
+  severity            -- info / warning / critical
+  status              -- unread / read / dismissed / resolved
+  action_route
+  created_at
+  read_at
+```
 
-### Phase 1：MCP 执行工作台 + 原生长期记忆 MVP
+Phase 1 UI 必须展示：
+
+1. 顶部待处理计数。
+2. 总览页“待我处理”卡片。
+3. Approvals 页面待确认列表。
+4. Reports 晨报提醒。
+5. 任务详情中的“需要关注”。
+
+---
+
+## 16. 阶段实施目标和功能边界
+
+### Phase 0：设计冻结和实施准备
+
+| 目标 | 交付物 | 验收标准 |
+|---|---|---|
+| 设计冻结 | 本文档 v4、用户确认记录 | 不存在互相冲突的阶段目标 |
+| 实施分支准备 | 独立 worktree、独立 feature 分支 | 不在 main 或生产根目录开发 |
+| 数据迁移规划 | Phase 1 表结构、回滚方案 | DDL gate 明确 |
+| API/MCP 契约规划 | API、MCP tools、risk level、schema | 写操作有 preflight/approval/idempotency |
+| UI 原型规划 | 页面结构、顶部导航、卡片/表格/抽屉模式 | 与现有 Sidebar 不冲突 |
+
+### Phase 1：核心助理能力完整交付
 
 必须实现：
 
-1. Research Assistant 基础页面。
-2. MCP 工具目录。
-3. Task Ledger。
-4. Agent Task Event Stream。
-5. MCP 执行工作台。
-6. 原生 Memory Backbone 基础表和检索。
-7. Context Pack 生成。
-8. UI 审批中心。
-9. QE Archive 只读分析和 QE Template 草稿/校验流程。
-10. 候选 Issue 队列。
+1. Research Assistant 主页面、主对话入口、顶部功能导航和页面模板。
+2. MCP 工具目录、schema 展示、健康状态、risk level、preflight 和执行事件。
+3. Task Ledger、Agent Task Event Stream、失败 triage、idempotency key。
+4. MCP 执行工作台：配置草稿、配置 diff、preflight、执行进度、tool result、业务深链。
+5. 原生 Memory Ledger 和非 RAG Context Pack。
+6. 轻量知识图谱原生表和关系检索。
+7. 本地 Skill Catalog 和首批 Skill。
+8. Validation / Pipeline Discovery Stream。
+9. External Agent Connector 合同。
+10. 多模型路由和临时记忆。
+11. UI 审批中心。
+12. 候选 Issue 队列和 GitHub 正式入库门禁。
+13. 今日事项、晨报、提醒和 personal namespace。
+14. Web 内通知。
+15. 原生 trace 和成本/耗时记录。
 
 明确不做：
 
 - 不控制鼠标键盘。
+- 不写代码、提交代码、创建 PR 或合入 main。
 - 不自动创建正式 Issue。
-- 不自动运行长时间实验。
+- 不自动运行长时间或高成本实验。
 - 不接入语音。
-- 不依赖外部 memory server。
+- 不引入图数据库。
+- 不接入外部 memory engine 到运行路径。
+- 不接入公共 Skill 市场。
+- 不注册任何实盘交易 MCP/Skill/审批入口。
+- 不实现多窗口对话。
 
-### Phase 2：对话确认、多窗口、多 Stream、Memory Adapter PoC
+### Phase 2：协同展示、外部增强和业务扩展
 
 必须实现：
 
-1. 对话确认执行。
-2. 多窗口 workspace session。
-3. HMM/QE/因子/事件 Research Streams。
-4. Mem0 OSS adapter PoC。
-5. Graphiti temporal graph adapter PoC。
-6. Langfuse 或原生 LLM trace 增强。
-7. 工作台支持 QE 10 loop 配置版本和 diff。
+1. 对话确认执行：NLU 意图识别、plan digest 匹配、确认原文回放。
+2. 多状态窗口 workspace session。
+3. HMM/QE/因子/事件 Research Streams 长期任务视图。
+4. Mem0/Graphiti/LangMem/Letta adapter 只读或镜像 PoC。
+5. QE 10 loop 配置版本、diff、preflight、审批、执行状态完整交互。
+6. 股票分析 MCP：复用现有股票分析能力，输入股票代码生成报告，不触发交易。
+7. 基础驾驶舱卡片。
+8. 外部搜索 provider PoC：中文低成本 provider + 学术 MCP + Firecrawl/Jina 抽取备用。
+9. 桌面通知或 IM 通知。
+10. 语音 Realtime 试点。
 
 ### Phase 3：长期自治研究助手
 
 必须实现：
 
-1. 每日晨报。
+1. 每日晨报和定时提醒自动化。
 2. 自动推进 read-only/dry-run 白名单任务。
-3. 多 Agent 分工。
-4. 长期记忆审计报告。
+3. 多 Agent 分工和 orchestrator 仲裁。
+4. 长期记忆审计报告和图谱审计报告。
 5. 自动候选 Issue 生成和人工入库审批。
-6. 语音输入/播报试点。
+6. 本地 STT/TTS 混合路线验证。
+7. Temporal 或同等级工作流引擎技术验证。
+8. AIstock 架构图、MCP 拓扑、任务依赖图和资源状态图形化展示。
+
+### Phase 4：独立产品化
+
+必须实现：
+
+1. 抽离 `assistant_product_core`，AIstock 成为首个 domain adapter。
+2. 支持其他 MCP/API 应用接入同一助理框架。
+3. 支持可替换 Memory Provider、Skill Provider、MCP Gateway、Channel Provider。
+4. 支持人工筛选公共 skill 后本地导入。
+5. 保持 AIstock 私有策略、生产边界和研究记忆不外泄。
 
 ---
 
-## 16. 开发验收指标
+## 17. 开发功能验证矩阵
 
-### 16.1 长期记忆验收
+### 17.1 总体验收红线
 
-| 项目 | 验收指标 |
-|---|---|
-| 记忆入库 | Core/Procedural/Architecture/Task/Experiment/Episodic 至少 6 类可写入 |
-| 分层检索 | 能按 user/project/module/stream/task/experiment 作用域检索 |
-| Context Pack | 每次 Agent 执行能生成可回放上下文包 |
-| 记忆审批 | Core/Procedural/Architecture 记忆支持 draft/approved/rejected/superseded |
-| 冲突处理 | 支持 supersedes/contradicts/valid_to |
-| 模型无关 | 更换模型不影响记忆查询和任务状态 |
-| 记忆审计 | 能导出记忆来源、使用记录、写入人、审批状态 |
-| 外部 adapter | Phase 2 至少完成 Mem0 或 Graphiti 的只读 PoC |
+| 验收项 | 验收标准 | 阻断条件 |
+|---|---|---|
+| 阶段完整性 | Phase 1 清单中的每个模块均有数据模型、API/MCP、UI、审计和测试证据 | 任一 Phase 1 模块只有静态占位或脚本代替 |
+| 真实数据 | UI 接真实 API/MCP 数据，空状态必须说明原因 | 用 mock 数据冒充完成 |
+| 可回放 | 任务计划、Context Pack、MCP 调用、Skill 使用、审批、结果、记忆写入都可追溯 | 关键动作缺少 event/trace |
+| 非 RAG 记忆 | Memory Ledger 是事实源，向量/RAG 只做辅助召回 | 用向量召回结果决定事实或审批 |
+| 安全边界 | 默认无鼠标键盘控制、无代码写入、无 main 合入、无实盘路径 | 任一越权路径存在 |
+| GitHub 一致 | 正式 Issue 必须有 GitHub URL 和状态回写 | 本地正式 BUG JSON 无 GitHub 链接 |
 
-### 16.2 MCP 执行工作台验收
+### 17.2 Phase 1 验收矩阵
 
-| 项目 | 验收指标 |
-|---|---|
-| 实时事件 | MCP 调用开始/完成/失败可实时显示 |
-| 配置预览 | QE 实验草稿能以卡片和 JSON 摘要展示 |
-| 配置 diff | 对话修改后能显示版本差异 |
-| 审批门禁 | 未审批不能执行 L2+ 操作 |
-| 深链跳转 | 能跳转到对应 QE/Validation/Issue 页面 |
-| 证据绑定 | 报告和候选 Issue 绑定 tool result/evidence ref |
+| 模块 | 必须功能 | 验收证据 |
+|---|---|---|
+| UI 模板 | 顶部功能导航、卡片、表格、抽屉、审批按钮、空状态、详情深链 | Playwright/UI smoke；截图；路由清单 |
+| MCP 目录 | server/tool/schema/risk/health、preflight | API 测试；MCP contract 测试 |
+| Task Ledger | 创建任务、状态流转、事件写入、失败 triage、idempotency key | 后端单测；事件流回放测试 |
+| Workbench | 配置草稿、diff、preflight、执行进度、tool result、业务深链 | E2E 流程测试 |
+| Memory Ledger | 分层记忆写入、检索、审批、supersedes/contradicts/valid_to | 后端单测；记忆审计导出 |
+| Context Pack | 必载规则、token budget、source refs、可回放 | 快照测试；回放测试 |
+| 轻量知识图谱 | entity/relation/evolution path、证据绑定 | 图谱 API 测试；关系检索测试 |
+| Skill Catalog | 本地 skill 注册、checksum、权限、trace、禁用 | 后端单测；UI 列表和详情测试 |
+| Validation Discovery | 夜间报告、候选 Issue、流水线证据绑定 | Validation MCP 测试；候选 Issue 测试 |
+| External Agent Connector | Codex/Claude session、context pack 读取、证据写入、候选 Issue | Contract test；权限边界测试 |
+| 多模型路由 | model profile、routing policy、cost、fallback、temp memory | 单测；模型调用 trace 样例 |
+| 审批中心 | risk、plan digest、config version、审批失效、审批回放 | E2E；状态机测试 |
+| 候选 Issue | 去重、证据、复现、审批、GitHub 正式同步门禁 | 后端单测；GitHub dry-run/同步测试 |
+| Web 通知 | assistant_notifications、待处理计数、详情跳转 | API/UI 测试 |
+| Trace/成本 | LLM/MCP/Skill 调用次数、耗时、成本、model profile | trace 样例；报告验证 |
 
-### 16.3 多窗口验收
+### 17.3 Phase 2 验收矩阵
 
-| 项目 | 验收指标 |
-|---|---|
-| 多窗口会话 | 不同窗口能绑定不同 Research Stream |
-| 状态同步 | 任务状态、审批状态、事件流跨窗口同步 |
-| 冲突控制 | 同一配置多窗口修改能提示冲突 |
-| 总览汇总 | 主窗口能看到所有 stream 的进展和阻塞 |
+| 模块 | 必须功能 | 验收证据 |
+|---|---|---|
+| 对话确认 | chat_text approval、plan digest 匹配、版本变化失效 | E2E；审批回放 |
+| 多状态窗口 | 主窗口发令，状态窗口同步，SSE/WebSocket 推送 | 多标签测试；事件同步测试 |
+| 外部 Memory Adapter PoC | 只读/镜像接入，效果对照，不写 approved 记忆 | PoC 报告；回滚测试 |
+| 股票分析 MCP | 输入股票代码生成报告，不触发交易 | MCP 测试；安全测试 |
+| 外部搜索 | 中文 provider、学术 MCP、Firecrawl/Jina 抽取备用、证据保存 | 搜索报告样例；中文搜索 PoC；prompt 注入测试 |
+| 通知 | 桌面/IM 通知，任务完成/失败/待审批 | 通知测试；订阅配置 |
+| 语音 Realtime | 语音转文本、播报、文本审批绑定 | transcript 测试；审批安全测试 |
 
-### 16.4 安全验收
+### 17.4 UI 验收矩阵
 
-| 项目 | 验收指标 |
-|---|---|
-| 禁止鼠标键盘控制 | 默认工具集中不包含桌面控制能力 |
-| 禁止编程能力 | 不暴露文件写入、git commit、PR、merge 工具 |
-| Token 安全 | 记忆、trace、报告中不出现 token/API key |
-| Issue 同步 | 正式 Issue 必须有 GitHub URL |
-| 生产边界 | 默认不重启 `8001`/`3000`，不做实盘交易 |
-
----
-
-## 17. 给 Claude Code 的审核重点
-
-请重点审核以下问题：
-
-1. 长期记忆表结构是否足以支持 AIstock 架构、任务、实验、流程规则和用户偏好长期演进。
-2. Memory Adapter 策略是否能避免 Mem0/Graphiti/Letta/LangGraph 造成事实源分裂。
-3. Context Pack 是否足以支持模型替换和任务回放。
-4. MCP 执行工作台是否完全避免了鼠标键盘控制路线。
-5. QE 10 loop 实验示例流程是否能覆盖配置草稿、diff、preflight、审批、物化、执行状态展示。
-6. 多窗口和多 Research Stream 是否有重复执行、重复审批、配置冲突风险。
-7. 候选 Issue 与正式 GitHub Issue 门禁是否符合 AIstock 现有规范。
-8. MCP 与 Skill 的边界是否清晰，Skill 是否不会绕过 MCP 和审批。
-9. OpenClaw 参考是否只作为 gateway/channel/skill/product 形态参考，没有引入核心安全风险。
-10. 独立产品化抽象是否足以支持其他 MCP 应用接入，同时不削弱 AIstock 首期交付。
-11. 股票分析 MCP 是否能复用现有 AIstock 股票分析能力，且不会触发交易动作。
-12. 搜索/学术 MCP 接入是否满足来源可追溯、当前性和不自研优先原则。
-13. 驾驶舱远期规划是否不会挤压 Phase 1 交付范围。
-14. Phase 1 范围是否足够小，可以先交付可用闭环。
+| 页面 | 必须展示 | 必须交互 | 验收证据 |
+|---|---|---|---|
+| 总览 | 今日待确认、运行中任务、失败、候选 Issue、成本 | 点击卡片进入详情 | UI smoke / 截图 |
+| Chat | 主对话、计划、配置讨论、确认入口 | 生成计划、提交确认、查看上下文 | E2E |
+| Workbench | MCP 调用、配置 diff、preflight、日志、深链 | 执行 dry-run、打开详情、失败 triage | E2E |
+| Tasks | 状态、事件、证据、耗时、模型 | 筛选、打开事件、暂停/恢复 | UI/API 测试 |
+| Memory | 记忆类型、审批、冲突、来源 | 审批、废弃、查看 source_ref | UI/API 测试 |
+| Graph | entity/relation/evolution path | 查看关系详情、证据、有效期 | UI/API 测试 |
+| MCP Tools | server/tool/schema/risk/health | 查看 schema、执行 preflight | UI/API 测试 |
+| Skills | 本地 skill、checksum、权限、trace | 启用/禁用、查看使用记录 | UI/API 测试 |
+| Approvals | risk、plan digest、配置版本、确认原文 | 批准/拒绝、查看执行结果 | E2E |
+| Reports | 晨报、实验报告、候选 Issue 报告 | 查看来源、导出、跳转详情 | UI/API 测试 |
+| Models | provider、profile、routing、成本 | 启用/禁用、调整策略 | UI/API 测试 |
 
 ---
 
-## 18. 推荐下一步
+## 18. 已确认决策记录
 
-1. 用户评审本文档。
-2. Claude Code 审核长期记忆和 MCP 工作台方案。
-3. 根据审核意见修订 v3。
-4. 通过后新建实现分支：`feature/research-agent-console-20260521`。
-5. Phase 1 只做：MCP 执行工作台 + 原生长期记忆 MVP + Skill Registry 基础治理 + 任务事件流 + 审批中心。
-6. Phase 2 再做：多窗口、多 Stream、对话确认、Mem0/Graphiti adapter PoC。
-7. Phase 2 增加股票分析 MCP 和基础驾驶舱卡片。
-8. Phase 2/3 评估搜索/学术 MCP 工具接入，优先选择成熟开源工具。
-9. Phase 3 再做 AIstock 架构图、资源监控和健康颜色映射。
-10. Phase 2/3 评估把通用核心抽离为独立产品包，AIstock 仅作为首个领域 adapter。
+| 决策项 | 结论 |
+|---|---|
+| 首批 Skill | QE 诊断、因子库分析、因子研发任务包、RDAgent 任务分析、数据健康检查 |
+| Phase 1 通知 | Web 内通知和通知数据模型；桌面/IM 放 Phase 2 |
+| 外部搜索 | Firecrawl 不做默认搜索入口；优先中文低成本 provider + 学术 MCP，Firecrawl/Jina 做抽取备用 |
+| Graphiti PoC | 优先只读镜像 AIstock 原生图谱核心实体关系，论文图谱作为补充 |
+| 语音路线 | Phase 2/3 优先托管 Realtime 试点，保留本地 STT/TTS 混合路线 |
+| 长期记忆 | 不是 RAG；Memory Ledger 是事实源，向量/RAG 只做辅助召回 |
+| Codex/Claude 接入 | 可作为外部主模型，但不可越权 |
+| 图数据库 | Phase 1 不引入；后续只作为增强 PoC |
+| Skill 公共平台 | 当前不设计；未来人工筛选后本地导入 |
 
 ---
 
-## 19. 参考资料
+## 19. 待后续确认问题
+
+1. Phase 2 中文搜索 provider 首选博查、秘塔，还是先做 SearXNG 自托管。
+2. Phase 2 Firecrawl/Jina/自建 Playwright crawler 的抽取备用优先级。
+3. Phase 2 桌面通知优先浏览器通知、Windows toast，还是 IM/企业微信。
+4. Phase 2 语音试点使用哪个托管 Realtime provider。
+5. Phase 2 国内模型 provider 的首批上线清单和预算。
+
+---
+
+## 20. 参考资料
 
 - Mem0 OSS：`https://docs.mem0.ai/open-source/overview`
-- Letta Stateful Agents：`https://docs.letta.com/guides/core-concepts/stateful-agents`
-- Letta Archival Memory：`https://docs.letta.com/guides/ade/archival-memory`
-- Zep / Graphiti Open Source：`https://www.getzep.com/product/open-source/`
 - Graphiti GitHub：`https://github.com/getzep/graphiti`
-- LangChain Long-term Memory：`https://docs.langchain.com/oss/python/langchain/long-term-memory`
+- LangMem Docs：`https://langchain-ai.github.io/langmem/`
+- Letta Stateful Agents：`https://docs.letta.com/guides/core-concepts/stateful-agents`
 - LangGraph Persistence：`https://docs.langchain.com/oss/python/langgraph/persistence`
-- LangMem GitHub：`https://github.com/langchain-ai/langmem`
-- Langfuse Docs：`https://langfuse.com/docs`
-- Open WebUI MCP：`https://docs.openwebui.com/features/mcp/`
-- Dify MCP Tools：`https://docs.dify.ai/en/use-dify/build/mcp`
-- Flowise Docs：`https://docs.flowiseai.com/`
-- Langflow MCP Server：`https://docs.langflow.org/mcp-server`
+- Ant Design Pro Preview：`https://preview.pro.ant.design/`
+- Ant Design X Overview：`https://x.ant.design/components/overview/`
+- shadcn/ui Blocks：`https://ui.shadcn.com/blocks`
+- React Flow：`https://reactflow.dev/`
 - MCP Tools Specification：`https://modelcontextprotocol.io/specification/2025-06-18/server/tools`
-- OpenClaw What is OpenClaw：`https://openclawdoc.com/docs/getting-started/what-is-openclaw/`
-- OpenClaw Agents Overview：`https://openclawdoc.com/docs/agents/overview/`
-- OpenClaw Architecture：`https://openclawlab.com/en/docs/start/architecture/`
+- Firecrawl Pricing：`https://www.firecrawl.dev/pricing`
+- Firecrawl Search API：`https://docs.firecrawl.dev/api-reference/endpoint/search`
+- Firecrawl Self-hosting：`https://docs.firecrawl.dev/contributing/self-host`
+- 博查 AI 开放平台：`https://open.bochaai.com/`
+- SerpApi Baidu Search：`https://serpapi.com/baidu-search-api`
 - SearXNG：`https://docs.searxng.org/`
 - Perplexica GitHub：`https://github.com/ItzCrazyKns/Perplexica`
-- Firecrawl MCP Server：`https://docs.firecrawl.dev/mcp-server`
-- mcp-omnisearch GitHub：`https://github.com/spences10/mcp-omnisearch`
 - arXiv MCP Server GitHub：`https://github.com/blazickjp/arxiv-mcp-server`
 - Semantic Scholar MCP Server GitHub：`https://github.com/awwaiid/semantic-scholar-mcp-server`
-- Paper Search MCP Server GitHub：`https://github.com/openags/paper-search-mcp`
-- Alpha Vantage MCP Server：`https://github.com/calvernaz/alphavantage`
-- Yahoo Finance MCP Server GitHub：`https://github.com/AgentX-ai/yahoo-finance-server`
+- OpenAI Realtime：`https://platform.openai.com/docs/guides/realtime`
+- Whisper：`https://github.com/openai/whisper`
+- whisper.cpp：`https://github.com/ggml-org/whisper.cpp`
+- Vosk：`https://github.com/alphacep/vosk-api`
+- Piper TTS：`https://github.com/rhasspy/piper`
+- Silero VAD：`https://github.com/snakers4/silero-vad`
+- openWakeWord：`https://github.com/dscripka/openWakeWord`
+- Temporal Platform Docs：`https://docs.temporal.io/temporal`
+- PostgreSQL LISTEN/NOTIFY：`https://www.postgresql.org/docs/current/sql-notify.html`
+- Redis Pub/Sub：`https://redis.io/docs/latest/develop/pubsub/`
