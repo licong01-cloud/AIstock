@@ -398,6 +398,88 @@ def paper_v2_l3(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def simulation_core_l2(session: nox.Session) -> None:
+    """Run shared simulation runtime core tests without production services."""
+    session.run(
+        "python",
+        "-m",
+        "compileall",
+        "backend/services/simulation_runtime",
+        "backend/routers/qmt_strategy_ledger.py",
+        "backend/db/init_trading_core_v2_schema.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/simulation_runtime",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
+def localsim_unattended_l3(session: nox.Session) -> None:
+    """Run current LocalSim scheduler/restart regression slice."""
+    _run_pytest(
+        session,
+        "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+        "backend/tests/simulation_runtime/test_target_rebalance_shared.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
+def miniqmt_sim_stub_l3(session: nox.Session) -> None:
+    """Run fake MiniQMT SIM order/sync/reconcile validation without real MiniQMT."""
+    _run_pytest(
+        session,
+        "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+        "backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py",
+        "backend/tests/qmt_strategy_ledger/test_sync_service.py",
+        "backend/tests/qmt_strategy_ledger/test_reconciliation.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
+def simulation_dual_backend_l4(session: nox.Session) -> None:
+    """Run dual-backend backend oracle coverage; UI/soak remains a separate gate."""
+    session.run(
+        "python",
+        "-m",
+        "compileall",
+        "backend/services/simulation_runtime",
+        "backend/routers/qmt_strategy_ledger.py",
+        "backend/db/init_trading_core_v2_schema.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/simulation_runtime",
+        "backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py",
+        "backend/tests/qmt_strategy_ledger/test_sync_service.py",
+        "backend/tests/qmt_strategy_ledger/test_reconciliation.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+
+
+@nox.session(venv_backend="none")
+def miniqmt_sim_trading_hours_l5(session: nox.Session) -> None:
+    """Manual controlled MiniQMT SIM trading-hours gate."""
+    session.skip(
+        "MiniQMT SIM L5 is a manual trading-hours gate and must use a separately approved runbook with real "
+        "MiniQMT SIM evidence; this nox entry is catalog-only and never fabricates success."
+    )
+
+
+@nox.session(venv_backend="none")
 def qe_read_backend(session: nox.Session) -> None:
     """Run QE read-path backend regression tests only."""
     _run_pytest(

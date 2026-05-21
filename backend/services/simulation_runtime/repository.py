@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Iterator
+from datetime import date
+from typing import Any, Callable, Iterable, Iterator
 
 import psycopg2.extras
 
@@ -174,6 +175,9 @@ class SimulationRuntimeRepository:
         *,
         strategy_id: str | None = None,
         release_id: str | None = None,
+        broker_backend: SimulationBrokerBackend | str | None = None,
+        approval_states: Iterable[SimulationBindingApprovalState | str] | None = None,
+        active_on: date | None = None,
         limit: int = 100,
     ) -> list[SimulationReleaseBinding]:
         clauses: list[str] = []
@@ -184,6 +188,27 @@ class SimulationRuntimeRepository:
         if release_id is not None:
             clauses.append("release_id = %s")
             params.append(release_id)
+        if broker_backend is not None:
+            backend = (
+                broker_backend.value
+                if isinstance(broker_backend, SimulationBrokerBackend)
+                else str(broker_backend)
+            )
+            clauses.append("broker_backend = %s")
+            params.append(backend)
+        states = [
+            state.value if isinstance(state, SimulationBindingApprovalState) else str(state)
+            for state in (approval_states or [])
+        ]
+        if states:
+            placeholders = ", ".join(["%s"] * len(states))
+            clauses.append(f"approval_state IN ({placeholders})")
+            params.extend(states)
+        if active_on is not None:
+            clauses.append("(effective_from IS NULL OR effective_from <= %s)")
+            params.append(active_on)
+            clauses.append("(effective_to IS NULL OR effective_to >= %s)")
+            params.append(active_on)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         params.append(limit)
         rows = self._fetch_rows(
@@ -705,6 +730,9 @@ class InMemorySimulationRuntimeRepository:
         *,
         strategy_id: str | None = None,
         release_id: str | None = None,
+        broker_backend: SimulationBrokerBackend | str | None = None,
+        approval_states: Iterable[SimulationBindingApprovalState | str] | None = None,
+        active_on: date | None = None,
         limit: int = 100,
     ) -> list[SimulationReleaseBinding]:
         rows = list(self.bindings.values())
@@ -712,6 +740,22 @@ class InMemorySimulationRuntimeRepository:
             rows = [row for row in rows if row.strategy_id == strategy_id]
         if release_id is not None:
             rows = [row for row in rows if row.release_id == release_id]
+        if broker_backend is not None:
+            backend = broker_backend if isinstance(broker_backend, SimulationBrokerBackend) else SimulationBrokerBackend(str(broker_backend))
+            rows = [row for row in rows if row.broker_backend == backend]
+        states = {
+            state if isinstance(state, SimulationBindingApprovalState) else SimulationBindingApprovalState(str(state))
+            for state in (approval_states or [])
+        }
+        if states:
+            rows = [row for row in rows if row.approval_state in states]
+        if active_on is not None:
+            rows = [
+                row
+                for row in rows
+                if (row.effective_from is None or row.effective_from <= active_on)
+                and (row.effective_to is None or row.effective_to >= active_on)
+            ]
         rows.sort(key=lambda item: (item.created_at, item.binding_id), reverse=True)
         return rows[:limit]
 
