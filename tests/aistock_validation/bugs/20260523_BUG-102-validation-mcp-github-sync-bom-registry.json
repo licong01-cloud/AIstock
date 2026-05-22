@@ -1,0 +1,85 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-102",
+  "title": "Validation MCP GitHub issue sync is blocked by UTF-8 BOM bug JSON parse errors",
+  "description": "Expected: Validation MCP BUG registry readers and GitHub issue sync tools must tolerate UTF-8 BOM in existing BUG JSON files, matching the already hardened CLI behavior that reads with utf-8-sig. A BOM-encoded or malformed unrelated registry record must not block listing, searching, or syncing another BUG. Actual: current Validation MCP calls still abort globally when any scanned BUG registry JSON is encoded with UTF-8 BOM; observed on 2026-05-23 while syncing BUG-101/#165, where mcp_github_issue_search and mcp_github_issue_sync_bug failed on F:/Dev/AIstock_worktrees/qe-mcp-template-archive-20260516/tests/aistock_validation/bugs/20260520_BUG-077-miniqmt-strategy-execution-bypasses-strategypackage-minute-e.json with Unexpected UTF-8 BOM. This issue was previously tracked as BUG-088/#116 in a stale worktree, but BUG-088 is already used in origin/main for a MiniQMT lifecycle issue; the canonical tracking ID is now BUG-102 while retaining GitHub issue #116.",
+  "module": "validation_center",
+  "severity": "P1",
+  "risk_area": "github_issue_tracking",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "validation_mcp_bug_registry_bom_blocks_global_github_sync",
+    "current_error": "Failed to read bug JSON registry entry ... Unexpected UTF-8 BOM (decode using utf-8-sig)",
+    "blocking_file_observed": "F:/Dev/AIstock_worktrees/qe-mcp-template-archive-20260516/tests/aistock_validation/bugs/20260520_BUG-077-miniqmt-strategy-execution-bypasses-strategypackage-minute-e.json",
+    "renumbered_from_conflicting_id": "BUG-088",
+    "conflict_reason": "origin/main already uses BUG-088 for paper-v2 live approval lifecycle missing for MiniQMT live"
+  },
+  "reproduce_command": "Run Validation MCP mcp_github_issue_search or mcp_github_issue_sync_bug while the configured/scanned BUG registry contains a UTF-8 BOM encoded JSON file such as F:/Dev/AIstock_worktrees/qe-mcp-template-archive-20260516/tests/aistock_validation/bugs/20260520_BUG-077-miniqmt-strategy-execution-bypasses-strategypackage-minute-e.json; observe the MCP call aborts with Unexpected UTF-8 BOM (decode using utf-8-sig).",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:backend/services/validation/finding_store.py",
+    "file:backend/services/validation/pipeline_center.py",
+    "file:backend/tests/test_validation_center_api.py",
+    "file:backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+    "file:backend/tests/scripts/test_bug_github_sync.py",
+    "file:scripts/bug_github_sync.py",
+    "file:tests/aistock_validation/bugs/README.md",
+    "github:https://github.com/licong01-cloud/AIstock/issues/116"
+  ],
+  "fingerprint": "ed4cb622490fccad",
+  "assigned_agent": "unassigned",
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-22T18:07:43Z",
+  "first_seen_at": "2026-05-20T08:54:30Z",
+  "last_seen_at": "2026-05-22T18:07:43Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-22T18:07:43Z",
+  "closed_at": null,
+  "github_issue_number": 116,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/116",
+  "allowed_write_scope": [
+    "backend/services/validation/finding_store.py",
+    "backend/services/validation/pipeline_center.py",
+    "backend/tests/test_validation_center_api.py",
+    "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+    "backend/tests/scripts/test_bug_github_sync.py",
+    "scripts/bug_github_sync.py",
+    "tests/aistock_validation/bugs/"
+  ],
+  "suspected_modules": [
+    "backend/services/validation/finding_store.py",
+    "backend/services/validation/pipeline_center.py",
+    "backend/mcp/aistock_mcp_server.py",
+    "scripts/bug_github_sync.py"
+  ],
+  "required_verification": [
+    "python -m pytest backend/tests/test_validation_center_api.py backend/tests/scripts/test_aistock_mcp_github_issue_tools.py -q -p no:cacheprovider",
+    "python -m pytest backend/tests/scripts/test_bug_github_sync.py -q -p no:cacheprovider",
+    "Validation MCP mcp_github_issue_search works when an unrelated BUG JSON has UTF-8 BOM",
+    "Validation MCP mcp_github_issue_sync_bug can sync a target BUG while another registry file has UTF-8 BOM",
+    "Confirm BUG-102 JSON and GitHub issue #116 remain synchronized after fix branch/commit is known"
+  ],
+  "closure_requirements": [
+    "BUG/finding JSON readers tolerate UTF-8 BOM or isolate parse failures without aborting unrelated sync operations.",
+    "Health/summary still reports parse diagnostics for genuinely invalid JSON.",
+    "mcp_github_issue_search/list/sync do not abort globally because of one unrelated BOM-encoded BUG JSON.",
+    "Regression tests include BOM-encoded BUG JSON fixtures for both local registry search and sync paths.",
+    "GitHub issue #116 and BUG-102 registry record are updated with fix branch, commit, and validation evidence before closure."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-20T08:54:30Z",
+      "actor": "validation-center-team",
+      "action": "discovered_as_conflicting_bug_088",
+      "note": "Original BOM registry sync blocker was discovered and mirrored to GitHub issue #116, but the local BUG ID conflicted with a different BUG-088 in origin/main."
+    },
+    {
+      "timestamp": "2026-05-22T18:07:43Z",
+      "actor": "codex-app",
+      "action": "renumbered_and_reopened",
+      "note": "Canonical registry ID corrected to BUG-102; GitHub issue #116 retained and reopened for current MCP regression/activation gap. No code fix is included in this registry-sync branch."
+    }
+  ]
+}
