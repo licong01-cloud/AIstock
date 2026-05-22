@@ -13,7 +13,7 @@ Read these files before planning or running validation:
 
 1. `AGENTS.override.md`
 2. `docs/codex_project_memory.md`
-3. `docs/standards/aistock_development_standard_v1.3_20260520.md`
+3. `docs/standards/aistock_development_standard_v1.5_20260523.md`
 4. The approved feature design document, implementation plan, GitHub Issue / BUG JSON `closure_requirements`, and any explicit user acceptance points.
 5. `docs/architecture/aistock_result_oriented_testing_standard.md`, if present.
 6. `docs/architecture/aistock_testing_version_management_system_design_20260429.md`, if present.

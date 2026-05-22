@@ -1,18 +1,18 @@
 # AIstock Issue 修复与并行开发隔离规范
 
-> 版本：v1.2
-> 更新日期：2026-05-22
+> 版本：v1.3
+> 更新日期：2026-05-23
 > 状态：生效
 > 适用范围：AIstock 所有 BUG / GitHub Issue / MCP issue / 并行 Codex 或 Claude Code 开发窗口
 > 规范位置：`docs/standards/aistock_issue_fix_parallel_workflow_standard_20260514.md`
-> v1.2 变更：移除跨工具强制通讯(改为 opt-in)、删除与 v1.4 标准重复的规则(改为引用)、新增同模块批量执行
+> v1.2 变更：移除跨工具强制通讯(改为 opt-in)、删除与 v1.5 标准重复的规则(改为引用)、新增同模块批量执行
 
 ## 1. 目的
 
 定义 issue 从发现到关闭的标准流程，以及多窗口并行开发时的隔离规则。
 
 与其他规范的关系：
-- **P0/P1 红线、fail-fast、生产端口、DB comment、文档归属、DESIGN-COMPLIANCE** → 参见 `aistock_development_standard_v1.4_20260521.md`
+- **P0/P1 红线、fail-fast、生产端口、DB comment、文档归属、DESIGN-COMPLIANCE** → 参见 `aistock_development_standard_v1.5_20260521.md`
 - **Worktree/分支隔离、生产同步规则** → 参见 `docs/codex_project_memory.md`
 - 本文仅定义 **issue 特有的** 生命周期、角色、allowed_write_scope、批量执行和 MCP 持久化
 
@@ -22,9 +22,23 @@
 2. **先 scope 后编码**：任何修复前必须声明 `allowed_write_scope`，未声明文件默认不可改。
 3. **同文件不并行写**：多个窗口需要改同一文件时，必须指定唯一实现者；其他窗口只做 review、测试或非重叠文件。
 4. **禁止 sweeping commit**：只 stage 当前 issue 的文件；不得把无关 Paper、QE、frontend build cache、test-results 等混入。
-5. **GitHub Issue 同步**：参见 v1.4 §5.18, §6.16 [ISSUE-GITHUB-SYNC-001]。
-6. **禁止简化交付**：参见 v1.4 §15.3 [DESIGN-COMPLIANCE-001]。
+5. **GitHub Issue 同步**：参见 v1.5 §5.18, §6.16 [ISSUE-GITHUB-SYNC-001]。
+6. **禁止简化交付**：参见 v1.5 §15.3 [DESIGN-COMPLIANCE-001]。
 7. **跨工具通讯为 opt-in**：仅在用户明确要求时通过 MemPalace 协调；不主动 poll channel，不发 `[DECISION]`/`[REVIEW]`/`[INFO]`/`[ACK]`。
+
+
+## 2.1 Issue 处理分级与上下文预算
+
+Triage 阶段必须写入或口头声明 `process_level` / `task_tier`，用于决定上下文注入、验证深度和是否批量处理：
+
+| 层级 | 适用范围 | 默认流程 | 上下文预算 |
+|---|---|---|---|
+| S / T0 | 小 UI、文案、明显依赖缺失、小测试修正、非核心 P2/P3 | 快速修复、针对性验证、简短 handoff | 不加载完整规范/设计/历史，只读相关文件片段和最小规则摘要 |
+| M / T1 | 单模块 P1/P2 bug、普通业务逻辑问题 | 标准 issue 流程、closure 验证、GitHub/BUG 同步 | 读取 issue agent context、allowed_write_scope、相关模块片段 |
+| B / T2 | 同模块多个 issue，文件和验证链路重叠 | batch worktree、每 issue 独立 commit、统一模块验证 | 使用 Batch Context Pack，不重复加载同一模块背景 |
+| L / T3 | 跨模块、设计驱动、架构调整、生产 DDL/依赖/资产风险 | 完整设计验收矩阵和分阶段验证 | 只加载当前阶段设计验收索引和相关章节，不反复注入全文 |
+
+禁止把所有 issue 都按 L/T3 处理；也禁止用 S/T0 绕过 P0/P1 红线、GitHub 同步、allowed_write_scope 或必须执行的业务验证。
 
 ## 3. 角色定义
 
@@ -42,7 +56,7 @@
 
 ### 4.1 Open
 
-创建 BUG JSON 和 GitHub Issue 必须同步完成（参见 v1.4 §6.16）。
+创建 BUG JSON 和 GitHub Issue 必须同步完成（参见 v1.5 §6.16）。
 
 BUG JSON 必须包含：`bug_id`、`title`、`module`、`severity`、`risk_area`、`status=open`、`description`、`reproduce_command`、`suspected_modules`、`required_verification`、`closure_requirements`、`allowed_write_scope`、`non_goals`。
 
@@ -111,6 +125,8 @@ PR 合入后标记 `fixed`，记录：fix commit、PR/GitHub Issue 链接、测�
 
 ## 6. 同模块批量执行
 
+规则依据见 v1.5 §23 [ISSUE-BATCH-CONTEXT-001]。
+
 同一模块的多个 issue 可通过 `batch_id` 合并执行：
 
 ```json
@@ -151,7 +167,7 @@ Fixes #23
 
 ### 7.3 PR checklist
 
-PR 必须说明：Linked BUG/Issue、文件是否全部在 scope 内、测试结果、是否改 DB schema、是否触碰生产 8001/3000、是否需要用户重启、是否有后续 issue。
+PR 必须说明：Linked BUG/Issue、文件是否全部在 scope 内、测试结果、是否改 DB schema、是否触碰生产 8001/3000、是否需要用户重启、是否有后续 issue。若修改依赖清单，必须声明合入后 `production_frontend_dependency_gate` / `production_backend_dependency_gate` 是否 required。
 
 ## 8. MCP Server 持久化要求
 
@@ -197,11 +213,11 @@ PR 必须说明：Linked BUG/Issue、文件是否全部在 scope 内、测试结
 
 ## 11. Agent 执行提示
 
-1. 先读取 BUG JSON / GitHub Issue / 相关 docs
+1. 先判定 `process_level/task_tier`、模块、风险等级和阶段；只读取 BUG JSON / GitHub Issue / 相关 docs 的必要片段
 2. 确认当前 worktree 和 branch，不在脏生产 checkout 中开发
 3. 不扩大 scope，不 revert 其他窗口的改动
 4. 不重启 `8001/3000` 除非用户明确要求
-5. 同模块多 issue 检查 batch_id，合并执行
+5. 同模块多 issue 检查 batch_id，默认优先合并执行；使用 Batch Context Pack，避免重复提示词和重复验证
 
 ## 12. 后续落地
 

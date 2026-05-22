@@ -196,3 +196,14 @@ cross-tool coordination. Do not poll it proactively.
 2. Issue 分级的 S/M/L 定义是否接受，还是需要调整？
 3. codex_project_memory.md 精简（Phase 2）是否需要先备份当前版本？
 4. 整改文档是否需要作为独立 PR 合入 main，还是暂存在分析目录等待审批？
+
+
+## 2026-05-23 执行状态
+
+本方案的核心建议已转入 `docs/standards/aistock_development_standard_v1.5_20260523.md` 和 `docs/standards/aistock_issue_fix_parallel_workflow_standard_20260514.md`：
+
+- 同模块 issue 批处理从“可选优化”升级为默认优先路径。
+- 增加 T0/T1/T2/T3 上下文预算，禁止所有任务默认加载全量规范、全量设计、全量历史记忆。
+- 增加 Batch Context Pack，要求 batch issue 保留独立 commit、独立 GitHub Issue 和独立 closure。
+- 增加 production dependency gate，避免 `package-lock` / Python 依赖变更合入后生产运行目录缺依赖。
+
