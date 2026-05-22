@@ -1,11 +1,11 @@
-﻿# AIstock 研究与实验综合助理控制台设计方案
+# AIstock 研究与实验综合助理控制台设计方案
 
 > 日期：2026-05-22
 > 类型：详细设计方案 v5（对话型主入口纠偏版）
 > 状态：正式实施设计稿；本文档定义功能边界、阶段目标和开发验收矩阵，不实现代码
 > 分支：`docs/research-assistant-chat-redesign-20260522`
 > Worktree：`F:\Dev\AIstock_worktrees\research-assistant-chat-redesign-doc-20260522`
-> 范围：研究与实验综合助理、Codex 式对话主入口、assistant-ui 前端基座、左侧图形化任务状态、原生长期记忆、轻量知识图谱、MCP/Skill 能力目录、Workflow Pack + 自主 Planner、Validation/Pipeline Discovery Stream、External Agent Connector、多模型路由、阶段实施目标和开发验收矩阵
+> 范围：研究与实验综合助理、Codex 式对话主入口、assistant-ui 前端基座、左侧图形化任务状态、原生长期记忆、轻量知识图谱、MCP/Skill 能力目录、Workflow Pack + 自主 Planner、多模型调度、Prompt Lab、自我学习闭环、Validation/Pipeline Discovery Stream、External Agent Connector、多模型路由、阶段实施目标和开发验收矩阵
 > 非目标：不让该助理控制鼠标键盘，不让该助理编程、改代码、提交代码、合入 main、重启生产服务、绕过 GitHub Issue 审批或执行实盘交易
 
 ---
@@ -731,6 +731,776 @@ Phase 1 修复版必须实现真实模型调用（真实 LLM 调用），而不�
 5. fallback 策略。
 6. token、耗时、成本 trace。
 7. 低价模型结果进入 temp memory，主模型审核后才能提升。
+
+
+### 6A.8 多模型调度、次模型提示词与 Prompt Lab
+
+AIstock 助理采用“主模型监督 + 次模型执行子任务 + Prompt Tree 动态装配 + Prompt Lab 离线优化”的设计。多模型调度不是简单 fallback，而是由主模型在权限边界内分配工作，并由系统记录每次提示词和模型选择的证据。
+
+#### 6A.8.1 模型角色
+
+| 角色 | 责任 | 允许动作 | 禁止动作 |
+|---|---|---|---|
+| `primary_orchestrator` | 用户对话、意图理解、任务拆解、风险判断、最终结论、用户确认 | 读取长期记忆、生成计划、调度次模型、提交候选记忆 | 绕过审批直接执行高风险 MCP |
+| `secondary_worker` | 摘要、日志分析、资料初筛、草案生成、批量解释、低风险分类 | 写 task-scoped temp memory、返回结构化 WorkerResult | 直接面向用户给最终结论；直接写 approved 长期记忆 |
+| `verifier_critic` | 复核次模型输出、检查遗漏、检查是否违反规则 | 生成风险/遗漏/纠错建议 | 直接执行 MCP；替代主模型确认 |
+| `router_model` | 低成本意图初筛、prompt branch 候选召回、模型路由建议 | 输出候选分支和置信度 | 最终决定高风险执行 |
+| `long_context_reader` | 长日志、论文、设计文档、实验报告归纳 | 输出证据绑定摘要 | 无证据地改写事实源 |
+
+Phase 1 修复版必须支持主/次模型真实调用和 trace；次模型可以配置为 DeepSeek、GLM、Qwen、Kimi 或本地模型，但所有结果必须进入结构化审计链。
+
+#### 6A.8.2 次模型提示词分层
+
+同一业务分支必须按模型角色拆分提示词，不能让主模型和次模型共用一段大提示词。
+
+~~~text
+qe.create_experiment
+  ├─ primary_planner_prompt          -- 面向主模型：理解需求、风险、确认点、最终计划
+  ├─ secondary_draft_prompt          -- 面向次模型：生成初始 loop/因子/参数草案
+  ├─ secondary_config_checker_prompt -- 面向次模型：检查字段完整性、固定回测规则、股票池规则
+  ├─ verifier_prompt                 -- 面向 verifier：检查是否遗漏确认、是否违反 QE 固定规则
+  ├─ renderer_prompt                 -- 面向结果渲染：人类可读配置卡、确认卡、失败卡
+  └─ guard_prompt                    -- 面向执行前门禁：materialize/run/写库/GitHub 同步
+~~~
+
+提示词装配必须同时考虑：任务意图、模型角色、执行阶段、风险等级、可用工具和 token 预算。
+
+#### 6A.8.3 主模型调度次模型流程
+
+~~~text
+用户输入
+  -> 主模型理解任务
+  -> Prompt Tree Selector 选择主提示词 bundle
+  -> Delegation Planner 判断可委派子任务
+  -> 为每个次模型生成最小 Context Pack + role-specific prompt bundle
+  -> 次模型执行并返回 WorkerResult
+  -> schema 校验和 verifier 复核
+  -> 主模型合并、纠偏、生成对用户可读计划
+  -> 用户确认
+  -> MCP/Skill 执行
+  -> 主模型汇报和写入候选记忆
+~~~
+
+强制约束：
+
+1. 次模型不得直接调用高风险 MCP；只能通过主模型生成的 action proposal 进入审批。
+2. 次模型不得直接写 approved 长期记忆；只能写 temp memory 或 candidate memory。
+3. 次模型不得直接生成最终用户结论；最终答复必须由主模型合并和复核。
+4. 次模型输出必须使用结构化 `WorkerResult`，schema 校验失败必须重试、降级或升级到主模型。
+5. 主模型和次模型之间必须优先使用 JSON/Schema 通信，尽量少使用自由自然语言；自然语言只能作为摘要或证据说明，不能作为执行参数或事实源。
+6. 主模型必须记录每个委派任务的 prompt bundle signature、模型、输入摘要、输出摘要、置信度、采纳/拒绝原因。
+
+推荐 `WorkerResult`：
+
+~~~text
+assistant_worker_results
+  result_id
+  conversation_id
+  task_id
+  worker_role
+  model_profile_id
+  prompt_bundle_signature
+  input_context_digest
+  confidence
+  summary_for_user
+  findings_json
+  proposed_actions_json
+  missing_information_json
+  evidence_refs
+  risks_json
+  schema_valid
+  accepted_by_primary
+  primary_review_note
+  created_at
+~~~
+
+#### 6A.8.4 模型路由与 Prompt 选择联合决策
+
+Model Router 和 Prompt Tree Selector 必须联合决策，不能先固定模型再随意拼提示词，也不能先固定提示词再随意选择模型。
+
+~~~text
+route_score =
+    task_complexity_match
+  + domain_expertise_match
+  + prompt_branch_fit
+  + historical_quality
+  + schema_success_rate
+  + latency_fit
+  - cost_penalty
+  - risk_penalty
+~~~
+
+示例：
+
+| 任务 | 模型策略 | Prompt 策略 |
+|---|---|---|
+| 后端日志摘要 | 次模型执行，主模型复核是否为 Bug | `log_summarizer` + `error_chain_extractor` |
+| 创建 QE 10 loop 草案 | 主模型规划，次模型生成草案，verifier 检查，主模型确认 | `qe.create_experiment` + `qe.stock_pool_rule` + `qe.template_guard` |
+| QE materialize/run | 主模型直接处理，次模型只可解释配置 | `qe.materialize_guard` / `qe.run_guard` |
+| HMM 演进研究 | 主模型制定方向，次模型批量总结实验和论文 | `hmm.research_planner` + `experiment_lineage` + `paper_summary` |
+| 因子研发方向 | 主模型综合历史 IC/RankIC/OOS，次模型整理候选因子文献 | `factor.research_planner` + `factor_library_analysis` |
+
+#### 6A.8.5 Prompt Lab
+
+Prompt Lab 用于让提示词体系持续进化，但生产提示词不能在线自动变异。它只产生候选版本、评估报告和发布建议。
+
+数据模型建议：
+
+~~~text
+assistant_prompt_variants
+  variant_id
+  prompt_id
+  version
+  content_md
+  source_type          -- human / llm_candidate / optimizer / rollback
+  status               -- draft / evaluating / release_candidate / approved / rejected
+  checksum
+  created_by
+  created_at
+
+assistant_prompt_eval_cases
+  case_id
+  case_key
+  task_type
+  user_input
+  expected_behavior_md
+  required_capabilities_json
+  forbidden_behaviors_json
+  evidence_refs
+  status
+
+assistant_prompt_eval_runs
+  run_id
+  case_id
+  variant_id
+  model_profile_id
+  prompt_bundle_signature
+  output_digest
+  metric_json
+  judge_notes
+  passed
+  created_at
+
+assistant_prompt_release_candidates
+  release_id
+  prompt_id
+  variant_id
+  baseline_version
+  eval_summary_json
+  risk_review_json
+  approval_status
+  approved_by
+  released_at
+~~~
+
+Prompt Lab 支持四种实验方式：
+
+1. **离线回放**：使用历史对话、历史 QE 请求、历史 Bug 归因和历史实验记录测试候选提示词。
+2. **Shadow 测试**：生产仍使用 approved prompt，候选 prompt 后台生成结果，不影响用户和 MCP 执行。
+3. **低风险 A/B**：仅用于摘要、解释、资料整理等低风险任务，不用于审批、执行、GitHub 同步或记忆 approved。
+4. **人工评分**：用户、Codex、Claude Code 或主模型对候选结果评分，但发布必须走审批。
+
+评估指标：
+
+| 指标 | 含义 |
+|---|---|
+| `intent_accuracy` | 意图识别是否正确 |
+| `tool_selection_accuracy` | MCP/Skill 选择是否正确 |
+| `clarification_quality` | 澄清问题是否必要且简洁 |
+| `guard_compliance` | 是否遵守审批、生产安全、无 JSON 主入口等规则 |
+| `human_correction_rate` | 用户修改或否定的比例 |
+| `schema_valid_rate` | 结构化输出通过率 |
+| `task_success_rate` | 任务最终完成率 |
+| `cost_per_success` | 单次成功任务成本 |
+| `latency_p95` | 95 分位延迟 |
+
+禁止事项：
+
+1. 禁止安全/审批/执行类 guard prompt 自动发布。
+2. 禁止候选 prompt 未经审批进入生产。
+3. 禁止次模型实验结果绕过主模型复核。
+4. 禁止用线上高风险 MCP 执行结果作为无审批 prompt 实验。
+
+### 6A.9 自我学习闭环：记忆、反思、评估和提示词优化
+
+AIstock 助理的“自我学习”不定义为模型权重在线训练，也不允许自己静默修改生产规则。Phase 1/2 的自我学习定义为：基于长期记忆事实源、任务结果、用户反馈、实验指标和 Prompt Lab 评估，持续沉淀可审计知识，并向用户提出记忆更新、研究方向和提示词优化建议。
+
+#### 6A.9.1 自我学习边界
+
+| 可以学习 | 学习方式 | 是否需要确认 |
+|---|---|---|
+| 用户工作风格、偏好、禁忌 | candidate memory + 证据 + 用户确认 | 重要偏好需要确认 |
+| 常见操作流程和准确性问题 | procedural memory + task outcome | 高影响流程需要确认 |
+| QE/HMM/因子研究进展 | experiment memory + hypothesis memory + lineage | 研究结论入库需要确认 |
+| MCP/Skill 使用成功率 | trace 自动统计 | 不需要逐条确认，但需可审计 |
+| 提示词缺陷和优化建议 | Prompt Lab candidate + eval report | 发布需要确认 |
+| 每日待办、提醒、关注事项 | task memory + notification rule | 需要用户授权或明确指令 |
+
+不允许：
+
+1. 不允许基于单次对话直接改写核心规则。
+2. 不允许用 RAG 检索结果替代 Memory Ledger 事实源。
+3. 不允许次模型直接形成长期结论。
+4. 不允许自动把研究假设当成已验证结论。
+5. 不允许为了“学习”而自动执行高成本或高风险实验。
+
+#### 6A.9.2 学习数据来源
+
+~~~text
+用户对话和确认/拒绝
+任务计划、审批、执行结果
+MCP/Skill trace
+Validation/Pipeline 结果
+GitHub Issue 生命周期
+QE/HMM/因子实验指标和失败原因
+用户对输出的修改、否定、补充
+每日/每周复盘
+外部论文、搜索证据和人工标注
+~~~
+
+这些数据先进入事件和候选层，只有经过置信度、证据、冲突检查和必要审批后，才进入长期记忆事实源。
+
+#### 6A.9.3 学习记忆类型
+
+| 记忆类型 | 示例 | 生命周期 |
+|---|---|---|
+| `user_preference` | 用户要求所有设计方案必须中文；禁止简化版；MCP/API first | 长期，支持 supersedes |
+| `operation_pattern` | 用户通常希望先看分析，再决定是否合入 main | 长期，可被新规则覆盖 |
+| `procedural_rule` | 创建 BUG 必须同步 GitHub；QE run 必须二次确认 | 长期，高优先级 |
+| `research_hypothesis` | HMM 某演进方向可能提升换手控制 | 候选/验证中/已否决/已采纳 |
+| `experiment_lineage` | QE loop 设计、指标、失败原因、下一步 | 长期，按实验链路组织 |
+| `factor_insight` | 某类因子在 OOS 下不稳定，后续降权 | 长期或阶段有效 |
+| `prompt_feedback` | 某提示词导致输出 JSON，应拆分 renderer prompt | 候选，进入 Prompt Lab |
+| `tool_success_pattern` | 某 MCP 工具组合在 QE 创建中成功率高 | 统计型，可自动更新但需审计 |
+
+#### 6A.9.4 自我学习流程
+
+~~~text
+Observe
+  -> 从对话、任务、MCP、实验、Issue、验证中收集证据
+Reflect
+  -> 主模型或 verifier 生成候选反思和学习点
+Validate
+  -> 检查证据、冲突、置信度、适用范围、过期条件
+Approve
+  -> 需要用户/主模型/Codex 审核的进入审批
+Store
+  -> 写入 Memory Ledger、Experiment Lineage、Prompt Lab 或 Task Memory
+Retrieve
+  -> 后续任务通过 Context Pack 按需加载
+Evaluate
+  -> 根据任务成功率、用户修正、实验指标继续调整
+~~~
+
+此流程借鉴“观察-计划-反思”“语言反馈强化”“技能库累积”和“时间感知记忆”的研究，但落地时必须以 AIstock 数据库为事实源。
+
+#### 6A.9.5 用户风格和日常助理能力
+
+助理应能逐步形成用户画像，但必须可见、可编辑、可废弃。
+
+必须支持：
+
+1. 用户偏好卡片：语言、输出结构、审批习惯、风险偏好、禁忌事项。
+2. 工作风格记忆：例如“先分析再动代码”“文档必须中文”“不接受简化版实现”。
+3. 每日事项：今天需要处理的 PR、Issue、未完成验证、等待确认实验、需要关注的研究方向。
+4. 提醒和复盘：根据用户授权，在指定时间汇报待办和风险。
+5. 纠错学习：用户指出错误后，助理必须生成候选记忆或提示词改进建议，而不是只在当前对话道歉。
+
+#### 6A.9.6 HMM、QE、因子研发的持续学习
+
+研究类学习必须区分“事实、指标、假设、结论、下一步”。
+
+| 领域 | 学习对象 | 后续用途 |
+|---|---|---|
+| QE 实验 | loop 配置、股票池、回测窗口、指标、失败原因、候选策略包 | 自动生成新实验草案、避免重复失败方向 |
+| HMM 演进 | 状态定义、特征组合、切换规则、回测表现、已否决路线 | 形成演进路线图和下一步研究计划 |
+| 因子研发 | 因子定义、数据依赖、IC/RankIC/OOS、相关性、泄漏检查结论 | 推荐保留/降权/淘汰因子，生成研发任务 |
+| 论文/外部资料 | 证据来源、适用市场、可迁移假设、实现难度 | 进入 research_hypothesis，不直接当作结论 |
+
+研究结论必须绑定证据：实验 ID、指标、数据窗口、commit/配置、报告路径或外部来源。没有证据的内容只能作为假设或待验证方向。
+
+#### 6A.9.7 提示词自我优化建议
+
+助理可以持续提出提示词优化方案，但不能自动发布生产提示词。
+
+触发条件：
+
+1. 用户多次纠正同类输出。
+2. 某 prompt branch 的任务成功率下降。
+3. 某 MCP/Skill 选择错误率升高。
+4. 主入口出现 JSON、ID、日志、乱码等违规展示。
+5. QE/HMM/因子任务反复遗漏固定规则。
+6. Prompt Lab shadow 测试显示候选版本明显优于当前版本。
+
+输出形式：
+
+~~~text
+Prompt Improvement Proposal
+  现有问题
+  证据样本
+  影响范围
+  建议修改的 prompt node
+  修改前后差异
+  评估用例
+  风险评估
+  是否建议进入 release candidate
+~~~
+
+发布流程：
+
+~~~text
+候选优化 -> 离线评估 -> Shadow 测试 -> 人工审核 -> approved -> 缓存失效 -> 生产启用 -> 回归监控
+~~~
+
+#### 6A.9.8 可借鉴研究和开源工具
+
+| 方向 | 可借鉴内容 | AIstock 落地方式 |
+|---|---|---|
+| MemGPT / Letta | 分层记忆、虚拟上下文、由模型管理上下文窗口 | 参考 Context Pack 和 memory paging，不直接替代事实源 |
+| Generative Agents | observation / planning / reflection 结构 | 用于每日反思、任务复盘、用户风格学习 |
+| Reflexion | 把失败反馈转成语言反思，供下次执行使用 | 写入 prompt_feedback 和 task reflection |
+| Voyager | 自动课程、技能库、执行反馈、自验证 | 用于 HMM/QE/因子长期研究路线和本地 Skill 复用 |
+| MemoryBank | 用户画像、重要性、遗忘/强化机制 | 用户偏好和日常助理记忆支持 valid_to/supersedes/importance |
+| A-MEM | Zettelkasten 式动态链接和记忆演化 | 参考轻量知识图谱和 memory link，不让 LLM 独立维护事实 |
+| Graphiti/Zep | 时间感知知识图谱、动态事实失效 | Phase 2/3 adapter 候选，Phase 1 仍用原生关系表 |
+| DSPy MIPROv2 / GEPA | 指令和 few-shot 自动优化、反思式 prompt 演化 | Prompt Lab 离线优化候选，不自动生产发布 |
+| OPRO / TextGrad | LLM 作为优化器、文本反馈优化组件 | 生成 prompt improvement proposal 和评估建议 |
+
+
+
+### 6A.10 可审计自我学习架构：参考方案筛选与 AIstock 落地设计
+
+本节把前述外部研究和开源工具正式落成 AIstock 设计，不作为“参考资料列表”存在。AIstock 不做模型权重在线训练；所有学习都必须通过 Memory Ledger、Operation Playbook、Reflection Card、Experiment Lineage、Prompt Feedback 和 Prompt Lab 实现，并且可审计、可回放、可人工确认。
+
+#### 6A.10.1 参考方案筛选原则
+
+| 参考来源 | 采纳内容 | 不采纳内容 | AIstock 落地模块 |
+|---|---|---|---|
+| MemGPT / Letta | core memory、archival memory、上下文分页 | 不让外部 agent runtime 成为事实源 | Memory Ledger、Context Pack、memory paging |
+| LangMem | semantic/episodic/procedural memory、后台整理 | 不允许 agent 任意直接写 approved memory | Typed Memory、Memory Candidate、Procedural Rule |
+| MemoryBank | 用户画像、重要性、强化/遗忘 | 不把自然语言画像当唯一事实 | User Profile Memory、Preference Card |
+| Reflexion | 失败后语言反思、下次执行引用 | 不让反思直接修改生产规则 | Reflection Card、Prompt Feedback |
+| Generative Agents | observation/planning/reflection | 不做开放式模拟社会行为 | 每日复盘、任务复盘、研究复盘 |
+| Voyager | skill library、自动课程、执行反馈 | 不让 agent 自主写代码或无限试错 | Operation Playbook、Research Curriculum |
+| Graphiti / Zep | temporal graph、事实有效期、关系演化 | Phase 1 不引入图数据库 | 原生 memory_links、experiment_lineage_edges |
+| DSPy / GEPA / OPRO / TextGrad | prompt 候选优化、评估、反思式改进 | 不自动发布生产提示词 | Prompt Lab、Eval Case、Release Candidate |
+
+筛选原则：
+
+1. 只采纳可审计、可落库、可回放的架构元素。
+2. 不采纳会绕过 AIstock DB、MCP、审批、权限和审计的外部 runtime。
+3. 任何“学习”结果先进入 candidate，不直接变成事实源或生产规则。
+4. 重复出现且有证据的学习点，才能升级为 approved memory、playbook 或 prompt candidate。
+5. 生产提示词和 guard prompt 的发布必须人工审批。
+
+#### 6A.10.2 用户画像和工作风格学习
+
+目标：让助理逐步理解用户的工作方式、偏好、禁忌和日常关注点，但所有画像必须结构化、可编辑、可废弃。
+
+数据模型：
+
+~~~text
+assistant_user_profile_memories
+  memory_id
+  profile_type              -- preference / work_style / risk_preference / communication / planning
+  subject                   -- language / branch_policy / merge_policy / ui_preference
+  statement
+  evidence_refs
+  confidence
+  importance
+  status                    -- candidate / approved / superseded / rejected
+  valid_from
+  valid_to
+  supersedes_memory_id
+  created_by
+  approved_by
+  created_at
+  updated_at
+~~~
+
+必须学习的用户画像类型：
+
+| 类型 | 示例 | 使用位置 |
+|---|---|---|
+| `language_preference` | 设计方案必须中文 | Context Pack、governance prompt |
+| `delivery_standard` | 禁止简化版、最小版、静态占位 | 开发计划、验收矩阵、PR 审核 |
+| `execution_style` | 先分析、再确认、再执行 | 主对话 Planner |
+| `git_policy` | 新功能使用独立 worktree 和分支 | Issue 修复流程、开发任务 |
+| `ui_preference` | 主对话不能展示 JSON/ID/日志 | Renderer prompt、UI 验收 |
+| `risk_preference` | 高风险动作必须二次确认 | Approval Guard |
+| `daily_attention` | 今日关注 QE/HMM/因子/Issue | 晨报、提醒、任务排序 |
+
+写入规则：
+
+1. 用户明确说“记住”时，创建 candidate memory，并在 UI 展示“建议记住”卡片。
+2. 同一偏好重复出现三次以上，助理可主动提出固化建议。
+3. 影响生产、Git、MCP 执行、Issue 同步或合入规则的偏好，必须用户确认后 approved。
+4. 与旧画像冲突时，必须显示差异，不能自动覆盖。
+5. 所有用户画像都必须有 evidence_refs，不能只保存模型猜测。
+
+#### 6A.10.3 平台操作能力学习：Operation Playbook
+
+目标：让助理学习 AIstock 平台的正确操作路径、MCP/Skill 组合、成功顺序和常见失败模式，避免每次临时猜工具。
+
+数据模型：
+
+~~~text
+assistant_operation_playbooks
+  playbook_id
+  playbook_key              -- qe.create_experiment / issue.sync / validation.run_plan
+  title
+  scope
+  preconditions_json
+  steps_json
+  required_confirmations_json
+  guardrails_json
+  success_metrics_json
+  common_failures_json
+  recovery_actions_json
+  related_mcp_tools_json
+  related_skills_json
+  version
+  checksum
+  status                    -- draft / approved / deprecated
+  created_at
+  updated_at
+
+assistant_tool_success_patterns
+  pattern_id
+  capability_key
+  mcp_tool_refs_json
+  skill_refs_json
+  recommended_sequence_json
+  success_count
+  failure_count
+  known_failure_modes_json
+  last_success_at
+  last_failure_at
+  evidence_refs
+~~~
+
+示例 Playbook：
+
+~~~text
+qe.create_experiment
+  preconditions:
+    - QE MCP ready
+    - fixed backtest window memory loaded
+    - stock pool rule loaded
+  steps:
+    - understand user intent
+    - load QE capability catalog
+    - draft experiment card
+    - ask for confirmation
+    - qe_template_create
+    - qe_template_validate
+    - show validate summary
+    - wait for materialize confirmation
+    - qe_template_materialize_confirmed
+    - wait for run confirmation
+    - qe_template_run_confirmed
+  guards:
+    - no materialize before confirmation
+    - no run before second confirmation
+    - no raw JSON in main chat
+  common_failures:
+    - missing stock_pool file
+    - wrong PIT pool date
+    - backend MCP env missing
+~~~
+
+操作学习来源：
+
+1. MCP 执行 trace。
+2. 用户确认/拒绝记录。
+3. Validation 结果。
+4. GitHub Issue 生命周期。
+5. 失败 Reflection Card。
+6. Codex/Claude 外部 agent connector 回写的候选经验。
+
+Prompt 使用规则：
+
+- Prompt 只要求“执行前必须读取 playbook”；具体步骤和失败模式在 Playbook 数据中。
+- 如果 playbook 不存在或不是 approved，助理只能生成只读探索计划，不能直接执行高风险动作。
+
+#### 6A.10.4 失败反思和纠错学习：Reflection Card
+
+目标：把过去失败案例变成可检索、可验证、可防复发的学习资产。
+
+触发条件：
+
+1. 用户指出助理理解错需求。
+2. 开发结果与设计方案不一致。
+3. MCP/Skill 执行失败。
+4. QE/HMM/因子实验失败。
+5. GitHub Issue 同步失败。
+6. 主入口展示 JSON、ID、后台日志或乱码。
+7. 合入前验收漏项。
+8. 平台业务 Bug 未被流水线发现。
+
+数据模型：
+
+~~~text
+assistant_reflection_cards
+  reflection_id
+  source_type              -- user_feedback / task_failure / validation_failure / bug / experiment_failure
+  source_ref
+  failure_class            -- intent_miss / design_drift / tool_misuse / guard_missing / memory_miss / prompt_gap / ui_human_unreadable / business_rule_miss / validation_gap
+  what_happened
+  root_cause
+  missed_memory_refs_json
+  missed_prompt_refs_json
+  missed_playbook_refs_json
+  prevention_rule
+  suggested_memory_update_json
+  suggested_prompt_update_json
+  suggested_playbook_update_json
+  suggested_eval_case_json
+  status                   -- candidate / approved / rejected / applied
+  created_at
+  updated_at
+~~~
+
+处理规则：
+
+| 失败类型 | 写入位置 | 是否改 prompt |
+|---|---|---|
+| 单次 MCP 失败 | Reflection Card + Playbook common_failures | 不一定 |
+| 重复遗漏用户偏好 | User Profile Memory | 可能升级 governance prompt |
+| UI 输出 JSON/日志 | Reflection Card + Prompt Feedback + UI eval case | 是，renderer prompt |
+| 漏掉 QE 固定规则 | Procedural Rule + QE Guard Prompt Candidate | 是，QE guard prompt |
+| 设计方案未逐项验收 | Operation Playbook + Eval Case | 是，development governance prompt |
+| 流水线未发现业务 Bug | Validation Discovery Gap | 可能，测试 prompt 或 playbook |
+
+#### 6A.10.5 QE/HMM/因子实验谱系学习：Experiment Lineage
+
+目标：让研究助理记住研究路线、实验假设、实验结果、失败原因和下一步，不重复历史失败方向。
+
+数据模型：
+
+~~~text
+assistant_research_hypotheses
+  hypothesis_id
+  domain                    -- qe / hmm / factor / stock_analysis
+  title
+  statement
+  rationale
+  expected_metric_change_json
+  risk_json
+  status                    -- candidate / testing / supported / rejected / superseded / archived
+  evidence_refs
+  created_at
+  updated_at
+
+assistant_experiment_lineage_nodes
+  node_id
+  domain
+  node_type                 -- hypothesis / experiment / result / reflection / next_step / external_evidence
+  ref_type                  -- qe_experiment / hmm_run / factor_eval / report / paper
+  ref_id
+  summary
+  metric_json
+  status
+  created_at
+
+assistant_experiment_lineage_edges
+  edge_id
+  from_node_id
+  to_node_id
+  relation_type             -- tests / supports / rejects / improves / derived_from / blocks / supersedes
+  evidence_refs
+  confidence
+  created_at
+~~~
+
+研究结论约束：
+
+1. 外部论文和搜索资料只能进入 `external_evidence` 或 `research_hypothesis`，不能直接成为结论。
+2. 实验结论必须绑定实验 ID、指标、数据窗口、配置、commit 或报告路径。
+3. 失败实验必须记录失败原因和避免重复条件。
+4. 下一步实验必须说明来自哪个假设、支持/反驳哪个历史结论。
+5. QE/HMM/因子任务生成前必须查询相关 lineage，不能只靠模型随机建议。
+
+#### 6A.10.6 研究持续学习和 Research Curriculum
+
+目标：让助理能够长期规划 HMM、QE、因子和股票分析研究，不只是响应单次任务。
+
+数据模型：
+
+~~~text
+assistant_research_curriculum_items
+  curriculum_id
+  domain
+  title
+  objective
+  priority
+  depends_on_json
+  related_hypotheses_json
+  proposed_tasks_json
+  expected_cost_json
+  expected_evidence_json
+  status                    -- proposed / approved / running / done / rejected / paused
+  next_review_at
+  created_at
+  updated_at
+~~~
+
+能力要求：
+
+1. 每日/每周生成研究复盘：已完成、失败、阻塞、建议下一步。
+2. 基于历史失败路线自动提醒“该方向过去失败过，是否仍要继续”。
+3. 基于外部论文只生成候选假设，不直接安排高成本实验。
+4. 基于资源预算、任务优先级和用户确认生成研究任务队列。
+5. HMM/QE/因子任务并行时，主助理必须能汇总状态，而不是每个窗口独立对话。
+
+#### 6A.10.7 Prompt Lab 与自我优化的落地边界
+
+Prompt Lab 采纳 DSPy/GEPA/OPRO/TextGrad 的“候选生成 + 评估 + 反思改进”思想，但生产发布必须由 AIstock 审批控制。
+
+完整流程：
+
+~~~text
+Prompt Problem Detected
+  -> Prompt Feedback
+  -> Eval Case
+  -> Prompt Variant
+  -> Offline Replay
+  -> Shadow Run
+  -> Baseline Comparison
+  -> Release Candidate
+  -> Human Approval
+  -> Approved Prompt
+  -> Cache Invalidation
+  -> Regression Monitor
+~~~
+
+数据模型补充：
+
+~~~text
+assistant_prompt_feedback
+  feedback_id
+  source_type              -- reflection / user_feedback / eval_failure / shadow_run
+  source_ref
+  prompt_id
+  prompt_tree_path
+  problem_class            -- missing_rule / wrong_tool / bad_renderer / unsafe_action / too_verbose / json_leak
+  evidence_refs
+  proposed_change_summary
+  status                   -- candidate / converted_to_eval / rejected / applied
+  created_at
+
+assistant_prompt_regression_monitors
+  monitor_id
+  prompt_id
+  release_id
+  metric_name
+  baseline_value
+  current_value
+  threshold
+  status
+  last_checked_at
+~~~
+
+生产约束：
+
+1. `guard`、`approval`、`production_safety` 类提示词不得自动发布。
+2. `renderer`、`summarizer`、`log_extractor` 可做低风险 shadow 或 A/B，但仍需发布审批。
+3. 所有 prompt variant 必须有 eval case 覆盖。
+4. 发布后必须使 prompt cache 失效，并记录 release trace。
+5. Prompt Lab 不能替代 Memory Ledger；它只能优化行为指令和输出方式。
+
+#### 6A.10.8 长期记忆、Prompt、Playbook、Eval Case 的边界
+
+| 内容类型 | 放在哪里 | 示例 |
+|---|---|---|
+| 事实和历史 | Memory Ledger | 某 QE 实验失败原因、用户确认过的规则 |
+| 用户偏好 | User Profile Memory | 设计方案必须中文 |
+| 操作步骤 | Operation Playbook | QE 创建必须先 validate 再 materialize |
+| 失败教训 | Reflection Card | 上次因未读取固定股票池规则失败 |
+| 研究演进 | Experiment Lineage | 某 HMM 假设被实验反驳 |
+| 稳定行为约束 | Prompt Tree | 不得在主窗口展示 JSON |
+| 提示词缺陷 | Prompt Feedback | renderer prompt 导致人类不可读 |
+| 回归测试样例 | Eval Case | 输入“创建 QE 10 loop”必须先生成草案和确认卡 |
+
+升级路径：
+
+~~~text
+单次事件 -> Reflection Card / Memory Candidate
+重复事件 -> Playbook / User Profile / Prompt Feedback
+稳定规则 -> Approved Memory / Prompt Candidate
+评估通过 -> Approved Prompt / Regression Case
+~~~
+
+#### 6A.10.9 主模型与次模型的结构化通信协议
+
+主模型和次模型之间必须优先使用结构化 JSON/Schema 通信，尽量少使用自由自然语言。自然语言只允许作为面向用户的摘要、证据摘录或调试说明，不得作为工具执行参数、审批判断或长期记忆事实源。
+
+通信对象：
+
+~~~text
+AssistantDelegationRequest
+  delegation_id
+  conversation_id
+  parent_task_id
+  worker_role
+  objective
+  task_type
+  input_slots_json
+  context_pack_refs
+  allowed_memory_refs
+  allowed_tool_refs
+  forbidden_actions_json
+  required_output_schema
+  risk_level
+  token_budget
+  deadline_seconds
+  prompt_bundle_signature
+
+AssistantWorkerResult
+  delegation_id
+  worker_role
+  model_profile_id
+  status                    -- success / needs_clarification / failed / refused
+  confidence
+  structured_findings_json
+  proposed_actions_json
+  missing_information_json
+  evidence_refs
+  risk_flags_json
+  memory_candidates_json
+  prompt_feedback_candidates_json
+  user_facing_summary       -- optional, cannot be final answer
+  schema_valid
+
+AssistantPrimaryReview
+  delegation_id
+  accepted
+  accepted_fields_json
+  rejected_fields_json
+  correction_json
+  reason_codes_json
+  next_action               -- ask_user / run_verifier / call_mcp / store_candidate / ignore
+~~~
+
+强制规则：
+
+1. `required_output_schema` 必须由主模型或系统生成，次模型必须按 schema 返回。
+2. 次模型返回结果先做 JSON schema 校验，再进入主模型复核。
+3. schema 校验失败时，系统最多重试一次；仍失败则升级主模型或标记失败。
+4. `proposed_actions_json` 不能直接执行，必须由主模型生成正式 action proposal 并通过审批。
+5. `memory_candidates_json` 不能直接写 approved memory，只能进入候选队列。
+6. 面向用户的最终自然语言只能由主模型或授权 renderer 生成。
+7. 所有 delegation request/result/review 必须写入 trace，支持回放。
+
+#### 6A.10.10 阶段实施优先级
+
+| 优先级 | 必须实现 | 说明 |
+|---|---|---|
+| P0 / Phase 1 修复版 | Typed Memory Ledger、User Profile Memory、Reflection Card、Operation Playbook、结构化主次模型通信、Prompt Feedback、基础 Eval Case | 解决不记忆、不反思、次模型不可控、提示词不可验收的问题 |
+| P1 / Phase 1B | Prompt Lab 离线回放、Shadow Run、Experiment Lineage、Tool Success Pattern、Research Review | 让提示词和研究路线可持续改进 |
+| P2 / Phase 2 | Research Curriculum、Graphiti/Zep adapter PoC、多窗口状态同步、更多外部研究证据接入 | 增强长期研究和关系查询能力 |
+| P3 / Phase 3 | 更完整的研究驾驶舱、跨应用产品化 adapter、复杂图谱可视化 | 独立产品化和可视化增强 |
+
 
 ## 7. MCP 执行工作台
 

@@ -72,6 +72,36 @@
 | Renderer | 工具返回后加载 result renderer，输出人类可读 | UI 截图 | 直接展示工具 JSON |
 | 文件缓存 | 缓存有 checksum，失效可重建，不改变选择结果 | 缓存命中/失效测试 | 缓存成为事实源或过期不失效 |
 
+
+### -1.5 多模型调度、Prompt Lab 与自我学习验收矩阵
+
+| 验收项 | 必须结果 | 证据 | 阻断条件 |
+|---|---|---|---|
+| 主模型调度 | 主模型能拆分任务并生成次模型 delegation plan | trace；UI 计划卡 | 次模型自由执行或无主模型复核 |
+| 次模型结构化输出 | 次模型只返回 JSON/Schema 格式 WorkerResult，schema 校验可追踪 | 单测；trace；schema 失败用例 | 次模型散文输出直接进入最终回复 |
+| 权限边界 | 次模型不能直接调用高风险 MCP、写 approved 记忆或发布提示词 | 权限测试；失败用例 | 次模型绕过审批执行 |
+| 联合路由 | 模型选择和 prompt branch 选择同时记录原因 | route trace | 只能看到模型或只能看到提示词，无法回放 |
+| Prompt Lab | 支持 prompt variant、eval case、eval run、release candidate | DB/API 测试；评估报告 | 候选提示词未评估直接生产使用 |
+| Shadow 测试 | 候选 prompt 可后台评估且不影响真实执行 | shadow run 证据 | 候选 prompt 影响生产 MCP 行为 |
+| 自我学习 | 用户偏好、操作模式、研究结论只能先进入候选/证据链 | memory candidate 审批记录 | 单次对话自动改写核心规则 |
+| 研究记忆 | QE/HMM/因子结论区分事实、假设、指标、下一步 | experiment lineage API；样例报告 | 无证据假设被当作结论 |
+| 提示词优化建议 | 能根据失败/纠错生成 Prompt Improvement Proposal | 样例 proposal；评估用例 | 只道歉不沉淀改进建议 |
+
+
+### -1.6 可审计自我学习详细验收矩阵
+
+| 验收项 | 必须结果 | 证据 | 阻断条件 |
+|---|---|---|---|
+| 用户画像记忆 | 用户偏好、工作风格、风险偏好可创建、审批、覆盖、废弃 | API 测试；UI 画像卡；冲突样例 | 用户画像只存在 prompt 或自由文本中 |
+| Operation Playbook | QE/Issue/Validation 等核心操作有 approved playbook、步骤、门禁和失败模式 | DB/API 测试；QE playbook 样例 | 助理每次靠模型猜工具顺序 |
+| Reflection Card | 用户纠错、任务失败、MCP 失败能生成反思卡和防复发建议 | 失败用例；reflection 记录 | 失败后只输出道歉，无可复用学习资产 |
+| Experiment Lineage | QE/HMM/因子研究有假设、实验、结果、反思、下一步节点和关系 | lineage API；样例研究报告 | 实验结论无证据或无法追溯来源 |
+| Research Curriculum | 能基于历史实验和失败方向提出候选研究任务队列 | curriculum 样例；用户确认记录 | 随机提出研究方向，不引用历史证据 |
+| Prompt Feedback | 提示词问题能转成 feedback、eval case、variant 或 release candidate | prompt feedback 样例；eval case | 重复 prompt 问题没有进入评估体系 |
+| 主次模型 JSON 通信 | DelegationRequest、WorkerResult、PrimaryReview 全部按 JSON schema 校验和 trace | schema 单测；失败重试测试；trace | 主次模型靠自由自然语言传递执行参数 |
+| 候选升级路径 | 单次事件、重复事件、稳定规则、评估通过分别进入正确存储层 | 端到端回放 | 记忆、prompt、playbook、eval case 边界混乱 |
+| 参考方案落地 | MemGPT/LangMem/Reflexion/Voyager/Graphiti/DSPy 等只以采纳模块体现，不作为空泛参考 | 设计映射表；模块测试 | 文档只列参考资料，未形成实现模块 |
+
 ## 0. 验收适用范围
 
 本矩阵对应主设计方案中的以下核心约束：
@@ -109,12 +139,14 @@
 7. 本地 Skill Catalog 和首批 Skill。
 8. Validation / Pipeline Discovery Stream。
 9. External Agent Connector 合同。
-10. 多模型路由、真实 LLM 调用、主/次模型选择、调用 trace 和临时记忆。
-11. UI 审批中心。
-12. 候选 Issue 队列和 GitHub 正式入库门禁。
-13. 今日事项、晨报、提醒和 personal namespace。
-14. Web 内通知。
-15. 原生 trace 和成本/耗时记录。
+10. 多模型路由、真实 LLM 调用、主/次模型选择、次模型调度、调用 trace 和临时记忆。
+11. Prompt Lab、提示词评估、候选发布和自我学习候选记忆。
+12. 可审计自我学习：用户画像、Operation Playbook、Reflection Card、Experiment Lineage、主次模型 JSON 通信。
+13. UI 审批中心。
+14. 候选 Issue 队列和 GitHub 正式入库门禁。
+15. 今日事项、晨报、提醒和 personal namespace。
+16. Web 内通知。
+17. 原生 trace 和成本/耗时记录。
 
 明确不做：
 
@@ -196,12 +228,16 @@
 | Skill Catalog | 本地 skill 注册、checksum、权限、trace、禁用 | 后端单测；UI 列表和详情测试 |
 | Validation Discovery | 夜间报告、候选 Issue、流水线证据绑定 | Validation MCP 测试；候选 Issue 测试 |
 | External Agent Connector | Codex/Claude session、context pack 读取、证据写入、候选 Issue | Contract test；权限边界测试 |
-| 多模型路由 | model profile、routing policy、真实模型调用、cost、fallback、temp memory | 单测；真实模型调用 trace 样例 |
+| 多模型路由 | model profile、routing policy、真实模型调用、主模型调度次模型、cost、fallback、temp memory | 单测；真实模型调用 trace 样例；delegation trace |
 | 审批中心 | risk、plan digest、config version、审批失效、审批回放 | E2E；状态机测试 |
 | 候选 Issue | 去重、证据、复现、审批、GitHub 正式同步门禁 | 后端单测；GitHub dry-run/同步测试 |
 | Web 通知 | assistant_notifications、待处理计数、详情跳转 | API/UI 测试 |
 | Trace/成本 | LLM/MCP/Skill 调用次数、耗时、成本、model profile | trace 样例；报告验证 |
 | Prompt Tree | 数据库固化、树型选择、多分支装配、文件缓存、selection trace | DB/API 单测；QE/跨模块 E2E；缓存失效测试 |
+| Prompt Lab | variant、eval case、shadow run、release candidate、审批发布 | DB/API 单测；评估报告；发布回放 |
+| 自我学习 | 用户画像、Operation Playbook、Reflection Card、Experiment Lineage、Prompt Feedback 形成完整候选和证据链 | Memory/API/Playbook/Lineage 测试；样例晨报；候选审批记录 |
+| 可审计自我学习 | 用户画像、Operation Playbook、Reflection Card、Experiment Lineage、Prompt Feedback、候选升级路径 | API 单测；端到端失败反思回放；样例研究谱系报告 |
+| 主次模型结构化通信 | DelegationRequest、WorkerResult、PrimaryReview 使用 JSON schema，校验失败可重试/升级 | schema 单测；trace；错误注入测试 |
 
 ### 17.3 Phase 2 验收矩阵
 
