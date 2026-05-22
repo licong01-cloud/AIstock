@@ -6,7 +6,7 @@
   "module": "validation",
   "severity": "P0",
   "risk_area": "validation_catalog_resource_policy",
-  "status": "open",
+  "status": "fixed",
   "trigger_condition": {
     "scenario": "reported_via_mcp",
     "files": [
@@ -25,12 +25,12 @@
   "fingerprint": "733655c4d5ede1e1",
   "assigned_agent": "codex-app",
   "fix_branch": "bug/BUG-097-validation-catalog-resource-policies",
-  "fix_commit": null,
-  "verification_run_id": null,
+  "fix_commit": "61844456b88aa879e3b663023f63c52edcfb4f40",
+  "verification_run_id": "tests/aistock_validation/history/validation_center/BUG-097-validation-catalog-resource-policies-validation-20260522.md",
   "created_at": "2026-05-22T12:08:24Z",
   "first_seen_at": "2026-05-22T12:08:24Z",
   "last_seen_at": "2026-05-22T12:08:24Z",
-  "fixed_at": null,
+  "fixed_at": "2026-05-22T12:24:30Z",
   "submitted_at": "2026-05-22T12:08:24Z",
   "closed_at": null,
   "allowed_write_scope": [
@@ -94,6 +94,12 @@
       "actor": "codex-app",
       "action": "renumbered_and_github_synced",
       "note": "Renumbered from stale MCP BUG-093 allocation to BUG-097 because origin/main already contains BUG-093. Mirrored to GitHub issue #156 and will fix in independent worktree/branch."
+    },
+    {
+      "timestamp": "2026-05-22T12:24:30Z",
+      "actor": "codex-app",
+      "action": "fix_committed",
+      "note": "Fix commit 61844456b88aa879e3b663023f63c52edcfb4f40 added simulation runtime validation catalog resource/evidence/runtime policies. Validation passed: validation_catalog_integrity finding_count=0; validation_module_registry_l0 passed; l0 successful blocking=0; git diff --check passed. production_ddl_gate=noop."
     }
   ],
   "github_issue_number": 156,
