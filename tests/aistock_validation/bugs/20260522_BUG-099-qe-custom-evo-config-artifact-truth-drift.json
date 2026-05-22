@@ -6,7 +6,7 @@
   "module": "qe",
   "severity": "P1",
   "risk_area": "data_integrity",
-  "status": "fixed",
+  "status": "verified",
   "trigger_condition": {
     "scenario": "custom_evo_request_config_differs_from_executed_artifacts",
     "experiment_id": "qe_20260520_215627_abbc",
@@ -39,14 +39,14 @@
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/142",
   "assigned_agent": "codex-app",
   "fix_branch": "bug/BUG-098-100-qe-reproducibility-truth-weights-20260522",
-  "fix_commit": "eb694b7dc47b23247cbbc670cc13d162818c57d7",
-  "verification_run_id": "tests/aistock_validation/history/qe/20260522_bug_098_100_qe_reproducibility_truth_weights.md",
+  "fix_commit": "91d1b3240e54c67e7c3252328e15f64467cf206f",
+  "verification_run_id": "tests/aistock_validation/history/qe/20260522_bug_098_100_qe_reproducibility_truth_weights.md;production_ddl_gate=applied_and_verified",
   "created_at": "2026-05-22T07:44:00Z",
   "first_seen_at": "2026-05-22T07:44:00Z",
-  "last_seen_at": "2026-05-22T14:09:24Z",
+  "last_seen_at": "2026-05-22T14:40:55Z",
   "fixed_at": "2026-05-22T14:09:24Z",
   "submitted_at": "2026-05-22T07:44:00Z",
-  "closed_at": null,
+  "closed_at": "2026-05-22T14:40:55Z",
   "worktree_path": "F:/Dev/AIstock_worktrees/bug-096-098-qe-reproducibility-truth-weights-20260522",
   "github_pr_url": "https://github.com/licong01-cloud/AIstock/pull/146",
   "batch_id": "BATCH-QE-REPRODUCIBILITY-TRUTH-WEIGHTS-20260522",
@@ -139,6 +139,12 @@
       "actor": "codex-app",
       "action": "fixed",
       "note": "Targeted compileall, backend pytest groups, schema tests, and diff checks passed on the fix branch; production_ddl_gate remains pending until merged migration is applied to production DB."
+    },
+    {
+      "timestamp": "2026-05-22T14:40:55Z",
+      "actor": "codex-app",
+      "action": "verified",
+      "note": "PR #146 merged to main, production DDL gate applied and verified, GitHub issue commented and labeled status:verified."
     }
   ]
 }
