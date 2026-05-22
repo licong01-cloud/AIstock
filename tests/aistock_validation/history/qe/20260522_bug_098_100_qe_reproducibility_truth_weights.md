@@ -67,7 +67,7 @@ rtk git diff --check
 - 生产前端 `3000`：未触碰、未重启。
 - 生产 DB：未连接、未写入、未执行 DDL。
 - 本次运行了专用 worktree 内 `frontend/npm ci`，生成的 `frontend/node_modules/` 与 `frontend/.next/` 均为 gitignored 本地验证产物，不进入提交。
-- `production_ddl_gate=pending`。原因：本次 runtime code 依赖的 `qe_archive.run_factor_importance.weight_pct` 新列已在分支里加入 bootstrap 与迁移，但尚未执行生产 DB 迁移；合入 `main` 后需要按 `PROD-DDL-001` 执行并验证。
+- `production_ddl_gate=applied_and_verified`。原因：本次 runtime code 依赖的 `qe_archive.run_factor_importance.weight_pct` 新列已在分支里加入 bootstrap 与迁移，但尚未执行生产 DB 迁移；合入 `main` 后需要按 `PROD-DDL-001` 执行并验证。
 
 ## 5. Merge Readiness
 
@@ -86,4 +86,15 @@ After merge, `backend/migrations/qe_archive_run_factor_importance_20260522.sql` 
 - `BUG-098` -> GitHub `#141`: fixed seed and reproducibility; registry file `tests/aistock_validation/bugs/20260522_BUG-098-qe-trainable-loops-require-fixed-seed.json`.
 - `BUG-099` -> GitHub `#142`: request config and artifact truth audit; registry file `tests/aistock_validation/bugs/20260522_BUG-099-qe-custom-evo-config-artifact-truth-drift.json`.
 - `BUG-100` -> GitHub `#143`: structured factor `weight_pct` warehouse facts; registry file `tests/aistock_validation/bugs/20260522_BUG-100-qe-archive-factor-weight-percentages-structured.json`.
-- `production_ddl_gate=pending` until the merged migration is applied and verified on production DB.
+- `production_ddl_gate=applied_and_verified` completed on production DB: `weight_pct` column/comment and schema_version marker verified.
+
+## 7. Production DDL Gate Evidence
+
+Executed after PR #146 merge to `origin/main` merge commit `91d1b3240e54c67e7c3252328e15f64467cf206f`:
+
+```text
+production_ddl_gate target host=127.0.0.1 port=5432 db=aistock user=postgres password_set=True
+before= {'table_regclass': 'qe_archive.run_factor_importance', 'has_weight_pct': False, 'weight_pct_comment': None, 'table_comment': 'Per factor or feature importance and attribution records for all model families.', 'has_schema_version': False}
+after= {'table_regclass': 'qe_archive.run_factor_importance', 'has_weight_pct': True, 'weight_pct_comment': 'Normalized factor importance percentage within the run and method, in percentage points from 0 to 100.', 'table_comment': 'Per factor or feature importance and attribution records for QE Archive runs; stores normalized percentages and artifact provenance without model blobs.', 'has_schema_version': True}
+production_ddl_gate=applied_and_verified
+```
