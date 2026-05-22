@@ -4,6 +4,7 @@ import argparse
 import fnmatch
 import hashlib
 import json
+import re
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -274,6 +275,56 @@ def scan_files(files: Iterable[Path], rules: Iterable[CompiledRule], root: Path)
     return findings
 
 
+def _changed_line_numbers(root: Path, paths: Iterable[Path], *, staged: bool) -> dict[str, set[int]]:
+    args = ["git", "diff", "--unified=0"]
+    if staged:
+        args.append("--cached")
+    args.append("--")
+    args.extend(_path_key(path, root) for path in paths)
+    output = _git_output(args, root)
+    changed: dict[str, set[int]] = {}
+    current_file: str | None = None
+    new_line = 0
+    for raw_line in output.splitlines():
+        if raw_line.startswith("+++ b/"):
+            current_file = raw_line[6:]
+            changed.setdefault(current_file, set())
+            continue
+        if raw_line.startswith("@@"):
+            match = re.search(r"\+(\d+)(?:,(\d+))?", raw_line)
+            if match:
+                span = int(match.group(2) or "1")
+                # Pure insert hunks use +N,0; the first added line is N+1.
+                new_line = int(match.group(1)) + (1 if span == 0 else 0)
+            continue
+        if current_file is None:
+            continue
+        if raw_line.startswith("+") and not raw_line.startswith("+++"):
+            changed.setdefault(current_file, set()).add(new_line)
+            new_line += 1
+        elif raw_line.startswith("-") and not raw_line.startswith("---"):
+            continue
+        else:
+            new_line += 1
+    return changed
+
+
+def filter_findings_to_changed_lines(
+    findings: list[Finding],
+    changed_lines_by_file: dict[str, set[int]],
+) -> list[Finding]:
+    if not changed_lines_by_file:
+        return findings
+    filtered: list[Finding] = []
+    for finding in findings:
+        changed_lines = changed_lines_by_file.get(finding.file)
+        if changed_lines is None:
+            continue
+        if not changed_lines or finding.line in changed_lines:
+            filtered.append(finding)
+    return filtered
+
+
 def load_baseline_fingerprints(path: Path | None) -> set[str]:
     if path is None or not path.exists():
         return set()
@@ -492,6 +543,11 @@ def main() -> int:
 
     files = iter_files(candidate_paths, root=root, suffixes=suffixes, skip_parts=skip_parts)
     findings = scan_files(files, rules=rules, root=root)
+    if args.changed_only or args.staged_only:
+        findings = filter_findings_to_changed_lines(
+            findings,
+            _changed_line_numbers(root, files, staged=args.staged_only),
+        )
     baseline_path = root / args.baseline_json if args.baseline_json else None
     baseline_fingerprints = load_baseline_fingerprints(baseline_path)
     findings = apply_baseline_status(findings, baseline_fingerprints)

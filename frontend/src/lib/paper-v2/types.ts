@@ -351,6 +351,89 @@ export type PaperSchedulerRunResult = {
   errors: JsonObject[];
 };
 
+export type SimulationRuntimeSchedulerStatus = JsonObject & {
+  scheduler?: string;
+  autostart?: boolean;
+  default_submit?: boolean;
+  read_only_ops_api?: boolean;
+  manual_tick_endpoint_enabled?: boolean;
+  approval_states?: string[];
+  schedule_windows?: Array<JsonObject & {
+    window_id?: string;
+    label?: string;
+    start?: string;
+    end?: string;
+    action?: string;
+    state?: string;
+  }>;
+  restart_recovery_mode?: string;
+  window_orchestration?: JsonObject;
+  summary?: JsonObject;
+};
+
+export type SimulationRuntimeRunSummary = JsonObject & {
+  run_id: string;
+  trade_date: string;
+  strategy_id: string;
+  broker_backend: "local_sim" | "minqmt_sim" | string;
+  package_id: string;
+  manifest_sha256: string;
+  release_id: string;
+  release_hash: string;
+  binding_id: string;
+  binding_hash: string;
+  selection_evidence_id?: string | null;
+  selection_artifact_hash?: string | null;
+  execution_plan_id?: string | null;
+  execution_plan_hash?: string | null;
+  status: string;
+  last_stage?: string;
+  stage_counts?: JsonObject;
+  broker_context?: JsonObject;
+  strategy_performance?: JsonObject | null;
+  reconciliation_context?: JsonObject | null;
+  orders?: JsonObject[];
+  fills?: JsonObject[];
+  errors?: JsonObject[];
+  audit?: JsonObject;
+};
+
+export type SimulationRuntimePlanSummary = JsonObject & {
+  plan_id: string;
+  plan_hash: string;
+  strategy_id: string;
+  portfolio_id: string;
+  package_id: string;
+  release_id: string;
+  release_hash: string;
+  binding_id: string;
+  binding_hash: string;
+  selection_evidence_id: string;
+  selection_evidence_hash: string;
+  target_trade_date: string;
+  execution_policy_version_id: string;
+  execution_policy_sha256: string;
+  tail_policy_version_id: string;
+  tail_policy_sha256: string;
+  intent_count: number;
+  buy_intent_count: number;
+  sell_intent_count: number;
+  trading_rule_decision_count: number;
+  symbols: string[];
+  intents?: JsonObject[];
+};
+
+export type SimulationRuntimeRunDetail = {
+  run: SimulationRuntimeRunSummary;
+  selection_evidence?: JsonObject | null;
+  execution_plan?: SimulationRuntimePlanSummary | null;
+};
+
+export type SimulationRuntimeRunsResponse = {
+  summary: JsonObject;
+  runs: SimulationRuntimeRunSummary[];
+};
+
 export type PaperLiveDashboard = {
   portfolio: PaperPortfolio;
   package: JsonObject;

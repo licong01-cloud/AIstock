@@ -59,12 +59,13 @@ class SelectionCenterRepository:
                 cur.execute(
                     """
                     UPDATE selection.run
-                    SET status = %s, valid_no_candidate = %s, no_candidate_reason = %s,
+                    SET status = %s, runtime_config = %s, valid_no_candidate = %s, no_candidate_reason = %s,
                         completed_at = %s
                     WHERE run_id = %s
                     """,
                     (
                         completed.status.value,
+                        psycopg2.extras.Json(completed.runtime_config),
                         completed.valid_no_candidate,
                         completed.no_candidate_reason,
                         completed.completed_at,

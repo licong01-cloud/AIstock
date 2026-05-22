@@ -22,7 +22,6 @@ from backend.services.paper_trading_v2.session import PaperTradingSessionRunner,
 from backend.services.paper_trading_v2.models import BrokerBackendId, PaperSessionMode
 from backend.services.paper_trading_v2.symbol_names import PaperV2SymbolNameResolver
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, TradingCoreError, UnsupportedFeatureError
-
 router = APIRouter(prefix="/paper-v2", tags=["paper-v2"])
 
 

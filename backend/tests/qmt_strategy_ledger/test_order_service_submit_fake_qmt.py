@@ -238,6 +238,23 @@ def test_submit_batch_retry_is_idempotent_and_does_not_call_broker_again() -> No
     assert len(repo.list_order_intents_by_batch(first.batch_id)) == 2
 
 
+def test_submit_batch_preflight_failure_keeps_broker_called_false_for_restart_retry() -> None:
+    repo = _repo()
+    broker = FakeManagedBroker(order_ids=[1082167001, 1082167002])
+    requests = [_buy_request("remark_dup_preflight"), _buy_request("remark_dup_preflight")]
+
+    first = _service(repo, broker).submit_batch(requests)
+    second_broker = FakeManagedBroker(order_ids=[1082167999, 1082168000])
+    second = _service(repo, second_broker).submit_batch(requests)
+
+    assert first.batch_status == OrderBatchStatus.PREFLIGHT_FAILED.value
+    assert all(result.broker_called is False for result in first.results)
+    assert second.retry_of_batch_id == first.batch_id
+    assert second.batch_status == OrderBatchStatus.PREFLIGHT_FAILED.value
+    assert all(result.broker_called is False for result in second.results)
+    assert second_broker.place_order_payloads == []
+
+
 def test_cancel_order_calls_fake_broker_and_releases_frozen_cash() -> None:
     repo = _repo()
     broker = FakeManagedBroker(order_ids=[1082167001])

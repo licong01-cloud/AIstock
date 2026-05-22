@@ -1,4 +1,4 @@
--- Trading Core v2 / Strategy Package / Selection Center / Paper v2 schema.
+﻿-- Trading Core v2 / Strategy Package / Selection Center / Paper v2 schema.
 -- Keep this migration explicit; business services must not run DDL implicitly.
 
 CREATE SCHEMA IF NOT EXISTS strategy_pkg;
@@ -199,6 +199,65 @@ CREATE TABLE IF NOT EXISTS strategy_pkg.validated_execution_policy (
     UNIQUE (package_id, policy_sha256)
 );
 
+CREATE TABLE IF NOT EXISTS strategy_pkg.strategy_runtime_release (
+    release_id TEXT PRIMARY KEY,
+    package_id TEXT NOT NULL REFERENCES strategy_pkg.package(package_id),
+    manifest_sha256 TEXT NOT NULL,
+    base_release_id TEXT REFERENCES strategy_pkg.strategy_runtime_release(release_id),
+    runtime_profile_id TEXT NOT NULL,
+    runtime_profile_version_id TEXT NOT NULL,
+    runtime_profile_sha256 TEXT NOT NULL,
+    daily_strategy_profile_version_id TEXT NOT NULL,
+    execution_policy_version_id TEXT NOT NULL,
+    execution_policy_sha256 TEXT NOT NULL,
+    tail_policy_version_id TEXT NOT NULL,
+    tail_policy_sha256 TEXT NOT NULL,
+    release_config_json JSONB NOT NULL,
+    release_hash TEXT NOT NULL UNIQUE,
+    validation_state TEXT NOT NULL CHECK (
+        validation_state IN (
+            'DRAFT',
+            'SIM_VALIDATING',
+            'SIM_PASSED',
+            'LIVE_APPROVAL_PENDING',
+            'LIVE_APPROVED',
+            'RETIRED'
+        )
+    ),
+    validation_evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+    effective_from DATE,
+    effective_to DATE,
+    created_by TEXT,
+    created_reason TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT ck_strategy_runtime_release_window CHECK (effective_to IS NULL OR effective_from IS NULL OR effective_to >= effective_from)
+);
+
+COMMENT ON TABLE strategy_pkg.strategy_runtime_release IS 'Immutable broker-neutral StrategyRuntimeRelease combining one StrategyPackage alpha core with versioned runtime, daily, execution, and tail policies.';
+COMMENT ON COLUMN strategy_pkg.strategy_runtime_release.release_id IS 'Stable immutable runtime release identifier generated from the canonical release hash.';
+COMMENT ON COLUMN strategy_pkg.strategy_runtime_release.package_id IS 'StrategyPackage alpha-core package_id referenced by this runtime release.';
+COMMENT ON COLUMN strategy_pkg.strategy_runtime_release.manifest_sha256 IS 'Immutable StrategyPackage manifest hash; factor/model/alpha changes require a new StrategyPackage, not a release override.';
+COMMENT ON COLUMN strategy_pkg.strategy_runtime_release.base_release_id IS 'Optional parent release_id when this release is derived from an earlier runtime release.';
+COMMENT ON COLUMN strategy_pkg.strategy_runtime_release.runtime_profile_id IS 'Platform runtime profile id containing HMM, stock pool, ST PIT, tradability, blacklist, and risk choices outside StrategyPackage.';
+COMMENT ON COLUMN strategy_pkg.strategy_runtime_release.runtime_profile_version_id IS 'Specific runtime profile version used by this release.';
+COMMENT ON COLUMN strategy_pkg.strategy_runtime_release.runtime_profile_sha256 IS 'Canonical hash of the runtime profile version used by this release.';
+COMMENT ON COLUMN strategy_pkg.strategy_runtime_release.daily_strategy_profile_version_id IS 'Versioned daily strategy profile that maps selection signals to target positions.';
+COMMENT ON COLUMN strategy_pkg.strategy_runtime_release.execution_policy_version_id IS 'Backtest or simulation validated minute execution policy version used by this release.';
+COMMENT ON COLUMN strategy_pkg.strategy_runtime_release.execution_policy_sha256 IS 'Canonical hash of the validated execution policy JSON.';
+COMMENT ON COLUMN strategy_pkg.strategy_runtime_release.tail_policy_version_id IS 'Versioned tail or unfilled-order handling policy used by this release.';
+COMMENT ON COLUMN strategy_pkg.strategy_runtime_release.tail_policy_sha256 IS 'Canonical hash of the tail or unfilled-order policy payload.';
+COMMENT ON COLUMN strategy_pkg.strategy_runtime_release.release_config_json IS 'Canonical broker-neutral release payload; must not contain alpha-core fields or broker/account/capital binding fields.';
+COMMENT ON COLUMN strategy_pkg.strategy_runtime_release.release_hash IS 'Canonical hash of release_config_json; all simulation runs, evidence, plans, and approvals reference this hash.';
+COMMENT ON COLUMN strategy_pkg.strategy_runtime_release.validation_state IS 'Runtime release lifecycle state for simulation validation and future live admission.';
+COMMENT ON COLUMN strategy_pkg.strategy_runtime_release.validation_evidence IS 'JSON references to LocalSim, MiniQMT SIM, dual-backend oracle, and manual validation evidence.';
+COMMENT ON COLUMN strategy_pkg.strategy_runtime_release.effective_from IS 'First trade date where this release may be used for future runs; NULL means no lower bound.';
+COMMENT ON COLUMN strategy_pkg.strategy_runtime_release.effective_to IS 'Last trade date where this release may be used for future runs; NULL means open ended.';
+COMMENT ON COLUMN strategy_pkg.strategy_runtime_release.created_by IS 'Actor that created this immutable runtime release.';
+COMMENT ON COLUMN strategy_pkg.strategy_runtime_release.created_reason IS 'Human-readable reason for creating this release.';
+COMMENT ON COLUMN strategy_pkg.strategy_runtime_release.created_at IS 'Timestamp when the release row was created.';
+COMMENT ON COLUMN strategy_pkg.strategy_runtime_release.updated_at IS 'Timestamp when release metadata was last updated; immutable identity fields must not change.';
+
 CREATE TABLE IF NOT EXISTS strategy_pkg.live_approval (
     approval_id TEXT PRIMARY KEY,
     package_id TEXT NOT NULL REFERENCES strategy_pkg.package(package_id),
@@ -363,6 +422,45 @@ CREATE TABLE IF NOT EXISTS selection.aggregate_result (
     UNIQUE(run_id, symbol)
 );
 
+CREATE TABLE IF NOT EXISTS selection.daily_selection_evidence (
+    evidence_id TEXT PRIMARY KEY,
+    target_trade_date DATE NOT NULL,
+    cutoff_date DATE,
+    package_id TEXT NOT NULL,
+    manifest_sha256 TEXT NOT NULL,
+    release_id TEXT REFERENCES strategy_pkg.strategy_runtime_release(release_id),
+    release_hash TEXT,
+    runtime_profile_version_id TEXT NOT NULL,
+    runtime_profile_hash TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    data_source TEXT NOT NULL,
+    candidate_count INTEGER NOT NULL CHECK (candidate_count >= 0),
+    excluded_count INTEGER NOT NULL CHECK (excluded_count >= 0),
+    artifact_hash TEXT NOT NULL UNIQUE,
+    evidence_payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_by TEXT
+);
+
+COMMENT ON TABLE selection.daily_selection_evidence IS 'Immutable broker-neutral DailySelectionEvidence generated by the shared StrategyPackageSelectionService before target, rebalance, execution or broker logic.';
+COMMENT ON COLUMN selection.daily_selection_evidence.evidence_id IS 'Stable evidence id generated from artifact_hash with dse_ prefix.';
+COMMENT ON COLUMN selection.daily_selection_evidence.target_trade_date IS 'Target trading date for the daily selection signal.';
+COMMENT ON COLUMN selection.daily_selection_evidence.cutoff_date IS 'Optional point-in-time data cutoff date used by inference; NULL means same-day or non-PIT selection semantics.';
+COMMENT ON COLUMN selection.daily_selection_evidence.package_id IS 'StrategyPackage package_id whose alpha core produced this selection evidence.';
+COMMENT ON COLUMN selection.daily_selection_evidence.manifest_sha256 IS 'StrategyPackage manifest hash frozen for the selected alpha core.';
+COMMENT ON COLUMN selection.daily_selection_evidence.release_id IS 'Optional StrategyRuntimeRelease id when the selection was generated through a formal runtime release.';
+COMMENT ON COLUMN selection.daily_selection_evidence.release_hash IS 'Optional StrategyRuntimeRelease canonical hash denormalized for audit.';
+COMMENT ON COLUMN selection.daily_selection_evidence.runtime_profile_version_id IS 'Runtime profile version id controlling platform selection features such as HMM, stock pool, ST PIT, tradability and risk policy.';
+COMMENT ON COLUMN selection.daily_selection_evidence.runtime_profile_hash IS 'Canonical runtime profile hash used by the evidence.';
+COMMENT ON COLUMN selection.daily_selection_evidence.source_type IS 'Authoritative selection source type; current production value is live/latest-data QE model inference.';
+COMMENT ON COLUMN selection.daily_selection_evidence.data_source IS 'Market data source label used for the selection artifact, for example DB_HISTORICAL.';
+COMMENT ON COLUMN selection.daily_selection_evidence.candidate_count IS 'Number of selected candidates retained after selection-only filters.';
+COMMENT ON COLUMN selection.daily_selection_evidence.excluded_count IS 'Number of candidates excluded by selection-only filters with traceable reasons.';
+COMMENT ON COLUMN selection.daily_selection_evidence.artifact_hash IS 'Canonical SHA-256 hash of evidence_payload_json; shared consumers use it to compare Selection Center, LocalSim and MiniQMT signals.';
+COMMENT ON COLUMN selection.daily_selection_evidence.evidence_payload_json IS 'Canonical JSON payload with schema_version=daily_selection_evidence_v1, runtime profile binding, PIT context, selected candidates and exclusions; must not contain broker/account/capital/order fields.';
+COMMENT ON COLUMN selection.daily_selection_evidence.created_at IS 'Timestamp when the evidence row was created.';
+COMMENT ON COLUMN selection.daily_selection_evidence.created_by IS 'Actor or service that generated the evidence.';
+
 ALTER TABLE selection.run
     ADD COLUMN IF NOT EXISTS package_ids JSONB NOT NULL DEFAULT '[]'::jsonb;
 
@@ -470,6 +568,151 @@ CREATE TABLE IF NOT EXISTS paper_v2.runtime_config_activation (
     superseded_at TIMESTAMPTZ
 );
 
+CREATE TABLE IF NOT EXISTS paper_v2.simulation_release_binding (
+    binding_id TEXT PRIMARY KEY,
+    strategy_id TEXT NOT NULL,
+    release_id TEXT NOT NULL REFERENCES strategy_pkg.strategy_runtime_release(release_id),
+    release_hash TEXT NOT NULL,
+    package_id TEXT NOT NULL,
+    manifest_sha256 TEXT NOT NULL,
+    broker_backend TEXT NOT NULL CHECK (broker_backend IN ('local_sim', 'minqmt_sim')),
+    broker_account_id TEXT,
+    capital_allocation NUMERIC(20, 6) NOT NULL CHECK (capital_allocation > 0),
+    strategy_name TEXT,
+    order_remark_prefix TEXT,
+    effective_from DATE,
+    effective_to DATE,
+    approval_state TEXT NOT NULL CHECK (
+        approval_state IN (
+            'DRAFT',
+            'SIM_VALIDATING',
+            'SIM_PASSED',
+            'LIVE_APPROVAL_PENDING',
+            'LIVE_APPROVED',
+            'RETIRED'
+        )
+    ),
+    binding_config_json JSONB NOT NULL,
+    binding_hash TEXT NOT NULL UNIQUE,
+    created_by TEXT,
+    created_reason TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT ck_simulation_release_binding_window CHECK (effective_to IS NULL OR effective_from IS NULL OR effective_to >= effective_from)
+);
+
+COMMENT ON TABLE paper_v2.simulation_release_binding IS 'Immutable SimulationReleaseBinding or PortfolioBindingVersion mapping a broker-neutral runtime release to a concrete simulation backend, account, capital allocation, and order attribution.';
+COMMENT ON COLUMN paper_v2.simulation_release_binding.binding_id IS 'Stable immutable binding identifier generated from the canonical binding hash.';
+COMMENT ON COLUMN paper_v2.simulation_release_binding.strategy_id IS 'Simulation strategy instance id used for multi-strategy capital, lot, and PnL attribution.';
+COMMENT ON COLUMN paper_v2.simulation_release_binding.release_id IS 'StrategyRuntimeRelease id deployed by this binding.';
+COMMENT ON COLUMN paper_v2.simulation_release_binding.release_hash IS 'Canonical hash of the referenced StrategyRuntimeRelease; denormalized for audit and run evidence.';
+COMMENT ON COLUMN paper_v2.simulation_release_binding.package_id IS 'StrategyPackage id inherited from the referenced release.';
+COMMENT ON COLUMN paper_v2.simulation_release_binding.manifest_sha256 IS 'StrategyPackage manifest hash inherited from the referenced release.';
+COMMENT ON COLUMN paper_v2.simulation_release_binding.broker_backend IS 'Simulation broker backend, local_sim or minqmt_sim; broker choice belongs to binding rather than StrategyRuntimeRelease.';
+COMMENT ON COLUMN paper_v2.simulation_release_binding.broker_account_id IS 'Concrete LocalSim virtual account or MiniQMT broker account alias used by this binding.';
+COMMENT ON COLUMN paper_v2.simulation_release_binding.capital_allocation IS 'Initial or target strategy-level capital allocation in account currency.';
+COMMENT ON COLUMN paper_v2.simulation_release_binding.strategy_name IS 'MiniQMT strategy_name or LocalSim strategy display identifier for broker/order attribution.';
+COMMENT ON COLUMN paper_v2.simulation_release_binding.order_remark_prefix IS 'Order remark prefix used to attribute MiniQMT orders and trades to this binding.';
+COMMENT ON COLUMN paper_v2.simulation_release_binding.effective_from IS 'First trade date where this binding may be used for future runs; NULL means no lower bound.';
+COMMENT ON COLUMN paper_v2.simulation_release_binding.effective_to IS 'Last trade date where this binding may be used for future runs; NULL means open ended.';
+COMMENT ON COLUMN paper_v2.simulation_release_binding.approval_state IS 'Binding lifecycle state for simulation validation and future live admission.';
+COMMENT ON COLUMN paper_v2.simulation_release_binding.binding_config_json IS 'Canonical binding payload; may contain broker/account/capital/order remark fields but must not contain alpha-core or runtime-policy fields.';
+COMMENT ON COLUMN paper_v2.simulation_release_binding.binding_hash IS 'Canonical hash of binding_config_json; simulation runs and approvals reference this hash.';
+COMMENT ON COLUMN paper_v2.simulation_release_binding.created_by IS 'Actor that created this immutable binding.';
+COMMENT ON COLUMN paper_v2.simulation_release_binding.created_reason IS 'Human-readable reason for creating this binding.';
+COMMENT ON COLUMN paper_v2.simulation_release_binding.created_at IS 'Timestamp when the binding row was created.';
+COMMENT ON COLUMN paper_v2.simulation_release_binding.updated_at IS 'Timestamp when binding metadata was last updated; immutable identity fields must not change.';
+
+CREATE TABLE IF NOT EXISTS paper_v2.execution_plan (
+    plan_id TEXT PRIMARY KEY,
+    strategy_id TEXT NOT NULL,
+    portfolio_id TEXT NOT NULL,
+    package_id TEXT NOT NULL,
+    release_id TEXT NOT NULL REFERENCES strategy_pkg.strategy_runtime_release(release_id),
+    release_hash TEXT NOT NULL,
+    binding_id TEXT NOT NULL REFERENCES paper_v2.simulation_release_binding(binding_id),
+    binding_hash TEXT NOT NULL,
+    selection_evidence_id TEXT NOT NULL REFERENCES selection.daily_selection_evidence(evidence_id),
+    selection_evidence_hash TEXT NOT NULL,
+    target_trade_date DATE NOT NULL,
+    execution_policy_version_id TEXT NOT NULL,
+    execution_policy_sha256 TEXT NOT NULL,
+    tail_policy_version_id TEXT NOT NULL,
+    tail_policy_sha256 TEXT NOT NULL,
+    intent_count INTEGER NOT NULL CHECK (intent_count >= 0),
+    trading_rule_decision_count INTEGER NOT NULL CHECK (trading_rule_decision_count >= 0),
+    plan_payload_json JSONB NOT NULL,
+    plan_hash TEXT NOT NULL UNIQUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+COMMENT ON TABLE paper_v2.execution_plan IS 'Immutable shared ExecutionPlan compiled from DailySelectionEvidence, StrategyRuntimeRelease, SimulationReleaseBinding, target positions, rebalance intents, and TradingRuleDecision rows before LocalSim or MiniQMT execution.';
+COMMENT ON COLUMN paper_v2.execution_plan.plan_id IS 'Stable execution plan id generated from plan_hash with plan_ prefix.';
+COMMENT ON COLUMN paper_v2.execution_plan.strategy_id IS 'Simulation strategy instance id owning this plan.';
+COMMENT ON COLUMN paper_v2.execution_plan.portfolio_id IS 'Paper v2 portfolio or strategy portfolio id consuming this plan.';
+COMMENT ON COLUMN paper_v2.execution_plan.package_id IS 'StrategyPackage package_id inherited from the runtime release.';
+COMMENT ON COLUMN paper_v2.execution_plan.release_id IS 'StrategyRuntimeRelease id used to compile this plan.';
+COMMENT ON COLUMN paper_v2.execution_plan.release_hash IS 'Canonical StrategyRuntimeRelease hash denormalized for audit.';
+COMMENT ON COLUMN paper_v2.execution_plan.binding_id IS 'SimulationReleaseBinding id supplying backend, account, capital and order attribution.';
+COMMENT ON COLUMN paper_v2.execution_plan.binding_hash IS 'Canonical binding hash denormalized for audit.';
+COMMENT ON COLUMN paper_v2.execution_plan.selection_evidence_id IS 'DailySelectionEvidence id used as the authoritative daily signal source.';
+COMMENT ON COLUMN paper_v2.execution_plan.selection_evidence_hash IS 'DailySelectionEvidence artifact hash denormalized for dual-backend comparison.';
+COMMENT ON COLUMN paper_v2.execution_plan.target_trade_date IS 'Trading date targeted by this execution plan.';
+COMMENT ON COLUMN paper_v2.execution_plan.execution_policy_version_id IS 'Validated minute execution policy version used by the compiler.';
+COMMENT ON COLUMN paper_v2.execution_plan.execution_policy_sha256 IS 'Canonical hash of the validated execution policy payload.';
+COMMENT ON COLUMN paper_v2.execution_plan.tail_policy_version_id IS 'Tail or unfilled-order policy version used by the compiler.';
+COMMENT ON COLUMN paper_v2.execution_plan.tail_policy_sha256 IS 'Canonical hash of the tail policy payload.';
+COMMENT ON COLUMN paper_v2.execution_plan.intent_count IS 'Number of executable plan intents after trading-rule decisions.';
+COMMENT ON COLUMN paper_v2.execution_plan.trading_rule_decision_count IS 'Number of TradingRuleDecision records embedded in plan_payload_json.';
+COMMENT ON COLUMN paper_v2.execution_plan.plan_payload_json IS 'Canonical JSON payload with intents, trading-rule decisions, schedule window, price policy and policy references.';
+COMMENT ON COLUMN paper_v2.execution_plan.plan_hash IS 'Canonical SHA-256 hash of plan_payload_json.';
+COMMENT ON COLUMN paper_v2.execution_plan.created_at IS 'Timestamp when the immutable execution plan row was created.';
+
+CREATE TABLE IF NOT EXISTS paper_v2.simulation_daily_run (
+    run_id TEXT PRIMARY KEY,
+    trade_date DATE NOT NULL,
+    strategy_id TEXT NOT NULL,
+    broker_backend TEXT NOT NULL CHECK (broker_backend IN ('local_sim', 'minqmt_sim')),
+    package_id TEXT NOT NULL,
+    manifest_sha256 TEXT NOT NULL,
+    release_id TEXT NOT NULL REFERENCES strategy_pkg.strategy_runtime_release(release_id),
+    release_hash TEXT NOT NULL,
+    binding_id TEXT NOT NULL REFERENCES paper_v2.simulation_release_binding(binding_id),
+    binding_hash TEXT NOT NULL,
+    selection_evidence_id TEXT REFERENCES selection.daily_selection_evidence(evidence_id),
+    selection_artifact_hash TEXT,
+    execution_plan_id TEXT REFERENCES paper_v2.execution_plan(plan_id),
+    execution_plan_hash TEXT,
+    status TEXT NOT NULL CHECK (status IN (
+        'CREATED', 'PRECHECKING', 'SIGNAL_GENERATING', 'TARGET_GENERATING', 'PLANNING_EXECUTION',
+        'SUBMITTING', 'INTRADAY_RUNNING', 'TAIL_HANDLING', 'RECONCILING', 'SUCCEEDED',
+        'FAILED_RETRYABLE', 'FAILED_TERMINAL', 'CANCELLED'
+    )),
+    run_payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(strategy_id, binding_id, trade_date)
+);
+
+COMMENT ON TABLE paper_v2.simulation_daily_run IS 'Unified SimulationDailyRun lifecycle row for one strategy, broker backend, binding and trade date; links daily selection evidence and shared execution plan before broker-specific execution.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.run_id IS 'Stable daily run id generated from strategy_id, binding_id, release hash, broker backend and trade_date.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.trade_date IS 'Trading date controlled by this lifecycle run.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.strategy_id IS 'Simulation strategy instance id used for multi-strategy attribution.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.broker_backend IS 'Execution backend selected by SimulationReleaseBinding; valid values are local_sim and minqmt_sim.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.package_id IS 'StrategyPackage package_id inherited from the runtime release.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.manifest_sha256 IS 'StrategyPackage manifest hash inherited from the runtime release.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.release_id IS 'StrategyRuntimeRelease id used for this daily run.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.release_hash IS 'Canonical StrategyRuntimeRelease hash denormalized for restart recovery and audit.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.binding_id IS 'SimulationReleaseBinding id supplying broker, account, capital and order attribution.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.binding_hash IS 'Canonical SimulationReleaseBinding hash denormalized for restart recovery and audit.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.selection_evidence_id IS 'DailySelectionEvidence id generated or loaded for this trade_date; NULL before signal generation.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.selection_artifact_hash IS 'DailySelectionEvidence artifact hash denormalized for dual-backend signal comparison.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.execution_plan_id IS 'Shared ExecutionPlan id compiled from selection evidence, target positions and rebalance intents; NULL before planning.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.execution_plan_hash IS 'Canonical ExecutionPlan hash denormalized for idempotency and restart recovery.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.status IS 'Lifecycle status from CREATED through SUCCEEDED/FAILED/CANCELLED, including no-trade/no-rebalance success states.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.run_payload_json IS 'Structured lifecycle metadata with schema_version, stage counts, operator/source and broker bridge context; must not override strategy alpha core.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.created_at IS 'Timestamp when the lifecycle row was created.';
+COMMENT ON COLUMN paper_v2.simulation_daily_run.updated_at IS 'Timestamp when lifecycle status or linked evidence/plan changed.';
 CREATE TABLE IF NOT EXISTS paper_v2.config_change_audit (
     audit_id BIGSERIAL PRIMARY KEY,
     portfolio_id TEXT,
@@ -714,10 +957,14 @@ CREATE INDEX IF NOT EXISTS idx_strategy_pkg_selection_artifact_package ON strate
 CREATE INDEX IF NOT EXISTS idx_strategy_pkg_exec_policy_package ON strategy_pkg.validated_execution_policy(package_id, paper_enabled);
 CREATE INDEX IF NOT EXISTS idx_strategy_pkg_live_approval_package_status ON strategy_pkg.live_approval(package_id, approval_status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_strategy_pkg_live_approval_portfolio_status ON strategy_pkg.live_approval(portfolio_id, approval_status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_strategy_pkg_strategy_runtime_release_package ON strategy_pkg.strategy_runtime_release(package_id, manifest_sha256, validation_state, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_strategy_pkg_strategy_runtime_release_runtime_profile ON strategy_pkg.strategy_runtime_release(runtime_profile_version_id, release_hash);
 CREATE INDEX IF NOT EXISTS idx_strategy_pkg_model_state_status ON strategy_pkg.model_state(staleness_status, train_end_date);
 CREATE INDEX IF NOT EXISTS idx_strategy_pkg_model_retrain_job_package ON strategy_pkg.model_retrain_job(package_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_selection_run_date ON selection.run(trade_date, status);
 CREATE INDEX IF NOT EXISTS idx_selection_pkg_result ON selection.package_result(package_id, manifest_sha256, symbol);
+CREATE INDEX IF NOT EXISTS idx_selection_daily_evidence_package ON selection.daily_selection_evidence(package_id, manifest_sha256, target_trade_date DESC);
+CREATE INDEX IF NOT EXISTS idx_selection_daily_evidence_release ON selection.daily_selection_evidence(release_id, release_hash, target_trade_date DESC);
 CREATE INDEX IF NOT EXISTS idx_selection_excluded_run ON selection.excluded_result(run_id, package_id, raw_rank);
 CREATE INDEX IF NOT EXISTS idx_selection_paper_link_run ON selection.paper_portfolio_link(run_id, portfolio_id);
 CREATE INDEX IF NOT EXISTS idx_paper_v2_portfolio_package ON paper_v2.portfolio(package_id, manifest_sha256);
@@ -727,6 +974,12 @@ CREATE INDEX IF NOT EXISTS idx_paper_v2_runtime_profile_portfolio ON paper_v2.ru
 CREATE INDEX IF NOT EXISTS idx_paper_v2_runtime_profile_version_profile ON paper_v2.runtime_profile_version(profile_id, version_no DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_v2_runtime_config_activation_active ON paper_v2.runtime_config_activation(portfolio_id, trade_date) WHERE status = 'ACTIVE';
 CREATE INDEX IF NOT EXISTS idx_paper_v2_runtime_config_activation_portfolio ON paper_v2.runtime_config_activation(portfolio_id, trade_date DESC, activated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_paper_v2_simulation_release_binding_strategy ON paper_v2.simulation_release_binding(strategy_id, approval_state, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_paper_v2_simulation_release_binding_release ON paper_v2.simulation_release_binding(release_id, broker_backend, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_paper_v2_execution_plan_binding_date ON paper_v2.execution_plan(binding_id, target_trade_date DESC, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_paper_v2_execution_plan_release_date ON paper_v2.execution_plan(release_id, selection_evidence_id, target_trade_date DESC);
+CREATE INDEX IF NOT EXISTS idx_paper_v2_simulation_daily_run_binding_date ON paper_v2.simulation_daily_run(binding_id, trade_date DESC, status);
+CREATE INDEX IF NOT EXISTS idx_paper_v2_simulation_daily_run_trade_date_status ON paper_v2.simulation_daily_run(trade_date DESC, broker_backend, status);
 CREATE INDEX IF NOT EXISTS idx_paper_v2_config_change_audit_portfolio ON paper_v2.config_change_audit(portfolio_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_paper_v2_run_portfolio_date ON paper_v2.run(portfolio_id, trade_date);
 CREATE INDEX IF NOT EXISTS idx_paper_v2_trade_session_portfolio ON paper_v2.trade_session(portfolio_id, status, created_at DESC);

@@ -394,6 +394,111 @@ plans:
     writes_business_state: false
     max_duration_seconds: 1200
     evidence_kinds: [pytest, db_smoke, playwright]
+  - plan_key: simulation_core_l2
+    title: Shared simulation runtime core backend validation
+    module: paper_v2_selection_center
+    level: L2
+    command_key: nox_simulation_core_l2
+    nox_session: simulation_core_l2
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: false
+    writes_business_state: false
+    runner_enabled: true
+    max_duration_seconds: 300
+    evidence_kinds: [pytest, compileall]
+  - plan_key: localsim_unattended_l3
+    title: LocalSim scheduler and restart backend validation slice
+    module: paper_v2_selection_center
+    level: L3
+    command_key: nox_localsim_unattended_l3
+    nox_session: localsim_unattended_l3
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: false
+    writes_business_state: false
+    runner_enabled: true
+    max_duration_seconds: 300
+    evidence_kinds: [pytest]
+  - plan_key: miniqmt_sim_stub_l3
+    title: MiniQMT SIM fake broker order sync and reconcile backend validation
+    module: paper_v2_selection_center
+    level: L3
+    command_key: nox_miniqmt_sim_stub_l3
+    nox_session: miniqmt_sim_stub_l3
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: false
+    writes_business_state: false
+    runner_enabled: true
+    max_duration_seconds: 600
+    evidence_kinds: [pytest]
+  - plan_key: simulation_runtime_ops_ui
+    title: Simulation Runtime read-only ops UI validation
+    module: paper_v2_selection_center
+    level: L3
+    command_key: nox_simulation_runtime_ops_ui
+    nox_session: simulation_runtime_ops_ui
+    enabled: true
+    requires_backend: false
+    requires_frontend: true
+    allowed_backend_ports: []
+    allowed_frontend_ports: [3012]
+    writes_database: false
+    writes_artifacts: true
+    writes_business_state: false
+    runner_enabled: true
+    max_duration_seconds: 600
+    evidence_kinds: [playwright, tsc]
+  - plan_key: simulation_dual_backend_l4
+    title: Dual backend simulation oracle validation without production services
+    module: paper_v2_selection_center
+    level: L4
+    command_key: nox_simulation_dual_backend_l4
+    nox_session: simulation_dual_backend_l4
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: false
+    writes_business_state: false
+    runner_enabled: false
+    max_duration_seconds: 900
+    evidence_kinds: [pytest]
+    validation_gap: UI and full-day soak evidence are still required before this plan becomes a merge gate.
+  - plan_key: miniqmt_sim_trading_hours_l5
+    title: MiniQMT SIM trading-hours controlled manual validation
+    module: paper_v2_selection_center
+    level: L5
+    command_key: nox_miniqmt_sim_trading_hours_l5
+    nox_session: miniqmt_sim_trading_hours_l5
+    enabled: true
+    requires_backend: true
+    requires_frontend: false
+    allowed_backend_ports: [8012]
+    allowed_frontend_ports: []
+    writes_database: true
+    writes_artifacts: true
+    writes_business_state: true
+    requires_confirmation: true
+    runner_enabled: false
+    max_duration_seconds: 7200
+    evidence_kinds: [manual_l5, broker_statement, ledger_reconciliation]
+    validation_gap: Requires approved trading-hours MiniQMT SIM runbook and real broker evidence.
   - plan_key: model_registry_backend
     title: Model Registry backend tests
     module: model_registry

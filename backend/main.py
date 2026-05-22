@@ -62,7 +62,7 @@ from .routers import (
     dispatch,
     hmm_training,
 )
-from .routers import llm_config
+from .routers import llm_config, simulation_runtime
 try:
     from .routers import rl_execution
 except ImportError as _rl_execution_import_exc:
@@ -282,6 +282,13 @@ async def _lifespan(app: FastAPI):
         from .services.paper_trading_v2.scheduler import paper_trading_v2_scheduler
         paper_trading_v2_scheduler.start()
 
+    # Unified LocalSim/MiniQMT simulation lifecycle scheduler is opt-in. It
+    # follows the committed simulation-runtime path and never starts by default.
+    enable_sim_runtime = (os.getenv("ENABLE_SIMULATION_RUNTIME_SCHEDULER") or "").strip().lower()
+    if enable_sim_runtime in {"1", "true", "yes", "y", "on"}:
+        from .services.simulation_runtime import simulation_lifecycle_background_scheduler
+        simulation_lifecycle_background_scheduler.start()
+
     # 相关性计算调度器 — 默认禁用，仅在显式开启时启动
     # 不允许后台自动计算，必须由用户在页面主动触发
     enable_corr_scheduler = (os.getenv("ENABLE_CORRELATION_SCHEDULER") or "").strip().lower()
@@ -432,6 +439,11 @@ async def _lifespan(app: FastAPI):
             paper_trading_v2_scheduler.shutdown(wait=False)
         except Exception:
             pass
+        try:
+            from .services.simulation_runtime import simulation_lifecycle_background_scheduler
+            simulation_lifecycle_background_scheduler.shutdown(wait=False)
+        except Exception:
+            pass
         # ── 后台线程已停，再关闭 DB 连接池和外部连接 ──
         try:
             client = get_qmt_client_singleton()
@@ -506,6 +518,7 @@ def create_app() -> FastAPI:
     app.include_router(strategy_packages.router, prefix="/api/v1")
     app.include_router(selection_center.router, prefix="/api/v1")
     app.include_router(paper_trading_v2.router, prefix="/api/v1")
+    app.include_router(simulation_runtime.router, prefix="/api/v1")
     app.include_router(validation.router, prefix="/api/v1")
     app.include_router(prometheus_admin.router, prefix="/api/v1")
     app.include_router(hmm_training.router, prefix="/api/v1")
