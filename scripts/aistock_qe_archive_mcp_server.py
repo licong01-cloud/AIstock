@@ -218,6 +218,48 @@ def qe_archive_query_factor_usage(limit: int = 50, min_runs: int = 1) -> dict[st
 
 
 @mcp.tool()
+def qe_archive_query_factor_importance(
+    run_id: str | None = None,
+    task_id: str | None = None,
+    loop_index: int | None = None,
+    factor_name: str | None = None,
+    method: str | None = None,
+    limit: int = 50,
+    order: str = "desc",
+) -> dict[str, Any]:
+    return _client().get(
+        "/query/factor-importance",
+        params={
+            "run_id": run_id,
+            "task_id": task_id,
+            "loop_index": loop_index,
+            "factor_name": factor_name,
+            "method": method,
+            "limit": limit,
+            "order": order,
+        },
+    )
+
+
+@mcp.tool()
+def qe_archive_query_factor_importance_stability(
+    factor_name: str | None = None,
+    method: str | None = None,
+    min_runs: int = 2,
+    limit: int = 50,
+) -> dict[str, Any]:
+    return _client().get(
+        "/query/factor-importance/stability",
+        params={
+            "factor_name": factor_name,
+            "method": method,
+            "min_runs": min_runs,
+            "limit": limit,
+        },
+    )
+
+
+@mcp.tool()
 def qe_archive_query_model_trials(model_type: str | None = None, limit: int = 50) -> dict[str, Any]:
     return _client().get("/query/model-trials", params={"model_type": model_type, "limit": limit})
 

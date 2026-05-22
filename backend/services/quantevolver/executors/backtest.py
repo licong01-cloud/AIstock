@@ -12,7 +12,8 @@ import logging
 from enum import Enum
 from typing import Any
 
-from ..experiment_config import ExperimentConfig
+from ..execution_manifest import build_and_audit_execution_manifest
+from ..experiment_config import ExperimentConfig, extract_qe_random_seed
 from ..runtime_contract import build_qe_minute_runtime_contract, merge_qe_minute_runtime_contract
 from .base import BaseExecutor, ExecutionContext, ExecutionResult
 
@@ -65,6 +66,15 @@ class BacktestExecutor(BaseExecutor):
 
         # 1. 构建 custom_params（配置层唯一注入点）
         custom_params = config.build_custom_params()
+        runtime_flags = config.build_runtime_flags()
+        fixed_seed = extract_qe_random_seed(runtime_flags)
+        require_fixed_seed = bool(ctx.require_fixed_seed or kwargs.get("require_fixed_seed"))
+        if mode == BacktestMode.FULL_TRAIN and require_fixed_seed and fixed_seed is None:
+            raise ValueError(
+                f"FULL_TRAIN requires runtime_flags.random_seed for task={ctx.task_id} loop={ctx.loop_index}"
+            )
+        if fixed_seed is not None:
+            custom_params["random_seed"] = fixed_seed
         strategy_params = config.build_strategy_params()
 
         # 2. 调用 ConfigComposer（已有统一层，不改）
@@ -136,11 +146,23 @@ class BacktestExecutor(BaseExecutor):
                 wsl_command,
             )
 
+        execution_manifest, execution_manifest_sha256 = build_and_audit_execution_manifest(
+            config=config,
+            ctx=ctx,
+            mode=mode.value if isinstance(mode, BacktestMode) else str(mode),
+            experiment_files=experiment_files,
+            wsl_command=wsl_command,
+        )
+
         # 4. 构建传给 RDAgent 的 config 记录
         persisted_model_params = {
             k: v for k, v in custom_params.items()
             if k != _PRECOMPUTED_HMM_COEFF_JSON_PARAM
         }
+        if fixed_seed is not None:
+            persisted_model_params.setdefault("random_seed", fixed_seed)
+            persisted_model_params.setdefault("seed", fixed_seed)
+            persisted_model_params.setdefault("random_state", fixed_seed)
         persisted_model_params = merge_qe_minute_runtime_contract(
             persisted_model_params,
             execution_algo=config.execution_algo,
@@ -161,7 +183,12 @@ class BacktestExecutor(BaseExecutor):
             "strategy_id": config.strategy_id,
             "data_split": config.data_split,
             "model_params": persisted_model_params,
+            "runtime_flags": runtime_flags,
+            "execution_manifest": execution_manifest,
+            "execution_manifest_sha256": execution_manifest_sha256,
         }
+        if fixed_seed is not None:
+            rdagent_config["random_seed"] = fixed_seed
         if runtime_contract:
             rdagent_config.update(runtime_contract)
 
@@ -181,4 +208,8 @@ class BacktestExecutor(BaseExecutor):
             status="submitted",
             experiment_files=experiment_files,
             wsl_command=wsl_command,
+            detail={
+                "execution_manifest": execution_manifest,
+                "execution_manifest_sha256": execution_manifest_sha256,
+            },
         )

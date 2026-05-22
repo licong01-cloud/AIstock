@@ -5,6 +5,7 @@ import asyncio
 import base64
 import inspect
 from pathlib import Path
+import yaml
 
 import pytest
 import pandas as pd
@@ -1035,13 +1036,20 @@ def test_score_weighted_v2_filters_archive_seed_metadata_from_strategy_kwargs():
     assert "archive_policy" not in yaml_text
     assert "archive_reason" not in yaml_text
     assert "archive_allow_override" not in yaml_text
-    assert "random_seed" not in yaml_text
+    parsed = yaml.safe_load(yaml_text)
+    strategy_kwargs = parsed["port_analysis_config"]["strategy"]["kwargs"]
+    assert "random_seed" not in strategy_kwargs
+    assert parsed["qe_runtime"]["random_seed"] == 42
+    assert parsed["qe_runtime"]["seed_policy"] == "fixed"
 
 
 def test_suspend_runtime_flags_reject_nested_conflicts():
     merged = _merge_strategy_runtime_flags({"topk": 10}, True, False)
     assert merged["filter_suspended_on_signal"] is True
     assert merged["suspend_filter_strict"] is False
+
+    seeded = _merge_strategy_runtime_flags({}, False, True, 123)
+    assert seeded["random_seed"] == 123
 
     with pytest.raises(HTTPException, match="top-level request fields"):
         _merge_strategy_runtime_flags({"filter_suspended_on_signal": True}, False, True)

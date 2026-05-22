@@ -31,6 +31,7 @@ from typing import Any
 from .experiment_config import (
     ExperimentConfig, HmmConfig,
     AlphaGroup, MetaModelConfig, MultiAlphaConfig,
+    extract_qe_random_seed,
     normalize_label_horizon,
 )
 
@@ -88,6 +89,23 @@ def _parse_json_field(value: Any) -> Any:
     if isinstance(value, str):
         return json.loads(value)
     return value
+
+
+def _extract_seed_to_runtime_flags(
+    runtime_flags: dict[str, Any] | None,
+    *sources: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Move any persisted seed alias into runtime_flags.random_seed."""
+
+    flags = dict(runtime_flags or {})
+    seed = extract_qe_random_seed(flags, *sources)
+    if seed is not None:
+        flags["random_seed"] = seed
+    for source in sources:
+        if isinstance(source, dict):
+            for key in ("random_seed", "seed", "loop_seed", "random_state", "torch_seed", "numpy_seed"):
+                source.pop(key, None)
+    return flags
 
 
 def _build_hmm_config(
@@ -267,6 +285,7 @@ def build_config_from_exp_record(
     custom_params: dict[str, Any] = dict(
         _parse_json_field(exp_record.get("custom_params") or {})
     )
+    runtime_flags = _extract_seed_to_runtime_flags(None, custom_params)
 
     execution_algo: str | None = custom_params.pop("execution_algo", None)
     execution_algo_params: dict[str, Any] = custom_params.pop("execution_algo_params", None) or {}
@@ -319,6 +338,7 @@ def build_config_from_exp_record(
         filter_suspended_on_signal=filter_suspended_on_signal,
         suspend_filter_strict=suspend_filter_strict,
         strategy_params=strategy_params or None,
+        runtime_flags=runtime_flags or None,
         extra_params=custom_params or None,
         experiment_name=experiment_name or exp_record.get("experiment_name"),
         alpha_mode=alpha_mode,
@@ -343,10 +363,17 @@ def build_config_from_evolution_loop(
     so every auto-evolution loop keeps the user-selected snapshot/preset.
     """
     model_params_base: dict[str, Any] = dict(config.get("model_params") or {})
+    runtime_flags: dict[str, Any] = dict(_parse_json_field(config.get("runtime_flags") or {}))
     config_hmm_fields = _pop_hmm_fields(model_params_base)
 
     effective_strategy_params: dict[str, Any] = dict(
         _parse_json_field(task.get("strategy_params") or {})
+    )
+    runtime_flags = _extract_seed_to_runtime_flags(
+        runtime_flags,
+        model_params_base,
+        effective_strategy_params,
+        dict(task),
     )
     task_hmm_fields = _pop_hmm_fields(effective_strategy_params)
     strategy_filter_suspended = effective_strategy_params.pop("filter_suspended_on_signal", None)
@@ -406,6 +433,7 @@ def build_config_from_evolution_loop(
         unfilled_handler=unfilled_handler,
         unfilled_handler_params=unfilled_handler_params or None,
         strategy_params=effective_strategy_params or None,
+        runtime_flags=runtime_flags or None,
         model_params_base=model_params_base or None,
         node_id=task.get("node_id"),
         experiment_name=experiment_name,
@@ -543,6 +571,11 @@ def build_config_from_custom_evo_loop(
     runtime_flags: dict[str, Any] = dict(
         _parse_json_field(loop_config.get("runtime_flags") or {})
     )
+    runtime_flags = _extract_seed_to_runtime_flags(
+        runtime_flags,
+        strategy_params,
+        dict(loop_config),
+    )
     execution_algo: str | None = loop_config.get("execution_algo")
     execution_algo_params: dict[str, Any] = dict(
         _parse_json_field(loop_config.get("execution_algo_params") or {})
@@ -657,6 +690,12 @@ def build_config_from_retry_loop(
 
     # model_params is the original custom_params snapshot
     model_params_base: dict[str, Any] = dict(config.get("model_params") or {})
+    runtime_flags: dict[str, Any] = dict(_parse_json_field(config.get("runtime_flags") or {}))
+    runtime_flags = _extract_seed_to_runtime_flags(
+        runtime_flags,
+        model_params_base,
+        dict(config),
+    )
     config_hmm_fields = _pop_hmm_fields(model_params_base)
     config_label_horizon = model_params_base.get("label_horizon") or config.get("label_horizon")
     if config_label_horizon not in (None, ""):
@@ -687,6 +726,7 @@ def build_config_from_retry_loop(
     effective_strategy_params: dict[str, Any] = dict(
         _parse_json_field(_snapshot_or_task("strategy_params") or {})
     )
+    runtime_flags = _extract_seed_to_runtime_flags(runtime_flags, effective_strategy_params)
     snapshot_hmm_fields = _pop_hmm_fields(effective_strategy_params)
     strategy_filter_suspended = effective_strategy_params.pop("filter_suspended_on_signal", None)
     strategy_filter_suspended = effective_strategy_params.pop("exclude_suspended", strategy_filter_suspended)
@@ -740,6 +780,7 @@ def build_config_from_retry_loop(
         unfilled_handler=unfilled_handler,
         unfilled_handler_params=unfilled_handler_params or None,
         strategy_params=effective_strategy_params or None,
+        runtime_flags=runtime_flags or None,
         model_params_base=model_params_base or None,
         node_id=task.get("node_id"),
         experiment_name=experiment_name,

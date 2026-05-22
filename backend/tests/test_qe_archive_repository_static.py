@@ -155,6 +155,8 @@ def test_repository_exposes_phase_one_write_methods() -> None:
         "upsert_bootstrap_marker",
         "get_bootstrap_marker",
         "query_factor_usage",
+        "query_factor_importance",
+        "query_factor_importance_stability",
         "query_model_trials",
         "query_seed_trials",
         "query_hyperparam_history",
@@ -208,6 +210,14 @@ def _sample_qe_payload() -> dict:
         "model_type": "LSTM",
         "freq": "day",
         "limit_suspend_authoritative": "false",
+        "environment": {
+            "python_version": "3.11.9",
+            "package_versions": {"torch": "2.5.1", "qlib": "0.9.6"},
+            "deterministic_flags": {"torch_deterministic": True, "cudnn_deterministic": True},
+        },
+        "git_commit": "abc123",
+        "runner_script": "scripts/qrun_limit_minute.py",
+        "source_config_paths": {"conf_yaml": "artifact://qe_exp_1/conf.yaml"},
         "config": {
             "model": {"model_type": "LSTM"},
             "params": {"lr": 0.001},
@@ -216,6 +226,7 @@ def _sample_qe_payload() -> dict:
             "data_split": {"train_start": "2022-01-01", "test_end": "2025-12-31"},
             "execution": {"limit_handling": "none", "suspend_handling": "none"},
             "factor_list": ["alpha_001", "alpha_002"],
+            "runtime_flags": {"random_seed": 20260522},
         },
         "metrics": {
             "IC": 0.04,
@@ -294,6 +305,10 @@ def _sample_qe_payload() -> dict:
                     "avg_turnover": 0.2,
                     "daily_trade_count_avg": 4.5,
                 },
+                "pytorch_correlation": {
+                    "alpha_001": {"weight_pct": 62.5, "raw_value": 0.31},
+                    "alpha_002": {"weight_pct": 37.5, "raw_value": 0.19},
+                },
                 "training_diagnostics": {
                     "train_loss_curve": [0.9, 0.7],
                     "val_loss_curve": [1.0, 0.8],
@@ -320,6 +335,14 @@ def test_payload_extractor_captures_reproducible_config_metrics_account_and_curv
     assert extracted.config.config_capture_complete is True
     assert extracted.config.factor_list == ["alpha_001", "alpha_002"]
     assert extracted.reproducibility_manifest.reproducibility_level == "full"
+    assert extracted.reproducibility_manifest.verification_status == "not_verified"
+    assert extracted.reproducibility_manifest.random_seed == 20260522
+    assert extracted.reproducibility_manifest.manifest_json["seed_policy"] == "fixed"
+    assert extracted.reproducibility_manifest.deterministic_flags["seed_policy"] == "fixed"
+    assert extracted.reproducibility_manifest.deterministic_flags["torch_deterministic"] is True
+    assert extracted.reproducibility_manifest.package_versions["torch"] == "2.5.1"
+    assert extracted.reproducibility_manifest.git_commit == "abc123"
+    assert extracted.reproducibility_manifest.runner_script == "scripts/qrun_limit_minute.py"
     assert extracted.data_contexts[0].backtest_start.isoformat() == "2025-01-01"
     assert extracted.data_contexts[0].backtest_end.isoformat() == "2025-12-31"
     assert extracted.account_summary is not None
@@ -339,6 +362,11 @@ def test_payload_extractor_captures_reproducible_config_metrics_account_and_curv
     assert extracted.trades[0].side == "buy"
     assert extracted.trades[0].trade_uid is not None
     assert extracted.trades[0].source_payload_path == "enhanced_metrics.stock_trades.000001.SZ[0]"
+    importance_by_factor = {item.factor_name: item for item in extracted.factor_importance}
+    assert importance_by_factor["alpha_001"].method == "pytorch_correlation"
+    assert importance_by_factor["alpha_001"].importance_value == 62.5
+    assert importance_by_factor["alpha_001"].normalized_value == 0.625
+    assert importance_by_factor["alpha_001"].rank_in_run == 1
     assert len(extracted.execution_events) >= 2
     assert extracted.stats["symbol_summary_count"] == 4
     assert extracted.stats["trade_count"] == 2
@@ -348,6 +376,58 @@ def test_payload_extractor_captures_reproducible_config_metrics_account_and_curv
         "qe_metrics_payload",
         "qe_enhanced_metrics_payload",
     }
+
+
+def test_payload_extractor_marks_seedless_payload_audit_only_unset_legacy() -> None:
+    payload = _sample_qe_payload()
+    payload["config"] = dict(payload["config"])
+    payload["config"]["runtime_flags"] = {}
+    payload.pop("random_seed", None)
+    payload.pop("seed", None)
+
+    extracted = QEArchivePayloadExtractor().extract(
+        payload,
+        event_type="qe.loop.completed",
+        source_system="qe",
+        source_id="legacy_task",
+        source_sub_id="Loop16",
+    )
+
+    manifest = extracted.reproducibility_manifest
+    assert manifest.random_seed is None
+    assert manifest.reproducibility_level == "audit_only"
+    assert manifest.verification_status == "not_reproducible"
+    assert manifest.manifest_json["seed_policy"] == "unset_legacy"
+    assert manifest.deterministic_flags["seed_policy"] == "unset_legacy"
+
+
+def test_payload_extractor_reads_enhanced_feature_importance_gain_pct() -> None:
+    payload = _sample_qe_payload()
+    payload["metrics"] = dict(payload["metrics"])
+    payload["metrics"]["enhanced_metrics"] = {
+        "factor_analysis": {
+            "feature_importance": [
+                {"name": "alpha_a", "gain": 0.3, "gain_pct": 75.0, "method": "pytorch_correlation"},
+                {"name": "alpha_b", "gain": 0.1, "gain_pct": 25.0, "method": "pytorch_correlation"},
+            ]
+        },
+        "summary": {"Rank IC": 0.05, "sharpe": 1.6},
+        "return_curves": {"dates": ["2025-01-02", "2025-01-03"]},
+    }
+
+    extracted = QEArchivePayloadExtractor().extract(
+        payload,
+        event_type="qe.loop.completed",
+        source_system="qe",
+        source_id="task_importance",
+        source_sub_id="Loop1",
+    )
+
+    importance_by_factor = {item.factor_name: item for item in extracted.factor_importance}
+    assert importance_by_factor["alpha_a"].method == "pytorch_correlation"
+    assert importance_by_factor["alpha_a"].importance_value == 0.3
+    assert importance_by_factor["alpha_a"].normalized_value == 0.75
+    assert importance_by_factor["alpha_a"].rank_in_run == 1
 
 
 def test_archive_service_dry_run_does_not_write() -> None:
@@ -406,6 +486,9 @@ def test_archive_service_write_calls_repository_without_runtime_hooks() -> None:
 
         def replace_run_factors(self, run_id, factors):  # type: ignore[no-untyped-def]
             self.calls.append(("replace_run_factors", list(factors)))
+
+        def replace_run_factor_importance(self, run_id, importances):  # type: ignore[no-untyped-def]
+            self.calls.append(("replace_run_factor_importance", list(importances)))
 
         def replace_run_symbol_summaries(self, run_id, summaries):  # type: ignore[no-untyped-def]
             self.calls.append(("replace_run_symbol_summaries", list(summaries)))
@@ -497,6 +580,125 @@ def test_repository_upsert_run_preserves_archived_at_when_incoming_value_is_null
 
     assert executed, "upsert_run should execute an INSERT ... ON CONFLICT statement"
     assert "archived_at = COALESCE(EXCLUDED.archived_at, qe_archive.run.archived_at)" in executed[-1][0]
+
+
+def test_factor_importance_query_includes_repro_config_source_and_return_context() -> None:
+    executed: list[tuple[str, list[object] | None]] = []
+
+    class FakeCursor:
+        description = []
+
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return False
+
+        def execute(self, sql, params=None):  # type: ignore[no-untyped-def]
+            executed.append((sql, params))
+
+        def fetchall(self):  # type: ignore[no-untyped-def]
+            return []
+
+    class FakeConnection:
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return False
+
+        def cursor(self):  # type: ignore[no-untyped-def]
+            return FakeCursor()
+
+    repository = QEArchiveRepository(connection_provider=lambda: FakeConnection())
+    repository.query_factor_importance(task_id="task_a", loop_index=16, limit=10)
+    sql = executed[-1][0]
+
+    assert "LEFT JOIN qe_archive.run_config c ON c.run_id = i.run_id" in sql
+    assert "LEFT JOIN qe_archive.run_reproducibility_manifest repro ON repro.run_id = i.run_id" in sql
+    assert "LEFT JOIN qe_archive.run_account_summary acc ON acc.run_id = i.run_id" in sql
+    assert "LEFT JOIN qe_archive.run_data_context dc ON dc.run_id = i.run_id" in sql
+    assert "LEFT JOIN qe_archive.run_source s ON s.run_id = i.run_id" in sql
+    for field in (
+        "repro.random_seed",
+        "seed_policy",
+        "repro.reproducibility_level",
+        "repro.verification_status",
+        "repro.deterministic_flags",
+        "repro.package_versions",
+        "repro.artifact_manifest_sha256",
+        "c.config_sha256",
+        "c.factor_set_hash",
+        "c.runtime_flags",
+        "c.model_params",
+        "c.strategy_config",
+        "c.data_split",
+        "c.execution_config",
+        "dc.train_start",
+        "dc.backtest_end",
+        "s.mlflow_artifact_uri",
+        "acc.cagr",
+        "acc.total_return",
+        "acc.max_drawdown",
+        "acc.sharpe",
+        "acc.avg_cash_ratio",
+        "acc.final_cash_ratio",
+    ):
+        assert field in sql
+
+
+def test_factor_importance_stability_query_includes_seed_hmm_and_return_risk_aggregation() -> None:
+    executed: list[tuple[str, list[object] | None]] = []
+
+    class FakeCursor:
+        description = []
+
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return False
+
+        def execute(self, sql, params=None):  # type: ignore[no-untyped-def]
+            executed.append((sql, params))
+
+        def fetchall(self):  # type: ignore[no-untyped-def]
+            return []
+
+    class FakeConnection:
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return False
+
+        def cursor(self):  # type: ignore[no-untyped-def]
+            return FakeCursor()
+
+    repository = QEArchiveRepository(connection_provider=lambda: FakeConnection())
+    repository.query_factor_importance_stability(factor_name="alpha_001", min_runs=2)
+    sql = executed[-1][0]
+
+    assert "LEFT JOIN qe_archive.run_config c ON c.run_id = i.run_id" in sql
+    assert "LEFT JOIN qe_archive.run_reproducibility_manifest repro ON repro.run_id = i.run_id" in sql
+    assert "LEFT JOIN qe_archive.run_account_summary acc ON acc.run_id = i.run_id" in sql
+    assert "LEFT JOIN qe_archive.run_data_context dc ON dc.run_id = i.run_id" in sql
+    assert "LEFT JOIN qe_archive.run_source s ON s.run_id = i.run_id" in sql
+    for field in (
+        "COUNT(DISTINCT repro.random_seed)",
+        "ARRAY_AGG(DISTINCT repro.random_seed)",
+        "repro.reproducibility_level",
+        "repro.verification_status",
+        "hmm_enabled_run_count",
+        "no_hmm_run_count",
+        "AVG(acc.cagr)",
+        "AVG(acc.total_return)",
+        "AVG(acc.max_drawdown)",
+        "AVG(acc.sharpe)",
+        "AVG(acc.avg_cash_ratio)",
+        "AVG(acc.final_cash_ratio)",
+    ):
+        assert field in sql
 
 
 def test_source_assembler_builds_single_experiment_payload_without_worker_paths() -> None:

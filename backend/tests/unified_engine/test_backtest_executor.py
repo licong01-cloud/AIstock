@@ -63,6 +63,7 @@ def make_ctx(
     callback_url: str | None = None,
     model_source: dict | None = None,
     extra_experiment_files: dict | None = None,
+    require_fixed_seed: bool = False,
 ) -> ExecutionContext:
     return ExecutionContext(
         task_id=task_id,
@@ -72,6 +73,7 @@ def make_ctx(
         callback_url=callback_url,
         model_source=model_source,
         extra_experiment_files=extra_experiment_files,
+        require_fixed_seed=require_fixed_seed,
     )
 
 
@@ -128,6 +130,16 @@ class TestBacktestExecutorBasic:
         )
 
         assert "--backtest-only" not in (result.wsl_command or "")
+
+    def test_full_train_strict_seed_contract_rejects_missing_seed(self):
+        executor = BacktestExecutor(make_mock_composer(), make_mock_client())
+        cfg = ExperimentConfig(factor_names=["f1"], model_id="lgbm")
+        ctx = make_ctx(require_fixed_seed=True)
+
+        with pytest.raises(ValueError, match="runtime_flags.random_seed"):
+            asyncio.get_event_loop().run_until_complete(
+                executor.submit(cfg, ctx, mode=BacktestMode.FULL_TRAIN)
+            )
 
     def test_submit_keeps_event_loop_responsive_during_blocking_compose_work(self):
         loop_thread_id: int | None = None

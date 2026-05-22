@@ -3,6 +3,17 @@
 import React, { useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
+const DEFAULT_QE_RANDOM_SEED = 20260522;
+const QE_RANDOM_SEED_MAX = 4294967295;
+
+function isValidQeRandomSeed(value: number) {
+  return Number.isInteger(value) && value >= 0 && value <= QE_RANDOM_SEED_MAX;
+}
+
+function parseQeRandomSeedInput(value: string, fallback = DEFAULT_QE_RANDOM_SEED) {
+  const parsed = Number(value);
+  return isValidQeRandomSeed(parsed) ? parsed : fallback;
+}
 
 type Node = {
   node_id: string;
@@ -46,6 +57,7 @@ export default function TaskCreatePanel({
   const [qeTargetDesc, setQeTargetDesc] = useState("");
   const [qeMaxLoops, setQeMaxLoops] = useState(10);
   const [qeEvolutionMode, setQeEvolutionMode] = useState("auto");
+  const [qeRandomSeed, setQeRandomSeed] = useState(DEFAULT_QE_RANDOM_SEED);
 
   const isQE = taskType === "qe_evolution";
 
@@ -61,6 +73,10 @@ export default function TaskCreatePanel({
     if (!taskName.trim()) { setError("请输入任务名称"); return; }
     if (!nodeId) { setError("请选择目标节点"); return; }
     if (isQE && !qeSourceTaskId.trim()) { setError("QE 任务必须指定来源实验 ID"); return; }
+    if (isQE && !isValidQeRandomSeed(qeRandomSeed)) {
+      setError(`QE 固定随机种子必须是 0-${QE_RANDOM_SEED_MAX} 之间的整数`);
+      return;
+    }
     setSubmitting(true);
     setError("");
     try {
@@ -77,6 +93,7 @@ export default function TaskCreatePanel({
           target_desc: qeTargetDesc.trim(),
           max_loops: qeMaxLoops,
           evolution_mode: qeEvolutionMode,
+          random_seed: qeRandomSeed,
         };
       } else {
         body.evolving_n = evolvingN;
@@ -348,6 +365,20 @@ export default function TaskCreatePanel({
                 <option value="model_only">仅模型</option>
                 <option value="joint">联合演进</option>
               </select>
+            </div>
+            <div style={{ flex: 1, minWidth: 160 }}>
+              <label style={{ fontSize: 11, color: "#9a3412", display: "block", marginBottom: 2, fontWeight: 600 }}>
+                固定随机种子 *
+              </label>
+              <input
+                style={{ ...selectStyle, width: "100%", borderColor: "#fdba74", background: "#fff7ed" }}
+                type="number"
+                min={0}
+                max={QE_RANDOM_SEED_MAX}
+                step={1}
+                value={qeRandomSeed}
+                onChange={e => setQeRandomSeed(parseQeRandomSeedInput(e.target.value, qeRandomSeed))}
+              />
             </div>
             <div style={{ flex: 2, minWidth: 200 }}>
               <label style={{ fontSize: 11, color: "#6b7280", display: "block", marginBottom: 2 }}>

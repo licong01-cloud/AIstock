@@ -22,6 +22,7 @@ except ImportError as exc:  # pragma: no cover
     raise SystemExit("mcp package is required: pip install mcp") from exc
 
 from scripts.aistock_mcp_common import LoopbackApiClient, require_confirm, sanitize_identifier, sanitize_tail
+from backend.services.quantevolver.seed_contract import ensure_loop_fixed_seed, ensure_template_fixed_seeds
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8011/api/v1"
 QE_EXPERIMENT_RUN_CONFIRM = "QE_EXPERIMENT_RUN"
@@ -141,20 +142,26 @@ def qe_custom_evo_retry_loop_confirmed(task_id: str, loop_index: int, retry_mode
 @mcp.tool()
 def qe_custom_evo_rerun_loop_confirmed(task_id: str, loop_index: int, loop: dict[str, Any], confirm_rerun: str | None = None) -> dict[str, Any]:
     require_confirm(confirm_rerun, "QE_CUSTOM_EVO_RERUN", "confirm_rerun")
+    loop_payload = dict(loop or {})
+    ensure_loop_fixed_seed(loop_payload, context="qe_custom_evo_rerun_loop_confirmed.loop")
     safe = sanitize_identifier(task_id, "task_id")
-    return _client().post(f"/quantevolver/evolution/tasks/{safe}/loops/{int(loop_index)}/rerun", {"loop": loop, "confirm_delete_old_result": True})
+    return _client().post(f"/quantevolver/evolution/tasks/{safe}/loops/{int(loop_index)}/rerun", {"loop": loop_payload, "confirm_delete_old_result": True})
 
 
 @mcp.tool()
 def qe_custom_evo_append_loops_confirmed(task_id: str, loops: list[dict[str, Any]], confirm_append: str | None = None) -> dict[str, Any]:
     require_confirm(confirm_append, "QE_CUSTOM_EVO_APPEND", "confirm_append")
+    loop_payloads = [dict(loop or {}) for loop in (loops or [])]
+    for idx, loop in enumerate(loop_payloads, start=1):
+        ensure_loop_fixed_seed(loop, context=f"qe_custom_evo_append_loops_confirmed.loops[{idx}]")
     safe = sanitize_identifier(task_id, "task_id")
-    return _client().post(f"/quantevolver/evolution/tasks/{safe}/custom-loops/append", {"loops": loops, "ack_failed_loop_warning": True})
+    return _client().post(f"/quantevolver/evolution/tasks/{safe}/custom-loops/append", {"loops": loop_payloads, "ack_failed_loop_warning": True})
 
 
 @mcp.tool()
 def qe_template_create(template_kind: str, title: str, config_json: dict[str, Any], archive_policy: str = "AUTO", description: str | None = None) -> dict[str, Any]:
-    return _client().post("/qe-templates", {"template_kind": template_kind, "title": title, "description": description, "config_json": config_json, "archive_policy": archive_policy})
+    normalized_config = ensure_template_fixed_seeds(template_kind, config_json or {})
+    return _client().post("/qe-templates", {"template_kind": template_kind, "title": title, "description": description, "config_json": normalized_config, "archive_policy": archive_policy})
 
 
 @mcp.tool()

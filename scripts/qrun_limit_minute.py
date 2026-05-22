@@ -24,6 +24,7 @@
 import argparse
 import gc
 import os
+import random
 import shutil
 import stat
 import sys
@@ -600,6 +601,41 @@ def inject_benchmark(config: dict, benchmark_series):
 
 
 
+def apply_qe_fixed_seed(config: dict) -> int | None:
+    """Apply QE fixed seed before qlib/model initialization."""
+
+    runtime = config.get("qe_runtime") if isinstance(config, dict) else None
+    if not isinstance(runtime, dict):
+        return None
+    seed_value = runtime.get("random_seed")
+    if seed_value in (None, ""):
+        return None
+    seed = int(seed_value)
+    os.environ.setdefault("PYTHONHASHSEED", str(seed))
+    random.seed(seed)
+    try:
+        import numpy as np
+        np.random.seed(seed)
+    except Exception as exc:  # pragma: no cover - numpy is expected in QE env
+        print(f"[WARN] QE fixed seed: numpy seed failed: {exc}")
+    try:
+        import torch
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+        if hasattr(torch.backends, "cudnn"):
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+        try:
+            torch.use_deterministic_algorithms(True, warn_only=True)
+        except TypeError:
+            torch.use_deterministic_algorithms(True)
+    except Exception as exc:
+        print(f"[INFO] QE fixed seed: torch seeding skipped: {exc}")
+    print(f"[INFO] QE fixed seed: {seed}")
+    return seed
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("yaml_path", nargs="?", default="conf.yaml")
@@ -618,6 +654,7 @@ def main():
     config = yaml.load(rendered)
 
     patch_backtest_config(config)
+    apply_qe_fixed_seed(config)
     sys_config(config, config_path=args.yaml_path)
 
     # 限制 qlib 并行度（必须在 qlib.init 之前！）

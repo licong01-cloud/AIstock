@@ -34,10 +34,12 @@ from ..services.quantevolver.evaluation_universe_service import EvaluationUniver
 from ..services.quantevolver.experiment_config import (
     ensure_qe_risk_policy,
     normalize_label_horizon,
+    normalize_qe_random_seed,
     split_qe_runtime_metadata,
 )
 from ..services.quantevolver.factor_official_evaluation_service import CALC_ENGINE
 from ..services.quantevolver.label_horizon_schema import ensure_qe_label_horizon_schema
+from ..services.quantevolver.seed_contract import ensure_loop_fixed_seed, raise_http_seed_error
 from ..services.quantevolver.node_execution import (
     QENodePreflightError,
     get_compute_node,
@@ -106,11 +108,17 @@ def _merge_strategy_runtime_flags(
     strategy_params: Optional[Dict[str, Any]],
     filter_suspended_on_signal: bool,
     suspend_filter_strict: bool = True,
+    random_seed: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Persist runtime signal-filter flags without requiring new task table columns."""
     merged = dict(strategy_params or {})
     _reject_nested_runtime_flags(merged, "strategy_params")
     merged = ensure_qe_risk_policy(merged, source="strategy_params")
+    if random_seed not in (None, ""):
+        merged["random_seed"] = normalize_qe_random_seed(
+            random_seed,
+            field_name="strategy_params.random_seed",
+        )
     if filter_suspended_on_signal:
         merged["filter_suspended_on_signal"] = True
         merged["suspend_filter_strict"] = bool(suspend_filter_strict)
@@ -222,6 +230,7 @@ class EvolutionTaskCreateRequest(BaseModel):
     node_id: Optional[str] = Field(None, description="执行节点 ID，None=默认本地节点")
     label_type: Optional[str] = Field(None, description="训练标签类型: close(默认) / open(可执行价) / vwap(均价)")
     label_horizon: Optional[int] = Field(None, description="训练标签期限: 1/3/5/10/20d，默认继承源实验或 1d")
+    random_seed: Optional[int] = Field(None, description="QE trainable loops fixed random seed; required for reproducibility")
     # ── Multi-Alpha (Phase 3) ──────────────────────────────────────
     alpha_mode: Optional[str] = Field(None, description="single (默认) / multi")
     multi_alpha_config: Optional[Dict[str, Any]] = Field(None, description="Multi-Alpha 分组配置 JSON")
@@ -241,6 +250,10 @@ async def create_evolution_task(req: EvolutionTaskCreateRequest, background_task
             raise HTTPException(status_code=500, detail=str(e)) from e
 
         base_experiment_id = req.base_experiment_id
+        try:
+            req_random_seed = normalize_qe_random_seed(req.random_seed, field_name="random_seed")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
 
         if req.source_type == "rdagent_task_sota":
             if not req.source_task_id:
@@ -270,6 +283,7 @@ async def create_evolution_task(req: EvolutionTaskCreateRequest, background_task
                 include_alpha_baseline=req.include_alpha_baseline,
                 model_id=req.selected_model_id,
                 factor_keys=req.selected_factor_keys,
+                custom_params={"random_seed": req_random_seed},
             )
             base_experiment_id = create_result["experiment_id"]
 
@@ -364,6 +378,11 @@ async def create_evolution_task(req: EvolutionTaskCreateRequest, background_task
                 if req.label_horizon not in (None, "")
                 else None
             )
+            req_random_seed = (
+                normalize_qe_random_seed(req.random_seed, field_name="fork.random_seed")
+                if req.random_seed not in (None, "")
+                else None
+            )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -395,6 +414,7 @@ async def create_evolution_task(req: EvolutionTaskCreateRequest, background_task
             stock_pool=req.stock_pool,
             node_id=req.node_id,
             label_horizon=req_label_horizon,
+            random_seed=req_random_seed,
         )
 
         # 保存额外字段（含 evolution_mode）
@@ -411,7 +431,7 @@ async def create_evolution_task(req: EvolutionTaskCreateRequest, background_task
                 """, (req.evolution_guidance, req.source_type, req.source_task_id,
                       req.evolution_mode or "auto",
                       req.strategy_id,
-                      json.dumps(_merge_strategy_runtime_flags(req.strategy_params, req.filter_suspended_on_signal, req.suspend_filter_strict)) if (req.strategy_params or req.filter_suspended_on_signal) else None,
+                      json.dumps(_merge_strategy_runtime_flags(req.strategy_params, req.filter_suspended_on_signal, req.suspend_filter_strict, req_random_seed)),
                       normalized_execution_algo,
                       json.dumps(req.execution_algo_params) if req.execution_algo_params else None,
                       req.unfilled_handler,
@@ -427,6 +447,7 @@ async def create_evolution_task(req: EvolutionTaskCreateRequest, background_task
                 req.strategy_params,
                 req.filter_suspended_on_signal,
                 req.suspend_filter_strict,
+                req_random_seed,
             )
             merged_params["sector_hmm_model_path"] = hmm_model_path
             merged_params["enable_sector_hmm"] = True
@@ -743,12 +764,25 @@ async def retry_evolution_loop(
         evolution_loop_db_id = f"{task_id}_Loop{loop_index}"
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT status FROM qe_evolution_loops WHERE loop_id = %s", (evolution_loop_db_id,))
+                cur.execute("SELECT status, config_json FROM qe_evolution_loops WHERE loop_id = %s", (evolution_loop_db_id,))
                 row = cur.fetchone()
         if not row:
             raise ValueError(f"Loop {evolution_loop_db_id} 不存在")
         if row["status"] not in ("failed", "cancelled"):
             raise ValueError(f"Loop 状态为 '{row['status']}'，只有 failed/cancelled 可以重试")
+
+        if requested_retry_mode in {"auto", "full_train"}:
+            config_json = row.get("config_json") or {}
+            if isinstance(config_json, str):
+                config_json = json.loads(config_json)
+            try:
+                ensure_loop_fixed_seed(
+                    dict(config_json or {}),
+                    context=f"retry_loop[{evolution_loop_db_id}]",
+                    trainable=True,
+                )
+            except ValueError as exc:
+                raise_http_seed_error(exc)
 
         background_tasks.add_task(scheduler.retry_loop, task_id, loop_index, requested_retry_mode)
         return {
@@ -782,6 +816,8 @@ class EvolutionTaskForkRequest(BaseModel):
     additional_factor_keys: Optional[List[str]] = Field(None, description="从因子库额外添加的因子key列表")
     node_id: Optional[str] = Field(None, description="执行节点 ID, None=默认本地节点")
     label_horizon: Optional[int] = Field(None, description="训练标签期限: 1/3/5/10/20d；全量重训 fork 可覆盖源 Loop")
+    random_seed: Optional[int] = Field(None, description="QE fork fixed random seed; required for reproducible full-train loops")
+
 
 @router.post("/tasks/{task_id}/fork", summary="从指定 Loop 分叉出全新演进任务")
 async def fork_evolution_task(task_id: str, req: EvolutionTaskForkRequest, background_tasks: BackgroundTasks):
@@ -801,6 +837,11 @@ async def fork_evolution_task(task_id: str, req: EvolutionTaskForkRequest, backg
                 if req.label_horizon not in (None, "")
                 else None
             )
+            req_random_seed = (
+                normalize_qe_random_seed(req.random_seed, field_name="fork.random_seed")
+                if req.random_seed not in (None, "")
+                else None
+            )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         new_task_id = await scheduler.fork_task(
@@ -817,8 +858,9 @@ async def fork_evolution_task(task_id: str, req: EvolutionTaskForkRequest, backg
                     req.strategy_params,
                     req.filter_suspended_on_signal,
                     req.suspend_filter_strict,
+                    req_random_seed,
                 )
-                if (req.strategy_params is not None or req.filter_suspended_on_signal)
+                if (req.strategy_params is not None or req.filter_suspended_on_signal or req_random_seed is not None)
                 else None
             ),
             execution_algo=_normalize_qe_execution_algo_for_request(req.execution_algo, "fork.execution_algo"),
@@ -827,6 +869,7 @@ async def fork_evolution_task(task_id: str, req: EvolutionTaskForkRequest, backg
             unfilled_handler_params=req.unfilled_handler_params,
             node_id=req.node_id,
             label_horizon=req_label_horizon,
+            random_seed=req_random_seed,
         )
 
         # 合并从因子库额外添加的因子
@@ -1168,6 +1211,10 @@ async def _prepare_custom_evo_loop_configs(
             f"custom_loop[{pos}].strategy_params",
         )
         _hoist_runtime_metadata_from_strategy_params(cfg_dict)
+        try:
+            ensure_loop_fixed_seed(cfg_dict, context=f"custom_loop[{pos}]")
+        except ValueError as exc:
+            raise_http_seed_error(exc)
         cfg_dict["strategy_params"] = ensure_qe_risk_policy(
             cfg_dict.get("strategy_params") or {},
             source=f"custom_loop[{pos}].strategy_params",
@@ -1333,6 +1380,11 @@ async def run_custom_evo_task(task_id: str, req: CustomEvoRunRequest, background
             raise HTTPException(status_code=400, detail=f"task {task_id} is not a custom_evo task")
         if config.get("status") == "running":
             raise HTTPException(status_code=409, detail=f"custom_evo task {task_id} is already running")
+        for idx, loop in enumerate(config.get("loops") or [], start=1):
+            try:
+                ensure_loop_fixed_seed(dict(loop), context=f"custom_evo.task[{task_id}].loops[{idx}]")
+            except ValueError as exc:
+                raise_http_seed_error(exc)
         background_tasks.add_task(
             scheduler.submit_custom_evo_all_loops,
             task_id,
