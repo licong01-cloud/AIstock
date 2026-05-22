@@ -28,7 +28,13 @@ TASK_STATUSES = {
 }
 EVENT_TYPES = {
     "planned",
+    "chat_received",
+    "prompt_bundle_built",
     "context_pack_built",
+    "llm_started",
+    "llm_done",
+    "llm_failed",
+    "action_proposed",
     "mcp_preflight_started",
     "mcp_preflight_passed",
     "mcp_preflight_failed",
@@ -79,6 +85,19 @@ MODEL_ROLES = {
     "reviewer",
     "external_agent",
 }
+CHAT_MESSAGE_ROLES = {"user", "assistant", "system", "tool"}
+PROMPT_NODE_CATEGORIES = {
+    "root",
+    "governance",
+    "intent",
+    "domain",
+    "workflow",
+    "tool_guard",
+    "renderer",
+    "memory",
+    "model_routing",
+}
+PROMPT_PHASES = {"planning", "preflight", "execution", "result", "reflection"}
 
 
 def utc_now() -> datetime:
@@ -388,4 +407,110 @@ class ModelRouteRequest(StrictModel):
     def _role(cls, value: str) -> str:
         if value not in MODEL_ROLES:
             raise ValueError(f"role must be one of {sorted(MODEL_ROLES)}")
+        return value
+
+
+class ConversationCreate(StrictModel):
+    title: str = Field("研究助理对话", min_length=1)
+    user_id: str = "default"
+    status: str = "active"
+    metadata_json: dict[str, Any] = Field(default_factory=dict)
+
+
+class ConversationMessageCreate(StrictModel):
+    conversation_id: str
+    role: str
+    content_text: str = Field(..., min_length=1)
+    content_json: dict[str, Any] = Field(default_factory=dict)
+    task_id: str | None = None
+    model_profile_id: str | None = None
+    prompt_bundle_id: str | None = None
+    trace_id: str | None = None
+    is_visible: bool = True
+
+    @field_validator("role")
+    @classmethod
+    def _role(cls, value: str) -> str:
+        if value not in CHAT_MESSAGE_ROLES:
+            raise ValueError(f"role must be one of {sorted(CHAT_MESSAGE_ROLES)}")
+        return value
+
+
+class PromptNodeCreate(StrictModel):
+    prompt_key: str = Field(..., min_length=1)
+    title: str = Field(..., min_length=1)
+    category: str
+    tree_path: str = Field(..., min_length=1)
+    parent_key: str | None = None
+    version: str = "1.0.0"
+    phase: str = "planning"
+    trigger_json: dict[str, Any] = Field(default_factory=dict)
+    prompt_text: str = Field(..., min_length=1)
+    risk_level: str = "medium"
+    status: str = "enabled"
+    source_ref: str | None = None
+
+    @field_validator("category")
+    @classmethod
+    def _category(cls, value: str) -> str:
+        if value not in PROMPT_NODE_CATEGORIES:
+            raise ValueError(f"category must be one of {sorted(PROMPT_NODE_CATEGORIES)}")
+        return value
+
+    @field_validator("phase")
+    @classmethod
+    def _phase(cls, value: str) -> str:
+        if value not in PROMPT_PHASES:
+            raise ValueError(f"phase must be one of {sorted(PROMPT_PHASES)}")
+        return value
+
+    @field_validator("risk_level")
+    @classmethod
+    def _risk(cls, value: str) -> str:
+        if value not in RISK_LEVELS:
+            raise ValueError(f"risk_level must be one of {sorted(RISK_LEVELS)}")
+        return value
+
+
+class PromptBundleBuildRequest(StrictModel):
+    user_message: str = Field(..., min_length=1)
+    task_id: str | None = None
+    conversation_id: str | None = None
+    phase: str = "planning"
+    model_profile_id: str | None = None
+    required_prompt_keys: list[str] = Field(default_factory=list)
+    namespace: str = "aistock"
+    cache_enabled: bool = True
+
+    @field_validator("phase")
+    @classmethod
+    def _phase(cls, value: str) -> str:
+        if value not in PROMPT_PHASES:
+            raise ValueError(f"phase must be one of {sorted(PROMPT_PHASES)}")
+        return value
+
+
+class ChatTurnRequest(StrictModel):
+    message: str = Field(..., min_length=1)
+    conversation_id: str | None = None
+    user_id: str = "default"
+    created_by: str = "user"
+    phase: str = "planning"
+    risk_level: str = "medium"
+    allow_execute: bool = False
+    confirm_approval_id: str | None = None
+    confirmation_text: str | None = None
+
+    @field_validator("phase")
+    @classmethod
+    def _phase(cls, value: str) -> str:
+        if value not in PROMPT_PHASES:
+            raise ValueError(f"phase must be one of {sorted(PROMPT_PHASES)}")
+        return value
+
+    @field_validator("risk_level")
+    @classmethod
+    def _risk(cls, value: str) -> str:
+        if value not in RISK_LEVELS:
+            raise ValueError(f"risk_level must be one of {sorted(RISK_LEVELS)}")
         return value

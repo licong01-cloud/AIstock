@@ -5,12 +5,23 @@ from fastapi.testclient import TestClient
 
 from backend.routers import research_assistant
 from backend.services.research_assistant.repository import InMemoryResearchAssistantRepository
-from backend.services.research_assistant.service import ASSISTANT_APPROVAL_CONFIRM, ResearchAssistantService
+from backend.services.research_assistant.service import ASSISTANT_APPROVAL_CONFIRM, LlmCallResult, ResearchAssistantService
+
+
+class FakeLlmClient:
+    def complete(self, **_kwargs: object) -> LlmCallResult:
+        return LlmCallResult(
+            content="我理解你要创建 QE 10 loop 实验。本轮只生成计划和确认问题，不执行。",
+            provider="fake",
+            model="fake-primary",
+            duration_ms=9,
+            usage={"prompt_tokens": 10, "completion_tokens": 8},
+        )
 
 
 def _client() -> TestClient:
     repository = InMemoryResearchAssistantRepository()
-    service = ResearchAssistantService(repository=repository)
+    service = ResearchAssistantService(repository=repository, llm_client=FakeLlmClient())
     service.seed_catalogs()
     app = FastAPI()
     app.include_router(research_assistant.router, prefix="/api/v1")
@@ -53,6 +64,26 @@ def test_research_assistant_api_phase1_smoke() -> None:
     ).status_code == 200
     context_resp = client.post("/api/v1/research-assistant/context-packs", json={"task_id": task_id, "token_budget": 4000}).json()
     assert context_resp["data"]["context_pack_id"].startswith("ctx_")
+
+    prompt_nodes = client.get("/api/v1/research-assistant/prompt-nodes", params={"phase": "planning", "search": "QE"}).json()["data"]
+    assert prompt_nodes["total"] >= 1
+    prompt_bundle = client.post(
+        "/api/v1/research-assistant/prompt-bundles",
+        json={"user_message": "帮我创建一个 QE 10 loop 实验，先不要执行。", "phase": "planning"},
+    ).json()["data"]
+    assert "domain.qe_experiment" in [node["prompt_key"] for node in prompt_bundle["node_refs"]]
+
+    chat_resp = client.post(
+        "/api/v1/research-assistant/chat/turn",
+        json={"message": "帮我创建一个 QE 10 loop 实验，先不要执行。", "allow_execute": False},
+    ).json()["data"]
+    assert chat_resp["assistant_message"]["content_text"].startswith("我理解你要创建 QE 10 loop")
+    assert chat_resp["cards"]["status_rail"][3]["label"] == "等待确认"
+    assert chat_resp["cards"]["safety"]["no_materialize_before_confirmation"] is True
+    assert client.post(
+        "/api/v1/research-assistant/chat/turn",
+        json={"message": "确认执行 QE materialize", "allow_execute": True},
+    ).status_code == 400
 
     preflight_resp = client.post(
         "/api/v1/research-assistant/mcp/preflight",

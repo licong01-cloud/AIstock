@@ -7,13 +7,21 @@ fall back to in-memory storage unless tests inject that repository explicitly.
 
 from __future__ import annotations
 
+import json
+import os
+from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 import jsonschema
 
 from .models import (
     ApprovalCreate,
+    ChatTurnRequest,
+    ConversationCreate,
+    ConversationMessageCreate,
     ContextPackBuildRequest,
     EvolutionPathCreate,
     ExternalAgentEventCreate,
@@ -25,6 +33,8 @@ from .models import (
     McpPreflightRequest,
     MemoryCreate,
     ModelRouteRequest,
+    PromptBundleBuildRequest,
+    PromptNodeCreate,
     TaskCreate,
     SkillUsageCreate,
     TaskEventCreate,
@@ -38,6 +48,7 @@ from .repository import DatabaseResearchAssistantRepository
 
 
 ASSISTANT_APPROVAL_CONFIRM = "APPROVE_RESEARCH_ASSISTANT_ACTION"
+PROMPT_CACHE_DIR = Path(os.getenv("AISTOCK_ASSISTANT_PROMPT_CACHE_DIR", "var/research_assistant/prompt_cache"))
 
 
 DEFAULT_SKILLS: list[dict[str, Any]] = [
@@ -181,7 +192,7 @@ DEFAULT_MODEL_PROFILES: list[dict[str, Any]] = [
     {
         "model_profile_id": "model_deepseek_v4_pro_primary",
         "provider": "deepseek",
-        "model_name": "deepseek-v4-pro",
+        "model_name": os.getenv("ASSISTANT_DEEPSEEK_MODEL", "deepseek-chat"),
         "role": "primary_reasoner",
         "status": "enabled",
         "capabilities_json": {"long_context": True, "reasoning": True, "language": ["zh", "en"]},
@@ -242,9 +253,177 @@ DEFAULT_ROUTING_POLICIES: list[dict[str, Any]] = [
 ]
 
 
+DEFAULT_PROMPT_NODES: list[dict[str, Any]] = [
+    {
+        "prompt_key": "root.assistant",
+        "title": "研究助理根提示词",
+        "category": "root",
+        "tree_path": "/root",
+        "phase": "planning",
+        "risk_level": "medium",
+        "trigger_json": {"always": True},
+        "prompt_text": (
+            "你是 AIstock 研究与实验综合助理。你必须先理解用户意图、用中文复述目标、提出必要确认问题，"
+            "再生成可审计计划。禁止控制鼠标键盘，禁止写代码，禁止绕过 MCP/API、审批、Trace 和 Memory。"
+        ),
+    },
+    {
+        "prompt_key": "governance.no_silent_action",
+        "title": "安全与审批根规则",
+        "category": "governance",
+        "tree_path": "/root/governance/no_silent_action",
+        "parent_key": "root.assistant",
+        "phase": "planning",
+        "risk_level": "high",
+        "trigger_json": {"always": True},
+        "prompt_text": (
+            "任何会创建实验、物化模板、运行任务、同步 GitHub、写长期记忆或影响生产数据的操作，都必须先输出计划卡和确认卡。"
+            "用户确认前只能做只读分析、草稿生成、preflight 或候选记录。"
+        ),
+    },
+    {
+        "prompt_key": "intent.planning",
+        "title": "意图理解与澄清",
+        "category": "intent",
+        "tree_path": "/root/intent/planning",
+        "parent_key": "root.assistant",
+        "phase": "planning",
+        "risk_level": "medium",
+        "trigger_json": {"always": True},
+        "prompt_text": (
+            "把用户输入拆成：目标、对象、约束、缺失信息、风险级别、下一步。"
+            "如果缺少必要参数，先问不超过 3 个关键问题。"
+        ),
+    },
+    {
+        "prompt_key": "domain.qe_experiment",
+        "title": "QE 实验创建分支提示词",
+        "category": "domain",
+        "tree_path": "/root/domain/qe_experiment",
+        "parent_key": "intent.planning",
+        "phase": "planning",
+        "risk_level": "high",
+        "trigger_json": {"keywords_any": ["qe", "quant", "loop", "实验", "回测", "演进", "模板"]},
+        "prompt_text": (
+            "QE 回测实验必须区分回测与实盘：回测优先使用固定 PIT 股票池或用户指定股票池，不得默认使用最新实盘股票池。"
+            "创建 QE 10 loop 这类任务时，先生成 loop 草稿、股票池/时间窗/因子来源确认点和 MCP preflight 计划，"
+            "不得在确认前调用 materialize 或 run。"
+        ),
+    },
+    {
+        "prompt_key": "workflow.qe_draft_then_approval",
+        "title": "QE 草稿到审批工作流",
+        "category": "workflow",
+        "tree_path": "/root/domain/qe_experiment/workflow/draft_then_approval",
+        "parent_key": "domain.qe_experiment",
+        "phase": "planning",
+        "risk_level": "high",
+        "trigger_json": {"keywords_any": ["创建", "生成", "10 loop", "实验"]},
+        "prompt_text": (
+            "QE 创建计划必须包含：1) 目标复述；2) 缺失参数；3) loop 草稿生成；4) 模板 validate；"
+            "5) stock pool / node / cost preflight；6) 等待用户确认；7) 确认后才进入物化/执行。"
+        ),
+    },
+    {
+        "prompt_key": "tool_guard.mcp_qe",
+        "title": "QE MCP 工具门禁",
+        "category": "tool_guard",
+        "tree_path": "/root/domain/qe_experiment/tool_guard/mcp_qe",
+        "parent_key": "domain.qe_experiment",
+        "phase": "preflight",
+        "risk_level": "production_sensitive",
+        "trigger_json": {"tools_any": ["qe_template_materialize_confirmed", "qe_custom_evo_run_confirmed"]},
+        "prompt_text": (
+            "调用 QE MCP 前必须检查工具目录、输入 schema、固定股票池文件、节点健康、成本和审批状态。"
+            "未通过检查时必须停止并报告具体阻断原因。"
+        ),
+    },
+    {
+        "prompt_key": "renderer.human_cards",
+        "title": "人类可读结果渲染",
+        "category": "renderer",
+        "tree_path": "/root/renderer/human_cards",
+        "parent_key": "root.assistant",
+        "phase": "result",
+        "risk_level": "low",
+        "trigger_json": {"always": True},
+        "prompt_text": (
+            "面向用户的主对话只能展示自然语言、计划卡、确认卡、结果卡和状态摘要。"
+            "禁止展示 raw JSON、payload、数据库 ID、trace ID、后台日志或乱码。"
+        ),
+    },
+    {
+        "prompt_key": "memory.candidate_only",
+        "title": "长期记忆候选规则",
+        "category": "memory",
+        "tree_path": "/root/memory/candidate_only",
+        "parent_key": "root.assistant",
+        "phase": "reflection",
+        "risk_level": "medium",
+        "trigger_json": {"keywords_any": ["记住", "长期", "偏好", "规则", "反思"]},
+        "prompt_text": (
+            "用户偏好、失败案例、研究结论和操作习惯只能先写入候选记忆或临时记忆，并绑定证据。"
+            "核心规则必须经主模型复核和用户审批后才能进入长期记忆。"
+        ),
+    },
+]
+
+
+@dataclass
+class LlmCallResult:
+    content: str
+    provider: str
+    model: str
+    duration_ms: int
+    usage: dict[str, Any]
+
+
+class ResearchAssistantLlmClient:
+    """Small LiteLLM wrapper for assistant chat turns.
+
+    Tests inject a fake client. Production calls fail fast if litellm or model
+    credentials are missing; there is no canned success fallback.
+    """
+
+    def complete(self, *, messages: list[dict[str, str]], model_profile: dict[str, Any], temperature: float = 0.2, max_tokens: int = 1200) -> LlmCallResult:
+        provider = str(model_profile.get("provider") or "").strip()
+        model_name = str(model_profile.get("model_name") or "").strip()
+        if not provider or not model_name:
+            raise RuntimeError("assistant LLM model profile is incomplete")
+        if provider == "deepseek":
+            env_key = "DEEPSEEK_API_KEY"
+            if not os.getenv(env_key):
+                raise RuntimeError("DEEPSEEK_API_KEY is not configured for Research Assistant LLM calls")
+            model_id = model_name if "/" in model_name else f"deepseek/{model_name}"
+        else:
+            env_key = f"{provider.upper()}_API_KEY"
+            if not os.getenv(env_key):
+                raise RuntimeError(f"{env_key} is not configured for Research Assistant LLM calls")
+            model_id = model_name if "/" in model_name else f"{provider}/{model_name}"
+        try:
+            import litellm
+        except Exception as exc:  # pragma: no cover
+            raise RuntimeError("litellm is not installed; Research Assistant cannot call LLM") from exc
+        start = perf_counter()
+        response = litellm.completion(
+            model=model_id,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        duration_ms = int((perf_counter() - start) * 1000)
+        content = str(response.choices[0].message.content or "").strip()
+        usage_raw = getattr(response, "usage", None)
+        usage = dict(usage_raw) if isinstance(usage_raw, dict) else {}
+        if not content:
+            raise RuntimeError("assistant LLM returned empty content")
+        return LlmCallResult(content=content, provider=provider, model=model_id, duration_ms=duration_ms, usage=usage)
+
+
 class ResearchAssistantService:
-    def __init__(self, repository: Any | None = None) -> None:
+    def __init__(self, repository: Any | None = None, llm_client: Any | None = None) -> None:
         self.repository = repository or DatabaseResearchAssistantRepository()
+        self.llm_client = llm_client or ResearchAssistantLlmClient()
 
     def health(self) -> dict[str, Any]:
         repository_health = self.repository.health()
@@ -311,7 +490,7 @@ class ResearchAssistantService:
         )
 
     def seed_catalogs(self) -> dict[str, Any]:
-        seeded = {"skills": 0, "mcp_servers": 0, "mcp_tools": 0, "model_profiles": 0, "routing_policies": 0, "reports": 0, "notifications": 0}
+        seeded = {"skills": 0, "mcp_servers": 0, "mcp_tools": 0, "model_profiles": 0, "routing_policies": 0, "prompt_nodes": 0, "reports": 0, "notifications": 0}
         for item in DEFAULT_SKILLS:
             payload = {
                 "skill_id": f"skill_{item['skill_key']}",
@@ -356,11 +535,145 @@ class ResearchAssistantService:
             policy["fallback_profile_id"] = policy.get("fallback_json", {}).get("fallback_profile_id")
             self.repository.create_record("routing_policies", policy)
             seeded["routing_policies"] += 1
+        for item in DEFAULT_PROMPT_NODES:
+            prompt = PromptNodeCreate(**item)
+            payload = prompt.model_dump()
+            payload["prompt_node_id"] = f"prompt_{prompt.prompt_key.replace('.', '_')}"
+            payload["checksum"] = sha256_json({"prompt_key": prompt.prompt_key, "version": prompt.version, "prompt_text": prompt.prompt_text})
+            self.repository.create_record("prompt_nodes", payload)
+            seeded["prompt_nodes"] += 1
         self._ensure_default_reports_and_notifications(seeded)
-        return {"seeded": seeded, "catalog_version": "research_assistant_phase1_catalog_20260521"}
+        return {"seeded": seeded, "catalog_version": "research_assistant_phase1_chat_prompt_catalog_20260522"}
 
     def list_records(self, kind: str, *, filters: dict[str, Any] | None = None, search: str | None = None, limit: int = 50, offset: int = 0) -> dict[str, Any]:
         return self.repository.list_records(kind, filters=filters, search=search, limit=limit, offset=offset)
+
+    def create_conversation(self, request: ConversationCreate | dict[str, Any]) -> dict[str, Any]:
+        data = request if isinstance(request, ConversationCreate) else ConversationCreate(**request)
+        return self.repository.create_record("conversations", {"conversation_id": new_id("conv"), **data.model_dump()})
+
+    def get_conversation(self, conversation_id: str) -> dict[str, Any]:
+        conversation = self.repository.get_record("conversations", conversation_id)
+        if not conversation:
+            raise KeyError(f"conversation not found: {conversation_id}")
+        messages = self.repository.list_records("conversation_messages", filters={"conversation_id": conversation_id}, limit=500)["items"]
+        messages.sort(key=lambda item: str(item.get("created_at") or ""))
+        return {"conversation": conversation, "messages": messages}
+
+    def add_conversation_message(self, request: ConversationMessageCreate | dict[str, Any]) -> dict[str, Any]:
+        data = request if isinstance(request, ConversationMessageCreate) else ConversationMessageCreate(**request)
+        if not self.repository.get_record("conversations", data.conversation_id):
+            raise KeyError(f"conversation not found: {data.conversation_id}")
+        row = {"message_id": new_id("msg"), **data.model_dump()}
+        message = self.repository.create_record("conversation_messages", row)
+        self.repository.update_record("conversations", data.conversation_id, {"metadata_json": {"last_role": data.role}})
+        return message
+
+    def build_prompt_bundle(self, request: PromptBundleBuildRequest | dict[str, Any]) -> dict[str, Any]:
+        data = request if isinstance(request, PromptBundleBuildRequest) else PromptBundleBuildRequest(**request)
+        available = self.repository.list_records("prompt_nodes", filters={"status": "enabled"}, limit=500)["items"]
+        if not available:
+            raise RuntimeError("Prompt Tree is empty; run /research-assistant/catalogs/seed before chat")
+        selected = self._select_prompt_nodes(available, data)
+        if not selected:
+            raise RuntimeError("Prompt Tree selection returned no nodes")
+        node_refs = [
+            {
+                "prompt_node_id": item["prompt_node_id"],
+                "prompt_key": item["prompt_key"],
+                "version": item.get("version"),
+                "checksum": item.get("checksum"),
+                "tree_path": item.get("tree_path"),
+                "phase": item.get("phase"),
+            }
+            for item in selected
+        ]
+        bundle_text = "\n\n".join(f"### {item['title']}\n{item['prompt_text']}" for item in selected)
+        bundle_json = {
+            "phase": data.phase,
+            "node_count": len(selected),
+            "prompt_keys": [item["prompt_key"] for item in selected],
+            "user_message_digest": sha256_json({"message": data.user_message}),
+        }
+        selection_trace = {
+            "algorithm": "ancestor_closed_keyword_multibranch_v1",
+            "phase": data.phase,
+            "matched_prompt_keys": bundle_json["prompt_keys"],
+            "required_prompt_keys": data.required_prompt_keys,
+            "cache_enabled": data.cache_enabled,
+        }
+        checksum = sha256_json({"node_refs": node_refs, "bundle_text": bundle_text, "phase": data.phase, "model_profile_id": data.model_profile_id})
+        cache_path = self._write_prompt_cache(checksum, bundle_text, bundle_json, selection_trace) if data.cache_enabled else None
+        row = {
+            "prompt_bundle_id": new_id("pbundle"),
+            "task_id": data.task_id,
+            "conversation_id": data.conversation_id,
+            "phase": data.phase,
+            "model_profile_id": data.model_profile_id,
+            "node_refs": node_refs,
+            "selection_trace_json": selection_trace,
+            "bundle_json": bundle_json,
+            "bundle_text": bundle_text,
+            "checksum": checksum,
+            "cache_path": cache_path,
+        }
+        bundle = self.repository.create_record("prompt_bundles", row)
+        if data.task_id:
+            self.add_task_event(
+                data.task_id,
+                TaskEventCreate(
+                    event_type="prompt_bundle_built",
+                    message="已按树型提示词选择必要分支，生成本轮提示词包。",
+                    payload_json={"prompt_bundle_id": bundle["prompt_bundle_id"], "prompt_keys": bundle_json["prompt_keys"], "checksum": checksum},
+                ),
+            )
+        return bundle
+
+    def _select_prompt_nodes(self, available: list[dict[str, Any]], data: PromptBundleBuildRequest) -> list[dict[str, Any]]:
+        by_key = {str(item["prompt_key"]): item for item in available}
+        lower_message = data.user_message.lower()
+        selected_keys: set[str] = set(data.required_prompt_keys)
+        for item in available:
+            trigger = item.get("trigger_json") or {}
+            if trigger.get("always"):
+                selected_keys.add(str(item["prompt_key"]))
+                continue
+            if item.get("phase") == data.phase and self._trigger_matches(trigger, lower_message):
+                selected_keys.add(str(item["prompt_key"]))
+            if str(item.get("phase")) in {"preflight", "result"} and data.phase == str(item.get("phase")) and self._trigger_matches(trigger, lower_message):
+                selected_keys.add(str(item["prompt_key"]))
+        if any(key.startswith("domain.qe") or key.startswith("workflow.qe") for key in selected_keys):
+            selected_keys.add("domain.qe_experiment")
+            selected_keys.add("workflow.qe_draft_then_approval")
+            selected_keys.add("tool_guard.mcp_qe")
+        selected_keys.add("root.assistant")
+        selected_keys.add("governance.no_silent_action")
+        selected_keys.add("intent.planning")
+        selected_keys.add("renderer.human_cards")
+        closed_keys: set[str] = set()
+        for key in list(selected_keys):
+            current = by_key.get(key)
+            while current:
+                current_key = str(current["prompt_key"])
+                closed_keys.add(current_key)
+                parent_key = current.get("parent_key")
+                current = by_key.get(str(parent_key)) if parent_key else None
+        ordered = [item for item in available if str(item["prompt_key"]) in closed_keys]
+        ordered.sort(key=lambda item: (str(item.get("tree_path") or ""), str(item.get("prompt_key") or "")))
+        return ordered
+
+    @staticmethod
+    def _trigger_matches(trigger: dict[str, Any], lower_message: str) -> bool:
+        keywords = [str(item).lower() for item in trigger.get("keywords_any") or []]
+        return any(keyword in lower_message for keyword in keywords)
+
+    @staticmethod
+    def _write_prompt_cache(checksum: str, bundle_text: str, bundle_json: dict[str, Any], selection_trace: dict[str, Any]) -> str:
+        PROMPT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        path = PROMPT_CACHE_DIR / f"{checksum}.json"
+        payload = {"bundle_text": bundle_text, "bundle_json": bundle_json, "selection_trace_json": selection_trace}
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return str(path)
 
     def get_task(self, task_id: str) -> dict[str, Any]:
         task = self.repository.get_record("tasks", task_id)
@@ -381,6 +694,239 @@ class ResearchAssistantService:
         task = self.repository.create_record("tasks", row)
         self.add_task_event(task_id, TaskEventCreate(event_type="planned", message=f"任务已创建：{data.title}", payload_json={"input": data.input_json}))
         return task
+
+
+    def chat_turn(self, request: ChatTurnRequest | dict[str, Any]) -> dict[str, Any]:
+        data = request if isinstance(request, ChatTurnRequest) else ChatTurnRequest(**request)
+        if data.allow_execute:
+            raise ValueError("Phase 1 chat turn does not execute actions; create approval/preflight plan first")
+        conversation = (
+            self.repository.get_record("conversations", data.conversation_id)
+            if data.conversation_id
+            else self.create_conversation(ConversationCreate(title=self._conversation_title(data.message), user_id=data.user_id))
+        )
+        if not conversation:
+            raise KeyError(f"conversation not found: {data.conversation_id}")
+        conversation_id = conversation["conversation_id"]
+        task = self.create_task(
+            TaskCreate(
+                title=self._conversation_title(data.message),
+                task_type="assistant_chat_turn",
+                risk_level=data.risk_level,
+                input_json={"user_message": data.message, "phase": data.phase, "allow_execute": data.allow_execute},
+                created_by=data.created_by,
+            )
+        )
+        user_message = self.add_conversation_message(
+            ConversationMessageCreate(
+                conversation_id=conversation_id,
+                role="user",
+                content_text=data.message,
+                task_id=task["task_id"],
+                content_json={"phase": data.phase},
+            )
+        )
+        self.add_task_event(task["task_id"], TaskEventCreate(event_type="chat_received", message="已接收用户对话需求，进入理解与计划阶段。", payload_json={"conversation_id": conversation_id}))
+
+        route = self.route_model(ModelRouteRequest(role="primary_reasoner", risk_level=data.risk_level, token_estimate=len(data.message) * 2))
+        model_profile = route.get("model_profile")
+        if not model_profile:
+            raise RuntimeError(f"no enabled primary model profile for risk={data.risk_level}: {route.get('route_status')}")
+        bundle = self.build_prompt_bundle(
+            PromptBundleBuildRequest(
+                user_message=data.message,
+                task_id=task["task_id"],
+                conversation_id=conversation_id,
+                phase=data.phase,
+                model_profile_id=model_profile["model_profile_id"],
+            )
+        )
+        context_pack = self.build_context_pack(
+            ContextPackBuildRequest(
+                task_id=task["task_id"],
+                agent_id="research_assistant_primary",
+                model_profile=model_profile["model_profile_id"],
+                token_budget=16000,
+            )
+        )
+        messages = self._chat_messages_for_llm(data.message, bundle, context_pack)
+        self.add_task_event(task["task_id"], TaskEventCreate(event_type="llm_started", message="主模型调用已开始。", payload_json={"model_profile_id": model_profile["model_profile_id"], "prompt_bundle_id": bundle["prompt_bundle_id"]}))
+        try:
+            llm_result = self.llm_client.complete(messages=messages, model_profile=model_profile, temperature=0.2, max_tokens=1600)
+        except Exception as exc:
+            trace = self.create_trace_event(
+                TraceEventCreate(
+                    task_id=task["task_id"],
+                    event_type="llm_call",
+                    component="research_assistant.chat_turn",
+                    status="failed",
+                    model_profile_id=model_profile["model_profile_id"],
+                    payload_json={"prompt_bundle_id": bundle["prompt_bundle_id"], "error": str(exc)},
+                )
+            )
+            self.add_task_event(task["task_id"], TaskEventCreate(event_type="llm_failed", severity="error", message=f"主模型调用失败：{exc}", payload_json={"trace_id": trace["trace_id"]}))
+            raise
+        trace = self.create_trace_event(
+            TraceEventCreate(
+                task_id=task["task_id"],
+                event_type="llm_call",
+                component="research_assistant.chat_turn",
+                status="ok",
+                duration_ms=llm_result.duration_ms,
+                model_profile_id=model_profile["model_profile_id"],
+                payload_json={
+                    "provider": llm_result.provider,
+                    "model": llm_result.model,
+                    "prompt_bundle_id": bundle["prompt_bundle_id"],
+                    "context_pack_id": context_pack["context_pack_id"],
+                    "response_preview": llm_result.content[:500],
+                },
+                cost_json={"usage": llm_result.usage},
+            )
+        )
+        cards = self._build_human_cards(data.message, task, bundle, route)
+        assistant_text = self._compose_assistant_reply(data.message, llm_result.content, cards)
+        assistant_message = self.add_conversation_message(
+            ConversationMessageCreate(
+                conversation_id=conversation_id,
+                role="assistant",
+                content_text=assistant_text,
+                content_json={
+                    "cards": cards,
+                    "audit_summary": {
+                        "model_profile": model_profile["display_name"],
+                        "prompt_bundle_checksum": bundle["checksum"],
+                        "context_pack_checksum": context_pack["checksum"],
+                    },
+                },
+                task_id=task["task_id"],
+                model_profile_id=model_profile["model_profile_id"],
+                prompt_bundle_id=bundle["prompt_bundle_id"],
+                trace_id=trace["trace_id"],
+                is_visible=True,
+            )
+        )
+        self.add_task_event(
+            task["task_id"],
+            TaskEventCreate(
+                event_type="llm_done",
+                message="主模型已返回，计划卡和确认卡已生成。",
+                payload_json={"assistant_message_id": assistant_message["message_id"], "trace_id": trace["trace_id"]},
+            ),
+        )
+        self.add_task_event(
+            task["task_id"],
+            TaskEventCreate(
+                event_type="action_proposed",
+                severity="warning",
+                message="已提出候选动作；确认前不会调用 materialize/run。",
+                payload_json={"proposal_count": len(cards.get("action_proposals", [])), "safety": cards["safety"]},
+            ),
+        )
+        return {
+            "conversation": self.repository.get_record("conversations", conversation_id),
+            "user_message": user_message,
+            "assistant_message": assistant_message,
+            "task": self.repository.get_record("tasks", task["task_id"]),
+            "task_events": self.repository.list_records("task_events", filters={"task_id": task["task_id"]}, limit=200)["items"],
+            "prompt_bundle": self._public_prompt_bundle(bundle),
+            "context_pack": {"context_pack_id": context_pack["context_pack_id"], "pack_summary": context_pack["pack_summary"], "checksum": context_pack["checksum"]},
+            "trace": {"trace_id": trace["trace_id"], "status": trace["status"], "duration_ms": trace.get("duration_ms"), "model_profile_id": trace.get("model_profile_id")},
+            "cards": cards,
+        }
+
+    @staticmethod
+    def _conversation_title(message: str) -> str:
+        return (message.strip().replace("\n", " ")[:48] or "新的对话")
+
+    @staticmethod
+    def _public_prompt_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "prompt_bundle_id": bundle["prompt_bundle_id"],
+            "phase": bundle["phase"],
+            "checksum": bundle["checksum"],
+            "node_refs": bundle["node_refs"],
+            "selection_trace_json": bundle["selection_trace_json"],
+            "cache_path": bundle.get("cache_path"),
+        }
+
+    @staticmethod
+    def _chat_messages_for_llm(user_message: str, bundle: dict[str, Any], context_pack: dict[str, Any]) -> list[dict[str, str]]:
+        system = (
+            f"{bundle['bundle_text']}\n\n"
+            "你必须用中文、自然语言和结构化计划说明来回复用户。主对话严禁输出 raw JSON、数据库 ID、Trace ID、payload 或后台日志。"
+            "如果需要使用 MCP 或 Skill，只能说明拟使用能力与确认点，不能在本轮直接执行高风险操作。"
+        )
+        context = (
+            f"Context Pack 摘要：{context_pack.get('pack_summary')}\n"
+            "请基于这些已审计上下文进行回答；缺失信息时先向用户确认。"
+        )
+        return [
+            {"role": "system", "content": system},
+            {"role": "user", "content": context},
+            {"role": "user", "content": user_message},
+        ]
+
+    @staticmethod
+    def _build_human_cards(user_message: str, task: dict[str, Any], bundle: dict[str, Any], route: dict[str, Any]) -> dict[str, Any]:
+        lower = user_message.lower()
+        is_qe = any(token in lower for token in ["qe", "loop", "实验", "回测", "演进", "quantevolver"])
+        if is_qe:
+            plan_steps = [
+                "复述 QE 实验目标、收益评估方向和本轮不执行的边界。",
+                "从 QE MCP 目录中选择模板创建、验证、预检查相关能力，并确认固定 PIT 股票池要求。",
+                "生成 10 个 loop 的草稿结构、候选因子来源、时间窗和成本约束。",
+                "等待用户确认后，才允许进入 validate、stock pool、节点健康和成本 preflight。",
+                "preflight 全部通过且用户再次确认后，后续阶段才能调用 materialize 或 run。",
+            ]
+            clarifications = [
+                "本次 QE 回测应使用哪个固定 PIT 股票池或默认回测股票池？",
+                "10 个 loop 的目标更偏向收益提升、稳定性、因子覆盖，还是模型结构探索？",
+                "确认前是否继续保持只生成草稿，不调用 materialize/run？",
+            ]
+            action_proposals = [
+                {"title": "生成 QE 10 loop 实验草稿", "risk": "medium", "approval_required": False, "status": "draft_only"},
+                {"title": "QE template validate + MCP preflight", "risk": "high", "approval_required": True, "status": "waiting_confirmation"},
+            ]
+        else:
+            plan_steps = [
+                "复述你的研究目标和约束。",
+                "选择可能需要的 MCP、Skill、Memory 和模型配置。",
+                "列出缺失信息和风险等级。",
+                "在你确认后，再进入相应 MCP preflight 或草稿生成。",
+            ]
+            clarifications = ["请确认这次任务只需要我先规划和提问，还是还要准备某个 MCP 的预检查？"]
+            action_proposals = [{"title": "继续澄清并生成计划", "risk": "low", "approval_required": False, "status": "ready"}]
+        return {
+            "plan_card": {"title": "本轮计划", "steps": plan_steps},
+            "clarification_card": {"title": "需要你确认", "questions": clarifications},
+            "action_proposals": action_proposals,
+            "status_rail": [
+                {"label": "接收需求", "status": "done"},
+                {"label": "选择提示词", "status": "done"},
+                {"label": "构建上下文", "status": "done"},
+                {"label": "等待确认", "status": "current"},
+                {"label": "MCP 预检查", "status": "locked"},
+                {"label": "执行", "status": "locked"},
+                {"label": "写入记忆", "status": "locked"},
+            ],
+            "capability_summary": {
+                "mcp": "已识别 Research Assistant、QE、Validation 等 MCP 能力候选。",
+                "skill": "已纳入本地 Skill Catalog，后续可按任务加载 QE 诊断、因子分析等能力。",
+                "model": route.get("model_profile", {}).get("display_name") or route.get("model_profile", {}).get("model_name"),
+                "prompt_branches": [item["prompt_key"] for item in bundle.get("node_refs", [])],
+            },
+            "safety": {"no_materialize_before_confirmation": True, "no_run_before_confirmation": True, "no_raw_json_in_main_chat": True},
+        }
+
+    @staticmethod
+    def _compose_assistant_reply(user_message: str, llm_text: str, cards: dict[str, Any]) -> str:
+        lines = [llm_text.strip()]
+        lines.append("\n我已先把本轮限制在理解、计划和确认阶段；不会在确认前执行 QE materialize/run 或其他高风险 MCP。")
+        if "qe" in user_message.lower() or "实验" in user_message or "回测" in user_message:
+            lines.append("我会把 QE 回测和实盘严格区分，回测默认要求固定 PIT 股票池或你明确指定的股票池。")
+        lines.append(f"请先确认：{cards['clarification_card']['questions'][0]}")
+        return "\n".join(lines)
 
     def add_task_event(self, task_id: str, request: TaskEventCreate | dict[str, Any]) -> dict[str, Any]:
         if not self.repository.get_record("tasks", task_id):

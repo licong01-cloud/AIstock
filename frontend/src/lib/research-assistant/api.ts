@@ -243,6 +243,48 @@ export type AssistantGraphSummary = JsonObject & {
   evolution_paths?: JsonObject[];
 };
 
+
+export type AssistantPromptNode = JsonObject & {
+  prompt_node_id: string;
+  prompt_key?: string;
+  title?: string;
+  category?: string;
+  tree_path?: string;
+  phase?: string;
+  status?: string;
+};
+
+export type AssistantPromptBundle = JsonObject & {
+  prompt_bundle_id: string;
+  phase?: string;
+  checksum?: string;
+  node_refs?: JsonObject[];
+  selection_trace_json?: JsonObject;
+  cache_path?: string | null;
+};
+
+export type AssistantConversationMessage = JsonObject & {
+  message_id: string;
+  conversation_id?: string;
+  role?: "user" | "assistant" | "system" | "tool";
+  content_text?: string;
+  content_json?: JsonObject;
+  task_id?: string | null;
+  created_at?: string;
+};
+
+export type AssistantChatTurnResult = JsonObject & {
+  conversation?: JsonObject;
+  user_message?: AssistantConversationMessage;
+  assistant_message?: AssistantConversationMessage;
+  task?: AssistantTask;
+  task_events?: AssistantTaskEvent[];
+  prompt_bundle?: AssistantPromptBundle;
+  context_pack?: JsonObject;
+  trace?: JsonObject;
+  cards?: JsonObject;
+};
+
 export type AssistantValidationDiscoverySummary = JsonObject & {
   latest_reports?: JsonObject[];
   candidate_issues_needing_review?: AssistantIssueCandidate[];
@@ -322,6 +364,22 @@ export const researchAssistantApi = {
   },
   seedCatalogs(): Promise<JsonObject> {
     return post<JsonObject>("/research-assistant/catalogs/seed", {});
+  },
+
+  chatTurn(payload: JsonObject): Promise<AssistantChatTurnResult> {
+    return post<AssistantChatTurnResult>("/research-assistant/chat/turn", payload);
+  },
+  conversation(conversationId: string): Promise<JsonObject> {
+    return unwrap<JsonObject>(`/research-assistant/conversations/${encodeURIComponent(conversationId)}`);
+  },
+  promptNodes(params: { phase?: string; category?: string; status?: string; search?: string; limit?: number; offset?: number } = {}): Promise<AssistantPage<AssistantPromptNode>> {
+    return unwrap<AssistantPage<AssistantPromptNode>>(appendQuery("/research-assistant/prompt-nodes", { limit: 100, ...params }));
+  },
+  buildPromptBundle(payload: JsonObject): Promise<AssistantPromptBundle> {
+    return post<AssistantPromptBundle>("/research-assistant/prompt-bundles", payload);
+  },
+  promptBundles(params: { task_id?: string; conversation_id?: string; phase?: string; limit?: number; offset?: number } = {}): Promise<AssistantPage<AssistantPromptBundle>> {
+    return unwrap<AssistantPage<AssistantPromptBundle>>(appendQuery("/research-assistant/prompt-bundles", { limit: 50, ...params }));
   },
   tasks(params: { status?: string; task_type?: string; search?: string; limit?: number; offset?: number } = {}): Promise<AssistantPage<AssistantTask>> {
     return unwrap<AssistantPage<AssistantTask>>(appendQuery("/research-assistant/tasks", { limit: 50, ...params }));

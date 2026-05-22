@@ -8,7 +8,7 @@ if TYPE_CHECKING:
     from backend.mcp.registry import ModuleRegistry
 
 
-TOOL_COUNT = 10
+TOOL_COUNT = 13
 
 
 def register(registry: "ModuleRegistry") -> None:
@@ -39,6 +39,34 @@ def register(registry: "ModuleRegistry") -> None:
 
         safe_task_id = registry.sanitize(task_id, "task_id")
         return client.post(f"/tasks/{safe_task_id}/events", payload)
+
+    @registry.mcp.tool(name="assistant_chat_turn")
+    def assistant_chat_turn(payload: dict[str, Any]) -> Any:
+        """Run one LLM-backed assistant conversation turn without executing high-risk actions."""
+
+        return client.post("/chat/turn", payload)
+
+    @registry.mcp.tool(name="assistant_build_prompt_bundle")
+    def assistant_build_prompt_bundle(payload: dict[str, Any]) -> Any:
+        """Build a tree-selected prompt bundle for a task or conversation turn."""
+
+        return client.post("/prompt-bundles", payload)
+
+    @registry.mcp.tool(name="assistant_list_prompt_nodes")
+    def assistant_list_prompt_nodes(
+        phase: str | None = None,
+        category: str | None = None,
+        status: str | None = None,
+        search: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Any:
+        """List Prompt Tree nodes and their trigger/phase metadata."""
+
+        return client.get(
+            "/prompt-nodes",
+            params={"phase": phase, "category": category, "status": status, "search": search, "limit": limit, "offset": offset},
+        )
 
     @registry.mcp.tool(name="assistant_create_memory_candidate")
     def assistant_create_memory_candidate(payload: dict[str, Any]) -> Any:

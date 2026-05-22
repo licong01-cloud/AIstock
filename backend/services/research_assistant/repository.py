@@ -36,6 +36,18 @@ TABLES: dict[str, dict[str, Any]] = {
         "json": {"payload_json", "evidence_refs"},
         "search": {"event_type", "message", "severity"},
     },
+    "conversations": {
+        "table": "assistant_conversations",
+        "id": "conversation_id",
+        "json": {"metadata_json"},
+        "search": {"conversation_id", "title", "user_id", "status"},
+    },
+    "conversation_messages": {
+        "table": "assistant_conversation_messages",
+        "id": "message_id",
+        "json": {"content_json"},
+        "search": {"message_id", "conversation_id", "role", "content_text", "task_id"},
+    },
     "memory_items": {
         "table": "research_memory_items",
         "id": "memory_id",
@@ -141,6 +153,18 @@ TABLES: dict[str, dict[str, Any]] = {
         "id": "policy_id",
         "json": {"selector_json", "fallback_json"},
         "search": {"policy_id", "role", "risk_level", "status"},
+    },
+    "prompt_nodes": {
+        "table": "assistant_prompt_nodes",
+        "id": "prompt_node_id",
+        "json": {"trigger_json"},
+        "search": {"prompt_node_id", "prompt_key", "title", "category", "tree_path", "phase", "status"},
+    },
+    "prompt_bundles": {
+        "table": "assistant_prompt_bundles",
+        "id": "prompt_bundle_id",
+        "json": {"node_refs", "selection_trace_json", "bundle_json"},
+        "search": {"prompt_bundle_id", "task_id", "conversation_id", "phase", "model_profile_id"},
     },
     "temp_memories": {
         "table": "assistant_temp_memories",

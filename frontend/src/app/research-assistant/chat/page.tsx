@@ -1,68 +1,263 @@
 "use client";
 
-import { useState } from "react";
+import {
+  AssistantRuntimeProvider,
+  ComposerPrimitive,
+  MessagePartPrimitive,
+  MessagePrimitive,
+  ThreadPrimitive,
+  useLocalRuntime,
+  useMessage,
+  type ChatModelAdapter,
+  type ChatModelRunOptions,
+  type ThreadMessageLike,
+} from "@assistant-ui/react";
+import Link from "next/link";
+import { useMemo, useState } from "react";
 
-import JsonPanel from "@/components/paper-v2/JsonPanel";
-import SectionCard from "@/components/paper-v2/SectionCard";
-import { DetailDrawer } from "@/components/research-assistant/AssistantShared";
-import { researchAssistantApi, type AssistantTask } from "@/lib/research-assistant/api";
+import { researchAssistantApi, type AssistantChatTurnResult } from "@/lib/research-assistant/api";
+
+type RailStep = { label: string; status: string };
+type PlanCard = { title?: string; steps?: string[] };
+type ClarificationCard = { title?: string; questions?: string[] };
+type Proposal = { title?: string; risk?: string; approval_required?: boolean; status?: string };
+
+type ChatCards = {
+  plan_card?: PlanCard;
+  clarification_card?: ClarificationCard;
+  action_proposals?: Proposal[];
+  status_rail?: RailStep[];
+  capability_summary?: Record<string, unknown>;
+  safety?: Record<string, unknown>;
+};
+
+const initialSteps: RailStep[] = [
+  { label: "接收需求", status: "idle" },
+  { label: "选择提示词", status: "idle" },
+  { label: "构建上下文", status: "idle" },
+  { label: "等待确认", status: "idle" },
+  { label: "MCP 预检查", status: "locked" },
+  { label: "执行", status: "locked" },
+  { label: "写入记忆", status: "locked" },
+];
+
+const thinkingSteps: RailStep[] = [
+  { label: "接收需求", status: "current" },
+  { label: "选择提示词", status: "idle" },
+  { label: "构建上下文", status: "idle" },
+  { label: "等待确认", status: "idle" },
+  { label: "MCP 预检查", status: "locked" },
+  { label: "执行", status: "locked" },
+  { label: "写入记忆", status: "locked" },
+];
+
+const welcomeMessages: ThreadMessageLike[] = [
+  {
+    role: "assistant",
+    content: [
+      {
+        type: "text",
+        text: "你好，我是 AIstock 研究助理。你可以直接描述研究或实验目标，例如创建 QE 实验、分析 HMM 演进、复盘因子研发或整理今天需要关注的事项。我会先理解并确认，不会在确认前执行高风险 MCP。",
+      },
+    ],
+  },
+];
+
+function textFromOptions(options: ChatModelRunOptions): string {
+  const last = [...options.messages].reverse().find((message) => message.role === "user");
+  if (!last) return "";
+  return last.content
+    .map((part) => (part.type === "text" ? part.text : ""))
+    .join("\n")
+    .trim();
+}
+
+function asCards(value: unknown): ChatCards {
+  if (!value || typeof value !== "object") return {};
+  return value as ChatCards;
+}
+
+function statusText(status: string): string {
+  if (status === "done") return "已完成";
+  if (status === "current") return "进行中";
+  if (status === "locked") return "未解锁";
+  if (status === "failed") return "失败";
+  return "等待";
+}
+
+function proposalStatusText(status?: string): string {
+  if (status === "waiting_confirmation") return "等待确认";
+  if (status === "draft_only") return "仅生成草稿";
+  if (status === "ready") return "可继续讨论";
+  return status || "待处理";
+}
+
+function cardText(result: AssistantChatTurnResult): string {
+  const cards = asCards(result.cards || result.assistant_message?.content_json?.cards);
+  const parts: string[] = [];
+  const plan = cards.plan_card;
+  if (plan?.steps?.length) {
+    parts.push(`\n计划：${plan.title || "下一步计划"}`);
+    parts.push(...plan.steps.map((step, index) => `${index + 1}. ${step}`));
+  }
+  const clarify = cards.clarification_card;
+  if (clarify?.questions?.length) {
+    parts.push(`\n需要确认：${clarify.title || "关键问题"}`);
+    parts.push(...clarify.questions.map((question, index) => `${index + 1}. ${question}`));
+  }
+  const proposals = cards.action_proposals || [];
+  if (proposals.length) {
+    parts.push("\n可选动作：");
+    parts.push(...proposals.map((proposal) => `- ${proposal.title || "待命名动作"}；风险：${proposal.risk || "未标注"}；状态：${proposalStatusText(proposal.status)}`));
+  }
+  parts.push("\n安全边界：本轮只完成理解、计划和确认，不会执行 QE materialize/run 或其他高风险 MCP。确认后才进入预检查和执行。");
+  return parts.join("\n");
+}
+
+function createAdapter(onTurn: (result: AssistantChatTurnResult) => void, onStage: (steps: RailStep[]) => void): ChatModelAdapter {
+  return {
+    async run(options) {
+      const message = textFromOptions(options);
+      if (!message) {
+        return { content: [{ type: "text", text: "请直接告诉我你要完成的研究或实验目标，我会先理解并向你确认。" }] };
+      }
+      onStage(thinkingSteps);
+      const result = await researchAssistantApi.chatTurn({ message, phase: "planning", risk_level: "medium", allow_execute: false });
+      onTurn(result);
+      const cards = asCards(result.cards || result.assistant_message?.content_json?.cards);
+      if (cards.status_rail?.length) onStage(cards.status_rail);
+      const reply = `${result.assistant_message?.content_text || "我已理解你的需求，先生成计划并等待确认。"}\n${cardText(result)}`;
+      return { content: [{ type: "text", text: reply }] };
+    },
+  };
+}
+
+function TaskProgressRail({ steps, latest }: { steps: RailStep[]; latest: AssistantChatTurnResult | null }) {
+  const cards = asCards(latest?.cards || latest?.assistant_message?.content_json?.cards);
+  const capability = cards.capability_summary || {};
+  return (
+    <aside className="ra-chat-rail" aria-label="任务状态轨道">
+      <div className="ra-chat-rail-head">
+        <span className="ra-chat-eyebrow">实时状态</span>
+        <h2>助理正在做什么</h2>
+        <p>这里只展示人类可读进度；后台 ID、payload 与 Trace 留在审计页面。</p>
+      </div>
+      <ol className="ra-chat-steps">
+        {steps.map((step) => (
+          <li className={`ra-chat-step ra-chat-step-${step.status}`} key={step.label}>
+            <span className="ra-chat-step-dot" aria-hidden="true" />
+            <span className="ra-chat-step-body">
+              <strong>{step.label}</strong>
+              <small>{statusText(step.status)}</small>
+            </span>
+          </li>
+        ))}
+      </ol>
+      <div className="ra-chat-capability">
+        <span className="ra-chat-eyebrow">能力选择</span>
+        <p>{String(capability.mcp || "将按需选择 Research Assistant、QE、Validation 等 MCP。")}</p>
+        <p>{String(capability.skill || "将按需选择本地 Skill Catalog，不要求用户记住工具名。")}</p>
+        <p>{String(capability.model || "主模型负责理解、确认和调度。")}</p>
+      </div>
+      <Link className="ra-chat-admin-link" href="/research-assistant/admin">打开后台管理 / 审计</Link>
+    </aside>
+  );
+}
+
+function AssistantMessageText() {
+  return <MessagePartPrimitive.Text component="p" className="ra-chat-message-text" smooth={false} />;
+}
+
+function ChatMessage() {
+  const role = useMessage((state) => state.role);
+  return (
+    <MessagePrimitive.Root className={`ra-chat-message ra-chat-message-${role}`}>
+      <div className="ra-chat-avatar" aria-hidden="true">{role === "user" ? "我" : "AI"}</div>
+      <div className="ra-chat-bubble">
+        <MessagePrimitive.Parts components={{ Text: AssistantMessageText }} />
+      </div>
+    </MessagePrimitive.Root>
+  );
+}
+
+function PlanSummary({ latest }: { latest: AssistantChatTurnResult | null }) {
+  const cards = asCards(latest?.cards || latest?.assistant_message?.content_json?.cards);
+  const plan = cards.plan_card;
+  const clarify = cards.clarification_card;
+  const proposals = cards.action_proposals || [];
+  if (!latest) {
+    return (
+      <section className="ra-chat-card ra-chat-card-welcome">
+        <span className="ra-chat-eyebrow">下一步</span>
+        <h2>直接输入你的目标</h2>
+        <p>示例：帮我创建一个 QE 10 loop 实验，先不要执行。</p>
+      </section>
+    );
+  }
+  return (
+    <section className="ra-chat-card" data-testid="ra-chat-plan-card">
+      <span className="ra-chat-eyebrow">计划卡</span>
+      <h2>{plan?.title || "本轮计划"}</h2>
+      <ul>
+        {(plan?.steps || []).map((step) => <li key={step}>{step}</li>)}
+      </ul>
+      {clarify?.questions?.length ? (
+        <div className="ra-chat-confirm-card" data-testid="ra-chat-confirm-card">
+          <strong>{clarify.title || "需要你确认"}</strong>
+          {clarify.questions.map((question) => <p key={question}>{question}</p>)}
+        </div>
+      ) : null}
+      {proposals.length ? (
+        <div className="ra-chat-proposals">
+          {proposals.map((proposal) => (
+            <span className="ra-chat-proposal" key={`${proposal.title}-${proposal.status}`}>{proposal.title} · {proposalStatusText(proposal.status)}</span>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function AssistantThread() {
+  return (
+    <ThreadPrimitive.Root className="ra-chat-thread-root">
+      <ThreadPrimitive.Viewport className="ra-chat-viewport">
+        <ThreadPrimitive.Messages components={{ Message: ChatMessage }} />
+        <ThreadPrimitive.ViewportFooter />
+      </ThreadPrimitive.Viewport>
+      <ComposerPrimitive.Root className="ra-chat-composer">
+        <ComposerPrimitive.Input
+          className="ra-chat-input"
+          placeholder="直接描述你的研究目标，例如：帮我创建一个 QE 10 loop 实验，先不要执行。"
+          submitMode="enter"
+          rows={2}
+        />
+        <ComposerPrimitive.Send className="ra-chat-send">发送</ComposerPrimitive.Send>
+      </ComposerPrimitive.Root>
+    </ThreadPrimitive.Root>
+  );
+}
 
 export default function ResearchAssistantChatPage() {
-  const [prompt, setPrompt] = useState("请帮我规划一个 QE 10 loop 实验，先生成计划和审批草稿，不执行。");
-  const [task, setTask] = useState<AssistantTask | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  async function createPlanTask() {
-    setLoading(true);
-    setError(null);
-    try {
-      const created = await researchAssistantApi.createTask({
-        title: prompt.slice(0, 80) || "研究助理对话计划",
-        task_type: "chat_plan",
-        risk_level: "medium",
-        input_json: { prompt, phase1_boundary: "plan_only_no_execution" },
-        created_by: "user",
-      });
-      await researchAssistantApi.addTaskEvent(created.task_id, {
-        event_type: "planned",
-        message: "已从对话生成计划草稿；阶段一不会直接执行高风险操作。",
-        payload_json: { prompt },
-      });
-      setTask(created);
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
-    } finally {
-      setLoading(false);
-    }
-  }
+  const [latest, setLatest] = useState<AssistantChatTurnResult | null>(null);
+  const [steps, setSteps] = useState<RailStep[]>(initialSteps);
+  const adapter = useMemo(() => createAdapter(setLatest, setSteps), []);
+  const runtime = useLocalRuntime(adapter, { initialMessages: welcomeMessages });
 
   return (
-    <main>
-      <div className="ra-two-column">
-        <SectionCard title="主对话入口" eyebrow="plan first / approval later">
-          <label className="pv2-field" htmlFor="ra-chat-input">
-            <span>需求或研究命令</span>
-            <textarea className="pv2-textarea" id="ra-chat-input" value={prompt} onChange={(event) => setPrompt(event.target.value)} />
-          </label>
-          <div className="pv2-row-actions" style={{ marginTop: 12 }}>
-            <button className="pv2-button-primary" type="button" onClick={() => void createPlanTask()} disabled={loading}>{loading ? "生成中..." : "生成计划任务"}</button>
-          </div>
-          {error ? <p className="pv2-error-meta">{error}</p> : null}
-          {task ? <DetailDrawer title="已创建的 Task Ledger 记录" data={task} /> : null}
-        </SectionCard>
-        <SectionCard title="阶段一交互边界" eyebrow="no silent action">
-          <div className="pv2-readable-panel">
-            <div className="pv2-readable-table">
-              <div className="pv2-readable-row"><div className="pv2-readable-key">计划</div><div className="pv2-readable-value">可以从对话生成 Task Ledger 和事件。</div></div>
-              <div className="pv2-readable-row"><div className="pv2-readable-key">执行</div><div className="pv2-readable-value">高风险 MCP 执行必须去工作台 preflight，再进入审批中心。</div></div>
-              <div className="pv2-readable-row"><div className="pv2-readable-key">记忆</div><div className="pv2-readable-value">低价模型和临时反馈先写 Temp Memory，主模型审核后才能升格长期记忆。</div></div>
-              <div className="pv2-readable-row"><div className="pv2-readable-key">Issue</div><div className="pv2-readable-value">只能生成候选 Issue；正式 GitHub 同步需人工确认。</div></div>
-            </div>
-          </div>
-          <JsonPanel value={{ supported_now: ["task ledger", "event stream", "context pack", "approval queue"], not_in_phase1: ["voice", "multi-window chat", "auto long-running experiment"] }} />
-        </SectionCard>
-      </div>
+    <main className="ra-chat-shell" data-testid="ra-chat-main">
+      <TaskProgressRail steps={steps} latest={latest} />
+      <section className="ra-chat-main-panel">
+        <div className="ra-chat-hero">
+          <span className="ra-chat-eyebrow">AIstock Research Assistant</span>
+          <h1>像 Codex 一样对话，由 MCP 安全执行</h1>
+          <p>助理会先理解、复述、追问和生成计划卡；确认前不会执行高风险工具。</p>
+        </div>
+        <AssistantRuntimeProvider runtime={runtime}>
+          <AssistantThread />
+        </AssistantRuntimeProvider>
+      </section>
+      <PlanSummary latest={latest} />
     </main>
   );
 }

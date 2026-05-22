@@ -4,6 +4,7 @@ import pytest
 
 from backend.services.research_assistant.models import (
     ApprovalCreate,
+    ChatTurnRequest,
     ContextPackBuildRequest,
     EvolutionPathCreate,
     ExternalAgentEventCreate,
@@ -15,6 +16,7 @@ from backend.services.research_assistant.models import (
     McpPreflightRequest,
     MemoryCreate,
     ModelRouteRequest,
+    PromptBundleBuildRequest,
     SkillUsageCreate,
     TaskCreate,
     TaskEventCreate,
@@ -22,11 +24,32 @@ from backend.services.research_assistant.models import (
     WorkbenchDryRunExecuteRequest,
 )
 from backend.services.research_assistant.repository import DatabaseResearchAssistantRepository, InMemoryResearchAssistantRepository
-from backend.services.research_assistant.service import ASSISTANT_APPROVAL_CONFIRM, ResearchAssistantService
+from backend.services.research_assistant.service import ASSISTANT_APPROVAL_CONFIRM, LlmCallResult, ResearchAssistantService
+
+
+class FakeLlmClient:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def complete(self, **kwargs: object) -> LlmCallResult:
+        self.calls.append(kwargs)
+        return LlmCallResult(
+            content="我理解你要创建 QE 10 loop 回测实验。本轮我会先复述目标、确认固定 PIT 股票池，并生成计划，不执行物化或运行。",
+            provider="fake",
+            model="fake-primary",
+            duration_ms=12,
+            usage={"prompt_tokens": 100, "completion_tokens": 40},
+        )
 
 
 def _service() -> ResearchAssistantService:
     svc = ResearchAssistantService(repository=InMemoryResearchAssistantRepository())
+    svc.seed_catalogs()
+    return svc
+
+
+def _chat_service(fake: FakeLlmClient | None = None) -> ResearchAssistantService:
+    svc = ResearchAssistantService(repository=InMemoryResearchAssistantRepository(), llm_client=fake or FakeLlmClient())
     svc.seed_catalogs()
     return svc
 
@@ -272,3 +295,48 @@ def test_candidate_issue_github_sync_gate_never_creates_github_issue() -> None:
     assert formal_blocked["github_sync_status"] == "blocked"
     assert formal_blocked["github_sync_json"]["direct_github_create_performed"] is False
     assert formal_blocked["github_issue_url"] is None
+
+
+def test_prompt_tree_selects_qe_multibranch_and_records_bundle() -> None:
+    svc = _chat_service()
+
+    bundle = svc.build_prompt_bundle(
+        PromptBundleBuildRequest(
+            user_message="帮我创建一个 QE 10 loop 实验，先不要执行。",
+            phase="planning",
+            model_profile_id="model_deepseek_v4_pro_primary",
+        )
+    )
+
+    keys = {node["prompt_key"] for node in bundle["node_refs"]}
+    assert "root.assistant" in keys
+    assert "governance.no_silent_action" in keys
+    assert "intent.planning" in keys
+    assert "domain.qe_experiment" in keys
+    assert "workflow.qe_draft_then_approval" in keys
+    assert "tool_guard.mcp_qe" in keys
+    assert "renderer.human_cards" in keys
+    assert bundle["selection_trace_json"]["algorithm"] == "ancestor_closed_keyword_multibranch_v1"
+    assert bundle["cache_path"]
+
+
+def test_chat_turn_uses_llm_builds_cards_and_blocks_execution() -> None:
+    fake = FakeLlmClient()
+    svc = _chat_service(fake)
+
+    result = svc.chat_turn(ChatTurnRequest(message="帮我创建一个 QE 10 loop 实验，先不要执行。"))
+
+    assert len(fake.calls) == 1
+    assert result["assistant_message"]["content_text"].startswith("我理解你要创建 QE 10 loop")
+    assert result["cards"]["plan_card"]["title"] == "本轮计划"
+    assert "固定 PIT 股票池" in "\n".join(result["cards"]["plan_card"]["steps"])
+    assert result["cards"]["clarification_card"]["questions"]
+    assert result["cards"]["status_rail"][3] == {"label": "等待确认", "status": "current"}
+    assert result["cards"]["safety"]["no_materialize_before_confirmation"] is True
+    assert result["trace"]["status"] == "ok"
+    assert result["prompt_bundle"]["selection_trace_json"]["algorithm"] == "ancestor_closed_keyword_multibranch_v1"
+    event_types = {event["event_type"] for event in result["task_events"]}
+    assert {"chat_received", "prompt_bundle_built", "context_pack_built", "llm_started", "llm_done", "action_proposed"} <= event_types
+
+    with pytest.raises(ValueError, match="does not execute actions"):
+        svc.chat_turn(ChatTurnRequest(message="确认执行 QE materialize", allow_execute=True))

@@ -20,7 +20,7 @@ except ImportError:  # pragma: no cover
         sys.path.insert(0, str(repo_root))
     from backend.db.pg_pool import get_conn
 
-RESEARCH_ASSISTANT_SCHEMA_VERSION = "research_assistant_console_v1_20260521"
+RESEARCH_ASSISTANT_SCHEMA_VERSION = "research_assistant_console_v2_chat_prompt_20260522"
 
 BASE_DDL: list[str] = [
     """
@@ -60,10 +60,41 @@ BASE_DDL: list[str] = [
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         CONSTRAINT ck_ate_severity CHECK (severity IN ('debug','info','warning','error','critical')),
-        CONSTRAINT ck_ate_type CHECK (event_type IN ('planned','context_pack_built','mcp_preflight_started','mcp_preflight_passed','mcp_preflight_failed','mcp_started','mcp_done','mcp_failed','skill_started','skill_done','skill_failed','approval_required','approved','rejected','memory_written','report_ready','triage_required'))
+        CONSTRAINT ck_ate_type CHECK (event_type IN ('planned','chat_received','prompt_bundle_built','context_pack_built','llm_started','llm_done','llm_failed','action_proposed','mcp_preflight_started','mcp_preflight_passed','mcp_preflight_failed','mcp_started','mcp_done','mcp_failed','skill_started','skill_done','skill_failed','approval_required','approved','rejected','memory_written','report_ready','triage_required'))
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_ate_task_created ON agent_task_events(task_id, created_at DESC)",
+    """
+    CREATE TABLE IF NOT EXISTS assistant_conversations (
+        conversation_id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL DEFAULT 'default',
+        title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT ck_ac_status CHECK (status IN ('active','archived','closed'))
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_ac_user_updated ON assistant_conversations(user_id, updated_at DESC)",
+    """
+    CREATE TABLE IF NOT EXISTS assistant_conversation_messages (
+        message_id TEXT PRIMARY KEY,
+        conversation_id TEXT REFERENCES assistant_conversations(conversation_id) ON DELETE CASCADE,
+        role TEXT NOT NULL,
+        content_text TEXT NOT NULL,
+        content_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        task_id TEXT,
+        model_profile_id TEXT,
+        prompt_bundle_id TEXT,
+        trace_id TEXT,
+        is_visible BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT ck_acm_role CHECK (role IN ('user','assistant','system','tool'))
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_acm_conversation_created ON assistant_conversation_messages(conversation_id, created_at ASC)",
     """
     CREATE TABLE IF NOT EXISTS research_memory_items (
         memory_id TEXT PRIMARY KEY,
@@ -390,6 +421,50 @@ BASE_DDL: list[str] = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS assistant_prompt_nodes (
+        prompt_node_id TEXT PRIMARY KEY,
+        prompt_key TEXT NOT NULL UNIQUE,
+        title TEXT NOT NULL,
+        category TEXT NOT NULL,
+        tree_path TEXT NOT NULL,
+        parent_key TEXT,
+        version TEXT NOT NULL DEFAULT '1.0.0',
+        phase TEXT NOT NULL DEFAULT 'planning',
+        trigger_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        prompt_text TEXT NOT NULL,
+        risk_level TEXT NOT NULL DEFAULT 'medium',
+        status TEXT NOT NULL DEFAULT 'enabled',
+        source_ref TEXT,
+        checksum TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT ck_apn_category CHECK (category IN ('root','governance','intent','domain','workflow','tool_guard','renderer','memory','model_routing')),
+        CONSTRAINT ck_apn_phase CHECK (phase IN ('planning','preflight','execution','result','reflection')),
+        CONSTRAINT ck_apn_risk CHECK (risk_level IN ('low','medium','high','production_sensitive')),
+        CONSTRAINT ck_apn_status CHECK (status IN ('draft','enabled','disabled','deprecated'))
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_apn_tree_phase ON assistant_prompt_nodes(tree_path, phase, status)",
+    """
+    CREATE TABLE IF NOT EXISTS assistant_prompt_bundles (
+        prompt_bundle_id TEXT PRIMARY KEY,
+        task_id TEXT,
+        conversation_id TEXT,
+        phase TEXT NOT NULL,
+        model_profile_id TEXT,
+        node_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+        selection_trace_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        bundle_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        bundle_text TEXT NOT NULL,
+        checksum TEXT NOT NULL,
+        cache_path TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT ck_apb_phase CHECK (phase IN ('planning','preflight','execution','result','reflection'))
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_apb_task_created ON assistant_prompt_bundles(task_id, created_at DESC)",
+    """
     CREATE TABLE IF NOT EXISTS assistant_temp_memories (
         temp_memory_id TEXT PRIMARY KEY,
         task_id TEXT,
@@ -491,6 +566,8 @@ BASE_DDL: list[str] = [
 TABLE_COMMENTS = {
     "research_agent_tasks": "Research Assistant task ledger with explicit status, risk, idempotency and trace boundaries.",
     "agent_task_events": "Append-only task events for replayable assistant progress and failures.",
+    "assistant_conversations": "Human-facing Research Assistant conversation sessions.",
+    "assistant_conversation_messages": "Visible and audit-scoped conversation messages; main UI renders only human-readable text and cards.",
     "research_memory_items": "Native long-term Memory Ledger; source of truth, not RAG chunks.",
     "assistant_context_packs": "Deterministic memory/context bundles used by models and external agents.",
     "research_memory_entities": "Native lightweight knowledge graph entities.",
@@ -499,6 +576,8 @@ TABLE_COMMENTS = {
     "assistant_mcp_tools": "MCP/API execution catalog including risk and preflight metadata.",
     "assistant_approval_requests": "Approval gate records for L2+ assistant operations.",
     "assistant_issue_candidates": "Candidate issue queue; formal GitHub issue creation requires explicit approval and sync.",
+    "assistant_prompt_nodes": "Tree-structured prompt nodes with version, checksum, trigger and phase metadata.",
+    "assistant_prompt_bundles": "Deterministic prompt bundles selected for one conversation turn; cache is derivative, not source of truth.",
 }
 
 
