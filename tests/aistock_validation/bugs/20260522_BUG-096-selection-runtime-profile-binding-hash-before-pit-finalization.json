@@ -6,7 +6,7 @@
   "module": "paper_v2",
   "severity": "P0",
   "risk_area": "runtime_profile_binding_lifecycle",
-  "status": "in_progress",
+  "status": "fixed",
   "trigger_condition": {
     "scenario": "reported_via_mcp",
     "files": [
@@ -32,11 +32,11 @@
   "fingerprint": "05b3cf7900151b89-BUG-096",
   "assigned_agent": "codex-app",
   "fix_branch": "bug/BUG-096-runtime-profile-binding",
-  "fix_commit": null,
+  "fix_commit": "28f6e4efd4f84506ee6b241e3cede32140c4cc44",
   "verification_run_id": "tests/aistock_validation/history/paper_v2/BUG-096-runtime-profile-binding-validation-20260522.md",
   "first_seen_at": "2026-05-22T07:57:30Z",
   "last_seen_at": "2026-05-22T07:57:30Z",
-  "fixed_at": null,
+  "fixed_at": "2026-05-22T09:45:30Z",
   "closed_at": null,
   "allowed_write_scope": [
     "backend/services/selection_center/runtime_profile.py",
@@ -126,6 +126,12 @@
       "actor": "codex-app",
       "action": "validation_passed",
       "note": "BUG-096 scoped fix validation passed: targeted regression 3 passed; module regression 65 passed; nox l0 successful with blocking=0; git diff --check passed. production_ddl_gate=noop."
+    },
+    {
+      "timestamp": "2026-05-22T09:45:30Z",
+      "actor": "codex-app",
+      "action": "fix_committed",
+      "note": "Fix commit 28f6e4efd4f84506ee6b241e3cede32140c4cc44 refreshes generated runtime_profile_binding after PIT/selection_artifact_config finalization and adds regression coverage. Validation: targeted 3 passed, module regression 65 passed, nox l0 successful, git diff --check passed. production_ddl_gate=noop."
     }
   ],
   "created_at": "2026-05-22T08:00:06Z",
