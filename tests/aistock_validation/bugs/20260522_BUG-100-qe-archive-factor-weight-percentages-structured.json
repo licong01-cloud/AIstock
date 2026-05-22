@@ -1,0 +1,142 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-100",
+  "title": "QE Archive should store structured factor weight percentages for loop analysis",
+  "description": "Expected: QE Archive stores model factor importance and normalized weight percentage as structured warehouse facts, with run/loop/seed/HMM/strategy/label-horizon/return-risk context and raw artifact pointers. Actual: factor weights in qlib_results_enhanced.json required manual workspace scans, blocking Loop16 factor analysis, cross-seed stability, HMM overlay comparisons, and low-weight factor replacement decisions. The fix extends QE Archive extraction, schema/bootstrap, repository queries, API, and MCP query entry points for factor importance and stability analysis, without storing raw model files as DB blobs.",
+  "module": "qe_archive",
+  "severity": "P1",
+  "risk_area": "data_integrity",
+  "status": "fixed",
+  "trigger_condition": {
+    "scenario": "factor_weight_percentages_not_structured_in_archive",
+    "experiment_id": "qe_20260520_215627_abbc",
+    "needed_analysis": [
+      "Loop16 factor weights",
+      "cross_seed_stability",
+      "hmm_overlay_comparison",
+      "low_weight_factor_replacement"
+    ]
+  },
+  "reproduce_command": "Try to query QE Archive for factor weight_pct across qe_20260520_215627_abbc Loop16 and same-config loops; before the fix the structured warehouse query was unavailable and required manual artifact scanning.",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "github:https://github.com/licong01-cloud/AIstock/issues/143",
+    "file:backend/db/init_qe_archive_schema.py",
+    "file:backend/migrations/qe_archive_run_factor_importance_20260522.sql",
+    "file:backend/services/qe_archive/payload_extractor.py",
+    "file:backend/services/qe_archive/repository.py",
+    "file:backend/routers/qe_archive.py",
+    "file:scripts/aistock_qe_archive_mcp_server.py",
+    "file:tests/aistock_validation/history/qe/20260522_bug_098_100_qe_reproducibility_truth_weights.md"
+  ],
+  "fingerprint": "qe_archive::factor_weight_percentages::20260522::issue_143",
+  "github_issue_number": 143,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/143",
+  "assigned_agent": "codex-app",
+  "fix_branch": "bug/BUG-098-100-qe-reproducibility-truth-weights-20260522",
+  "fix_commit": "01c889160595fbbf95dcafa11b890e3b44e1b0b5",
+  "verification_run_id": "tests/aistock_validation/history/qe/20260522_bug_098_100_qe_reproducibility_truth_weights.md",
+  "created_at": "2026-05-22T07:44:00Z",
+  "first_seen_at": "2026-05-22T07:44:00Z",
+  "last_seen_at": "2026-05-22T14:09:24Z",
+  "fixed_at": "2026-05-22T14:09:24Z",
+  "submitted_at": "2026-05-22T07:44:00Z",
+  "closed_at": null,
+  "worktree_path": "F:/Dev/AIstock_worktrees/bug-096-098-qe-reproducibility-truth-weights-20260522",
+  "github_pr_url": "https://github.com/licong01-cloud/AIstock/pull/146",
+  "batch_id": "BATCH-QE-REPRODUCIBILITY-TRUTH-WEIGHTS-20260522",
+  "batch_issues": [
+    "BUG-098",
+    "BUG-099",
+    "BUG-100"
+  ],
+  "allowed_write_scope": [
+    "backend/db/init_qe_archive_schema.py",
+    "backend/migrations/qe_archive_run_factor_importance_20260522.sql",
+    "backend/routers/dispatch.py",
+    "backend/routers/qe_archive.py",
+    "backend/routers/qe_templates.py",
+    "backend/routers/quantevolver.py",
+    "backend/routers/quantevolver_evolution.py",
+    "backend/services/dispatch_service.py",
+    "backend/services/qe_archive/__init__.py",
+    "backend/services/qe_archive/archive_service.py",
+    "backend/services/qe_archive/models.py",
+    "backend/services/qe_archive/payload_extractor.py",
+    "backend/services/qe_archive/repository.py",
+    "backend/services/qe_templates/materializer.py",
+    "backend/services/qe_templates/validator.py",
+    "backend/services/quantevolver/config_composer.py",
+    "backend/services/quantevolver/execution_manifest.py",
+    "backend/services/quantevolver/executors/backtest.py",
+    "backend/services/quantevolver/executors/base.py",
+    "backend/services/quantevolver/experiment_config.py",
+    "backend/services/quantevolver/experiment_config_builders.py",
+    "backend/services/quantevolver/qe_evolution_service.py",
+    "backend/services/quantevolver/seed_contract.py",
+    "backend/tests/qe_templates/test_template_validator.py",
+    "backend/tests/test_aistock_qe_mcp_servers.py",
+    "backend/tests/test_qe_archive_repository_static.py",
+    "backend/tests/test_qe_archive_schema.py",
+    "backend/tests/unified_engine/test_backtest_executor.py",
+    "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
+    "backend/tests/unified_engine/test_label_horizon.py",
+    "backend/tests/unified_engine/test_qe_config_truth.py",
+    "backend/tests/unified_engine/test_qe_score_weighted_capacity_strategy.py",
+    "frontend/src/app/quantevolver/compose/page.tsx",
+    "frontend/src/app/quantevolver/evolution/page.tsx",
+    "frontend/src/app/rdagent/dispatch/components/TaskCreatePanel.tsx",
+    "scripts/aistock_qe_archive_mcp_server.py",
+    "scripts/aistock_qe_experiment_mcp_server.py",
+    "scripts/qrun_limit.py",
+    "scripts/qrun_limit_minute.py",
+    "tests/aistock_validation/bugs/20260522_BUG-100-qe-archive-factor-weight-percentages-structured.json",
+    "tests/aistock_validation/history/qe/20260522_bug_098_100_qe_reproducibility_truth_weights.md"
+  ],
+  "suspected_modules": [
+    "backend/services/qe_archive/payload_extractor.py",
+    "backend/services/qe_archive/repository.py",
+    "backend/services/qe_archive/models.py",
+    "backend/db/init_qe_archive_schema.py",
+    "backend/migrations/qe_archive_run_factor_importance_20260522.sql",
+    "backend/routers/qe_archive.py",
+    "scripts/aistock_qe_archive_mcp_server.py"
+  ],
+  "required_verification": [
+    "python -m compileall backend/routers/dispatch.py backend/routers/qe_archive.py backend/routers/qe_templates.py backend/routers/quantevolver.py backend/routers/quantevolver_evolution.py backend/services/dispatch_service.py backend/services/qe_archive backend/services/qe_templates backend/services/quantevolver scripts/aistock_qe_archive_mcp_server.py scripts/aistock_qe_experiment_mcp_server.py scripts/qrun_limit.py scripts/qrun_limit_minute.py",
+    "python -m pytest backend/tests/unified_engine/test_qe_config_truth.py backend/tests/unified_engine/test_backtest_executor.py backend/tests/qe_templates/test_template_validator.py backend/tests/test_qe_archive_repository_static.py backend/tests/unified_engine/test_custom_evo_mutation_routes.py backend/tests/unified_engine/test_qe_score_weighted_capacity_strategy.py -q -p no:cacheprovider",
+    "python -m pytest backend/tests/unified_engine/test_label_horizon.py backend/tests/test_aistock_qe_mcp_servers.py -q -p no:cacheprovider",
+    "python -m pytest backend/tests/test_qe_archive_schema.py -q -p no:cacheprovider",
+    "python scripts/aistock_guardrail_scan.py <changed paths> --fail-on-severity P1",
+    "git diff --check"
+  ],
+  "closure_requirements": [
+    "New QE archive writes extract factor importance and normalized weight_pct from supported enhanced result formats.",
+    "qe_archive.run_factor_importance persists weight_pct with DB comments and idempotent migration/bootstrap support.",
+    "API and MCP queries return top/bottom factor importance plus seed, HMM/no-HMM, strategy, label-horizon, return-risk, and raw artifact context.",
+    "Stability query supports cross-seed aggregation without pretending historical seedless runs are fixed-seed evidence.",
+    "Raw model files remain artifact pointers/hashes rather than structured DB blobs.",
+    "Production DDL gate applies and verifies qe_archive.run_factor_importance.weight_pct before production runtime activation.",
+    "GitHub issue #143 and BUG-100 registry record remain synchronized."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-22T07:44:00Z",
+      "actor": "codex-app",
+      "action": "github_issue_registered",
+      "note": "Mirrored user-reported QE defect/enhancement to GitHub issue #143."
+    },
+    {
+      "timestamp": "2026-05-22T15:30:33Z",
+      "actor": "codex-app",
+      "action": "fix_started",
+      "note": "Implemented batch fix in dedicated worktree F:/Dev/AIstock_worktrees/bug-096-098-qe-reproducibility-truth-weights-20260522 on branch bug/BUG-098-100-qe-reproducibility-truth-weights-20260522."
+    },
+    {
+      "timestamp": "2026-05-22T14:09:24Z",
+      "actor": "codex-app",
+      "action": "fixed",
+      "note": "Targeted compileall, backend pytest groups, schema tests, and diff checks passed on the fix branch; production_ddl_gate remains pending until merged migration is applied to production DB."
+    }
+  ]
+}
