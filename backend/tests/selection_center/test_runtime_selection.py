@@ -18,7 +18,7 @@ from backend.services.selection_center.industry_provider import IndustryInfo
 from backend.services.selection_center.models import SelectionMode, SelectionRunStatus
 from backend.services.selection_center.repository import InMemorySelectionCenterRepository
 from backend.services.selection_center.risk_policy import RiskDecision, StockRiskPolicyService
-from backend.services.selection_center.runtime_profile import runtime_profile_config_sha256
+from backend.services.selection_center.runtime_profile import runtime_profile_config_sha256, validate_runtime_profile_binding
 from backend.services.selection_center.service import SelectionCenterService
 from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.strategy_package.manifest import freeze_manifest
@@ -2239,6 +2239,64 @@ def test_selection_center_creates_single_package_paper_portfolio_with_trace_link
     assert "selection_scores" not in result["paper_runtime_config"]
     assert package_repo.get(manifest.package_id).paper_portfolio_count == 1
     assert service.list_paper_portfolio_links(run.run_id)[0].portfolio_id == portfolio.portfolio_id
+
+
+def test_selection_center_creates_paper_portfolio_after_default_pit_binding_finalization() -> None:
+    class FakeCalendar:
+        def ensure_trading_day(self, trade_date: date) -> None:
+            return None
+
+        def list_trading_days(self, start_date: date, end_date: date) -> list[date]:
+            assert end_date == date(2024, 1, 2)
+            return [date(2024, 1, 2)]
+
+    package_repo = InMemoryStrategyPackageRepository()
+    paper_repo = InMemoryPaperTradingV2Repository()
+    manifest = ready_manifest_with_score_rows(
+        "pkg_paper_pit_default",
+        [{"symbol": "000001.SZ", "score": 0.99, "rank": 1, "target_weight": 0.03, "reference_price": 10.0}],
+    )
+    package_repo.save_manifest(manifest)
+    StrategyPackageService(repository=package_repo).create_execution_policy(
+        package_id=manifest.package_id,
+        policy_name="selection_link_pit_default_policy",
+        policy_json=manifest.minute_execution_policy.model_dump(mode="json"),
+        source_backtest_id="selection_link_pit_default_backtest",
+        source_backtest_status="COMPLETED",
+        paper_enabled=True,
+    )
+    service = SelectionCenterService(
+        package_repository=package_repo,
+        repository=InMemorySelectionCenterRepository(),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+        paper_portfolio_service=PaperTradingV2PortfolioService(
+            package_repository=package_repo,
+            repository=paper_repo,
+        ),
+        calendar_provider=FakeCalendar(),
+    )
+
+    run = service.run_single_package(
+        package_id=manifest.package_id,
+        trade_date=date(2024, 1, 3),
+        data_source="DB_HISTORICAL",
+        runtime_config={"selection_artifact_config": {"pit_mode": "PREVIOUS_TRADING_DAY_CLOSE"}},
+    )
+    binding = validate_runtime_profile_binding(run.runtime_config)
+
+    result = service.create_paper_portfolio_from_run(
+        run_id=run.run_id,
+        portfolio_name="from PIT default selection",
+        initial_cash=100_000,
+        start_date=date(2024, 1, 4),
+        data_source=MinuteDataSource.DB_HISTORICAL,
+    )
+
+    assert run.runtime_config["selection_artifact_config"]["cutoff_date"] == "2024-01-02"
+    assert binding["source"] == "platform_default"
+    assert binding["config_sha256"] == runtime_profile_config_sha256(run.runtime_config)
+    assert result["paper_runtime_config"]["selection_runtime_profile_binding"]["config_sha256"] == binding["config_sha256"]
 
 
 def test_selection_center_rejects_multi_package_paper_portfolio_without_combined_package() -> None:

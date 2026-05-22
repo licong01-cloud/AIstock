@@ -26,6 +26,7 @@ from backend.services.selection_center.runtime_profile import (
     mark_non_trading_preview_runtime_config,
     normalize_selection_runtime_config,
     parse_selection_runtime_profile,
+    refresh_generated_runtime_profile_binding,
     runtime_profile_config_sha256,
     validate_runtime_profile_binding,
 )
@@ -252,6 +253,12 @@ class StrategyPackageSelectionService:
             require_trade_enabled=not is_non_trading_runtime_config(config),
         )
         config = self._apply_point_in_time_selection_config(config, trade_date=trade_date)
+        config = refresh_generated_runtime_profile_binding(config)
+        validate_runtime_profile_binding(
+            config,
+            context={**behavior_context, "phase": "post_pit_selection_config"},
+            require_trade_enabled=not is_non_trading_runtime_config(config),
+        )
         self._validate_request_shape(package_ids=package_ids, mode=mode)
         weights = self._package_weights(config, package_ids) if mode == SelectionMode.WEIGHTED_FUSION else None
         records_by_id, package_configs, package_health = self._prepare_package_runtime_configs(
@@ -458,6 +465,12 @@ class StrategyPackageSelectionService:
                 manifest=manifest,
                 runtime_config=raw_package_config,
                 package_id=package_id,
+            )
+            package_config = refresh_generated_runtime_profile_binding(package_config)
+            validate_runtime_profile_binding(
+                package_config,
+                context={"package_id": package_id, "path": "strategy_package_selection.package_runtime_config"},
+                require_trade_enabled=not is_non_trading_runtime_config(package_config),
             )
             health = self.package_health_service.require_runnable(
                 record,

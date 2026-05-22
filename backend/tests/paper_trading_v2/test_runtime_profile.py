@@ -11,7 +11,12 @@ from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2R
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
 from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
-from backend.services.selection_center.runtime_profile import runtime_profile_config_sha256
+from backend.services.selection_center.runtime_profile import (
+    attach_default_runtime_profile_binding,
+    refresh_generated_runtime_profile_binding,
+    runtime_profile_config_sha256,
+    validate_runtime_profile_binding,
+)
 from backend.services.trading_core.errors import InvalidStateTransitionError, StrategyPackageValidationError
 from backend.services.trading_core.models import RunStatus
 
@@ -273,6 +278,28 @@ def test_default_runtime_profile_binding_hash_is_post_contract_normalized() -> N
     assert binding["profile_version_id"] == "platform_default_runtime_profile_v1"
     assert binding["config_sha256"] == runtime_profile_config_sha256(runtime_config)
     assert runtime_config["runtime_profile"]["selection"]["top_k"] == 2
+
+
+def test_default_runtime_profile_binding_can_refresh_after_system_generated_pit_metadata() -> None:
+    runtime_config = attach_default_runtime_profile_binding({"runtime_profile": {"selection": {"top_k": 2}}})
+    validate_runtime_profile_binding(runtime_config)
+
+    finalized = dict(runtime_config)
+    finalized["selection_artifact_config"] = {"pit_mode": "PREVIOUS_TRADING_DAY_CLOSE", "cutoff_date": "2024-01-02"}
+    finalized["point_in_time_context"] = {
+        "pit_mode": "PREVIOUS_TRADING_DAY_CLOSE",
+        "trade_date": "2024-01-03",
+        "cutoff_date": "2024-01-02",
+        "score_trade_date": "2024-01-02",
+        "reference_price_trade_date": "2024-01-02",
+    }
+    with pytest.raises(StrategyPackageValidationError, match="hash mismatch"):
+        validate_runtime_profile_binding(finalized)
+
+    refreshed = refresh_generated_runtime_profile_binding(finalized)
+    binding = validate_runtime_profile_binding(refreshed)
+    assert binding["source"] == "platform_default"
+    assert binding["config_sha256"] == runtime_profile_config_sha256(refreshed)
 
 
 def test_paper_day_runner_rejects_unversioned_runtime_profile_override() -> None:
