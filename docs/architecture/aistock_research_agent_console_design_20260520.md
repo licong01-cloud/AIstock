@@ -1,11 +1,11 @@
 ﻿# AIstock 研究与实验综合助理控制台设计方案
 
-> 日期：2026-05-21
-> 类型：详细设计方案 v4
+> 日期：2026-05-22
+> 类型：详细设计方案 v5（对话型主入口纠偏版）
 > 状态：正式实施设计稿；本文档定义功能边界、阶段目标和开发验收矩阵，不实现代码
-> 分支：`docs/research-agent-console-design-20260520`
-> Worktree：`F:\Dev\AIstock_worktrees\research-agent-console-design-20260520`
-> 范围：研究与实验综合助理、原生长期记忆、轻量知识图谱、MCP 执行工作台、本地 Skill Catalog、Validation/Pipeline Discovery Stream、External Agent Connector、多模型路由、UI 页面模板、阶段实施目标和开发验收矩阵
+> 分支：`docs/research-assistant-chat-redesign-20260522`
+> Worktree：`F:\Dev\AIstock_worktrees\research-assistant-chat-redesign-doc-20260522`
+> 范围：研究与实验综合助理、Codex 式对话主入口、assistant-ui 前端基座、左侧图形化任务状态、原生长期记忆、轻量知识图谱、MCP/Skill 能力目录、Workflow Pack + 自主 Planner、Validation/Pipeline Discovery Stream、External Agent Connector、多模型路由、阶段实施目标和开发验收矩阵
 > 非目标：不让该助理控制鼠标键盘，不让该助理编程、改代码、提交代码、合入 main、重启生产服务、绕过 GitHub Issue 审批或执行实盘交易
 
 ---
@@ -319,6 +319,418 @@ Adapter 原则：
 4. 外部 adapter 故障不能影响原生任务账本、审批、Issue 状态、实验谱系和核心规则。
 
 ---
+
+## 6A. 对话智能、Capability Registry、Prompt Pack 与工作流边界
+
+### 6A.1 助理不是固定工作流机器人
+
+研究助理必须具备自主分析能力，不能只能按预设工作流机械执行。正确边界是：
+
+1. **自主 Planner 是默认入口**：任何自然语言请求先由主模型结合 Context Pack、Capability Registry 和长期记忆进行理解、拆解、追问和计划生成。
+2. **Workflow Pack 是安全护栏和高频模板**：QE 实验创建、GitHub Issue 入库、Validation 执行、候选 Issue 审核等高风险或高频任务使用工作流包约束顺序、确认点和风险边界。
+3. **Planner 可以组合多个 Workflow Pack**：例如“分析 QE 结果并提出新实验”可以组合 QE 诊断 Skill、QE Archive 查询、QE Template 创建和审批流程。
+4. **未知任务不能强行套工作流**：若没有匹配工作流，助理应先说明不确定性、提出澄清问题、给出只读/低风险探索计划。
+5. **高风险动作必须落到工作流门禁**：自主分析不能绕过 MCP preflight、approval、plan digest、risk policy 和 trace。
+
+因此，AIstock 采用 **自主 Planner + 可选 Workflow Pack + 强制安全门禁**，而不是纯工作流系统。
+
+### 6A.2 是否必须引入外部工作流引擎
+
+Phase 1 修复版不必须引入 Temporal、LangGraph、Dify、Flowise 或其他外部工作流引擎。
+
+原因：
+
+1. 当前关键缺口是对话主入口、LLM 调用、能力目录、提示词和人类可读状态，不是分布式工作流调度。
+2. 外部工作流引擎会增加部署、状态一致性、回滚和权限边界复杂度。
+3. AIstock 已经有任务表、事件表、审批表、Trace 表和 MCP 服务，可以先实现原生轻量状态机。
+4. 后续 Phase 3 可以评估 Temporal 或 LangGraph，但只能作为执行编排增强，不替代 AIstock 原生事实源和审批门禁。
+
+Phase 1 必须实现的是：
+
+```text
+Conversation -> Planner -> Action Proposal -> Confirmation -> Preflight -> MCP/Skill -> Trace -> Human Report
+```
+
+而不是引入大型工作流引擎。
+
+### 6A.3 Capability Registry
+
+助理必须通过能力目录知道自己能做什么。Capability Registry 包含：
+
+```text
+assistant_capabilities
+  capability_key              -- qe.create_experiment / qe.analyze_result / validation.run / issue.create_candidate
+  capability_type             -- mcp_tool / skill / workflow_pack / composite
+  title
+  natural_language_triggers
+  description_for_llm
+  risk_level
+  required_confirmations
+  preferred_model_role
+  input_slots
+  output_cards
+  mcp_tool_refs
+  skill_refs
+  workflow_pack_ref
+  status
+  source_ref
+  checksum
+```
+
+Phase 1 修复版至少要覆盖：
+
+| 能力 | 类型 | 说明 |
+|---|---|---|
+| `qe.create_experiment_draft` | workflow_pack | 根据自然语言生成 QE 实验草案，不执行 |
+| `qe.validate_template` | mcp_tool | 调用 QE template validate |
+| `qe.materialize_template` | mcp_tool | 需要二次确认后 materialize |
+| `qe.run_experiment` | mcp_tool | 高风险/高成本，必须单独确认 |
+| `qe.analyze_result` | skill | 调用 QE 诊断 skill |
+| `validation.run_plan` | mcp_tool | 运行验证计划 |
+| `issue.create_candidate` | workflow_pack | 只创建候选 Issue，不直接入 GitHub |
+| `issue.sync_github` | mcp_tool | 正式 GitHub 同步，必须人工确认 |
+| `memory.write_candidate` | workflow_pack | 写临时/候选记忆，不直接 approved |
+| `factor.analyze_library` | skill | 因子库分析 |
+| `rdagent.analyze_task` | skill | RDAgent 任务分析 |
+
+### 6A.4 MCP/Skill 覆盖策略
+
+当前实现只 seed 少量 MCP/Skill，不能满足助理自主选择工具。Phase 1 修复版必须增加能力同步：
+
+1. 从 AIstock 已注册 MCP server 拉取工具清单，写入 `assistant_mcp_tools`。
+2. 从本地 Codex Skill 目录或 AIstock skill registry 拉取可用 Skill，写入 `assistant_skill_registry`。
+3. 将 MCP/Skill 转换为 LLM 可读 tool catalog，包含中文说明、适用场景、风险等级、输入槽位、确认要求。
+4. 对业务任务建立 intent/capability 映射，不能只依赖模型猜测。
+5. 工具目录变化必须有 checksum 和同步时间，避免使用过期工具。
+
+### 6A.5 Prompt Pack
+
+必须新增 Research Assistant Prompt Pack。提示词不能散落在前端或临时代码中，必须版本化、可审计、可测试。
+
+| Prompt | 作用 | 必须包含 |
+|---|---|---|
+| `assistant_system_v1` | 助理身份和硬边界 | 中文、MCP/API first、禁止越权、禁止显示 JSON、确认后执行 |
+| `intent_router_v1` | 意图识别 | 任务类型、风险等级、所需能力、待确认槽位 |
+| `tool_planner_v1` | 工具选择 | MCP/Skill 使用规则、工作流匹配、未知任务处理 |
+| `qe_experiment_planner_v1` | QE 实验创建 | 固定回测/股票池规则、模板草案、validate、materialize/run 二次确认 |
+| `clarification_v1` | 澄清问题 | 只问必要问题，不输出技术字段 |
+| `result_renderer_v1` | 结果汇报 | 人类可读、失败原因、下一步、审计链接 |
+| `memory_candidate_v1` | 记忆候选 | 不直接 approved，证据绑定，用户确认 |
+
+
+### 6A.5.1 树型提示词结构
+
+Prompt Pack 必须采用树型结构，而不是把所有提示词拼成一个大 system prompt。根节点是全局主提示词，后续根据用户命令、意图、风险等级、候选能力、MCP/Skill 工具和执行阶段逐层选择。
+
+这里的“树型”不是指每次只能走一条固定分支，而是指：
+
+1. **存储结构是树**：每个提示词节点只有一个主父节点，便于版本管理、权限控制、审计和缓存失效。
+2. **运行时可以装配成提示词集合**：跨模块任务可同时加载多个分支，形成一个有序的 prompt bundle。
+3. **安全边界始终优先**：无论选择多少业务分支，`assistant_root`、`governance`、`execution_guard` 等基础分支必须先装配。
+4. **树与集合的职责分离**：数据库里保留树和边；运行时装配器负责把多个分支拼成当前阶段所需的最小充分集合。
+
+~~~text
+assistant_root
+  ├─ governance
+  │   ├─ production_safety
+  │   ├─ github_issue_sync
+  │   └─ no_simplified_delivery
+  ├─ intent_router
+  │   ├─ qe
+  │   │   ├─ create_experiment
+  │   │   │   ├─ template_create
+  │   │   │   ├─ template_validate
+  │   │   │   ├─ materialize_guard
+  │   │   │   └─ run_guard
+  │   │   ├─ analyze_result
+  │   │   └─ archive_query
+  │   ├─ validation
+  │   │   ├─ run_plan
+  │   │   └─ issue_candidate_review
+  │   ├─ github_issue
+  │   │   ├─ create_candidate
+  │   │   └─ sync_formal_issue
+  │   ├─ factor_research
+  │   │   ├─ analyze_library
+  │   │   └─ develop_factor_plan
+  │   ├─ rdagent
+  │   └─ stock_analysis
+  ├─ capability_selector
+  ├─ execution_guard
+  └─ result_renderer
+~~~
+
+根提示词每次必载；子树按需加载。任何子树都必须有父子关系、触发条件、风险等级、适用工具、版本号、checksum 和状态。
+
+### 6A.5.2 多分支加载
+
+复杂任务可能同时命中多个分支，不能只选择单一路径。例如：
+
+~~~text
+用户：分析最近 QE 实验结果，基于结果创建一个新的 10 loop 实验草案，如果发现平台 bug 就生成候选 Issue。
+~~~
+
+需要同时加载：
+
+1. qe.analyze_result 分支；
+2. qe.create_experiment 分支；
+3. issue.create_candidate 分支；
+4. memory.write_candidate 分支；
+5. 对应的 execution guard 和 result renderer。
+
+多分支加载规则：
+
+| 场景 | 加载策略 |
+|---|---|
+| 单模块低风险任务 | 根提示词 + governance 摘要 + intent + 对应 capability 分支 |
+| 单模块高风险任务 | 额外加载 execution guard、approval、risk policy |
+| 跨模块任务 | 加载多个 capability/workflow 分支，并生成组合计划 |
+| 工具执行阶段 | 只加载即将调用工具的 tool prompt 和 guard prompt |
+| 结果汇报阶段 | 卸载执行提示词，加载 result renderer 和必要业务摘要 |
+| 不确定意图 | 只加载根提示词、intent router、澄清提示词，不加载具体工具长提示词 |
+
+### 6A.5.3 Prompt Registry 数据模型
+
+提示词必须固化到数据库中，数据库是事实源。文件缓存只能用于访问效率，不能成为事实源。
+
+~~~text
+assistant_prompt_nodes
+  prompt_id
+  prompt_key                 -- assistant.root / qe.create_experiment / qe.template_validate
+  parent_prompt_id
+  tree_path                  -- assistant.root/qe/create_experiment/template_validate
+  version
+  layer                      -- root / governance / intent / capability / workflow / tool / guard / renderer
+  title
+  description
+  content_md
+  trigger_type               -- always / intent / capability / mcp_tool / skill / workflow / risk / phase
+  trigger_refs               -- JSON array
+  capability_refs            -- JSON array
+  mcp_tool_refs              -- JSON array
+  skill_refs                 -- JSON array
+  risk_level
+  token_budget
+  priority
+  conflict_group
+  status                     -- draft / approved / deprecated / blocked
+  checksum
+  created_at
+  updated_at
+
+assistant_prompt_edges
+  edge_id
+  parent_prompt_id
+  child_prompt_id
+  condition_json             -- 命中条件、风险条件、阶段条件
+  load_mode                  -- required / optional / exclusive / fallback
+  priority
+  status
+
+assistant_prompt_cache_files
+  cache_id
+  prompt_id
+  version
+  checksum
+  cache_path
+  rendered_for               -- model profile / locale / compact mode
+  generated_at
+  expires_at
+  status
+
+assistant_prompt_selection_traces
+  trace_id
+  conversation_id
+  task_id
+  user_message_digest
+  selected_prompt_refs
+  rejected_prompt_refs
+  selection_reason_json
+  token_estimate
+  cache_hits
+  created_at
+~~~
+
+约束：
+
+1. approved 状态的提示词才能进入生产对话装配。
+2. 每次装配必须记录 assistant_prompt_selection_traces。
+3. 文件缓存必须包含 checksum；缓存 checksum 与数据库不一致时必须废弃。
+4. 提示词更新后必须使相关缓存失效。
+5. 禁止前端硬编码生产提示词。
+
+### 6A.5.4 Prompt Tree Selector 算法
+
+Prompt Tree Selector 负责从树中选择最小但足够的提示词集合。目标是：准确、可解释、低 token、支持跨模块。
+
+输入：
+
+~~~text
+user_message
+conversation_state
+context_pack_summary
+capability_registry
+available_mcp_tools
+available_skills
+risk_policy
+model_profile
+~~~
+
+输出：
+
+~~~text
+selected_prompt_nodes
+selected_capabilities
+selected_workflow_packs
+token_estimate
+selection_reason
+missing_clarifications
+~~~
+
+算法步骤：
+
+1. 必载根节点：加载 assistant.root、全局安全边界、用户硬规则摘要。
+2. 轻量意图路由：使用短 prompt 判断候选意图、风险等级、模块范围和是否跨模块。
+3. 候选能力召回：基于 intent、关键词、Capability Registry、MCP/Skill 标签召回 Top-K 能力。
+4. 分支评分：对每个候选 prompt branch 计算分数。
+
+~~~text
+score = intent_match * 0.35
+      + capability_match * 0.25
+      + tool_match * 0.15
+      + risk_relevance * 0.10
+      + historical_success * 0.05
+      + user_context_match * 0.05
+      - token_cost_penalty * 0.05
+~~~
+
+5. 父子闭包补齐：对所有命中的分支自动补齐祖先节点，确保 root/governance/intent 等上层约束完整加载。
+6. 多分支合并：保留所有超过阈值的分支；跨模块任务允许多个分支同时加载；如果多个分支分别属于不同模块，只要都满足阈值，就都进入 bundle。
+7. 冲突消解：同一 conflict_group 中选择最高优先级或最新 approved 版本；生产安全类提示词不可被覆盖。
+8. token 预算裁剪：保留 root/governance/guard，压缩低优先级说明，必要时只加载 capability summary。
+9. 阶段化再装配：计划阶段、执行前、执行中、结果汇报阶段分别重新装配提示词，避免一次加载全部。
+10. 记录选择 trace：保存选中和未选中的 prompt、原因、token 估算、缓存命中。
+11. 生成 bundle signature：将当前阶段的 prompt 选择集合、版本、checksum、model profile、locale、stage 合成为 bundle signature，作为文件缓存键和审计键。
+
+### 6A.5.5 文件缓存策略
+
+提示词固化在数据库中，但允许生成文件缓存提升访问效率。
+
+缓存原则：
+
+1. 数据库是事实源，文件缓存只读加速。
+2. 缓存文件按 prompt tree path、version、checksum、model profile、压缩模式生成。
+3. 常用组合可以生成 bundle cache，例如：
+   - bundle/assistant_root_zh.md
+   - bundle/qe_create_experiment_deepseek.md
+   - bundle/github_issue_sync_guard.md
+4. 服务启动时可预热 root/governance/常用 QE bundle。
+5. prompt 更新、状态变化、checksum 变化时必须失效对应缓存。
+6. selection trace 必须记录 cache hit/miss。
+7. 文件缓存仅允许由数据库派生生成，禁止手工编辑后回写为事实源。
+8. 生成 bundle cache 时必须按 `bundle_signature` 读取缓存；`bundle_signature` 一致则可直接复用，不一致则重新从数据库装配。
+9. 缓存命中不得改变 prompt 选择结果，最多只能缩短装配时间。
+
+推荐缓存路径：
+
+~~~text
+runtime_cache/research_assistant/prompts/
+  root/
+  governance/
+  qe/
+  validation/
+  github_issue/
+  bundles/
+~~~
+
+这些缓存不得提交到 git，必须加入 .gitignore。
+
+### 6A.5.6 QE MCP 分层加载示例
+
+用户输入：
+
+~~~text
+帮我创建一个 QE 10 loop 实验，先不要执行。
+~~~
+
+装配阶段：
+
+| 阶段 | 加载提示词 |
+|---|---|
+| 初始理解 | assistant.root、governance.production_safety、intent_router |
+| 命中 QE | capability.qe.summary、workflow.qe.create_experiment |
+| 生成草案 | tool_planner.qe_mcp、renderer.experiment_draft |
+| 用户确认 create/validate | tool.qe_template_create、tool.qe_template_validate、guard.qe_template_write |
+| 用户确认 materialize | tool.qe_template_materialize_confirmed、guard.qe_materialize |
+| 用户确认 run | tool.qe_template_run_confirmed、guard.qe_run |
+| 结果汇报 | renderer.qe_validate_result、renderer.qe_run_status |
+
+不会加载：股票分析、HMM 深度演进、GitHub Issue 正式同步、外部搜索等无关分支。
+
+### 6A.5.7 验收要求
+
+Prompt Tree 必须通过以下验收：
+
+1. 固化到数据库，有版本、状态、checksum、父子关系。
+2. 能为 QE 创建任务选择 QE 分支，不加载无关股票分析/GitHub 正式同步分支。
+3. 跨模块任务能同时加载 QE + Issue + Memory 等多个分支。
+4. 执行前能追加对应 tool guard。
+5. 结果汇报能切换到 renderer prompt，且默认不输出 JSON。
+6. selection trace 可回放每次提示词选择。
+7. 文件缓存命中不改变选择结果；缓存失效后能从数据库重新生成。
+
+### 6A.6 QE Experiment Workflow Pack
+
+“创建 QE 实验”是 Phase 1 修复版的强制验收场景。Workflow Pack 必须定义：
+
+```text
+intent: qe.create_experiment
+triggers:
+  - 创建 QE 实验
+  - QE 10 loop
+  - 实验模板
+  - 回测实验
+  - 模型演进实验
+
+steps:
+  1. 理解实验目标和边界
+  2. 读取 QE MCP/Skill 能力目录
+  3. 读取相关记忆和固定业务规则
+  4. 向用户确认 loop 数、回测窗口、股票池、模板来源、是否只生成草案
+  5. 生成实验草案卡
+  6. 用户确认后创建/校验 template
+  7. 展示 validate 结果和配置摘要
+  8. 用户二次确认后 materialize
+  9. 用户再次确认后 run
+  10. 轮询状态并汇报结果
+
+guards:
+  - 未确认不得 materialize
+  - 未二次确认不得 run
+  - 股票池/回测窗口规则必须来自 approved Memory 或 QE 配置
+  - 失败时必须给出人类可读原因和下一步
+```
+
+### 6A.7 主模型和次模型
+
+Phase 1 修复版必须实现真实模型调用（真实 LLM 调用），而不是只存 model profile。
+
+| 模型角色 | 用途 | 写记忆权限 |
+|---|---|---|
+| 主模型 primary_reasoner | 用户对话、需求理解、高风险计划、最终回复 | 可写候选长期记忆，不能直接 approved |
+| 次模型 cheap_worker | 日志摘要、低风险分类、格式化、批量摘要 | 只能写 temp memory |
+| 长上下文模型 long_context | 大文档、长日志、研究资料归纳 | 只能写 temp memory 或候选记忆 |
+| 外部主模型 external_agent | Codex/Claude 受控接入 | 通过 External Agent Connector 写入 |
+
+必须提供：
+
+1. 模型配置读取。
+2. OpenAI-compatible/LiteLLM 调用 client。
+3. 主模型/次模型选择 UI。
+4. 对话消息必须触发真实 LLM completion，不能只创建任务或返回静态文本。
+5. fallback 策略。
+6. token、耗时、成本 trace。
+7. 低价模型结果进入 temp memory，主模型审核后才能提升。
 
 ## 7. MCP 执行工作台
 
@@ -665,61 +1077,163 @@ research_web_sources
 
 ---
 
-## 13. UI 页面设计
+## 13. UI 页面设计：assistant-ui 对话主入口 + 后台管理隔离
 
-### 13.1 UI 模板选择
+### 13.1 UI 选型结论
 
-研究助理 UI 采用 **AIstock Console Template**：保留 AIstock 现有左侧导航；研究助理页面内部采用 Ant Design Pro 风格业务控制台结构，结合现有 `SectionCard`、`MetricCard`、`PaperTable`、`StatusBadge` 和 `components/ui` 基础组件；对话区后续可评估 Ant Design X；驾驶舱图形化后续可评估 React Flow。
+Phase 1 修复版选择 **assistant-ui** 作为主对话窗口前端基座。
 
-### 13.2 页面结构
+使用方式：
 
-```text
-AIstock 全局 Sidebar
-  Research Assistant 页面
-    顶部 Page Header：标题、当前模型、任务状态、快速操作
-    顶部功能导航：总览 / 对话 / 工作台 / 任务 / 记忆 / 图谱 / MCP / Skill / 审批 / 报告 / 模型 / 设置
-    主内容区：卡片 + 表格 + 时间线 + 抽屉详情
-    右侧可选上下文栏：当前任务、等待审批、关联记忆、证据来源
-```
+1. **直接使用 assistant-ui 组件和运行时**：用于 Thread、Message、Composer、assistant thinking、tool/action card 等对话体验。
+2. **不使用 assistant-ui 替代 AIstock 后端**：AIstock 仍负责模型路由、MCP、Skill、Memory、Approval、Trace、任务状态和业务执行。
+3. **不复用当前后台模板做主入口**：当前 `SectionCard + DetailDrawer + JsonPanel + 表格` 的页面只允许保留在 Admin/审计区。
+4. **可以参考 Vercel Chatbot 的简洁消息流和 CopilotKit/AG-UI 的工具状态卡**，但不引入完整外部聊天系统。
 
-### 13.3 路由
+架构边界：
 
 ```text
-/research-assistant
-/research-assistant/chat
-/research-assistant/workbench
-/research-assistant/tasks
-/research-assistant/streams
-/research-assistant/memory
-/research-assistant/graph
-/research-assistant/mcp-tools
-/research-assistant/skills
-/research-assistant/approvals
-/research-assistant/reports
-/research-assistant/models
-/research-assistant/settings
-/research-assistant/cockpit          # Phase 2/3
-/research-assistant/stock-analysis    # Phase 2
+assistant-ui 前端主对话
+  -> AIstock Conversation API
+  -> Assistant Orchestrator
+  -> Prompt Pack + Context Pack + Model Router
+  -> Planner / Workflow Pack / Capability Registry
+  -> MCP / Skill / Approval / Trace / Memory
 ```
 
-### 13.4 页面职责
+### 13.2 主入口布局
 
-| 页面 | 职责 | Phase 1 状态 |
+`/research-assistant` 和 `/research-assistant/chat` 默认显示同一个对话主入口：
+
+```text
+┌──────────────────────────┬────────────────────────────────────────────────────┐
+│ 左侧任务状态轨道          │ 右侧主对话窗口                                      │
+│                          │                                                    │
+│ 当前任务：QE 实验创建      │ 用户：帮我创建一个 QE 10 loop 实验，先不要执行       │
+│                          │                                                    │
+│ ● 理解需求      完成      │ 助理：我理解你要创建一个 QE 回测实验草案……          │
+│ ● 读取上下文    完成      │                                                    │
+│ ● 生成计划      进行中    │ 需要确认：                                         │
+│ ○ 等待确认      未开始    │ 1. 使用固定回测股票池还是指定股票池？               │
+│ ○ MCP 预检查    未开始    │ 2. 是否使用已有 QE 模板？                          │
+│ ○ 执行          未开始    │ 3. 当前只生成草案，不 materialize/run，对吗？       │
+│ ○ 汇报结果      未开始    │                                                    │
+│                          │ 推荐计划：                                         │
+│ 模型：DeepSeek V4 Pro     │ 1. 读取 QE 能力目录和上下文                         │
+│ MCP：已连接               │ 2. 生成 10 loop 草案                                │
+│ 风险：确认后执行           │ 3. validate 草案                                    │
+│                          │ 4. 展示配置摘要，等待你确认                         │
+│                          │                                                    │
+│                          │ [确认生成草案] [修改要求] [取消]                    │
+│                          │                                                    │
+│                          │ 输入框：告诉助理你要研究、实验、分析或验证什么……    │
+└──────────────────────────┴────────────────────────────────────────────────────┘
+```
+
+左侧状态轨道只展示人类可读状态，不展示 `task_id`、`trace_id`、`payload_json`、后台日志或数据库字段。
+
+### 13.3 禁止在主入口显示的内容
+
+主对话窗口默认禁止出现：
+
+- raw JSON；
+- `input_json` / `result_json` / `payload_json`；
+- MCP 原始 request/response；
+- schema 原文；
+- 数据库 ID、trace ID、task ID；
+- 后台日志；
+- 开发调试字段；
+- 中文乱码。
+
+允许存在的方式：
+
+- 以“技术详情 / 审计详情”按钮跳转到 `/research-assistant/admin/...`；
+- 默认折叠；
+- 明确标注为开发者/审计信息；
+- 不影响普通用户完成对话和确认。
+
+### 13.4 路由重定位
+
+| 路由 | 定位 | Phase 1 修复版要求 |
 |---|---|---|
-| 总览 | 所有 stream 状态、待确认、失败、今日报告、成本摘要 | 完整实现 |
-| Chat | 主对话、计划生成、配置讨论、文字汇报 | 完整实现主窗口 |
-| Workbench | MCP 执行进度、配置预览、diff、业务深链、失败 triage | 完整实现 |
-| Tasks | Agent 任务和事件流 | 完整实现 |
-| Memory | 记忆搜索、审批、废弃、冲突处理、审计 | 完整实现 |
-| Graph | 轻量知识图谱实体、关系、实验谱系 | 表格/列表/关系详情，不做复杂图形化 |
-| MCP Tools | MCP server/tool/schema/risk/health | 完整实现 |
-| Skills | 本地 Skill Catalog、版本、checksum、权限、使用记录 | 完整实现 |
-| Approvals | 待确认动作、风险、参数快照、确认原文 | 完整实现 |
-| Reports | 晨报、研究报告、实验报告、候选 Issue 报告 | 完整实现 |
-| Models | provider、profile、routing policy、成本规则 | 完整实现基础配置 |
-| Cockpit | 任务/实验/Issue/资源概览 | Phase 2/3 增强 |
+| `/research-assistant` | 主对话入口 | 默认打开 assistant-ui 对话窗口 |
+| `/research-assistant/chat` | 主对话入口别名 | 与主入口同体验 |
+| `/research-assistant/admin` | 后台管理总览 | 当前已开发功能迁移/聚合到这里 |
+| `/research-assistant/admin/tasks` | Task Ledger 审计 | 可显示 ID/JSON，但必须标为审计详情 |
+| `/research-assistant/admin/memory` | Memory 管理 | 后台管理页 |
+| `/research-assistant/admin/mcp-tools` | MCP 工具目录 | 后台管理页 |
+| `/research-assistant/admin/skills` | Skill Catalog | 后台管理页 |
+| `/research-assistant/admin/approvals` | 审批后台 | 后台管理页 |
+| `/research-assistant/admin/trace` | Trace/成本 | 后台管理页 |
+| `/research-assistant/cockpit` | 后续驾驶舱 | Phase 2/3 |
+| `/research-assistant/stock-analysis` | 股票分析 MCP | Phase 2 |
 
----
+现有已经开发的页面暂时不删除，但不得继续作为主入口体验。
+
+### 13.5 主对话组件
+
+必须新增或等价实现以下组件：
+
+| 组件 | 职责 | 禁止事项 |
+|---|---|---|
+| `AssistantConversationShell` | 页面总容器，左侧状态 + 右侧对话 | 不得引用后台表格模板 |
+| `TaskProgressRail` | 图形化状态轨道 | 不得显示后台日志和 ID |
+| `AssistantThread` | assistant-ui 消息流 | 不得显示 raw JSON |
+| `AssistantMessageBubble` | 用户/助理消息 | 不得把模型输出当 HTML 注入 |
+| `AssistantPlanCard` | LLM 生成的计划 | 不得展示 planner JSON |
+| `ClarificationCard` | 待确认问题 | 不得自动执行 |
+| `ActionProposalCard` | 待执行动作 | 未确认前不得调用高风险 MCP/Skill |
+| `McpPreflightCard` | MCP 预检查摘要 | 原始 response 只能进审计详情 |
+| `ExperimentDraftCard` | QE 实验草案摘要 | 不得隐藏关键风险 |
+| `ResultReportCard` | 结果汇报 | 不得只给技术状态码 |
+
+### 13.6 主对话端到端交互
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant UI as assistant-ui 主对话
+    participant API as Conversation API
+    participant O as Assistant Orchestrator
+    participant M as Model Router/LLM
+    participant P as Planner/Workflow Pack
+    participant T as MCP/Skill Gateway
+
+    U->>UI: 输入自然语言任务
+    UI->>API: POST conversation message
+    API->>O: 保存消息并构建 Context Pack
+    O->>M: 调用主模型理解需求
+    M-->>O: 返回目标、追问、计划草案
+    O->>P: 匹配自主计划或特定 Workflow Pack
+    P-->>O: 返回 Action Proposals
+    O-->>UI: 助理回复 + 计划卡 + 确认卡
+    U->>UI: 确认或修改
+    UI->>API: confirm action proposal
+    API->>O: 校验 plan digest / risk / approval
+    O->>T: preflight 或执行允许的 MCP/Skill
+    T-->>O: 返回结构化结果
+    O-->>UI: 人类可读状态和结果卡
+```
+
+### 13.7 第一验收场景：创建 QE 10 loop 实验
+
+固定验收输入：
+
+```text
+帮我创建一个 QE 10 loop 实验，先不要执行。
+```
+
+必须表现：
+
+1. 页面显示“正在理解需求”。
+2. 后端真实调用主模型。
+3. 助理用中文复述目标。
+4. 助理提出必要确认问题。
+5. 助理生成 QE 实验草案计划卡。
+6. 左侧状态轨道显示“理解需求、读取上下文、生成计划、等待确认”。
+7. 用户确认前不得 materialize 或 run。
+8. 默认页面不出现 raw JSON、ID、payload 或日志。
+9. 后台 trace 能看到模型、耗时、成本、Context Pack、候选 MCP/Skill。
 
 ## 14. 语音能力预留
 

@@ -1,19 +1,83 @@
 # AIstock 研究与实验综合助理实施阶段与功能验证矩阵
 
-> 日期：2026-05-21
-> 类型：实施验收 companion 文档
+> 日期：2026-05-22
+> 类型：实施验收 companion 文档 v2（对话型主入口纠偏版）
 > 来源：`docs/architecture/aistock_research_agent_console_design_20260520.md`
 > 用途：作为后续开发、验收、外部审核和合入 main 前检查的逐项矩阵；任何阶段不得交付静态占位、脚本替代或低完整度版本。
 
 ---
 
+## -1. 2026-05-22 纠偏验收增补
+
+本矩阵从 v2 起增加“对话型主入口纠偏”验收。当前 main 中已合入的 Research Assistant Phase 1 基础设施不能视为对话型助理完成，必须补齐以下差距后才可重新声明 Phase 1 可用。
+
+### -1.1 当前实现差距矩阵
+
+| 差距编号 | 当前状态 | 必须修复结果 | 合入阻断 |
+|---|---|---|---|
+| GAP-CHAT-001 | Chat 只创建任务 | assistant-ui 对话主入口真实回复 | 是 |
+| GAP-LLM-001 | 没有真实 LLM 调用 | 用户消息触发主模型 completion 并写 trace | 是 |
+| GAP-UI-001 | 主入口显示 JSON/ID/payload | 默认无 raw JSON、无后台日志、无乱码 | 是 |
+| GAP-STATE-001 | 任务进度是列表/事件 | 左侧图形化任务状态轨道 | 是 |
+| GAP-CAP-001 | MCP/Skill 目录不完整 | Capability Registry 覆盖首批 MCP/Skill | 是 |
+| GAP-QE-001 | QE 创建流程不可用 | QE 10 loop 草案端到端通过 | 是 |
+| GAP-PROMPT-001 | 无正式 Prompt Pack | system/intent/tool/qe/result prompt 版本化 | 是 |
+| GAP-MODEL-001 | 只有 model profile | 主/次模型真实调用、fallback、cost trace | 是 |
+
+### -1.2 对话主入口验收用例
+
+固定输入：
+
+```text
+帮我创建一个 QE 10 loop 实验，先不要执行。
+```
+
+必须通过：
+
+| 步骤 | 必须结果 | 证据 |
+|---|---|---|
+| 发送消息 | 页面显示正在理解需求 | UI 截图 / Playwright |
+| 模型调用 | 后端真实调用主模型 | trace 记录包含 model/provider/latency |
+| 需求理解 | 助理中文复述任务目标 | UI 截图 |
+| 澄清确认 | 助理提出必要确认问题 | UI 截图 |
+| 计划生成 | 生成 QE 实验草案计划卡 | UI 截图 |
+| 状态展示 | 左侧状态轨道进入等待确认 | UI 截图 |
+| 安全门禁 | 确认前不得 materialize/run | 后端事件/审计记录 |
+| 无 JSON | 主窗口没有 raw JSON/payload/schema/日志 | 自动检查 + 截图 |
+| 后台审计 | Admin 可查看 trace 和技术详情 | 后台链接证据 |
+
+### -1.3 Workflow 与自主 Planner 验收
+
+| 验收项 | 必须结果 | 阻断条件 |
+|---|---|---|
+| 自主分析 | 未知任务能先分析、澄清、提出只读探索计划 | 只能机械匹配固定流程 |
+| Workflow Pack | QE/GitHub/Validation 等高频高风险任务有明确流程包 | 高风险任务只靠模型自由发挥 |
+| 安全门禁 | Workflow 和自主 Planner 都必须经过 risk/preflight/approval | Planner 可绕过确认直接执行 |
+| 能力目录 | Prompt 可读取 MCP/Skill/Capability 摘要 | 模型不知道有哪些工具 |
+| 人类可读 | Workflow 输出渲染成计划卡/确认卡/结果卡 | 输出 planner JSON |
+
+
+### -1.4 树型提示词验收矩阵
+
+| 验收项 | 必须结果 | 证据 | 阻断条件 |
+|---|---|---|---|
+| Prompt DB 固化 | 根提示词、子提示词、边、状态、checksum 全部在数据库 | DB schema/API 测试 | 生产提示词只存在代码或前端 |
+| 树型关系 | 每个提示词有 tree_path、parent/child、trigger、risk | 单测；样例导出 | 平铺提示词无法按层选择 |
+| 动态选择 | QE 创建只加载 root/governance/intent/QE 分支 | selection trace | 每次加载全部提示词 |
+| 多分支任务 | 跨模块任务可同时加载 QE + Issue + Memory 分支 | selection trace；E2E | 只能选一个分支导致任务缺失 |
+| 父子闭包 | 命中子分支时自动补齐 root/governance/intent 等祖先节点 | selector 单测；trace | 只加载叶子节点导致安全约束丢失 |
+| Bundle Signature | 每次装配生成包含 prompt 版本、checksum、模型、阶段的签名 | selection trace；缓存键测试 | 缓存键不能区分版本或阶段 |
+| 阶段化装配 | 计划、执行前、执行中、结果汇报阶段加载不同提示词 | trace 回放 | 一次性加载所有执行提示词 |
+| 工具 guard | MCP/Skill 执行前加载对应 guard prompt | preflight trace | 高风险工具无 guard |
+| Renderer | 工具返回后加载 result renderer，输出人类可读 | UI 截图 | 直接展示工具 JSON |
+| 文件缓存 | 缓存有 checksum，失效可重建，不改变选择结果 | 缓存命中/失效测试 | 缓存成为事实源或过期不失效 |
 
 ## 0. 验收适用范围
 
 本矩阵对应主设计方案中的以下核心约束：
 
 - 长期记忆不是 RAG：Memory Ledger 是事实源，向量/RAG 只做辅助召回。
-- UI 采用 AIstock Console Template：保留 AIstock 左侧导航，研究助理内部使用顶部功能导航、卡片、表格、时间线、抽屉和审批工作台。
+- UI 主入口采用 assistant-ui + Codex 式对话体验：保留 AIstock 左侧导航，研究助理主入口使用对话窗口和左侧图形化任务状态；后台管理页才允许表格、抽屉和审计详情。
 - Firecrawl 不做默认搜索入口：中文搜索优先低成本 provider，Firecrawl/Jina 作为高质量抓取/抽取备用。
 - Phase 1 不引入图数据库：轻量知识图谱使用 AIstock 原生关系表。
 - Codex / Claude Code 可通过 External Agent Connector 接入，但不得越权。
@@ -36,7 +100,7 @@
 
 必须实现：
 
-1. Research Assistant 主页面、主对话入口、顶部功能导航和页面模板。
+1. Research Assistant 主页面必须是 assistant-ui 驱动的 Codex 式对话主入口，并带左侧图形化任务状态轨道。
 2. MCP 工具目录、schema 展示、健康状态、risk level、preflight 和执行事件。
 3. Task Ledger、Agent Task Event Stream、失败 triage、idempotency key。
 4. MCP 执行工作台：配置草稿、配置 diff、preflight、执行进度、tool result、业务深链。
@@ -45,7 +109,7 @@
 7. 本地 Skill Catalog 和首批 Skill。
 8. Validation / Pipeline Discovery Stream。
 9. External Agent Connector 合同。
-10. 多模型路由和临时记忆。
+10. 多模型路由、真实 LLM 调用、主/次模型选择、调用 trace 和临时记忆。
 11. UI 审批中心。
 12. 候选 Issue 队列和 GitHub 正式入库门禁。
 13. 今日事项、晨报、提醒和 personal namespace。
@@ -122,7 +186,7 @@
 
 | 模块 | 必须功能 | 验收证据 |
 |---|---|---|
-| UI 模板 | 顶部功能导航、卡片、表格、抽屉、审批按钮、空状态、详情深链 | Playwright/UI smoke；截图；路由清单 |
+| 对话主入口 UI | assistant-ui 消息流、左侧图形化任务状态、计划卡、确认卡、结果卡；默认无 raw JSON | Playwright/UI smoke；截图；无 JSON 检查；路由清单 |
 | MCP 目录 | server/tool/schema/risk/health、preflight | API 测试；MCP contract 测试 |
 | Task Ledger | 创建任务、状态流转、事件写入、失败 triage、idempotency key | 后端单测；事件流回放测试 |
 | Workbench | 配置草稿、diff、preflight、执行进度、tool result、业务深链 | E2E 流程测试 |
@@ -132,11 +196,12 @@
 | Skill Catalog | 本地 skill 注册、checksum、权限、trace、禁用 | 后端单测；UI 列表和详情测试 |
 | Validation Discovery | 夜间报告、候选 Issue、流水线证据绑定 | Validation MCP 测试；候选 Issue 测试 |
 | External Agent Connector | Codex/Claude session、context pack 读取、证据写入、候选 Issue | Contract test；权限边界测试 |
-| 多模型路由 | model profile、routing policy、cost、fallback、temp memory | 单测；模型调用 trace 样例 |
+| 多模型路由 | model profile、routing policy、真实模型调用、cost、fallback、temp memory | 单测；真实模型调用 trace 样例 |
 | 审批中心 | risk、plan digest、config version、审批失效、审批回放 | E2E；状态机测试 |
 | 候选 Issue | 去重、证据、复现、审批、GitHub 正式同步门禁 | 后端单测；GitHub dry-run/同步测试 |
 | Web 通知 | assistant_notifications、待处理计数、详情跳转 | API/UI 测试 |
 | Trace/成本 | LLM/MCP/Skill 调用次数、耗时、成本、model profile | trace 样例；报告验证 |
+| Prompt Tree | 数据库固化、树型选择、多分支装配、文件缓存、selection trace | DB/API 单测；QE/跨模块 E2E；缓存失效测试 |
 
 ### 17.3 Phase 2 验收矩阵
 
@@ -155,8 +220,8 @@
 | 页面 | 必须展示 | 必须交互 | 验收证据 |
 |---|---|---|---|
 | 总览 | 今日待确认、运行中任务、失败、候选 Issue、成本 | 点击卡片进入详情 | UI smoke / 截图 |
-| Chat | 主对话、计划、配置讨论、确认入口 | 生成计划、提交确认、查看上下文 | E2E |
-| Workbench | MCP 调用、配置 diff、preflight、日志、深链 | 执行 dry-run、打开详情、失败 triage | E2E |
+| Chat | assistant-ui 主对话、左侧任务状态、计划卡、配置讨论、确认入口、无 JSON 默认展示 | 真实 LLM 回复、生成计划、提交确认、查看上下文 | E2E；截图；LLM trace |
+| Admin Workbench | MCP 调用、配置 diff、preflight、日志、深链 | 执行 dry-run、打开详情、失败 triage | E2E；仅后台入口 |
 | Tasks | 状态、事件、证据、耗时、模型 | 筛选、打开事件、暂停/恢复 | UI/API 测试 |
 | Memory | 记忆类型、审批、冲突、来源 | 审批、废弃、查看 source_ref | UI/API 测试 |
 | Graph | entity/relation/evolution path | 查看关系详情、证据、有效期 | UI/API 测试 |
