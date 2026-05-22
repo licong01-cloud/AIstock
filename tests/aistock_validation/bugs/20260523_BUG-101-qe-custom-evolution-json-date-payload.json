@@ -1,0 +1,88 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-101",
+  "title": "QE custom evolution loops fail before WSL submission when execution manifest contains YAML date objects",
+  "description": "Expected: QE custom evolution should normalize generated execution manifests and outbound workspace payloads into JSON-compatible primitives before submission. Actual: task qe_20260522_012542_90fb created 16 loop records but all failed locally before WSL submission with TypeError: Object of type date is not JSON serializable. PyYAML parses unquoted conf.yaml dates into datetime.date; execution_manifest preserves them and QEWorkspaceClient posts the payload without normalize_json().",
+  "module": "quantevolver",
+  "severity": "P1",
+  "risk_area": "runtime_payload_json_serialization",
+  "status": "fixed",
+  "trigger_condition": {
+    "scenario": "qe_custom_evolution_wsl_submit_payload_contains_python_date",
+    "task_id": "qe_20260522_012542_90fb",
+    "failed_loop_count": 16,
+    "error": "Object of type date is not JSON serializable"
+  },
+  "reproduce_command": "PYTHONPATH=F:\\Dev\\AIstock python - <<'PY'\nimport json\nfrom backend.services.quantevolver.execution_manifest import _safe_conf_yaml_load, _artifact_manifest\ntext = '''\ntask:\n  model: {class: LSTM, kwargs: {}}\n  dataset:\n    class: DatasetH\n    kwargs: {handler: {kwargs: {}}}\nport_analysis_config:\n  strategy: {class: ScoreWeightedTopkStrategyV2, kwargs: {}}\n  backtest:\n    start_time: 2024-07-01\n    end_time: 2026-04-27\n    account: 10000000\n  executor: {class: SimulatorExecutor}\n'''\nconf = _safe_conf_yaml_load(text)\nmanifest = {'artifact': _artifact_manifest(conf, {'label_horizon': 10, 'factor_list': ['x']})}\njson.dumps({'config': {'execution_manifest': manifest}})\nPY",
+  "failing_run_id": "qe_20260522_012542_90fb",
+  "evidence_uris": [
+    "file:backend/services/quantevolver/qe_workspace_client.py",
+    "file:backend/services/quantevolver/execution_manifest.py",
+    "file:backend/services/quantevolver/executors/backtest.py",
+    "file:backend/services/quantevolver/config_composer.py",
+    "file:backend/services/qe_archive/models.py",
+    "github:https://github.com/licong01-cloud/AIstock/issues/165"
+  ],
+  "fingerprint": "a43fe15bd3964ad7",
+  "assigned_agent": "codex-app",
+  "fix_branch": "bug/BUG-101-qe-date-json-serialization",
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-22T17:22:01Z",
+  "first_seen_at": "2026-05-22T17:22:01Z",
+  "last_seen_at": "2026-05-23T00:00:00Z",
+  "fixed_at": "2026-05-23T00:00:00Z",
+  "submitted_at": "2026-05-22T17:22:01Z",
+  "closed_at": null,
+  "github_issue_number": 165,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/165",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/qe_workspace_client.py",
+    "backend/services/quantevolver/execution_manifest.py",
+    "backend/services/quantevolver/executors/backtest.py",
+    "backend/services/quantevolver/config_composer.py",
+    "backend/services/qe_archive/models.py",
+    "backend/tests/",
+    "tests/aistock_validation/bugs/"
+  ],
+  "suspected_modules": [
+    "backend/services/quantevolver/qe_workspace_client.py",
+    "backend/services/quantevolver/execution_manifest.py",
+    "backend/services/quantevolver/executors/backtest.py",
+    "backend/services/quantevolver/config_composer.py",
+    "backend/services/qe_archive/models.py"
+  ],
+  "required_verification": [
+    "pytest regression for execution_manifest unquoted YAML dates returning JSON-compatible ISO strings",
+    "pytest regression for QEWorkspaceClient outbound payload normalize_json before httpx.post(json=payload)",
+    "python -m pytest backend/tests -k 'execution_manifest or workspace_client or quantevolver' -q -p no:cacheprovider",
+    "git diff --check",
+    "After backend restart, rerun one loop from qe_20260522_012542_90fb as smoke and confirm WSL job creation before rerunning all 16 loops"
+  ],
+  "closure_requirements": [
+    "Execution manifest returned from builder contains only JSON-compatible primitives for generated Qlib conf.yaml dates.",
+    "QEWorkspaceClient outbound payload is normalized before httpx JSON encoding.",
+    "The failure signature TypeError: Object of type date is not JSON serializable is covered by regression tests.",
+    "BUG-101 registry record and GitHub issue remain synchronized with fix branch, commit, and validation evidence."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-22T17:22:01Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Mirrored manually to GitHub issue #165 via gh CLI because Validation MCP sync is currently blocked by an unrelated UTF-8 BOM parse error in another BUG JSON registry entry."
+    },
+    {
+      "timestamp": "2026-05-22T17:22:01Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Reported from qe_20260522_012542_90fb execution failure logs and DB loop records; 16/16 loops failed before WSL submission."
+    },
+    {
+      "timestamp": "2026-05-23T00:00:00Z",
+      "actor": "codex-app",
+      "action": "fix_implemented",
+      "note": "Two-layer defense: (1) execution_manifest.py build_and_audit_execution_manifest wraps all 3 return-path manifests with normalize_json() from qe_archive.models, converting datetime.date → .isoformat() at source. (2) qe_workspace_client.py create_and_run_loop applies normalize_json() on payload before httpx.post(json=payload) as defense-in-depth. Regression test (4 cases) added at backend/tests/quantevolver/test_execution_manifest_json_safe.py."
+    }
+  ]
+}

@@ -7,7 +7,7 @@ from typing import Any, Mapping
 
 import yaml
 
-from backend.services.qe_archive.models import sha256_json
+from backend.services.qe_archive.models import normalize_json, sha256_json
 
 from .experiment_config import ExperimentConfig, model_seed_param_keys, normalize_label_horizon
 from .executors.base import ExecutionContext
@@ -208,7 +208,7 @@ def build_and_audit_execution_manifest(
     except ValueError as exc:
         if requested.get("random_seed") is not None:
             raise
-        manifest = {
+        manifest = normalize_json({
             "schema_version": "qe_execution_manifest_v1",
             "verification_status": "not_applicable",
             "not_applicable_reason": str(exc),
@@ -216,13 +216,13 @@ def build_and_audit_execution_manifest(
             "artifact": {},
             "wsl_command": wsl_command,
             "conf_yaml_sha256": sha256_json(conf_yaml),
-        }
+        })
         manifest["manifest_sha256"] = sha256_json(manifest)
         return manifest, str(manifest["manifest_sha256"])
     if not _is_auditable_conf(conf):
         if requested.get("random_seed") is not None:
             raise ValueError("execution manifest audit requires generated Qlib task and port_analysis_config sections")
-        manifest = {
+        manifest = normalize_json({
             "schema_version": "qe_execution_manifest_v1",
             "verification_status": "not_applicable",
             "not_applicable_reason": "conf.yaml is not a generated Qlib experiment config",
@@ -230,18 +230,18 @@ def build_and_audit_execution_manifest(
             "artifact": {},
             "wsl_command": wsl_command,
             "conf_yaml_sha256": sha256_json(conf_yaml),
-        }
+        })
         manifest["manifest_sha256"] = sha256_json(manifest)
         return manifest, str(manifest["manifest_sha256"])
     artifact = _artifact_manifest(conf, requested)
-    manifest = {
+    manifest = normalize_json({
         "schema_version": "qe_execution_manifest_v1",
         "verification_status": "verified",
         "requested": requested,
         "artifact": artifact,
         "wsl_command": wsl_command,
         "conf_yaml_sha256": sha256_json(conf_yaml),
-    }
+    })
     mismatches = _compare_manifest(requested, artifact)
     if mismatches:
         manifest["verification_status"] = "failed"
