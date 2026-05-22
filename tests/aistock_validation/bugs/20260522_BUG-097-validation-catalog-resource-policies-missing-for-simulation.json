@@ -1,0 +1,121 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-097",
+  "title": "Validation catalog resource policies missing for simulation runtime live plans",
+  "description": "Expected: validation_catalog_integrity must pass for main and PR branches. Any plan with writes_business_state=true or production-adjacent MiniQMT/LocalSim simulation behavior must declare an explicit resource_policy, forbid prod_db unless specifically approved, include evidence_policy for L4/L5 plans, and default live/long-running L3+ plans to manual/non-runner-enabled unless gated.\nActual: GitHub PR #153 for BUG-096 failed Static gate (l0 + module registry) in validation_catalog_integrity. The failing report shows P0 RESOURCE-001 and RESOURCE-005 for miniqmt_sim_trading_hours_l5, plus P1 CATALOG-012/RESOURCE-006 findings for localsim_unattended_l3, miniqmt_sim_stub_l3, simulation_runtime_ops_ui, simulation_dual_backend_l4, and miniqmt_sim_trading_hours_l5. This blocks unrelated BUG-096 merge and indicates validation catalog resource safety metadata is incomplete.",
+  "module": "validation",
+  "severity": "P0",
+  "risk_area": "validation_catalog_resource_policy",
+  "status": "fixed",
+  "trigger_condition": {
+    "scenario": "reported_via_mcp",
+    "files": [
+      "tests/aistock_validation/catalog/test_plans.yaml",
+      "scripts/aistock_validation_catalog_integrity.py",
+      "backend/services/validation/catalog_integrity.py"
+    ]
+  },
+  "reproduce_command": "python -m nox -s validation_catalog_integrity",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:tests/aistock_validation/catalog/test_plans.yaml",
+    "file:scripts/aistock_validation_catalog_integrity.py",
+    "file:backend/services/validation/catalog_integrity.py"
+  ],
+  "fingerprint": "733655c4d5ede1e1",
+  "assigned_agent": "codex-app",
+  "fix_branch": "bug/BUG-097-validation-catalog-resource-policies",
+  "fix_commit": "61844456b88aa879e3b663023f63c52edcfb4f40",
+  "verification_run_id": "tests/aistock_validation/history/validation_center/BUG-097-validation-catalog-resource-policies-validation-20260522.md",
+  "created_at": "2026-05-22T12:08:24Z",
+  "first_seen_at": "2026-05-22T12:08:24Z",
+  "last_seen_at": "2026-05-22T12:08:24Z",
+  "fixed_at": "2026-05-22T12:24:30Z",
+  "submitted_at": "2026-05-22T12:08:24Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "tests/aistock_validation/catalog/test_plans.yaml",
+    "scripts/aistock_validation_catalog_integrity.py",
+    "backend/services/validation/catalog_integrity.py",
+    "tests/aistock_validation/bugs/20260522_BUG-097-validation-catalog-resource-policies-missing-for-simulation.json",
+    "tests/aistock_validation/history/validation_center/BUG-097-validation-catalog-resource-policies-validation-20260522.md"
+  ],
+  "suspected_modules": [
+    "tests/aistock_validation/catalog/test_plans.yaml",
+    "scripts/aistock_validation_catalog_integrity.py",
+    "backend/services/validation/catalog_integrity.py"
+  ],
+  "required_verification": [
+    "python -m nox -s validation_catalog_integrity",
+    "python -m nox -s validation_module_registry_l0",
+    "python -m nox -s l0",
+    "git diff --check"
+  ],
+  "closure_requirements": [
+    "validation_catalog_integrity passes with no P0/P1 findings for simulation runtime plans",
+    "miniqmt_sim_trading_hours_l5 declares resource_policy and forbids prod_db unless explicitly approved",
+    "L3/live or long-running plans are not runner_enabled by default unless manual/nightly gated according to catalog rules",
+    "L4/L5 plans declare runtime timeout and evidence_policy",
+    "GitHub issue #156 and BUG JSON remain synchronized"
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-22T12:08:24Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Reported via aistock_mcp_server.report_bug. Comments: 4"
+    },
+    {
+      "timestamp": "2026-05-22T12:08:24Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Observed in GitHub Actions run 26280489478 for PR #153: validation_catalog_integrity state=failed with error_count=2 warning_count=5."
+    },
+    {
+      "timestamp": "2026-05-22T12:08:24Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "P0 findings: miniqmt_sim_trading_hours_l5 writes business state but lacks resource_policy; miniqmt_sim_trading_hours_l5 does not explicitly forbid prod_db."
+    },
+    {
+      "timestamp": "2026-05-22T12:08:24Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "P1 findings: L3/live plans localsim_unattended_l3, miniqmt_sim_stub_l3, simulation_runtime_ops_ui must not be runner_enabled by default; L4/L5 plans miniqmt_sim_trading_hours_l5 and simulation_dual_backend_l4 lack evidence_policy."
+    },
+    {
+      "timestamp": "2026-05-22T12:08:24Z",
+      "actor": "codex-app",
+      "action": "comment",
+      "note": "Fix must be in an independent worktree/branch and must not be mixed into BUG-096."
+    },
+    {
+      "timestamp": "2026-05-22T12:18:30Z",
+      "actor": "codex-app",
+      "action": "renumbered_and_github_synced",
+      "note": "Renumbered from stale MCP BUG-093 allocation to BUG-097 because origin/main already contains BUG-093. Mirrored to GitHub issue #156 and will fix in independent worktree/branch."
+    },
+    {
+      "timestamp": "2026-05-22T12:24:30Z",
+      "actor": "codex-app",
+      "action": "fix_committed",
+      "note": "Fix commit 61844456b88aa879e3b663023f63c52edcfb4f40 added simulation runtime validation catalog resource/evidence/runtime policies. Validation passed: validation_catalog_integrity finding_count=0; validation_module_registry_l0 passed; l0 successful blocking=0; git diff --check passed. production_ddl_gate=noop."
+    },
+    {
+      "timestamp": "2026-05-22T12:28:30Z",
+      "actor": "codex-app",
+      "action": "pr_created",
+      "note": "Created GitHub PR #157 for BUG-097 and will sync GitHub issue #156 with fixed-pending-review validation evidence."
+    },
+    {
+      "timestamp": "2026-05-22T13:10:30Z",
+      "actor": "codex-app",
+      "action": "merged_to_main",
+      "note": "GitHub PR #157 merged to main as ddef3e015e4275824474b1b74f07d2769ba7f97f. GitHub issue #156 closed and labeled status:fixed. production_ddl_gate=noop."
+    }
+  ],
+  "github_issue_number": 156,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/156",
+  "worktree_path": "F:\\Dev\\AIstock_worktrees\\bug-097-validation-catalog-resource-policies",
+  "github_pr_url": "https://github.com/licong01-cloud/AIstock/pull/157"
+}
