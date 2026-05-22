@@ -2,7 +2,7 @@
 
 ## Startup (read before any code changes)
 
-- `docs/standards/aistock_development_standard_v1.4_20260521.md` — P0/P1 red lines (18 rules)
+- `docs/standards/aistock_development_standard_v1.5_20260523.md` — P0/P1 red lines (21 rules)
 - `docs/standards/aistock_issue_fix_parallel_workflow_standard_20260514.md` — issue lifecycle, scope, batch execution
 - `docs/codex_project_memory.md` — architecture, subsystems, worktree rules (Codex-maintained, do not modify)
 
@@ -10,8 +10,8 @@
 
 1. **Production port 8001**: never touch. Validate on 8011/8012 (backend) + 3011/3012 (frontend).
 2. **Worktree isolation**: new feature/bugfix → new worktree from `origin/main`. Never develop in dirty `F:\Dev\AIstock`.
-3. **Fail-fast**: no silent fallback, no empty `except: pass`, no default values masking errors. See v1.4 §6.3-6.4.
-4. **DESIGN-COMPLIANCE-001**: before merge, item-by-item review against design/closure_requirements. No simplified/POC/placeholder delivery. See v1.4 §15.3.
+3. **Fail-fast**: no silent fallback, no empty `except: pass`, no default values masking errors. See v1.5 §6.3-6.4.
+4. **DESIGN-COMPLIANCE-001**: before merge, item-by-item review against design/closure_requirements. No simplified/POC/placeholder delivery. See v1.5 §15.3.
 5. **Do not modify** Codex-owned files: `codex_project_memory.md`, `AGENTS.override.md`, `AGENTS.md`.
 6. **Branch naming**: `claude/<task>-<yyyymmdd>` to distinguish from Codex's `codex/` prefix.
 7. **Batch execution**: same-module issues share worktree/context/validation via `batch_id`. See issue workflow §6.
@@ -156,3 +156,5 @@ rtk init --global       # Add RTK to ~/.claude/CLAUDE.md
 
 Overall average: **60-90% token reduction** on common development operations.
 <!-- /rtk-instructions -->
+
+- **Context budget**: classify tasks as T0/T1/T2/T3 and avoid loading full unrelated standards, designs, memories, or prompts. Use batch context for same-module issues when safe.

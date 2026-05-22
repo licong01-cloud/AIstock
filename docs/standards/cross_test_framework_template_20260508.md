@@ -1063,7 +1063,7 @@ state_consistency_checks:
 
 | 标准文档 | 关系 |
 | --- | --- |
-| `docs/standards/aistock_development_standard_v1.4_20260521.md` | 上位标准；本模板是其在 cross-test 维度的扩展 |
+| `docs/standards/aistock_development_standard_v1.5_20260523.md` | 上位标准；本模板是其在 cross-test 维度的扩展 |
 | `tests/aistock_validation/catalog/test_levels.md` | L0-L5 定义；本模板 §2.1 / §2.8 直接引用 |
 | `feedback_aistock_codex_alignment.md` | Claude/Codex 协调 13 条；本模板 §1.3 / §4.3 落实其中"测试只填 bug"条款 |
 | `feedback_no_silent_errors.md` | 错误必须传播；本模板 §2.5 落实 |

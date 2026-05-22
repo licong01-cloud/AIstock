@@ -8,7 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = ROOT / "scripts" / "aistock_guardrail_scan.py"
-CATALOG_PATH = ROOT / "docs" / "standards" / "aistock_development_standard_v1.4_20260521.yaml"
+CATALOG_PATH = ROOT / "docs" / "standards" / "aistock_development_standard_v1.5_20260523.yaml"
 
 
 def _load_module():
@@ -40,8 +40,8 @@ def test_catalog_references_current_human_readable_standard() -> None:
     standard_path = ROOT / catalog["source_standard"]
     standard_text = standard_path.read_text(encoding="utf-8")
 
-    assert catalog["source_version"] == "1.4"
-    assert standard_path.name == "aistock_development_standard_v1.4_20260521.md"
+    assert catalog["source_version"] == "1.5"
+    assert standard_path.name == "aistock_development_standard_v1.5_20260523.md"
     for rule in catalog["rules"]:
         if not rule.get("enabled", True):
             continue
