@@ -5,6 +5,8 @@ import zipfile
 from typing import Dict, Any, Optional
 import httpx
 
+from backend.services.qe_archive.models import normalize_json
+
 logger = logging.getLogger(__name__)
 
 
@@ -95,7 +97,7 @@ class QEWorkspaceClient:
             payload["callback_url"] = callback_url
         
         try:
-            response = await self.client.post(url, json=payload)
+            response = await self.client.post(url, json=normalize_json(payload))
             response.raise_for_status()
             data = response.json()
             loop_id = data.get("loop_id")
