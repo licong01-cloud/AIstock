@@ -1,3 +1,28 @@
+# AIstock — Claude Code Project Instructions
+
+## Startup (read before any code changes)
+
+- `docs/standards/aistock_development_standard_v1.4_20260521.md` — P0/P1 red lines (18 rules)
+- `docs/standards/aistock_issue_fix_parallel_workflow_standard_20260514.md` — issue lifecycle, scope, batch execution
+- `docs/codex_project_memory.md` — architecture, subsystems, worktree rules (Codex-maintained, do not modify)
+
+## Key Boundaries (same standard as Codex)
+
+1. **Production port 8001**: never touch. Validate on 8011/8012 (backend) + 3011/3012 (frontend).
+2. **Worktree isolation**: new feature/bugfix → new worktree from `origin/main`. Never develop in dirty `F:\Dev\AIstock`.
+3. **Fail-fast**: no silent fallback, no empty `except: pass`, no default values masking errors. See v1.4 §6.3-6.4.
+4. **DESIGN-COMPLIANCE-001**: before merge, item-by-item review against design/closure_requirements. No simplified/POC/placeholder delivery. See v1.4 §15.3.
+5. **Do not modify** Codex-owned files: `codex_project_memory.md`, `AGENTS.override.md`, `AGENTS.md`.
+6. **Branch naming**: `claude/<task>-<yyyymmdd>` to distinguish from Codex's `codex/` prefix.
+7. **Batch execution**: same-module issues share worktree/context/validation via `batch_id`. See issue workflow §6.
+8. **Cross-tool comms**: opt-in only. Do not poll MemPalace channel unless user explicitly requests coordination.
+
+## Temporary artifacts
+
+Output under `F:\Dev\AIstock_backups` or `F:\Dev\AIstock_artifacts`. Never leave untracked artifacts in the repo root. One-shot diagnostics go in `debug_tools/`.
+
+---
+
 <!-- rtk-instructions v2 -->
 # RTK (Rust Token Killer) - Token-Optimized Commands
 
