@@ -6,7 +6,7 @@ import pytest
 
 from backend.services.selection_center.models import SelectionMode, SelectionRunStatus
 from backend.services.selection_center.repository import InMemorySelectionCenterRepository
-from backend.services.selection_center.runtime_profile import runtime_profile_config_sha256
+from backend.services.selection_center.runtime_profile import runtime_profile_config_sha256, validate_runtime_profile_binding
 from backend.services.selection_center.service import SelectionCenterService
 from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.simulation_runtime import (
@@ -42,6 +42,14 @@ class FakeSuspendLookup:
         return {}
 
 
+class FakeCalendar:
+    def ensure_trading_day(self, trade_date: date) -> None:
+        return None
+
+    def list_trading_days(self, start_date: date, end_date: date) -> list[date]:
+        return [date(2024, 1, 2)]
+
+
 def _runtime_config(*, top_k: int = 2) -> dict:
     return {
         "runtime_profile": {
@@ -62,14 +70,21 @@ def _versioned_runtime_config(*, top_k: int = 2) -> dict:
     return payload
 
 
-def _seed_artifact(artifact_repo: InMemorySelectionScoreArtifactRepository, manifest, rows: list[dict]) -> None:
+def _seed_artifact(
+    artifact_repo: InMemorySelectionScoreArtifactRepository,
+    manifest,
+    rows: list[dict],
+    *,
+    trade_date: date = date(2024, 1, 2),
+    runtime_config: dict | None = None,
+) -> None:
     artifact_repo.save(
         SelectionScoreArtifact(
             package_id=manifest.package_id,
             manifest_sha256=manifest.manifest_sha256 or "",
-            trade_date=date(2024, 1, 2),
+            trade_date=trade_date,
             data_source="DB_HISTORICAL",
-            runtime_config_hash=selection_artifact_runtime_hash({}),
+            runtime_config_hash=selection_artifact_runtime_hash(runtime_config or {}),
             scores_json=rows,
             score_count=len(rows),
             universe_count=len(rows),
@@ -128,6 +143,7 @@ def _selection_service(
         runtime=runtime,
         tradability_filter=TradabilityFilter(FakeSuspendLookup()),
         refresh_audit=NoopRefreshAudit(),
+        calendar_provider=FakeCalendar(),
         repository=repository,
     )
 
@@ -223,3 +239,40 @@ def test_selection_center_uses_shared_selection_evidence_service() -> None:
     assert runtime_repo.get_daily_selection_evidence(evidence_id).package_id == manifest.package_id
     assert evidence_refs["artifact_hash_by_package"][manifest.package_id]
     assert [item.symbol for item in run.aggregate_results] == ["000001.SZ", "000002.SZ"]
+
+
+def test_strategy_package_selection_refreshes_default_binding_after_pit_finalization() -> None:
+    pit_config = {
+        "selection_artifact_config": {
+            "pit_mode": "PREVIOUS_TRADING_DAY_CLOSE",
+            "cutoff_date": "2024-01-02",
+        }
+    }
+    rows = [
+        {"symbol": "000001.SZ", "score": 0.9, "rank": 1, "reference_price": 10.0},
+        {"symbol": "000002.SZ", "score": 0.8, "rank": 2, "reference_price": 11.0},
+    ]
+    package_repo, _artifact_repo, manifest, runtime = _package_with_artifact(rows)
+    _seed_artifact(_artifact_repo, manifest, rows, trade_date=date(2024, 1, 3), runtime_config=pit_config)
+    runtime_repo = InMemorySimulationRuntimeRepository()
+
+    result = _selection_service(package_repo, runtime, runtime_repo).run_selection(
+        package_ids=[manifest.package_id],
+        mode=SelectionMode.SINGLE_PACKAGE,
+        trade_date=date(2024, 1, 3),
+        data_source="DB_HISTORICAL",
+        runtime_config=pit_config,
+        created_by="unit_test",
+    )
+
+    binding = validate_runtime_profile_binding(result.runtime_config)
+    assert result.runtime_config["selection_artifact_config"]["cutoff_date"] == "2024-01-02"
+    assert result.runtime_config["point_in_time_context"]["score_trade_date"] == "2024-01-02"
+    assert binding["source"] == "platform_default"
+    assert binding["config_sha256"] == runtime_profile_config_sha256(result.runtime_config)
+    evidence = result.evidence_by_package[manifest.package_id]
+    package_binding = result.runtime_config["package_runtime_configs"][manifest.package_id]["runtime_profile_binding"]
+    assert evidence.runtime_profile_hash == package_binding["config_sha256"]
+    assert package_binding["config_sha256"] == runtime_profile_config_sha256(
+        result.runtime_config["package_runtime_configs"][manifest.package_id]
+    )

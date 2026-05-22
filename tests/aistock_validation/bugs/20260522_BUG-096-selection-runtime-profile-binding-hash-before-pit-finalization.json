@@ -1,0 +1,149 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-096",
+  "title": "Selection runtime_profile_binding hash is generated before PIT and selection_artifact_config are finalized",
+  "description": "Expected: Selection Center / simulation runtime should finalize the exact trading runtime_config before generating or validating runtime_profile_binding. After point-in-time selection settings, selection_artifact_config, evidence refs, and platform runtime profile fields are normalized, the persisted selection run and any downstream Paper v2 portfolio creation must validate against the same runtime_profile_config_sha256. Selection run success should be sufficient evidence for create_paper_portfolio_from_run() to pass the platform_default runtime profile binding check when no later trading-behavior config mutation occurs.\nActual: A selection run can succeed, but downstream SelectionCenterService.create_paper_portfolio_from_run() can reject the same run with a platform default runtime profile binding hash mismatch. Current root-cause trace shows StrategyPackageSelectionService.run_selection() attaches the default runtime_profile_binding before _apply_point_in_time_selection_config() finalizes selection_artifact_config / PIT-related fields. runtime_profile_config_sha256() includes selection_artifact_config in the hashed config, while point_in_time_context is excluded. Therefore the binding can be computed over a pre-finalized runtime_config and later validated against a post-finalized runtime_config, causing a false fail-fast block in Selection -> Paper portfolio -> LocalSim/MiniQMT startup.",
+  "module": "paper_v2",
+  "severity": "P0",
+  "risk_area": "runtime_profile_binding_lifecycle",
+  "status": "fixed",
+  "trigger_condition": {
+    "scenario": "reported_via_mcp",
+    "files": [
+      "backend/services/simulation_runtime/selection.py",
+      "backend/services/selection_center/runtime_profile.py",
+      "backend/services/selection_center/service.py",
+      "backend/tests/simulation_runtime/test_strategy_package_selection_service.py",
+      "backend/tests/selection_center/test_runtime_selection.py",
+      "backend/tests/paper_trading_v2/test_runtime_profile.py"
+    ]
+  },
+  "reproduce_command": "python - <<'PY'\nfrom backend.services.selection_center.runtime_profile import normalize_selection_runtime_config, attach_default_runtime_profile_binding, validate_runtime_profile_binding\nbase = {'runtime_profile': {'selection': {'top_k': 2}}}\nconfig = normalize_selection_runtime_config(attach_default_runtime_profile_binding(base))\nvalidate_runtime_profile_binding(config)\nwith_pit = dict(config)\nwith_pit['selection_artifact_config'] = {'pit_mode': 'NONE', 'cutoff_date': '2024-01-01'}\nwith_pit['point_in_time_context'] = {'pit_mode': 'NONE', 'cutoff_date': '2024-01-01'}\nvalidate_runtime_profile_binding(with_pit)\nPY",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:backend/services/simulation_runtime/selection.py",
+    "file:backend/services/selection_center/runtime_profile.py",
+    "file:backend/services/selection_center/service.py",
+    "file:backend/tests/simulation_runtime/test_strategy_package_selection_service.py",
+    "file:backend/tests/selection_center/test_runtime_selection.py",
+    "file:backend/tests/paper_trading_v2/test_runtime_profile.py",
+    "file:tests/aistock_validation/history/paper_v2/BUG-096-runtime-profile-binding-validation-20260522.md"
+  ],
+  "fingerprint": "05b3cf7900151b89-BUG-096",
+  "assigned_agent": "codex-app",
+  "fix_branch": "bug/BUG-096-runtime-profile-binding",
+  "fix_commit": "28f6e4efd4f84506ee6b241e3cede32140c4cc44",
+  "verification_run_id": "tests/aistock_validation/history/paper_v2/BUG-096-runtime-profile-binding-validation-20260522.md",
+  "first_seen_at": "2026-05-22T07:57:30Z",
+  "last_seen_at": "2026-05-22T07:57:30Z",
+  "fixed_at": "2026-05-22T09:45:30Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/selection_center/runtime_profile.py",
+    "backend/services/simulation_runtime/selection.py",
+    "backend/tests/paper_trading_v2/test_runtime_profile.py",
+    "backend/tests/selection_center/test_runtime_selection.py",
+    "backend/tests/simulation_runtime/test_strategy_package_selection_service.py",
+    "tests/aistock_validation/bugs/20260522_BUG-096-selection-runtime-profile-binding-hash-before-pit-finalization.json",
+    "tests/aistock_validation/history/paper_v2/BUG-096-runtime-profile-binding-validation-20260522.md"
+  ],
+  "suspected_modules": [
+    "backend/services/selection_center/runtime_profile.py",
+    "backend/services/simulation_runtime/selection.py",
+    "backend/tests/paper_trading_v2/test_runtime_profile.py",
+    "backend/tests/selection_center/test_runtime_selection.py",
+    "backend/tests/simulation_runtime/test_strategy_package_selection_service.py"
+  ],
+  "required_verification": [
+    "Regression test proves runtime_config is finalized with PIT / selection_artifact_config before platform_default runtime_profile_binding is generated or refreshed.",
+    "Regression test proves validate_runtime_profile_binding() passes after selection_artifact_config and point_in_time_context are present.",
+    "Selection run -> SelectionCenterService.create_paper_portfolio_from_run() succeeds for a valid finalized runtime_config and fails fast only on real post-binding trading-behavior mutation.",
+    "LocalSim and MiniQMT startup paths do not use silent fallback, stale binding, or historical selection evidence to bypass runtime_profile_binding validation."
+  ],
+  "closure_requirements": [
+    "The platform_default runtime_profile_binding hash is computed from the final persisted trading runtime_config.",
+    "Selection artifact / PIT normalization cannot mutate hash-included fields after binding without explicitly refreshing the binding.",
+    "Current-day selection evidence can be used to create Paper v2 portfolios for LocalSim and MiniQMT without false hash mismatch.",
+    "Related BUG-086 / GitHub #108 remains linked but this bug has its own fix branch, validation evidence, and GitHub issue."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-22T07:57:30Z",
+      "actor": "paper_v2",
+      "action": "discovered",
+      "note": "Reported via aistock_mcp_server.report_bug. Comments: 5"
+    },
+    {
+      "timestamp": "2026-05-22T07:57:30Z",
+      "actor": "paper_v2",
+      "action": "comment",
+      "note": "Business impact: P0 because it can block creating Paper v2 portfolios from successful selection runs and therefore block LocalSim / MiniQMT multi-strategy simulation startup before trading validation."
+    },
+    {
+      "timestamp": "2026-05-22T07:57:30Z",
+      "actor": "paper_v2",
+      "action": "comment",
+      "note": "This is related to, but not fully covered by, BUG-086 / GitHub #108. BUG-086 addressed the broader runtime_config activation boundary; this defect is a concrete lifecycle ordering bug where platform_default binding is generated before final runtime_config mutation by PIT/selection_artifact_config."
+    },
+    {
+      "timestamp": "2026-05-22T07:57:30Z",
+      "actor": "paper_v2",
+      "action": "comment",
+      "note": "Known high-probability code path: backend/services/simulation_runtime/selection.py calls attach_default_runtime_profile_binding(), then _apply_point_in_time_selection_config() later mutates runtime_config with selection_artifact_config. backend/services/selection_center/runtime_profile.py::runtime_profile_config_sha256() includes selection_artifact_config in the hash."
+    },
+    {
+      "timestamp": "2026-05-22T07:57:30Z",
+      "actor": "paper_v2",
+      "action": "comment",
+      "note": "Observed/related runtime artifacts from current investigation: package pkg_378eb9c91e104c64935404e257e932ee; selection runs sel_1de1375f43aa415db32aa0c63338b8f9 and sel_e0885f5a5b224f6d849bf0511436e69d; artifact ssa_86744f94710e494c8d55a153471472c9; daily evidence dse_fcd00703efc5c8af."
+    },
+    {
+      "timestamp": "2026-05-22T07:57:30Z",
+      "actor": "paper_v2",
+      "action": "comment",
+      "note": "Do not fix in this registration step. Required future verification should include: selection_artifact_config/PIT finalization followed by validate_runtime_profile_binding(); selection run -> create_paper_portfolio_from_run(); and regression tests proving no silent fallback or post-binding trading-behavior mutation."
+    },
+    {
+      "timestamp": "2026-05-22T08:01:34Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Mirrored BUG-096 to GitHub issue #149 via gh CLI because MCP GitHub sync is currently blocked by an unrelated UTF-8 BOM bug JSON in another worktree."
+    },
+    {
+      "timestamp": "2026-05-22T08:01:34Z",
+      "actor": "codex-app",
+      "action": "github_sync_verified",
+      "note": "GitHub issue #149 created with P0/severity:p0, paper_v2, selection-center, strategy-package, and runtime-contract labels. No code fix performed in this registration step."
+    },
+    {
+      "timestamp": "2026-05-22T09:03:00Z",
+      "actor": "codex-app",
+      "action": "assigned",
+      "note": "Claimed in independent worktree F:\\Dev\\AIstock_worktrees\\bug-096-runtime-profile-binding on branch bug/BUG-096-runtime-profile-binding. Scope remains limited to BUG-096 allowed_write_scope; no backend restart or production DB operation."
+    },
+    {
+      "timestamp": "2026-05-22T09:29:49Z",
+      "actor": "codex-app",
+      "action": "validation_passed",
+      "note": "BUG-096 scoped fix validation passed: targeted regression 3 passed; module regression 65 passed; nox l0 successful with blocking=0; git diff --check passed. production_ddl_gate=noop."
+    },
+    {
+      "timestamp": "2026-05-22T09:45:30Z",
+      "actor": "codex-app",
+      "action": "fix_committed",
+      "note": "Fix commit 28f6e4efd4f84506ee6b241e3cede32140c4cc44 refreshes generated runtime_profile_binding after PIT/selection_artifact_config finalization and adds regression coverage. Validation: targeted 3 passed, module regression 65 passed, nox l0 successful, git diff --check passed. production_ddl_gate=noop."
+    },
+    {
+      "timestamp": "2026-05-22T09:50:30Z",
+      "actor": "codex-app",
+      "action": "pr_created",
+      "note": "Created GitHub PR #153 for BUG-096 fix branch and synced GitHub issue #149 with status:fixed-pending-review plus validation summary comment https://github.com/licong01-cloud/AIstock/issues/149#issuecomment-4517549047."
+    }
+  ],
+  "created_at": "2026-05-22T08:00:06Z",
+  "submitted_at": "2026-05-22T08:00:06Z",
+  "github_issue_number": 149,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/149",
+  "worktree_path": "F:\\Dev\\AIstock_worktrees\\bug-096-runtime-profile-binding",
+  "github_pr_url": "https://github.com/licong01-cloud/AIstock/pull/153"
+}

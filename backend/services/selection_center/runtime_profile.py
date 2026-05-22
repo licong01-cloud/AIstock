@@ -461,6 +461,21 @@ def attach_default_runtime_profile_binding(runtime_config: dict[str, Any]) -> di
     return config
 
 
+def refresh_generated_runtime_profile_binding(runtime_config: dict[str, Any]) -> dict[str, Any]:
+    """Refresh generated binding hashes after system-owned config finalization."""
+
+    config = dict(runtime_config)
+    binding = config.get(RUNTIME_PROFILE_BINDING_KEY)
+    if not isinstance(binding, dict):
+        return config
+    if binding.get("source") not in {"platform_default", "ad_hoc_non_trading_preview"}:
+        return config
+    refreshed = dict(binding)
+    refreshed["config_sha256"] = runtime_profile_config_sha256(config)
+    config[RUNTIME_PROFILE_BINDING_KEY] = refreshed
+    return config
+
+
 def attach_activation_runtime_profile_binding(
     runtime_config: dict[str, Any],
     *,
