@@ -1,8 +1,8 @@
-﻿# BUG-096/097/098 QE 可复现性、执行真值与因子权重入仓验证记录
+# BUG-098/099/100 QE 可复现性、执行真值与因子权重入仓验证记录
 
 日期：2026-05-22
 工作目录：`F:\Dev\AIstock_worktrees\bug-096-098-qe-reproducibility-truth-weights-20260522`
-分支：`bug/BUG-096-098-qe-reproducibility-truth-weights-20260522`
+分支：`bug/BUG-098-100-qe-reproducibility-truth-weights-20260522`
 关联 GitHub Issues：`#141`、`#142`、`#143`
 治理规则：`DESIGN-COMPLIANCE-001`、`PROD-DDL-001`
 
