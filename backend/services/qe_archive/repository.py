@@ -24,6 +24,7 @@ from .models import (
     OutboxEventRecord,
     RawPayloadRecord,
     ReproducibilityManifestRecord,
+    RunFactorImportanceRecord,
     RunFactorRecord,
     RunConfigRecord,
     RunSourceRecord,
@@ -252,6 +253,30 @@ FACTOR_COLUMNS = (
     "independent_metrics_snapshot",
     "official_rating_snapshot",
     "correlation_cluster",
+)
+
+FACTOR_IMPORTANCE_COLUMNS = (
+    "run_id",
+    "factor_catalog_id",
+    "factor_name",
+    "feature_name",
+    "feature_index",
+    "model_family",
+    "model_type",
+    "method",
+    "method_version",
+    "split_name",
+    "time_bucket",
+    "epoch",
+    "step",
+    "importance_value",
+    "normalized_value",
+    "weight_pct",
+    "signed_value",
+    "rank_in_run",
+    "sample_count",
+    "reliability",
+    "metadata",
 )
 
 SYMBOL_SUMMARY_COLUMNS = (
@@ -958,6 +983,9 @@ class QEArchiveRepository:
             filters.append("source_type = %s")
             params.append(source_type)
         params.append(limit)
+        # ALGO-COMPLEXITY-001: this analytics join is bounded by indexed
+        # run/task/factor filters plus a hard LIMIT; it never scans raw
+        # workspace artifacts or expands factor x symbol x date rows.
         where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
         with self._connection_provider() as conn:
             with conn.cursor() as cur:
@@ -1273,6 +1301,9 @@ class QEArchiveRepository:
                 """
             )
             params.extend([params[-1]] * 4)
+        # ALGO-COMPLEXITY-001: stability aggregation groups only persisted
+        # per-run factor-importance facts, optionally narrowed by factor/method,
+        # and is capped by LIMIT to avoid unbounded analytics results.
         where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
         params.append(limit)
 
@@ -1492,6 +1523,188 @@ class QEArchiveRepository:
                 )
                 return self._fetch_dicts(cur)
 
+    def query_factor_importance(
+        self,
+        *,
+        run_id: str | None = None,
+        task_id: str | None = None,
+        loop_index: int | None = None,
+        factor_name: str | None = None,
+        method: str | None = None,
+        limit: int = 50,
+        order: str = "desc",
+    ) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit or 50), 500))
+        direction = "ASC" if str(order or "").lower() == "asc" else "DESC"
+        filters: list[str] = []
+        params: list[Any] = []
+        if run_id:
+            filters.append("i.run_id = %s")
+            params.append(run_id)
+        if task_id:
+            filters.append("r.task_id = %s")
+            params.append(task_id)
+        if loop_index is not None:
+            filters.append("r.loop_index = %s")
+            params.append(int(loop_index))
+        if factor_name:
+            filters.append("i.factor_name = %s")
+            params.append(factor_name)
+        if method:
+            filters.append("i.method = %s")
+            params.append(method)
+        where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
+        params.append(limit)
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT
+                        i.run_id,
+                        r.task_id,
+                        r.loop_index,
+                        r.experiment_id,
+                        r.logical_experiment_id,
+                        r.model_family AS run_model_family,
+                        r.model_type AS run_model_type,
+                        r.factor_set_hash AS run_factor_set_hash,
+                        r.factor_count,
+                        r.freq,
+                        r.label_horizon,
+                        r.score_total,
+                        r.research_valid,
+                        r.invalid_reason,
+                        r.completed_at,
+                        s.source_system,
+                        s.source_type,
+                        s.source_id,
+                        s.source_sub_id,
+                        s.mlflow_artifact_uri,
+                        c.config_sha256,
+                        c.factor_set_hash AS config_factor_set_hash,
+                        c.model_params,
+                        c.strategy_config,
+                        c.data_split,
+                        c.execution_config,
+                        c.runtime_flags,
+                        repro.random_seed,
+                        (repro.manifest_json ->> 'seed_policy') AS seed_policy,
+                        repro.reproducibility_level,
+                        repro.verification_status,
+                        repro.deterministic_flags,
+                        repro.package_versions,
+                        repro.artifact_manifest_sha256,
+                        dc.train_start,
+                        dc.train_end,
+                        dc.valid_start,
+                        dc.valid_end,
+                        dc.test_start,
+                        dc.test_end,
+                        dc.backtest_start,
+                        dc.backtest_end,
+                        acc.cagr,
+                        acc.total_return,
+                        acc.max_drawdown,
+                        acc.sharpe,
+                        acc.avg_cash_ratio,
+                        acc.final_cash_ratio,
+                        i.factor_name,
+                        i.feature_name,
+                        i.feature_index,
+                        i.model_family,
+                        i.model_type,
+                        i.method,
+                        i.split_name,
+                        i.importance_value,
+                        i.normalized_value,
+                        i.weight_pct,
+                        i.signed_value,
+                        i.rank_in_run,
+                        i.reliability,
+                        i.metadata,
+                        i.created_at
+                    FROM qe_archive.run_factor_importance i
+                    JOIN qe_archive.run r ON r.run_id = i.run_id
+                    LEFT JOIN qe_archive.run_config c ON c.run_id = i.run_id
+                    LEFT JOIN qe_archive.run_reproducibility_manifest repro ON repro.run_id = i.run_id
+                    LEFT JOIN qe_archive.run_account_summary acc ON acc.run_id = i.run_id
+                    LEFT JOIN qe_archive.run_data_context dc ON dc.run_id = i.run_id AND dc.context_type = 'primary'
+                    LEFT JOIN qe_archive.run_source s ON s.run_id = i.run_id
+                    {where_sql}
+                    ORDER BY i.normalized_value {direction} NULLS LAST,
+                             i.importance_value {direction},
+                             i.created_at DESC
+                    LIMIT %s
+                    """,
+                    params,
+                )
+                return self._fetch_dicts(cur)
+
+    def query_factor_importance_stability(
+        self,
+        *,
+        factor_name: str | None = None,
+        method: str | None = None,
+        min_runs: int = 2,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit or 50), 500))
+        min_runs = max(1, int(min_runs or 2))
+        filters: list[str] = []
+        params: list[Any] = []
+        if factor_name:
+            filters.append("i.factor_name = %s")
+            params.append(factor_name)
+        if method:
+            filters.append("i.method = %s")
+            params.append(method)
+        where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
+        params.extend([min_runs, limit])
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT
+                        i.factor_name,
+                        i.method,
+                        COUNT(DISTINCT i.run_id) AS run_count,
+                        COUNT(DISTINCT repro.random_seed) FILTER (WHERE repro.random_seed IS NOT NULL) AS distinct_seed_count,
+                        ARRAY_AGG(DISTINCT repro.random_seed) FILTER (WHERE repro.random_seed IS NOT NULL) AS random_seeds,
+                        ARRAY_AGG(DISTINCT repro.reproducibility_level) FILTER (WHERE repro.reproducibility_level IS NOT NULL) AS reproducibility_levels,
+                        ARRAY_AGG(DISTINCT repro.verification_status) FILTER (WHERE repro.verification_status IS NOT NULL) AS verification_statuses,
+                        SUM(CASE WHEN lower(COALESCE(c.runtime_flags ->> 'enable_sector_hmm', 'false')) IN ('1','true','yes','on') THEN 1 ELSE 0 END) AS hmm_enabled_run_count,
+                        SUM(CASE WHEN lower(COALESCE(c.runtime_flags ->> 'enable_sector_hmm', 'false')) NOT IN ('1','true','yes','on') THEN 1 ELSE 0 END) AS no_hmm_run_count,
+                        AVG(i.normalized_value) AS avg_normalized_value,
+                        AVG(i.weight_pct) AS avg_weight_pct,
+                        STDDEV_POP(i.normalized_value) AS std_normalized_value,
+                        MIN(i.normalized_value) AS min_normalized_value,
+                        MAX(i.normalized_value) AS max_normalized_value,
+                        AVG(i.rank_in_run) AS avg_rank,
+                        MIN(i.rank_in_run) AS best_rank,
+                        AVG(acc.cagr) AS avg_cagr,
+                        AVG(acc.total_return) AS avg_total_return,
+                        AVG(acc.max_drawdown) AS avg_max_drawdown,
+                        AVG(acc.sharpe) AS avg_sharpe,
+                        AVG(acc.avg_cash_ratio) AS avg_cash_ratio,
+                        AVG(acc.final_cash_ratio) AS avg_final_cash_ratio,
+                        MAX(r.completed_at) AS latest_completed_at
+                    FROM qe_archive.run_factor_importance i
+                    JOIN qe_archive.run r ON r.run_id = i.run_id
+                    LEFT JOIN qe_archive.run_config c ON c.run_id = i.run_id
+                    LEFT JOIN qe_archive.run_reproducibility_manifest repro ON repro.run_id = i.run_id
+                    LEFT JOIN qe_archive.run_account_summary acc ON acc.run_id = i.run_id
+                    LEFT JOIN qe_archive.run_data_context dc ON dc.run_id = i.run_id AND dc.context_type = 'primary'
+                    LEFT JOIN qe_archive.run_source s ON s.run_id = i.run_id
+                    {where_sql}
+                    GROUP BY i.factor_name, i.method
+                    HAVING COUNT(DISTINCT i.run_id) >= %s
+                    ORDER BY avg_normalized_value DESC NULLS LAST, run_count DESC
+                    LIMIT %s
+                    """,
+                    params,
+                )
+                return self._fetch_dicts(cur)
+
     def query_model_trials(self, *, model_type: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
         limit = max(1, min(int(limit or 50), 500))
         params: list[Any] = []
@@ -1662,8 +1875,38 @@ class QEArchiveRepository:
                     tuple(self._adapt_value(col, record.get(col)) for col in FACTOR_COLUMNS)
                     for record in records
                 ]
+                # ALGO-COMPLEXITY-001: ingestion writes one run at a time and
+                # uses execute_values paging, so batch size is bounded by the
+                # source run's extracted factor list rather than full market data.
                 sql = f"""
                     INSERT INTO qe_archive.run_factor ({", ".join(FACTOR_COLUMNS)})
+                    VALUES %s
+                """
+                execute_values(cur, sql, rows, page_size=1000)
+        return len(records)
+
+    def replace_run_factor_importance(
+        self,
+        run_id: str,
+        importances: Sequence[RunFactorImportanceRecord | Mapping[str, Any]],
+    ) -> int:
+        records = [self._prepare_record(item, FACTOR_IMPORTANCE_COLUMNS) for item in importances]
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM qe_archive.run_factor_importance WHERE run_id = %s", (run_id,))
+                if not records:
+                    return 0
+                for record in records:
+                    record["run_id"] = run_id
+                    self._require(record, ("run_id", "factor_name", "method", "importance_value"))
+                    record.setdefault("reliability", "unknown")
+                    record.setdefault("metadata", {})
+                rows = [
+                    tuple(self._adapt_value(col, record.get(col)) for col in FACTOR_IMPORTANCE_COLUMNS)
+                    for record in records
+                ]
+                sql = f"""
+                    INSERT INTO qe_archive.run_factor_importance ({", ".join(FACTOR_IMPORTANCE_COLUMNS)})
                     VALUES %s
                 """
                 execute_values(cur, sql, rows, page_size=1000)

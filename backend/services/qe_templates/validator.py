@@ -6,12 +6,23 @@ from collections.abc import Mapping
 from typing import Any
 
 from backend.services.quantevolver.experiment_config import QE_RUNTIME_METADATA_KEYS
+from backend.services.quantevolver.seed_contract import ensure_template_fixed_seeds
+
+
+def normalize_template_config(template_kind: str, config_json: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the canonical template config persisted and later materialized."""
+
+    return ensure_template_fixed_seeds(template_kind, dict(config_json or {}))
 
 
 def validate_template_payload(template_kind: str, config_json: Mapping[str, Any]) -> dict[str, Any]:
     errors: list[str] = []
     warnings: list[str] = []
     config = dict(config_json or {})
+    try:
+        config = normalize_template_config(template_kind, config)
+    except ValueError as exc:
+        errors.append(str(exc))
     if template_kind == "single_experiment":
         if config.get("alpha_mode") == "multi":
             errors.append("QE MCP v1 does not support multi-alpha experiment templates")

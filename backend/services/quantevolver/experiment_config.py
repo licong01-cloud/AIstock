@@ -7,7 +7,7 @@ Replaces the ad-hoc loop_custom_params dicts scattered across the four call path
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Mapping
 
 from pydantic import BaseModel, model_validator
 
@@ -42,6 +42,11 @@ QE_RUNTIME_METADATA_KEYS = frozenset(
         "archive_reason",
         "archive_allow_override",
         "random_seed",
+        "seed",
+        "loop_seed",
+        "random_state",
+        "torch_seed",
+        "numpy_seed",
     }
 )
 
@@ -64,6 +69,73 @@ def strip_qe_runtime_metadata(params: dict[str, Any] | None) -> dict[str, Any]:
 
     clean, _ = split_qe_runtime_metadata(params)
     return clean
+
+
+def normalize_qe_random_seed(value: Any, *, field_name: str = "random_seed") -> int:
+    """Return a fixed integer seed or fail fast for non-reproducible loops."""
+
+    if isinstance(value, bool) or value in (None, ""):
+        raise ValueError(f"{field_name} is required and must be an integer fixed seed")
+    try:
+        seed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be an integer fixed seed, got {value!r}") from exc
+    if seed < 0 or seed > 2**32 - 1:
+        raise ValueError(f"{field_name} must be between 0 and 4294967295, got {seed}")
+    return seed
+
+
+def extract_qe_random_seed(*sources: Mapping[str, Any] | None) -> int | None:
+    """Find random_seed/seed/loop_seed from explicit runtime sources."""
+
+    for source in sources:
+        if not isinstance(source, Mapping):
+            continue
+        for key in ("random_seed", "seed", "loop_seed", "random_state", "torch_seed", "numpy_seed"):
+            if key in source and source.get(key) not in (None, ""):
+                return normalize_qe_random_seed(source.get(key), field_name=key)
+    return None
+
+
+def require_qe_random_seed(*sources: Mapping[str, Any] | None, context: str = "qe_loop") -> int:
+    seed = extract_qe_random_seed(*sources)
+    if seed is None:
+        raise ValueError(f"{context}: runtime_flags.random_seed is required for trainable QE loops")
+    return seed
+
+
+def model_seed_param_keys(model_class: str | None) -> tuple[str, ...]:
+    """Return constructor-safe seed kwargs for a concrete Qlib model class."""
+
+    normalized = str(model_class or "").strip()
+    if normalized in {"LGBModel", "AIStockXGBModel", "XGBModel"}:
+        return ("seed", "random_state")
+    if normalized == "CatBoostModel":
+        return ("random_seed",)
+    if normalized in {"TabPFNModel", "LambdaRankModel"}:
+        return ("random_state",)
+    return ()
+
+
+def apply_qe_seed_to_model_params(
+    params: dict[str, Any] | None,
+    seed: int | None,
+    *,
+    model_class: str | None = None,
+) -> dict[str, Any]:
+    """Inject only model-constructor-supported seed kwargs."""
+
+    seeded = dict(params or {})
+    if seed is None:
+        return seeded
+    fixed_seed = normalize_qe_random_seed(seed)
+    allowed_keys = set(model_seed_param_keys(model_class))
+    for key in ("random_seed", "seed", "loop_seed", "random_state", "torch_seed", "numpy_seed"):
+        if key not in allowed_keys:
+            seeded.pop(key, None)
+    for key in allowed_keys:
+        seeded[key] = fixed_seed
+    return seeded
 
 
 def default_qe_risk_policy() -> dict[str, Any]:

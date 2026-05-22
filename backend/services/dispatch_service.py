@@ -722,6 +722,8 @@ class DispatchService:
             "evolution_mode": qe_config.get("evolution_mode", "auto"),
             "selected_model_id": qe_config.get("selected_model_id"),
             "selected_factor_keys": qe_config.get("selected_factor_keys"),
+            "label_horizon": qe_config.get("label_horizon"),
+            "random_seed": qe_config.get("random_seed"),
         }
 
         task = self._insert_task({
@@ -760,6 +762,7 @@ class DispatchService:
                 start_from_loop_zero=start_from_loop_zero,
                 node_id=node["node_id"],
                 label_horizon=config.get("label_horizon"),
+                random_seed=config.get("random_seed"),
             )
         except Exception as e:
             self._update_task_fields(task_id, status="failed", error_message=str(e))

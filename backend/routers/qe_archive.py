@@ -317,6 +317,48 @@ def query_qe_archive_factor_usage(
     return {"status": "success", "data": get_repository().query_factor_usage(limit=limit, min_runs=min_runs)}
 
 
+@router.get("/query/factor-importance", summary="QE archive structured factor importance records")
+def query_qe_archive_factor_importance(
+    run_id: str | None = Query(None),
+    task_id: str | None = Query(None),
+    loop_index: int | None = Query(None, ge=1),
+    factor_name: str | None = Query(None),
+    method: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=500),
+    order: Literal["asc", "desc"] = Query("desc"),
+):
+    return {
+        "status": "success",
+        "data": get_repository().query_factor_importance(
+            run_id=run_id,
+            task_id=task_id,
+            loop_index=loop_index,
+            factor_name=factor_name,
+            method=method,
+            limit=limit,
+            order=order,
+        ),
+    }
+
+
+@router.get("/query/factor-importance/stability", summary="QE archive factor importance stability aggregation")
+def query_qe_archive_factor_importance_stability(
+    factor_name: str | None = Query(None),
+    method: str | None = Query(None),
+    min_runs: int = Query(2, ge=1, le=1000),
+    limit: int = Query(50, ge=1, le=500),
+):
+    return {
+        "status": "success",
+        "data": get_repository().query_factor_importance_stability(
+            factor_name=factor_name,
+            method=method,
+            min_runs=min_runs,
+            limit=limit,
+        ),
+    }
+
+
 @router.get("/query/model-trials", summary="QE archive model trial history")
 def query_qe_archive_model_trials(
     model_type: str | None = Query(None),

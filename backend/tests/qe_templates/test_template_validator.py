@@ -69,7 +69,7 @@ def test_single_template_materializer_reuses_quantevolver_generate_config(monkey
                     "factor_names": ["f1"],
                     "model_id": "lgb",
                     "strategy_id": "topk",
-                    "custom_params": {"label_horizon": 3},
+                    "custom_params": {"label_horizon": 3, "random_seed": 42},
                     "unfilled_handler": "TAIL_SUBSTITUTE",
                     "unfilled_handler_params": {"backup_depth": 15},
                 },
@@ -113,7 +113,7 @@ def test_single_template_materializer_surfaces_existing_generate_config_errors(m
                 "template_kind": "single_experiment",
                 "title": "bad",
                 "archive_policy": "AUTO",
-                "config_json": {"factor_names": ["f1"], "model_id": "bad"},
+                "config_json": {"factor_names": ["f1"], "model_id": "bad", "custom_params": {"random_seed": 42}},
             }
         )
 
@@ -153,6 +153,7 @@ def test_custom_evo_materializer_keeps_archive_policy_out_of_strategy_params(mon
                             "factor_keys": ["Alpha001||alpha158"],
                             "model_id": "model_lgbm_v1",
                             "strategy_params": {"topk": 20},
+                            "runtime_flags": {"random_seed": 42},
                         }
                     ],
                 },

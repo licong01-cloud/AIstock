@@ -18,6 +18,7 @@ from .models import (
     RawPayloadRecord,
     ReproducibilityManifestRecord,
     RunConfigRecord,
+    RunFactorImportanceRecord,
     RunFactorRecord,
     RunSourceRecord,
     SymbolSummaryRecord,
@@ -42,6 +43,7 @@ class ExtractedArchivePayload:
     metrics: list[MetricRecord]
     curves: list[CurveRecord]
     factors: list[RunFactorRecord]
+    factor_importance: list[RunFactorImportanceRecord]
     symbol_summaries: list[SymbolSummaryRecord]
     trades: list[TradeRecord]
     execution_events: list[ExecutionEventRecord]
@@ -171,6 +173,7 @@ class QEArchivePayloadExtractor:
         metric_records = self._extract_metrics(run_id, metrics, enhanced)
         curves = self._extract_curves(run_id, enhanced)
         factor_records = self._extract_factors(run_id, factor_items)
+        factor_importance = self._extract_factor_importance(run_id, data, metrics, enhanced)
         symbol_summaries = self._extract_symbol_summaries(run_id, enhanced, metrics)
         trades = self._extract_trades(run_id, enhanced, metrics)
         execution_events = self._extract_execution_events(
@@ -183,27 +186,56 @@ class QEArchivePayloadExtractor:
         )
         raw_payloads = self._raw_payloads(run_id, source_system, source_id, data, metrics, enhanced)
 
+        random_seed = _extract_random_seed(data, config)
+        seed_policy = "fixed" if random_seed is not None else "unset_legacy"
+        reproducibility_level = (
+            "audit_only"
+            if random_seed is None
+            else ("full" if config_capture_complete else "partial")
+        )
+        verification_status = "not_reproducible" if random_seed is None else "not_verified"
+        runtime_metadata = _extract_reproducibility_runtime_metadata(
+            data,
+            config,
+            random_seed=random_seed,
+            seed_policy=seed_policy,
+        )
+
         manifest_json = {
             "source_system": source_system,
             "source_id": source_id,
             "source_sub_id": source_sub_id,
             "run_id": run_id,
             "run_type": run_type,
+            "reproducibility_level": reproducibility_level,
+            "verification_status": verification_status,
+            "seed_policy": seed_policy,
+            "random_seed": random_seed,
             "config_capture_complete": config_capture_complete,
             "missing_items": missing_items,
             "factor_count": len(factor_list),
             "metric_count": len(metric_records),
             "curve_count": len(curves),
+            "factor_importance_count": len(factor_importance),
             "symbol_summary_count": len(symbol_summaries),
             "trade_count": len(trades),
             "execution_event_count": len(execution_events),
             "raw_payload_sha256": sha256_json(data),
+            "package_versions": runtime_metadata["package_versions"],
+            "deterministic_flags": runtime_metadata["deterministic_flags"],
+            "git_commit": runtime_metadata["git_commit"],
+            "runner_script": runtime_metadata["runner_script"],
+            "source_config_paths": runtime_metadata["source_config_paths"],
+            "python_version": runtime_metadata["python_version"],
+            "qlib_version": runtime_metadata["qlib_version"],
+            "mlflow_version": runtime_metadata["mlflow_version"],
+            "torch_version": runtime_metadata["torch_version"],
         }
         manifest = ReproducibilityManifestRecord(
             run_id=run_id,
             manifest_schema_version=DEFAULT_MANIFEST_SCHEMA_VERSION,
-            reproducibility_level="full" if config_capture_complete else "partial",
-            verification_status="not_verified",
+            reproducibility_level=reproducibility_level,
+            verification_status=verification_status,
             config_sha256=config.config_sha256,
             canonical_config_sha256=sha256_json(config.canonical_config),
             raw_config_sha256=sha256_json(config.raw_config),
@@ -214,7 +246,18 @@ class QEArchivePayloadExtractor:
             metrics_payload_sha256=sha256_json(metrics) if metrics else None,
             enhanced_metrics_sha256=sha256_json(enhanced) if enhanced else None,
             artifact_manifest_sha256=sha256_json(data.get("artifact_manifest")) if data.get("artifact_manifest") else None,
-            source_config_paths=_ensure_mapping(data.get("source_config_paths") or {}),
+            git_commit=runtime_metadata["git_commit"],
+            git_dirty=runtime_metadata["git_dirty"],
+            runner_script=runtime_metadata["runner_script"],
+            runner_script_sha256=runtime_metadata["runner_script_sha256"],
+            python_version=runtime_metadata["python_version"],
+            qlib_version=runtime_metadata["qlib_version"],
+            mlflow_version=runtime_metadata["mlflow_version"],
+            torch_version=runtime_metadata["torch_version"],
+            package_versions=runtime_metadata["package_versions"],
+            random_seed=random_seed,
+            deterministic_flags=runtime_metadata["deterministic_flags"],
+            source_config_paths=runtime_metadata["source_config_paths"],
             missing_items=missing_items,
             manifest_json=manifest_json,
         )
@@ -246,6 +289,7 @@ class QEArchivePayloadExtractor:
             metrics=metric_records,
             curves=curves,
             factors=factor_records,
+            factor_importance=factor_importance,
             symbol_summaries=symbol_summaries,
             trades=trades,
             execution_events=execution_events,
@@ -255,6 +299,7 @@ class QEArchivePayloadExtractor:
                 "factor_count": len(factor_records),
                 "metric_count": len(metric_records),
                 "curve_count": len(curves),
+                "factor_importance_count": len(factor_importance),
                 "symbol_summary_count": len(symbol_summaries),
                 "trade_count": len(trades),
                 "execution_event_count": len(execution_events),
@@ -470,6 +515,116 @@ class QEArchivePayloadExtractor:
                     records.append(RunFactorRecord(run_id=run_id, factor_name=name, factor_order=idx))
         return records
 
+    def _extract_factor_importance(
+        self,
+        run_id: str,
+        data: Mapping[str, Any],
+        metrics: Mapping[str, Any],
+        enhanced: Mapping[str, Any],
+    ) -> list[RunFactorImportanceRecord]:
+        sources: list[tuple[str, Any, str]] = []
+        for path, value, default_method in (
+            ("enhanced_metrics.factor_analysis.feature_importance", _ensure_mapping(enhanced.get("factor_analysis")).get("feature_importance"), "feature_importance"),
+            ("enhanced_metrics.feature_importance", enhanced.get("feature_importance"), "feature_importance"),
+            ("metrics.factor_importance", metrics.get("factor_importance"), "factor_importance"),
+            ("data.factor_importance", data.get("factor_importance"), "factor_importance"),
+            ("enhanced_metrics.pytorch_correlation", enhanced.get("pytorch_correlation"), "pytorch_correlation"),
+            ("metrics.pytorch_correlation", metrics.get("pytorch_correlation"), "pytorch_correlation"),
+        ):
+            if value not in (None, {}, []):
+                sources.append((path, value, default_method))
+
+        raw_records: list[dict[str, Any]] = []
+        for source_path, value, default_method in sources:
+            for row_idx, row in enumerate(_iter_importance_rows(value)):
+                factor_name = _optional_str(
+                    row.get("factor_name")
+                    or row.get("name")
+                    or row.get("factor")
+                    or row.get("feature")
+                    or row.get("feature_name")
+                )
+                raw_value = _as_float(
+                    row.get("importance_value")
+                    if row.get("importance_value") is not None
+                    else row.get("importance")
+                    if row.get("importance") is not None
+                    else row.get("gain")
+                    if row.get("gain") is not None
+                    else row.get("value")
+                    if row.get("value") is not None
+                    else row.get("weight_pct")
+                    if row.get("weight_pct") is not None
+                    else row.get("gain_pct")
+                    if row.get("gain_pct") is not None
+                    else row.get("normalized_value")
+                )
+                if not factor_name or raw_value is None:
+                    continue
+                normalized = _as_float(row.get("normalized_value"))
+                weight_pct = _as_float(row.get("weight_pct") if row.get("weight_pct") is not None else row.get("gain_pct"))
+                if normalized is None:
+                    normalized = weight_pct
+                    if normalized is not None and normalized > 1:
+                        normalized = normalized / 100.0
+                if weight_pct is None and normalized is not None:
+                    weight_pct = normalized * 100.0
+                raw_records.append(
+                    {
+                        "run_id": run_id,
+                        "factor_catalog_id": _as_int(row.get("factor_catalog_id") or row.get("catalog_id")),
+                        "factor_name": factor_name,
+                        "feature_name": _optional_str(row.get("feature_name") or row.get("feature")),
+                        "feature_index": _as_int(row.get("feature_index") or row.get("index")),
+                        "model_family": _optional_str(row.get("model_family") or data.get("model_family")),
+                        "model_type": _optional_str(row.get("model_type") or data.get("model_type") or data.get("model_name")),
+                        "method": _optional_str(row.get("method")) or default_method,
+                        "method_version": _optional_str(row.get("method_version")),
+                        "split_name": _optional_str(row.get("split_name") or row.get("split")),
+                        "time_bucket": _optional_str(row.get("time_bucket")),
+                        "epoch": _as_int(row.get("epoch")),
+                        "step": _as_int(row.get("step")),
+                        "importance_value": raw_value,
+                        "normalized_value": normalized,
+                        "weight_pct": weight_pct,
+                        "signed_value": _as_float(row.get("signed_value") or row.get("raw_value")),
+                        "rank_in_run": _as_int(row.get("rank_in_run") or row.get("rank")),
+                        "sample_count": _as_int(row.get("sample_count") or row.get("n")),
+                        "reliability": _optional_str(row.get("reliability")) or "unknown",
+                        "metadata": {
+                            "source_payload_path": source_path,
+                            "source_row_index": row_idx,
+                            "source_keys": sorted(str(key) for key in row.keys()),
+                        },
+                    }
+                )
+
+        if not raw_records:
+            return []
+
+        total_abs_by_method: dict[str, float] = {}
+        for record in raw_records:
+            if record.get("normalized_value") is None:
+                total_abs_by_method[record["method"]] = total_abs_by_method.get(record["method"], 0.0) + abs(float(record["importance_value"]))
+        for record in raw_records:
+            if record.get("normalized_value") is None:
+                total = total_abs_by_method.get(record["method"], 0.0)
+                record["normalized_value"] = abs(float(record["importance_value"])) / total if total else None
+            if record.get("weight_pct") is None and record.get("normalized_value") is not None:
+                record["weight_pct"] = float(record["normalized_value"]) * 100.0
+
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for record in raw_records:
+            grouped.setdefault(str(record["method"]), []).append(record)
+        for rows in grouped.values():
+            rows.sort(key=lambda item: (item.get("normalized_value") is None, -(item.get("normalized_value") or 0.0), -abs(float(item["importance_value"]))))
+            for idx, record in enumerate(rows, start=1):
+                record.setdefault("rank_in_run", idx)
+                if record.get("rank_in_run") is None:
+                    record["rank_in_run"] = idx
+
+        return [RunFactorImportanceRecord(**record) for record in raw_records]
+
     def _extract_symbol_summaries(
         self,
         run_id: str,
@@ -661,6 +816,187 @@ class QEArchivePayloadExtractor:
         return raw
 
 
+
+def _iter_importance_rows(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, Mapping):
+        rows: list[dict[str, Any]] = []
+        for key, val in value.items():
+            if isinstance(val, Mapping):
+                row = dict(val)
+                row.setdefault("factor_name", key)
+                rows.append(row)
+            elif isinstance(val, Number):
+                rows.append({"factor_name": key, "importance_value": val})
+            elif isinstance(val, (list, tuple)) and val and isinstance(val[0], Number):
+                rows.append({"factor_name": key, "importance_value": val[0]})
+        return rows
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        rows = []
+        for item in value:
+            if isinstance(item, Mapping):
+                rows.append(dict(item))
+            elif isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)) and len(item) >= 2:
+                rows.append({"factor_name": item[0], "importance_value": item[1]})
+        return rows
+    return []
+
+
+def _extract_random_seed(data: Mapping[str, Any], config: Mapping[str, Any] | RunConfigRecord) -> int | None:
+    config_sources: list[Mapping[str, Any]] = []
+    if isinstance(config, RunConfigRecord):
+        canonical_config = _ensure_mapping(config.canonical_config)
+        raw_config = _ensure_mapping(config.raw_config)
+        config_sources.extend(
+            [
+                canonical_config,
+                raw_config,
+                config.model_params or {},
+                config.strategy_config or {},
+                _ensure_mapping(canonical_config.get("runtime_flags")),
+                _ensure_mapping(canonical_config.get("model_params")),
+                _ensure_mapping(canonical_config.get("params")),
+                _ensure_mapping(canonical_config.get("custom_params")),
+                _ensure_mapping(raw_config.get("runtime_flags")),
+                _ensure_mapping(raw_config.get("model_params")),
+                _ensure_mapping(raw_config.get("params")),
+                _ensure_mapping(raw_config.get("custom_params")),
+            ]
+        )
+    else:
+        config_map = _ensure_mapping(config)
+        config_sources.extend(
+            [
+                config_map,
+                _ensure_mapping(config_map.get("runtime_flags")),
+                _ensure_mapping(config_map.get("model_params")),
+                _ensure_mapping(config_map.get("params")),
+                _ensure_mapping(config_map.get("custom_params")),
+            ]
+        )
+
+    data_config = _ensure_mapping(data.get("config"))
+    execution_manifest = _ensure_mapping(data.get("execution_manifest"))
+    requested_manifest = _ensure_mapping(execution_manifest.get("requested"))
+    for source in (
+        data,
+        _ensure_mapping(data.get("runtime_flags")),
+        _ensure_mapping(data.get("model_params")),
+        _ensure_mapping(data.get("params")),
+        data_config,
+        _ensure_mapping(data_config.get("runtime_flags")),
+        _ensure_mapping(data_config.get("model_params")),
+        _ensure_mapping(data_config.get("params")),
+        _ensure_mapping(data_config.get("custom_params")),
+        execution_manifest,
+        requested_manifest,
+        _ensure_mapping(requested_manifest.get("runtime_flags")),
+        _ensure_mapping(requested_manifest.get("model_params")),
+        *config_sources,
+    ):
+        for key in ("random_seed", "seed", "loop_seed", "random_state"):
+            value = source.get(key) if isinstance(source, Mapping) else None
+            if value not in (None, ""):
+                parsed = _as_int(value)
+                if parsed is not None:
+                    return parsed
+    return None
+
+
+def _extract_reproducibility_runtime_metadata(
+    data: Mapping[str, Any],
+    config: RunConfigRecord,
+    *,
+    random_seed: int | None,
+    seed_policy: str,
+) -> dict[str, Any]:
+    canonical_config = _ensure_mapping(config.canonical_config)
+    raw_config = _ensure_mapping(config.raw_config)
+    execution_manifest = _ensure_mapping(data.get("execution_manifest") or canonical_config.get("execution_manifest"))
+    artifact_manifest = _ensure_mapping(data.get("artifact_manifest") or canonical_config.get("artifact_manifest"))
+    runtime_flags = _merge_mappings(
+        canonical_config.get("runtime_flags"),
+        raw_config.get("runtime_flags"),
+        data.get("runtime_flags"),
+        execution_manifest.get("runtime_flags"),
+        _ensure_mapping(execution_manifest.get("requested")).get("runtime_flags"),
+    )
+    environment = _merge_mappings(
+        data.get("environment"),
+        data.get("env"),
+        data.get("runtime_environment"),
+        canonical_config.get("environment"),
+        artifact_manifest.get("environment"),
+        execution_manifest.get("environment"),
+    )
+    package_versions = _merge_mappings(
+        data.get("package_versions"),
+        environment.get("package_versions"),
+        artifact_manifest.get("package_versions"),
+        execution_manifest.get("package_versions"),
+    )
+    for key, package_key in (("qlib_version", "qlib"), ("mlflow_version", "mlflow"), ("torch_version", "torch")):
+        value = _first_non_empty_value([data, environment, package_versions], key) or package_versions.get(package_key)
+        if value not in (None, "", [], {}):
+            package_versions.setdefault(package_key, value)
+
+    deterministic_flags = _merge_mappings(
+        data.get("deterministic_flags"),
+        data.get("nondeterministic_flags"),
+        environment.get("deterministic_flags"),
+        runtime_flags.get("deterministic_flags"),
+        runtime_flags.get("nondeterministic_flags"),
+        execution_manifest.get("deterministic_flags"),
+    )
+    deterministic_flags.setdefault("seed_policy", seed_policy)
+    if random_seed is not None:
+        deterministic_flags.setdefault("random_seed", random_seed)
+    if "torch_deterministic" not in deterministic_flags:
+        torch_deterministic = _first_non_empty_value([runtime_flags, environment], "torch_deterministic")
+        if torch_deterministic not in (None, "", [], {}):
+            deterministic_flags["torch_deterministic"] = torch_deterministic
+    if "cudnn_deterministic" not in deterministic_flags:
+        cudnn_deterministic = _first_non_empty_value([runtime_flags, environment], "cudnn_deterministic")
+        if cudnn_deterministic not in (None, "", [], {}):
+            deterministic_flags["cudnn_deterministic"] = cudnn_deterministic
+
+    source_config_paths = _merge_mappings(
+        data.get("source_config_paths"),
+        data.get("config_paths"),
+        artifact_manifest.get("source_config_paths"),
+        execution_manifest.get("source_config_paths"),
+    )
+    for key in ("config_path", "conf_yaml_path", "qlib_config_path", "run_log_path"):
+        value = _first_non_empty_value([data, artifact_manifest, execution_manifest], key)
+        if value not in (None, "", [], {}):
+            source_config_paths.setdefault(key, value)
+
+    git_dirty_value = _first_non_empty_value([data, environment, artifact_manifest, execution_manifest], "git_dirty")
+    return {
+        "git_commit": _optional_str(
+            _first_non_empty_value(
+                [data, environment, artifact_manifest, execution_manifest],
+                "git_commit",
+            )
+            or _first_non_empty_value([data, environment, artifact_manifest, execution_manifest], "commit_sha")
+        ),
+        "git_dirty": _as_bool(git_dirty_value),
+        "runner_script": _optional_str(
+            _first_non_empty_value([data, artifact_manifest, execution_manifest], "runner_script")
+            or _first_non_empty_value([data, artifact_manifest, execution_manifest], "entrypoint")
+        ),
+        "runner_script_sha256": _optional_str(
+            _first_non_empty_value([data, artifact_manifest, execution_manifest], "runner_script_sha256")
+        ),
+        "python_version": _optional_str(_first_non_empty_value([data, environment, package_versions], "python_version")),
+        "qlib_version": _optional_str(_first_non_empty_value([data, environment, package_versions], "qlib_version") or package_versions.get("qlib")),
+        "mlflow_version": _optional_str(_first_non_empty_value([data, environment, package_versions], "mlflow_version") or package_versions.get("mlflow")),
+        "torch_version": _optional_str(_first_non_empty_value([data, environment, package_versions], "torch_version") or package_versions.get("torch")),
+        "package_versions": package_versions,
+        "deterministic_flags": deterministic_flags,
+        "source_config_paths": source_config_paths,
+    }
+
+
 def _ensure_mapping(value: Any) -> dict[str, Any]:
     if isinstance(value, Mapping):
         return dict(value)
@@ -671,6 +1007,16 @@ def _ensure_mapping(value: Any) -> dict[str, Any]:
             return {}
         return dict(parsed) if isinstance(parsed, Mapping) else {}
     return {}
+
+
+def _merge_mappings(*values: Any) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for value in values:
+        mapping = _ensure_mapping(value)
+        for key, item in mapping.items():
+            if item not in (None, "", [], {}):
+                merged[str(key)] = item
+    return merged
 
 
 def _as_list(value: Any) -> list[Any]:

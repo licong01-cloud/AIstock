@@ -42,7 +42,8 @@ class DummyScheduler:
         return {"submitted_loop_ids": []}
 
 
-def _loop(label="Loop A", node_id=None, stock_pool=None):
+def _loop(label="Loop A", node_id=None, stock_pool=None, random_seed=20260522):
+    runtime_flags = {"random_seed": random_seed} if random_seed is not None else None
     return qe.CustomEvoLoopConfig(
         label=label,
         factor_keys=["alpha_factor||catalog"],
@@ -51,6 +52,7 @@ def _loop(label="Loop A", node_id=None, stock_pool=None):
         label_horizon=5,
         node_id=node_id,
         stock_pool=stock_pool,
+        runtime_flags=runtime_flags,
     )
 
 
@@ -127,6 +129,23 @@ def test_custom_evo_rerun_route_schedules_only_target_loop(monkeypatch):
     assert dummy.calls[1][1]["loop_config"]["node_id"] == "node-a"
     assert len(background_tasks.tasks) == 1
     assert background_tasks.tasks[0].args == ("task-a", [2])
+
+
+def test_custom_evo_rerun_route_rejects_seedless_trainable_loop(monkeypatch):
+    _patch_non_qe_dependencies(monkeypatch)
+    dummy = DummyScheduler()
+    monkeypatch.setattr(qe, "scheduler", dummy)
+
+    req = qe.CustomEvoLoopRerunRequest(
+        loop=_loop("seedless", random_seed=None),
+        confirm_delete_old_result=True,
+    )
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(qe.rerun_custom_evo_loop("task-a", 2, req, BackgroundTasks()))
+
+    assert exc.value.status_code == 400
+    assert "runtime_flags.random_seed" in str(exc.value.detail)
+    assert [call[0] for call in dummy.calls] == ["config"]
 
 
 def test_custom_evo_rerun_keeps_full_distributed_parallelism(monkeypatch):

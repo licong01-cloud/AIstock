@@ -32,6 +32,17 @@ const DEFAULT_QE_DATA_SPLIT = {
   test_end: QE_DEFAULT_SIGNAL_END,
   backtest_end: QE_DEFAULT_BACKTEST_END,
 };
+const DEFAULT_QE_RANDOM_SEED = 20260522;
+const QE_RANDOM_SEED_MAX = 4294967295;
+
+function isValidQeRandomSeed(value: number) {
+  return Number.isInteger(value) && value >= 0 && value <= QE_RANDOM_SEED_MAX;
+}
+
+function parseQeRandomSeedInput(value: string, fallback = DEFAULT_QE_RANDOM_SEED) {
+  const parsed = Number(value);
+  return isValidQeRandomSeed(parsed) ? parsed : fallback;
+}
 
 function deriveBacktestEnd(testEnd?: string) {
   if (!testEnd) return QE_DEFAULT_BACKTEST_END;
@@ -194,6 +205,7 @@ export default function ComposePage() {
   const [holdThresh, setHoldThresh] = useState(1);
   const [disableAlphaBaseline, setDisableAlphaBaseline] = useState(false);
   const [quickTrain, setQuickTrain] = useState(false);
+  const [randomSeed, setRandomSeed] = useState(DEFAULT_QE_RANDOM_SEED);
   const [labelType, setLabelType] = useState<"close" | "open" | "vwap">("close");
   const [labelHorizon, setLabelHorizon] = useState<1 | 3 | 5 | 10 | 20>(1);
   const [blacklistEnabled, setBlacklistEnabled] = useState(false);
@@ -424,6 +436,9 @@ export default function ComposePage() {
         if (exp.custom_params.topk) setTopk(exp.custom_params.topk);
         if (exp.custom_params.n_drop) setNDrop(exp.custom_params.n_drop);
         if (exp.custom_params.hold_thresh) setHoldThresh(exp.custom_params.hold_thresh);
+        if (exp.custom_params.random_seed !== undefined) {
+          setRandomSeed(parseQeRandomSeedInput(String(exp.custom_params.random_seed), DEFAULT_QE_RANDOM_SEED));
+        }
         if ([1, 3, 5, 10, 20].includes(Number(exp.custom_params.label_horizon || 1))) {
           setLabelHorizon(Number(exp.custom_params.label_horizon || 1) as 1 | 3 | 5 | 10 | 20);
         }
@@ -599,6 +614,10 @@ export default function ComposePage() {
       alert("行业 HMM 已启用，但尚未选择已完成的 HMM 快照。请选择快照后再继续。");
       return false;
     }
+    if (!isValidQeRandomSeed(randomSeed)) {
+      alert(`固定随机种子必须是 0 到 ${QE_RANDOM_SEED_MAX} 之间的整数。`);
+      return false;
+    }
     return true;
   }
 
@@ -609,6 +628,7 @@ export default function ComposePage() {
       hold_thresh: holdThresh,
       disable_alpha158: disableAlphaBaseline,
       quick_train: quickTrain,
+      random_seed: randomSeed,
       label_type: labelType,
       ...(labelHorizon !== 1 ? { label_horizon: labelHorizon } : {}),
       backtest_freq: backtestFreq,
@@ -1631,6 +1651,24 @@ export default function ComposePage() {
                   <input data-testid="qe-quick-train" type="checkbox" checked={quickTrain} onChange={e => setQuickTrain(e.target.checked)} style={{ width: "16px", height: "16px", accentColor: "#2563eb" }} />
                   启用快速训练模式 <span style={{ fontSize: "12px", color: "#d97706", marginLeft: "4px" }}>(训练时间缩短至20%)</span>
                 </label>
+              </div>
+              <div style={{ marginTop: "16px", padding: "12px 14px", borderRadius: "8px", border: "1px solid #bfdbfe", backgroundColor: "#eff6ff" }}>
+                <label style={{ ...labelStyle, color: "#1d4ed8" }}>固定随机种子（必填）</label>
+                <div style={{ display: "grid", gridTemplateColumns: "220px 1fr", gap: "12px", alignItems: "center" }}>
+                  <input
+                    data-testid="qe-random-seed"
+                    type="number"
+                    min={0}
+                    max={QE_RANDOM_SEED_MAX}
+                    step={1}
+                    value={randomSeed}
+                    onChange={e => setRandomSeed(parseQeRandomSeedInput(e.target.value))}
+                    style={{ ...inputStyle, fontFamily: "monospace", borderColor: isValidQeRandomSeed(randomSeed) ? "#93c5fd" : "#ef4444" }}
+                  />
+                  <div style={{ fontSize: "12px", color: "#475569", lineHeight: 1.6 }}>
+                    该种子会写入 custom_params.random_seed、生成配置和归档元数据；训练型 QE 任务缺失种子会被后端拒绝。
+                  </div>
+                </div>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: "12px", marginTop: "12px" }}>
                 <span style={{ fontSize: "14px", color: "#475569", fontWeight: 600, whiteSpace: "nowrap" }}>训练标签</span>

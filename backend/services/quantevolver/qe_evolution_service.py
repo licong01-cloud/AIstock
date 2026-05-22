@@ -11,13 +11,15 @@ from typing import Dict, Any, List, Optional
 import aiofiles
 from psycopg2.extras import RealDictCursor
 from ...db.pg_pool import get_conn
+from ..qe_archive.models import sha256_json
 
 from .factor_official_evaluation_service import CALC_ENGINE
 from .qe_workspace_client import QEWorkspaceClient, QELoopWorkspaceCleanupUnavailable
 from .qe_evolution_agents import EvolutionAgents, EvolutionFactorAgent, EvolutionModelAgent, AnalystResult
 from .callback_urls import build_aistock_callback_url
-from .experiment_config import DEFAULT_LABEL_HORIZON, normalize_label_horizon
+from .experiment_config import DEFAULT_LABEL_HORIZON, normalize_label_horizon, normalize_qe_random_seed
 from .runtime_contract import build_qe_minute_runtime_contract, merge_qe_minute_runtime_contract
+from .seed_contract import ensure_loop_fixed_seed
 from .node_execution import (
     normalize_node_parallelism,
     preflight_qe_node,
@@ -528,6 +530,7 @@ class AutoEvolutionScheduler:
         node_id: Optional[str] = None,
         stock_pool: Optional[str] = None,
         label_horizon: Optional[int] = None,
+        random_seed: Optional[int] = None,
     ) -> str:
         """
         创建演进任务并写入数据库。
@@ -555,6 +558,10 @@ class AutoEvolutionScheduler:
             base_experiment_id,
             explicit_label_horizon=label_horizon,
         )
+        effective_random_seed = normalize_qe_random_seed(
+            random_seed,
+            field_name="create_task.random_seed",
+        )
         root_experiment_id = base_experiment_id
         # rdagent_task_sota: 从 0 开始，Loop1 为初始回测
         # qe_experiment: 从 1 开始，基础实验已完成相当于 Loop1
@@ -567,7 +574,7 @@ class AutoEvolutionScheduler:
         task_id = root_experiment_id
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT task_id, status, current_loop FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
+                cur.execute("SELECT task_id, status, current_loop, strategy_params FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
                 existing_task = cur.fetchone()
 
         if existing_task:
@@ -578,6 +585,11 @@ class AutoEvolutionScheduler:
                 actual_start = 0  # rdagent_task_sota: 从头开始，Loop1 为初始回测
             else:
                 actual_start = max(existing_task['current_loop'], start_loop_index)
+            current_strategy_params = self._parse_json_field(
+                existing_task.get("strategy_params"),
+                "create_task.strategy_params",
+            ) if existing_task.get("strategy_params") not in (None, "") else {}
+            current_strategy_params["random_seed"] = effective_random_seed
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute("""
@@ -585,11 +597,13 @@ class AutoEvolutionScheduler:
                         SET task_name = %s, target_desc = %s, max_loops = %s,
                             current_loop = %s, status = 'pending',
                             base_experiment_id = %s, node_id = COALESCE(%s, node_id),
+                            strategy_params = %s,
                             label_horizon = %s, updated_at = NOW()
                         WHERE task_id = %s
                     """, (
                         task_name, target_desc, actual_start + max_loops,
                         actual_start, base_experiment_id, node_id,
+                        json.dumps(current_strategy_params),
                         effective_label_horizon, task_id,
                     ))
                 conn.commit()
@@ -610,11 +624,12 @@ class AutoEvolutionScheduler:
                     cur.execute("""
                         INSERT INTO qe_evolution_tasks
                         (task_id, task_name, target_desc, max_loops, current_loop, status,
-                         base_experiment_id, node_id, stock_pool, label_horizon)
-                        VALUES (%s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s)
+                         base_experiment_id, node_id, stock_pool, strategy_params, label_horizon)
+                        VALUES (%s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s)
                     """, (
                         task_id, task_name, target_desc, actual_start + max_loops,
                         actual_start, base_experiment_id, node_id, stock_pool,
+                        json.dumps({"random_seed": effective_random_seed}),
                         effective_label_horizon,
                     ))
                 conn.commit()
@@ -1747,6 +1762,7 @@ class AutoEvolutionScheduler:
                 experiment_name=experiment_name,
                 node_id=task.get("node_id"),
                 callback_url=self._get_callback_url_for_task(task_id),
+                require_fixed_seed=True,
             )
             await executor.submit(cfg, ctx, mode=BacktestMode.FULL_TRAIN)
         except Exception as e:
@@ -2528,6 +2544,7 @@ class AutoEvolutionScheduler:
         unfilled_handler_params: Optional[Dict[str, Any]] = None,
         node_id: Optional[str] = None,
         label_horizon: Optional[int] = None,
+        random_seed: Optional[int] = None,
     ) -> str:
         """
         从指定 task 的某个已完成 loop 分叉出新的演进任务。
@@ -2573,6 +2590,20 @@ class AutoEvolutionScheduler:
             effective_strategy_params = json.loads(effective_strategy_params)
         if isinstance(effective_execution_algo_params, str):
             effective_execution_algo_params = json.loads(effective_execution_algo_params)
+        effective_strategy_params = dict(effective_strategy_params or {})
+        seed_source = (
+            random_seed
+            if random_seed not in (None, "")
+            else effective_strategy_params.get("random_seed")
+            or config.get("random_seed")
+            or (config.get("runtime_flags") or {}).get("random_seed")
+            or (config.get("execution_manifest") or {}).get("random_seed")
+        )
+        effective_random_seed = normalize_qe_random_seed(
+            seed_source,
+            field_name="fork_task.random_seed",
+        )
+        effective_strategy_params["random_seed"] = effective_random_seed
         strategy_id = effective_strategy_id
         data_split = config.get("data_split", {})
         model_params = config.get("model_params", {})
@@ -3146,6 +3177,10 @@ class AutoEvolutionScheduler:
             task_for_retry = dict(task)
             task_for_retry["node_id"] = effective_node_id
             cfg = build_config_from_retry_loop(config, task_for_retry, experiment_name=f"{task_id}/{loop_id}")
+            if retry_mode_name != QE_LOOP_RETRY_MODE_BACKTEST_ONLY and cfg.build_runtime_flags().get("random_seed") is None:
+                raise ValueError(
+                    f"Loop {evolution_loop_db_id}: runtime_flags.random_seed is required for full-train retry"
+                )
 
             composer = ConfigComposer()
             executor = BacktestExecutor(composer, client)
@@ -3179,6 +3214,7 @@ class AutoEvolutionScheduler:
                 callback_url=self._get_callback_url_for_node(effective_node_id),
                 model_source=retry_model_source,
                 extra_experiment_files=retry_extra_experiment_files,
+                require_fixed_seed=(retry_mode_name != "backtest_only"),
             )
             retry_mode = BacktestMode.BACKTEST_ONLY if retry_mode_name == "backtest_only" else BacktestMode.FULL_TRAIN
             result = await executor.submit(cfg, ctx, mode=retry_mode)
@@ -3784,6 +3820,7 @@ class AutoEvolutionScheduler:
         model_id: Optional[str] = None,
         strategy_id: Optional[str] = None,
         factor_keys: Optional[List[str]] = None,
+        custom_params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         基于 RDAgent task 的 SOTA 资产创建真实 QE 实验。
@@ -3814,6 +3851,11 @@ class AutoEvolutionScheduler:
         # model_id 由调用方传入（Factor Task 由前端传入，Model Task 自动使用 SOTA 第一个模型）
         if not model_id and assets["sota_models"]:
             model_id = assets["sota_models"][0]["model_id"]
+        params = dict(custom_params or {})
+        params["random_seed"] = normalize_qe_random_seed(
+            params.get("random_seed"),
+            field_name="create_experiment_from_task_sota.random_seed",
+        )
 
         # 使用 ConfigComposer 创建实验
         from .config_composer import ConfigComposer
@@ -3823,6 +3865,7 @@ class AutoEvolutionScheduler:
             model_id=model_id,
             strategy_id=strategy_id,
             experiment_name=experiment_name,
+            custom_params=params,
         )
 
         return {
@@ -4682,6 +4725,7 @@ class AutoEvolutionScheduler:
         normalized_loops = []
         for idx, loop_cfg in enumerate(loops_config, start=1):
             cfg = dict(loop_cfg)
+            ensure_loop_fixed_seed(cfg, context=f"custom_evo.loops[{idx}]")
             if cfg.get("backtest_only") and "source_label_horizon" not in cfg:
                 if not cfg.get("model_source_task_id") or cfg.get("model_source_loop_index") is None:
                     raise ValueError(f"Loop {idx}: backtest-only requires model_source before label_horizon validation")
@@ -5440,6 +5484,8 @@ class AutoEvolutionScheduler:
             conn.commit()
 
         try:
+            loop_config = dict(loop_config)
+            ensure_loop_fixed_seed(loop_config, context=f"custom_evo.task[{task_id}].Loop{loop_index}")
             if loop_config.get("backtest_only") and "source_label_horizon" not in loop_config:
                 loop_config = dict(loop_config)
                 loop_config["source_label_horizon"] = self._get_source_loop_label_horizon(
@@ -5455,6 +5501,11 @@ class AutoEvolutionScheduler:
             )
 
             # 2. 保存 config 记录到 loop
+            runtime_flags = cfg.build_runtime_flags()
+            requested_seed = runtime_flags.get("random_seed")
+            if requested_seed is None and not cfg.backtest_only:
+                raise ValueError(f"Loop {loop_index}: runtime_flags.random_seed is required before config persistence")
+
             config_record = {
                 "action_type": "custom_config",
                 "label": loop_config.get("label"),
@@ -5462,7 +5513,7 @@ class AutoEvolutionScheduler:
                 "model_id": cfg.model_id,
                 "strategy_id": cfg.strategy_id,
                 "strategy_params": cfg.build_strategy_params(),
-                "runtime_flags": cfg.build_runtime_flags(),
+                "runtime_flags": runtime_flags,
                 "execution_algo": cfg.execution_algo,
                 "execution_algo_params": cfg.execution_algo_params,
                 "disable_alpha158": bool(loop_config.get("disable_alpha158", False)),
@@ -5500,6 +5551,27 @@ class AutoEvolutionScheduler:
             )
             if runtime_contract:
                 config_record.update(runtime_contract)
+            config_record["execution_manifest"] = {
+                "schema_version": "qe_execution_manifest_v1",
+                "task_id": task_id,
+                "loop_index": loop_index,
+                "factor_list": list(cfg.factor_names),
+                "factor_count": len(cfg.factor_names),
+                "model_id": cfg.model_id,
+                "strategy_id": cfg.strategy_id,
+                "strategy_params": cfg.build_strategy_params(),
+                "model_params": loop_model_params,
+                "data_split": cfg.data_split or {},
+                "label_type": cfg.label_type,
+                "label_horizon": cfg.label_horizon,
+                "execution_algo": cfg.execution_algo,
+                "execution_algo_params": cfg.execution_algo_params or {},
+                "runtime_flags": runtime_flags,
+                "random_seed": requested_seed,
+                "node_id": effective_node_id,
+                "backtest_only": cfg.backtest_only,
+            }
+            config_record["execution_manifest_sha256"] = sha256_json(config_record["execution_manifest"])
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute("""
@@ -5531,6 +5603,7 @@ class AutoEvolutionScheduler:
                 experiment_name=experiment_name,
                 node_id=effective_node_id,
                 callback_url=self._get_callback_url_for_node(effective_node_id),
+                require_fixed_seed=True,
             )
             # backtest-only 模式：注入 model_source 并切换执行模式
             # force_full_train 可覆盖 backtest_only 配置，用于恢复时源模型不可用的场景
@@ -5566,6 +5639,7 @@ class AutoEvolutionScheduler:
                     callback_url=self._get_callback_url_for_node(effective_node_id),
                     model_source=model_source,
                     extra_experiment_files=extra_experiment_files or None,
+                    require_fixed_seed=False,
                 )
                 mode = BacktestMode.BACKTEST_ONLY
                 logger.info(

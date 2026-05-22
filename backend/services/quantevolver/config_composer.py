@@ -26,7 +26,7 @@ from ..strategy_package.workspace_policy import (
     ensure_aistock_artifact_path,
     ensure_not_forbidden_worker_workspace_path,
 )
-from .experiment_config import ensure_qe_risk_policy, normalize_label_horizon
+from .experiment_config import apply_qe_seed_to_model_params, ensure_qe_risk_policy, normalize_label_horizon
 from .runtime_contract import merge_qe_minute_runtime_contract
 
 logger = logging.getLogger("aistock.quantevolver.config_composer")
@@ -2679,6 +2679,7 @@ class ConfigComposer:
         }
         # NOTE: hidden_size, num_layers, dropout 是模型架构参数，属于 pt_model_kwargs，
         # 由模型源码 (model.py) 硬编码，不能作为 GeneralPTNN.__init__() 的顶层参数传入。
+        _SEED_ALIAS_KEYS = {"random_seed", "seed", "loop_seed", "random_state", "torch_seed", "numpy_seed"}
         _LGB_HP_KEYS = {
             "learning_rate", "max_depth", "num_leaves", "lambda_l1", "lambda_l2",
             "colsample_bytree", "subsample", "n_estimators", "min_child_samples",
@@ -2694,7 +2695,7 @@ class ConfigComposer:
         }
         _TABPFN_HP_KEYS = {
             "n_estimators", "device", "max_context_size", "predict_batch_size",
-            "min_predict_batch_size", "n_bins", "random_state",
+            "min_predict_batch_size", "n_bins",
         }
         _LINEAR_HP_KEYS = {
             "estimator", "alpha",
@@ -2713,7 +2714,6 @@ class ConfigComposer:
             "archive_policy",        # QE Archive policy metadata, not a strategy kwarg
             "archive_reason",
             "archive_allow_override",
-            "random_seed",           # Seed/provenance metadata; strategies do not consume it
             "backtest_freq",        # 回测频率（已在上层提取）
             "execution_algo",       # 执行算法（已在上层提取到 inner_strategy）
             "execution_algo_params",  # 执行算法参数（已在上层提取到 inner_strategy）
@@ -2741,7 +2741,7 @@ class ConfigComposer:
             "suspend_filter_file",
             "suspend_filter_strict",
             PRECOMPUTED_HMM_COEFF_JSON_PARAM,
-        } | _PTNN_HP_KEYS | _LGB_HP_KEYS | _XGB_HP_KEYS | _CATBOOST_HP_KEYS | _TABPFN_HP_KEYS | _LINEAR_HP_KEYS
+        } | _SEED_ALIAS_KEYS | _PTNN_HP_KEYS | _LGB_HP_KEYS | _XGB_HP_KEYS | _CATBOOST_HP_KEYS | _TABPFN_HP_KEYS | _LINEAR_HP_KEYS
 
         if custom_params:
             # ── 模型超参透传: 从 custom_params 中提取模型超参 → model_kwargs ──
@@ -2773,6 +2773,14 @@ class ConfigComposer:
             if model_hp_overrides:
                 logger.info(f"模型超参透传: {list(model_hp_overrides.keys())} → model_kwargs")
                 model_kwargs.update(model_hp_overrides)
+
+            runtime_seed = (custom_params or {}).get("random_seed")
+            if runtime_seed is not None:
+                model_kwargs = apply_qe_seed_to_model_params(
+                    model_kwargs,
+                    runtime_seed,
+                    model_class=model_class,
+                )
 
             # 过滤掉非策略参数（含模型超参、数据加载器配置等）
             filtered_params = {k: v for k, v in custom_params.items() if k not in _NON_STRATEGY_PARAMS}
@@ -2962,8 +2970,22 @@ class ConfigComposer:
                 "Using non-default training label: "
                 f"label_type={_label_type}, label_horizon={_label_horizon}, formula={_label_formula}"
             )
+        _runtime_seed = (custom_params or {}).get("random_seed")
         lines.append(f"market: &market {stock_pool}")
         lines.append("benchmark: &benchmark 000300.SH")
+        if _runtime_seed is not None:
+            _seed_value = int(_runtime_seed)
+            lines.append("")
+            lines.append("qe_runtime:")
+            lines.append("    seed_policy: fixed")
+            lines.append(f"    random_seed: {_seed_value}")
+            lines.append("    deterministic_flags:")
+            lines.append("        python_random: true")
+            lines.append("        numpy_random: true")
+            lines.append("        torch_random: true")
+            lines.append("        torch_cuda_random: true")
+            lines.append("        cudnn_deterministic: true")
+            lines.append("        cudnn_benchmark: false")
         lines.append("")
 
         # data_handler_config

@@ -104,6 +104,7 @@ class QEArchiveService:
         repo.upsert_metric_batch(extracted.metrics, replace_existing=True)
         repo.replace_run_curves(run_id, extracted.curves)
         repo.replace_run_factors(run_id, extracted.factors)
+        repo.replace_run_factor_importance(run_id, extracted.factor_importance)
         repo.replace_run_symbol_summaries(run_id, extracted.symbol_summaries)
         repo.replace_run_trades(run_id, extracted.trades)
         repo.replace_run_execution_events(run_id, extracted.execution_events)

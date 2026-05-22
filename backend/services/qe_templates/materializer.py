@@ -9,7 +9,7 @@ from fastapi import HTTPException
 
 from .repository import QETemplateRepository
 from .runtime_diff import build_runtime_diff
-from .validator import validate_template_payload
+from .validator import normalize_template_config, validate_template_payload
 
 
 def _generate_single_experiment_through_existing_api(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -32,7 +32,7 @@ class QETemplateMaterializer:
         return await self._materialize_custom_evo(template)
 
     def _materialize_single(self, template: Mapping[str, Any]) -> dict[str, Any]:
-        config = dict(template.get("config_json") or {})
+        config = normalize_template_config("single_experiment", template.get("config_json") or {})
         custom_params = dict(config.get("custom_params") or {})
         custom_params["archive_policy"] = template.get("archive_policy") or "AUTO"
         if template.get("archive_reason"):
@@ -72,7 +72,7 @@ class QETemplateMaterializer:
     async def _materialize_custom_evo(self, template: Mapping[str, Any]) -> dict[str, Any]:
         from backend.routers.quantevolver_evolution import CustomEvoLoopConfig, _prepare_custom_evo_loop_configs, scheduler
 
-        config = dict(template.get("config_json") or {})
+        config = normalize_template_config("custom_evo", template.get("config_json") or {})
         loop_models = [CustomEvoLoopConfig(**loop) for loop in config.get("loops") or []]
         loops_config, loop1_node_id, node_parallelism = await _prepare_custom_evo_loop_configs(
             loop_models,

@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from backend.services.qe_templates.materializer import QETemplateMaterializer
 from backend.services.qe_templates.models import QETemplateRecord
 from backend.services.qe_templates.repository import QETemplateRepository
-from backend.services.qe_templates.validator import validate_template_payload
+from backend.services.qe_templates.validator import normalize_template_config, validate_template_payload
 from backend.routers import quantevolver, quantevolver_evolution
 
 router = APIRouter(prefix="/qe-templates", tags=["qe-templates"])
@@ -132,7 +132,9 @@ def list_qe_templates(
 @router.post("")
 def create_qe_template(request: QETemplateCreateRequest):
     try:
-        record = QETemplateRecord(**request.model_dump())
+        payload = request.model_dump()
+        payload["config_json"] = normalize_template_config(request.template_kind, request.config_json)
+        record = QETemplateRecord(**payload)
         row = _repo().create(record)
         return {"status": "success", "data": row}
     except ValueError as exc:
@@ -155,6 +157,11 @@ def update_qe_template(template_id: str, request: QETemplateUpdateRequest):
         if not existing:
             raise HTTPException(status_code=404, detail=f"template not found: {template_id}")
         updates = _template_update_payload(existing, request)
+        if "config_json" in updates:
+            updates["config_json"] = normalize_template_config(
+                str(existing.get("template_kind")),
+                updates["config_json"] or {},
+            )
         return {"status": "success", "data": repo.update(template_id, updates)}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -34,6 +34,75 @@ const TERMINAL_LOG_STATUSES = new Set([
   "stopped",
 ]);
 const ACTIVE_POLL_STATUSES = new Set(["running", "processing"]);
+const DEFAULT_QE_RANDOM_SEED = 20260522;
+const QE_RANDOM_SEED_MAX = 4294967295;
+
+function isValidQeRandomSeed(value: number) {
+  return Number.isInteger(value) && value >= 0 && value <= QE_RANDOM_SEED_MAX;
+}
+
+function parseQeRandomSeedInput(value: string, fallback = DEFAULT_QE_RANDOM_SEED) {
+  const parsed = Number(value);
+  return isValidQeRandomSeed(parsed) ? parsed : fallback;
+}
+
+function extractQeRandomSeed(...sources: any[]) {
+  for (const source of sources) {
+    if (!source || typeof source !== "object") continue;
+    for (const key of ["random_seed", "seed", "loop_seed", "random_state", "torch_seed", "numpy_seed"]) {
+      if (source[key] !== undefined && source[key] !== null && source[key] !== "") {
+        const parsed = Number(source[key]);
+        if (isValidQeRandomSeed(parsed)) return parsed;
+      }
+    }
+  }
+  return DEFAULT_QE_RANDOM_SEED;
+}
+
+const emptyNewTaskState = () => ({
+  task_name: "",
+  target_desc: "",
+  max_loops: 10,
+  base_experiment_id: "",
+  source_type: "qe_experiment" as "qe_experiment" | "rdagent_task_sota" | "evolution_fork" | "custom_evo",
+  source_task_id: "",
+  include_alpha_baseline: false,
+  evolution_guidance: "",
+  evolution_mode: "auto" as "auto" | "factor_only" | "model_only" | "joint",
+  fork_from_task_id: "",
+  fork_from_loop_index: -1,
+  inherit_history: false,
+  strategy_id: "",
+  strategy_params: {} as Record<string, any>,
+  execution_algo: "",
+  execution_algo_params: {} as Record<string, any>,
+  unfilled_handler: "",
+  unfilled_handler_params: {} as Record<string, any>,
+  enable_sector_hmm: false,
+  hmm_model_version_id: "",
+  hmm_signal_preset: "preset_A",
+  node_id: "",
+  label_horizon: 1 as 1 | 3 | 5 | 10 | 20,
+  random_seed: DEFAULT_QE_RANDOM_SEED,
+  filter_suspended_on_signal: false,
+  suspend_filter_strict: true,
+});
+
+const emptyForkFormState = () => ({
+  task_name: "",
+  max_loops: 10,
+  evolution_guidance: "",
+  evolution_mode: "auto" as string,
+  inherit_history: false,
+  strategy_id: "",
+  strategy_params: {} as Record<string, any>,
+  execution_algo: "",
+  execution_algo_params: {} as Record<string, any>,
+  label_horizon: 1 as 1 | 3 | 5 | 10 | 20,
+  random_seed: DEFAULT_QE_RANDOM_SEED,
+  filter_suspended_on_signal: false,
+  suspend_filter_strict: true,
+});
 
 function archiveStatusLabel(status?: string): string {
   switch (status) {
@@ -154,33 +223,7 @@ export default function EvolutionDashboard() {
   const [activeLoopIndex, setActiveLoopIndex] = useState<number | null>(null);
 
   const [showCreateTask, setShowCreateTask] = useState(false);
-  const [newTask, setNewTask] = useState({
-    task_name: "",
-    target_desc: "",
-    max_loops: 10,
-    base_experiment_id: "",
-    source_type: "qe_experiment" as "qe_experiment" | "rdagent_task_sota" | "evolution_fork" | "custom_evo",
-    source_task_id: "",
-    include_alpha_baseline: false,
-    evolution_guidance: "",
-    evolution_mode: "auto" as "auto" | "factor_only" | "model_only" | "joint",
-    fork_from_task_id: "",
-    fork_from_loop_index: -1,
-    inherit_history: false,
-    strategy_id: "",
-    strategy_params: {} as Record<string, any>,
-    execution_algo: "",
-    execution_algo_params: {} as Record<string, any>,
-    unfilled_handler: "",
-    unfilled_handler_params: {} as Record<string, any>,
-    enable_sector_hmm: false,
-    hmm_model_version_id: "",
-    hmm_signal_preset: "preset_A",
-    node_id: "",
-    label_horizon: 1 as 1 | 3 | 5 | 10 | 20,
-    filter_suspended_on_signal: false,
-    suspend_filter_strict: true,
-  });
+  const [newTask, setNewTask] = useState(emptyNewTaskState);
   const [isCreating, setIsCreating] = useState(false);
 
   // HMM 模型选择器状态
@@ -227,6 +270,12 @@ export default function EvolutionDashboard() {
     delete cleaned.suspend_filter_strict;
     delete cleaned.suspend_filter_file;
     delete cleaned.disable_alpha158;
+    delete cleaned.random_seed;
+    delete cleaned.seed;
+    delete cleaned.loop_seed;
+    delete cleaned.random_state;
+    delete cleaned.torch_seed;
+    delete cleaned.numpy_seed;
     return cleaned;
   };
   const selectedStrategyInfo = useCallback((strategyId: string | undefined) => (
@@ -356,6 +405,7 @@ export default function EvolutionDashboard() {
     unfilled_handler_params: Record<string, any>;
     label_type: string;
     label_horizon: 1 | 3 | 5 | 10 | 20;
+    random_seed: number;
     data_split: Record<string, string> | null;
     blacklist_enabled: boolean;
     stock_pool: string;
@@ -387,6 +437,7 @@ export default function EvolutionDashboard() {
     unfilled_handler_params: {},
     label_type: "",
     label_horizon: 1,
+    random_seed: DEFAULT_QE_RANDOM_SEED,
     data_split: null,
     blacklist_enabled: false,
     stock_pool: "",
@@ -451,6 +502,10 @@ export default function EvolutionDashboard() {
     setCustomEvoLoops(prev => [...prev, {
       ...first,
       label: `Loop ${prev.length + 1}`,
+      random_seed: parseQeRandomSeedInput(
+        String(first.random_seed + prev.length),
+        DEFAULT_QE_RANDOM_SEED + prev.length,
+      ),
       factor_keys: new Set(first.factor_keys),
       strategy_params: stripRuntimeStrategyFlags(first.strategy_params),
       execution_algo_params: { ...first.execution_algo_params },
@@ -553,6 +608,7 @@ export default function EvolutionDashboard() {
       unfilled_handler_params: loop.unfilled_handler_params || {},
       label_type: loop.label_type || "",
       label_horizon: ([1, 3, 5, 10, 20].includes(Number(loop.label_horizon || 1)) ? Number(loop.label_horizon || 1) : 1) as 1 | 3 | 5 | 10 | 20,
+      random_seed: extractQeRandomSeed(loop.runtime_flags, loop, loop.strategy_params, loop.model_params),
       data_split: loop.data_split || null,
       blacklist_enabled: !!loop.stock_pool,
       stock_pool: loop.stock_pool || "",
@@ -659,6 +715,7 @@ export default function EvolutionDashboard() {
         strategy_id: exp.strategy_id || "",
         strategy_params: {},
         label_horizon: expHorizon,
+        random_seed: extractQeRandomSeed(expParams, exp.runtime_flags, exp.config_json),
         backtest_only: !!sourceTaskId,
         model_source_task_id: sourceTaskId,
         model_source_loop_index: sourceTaskId ? sourceLoopIdx : null,
@@ -681,6 +738,7 @@ export default function EvolutionDashboard() {
       if (!loop || !loop.config_json) { alert(`Loop ${loopIndex} 没有配置数据`); return; }
       const config = typeof loop.config_json === "string" ? JSON.parse(loop.config_json) : loop.config_json;
       const configParams = config.model_params || {};
+      const configRuntimeFlags = config.runtime_flags || {};
       const loopDisableAlpha158 = !!(config.disable_alpha158 ?? configParams.disable_alpha158);
       const loopHorizon = ([1, 3, 5, 10, 20].includes(Number(configParams.label_horizon || config.label_horizon || 1))
         ? Number(configParams.label_horizon || config.label_horizon || 1)
@@ -711,6 +769,7 @@ export default function EvolutionDashboard() {
         strategy_id: config.strategy_id || "",
         strategy_params: stripRuntimeStrategyFlags(config.model_params),
         label_horizon: loopHorizon,
+        random_seed: extractQeRandomSeed(configRuntimeFlags, config, configParams, loop),
         backtest_only: true,
         model_source_task_id: taskId,
         model_source_loop_index: loopIndex,
@@ -737,20 +796,7 @@ export default function EvolutionDashboard() {
   // Fork 状态
   const [showForkDialog, setShowForkDialog] = useState<number | null>(null); // from_loop_index or null
   const [forkType, setForkType] = useState<"evolution" | "strategy_evo">("evolution"); // fork 类型
-  const [forkForm, setForkForm] = useState({
-    task_name: "",
-    max_loops: 10,
-    evolution_guidance: "",
-    evolution_mode: "auto" as string,
-    inherit_history: false,
-    strategy_id: "",
-    strategy_params: {} as Record<string, any>,
-    execution_algo: "",
-    execution_algo_params: {} as Record<string, any>,
-    label_horizon: 1 as 1 | 3 | 5 | 10 | 20,
-    filter_suspended_on_signal: false,
-    suspend_filter_strict: true,
-  });
+  const [forkForm, setForkForm] = useState(emptyForkFormState);
 
   // 策略演进相关状态
   const [cloneFromTask, setCloneFromTask] = useState<Task | null>(null);
@@ -904,6 +950,7 @@ export default function EvolutionDashboard() {
     if (showCreateTask && cloneFromTask) {
       const sp: Record<string, any> = cloneFromTask.strategy_params || {};
       setNewTask({
+        ...emptyNewTaskState(),
         task_name: cloneFromTask.task_name + "_副本",
         target_desc: cloneFromTask.target_desc || "",
         max_loops: cloneFromTask.max_loops,
@@ -929,6 +976,7 @@ export default function EvolutionDashboard() {
         label_horizon: ([1, 3, 5, 10, 20].includes(Number((cloneFromTask as any).label_horizon || 1))
           ? Number((cloneFromTask as any).label_horizon || 1)
           : 1) as 1 | 3 | 5 | 10 | 20,
+        random_seed: extractQeRandomSeed(sp, (cloneFromTask as any).runtime_flags, cloneFromTask),
         filter_suspended_on_signal: !!sp.filter_suspended_on_signal,
         suspend_filter_strict: sp.suspend_filter_strict !== false,
       });
@@ -1299,6 +1347,11 @@ export default function EvolutionDashboard() {
     }
     } // end of non-custom_evo validation
 
+    if (newTask.source_type !== "custom_evo" && !isValidQeRandomSeed(newTask.random_seed)) {
+      alert(`固定随机种子必须是 0-${QE_RANDOM_SEED_MAX} 之间的整数`);
+      return;
+    }
+
     if (newTask.source_type !== "custom_evo" && !ensureQeExecutionAlgoSupported(newTask.execution_algo, "new task")) {
       return;
     }
@@ -1330,6 +1383,7 @@ export default function EvolutionDashboard() {
                 : undefined,
             additional_factor_keys: additionalFactorKeys.size > 0 ? Array.from(additionalFactorKeys) : undefined,
             label_horizon: newTask.label_horizon,
+            random_seed: newTask.random_seed,
           }),
         });
         if (!res.ok) {
@@ -1342,7 +1396,7 @@ export default function EvolutionDashboard() {
         if (data.status === "success") {
           alert(`已从 Loop ${newTask.fork_from_loop_index} 创建新演进任务！`);
           setShowCreateTask(false);
-          setNewTask({ task_name: "", target_desc: "", max_loops: 10, base_experiment_id: "", source_type: "qe_experiment", source_task_id: "", include_alpha_baseline: false, evolution_guidance: "", evolution_mode: "auto", fork_from_task_id: "", fork_from_loop_index: -1, inherit_history: false, strategy_id: "", strategy_params: {}, execution_algo: "", execution_algo_params: {}, unfilled_handler: "", unfilled_handler_params: {}, enable_sector_hmm: false, hmm_model_version_id: "", hmm_signal_preset: "preset_A", node_id: "", label_horizon: 1, filter_suspended_on_signal: false, suspend_filter_strict: true });
+          setNewTask(emptyNewTaskState());
           setForkSourceLoops([]);
           setShowFactorLibrary(false);
           setAdditionalFactorKeys(new Set());
@@ -1362,6 +1416,7 @@ export default function EvolutionDashboard() {
           const loop = customEvoLoops[i];
           if (loop.factor_keys.size === 0) { alert(`Loop ${i + 1} 必须选择至少一个因子`); setIsCreating(false); return; }
           if (!loop.model_id) { alert(`Loop ${i + 1} 必须选择一个模型`); setIsCreating(false); return; }
+          if (!isValidQeRandomSeed(loop.random_seed)) { alert(`Loop ${i + 1} 固定随机种子必须是 0-${QE_RANDOM_SEED_MAX} 之间的整数`); setIsCreating(false); return; }
           if (!ensureQeExecutionAlgoSupported(loop.execution_algo, `custom loop ${i + 1}`)) { setIsCreating(false); return; }
         }
         if (customEvoFormMode === "rerun" && (!customEvoTargetTaskId || customEvoTargetLoopIndex == null)) {
@@ -1403,6 +1458,7 @@ export default function EvolutionDashboard() {
           stock_pool: loop.stock_pool || undefined,
           label_type: loop.label_type || undefined,
           label_horizon: loop.label_horizon,
+          runtime_flags: { random_seed: loop.random_seed },
           data_split: loop.data_split || undefined,
           backtest_only: loop.backtest_only,
           model_source_task_id: loop.backtest_only ? (loop.model_source_task_id || undefined) : undefined,
@@ -1531,6 +1587,7 @@ export default function EvolutionDashboard() {
         hmm_model_version_id: newTask.enable_sector_hmm ? (newTask.hmm_model_version_id || undefined) : undefined,
         hmm_signal_preset: newTask.enable_sector_hmm ? (newTask.hmm_signal_preset || undefined) : undefined,
         label_horizon: newTask.label_horizon,
+        random_seed: newTask.random_seed,
       };
       const res = await fetch(`${API}/quantevolver/evolution/tasks`, {
         method: "POST",
@@ -1555,7 +1612,7 @@ export default function EvolutionDashboard() {
           // 有因子验证问题 — 弹出处理弹窗
           setFactorValidation({ taskId: data.task_id, validation: data.factor_validation });
           setShowCreateTask(false);
-          setNewTask({ task_name: "", target_desc: "", max_loops: 10, base_experiment_id: "", source_type: "qe_experiment", source_task_id: "", include_alpha_baseline: false, evolution_guidance: "", evolution_mode: "auto", fork_from_task_id: "", fork_from_loop_index: -1, inherit_history: false, strategy_id: "", strategy_params: {}, execution_algo: "", execution_algo_params: {}, unfilled_handler: "", unfilled_handler_params: {}, enable_sector_hmm: false, hmm_model_version_id: "", hmm_signal_preset: "preset_A", node_id: "", label_horizon: 1, filter_suspended_on_signal: false, suspend_filter_strict: true });
+          setNewTask(emptyNewTaskState());
           setSotaPreview(null);
           setDetectedTaskType("none");
           setSelectedFactorsForEvo(new Set());
@@ -1570,7 +1627,7 @@ export default function EvolutionDashboard() {
         } else {
           alert("演进任务创建成功并已在后台启动！");
           setShowCreateTask(false);
-          setNewTask({ task_name: "", target_desc: "", max_loops: 10, base_experiment_id: "", source_type: "qe_experiment", source_task_id: "", include_alpha_baseline: false, evolution_guidance: "", evolution_mode: "auto", fork_from_task_id: "", fork_from_loop_index: -1, inherit_history: false, strategy_id: "", strategy_params: {}, execution_algo: "", execution_algo_params: {}, unfilled_handler: "", unfilled_handler_params: {}, enable_sector_hmm: false, hmm_model_version_id: "", hmm_signal_preset: "preset_A", node_id: "", label_horizon: 1, filter_suspended_on_signal: false, suspend_filter_strict: true });
+          setNewTask(emptyNewTaskState());
           setSotaPreview(null);
           setDetectedTaskType("none");
           setSelectedFactorsForEvo(new Set());
@@ -1663,6 +1720,7 @@ export default function EvolutionDashboard() {
       ? Number(mp.label_horizon || cfg.label_horizon || task?.label_horizon || 1)
       : 1) as 1 | 3 | 5 | 10 | 20;
     setForkForm({
+      ...emptyForkFormState(),
       task_name: task ? `${task.task_name}_from_L${loopIndex}` : "",
       max_loops: 10,
       evolution_guidance: "",
@@ -1673,6 +1731,7 @@ export default function EvolutionDashboard() {
       execution_algo: task?.execution_algo || "",
       execution_algo_params: task?.execution_algo_params || {},
       label_horizon: sourceHorizon,
+      random_seed: extractQeRandomSeed(cfg?.runtime_flags, cfg?.execution_manifest, cfg?.model_params, cfg, task?.strategy_params, task),
       filter_suspended_on_signal: !!task?.strategy_params?.filter_suspended_on_signal,
       suspend_filter_strict: task?.strategy_params?.suspend_filter_strict !== false,
     });
@@ -1683,7 +1742,7 @@ export default function EvolutionDashboard() {
     setShowForkDialog(null);
     setIsForking(false);
     setForkType("evolution");
-    setForkForm({ task_name: "", max_loops: 10, evolution_guidance: "", evolution_mode: "auto", inherit_history: false, strategy_id: "", strategy_params: {}, execution_algo: "", execution_algo_params: {}, label_horizon: 1, filter_suspended_on_signal: false, suspend_filter_strict: true });
+    setForkForm(emptyForkFormState());
     setStrategyEvoLoops([]);
     setStrategyEvoExecutionMode("serial");
   };
@@ -1807,6 +1866,10 @@ export default function EvolutionDashboard() {
       return;
     }
     if (!ensureQeExecutionAlgoSupported(forkForm.execution_algo, "fork task")) return;
+    if (!isValidQeRandomSeed(forkForm.random_seed)) {
+      alert(`固定随机种子必须是 0-${QE_RANDOM_SEED_MAX} 之间的整数`);
+      return;
+    }
     setIsForking(true);
     try {
       const res = await fetch(`${API}/quantevolver/evolution/tasks/${activeTaskId}/fork`, {
@@ -1826,6 +1889,7 @@ export default function EvolutionDashboard() {
           filter_suspended_on_signal: !!forkForm.filter_suspended_on_signal,
           suspend_filter_strict: forkForm.suspend_filter_strict !== false,
           label_horizon: forkForm.label_horizon,
+          random_seed: forkForm.random_seed,
         }),
       });
       const data = await res.json();
@@ -3415,6 +3479,24 @@ export default function EvolutionDashboard() {
                 </div>
               </div>
 
+              <div style={{ padding: "10px 12px", borderRadius: "8px", border: "1px solid #fed7aa", backgroundColor: "#fff7ed" }}>
+                <label style={{ display: "block", fontSize: "13px", fontWeight: 700, color: "#9a3412", marginBottom: "6px" }}>
+                  固定随机种子（必填）
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={QE_RANDOM_SEED_MAX}
+                  step={1}
+                  value={newTask.random_seed}
+                  onChange={e => setNewTask(prev => ({ ...prev, random_seed: parseQeRandomSeedInput(e.target.value, prev.random_seed) }))}
+                  style={{ width: "240px", padding: "8px 12px", borderRadius: "6px", border: "1px solid #fdba74", fontSize: "14px", boxSizing: "border-box" }}
+                />
+                <div style={{ marginTop: "4px", fontSize: "12px", color: "#9a3412" }}>
+                  该 seed 会写入请求、runtime_flags、生成配置和归档，用于复现实验结果。
+                </div>
+              </div>
+
               {/* 初始资金 */}
               <div>
                 <label style={{ display: "block", fontSize: "13px", fontWeight: 600, color: "#475569", marginBottom: "6px" }}>
@@ -3811,6 +3893,24 @@ export default function EvolutionDashboard() {
                           选择 5d/10d/20d 时建议同步调整 hold_thresh，避免高 IC 无法转化为收益。
                         </span>
                       </div>
+                    </div>
+
+                    <div style={{ border: "1px solid #fed7aa", borderRadius: "8px", padding: "10px", backgroundColor: "#fff7ed" }}>
+                      <label style={{ display: "block", fontSize: "12px", fontWeight: 700, color: "#9a3412", marginBottom: "6px" }}>
+                        固定随机种子（必填）
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={QE_RANDOM_SEED_MAX}
+                        step={1}
+                        value={loop.random_seed}
+                        onChange={e => updateCustomEvoLoop(loopIdx, { random_seed: parseQeRandomSeedInput(e.target.value, loop.random_seed) })}
+                        style={{ width: "180px", padding: "5px 8px", borderRadius: "4px", border: "1px solid #fdba74", fontSize: "12px" }}
+                      />
+                      <span style={{ marginLeft: "8px", fontSize: "11px", color: "#9a3412" }}>
+                        每个 Loop 独立固定，禁止 seed=None 进入训练。
+                      </span>
                     </div>
 
                     {/* 策略 + 执行算法 */}
@@ -4227,6 +4327,18 @@ export default function EvolutionDashboard() {
                       {h}d
                     </button>
                   ))}
+                </div>
+              </div>
+              <div style={{ padding: "10px 12px", borderRadius: "8px", border: "1px solid #fed7aa", backgroundColor: "#fff7ed" }}>
+                <label style={{ display: "block", fontSize: "13px", fontWeight: 700, color: "#9a3412", marginBottom: "6px" }}>
+                  固定随机种子（必填）
+                </label>
+                <input type="number" min={0} max={QE_RANDOM_SEED_MAX} step={1} value={forkForm.random_seed}
+                  onChange={e => setForkForm(f => ({ ...f, random_seed: parseQeRandomSeedInput(e.target.value, f.random_seed) }))}
+                  style={{ width: "220px", padding: "8px 12px", borderRadius: "6px", border: "1px solid #fdba74", fontSize: "14px", boxSizing: "border-box" }}
+                />
+                <div style={{ marginTop: "4px", fontSize: "12px", color: "#9a3412" }}>
+                  默认继承源 Loop seed；修改后会随 fork 请求显式传入后端。
                 </div>
               </div>
               <div>

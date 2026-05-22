@@ -178,6 +178,7 @@ from pydantic import BaseModel, Field
 from ..db.pg_pool import get_conn
 from ..services.quantevolver.callback_urls import build_aistock_callback_url
 from ..services.quantevolver.experiment_config import ensure_qe_risk_policy, normalize_label_horizon
+from ..services.quantevolver.seed_contract import normalize_single_experiment_seed_config
 from ..services.quantevolver.label_horizon_schema import ensure_qe_label_horizon_schema
 from ..services.quantevolver.node_execution import (
     QENodePreflightError,
@@ -2826,8 +2827,11 @@ def generate_config(req: GenerateConfigRequest):
                             detail=f"model_id='{req.model_id}' 在模型目录中不存在",
                         )
 
+        # --- Seed 固定契约：生成/入库阶段即规范化，执行阶段只校验不补救 ---
+        seed_config = normalize_single_experiment_seed_config({"custom_params": req.custom_params or {}})
+        custom_params = dict(seed_config.get("custom_params") or {})
+
         # --- HMM 模型验证与路径注入（对齐自动演进逻辑）---
-        custom_params = dict(req.custom_params or {})
         try:
             from ..services.quantevolver.blacklist_snapshot import attach_persistent_blacklist_snapshot
             custom_params = attach_persistent_blacklist_snapshot(custom_params)
@@ -6320,6 +6324,7 @@ async def _run_experiment_unified(experiment_id: str, node_id: str = None):
             experiment_name=f"{experiment_name}/Loop1",
             node_id=effective_node_id,
             callback_url=callback_url,
+            require_fixed_seed=True,
         )
 
         client = QEWorkspaceClient.for_node(effective_node_id)

@@ -431,6 +431,34 @@ class RunFactorRecord:
 
 
 @dataclass
+class RunFactorImportanceRecord:
+    run_id: str
+    factor_name: str
+    method: str
+    importance_value: float
+    factor_catalog_id: int | None = None
+    feature_name: str | None = None
+    feature_index: int | None = None
+    model_family: str | None = None
+    model_type: str | None = None
+    method_version: str | None = None
+    split_name: str | None = None
+    time_bucket: str | None = None
+    epoch: int | None = None
+    step: int | None = None
+    normalized_value: float | None = None
+    weight_pct: float | None = None
+    signed_value: float | None = None
+    rank_in_run: int | None = None
+    sample_count: int | None = None
+    reliability: str = "unknown"
+    metadata: Mapping[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        self.metadata = _json_map(self.metadata)
+
+
+@dataclass
 class OutboxEventRecord:
     event_type: str
     source_system: str
