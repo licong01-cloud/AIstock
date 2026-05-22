@@ -54,15 +54,18 @@ def _registry_with_capture() -> tuple[ModuleRegistry, FakeMCP, list[dict[str, An
     return registry, mcp, calls
 
 
-def test_research_assistant_module_registers_exactly_10_tools() -> None:
+def test_research_assistant_module_registers_exactly_13_tools() -> None:
     registry, mcp, _calls = _registry_with_capture()
 
-    assert registry.tool_count("research_assistant") == 10
-    assert registry.total_tool_count() == 10
+    assert registry.tool_count("research_assistant") == 13
+    assert registry.total_tool_count() == 13
     assert set(mcp.tools) == {
         "assistant_health",
         "assistant_create_task",
         "assistant_add_task_event",
+        "assistant_chat_turn",
+        "assistant_build_prompt_bundle",
+        "assistant_list_prompt_nodes",
         "assistant_create_memory_candidate",
         "assistant_build_context_pack",
         "assistant_list_mcp_tools",
@@ -85,6 +88,23 @@ def test_research_assistant_tools_call_expected_http_contracts() -> None:
 
     tools["assistant_add_task_event"]("rat_1", {"event_type": "planned", "message": "ok"})
     assert calls[-1] == {"method": "POST", "path": "/api/v1/research-assistant/tasks/rat_1/events", "query": {}, "body": {"event_type": "planned", "message": "ok"}}
+
+    tools["assistant_chat_turn"]({"message": "帮我创建一个 QE 10 loop 实验，先不要执行。"})
+    assert calls[-1]["method"] == "POST"
+    assert calls[-1]["path"] == "/api/v1/research-assistant/chat/turn"
+    assert calls[-1]["body"]["message"].startswith("帮我创建一个 QE")
+
+    tools["assistant_build_prompt_bundle"]({"user_message": "QE 10 loop", "phase": "planning"})
+    assert calls[-1]["method"] == "POST"
+    assert calls[-1]["path"] == "/api/v1/research-assistant/prompt-bundles"
+
+    tools["assistant_list_prompt_nodes"](phase="planning", category="domain", status="enabled", search="QE", limit=8, offset=1)
+    assert calls[-1] == {
+        "method": "GET",
+        "path": "/api/v1/research-assistant/prompt-nodes",
+        "query": {"phase": "planning", "category": "domain", "status": "enabled", "search": "QE", "limit": "8", "offset": "1"},
+        "body": {},
+    }
 
     tools["assistant_create_memory_candidate"]({"memory_type": "core", "subject_key": "assistant", "title": "记忆"})
     assert calls[-1]["path"] == "/api/v1/research-assistant/memories"

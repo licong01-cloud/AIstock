@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from backend.services.research_assistant.models import (
     ApprovalCreate,
+    ChatTurnRequest,
     ContextPackBuildRequest,
     EvolutionPathCreate,
     ExternalAgentEventCreate,
@@ -20,6 +21,7 @@ from backend.services.research_assistant.models import (
     McpPreflightRequest,
     MemoryCreate,
     ModelRouteRequest,
+    PromptBundleBuildRequest,
     SkillUsageCreate,
     TaskCreate,
     TaskEventCreate,
@@ -145,6 +147,61 @@ def get_task(task_id: str, service: ResearchAssistantService = Depends(get_resea
 def add_task_event(task_id: str, request: TaskEventCreate, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
     try:
         return _success(service.add_task_event(task_id, request))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.post("/chat/turn", response_model=ResearchAssistantResponse)
+def chat_turn(request: ChatTurnRequest, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
+    try:
+        return _success(service.chat_turn(request))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.get("/conversations/{conversation_id}", response_model=ResearchAssistantResponse)
+def get_conversation(conversation_id: str, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
+    try:
+        return _success(service.get_conversation(conversation_id))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.get("/prompt-nodes", response_model=ResearchAssistantResponse)
+def list_prompt_nodes(
+    phase: str | None = Query(None),
+    category: str | None = Query(None),
+    status: str | None = Query(None),
+    search: str | None = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    service: ResearchAssistantService = Depends(get_research_assistant_service),
+) -> ResearchAssistantResponse:
+    try:
+        return _success(service.list_records("prompt_nodes", filters={"phase": phase, "category": category, "status": status}, search=search, limit=limit, offset=offset))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.post("/prompt-bundles", response_model=ResearchAssistantResponse)
+def build_prompt_bundle(request: PromptBundleBuildRequest, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
+    try:
+        return _success(service.build_prompt_bundle(request))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.get("/prompt-bundles", response_model=ResearchAssistantResponse)
+def list_prompt_bundles(
+    task_id: str | None = Query(None),
+    conversation_id: str | None = Query(None),
+    phase: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    service: ResearchAssistantService = Depends(get_research_assistant_service),
+) -> ResearchAssistantResponse:
+    try:
+        return _success(service.list_records("prompt_bundles", filters={"task_id": task_id, "conversation_id": conversation_id, "phase": phase}, limit=limit, offset=offset))
     except Exception as exc:
         raise _map_error(exc) from exc
 

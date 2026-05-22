@@ -8,6 +8,7 @@ from backend.services.research_assistant.service import (
     DEFAULT_MCP_SERVERS,
     DEFAULT_MCP_TOOLS,
     DEFAULT_MODEL_PROFILES,
+    DEFAULT_PROMPT_NODES,
     DEFAULT_ROUTING_POLICIES,
     DEFAULT_SKILLS,
 )
@@ -34,10 +35,12 @@ def _assert_columns(table_columns: dict[str, set[str]], kind: str, payload: dict
 def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
     sql = "\n".join(DDL)
 
-    assert RESEARCH_ASSISTANT_SCHEMA_VERSION == "research_assistant_console_v1_20260521"
+    assert RESEARCH_ASSISTANT_SCHEMA_VERSION == "research_assistant_console_v2_chat_prompt_20260522"
     for table in {
         "research_agent_tasks",
         "agent_task_events",
+        "assistant_conversations",
+        "assistant_conversation_messages",
         "research_memory_items",
         "research_memory_access_log",
         "assistant_context_packs",
@@ -55,6 +58,8 @@ def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
         "assistant_external_agent_events",
         "assistant_model_profiles",
         "assistant_model_routing_policies",
+        "assistant_prompt_nodes",
+        "assistant_prompt_bundles",
         "assistant_temp_memories",
         "assistant_notifications",
         "assistant_reports",
@@ -71,6 +76,9 @@ def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
     assert "CONSTRAINT ck_aar_status" in sql
     assert "CONSTRAINT ck_aic_status" in sql
     assert "requires_approval BOOLEAN NOT NULL DEFAULT FALSE" in sql
+    assert "chat_received" in sql
+    assert "prompt_bundle_built" in sql
+    assert "llm_done" in sql
 
 
 def test_research_assistant_service_payloads_match_schema_columns() -> None:
@@ -81,6 +89,16 @@ def test_research_assistant_service_payloads_match_schema_columns() -> None:
         table_columns,
         "task_events",
         {"event_id": "ratev_x", "task_id": "rat_x", "event_type": "planned", "severity": "info", "message": "created", "payload_json": {}, "evidence_refs": []},
+    )
+    _assert_columns(
+        table_columns,
+        "conversations",
+        {"conversation_id": "conv_x", "user_id": "default", "title": "Chat", "status": "active", "metadata_json": {}},
+    )
+    _assert_columns(
+        table_columns,
+        "conversation_messages",
+        {"message_id": "msg_x", "conversation_id": "conv_x", "role": "assistant", "content_text": "text", "content_json": {}, "task_id": "rat_x", "model_profile_id": "model", "prompt_bundle_id": "pbundle_x", "trace_id": "trace_x", "is_visible": True},
     )
     for item in DEFAULT_SKILLS:
         _assert_columns(
@@ -122,6 +140,29 @@ def test_research_assistant_service_payloads_match_schema_columns() -> None:
         payload["primary_profile_id"] = payload.pop("model_profile_id")
         payload["fallback_profile_id"] = "fallback"
         _assert_columns(table_columns, "routing_policies", payload)
+    for item in DEFAULT_PROMPT_NODES:
+        _assert_columns(
+            table_columns,
+            "prompt_nodes",
+            {**item, "prompt_node_id": f"prompt_{item['prompt_key'].replace('.', '_')}", "checksum": "checksum"},
+        )
+    _assert_columns(
+        table_columns,
+        "prompt_bundles",
+        {
+            "prompt_bundle_id": "pbundle_x",
+            "task_id": "rat_x",
+            "conversation_id": "conv_x",
+            "phase": "planning",
+            "model_profile_id": "model",
+            "node_refs": [],
+            "selection_trace_json": {},
+            "bundle_json": {},
+            "bundle_text": "prompt",
+            "checksum": "checksum",
+            "cache_path": "var/research_assistant/prompt_cache/checksum.json",
+        },
+    )
     _assert_columns(
         table_columns,
         "memory_items",
