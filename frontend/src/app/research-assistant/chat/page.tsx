@@ -13,9 +13,14 @@ import {
   type ThreadMessageLike,
 } from "@assistant-ui/react";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
-import { researchAssistantApi, type AssistantChatTurnResult } from "@/lib/research-assistant/api";
+import {
+  ResearchAssistantApiError,
+  researchAssistantApi,
+  type AssistantCatalogReadiness,
+  type AssistantChatTurnResult,
+} from "@/lib/research-assistant/api";
 
 type RailStep = { label: string; status: string };
 type PlanCard = { title?: string; steps?: string[] };
@@ -29,6 +34,13 @@ type ChatCards = {
   status_rail?: RailStep[];
   capability_summary?: Record<string, unknown>;
   safety?: Record<string, unknown>;
+};
+
+type CatalogNotReadyDetail = {
+  code?: string;
+  message?: string;
+  operator_action?: string | null;
+  readiness?: AssistantCatalogReadiness;
 };
 
 const initialSteps: RailStep[] = [
@@ -77,6 +89,31 @@ function asCards(value: unknown): ChatCards {
   return value as ChatCards;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function catalogNotReadyDetail(error: unknown): CatalogNotReadyDetail | null {
+  if (!(error instanceof ResearchAssistantApiError)) return null;
+  const raw = asRecord(error.raw);
+  const detail = asRecord(raw?.detail);
+  if (detail?.code !== "research_assistant_catalog_not_ready") return null;
+  return detail as CatalogNotReadyDetail;
+}
+
+function catalogSetupReply(detail: CatalogNotReadyDetail): string {
+  const readiness = detail.readiness;
+  const missing = readiness?.checks
+    ?.filter((check) => !check.ready)
+    .map((check) => `${check.label} 当前 ${check.present}/${check.expected_min}`)
+    .join("；");
+  return [
+    "助理目录尚未初始化完整，所以我还不能安全地理解和执行这次对话。",
+    missing ? `缺少的目录：${missing}。` : "缺少 Prompt Tree、MCP、Skill 或模型路由目录。",
+    "请点击右侧初始化按钮；初始化完成后，再重新发送你的研究或实验目标。",
+  ].join("\n");
+}
+
 function statusText(status: string): string {
   if (status === "done") return "已完成";
   if (status === "current") return "进行中";
@@ -114,7 +151,11 @@ function cardText(result: AssistantChatTurnResult): string {
   return parts.join("\n");
 }
 
-function createAdapter(onTurn: (result: AssistantChatTurnResult) => void, onStage: (steps: RailStep[]) => void): ChatModelAdapter {
+function createAdapter(
+  onTurn: (result: AssistantChatTurnResult) => void,
+  onStage: (steps: RailStep[]) => void,
+  onCatalogIssue: (detail: CatalogNotReadyDetail | null) => void,
+): ChatModelAdapter {
   return {
     async run(options) {
       const message = textFromOptions(options);
@@ -122,7 +163,19 @@ function createAdapter(onTurn: (result: AssistantChatTurnResult) => void, onStag
         return { content: [{ type: "text", text: "请直接告诉我你要完成的研究或实验目标，我会先理解并向你确认。" }] };
       }
       onStage(thinkingSteps);
-      const result = await researchAssistantApi.chatTurn({ message, phase: "planning", risk_level: "medium", allow_execute: false });
+      let result: AssistantChatTurnResult;
+      try {
+        result = await researchAssistantApi.chatTurn({ message, phase: "planning", risk_level: "medium", allow_execute: false });
+      } catch (error) {
+        const detail = catalogNotReadyDetail(error);
+        if (detail) {
+          onCatalogIssue(detail);
+          onStage(initialSteps);
+          return { content: [{ type: "text", text: catalogSetupReply(detail) }] };
+        }
+        throw error;
+      }
+      onCatalogIssue(null);
       onTurn(result);
       const cards = asCards(result.cards || result.assistant_message?.content_json?.cards);
       if (cards.status_rail?.length) onStage(cards.status_rail);
@@ -218,6 +271,44 @@ function PlanSummary({ latest }: { latest: AssistantChatTurnResult | null }) {
   );
 }
 
+function CatalogSetupCard({
+  detail,
+  initializing,
+  initMessage,
+  onInitialize,
+}: {
+  detail: CatalogNotReadyDetail;
+  initializing: boolean;
+  initMessage: string | null;
+  onInitialize: () => void;
+}) {
+  const readiness = detail.readiness;
+  const ready = readiness?.ready === true;
+  const missingChecks = readiness?.checks?.filter((check) => !check.ready) || [];
+  return (
+    <section className="ra-chat-card ra-chat-card-setup" data-testid="ra-chat-catalog-setup">
+      <span className="ra-chat-eyebrow">{ready ? "初始化完成" : "需要初始化"}</span>
+      <h2>{ready ? "助理目录已准备好" : "助理目录尚未准备好"}</h2>
+      <p>{ready ? "Prompt Tree、MCP、Skill 和模型路由目录已经可用。请重新发送你的研究或实验目标。" : "Prompt Tree、MCP、Skill 和模型路由目录必须先写入数据库。完成后，助理才能按设计方案选择提示词分支、模型和工具。"}</p>
+      {!ready && missingChecks.length ? (
+        <ul>
+          {missingChecks.map((check) => (
+            <li key={check.catalog}>
+              {check.label}：当前 {check.present} / 至少 {check.expected_min}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {!ready ? (
+        <button className="ra-chat-setup-button" type="button" onClick={onInitialize} disabled={initializing}>
+          {initializing ? "正在初始化目录..." : "初始化助理目录"}
+        </button>
+      ) : null}
+      {initMessage ? <p className="ra-chat-setup-result">{initMessage}</p> : null}
+    </section>
+  );
+}
+
 function AssistantThread() {
   return (
     <ThreadPrimitive.Root className="ra-chat-thread-root">
@@ -241,7 +332,32 @@ function AssistantThread() {
 export default function ResearchAssistantChatPage() {
   const [latest, setLatest] = useState<AssistantChatTurnResult | null>(null);
   const [steps, setSteps] = useState<RailStep[]>(initialSteps);
-  const adapter = useMemo(() => createAdapter(setLatest, setSteps), []);
+  const [catalogIssue, setCatalogIssue] = useState<CatalogNotReadyDetail | null>(null);
+  const [initializingCatalogs, setInitializingCatalogs] = useState(false);
+  const [catalogInitMessage, setCatalogInitMessage] = useState<string | null>(null);
+
+  const initializeCatalogs = useCallback(async () => {
+    setInitializingCatalogs(true);
+    setCatalogInitMessage(null);
+    try {
+      await researchAssistantApi.seedCatalogs();
+      const readiness = await researchAssistantApi.catalogReadiness();
+      if (readiness.ready) {
+        setCatalogIssue({ code: "research_assistant_catalog_ready", readiness });
+        setCatalogInitMessage("目录初始化完成。请重新发送你的研究或实验目标。");
+      } else {
+        setCatalogIssue({ code: "research_assistant_catalog_not_ready", readiness });
+        setCatalogInitMessage("目录仍未完整，请查看缺少项后再次初始化。");
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "目录初始化失败，请查看后台日志。";
+      setCatalogInitMessage(message);
+    } finally {
+      setInitializingCatalogs(false);
+    }
+  }, []);
+
+  const adapter = useMemo(() => createAdapter(setLatest, setSteps, setCatalogIssue), []);
   const runtime = useLocalRuntime(adapter, { initialMessages: welcomeMessages });
 
   return (
@@ -257,7 +373,16 @@ export default function ResearchAssistantChatPage() {
           <AssistantThread />
         </AssistantRuntimeProvider>
       </section>
-      <PlanSummary latest={latest} />
+      {catalogIssue ? (
+        <CatalogSetupCard
+          detail={catalogIssue}
+          initializing={initializingCatalogs}
+          initMessage={catalogInitMessage}
+          onInitialize={initializeCatalogs}
+        />
+      ) : (
+        <PlanSummary latest={latest} />
+      )}
     </main>
   );
 }

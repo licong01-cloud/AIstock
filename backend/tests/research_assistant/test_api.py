@@ -19,14 +19,44 @@ class FakeLlmClient:
         )
 
 
-def _client() -> TestClient:
+def _client(*, seed: bool = True) -> TestClient:
     repository = InMemoryResearchAssistantRepository()
     service = ResearchAssistantService(repository=repository, llm_client=FakeLlmClient())
-    service.seed_catalogs()
+    if seed:
+        service.seed_catalogs()
     app = FastAPI()
     app.include_router(research_assistant.router, prefix="/api/v1")
     app.dependency_overrides[research_assistant.get_research_assistant_service] = lambda: service
     return TestClient(app)
+
+
+def test_research_assistant_catalog_readiness_api_is_explicit() -> None:
+    client = _client(seed=False)
+
+    health = client.get("/api/v1/research-assistant/health").json()["data"]
+    assert health["status"] == "catalog_not_ready"
+    assert health["catalog_readiness"]["ready"] is False
+    assert "prompt_nodes" in health["catalog_readiness"]["missing_catalogs"]
+
+    readiness = client.get("/api/v1/research-assistant/catalogs/readiness").json()["data"]
+    assert readiness["operator_action"] == "POST /api/v1/research-assistant/catalogs/seed"
+
+    chat_resp = client.post(
+        "/api/v1/research-assistant/chat/turn",
+        json={"message": "帮我创建一个 QE 10 loop 实验，先不要执行。", "allow_execute": False},
+    )
+    assert chat_resp.status_code == 409
+    detail = chat_resp.json()["detail"]
+    assert detail["code"] == "research_assistant_catalog_not_ready"
+    assert detail["readiness"]["ready"] is False
+
+    seed_result = client.post("/api/v1/research-assistant/catalogs/seed").json()["data"]
+    assert seed_result["seeded"]["prompt_nodes"] >= 1
+    assert client.get("/api/v1/research-assistant/health").json()["data"]["status"] == "ok"
+    assert client.post(
+        "/api/v1/research-assistant/chat/turn",
+        json={"message": "帮我创建一个 QE 10 loop 实验，先不要执行。", "allow_execute": False},
+    ).status_code == 200
 
 
 def test_research_assistant_api_phase1_smoke() -> None:

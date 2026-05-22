@@ -49,6 +49,17 @@ from .repository import DatabaseResearchAssistantRepository
 
 ASSISTANT_APPROVAL_CONFIRM = "APPROVE_RESEARCH_ASSISTANT_ACTION"
 PROMPT_CACHE_DIR = Path(os.getenv("AISTOCK_ASSISTANT_PROMPT_CACHE_DIR", "var/research_assistant/prompt_cache"))
+CATALOG_BOOTSTRAP_ACTION = "POST /api/v1/research-assistant/catalogs/seed"
+
+
+class ResearchAssistantCatalogNotReadyError(RuntimeError):
+    """Raised when required assistant catalogs are empty or disabled."""
+
+    def __init__(self, readiness: dict[str, Any]) -> None:
+        self.readiness = readiness
+        missing = ", ".join(readiness.get("missing_catalogs") or [])
+        message = f"Research Assistant catalogs are not ready: {missing or 'unknown'}"
+        super().__init__(message)
 
 
 DEFAULT_SKILLS: list[dict[str, Any]] = [
@@ -369,6 +380,46 @@ DEFAULT_PROMPT_NODES: list[dict[str, Any]] = [
 ]
 
 
+CATALOG_READINESS_REQUIREMENTS: list[dict[str, Any]] = [
+    {
+        "catalog": "skills",
+        "label": "Skill Catalog",
+        "expected_min": len(DEFAULT_SKILLS),
+        "filters": {"status": "approved"},
+    },
+    {
+        "catalog": "mcp_servers",
+        "label": "MCP Server Catalog",
+        "expected_min": len(DEFAULT_MCP_SERVERS),
+        "filters": {"status": "ready"},
+    },
+    {
+        "catalog": "mcp_tools",
+        "label": "MCP Tool Catalog",
+        "expected_min": len(DEFAULT_MCP_TOOLS),
+        "filters": {"status": "enabled"},
+    },
+    {
+        "catalog": "model_profiles",
+        "label": "Primary Model Profiles",
+        "expected_min": 1,
+        "filters": {"status": "enabled", "role": "primary_reasoner"},
+    },
+    {
+        "catalog": "routing_policies",
+        "label": "Model Routing Policies",
+        "expected_min": 1,
+        "filters": {"status": "enabled", "role": "primary_reasoner"},
+    },
+    {
+        "catalog": "prompt_nodes",
+        "label": "Prompt Tree",
+        "expected_min": len(DEFAULT_PROMPT_NODES),
+        "filters": {"status": "enabled"},
+    },
+]
+
+
 @dataclass
 class LlmCallResult:
     content: str
@@ -427,10 +478,25 @@ class ResearchAssistantService:
 
     def health(self) -> dict[str, Any]:
         repository_health = self.repository.health()
+        if repository_health.get("status") == "ok":
+            catalog_readiness = self.catalog_readiness()
+            status = "ok" if catalog_readiness["ready"] else "catalog_not_ready"
+        else:
+            catalog_readiness = {
+                "ready": False,
+                "status": "schema_missing",
+                "checks": [],
+                "missing_catalogs": ["research_assistant_schema"],
+                "operator_action": "apply backend.db.init_research_assistant_schema_20260521",
+                "human_message": "Research Assistant schema is missing or out of date; apply the committed DDL before catalog initialization.",
+                "generated_at": utc_now().isoformat(),
+            }
+            status = "schema_missing"
         return {
             "service": "research-assistant",
-            "status": "ok" if repository_health.get("status") == "ok" else "schema_missing",
+            "status": status,
             "repository": repository_health,
+            "catalog_readiness": catalog_readiness,
             "phase": "phase1",
             "runtime_boundaries": {
                 "mouse_keyboard_control": False,
@@ -440,6 +506,51 @@ class ResearchAssistantService:
                 "silent_fallback": False,
             },
         }
+
+    def catalog_readiness(self) -> dict[str, Any]:
+        checks: list[dict[str, Any]] = []
+        missing_catalogs: list[str] = []
+        for requirement in CATALOG_READINESS_REQUIREMENTS:
+            page = self.repository.list_records(
+                requirement["catalog"],
+                filters=requirement.get("filters") or {},
+                limit=1,
+            )
+            present = int(page.get("total") or 0)
+            expected_min = int(requirement["expected_min"])
+            ready = present >= expected_min
+            check = {
+                "catalog": requirement["catalog"],
+                "label": requirement["label"],
+                "expected_min": expected_min,
+                "present": present,
+                "ready": ready,
+                "filters": requirement.get("filters") or {},
+            }
+            if not ready:
+                check["missing_count"] = max(expected_min - present, 0)
+                missing_catalogs.append(requirement["catalog"])
+            checks.append(check)
+        ready = not missing_catalogs
+        return {
+            "ready": ready,
+            "status": "ready" if ready else "catalog_not_ready",
+            "checks": checks,
+            "missing_catalogs": missing_catalogs,
+            "operator_action": None if ready else CATALOG_BOOTSTRAP_ACTION,
+            "human_message": (
+                "Research Assistant catalogs are ready."
+                if ready
+                else "研究助理目录尚未初始化完整；请先初始化 Prompt Tree、MCP、Skill 与模型路由目录。"
+            ),
+            "generated_at": utc_now().isoformat(),
+        }
+
+    def ensure_catalog_ready(self) -> dict[str, Any]:
+        readiness = self.catalog_readiness()
+        if not readiness["ready"]:
+            raise ResearchAssistantCatalogNotReadyError(readiness)
+        return readiness
 
     def overview(self) -> dict[str, Any]:
         task_status = self.repository.counts("tasks", "status")
@@ -571,6 +682,7 @@ class ResearchAssistantService:
 
     def build_prompt_bundle(self, request: PromptBundleBuildRequest | dict[str, Any]) -> dict[str, Any]:
         data = request if isinstance(request, PromptBundleBuildRequest) else PromptBundleBuildRequest(**request)
+        self.ensure_catalog_ready()
         available = self.repository.list_records("prompt_nodes", filters={"status": "enabled"}, limit=500)["items"]
         if not available:
             raise RuntimeError("Prompt Tree is empty; run /research-assistant/catalogs/seed before chat")
@@ -700,6 +812,7 @@ class ResearchAssistantService:
         data = request if isinstance(request, ChatTurnRequest) else ChatTurnRequest(**request)
         if data.allow_execute:
             raise ValueError("Phase 1 chat turn does not execute actions; create approval/preflight plan first")
+        self.ensure_catalog_ready()
         conversation = (
             self.repository.get_record("conversations", data.conversation_id)
             if data.conversation_id
