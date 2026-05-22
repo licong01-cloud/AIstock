@@ -775,7 +775,7 @@ Mandatory future rules:
 
 ## Development Standards / Guardrails Framework - 2026-05-04
 
-- Current canonical project development standard as of 2026-05-21: `docs/standards/aistock_development_standard_v1.5_20260523.md`. This is the human-readable authority for Python engineering, quant/trading engineering, QE/warehouse completeness, UI, testing, agent workflow, documentation placement, and detailed-design delivery governance.
+- Current canonical project development standard as of 2026-05-23: `docs/standards/aistock_development_standard_v1.5_20260523.md`. This is the human-readable authority for Python engineering, quant/trading engineering, QE/warehouse completeness, UI, testing, agent workflow, documentation placement, and detailed-design delivery governance.
 - Same-version machine-readable standard: `docs/standards/aistock_development_standard_v1.5_20260523.yaml`. Every enabled rule and manual review control must reference the human standard with `standard_ref`; old machine rules are archived under `docs/standards/archive`.
 - Guardrail framework design document: `docs/architecture/aistock_development_standards_and_guardrails_20260504.md`. It is implementation design only, not a competing standards source; if it conflicts with `docs/standards`, `docs/standards` wins.
 - Required implementation path: update the human standard first, update the same-version YAML in the same change, run a read-only full-repo baseline scan, save the human summary to `docs/analysis/aistock_guardrail_baseline_YYYYMMDD.md`, then make `nox -s l0` block new/changed P0/P1 violations after rule calibration.
@@ -784,7 +784,7 @@ Mandatory future rules:
 
 ## Design Compliance Update - 2026-05-20
 
-- Canonical project development standard is now `docs/standards/aistock_development_standard_v1.5_20260523.md`, with machine catalog `docs/standards/aistock_development_standard_v1.5_20260523.yaml`; v1.2 is archived under `docs/standards/archive`.
+- Canonical project development standard is now `docs/standards/aistock_development_standard_v1.5_20260523.md`, with machine catalog `docs/standards/aistock_development_standard_v1.5_20260523.yaml`; v1.4 is archived under `docs/standards/archive`.
 - New P0 rule DESIGN-COMPLIANCE-001 requires a design acceptance matrix before reporting completion, requesting Main merge, closing an issue, or marking a feature verified. The matrix must map each design/user requirement item to implementation references, real validation evidence, status, and any approved exception.
 - Pipeline success is not sufficient when the pipeline does not cover the design: UI/API/DB/MCP/QE/RP/Paper/HMM requirements need real route, DB side-effect, run record, E2E, screenshot, or controlled smoke evidence.
 - Future Codex App, Codex CLI, and Claude Code sessions must not silently downgrade a design into a simplified version or subset; if full implementation is blocked, stop and ask the user to approve the changed scope.
@@ -810,7 +810,7 @@ Mandatory future rules:
 - Detailed design document: `docs/architecture/data_sync_autonomous_control_plane_design_20260519.md`. It records the local data-management root cause for `cyq_perf`, the autonomous daily data-sync control plane, release/deadline policy, persistent retry queue, reconciliation, alert gate, dashboard cache semantics, strict L0-L5 test plan, result-data validation SQL, and Main acceptance criteria.
 - `cyq_perf` root cause: the scheduler still routes `cyq_perf` / `cyq_chips` through `scripts/ingest_tushare_cyq.py`; that legacy path writes the physical table and job/log/progress rows but does not write `market.dataset_date_refresh_audit`, while the dashboard reads cached `market.data_stats`. Job `success` therefore does not equal audit-backed readiness.
 - `market.dataset_date_refresh_audit` is the readiness authority for daily data; `market.data_stats` is a dashboard/gap-query cache that may be stale and must be rebuilt or marked stale from audit/physical reconciliation. Do not treat `data_stats.max_date` or `ingestion_jobs.success` as the final business-ready signal.
-- Development standard upgraded to `docs/standards/aistock_development_standard_v1.5_20260523.md` with machine catalog `docs/standards/aistock_development_standard_v1.5_20260523.yaml`; v1.2 is archived under `docs/standards/archive`. The guardrail scanner default catalog and tests now point to v1.5.
+- Development standard upgraded to `docs/standards/aistock_development_standard_v1.5_20260523.md` with machine catalog `docs/standards/aistock_development_standard_v1.5_20260523.yaml`; v1.4 is archived under `docs/standards/archive`. The guardrail scanner default catalog and tests now point to v1.5.
 - New governance rule: completed detailed design deliverables must include strict test cases, test plan, result-data validation method, and Main acceptance criteria, then be validated, committed, and pushed to `origin/main` unless the user explicitly exempts them. This rule covers documentation/design delivery only; runtime code, DB migrations, schedulers, production data repair, and strategy assets still require an independent development branch, automated pipeline validation, and user confirmation before Main merge.
 
 ## Tushare ST Events Local Dataset - 2026-05-04
@@ -982,7 +982,7 @@ Mandatory future rules:
 
 ## Production DDL Activation Rule - 2026-05-21
 
-- Current canonical project development standard is `docs/standards/aistock_development_standard_v1.5_20260523.md`, with machine catalog `docs/standards/aistock_development_standard_v1.5_20260523.yaml`; v1.3 is archived under `docs/standards/archive`.
+- Current canonical project development standard is `docs/standards/aistock_development_standard_v1.5_20260523.md`, with machine catalog `docs/standards/aistock_development_standard_v1.5_20260523.yaml`; v1.4 is archived under `docs/standards/archive`.
 - Mandatory rule: when a merged `main` change includes production DB DDL or runtime code depends on new DB objects, apply the committed production migration to the production DB immediately after `main` merge and before production runtime activation/restart. If production DDL cannot be executed or verified, stop and report `production_ddl_pending`; do not report the feature as production-ready.
 - Every feature/fix handoff must include `production_ddl_gate`: `applied` with migration file and validation evidence, `noop` when no DB DDL exists, or `pending/blocking` when production DDL could not be safely applied. Never again leave production code running against a schema missing required runtime tables/columns.
 - Required evidence after production DDL: target DB preflight without secrets, before/after `to_regclass` or catalog checks, table/column/index/constraint/comment verification, API/scheduler/log smoke, and a validation record under `tests/aistock_validation/history/`.
