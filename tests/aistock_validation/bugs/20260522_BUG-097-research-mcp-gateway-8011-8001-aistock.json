@@ -1,0 +1,64 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-097",
+  "title": "Research MCP gateway 端口配置错误 8011→8001，导致无法连接 AIstock 后端",
+  "description": "Expected: Research MCP gateway 连接 AIstock 后端 8001 端口，正常响应 research_pipeline API 请求（/api/v1/research-pipeline/experiments 等）\nActual: gateway.py DEFAULT_BASE_URL 和 .mcp.json AISTOCK_MCP_BASE_URL 均写死端口 8011，但 AIstock 后端只有一个服务运行在端口 8001。8011 端口无服务监听，所有 Research MCP 工具调用（research_list_experiments 等）均返回 WinError 10061 连接拒绝。其他 3 个 MCP 服务器（validation/qe-experiment/qe-archive）正确使用 8001 端口，仅 research MCP 使用了错误端口。",
+  "module": "mcp.gateway",
+  "severity": "P1",
+  "risk_area": "unspecified",
+  "status": "fixed",
+  "trigger_condition": {
+    "scenario": "reported_via_mcp",
+    "files": [
+      "backend/mcp/gateway.py",
+      ".mcp.json"
+    ]
+  },
+  "reproduce_command": "cd F:/Dev/AIstock && python scripts/aistock_mcp_gateway.py --modules=research  # MCP 工具调用时 httpx 连接 8011 端口被拒绝 (WinError 10061)",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:backend/mcp/gateway.py",
+    "file:.mcp.json"
+  ],
+  "fingerprint": "c4421d4b86e36fe2",
+  "assigned_agent": null,
+  "fix_branch": "bug-097-mcp-gateway-port-fix",
+  "fix_commit": "bug-097-mcp-gateway-port-fix merged to main",
+  "verification_run_id": null,
+  "created_at": "2026-05-22T09:48:36Z",
+  "first_seen_at": "2026-05-22T09:48:36Z",
+  "last_seen_at": "2026-05-22T10:25:11Z",
+  "fixed_at": "2026-05-22T10:25:11Z",
+  "submitted_at": "2026-05-22T09:48:36Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/mcp/gateway.py",
+    ".mcp.json"
+  ],
+  "suspected_modules": [
+    "backend/mcp/gateway.py",
+    ".mcp.json"
+  ],
+  "required_verification": [],
+  "closure_requirements": [],
+  "events": [
+    {
+      "timestamp": "2026-05-22T09:48:36Z",
+      "actor": "unknown",
+      "action": "discovered",
+      "note": "Reported via aistock_mcp_server.report_bug. Comments: 0"
+    },
+    {
+      "timestamp": "2026-05-22T09:50:09Z",
+      "actor": "mcp_agent",
+      "action": "status_changed",
+      "note": "Fix committed in worktree F:/Dev/AIstock_worktrees/bug-097-mcp-gateway-port-fix, branch bug-097-mcp-gateway-port-fix. Changes: gateway.py DEFAULT_BASE_URL 8011→8001, .mcp.json comment + AISTOCK_MCP_BASE_URL 8011→8001. 同步修复了用户全局 ~/.mcp.json。等待用户确认后合入 main。"
+    },
+    {
+      "timestamp": "2026-05-22T10:25:11Z",
+      "actor": "mcp_agent",
+      "action": "status_changed",
+      "note": "Merged bug-097-mcp-gateway-port-fix into main (ort strategy, 2 files changed). Worktree cleanup pending. 用户需重启 Claude Code 使 ~/.mcp.json 修改生效。"
+    }
+  ]
+}
