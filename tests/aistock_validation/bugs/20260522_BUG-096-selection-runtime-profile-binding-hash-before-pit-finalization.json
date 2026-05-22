@@ -138,6 +138,12 @@
       "actor": "codex-app",
       "action": "pr_created",
       "note": "Created GitHub PR #153 for BUG-096 fix branch and synced GitHub issue #149 with status:fixed-pending-review plus validation summary comment https://github.com/licong01-cloud/AIstock/issues/149#issuecomment-4517549047."
+    },
+    {
+      "timestamp": "2026-05-22T13:22:00Z",
+      "actor": "codex-app",
+      "action": "merged_to_main",
+      "note": "GitHub PR #153 merged to main as 36616cf342665e953f75ac483c6cf7a81c32fdaa after BUG-097 catalog gate remediation. GitHub issue #149 closed and labeled status:fixed. production_ddl_gate=noop."
     }
   ],
   "created_at": "2026-05-22T08:00:06Z",
