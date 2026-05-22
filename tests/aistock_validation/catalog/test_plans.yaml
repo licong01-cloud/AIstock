@@ -425,9 +425,17 @@ plans:
     writes_database: false
     writes_artifacts: false
     writes_business_state: false
-    runner_enabled: true
+    runner_enabled: false
     max_duration_seconds: 300
     evidence_kinds: [pytest]
+    runtime_policy:
+      default_trigger: manual
+      allow_mcp_start: false
+      allow_github_actions: false
+      allow_local_manual: true
+      allow_parallel: false
+      timeout_seconds: 300
+    validation_gap: Manual/nightly gate because L3/live or long-running validation must not be runner-enabled by default.
   - plan_key: miniqmt_sim_stub_l3
     title: MiniQMT SIM fake broker order sync and reconcile backend validation
     module: paper_v2_selection_center
@@ -442,9 +450,17 @@ plans:
     writes_database: false
     writes_artifacts: false
     writes_business_state: false
-    runner_enabled: true
+    runner_enabled: false
     max_duration_seconds: 600
     evidence_kinds: [pytest]
+    runtime_policy:
+      default_trigger: manual
+      allow_mcp_start: false
+      allow_github_actions: false
+      allow_local_manual: true
+      allow_parallel: false
+      timeout_seconds: 600
+    validation_gap: Manual/nightly gate because L3/live or long-running validation must not be runner-enabled by default.
   - plan_key: simulation_runtime_ops_ui
     title: Simulation Runtime read-only ops UI validation
     module: paper_v2_selection_center
@@ -459,9 +475,17 @@ plans:
     writes_database: false
     writes_artifacts: true
     writes_business_state: false
-    runner_enabled: true
+    runner_enabled: false
     max_duration_seconds: 600
     evidence_kinds: [playwright, tsc]
+    runtime_policy:
+      default_trigger: manual
+      allow_mcp_start: false
+      allow_github_actions: false
+      allow_local_manual: true
+      allow_parallel: false
+      timeout_seconds: 600
+    validation_gap: Manual/nightly gate because L3/live or long-running validation must not be runner-enabled by default.
   - plan_key: simulation_dual_backend_l4
     title: Dual backend simulation oracle validation without production services
     module: paper_v2_selection_center
@@ -479,6 +503,18 @@ plans:
     runner_enabled: false
     max_duration_seconds: 900
     evidence_kinds: [pytest]
+    runtime_policy:
+      default_trigger: manual
+      allow_mcp_start: false
+      allow_github_actions: false
+      allow_local_manual: true
+      allow_parallel: false
+      timeout_seconds: 900
+    evidence_policy:
+      required_files: [tests/aistock_validation/history/simulation-runtime/<validation_run_id>.md]
+      required_fields: [validation_run_id, shared_signal_oracle, localsim_result, miniqmt_stub_result]
+      artifact_retention_days: 90
+      max_log_excerpt_chars: 4000
     validation_gap: UI and full-day soak evidence are still required before this plan becomes a merge gate.
   - plan_key: miniqmt_sim_trading_hours_l5
     title: MiniQMT SIM trading-hours controlled manual validation
@@ -498,6 +534,35 @@ plans:
     runner_enabled: false
     max_duration_seconds: 7200
     evidence_kinds: [manual_l5, broker_statement, ledger_reconciliation]
+    resource_policy:
+      policy: validation_paper_account
+      creates_validation_resources: true
+      resource_types: [paper_portfolio, paper_session, paper_order, paper_fill, paper_ledger, validation_account, miniqmt_sim_order, miniqmt_sim_fill]
+      allowed_db_targets: [dev_db]
+      forbidden_db_targets: [prod_db]
+      validation_namespace_required: true
+      validation_run_id_required: true
+      cleanup_required: true
+      cleanup_policy:
+        strategy: manual_review
+        retain_evidence: true
+        retain_summary_days: 180
+        cleanup_failure_severity: P1
+    runtime_policy:
+      default_trigger: manual
+      allow_mcp_start: false
+      allow_github_actions: false
+      allow_local_manual: true
+      allow_parallel: false
+      requires_self_hosted_runner: true
+      requires_market_hours: true
+      requires_tdx: true
+      timeout_seconds: 7200
+    evidence_policy:
+      required_files: [tests/aistock_validation/history/simulation-runtime/<validation_run_id>.md]
+      required_fields: [validation_run_id, manual_confirmation, broker_statement, ledger_reconciliation, cleanup_status]
+      artifact_retention_days: 180
+      max_log_excerpt_chars: 8000
     validation_gap: Requires approved trading-hours MiniQMT SIM runbook and real broker evidence.
   - plan_key: model_registry_backend
     title: Model Registry backend tests
