@@ -20,7 +20,40 @@ except ImportError:  # pragma: no cover
         sys.path.insert(0, str(repo_root))
     from backend.db.pg_pool import get_conn
 
-RESEARCH_ASSISTANT_SCHEMA_VERSION = "research_assistant_console_v2_chat_prompt_20260522"
+RESEARCH_ASSISTANT_SCHEMA_VERSION = "research_assistant_console_v3_event_constraint_reconcile_20260523"
+
+RESEARCH_ASSISTANT_EVENT_TYPES: tuple[str, ...] = (
+    "planned",
+    "chat_received",
+    "prompt_bundle_built",
+    "context_pack_built",
+    "llm_started",
+    "llm_done",
+    "llm_failed",
+    "action_proposed",
+    "mcp_preflight_started",
+    "mcp_preflight_passed",
+    "mcp_preflight_failed",
+    "mcp_started",
+    "mcp_done",
+    "mcp_failed",
+    "skill_started",
+    "skill_done",
+    "skill_failed",
+    "approval_required",
+    "approved",
+    "rejected",
+    "memory_written",
+    "report_ready",
+    "triage_required",
+)
+
+
+def _check_in_values(column_name: str, values: tuple[str, ...]) -> str:
+    return f"{column_name} IN ({','.join(repr(value) for value in values)})"
+
+
+AGENT_TASK_EVENT_TYPE_CHECK = _check_in_values("event_type", RESEARCH_ASSISTANT_EVENT_TYPES)
 
 BASE_DDL: list[str] = [
     """
@@ -60,10 +93,18 @@ BASE_DDL: list[str] = [
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         CONSTRAINT ck_ate_severity CHECK (severity IN ('debug','info','warning','error','critical')),
-        CONSTRAINT ck_ate_type CHECK (event_type IN ('planned','chat_received','prompt_bundle_built','context_pack_built','llm_started','llm_done','llm_failed','action_proposed','mcp_preflight_started','mcp_preflight_passed','mcp_preflight_failed','mcp_started','mcp_done','mcp_failed','skill_started','skill_done','skill_failed','approval_required','approved','rejected','memory_written','report_ready','triage_required'))
+        CONSTRAINT ck_ate_type CHECK ({event_type_check})
     )
-    """,
+    """.replace("{event_type_check}", AGENT_TASK_EVENT_TYPE_CHECK),
     "CREATE INDEX IF NOT EXISTS idx_ate_task_created ON agent_task_events(task_id, created_at DESC)",
+    """
+    ALTER TABLE agent_task_events
+        DROP CONSTRAINT IF EXISTS ck_ate_type
+    """,
+    f"""
+    ALTER TABLE agent_task_events
+        ADD CONSTRAINT ck_ate_type CHECK ({AGENT_TASK_EVENT_TYPE_CHECK})
+    """,
     """
     CREATE TABLE IF NOT EXISTS assistant_conversations (
         conversation_id TEXT PRIMARY KEY,

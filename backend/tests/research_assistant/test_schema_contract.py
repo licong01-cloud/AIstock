@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import re
 
-from backend.db.init_research_assistant_schema_20260521 import DDL, RESEARCH_ASSISTANT_SCHEMA_VERSION
+from backend.db.init_research_assistant_schema_20260521 import DDL, RESEARCH_ASSISTANT_EVENT_TYPES, RESEARCH_ASSISTANT_SCHEMA_VERSION
+from backend.services.research_assistant.models import EVENT_TYPES
 from backend.services.research_assistant.repository import TABLES
 from backend.services.research_assistant.service import (
     DEFAULT_MCP_SERVERS,
@@ -35,7 +36,7 @@ def _assert_columns(table_columns: dict[str, set[str]], kind: str, payload: dict
 def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
     sql = "\n".join(DDL)
 
-    assert RESEARCH_ASSISTANT_SCHEMA_VERSION == "research_assistant_console_v2_chat_prompt_20260522"
+    assert RESEARCH_ASSISTANT_SCHEMA_VERSION == "research_assistant_console_v3_event_constraint_reconcile_20260523"
     for table in {
         "research_agent_tasks",
         "agent_task_events",
@@ -79,6 +80,9 @@ def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
     assert "chat_received" in sql
     assert "prompt_bundle_built" in sql
     assert "llm_done" in sql
+    assert set(RESEARCH_ASSISTANT_EVENT_TYPES) == EVENT_TYPES
+    assert "DROP CONSTRAINT IF EXISTS ck_ate_type" in sql
+    assert "ADD CONSTRAINT ck_ate_type CHECK" in sql
 
 
 def test_research_assistant_service_payloads_match_schema_columns() -> None:
