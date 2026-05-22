@@ -61,7 +61,7 @@ def test_config_composer_keeps_capacity_params_as_strategy_kwargs() -> None:
     allowed_block_start = COMPOSER_SOURCE.index("_SCORE_WEIGHTED_TOPK_ALLOWED_KEYS")
     allowed_block = COMPOSER_SOURCE[allowed_block_start : allowed_block_start + 900]
     non_strategy_block_start = COMPOSER_SOURCE.index("_NON_STRATEGY_PARAMS")
-    non_strategy_block_end = COMPOSER_SOURCE.index("} | _PTNN_HP_KEYS", non_strategy_block_start)
+    non_strategy_block_end = COMPOSER_SOURCE.index("if custom_params:", non_strategy_block_start)
     non_strategy_block = COMPOSER_SOURCE[non_strategy_block_start:non_strategy_block_end]
 
     for field in ("max_single_order_value", "max_weight", "max_position_ratio"):

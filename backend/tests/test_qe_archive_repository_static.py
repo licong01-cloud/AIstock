@@ -366,6 +366,7 @@ def test_payload_extractor_captures_reproducible_config_metrics_account_and_curv
     assert importance_by_factor["alpha_001"].method == "pytorch_correlation"
     assert importance_by_factor["alpha_001"].importance_value == 62.5
     assert importance_by_factor["alpha_001"].normalized_value == 0.625
+    assert importance_by_factor["alpha_001"].weight_pct == 62.5
     assert importance_by_factor["alpha_001"].rank_in_run == 1
     assert len(extracted.execution_events) >= 2
     assert extracted.stats["symbol_summary_count"] == 4
@@ -427,6 +428,7 @@ def test_payload_extractor_reads_enhanced_feature_importance_gain_pct() -> None:
     assert importance_by_factor["alpha_a"].method == "pytorch_correlation"
     assert importance_by_factor["alpha_a"].importance_value == 0.3
     assert importance_by_factor["alpha_a"].normalized_value == 0.75
+    assert importance_by_factor["alpha_a"].weight_pct == 75.0
     assert importance_by_factor["alpha_a"].rank_in_run == 1
 
 
@@ -636,6 +638,7 @@ def test_factor_importance_query_includes_repro_config_source_and_return_context
         "c.execution_config",
         "dc.train_start",
         "dc.backtest_end",
+        "i.weight_pct",
         "s.mlflow_artifact_uri",
         "acc.cagr",
         "acc.total_return",
@@ -692,6 +695,7 @@ def test_factor_importance_stability_query_includes_seed_hmm_and_return_risk_agg
         "hmm_enabled_run_count",
         "no_hmm_run_count",
         "AVG(acc.cagr)",
+        "AVG(i.weight_pct)",
         "AVG(acc.total_return)",
         "AVG(acc.max_drawdown)",
         "AVG(acc.sharpe)",

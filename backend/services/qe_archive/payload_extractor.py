@@ -562,10 +562,13 @@ class QEArchivePayloadExtractor:
                 if not factor_name or raw_value is None:
                     continue
                 normalized = _as_float(row.get("normalized_value"))
+                weight_pct = _as_float(row.get("weight_pct") if row.get("weight_pct") is not None else row.get("gain_pct"))
                 if normalized is None:
-                    normalized = _as_float(row.get("weight_pct") if row.get("weight_pct") is not None else row.get("gain_pct"))
+                    normalized = weight_pct
                     if normalized is not None and normalized > 1:
                         normalized = normalized / 100.0
+                if weight_pct is None and normalized is not None:
+                    weight_pct = normalized * 100.0
                 raw_records.append(
                     {
                         "run_id": run_id,
@@ -583,6 +586,7 @@ class QEArchivePayloadExtractor:
                         "step": _as_int(row.get("step")),
                         "importance_value": raw_value,
                         "normalized_value": normalized,
+                        "weight_pct": weight_pct,
                         "signed_value": _as_float(row.get("signed_value") or row.get("raw_value")),
                         "rank_in_run": _as_int(row.get("rank_in_run") or row.get("rank")),
                         "sample_count": _as_int(row.get("sample_count") or row.get("n")),
@@ -606,6 +610,8 @@ class QEArchivePayloadExtractor:
             if record.get("normalized_value") is None:
                 total = total_abs_by_method.get(record["method"], 0.0)
                 record["normalized_value"] = abs(float(record["importance_value"])) / total if total else None
+            if record.get("weight_pct") is None and record.get("normalized_value") is not None:
+                record["weight_pct"] = float(record["normalized_value"]) * 100.0
 
         grouped: dict[str, list[dict[str, Any]]] = {}
         for record in raw_records:

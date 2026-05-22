@@ -447,6 +447,7 @@ class RunFactorImportanceRecord:
     epoch: int | None = None
     step: int | None = None
     normalized_value: float | None = None
+    weight_pct: float | None = None
     signed_value: float | None = None
     rank_in_run: int | None = None
     sample_count: int | None = None
