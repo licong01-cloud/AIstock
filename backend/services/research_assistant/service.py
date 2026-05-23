@@ -8,12 +8,15 @@ fall back to in-memory storage unless tests inject that repository explicitly.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from time import perf_counter
 from typing import Any
+
+logger = logging.getLogger("aistock.research_assistant.service")
 
 import jsonschema
 
@@ -841,7 +844,11 @@ class ResearchAssistantService:
         )
         self.add_task_event(task["task_id"], TaskEventCreate(event_type="chat_received", message="已接收用户对话需求，进入理解与计划阶段。", payload_json={"conversation_id": conversation_id}))
 
-        route = self.route_model(ModelRouteRequest(role="primary_reasoner", risk_level=data.risk_level, token_estimate=len(data.message) * 2))
+        prior_messages = self._load_prior_chat_messages(conversation_id, data.message)
+        history_tokens = sum(self._estimate_tokens(m["content"]) for m in prior_messages)
+        estimated_total_tokens = len(data.message) * 2 + history_tokens + 32000  # system + context pack overhead
+
+        route = self.route_model(ModelRouteRequest(role="primary_reasoner", risk_level=data.risk_level, token_estimate=estimated_total_tokens))
         model_profile = route.get("model_profile")
         if not model_profile:
             raise RuntimeError(f"no enabled primary model profile for risk={data.risk_level}: {route.get('route_status')}")
@@ -859,10 +866,9 @@ class ResearchAssistantService:
                 task_id=task["task_id"],
                 agent_id="research_assistant_primary",
                 model_profile=model_profile["model_profile_id"],
-                token_budget=16000,
+                token_budget=64000,
             )
         )
-        prior_messages = self._load_prior_chat_messages(conversation_id, data.message)
         messages = self._chat_messages_for_llm(data.message, bundle, context_pack, prior_messages)
         self.add_task_event(task["task_id"], TaskEventCreate(event_type="llm_started", message="主模型调用已开始。", payload_json={"model_profile_id": model_profile["model_profile_id"], "prompt_bundle_id": bundle["prompt_bundle_id"]}))
         try:
@@ -984,28 +990,52 @@ class ResearchAssistantService:
         messages.append({"role": "user", "content": user_message})
         return messages
 
+    # Budget reserved for system prompt, context pack, and assistant response.
+    # Model context window is 1M tokens; we reserve ~200K for non-history content
+    # and use the remaining ~800K for conversation history.
+    _PRIOR_MESSAGES_TOKEN_BUDGET = 800_000
+    _TOKEN_ESTIMATE_CHARS_PER_TOKEN = 2.0
+
+    @classmethod
+    def _estimate_tokens(cls, text: str) -> int:
+        return max(1, int(len(text) / cls._TOKEN_ESTIMATE_CHARS_PER_TOKEN))
+
     def _load_prior_chat_messages(self, conversation_id: str, current_message: str) -> list[dict[str, str]]:
         try:
             result = self.repository.list_records(
                 "conversation_messages",
                 filters={"conversation_id": conversation_id},
-                limit=20,
+                limit=500,
             )
             items = sorted(result["items"], key=lambda item: str(item.get("created_at") or ""))
         except Exception:
             return []
-        prior: list[dict[str, str]] = []
+        candidates: list[dict[str, str]] = []
         for item in items:
-            role = str(item.get("role") or "")
-            if role not in ("user", "assistant"):
-                continue
             content = str(item.get("content_text") or "").strip()
             if not content:
                 continue
             if content == current_message:
                 continue
-            prior.append({"role": role, "content": content[:500]})
-        return prior[-20:]
+            role = str(item.get("role") or "")
+            candidates.append({"role": role, "content": content})
+        # Sliding window: newest first, keep as many full messages as fit in budget.
+        # Never truncate individual messages — drop oldest when budget is exceeded.
+        selected: list[dict[str, str]] = []
+        tokens_used = 0
+        for msg in reversed(candidates):
+            msg_tokens = self._estimate_tokens(msg["content"])
+            if tokens_used + msg_tokens > self._PRIOR_MESSAGES_TOKEN_BUDGET and selected:
+                break
+            selected.append(msg)
+            tokens_used += msg_tokens
+        selected.reverse()
+        if len(selected) < len(candidates):
+            logger.info(
+                "chat history window: kept %d/%d messages (~%d estimated tokens), dropped %d oldest due to budget %d",
+                len(selected), len(candidates), tokens_used, len(candidates) - len(selected), self._PRIOR_MESSAGES_TOKEN_BUDGET,
+            )
+        return selected
 
     @staticmethod
     def _build_human_cards(user_message: str, task: dict[str, Any], bundle: dict[str, Any], route: dict[str, Any]) -> dict[str, Any]:
