@@ -1,80 +1,86 @@
 {
-    "schema_version":  "aistock_validation_bug_v1",
-    "bug_id":  "BUG-102",
-    "title":  "Research Assistant chat loses context after first turn",
-    "description":  "Research Assistant currently records conversation rows but behaves like one-shot chat. The frontend does not pass the active conversation_id returned by the first /chat/turn response, so the backend creates a new assistant_conversations row for every message. Even when a conversation_id is supplied, backend _chat_messages_for_llm only includes system prompt, Context Pack summary, and current user message; it does not load assistant_conversation_messages history into LLM context. Therefore the second turn forgets prior user requirements, assistant clarifications, and confirmed configuration details.",
-    "module":  "research_assistant",
-    "severity":  "P1",
-    "risk_area":  "conversation_state_and_llm_context",
-    "status":  "open",
-    "trigger_condition":  {
-                              "scenario":  "research_assistant_second_turn_forgets_previous_message",
-                              "route":  "/api/v1/research-assistant/chat/turn",
-                              "frontend_gap":  "chatTurn payload omits conversation_id",
-                              "backend_gap":  "LLM messages omit prior assistant_conversation_messages history"
-                          },
-    "reproduce_command":  "1) Open /research-assistant/chat. 2) Send: \u0027帮我创建一个 QE 10 loop 实验，先不要执行\u0027. 3) Send: \u0027把刚才那个实验改成只用固定 PIT 股票池\u0027. 4) Observe the second turn is treated as a new request or cannot reliably reference the first turn. Code inspection: frontend/src/app/research-assistant/chat/page.tsx sends chatTurn without conversation_id; backend/services/research_assistant/service.py::_chat_messages_for_llm omits conversation history.",
-    "evidence_uris":  [
-                          "file:frontend/src/app/research-assistant/chat/page.tsx",
-                          "file:frontend/src/lib/research-assistant/api.ts",
-                          "file:backend/services/research_assistant/service.py",
-                          "file:backend/services/research_assistant/models.py",
-                          "github:https://github.com/licong01-cloud/AIstock/issues/168"
-                      ],
-    "fingerprint":  "40dc38cadca6ca1a",
-    "assigned_agent":  null,
-    "fix_branch":  null,
-    "fix_commit":  null,
-    "verification_run_id":  null,
-    "created_at":  "2026-05-22T18:12:04Z",
-    "first_seen_at":  "2026-05-22T18:12:04Z",
-    "last_seen_at":  "2026-05-22T18:12:04Z",
-    "fixed_at":  null,
-    "submitted_at":  "2026-05-22T18:12:04Z",
-    "closed_at":  null,
-    "github_issue_number":  168,
-    "github_issue_url":  "https://github.com/licong01-cloud/AIstock/issues/168",
-    "allowed_write_scope":  [
-                                "frontend/src/app/research-assistant/chat/page.tsx",
-                                "frontend/src/lib/research-assistant/api.ts",
-                                "backend/services/research_assistant/service.py",
-                                "backend/services/research_assistant/models.py",
-                                "backend/tests/research_assistant/",
-                                "frontend/tests/research-assistant/",
-                                "tests/aistock_validation/bugs/"
-                            ],
-    "suspected_modules":  [
-                              "frontend/src/app/research-assistant/chat/page.tsx",
-                              "backend/services/research_assistant/service.py",
-                              "assistant_conversations",
-                              "assistant_conversation_messages"
-                          ],
-    "required_verification":  [
-                                  "Backend unit test: second chat turn with same conversation_id passes bounded prior user/assistant messages into LLM messages.",
-                                  "Frontend test: second send includes conversation_id returned by first chatTurn response.",
-                                  "API test: /conversations/{conversation_id} returns ordered user/assistant messages for both turns.",
-                                  "Regression test: New conversation/reset action clears active conversation_id and does not pollute previous conversation.",
-                                  "git diff --check"
-                              ],
-    "closure_requirements":  [
-                                 "The chat UI preserves active conversation_id across turns until the user explicitly starts a new conversation.",
-                                 "Backend chat_turn loads bounded recent conversation history for the same conversation_id and injects it into LLM context.",
-                                 "History injection excludes raw JSON, database IDs, trace IDs, payloads, and backend logs from the main human conversation prompt.",
-                                 "Token budget handling is explicit: recent turns are bounded and older context is truncated or summarized without silent failure.",
-                                 "BUG-102 registry record and GitHub issue #168 remain synchronized with fix branch, commit, and validation evidence."
-                             ],
-    "events":  [
-                   {
-                       "timestamp":  "2026-05-22T18:12:04Z",
-                       "actor":  "codex-app",
-                       "action":  "github_issue_created",
-                       "note":  "Mirrored manually to GitHub issue #168 because Validation MCP bug sync is currently blocked by an unrelated UTF-8 BOM parse error in a stale worktree registry entry."
-                   },
-                   {
-                       "timestamp":  "2026-05-22T18:12:04Z",
-                       "actor":  "codex-app",
-                       "action":  "discovered",
-                       "note":  "Confirmed by code inspection after user reported second turn forgets prior Research Assistant chat context."
-                   }
-               ]
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-105",
+  "title": "Research Assistant chat loses context after first turn",
+  "description": "Research Assistant currently records conversation rows but behaves like one-shot chat. The frontend does not pass the active conversation_id returned by the first /chat/turn response, so the backend creates a new assistant_conversations row for every message. Even when a conversation_id is supplied, backend _chat_messages_for_llm only includes system prompt, Context Pack summary, and current user message; it does not load assistant_conversation_messages history into LLM context. Therefore the second turn forgets prior user requirements, assistant clarifications, and confirmed configuration details.",
+  "module": "research_assistant",
+  "severity": "P1",
+  "risk_area": "conversation_state_and_llm_context",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "research_assistant_second_turn_forgets_previous_message",
+    "route": "/api/v1/research-assistant/chat/turn",
+    "frontend_gap": "chatTurn payload omits conversation_id",
+    "backend_gap": "LLM messages omit prior assistant_conversation_messages history"
+  },
+  "reproduce_command": "1) Open /research-assistant/chat. 2) Send: '帮我创建一个 QE 10 loop 实验，先不要执行'. 3) Send: '把刚才那个实验改成只用固定 PIT 股票池'. 4) Observe the second turn is treated as a new request or cannot reliably reference the first turn. Code inspection: frontend/src/app/research-assistant/chat/page.tsx sends chatTurn without conversation_id; backend/services/research_assistant/service.py::_chat_messages_for_llm omits conversation history.",
+  "evidence_uris": [
+    "file:frontend/src/app/research-assistant/chat/page.tsx",
+    "file:frontend/src/lib/research-assistant/api.ts",
+    "file:backend/services/research_assistant/service.py",
+    "file:backend/services/research_assistant/models.py",
+    "github:https://github.com/licong01-cloud/AIstock/issues/168"
+  ],
+  "fingerprint": "40dc38cadca6ca1a",
+  "assigned_agent": null,
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-22T18:12:04Z",
+  "first_seen_at": "2026-05-22T18:12:04Z",
+  "last_seen_at": "2026-05-22T18:12:04Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-22T18:12:04Z",
+  "closed_at": null,
+  "github_issue_number": 168,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/168",
+  "allowed_write_scope": [
+    "frontend/src/app/research-assistant/chat/page.tsx",
+    "frontend/src/lib/research-assistant/api.ts",
+    "backend/services/research_assistant/service.py",
+    "backend/services/research_assistant/models.py",
+    "backend/tests/research_assistant/",
+    "frontend/tests/research-assistant/",
+    "tests/aistock_validation/bugs/"
+  ],
+  "suspected_modules": [
+    "frontend/src/app/research-assistant/chat/page.tsx",
+    "backend/services/research_assistant/service.py",
+    "assistant_conversations",
+    "assistant_conversation_messages"
+  ],
+  "required_verification": [
+    "Backend unit test: second chat turn with same conversation_id passes bounded prior user/assistant messages into LLM messages.",
+    "Frontend test: second send includes conversation_id returned by first chatTurn response.",
+    "API test: /conversations/{conversation_id} returns ordered user/assistant messages for both turns.",
+    "Regression test: New conversation/reset action clears active conversation_id and does not pollute previous conversation.",
+    "git diff --check"
+  ],
+  "closure_requirements": [
+    "The chat UI preserves active conversation_id across turns until the user explicitly starts a new conversation.",
+    "Backend chat_turn loads bounded recent conversation history for the same conversation_id and injects it into LLM context.",
+    "History injection excludes raw JSON, database IDs, trace IDs, payloads, and backend logs from the main human conversation prompt.",
+    "Token budget handling is explicit: recent turns are bounded and older context is truncated or summarized without silent failure.",
+    "BUG-105 registry record and GitHub issue #168 remain synchronized with fix branch, commit, and validation evidence."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-22T18:12:04Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Mirrored manually to GitHub issue #168 because Validation MCP bug sync is currently blocked by an unrelated UTF-8 BOM parse error in a stale worktree registry entry."
+    },
+    {
+      "timestamp": "2026-05-22T18:12:04Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "Confirmed by code inspection after user reported second turn forgets prior Research Assistant chat context."
+    },
+    {
+      "timestamp": "2026-05-23T03:07:00Z",
+      "actor": "codex-app",
+      "action": "renumbered_due_to_duplicate_bug_id",
+      "note": "Renumbered from BUG-102 to BUG-105 because BUG-102 was already used by the fixed Validation MCP GitHub sync BOM issue linked to GitHub #116. Canonical GitHub issue remains #168."
+    }
+  ]
 }
