@@ -1,11 +1,11 @@
-"""Read-only operator API for unified LocalSim and MiniQMT simulation runtime."""
+"""Operator API for unified LocalSim and MiniQMT simulation runtime."""
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from backend.services.simulation_runtime import SimulationBrokerBackend, SimulationDailyRunStatus
 from backend.services.simulation_runtime.ops import SimulationRuntimeOpsService
@@ -127,5 +127,38 @@ def get_live_admission_evidence(
             target_broker_backend=target_broker_backend,
         )
         return {"ok": True, **payload}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/scheduler/start")
+def start_scheduler(
+    interval_seconds: int | None = Body(None, ge=1, le=3600),
+    default_submit: bool | None = Body(None),
+    service: SimulationRuntimeOpsService = Depends(get_simulation_runtime_ops_service),
+) -> dict[str, Any]:
+    try:
+        return service.start_scheduler(interval_seconds=interval_seconds, default_submit=default_submit)
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/scheduler/stop")
+def stop_scheduler(
+    service: SimulationRuntimeOpsService = Depends(get_simulation_runtime_ops_service),
+) -> dict[str, Any]:
+    try:
+        return service.stop_scheduler()
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/scheduler/tick")
+def scheduler_tick(
+    as_of_time: datetime | None = Body(None),
+    service: SimulationRuntimeOpsService = Depends(get_simulation_runtime_ops_service),
+) -> dict[str, Any]:
+    try:
+        return service.scheduler_tick(as_of_time=as_of_time)
     except TradingCoreError as exc:
         _raise_http(exc)

@@ -958,3 +958,118 @@ def test_scheduler_miniqmt_two_strategies_same_stock_keep_strategy_lots_and_merg
     assert len(broker.place_order_payloads) == 6
     assert [payload["strategy_name"] for payload in broker.place_order_payloads].count("SchedulerQMT") == 3
     assert [payload["strategy_name"] for payload in broker.place_order_payloads].count("SchedulerQMTB") == 3
+
+
+def test_production_context_provider_loads_positions():
+    """Production provider returns context with positions from the loader."""
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+    from backend.services.trading_core.models import PositionLot
+
+    positions = {
+        "000001.XSHE": PositionLot(
+            portfolio_id="strat1", symbol="000001.XSHE", quantity=1000,
+            available_quantity=1000, avg_cost=12.50, trade_date=date.today(),
+        ),
+    }
+
+    def _pos_loader(strategy_id, trade_date):
+        return positions
+
+    provider = ProductionSimulationRunContextProvider(position_loader=_pos_loader)
+    release = _make_test_release()
+    binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
+    ctx = provider.load_context(runtime_release=release, binding=binding, trade_date=date.today())
+    assert ctx.current_positions == positions
+    assert ctx.portfolio_id == "strat1"
+
+
+def test_production_context_provider_graceful_position_failure():
+    """Production provider returns empty positions when the loader raises."""
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    def failing_loader(strategy_id, trade_date):
+        raise RuntimeError("db unreachable")
+
+    provider = ProductionSimulationRunContextProvider(position_loader=failing_loader)
+    release = _make_test_release()
+    binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
+    ctx = provider.load_context(runtime_release=release, binding=binding, trade_date=date.today())
+    assert ctx.current_positions == {}
+    assert ctx.current_prices == {}
+
+
+def test_production_context_provider_miniqmt_context():
+    """Production provider wires MiniQMT services when backend is MINIQMT_SIM."""
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    provider = ProductionSimulationRunContextProvider(
+        managed_order_service_factory=lambda: "fake_mos",
+        qmt_sync_service_factory=lambda: "fake_sync",
+        qmt_reconciliation_service_factory=lambda: "fake_recon",
+        qmt_ledger_repository="fake_ledger_repo",
+    )
+    release = _make_test_release()
+    binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.MINIQMT_SIM)
+    ctx = provider.load_context(runtime_release=release, binding=binding, trade_date=date.today())
+    assert ctx.managed_order_service == "fake_mos"
+    assert ctx.qmt_sync_service == "fake_sync"
+    assert ctx.qmt_reconciliation_service == "fake_recon"
+    assert ctx.qmt_ledger_repository == "fake_ledger_repo"
+
+
+def test_fail_fast_provider_still_rejects():
+    """FailFastSimulationRunContextProvider still raises DataUnavailableError."""
+    from backend.services.simulation_runtime.scheduler import FailFastSimulationRunContextProvider
+    from backend.services.trading_core.errors import DataUnavailableError
+
+    provider = FailFastSimulationRunContextProvider()
+    release = _make_test_release()
+    binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
+    try:
+        provider.load_context(runtime_release=release, binding=binding, trade_date=date.today())
+        raise AssertionError('expected DataUnavailableError')
+    except DataUnavailableError as exc:
+        assert 'requires an explicit run context provider' in str(exc)
+
+
+def _make_test_release():
+    from backend.services.simulation_runtime.models import StrategyRuntimeRelease
+    return StrategyRuntimeRelease(
+        package_id="pkg", manifest_sha256="aa",
+        runtime_profile_id="rp", runtime_profile_version_id="rpv", runtime_profile_sha256="rps",
+        daily_strategy_profile_version_id="dsp", execution_policy_version_id="epv",
+        execution_policy_sha256="eps", tail_policy_version_id="tpv", tail_policy_sha256="tps",
+        release_config_json={
+            "schema_version": "strategy_runtime_release_v1",
+            "package_id": "pkg",
+            "manifest_sha256": "aa",
+            "runtime_profile": {"profile_id": "rp", "profile_version_id": "rpv", "config_sha256": "rps"},
+            "daily_strategy": {"profile_version_id": "dsp"},
+            "execution_policy": {"policy_version_id": "epv", "policy_sha256": "eps"},
+            "tail_policy": {"policy_version_id": "tpv", "policy_sha256": "tps"},
+            "validation_state": "DRAFT",
+            "validation_evidence": {},
+            "metadata": {},
+        },
+    )
+
+
+def _make_test_binding(release, *, broker_backend):
+    from backend.services.simulation_runtime.models import SimulationReleaseBinding
+    return SimulationReleaseBinding(
+        strategy_id="strat1", release_id=release.release_id, release_hash=release.release_hash or "",
+        package_id=release.package_id, manifest_sha256=release.manifest_sha256,
+        broker_backend=broker_backend, capital_allocation=1_000_000.0,
+        binding_config_json={
+            "schema_version": "simulation_release_binding_v1",
+            "strategy_id": "strat1",
+            "release_id": release.release_id,
+            "release_hash": release.release_hash or "",
+            "package_id": release.package_id,
+            "manifest_sha256": release.manifest_sha256,
+            "broker_backend": broker_backend.value,
+            "capital_allocation": 1_000_000.0,
+            "approval_state": "DRAFT",
+            "metadata": {},
+        },
+    )

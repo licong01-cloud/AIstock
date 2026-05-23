@@ -1,9 +1,10 @@
-"""Read-only operator projections for the unified simulation runtime."""
+"""Operator projections and controlled scheduler operations for the unified simulation runtime."""
 
 from __future__ import annotations
 
+import os
 from collections import Counter
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from backend.services.trading_core.errors import DataUnavailableError
@@ -495,3 +496,55 @@ class SimulationRuntimeOpsService:
                 }
             )
         return errors
+
+    def start_scheduler(self, *, interval_seconds: int | None = None, default_submit: bool | None = None) -> dict[str, Any]:
+        if not isinstance(self.scheduler, SimulationLifecycleBackgroundScheduler):
+            raise DataUnavailableError(
+                "scheduler start requires SimulationLifecycleBackgroundScheduler",
+                context={"scheduler_type": type(self.scheduler).__name__},
+            )
+        result = self.scheduler.start(interval_seconds=interval_seconds, default_submit=default_submit)
+        return {"ok": True, "action": "scheduler_started", **result}
+
+    def stop_scheduler(self) -> dict[str, Any]:
+        if not isinstance(self.scheduler, SimulationLifecycleBackgroundScheduler):
+            raise DataUnavailableError(
+                "scheduler stop requires SimulationLifecycleBackgroundScheduler",
+                context={"scheduler_type": type(self.scheduler).__name__},
+            )
+        result = self.scheduler.shutdown(wait=True)
+        return {"ok": True, "action": "scheduler_stopped", **result}
+
+    def scheduler_tick(self, *, as_of_time: datetime | None = None) -> dict[str, Any]:
+        if isinstance(self.scheduler, SimulationLifecycleBackgroundScheduler):
+            result = self.scheduler.run_once(as_of_time=as_of_time)
+            return {"ok": True, "action": "scheduler_tick", **result}
+        tick = self.scheduler.run_once(
+            trade_date=(as_of_time or datetime.now()).date(),
+            data_source=(os.getenv("SIMULATION_RUNTIME_SCHEDULER_DATA_SOURCE") or "DB_HISTORICAL").strip() or "DB_HISTORICAL",
+            submit=False,
+            as_of_time=as_of_time,
+        )
+        return {
+            "ok": True,
+            "action": "scheduler_tick",
+            "trade_date": tick.trade_date.isoformat(),
+            "data_source": tick.data_source,
+            "submit": tick.submit,
+            "total_bindings": tick.total_bindings,
+            "planned_count": tick.planned_count,
+            "reused_count": tick.reused_count,
+            "submitted_count": tick.submitted_count,
+            "failed_count": tick.failed_count,
+            "results": [
+                {
+                    "binding_id": item.binding_id,
+                    "strategy_id": item.strategy_id,
+                    "broker_backend": item.broker_backend.value,
+                    "status": item.status,
+                    "run_id": item.run.run_id if item.run else None,
+                    "error": item.error,
+                }
+                for item in tick.results
+            ],
+        }

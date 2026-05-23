@@ -452,3 +452,35 @@ def test_live_admission_evidence_api_returns_standardized_dual_sim_payload(clien
     assert payload["sim_validation_evidence"]["paper_v2"]["status"] == "VERIFIED"
     assert payload["sim_validation_evidence"]["miniqmt_sim"]["status"] == "VERIFIED"
     assert payload["broker_compatibility"]["status"] == "VERIFIED"
+
+
+def test_ops_service_start_stop_scheduler_requires_background_scheduler():
+    """start_scheduler and stop_scheduler raise when scheduler is not background."""
+    from backend.services.simulation_runtime.ops import SimulationRuntimeOpsService
+    from backend.services.simulation_runtime.scheduler import SimulationLifecycleScheduler
+    from backend.services.trading_core.errors import DataUnavailableError
+
+    svc = SimulationRuntimeOpsService(scheduler=SimulationLifecycleScheduler())
+    with pytest.raises(DataUnavailableError, match="SimulationLifecycleBackgroundScheduler"):
+        svc.start_scheduler()
+    with pytest.raises(DataUnavailableError, match="SimulationLifecycleBackgroundScheduler"):
+        svc.stop_scheduler()
+
+
+def test_ops_service_scheduler_tick_with_lifecycle_scheduler():
+    """scheduler_tick works with plain SimulationLifecycleScheduler."""
+    from backend.services.simulation_runtime.ops import SimulationRuntimeOpsService
+    from backend.services.simulation_runtime.repository import InMemorySimulationRuntimeRepository
+    from backend.services.simulation_runtime.scheduler import SimulationLifecycleScheduler
+    from backend.services.simulation_runtime.models import SimulationBindingApprovalState
+
+    repo = InMemorySimulationRuntimeRepository()
+    # Use an approval state that won't match any bindings, so the tick completes cleanly
+    scheduler = SimulationLifecycleScheduler(repository=repo)
+    svc = SimulationRuntimeOpsService(repository=repo, scheduler=scheduler)
+    result = svc.scheduler_tick()
+    assert result["ok"] is True
+    assert result["action"] == "scheduler_tick"
+    assert "total_bindings" in result
+    assert result["total_bindings"] == 0
+    assert result["failed_count"] == 0
