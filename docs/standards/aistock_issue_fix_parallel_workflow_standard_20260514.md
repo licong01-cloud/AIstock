@@ -56,11 +56,11 @@ Triage 阶段必须写入或口头声明 `process_level` / `task_tier`，用于�
 
 ### 4.1 Open
 
-创建 BUG JSON 和 GitHub Issue 必须同步完成（参见 v1.5 §6.16）。
+正式 BUG 必须通过 Validation MCP 创建（参见 v1.5 §6.16），由流水线分配唯一 `BUG-NNN`，并同步生成 GitHub Issue 与 BUG JSON。
 
 BUG JSON 必须包含：`bug_id`、`title`、`module`、`severity`、`risk_area`、`status=open`、`description`、`reproduce_command`、`suspected_modules`、`required_verification`、`closure_requirements`、`allowed_write_scope`、`non_goals`。
 
-若 `allowed_write_scope` 还不能确定，issue 只能进入 RCA / triage，不能进入代码修复。
+创建 BUG 只登记 issue，不创建修复 worktree。若 `allowed_write_scope` 还不能确定，issue 只能进入 RCA / triage，不能进入代码修复。
 
 ### 4.2 Triaged
 
@@ -139,9 +139,9 @@ PR 合入后标记 `fixed`，记录：fix commit、PR/GitHub Issue 链接、测�
 
 合并规则：
 - 同 `batch_id` 共享一个 worktree、一次上下文加载、一次回归测试
-- 每个 issue 仍独立 commit、独立 GitHub Issue、独立 closure
+- 每个 issue 仍独立 `BUG-NNN`、独立 commit、独立 GitHub Issue、独立 BUG JSON、独立 closure
 - batch 内按 issue 顺序逐个修复，每个 fix commit 引用对应 BUG-NNN
-- 不可合并：GitHub Issue 创建、commit 粒度、closure requirements 逐项满足
+- batch 只用于修复和验证，不用于共享 BUG 编号或跳过单 issue closure
 
 ## 7. Git 与提交规范
 

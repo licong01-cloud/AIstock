@@ -8,9 +8,9 @@ Design:
 - Read/action tools call the Validation Center HTTP API at
   ``${AISTOCK_VALIDATION_BASE_URL}`` (default ``http://127.0.0.1:8001/api/v1/validation``).
 - ``report_bug`` writes directly to the filesystem under
-  ``tests/aistock_validation/bugs/`` because the backend is read-only for bug
-  records. Bug ID assignment + fingerprint-based de-duplication are handled
-  client-side.
+  ``tests/aistock_validation/bugs/``. Bug ID assignment is centralized through
+  the versioned allocator file, while fingerprint-based de-duplication remains
+  local to the registry.
 - All tools raise on HTTP / FS error so the MCP client surfaces the failure
   to the agent instead of silently returning empty data.
 
@@ -35,6 +35,7 @@ import logging
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
@@ -258,6 +259,9 @@ def _resolve_repo_root() -> Path:
 
 REPO_ROOT = _resolve_repo_root()
 BUG_ROOT = REPO_ROOT / "tests" / "aistock_validation" / "bugs"
+BUG_ID_ALLOCATOR_PATH = BUG_ROOT / ".bug_id_allocator.json"
+BUG_ID_ALLOCATOR_LOCK_PATH = BUG_ROOT / ".bug_id_allocator.lock"
+BUG_ID_ALLOCATOR_SCHEMA = "aistock_bug_id_allocator_v1"
 
 
 def _utcnow_iso() -> str:
@@ -366,10 +370,68 @@ def _scan_existing_bug_ids() -> set[int]:
     return ids
 
 
-def _next_bug_id() -> str:
-    existing = _scan_existing_bug_ids()
-    next_int = (max(existing) + 1) if existing else 1
+def _read_bug_id_allocator_last() -> int:
+    if not BUG_ID_ALLOCATOR_PATH.exists():
+        return 0
+    try:
+        payload = json.loads(BUG_ID_ALLOCATOR_PATH.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return 0
+    if payload.get("schema_version") != BUG_ID_ALLOCATOR_SCHEMA:
+        return 0
+    try:
+        return int(payload.get("last_allocated") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+class _BugIdAllocatorLock:
+    def __enter__(self) -> "_BugIdAllocatorLock":
+        BUG_ROOT.mkdir(parents=True, exist_ok=True)
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                self._fd = os.open(str(BUG_ID_ALLOCATOR_LOCK_PATH), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.write(self._fd, f"{os.getpid()}\n".encode("ascii"))
+                return self
+            except FileExistsError:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(f"timed out waiting for bug id allocator lock: {_repo_relative_path(BUG_ID_ALLOCATOR_LOCK_PATH)}")
+                time.sleep(0.1)
+
+    def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
+        fd = getattr(self, "_fd", None)
+        if fd is not None:
+            os.close(fd)
+        try:
+            BUG_ID_ALLOCATOR_LOCK_PATH.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _write_bug_id_allocator(last_allocated: int) -> None:
+    BUG_ROOT.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": BUG_ID_ALLOCATOR_SCHEMA,
+        "last_allocated": int(last_allocated),
+        "updated_at": _utcnow_iso(),
+        "updated_by": "validation_mcp",
+    }
+    tmp_path = BUG_ID_ALLOCATOR_PATH.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    tmp_path.replace(BUG_ID_ALLOCATOR_PATH)
+
+
+def _allocate_next_bug_id() -> str:
+    with _BugIdAllocatorLock():
+        registry_max = max(_scan_existing_bug_ids() or {0})
+        next_int = max(_read_bug_id_allocator_last(), registry_max) + 1
+        _write_bug_id_allocator(next_int)
     return f"BUG-{next_int:03d}"
+
+
+def _next_bug_id() -> str:
+    return _allocate_next_bug_id()
 
 
 def _fingerprint(module: str, title: str, reproduce_command: str) -> str:
@@ -608,6 +670,7 @@ def _issue_body_for_bug_record(record: dict[str, Any]) -> str:
     closure = record.get("closure_requirements") or []
     sections = [
         f"<!-- aistock-bug-id: {record.get('bug_id')} -->",
+        f"<!-- aistock-registry-path: {record.get('_source_path') or ''} -->",
         "<!-- managed-by: scripts/bug_github_sync.py -->",
         "",
         "## Summary",

@@ -367,6 +367,9 @@ def test_report_bug_creates_file(mcp_module):
     assert payload["severity"] == "P2"
     assert payload["status"] == "open"
     assert payload["fingerprint"] == result["fingerprint"]
+    allocator = json.loads(Path(mcp_module.BUG_ID_ALLOCATOR_PATH).read_text(encoding="utf-8"))
+    assert allocator["schema_version"] == mcp_module.BUG_ID_ALLOCATOR_SCHEMA
+    assert allocator["last_allocated"] == 1
 
 
 def test_report_bug_dedupes_on_fingerprint(mcp_module):
@@ -414,6 +417,54 @@ def test_report_bug_increments_id(mcp_module):
     )
     assert a["bug_id"] == "BUG-001"
     assert b["bug_id"] == "BUG-002"
+
+
+def test_report_bug_uses_allocator_when_it_is_ahead_of_registry(mcp_module):
+    mcp_module.BUG_ROOT.mkdir(parents=True, exist_ok=True)
+    mcp_module._write_bug_id_allocator(41)
+
+    result = mcp_module.report_bug(
+        title="allocator ahead",
+        severity="P3",
+        module="allocator_mod",
+        files=["foo.py"],
+        reproduce_command="cmd allocator",
+        expected="x",
+        actual="y",
+    )
+
+    assert result["bug_id"] == "BUG-042"
+
+
+def test_report_bug_uses_registry_max_when_allocator_is_stale(mcp_module):
+    mcp_module.BUG_ROOT.mkdir(parents=True, exist_ok=True)
+    existing = {
+        "schema_version": mcp_module.SCHEMA_VERSION,
+        "bug_id": "BUG-105",
+        "title": "existing high id",
+        "module": "validation",
+        "severity": "P2",
+        "status": "open",
+    }
+    (Path(mcp_module.BUG_ROOT) / "20260523_BUG-105-existing-high-id.json").write_text(
+        json.dumps(existing),
+        encoding="utf-8",
+    )
+    mcp_module._write_bug_id_allocator(12)
+
+    result = mcp_module.report_bug(
+        title="registry ahead",
+        severity="P3",
+        module="allocator_mod",
+        files=["bar.py"],
+        reproduce_command="cmd registry",
+        expected="x",
+        actual="y",
+    )
+
+    assert result["bug_id"] == "BUG-106"
+    allocator = json.loads(Path(mcp_module.BUG_ID_ALLOCATOR_PATH).read_text(encoding="utf-8"))
+    assert allocator["last_allocated"] == 106
 
 
 def test_report_bug_rejects_invalid_severity(mcp_module):

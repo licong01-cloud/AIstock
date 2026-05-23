@@ -224,11 +224,12 @@ QE/RD-Agent/Qlib 产物不得只保存文件路径。manifest 至少应包含：
 ### 6.16 [ISSUE-GITHUB-SYNC-001] Issue 创建必须同步 GitHub
 
 - 严重等级：P1。
-- 适用范围：Validation Center、MCP、Codex/Claude Code、脚本、人工流程创建的所有新 BUG / Issue。
-- 必须做法：创建 issue 时同时创建或同步 GitHub Issue，并在 BUG JSON 回填 `github_issue_number`、`github_issue_url`。
-- 禁止做法：只写入 `tests/aistock_validation/bugs/*.json` 后提交，或让 GitHub Issue 状态、label、severity 与本地 BUG JSON 长期不一致。
-- 如果 GitHub 暂时不可用：只能保留未提交 triage 草稿；不得把本地-only BUG JSON 合入 main。
-- 历史遗留未链接 BUG 必须通过专门 cleanup/backfill 分支补链、关闭或迁移，不得作为新增 issue 的例外。
+- 适用范围：Validation Center、MCP、Codex/Claude Code、脚本和人工流程创建的所有正式 BUG / Issue。
+- 标准入口：正式 BUG / Issue 必须通过 Validation MCP 创建，由流水线统一分配 `BUG-NNN`。
+- 创建结果：MCP 同步创建或同步 GitHub Issue，并在 BUG JSON 回填 `github_issue_number`、`github_issue_url`。
+- Registry 镜像：正式 BUG JSON 保存到 `tests/aistock_validation/bugs/*.json` 并提交 Git；未确认问题只保留在 `tmp/` 或 `debug_tools/` 草稿区。
+- 流程边界：创建 BUG 只登记 issue，不创建修复 worktree；认领修复时再创建独立 worktree/branch 或 batch worktree/branch。
+- 历史遗留未链接或重号 BUG 通过专门 cleanup/backfill 分支处理，不作为新增 issue 的例外。
 
 ## 7. 项目目录结构和文件归属规范
 
