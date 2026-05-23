@@ -1,206 +1,100 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1240" viewBox="0 0 1800 1240" role="img" aria-label="AIstock 研究助理长期记忆与架构图谱可视化">
+<svg xmlns="http://www.w3.org/2000/svg" width="1900" height="1420" viewBox="0 0 1900 1420" role="img" aria-label="AIstock 研究助理长期记忆与本地数据管理 MCP 图谱">
 <defs>
-  <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
-    <path d="M2,2 L10,6 L2,10 Z" fill="#334155" />
-  </marker>
-  <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
-    <feDropShadow dx="0" dy="6" stdDeviation="5" flood-color="#0f172a" flood-opacity="0.12"/>
-  </filter>
+  <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth"><path d="M2,2 L10,6 L2,10 Z" fill="#334155" /></marker>
+  <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="5" stdDeviation="4" flood-color="#0f172a" flood-opacity="0.13"/></filter>
   <style>
     .title { font-family: 'Microsoft YaHei', 'Noto Sans CJK SC', 'SimHei', sans-serif; font-size: 34px; font-weight: 800; fill: #0f172a; }
-    .subtitle { font-family: 'Microsoft YaHei', 'Noto Sans CJK SC', 'SimHei', sans-serif; font-size: 16px; fill: #475569; }
-    .node-title { font-family: 'Microsoft YaHei', 'Noto Sans CJK SC', 'SimHei', sans-serif; font-size: 19px; font-weight: 800; }
-    .node-sub { font-family: 'Microsoft YaHei', 'Noto Sans CJK SC', 'SimHei', sans-serif; font-size: 14px; fill: #334155; }
-    .edge-label { font-family: 'Microsoft YaHei', 'Noto Sans CJK SC', 'SimHei', sans-serif; font-size: 12px; fill: #475569; }
-    .legend { font-family: 'Microsoft YaHei', 'Noto Sans CJK SC', 'SimHei', sans-serif; font-size: 13px; fill: #334155; }
+    .subtitle { font-family: 'Microsoft YaHei', 'Noto Sans CJK SC', 'SimHei', sans-serif; font-size: 17px; fill: #475569; }
+    .node-title { font-family: 'Microsoft YaHei', 'Noto Sans CJK SC', 'SimHei', sans-serif; font-size: 20px; font-weight: 800; }
+    .node-sub { font-family: 'Microsoft YaHei', 'Noto Sans CJK SC', 'SimHei', sans-serif; font-size: 15px; fill: #475569; }
+    .section { font-family: 'Microsoft YaHei', 'Noto Sans CJK SC', 'SimHei', sans-serif; font-size: 22px; font-weight: 800; fill: #0f172a; }
+    .edge { stroke: #334155; stroke-width: 2.5; fill: none; marker-end: url(#arrow); opacity: .72; }
   </style>
 </defs>
-<rect width="100%" height="100%" fill="#F8FAFC"/>
-<text x="60" y="44" class="title">AIstock 研究助理长期记忆与架构图谱：审阅版</text>
-<text x="60" y="74" class="subtitle">目标：把 AIstock 模块、MCP、Skill、流程、规则、Issue 与实验谱系沉淀为可审计 Memory Ledger + 轻量知识图谱。</text>
-
-<line x1="300.0" y1="153.1" x2="420.0" y2="155.5" stroke="#334155" stroke-width="2" stroke-opacity="0.42" marker-end="url(#arrow)"/>
-<rect x="300.0" y="144.3" width="120" height="20" rx="10" fill="#F8FAFC" opacity="0.9"/>
-<text x="360.0" y="158.3" text-anchor="middle" class="edge-label">自然语言目标</text>
-<line x1="680.0" y1="158.0" x2="760.0" y2="158.0" stroke="#334155" stroke-width="2" stroke-opacity="0.42" marker-end="url(#arrow)"/>
-<rect x="660.0" y="148.0" width="120" height="20" rx="10" fill="#F8FAFC" opacity="0.9"/>
-<text x="720.0" y="162.0" text-anchor="middle" class="edge-label">构建上下文</text>
-<line x1="776.5" y1="201.0" x2="520.0" y2="298.2" stroke="#334155" stroke-width="2" stroke-opacity="0.42" marker-end="url(#arrow)"/>
-<rect x="588.2" y="239.6" width="120" height="20" rx="10" fill="#F8FAFC" opacity="0.9"/>
-<text x="648.2" y="253.6" text-anchor="middle" class="edge-label">读取 approved 记忆</text>
-<line x1="857.3" y1="201.0" x2="785.7" y2="295.0" stroke="#334155" stroke-width="2" stroke-opacity="0.42" marker-end="url(#arrow)"/>
-<rect x="761.5" y="238.0" width="120" height="20" rx="10" fill="#F8FAFC" opacity="0.9"/>
-<text x="821.5" y="252.0" text-anchor="middle" class="edge-label">读取 1-2 跳关系</text>
-<line x1="935.8" y1="201.0" x2="1036.0" y2="295.0" stroke="#334155" stroke-width="2" stroke-opacity="0.42" marker-end="url(#arrow)"/>
-<rect x="925.9" y="238.0" width="120" height="20" rx="10" fill="#F8FAFC" opacity="0.9"/>
-<text x="985.9" y="252.0" text-anchor="middle" class="edge-label">选择提示词分支</text>
-<line x1="680.0" y1="158.0" x2="1100.0" y2="158.0" stroke="#334155" stroke-width="2" stroke-opacity="0.42" marker-end="url(#arrow)"/>
-<rect x="830.0" y="148.0" width="120" height="20" rx="10" fill="#F8FAFC" opacity="0.9"/>
-<text x="890.0" y="162.0" text-anchor="middle" class="edge-label">计划与确认</text>
-<line x1="1123.1" y1="201.0" x2="387.6" y2="545.0" stroke="#334155" stroke-width="2" stroke-opacity="0.42" marker-end="url(#arrow)"/>
-<rect x="695.3" y="363.0" width="120" height="20" rx="10" fill="#F8FAFC" opacity="0.9"/>
-<text x="755.3" y="377.0" text-anchor="middle" class="edge-label">确认后调用</text>
-<line x1="1160.0" y1="201.0" x2="720.3" y2="545.0" stroke="#334155" stroke-width="2" stroke-opacity="0.42" marker-end="url(#arrow)"/>
-<rect x="880.2" y="363.0" width="120" height="20" rx="10" fill="#F8FAFC" opacity="0.9"/>
-<text x="940.2" y="377.0" text-anchor="middle" class="edge-label">确认后调用</text>
-<line x1="420.0" y1="600.0" x2="880.0" y2="600.0" stroke="#334155" stroke-width="2" stroke-opacity="0.42" marker-end="url(#arrow)"/>
-<rect x="590.0" y="590.0" width="120" height="20" rx="10" fill="#F8FAFC" opacity="0.9"/>
-<text x="650.0" y="604.0" text-anchor="middle" class="edge-label">BUG / 验证</text>
-<line x1="420.0" y1="600.0" x2="1240.0" y2="600.0" stroke="#334155" stroke-width="2" stroke-opacity="0.42" marker-end="url(#arrow)"/>
-<rect x="770.0" y="590.0" width="120" height="20" rx="10" fill="#F8FAFC" opacity="0.9"/>
-<text x="830.0" y="604.0" text-anchor="middle" class="edge-label">模板 / 实验</text>
-<line x1="800.0" y1="600.0" x2="1240.0" y2="600.0" stroke="#334155" stroke-width="2" stroke-opacity="0.42" marker-end="url(#arrow)"/>
-<rect x="960.0" y="590.0" width="120" height="20" rx="10" fill="#F8FAFC" opacity="0.9"/>
-<text x="1020.0" y="604.0" text-anchor="middle" class="edge-label">实验诊断</text>
-<line x1="800.0" y1="637.9" x2="1480.0" y2="809.7" stroke="#334155" stroke-width="2" stroke-opacity="0.42" marker-end="url(#arrow)"/>
-<rect x="1080.0" y="713.8" width="120" height="20" rx="10" fill="#F8FAFC" opacity="0.9"/>
-<text x="1140.0" y="727.8" text-anchor="middle" class="edge-label">研发分析</text>
-<line x1="1240.0" y1="631.7" x2="390.0" y2="811.5" stroke="#334155" stroke-width="2" stroke-opacity="0.42" marker-end="url(#arrow)"/>
-<rect x="755.0" y="711.6" width="120" height="20" rx="10" fill="#F8FAFC" opacity="0.9"/>
-<text x="815.0" y="725.6" text-anchor="middle" class="edge-label">产生候选策略包</text>
-<line x1="390.0" y1="840.0" x2="460.0" y2="840.0" stroke="#334155" stroke-width="2" stroke-opacity="0.42" marker-end="url(#arrow)"/>
-<rect x="365.0" y="830.0" width="120" height="20" rx="10" fill="#F8FAFC" opacity="0.9"/>
-<text x="425.0" y="844.0" text-anchor="middle" class="edge-label">提供策略包</text>
-<line x1="730.0" y1="840.0" x2="800.0" y2="840.0" stroke="#334155" stroke-width="2" stroke-opacity="0.42" marker-end="url(#arrow)"/>
-<rect x="705.0" y="830.0" width="120" height="20" rx="10" fill="#F8FAFC" opacity="0.9"/>
-<text x="765.0" y="844.0" text-anchor="middle" class="edge-label">选股进入模拟盘</text>
-<line x1="1140.0" y1="840.0" x2="1070.0" y2="840.0" stroke="#334155" stroke-width="2" stroke-opacity="0.42" marker-end="url(#arrow)"/>
-<rect x="1045.0" y="830.0" width="120" height="20" rx="10" fill="#F8FAFC" opacity="0.9"/>
-<text x="1105.0" y="844.0" text-anchor="middle" class="edge-label">runtime gate</text>
-<line x1="1551.9" y1="785.0" x2="1438.1" y2="655.0" stroke="#334155" stroke-width="2" stroke-opacity="0.42" marker-end="url(#arrow)"/>
-<rect x="1435.0" y="710.0" width="120" height="20" rx="10" fill="#F8FAFC" opacity="0.9"/>
-<text x="1495.0" y="724.0" text-anchor="middle" class="edge-label">因子/模型候选</text>
-<line x1="499.7" y1="1025.0" x2="1274.8" y2="655.0" stroke="#334155" stroke-width="2" stroke-opacity="0.42" marker-end="url(#arrow)"/>
-<rect x="827.3" y="830.0" width="120" height="20" rx="10" fill="#F8FAFC" opacity="0.9"/>
-<text x="887.3" y="844.0" text-anchor="middle" class="edge-label">PIT 数据 / 股票池</text>
-<line x1="437.6" y1="1025.0" x2="548.2" y2="895.0" stroke="#334155" stroke-width="2" stroke-opacity="0.42" marker-end="url(#arrow)"/>
-<rect x="432.9" y="950.0" width="120" height="20" rx="10" fill="#F8FAFC" opacity="0.9"/>
-<text x="492.9" y="964.0" text-anchor="middle" class="edge-label">选股数据</text>
-<line x1="743.8" y1="1025.0" x2="559.6" y2="201.0" stroke="#334155" stroke-width="2" stroke-opacity="0.42" marker-end="url(#arrow)"/>
-<rect x="591.7" y="603.0" width="120" height="20" rx="10" fill="#F8FAFC" opacity="0.9"/>
-<text x="651.7" y="617.0" text-anchor="middle" class="edge-label">股票分析请求</text>
-<line x1="1031.0" y1="655.0" x2="1105.0" y2="1025.0" stroke="#334155" stroke-width="2" stroke-opacity="0.42" marker-end="url(#arrow)"/>
-<rect x="1008.0" y="830.0" width="120" height="20" rx="10" fill="#F8FAFC" opacity="0.9"/>
-<text x="1068.0" y="844.0" text-anchor="middle" class="edge-label">登记与同步</text>
-<line x1="1089.0" y1="1025.0" x2="771.2" y2="415.0" stroke="#334155" stroke-width="2" stroke-opacity="0.42" marker-end="url(#arrow)"/>
-<rect x="870.1" y="710.0" width="120" height="20" rx="10" fill="#F8FAFC" opacity="0.9"/>
-<text x="930.1" y="724.0" text-anchor="middle" class="edge-label">blocks / relates_to</text>
-<line x1="1399.8" y1="655.0" x2="1466.1" y2="1025.0" stroke="#334155" stroke-width="2" stroke-opacity="0.42" marker-end="url(#arrow)"/>
-<rect x="1372.9" y="830.0" width="120" height="20" rx="10" fill="#F8FAFC" opacity="0.9"/>
-<text x="1432.9" y="844.0" text-anchor="middle" class="edge-label">实验结果</text>
-<line x1="1321.8" y1="895.0" x2="1432.4" y2="1025.0" stroke="#334155" stroke-width="2" stroke-opacity="0.42" marker-end="url(#arrow)"/>
-<rect x="1317.1" y="950.0" width="120" height="20" rx="10" fill="#F8FAFC" opacity="0.9"/>
-<text x="1377.1" y="964.0" text-anchor="middle" class="edge-label">研究路径</text>
-<line x1="1398.3" y1="1025.0" x2="462.1" y2="415.0" stroke="#334155" stroke-width="2" stroke-opacity="0.42" marker-end="url(#arrow)"/>
-<rect x="870.2" y="710.0" width="120" height="20" rx="10" fill="#F8FAFC" opacity="0.9"/>
-<text x="930.2" y="724.0" text-anchor="middle" class="edge-label">审核后入库</text>
-<line x1="1320.0" y1="355.0" x2="520.0" y2="355.0" stroke="#334155" stroke-width="2" stroke-opacity="0.42" marker-end="url(#arrow)"/>
-<rect x="860.0" y="345.0" width="120" height="20" rx="10" fill="#F8FAFC" opacity="0.9"/>
-<text x="920.0" y="359.0" text-anchor="middle" class="edge-label">候选记忆</text>
-<line x1="680.0" y1="185.8" x2="1320.0" y2="322.9" stroke="#334155" stroke-width="2" stroke-opacity="0.42" marker-end="url(#arrow)"/>
-<rect x="940.0" y="244.4" width="120" height="20" rx="10" fill="#F8FAFC" opacity="0.9"/>
-<text x="1000.0" y="258.4" text-anchor="middle" class="edge-label">任务事件</text>
-<g filter="url(#shadow)"><rect x="80" y="115" width="220" height="72" rx="18" fill="#E0F2FE" stroke="#0F172A" stroke-width="2.2"/>
-<text x="190.0" y="145" text-anchor="middle" class="node-title" fill="#0F172A">用户 / Codex / Claude Code</text>
-<text x="190.0" y="173" text-anchor="middle" class="node-sub">主对话与确认入口</text>
-</g>
-<g filter="url(#shadow)"><rect x="420" y="115" width="260" height="86" rx="18" fill="#DBEAFE" stroke="#0F172A" stroke-width="2.2"/>
-<text x="550.0" y="145" text-anchor="middle" class="node-title" fill="#0F172A">Research Assistant</text>
-<text x="550.0" y="173" text-anchor="middle" class="node-sub">意图理解 / 计划 / 汇报</text>
-</g>
-<g filter="url(#shadow)"><rect x="760" y="115" width="260" height="86" rx="18" fill="#EDE9FE" stroke="#0F172A" stroke-width="2.2"/>
-<text x="890.0" y="145" text-anchor="middle" class="node-title" fill="#0F172A">Context Pack Builder</text>
-<text x="890.0" y="173" text-anchor="middle" class="node-sub">按任务加载记忆和图谱</text>
-</g>
-<g filter="url(#shadow)"><rect x="1100" y="115" width="230" height="86" rx="18" fill="#FEF3C7" stroke="#0F172A" stroke-width="2.2"/>
-<text x="1215.0" y="145" text-anchor="middle" class="node-title" fill="#0F172A">审批与门禁</text>
-<text x="1215.0" y="173" text-anchor="middle" class="node-sub">确认后才执行高风险操作</text>
-</g>
-<g filter="url(#shadow)"><rect x="220" y="295" width="300" height="120" rx="18" fill="#D1FAE5" stroke="#064E3B" stroke-width="2.2"/>
-<text x="370.0" y="325" text-anchor="middle" class="node-title" fill="#064E3B">Memory Ledger</text>
-<text x="370.0" y="353" text-anchor="middle" class="node-sub">core / procedural / architecture</text>
-<text x="370.0" y="373" text-anchor="middle" class="node-sub">roadmap / task / experiment</text>
-</g>
-<g filter="url(#shadow)"><rect x="590" y="295" width="300" height="120" rx="18" fill="#DBEAFE" stroke="#1E3A8A" stroke-width="2.2"/>
-<text x="740.0" y="325" text-anchor="middle" class="node-title" fill="#1E3A8A">轻量架构图谱</text>
-<text x="740.0" y="353" text-anchor="middle" class="node-sub">模块 / API / MCP / Skill</text>
-<text x="740.0" y="373" text-anchor="middle" class="node-sub">流程 / 规则 / Issue</text>
-</g>
-<g filter="url(#shadow)"><rect x="960" y="295" width="280" height="120" rx="18" fill="#F3E8FF" stroke="#581C87" stroke-width="2.2"/>
-<text x="1100.0" y="325" text-anchor="middle" class="node-title" fill="#581C87">Prompt Tree</text>
-<text x="1100.0" y="353" text-anchor="middle" class="node-sub">根提示词 + 领域分支</text>
-<text x="1100.0" y="373" text-anchor="middle" class="node-sub">多分支按需加载</text>
-</g>
-<g filter="url(#shadow)"><rect x="1320" y="295" width="300" height="120" rx="18" fill="#FFEDD5" stroke="#7C2D12" stroke-width="2.2"/>
-<text x="1470.0" y="325" text-anchor="middle" class="node-title" fill="#7C2D12">Trace / Reflection</text>
-<text x="1470.0" y="353" text-anchor="middle" class="node-sub">任务事件 / 失败反思</text>
-<text x="1470.0" y="373" text-anchor="middle" class="node-sub">候选记忆 / 审计</text>
-</g>
-<g filter="url(#shadow)"><rect x="120" y="545" width="300" height="110" rx="18" fill="#F1F5F9" stroke="#0F172A" stroke-width="2.2"/>
-<text x="270.0" y="575" text-anchor="middle" class="node-title" fill="#0F172A">MCP 能力层</text>
-<text x="270.0" y="603" text-anchor="middle" class="node-sub">Validation / QE Experiment</text>
-<text x="270.0" y="623" text-anchor="middle" class="node-sub">QE Archive / Research Gateway</text>
-</g>
-<g filter="url(#shadow)"><rect x="500" y="545" width="300" height="110" rx="18" fill="#F1F5F9" stroke="#0F172A" stroke-width="2.2"/>
-<text x="650.0" y="575" text-anchor="middle" class="node-title" fill="#0F172A">Skill 能力层</text>
-<text x="650.0" y="603" text-anchor="middle" class="node-sub">QE 诊断 / 因子研发</text>
-<text x="650.0" y="623" text-anchor="middle" class="node-sub">RDAgent 分析 / 数据医生</text>
-</g>
-<g filter="url(#shadow)"><rect x="880" y="545" width="280" height="110" rx="18" fill="#FEE2E2" stroke="#7F1D1D" stroke-width="2.2"/>
-<text x="1020.0" y="575" text-anchor="middle" class="node-title" fill="#7F1D1D">Validation Center</text>
-<text x="1020.0" y="603" text-anchor="middle" class="node-sub">测试计划 / BUG JSON</text>
-<text x="1020.0" y="623" text-anchor="middle" class="node-sub">GitHub Issue / 分支状态</text>
-</g>
-<g filter="url(#shadow)"><rect x="1240" y="545" width="300" height="110" rx="18" fill="#DCFCE7" stroke="#064E3B" stroke-width="2.2"/>
-<text x="1390.0" y="575" text-anchor="middle" class="node-title" fill="#064E3B">QuantEvolver / QE</text>
-<text x="1390.0" y="603" text-anchor="middle" class="node-sub">模板 / 实验 / 自动演进</text>
-<text x="1390.0" y="623" text-anchor="middle" class="node-sub">固定 PIT 回测规则</text>
-</g>
-<g filter="url(#shadow)"><rect x="120" y="785" width="270" height="110" rx="18" fill="#D1FAE5" stroke="#065F46" stroke-width="2.2"/>
-<text x="255.0" y="815" text-anchor="middle" class="node-title" fill="#065F46">StrategyPackage</text>
-<text x="255.0" y="843" text-anchor="middle" class="node-sub">冻结 manifest</text>
-<text x="255.0" y="863" text-anchor="middle" class="node-sub">候选策略包治理</text>
-</g>
-<g filter="url(#shadow)"><rect x="460" y="785" width="270" height="110" rx="18" fill="#FEF3C7" stroke="#92400E" stroke-width="2.2"/>
-<text x="595.0" y="815" text-anchor="middle" class="node-title" fill="#92400E">Selection Center</text>
-<text x="595.0" y="843" text-anchor="middle" class="node-sub">统一选股 / 聚合选股</text>
-<text x="595.0" y="863" text-anchor="middle" class="node-sub">平台规则边界</text>
-</g>
-<g filter="url(#shadow)"><rect x="800" y="785" width="270" height="110" rx="18" fill="#DBEAFE" stroke="#1E3A8A" stroke-width="2.2"/>
-<text x="935.0" y="815" text-anchor="middle" class="node-title" fill="#1E3A8A">Paper Trading v2</text>
-<text x="935.0" y="843" text-anchor="middle" class="node-sub">模拟盘组合 / 运行</text>
-<text x="935.0" y="863" text-anchor="middle" class="node-sub">ledger / runtime</text>
-</g>
-<g filter="url(#shadow)"><rect x="1140" y="785" width="270" height="110" rx="18" fill="#E0E7FF" stroke="#312E81" stroke-width="2.2"/>
-<text x="1275.0" y="815" text-anchor="middle" class="node-title" fill="#312E81">HMM / Market Regime</text>
-<text x="1275.0" y="843" text-anchor="middle" class="node-sub">市场状态 / 风险门控</text>
-<text x="1275.0" y="863" text-anchor="middle" class="node-sub">长期演进研究</text>
-</g>
-<g filter="url(#shadow)"><rect x="1480" y="785" width="240" height="110" rx="18" fill="#F1F5F9" stroke="#0F172A" stroke-width="2.2"/>
-<text x="1600.0" y="815" text-anchor="middle" class="node-title" fill="#0F172A">RD-Agent</text>
-<text x="1600.0" y="843" text-anchor="middle" class="node-sub">多节点调度</text>
-<text x="1600.0" y="863" text-anchor="middle" class="node-sub">因子/模型研发</text>
-</g>
-<g filter="url(#shadow)"><rect x="260" y="1025" width="270" height="100" rx="18" fill="#E2E8F0" stroke="#0F172A" stroke-width="2.2"/>
-<text x="395.0" y="1055" text-anchor="middle" class="node-title" fill="#0F172A">数据与同步</text>
-<text x="395.0" y="1083" text-anchor="middle" class="node-sub">本地数据 / 数仓 / Tushare</text>
-<text x="395.0" y="1103" text-anchor="middle" class="node-sub">数据质量与新鲜度</text>
-</g>
-<g filter="url(#shadow)"><rect x="620" y="1025" width="270" height="100" rx="18" fill="#E2E8F0" stroke="#0F172A" stroke-width="2.2"/>
-<text x="755.0" y="1055" text-anchor="middle" class="node-title" fill="#0F172A">股票分析</text>
-<text x="755.0" y="1083" text-anchor="middle" class="node-sub">个股分析 MCP 预留</text>
-<text x="755.0" y="1103" text-anchor="middle" class="node-sub">市场资讯与外部搜索</text>
-</g>
-<g filter="url(#shadow)"><rect x="980" y="1025" width="270" height="100" rx="18" fill="#FEE2E2" stroke="#7F1D1D" stroke-width="2.2"/>
-<text x="1115.0" y="1055" text-anchor="middle" class="node-title" fill="#7F1D1D">Issue / BUG</text>
-<text x="1115.0" y="1083" text-anchor="middle" class="node-sub">唯一编号 / GitHub 同步</text>
-<text x="1115.0" y="1103" text-anchor="middle" class="node-sub">P0/P1 阻塞关系</text>
-</g>
-<g filter="url(#shadow)"><rect x="1340" y="1025" width="270" height="100" rx="18" fill="#D1FAE5" stroke="#064E3B" stroke-width="2.2"/>
-<text x="1475.0" y="1055" text-anchor="middle" class="node-title" fill="#064E3B">Experiment Lineage</text>
-<text x="1475.0" y="1083" text-anchor="middle" class="node-sub">QE/HMM/因子实验谱系</text>
-<text x="1475.0" y="1103" text-anchor="middle" class="node-sub">失败与下一步计划</text>
-</g>
-<rect x="60" y="1148" width="1680" height="50" rx="14" fill="#FFFFFF" stroke="#CBD5E1"/>
-<text x="80" y="1178" class="legend">颜色说明：绿色=记忆/实验/QE，蓝色=架构/助理/Paper，黄色=审批/Selection，红色=验证/Issue，灰色=能力层与基础设施。所有关系进入图谱前必须有 evidence_refs。</text>
+<rect x="0" y="0" width="1900" height="1420" fill="#f8fafc"/>
+<text x="70" y="48" class="title">AIstock 研究助理长期记忆与本地数据管理 MCP 图谱</text>
+<text x="70" y="76" class="subtitle">2026-05-23 更新：新增 local_data MCP、facade API、readiness 权威源、任务调度、计划任务重置与自动修复编排；本轮不接入因子独立指标计算和 Xtquant。</text>
+<text x="70" y="600" class="section">本地数据管理 MCP 能力层</text>
+<text x="70" y="815" class="section">数据状态事实源</text>
+<text x="70" y="1045" class="section">下游业务影响</text>
+<path class="edge" d="M220.0,135.0 L595.0,135.0"/>
+<path class="edge" d="M595.0,135.0 L990.0,135.0"/>
+<path class="edge" d="M990.0,135.0 L1410.0,135.0"/>
+<path class="edge" d="M1410.0,135.0 L970.0,325.0"/>
+<path class="edge" d="M970.0,325.0 L970.0,505.0"/>
+<path class="edge" d="M970.0,505.0 L265.0,695.0"/>
+<path class="edge" d="M970.0,505.0 L655.0,695.0"/>
+<path class="edge" d="M970.0,505.0 L1045.0,695.0"/>
+<path class="edge" d="M970.0,505.0 L1435.0,695.0"/>
+<path class="edge" d="M265.0,695.0 L265.0,900.0"/>
+<path class="edge" d="M265.0,695.0 L655.0,900.0"/>
+<path class="edge" d="M655.0,695.0 L1045.0,900.0"/>
+<path class="edge" d="M1045.0,695.0 L1435.0,900.0"/>
+<path class="edge" d="M1435.0,695.0 L1435.0,900.0"/>
+<path class="edge" d="M1435.0,900.0 L1745.0,900.0"/>
+<path class="edge" d="M265.0,900.0 L430.0,1125.0"/>
+<path class="edge" d="M265.0,900.0 L950.0,1125.0"/>
+<path class="edge" d="M265.0,900.0 L1470.0,1125.0"/>
+<rect x="70" y="90" rx="22" ry="22" width="300" height="90" fill="#e0f2fe" stroke="#0369a1" stroke-width="2.5" filter="url(#shadow)"/>
+<text x="92" y="124" class="node-title" fill="#0369a1">用户命令</text>
+<text x="92" y="154" class="node-sub">一句话检查/修复数据</text>
+<rect x="430" y="90" rx="22" ry="22" width="330" height="90" fill="#ede9fe" stroke="#6d28d9" stroke-width="2.5" filter="url(#shadow)"/>
+<text x="452" y="124" class="node-title" fill="#6d28d9">Research Assistant</text>
+<text x="452" y="154" class="node-sub">意图识别 + 中文确认</text>
+<rect x="810" y="90" rx="22" ry="22" width="360" height="90" fill="#fef3c7" stroke="#b45309" stroke-width="2.5" filter="url(#shadow)"/>
+<text x="832" y="124" class="node-title" fill="#b45309">Context Pack</text>
+<text x="832" y="154" class="node-sub">加载本地数据记忆/图谱/提示词</text>
+<rect x="1230" y="90" rx="22" ry="22" width="360" height="90" fill="#dcfce7" stroke="#15803d" stroke-width="2.5" filter="url(#shadow)"/>
+<text x="1252" y="124" class="node-title" fill="#15803d">统一 MCP Gateway</text>
+<text x="1252" y="154" class="node-sub">Capability Registry + 风险门禁</text>
+<rect x="760" y="270" rx="22" ry="22" width="420" height="110" fill="#ccfbf1" stroke="#0f766e" stroke-width="2.5" filter="url(#shadow)"/>
+<text x="782" y="304" class="node-title" fill="#0f766e">local_data MCP</text>
+<text x="782" y="334" class="node-sub">状态查询 / 调度 / 计划任务 / 修复</text>
+<rect x="760" y="450" rx="22" ry="22" width="420" height="110" fill="#f0f9ff" stroke="#0284c7" stroke-width="2.5" filter="url(#shadow)"/>
+<text x="782" y="484" class="node-title" fill="#0284c7">本地数据 facade API</text>
+<text x="782" y="514" class="node-sub">/api/v1/local-data/*</text>
+<rect x="90" y="640" rx="22" ry="22" width="350" height="110" fill="#f8fafc" stroke="#334155" stroke-width="2.5" filter="url(#shadow)"/>
+<text x="112" y="674" class="node-title" fill="#334155">数据状态总览</text>
+<text x="112" y="704" class="node-sub">health_overview / dataset_st</text>
+<text x="112" y="726" class="node-sub">atus / gaps</text>
+<rect x="480" y="640" rx="22" ry="22" width="350" height="110" fill="#f8fafc" stroke="#334155" stroke-width="2.5" filter="url(#shadow)"/>
+<text x="502" y="674" class="node-title" fill="#334155">任务监控与控制</text>
+<text x="502" y="704" class="node-sub">jobs / logs / cancel / clear</text>
+<text x="502" y="726" class="node-sub"> queued</text>
+<rect x="870" y="640" rx="22" ry="22" width="350" height="110" fill="#f8fafc" stroke="#334155" stroke-width="2.5" filter="url(#shadow)"/>
+<text x="892" y="674" class="node-title" fill="#334155">同步调度执行</text>
+<text x="892" y="704" class="node-sub">run / incremental / init / p</text>
+<text x="892" y="726" class="node-sub">resets</text>
+<rect x="1260" y="640" rx="22" ry="22" width="350" height="110" fill="#f8fafc" stroke="#334155" stroke-width="2.5" filter="url(#shadow)"/>
+<text x="1282" y="674" class="node-title" fill="#334155">计划任务管理</text>
+<text x="1282" y="704" class="node-sub">list / upsert / toggle / res</text>
+<text x="1282" y="726" class="node-sub">et diff</text>
+<rect x="90" y="850" rx="22" ry="22" width="350" height="100" fill="#ecfccb" stroke="#4d7c0f" stroke-width="2.5" filter="url(#shadow)"/>
+<text x="112" y="884" class="node-title" fill="#4d7c0f">dataset_date_refresh_audit</text>
+<text x="112" y="914" class="node-sub">业务 readiness 权威源</text>
+<rect x="480" y="850" rx="22" ry="22" width="350" height="100" fill="#ecfccb" stroke="#4d7c0f" stroke-width="2.5" filter="url(#shadow)"/>
+<text x="502" y="884" class="node-title" fill="#4d7c0f">data_stats</text>
+<text x="502" y="914" class="node-sub">看板缓存，可 stale / 可重建</text>
+<rect x="870" y="850" rx="22" ry="22" width="350" height="100" fill="#ecfccb" stroke="#4d7c0f" stroke-width="2.5" filter="url(#shadow)"/>
+<text x="892" y="884" class="node-title" fill="#4d7c0f">ingestion_jobs/logs</text>
+<text x="892" y="914" class="node-sub">执行过程证据</text>
+<rect x="1260" y="850" rx="22" ry="22" width="350" height="100" fill="#ecfccb" stroke="#4d7c0f" stroke-width="2.5" filter="url(#shadow)"/>
+<text x="1282" y="884" class="node-title" fill="#4d7c0f">data_sync_targets/attempts</text>
+<text x="1282" y="914" class="node-sub">重试与修复状态源</text>
+<rect x="1650" y="850" rx="22" ry="22" width="190" height="100" fill="#fee2e2" stroke="#b91c1c" stroke-width="2.5" filter="url(#shadow)"/>
+<text x="1672" y="884" class="node-title" fill="#b91c1c">data_alerts</text>
+<text x="1672" y="914" class="node-sub">final blocked / 不可控故障</text>
+<rect x="280" y="1080" rx="22" ry="22" width="300" height="90" fill="#fff7ed" stroke="#c2410c" stroke-width="2.5" filter="url(#shadow)"/>
+<text x="302" y="1114" class="node-title" fill="#c2410c">QE</text>
+<text x="302" y="1144" class="node-sub">实验/回测依赖数据 readiness</text>
+<rect x="800" y="1080" rx="22" ry="22" width="300" height="90" fill="#fff7ed" stroke="#c2410c" stroke-width="2.5" filter="url(#shadow)"/>
+<text x="822" y="1114" class="node-title" fill="#c2410c">Selection Center</text>
+<text x="822" y="1144" class="node-sub">选股依赖数据 readiness</text>
+<rect x="1320" y="1080" rx="22" ry="22" width="300" height="90" fill="#fff7ed" stroke="#c2410c" stroke-width="2.5" filter="url(#shadow)"/>
+<text x="1342" y="1114" class="node-title" fill="#c2410c">Paper v2</text>
+<text x="1342" y="1144" class="node-sub">模拟盘依赖数据 readiness</text>
+<rect x="560" y="1260" rx="22" ry="22" width="780" height="80" fill="#f1f5f9" stroke="#64748b" stroke-width="2.5" filter="url(#shadow)"/>
+<text x="582" y="1294" class="node-title" fill="#64748b">本轮排除</text>
+<text x="582" y="1324" class="node-sub">因子独立指标计算 / Xtquant / miniQMT</text>
+<text x="582" y="1346" class="node-sub"> 同步</text>
 </svg>
