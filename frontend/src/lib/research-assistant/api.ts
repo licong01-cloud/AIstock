@@ -285,6 +285,26 @@ export type AssistantChatTurnResult = JsonObject & {
   cards?: JsonObject;
 };
 
+export type AssistantCatalogReadinessCheck = JsonObject & {
+  catalog: string;
+  label: string;
+  expected_min: number;
+  present: number;
+  ready: boolean;
+  filters?: JsonObject;
+  missing_count?: number;
+};
+
+export type AssistantCatalogReadiness = JsonObject & {
+  ready: boolean;
+  status: "ready" | "catalog_not_ready" | string;
+  checks: AssistantCatalogReadinessCheck[];
+  missing_catalogs: string[];
+  operator_action?: string | null;
+  human_message?: string;
+  generated_at?: string;
+};
+
 export type AssistantValidationDiscoverySummary = JsonObject & {
   latest_reports?: JsonObject[];
   candidate_issues_needing_review?: AssistantIssueCandidate[];
@@ -364,6 +384,9 @@ export const researchAssistantApi = {
   },
   seedCatalogs(): Promise<JsonObject> {
     return post<JsonObject>("/research-assistant/catalogs/seed", {});
+  },
+  catalogReadiness(): Promise<AssistantCatalogReadiness> {
+    return unwrap<AssistantCatalogReadiness>("/research-assistant/catalogs/readiness");
   },
 
   chatTurn(payload: JsonObject): Promise<AssistantChatTurnResult> {

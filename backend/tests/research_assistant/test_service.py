@@ -24,7 +24,12 @@ from backend.services.research_assistant.models import (
     WorkbenchDryRunExecuteRequest,
 )
 from backend.services.research_assistant.repository import DatabaseResearchAssistantRepository, InMemoryResearchAssistantRepository
-from backend.services.research_assistant.service import ASSISTANT_APPROVAL_CONFIRM, LlmCallResult, ResearchAssistantService
+from backend.services.research_assistant.service import (
+    ASSISTANT_APPROVAL_CONFIRM,
+    LlmCallResult,
+    ResearchAssistantCatalogNotReadyError,
+    ResearchAssistantService,
+)
 
 
 class FakeLlmClient:
@@ -52,6 +57,29 @@ def _chat_service(fake: FakeLlmClient | None = None) -> ResearchAssistantService
     svc = ResearchAssistantService(repository=InMemoryResearchAssistantRepository(), llm_client=fake or FakeLlmClient())
     svc.seed_catalogs()
     return svc
+
+
+def test_catalog_readiness_blocks_chat_until_seeded() -> None:
+    fake = FakeLlmClient()
+    svc = ResearchAssistantService(repository=InMemoryResearchAssistantRepository(), llm_client=fake)
+
+    health = svc.health()
+    assert health["status"] == "catalog_not_ready"
+    assert health["catalog_readiness"]["ready"] is False
+    assert "prompt_nodes" in health["catalog_readiness"]["missing_catalogs"]
+
+    with pytest.raises(ResearchAssistantCatalogNotReadyError) as excinfo:
+        svc.chat_turn(ChatTurnRequest(message="帮我创建一个 QE 10 loop 实验，先不要执行。"))
+    assert excinfo.value.readiness["operator_action"] == "POST /api/v1/research-assistant/catalogs/seed"
+    assert fake.calls == []
+
+    with pytest.raises(ResearchAssistantCatalogNotReadyError):
+        svc.build_prompt_bundle(PromptBundleBuildRequest(user_message="QE 10 loop", phase="planning"))
+
+    seed_result = svc.seed_catalogs()
+    assert seed_result["seeded"]["prompt_nodes"] >= 1
+    assert svc.health()["status"] == "ok"
+    assert svc.catalog_readiness()["ready"] is True
 
 
 def test_service_runs_phase1_task_memory_context_approval_issue_flow() -> None:

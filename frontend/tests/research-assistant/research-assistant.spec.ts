@@ -57,6 +57,68 @@ function page<T>(items: T[]) {
   return { items, total: items.length, page: 1, page_size: 100, has_more: false };
 }
 
+const catalogNotReadyDetail = {
+  code: "research_assistant_catalog_not_ready",
+  message: "研究助理目录尚未初始化完整，请先初始化 Prompt Tree、MCP、Skill 与模型路由目录。",
+  operator_action: "POST /api/v1/research-assistant/catalogs/seed",
+  readiness: {
+    ready: false,
+    status: "catalog_not_ready",
+    missing_catalogs: ["prompt_nodes", "mcp_tools"],
+    checks: [
+      { catalog: "prompt_nodes", label: "Prompt Tree", expected_min: 8, present: 0, ready: false },
+      { catalog: "mcp_tools", label: "MCP Tool Catalog", expected_min: 6, present: 0, ready: false },
+    ],
+  },
+};
+
+test("Research Assistant chat shows readable catalog setup state instead of backend error JSON", async ({ page: browserPage }) => {
+  const writeMethods: string[] = [];
+  await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+    const method = route.request().method();
+    if (method !== "GET") writeMethods.push(`${method} ${path}`);
+
+    if (path.endsWith("/chat/turn")) {
+      return route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: catalogNotReadyDetail }),
+      });
+    }
+    if (path.endsWith("/catalogs/seed")) {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ status: "success", data: { seeded: { prompt_nodes: 8, mcp_tools: 6 } } }),
+      });
+    }
+    if (path.endsWith("/catalogs/readiness")) {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ status: "success", data: { ...catalogNotReadyDetail.readiness, ready: true, status: "ready", missing_catalogs: [], checks: [] } }),
+      });
+    }
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "success", data: page([]) }) });
+  });
+
+  await browserPage.goto("/research-assistant");
+  await browserPage.getByPlaceholder(/直接描述你的研究目标/).fill("帮我创建一个 QE 10 loop 实验，先不要执行。");
+  await browserPage.getByRole("button", { name: "发送" }).click();
+
+  await expect(browserPage.getByText("助理目录尚未初始化完整").first()).toBeVisible();
+  await expect(browserPage.getByTestId("ra-chat-catalog-setup")).toContainText("Prompt Tree：当前 0 / 至少 8");
+  await expect(browserPage.getByTestId("ra-chat-catalog-setup")).toContainText("MCP Tool Catalog：当前 0 / 至少 6");
+  await expect(browserPage.locator("[data-testid='ra-chat-main']")).not.toContainText("research_assistant_catalog_not_ready");
+  await expect(browserPage.locator("[data-testid='ra-chat-main']")).not.toContainText("{");
+
+  await browserPage.getByRole("button", { name: "初始化助理目录" }).click();
+  await expect(browserPage.getByText("目录初始化完成。请重新发送你的研究或实验目标。")).toBeVisible();
+  expect(writeMethods).toEqual(["POST /api/v1/research-assistant/chat/turn", "POST /api/v1/research-assistant/catalogs/seed"]);
+});
+
 test("Research Assistant main entry is a Codex-like LLM chat with readable cards", async ({ page: browserPage }) => {
   const writeMethods: string[] = [];
   const consoleErrors: string[] = [];

@@ -29,7 +29,7 @@ from backend.services.research_assistant.models import (
     WorkbenchDryRunExecuteRequest,
 )
 from backend.services.research_assistant.repository import ResearchAssistantSchemaMissingError
-from backend.services.research_assistant.service import ResearchAssistantService
+from backend.services.research_assistant.service import ResearchAssistantCatalogNotReadyError, ResearchAssistantService
 
 router = APIRouter(prefix="/research-assistant", tags=["research-assistant"])
 
@@ -83,6 +83,16 @@ def _map_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=404, detail=str(exc))
     if isinstance(exc, ResearchAssistantSchemaMissingError):
         return HTTPException(status_code=503, detail=str(exc))
+    if isinstance(exc, ResearchAssistantCatalogNotReadyError):
+        return HTTPException(
+            status_code=409,
+            detail={
+                "code": "research_assistant_catalog_not_ready",
+                "message": "研究助理目录尚未初始化完整，请先初始化 Prompt Tree、MCP、Skill 与模型路由目录。",
+                "operator_action": exc.readiness.get("operator_action"),
+                "readiness": exc.readiness,
+            },
+        )
     if isinstance(exc, (ValueError, ValidationError)):
         return HTTPException(status_code=400, detail=str(exc))
     return HTTPException(status_code=500, detail=str(exc))
@@ -108,6 +118,14 @@ def overview(service: ResearchAssistantService = Depends(get_research_assistant_
 def seed_catalogs(service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
     try:
         return _success(service.seed_catalogs())
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.get("/catalogs/readiness", response_model=ResearchAssistantResponse)
+def catalog_readiness(service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
+    try:
+        return _success(service.catalog_readiness())
     except Exception as exc:
         raise _map_error(exc) from exc
 
