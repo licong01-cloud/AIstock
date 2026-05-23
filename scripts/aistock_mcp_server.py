@@ -1351,6 +1351,9 @@ def start_validation_execution(
     frontend_port: int | None = None,
     timeout_seconds: int | None = None,
     confirm_text: str | None = None,
+    workspace_path: str | None = None,
+    expected_branch: str | None = None,
+    expected_commit: str | None = None,
 ) -> dict[str, Any]:
     """Start an allowlisted controlled validation execution (nox session).
 
@@ -1367,6 +1370,12 @@ def start_validation_execution(
         body["timeout_seconds"] = timeout_seconds
     if confirm_text is not None:
         body["confirm_text"] = confirm_text
+    if workspace_path is not None:
+        body["workspace_path"] = workspace_path
+    if expected_branch is not None:
+        body["expected_branch"] = expected_branch
+    if expected_commit is not None:
+        body["expected_commit"] = expected_commit
     return _client().post("/executions", json_body=body)
 
 

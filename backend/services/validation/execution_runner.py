@@ -27,6 +27,10 @@ MAX_LOG_TAIL_LINES = 2000
 ARTIFACT_KIND_SUFFIXES = {
     "guardrail_md": ".txt",
 }
+_WORKSPACE_PATH_ALLOWLIST: tuple[str, ...] = (
+    "F:/Dev/AIstock_worktrees/",
+    "F:\\Dev\\AIstock_worktrees\\",
+)
 
 
 @dataclass(frozen=True)
@@ -124,6 +128,26 @@ def _git_commit(repo_root: Path) -> str | None:
     return value or None
 
 
+def _git_branch(repo_root: Path) -> str | None:
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=str(repo_root),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            shell=False,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    value = (completed.stdout or "").strip()
+    return value or None
+
+
 def _history_id_for_path(path: Path, history_root: Path) -> str:
     relative = path.resolve().relative_to(history_root.resolve()).as_posix()
     digest = hashlib.sha256(relative.encode("utf-8")).hexdigest()[:10]
@@ -176,6 +200,30 @@ class ValidationExecutionRunner:
         self.run_inline = run_inline
         self.archive_enabled = archive_enabled
         self._lock = threading.Lock()
+
+    @staticmethod
+    def _validate_workspace_path(workspace_path: str | None, repo_root: Path) -> Path:
+        if workspace_path is None:
+            return repo_root.resolve()
+        resolved = Path(workspace_path).resolve()
+        if not resolved.is_dir():
+            raise ValidationRunnerError(f"workspace_path is not a directory: {workspace_path}")
+        resolved_str = str(resolved).replace("\\", "/")
+        allowed = any(
+            resolved_str.startswith(prefix.replace("\\", "/"))
+            for prefix in _WORKSPACE_PATH_ALLOWLIST
+        )
+        try:
+            resolved.relative_to(repo_root.resolve())
+            allowed = True
+        except ValueError:
+            pass
+        if not allowed:
+            raise ValidationRunnerError(
+                f"workspace_path is not in the allowlist: {workspace_path}. "
+                f"Must be under F:/Dev/AIstock_worktrees/ or the configured repo root."
+            )
+        return resolved
 
     def health(self) -> dict[str, Any]:
         jobs = self.list_jobs(page=1, page_size=1000)["items"]
@@ -298,14 +346,32 @@ class ValidationExecutionRunner:
         frontend_port: int | None = None,
         timeout_seconds: int | None = None,
         confirm_text: str | None = None,
+        workspace_path: str | None = None,
+        expected_branch: str | None = None,
+        expected_commit: str | None = None,
     ) -> dict[str, Any]:
         plan = self._validate_plan(plan_key, confirm_text=confirm_text)
+        resolved_cwd = self._validate_workspace_path(workspace_path, self.repo_root)
+        if expected_branch:
+            actual_branch = _git_branch(resolved_cwd)
+            if actual_branch != expected_branch:
+                raise ValidationRunnerError(
+                    f"expected_branch {expected_branch!r} does not match actual branch {actual_branch!r}"
+                )
+        if expected_commit:
+            actual_commit = _git_commit(resolved_cwd)
+            if actual_commit != expected_commit:
+                raise ValidationRunnerError(
+                    f"expected_commit {expected_commit!r} does not match actual commit {actual_commit!r}"
+                )
         resolved_backend_port = self._resolve_port(plan, backend_port, "backend")
         resolved_frontend_port = self._resolve_port(plan, frontend_port, "frontend")
         timeout = self._resolve_timeout(plan, timeout_seconds)
         job_id = f"valjob_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
         command = [sys.executable, "-m", "nox", "-s", str(plan["nox_session"])]
-        env = self._runner_env(plan, resolved_backend_port, resolved_frontend_port)
+        env = self._runner_env(plan, resolved_backend_port, resolved_frontend_port, resolved_cwd)
+        workspace_branch = _git_branch(resolved_cwd)
+        workspace_commit = _git_commit(resolved_cwd)
         job = {
             "schema_version": JOB_SCHEMA_VERSION,
             "job_id": job_id,
@@ -317,7 +383,13 @@ class ValidationExecutionRunner:
             "command_key": plan.get("command_key"),
             "nox_session": plan.get("nox_session"),
             "command": command,
-            "cwd": _repo_path(self.repo_root),
+            "cwd": _repo_path(resolved_cwd),
+            "workspace_path": str(resolved_cwd),
+            "workspace_branch": workspace_branch,
+            "workspace_commit": workspace_commit,
+            "workspace_is_root": resolved_cwd == self.repo_root.resolve(),
+            "expected_branch": expected_branch,
+            "expected_commit": expected_commit,
             "requested_by": requested_by,
             "requested_at": _now_iso(),
             "started_at": None,
@@ -398,7 +470,7 @@ class ValidationExecutionRunner:
         return timeout
 
     @staticmethod
-    def _runner_env(plan: dict[str, Any], backend_port: int | None, frontend_port: int | None) -> dict[str, str]:
+    def _runner_env(plan: dict[str, Any], backend_port: int | None, frontend_port: int | None, workspace_path: Path | None = None) -> dict[str, str]:
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -409,6 +481,8 @@ class ValidationExecutionRunner:
             env["NEXT_PUBLIC_API_BASE"] = f"http://127.0.0.1:{backend_port}/api/v1"
         if frontend_port is not None:
             env["FRONTEND_PORT"] = str(frontend_port)
+        if workspace_path is not None:
+            env["VALIDATION_WORKSPACE_PATH"] = str(workspace_path)
         return env
 
     def _run_job(self, job_id: str, command: list[str], env: dict[str, str], timeout: int) -> None:
@@ -420,7 +494,8 @@ class ValidationExecutionRunner:
         self._write_job(job)
         executor_error: str | None = None
         try:
-            result = self.executor(command, env, self.repo_root, timeout)
+            resolved_cwd = Path(job.get("workspace_path", str(self.repo_root)))
+            result = self.executor(command, env, resolved_cwd, timeout)
         except Exception as exc:
             executor_error = f"{type(exc).__name__}: {exc}"
             result = RunnerResult(
@@ -568,6 +643,7 @@ class ValidationExecutionRunner:
         return unique
 
     def _run_metadata(self, job: dict[str, Any], archive: dict[str, Any], artifacts: list[dict[str, Any]]) -> dict[str, Any]:
+        resolved_cwd = Path(job.get("workspace_path", str(self.repo_root)))
         return {
             "schema_version": RUN_SCHEMA,
             "module": job.get("module") or "validation",
@@ -575,8 +651,16 @@ class ValidationExecutionRunner:
             "level": str(job.get("level") or "").upper() or None,
             "title": f"Runner {job.get('plan_key')} {job.get('status')}",
             "status": job.get("status"),
-            "git_commit": _git_commit(self.repo_root),
+            "git_commit": _git_commit(resolved_cwd),
             "operator": job.get("requested_by"),
+            "workspace": {
+                "path": job.get("workspace_path"),
+                "branch": job.get("workspace_branch"),
+                "commit": job.get("workspace_commit"),
+                "is_root": job.get("workspace_is_root"),
+                "expected_branch": job.get("expected_branch"),
+                "expected_commit": job.get("expected_commit"),
+            },
             "started_at": job.get("started_at") or job.get("requested_at"),
             "finished_at": job.get("finished_at"),
             "runner_job_id": job.get("job_id"),
@@ -672,6 +756,10 @@ class ValidationExecutionRunner:
             f"- Nox session: `{job.get('nox_session')}`\n"
             f"- Status: {job.get('status')}\n"
             f"- Return code: {job.get('return_code')}\n"
+            f"- Workspace: `{job.get('workspace_path', 'N/A')}`\n"
+            f"- Branch: `{job.get('workspace_branch', 'N/A')}`\n"
+            f"- Commit: `{job.get('workspace_commit', 'N/A')}`\n"
+            f"- Is root: {job.get('workspace_is_root', True)}\n"
             f"- Started at: {job.get('started_at')}\n"
             f"- Finished at: {job.get('finished_at')}\n"
             f"- Production 8001 touched: {job.get('production_8001_touched')}\n"
@@ -714,7 +802,7 @@ class ValidationExecutionRunner:
             "level": str(job.get("level") or "").upper() or None,
             "title": f"Runner evidence for {job.get('plan_key')}",
             "run_id": archive.get("run_id"),
-            "git_commit": _git_commit(self.repo_root),
+            "git_commit": _git_commit(Path(job.get("workspace_path", str(self.repo_root)))),
             "operator": job.get("requested_by"),
             "runner_job_id": job.get("job_id"),
             "evidence": evidence,
