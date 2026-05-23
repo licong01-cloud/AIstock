@@ -6,6 +6,7 @@ column. QE source tables are read-only from this layer.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterator
 
@@ -45,6 +46,8 @@ from .validation_run import (
     StrategyPackageValidationRun,
     ensure_package_validation_run,
 )
+
+logger = logging.getLogger("aistock.strategy_package.repository")
 
 ConnFactory = Callable[[], Iterator[Any]]
 
@@ -200,7 +203,7 @@ class StrategyPackageRepository:
                     tuple(params),
                 )
                 rows = cur.fetchall()
-        return [self._record_from_row(dict(row)) for row in rows]
+        return [record for record in (self._record_from_row(dict(row), quarantine=True) for row in rows) if record is not None]
 
     def transition_status(
         self,
@@ -1015,7 +1018,155 @@ class StrategyPackageRepository:
                 rows = cur.fetchall()
         return [self._validation_run_from_row(dict(row)) for row in rows]
 
-    def _record_from_row(self, row: dict[str, Any]) -> StrategyPackageRecord:
+    def validate_manifest_integrity(self, *, limit: int = 500) -> dict[str, Any]:
+        """Scan all packages and report manifest_sha256 drift without modifying data.
+
+        Returns a diagnostic report with per-package drift details so operators
+        can decide whether to repair or quarantine individual packages.
+        """
+        if limit <= 0:
+            raise StrategyPackageValidationError("limit must be positive")
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT package_id, package_name, package_version, source_type,
+                           source_id, loop_id, run_id, package_status, manifest_json,
+                           manifest_sha256, paper_portfolio_count, created_at, updated_at
+                    FROM strategy_pkg.package
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    (limit,),
+                )
+                rows = cur.fetchall()
+        drifted: list[dict[str, Any]] = []
+        clean_count = 0
+        for row in rows:
+            row_dict = dict(row)
+            manifest_json = row_dict["manifest_json"]
+            try:
+                manifest = StrategyPackageManifest.model_validate(manifest_json)
+            except Exception:
+                drifted.append({
+                    "package_id": row_dict["package_id"],
+                    "package_name": row_dict["package_name"],
+                    "package_status": row_dict["package_status"],
+                    "stored_sha256": row_dict["manifest_sha256"],
+                    "computed_sha256": None,
+                    "error": "manifest_json failed pydantic validation",
+                })
+                continue
+            stored = row_dict["manifest_sha256"]
+            record = StrategyPackageRecord(
+                package_id=row_dict["package_id"],
+                package_name=row_dict["package_name"],
+                package_version=row_dict["package_version"],
+                source_type=row_dict["source_type"],
+                source_id=row_dict["source_id"],
+                loop_id=row_dict.get("loop_id"),
+                run_id=row_dict.get("run_id"),
+                package_status=PackageStatus(row_dict["package_status"]),
+                manifest=manifest,
+                manifest_sha256=stored,
+                paper_portfolio_count=int(row_dict.get("paper_portfolio_count") or 0),
+                created_at=row_dict["created_at"],
+                updated_at=row_dict["updated_at"],
+            )
+            computed = compute_manifest_sha256(record.current_manifest())
+            if stored != computed:
+                drifted.append({
+                    "package_id": record.package_id,
+                    "package_name": record.package_name,
+                    "package_status": record.package_status.value,
+                    "stored_sha256": stored,
+                    "computed_sha256": computed,
+                })
+            else:
+                clean_count += 1
+        return {
+            "total_scanned": len(rows),
+            "clean_count": clean_count,
+            "drifted_count": len(drifted),
+            "drifted": drifted,
+        }
+
+    def repair_manifest_hash(self, package_id: str, *, operator: str = "repair_manifest_hash") -> StrategyPackageRecord:
+        """Recompute and persist the correct manifest_sha256 with an audit event.
+
+        Only repairs the hash column — the manifest JSON itself is not modified.
+        The existing hash check in get() will fail first if the package has drift,
+        so we bypass it by reading the raw row directly.
+        """
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT package_id, package_name, package_version, source_type,
+                           source_id, loop_id, run_id, package_status, manifest_json,
+                           manifest_sha256, paper_portfolio_count, created_at, updated_at
+                    FROM strategy_pkg.package
+                    WHERE package_id = %s
+                    """,
+                    (package_id,),
+                )
+                row = cur.fetchone()
+        if not row:
+            raise DataUnavailableError(
+                "strategy package does not exist",
+                context={"package_id": package_id},
+            )
+        row_dict = dict(row)
+        manifest = StrategyPackageManifest.model_validate(row_dict["manifest_json"])
+        record = StrategyPackageRecord(
+            package_id=row_dict["package_id"],
+            package_name=row_dict["package_name"],
+            package_version=row_dict["package_version"],
+            source_type=row_dict["source_type"],
+            source_id=row_dict["source_id"],
+            loop_id=row_dict.get("loop_id"),
+            run_id=row_dict.get("run_id"),
+            package_status=PackageStatus(row_dict["package_status"]),
+            manifest=manifest,
+            manifest_sha256=row_dict["manifest_sha256"],
+            paper_portfolio_count=int(row_dict.get("paper_portfolio_count") or 0),
+            created_at=row_dict["created_at"],
+            updated_at=row_dict["updated_at"],
+        )
+        correct_hash = compute_manifest_sha256(record.current_manifest())
+        if record.manifest_sha256 == correct_hash:
+            return record
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE strategy_pkg.package
+                    SET manifest_sha256 = %s, updated_at = NOW()
+                    WHERE package_id = %s
+                    """,
+                    (correct_hash, package_id),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO strategy_pkg.package_status_event (
+                        package_id, from_status, to_status, reason, context
+                    ) VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (
+                        package_id,
+                        record.package_status.value,
+                        record.package_status.value,
+                        "manifest_hash_repaired",
+                        psycopg2.extras.Json({
+                            "operator": operator,
+                            "old_manifest_sha256": record.manifest_sha256,
+                            "new_manifest_sha256": correct_hash,
+                        }),
+                    ),
+                )
+        return self.get(package_id)
+
+    def _record_from_row(self, row: dict[str, Any], *, quarantine: bool = False) -> StrategyPackageRecord | None:
         manifest_json = row["manifest_json"]
         manifest = StrategyPackageManifest.model_validate(manifest_json)
         record = StrategyPackageRecord(
@@ -1033,10 +1184,23 @@ class StrategyPackageRepository:
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
-        if record.manifest_sha256 != compute_manifest_sha256(record.current_manifest()):
+        computed = compute_manifest_sha256(record.current_manifest())
+        if record.manifest_sha256 != computed:
+            if quarantine:
+                logger.warning(
+                    "strategy package manifest_sha256 drift quarantined: package_id=%s stored=%s computed=%s",
+                    record.package_id,
+                    record.manifest_sha256,
+                    computed,
+                )
+                return None
             raise StrategyPackageValidationError(
                 "stored manifest_sha256 does not match stored manifest",
-                context={"package_id": record.package_id},
+                context={
+                    "package_id": record.package_id,
+                    "stored_sha256": record.manifest_sha256,
+                    "computed_sha256": computed,
+                },
             )
         return record
 
@@ -1263,7 +1427,77 @@ class InMemoryStrategyPackageRepository:
         records = list(self.records.values())
         if status is not None:
             records = [record for record in records if record.package_status == status]
-        return records[:limit]
+        result: list[StrategyPackageRecord] = []
+        for record in records[:limit]:
+            computed = compute_manifest_sha256(record.current_manifest())
+            if record.manifest_sha256 != computed:
+                logger.warning(
+                    "strategy package manifest_sha256 drift quarantined: package_id=%s stored=%s computed=%s",
+                    record.package_id,
+                    record.manifest_sha256,
+                    computed,
+                )
+                continue
+            result.append(record)
+        return result
+
+    def validate_manifest_integrity(self, *, limit: int = 500) -> dict[str, Any]:
+        records = list(self.records.values())[:limit]
+        drifted: list[dict[str, Any]] = []
+        clean_count = 0
+        for record in records:
+            try:
+                computed = compute_manifest_sha256(record.current_manifest())
+            except Exception:
+                drifted.append({
+                    "package_id": record.package_id,
+                    "package_name": record.package_name,
+                    "package_status": record.package_status.value,
+                    "stored_sha256": record.manifest_sha256,
+                    "computed_sha256": None,
+                    "error": "manifest_json failed pydantic validation",
+                })
+                continue
+            if record.manifest_sha256 != computed:
+                drifted.append({
+                    "package_id": record.package_id,
+                    "package_name": record.package_name,
+                    "package_status": record.package_status.value,
+                    "stored_sha256": record.manifest_sha256,
+                    "computed_sha256": computed,
+                })
+            else:
+                clean_count += 1
+        return {
+            "total_scanned": len(records),
+            "clean_count": clean_count,
+            "drifted_count": len(drifted),
+            "drifted": drifted,
+        }
+
+    def repair_manifest_hash(self, package_id: str, *, operator: str = "repair_manifest_hash") -> StrategyPackageRecord:
+        record = self.records.get(package_id)
+        if record is None:
+            raise DataUnavailableError("strategy package does not exist", context={"package_id": package_id})
+        correct_hash = compute_manifest_sha256(record.current_manifest())
+        if record.manifest_sha256 == correct_hash:
+            return record
+        updated = record.model_copy(update={"manifest_sha256": correct_hash, "updated_at": datetime.now(timezone.utc)})
+        self.records[package_id] = updated
+        self.events.append(
+            PackageStatusEvent(
+                package_id=package_id,
+                from_status=record.package_status,
+                to_status=record.package_status,
+                reason="manifest_hash_repaired",
+                context={
+                    "operator": operator,
+                    "old_manifest_sha256": record.manifest_sha256,
+                    "new_manifest_sha256": correct_hash,
+                },
+            )
+        )
+        return updated
 
     def transition_status(
         self,

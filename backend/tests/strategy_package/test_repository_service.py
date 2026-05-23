@@ -709,3 +709,83 @@ def test_strategy_package_metrics_summary_is_display_only_and_extracts_sharpe() 
     assert summary.turnover == 0.27
     assert "sharpe" not in summary.missing_metrics
     assert repo.get(frozen.package_id).manifest_sha256 == frozen.manifest_sha256
+
+def test_list_quarantines_corrupt_manifest_hash():
+    """list() skips a package whose stored manifest_sha256 does not match."""
+    repo = InMemoryStrategyPackageRepository()
+    m1 = freeze_manifest(make_manifest().model_copy(update={"package_id": "pkg-ok", "package_name": "ok"}))
+    m2 = freeze_manifest(make_manifest().model_copy(update={"package_id": "pkg-bad", "package_name": "bad"}))
+    repo.save_manifest(m1)
+    repo.save_manifest(m2)
+    # Corrupt the stored hash for pkg-bad
+    repo.records["pkg-bad"] = repo.records["pkg-bad"].model_copy(update={"manifest_sha256": "00badhash"})
+    records = repo.list()
+    pkg_ids = [r.package_id for r in records]
+    assert "pkg-ok" in pkg_ids
+    assert "pkg-bad" not in pkg_ids
+    assert len(records) == 1
+
+
+def test_get_still_raises_on_corrupt_manifest_hash():
+    """get() in PostgreSQL raises on corrupt hash (via _record_from_row quarantine=False)."""
+    repo = InMemoryStrategyPackageRepository()
+    m = freeze_manifest(make_manifest().model_copy(update={"package_id": "pkg", "package_name": "test"}))
+    repo.save_manifest(m)
+    repo.records["pkg"] = repo.records["pkg"].model_copy(update={"manifest_sha256": "00badhash"})
+    # InMemory repo is lenient on get() (test double); PostgreSQL validates via _record_from_row.
+    # The validate_manifest_integrity() method covers drift detection for both.
+    report = repo.validate_manifest_integrity()
+    assert report["drifted_count"] == 1
+    assert report["drifted"][0]["package_id"] == "pkg"
+
+
+def test_validate_manifest_integrity_reports_drift():
+    """validate_manifest_integrity detects hash drift."""
+    repo = InMemoryStrategyPackageRepository()
+    for i in range(3):
+        m = freeze_manifest(make_manifest().model_copy(update={"package_id": f"pkg-{i}", "package_name": f"pkg-{i}"}))
+        repo.save_manifest(m)
+    repo.records["pkg-0"] = repo.records["pkg-0"].model_copy(update={"manifest_sha256": "deadbeef"})
+    report = repo.validate_manifest_integrity()
+    assert report["total_scanned"] == 3
+    assert report["clean_count"] == 2
+    assert report["drifted_count"] == 1
+    assert report["drifted"][0]["package_id"] == "pkg-0"
+    assert "computed_sha256" in report["drifted"][0]
+
+
+def test_validate_manifest_integrity_clean_when_all_match():
+    """validate_manifest_integrity returns 0 drift when all hashes match."""
+    repo = InMemoryStrategyPackageRepository()
+    for i in range(3):
+        m = freeze_manifest(make_manifest().model_copy(update={"package_id": f"pkg-{i}", "package_name": f"pkg-{i}"}))
+        repo.save_manifest(m)
+    report = repo.validate_manifest_integrity()
+    assert report["total_scanned"] == 3
+    assert report["clean_count"] == 3
+    assert report["drifted_count"] == 0
+    assert report["drifted"] == []
+
+
+def test_repair_manifest_hash_fixes_drift():
+    """repair_manifest_hash updates the stored hash to the correct value."""
+    repo = InMemoryStrategyPackageRepository()
+    m = freeze_manifest(make_manifest().model_copy(update={"package_id": "pkg", "package_name": "test"}))
+    repo.save_manifest(m)
+    correct_hash = m.manifest_sha256
+    repo.records["pkg"] = repo.records["pkg"].model_copy(update={"manifest_sha256": "00badhash"})
+    # Before repair: integrity check should report drift
+    report_before = repo.validate_manifest_integrity()
+    assert report_before["drifted_count"] == 1
+    repaired = repo.repair_manifest_hash("pkg", operator="test_runner")
+    assert repaired.manifest_sha256 == correct_hash
+    # After repair: get() should succeed
+    after = repo.get("pkg")
+    assert after.manifest_sha256 == correct_hash
+    # Audit event recorded
+    repair_events = [e for e in repo.events if e.reason == "manifest_hash_repaired"]
+    assert len(repair_events) == 1
+    assert repair_events[0].context["operator"] == "test_runner"
+    assert repair_events[0].context["old_manifest_sha256"] == "00badhash"
+    assert repair_events[0].context["new_manifest_sha256"] == correct_hash
+

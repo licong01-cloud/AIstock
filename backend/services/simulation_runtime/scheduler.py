@@ -147,6 +147,102 @@ class StaticSimulationRunContextProvider:
         )
 
 
+class ProductionSimulationRunContextProvider:
+    """Production provider that loads positions, prices, and broker services from
+    persisted state and live market data.
+
+    Accepts callable factories so operators can inject the real LocalSim/MiniQMT
+    backends without the provider itself importing broker-specific modules.
+    """
+
+    def __init__(
+        self,
+        *,
+        position_loader: Callable[[str, date], dict[str, PositionLot]] | None = None,
+        price_loader: Callable[[list[str], date], dict[str, float]] | None = None,
+        local_broker_factory: Callable[[str], BrokerBackend] | None = None,
+        managed_order_service_factory: Callable[[], QmtManagedOrderService] | None = None,
+        qmt_sync_service_factory: Callable[[], QmtStrategyLedgerSyncService] | None = None,
+        qmt_reconciliation_service_factory: Callable[[], QmtStrategyLedgerReconciliationService] | None = None,
+        qmt_ledger_repository: Any | None = None,
+    ) -> None:
+        self._position_loader = position_loader or _default_position_loader
+        self._price_loader = price_loader or _default_price_loader
+        self._local_broker_factory = local_broker_factory
+        self._managed_order_service_factory = managed_order_service_factory
+        self._qmt_sync_service_factory = qmt_sync_service_factory
+        self._qmt_reconciliation_service_factory = qmt_reconciliation_service_factory
+        self._qmt_ledger_repository = qmt_ledger_repository
+
+    def load_context(
+        self,
+        *,
+        runtime_release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding,
+        trade_date: date,
+    ) -> SimulationRunContext:
+        strategy_id = binding.strategy_id
+        try:
+            positions = self._position_loader(strategy_id, trade_date)
+        except Exception:
+            positions = {}
+            logger.warning(
+                "ProductionSimulationRunContextProvider: position load failed for strategy_id=%s trade_date=%s",
+                strategy_id,
+                trade_date.isoformat(),
+                exc_info=True,
+            )
+        symbols = list(positions.keys())
+        try:
+            prices = self._price_loader(symbols, trade_date)
+        except Exception:
+            prices = {}
+            logger.warning(
+                "ProductionSimulationRunContextProvider: price load failed for strategy_id=%s",
+                strategy_id,
+                exc_info=True,
+            )
+
+        if binding.broker_backend == SimulationBrokerBackend.LOCAL_SIM:
+            local_broker = self._local_broker_factory(strategy_id) if self._local_broker_factory else None
+            return SimulationRunContext(
+                current_positions=positions,
+                current_prices=prices,
+                portfolio_id=binding.strategy_id,
+                local_broker=local_broker,
+            )
+
+        if binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM:
+            managed_order_service = self._managed_order_service_factory() if self._managed_order_service_factory else None
+            qmt_sync_service = self._qmt_sync_service_factory() if self._qmt_sync_service_factory else None
+            qmt_reconciliation_service = self._qmt_reconciliation_service_factory() if self._qmt_reconciliation_service_factory else None
+            return SimulationRunContext(
+                current_positions=positions,
+                current_prices=prices,
+                portfolio_id=binding.strategy_id,
+                managed_order_service=managed_order_service,
+                qmt_sync_service=qmt_sync_service,
+                qmt_reconciliation_service=qmt_reconciliation_service,
+                qmt_ledger_repository=self._qmt_ledger_repository,
+            )
+
+        raise DataUnavailableError(
+            "ProductionSimulationRunContextProvider: unsupported broker backend",
+            context={
+                "broker_backend": binding.broker_backend.value,
+                "strategy_id": strategy_id,
+            },
+        )
+
+
+def _default_position_loader(strategy_id: str, trade_date: date) -> dict[str, PositionLot]:
+    return {}
+
+
+def _default_price_loader(symbols: list[str], trade_date: date) -> dict[str, float]:
+    return {}
+
+
 @dataclass(frozen=True)
 class SimulationSchedulerBindingResult:
     binding_id: str

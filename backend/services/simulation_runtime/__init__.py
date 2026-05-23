@@ -33,6 +33,7 @@ from .performance import (
 from .ops import SimulationRuntimeOpsService
 from .repository import InMemorySimulationRuntimeRepository, SimulationRuntimeRepository
 from .scheduler import (
+    ProductionSimulationRunContextProvider,
     SimulationLifecycleBackgroundScheduler,
     SimulationLifecycleScheduler,
     SimulationRunContext,
@@ -49,6 +50,7 @@ from .tail import TailHandlingOrderResult, TailHandlingPolicyService, TailHandli
 __all__ = [
     "DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID",
     "DailySelectionEvidence",
+    "ProductionSimulationRunContextProvider",
     "DailySelectionSignalService",
     "ExecutionPlan",
     "ExecutionPlanCompiler",
