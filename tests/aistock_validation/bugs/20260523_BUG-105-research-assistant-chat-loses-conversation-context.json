@@ -6,7 +6,7 @@
   "module": "research_assistant",
   "severity": "P1",
   "risk_area": "conversation_state_and_llm_context",
-  "status": "open",
+  "status": "in_progress",
   "trigger_condition": {
     "scenario": "research_assistant_second_turn_forgets_previous_message",
     "route": "/api/v1/research-assistant/chat/turn",
@@ -22,13 +22,13 @@
     "github:https://github.com/licong01-cloud/AIstock/issues/168"
   ],
   "fingerprint": "40dc38cadca6ca1a",
-  "assigned_agent": null,
+  "assigned_agent": "claude_code",
   "fix_branch": null,
   "fix_commit": null,
   "verification_run_id": null,
   "created_at": "2026-05-22T18:12:04Z",
   "first_seen_at": "2026-05-22T18:12:04Z",
-  "last_seen_at": "2026-05-22T18:12:04Z",
+  "last_seen_at": "2026-05-23T15:31:16Z",
   "fixed_at": null,
   "submitted_at": "2026-05-22T18:12:04Z",
   "closed_at": null,
@@ -81,6 +81,12 @@
       "actor": "codex-app",
       "action": "renumbered_due_to_duplicate_bug_id",
       "note": "Renumbered from BUG-102 to BUG-105 because BUG-102 was already used by the fixed Validation MCP GitHub sync BOM issue linked to GitHub #116. Canonical GitHub issue remains #168."
+    },
+    {
+      "timestamp": "2026-05-23T15:31:16Z",
+      "actor": "mcp_agent",
+      "action": "assigned",
+      "note": "Assigned to claude_code via MCP."
     }
   ]
 }
