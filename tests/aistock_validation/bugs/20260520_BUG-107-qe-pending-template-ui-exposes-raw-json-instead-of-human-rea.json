@@ -1,6 +1,6 @@
 {
   "schema_version": "aistock_validation_bug_v1",
-  "bug_id": "BUG-085",
+  "bug_id": "BUG-107",
   "title": "QE pending template UI exposes raw JSON instead of human-readable full configuration editor",
   "description": "Expected: QE pending execution templates must be configurable through a complete human-readable UI equivalent to the QE evolution task creation page. Raw config_json must be removed from the normal operator page and must not be the way to configure all fields.\nActual: /quantevolver/templates/[templateId] exposes only a small subset of structured fields and relies on a large raw JSON textarea for full configuration. This is not readable or operable for manual review.",
   "module": "qe_mcp",
@@ -119,6 +119,12 @@
       "actor": "codex-app",
       "action": "validation_mcp_scope_correction",
       "note": "Validation MCP controlled runner is currently bound to its configured repo root (F:/Dev/AIstock) and has no cwd/worktree parameter; controlled jobs started from this thread did not validate the bug/BUG-085-qe-pending-template-ui worktree. Branch-local qe_mcp_l3 on the rebased worktree passed and remains the valid verification evidence until Validation MCP supports branch/worktree execution or the configured root is explicitly switched."
+    },
+    {
+      "timestamp": "2026-05-23T04:24:02Z",
+      "actor": "codex-app",
+      "action": "renumbered_due_to_duplicate_bug_id",
+      "note": "Renumbered from BUG-085 to BUG-107 during historical BUG registry duplicate cleanup. GitHub issue #113 remains linked."
     }
   ],
   "github_issue_number": 113,

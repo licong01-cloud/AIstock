@@ -1,6 +1,6 @@
 {
   "schema_version": "aistock_validation_bug_v1",
-  "bug_id": "BUG-074",
+  "bug_id": "BUG-106",
   "title": "Paper v2 MiniQMT route inherits forbidden StrategyPackage QE backtest contract before MiniQMT execution authority",
   "description": "Expected: Paper v2 broker_backend=minqmt_sim should not inherit or validate HMM, ST PIT, ordinary runtime profile, or execution-policy changes from the StrategyPackage QE backtest runtime contract before entering MiniQMT execution. MiniQMT should be the broker/execution authority for acceptance, fills, cash, positions, and order status, while HMM/ST PIT remain platform runtime functions and ordinary configuration changes use auditable package/runtime versions or activations. The route must be explicitly verified for HMM disabled, new platform HMM snapshot, platform ST PIT data, and a versioned execution-policy activation.\nActual: The miniQMT UI creates an ordinary Paper v2 portfolio with data_source=MINIQMT_REALTIME and broker_backend=minqmt_sim, but the backend still runs the common Paper v2 StrategyPackage/QE backtest contract path before the minqmt_sim branch. create_portfolio resolves execution policy through validate_execution_policy_matches_manifest(); readiness and day_runner call normalize_runtime_config_with_backtest_contract(), validate_execution_policy_matches_manifest(), and validate_runtime_profile_matches_backtest_contract() before branching into minqmt_sim handling. Therefore a miniQMT Paper v2 run can still be blocked by the same forbidden HMM/ST PIT/execution-policy binding defects even though current miniQMT testing may not have reached this layer yet.",
   "module": "paper_v2",
@@ -147,6 +147,12 @@
       "actor": "codex-app",
       "action": "fixed",
       "note": "Fixed by 0e4ef23 and merged to main by PR #102 (790cb9c9707b3151b822f3ecf56d7c0cfe62d0f7); validation evidence: tests/aistock_validation/history/paper_v2/20260520_070726_l3_paper-v2-platform-runtime-contract-fixes.md."
+    },
+    {
+      "timestamp": "2026-05-23T04:24:02Z",
+      "actor": "codex-app",
+      "action": "renumbered_due_to_duplicate_bug_id",
+      "note": "Renumbered from BUG-074 to BUG-106 during historical BUG registry duplicate cleanup. GitHub issue #89 remains linked."
     }
   ],
   "github_pr_number": 102,
