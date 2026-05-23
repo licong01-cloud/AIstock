@@ -1614,6 +1614,10 @@ class AutoEvolutionScheduler:
             logger.info(f"Task {task_id} is in state {task['status']}, cannot submit next loop.")
             return None
 
+        if task.get("task_type") == "custom_evo":
+            next_loop_index = (task["current_loop"] or 0) + 1
+            return await self.submit_custom_evo_loop(task_id, next_loop_index)
+
         current_loop = task['current_loop']
         max_loops = task['max_loops']
 
