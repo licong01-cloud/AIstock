@@ -559,15 +559,14 @@ ORDER BY severity DESC, dataset;
 - 不把长期代码修复直接混入本次 Main 文档提交。
 
 
-### 12.1 ????????
+### 12.1 后续待确认问题
 
-- final deadline ?? A ?????????????? `Asia/Shanghai` ???? deadline????? UTC ???????????? 23:30??????UTC 23:30??
-- `_auto_retry_stale` ??????????????? `now >= final_deadline_at`??? final deadline ????? `data_sync_targets.retry` ? `next_retry_at`??? `final_blocked`???? `market.data_alerts`?
-- audit cursor ?????????????????????????? seed audit??????????? fail-fast ?? operator ?????????????????????????????
-- `preset-stats` ? `auto-range` ? `/api/data-stats` ?????????`current_max_date`/`ready_date` ???? `dataset_date_refresh_audit`??? `MAX(date)` ???? `physical_max_date` / `data_max_date` ??? reconciliation ??????? readiness cursor ?? audit ???
-- `cyq_perf` ???? `TushareSyncEngine` ??? readiness?`cyq_chips` ???? legacy stock-loop ???????? UI ??????? BY_DATE readiness ?????? BY_CODE/per-date audit policy?
-- local DB ??????`local_data_management_audit` ??????? DDL/comment review ??? `offline_schema_review` warning?????????? bootstrap schema ????????? DB ??????
-
+- final deadline 必须统一使用 `Asia/Shanghai` 业务时区计算，避免把 23:30 等本地截止时间误解释成 UTC。
+- `_auto_retry_stale` 在 final deadline 前只能更新 `data_sync_targets.retry` 和 `next_retry_at`，不得直接写 `market.data_alerts`；到达 final 后才可进入 `final_blocked` 和 Alert Gate。
+- audit cursor 初始化需要明确策略：历史 seed audit 只能作为有证据的初始化，不得用静默补写掩盖真实同步失败；无法确认时应 fail-fast 并要求 operator 决策。
+- `preset-stats`、`auto-range`、`/api/data-stats` 必须区分 `current_max_date`、`ready_date`、`physical_max_date` 和 `data_max_at`；`dataset_date_refresh_audit` 是 ready cursor，物理表 `MAX(date)` 只能作为 physical cursor。
+- `cyq_perf` 迁移到 `TushareSyncEngine` 后需要确认 `cyq_chips` 的 legacy stock-loop 是否也需要 BY_DATE readiness，或采用 BY_CODE/per-date audit policy。
+- local DB 缺少 DDL 时必须通过 DDL/comment review 和 `production_ddl_gate` 处理；验证环境允许 `offline_schema_review` warning，但生产可用性声明前必须完成 schema 验证。
 
 ## 14. 重复门禁复核结论
 
@@ -601,3 +600,60 @@ Dataset Catalog -> data_sync_targets -> Ingestion Adapter -> dataset_date_refres
 | 准确更新情况 | 同时返回 physical/audit/stats/retry/alert 状态 |
 | 报警策略 | 只对 final blocked 和不可控故障报警 |
 | 合入 Main | 文档和规范可本次合入；代码实现必须独立分支、流水线通过、用户确认 |
+## 15. 2026-05-23 补充：本地数据管理 MCP 控制面
+
+本章补充 Research Assistant 通过统一 MCP Gateway 操作本地数据管理的详细设计。完整工具清单、风险分级和验收矩阵见：`docs/architecture/local_data_management_mcp_gateway_design_20260523.md`。
+
+### 15.1 设计定位
+
+1. 本地数据管理 MCP 是 Research Assistant 第一优先级能力，先于 Paper v2、StrategyPackage、Selection Center MCP 扩展。
+2. MCP 采用统一 Gateway 的 `local_data` module，不新建完全割裂的独立 MCP Server。
+3. MCP 不直接访问数据库、不直接 import 调度器、不直接运行脚本，只调用后端正式 API 或新增 `/api/v1/local-data/*` facade。
+4. MCP 结果必须以中文摘要、状态卡片、影响说明和下一步建议呈现；raw JSON 只能作为审计详情。
+5. 本次 MCP 只覆盖本地数据管理主要功能，暂不处理因子独立指标计算、miniQMT / Xtquant 数据同步。
+
+### 15.2 必须覆盖的本地数据管理功能
+
+| 功能域 | MCP 必须具备能力 | 典型后端依据 |
+| --- | --- | --- |
+| 数据状态总览 | 查询整体数据健康、readiness、缓存状态、告警和影响模块 | `data_stats`、`dataset_date_refresh_audit`、`data_alerts`、`data_sync_targets` |
+| 数据集详情 | 查询单个 dataset 的 ready_date、physical_max_date、stats_max_date、last_job、gap | `GET /api/data-stats`、`GET /api/data-stats/gaps` |
+| 同步任务状态 | 查询最近任务、运行中任务、失败任务、任务日志摘要 | `/api/ingestion/jobs`、`/api/ingestion/job/{job_id}`、`/api/ingestion/logs` |
+| 同步任务调度 | 用户确认后运行 init/incremental/run/schedule/preset/calendar/sector/stats refresh | `/api/ingestion/*`、`/api/calendar/sync`、`/api/sector-data/build`、`/api/data-stats/refresh` |
+| 计划任务管理 | 查询、创建、更新、启停、立即运行、删除、批量创建、重置计划任务 | `/api/ingestion/schedule*` |
+| 计划任务重置 | 先生成默认计划与当前计划的 diff，再确认应用 | 新增 `/api/v1/local-data/schedules/reset-plan`、`reset-apply` facade |
+| 数据源测试 | 查询测试历史、维护测试计划、确认后执行测试 | `/api/testing/*` |
+| 告警处理 | 查询 active/unack 告警，确认后 ack；不反向修改 readiness | `/api/ingestion/alerts/*` |
+| 修复编排 | 生成修复计划、确认后执行、复查状态、记录 trace | 新增 `/api/v1/local-data/repair-plan`、`repair-apply` facade |
+
+### 15.3 与 readiness 控制面的关系
+
+本地数据管理 MCP 不改变本方案已经确认的 readiness 权威模型：
+
+```text
+market.dataset_date_refresh_audit = 业务 readiness 权威源
+market.data_stats = UI 和 gap 查询缓存
+market.ingestion_jobs / ingestion_logs = 执行过程证据
+market.data_sync_targets / data_sync_attempts = 自动补齐和重试状态源
+market.data_alerts = final blocked 或不可控故障告警
+```
+
+助手通过 MCP 查询和修复数据时，必须按上述语义解释：job success 不等于业务 ready；data_stats stale 不等于业务失败；audit ready 可以支持下游业务，但 UI 可能仍在刷新缓存；final_blocked 才是需要用户重点关注的阻断状态；告警 ack 只表示用户已知悉，不得把数据改成 ready。
+
+### 15.4 确认和风险控制
+
+| 操作 | 风险 | 要求 |
+| --- | --- | --- |
+| 查询状态、任务、计划、告警 | read_only | 不需要确认 |
+| 生成修复计划、计划任务 reset diff | plan_only | 不需要确认，但不得执行 |
+| 启停计划、ack 告警、取消任务 | write_control_plane | 需要确认口令和 trace |
+| 创建同步 job、刷新 stats、运行计划任务 | run_data_job | 需要确认口令、参数摘要和复查 |
+| 删除任务、清理排队、带 truncate 的初始化 | destructive | 需要二次确认，默认不作为自动修复动作 |
+
+### 15.5 助手标准流程
+
+用户说“检查当前数据同步情况并自动修复未同步成功的数据”时，助手必须执行：只读检查数据状态、最近任务、active 告警和 data_sync_targets；输出中文问题摘要和影响模块；生成修复计划并说明将调用的 MCP 工具和风险；等待用户确认；确认后调度同步、刷新缓存、ack 告警或重置计划任务；每一步写入 trace；复查状态并给出最终结论。
+
+### 15.6 验收要求
+
+后续实现本地数据管理 MCP 时，必须逐项满足 `local_data_management_mcp_gateway_design_20260523.md` 中的 `LDM-MCP-001` 至 `LDM-MCP-025` 验收矩阵；不能只实现查询工具，也不能只返回后端 JSON。所有调度、计划任务维护、计划重置、修复编排和任务状态跟踪都必须按设计完整交付。

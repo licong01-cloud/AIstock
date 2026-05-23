@@ -729,4 +729,68 @@ Skill 适合复杂分析、研发、离线处理和解释型任务：
 4. Memory/Graph 中文可读 UI。
 5. Chat 主入口展示“本轮加载记忆”和“依据哪些图谱关系”。
 6. 单测、API、前端 typecheck、UI smoke、设计验收矩阵逐项核对。
+## 17. 2026-05-23 补充：本地数据管理 MCP 记忆和图谱扩展
 
+本章把 `docs/architecture/local_data_management_mcp_gateway_design_20260523.md` 纳入 Research Assistant 长期记忆和轻量图谱范围。本次只增加本地数据管理 MCP，不扩展因子独立指标计算、miniQMT / Xtquant 数据同步，也不把 Paper v2、StrategyPackage、Selection Center MCP 作为本轮实现范围。
+
+### 17.1 需要新增的 Memory seed
+
+| 编号 | memory_type | subject_key | 内容摘要 | evidence_refs |
+| --- | --- | --- | --- | --- |
+| M-ARCH-004 | architecture | `architecture.local_data_management.mcp_gateway` | 本地数据管理通过统一 MCP Gateway 的 `local_data` module 暴露能力；MCP 只调用后端 API/facade，不直接连数据库或运行脚本。 | `docs/architecture/local_data_management_mcp_gateway_design_20260523.md` |
+| M-PROC-004 | procedural | `process.local_data.check_repair_confirm` | 数据修复必须先只读检查、生成修复计划、用户确认、执行、复查，不得直接启动写操作。 | `docs/architecture/local_data_management_mcp_gateway_design_20260523.md` |
+| M-PROC-005 | procedural | `process.local_data.schedule_reset` | 计划任务重置必须先展示当前计划与目标计划 diff，确认后应用，不得静默覆盖。 | `docs/architecture/local_data_management_mcp_gateway_design_20260523.md` |
+| M-ARCH-005 | architecture | `architecture.data_readiness.audit_authority` | `dataset_date_refresh_audit` 是 readiness 权威源，`data_stats` 是缓存，`ingestion_jobs` 是执行证据。 | `docs/architecture/data_sync_autonomous_control_plane_design_20260519.md` |
+| M-RULE-001 | rule | `rule.local_data.no_direct_db_script_mcp` | 本地数据 MCP 不得直接访问数据库、import 调度器或运行脚本，必须走后端正式 API。 | `docs/architecture/local_data_management_mcp_gateway_design_20260523.md` |
+| M-ROAD-002 | roadmap | `roadmap.local_data_mcp.first_priority` | 本地数据管理 MCP 是助手操作 AIstock 平台的第一优先级，先于 Paper v2 MCP 扩展。 | 用户确认需求、本设计文档 |
+
+### 17.2 需要新增的 Graph seed 实体
+
+| entity_key | entity_type | title | 摘要 |
+| --- | --- | --- | --- |
+| `capability.local_data_management` | capability | 本地数据管理 MCP 能力 | 面向助手的本地数据状态查询、同步任务调度、计划任务管理和修复编排能力。 |
+| `mcp.local_data` | mcp_server | Gateway local_data module | 统一 MCP Gateway 下的本地数据管理模块。 |
+| `api.local_data_facade` | api_router | 本地数据管理 facade API | 对旧 `/api/ingestion/*`、`/api/data-stats*`、`/api/testing/*` 做稳定封装。 |
+| `process.local_data_check_repair` | process | 本地数据检查与修复流程 | 只读检查、修复计划、确认执行、复查。 |
+| `process.local_data_schedule_reset` | process | 本地数据计划任务重置流程 | 生成 diff、确认后应用、记录 trace。 |
+| `data.dataset_date_refresh_audit` | data_asset | Readiness 权威源 | dataset/date 可用性事实源。 |
+| `data.data_stats` | data_asset | 数据看板缓存 | UI 和 gap 查询缓存，可重建，可 stale。 |
+| `data.ingestion_jobs` | data_asset | 数据同步任务账本 | job 执行过程和状态证据。 |
+| `data.data_sync_targets` | data_asset | 数据同步目标状态源 | 自动补齐和 retry 状态源。 |
+| `data.data_alerts` | data_asset | 本地数据告警 | final blocked 和不可控故障告警。 |
+
+### 17.3 需要新增的 Graph seed 关系
+
+| source | relation_type | target | 说明 |
+| --- | --- | --- | --- |
+| `module.research_assistant` | `uses` | `capability.local_data_management` | 助手通过能力目录理解本地数据管理。 |
+| `capability.local_data_management` | `exposes` | `mcp.local_data` | 能力由 Gateway local_data module 暴露。 |
+| `mcp.local_data` | `calls` | `api.local_data_facade` | MCP 只调用后端 facade。 |
+| `api.local_data_facade` | `wraps` | `api.ingestion` | facade 复用现有 ingestion API。 |
+| `api.local_data_facade` | `reads` | `data.dataset_date_refresh_audit` | 查询业务 readiness。 |
+| `api.local_data_facade` | `reads` | `data.data_stats` | 查询/刷新看板缓存。 |
+| `api.local_data_facade` | `reads` | `data.data_sync_targets` | 查询目标和重试状态。 |
+| `process.local_data_check_repair` | `uses` | `mcp.local_data` | 检查修复流程通过 MCP 执行。 |
+| `process.local_data_schedule_reset` | `uses` | `mcp.local_data` | 计划任务重置通过 MCP 执行。 |
+| `data.dataset_date_refresh_audit` | `supports` | `module.qe` | QE 依赖本地数据 readiness。 |
+| `data.dataset_date_refresh_audit` | `supports` | `module.selection_center` | 选股依赖本地数据 readiness。 |
+| `data.dataset_date_refresh_audit` | `supports` | `module.paper_v2` | 模拟盘依赖本地数据 readiness。 |
+
+### 17.4 Context Pack 加载规则
+
+当用户命令包含“本地数据、数据同步、同步失败、自动修复、计划任务、数据看板、任务监视器、告警、data_stats、data_sync_targets”等意图时，Context Pack 必须加载：`architecture.local_data_management.mcp_gateway`、`architecture.data_readiness.audit_authority`、`process.local_data.check_repair_confirm`、`process.local_data.schedule_reset`、`rule.local_data.no_direct_db_script_mcp`，以及与 `module.data_sync` 相邻的一跳图谱实体和关系。
+
+不得加载完整项目规范全文，不得把全部本地数据历史日志塞进 prompt；任务详情和日志应通过 MCP 按需查询。
+
+### 17.5 助手必须能回答的新问题
+
+完成本地数据管理 MCP 后，助手至少要能基于 Memory/Graph 回答：当前本地数据是否足够支持 QE、Selection Center 和 Paper v2；某个数据集 job 成功但业务仍不可用时应该看哪个 readiness 权威源；data_stats 刷新落后和数据真正缺失有什么区别；如何通过 MCP 重置本地数据计划任务并确保不会静默覆盖；哪些数据同步失败可以自动修复，哪些必须创建 Issue 或人工处理。
+
+### 17.6 图谱预览文件
+
+本次已更新图谱预览文件，增加本地数据管理 MCP、facade API、readiness/audit/targets/stats/alerts 与 QE、Selection Center、Paper v2 的依赖关系：
+
+- `docs/architecture/diagrams/research_assistant_memory_graph_overview_20260523.svg`
+- `docs/architecture/diagrams/research_assistant_memory_graph_overview_20260523.png`
+
+图片仅用于人工审阅；助手运行时必须读取结构化 Memory Ledger 和 Graph 表，而不是读取图片。
