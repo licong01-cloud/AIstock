@@ -368,3 +368,112 @@ def test_chat_turn_uses_llm_builds_cards_and_blocks_execution() -> None:
 
     with pytest.raises(ValueError, match="does not execute actions"):
         svc.chat_turn(ChatTurnRequest(message="确认执行 QE materialize", allow_execute=True))
+
+
+def test_chat_turn_prior_messages_injected_into_llm_context() -> None:
+    fake = FakeLlmClient()
+    svc = _chat_service(fake)
+
+    conv_id = "conv_test_001"
+    svc.repository.create_record("conversations", {
+        "conversation_id": conv_id,
+        "title": "test conversation",
+        "user_id": "default",
+        "status": "active",
+    })
+    svc.repository.create_record("conversation_messages", {
+        "message_id": "msg_001",
+        "conversation_id": conv_id,
+        "role": "user",
+        "content_text": "第一轮用户消息：帮我分析因子覆盖率。",
+    })
+    svc.repository.create_record("conversation_messages", {
+        "message_id": "msg_002",
+        "conversation_id": conv_id,
+        "role": "assistant",
+        "content_text": "第一轮助手回复：好的，我来分析因子覆盖率。",
+    })
+
+    result = svc.chat_turn(ChatTurnRequest(
+        message="继续上一轮的讨论，补充更多细节。",
+        conversation_id=conv_id,
+    ))
+
+    assert len(fake.calls) == 1
+    messages = fake.calls[0]["messages"]
+    assert isinstance(messages, list)
+    roles = [str(m["role"]) for m in messages]
+    assert roles[0] == "system"
+    assert roles[-1] == "user"
+    assert messages[-1]["content"] == "继续上一轮的讨论，补充更多细节。"
+
+    all_content = " ".join(str(m["content"]) for m in messages)
+    assert "因子覆盖率" in all_content
+    assert result["conversation"]["conversation_id"] == conv_id
+
+
+def test_new_conversation_has_no_prior_messages() -> None:
+    fake = FakeLlmClient()
+    svc = _chat_service(fake)
+
+    svc.chat_turn(ChatTurnRequest(message="帮我创建一个 QE 10 loop 实验，先不要执行。"))
+
+    assert len(fake.calls) == 1
+    messages = fake.calls[0]["messages"]
+    assert isinstance(messages, list)
+    non_system = [m for m in messages if m["role"] != "system"]
+    assert len(non_system) == 2
+    assert non_system[0]["role"] == "user"
+    assert "Context Pack" in str(non_system[0]["content"])
+    assert non_system[1]["role"] == "user"
+    assert non_system[1]["content"] == "帮我创建一个 QE 10 loop 实验，先不要执行。"
+
+
+def test_chat_history_excludes_system_tool_roles() -> None:
+    fake = FakeLlmClient()
+    svc = _chat_service(fake)
+
+    conv_id = "conv_test_002"
+    svc.repository.create_record("conversations", {
+        "conversation_id": conv_id,
+        "title": "role filter test",
+        "user_id": "default",
+        "status": "active",
+    })
+    svc.repository.create_record("conversation_messages", {
+        "message_id": "msg_010",
+        "conversation_id": conv_id,
+        "role": "system",
+        "content_text": "系统提示：当前阶段是 planning。",
+    })
+    svc.repository.create_record("conversation_messages", {
+        "message_id": "msg_011",
+        "conversation_id": conv_id,
+        "role": "user",
+        "content_text": "用户消息：开始分析。",
+    })
+    svc.repository.create_record("conversation_messages", {
+        "message_id": "msg_012",
+        "conversation_id": conv_id,
+        "role": "tool",
+        "content_text": '{"tool_result": "raw json here"}',
+    })
+    svc.repository.create_record("conversation_messages", {
+        "message_id": "msg_013",
+        "conversation_id": conv_id,
+        "role": "assistant",
+        "content_text": "助手回复：分析结果如下。",
+    })
+
+    svc.chat_turn(ChatTurnRequest(
+        message="第二轮用户消息",
+        conversation_id=conv_id,
+    ))
+
+    assert len(fake.calls) == 1
+    messages = fake.calls[0]["messages"]
+    all_content = " ".join(str(m["content"]) for m in messages)
+    assert "用户消息：开始分析" in all_content
+    assert "助手回复：分析结果如下" in all_content
+    assert "系统提示" not in all_content
+    assert "raw json" not in all_content

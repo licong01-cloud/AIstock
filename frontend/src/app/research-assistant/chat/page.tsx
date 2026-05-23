@@ -155,6 +155,8 @@ function createAdapter(
   onTurn: (result: AssistantChatTurnResult) => void,
   onStage: (steps: RailStep[]) => void,
   onCatalogIssue: (detail: CatalogNotReadyDetail | null) => void,
+  conversationId: string | null,
+  setConversationId: (id: string) => void,
 ): ChatModelAdapter {
   return {
     async run(options) {
@@ -164,8 +166,10 @@ function createAdapter(
       }
       onStage(thinkingSteps);
       let result: AssistantChatTurnResult;
+      const payload: Record<string, unknown> = { message, phase: "planning", risk_level: "medium", allow_execute: false };
+      if (conversationId) payload.conversation_id = conversationId;
       try {
-        result = await researchAssistantApi.chatTurn({ message, phase: "planning", risk_level: "medium", allow_execute: false });
+        result = await researchAssistantApi.chatTurn(payload);
       } catch (error) {
         const detail = catalogNotReadyDetail(error);
         if (detail) {
@@ -176,6 +180,8 @@ function createAdapter(
         throw error;
       }
       onCatalogIssue(null);
+      const newConversationId = (result.conversation as Record<string, unknown> | null)?.conversation_id as string | undefined;
+      if (newConversationId && !conversationId) setConversationId(newConversationId);
       onTurn(result);
       const cards = asCards(result.cards || result.assistant_message?.content_json?.cards);
       if (cards.status_rail?.length) onStage(cards.status_rail);
@@ -335,6 +341,15 @@ export default function ResearchAssistantChatPage() {
   const [catalogIssue, setCatalogIssue] = useState<CatalogNotReadyDetail | null>(null);
   const [initializingCatalogs, setInitializingCatalogs] = useState(false);
   const [catalogInitMessage, setCatalogInitMessage] = useState<string | null>(null);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+
+  const newConversation = useCallback(() => {
+    setConversationId(null);
+    setLatest(null);
+    setSteps(initialSteps);
+    setCatalogIssue(null);
+    setCatalogInitMessage(null);
+  }, []);
 
   const initializeCatalogs = useCallback(async () => {
     setInitializingCatalogs(true);
@@ -357,7 +372,7 @@ export default function ResearchAssistantChatPage() {
     }
   }, []);
 
-  const adapter = useMemo(() => createAdapter(setLatest, setSteps, setCatalogIssue), []);
+  const adapter = useMemo(() => createAdapter(setLatest, setSteps, setCatalogIssue, conversationId, setConversationId), [conversationId]);
   const runtime = useLocalRuntime(adapter, { initialMessages: welcomeMessages });
 
   return (
@@ -368,6 +383,11 @@ export default function ResearchAssistantChatPage() {
           <span className="ra-chat-eyebrow">AIstock Research Assistant</span>
           <h1>像 Codex 一样对话，由 MCP 安全执行</h1>
           <p>助理会先理解、复述、追问和生成计划卡；确认前不会执行高风险工具。</p>
+          {conversationId ? (
+            <button className="ra-chat-new-session-button" type="button" onClick={newConversation}>
+              新建对话
+            </button>
+          ) : null}
         </div>
         <AssistantRuntimeProvider runtime={runtime}>
           <AssistantThread />

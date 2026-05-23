@@ -862,7 +862,8 @@ class ResearchAssistantService:
                 token_budget=16000,
             )
         )
-        messages = self._chat_messages_for_llm(data.message, bundle, context_pack)
+        prior_messages = self._load_prior_chat_messages(conversation_id, data.message)
+        messages = self._chat_messages_for_llm(data.message, bundle, context_pack, prior_messages)
         self.add_task_event(task["task_id"], TaskEventCreate(event_type="llm_started", message="主模型调用已开始。", payload_json={"model_profile_id": model_profile["model_profile_id"], "prompt_bundle_id": bundle["prompt_bundle_id"]}))
         try:
             llm_result = self.llm_client.complete(messages=messages, model_profile=model_profile, temperature=0.2, max_tokens=1600)
@@ -964,7 +965,7 @@ class ResearchAssistantService:
         }
 
     @staticmethod
-    def _chat_messages_for_llm(user_message: str, bundle: dict[str, Any], context_pack: dict[str, Any]) -> list[dict[str, str]]:
+    def _chat_messages_for_llm(user_message: str, bundle: dict[str, Any], context_pack: dict[str, Any], prior_messages: list[dict[str, str]] | None = None) -> list[dict[str, str]]:
         system = (
             f"{bundle['bundle_text']}\n\n"
             "你必须用中文、自然语言和结构化计划说明来回复用户。主对话严禁输出 raw JSON、数据库 ID、Trace ID、payload 或后台日志。"
@@ -974,11 +975,37 @@ class ResearchAssistantService:
             f"Context Pack 摘要：{context_pack.get('pack_summary')}\n"
             "请基于这些已审计上下文进行回答；缺失信息时先向用户确认。"
         )
-        return [
+        messages: list[dict[str, str]] = [
             {"role": "system", "content": system},
             {"role": "user", "content": context},
-            {"role": "user", "content": user_message},
         ]
+        if prior_messages:
+            messages.extend(prior_messages)
+        messages.append({"role": "user", "content": user_message})
+        return messages
+
+    def _load_prior_chat_messages(self, conversation_id: str, current_message: str) -> list[dict[str, str]]:
+        try:
+            result = self.repository.list_records(
+                "conversation_messages",
+                filters={"conversation_id": conversation_id},
+                limit=20,
+            )
+            items = sorted(result["items"], key=lambda item: str(item.get("created_at") or ""))
+        except Exception:
+            return []
+        prior: list[dict[str, str]] = []
+        for item in items:
+            role = str(item.get("role") or "")
+            if role not in ("user", "assistant"):
+                continue
+            content = str(item.get("content_text") or "").strip()
+            if not content:
+                continue
+            if content == current_message:
+                continue
+            prior.append({"role": role, "content": content[:500]})
+        return prior[-20:]
 
     @staticmethod
     def _build_human_cards(user_message: str, task: dict[str, Any], bundle: dict[str, Any], route: dict[str, Any]) -> dict[str, Any]:
