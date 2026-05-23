@@ -68,6 +68,18 @@ def test_research_profile_is_only_current_module() -> None:
     assert resolve_modules(profile="research") == ["research"]
     assert resolve_modules(profile="research_assistant") == ["research_assistant"]
     assert resolve_modules(profile="research_with_assistant") == ["research", "research_assistant"]
+    assert resolve_modules(profile="local_data") == ["local_data"]
+    assert resolve_modules(profile="assistant_with_local_data") == ["research_assistant", "local_data"]
+    assert resolve_modules(profile="research_with_assistant_local_data") == [
+        "research",
+        "research_assistant",
+        "local_data",
+    ]
+
+
+def test_local_data_module_is_allowed_for_explicit_gateway_modules() -> None:
+    assert resolve_modules(modules="local_data") == ["local_data"]
+    assert resolve_modules(modules=["research_assistant", "local_data"]) == ["research_assistant", "local_data"]
 
 
 @pytest.mark.parametrize("profile", ["full", "operations", "research_with_qe", "paper_v2"])
@@ -153,8 +165,22 @@ def test_gateway_loads_research_assistant_tools() -> None:
         env_name="test",
     )
 
-    assert registry.tool_count("research_assistant") == 10
-    assert registry.total_tool_count() == 10
+    assert registry.tool_count("research_assistant") == 13
+    assert registry.total_tool_count() == 13
+
+
+def test_gateway_loads_local_data_tools() -> None:
+    from backend.mcp import gateway
+    from backend.mcp.modules import local_data
+
+    _mcp, registry = gateway.create_gateway(
+        profile="local_data",
+        base_url="http://127.0.0.1:8001/api/v1",
+        env_name="test",
+    )
+
+    assert registry.tool_count("local_data") == local_data.TOOL_COUNT
+    assert registry.total_tool_count() == local_data.TOOL_COUNT
 
 
 def test_gateway_rejects_banned_future_profile_before_loading_modules() -> None:

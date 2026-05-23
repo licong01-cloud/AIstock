@@ -1,0 +1,72 @@
+﻿# 本地数据管理 MCP Gateway 开发验收记录（2026-05-24）
+
+> 分支：`feature/local-data-mcp-gateway-20260524`  
+> Worktree：`F:\Dev\AIstock_worktrees\local-data-mcp-gateway-20260524`  
+> 对应设计方案：`docs/architecture/local_data_management_mcp_gateway_design_20260523.md`  
+> 验收范围：`LDM-MCP-001` 至 `LDM-MCP-028`  
+> 生产影响：未启动、停止或重启生产 backend `8001` / frontend `3000`；未写生产数据库。  
+> DDL 结论：本次实现未新增数据库表、字段、索引、约束或 migration，`production_ddl_gate=noop`。
+
+## 1. 交付内容
+
+| 类别 | 文件 | 说明 |
+| --- | --- | --- |
+| 后端 facade | `backend/services/local_data_management.py` | 统一封装本地数据状态、任务、计划、告警、同步目标、修复计划和确认执行。 |
+| 后端路由 | `backend/routers/local_data.py`、`backend/main.py` | 新增 `/api/v1/local-data/*` 稳定 facade，并挂载到主应用。 |
+| MCP Gateway | `backend/mcp/modules/local_data.py`、`backend/mcp/profiles.py` | 新增 `local_data` Gateway module 和 profile；工具只调用 facade，不直接连 DB 或调度器。 |
+| 助手能力 | `backend/services/research_assistant/service.py` | 注册 `local_data_management` capability、MCP 工具目录、Prompt Tree、长期记忆和轻量图谱 seed。 |
+| 前端 UI | `frontend/src/app/research-assistant/chat/page.tsx`、`frontend/src/app/research-assistant/workbench/page.tsx`、`frontend/src/app/research-assistant/mcp-tools/page.tsx`、`frontend/src/lib/research-assistant/api.ts` | 对话页、工作台和 MCP 工具页增加人类可读的本地数据检查、计划、确认、执行、复查卡片。 |
+| 测试 | `backend/tests/test_local_data_management_facade.py`、`backend/tests/mcp/test_local_data_module.py`、相关 Research Assistant 与 Playwright 测试 | 覆盖 facade、MCP 工具目录、确认口令、Prompt/Memory/Graph、前端无 raw JSON 主视图。 |
+
+## 2. 验证命令与结果
+
+| 序号 | 命令 | 结果 |
+| --- | --- | --- |
+| 1 | `python -m pytest backend/tests/test_local_data_management_facade.py backend/tests/mcp/test_local_data_module.py backend/tests/mcp/test_profiles_registry_gateway.py backend/tests/research_assistant/test_service.py backend/tests/research_assistant/test_api.py -q -p no:cacheprovider` | 通过，`82 passed in 8.43s`。 |
+| 2 | `python -m compileall backend/services/local_data_management.py backend/routers/local_data.py backend/mcp/modules/local_data.py backend/services/research_assistant` | 通过。 |
+| 3 | `npm run lint`（frontend） | 通过；仅保留既有其他模块 `react-hooks/exhaustive-deps` warnings。 |
+| 4 | `npm exec tsc -- --noEmit --incremental false`（frontend） | 通过。 |
+| 5 | `npx playwright test tests/research-assistant/research-assistant.spec.ts --project=chromium`（frontend） | 通过，`4 passed`；Playwright 临时 3012 服务已结束，未占用 3000。 |
+| 6 | `npm run build`（frontend） | 通过；仅保留既有 lint warnings。 |
+| 7 | `rg -n "get_conn|psycopg|subprocess|scheduler|backend\.ingestion|backend\.routers|backend\.services|requests" backend/mcp/modules/local_data.py` | 无输出，MCP module 没有直接 DB、调度器、脚本或后端 service import。 |
+| 8 | `git diff --check` | 通过，无空白错误。 |
+
+## 3. 逐项验收矩阵
+
+| 编号 | 结论 | 代码位置 | 测试命令/证据 | 备注 |
+| --- | --- | --- | --- | --- |
+| LDM-MCP-001 | 通过 | `backend/mcp/modules/local_data.py`、`backend/mcp/profiles.py` | 后端测试命令 1；`test_local_data_module_registers_design_tool_catalog`、`test_gateway_loads_local_data_tools` | `local_data` profile 可加载，注册 47 个工具。 |
+| LDM-MCP-002 | 通过 | `backend/services/research_assistant/service.py` | 后端测试命令 1；`test_local_data_management_catalog_prompt_memory_and_cards` | `local_data_management` capability 包含风险、入口、提示词和 MCP 工具引用。 |
+| LDM-MCP-003 | 通过 | `backend/services/local_data_management.py` | 后端测试命令 1；`test_overview_returns_human_summary_and_business_impact` | overview 返回中文摘要、状态、影响模块和待处理项。 |
+| LDM-MCP-004 | 通过 | `backend/services/local_data_management.py`、`backend/routers/local_data.py` | 后端测试命令 1；MCP 工具路径覆盖 `local_data_get_dataset_status` | dataset 状态包含 audit/cache/physical/last_job 结构。 |
+| LDM-MCP-005 | 通过 | `backend/services/local_data_management.py`、`backend/mcp/modules/local_data.py` | 后端测试命令 1；MCP 路径覆盖 `/gaps`，facade 调用既有 gaps API | 按 `data_kind` 检查缺口，不直接启动修复。 |
+| LDM-MCP-006 | 通过 | `backend/services/local_data_management.py` | 后端测试命令 1；`/targets`、`/sync-attempts` facade 测试 | 支持 target 与 attempt 查询。 |
+| LDM-MCP-007 | 通过 | `backend/services/local_data_management.py`、`backend/routers/local_data.py` | 后端测试命令 1；MCP 覆盖 `local_data_list_jobs`、`local_data_get_job`、`local_data_get_job_logs` | 任务和日志通过 facade 读取。 |
+| LDM-MCP-008 | 通过 | `backend/services/local_data_management.py`、`backend/routers/local_data.py`、`backend/mcp/modules/local_data.py` | 后端测试命令 1；`test_confirmed_write_refuses_to_call_source_without_confirmation`、`test_confirmed_run_calls_source_after_confirmation`、router `/run` 测试 | 缺确认时拒绝，确认后创建受控 fake job；未触碰生产 job。 |
+| LDM-MCP-009 | 通过 | `backend/mcp/modules/local_data.py`、`backend/services/local_data_management.py` | 后端测试命令 1；MCP 工具目录覆盖 `/schedules/{id}/run` | 确认型计划运行工具已映射 facade。 |
+| LDM-MCP-010 | 通过 | `backend/services/local_data_management.py`、`backend/mcp/modules/local_data.py` | 后端测试命令 1；MCP 工具目录覆盖 `/stats/refresh` | 刷新后复查 `data_stats`，缺确认不执行。 |
+| LDM-MCP-011 | 通过 | `backend/services/local_data_management.py`、`backend/routers/local_data.py` | 后端测试命令 1；MCP 工具目录覆盖 `/schedules` | 计划任务列表只读返回。 |
+| LDM-MCP-012 | 通过 | `backend/services/local_data_management.py`、`backend/routers/local_data.py` | 后端测试命令 1；MCP 工具目录覆盖 upsert/batch/toggle/delete | 更新、启停和删除均为确认型工具。 |
+| LDM-MCP-013 | 通过 | `backend/services/local_data_management.py` | 后端测试命令 1；`test_schedule_reset_plan_is_plan_only_and_does_not_write`、`test_schedule_reset_apply_requires_confirmation` | reset plan 只生成 diff，apply 需确认并复查。 |
+| LDM-MCP-014 | 通过 | `backend/services/local_data_management.py`、`backend/mcp/modules/local_data.py` | 后端测试命令 1；MCP 确认型工具覆盖 cancel | 取消任务使用 `confirm_change`，错误不被吞掉。 |
+| LDM-MCP-015 | 通过 | `backend/services/local_data_management.py`、`backend/mcp/modules/local_data.py` | 后端测试命令 1；MCP 确认型工具覆盖 clear queued | 清理 queued jobs 使用 destructive 确认口令。 |
+| LDM-MCP-016 | 通过 | `backend/services/local_data_management.py`、`backend/routers/local_data.py` | 后端测试命令 1；MCP 工具目录覆盖 alert ack | 告警确认只 ack 告警，不改 readiness 事实。 |
+| LDM-MCP-017 | 通过 | `backend/services/local_data_management.py` | 后端测试命令 1；`test_repair_apply_stops_on_first_failure_and_records_error` 前置 plan 流程覆盖 | repair plan 为 plan_only，不执行写操作。 |
+| LDM-MCP-018 | 通过 | `backend/services/local_data_management.py` | 后端测试命令 1；`test_repair_apply_stops_on_first_failure_and_records_error` | repair apply 任一步失败即停止并记录真实错误。 |
+| LDM-MCP-019 | 通过 | `backend/services/research_assistant/service.py`、`frontend/src/app/research-assistant/chat/page.tsx` | 后端测试命令 1；Playwright 命令 5 | 本地数据自然语言意图先生成检查/计划/确认卡，不直接执行写操作。 |
+| LDM-MCP-020 | 通过 | `backend/services/research_assistant/service.py` | 后端测试命令 1；Research Assistant API memory/entity/relation 测试 | 新增长期记忆和轻量图谱 seed，可被 catalog API 读取。 |
+| LDM-MCP-021 | 通过 | `frontend/src/app/research-assistant/chat/page.tsx`、`frontend/src/app/research-assistant/workbench/page.tsx`、`frontend/src/app/research-assistant/mcp-tools/page.tsx` | Playwright 命令 5 | 主视图使用中文卡片；JSON 仅保留在审计详情展开区。 |
+| LDM-MCP-022 | 通过 | `backend/mcp/modules/local_data.py` | 静态检查命令 7；后端测试命令 1 | MCP module 仅使用 loopback client，不直接 DB、调度器或脚本。 |
+| LDM-MCP-023 | 通过 | `backend/mcp/modules/local_data.py` | 后端测试命令 1；工具目录断言不包含 factor、xtquant、miniqmt、paper | 首批工具排除因子独立指标、Xtquant/miniQMT 与实盘路径。 |
+| LDM-MCP-024 | 通过 | `backend/services/local_data_management.py`、`backend/mcp/common.py` | 后端测试命令 1；`test_repair_apply_stops_on_first_failure_and_records_error` | 后端错误不转成功，MCP HTTP 4xx/5xx 会抛出真实错误摘要。 |
+| LDM-MCP-025 | 通过 | 本记录 | 本记录第 1、2 节 | 无 DB DDL 变更，`production_ddl_gate=noop`。 |
+| LDM-MCP-026 | 通过 | 本记录 | 本矩阵 | 已逐条记录设计一致性、代码位置、测试证据和风险边界。 |
+| LDM-MCP-027 | 通过 | 本记录 | 本记录第 2 节 | 后端、MCP、助手、前端、构建、静态检查均有命令和结果。 |
+| LDM-MCP-028 | 通过 | `backend/services/local_data_management.py`、`backend/mcp/modules/local_data.py`、前端三页 | 后端测试命令 1；Playwright 命令 5 | 写操作闭环为只读检查、计划生成、用户确认、执行、复查；缺确认时拒绝。 |
+
+## 4. 合入前结论
+
+1. `LDM-MCP-001` 至 `LDM-MCP-028` 均已按设计方案完成并通过聚焦验证。
+2. 本次没有 production DDL，合入后无需执行生产迁移；仍需由用户按规范重启后端使新增 router/MCP profile 生效。
+3. 本次没有触碰生产服务和生产数据库；验证使用单元测试、MCP MockTransport、FastAPI TestClient 和 Playwright mock API。
+4. 分支具备创建 PR 和进入用户确认合入环节的条件；未获得用户确认前不得合入 `main`。

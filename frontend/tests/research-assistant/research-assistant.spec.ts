@@ -42,8 +42,18 @@ const chatTurnResponse = {
     ],
     capability_summary: {
       mcp: "已识别 Research Assistant、QE、Validation 等 MCP 能力候选。",
+      local_data_management: "已优先识别 local_data_management 本地数据管理能力，按检查、计划、确认、执行、复查闭环处理。",
       skill: "已纳入本地 Skill Catalog，后续可按任务加载 QE 诊断、因子分析等能力。",
       model: "DeepSeek primary",
+    },
+    local_data_management: {
+      phases: [
+        { key: "check", status: "done" },
+        { key: "plan", status: "done" },
+        { key: "confirm", status: "current" },
+        { key: "execute", status: "locked" },
+        { key: "review", status: "locked" },
+      ],
     },
     safety: {
       no_materialize_before_confirmation: true,
@@ -144,6 +154,8 @@ test("Research Assistant main entry is a Codex-like LLM chat with readable cards
   await expect(browserPage.getByRole("heading", { name: "像 Codex 一样对话，由 MCP 安全执行" })).toBeVisible();
   await expect(browserPage.getByText("助理正在做什么")).toBeVisible();
   await expect(browserPage.getByText("主界面不显示 JSON")).toBeVisible();
+  await expect(browserPage.getByTestId("ra-local-data-phase-card")).toContainText("local_data_management");
+  await expect(browserPage.getByText("本地数据管理闭环")).toBeVisible();
 
   await browserPage.getByPlaceholder(/直接描述你的研究目标/).fill("帮我创建一个 QE 10 loop 实验，先不要执行。");
   await browserPage.getByRole("button", { name: "发送" }).click();
@@ -154,6 +166,8 @@ test("Research Assistant main entry is a Codex-like LLM chat with readable cards
   await expect(browserPage.getByText("等待确认").first()).toBeVisible();
   await expect(browserPage.getByText("不会执行 QE materialize/run").first()).toBeVisible();
   await expect(browserPage.getByText("生成 QE 10 loop 实验草稿").first()).toBeVisible();
+  await expect(browserPage.getByTestId("ra-local-data-plan-card")).toContainText("本地数据检查");
+  await expect(browserPage.getByTestId("ra-local-data-plan-card")).toContainText("复查与结论");
 
   await expect(browserPage.locator("[data-testid='ra-chat-main']")).not.toContainText("payload_json");
   await expect(browserPage.locator("[data-testid='ra-chat-main']")).not.toContainText("trace_id");
@@ -173,16 +187,28 @@ test("Research Assistant admin page separates audit tools from the chat entry", 
     if (path.endsWith("/mcp/tools")) {
       return respond(page([
         {
-          tool_id: "mcp_tool_research_assistant_issue",
-          server_key: "research-assistant",
-          tool_name: "assistant_create_issue_candidate",
-          title: "创建候选 Issue",
-          risk_level: "high",
+          tool_id: "mcp_tool_local_data_health",
+          server_key: "local_data",
+          tool_name: "local_data_health_overview",
+          title: "数据健康总览",
+          risk_level: "read_only",
+          requires_approval: false,
+          status: "enabled",
+          input_schema_json: { type: "object" },
+          preflight_schema_json: { checks: ["dataset", "alerts", "jobs"] },
+          required_confirmations: [],
+        },
+        {
+          tool_id: "mcp_tool_local_data_apply_repair",
+          server_key: "local_data",
+          tool_name: "local_data_apply_repair_confirmed",
+          title: "执行本地数据修复计划",
+          risk_level: "run_data_job",
           requires_approval: true,
           status: "enabled",
           input_schema_json: { type: "object" },
-          preflight_schema_json: { checks: ["dedupe_key"] },
-          required_confirmations: ["APPROVE_RESEARCH_ASSISTANT_ACTION"],
+          preflight_schema_json: { checks: ["confirmation_text", "trace_id"] },
+          required_confirmations: ["APPROVE_LOCAL_DATA_REPAIR"],
         },
       ]));
     }
@@ -196,8 +222,59 @@ test("Research Assistant admin page separates audit tools from the chat entry", 
   await expect(browserPage.getByText("后台管理区面向开发、审计和问题排查")).toBeVisible();
 
   await browserPage.getByRole("link", { name: /MCP 执行工作台/ }).click();
-  await expect(browserPage.getByRole("heading", { name: "MCP 执行工作台" })).toBeVisible();
-  await expect(browserPage.getByText("配置草稿 JSON")).toBeVisible();
+  await expect(browserPage.getByRole("heading", { name: "本地数据 MCP 工作台" })).toBeVisible();
+  await expect(browserPage.getByTestId("ra-local-data-workbench-card")).toContainText("local_data_management");
+  await expect(browserPage.getByText("本地数据检查").first()).toBeVisible();
+  await expect(browserPage.getByText("审计参数草稿")).toBeVisible();
   await browserPage.getByRole("button", { name: "执行 preflight" }).click();
-  await expect(browserPage.getByText("Missing Confirmations").first()).toBeVisible();
+  await expect(browserPage.getByText("缺少确认").first()).toBeVisible();
+  await expect(browserPage.getByText("本地数据工具目录")).toBeVisible();
+  await expect(browserPage.getByTestId("ra-local-data-tool-cards")).toContainText("数据健康总览");
+});
+
+test("Research Assistant MCP tools page shows local data capability as readable cards", async ({ page: browserPage }) => {
+  await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+    const respond = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ status: status >= 400 ? "error" : "success", data }) });
+    if (path.endsWith("/mcp/servers")) {
+      return respond(page([{ server_id: "srv_local_data", server_key: "local_data", title: "AIstock Gateway / local_data", status: "enabled", health_json: { ok: true } }]));
+    }
+    if (path.endsWith("/mcp/tools")) {
+      return respond(page([
+        {
+          tool_id: "mcp_tool_local_data_plan_repair",
+          server_key: "local_data",
+          tool_name: "local_data_plan_repair",
+          title: "生成本地数据修复计划",
+          risk_level: "plan_only",
+          requires_approval: false,
+          status: "enabled",
+          input_schema_json: { type: "object" },
+          preflight_schema_json: { checks: ["overview", "gaps", "targets"] },
+          required_confirmations: [],
+        },
+        {
+          tool_id: "mcp_tool_local_data_refresh",
+          server_key: "local_data",
+          tool_name: "local_data_refresh_stats_confirmed",
+          title: "刷新数据看板缓存",
+          risk_level: "run_data_job",
+          requires_approval: true,
+          status: "enabled",
+          input_schema_json: { type: "object" },
+          preflight_schema_json: { checks: ["confirmation_text"] },
+          required_confirmations: ["APPROVE_LOCAL_DATA_REFRESH"],
+        },
+      ]));
+    }
+    return respond(page([]));
+  });
+
+  await browserPage.goto("/research-assistant/mcp-tools");
+  await expect(browserPage.getByTestId("ra-mcp-local-data-capability")).toContainText("local_data_management");
+  await expect(browserPage.getByText("本地数据检查").first()).toBeVisible();
+  await expect(browserPage.getByTestId("ra-mcp-local-data-tool-cards")).toContainText("生成本地数据修复计划");
+  await expect(browserPage.getByTestId("ra-mcp-local-data-tool-cards")).toContainText("刷新数据看板缓存");
+  await expect(browserPage.getByText("审计详情：工具 schema / confirmations").first()).toBeVisible();
 });

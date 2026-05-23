@@ -16,16 +16,22 @@ import Link from "next/link";
 import { useCallback, useMemo, useState } from "react";
 
 import {
+  LOCAL_DATA_MANAGEMENT_CAPABILITY,
+  LOCAL_DATA_MANAGEMENT_PHASES,
   ResearchAssistantApiError,
+  localDataRiskLabel,
   researchAssistantApi,
   type AssistantCatalogReadiness,
   type AssistantChatTurnResult,
+  type LocalDataPhase,
+  type LocalDataPhaseKey,
 } from "@/lib/research-assistant/api";
 
 type RailStep = { label: string; status: string };
 type PlanCard = { title?: string; steps?: string[] };
 type ClarificationCard = { title?: string; questions?: string[] };
 type Proposal = { title?: string; risk?: string; approval_required?: boolean; status?: string };
+type LocalDataPhaseCard = { key?: string; phase?: string; title?: string; label?: string; status?: string; description?: string };
 
 type ChatCards = {
   plan_card?: PlanCard;
@@ -33,6 +39,9 @@ type ChatCards = {
   action_proposals?: Proposal[];
   status_rail?: RailStep[];
   capability_summary?: Record<string, unknown>;
+  local_data_management?: Record<string, unknown>;
+  local_data_card?: Record<string, unknown>;
+  local_data_phases?: LocalDataPhaseCard[];
   safety?: Record<string, unknown>;
 };
 
@@ -69,7 +78,7 @@ const welcomeMessages: ThreadMessageLike[] = [
     content: [
       {
         type: "text",
-        text: "你好，我是 AIstock 研究助理。你可以直接描述研究或实验目标，例如创建 QE 实验、分析 HMM 演进、复盘因子研发或整理今天需要关注的事项。我会先理解并确认，不会在确认前执行高风险 MCP。",
+        text: "你好，我是 AIstock 研究助理。你可以直接描述研究或实验目标，例如检查本地数据同步并生成修复计划、创建 QE 实验、分析 HMM 演进或复盘因子研发。我会先理解并确认，不会在确认前执行高风险 MCP。",
       },
     ],
   },
@@ -119,6 +128,7 @@ function statusText(status: string): string {
   if (status === "current") return "进行中";
   if (status === "locked") return "未解锁";
   if (status === "failed") return "失败";
+  if (status === "blocked") return "已阻断";
   return "等待";
 }
 
@@ -127,6 +137,40 @@ function proposalStatusText(status?: string): string {
   if (status === "draft_only") return "仅生成草稿";
   if (status === "ready") return "可继续讨论";
   return status || "待处理";
+}
+
+function phaseRecordStatus(records: LocalDataPhaseCard[], phase: LocalDataPhase): string | null {
+  const matched = records.find((record) => {
+    const key = String(record.key || record.phase || "").toLowerCase();
+    const title = String(record.title || record.label || "");
+    return key === phase.key || key === phase.shortTitle || title.includes(phase.shortTitle) || title.includes(phase.title);
+  });
+  return matched?.status || null;
+}
+
+function localDataPhaseRows(cards: ChatCards, hasLatest: boolean): Array<LocalDataPhase & { status: string }> {
+  const localDataCard = asRecord(cards.local_data_management) || asRecord(cards.local_data_card) || {};
+  const explicitRecords = [
+    ...(Array.isArray(cards.local_data_phases) ? cards.local_data_phases : []),
+    ...(Array.isArray(localDataCard.phases) ? localDataCard.phases as LocalDataPhaseCard[] : []),
+    ...(Array.isArray(localDataCard.stage_statuses) ? localDataCard.stage_statuses as LocalDataPhaseCard[] : []),
+  ];
+  const fallback: Record<LocalDataPhaseKey, string> = hasLatest
+    ? { check: "done", plan: "done", confirm: "current", execute: "locked", review: "locked" }
+    : { check: "idle", plan: "idle", confirm: "locked", execute: "locked", review: "locked" };
+
+  return LOCAL_DATA_MANAGEMENT_PHASES.map((phase) => ({
+    ...phase,
+    status: phaseRecordStatus(explicitRecords, phase) || fallback[phase.key],
+  }));
+}
+
+function localDataCapabilityText(capability: Record<string, unknown>): string {
+  return String(
+    capability.local_data_management ||
+      capability.local_data ||
+      `${LOCAL_DATA_MANAGEMENT_CAPABILITY.displayName} 是第一优先级 MCP 能力：先检查本地数据，再生成计划，确认后才执行和复查。`,
+  );
 }
 
 function cardText(result: AssistantChatTurnResult): string {
@@ -147,7 +191,10 @@ function cardText(result: AssistantChatTurnResult): string {
     parts.push("\n可选动作：");
     parts.push(...proposals.map((proposal) => `- ${proposal.title || "待命名动作"}；风险：${proposal.risk || "未标注"}；状态：${proposalStatusText(proposal.status)}`));
   }
-  parts.push("\n安全边界：本轮只完成理解、计划和确认，不会执行 QE materialize/run 或其他高风险 MCP。确认后才进入预检查和执行。");
+  const localDataRows = localDataPhaseRows(cards, true);
+  parts.push("\n本地数据管理阶段：");
+  parts.push(...localDataRows.map((phase) => `- ${phase.title}：${statusText(phase.status)}；${phase.description}`));
+  parts.push("\n安全边界：本轮只完成理解、计划和确认，不会执行 QE materialize/run 或本地数据写操作。确认后才进入预检查、执行和复查。");
   return parts.join("\n");
 }
 
@@ -194,6 +241,7 @@ function createAdapter(
 function TaskProgressRail({ steps, latest }: { steps: RailStep[]; latest: AssistantChatTurnResult | null }) {
   const cards = asCards(latest?.cards || latest?.assistant_message?.content_json?.cards);
   const capability = cards.capability_summary || {};
+  const localDataRows = localDataPhaseRows(cards, Boolean(latest));
   return (
     <aside className="ra-chat-rail" aria-label="任务状态轨道">
       <div className="ra-chat-rail-head">
@@ -214,9 +262,19 @@ function TaskProgressRail({ steps, latest }: { steps: RailStep[]; latest: Assist
       </ol>
       <div className="ra-chat-capability">
         <span className="ra-chat-eyebrow">能力选择</span>
+        <p>{localDataCapabilityText(capability)}</p>
         <p>{String(capability.mcp || "将按需选择 Research Assistant、QE、Validation 等 MCP。")}</p>
         <p>{String(capability.skill || "将按需选择本地 Skill Catalog，不要求用户记住工具名。")}</p>
         <p>{String(capability.model || "主模型负责理解、确认和调度。")}</p>
+      </div>
+      <div className="ra-chat-capability" data-testid="ra-local-data-phase-card" style={{ marginTop: 12 }}>
+        <span className="ra-chat-eyebrow">local_data_management</span>
+        <strong>{LOCAL_DATA_MANAGEMENT_CAPABILITY.displayName}闭环</strong>
+        {localDataRows.map((phase) => (
+          <p key={phase.key}>
+            {phase.shortTitle}：{statusText(phase.status)} · {localDataRiskLabel(phase.riskLevel)}
+          </p>
+        ))}
       </div>
       <Link className="ra-chat-admin-link" href="/research-assistant/admin">打开后台管理 / 审计</Link>
     </aside>
@@ -244,12 +302,17 @@ function PlanSummary({ latest }: { latest: AssistantChatTurnResult | null }) {
   const plan = cards.plan_card;
   const clarify = cards.clarification_card;
   const proposals = cards.action_proposals || [];
+  const localDataRows = localDataPhaseRows(cards, Boolean(latest));
   if (!latest) {
     return (
       <section className="ra-chat-card ra-chat-card-welcome">
         <span className="ra-chat-eyebrow">下一步</span>
         <h2>直接输入你的目标</h2>
-        <p>示例：帮我创建一个 QE 10 loop 实验，先不要执行。</p>
+          <p>示例：帮我创建一个 QE 实验草案，先不要执行。</p>
+        <div className="ra-chat-confirm-card">
+          <strong>也可以直接说：检查本地数据同步情况并生成修复计划</strong>
+          <p>助手会按“检查、计划、确认、执行、复查”展示中文卡片，确认前不启动同步任务或改计划任务。</p>
+        </div>
       </section>
     );
   }
@@ -273,6 +336,14 @@ function PlanSummary({ latest }: { latest: AssistantChatTurnResult | null }) {
           ))}
         </div>
       ) : null}
+      <div className="ra-chat-confirm-card" data-testid="ra-local-data-plan-card">
+        <strong>本地数据管理执行阶段</strong>
+        {localDataRows.map((phase) => (
+          <p key={phase.key}>
+            {phase.title}：{statusText(phase.status)}。{phase.description}
+          </p>
+        ))}
+      </div>
     </section>
   );
 }
@@ -382,7 +453,7 @@ export default function ResearchAssistantChatPage() {
         <div className="ra-chat-hero">
           <span className="ra-chat-eyebrow">AIstock Research Assistant</span>
           <h1>像 Codex 一样对话，由 MCP 安全执行</h1>
-          <p>助理会先理解、复述、追问和生成计划卡；确认前不会执行高风险工具。</p>
+          <p>助理会先理解、复述、追问和生成计划卡；本地数据管理按检查、计划、确认、执行、复查闭环展示，确认前不会执行高风险工具。</p>
           {conversationId ? (
             <button className="ra-chat-new-session-button" type="button" onClick={newConversation}>
               新建对话

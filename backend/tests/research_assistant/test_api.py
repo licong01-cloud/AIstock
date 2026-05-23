@@ -187,6 +187,47 @@ def test_research_assistant_api_phase1_smoke() -> None:
     assert client.get("/api/v1/research-assistant/validation-discovery/summary").status_code == 200
 
 
+def test_research_assistant_api_exposes_local_data_management_catalog() -> None:
+    client = _client()
+    message = "帮我检查本地数据同步健康，发现问题先生成修复计划，确认前不要执行。"
+
+    servers = client.get("/api/v1/research-assistant/mcp/servers").json()["data"]["items"]
+    assert "aistock-local-data" in {item["server_key"] for item in servers}
+
+    tools = client.get("/api/v1/research-assistant/mcp/tools", params={"server_key": "aistock-local-data"}).json()["data"]["items"]
+    tool_names = {item["tool_name"] for item in tools}
+    assert {"local_data_health_overview", "local_data_list_sync_targets", "local_data_plan_repair", "local_data_apply_repair_confirmed"} <= tool_names
+
+    prompt_bundle = client.post(
+        "/api/v1/research-assistant/prompt-bundles",
+        json={"user_message": message, "phase": "planning"},
+    ).json()["data"]
+    prompt_keys = {node["prompt_key"] for node in prompt_bundle["node_refs"]}
+    assert "prompt.local_data_management" in prompt_keys
+    assert "tool_guard.mcp_local_data" in prompt_keys
+    assert "domain.qe_experiment" not in prompt_keys
+
+    memories = client.get(
+        "/api/v1/research-assistant/memories",
+        params={"memory_type": "architecture", "approval_status": "approved", "search": "local_data_management"},
+    ).json()["data"]
+    assert any(item["subject_key"] == "architecture.local_data_management.mcp_gateway" for item in memories["items"])
+
+    graph_entities = client.get(
+        "/api/v1/research-assistant/graph/entities",
+        params={"entity_type": "capability", "approval_status": "approved", "search": "local_data_management"},
+    ).json()["data"]
+    assert any(item["entity_key"] == "capability.local_data_management" for item in graph_entities["items"])
+
+    chat_resp = client.post(
+        "/api/v1/research-assistant/chat/turn",
+        json={"message": message, "allow_execute": False},
+    ).json()["data"]
+    assert "aistock-local-data" in chat_resp["cards"]["capability_summary"]["mcp"]
+    assert chat_resp["cards"]["safety"]["local_data_read_only_before_confirmation"] is True
+    assert chat_resp["cards"]["action_proposals"][0]["status"] == "read_only"
+
+
 def test_research_assistant_api_errors_are_explicit() -> None:
     client = _client()
 

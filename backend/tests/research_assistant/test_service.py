@@ -126,7 +126,7 @@ def test_service_runs_phase1_task_memory_context_approval_issue_flow() -> None:
     assert pack["pack_summary"].startswith("Context Pack:")
     assert memory["memory_id"] in pack["core_memory_refs"]
     access_log = svc.list_records("memory_access_log", filters={"task_id": task["task_id"]})
-    assert access_log["items"][0]["memory_id"] == memory["memory_id"]
+    assert memory["memory_id"] in {item["memory_id"] for item in access_log["items"]}
 
     approval = svc.create_approval(
         ApprovalCreate(
@@ -346,6 +346,60 @@ def test_prompt_tree_selects_qe_multibranch_and_records_bundle() -> None:
     assert "renderer.human_cards" in keys
     assert bundle["selection_trace_json"]["algorithm"] == "ancestor_closed_keyword_multibranch_v1"
     assert bundle["cache_path"]
+
+
+def test_local_data_management_catalog_prompt_memory_and_cards() -> None:
+    svc = _chat_service()
+    message = "请排查本地数据入库健康，如果有缺口先给修复计划，不要执行任务。"
+
+    capability = svc.repository.find_one("skills", {"skill_key": "local_data_management"})
+    assert capability is not None
+    assert capability["skill_type"] == "assistant_capability"
+    assert capability["entrypoint_ref"] == "aistock-local-data"
+    assert "aistock-local-data/local_data_plan_repair" in capability["required_mcp_tools"]
+
+    server = svc.repository.find_one("mcp_servers", {"server_key": "aistock-local-data"})
+    assert server is not None
+    assert server["health_json"]["capability_key"] == "local_data_management"
+
+    tools = svc.list_records("mcp_tools", filters={"server_key": "aistock-local-data"}, limit=20)["items"]
+    tool_names = {tool["tool_name"] for tool in tools}
+    assert {"local_data_health_overview", "local_data_list_sync_targets", "local_data_plan_repair", "local_data_apply_repair_confirmed"} <= tool_names
+    apply_tool = svc.repository.find_one("mcp_tools", {"server_key": "aistock-local-data", "tool_name": "local_data_apply_repair_confirmed"})
+    assert apply_tool["requires_approval"] is True
+    assert apply_tool["required_confirmations"] == [ASSISTANT_APPROVAL_CONFIRM]
+
+    bundle = svc.build_prompt_bundle(PromptBundleBuildRequest(user_message=message, phase="planning"))
+    keys = {node["prompt_key"] for node in bundle["node_refs"]}
+    assert "prompt.local_data_management" in keys
+    assert "workflow.local_data_check_repair" in keys
+    assert "tool_guard.mcp_local_data" in keys
+    assert "domain.qe_experiment" not in keys
+
+    arch_memory = svc.repository.find_one("memory_items", {"subject_key": "architecture.local_data_management.mcp_gateway"})
+    proc_memory = svc.repository.find_one("memory_items", {"subject_key": "process.local_data.check_repair_confirm"})
+    assert arch_memory["approval_status"] == "approved"
+    assert proc_memory["approval_status"] == "approved"
+    task = svc.create_task(TaskCreate(title="local data context pack"))
+    pack = svc.build_context_pack(ContextPackBuildRequest(task_id=task["task_id"], include_memory_types=["architecture", "procedural"]))
+    assert arch_memory["memory_id"] in pack["architecture_memory_refs"]
+    assert proc_memory["memory_id"] in pack["procedural_memory_refs"]
+
+    graph_capability = svc.repository.find_one("entities", {"entity_key": "capability.local_data_management"})
+    graph_mcp = svc.repository.find_one("entities", {"entity_key": "mcp.local_data"})
+    assert graph_capability["approval_status"] == "approved"
+    relation = svc.repository.get_record("relations", "rel_local_data_management_exposes_mcp_local_data")
+    assert relation["source_entity_id"] == graph_capability["entity_id"]
+    assert relation["target_entity_id"] == graph_mcp["entity_id"]
+
+    result = svc.chat_turn(ChatTurnRequest(message=message))
+    assert "aistock-local-data" in result["cards"]["capability_summary"]["mcp"]
+    assert "local_data_plan_repair" in result["cards"]["capability_summary"]["mcp_tools"]
+    assert result["cards"]["safety"]["local_data_read_only_before_confirmation"] is True
+    assert result["cards"]["safety"]["no_data_job_before_confirmation"] is True
+    assert result["cards"]["action_proposals"][0]["status"] == "read_only"
+    assert result["cards"]["action_proposals"][-1]["status"] == "waiting_confirmation"
+    assert "aistock-local-data MCP" in result["assistant_message"]["content_text"]
 
 
 def test_chat_turn_uses_llm_builds_cards_and_blocks_execution() -> None:

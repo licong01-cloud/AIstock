@@ -93,6 +93,14 @@ export type AssistantMcpTool = JsonObject & {
   server_key: string;
   tool_name: string;
   title?: string;
+  description?: string | null;
+  capability_key?: string | null;
+  capability?: string | null;
+  mcp_module?: string | null;
+  module?: string | null;
+  category?: string | null;
+  phase?: string | null;
+  tags?: string[];
   risk_level?: string;
   requires_approval?: boolean;
   input_schema_json?: JsonObject;
@@ -100,6 +108,185 @@ export type AssistantMcpTool = JsonObject & {
   required_confirmations?: string[];
   status?: string;
 };
+
+export type LocalDataPhaseKey = "check" | "plan" | "confirm" | "execute" | "review";
+
+export type LocalDataPhase = {
+  key: LocalDataPhaseKey;
+  title: string;
+  shortTitle: string;
+  description: string;
+  primaryTools: string[];
+  riskLevel: "read_only" | "plan_only" | "write_control_plane" | "run_data_job";
+  requiresConfirmation: boolean;
+};
+
+export const LOCAL_DATA_MANAGEMENT_CAPABILITY = {
+  capabilityKey: "local_data_management",
+  displayName: "本地数据管理",
+  gatewayModule: "local_data",
+  promptBranch: "prompt.local_data_management",
+  memorySubject: "architecture.local_data_management.mcp_gateway",
+  summary: "通过统一 MCP Gateway 调用后端 local-data facade，完成数据状态检查、修复计划、用户确认、执行和复查。",
+};
+
+export const LOCAL_DATA_MANAGEMENT_PHASES: LocalDataPhase[] = [
+  {
+    key: "check",
+    title: "本地数据检查",
+    shortTitle: "检查",
+    description: "只读读取 data_stats、最近任务、活跃告警、sync targets 和业务 readiness。",
+    primaryTools: [
+      "local_data_health_overview",
+      "local_data_list_jobs",
+      "local_data_list_alerts",
+      "local_data_list_sync_targets",
+      "local_data_check_gaps",
+    ],
+    riskLevel: "read_only",
+    requiresConfirmation: false,
+  },
+  {
+    key: "plan",
+    title: "生成修复计划",
+    shortTitle: "计划",
+    description: "把缺口、阻断 target、失败任务和影响模块整理为中文修复步骤，不执行写操作。",
+    primaryTools: [
+      "local_data_plan_repair",
+      "local_data_plan_schedule_reset",
+      "local_data_explain_business_impact",
+    ],
+    riskLevel: "plan_only",
+    requiresConfirmation: false,
+  },
+  {
+    key: "confirm",
+    title: "等待用户确认",
+    shortTitle: "确认",
+    description: "展示将调用的工具、写入范围、长任务风险和确认口令；确认前禁止执行。",
+    primaryTools: [
+      "local_data_apply_repair_confirmed",
+      "local_data_run_dataset_sync_confirmed",
+      "local_data_apply_schedule_reset_confirmed",
+    ],
+    riskLevel: "write_control_plane",
+    requiresConfirmation: true,
+  },
+  {
+    key: "execute",
+    title: "执行数据任务",
+    shortTitle: "执行",
+    description: "确认后调度同步、刷新缓存、ack 告警或维护计划任务，并记录 trace。",
+    primaryTools: [
+      "local_data_run_incremental_confirmed",
+      "local_data_refresh_stats_confirmed",
+      "local_data_apply_repair_confirmed",
+      "local_data_run_schedule_confirmed",
+    ],
+    riskLevel: "run_data_job",
+    requiresConfirmation: true,
+  },
+  {
+    key: "review",
+    title: "复查与结论",
+    shortTitle: "复查",
+    description: "重新读取健康总览、任务状态和业务影响，给出完成、仍阻断或需转 Issue 的结论。",
+    primaryTools: [
+      "local_data_get_repair_status",
+      "local_data_health_overview",
+      "local_data_get_job",
+    ],
+    riskLevel: "read_only",
+    requiresConfirmation: false,
+  },
+];
+
+export const LOCAL_DATA_TOOL_LABELS: Record<string, string> = {
+  local_data_health_overview: "数据健康总览",
+  local_data_get_dataset_status: "数据集状态",
+  local_data_list_data_stats: "数据看板列表",
+  local_data_check_gaps: "缺口检查",
+  local_data_compute_auto_range: "自动补齐区间",
+  local_data_list_alerts: "活跃告警列表",
+  local_data_get_unack_alert_count: "未确认告警数量",
+  local_data_list_sync_targets: "同步 target 列表",
+  local_data_get_sync_target: "同步 target 详情",
+  local_data_list_sync_attempts: "同步 attempt 时间线",
+  local_data_list_jobs: "同步任务列表",
+  local_data_get_job: "同步任务详情",
+  local_data_get_job_logs: "关键日志摘要",
+  local_data_cancel_job_confirmed: "取消运行中任务",
+  local_data_clear_queued_jobs_confirmed: "清理排队任务",
+  local_data_delete_job_confirmed: "删除历史任务",
+  local_data_run_dataset_sync_confirmed: "运行数据同步",
+  local_data_run_incremental_confirmed: "运行增量同步",
+  local_data_run_init_confirmed: "运行初始化",
+  local_data_run_schedule_confirmed: "立即运行计划任务",
+  local_data_run_single_preset_confirmed: "运行单个预置任务",
+  local_data_run_all_presets_confirmed: "运行全部预置任务",
+  local_data_refresh_stats_confirmed: "刷新数据看板缓存",
+  local_data_sync_calendar_confirmed: "同步交易日历",
+  local_data_build_sector_data_confirmed: "构建申万行业数据",
+  local_data_export_sector_data_confirmed: "导出行业数据",
+  local_data_sync_tushare_all_confirmed: "批量同步 Tushare",
+  local_data_list_schedules: "计划任务列表",
+  local_data_get_schedule_defaults: "默认计划模板",
+  local_data_upsert_schedule_confirmed: "创建或更新计划任务",
+  local_data_batch_create_schedules_confirmed: "批量创建或更新计划任务",
+  local_data_toggle_schedule_confirmed: "启停计划任务",
+  local_data_delete_schedule_confirmed: "删除计划任务",
+  local_data_plan_schedule_reset: "生成计划任务重置 diff",
+  local_data_apply_schedule_reset_confirmed: "应用计划任务重置",
+  local_data_get_preset_stats: "预置计划覆盖情况",
+  local_data_get_preset_daily_status: "当日预置任务状态",
+  local_data_run_source_test_confirmed: "运行数据源测试",
+  local_data_list_source_test_runs: "数据源测试历史",
+  local_data_list_source_test_schedules: "数据源测试计划",
+  local_data_upsert_source_test_schedule_confirmed: "创建或更新测试计划",
+  local_data_toggle_source_test_schedule_confirmed: "启停测试计划",
+  local_data_run_source_test_schedule_confirmed: "立即运行测试计划",
+  local_data_plan_repair: "生成本地数据修复计划",
+  local_data_apply_repair_confirmed: "执行本地数据修复计划",
+  local_data_get_repair_status: "修复进度复查",
+  local_data_explain_business_impact: "解释业务影响",
+};
+
+export const LOCAL_DATA_RISK_LABELS: Record<string, string> = {
+  read_only: "只读检查",
+  plan_only: "只生成计划",
+  write_control_plane: "写控制面",
+  run_data_job: "启动数据任务",
+  destructive: "破坏性操作",
+  high: "高风险",
+  medium: "中风险",
+  low: "低风险",
+};
+
+export function localDataRiskLabel(risk: unknown): string {
+  const key = String(risk || "").trim();
+  return LOCAL_DATA_RISK_LABELS[key] || LOCAL_DATA_RISK_LABELS[key.toLowerCase()] || key || "未标注风险";
+}
+
+export function localDataToolTitle(tool: Pick<AssistantMcpTool, "tool_name" | "title">): string {
+  return tool.title || LOCAL_DATA_TOOL_LABELS[tool.tool_name] || tool.tool_name;
+}
+
+export function localDataToolPhase(toolName: string): LocalDataPhase | undefined {
+  return LOCAL_DATA_MANAGEMENT_PHASES.find((phase) => phase.primaryTools.includes(toolName));
+}
+
+export function isLocalDataManagementTool(tool: Pick<AssistantMcpTool, "server_key" | "tool_name"> & JsonObject): boolean {
+  const values = [
+    tool.server_key,
+    tool.tool_name,
+    tool.capability_key,
+    tool.capability,
+    tool.mcp_module,
+    tool.module,
+    tool.category,
+  ].map((value) => String(value || "").toLowerCase());
+  return values.some((value) => value === "local_data" || value === "local_data_management" || value === "capability.local_data_management" || value.includes("local_data"));
+}
 
 export type AssistantSkill = JsonObject & {
   skill_id: string;
