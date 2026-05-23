@@ -284,6 +284,7 @@ def test_github_issue_create_live_path_is_mockable(mcp_module, monkeypatch: pyte
     assert captured["token"] == "pytest-token"
     assert captured["title"].startswith("[BUG-001] Mirror me")
     assert "<!-- aistock-bug-id: BUG-001 -->" in captured["body"]
+    assert "<!-- aistock-registry-path: tests/aistock_validation/bugs/" in captured["body"]
     assert "aistock:bug" in captured["labels"]
     assert "workflow:triage" in captured["labels"]
     assert result["github"]["number"] == 77
