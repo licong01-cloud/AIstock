@@ -1,0 +1,89 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-110",
+  "title": "custom_evo zombie recovery uses wrong code path (submit_next_loop instead of submit_custom_evo_loop), causing FULL_TRAIN seed validation failure",
+  "description": "Expected: Zombie recovery (_safe_submit_or_fail) should detect custom_evo task_type and delegate to submit_custom_evo_loop, which reads loop config from strategy_evo_config.loops (including runtime_flags.random_seed), and calls _submit_custom_evo_loop_unified → build_config_from_custom_evo_loop → ensure_loop_fixed_seed. This properly extracts the fixed seed from the loop-specific config.\nActual: _safe_submit_or_fail unconditionally calls submit_next_loop. submit_next_loop is designed for auto-evolution tasks — it loads config from reviewer.validated_config (previous loop) or falls back to _load_base_config_from_experiment(task[\"base_experiment_id\"]). Neither source contains the loop-specific runtime_flags.random_seed. BacktestExecutor.submit() at backtest.py:72-75 performs seed validation: require_fixed_seed=True && fixed_seed is None → raises ValueError(\"FULL_TRAIN requires runtime_flags.random_seed\"). The error is caught at line 1768, L13 marked as failed, but the task stays in \"running\" state, creating a zombie retry loop every 10 minutes.",
+  "module": "quantevolver",
+  "severity": "P2",
+  "risk_area": "unspecified",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "reported_via_mcp",
+    "files": [
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/services/quantevolver/executors/backtest.py",
+      "backend/services/quantevolver/experiment_config_builders.py"
+    ]
+  },
+  "reproduce_command": "1. Create a custom_evo task with 16 loops and parallelism=2 on a single node (wsl2-5080)\n2. Let L1-L12 complete normally (parallel batches of 2)\n3. After L12 completes, L13 will be submitted by zombie recovery which calls submit_next_loop → uses base_experiment config without runtime_flags.random_seed → ValueError: FULL_TRAIN requires runtime_flags.random_seed\n4. System retries every 10 minutes in infinite loop, never recovering\n\nConcrete repro: task qe_20260522_012542_90fb on AIstock backend, loop_statuses show L13 failed with null experiment_id",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:backend/services/quantevolver/qe_evolution_service.py",
+    "file:backend/services/quantevolver/executors/backtest.py",
+    "file:backend/services/quantevolver/experiment_config_builders.py",
+    "https://github.com/licong01-cloud/AIstock/issues/178"
+  ],
+  "fingerprint": "3ddc00fa90d047ba",
+  "assigned_agent": "lc999",
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-23T06:18:49Z",
+  "first_seen_at": "2026-05-23T06:18:49Z",
+  "last_seen_at": "2026-05-23T06:18:49Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-23T06:18:49Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/quantevolver/qe_evolution_service.py",
+    "backend/services/quantevolver/executors/backtest.py",
+    "backend/services/quantevolver/experiment_config_builders.py"
+  ],
+  "suspected_modules": [
+    "backend/services/quantevolver/qe_evolution_service.py",
+    "backend/services/quantevolver/executors/backtest.py",
+    "backend/services/quantevolver/experiment_config_builders.py"
+  ],
+  "required_verification": [],
+  "closure_requirements": [],
+  "events": [
+    {
+      "timestamp": "2026-05-23T06:18:49Z",
+      "actor": "lc999",
+      "action": "discovered",
+      "note": "Reported via aistock_mcp_server.report_bug. Comments: 3"
+    },
+    {
+      "timestamp": "2026-05-23T06:18:49Z",
+      "actor": "lc999",
+      "action": "comment",
+      "note": "Root cause: In submit_next_loop (line 1599), there is no custom_evo task_type detection. The zombie recovery at _safe_submit_or_fail (line 2397) always calls submit_next_loop regardless of task_type."
+    },
+    {
+      "timestamp": "2026-05-23T06:18:49Z",
+      "actor": "lc999",
+      "action": "comment",
+      "note": "Fix direction: In submit_next_loop, after status check (line 1615), add: if task.get('task_type') == 'custom_evo': next = (task['current_loop'] or 0) + 1; return await self.submit_custom_evo_loop(task_id, next). This delegates to the correct code path that reads strategy_evo_config.loops."
+    },
+    {
+      "timestamp": "2026-05-23T06:18:49Z",
+      "actor": "lc999",
+      "action": "comment",
+      "note": "Affected experiments: qe_20260522_012542_90fb L13-L16 all blocked. L13 uses label_horizon=5 (different from baseline 10D), L14 uses label_horizon=20, L15-L16 use legacy 5M cap strategy. These horizon/strategy differences are intentional experiment design, validated in loop config, but irrelevant to this bug — the seed is simply missing from the base_experiment config used by the wrong code path."
+    },
+    {
+      "timestamp": "2026-05-23T09:38:42Z",
+      "actor": "mcp_agent",
+      "action": "github_issue_created",
+      "note": "Mirrored bug registry entry to GitHub issue #178."
+    },
+    {
+      "timestamp": "2026-05-23T12:58:01Z",
+      "actor": "mcp_agent",
+      "action": "github_issue_synced",
+      "note": "Synced bug registry entry to GitHub issue #178."
+    }
+  ],
+  "github_issue_number": 178,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/178"
+}
