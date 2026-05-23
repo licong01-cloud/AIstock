@@ -6,7 +6,7 @@
   "module": "quantevolver",
   "severity": "P2",
   "risk_area": "unspecified",
-  "status": "open",
+  "status": "in_progress",
   "trigger_condition": {
     "scenario": "reported_via_mcp",
     "files": [
@@ -24,13 +24,13 @@
     "https://github.com/licong01-cloud/AIstock/issues/178"
   ],
   "fingerprint": "3ddc00fa90d047ba",
-  "assigned_agent": "lc999",
-  "fix_branch": null,
+  "assigned_agent": "claude_code",
+  "fix_branch": "claude/BUG-110-custom-evo-zombie-code-path",
   "fix_commit": null,
   "verification_run_id": null,
   "created_at": "2026-05-23T06:18:49Z",
   "first_seen_at": "2026-05-23T06:18:49Z",
-  "last_seen_at": "2026-05-23T06:18:49Z",
+  "last_seen_at": "2026-05-23T17:17:48Z",
   "fixed_at": null,
   "submitted_at": "2026-05-23T06:18:49Z",
   "closed_at": null,
@@ -82,6 +82,12 @@
       "actor": "mcp_agent",
       "action": "github_issue_synced",
       "note": "Synced bug registry entry to GitHub issue #178."
+    },
+    {
+      "timestamp": "2026-05-23T17:17:48Z",
+      "actor": "mcp_agent",
+      "action": "assigned",
+      "note": "worktree: F:/Dev/AIstock_worktrees/bug-110-custom-evo-zombie-code-path. Fix: add custom_evo delegation in submit_next_loop to call submit_custom_evo_loop instead of using auto-evolution code path."
     }
   ],
   "github_issue_number": 178,
