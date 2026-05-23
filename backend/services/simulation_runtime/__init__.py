@@ -40,6 +40,7 @@ from .scheduler import (
     SimulationSchedulerBindingResult,
     SimulationSchedulerRunOnceResult,
     StaticSimulationRunContextProvider,
+    build_simulation_lifecycle_scheduler_from_env,
     simulation_lifecycle_background_scheduler,
     simulation_lifecycle_scheduler,
 )
@@ -94,6 +95,7 @@ __all__ = [
     "TradingRuleDecision",
     "TradingRuleService",
     "assert_selection_only_payload_boundary",
+    "build_simulation_lifecycle_scheduler_from_env",
     "simulation_lifecycle_background_scheduler",
     "simulation_lifecycle_scheduler",
 ]

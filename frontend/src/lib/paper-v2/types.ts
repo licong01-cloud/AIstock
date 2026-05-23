@@ -355,8 +355,13 @@ export type SimulationRuntimeSchedulerStatus = JsonObject & {
   scheduler?: string;
   autostart?: boolean;
   default_submit?: boolean;
+  read_only_status_api?: boolean;
   read_only_ops_api?: boolean;
+  controlled_ops_api?: boolean;
+  scheduler_control_api_enabled?: boolean;
   manual_tick_endpoint_enabled?: boolean;
+  context_provider_mode?: string;
+  context_provider?: JsonObject;
   approval_states?: string[];
   schedule_windows?: Array<JsonObject & {
     window_id?: string;

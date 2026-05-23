@@ -157,14 +157,14 @@ export default function SimulationRuntimeOpsPage() {
   return (
     <main>
       <ErrorPanel error={error} title="模拟盘运行态加载失败" />
-      <NoticePanel title="只读运维入口" tone="info">
-        本页只展示 StrategyRuntimeRelease、SimulationReleaseBinding、DailySelectionEvidence、ExecutionPlan 和 SimulationDailyRun 的真实后端状态；不会启动 scheduler tick，也不会向 LocalSim 或 MiniQMT 提交订单。
+      <NoticePanel title="受控运维入口" tone="info">
+        本页展示 StrategyRuntimeRelease、SimulationReleaseBinding、DailySelectionEvidence、ExecutionPlan 和 SimulationDailyRun 的真实后端状态；手动 tick / start / stop 属于受控 API，默认 submit=false，不会默认向 LocalSim 或 MiniQMT 提交订单。
       </NoticePanel>
 
       <div className="pv2-grid pv2-grid-4">
         <div data-testid="sim-runtime-total-runs"><MetricCard label="运行记录" value={numberValue(summary.run_count)} hint={`active ${numberValue(summary.active_run_count)} / terminal ${numberValue(summary.terminal_run_count)}`} tone="info" /></div>
         <div data-testid="sim-runtime-local-count"><MetricCard label="LocalSim" value={mapCount(byBackend, "local_sim")} hint="按统一 execution plan 运行" tone="success" /></div>
-        <div data-testid="sim-runtime-miniqmt-count"><MetricCard label="MiniQMT SIM" value={mapCount(byBackend, "minqmt_sim")} hint="托管订单路径只读观测" tone="warning" /></div>
+        <div data-testid="sim-runtime-miniqmt-count"><MetricCard label="MiniQMT SIM" value={mapCount(byBackend, "minqmt_sim")} hint="托管订单默认 preview / dry-run" tone="warning" /></div>
         <div data-testid="sim-runtime-submit-default"><MetricCard label="Scheduler 默认提交" value={scheduler?.default_submit ? "ON" : "OFF"} hint={scheduler?.autostart ? "autostart enabled" : "autostart disabled"} tone={scheduler?.default_submit || scheduler?.autostart ? "danger" : "success"} /></div>
       </div>
 
@@ -197,13 +197,15 @@ export default function SimulationRuntimeOpsPage() {
       </SectionCard>
 
       <div className="pv2-grid pv2-grid-2">
-        <SectionCard title="Scheduler 安全状态" eyebrow="read-only status">
+        <SectionCard title="Scheduler 安全状态" eyebrow="controlled operations">
           <div className="pv2-readable-panel" data-testid="sim-runtime-scheduler-status">
             <div className="pv2-readable-table">
               <div className="pv2-readable-row"><div className="pv2-readable-key">调度器</div><div className="pv2-readable-value">{scheduler?.scheduler || "-"}</div></div>
               <div className="pv2-readable-row"><div className="pv2-readable-key">自动启动</div><div className="pv2-readable-value"><StatusBadge status={scheduler?.autostart ? "ENABLED" : "DISABLED"} /></div></div>
               <div className="pv2-readable-row"><div className="pv2-readable-key">默认提交订单</div><div className="pv2-readable-value"><StatusBadge status={scheduler?.default_submit ? "ENABLED" : "DISABLED"} /></div></div>
               <div className="pv2-readable-row"><div className="pv2-readable-key">手动 tick API</div><div className="pv2-readable-value"><StatusBadge status={scheduler?.manual_tick_endpoint_enabled ? "ENABLED" : "DISABLED"} /></div></div>
+              <div className="pv2-readable-row"><div className="pv2-readable-key">受控 start/stop API</div><div className="pv2-readable-value"><StatusBadge status={scheduler?.scheduler_control_api_enabled ? "ENABLED" : "DISABLED"} /></div></div>
+              <div className="pv2-readable-row"><div className="pv2-readable-key">Context Provider</div><div className="pv2-readable-value" data-testid="sim-runtime-provider-mode">{textValue(scheduler?.context_provider_mode || objectValue(scheduler?.context_provider)?.provider_mode) || "-"}</div></div>
               <div className="pv2-readable-row"><div className="pv2-readable-key">Recovery mode</div><div className="pv2-readable-value" data-testid="sim-runtime-restart-recovery-mode">{scheduler?.restart_recovery_mode || "-"}</div></div>
               <div className="pv2-readable-row"><div className="pv2-readable-key">准入状态</div><div className="pv2-readable-value">{(scheduler?.approval_states || []).join(", ") || "-"}</div></div>
             </div>

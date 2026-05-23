@@ -55,12 +55,20 @@ class SimulationRuntimeOpsService:
             "schedule_windows": list(status.get("schedule_windows") or []),
             "restart_recovery_mode": status.get("restart_recovery_mode") or "persisted_state_only",
             "window_orchestration": status.get("window_orchestration") or {},
-            "read_only_ops_api": True,
+            "read_only_status_api": True,
+            "read_only_ops_api": False,
+            "controlled_ops_api": True,
+            "scheduler_control_api_enabled": bool(status.get("scheduler_control_api_enabled", False)),
             "manual_tick_endpoint_enabled": bool(status.get("manual_tick_endpoint_enabled", False)),
+            "context_provider": status.get("context_provider") or {},
+            "context_provider_mode": status.get("context_provider_mode"),
             "summary": {
                 "label": "simulation lifecycle scheduler",
-                "next_action": "monitor persisted scheduler windows and runs",
-                "safety_note": "This read-only API does not submit broker orders; execution uses the controlled scheduler path.",
+                "next_action": "monitor scheduler windows, or use the controlled start/stop/tick APIs",
+                "safety_note": (
+                    "Status is read-only. start/stop/tick are controlled operations; "
+                    "default_submit remains false unless explicitly enabled."
+                ),
             },
         }
 

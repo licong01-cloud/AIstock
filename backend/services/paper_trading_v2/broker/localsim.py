@@ -28,7 +28,7 @@ from __future__ import annotations
 import threading
 from datetime import UTC, date as date_cls, datetime
 from decimal import Decimal
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping
 from uuid import uuid4
 
 from backend.services.paper_trading_v2.market_data import (
@@ -124,6 +124,8 @@ class LocalSimBackend(BrokerBackend):
         oms: OMS | None = None,
         execution_engine: MinuteExecutionEngine | None = None,
         fee_model: FeeModel | None = None,
+        initial_available_cash: float | None = None,
+        initial_positions: Mapping[str, PositionLot] | None = None,
     ) -> None:
         if not portfolio_id:
             raise ValueError("portfolio_id is required")
@@ -146,6 +148,16 @@ class LocalSimBackend(BrokerBackend):
             initial_cash=initial_cash,
             fee_model=fee_model,
         )
+        if initial_available_cash is not None:
+            if initial_available_cash < 0:
+                raise ValueError("initial_available_cash must be non-negative")
+            self._ledger.cash = float(initial_available_cash)
+        for symbol, lot in dict(initial_positions or {}).items():
+            if lot.portfolio_id != portfolio_id:
+                raise ValueError(
+                    "initial_positions lot portfolio_id must match LocalSim portfolio_id"
+                )
+            self._ledger.positions[str(symbol)] = lot
         self._records: dict[str, _OrderRecord] = {}  # keyed by handle_id
         self._intent_index: dict[str, str] = {}  # intent_id -> handle_id
         self._subscribers: dict[str, Callable[[FillEvent], None]] = {}

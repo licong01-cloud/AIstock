@@ -11,13 +11,27 @@ from __future__ import annotations
 import logging
 import os
 import threading
-from dataclasses import dataclass, field
-from datetime import date, datetime, time
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
+from datetime import UTC, date, datetime, time
+from decimal import Decimal
 from typing import Any, Protocol
 
+import psycopg2.extras
+
+from backend.db.pg_pool import get_conn
+from backend.services.paper_trading_v2.market_data import MinuteDataSource
 from backend.services.paper_trading_v2.broker.base import BrokerBackend
 from backend.services.qmt_strategy_ledger.reconciliation import QmtStrategyLedgerReconciliationService
-from backend.services.qmt_strategy_ledger.order_service import QmtManagedOrderService
+from backend.services.qmt_strategy_ledger.order_service import SELL_ORDER_TYPE, OrderPreflightError, QmtManagedOrderService
+from backend.services.qmt_strategy_ledger.models import (
+    IntentPreflightStatus,
+    IntentSubmitStatus,
+    OrderBatchRecord,
+    OrderBatchStatus,
+    OrderIntentRecord,
+    new_id as new_qmt_id,
+)
 from backend.services.qmt_strategy_ledger.sync_service import QmtStrategyLedgerSyncService
 from backend.services.selection_center.models import SelectionMode, SignalSnapshot
 from backend.services.strategy_package.models import StrategyPackageManifest
@@ -33,6 +47,7 @@ from .models import (
     SimulationDailyRunStatus,
     SimulationReleaseBinding,
     StrategyRuntimeRelease,
+    canonical_json_sha256,
 )
 from .repository import InMemorySimulationRuntimeRepository, SimulationRuntimeRepository
 from .selection import StrategyPackageSelectionResult, StrategyPackageSelectionService
@@ -95,6 +110,8 @@ class SimulationRunContextProvider(Protocol):
 class FailFastSimulationRunContextProvider:
     """Default provider that prevents silent empty-position or empty-price success."""
 
+    provider_mode = "fail_fast"
+
     def load_context(
         self,
         *,
@@ -111,6 +128,18 @@ class FailFastSimulationRunContextProvider:
                 "trade_date": trade_date.isoformat(),
             },
         )
+
+    def status(self) -> dict[str, Any]:
+        return {
+            "provider_mode": self.provider_mode,
+            "provider_name": type(self).__name__,
+            "ready": False,
+            "diagnostic": (
+                "Set SIMULATION_RUNTIME_CONTEXT_PROVIDER=production or "
+                "ENABLE_SIMULATION_RUNTIME_PRODUCTION_PROVIDER=1 to enable the "
+                "production SimulationRunContextProvider."
+            ),
+        }
 
 
 class StaticSimulationRunContextProvider:
@@ -151,28 +180,70 @@ class ProductionSimulationRunContextProvider:
     """Production provider that loads positions, prices, and broker services from
     persisted state and live market data.
 
-    Accepts callable factories so operators can inject the real LocalSim/MiniQMT
-    backends without the provider itself importing broker-specific modules.
+    The provider uses persisted Paper v2 portfolios for LocalSim state and the
+    qmt_strategy virtual ledger for MiniQMT strategy state. Optional factories
+    keep tests deterministic, but the default path is no longer an empty-state
+    placeholder: missing repositories, accounts, positions, or prices fail fast
+    with actionable diagnostics.
     """
+
+    provider_mode = "production"
 
     def __init__(
         self,
         *,
         position_loader: Callable[[str, date], dict[str, PositionLot]] | None = None,
         price_loader: Callable[[list[str], date], dict[str, float]] | None = None,
+        paper_repository_factory: Callable[[], Any] | None = None,
+        qmt_repository_factory: Callable[[], Any] | None = None,
+        qmt_client_factory: Callable[[], Any] | None = None,
+        qmt_calendar_provider_factory: Callable[[], Any] | None = None,
         local_broker_factory: Callable[[str], BrokerBackend] | None = None,
         managed_order_service_factory: Callable[[], QmtManagedOrderService] | None = None,
         qmt_sync_service_factory: Callable[[], QmtStrategyLedgerSyncService] | None = None,
         qmt_reconciliation_service_factory: Callable[[], QmtStrategyLedgerReconciliationService] | None = None,
         qmt_ledger_repository: Any | None = None,
+        enable_localsim_broker: bool | None = None,
+        enable_miniqmt_submit: bool | None = None,
     ) -> None:
-        self._position_loader = position_loader or _default_position_loader
+        self._position_loader = position_loader
         self._price_loader = price_loader or _default_price_loader
+        self._paper_repository_factory = paper_repository_factory or _default_paper_repository_factory
+        self._qmt_repository_factory = qmt_repository_factory or _default_qmt_repository_factory
+        self._qmt_client_factory = qmt_client_factory or _default_qmt_client_factory
+        self._qmt_calendar_provider_factory = qmt_calendar_provider_factory or _default_qmt_calendar_provider
         self._local_broker_factory = local_broker_factory
         self._managed_order_service_factory = managed_order_service_factory
         self._qmt_sync_service_factory = qmt_sync_service_factory
         self._qmt_reconciliation_service_factory = qmt_reconciliation_service_factory
         self._qmt_ledger_repository = qmt_ledger_repository
+        self._enable_localsim_broker = (
+            _env_flag("SIMULATION_RUNTIME_ENABLE_LOCALSIM_BROKER", default=True)
+            if enable_localsim_broker is None
+            else bool(enable_localsim_broker)
+        )
+        self._enable_miniqmt_submit = (
+            (
+                _env_flag("AISTOCK_ALLOW_MINIQMT_MANAGED_ORDERS", default=False)
+                or _env_flag("AISTOCK_ALLOW_MINIQMT_SUBMIT_TEST", default=False)
+            )
+            if enable_miniqmt_submit is None
+            else bool(enable_miniqmt_submit)
+        )
+
+    def status(self) -> dict[str, Any]:
+        return {
+            "provider_mode": self.provider_mode,
+            "provider_name": type(self).__name__,
+            "ready": True,
+            "localsim_state_source": "paper_v2_portfolio",
+            "miniqmt_state_source": "qmt_strategy_virtual_ledger",
+            "market_price_source": "market.kline_daily_raw_latest_close",
+            "localsim_broker_enabled": self._enable_localsim_broker or self._local_broker_factory is not None,
+            "miniqmt_preview_enabled": True,
+            "miniqmt_submit_enabled": self._enable_miniqmt_submit,
+            "miniqmt_submit_default": False,
+        }
 
     def load_context(
         self,
@@ -181,66 +252,823 @@ class ProductionSimulationRunContextProvider:
         binding: SimulationReleaseBinding,
         trade_date: date,
     ) -> SimulationRunContext:
-        strategy_id = binding.strategy_id
-        try:
-            positions = self._position_loader(strategy_id, trade_date)
-        except Exception:
-            positions = {}
-            logger.warning(
-                "ProductionSimulationRunContextProvider: position load failed for strategy_id=%s trade_date=%s",
-                strategy_id,
-                trade_date.isoformat(),
-                exc_info=True,
-            )
-        symbols = list(positions.keys())
-        try:
-            prices = self._price_loader(symbols, trade_date)
-        except Exception:
-            prices = {}
-            logger.warning(
-                "ProductionSimulationRunContextProvider: price load failed for strategy_id=%s",
-                strategy_id,
-                exc_info=True,
-            )
-
         if binding.broker_backend == SimulationBrokerBackend.LOCAL_SIM:
-            local_broker = self._local_broker_factory(strategy_id) if self._local_broker_factory else None
-            return SimulationRunContext(
-                current_positions=positions,
-                current_prices=prices,
-                portfolio_id=binding.strategy_id,
-                local_broker=local_broker,
+            return self._load_local_sim_context(
+                runtime_release=runtime_release,
+                binding=binding,
+                trade_date=trade_date,
             )
 
         if binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM:
-            managed_order_service = self._managed_order_service_factory() if self._managed_order_service_factory else None
-            qmt_sync_service = self._qmt_sync_service_factory() if self._qmt_sync_service_factory else None
-            qmt_reconciliation_service = self._qmt_reconciliation_service_factory() if self._qmt_reconciliation_service_factory else None
-            return SimulationRunContext(
-                current_positions=positions,
-                current_prices=prices,
-                portfolio_id=binding.strategy_id,
-                managed_order_service=managed_order_service,
-                qmt_sync_service=qmt_sync_service,
-                qmt_reconciliation_service=qmt_reconciliation_service,
-                qmt_ledger_repository=self._qmt_ledger_repository,
+            return self._load_miniqmt_context(
+                runtime_release=runtime_release,
+                binding=binding,
+                trade_date=trade_date,
             )
 
         raise DataUnavailableError(
             "ProductionSimulationRunContextProvider: unsupported broker backend",
             context={
                 "broker_backend": binding.broker_backend.value,
-                "strategy_id": strategy_id,
+                "strategy_id": binding.strategy_id,
             },
         )
 
+    def _load_local_sim_context(
+        self,
+        *,
+        runtime_release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding,
+        trade_date: date,
+    ) -> SimulationRunContext:
+        portfolio_id = self._resolve_local_sim_portfolio_id(binding)
+        paper_repository = self._build_dependency(
+            self._paper_repository_factory,
+            "PaperTradingV2Repository",
+            binding=binding,
+            trade_date=trade_date,
+        )
+        try:
+            portfolio = paper_repository.get_portfolio(portfolio_id)
+            positions = (
+                self._load_positions_with_injected_loader(binding.strategy_id, trade_date)
+                if self._position_loader is not None
+                else paper_repository.load_latest_positions(portfolio_id, trade_date)
+            )
+            cash = float(paper_repository.load_latest_cash(portfolio, trade_date))
+        except DataUnavailableError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise DataUnavailableError(
+                "failed to load LocalSim production context from Paper v2 persisted state",
+                context={
+                    "strategy_id": binding.strategy_id,
+                    "binding_id": binding.binding_id,
+                    "portfolio_id": portfolio_id,
+                    "trade_date": trade_date.isoformat(),
+                },
+            ) from exc
+        prices = self._load_prices_for_positions(
+            positions,
+            trade_date,
+            strategy_id=binding.strategy_id,
+            binding_id=binding.binding_id,
+        )
+        manifest = getattr(portfolio, "frozen_manifest", None)
+        self._validate_manifest_identity(
+            manifest=manifest,
+            runtime_release=runtime_release,
+            binding=binding,
+        )
+        local_broker = self._build_local_sim_broker(
+            portfolio_id=portfolio_id,
+            portfolio=portfolio,
+            binding=binding,
+            manifest=manifest,
+            cash=cash,
+            positions=positions,
+        )
+        return SimulationRunContext(
+            current_positions=positions,
+            current_prices=prices,
+            portfolio_id=portfolio_id,
+            manifest=manifest,
+            local_broker=local_broker,
+            cash=cash,
+        )
 
-def _default_position_loader(strategy_id: str, trade_date: date) -> dict[str, PositionLot]:
-    return {}
+    def _load_miniqmt_context(
+        self,
+        *,
+        runtime_release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding,
+        trade_date: date,
+    ) -> SimulationRunContext:
+        qmt_repository = self._qmt_ledger_repository or self._build_dependency(
+            self._qmt_repository_factory,
+            "QmtStrategyLedgerRepository",
+            binding=binding,
+            trade_date=trade_date,
+        )
+        try:
+            account = qmt_repository.get_virtual_account(binding.strategy_id)
+            positions = (
+                self._load_positions_with_injected_loader(binding.strategy_id, trade_date)
+                if self._position_loader is not None
+                else self._positions_from_qmt_lots(
+                    repository=qmt_repository,
+                    strategy_id=binding.strategy_id,
+                )
+            )
+        except DataUnavailableError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise DataUnavailableError(
+                "failed to load MiniQMT production context from qmt_strategy virtual ledger",
+                context={
+                    "strategy_id": binding.strategy_id,
+                    "binding_id": binding.binding_id,
+                    "broker_account_id": binding.broker_account_id,
+                    "trade_date": trade_date.isoformat(),
+                },
+            ) from exc
+        prices = self._load_prices_for_positions(
+            positions,
+            trade_date,
+            strategy_id=binding.strategy_id,
+            binding_id=binding.binding_id,
+        )
+        managed_order_service = (
+            self._managed_order_service_factory()
+            if self._managed_order_service_factory is not None
+            else self._build_managed_order_service(qmt_repository)
+        )
+        if not self._enable_miniqmt_submit and self._managed_order_service_factory is None:
+            managed_order_service = PreviewOnlyMiniQMTManagedOrderService(managed_order_service)
+        qmt_sync_service = (
+            self._qmt_sync_service_factory()
+            if self._qmt_sync_service_factory is not None
+            else QmtStrategyLedgerSyncService(
+                repository=qmt_repository,
+                qmt_client=self._qmt_client_factory(),
+                account_id=binding.broker_account_id or account.account_id,
+                trade_date=trade_date,
+                calendar_provider=self._qmt_calendar_provider_factory(),
+            )
+        )
+        qmt_reconciliation_service = (
+            self._qmt_reconciliation_service_factory()
+            if self._qmt_reconciliation_service_factory is not None
+            else QmtStrategyLedgerReconciliationService(repository=qmt_repository)
+        )
+        return SimulationRunContext(
+            current_positions=positions,
+            current_prices=prices,
+            portfolio_id=binding.strategy_id,
+            managed_order_service=managed_order_service,
+            qmt_sync_service=qmt_sync_service,
+            qmt_reconciliation_service=qmt_reconciliation_service,
+            qmt_ledger_repository=qmt_repository,
+            cash=float(account.cash),
+            frozen_cash=float(account.frozen_cash),
+            realized_pnl=float(account.realized_pnl),
+            price_by_symbol=prices,
+        )
+
+    def _build_managed_order_service(self, qmt_repository: Any) -> QmtManagedOrderService:
+        broker = self._qmt_client_factory()
+        return QmtManagedOrderService(
+            repository=qmt_repository,
+            broker=broker,
+            calendar_provider=self._qmt_calendar_provider_factory(),
+        )
+
+    def _build_local_sim_broker(
+        self,
+        *,
+        portfolio_id: str,
+        portfolio: Any,
+        binding: SimulationReleaseBinding,
+        manifest: StrategyPackageManifest | None,
+        cash: float,
+        positions: dict[str, PositionLot],
+    ) -> BrokerBackend | None:
+        if self._local_broker_factory is not None:
+            return self._local_broker_factory(binding.strategy_id)
+        if not self._enable_localsim_broker:
+            return None
+        if manifest is None:
+            raise DataUnavailableError(
+                "LocalSim production context requires a frozen StrategyPackage manifest",
+                context={"portfolio_id": portfolio_id, "binding_id": binding.binding_id},
+            )
+        try:
+            from backend.services.paper_trading_v2.broker.localsim import LocalSimBackend
+
+            data_source = getattr(portfolio, "data_source", MinuteDataSource.DB_HISTORICAL)
+            if not isinstance(data_source, MinuteDataSource):
+                data_source = MinuteDataSource(str(data_source))
+            return LocalSimBackend(
+                portfolio_id=portfolio_id,
+                initial_cash=float(getattr(portfolio, "initial_cash", binding.capital_allocation)),
+                initial_available_cash=cash,
+                initial_positions=positions,
+                data_source=data_source,
+                manifest=manifest,
+                package_id=binding.package_id,
+            )
+        except DataUnavailableError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise DataUnavailableError(
+                "failed to construct LocalSim production broker from persisted context",
+                context={
+                    "portfolio_id": portfolio_id,
+                    "strategy_id": binding.strategy_id,
+                    "binding_id": binding.binding_id,
+                },
+            ) from exc
+
+    def _load_positions_with_injected_loader(self, strategy_id: str, trade_date: date) -> dict[str, PositionLot]:
+        if self._position_loader is None:
+            raise DataUnavailableError(
+                "production context provider has no injected position_loader",
+                context={"strategy_id": strategy_id, "trade_date": trade_date.isoformat()},
+            )
+        try:
+            return dict(self._position_loader(strategy_id, trade_date))
+        except DataUnavailableError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise DataUnavailableError(
+                "injected production position_loader failed",
+                context={"strategy_id": strategy_id, "trade_date": trade_date.isoformat()},
+            ) from exc
+
+    def _load_prices_for_positions(
+        self,
+        positions: dict[str, PositionLot],
+        trade_date: date,
+        *,
+        strategy_id: str,
+        binding_id: str,
+    ) -> dict[str, float]:
+        symbols = sorted(positions)
+        try:
+            prices = dict(self._price_loader(symbols, trade_date))
+        except DataUnavailableError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise DataUnavailableError(
+                "production price_loader failed",
+                context={
+                    "strategy_id": strategy_id,
+                    "binding_id": binding_id,
+                    "symbols": symbols,
+                    "trade_date": trade_date.isoformat(),
+                },
+            ) from exc
+        missing = sorted(symbol for symbol in symbols if symbol not in prices)
+        if missing:
+            raise DataUnavailableError(
+                "production price_loader did not return marks for all held positions",
+                context={
+                    "strategy_id": strategy_id,
+                    "binding_id": binding_id,
+                    "missing_symbols": missing,
+                    "trade_date": trade_date.isoformat(),
+                },
+            )
+        return prices
+
+    @staticmethod
+    def _positions_from_qmt_lots(*, repository: Any, strategy_id: str) -> dict[str, PositionLot]:
+        lots = repository.list_position_lots(strategy_id)
+        positions: dict[str, PositionLot] = {}
+        for lot in lots:
+            remaining = int(getattr(lot, "remaining_quantity", getattr(lot, "quantity", 0)))
+            if remaining <= 0:
+                continue
+            symbol = str(lot.symbol)
+            existing = positions.get(symbol)
+            quantity = remaining + (existing.quantity if existing else 0)
+            available_quantity = int(getattr(lot, "available_quantity", 0)) + (
+                existing.available_quantity if existing else 0
+            )
+            cost_amount = Decimal(str(getattr(lot, "avg_cost"))) * Decimal(str(remaining))
+            if existing is not None:
+                cost_amount += Decimal(str(existing.avg_cost)) * Decimal(str(existing.quantity))
+            avg_cost = float(cost_amount / Decimal(str(quantity))) if quantity else 0.0
+            positions[symbol] = PositionLot(
+                portfolio_id=strategy_id,
+                symbol=symbol,
+                quantity=quantity,
+                available_quantity=available_quantity,
+                avg_cost=avg_cost,
+                trade_date=getattr(lot, "open_date"),
+            )
+        return positions
+
+    @staticmethod
+    def _resolve_local_sim_portfolio_id(binding: SimulationReleaseBinding) -> str:
+        metadata = binding.binding_config_json.get("metadata") if isinstance(binding.binding_config_json, dict) else {}
+        if isinstance(metadata, dict):
+            for key in ("paper_v2_portfolio_id", "local_sim_portfolio_id", "portfolio_id"):
+                value = str(metadata.get(key) or "").strip()
+                if value:
+                    return value
+        if binding.broker_account_id:
+            return binding.broker_account_id
+        return binding.strategy_id
+
+    @staticmethod
+    def _validate_manifest_identity(
+        *,
+        manifest: StrategyPackageManifest | None,
+        runtime_release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding,
+    ) -> None:
+        if manifest is None:
+            return
+        if manifest.package_id != binding.package_id or manifest.package_id != runtime_release.package_id:
+            raise DataUnavailableError(
+                "LocalSim manifest package_id does not match runtime release binding",
+                context={
+                    "manifest_package_id": manifest.package_id,
+                    "release_package_id": runtime_release.package_id,
+                    "binding_package_id": binding.package_id,
+                },
+            )
+        if manifest.manifest_sha256 != binding.manifest_sha256 or manifest.manifest_sha256 != runtime_release.manifest_sha256:
+            raise DataUnavailableError(
+                "LocalSim manifest hash does not match runtime release binding",
+                context={
+                    "manifest_sha256": manifest.manifest_sha256,
+                    "release_manifest_sha256": runtime_release.manifest_sha256,
+                    "binding_manifest_sha256": binding.manifest_sha256,
+                },
+            )
+
+    @staticmethod
+    def _build_dependency(
+        factory: Callable[[], Any],
+        dependency_name: str,
+        *,
+        binding: SimulationReleaseBinding,
+        trade_date: date,
+    ) -> Any:
+        try:
+            return factory()
+        except Exception as exc:  # noqa: BLE001
+            raise DataUnavailableError(
+                f"failed to construct {dependency_name} for production simulation context",
+                context={
+                    "strategy_id": binding.strategy_id,
+                    "binding_id": binding.binding_id,
+                    "broker_backend": binding.broker_backend.value,
+                    "trade_date": trade_date.isoformat(),
+                },
+            ) from exc
+
+
+class PreviewOnlyMiniQMTManagedOrderService:
+    """Managed-order facade that persists preview evidence without calling MiniQMT."""
+
+    def __init__(self, wrapped: QmtManagedOrderService) -> None:
+        self._wrapped = wrapped
+        self._repository = getattr(wrapped, "_repository", None)
+        # Preview mode may read broker positions for SELL availability and
+        # reconciliation, but it must never call place_order/cancel_order.
+        self._broker = getattr(wrapped, "_broker", None)
+
+    def preview_order(self, request: Any) -> Any:
+        return self._wrapped.preview_order(request)
+
+    def _broker_can_sell(self, symbol: str) -> int:
+        helper = getattr(self._wrapped, "_broker_can_sell", None)
+        if callable(helper):
+            return int(helper(symbol))
+        return 0
+
+    def submit_batch(self, requests: list[Any]) -> Any:
+        requests_list = list(requests)
+        if not requests_list:
+            raise DataUnavailableError("MiniQMT preview-only submit requires at least one request")
+        batch_id = _preview_batch_id(requests_list)
+        existing_result = self._existing_preview_result(batch_id, request_count=len(requests_list))
+        if existing_result is not None:
+            return existing_result
+        preflights = self._preview_batch_preflight(requests_list)
+        results = tuple(
+            self._preview_submit_result(request, preflight)
+            for request, preflight in zip(requests_list, preflights, strict=True)
+        )
+        succeeded = sum(1 for result in results if result.success)
+        failed = len(results) - succeeded
+        preview_result = MiniQMTPreviewBatchSubmitResult(
+            success=failed == 0,
+            total=len(results),
+            succeeded=succeeded,
+            failed=failed,
+            results=results,
+            compensation_required=False,
+            compensation_hint=None,
+            batch_id=batch_id,
+            batch_status="PREVIEW_SUCCEEDED" if failed == 0 else "PREVIEW_FAILED",
+            preflight_passed=failed == 0,
+            retry_of_batch_id=None,
+            compensation_actions=(),
+        )
+        return self._persist_preview_result(batch_id=batch_id, requests=requests_list, result=preview_result)
+
+    def _preview_batch_preflight(self, requests: list[Any]) -> tuple[Any, ...]:
+        helper = getattr(self._wrapped, "_batch_preflight", None)
+        if callable(helper):
+            return tuple(helper(requests))
+        return tuple(self._wrapped.preview_order(request) for request in requests)
+
+    def _preview_submit_result(self, request: Any, preflight: Any) -> Any:
+        broker_can_sell = None
+        if getattr(request, "order_type", None) == SELL_ORDER_TYPE:
+            broker_can_sell = self._broker_can_sell(str(getattr(request, "symbol", "")))
+            if broker_can_sell < int(getattr(request, "quantity", 0) or 0):
+                errors = tuple(getattr(preflight, "errors", ()) or ()) + (
+                    OrderPreflightError(
+                        "INSUFFICIENT_BROKER_CAN_SELL",
+                        "MiniQMT account-level can_sell is insufficient",
+                        {
+                            "broker_can_sell": broker_can_sell,
+                            "requested_quantity": int(getattr(request, "quantity", 0) or 0),
+                        },
+                    ),
+                )
+                preflight = replace(preflight, allowed=False, errors=errors, broker_can_sell=broker_can_sell)
+            else:
+                preflight = replace(preflight, broker_can_sell=broker_can_sell)
+        success = bool(getattr(preflight, "allowed", False))
+        message = "preview-only dry-run accepted" if success else "preview-only preflight failed"
+        return MiniQMTPreviewOrderSubmitResult(
+            success=success,
+            intent_id=None,
+            qmt_order_id=None,
+            broker_message=message,
+            preflight=preflight,
+            broker_called=False,
+        )
+
+    def _existing_preview_result(self, batch_id: str, *, request_count: int) -> Any | None:
+        get_batch = getattr(self._repository, "get_order_batch", None)
+        if get_batch is None:
+            return None
+        batch = get_batch(batch_id)
+        if batch is None or not (batch.metadata or {}).get("preview_only"):
+            return None
+        result_json = batch.result_json if isinstance(batch.result_json, dict) else {}
+        stored_results = tuple(
+            _preview_result_from_payload(item)
+            for item in result_json.get("results", ())
+            if isinstance(item, dict)
+        )
+        if not stored_results:
+            return None
+        succeeded = sum(1 for item in stored_results if item.success)
+        failed = sum(1 for item in stored_results if not item.success) + max(request_count - len(stored_results), 0)
+        return MiniQMTPreviewBatchSubmitResult(
+            success=failed == 0,
+            total=request_count,
+            succeeded=succeeded,
+            failed=failed,
+            results=stored_results,
+            compensation_required=False,
+            compensation_hint=None,
+            batch_id=batch_id,
+            batch_status=str(result_json.get("batch_status") or batch.metadata.get("preview_batch_status") or ""),
+            preflight_passed=bool(result_json.get("preflight_passed", failed == 0)),
+            retry_of_batch_id=batch_id,
+            compensation_actions=(),
+        )
+
+    def _persist_preview_result(
+        self,
+        *,
+        batch_id: str,
+        requests: list[Any],
+        result: "MiniQMTPreviewBatchSubmitResult",
+    ) -> "MiniQMTPreviewBatchSubmitResult":
+        if self._repository is None or getattr(self._repository, "upsert_order_batch", None) is None:
+            return result
+
+        persisted_results: list[MiniQMTPreviewOrderSubmitResult] = []
+        self._upsert_preview_batch(batch_id=batch_id, requests=requests, result=result)
+        if result.success:
+            for request, item in zip(requests, result.results, strict=True):
+                intent_id = self._create_preview_intent(
+                    batch_id=batch_id,
+                    request=request,
+                    result=item,
+                )
+                persisted_results.append(replace(item, intent_id=intent_id))
+        else:
+            persisted_results.extend(result.results)
+
+        persisted = replace(result, results=tuple(persisted_results))
+        self._upsert_preview_batch(batch_id=batch_id, requests=requests, result=persisted)
+        return persisted
+
+    def _create_preview_intent(
+        self,
+        *,
+        batch_id: str,
+        request: Any,
+        result: "MiniQMTPreviewOrderSubmitResult",
+    ) -> str | None:
+        create_intent = getattr(self._repository, "create_order_intent", None)
+        if create_intent is None or not result.success:
+            return None
+        strategy_id = getattr(result.preflight, "strategy_id", None)
+        if not strategy_id:
+            return None
+        metadata = dict(getattr(request, "metadata", {}) or {})
+        metadata.update(
+            {
+                "source": "simulation_runtime_preview_only",
+                "preview_only": True,
+                "broker_called": False,
+                "preview_batch_id": batch_id,
+            }
+        )
+        intent = OrderIntentRecord(
+            intent_id=new_qmt_id("qmtpreviewintent"),
+            batch_id=batch_id,
+            strategy_id=strategy_id,
+            strategy_name=str(getattr(request, "strategy_name")),
+            symbol=str(getattr(request, "symbol")),
+            side=str(getattr(request, "side")),
+            order_type=int(getattr(request, "order_type")),
+            quantity=int(getattr(request, "quantity")),
+            price_type=int(getattr(request, "price_type")),
+            order_remark=str(getattr(request, "order_remark")),
+            account_id=str(getattr(request, "account_id")),
+            trade_date=getattr(request, "trade_date"),
+            package_id=getattr(request, "package_id", None),
+            selection_run_id=getattr(request, "selection_run_id", None),
+            limit_price=getattr(request, "price", None),
+            target_weight=getattr(request, "target_weight", None),
+            estimated_notional=getattr(result.preflight, "estimated_notional", None),
+            estimated_fee=getattr(result.preflight, "estimated_fee", None),
+            preflight_status=IntentPreflightStatus.PASSED,
+            submit_status=IntentSubmitStatus.CREATED,
+            metadata=metadata,
+            submitted_at=None,
+        )
+        return create_intent(intent).intent_id
+
+    def _upsert_preview_batch(
+        self,
+        *,
+        batch_id: str,
+        requests: list[Any],
+        result: "MiniQMTPreviewBatchSubmitResult",
+    ) -> None:
+        upsert = getattr(self._repository, "upsert_order_batch", None)
+        if upsert is None:
+            return
+        get_batch = getattr(self._repository, "get_order_batch", lambda _batch_id: None)
+        existing = get_batch(batch_id)
+        created_at = existing.created_at if existing is not None else datetime.now(UTC)
+        first_request = requests[0]
+        strategy_ids = sorted(
+            {
+                item.preflight.strategy_id
+                for item in result.results
+                if getattr(item.preflight, "strategy_id", None)
+            }
+        )
+        batch_status = OrderBatchStatus.CREATED if result.success else OrderBatchStatus.PREFLIGHT_FAILED
+        result_json = result.to_dict()
+        result_json.update(
+            {
+                "preview_only": True,
+                "broker_called": False,
+                "batch_status": result.batch_status,
+                "preflight_passed": result.preflight_passed,
+            }
+        )
+        upsert(
+            OrderBatchRecord(
+                batch_id=batch_id,
+                strategy_id=strategy_ids[0] if len(strategy_ids) == 1 else None,
+                account_id=str(getattr(first_request, "account_id")),
+                mode=str(getattr(first_request, "mode", "SIM") or "SIM"),
+                batch_status=batch_status,
+                request_json={"orders": [_preview_request_signature(request) for request in requests]},
+                result_json=result_json,
+                metadata={
+                    "source": "simulation_runtime_preview_only",
+                    "preview_only": True,
+                    "preview_batch_status": result.batch_status,
+                    "preflight_passed": result.preflight_passed,
+                    "broker_called": False,
+                    "mini_qmt_submit_enabled": False,
+                },
+                created_at=created_at,
+                submitted_at=None,
+                completed_at=datetime.now(UTC),
+            )
+        )
+
+
+@dataclass(frozen=True)
+class MiniQMTPreviewOrderSubmitResult:
+    success: bool
+    intent_id: str | None
+    qmt_order_id: str | None
+    broker_message: str
+    preflight: Any
+    broker_called: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        preflight_dict = self.preflight.to_dict() if hasattr(self.preflight, "to_dict") else dict(self.preflight)
+        return {
+            "success": self.success,
+            "intent_id": self.intent_id,
+            "qmt_order_id": self.qmt_order_id,
+            "broker_message": self.broker_message,
+            "preflight": preflight_dict,
+            "broker_called": self.broker_called,
+            "preview_only": True,
+        }
+
+
+@dataclass(frozen=True)
+class MiniQMTPreviewBatchSubmitResult:
+    success: bool
+    total: int
+    succeeded: int
+    failed: int
+    results: tuple[MiniQMTPreviewOrderSubmitResult, ...]
+    compensation_required: bool
+    compensation_hint: str | None = None
+    batch_id: str | None = None
+    batch_status: str | None = None
+    preflight_passed: bool = True
+    retry_of_batch_id: str | None = None
+    compensation_actions: tuple[dict[str, Any], ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "success": self.success,
+            "batch_id": self.batch_id,
+            "batch_status": self.batch_status,
+            "preflight_passed": self.preflight_passed,
+            "retry_of_batch_id": self.retry_of_batch_id,
+            "total": self.total,
+            "succeeded": self.succeeded,
+            "failed": self.failed,
+            "results": [result.to_dict() for result in self.results],
+            "compensation_required": self.compensation_required,
+            "compensation_hint": self.compensation_hint,
+            "compensation_actions": list(self.compensation_actions),
+            "preview_only": True,
+        }
+
+
+def _preview_batch_id(requests: list[Any]) -> str:
+    signatures = [_preview_request_signature(request) for request in requests]
+    return f"qmtpreview_{canonical_json_sha256(signatures)[:24]}"
+
+
+def _preview_request_signature(request: Any) -> dict[str, Any]:
+    metadata = getattr(request, "metadata", {}) or {}
+    return {
+        "account_id": str(getattr(request, "account_id", "")),
+        "strategy_name": str(getattr(request, "strategy_name", "")),
+        "symbol": str(getattr(request, "symbol", "")),
+        "side": str(getattr(request, "side", "")),
+        "order_type": int(getattr(request, "order_type", 0) or 0),
+        "quantity": int(getattr(request, "quantity", 0) or 0),
+        "price_type": int(getattr(request, "price_type", 0) or 0),
+        "price": str(getattr(request, "price", "")),
+        "order_remark": str(getattr(request, "order_remark", "")),
+        "trade_date": getattr(request, "trade_date").isoformat()
+        if getattr(request, "trade_date", None) is not None
+        else None,
+        "mode": str(getattr(request, "mode", "SIM") or "SIM"),
+        "package_id": getattr(request, "package_id", None),
+        "selection_run_id": getattr(request, "selection_run_id", None),
+        "target_weight": str(getattr(request, "target_weight", ""))
+        if getattr(request, "target_weight", None) is not None
+        else None,
+        "execution_plan_id": metadata.get("execution_plan_id"),
+        "execution_plan_intent_id": metadata.get("execution_plan_intent_id"),
+        "metadata": _json_safe_preview(metadata),
+    }
+
+
+def _preview_result_from_payload(payload: dict[str, Any]) -> MiniQMTPreviewOrderSubmitResult:
+    return MiniQMTPreviewOrderSubmitResult(
+        success=bool(payload.get("success")),
+        intent_id=payload.get("intent_id"),
+        qmt_order_id=payload.get("qmt_order_id"),
+        broker_message=str(payload.get("broker_message") or "existing preview-only dry-run result"),
+        preflight=dict(payload.get("preflight") or {}),
+        broker_called=bool(payload.get("broker_called", False)),
+    )
+
+
+def _json_safe_preview(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _json_safe_preview(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_preview(item) for item in value]
+    if isinstance(value, date | datetime):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return str(value)
+    return value
 
 
 def _default_price_loader(symbols: list[str], trade_date: date) -> dict[str, float]:
-    return {}
+    unique_symbols = sorted({str(symbol).strip() for symbol in symbols if str(symbol).strip()})
+    if not unique_symbols:
+        return {}
+    try:
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT DISTINCT ON (ts_code)
+                           ts_code, trade_date, close_li
+                    FROM market.kline_daily_raw
+                    WHERE ts_code = ANY(%s)
+                      AND trade_date <= %s
+                      AND close_li IS NOT NULL
+                      AND close_li > 0
+                    ORDER BY ts_code, trade_date DESC
+                    """,
+                    (unique_symbols, trade_date),
+                )
+                rows = cur.fetchall()
+    except Exception as exc:  # noqa: BLE001
+        raise DataUnavailableError(
+            "failed to load latest market close prices for production simulation context",
+            context={"symbols": unique_symbols, "trade_date": trade_date.isoformat()},
+        ) from exc
+    prices = {str(row["ts_code"]): float(row["close_li"]) / 1000.0 for row in rows}
+    missing = sorted(symbol for symbol in unique_symbols if symbol not in prices)
+    if missing:
+        raise DataUnavailableError(
+            "missing market close prices for production simulation context",
+            context={"missing_symbols": missing, "trade_date": trade_date.isoformat()},
+        )
+    return prices
+
+
+def _default_paper_repository_factory() -> Any:
+    from backend.services.paper_trading_v2.repository import PaperTradingV2Repository
+
+    return PaperTradingV2Repository()
+
+
+def _default_qmt_repository_factory() -> Any:
+    from backend.services.qmt_strategy_ledger.repository import QmtStrategyLedgerRepository
+
+    return QmtStrategyLedgerRepository()
+
+
+def _default_qmt_client_factory() -> Any:
+    from backend.infra.qmt_client import get_qmt_client_singleton
+
+    return get_qmt_client_singleton()
+
+
+def _default_qmt_calendar_provider() -> Any:
+    from backend.services.qmt_strategy_ledger.lot_availability import DbTradingCalendarProvider
+
+    return DbTradingCalendarProvider()
+
+
+def _env_flag(name: str, *, default: bool) -> bool:
+    raw = (os.getenv(name) or "").strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "y", "on"}
+
+
+def _context_provider_status(provider: Any) -> dict[str, Any]:
+    status_fn = getattr(provider, "status", None)
+    if callable(status_fn):
+        try:
+            payload = dict(status_fn())
+        except Exception as exc:  # noqa: BLE001
+            payload = {
+                "provider_mode": getattr(provider, "provider_mode", "unknown"),
+                "provider_name": type(provider).__name__,
+                "ready": False,
+                "diagnostic": f"context provider status failed: {type(exc).__name__}: {exc}",
+            }
+    else:
+        payload = {
+            "provider_mode": getattr(provider, "provider_mode", type(provider).__name__),
+            "provider_name": type(provider).__name__,
+            "ready": True,
+        }
+    payload.setdefault("provider_name", type(provider).__name__)
+    payload.setdefault("provider_mode", getattr(provider, "provider_mode", type(provider).__name__))
+    return payload
+
+
+def build_simulation_lifecycle_scheduler_from_env(
+    *,
+    repository: SimulationRuntimeRepository | InMemorySimulationRuntimeRepository | Any | None = None,
+) -> SimulationLifecycleScheduler:
+    mode = (os.getenv("SIMULATION_RUNTIME_CONTEXT_PROVIDER") or "").strip().lower()
+    production_enabled = _env_flag("ENABLE_SIMULATION_RUNTIME_PRODUCTION_PROVIDER", default=False)
+    if mode in {"production", "prod"} or production_enabled:
+        provider: SimulationRunContextProvider = ProductionSimulationRunContextProvider()
+    else:
+        provider = FailFastSimulationRunContextProvider()
+    return SimulationLifecycleScheduler(repository=repository, context_provider=provider)
 
 
 @dataclass(frozen=True)
@@ -318,13 +1146,17 @@ class SimulationLifecycleScheduler:
         self.performance_service = performance_service or StrategyPerformanceProjectionService()
 
     def status(self) -> dict[str, Any]:
+        provider_status = _context_provider_status(self.context_provider)
         return {
             "ok": True,
             "scheduler": "simulation_lifecycle_scheduler",
             "autostart": False,
             "default_submit": False,
             "approval_states": [state.value for state in DEFAULT_SCHEDULER_APPROVAL_STATES],
-            "manual_tick_endpoint_enabled": False,
+            "manual_tick_endpoint_enabled": True,
+            "scheduler_control_api_enabled": False,
+            "context_provider": provider_status,
+            "context_provider_mode": provider_status.get("provider_mode"),
             "schedule_windows": list(DEFAULT_SCHEDULER_WINDOWS),
             "restart_recovery_mode": "persisted_state_only",
             "window_orchestration": {
@@ -438,6 +1270,12 @@ class SimulationLifecycleScheduler:
             runtime_config={},
             runtime_release=runtime_release,
             created_by=created_by,
+        )
+        self._validate_fresh_selection_evidence(
+            binding=binding,
+            runtime_release=runtime_release,
+            selection=selection,
+            trade_date=trade_date,
         )
         build_result = self._build_plan_from_selection(
             runtime_release=runtime_release,
@@ -677,6 +1515,46 @@ class SimulationLifecycleScheduler:
         )
         return payload
 
+    def _validate_fresh_selection_evidence(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        runtime_release: StrategyRuntimeRelease,
+        selection: StrategyPackageSelectionResult,
+        trade_date: date,
+    ) -> None:
+        evidence = selection.evidence_by_package.get(binding.package_id)
+        if evidence is None:
+            raise DataUnavailableError(
+                "simulation scheduler requires fresh daily selection evidence for the binding package",
+                context={
+                    "package_id": binding.package_id,
+                    "binding_id": binding.binding_id,
+                    "trade_date": trade_date.isoformat(),
+                },
+            )
+        stale_reasons: list[str] = []
+        if evidence.target_trade_date != trade_date:
+            stale_reasons.append("target_trade_date")
+        if evidence.package_id != binding.package_id:
+            stale_reasons.append("package_id")
+        if evidence.manifest_sha256 != binding.manifest_sha256 or evidence.manifest_sha256 != runtime_release.manifest_sha256:
+            stale_reasons.append("manifest_sha256")
+        if evidence.release_id != runtime_release.release_id or evidence.release_hash != runtime_release.release_hash:
+            stale_reasons.append("runtime_release")
+        if stale_reasons:
+            raise DataUnavailableError(
+                "simulation scheduler rejected stale daily selection evidence",
+                context={
+                    "reasons": stale_reasons,
+                    "evidence_id": evidence.evidence_id,
+                    "target_trade_date": evidence.target_trade_date.isoformat(),
+                    "expected_trade_date": trade_date.isoformat(),
+                    "binding_id": binding.binding_id,
+                    "release_id": runtime_release.release_id,
+                },
+            )
+
     def _build_plan_from_selection(
         self,
         *,
@@ -799,7 +1677,7 @@ class SimulationLifecycleScheduler:
         return tuple(windows)
 
 
-simulation_lifecycle_scheduler = SimulationLifecycleScheduler()
+simulation_lifecycle_scheduler = build_simulation_lifecycle_scheduler_from_env()
 
 
 class SimulationLifecycleBackgroundScheduler:
@@ -863,6 +1741,8 @@ class SimulationLifecycleBackgroundScheduler:
             "autostart": running,
             "running": running,
             "thread_alive": bool(thread and thread.is_alive()),
+            "scheduler_control_api_enabled": True,
+            "manual_tick_endpoint_enabled": True,
             "interval_seconds": self._interval_seconds,
             "default_submit": self._default_submit,
             "data_source": self._data_source,
