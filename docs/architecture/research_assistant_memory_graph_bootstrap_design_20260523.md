@@ -258,6 +258,15 @@ flowchart TB
 | `rule.fixed_pit_pool` | `guards` | `process.qe_backtest` | QE 回测使用固定 PIT 股票池。 |
 | `issue.BUG-109` | `blocks` | `process.assistant_qe_planning` | 示例 10 loop 固化会误导 QE 计划。 |
 
+
+### 5.6 可视化审阅图
+
+为便于人工审阅，已生成 AIstock 研究助理长期记忆与架构图谱的第一版 SVG 预览图：
+
+- SVG：`docs/architecture/diagrams/research_assistant_memory_graph_overview_20260523.svg`
+
+该图用于审阅模块、MCP、Skill、Memory Ledger、Context Pack、Validation、QE、StrategyPackage、Selection Center、Paper v2、HMM、RD-Agent、数据同步、股票分析、Issue 和实验谱系之间的关系。它不是运行时图数据库导出，后续 Phase 1 实现时应由 graph seed 数据和 graph summary API 自动生成同类可视化。
+
 ## 6. 核心业务流程图谱
 
 ### 6.1 QE 实验创建与演进流程
