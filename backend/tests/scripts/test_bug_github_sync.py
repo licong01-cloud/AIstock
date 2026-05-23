@@ -494,3 +494,50 @@ def test_github_token_default_uses_gh_cli_only_when_remote_needed(monkeypatch: p
     assert sync._github_token_default(remote_needed=False) is None
     assert sync._github_token_default(remote_needed=True) == "pytest-token"
     assert calls == [["gh", "auth", "token"]]
+
+
+# ---------------------------------------------------------------------------
+# BUG-102 regression: load_bug_files must skip individual corrupted files
+# instead of aborting the entire scan.
+# ---------------------------------------------------------------------------
+
+
+def test_load_bug_files_skips_corrupted_json(tmp_path: Path) -> None:
+    good = tmp_path / "20260523_BUG-501-good.json"
+    good.write_text(json.dumps({
+        "schema_version": "aistock_validation_bug_v1",
+        "bug_id": "BUG-501",
+        "title": "good",
+        "description": "ok",
+        "module": "qe",
+        "severity": "P1",
+        "reproduce_command": "pytest",
+        "fingerprint": "abc",
+        "events": [],
+    }), encoding="utf-8")
+
+    bad = tmp_path / "20260523_BUG-CORRUPT.json"
+    bad.write_bytes(b"\xef\xbb\xbf{not valid json")
+
+    bugs = sync.load_bug_files(bugs_dir=tmp_path)
+    bug_ids = {b["bug_id"] for b in bugs}
+    assert "BUG-501" in bug_ids
+    assert len(bugs) == 1
+
+
+def test_load_bug_files_skips_non_object_json(tmp_path: Path) -> None:
+    (tmp_path / "20260523_BUG-502.json").write_text("[]", encoding="utf-8")
+    (tmp_path / "20260523_BUG-503.json").write_text(json.dumps({
+        "schema_version": "aistock_validation_bug_v1",
+        "bug_id": "BUG-503",
+        "title": "ok",
+        "description": "ok",
+        "module": "qe",
+        "severity": "P1",
+        "fingerprint": "abc",
+        "events": [],
+    }), encoding="utf-8")
+
+    bugs = sync.load_bug_files(bugs_dir=tmp_path)
+    bug_ids = {b["bug_id"] for b in bugs}
+    assert bug_ids == {"BUG-503"}

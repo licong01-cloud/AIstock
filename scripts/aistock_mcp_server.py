@@ -31,6 +31,7 @@ import datetime as _dt
 import hashlib
 import importlib.util
 import json
+import logging
 import os
 import re
 import subprocess
@@ -39,6 +40,8 @@ from typing import Any, Callable
 from urllib.parse import urlparse
 
 import httpx
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 try:  # FastMCP is the canonical stdio MCP server. Imported lazily-friendly.
     from mcp.server.fastmcp import FastMCP
@@ -499,10 +502,12 @@ def _load_bug_records() -> list[dict[str, Any]]:
     for path in sorted(BUG_ROOT.glob("*.json")):
         try:
             payload = json.loads(path.read_text(encoding="utf-8-sig"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise RuntimeError(f"Failed to read bug JSON registry entry {path}: {exc}") from exc
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            logging.warning("Skipping unreadable bug JSON registry entry %s: %s", path, exc)
+            continue
         if not isinstance(payload, dict) or not payload.get("bug_id"):
-            raise RuntimeError(f"Invalid bug JSON registry entry missing bug_id: {path}")
+            logging.warning("Skipping bug JSON registry entry missing bug_id: %s", path)
+            continue
         payload = dict(payload)
         payload["_source_path"] = _repo_relative_path(path)
         records.append(payload)
@@ -517,8 +522,9 @@ def _load_bug_record_by_id(bug_id: str) -> tuple[dict[str, Any], Path]:
     for path in sorted(BUG_ROOT.glob("*.json")):
         try:
             payload = json.loads(path.read_text(encoding="utf-8-sig"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise RuntimeError(f"Failed to read bug JSON registry entry {path}: {exc}") from exc
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            logging.warning("Skipping unreadable bug JSON registry entry %s: %s", path, exc)
+            continue
         if isinstance(payload, dict) and str(payload.get("bug_id") or "") == safe_bug_id:
             record = dict(payload)
             record["_source_path"] = _repo_relative_path(path)

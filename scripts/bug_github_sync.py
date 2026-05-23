@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import re
 import subprocess
@@ -210,10 +211,15 @@ def load_bug_files(bugs_dir: Path = BUGS_DIR) -> list[dict[str, Any]]:
 
     bugs: list[dict[str, Any]] = []
     for path in sorted(bugs_dir.glob("*.json")):
-        with path.open("r", encoding="utf-8-sig") as handle:
-            bug = json.load(handle)
+        try:
+            with path.open("r", encoding="utf-8-sig") as handle:
+                bug = json.load(handle)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            logging.warning("Skipping unreadable bug JSON file %s: %s", path, exc)
+            continue
         if not isinstance(bug, dict) or not bug.get("bug_id"):
-            raise BugGitHubSyncError(f"invalid bug JSON missing bug_id: {path}")
+            logging.warning("Skipping bug JSON file missing bug_id: %s", path)
+            continue
         bug["_source_path"] = str(path)
         bugs.append(bug)
     return bugs

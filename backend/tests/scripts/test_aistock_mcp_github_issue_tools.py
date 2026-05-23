@@ -534,3 +534,77 @@ def test_sync_github_to_json_backfills_status_label_and_link(
     assert payload["status"] == "verified"
     assert payload["closed_at"]
     assert payload["events"][-1]["action"] == "github_issue_synced_to_json"
+
+
+# ---------------------------------------------------------------------------
+# BUG-102 regression: parse errors on individual BUG JSON files must not
+# abort the entire registry scan.  A single corrupted file must be skipped
+# with a warning; unrelated files must still be readable.
+# ---------------------------------------------------------------------------
+
+
+def _write_corrupted_json(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{not valid json\n", encoding="utf-8")
+
+
+def test_github_issue_list_skips_corrupted_registry_file(mcp_module, tmp_path: Path):
+    _write_bug(tmp_path, "BUG-301", title="Good bug", module="qe")
+    _write_corrupted_json(_bugs_dir(tmp_path) / "20260520_BUG-CORRUPT.json")
+
+    result = mcp_module.mcp_github_issue_list()
+
+    assert result["source"] == "local"
+    bug_ids = {item["bug_id"] for item in result["items"] if item.get("bug_id")}
+    assert "BUG-301" in bug_ids
+    assert "BUG-CORRUPT" not in bug_ids
+
+
+def test_github_issue_search_skips_corrupted_registry_file(mcp_module, tmp_path: Path):
+    _write_bug(tmp_path, "BUG-302", title="search target", description="findme", module="qe")
+    _write_corrupted_json(_bugs_dir(tmp_path) / "20260520_BUG-CORRUPT.json")
+
+    result = mcp_module.mcp_github_issue_search("findme", module="qe")
+
+    assert result["total"] == 1
+    assert result["items"][0]["bug_id"] == "BUG-302"
+
+
+def test_github_issue_sync_tolerates_corrupted_unrelated_file(
+    mcp_module, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    path = _write_bug(tmp_path, "BUG-303", status="open", title="sync me",
+                      github_issue_number=None)
+    _write_corrupted_json(_bugs_dir(tmp_path) / "20260520_BUG-CORRUPT.json")
+
+    class FakeGitHubClient:
+        def __init__(self, *, repo: str, token: str, **__: Any) -> None:
+            pass
+
+        def list_issues(self, *, state: str = "open", labels: list[str] | None = None) -> list[dict[str, Any]]:
+            return [{
+                "number": 303,
+                "title": "[BUG-303] synced",
+                "body": "<!-- aistock-bug-id: BUG-303 -->\nSynced content",
+                "state": "closed",
+                "status": "verified",
+                "module": "mcp",
+                "severity": "P1",
+                "labels": [
+                    "aistock:bug", "severity:p1", "module:mcp", "status:verified",
+                ],
+                "html_url": "https://github.example/issues/303",
+            }]
+
+    monkeypatch.setenv("GH_TOKEN", "pytest-token")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setattr(mcp_module, "_github_client_factory", FakeGitHubClient)
+
+    result = mcp_module.mcp_github_issue_sync_bug(
+        "BUG-303", direction="github-to-json", apply=True, actor="pytest",
+    )
+    # The corrupted file must not prevent the sync from finding BUG-303.
+    # The result action depends on whether status/link changes are detected;
+    # the invariant is that the call succeeds without crashing.
+    assert isinstance(result, dict)
+    assert "results" in result

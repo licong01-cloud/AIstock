@@ -272,7 +272,7 @@ class ValidationHistoryStore:
         try:
             if path.stat().st_size > MAX_JSON_BYTES:
                 return {}, f"JSON file exceeds max size: {MAX_JSON_BYTES}"
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
         except json.JSONDecodeError as exc:
             return {}, f"invalid JSON: {exc}"
         except UnicodeDecodeError as exc:
