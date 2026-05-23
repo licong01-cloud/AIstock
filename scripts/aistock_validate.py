@@ -28,10 +28,10 @@ def _safe_slug(value: str) -> str:
     return re.sub(r"-+", "-", value).strip("-") or "validation"
 
 
-def _git_commit() -> str:
+def _git_commit(cwd: Path | None = None) -> str:
     try:
         return subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, text=True
+            ["git", "rev-parse", "--short", "HEAD"], cwd=str(cwd or ROOT), text=True
         ).strip()
     except Exception:
         return "unknown"
@@ -435,9 +435,9 @@ def _parse_diff_patch(patch_text: str) -> dict[str, set[int]]:
     return {path: lines for path, lines in changed_lines.items() if lines}
 
 
-def _git_diff_patch(base: str, paths: list[str]) -> str:
+def _git_diff_patch(base: str, paths: list[str], cwd: Path | None = None) -> str:
     command = ["git", "diff", "--unified=0", base, "--", *paths]
-    return subprocess.check_output(command, cwd=ROOT, text=True, encoding="utf-8")
+    return subprocess.check_output(command, cwd=str(cwd or ROOT), text=True, encoding="utf-8")
 
 
 def _find_coverage_file(path: str, files_by_path: dict[str, dict]) -> tuple[dict | None, str]:

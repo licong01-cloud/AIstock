@@ -80,6 +80,9 @@ class ValidationExecutionStartRequest(BaseModel):
     frontend_port: int | None = None
     timeout_seconds: int | None = Field(None, gt=0)
     confirm_text: str | None = None
+    workspace_path: str | None = None
+    expected_branch: str | None = None
+    expected_commit: str | None = None
 
 
 def _success(data):
@@ -738,6 +741,9 @@ def start_validation_execution(
                 frontend_port=request.frontend_port,
                 timeout_seconds=request.timeout_seconds,
                 confirm_text=request.confirm_text,
+                workspace_path=request.workspace_path,
+                expected_branch=request.expected_branch,
+                expected_commit=request.expected_commit,
             )
         )
     except ValidationRunnerError as exc:

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -12,6 +15,7 @@ from backend.services.validation.execution_runner import (
     JOB_SCHEMA_VERSION,
     RunnerResult,
     ValidationExecutionRunner,
+    ValidationRunnerError,
 )
 from backend.services.validation.history_store import COVERAGE_SCHEMA, EVIDENCE_SCHEMA, RUN_SCHEMA, ValidationHistoryStore
 from backend.services.validation.plan_catalog import ValidationCatalogError, ValidationPlanCatalog
@@ -344,3 +348,107 @@ def test_validation_execution_api_starts_and_lists_job(tmp_path: Path) -> None:
 
     rejected = client.post("/api/v1/validation/executions", json={"plan_key": "missing"})
     assert rejected.status_code == 400
+
+
+def _init_git_repo(path: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=str(path), check=True, shell=False)
+    subprocess.run(["git", "config", "user.email", "test@test"], cwd=str(path), check=True, shell=False)
+    subprocess.run(["git", "config", "user.name", "test"], cwd=str(path), check=True, shell=False)
+    (path / "dummy.txt").write_text("hello", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=str(path), check=True, shell=False)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=str(path), check=True, shell=False)
+    subprocess.run(["git", "checkout", "-q", "-b", "feature/test-branch"], cwd=str(path), check=True, shell=False)
+
+
+def test_workspace_path_accepted_for_allowlisted_worktree(tmp_path: Path) -> None:
+    worktree = tmp_path / "worktrees" / "bug-xxx"
+    worktree.mkdir(parents=True)
+    _init_git_repo(worktree)
+
+    catalog_path = tmp_path / "plans.yaml"
+    _write_catalog(catalog_path, runner_enabled=True)
+    runner = ValidationExecutionRunner(
+        plan_catalog=ValidationPlanCatalog(catalog_path),
+        execution_root=tmp_path / "jobs",
+        history_root=tmp_path / "history",
+        repo_root=tmp_path,
+        run_inline=True,
+        executor=lambda c, e, cwd, t: RunnerResult(return_code=0, output="ok"),
+    )
+    job = runner.start_job(plan_key="l0", workspace_path=str(worktree))
+
+    assert job["status"] == "passed"
+    assert job["workspace_is_root"] is False
+    assert job["workspace_branch"] == "feature/test-branch"
+    assert job["workspace_commit"] is not None
+    assert str(worktree.resolve()) in job["workspace_path"]
+
+
+def test_workspace_path_rejects_path_outside_allowlist(tmp_path: Path) -> None:
+    catalog_path = tmp_path / "plans.yaml"
+    _write_catalog(catalog_path, runner_enabled=True)
+    runner = ValidationExecutionRunner(
+        plan_catalog=ValidationPlanCatalog(catalog_path),
+        execution_root=tmp_path / "jobs",
+        history_root=tmp_path / "history",
+        repo_root=tmp_path,
+        run_inline=True,
+    )
+    outside_dir = Path(os.environ.get("TEMP", "C:/Windows/Temp")) / "aistock_test_reject"
+    outside_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        with pytest.raises(ValidationRunnerError, match="workspace_path is not in the allowlist"):
+            runner.start_job(plan_key="l0", workspace_path=str(outside_dir))
+    finally:
+        shutil.rmtree(outside_dir, ignore_errors=True)
+
+
+def test_workspace_path_rejects_non_directory(tmp_path: Path) -> None:
+    catalog_path = tmp_path / "plans.yaml"
+    _write_catalog(catalog_path, runner_enabled=True)
+    runner = ValidationExecutionRunner(
+        plan_catalog=ValidationPlanCatalog(catalog_path),
+        execution_root=tmp_path / "jobs",
+        history_root=tmp_path / "history",
+        repo_root=tmp_path,
+        run_inline=True,
+    )
+    nonexistent = tmp_path / "nonexistent_dir"
+    with pytest.raises(ValidationRunnerError, match="workspace_path is not a directory"):
+        runner.start_job(plan_key="l0", workspace_path=str(nonexistent))
+
+
+def test_workspace_path_none_defaults_to_repo_root(tmp_path: Path) -> None:
+    catalog_path = tmp_path / "plans.yaml"
+    _write_catalog(catalog_path, runner_enabled=True)
+    runner = ValidationExecutionRunner(
+        plan_catalog=ValidationPlanCatalog(catalog_path),
+        execution_root=tmp_path / "jobs",
+        history_root=tmp_path / "history",
+        repo_root=tmp_path,
+        run_inline=True,
+        executor=lambda c, e, cwd, t: RunnerResult(return_code=0, output="ok"),
+    )
+    job = runner.start_job(plan_key="l0")
+
+    assert job["status"] == "passed"
+    assert job["workspace_is_root"] is True
+    assert tmp_path.resolve() == Path(job["workspace_path"]).resolve()
+
+
+def test_expected_branch_mismatch_rejected(tmp_path: Path) -> None:
+    worktree = tmp_path / "worktrees" / "bug-xxx"
+    worktree.mkdir(parents=True)
+    _init_git_repo(worktree)
+
+    catalog_path = tmp_path / "plans.yaml"
+    _write_catalog(catalog_path, runner_enabled=True)
+    runner = ValidationExecutionRunner(
+        plan_catalog=ValidationPlanCatalog(catalog_path),
+        execution_root=tmp_path / "jobs",
+        history_root=tmp_path / "history",
+        repo_root=tmp_path,
+        run_inline=True,
+    )
+    with pytest.raises(ValidationRunnerError, match="expected_branch.*does not match"):
+        runner.start_job(plan_key="l0", workspace_path=str(worktree), expected_branch="wrong-branch")
