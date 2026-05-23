@@ -6,7 +6,7 @@
   "module": "quantevolver",
   "severity": "P2",
   "risk_area": "unspecified",
-  "status": "in_progress",
+  "status": "fixed",
   "trigger_condition": {
     "scenario": "reported_via_mcp",
     "files": [
@@ -26,12 +26,12 @@
   "fingerprint": "3ddc00fa90d047ba",
   "assigned_agent": "claude_code",
   "fix_branch": "claude/BUG-110-custom-evo-zombie-code-path",
-  "fix_commit": null,
+  "fix_commit": "7f9c684",
   "verification_run_id": null,
   "created_at": "2026-05-23T06:18:49Z",
   "first_seen_at": "2026-05-23T06:18:49Z",
-  "last_seen_at": "2026-05-23T17:17:48Z",
-  "fixed_at": null,
+  "last_seen_at": "2026-05-23T17:31:25Z",
+  "fixed_at": "2026-05-23T17:31:25Z",
   "submitted_at": "2026-05-23T06:18:49Z",
   "closed_at": null,
   "allowed_write_scope": [
@@ -88,6 +88,12 @@
       "actor": "mcp_agent",
       "action": "assigned",
       "note": "worktree: F:/Dev/AIstock_worktrees/bug-110-custom-evo-zombie-code-path. Fix: add custom_evo delegation in submit_next_loop to call submit_custom_evo_loop instead of using auto-evolution code path."
+    },
+    {
+      "timestamp": "2026-05-23T17:31:25Z",
+      "actor": "claude_code",
+      "action": "status_changed",
+      "note": "Merged into main. Fix: 4 lines in submit_next_loop to delegate custom_evo tasks to submit_custom_evo_loop. Verified: compileall clean, 6/6 QE tests pass, guardrail 0 findings."
     }
   ],
   "github_issue_number": 178,
