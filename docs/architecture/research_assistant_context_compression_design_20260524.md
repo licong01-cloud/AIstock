@@ -1,8 +1,9 @@
 # Research Assistant 上下文压缩设计方案
 
-- **版本**: v1.0
+- **版本**: v1.1
 - **日期**: 2026-05-24
-- **状态**: Draft（Phase 1 已实现，Phase 2/3 待评审）
+- **状态**: Phase 1 基线已实现（版本 B），Phase 2/3 为后续开发目标
+- **当前基线**: 版本 B — Token 感知滑动窗口（commit `325fd75`，待合入 main）
 - **参考**: Claude Code AutoCompact 算法、LCM (Lossless Context Management) DAG 方案
 - **关联**: BUG-105 (Research Assistant Chat Context Loss)
 
@@ -26,37 +27,222 @@ Research Assistant 是多轮对话系统，用户通过对话完成 QE 实验创
 
 ## 3. 三阶段策略
 
-### Phase 1（已实现）：Token 感知滑动窗口
+### Phase 1（基线 — 版本 B）：Token 感知滑动窗口
 
-**触发**：每次 `chat_turn` 调用
+**当前状态**: 已实现，待合入 main（工作目录: `claude/bug105-verify-20260523`，commit `325fd75`）
 
-**策略**：
-- 从 DB 加载最近 500 条消息（所有角色：user/assistant/system/tool）
-- 从最新到最旧累计 token 估算值
-- 保留尽可能多的完整消息，不超过 800K token 预算
-- 超出预算时，丢弃最旧消息，记录 info 日志
-- 保留所有角色的完整内容，不截断单条消息
+#### 3.1.1 设计原则
 
-**Token 估算**：`len(content) / 2.0`（中文混合文本保守估计，1 中文字符 ≈ 1-2 tokens）
+1. **不截断单条消息**：每条消息完整进入 LLM 上下文，不做 `content[:500]` 式静默截断
+2. **不过滤角色**：user/assistant/system/tool 全部保留，system 消息可能包含重要的阶段切换提示，tool 消息包含 MCP 调用结果
+3. **Token 预算感知**：基于模型 1M 上下文窗口，为历史消息分配 800K token 预算
+4. **滑动窗口**：从最新消息开始累计，超出预算时丢弃最旧消息，保留完整性
+5. **可观测性**：丢弃消息时输出 info 日志，记录保留/丢弃数量和 token 使用量
 
-**预算分配**（基于 1M 上下文窗口）：
+#### 3.1.2 核心常量
 
-```
-┌─────────────────────────────────────────────────────┐
-│ System Prompt + Context Pack (~64K)                  │
-├─────────────────────────────────────────────────────┤
-│ 对话历史轮次 (~800K)                                 │
-│  [最旧] ... [msg n-2] [msg n-1] [当前消息] [最旧]   │
-│  超出预算时从左侧（最旧）开始丢弃                     │
-├─────────────────────────────────────────────────────┤
-│ 当前用户消息 + 预留回复空间 (~136K)                   │
-└─────────────────────────────────────────────────────┘
+```python
+# backend/services/research_assistant/service.py
+
+# 历史消息 token 预算（1M 窗口 - 200K 系统开销）
+_PRIOR_MESSAGES_TOKEN_BUDGET = 800_000
+
+# 中文混合文本 token 估算系数（1 中文字符 ≈ 1-2 tokens，取保守值 2.0）
+_TOKEN_ESTIMATE_CHARS_PER_TOKEN = 2.0
 ```
 
-**代码位置**：`backend/services/research_assistant/service.py`
-- `_PRIOR_MESSAGES_TOKEN_BUDGET = 800_000`
-- `_TOKEN_ESTIMATE_CHARS_PER_TOKEN = 2.0`
-- `_estimate_tokens()` / `_load_prior_chat_messages()`
+#### 3.1.3 Token 估算
+
+```python
+@classmethod
+def _estimate_tokens(cls, text: str) -> int:
+    """保守估算：字符数 / 2.0，至少 1 token"""
+    return max(1, int(len(text) / cls._TOKEN_ESTIMATE_CHARS_PER_TOKEN))
+```
+
+上线后应对比 API 实际返回的 token 计数校准此系数。
+
+#### 3.1.4 历史消息加载算法
+
+```python
+def _load_prior_chat_messages(self, conversation_id: str, current_message: str
+                              ) -> list[dict[str, str]]:
+    # 1. 从 DB 加载最近 500 条消息
+    result = self.repository.list_records(
+        "conversation_messages",
+        filters={"conversation_id": conversation_id},
+        limit=500,
+    )
+    items = sorted(result["items"], key=lambda item: str(item.get("created_at") or ""))
+
+    # 2. 构建候选列表（完整内容、全部角色、排除空消息和当前消息）
+    candidates: list[dict[str, str]] = []
+    for item in items:
+        content = str(item.get("content_text") or "").strip()
+        if not content:
+            continue
+        if content == current_message:
+            continue
+        role = str(item.get("role") or "")
+        candidates.append({"role": role, "content": content})
+
+    # 3. 滑动窗口：从最新开始累加 token，不超过预算
+    selected: list[dict[str, str]] = []
+    tokens_used = 0
+    for msg in reversed(candidates):                  # 从最新开始
+        msg_tokens = self._estimate_tokens(msg["content"])
+        if tokens_used + msg_tokens > self._PRIOR_MESSAGES_TOKEN_BUDGET and selected:
+            break                                     # 超出预算，停止添加
+        selected.append(msg)
+        tokens_used += msg_tokens
+    selected.reverse()                                # 恢复时间顺序
+
+    # 4. 丢弃消息时记录日志
+    if len(selected) < len(candidates):
+        logger.info(
+            "chat history window: kept %d/%d messages (~%d tokens), "
+            "dropped %d oldest due to budget %d",
+            len(selected), len(candidates), tokens_used,
+            len(candidates) - len(selected), self._PRIOR_MESSAGES_TOKEN_BUDGET,
+        )
+    return selected
+```
+
+**算法复杂度**: O(n)，n ≤ 500。单次遍历候选列表，无重复分配。
+
+#### 3.1.5 LLM 消息组装
+
+```python
+@staticmethod
+def _chat_messages_for_llm(user_message, bundle, context_pack,
+                           prior_messages=None) -> list[dict[str, str]]:
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": context_pack_summary},
+    ]
+    if prior_messages:
+        messages.extend(prior_messages)    # 对话历史注入在 system 之后
+    messages.append({"role": "user", "content": user_message})
+    return messages
+```
+
+**消息顺序**:
+
+```
+[0] system    — Prompt Bundle 文本 + 行为约束
+[1] user      — Context Pack 摘要（已审计记忆）
+[2..n-1]      — 对话历史（prior_messages，按时间正序）
+[n]   user    — 当前用户消息
+```
+
+#### 3.1.6 chat_turn 集成点
+
+```python
+def chat_turn(self, request):
+    # ... 创建/获取 conversation，创建 task，记录 user_message ...
+
+    # ① 加载历史消息（在模型路由之前，用于 token 估算）
+    prior_messages = self._load_prior_chat_messages(conversation_id, data.message)
+    history_tokens = sum(self._estimate_tokens(m["content"]) for m in prior_messages)
+    estimated_total_tokens = len(data.message) * 2 + history_tokens + 32000
+
+    # ② 模型路由（token 估算包含历史，可能路由到长上下文模型）
+    route = self.route_model(ModelRouteRequest(
+        role="primary_reasoner",
+        risk_level=data.risk_level,
+        token_estimate=estimated_total_tokens,  # 包含历史 token
+    ))
+
+    # ③ Context Pack（预算从 16K 提升到 64K）
+    context_pack = self.build_context_pack(ContextPackBuildRequest(
+        token_budget=64000,  # 原为 16000
+    ))
+
+    # ④ 组装 LLM 消息（含历史）
+    messages = self._chat_messages_for_llm(data.message, bundle, context_pack, prior_messages)
+    # ... LLM 调用 ...
+```
+
+#### 3.1.7 预算分配模型（1M 上下文窗口）
+
+```
+┌──────────────────────────────────────────────────────┐
+│ System Prompt (~32K)                                  │
+│   - Prompt Bundle 文本（由 Prompt Tree 组装）          │
+│   - 行为约束（中文回复、禁止 raw JSON、禁止执行高风险） │
+├──────────────────────────────────────────────────────┤
+│ Context Pack 摘要 (~32K 预留, 实际可变)                │
+│   - 已审计的 Memory Items 摘要                        │
+│   - 临时记忆引用                                     │
+├──────────────────────────────────────────────────────┤
+│ 对话历史 — prior_messages (~800K)                     │
+│   [msg_1] [msg_2] ... [msg_k]                        │
+│   超出 800K 时从 msg_1（最旧）开始丢弃                 │
+│   所有角色保留，所有消息完整                           │
+├──────────────────────────────────────────────────────┤
+│ 当前用户消息 + 预留 LLM 回复空间 (~136K)               │
+└──────────────────────────────────────────────────────┘
+```
+
+#### 3.1.8 前端变更
+
+**文件**: `frontend/src/app/research-assistant/chat/page.tsx`
+
+```typescript
+// 新增状态
+const [conversationId, setConversationId] = useState<string | null>(null);
+
+// createAdapter 新增参数
+function createAdapter(
+  onTurn, onStage, onCatalogIssue,
+  conversationId: string | null,         // 新增
+  setConversationId: (id: string) => void, // 新增
+): ChatModelAdapter
+
+// run() 方法内
+const payload: Record<string, unknown> = { message, phase, risk_level, allow_execute };
+if (conversationId) payload.conversation_id = conversationId;  // 传递已有 ID
+result = await researchAssistantApi.chatTurn(payload);
+
+// 首轮响应后保存 conversation_id
+const newId = result.conversation?.conversation_id;
+if (newId && !conversationId) setConversationId(newId);
+
+// 新建对话按钮（重置所有状态）
+const newConversation = useCallback(() => {
+  setConversationId(null);
+  setLatest(null);
+  setSteps(initialSteps);
+  setCatalogIssue(null);
+  setCatalogInitMessage(null);
+}, []);
+```
+
+#### 3.1.9 测试覆盖
+
+**文件**: `backend/tests/research_assistant/test_service.py`（5 个 BUG-105 专项测试）
+
+| 测试 | 验证点 |
+|------|--------|
+| `test_chat_turn_prior_messages_injected_into_llm_context` | 第二轮对话的 LLM 消息包含第一轮内容 |
+| `test_new_conversation_has_no_prior_messages` | 无 conversation_id 时不发送历史 |
+| `test_chat_history_includes_all_roles` | system/tool 消息被保留并注入 LLM |
+| `test_chat_history_preserves_full_message_content` | 2000+ 字符消息完整保留，不截断 |
+| `test_chat_history_token_budget_drops_oldest_first` | 超出预算时丢弃最旧而非最新消息 |
+
+#### 3.1.10 与版本 A 的对比
+
+| 维度 | 版本 A（已废弃） | 版本 B（当前基线） |
+|------|-----------------|-------------------|
+| 角色过滤 | ❌ `if role not in ("user", "assistant"): continue` | ✅ 保留所有角色 |
+| 内容完整性 | ❌ `content[:500]` 截断 | ✅ 完整保留 |
+| 消息数量 | ❌ `limit=20`, `prior[-20:]` 硬编码 | ✅ 按 800K token 预算动态滑动 |
+| Token 感知 | ❌ 无 | ✅ `_estimate_tokens()` |
+| 超出预算 | ❌ 静默丢弃 | ✅ `logger.info()` 记录 |
+| 丢弃策略 | ❌ 先取后截，20 条限制 | ✅ 从最旧开始丢弃，保留最新 |
+| 模型路由 | ❌ `len(msg)*2` | ✅ 包含实际历史 token 数 |
+| Context Pack | ❌ 16K budget | ✅ 64K budget |
+| DB 查询 | ❌ `limit=20` | ✅ `limit=500` |
 
 ### Phase 2（建议实现）：结构化压缩（LLM 驱动）
 

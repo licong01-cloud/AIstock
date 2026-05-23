@@ -429,14 +429,15 @@ def test_new_conversation_has_no_prior_messages() -> None:
     assert non_system[1]["content"] == "帮我创建一个 QE 10 loop 实验，先不要执行。"
 
 
-def test_chat_history_excludes_system_tool_roles() -> None:
+def test_chat_history_includes_all_roles() -> None:
+    """system and tool messages are preserved — they carry context the LLM needs."""
     fake = FakeLlmClient()
     svc = _chat_service(fake)
 
     conv_id = "conv_test_002"
     svc.repository.create_record("conversations", {
         "conversation_id": conv_id,
-        "title": "role filter test",
+        "title": "role preservation test",
         "user_id": "default",
         "status": "active",
     })
@@ -475,5 +476,73 @@ def test_chat_history_excludes_system_tool_roles() -> None:
     all_content = " ".join(str(m["content"]) for m in messages)
     assert "用户消息：开始分析" in all_content
     assert "助手回复：分析结果如下" in all_content
-    assert "系统提示" not in all_content
-    assert "raw json" not in all_content
+    assert "系统提示：当前阶段是 planning" in all_content
+    assert "raw json here" in all_content
+
+
+def test_chat_history_preserves_full_message_content() -> None:
+    """Messages must not be truncated — full content must reach the LLM."""
+    fake = FakeLlmClient()
+    svc = _chat_service(fake)
+
+    conv_id = "conv_test_003"
+    svc.repository.create_record("conversations", {
+        "conversation_id": conv_id,
+        "title": "no truncation test",
+        "user_id": "default",
+        "status": "active",
+    })
+    long_content = "长消息" + "X" * 2000
+    svc.repository.create_record("conversation_messages", {
+        "message_id": "msg_020",
+        "conversation_id": conv_id,
+        "role": "assistant",
+        "content_text": long_content,
+    })
+
+    svc.chat_turn(ChatTurnRequest(
+        message="继续",
+        conversation_id=conv_id,
+    ))
+
+    assert len(fake.calls) == 1
+    messages = fake.calls[0]["messages"]
+    all_content = " ".join(str(m["content"]) for m in messages)
+    assert long_content in all_content
+
+
+def test_chat_history_token_budget_drops_oldest_first() -> None:
+    """When budget is exceeded, oldest messages are dropped, not truncated."""
+    fake = FakeLlmClient()
+    svc = _chat_service(fake)
+
+    conv_id = "conv_test_004"
+    svc.repository.create_record("conversations", {
+        "conversation_id": conv_id,
+        "title": "token budget test",
+        "user_id": "default",
+        "status": "active",
+    })
+    svc.repository.create_record("conversation_messages", {
+        "message_id": "msg_030",
+        "conversation_id": conv_id,
+        "role": "user",
+        "content_text": "最早的消息",
+    })
+    svc.repository.create_record("conversation_messages", {
+        "message_id": "msg_031",
+        "conversation_id": conv_id,
+        "role": "assistant",
+        "content_text": "最新的消息",
+    })
+
+    svc.chat_turn(ChatTurnRequest(
+        message="当前消息",
+        conversation_id=conv_id,
+    ))
+
+    assert len(fake.calls) == 1
+    messages = fake.calls[0]["messages"]
+    all_content = " ".join(str(m["content"]) for m in messages)
+    assert "最新的消息" in all_content
+    assert "当前消息" in all_content
