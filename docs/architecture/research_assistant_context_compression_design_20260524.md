@@ -225,3 +225,333 @@ def _maybe_compact(self, conversation_id: str, current_turn: int) -> str | None:
 - `production_ddl_gate`: Phase 2 需新增 `assistant_compact_summaries` 表（DDL 评审后执行）
 - `production_frontend_dependency_gate`: noop（压缩逻辑纯后端）
 - `production_backend_dependency_gate`: noop（不引入新依赖）
+
+## 附录 A：Claude Code 上下文压缩算法详解（参考）
+
+本附录记录 Claude Code 上下文压缩算法的完整架构，作为 RA Phase 2 结构化压缩方案的设计参考。信息来源为 Claude Code 源代码逆向分析及社区文档。
+
+### A.1 五层压缩流水线
+
+Claude Code 不是"满了就总结"，而是一个按成本从低到高的 **5 层递进式压缩流水线**，实现在 `query.ts` 中：
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  ① Tool Result Budget  零 LLM 成本                       │
+│     大工具结果(>50K chars) → 写磁盘，context仅保留路径+预览 │
+│     使用3区决策树(mustReapply/frozen/fresh)保护缓存前缀    │
+├──────────────────────────────────────────────────────────┤
+│  ② Snip Compact        零 LLM 成本                       │
+│     特征开关 HISTORY_SNIP 控制                            │
+│     从历史头部截断最旧消息，释放的 token 数传给 AutoCompact │
+├──────────────────────────────────────────────────────────┤
+│  ③ Microcompact        低 LLM 成本                       │
+│     路径A(时间): 空闲>60分钟 → 清除旧工具结果为占位文本    │
+│     路径B(缓存): Anthropic cache_edits API 服务端删除      │
+│     仅在主线程运行（不在 fork agent 中执行）               │
+├──────────────────────────────────────────────────────────┤
+│  ④ Context Collapse    中 LLM 成本                       │
+│     ~90% 上下文填充时触发，将REPL历史投影为"commit log"    │
+│     与⑤互斥：Collapse 开启时 AutoCompact 被禁用           │
+│     阻塞阈值 ~95%                                         │
+├──────────────────────────────────────────────────────────┤
+│  ⑤ AutoCompact         最高 LLM 成本                     │
+│     ~75-95% 上下文填充时触发                               │
+│     两级: Session Memory 压缩 → 失败则 LLM 摘要（fork子调用）│
+│     熔断机制: 连续 3 次失败 → 停止                         │
+└──────────────────────────────────────────────────────────┘
+```
+
+**后调用恢复链**：当 API 返回 `prompt_too_long` 时：
+1. Context Collapse 尝试 `recoverFromOverflow()`（如已启用）
+2. Reactive Compact 尝试 `tryReactiveCompact()` 作为最后手段
+
+### A.2 AutoCompact 阈值配置
+
+```
+effectiveContextWindow = modelContextWindow - maxOutputTokens
+autoCompactThreshold    = effectiveContextWindow - AUTOCOMPACT_BUFFER_TOKENS (13,000)
+```
+
+对于 200K 窗口 + ≥20K max output：effective ≈ 180K，触发于 ≈ **167K tokens (82%)**。
+
+社区建议：在 **50-60%** 上下文时主动压缩，而非等到 95% —— 更早触发产生更高质量的摘要。
+
+### A.3 结构化压缩 Prompt 设计
+
+Claude Code 使用 **XML 标签**（`<analysis>` + `<summary>`）而非 JSON 输出。选择 XML 的原因是 **Claude 模型在训练时大量接触 XML 标签**，输出稳定性优于 JSON。
+
+#### A.3.1 NO_TOOLS_PREAMBLE
+
+放在提示词最前面，大写强调：
+
+```
+CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.
+Tool calls will be REJECTED and will waste your only turn.
+```
+
+**设计原因**：压缩在 `maxTurns: 1` 的 fork 子调用中执行。如果模型调工具被拒绝，就没有输出，浪费唯一的一次 API 调用。
+
+#### A.3.2 三种压缩模式
+
+| 模式 | 用途 | Prompt 模板 |
+|------|------|------------|
+| `BASE_COMPACT` | 全量压缩（`/compact` 命令） | 首次完整压缩 |
+| `PARTIAL_COMPACT(from)` | 增量压缩 | 只压缩旧消息，保留近期 |
+| `PARTIAL_COMPACT_UP_TO` | 部分压缩到某点 | 标记后面还有未压缩的新消息 |
+
+#### A.3.3 9 段强制输出结构（原文对照）
+
+```
+<analysis>
+  (模型在生成摘要前的思考过程 — 最终被 formatCompactSummary() 剥离，
+   不进入后续 context。等同于 Chain-of-Thought，提升摘要质量)
+</analysis>
+<summary>
+1. Primary Request and Intent
+   — 捕获用户所有明确请求和意图
+
+2. Key Technical Concepts
+   — 列出所有重要技术概念、技术和框架
+
+3. Files and Code Sections
+   — 列举检查/修改/创建的文件，含完整代码片段
+
+4. Errors and fixes
+   — 所有遇到的错误及修复方式，尤其关注用户反馈
+
+5. Problem Solving
+   — 已解决问题和正在进行的故障排除
+
+6. All user messages
+   — 所有非工具结果的用户消息（关键设计！保留用户原话）
+
+7. Pending Tasks
+   — 明确要求处理的待办任务
+
+8. Current Work / Work Completed
+   — 摘要请求前正在进行的精确工作描述
+
+9. Optional Next Step / Context for Continuing Work
+   — 下一步行动（必须引用用户原话，防止任务漂移）
+</summary>
+```
+
+#### A.3.4 压缩工作流程
+
+```
+原始消息列表
+  → stripImages（去除图片/文档，只保留文本标记）
+  → stripReinjectedAttachments（去除重复注入的附件）
+  → createUserMessage(summarize_request)
+  → 调用 AI 模型生成摘要（tools禁用, thinkingConfig禁用, temperature=0.2）
+  → 生成 <analysis> + <summary> 结构化输出
+  → formatCompactSummary() 剥离 <analysis>，只保留 <summary>
+  → 重建消息链:
+     [boundary_marker] + [summary] + [recent_messages] + [post_compact_attachments]
+```
+
+#### A.3.5 压缩后恢复提示词（原文）
+
+```
+Continue the conversation from where it left off without asking
+the user any further questions. Resume directly — do not acknowledge
+the summary, do not recap what was happening. Pick up the last task
+as if the break never happened.
+```
+
+**设计意图**：禁止 AI 说"好的，我继续之前的工作"这类废话，直接无缝接上中断点。Proactive 模式下还有额外指令："你之前就在自主工作，不是首次唤醒，不要打招呼。"
+
+#### A.3.6 压缩后恢复注入
+
+压缩后系统重新注入以下内容以保持连续性：
+- 最近 5 个已读文件（上限 50K tokens）
+- Plan mode 状态
+- 当前激活的 Skills
+- 延迟的工具附件（deferred tool attachments）
+- MCP 指令
+- Session start hooks（包括 CLAUDE.md）
+
+### A.4 Session Memory 背景提取
+
+AutoCompact 的第一优先级路径（非 LLM）：
+
+| 参数 | 值 | 说明 |
+|------|---|------|
+| 初始化阈值 | 10K context tokens | 上下文累积到 10K token 时首次提取 |
+| 增量触发 | ≥5K token 增长 | 自上次提取后上下文增长 5K 时再次提取 |
+| 工具调用触发 | 3 次累积工具调用 | 防止高频提取 |
+| 自然暂停触发 | 上一轮无工具调用 | 对话自然断点 |
+
+**两层门控**：`tengu_session_memory` + `tengu_sm_compact` 特征开关同时开启才启用此路径。
+
+### A.5 Post-Compact 上下文组装
+
+压缩后的上下文由以下部分拼接而成：
+
+```
+[System Prompt + CLAUDE.md 指令]
+[压缩摘要 (9 段结构化)]
+[最近 N 条原始消息 (未被压缩的部分)]
+[重新注入的附件: 最近读取的文件、plan状态、skills、MCP指令]
+[当前用户消息]
+```
+
+关键：**压缩摘要替换了被压缩的原始消息**，原始消息不再进入后续上下文，但摘要中保留了关键信息的结构化记录。
+
+### A.6 已知约束
+
+| 约束 | 详情 |
+|------|------|
+| Sonnet 4.6 工具调用违规率 | 2.79%（vs Sonnet 4.5 的 0.01%），压缩 prompt 中模型仍试图调工具 |
+| Prompt 缓存兼容 | Microcompact 使用 cache_edits API 删除服务端缓存内容，不破坏本地缓存前缀 |
+| Fork 子调用隔离 | 压缩在 fork agent 中执行，共享父 agent 的 prompt cache prefix |
+| 与 Context Collapse 互斥 | 两个不能同时开启，Collapse 启用时 AutoCompact 自动禁用 |
+
+## 附录 B：LCM (Lossless Context Management) DAG 方案详解（参考）
+
+LCM 是社区方案 `@lossless-claude/lcm`，在 Claude Code AutoCompact 基础上进一步实现了 **零消息丢失 + 可展开 + 跨 session 记忆**。
+
+### B.1 核心架构：DAG 分层摘要
+
+```
+原始消息:  [m1]...[m20]     [m21]...[m40]     [m41]...[m60]
+               ↓                  ↓                  ↓
+Leaf(d0):  [summary_1]      [summary_2]       [summary_3]    (~1,200 tokens/leaf)
+               ↓                  ↓
+Condensed:  [cond_1: s1+s2]  [cond_2: s3]                    (~2,000 tokens/condensed)
+                    ↓
+Root:           [root: c1+c2]
+```
+
+每个摘要节点存储：
+- MD5 指纹（防重复压缩）
+- 语义向量 embedding
+- 时间范围 `ts_start` / `ts_end`
+- 父/子节点指针（支持展开遍历）
+
+### B.2 SQLite 持久化 Schema
+
+```sql
+-- 不可变消息存储（追加写入，永不修改或删除）
+CREATE TABLE messages (
+    id TEXT PRIMARY KEY,
+    seq INTEGER NOT NULL UNIQUE,
+    role TEXT NOT NULL,           -- user / assistant / system / tool
+    content TEXT NOT NULL,
+    token_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+
+-- DAG 摘要节点（分层）
+CREATE TABLE nodes (
+    id TEXT PRIMARY KEY,
+    level TEXT NOT NULL DEFAULT 'verbatim',
+    content TEXT NOT NULL,
+    token_count INTEGER NOT NULL DEFAULT 0,
+    seq_start INTEGER NOT NULL,
+    seq_end INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+-- DAG 边（摘要 → 原始消息或子摘要）
+CREATE TABLE node_children (
+    node_id TEXT NOT NULL REFERENCES nodes(id),
+    child_id TEXT NOT NULL,
+    child_type TEXT NOT NULL DEFAULT 'message',  -- 'message' or 'node'
+    PRIMARY KEY (node_id, child_id)
+);
+
+-- 跨 session FTS5 全文搜索记忆
+CREATE VIRTUAL TABLE promoted_memory USING fts5(
+    content, tags, source_session, created_at
+);
+```
+
+### B.3 三级压缩升级（保证收敛）
+
+| 级别 | 触发 | 方法 | 压缩率 |
+|------|------|------|--------|
+| Level 1: Normal Summary | 上下文 > 75% | LLM 摘要（temperature=0.2），保留决策/命令/错误/原因 | ~50% semantic reduction |
+| Level 2: Aggressive Bullet | 重新压缩 DAG 上层节点时 | 更严格的 prompt（temperature=0.1），关键词提取 + 模板生成 | ~80% reduction |
+| Level 3: Deterministic Truncation | LLM 摘要失败时 | 头部截断到 ~512 tokens + `[Truncated for context management]` 标记 | 保证收敛 |
+
+### B.4 MCP 检索工具
+
+| 工具 | 延迟 | 用途 |
+|------|------|------|
+| `lcm_search` | <100ms | 混合搜索 episoidic + semantic promoted memory |
+| `lcm_grep` | <100ms | 正则或 FTS5 全文搜索存储的消息和摘要 |
+| `lcm_describe` | <100ms | 检查节点元数据：深度、token 数、父子链接 |
+| `lcm_expand` | 30-120s | DAG 遍历：将摘要节点递归展开为原始消息 |
+| `lcm_store` | <100ms | 手动存储持久记忆 |
+| `lcm_stats` | <50ms | Token 节省、压缩率、DAG 深度统计 |
+
+### B.5 每轮上下文组装算法
+
+```
+context = [相关 DAG 摘要节点] + [fresh_tail 原始消息]
+
+1. 零成本路径: token 不超窗口 → 不压缩，零开销
+2. 预算感知: 从不同 DAG 深度选取摘要节点，最大化信息密度
+3. Fresh tail: 最近 32-64 条消息始终保留原始形式（工作记忆）
+4. DAG 遍历: 从 root 向下，选取 token 预算内信息密度最高的摘要
+```
+
+### B.6 生命周期 Hook 集成
+
+| Hook | 命令 | 用途 |
+|------|------|------|
+| PreCompact | `lcm compact --hook` | 拦截 Claude 原生压缩，写入 DAG 摘要（不丢弃消息） |
+| SessionStart | `lcm restore` | 恢复项目上下文、近期摘要、promoted memory |
+| UserPromptSubmit | `lcm user-prompt` | 搜索记忆，注入 prompt 前提示 |
+| SessionEnd | `lcm session-end` | 将完成的 Claude 对话记录写入 SQLite |
+
+所有 Hook 具有自愈能力：每次执行前验证注册状态，修复缺失条目后再继续。
+
+### B.7 性能基准（OOLONG benchmark）
+
+| 上下文长度 | LCM Score | 传统方法 | 优势 |
+|-----------|-----------|---------|------|
+| 2,048 tokens | 74.8 | 70.3 | +4.5 |
+| 8,192 tokens | 79.1 | 66.4 | +12.7 |
+| 32,768 tokens | 保持准确 | 显著退化 | 差距大 |
+
+- Token 节省: 40-70%（重复上下文传输成本降低）
+- 摘要生成延迟: 85-120ms/次
+- 关键信息遗漏率: 从 18% 降至 0.3%
+
+### B.8 关键配置参数
+
+| 参数 | 默认值 | 用途 |
+|------|--------|------|
+| `LCM_CONTEXT_THRESHOLD` | 0.75 | 触发压缩的上下文填充比例 |
+| `LCM_FRESH_TAIL_COUNT` | 32-64 | 最近消息保护数量（不压缩） |
+| `LCM_LEAF_MIN_FANOUT` | 8 | 生成一个叶摘要的最小原始消息数 |
+| `LCM_CONDENSED_MIN_FANOUT` | 4 | 生成一个压缩节点的最小摘要数 |
+| `LCM_INCREMENTAL_MAX_DEPTH` | 0-1 | 压缩级联深度（0=仅叶, 1=一级压缩, -1=无限制） |
+| `LCM_LEAF_CHUNK_TOKENS` | 20,000 | 每次压缩通过的最大源 token 数 |
+| `LCM_LEAF_TARGET_TOKENS` | 1,200 | 叶摘要目标 token 数 |
+| `LCM_CONDENSED_TARGET_TOKENS` | 2,000 | 压缩摘要目标 token 数 |
+
+## 附录 C：RA 与参考方案的适用性映射
+
+| Claude Code / LCM 特性 | RA 是否采用 | 理由 |
+|------------------------|-----------|------|
+| 5 层压缩流水线 | 不需要 | RA 对话量远小于 Codex REPL，1-2 层足够 |
+| 9 段结构化摘要 | ✅ Phase 2 | 核心参考，RA 定制字段（实验参数/确认决策/风险边界） |
+| XML 输出格式 | ✅ Phase 2 | Claude 模型对 XML 更稳定 |
+| Analysis-First | ✅ Phase 2 | `<analysis>` 剥离，提升摘要质量 |
+| NO_TOOLS_PREAMBLE | ✅ Phase 2 | 压缩子调用禁止工具 |
+| Fresh Tail 保护 | ✅ Phase 2 | 最近 8 轮不压缩 |
+| 压缩后 Continuation Prompt | ✅ Phase 2 | "像对话从未中断一样继续" |
+| Tool Result Budget | 不需要 | RA 当前无 > 50K 字符的工具结果 |
+| Snip Compact | 被 Phase 1 替代 | Phase 1 的 token 滑动窗口实现等效功能 |
+| Microcompact(Time) | 远期可选 | RA 会话通常短于 60 分钟 |
+| Microcompact(Cache) | 不适用 | 需要 Anthropic cache_edits API |
+| Context Collapse | 不适用 | RA 用结构化压缩替代 commit log 方式 |
+| Session Memory 背景提取 | 远期可选 | RA 已有 Memory Ledger + Context Pack 体系 |
+| SQLite DAG + Embedding | ❌ | RA 对话量不需要分层 DAG |
+| FTS5 跨 session 记忆 | ❌ | RA 已有 Memory Ledger 体系 |
+| SimHash 去重 | ❌ | RA 对话重复消息极少 |
+| lcm_expand 可展开 | 部分采用 | RA 通过 API 查询原始消息（非 MCP 工具） |
+| 三级压缩升级 | 部分采用 | Level 1 (LLM摘要) + Level 3 (头截断保底)，不需要 Level 2 |
