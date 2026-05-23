@@ -264,6 +264,7 @@ flowchart TB
 为便于人工审阅，已生成 AIstock 研究助理长期记忆与架构图谱的第一版 SVG 预览图：
 
 - SVG：`docs/architecture/diagrams/research_assistant_memory_graph_overview_20260523.svg`
+- PNG：`docs/architecture/diagrams/research_assistant_memory_graph_overview_20260523.png`
 
 该图用于审阅模块、MCP、Skill、Memory Ledger、Context Pack、Validation、QE、StrategyPackage、Selection Center、Paper v2、HMM、RD-Agent、数据同步、股票分析、Issue 和实验谱系之间的关系。它不是运行时图数据库导出，后续 Phase 1 实现时应由 graph seed 数据和 graph summary API 自动生成同类可视化。
 
