@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -671,6 +672,52 @@ def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
     }
 
 
+def build_client_install_plan(*, apply: bool = False, codex_home: str | None = None) -> dict[str, Any]:
+    source_skill = REPO_ROOT / ".codex" / "skills" / "fix-aistock-issue"
+    source_claude = REPO_ROOT / ".claude" / "commands" / "fix-aistock-issue.md"
+    target_home = Path(codex_home) if codex_home else _codex_home()
+    target_skill = target_home / "skills" / "fix-aistock-issue"
+    blocking: list[str] = []
+    if not source_skill.exists():
+        blocking.append(f"missing repo Codex skill: {source_skill}")
+    if not source_claude.exists():
+        blocking.append(f"missing repo Claude Code command: {source_claude}")
+    actions = [
+        {
+            "action": "sync_global_codex_skill",
+            "source": str(source_skill),
+            "target": str(target_skill),
+            "safe": not blocking,
+        },
+        {
+            "action": "verify_claude_code_command",
+            "source": str(source_claude),
+            "target": "repo-local .claude/commands/fix-aistock-issue.md",
+            "safe": source_claude.exists(),
+        },
+    ]
+    payload = {
+        "schema_version": "aistock_issue_workflow_client_install_v1",
+        "generated_at": _utc_now(),
+        "dry_run": not apply,
+        "workflow_gate": "ready_for_install" if not blocking else "blocked",
+        "blocking": blocking,
+        "actions": actions,
+        "codex_home": str(target_home),
+    }
+    if apply:
+        if blocking:
+            raise WorkflowError("; ".join(blocking))
+        if target_skill.exists():
+            shutil.rmtree(target_skill)
+        target_skill.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source_skill, target_skill)
+        payload["workflow_gate"] = "installed"
+        payload["dry_run"] = False
+        payload["installed"] = [{"target": str(target_skill)}]
+    return payload
+
+
 def _state_roots_for_bug(bug_id: str) -> list[Path]:
     roots: list[Path] = [REPO_ROOT]
     worktree_root = _default_worktree_root()
@@ -1128,6 +1175,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return 0 if payload.get("workflow_gate") != "blocked" else 2
 
 
+def cmd_install_client(args: argparse.Namespace) -> int:
+    payload = build_client_install_plan(apply=args.apply, codex_home=args.codex_home)
+    _emit(payload, args.output)
+    return 0 if payload.get("workflow_gate") in {"ready_for_install", "installed"} else 2
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     payload = build_run_plan(
         bug_id=args.bug_id,
@@ -1193,6 +1246,12 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--skip-external", action="store_true", help="Skip gh/network-style checks for offline tests.")
     doctor.add_argument("--output")
     doctor.set_defaults(func=cmd_doctor)
+
+    install_client = sub.add_parser("install-client", help="Install or dry-run developer-client entry wrappers.")
+    install_client.add_argument("--apply", action="store_true")
+    install_client.add_argument("--codex-home")
+    install_client.add_argument("--output")
+    install_client.set_defaults(func=cmd_install_client)
 
     run = sub.add_parser("run", help="Run the Phase 1 issue workflow state machine for one BUG.")
     run.add_argument("--bug-id", required=True)

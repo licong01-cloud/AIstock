@@ -43,6 +43,22 @@ Then use run/resume from the same script. Do not manually explore the whole repo
 
 Read this quickstart, run `doctor`, then follow the returned `next_command`. All workflow artifacts are Markdown/JSON under `tmp/issue_workflow/<BUG-ID>/`.
 
+## Install Client Entry Wrappers
+
+After this workflow code is merged into the canonical checkout, install or refresh the global Codex skill wrapper with:
+
+```powershell
+python scripts/aistock_issue_workflow.py install-client --apply
+```
+
+Before merge, use the dry-run form only:
+
+```powershell
+python scripts/aistock_issue_workflow.py install-client
+```
+
+The install command copies the repo-local `.codex/skills/fix-aistock-issue` wrapper to `$CODEX_HOME/skills/fix-aistock-issue` and verifies the repo-local Claude Code command exists. It does not modify production runtime or DB.
+
 ## Health Check
 
 Before starting a new issue workflow:

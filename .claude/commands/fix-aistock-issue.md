@@ -66,3 +66,7 @@ Use `tmp/issue_workflow/<BUG>/pr-body.md` as the PR body. If the user requested 
 ## Post-Merge Sync And Cleanup
 
 After an approved merge, run `python scripts/aistock_issue_workflow.py close-sync --bug-id BUG-XXX --pr-url <PR_URL> --validation-evidence "<command> -> passed" --apply`, then dry-run `cleanup-after-merge`; add `--apply` only when the cleanup gate is ready.
+
+## Client Install
+
+After the workflow branch is merged into the canonical checkout, run `python scripts/aistock_issue_workflow.py install-client --apply` to refresh the global Codex skill. Before merge, use `install-client` without `--apply` as a dry-run.

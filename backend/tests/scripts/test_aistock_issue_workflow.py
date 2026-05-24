@@ -249,6 +249,26 @@ def test_doctor_reports_ready_when_client_entries_exist(
     assert "run --bug-id BUG-XXX" in payload["next_command"]
 
 
+def test_install_client_plan_can_copy_global_codex_skill(
+    isolated_workflow_root: Path,
+) -> None:
+    source = isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue"
+    source.mkdir(parents=True)
+    (source / "SKILL.md").write_text("skill", encoding="utf-8")
+    claude = isolated_workflow_root / ".claude" / "commands"
+    claude.mkdir(parents=True)
+    (claude / "fix-aistock-issue.md").write_text("claude", encoding="utf-8")
+    codex_home = isolated_workflow_root / "codex_home"
+
+    dry = workflow.build_client_install_plan(codex_home=str(codex_home))
+    assert dry["workflow_gate"] == "ready_for_install"
+    assert dry["dry_run"] is True
+
+    applied = workflow.build_client_install_plan(apply=True, codex_home=str(codex_home))
+    assert applied["workflow_gate"] == "installed"
+    assert (codex_home / "skills" / "fix-aistock-issue" / "SKILL.md").read_text(encoding="utf-8") == "skill"
+
+
 def test_run_plan_writes_state_and_resume_reads_it(isolated_workflow_root: Path) -> None:
     issue = _write_json(isolated_workflow_root / "bug.json", _bug())
 
