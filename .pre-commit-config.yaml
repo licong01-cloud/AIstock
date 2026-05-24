@@ -12,3 +12,15 @@ repos:
         entry: python .codex/skills/verify-aistock-feature/scripts/scan_quality_guardrails.py --changed-only --fail-on HIGH
         language: system
         pass_filenames: false
+
+      - id: aistock-ruff
+        name: Ruff changed Python files
+        entry: ruff check --force-exclude
+        language: system
+        types_or: [python, pyi]
+
+      - id: aistock-semgrep-guardrails
+        name: Semgrep AIstock P0/P1 guardrails
+        entry: semgrep --config .semgrep.yml --error --severity ERROR
+        language: system
+        pass_filenames: false

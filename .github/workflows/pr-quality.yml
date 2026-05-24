@@ -1,0 +1,106 @@
+name: AIstock PR Quality
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      base_ref:
+        description: Base ref for local dry-run style checks.
+        required: false
+        default: main
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-quality-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  pr-quality:
+    name: Context, scope, and open-source tooling dry-run
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install quality tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyyaml ruff semgrep
+
+      - name: Build AIstock PR quality summary
+        env:
+          BASE_REF: ${{ github.base_ref || inputs.base_ref || 'main' }}
+        run: |
+          mkdir -p tmp/validation/pr_quality
+          git fetch origin "${BASE_REF}" --depth=1 || true
+          BASE_COMMIT="origin/${BASE_REF}"
+          git rev-parse --verify "${BASE_COMMIT}" >/dev/null 2>&1 || BASE_COMMIT="FETCH_HEAD"
+          python scripts/issue_flow.py pr-check \
+            --base "${BASE_COMMIT}" \
+            --head HEAD \
+            --output-json tmp/validation/pr_quality/summary.json \
+            --output-md tmp/validation/pr_quality/summary.md
+          cat tmp/validation/pr_quality/summary.md
+
+      - name: Ruff changed Python files
+        env:
+          BASE_REF: ${{ github.base_ref || inputs.base_ref || 'main' }}
+        run: |
+          BASE_COMMIT="origin/${BASE_REF}"
+          git rev-parse --verify "${BASE_COMMIT}" >/dev/null 2>&1 || BASE_COMMIT="FETCH_HEAD"
+          git diff --name-only "${BASE_COMMIT}...HEAD" -- '*.py' > tmp/validation/pr_quality/changed_python.txt
+          if [ -s tmp/validation/pr_quality/changed_python.txt ]; then
+            xargs -a tmp/validation/pr_quality/changed_python.txt ruff check --force-exclude
+          else
+            echo "No changed Python files."
+          fi
+
+      - name: Semgrep AIstock guardrails (report-only phase)
+        continue-on-error: true
+        run: |
+          semgrep --config .semgrep.yml --json --output tmp/validation/pr_quality/semgrep.json .
+
+      - name: Comment PR summary
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- aistock-pr-quality-summary -->';
+            const summaryPath = 'tmp/validation/pr_quality/summary.md';
+            const summary = fs.existsSync(summaryPath) ? fs.readFileSync(summaryPath, 'utf8') : 'PR quality summary was not generated.';
+            const body = `${marker}\n${summary}\n\nSemgrep is report-only in the Phase 2 rollout; existing AIstock CI remains the blocking gate.`;
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number, per_page: 100 });
+            const existing = comments.find((comment) => comment.body && comment.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+      - name: Upload PR quality artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-quality-${{ github.run_id }}
+          path: tmp/validation/pr_quality/
+          if-no-files-found: ignore
