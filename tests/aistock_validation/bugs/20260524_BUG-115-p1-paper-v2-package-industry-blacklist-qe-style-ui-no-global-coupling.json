@@ -1,0 +1,120 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-115",
+  "title": "P1: Paper v2 package industry blacklist needs QE-style UI without QE global coupling",
+  "description": "Expected: QE global blacklist/filtered stock pool remains QE-only. Paper v2 has a StrategyPackage-level or Paper runtime-profile/version-level industry blacklist that Selection Center and Paper v2 simulation both read. The UI should provide the same industry-tree selection experience as QE custom evolution, but in Paper v2 local/package mode with no writes to QE global blacklist and no QE stock-pool generation.\nActual: Selection Center exposes a text input that splits comma-separated industry strings into runtime_profile.industry_blacklist. Backend matching is exact against PIT industry metadata, so free-text input is fragile and cannot reliably support real customization. QE SectorBlacklistPanel has the desired selector UX but is coupled to /quantevolver/stock-pool/blacklist and /stock-pool/generate, which would incorrectly make Paper v2 modify QE global state.",
+  "module": "paper_v2_selection_center",
+  "severity": "P1",
+  "risk_area": "paper_v2_platform_data_boundary",
+  "status": "open",
+  "batch_id": "paper_v2_selection_runtime_ui_20260524",
+  "trigger_condition": {
+    "scenario": "selection_industry_blacklist_text_input_cannot_support_package_level_customization_20260524",
+    "domain_boundary": "QE global blacklist is QE-only; Paper v2 blacklist is StrategyPackage/Paper-runtime scoped and shared by Selection Center plus simulation.",
+    "forbidden_coupling": [
+      "quantevolver stock-pool global blacklist writes",
+      "QE filtered stock_pool generation",
+      "frozen StrategyPackage manifest mutation"
+    ]
+  },
+  "reproduce_command": "Open /paper-v2/selection and inspect the industry blacklist control; it is a free-text input, while QE custom evolution has an industry tree selector that is currently coupled to QE global stock-pool endpoints and must not be reused as global state for Paper v2.",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "github:https://github.com/licong01-cloud/AIstock/issues/185",
+    "file:frontend/src/app/paper-v2/selection/page.tsx:318",
+    "file:frontend/src/app/quantevolver/components/SectorBlacklistPanel.tsx:51",
+    "file:frontend/src/app/quantevolver/components/SectorBlacklistPanel.tsx:63",
+    "file:frontend/src/app/quantevolver/components/SectorBlacklistPanel.tsx:110",
+    "file:frontend/src/app/quantevolver/evolution/page.tsx:4033",
+    "file:backend/services/selection_center/tradability.py:153",
+    "file:backend/services/selection_center/industry_provider.py:44"
+  ],
+  "fingerprint": "867177eb1019e655",
+  "assigned_agent": "paper_v2",
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-24T06:03:58Z",
+  "first_seen_at": "2026-05-24T06:03:58Z",
+  "last_seen_at": "2026-05-24T06:03:58Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-24T06:03:58Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "frontend/src/app/paper-v2/selection/page.tsx",
+    "frontend/src/components/paper-v2",
+    "frontend/src/app/quantevolver/components/SectorBlacklistPanel.tsx",
+    "frontend/src/components/industry",
+    "frontend/src/lib/paper-v2",
+    "backend/routers/selection_center.py",
+    "backend/routers/paper_trading_v2.py",
+    "backend/services/selection_center/runtime_profile.py",
+    "backend/services/selection_center/tradability.py",
+    "backend/services/selection_center/industry_provider.py",
+    "backend/services/paper_trading_v2",
+    "backend/services/strategy_package/runtime_variant.py",
+    "backend/services/strategy_package/repository.py",
+    "backend/migrations",
+    "backend/tests/selection_center",
+    "backend/tests/paper_trading_v2",
+    "frontend/tests/paper-v2",
+    "tests/aistock_validation/bugs/20260524_BUG-115-p1-paper-v2-package-industry-blacklist-qe-style-ui-no-global-coupling.json",
+    "tests/aistock_validation/history/paper_v2_selection_center"
+  ],
+  "suspected_modules": [
+    "frontend/src/app/paper-v2/selection/page.tsx",
+    "frontend/src/app/quantevolver/components/SectorBlacklistPanel.tsx",
+    "backend/services/selection_center/runtime_profile.py",
+    "backend/services/selection_center/tradability.py",
+    "backend/services/selection_center/industry_provider.py",
+    "backend/services/paper_trading_v2",
+    "backend/services/strategy_package/runtime_variant.py"
+  ],
+  "required_verification": [
+    "Paper v2 exposes a StrategyPackage-level or Paper runtime-profile/version-level industry blacklist config surface using a QE-style industry tree selector.",
+    "The Paper v2 selector runs in local/package mode and does not call QE global blacklist endpoints or generate QE filtered stock pools.",
+    "The persisted config is associated with package_id plus version/hash/activation metadata so historical Selection/Paper runs can prove which blacklist was used.",
+    "Selection Center uses the package-level Paper v2 blacklist by default and supports explicit per-run override, clear, or append semantics without silent package-default mutation.",
+    "Paper v2 simulation/readiness/day-run/live paths use the same resolved package-level blacklist as Selection Center.",
+    "The config stores canonical industry level/code/name and backend matching uses canonical values instead of hand-entered text.",
+    "QE experiments, QE global blacklist, QE stock pools, QE backtests, and frozen StrategyPackage manifests are not modified by Paper v2 blacklist edits.",
+    "Tests cover Selection exclusion, Paper v2 consistency, absence of QE global endpoint writes, and historical run config persistence.",
+    "Validation record includes DESIGN-COMPLIANCE-001 and production gate reporting; if DB DDL is required, production_ddl_gate must be applied_and_verified after merge before runtime activation."
+  ],
+  "closure_requirements": [
+    "Paper v2 industry blacklist is scoped to StrategyPackage/Paper runtime configuration, not AIstock global and not QE global.",
+    "Selection Center and Paper v2 simulation share the same Paper v2 package blacklist resolution contract.",
+    "Operator UI provides QE-style industry selection without free-text as the main path.",
+    "QE global blacklist and filtered stock pools remain untouched by Paper v2 configuration.",
+    "Historical runs persist enough config identity to reproduce which blacklist was used."
+  ],
+  "non_goals": [
+    "Do not reuse QE global blacklist state for Paper v2.",
+    "Do not write Paper v2 blacklist changes into frozen StrategyPackage manifests.",
+    "Do not change QE experiment/backtest behavior."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-24T06:03:58Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "User clarified that QE global blacklist is QE-only; Paper v2 needs package-scoped blacklist shared by Selection and simulation."
+    },
+    {
+      "timestamp": "2026-05-24T06:03:58Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Created GitHub issue #185 and mirrored BUG-115 JSON."
+    }
+  ],
+  "custom_github_labels": [
+    "paper-v2",
+    "selection-center",
+    "strategy-package",
+    "P1",
+    "risk:runtime_contract",
+    "risk:platform_data_boundary"
+  ],
+  "github_issue_number": 185,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/185"
+}

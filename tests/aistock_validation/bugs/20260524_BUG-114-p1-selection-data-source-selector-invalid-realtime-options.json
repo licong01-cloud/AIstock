@@ -1,0 +1,110 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-114",
+  "title": "P1: Selection Center exposes invalid realtime data-source options that are not factor or quote sources",
+  "description": "Expected: Selection Center separates selection score/artifact source, selection entry price source, current display quote source, and Paper v2 execution data source. Unsupported realtime sources such as TDX_REALTIME or MINIQMT_REALTIME must not be listed as runnable Selection Center data-source options. TDX is used through an explicit quote resolver for current-price display and current-date entry-price resolution, not as the factor/artifact data source.\nActual: The Selection UI exposes DB_HISTORICAL and TDX_REALTIME in a data-source dropdown. TDX_REALTIME is selectable even though the frontend warns it will fail and backend authoritative artifact generation rejects non-DB_HISTORICAL, causing a known-invalid operator path and conflating factor computation with quote display.",
+  "module": "paper_v2_selection_center",
+  "severity": "P1",
+  "risk_area": "runtime_contract",
+  "status": "open",
+  "batch_id": "paper_v2_selection_runtime_ui_20260524",
+  "trigger_condition": {
+    "scenario": "selection_ui_exposes_known_invalid_tdx_realtime_source_20260524",
+    "invalid_options": [
+      "TDX_REALTIME",
+      "MINIQMT_REALTIME"
+    ],
+    "semantic_split_required": [
+      "selection_artifact_source",
+      "selection_entry_price_source",
+      "current_quote_source",
+      "paper_execution_data_source"
+    ]
+  },
+  "reproduce_command": "Open /paper-v2/selection and inspect the data-source dropdown; TDX_REALTIME is presented as selectable even though authoritative Selection artifact generation rejects non-DB_HISTORICAL and the UI warns it will fail.",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "github:https://github.com/licong01-cloud/AIstock/issues/184",
+    "file:frontend/src/app/paper-v2/selection/page.tsx:316",
+    "file:frontend/src/app/paper-v2/selection/page.tsx:384",
+    "file:backend/services/strategy_package/selection_artifact.py:369",
+    "file:backend/routers/selection_center.py:22"
+  ],
+  "fingerprint": "9738880aed05c309",
+  "assigned_agent": "paper_v2",
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-24T06:03:58Z",
+  "first_seen_at": "2026-05-24T06:03:58Z",
+  "last_seen_at": "2026-05-24T06:03:58Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-24T06:03:58Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "frontend/src/app/paper-v2/selection/page.tsx",
+    "frontend/src/lib/paper-v2/types.ts",
+    "frontend/src/lib/paper-v2/format.ts",
+    "frontend/src/lib/paper-v2/api.ts",
+    "backend/routers/selection_center.py",
+    "backend/services/selection_center/service.py",
+    "backend/services/strategy_package/selection_artifact.py",
+    "backend/services/selection_center/price_enrichment.py",
+    "backend/data_service/tdx_adapter.py",
+    "frontend/tests/paper-v2",
+    "backend/tests/selection_center",
+    "tests/aistock_validation/bugs/20260524_BUG-114-p1-selection-data-source-selector-invalid-realtime-options.json",
+    "tests/aistock_validation/history/paper_v2_selection_center"
+  ],
+  "suspected_modules": [
+    "frontend/src/app/paper-v2/selection/page.tsx",
+    "frontend/src/lib/paper-v2/types.ts",
+    "backend/routers/selection_center.py",
+    "backend/services/strategy_package/selection_artifact.py",
+    "backend/services/selection_center/service.py"
+  ],
+  "required_verification": [
+    "TDX_REALTIME, MINIQMT_REALTIME, and any other unsupported realtime source are no longer shown as runnable Selection Center data-source options.",
+    "Selection UI displays a clear read-only source contract or uses an internal/renamed field with only supported selection artifact values.",
+    "Backend request validation rejects unsupported selection artifact sources before run creation or keeps the internal default hidden from operators.",
+    "TDX current quote is resolved through a separate quote/price resolver, not through the selection data_source field.",
+    "Existing DB_HISTORICAL authoritative artifact generation and historical PIT selection continue to work.",
+    "Historical run aggregation validates compatible source contracts without exposing a misleading realtime data-source selector.",
+    "Tests prove forged TDX_REALTIME cannot enter artifact generation as a guaranteed-failure run.",
+    "Validation record includes DESIGN-COMPLIANCE-001 and production gate reporting."
+  ],
+  "closure_requirements": [
+    "Known-invalid realtime data-source choices are removed from normal Selection Center UI.",
+    "Factor/artifact source, selection entry price source, current quote source, and Paper execution source are clearly separated.",
+    "TDX is used only for quote/price enrichment paths required by BUG-113, not for factor computation.",
+    "Unsupported source requests fail before creating misleading failed selection runs."
+  ],
+  "non_goals": [
+    "Do not add TDX factor computation in this issue.",
+    "Do not change Paper v2 portfolio execution data-source configuration.",
+    "Do not change Selection rank/score behavior."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-24T06:03:58Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "User clarified that selectable-but-guaranteed-failing TDX_REALTIME options have no value and must not be listed."
+    },
+    {
+      "timestamp": "2026-05-24T06:03:58Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Created GitHub issue #184 and mirrored BUG-114 JSON."
+    }
+  ],
+  "custom_github_labels": [
+    "paper-v2",
+    "selection-center",
+    "P1",
+    "risk:runtime_contract",
+    "risk:feature_gap"
+  ],
+  "github_issue_number": 184,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/184"
+}
