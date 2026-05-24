@@ -63,8 +63,9 @@ def _validate_in_tree_codex_skill(session: nox.Session, skill_path: str) -> None
     root = ROOT / skill_path
     required = [
         root / "SKILL.md",
-        root / "scripts" / "scan_quality_guardrails.py",
     ]
+    if Path(skill_path).name == "verify-aistock-feature":
+        required.append(root / "scripts" / "scan_quality_guardrails.py")
     missing = [path for path in required if not path.exists()]
     if missing:
         session.error("Missing in-tree Codex skill files: " + ", ".join(str(path) for path in missing))
@@ -104,6 +105,7 @@ def l0(session: nox.Session) -> None:
         "scripts/aistock_guardrail_scan.py",
         "scripts/aistock_module_ownership_scan.py",
         "scripts/issue_flow.py",
+        "scripts/aistock_issue_workflow.py",
         "scripts/validation_center_readonly_smoke.py",
         "scripts/aistock_data_quality_smoke.py",
         "scripts/paper_v2_live_validation.py",
@@ -127,6 +129,7 @@ def l0(session: nox.Session) -> None:
         "backend/tests/test_validation_git_status_provider.py",
         "backend/tests/test_validation_module_ownership.py",
         "backend/tests/test_validation_center_api.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
         "backend/services/validation/plan_catalog.py",
         "backend/tests/unified_engine/test_qe_completion_contract.py",
         "backend/tests/paper_trading_v2",
@@ -142,6 +145,8 @@ def l0(session: nox.Session) -> None:
         "tests/aistock_validation/modules/local_data_management.md",
         "tests/aistock_validation/catalog/file_ownership.yaml",
         "tests/aistock_validation/modules/development_guardrails.md",
+        "docs/standards/aistock_issue_workflow_quickstart.md",
+        ".codex/skills/fix-aistock-issue",
         ".github/workflows/pr-quality.yml",
         ".github/workflows/semgrep.yml",
         ".github/workflows/codeql.yml",
@@ -152,6 +157,7 @@ def l0(session: nox.Session) -> None:
         ".github/renovate.json",
     ]
     _validate_in_tree_codex_skill(session, ".codex/skills/verify-aistock-feature")
+    _validate_in_tree_codex_skill(session, ".codex/skills/fix-aistock-issue")
     session.run(
         "python",
         ".codex/skills/verify-aistock-feature/scripts/scan_quality_guardrails.py",
@@ -1150,6 +1156,7 @@ def validation_center_backend(session: nox.Session) -> None:
         "scripts/aistock_validate.py",
         "scripts/aistock_mcp_server.py",
         "scripts/aistock_validation_catalog_integrity.py",
+        "scripts/aistock_issue_workflow.py",
         "scripts/issue_flow.py",
         "scripts/validation_failure_event_to_bug.py",
         "scripts/validation_center_readonly_smoke.py",
@@ -1178,6 +1185,7 @@ def validation_center_backend(session: nox.Session) -> None:
         "backend/tests/scripts/test_validation_failure_event_to_bug.py",
         "backend/tests/scripts/test_bug_github_sync.py",
         "backend/tests/scripts/test_issue_flow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
         "--cov=backend.services.validation",
         "--cov=backend.routers.validation",
         "--cov=scripts.aistock_mcp_server",
