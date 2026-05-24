@@ -1,9 +1,17 @@
 {
   "allowed_write_scope": [
     "backend/services/factor_eligibility_service.py",
-    "frontend/src/api/factor-library.ts"
+    "frontend/src/api/factor-library.ts",
+    "backend/routers/quantevolver.py",
+    "backend/services/quantevolver/correlation_compute_service.py",
+    "backend/services/quantevolver/factor_eligibility_service.py",
+    "backend/services/quantevolver/factor_official_evaluation_service.py",
+    "backend/tests/quantevolver/test_bug_013_014_factor_eligibility_correlation.py",
+    "backend/tests/test_correlation_compute_independence.py",
+    "tests/aistock_validation/bugs/20260421_BUG-013-disabled-factor-cannot-compute-standalone-metrics.json",
+    "tests/aistock_validation/bugs/20260421_BUG-014-correlation-dispatch-cache-only-fails.json"
   ],
-  "assigned_agent": null,
+  "assigned_agent": "claude-code",
   "bug_id": "BUG-013",
   "closed_at": null,
   "closure_requirements": [
@@ -18,6 +26,18 @@
       "actor": "claude_code",
       "note": "Found during QE Official Eval Unification work",
       "timestamp": "2026-04-21T00:00:00Z"
+    },
+    {
+      "action": "clean_main_sync",
+      "actor": "codex-app",
+      "note": "Cherry-picked Claude Code commits 21023e2 and 6b7b52f onto latest origin/main as bug/BUG-013-014-main-sync-20260525.",
+      "timestamp": "2026-05-24T17:59:41.695296Z"
+    },
+    {
+      "action": "status_changed",
+      "actor": "codex-app",
+      "note": "Clean-main sync of Claude Code fix: allow disabled factors in standalone metrics and preserve active-factor compatibility.",
+      "timestamp": "2026-05-24T17:59:41.695296Z"
     }
   ],
   "evidence_uris": [
@@ -27,22 +47,24 @@
   "failing_run_id": null,
   "fingerprint": "aistock::factor_eligibility::include_disabled_default_false",
   "first_seen_at": "2026-04-21T00:00:00Z",
-  "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_branch": "bug/BUG-013-014-main-sync-20260525",
+  "fix_commit": "4553cb0",
+  "fixed_at": "2026-05-24T17:59:41.695296Z",
   "github_issue_number": 9,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/9",
-  "last_seen_at": "2026-05-13T07:03:20Z",
+  "last_seen_at": "2026-05-24T17:59:41.695296Z",
   "module": "aistock_backend",
   "reproduce_command": "curl 'http://127.0.0.1:8001/api/v1/factor-library/{disabled_factor_id}/standalone-metrics'  # returns empty",
   "required_verification": [
     "Standalone metrics computed for known-disabled factor",
-    "Backward compatibility test for active-factor flow"
+    "Backward compatibility test for active-factor flow",
+    "python -m pytest backend/tests/quantevolver/test_bug_013_014_factor_eligibility_correlation.py backend/tests/test_correlation_compute_independence.py -q -p no:cacheprovider",
+    "python -m nox -s l0"
   ],
   "risk_area": "feature_gap",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "submitted_at": null,
   "suspected_modules": [
     "backend/services/factor_eligibility_service.py",

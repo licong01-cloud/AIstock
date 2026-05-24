@@ -412,7 +412,7 @@ class FactorOfficialEvaluationService:
         self,
         factor_names: Optional[List[str]] = None,
         data_date: str = "",
-        include_disabled: bool = False,
+        include_disabled: bool = True,
         max_workers: int = 4,
         timeout_per_factor: int = 600,
     ) -> Dict[str, Any]:
@@ -732,7 +732,7 @@ class FactorOfficialEvaluationService:
         self,
         factor_names: Optional[List[str]] = None,
         data_date: str = "",
-        include_disabled: bool = False,
+        include_disabled: bool = True,
         max_workers: int = 4,
         timeout_per_factor: int = 600,
     ) -> Dict[str, Any]:
