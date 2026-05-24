@@ -15,6 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 BUGS_ROOT = REPO_ROOT / "tests" / "aistock_validation" / "bugs"
 WORKFLOW_ROOT = Path("tmp") / "issue_workflow"
 ALLOWED_FIX_STATUSES = {"open", "in_progress"}
+GITHUB_REPO = "licong01-cloud/AIstock"
 
 sys.path.insert(0, str(REPO_ROOT))
 from scripts import issue_flow as flow  # noqa: E402
@@ -197,6 +198,45 @@ def _bug_files(bugs_root: Path | None = None) -> list[Path]:
     return sorted(path for path in bugs_root.glob("*.json") if not path.name.startswith("."))
 
 
+def _allocator_path() -> Path:
+    return BUGS_ROOT / ".bug_id_allocator.json"
+
+
+def _next_bug_id() -> tuple[str, int]:
+    allocator = _allocator_path()
+    last_allocated = 0
+    if allocator.exists():
+        payload = _load_json(allocator)
+        try:
+            last_allocated = int(payload.get("last_allocated") or 0)
+        except (TypeError, ValueError) as exc:
+            raise WorkflowError(f"invalid bug id allocator: {allocator}") from exc
+    next_number = last_allocated + 1
+    return f"BUG-{next_number:03d}", next_number
+
+
+def _write_allocator(next_number: int) -> None:
+    _write_json(
+        _allocator_path(),
+        {
+            "schema_version": "aistock_bug_id_allocator_v1",
+            "last_allocated": next_number,
+            "updated_at": _utc_now(),
+            "updated_by": "aistock_issue_workflow.py",
+        },
+    )
+
+
+def _bug_json_path(record: dict[str, Any]) -> Path:
+    bug_id = str(record["bug_id"])
+    return BUGS_ROOT / f"{_today_compact()}_{bug_id}-{_slug(str(record.get('title') or bug_id))}.json"
+
+
+def _github_issue_number_from_url(url: str) -> int | None:
+    match = re.search(r"/issues/(\d+)(?:$|[?#])", url.strip())
+    return int(match.group(1)) if match else None
+
+
 def find_bug_record(bug_id: str | None = None, issue_json: str | None = None) -> tuple[dict[str, Any], Path]:
     if issue_json:
         path = Path(issue_json)
@@ -215,6 +255,199 @@ def find_bug_record(bug_id: str | None = None, issue_json: str | None = None) ->
     if len(matches) > 1:
         raise WorkflowError(f"Multiple BUG records found for {normalized}: {[str(path) for _, path in matches]}")
     return matches[0]
+
+
+def _render_github_issue_body(record: dict[str, Any], candidate: dict[str, Any]) -> str:
+    evidence = record.get("evidence_uris") or []
+    scope = record.get("allowed_write_scope") or []
+    verification = record.get("required_verification") or []
+    lines = [
+        f"<!-- aistock-bug:{record.get('bug_id')} -->",
+        f"<!-- aistock-candidate:{candidate.get('candidate_id')} -->",
+        "",
+        "## Summary",
+        str(record.get("description") or record.get("title") or ""),
+        "",
+        "## Expected",
+        str(record.get("expected") or "Expected behavior should be restored."),
+        "",
+        "## Actual",
+        str(record.get("actual") or record.get("description") or ""),
+        "",
+        "## Reproduce",
+        f"`{record.get('reproduce_command') or 'n/a'}`",
+        "",
+        "## Scope",
+        *[f"- `{item}`" for item in scope or ["triage required"]],
+        "",
+        "## Required Verification",
+        *[f"- `{item}`" for item in verification or ["l0"]],
+        "",
+        "## Evidence",
+        *[f"- {item}" for item in evidence or ["n/a"]],
+        "",
+        "## Workflow Gates",
+        "- production_ddl_gate: `noop`",
+        "- production_frontend_dependency_gate: `noop`",
+        "- production_backend_dependency_gate: `noop`",
+    ]
+    return "\n".join(lines)
+
+
+def build_submit_bug_plan(
+    *,
+    title: str,
+    module: str,
+    severity: str,
+    description: str | None,
+    expected: str | None,
+    actual: str | None,
+    reproduce_command: str | None,
+    evidence_refs: list[str],
+    changed_files: list[str],
+    plan_key: str | None,
+    nox_session: str | None,
+    candidate_type: str,
+    bug_id: str | None,
+    github_issue_number: str | None,
+    github_issue_url: str | None,
+    create_github: bool,
+    apply: bool,
+) -> dict[str, Any]:
+    canonical_bug_id = (bug_id or "").strip().upper() or None
+    allocated_number: int | None = None
+    if not canonical_bug_id:
+        canonical_bug_id, allocated_number = _next_bug_id()
+    else:
+        match = re.fullmatch(r"BUG-(\d{3,})", canonical_bug_id)
+        if not match:
+            raise WorkflowError("--bug-id must match BUG-NNN when provided")
+        allocated_number = int(match.group(1))
+
+    event_args = argparse.Namespace(
+        source="manual",
+        source_json=None,
+        title=title,
+        module=module,
+        severity_guess=severity,
+        actual=actual or description or title,
+        plan_key=plan_key,
+        nox_session=nox_session,
+        reproduce_command=reproduce_command,
+        evidence_ref=evidence_refs,
+        changed_file=changed_files,
+    )
+    event = flow.build_failure_event(event_args)
+    candidate = flow.candidate_from_event(
+        event,
+        title=title,
+        candidate_type=candidate_type,
+        expected=expected,
+        actual=actual or description,
+    )
+    record = flow.promote_candidate_to_bug(
+        candidate,
+        bug_id=canonical_bug_id,
+        github_issue_number=github_issue_number,
+        github_issue_url=github_issue_url,
+    )
+    now = _utc_now()
+    record.setdefault("created_at", now)
+    record.setdefault("first_seen_at", now)
+    record.setdefault("last_seen_at", now)
+    record.setdefault("assigned_agent", None)
+    record.setdefault("fix_branch", None)
+    record.setdefault("fix_commit", None)
+    record.setdefault("verification_run_id", None)
+    record.setdefault("github_issue_number", None)
+    record.setdefault("github_issue_url", None)
+    record.setdefault("fixed_at", None)
+    record.setdefault("closed_at", None)
+    record.setdefault("production_ddl_gate", "noop")
+    record.setdefault("production_frontend_dependency_gate", "noop")
+    record.setdefault("production_backend_dependency_gate", "noop")
+
+    output_dir = REPO_ROOT / WORKFLOW_ROOT / canonical_bug_id
+    candidate_path = output_dir / "candidate.json"
+    github_body_path = output_dir / "github-issue-body.md"
+    bug_path = _bug_json_path(record)
+    github_result: dict[str, Any] | None = None
+
+    if apply and bug_path.exists():
+        raise WorkflowError(f"BUG JSON already exists: {bug_path}")
+
+    if create_github and not record.get("github_issue_url"):
+        _write_text(github_body_path, _render_github_issue_body(record, candidate))
+        if apply:
+            github_title = f"{canonical_bug_id} {severity}: {title}"
+            result = _execute_checked(
+                [
+                    "gh",
+                    "issue",
+                    "create",
+                    "--repo",
+                    GITHUB_REPO,
+                    "--title",
+                    github_title,
+                    "--body-file",
+                    str(github_body_path),
+                ],
+                cwd=REPO_ROOT,
+                timeout=120,
+            )
+            issue_url = str(result.get("stdout") or "").splitlines()[-1].strip()
+            issue_number = _github_issue_number_from_url(issue_url)
+            if not issue_url or not issue_number:
+                raise WorkflowError(f"cannot parse created GitHub issue URL: {issue_url!r}")
+            record["github_issue_url"] = issue_url
+            record["github_issue_number"] = issue_number
+            github_result = {"created": True, "url": issue_url, "number": issue_number}
+        else:
+            github_result = {"created": False, "planned": True, "body_path": _repo_rel(github_body_path)}
+
+    has_linkage = bool(record.get("github_issue_number") and record.get("github_issue_url"))
+    if apply and not has_linkage:
+        raise WorkflowError("--apply requires --create-github or existing --github-issue-number and --github-issue-url")
+
+    payload = {
+        "schema_version": "aistock_issue_workflow_submit_bug_v1",
+        "generated_at": now,
+        "bug_id": canonical_bug_id,
+        "candidate_id": candidate.get("candidate_id"),
+        "dry_run": not apply,
+        "workflow_gate": "submitted" if apply else ("ready_for_apply" if has_linkage or create_github else "needs_github_sync"),
+        "candidate_path": _repo_rel(candidate_path),
+        "github_issue_body_path": _repo_rel(github_body_path),
+        "bug_json_path": _repo_rel(bug_path),
+        "github": github_result or {
+            "created": False,
+            "number": record.get("github_issue_number"),
+            "url": record.get("github_issue_url"),
+        },
+        "record": record,
+        "next_command": f"python scripts/aistock_issue_workflow.py run --bug-id {canonical_bug_id} --mode plan --create-worktree"
+        if apply
+        else f"python scripts/aistock_issue_workflow.py submit-bug --title \"{title}\" --module {module} --severity {severity} --create-github --apply",
+    }
+
+    if apply:
+        _write_json(candidate_path, {"event": event, "candidate": candidate})
+        _write_text(github_body_path, _render_github_issue_body(record, candidate))
+        _write_json(bug_path, record)
+        if bug_id is None:
+            _write_allocator(int(allocated_number or canonical_bug_id.split("-")[1]))
+        _write_state(
+            canonical_bug_id,
+            state="discovered",
+            source_bug_json=_repo_rel(bug_path),
+            candidate_path=_repo_rel(candidate_path),
+            github_issue_number=record.get("github_issue_number"),
+            github_issue_url=record.get("github_issue_url"),
+            next_actions=["run_issue_workflow_plan", "create_worktree", "read_context_pack"],
+        )
+        payload["state_path"] = _repo_rel(_state_path(canonical_bug_id))
+        payload["events_path"] = _repo_rel(_events_path(canonical_bug_id))
+    return payload
 
 
 def _require_github_linkage(record: dict[str, Any], *, allow_missing: bool = False) -> list[str]:
@@ -1175,6 +1408,30 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return 0 if payload.get("workflow_gate") != "blocked" else 2
 
 
+def cmd_submit_bug(args: argparse.Namespace) -> int:
+    payload = build_submit_bug_plan(
+        title=args.title,
+        module=args.module,
+        severity=args.severity,
+        description=args.description,
+        expected=args.expected,
+        actual=args.actual,
+        reproduce_command=args.reproduce_command,
+        evidence_refs=list(args.evidence_ref or []),
+        changed_files=list(args.changed_file or []),
+        plan_key=args.plan_key,
+        nox_session=args.nox_session,
+        candidate_type=args.candidate_type,
+        bug_id=args.bug_id,
+        github_issue_number=args.github_issue_number,
+        github_issue_url=args.github_issue_url,
+        create_github=args.create_github,
+        apply=args.apply,
+    )
+    _emit(payload, args.output)
+    return 0 if payload.get("workflow_gate") in {"ready_for_apply", "submitted"} else 2
+
+
 def cmd_install_client(args: argparse.Namespace) -> int:
     payload = build_client_install_plan(apply=args.apply, codex_home=args.codex_home)
     _emit(payload, args.output)
@@ -1246,6 +1503,27 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--skip-external", action="store_true", help="Skip gh/network-style checks for offline tests.")
     doctor.add_argument("--output")
     doctor.set_defaults(func=cmd_doctor)
+
+    submit_bug = sub.add_parser("submit-bug", help="Create a normalized BUG candidate and optionally sync GitHub/BUG JSON.")
+    submit_bug.add_argument("--title", required=True)
+    submit_bug.add_argument("--module", required=True)
+    submit_bug.add_argument("--severity", default="P2", choices=["P0", "P1", "P2", "P3"])
+    submit_bug.add_argument("--description")
+    submit_bug.add_argument("--expected")
+    submit_bug.add_argument("--actual")
+    submit_bug.add_argument("--reproduce-command")
+    submit_bug.add_argument("--evidence-ref", action="append")
+    submit_bug.add_argument("--changed-file", action="append")
+    submit_bug.add_argument("--plan-key")
+    submit_bug.add_argument("--nox-session")
+    submit_bug.add_argument("--candidate-type", default="bug", choices=["bug", "regression", "infra_failure", "flaky"])
+    submit_bug.add_argument("--bug-id", help="Use an already reserved BUG-NNN id instead of the allocator.")
+    submit_bug.add_argument("--github-issue-number")
+    submit_bug.add_argument("--github-issue-url")
+    submit_bug.add_argument("--create-github", action="store_true", help="Use gh to create the linked GitHub Issue when --apply is set.")
+    submit_bug.add_argument("--apply", action="store_true", help="Write candidate/BUG JSON and update allocator after GitHub linkage exists.")
+    submit_bug.add_argument("--output")
+    submit_bug.set_defaults(func=cmd_submit_bug)
 
     install_client = sub.add_parser("install-client", help="Install or dry-run developer-client entry wrappers.")
     install_client.add_argument("--apply", action="store_true")

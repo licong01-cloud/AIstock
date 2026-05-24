@@ -12,12 +12,12 @@ The skill/command/prompt layer is intentionally thin. The source of truth is `sc
 
 ## Trigger Examples
 
-- `????? BUG-112????? main`
-- `????? BUG-112???????? PR`
-- `???? open P0?? batch ? batch`
-- `?? issue workflow ???? GitHub Issue`
-- `???????? PR????? main`
-- `?????????? GitHub main`
+- `按规范修复 BUG-112，不要合入 main`
+- `按规范修复 BUG-112，验证通过后创建 PR`
+- `处理 open P0，能 batch 的 batch`
+- `按 issue workflow 登记一个 GitHub Issue`
+- `修复完成后创建 PR，不要合入 main`
+- `验证通过后同步本地和 GitHub main`
 
 ## Client Entry Rules
 
@@ -68,6 +68,23 @@ python scripts/aistock_issue_workflow.py doctor
 ```
 
 `doctor` checks the repo, GitHub CLI fallback, MCP/Codex config hints, repo/global skill presence, Claude Code command presence, canonical root cleanliness, and active standard/design files. It returns `workflow_gate=ready|warning|blocked`.
+
+## Submit Or Register A New BUG
+
+When the user asks to register a new BUG, do not hand-write a local-only BUG JSON. Use the high-level submit command so the developer client creates the same candidate and BUG record format:
+
+```powershell
+python scripts/aistock_issue_workflow.py submit-bug `
+  --title "<short title>" `
+  --module paper_v2 `
+  --severity P1 `
+  --description "<observed problem>" `
+  --reproduce-command "<command or n/a>" `
+  --create-github `
+  --apply
+```
+
+`--apply` requires GitHub linkage. Either pass `--create-github` so the command uses `gh issue create`, or supply both `--github-issue-number` and `--github-issue-url`. If GitHub is unavailable, keep the output as a draft and do not commit BUG JSON.
 
 ## Start Or Plan A Single BUG Fix
 

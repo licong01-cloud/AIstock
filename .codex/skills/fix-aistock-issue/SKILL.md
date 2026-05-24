@@ -1,11 +1,11 @@
 ---
 name: fix-aistock-issue
-description: "Use when the user asks Codex to submit, fix, process, triage, batch, finish, close, sync, merge, or resume AIstock BUG/GitHub Issues, including Chinese prompts such as ????? BUG-XXX, ?? P0/P1 issue, ?? PR, ?? main, or ?? issue. Always starts with scripts/aistock_issue_workflow.py instead of manual repo exploration."
+description: "Use when the user asks Codex to submit, fix, process, triage, batch, finish, close, sync, merge, or resume AIstock BUG/GitHub Issues, including Chinese-language requests that mention BUG-XXX, P0/P1, PR, main, or issue registration. Always starts with scripts/aistock_issue_workflow.py instead of manual repo exploration."
 ---
 
 # Fix AIstock Issue
 
-Use this skill to turn a short user request such as `????? BUG-112????? main` into the standard AIstock issue workflow.
+Use this skill to turn a short user request such as `fix BUG-112 according to AIstock standards; do not merge main` into the standard AIstock issue workflow.
 
 English trigger example: `fix BUG-112 according to AIstock standards; do not merge main`.
 
@@ -23,21 +23,24 @@ English trigger example: `fix BUG-112 according to AIstock standards; do not mer
 
 1. Health-check the environment:
    `python scripts/aistock_issue_workflow.py doctor`
-2. If the user names a BUG, run:
+2. If the user asks to submit/register a new BUG, run:
+   `python scripts/aistock_issue_workflow.py submit-bug --title "<title>" --module <module> --severity P1 --description "<description>" --create-github --apply`
+   If the command cannot create or link GitHub Issue, stop before committing any BUG JSON.
+3. If the user names an existing BUG, run:
    `python scripts/aistock_issue_workflow.py run --bug-id BUG-XXX --mode plan --create-worktree`
    Compatibility fallback:
    `python scripts/aistock_issue_workflow.py start --bug-id BUG-XXX --create-worktree`
-3. Switch to the returned worktree when one is created, then read `context_pack_md`, `fix_ready_path`, `state_path`, and `events_path` from the output.
-4. Fix only within `allowed_write_scope`; if more files are needed, stop and ask for scope expansion.
-5. If the window restarts, run:
+4. Switch to the returned worktree when one is created, then read `context_pack_md`, `fix_ready_path`, `state_path`, and `events_path` from the output.
+5. Fix only within `allowed_write_scope`; if more files are needed, stop and ask for scope expansion.
+6. If the window restarts, run:
    `python scripts/aistock_issue_workflow.py resume --bug-id BUG-XXX`
-6. After code changes, run:
+7. After code changes, run:
    `python scripts/aistock_issue_workflow.py finish --bug-id BUG-XXX --plan-only`
-7. Run every required validation plan.
-8. Re-run `finish` or `run --mode pr` with `--validation-evidence` entries for the commands/results that passed.
-9. Commit only the task files. If the user requested automated PR flow and validation evidence exists, run `python scripts/aistock_issue_workflow.py run --bug-id BUG-XXX --mode pr --validation-evidence "<command> -> passed" --push --create-pr`.
-10. Stop before merge unless the user explicitly requested merge.
-11. After an approved merge, run:
+8. Run every required validation plan.
+9. Re-run `finish` or `run --mode pr` with `--validation-evidence` entries for the commands/results that passed.
+10. Commit only the task files. If the user requested automated PR flow and validation evidence exists, run `python scripts/aistock_issue_workflow.py run --bug-id BUG-XXX --mode pr --validation-evidence "<command> -> passed" --push --create-pr`.
+11. Stop before merge unless the user explicitly requested merge.
+12. After an approved merge, run:
     `python scripts/aistock_issue_workflow.py close-sync --bug-id BUG-XXX --pr-url <PR_URL>`
     Then align BUG JSON and GitHub Issue status through the approved sync channel.
 

@@ -12,6 +12,16 @@ python F:\Dev\AIstock\scripts\aistock_issue_workflow.py doctor
 
 If `doctor` reports `workflow_gate=blocked`, stop and report the blocking items. If it reports warnings, continue only when the warning does not affect the requested workflow.
 
+## Submit/Register BUG workflow
+
+For a new BUG report, create the GitHub-linked BUG record through the orchestrator instead of hand-writing JSON:
+
+```powershell
+python F:\Dev\AIstock\scripts\aistock_issue_workflow.py submit-bug --title "<title>" --module <module> --severity P1 --description "<description>" --create-github --apply
+```
+
+If GitHub linkage cannot be created or supplied with `--github-issue-number` plus `--github-issue-url`, stop before committing BUG JSON.
+
 ## Single BUG workflow
 
 For a named BUG:

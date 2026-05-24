@@ -249,6 +249,74 @@ def test_doctor_reports_ready_when_client_entries_exist(
     assert "run --bug-id BUG-XXX" in payload["next_command"]
 
 
+def test_submit_bug_dry_run_requires_github_sync(isolated_workflow_root: Path) -> None:
+    allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
+    _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 117})
+
+    payload = workflow.build_submit_bug_plan(
+        title="Paper v2 display regression",
+        module="paper_v2",
+        severity="P1",
+        description="The view shows stale data.",
+        expected="The view should show fresh data.",
+        actual="The view shows stale data.",
+        reproduce_command="n/a",
+        evidence_refs=["screenshot:paper-v2"],
+        changed_files=["frontend/src/app/paper-v2/page.tsx"],
+        plan_key=None,
+        nox_session=None,
+        candidate_type="bug",
+        bug_id=None,
+        github_issue_number=None,
+        github_issue_url=None,
+        create_github=False,
+        apply=False,
+    )
+
+    assert payload["schema_version"] == "aistock_issue_workflow_submit_bug_v1"
+    assert payload["bug_id"] == "BUG-118"
+    assert payload["workflow_gate"] == "needs_github_sync"
+    assert payload["record"]["github_issue_number"] is None
+    assert not (isolated_workflow_root / payload["bug_json_path"]).exists()
+
+
+def test_submit_bug_apply_with_existing_github_link_writes_registry(
+    isolated_workflow_root: Path,
+) -> None:
+    allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
+    _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 117})
+
+    payload = workflow.build_submit_bug_plan(
+        title="Paper v2 display regression",
+        module="paper_v2",
+        severity="P1",
+        description="The view shows stale data.",
+        expected="The view should show fresh data.",
+        actual="The view shows stale data.",
+        reproduce_command="n/a",
+        evidence_refs=["screenshot:paper-v2"],
+        changed_files=["frontend/src/app/paper-v2/page.tsx"],
+        plan_key=None,
+        nox_session=None,
+        candidate_type="bug",
+        bug_id=None,
+        github_issue_number="188",
+        github_issue_url="https://github.com/licong01-cloud/AIstock/issues/188",
+        create_github=False,
+        apply=True,
+    )
+
+    assert payload["workflow_gate"] == "submitted"
+    bug_path = isolated_workflow_root / payload["bug_json_path"]
+    assert bug_path.exists()
+    record = json.loads(bug_path.read_text(encoding="utf-8"))
+    assert record["bug_id"] == "BUG-118"
+    assert record["github_issue_number"] == 188
+    assert record["production_ddl_gate"] == "noop"
+    assert json.loads(allocator.read_text(encoding="utf-8"))["last_allocated"] == 118
+    assert (isolated_workflow_root / payload["state_path"]).exists()
+
+
 def test_install_client_plan_can_copy_global_codex_skill(
     isolated_workflow_root: Path,
 ) -> None:
@@ -439,10 +507,19 @@ def test_repo_skill_and_quickstart_are_parseable() -> None:
 
     quickstart = Path("docs/standards/aistock_issue_workflow_quickstart.md").read_text(encoding="utf-8")
     assert "AIstock Issue Workflow Quickstart" in quickstart
+    assert "按规范修复 BUG-112" in quickstart
+    assert "????" not in quickstart
     assert "doctor" in quickstart
+    assert "submit-bug" in quickstart
     assert "resume" in quickstart
     assert "production_ddl_gate" in quickstart
 
     claude_command = Path(".claude/commands/fix-aistock-issue.md").read_text(encoding="utf-8")
     assert "Claude Code" in claude_command
+    assert "submit-bug" in claude_command
     assert "aistock_issue_workflow.py doctor" in claude_command
+
+    design = Path("docs/architecture/aistock_issue_workflow_opensource_cicd_design_v2_20260525.md").read_text(encoding="utf-8")
+    assert "智能验证平台设计实施方案 v2.0" in design
+    assert "Codex / Claude Code / Cursor" in design
+    assert "????" not in design
