@@ -41,6 +41,7 @@ from backend.services.trading_core.errors import (
 from .models import SelectionCandidate, SelectionMode, SelectionPaperPortfolioLink, SelectionRun, SelectionRunStatus
 from .package_health import SelectionPackageHealthService
 from .repository import SelectionCenterRepository
+from .result_enrichment import SelectionResultEnrichmentService
 from .risk_policy import StockRiskPolicyService
 from .runtime_profile import (
     RUNTIME_PROFILE_BINDING_KEY,
@@ -71,6 +72,7 @@ class SelectionCenterService:
         risk_policy_service: StockRiskPolicyService | Any | None = None,
         package_health_service: SelectionPackageHealthService | Any | None = None,
         strategy_selection_service: StrategyPackageSelectionService | Any | None = None,
+        result_enrichment_service: SelectionResultEnrichmentService | Any | None = None,
     ) -> None:
         self.package_repository = package_repository or StrategyPackageRepository()
         self.repository = repository or SelectionCenterRepository()
@@ -86,6 +88,7 @@ class SelectionCenterService:
         )
         self.calendar_provider = calendar_provider or TradeCalendarProvider()
         self.risk_policy_service = risk_policy_service or StockRiskPolicyService()
+        self.result_enrichment_service = result_enrichment_service or SelectionResultEnrichmentService()
         self.package_health_service = package_health_service or SelectionPackageHealthService(
             artifact_repository=getattr(self.runtime, "artifact_repository", None),
             runtime_source_resolver=getattr(self.selection_artifact_service, "runtime_asset_resolver", None),
@@ -150,11 +153,24 @@ class SelectionCenterService:
                 runtime_config=runtime_config or {},
                 created_by="selection_center",
             )
+            package_results = {
+                package_id: self.result_enrichment_service.enrich_candidates(
+                    candidates,
+                    trade_date=trade_date,
+                    runtime_config=selection.runtime_config,
+                )
+                for package_id, candidates in selection.package_results.items()
+            }
+            aggregate_results = self.result_enrichment_service.enrich_candidates(
+                selection.aggregate_results,
+                trade_date=trade_date,
+                runtime_config=selection.runtime_config,
+            )
             completed = run.model_copy(
                 update={
                     "runtime_config": selection.runtime_config,
-                    "package_results": selection.package_results,
-                    "aggregate_results": selection.aggregate_results,
+                    "package_results": package_results,
+                    "aggregate_results": aggregate_results,
                     "excluded_results": selection.excluded_results,
                     "manifest_sha256_by_package": selection.manifest_sha256_by_package,
                     "valid_no_candidate": selection.valid_no_candidate,
@@ -200,6 +216,8 @@ class SelectionCenterService:
                 PackageStatus.BACKTEST_APPROVED,
                 PackageStatus.SELECTION_ENABLED,
                 PackageStatus.PAPER_ENABLED,
+                PackageStatus.PAPER_RUNNING,
+                PackageStatus.PAPER_PASSED,
             }:
                 raise StrategyPackageValidationError(
                     "package is not enabled for selection",
@@ -621,6 +639,8 @@ class SelectionCenterService:
             PackageStatus.BACKTEST_APPROVED,
             PackageStatus.SELECTION_ENABLED,
             PackageStatus.PAPER_ENABLED,
+            PackageStatus.PAPER_RUNNING,
+            PackageStatus.PAPER_PASSED,
         ]
         records_by_id = {}
         for status in eligible_statuses:
@@ -773,6 +793,11 @@ class SelectionCenterService:
         self.repository.create_run(run)
         try:
             aggregate = self._aggregate(mode=mode, package_results=package_results, package_weights=weights)
+            aggregate = self.result_enrichment_service.enrich_candidates(
+                aggregate,
+                trade_date=run.trade_date,
+                runtime_config=run.runtime_config,
+            )
             aggregate = [
                 item.model_copy(
                     update={

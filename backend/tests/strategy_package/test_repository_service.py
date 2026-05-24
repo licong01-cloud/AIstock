@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timezone
@@ -142,7 +142,7 @@ def test_enable_paper_does_not_validate_manifest_minute_runtime_asset() -> None:
     assert paper.package_status == PackageStatus.PAPER_ENABLED
 
 
-def test_enable_paper_requires_governance_eligibility_ready() -> None:
+def test_enable_paper_does_not_require_live_strict_governance_ready() -> None:
     repo = InMemoryStrategyPackageRepository()
     manifest = freeze_manifest(
         make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
@@ -150,20 +150,19 @@ def test_enable_paper_requires_governance_eligibility_ready() -> None:
     repo.save_manifest(manifest)
     service = StrategyPackageService(repository=repo)
     _record_passed_original_retest(service, manifest.package_id)
-    before_reasons = [event.reason for event in repo.list_status_events(manifest.package_id)]
 
-    with pytest.raises(StrategyPackageValidationError, match="governance eligibility") as exc_info:
-        service.enable_paper(manifest.package_id)
+    governance = service.governance_eligibility(manifest.package_id)
+    paper = service.enable_paper(manifest.package_id)
 
-    context = exc_info.value.context
-    assert context["paper_ready"] is False
-    assert "protected_asset_ledger_missing" in context["blockers"]
-    assert "runtime_variant_paper_candidate_missing" in context["blockers"]
-    assert repo.get(manifest.package_id).package_status == PackageStatus.BACKTEST_APPROVED
-    assert [event.reason for event in repo.list_status_events(manifest.package_id)] == before_reasons
+    assert governance["paper_ready"] is False
+    assert governance["does_not_block_paper_simulation"] is True
+    assert "protected_asset_ledger_missing" in governance["blockers"]
+    assert "runtime_variant_paper_candidate_missing" in governance["blockers"]
+    assert paper.package_status == PackageStatus.PAPER_ENABLED
+    assert [event.reason for event in repo.list_status_events(manifest.package_id)][-1] == "enable_paper"
 
 
-def test_enable_paper_uses_large_governance_history_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_paper_simulation_admission_uses_large_governance_history_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     repo = InMemoryStrategyPackageRepository()
     manifest = freeze_manifest(
         make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
@@ -179,13 +178,14 @@ def test_enable_paper_uses_large_governance_history_limit(monkeypatch: pytest.Mo
         limit: int = 500,
     ) -> dict[str, object]:
         observed.update({"package_id": package_id, "metric_key": metric_key, "limit": limit})
-        return {"paper_ready": True}
+        return {"paper_ready": False, "blockers": ["seed_stability=INSUFFICIENT_EVIDENCE"]}
 
     monkeypatch.setattr(service, "governance_eligibility", fake_governance_eligibility)
 
-    paper = service.enable_paper(manifest.package_id)
+    admission = service.paper_simulation_admission(manifest.package_id)
 
-    assert paper.package_status == PackageStatus.PAPER_ENABLED
+    assert admission["paper_simulation_allowed"] is True
+    assert admission["warnings"] == ["live_strict_governance:seed_stability=INSUFFICIENT_EVIDENCE"]
     assert observed == {
         "package_id": manifest.package_id,
         "metric_key": "annual_return",
@@ -193,19 +193,23 @@ def test_enable_paper_uses_large_governance_history_limit(monkeypatch: pytest.Mo
     }
 
 
-def test_enable_paper_requires_passed_original_fixed_weight_retest() -> None:
+def test_enable_paper_allows_missing_original_fixed_weight_retest_as_warning() -> None:
     repo = InMemoryStrategyPackageRepository()
     manifest = freeze_manifest(
         make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
     )
     repo.save_manifest(manifest)
+    service = StrategyPackageService(repository=repo)
 
-    with pytest.raises(StrategyPackageValidationError, match="governance eligibility") as exc_info:
-        StrategyPackageService(repository=repo).enable_paper(manifest.package_id)
-    assert "original_fixed_weight_retest_missing_passed_run_for_current_manifest" in exc_info.value.context["blockers"]
+    admission = service.paper_simulation_admission(manifest.package_id)
+    paper = service.enable_paper(manifest.package_id)
+
+    assert admission["paper_simulation_allowed"] is True
+    assert "live_strict_governance:original_fixed_weight_retest_missing_passed_run_for_current_manifest" in admission["warnings"]
+    assert paper.package_status == PackageStatus.PAPER_ENABLED
 
 
-def test_enable_paper_reports_failed_original_retest_without_status_mutation() -> None:
+def test_governance_reports_failed_original_retest_but_enable_paper_still_marks_intent() -> None:
     repo = InMemoryStrategyPackageRepository()
     manifest = freeze_manifest(
         make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
@@ -221,14 +225,13 @@ def test_enable_paper_reports_failed_original_retest_without_status_mutation() -
         completed_at=datetime.now(timezone.utc),
         created_by="unit_test",
     )
-    before_reasons = [event.reason for event in repo.list_status_events(manifest.package_id)]
 
-    with pytest.raises(StrategyPackageValidationError, match="governance eligibility") as exc_info:
-        service.enable_paper(manifest.package_id)
+    context = service.governance_eligibility(manifest.package_id)
+    paper = service.enable_paper(manifest.package_id)
 
-    context = exc_info.value.context
     original_retest = context["original_fixed_weight_retest"]
     assert context["paper_ready"] is False
+    assert context["does_not_block_paper_simulation"] is True
     assert "original_fixed_weight_retest_missing_passed_run_for_current_manifest" in context["blockers"]
     assert original_retest["required_validation_type"] == PackageValidationType.ORIGINAL_FIXED_WEIGHT.value
     assert original_retest["required_status"] == PackageValidationStatus.PASSED.value
@@ -243,11 +246,10 @@ def test_enable_paper_reports_failed_original_retest_without_status_mutation() -
             "created_by": "unit_test",
         }
     ]
-    assert repo.get(manifest.package_id).package_status == PackageStatus.BACKTEST_APPROVED
-    assert [event.reason for event in repo.list_status_events(manifest.package_id)] == before_reasons
+    assert paper.package_status == PackageStatus.PAPER_ENABLED
 
 
-def test_enable_paper_does_not_fall_back_to_latest_fixed_weight_validation() -> None:
+def test_governance_does_not_fall_back_to_latest_fixed_weight_validation() -> None:
     repo = InMemoryStrategyPackageRepository()
     manifest = freeze_manifest(
         make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
@@ -267,14 +269,15 @@ def test_enable_paper_does_not_fall_back_to_latest_fixed_weight_validation() -> 
         created_by="unit_test",
     )
 
-    with pytest.raises(StrategyPackageValidationError) as exc_info:
-        service.enable_paper(manifest.package_id)
+    context = service.governance_eligibility(manifest.package_id)
+    paper = service.enable_paper(manifest.package_id)
 
-    original_retest = exc_info.value.context["original_fixed_weight_retest"]
+    original_retest = context["original_fixed_weight_retest"]
     assert original_retest["required_validation_type"] == PackageValidationType.ORIGINAL_FIXED_WEIGHT.value
     assert original_retest["same_manifest_run_count"] == 0
     assert original_retest["observed_original_fixed_weight_runs"] == []
-    assert repo.get(manifest.package_id).package_status == PackageStatus.BACKTEST_APPROVED
+    assert context["does_not_block_paper_simulation"] is True
+    assert paper.package_status == PackageStatus.PAPER_ENABLED
 
 
 def test_enable_paper_finds_passed_original_retest_even_after_many_newer_runs() -> None:

@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from backend.services.paper_trading_v2.market_data import MinuteDataSource
 from backend.services.selection_center.models import SelectionMode
+from backend.services.selection_center.industry_tree import SelectionIndustryTreeService
 from backend.services.selection_center.service import SelectionCenterService
 from backend.services.trading_core.errors import DataUnavailableError, TradingCoreError, UnsupportedFeatureError
 
@@ -60,6 +61,10 @@ def get_selection_center_service() -> SelectionCenterService:
     return SelectionCenterService()
 
 
+def get_industry_tree_service() -> SelectionIndustryTreeService:
+    return SelectionIndustryTreeService()
+
+
 @router.post("/runs")
 def run_selection(
     req: RunSelectionRequest,
@@ -86,6 +91,16 @@ def list_selectable_packages(
     try:
         packages = service.list_selectable_packages(limit=limit)
         return {"ok": True, "packages": packages}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/industry-tree")
+def get_selection_industry_tree(
+    service: SelectionIndustryTreeService = Depends(get_industry_tree_service),
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, "tree": service.sw2_tree()}
     except TradingCoreError as exc:
         _raise_http(exc)
 

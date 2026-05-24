@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 from datetime import date
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -21,8 +22,11 @@ from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioSer
 from backend.services.paper_trading_v2.session import PaperTradingSessionRunner, PaperTradingSessionService
 from backend.services.paper_trading_v2.models import BrokerBackendId, PaperSessionMode
 from backend.services.paper_trading_v2.symbol_names import PaperV2SymbolNameResolver
+from backend.services.trading_calendar_status import TradingCalendarStatusService
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, TradingCoreError, UnsupportedFeatureError
 router = APIRouter(prefix="/paper-v2", tags=["paper-v2"])
+
+CHINA_TZ = ZoneInfo("Asia/Shanghai")
 
 
 class CreatePortfolioRequest(BaseModel):
@@ -208,8 +212,10 @@ def get_trading_day_defaults(
 ) -> dict[str, Any]:
     if lookback_trading_days <= 0 or lookback_trading_days > 250:
         raise HTTPException(status_code=400, detail="lookback_trading_days must be between 1 and 250")
-    as_of = as_of_date or dt.date.today()
+    as_of = as_of_date or dt.datetime.now(CHINA_TZ).date()
     try:
+        calendar_service = TradingCalendarStatusService()
+        status = calendar_service.status(as_of_date=as_of)
         with get_conn() as conn:
             with conn.cursor() as cur:
                 data_ready_latest_date: date | None = None
@@ -230,26 +236,9 @@ def get_trading_day_defaults(
                     if data_ready_row and data_ready_row[0]:
                         data_ready_latest_date = data_ready_row[0]
                         effective_end = min(as_of, data_ready_latest_date)
-                cur.execute(
-                    """
-                    SELECT cal_date
-                    FROM market.trading_calendar
-                    WHERE cal_date <= %s AND is_trading = TRUE
-                    ORDER BY cal_date DESC
-                    LIMIT %s
-                    """,
-                    (effective_end, lookback_trading_days),
-                )
-                rows = cur.fetchall()
-                cur.execute(
-                    """
-                    SELECT MIN(cal_date)
-                    FROM market.trading_calendar
-                    WHERE cal_date > %s AND is_trading = TRUE
-                    """,
-                    (as_of,),
-                )
-                next_row = cur.fetchone()
+        lookup_start = effective_end - dt.timedelta(days=max(lookback_trading_days * 3, 31))
+        all_days = calendar_service.list_trading_days(lookup_start, effective_end)
+        dates = list(reversed(all_days[-lookback_trading_days:]))
     except Exception as exc:
         _raise_http(DataUnavailableError(
             "trading calendar defaults query failed",
@@ -260,7 +249,7 @@ def get_trading_day_defaults(
                 "error": str(exc),
             },
         ))
-    if not rows:
+    if not dates:
         _raise_http(DataUnavailableError(
             "trading calendar has no completed trading day for defaults",
             context={
@@ -269,13 +258,12 @@ def get_trading_day_defaults(
                 "require_minute_data": require_minute_data,
             },
         ))
-    dates = [row[0] for row in rows]
     latest = dates[0]
     replay_start = dates[-1]
-    next_trading_day = next_row[0] if next_row and next_row[0] else None
     return {
         "ok": True,
         "as_of_date": as_of.isoformat(),
+        "trading_day_status": status,
         "lookback_trading_days": lookback_trading_days,
         "require_minute_data": require_minute_data,
         "data_ready_latest_date": data_ready_latest_date.isoformat() if data_ready_latest_date else None,
@@ -283,7 +271,7 @@ def get_trading_day_defaults(
         "replay_start_date": replay_start.isoformat(),
         "replay_end_date": latest.isoformat(),
         "available_trading_day_count": len(dates),
-        "next_trading_day": next_trading_day.isoformat() if next_trading_day else None,
+        "next_trading_day": status.get("next_trading_day"),
     }
 
 

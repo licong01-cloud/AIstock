@@ -79,6 +79,14 @@ STATUS_TRANSITIONS: dict[PackageStatus, set[PackageStatus]] = {
     },
 }
 
+PAPER_SIMULATION_ALLOWED_STATUSES = {
+    PackageStatus.BACKTEST_APPROVED,
+    PackageStatus.SELECTION_ENABLED,
+    PackageStatus.PAPER_ENABLED,
+    PackageStatus.PAPER_RUNNING,
+    PackageStatus.PAPER_PASSED,
+}
+
 LIVE_APPROVAL_STATUS_TRANSITIONS: dict[LiveApprovalStatus, set[LiveApprovalStatus]] = {
     LiveApprovalStatus.LIVE_APPROVAL_PENDING: {LiveApprovalStatus.LIVE_CANDIDATE},
     LiveApprovalStatus.LIVE_APPROVED: {LiveApprovalStatus.LIVE_APPROVAL_PENDING},
@@ -404,11 +412,10 @@ class StrategyPackageService:
             )
         if to_status == PackageStatus.PAPER_ENABLED:
             record = self.repository.get(package_id)
-            # StrategyPackage freezes factor/model lineage. Minute execution
-            # policies are selected later from backtest-validated policy rows,
-            # so enabling the package for Paper v2 must not validate an obsolete
-            # manifest-embedded V24/V25 runtime asset path.
-            self._require_governance_paper_ready(record)
+            # Paper simulation admission is intentionally alpha-core only.
+            # HMM, execution policy, broker, data freshness, and future live
+            # governance are runtime/preflight concerns, not package gates.
+            self._require_paper_simulation_admission(record)
         return self.repository.transition_status(
             package_id=package_id,
             to_status=to_status,
@@ -437,6 +444,12 @@ class StrategyPackageService:
             to_status=PackageStatus.RETIRED,
             reason=reason,
         )
+
+    def validate_manifest_integrity(self, *, limit: int = 500) -> dict[str, Any]:
+        return self.repository.validate_manifest_integrity(limit=limit)
+
+    def repair_manifest_hash(self, package_id: str, *, operator: str = "paper_v2_gate_decoupling") -> StrategyPackageRecord:
+        return self.repository.repair_manifest_hash(package_id, operator=operator)
 
     def list_status_events(self, package_id: str, *, limit: int = 200) -> list[PackageStatusEvent]:
         return self.repository.list_status_events(package_id, limit=limit)
@@ -1033,6 +1046,8 @@ class StrategyPackageService:
             "manifest_sha256": record.manifest_sha256,
             "package_status": record.package_status.value,
             "paper_ready": not blockers,
+            "paper_ready_semantics": "live_strict_governance_readiness",
+            "does_not_block_paper_simulation": True,
             "blockers": blockers,
             "satisfied_gates": satisfied_gates,
             "manifest_identity": manifest_identity,
@@ -1042,22 +1057,65 @@ class StrategyPackageService:
             "runtime_variant_candidate_status": runtime_variants,
         }
 
-    def _require_original_fixed_weight_retest_passed(self, record: StrategyPackageRecord) -> None:
-        report = self._original_fixed_weight_retest_gate(record)
-        if report["passed"]:
-            return
-        raise StrategyPackageValidationError(
-            "original fixed-weight validation must pass before enabling Paper",
-            context=report,
-        )
+    def paper_simulation_admission(
+        self,
+        package_id: str,
+        *,
+        metric_key: str = "annual_return",
+        governance_limit: int = PAPER_READY_GOVERNANCE_LIMIT,
+    ) -> dict[str, Any]:
+        """Return the Paper v2 simulation admission summary for a package.
 
-    def _require_governance_paper_ready(self, record: StrategyPackageRecord) -> None:
-        eligibility = self.governance_eligibility(record.package_id, limit=PAPER_READY_GOVERNANCE_LIMIT)
-        if eligibility["paper_ready"]:
+        This is deliberately narrower than ``governance_eligibility``. Paper v2
+        simulation may run a backtest-approved QE alpha core even when live-like
+        governance evidence is incomplete. Runtime failures are reported by the
+        concrete Selection/Paper preflight instead of invalidating the package.
+        """
+
+        record = self.repository.get(package_id)
+        manifest = record.current_manifest()
+        alpha_core = self._manifest_identity_gate(record, manifest)
+        warnings: list[str] = []
+        governance: dict[str, Any] | None = None
+        if governance_limit > 0:
+            governance = self.governance_eligibility(package_id, metric_key=metric_key, limit=governance_limit)
+            for blocker in governance.get("blockers") or []:
+                warning = f"live_strict_governance:{blocker}"
+                if warning not in warnings:
+                    warnings.append(warning)
+
+        return {
+            "package_id": package_id,
+            "manifest_sha256": record.manifest_sha256,
+            "package_status": record.package_status.value,
+            "alpha_core_eligible": alpha_core["passed"],
+            "paper_simulation_allowed": alpha_core["passed"],
+            "blockers": list(alpha_core["blockers"]),
+            "warnings": warnings,
+            "runtime_preflight_required": True,
+            "live_strict_governance": governance,
+            "alpha_core_identity": alpha_core,
+            "admission_policy": {
+                "name": "paper_v2_alpha_core_admission_v1",
+                "allowed_package_statuses": [status.value for status in PAPER_SIMULATION_ALLOWED_STATUSES],
+                "non_blocking_governance": [
+                    "original_fixed_weight_retest",
+                    "seed_stability",
+                    "regime_stability",
+                    "protected_asset_ledger",
+                    "runtime_variant_candidate",
+                    "rolling_retrain_evidence",
+                ],
+            },
+        }
+
+    def _require_paper_simulation_admission(self, record: StrategyPackageRecord) -> None:
+        admission = self.paper_simulation_admission(record.package_id, governance_limit=0)
+        if admission["paper_simulation_allowed"]:
             return
         raise StrategyPackageValidationError(
-            "governance eligibility must be paper_ready before enabling Paper",
-            context=eligibility,
+            "package alpha core is not eligible for Paper v2 simulation",
+            context=admission,
         )
 
     @staticmethod
@@ -1179,16 +1237,8 @@ class StrategyPackageService:
 
     def _manifest_identity_gate(self, record: StrategyPackageRecord, manifest: StrategyPackageManifest) -> dict[str, Any]:
         blockers: list[str] = []
-        allowed_statuses = [
-            PackageStatus.BACKTEST_APPROVED.value,
-            PackageStatus.SELECTION_ENABLED.value,
-            PackageStatus.PAPER_ENABLED.value,
-        ]
-        if record.package_status not in {
-            PackageStatus.BACKTEST_APPROVED,
-            PackageStatus.SELECTION_ENABLED,
-            PackageStatus.PAPER_ENABLED,
-        }:
+        allowed_statuses = [status.value for status in PAPER_SIMULATION_ALLOWED_STATUSES]
+        if record.package_status not in PAPER_SIMULATION_ALLOWED_STATUSES:
             blockers.append(f"package_status={record.package_status.value}")
         try:
             self.validator.validate_manifest(manifest)

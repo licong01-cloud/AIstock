@@ -144,6 +144,11 @@ class FakeTradingCalendar:
             raise DataUnavailableError("not trading day", context={"trade_date": trade_date.isoformat()})
 
 
+class ExplodingTradingCalendar:
+    def ensure_trading_day(self, trade_date: date) -> None:
+        raise RuntimeError("calendar backend unavailable")
+
+
 def test_replay_only_session_create_tick_and_progress() -> None:
     package_repo, paper_repo, portfolio = make_portfolio(data_source=MinuteDataSource.DB_HISTORICAL)
     portfolio_service = PaperTradingV2PortfolioService(package_repository=package_repo, repository=paper_repo)
@@ -377,6 +382,18 @@ def test_session_mutation_guard_blocks_trading_hours_when_enabled() -> None:
         as_of_time=datetime(2024, 1, 2, 16, 0),
     )
     assert session.status == PaperSessionStatus.CREATED
+
+
+def test_session_trading_day_check_does_not_fall_back_to_local_weekday() -> None:
+    _package_repo, paper_repo, _portfolio = make_portfolio(data_source=MinuteDataSource.DB_HISTORICAL)
+    service = PaperTradingSessionService(
+        repository=paper_repo,
+        calendar_provider=ExplodingTradingCalendar(),
+        enforce_non_trading_window=True,
+    )
+
+    with pytest.raises(SessionConfigError, match="could not determine trading-day status"):
+        service._is_trading_day_for_operation(date(2024, 1, 2))
 
 
 def test_switch_session_mode_stops_source_and_creates_target_after_close() -> None:

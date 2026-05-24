@@ -11,8 +11,38 @@ from backend.db.pg_pool import get_conn
 from backend.services.trading_core.errors import DataUnavailableError
 
 from .models import SelectionCandidate, SelectionExclusion, SelectionMode, SelectionPaperPortfolioLink, SelectionRun, SelectionRunStatus
+from .result_enrichment import component_scores_with_display_fields, display_fields_from_component_scores
 
 ConnFactory = Callable[[], Iterator[Any]]
+
+
+def _optional_float(value: Any) -> float | None:
+    return float(value) if value is not None else None
+
+
+def _selection_candidate_from_aggregate_row(item: dict[str, Any]) -> SelectionCandidate:
+    component_scores = item["explanation"] or {}
+    display_fields = display_fields_from_component_scores(component_scores)
+    entry_price = display_fields.get("selection_entry_price")
+    reference_price = entry_price if entry_price is not None else item["reference_price"]
+    return SelectionCandidate(
+        symbol=item["symbol"],
+        score=float(item["score"]),
+        rank=int(item["rank"]),
+        target_weight=_optional_float(item["target_weight"]),
+        target_quantity=int(item["target_quantity"]) if item["target_quantity"] is not None else None,
+        reference_price=_optional_float(reference_price),
+        stock_name=display_fields.get("stock_name"),
+        selection_entry_price=_optional_float(entry_price),
+        selection_entry_price_source=display_fields.get("selection_entry_price_source"),
+        selection_entry_price_time=display_fields.get("selection_entry_price_time"),
+        previous_close=_optional_float(display_fields.get("previous_close")),
+        volume=_optional_float(display_fields.get("volume")),
+        current_price=_optional_float(display_fields.get("current_price")),
+        current_price_source=display_fields.get("current_price_source"),
+        current_price_time=display_fields.get("current_price_time"),
+        component_scores=component_scores,
+    )
 
 
 class SelectionCenterRepository:
@@ -93,7 +123,7 @@ class SelectionCenterRepository:
                                 candidate.target_weight,
                                 candidate.target_quantity,
                                 candidate.reference_price,
-                                psycopg2.extras.Json(candidate.component_scores),
+                                psycopg2.extras.Json(component_scores_with_display_fields(candidate)),
                                 candidate.reason,
                             ),
                         )
@@ -115,7 +145,7 @@ class SelectionCenterRepository:
                             candidate.target_quantity,
                             candidate.reference_price,
                             psycopg2.extras.Json(source_package_ids),
-                            psycopg2.extras.Json(candidate.component_scores),
+                            psycopg2.extras.Json(component_scores_with_display_fields(candidate)),
                         ),
                     )
                 for package_id, exclusions in completed.excluded_results.items():
@@ -224,6 +254,9 @@ class SelectionCenterRepository:
         for item in package_rows:
             package_id = item["package_id"]
             manifest_sha[package_id] = item["manifest_sha256"]
+            component_scores = item["component_scores"] or {}
+            display_fields = display_fields_from_component_scores(component_scores)
+            entry_price = display_fields.get("selection_entry_price")
             package_results.setdefault(package_id, []).append(
                 SelectionCandidate(
                     symbol=item["symbol"],
@@ -231,21 +264,22 @@ class SelectionCenterRepository:
                     rank=int(item["rank"]),
                     target_weight=float(item["target_weight"]) if item["target_weight"] is not None else None,
                     target_quantity=int(item["target_quantity"]) if item["target_quantity"] is not None else None,
-                    reference_price=float(item["reference_price"]) if item["reference_price"] is not None else None,
-                    component_scores=item["component_scores"] or {},
+                    reference_price=float(entry_price or item["reference_price"]) if (entry_price or item["reference_price"]) is not None else None,
+                    stock_name=display_fields.get("stock_name"),
+                    selection_entry_price=float(entry_price) if entry_price is not None else None,
+                    selection_entry_price_source=display_fields.get("selection_entry_price_source"),
+                    selection_entry_price_time=display_fields.get("selection_entry_price_time"),
+                    previous_close=float(display_fields["previous_close"]) if display_fields.get("previous_close") is not None else None,
+                    volume=float(display_fields["volume"]) if display_fields.get("volume") is not None else None,
+                    current_price=float(display_fields["current_price"]) if display_fields.get("current_price") is not None else None,
+                    current_price_source=display_fields.get("current_price_source"),
+                    current_price_time=display_fields.get("current_price_time"),
+                    component_scores=component_scores,
                     reason=item["reason"],
                 )
             )
         aggregate = [
-            SelectionCandidate(
-                symbol=item["symbol"],
-                score=float(item["score"]),
-                rank=int(item["rank"]),
-                target_weight=float(item["target_weight"]) if item["target_weight"] is not None else None,
-                target_quantity=int(item["target_quantity"]) if item["target_quantity"] is not None else None,
-                reference_price=float(item["reference_price"]) if item["reference_price"] is not None else None,
-                component_scores=item["explanation"] or {},
-            )
+            _selection_candidate_from_aggregate_row(item)
             for item in aggregate_rows
         ]
         excluded_results: dict[str, list[SelectionExclusion]] = {}

@@ -22,6 +22,7 @@ import psycopg2.extras
 from backend.db.pg_pool import get_conn
 from backend.services.paper_trading_v2.market_data import MinuteDataSource
 from backend.services.qe_archive.models import canonical_json_dumps, normalize_json, sha256_json
+from backend.services.trading_calendar_status import TradingCalendarStatusService
 from backend.services.trading_core.errors import (
     InvalidStateTransitionError,
     StrategyPackageValidationError,
@@ -570,9 +571,12 @@ def _fill_market_context(*, req: dict[str, Any], now: dt.datetime) -> dict[str, 
 
 
 def _is_a_share_trading_window(now: dt.datetime) -> bool:
-    if now.weekday() >= 5:
+    local_dt = now.astimezone(SENTINEL_TZ)
+    try:
+        TradingCalendarStatusService().ensure_trading_day(local_dt.date())
+    except TradingCoreError:
         return False
-    local = now.astimezone(SENTINEL_TZ).time()
+    local = local_dt.time()
     return dt.time(9, 30) <= local <= dt.time(11, 30) or dt.time(13, 0) <= local <= dt.time(15, 0)
 
 

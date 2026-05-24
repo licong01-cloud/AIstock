@@ -84,6 +84,22 @@ async function mockPaperV2Api(page: Page, captures: JsonObject[]) {
     }
     if (method === "GET" && path === "/hmm-training/configs") return respond(route, [hmmConfig]);
     if (method === "GET" && path === `/hmm-training/configs/${configId}/snapshots`) return respond(route, [hmmSnapshot]);
+    if (method === "GET" && path === "/selection-center/industry-tree") return respond(route, { industries: [] });
+    if (method === "GET" && path === "/selection-center/selectable-packages") return respond(route, { packages: [packageRow] });
+    if (method === "GET" && path === "/paper-v2/running-summary") {
+      return respond(route, { summaries: [], pagination: { page: 1, page_size: 20, total: 0, total_pages: 0 } });
+    }
+    if (method === "GET" && path === "/trading-calendar/status") {
+      return respond(route, {
+        as_of_date: "2026-05-25",
+        is_trading_day: false,
+        latest_completed_trading_day: "2026-05-22",
+        previous_trading_day: "2026-05-22",
+        next_trading_day: "2026-05-26",
+        warnings: [{ code: "TRADING_CALENDAR_NEXT_MONTH_INCOMPLETE", message: "market.trading_calendar does not cover the full next month" }],
+        cache: { calendar_row_count: 252, refresh_reason: "file_cache" },
+      });
+    }
     if (method === "GET" && path.startsWith("/strategy-packages")) {
       if (path.endsWith("/execution-policies")) return respond(route, { execution_policies: [{ policy_id: "policy_bug076", policy_name: "V25", algo_code: "V25_TWO_STAGE", paper_enabled: true }] });
       return respond(route, { packages: [packageRow] });
@@ -142,7 +158,20 @@ async function mockPaperV2Api(page: Page, captures: JsonObject[]) {
   });
 }
 
-test("Portfolio creation persists and starts sessions with explicit HMM coefficients_path", async ({ page }) => {
+test("Paper overview displays official trading-day status from unified service", async ({ page }) => {
+  const captures: JsonObject[] = [];
+  await mockPaperV2Api(page, captures);
+
+  await page.goto("/paper-v2");
+
+  await expect(page.getByText("官方交易日状态")).toBeVisible();
+  await expect(page.getByText("非交易日")).toBeVisible();
+  await expect(page.getByText("2026-05-22")).toBeVisible();
+  await expect(page.getByText("2026-05-26")).toBeVisible();
+  await expect(page.getByText("market.trading_calendar does not cover the full next month")).toBeVisible();
+});
+
+test("Portfolio creation persists HMM model config for automatic coefficient cache", async ({ page }) => {
   const captures: JsonObject[] = [];
   await mockPaperV2Api(page, captures);
 
@@ -150,7 +179,7 @@ test("Portfolio creation persists and starts sessions with explicit HMM coeffici
   await page.getByTestId("portfolio-hmm-enabled").check();
   await page.getByTestId("portfolio-hmm-config").selectOption(configId);
   await page.getByTestId("portfolio-hmm-preset").selectOption("preset_A");
-  await expect(page.getByTestId("portfolio-hmm-coverage")).toContainText("coefficients_path");
+  await expect(page.getByTestId("portfolio-hmm-coverage")).toContainText("HMM 自动系数缓存");
   await page.getByTestId("portfolio-replay-start").fill("2026-05-18");
   await page.getByTestId("portfolio-replay-end").fill("2026-05-20");
   await page.getByTestId("portfolio-create").click();
@@ -158,11 +187,15 @@ test("Portfolio creation persists and starts sessions with explicit HMM coeffici
   await expect.poll(() => captures.length, { timeout: 30_000 }).toBeGreaterThanOrEqual(2);
   const profile = captures.find((item) => item.path.endsWith("/runtime-profiles"));
   const session = captures.find((item) => item.path.endsWith("/sessions"));
-  expect(profile?.payload.config_json.runtime_profile.hmm.coefficients_path).toBe(coveredPath);
-  expect(session?.payload.runtime_config.runtime_profile.hmm.coefficients_path).toBe(coveredPath);
+  expect(profile?.payload.config_json.runtime_profile.hmm.model_config_id).toBe(configId);
+  expect(profile?.payload.config_json.runtime_profile.hmm.model_snapshot_id).toBeNull();
+  expect(profile?.payload.config_json.runtime_profile.hmm.coefficients_path).toBeUndefined();
+  expect(session?.payload.runtime_config.runtime_profile.hmm.model_config_id).toBe(configId);
+  expect(session?.payload.runtime_config.runtime_profile.hmm.model_snapshot_id).toBeNull();
+  expect(session?.payload.runtime_config.runtime_profile.hmm.coefficients_path).toBeUndefined();
 });
 
-test("Run console sends explicit HMM coefficients_path for day, replay, live, switch, and runtime profile actions", async ({ page }) => {
+test("Run console sends HMM model config for day, replay, live, switch, and runtime profile actions", async ({ page }) => {
   const captures: JsonObject[] = [];
   await mockPaperV2Api(page, captures);
 
@@ -171,7 +204,7 @@ test("Run console sends explicit HMM coefficients_path for day, replay, live, sw
   await page.getByTestId("console-runtime-hmm-config").selectOption(configId);
   await page.getByTestId("console-runtime-hmm-preset").selectOption("preset_A");
   await page.getByTestId("console-trade-date").fill("2026-05-18");
-  await expect(page.getByTestId("console-runtime-hmm-coverage")).toContainText("coefficients_path");
+  await expect(page.getByTestId("console-runtime-hmm-coverage")).toContainText("不再要求手工选择 coefficients_path");
 
   await page.getByTestId("console-readiness").click();
   await expect(page.getByTestId("console-run-day")).toBeEnabled({ timeout: 30_000 });
@@ -191,14 +224,15 @@ test("Run console sends explicit HMM coefficients_path for day, replay, live, sw
   for (const item of captures) {
     const hmm = runtimeHmm(item.payload);
     if (item.path.includes("readiness") || item.path.includes("run-day") || item.path.includes("sessions") || item.path.includes("runtime-profiles")) {
-      expect(hmm.coefficients_path, `${item.path} must include coefficients_path`).toBe(coveredPath);
-      expect(hmm.model_snapshot_id, `${item.path} must include model snapshot`).toBe(snapshotId);
+      expect(hmm.model_config_id, `${item.path} must include model config`).toBe(configId);
+      expect(hmm.model_snapshot_id, `${item.path} should let backend resolve latest ready snapshot`).toBeNull();
+      expect(hmm.coefficients_path, `${item.path} must not require manual coefficients_path`).toBeUndefined();
       expect(hmm.signal_preset, `${item.path} must include preset`).toBe("preset_A");
     }
   }
 });
 
-test("Run console blocks HMM-enabled replay before API submission when coefficient coverage is missing", async ({ page }) => {
+test("Run console no longer blocks HMM replay when precomputed coefficient coverage is missing", async ({ page }) => {
   const captures: JsonObject[] = [];
   await mockPaperV2Api(page, captures);
 
@@ -211,6 +245,9 @@ test("Run console blocks HMM-enabled replay before API submission when coefficie
   const before = captures.length;
   await page.getByTestId("console-replay-reject").click();
 
-  await expect(page.locator(".pv2-error-panel")).toContainText("HMM coefficient artifact does not cover", { timeout: 30_000 });
-  expect(captures.length).toBe(before);
+  await expect.poll(() => captures.length, { timeout: 30_000 }).toBeGreaterThan(before);
+  const replay = captures.find((item) => item.path.endsWith("/sessions"));
+  const hmm = runtimeHmm(replay?.payload || {});
+  expect(hmm.model_config_id).toBe(configId);
+  expect(hmm.coefficients_path).toBeUndefined();
 });

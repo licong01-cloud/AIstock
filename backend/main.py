@@ -52,6 +52,7 @@ from .routers import (
     strategy_packages,
     selection_center,
     paper_trading_v2,
+    trading_calendar,
     validation,
     prometheus_admin,
     rdagent,
@@ -518,6 +519,7 @@ def create_app() -> FastAPI:
     app.include_router(strategy_packages.router, prefix="/api/v1")
     app.include_router(selection_center.router, prefix="/api/v1")
     app.include_router(paper_trading_v2.router, prefix="/api/v1")
+    app.include_router(trading_calendar.router, prefix="/api/v1")
     app.include_router(simulation_runtime.router, prefix="/api/v1")
     app.include_router(validation.router, prefix="/api/v1")
     app.include_router(prometheus_admin.router, prefix="/api/v1")

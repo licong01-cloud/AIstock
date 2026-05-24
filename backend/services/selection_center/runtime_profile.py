@@ -48,6 +48,8 @@ BEHAVIOR_CHANGING_RUNTIME_CONFIG_KEYS = frozenset(
         "industry_blacklist",
         "sector_blacklist",
         "hmm",
+        "hmm_config_id",
+        "hmm_model_config_id",
         "enable_sector_hmm",
         "hmm_model_snapshot_id",
         "hmm_model_version_id",
@@ -91,11 +93,12 @@ class RuntimeHMMProfile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
+    model_config_id: str | None = None
     model_snapshot_id: str | None = None
     signal_preset: str | None = None
     coefficients_path: str | None = None
 
-    @field_validator("model_snapshot_id", "signal_preset", "coefficients_path")
+    @field_validator("model_config_id", "model_snapshot_id", "signal_preset", "coefficients_path")
     @classmethod
     def _strip_optional_text(cls, value: str | None) -> str | None:
         if value is None:
@@ -250,6 +253,10 @@ def parse_selection_runtime_profile(runtime_config: dict[str, Any] | None) -> Se
         hmm_payload = merged
     if "enable_sector_hmm" in config and "enabled" not in hmm_payload:
         hmm_payload["enabled"] = bool(config["enable_sector_hmm"])
+    if "hmm_config_id" in config and "model_config_id" not in hmm_payload:
+        hmm_payload["model_config_id"] = config["hmm_config_id"]
+    if "hmm_model_config_id" in config and "model_config_id" not in hmm_payload:
+        hmm_payload["model_config_id"] = config["hmm_model_config_id"]
     if "hmm_model_snapshot_id" in config and "model_snapshot_id" not in hmm_payload:
         hmm_payload["model_snapshot_id"] = config["hmm_model_snapshot_id"]
     if "hmm_model_version_id" in config and "model_snapshot_id" not in hmm_payload:
@@ -280,9 +287,9 @@ def parse_selection_runtime_profile(runtime_config: dict[str, Any] | None) -> Se
         ) from exc
 
     if profile.hmm.enabled:
-        if not profile.hmm.model_snapshot_id:
+        if not profile.hmm.model_snapshot_id and not profile.hmm.model_config_id:
             raise StrategyPackageValidationError(
-                "HMM runtime profile requires model_snapshot_id when enabled",
+                "HMM runtime profile requires model_snapshot_id or model_config_id when enabled",
                 context={"runtime_profile": profile.model_dump(mode="json")},
             )
         if not profile.hmm.signal_preset:

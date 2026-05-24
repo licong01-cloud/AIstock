@@ -213,24 +213,27 @@ def save_manifest_with_default_execution_policy(
     )
 
 
-def test_create_portfolio_requires_explicit_validated_policy_evidence() -> None:
+def test_create_portfolio_uses_manifest_minute_policy_as_platform_default() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_enabled_manifest()
     package_repo.save_manifest(manifest)
 
-    with pytest.raises(StrategyPackageValidationError, match="explicit validated execution policy"):
-        PaperTradingV2PortfolioService(
-            package_repository=package_repo,
-            repository=paper_repo,
-        ).create_portfolio(
-            package_id=manifest.package_id,
-            portfolio_name="missing policy evidence",
-            initial_cash=100_000,
-            start_date=date(2024, 1, 2),
-            data_source=MinuteDataSource.DB_HISTORICAL,
-        )
+    portfolio = PaperTradingV2PortfolioService(
+        package_repository=package_repo,
+        repository=paper_repo,
+    ).create_portfolio(
+        package_id=manifest.package_id,
+        portfolio_name="platform default policy",
+        initial_cash=100_000,
+        start_date=date(2024, 1, 2),
+        data_source=MinuteDataSource.DB_HISTORICAL,
+    )
 
+    assert portfolio.execution_policy["validated_execution_policy_id"].startswith("platform_manifest_")
+    assert portfolio.execution_policy["source_backtest_id"] == f"strategy_package_manifest:{manifest.manifest_sha256}"
+    assert portfolio.execution_policy["policy_json"]["algo_code"] == manifest.minute_execution_policy.algo_code
+    assert portfolio.execution_policy["policy_json"]["data_requirements"] == manifest.minute_execution_policy.data_requirements.model_dump(mode="json")
     assert not package_repo.list_execution_policies(manifest.package_id)
 
 

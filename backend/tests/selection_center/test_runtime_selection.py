@@ -53,6 +53,31 @@ class NoopRefreshAudit:
         return None
 
 
+class NoopSelectionResultEnrichment:
+    def enrich_candidates(self, candidates, *, trade_date, runtime_config=None):
+        return list(candidates)
+
+
+class FixedEntryPriceEnrichment:
+    def __init__(self, entry_prices: dict[str, float]) -> None:
+        self.entry_prices = entry_prices
+
+    def enrich_candidates(self, candidates, *, trade_date, runtime_config=None):
+        enriched = []
+        for candidate in candidates:
+            entry_price = self.entry_prices.get(candidate.symbol, candidate.reference_price)
+            enriched.append(
+                candidate.model_copy(
+                    update={
+                        "selection_entry_price": entry_price,
+                        "current_price": 999.0,
+                        "reference_price": entry_price,
+                    }
+                )
+            )
+        return enriched
+
+
 class RecordingRefreshAudit:
     def __init__(self) -> None:
         self.calls: list[dict] = []
@@ -2142,6 +2167,149 @@ def test_strategy_package_runtime_applies_hmm_coefficients(tmp_path) -> None:
     assert snapshot.candidates[0].component_scores["hmm"]["coefficients_path"] == str(coeff_path)
 
 
+def test_strategy_package_runtime_auto_generates_hmm_coefficients_on_miss(tmp_path) -> None:
+    model_path = tmp_path / "models.json"
+    model_path.write_text("{}", encoding="utf-8")
+
+    class AutoGenerateHMMSnapshotProvider(FakeHMMSnapshotProvider):
+        def __init__(self) -> None:
+            super().__init__({"hmm_001": {"snapshot_id": "hmm_001", "model_path": str(model_path), "status": "completed"}})
+            self.calls = []
+
+        def _list_trading_days(self, start_date, end_date):
+            return [date(2024, 1, 1)]
+
+        def generate_daily_coefficients(self, snapshot_id, *, signal_preset, confirm_text, as_of_date=None, effective_trade_date=None):
+            self.calls.append({
+                "snapshot_id": snapshot_id,
+                "signal_preset": signal_preset,
+                "confirm_text": confirm_text,
+                "as_of_date": as_of_date,
+                "effective_trade_date": effective_trade_date,
+            })
+            output = tmp_path / "coefficients_preset_A_2024-01-02_2024-01-02.json"
+            output.write_text(
+                json.dumps(
+                    {
+                        "generation_mode": "daily_asof_prediction_v1",
+                        "snapshot_id": snapshot_id,
+                        "config_id": "cfg_001",
+                        "preset_key": signal_preset,
+                        "as_of_trade_date": as_of_date.isoformat(),
+                        "effective_trade_date": effective_trade_date.isoformat(),
+                        "daily_coefficients": {"2024-01-02": {"801780.SI": 1.20}},
+                        "stock_sector_map": {"000001.SZ": "801780.SI"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return {"status": "CREATED", "output_path": str(output)}
+
+    provider = AutoGenerateHMMSnapshotProvider()
+    manifest = ready_manifest_with_scores("pkg_hmm_auto_cache", "000001.SZ", 1.0, 1)
+    runtime = StrategyPackageRuntime(hmm_runtime=SectorHMMRuntime(snapshot_provider=provider))
+
+    snapshot = runtime.build_signal_snapshot(
+        manifest=manifest,
+        trade_date=date(2024, 1, 2),
+        data_source="DB_HISTORICAL",
+        runtime_config={
+            "runtime_profile": {
+                "hmm": {
+                    "enabled": True,
+                    "model_snapshot_id": "hmm_001",
+                    "signal_preset": "preset_A",
+                }
+            }
+        },
+    )
+
+    assert provider.calls == [
+        {
+            "snapshot_id": "hmm_001",
+            "signal_preset": "preset_A",
+            "confirm_text": "hmm_001",
+            "as_of_date": date(2024, 1, 1),
+            "effective_trade_date": date(2024, 1, 2),
+        }
+    ]
+    assert snapshot.candidates[0].score == pytest.approx(1.2)
+    assert snapshot.candidates[0].component_scores["hmm"]["coefficient"] == pytest.approx(1.2)
+
+    cached = runtime.build_signal_snapshot(
+        manifest=manifest,
+        trade_date=date(2024, 1, 2),
+        data_source="DB_HISTORICAL",
+        runtime_config={
+            "runtime_profile": {
+                "hmm": {
+                    "enabled": True,
+                    "model_snapshot_id": "hmm_001",
+                    "signal_preset": "preset_A",
+                }
+            }
+        },
+    )
+
+    assert len(provider.calls) == 1
+    assert cached.candidates[0].component_scores["hmm"]["coefficients_path"] == snapshot.candidates[0].component_scores["hmm"]["coefficients_path"]
+
+
+def test_strategy_package_runtime_resolves_latest_ready_hmm_snapshot_from_model_config(tmp_path) -> None:
+    old_model_path = tmp_path / "old_models.json"
+    new_model_path = tmp_path / "new_models.json"
+    old_model_path.write_text("{}", encoding="utf-8")
+    new_model_path.write_text("{}", encoding="utf-8")
+    (tmp_path / "coefficients_preset_A_latest_2024-01-02.json").write_text(
+        json.dumps(
+            {
+                "preset_key": "preset_A",
+                "daily_coefficients": {"2024-01-02": {"801780.SI": 1.15}},
+                "stock_sector_map": {"000001.SZ": "801780.SI"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class ConfigResolvingProvider(FakeHMMSnapshotProvider):
+        def __init__(self) -> None:
+            super().__init__(
+                {
+                    "hmm_old": {"snapshot_id": "hmm_old", "model_path": str(old_model_path), "status": "completed", "trained_at": "2024-01-01T00:00:00"},
+                    "hmm_latest": {"snapshot_id": "hmm_latest", "model_path": str(new_model_path), "status": "completed", "trained_at": "2024-01-03T00:00:00"},
+                    "hmm_failed": {"snapshot_id": "hmm_failed", "model_path": str(new_model_path), "status": "failed", "trained_at": "2024-01-04T00:00:00"},
+                }
+            )
+            self.list_calls: list[str] = []
+
+        def list_snapshots(self, config_id: str):
+            self.list_calls.append(config_id)
+            return list(self.snapshots.values())
+
+    provider = ConfigResolvingProvider()
+    manifest = ready_manifest_with_scores("pkg_hmm_config", "000001.SZ", 1.0, 1)
+    runtime = StrategyPackageRuntime(hmm_runtime=SectorHMMRuntime(snapshot_provider=provider))
+
+    snapshot = runtime.build_signal_snapshot(
+        manifest=manifest,
+        trade_date=date(2024, 1, 2),
+        data_source="DB_HISTORICAL",
+        runtime_config={
+            "runtime_profile": {
+                "hmm": {
+                    "enabled": True,
+                    "model_config_id": "cfg_hmm",
+                    "signal_preset": "preset_A",
+                }
+            }
+        },
+    )
+
+    assert provider.list_calls == ["cfg_hmm"]
+    assert snapshot.candidates[0].score == pytest.approx(1.15)
+    assert snapshot.candidates[0].component_scores["hmm"]["model_snapshot_id"] == "hmm_latest"
+
+
 def test_strategy_package_runtime_hmm_requires_stock_sector_map(tmp_path) -> None:
     model_path = tmp_path / "models.json"
     model_path.write_text("{}", encoding="utf-8")
@@ -2349,6 +2517,7 @@ def test_selection_center_adds_selection_run_to_watchlist_with_trace(monkeypatch
         repository=InMemorySelectionCenterRepository(),
         tradability_filter=TradabilityFilter(FakeSuspendLookup()),
         refresh_audit=NoopRefreshAudit(),
+        result_enrichment_service=NoopSelectionResultEnrichment(),
     )
     run = service.run_single_package(
         package_id=manifest.package_id,
@@ -2412,6 +2581,59 @@ def test_selection_center_adds_selection_run_to_watchlist_with_trace(monkeypatch
     assert "Selection Center single_package" in items[0]["note"]
 
 
+def test_selection_center_watchlist_import_uses_selection_entry_price_not_current_price(monkeypatch) -> None:
+    package_repo = InMemoryStrategyPackageRepository()
+    manifest = ready_manifest_with_score_rows(
+        "qe_watchlist_entry_pkg",
+        [
+            {"symbol": "000001.SZ", "score": 0.99, "rank": 1, "target_weight": 0.03, "reference_price": 10.5},
+            {"symbol": "000002.SZ", "score": 0.88, "rank": 2, "target_weight": 0.03, "reference_price": 11.5},
+        ],
+    )
+    package_repo.save_manifest(manifest)
+    service = SelectionCenterService(
+        package_repository=package_repo,
+        repository=InMemorySelectionCenterRepository(),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+        result_enrichment_service=FixedEntryPriceEnrichment({"000001.SZ": 21.5, "000002.SZ": 22.5}),
+    )
+    run = service.run_single_package(
+        package_id=manifest.package_id,
+        trade_date=date(2024, 1, 2),
+        data_source="DB_HISTORICAL",
+    )
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr("backend.services.selection_center.service.watchlist_service.list_categories", lambda: [])
+    monkeypatch.setattr(
+        "backend.services.selection_center.service.watchlist_service.create_category",
+        lambda name, description: 901,
+    )
+
+    def fake_add_items_bulk_from_task_selection(**kwargs):
+        captured["watchlist_call"] = kwargs
+        return {
+            "ok": True,
+            "added": len(kwargs["items"]),
+            "skipped": 0,
+            "moved": 0,
+            "errors": [],
+            "item_ids_by_code": {},
+        }
+
+    monkeypatch.setattr(
+        "backend.services.selection_center.service.watchlist_service.add_items_bulk_from_task_selection",
+        fake_add_items_bulk_from_task_selection,
+    )
+
+    result = service.add_run_to_watchlist(run_id=run.run_id, category_name="EntryPrice", top_k=2)
+
+    assert result["ok"] is True
+    items = captured["watchlist_call"]["items"]
+    assert [item["entry_price"] for item in items] == [21.5, 22.5]
+
+
 def test_selection_center_watchlist_import_rejects_missing_reference_price() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     manifest = ready_manifest_with_score_rows(
@@ -2427,6 +2649,7 @@ def test_selection_center_watchlist_import_rejects_missing_reference_price() -> 
         repository=InMemorySelectionCenterRepository(),
         tradability_filter=TradabilityFilter(FakeSuspendLookup()),
         refresh_audit=NoopRefreshAudit(),
+        result_enrichment_service=NoopSelectionResultEnrichment(),
     )
     run = service.run_single_package(
         package_id=manifest.package_id,
