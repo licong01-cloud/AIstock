@@ -1200,14 +1200,14 @@ class ManualFactorValidate(BaseModel):
 
 class BatchComputeMetricsUnified(BaseModel):
     factor_names: Optional[List[str]] = Field(None, description="指定因子名列表")
-    all_available: bool = Field(False, description="True=全部 is_available 因子")
+    all_available: bool = Field(True, description="True=全部可用因子（含 disabled）；legacy 接口，请使用 official-evaluation/compute")
     data_date: Optional[str] = Field(None, description="快照日期 (YYYYMMDD)，指定后使用磁盘快照数据")
 
 
 class OfficialEvaluationComputeRequest(BaseModel):
     factor_names: Optional[List[str]] = Field(None, description="指定因子名列表；为空时计算全部符合 official 准入规则的因子")
     data_date: str = Field(..., description="评估快照日期 (YYYYMMDD)")
-    include_disabled: bool = Field(False, description="是否包含 is_available=false 的因子")
+    include_disabled: bool = Field(True, description="是否包含 is_available=false 的因子；默认 True 以支持 disabled 因子指标计算")
     max_workers: int = Field(4, ge=1, le=16, description="并行 worker 数")
     timeout_per_factor: int = Field(600, ge=60, le=3600, description="单因子超时秒数")
 

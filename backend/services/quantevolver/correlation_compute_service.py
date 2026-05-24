@@ -443,6 +443,22 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
                     + (f"... 等 {len(missing_factors)} 个" if len(missing_factors) > 10 else ""),
                     "WARN",
                 )
+                if len(missing_factors) == len(factor_names):
+                    _error_msg = (
+                        f"全部 {len(factor_names)} 个因子均无独立指标缓存 (single/*.parquet)。"
+                        "请先通过 /api/v1/quantevolver/official-evaluation/compute 完成独立指标计算，"
+                        "然后再触发相关性计算。"
+                    )
+                    _correlation_logs.append(f"[缓存检查] {_error_msg}", "ERROR")
+                    _correlation_progress.finish("failed", _error_msg)
+                    _update_job_status(job_id, "failed")
+                    return {
+                        "success": False,
+                        "status": "failed",
+                        "error": _error_msg,
+                        "missing_factors": missing_factors,
+                        "hint": "run_official_evaluation_first",
+                    }
 
             compute_factors = [f for f in factor_names if f in cached_names]
 
