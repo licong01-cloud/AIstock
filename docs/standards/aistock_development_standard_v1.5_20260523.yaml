@@ -1,7 +1,7 @@
 schema_version: aistock_development_guardrails_v1
 source_standard: docs/standards/aistock_development_standard_v1.5_20260523.md
 source_version: "1.5"
-updated_at: "2026-05-23"
+updated_at: "2026-05-24"
 rule_sync_policy:
   authority: human_markdown_standard
   requirement: Every enabled machine rule must reference a rule section in the human-readable standard.
@@ -211,6 +211,31 @@ rules:
         - 'JsonPanel'
     baseline_policy: warn_new_only
     remediation: Show Chinese business labels, tables, cards, error states, and optional advanced JSON drawer only.
+
+  - rule_id: UI-DESIGN-SYSTEM-001
+    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-ui-design-system-001
+    title: New UI must use shadcn/ui Blocks baseline and not inherit Paper v2 templates
+    severity: P2
+    category: frontend
+    enabled: true
+    applies_to:
+      include_globs:
+        - frontend/src/**/*.tsx
+        - frontend/src/**/*.ts
+        - frontend/src/**/*.css
+      exclude_globs:
+        - frontend/src/app/paper-v2/**/*
+        - frontend/src/components/paper-v2/**/*
+        - frontend/src/**/*.test.tsx
+        - frontend/src/**/*.spec.tsx
+    checker:
+      type: regex
+      patterns:
+        - '@/app/paper-v2/paper-v2\.css'
+        - '@/components/paper-v2'
+        - 'pv2-[A-Za-z0-9_-]+'
+    baseline_policy: warn_new_only
+    remediation: Use shadcn/ui Blocks-aligned visual tokens and components; Research Assistant may use assistant-ui for conversation runtime but not the Paper v2 visual shell.
 
   - rule_id: RESOURCE-TIMEOUT-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-resource-timeout-001
