@@ -1,0 +1,78 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-117",
+  "title": "Research Assistant prompt forbids undeveloped mouse/keyboard and code-write capabilities",
+  "description": "Expected: Research Assistant primary prompt should describe only implemented behavior and real governance boundaries. It must not warn users that the assistant is forbidden from using mouse/keyboard control or writing code when those capabilities are not implemented.\n\nActual: The enabled root assistant prompt includes `禁止控制鼠标键盘，禁止写代码`, and `/health` exposes runtime boundaries such as `mouse_keyboard_control=false` and `code_write=false`. This makes the product appear to forbid unavailable capabilities rather than simply describing the supported MCP/API/approval workflow.\n\nEvidence:\n- `backend/services/research_assistant/service.py:281` hardcodes `禁止控制鼠标键盘，禁止写代码` in `DEFAULT_PROMPT_NODES[root.assistant]`.\n- The live `GET /api/v1/research-assistant/prompt-nodes?status=enabled&limit=500` response was reported to return the same text for `root.assistant`.\n- `backend/services/research_assistant/service.py:505-506` exposes `mouse_keyboard_control=false` and `code_write=false` in `/health` runtime boundaries.\n\nClosure requirements:\n1. Remove `禁止控制鼠标键盘` and `禁止写代码` from the Research Assistant root prompt source.\n2. Backfill/update the current DB `assistant_prompt_nodes.root.assistant` record so live chat no longer uses the stale text.\n3. Replace negative unavailable-capability metadata (`mouse_keyboard_control=false`, `code_write=false`) with a positive implemented-capability summary or remove it from user-facing health payloads.\n4. Keep real governance boundaries: high-risk operations still require MCP/API, approval, traceability, and memory/audit discipline.\n5. Add/update backend tests proving the root prompt and live prompt-node listing do not contain those two forbidden undeveloped-capability phrases.",
+  "module": "research_assistant",
+  "severity": "P1",
+  "risk_area": "prompt_runtime_correctness",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "research_assistant_root_prompt_contains_unimplemented_capability_bans"
+  },
+  "reproduce_command": "cd F:\\Dev\\AIstock && rg -n \"禁止控制鼠标键盘|禁止写代码|mouse_keyboard_control|code_write\" backend\\services\\research_assistant\\service.py",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "github:https://github.com/licong01-cloud/AIstock/issues/186",
+    "file:backend/services/research_assistant/service.py:281",
+    "file:backend/services/research_assistant/service.py:505",
+    "file:backend/services/research_assistant/service.py:506"
+  ],
+  "fingerprint": "2ebcba19571c8e84",
+  "assigned_agent": "codex",
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-24T06:07:58Z",
+  "first_seen_at": "2026-05-24T06:07:58Z",
+  "last_seen_at": "2026-05-24T06:40:00Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-24T06:40:00Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/research_assistant/service.py",
+    "backend/db/init_research_assistant_schema_20260521.py",
+    "backend/tests/research_assistant",
+    "tests/aistock_validation/bugs/20260524_BUG-117-research-assistant-prompt-forbids-undeveloped-mouse-keyboard.json",
+    "tests/aistock_validation/history/research_assistant"
+  ],
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "required_verification": [
+    "Static grep confirms the root prompt no longer contains `禁止控制鼠标键盘` or `禁止写代码`.",
+    "Live prompt-node listing for `root.assistant` no longer contains those phrases after DB backfill.",
+    "Health/runtime capability payload describes implemented capabilities positively or omits unavailable capability booleans.",
+    "Prompt governance boundaries still require MCP/API, approval, trace and memory/audit discipline."
+  ],
+  "closure_requirements": [
+    "Prompt source and live DB prompt-node record are both updated.",
+    "Unavailable mouse/keyboard and code-write capability bans are not user-facing.",
+    "Tests cover root prompt source and prompt-node listing."
+  ],
+  "non_goals": [
+    "Do not implement mouse/keyboard control in this issue.",
+    "Do not implement code-writing capability in Research Assistant chat in this issue.",
+    "Do not weaken MCP/API approval, traceability, or audit boundaries."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-24T06:07:58Z",
+      "actor": "codex",
+      "action": "discovered",
+      "note": "Reported via aistock_mcp_server.report_bug; initial local draft used BUG-114 before origin/main advanced."
+    },
+    {
+      "timestamp": "2026-05-24T06:40:00Z",
+      "actor": "codex-app",
+      "action": "renumbered_after_origin_sync",
+      "note": "origin/main already contained BUG-114 through BUG-116; registered this prompt defect as BUG-117 while preserving GitHub issue #186."
+    }
+  ],
+  "custom_github_labels": [
+    "research_assistant",
+    "prompt_runtime_correctness"
+  ],
+  "github_issue_number": 186,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/186"
+}
