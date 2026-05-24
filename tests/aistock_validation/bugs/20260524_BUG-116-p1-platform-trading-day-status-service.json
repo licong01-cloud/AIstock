@@ -1,0 +1,128 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-116",
+  "title": "P1: Platform trading-day status service missing for Paper v2 and Local Data",
+  "description": "Expected: AIstock should expose a shared read-only platform trading-day status service backed by market.trading_calendar so Paper v2, Local Data management, simulation runtime, and future live paths read one canonical current-day calendar answer. The service should cache briefly and invalidate after calendar sync, but the database table remains the source of truth. Actual: multiple modules query market.trading_calendar directly or expose module-local helpers; Paper v2 session guard code may fall back to weekday logic on provider errors, and Local Data owns calendar sync UX without publishing a shared status contract.",
+  "module": "platform_trading_calendar",
+  "severity": "P1",
+  "risk_area": "trading_day_status_contract",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "paper_v2_local_data_and_future_live_paths_need_shared_current_trading_day_status_20260524",
+    "user_requirement": "Local Data management and Paper v2 same-day behavior both need to know whether today is a trading day; future modules should read one shared status instead of each module duplicating calendar SQL.",
+    "required_contract": [
+      "today_asia_shanghai",
+      "is_trading_day",
+      "latest_trading_day_lte_today",
+      "previous_trading_day",
+      "next_trading_day",
+      "calendar_source",
+      "calendar_coverage",
+      "source_updated_at_or_audit",
+      "status_ok_missing_or_stale"
+    ],
+    "source_of_truth": "market.trading_calendar",
+    "forbidden_design": [
+      "manually edited global trading-day flag",
+      "weekday-only fallback in trading-sensitive paths",
+      "Paper v2-only hidden global state"
+    ]
+  },
+  "reproduce_command": "rg -n \"trading_calendar|TradeCalendarProvider|get_latest_trading_day|is_trading_day|trade_cal\" backend frontend/src/app/local-data -g \"*.py\" -g \"*.tsx\" -g \"*.ts\"",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "github:https://github.com/licong01-cloud/AIstock/issues/187",
+    "file:backend/services/paper_trading_v2/market_data.py:890",
+    "file:backend/services/paper_trading_v2/session.py:532",
+    "file:backend/routers/paper_trading_v2.py:204",
+    "file:backend/routers/ingestion.py:2790",
+    "file:frontend/src/app/local-data/page.tsx:538",
+    "file:frontend/src/app/local-data/page.tsx:1701"
+  ],
+  "fingerprint": "351f01b82f204e2d",
+  "assigned_agent": "platform_runtime",
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-24T06:16:41Z",
+  "first_seen_at": "2026-05-24T06:16:41Z",
+  "last_seen_at": "2026-05-24T06:16:41Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-24T06:16:41Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/market_calendar",
+    "backend/services/platform_calendar_status.py",
+    "backend/routers/platform_calendar.py",
+    "backend/routers/ingestion.py",
+    "backend/routers/paper_trading_v2.py",
+    "backend/services/paper_trading_v2/market_data.py",
+    "backend/services/paper_trading_v2/session.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/paper_trading_v2/readiness.py",
+    "backend/services/simulation_runtime/selection.py",
+    "backend/services/qmt_strategy_ledger/lot_availability.py",
+    "frontend/src/app/local-data/page.tsx",
+    "frontend/src/lib/paper-v2",
+    "frontend/src/lib/platform-calendar",
+    "backend/tests/platform_calendar",
+    "backend/tests/paper_trading_v2",
+    "frontend/tests/local-data",
+    "tests/aistock_validation/bugs/20260524_BUG-116-p1-platform-trading-day-status-service.json",
+    "tests/aistock_validation/history/platform_calendar"
+  ],
+  "suspected_modules": [
+    "backend/services/paper_trading_v2/market_data.py",
+    "backend/services/paper_trading_v2/session.py",
+    "backend/routers/paper_trading_v2.py",
+    "backend/routers/ingestion.py",
+    "backend/services/simulation_runtime/selection.py",
+    "backend/services/qmt_strategy_ledger/lot_availability.py",
+    "frontend/src/app/local-data/page.tsx"
+  ],
+  "required_verification": [
+    "A shared platform calendar status service/API returns today, is_trading_day, latest_trading_day_lte_today, previous_trading_day, next_trading_day, source, coverage, and freshness/audit status from market.trading_calendar.",
+    "The service uses a bounded per-process cache or request cache with explicit invalidation after successful /calendar/sync; it does not create a manually edited global flag.",
+    "Paper v2 same-day/session/readiness/day-run paths use the shared provider contract or injected adapter and do not fall back to weekday-only logic for trading-sensitive decisions.",
+    "Local Data management displays the same platform status and refreshes it after trade calendar sync.",
+    "Missing or stale calendar coverage fails fast with calendar_missing/calendar_stale status instead of silently claiming trading or non-trading day.",
+    "Tests cover normal trading day, weekend/holiday, make-up trading day, missing calendar rows, stale future coverage, cache invalidation after sync, and Paper v2 no-weekday-fallback behavior.",
+    "Validation record includes DESIGN-COMPLIANCE-001 item-by-item matrix and reports production_ddl_gate, production_frontend_dependency_gate, production_backend_dependency_gate, and whether production 8001/3000 were touched."
+  ],
+  "closure_requirements": [
+    "All modules have a documented shared current trading-day status contract backed by market.trading_calendar.",
+    "Paper v2 and Local Data consume the shared status instead of maintaining separate current-day semantics.",
+    "No trading-sensitive path silently falls back to weekday-only logic when the calendar provider fails.",
+    "The service exposes freshness and coverage diagnostics so operators can distinguish non-trading day from missing/stale calendar data.",
+    "Future modules can call the same service/API without duplicating SQL."
+  ],
+  "non_goals": [
+    "Do not replace market.trading_calendar as the source of truth.",
+    "Do not add a manually editable AIstock global trading-day flag.",
+    "Do not change QE/backtest historical calendar semantics.",
+    "Do not start or restart production 8001/3000 as part of issue registration."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-24T06:16:41Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "User asked whether Paper v2, Local Data, and future modules should share a global current trading-day status based on the synced annual trading calendar."
+    },
+    {
+      "timestamp": "2026-05-24T06:16:41Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Created GitHub issue #187 and mirrored BUG-116 JSON."
+    }
+  ],
+  "custom_github_labels": [
+    "P1",
+    "module:paper_v2",
+    "platform-runtime",
+    "risk:data_freshness_policy",
+    "status:open"
+  ],
+  "github_issue_number": 187,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/187"
+}
