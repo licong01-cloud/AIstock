@@ -103,6 +103,7 @@ def l0(session: nox.Session) -> None:
         "scripts/aistock_validate.py",
         "scripts/aistock_guardrail_scan.py",
         "scripts/aistock_module_ownership_scan.py",
+        "scripts/issue_flow.py",
         "scripts/validation_center_readonly_smoke.py",
         "scripts/aistock_data_quality_smoke.py",
         "scripts/paper_v2_live_validation.py",
@@ -141,6 +142,14 @@ def l0(session: nox.Session) -> None:
         "tests/aistock_validation/modules/local_data_management.md",
         "tests/aistock_validation/catalog/file_ownership.yaml",
         "tests/aistock_validation/modules/development_guardrails.md",
+        ".github/workflows/pr-quality.yml",
+        ".github/workflows/semgrep.yml",
+        ".github/workflows/codeql.yml",
+        ".github/workflows/dependency-update-validate.yml",
+        ".pre-commit-config.yaml",
+        ".semgrep.yml",
+        "ruff.toml",
+        ".github/renovate.json",
     ]
     _validate_in_tree_codex_skill(session, ".codex/skills/verify-aistock-feature")
     session.run(
@@ -1141,6 +1150,7 @@ def validation_center_backend(session: nox.Session) -> None:
         "scripts/aistock_validate.py",
         "scripts/aistock_mcp_server.py",
         "scripts/aistock_validation_catalog_integrity.py",
+        "scripts/issue_flow.py",
         "scripts/validation_failure_event_to_bug.py",
         "scripts/validation_center_readonly_smoke.py",
         "scripts/validation_center_runner_smoke.py",
@@ -1167,6 +1177,7 @@ def validation_center_backend(session: nox.Session) -> None:
         "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
         "backend/tests/scripts/test_validation_failure_event_to_bug.py",
         "backend/tests/scripts/test_bug_github_sync.py",
+        "backend/tests/scripts/test_issue_flow.py",
         "--cov=backend.services.validation",
         "--cov=backend.routers.validation",
         "--cov=scripts.aistock_mcp_server",
