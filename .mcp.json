@@ -1,5 +1,5 @@
 {
-  "_comment": "项目级 MCP server 注册文件。当前按用户要求默认指向本机生产后端 8001；各客户端仍需显式启用。QE/Research MCP 只能使用 loopback 地址；aistock-research 默认指向 dev/shadow 8011，不启用生产 8001。",
+  "_comment": "项目级 MCP server 注册文件。所有 AIstock MCP server 统一使用本机生产后端 8001；各客户端仍需显式启用。QE/Research MCP 只能使用 loopback 地址。",
   "mcpServers": {
     "aistock-validation": {
       "command": "python",
@@ -36,7 +36,7 @@
         "--modules=research"
       ],
       "env": {
-        "AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8011/api/v1"
+        "AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8001/api/v1"
       }
     }
   }
