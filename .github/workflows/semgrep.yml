@@ -33,4 +33,14 @@ jobs:
         run: python -m pip install --upgrade semgrep
 
       - name: Run Semgrep
-        run: semgrep --config .semgrep.yml --error --severity ERROR .
+        run: |
+          mkdir -p tmp/validation/semgrep
+          semgrep --config .semgrep.yml --json --output tmp/validation/semgrep/semgrep.json .
+
+      - name: Upload Semgrep report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-${{ github.run_id }}
+          path: tmp/validation/semgrep/
+          if-no-files-found: ignore

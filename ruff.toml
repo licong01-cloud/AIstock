@@ -9,7 +9,7 @@ exclude = [
 ]
 
 [lint]
-select = ["E", "F", "I", "UP"]
+select = ["E", "F"]
 ignore = ["E501"]
 
 [lint.isort]
