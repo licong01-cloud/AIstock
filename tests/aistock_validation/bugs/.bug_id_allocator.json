@@ -1,6 +1,6 @@
 {
   "schema_version": "aistock_bug_id_allocator_v1",
-  "last_allocated": 112,
-  "updated_at": "2026-05-24T03:50:00Z",
-  "updated_by": "codex-app-duplicate-cleanup"
+  "last_allocated": 113,
+  "updated_at": "2026-05-24T04:22:44Z",
+  "updated_by": "codex-app"
 }

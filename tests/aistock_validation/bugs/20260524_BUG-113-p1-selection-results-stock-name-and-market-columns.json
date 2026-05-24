@@ -1,0 +1,111 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-113",
+  "title": "P1: Selection Center results omit stock names and waste main-table space on low-value trace column",
+  "description": "Expected: Selection Center results should reuse the existing Paper v2 simulation/trading stock-name enrichment/display logic so operators see symbol plus stock_name/symbol_name. The main results table should replace the current Trace/?? column with useful backend/API market context such as trade-date volume/volume_hand, amount when available, previous close/pre_close, and data_as_of/source, while keeping raw component_scores accessible in a secondary audit/detail view. Fresh runs, listed historical runs, get-run detail, and aggregate-existing-runs should expose the same display metadata consistently.\nActual: SelectionCandidate currently carries symbol, score, rank, target fields, reference_price, component_scores, and reason, but not stock_name/symbol_name or market snapshot fields. frontend/src/app/paper-v2/selection/page.tsx renders selected stocks as row.symbol only. Its Trace/?? column renders Object.keys(row.component_scores).join(\", \"), so it shows explanation key names rather than values; these keys are usually nearly identical across rows and consume primary table space without helping operators choose or inspect stocks.",
+  "module": "paper_v2_selection_center",
+  "severity": "P1",
+  "risk_area": "feature_gap_observability",
+  "status": "open",
+  "trigger_condition": {
+    "scenario": "reported_selection_results_need_stock_names_and_useful_market_columns_20260524",
+    "runtime_paths": [
+      "Selection Center fresh run",
+      "Selection Center historical run detail",
+      "Selection Center aggregate existing runs",
+      "Paper v2 Selection UI results table"
+    ],
+    "user_requirement": "Use the same stock-name display logic already implemented in Paper v2 simulation/trading, and replace the low-value main-table Trace/?? column with useful stock market fields such as volume and yesterday close.",
+    "trace_column_current_meaning": "The current Selection UI trace column renders only Object.keys(component_scores). component_scores is backend audit/explanation metadata such as source_package_ids, package_ranks, package_raw_scores, package_rank_scores, package_weights, hmm, tradability_filter, event_risk, raw_rank, or aggregation_source depending on runtime path. The UI shows only the key names, not the values, so rows often look almost identical."
+  },
+  "reproduce_command": "Open /paper-v2/selection, run or load a Selection Center run, inspect the selection results table: the stock column shows only the symbol and the Trace/?? column shows comma-separated component_scores keys that are nearly identical across rows instead of useful market fields such as stock name, volume, and previous close.",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "github:https://github.com/licong01-cloud/AIstock/issues/183",
+    "file:frontend/src/app/paper-v2/selection/page.tsx:397",
+    "file:frontend/src/app/paper-v2/selection/page.tsx:403",
+    "file:frontend/src/app/paper-v2/portfolios/[portfolioId]/live-dashboard/page.tsx:55",
+    "file:backend/services/paper_trading_v2/symbol_names.py",
+    "file:backend/services/selection_center/models.py:29",
+    "file:backend/services/selection_center/repository.py:100"
+  ],
+  "fingerprint": "7978b09f94bc7cfc",
+  "assigned_agent": "paper_v2",
+  "fix_branch": null,
+  "fix_commit": null,
+  "verification_run_id": null,
+  "created_at": "2026-05-24T04:22:44Z",
+  "first_seen_at": "2026-05-24T04:22:44Z",
+  "last_seen_at": "2026-05-24T04:22:44Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-24T04:22:44Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "backend/services/selection_center/models.py",
+    "backend/services/selection_center/service.py",
+    "backend/services/selection_center/repository.py",
+    "backend/services/selection_center/market_snapshot.py",
+    "backend/routers/selection_center.py",
+    "backend/services/paper_trading_v2/symbol_names.py",
+    "frontend/src/app/paper-v2/selection/page.tsx",
+    "frontend/src/lib/paper-v2/types.ts",
+    "frontend/src/lib/paper-v2/api.ts",
+    "frontend/tests/paper-v2",
+    "backend/tests/selection_center",
+    "tests/aistock_validation/bugs/20260524_BUG-113-p1-selection-results-stock-name-and-market-columns.json",
+    "tests/aistock_validation/history/paper_v2_selection_center"
+  ],
+  "suspected_modules": [
+    "frontend/src/app/paper-v2/selection/page.tsx",
+    "frontend/src/app/paper-v2/portfolios/[portfolioId]/live-dashboard/page.tsx",
+    "backend/services/paper_trading_v2/symbol_names.py",
+    "backend/services/selection_center/models.py",
+    "backend/services/selection_center/service.py",
+    "backend/services/selection_center/repository.py",
+    "frontend/src/lib/paper-v2/types.ts"
+  ],
+  "required_verification": [
+    "Selection result rows display symbol plus stock name using the same resolver/field priority as Paper v2 simulation/trading views: stock_name first, symbol_name fallback, no display name means symbol-only fallback.",
+    "The SelectionCandidate API/types include display-only stock_name/symbol_name without changing ranking, score, target_weight, target_quantity, reference_price, HMM scoring, ST PIT/risk/tradability filtering, StrategyPackage contract behavior, or order generation.",
+    "Main result table replaces the Trace/?? column with useful market fields from backend/API: at minimum volume (or volume_hand with unit clearly shown) and previous close/pre_close; amount/latest close/data_as_of/source should be included if available without changing selection decisions.",
+    "Raw component_scores remain accessible in a secondary detail view for audit/debugging, and tests assert the primary table no longer renders comma-separated component_scores keys as the default trace column.",
+    "Historical run retrieval and aggregate-existing-runs paths return the same display fields as fresh runs.",
+    "Missing stock name or market snapshot data is clearly represented as display metadata unavailable; it must not fail a successful selection run or silently alter selection/reference-price semantics.",
+    "Validation record includes DESIGN-COMPLIANCE-001 item-by-item matrix and reports production_ddl_gate, production_frontend_dependency_gate, production_backend_dependency_gate, and whether production 8001/3000 were touched."
+  ],
+  "closure_requirements": [
+    "Selection Center result UI shows stock code plus name consistently with Paper v2 simulation/trading views.",
+    "Primary result table no longer uses the wide Trace/?? column to show only component_scores key names; valuable stock market context such as volume and previous close is shown instead.",
+    "component_scores/audit trace is preserved in a secondary detail affordance and remains available for debugging and evidence.",
+    "Fresh, historical, and aggregate-existing selection result paths use one consistent display-enrichment contract.",
+    "No trading/selection decision behavior is changed by display-only name or market metadata enrichment."
+  ],
+  "non_goals": [
+    "Do not change selection ranking, HMM scoring, ST PIT/risk/tradability filters, StrategyPackage contract behavior, order generation, or Paper v2 execution.",
+    "Do not introduce fallback market data that silently changes reference_price or trading decisions.",
+    "Do not remove component_scores or audit evidence; move it out of the main table only."
+  ],
+  "events": [
+    {
+      "timestamp": "2026-05-24T04:22:44Z",
+      "actor": "codex-app",
+      "action": "discovered",
+      "note": "User reported Selection Center result UI gap: stock names missing while Paper v2 simulation displays them, and Trace/?? column is low-value repetitive component_scores key metadata."
+    },
+    {
+      "timestamp": "2026-05-24T04:22:44Z",
+      "actor": "codex-app",
+      "action": "github_issue_created",
+      "note": "Validation MCP create timed out after partially advancing allocator in root; created GitHub issue #183 via gh CLI and mirrored fields into BUG-113 JSON before commit."
+    }
+  ],
+  "custom_github_labels": [
+    "paper-v2",
+    "selection-center",
+    "P1",
+    "risk:feature_gap",
+    "risk:observability"
+  ],
+  "github_issue_number": 183,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/183"
+}
