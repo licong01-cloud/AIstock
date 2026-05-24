@@ -411,6 +411,15 @@ QE/RD-Agent/Qlib 产物不得只保存文件路径。manifest 至少应包含：
 - UI E2E 必须监听 pageerror、console error、requestfailed 和非预期 4xx/5xx。
 - 前端验证使用 3011/3012，不得影响生产前端或后端。
 
+<a id="rule-ui-design-system-001"></a>
+### 14.1 [UI-DESIGN-SYSTEM-001] 新 UI 视觉基准和旧模板隔离
+
+- 所有新增面向用户或操作员的 AIstock UI，默认必须采用 `shadcn/ui Blocks` 的视觉语言、布局密度、组件边界和交互基准。
+- Research Assistant 主入口采用 `assistant-ui` 作为对话交互和消息组件基座，但页面 shell、配色、按钮、卡片、表单、抽屉、表格和状态展示必须使用 shadcn-compatible tokens/theme，不得继承 Paper v2 的旧视觉模板。
+- Paper v2 的 `paper-v2.css`、`pv2-*` class 和 `frontend/src/components/paper-v2/*` 仅视为 Paper v2 既有页面的局部遗留实现；除维护既有 `/paper-v2` 路由外，不得作为新模块、新功能或 Research Assistant 主入口的默认 UI 基座。
+- 后台管理、审计页、JSON 调试区可以保留表格、抽屉和高级详情，但也必须按 shadcn 风格重建主要操作视图，raw JSON 只能作为高级信息。
+- 图谱、交易看板、密集图表页等特殊交互可以在 shadcn 基础上扩展，但必须在设计验收矩阵中声明扩展理由、视觉 token 对齐方式和截图/E2E 证据。
+
 ## 15. 测试、覆盖率和提交规范
 
 ### 15.1 设计阶段测试要求
