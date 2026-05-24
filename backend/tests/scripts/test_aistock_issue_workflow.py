@@ -193,6 +193,120 @@ def test_triage_p0_groups_open_issues_and_flags_missing_linkage(
     assert payload["groups"][0]["suggested_branch"].startswith("bug/p0-validation-guardrails-batch-")
 
 
+def test_run_p0_recommends_next_issue_command(isolated_workflow_root: Path) -> None:
+    bugs_root = workflow.BUGS_ROOT
+    _write_json(bugs_root / "bug199.json", _bug(severity="P0", module="paper_v2"))
+    _write_json(bugs_root / "bug200.json", _bug(bug_id="BUG-200", severity="P0", module="validation.guardrails"))
+
+    payload = workflow.build_run_p0_plan(module="paper_v2")
+
+    assert payload["schema_version"] == "aistock_issue_workflow_run_p0_v1"
+    assert payload["count"] == 1
+    assert payload["recommended_first_issue"] == "BUG-199"
+    assert "run --bug-id BUG-199" in payload["next_command"]
+
+
+def test_doctor_reports_ready_when_client_entries_exist(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (isolated_workflow_root / "scripts").mkdir()
+    (isolated_workflow_root / "scripts" / "aistock_issue_workflow.py").write_text("", encoding="utf-8")
+    (isolated_workflow_root / "scripts" / "issue_flow.py").write_text("", encoding="utf-8")
+    (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue").mkdir(parents=True)
+    (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue" / "SKILL.md").write_text("", encoding="utf-8")
+    (isolated_workflow_root / ".claude" / "commands").mkdir(parents=True)
+    (isolated_workflow_root / ".claude" / "commands" / "fix-aistock-issue.md").write_text("", encoding="utf-8")
+    (isolated_workflow_root / "docs" / "standards").mkdir(parents=True)
+    (isolated_workflow_root / "docs" / "standards" / "aistock_development_standard_v1.5_20260523.md").write_text("", encoding="utf-8")
+    (isolated_workflow_root / "docs" / "architecture").mkdir(parents=True)
+    (isolated_workflow_root / "docs" / "architecture" / "aistock_issue_workflow_opensource_cicd_design_v2_20260525.md").write_text("", encoding="utf-8")
+    codex_home = isolated_workflow_root / "codex_home"
+    (codex_home / "skills" / "fix-aistock-issue").mkdir(parents=True)
+    (codex_home / "skills" / "fix-aistock-issue" / "SKILL.md").write_text("", encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {
+            "ok": True,
+            "branch": "main",
+            "head": "abc1234",
+            "origin_main": "abc1234",
+            "dirty": False,
+            "dirty_count": 0,
+            "status": "## main...origin/main",
+        },
+    )
+    monkeypatch.setattr(workflow, "_mcp_config_snapshot", lambda: {"files": [], "stale_worktree_config_files": []})
+
+    payload = workflow.build_doctor_report(skip_external=True)
+
+    assert payload["schema_version"] == "aistock_issue_workflow_doctor_v1"
+    assert payload["workflow_gate"] == "ready"
+    assert payload["blocking"] == []
+    assert "run --bug-id BUG-XXX" in payload["next_command"]
+
+
+def test_run_plan_writes_state_and_resume_reads_it(isolated_workflow_root: Path) -> None:
+    issue = _write_json(isolated_workflow_root / "bug.json", _bug())
+
+    payload = workflow.build_run_plan(
+        bug_id="BUG-199",
+        mode="plan",
+        issue_json=str(issue),
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        create_worktree=False,
+        dry_run=False,
+        validation_evidence=[],
+        task_slug=None,
+        allow_missing_linkage=False,
+        allow_closed=False,
+        base="origin/main",
+        head="HEAD",
+    )
+    state_path = isolated_workflow_root / payload["start"]["state_path"]
+    events_path = isolated_workflow_root / payload["start"]["events_path"]
+
+    assert payload["workflow_gate"] == "planned"
+    assert state_path.exists()
+    assert events_path.exists()
+    assert json.loads(state_path.read_text(encoding="utf-8"))["state"] == "context_ready"
+
+    resume = workflow.build_resume_plan(bug_id="BUG-199", worktree=str(isolated_workflow_root))
+    assert resume["schema_version"] == "aistock_issue_workflow_resume_v1"
+    assert resume["state"]["context_pack_md"].endswith("context-pack.md")
+    assert "finish --bug-id BUG-199" in resume["next_command"]
+
+
+def test_run_pr_mode_drafts_pr_automation_without_side_effects(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _write_json(isolated_workflow_root / "bug.json", _bug())
+    monkeypatch.setattr(workflow, "_current_branch", lambda root=None: "bug/BUG-199-workflow")
+
+    payload = workflow.build_run_plan(
+        bug_id="BUG-199",
+        mode="pr",
+        issue_json=str(issue),
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        create_worktree=False,
+        dry_run=False,
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        task_slug=None,
+        allow_missing_linkage=False,
+        allow_closed=False,
+        base="origin/main",
+        head="HEAD",
+    )
+
+    assert payload["workflow_gate"] == "ready_for_pr"
+    assert payload["pr_automation"]["dry_run"] is True
+    assert "gh pr create" in payload["pr_automation"]["next_commands"][1]
+
+
 def test_close_sync_is_dry_run_and_requires_pr_url(
     isolated_workflow_root: Path,
     capsys: pytest.CaptureFixture[str],
@@ -230,4 +344,10 @@ def test_repo_skill_and_quickstart_are_parseable() -> None:
 
     quickstart = Path("docs/standards/aistock_issue_workflow_quickstart.md").read_text(encoding="utf-8")
     assert "AIstock Issue Workflow Quickstart" in quickstart
+    assert "doctor" in quickstart
+    assert "resume" in quickstart
     assert "production_ddl_gate" in quickstart
+
+    claude_command = Path(".claude/commands/fix-aistock-issue.md").read_text(encoding="utf-8")
+    assert "Claude Code" in claude_command
+    assert "aistock_issue_workflow.py doctor" in claude_command

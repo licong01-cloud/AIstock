@@ -1,42 +1,51 @@
 ---
 name: fix-aistock-issue
-description: "Use when the user asks Codex to fix, process, triage, batch, finish, close, or sync AIstock BUG/GitHub issues, including Chinese prompts meaning fix according to standard, fix BUG-XXX, handle P0/P1 issue, run the new issue workflow, or batch-fix same-module issues. Executes the AIstock issue-fix workflow through scripts/aistock_issue_workflow.py instead of improvising manual steps."
+description: "Use when the user asks Codex to submit, fix, process, triage, batch, finish, close, sync, merge, or resume AIstock BUG/GitHub Issues, including Chinese prompts such as ????? BUG-XXX, ?? P0/P1 issue, ?? PR, ?? main, or ?? issue. Always starts with scripts/aistock_issue_workflow.py instead of manual repo exploration."
 ---
 
 # Fix AIstock Issue
 
-Use this skill to turn a short user request such as `fix BUG-112 according to AIstock standards; do not merge main` into the standard AIstock issue workflow.
+Use this skill to turn a short user request such as `????? BUG-112????? main` into the standard AIstock issue workflow.
+
+English trigger example: `fix BUG-112 according to AIstock standards; do not merge main`.
 
 ## Non-Negotiable Rules
 
 - Start from latest `origin/main` in an isolated worktree and task branch; do not develop in the production root checkout.
+- Run `python scripts/aistock_issue_workflow.py doctor` before manual exploration.
 - Use `scripts/aistock_issue_workflow.py` as the high-level entrypoint and `scripts/issue_flow.py` only as a lower-level helper.
 - Do not merge to `main` unless the user explicitly asks for merge.
 - Do not touch production runtime services, write production DB, or apply DDL without explicit approval.
 - Preserve per-issue evidence even when batching same-module issues.
-- Stop and report when BUG JSON lacks GitHub linkage, has a closed status, needs scope expansion, or lacks validation evidence.
+- Stop and report when BUG JSON lacks GitHub linkage, has a closed status, needs scope expansion, lacks validation evidence, or `doctor` returns `workflow_gate=blocked`.
 
 ## Workflow
 
-1. If the user names a BUG, run:
+1. Health-check the environment:
+   `python scripts/aistock_issue_workflow.py doctor`
+2. If the user names a BUG, run:
+   `python scripts/aistock_issue_workflow.py run --bug-id BUG-XXX --mode plan --create-worktree`
+   Compatibility fallback:
    `python scripts/aistock_issue_workflow.py start --bug-id BUG-XXX --create-worktree`
-2. Switch to the returned worktree when one is created, then read `context_pack_md` and `fix_ready_path` from the start output.
-3. Fix only within `allowed_write_scope`; if more files are needed, stop and ask for scope expansion.
-4. After code changes, run:
+3. Switch to the returned worktree when one is created, then read `context_pack_md`, `fix_ready_path`, `state_path`, and `events_path` from the output.
+4. Fix only within `allowed_write_scope`; if more files are needed, stop and ask for scope expansion.
+5. If the window restarts, run:
+   `python scripts/aistock_issue_workflow.py resume --bug-id BUG-XXX`
+6. After code changes, run:
    `python scripts/aistock_issue_workflow.py finish --bug-id BUG-XXX --plan-only`
-5. Run every `required_verification` plan selected by the finish output.
-6. Re-run `finish` with `--validation-evidence` entries for the commands/results that passed.
-7. Commit only the task files, push the task branch, and create a PR whose body is based on `tmp/issue_workflow/<BUG>/pr-body.md`.
-8. Stop before merge unless the user explicitly requested merge.
-9. After an approved merge, run:
-   `python scripts/aistock_issue_workflow.py close-sync --bug-id BUG-XXX --pr-url <PR_URL>`
-   Then use MCP sync tools to align BUG JSON and GitHub Issue status.
+7. Run every required validation plan.
+8. Re-run `finish` or `run --mode pr` with `--validation-evidence` entries for the commands/results that passed.
+9. Commit only the task files. If the user requested automated PR flow and validation evidence exists, run `python scripts/aistock_issue_workflow.py run --bug-id BUG-XXX --mode pr --validation-evidence "<command> -> passed" --push --create-pr`.
+10. Stop before merge unless the user explicitly requested merge.
+11. After an approved merge, run:
+    `python scripts/aistock_issue_workflow.py close-sync --bug-id BUG-XXX --pr-url <PR_URL>`
+    Then align BUG JSON and GitHub Issue status through the approved sync channel.
 
 ## P0 Triage and Batch
 
 When the user asks to handle current P0/P1 issues without naming a single BUG, first run:
 
-`python scripts/aistock_issue_workflow.py triage-p0`
+`python scripts/aistock_issue_workflow.py run-p0 --module <module>`
 
 Use the output groups to decide whether issues can batch. Batch only same-module issues with compatible validation and write scope. Cross-module P0s must use separate worktrees/branches.
 
