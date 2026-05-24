@@ -323,14 +323,89 @@ def test_close_sync_is_dry_run_and_requires_pr_url(
         str(issue),
         "--pr-url",
         "https://github.example/pull/1",
+        "--validation-evidence",
+        "python -m nox -s l0 -> passed",
     ]) == 0
     ready = json.loads(capsys.readouterr().out)
-    assert ready["workflow_gate"] == "ready_for_mcp_sync"
+    assert ready["workflow_gate"] == "ready_for_apply"
     assert ready["dry_run"] is True
     assert (isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "close-sync-plan.json").exists()
 
-    assert workflow.main(["close-sync", "--issue-json", str(issue), "--apply"]) == 2
-    assert "intentionally not implemented" in capsys.readouterr().err
+    assert workflow.main([
+        "close-sync",
+        "--issue-json",
+        str(issue),
+        "--pr-url",
+        "https://github.example/pull/1",
+        "--validation-evidence",
+        "python -m nox -s l0 -> passed",
+        "--merge-commit",
+        "abc1234",
+        "--skip-github-check",
+        "--apply",
+    ]) == 0
+    applied = json.loads(capsys.readouterr().out)
+    assert applied["workflow_gate"] == "close_synced"
+    updated = json.loads(issue.read_text(encoding="utf-8"))
+    assert updated["status"] == "fixed"
+    assert updated["fix_commit"] == "abc1234"
+
+
+def test_cleanup_after_merge_blocks_unmerged_branch(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
+        if args[:2] == ["branch", "--show-current"]:
+            return "feature/current"
+        if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
+            return "bug/BUG-199-workflow"
+        if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
+            return ""
+        if args[:2] == ["ls-remote", "--heads"]:
+            return ""
+        return ""
+
+    monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {"ok": True, "branch": "main", "dirty": False, "dirty_count": 0, "head": "a", "origin_main": "a"},
+    )
+
+    payload = workflow.build_cleanup_after_merge_plan(branch="bug/BUG-199-workflow")
+
+    assert payload["workflow_gate"] == "blocked"
+    assert "not merged" in payload["blocking"][0]
+
+
+def test_cleanup_after_merge_dry_run_ready_for_merged_branch(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
+        if args[:2] == ["branch", "--show-current"]:
+            return "feature/current"
+        if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
+            return "bug/BUG-199-workflow"
+        if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
+            return "bug/BUG-199-workflow"
+        if args[:2] == ["ls-remote", "--heads"]:
+            return "ref"
+        return ""
+
+    monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {"ok": True, "branch": "main", "dirty": False, "dirty_count": 0, "head": "a", "origin_main": "a"},
+    )
+
+    payload = workflow.build_cleanup_after_merge_plan(branch="bug/BUG-199-workflow", sync_root=True)
+
+    assert payload["workflow_gate"] == "ready_for_cleanup"
+    assert payload["dry_run"] is True
+    assert {item["action"] for item in payload["actions"]} >= {"sync_root_main", "delete_local_branch", "delete_remote_branch"}
 
 
 def test_repo_skill_and_quickstart_are_parseable() -> None:

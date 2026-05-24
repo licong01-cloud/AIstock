@@ -11,3 +11,7 @@ For AIstock BUG/GitHub Issue work:
 5. Use `resume --bug-id BUG-XXX` after any restart.
 6. Finish with validation evidence and a PR body generated under `tmp/issue_workflow/<BUG>/`.
 7. Do not merge, close-sync, touch production services, or clean worktrees unless the user explicitly asks and the workflow gate allows it.
+
+## Post-Merge Sync And Cleanup
+
+After an approved merge, run `python scripts/aistock_issue_workflow.py close-sync --bug-id BUG-XXX --pr-url <PR_URL> --validation-evidence "<command> -> passed" --apply`, then dry-run `cleanup-after-merge`; add `--apply` only when the cleanup gate is ready.

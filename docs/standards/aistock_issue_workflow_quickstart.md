@@ -124,7 +124,24 @@ After the PR is approved and merged, prepare the close/sync checklist:
 python scripts/aistock_issue_workflow.py close-sync --bug-id BUG-XXX --pr-url <PR_URL>
 ```
 
-The current wrapper is dry-run for destructive/apply behavior unless the implementation phase explicitly adds safe apply gates. Use MCP or GitHub CLI/API sync only after the checklist is satisfied.
+By default this is a dry-run plan. When the PR is already merged and validation evidence plus production gates are known, use the safe apply gate:
+
+```powershell
+python scripts/aistock_issue_workflow.py close-sync --bug-id BUG-XXX --pr-url <PR_URL> --validation-evidence "python -m nox -s l0 -> passed" --apply
+```
+
+`--apply` verifies the PR is merged through `gh`, updates the BUG JSON to `fixed`, writes `close-sync-evidence.json`, and records `state=close_synced`. It does not merge PRs and does not touch production services.
+
+
+## Cleanup After Merge
+
+After a PR is merged and close-sync is complete, dry-run cleanup first:
+
+```powershell
+python scripts/aistock_issue_workflow.py cleanup-after-merge --branch bug/BUG-XXX-scope --worktree F:/Dev/AIstock_worktrees/BUG-XXX-scope --sync-root
+```
+
+Only add `--apply` when the plan reports `workflow_gate=ready_for_cleanup`. The apply path refuses dirty worktrees, unmerged branches, dirty canonical root, or the currently checked-out branch.
 
 ## Triage Current P0
 

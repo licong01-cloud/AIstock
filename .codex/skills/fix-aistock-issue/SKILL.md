@@ -52,3 +52,7 @@ Use the output groups to decide whether issues can batch. Batch only same-module
 ## Completion Report
 
 Report branch, PR URL, commit hash, changed files, validation evidence, production gates, and whether production runtime or DB was untouched.
+
+## Post-Merge Sync And Cleanup
+
+After an approved merge, run `python scripts/aistock_issue_workflow.py close-sync --bug-id BUG-XXX --pr-url <PR_URL> --validation-evidence "<command> -> passed" --apply`, then dry-run `cleanup-after-merge`; add `--apply` only when the cleanup gate is ready.

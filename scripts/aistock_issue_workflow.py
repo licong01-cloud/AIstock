@@ -788,6 +788,40 @@ def _maybe_create_pr(
     return {"branch": branch, "dry_run": False, "pr_url": pr_url, "actions": actions}
 
 
+def _verify_pr_merged(pr_url: str, *, skip_github_check: bool = False) -> dict[str, Any]:
+    if skip_github_check:
+        return {"checked": False, "merged": True, "reason": "skip_github_check"}
+    result = _run_command(
+        ["gh", "pr", "view", pr_url, "--json", "state,mergedAt,mergeCommit,url"],
+        cwd=REPO_ROOT,
+        timeout=30,
+    )
+    if not result.get("ok"):
+        raise WorkflowError(result.get("stderr") or result.get("stdout") or f"cannot inspect PR: {pr_url}")
+    try:
+        payload = json.loads(str(result.get("stdout") or "{}"))
+    except json.JSONDecodeError as exc:
+        raise WorkflowError(f"cannot parse gh pr view output for {pr_url}: {exc}") from exc
+    merged = payload.get("state") == "MERGED" or bool(payload.get("mergedAt"))
+    if not merged:
+        raise WorkflowError(f"PR is not merged: {pr_url}")
+    return {"checked": True, "merged": True, "pr": payload}
+
+
+def _production_gates_payload(args: argparse.Namespace | None = None) -> dict[str, str]:
+    if args is None:
+        return {
+            "production_ddl_gate": "noop",
+            "production_frontend_dependency_gate": "noop",
+            "production_backend_dependency_gate": "noop",
+        }
+    return {
+        "production_ddl_gate": args.production_ddl_gate,
+        "production_frontend_dependency_gate": args.production_frontend_dependency_gate,
+        "production_backend_dependency_gate": args.production_backend_dependency_gate,
+    }
+
+
 def build_run_plan(
     *,
     bug_id: str,
@@ -878,6 +912,10 @@ def build_close_sync_plan(
     pr_url: str | None,
     apply: bool,
     allow_missing_linkage: bool,
+    validation_evidence: list[str] | None = None,
+    merge_commit: str | None = None,
+    production_gates: dict[str, str] | None = None,
+    skip_github_check: bool = False,
 ) -> dict[str, Any]:
     record, source_path = find_bug_record(bug_id=bug_id, issue_json=issue_json)
     canonical_bug_id = str(record.get("bug_id") or bug_id or source_path.stem).upper()
@@ -885,9 +923,10 @@ def build_close_sync_plan(
     status = str(record.get("status") or "").strip()
     if status not in flow.VALID_BUG_STATUSES:
         raise WorkflowError(f"{canonical_bug_id} has invalid status for close/sync: {status!r}")
-    if apply:
-        raise WorkflowError("close-sync --apply is intentionally not implemented in the high-level wrapper; use MCP sync tools after verification")
+    evidence = [item for item in validation_evidence or [] if item.strip()]
+    gates = production_gates or _production_gates_payload()
     output_dir = REPO_ROOT / WORKFLOW_ROOT / canonical_bug_id
+    workflow_gate = "ready_for_apply" if pr_url and evidence else ("missing_validation_evidence" if pr_url else "missing_pr_url")
     payload = {
         "schema_version": "aistock_issue_workflow_close_sync_v1",
         "generated_at": _utc_now(),
@@ -898,8 +937,11 @@ def build_close_sync_plan(
         "github_issue_url": record.get("github_issue_url"),
         "missing_github_linkage": missing_linkage,
         "merged_pr": pr_url,
-        "dry_run": True,
-        "workflow_gate": "ready_for_mcp_sync" if pr_url else "missing_pr_url",
+        "merge_commit": merge_commit,
+        "validation_evidence": evidence,
+        "production_gates": gates,
+        "dry_run": not apply,
+        "workflow_gate": workflow_gate,
         "required_checks": [
             "closure_requirements_completed",
             "validation_evidence_attached",
@@ -908,11 +950,133 @@ def build_close_sync_plan(
         ],
         "next_agent_steps": [
             "verify_closure_requirements_item_by_item",
-            "sync_bug_json_and_github_issue_with_mcp_tools",
+            "run_close_sync_apply_after_pr_merge",
+            "sync_github_issue_status_with_gh_or_mcp",
             "record_final_production_gates",
         ],
     }
     _write_json(output_dir / "close-sync-plan.json", payload)
+    if apply:
+        if not pr_url:
+            raise WorkflowError("close-sync --apply requires --pr-url")
+        if not evidence:
+            raise WorkflowError("close-sync --apply requires at least one --validation-evidence")
+        pr_check = _verify_pr_merged(pr_url, skip_github_check=skip_github_check)
+        merge_commit = merge_commit or (
+            ((pr_check.get("pr") or {}).get("mergeCommit") or {}).get("oid")
+            if isinstance((pr_check.get("pr") or {}).get("mergeCommit"), dict)
+            else None
+        )
+        updated = dict(record)
+        updated.update(
+            {
+                "status": "fixed",
+                "fixed_at": _utc_now(),
+                "fix_commit": merge_commit,
+                "pr_url": pr_url,
+                "validation_evidence": evidence,
+                **gates,
+            }
+        )
+        _write_json(source_path, updated)
+        evidence_payload = {
+            **payload,
+            "workflow_gate": "close_synced",
+            "dry_run": False,
+            "pr_check": pr_check,
+            "merge_commit": merge_commit,
+            "updated_bug_json": _repo_rel(source_path),
+        }
+        _write_json(output_dir / "close-sync-evidence.json", evidence_payload)
+        _write_state(
+            canonical_bug_id,
+            state="close_synced",
+            pr_url=pr_url,
+            commit=merge_commit,
+            validation_evidence=evidence,
+            production_gates=gates,
+            next_actions=["sync_local_main", "cleanup_after_merge"],
+        )
+        return evidence_payload
+    return payload
+
+
+def build_cleanup_after_merge_plan(
+    *,
+    branch: str,
+    worktree: str | None = None,
+    apply: bool = False,
+    sync_root: bool = False,
+    canonical_root: str | None = None,
+) -> dict[str, Any]:
+    root = Path(canonical_root) if canonical_root else _canonical_root()
+    current_branch = _git(["branch", "--show-current"], check=False)
+    local_branches = set(_git(["for-each-ref", "--format=%(refname:short)", "refs/heads"], check=False).splitlines())
+    remote_ref = _git(["ls-remote", "--heads", "origin", branch], check=False)
+    merged_refs = set(_git(["branch", "--format=%(refname:short)", "--merged", "origin/main"], check=False).splitlines())
+    merged = branch in merged_refs
+    worktree_path = Path(worktree) if worktree else None
+    worktree_clean = True
+    if worktree_path and worktree_path.exists():
+        worktree_clean = _run_command(["git", "status", "--porcelain=v1"], cwd=worktree_path).get("stdout") == ""
+    root_git = _git_snapshot(root) if root.exists() else {"ok": False, "error": "canonical root missing"}
+    blocking: list[str] = []
+    if branch == current_branch and apply:
+        blocking.append("refusing to cleanup the currently checked-out branch")
+    if not merged:
+        blocking.append(f"branch is not merged into origin/main: {branch}")
+    if worktree_path and worktree_path.exists() and not worktree_clean:
+        blocking.append(f"worktree is dirty: {worktree_path}")
+    if sync_root:
+        if not root.exists():
+            blocking.append(f"canonical root missing: {root}")
+        elif root_git.get("dirty"):
+            blocking.append(f"canonical root is dirty: {root}")
+        elif root_git.get("branch") != "main":
+            blocking.append(f"canonical root is not on main: {root_git.get('branch')}")
+    actions = []
+    if sync_root:
+        actions.append({"action": "sync_root_main", "root": str(root), "safe": not any("canonical root" in item for item in blocking)})
+    if worktree_path and worktree_path.exists():
+        actions.append({"action": "remove_worktree", "worktree": str(worktree_path), "safe": merged and worktree_clean})
+    if branch in local_branches:
+        actions.append({"action": "delete_local_branch", "branch": branch, "safe": merged})
+    if remote_ref:
+        actions.append({"action": "delete_remote_branch", "branch": branch, "safe": merged})
+    payload = {
+        "schema_version": "aistock_issue_workflow_cleanup_v1",
+        "generated_at": _utc_now(),
+        "branch": branch,
+        "worktree": str(worktree_path) if worktree_path else None,
+        "canonical_root": str(root),
+        "sync_root": sync_root,
+        "merged_into_origin_main": merged,
+        "worktree_clean": worktree_clean,
+        "root_git": root_git,
+        "blocking": blocking,
+        "actions": actions,
+        "dry_run": not apply,
+        "workflow_gate": "ready_for_cleanup" if not blocking else "blocked",
+    }
+    output_dir = REPO_ROOT / WORKFLOW_ROOT / "cleanup"
+    _write_json(output_dir / f"{_slug(branch)}-cleanup-plan.json", payload)
+    if apply:
+        if blocking:
+            raise WorkflowError("; ".join(blocking))
+        applied: list[dict[str, Any]] = []
+        if sync_root:
+            applied.append({"command": "git fetch origin --prune", "result": _execute_checked(["git", "fetch", "origin", "--prune"], cwd=root, timeout=120)})
+            applied.append({"command": "git merge --ff-only origin/main", "result": _execute_checked(["git", "merge", "--ff-only", "origin/main"], cwd=root, timeout=120)})
+        if worktree_path and worktree_path.exists():
+            applied.append({"command": f"git worktree remove {worktree_path}", "result": _execute_checked(["git", "worktree", "remove", str(worktree_path)], cwd=REPO_ROOT, timeout=120)})
+        if branch in local_branches:
+            applied.append({"command": f"git branch -d {branch}", "result": _execute_checked(["git", "branch", "-d", branch], cwd=REPO_ROOT, timeout=120)})
+        if remote_ref:
+            applied.append({"command": f"git push origin --delete {branch}", "result": _execute_checked(["git", "push", "origin", "--delete", branch], cwd=REPO_ROOT, timeout=180)})
+        payload["applied"] = applied
+        payload["workflow_gate"] = "cleanup_done"
+        payload["dry_run"] = False
+        _write_json(output_dir / f"{_slug(branch)}-cleanup-evidence.json", payload)
     return payload
 
 
@@ -1000,9 +1164,25 @@ def cmd_close_sync(args: argparse.Namespace) -> int:
         pr_url=args.pr_url,
         apply=args.apply,
         allow_missing_linkage=args.allow_missing_linkage,
+        validation_evidence=list(args.validation_evidence or []),
+        merge_commit=args.merge_commit,
+        production_gates=_production_gates_payload(args),
+        skip_github_check=args.skip_github_check,
     )
     _emit(payload, args.output)
-    return 0 if payload.get("workflow_gate") == "ready_for_mcp_sync" else 2
+    return 0 if payload.get("workflow_gate") in {"ready_for_apply", "close_synced"} else 2
+
+
+def cmd_cleanup_after_merge(args: argparse.Namespace) -> int:
+    payload = build_cleanup_after_merge_plan(
+        branch=args.branch,
+        worktree=args.worktree,
+        apply=args.apply,
+        sync_root=args.sync_root,
+        canonical_root=args.canonical_root,
+    )
+    _emit(payload, args.output)
+    return 0 if payload.get("workflow_gate") in {"ready_for_cleanup", "cleanup_done"} else 2
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1082,8 +1262,23 @@ def build_parser() -> argparse.ArgumentParser:
     close.add_argument("--pr-url")
     close.add_argument("--apply", action="store_true")
     close.add_argument("--allow-missing-linkage", action="store_true")
+    close.add_argument("--validation-evidence", action="append")
+    close.add_argument("--merge-commit")
+    close.add_argument("--production-ddl-gate", default="noop")
+    close.add_argument("--production-frontend-dependency-gate", default="noop")
+    close.add_argument("--production-backend-dependency-gate", default="noop")
+    close.add_argument("--skip-github-check", action="store_true")
     close.add_argument("--output")
     close.set_defaults(func=cmd_close_sync)
+
+    cleanup = sub.add_parser("cleanup-after-merge", help="Safely sync root and clean merged issue worktrees/branches.")
+    cleanup.add_argument("--branch", required=True)
+    cleanup.add_argument("--worktree")
+    cleanup.add_argument("--sync-root", action="store_true")
+    cleanup.add_argument("--canonical-root")
+    cleanup.add_argument("--apply", action="store_true")
+    cleanup.add_argument("--output")
+    cleanup.set_defaults(func=cmd_cleanup_after_merge)
 
     return parser
 
