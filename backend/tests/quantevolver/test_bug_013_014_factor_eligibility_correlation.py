@@ -1,8 +1,5 @@
 """Tests for BUG-013 (disabled factor metrics) and BUG-014 (correlation cache dependency)."""
-import pytest
-from unittest.mock import patch, MagicMock
-import os
-import tempfile
+from unittest.mock import MagicMock, patch
 
 # BUG-013: FactorEligibilityService.get_factor_eligibility should NOT block disabled factors
 

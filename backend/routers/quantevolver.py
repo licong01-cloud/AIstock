@@ -45,10 +45,25 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import httpx
+from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, ConfigDict, Field
+
 from backend.services.quantevolver.factor_cache_coverage import (
     DEFAULT_WARMUP_TOLERANCE_DAYS,
     factor_cache_covers_window,
 )
+from ..db.pg_pool import get_conn
+from ..services.quantevolver.callback_urls import build_aistock_callback_url
+from ..services.quantevolver.experiment_config import ensure_qe_risk_policy, normalize_label_horizon
+from ..services.quantevolver.label_horizon_schema import ensure_qe_label_horizon_schema
+from ..services.quantevolver.node_execution import (
+    QENodePreflightError,
+    preflight_qe_node,
+    resolve_default_qe_node_id,
+)
+from ..services.quantevolver.seed_contract import normalize_single_experiment_seed_config
+from .model_registry import router as model_registry_router
 
 AISTOCK_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -170,26 +185,9 @@ def _build_multi_alpha_group_command(gc: dict[str, Any], node_label: str | None 
     )
 
 
-from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Query, Request
-from pydantic import ConfigDict
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
-
-from ..db.pg_pool import get_conn
-from ..services.quantevolver.callback_urls import build_aistock_callback_url
-from ..services.quantevolver.experiment_config import ensure_qe_risk_policy, normalize_label_horizon
-from ..services.quantevolver.seed_contract import normalize_single_experiment_seed_config
-from ..services.quantevolver.label_horizon_schema import ensure_qe_label_horizon_schema
-from ..services.quantevolver.node_execution import (
-    QENodePreflightError,
-    preflight_qe_node,
-    resolve_default_qe_node_id,
-)
-
 logger = logging.getLogger("aistock.routers.quantevolver")
 
 router = APIRouter(prefix="/quantevolver", tags=["QuantEvolver"])
-from .model_registry import router as model_registry_router
 
 router.include_router(model_registry_router)
 
@@ -400,7 +398,6 @@ def sync_model_task(task_id: str, req: SyncModelTaskRequest = None):
         task_dir = req.task_dir if req and req.task_dir else None
         if not task_dir:
             # 使用默认路径
-            from pathlib import Path
             default_root = AISTOCK_PROJECT_ROOT / "rdagent_assets" / "rdagent_tasks" / task_id
             default_root.mkdir(parents=True, exist_ok=True)
             task_dir = str(default_root)
@@ -2337,8 +2334,6 @@ def create_strategy(req: CreateStrategyRequest):
     """新建策略。"""
     try:
         import json as _json
-        import os
-        from pathlib import Path
         from ..db.pg_pool import get_conn
         
         # 保存源码到文件系统
@@ -2389,7 +2384,6 @@ def update_strategy(strategy_id: str, req: UpdateStrategyRequest):
     """编辑策略。"""
     try:
         import json as _json
-        from pathlib import Path
         from ..db.pg_pool import get_conn
 
         set_parts = []
@@ -2475,7 +2469,6 @@ def clone_strategy(strategy_id: str, req: CreateStrategyRequest):
     """从现有策略模板创建新策略。"""
     try:
         import json as _json
-        from pathlib import Path
         from ..db.pg_pool import get_conn
         
         # 保存源码到文件系统
@@ -4901,7 +4894,7 @@ def get_available_llm_models():
                         "model_category": row[4],
                         "source": "aistock_db"
                     })
-    except Exception as e:
+    except Exception:
         logger.exception("获取可用LLM模型列表失败")
         
     return {"ok": True, "models": models}
@@ -7705,7 +7698,8 @@ def generate_stock_pool(date: Optional[str] = None):
     调用 generate_stock_pool.py 生成 filtered_pool_{date}.txt。
     date: YYYY-MM-DD，默认今日。返回生成的 WSL 路径。
     """
-    import subprocess, sys
+    import subprocess
+    import sys
     from pathlib import Path
     from datetime import date as date_cls
 

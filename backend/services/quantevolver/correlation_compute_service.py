@@ -7,8 +7,6 @@ QE experiment orchestration change.
 """
 from __future__ import annotations
 
-import gc
-import json
 import logging
 import os
 import threading
@@ -339,7 +337,6 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
             phase1_elapsed = 0.0
             phase2_elapsed = 0.0
             phase3_elapsed = 0.0
-            success_factors = []
 
             # ═══ 先收敛历史脏状态，保证当前 official 准入规则和 DB 一致 ═══
             reconcile_stats = _reconcile_correlation_state(reset_all=True)
@@ -657,7 +654,7 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
 
             # --- 完整汇总日志 ---
             _correlation_logs.append("=" * 50)
-            _correlation_logs.append(f"计算完成汇总")
+            _correlation_logs.append("计算完成汇总")
             _correlation_logs.append(f"  请求因子数: {_requested_count}")
             _correlation_logs.append(f"  成功因子数: {_success_count}")
             _correlation_logs.append(
