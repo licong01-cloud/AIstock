@@ -1,11 +1,12 @@
 # Research Assistant Prompt Pack 运行时治理设计方案
 
-- **版本**: v1.0
+- **版本**: v1.1
 - **日期**: 2026-05-24
-- **状态**: 建议方案，已按当前最佳方案提交；后续实现需单独拆分任务
-- **适用范围**: Research Assistant 主提示词、Prompt Tree、运行时 Prompt Bundle、Prompt 版本发布与回滚
+- **状态**: 已并入统一 Runtime Governance 设计；本文继续作为 Prompt Pack 子方案
+- **适用范围**: Research Assistant 主提示词、压缩提示词、恢复提示词、Prompt Tree、运行时 Prompt Bundle、Prompt 版本发布与回滚
 - **关联问题**: GitHub Issue #186 / `BUG-117`（删除未开发 mouse/keyboard 与 code-write 能力的负向禁用提示）
-- **本次提交边界**: 仅新增设计文档与 BUG 登记；不修改运行时代码、不触碰生产 `8001`/`3000`、不写生产 DB
+- **统一方案**: `docs/architecture/research_assistant_prompt_context_runtime_governance_design_20260524.md`
+- **本次提交边界**: 仅更新设计文档；不修改运行时代码、不触碰生产 `8001`/`3000`、不写生产 DB
 
 ## 1. 结论
 
@@ -18,6 +19,23 @@ AIstock 的提示词存储不应在“文件”和“数据库”之间二选一
 5. **安全边界由代码强制，不靠提示词表达**：MCP/API gate、approval、权限、DB role、tool risk policy、测试和审计是硬边界；prompt 只能解释流程，不能替代权限控制。
 
 这套结构同时满足效率、审计、可回滚、多人协作和生产安全：文件适合治理和版本管理，DB 适合运行状态和审计，内存缓存负责性能。
+
+### 1.1 与上下文压缩方案的统一
+
+Prompt Pack 改造必须与上下文压缩方案合并为同一个项目：`Research Assistant Prompt & Context Runtime Governance`。
+
+统一后，Prompt Pack 不只管理主对话提示词，还必须管理：
+
+1. `context.compaction.structured_summary`：结构化压缩提示词；
+2. `context.compaction.key_fact_extraction`：关键事实抽取提示词；
+3. `context.compaction.summary_of_summaries`：多摘要再压缩提示词；
+4. `context.recovery.continue_after_compaction`：压缩后无感继续提示词；
+5. `context.recovery.prompt_too_long_retry`：provider 返回上下文超限后的恢复提示词；
+6. `context.renderer.context_health`：上下文健康状态渲染提示词。
+
+所有这些 prompt 都必须走同一条 Git 文件权威源、DB version/activation、内存 active snapshot 和运行审计链路，不能以 Python 常量或内联字符串形式硬编码。
+
+同时，Prompt Pack 不再承载可调运行参数。所有 token 预算、fresh tail 长度、压缩阈值、temperature、max output、重试次数、历史分页、检索 top-k 等参数必须进入 runtime config，并由 `docs/architecture/research_assistant_prompt_context_runtime_governance_design_20260524.md` 定义的 config activation 管理。
 
 ## 2. 当前问题基线
 

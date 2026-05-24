@@ -1,11 +1,12 @@
 # Research Assistant 上下文压缩设计方案
 
-- **版本**: v1.1
+- **版本**: v1.2
 - **日期**: 2026-05-24
-- **状态**: Phase 1 基线已实现（版本 B），Phase 2/3 为后续开发目标
-- **当前基线**: 版本 B — Token 感知滑动窗口（commit `325fd75`，待合入 main）
+- **状态**: 已并入统一 Runtime Governance 设计；本文继续作为上下文压缩子方案
+- **当前基线**: 版本 B — Token 感知滑动窗口（commit `325fd75`）；后续必须迁移为配置驱动，不得保留运行参数硬编码
 - **参考**: Claude Code AutoCompact 算法、LCM (Lossless Context Management) DAG 方案
 - **关联**: BUG-105 (Research Assistant Chat Context Loss)
+- **统一方案**: `docs/architecture/research_assistant_prompt_context_runtime_governance_design_20260524.md`
 
 ## 1. 问题定义
 
@@ -22,8 +23,18 @@ Research Assistant 是多轮对话系统，用户通过对话完成 QE 实验创
 1. **不丢失有价值信息**：压缩过程保留决策链、用户确认、实验参数等关键语义
 2. **对用户透明**：压缩自动触发，用户无需感知或手动操作
 3. **可审计**：原始消息始终在 DB 中，压缩摘要可通过 API 回溯
-4. **模型上下文能力匹配**：利用 1M token 上下文窗口，在接近上限前触发压缩
+4. **模型上下文能力匹配**：读取 active model profile 的上下文窗口，在达到配置阈值前触发压缩
 5. **不截断单条消息**：每条消息完整保留或完整压缩，不做 `content[:500]` 式的静默截断
+
+### 2.1 配置化硬约束
+
+本方案后续实现必须遵守统一 Runtime Governance 设计：
+
+1. 所有可调整参数必须从 active runtime config 读取，并进入 DB version/activation 与内存 active snapshot。
+2. 业务代码不得硬编码 token 预算、上下文窗口、历史消息条数、fresh tail 长度、压缩触发阈值、模型温度、输出 token、重试次数、分页大小、检索 top-k 或 provider error code。
+3. 压缩提示词、恢复提示词、key-fact 提取提示词必须来自 active Prompt Pack，不得以内联字符串写入 Python。
+4. 当前文档中出现的固定数值只代表已实现基线或参考方案示例，不是未来实现允许硬编码的限制。
+5. 未来代码验收必须包含硬编码扫描，阻断 `_PRIOR_MESSAGES_TOKEN_BUDGET`、固定 `limit=...`、固定 `temperature=...`、固定 `max_tokens=...`、固定 fresh tail 轮数等模式。
 
 ## 3. 三阶段策略
 
@@ -35,45 +46,52 @@ Research Assistant 是多轮对话系统，用户通过对话完成 QE 实验创
 
 1. **不截断单条消息**：每条消息完整进入 LLM 上下文，不做 `content[:500]` 式静默截断
 2. **不过滤角色**：user/assistant/system/tool 全部保留，system 消息可能包含重要的阶段切换提示，tool 消息包含 MCP 调用结果
-3. **Token 预算感知**：基于模型 1M 上下文窗口，为历史消息分配 800K token 预算
+3. **Token 预算感知**：基于 active model profile 和 active runtime config 动态分配历史消息预算
 4. **滑动窗口**：从最新消息开始累计，超出预算时丢弃最旧消息，保留完整性
 5. **可观测性**：丢弃消息时输出 info 日志，记录保留/丢弃数量和 token 使用量
 
-#### 3.1.2 核心常量
+#### 3.1.2 配置驱动的预算入口
 
 ```python
 # backend/services/research_assistant/service.py
 
-# 历史消息 token 预算（1M 窗口 - 200K 系统开销）
-_PRIOR_MESSAGES_TOKEN_BUDGET = 800_000
-
-# 中文混合文本 token 估算系数（1 中文字符 ≈ 1-2 tokens，取保守值 2.0）
-_TOKEN_ESTIMATE_CHARS_PER_TOKEN = 2.0
+# 不再定义 _PRIOR_MESSAGES_TOKEN_BUDGET / _TOKEN_ESTIMATE_CHARS_PER_TOKEN。
+# 每轮从 active runtime config + model_profile 计算：
+# - model_context.window_source
+# - model_context.token_estimator
+# - model_context.safety_buffer
+# - budget.prompt_bundle/context_pack/compact_summaries/fresh_tail/history/response
+budget_plan = self.context_budget_planner.plan(
+    model_profile=model_profile,
+    runtime_config=active_runtime_config,
+    prompt_bundle=bundle,
+    context_pack=context_pack,
+    conversation_id=conversation_id,
+)
 ```
 
 #### 3.1.3 Token 估算
 
 ```python
-@classmethod
-def _estimate_tokens(cls, text: str) -> int:
-    """保守估算：字符数 / 2.0，至少 1 token"""
-    return max(1, int(len(text) / cls._TOKEN_ESTIMATE_CHARS_PER_TOKEN))
+def estimate_tokens(text: str, runtime_config: RuntimeConfig, model_profile: dict) -> int:
+    """优先使用 provider reported tokenizer；fallback 策略来自 runtime config。"""
+    return token_estimator_from_config(runtime_config, model_profile).estimate(text)
 ```
 
-上线后应对比 API 实际返回的 token 计数校准此系数。
+上线后应对比 API 实际返回的 token 计数校准配置中的 fallback estimator，而不是改代码常量。
 
 #### 3.1.4 历史消息加载算法
 
 ```python
 def _load_prior_chat_messages(self, conversation_id: str, current_message: str
                               ) -> list[dict[str, str]]:
-    # 1. 从 DB 加载最近 500 条消息
-    result = self.repository.list_records(
-        "conversation_messages",
-        filters={"conversation_id": conversation_id},
-        limit=500,
+    # 1. 按 runtime config 分页加载历史；停止条件由预算满足/页数上限/会话起点决定
+    items = self.repository.iter_conversation_messages(
+        conversation_id=conversation_id,
+        page_size=runtime_config.history_fetch.page_size,
+        max_pages=runtime_config.history_fetch.max_pages,
+        order="desc",
     )
-    items = sorted(result["items"], key=lambda item: str(item.get("created_at") or ""))
 
     # 2. 构建候选列表（完整内容、全部角色、排除空消息和当前消息）
     candidates: list[dict[str, str]] = []
@@ -86,12 +104,12 @@ def _load_prior_chat_messages(self, conversation_id: str, current_message: str
         role = str(item.get("role") or "")
         candidates.append({"role": role, "content": content})
 
-    # 3. 滑动窗口：从最新开始累加 token，不超过预算
+    # 3. 滑动窗口：从最新开始累加 token，不超过 budget_plan.history_budget_tokens
     selected: list[dict[str, str]] = []
     tokens_used = 0
     for msg in reversed(candidates):                  # 从最新开始
         msg_tokens = self._estimate_tokens(msg["content"])
-        if tokens_used + msg_tokens > self._PRIOR_MESSAGES_TOKEN_BUDGET and selected:
+        if tokens_used + msg_tokens > budget_plan.history_budget_tokens and selected:
             break                                     # 超出预算，停止添加
         selected.append(msg)
         tokens_used += msg_tokens
@@ -103,7 +121,7 @@ def _load_prior_chat_messages(self, conversation_id: str, current_message: str
             "chat history window: kept %d/%d messages (~%d tokens), "
             "dropped %d oldest due to budget %d",
             len(selected), len(candidates), tokens_used,
-            len(candidates) - len(selected), self._PRIOR_MESSAGES_TOKEN_BUDGET,
+            len(candidates) - len(selected), budget_plan.history_budget_tokens,
         )
     return selected
 ```
@@ -141,21 +159,24 @@ def _chat_messages_for_llm(user_message, bundle, context_pack,
 def chat_turn(self, request):
     # ... 创建/获取 conversation，创建 task，记录 user_message ...
 
-    # ① 加载历史消息（在模型路由之前，用于 token 估算）
-    prior_messages = self._load_prior_chat_messages(conversation_id, data.message)
-    history_tokens = sum(self._estimate_tokens(m["content"]) for m in prior_messages)
-    estimated_total_tokens = len(data.message) * 2 + history_tokens + 32000
+    # ① 加载 active runtime config，并生成预算计划
+    budget_plan = self.context_budget_planner.plan(
+        conversation_id=conversation_id,
+        current_message=data.message,
+        runtime_config=active_runtime_config,
+        model_profile_candidates=self.model_profiles,
+    )
 
     # ② 模型路由（token 估算包含历史，可能路由到长上下文模型）
     route = self.route_model(ModelRouteRequest(
         role="primary_reasoner",
         risk_level=data.risk_level,
-        token_estimate=estimated_total_tokens,  # 包含历史 token
+        token_estimate=budget_plan.estimated_total_tokens,
     ))
 
-    # ③ Context Pack（预算从 16K 提升到 64K）
+    # ③ Context Pack 预算由 runtime config 和 budget_plan 分配
     context_pack = self.build_context_pack(ContextPackBuildRequest(
-        token_budget=64000,  # 原为 16000
+        token_budget=budget_plan.context_pack_budget_tokens,
     ))
 
     # ④ 组装 LLM 消息（含历史）
@@ -163,26 +184,24 @@ def chat_turn(self, request):
     # ... LLM 调用 ...
 ```
 
-#### 3.1.7 预算分配模型（1M 上下文窗口）
+#### 3.1.7 配置驱动的预算分配模型
 
 ```
-┌──────────────────────────────────────────────────────┐
-│ System Prompt (~32K)                                  │
-│   - Prompt Bundle 文本（由 Prompt Tree 组装）          │
-│   - 行为约束（中文回复、禁止 raw JSON、禁止执行高风险） │
-├──────────────────────────────────────────────────────┤
-│ Context Pack 摘要 (~32K 预留, 实际可变)                │
-│   - 已审计的 Memory Items 摘要                        │
-│   - 临时记忆引用                                     │
-├──────────────────────────────────────────────────────┤
-│ 对话历史 — prior_messages (~800K)                     │
-│   [msg_1] [msg_2] ... [msg_k]                        │
-│   超出 800K 时从 msg_1（最旧）开始丢弃                 │
-│   所有角色保留，所有消息完整                           │
-├──────────────────────────────────────────────────────┤
-│ 当前用户消息 + 预留 LLM 回复空间 (~136K)               │
-└──────────────────────────────────────────────────────┘
+effective_window = model_profile.context_window_tokens
+                 - runtime_config.budget.response.reserved
+                 - runtime_config.model_context.safety_buffer
+
+effective_window 按 runtime_config.budget.* 分配给：
+  - active Prompt Bundle
+  - approved Context Pack
+  - compact summaries
+  - key facts / retrieved raw snippets
+  - fresh tail
+  - current user message
+  - response reserve
 ```
+
+任何具体比例、最小值、分页大小、fresh tail 长度和压缩触发阈值都必须来自 active runtime config；代码只执行预算计划，不保存固定数值。
 
 #### 3.1.8 前端变更
 
@@ -236,17 +255,17 @@ const newConversation = useCallback(() => {
 |------|-----------------|-------------------|
 | 角色过滤 | ❌ `if role not in ("user", "assistant"): continue` | ✅ 保留所有角色 |
 | 内容完整性 | ❌ `content[:500]` 截断 | ✅ 完整保留 |
-| 消息数量 | ❌ `limit=20`, `prior[-20:]` 硬编码 | ✅ 按 800K token 预算动态滑动 |
-| Token 感知 | ❌ 无 | ✅ `_estimate_tokens()` |
+| 消息数量 | ❌ `limit=20`, `prior[-20:]` 硬编码 | ✅ 按 runtime config 的预算和分页策略动态滑动 |
+| Token 感知 | ❌ 无 | ✅ provider tokenizer 优先，fallback estimator 来自 runtime config |
 | 超出预算 | ❌ 静默丢弃 | ✅ `logger.info()` 记录 |
 | 丢弃策略 | ❌ 先取后截，20 条限制 | ✅ 从最旧开始丢弃，保留最新 |
 | 模型路由 | ❌ `len(msg)*2` | ✅ 包含实际历史 token 数 |
-| Context Pack | ❌ 16K budget | ✅ 64K budget |
-| DB 查询 | ❌ `limit=20` | ✅ `limit=500` |
+| Context Pack | ❌ 固定 budget | ✅ 由 Budget Planner 配置分配 |
+| DB 查询 | ❌ 固定 `limit` | ✅ 由 `history_fetch.page_size/max_pages/stop_condition` 配置控制 |
 
 ### Phase 2（建议实现）：结构化压缩（LLM 驱动）
 
-**触发**：历史消息估算 > 500K tokens 时自动触发
+**触发**：由 active runtime config 的 `compaction.trigger.proactive_utilization_ratio`、`mandatory_utilization_ratio`、`min_turns_before_compaction`、`min_messages_before_compaction` 和 provider reactive error codes 共同决定。
 
 **设计原理**：参考 Claude Code AutoCompact 的 9 段结构化摘要，定制为 RA 领域。不是传统摘要（损失细节），而是结构化信息提取（保留关键信息）。
 
@@ -294,17 +313,17 @@ const newConversation = useCallback(() => {
 - **XML 格式**：Claude 模型对 XML 输出更稳定，不用 JSON
 - **Analysis-First**：强制 `<analysis>` 思考再输出，提升摘要质量
 - **NO_TOOLS_PREAMBLE**：`CRITICAL: 只输出文本。禁止调用工具。` —— 压缩子调用不允许工具
-- **低温度**：`temperature=0.2` 保证输出一致性
+- **低温度**：temperature 来自 `compaction.worker.temperature` 配置，默认值只允许在配置文件中调整
 
 #### 3.2.2 Fresh Tail 保护
 
-最近 8 轮对话（约 16-20 条消息）保持原始形式不压缩。这是 AI 的"工作记忆"，包含当前讨论的上下文和最新的确认状态。
+Fresh Tail 的保留单位、轮数、消息数和预算占比都由 `fresh_tail.*` 配置决定。这是 AI 的“工作记忆”，包含当前讨论的上下文和最新的确认状态。
 
 ```
 ┌──────────────────────────────────────────┐
-│ [原始] 最近 8 轮（Fresh Tail）            │  ← 永远不压缩
+│ [原始] Configured Fresh Tail             │  ← 永远不压缩
 ├──────────────────────────────────────────┤
-│ [压缩摘要] 8 轮之前的对话                  │  ← LLM 压缩为结构化摘要
+│ [压缩摘要] Fresh Tail 之前的对话           │  ← LLM 压缩为结构化摘要
 ├──────────────────────────────────────────┤
 │ System Prompt + Context Pack             │
 └──────────────────────────────────────────┘
@@ -312,7 +331,7 @@ const newConversation = useCallback(() => {
 
 #### 3.2.3 压缩摘要生命周期
 
-1. **存储**：压缩摘要作为特殊消息存入 `assistant_conversation_messages`（role=system, 标记为压缩摘要）
+1. **存储**：压缩摘要作为派生 segment 存入 `assistant_context_segments`，不伪装成普通 system message
 2. **链接**：摘要的 `content_json` 包含被压缩的原始消息 ID 范围
 3. **替换**：后续请求中，压缩摘要替换被压缩的原始消息进入上下文
 4. **再压缩**：当压缩摘要也累积过多时，对多个摘要再次执行压缩（二级压缩）
@@ -329,21 +348,20 @@ const newConversation = useCallback(() => {
 #### 3.2.5 触发条件伪代码
 
 ```python
-def _maybe_compact(self, conversation_id: str, current_turn: int) -> str | None:
+def _maybe_compact(self, conversation_id: str, budget_plan: ContextBudgetPlan) -> str | None:
     """Return compact summary text if compaction was performed, else None."""
-    if current_turn < 16:  # 至少 16 轮才考虑压缩
+    if not budget_plan.compaction_allowed_by_config:
         return None
 
-    history_tokens = self._estimate_history_tokens(conversation_id)
-    if history_tokens < 500_000:  # 预算充足，不压缩
+    if not budget_plan.should_compact:
         return None
 
-    # 保护最近 8 轮原始消息
-    fresh_tail_ids = self._get_last_n_message_ids(conversation_id, n=16)
+    # Fresh Tail 保留策略来自 runtime config
+    fresh_tail_ids = self._get_fresh_tail_ids(conversation_id, budget_plan.runtime_config.fresh_tail)
     old_messages = self._get_messages_before(conversation_id, fresh_tail_ids[0])
 
-    # 用低温度 LLM 执行结构化压缩
-    compact_result = self._llm_compact(old_messages)
+    # compaction worker 参数、模型、工具权限、重试和 timeout 都来自 runtime config
+    compact_result = self._llm_compact(old_messages, budget_plan.runtime_config.compaction.worker)
     self._store_compact_summary(conversation_id, compact_result, old_messages)
     return compact_result
 ```
@@ -362,14 +380,14 @@ def _maybe_compact(self, conversation_id: str, current_turn: int) -> str | None:
 二级摘要:     [root_compact_summary_from_c1_c2_c3]
 ```
 
-**评估标准**：当 RA 对话平均轮次显著增长（用户单会话 > 100 轮成为常态）时再实施。当前场景下 Phase 2 的线性压缩已足够。
+**评估标准**：是否启用 DAG 分层摘要由 runtime config 和线上观测指标决定，例如平均会话长度、摘要层级数量、装配失败率和 token 成本；不得在代码中写死单一轮次阈值。
 
 ## 4. 与 Claude Code / LCM 的对比
 
 | 维度 | Claude Code AutoCompact | LCM DAG | RA Phase 1 | RA Phase 2（设计） |
 |------|------------------------|---------|-----------|-------------------|
-| 触发方式 | ~167K tokens (82%) | 75% 窗口 | 每次加载 | 500K tokens |
-| 完整新消息 | 始终保留 | 最近 32-64 条 | 全部保留 | 最近 8 轮 |
+| 触发方式 | ~167K tokens (82%) | 75% 窗口 | 每次加载 | 由 runtime config 控制 |
+| 完整新消息 | 始终保留 | 最近 32-64 条 | 全部保留 | Fresh Tail 由 runtime config 控制 |
 | 压缩输出 | 9 段结构化摘要 | 分层摘要 DAG | 无 | 9 段 RA 定制摘要 |
 | 原始消息 | 丢弃（被摘要替换） | 永久存 SQLite | 永久存 PostgreSQL | 永久存 PostgreSQL |
 | LLM 调用 | 1 次子调用 | 多次分层 | 无 | 1 次子调用 |
@@ -380,11 +398,14 @@ def _maybe_compact(self, conversation_id: str, current_turn: int) -> str | None:
 
 | 文件 | Phase | 变更类型 |
 |------|-------|---------|
+| `docs/architecture/research_assistant_prompt_context_runtime_governance_design_20260524.md` | 0 | Prompt Pack + Context Runtime 统一设计 |
+| `configs/research_assistant/runtime_context.yaml` | 1 | 所有可调上下文参数的配置权威源 |
 | `backend/services/research_assistant/service.py` | 1/2 | `_load_prior_chat_messages()`, `_estimate_tokens()`, `_maybe_compact()` |
-| `backend/services/research_assistant/models.py` | 2 | `CompactSummaryCreate` 模型 |
-| `backend/services/research_assistant/repository.py` | 2 | `compact_summaries` 表注册 |
+| `backend/services/research_assistant/context_budget.py` | 1/2 | `ContextBudgetPlanner`，替代所有硬编码预算 |
+| `backend/services/research_assistant/models.py` | 2 | `ContextSegmentCreate` / `ContextKeyFactCreate` 模型 |
+| `backend/services/research_assistant/repository.py` | 2 | `context_segments` / `context_key_facts` 表注册 |
 | `backend/routers/research_assistant.py` | 2 | GET `/conversations/{id}/messages` 原始消息查询 |
-| `backend/db/init_research_assistant_schema_20260521.sql` | 2 | `assistant_compact_summaries` DDL |
+| `backend/db/init_research_assistant_schema_20260521.sql` | 2 | `assistant_context_segments` / `assistant_context_key_facts` / assembly trace DDL |
 | `backend/tests/research_assistant/test_service.py` | 1/2 | 压缩触发、Fresh Tail、恢复测试 |
 
 ## 6. 验证标准
@@ -392,7 +413,7 @@ def _maybe_compact(self, conversation_id: str, current_turn: int) -> str | None:
 | # | 验证项 | 方法 |
 |---|-------|------|
 | 1 | 压缩不丢失用户确认的配置参数 | 多轮对话后查询 LLM 上下文，验证关键参数存在 |
-| 2 | Fresh Tail 的 8 轮原始消息完整 | 检查压缩后 context 中最近 8 轮为原始消息 |
+| 2 | Fresh Tail 的配置范围原始消息完整 | 检查压缩后 context 中 configured fresh tail 为原始消息 |
 | 3 | 压缩后对话连续性 | 压缩前后发送同一跟进问题，验证回复引用正确上下文 |
 | 4 | Token 估算准确性 | 对比估算值和实际 API reported tokens，偏差 < 20% |
 | 5 | 超出预算时日志记录 | 检查 info 日志包含丢弃条数和 token 使用量 |
@@ -403,14 +424,16 @@ def _maybe_compact(self, conversation_id: str, current_turn: int) -> str | None:
 |------|------|---------|
 | LLM 压缩遗漏关键信息 | 中 | 9 段强制结构 + 低温度 + 原始消息 DB 保留 |
 | 压缩 latency 影响用户体验 | 低 | 压缩异步执行或流式响应中隐藏 latency |
-| Token 估算偏差大 | 低 | 初始用 chars/2.0，上线后根据实际 token counting 校准 |
+| Token 估算偏差大 | 低 | fallback estimator 参数来自 runtime config，上线后根据实际 token counting 调整配置版本 |
 | 压缩提示词注入 | 低 | 历史消息来自可信 DB 源，当前用户消息不进入压缩 prompt |
 
 ## 8. Handoff
 
-- `production_ddl_gate`: Phase 2 需新增 `assistant_compact_summaries` 表（DDL 评审后执行）
+- `production_ddl_gate`: 本次文档更新为 noop；后续 Phase 2 如新增 context segment / compact summary 表，必须在 DDL 评审、COMMENT 补齐和生产迁移验证后报告非 noop gate
 - `production_frontend_dependency_gate`: noop（压缩逻辑纯后端）
 - `production_backend_dependency_gate`: noop（不引入新依赖）
+
+以下附录保留 Claude Code 与 LCM 的外部参考细节。附录中的 token、时间、条数、温度和阈值均是参考系统的行为记录，不是 RA 未来实现的硬编码限制。RA 的对应参数必须来自 `docs/architecture/research_assistant_prompt_context_runtime_governance_design_20260524.md` 定义的 active runtime config。
 
 ## 附录 A：Claude Code 上下文压缩算法详解（参考）
 
@@ -727,12 +750,12 @@ context = [相关 DAG 摘要节点] + [fresh_tail 原始消息]
 | 9 段结构化摘要 | ✅ Phase 2 | 核心参考，RA 定制字段（实验参数/确认决策/风险边界） |
 | XML 输出格式 | ✅ Phase 2 | Claude 模型对 XML 更稳定 |
 | Analysis-First | ✅ Phase 2 | `<analysis>` 剥离，提升摘要质量 |
-| NO_TOOLS_PREAMBLE | ✅ Phase 2 | 压缩子调用禁止工具 |
-| Fresh Tail 保护 | ✅ Phase 2 | 最近 8 轮不压缩 |
-| 压缩后 Continuation Prompt | ✅ Phase 2 | "像对话从未中断一样继续" |
-| Tool Result Budget | 不需要 | RA 当前无 > 50K 字符的工具结果 |
+| NO_TOOLS_PREAMBLE | ✅ Phase 2 | 压缩子调用由 worker policy 强制禁用工具，prompt 只作为说明 |
+| Fresh Tail 保护 | ✅ Phase 2 | Fresh Tail 单位、轮数、消息数和预算占比全部由 runtime config 控制 |
+| 压缩后 Continuation Prompt | ✅ Phase 2 | 恢复提示词进入 Prompt Pack，不在 Python 中硬编码 |
+| Tool Result Budget | 远期可选 | 是否启用、大小阈值和 artifact 策略由 runtime config 控制 |
 | Snip Compact | 被 Phase 1 替代 | Phase 1 的 token 滑动窗口实现等效功能 |
-| Microcompact(Time) | 远期可选 | RA 会话通常短于 60 分钟 |
+| Microcompact(Time) | 远期可选 | 空闲时间阈值如需引入必须来自 runtime config |
 | Microcompact(Cache) | 不适用 | 需要 Anthropic cache_edits API |
 | Context Collapse | 不适用 | RA 用结构化压缩替代 commit log 方式 |
 | Session Memory 背景提取 | 远期可选 | RA 已有 Memory Ledger + Context Pack 体系 |
@@ -740,4 +763,4 @@ context = [相关 DAG 摘要节点] + [fresh_tail 原始消息]
 | FTS5 跨 session 记忆 | ❌ | RA 已有 Memory Ledger 体系 |
 | SimHash 去重 | ❌ | RA 对话重复消息极少 |
 | lcm_expand 可展开 | 部分采用 | RA 通过 API 查询原始消息（非 MCP 工具） |
-| 三级压缩升级 | 部分采用 | Level 1 (LLM摘要) + Level 3 (头截断保底)，不需要 Level 2 |
+| 三级压缩升级 | 部分采用 | 级别启用、目标压缩率和兜底行为都由 runtime config 控制；用户确认和审批不得被头截断 |
