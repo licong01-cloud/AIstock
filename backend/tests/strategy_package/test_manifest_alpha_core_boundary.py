@@ -200,21 +200,23 @@ def test_qe_source_resolver_emits_alpha_core_manifest_with_audit_only_runtime_ev
     assert manifest.backtest_context["execution"]["execution_algo"] == "TWAP"
 
 
-def test_alpha_core_paper_portfolio_requires_manifest_or_explicit_execution_policy() -> None:
+def test_alpha_core_paper_portfolio_derives_or_accepts_explicit_execution_policy() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = _alpha_core_manifest(status=PackageStatus.PAPER_ENABLED)
     package_repo.save_manifest(manifest)
     service = PaperTradingV2PortfolioService(package_repository=package_repo, repository=paper_repo)
 
-    with pytest.raises(StrategyPackageValidationError, match="manifest minute execution policy"):
-        service.create_portfolio(
-            package_id=manifest.package_id,
-            portfolio_name="alpha core missing execution policy",
-            initial_cash=100_000,
-            start_date=date(2024, 1, 2),
-            data_source=MinuteDataSource.DB_HISTORICAL,
-        )
+    derived_portfolio = service.create_portfolio(
+        package_id=manifest.package_id,
+        portfolio_name="alpha core derived execution policy",
+        initial_cash=100_000,
+        start_date=date(2024, 1, 2),
+        data_source=MinuteDataSource.DB_HISTORICAL,
+    )
+    assert derived_portfolio.execution_policy["validated_execution_policy_id"].startswith("platform_manifest_")
+    assert derived_portfolio.execution_policy["source_backtest_id"] == f"strategy_package_manifest:{manifest.manifest_sha256}"
+    assert derived_portfolio.execution_policy["algo_code"] == "TWAP"
 
     policy = StrategyPackageService(repository=package_repo).create_execution_policy(
         package_id=manifest.package_id,
