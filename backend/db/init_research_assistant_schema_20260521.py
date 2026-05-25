@@ -429,6 +429,15 @@ BASE_DDL: list[str] = [
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """,
+    "ALTER TABLE assistant_mcp_tool_events ADD COLUMN IF NOT EXISTS action_proposal_id TEXT",
+    "ALTER TABLE assistant_mcp_tool_events ADD COLUMN IF NOT EXISTS approval_id TEXT",
+    "ALTER TABLE assistant_mcp_tool_events ADD COLUMN IF NOT EXISTS plan_digest TEXT",
+    "ALTER TABLE assistant_mcp_tool_events ADD COLUMN IF NOT EXISTS transport TEXT",
+    "ALTER TABLE assistant_mcp_tool_events ADD COLUMN IF NOT EXISTS timeout_ms INTEGER",
+    "ALTER TABLE assistant_mcp_tool_events ADD COLUMN IF NOT EXISTS attempt_index INTEGER",
+    "ALTER TABLE assistant_mcp_tool_events ADD COLUMN IF NOT EXISTS duration_ms INTEGER",
+    "ALTER TABLE assistant_mcp_tool_events ADD COLUMN IF NOT EXISTS result_card_json JSONB NOT NULL DEFAULT '{}'::jsonb",
+    "ALTER TABLE assistant_mcp_tool_events ADD COLUMN IF NOT EXISTS artifact_refs JSONB NOT NULL DEFAULT '[]'::jsonb",
     """
     CREATE TABLE IF NOT EXISTS assistant_approval_requests (
         approval_id TEXT PRIMARY KEY,
@@ -863,6 +872,7 @@ TABLE_COMMENTS = {
     "assistant_skill_registry": "Local-only skill catalog with checksum, permissions and approval metadata.",
     "assistant_capabilities": "Approved Research Assistant Capability Registry for planner-selectable MCP tools, skills and workflow packs.",
     "assistant_action_proposals": "Immutable pre-execution action proposal snapshots bound to plan digest, confirmation, preflight and approval state.",
+    "assistant_mcp_tool_events": "MCP/API execution event ledger including preflight, retry, approval and result-card audit data.",
     "assistant_mcp_tools": "MCP/API execution catalog including risk and preflight metadata.",
     "assistant_approval_requests": "Approval gate records for L2+ assistant operations.",
     "assistant_issue_candidates": "Candidate issue queue; formal GitHub issue creation requires explicit approval and sync.",
