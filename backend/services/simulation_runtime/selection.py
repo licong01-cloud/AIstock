@@ -451,6 +451,8 @@ class StrategyPackageSelectionService:
                 PackageStatus.BACKTEST_APPROVED,
                 PackageStatus.SELECTION_ENABLED,
                 PackageStatus.PAPER_ENABLED,
+                PackageStatus.PAPER_RUNNING,
+                PackageStatus.PAPER_PASSED,
             }:
                 raise StrategyPackageValidationError(
                     "package is not enabled for selection",

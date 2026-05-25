@@ -102,7 +102,7 @@ class PaperTradingSessionService:
     ) -> None:
         self.repository = repository or PaperTradingV2Repository()
         self.package_repository = package_repository
-        self.calendar_provider = calendar_provider
+        self.calendar_provider = calendar_provider or TradeCalendarProvider()
         self.enforce_non_trading_window = enforce_non_trading_window
 
     def create_session(
@@ -530,15 +530,16 @@ class PaperTradingSessionService:
         return value.astimezone(SESSION_STATE_CHANGE_TZ)
 
     def _is_trading_day_for_operation(self, trade_date: date) -> bool:
-        if self.calendar_provider is not None:
-            try:
-                self.calendar_provider.ensure_trading_day(trade_date)
-                return True
-            except DataUnavailableError:
-                return False
-            except Exception:
-                return trade_date.weekday() < 5
-        return trade_date.weekday() < 5
+        try:
+            self.calendar_provider.ensure_trading_day(trade_date)
+            return True
+        except DataUnavailableError:
+            return False
+        except Exception as exc:
+            raise SessionConfigError(
+                "paper v2 session could not determine trading-day status",
+                context={"trade_date": trade_date.isoformat(), "source": "TradingCalendarStatusService"},
+            ) from exc
 
     def _has_running_run(self, portfolio_id: str) -> bool:
         try:

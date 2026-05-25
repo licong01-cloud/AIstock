@@ -269,12 +269,12 @@ def test_runtime_handles_enable_paper_strict_gate_failure(
     err = exc_info.value
     context = getattr(err, "context", {}) or {}
     msg = str(err)
-    # R6: governance gate wraps the validator's asset-check failure as a
-    # blocker string inside ``context["manifest_identity"]["blockers"]``.
+    # Paper simulation admission wraps the validator's asset-check failure as a
+    # blocker string inside the alpha-core admission context.
     # Audit-grade observability: the failed asset-check must remain
     # discoverable so operators know which gate fired.
-    manifest_identity = context.get("manifest_identity") or {}
-    blockers_str = " ".join(manifest_identity.get("blockers") or [])
+    alpha_core_identity = context.get("alpha_core_identity") or {}
+    blockers_str = " ".join([*(context.get("blockers") or []), *(alpha_core_identity.get("blockers") or [])])
     surfaces_asset_check = (
         "asset" in msg.lower()
         or "asset" in blockers_str.lower()

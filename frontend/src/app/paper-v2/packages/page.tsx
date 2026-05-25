@@ -24,6 +24,7 @@ function metricText(source: QEPackagingSource): string {
 const SELECTION_RUNNABLE_STATUSES = new Set(["BACKTEST_APPROVED", "SELECTION_ENABLED", "PAPER_ENABLED"]);
 const SELECTION_MARKABLE_STATUSES = new Set(["BACKTEST_APPROVED"]);
 const PAPER_MARKABLE_STATUSES = new Set(["BACKTEST_APPROVED", "SELECTION_ENABLED"]);
+const PAPER_CREATABLE_STATUSES = new Set(["BACKTEST_APPROVED", "SELECTION_ENABLED", "PAPER_ENABLED", "PAPER_RUNNING", "PAPER_PASSED"]);
 
 function packageLifecycleText(status: string): string {
   const labels: Record<string, string> = {
@@ -61,18 +62,15 @@ function paperCapability(
   if (status === "RETIRED") {
     return { ok: false, title: "不可新建模拟盘", detail: "策略包已退役，仅保留历史组合和审计记录。" };
   }
-  if (status === "PAPER_ENABLED") {
+  if (PAPER_CREATABLE_STATUSES.has(status)) {
     const policyText = paperReadyPolicyCount > 0
       ? `已有 ${paperReadyPolicyCount} 个可用于模拟盘的已验证执行策略。`
       : policyCount > 0
-        ? "已有执行策略，但尚未启用用于模拟盘；创建时仍会 fail-fast 校验。"
-        : "尚未列出执行策略；创建时会尝试导入并校验 manifest 默认策略。";
+        ? "已有执行策略；创建时可显式选择，也可由平台使用 manifest 默认策略。"
+        : "尚未列出执行策略；创建时会尝试使用 manifest 默认策略并在运行前 fail-fast 校验。";
     return { ok: true, title: "可以创建模拟盘实例", detail: policyText };
   }
-  if (PAPER_MARKABLE_STATUSES.has(status)) {
-    return { ok: false, title: "未完成模拟盘准入", detail: "先点击“标记可用于模拟盘”，再创建具体模拟盘。" };
-  }
-  return { ok: false, title: "不可新建模拟盘", detail: "需要至少达到“回测已批准”状态，并完成模拟盘准入。" };
+  return { ok: false, title: "不可新建模拟盘", detail: "需要至少达到回测已批准状态；DRAFT/RETIRED 仍会阻断。" };
 }
 
 export default function PaperV2PackagesPage() {
@@ -204,7 +202,7 @@ export default function PaperV2PackagesPage() {
   const paperReadyPolicies = policies.filter((item) => item.paper_enabled);
   const canMarkSelection = SELECTION_MARKABLE_STATUSES.has(selectedStatus);
   const canMarkPaper = PAPER_MARKABLE_STATUSES.has(selectedStatus);
-  const canCreatePortfolio = selectedStatus === "PAPER_ENABLED";
+  const canCreatePortfolio = PAPER_CREATABLE_STATUSES.has(selectedStatus);
   const canRetirePackage = Boolean(selected && selectedStatus !== "RETIRED");
   const selectionState = selectionCapability(selectedStatus);
   const paperState = paperCapability(selectedStatus, paperReadyPolicies.length, policies.length);
@@ -212,7 +210,7 @@ export default function PaperV2PackagesPage() {
   const workflowSteps = paperV2WorkflowSteps({
     hasPackages: packages.length > 0,
     hasSelectionEnabledPackage: packages.some((item) => ["SELECTION_ENABLED", "PAPER_ENABLED", "PAPER_RUNNING", "PAPER_PASSED"].includes(item.package_status)),
-    hasPaperEnabledPackage: packages.some((item) => ["PAPER_ENABLED", "PAPER_RUNNING", "PAPER_PASSED"].includes(item.package_status)),
+    hasPaperEnabledPackage: packages.some((item) => PAPER_CREATABLE_STATUSES.has(item.package_status)),
     hasSelectionRun: false,
     hasPortfolio: false,
     hasReadyRun: false,

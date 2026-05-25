@@ -6,9 +6,9 @@ HTTP 400 used for `StrategyPackageValidationError`. These tests guard against
 regression and against the inverse mistake of collapsing both error classes
 into 409.
 
-R6 (codex/qe-governance) adds the governance enable_paper gate, which adds
-a second 400 invariant: paper_ready blockers (e.g. missing fixed_weight
-retest) must keep mapping to 400, separate from state-machine 409.
+R6 originally added a governance enable_paper gate. Paper v2 gate decoupling
+now keeps governance as read-only/live-strict metadata: paper_ready blockers
+must no longer prevent Paper simulation admission.
 
 Per T9 audit-drift §6: the only path that reaches the state-machine check
 without first being rejected by `validate_manifest_identity_for_paper_trading`
@@ -211,12 +211,10 @@ def test_enable_paper_endpoint_returns_400_on_validation_error(
     assert detail.get("error_code") == "STRATEGY_PACKAGE_VALIDATION_ERROR"
 
 
-def test_enable_paper_endpoint_keeps_governance_blockers_at_400(
+def test_enable_paper_endpoint_allows_simulation_despite_governance_blockers(
     app_and_repo: tuple[FastAPI, InMemoryStrategyPackageRepository],
 ) -> None:
-    """R6 governance gate: paper_ready=False with missing fixed_weight retest
-    must map to 400 (paper_ready blockers), not 409.
-    """
+    """paper_ready=False stays governance-only and must not block simulation."""
     app, repo = app_and_repo
     manifest = freeze_manifest(
         make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
@@ -225,8 +223,17 @@ def test_enable_paper_endpoint_keeps_governance_blockers_at_400(
 
     response = TestClient(app).post(f"/strategy-packages/{record.package_id}/enable-paper")
 
-    assert response.status_code == 400, response.text
-    detail = response.json()["detail"]
-    assert detail["error_code"] == "STRATEGY_PACKAGE_VALIDATION_ERROR"
-    assert detail["context"]["paper_ready"] is False
-    assert "original_fixed_weight_retest_missing_passed_run_for_current_manifest" in detail["context"]["blockers"]
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["package"]["package_status"] == PackageStatus.PAPER_ENABLED.value
+
+    admission = TestClient(app).get(f"/strategy-packages/{record.package_id}/paper-simulation-admission")
+    assert admission.status_code == 200, admission.text
+    detail = admission.json()["admission"]
+    assert detail["paper_simulation_allowed"] is True
+    assert detail["live_strict_governance"]["paper_ready"] is False
+    assert detail["live_strict_governance"]["does_not_block_paper_simulation"] is True
+    assert any(
+        "original_fixed_weight_retest_missing_passed_run_for_current_manifest" in warning
+        for warning in detail["warnings"]
+    )

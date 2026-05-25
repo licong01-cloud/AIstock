@@ -8,13 +8,13 @@ import ErrorPanel from "@/components/paper-v2/ErrorPanel";
 import JsonPanel from "@/components/paper-v2/JsonPanel";
 import MetricCard from "@/components/paper-v2/MetricCard";
 import NoticePanel from "@/components/paper-v2/NoticePanel";
+import PaperIndustryBlacklistSelector, { selectedIndustryCodes, selectedIndustryTrace, type Sw2Entry } from "@/components/paper-v2/PaperIndustryBlacklistSelector";
 import PaperTable from "@/components/paper-v2/PaperTable";
 import ReadinessFailureCard from "@/components/paper-v2/ReadinessFailureCard";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import { hmmTrainingApi, paperV2Api } from "@/lib/paper-v2/api";
 import { dataSourceLabel, hmmSnapshotLabel, shortHash, todayIso } from "@/lib/paper-v2/format";
-import { artifactCoverageLabel, artifactCoversDateRange, selectCoveredHmmSnapshot } from "@/lib/paper-v2/hmm-runtime";
 import type {
   Activation,
   ExecutionPolicy,
@@ -34,14 +34,6 @@ import type {
   RuntimeProfile,
   RuntimeProfileVersion,
 } from "@/lib/paper-v2/types";
-
-function splitList(text: string): string[] {
-  return text
-    .replace(/\r?\n/g, ",")
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
 
 function asDate(value: unknown): string {
   if (!value) return "-";
@@ -110,7 +102,7 @@ export default function PaperV2RunConsolePage() {
   const [tradeDate, setTradeDate] = useState(todayIso());
   const [runtimeTopK, setRuntimeTopK] = useState(20);
   const [runtimeExcludeSuspended, setRuntimeExcludeSuspended] = useState(true);
-  const [runtimeIndustryBlacklist, setRuntimeIndustryBlacklist] = useState("");
+  const [runtimeIndustryBlacklist, setRuntimeIndustryBlacklist] = useState<Sw2Entry[]>([]);
   const [runtimeHmmConfigs, setRuntimeHmmConfigs] = useState<HmmConfig[]>([]);
   const [runtimeHmmSnapshots, setRuntimeHmmSnapshots] = useState<HmmSnapshot[]>([]);
   const [runtimeHmmEnabled, setRuntimeHmmEnabled] = useState(false);
@@ -149,35 +141,24 @@ export default function PaperV2RunConsolePage() {
   const catchupBlocked = Boolean(catchupCapability && !catchupCapability.can_start);
   const sessionModeBlocked = sessionMode === "REPLAY_ONLY" ? replayBlocked : sessionMode === "CATCHUP_THEN_LIVE" ? catchupBlocked : liveBlocked;
   const switchModeBlocked = switchMode === "REPLAY_ONLY" ? replayBlocked : switchMode === "CATCHUP_THEN_LIVE" ? catchupBlocked : liveBlocked;
-  const selectedRuntimeHmmSnapshot = useMemo(
-    () => runtimeHmmSnapshots.find((item) => item.snapshot_id === runtimeHmmSnapshotId) || null,
-    [runtimeHmmSnapshotId, runtimeHmmSnapshots],
-  );
-  const runtimeHmmPreviewArtifact = useMemo(
-    () => selectedRuntimeHmmSnapshot ? artifactCoversDateRange(selectedRuntimeHmmSnapshot, runtimeHmmPreset, tradeDate, tradeDate) : null,
-    [runtimeHmmPreset, selectedRuntimeHmmSnapshot, tradeDate],
-  );
   function buildRuntimeConfigForRange(startDate: string, endDate?: string | null, manualTickOnly = false, strict = true): JsonObject {
     const safeTopK = Number.isFinite(runtimeTopK) ? Math.min(50, Math.max(1, Math.trunc(runtimeTopK))) : 20;
-    const selectedSnapshot = runtimeHmmSnapshots.find((item) => item.snapshot_id === runtimeHmmSnapshotId) || null;
-    const selectedArtifact = selectedSnapshot ? artifactCoversDateRange(selectedSnapshot, runtimeHmmPreset, startDate, endDate || startDate) : null;
     if (runtimeHmmEnabled) {
-      if (strict && !runtimeHmmConfigId) throw new Error("HMM config is required before submitting Paper v2 runtime config.");
-      if (strict && !runtimeHmmSnapshotId) throw new Error(`No completed HMM snapshot covers ${startDate}~${endDate || startDate} / ${runtimeHmmPreset}.`);
-      if (strict && !selectedArtifact) throw new Error(`HMM coefficient artifact does not cover ${startDate}~${endDate || startDate} / ${runtimeHmmPreset}; request is blocked before API submission.`);
+      if (strict && !runtimeHmmConfigId && !runtimeHmmSnapshotId) throw new Error("HMM model config or trained snapshot is required before submitting Paper v2 runtime config.");
     }
     return {
       paper_v2_session: { signal_data_source: "DB_HISTORICAL", manual_tick_only: manualTickOnly },
       selection_artifact_config: { auto_generate: true, inference_backend: "wsl" },
+      industry_blacklist_trace: selectedIndustryTrace(runtimeIndustryBlacklist),
       runtime_profile: {
         selection: { top_k: safeTopK },
         tradability: { exclude_suspended: runtimeExcludeSuspended },
-        industry_blacklist: splitList(runtimeIndustryBlacklist),
+        industry_blacklist: selectedIndustryCodes(runtimeIndustryBlacklist),
         hmm: {
           enabled: runtimeHmmEnabled,
+          model_config_id: runtimeHmmEnabled ? runtimeHmmConfigId || null : null,
           model_snapshot_id: runtimeHmmEnabled ? runtimeHmmSnapshotId || null : null,
           signal_preset: runtimeHmmEnabled ? runtimeHmmPreset || null : null,
-          coefficients_path: runtimeHmmEnabled ? selectedArtifact?.path || null : null,
         },
       },
     };
@@ -196,21 +177,22 @@ export default function PaperV2RunConsolePage() {
     const safeTopK = Number.isFinite(runtimeTopK) ? Math.min(50, Math.max(1, Math.trunc(runtimeTopK))) : 20;
     const previewHmm: JsonObject = {
       enabled: runtimeHmmEnabled,
+      model_config_id: runtimeHmmEnabled ? runtimeHmmConfigId || null : null,
       model_snapshot_id: runtimeHmmEnabled ? runtimeHmmSnapshotId || null : null,
       signal_preset: runtimeHmmEnabled ? runtimeHmmPreset || null : null,
-      coefficients_path: runtimeHmmEnabled ? runtimeHmmPreviewArtifact?.path || null : null,
     };
     return {
       paper_v2_session: { signal_data_source: "DB_HISTORICAL", manual_tick_only: false },
       selection_artifact_config: { auto_generate: true, inference_backend: "wsl" },
+      industry_blacklist_trace: selectedIndustryTrace(runtimeIndustryBlacklist),
       runtime_profile: {
         selection: { top_k: safeTopK },
         tradability: { exclude_suspended: runtimeExcludeSuspended },
-        industry_blacklist: splitList(runtimeIndustryBlacklist),
+        industry_blacklist: selectedIndustryCodes(runtimeIndustryBlacklist),
         hmm: previewHmm,
       },
     };
-  }, [runtimeExcludeSuspended, runtimeHmmEnabled, runtimeHmmPreset, runtimeHmmPreviewArtifact, runtimeHmmSnapshotId, runtimeIndustryBlacklist, runtimeTopK]);
+  }, [runtimeExcludeSuspended, runtimeHmmConfigId, runtimeHmmEnabled, runtimeHmmPreset, runtimeHmmSnapshotId, runtimeIndustryBlacklist, runtimeTopK]);
 
   const load = useCallback(async () => {
     setError(null);
@@ -282,21 +264,13 @@ export default function PaperV2RunConsolePage() {
       if (!alive) return;
       const ready = rows.filter((item) => ["completed", "ready", "success", "succeeded"].includes(String(item.status || "").toLowerCase()));
       setRuntimeHmmSnapshots(ready);
-      setRuntimeHmmSnapshotId((current) => (ready.find((item) => item.snapshot_id === current) ? current : ready[0]?.snapshot_id || ""));
+      setRuntimeHmmSnapshotId((current) => (ready.find((item) => item.snapshot_id === current) ? current : ""));
     }).catch((exc) => {
       if (alive) setError(exc);
     });
     return () => { alive = false; };
   }, [runtimeHmmConfigId]);
 
-  useEffect(() => {
-    if (!runtimeHmmEnabled || !runtimeHmmSnapshots.length) return;
-    const current = runtimeHmmSnapshots.find((item) => item.snapshot_id === runtimeHmmSnapshotId);
-    if (current && artifactCoversDateRange(current, runtimeHmmPreset, tradeDate, tradeDate)) return;
-    const firstCovered = selectCoveredHmmSnapshot(runtimeHmmSnapshots, runtimeHmmPreset, tradeDate, tradeDate);
-    const nextSnapshotId = firstCovered?.snapshot_id || "";
-    if (nextSnapshotId !== runtimeHmmSnapshotId) setRuntimeHmmSnapshotId(nextSnapshotId);
-  }, [runtimeHmmConfigId, runtimeHmmEnabled, runtimeHmmPreset, runtimeHmmSnapshotId, runtimeHmmSnapshots, tradeDate]);
   useEffect(() => {
     if (!runtimeProfileId) {
       setRuntimeVersions([]);
@@ -614,9 +588,8 @@ export default function PaperV2RunConsolePage() {
                 <input className="pv2-input" value="自动生成：WSL 最新数据推理" readOnly />
               </div>
             </div>
-            <div className="pv2-field" style={{ marginTop: 12 }}>
-              <label>行业黑名单（按行或逗号分隔）</label>
-              <textarea className="pv2-textarea" data-testid="console-runtime-industry-blacklist" value={runtimeIndustryBlacklist} onChange={(event) => setRuntimeIndustryBlacklist(event.target.value)} placeholder={"示例：银行\n房地产"} />
+            <div style={{ marginTop: 12 }}>
+              <PaperIndustryBlacklistSelector selected={runtimeIndustryBlacklist} onChange={setRuntimeIndustryBlacklist} />
             </div>
             <div className="pv2-form-grid" style={{ marginTop: 12 }}>
               <div className="pv2-field">
@@ -632,11 +605,8 @@ export default function PaperV2RunConsolePage() {
               <div className="pv2-field">
                 <label>HMM Snapshot</label>
                 <select className="pv2-select" data-testid="console-runtime-hmm-snapshot" disabled={!runtimeHmmEnabled || !runtimeHmmConfigId} value={runtimeHmmSnapshotId} onChange={(event) => setRuntimeHmmSnapshotId(event.target.value)}>
-                  <option value="">Select covered snapshot</option>
-                  {runtimeHmmSnapshots.map((item) => {
-                    const artifact = artifactCoversDateRange(item, runtimeHmmPreset, tradeDate, tradeDate);
-                    return <option value={item.snapshot_id} key={item.snapshot_id} disabled={runtimeHmmEnabled && !artifact}>{hmmSnapshotLabel(item)} / {artifact ? `covers ${artifact.start_date}~${artifact.end_date}` : artifactCoverageLabel(item, runtimeHmmPreset)}</option>;
-                  })}
+                  <option value="">可选：默认使用模型配置的最新可用快照</option>
+                  {runtimeHmmSnapshots.map((item) => <option value={item.snapshot_id} key={item.snapshot_id}>{hmmSnapshotLabel(item)}</option>)}
                 </select>
               </div>
               <div className="pv2-field">
@@ -649,12 +619,11 @@ export default function PaperV2RunConsolePage() {
             </div>
             <div className="pv2-field" style={{ marginTop: 12 }} data-testid="console-runtime-hmm-coverage">
               <label>HMM Coefficients</label>
-              <input className="pv2-input" data-testid="console-runtime-hmm-coefficients" disabled={!runtimeHmmEnabled} value={runtimeHmmPreviewArtifact?.path || ""} readOnly placeholder="Selected snapshot must provide a covering audited coefficients_path" />
               {runtimeHmmEnabled ? (
-                <NoticePanel title={runtimeHmmPreviewArtifact ? "HMM coefficient coverage confirmed" : "HMM coefficient coverage missing"} tone={runtimeHmmPreviewArtifact ? "success" : "warning"}>
-                  {runtimeHmmPreviewArtifact ? `Readiness/day-run preview carries coefficients_path for ${tradeDate}. Replay/live actions validate their own date ranges before submission.` : `No completed ${runtimeHmmPreset} coefficient artifact covers preview date ${tradeDate}; affected actions are blocked before API submission.`}
+                <NoticePanel title="HMM 自动系数缓存" tone="info">
+                  运行控制台不再要求手工选择 coefficients_path；后端会按模型配置、preset、交易日自动计算或命中缓存，缺模型/缺输入/缺行业映射才 fail-fast。
                 </NoticePanel>
-              ) : null}
+              ) : <input className="pv2-input" data-testid="console-runtime-hmm-coefficients" disabled value="" readOnly placeholder="HMM 未启用" />}
             </div>
             <JsonPanel value={runtimeConfig} />
           </div>

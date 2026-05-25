@@ -3,14 +3,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import ErrorPanel from "@/components/paper-v2/ErrorPanel";
 import NoticePanel from "@/components/paper-v2/NoticePanel";
+import PaperIndustryBlacklistSelector, { selectedIndustryCodes, selectedIndustryTrace, type Sw2Entry } from "@/components/paper-v2/PaperIndustryBlacklistSelector";
 import PaperTable from "@/components/paper-v2/PaperTable";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import WorkflowStepper from "@/components/paper-v2/WorkflowStepper";
 import { hmmTrainingApi, paperV2Api, selectionCenterApi } from "@/lib/paper-v2/api";
 import { asText, dataSourceLabel, formatNumber, formatPercent, hmmSnapshotLabel, paperV2WorkflowSteps, selectionRunLabel, shortHash, statusLabel, todayIso } from "@/lib/paper-v2/format";
-import { artifactCoverageLabel, artifactCoversTradeDate } from "@/lib/paper-v2/hmm-runtime";
-import type { DataSource, HmmConfig, HmmSnapshot, JsonObject, SelectablePackage, SelectionMode, SelectionRun, SelectionWatchlistImportResult } from "@/lib/paper-v2/types";
+import type { HmmConfig, HmmSnapshot, JsonObject, SelectablePackage, SelectionDataSource, SelectionMode, SelectionRun, SelectionWatchlistImportResult } from "@/lib/paper-v2/types";
 
 function runLabel(run: SelectionRun): string {
   return `${run.trade_date} / ${statusLabel(run.mode)} / ${run.package_ids.map((item) => shortHash(item, 5)).join(", ")}`;
@@ -45,9 +45,9 @@ export default function PaperV2SelectionPage() {
   const [tradeDate, setTradeDate] = useState(todayIso());
   const [pitMode, setPitMode] = useState("PREVIOUS_TRADING_DAY_CLOSE");
   const [pitContext, setPitContext] = useState<JsonObject | null>(null);
-  const [dataSource, setDataSource] = useState<DataSource>("DB_HISTORICAL");
+  const [dataSource, setDataSource] = useState<SelectionDataSource>("DB_HISTORICAL");
   const [topK, setTopK] = useState(20);
-  const [industryBlacklist, setIndustryBlacklist] = useState("");
+  const [industryBlacklist, setIndustryBlacklist] = useState<Sw2Entry[]>([]);
   const [excludeSuspended, setExcludeSuspended] = useState(true);
   const [hmmEnabled, setHmmEnabled] = useState(false);
   const [hmmConfigs, setHmmConfigs] = useState<HmmConfig[]>([]);
@@ -68,10 +68,6 @@ export default function PaperV2SelectionPage() {
   const singlePackageMode = mode === "single_package";
   const selectedPackageName = selectedPackages[0]?.package_name || "策略包";
   const selectedHmmSnapshot = useMemo(() => hmmSnapshots.find((item) => item.snapshot_id === hmmSnapshotId) || null, [hmmSnapshotId, hmmSnapshots]);
-  const selectedHmmArtifact = useMemo(
-    () => selectedHmmSnapshot ? artifactCoversTradeDate(selectedHmmSnapshot, hmmPreset, tradeDate) || null : null,
-    [hmmPreset, selectedHmmSnapshot, tradeDate],
-  );
 
   const loadPackages = useCallback(async () => {
     setLoading(true);
@@ -123,7 +119,7 @@ export default function PaperV2SelectionPage() {
       if (!alive) return;
       const ready = rows.filter((item) => ["completed", "ready", "success", "succeeded"].includes(String(item.status || "").toLowerCase()));
       setHmmSnapshots(ready);
-      setHmmSnapshotId((current) => (ready.find((item) => item.snapshot_id === current) ? current : ready[0]?.snapshot_id || ""));
+      setHmmSnapshotId((current) => (ready.find((item) => item.snapshot_id === current) ? current : ""));
     }).catch((exc) => {
       if (alive) {
         setHmmSnapshots([]);
@@ -133,15 +129,6 @@ export default function PaperV2SelectionPage() {
     });
     return () => { alive = false; };
   }, [hmmConfigId]);
-
-  useEffect(() => {
-    if (!hmmSnapshots.length) return;
-    const current = hmmSnapshots.find((item) => item.snapshot_id === hmmSnapshotId);
-    if (current && artifactCoversTradeDate(current, hmmPreset, tradeDate)) return;
-    const firstCovered = hmmSnapshots.find((item) => artifactCoversTradeDate(item, hmmPreset, tradeDate));
-    const nextSnapshotId = firstCovered?.snapshot_id || "";
-    if (nextSnapshotId !== hmmSnapshotId) setHmmSnapshotId(nextSnapshotId);
-  }, [hmmPreset, hmmSnapshotId, hmmSnapshots, tradeDate]);
 
   useEffect(() => {
     let alive = true;
@@ -174,16 +161,16 @@ export default function PaperV2SelectionPage() {
   }
 
   function runtimeConfig(): JsonObject {
-    const blacklist = industryBlacklist.split(",").map((item) => item.trim()).filter(Boolean);
+    const blacklist = selectedIndustryCodes(industryBlacklist);
     const runtimeProfile: JsonObject = {
       industry_blacklist: blacklist,
       tradability: { exclude_suspended: excludeSuspended },
       selection: { top_k: topK },
       hmm: {
         enabled: hmmEnabled,
-        model_snapshot_id: hmmEnabled ? hmmSnapshotId : null,
+        model_config_id: hmmEnabled ? hmmConfigId : null,
+        model_snapshot_id: hmmEnabled ? hmmSnapshotId || null : null,
         signal_preset: hmmEnabled ? hmmPreset : null,
-        coefficients_path: hmmEnabled ? selectedHmmArtifact?.path || null : null,
       },
     };
     const artifactConfig: JsonObject = { auto_generate: true, inference_backend: "wsl" };
@@ -197,6 +184,7 @@ export default function PaperV2SelectionPage() {
       st_pit_authoritative: true,
       selection_artifact_config: artifactConfig,
       runtime_profile: runtimeProfile,
+      industry_blacklist_trace: selectedIndustryTrace(industryBlacklist),
     };
     if (mode === "weighted_fusion") {
       config.package_weights = Object.fromEntries(selectedPackages.map((item) => [item.package_id, weights[item.package_id] ?? 1]));
@@ -220,12 +208,8 @@ export default function PaperV2SelectionPage() {
     try {
       const packageIds = selectedPackages.map((item) => item.package_id);
       if (topK < 1 || topK > 50) throw new Error("TopK 必须在 1 到 50 之间。");
-      if (hmmEnabled && !hmmConfigId) throw new Error("启用 HMM 时必须选择模型版本。");
+      if (hmmEnabled && !hmmConfigId && !hmmSnapshotId) throw new Error("启用 HMM 时必须选择模型配置或已训练模型快照。");
       if (pitMode !== "NONE" && !pitContext?.cutoff_date) throw new Error("历史时点选股必须先解析出前一交易日截止日。");
-      if (hmmEnabled && !hmmSnapshotId) throw new Error(`没有 HMM 快照系数覆盖交易日 ${tradeDate} / ${hmmPreset}。请切换交易日、快照或预设，或先执行 HMM 滚动训练。`);
-      if (hmmEnabled && !selectedHmmArtifact) {
-        throw new Error(`HMM 系数文件不覆盖交易日 ${tradeDate} / ${hmmPreset}。请改选覆盖该日期的快照，或先执行 HMM 滚动训练生成新系数。`);
-      }
       if (singlePackageMode && packageIds.length !== 1) throw new Error("单策略包模式必须且只能选择一个 StrategyPackage。");
       if (!singlePackageMode && packageIds.length < 2) throw new Error("多策略包聚合至少需要两个 StrategyPackage。");
       const blockedPackages = selectedPackages.filter((item) => !packageHealthRunnable(item));
@@ -313,9 +297,9 @@ export default function PaperV2SelectionPage() {
             <div className="pv2-field"><label>模式</label><select className="pv2-select" data-testid="selection-mode" value={mode} onChange={(event) => updateMode(event.target.value as SelectionMode)}><option value="single_package">单策略包</option><option value="weighted_fusion">加权融合</option><option value="intersection">交集</option><option value="union">并集</option></select></div>
             <div className="pv2-field"><label>交易日期</label><input className="pv2-input" data-testid="selection-trade-date" type="date" value={tradeDate} onChange={(event) => setTradeDate(event.target.value)} /></div>
             <div className="pv2-field"><label>时点口径</label><select className="pv2-select" data-testid="selection-pit-mode" value={pitMode} onChange={(event) => setPitMode(event.target.value)}><option value="PREVIOUS_TRADING_DAY_CLOSE">前一交易日收盘数据</option><option value="NONE">诊断：不强制截止日</option></select></div>
-            <div className="pv2-field"><label>数据源</label><select className="pv2-select" data-testid="selection-data-source" value={dataSource} onChange={(event) => setDataSource(event.target.value as DataSource)}><option value="DB_HISTORICAL">DB_HISTORICAL 历史分钟回放</option><option value="TDX_REALTIME">TDX_REALTIME 实时行情</option></select></div>
+            <div className="pv2-field"><label>因子/选股数据源</label><select className="pv2-select" data-testid="selection-data-source" value={dataSource} onChange={(event) => setDataSource(event.target.value as SelectionDataSource)}><option value="DB_HISTORICAL">DB_HISTORICAL 权威历史/PIT选股数据</option></select></div>
             <div className="pv2-field"><label>TopK（默认 20，最高 50）</label><input className="pv2-input" data-testid="selection-top-k" type="number" min={1} max={50} value={topK} onChange={(event) => setTopK(Number(event.target.value))} /></div>
-            <div className="pv2-field"><label>行业黑名单</label><input className="pv2-input" data-testid="selection-industry-blacklist" placeholder="银行, 房地产" value={industryBlacklist} onChange={(event) => setIndustryBlacklist(event.target.value)} /></div>
+            <PaperIndustryBlacklistSelector selected={industryBlacklist} onChange={setIndustryBlacklist} />
             <div className="pv2-field"><label>可交易性</label><label className="pv2-chip"><input data-testid="selection-exclude-suspended" type="checkbox" checked={excludeSuspended} onChange={(event) => setExcludeSuspended(event.target.checked)} /> 剔除已确认停牌股票并按后续排名补位</label></div>
           </div>
           {pitMode !== "NONE" ? (
@@ -333,12 +317,8 @@ export default function PaperV2SelectionPage() {
                 {hmmConfigs.map((item) => <option value={item.config_id} key={item.config_id}>{item.display_name} / {item.model_type}</option>)}
               </select>
               <select className="pv2-select" data-testid="selection-hmm-snapshot" value={hmmSnapshotId} disabled={!hmmEnabled || !hmmConfigId} onChange={(event) => setHmmSnapshotId(event.target.value)} style={{ maxWidth: 280 }}>
-                <option value="">选择已完成快照</option>
-                {hmmSnapshots.map((item) => {
-                  const artifact = artifactCoversTradeDate(item, hmmPreset, tradeDate);
-                  const disabled = hmmEnabled && !artifact;
-                  return <option value={item.snapshot_id} key={item.snapshot_id} disabled={disabled}>{hmmSnapshotLabel(item)} / {artifact ? `覆盖 ${artifact.start_date}~${artifact.end_date}` : artifactCoverageLabel(item, hmmPreset)}</option>;
-                })}
+                <option value="">可选：指定已训练模型快照</option>
+                {hmmSnapshots.map((item) => <option value={item.snapshot_id} key={item.snapshot_id}>{hmmSnapshotLabel(item)}</option>)}
               </select>
               <select className="pv2-select" data-testid="selection-hmm-preset" value={hmmPreset} disabled={!hmmEnabled} onChange={(event) => setHmmPreset(event.target.value)} style={{ maxWidth: 150 }}>
                 <option value="preset_A">preset_A</option>
@@ -347,15 +327,9 @@ export default function PaperV2SelectionPage() {
             </div>
             {hmmEnabled ? (
               <div data-testid="selection-hmm-coverage" style={{ marginTop: 10 }}>
-                {selectedHmmArtifact ? (
-                  <NoticePanel title="HMM 系数覆盖已确认" tone="success">
-                    当前快照使用 {hmmPreset}，系数文件覆盖 {selectedHmmArtifact.start_date} 至 {selectedHmmArtifact.end_date}。选股请求会显式传入 coefficients_path，避免误用过期系数。
-                  </NoticePanel>
-                ) : (
-                  <NoticePanel title="HMM 系数不覆盖当前交易日" tone="warning">
-                    没有已完成快照的 {hmmPreset} 系数覆盖 {tradeDate}。选股不会继续调用后端伪装成功；请切换交易日、快照或预设，或先在“模型与 HMM”页面执行滚动训练。
-                  </NoticePanel>
-                )}
+                <NoticePanel title="HMM 自动系数缓存" tone="info">
+                  选择 HMM 模型配置后无需每天手工生成系数快照；Selection/Paper 首次运行会自动按交易日计算并写入缓存，同一模型、preset 和交易日后续直接复用缓存。
+                </NoticePanel>
               </div>
             ) : null}
           </div>
@@ -381,7 +355,6 @@ export default function PaperV2SelectionPage() {
         </SectionCard>
       </div>
 
-      {dataSource === "TDX_REALTIME" ? <NoticePanel title="实时数据源提示" tone="warning">当前权威 artifact 推理仍要求「{dataSourceLabel("DB_HISTORICAL")}」；选择「{dataSourceLabel("TDX_REALTIME")}」时后端会明确失败，不会静默回退。</NoticePanel> : null}
       {mode !== "single_package" ? <NoticePanel title="多策略包边界" tone="warning">多策略包当前只用于统一选股研究；不能直接创建模拟盘执行组合。</NoticePanel> : null}
 
       <SectionCard title="选股结果" eyebrow={run ? selectionRunLabel(run) : "尚未运行"} action={<button className="pv2-button" data-testid="selection-add-watchlist" onClick={addToWatchlist} disabled={!run || !resultRows.length} type="button">一键加入自选股票池</button>}>
@@ -396,11 +369,14 @@ export default function PaperV2SelectionPage() {
           columns={[
             { key: "rank", header: "排名", render: (row) => row.rank },
             { key: "symbol", header: "股票代码", render: (row) => row.symbol },
+            { key: "name", header: "股票名称", render: (row) => row.stock_name || "-" },
             { key: "score", header: "评分", render: (row) => row.score.toFixed(6) },
-            { key: "price", header: "选股参考价", render: (row) => row.reference_price?.toFixed(3) || "-" },
+            { key: "entry", header: "入池价", render: (row) => row.selection_entry_price?.toFixed(3) || row.reference_price?.toFixed(3) || "-" },
             { key: "weight", header: "目标权重", render: (row) => formatPercent(row.target_weight) },
             { key: "reason", header: "原因", render: (row) => row.reason || "-" },
-            { key: "trace", header: "追踪", render: (row) => row.component_scores ? <span className="pv2-mono">{Object.keys(row.component_scores).join(", ")}</span> : "-" },
+            { key: "current", header: "当前价", render: (row) => row.current_price?.toFixed(3) || "-" },
+            { key: "prev", header: "昨收", render: (row) => row.previous_close?.toFixed(3) || "-" },
+            { key: "volume", header: "成交量", render: (row) => formatNumber(row.volume, 0) },
           ]}
         />
         {watchlistResult ? (
@@ -433,7 +409,7 @@ export default function PaperV2SelectionPage() {
               <div className="pv2-readable-row"><div className="pv2-readable-key">数据源</div><div className="pv2-readable-value">{dataSourceLabel(dataSource)}</div></div>
               <div className="pv2-readable-row"><div className="pv2-readable-key">TopK</div><div className="pv2-readable-value">{formatNumber(topK, 0)}</div></div>
               <div className="pv2-readable-row"><div className="pv2-readable-key">停牌过滤</div><div className="pv2-readable-value">{excludeSuspended ? "启用，按后续排名补位" : "关闭"}</div></div>
-              <div className="pv2-readable-row"><div className="pv2-readable-key">HMM</div><div className="pv2-readable-value">{hmmEnabled ? `${hmmSnapshotId || "未选择"} / ${hmmPreset}` : "未启用"}</div></div>
+              <div className="pv2-readable-row"><div className="pv2-readable-key">HMM</div><div className="pv2-readable-value">{hmmEnabled ? `${hmmConfigId || hmmSnapshotId || "未选择"} / ${hmmPreset}` : "未启用"}</div></div>
               <div className="pv2-readable-row"><div className="pv2-readable-key">策略包</div><div className="pv2-readable-value">{selectedPackages.map((item) => item.package_name).join(", ") || "-"}</div></div>
             </div>
           </div>

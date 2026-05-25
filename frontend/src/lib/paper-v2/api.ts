@@ -3,6 +3,7 @@ import type {
   CandidateStrategyPackage,
   CandidateStrategyPackageInput,
   DataSource,
+  TradingDayStatus,
   ExecutionPolicy,
   HmmConfig,
   HmmDailyCoefficientJob,
@@ -255,6 +256,10 @@ export const selectionCenterApi = {
     const data = await apiFetch<{ packages: SelectablePackage[] }>(`/selection-center/selectable-packages?limit=${limit}`);
     return data.packages || [];
   },
+  async industryTree(): Promise<JsonObject[]> {
+    const data = await apiFetch<{ tree: JsonObject[] }>("/selection-center/industry-tree");
+    return data.tree || [];
+  },
   async listRuns(limit = 100): Promise<SelectionRun[]> {
     const data = await apiFetch<{ runs: SelectionRun[] }>(`/selection-center/runs?limit=${limit}`);
     return data.runs || [];
@@ -297,6 +302,9 @@ export const paperV2Api = {
   async tradingDayDefaults(lookbackTradingDays = 10): Promise<TradingDayDefaults> {
     const data = await apiFetch<TradingDayDefaults>(`/paper-v2/trading-days/defaults?lookback_trading_days=${lookbackTradingDays}`);
     return data;
+  },
+  async tradingDayStatus(): Promise<TradingDayStatus> {
+    return apiFetch<TradingDayStatus>("/trading-calendar/status");
   },
   async listPortfolios(limit = 200): Promise<PaperPortfolio[]> {
     const data = await apiFetch<{ portfolios: PaperPortfolio[] }>(`/paper-v2/portfolios?limit=${limit}`);

@@ -2,8 +2,18 @@ export type JsonValue = string | number | boolean | null | JsonValue[] | { [key:
 export type JsonObject = Record<string, unknown>;
 
 export type DataSource = "DB_HISTORICAL" | "TDX_REALTIME" | "MINIQMT_REALTIME";
+export type SelectionDataSource = "DB_HISTORICAL";
 export type SelectionMode = "single_package" | "intersection" | "union" | "weighted_fusion";
 export type PaperSessionMode = "REPLAY_ONLY" | "LIVE_ONLY" | "CATCHUP_THEN_LIVE";
+export type TradingDayStatus = {
+  as_of_date: string;
+  is_trading_day: boolean;
+  latest_completed_trading_day?: string | null;
+  previous_trading_day?: string | null;
+  next_trading_day?: string | null;
+  warnings?: JsonObject[];
+  cache?: JsonObject;
+};
 
 export type TradingDayDefaults = {
   as_of_date: string;
@@ -15,6 +25,7 @@ export type TradingDayDefaults = {
   replay_end_date: string;
   available_trading_day_count: number;
   next_trading_day?: string | null;
+  trading_day_status?: TradingDayStatus;
 };
 
 export type BackendErrorDetail = {
@@ -159,10 +170,19 @@ export type SelectablePackage = {
 
 export type SelectionCandidate = {
   symbol: string;
+  stock_name?: string | null;
   score: number;
   rank: number;
   target_weight?: number | null;
   reference_price?: number | null;
+  selection_entry_price?: number | null;
+  selection_entry_price_source?: string | null;
+  selection_entry_price_time?: string | null;
+  previous_close?: number | null;
+  volume?: number | null;
+  current_price?: number | null;
+  current_price_source?: string | null;
+  current_price_time?: string | null;
   component_scores?: JsonObject;
   reason?: string | null;
   context?: JsonObject;

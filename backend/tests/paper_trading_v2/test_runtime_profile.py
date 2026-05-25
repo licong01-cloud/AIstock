@@ -68,7 +68,13 @@ def test_runtime_profile_version_hash_and_audit_are_persisted() -> None:
     assert version.config_json == {
         "runtime_profile": {
             "industry_blacklist": [],
-            "hmm": {"enabled": False, "model_snapshot_id": None, "signal_preset": None, "coefficients_path": None},
+            "hmm": {
+                "enabled": False,
+                "model_config_id": None,
+                "model_snapshot_id": None,
+                "signal_preset": None,
+                "coefficients_path": None,
+            },
             "tradability": {"exclude_suspended": True},
             "selection": {"top_k": 2},
             "risk_policy": {

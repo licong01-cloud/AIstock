@@ -35,6 +35,15 @@ class SelectionCandidate(BaseModel):
     target_weight: float | None = Field(default=None, gt=0)
     target_quantity: int | None = Field(default=None, ge=0)
     reference_price: float | None = Field(default=None, gt=0)
+    stock_name: str | None = None
+    selection_entry_price: float | None = Field(default=None, gt=0)
+    selection_entry_price_source: str | None = None
+    selection_entry_price_time: str | None = None
+    previous_close: float | None = Field(default=None, gt=0)
+    volume: float | None = Field(default=None, ge=0)
+    current_price: float | None = Field(default=None, gt=0)
+    current_price_source: str | None = None
+    current_price_time: str | None = None
     component_scores: dict[str, Any] = Field(default_factory=dict)
     reason: str | None = None
 

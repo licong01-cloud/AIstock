@@ -44,14 +44,10 @@ def test_enable_paper_raises_on_manifest_sha256_mismatch() -> None:
     digest into the in-memory repository directly (bypassing save_manifest,
     which would re-freeze and overwrite the digest).
 
-    R6: governance gate prereq seed; the new
-    ``_require_governance_paper_ready`` gate now intercepts before the legacy
-    raise point. The validator's sha-mismatch error is caught inside
-    ``_manifest_identity_gate`` and surfaced as a blocker string in the
-    governance eligibility context. We assert against the wrapped governance
-    error: error message identifies the governance gate, and
-    ``context["manifest_identity"]`` records the underlying sha mismatch (via
-    its ``blockers`` list and the persisted ``manifest_sha256``).
+    The validator's sha-mismatch error is caught inside the alpha-core
+    admission gate and surfaced as a blocker string. Live-strict governance
+    evidence is no longer required for Paper simulation, but manifest identity
+    remains a hard package eligibility gate.
     """
 
     repo = InMemoryStrategyPackageRepository()
@@ -83,22 +79,21 @@ def test_enable_paper_raises_on_manifest_sha256_mismatch() -> None:
 
     service = StrategyPackageService(repository=repo)
 
-    # R6: seed governance gate prereqs so we exercise the manifest-identity
-    # blocker path rather than getting blocked by missing prereqs first.
+    # Seed legacy governance evidence to prove manifest identity remains the
+    # blocking condition even when live-strict evidence exists.
     _seed_paper_ready_package(service, record.package_id)
 
     with pytest.raises(StrategyPackageValidationError) as exc_info:
         service.enable_paper(record.package_id)
 
-    # R6: governance gate wraps the validator's sha-mismatch error.
     err = exc_info.value
     context = err.context or {}
-    manifest_identity = context.get("manifest_identity") or {}
+    manifest_identity = context.get("alpha_core_identity") or {}
     blockers_str = " ".join(manifest_identity.get("blockers") or [])
-    # Top-level error must surface governance gate failure.
-    assert "governance" in str(err).lower() or "paper_ready" in str(err).lower()
-    # Underlying sha mismatch must remain discoverable in the eligibility
-    # context so reviewers can tell tampering from drift.
+    assert "alpha core" in str(err).lower()
+    assert context.get("paper_simulation_allowed") is False
+    # Underlying sha mismatch must remain discoverable in the admission context
+    # so reviewers can tell tampering from drift.
     assert "manifest_sha256" in blockers_str.lower() or "sha" in blockers_str.lower()
     assert manifest_identity.get("manifest_sha256") == bad_digest
     assert manifest_identity.get("passed") is False
@@ -129,9 +124,8 @@ def test_enable_paper_raises_on_invalid_status_transition() -> None:
     record = repo.save_manifest(saved_manifest)
 
     service = StrategyPackageService(repository=repo)
-    # R6: seed governance gate prereqs so the new
-    # ``_require_governance_paper_ready`` gate passes and we reach the
-    # legacy state-machine compare-and-set raise point.
+    # Seed read-only governance fixtures so this regression stays focused on
+    # the legacy state-machine compare-and-set raise point.
     _seed_paper_ready_package(service, record.package_id)
 
     # Force the persisted package_status to PAPER_ENABLED. current_manifest()

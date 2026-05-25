@@ -25,6 +25,7 @@ from backend.services.trading_core.limit_price_provider import (
     StkLimitPriceProvider,
 )
 from backend.services.trading_core.models import MinuteBar
+from backend.services.trading_calendar_status import TradingCalendarStatusService
 from backend.services.paper_trading_v2.day_features import DbV25DayFeatureProvider, V25DayFeatureProvider, V25DayFeatures
 
 
@@ -890,53 +891,12 @@ class PaperV2MinuteMarketDataProvider:
 class TradeCalendarProvider:
     """Read-only trading calendar validator for authoritative day runs."""
 
-    def __init__(self, conn_factory: ConnFactory | None = None) -> None:
+    def __init__(self, conn_factory: ConnFactory | None = None, calendar_service: TradingCalendarStatusService | Any | None = None) -> None:
         self.conn_factory = conn_factory or get_conn
+        self.calendar_service = calendar_service or TradingCalendarStatusService(conn_factory=self.conn_factory)
 
     def ensure_trading_day(self, trade_date: date) -> None:
-        with self.conn_factory() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT is_trading
-                    FROM market.trading_calendar
-                    WHERE cal_date = %s
-                    """,
-                    (trade_date,),
-                )
-                row = cur.fetchone()
-        if row is None:
-            raise DataUnavailableError(
-                "trade calendar row is required for paper trading day",
-                context={"trade_date": trade_date.isoformat()},
-            )
-        if not bool(row[0]):
-            raise DataUnavailableError(
-                "trade_date is not a trading day",
-                context={"trade_date": trade_date.isoformat()},
-            )
+        self.calendar_service.ensure_trading_day(trade_date)
 
     def list_trading_days(self, start_date: date, end_date: date) -> list[date]:
-        if start_date > end_date:
-            raise DataUnavailableError(
-                "start_date cannot be after end_date",
-                context={"start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
-            )
-        with self.conn_factory() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT cal_date
-                    FROM market.trading_calendar
-                    WHERE cal_date >= %s AND cal_date <= %s AND is_trading = TRUE
-                    ORDER BY cal_date
-                    """,
-                    (start_date, end_date),
-                )
-                rows = cur.fetchall()
-        if not rows:
-            raise DataUnavailableError(
-                "trading calendar has no trading days in replay range",
-                context={"start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
-            )
-        return [row[0] for row in rows]
+        return self.calendar_service.list_trading_days(start_date, end_date)

@@ -118,6 +118,10 @@ class TransitionPackageStatusRequest(BaseModel):
     context: dict[str, Any] = Field(default_factory=dict)
 
 
+class RepairManifestHashRequest(BaseModel):
+    operator: str = Field(default="paper_v2_gate_decoupling", min_length=1)
+
+
 class CreateExecutionPolicyRequest(BaseModel):
     policy_name: str = Field(min_length=1)
     policy_json: dict[str, Any] = Field(default_factory=dict)
@@ -418,6 +422,27 @@ def get_candidate_strategy_package(candidate_id: str) -> dict[str, Any]:
     try:
         record = CandidateStrategyPackageService().get_candidate(candidate_id)
         return {"ok": True, "candidate": _candidate_payload(record)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/manifest-integrity")
+def get_strategy_package_manifest_integrity(limit: int = 500) -> dict[str, Any]:
+    try:
+        report = StrategyPackageService().validate_manifest_integrity(limit=limit)
+        return {"ok": True, "report": report}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/{package_id}/repair-manifest-hash")
+def repair_strategy_package_manifest_hash(package_id: str, req: RepairManifestHashRequest | None = None) -> dict[str, Any]:
+    try:
+        record = StrategyPackageService().repair_manifest_hash(
+            package_id,
+            operator=(req.operator if req else "paper_v2_gate_decoupling"),
+        )
+        return {"ok": True, "package": _record_payload(record)}
     except TradingCoreError as exc:
         _raise_http(exc)
 
@@ -872,6 +897,29 @@ def get_strategy_package_governance_eligibility(
             limit=limit,
         )
         return {"ok": True, "package_id": package_id, "eligibility": eligibility}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/{package_id}/paper-simulation-admission")
+def get_strategy_package_paper_simulation_admission(
+    package_id: str,
+    metric_key: str = "annual_return",
+    governance_limit: int = 500,
+) -> dict[str, Any]:
+    """Return alpha-core admission for Paper v2 simulation.
+
+    This endpoint is intentionally separate from live-strict governance so the
+    UI can explain warnings without blocking backtest-approved simulation.
+    """
+
+    try:
+        admission = StrategyPackageService().paper_simulation_admission(
+            package_id,
+            metric_key=metric_key,
+            governance_limit=governance_limit,
+        )
+        return {"ok": True, "package_id": package_id, "admission": admission}
     except TradingCoreError as exc:
         _raise_http(exc)
 

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import ErrorPanel from "@/components/paper-v2/ErrorPanel";
 import JsonPanel from "@/components/paper-v2/JsonPanel";
 import NoticePanel from "@/components/paper-v2/NoticePanel";
+import PaperIndustryBlacklistSelector, { selectedIndustryCodes, selectedIndustryTrace, type Sw2Entry } from "@/components/paper-v2/PaperIndustryBlacklistSelector";
 import PaperTable from "@/components/paper-v2/PaperTable";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import CopyChip from "@/components/paper-v2/CopyChip";
@@ -12,7 +13,6 @@ import StatusBadge from "@/components/paper-v2/StatusBadge";
 import WorkflowStepper from "@/components/paper-v2/WorkflowStepper";
 import { hmmTrainingApi, paperV2Api, strategyPackageApi } from "@/lib/paper-v2/api";
 import { dataSourceLabel, formatCompact, hmmSnapshotLabel, packageDisplayLabel, paperV2WorkflowSteps, shortHash, todayIso } from "@/lib/paper-v2/format";
-import { artifactCoverageLabel, artifactCoversDateRange, selectCoveredHmmSnapshot } from "@/lib/paper-v2/hmm-runtime";
 import type { DataSource, ExecutionPolicy, HmmConfig, HmmSnapshot, JsonObject, PaperPortfolio, PaperSessionMode, PaperSessionProgress, RuntimeProfileVersion, StrategyPackage } from "@/lib/paper-v2/types";
 
 function daysAgoIso(days: number): string {
@@ -57,7 +57,7 @@ export default function PaperV2PortfoliosPage() {
   const [dataSource, setDataSource] = useState<DataSource>("DB_HISTORICAL");
   const [policyId, setPolicyId] = useState("");
   const [topK, setTopK] = useState(20);
-  const [industryBlacklist, setIndustryBlacklist] = useState("");
+  const [industryBlacklist, setIndustryBlacklist] = useState<Sw2Entry[]>([]);
   const [excludeSuspended, setExcludeSuspended] = useState(true);
   const [hmmEnabled, setHmmEnabled] = useState(false);
   const [hmmConfigId, setHmmConfigId] = useState("");
@@ -72,14 +72,6 @@ export default function PaperV2PortfoliosPage() {
 
   const selectedPackage = useMemo(() => packages.find((item) => item.package_id === packageId), [packages, packageId]);
   const activePortfolios = useMemo(() => portfolios.filter((item) => ["RUNNING", "PAUSED"].includes(item.status)), [portfolios]);
-  const hmmCoverageStartDate = sessionMode === "LIVE_ONLY" ? startDate : replayStart;
-  const hmmCoverageEndDate = sessionMode === "LIVE_ONLY" ? startDate : replayEnd;
-  const selectedHmmSnapshot = useMemo(() => hmmSnapshots.find((item) => item.snapshot_id === hmmSnapshotId) || null, [hmmSnapshotId, hmmSnapshots]);
-  const selectedHmmArtifact = useMemo(
-    () => selectedHmmSnapshot ? artifactCoversDateRange(selectedHmmSnapshot, hmmPreset, hmmCoverageStartDate, hmmCoverageEndDate) : null,
-    [hmmCoverageEndDate, hmmCoverageStartDate, hmmPreset, selectedHmmSnapshot],
-  );
-
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -149,38 +141,28 @@ export default function PaperV2PortfoliosPage() {
       if (!alive) return;
       const ready = rows.filter((item) => ["completed", "ready", "success", "succeeded"].includes(String(item.status || "").toLowerCase()));
       setHmmSnapshots(ready);
-      setHmmSnapshotId((current) => (
-        ready.find((item) => item.snapshot_id === current) ? current : ready[0]?.snapshot_id || ""
-      ));
+      setHmmSnapshotId((current) => (ready.find((item) => item.snapshot_id === current) ? current : ""));
     }).catch((exc) => {
       if (alive) setError(exc);
     });
     return () => { alive = false; };
   }, [hmmConfigId]);
 
-  useEffect(() => {
-    if (!hmmEnabled || !hmmSnapshots.length) return;
-    const current = hmmSnapshots.find((item) => item.snapshot_id === hmmSnapshotId);
-    if (current && artifactCoversDateRange(current, hmmPreset, hmmCoverageStartDate, hmmCoverageEndDate)) return;
-    const firstCovered = selectCoveredHmmSnapshot(hmmSnapshots, hmmPreset, hmmCoverageStartDate, hmmCoverageEndDate);
-    const nextSnapshotId = firstCovered?.snapshot_id || "";
-    if (nextSnapshotId !== hmmSnapshotId) setHmmSnapshotId(nextSnapshotId);
-  }, [hmmCoverageEndDate, hmmCoverageStartDate, hmmEnabled, hmmPreset, hmmSnapshotId, hmmSnapshots]);
-
   function runtimeProfileConfig(): JsonObject {
-    const blacklist = industryBlacklist.split(",").map((item) => item.trim()).filter(Boolean);
+    const blacklist = selectedIndustryCodes(industryBlacklist);
     return {
       top_k: topK,
       selection_artifact_config: { auto_generate: true, inference_backend: "wsl" },
+      industry_blacklist_trace: selectedIndustryTrace(industryBlacklist),
       runtime_profile: {
         selection: { top_k: topK },
         tradability: { exclude_suspended: excludeSuspended },
         industry_blacklist: blacklist,
         hmm: {
           enabled: hmmEnabled,
-          model_snapshot_id: hmmEnabled ? hmmSnapshotId : null,
+          model_config_id: hmmEnabled ? hmmConfigId || null : null,
+          model_snapshot_id: hmmEnabled ? hmmSnapshotId || null : null,
           signal_preset: hmmEnabled ? hmmPreset : null,
-          coefficients_path: hmmEnabled ? selectedHmmArtifact?.path || null : null,
         },
       },
     };
@@ -202,9 +184,7 @@ export default function PaperV2PortfoliosPage() {
     try {
       if (!packageId) throw new Error("请先选择 StrategyPackage。");
       if (topK < 1 || topK > 50) throw new Error("TopK 必须在 1 到 50 之间。");
-      if (hmmEnabled && (!hmmConfigId || !hmmSnapshotId)) throw new Error("启用 HMM 时必须选择模型版本和已完成快照。");
-      if (!policyId) throw new Error("Select a paper-enabled validated execution policy before creating portfolio.");
-      if (hmmEnabled && !selectedHmmArtifact) throw new Error(`HMM coefficient artifact does not cover ${hmmCoverageStartDate}~${hmmCoverageEndDate} / ${hmmPreset}; create portfolio/session is blocked before backend submission.`);
+      if (hmmEnabled && !hmmConfigId && !hmmSnapshotId) throw new Error("启用 HMM 时必须选择模型配置或已训练模型快照。");
       if (sessionMode !== "LIVE_ONLY" && dataSource !== "DB_HISTORICAL") throw new Error(`历史追赶必须使用「${dataSourceLabel("DB_HISTORICAL")}」数据源。`);
       const isReplayOnly = sessionMode === "REPLAY_ONLY";
       const isCatchupThenLive = sessionMode === "CATCHUP_THEN_LIVE";
@@ -290,7 +270,7 @@ export default function PaperV2PortfoliosPage() {
             <div className="pv2-field"><label>初始资金</label><input className="pv2-input" data-testid="portfolio-initial-cash" type="number" min={1} value={initialCash} onChange={(event) => setInitialCash(Number(event.target.value))} /></div>
             <div className="pv2-field"><label>运行场景</label><select className="pv2-select" data-testid="portfolio-start-mode" value={sessionMode} onChange={(event) => setSessionMode(event.target.value as PaperSessionMode)}>{SESSION_MODE_OPTIONS.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}</select></div>
             <div className="pv2-field"><label>数据源</label><input className="pv2-input" data-testid="portfolio-data-source" value={dataSourceLabel(dataSource)} readOnly /></div>
-            <div className="pv2-field"><label>已验证执行策略</label><select className="pv2-select" data-testid="portfolio-policy" value={policyId} onChange={(event) => setPolicyId(event.target.value)}><option value="">请选择已通过回测并启用模拟盘的执行策略（必选；不再从 manifest 自动导入）</option>{policies.map((item) => <option value={item.policy_id} key={item.policy_id}>{item.policy_name || item.policy_id} / {item.algo_code} / {item.paper_enabled ? "可用于模拟盘" : "未启用"}</option>)}</select></div>
+            <div className="pv2-field"><label>执行策略</label><select className="pv2-select" data-testid="portfolio-policy" value={policyId} onChange={(event) => setPolicyId(event.target.value)}><option value="">平台默认：使用 manifest 默认执行策略，运行前 fail-fast 校验</option>{policies.map((item) => <option value={item.policy_id} key={item.policy_id}>{item.policy_name || item.policy_id} / {item.algo_code} / {item.paper_enabled ? "可用于模拟盘" : "未启用"}</option>)}</select></div>
             {sessionMode !== "LIVE_ONLY" ? <>
               <div className="pv2-field"><label>历史追赶开始</label><input className="pv2-input" data-testid="portfolio-replay-start" type="date" value={replayStart} onChange={(event) => setReplayStart(event.target.value)} /></div>
               <div className="pv2-field"><label>历史追赶结束</label><input className="pv2-input" data-testid="portfolio-replay-end" type="date" value={replayEnd} onChange={(event) => setReplayEnd(event.target.value)} /></div>
@@ -305,13 +285,13 @@ export default function PaperV2PortfoliosPage() {
             <div className="pv2-eyebrow">运行时选股配置（不写入策略包 Manifest）</div>
             <div className="pv2-form-grid">
               <div className="pv2-field"><label>TopK</label><input className="pv2-input" data-testid="portfolio-top-k" type="number" min={1} max={50} value={topK} onChange={(event) => setTopK(Number(event.target.value))} /></div>
-              <div className="pv2-field"><label>行业黑名单</label><input className="pv2-input" data-testid="portfolio-industry-blacklist" value={industryBlacklist} placeholder="银行, 房地产" onChange={(event) => setIndustryBlacklist(event.target.value)} /></div>
+              <PaperIndustryBlacklistSelector selected={industryBlacklist} onChange={setIndustryBlacklist} />
               <div className="pv2-field"><label>停牌处理</label><label className="pv2-chip"><input data-testid="portfolio-exclude-suspended" type="checkbox" checked={excludeSuspended} onChange={(event) => setExcludeSuspended(event.target.checked)} /> 剔除并补位</label></div>
               <div className="pv2-field"><label>HMM</label><label className="pv2-chip"><input data-testid="portfolio-hmm-enabled" type="checkbox" checked={hmmEnabled} onChange={(event) => setHmmEnabled(event.target.checked)} /> Enable HMM</label></div>
               <div className="pv2-field"><label>HMM Config</label><select className="pv2-select" data-testid="portfolio-hmm-config" value={hmmConfigId} disabled={!hmmEnabled} onChange={(event) => setHmmConfigId(event.target.value)}><option value="">Select HMM config</option>{hmmConfigs.map((item) => <option value={item.config_id} key={item.config_id}>{item.display_name} / {item.model_type}</option>)}</select></div>
-              <div className="pv2-field"><label>HMM Snapshot</label><select className="pv2-select" data-testid="portfolio-hmm-snapshot" value={hmmSnapshotId} disabled={!hmmEnabled || !hmmConfigId} onChange={(event) => setHmmSnapshotId(event.target.value)}><option value="">Select covered snapshot</option>{hmmSnapshots.map((item) => { const artifact = artifactCoversDateRange(item, hmmPreset, hmmCoverageStartDate, hmmCoverageEndDate); return <option value={item.snapshot_id} key={item.snapshot_id} disabled={hmmEnabled && !artifact}>{hmmSnapshotLabel(item)} / {artifact ? `covers ${artifact.start_date}~${artifact.end_date}` : artifactCoverageLabel(item, hmmPreset)}</option>; })}</select></div>
+              <div className="pv2-field"><label>HMM Snapshot</label><select className="pv2-select" data-testid="portfolio-hmm-snapshot" value={hmmSnapshotId} disabled={!hmmEnabled || !hmmConfigId} onChange={(event) => setHmmSnapshotId(event.target.value)}><option value="">可选：默认使用模型配置的最新可用快照</option>{hmmSnapshots.map((item) => <option value={item.snapshot_id} key={item.snapshot_id}>{hmmSnapshotLabel(item)}</option>)}</select></div>
               <div className="pv2-field"><label>HMM Preset</label><select className="pv2-select" data-testid="portfolio-hmm-preset" value={hmmPreset} disabled={!hmmEnabled} onChange={(event) => setHmmPreset(event.target.value)}><option value="preset_A">preset_A</option><option value="preset_B">preset_B</option></select></div>
-              {hmmEnabled ? <div className="pv2-field" data-testid="portfolio-hmm-coverage"><label>HMM Coefficients</label><NoticePanel title={selectedHmmArtifact ? "HMM coefficient coverage confirmed" : "HMM coefficient coverage missing"} tone={selectedHmmArtifact ? "success" : "warning"}>{selectedHmmArtifact ? `Session/profile will carry coefficients_path=${selectedHmmArtifact.path} for ${hmmCoverageStartDate}~${hmmCoverageEndDate}.` : `No completed ${hmmPreset} coefficient artifact covers ${hmmCoverageStartDate}~${hmmCoverageEndDate}; create is blocked before API submission.`}</NoticePanel></div> : null}
+              {hmmEnabled ? <div className="pv2-field" data-testid="portfolio-hmm-coverage"><label>HMM Coefficients</label><NoticePanel title="HMM 自动系数缓存" tone="info">组合创建不再要求手工选择每日系数 artifact；运行时按模型配置、preset 和交易日自动计算，后续复用平台缓存。</NoticePanel></div> : null}
             </div>
           </div>
 
@@ -326,7 +306,7 @@ export default function PaperV2PortfoliosPage() {
               {selectedPackage?.manifest_sha256 ? <CopyChip label={`manifest ${shortHash(selectedPackage.manifest_sha256, 6)}`} value={selectedPackage.manifest_sha256} title={`完整 manifest_sha256：${selectedPackage.manifest_sha256}`} /> : null}
             </div>
           </div>
-          <button className="pv2-button-primary" data-testid="portfolio-create" onClick={createPortfolio} disabled={busy || !policyId} type="button">{busy ? "处理中..." : sessionMode === "LIVE_ONLY" ? "创建完全实时模拟盘" : sessionMode === "CATCHUP_THEN_LIVE" ? "创建并追赶后自动实时" : "创建并仅历史追赶"}</button>
+          <button className="pv2-button-primary" data-testid="portfolio-create" onClick={createPortfolio} disabled={busy} type="button">{busy ? "处理中..." : sessionMode === "LIVE_ONLY" ? "创建完全实时模拟盘" : sessionMode === "CATCHUP_THEN_LIVE" ? "创建并追赶后自动实时" : "创建并仅历史追赶"}</button>
           {created ? <JsonPanel value={{ created_portfolio_id: created.portfolio_id, package_id: created.package_id, manifest_sha256: created.manifest_sha256, runtime_profile_version: createdRuntimeVersion, session_progress: sessionProgress }} /> : null}
         </SectionCard>
 

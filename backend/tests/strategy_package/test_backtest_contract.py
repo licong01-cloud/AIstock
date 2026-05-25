@@ -38,6 +38,7 @@ def test_backtest_contract_never_reinjects_hmm_runtime_from_qe_config() -> None:
     disabled = normalize_runtime_config_with_backtest_contract(manifest, {}, include_contract=True)
     assert disabled["runtime_profile"]["hmm"] == {
         "enabled": False,
+        "model_config_id": None,
         "model_snapshot_id": None,
         "signal_preset": None,
         "coefficients_path": None,

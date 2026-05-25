@@ -193,6 +193,273 @@ def test_triage_p0_groups_open_issues_and_flags_missing_linkage(
     assert payload["groups"][0]["suggested_branch"].startswith("bug/p0-validation-guardrails-batch-")
 
 
+def test_run_p0_recommends_next_issue_command(isolated_workflow_root: Path) -> None:
+    bugs_root = workflow.BUGS_ROOT
+    _write_json(bugs_root / "bug199.json", _bug(severity="P0", module="paper_v2"))
+    _write_json(bugs_root / "bug200.json", _bug(bug_id="BUG-200", severity="P0", module="validation.guardrails"))
+
+    payload = workflow.build_run_p0_plan(module="paper_v2")
+
+    assert payload["schema_version"] == "aistock_issue_workflow_run_p0_v1"
+    assert payload["count"] == 1
+    assert payload["recommended_first_issue"] == "BUG-199"
+    assert "run --bug-id BUG-199" in payload["next_command"]
+
+
+def test_start_batch_rejects_incompatible_modules(isolated_workflow_root: Path) -> None:
+    bugs_root = workflow.BUGS_ROOT
+    _write_json(bugs_root / "bug199.json", _bug())
+    _write_json(bugs_root / "bug200.json", _bug(bug_id="BUG-200", module="paper_v2", github_issue_number=200))
+
+    with pytest.raises(workflow.WorkflowError, match="share one module"):
+        workflow.build_start_batch_plan(
+            bug_ids=["BUG-199", "BUG-200"],
+            create_worktree=False,
+            dry_run=True,
+            task_slug=None,
+            allow_missing_linkage=False,
+            allow_closed=False,
+        )
+
+
+def test_start_batch_writes_batch_state_and_contexts(isolated_workflow_root: Path) -> None:
+    bugs_root = workflow.BUGS_ROOT
+    _write_json(bugs_root / "bug199.json", _bug())
+    _write_json(bugs_root / "bug200.json", _bug(bug_id="BUG-200", github_issue_number=200, github_issue_url="https://github.example/issues/200"))
+
+    payload = workflow.build_start_batch_plan(
+        bug_ids=["BUG-199", "BUG-200"],
+        create_worktree=False,
+        dry_run=False,
+        task_slug=None,
+        allow_missing_linkage=False,
+        allow_closed=False,
+    )
+
+    assert payload["schema_version"] == "aistock_issue_workflow_start_batch_v1"
+    assert payload["workflow_gate"] == "ready_for_batch_fix"
+    assert payload["batch_id"].startswith("BATCH-validation-guardrails-")
+    assert payload["bug_ids"] == ["BUG-199", "BUG-200"]
+    assert (isolated_workflow_root / payload["batch_state_path"]).exists()
+    assert (isolated_workflow_root / payload["context_dir"] / "BUG-199.md").exists()
+    assert (isolated_workflow_root / payload["fix_ready_dir"] / "BUG-200.json").exists()
+
+
+def test_finish_batch_plan_generates_per_issue_pr_body(isolated_workflow_root: Path) -> None:
+    bugs_root = workflow.BUGS_ROOT
+    _write_json(bugs_root / "bug199.json", _bug())
+    _write_json(bugs_root / "bug200.json", _bug(bug_id="BUG-200", github_issue_number=200, github_issue_url="https://github.example/issues/200"))
+
+    payload = workflow.build_finish_batch_plan(
+        batch_id=None,
+        bug_ids=["BUG-199", "BUG-200"],
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        base="origin/main",
+        head="HEAD",
+        validation_evidence=["python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> passed"],
+        issue_commit=["BUG-199=abc1234", "BUG-200=def5678"],
+        plan_only=False,
+        allow_missing_evidence=False,
+    )
+
+    assert payload["schema_version"] == "aistock_issue_workflow_finish_batch_v1"
+    assert payload["workflow_gate"] == "ready_for_pr"
+    assert payload["per_issue_commit_map"] == {"BUG-199": "abc1234", "BUG-200": "def5678"}
+    pr_body = (isolated_workflow_root / payload["pr_body_path"]).read_text(encoding="utf-8")
+    assert "Closes #199" in pr_body
+    assert "Closes #200" in pr_body
+    assert "Per-issue closure map" in pr_body
+
+
+def test_doctor_reports_ready_when_client_entries_exist(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (isolated_workflow_root / "scripts").mkdir()
+    (isolated_workflow_root / "scripts" / "aistock_issue_workflow.py").write_text("", encoding="utf-8")
+    (isolated_workflow_root / "scripts" / "issue_flow.py").write_text("", encoding="utf-8")
+    (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue").mkdir(parents=True)
+    (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue" / "SKILL.md").write_text("", encoding="utf-8")
+    (isolated_workflow_root / ".claude" / "commands").mkdir(parents=True)
+    (isolated_workflow_root / ".claude" / "commands" / "fix-aistock-issue.md").write_text("", encoding="utf-8")
+    (isolated_workflow_root / "docs" / "standards").mkdir(parents=True)
+    (isolated_workflow_root / "docs" / "standards" / "aistock_development_standard_v1.5_20260523.md").write_text("", encoding="utf-8")
+    (isolated_workflow_root / "docs" / "architecture").mkdir(parents=True)
+    (isolated_workflow_root / "docs" / "architecture" / "aistock_issue_workflow_opensource_cicd_design_v2_20260525.md").write_text("", encoding="utf-8")
+    codex_home = isolated_workflow_root / "codex_home"
+    (codex_home / "skills" / "fix-aistock-issue").mkdir(parents=True)
+    (codex_home / "skills" / "fix-aistock-issue" / "SKILL.md").write_text("", encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {
+            "ok": True,
+            "branch": "main",
+            "head": "abc1234",
+            "origin_main": "abc1234",
+            "dirty": False,
+            "dirty_count": 0,
+            "status": "## main...origin/main",
+        },
+    )
+    monkeypatch.setattr(workflow, "_mcp_config_snapshot", lambda: {"files": [], "stale_worktree_config_files": []})
+
+    payload = workflow.build_doctor_report(skip_external=True)
+
+    assert payload["schema_version"] == "aistock_issue_workflow_doctor_v1"
+    assert payload["workflow_gate"] == "ready"
+    assert payload["blocking"] == []
+    assert "run --bug-id BUG-XXX" in payload["next_command"]
+
+
+def test_submit_bug_dry_run_requires_github_sync(isolated_workflow_root: Path) -> None:
+    allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
+    _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 117})
+
+    payload = workflow.build_submit_bug_plan(
+        title="Paper v2 display regression",
+        module="paper_v2",
+        severity="P1",
+        description="The view shows stale data.",
+        expected="The view should show fresh data.",
+        actual="The view shows stale data.",
+        reproduce_command="n/a",
+        evidence_refs=["screenshot:paper-v2"],
+        changed_files=["frontend/src/app/paper-v2/page.tsx"],
+        plan_key=None,
+        nox_session=None,
+        candidate_type="bug",
+        bug_id=None,
+        github_issue_number=None,
+        github_issue_url=None,
+        create_github=False,
+        apply=False,
+    )
+
+    assert payload["schema_version"] == "aistock_issue_workflow_submit_bug_v1"
+    assert payload["bug_id"] == "BUG-118"
+    assert payload["workflow_gate"] == "needs_github_sync"
+    assert payload["record"]["github_issue_number"] is None
+    assert not (isolated_workflow_root / payload["bug_json_path"]).exists()
+
+
+def test_submit_bug_apply_with_existing_github_link_writes_registry(
+    isolated_workflow_root: Path,
+) -> None:
+    allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
+    _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 117})
+
+    payload = workflow.build_submit_bug_plan(
+        title="Paper v2 display regression",
+        module="paper_v2",
+        severity="P1",
+        description="The view shows stale data.",
+        expected="The view should show fresh data.",
+        actual="The view shows stale data.",
+        reproduce_command="n/a",
+        evidence_refs=["screenshot:paper-v2"],
+        changed_files=["frontend/src/app/paper-v2/page.tsx"],
+        plan_key=None,
+        nox_session=None,
+        candidate_type="bug",
+        bug_id=None,
+        github_issue_number="188",
+        github_issue_url="https://github.com/licong01-cloud/AIstock/issues/188",
+        create_github=False,
+        apply=True,
+    )
+
+    assert payload["workflow_gate"] == "submitted"
+    bug_path = isolated_workflow_root / payload["bug_json_path"]
+    assert bug_path.exists()
+    record = json.loads(bug_path.read_text(encoding="utf-8"))
+    assert record["bug_id"] == "BUG-118"
+    assert record["github_issue_number"] == 188
+    assert record["production_ddl_gate"] == "noop"
+    assert json.loads(allocator.read_text(encoding="utf-8"))["last_allocated"] == 118
+    assert (isolated_workflow_root / payload["state_path"]).exists()
+
+
+def test_install_client_plan_can_copy_global_codex_skill(
+    isolated_workflow_root: Path,
+) -> None:
+    source = isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue"
+    source.mkdir(parents=True)
+    (source / "SKILL.md").write_text("skill", encoding="utf-8")
+    claude = isolated_workflow_root / ".claude" / "commands"
+    claude.mkdir(parents=True)
+    (claude / "fix-aistock-issue.md").write_text("claude", encoding="utf-8")
+    codex_home = isolated_workflow_root / "codex_home"
+
+    dry = workflow.build_client_install_plan(codex_home=str(codex_home))
+    assert dry["workflow_gate"] == "ready_for_install"
+    assert dry["dry_run"] is True
+
+    applied = workflow.build_client_install_plan(apply=True, codex_home=str(codex_home))
+    assert applied["workflow_gate"] == "installed"
+    assert (codex_home / "skills" / "fix-aistock-issue" / "SKILL.md").read_text(encoding="utf-8") == "skill"
+
+
+def test_run_plan_writes_state_and_resume_reads_it(isolated_workflow_root: Path) -> None:
+    issue = _write_json(isolated_workflow_root / "bug.json", _bug())
+
+    payload = workflow.build_run_plan(
+        bug_id="BUG-199",
+        mode="plan",
+        issue_json=str(issue),
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        create_worktree=False,
+        dry_run=False,
+        validation_evidence=[],
+        task_slug=None,
+        allow_missing_linkage=False,
+        allow_closed=False,
+        base="origin/main",
+        head="HEAD",
+    )
+    state_path = isolated_workflow_root / payload["start"]["state_path"]
+    events_path = isolated_workflow_root / payload["start"]["events_path"]
+
+    assert payload["workflow_gate"] == "planned"
+    assert state_path.exists()
+    assert events_path.exists()
+    assert json.loads(state_path.read_text(encoding="utf-8"))["state"] == "context_ready"
+
+    resume = workflow.build_resume_plan(bug_id="BUG-199", worktree=str(isolated_workflow_root))
+    assert resume["schema_version"] == "aistock_issue_workflow_resume_v1"
+    assert resume["state"]["context_pack_md"].endswith("context-pack.md")
+    assert "finish --bug-id BUG-199" in resume["next_command"]
+
+
+def test_run_pr_mode_drafts_pr_automation_without_side_effects(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _write_json(isolated_workflow_root / "bug.json", _bug())
+    monkeypatch.setattr(workflow, "_current_branch", lambda root=None: "bug/BUG-199-workflow")
+
+    payload = workflow.build_run_plan(
+        bug_id="BUG-199",
+        mode="pr",
+        issue_json=str(issue),
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        create_worktree=False,
+        dry_run=False,
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        task_slug=None,
+        allow_missing_linkage=False,
+        allow_closed=False,
+        base="origin/main",
+        head="HEAD",
+    )
+
+    assert payload["workflow_gate"] == "ready_for_pr"
+    assert payload["pr_automation"]["dry_run"] is True
+    assert "gh pr create" in payload["pr_automation"]["next_commands"][1]
+
+
 def test_close_sync_is_dry_run_and_requires_pr_url(
     isolated_workflow_root: Path,
     capsys: pytest.CaptureFixture[str],
@@ -209,14 +476,127 @@ def test_close_sync_is_dry_run_and_requires_pr_url(
         str(issue),
         "--pr-url",
         "https://github.example/pull/1",
+        "--validation-evidence",
+        "python -m nox -s l0 -> passed",
     ]) == 0
     ready = json.loads(capsys.readouterr().out)
-    assert ready["workflow_gate"] == "ready_for_mcp_sync"
+    assert ready["workflow_gate"] == "ready_for_apply"
     assert ready["dry_run"] is True
     assert (isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "close-sync-plan.json").exists()
 
-    assert workflow.main(["close-sync", "--issue-json", str(issue), "--apply"]) == 2
-    assert "intentionally not implemented" in capsys.readouterr().err
+    assert workflow.main([
+        "close-sync",
+        "--issue-json",
+        str(issue),
+        "--pr-url",
+        "https://github.example/pull/1",
+        "--validation-evidence",
+        "python -m nox -s l0 -> passed",
+        "--merge-commit",
+        "abc1234",
+        "--skip-github-check",
+        "--apply",
+    ]) == 0
+    applied = json.loads(capsys.readouterr().out)
+    assert applied["workflow_gate"] == "close_synced"
+    updated = json.loads(issue.read_text(encoding="utf-8"))
+    assert updated["status"] == "fixed"
+    assert updated["fix_commit"] == "abc1234"
+
+
+def test_cleanup_after_merge_blocks_unmerged_branch(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
+        if args[:2] == ["branch", "--show-current"]:
+            return "feature/current"
+        if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
+            return "bug/BUG-199-workflow"
+        if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
+            return ""
+        if args[:2] == ["ls-remote", "--heads"]:
+            return ""
+        return ""
+
+    monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {"ok": True, "branch": "main", "dirty": False, "dirty_count": 0, "head": "a", "origin_main": "a"},
+    )
+
+    payload = workflow.build_cleanup_after_merge_plan(branch="bug/BUG-199-workflow")
+
+    assert payload["workflow_gate"] == "blocked"
+    assert "not merged" in payload["blocking"][0]
+
+
+def test_cleanup_after_merge_dry_run_ready_for_merged_branch(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
+        if args[:2] == ["branch", "--show-current"]:
+            return "feature/current"
+        if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
+            return "bug/BUG-199-workflow"
+        if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
+            return "bug/BUG-199-workflow"
+        if args[:2] == ["ls-remote", "--heads"]:
+            return "ref"
+        return ""
+
+    monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {"ok": True, "branch": "main", "dirty": False, "dirty_count": 0, "head": "a", "origin_main": "a"},
+    )
+
+    payload = workflow.build_cleanup_after_merge_plan(branch="bug/BUG-199-workflow", sync_root=True)
+
+    assert payload["workflow_gate"] == "ready_for_cleanup"
+    assert payload["dry_run"] is True
+    assert {item["action"] for item in payload["actions"]} >= {"sync_root_main", "delete_local_branch", "delete_remote_branch"}
+
+
+def test_cleanup_after_merge_allows_verified_squash_merge(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "feature/issue-workflow-phase2"
+
+    def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
+        if args[:2] == ["branch", "--show-current"]:
+            return "main"
+        if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
+            return branch
+        if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
+            return ""
+        if args[:2] == ["ls-remote", "--heads"]:
+            return ""
+        return ""
+
+    monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {"ok": True, "branch": "main", "dirty": False, "dirty_count": 0, "head": "a", "origin_main": "a"},
+    )
+    monkeypatch.setattr(workflow, "_verify_pr_merged", lambda pr_url: {"checked": True, "merged": True, "pr": {"url": pr_url}})
+    monkeypatch.setattr(workflow, "_run_command", lambda *args, **kwargs: {"ok": True, "stdout": "", "stderr": "", "returncode": 0})
+
+    payload = workflow.build_cleanup_after_merge_plan(
+        branch=branch,
+        pr_url="https://github.example/pull/195",
+        sync_root=True,
+    )
+
+    assert payload["workflow_gate"] == "ready_for_cleanup"
+    assert payload["merged_into_origin_main"] is False
+    assert payload["squash_merge_verified"] is True
+    assert payload["tree_equivalent_to_origin_main"] is True
 
 
 def test_repo_skill_and_quickstart_are_parseable() -> None:
@@ -230,4 +610,20 @@ def test_repo_skill_and_quickstart_are_parseable() -> None:
 
     quickstart = Path("docs/standards/aistock_issue_workflow_quickstart.md").read_text(encoding="utf-8")
     assert "AIstock Issue Workflow Quickstart" in quickstart
+    assert "按规范修复 BUG-112" in quickstart
+    assert "????" not in quickstart
+    assert "doctor" in quickstart
+    assert "submit-bug" in quickstart
+    assert "start-batch" in quickstart
+    assert "resume" in quickstart
     assert "production_ddl_gate" in quickstart
+
+    claude_command = Path(".claude/commands/fix-aistock-issue.md").read_text(encoding="utf-8")
+    assert "Claude Code" in claude_command
+    assert "submit-bug" in claude_command
+    assert "aistock_issue_workflow.py doctor" in claude_command
+
+    design = Path("docs/architecture/aistock_issue_workflow_opensource_cicd_design_v2_20260525.md").read_text(encoding="utf-8")
+    assert "智能验证平台设计实施方案 v2.0" in design
+    assert "Codex / Claude Code / Cursor" in design
+    assert "????" not in design
