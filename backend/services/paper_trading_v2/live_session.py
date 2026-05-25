@@ -8,7 +8,7 @@ live work and it never switches data sources or algorithms implicitly.
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, time, timedelta
-from typing import Any
+from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 from backend.services.data_refresh_audit import DataRefreshAuditRepository
@@ -89,6 +89,7 @@ class PaperTradingLiveMinuteExecutor:
         refresh_audit: DataRefreshAuditRepository | Any | None = None,
         replay_service: PaperTradingHistoricalReplay | None = None,
         risk_policy_service: StockRiskPolicyService | Any | None = None,
+        minqmt_broker_factory: Callable[..., Any] | None = None,
     ) -> None:
         self.repository = repository or PaperTradingV2Repository()
         self.package_repository = package_repository
@@ -117,6 +118,7 @@ class PaperTradingLiveMinuteExecutor:
             tradability_filter=self.tradability_filter,
             refresh_audit=self.refresh_audit,
             risk_policy_service=self.risk_policy_service,
+            minqmt_broker_factory=minqmt_broker_factory,
         )
         self.replay_service = replay_service or PaperTradingHistoricalReplay(
             repository=self.repository,
@@ -290,12 +292,19 @@ class PaperTradingLiveMinuteExecutor:
         *,
         as_of_time: datetime,
     ) -> PaperSessionProgress:
+        portfolio = self.repository.get_portfolio(session.portfolio_id)
+        if portfolio.broker_backend == "minqmt_sim":
+            return self._tick_minqmt_live_intraday(session, portfolio=portfolio, as_of_time=as_of_time)
         if session.live_data_source != MinuteDataSource.TDX_REALTIME:
             raise SessionConfigError(
-                "live Paper v2 sessions require TDX_REALTIME live_data_source",
-                context={"session_id": session.session_id, "live_data_source": str(session.live_data_source)},
+                "live Paper v2 sessions require the broker-bound live_data_source",
+                context={
+                    "session_id": session.session_id,
+                    "broker_backend": portfolio.broker_backend,
+                    "live_data_source": str(session.live_data_source),
+                    "expected_live_data_source": MinuteDataSource.TDX_REALTIME.value,
+                },
             )
-        portfolio = self.repository.get_portfolio(session.portfolio_id)
         if portfolio.status not in {PortfolioStatus.READY, PortfolioStatus.RUNNING}:
             raise InvalidStateTransitionError(
                 "paper v2 portfolio must be READY/RUNNING before live session tick",
@@ -352,6 +361,186 @@ class PaperTradingLiveMinuteExecutor:
             run = self.repository.get_run_by_portfolio_date(session.portfolio_id, as_of_time.date()) or run
             progress = self._finalize_live_day(session, run, as_of_time=as_of_time)
         return progress
+
+    def _tick_minqmt_live_intraday(
+        self,
+        session: PaperTradingSession,
+        *,
+        portfolio: Any,
+        as_of_time: datetime,
+    ) -> PaperSessionProgress:
+        if session.live_data_source != MinuteDataSource.MINIQMT_REALTIME:
+            raise SessionConfigError(
+                "MiniQMT Paper v2 live sessions require MINIQMT_REALTIME live_data_source",
+                context={
+                    "session_id": session.session_id,
+                    "portfolio_id": session.portfolio_id,
+                    "broker_backend": portfolio.broker_backend,
+                    "live_data_source": str(session.live_data_source),
+                },
+            )
+        if portfolio.status not in {PortfolioStatus.READY, PortfolioStatus.RUNNING}:
+            raise InvalidStateTransitionError(
+                "paper v2 portfolio must be READY/RUNNING before MiniQMT live session tick",
+                context={"portfolio_id": portfolio.portfolio_id, "status": portfolio.status.value},
+            )
+
+        local_as_of = self._local_session_time(as_of_time)
+        trade_date = local_as_of.date()
+        if session.start_date > trade_date:
+            updated = self._save_waiting_next_day(
+                session,
+                trade_date=session.start_date,
+                message="MiniQMT live session is waiting for configured start_date",
+                context={"as_of_date": trade_date.isoformat(), "broker_backend": portfolio.broker_backend},
+            )
+            return self._progress(updated.session_id)
+        try:
+            self.calendar_provider.ensure_trading_day(trade_date)
+        except DataUnavailableError as exc:
+            updated = self._save_waiting_next_day(
+                session,
+                trade_date=trade_date,
+                message="MiniQMT live session is waiting for next trading day",
+                context={**exc.context, "broker_backend": portfolio.broker_backend},
+            )
+            return self._progress(updated.session_id)
+
+        existing = self.repository.get_run_by_portfolio_date(session.portfolio_id, trade_date)
+        if existing is not None:
+            if existing.status == RunStatus.SUCCEEDED:
+                self.repository.save_session_day(
+                    PaperSessionDay(
+                        session_id=session.session_id,
+                        portfolio_id=session.portfolio_id,
+                        trade_date=trade_date,
+                        run_id=existing.run_id,
+                        status=PaperSessionStatus.LIVE_WAITING_NEXT_TRADING_DAY,
+                        phase=PaperSessionPhase.WAITING_NEXT_DAY,
+                        data_source=MinuteDataSource.MINIQMT_REALTIME,
+                    )
+                )
+                self.repository.save_session_event(
+                    session_id=session.session_id,
+                    run_id=existing.run_id,
+                    event_type="MINIQMT_LIVE_DAY_ALREADY_RECONCILED",
+                    message="MiniQMT live day is already broker-reconciled",
+                    context={"run_id": existing.run_id, "broker_backend": portfolio.broker_backend},
+                )
+                self.repository.update_portfolio_status(session.portfolio_id, PortfolioStatus.RUNNING)
+                self.repository.update_session_status(
+                    session.session_id,
+                    status=PaperSessionStatus.LIVE_WAITING_NEXT_TRADING_DAY,
+                    phase=PaperSessionPhase.WAITING_NEXT_DAY,
+                    started_at=session.started_at or datetime.now(UTC),
+                )
+                return self._progress(session.session_id)
+            if existing.status == RunStatus.FAILED:
+                raise InvalidStateTransitionError(
+                    "cannot continue a failed MiniQMT live paper run",
+                    context={
+                        "session_id": session.session_id,
+                        "run_id": existing.run_id,
+                        "trade_date": existing.trade_date.isoformat(),
+                    },
+                )
+            self.repository.save_session_day(
+                PaperSessionDay(
+                    session_id=session.session_id,
+                    portfolio_id=session.portfolio_id,
+                    trade_date=trade_date,
+                    run_id=existing.run_id,
+                    status=PaperSessionStatus.PAUSED if self._manual_tick_only(session) else PaperSessionStatus.LIVE_WAITING_FOR_BAR,
+                    phase=PaperSessionPhase.LIVE_INTRADAY,
+                    data_source=MinuteDataSource.MINIQMT_REALTIME,
+                )
+            )
+            self.repository.save_session_event(
+                session_id=session.session_id,
+                run_id=existing.run_id,
+                event_type="MINIQMT_LIVE_RUN_ALREADY_ACTIVE",
+                message="MiniQMT live tick found an existing active broker-authoritative run; no duplicate orders submitted",
+                context={"trade_date": trade_date.isoformat(), "broker_backend": portfolio.broker_backend},
+            )
+            self.repository.update_portfolio_status(session.portfolio_id, PortfolioStatus.RUNNING)
+            self.repository.update_session_status(
+                session.session_id,
+                status=PaperSessionStatus.PAUSED if self._manual_tick_only(session) else PaperSessionStatus.LIVE_WAITING_FOR_BAR,
+                phase=PaperSessionPhase.LIVE_INTRADAY,
+                started_at=session.started_at or datetime.now(UTC),
+            )
+            return self._progress(session.session_id)
+
+        self.repository.save_session_event(
+            session_id=session.session_id,
+            event_type="MINIQMT_LIVE_TICK_STARTED",
+            message="MiniQMT live tick is starting broker-authoritative order submission",
+            context={
+                "trade_date": trade_date.isoformat(),
+                "as_of_time": local_as_of.isoformat(),
+                "broker_backend": portfolio.broker_backend,
+                "live_data_source": MinuteDataSource.MINIQMT_REALTIME.value,
+            },
+        )
+        if portfolio.status == PortfolioStatus.RUNNING:
+            # The live session keeps the portfolio operational between days;
+            # the strict day runner still expects READY before creating a run.
+            self.repository.update_portfolio_status(session.portfolio_id, PortfolioStatus.READY)
+        result = self.day_helper.run_day(
+            portfolio_id=session.portfolio_id,
+            trade_date=trade_date,
+            runtime_config=session.runtime_config,
+        )
+        self.repository.save_session_day(
+            PaperSessionDay(
+                session_id=session.session_id,
+                portfolio_id=session.portfolio_id,
+                trade_date=trade_date,
+                run_id=result.run.run_id,
+                status=PaperSessionStatus.LIVE_WAITING_NEXT_TRADING_DAY,
+                phase=PaperSessionPhase.WAITING_NEXT_DAY,
+                data_source=MinuteDataSource.MINIQMT_REALTIME,
+            )
+        )
+        self.repository.save_intraday_snapshot(
+            IntradaySnapshot(
+                session_id=session.session_id,
+                run_id=result.run.run_id,
+                portfolio_id=session.portfolio_id,
+                trade_date=trade_date,
+                snapshot_time=result.account_snapshot.snapshot_time,
+                cash=result.account_snapshot.cash,
+                market_value=result.account_snapshot.market_value,
+                nav=result.account_snapshot.nav,
+                positions=[item.model_dump(mode="json") for item in result.positions],
+                source=MinuteDataSource.MINIQMT_REALTIME.value,
+            )
+        )
+        self.repository.save_session_event(
+            session_id=session.session_id,
+            run_id=result.run.run_id,
+            event_type="MINIQMT_LIVE_TICK_RECONCILED",
+            message="MiniQMT live tick submitted orders and persisted broker-authoritative snapshot without TDX matching",
+            context={
+                "trade_date": trade_date.isoformat(),
+                "run_id": result.run.run_id,
+                "order_count": len(result.orders),
+                "position_count": len(result.positions),
+                "cash": result.account_snapshot.cash,
+                "nav": result.account_snapshot.nav,
+                "broker_backend": portfolio.broker_backend,
+                "authority_source": "MINIQMT_QUERY",
+                "live_data_source": MinuteDataSource.MINIQMT_REALTIME.value,
+            },
+        )
+        self.repository.update_portfolio_status(session.portfolio_id, PortfolioStatus.RUNNING)
+        self.repository.update_session_status(
+            session.session_id,
+            status=PaperSessionStatus.PAUSED if self._manual_tick_only(session) else PaperSessionStatus.LIVE_WAITING_NEXT_TRADING_DAY,
+            phase=PaperSessionPhase.WAITING_NEXT_DAY,
+            started_at=session.started_at or datetime.now(UTC),
+        )
+        return self._progress(session.session_id)
 
     def _prepare_live_run(
         self,

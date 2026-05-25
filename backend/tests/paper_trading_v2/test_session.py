@@ -430,15 +430,33 @@ def test_minqmt_sim_live_session_creation_is_not_time_window_blocked() -> None:
         enforce_non_trading_window=True,
     )
 
-    with pytest.raises(SessionSourceUnsupportedError, match="live source"):
-        service.create_session(
+    session = service.create_session(
+        portfolio_id=portfolio.portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.MINIQMT_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+        as_of_time=datetime(2024, 1, 2, 13, 5),
+    )
+
+    assert session.live_data_source == MinuteDataSource.MINIQMT_REALTIME
+    assert session.status == PaperSessionStatus.CREATED
+
+
+def test_local_sim_live_session_rejects_minqmt_source() -> None:
+    _package_repo, paper_repo, portfolio = make_portfolio(data_source=MinuteDataSource.TDX_REALTIME)
+
+    with pytest.raises(SessionSourceUnsupportedError, match="broker-bound live source") as exc_info:
+        PaperTradingSessionService(repository=paper_repo).create_session(
             portfolio_id=portfolio.portfolio_id,
             mode=PaperSessionMode.LIVE_ONLY,
             start_date=date(2024, 1, 2),
             live_data_source=MinuteDataSource.MINIQMT_REALTIME,
             runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
-            as_of_time=datetime(2024, 1, 2, 13, 5),
         )
+
+    assert exc_info.value.context["broker_backend"] == "local_sim"
+    assert exc_info.value.context["live_data_source"] == "MINIQMT_REALTIME"
 
 
 def test_switch_session_mode_stops_source_and_creates_target_after_close() -> None:
@@ -544,6 +562,20 @@ def test_session_capabilities_expose_only_real_startable_modes() -> None:
     assert capabilities["modes"]["REPLAY_ONLY"]["can_start"] is True
     assert capabilities["modes"]["LIVE_ONLY"]["can_start"] is True
     assert capabilities["modes"]["CATCHUP_THEN_LIVE"]["can_start"] is True
+
+
+def test_session_capabilities_expose_minqmt_live_source() -> None:
+    _package_repo, paper_repo, portfolio = make_portfolio(
+        data_source=MinuteDataSource.MINIQMT_REALTIME,
+        broker_backend="minqmt_sim",
+    )
+
+    capabilities = PaperTradingSessionService(repository=paper_repo).session_capabilities(portfolio.portfolio_id)
+
+    assert capabilities["broker_backend"] == "minqmt_sim"
+    assert capabilities["portfolio_data_source"] == "MINIQMT_REALTIME"
+    assert capabilities["modes"]["LIVE_ONLY"]["can_start"] is True
+    assert capabilities["modes"]["REPLAY_ONLY"]["can_start"] is False
 
 
 def test_v2_scheduler_ticks_created_sessions_without_fake_success() -> None:
