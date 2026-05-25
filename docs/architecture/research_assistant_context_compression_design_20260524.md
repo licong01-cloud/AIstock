@@ -2,7 +2,7 @@
 
 - **版本**: v1.2
 - **日期**: 2026-05-24
-- **状态**: 已并入统一 Runtime Governance 设计；本文继续作为上下文压缩子方案
+- **状态**: 已并入统一 Runtime Governance 设计；本文继续作为上下文压缩子方案；2026-05-26 补充 P0 类人对话治理一致性要求
 - **当前基线**: 版本 B — Token 感知滑动窗口（commit `325fd75`）；后续必须迁移为配置驱动，不得保留运行参数硬编码
 - **参考**: Claude Code AutoCompact 算法、LCM (Lossless Context Management) DAG 方案
 - **关联**: BUG-105 (Research Assistant Chat Context Loss)
@@ -25,6 +25,7 @@ Research Assistant 是多轮对话系统，用户通过对话完成 QE 实验创
 3. **可审计**：原始消息始终在 DB 中，压缩摘要可通过 API 回溯
 4. **模型上下文能力匹配**：读取 active model profile 的上下文窗口，在达到配置阈值前触发压缩
 5. **不截断单条消息**：每条消息完整保留或完整压缩，不做 `content[:500]` 式的静默截断
+6. **不改变用户意图类型**：压缩必须保留 capability inquiry、concept explanation、status query、bug diagnosis、explicit task request 等意图事实，不能把能力询问压缩成任务启动。
 
 ### 2.1 配置化硬约束
 
@@ -35,6 +36,7 @@ Research Assistant 是多轮对话系统，用户通过对话完成 QE 实验创
 3. 压缩提示词、恢复提示词、key-fact 提取提示词必须来自 active Prompt Pack，不得以内联字符串写入 Python。
 4. 当前文档中出现的固定数值只代表已实现基线或参考方案示例，不是未来实现允许硬编码的限制。
 5. 未来代码验收必须包含硬编码扫描，阻断 `_PRIOR_MESSAGES_TOKEN_BUDGET`、固定 `limit=...`、固定 `temperature=...`、固定 `max_tokens=...`、固定 fresh tail 轮数等模式。
+6. 压缩摘要必须保留用户偏好的交互边界，例如直接回答、少展示过程、过程信息折叠、不得默认固定 loop 数。
 
 ## 3. 三阶段策略
 
@@ -280,8 +282,9 @@ const newConversation = useCallback(() => {
 <summary>
   1. 用户主要请求与意图
      - 记录用户所有明确的实验目标、分析需求、配置要求
+     - 保留意图类型：能力询问、概念解释、状态查询、bug 诊断、issue intake、草案请求、执行请求或普通对话
   2. 关键技术概念与参数
-     - 涉及的 QE 参数（loop 数、股票池、时间窗）
+     - 涉及的 QE 参数（用户明确给出的 loop/迭代数量、股票池、时间窗）
      - 涉及的因子名称、模型配置、风险等级
   3. 决策与确认记录
      - 用户明确确认的选项和参数值
@@ -747,12 +750,12 @@ context = [相关 DAG 摘要节点] + [fresh_tail 原始消息]
 | Claude Code / LCM 特性 | RA 是否采用 | 理由 |
 |------------------------|-----------|------|
 | 5 层压缩流水线 | 不需要 | RA 对话量远小于 Codex REPL，1-2 层足够 |
-| 9 段结构化摘要 | ✅ Phase 2 | 核心参考，RA 定制字段（实验参数/确认决策/风险边界） |
+| 9 段结构化摘要 | ✅ Phase 2 | 核心参考，RA 定制字段（意图类型/实验参数/确认决策/风险边界/交互偏好） |
 | XML 输出格式 | ✅ Phase 2 | Claude 模型对 XML 更稳定 |
 | Analysis-First | ✅ Phase 2 | `<analysis>` 剥离，提升摘要质量 |
 | NO_TOOLS_PREAMBLE | ✅ Phase 2 | 压缩子调用由 worker policy 强制禁用工具，prompt 只作为说明 |
 | Fresh Tail 保护 | ✅ Phase 2 | Fresh Tail 单位、轮数、消息数和预算占比全部由 runtime config 控制 |
-| 压缩后 Continuation Prompt | ✅ Phase 2 | 恢复提示词进入 Prompt Pack，不在 Python 中硬编码 |
+| 压缩后 Continuation Prompt | ✅ Phase 2 | 恢复提示词进入 Prompt Pack，不在 Python 中硬编码；恢复后不得把能力问答漂移为 workflow |
 | Tool Result Budget | 远期可选 | 是否启用、大小阈值和 artifact 策略由 runtime config 控制 |
 | Snip Compact | 被 Phase 1 替代 | Phase 1 的 token 滑动窗口实现等效功能 |
 | Microcompact(Time) | 远期可选 | 空闲时间阈值如需引入必须来自 runtime config |
