@@ -47,7 +47,7 @@
 
 ```powershell
 python -m pytest backend/tests/research_assistant -q
-# 25 passed in 13.55s
+# 25 passed in 12.86s
 
 python -m compileall backend/services/research_assistant backend/routers/research_assistant.py backend/db/init_research_assistant_schema_20260521.py
 # passed

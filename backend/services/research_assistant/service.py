@@ -16,8 +16,6 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-logger = logging.getLogger("aistock.research_assistant.service")
-
 import jsonschema
 
 from .context_budget import ContextBudgetPlan, ContextBudgetPlanner
@@ -48,10 +46,17 @@ from .models import (
     sha256_json,
     utc_now,
 )
-from .prompt_pack import DEFAULT_PROMPT_PACK_PATH, FORBIDDEN_UNDEVELOPED_CAPABILITY_PHRASES, PromptPackSnapshot, load_prompt_pack
+from .prompt_pack import (
+    DEFAULT_PROMPT_PACK_PATH,
+    FORBIDDEN_UNDEVELOPED_CAPABILITY_PHRASES as FORBIDDEN_UNDEVELOPED_CAPABILITY_PHRASES,
+    PromptPackSnapshot,
+    load_prompt_pack,
+)
 from .repository import DatabaseResearchAssistantRepository
 from .runtime_config import DEFAULT_ENVIRONMENT, RUNTIME_CONFIG_KEY, RuntimeConfigSnapshot, load_runtime_config
 
+
+logger = logging.getLogger("aistock.research_assistant.service")
 
 ASSISTANT_APPROVAL_CONFIRM = "APPROVE_RESEARCH_ASSISTANT_ACTION"
 PROMPT_CACHE_DIR = Path(os.getenv("AISTOCK_ASSISTANT_PROMPT_CACHE_DIR", "var/research_assistant/prompt_cache"))
