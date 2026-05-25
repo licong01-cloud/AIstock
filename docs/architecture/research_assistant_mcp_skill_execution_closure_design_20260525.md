@@ -1,16 +1,71 @@
 ﻿# Research Assistant MCP/Skill 执行闭环补充设计
 
 > 日期: 2026-05-25
-> 状态: Implementation design, pending code development
-> 适用范围: Research Assistant Phase 1 修复版中尚未完成的 MCP/Skill 真实执行闭环
+> 状态: Implementation design, pending code development；2026-05-26 补充 P0 类人对话治理前置整改
+> 适用范围: Research Assistant 下一阶段研发；先完成类人对话治理和默认示例清理，再补齐 MCP/Skill 真实执行闭环
 > 设计来源:
 > - `docs/architecture/aistock_research_agent_console_design_20260520.md`
 > - `docs/architecture/research_assistant_prompt_context_runtime_governance_design_20260524.md`
 > - `tests/aistock_validation/history/research_assistant/20260525_l3_prompt_context_runtime_governance_validation.md`
 
+## 0. P0 前置整改：类人对话治理与默认示例清理
+
+本节是下一阶段开发的最高优先级，必须排在 Capability Registry、Action Proposal、MCP/Skill Execution Gateway 和 QE workflow 之前。后续任何方案、实现、测试或 UI 文案如果与本节冲突，均以本节为准并必须更新。
+
+### 0.1 整改目标
+
+1. **直接回答用户真实问题**：能力询问、概念解释、状态查询应先给结论；不得输出解释用户意图分类或声明“不执行动作”的元话术。
+2. **先理解意图，再选择流程**：模型或意图层必须区分 `capability_inquiry`、`concept_explanation`、`status_query`、`bug_diagnosis_request`、`issue_intake_request`、`experiment_draft_request`、`experiment_validation_request`、`experiment_execution_request`、`ambiguous_request`、`general_chat`。
+3. **关键词只用于候选召回，不能启动 workflow**：`QE`、`实验`、`回测`、`bug`、`issue`、`MCP` 等词只能帮助检索能力目录或上下文，不能单独触发草案、确认卡、preflight、materialize、run 或 issue 创建流程。
+4. **彻底清理默认 `10 loop` 污染**：active prompt、runtime config、backend card、frontend 示例/placeholder、测试夹具和文档中的执行型示例不得把 `10 loop` 当作默认任务；只有用户明确提出时才保留该参数。
+5. **Bug 诊断是一等能力**：用户问“能否诊断 bug”或请求诊断时，应回答诊断能力、所需证据和可用入口；不得被 QE 草案流程覆盖。
+6. **主回答保持简洁**：普通对话只显示必要结论和最少澄清；计划卡、确认卡、上下文健康、trace、候选能力和过程细节默认折叠到 side panel/debug drawer，不能拼接进主气泡。
+7. **用户可见话术全部治理化**：能力说明、澄清问题、计划卡标题、确认文案、欢迎语、placeholder、示例问题和 workflow renderer 模板必须来自 Prompt Pack、runtime config、capability catalog、UI copy config 或 DB activation；不得硬编码在 Python/TSX 中。
+8. **JARVIS-like 是交互风格，不是角色扮演**：目标是冷静、简洁、上下文感知、主动但克制、风险时一句话提醒、需要授权时清楚等待；不得加入电影化口癖、夸张自述或无关过程。
+
+### 0.2 已确认的清理目标
+
+下一阶段实现必须优先扫描并移除以下 active/runtime 可见默认示例，替换为参数化、非默认化或按用户输入生成的内容：
+
+| 位置 | 当前问题 | 整改要求 |
+| --- | --- | --- |
+| `configs/research_assistant/runtime_context.yaml` | 示例能力文案包含默认 `QE 10 loop` | 改为通用 QE 实验草案示例，loop 数仅来自用户输入 |
+| `backend/services/research_assistant/service.py` | `_build_human_cards()` 等路径含固定 QE loop 草案和确认问题 | 删除固定 loop 数；按 intent 和 capability schema 动态生成 |
+| `prompt_packs/research_assistant/main/nodes/domain.qe_experiment.md` | domain 示例把特定 loop 任务作为触发样例 | 改为能力说明与条件化模板，不默认启动流程 |
+| `frontend/src/app/research-assistant/chat/page.tsx` | chat 示例和 placeholder 暗示固定 QE loop 任务 | 改为能力问答、诊断、草案等中性示例 |
+| `frontend/src/app/research-assistant/workbench/page.tsx` | workbench mock/dry-run 标题含固定 QE loop draft | 改为 generic draft 或从 proposal.title 读取 |
+
+### 0.3 与执行闭环的关系
+
+执行闭环仍然是下一阶段目标，但入口必须从“用户明确提出任务请求”开始，而不是从关键词匹配开始：
+
+```text
+User Message
+  -> Intent Understanding
+  -> Direct Answer or Clarification
+  -> Capability Candidate Recall
+  -> Action Proposal only for explicit task requests
+  -> Confirmation / Preflight / Execute
+```
+
+因此，`Conversation -> Planner -> Action Proposal -> Confirmation -> Preflight -> MCP/Skill -> Trace -> Human Report` 只适用于 `experiment_draft_request`、`experiment_validation_request`、`experiment_execution_request`、`issue_intake_request` 等明确任务请求；不适用于能力询问、概念解释、状态查询和普通对话。
+
+### 0.4 P0 验收用例
+
+| 编号 | 验收项 | 标准 |
+| --- | --- | --- |
+| E0A | 能力询问直答 | 用户问“能否生成 QE 实验和诊断 bug”时，回答能力范围和所需输入；不输出意图分类元话术，不生成计划卡 |
+| E0B | Bug 诊断直答 | 用户问 bug 诊断能力时必须覆盖诊断流程、可用证据和边界，不被 QE 草案覆盖 |
+| E0C | 关键词不触发 workflow | 含 `QE`、`实验`、`bug`、`issue` 的概念/能力/状态问题不得创建 Action Proposal、preflight 或确认卡 |
+| E0D | 默认 loop 清零 | active prompt、runtime config、backend、frontend 用户可见文案和测试不再包含默认 `10 loop` 或 `10 个 loop` 任务 |
+| E0E | 显式任务才规划 | 只有用户明确要求“帮我设计/创建/运行/提交”时，才进入草案、确认或执行链路 |
+| E0F | 主回答瘦身 | 主气泡不拼接过程卡；计划、trace、候选能力、上下文健康默认折叠或在 side panel 展示 |
+| E0G | 用户可见文案外置 | 能力说明、确认问题、计划卡标题、placeholder、示例问题不得硬编码在 `.py` 或 `.tsx` 业务逻辑中 |
+| E0H | 风格一致性 | 回答保持类人助手风格：少说过程、多给结论；风险和授权点简短明确 |
+
 ## 1. 目的与边界
 
-本设计不是新的研发方向，而是补齐既有 Research Assistant 设计中的执行闭环部分。
+本设计不是新的研发方向，而是在 P0 类人对话治理通过后，补齐既有 Research Assistant 设计中的执行闭环部分。
 
 原设计已经定义 Phase 1 必须实现的主链路:
 
@@ -20,7 +75,7 @@ Conversation -> Planner -> Action Proposal -> Confirmation -> Preflight -> MCP/S
 
 当前 PR `#198` 已完成 Prompt Pack、Runtime Config、上下文预算、自动压缩、Reactive compact、key facts、MCP/Skill 基础目录、preflight、approval、trace 和 dry-run 基础能力；但尚未实现真实 MCP/Skill 执行和端到端任务闭环。
 
-本设计补齐以下内容:
+在 P0 整改验收通过后，本设计补齐以下内容:
 
 1. Capability Registry 与 MCP/Skill 能力同步。
 2. Action Proposal、Confirmation、Approval 与 plan digest 绑定。
@@ -59,16 +114,18 @@ Conversation -> Planner -> Action Proposal -> Confirmation -> Preflight -> MCP/S
 
 ## 4. 设计原则
 
-1. **Capability first**: 助手只能从已同步、已批准、可审计的 Capability Registry 中选择能力。
-2. **MCP/API first**: 所有业务动作通过 MCP/API/Skill gateway，不通过 UI 点击或隐式脚本。
-3. **Proposal before execution**: 任何有副作用动作必须先生成 Action Proposal。
-4. **Confirmation before preflight/execute**: 未确认不得进入有副作用 preflight 或 execute。
-5. **Preflight before execute**: preflight 失败不得执行。
-6. **Approval for high risk**: 高风险和 production-sensitive 必须绑定 approval、plan digest、config/version 和确认文本。
-7. **Trace everything**: plan、preflight、approval、execute、result、failure 都必须可回放。
-8. **Fail fast, no silent fallback**: 失败必须结构化返回，不得把失败伪装成成功。
-9. **Runtime configurable**: retry、timeout、page size、catalog sync limit、risk policy 等可调参数进入 runtime config 或 DB activation。
-10. **Original facts preserved**: 用户确认、参数、审批、执行结果和错误是结构化事实源，不依赖自然语言摘要。
+1. **Dialogue first**: 先回答用户真实问题；能力问答、概念解释和状态查询不进入执行链路。
+2. **Intent before workflow**: 先分类意图，再召回 capability；关键词不得单独触发 workflow。
+3. **Capability first**: 助手只能从已同步、已批准、可审计的 Capability Registry 中选择能力。
+4. **MCP/API first**: 所有业务动作通过 MCP/API/Skill gateway，不通过 UI 点击或隐式脚本。
+5. **Proposal before execution**: 任何有副作用动作必须先生成 Action Proposal。
+6. **Confirmation before preflight/execute**: 未确认不得进入有副作用 preflight 或 execute。
+7. **Preflight before execute**: preflight 失败不得执行。
+8. **Approval for high risk**: 高风险和 production-sensitive 必须绑定 approval、plan digest、config/version 和确认文本。
+9. **Trace everything**: plan、preflight、approval、execute、result、failure 都必须可回放。
+10. **Fail fast, no silent fallback**: 失败必须结构化返回，不得把失败伪装成成功。
+11. **Runtime configurable**: retry、timeout、page size、catalog sync limit、risk policy、用户可见 copy 和 UI 展示开关等可调项进入 runtime config、Prompt Pack、UI copy config 或 DB activation。
+12. **Original facts preserved**: 用户确认、参数、审批、执行结果和错误是结构化事实源，不依赖自然语言摘要。
 
 ## 5. 数据模型补充
 
@@ -240,24 +297,23 @@ Planner 不直接执行工具，只输出结构化 Action Proposal:
 
 ```json
 {
-  "capability_key": "qe.create_experiment",
+  "capability_key": "qe.create_experiment_draft",
   "proposal_type": "workflow_pack",
-  "title": "创建 QE 10 loop 实验草案",
-  "risk_level": "high",
-  "side_effect_level": "high_cost_compute",
+  "title": "创建 QE 实验草案",
+  "risk_level": "medium",
+  "side_effect_level": "draft_only",
   "input_json": {
-    "loop_count": 10,
-    "stock_pool": "pending_confirmation",
-    "backtest_window": "pending_confirmation",
+    "intent_type": "experiment_draft_request",
+    "loop_count": "unspecified_until_user_provides",
+    "stock_pool": "pending_if_required",
+    "backtest_window": "pending_if_required",
     "materialize": false,
     "run": false
   },
   "required_confirmations": [
-    "CONFIRM_QE_DRAFT",
-    "CONFIRM_QE_MATERIALIZE",
-    "CONFIRM_QE_RUN"
+    "CONFIRM_QE_DRAFT_PARAMETERS"
   ],
-  "next_step": "ask_confirmation"
+  "next_step": "ask_only_missing_required_inputs"
 }
 ```
 
@@ -386,7 +442,7 @@ execution:
 
 ## 10. Workflow Pack: `qe.create_experiment`
 
-`qe.create_experiment` 是 Phase 1 修复版强制验收场景。实现顺序必须与原设计一致。
+`qe.create_experiment` 是 Phase 1 修复版强制验收场景，但必须在 P0 类人对话治理通过后实施。实现顺序必须与原设计一致：先确认用户明确要求创建、校验、物化或运行实验，再进入 workflow。
 
 ### 10.1 Workflow steps
 
@@ -395,7 +451,7 @@ execution:
 | 1 | 理解实验目标和边界 | planner | medium | 无副作用 |
 | 2 | 读取 QE MCP/Skill 目录 | capability lookup | read_only | trace |
 | 3 | 加载相关 Memory/规则 | context pack | read_only | trace |
-| 4 | 询问 loop、窗口、股票池、模型资源 | chat confirmation | medium | 用户确认 |
+| 4 | 询问缺失的窗口、股票池、模型资源和用户明确需要的迭代数量 | chat confirmation | medium | 用户确认；不得默认固定 loop 数 |
 | 5 | 生成实验草案 | workflow_pack | draft_only | C1 |
 | 6 | 创建/校验 template | mcp_tool | write_nonprod | C2 approval |
 | 7 | 展示 validate diff/summary | renderer | read_only | trace |
@@ -405,6 +461,8 @@ execution:
 
 ### 10.2 强制 guard
 
+- 能力询问、概念解释、状态查询不得进入本 workflow。
+- 不得因 QE、实验、回测、bug 等关键词自动进入本 workflow。
 - 未确认不得 materialize。
 - 未二次确认不得 run。
 - 股票池、回测窗口、成本、节点健康、模板 diff 必须展示。
@@ -511,6 +569,7 @@ ui_execution:
 
 | 编号 | 验收项 | 标准 |
 | --- | --- | --- |
+| E0A-E0H | P0 类人对话治理 | 先通过本设计第 0.4 节全部验收；否则不得进入执行闭环开发验收 |
 | E1 | Capability sync | 从 approved MCP/Skill 来源同步 catalog；disabled/blocked 不进入可选列表 |
 | E2 | Capability schema | 每个 capability 有 schema、risk、side_effect、checksum、中文说明 |
 | E3 | Planner proposal | 有副作用任务只生成 Action Proposal，不直接 execute |
@@ -531,6 +590,14 @@ ui_execution:
 | E18 | Design compliance | 实现报告逐条映射本矩阵到代码、测试、API/UI/trace 证据 |
 
 ## 15. 实施阶段
+
+### Phase 0: P0 类人对话治理与默认示例清理
+
+- 实现 intent understanding 层，明确区分能力问答、概念解释、状态查询、bug 诊断、issue intake、实验草案、实验校验和实验执行。
+- 清理 active prompt、runtime config、backend card、frontend 示例和测试中的默认 `10 loop` / `10 个 loop` 执行型内容。
+- 将用户可见能力说明、澄清问题、计划卡标题、placeholder 和示例问题迁移到 Prompt Pack、runtime config、capability catalog、UI copy config 或 DB activation。
+- 修改 chat 主气泡渲染，默认不拼接 plan/clarification/proposal/context health；这些内容进入折叠面板或 side panel。
+- 验证 E0A-E0H，未通过前不得启动 Phase A-F 的完成验收。
 
 ### Phase A: Capability Registry 与 sync dry-run
 
@@ -601,4 +668,4 @@ PR `#198` 提供本设计的前置能力:
 
 下一阶段方向与既有研发设计一致，但必须表述为“Phase 1 修复版中尚未完成的 MCP/Skill 真实执行闭环”，而不是新路线。
 
-开发前应以本设计的 E1-E18 验证矩阵作为准入和验收标准。完成 QE 创建实验端到端 workflow 前，Research Assistant 不应宣称具备完整任务执行能力或可调用所有 MCP。
+开发前应以本设计的 E0A-E0H 与 E1-E18 验证矩阵作为准入和验收标准。P0 类人对话治理未通过时，不得继续宣称或验收 MCP/Skill 执行闭环；完成 QE 创建实验端到端 workflow 前，Research Assistant 不应宣称具备完整任务执行能力或可调用所有 MCP。
