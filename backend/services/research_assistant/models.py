@@ -386,7 +386,7 @@ class ContextPackBuildRequest(StrictModel):
     agent_id: str | None = None
     model_profile: str | None = None
     namespace: str = "aistock"
-    token_budget: int | None = Field(None, ge=1, le=1000000)
+    token_budget: int | None = Field(None, ge=1)
     include_memory_types: list[str] = Field(default_factory=lambda: ["core", "procedural", "architecture", "task_state", "experiment", "roadmap"])
 
 

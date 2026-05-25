@@ -23,7 +23,7 @@ from backend.services.research_assistant.models import (
     TraceEventCreate,
     WorkbenchDryRunExecuteRequest,
 )
-from backend.services.research_assistant.repository import DatabaseResearchAssistantRepository, InMemoryResearchAssistantRepository
+from backend.services.research_assistant.repository import DatabaseResearchAssistantRepository, InMemoryResearchAssistantRepository, TABLES
 from backend.services.research_assistant.service import (
     ASSISTANT_APPROVAL_CONFIRM,
     FORBIDDEN_UNDEVELOPED_CAPABILITY_PHRASES,
@@ -404,6 +404,54 @@ def test_bug117_prompt_and_health_do_not_expose_undeveloped_capability_bans() ->
     assert "code_write" not in serialized
     assert health["implemented_capabilities"]["mcp_api_preflight"] is True
     assert health["governance_boundaries"]["formal_github_issue_requires_approval"] is True
+
+
+def test_runtime_config_declares_api_list_limit_for_each_catalog() -> None:
+    svc = _service()
+
+    limits = svc.active_runtime_config()["query_limits"]
+    missing = sorted(f"api_list_{kind}" for kind in TABLES if f"api_list_{kind}" not in limits)
+
+    assert missing == []
+
+
+def test_runtime_config_controls_api_page_defaults_and_max() -> None:
+    svc = _service()
+    activation = svc.active_runtime_config_activation()
+    config = dict(activation["config_json"])
+    config["query_limits"] = dict(config["query_limits"])
+    config["query_limits"]["api_list_skills"] = 2
+    config["query_limits"]["api_list_max_page_size"] = 3
+    config["query_limits"]["router_mcp_servers"] = 1
+    svc.repository.update_record("runtime_config_activations", activation["activation_id"], {"config_json": config})
+
+    skills = svc.list_records("skills")
+    assert skills["page_size"] == 2
+    assert len(skills["items"]) == 2
+
+    mcp_servers = svc.list_records("mcp_servers", limit_key="router_mcp_servers")
+    assert mcp_servers["page_size"] == 1
+
+    with pytest.raises(ValueError, match="api_list_max_page_size"):
+        svc.list_records("skills", limit=4)
+    with pytest.raises(ValueError, match="limit must be positive"):
+        svc.list_records("skills", limit=0)
+
+
+def test_context_pack_token_budget_max_is_runtime_config_driven() -> None:
+    svc = _service()
+    activation = svc.active_runtime_config_activation()
+    config = dict(activation["config_json"])
+    config["query_limits"] = dict(config["query_limits"])
+    config["query_limits"]["context_pack_max_token_budget"] = 9
+    svc.repository.update_record("runtime_config_activations", activation["activation_id"], {"config_json": config})
+    task = svc.create_task(TaskCreate(title="context pack budget gate"))
+
+    with pytest.raises(ValueError, match="context_pack_max_token_budget"):
+        svc.build_context_pack(ContextPackBuildRequest(task_id=task["task_id"], token_budget=10))
+
+    pack = svc.build_context_pack(ContextPackBuildRequest(task_id=task["task_id"], token_budget=9))
+    assert pack["token_budget"] == 9
 
 
 def test_chat_turn_uses_llm_builds_cards_and_blocks_execution() -> None:

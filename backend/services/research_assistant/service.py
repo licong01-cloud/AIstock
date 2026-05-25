@@ -728,8 +728,27 @@ class ResearchAssistantService:
         )
         seeded["runtime_config_activations"] += 1
 
-    def list_records(self, kind: str, *, filters: dict[str, Any] | None = None, search: str | None = None, limit: int = 50, offset: int = 0) -> dict[str, Any]:
-        return self.repository.list_records(kind, filters=filters, search=search, limit=limit, offset=offset)
+    def list_records(
+        self,
+        kind: str,
+        *,
+        filters: dict[str, Any] | None = None,
+        search: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+        limit_key: str | None = None,
+    ) -> dict[str, Any]:
+        resolved_limit = int(limit) if limit is not None else self.configured_limit(limit_key or self._default_query_limit_key(kind))
+        if resolved_limit < 1:
+            raise ValueError("limit must be positive")
+        max_limit = self.configured_limit("api_list_max_page_size")
+        if resolved_limit > max_limit:
+            raise ValueError(f"limit exceeds configured api_list_max_page_size: {max_limit}")
+        return self.repository.list_records(kind, filters=filters, search=search, limit=resolved_limit, offset=offset)
+
+    @staticmethod
+    def _default_query_limit_key(kind: str) -> str:
+        return f"api_list_{kind}"
 
     def create_conversation(self, request: ConversationCreate | dict[str, Any]) -> dict[str, Any]:
         data = request if isinstance(request, ConversationCreate) else ConversationCreate(**request)
@@ -1656,7 +1675,10 @@ class ResearchAssistantService:
         if data.task_id:
             temp_page = self.repository.list_records("temp_memories", filters={"task_id": data.task_id}, limit=self.configured_limit("temp_memories_context_pack"))
             temp_refs = [item["temp_memory_id"] for item in temp_page["items"]]
+        max_context_budget = self.configured_limit("context_pack_max_token_budget")
         token_budget = data.token_budget or self.configured_limit("default_context_pack_token_budget")
+        if token_budget > max_context_budget:
+            raise ValueError(f"token_budget exceeds configured context_pack_max_token_budget: {max_context_budget}")
         pack_json = {
             "mandatory_rules": [
                 "Memory Ledger 是事实源，RAG/向量只能辅助召回。",

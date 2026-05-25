@@ -9,6 +9,7 @@ from typing import Any
 import yaml
 
 from .models import sha256_json
+from .repository import TABLES
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_RUNTIME_CONFIG_PATH = REPO_ROOT / "configs" / "research_assistant" / "runtime_context.yaml"
@@ -116,7 +117,10 @@ def _validate_runtime_config(payload: dict[str, Any], path: Path) -> None:
         "router_model_profiles",
         "router_routing_policies",
         "default_context_pack_token_budget",
+        "context_pack_max_token_budget",
+        "api_list_max_page_size",
     }
+    required_limits.update(f"api_list_{kind}" for kind in TABLES)
     missing_limits = sorted(required_limits - set(query_limits))
     if missing_limits:
         raise ValueError(f"runtime config {path} missing query_limits: {missing_limits}")

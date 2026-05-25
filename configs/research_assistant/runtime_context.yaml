@@ -144,3 +144,43 @@ query_limits:
   router_model_profiles: 200
   router_routing_policies: 200
   default_context_pack_token_budget: 16000
+  context_pack_max_token_budget: 1000000
+  api_list_max_page_size: 500
+  api_list_tasks: 50
+  api_list_task_events: 200
+  api_list_conversations: 50
+  api_list_conversation_messages: 200
+  api_list_memory_items: 50
+  api_list_memory_access_log: 50
+  api_list_context_packs: 50
+  api_list_entities: 50
+  api_list_relations: 50
+  api_list_evolution_paths: 50
+  api_list_skills: 100
+  api_list_skill_events: 50
+  api_list_mcp_servers: 200
+  api_list_mcp_tools: 100
+  api_list_mcp_tool_events: 50
+  api_list_approvals: 50
+  api_list_issue_candidates: 50
+  api_list_external_sessions: 50
+  api_list_external_events: 50
+  api_list_model_profiles: 200
+  api_list_routing_policies: 200
+  api_list_prompt_nodes: 100
+  api_list_prompt_sources: 50
+  api_list_prompt_node_versions: 50
+  api_list_prompt_activations: 50
+  api_list_prompt_activation_events: 50
+  api_list_prompt_bundles: 50
+  api_list_runtime_config_sources: 50
+  api_list_runtime_config_activations: 50
+  api_list_context_segments: 50
+  api_list_context_key_facts: 50
+  api_list_context_assembly_traces: 50
+  api_list_temp_memories: 50
+  api_list_notifications: 50
+  api_list_reports: 50
+  api_list_agenda_items: 50
+  api_list_validation_discovery_reports: 50
+  api_list_trace_events: 50

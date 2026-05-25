@@ -312,9 +312,9 @@ class DatabaseResearchAssistantRepository:
             "generated_at": _now_iso(),
         }
 
-    def list_records(self, kind: str, *, filters: Mapping[str, Any] | None = None, search: str | None = None, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+    def list_records(self, kind: str, *, filters: Mapping[str, Any] | None = None, search: str | None = None, limit: int, offset: int = 0) -> dict[str, Any]:
         meta = self._meta(kind)
-        limit = max(1, min(int(limit or 50), 500))
+        limit = max(1, int(limit))
         offset = max(0, int(offset or 0))
         where, params = self._where(meta, filters or {}, search)
         table = meta["table"]
@@ -463,7 +463,7 @@ class InMemoryResearchAssistantRepository:
     def health(self) -> dict[str, Any]:
         return {"schema_version": "aistock_research_assistant_repository_health_v1", "status": "ok", "table_count": len(TABLES), "present_count": len(TABLES), "missing_tables": [], "generated_at": _now_iso(), "mode": "in_memory_test_only"}
 
-    def list_records(self, kind: str, *, filters: Mapping[str, Any] | None = None, search: str | None = None, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+    def list_records(self, kind: str, *, filters: Mapping[str, Any] | None = None, search: str | None = None, limit: int, offset: int = 0) -> dict[str, Any]:
         meta = TABLES[kind]
         filters = filters or {}
         items = list(self.data[kind].values())
@@ -479,7 +479,7 @@ class InMemoryResearchAssistantRepository:
             return str(item.get("updated_at") or item.get("created_at") or item.get("retrieved_at") or item.get("run_date") or "")
 
         items.sort(key=_sort_key, reverse=True)
-        limit = max(1, min(int(limit or 50), 500))
+        limit = max(1, int(limit))
         offset = max(0, int(offset or 0))
         return {"items": copy.deepcopy(items[offset:offset + limit]), "total": len(items), "page": offset // limit + 1, "page_size": limit, "has_more": offset + limit < len(items)}
 
