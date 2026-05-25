@@ -20,6 +20,7 @@ from backend.services.selection_center.risk_policy import RiskDecision, StockRis
 from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELECTION_SCOPE, AUTHORITATIVE_SELECTION_SOURCE_TYPE
+from backend.services.strategy_package.model_asset_resolver import DEFAULT_MODEL_CACHE_ROOT
 from backend.services.strategy_package.models import PackageStatus, PortfolioPolicy
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.strategy_package.runtime import StrategyPackageRuntime
@@ -288,6 +289,121 @@ def test_create_portfolio_accepts_requested_validated_policy_that_differs_from_m
     assert portfolio.execution_policy["validated_execution_policy_id"] == policy.policy_id
     assert portfolio.execution_policy["algo_code"] == "TWAP"
     assert manifest.minute_execution_policy.algo_code == "V24_PLAN"
+
+
+def test_create_portfolio_derives_platform_policy_from_qe_backtest_execution_context() -> None:
+    package_repo = InMemoryStrategyPackageRepository()
+    paper_repo = InMemoryPaperTradingV2Repository()
+    base = make_manifest(algo_code="TWAP")
+    backtest_context = {
+        "schema_version": "qe_backtest_context_v1",
+        "authority": "source_evidence_not_runtime_authority",
+        "execution": {
+            "backtest_freq": "1min",
+            "execution_algo": "V25_1_SMALL_CAP",
+            "execution_algo_params": {"device": "cuda", "min_cost": 5, "max_buckets": 12},
+        },
+    }
+    manifest = freeze_manifest(
+        base.model_copy(
+            update={
+                "package_status": PackageStatus.BACKTEST_APPROVED,
+                "minute_execution_policy": None,
+                "backtest_context": backtest_context,
+            }
+        )
+    )
+    package_repo.save_manifest(manifest)
+
+    portfolio = PaperTradingV2PortfolioService(
+        package_repository=package_repo,
+        repository=paper_repo,
+    ).create_portfolio(
+        package_id=manifest.package_id,
+        portfolio_name="derived platform policy",
+        initial_cash=100_000,
+        start_date=date(2024, 1, 2),
+        data_source=MinuteDataSource.DB_HISTORICAL,
+    )
+
+    policy = portfolio.execution_policy
+    config = policy["policy_json"]["algo_config"]
+    assert policy["validated_execution_policy_id"].startswith("platform_manifest_")
+    assert policy["source_backtest_id"] == f"strategy_package_manifest:{manifest.manifest_sha256}"
+    assert policy["policy_json"]["algo_code"] == "V25_1_SMALL_CAP"
+    assert policy["policy_json"]["bar_freq"] == "1m"
+    assert config["device"] == "cuda"
+    assert config["min_cost"] == 5
+    assert config["early_model_path"] == str(DEFAULT_MODEL_CACHE_ROOT / "V25_1_SMALL_CAP" / "v25_early_net_joint_fixed.pt")
+    assert config["late_model_path"] == str(DEFAULT_MODEL_CACHE_ROOT / "V25_1_SMALL_CAP" / "v25_late_net_joint_fixed.pt")
+    assert not package_repo.list_execution_policies(manifest.package_id)
+
+
+def test_create_portfolio_derives_platform_policy_using_model_cache_env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    package_repo = InMemoryStrategyPackageRepository()
+    paper_repo = InMemoryPaperTradingV2Repository()
+    monkeypatch.setenv("AISTOCK_MODEL_CACHE_DIR", str(tmp_path / "model_cache" / "execution"))
+    base = make_manifest(algo_code="TWAP")
+    manifest = freeze_manifest(
+        base.model_copy(
+            update={
+                "package_status": PackageStatus.BACKTEST_APPROVED,
+                "minute_execution_policy": None,
+                "backtest_context": {
+                    "schema_version": "qe_backtest_context_v1",
+                    "execution": {
+                        "backtest_freq": "1min",
+                        "execution_algo": "V25_1_SMALL_CAP",
+                        "execution_algo_params": {"device": "cuda"},
+                    },
+                },
+            }
+        )
+    )
+    package_repo.save_manifest(manifest)
+
+    portfolio = PaperTradingV2PortfolioService(
+        package_repository=package_repo,
+        repository=paper_repo,
+    ).create_portfolio(
+        package_id=manifest.package_id,
+        portfolio_name="derived env model cache",
+        initial_cash=100_000,
+        start_date=date(2024, 1, 2),
+        data_source=MinuteDataSource.DB_HISTORICAL,
+    )
+
+    config = portfolio.execution_policy["policy_json"]["algo_config"]
+    expected_root = tmp_path / "model_cache" / "execution" / "V25_1_SMALL_CAP"
+    assert config["early_model_path"] == str(expected_root / "v25_early_net_joint_fixed.pt")
+    assert config["late_model_path"] == str(expected_root / "v25_late_net_joint_fixed.pt")
+
+
+def test_create_portfolio_rejects_missing_execution_context_without_manifest_policy() -> None:
+    package_repo = InMemoryStrategyPackageRepository()
+    paper_repo = InMemoryPaperTradingV2Repository()
+    manifest = freeze_manifest(
+        make_manifest().model_copy(
+            update={
+                "package_status": PackageStatus.BACKTEST_APPROVED,
+                "minute_execution_policy": None,
+                "backtest_context": {},
+            }
+        )
+    )
+    package_repo.save_manifest(manifest)
+
+    with pytest.raises(StrategyPackageValidationError, match="platform execution policy"):
+        PaperTradingV2PortfolioService(
+            package_repository=package_repo,
+            repository=paper_repo,
+        ).create_portfolio(
+            package_id=manifest.package_id,
+            portfolio_name="missing execution context",
+            initial_cash=100_000,
+            start_date=date(2024, 1, 2),
+            data_source=MinuteDataSource.DB_HISTORICAL,
+        )
 
 
 def test_create_portfolio_accepts_requested_policy_matching_qe_contract() -> None:

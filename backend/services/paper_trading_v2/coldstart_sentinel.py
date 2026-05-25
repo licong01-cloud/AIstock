@@ -22,7 +22,6 @@ import psycopg2.extras
 from backend.db.pg_pool import get_conn
 from backend.services.paper_trading_v2.market_data import MinuteDataSource
 from backend.services.qe_archive.models import canonical_json_dumps, normalize_json, sha256_json
-from backend.services.trading_calendar_status import TradingCalendarStatusService
 from backend.services.trading_core.errors import (
     InvalidStateTransitionError,
     StrategyPackageValidationError,
@@ -69,15 +68,6 @@ class ColdstartSentinelService:
     def record_sentinel_order(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         req = _validate_payload(payload)
         now = self._now_factory().astimezone(SENTINEL_TZ)
-        if _is_a_share_trading_window(now):
-            raise InvalidStateTransitionError(
-                "paper v2 coldstart sentinel is blocked during A-share trading hours",
-                context={
-                    "as_of_time": now.isoformat(),
-                    "timezone": "Asia/Shanghai",
-                    "blocked_windows": ["09:30-11:30", "13:00-15:00"],
-                },
-            )
         if not self._daemon_checker(self._daemon_process_name):
             raise PaperV2DaemonUnavailableError(
                 "paper v2 daemon process is not running",
@@ -568,16 +558,6 @@ def _fill_market_context(*, req: dict[str, Any], now: dt.datetime) -> dict[str, 
         "limit_up": "11.00",
         "limit_down": "9.00",
     }
-
-
-def _is_a_share_trading_window(now: dt.datetime) -> bool:
-    local_dt = now.astimezone(SENTINEL_TZ)
-    try:
-        TradingCalendarStatusService().ensure_trading_day(local_dt.date())
-    except TradingCoreError:
-        return False
-    local = local_dt.time()
-    return dt.time(9, 30) <= local <= dt.time(11, 30) or dt.time(13, 0) <= local <= dt.time(15, 0)
 
 
 def _now_cst() -> dt.datetime:

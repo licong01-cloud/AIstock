@@ -9,9 +9,8 @@ created.
 from __future__ import annotations
 
 import threading
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime
 from typing import Any, Literal
-from zoneinfo import ZoneInfo
 
 from backend.services.trading_core.errors import (
     DataUnavailableError,
@@ -49,9 +48,6 @@ from .service import PaperTradingV2PortfolioService
 
 SUPPORTED_HISTORICAL_SESSION_SOURCES = {MinuteDataSource.DB_HISTORICAL}
 SUPPORTED_LIVE_SESSION_SOURCES = {MinuteDataSource.TDX_REALTIME}
-SESSION_STATE_CHANGE_BLOCK_START = time(9, 15)
-SESSION_STATE_CHANGE_BLOCK_END = time(15, 0)
-SESSION_STATE_CHANGE_TZ = ZoneInfo("Asia/Shanghai")
 TERMINAL_SESSION_STATUSES = {
     PaperSessionStatus.SUCCEEDED,
     PaperSessionStatus.FAILED,
@@ -500,46 +496,19 @@ class PaperTradingSessionService:
         session_id: str | None = None,
         as_of_time: datetime | None = None,
     ) -> None:
-        if not self.enforce_non_trading_window:
-            return
-        now = self._operation_time(as_of_time)
-        if not self._is_trading_day_for_operation(now.date()):
-            return
-        if SESSION_STATE_CHANGE_BLOCK_START <= now.time() <= SESSION_STATE_CHANGE_BLOCK_END:
-            raise InvalidStateTransitionError(
-                "paper v2 session state changes are blocked during A-share trading hours",
-                context={
-                    "action": action,
-                    "portfolio_id": portfolio_id,
-                    "session_id": session_id,
-                    "as_of_time": now.isoformat(),
-                    "timezone": "Asia/Shanghai",
-                    "blocked_window": {
-                        "start": SESSION_STATE_CHANGE_BLOCK_START.isoformat(),
-                        "end": SESSION_STATE_CHANGE_BLOCK_END.isoformat(),
-                    },
-                    "reason": "change session mode/state before open, after close, or on a non-trading day",
-                },
-            )
+        """Allow intraday operational recovery while keeping execution fail-fast.
 
-    @staticmethod
-    def _operation_time(as_of_time: datetime | None) -> datetime:
-        value = as_of_time or datetime.now(SESSION_STATE_CHANGE_TZ)
-        if value.tzinfo is None:
-            return value.replace(tzinfo=SESSION_STATE_CHANGE_TZ)
-        return value.astimezone(SESSION_STATE_CHANGE_TZ)
-
-    def _is_trading_day_for_operation(self, trade_date: date) -> bool:
-        try:
-            self.calendar_provider.ensure_trading_day(trade_date)
-            return True
-        except DataUnavailableError:
-            return False
-        except Exception as exc:
-            raise SessionConfigError(
-                "paper v2 session could not determine trading-day status",
-                context={"trade_date": trade_date.isoformat(), "source": "TradingCalendarStatusService"},
-            ) from exc
+        Older Paper v2 APIs used this hook to block all session and portfolio
+        state changes from 09:15 to 15:00. That prevented real recovery
+        scenarios, for example MiniQMT being unavailable in the morning and
+        becoming usable after lunch. The time window is no longer a safety
+        gate: local_sim, minqmt_sim, and future live paths may be started or
+        stopped intraday. Actual trading safety remains enforced by runtime
+        preflight, broker health checks, explicit MiniQMT/live authorization,
+        order submission checks, and fail-fast data validation.
+        """
+        _ = (action, portfolio_id, session_id, as_of_time, self.enforce_non_trading_window)
+        return
 
     def _has_running_run(self, portfolio_id: str) -> bool:
         try:

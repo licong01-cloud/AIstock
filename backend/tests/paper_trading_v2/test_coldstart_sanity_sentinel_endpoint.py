@@ -15,7 +15,6 @@ from backend.services.paper_trading_v2.coldstart_sentinel import (
 )
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import PackageStatus
-from backend.services.trading_core.errors import InvalidStateTransitionError
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
 
@@ -272,15 +271,15 @@ def test_sentinel_endpoint_rejects_when_daemon_absent(monkeypatch: pytest.Monkey
     assert conn.executed == []
 
 
-def test_sentinel_endpoint_rejects_a_share_trading_window(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sentinel_endpoint_allows_intraday_recovery_sanity(monkeypatch: pytest.MonkeyPatch) -> None:
     conn = FakeConnection(package_row=_manifest_row())
     client = _client(monkeypatch, conn, now=dt.datetime(2026, 5, 11, 9, 31, tzinfo=dt.timezone(dt.timedelta(hours=8))))
 
     response = client.post("/api/v1/paper-v2/coldstart-sanity/sentinel-order", json=_payload())
 
-    assert response.status_code == 409
-    assert response.json()["detail"]["error_code"] == InvalidStateTransitionError.error_code
-    assert conn.executed == []
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert conn.commits == 1
 
 
 def test_sentinel_endpoint_present_in_openapi(monkeypatch: pytest.MonkeyPatch) -> None:

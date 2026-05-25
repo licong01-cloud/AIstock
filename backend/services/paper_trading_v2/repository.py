@@ -94,7 +94,7 @@ def _running_summary_operability(
     if no_operable:
         hint = (
             "Portfolio status is active but no scheduler-tickable live/replay session exists. "
-            "Review the latest terminal session, then create or resume a session outside the 09:15-15:00 state-change block."
+            "Review the latest terminal session, then create or resume a session; intraday recovery is allowed."
         )
     return {
         "tickable_session_count": tickable_session_count,
