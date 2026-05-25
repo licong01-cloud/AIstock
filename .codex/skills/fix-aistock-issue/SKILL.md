@@ -50,7 +50,15 @@ When the user asks to handle current P0/P1 issues without naming a single BUG, f
 
 `python scripts/aistock_issue_workflow.py run-p0 --module <module>`
 
-Use the output groups to decide whether issues can batch. Batch only same-module issues with compatible validation and write scope. Cross-module P0s must use separate worktrees/branches.
+Use the output groups to decide whether issues can batch. Batch only same-module issues with compatible risk tier, validation, GitHub linkage, and write scope. Cross-module P0s must use separate worktrees/branches.
+
+For compatible batch groups, run:
+
+`python scripts/aistock_issue_workflow.py start-batch --bug-id BUG-XXX --bug-id BUG-YYY --create-worktree`
+
+After the shared fix, run:
+
+`python scripts/aistock_issue_workflow.py finish-batch --batch-id <BATCH-ID> --validation-evidence "<command> -> passed"`
 
 ## Completion Report
 
@@ -58,7 +66,7 @@ Report branch, PR URL, commit hash, changed files, validation evidence, producti
 
 ## Post-Merge Sync And Cleanup
 
-After an approved merge, run `python scripts/aistock_issue_workflow.py close-sync --bug-id BUG-XXX --pr-url <PR_URL> --validation-evidence "<command> -> passed" --apply`, then dry-run `cleanup-after-merge`; add `--apply` only when the cleanup gate is ready.
+After an approved merge, run `python scripts/aistock_issue_workflow.py close-sync --bug-id BUG-XXX --pr-url <PR_URL> --validation-evidence "<command> -> passed" --apply`, then dry-run `cleanup-after-merge`; add `--pr-url <PR_URL>` for squash-merged PR cleanup and add `--apply` only when the cleanup gate is ready.
 
 ## Client Install
 

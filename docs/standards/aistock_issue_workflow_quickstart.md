@@ -174,7 +174,15 @@ After a PR is merged and close-sync is complete, dry-run cleanup first:
 python scripts/aistock_issue_workflow.py cleanup-after-merge --branch bug/BUG-XXX-scope --worktree F:/Dev/AIstock_worktrees/BUG-XXX-scope --sync-root
 ```
 
-Only add `--apply` when the plan reports `workflow_gate=ready_for_cleanup`. The apply path refuses dirty worktrees, unmerged branches, dirty canonical root, or the currently checked-out branch.
+Only add `--apply` when the plan reports `workflow_gate=ready_for_cleanup`. The apply path refuses dirty worktrees, dirty canonical root, or the currently checked-out branch. For squash-merged PRs, pass `--pr-url <PR_URL>` so cleanup can verify the merged PR and tree equivalence before deleting the local branch:
+
+```powershell
+python scripts/aistock_issue_workflow.py cleanup-after-merge `
+  --branch feature/issue-workflow-phase1 `
+  --worktree F:/Dev/AIstock_worktrees/issue-workflow-phase1 `
+  --pr-url https://github.com/licong01-cloud/AIstock/pull/195 `
+  --sync-root
+```
 
 ## Triage Current P0
 
@@ -185,6 +193,29 @@ python scripts/aistock_issue_workflow.py triage-p0
 ```
 
 Batch only same-module issues with compatible validation and write scope. Keep independent closure evidence for every BUG.
+
+## Batch Same-Module BUGs
+
+When `run-p0` shows compatible issues, start a batch only if the BUGs share module, risk tier, required verification, and GitHub linkage:
+
+```powershell
+python scripts/aistock_issue_workflow.py start-batch `
+  --bug-id BUG-015 `
+  --bug-id BUG-016 `
+  --create-worktree
+```
+
+The command writes one batch state plus per-issue Context Packs under `tmp/issue_workflow/<BATCH-ID>/`. After the shared fix and required validation:
+
+```powershell
+python scripts/aistock_issue_workflow.py finish-batch `
+  --batch-id BATCH-paper-v2-YYYYMMDD-xxxxxxxx `
+  --validation-evidence "python -m nox -s l0 -> passed" `
+  --issue-commit BUG-015=<sha> `
+  --issue-commit BUG-016=<sha>
+```
+
+Batch PR bodies must preserve per-issue closure maps and `Closes #...` lines for every linked GitHub Issue.
 
 ## Stop Conditions
 

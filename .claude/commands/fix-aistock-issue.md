@@ -70,12 +70,12 @@ Use `tmp/issue_workflow/<BUG>/pr-body.md` as the PR body. If the user requested 
 - Do not merge to `main` unless the user explicitly asked for merge.
 - Do not touch production backend `8001`, frontend `3000`, production DB, or DDL without explicit approval.
 - Keep BUG JSON and GitHub Issue linkage intact.
-- Preserve per-issue evidence when batching.
+- Preserve per-issue evidence when batching; use `start-batch` and `finish-batch` only for same-module, same-risk, same-validation BUG groups.
 - Final report must include branch, PR URL, commit, changed files, validation evidence, and production gates.
 
 ## Post-Merge Sync And Cleanup
 
-After an approved merge, run `python scripts/aistock_issue_workflow.py close-sync --bug-id BUG-XXX --pr-url <PR_URL> --validation-evidence "<command> -> passed" --apply`, then dry-run `cleanup-after-merge`; add `--apply` only when the cleanup gate is ready.
+After an approved merge, run `python scripts/aistock_issue_workflow.py close-sync --bug-id BUG-XXX --pr-url <PR_URL> --validation-evidence "<command> -> passed" --apply`, then dry-run `cleanup-after-merge`; add `--pr-url <PR_URL>` for squash-merged PR cleanup and add `--apply` only when the cleanup gate is ready.
 
 ## Client Install
 
