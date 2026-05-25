@@ -11,7 +11,8 @@ For AIstock BUG/GitHub Issue work:
 5. Switch to the returned worktree and use only the generated Context Pack and Fix Ready scope as the starting context.
 6. Use `resume --bug-id BUG-XXX` after any restart.
 7. Finish with validation evidence and a PR body generated under `tmp/issue_workflow/<BUG>/`.
-8. Do not merge, close-sync, touch production services, or clean worktrees unless the user explicitly asks and the workflow gate allows it.
+8. For compatible same-module BUG groups, use `start-batch` and `finish-batch`; preserve per-issue closure evidence.
+9. Do not merge, close-sync, touch production services, or clean worktrees unless the user explicitly asks and the workflow gate allows it.
 
 ## Post-Merge Sync And Cleanup
 

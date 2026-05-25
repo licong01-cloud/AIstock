@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -36,6 +37,11 @@ def _today_compact() -> str:
 def _slug(value: str, max_len: int = 72) -> str:
     slug = re.sub(r"[^a-zA-Z0-9]+", "-", value.strip().lower()).strip("-")
     return (slug or "issue")[:max_len].strip("-") or "issue"
+
+
+def _short_hash(*values: Any, length: int = 8) -> str:
+    payload = json.dumps(values, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:length]
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -474,6 +480,14 @@ def _target_names(record: dict[str, Any], bug_id: str, task_slug: str | None = N
     return branch, worktree
 
 
+def _batch_target_names(batch_id: str, module: str, task_slug: str | None = None) -> tuple[str, Path]:
+    batch_slug = _slug(task_slug or f"{batch_id}-{module}", max_len=56)
+    today = _today_compact()
+    branch = f"bug/{batch_slug}-{today}"
+    worktree = _default_worktree_root() / f"{batch_slug}-{today}"
+    return branch, worktree
+
+
 def _maybe_create_worktree(
     *,
     record: dict[str, Any],
@@ -483,6 +497,30 @@ def _maybe_create_worktree(
     task_slug: str | None,
 ) -> dict[str, Any]:
     branch, worktree = _target_names(record, bug_id, task_slug)
+    plan = {
+        "create_worktree": create,
+        "dry_run": dry_run,
+        "branch": branch,
+        "worktree": str(worktree),
+        "base": "origin/main",
+    }
+    if not create or dry_run:
+        return plan
+    if worktree.exists():
+        raise WorkflowError(f"target worktree already exists: {worktree}")
+    _git(["fetch", "origin", "main"])
+    _git(["worktree", "add", str(worktree), "-b", branch, "origin/main"])
+    plan["created"] = True
+    return plan
+
+
+def _maybe_create_named_worktree(
+    *,
+    branch: str,
+    worktree: Path,
+    create: bool,
+    dry_run: bool,
+) -> dict[str, Any]:
     plan = {
         "create_worktree": create,
         "dry_run": dry_run,
@@ -770,6 +808,298 @@ def build_run_p0_plan(*, module: str | None = None, include_fixed: bool = False)
         if recommended
         else None,
     }
+
+
+def _records_for_bug_ids(
+    bug_ids: list[str],
+    *,
+    allow_missing_linkage: bool = False,
+    allow_closed: bool = False,
+) -> list[tuple[dict[str, Any], Path]]:
+    normalized = [bug_id.strip().upper() for bug_id in bug_ids if bug_id.strip()]
+    if len(normalized) != len(set(normalized)):
+        raise WorkflowError(f"duplicate BUG ids in batch: {bug_ids}")
+    if len(normalized) < 2:
+        raise WorkflowError("batch workflow requires at least two BUG ids")
+    records: list[tuple[dict[str, Any], Path]] = []
+    for bug_id in normalized:
+        record, path = find_bug_record(bug_id=bug_id)
+        _require_github_linkage(record, allow_missing=allow_missing_linkage)
+        _require_fixable_status(record, allow_closed=allow_closed)
+        records.append((record, path))
+    return records
+
+
+def _batch_signature(records: list[dict[str, Any]]) -> dict[str, Any]:
+    modules = sorted({str(record.get("module") or "unknown") for record in records})
+    if len(modules) != 1:
+        raise WorkflowError(f"batch issues must share one module; got {modules}")
+    risks = sorted({flow._risk_from_severity(str(record.get("severity") or "P2")) for record in records})
+    if len(risks) != 1:
+        raise WorkflowError(f"batch issues must share one risk tier; got {risks}")
+    verification_signatures = {
+        tuple(flow._unique_strings(flow._as_list(record.get("required_verification"))))
+        for record in records
+    }
+    if len(verification_signatures) != 1:
+        raise WorkflowError("batch issues must share the same required_verification signature")
+    bug_ids = [str(record.get("bug_id")) for record in records]
+    batch_id = f"BATCH-{_slug(modules[0], max_len=32)}-{_today_compact()}-{_short_hash(*bug_ids)}"
+    return {
+        "batch_id": batch_id,
+        "module": modules[0],
+        "risk_tier": risks[0],
+        "bug_ids": bug_ids,
+        "required_verification": list(next(iter(verification_signatures))),
+    }
+
+
+def build_start_batch_plan(
+    *,
+    bug_ids: list[str],
+    create_worktree: bool,
+    dry_run: bool,
+    task_slug: str | None,
+    allow_missing_linkage: bool,
+    allow_closed: bool,
+) -> dict[str, Any]:
+    record_pairs = _records_for_bug_ids(
+        bug_ids,
+        allow_missing_linkage=allow_missing_linkage,
+        allow_closed=allow_closed,
+    )
+    records = [record for record, _ in record_pairs]
+    signature = _batch_signature(records)
+    batch_plan = flow.build_batch_plan(records)
+    batch_plan["batch_id"] = signature["batch_id"]
+    branch, worktree = _batch_target_names(signature["batch_id"], signature["module"], task_slug)
+    worktree_plan = _maybe_create_named_worktree(
+        branch=branch,
+        worktree=worktree,
+        create=create_worktree,
+        dry_run=dry_run,
+    )
+    target_root = Path(worktree_plan["worktree"]) if create_worktree and not dry_run else REPO_ROOT
+    output_dir = target_root / WORKFLOW_ROOT / signature["batch_id"]
+    context_dir = output_dir / "context-packs"
+    fix_ready_dir = output_dir / "fix-ready"
+    if not dry_run:
+        for record, source_path in record_pairs:
+            bug_id = str(record.get("bug_id"))
+            context_pack = flow.build_context_pack(record, [])
+            fix_ready = flow.build_fix_ready(record, [])
+            _write_json(context_dir / f"{bug_id}.json", context_pack)
+            _write_text(context_dir / f"{bug_id}.md", flow.render_context_pack_markdown(context_pack))
+            _write_json(fix_ready_dir / f"{bug_id}.json", fix_ready)
+            target_bug_path = _bug_path_for_target(source_path, target_root)
+            batch_plan.setdefault("source_bug_json", {})[bug_id] = _repo_rel(source_path)
+            batch_plan.setdefault("target_bug_json", {})[bug_id] = _repo_rel(target_bug_path, target_root)
+        _write_json(output_dir / "batch-plan.json", batch_plan)
+        _write_json(output_dir / "batch-state.json", {
+            **signature,
+            "state": "context_ready",
+            "branch": worktree_plan.get("branch"),
+            "worktree": worktree_plan.get("worktree"),
+            "batch_plan_path": _repo_rel(output_dir / "batch-plan.json", target_root),
+            "context_dir": _repo_rel(context_dir, target_root),
+            "fix_ready_dir": _repo_rel(fix_ready_dir, target_root),
+            "updated_at": _utc_now(),
+        })
+        _write_state(
+            signature["batch_id"],
+            state="context_ready",
+            root=target_root,
+            branch=worktree_plan.get("branch"),
+            worktree=worktree_plan.get("worktree"),
+            base=worktree_plan.get("base"),
+            batch_id=signature["batch_id"],
+            bug_ids=signature["bug_ids"],
+            module=signature["module"],
+            risk_tier=signature["risk_tier"],
+            batch_plan_path=_repo_rel(output_dir / "batch-plan.json", target_root),
+            batch_state_path=_repo_rel(output_dir / "batch-state.json", target_root),
+            context_dir=_repo_rel(context_dir, target_root),
+            fix_ready_dir=_repo_rel(fix_ready_dir, target_root),
+            next_actions=[
+                "switch_to_batch_worktree_if_created",
+                "read_each_context_pack",
+                "fix_only_within_shared_scope_or_stop_for_scope_expansion",
+                "run_finish_batch_before_reporting_done",
+            ],
+        )
+    return {
+        "schema_version": "aistock_issue_workflow_start_batch_v1",
+        "generated_at": _utc_now(),
+        **signature,
+        "worktree_plan": worktree_plan,
+        "batch_plan": batch_plan,
+        "batch_plan_path": _repo_rel(output_dir / "batch-plan.json", target_root),
+        "batch_state_path": _repo_rel(output_dir / "batch-state.json", target_root),
+        "context_dir": _repo_rel(context_dir, target_root),
+        "fix_ready_dir": _repo_rel(fix_ready_dir, target_root),
+        "state_path": _repo_rel(_state_path(signature["batch_id"], target_root), target_root),
+        "events_path": _repo_rel(_events_path(signature["batch_id"], target_root), target_root),
+        "workflow_gate": "ready_for_batch_fix",
+        "next_command": f"python scripts/aistock_issue_workflow.py finish-batch --batch-id {signature['batch_id']} --plan-only",
+    }
+
+
+def _load_batch_state(batch_id: str) -> dict[str, Any] | None:
+    path = REPO_ROOT / WORKFLOW_ROOT / batch_id / "batch-state.json"
+    if path.exists():
+        return _load_json(path)
+    state = _load_state(batch_id)
+    return state
+
+
+def _parse_issue_commit_map(entries: list[str] | None) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for entry in entries or []:
+        if "=" not in entry:
+            raise WorkflowError(f"--issue-commit must use BUG-XXX=<commit>: {entry}")
+        issue, commit = entry.split("=", 1)
+        issue = issue.strip().upper()
+        commit = commit.strip()
+        if not issue or not commit:
+            raise WorkflowError(f"--issue-commit must use BUG-XXX=<commit>: {entry}")
+        result[issue] = commit
+    return result
+
+
+def render_batch_pr_body(
+    batch_id: str,
+    records: list[dict[str, Any]],
+    changed_files: list[str],
+    validation: dict[str, Any],
+    evidence: list[str],
+    commit_map: dict[str, str],
+    closure_ready: bool,
+) -> str:
+    gates = validation.get("production_gates") or {}
+    lines = [
+        f"## {batch_id} batch issue workflow summary",
+        "",
+        f"- Module: `{records[0].get('module') if records else 'unknown'}`",
+        f"- Closure ready: `{str(closure_ready).lower()}`",
+        "",
+        "## Issues",
+    ]
+    for record in records:
+        bug_id = str(record.get("bug_id"))
+        issue = record.get("github_issue_number")
+        url = record.get("github_issue_url") or "missing"
+        commit = commit_map.get(bug_id, "shared PR")
+        lines.append(f"- `{bug_id}` / #{issue}: {url} / commit: `{commit}`")
+    lines.extend([
+        "",
+        "## Changed files",
+        *[f"- `{path}`" for path in changed_files or ["none"]],
+        "",
+        "## Required validation",
+        *[f"- `{plan}`" for plan in validation.get("required_plans") or ["l0"]],
+        "",
+        "## Evidence",
+        *[f"- {item}" for item in evidence or ["missing - run required validation before requesting merge"]],
+        "",
+        "## Production gates",
+        f"- production_ddl_gate: `{gates.get('ddl', 'noop')}`",
+        f"- production_frontend_dependency_gate: `{gates.get('frontend_dependency', 'noop')}`",
+        f"- production_backend_dependency_gate: `{gates.get('backend_dependency', 'noop')}`",
+        "",
+        "## Per-issue closure map",
+    ])
+    for record in records:
+        bug_id = str(record.get("bug_id"))
+        requirements = flow._unique_strings(flow._as_list(record.get("closure_requirements"))) or ["Fix issue-specific behavior."]
+        lines.append(f"- `{bug_id}`")
+        lines.extend(f"  - {item}" for item in requirements)
+    closing = [f"Closes #{record.get('github_issue_number')}" for record in records if record.get("github_issue_number")]
+    if closing:
+        lines.extend(["", *closing])
+    return "\n".join(lines)
+
+
+def build_finish_batch_plan(
+    *,
+    batch_id: str | None,
+    bug_ids: list[str],
+    changed_files: list[str] | None,
+    base: str,
+    head: str,
+    validation_evidence: list[str],
+    issue_commit: list[str] | None,
+    plan_only: bool,
+    allow_missing_evidence: bool,
+) -> dict[str, Any]:
+    if not batch_id and not bug_ids:
+        raise WorkflowError("finish-batch requires --batch-id or at least two --bug-id values")
+    if batch_id:
+        state = _load_batch_state(batch_id)
+        if state and not bug_ids:
+            bug_ids = [str(item) for item in state.get("bug_ids") or []]
+    record_pairs = _records_for_bug_ids(bug_ids, allow_missing_linkage=False, allow_closed=True)
+    records = [record for record, _ in record_pairs]
+    signature = _batch_signature(records)
+    if batch_id and batch_id != signature["batch_id"]:
+        signature["batch_id"] = batch_id
+    canonical_batch_id = signature["batch_id"]
+    changed = changed_files if changed_files is not None else flow.changed_files_from_git(base, head)
+    validation = flow.select_validation(changed, module=signature["module"])
+    evidence = [item for item in validation_evidence if item.strip()]
+    closure_ready = bool(evidence) or plan_only or allow_missing_evidence
+    commit_map = _parse_issue_commit_map(issue_commit)
+    output_dir = REPO_ROOT / WORKFLOW_ROOT / canonical_batch_id
+    pr_body_path = output_dir / "pr-body.md"
+    finish_plan = {
+        "schema_version": "aistock_issue_workflow_finish_batch_v1",
+        "generated_at": _utc_now(),
+        **signature,
+        "batch_id": canonical_batch_id,
+        "changed_files": changed,
+        "selected_validation": validation,
+        "validation_evidence": evidence,
+        "per_issue_commit_map": commit_map,
+        "per_issue_closure_map": {
+            str(record.get("bug_id")): flow._unique_strings(flow._as_list(record.get("closure_requirements")))
+            for record in records
+        },
+        "closure_ready": closure_ready,
+        "production_gates": validation.get("production_gates") or {},
+    }
+    _write_json(output_dir / "finish-plan.json", finish_plan)
+    if evidence:
+        _write_json(output_dir / "validation-evidence.json", {"batch_id": canonical_batch_id, "items": evidence})
+    _write_text(pr_body_path, render_batch_pr_body(canonical_batch_id, records, changed, validation, evidence, commit_map, closure_ready))
+    next_state = "validation_passed" if evidence else ("validation_planned" if plan_only else "blocked")
+    _write_state(
+        canonical_batch_id,
+        state=next_state,
+        batch_id=canonical_batch_id,
+        bug_ids=signature["bug_ids"],
+        changed_files=changed,
+        validation_evidence=evidence,
+        pr_body_path=_repo_rel(pr_body_path),
+        production_gates=validation.get("production_gates") or {},
+        stop_reason=None if closure_ready else "validation_evidence_missing",
+        next_actions=[
+            "commit_only_batch_files",
+            "push_task_branch",
+            "create_pr_from_batch_pr_body",
+            "watch_ci_before_merge",
+        ] if evidence else ["run_required_validation", "rerun_finish_batch_with_validation_evidence"],
+    )
+    payload = {
+        **finish_plan,
+        "workflow_gate": "ready_for_pr" if closure_ready else "validation_evidence_missing",
+        "required_verification": validation.get("required_plans") or [],
+        "recommended_verification": validation.get("recommended_plans") or [],
+        "pr_body_path": _repo_rel(pr_body_path),
+        "state_path": _repo_rel(_state_path(canonical_batch_id)),
+        "events_path": _repo_rel(_events_path(canonical_batch_id)),
+    }
+    if not closure_ready:
+        payload["error"] = "validation evidence is required unless --plan-only or --allow-missing-evidence is used"
+    return payload
 
 
 def _path_check(path: Path, label: str, *, blocking: bool = True) -> dict[str, Any]:
@@ -1285,6 +1615,7 @@ def build_cleanup_after_merge_plan(
     *,
     branch: str,
     worktree: str | None = None,
+    pr_url: str | None = None,
     apply: bool = False,
     sync_root: bool = False,
     canonical_root: str | None = None,
@@ -1295,6 +1626,13 @@ def build_cleanup_after_merge_plan(
     remote_ref = _git(["ls-remote", "--heads", "origin", branch], check=False)
     merged_refs = set(_git(["branch", "--format=%(refname:short)", "--merged", "origin/main"], check=False).splitlines())
     merged = branch in merged_refs
+    squash_merge_verified = False
+    pr_check: dict[str, Any] | None = None
+    tree_equivalent = False
+    if not merged and pr_url:
+        pr_check = _verify_pr_merged(pr_url)
+        tree_equivalent = bool(_run_command(["git", "diff", "--quiet", branch, "origin/main"], cwd=REPO_ROOT).get("ok"))
+        squash_merge_verified = bool(pr_check.get("merged")) and tree_equivalent
     worktree_path = Path(worktree) if worktree else None
     worktree_clean = True
     if worktree_path and worktree_path.exists():
@@ -1303,7 +1641,7 @@ def build_cleanup_after_merge_plan(
     blocking: list[str] = []
     if branch == current_branch and apply:
         blocking.append("refusing to cleanup the currently checked-out branch")
-    if not merged:
+    if not (merged or squash_merge_verified):
         blocking.append(f"branch is not merged into origin/main: {branch}")
     if worktree_path and worktree_path.exists() and not worktree_clean:
         blocking.append(f"worktree is dirty: {worktree_path}")
@@ -1318,11 +1656,11 @@ def build_cleanup_after_merge_plan(
     if sync_root:
         actions.append({"action": "sync_root_main", "root": str(root), "safe": not any("canonical root" in item for item in blocking)})
     if worktree_path and worktree_path.exists():
-        actions.append({"action": "remove_worktree", "worktree": str(worktree_path), "safe": merged and worktree_clean})
+        actions.append({"action": "remove_worktree", "worktree": str(worktree_path), "safe": (merged or squash_merge_verified) and worktree_clean})
     if branch in local_branches:
-        actions.append({"action": "delete_local_branch", "branch": branch, "safe": merged})
+        actions.append({"action": "delete_local_branch", "branch": branch, "safe": merged or squash_merge_verified})
     if remote_ref:
-        actions.append({"action": "delete_remote_branch", "branch": branch, "safe": merged})
+        actions.append({"action": "delete_remote_branch", "branch": branch, "safe": merged or squash_merge_verified})
     payload = {
         "schema_version": "aistock_issue_workflow_cleanup_v1",
         "generated_at": _utc_now(),
@@ -1331,6 +1669,9 @@ def build_cleanup_after_merge_plan(
         "canonical_root": str(root),
         "sync_root": sync_root,
         "merged_into_origin_main": merged,
+        "squash_merge_verified": squash_merge_verified,
+        "tree_equivalent_to_origin_main": tree_equivalent,
+        "pr_check": pr_check,
         "worktree_clean": worktree_clean,
         "root_git": root_git,
         "blocking": blocking,
@@ -1350,7 +1691,8 @@ def build_cleanup_after_merge_plan(
         if worktree_path and worktree_path.exists():
             applied.append({"command": f"git worktree remove {worktree_path}", "result": _execute_checked(["git", "worktree", "remove", str(worktree_path)], cwd=REPO_ROOT, timeout=120)})
         if branch in local_branches:
-            applied.append({"command": f"git branch -d {branch}", "result": _execute_checked(["git", "branch", "-d", branch], cwd=REPO_ROOT, timeout=120)})
+            delete_flag = "-d" if merged else "-D"
+            applied.append({"command": f"git branch {delete_flag} {branch}", "result": _execute_checked(["git", "branch", delete_flag, branch], cwd=REPO_ROOT, timeout=120)})
         if remote_ref:
             applied.append({"command": f"git push origin --delete {branch}", "result": _execute_checked(["git", "push", "origin", "--delete", branch], cwd=REPO_ROOT, timeout=180)})
         payload["applied"] = applied
@@ -1400,6 +1742,35 @@ def cmd_run_p0(args: argparse.Namespace) -> int:
     payload = build_run_p0_plan(module=args.module, include_fixed=args.include_fixed)
     _emit(payload, args.output)
     return 0
+
+
+def cmd_start_batch(args: argparse.Namespace) -> int:
+    payload = build_start_batch_plan(
+        bug_ids=list(args.bug_id or []),
+        create_worktree=args.create_worktree,
+        dry_run=args.dry_run,
+        task_slug=args.task_slug,
+        allow_missing_linkage=args.allow_missing_linkage,
+        allow_closed=args.allow_closed,
+    )
+    _emit(payload, args.output)
+    return 0
+
+
+def cmd_finish_batch(args: argparse.Namespace) -> int:
+    payload = build_finish_batch_plan(
+        batch_id=args.batch_id,
+        bug_ids=list(args.bug_id or []),
+        changed_files=list(args.changed_file) if args.changed_file else None,
+        base=args.base,
+        head=args.head,
+        validation_evidence=list(args.validation_evidence or []),
+        issue_commit=list(args.issue_commit or []),
+        plan_only=args.plan_only,
+        allow_missing_evidence=args.allow_missing_evidence,
+    )
+    _emit(payload, args.output)
+    return 0 if payload.get("closure_ready") else 2
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
@@ -1487,6 +1858,7 @@ def cmd_cleanup_after_merge(args: argparse.Namespace) -> int:
     payload = build_cleanup_after_merge_plan(
         branch=args.branch,
         worktree=args.worktree,
+        pr_url=args.pr_url,
         apply=args.apply,
         sync_root=args.sync_root,
         canonical_root=args.canonical_root,
@@ -1593,6 +1965,29 @@ def build_parser() -> argparse.ArgumentParser:
     run_p0.add_argument("--output")
     run_p0.set_defaults(func=cmd_run_p0)
 
+    start_batch = sub.add_parser("start-batch", help="Prepare a same-module batch BUG workflow and context packs.")
+    start_batch.add_argument("--bug-id", action="append", required=True)
+    start_batch.add_argument("--create-worktree", action="store_true")
+    start_batch.add_argument("--dry-run", action="store_true")
+    start_batch.add_argument("--task-slug")
+    start_batch.add_argument("--allow-missing-linkage", action="store_true")
+    start_batch.add_argument("--allow-closed", action="store_true")
+    start_batch.add_argument("--output")
+    start_batch.set_defaults(func=cmd_start_batch)
+
+    finish_batch = sub.add_parser("finish-batch", help="Select validation and generate a PR-ready batch finish plan.")
+    finish_batch.add_argument("--batch-id")
+    finish_batch.add_argument("--bug-id", action="append")
+    finish_batch.add_argument("--changed-file", action="append")
+    finish_batch.add_argument("--base", default="origin/main")
+    finish_batch.add_argument("--head", default="HEAD")
+    finish_batch.add_argument("--validation-evidence", action="append")
+    finish_batch.add_argument("--issue-commit", action="append", help="Per-issue commit map entry, e.g. BUG-123=<sha>.")
+    finish_batch.add_argument("--plan-only", action="store_true")
+    finish_batch.add_argument("--allow-missing-evidence", action="store_true")
+    finish_batch.add_argument("--output")
+    finish_batch.set_defaults(func=cmd_finish_batch)
+
     close = sub.add_parser("close-sync", help="Prepare a dry-run close/sync plan after PR merge.")
     close.add_argument("--bug-id")
     close.add_argument("--issue-json")
@@ -1611,6 +2006,7 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup = sub.add_parser("cleanup-after-merge", help="Safely sync root and clean merged issue worktrees/branches.")
     cleanup.add_argument("--branch", required=True)
     cleanup.add_argument("--worktree")
+    cleanup.add_argument("--pr-url", help="Merged PR URL used to verify squash-merged branch cleanup.")
     cleanup.add_argument("--sync-root", action="store_true")
     cleanup.add_argument("--canonical-root")
     cleanup.add_argument("--apply", action="store_true")

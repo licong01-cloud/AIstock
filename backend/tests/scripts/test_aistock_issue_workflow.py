@@ -206,6 +206,71 @@ def test_run_p0_recommends_next_issue_command(isolated_workflow_root: Path) -> N
     assert "run --bug-id BUG-199" in payload["next_command"]
 
 
+def test_start_batch_rejects_incompatible_modules(isolated_workflow_root: Path) -> None:
+    bugs_root = workflow.BUGS_ROOT
+    _write_json(bugs_root / "bug199.json", _bug())
+    _write_json(bugs_root / "bug200.json", _bug(bug_id="BUG-200", module="paper_v2", github_issue_number=200))
+
+    with pytest.raises(workflow.WorkflowError, match="share one module"):
+        workflow.build_start_batch_plan(
+            bug_ids=["BUG-199", "BUG-200"],
+            create_worktree=False,
+            dry_run=True,
+            task_slug=None,
+            allow_missing_linkage=False,
+            allow_closed=False,
+        )
+
+
+def test_start_batch_writes_batch_state_and_contexts(isolated_workflow_root: Path) -> None:
+    bugs_root = workflow.BUGS_ROOT
+    _write_json(bugs_root / "bug199.json", _bug())
+    _write_json(bugs_root / "bug200.json", _bug(bug_id="BUG-200", github_issue_number=200, github_issue_url="https://github.example/issues/200"))
+
+    payload = workflow.build_start_batch_plan(
+        bug_ids=["BUG-199", "BUG-200"],
+        create_worktree=False,
+        dry_run=False,
+        task_slug=None,
+        allow_missing_linkage=False,
+        allow_closed=False,
+    )
+
+    assert payload["schema_version"] == "aistock_issue_workflow_start_batch_v1"
+    assert payload["workflow_gate"] == "ready_for_batch_fix"
+    assert payload["batch_id"].startswith("BATCH-validation-guardrails-")
+    assert payload["bug_ids"] == ["BUG-199", "BUG-200"]
+    assert (isolated_workflow_root / payload["batch_state_path"]).exists()
+    assert (isolated_workflow_root / payload["context_dir"] / "BUG-199.md").exists()
+    assert (isolated_workflow_root / payload["fix_ready_dir"] / "BUG-200.json").exists()
+
+
+def test_finish_batch_plan_generates_per_issue_pr_body(isolated_workflow_root: Path) -> None:
+    bugs_root = workflow.BUGS_ROOT
+    _write_json(bugs_root / "bug199.json", _bug())
+    _write_json(bugs_root / "bug200.json", _bug(bug_id="BUG-200", github_issue_number=200, github_issue_url="https://github.example/issues/200"))
+
+    payload = workflow.build_finish_batch_plan(
+        batch_id=None,
+        bug_ids=["BUG-199", "BUG-200"],
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        base="origin/main",
+        head="HEAD",
+        validation_evidence=["python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> passed"],
+        issue_commit=["BUG-199=abc1234", "BUG-200=def5678"],
+        plan_only=False,
+        allow_missing_evidence=False,
+    )
+
+    assert payload["schema_version"] == "aistock_issue_workflow_finish_batch_v1"
+    assert payload["workflow_gate"] == "ready_for_pr"
+    assert payload["per_issue_commit_map"] == {"BUG-199": "abc1234", "BUG-200": "def5678"}
+    pr_body = (isolated_workflow_root / payload["pr_body_path"]).read_text(encoding="utf-8")
+    assert "Closes #199" in pr_body
+    assert "Closes #200" in pr_body
+    assert "Per-issue closure map" in pr_body
+
+
 def test_doctor_reports_ready_when_client_entries_exist(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -496,6 +561,44 @@ def test_cleanup_after_merge_dry_run_ready_for_merged_branch(
     assert {item["action"] for item in payload["actions"]} >= {"sync_root_main", "delete_local_branch", "delete_remote_branch"}
 
 
+def test_cleanup_after_merge_allows_verified_squash_merge(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "feature/issue-workflow-phase2"
+
+    def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
+        if args[:2] == ["branch", "--show-current"]:
+            return "main"
+        if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
+            return branch
+        if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
+            return ""
+        if args[:2] == ["ls-remote", "--heads"]:
+            return ""
+        return ""
+
+    monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {"ok": True, "branch": "main", "dirty": False, "dirty_count": 0, "head": "a", "origin_main": "a"},
+    )
+    monkeypatch.setattr(workflow, "_verify_pr_merged", lambda pr_url: {"checked": True, "merged": True, "pr": {"url": pr_url}})
+    monkeypatch.setattr(workflow, "_run_command", lambda *args, **kwargs: {"ok": True, "stdout": "", "stderr": "", "returncode": 0})
+
+    payload = workflow.build_cleanup_after_merge_plan(
+        branch=branch,
+        pr_url="https://github.example/pull/195",
+        sync_root=True,
+    )
+
+    assert payload["workflow_gate"] == "ready_for_cleanup"
+    assert payload["merged_into_origin_main"] is False
+    assert payload["squash_merge_verified"] is True
+    assert payload["tree_equivalent_to_origin_main"] is True
+
+
 def test_repo_skill_and_quickstart_are_parseable() -> None:
     skill = Path(".codex/skills/fix-aistock-issue/SKILL.md").read_text(encoding="utf-8")
     assert skill.startswith("---\n")
@@ -511,6 +614,7 @@ def test_repo_skill_and_quickstart_are_parseable() -> None:
     assert "????" not in quickstart
     assert "doctor" in quickstart
     assert "submit-bug" in quickstart
+    assert "start-batch" in quickstart
     assert "resume" in quickstart
     assert "production_ddl_gate" in quickstart
 
