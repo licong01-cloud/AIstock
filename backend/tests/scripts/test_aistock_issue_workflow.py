@@ -336,6 +336,8 @@ def test_submit_bug_dry_run_requires_github_sync(isolated_workflow_root: Path) -
         github_issue_url=None,
         create_github=False,
         apply=False,
+        create_registry_worktree=False,
+        dry_run=False,
     )
 
     assert payload["schema_version"] == "aistock_issue_workflow_submit_bug_v1"
@@ -347,9 +349,11 @@ def test_submit_bug_dry_run_requires_github_sync(isolated_workflow_root: Path) -
 
 def test_submit_bug_apply_with_existing_github_link_writes_registry(
     isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
     _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 117})
+    monkeypatch.setattr(workflow, "_validate_registry_apply_target", lambda root: {"blocking": [], "warnings": [], "target_root": str(root)})
 
     payload = workflow.build_submit_bug_plan(
         title="Paper v2 display regression",
@@ -369,6 +373,8 @@ def test_submit_bug_apply_with_existing_github_link_writes_registry(
         github_issue_url="https://github.com/licong01-cloud/AIstock/issues/188",
         create_github=False,
         apply=True,
+        create_registry_worktree=False,
+        dry_run=False,
     )
 
     assert payload["workflow_gate"] == "submitted"
@@ -380,6 +386,119 @@ def test_submit_bug_apply_with_existing_github_link_writes_registry(
     assert record["production_ddl_gate"] == "noop"
     assert json.loads(allocator.read_text(encoding="utf-8"))["last_allocated"] == 118
     assert (isolated_workflow_root / payload["state_path"]).exists()
+
+
+def test_submit_bug_apply_blocks_canonical_root_pollution(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
+    _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 117})
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {"ok": True, "branch": "main", "dirty": False, "dirty_count": 0, "head": "a", "origin_main": "a"},
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="canonical root"):
+        workflow.build_submit_bug_plan(
+            title="Paper v2 display regression",
+            module="paper_v2",
+            severity="P1",
+            description="The view shows stale data.",
+            expected="The view should show fresh data.",
+            actual="The view shows stale data.",
+            reproduce_command="n/a",
+            evidence_refs=[],
+            changed_files=[],
+            plan_key=None,
+            nox_session=None,
+            candidate_type="bug",
+            bug_id=None,
+            github_issue_number="188",
+            github_issue_url="https://github.com/licong01-cloud/AIstock/issues/188",
+            create_github=False,
+            apply=True,
+            create_registry_worktree=False,
+            dry_run=False,
+        )
+
+
+def test_submit_bug_apply_uses_registry_worktree_override(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = isolated_workflow_root / "registry-worktree"
+    allocator = registry / "tests" / "aistock_validation" / "bugs" / ".bug_id_allocator.json"
+    _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 117})
+    monkeypatch.setenv("AISTOCK_ISSUE_REGISTRY_ROOT", str(registry))
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {"ok": True, "branch": "bug/registry", "dirty": False, "dirty_count": 0, "head": "a", "origin_main": "a"},
+    )
+
+    payload = workflow.build_submit_bug_plan(
+        title="Paper v2 display regression",
+        module="paper_v2",
+        severity="P1",
+        description="The view shows stale data.",
+        expected="The view should show fresh data.",
+        actual="The view shows stale data.",
+        reproduce_command="n/a",
+        evidence_refs=[],
+        changed_files=[],
+        plan_key=None,
+        nox_session=None,
+        candidate_type="bug",
+        bug_id=None,
+        github_issue_number="188",
+        github_issue_url="https://github.com/licong01-cloud/AIstock/issues/188",
+        create_github=False,
+        apply=True,
+        create_registry_worktree=False,
+        dry_run=False,
+    )
+
+    assert payload["workflow_gate"] == "submitted"
+    assert payload["registry_root"] == str(registry)
+    assert (registry / payload["bug_json_path"]).exists()
+    assert json.loads(allocator.read_text(encoding="utf-8"))["last_allocated"] == 118
+
+
+def test_submit_bug_can_plan_registry_worktree_without_writes(isolated_workflow_root: Path) -> None:
+    allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
+    _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 117})
+
+    payload = workflow.build_submit_bug_plan(
+        title="Paper v2 display regression",
+        module="paper_v2",
+        severity="P1",
+        description="The view shows stale data.",
+        expected="The view should show fresh data.",
+        actual="The view shows stale data.",
+        reproduce_command="n/a",
+        evidence_refs=[],
+        changed_files=[],
+        plan_key=None,
+        nox_session=None,
+        candidate_type="bug",
+        bug_id=None,
+        github_issue_number=None,
+        github_issue_url=None,
+        create_github=False,
+        apply=False,
+        create_registry_worktree=True,
+        dry_run=True,
+    )
+
+    assert payload["workflow_gate"] == "needs_github_sync"
+    assert payload["registry_worktree_plan"]["create_worktree"] is True
+    assert payload["registry_worktree_plan"]["dry_run"] is True
+    assert payload["registry_worktree_plan"]["branch"].startswith("bug/registry-paper-v2-")
+    assert not (isolated_workflow_root / payload["bug_json_path"]).exists()
 
 
 def test_install_client_plan_can_copy_global_codex_skill(
@@ -439,6 +558,16 @@ def test_run_pr_mode_drafts_pr_automation_without_side_effects(
 ) -> None:
     issue = _write_json(isolated_workflow_root / "bug.json", _bug())
     monkeypatch.setattr(workflow, "_current_branch", lambda root=None: "bug/BUG-199-workflow")
+    monkeypatch.setattr(
+        workflow,
+        "_pr_worktree_guard",
+        lambda root=None: {
+            "blocking": [],
+            "warnings": [],
+            "root": str(isolated_workflow_root),
+            "canonical_root": str(isolated_workflow_root.parent / "AIstock"),
+        },
+    )
 
     payload = workflow.build_run_plan(
         bug_id="BUG-199",
@@ -458,6 +587,35 @@ def test_run_pr_mode_drafts_pr_automation_without_side_effects(
     assert payload["workflow_gate"] == "ready_for_pr"
     assert payload["pr_automation"]["dry_run"] is True
     assert "gh pr create" in payload["pr_automation"]["next_commands"][1]
+
+
+def test_run_pr_mode_blocks_pr_automation_from_canonical_root(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _write_json(isolated_workflow_root / "bug.json", _bug())
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {"ok": True, "branch": "main", "dirty": False, "dirty_count": 0, "head": "a", "origin_main": "a"},
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="canonical root"):
+        workflow.build_run_plan(
+            bug_id="BUG-199",
+            mode="pr",
+            issue_json=str(issue),
+            changed_files=["scripts/aistock_issue_workflow.py"],
+            create_worktree=False,
+            dry_run=False,
+            validation_evidence=["python -m nox -s l0 -> passed"],
+            task_slug=None,
+            allow_missing_linkage=False,
+            allow_closed=False,
+            base="origin/main",
+            head="HEAD",
+        )
 
 
 def test_close_sync_is_dry_run_and_requires_pr_url(

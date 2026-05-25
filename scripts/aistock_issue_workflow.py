@@ -204,12 +204,16 @@ def _bug_files(bugs_root: Path | None = None) -> list[Path]:
     return sorted(path for path in bugs_root.glob("*.json") if not path.name.startswith("."))
 
 
-def _allocator_path() -> Path:
-    return BUGS_ROOT / ".bug_id_allocator.json"
+def _bugs_root(root: Path | None = None) -> Path:
+    return (root / "tests" / "aistock_validation" / "bugs") if root else BUGS_ROOT
 
 
-def _next_bug_id() -> tuple[str, int]:
-    allocator = _allocator_path()
+def _allocator_path(root: Path | None = None) -> Path:
+    return _bugs_root(root) / ".bug_id_allocator.json"
+
+
+def _next_bug_id(root: Path | None = None) -> tuple[str, int]:
+    allocator = _allocator_path(root)
     last_allocated = 0
     if allocator.exists():
         payload = _load_json(allocator)
@@ -221,9 +225,9 @@ def _next_bug_id() -> tuple[str, int]:
     return f"BUG-{next_number:03d}", next_number
 
 
-def _write_allocator(next_number: int) -> None:
+def _write_allocator(next_number: int, root: Path | None = None) -> None:
     _write_json(
-        _allocator_path(),
+        _allocator_path(root),
         {
             "schema_version": "aistock_bug_id_allocator_v1",
             "last_allocated": next_number,
@@ -233,14 +237,125 @@ def _write_allocator(next_number: int) -> None:
     )
 
 
-def _bug_json_path(record: dict[str, Any]) -> Path:
+def _bug_json_path(record: dict[str, Any], root: Path | None = None) -> Path:
     bug_id = str(record["bug_id"])
-    return BUGS_ROOT / f"{_today_compact()}_{bug_id}-{_slug(str(record.get('title') or bug_id))}.json"
+    return _bugs_root(root) / f"{_today_compact()}_{bug_id}-{_slug(str(record.get('title') or bug_id))}.json"
+
+
+def _registry_target_root() -> Path:
+    override = os.environ.get("AISTOCK_ISSUE_REGISTRY_ROOT")
+    return Path(override) if override else REPO_ROOT
+
+
+def _registry_worktree_names(*, title: str, module: str, severity: str) -> tuple[str, Path]:
+    title_slug = _slug(title, max_len=34)
+    module_slug = _slug(module, max_len=22)
+    suffix = _short_hash(title, module, severity, _utc_now(), length=6)
+    name = f"registry-{module_slug}-{title_slug}-{_today_compact()}-{suffix}"
+    branch = f"bug/{name}"
+    return branch, _default_worktree_root() / name
+
+
+def _maybe_create_registry_worktree(
+    *,
+    title: str,
+    module: str,
+    severity: str,
+    create: bool,
+    dry_run: bool,
+) -> dict[str, Any]:
+    branch, worktree = _registry_worktree_names(title=title, module=module, severity=severity)
+    plan = {
+        "create_worktree": create,
+        "dry_run": dry_run,
+        "branch": branch,
+        "worktree": str(worktree),
+        "base": "origin/main",
+    }
+    if not create or dry_run:
+        return plan
+    if worktree.exists():
+        raise WorkflowError(f"target registry worktree already exists: {worktree}")
+    _git(["fetch", "origin", "main"])
+    _git(["worktree", "add", str(worktree), "-b", branch, "origin/main"])
+    plan["created"] = True
+    return plan
+
+
+def _validate_registry_apply_target(target_root: Path) -> dict[str, Any]:
+    target = target_root.resolve()
+    canonical = _canonical_root().resolve()
+    git = _git_snapshot(target_root)
+    blocking: list[str] = []
+    warnings: list[str] = []
+
+    if not git.get("ok"):
+        blocking.append(str(git.get("error") or f"not a git checkout: {target_root}"))
+    if target == canonical:
+        blocking.append(
+            "refusing to write BUG registry files in canonical root; use a task/registry worktree and branch"
+        )
+    if git.get("branch") == "main":
+        blocking.append("refusing to write BUG registry files on main; use a task/registry branch")
+    if git.get("dirty"):
+        blocking.append(f"registry target is dirty ({git.get('dirty_count')} file(s)); start from a clean task worktree")
+    if (
+        target_root.name.lower() == "aistock"
+        and not _is_inside(target_root, _default_worktree_root())
+        and target != canonical
+    ):
+        warnings.append("registry target does not look like an isolated AIstock worktree")
+
+    return {
+        "target_root": str(target),
+        "canonical_root": str(canonical),
+        "git": git,
+        "blocking": blocking,
+        "warnings": warnings,
+    }
 
 
 def _github_issue_number_from_url(url: str) -> int | None:
     match = re.search(r"/issues/(\d+)(?:$|[?#])", url.strip())
     return int(match.group(1)) if match else None
+
+
+def _is_inside(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _canonical_root() -> Path:
+    override = os.environ.get("AISTOCK_CANONICAL_ROOT") or os.environ.get("AISTOCK_ROOT")
+    if override:
+        return Path(override)
+    default = Path("F:/Dev/AIstock")
+    return default if default.exists() else REPO_ROOT
+
+
+def _git_snapshot(root: Path) -> dict[str, Any]:
+    if not (root / ".git").exists() and not (root / ".git").is_file():
+        return {"ok": False, "error": f"not a git checkout: {root}"}
+    status = _run_command(["git", "status", "--porcelain=v1", "-b"], cwd=root)
+    branch = _run_command(["git", "branch", "--show-current"], cwd=root)
+    head = _run_command(["git", "rev-parse", "--short", "HEAD"], cwd=root)
+    upstream = _run_command(["git", "rev-parse", "--short", "@{u}"], cwd=root)
+    origin_main = _run_command(["git", "rev-parse", "--short", "origin/main"], cwd=root)
+    porcelain = status.get("stdout", "")
+    dirty_lines = [line for line in porcelain.splitlines()[1:] if line.strip()]
+    return {
+        "ok": bool(status.get("ok")),
+        "branch": branch.get("stdout"),
+        "head": head.get("stdout"),
+        "upstream": upstream.get("stdout"),
+        "origin_main": origin_main.get("stdout"),
+        "status": porcelain,
+        "dirty": bool(dirty_lines),
+        "dirty_count": len(dirty_lines),
+    }
 
 
 def find_bug_record(bug_id: str | None = None, issue_json: str | None = None) -> tuple[dict[str, Any], Path]:
@@ -319,11 +434,33 @@ def build_submit_bug_plan(
     github_issue_url: str | None,
     create_github: bool,
     apply: bool,
+    allow_current_worktree: bool = False,
+    create_registry_worktree: bool = False,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
+    effective_apply = apply and not dry_run
+    if effective_apply and not create_github and not (github_issue_number and github_issue_url):
+        raise WorkflowError("--apply requires --create-github or existing --github-issue-number and --github-issue-url")
+    registry_worktree_plan = _maybe_create_registry_worktree(
+        title=title,
+        module=module,
+        severity=severity,
+        create=create_registry_worktree,
+        dry_run=dry_run or not apply,
+    )
+    registry_root = (
+        Path(registry_worktree_plan["worktree"])
+        if create_registry_worktree
+        else _registry_target_root()
+    )
+    allocation_root = registry_root if registry_root.exists() else _registry_target_root()
+    registry_guard = _validate_registry_apply_target(registry_root) if effective_apply else None
+    if registry_guard and registry_guard["blocking"] and not allow_current_worktree:
+        raise WorkflowError("; ".join(registry_guard["blocking"]))
     canonical_bug_id = (bug_id or "").strip().upper() or None
     allocated_number: int | None = None
     if not canonical_bug_id:
-        canonical_bug_id, allocated_number = _next_bug_id()
+        canonical_bug_id, allocated_number = _next_bug_id(allocation_root)
     else:
         match = re.fullmatch(r"BUG-(\d{3,})", canonical_bug_id)
         if not match:
@@ -373,46 +510,45 @@ def build_submit_bug_plan(
     record.setdefault("production_frontend_dependency_gate", "noop")
     record.setdefault("production_backend_dependency_gate", "noop")
 
-    output_dir = REPO_ROOT / WORKFLOW_ROOT / canonical_bug_id
+    output_dir = registry_root / WORKFLOW_ROOT / canonical_bug_id
     candidate_path = output_dir / "candidate.json"
     github_body_path = output_dir / "github-issue-body.md"
-    bug_path = _bug_json_path(record)
+    bug_path = _bug_json_path(record, registry_root)
     github_result: dict[str, Any] | None = None
 
-    if apply and bug_path.exists():
+    if effective_apply and bug_path.exists():
         raise WorkflowError(f"BUG JSON already exists: {bug_path}")
 
-    if create_github and not record.get("github_issue_url"):
+    if create_github and not record.get("github_issue_url") and effective_apply:
         _write_text(github_body_path, _render_github_issue_body(record, candidate))
-        if apply:
-            github_title = f"{canonical_bug_id} {severity}: {title}"
-            result = _execute_checked(
-                [
-                    "gh",
-                    "issue",
-                    "create",
-                    "--repo",
-                    GITHUB_REPO,
-                    "--title",
-                    github_title,
-                    "--body-file",
-                    str(github_body_path),
-                ],
-                cwd=REPO_ROOT,
-                timeout=120,
-            )
-            issue_url = str(result.get("stdout") or "").splitlines()[-1].strip()
-            issue_number = _github_issue_number_from_url(issue_url)
-            if not issue_url or not issue_number:
-                raise WorkflowError(f"cannot parse created GitHub issue URL: {issue_url!r}")
-            record["github_issue_url"] = issue_url
-            record["github_issue_number"] = issue_number
-            github_result = {"created": True, "url": issue_url, "number": issue_number}
-        else:
-            github_result = {"created": False, "planned": True, "body_path": _repo_rel(github_body_path)}
+        github_title = f"{canonical_bug_id} {severity}: {title}"
+        result = _execute_checked(
+            [
+                "gh",
+                "issue",
+                "create",
+                "--repo",
+                GITHUB_REPO,
+                "--title",
+                github_title,
+                "--body-file",
+                str(github_body_path),
+            ],
+            cwd=registry_root,
+            timeout=120,
+        )
+        issue_url = str(result.get("stdout") or "").splitlines()[-1].strip()
+        issue_number = _github_issue_number_from_url(issue_url)
+        if not issue_url or not issue_number:
+            raise WorkflowError(f"cannot parse created GitHub issue URL: {issue_url!r}")
+        record["github_issue_url"] = issue_url
+        record["github_issue_number"] = issue_number
+        github_result = {"created": True, "url": issue_url, "number": issue_number}
+    elif create_github and not record.get("github_issue_url"):
+        github_result = {"created": False, "planned": True, "body_path": _repo_rel(github_body_path, registry_root)}
 
     has_linkage = bool(record.get("github_issue_number") and record.get("github_issue_url"))
-    if apply and not has_linkage:
+    if effective_apply and not has_linkage:
         raise WorkflowError("--apply requires --create-github or existing --github-issue-number and --github-issue-url")
 
     payload = {
@@ -420,39 +556,67 @@ def build_submit_bug_plan(
         "generated_at": now,
         "bug_id": canonical_bug_id,
         "candidate_id": candidate.get("candidate_id"),
-        "dry_run": not apply,
-        "workflow_gate": "submitted" if apply else ("ready_for_apply" if has_linkage or create_github else "needs_github_sync"),
-        "candidate_path": _repo_rel(candidate_path),
-        "github_issue_body_path": _repo_rel(github_body_path),
-        "bug_json_path": _repo_rel(bug_path),
+        "dry_run": not effective_apply,
+        "workflow_gate": "submitted" if effective_apply else ("ready_for_apply" if has_linkage or create_github else "needs_github_sync"),
+        "registry_root": str(registry_root),
+        "registry_guard": registry_guard or (
+            {
+                "target_root": str(registry_root),
+                "canonical_root": str(_canonical_root().resolve()),
+                "blocking": [],
+                "warnings": ["registry worktree will be created on apply"],
+                "planned": True,
+            }
+            if create_registry_worktree and not registry_root.exists()
+            else _validate_registry_apply_target(registry_root)
+        ),
+        "registry_worktree_plan": registry_worktree_plan,
+        "candidate_path": _repo_rel(candidate_path, registry_root),
+        "github_issue_body_path": _repo_rel(github_body_path, registry_root),
+        "bug_json_path": _repo_rel(bug_path, registry_root),
         "github": github_result or {
             "created": False,
             "number": record.get("github_issue_number"),
             "url": record.get("github_issue_url"),
         },
         "record": record,
-        "next_command": f"python scripts/aistock_issue_workflow.py run --bug-id {canonical_bug_id} --mode plan --create-worktree"
-        if apply
-        else f"python scripts/aistock_issue_workflow.py submit-bug --title \"{title}\" --module {module} --severity {severity} --create-github --apply",
+        "next_agent_steps": [
+            "switch_to_registry_worktree",
+            "continue_fix_in_same_task_branch_or_commit_registry_only_pr",
+            "do_not_write_bug_json_in_canonical_root",
+        ] if effective_apply else [
+            "create_or_switch_to_clean_registry_worktree",
+            "rerun_submit_bug_with_github_linkage",
+        ],
+        "next_command": (
+            f"cd /d {registry_root} && python scripts/aistock_issue_workflow.py run "
+            f"--bug-id {canonical_bug_id} --mode plan"
+        )
+        if effective_apply
+        else (
+            f"python scripts/aistock_issue_workflow.py submit-bug --title \"{title}\" --module {module} "
+            f"--severity {severity} --create-github --create-registry-worktree --apply"
+        ),
     }
 
-    if apply:
+    if effective_apply:
         _write_json(candidate_path, {"event": event, "candidate": candidate})
         _write_text(github_body_path, _render_github_issue_body(record, candidate))
         _write_json(bug_path, record)
         if bug_id is None:
-            _write_allocator(int(allocated_number or canonical_bug_id.split("-")[1]))
+            _write_allocator(int(allocated_number or canonical_bug_id.split("-")[1]), registry_root)
         _write_state(
             canonical_bug_id,
             state="discovered",
-            source_bug_json=_repo_rel(bug_path),
-            candidate_path=_repo_rel(candidate_path),
+            root=registry_root,
+            source_bug_json=_repo_rel(bug_path, registry_root),
+            candidate_path=_repo_rel(candidate_path, registry_root),
             github_issue_number=record.get("github_issue_number"),
             github_issue_url=record.get("github_issue_url"),
             next_actions=["run_issue_workflow_plan", "create_worktree", "read_context_pack"],
         )
-        payload["state_path"] = _repo_rel(_state_path(canonical_bug_id))
-        payload["events_path"] = _repo_rel(_events_path(canonical_bug_id))
+        payload["state_path"] = _repo_rel(_state_path(canonical_bug_id, registry_root), registry_root)
+        payload["events_path"] = _repo_rel(_events_path(canonical_bug_id, registry_root), registry_root)
     return payload
 
 
@@ -1115,36 +1279,6 @@ def _codex_home() -> Path:
     return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
 
 
-def _canonical_root() -> Path:
-    override = os.environ.get("AISTOCK_CANONICAL_ROOT") or os.environ.get("AISTOCK_ROOT")
-    if override:
-        return Path(override)
-    default = Path("F:/Dev/AIstock")
-    return default if default.exists() else REPO_ROOT
-
-
-def _git_snapshot(root: Path) -> dict[str, Any]:
-    if not (root / ".git").exists() and not (root / ".git").is_file():
-        return {"ok": False, "error": f"not a git checkout: {root}"}
-    status = _run_command(["git", "status", "--porcelain=v1", "-b"], cwd=root)
-    branch = _run_command(["git", "branch", "--show-current"], cwd=root)
-    head = _run_command(["git", "rev-parse", "--short", "HEAD"], cwd=root)
-    upstream = _run_command(["git", "rev-parse", "--short", "@{u}"], cwd=root)
-    origin_main = _run_command(["git", "rev-parse", "--short", "origin/main"], cwd=root)
-    porcelain = status.get("stdout", "")
-    dirty_lines = [line for line in porcelain.splitlines()[1:] if line.strip()]
-    return {
-        "ok": bool(status.get("ok")),
-        "branch": branch.get("stdout"),
-        "head": head.get("stdout"),
-        "upstream": upstream.get("stdout"),
-        "origin_main": origin_main.get("stdout"),
-        "status": porcelain,
-        "dirty": bool(dirty_lines),
-        "dirty_count": len(dirty_lines),
-    }
-
-
 def _mcp_config_snapshot() -> dict[str, Any]:
     candidates = [
         _codex_home() / "config.toml",
@@ -1310,30 +1444,42 @@ def build_resume_plan(*, bug_id: str, worktree: str | None = None, events_limit:
     if events_path.exists():
         lines = events_path.read_text(encoding="utf-8").splitlines()[-events_limit:]
         events = [json.loads(line) for line in lines if line.strip()]
+    git = _git_snapshot(root) if root.exists() else {"ok": False, "error": f"workflow root missing: {root}"}
+    dirty_stop = bool(git.get("dirty") and state.get("state") == "validation_passed")
     return {
         "schema_version": "aistock_issue_workflow_resume_v1",
         "generated_at": _utc_now(),
         "bug_id": canonical_bug_id,
         "workflow_root": str(root),
+        "workflow_git": git,
+        "worktree": state.get("worktree") or str(root),
+        "branch": state.get("branch") or git.get("branch"),
         "state_path": _repo_rel(_state_path(canonical_bug_id, root), root),
         "events_path": _repo_rel(events_path, root),
         "state": state,
         "recent_events": events,
+        "stop_conditions": ["commit task files before PR automation"] if dirty_stop else [],
         "next_command": _next_command_for_state(canonical_bug_id, state),
     }
 
 
 def _next_command_for_state(bug_id: str, state: dict[str, Any]) -> str:
     current = str(state.get("state") or "")
+    worktree = str(state.get("worktree") or state.get("cwd") or "").strip()
+    prefix = f"cd /d {worktree} && " if worktree else ""
     if current in {"context_ready", "fix_in_progress"}:
-        return f"python scripts/aistock_issue_workflow.py finish --bug-id {bug_id} --plan-only"
+        return f"{prefix}python scripts/aistock_issue_workflow.py finish --bug-id {bug_id} --plan-only"
     if current in {"validation_planned", "blocked"}:
-        return f"python scripts/aistock_issue_workflow.py finish --bug-id {bug_id} --validation-evidence \"<command> -> passed\""
+        return f"{prefix}python scripts/aistock_issue_workflow.py finish --bug-id {bug_id} --validation-evidence \"<command> -> passed\""
     if current == "validation_passed":
-        return "commit, push, and create PR from tmp/issue_workflow/<BUG>/pr-body.md"
+        return (
+            f"{prefix}git status --short && git add <task files> && git commit -m \"fix: resolve {bug_id}\" && "
+            f"python scripts/aistock_issue_workflow.py run --bug-id {bug_id} --mode pr "
+            "--validation-evidence \"<command> -> passed\" --push --create-pr"
+        )
     if current in {"pr_opened", "ci_running"}:
         return "watch CI and rerun finish if changes are needed"
-    return f"python scripts/aistock_issue_workflow.py run --bug-id {bug_id} --mode plan"
+    return f"{prefix}python scripts/aistock_issue_workflow.py run --bug-id {bug_id} --mode plan"
 
 
 def _execute_checked(args: list[str], *, cwd: Path | None = None, timeout: int = 120) -> dict[str, Any]:
@@ -1352,6 +1498,30 @@ def _current_branch(root: Path | None = None) -> str:
     return branch
 
 
+def _pr_worktree_guard(root: Path | None = None) -> dict[str, Any]:
+    work_root = root or REPO_ROOT
+    canonical = _canonical_root().resolve()
+    git = _git_snapshot(work_root)
+    blocking: list[str] = []
+    warnings: list[str] = []
+    target = work_root.resolve()
+    if not git.get("ok"):
+        blocking.append(str(git.get("error") or f"not a git checkout: {work_root}"))
+    if target == canonical:
+        blocking.append("refusing PR automation from canonical root; continue in the issue worktree")
+    if git.get("branch") == "main":
+        blocking.append("refusing PR automation from main; continue on the task branch")
+    if git.get("dirty"):
+        warnings.append(f"task worktree has {git.get('dirty_count')} uncommitted file(s); commit only task files before push/PR")
+    return {
+        "root": str(target),
+        "canonical_root": str(canonical),
+        "git": git,
+        "blocking": blocking,
+        "warnings": warnings,
+    }
+
+
 def _maybe_create_pr(
     *,
     bug_id: str,
@@ -1363,11 +1533,15 @@ def _maybe_create_pr(
 ) -> dict[str, Any]:
     actions: list[dict[str, Any]] = []
     pr_url: str | None = None
+    guard = _pr_worktree_guard()
+    if guard["blocking"]:
+        raise WorkflowError("; ".join(guard["blocking"]))
     branch = _current_branch()
     if not (push or create_pr or watch_ci):
         return {
             "branch": branch,
             "dry_run": True,
+            "worktree_guard": guard,
             "next_commands": [
                 f"git push -u origin {branch}",
                 f"gh pr create --base main --head {branch} --title \"{pr_title or bug_id + ' issue workflow fix'}\" --body-file {finish.get('pr_body_path')}",
@@ -1394,8 +1568,21 @@ def _maybe_create_pr(
             raise WorkflowError("--watch-ci requires --create-pr in this Phase 1 wrapper")
         result = _execute_checked(["gh", "pr", "checks", pr_url, "--watch", "--interval", "10"], cwd=REPO_ROOT, timeout=900)
         actions.append({"command": "gh pr checks --watch", "result": result})
-        _write_state(bug_id, state="ci_green", branch=branch, pr_url=pr_url, next_actions=["merge_only_if_user_authorized"])
-    return {"branch": branch, "dry_run": False, "pr_url": pr_url, "actions": actions}
+        check_text = "\n".join(str(result.get(key) or "") for key in ("stdout", "stderr"))
+        check_ok = bool(result.get("ok")) and not re.search(
+            r"\b(fail|failed|failure|cancelled|timed out)\b",
+            check_text,
+            re.IGNORECASE,
+        )
+        _write_state(
+            bug_id,
+            state="ci_green" if check_ok else "ci_running",
+            branch=branch,
+            pr_url=pr_url,
+            next_actions=["merge_only_if_user_authorized"] if check_ok else ["inspect_ci_failure", "fix_on_same_task_branch"],
+            stop_reason=None if check_ok else "ci_not_green",
+        )
+    return {"branch": branch, "dry_run": False, "pr_url": pr_url, "actions": actions, "worktree_guard": guard}
 
 
 def _verify_pr_merged(pr_url: str, *, skip_github_check: bool = False) -> dict[str, Any]:
@@ -1798,6 +1985,9 @@ def cmd_submit_bug(args: argparse.Namespace) -> int:
         github_issue_url=args.github_issue_url,
         create_github=args.create_github,
         apply=args.apply,
+        allow_current_worktree=args.allow_current_worktree,
+        create_registry_worktree=args.create_registry_worktree,
+        dry_run=args.dry_run,
     )
     _emit(payload, args.output)
     return 0 if payload.get("workflow_gate") in {"ready_for_apply", "submitted"} else 2
@@ -1894,6 +2084,13 @@ def build_parser() -> argparse.ArgumentParser:
     submit_bug.add_argument("--github-issue-url")
     submit_bug.add_argument("--create-github", action="store_true", help="Use gh to create the linked GitHub Issue when --apply is set.")
     submit_bug.add_argument("--apply", action="store_true", help="Write candidate/BUG JSON and update allocator after GitHub linkage exists.")
+    submit_bug.add_argument("--create-registry-worktree", action="store_true", help="Create a clean registry worktree/branch from origin/main before writing BUG JSON.")
+    submit_bug.add_argument("--dry-run", action="store_true", help="Plan registry worktree creation without writing files or creating a worktree.")
+    submit_bug.add_argument(
+        "--allow-current-worktree",
+        action="store_true",
+        help="Override the registry guard for emergency/manual use. Normal agent workflows must not use this on canonical main.",
+    )
     submit_bug.add_argument("--output")
     submit_bug.set_defaults(func=cmd_submit_bug)
 
