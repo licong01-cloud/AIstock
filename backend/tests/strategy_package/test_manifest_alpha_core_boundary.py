@@ -42,7 +42,6 @@ from backend.services.strategy_package.selection_artifact import (
     selection_artifact_runtime_hash,
 )
 from backend.services.strategy_package.service import StrategyPackageService
-from backend.services.trading_core.errors import StrategyPackageValidationError
 from backend.tests.selection_center.test_runtime_selection import (
     FakeSuspendLookup,
     NoopRefreshAudit,
