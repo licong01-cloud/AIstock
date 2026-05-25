@@ -43,8 +43,8 @@
   "expected": "CI/Nightly failure intake creates or updates a diagnostic-rich GitHub Issue with failed job/session/test/error details, fingerprint-based dedupe, partial extraction status when needed, and a repo CLI path to triage/promote the issue into BUG JSON before standard worktree-based repair.",
   "first_seen_at": "2026-05-25T06:05:00.261441Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "bee314df1ad2f8a98704e07ba2b896ba4de3e9e7",
+  "fixed_at": "2026-05-25T15:26:21.252462Z",
   "github_issue_number": 202,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/202",
   "last_seen_at": "2026-05-25T06:05:00.261441Z",
@@ -52,6 +52,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/204",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -68,7 +69,7 @@
   "risk_area": "ci_failure_intake",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation.guardrails",
     "validation.runner",
@@ -79,5 +80,9 @@
     "fingerprint": "b66f66430f0a982e8c961294",
     "source_event_id": "FE-20260525-b66f66430f0a"
   },
+  "validation_evidence": [
+    "local focused workflow tests: 37 passed",
+    "GitHub PR #204 checks: CI/PR Quality/Semgrep/CodeQL passed; Auto-register CI failures skipped because no failures"
+  ],
   "verification_run_id": null
 }
