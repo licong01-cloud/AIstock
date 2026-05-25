@@ -464,6 +464,67 @@ GET /api/v1/strategy-packages/asset-eligible
 
 ## 9. 前端详细设计
 
+### 9.0 UI 同步整改总原则
+
+本项目必须把 UI 作为同一整改范围，不允许只改后端、不改前端。过去的核心问题之一就是：UI 没有提供任何真正可调整的平台配置能力，却在策略包进入选股或模拟盘时用旧状态、旧 health、旧 governance 字段阻拦用户，最终形成“用户无处修改、但处处报错”的死流程。
+
+本次 UI 整改必须遵守：
+
+1. 后端删除的门禁，UI 必须同步删除；不得继续用旧字段在前端隐藏包、禁用按钮、禁用 option 或显示“必须先启用”的流程。
+2. 资产合格包必须在 Selection、AIstock Paper、MiniQMT SIM 三类页面都可见、可选、可提交。
+3. UI 只能因为以下原因禁用按钮：
+   - 正在执行请求，避免重复提交；
+   - 最小必填表单为空，例如未选择任何策略包、trade_date 为空、top_k 非法；
+   - destructive action 的确认文本未输入；
+   - 真实下单或未来实盘路径缺少显式安全授权。
+4. UI 不得因为以下原因禁用 Selection/Paper/MiniQMT 模拟盘入口：
+   - `PAPER_ENABLED/PAPER_RUNNING/PAPER_PASSED/PAPER_FAILED`；
+   - `SELECTION_ENABLED`；
+   - `paper_ready=false`；
+   - `paper_enabled=false` execution policy；
+   - `paper_candidate=false` runtime variant；
+   - package health warning；
+   - ST PIT / HMM / 行业黑名单 / 交易日 / 行情源 / broker runtime warning。
+5. 平台 runtime 风险可以展示为 warning / diagnostics，但必须附带“仍可运行，失败会记录为本次 run/session 错误”的清晰说明。
+6. UI 错误必须区分“策略包资产不合格”和“本次运行条件不足”，不得把 runtime failure 显示为策略包不可用。
+7. UI 要减少旧流程噪音：删除 enable-selection、enable-paper、paper_ready governance、paper-enabled policy、PAPER lifecycle badge 等会误导用户的展示。
+8. UI 要保留真正有用的信息：资产合格检查、artifact 缺失原因、runtime warning、交易日状态、HMM 自动计算/缓存状态、行情价格来源、MiniQMT 连接与 SIM 安全状态、run/session 错误和下一步动作。
+
+### 9.0.1 UI 删除/保留矩阵
+
+| UI 功能/展示 | 处理 | 说明 |
+|---|---|---|
+| “标记可用于选股” | 删除 | 资产合格即可选股。 |
+| “标记可用于模拟盘” | 删除 | 资产合格即可创建模拟盘。 |
+| `PAPER_ENABLED/PAPER_RUNNING/PAPER_PASSED/PAPER_FAILED` 状态 badge | 从 Paper v2 主路径删除 | 历史状态只能在高级审计中显示为 legacy。 |
+| `paper_ready` 卡片/按钮禁用 | 从 Paper v2 主路径删除 | 仅未来 live governance 只读可见。 |
+| `paper_enabled` execution policy ready/disabled 展示 | 删除 | policy 是否可用于模拟盘不再由该字段决定。 |
+| `paper_candidate` runtime variant 展示 | 从 Selection/Paper 主路径删除 | runtime variant 不再作为准入。 |
+| StrategyPackage health blocked notice | 改为 runtime warning | 不禁用选择和运行。 |
+| Selection checkbox disabled | 删除 | 只有资产不合格包不进入列表；列表内包都可选。 |
+| Selection run button 因 package health disabled | 删除 | 只因 busy/表单缺失禁用。 |
+| MiniQMT 创建按钮因 `!policyId` disabled | 删除 | policy 可为空，平台默认解析。 |
+| MiniQMT package list 只显示 Paper 状态包 | 删除 | 使用 asset eligible packages。 |
+| Workflow step “用 PAPER_ENABLED 策略包冻结模拟盘实例” | 删除 | 改为“资产合格策略包可直接创建模拟盘”。 |
+| AssetEligibilityCard | 保留/新增 | 展示唯一硬准入及 blockers。 |
+| RuntimeDiagnosticsPanel | 保留/新增 | 展示非阻断 warning、可重试错误和下一步动作。 |
+| BrokerStatusPanel | 保留/简化 | MiniQMT 连接、SIM mode、账户状态属于运行时，不隐藏策略包。 |
+| HMM runtime panel | 保留/简化 | 选择 model config；snapshot 可选；展示自动计算/缓存状态。 |
+| Selection result price/source columns | 保留/增强 | 展示股票名称、入池价、当前价、成交量、昨收、价格来源。 |
+
+### 9.0.2 UI 可运行性验收
+
+每个 UI 页面必须通过“无门禁走通”验收：
+
+1. 给定一个 asset eligible package，即使 legacy status 是 `BACKTEST_APPROVED`，也能在页面中看到并选择。
+2. 不需要点击任何 enable-selection / enable-paper / governance 页面。
+3. 不需要先创建或启用 paper-enabled execution policy。
+4. 不需要先创建 paper_candidate runtime variant。
+5. Selection 页面可以直接点击运行；若 runtime 数据缺失，后端返回本次 run error，UI 显示错误和下一步，不把包变成不可用。
+6. AIstock Paper 页面可以直接创建 portfolio；policy 为空时由平台默认解析。
+7. MiniQMT SIM 页面可以直接创建配置；MiniQMT 未连接时显示 broker unavailable/waiting，但不隐藏策略包、不要求换包。
+8. 页面不得出现让用户无处修改但必须满足的阻断文案，例如“请先启用 Paper”“Required paper-enabled policy”“策略包健康预检阻断”。
+
 ### 9.1 Paper v2 首页
 
 - ready package count 改为 asset eligible count。
@@ -678,6 +739,9 @@ rg -n "PAPER_ENABLED|PAPER_RUNNING|PAPER_PASSED|PAPER_FAILED|paper_ready|paper_c
 | L3 UI | Selection UI | Playwright | 包不被禁用，运行按钮不因 health 阻断。 |
 | L3 UI | AIstock Paper UI | Playwright | policy 可为空，页面无 `paper_enabled` gate 文案。 |
 | L3 UI | MiniQMT UI | Playwright | asset eligible packages 可选，创建按钮不要求 policyId。 |
+| L3 UI | No dead-end gate UX | Playwright + text scan | 不出现“先启用 Paper / Required paper-enabled policy / 策略包健康预检阻断”等用户无法在 UI 内解决的阻断流程。 |
+| L3 UI | Runtime warning is non-blocking | Playwright | 有 HMM/ST PIT/broker/data warning 时，包仍可选择，运行按钮仍可点击，失败归属本次 run/session。 |
+| L3 UI | Useful simplified display | Playwright + API fixture | 页面保留 asset eligibility、runtime diagnostics、HMM 自动计算/缓存、交易日状态、MiniQMT broker status、价格来源；删除 legacy paper lifecycle 噪音。 |
 | L4 integration | LocalSim full day | dev backend + DB/fake data | selection/target/order/ledger/snapshot 完整，runtime 缺失 fail-fast。 |
 | L4 integration | MiniQMT fake broker | fake broker E2E | order/trade/account/reconciliation 全链路。 |
 | L4 dual backend | Same strategy LocalSim vs MiniQMT fake | oracle compare | selection evidence 一致；执行差异只来自 broker/fill。 |
@@ -695,12 +759,15 @@ rg -n "PAPER_ENABLED|PAPER_RUNNING|PAPER_PASSED|PAPER_FAILED|paper_ready|paper_c
 5. Paper v2 主路径没有 `paper_candidate runtime variant` gate。
 6. Selection UI 不再因为 package health 禁用包或运行按钮。
 7. MiniQMT UI 不再只列 Paper 状态包，不再要求 paper-enabled policy。
-8. HMM 不需要手工生成 snapshot；选择模型后自动计算/缓存。
-9. 平台数据缺失只影响本次 run/session，不改变 StrategyPackage 状态。
-10. MiniQMT 模拟盘不使用 TDX/DB/LocalSim 补成交。
-11. 未来实盘仍必须走 LiveApproval，不能由 QE 包直接进入实盘。
-12. 所有旧状态数据完成迁移或有明确兼容处理。
-13. validation record 证明 L0-L4 通过；L5 MiniQMT SIM 若未完成，明确标记为实盘前验证项，不阻断模拟盘 gate purge。
+8. UI 不再暴露 enable-selection / enable-paper 作为主路径操作。
+9. UI 不再出现用户无法通过页面配置解决、但会阻断进入 Selection/Paper/MiniQMT 的 dead-end gate 文案。
+10. UI 保留并简化真正有用的信息：asset eligibility、runtime diagnostics、HMM 自动计算/缓存、交易日状态、价格来源、MiniQMT broker status、run/session 错误和下一步动作。
+11. HMM 不需要手工生成 snapshot；选择模型后自动计算/缓存。
+12. 平台数据缺失只影响本次 run/session，不改变 StrategyPackage 状态。
+13. MiniQMT 模拟盘不使用 TDX/DB/LocalSim 补成交。
+14. 未来实盘仍必须走 LiveApproval，不能由 QE 包直接进入实盘。
+15. 所有旧状态数据完成迁移或有明确兼容处理。
+16. validation record 证明 L0-L4 通过；L5 MiniQMT SIM 若未完成，明确标记为实盘前验证项，不阻断模拟盘 gate purge。
 
 ## 14. 风险和缓解
 
@@ -743,5 +810,7 @@ rg -n "PAPER_ENABLED|PAPER_RUNNING|PAPER_PASSED|PAPER_FAILED|paper_ready|paper_c
 4. `paper_enabled` execution policy 和 `paper_candidate` runtime variant 不再作为任何 Selection/Paper/MiniQMT 门禁。
 5. 平台能力全部降级为 runtime run/session checks，不影响包准入。
 6. 未来实盘只保留 LiveApproval 独立 gate，必须有模拟盘运行证据和人工审批。
+7. UI 必须同步删除所有旧门禁入口、disabled 逻辑和 dead-end gate 文案；不得出现后端已放开但前端继续阻断的情况。
+8. UI 必须同步简化展示，只保留资产合格、运行时诊断、交易日/HMM/价格/MiniQMT 状态和 run/session 证据等对用户有操作意义的信息。
 
 审批后即可按本设计启动实现项目。
