@@ -127,3 +127,34 @@ rtk rg -n "TDX_REALTIME|MINIQMT_REALTIME" frontend/src/app/paper-v2/selection fr
 - Remaining risks: real DB/API LocalSim, MiniQMT sim dry-run, QE/Paper score equivalence, and production runtime smoke are intentionally deferred until user-approved deployment/test window.
 - Need production backend restart: no action performed now; yes after approved merge/activation.
 - Need dev service restart: only Playwright-managed dev frontend `3011` was used and closed by Playwright.
+
+## Runtime Readiness Validation - 2026-05-25 09:17+08:00
+
+This pass used the implementation worktree only and did not restart or modify production `8001` / `3000`.
+
+### Commands
+
+```bash
+rtk python -m pytest backend/tests/paper_trading_v2/test_trading_calendar_status.py backend/tests/selection_center/test_result_enrichment.py backend/tests/selection_center/test_runtime_selection.py::test_strategy_package_runtime_auto_generates_hmm_coefficients_on_miss backend/tests/selection_center/test_runtime_selection.py::test_strategy_package_runtime_resolves_latest_ready_hmm_snapshot_from_model_config backend/tests/test_strategy_scheduler_calendar.py -q -p no:cacheprovider
+rtk cmd /c "set AISTOCK_ENV_PATH=F:\Dev\AIstock\.env&& set PYTHONIOENCODING=utf-8&& python debug_tools\paper_v2\20260525\runtime_readiness_probe.py"
+rtk cmd /c "set AISTOCK_ENV_PATH=F:\Dev\AIstock\.env&& set PYTHONIOENCODING=utf-8&& python debug_tools\paper_v2\20260525\hmm_runtime_readiness_probe.py"
+```
+
+### Results
+
+| Capability | Evidence | Status | Notes |
+|---|---|---|---|
+| Targeted regression | `11 passed in 1.63s` | PASS | Trading calendar, result enrichment, HMM compute-on-miss/cache, scheduler calendar tests passed. |
+| Official trading-day service | Cache built from `market.trading_calendar`; DB coverage `1990-12-19` to `2026-12-31`, `13162` rows, `8797` trading days; second call made no additional DB query | PASS | `2026-05-25` is a trading day; previous trading day `2026-05-22`; next trading day `2026-05-26`; no coverage warnings. |
+| Historical selection PIT entry price | Target date `2026-05-13` used reference date `2026-05-12`; `000001.SZ` name `平安银行`, entry price `11.25`; `000002.SZ` name `万科Ａ`, entry price `4.10` | PASS | Entry-price source is `market.kline_daily_raw.close:2026-05-12`; historical path does not use target-day future data. |
+| Current-date TDX quote / entry price | TDX responded for `000001`, `000002`, `600000`, but `current_price=0.0`, `volume=0.0`, with non-zero `pre_close` (`10.68`, `3.46`, `8.96`) | FAIL | At 09:17 pre-open, current-date selection fails with `current-date selection requires TDX quote price for watchlist entry price`. This is a real blocker unless the implementation treats TDX `pre_close` as the latest close / entry price before the first live price is available. |
+| Paper v2 runtime data excluding `stk_limit` | Minute sample `000001.SZ` on `2026-05-13`: `240` bars, `09:31` to `15:00`; latest minute audit success for `2026-05-22`, `1324802` rows | PASS | `DbPreviousCloseProvider` returned `11.25` from `2026-05-12`; `suspend_d` audit success with `31` rows and sample not suspended; `kline_daily_raw` audit success with `5515` rows. |
+| Execution policy inventory | `strategy_pkg.validated_execution_policy`: `2` total, `2` `paper_enabled`; latest sample `pkg_2a9fccb83da840c9a27a2d7a4118af9a` / `execpol_b5d500062f3b4e51bdfb05960bb93a48` / `V25_1_SMALL_CAP` / `BACKTEST_VALIDATED` | PASS | Paper portfolios include READY `paper_d842151c16494ea6847d0470fef99e10` (`TDX_REALTIME`) and READY `paper_8cd47431538f4cb78ff182724fa8f182` (`DB_HISTORICAL`). |
+| `stk_limit` excluded check | Probe did not use `stk_limit` as a required gate; sample date `2026-05-13` has `stk_limit` audit success with `7589` rows | EXCLUDED | Per user scope, limit-up/down data was not used to decide readiness in this pass. |
+| HMM real model/cache readiness | Real config `fc0683a9-6ca0-4d55-b053-17c2360c3c40` resolved latest ready snapshot `ecee7c40-6764-49ad-bc0f-1c6c6b390504`; `preset_A` coefficient artifact covered `2026-05-19`; `sector_count=131`, `stock_sector_map_count=5847`; two preflights reused the same coefficient path | PASS | This proves model-config resolution and cache-hit behavior on real assets. Real compute-on-miss was not executed because a reusable cache existed; unit tests above cover compute-on-miss and no manual snapshot requirement. |
+
+### Runtime Go/No-Go Delta
+
+- Newly confirmed blocker: current-date selection before the market produces a positive TDX `current_price` fails even though TDX provides `pre_close`. This conflicts with the requirement that current-date selection should use the TDX latest close/price as the entry/watchlist price without manual handling.
+- Non-blocked in this pass: official trading-day cache, historical PIT selection entry price, stock-name enrichment, Paper v2 minute/pre-close/suspend data, execution policy inventory, and real HMM model-config cache hit.
+- Production impact: no production restart, no DDL, no frontend/backend dependency changes, no StrategyPackage manifest/model/HMM/Paper ledger edits.
