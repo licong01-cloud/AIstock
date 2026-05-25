@@ -33,13 +33,13 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from zoneinfo import ZoneInfo
 
-import psycopg2
 import psycopg2.extras as pgx
 import requests
 import schedule
 import logging
 from dotenv import load_dotenv
 
+from ..db.pg_pool import get_conn
 from ..services.tushare_dataset_specs import DATASET_REGISTRY
 from ..services.tushare_sync_engine import TushareSyncEngine
 from ..services.trading_calendar_status import TradingCalendarStatusService
@@ -159,9 +159,6 @@ def _coerce_int(value: Any) -> Optional[int]:
 
 def _is_zero_update_success(status: str, inserted_rows: Any) -> bool:
     return (status or "").lower() == "success" and _coerce_int(inserted_rows) == 0
-
-
-from ..db.pg_pool import get_conn
 
 
 @contextmanager
@@ -833,7 +830,7 @@ class TDXScheduler:
     def _scheduled_testing_run(self, schedule_id: str, options: Dict[str, Any]) -> None:
         if self._tracker.is_running(f"testing:{schedule_id}"):
             return
-        run_id = self._submit_testing(schedule_id, "schedule", options)
+        self._submit_testing(schedule_id, "schedule", options)
         if schedule_id:
             self._update_testing_schedule(
                 schedule_id,
@@ -1067,7 +1064,7 @@ class TDXScheduler:
                 _logger.error("failed to create job record for %s: %s", dataset, exc)
 
         try:
-            run_id = self._submit_ingestion(schedule_id, dataset, mode, "schedule", effective_options)
+            self._submit_ingestion(schedule_id, dataset, mode, "schedule", effective_options)
         except Exception as exc:  # noqa: BLE001
             _logger.exception("scheduled ingestion submit failed for %s/%s: %s", dataset, mode, exc)
             self._mark_job_failed_before_start(
@@ -3883,7 +3880,7 @@ class TDXScheduler:
             if raw:
                 try:
                     base = json.loads(raw) if isinstance(raw, str) else dict(raw)
-                except Exception:  # noqa: BLE001
+                except Exception as exc:  # noqa: BLE001
                     _logger.warning("_update_ingestion_job_status: failed to parse existing summary for job %s: %s", job_id, exc)
                     base = {}
         base.update(summary or {})

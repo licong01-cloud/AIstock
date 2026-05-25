@@ -143,3 +143,27 @@
 - Production backend/frontend: untouched; no restart of `8001` or `3000`.
 - Production DB/DDL: untouched; only read-only audit queries were executed.
 
+## PR Quality Rerun - 2026-05-26
+
+- GitHub PR quality dry-run initially failed on Ruff changed-files checks for pre-existing lint findings in BUG-118 touched files after the branch was pushed.
+- Fixed only changed-file lint blockers inside BUG-118 allowed scope:
+  - Removed unused imports in `backend/ingestion/tdx_scheduler.py` and `backend/routers/ingestion.py`.
+  - Split inline `import logging; ...` statements in `backend/routers/ingestion.py`.
+  - Renamed the ambiguous local variable in active-alert severity filtering.
+  - Bound the existing exception variable in `_update_ingestion_job_status`.
+- Re-run evidence:
+  - `python -m ruff check backend/ingestion/tdx_scheduler.py backend/routers/ingestion.py backend/services/trading_calendar_status.py backend/services/tushare_dataset_specs.py backend/services/tushare_sync_engine.py backend/tests/ingestion/test_ingestion_router_auto_range.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/paper_trading_v2/test_trading_calendar_status.py backend/tests/test_tushare_sync_engine.py --force-exclude`
+    - Result: PASS, all checks passed.
+  - `python -m py_compile backend/ingestion/tdx_scheduler.py backend/routers/ingestion.py`
+    - Result: PASS.
+  - `git diff --check`
+    - Result: PASS.
+  - `python -m pytest backend/tests/test_tushare_sync_engine.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/ingestion/test_ingestion_router_auto_range.py backend/tests/paper_trading_v2/test_trading_calendar_status.py -q`
+    - Result: PASS, 46 passed in 17.76s.
+  - `python -m pytest backend/tests/test_ingestion_data_stats_readiness_api.py -q`
+    - Result: PASS, 5 passed in 17.17s.
+  - `python -m nox -s data_sync_autonomy_backend`
+    - Result: PASS, 77 passed in 16.30s.
+  - `python -m nox -s local_data_management_audit`
+    - Result: PASS, 11 passed in 0.37s plus local dev DB schema smoke PASS.
+

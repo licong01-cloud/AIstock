@@ -11,12 +11,10 @@ import psycopg2.extras as pgx
 from fastapi import APIRouter, Body, HTTPException, Path, Query
 from pydantic import BaseModel, Field
 import requests
-from requests import exceptions as req_exc
 
 from ..db.pg_pool import get_conn
 from ..ingestion.tdx_scheduler import scheduler  # 1:1 复用现有调度器实现
 from ..services.tushare_dataset_specs import DATASET_REGISTRY
-from ..services.tushare_sync_engine import TushareSyncEngine
 from ..services.trading_calendar_status import TradingCalendarStatusService
 from ..services.trading_core.errors import DataUnavailableError
 
@@ -479,7 +477,7 @@ def _job_status(job_id: uuid.UUID) -> Dict[str, Any]:
             try:
                 avg_progress = int(float((avg_rows[0] or {}).get("avg_progress") or 0))
             except Exception:  # noqa: BLE001
-                import logging; logging.getLogger(__name__).debug("progress parse fallback: avg_progress")
+                logging.getLogger(__name__).debug("progress parse fallback: avg_progress")
                 avg_progress = 0
             percent = max(percent, min(100, avg_progress))
     else:
@@ -506,7 +504,7 @@ def _job_status(job_id: uuid.UUID) -> Dict[str, Any]:
                 total_c = int(counters_from_summary.get("total") or 0)
                 done_c = int(counters_from_summary.get("done") or 0)
             except Exception:  # noqa: BLE001
-                import logging; logging.getLogger(__name__).debug("progress parse fallback: total_c")
+                logging.getLogger(__name__).debug("progress parse fallback: total_c")
                 total_c = 0
                 done_c = 0
             if total_c > 0:
@@ -524,7 +522,7 @@ def _job_status(job_id: uuid.UUID) -> Dict[str, Any]:
                     else:
                         percent = min(100, int((done / total) * 100))
                 except Exception:  # noqa: BLE001
-                    import logging; logging.getLogger(__name__).debug("progress parse fallback: percent")
+                    logging.getLogger(__name__).debug("progress parse fallback: percent")
                     percent = min(100, int((done / total) * 100)) if total > 0 else 0
 
     log_rows = _fetchall(
@@ -747,7 +745,7 @@ def _batch_job_statuses(job_ids: List[uuid.UUID]) -> List[Dict[str, Any]]:
                     total_c = int(counters_from_summary.get("total") or 0)
                     done_c = int(counters_from_summary.get("done") or 0)
                 except Exception:  # noqa: BLE001
-                    import logging; logging.getLogger(__name__).debug("progress parse fallback: total_c")
+                    logging.getLogger(__name__).debug("progress parse fallback: total_c")
                     total_c = 0
                     done_c = 0
                 if total_c > 0:
@@ -764,7 +762,7 @@ def _batch_job_statuses(job_ids: List[uuid.UUID]) -> List[Dict[str, Any]]:
                         else:
                             percent = min(100, int((done / total) * 100))
                     except Exception:  # noqa: BLE001
-                        import logging; logging.getLogger(__name__).debug("progress parse fallback: percent")
+                        logging.getLogger(__name__).debug("progress parse fallback: percent")
                         percent = min(100, int((done / total) * 100)) if total > 0 else 0
 
         inserted_rows = int(
@@ -2939,7 +2937,7 @@ def get_active_alerts(
                      AND severity IN %s
                    ORDER BY created_at DESC
                    LIMIT %s""",
-                (tuple(s for s, l in sev_order.items() if l >= min_level), limit),
+                (tuple(severity for severity, level in sev_order.items() if level >= min_level), limit),
             )
             rows = cur.fetchall()
             return {"alerts": [_serialize_alert(r) for r in rows], "count": len(rows)}
