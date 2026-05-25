@@ -16,6 +16,7 @@ WORKFLOW_ROOT = Path("tmp") / "issue_workflow"
 DEFAULT_CODEGRAPH_VERSION = "0.9.4"
 DEFAULT_UNDERSTAND_ANYTHING_VERSION = "v2.7.3"
 CATALOG_PATH = REPO_ROOT / "tests" / "aistock_validation" / "catalog" / "code_intelligence.yaml"
+DEFAULT_UA_MODULES = ["issue_workflow", "validation_center", "paper_v2", "research_assistant", "qe"]
 
 
 def _load_catalog(root: Path | None = None) -> dict[str, Any]:
@@ -187,6 +188,147 @@ def understand_anything_status(root: Path | None = None) -> dict[str, Any]:
         "blocking_for_issue_workflow": False,
         "manifest": manifest,
     }
+
+
+def build_understand_anything_summary(
+    *,
+    module: str,
+    root: Path | None = None,
+    output_dir: Path | None = None,
+    max_nodes: int | None = None,
+) -> dict[str, Any]:
+    root = root or REPO_ROOT
+    catalog = _load_catalog(root)
+    ua_config = catalog.get("understand_anything") if isinstance(catalog.get("understand_anything"), dict) else {}
+    graph_path = _understand_graph_path(root)
+    output_dir = output_dir or root / "tmp" / "validation" / "code-intelligence"
+    safe_module = re.sub(r"[^A-Za-z0-9_.-]+", "-", module).strip("-") or "unknown"
+    json_path = output_dir / f"ua-{safe_module}-summary.json"
+    md_path = output_dir / f"ua-{safe_module}-summary.md"
+    limit = max_nodes or int(ua_config.get("max_context_nodes_t3") or 60)
+    status = understand_anything_status(root)
+    node_count = 0
+    edge_count = 0
+    selected_nodes: list[dict[str, Any]] = []
+    selected_edges: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    if graph_path.exists():
+        try:
+            graph = json.loads(graph_path.read_text(encoding="utf-8-sig"))
+            nodes = [node for node in graph.get("nodes", []) if isinstance(node, dict)] if isinstance(graph, dict) else []
+            edges = [edge for edge in graph.get("edges", []) if isinstance(edge, dict)] if isinstance(graph, dict) else []
+            node_count = len(nodes)
+            edge_count = len(edges)
+            selected_nodes = [
+                node for node in nodes
+                if module.lower() in json.dumps(node, ensure_ascii=False).lower()
+            ][:limit]
+            selected_ids = {str(node.get("id") or node.get("name") or node.get("label")) for node in selected_nodes}
+            selected_edges = [
+                edge for edge in edges
+                if str(edge.get("source") or edge.get("from")) in selected_ids
+                or str(edge.get("target") or edge.get("to")) in selected_ids
+            ][:limit]
+        except Exception as exc:
+            warnings.append(f"failed to read Understand Anything graph: {exc}")
+    else:
+        warnings.append("Understand Anything graph is missing; summary is a non-blocking placeholder.")
+    payload = {
+        "schema_version": "aistock_understand_anything_summary_v1",
+        "generated_at": _utc_now(),
+        "graph_provider": "understand_anything",
+        "graph_version": ua_config.get("version") or DEFAULT_UNDERSTAND_ANYTHING_VERSION,
+        "graph_commit": _git_snapshot(root).get("head"),
+        "module": module,
+        "status": "ok" if graph_path.exists() and not warnings else "fallback",
+        "graph_path": _repo_rel(graph_path, root),
+        "graph_exists": graph_path.exists(),
+        "summary_ref": _repo_rel(md_path, root),
+        "artifact_path": _repo_rel(json_path, root),
+        "node_count": node_count,
+        "edge_count": edge_count,
+        "nodes_used": len(selected_nodes),
+        "edges_used": len(selected_edges),
+        "selected_nodes": selected_nodes,
+        "selected_edges": selected_edges,
+        "provenance": "understand_anything_graph_summary_adapter",
+        "approval_required_for_long_term_memory": True,
+        "blocking_for_issue_workflow": False,
+        "warnings": warnings,
+        "understand_anything": status,
+    }
+    _write_json(json_path, payload)
+    _write_text(md_path, render_understand_anything_summary_markdown(payload))
+    return payload
+
+
+def build_understand_anything_summary_manifest(
+    *,
+    modules: list[str] | None = None,
+    root: Path | None = None,
+    output_dir: Path | None = None,
+    max_nodes: int | None = None,
+) -> dict[str, Any]:
+    root = root or REPO_ROOT
+    output_dir = output_dir or root / "tmp" / "validation" / "code-intelligence"
+    module_list = [module for module in modules or DEFAULT_UA_MODULES if module.strip()]
+    summaries = [
+        build_understand_anything_summary(
+            module=module,
+            root=root,
+            output_dir=output_dir,
+            max_nodes=max_nodes,
+        )
+        for module in module_list
+    ]
+    payload = {
+        "schema_version": "aistock_understand_anything_summary_manifest_v1",
+        "generated_at": _utc_now(),
+        "graph_provider": "understand_anything",
+        "modules": module_list,
+        "summary_refs": [
+            {
+                "module": item.get("module"),
+                "status": item.get("status"),
+                "summary_ref": item.get("summary_ref"),
+                "artifact_path": item.get("artifact_path"),
+            }
+            for item in summaries
+        ],
+        "blocking_for_issue_workflow": False,
+        "approval_required_for_long_term_memory": True,
+    }
+    _write_json(output_dir / "ua-summary-manifest.json", payload)
+    return payload
+
+
+def render_understand_anything_summary_markdown(payload: dict[str, Any]) -> str:
+    lines = [
+        f"## Understand Anything Summary: {payload.get('module') or 'unknown'}",
+        "",
+        f"- status: `{payload.get('status') or 'unknown'}`",
+        f"- graph_version: `{payload.get('graph_version') or 'unknown'}`",
+        f"- graph_commit: `{payload.get('graph_commit') or 'unknown'}`",
+        f"- graph_path: `{payload.get('graph_path') or 'not_configured'}`",
+        f"- nodes_used: `{payload.get('nodes_used', 0)}` / `{payload.get('node_count', 0)}`",
+        f"- edges_used: `{payload.get('edges_used', 0)}` / `{payload.get('edge_count', 0)}`",
+        "- approval_required_for_long_term_memory: `true`",
+        "",
+        "### Selected Nodes",
+    ]
+    nodes = payload.get("selected_nodes") or []
+    lines.extend(f"- `{str(node.get('id') or node.get('name') or node.get('label') or node)[:160]}`" for node in nodes[:20])
+    if not nodes:
+        lines.append("- `none`")
+    warnings = payload.get("warnings") or []
+    if warnings:
+        lines.extend(["", "### Warnings", *[f"- {item}" for item in warnings]])
+    lines.extend([
+        "",
+        "This summary is a read-only graph artifact for Research Assistant / Validation Center context. It is not a test result and does not block issue workflow.",
+        "",
+    ])
+    return "\n".join(lines)
 
 
 def build_doctor_report(root: Path | None = None, *, skip_external: bool = False) -> dict[str, Any]:
@@ -437,6 +579,28 @@ def cmd_affected_tests(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ua_summary(args: argparse.Namespace) -> int:
+    payload = build_understand_anything_summary(
+        module=args.module,
+        root=Path(args.root) if args.root else REPO_ROOT,
+        output_dir=Path(args.output_dir) if args.output_dir else None,
+        max_nodes=args.max_nodes,
+    )
+    _emit(payload, args.output)
+    return 0
+
+
+def cmd_ua_summary_all(args: argparse.Namespace) -> int:
+    payload = build_understand_anything_summary_manifest(
+        modules=list(args.module or []),
+        root=Path(args.root) if args.root else REPO_ROOT,
+        output_dir=Path(args.output_dir) if args.output_dir else None,
+        max_nodes=args.max_nodes,
+    )
+    _emit(payload, args.output)
+    return 0
+
+
 def cmd_summary(args: argparse.Namespace) -> int:
     changed = list(args.changed_file or [])
     if args.changed_files_file:
@@ -483,6 +647,22 @@ def build_parser() -> argparse.ArgumentParser:
     affected.add_argument("--skip-external", action="store_true")
     affected.add_argument("--output")
     affected.set_defaults(func=cmd_affected_tests)
+
+    ua_summary = sub.add_parser("ua-summary", help="Build a read-only Understand Anything graph summary artifact.")
+    ua_summary.add_argument("--module", required=True)
+    ua_summary.add_argument("--root")
+    ua_summary.add_argument("--output-dir")
+    ua_summary.add_argument("--max-nodes", type=int)
+    ua_summary.add_argument("--output")
+    ua_summary.set_defaults(func=cmd_ua_summary)
+
+    ua_summary_all = sub.add_parser("ua-summary-all", help="Build read-only Understand Anything summaries for standard AIstock modules.")
+    ua_summary_all.add_argument("--module", action="append")
+    ua_summary_all.add_argument("--root")
+    ua_summary_all.add_argument("--output-dir")
+    ua_summary_all.add_argument("--max-nodes", type=int)
+    ua_summary_all.add_argument("--output")
+    ua_summary_all.set_defaults(func=cmd_ua_summary_all)
 
     summary = sub.add_parser("summary", help="Build context and affected-tests artifacts together.")
     summary.add_argument("--item-id", required=True)

@@ -122,3 +122,52 @@ def test_summary_markdown_contains_warning_only_artifact_refs(tmp_path: Path, mo
     assert "affected-tests.json" in markdown
     assert "warning-only" in markdown
 
+
+def test_understand_anything_summary_reads_graph_without_blocking(tmp_path: Path, monkeypatch) -> None:
+    graph_path = tmp_path / ".understand-anything" / "knowledge-graph.json"
+    graph_path.parent.mkdir(parents=True)
+    graph_path.write_text(
+        json.dumps(
+            {
+                "nodes": [
+                    {"id": "paper_v2_service", "label": "paper_v2 service"},
+                    {"id": "qe_service", "label": "qe service"},
+                ],
+                "edges": [{"source": "paper_v2_service", "target": "qe_service", "type": "depends_on"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
+    )
+
+    payload = adapter.build_understand_anything_summary(module="paper_v2", root=tmp_path)
+
+    assert payload["schema_version"] == "aistock_understand_anything_summary_v1"
+    assert payload["status"] == "ok"
+    assert payload["blocking_for_issue_workflow"] is False
+    assert payload["nodes_used"] == 1
+    assert (tmp_path / payload["artifact_path"]).exists()
+    assert "Understand Anything Summary" in (tmp_path / payload["summary_ref"]).read_text(encoding="utf-8")
+
+
+def test_understand_anything_summary_manifest_uses_standard_modules(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
+    )
+
+    payload = adapter.build_understand_anything_summary_manifest(
+        modules=["issue_workflow", "paper_v2"],
+        root=tmp_path,
+    )
+
+    assert payload["schema_version"] == "aistock_understand_anything_summary_manifest_v1"
+    assert payload["blocking_for_issue_workflow"] is False
+    assert [item["module"] for item in payload["summary_refs"]] == ["issue_workflow", "paper_v2"]
+    assert (tmp_path / "tmp" / "validation" / "code-intelligence" / "ua-summary-manifest.json").exists()
+
