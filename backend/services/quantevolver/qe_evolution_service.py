@@ -1125,7 +1125,7 @@ class AutoEvolutionScheduler:
 
         # S2: 计算 consecutive_same_action（只统计当前 task 的 loops，不含 inherited）
         consecutive_same_action = {"action_type": None, "count": 0, "recent_ic_deltas": []}
-        current_loops = [l for l in loops if not l.get("inherited")]
+        current_loops = [loop_entry for loop_entry in loops if not loop_entry.get("inherited")]
         if current_loops:
             last_action = current_loops[-1]["action_type"]
             consecutive = 0
@@ -1697,7 +1697,6 @@ class AutoEvolutionScheduler:
             factor_list = config.get("factor_list", [])
             validation = self.validate_factor_availability(factor_list)
             if validation["has_issues"]:
-                removed = validation["deleted_factors"] + validation["unavailable_factors"]
                 # 严格模式：因子不可用时暂停任务，不静默移除
                 logger.error(
                     f"Loop {loop_index} 因子可用性检查失败。"
@@ -1806,7 +1805,7 @@ class AutoEvolutionScheduler:
         # 检查任务类型：策略演进走简化流程
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT task_type, base_experiment_id FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
+                cur.execute("SELECT task_type, base_experiment_id, label_horizon FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
                 task_row = cur.fetchone()
 
         if task_row and task_row.get("task_type") in ("strategy_evo", "custom_evo"):
@@ -1987,8 +1986,8 @@ class AutoEvolutionScheduler:
                 sota_config = self._get_sota_loop_config(task_id)
                 if sota_config:
                     logger.info(
-                        f"SOTA 回滚: 当前轮非 SOTA，回滚到 SOTA 配置为基础继续演进。"
-                        f"因子保护由 importance-based 机制管理。"
+                        "SOTA 回滚: 当前轮非 SOTA，回滚到 SOTA 配置为基础继续演进。"
+                        "因子保护由 importance-based 机制管理。"
                     )
                     config = sota_config
                     # 更新 factor_names 以匹配回滚后的配置
@@ -2125,7 +2124,7 @@ class AutoEvolutionScheduler:
                     next_config[key] = config[key]
             next_config = self._enforce_config_label_horizon(
                 next_config,
-                task.get("label_horizon"),
+                (task_row or {}).get("label_horizon"),
                 context=f"{task_id}/Loop{loop_index}.reviewer",
             )
 
@@ -4337,9 +4336,6 @@ class AutoEvolutionScheduler:
             base_config["model_params"] = dict(source_config.get("model_params", {}))
             base_config["model_params"].update(strategy_params)
 
-        execution_algo = loop_config.get("execution_algo")
-        execution_algo_params = loop_config.get("execution_algo_params", {})
-
         evolution_loop_db_id = f"{task_id}_Loop{loop_index}"
         loop_id = f"Loop{loop_index}"
 
@@ -5592,7 +5588,6 @@ class AutoEvolutionScheduler:
         from .executors.backtest import BacktestExecutor, BacktestMode
         from .executors.base import ExecutionContext
         from .config_composer import ConfigComposer
-        from .qe_workspace_client import QEWorkspaceClient
 
         evolution_loop_db_id = f"{task_id}_Loop{loop_index}"
         loop_id = f"Loop{loop_index}"

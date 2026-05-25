@@ -14,12 +14,10 @@ import json
 import logging
 import os
 import re
-import uuid
 import hashlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import httpx
 
 from ...db.pg_pool import get_conn
 from ..strategy_package.workspace_policy import (
@@ -1838,16 +1836,21 @@ class ConfigComposer:
             for i, line in enumerate(lines):
                 stripped = line.strip()
                 if not stripped:
-                    insert_pos = i + 1; continue
+                    insert_pos = i + 1
+                    continue
                 if stripped.startswith("#"):
-                    insert_pos = i + 1; continue
+                    insert_pos = i + 1
+                    continue
                 if '"""' in stripped or "'''" in stripped:
                     in_docstring = not in_docstring
-                    insert_pos = i + 1; continue
+                    insert_pos = i + 1
+                    continue
                 if in_docstring:
-                    insert_pos = i + 1; continue
+                    insert_pos = i + 1
+                    continue
                 if stripped.startswith("import ") or stripped.startswith("from "):
-                    insert_pos = i + 1; continue
+                    insert_pos = i + 1
+                    continue
                 break
             for imp in import_lines:
                 lines.insert(insert_pos, imp)
@@ -2422,7 +2425,6 @@ class ConfigComposer:
         model_step_len: Optional[int] = None
 
         if model_info:
-            model_name = model_info.get("model_name", "")
             model_type = (model_info.get("model_type") or "").upper()
             code_text = model_info.get("code_text")
 
@@ -4221,7 +4223,7 @@ class ConfigComposer:
         ]
         if train_only:
             core_parts.append("export TRAIN_ONLY=1")
-        core_parts.extend([l for l in env_lines if l and not l.startswith("#")])
+        core_parts.extend([line for line in env_lines if line and not line.startswith("#")])
         core_parts.append(link_data_cmd)
         if has_custom_factors:
             core_parts.append("python prepare_factors.py")
@@ -4857,10 +4859,10 @@ model_cls = {nn_class_name}
         # 5. 检查 HMM 调用顺序：_apply_hmm_adjustment 必须在 None 检查之后
         if "_apply_hmm_adjustment" in source_code:
             lines = source_code.split("\n")
-            hmm_line = next((i for i, l in enumerate(lines) if "_apply_hmm_adjustment" in l), None)
-            none_check_line = next((i for i, l in enumerate(lines)
-                                    if ("is None" in l or "if not" in l) and
-                                    ("pred_score" in l or "all_pred_scores" in l or "scores" in l)
+            hmm_line = next((i for i, line in enumerate(lines) if "_apply_hmm_adjustment" in line), None)
+            none_check_line = next((i for i, line in enumerate(lines)
+                                    if ("is None" in line or "if not" in line) and
+                                    ("pred_score" in line or "all_pred_scores" in line or "scores" in line)
                                     and i < (hmm_line or 9999)), None)
             if hmm_line is not None and none_check_line is None:
                 result["warnings"].append(

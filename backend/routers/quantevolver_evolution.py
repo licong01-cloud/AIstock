@@ -8,10 +8,10 @@ import threading
 import traceback
 from datetime import datetime
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, Future, as_completed
+from concurrent.futures import ThreadPoolExecutor, Future
 from typing import Callable, Dict, Any, List, Optional
 from pydantic import BaseModel, Field
-from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Request, Query, Body
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, Query, Body
 from fastapi.responses import Response, StreamingResponse
 import httpx
 
@@ -2042,7 +2042,7 @@ _correlation_logs = _CorrelationLogBuffer()
 _correlation_event_emitter: Optional[Callable[[Dict[str, Any]], None]] = None
 
 
-def set_correlation_event_emitter(emitter: Optional[Callable[[Dict[str, Any]], None]]) -> None:
+def _set_local_correlation_event_emitter(emitter: Optional[Callable[[Dict[str, Any]], None]]) -> None:
     global _correlation_event_emitter
     _correlation_event_emitter = emitter
 
@@ -2262,13 +2262,12 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
     # 自动推导 data_date: as_of_date (YYYY-MM-DD) → data_date (YYYYMMDD)
     if not data_date and as_of_date:
         data_date = as_of_date.replace("-", "")
-    official_instruments = None
     if data_date:
-        official_instruments = EvaluationUniverseService().get_official_universe(
+        EvaluationUniverseService().get_official_universe(
             as_of_date=f"{data_date[:4]}-{data_date[4:6]}-{data_date[6:8]}"
         )
     elif as_of_date:
-        official_instruments = EvaluationUniverseService().get_official_universe(as_of_date=as_of_date)
+        EvaluationUniverseService().get_official_universe(as_of_date=as_of_date)
 
     global _latest_result
     timeout_timer = None
@@ -2287,7 +2286,6 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
             phase1_elapsed = 0.0
             phase2_elapsed = 0.0
             phase3_elapsed = 0.0
-            success_factors = []
 
             # ═══ 先收敛历史脏状态，保证当前 official 准入规则和 DB 一致 ═══
             reconcile_stats = _reconcile_correlation_state(reset_all=True)
@@ -2589,7 +2587,7 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
 
             # --- 完整汇总日志 ---
             _correlation_logs.append("=" * 50)
-            _correlation_logs.append(f"计算完成汇总")
+            _correlation_logs.append("计算完成汇总")
             _correlation_logs.append(f"  请求因子数: {_requested_count}")
             _correlation_logs.append(f"  成功因子数: {_success_count}")
             _correlation_logs.append(
@@ -3401,7 +3399,7 @@ async def get_correlation_pair(
                 "daily_correlations": pair_result.daily_correlations[-60:],
             }
         except Exception as e:
-            logger.warning("Daily correlation 计算失败: factor_a=%s, factor_b=%s, error=%s", factor_a, factor_b, e)
+            logger.warning("Daily correlation 计算失败: factor_a=%s, factor_b=%s, error=%s", fa, fb, e)
             daily_data = {"error": str(e)}
 
     # 无 DB 记录且无 daily_data 时，使用缓存计算（仅在 DB 无记录时触发，非 DB 故障兜底）
@@ -4372,15 +4370,14 @@ def get_system_logs(
     level: 过滤级别关键字，如 ERROR / WARN / INFO，空=全部。
     errors_only: True 则只读 errors.log。
     """
-    from pathlib import Path
     log_file = Path(__file__).parent.parent / "logs" / ("errors.log" if errors_only else "aistock.log")
     if not log_file.exists():
         return {"ok": True, "lines": [], "exists": False}
     with open(log_file, "r", encoding="utf-8", errors="replace") as f:
         lines = f.readlines()
     if level:
-        lines = [l for l in lines if f" {level.upper()} " in l]
-    return {"ok": True, "lines": [l.rstrip() for l in lines[-tail:]], "exists": True}
+        lines = [line for line in lines if f" {level.upper()} " in line]
+    return {"ok": True, "lines": [line.rstrip() for line in lines[-tail:]], "exists": True}
 
 
 # ================================================================
