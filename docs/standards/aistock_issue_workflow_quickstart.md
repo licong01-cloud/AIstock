@@ -224,7 +224,7 @@ python scripts/aistock_issue_workflow.py start-batch `
   --create-worktree
 ```
 
-The command writes one batch state plus per-issue Context Packs under `tmp/issue_workflow/<BATCH-ID>/`. After the shared fix and required validation:
+The command writes one batch state plus per-issue Context Packs under `tmp/issue_workflow/<BATCH-ID>/`. In KG-4, the batch state and per-issue Context Packs also include a shared `code_intelligence` block so Codex / Claude Code can reuse one CodeGraph context and affected-tests artifact instead of repeating code exploration for every BUG. After the shared fix and required validation:
 
 ```powershell
 python scripts/aistock_issue_workflow.py finish-batch `
@@ -234,7 +234,7 @@ python scripts/aistock_issue_workflow.py finish-batch `
   --issue-commit BUG-016=<sha>
 ```
 
-Batch PR bodies must preserve per-issue closure maps and `Closes #...` lines for every linked GitHub Issue.
+Batch PR bodies must preserve per-issue closure maps, shared code-intelligence refs, and `Closes #...` lines for every linked GitHub Issue.
 
 ## Stop Conditions
 

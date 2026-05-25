@@ -260,10 +260,14 @@ def test_start_batch_rejects_incompatible_modules(isolated_workflow_root: Path) 
         )
 
 
-def test_start_batch_writes_batch_state_and_contexts(isolated_workflow_root: Path) -> None:
+def test_start_batch_writes_batch_state_and_contexts(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     bugs_root = workflow.BUGS_ROOT
     _write_json(bugs_root / "bug199.json", _bug())
     _write_json(bugs_root / "bug200.json", _bug(bug_id="BUG-200", github_issue_number=200, github_issue_url="https://github.example/issues/200"))
+    monkeypatch.setattr(workflow, "_build_batch_code_intelligence_summary", lambda **kwargs: _fake_code_intelligence_summary(item_id=kwargs["batch_id"]))
 
     payload = workflow.build_start_batch_plan(
         bug_ids=["BUG-199", "BUG-200"],
@@ -278,15 +282,29 @@ def test_start_batch_writes_batch_state_and_contexts(isolated_workflow_root: Pat
     assert payload["workflow_gate"] == "ready_for_batch_fix"
     assert payload["batch_id"].startswith("BATCH-validation-guardrails-")
     assert payload["bug_ids"] == ["BUG-199", "BUG-200"]
+    assert payload["code_intelligence"]["context_ref"].endswith("codegraph-context.md")
     assert (isolated_workflow_root / payload["batch_state_path"]).exists()
     assert (isolated_workflow_root / payload["context_dir"] / "BUG-199.md").exists()
     assert (isolated_workflow_root / payload["fix_ready_dir"] / "BUG-200.json").exists()
+    context_pack = json.loads((isolated_workflow_root / payload["context_dir"] / "BUG-199.json").read_text(encoding="utf-8"))
+    assert context_pack["code_intelligence"]["affected_tests_ref"].endswith("affected-tests.json")
 
 
-def test_finish_batch_plan_generates_per_issue_pr_body(isolated_workflow_root: Path) -> None:
+def test_finish_batch_plan_generates_per_issue_pr_body(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     bugs_root = workflow.BUGS_ROOT
     _write_json(bugs_root / "bug199.json", _bug())
     _write_json(bugs_root / "bug200.json", _bug(bug_id="BUG-200", github_issue_number=200, github_issue_url="https://github.example/issues/200"))
+    monkeypatch.setattr(
+        workflow,
+        "_build_batch_code_intelligence_summary",
+        lambda **kwargs: _fake_code_intelligence_summary(
+            item_id=kwargs["batch_id"],
+            affected_tests={"suggested_tests": ["backend/tests/scripts/test_aistock_issue_workflow.py"]},
+        ),
+    )
 
     payload = workflow.build_finish_batch_plan(
         batch_id=None,
@@ -303,10 +321,13 @@ def test_finish_batch_plan_generates_per_issue_pr_body(isolated_workflow_root: P
     assert payload["schema_version"] == "aistock_issue_workflow_finish_batch_v1"
     assert payload["workflow_gate"] == "ready_for_pr"
     assert payload["per_issue_commit_map"] == {"BUG-199": "abc1234", "BUG-200": "def5678"}
+    assert payload["codegraph_suggested_tests"] == ["backend/tests/scripts/test_aistock_issue_workflow.py"]
     pr_body = (isolated_workflow_root / payload["pr_body_path"]).read_text(encoding="utf-8")
     assert "Closes #199" in pr_body
     assert "Closes #200" in pr_body
     assert "Per-issue closure map" in pr_body
+    assert "Code intelligence" in pr_body
+    assert "backend/tests/scripts/test_aistock_issue_workflow.py" in pr_body
 
 
 def test_doctor_reports_ready_when_client_entries_exist(
