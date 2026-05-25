@@ -4,7 +4,8 @@
 - 日期: 2026-05-25
 - worktree: `F:\Dev\AIstock_worktrees\research-assistant-prompt-context-runtime-20260525`
 - branch: `feature/research-assistant-prompt-context-runtime-20260525`
-- base: `origin/main` = `b0cb1df docs(architecture): add issue workflow v2 client plan`
+- base: `origin/main` = `62dc1b1 fix(selection): use TDX pre-close for pre-open entry price`
+- head: `2b1ab32 Merge remote-tracking branch 'origin/main' into feature/research-assistant-prompt-context-runtime-20260525`
 - 关联: `BUG-117` / GitHub Issue `#186`
 - 设计依据:
   - `docs/architecture/research_assistant_prompt_context_runtime_governance_design_20260524.md`
@@ -46,10 +47,13 @@
 
 ```powershell
 python -m pytest backend/tests/research_assistant -q
-# 25 passed in 13.95s
+# 25 passed in 13.55s
 
 python -m compileall backend/services/research_assistant backend/routers/research_assistant.py backend/db/init_research_assistant_schema_20260521.py
 # passed
+
+python scripts/aistock_issue_workflow.py doctor
+# workflow_gate=ready; repo_git clean; canonical root clean
 
 rg -n "禁止控制鼠标键盘|禁止写代码|mouse_keyboard_control|code_write" prompt_packs\research_assistant\main configs\research_assistant
 # no matches
@@ -60,8 +64,8 @@ rg -n "_PRIOR_MESSAGES_TOKEN_BUDGET|_TOKEN_ESTIMATE_CHARS_PER_TOKEN|token_budget
 npm --prefix frontend run build
 # passed; only pre-existing react-hooks/exhaustive-deps warnings in unrelated pages
 
-git diff --check
-# passed; Windows LF/CRLF warnings only
+git diff --check origin/main...HEAD
+# passed
 
 new DDL comment coverage check
 # missing_comment_count 0
