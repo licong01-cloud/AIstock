@@ -627,3 +627,125 @@ def test_repo_skill_and_quickstart_are_parseable() -> None:
     assert "智能验证平台设计实施方案 v2.0" in design
     assert "Codex / Claude Code / Cursor" in design
     assert "????" not in design
+
+
+def test_triage_ci_issue_extracts_run_summary_and_recommends_promotion(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = {
+        "number": 197,
+        "title": "[P1] AIstock CI failed on main",
+        "state": "OPEN",
+        "url": "https://github.com/licong01-cloud/AIstock/issues/197",
+        "body": "<!-- aistock-issue-on-test-fail:26378872481 -->",
+        "labels": [],
+    }
+    summary = {
+        "schema_version": "aistock_ci_failure_summary_v1",
+        "diagnostic_status": "complete",
+        "severity": "P1",
+        "workflow": "AIstock CI",
+        "run_id": "26378872481",
+        "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/26378872481",
+        "branch": "main",
+        "commit": "62dc1b1",
+        "failed_jobs": [
+            {
+                "job_name": "Backend tests (paper_v2_backend)",
+                "nox_session": "paper_v2_backend",
+                "failed_tests": [
+                    "backend/tests/paper_trading_v2/test_coldstart_sanity_sentinel_endpoint.py::test_sentinel_endpoint_rejects_a_share_trading_window"
+                ],
+                "error_signature": "assert 200 == 409",
+                "key_log_excerpt": ['relation "market.trading_calendar" does not exist'],
+                "suspected_module": "paper_v2",
+                "suspected_files": ["backend/tests/paper_trading_v2/test_coldstart_sanity_sentinel_endpoint.py"],
+            }
+        ],
+        "suspected_modules": ["paper_v2"],
+        "suspected_files": ["backend/tests/paper_trading_v2/test_coldstart_sanity_sentinel_endpoint.py"],
+        "fingerprint": "ci-test",
+        "issue_title": "[P1][paper_v2_backend] main CI failed: test_sentinel_endpoint_rejects_a_share_trading_window",
+        "reproduce_command": "python -m pytest backend/tests/paper_trading_v2/test_coldstart_sanity_sentinel_endpoint.py::test_sentinel_endpoint_rejects_a_share_trading_window -q -p no:cacheprovider",
+    }
+
+    monkeypatch.setattr(workflow, "_load_github_issue", lambda issue_number: issue)
+    monkeypatch.setattr(workflow, "_find_bug_by_github_issue", lambda issue_number: None)
+    monkeypatch.setattr(
+        workflow.ci_failure_summary,
+        "summarize_actions_run",
+        lambda **kwargs: summary,
+    )
+
+    payload = workflow.build_triage_ci_issue_plan(issue_number=197)
+
+    assert payload["schema_version"] == "aistock_issue_workflow_triage_ci_issue_v1"
+    assert payload["detected_run_id"] == "26378872481"
+    assert payload["needs_bug_json"] is True
+    assert payload["suggested_bug"]["module"] == "paper_v2"
+    assert "promote-ci-issue --issue 197" in payload["next_command"]
+    assert (isolated_workflow_root / "tmp" / "issue_workflow" / "ci-issue-197" / "triage-ci-issue.json").exists()
+
+
+def test_promote_ci_issue_writes_bug_json_with_existing_github_issue(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
+    _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 118})
+    issue = {
+        "number": 197,
+        "title": "[P1] AIstock CI failed on main",
+        "state": "OPEN",
+        "url": "https://github.com/licong01-cloud/AIstock/issues/197",
+        "body": "<!-- aistock-issue-on-test-fail:26378872481 -->",
+        "labels": [],
+    }
+    summary = {
+        "schema_version": "aistock_ci_failure_summary_v1",
+        "diagnostic_status": "complete",
+        "severity": "P1",
+        "workflow": "AIstock CI",
+        "run_id": "26378872481",
+        "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/26378872481",
+        "branch": "main",
+        "commit": "62dc1b1",
+        "failed_jobs": [
+            {
+                "job_name": "Backend tests (paper_v2_backend)",
+                "nox_session": "paper_v2_backend",
+                "failed_tests": [
+                    "backend/tests/paper_trading_v2/test_coldstart_sanity_sentinel_endpoint.py::test_sentinel_endpoint_rejects_a_share_trading_window"
+                ],
+                "error_signature": "assert 200 == 409",
+                "key_log_excerpt": ['relation "market.trading_calendar" does not exist'],
+                "suspected_module": "paper_v2",
+                "suspected_files": ["backend/tests/paper_trading_v2/test_coldstart_sanity_sentinel_endpoint.py"],
+            }
+        ],
+        "suspected_modules": ["paper_v2"],
+        "suspected_files": ["backend/tests/paper_trading_v2/test_coldstart_sanity_sentinel_endpoint.py"],
+        "fingerprint": "ci-test",
+        "issue_title": "[P1][paper_v2_backend] main CI failed: test_sentinel_endpoint_rejects_a_share_trading_window",
+        "reproduce_command": "python -m pytest backend/tests/paper_trading_v2/test_coldstart_sanity_sentinel_endpoint.py::test_sentinel_endpoint_rejects_a_share_trading_window -q -p no:cacheprovider",
+    }
+
+    monkeypatch.setattr(workflow, "_load_github_issue", lambda issue_number: issue)
+    monkeypatch.setattr(workflow, "_find_bug_by_github_issue", lambda issue_number: None)
+    monkeypatch.setattr(
+        workflow.ci_failure_summary,
+        "summarize_actions_run",
+        lambda **kwargs: summary,
+    )
+
+    payload = workflow.build_promote_ci_issue_plan(issue_number=197, apply=True, bug_id=None)
+
+    assert payload["workflow_gate"] == "promoted"
+    assert payload["submit_bug"]["bug_id"] == "BUG-119"
+    bug_path = isolated_workflow_root / payload["submit_bug"]["bug_json_path"]
+    record = json.loads(bug_path.read_text(encoding="utf-8"))
+    assert record["github_issue_number"] == 197
+    assert record["github_issue_url"] == "https://github.com/licong01-cloud/AIstock/issues/197"
+    assert record["module"] == "paper_v2"
+    assert record["production_ddl_gate"] == "noop"

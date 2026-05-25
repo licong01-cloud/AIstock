@@ -1,0 +1,83 @@
+{
+  "actual": "Auto-filed issues such as GitHub Issue #197 contain only generic CI failure metadata and no failed test or error details; the current workflow uses run-id markers and does not bridge GitHub CI issues into BUG JSON workflow commands.",
+  "allowed_write_scope": [
+    ".github/workflows/issue-on-test-fail.yml",
+    "scripts/ci_failure_issue_summary.py",
+    "scripts/aistock_issue_workflow.py",
+    "noxfile.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "backend/tests/scripts/test_ci_failure_issue_summary.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "tests/aistock_validation/bugs/20260525_BUG-119-ci-failure-auto-filed-issues-lack-actionable-diagnostics-and-bug-workflo.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-119",
+  "closed_at": null,
+  "closure_requirements": [
+    "Auto-filed CI/Nightly issues include failed job, nox session or failed step, failed test or error signature, key log excerpt, reproduce command, diagnostic status, production gates, and fingerprint marker.",
+    "Repeated failures with the same fingerprint update the existing GitHub Issue instead of creating duplicate run-id-only issues.",
+    "If log extraction is partial or unavailable, the issue explicitly records diagnostic_status=partial plus extraction errors and uses needs-log-triage semantics rather than creating an empty issue.",
+    "Repo workflow CLI supports triage-ci-issue and promote-ci-issue so Codex, Claude Code, Cursor, or humans can move from GitHub Issue to BUG JSON and then standard run --bug-id workflow.",
+    "BUG-119 JSON and GitHub Issue #202 stay synchronized, and validation evidence covers parser, workflow CLI, ownership, and catalog gates."
+  ],
+  "created_at": "2026-05-25T06:05:00.261441Z",
+  "description": "Auto-filed issues such as GitHub Issue #197 contain only generic CI failure metadata and no failed test or error details; the current workflow uses run-id markers and does not bridge GitHub CI issues into BUG JSON workflow commands.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260525-b66f66430f0a",
+      "timestamp": "2026-05-25T06:05:00.261437Z"
+    },
+    {
+      "action": "scope_enriched",
+      "actor": "codex-app",
+      "note": "Expanded BUG-119 scope and closure requirements after implementing CI failure summary extraction, fingerprint dedupe, and triage/promote CLI bridge.",
+      "timestamp": "2026-05-25T06:18:00Z"
+    }
+  ],
+  "evidence_uris": [
+    "github:https://github.com/licong01-cloud/AIstock/issues/197",
+    "github-actions:https://github.com/licong01-cloud/AIstock/actions/runs/26378872481"
+  ],
+  "expected": "CI/Nightly failure intake creates or updates a diagnostic-rich GitHub Issue with failed job/session/test/error details, fingerprint-based dedupe, partial extraction status when needed, and a repo CLI path to triage/promote the issue into BUG JSON before standard worktree-based repair.",
+  "first_seen_at": "2026-05-25T06:05:00.261441Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 202,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/202",
+  "last_seen_at": "2026-05-25T06:05:00.261441Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "gh issue view 197 --repo licong01-cloud/AIstock --json body,title,labels && gh run view 26378872481 --repo licong01-cloud/AIstock --job 77644205538 --log",
+  "required_verification": [
+    "python -m pytest backend/tests/scripts/test_ci_failure_issue_summary.py backend/tests/scripts/test_aistock_issue_workflow.py -q -p no:cacheprovider",
+    "python scripts/ci_failure_issue_summary.py --log-file <fixture> --job-name \"Backend tests (paper_v2_backend)\" --output <json> --markdown-output <md>",
+    "python scripts/aistock_issue_workflow.py triage-ci-issue --issue 197 --summary-json <json>",
+    "python -m nox -s guardrail_changed_files -- --changed-only",
+    "python -m nox -s validation_catalog_integrity",
+    "python -m nox -s validation_module_registry_l0",
+    "python -m nox -s l0"
+  ],
+  "risk_area": "ci_failure_intake",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation.guardrails",
+    "validation.runner",
+    "dev_quality_tooling"
+  ],
+  "title": "CI failure auto-filed issues lack actionable diagnostics and BUG workflow bridge",
+  "trigger_condition": {
+    "fingerprint": "b66f66430f0a982e8c961294",
+    "source_event_id": "FE-20260525-b66f66430f0a"
+  },
+  "verification_run_id": null
+}
