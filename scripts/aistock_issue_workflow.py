@@ -324,7 +324,7 @@ def _is_inside(path: Path, parent: Path) -> bool:
     try:
         path.resolve().relative_to(parent.resolve())
         return True
-    except Exception:
+    except ValueError:
         return False
 
 
