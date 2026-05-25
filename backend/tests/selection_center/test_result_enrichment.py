@@ -113,6 +113,33 @@ def test_current_day_selection_entry_price_uses_tdx_quote_and_display_fields_per
     assert display["current_price_display_only"] is True
 
 
+def test_current_day_selection_uses_tdx_pre_close_before_first_live_price() -> None:
+    service = SelectionResultEnrichmentService(
+        conn_factory=lambda: pytest.fail("current-day enrichment must not query PIT daily rows"),
+        symbol_name_resolver=_FakeNameResolver(),
+        quote_fetcher=lambda symbol: _quote(symbol, price=0.0),
+        today_provider=lambda: date(2026, 5, 25),
+    )
+
+    enriched = service.enrich_candidates(
+        [SelectionCandidate(symbol="000001.SZ", score=0.9, rank=1, reference_price=99.0)],
+        trade_date=date(2026, 5, 25),
+        runtime_config={},
+    )
+
+    candidate = enriched[0]
+    assert candidate.selection_entry_price == pytest.approx(12.8)
+    assert candidate.reference_price == pytest.approx(12.8)
+    assert candidate.previous_close == pytest.approx(12.8)
+    assert candidate.current_price is None
+    assert candidate.selection_entry_price_source == "TDX_REALTIME.latest_close_pre_close"
+
+    display = display_fields_from_component_scores(candidate.component_scores)
+    assert display["selection_entry_price"] == pytest.approx(12.8)
+    assert display["selection_entry_price_source"] == "TDX_REALTIME.latest_close_pre_close"
+    assert display["current_price"] is None
+
+
 def test_current_day_selection_fails_fast_when_tdx_quote_price_is_missing() -> None:
     service = SelectionResultEnrichmentService(
         conn_factory=lambda: pytest.fail("current-day enrichment must not query PIT daily rows"),

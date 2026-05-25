@@ -70,6 +70,7 @@ class SelectionResultEnrichmentService:
             quote = quotes.get(symbol)
             daily = historical_rows.get(symbol) or {}
             current_price = _positive_float(getattr(quote, "current_price", None))
+            quote_previous_close = _positive_float(getattr(quote, "pre_close", None))
             current_time = _iso_or_none(getattr(quote, "quote_timestamp", None))
             current_source = str(getattr(quote, "quote_source", None) or "TDX_REALTIME") if quote else None
             stock_name = (
@@ -80,8 +81,11 @@ class SelectionResultEnrichmentService:
             )
 
             if trade_date >= today:
-                entry_price = current_price
-                entry_source = current_source or "TDX_REALTIME"
+                entry_price = current_price or quote_previous_close
+                if current_price is not None:
+                    entry_source = current_source or "TDX_REALTIME"
+                else:
+                    entry_source = _tdx_pre_close_entry_source(current_source)
                 entry_time = current_time or datetime.now(CHINA_TZ).isoformat()
                 if entry_price is None:
                     missing_current_entry_price.append(symbol)
@@ -94,7 +98,7 @@ class SelectionResultEnrichmentService:
                 )
                 entry_time = reference_trade_date.isoformat()
 
-            previous_close = _positive_float(getattr(quote, "pre_close", None)) or _positive_float(daily.get("close"))
+            previous_close = quote_previous_close or _positive_float(daily.get("close"))
             volume = _non_negative_float(getattr(quote, "volume", None))
             if volume is None:
                 volume = _non_negative_float(daily.get("volume"))
@@ -238,6 +242,13 @@ def _non_negative_float(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return parsed if parsed >= 0 else None
+
+
+def _tdx_pre_close_entry_source(source: str | None) -> str:
+    label = str(source or "").strip()
+    if not label or "tdx" in label.casefold():
+        label = "TDX_REALTIME"
+    return f"{label}.latest_close_pre_close"
 
 
 def _iso_or_none(value: Any) -> str | None:

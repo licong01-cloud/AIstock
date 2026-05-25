@@ -158,3 +158,28 @@ rtk cmd /c "set AISTOCK_ENV_PATH=F:\Dev\AIstock\.env&& set PYTHONIOENCODING=utf-
 - Newly confirmed blocker: current-date selection before the market produces a positive TDX `current_price` fails even though TDX provides `pre_close`. This conflicts with the requirement that current-date selection should use the TDX latest close/price as the entry/watchlist price without manual handling.
 - Non-blocked in this pass: official trading-day cache, historical PIT selection entry price, stock-name enrichment, Paper v2 minute/pre-close/suspend data, execution policy inventory, and real HMM model-config cache hit.
 - Production impact: no production restart, no DDL, no frontend/backend dependency changes, no StrategyPackage manifest/model/HMM/Paper ledger edits.
+
+## Pre-open TDX Pre-close Entry Price Fix - 2026-05-25 09:28+08:00
+
+Follow-up fix: current-date selection now uses TDX `pre_close` as `selection_entry_price` when TDX `current_price <= 0` but `pre_close > 0`. The entry-price source is marked `TDX_REALTIME.latest_close_pre_close`; display-only `current_price` remains empty when the live price itself is invalid.
+
+### Commands
+
+```bash
+rtk python -m pytest backend/tests/selection_center/test_result_enrichment.py -q -p no:cacheprovider
+rtk python -m py_compile backend/services/selection_center/result_enrichment.py
+rtk python -m pytest backend/tests/paper_trading_v2/test_trading_calendar_status.py backend/tests/selection_center/test_result_enrichment.py backend/tests/selection_center/test_runtime_selection.py::test_strategy_package_runtime_auto_generates_hmm_coefficients_on_miss backend/tests/selection_center/test_runtime_selection.py::test_strategy_package_runtime_resolves_latest_ready_hmm_snapshot_from_model_config backend/tests/test_strategy_scheduler_calendar.py -q -p no:cacheprovider
+rtk cmd /c "set AISTOCK_ENV_PATH=F:\Dev\AIstock\.env&& set PYTHONIOENCODING=utf-8&& python debug_tools\paper_v2\20260525\runtime_readiness_probe.py > debug_tools\paper_v2\20260525\outputs\runtime_readiness_probe_after_preclose_fix_20260525.log 2>&1"
+```
+
+### Evidence
+
+- `backend/tests/selection_center/test_result_enrichment.py`: `4 passed in 1.28s`.
+- Targeted readiness regression: `12 passed in 1.54s`.
+- Real TDX readiness probe after the fix exited `0`; current-date selection accepted TDX prices and produced `selection_entry_price` for `000001.SZ` and `000002.SZ`.
+- Regression added: `test_current_day_selection_uses_tdx_pre_close_before_first_live_price` covers `current_price=0.0`, `pre_close=12.8`, and asserts entry source `TDX_REALTIME.latest_close_pre_close`.
+
+### Updated Delta
+
+- The previous current-date selection blocker is fixed in code and covered by unit regression.
+- Production impact remains unchanged: no DDL, no dependency changes, no production `8001/3000` restart, and no StrategyPackage manifest/model/HMM/Paper ledger edits.
