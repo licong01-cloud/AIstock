@@ -175,7 +175,7 @@ class PaperTradingLiveDashboardService:
         if no_operable:
             hint = (
                 "Portfolio status is active but no scheduler-tickable live/replay session exists. "
-                "Review the latest terminal session, then create or resume a session outside the 09:15-15:00 state-change block."
+                "Review the latest terminal session, then create or resume a session; intraday recovery is allowed."
             )
         return {
             "has_sessions": bool(sessions),

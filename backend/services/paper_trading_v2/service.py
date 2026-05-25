@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from datetime import date
 from math import sqrt
+from pathlib import Path
 from statistics import mean, stdev
 from typing import Any
 
@@ -14,6 +16,7 @@ from backend.services.strategy_package.execution_policy import (
     normalize_execution_policy_json,
 )
 from backend.services.strategy_package.models import StrategyPackageLiveApproval
+from backend.services.strategy_package.model_asset_resolver import DEFAULT_MODEL_CACHE_ROOT
 from backend.services.strategy_package.repository import StrategyPackageRepository
 from backend.services.strategy_package.runtime import apply_runtime_variant_config
 from backend.services.strategy_package.runtime_variant import RuntimeVariantValidationStatus, derive_locked_core_hash
@@ -1324,9 +1327,10 @@ class PaperTradingV2PortfolioService:
             policy = self.package_repository.get_execution_policy(package_id, str(policy_id))
         else:
             if manifest_execution_policy is None:
-                raise StrategyPackageValidationError(
-                    "Paper v2 requires a manifest minute execution policy or an explicit execution policy id",
-                    context={"package_id": package_id, "manifest_sha256": manifest_sha256},
+                manifest_execution_policy = self._derive_platform_execution_policy_from_backtest_context(
+                    package_id=package_id,
+                    manifest_sha256=manifest_sha256,
+                    manifest=manifest,
                 )
             policy = self._select_default_manifest_execution_policy(
                 package_id=package_id,
@@ -1356,6 +1360,73 @@ class PaperTradingV2PortfolioService:
             require_runtime_assets=False,
         )
         return policy
+
+    def _derive_platform_execution_policy_from_backtest_context(
+        self,
+        *,
+        package_id: str,
+        manifest_sha256: str,
+        manifest: Any,
+    ) -> dict[str, Any]:
+        execution = (getattr(manifest, "backtest_context", None) or {}).get("execution")
+        if not isinstance(execution, dict):
+            raise StrategyPackageValidationError(
+                "Paper v2 requires a platform execution policy or QE backtest execution evidence",
+                context={"package_id": package_id, "manifest_sha256": manifest_sha256},
+            )
+        algo_code = str(execution.get("execution_algo") or "").strip().upper()
+        if not algo_code:
+            raise StrategyPackageValidationError(
+                "Paper v2 requires execution_algo evidence before deriving a platform execution policy",
+                context={"package_id": package_id, "manifest_sha256": manifest_sha256},
+            )
+        backtest_freq = str(execution.get("backtest_freq") or "").strip().lower()
+        if backtest_freq in {"5min", "5m"}:
+            bar_freq = "5m"
+        elif backtest_freq in {"1min", "1m", "minute", ""}:
+            bar_freq = "1m"
+        else:
+            raise StrategyPackageValidationError(
+                "Paper v2 can only derive minute execution policy from minute backtest evidence",
+                context={
+                    "package_id": package_id,
+                    "manifest_sha256": manifest_sha256,
+                    "backtest_freq": execution.get("backtest_freq"),
+                    "algo_code": algo_code,
+                },
+            )
+        algo_config = dict(execution.get("execution_algo_params") or {})
+        algo_config = self._complete_platform_algo_config(algo_code, algo_config)
+        return {
+            "execution_level": "minute",
+            "bar_freq": bar_freq,
+            "algo_code": algo_code,
+            "algo_config": algo_config,
+            "fallback_algo_code": None,
+            "data_requirements": {
+                "requires_minute_bar": True,
+                "requires_limit_price": True,
+                "requires_trade_calendar": True,
+                "requires_suspend_status": True,
+            },
+            "fallback_policy": {"on_missing_minute_bar": "fail", "on_algo_error": "fail"},
+            "quality_report": {
+                "record_slippage": True,
+                "record_participation_rate": True,
+                "record_unfilled_reason": True,
+            },
+            "unfilled_handler": execution.get("unfilled_handler"),
+            "unfilled_handler_params": dict(execution.get("unfilled_handler_params") or {}),
+        }
+
+    @staticmethod
+    def _complete_platform_algo_config(algo_code: str, algo_config: dict[str, Any]) -> dict[str, Any]:
+        config = dict(algo_config)
+        if algo_code in {"V25_TWO_STAGE", "V25_1_SMALL_CAP"}:
+            cache_root = _platform_model_cache_root()
+            config.setdefault("early_model_path", str(cache_root / algo_code / "v25_early_net_joint_fixed.pt"))
+            config.setdefault("late_model_path", str(cache_root / algo_code / "v25_late_net_joint_fixed.pt"))
+        return config
 
     def _select_default_manifest_execution_policy(
         self,
@@ -1429,3 +1500,7 @@ class PaperTradingV2PortfolioService:
             "validation_status": policy.validation_status.value,
             "paper_enabled": policy.paper_enabled,
         }
+
+
+def _platform_model_cache_root() -> Path:
+    return Path(os.getenv("AISTOCK_MODEL_CACHE_DIR") or DEFAULT_MODEL_CACHE_ROOT)

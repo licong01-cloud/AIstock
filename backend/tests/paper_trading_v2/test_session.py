@@ -43,7 +43,11 @@ def make_paper_manifest():
     return freeze_manifest(manifest)
 
 
-def make_portfolio(*, data_source: MinuteDataSource = MinuteDataSource.DB_HISTORICAL):
+def make_portfolio(
+    *,
+    data_source: MinuteDataSource = MinuteDataSource.DB_HISTORICAL,
+    broker_backend: str = "local_sim",
+):
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_manifest()
@@ -57,6 +61,7 @@ def make_portfolio(*, data_source: MinuteDataSource = MinuteDataSource.DB_HISTOR
         initial_cash=100_000,
         start_date=date(2024, 1, 2),
         data_source=data_source,
+        broker_backend=broker_backend,
     )
     return package_repo, paper_repo, portfolio
 
@@ -355,7 +360,7 @@ def test_replay_auto_switch_normalizes_to_catchup_session() -> None:
     assert session.runtime_config["paper_v2_session"]["auto_switch_to_live"] is True
 
 
-def test_session_mutation_guard_blocks_trading_hours_when_enabled() -> None:
+def test_session_mutation_guard_allows_intraday_recovery_when_enabled() -> None:
     _package_repo, paper_repo, portfolio = make_portfolio(data_source=MinuteDataSource.DB_HISTORICAL)
     service = PaperTradingSessionService(
         repository=paper_repo,
@@ -363,15 +368,24 @@ def test_session_mutation_guard_blocks_trading_hours_when_enabled() -> None:
         enforce_non_trading_window=True,
     )
 
-    with pytest.raises(InvalidStateTransitionError, match="trading hours"):
-        service.create_session(
-            portfolio_id=portfolio.portfolio_id,
-            mode=PaperSessionMode.REPLAY_ONLY,
-            start_date=date(2024, 1, 2),
-            end_date=date(2024, 1, 3),
-            historical_data_source=MinuteDataSource.DB_HISTORICAL,
-            as_of_time=datetime(2024, 1, 2, 10, 0),
-        )
+    session = service.create_session(
+        portfolio_id=portfolio.portfolio_id,
+        mode=PaperSessionMode.REPLAY_ONLY,
+        start_date=date(2024, 1, 2),
+        end_date=date(2024, 1, 3),
+        historical_data_source=MinuteDataSource.DB_HISTORICAL,
+        as_of_time=datetime(2024, 1, 2, 10, 0),
+    )
+    assert session.status == PaperSessionStatus.CREATED
+
+
+def test_session_mutation_guard_does_not_query_weekday_fallback_calendar() -> None:
+    _package_repo, paper_repo, portfolio = make_portfolio(data_source=MinuteDataSource.DB_HISTORICAL)
+    service = PaperTradingSessionService(
+        repository=paper_repo,
+        calendar_provider=ExplodingTradingCalendar(),
+        enforce_non_trading_window=True,
+    )
 
     session = service.create_session(
         portfolio_id=portfolio.portfolio_id,
@@ -379,21 +393,70 @@ def test_session_mutation_guard_blocks_trading_hours_when_enabled() -> None:
         start_date=date(2024, 1, 2),
         end_date=date(2024, 1, 3),
         historical_data_source=MinuteDataSource.DB_HISTORICAL,
-        as_of_time=datetime(2024, 1, 2, 16, 0),
+        as_of_time=datetime(2024, 1, 2, 10, 0),
     )
     assert session.status == PaperSessionStatus.CREATED
 
 
-def test_session_trading_day_check_does_not_fall_back_to_local_weekday() -> None:
-    _package_repo, paper_repo, _portfolio = make_portfolio(data_source=MinuteDataSource.DB_HISTORICAL)
+def test_session_mutation_guard_allows_minqmt_and_future_live_intraday_actions() -> None:
+    service = PaperTradingSessionService(
+        repository=InMemoryPaperTradingV2Repository(),
+        calendar_provider=ExplodingTradingCalendar(),
+        enforce_non_trading_window=True,
+    )
+
+    for action in [
+        "create_minqmt_sim_portfolio",
+        "resume_minqmt_sim_session",
+        "create_live_approval_candidate",
+        "resume_future_live_session",
+    ]:
+        service.require_non_trading_operation_window(
+            action=action,
+            portfolio_id="paper_intraday_recovery",
+            session_id="psess_intraday_recovery",
+            as_of_time=datetime(2024, 1, 2, 13, 5),
+        )
+
+
+def test_minqmt_sim_live_session_creation_is_not_time_window_blocked() -> None:
+    _package_repo, paper_repo, portfolio = make_portfolio(
+        data_source=MinuteDataSource.MINIQMT_REALTIME,
+        broker_backend="minqmt_sim",
+    )
     service = PaperTradingSessionService(
         repository=paper_repo,
         calendar_provider=ExplodingTradingCalendar(),
         enforce_non_trading_window=True,
     )
 
-    with pytest.raises(SessionConfigError, match="could not determine trading-day status"):
-        service._is_trading_day_for_operation(date(2024, 1, 2))
+    session = service.create_session(
+        portfolio_id=portfolio.portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.MINIQMT_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+        as_of_time=datetime(2024, 1, 2, 13, 5),
+    )
+
+    assert session.live_data_source == MinuteDataSource.MINIQMT_REALTIME
+    assert session.status == PaperSessionStatus.CREATED
+
+
+def test_local_sim_live_session_rejects_minqmt_source() -> None:
+    _package_repo, paper_repo, portfolio = make_portfolio(data_source=MinuteDataSource.TDX_REALTIME)
+
+    with pytest.raises(SessionSourceUnsupportedError, match="broker-bound live source") as exc_info:
+        PaperTradingSessionService(repository=paper_repo).create_session(
+            portfolio_id=portfolio.portfolio_id,
+            mode=PaperSessionMode.LIVE_ONLY,
+            start_date=date(2024, 1, 2),
+            live_data_source=MinuteDataSource.MINIQMT_REALTIME,
+            runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+        )
+
+    assert exc_info.value.context["broker_backend"] == "local_sim"
+    assert exc_info.value.context["live_data_source"] == "MINIQMT_REALTIME"
 
 
 def test_switch_session_mode_stops_source_and_creates_target_after_close() -> None:
@@ -499,6 +562,20 @@ def test_session_capabilities_expose_only_real_startable_modes() -> None:
     assert capabilities["modes"]["REPLAY_ONLY"]["can_start"] is True
     assert capabilities["modes"]["LIVE_ONLY"]["can_start"] is True
     assert capabilities["modes"]["CATCHUP_THEN_LIVE"]["can_start"] is True
+
+
+def test_session_capabilities_expose_minqmt_live_source() -> None:
+    _package_repo, paper_repo, portfolio = make_portfolio(
+        data_source=MinuteDataSource.MINIQMT_REALTIME,
+        broker_backend="minqmt_sim",
+    )
+
+    capabilities = PaperTradingSessionService(repository=paper_repo).session_capabilities(portfolio.portfolio_id)
+
+    assert capabilities["broker_backend"] == "minqmt_sim"
+    assert capabilities["portfolio_data_source"] == "MINIQMT_REALTIME"
+    assert capabilities["modes"]["LIVE_ONLY"]["can_start"] is True
+    assert capabilities["modes"]["REPLAY_ONLY"]["can_start"] is False
 
 
 def test_v2_scheduler_ticks_created_sessions_without_fake_success() -> None:
