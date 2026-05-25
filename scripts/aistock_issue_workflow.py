@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import hashlib
@@ -21,6 +21,7 @@ GITHUB_REPO = "licong01-cloud/AIstock"
 sys.path.insert(0, str(REPO_ROOT))
 from scripts import issue_flow as flow  # noqa: E402
 from scripts import ci_failure_issue_summary as ci_failure_summary  # noqa: E402
+from scripts import code_intelligence_adapter as code_intelligence  # noqa: E402
 
 
 class WorkflowError(ValueError):
@@ -756,6 +757,33 @@ def _bug_path_for_target(original_path: Path, target_root: Path) -> Path:
         return original_path
 
 
+def _issue_query(record: dict[str, Any], changed_files: list[str] | None = None) -> str:
+    parts = [
+        str(record.get("bug_id") or record.get("candidate_id") or "AIstock issue"),
+        str(record.get("title") or ""),
+        str(record.get("module") or record.get("module_guess") or ""),
+        str(record.get("description") or record.get("actual") or ""),
+    ]
+    if changed_files:
+        parts.extend(changed_files[:8])
+    return " ".join(part for part in parts if part).strip() or "AIstock issue"
+
+
+def _build_code_intelligence_summary(
+    *,
+    item_id: str,
+    record: dict[str, Any],
+    changed_files: list[str] | None,
+    root: Path,
+) -> dict[str, Any]:
+    return code_intelligence.build_summary(
+        item_id=item_id,
+        query=_issue_query(record, changed_files),
+        changed_files=changed_files or [],
+        root=root,
+        skip_external=False,
+    )
+
 def build_start_plan(
     *,
     bug_id: str | None,
@@ -783,6 +811,22 @@ def build_start_plan(
     output_dir = target_root / WORKFLOW_ROOT / canonical_bug_id
     fix_ready = flow.build_fix_ready(record, changed_files)
     context_pack = flow.build_context_pack(record, changed_files)
+    code_intelligence_summary = _build_code_intelligence_summary(
+        item_id=canonical_bug_id,
+        record=record,
+        changed_files=changed_files,
+        root=target_root,
+    )
+    context_pack["code_intelligence"] = {
+        "provider": code_intelligence_summary.get("provider"),
+        "status": code_intelligence_summary.get("status"),
+        "context_ref": code_intelligence_summary.get("context_ref"),
+        "manifest_ref": code_intelligence_summary.get("manifest_ref"),
+        "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
+        "fallback_used": code_intelligence_summary.get("fallback_used"),
+        "understand_anything": code_intelligence_summary.get("understand_anything"),
+    }
+    fix_ready["code_intelligence"] = context_pack["code_intelligence"]
     fix_ready_path = output_dir / "fix-ready.json"
     context_json_path = output_dir / "context-pack.json"
     context_md_path = output_dir / "context-pack.md"
@@ -805,6 +849,7 @@ def build_start_plan(
             github_issue_number=record.get("github_issue_number"),
             github_issue_url=record.get("github_issue_url"),
             production_gates=fix_ready.get("validation_selection", {}).get("production_gates", {}),
+            code_intelligence=context_pack.get("code_intelligence"),
             next_actions=[
                 "switch_to_worktree_if_created",
                 "read_context_pack_md",
@@ -833,6 +878,7 @@ def build_start_plan(
         "required_verification": fix_ready.get("required_verification") or [],
         "recommended_verification": fix_ready.get("recommended_verification") or [],
         "production_gates": fix_ready.get("validation_selection", {}).get("production_gates", {}),
+        "code_intelligence": context_pack.get("code_intelligence"),
         "next_agent_steps": [
             "switch_to_worktree_if_created",
             "read_context_pack_md",
@@ -858,6 +904,15 @@ def build_finish_plan(
     changed = changed_files if changed_files is not None else flow.changed_files_from_git(base, head)
     validation = flow.select_validation(changed, module=record.get("module"))
     pr_quality = flow.build_pr_quality(base=base, head=head, issue_record=record, changed_files=changed)
+    code_intelligence_summary = _build_code_intelligence_summary(
+        item_id=canonical_bug_id,
+        record=record,
+        changed_files=changed,
+        root=REPO_ROOT,
+    )
+    codegraph_tests = code_intelligence_summary.get("affected_tests", {}).get("suggested_tests") or []
+    if codegraph_tests:
+        validation["codegraph_suggested_tests"] = codegraph_tests
     evidence = [item for item in validation_evidence if item.strip()]
     closure_ready = bool(evidence) or plan_only or allow_missing_evidence
     output_dir = REPO_ROOT / WORKFLOW_ROOT / canonical_bug_id
@@ -870,6 +925,7 @@ def build_finish_plan(
         "pr_quality": pr_quality,
         "validation_evidence": evidence,
         "closure_ready": closure_ready,
+        "code_intelligence": code_intelligence_summary,
     })
     _write_text(pr_body_path, pr_body)
     next_state = "validation_passed" if evidence else ("validation_planned" if plan_only else "blocked")
@@ -880,6 +936,12 @@ def build_finish_plan(
         validation_evidence=evidence,
         pr_body_path=_repo_rel(pr_body_path),
         production_gates=validation.get("production_gates") or {},
+        code_intelligence={
+            "status": code_intelligence_summary.get("status"),
+            "context_ref": code_intelligence_summary.get("context_ref"),
+            "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
+            "fallback_used": code_intelligence_summary.get("fallback_used"),
+        },
         stop_reason=None if closure_ready else "validation_evidence_missing",
         next_actions=[
             "commit_only_task_files",
@@ -898,6 +960,14 @@ def build_finish_plan(
         "recommended_verification": validation.get("recommended_plans") or [],
         "production_gates": validation.get("production_gates") or {},
         "scope_check": pr_quality.get("scope_check"),
+        "code_intelligence": {
+            "status": code_intelligence_summary.get("status"),
+            "context_ref": code_intelligence_summary.get("context_ref"),
+            "manifest_ref": code_intelligence_summary.get("manifest_ref"),
+            "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
+            "fallback_used": code_intelligence_summary.get("fallback_used"),
+        },
+        "codegraph_suggested_tests": codegraph_tests,
         "validation_evidence": evidence,
         "closure_ready": closure_ready,
         "workflow_gate": "ready_for_pr" if closure_ready else "validation_evidence_missing",
@@ -933,6 +1003,9 @@ def render_pr_body(
         "",
         "## Required validation",
         *[f"- `{plan}`" for plan in validation.get("required_plans") or ["l0"]],
+        "",
+        "## Code intelligence",
+        *[f"- CodeGraph suggested test: `{path}`" for path in validation.get("codegraph_suggested_tests") or ["none"]],
         "",
         "## Evidence",
         *[f"- {item}" for item in evidence or ["missing - run required validation before requesting merge"]],
@@ -1397,6 +1470,12 @@ def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
     if mcp["stale_worktree_config_files"]:
         warnings.append("MCP/Codex config mentions AIstock_worktrees; verify it is not a stale server target")
 
+    code_intel = code_intelligence.build_doctor_report(REPO_ROOT, skip_external=skip_external)
+    for warning in code_intel.get("warnings") or []:
+        warnings.append(f"code intelligence: {warning}")
+    for item in code_intel.get("blocking") or []:
+        blocking.append(f"code intelligence: {item}")
+
     gate = "blocked" if blocking else ("warning" if warnings else "ready")
     next_command = f"python {REPO_ROOT / 'scripts' / 'aistock_issue_workflow.py'} run --bug-id BUG-XXX --mode plan --create-worktree"
     return {
@@ -1411,6 +1490,7 @@ def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
         "canonical_git": canonical_git,
         "github": github,
         "mcp": mcp,
+        "code_intelligence": code_intel,
         "next_command": next_command,
     }
 
@@ -2470,3 +2550,7 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+
+
