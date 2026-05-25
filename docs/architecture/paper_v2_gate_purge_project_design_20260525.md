@@ -565,7 +565,7 @@ GET /api/v1/strategy-packages/asset-eligible
 
 确认交互规则：
 
-1. HMM 模型在线重训、HMM 滚动训练、每日系数生成、模型重训预览后的提交，只允许使用弹窗二次确认：展示操作名称、对象名称、预计影响、是否会写入新任务、是否会影响当前运行；用户点击“确认执行/取消”即可。
+1. 策略模型重训、策略模型滚动训练、HMM 模型在线重训、HMM 滚动训练、每日系数生成、模型重训预览后的提交，只允许使用弹窗二次确认：展示操作名称、对象名称、预计影响、是否会写入新任务、是否会影响当前运行；用户点击“确认执行/取消”即可。
 2. 不得要求用户输入 package_id、config_id、snapshot_id、portfolio_id 等长字符串来确认 HMM 或模型运维操作。
 3. 物理删除 StrategyPackage、物理删除历史模拟盘、清空历史账本、真实 live 下单开关、生产 DDL/DML 等破坏性操作必须使用弹窗二次确认。用户要求本项目内删除操作不再使用长字符串输入确认；弹窗必须用醒目中文列出将被删除的对象、数量、不可恢复后果和不受影响对象。
 4. 普通模拟盘重跑、HMM 重训、生成系数、启动/暂停/恢复 session、调度器 run-once、退役/归档等非真实资金操作，不得使用长字符串确认。
@@ -577,6 +577,7 @@ GET /api/v1/strategy-packages/asset-eligible
 | 当前入口 | 当前问题 | 目标交互 |
 |---|---|---|
 | `frontend/src/app/paper-v2/model-hmm/page.tsx` 提交重训任务 | 输入 `packageId` | 弹窗二次确认。 |
+| `frontend/src/app/paper-v2/model-hmm/page.tsx` 策略模型重训/滚动训练和 HMM 滚动训练横向挤压 | 操作区显示不完整 | 纵向排列，独立卡片，保证按钮、参数、状态和错误完整显示。 |
 | `frontend/src/app/paper-v2/model-hmm/page.tsx` 触发 HMM 滚动训练 | 输入 `configId` | 弹窗二次确认。 |
 | `frontend/src/app/paper-v2/model-hmm/page.tsx` 生成每日系数 | 输入 `snapshotId` | 弹窗二次确认。 |
 | `frontend/src/app/paper-v2/portfolios/[portfolioId]/run-console/page.tsx` 非真实资金重跑类操作 | 输入长 id | 默认弹窗二次确认；如果会清空历史账本，弹窗必须明确不可恢复后果。 |
@@ -721,7 +722,7 @@ HMM 每日系数生成是平台能力，不能要求用户每天在 HMM 页面�
 
 后端要求：
 
-1. Selection、AIstock Paper、MiniQMT SIM 在 runtime profile 启用 HMM 且选择 `model_config_id` 后，应通过统一 HMM runtime service 获取 `{model_config_id, optional snapshot_id, signal_preset, trade_date}` 对应的每日系数。
+1. Selection、AIstock Paper、MiniQMT SIM 在 runtime profile 启用 HMM 且选择 `model_config_id` 后，应通过统一 HMM runtime service 获取 `{model_config_id, optional snapshot_id, signal_preset, trade_date}` 对应的每日系数和当日评分。
 2. 首次请求发现缓存缺失时自动计算并写入平台缓存；同一交易日、同一模型、同一 preset、同一输入数据版本后续直接读取缓存。
 3. 自动计算必须有并发锁，避免选股和模拟盘同时触发重复计算。
 4. 缓存 key 必须包含数据版本或输入截止日期，防止同一天上游数据修正后读到错误缓存。
@@ -734,6 +735,33 @@ HMM 每日系数生成是平台能力，不能要求用户每天在 HMM 页面�
 2. 不显示“请先手工生成每日系数”的提示。
 3. HMM 状态只显示为简短状态：`已命中缓存`、`首次运行将自动计算`、`正在计算`、`计算失败，可查看诊断`。
 4. 每日系数手工生成按钮若保留，只使用弹窗二次确认，不要求输入 snapshot/config 长字符串。
+
+### 9.0.9 模型与 HMM 页面布局和可读性
+
+`frontend/src/app/paper-v2/model-hmm/page.tsx` 必须从“堆叠很多技术 ID 和横向挤压操作”的页面，改为以可读模型名称、清晰操作分区和缓存状态为核心。
+
+布局要求：
+
+1. 策略模型重训、策略模型滚动训练、HMM 滚动训练必须纵向排列为独立卡片，不允许横向并排挤压导致按钮、输入、状态、错误提示显示不完整。
+2. 每个训练卡片的结构统一为：标题、适用对象、关键参数、二次确认按钮、最近任务状态、错误摘要。
+3. 移动端和窄屏下保持同样纵向顺序，不得出现横向滚动才能看完整操作按钮。
+4. 训练/重训入口只使用弹窗二次确认，不要求输入 package_id、config_id、snapshot_id。
+
+快照和缓存显示要求：
+
+1. 删除当前“可用快照”长列表式展示，不再让用户在主页面阅读大量 snapshot_id。
+2. “可用快照”区域改为“可用 HMM 模型缓存状态”，显示所有可使用 HMM 模型的当前缓存最新日期。
+3. 每行展示：HMM 模型可读名称、model_config_id 小字、最新缓存交易日、最新评分日期、preset、缓存状态、最近计算时间。
+4. 若某模型没有当日缓存，显示“首次运行将自动计算”，不能显示成不可用或要求手工生成。
+5. 如保留 snapshot 选择，只放入高级折叠区，默认隐藏；主流程不展示 snapshot_id 列表。
+
+当前模型状态显示要求：
+
+1. “当前模型状态”中优先显示策略包中文名或可读名称，例如 `package_name`、manifest display name、QE 任务名称。
+2. 策略包 ID 只在名称下方用小字体显示，便于复制诊断；不得把不可读 ID 同时放在标题、选择框、状态卡和表格主列里重复显示。
+3. 如果没有中文名或可读名，后端应返回可读 fallback，例如 `source_id + loop_id`、QE experiment name、package short hash，而不是只返回完整 UUID/hash。
+4. 当前状态卡必须显示：模型状态、最近训练任务、最近 HMM 缓存交易日、是否需要自动计算、最近错误摘要。
+5. 对用户没有操作意义的内部字段默认隐藏，只进入“一键复制诊断文本”。
 
 `ErrorDigest` 的用户视图结构：
 
@@ -828,7 +856,16 @@ user_action: clicked run-day
   - 非 SIM：禁止实际订单提交，并突出显示安全错误。
 - 页面文案明确：MiniQMT 是订单/成交权威，TDX 不参与 MiniQMT 撮合。
 
-### 9.6 Governance 页面
+### 9.6 模型与 HMM 页面
+
+- 策略模型重训、策略模型滚动训练、HMM 滚动训练纵向排列，不得横向挤压。
+- 删除主页面“可用快照”长列表，改为“可用 HMM 模型缓存状态”。
+- 缓存状态显示所有可使用 HMM 模型当前缓存最新日期、最新评分日期、preset、状态和最近计算时间。
+- HMM 每日评分由平台自动计算；没有当日缓存时显示“首次运行将自动计算”，不要求手工生成。
+- 当前模型状态优先显示策略包中文名或可读名称；策略包 ID 仅在下方小字体显示。
+- 不重复展示不可读 package_id/config_id/snapshot_id；完整 ID 进入复制诊断文本或 tooltip。
+
+### 9.7 Governance 页面
 
 - `strategy-package-governance` 不再作为 Paper v2 流程入口。
 - 如果保留，只改名/定位为“未来实盘治理证据”。
@@ -960,6 +997,7 @@ rg -n "PAPER_ENABLED|PAPER_RUNNING|PAPER_PASSED|PAPER_FAILED|paper_ready|paper_c
 - 删除 Portfolio 创建页“组合生命周期规则/实时模拟说明”等占用主布局的大块说明。
 - Selection 历史记录、Portfolio 列表、策略包选择列表均改为分页/搜索/批量处理。
 - HMM 每日系数在 Selection/Portfolio 页面显示自动缓存状态，不再引导手工生成。
+- 模型与 HMM 页面纵向排列训练操作，删除主视图“可用快照”长列表，改为 HMM 模型缓存最新日期和每日评分状态。
 
 验证：
 
@@ -967,6 +1005,7 @@ rg -n "PAPER_ENABLED|PAPER_RUNNING|PAPER_PASSED|PAPER_FAILED|paper_ready|paper_c
 - Playwright：不出现 `PAPER_ENABLED`、`Required paper-enabled policy`、`策略包健康预检阻断` 等旧文案。
 - Playwright：选股历史分页、批量删除、Portfolio 分页、批量退役可用。
 - Playwright：Portfolio 创建表单在桌面和移动端完整显示，无大块说明挤占主操作区。
+- Playwright：模型与 HMM 页面中策略模型重训、策略模型滚动训练、HMM 滚动训练均完整显示；当前模型状态优先显示可读名称而不是重复 ID。
 - UI console/pageerror/requestfailed clean。
 
 ### Phase 6：迁移、测试和设计合规复核
@@ -1013,6 +1052,9 @@ rg -n "PAPER_ENABLED|PAPER_RUNNING|PAPER_PASSED|PAPER_FAILED|paper_ready|paper_c
 | L3 UI | Useful simplified display | Playwright + API fixture | 页面保留 asset eligibility、runtime diagnostics、HMM 自动计算/缓存、交易日状态、MiniQMT broker status、价格来源；删除 legacy paper lifecycle 噪音和大块说明文字。 |
 | L3 UI | HMM no long-string confirmation | Playwright + grep | HMM/模型重训、滚动训练、每日系数生成使用弹窗二次确认；不得要求输入 package_id/config_id/snapshot_id。 |
 | L3 UI | HMM no manual daily coefficient dependency | Playwright + API fixture | Selection/Paper 只选 model config 即可提交；页面不要求手工生成每日系数。 |
+| L3 UI | Model/HMM layout readability | Playwright screenshot/text scan | 策略模型重训、策略模型滚动训练、HMM 滚动训练纵向完整显示；无横向挤压；主视图无“可用快照”长列表。 |
+| L3 UI | HMM cache status display | Playwright + API fixture | 可用 HMM 模型显示最新缓存日期和最新评分日期；无当日缓存显示自动计算，不显示不可用。 |
+| L3 UI | Model status readable name | Playwright + fixture | 当前模型状态主标题显示策略包中文名/可读名，package_id 只在下方小字体或 tooltip/复制诊断中出现。 |
 | L3 UI | Error digest not drawer/table | Playwright + grep | Paper v2 错误详情使用中文摘要 + 可复制诊断文本；主视图不使用嵌套表格、抽屉、details 或 JsonPanel 展示错误。 |
 | L3 UI | Codex diagnostic copy | Playwright | 错误详情提供“一键复制给 Codex 分析”的纯文本，包含 error_code、route、ids、trade_date、request_id、context 摘要。 |
 | L4 integration | LocalSim full day | dev backend + DB/fake data | selection/target/order/ledger/snapshot 完整，runtime 缺失 fail-fast。 |
@@ -1051,6 +1093,9 @@ rg -n "PAPER_ENABLED|PAPER_RUNNING|PAPER_PASSED|PAPER_FAILED|paper_ready|paper_c
 24. Portfolio 卡片/列表/创建结果必须区分“已创建 READY”和“实际运行成功”；没有 run/session 证据时不得显示假成功。
 25. HMM 每日系数由平台按模型、preset、交易日和数据版本自动计算/缓存；Selection/Paper/MiniQMT 不依赖手工每日生成。
 26. StrategyPackage 必须新增物理删除功能；删除前做依赖检查，允许删除时使用二次弹窗确认，不要求输入长 package_id。
+27. 模型与 HMM 页面必须纵向完整展示策略模型重训、策略模型滚动训练和 HMM 滚动训练；不得横向挤压或隐藏按钮。
+28. 模型与 HMM 页面主视图不再展示“可用快照”长列表；改为显示所有可用 HMM 模型的最新缓存日期和最新评分日期。
+29. 当前模型状态必须显示策略包中文名或可读名称，package_id 只作为小字体辅助信息，不得重复占据主显示空间。
 
 ## 14. 风险和缓解
 
@@ -1107,5 +1152,6 @@ rg -n "PAPER_ENABLED|PAPER_RUNNING|PAPER_PASSED|PAPER_FAILED|paper_ready|paper_c
 14. UI 必须防止假成功：Portfolio `READY` 只代表已创建，真实运行成功必须来自 run/session evidence。
 15. HMM 每日系数必须由平台自动计算和缓存，Selection/Paper/MiniQMT 不再依赖任何手工每日生成流程。
 16. StrategyPackage 必须新增物理删除功能；删除前做依赖检查，允许删除时使用二次弹窗确认，不要求输入长 package_id。
+17. 模型与 HMM 页面必须纵向展示训练操作，删除主视图可用快照长列表，并用可读策略包名称替代重复 ID。
 
 审批后即可按本设计启动实现项目。
