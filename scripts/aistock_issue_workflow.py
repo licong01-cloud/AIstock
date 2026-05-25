@@ -20,6 +20,7 @@ GITHUB_REPO = "licong01-cloud/AIstock"
 
 sys.path.insert(0, str(REPO_ROOT))
 from scripts import issue_flow as flow  # noqa: E402
+from scripts import ci_failure_issue_summary as ci_failure_summary  # noqa: E402
 
 
 class WorkflowError(ValueError):
@@ -356,6 +357,51 @@ def _git_snapshot(root: Path) -> dict[str, Any]:
         "dirty": bool(dirty_lines),
         "dirty_count": len(dirty_lines),
     }
+
+
+def _github_issue_url(number: int | str) -> str:
+    return f"https://github.com/{GITHUB_REPO}/issues/{number}"
+
+
+def _extract_run_id_from_issue_body(body: str) -> str | None:
+    marker = re.search(r"aistock-issue-on-test-fail:(\d+)", body or "")
+    if marker:
+        return marker.group(1)
+    run_url = re.search(r"github\.com/[^/]+/[^/]+/actions/runs/(\d+)", body or "")
+    return run_url.group(1) if run_url else None
+
+
+def _load_github_issue(issue_number: int | str) -> dict[str, Any]:
+    result = _execute_checked(
+        [
+            "gh",
+            "issue",
+            "view",
+            str(issue_number),
+            "--repo",
+            GITHUB_REPO,
+            "--json",
+            "number,title,state,body,url,labels,createdAt,updatedAt",
+        ],
+        cwd=REPO_ROOT,
+        timeout=60,
+    )
+    try:
+        payload = json.loads(str(result.get("stdout") or "{}"))
+    except json.JSONDecodeError as exc:
+        raise WorkflowError(f"cannot parse GitHub issue #{issue_number}: {exc}") from exc
+    if not payload.get("number"):
+        raise WorkflowError(f"GitHub issue not found or unreadable: {issue_number}")
+    return payload
+
+
+def _find_bug_by_github_issue(issue_number: int | str) -> tuple[dict[str, Any], Path] | None:
+    target = int(issue_number)
+    for path in _bug_files():
+        record = _load_json(path)
+        if int(record.get("github_issue_number") or 0) == target:
+            return record, path
+    return None
 
 
 def find_bug_record(bug_id: str | None = None, issue_json: str | None = None) -> tuple[dict[str, Any], Path]:
@@ -1463,6 +1509,165 @@ def build_resume_plan(*, bug_id: str, worktree: str | None = None, events_limit:
     }
 
 
+def _classify_ci_issue(summary: dict[str, Any], issue: dict[str, Any]) -> str:
+    title_body = f"{issue.get('title') or ''}\n{issue.get('body') or ''}".lower()
+    errors = "\n".join(
+        str(item)
+        for job in summary.get("failed_jobs") or []
+        for item in [job.get("error_signature"), *(job.get("key_log_excerpt") or [])]
+        if item
+    ).lower()
+    if any(token in title_body for token in ["flaky", "timeout", "network", "runner"]):
+        return "infra_flaky"
+    if any(token in errors for token in ["relation ", "does not exist", "fixture", "test fixture"]):
+        return "test_fixture_gap_or_real_regression"
+    if summary.get("diagnostic_status") == "complete":
+        return "real_regression_candidate"
+    return "needs_log_triage"
+
+
+def build_triage_ci_issue_plan(
+    *,
+    issue_number: int | str,
+    run_id: str | None = None,
+    summary_json: str | None = None,
+    skip_github_summary: bool = False,
+) -> dict[str, Any]:
+    issue = _load_github_issue(issue_number)
+    linked = _find_bug_by_github_issue(issue["number"])
+    body = str(issue.get("body") or "")
+    detected_run_id = run_id or _extract_run_id_from_issue_body(body)
+    summary: dict[str, Any]
+    extraction_errors: list[str] = []
+    if summary_json:
+        summary = _load_json(Path(summary_json))
+    elif detected_run_id and not skip_github_summary:
+        summary = ci_failure_summary.summarize_actions_run(
+            repo=GITHUB_REPO,
+            run_id=detected_run_id,
+            run_url=None,
+            severity="P1",
+        )
+    else:
+        extraction_errors.append("No Actions run id was found in the GitHub Issue body.")
+        summary = ci_failure_summary.finalize_summary(
+            {
+                "schema_version": "aistock_ci_failure_summary_v1",
+                "generated_at": _utc_now(),
+                "severity": "P1",
+                "workflow": "unknown",
+                "run_id": detected_run_id or "",
+                "run_url": None,
+                "branch": None,
+                "commit": None,
+                "failed_jobs": [],
+                "extraction_errors": extraction_errors,
+            }
+        )
+    classification = _classify_ci_issue(summary, issue)
+    module = (summary.get("suspected_modules") or ["validation"])[0]
+    first_job = (summary.get("failed_jobs") or [{}])[0]
+    failed_test = ((first_job.get("failed_tests") or [None])[0] or "").split("::")[-1]
+    suggested_title = (
+        f"{module} CI failure requires triage: {failed_test or first_job.get('error_signature') or issue.get('title')}"
+    )
+    payload = {
+        "schema_version": "aistock_issue_workflow_triage_ci_issue_v1",
+        "generated_at": _utc_now(),
+        "github_issue": {
+            "number": issue.get("number"),
+            "url": issue.get("url"),
+            "title": issue.get("title"),
+            "state": issue.get("state"),
+        },
+        "detected_run_id": detected_run_id,
+        "summary": summary,
+        "classification_recommendation": classification,
+        "linked_bug": {"bug_id": linked[0].get("bug_id"), "path": _repo_rel(linked[1])} if linked else None,
+        "needs_bug_json": linked is None and classification != "infra_flaky",
+        "suggested_bug": {
+            "module": module,
+            "severity": summary.get("severity") or "P1",
+            "title": suggested_title[:180],
+            "risk_area": "ci_failure_intake",
+            "allowed_write_scope": summary.get("suspected_files") or [],
+            "required_verification": [
+                "Reproduce the failed job or focused test when applicable.",
+                "Run issue-specific validation selected by the promoted BUG JSON.",
+                "Keep BUG JSON and GitHub Issue synchronized.",
+            ],
+        },
+        "next_command": (
+            f"python scripts/aistock_issue_workflow.py promote-ci-issue --issue {issue.get('number')} --apply"
+            if linked is None
+            else f"python scripts/aistock_issue_workflow.py run --bug-id {linked[0].get('bug_id')} --mode plan --create-worktree"
+        ),
+    }
+    _write_json(REPO_ROOT / WORKFLOW_ROOT / f"ci-issue-{issue.get('number')}" / "triage-ci-issue.json", payload)
+    return payload
+
+
+def build_promote_ci_issue_plan(
+    *,
+    issue_number: int | str,
+    apply: bool,
+    bug_id: str | None = None,
+    summary_json: str | None = None,
+    skip_github_summary: bool = False,
+) -> dict[str, Any]:
+    triage = build_triage_ci_issue_plan(
+        issue_number=issue_number,
+        summary_json=summary_json,
+        skip_github_summary=skip_github_summary,
+    )
+    if triage.get("linked_bug"):
+        return {
+            "schema_version": "aistock_issue_workflow_promote_ci_issue_v1",
+            "generated_at": _utc_now(),
+            "workflow_gate": "already_linked",
+            "dry_run": not apply,
+            "triage": triage,
+            "next_command": f"python scripts/aistock_issue_workflow.py run --bug-id {triage['linked_bug']['bug_id']} --mode plan --create-worktree",
+        }
+    summary = triage["summary"]
+    suggested = triage["suggested_bug"]
+    first_job = (summary.get("failed_jobs") or [{}])[0]
+    failed_tests = first_job.get("failed_tests") or []
+    error_signature = first_job.get("error_signature")
+    details = ci_failure_summary.render_issue_markdown(summary)
+    changed_files = list(suggested.get("allowed_write_scope") or [])
+    if not changed_files:
+        changed_files = ["scripts/aistock_issue_workflow.py"]
+    plan = build_submit_bug_plan(
+        title=suggested["title"],
+        module=suggested["module"],
+        severity=suggested["severity"],
+        description=f"Auto-filed CI issue #{issue_number} requires actionable triage and repair.\n\n{details}",
+        expected="CI/Nightly failure issues include enough diagnostic detail to enter the BUG JSON workflow without manual log rediscovery.",
+        actual=f"Failure summary: {error_signature or (failed_tests[0] if failed_tests else 'diagnostic extraction incomplete')}",
+        reproduce_command=str(summary.get("reproduce_command") or "Inspect linked CI run log."),
+        evidence_refs=[str(summary.get("run_url") or ""), _github_issue_url(issue_number)],
+        changed_files=changed_files,
+        plan_key="ci_failure_issue_intake",
+        nox_session=first_job.get("nox_session"),
+        candidate_type="regression",
+        bug_id=bug_id,
+        github_issue_number=str(issue_number),
+        github_issue_url=_github_issue_url(issue_number),
+        create_github=False,
+        apply=apply,
+    )
+    return {
+        "schema_version": "aistock_issue_workflow_promote_ci_issue_v1",
+        "generated_at": _utc_now(),
+        "workflow_gate": "promoted" if apply else "ready_for_apply",
+        "dry_run": not apply,
+        "triage": triage,
+        "submit_bug": plan,
+        "next_command": plan.get("next_command"),
+    }
+
+
 def _next_command_for_state(bug_id: str, state: dict[str, Any]) -> str:
     current = str(state.get("state") or "")
     worktree = str(state.get("worktree") or state.get("cwd") or "").strip()
@@ -1999,6 +2204,29 @@ def cmd_install_client(args: argparse.Namespace) -> int:
     return 0 if payload.get("workflow_gate") in {"ready_for_install", "installed"} else 2
 
 
+def cmd_triage_ci_issue(args: argparse.Namespace) -> int:
+    payload = build_triage_ci_issue_plan(
+        issue_number=args.issue,
+        run_id=args.run_id,
+        summary_json=args.summary_json,
+        skip_github_summary=args.skip_github_summary,
+    )
+    _emit(payload, args.output)
+    return 0
+
+
+def cmd_promote_ci_issue(args: argparse.Namespace) -> int:
+    payload = build_promote_ci_issue_plan(
+        issue_number=args.issue,
+        apply=args.apply,
+        bug_id=args.bug_id,
+        summary_json=args.summary_json,
+        skip_github_summary=args.skip_github_summary,
+    )
+    _emit(payload, args.output)
+    return 0 if payload.get("workflow_gate") in {"ready_for_apply", "promoted", "already_linked"} else 2
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     payload = build_run_plan(
         bug_id=args.bug_id,
@@ -2099,6 +2327,23 @@ def build_parser() -> argparse.ArgumentParser:
     install_client.add_argument("--codex-home")
     install_client.add_argument("--output")
     install_client.set_defaults(func=cmd_install_client)
+
+    triage_ci = sub.add_parser("triage-ci-issue", help="Summarize and classify an auto-filed CI/Nightly GitHub Issue.")
+    triage_ci.add_argument("--issue", required=True, help="GitHub Issue number to triage.")
+    triage_ci.add_argument("--run-id", help="Override or provide the Actions run id.")
+    triage_ci.add_argument("--summary-json", help="Use an existing CI failure summary JSON instead of querying Actions.")
+    triage_ci.add_argument("--skip-github-summary", action="store_true", help="Do not query Actions logs; emit a partial triage summary.")
+    triage_ci.add_argument("--output")
+    triage_ci.set_defaults(func=cmd_triage_ci_issue)
+
+    promote_ci = sub.add_parser("promote-ci-issue", help="Promote a triaged CI GitHub Issue into the BUG JSON workflow.")
+    promote_ci.add_argument("--issue", required=True, help="GitHub Issue number to promote.")
+    promote_ci.add_argument("--bug-id", help="Use an already reserved BUG-NNN id.")
+    promote_ci.add_argument("--summary-json", help="Use an existing CI failure summary JSON instead of querying Actions.")
+    promote_ci.add_argument("--skip-github-summary", action="store_true", help="Do not query Actions logs; promote with partial diagnostics.")
+    promote_ci.add_argument("--apply", action="store_true")
+    promote_ci.add_argument("--output")
+    promote_ci.set_defaults(func=cmd_promote_ci_issue)
 
     run = sub.add_parser("run", help="Run the Phase 1 issue workflow state machine for one BUG.")
     run.add_argument("--bug-id", required=True)
