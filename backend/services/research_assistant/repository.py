@@ -160,11 +160,65 @@ TABLES: dict[str, dict[str, Any]] = {
         "json": {"trigger_json"},
         "search": {"prompt_node_id", "prompt_key", "title", "category", "tree_path", "phase", "status"},
     },
+    "prompt_sources": {
+        "table": "assistant_prompt_sources",
+        "id": "source_id",
+        "json": {"metadata_json"},
+        "search": {"source_id", "pack_key", "pack_version", "source_path", "source_commit", "status"},
+    },
+    "prompt_node_versions": {
+        "table": "assistant_prompt_node_versions",
+        "id": "version_id",
+        "json": {"trigger_json", "metadata_json"},
+        "search": {"version_id", "source_id", "prompt_key", "pack_key", "pack_version", "status"},
+    },
+    "prompt_activations": {
+        "table": "assistant_prompt_activations",
+        "id": "activation_id",
+        "json": {"version_refs", "activation_metadata_json"},
+        "search": {"activation_id", "assistant_key", "environment", "pack_key", "pack_version", "status"},
+    },
+    "prompt_activation_events": {
+        "table": "assistant_prompt_activation_events",
+        "id": "event_id",
+        "json": {"event_json"},
+        "search": {"event_id", "activation_id", "event_type", "actor"},
+    },
     "prompt_bundles": {
         "table": "assistant_prompt_bundles",
         "id": "prompt_bundle_id",
-        "json": {"node_refs", "selection_trace_json", "bundle_json"},
-        "search": {"prompt_bundle_id", "task_id", "conversation_id", "phase", "model_profile_id"},
+        "json": {"node_refs", "selection_trace_json", "bundle_json", "version_refs"},
+        "search": {"prompt_bundle_id", "task_id", "conversation_id", "phase", "model_profile_id", "activation_id"},
+    },
+    "runtime_config_sources": {
+        "table": "assistant_runtime_config_sources",
+        "id": "source_id",
+        "json": {"config_json", "metadata_json"},
+        "search": {"source_id", "config_key", "config_version", "source_path", "status"},
+    },
+    "runtime_config_activations": {
+        "table": "assistant_runtime_config_activations",
+        "id": "activation_id",
+        "json": {"config_json", "activation_metadata_json"},
+        "search": {"activation_id", "config_key", "config_version", "environment", "status"},
+    },
+    "context_segments": {
+        "table": "assistant_context_segments",
+        "id": "segment_id",
+        "json": {"content_json", "source_message_ids", "metadata_json"},
+        "search": {"segment_id", "conversation_id", "segment_type", "status", "prompt_activation_id", "runtime_config_activation_id"},
+    },
+    "context_key_facts": {
+        "table": "assistant_context_key_facts",
+        "id": "fact_id",
+        "json": {"fact_json", "source_message_ids", "metadata_json"},
+        "search": {"fact_id", "conversation_id", "fact_type", "status"},
+    },
+    "context_assembly_traces": {
+        "table": "assistant_context_assembly_traces",
+        "id": "assembly_trace_id",
+        "json": {"budget_json", "assembly_json", "source_refs_json"},
+        "search": {"assembly_trace_id", "conversation_id", "task_id", "prompt_activation_id", "runtime_config_activation_id", "status"},
     },
     "temp_memories": {
         "table": "assistant_temp_memories",
@@ -258,9 +312,9 @@ class DatabaseResearchAssistantRepository:
             "generated_at": _now_iso(),
         }
 
-    def list_records(self, kind: str, *, filters: Mapping[str, Any] | None = None, search: str | None = None, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+    def list_records(self, kind: str, *, filters: Mapping[str, Any] | None = None, search: str | None = None, limit: int, offset: int = 0) -> dict[str, Any]:
         meta = self._meta(kind)
-        limit = max(1, min(int(limit or 50), 500))
+        limit = max(1, int(limit))
         offset = max(0, int(offset or 0))
         where, params = self._where(meta, filters or {}, search)
         table = meta["table"]
@@ -409,7 +463,7 @@ class InMemoryResearchAssistantRepository:
     def health(self) -> dict[str, Any]:
         return {"schema_version": "aistock_research_assistant_repository_health_v1", "status": "ok", "table_count": len(TABLES), "present_count": len(TABLES), "missing_tables": [], "generated_at": _now_iso(), "mode": "in_memory_test_only"}
 
-    def list_records(self, kind: str, *, filters: Mapping[str, Any] | None = None, search: str | None = None, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+    def list_records(self, kind: str, *, filters: Mapping[str, Any] | None = None, search: str | None = None, limit: int, offset: int = 0) -> dict[str, Any]:
         meta = TABLES[kind]
         filters = filters or {}
         items = list(self.data[kind].values())
@@ -425,7 +479,7 @@ class InMemoryResearchAssistantRepository:
             return str(item.get("updated_at") or item.get("created_at") or item.get("retrieved_at") or item.get("run_date") or "")
 
         items.sort(key=_sort_key, reverse=True)
-        limit = max(1, min(int(limit or 50), 500))
+        limit = max(1, int(limit))
         offset = max(0, int(offset or 0))
         return {"items": copy.deepcopy(items[offset:offset + limit]), "total": len(items), "page": offset // limit + 1, "page_size": limit, "has_more": offset + limit < len(items)}
 

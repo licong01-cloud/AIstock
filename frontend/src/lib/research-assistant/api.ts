@@ -281,6 +281,7 @@ export type AssistantChatTurnResult = JsonObject & {
   task_events?: AssistantTaskEvent[];
   prompt_bundle?: AssistantPromptBundle;
   context_pack?: JsonObject;
+  context_health?: JsonObject;
   trace?: JsonObject;
   cards?: JsonObject;
 };

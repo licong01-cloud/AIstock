@@ -26,6 +26,13 @@ type RailStep = { label: string; status: string };
 type PlanCard = { title?: string; steps?: string[] };
 type ClarificationCard = { title?: string; questions?: string[] };
 type Proposal = { title?: string; risk?: string; approval_required?: boolean; status?: string };
+type ContextHealth = {
+  status?: string;
+  utilization_ratio?: number;
+  compact_summary_count?: number;
+  key_fact_count?: number;
+  show_badge?: boolean;
+};
 
 type ChatCards = {
   plan_card?: PlanCard;
@@ -34,6 +41,7 @@ type ChatCards = {
   status_rail?: RailStep[];
   capability_summary?: Record<string, unknown>;
   safety?: Record<string, unknown>;
+  context_health?: ContextHealth;
 };
 
 type CatalogNotReadyDetail = {
@@ -194,6 +202,7 @@ function createAdapter(
 function TaskProgressRail({ steps, latest }: { steps: RailStep[]; latest: AssistantChatTurnResult | null }) {
   const cards = asCards(latest?.cards || latest?.assistant_message?.content_json?.cards);
   const capability = cards.capability_summary || {};
+  const contextHealth = cards.context_health;
   return (
     <aside className="ra-chat-rail" aria-label="任务状态轨道">
       <div className="ra-chat-rail-head">
@@ -218,6 +227,13 @@ function TaskProgressRail({ steps, latest }: { steps: RailStep[]; latest: Assist
         <p>{String(capability.skill || "将按需选择本地 Skill Catalog，不要求用户记住工具名。")}</p>
         <p>{String(capability.model || "主模型负责理解、确认和调度。")}</p>
       </div>
+      {contextHealth?.show_badge ? (
+        <div className="ra-chat-capability">
+          <span className="ra-chat-eyebrow">上下文健康</span>
+          <p>状态：{contextHealth.status || "healthy"}；窗口使用率：{Math.round((contextHealth.utilization_ratio || 0) * 100)}%。</p>
+          <p>摘要 {contextHealth.compact_summary_count || 0} 条，关键事实 {contextHealth.key_fact_count || 0} 条，可在审计页回溯原文。</p>
+        </div>
+      ) : null}
       <Link className="ra-chat-admin-link" href="/research-assistant/admin">打开后台管理 / 审计</Link>
     </aside>
   );
