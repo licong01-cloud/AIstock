@@ -363,6 +363,47 @@ def build_summary(
     }
 
 
+def _inline(items: list[Any] | tuple[Any, ...] | None, *, default: str = "none") -> str:
+    values = [str(item) for item in items or [] if str(item).strip()]
+    return ", ".join(values) if values else default
+
+
+def render_summary_markdown(payload: dict[str, Any]) -> str:
+    context = payload.get("context") or {}
+    affected = payload.get("affected_tests") or {}
+    context_fallback = context.get("fallback") or {}
+    affected_fallback = affected.get("fallback") or {}
+    ua = payload.get("understand_anything") or {}
+    suggested_tests = [str(item) for item in affected.get("suggested_tests") or [] if str(item).strip()]
+    warnings = []
+    if context_fallback.get("used"):
+        warnings.append(f"context fallback: {context_fallback.get('reason') or 'unknown'}")
+    if affected_fallback.get("used"):
+        warnings.append(f"affected-tests fallback: {affected_fallback.get('reason') or 'unknown'}")
+    lines = [
+        "## Code Intelligence Summary",
+        "",
+        f"- provider: `{payload.get('provider') or 'codegraph'}`",
+        f"- status: `{payload.get('status') or 'unknown'}`",
+        f"- fallback_used: `{str(bool(payload.get('fallback_used'))).lower()}`",
+        f"- context_ref: `{payload.get('context_ref') or 'not_generated'}`",
+        f"- affected_tests_ref: `{payload.get('affected_tests_ref') or 'not_generated'}`",
+        f"- changed_files: `{_inline(affected.get('changed_files') or context.get('changed_files'))}`",
+        f"- understand_anything_status: `{ua.get('status') or 'unknown'}`",
+        "",
+        "### Suggested Impacted Tests",
+        *[f"- `{item}`" for item in suggested_tests or ["none"]],
+    ]
+    if warnings:
+        lines.extend(["", "### Warnings", *[f"- {item}" for item in warnings]])
+    lines.extend([
+        "",
+        "Code intelligence is warning-only. Final merge readiness still depends on AIstock nox, pytest, Validation Center, and production gates.",
+        "",
+    ])
+    return "\n".join(lines)
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     _emit(build_doctor_report(Path(args.root) if args.root else REPO_ROOT, skip_external=args.skip_external), args.output)
     return 0
@@ -407,6 +448,8 @@ def cmd_summary(args: argparse.Namespace) -> int:
         root=Path(args.root) if args.root else REPO_ROOT,
         skip_external=args.skip_external,
     )
+    if args.output_md:
+        _write_text(Path(args.output_md), render_summary_markdown(payload))
     _emit(payload, args.output)
     return 0
 
@@ -449,6 +492,7 @@ def build_parser() -> argparse.ArgumentParser:
     summary.add_argument("--root")
     summary.add_argument("--skip-external", action="store_true")
     summary.add_argument("--output")
+    summary.add_argument("--output-md")
     summary.set_defaults(func=cmd_summary)
     return parser
 

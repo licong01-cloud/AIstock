@@ -98,3 +98,27 @@ def test_doctor_reads_code_intelligence_catalog(tmp_path: Path, monkeypatch) -> 
 
     assert payload["catalog"]["schema_version"] == "aistock_code_intelligence_catalog_v1"
     assert payload["catalog"]["codegraph"]["version"] == "0.9.4"
+
+
+def test_summary_markdown_contains_warning_only_artifact_refs(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(adapter, "_codegraph_command", lambda: None)
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
+    )
+
+    payload = adapter.build_summary(
+        item_id="PR-226",
+        query="PR impact",
+        changed_files=["scripts/code_intelligence_adapter.py"],
+        root=tmp_path,
+        skip_external=True,
+    )
+    markdown = adapter.render_summary_markdown(payload)
+
+    assert "## Code Intelligence Summary" in markdown
+    assert "scripts/code_intelligence_adapter.py" in markdown
+    assert "affected-tests.json" in markdown
+    assert "warning-only" in markdown
+

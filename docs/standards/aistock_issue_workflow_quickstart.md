@@ -69,7 +69,7 @@ python scripts/aistock_issue_workflow.py doctor
 
 `doctor` checks the repo, GitHub CLI fallback, MCP/Codex config hints, repo/global skill presence, Claude Code command presence, canonical root cleanliness, active standard/design files, and code-intelligence readiness. It returns `workflow_gate=ready|warning|blocked`.
 
-Code intelligence is non-blocking in KG-1/KG-2. If CodeGraph is installed and `.codegraph/` exists, Context Pack and finish artifacts include `code_intelligence` refs such as `codegraph-context.md` and `affected-tests.json`. If CodeGraph or Understand Anything is unavailable, continue with the existing issue workflow fallback and record the warning; do not run full-repo exploration by default.
+Code intelligence is non-blocking in KG-1/KG-3. If CodeGraph is installed and `.codegraph/` exists, Context Pack, finish artifacts, and PR Quality artifacts include `code_intelligence` refs such as `codegraph-context.md`, `affected-tests.json`, and `code-intelligence-summary.md`. If CodeGraph or Understand Anything is unavailable, continue with the existing issue workflow fallback and record the warning; do not run full-repo exploration by default. PR Quality publishes these artifacts as warning-only acceleration hints; final validation still comes from AIstock nox / pytest / Validation Center gates.
 
 Warnings about a dirty canonical root are not permission to write there. They mean root sync/cleanup must stop until the unrelated work is resolved. New issue registration and fixes should continue only in a clean task or registry worktree.
 
