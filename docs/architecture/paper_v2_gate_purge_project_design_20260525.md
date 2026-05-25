@@ -536,7 +536,7 @@ GET /api/v1/strategy-packages/asset-eligible
 | Workflow step “用 PAPER_ENABLED 策略包冻结模拟盘实例” | 删除 | 改为“资产合格策略包可直接创建模拟盘”。 |
 | 模拟盘创建页大块说明文字 | 删除/折叠 | 不得占用主表单空间；组合生命周期说明移到帮助/tooltip/文档，不影响左侧创建表单完整显示。 |
 | 模拟盘实例列表无限累积 | 改为分页列表 | 支持 page/page_size/total、搜索、状态筛选、broker 筛选、排序。 |
-| 模拟盘实例只能逐个处理 | 新增批量操作 | checkbox 选择后可批量暂停、恢复、退役；破坏性删除另走确认和权限，不作为默认入口。 |
+| 模拟盘实例只能逐个处理 | 新增批量操作 | checkbox 选择后可批量暂停、恢复、退役、删除；删除必须二次弹窗确认。 |
 | AssetEligibilityCard | 保留/新增 | 展示唯一硬准入及 blockers。 |
 | RuntimeDiagnosticsPanel | 保留/新增 | 展示非阻断 warning、可重试错误和下一步动作。 |
 | BrokerStatusPanel | 保留/简化 | MiniQMT 连接、SIM mode、账户状态属于运行时，不隐藏策略包。 |
@@ -567,8 +567,8 @@ GET /api/v1/strategy-packages/asset-eligible
 
 1. HMM 模型在线重训、HMM 滚动训练、每日系数生成、模型重训预览后的提交，只允许使用弹窗二次确认：展示操作名称、对象名称、预计影响、是否会写入新任务、是否会影响当前运行；用户点击“确认执行/取消”即可。
 2. 不得要求用户输入 package_id、config_id、snapshot_id、portfolio_id 等长字符串来确认 HMM 或模型运维操作。
-3. 文本输入确认只允许用于真正破坏性、不可自动恢复或可能影响真实资金的操作，例如：物理删除资产、清空历史账本、真实 live 下单开关、生产 DDL/DML 手工确认。即使保留，也必须说明为什么不能用普通二次确认。
-4. 普通模拟盘重跑、HMM 重训、生成系数、启动/暂停/恢复 session、调度器 run-once 等非真实资金操作，不得使用长字符串确认。
+3. 物理删除 StrategyPackage、物理删除历史模拟盘、清空历史账本、真实 live 下单开关、生产 DDL/DML 等破坏性操作必须使用弹窗二次确认。用户要求本项目内删除操作不再使用长字符串输入确认；弹窗必须用醒目中文列出将被删除的对象、数量、不可恢复后果和不受影响对象。
+4. 普通模拟盘重跑、HMM 重训、生成系数、启动/暂停/恢复 session、调度器 run-once、退役/归档等非真实资金操作，不得使用长字符串确认。
 5. 弹窗必须使用中文摘要和明确后果，不得只展示 raw JSON。
 6. 所有确认弹窗必须可键盘操作、可取消、失败后保留页面上下文，并显示统一错误摘要。
 
@@ -579,8 +579,8 @@ GET /api/v1/strategy-packages/asset-eligible
 | `frontend/src/app/paper-v2/model-hmm/page.tsx` 提交重训任务 | 输入 `packageId` | 弹窗二次确认。 |
 | `frontend/src/app/paper-v2/model-hmm/page.tsx` 触发 HMM 滚动训练 | 输入 `configId` | 弹窗二次确认。 |
 | `frontend/src/app/paper-v2/model-hmm/page.tsx` 生成每日系数 | 输入 `snapshotId` | 弹窗二次确认。 |
-| `frontend/src/app/paper-v2/portfolios/[portfolioId]/run-console/page.tsx` 非真实资金重跑类操作 | 输入长 id | 默认弹窗二次确认；只有会清空历史账本时才允许文本确认，并必须标注原因。 |
-| `frontend/src/app/paper-v2/packages/page.tsx` 退役策略包 | 输入 package id | 若保留退役，使用弹窗二次确认；文本确认只用于物理删除/不可恢复清理。 |
+| `frontend/src/app/paper-v2/portfolios/[portfolioId]/run-console/page.tsx` 非真实资金重跑类操作 | 输入长 id | 默认弹窗二次确认；如果会清空历史账本，弹窗必须明确不可恢复后果。 |
+| `frontend/src/app/paper-v2/packages/page.tsx` 退役/删除策略包 | 输入 package id 或无删除入口 | 退役和物理删除都使用弹窗二次确认；物理删除必须展示依赖关系和不可恢复后果。 |
 
 ### 9.0.4 错误展示整改
 
@@ -662,6 +662,10 @@ Selection Center 需要同时解决“策略包不可见”和“历史选股记
 4. 新增批量 lifecycle 接口，例如 `POST /paper-v2/portfolios:bulk-lifecycle`，支持 `pause/resume/retire`。
 5. 批量操作必须逐项返回结果；部分成功时不能显示整体成功，必须列出成功、失败和失败原因。
 6. 已退役组合默认不再出现在“当前模拟盘”列表，只在“已退役/归档”筛选中显示。
+7. 新增物理删除历史模拟盘接口，例如 `DELETE /paper-v2/portfolios/{portfolio_id}` 和 `POST /paper-v2/portfolios:bulk-delete`。
+8. 删除 portfolio 必须先做依赖检查：禁止删除正在运行、正在下单、存在未终结 session、存在未完成 broker order 或未来 live evidence 引用的组合。
+9. 删除 portfolio 必须级联删除 Paper v2 相关数据库记录，包括 portfolio、runtime profile/activation、session、run、run events、errors、orders、fills、cash ledger、positions、snapshots、reset audit、selection-paper link 等；若存在 MiniQMT 外部订单/成交事实，只删除 AIstock 本地历史模拟盘记录，不得向 broker 发撤单或改写 broker 历史。
+10. 删除接口必须写 deletion audit，保存操作者、删除对象 ID、删除前摘要、依赖检查结果、记录数量和时间；audit 不保留完整账本明细。
 
 退役的准确含义：
 
@@ -670,19 +674,48 @@ Selection Center 需要同时解决“策略包不可见”和“历史选股记
 - 退役保留组合定义、冻结 manifest、历史 session、run、order、fill、cash ledger、position、snapshot、error、audit，供复盘和追责。
 - 退役可以用于清理测试组合对主列表的干扰。
 - 是否允许从 `RETIRED` 恢复要作为单独设计决策；本项目默认不提供普通 UI 恢复，避免归档数据被误重新运行。如确需恢复，只能走高级运维入口并写审计。
-- 退役不同于删除。删除会物理清理数据库记录，可能破坏审计和账本连续性；普通用户入口不提供批量物理删除。
+- 退役不同于删除。删除会物理清理数据库记录，删除后普通 UI 不再能查看该历史模拟盘；本项目要求新增删除入口，但必须二次弹窗确认、通过依赖检查并写 deletion audit。
 
 前端要求：
 
 1. `frontend/src/app/paper-v2/portfolios/page.tsx` 删除右侧大块“组合生命周期规则/实时模拟说明”卡片。
 2. 组合生命周期、实时模拟、历史回放说明移到短 tooltip、帮助链接或折叠“说明”中，默认不占主表单面积。
 3. “从策略包生成模拟盘”主表单必须完整可见；左侧不能因为说明卡片挤压而显示不完整。
-4. 当前模拟盘列表改为分页表格；提供 checkbox、多选、全选当前页、批量暂停、批量恢复、批量退役。
+4. 当前模拟盘列表改为分页表格；提供 checkbox、多选、全选当前页、批量暂停、批量恢复、批量退役、批量删除。
 5. 批量退役使用中文弹窗二次确认，说明“退役不是删除，历史账本保留，默认不再调度和显示”。
-6. 实例卡片/列表必须显示最近 session/run 的真实状态：`WAITING_FOR_TRADING_DAY`、`WAITING_FOR_BAR`、`FAILED`、`SUCCEEDED`、`NO_SESSION` 等，防止 portfolio `READY` 被误读为运行成功。
-7. 创建实时模拟盘后，如果只是创建了 `READY` portfolio、没有真实 session 成功运行，UI 必须显示“已创建，尚未运行/等待交易条件”，不能显示“成功完成模拟盘运行”。
+6. 批量删除使用中文弹窗二次确认，说明“删除会彻底移除本地历史模拟盘及账本记录，不可恢复；不会影响 StrategyPackage 本体，除非用户在策略包页面单独删除策略包”。
+7. 删除按钮必须与退役按钮视觉区分，默认放在批量操作区或更多菜单，不与常用暂停/恢复混淆。
+8. 实例卡片/列表必须显示最近 session/run 的真实状态：`WAITING_FOR_TRADING_DAY`、`WAITING_FOR_BAR`、`FAILED`、`SUCCEEDED`、`NO_SESSION` 等，防止 portfolio `READY` 被误读为运行成功。
+9. 创建实时模拟盘后，如果只是创建了 `READY` portfolio、没有真实 session 成功运行，UI 必须显示“已创建，尚未运行/等待交易条件”，不能显示“成功完成模拟盘运行”。
 
-### 9.0.7 HMM 每日系数自动化
+### 9.0.7 StrategyPackage 物理删除
+
+除退役外，StrategyPackage Center 必须提供物理删除能力，用于清理测试策略包、失败打包残留和不再需要的历史包。删除是不可恢复操作，但不能再要求用户输入长 package_id；必须使用中文二次确认弹窗。
+
+后端要求：
+
+1. 新增删除接口，例如 `DELETE /strategy-packages/{package_id}` 和 `POST /strategy-packages:bulk-delete`。
+2. 删除前必须做依赖检查：
+   - 若存在非 RETIRED/未删除的 Paper v2 portfolio 引用，默认阻止删除，并返回引用的 portfolio 列表。
+   - 若存在 MiniQMT binding、live approval、future live evidence、正在运行的 selection/session/run 引用，必须阻止删除。
+   - 若只存在可删除的历史 selection run 或已退役/待删除 portfolio，可允许用户选择“同时删除依赖历史记录”。
+3. 支持两种删除模式：
+   - `delete_package_only`：只在没有运行依赖时删除 StrategyPackage 记录、manifest、status events、asset records、runtime variants、model state、validated policies 等包中心记录。
+   - `delete_with_history`：在依赖检查通过且用户确认后，同时删除该包关联的 selection runs、Paper v2 历史模拟盘和本地账本记录。
+4. 物理删除必须清理数据库记录和本地 artifact 引用；真实文件删除需遵守 artifact ownership：只删除该 package 独占且不被其他包引用的文件，shared artifact 只解除引用。
+5. 删除必须写 deletion audit，记录操作者、package_id、manifest_sha256、删除模式、依赖检查摘要、删除记录数量、artifact 处理结果和时间；audit 不保留完整模型文件或完整账本。
+6. 删除后该 package 不得再出现在选股中心、Paper 创建、MiniQMT 创建、StrategyPackage 主列表中；历史审计页可显示“已删除 package_id”摘要。
+
+前端要求：
+
+1. StrategyPackage 页面在列表和详情中提供“删除”入口，和“退役”明确区分。
+2. 删除入口默认放在更多菜单或危险操作区，按钮使用危险色，不与“运行/选股/创建模拟盘”主操作混放。
+3. 点击删除后弹窗展示：package 名称、package_id、manifest hash、引用的 selection run 数、portfolio 数、MiniQMT/live 引用状态、将删除的范围。
+4. 如果存在阻止项，弹窗只允许查看依赖和跳转处理，不显示确认删除按钮。
+5. 如果允许删除，用户点击“确认删除”即可；不得要求输入完整 package_id。
+6. 批量删除策略包时必须逐项显示可删除/不可删除原因；部分成功不能显示整体成功。
+
+### 9.0.8 HMM 每日系数自动化
 
 HMM 每日系数生成是平台能力，不能要求用户每天在 HMM 页面手工生成。
 
@@ -759,6 +792,8 @@ user_action: clicked run-day
   - blockers。
   - warnings。
   - alpha core artifact 列表。
+- 增加“退役”和“删除”两个独立危险操作：退役为归档，删除为物理删除。
+- 删除前必须显示依赖检查；存在活跃 portfolio、MiniQMT binding、live approval 或运行中任务时阻止删除。
 - 合格包直接显示：
   - “运行选股”。
   - “创建 AIstock 模拟盘”。
@@ -892,7 +927,7 @@ rg -n "PAPER_ENABLED|PAPER_RUNNING|PAPER_PASSED|PAPER_FAILED|paper_ready|paper_c
 - runtime variant 不再要求 `paper_candidate`。
 - readiness 改可选诊断，run 自动 preflight。
 - Portfolio 生命周期精简为调度生命周期；运行成败只在 session/run 层展示。
-- Portfolio 列表 API 和 UI 改分页，支持筛选、排序、批量暂停/恢复/退役。
+- Portfolio 列表 API 和 UI 改分页，支持筛选、排序、批量暂停/恢复/退役/删除。
 - 创建页移除大块说明文字，保留完整创建表单；说明转移到帮助/tooltip/折叠区。
 
 验证：
@@ -901,7 +936,7 @@ rg -n "PAPER_ENABLED|PAPER_RUNNING|PAPER_PASSED|PAPER_FAILED|paper_ready|paper_c
 - 无 policyId 可创建，运行前平台解析默认 policy。
 - 缺行情/分钟线/昨收只导致本次 run fail-fast。
 - 非交易时段创建实时模拟盘只显示 `READY/尚未运行/等待交易条件`，不显示假成功。
-- 上百个 portfolio 通过分页可管理，批量退役后默认活跃列表不显示，历史账本仍可查。
+- 上百个 portfolio 通过分页可管理；批量退役后默认活跃列表不显示且历史账本仍可查；批量删除后本地历史模拟盘和账本记录被物理清除。
 
 ### Phase 4：MiniQMT SIM gate purge
 
@@ -954,11 +989,12 @@ rg -n "PAPER_ENABLED|PAPER_RUNNING|PAPER_PASSED|PAPER_FAILED|paper_ready|paper_c
 | L0 grep | 删除 UI 禁用门禁 | `rg -n "packageHealthRunnable|selectedPackageBlocked|Required paper-enabled|paper_ready" frontend/src/app/paper-v2 frontend/src/app/strategy-package-governance -S` | Paper v2 主路径不命中。 |
 | L1 unit | Asset eligibility | pytest strategy_package asset tests | 合格包通过；缺 manifest/hash/artifact/retired 失败。 |
 | L1 unit | Status normalization | pytest migration/status tests | legacy `PAPER_*` 映射到 `BACKTEST_APPROVED`。 |
+| L1/L2 delete | StrategyPackage physical delete | pytest/TestClient seeded dependencies | 无依赖包可删除；有活跃 portfolio/MiniQMT/live 引用时阻止；delete_with_history 只在依赖检查通过时级联清理。 |
 | L2 API | Selection direct run | TestClient / dev API | asset eligible package 无 enable-selection 可运行。 |
 | L2 API | Selection package pagination | TestClient / seeded packages | 多个 asset eligible package 分页返回；不因 legacy `PAPER_*`、health warning 或最后添加包截断。 |
 | L2 API | Selection run pagination/delete | TestClient / seeded runs | `page/page_size/total` 正确；批量删除后 DB selection 记录清除，watchlist 保留。 |
 | L2 API | Paper create | TestClient / dev API | asset eligible package 无 enable-paper 可创建 portfolio。 |
-| L2 API | Portfolio pagination/bulk lifecycle | TestClient / seeded portfolios | 分页、筛选、排序正确；批量暂停/恢复/退役逐项返回结果。 |
+| L2 API | Portfolio pagination/bulk lifecycle/delete | TestClient / seeded portfolios | 分页、筛选、排序正确；批量暂停/恢复/退役/删除逐项返回结果，删除后本地 portfolio 历史记录不存在。 |
 | L2 API | MiniQMT create | TestClient / fake broker | asset eligible package 无 paper policy 可创建 binding。 |
 | L2 negative | Runtime data missing | mocked provider | 返回 `MARKET_DATA_UNAVAILABLE` 等 runtime error，不返回 package gate error。 |
 | L2 HMM | Auto coefficient/cache | mocked HMM service | 首次自动计算，二次命中缓存，无手工 snapshot。 |
@@ -966,9 +1002,10 @@ rg -n "PAPER_ENABLED|PAPER_RUNNING|PAPER_PASSED|PAPER_FAILED|paper_ready|paper_c
 | L3 UI | Selection UI | Playwright | 包不被禁用，运行按钮不因 health 阻断。 |
 | L3 UI | Selection package list | Playwright + fixture | 多个合格策略包分页可见，可搜索；默认选中不隐藏其他包。 |
 | L3 UI | Selection history cleanup | Playwright + API fixture | 历史记录分页、checkbox、多选删除可用；删除提示说明 watchlist 不受影响。 |
+| L3 UI | StrategyPackage delete UX | Playwright + API fixture | 删除入口展示依赖检查和不可恢复后果；二次弹窗确认；不要求输入 package_id。 |
 | L3 UI | AIstock Paper UI | Playwright | policy 可为空，页面无 `paper_enabled` gate 文案。 |
 | L3 UI | Portfolio create layout | Playwright screenshot/text scan | 主表单完整显示；不出现大块“组合生命周期规则/实时模拟说明”占位卡片。 |
-| L3 UI | Portfolio list operations | Playwright + fixture | 分页、筛选、批量暂停/恢复/退役可用；退役解释清晰。 |
+| L3 UI | Portfolio list operations | Playwright + fixture | 分页、筛选、批量暂停/恢复/退役/删除可用；退役和删除含义清晰区分。 |
 | L3 UI | No fake success card | Playwright + mocked non-trading day | 创建实时模拟后显示“已创建/等待交易条件/尚未运行”，不显示成功运行。 |
 | L3 UI | MiniQMT UI | Playwright | asset eligible packages 可选，创建按钮不要求 policyId。 |
 | L3 UI | No dead-end gate UX | Playwright + text scan | 不出现“先启用 Paper / Required paper-enabled policy / 策略包健康预检阻断”等用户无法在 UI 内解决的阻断流程。 |
@@ -1008,11 +1045,12 @@ rg -n "PAPER_ENABLED|PAPER_RUNNING|PAPER_PASSED|PAPER_FAILED|paper_ready|paper_c
 18. validation record 证明 L0-L4 通过；L5 MiniQMT SIM 若未完成，明确标记为实盘前验证项，不阻断模拟盘 gate purge。
 19. 选股中心能看到所有资产合格策略包；不会只显示最后添加的一个包。
 20. 选股历史记录支持分页、选择、批量删除；删除后数据库不保留该 selection run/results/exclusions/link 记录，已加入自选股票池的股票不受影响。
-21. Portfolio 列表支持分页、筛选、排序、checkbox 多选和批量暂停/恢复/退役；上百个测试组合不会撑爆页面。
-22. 退役组合默认不在活跃列表展示，不再调度、不再创建新 session，但历史账本和证据只读保留。
+21. Portfolio 列表支持分页、筛选、排序、checkbox 多选和批量暂停/恢复/退役/删除；上百个测试组合不会撑爆页面。
+22. 退役组合默认不在活跃列表展示，不再调度、不再创建新 session，但历史账本和证据只读保留；删除组合会物理清理本地历史模拟盘和账本记录。
 23. Portfolio 创建页不再展示占用大块面积的说明卡片；主创建表单完整可见。
 24. Portfolio 卡片/列表/创建结果必须区分“已创建 READY”和“实际运行成功”；没有 run/session 证据时不得显示假成功。
 25. HMM 每日系数由平台按模型、preset、交易日和数据版本自动计算/缓存；Selection/Paper/MiniQMT 不依赖手工每日生成。
+26. StrategyPackage 必须新增物理删除功能；删除前做依赖检查，允许删除时使用二次弹窗确认，不要求输入长 package_id。
 
 ## 14. 风险和缓解
 
@@ -1027,7 +1065,7 @@ rg -n "PAPER_ENABLED|PAPER_RUNNING|PAPER_PASSED|PAPER_FAILED|paper_ready|paper_c
 | UI 放开选择后运行失败变多 | 正常暴露 runtime 问题 | run/preflight 错误必须清晰，可重试，不污染包。 |
 | 历史测试数据过多 | 页面不可用、误以为系统卡死 | 所有列表分页，默认隐藏 RETIRED，提供批量退役清理主列表。 |
 | 批量删除 selection run 误伤自选池 | 用户丢失关注股票 | 删除边界限定在 `selection.*` 记录，watchlist 独立保留，并在确认弹窗明确说明。 |
-| 退役和删除概念混淆 | 用户担心历史账本被删除 | UI 文案明确退役是归档不删除；普通入口不做批量物理删除 portfolio。 |
+| 退役和删除概念混淆 | 用户误操作或担心历史账本被删除 | UI 文案明确退役是归档不删除、删除是物理清理；删除必须二次弹窗确认并展示依赖检查。 |
 | READY 被误读为运行成功 | 假成功继续误导操作 | 实例卡片强制展示最近 session/run 状态；没有证据显示“尚未运行/等待条件”。 |
 
 ## 15. 交付和合入流程
@@ -1065,8 +1103,9 @@ rg -n "PAPER_ENABLED|PAPER_RUNNING|PAPER_PASSED|PAPER_FAILED|paper_ready|paper_c
 10. 错误详情必须改为精炼中文摘要 + 可复制 Codex 诊断文本，禁止把多层表格/抽屉/JsonPanel 作为普通用户错误主视图。
 11. 选股中心和模拟盘实例必须分页、搜索、批量处理；不能因为历史测试数据无限累积导致主流程不可用。
 12. Selection run 删除是物理删除选股中心数据库记录，但不得影响已导入 watchlist 的股票。
-13. Portfolio 退役是逻辑归档，不删除历史账本；默认隐藏且不再调度。
+13. Portfolio 退役是逻辑归档，不删除历史账本；默认隐藏且不再调度。Portfolio 删除是物理删除本地历史模拟盘和账本记录，必须二次弹窗确认。
 14. UI 必须防止假成功：Portfolio `READY` 只代表已创建，真实运行成功必须来自 run/session evidence。
 15. HMM 每日系数必须由平台自动计算和缓存，Selection/Paper/MiniQMT 不再依赖任何手工每日生成流程。
+16. StrategyPackage 必须新增物理删除功能；删除前做依赖检查，允许删除时使用二次弹窗确认，不要求输入长 package_id。
 
 审批后即可按本设计启动实现项目。
