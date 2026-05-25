@@ -465,6 +465,9 @@ def test_chat_turn_uses_llm_builds_cards_and_blocks_execution() -> None:
     assert result["cards"]["plan_card"]["title"] == "本轮计划"
     assert "固定 PIT 股票池" in "\n".join(result["cards"]["plan_card"]["steps"])
     assert result["cards"]["clarification_card"]["questions"]
+    capability_keys = {item["capability_key"] for item in result["cards"]["capability_cards"]}
+    assert {"qe.create_experiment_draft", "qe.validate_template", "qe.run_experiment"} <= capability_keys
+    assert result["cards"]["missing_capability_keys"] == []
     assert result["cards"]["status_rail"][3] == {"label": "等待确认", "status": "current"}
     assert result["cards"]["safety"]["no_materialize_before_confirmation"] is True
     assert result["trace"]["status"] == "ok"

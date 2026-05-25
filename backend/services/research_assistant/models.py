@@ -6,7 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -39,7 +39,9 @@ EVENT_TYPES = {
     "mcp_preflight_started",
     "mcp_preflight_passed",
     "mcp_preflight_failed",
+    "mcp_execution_timeout",
     "mcp_started",
+    "mcp_retry",
     "mcp_done",
     "mcp_failed",
     "skill_started",
@@ -55,6 +57,7 @@ EVENT_TYPES = {
 SEVERITIES = {"debug", "info", "warning", "error", "critical"}
 SKILL_USAGE_STATUSES = {"started", "completed", "failed", "cancelled"}
 RISK_LEVELS = {"low", "medium", "high", "production_sensitive"}
+SIDE_EFFECT_LEVELS = {"read_only", "draft_only", "write_nonprod", "high_cost_compute", "production_sensitive"}
 MEMORY_TYPES = {
     "core",
     "procedural",
@@ -68,6 +71,23 @@ MEMORY_TYPES = {
 }
 APPROVAL_STATUSES = {"draft", "approved", "rejected", "expired", "superseded"}
 APPROVAL_REQUEST_STATUSES = {"pending", "approved", "rejected", "expired"}
+CAPABILITY_TYPES = {"mcp_tool", "skill", "workflow_pack", "composite"}
+CAPABILITY_STATUSES = {"draft", "approved", "disabled", "deprecated", "blocked"}
+ACTION_PROPOSAL_TYPES = {"workflow_step", "mcp_tool", "skill", "workflow_pack"}
+ACTION_PROPOSAL_STATUSES = {
+    "proposed",
+    "confirmed",
+    "preflight_passed",
+    "approval_required",
+    "approved",
+    "executing",
+    "succeeded",
+    "rejected",
+    "expired",
+    "preflight_failed",
+    "failed",
+    "cancelled",
+}
 ISSUE_CANDIDATE_STATUSES = {
     "draft",
     "needs_review",
@@ -343,6 +363,56 @@ class TraceEventCreate(StrictModel):
     model_profile_id: str | None = None
     payload_json: dict[str, Any] = Field(default_factory=dict)
     cost_json: dict[str, Any] = Field(default_factory=dict)
+
+
+class CapabilitySyncRequest(StrictModel):
+    apply: bool = False
+    include_disabled: bool = False
+    requested_by: str = "assistant"
+
+
+class ActionProposalCreate(StrictModel):
+    task_id: str = Field(..., min_length=1)
+    conversation_id: str | None = None
+    capability_key: str = Field(..., min_length=1)
+    proposal_type: str = "workflow_pack"
+    title: str = Field(..., min_length=1)
+    summary: str = Field(..., min_length=1)
+    input_json: dict[str, Any] = Field(default_factory=dict)
+    expected_result_json: dict[str, Any] = Field(default_factory=dict)
+    context_pack_id: str | None = None
+    idempotency_key: str | None = None
+    expires_in_minutes: int | None = Field(None, ge=1)
+    created_by: str = "assistant"
+
+    @field_validator("proposal_type")
+    @classmethod
+    def _proposal_type(cls, value: str) -> str:
+        if value not in ACTION_PROPOSAL_TYPES:
+            raise ValueError(f"proposal_type must be one of {sorted(ACTION_PROPOSAL_TYPES)}")
+        return value
+
+
+class ActionProposalDecisionRequest(StrictModel):
+    confirmation_text: str | None = None
+    decided_by: str = "user"
+
+
+class ActionProposalPreflightRequest(StrictModel):
+    payload_json: dict[str, Any] | None = None
+    idempotency_key: str | None = None
+
+
+class ActionProposalApprovalRequest(StrictModel):
+    confirmation_text: str | None = None
+    approved_by: str = "user"
+
+
+class ActionProposalExecuteRequest(StrictModel):
+    dry_run: bool = False
+    actor_role: str = "primary_orchestrator"
+    payload_json: dict[str, Any] | None = None
+    idempotency_key: str | None = None
 
 
 class IssueCandidateGithubSyncRequest(StrictModel):

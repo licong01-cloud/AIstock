@@ -8,6 +8,7 @@ from backend.services.research_assistant.repository import TABLES
 from backend.services.research_assistant.service import (
     DEFAULT_MCP_SERVERS,
     DEFAULT_MCP_TOOLS,
+    DEFAULT_WORKFLOW_CAPABILITIES,
     DEFAULT_MODEL_PROFILES,
     DEFAULT_PROMPT_NODES,
     DEFAULT_ROUTING_POLICIES,
@@ -36,7 +37,7 @@ def _assert_columns(table_columns: dict[str, set[str]], kind: str, payload: dict
 def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
     sql = "\n".join(DDL)
 
-    assert RESEARCH_ASSISTANT_SCHEMA_VERSION == "research_assistant_prompt_context_runtime_v1_20260525"
+    assert RESEARCH_ASSISTANT_SCHEMA_VERSION == "research_assistant_mcp_skill_execution_v1_20260525"
     for table in {
         "research_agent_tasks",
         "agent_task_events",
@@ -51,6 +52,8 @@ def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
         "assistant_skill_registry",
         "assistant_skill_usage_events",
         "assistant_mcp_servers",
+        "assistant_capabilities",
+        "assistant_action_proposals",
         "assistant_mcp_tools",
         "assistant_mcp_tool_events",
         "assistant_approval_requests",
@@ -86,6 +89,12 @@ def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
     assert "CONSTRAINT ck_aar_status" in sql
     assert "CONSTRAINT ck_aic_status" in sql
     assert "requires_approval BOOLEAN NOT NULL DEFAULT FALSE" in sql
+    assert "COMMENT ON TABLE assistant_capabilities" in sql
+    assert "COMMENT ON TABLE assistant_action_proposals" in sql
+    assert "action_proposal_id TEXT PRIMARY KEY" in sql
+    assert "assistant_mcp_tool_events.result_card_json" in sql
+    assert "assistant_mcp_tool_events.artifact_refs" in sql
+    assert "mcp_execution_timeout" in sql
     assert "chat_received" in sql
     assert "prompt_bundle_built" in sql
     assert "llm_done" in sql
@@ -146,6 +155,70 @@ def test_research_assistant_service_payloads_match_schema_columns() -> None:
     for item in DEFAULT_MCP_TOOLS:
         tool_id = f"mcp_tool_{item['server_key']}_{item['tool_name']}".replace("-", "_")
         _assert_columns(table_columns, "mcp_tools", {"tool_id": tool_id, "status": "enabled", **item})
+    _assert_columns(
+        table_columns,
+        "mcp_tool_events",
+        {
+            "tool_event_id": "mcptev_x",
+            "task_id": "rat_x",
+            "server_key": "aistock-qe-experiment",
+            "tool_name": "qe_template_create",
+            "event_type": "execute",
+            "status": "succeeded",
+            "idempotency_key": "idem",
+            "request_json": {},
+            "response_json": {},
+            "error_json": {},
+            "action_proposal_id": "actprop_x",
+            "approval_id": "appr_x",
+            "plan_digest": "digest",
+            "transport": "loopback_http",
+            "timeout_ms": 60000,
+            "attempt_index": 0,
+            "duration_ms": 10,
+            "result_card_json": {},
+            "artifact_refs": [],
+            "started_at": "2099-12-31T00:00:00+00:00",
+            "completed_at": "2099-12-31T00:00:00+00:00",
+        },
+    )
+    for item in DEFAULT_WORKFLOW_CAPABILITIES:
+        _assert_columns(
+            table_columns,
+            "capabilities",
+            {
+                "capability_id": f"cap_{item['capability_key'].replace('.', '_').replace('-', '_')}",
+                "checksum": "checksum",
+                "last_synced_at": "2099-12-31T00:00:00+00:00",
+                **item,
+            },
+        )
+    _assert_columns(
+        table_columns,
+        "action_proposals",
+        {
+            "action_proposal_id": "actprop_x",
+            "task_id": "rat_x",
+            "conversation_id": "conv_x",
+            "capability_key": "qe.create_experiment_draft",
+            "proposal_type": "workflow_pack",
+            "title": "QE draft",
+            "summary": "draft",
+            "risk_level": "medium",
+            "side_effect_level": "draft_only",
+            "input_json": {},
+            "expected_result_json": {},
+            "plan_digest": "digest",
+            "prompt_bundle_signature": "sig",
+            "runtime_config_activation_id": "runtime",
+            "context_pack_id": "ctx_x",
+            "status": "proposed",
+            "approval_id": None,
+            "idempotency_key": "idem",
+            "expires_at": "2099-12-31T00:00:00+00:00",
+            "created_by": "assistant",
+        },
+    )
     for item in DEFAULT_MODEL_PROFILES:
         _assert_columns(table_columns, "model_profiles", {**item, "display_name": "display"})
     for item in DEFAULT_ROUTING_POLICIES:

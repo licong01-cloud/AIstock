@@ -106,6 +106,18 @@ TABLES: dict[str, dict[str, Any]] = {
         "json": {"health_json"},
         "search": {"server_id", "server_key", "title", "status"},
     },
+    "capabilities": {
+        "table": "assistant_capabilities",
+        "id": "capability_id",
+        "json": {"natural_language_triggers", "required_confirmations", "input_slots", "output_cards", "mcp_tool_refs", "skill_refs"},
+        "search": {"capability_id", "capability_key", "capability_type", "title", "description_for_llm", "risk_level", "side_effect_level", "status"},
+    },
+    "action_proposals": {
+        "table": "assistant_action_proposals",
+        "id": "action_proposal_id",
+        "json": {"input_json", "expected_result_json"},
+        "search": {"action_proposal_id", "task_id", "conversation_id", "capability_key", "proposal_type", "title", "summary", "risk_level", "side_effect_level", "status", "approval_id", "idempotency_key"},
+    },
     "mcp_tools": {
         "table": "assistant_mcp_tools",
         "id": "tool_id",
@@ -115,7 +127,7 @@ TABLES: dict[str, dict[str, Any]] = {
     "mcp_tool_events": {
         "table": "assistant_mcp_tool_events",
         "id": "tool_event_id",
-        "json": {"request_json", "response_json", "error_json"},
+        "json": {"request_json", "response_json", "error_json", "result_card_json", "artifact_refs"},
         "search": {"tool_event_id", "task_id", "server_key", "tool_name", "event_type", "status"},
     },
     "approvals": {

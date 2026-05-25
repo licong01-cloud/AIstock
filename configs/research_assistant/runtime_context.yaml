@@ -121,6 +121,271 @@ ui:
   allow_user_expand_summary: true
   show_context_health_badge: true
 
+capability_sync:
+  enabled: true
+  max_servers_per_run: 20
+  max_tools_per_server: 500
+  timeout_seconds: 30
+  require_checksum: true
+
+planner:
+  candidate_capability_top_k: 12
+  require_action_proposal_for_side_effects: true
+  qe_workflow_capability_keys:
+    - qe.create_experiment_draft
+    - qe.validate_template
+    - qe.materialize_template
+    - qe.run_experiment
+    - qe.analyze_result
+  workflow_capabilities:
+    - capability_key: qe.create_experiment_draft
+      capability_type: workflow_pack
+      title: "\u751f\u6210 QE \u5b9e\u9a8c\u8349\u6848"
+      natural_language_triggers:
+        - "\u521b\u5efa QE \u5b9e\u9a8c"
+        - "QE 10 loop"
+        - "\u56de\u6d4b\u5b9e\u9a8c\u8349\u7a3f"
+        - "custom_evo \u8349\u6848"
+      description_for_llm: "\u6839\u636e\u81ea\u7136\u8bed\u8a00\u751f\u6210 QE template draft \u548c\u786e\u8ba4\u5361\uff1b\u4e0d\u7269\u5316\u3001\u4e0d\u8fd0\u884c\u3002"
+      risk_level: medium
+      side_effect_level: draft_only
+      required_confirmations:
+        - CONFIRM_QE_DRAFT
+      preferred_model_role: primary_orchestrator
+      input_slots:
+        required: [template_kind, title, config_json]
+        business_required: [loop_count, stock_pool, backtest_window, cost_guard]
+      output_cards: [intent_summary, missing_slots, qe_draft, risk_confirmation]
+      mcp_tool_refs:
+        - server_key: aistock-qe-experiment
+          tool_name: qe_template_create
+      skill_refs: []
+      workflow_pack_ref: qe.create_experiment
+      status: approved
+      source_ref: "docs/architecture/research_assistant_mcp_skill_execution_closure_design_20260525.md#10"
+    - capability_key: qe.validate_template
+      capability_type: mcp_tool
+      title: "\u6821\u9a8c QE template"
+      natural_language_triggers:
+        - "\u6821\u9a8c QE \u6a21\u677f"
+        - "validate template"
+        - "\u68c0\u67e5 QE \u914d\u7f6e"
+      description_for_llm: "\u5728\u7528\u6237\u786e\u8ba4\u540e\u6821\u9a8c QE template\uff0c\u5c55\u793a diff/summary\uff1b\u4e0d\u7269\u5316\u3001\u4e0d\u8fd0\u884c\u3002"
+      risk_level: medium
+      side_effect_level: write_nonprod
+      required_confirmations:
+        - CONFIRM_QE_VALIDATE
+      preferred_model_role: primary_orchestrator
+      input_slots:
+        required: [template_id]
+      output_cards: [preflight_result, validation_diff, next_step]
+      mcp_tool_refs:
+        - server_key: aistock-qe-experiment
+          tool_name: qe_template_validate
+      skill_refs: []
+      workflow_pack_ref: qe.create_experiment
+      status: approved
+      source_ref: "scripts/aistock_qe_experiment_mcp_server.py:qe_template_validate"
+    - capability_key: qe.materialize_template
+      capability_type: mcp_tool
+      title: "\u7269\u5316 QE template"
+      natural_language_triggers:
+        - "\u7269\u5316 QE \u6a21\u677f"
+        - "materialize template"
+        - "\u521b\u5efa pending experiment"
+      description_for_llm: "\u4e8c\u6b21\u786e\u8ba4\u3001preflight\u3001approval \u540e\u624d\u53ef\u7269\u5316 QE template\u3002"
+      risk_level: high
+      side_effect_level: high_cost_compute
+      required_confirmations:
+        - CONFIRM_QE_MATERIALIZE
+        - MATERIALIZE_QE_TEMPLATE
+      preferred_model_role: primary_orchestrator
+      input_slots:
+        required: [template_id, confirm_template]
+      output_cards: [approval_gate, execute_progress, artifact_refs]
+      mcp_tool_refs:
+        - server_key: aistock-qe-experiment
+          tool_name: qe_template_materialize_confirmed
+      skill_refs: []
+      workflow_pack_ref: qe.create_experiment
+      status: approved
+      source_ref: "scripts/aistock_qe_experiment_mcp_server.py:qe_template_materialize_confirmed"
+    - capability_key: qe.run_experiment
+      capability_type: mcp_tool
+      title: "\u8fd0\u884c QE experiment"
+      natural_language_triggers:
+        - "\u8fd0\u884c QE"
+        - "\u542f\u52a8 loop"
+        - "submit QE experiment"
+      description_for_llm: "\u9ad8\u6210\u672c\u8fd0\u884c QE experiment\uff1b\u5fc5\u987b run confirmation\u3001cost guard\u3001approval \u540e\u624d\u53ef\u6267\u884c\u3002"
+      risk_level: high
+      side_effect_level: high_cost_compute
+      required_confirmations:
+        - CONFIRM_QE_RUN
+        - QE_EXPERIMENT_RUN
+      preferred_model_role: primary_orchestrator
+      input_slots:
+        required: [template_id, confirm_run]
+        optional: [node_id]
+      output_cards: [cost_guard, execute_progress, status_query, failure_recovery]
+      mcp_tool_refs:
+        - server_key: aistock-qe-experiment
+          tool_name: qe_template_run_confirmed
+      skill_refs: []
+      workflow_pack_ref: qe.create_experiment
+      status: approved
+      source_ref: "scripts/aistock_qe_experiment_mcp_server.py:qe_template_run_confirmed"
+    - capability_key: qe.analyze_result
+      capability_type: skill
+      title: "\u5206\u6790 QE \u7ed3\u679c"
+      natural_language_triggers:
+        - "\u5206\u6790 QE \u7ed3\u679c"
+        - "QE diagnostics"
+        - "loop \u6307\u6807\u5206\u6790"
+      description_for_llm: "\u8c03\u7528 QE diagnostics skill \u8bfb\u53d6\u7ed3\u679c\u548c\u8bc1\u636e\uff0c\u751f\u6210\u5206\u6790\u5361\u3002"
+      risk_level: medium
+      side_effect_level: read_only
+      required_confirmations: []
+      preferred_model_role: secondary_worker
+      input_slots:
+        required: [experiment_id]
+      output_cards: [metrics_summary, risk_findings, evidence_refs]
+      mcp_tool_refs: []
+      skill_refs:
+        - qe-evolution-diagnostics
+      workflow_pack_ref: qe.create_experiment
+      status: approved
+      source_ref: "C:/Users/lc999/.codex/skills/qe-evolution-diagnostics/SKILL.md"
+    - capability_key: issue.create_candidate
+      capability_type: mcp_tool
+      title: "\u521b\u5efa\u5019\u9009 Issue"
+      natural_language_triggers:
+        - "\u767b\u8bb0\u5019\u9009\u95ee\u9898"
+        - "\u521b\u5efa issue \u8349\u6848"
+        - "bug candidate"
+      description_for_llm: "\u53ea\u5199\u5019\u9009 Issue\uff0c\u4e0d\u76f4\u63a5\u521b\u5efa\u6b63\u5f0f GitHub Issue\u3002"
+      risk_level: medium
+      side_effect_level: draft_only
+      required_confirmations: []
+      preferred_model_role: primary_orchestrator
+      input_slots:
+        required: [title, problem_statement]
+      output_cards: [issue_candidate, sync_policy]
+      mcp_tool_refs:
+        - server_key: research-assistant
+          tool_name: assistant_create_issue_candidate
+      skill_refs: []
+      workflow_pack_ref: issue.intake
+      status: approved
+      source_ref: "backend/services/research_assistant/service.py:assistant_create_issue_candidate"
+    - capability_key: issue.sync_github
+      capability_type: mcp_tool
+      title: "\u540c\u6b65 GitHub Issue"
+      natural_language_triggers:
+        - "\u540c\u6b65 GitHub"
+        - "\u521b\u5efa\u6b63\u5f0f issue"
+        - "mcp_github_issue_sync"
+      description_for_llm: "GitHub \u6b63\u5f0f\u540c\u6b65\u5fc5\u987b\u5ba1\u6279\uff0c\u5e76\u4fdd\u6301 BUG JSON \u4e0e GitHub \u72b6\u6001\u4e00\u81f4\u3002"
+      risk_level: high
+      side_effect_level: write_nonprod
+      required_confirmations:
+        - APPROVE_RESEARCH_ASSISTANT_ACTION
+      preferred_model_role: primary_orchestrator
+      input_slots:
+        required: [candidate_id, mode]
+      output_cards: [approval_gate, sync_result, audit_link]
+      mcp_tool_refs:
+        - server_key: aistock-validation
+          tool_name: mcp_github_issue_create
+      skill_refs: []
+      workflow_pack_ref: issue.github_sync
+      status: approved
+      source_ref: "scripts/aistock_mcp_server.py:mcp_github_issue_create"
+    - capability_key: memory.write_candidate
+      capability_type: mcp_tool
+      title: "\u521b\u5efa\u5019\u9009\u8bb0\u5fc6"
+      natural_language_triggers:
+        - "\u5199\u5165\u5019\u9009\u8bb0\u5fc6"
+        - "\u4fdd\u5b58\u9879\u76ee\u8bb0\u5fc6"
+        - "memory candidate"
+      description_for_llm: "\u521b\u5efa draft memory candidate\uff0c\u6279\u51c6\u524d\u4e0d\u8fdb\u5165\u957f\u671f\u8bb0\u5fc6\u3002"
+      risk_level: medium
+      side_effect_level: draft_only
+      required_confirmations: []
+      preferred_model_role: primary_orchestrator
+      input_slots:
+        required: [memory_type, subject_key, title]
+      output_cards: [memory_candidate, approval_policy]
+      mcp_tool_refs:
+        - server_key: research-assistant
+          tool_name: assistant_create_memory_candidate
+      skill_refs: []
+      workflow_pack_ref: memory.intake
+      status: approved
+      source_ref: "backend/services/research_assistant/service.py:assistant_create_memory_candidate"
+    - capability_key: factor.analyze_library
+      capability_type: skill
+      title: "\u5206\u6790\u56e0\u5b50\u5e93"
+      natural_language_triggers:
+        - "\u5206\u6790\u56e0\u5b50\u5e93"
+        - "factor library"
+        - "IC \u8986\u76d6"
+      description_for_llm: "\u8c03\u7528\u56e0\u5b50\u5e93\u5206\u6790 skill\uff0c\u4ec5\u8bfb\u53d6\u548c\u6c47\u603b\u8bc1\u636e\u3002"
+      risk_level: medium
+      side_effect_level: read_only
+      required_confirmations: []
+      preferred_model_role: secondary_worker
+      input_slots:
+        required: [question]
+      output_cards: [factor_coverage, ic_summary, replacement_candidates]
+      mcp_tool_refs: []
+      skill_refs:
+        - analyze-factor-library
+      workflow_pack_ref: factor.analysis
+      status: approved
+      source_ref: "C:/Users/lc999/.codex/skills/analyze-factor-library/SKILL.md"
+    - capability_key: rdagent.analyze_task
+      capability_type: skill
+      title: "\u5206\u6790 RDAgent \u4efb\u52a1"
+      natural_language_triggers:
+        - "\u5206\u6790 rdagent"
+        - "\u4efb\u52a1\u8bca\u65ad"
+        - "rdagent log"
+      description_for_llm: "\u8c03\u7528 RDAgent task analyzer\uff0c\u4ec5\u8bfb\u53d6\u4efb\u52a1\u65e5\u5fd7\u548c\u6307\u6807\u3002"
+      risk_level: medium
+      side_effect_level: read_only
+      required_confirmations: []
+      preferred_model_role: secondary_worker
+      input_slots:
+        required: [task_id]
+      output_cards: [task_metrics, failure_findings, next_actions]
+      mcp_tool_refs: []
+      skill_refs:
+        - rdagent-task-analyzer
+      workflow_pack_ref: rdagent.analysis
+      status: approved
+      source_ref: "C:/Users/lc999/.codex/skills/rdagent-task-analyzer/SKILL.md"
+
+execution:
+  default_timeout_seconds: 60
+  high_cost_timeout_seconds: 600
+  max_retries: 1
+  retryable_error_codes: [timeout, transient_network, rate_limited]
+  non_retryable_error_codes: [approval_missing, schema_invalid, risk_policy_blocked]
+  cancel_check_interval_seconds: 2
+
+approval_policy:
+  approval_ttl_minutes: 60
+  expire_on_input_change: true
+  expire_on_tool_checksum_change: true
+  expire_on_runtime_config_change: true
+  production_sensitive_auto_execute: false
+
+ui_execution:
+  event_poll_interval_seconds: 2
+  show_raw_json_debug_drawer: true
+  raw_json_main_view: false
+
 query_limits:
   conversation_messages_full: 500
   prompt_nodes_active: 500
@@ -161,6 +426,8 @@ query_limits:
   api_list_mcp_servers: 200
   api_list_mcp_tools: 100
   api_list_mcp_tool_events: 50
+  api_list_capabilities: 100
+  api_list_action_proposals: 100
   api_list_approvals: 50
   api_list_issue_candidates: 50
   api_list_external_sessions: 50

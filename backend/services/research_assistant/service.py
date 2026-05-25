@@ -19,8 +19,15 @@ from typing import Any
 import jsonschema
 
 from .context_budget import ContextBudgetPlan, ContextBudgetPlanner
+from .execution import ResearchAssistantExecutionMixin
 from .models import (
+    ActionProposalApprovalRequest,
+    ActionProposalCreate,
+    ActionProposalDecisionRequest,
+    ActionProposalExecuteRequest,
+    ActionProposalPreflightRequest,
     ApprovalCreate,
+    CapabilitySyncRequest,
     ChatTurnRequest,
     ConversationCreate,
     ConversationMessageCreate,
@@ -144,7 +151,9 @@ DEFAULT_MCP_TOOLS: list[dict[str, Any]] = [
     {
         "server_key": "research-assistant",
         "tool_name": "assistant_create_task",
-        "title": "Data health check",
+        "title": "创建研究助理任务",
+        "description": "创建 Research Assistant Task Ledger 记录，仅写入助理任务账本。",
+        "side_effect_level": "draft_only",
         "risk_level": "medium",
         "requires_approval": False,
         "input_schema_json": {"type": "object", "required": ["title"]},
@@ -155,7 +164,9 @@ DEFAULT_MCP_TOOLS: list[dict[str, Any]] = [
     {
         "server_key": "research-assistant",
         "tool_name": "assistant_build_context_pack",
-        "title": "Build Context Pack",
+        "title": "构建上下文包",
+        "description": "根据已审批 Memory/Graph/Temp Memory 构建 Context Pack，不触发外部执行。",
+        "side_effect_level": "read_only",
         "risk_level": "low",
         "requires_approval": False,
         "input_schema_json": {"type": "object"},
@@ -166,7 +177,9 @@ DEFAULT_MCP_TOOLS: list[dict[str, Any]] = [
     {
         "server_key": "research-assistant",
         "tool_name": "assistant_create_memory_candidate",
-        "title": "Create memory candidate",
+        "title": "创建候选记忆",
+        "description": "创建 draft memory candidate，不直接批准长期记忆。",
+        "side_effect_level": "draft_only",
         "risk_level": "medium",
         "requires_approval": False,
         "input_schema_json": {"type": "object", "required": ["memory_type", "subject_key", "title"]},
@@ -177,7 +190,9 @@ DEFAULT_MCP_TOOLS: list[dict[str, Any]] = [
     {
         "server_key": "research-assistant",
         "tool_name": "assistant_create_issue_candidate",
-        "title": "Create issue candidate",
+        "title": "创建候选 Issue",
+        "description": "创建本地候选 Issue，不直接创建正式 GitHub Issue。",
+        "side_effect_level": "draft_only",
         "risk_level": "medium",
         "requires_approval": False,
         "input_schema_json": {"type": "object", "required": ["title", "problem_statement"]},
@@ -188,7 +203,9 @@ DEFAULT_MCP_TOOLS: list[dict[str, Any]] = [
     {
         "server_key": "aistock-qe-experiment",
         "tool_name": "qe_template_materialize_confirmed",
-        "title": "Materialize QE pending experiment",
+        "title": "物化 QE pending experiment",
+        "description": "在二次确认和审批后调用 QE template materialize。",
+        "side_effect_level": "high_cost_compute",
         "risk_level": "production_sensitive",
         "requires_approval": True,
         "input_schema_json": {"type": "object", "required": ["template_id", "confirm_template"]},
@@ -197,9 +214,50 @@ DEFAULT_MCP_TOOLS: list[dict[str, Any]] = [
         "required_confirmations": ["MATERIALIZE_QE_TEMPLATE"],
     },
     {
+        "server_key": "aistock-qe-experiment",
+        "tool_name": "qe_template_create",
+        "title": "创建 QE template 草案",
+        "description": "创建 QE template draft，默认不 materialize、不 run。",
+        "risk_level": "medium",
+        "side_effect_level": "draft_only",
+        "requires_approval": False,
+        "input_schema_json": {"type": "object", "required": ["template_kind", "title", "config_json"]},
+        "output_schema_json": {"type": "object", "required": ["template_id", "status"]},
+        "preflight_schema_json": {"checks": ["schema", "fixed_seed", "draft_only"]},
+        "required_confirmations": ["CONFIRM_QE_DRAFT"],
+    },
+    {
+        "server_key": "aistock-qe-experiment",
+        "tool_name": "qe_template_validate",
+        "title": "校验 QE template",
+        "description": "校验 QE template 并返回 diff/summary，不 materialize、不 run。",
+        "risk_level": "medium",
+        "side_effect_level": "write_nonprod",
+        "requires_approval": False,
+        "input_schema_json": {"type": "object", "required": ["template_id"]},
+        "output_schema_json": {"type": "object", "required": ["validation"]},
+        "preflight_schema_json": {"checks": ["template_exists", "schema", "diff_summary"]},
+        "required_confirmations": ["CONFIRM_QE_VALIDATE"],
+    },
+    {
+        "server_key": "aistock-qe-experiment",
+        "tool_name": "qe_template_run_confirmed",
+        "title": "运行 QE experiment",
+        "description": "在 materialize 后启动 QE run，高成本，必须审批和成本确认。",
+        "risk_level": "high",
+        "side_effect_level": "high_cost_compute",
+        "requires_approval": True,
+        "input_schema_json": {"type": "object", "required": ["template_id", "confirm_run"]},
+        "output_schema_json": {"type": "object"},
+        "preflight_schema_json": {"checks": ["materialized_template", "cost_guard", "node_health", "approval"]},
+        "required_confirmations": ["CONFIRM_QE_RUN"],
+    },
+    {
         "server_key": "aistock-validation",
         "tool_name": "mcp_github_issue_create",
-        "title": "Create formal GitHub Issue",
+        "title": "创建正式 GitHub Issue",
+        "description": "正式 GitHub Issue 创建，高风险，必须人工审批。",
+        "side_effect_level": "write_nonprod",
         "risk_level": "high",
         "requires_approval": True,
         "input_schema_json": {"type": "object", "required": ["title"]},
@@ -208,6 +266,12 @@ DEFAULT_MCP_TOOLS: list[dict[str, Any]] = [
         "required_confirmations": [ASSISTANT_APPROVAL_CONFIRM],
     },
 ]
+
+
+DEFAULT_WORKFLOW_CAPABILITIES: list[dict[str, Any]] = [
+    dict(item) for item in load_runtime_config(environment=DEFAULT_ENVIRONMENT).config["planner"]["workflow_capabilities"]
+]
+
 
 
 DEFAULT_MODEL_PROFILES: list[dict[str, Any]] = [
@@ -299,6 +363,12 @@ CATALOG_READINESS_REQUIREMENTS: list[dict[str, Any]] = [
         "filters": {"status": "enabled"},
     },
     {
+        "catalog": "capabilities",
+        "label": "Capability Registry",
+        "expected_min": len(DEFAULT_WORKFLOW_CAPABILITIES),
+        "filters": {"status": "approved"},
+    },
+    {
         "catalog": "model_profiles",
         "label": "Primary Model Profiles",
         "expected_min": 1,
@@ -338,6 +408,12 @@ class LlmCallResult:
     model: str
     duration_ms: int
     usage: dict[str, Any]
+
+
+
+
+def _default_workflow_capabilities() -> list[dict[str, Any]]:
+    return DEFAULT_WORKFLOW_CAPABILITIES
 
 
 class ResearchAssistantLlmClient:
@@ -382,12 +458,25 @@ class ResearchAssistantLlmClient:
         return LlmCallResult(content=content, provider=provider, model=model_id, duration_ms=duration_ms, usage=usage)
 
 
-class ResearchAssistantService:
+class ResearchAssistantService(ResearchAssistantExecutionMixin):
+    @staticmethod
+    def default_workflow_capabilities() -> list[dict[str, Any]]:
+        return _default_workflow_capabilities()
+
     def __init__(self, repository: Any | None = None, llm_client: Any | None = None, *, environment: str = DEFAULT_ENVIRONMENT) -> None:
         self.repository = repository or DatabaseResearchAssistantRepository()
         self.llm_client = llm_client or ResearchAssistantLlmClient()
         self.environment = environment
         self.context_budget_planner = ContextBudgetPlanner()
+
+
+    def _workflow_capabilities(self) -> list[dict[str, Any]]:
+        configured = self.active_runtime_config().get("planner", {}).get("workflow_capabilities")
+        if configured is None:
+            return self.default_workflow_capabilities()
+        if not isinstance(configured, list):
+            raise ValueError("planner.workflow_capabilities must be a list when configured")
+        return [dict(item) for item in configured]
 
     def health(self) -> dict[str, Any]:
         repository_health = self.repository.health()
@@ -410,7 +499,7 @@ class ResearchAssistantService:
             "status": status,
             "repository": repository_health,
             "catalog_readiness": catalog_readiness,
-            "phase": "prompt_context_runtime",
+            "phase": "mcp_skill_execution_closure",
             "implemented_capabilities": {
                 "mcp_api_preflight": True,
                 "approval_gates": True,
@@ -418,6 +507,10 @@ class ResearchAssistantService:
                 "memory_audit": True,
                 "prompt_pack_activation": True,
                 "runtime_context_config": True,
+                "capability_registry": True,
+                "action_proposals": True,
+                "execution_gateway": True,
+                "qe_create_experiment_workflow": True,
             },
             "governance_boundaries": {
                 "formal_github_issue_requires_approval": True,
@@ -561,6 +654,7 @@ class ResearchAssistantService:
             "skills": 0,
             "mcp_servers": 0,
             "mcp_tools": 0,
+            "capabilities": 0,
             "model_profiles": 0,
             "routing_policies": 0,
             "prompt_nodes": 0,
@@ -618,8 +712,100 @@ class ResearchAssistantService:
         self._seed_prompt_pack(prompt_pack, seeded)
         runtime_config = load_runtime_config(environment=self.environment)
         self._seed_runtime_config(runtime_config, seeded)
+        capability_sync = self.sync_capabilities({"apply": True, "requested_by": "seed_catalogs"})
+        seeded["capabilities"] += int(capability_sync["applied_count"])
         self._ensure_default_reports_and_notifications(seeded)
-        return {"seeded": seeded, "catalog_version": "research_assistant_prompt_context_runtime_20260525"}
+        return {"seeded": seeded, "catalog_version": "research_assistant_mcp_skill_execution_20260525"}
+
+
+    def _normalize_capability_catalog(self, *, include_disabled: bool = False) -> list[dict[str, Any]]:
+        capabilities: list[dict[str, Any]] = []
+        approved_tools = {
+            (str(tool.get("server_key")), str(tool.get("tool_name"))): tool
+            for tool in self.repository.list_records("mcp_tools", limit=self.configured_limit("api_list_mcp_tools"))["items"]
+            if include_disabled or str(tool.get("status")) in {"enabled", "approved", "ready"}
+        }
+        approved_skills = {
+            str(skill.get("skill_key")): skill
+            for skill in self.repository.list_records("skills", limit=self.configured_limit("api_list_skills"))["items"]
+            if include_disabled or str(skill.get("status")) == "approved"
+        }
+        now = utc_now().isoformat()
+        for item in self._workflow_capabilities():
+            mcp_refs = list(item.get("mcp_tool_refs") or [])
+            skill_refs = [str(ref) for ref in item.get("skill_refs") or []]
+            missing_refs = [ref for ref in mcp_refs if (str(ref.get("server_key")), str(ref.get("tool_name"))) not in approved_tools]
+            missing_skills = [ref for ref in skill_refs if ref not in approved_skills]
+            status = str(item.get("status") or "approved")
+            if missing_refs or missing_skills:
+                status = "blocked"
+            if not include_disabled and status in {"disabled", "deprecated", "blocked"}:
+                continue
+            payload = {
+                "capability_id": f"cap_{str(item['capability_key']).replace('.', '_').replace('-', '_')}",
+                "last_synced_at": now,
+                **item,
+                "status": status,
+            }
+            checksum_payload = {k: v for k, v in payload.items() if k not in {"capability_id", "last_synced_at", "checksum", "created_at", "updated_at"}}
+            if missing_refs or missing_skills:
+                checksum_payload["missing_refs"] = {"mcp": missing_refs, "skills": missing_skills}
+            payload["checksum"] = sha256_json(checksum_payload)
+            capabilities.append(payload)
+        return capabilities
+
+    def sync_capabilities(self, request: CapabilitySyncRequest | dict[str, Any] | None = None) -> dict[str, Any]:
+        data = request if isinstance(request, CapabilitySyncRequest) else CapabilitySyncRequest(**(request or {}))
+        runtime_config = self.active_runtime_config()
+        sync_cfg = runtime_config["capability_sync"]
+        if not bool(sync_cfg.get("enabled", True)):
+            raise ValueError("capability sync is disabled by runtime config")
+        capabilities = self._normalize_capability_catalog(include_disabled=data.include_disabled)
+        max_tools = int(sync_cfg["max_tools_per_server"])
+        if len(capabilities) > max_tools:
+            raise ValueError(f"capability sync exceeded runtime limit: {max_tools}")
+        existing_page = self.repository.list_records("capabilities", limit=self.configured_limit("api_list_capabilities"))
+        existing_by_key = {str(item.get("capability_key")): item for item in existing_page["items"]}
+        diff: list[dict[str, Any]] = []
+        applied_count = 0
+        for capability in capabilities:
+            current = existing_by_key.get(str(capability["capability_key"]))
+            change = "create" if not current else "unchanged" if current.get("checksum") == capability["checksum"] and current.get("status") == capability["status"] else "update"
+            diff.append(
+                {
+                    "capability_key": capability["capability_key"],
+                    "change": change,
+                    "status": capability["status"],
+                    "risk_level": capability["risk_level"],
+                    "side_effect_level": capability["side_effect_level"],
+                    "checksum": capability["checksum"],
+                }
+            )
+            if data.apply and change in {"create", "update"}:
+                self.repository.create_record("capabilities", capability)
+                applied_count += 1
+        result = {
+            "dry_run": not data.apply,
+            "requested_by": data.requested_by,
+            "source_count": len(capabilities),
+            "applied_count": applied_count,
+            "diff": diff,
+            "blocked_or_disabled_excluded": not data.include_disabled,
+            "runtime_config": {
+                "max_tools_per_server": max_tools,
+                "timeout_seconds": sync_cfg["timeout_seconds"],
+                "require_checksum": sync_cfg["require_checksum"],
+            },
+        }
+        self.create_trace_event(
+            TraceEventCreate(
+                event_type="capability_sync",
+                component="research_assistant.capability_sync",
+                status="applied" if data.apply else "dry_run",
+                payload_json={"source_count": len(capabilities), "applied_count": applied_count, "diff": diff[:20]},
+            )
+        )
+        return result
 
     def _seed_prompt_pack(self, prompt_pack: PromptPackSnapshot, seeded: dict[str, int]) -> None:
         source = self.repository.create_record(
@@ -1532,8 +1718,7 @@ class ResearchAssistantService:
     def _preview_text(text: str, budget_plan: ContextBudgetPlan) -> str:
         return text[: budget_plan.trace_response_preview_chars]
 
-    @staticmethod
-    def _build_human_cards(user_message: str, task: dict[str, Any], bundle: dict[str, Any], route: dict[str, Any]) -> dict[str, Any]:
+    def _build_human_cards(self, user_message: str, task: dict[str, Any], bundle: dict[str, Any], route: dict[str, Any]) -> dict[str, Any]:
         lower = user_message.lower()
         is_qe = any(token in lower for token in ["qe", "loop", "实验", "回测", "演进", "quantevolver"])
         if is_qe:
@@ -1553,6 +1738,26 @@ class ResearchAssistantService:
                 {"title": "生成 QE 10 loop 实验草稿", "risk": "medium", "approval_required": False, "status": "draft_only"},
                 {"title": "QE template validate + MCP preflight", "risk": "high", "approval_required": True, "status": "waiting_confirmation"},
             ]
+            capabilities = self.repository.list_records(
+                "capabilities",
+                filters={"status": "approved"},
+                limit=self.configured_limit("api_list_capabilities"),
+            )["items"]
+            qe_capability_keys = set(self.active_runtime_config().get("planner", {}).get("qe_workflow_capability_keys", []))
+            available_keys = {str(item.get("capability_key")) for item in capabilities}
+            capability_cards = [
+                {
+                    "capability_key": str(item.get("capability_key")),
+                    "title": str(item.get("title") or item.get("capability_key")),
+                    "risk": str(item.get("risk_level") or "medium"),
+                    "side_effect": str(item.get("side_effect_level") or "read_only"),
+                    "status": "available",
+                    "required_confirmations": item.get("required_confirmations") or [],
+                }
+                for item in capabilities
+                if str(item.get("capability_key")) in qe_capability_keys
+            ]
+            missing_capability_keys = sorted(qe_capability_keys - available_keys)
         else:
             plan_steps = [
                 "复述你的研究目标和约束。",
@@ -1562,10 +1767,14 @@ class ResearchAssistantService:
             ]
             clarifications = ["请确认这次任务只需要我先规划和提问，还是还要准备某个 MCP 的预检查？"]
             action_proposals = [{"title": "继续澄清并生成计划", "risk": "low", "approval_required": False, "status": "ready"}]
+            capability_cards = []
+            missing_capability_keys = []
         return {
             "plan_card": {"title": "本轮计划", "steps": plan_steps},
             "clarification_card": {"title": "需要你确认", "questions": clarifications},
             "action_proposals": action_proposals,
+            "capability_cards": capability_cards,
+            "missing_capability_keys": missing_capability_keys,
             "status_rail": [
                 {"label": "接收需求", "status": "done"},
                 {"label": "选择提示词", "status": "done"},
@@ -1806,7 +2015,8 @@ class ResearchAssistantService:
         if not server:
             raise KeyError(f"MCP server not registered: {data.server_key}")
         risk = str(tool.get("risk_level") or "medium")
-        requires_approval = bool(tool.get("requires_approval")) or risk in {"high", "production_sensitive"}
+        side_effect = str(tool.get("side_effect_level") or "read_only")
+        requires_approval = bool(tool.get("requires_approval")) or self._side_effect_requires_approval(side_effect, risk)
         failures: list[dict[str, Any]] = []
         if tool.get("status") not in {"enabled", "ready", "approved"}:
             failures.append({"check": "tool_status", "status": "failed", "detail": tool.get("status")})
@@ -1825,6 +2035,7 @@ class ResearchAssistantService:
             "server_key": data.server_key,
             "tool_name": data.tool_name,
             "risk_level": risk,
+            "side_effect_level": side_effect,
             "requires_approval": requires_approval,
             "passed": passed,
             "approval_required": requires_approval,

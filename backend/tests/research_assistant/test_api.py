@@ -180,6 +180,38 @@ def test_research_assistant_api_phase1_smoke() -> None:
     assert dry_run["tool_result"]["executed"] is False
     assert client.get("/api/v1/research-assistant/mcp/tool-events", params={"task_id": task_id}).json()["data"]["total"] >= 1
 
+    capabilities = client.get("/api/v1/research-assistant/capabilities", params={"status": "approved"}).json()["data"]
+    assert capabilities["total"] >= 10
+    action_task = client.post("/api/v1/research-assistant/tasks", json={"title": "QE action closure"}).json()["data"]
+    action = client.post(
+        "/api/v1/research-assistant/actions/propose",
+        json={
+            "task_id": action_task["task_id"],
+            "capability_key": "qe.create_experiment_draft",
+            "proposal_type": "workflow_pack",
+            "title": "生成 QE 草案",
+            "summary": "只生成草案，不 materialize/run",
+            "input_json": {
+                "template_kind": "custom_evo",
+                "title": "QE draft",
+                "config_json": {
+                    "loops": [{"factor_keys": ["alpha001"], "model_id": "lightgbm"}],
+                    "stock_pool": "fixed_pit_pool",
+                    "backtest_window": {"start": "2023-01-01", "end": "2024-12-31"},
+                },
+            },
+        },
+    ).json()["data"]
+    assert action["status"] == "proposed"
+    assert client.post(f"/api/v1/research-assistant/actions/{action['action_proposal_id']}/confirm", json={"confirmation_text": "CONFIRM_QE_DRAFT"}).json()["data"]["status"] == "confirmed"
+    assert client.post(f"/api/v1/research-assistant/actions/{action['action_proposal_id']}/preflight", json={}).json()["data"]["proposal"]["status"] == "preflight_passed"
+    executed = client.post(f"/api/v1/research-assistant/actions/{action['action_proposal_id']}/execute", json={}).json()["data"]
+    assert executed["executed"] is True
+    assert executed["tool_event"]["result_card_json"]["title"] == "QE template 草案已生成"
+    action_events = client.get(f"/api/v1/research-assistant/actions/{action['action_proposal_id']}/events").json()["data"]
+    assert action_events["mcp_tool_events"]
+    assert action_events["trace_events"]
+
     sync = client.post(f"/api/v1/research-assistant/issue-candidates/{issue_resp['data']['candidate_id']}/github-sync", json={"mode": "formal"}).json()["data"]
     assert sync["github_sync_status"] == "approval_required"
     assert sync["github_sync_json"]["direct_github_create_performed"] is False

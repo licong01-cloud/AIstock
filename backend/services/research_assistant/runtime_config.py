@@ -66,6 +66,11 @@ def _validate_runtime_config(payload: dict[str, Any], path: Path) -> None:
         "assembly",
         "trace",
         "ui",
+        "capability_sync",
+        "planner",
+        "execution",
+        "approval_policy",
+        "ui_execution",
         "query_limits",
     }
     missing = sorted(required - set(payload))
@@ -93,6 +98,34 @@ def _validate_runtime_config(payload: dict[str, Any], path: Path) -> None:
         raise ValueError("runtime context budget ratios are unexpectedly high")
     if str(payload["compaction"]["worker"].get("tools_enabled")).lower() != "false":
         raise ValueError("compaction.worker.tools_enabled must be false")
+    execution_defaults = payload["execution"]
+    for key in ("default_timeout_seconds", "high_cost_timeout_seconds", "max_retries", "cancel_check_interval_seconds"):
+        if int(execution_defaults[key]) < 0:
+            raise ValueError(f"execution.{key} must be non-negative")
+    if bool(payload["approval_policy"].get("production_sensitive_auto_execute")):
+        raise ValueError("approval_policy.production_sensitive_auto_execute must be false in Phase 1")
+    if bool(payload["ui_execution"].get("raw_json_main_view")):
+        raise ValueError("ui_execution.raw_json_main_view must be false")
+    if int(payload["capability_sync"]["max_tools_per_server"]) <= 0:
+        raise ValueError("capability_sync.max_tools_per_server must be positive")
+    if int(payload["planner"]["candidate_capability_top_k"]) <= 0:
+        raise ValueError("planner.candidate_capability_top_k must be positive")
+    workflow_capabilities = payload["planner"].get("workflow_capabilities", [])
+    if not isinstance(workflow_capabilities, list) or not workflow_capabilities:
+        raise ValueError("planner.workflow_capabilities must be a non-empty list")
+    for index, capability in enumerate(workflow_capabilities):
+        if not isinstance(capability, dict):
+            raise ValueError(f"planner.workflow_capabilities[{index}] must be an object")
+        for key in ("capability_key", "capability_type", "title", "description_for_llm", "risk_level", "side_effect_level", "status"):
+            if key not in capability:
+                raise ValueError(f"planner.workflow_capabilities[{index}] missing {key}")
+        if str(capability["risk_level"]) not in {"low", "medium", "high", "production_sensitive"}:
+            raise ValueError(f"planner.workflow_capabilities[{index}].risk_level is invalid")
+        if str(capability["side_effect_level"]) not in {"read_only", "draft_only", "write_nonprod", "high_cost_compute", "production_sensitive"}:
+            raise ValueError(f"planner.workflow_capabilities[{index}].side_effect_level is invalid")
+    qe_keys = payload["planner"].get("qe_workflow_capability_keys", [])
+    if not isinstance(qe_keys, list) or not qe_keys:
+        raise ValueError("planner.qe_workflow_capability_keys must be a non-empty list")
     query_limits = payload["query_limits"]
     required_limits = {
         "conversation_messages_full",

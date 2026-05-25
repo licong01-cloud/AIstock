@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 from typing import Any
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from backend.services.research_assistant.models import (
+    ActionProposalApprovalRequest,
+    ActionProposalCreate,
+    ActionProposalDecisionRequest,
+    ActionProposalExecuteRequest,
+    ActionProposalPreflightRequest,
     ApprovalCreate,
+    CapabilitySyncRequest,
     ChatTurnRequest,
     ContextPackBuildRequest,
     EvolutionPathCreate,
@@ -48,7 +55,7 @@ class MemoryStatusRequest(BaseModel):
     confirmation_text: str | None = None
 
 
-class ApprovalDecisionRequest(BaseModel):
+class ApprovalDecisionRequestBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     confirmation_text: str = ""
@@ -556,6 +563,109 @@ def list_mcp_tools(
         raise _map_error(exc) from exc
 
 
+
+@router.get("/capabilities", response_model=ResearchAssistantResponse)
+def list_capabilities(
+    status: str | None = Query(None),
+    risk_level: str | None = Query(None),
+    search: str | None = Query(None),
+    limit: int | None = Query(None, ge=1),
+    offset: int = Query(0, ge=0),
+    service: ResearchAssistantService = Depends(get_research_assistant_service),
+) -> ResearchAssistantResponse:
+    try:
+        return _success(service.list_records("capabilities", filters={"status": status, "risk_level": risk_level}, search=search, limit=limit, offset=offset))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.post("/capabilities/sync", response_model=ResearchAssistantResponse)
+def sync_capabilities(request: CapabilitySyncRequest, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
+    try:
+        return _success(service.sync_capabilities(request))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.post("/actions/propose", response_model=ResearchAssistantResponse)
+def create_action_proposal(request: ActionProposalCreate, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
+    try:
+        return _success(service.create_action_proposal(request))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.get("/actions", response_model=ResearchAssistantResponse)
+def list_action_proposals(
+    task_id: str | None = Query(None),
+    capability_key: str | None = Query(None),
+    status: str | None = Query(None),
+    limit: int | None = Query(None, ge=1),
+    offset: int = Query(0, ge=0),
+    service: ResearchAssistantService = Depends(get_research_assistant_service),
+) -> ResearchAssistantResponse:
+    try:
+        return _success(service.list_records("action_proposals", filters={"task_id": task_id, "capability_key": capability_key, "status": status}, limit=limit, offset=offset))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.get("/actions/{action_proposal_id}", response_model=ResearchAssistantResponse)
+def get_action_proposal(action_proposal_id: str, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
+    try:
+        return _success(service.get_action_proposal(action_proposal_id))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.get("/actions/{action_proposal_id}/events", response_model=ResearchAssistantResponse)
+def get_action_proposal_events(action_proposal_id: str, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
+    try:
+        return _success(service.action_proposal_events(action_proposal_id))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.post("/actions/{action_proposal_id}/confirm", response_model=ResearchAssistantResponse)
+def confirm_action_proposal(action_proposal_id: str, request: ActionProposalDecisionRequest, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
+    try:
+        return _success(service.confirm_action_proposal(action_proposal_id, request))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.post("/actions/{action_proposal_id}/reject", response_model=ResearchAssistantResponse)
+def reject_action_proposal(action_proposal_id: str, request: ActionProposalDecisionRequest, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
+    try:
+        return _success(service.reject_action_proposal(action_proposal_id, request))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.post("/actions/{action_proposal_id}/preflight", response_model=ResearchAssistantResponse)
+def preflight_action_proposal(action_proposal_id: str, request: ActionProposalPreflightRequest, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
+    try:
+        return _success(service.preflight_action_proposal(action_proposal_id, request))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.post("/actions/{action_proposal_id}/approve", response_model=ResearchAssistantResponse)
+def approve_action_proposal(action_proposal_id: str, request: ActionProposalApprovalRequest, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
+    try:
+        return _success(service.approve_action_proposal(action_proposal_id, request))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.post("/actions/{action_proposal_id}/execute", response_model=ResearchAssistantResponse)
+def execute_action_proposal(action_proposal_id: str, request: ActionProposalExecuteRequest, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
+    try:
+        return _success(service.execute_action_proposal(action_proposal_id, request))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
 @router.post("/mcp/preflight", response_model=ResearchAssistantResponse)
 def preflight_mcp_tool(request: McpPreflightRequest, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
     try:
@@ -612,7 +722,7 @@ def list_approvals(
 
 
 @router.post("/approvals/{approval_id}/approve", response_model=ResearchAssistantResponse)
-def approve(approval_id: str, request: ApprovalDecisionRequest, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
+def approve(approval_id: str, request: ApprovalDecisionRequestBody, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
     try:
         return _success(service.decide_approval(approval_id, action="approve", confirmation_text=request.confirmation_text, decided_by=request.decided_by))
     except Exception as exc:
@@ -620,7 +730,7 @@ def approve(approval_id: str, request: ApprovalDecisionRequest, service: Researc
 
 
 @router.post("/approvals/{approval_id}/reject", response_model=ResearchAssistantResponse)
-def reject(approval_id: str, request: ApprovalDecisionRequest, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
+def reject(approval_id: str, request: ApprovalDecisionRequestBody, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
     try:
         return _success(service.decide_approval(approval_id, action="reject", confirmation_text=request.confirmation_text, decided_by=request.decided_by))
     except Exception as exc:
