@@ -596,27 +596,50 @@ def resolve_factor_issues(task_id: str, req: FactorResolveRequest, background_ta
         raise HTTPException(500, detail=str(e))
 
 @router.get("/tasks", summary="获取所有演进任务列表")
-async def list_evolution_tasks():
+async def list_evolution_tasks(
+    detail: str = Query("summary", pattern="^(summary|full)$", description="summary 默认不返回大 JSON；full 保留旧完整字段"),
+):
     """
-    从数据库中读取所有 qe_evolution_tasks
+    从数据库中读取所有 qe_evolution_tasks。默认 summary，避免 MCP/列表返回大 JSON。
     """
     try:
-        tasks = await scheduler.get_all_tasks()
-        return {"status": "success", "data": tasks}
+        tasks = await scheduler.get_all_tasks(detail=detail)
+        return {"status": "success", "data": tasks, "detail": detail}
     except Exception as e:
         logger.error(f"Failed to list evolution tasks: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+def _task_detail_contains_full_loop_payloads(detail_data: dict) -> bool:
+    loops = detail_data.get("loops") if isinstance(detail_data, dict) else None
+    if not isinstance(loops, list):
+        return False
+    return any(
+        isinstance(loop, dict) and any(key in loop for key in ("config_json", "metrics_json", "agent_analysis"))
+        for loop in loops
+    )
+
+
 @router.get("/tasks/{task_id}", summary="获取单个演进任务的详细信息与所有 LOOP")
-async def get_evolution_task_detail(task_id: str):
+async def get_evolution_task_detail(
+    task_id: str,
+    detail: str = Query("summary", pattern="^(summary|full)$", description="summary 返回 compact loop 表；full 返回旧完整 JSON 字段"),
+):
     """
-    获取单个任务详情，包括其下属所有的 qe_evolution_loops
+    获取任务详情。默认 summary；前端深度页可显式 detail=full。
     """
     try:
-        detail = await scheduler.get_task_detail(task_id)
-        if not detail:
+        try:
+            detail_data = await scheduler.get_task_detail(task_id, detail=detail)
+        except TypeError as exc:
+            if "detail" not in str(exc):
+                raise
+            detail_data = await scheduler.get_task_detail(task_id)
+        if not detail_data:
             raise HTTPException(status_code=404, detail="Task not found")
-        for loop in detail.get("loops", []):
+        if detail != "full" and not _task_detail_contains_full_loop_payloads(detail_data):
+            return {"status": "success", "data": detail_data, "detail": detail}
+        for loop in detail_data.get("loops", []):
             metrics = loop.get("metrics_json")
             if isinstance(metrics, str):
                 try:
@@ -640,12 +663,69 @@ async def get_evolution_task_detail(task_id: str):
                 continue
             metrics["enhanced_metrics"] = enhanced
             loop["metrics_json"] = metrics
-        return {"status": "success", "data": detail}
+        return {"status": "success", "data": detail_data, "detail": detail}
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Failed to get task detail: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/tasks/{task_id}/loops/comparison", summary="获取任务所有 Loop 的标量对比表")
+def get_evolution_task_loop_comparison(task_id: str):
+    try:
+        result = scheduler.get_loop_comparison(task_id)
+        if not result:
+            raise HTTPException(status_code=404, detail="Task not found")
+        return {"status": "success", "data": result, "detail": "comparison"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get loop comparison for {task_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/tasks/{task_id}/loops/{loop_index}/config", summary="按需获取单个 Loop 配置")
+def get_evolution_loop_config(task_id: str, loop_index: int):
+    try:
+        result = scheduler.get_loop_payload(task_id, loop_index, "config")
+        if not result:
+            raise HTTPException(status_code=404, detail="Loop not found")
+        return {"status": "success", "data": result}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get loop config for {task_id}/{loop_index}: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/tasks/{task_id}/loops/{loop_index}/metrics", summary="按需获取单个 Loop 完整指标")
+def get_evolution_loop_metrics(task_id: str, loop_index: int):
+    try:
+        result = scheduler.get_loop_payload(task_id, loop_index, "metrics")
+        if not result:
+            raise HTTPException(status_code=404, detail="Loop not found")
+        return {"status": "success", "data": result}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get loop metrics for {task_id}/{loop_index}: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/tasks/{task_id}/loops/{loop_index}/analysis", summary="按需获取单个 Loop LLM 分析")
+def get_evolution_loop_analysis(task_id: str, loop_index: int):
+    try:
+        result = scheduler.get_loop_payload(task_id, loop_index, "analysis")
+        if not result:
+            raise HTTPException(status_code=404, detail="Loop not found")
+        return {"status": "success", "data": result}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get loop analysis for {task_id}/{loop_index}: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.post("/tasks/{task_id}/stop", summary="手动停止/暂停演进任务")
 async def stop_evolution_task(task_id: str):

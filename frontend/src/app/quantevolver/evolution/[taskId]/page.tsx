@@ -202,7 +202,7 @@ export default function EvolutionDetailPage({ params }: { params: { taskId: stri
   useEffect(() => {
     if (!taskId) return;
     setLoading(true);
-    fetch(`${API}/quantevolver/evolution/tasks/${taskId}`)
+    fetch(`${API}/quantevolver/evolution/tasks/${taskId}?detail=full`)
       .then(r => {
         if (!r.ok) throw new Error(`任务 API 错误: HTTP ${r.status}`);
         return r.json();
