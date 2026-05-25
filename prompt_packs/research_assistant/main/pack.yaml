@@ -1,0 +1,159 @@
+schema_version: aistock_prompt_pack_v1
+assistant_key: research_assistant
+pack_key: research_assistant.main
+pack_version: 1.0.0
+owner: research_assistant
+environment_scope:
+  - dev
+  - staging
+  - production
+nodes:
+  - prompt_key: root.assistant
+    title: 研究助理根提示词
+    category: root
+    tree_path: /root
+    phase: planning
+    risk_level: medium
+    trigger_json:
+      always: true
+    prompt_file: nodes/root.assistant.md
+  - prompt_key: governance.no_silent_action
+    title: 安全与审批根规则
+    category: governance
+    tree_path: /root/governance/no_silent_action
+    parent_key: root.assistant
+    phase: planning
+    risk_level: high
+    trigger_json:
+      always: true
+    prompt_file: nodes/governance.no_silent_action.md
+  - prompt_key: intent.planning
+    title: 意图理解与澄清
+    category: intent
+    tree_path: /root/intent/planning
+    parent_key: root.assistant
+    phase: planning
+    risk_level: medium
+    trigger_json:
+      always: true
+    prompt_file: nodes/intent.planning.md
+  - prompt_key: domain.qe_experiment
+    title: QE 实验创建分支提示词
+    category: domain
+    tree_path: /root/domain/qe_experiment
+    parent_key: intent.planning
+    phase: planning
+    risk_level: high
+    trigger_json:
+      keywords_any: [qe, quant, loop, 实验, 回测, 演进, 模板]
+    prompt_file: nodes/domain.qe_experiment.md
+  - prompt_key: workflow.qe_draft_then_approval
+    title: QE 草稿到审批工作流
+    category: workflow
+    tree_path: /root/domain/qe_experiment/workflow/draft_then_approval
+    parent_key: domain.qe_experiment
+    phase: planning
+    risk_level: high
+    trigger_json:
+      keywords_any: [qe, loop, materialize, run, 执行, 物化]
+    prompt_file: nodes/workflow.qe_draft_then_approval.md
+  - prompt_key: tool_guard.mcp_qe
+    title: QE MCP 工具门禁
+    category: tool_guard
+    tree_path: /root/domain/qe_experiment/tool_guard/mcp_qe
+    parent_key: domain.qe_experiment
+    phase: preflight
+    risk_level: production_sensitive
+    trigger_json:
+      keywords_any: [mcp, materialize, run, 执行, 物化]
+    prompt_file: nodes/tool_guard.mcp_qe.md
+  - prompt_key: renderer.human_cards
+    title: 人类可读结果渲染
+    category: renderer
+    tree_path: /root/renderer/human_cards
+    parent_key: root.assistant
+    phase: result
+    risk_level: medium
+    trigger_json:
+      always: true
+    prompt_file: nodes/renderer.human_cards.md
+  - prompt_key: memory.candidate_only
+    title: 长期记忆候选规则
+    category: memory
+    tree_path: /root/memory/candidate_only
+    parent_key: root.assistant
+    phase: reflection
+    risk_level: high
+    trigger_json:
+      keywords_any: [记忆, memory, 长期, 保存]
+    prompt_file: nodes/memory.candidate_only.md
+  - prompt_key: context.budget.runtime_policy
+    title: 上下文预算运行策略
+    category: context
+    tree_path: /root/context/budget/runtime_policy
+    parent_key: root.assistant
+    phase: reflection
+    risk_level: medium
+    trigger_json:
+      context_runtime: true
+    prompt_file: nodes/context.budget.runtime_policy.md
+  - prompt_key: context.compaction.structured_summary
+    title: 结构化上下文压缩提示词
+    category: context
+    tree_path: /root/context/compaction/structured_summary
+    parent_key: context.budget.runtime_policy
+    phase: reflection
+    risk_level: medium
+    trigger_json:
+      context_runtime: true
+    prompt_file: nodes/context.compaction.structured_summary.md
+  - prompt_key: context.compaction.key_fact_extraction
+    title: 关键事实提取提示词
+    category: context
+    tree_path: /root/context/compaction/key_fact_extraction
+    parent_key: context.budget.runtime_policy
+    phase: reflection
+    risk_level: medium
+    trigger_json:
+      context_runtime: true
+    prompt_file: nodes/context.compaction.key_fact_extraction.md
+  - prompt_key: context.compaction.summary_of_summaries
+    title: 二级摘要压缩提示词
+    category: context
+    tree_path: /root/context/compaction/summary_of_summaries
+    parent_key: context.budget.runtime_policy
+    phase: reflection
+    risk_level: medium
+    trigger_json:
+      context_runtime: true
+    prompt_file: nodes/context.compaction.summary_of_summaries.md
+  - prompt_key: context.recovery.continue_after_compaction
+    title: 压缩后连续对话恢复提示词
+    category: context
+    tree_path: /root/context/recovery/continue_after_compaction
+    parent_key: context.budget.runtime_policy
+    phase: reflection
+    risk_level: medium
+    trigger_json:
+      context_runtime: true
+    prompt_file: nodes/context.recovery.continue_after_compaction.md
+  - prompt_key: context.recovery.prompt_too_long_retry
+    title: 上下文超限重试提示词
+    category: context
+    tree_path: /root/context/recovery/prompt_too_long_retry
+    parent_key: context.budget.runtime_policy
+    phase: reflection
+    risk_level: medium
+    trigger_json:
+      context_runtime: true
+    prompt_file: nodes/context.recovery.prompt_too_long_retry.md
+  - prompt_key: context.renderer.context_health
+    title: 上下文健康展示提示词
+    category: context
+    tree_path: /root/context/renderer/context_health
+    parent_key: context.budget.runtime_policy
+    phase: result
+    risk_level: medium
+    trigger_json:
+      context_runtime: true
+    prompt_file: nodes/context.renderer.context_health.md

@@ -31,6 +31,7 @@ EVENT_TYPES = {
     "chat_received",
     "prompt_bundle_built",
     "context_pack_built",
+    "context_compacted",
     "llm_started",
     "llm_done",
     "llm_failed",
@@ -96,6 +97,7 @@ PROMPT_NODE_CATEGORIES = {
     "renderer",
     "memory",
     "model_routing",
+    "context",
 }
 PROMPT_PHASES = {"planning", "preflight", "execution", "result", "reflection"}
 
@@ -384,7 +386,7 @@ class ContextPackBuildRequest(StrictModel):
     agent_id: str | None = None
     model_profile: str | None = None
     namespace: str = "aistock"
-    token_budget: int = Field(16000, ge=1000, le=1000000)
+    token_budget: int | None = Field(None, ge=1, le=1000000)
     include_memory_types: list[str] = Field(default_factory=lambda: ["core", "procedural", "architecture", "task_state", "experiment", "roadmap"])
 
 

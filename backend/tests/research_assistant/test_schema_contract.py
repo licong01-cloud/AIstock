@@ -36,7 +36,7 @@ def _assert_columns(table_columns: dict[str, set[str]], kind: str, payload: dict
 def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
     sql = "\n".join(DDL)
 
-    assert RESEARCH_ASSISTANT_SCHEMA_VERSION == "research_assistant_console_v3_event_constraint_reconcile_20260523"
+    assert RESEARCH_ASSISTANT_SCHEMA_VERSION == "research_assistant_prompt_context_runtime_v1_20260525"
     for table in {
         "research_agent_tasks",
         "agent_task_events",
@@ -60,7 +60,16 @@ def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
         "assistant_model_profiles",
         "assistant_model_routing_policies",
         "assistant_prompt_nodes",
+        "assistant_prompt_sources",
+        "assistant_prompt_node_versions",
+        "assistant_prompt_activations",
+        "assistant_prompt_activation_events",
         "assistant_prompt_bundles",
+        "assistant_runtime_config_sources",
+        "assistant_runtime_config_activations",
+        "assistant_context_segments",
+        "assistant_context_key_facts",
+        "assistant_context_assembly_traces",
         "assistant_temp_memories",
         "assistant_notifications",
         "assistant_reports",
@@ -159,6 +168,8 @@ def test_research_assistant_service_payloads_match_schema_columns() -> None:
             "conversation_id": "conv_x",
             "phase": "planning",
             "model_profile_id": "model",
+            "activation_id": "prompt_activation_x",
+            "version_refs": [],
             "node_refs": [],
             "selection_trace_json": {},
             "bundle_json": {},

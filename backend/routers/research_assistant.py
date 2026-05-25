@@ -185,6 +185,19 @@ def get_conversation(conversation_id: str, service: ResearchAssistantService = D
         raise _map_error(exc) from exc
 
 
+@router.get("/conversations/{conversation_id}/messages", response_model=ResearchAssistantResponse)
+def list_conversation_messages(
+    conversation_id: str,
+    limit: int = Query(200, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    service: ResearchAssistantService = Depends(get_research_assistant_service),
+) -> ResearchAssistantResponse:
+    try:
+        return _success(service.list_records("conversation_messages", filters={"conversation_id": conversation_id}, limit=limit, offset=offset))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
 @router.get("/prompt-nodes", response_model=ResearchAssistantResponse)
 def list_prompt_nodes(
     phase: str | None = Query(None),
@@ -197,6 +210,77 @@ def list_prompt_nodes(
 ) -> ResearchAssistantResponse:
     try:
         return _success(service.list_records("prompt_nodes", filters={"phase": phase, "category": category, "status": status}, search=search, limit=limit, offset=offset))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.get("/prompt-activations", response_model=ResearchAssistantResponse)
+def list_prompt_activations(
+    environment: str | None = Query(None),
+    status: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    service: ResearchAssistantService = Depends(get_research_assistant_service),
+) -> ResearchAssistantResponse:
+    try:
+        return _success(service.list_records("prompt_activations", filters={"environment": environment, "status": status}, limit=limit, offset=offset))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.get("/runtime-config/activations", response_model=ResearchAssistantResponse)
+def list_runtime_config_activations(
+    environment: str | None = Query(None),
+    status: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    service: ResearchAssistantService = Depends(get_research_assistant_service),
+) -> ResearchAssistantResponse:
+    try:
+        return _success(service.list_records("runtime_config_activations", filters={"environment": environment, "status": status}, limit=limit, offset=offset))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.get("/context-segments", response_model=ResearchAssistantResponse)
+def list_context_segments(
+    conversation_id: str | None = Query(None),
+    status: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    service: ResearchAssistantService = Depends(get_research_assistant_service),
+) -> ResearchAssistantResponse:
+    try:
+        return _success(service.list_records("context_segments", filters={"conversation_id": conversation_id, "status": status}, limit=limit, offset=offset))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.get("/context-key-facts", response_model=ResearchAssistantResponse)
+def list_context_key_facts(
+    conversation_id: str | None = Query(None),
+    status: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    service: ResearchAssistantService = Depends(get_research_assistant_service),
+) -> ResearchAssistantResponse:
+    try:
+        return _success(service.list_records("context_key_facts", filters={"conversation_id": conversation_id, "status": status}, limit=limit, offset=offset))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.get("/context-assembly-traces", response_model=ResearchAssistantResponse)
+def list_context_assembly_traces(
+    conversation_id: str | None = Query(None),
+    task_id: str | None = Query(None),
+    status: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    service: ResearchAssistantService = Depends(get_research_assistant_service),
+) -> ResearchAssistantResponse:
+    try:
+        return _success(service.list_records("context_assembly_traces", filters={"conversation_id": conversation_id, "task_id": task_id, "status": status}, limit=limit, offset=offset))
     except Exception as exc:
         raise _map_error(exc) from exc
 
@@ -452,7 +536,7 @@ def list_skill_usage_events(
 @router.get("/mcp/servers", response_model=ResearchAssistantResponse)
 def list_mcp_servers(service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
     try:
-        return _success(service.list_records("mcp_servers", limit=200))
+        return _success(service.list_records("mcp_servers", limit=service.configured_limit("router_mcp_servers")))
     except Exception as exc:
         raise _map_error(exc) from exc
 
@@ -644,7 +728,7 @@ def list_trace_events(
 @router.get("/models/profiles", response_model=ResearchAssistantResponse)
 def list_model_profiles(service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
     try:
-        return _success(service.list_records("model_profiles", limit=200))
+        return _success(service.list_records("model_profiles", limit=service.configured_limit("router_model_profiles")))
     except Exception as exc:
         raise _map_error(exc) from exc
 
@@ -652,7 +736,7 @@ def list_model_profiles(service: ResearchAssistantService = Depends(get_research
 @router.get("/models/routing-policies", response_model=ResearchAssistantResponse)
 def list_model_routing_policies(service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
     try:
-        return _success(service.list_records("routing_policies", limit=200))
+        return _success(service.list_records("routing_policies", limit=service.configured_limit("router_routing_policies")))
     except Exception as exc:
         raise _map_error(exc) from exc
 
