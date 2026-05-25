@@ -525,6 +525,97 @@ GET /api/v1/strategy-packages/asset-eligible
 7. MiniQMT SIM 页面可以直接创建配置；MiniQMT 未连接时显示 broker unavailable/waiting，但不隐藏策略包、不要求换包。
 8. 页面不得出现让用户无处修改但必须满足的阻断文案，例如“请先启用 Paper”“Required paper-enabled policy”“策略包健康预检阻断”。
 
+### 9.0.3 确认交互整改
+
+当前 Paper v2 中存在多处 `ConfirmAction` 要求用户输入 package_id、config_id、snapshot_id 或 portfolio_id 才能执行操作。对 HMM 模型在线重训、HMM 滚动训练、每日系数生成等平台运维操作，这种长字符串确认没有业务价值，反而让正常操作变得不可用。本项目必须同步修复。
+
+确认交互规则：
+
+1. HMM 模型在线重训、HMM 滚动训练、每日系数生成、模型重训预览后的提交，只允许使用弹窗二次确认：展示操作名称、对象名称、预计影响、是否会写入新任务、是否会影响当前运行；用户点击“确认执行/取消”即可。
+2. 不得要求用户输入 package_id、config_id、snapshot_id、portfolio_id 等长字符串来确认 HMM 或模型运维操作。
+3. 文本输入确认只允许用于真正破坏性、不可自动恢复或可能影响真实资金的操作，例如：物理删除资产、清空历史账本、真实 live 下单开关、生产 DDL/DML 手工确认。即使保留，也必须说明为什么不能用普通二次确认。
+4. 普通模拟盘重跑、HMM 重训、生成系数、启动/暂停/恢复 session、调度器 run-once 等非真实资金操作，不得使用长字符串确认。
+5. 弹窗必须使用中文摘要和明确后果，不得只展示 raw JSON。
+6. 所有确认弹窗必须可键盘操作、可取消、失败后保留页面上下文，并显示统一错误摘要。
+
+必须改造的当前已知入口：
+
+| 当前入口 | 当前问题 | 目标交互 |
+|---|---|---|
+| `frontend/src/app/paper-v2/model-hmm/page.tsx` 提交重训任务 | 输入 `packageId` | 弹窗二次确认。 |
+| `frontend/src/app/paper-v2/model-hmm/page.tsx` 触发 HMM 滚动训练 | 输入 `configId` | 弹窗二次确认。 |
+| `frontend/src/app/paper-v2/model-hmm/page.tsx` 生成每日系数 | 输入 `snapshotId` | 弹窗二次确认。 |
+| `frontend/src/app/paper-v2/portfolios/[portfolioId]/run-console/page.tsx` 非真实资金重跑类操作 | 输入长 id | 默认弹窗二次确认；只有会清空历史账本时才允许文本确认，并必须标注原因。 |
+| `frontend/src/app/paper-v2/packages/page.tsx` 退役策略包 | 输入 package id | 若保留退役，使用弹窗二次确认；文本确认只用于物理删除/不可恢复清理。 |
+
+### 9.0.4 错误展示整改
+
+当前 Paper v2 多处错误详情使用 `ErrorPanel` / `ErrorListCard` / `ReadinessFailureCard` / `JsonPanel` 组合展示，容易形成“点击详细信息后出现多层表格、折叠、抽屉、raw JSON”的界面。对普通使用者没有帮助，对排查问题也不够直接。本项目必须统一改造错误展示。
+
+错误展示规则：
+
+1. 不再使用多层表格、嵌套 drawer、嵌套 details、嵌套 JsonPanel 作为错误详情主展示。
+2. 默认展示精炼中文描述，必须包含：
+   - 发生了什么；
+   - 影响范围，例如本次 selection run、portfolio create、session tick、MiniQMT submit；
+   - 是否是策略包资产问题，还是本次 runtime/broker/data 问题；
+   - 用户下一步能做什么。
+3. 诊断信息必须提供“一键复制给 Codex 分析”的纯文本块，不要求用户从多层表格里拼字段。
+4. 复制文本必须包含足够诊断上下文：
+   - error_code / error_type；
+   - message；
+   - route / action；
+   - package_id / portfolio_id / run_id / session_id / task_id；
+   - trade_date / data_source / broker_backend；
+   - request_id / timestamp；
+   - backend context 摘要；
+   - stack/log reference（如有）；
+   - 当前页面路径和用户操作摘要。
+5. raw JSON 只能作为复制文本的一部分或开发者调试文本块，不得作为普通用户主视图。
+6. 错误列表应按“最重要错误摘要”展示，不展示字段级多层表格。多条错误时只展示前 N 条摘要，其余进入同一个可复制诊断文本。
+7. Readiness/Preflight 结果不再用多层表格抽屉展示；改为“通过/阻断/警告”摘要卡 + 运行时错误诊断文本。
+8. 所有错误都必须使用新 error taxonomy，避免把 runtime failure 显示成 StrategyPackage 不可用。
+
+建议新增统一组件：
+
+```text
+frontend/src/components/paper-v2/ActionConfirmDialog.tsx
+frontend/src/components/paper-v2/ErrorDigest.tsx
+frontend/src/components/paper-v2/CopyDiagnosticText.tsx
+```
+
+`ErrorDigest` 的用户视图结构：
+
+```text
+标题：本次模拟盘运行失败
+结论：缺少 2026-05-25 的 pre_close 数据，本次 run 未执行，不影响策略包资格。
+影响：portfolio=paper_xxx，trade_date=2026-05-25，data_source=DB_HISTORICAL。
+下一步：同步 pre_close 数据后重新运行；如仍失败，复制诊断文本提交给 Codex。
+[复制诊断文本]
+```
+
+`CopyDiagnosticText` 示例：
+
+```text
+AIstock Paper v2 diagnostic
+action: run-day
+route: /api/v1/paper-v2/portfolios/{portfolio_id}/run-day
+error_code: MARKET_DATA_UNAVAILABLE
+message: missing pre_close for 2026-05-25
+package_id: pkg_xxx
+portfolio_id: paper_xxx
+run_id: -
+session_id: -
+trade_date: 2026-05-25
+data_source: DB_HISTORICAL
+broker_backend: local_sim
+request_id: req_xxx
+timestamp: 2026-05-25T...
+context: {...compact backend context...}
+page: /paper-v2/portfolios/paper_xxx/run-console
+user_action: clicked run-day
+```
+
 ### 9.1 Paper v2 首页
 
 - ready package count 改为 asset eligible count。
@@ -742,6 +833,9 @@ rg -n "PAPER_ENABLED|PAPER_RUNNING|PAPER_PASSED|PAPER_FAILED|paper_ready|paper_c
 | L3 UI | No dead-end gate UX | Playwright + text scan | 不出现“先启用 Paper / Required paper-enabled policy / 策略包健康预检阻断”等用户无法在 UI 内解决的阻断流程。 |
 | L3 UI | Runtime warning is non-blocking | Playwright | 有 HMM/ST PIT/broker/data warning 时，包仍可选择，运行按钮仍可点击，失败归属本次 run/session。 |
 | L3 UI | Useful simplified display | Playwright + API fixture | 页面保留 asset eligibility、runtime diagnostics、HMM 自动计算/缓存、交易日状态、MiniQMT broker status、价格来源；删除 legacy paper lifecycle 噪音。 |
+| L3 UI | HMM no long-string confirmation | Playwright + grep | HMM/模型重训、滚动训练、每日系数生成使用弹窗二次确认；不得要求输入 package_id/config_id/snapshot_id。 |
+| L3 UI | Error digest not drawer/table | Playwright + grep | Paper v2 错误详情使用中文摘要 + 可复制诊断文本；主视图不使用嵌套表格、抽屉、details 或 JsonPanel 展示错误。 |
+| L3 UI | Codex diagnostic copy | Playwright | 错误详情提供“一键复制给 Codex 分析”的纯文本，包含 error_code、route、ids、trade_date、request_id、context 摘要。 |
 | L4 integration | LocalSim full day | dev backend + DB/fake data | selection/target/order/ledger/snapshot 完整，runtime 缺失 fail-fast。 |
 | L4 integration | MiniQMT fake broker | fake broker E2E | order/trade/account/reconciliation 全链路。 |
 | L4 dual backend | Same strategy LocalSim vs MiniQMT fake | oracle compare | selection evidence 一致；执行差异只来自 broker/fill。 |
@@ -762,12 +856,14 @@ rg -n "PAPER_ENABLED|PAPER_RUNNING|PAPER_PASSED|PAPER_FAILED|paper_ready|paper_c
 8. UI 不再暴露 enable-selection / enable-paper 作为主路径操作。
 9. UI 不再出现用户无法通过页面配置解决、但会阻断进入 Selection/Paper/MiniQMT 的 dead-end gate 文案。
 10. UI 保留并简化真正有用的信息：asset eligibility、runtime diagnostics、HMM 自动计算/缓存、交易日状态、价格来源、MiniQMT broker status、run/session 错误和下一步动作。
-11. HMM 不需要手工生成 snapshot；选择模型后自动计算/缓存。
-12. 平台数据缺失只影响本次 run/session，不改变 StrategyPackage 状态。
-13. MiniQMT 模拟盘不使用 TDX/DB/LocalSim 补成交。
-14. 未来实盘仍必须走 LiveApproval，不能由 QE 包直接进入实盘。
-15. 所有旧状态数据完成迁移或有明确兼容处理。
-16. validation record 证明 L0-L4 通过；L5 MiniQMT SIM 若未完成，明确标记为实盘前验证项，不阻断模拟盘 gate purge。
+11. HMM/模型在线重训、滚动训练、每日系数生成使用弹窗二次确认，不要求输入长 id 字符串。
+12. Paper v2 错误详情不再用多层表格、抽屉、details 或 JsonPanel 作为主展示；必须提供中文摘要和可复制诊断文本。
+13. HMM 不需要手工生成 snapshot；选择模型后自动计算/缓存。
+14. 平台数据缺失只影响本次 run/session，不改变 StrategyPackage 状态。
+15. MiniQMT 模拟盘不使用 TDX/DB/LocalSim 补成交。
+16. 未来实盘仍必须走 LiveApproval，不能由 QE 包直接进入实盘。
+17. 所有旧状态数据完成迁移或有明确兼容处理。
+18. validation record 证明 L0-L4 通过；L5 MiniQMT SIM 若未完成，明确标记为实盘前验证项，不阻断模拟盘 gate purge。
 
 ## 14. 风险和缓解
 
@@ -812,5 +908,7 @@ rg -n "PAPER_ENABLED|PAPER_RUNNING|PAPER_PASSED|PAPER_FAILED|paper_ready|paper_c
 6. 未来实盘只保留 LiveApproval 独立 gate，必须有模拟盘运行证据和人工审批。
 7. UI 必须同步删除所有旧门禁入口、disabled 逻辑和 dead-end gate 文案；不得出现后端已放开但前端继续阻断的情况。
 8. UI 必须同步简化展示，只保留资产合格、运行时诊断、交易日/HMM/价格/MiniQMT 状态和 run/session 证据等对用户有操作意义的信息。
+9. HMM/模型运维类操作必须用弹窗二次确认，禁止长字符串确认；文本确认只保留给真实资金或不可恢复破坏性操作。
+10. 错误详情必须改为精炼中文摘要 + 可复制 Codex 诊断文本，禁止把多层表格/抽屉/JsonPanel 作为普通用户错误主视图。
 
 审批后即可按本设计启动实现项目。
