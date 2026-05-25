@@ -4,9 +4,9 @@
 - 日期: 2026-05-25
 - worktree: `F:\Dev\AIstock_worktrees\research-assistant-prompt-context-runtime-20260525`
 - branch: `feature/research-assistant-prompt-context-runtime-20260525`
-- base: `origin/main` = `62dc1b1 fix(selection): use TDX pre-close for pre-open entry price`
-- validated_code_head: `2c5df70 fix(research-assistant): move assistant query limits into runtime config`
-- origin/main_observed: `4bc2b89 fix(paper-v2): route MiniQMT live sessions to broker authority`（未合入本分支；本轮按用户要求只处理 Research Assistant 范围）
+- base: `origin/main` = `65e98c8 docs(research-assistant): define mcp skill execution closure`
+- validated_code_head: `32f60e16 Merge remote-tracking branch origin/main into feature/research-assistant-prompt-context-runtime-20260525`
+- origin/main_observed: `65e98c8 docs(research-assistant): define mcp skill execution closure`（已合入本分支；本轮按用户要求只处理 Research Assistant 范围，未处理其它模块 issue）
 - 关联: `BUG-117` / GitHub Issue `#186`
 - 设计依据:
   - `docs/architecture/research_assistant_prompt_context_runtime_governance_design_20260524.md`
@@ -50,12 +50,13 @@
 - API list default page size, router catalog page size, and `api_list_max_page_size` now resolve from active runtime config; tests cover `api_list_skills`, `router_mcp_servers`, positive validation, and max-page fail-fast.
 - Context Pack `token_budget` max moved from the Pydantic field to `query_limits.context_pack_max_token_budget`; tests cover over-limit rejection and configured-limit success.
 - Runtime config validation now requires every repository catalog to declare `api_list_<kind>`, preventing catalog/config drift.
+- 2026-05-25 refresh merged latest `origin/main` (`65e98c8`) into the PR branch as `32f60e16` with no conflicts, then re-ran the backend, prompt/config scan, workflow doctor, frontend build, and diff checks.
 
 ## 执行的验证命令
 
 ```powershell
 python -m pytest backend/tests/research_assistant -q
-# 28 passed in 10.49s
+# 28 passed in 9.50s after merging origin/main 65e98c8
 
 python -m compileall backend/services/research_assistant backend/routers/research_assistant.py backend/db/init_research_assistant_schema_20260521.py
 # passed
@@ -90,4 +91,4 @@ Frontend build 使用临时 junction 将本 worktree 的 `frontend/node_modules`
 
 ## 结论
 
-当前分支已达到设计矩阵 A1-A10 的本地验收条件，具备提交 PR/合入前评审基础；但在用户决定合入前，不关闭 `BUG-117` / GitHub Issue `#186`。生产 readiness 仍取决于合入后的 DDL 执行与验证。
+当前分支已合入最新 origin/main 并达到设计矩阵 A1-A10 的本地验收条件，具备提交 PR/合入前评审基础；但在用户决定合入前，不关闭 `BUG-117` / GitHub Issue `#186`。生产 readiness 仍取决于合入后的 DDL 执行与验证。
