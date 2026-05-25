@@ -28,7 +28,7 @@ TABLES: dict[str, dict[str, Any]] = {
         "table": "research_agent_tasks",
         "id": "task_id",
         "json": {"input_json", "result_json", "triage_json"},
-        "search": {"task_id", "title", "task_type", "status", "created_by"},
+        "search": {"task_id", "title", "task_type", "status", "created_by", "idempotency_key"},
     },
     "task_events": {
         "table": "agent_task_events",

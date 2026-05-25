@@ -568,6 +568,14 @@ BASE_DDL: list[str] = [
         CONSTRAINT ck_apn_status CHECK (status IN ('draft','enabled','disabled','deprecated'))
     )
     """,
+    """
+    ALTER TABLE assistant_prompt_nodes
+        DROP CONSTRAINT IF EXISTS ck_apn_category
+    """,
+    """
+    ALTER TABLE assistant_prompt_nodes
+        ADD CONSTRAINT ck_apn_category CHECK (category IN ('root','governance','intent','domain','workflow','tool_guard','renderer','memory','model_routing','context'))
+    """,
     "CREATE INDEX IF NOT EXISTS idx_apn_tree_phase ON assistant_prompt_nodes(tree_path, phase, status)",
     """
     CREATE TABLE IF NOT EXISTS assistant_prompt_sources (
