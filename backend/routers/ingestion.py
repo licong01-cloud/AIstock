@@ -17,6 +17,8 @@ from ..db.pg_pool import get_conn
 from ..ingestion.tdx_scheduler import scheduler  # 1:1 复用现有调度器实现
 from ..services.tushare_dataset_specs import DATASET_REGISTRY
 from ..services.tushare_sync_engine import TushareSyncEngine
+from ..services.trading_calendar_status import TradingCalendarStatusService
+from ..services.trading_core.errors import DataUnavailableError
 
 
 router = APIRouter(prefix="/api", tags=["ingestion"])
@@ -62,6 +64,29 @@ def _uses_refresh_audit_cursor(extra_info: Any) -> bool:
     if not isinstance(info, dict):
         return False
     return str(info.get("cursor_source") or "").strip().lower() in {"refresh_audit", "audit"}
+
+
+def _trading_calendar_service() -> TradingCalendarStatusService:
+    return TradingCalendarStatusService()
+
+
+def _latest_trading_day_on_or_before(as_of_date: Optional[dt.date] = None) -> Optional[dt.date]:
+    return _trading_calendar_service().latest_trading_day_on_or_before(as_of_date or dt.date.today())
+
+
+def _next_trading_day_after(anchor_date: dt.date) -> dt.date:
+    return _trading_calendar_service().next_trading_day(anchor_date)
+
+
+def _raise_trading_calendar_unavailable(exc: DataUnavailableError) -> None:
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error_code": exc.error_code,
+            "message": exc.message,
+            "context": exc.context,
+        },
+    ) from exc
 
 
 def _isoformat(value: Optional[dt.datetime]) -> Optional[str]:
@@ -2574,15 +2599,10 @@ def get_ingestion_auto_range(
     if use_calendar_dates:
         latest_date: Optional[dt.date] = dt.date.today()
     else:
-        latest_rows = _fetchall(
-            """
-            SELECT MAX(cal_date) AS latest
-              FROM market.trading_calendar
-             WHERE is_trading = TRUE
-               AND cal_date <= CURRENT_DATE
-            """,
-        )
-        latest_date = latest_rows[0].get("latest") if latest_rows else None
+        try:
+            latest_date = _latest_trading_day_on_or_before()
+        except DataUnavailableError as exc:
+            _raise_trading_calendar_unavailable(exc)
         if latest_date is None:
             raise HTTPException(status_code=400, detail="no trading_calendar rows; please sync calendar first")
 
@@ -2605,17 +2625,10 @@ def get_ingestion_auto_range(
         elif use_calendar_dates:
             start_date = current_max_date + dt.timedelta(days=1)
         else:
-            next_rows = _fetchall(
-                """
-                SELECT MIN(cal_date) AS next_trading
-                  FROM market.trading_calendar
-                 WHERE is_trading = TRUE
-                   AND cal_date > %s
-                """,
-                (current_max_date,),
-            )
-            next_trading: Optional[dt.date] = next_rows[0].get("next_trading") if next_rows else None
-            start_date = latest_date if next_trading is None else next_trading
+            try:
+                start_date = _next_trading_day_after(current_max_date)
+            except DataUnavailableError as exc:
+                _raise_trading_calendar_unavailable(exc)
         has_data = True
 
     return {

@@ -1,0 +1,109 @@
+{
+  "actual": "stk_limit and margin_detail still iterate natural-day windows in Local Data ingestion. Non-trading dates such as 2026-05-23/2026-05-24 for stk_limit and 2026-05-01 through 2026-05-05 for margin_detail returned 0 rows and were persisted as failed empty_invalid audit rows.",
+  "allowed_write_scope": [
+    "backend/services/tushare_dataset_specs.py",
+    "backend/services/tushare_sync_engine.py",
+    "backend/routers/ingestion.py",
+    "backend/services/trading_calendar_status.py",
+    "backend/tests/test_tushare_sync_engine.py",
+    "backend/tests/ingestion",
+    "tests/aistock_validation/history/local_data_management",
+    "backend/ingestion/tdx_scheduler.py",
+    "backend/tests/paper_trading_v2/test_trading_calendar_status.py",
+    "tests/aistock_validation/bugs/20260525_BUG-118-local-data-tushare-trade-date-datasets-still-sync-natural-days-after-glo.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-118",
+  "closed_at": null,
+  "closure_requirements": [
+    "stk_limit and margin_detail no longer create failed batches/audit rows for weekends or exchange holidays in incremental BY_DATE sync.",
+    "daily_basic, adj_factor, bak_basic, stk_limit, and margin_detail have a documented trading-day date policy.",
+    "Local Data Tushare sync and scheduler paths consume one canonical trading-day policy/service, or an explicitly justified adapter around it, instead of relying on omitted per-dataset flags.",
+    "Calendar-day/event datasets keep their intended natural-day semantics and valid empty-row behavior.",
+    "Existing same-day trading-date empty results that indicate upstream data not yet published remain fail-fast where appropriate; the fix must not blanket-mark all 0-row results as success.",
+    "BUG JSON and GitHub Issue stay synchronized before fix work starts and before closure."
+  ],
+  "created_at": "2026-05-25T05:25:03.364908Z",
+  "description": "stk_limit and margin_detail still iterate natural-day windows in Local Data ingestion. Non-trading dates such as 2026-05-23/2026-05-24 for stk_limit and 2026-05-01 through 2026-05-05 for margin_detail returned 0 rows and were persisted as failed empty_invalid audit rows.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260525-efef8e982adb",
+      "timestamp": "2026-05-25T05:25:03.364903Z"
+    },
+    {
+      "timestamp": "2026-05-25T05:25:36Z",
+      "actor": "codex-app",
+      "action": "triage_metadata_enriched",
+      "note": "Added explicit Local Data calendar-policy scope, verification, non-goals, and BUG-116 linkage after rebuilding local BUG JSON from linked GitHub issue #201."
+    }
+  ],
+  "evidence_uris": [
+    "file:backend/services/tushare_sync_engine.py:499",
+    "file:backend/services/tushare_sync_engine.py:823",
+    "file:backend/services/tushare_dataset_specs.py:45",
+    "file:backend/services/tushare_dataset_specs.py:238",
+    "file:backend/services/tushare_dataset_specs.py:289",
+    "db:market.dataset_date_refresh_audit non-trading failed rows since 2026-05-01: margin_detail=7, stk_limit=6",
+    "github:https://github.com/licong01-cloud/AIstock/issues/187"
+  ],
+  "expected": "BY_DATE trade_date market datasets derive sync ranges from the canonical trading calendar service/policy; non-trading days are skipped or explicitly treated as non-target dates; Local Data job counters and audit records are grouped by trading dates where appropriate.",
+  "first_seen_at": "2026-05-25T05:25:03.364908Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 201,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/201",
+  "last_seen_at": "2026-05-25T05:25:03.364908Z",
+  "module": "local_data_management",
+  "non_goals": [
+    "Do not execute the code fix as part of issue registration.",
+    "Do not repair or rewrite historical dataset_date_refresh_audit rows without separate approval.",
+    "Do not apply DB DDL or schema migrations unless a later fix plan explicitly requires and approves them.",
+    "Do not restart production runtime services 8001/3000 without explicit approval.",
+    "Do not weaken fail-fast behavior for true trading-day data publication delays or genuine empty-invalid results."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "rg -n 'trading_day_only|_date_sequence_for_by_date|ZERO_ROW_VALID_DATASETS|TradingCalendarStatusService|market.trading_calendar' backend/services/tushare_dataset_specs.py backend/services/tushare_sync_engine.py backend/ingestion/tdx_scheduler.py backend/routers/ingestion.py -S",
+  "required_verification": [
+    "Unit tests prove stk_limit and margin_detail skip weekend/holiday dates when syncing a BY_DATE range.",
+    "Regression check proves daily_basic, adj_factor, bak_basic, stk_limit, and margin_detail are explicitly classified as trading-day datasets or covered by an equivalent central policy.",
+    "Regression check proves stock_st_events/calendar-day event datasets and suspend_d special refresh behavior are not silently reclassified as normal trade_date datasets.",
+    "Scheduler/auto-range tests prove Local Data uses the canonical trading-day policy/service instead of drifting per-path SQL or natural-day iteration for trade_date datasets.",
+    "Read-only DB audit query after fix confirms new non-trading-day empty_invalid failures are not produced for stk_limit or margin_detail.",
+    "Run targeted backend tests for Tushare sync engine and ingestion scheduler; report production_ddl_gate, production_frontend_dependency_gate, production_backend_dependency_gate."
+  ],
+  "risk_area": "local_data_trading_calendar_policy",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "backend/services/tushare_dataset_specs.py",
+    "backend/services/tushare_sync_engine.py",
+    "backend/ingestion/tdx_scheduler.py",
+    "backend/routers/ingestion.py",
+    "backend/services/trading_calendar_status.py"
+  ],
+  "title": "Local Data Tushare trade-date datasets still sync natural days after global trading calendar service",
+  "trigger_condition": {
+    "fingerprint": "efef8e982adb79ef86ebc8b2",
+    "source_event_id": "FE-20260525-efef8e982adb"
+  },
+  "verification_run_id": null,
+  "related_issues": [
+    "BUG-116",
+    "https://github.com/licong01-cloud/AIstock/issues/187"
+  ],
+  "custom_github_labels": [
+    "bug",
+    "aistock:bug",
+    "P1",
+    "severity:p1",
+    "status:open",
+    "data-freshness",
+    "risk:data_freshness_policy"
+  ]
+}
