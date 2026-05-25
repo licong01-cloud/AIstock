@@ -2,7 +2,6 @@
 
 import json
 from pathlib import Path
-from typing import Any
 
 import scripts.code_intelligence_adapter as adapter
 
