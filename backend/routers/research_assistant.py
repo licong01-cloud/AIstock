@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 from typing import Any
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from backend.services.research_assistant.models import (
+    ActionProposalApprovalRequest,
+    ActionProposalCreate,
+    ActionProposalDecisionRequest,
+    ActionProposalExecuteRequest,
+    ActionProposalPreflightRequest,
     ApprovalCreate,
+    CapabilitySyncRequest,
     ChatTurnRequest,
     ContextPackBuildRequest,
     EvolutionPathCreate,
@@ -48,7 +55,7 @@ class MemoryStatusRequest(BaseModel):
     confirmation_text: str | None = None
 
 
-class ApprovalDecisionRequest(BaseModel):
+class ApprovalDecisionRequestBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     confirmation_text: str = ""
@@ -143,7 +150,7 @@ def list_tasks(
     status: str | None = Query(None),
     task_type: str | None = Query(None),
     search: str | None = Query(None),
-    limit: int = Query(50, ge=1, le=500),
+    limit: int | None = Query(None, ge=1),
     offset: int = Query(0, ge=0),
     service: ResearchAssistantService = Depends(get_research_assistant_service),
 ) -> ResearchAssistantResponse:
@@ -185,18 +192,102 @@ def get_conversation(conversation_id: str, service: ResearchAssistantService = D
         raise _map_error(exc) from exc
 
 
+@router.get("/conversations/{conversation_id}/messages", response_model=ResearchAssistantResponse)
+def list_conversation_messages(
+    conversation_id: str,
+    limit: int | None = Query(None, ge=1),
+    offset: int = Query(0, ge=0),
+    service: ResearchAssistantService = Depends(get_research_assistant_service),
+) -> ResearchAssistantResponse:
+    try:
+        return _success(service.list_records("conversation_messages", filters={"conversation_id": conversation_id}, limit=limit, offset=offset))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
 @router.get("/prompt-nodes", response_model=ResearchAssistantResponse)
 def list_prompt_nodes(
     phase: str | None = Query(None),
     category: str | None = Query(None),
     status: str | None = Query(None),
     search: str | None = Query(None),
-    limit: int = Query(100, ge=1, le=500),
+    limit: int | None = Query(None, ge=1),
     offset: int = Query(0, ge=0),
     service: ResearchAssistantService = Depends(get_research_assistant_service),
 ) -> ResearchAssistantResponse:
     try:
         return _success(service.list_records("prompt_nodes", filters={"phase": phase, "category": category, "status": status}, search=search, limit=limit, offset=offset))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.get("/prompt-activations", response_model=ResearchAssistantResponse)
+def list_prompt_activations(
+    environment: str | None = Query(None),
+    status: str | None = Query(None),
+    limit: int | None = Query(None, ge=1),
+    offset: int = Query(0, ge=0),
+    service: ResearchAssistantService = Depends(get_research_assistant_service),
+) -> ResearchAssistantResponse:
+    try:
+        return _success(service.list_records("prompt_activations", filters={"environment": environment, "status": status}, limit=limit, offset=offset))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.get("/runtime-config/activations", response_model=ResearchAssistantResponse)
+def list_runtime_config_activations(
+    environment: str | None = Query(None),
+    status: str | None = Query(None),
+    limit: int | None = Query(None, ge=1),
+    offset: int = Query(0, ge=0),
+    service: ResearchAssistantService = Depends(get_research_assistant_service),
+) -> ResearchAssistantResponse:
+    try:
+        return _success(service.list_records("runtime_config_activations", filters={"environment": environment, "status": status}, limit=limit, offset=offset))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.get("/context-segments", response_model=ResearchAssistantResponse)
+def list_context_segments(
+    conversation_id: str | None = Query(None),
+    status: str | None = Query(None),
+    limit: int | None = Query(None, ge=1),
+    offset: int = Query(0, ge=0),
+    service: ResearchAssistantService = Depends(get_research_assistant_service),
+) -> ResearchAssistantResponse:
+    try:
+        return _success(service.list_records("context_segments", filters={"conversation_id": conversation_id, "status": status}, limit=limit, offset=offset))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.get("/context-key-facts", response_model=ResearchAssistantResponse)
+def list_context_key_facts(
+    conversation_id: str | None = Query(None),
+    status: str | None = Query(None),
+    limit: int | None = Query(None, ge=1),
+    offset: int = Query(0, ge=0),
+    service: ResearchAssistantService = Depends(get_research_assistant_service),
+) -> ResearchAssistantResponse:
+    try:
+        return _success(service.list_records("context_key_facts", filters={"conversation_id": conversation_id, "status": status}, limit=limit, offset=offset))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.get("/context-assembly-traces", response_model=ResearchAssistantResponse)
+def list_context_assembly_traces(
+    conversation_id: str | None = Query(None),
+    task_id: str | None = Query(None),
+    status: str | None = Query(None),
+    limit: int | None = Query(None, ge=1),
+    offset: int = Query(0, ge=0),
+    service: ResearchAssistantService = Depends(get_research_assistant_service),
+) -> ResearchAssistantResponse:
+    try:
+        return _success(service.list_records("context_assembly_traces", filters={"conversation_id": conversation_id, "task_id": task_id, "status": status}, limit=limit, offset=offset))
     except Exception as exc:
         raise _map_error(exc) from exc
 
@@ -214,7 +305,7 @@ def list_prompt_bundles(
     task_id: str | None = Query(None),
     conversation_id: str | None = Query(None),
     phase: str | None = Query(None),
-    limit: int = Query(50, ge=1, le=500),
+    limit: int | None = Query(None, ge=1),
     offset: int = Query(0, ge=0),
     service: ResearchAssistantService = Depends(get_research_assistant_service),
 ) -> ResearchAssistantResponse:
@@ -229,7 +320,7 @@ def list_prompt_bundles(
 @router.get("/tasks/{task_id}/events", response_model=ResearchAssistantResponse)
 def list_task_events(
     task_id: str,
-    limit: int = Query(200, ge=1, le=500),
+    limit: int | None = Query(None, ge=1),
     offset: int = Query(0, ge=0),
     service: ResearchAssistantService = Depends(get_research_assistant_service),
 ) -> ResearchAssistantResponse:
@@ -252,7 +343,7 @@ def list_memories(
     memory_type: str | None = Query(None),
     approval_status: str | None = Query(None),
     search: str | None = Query(None),
-    limit: int = Query(50, ge=1, le=500),
+    limit: int | None = Query(None, ge=1),
     offset: int = Query(0, ge=0),
     service: ResearchAssistantService = Depends(get_research_assistant_service),
 ) -> ResearchAssistantResponse:
@@ -282,7 +373,7 @@ def build_context_pack(request: ContextPackBuildRequest, service: ResearchAssist
 def list_context_packs(
     task_id: str | None = Query(None),
     agent_id: str | None = Query(None),
-    limit: int = Query(50, ge=1, le=500),
+    limit: int | None = Query(None, ge=1),
     offset: int = Query(0, ge=0),
     service: ResearchAssistantService = Depends(get_research_assistant_service),
 ) -> ResearchAssistantResponse:
@@ -316,7 +407,7 @@ def list_graph_entities(
     entity_type: str | None = Query(None),
     approval_status: str | None = Query(None),
     search: str | None = Query(None),
-    limit: int = Query(50, ge=1, le=500),
+    limit: int | None = Query(None, ge=1),
     offset: int = Query(0, ge=0),
     service: ResearchAssistantService = Depends(get_research_assistant_service),
 ) -> ResearchAssistantResponse:
@@ -348,7 +439,7 @@ def list_graph_relations(
     target_entity_id: str | None = Query(None),
     relation_type: str | None = Query(None),
     search: str | None = Query(None),
-    limit: int = Query(50, ge=1, le=500),
+    limit: int | None = Query(None, ge=1),
     offset: int = Query(0, ge=0),
     service: ResearchAssistantService = Depends(get_research_assistant_service),
 ) -> ResearchAssistantResponse:
@@ -378,7 +469,7 @@ def create_evolution_path(request: EvolutionPathCreate, service: ResearchAssista
 def list_evolution_paths(
     stream_id: str | None = Query(None),
     search: str | None = Query(None),
-    limit: int = Query(50, ge=1, le=500),
+    limit: int | None = Query(None, ge=1),
     offset: int = Query(0, ge=0),
     service: ResearchAssistantService = Depends(get_research_assistant_service),
 ) -> ResearchAssistantResponse:
@@ -399,7 +490,7 @@ def get_evolution_path(path_id: str, service: ResearchAssistantService = Depends
 def list_skills(
     status: str | None = Query(None),
     search: str | None = Query(None),
-    limit: int = Query(100, ge=1, le=500),
+    limit: int | None = Query(None, ge=1),
     offset: int = Query(0, ge=0),
     service: ResearchAssistantService = Depends(get_research_assistant_service),
 ) -> ResearchAssistantResponse:
@@ -440,7 +531,7 @@ def list_skill_usage_events(
     skill_key: str | None = Query(None),
     task_id: str | None = Query(None),
     status: str | None = Query(None),
-    limit: int = Query(50, ge=1, le=500),
+    limit: int | None = Query(None, ge=1),
     offset: int = Query(0, ge=0),
     service: ResearchAssistantService = Depends(get_research_assistant_service),
 ) -> ResearchAssistantResponse:
@@ -452,7 +543,7 @@ def list_skill_usage_events(
 @router.get("/mcp/servers", response_model=ResearchAssistantResponse)
 def list_mcp_servers(service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
     try:
-        return _success(service.list_records("mcp_servers", limit=200))
+        return _success(service.list_records("mcp_servers", limit_key="router_mcp_servers"))
     except Exception as exc:
         raise _map_error(exc) from exc
 
@@ -462,12 +553,115 @@ def list_mcp_tools(
     server_key: str | None = Query(None),
     risk_level: str | None = Query(None),
     search: str | None = Query(None),
-    limit: int = Query(100, ge=1, le=500),
+    limit: int | None = Query(None, ge=1),
     offset: int = Query(0, ge=0),
     service: ResearchAssistantService = Depends(get_research_assistant_service),
 ) -> ResearchAssistantResponse:
     try:
         return _success(service.list_records("mcp_tools", filters={"server_key": server_key, "risk_level": risk_level}, search=search, limit=limit, offset=offset))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+
+@router.get("/capabilities", response_model=ResearchAssistantResponse)
+def list_capabilities(
+    status: str | None = Query(None),
+    risk_level: str | None = Query(None),
+    search: str | None = Query(None),
+    limit: int | None = Query(None, ge=1),
+    offset: int = Query(0, ge=0),
+    service: ResearchAssistantService = Depends(get_research_assistant_service),
+) -> ResearchAssistantResponse:
+    try:
+        return _success(service.list_records("capabilities", filters={"status": status, "risk_level": risk_level}, search=search, limit=limit, offset=offset))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.post("/capabilities/sync", response_model=ResearchAssistantResponse)
+def sync_capabilities(request: CapabilitySyncRequest, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
+    try:
+        return _success(service.sync_capabilities(request))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.post("/actions/propose", response_model=ResearchAssistantResponse)
+def create_action_proposal(request: ActionProposalCreate, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
+    try:
+        return _success(service.create_action_proposal(request))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.get("/actions", response_model=ResearchAssistantResponse)
+def list_action_proposals(
+    task_id: str | None = Query(None),
+    capability_key: str | None = Query(None),
+    status: str | None = Query(None),
+    limit: int | None = Query(None, ge=1),
+    offset: int = Query(0, ge=0),
+    service: ResearchAssistantService = Depends(get_research_assistant_service),
+) -> ResearchAssistantResponse:
+    try:
+        return _success(service.list_records("action_proposals", filters={"task_id": task_id, "capability_key": capability_key, "status": status}, limit=limit, offset=offset))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.get("/actions/{action_proposal_id}", response_model=ResearchAssistantResponse)
+def get_action_proposal(action_proposal_id: str, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
+    try:
+        return _success(service.get_action_proposal(action_proposal_id))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.get("/actions/{action_proposal_id}/events", response_model=ResearchAssistantResponse)
+def get_action_proposal_events(action_proposal_id: str, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
+    try:
+        return _success(service.action_proposal_events(action_proposal_id))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.post("/actions/{action_proposal_id}/confirm", response_model=ResearchAssistantResponse)
+def confirm_action_proposal(action_proposal_id: str, request: ActionProposalDecisionRequest, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
+    try:
+        return _success(service.confirm_action_proposal(action_proposal_id, request))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.post("/actions/{action_proposal_id}/reject", response_model=ResearchAssistantResponse)
+def reject_action_proposal(action_proposal_id: str, request: ActionProposalDecisionRequest, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
+    try:
+        return _success(service.reject_action_proposal(action_proposal_id, request))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.post("/actions/{action_proposal_id}/preflight", response_model=ResearchAssistantResponse)
+def preflight_action_proposal(action_proposal_id: str, request: ActionProposalPreflightRequest, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
+    try:
+        return _success(service.preflight_action_proposal(action_proposal_id, request))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.post("/actions/{action_proposal_id}/approve", response_model=ResearchAssistantResponse)
+def approve_action_proposal(action_proposal_id: str, request: ActionProposalApprovalRequest, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
+    try:
+        return _success(service.approve_action_proposal(action_proposal_id, request))
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.post("/actions/{action_proposal_id}/execute", response_model=ResearchAssistantResponse)
+def execute_action_proposal(action_proposal_id: str, request: ActionProposalExecuteRequest, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
+    try:
+        return _success(service.execute_action_proposal(action_proposal_id, request))
     except Exception as exc:
         raise _map_error(exc) from exc
 
@@ -496,7 +690,7 @@ def list_mcp_tool_events(
     server_key: str | None = Query(None),
     tool_name: str | None = Query(None),
     status: str | None = Query(None),
-    limit: int = Query(50, ge=1, le=500),
+    limit: int | None = Query(None, ge=1),
     offset: int = Query(0, ge=0),
     service: ResearchAssistantService = Depends(get_research_assistant_service),
 ) -> ResearchAssistantResponse:
@@ -517,7 +711,7 @@ def create_approval(request: ApprovalCreate, service: ResearchAssistantService =
 def list_approvals(
     status: str | None = Query(None),
     risk_level: str | None = Query(None),
-    limit: int = Query(50, ge=1, le=500),
+    limit: int | None = Query(None, ge=1),
     offset: int = Query(0, ge=0),
     service: ResearchAssistantService = Depends(get_research_assistant_service),
 ) -> ResearchAssistantResponse:
@@ -528,7 +722,7 @@ def list_approvals(
 
 
 @router.post("/approvals/{approval_id}/approve", response_model=ResearchAssistantResponse)
-def approve(approval_id: str, request: ApprovalDecisionRequest, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
+def approve(approval_id: str, request: ApprovalDecisionRequestBody, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
     try:
         return _success(service.decide_approval(approval_id, action="approve", confirmation_text=request.confirmation_text, decided_by=request.decided_by))
     except Exception as exc:
@@ -536,7 +730,7 @@ def approve(approval_id: str, request: ApprovalDecisionRequest, service: Researc
 
 
 @router.post("/approvals/{approval_id}/reject", response_model=ResearchAssistantResponse)
-def reject(approval_id: str, request: ApprovalDecisionRequest, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
+def reject(approval_id: str, request: ApprovalDecisionRequestBody, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
     try:
         return _success(service.decide_approval(approval_id, action="reject", confirmation_text=request.confirmation_text, decided_by=request.decided_by))
     except Exception as exc:
@@ -556,7 +750,7 @@ def list_issue_candidates(
     status: str | None = Query(None),
     module: str | None = Query(None),
     search: str | None = Query(None),
-    limit: int = Query(50, ge=1, le=500),
+    limit: int | None = Query(None, ge=1),
     offset: int = Query(0, ge=0),
     service: ResearchAssistantService = Depends(get_research_assistant_service),
 ) -> ResearchAssistantResponse:
@@ -586,7 +780,7 @@ def create_external_agent_session(request: ExternalAgentSessionCreate, service: 
 def list_external_agent_sessions(
     agent_type: str | None = Query(None),
     status: str | None = Query(None),
-    limit: int = Query(50, ge=1, le=500),
+    limit: int | None = Query(None, ge=1),
     offset: int = Query(0, ge=0),
     service: ResearchAssistantService = Depends(get_research_assistant_service),
 ) -> ResearchAssistantResponse:
@@ -608,7 +802,7 @@ def create_external_agent_event(request: ExternalAgentEventCreate, service: Rese
 def list_external_agent_events(
     session_id: str | None = Query(None),
     event_type: str | None = Query(None),
-    limit: int = Query(50, ge=1, le=500),
+    limit: int | None = Query(None, ge=1),
     offset: int = Query(0, ge=0),
     service: ResearchAssistantService = Depends(get_research_assistant_service),
 ) -> ResearchAssistantResponse:
@@ -631,7 +825,7 @@ def list_trace_events(
     task_id: str | None = Query(None),
     component: str | None = Query(None),
     status: str | None = Query(None),
-    limit: int = Query(50, ge=1, le=500),
+    limit: int | None = Query(None, ge=1),
     offset: int = Query(0, ge=0),
     service: ResearchAssistantService = Depends(get_research_assistant_service),
 ) -> ResearchAssistantResponse:
@@ -644,7 +838,7 @@ def list_trace_events(
 @router.get("/models/profiles", response_model=ResearchAssistantResponse)
 def list_model_profiles(service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
     try:
-        return _success(service.list_records("model_profiles", limit=200))
+        return _success(service.list_records("model_profiles", limit_key="router_model_profiles"))
     except Exception as exc:
         raise _map_error(exc) from exc
 
@@ -652,7 +846,7 @@ def list_model_profiles(service: ResearchAssistantService = Depends(get_research
 @router.get("/models/routing-policies", response_model=ResearchAssistantResponse)
 def list_model_routing_policies(service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
     try:
-        return _success(service.list_records("routing_policies", limit=200))
+        return _success(service.list_records("routing_policies", limit_key="router_routing_policies"))
     except Exception as exc:
         raise _map_error(exc) from exc
 
@@ -685,7 +879,7 @@ def notification_summary(user_id: str = Query("default"), service: ResearchAssis
 def list_notifications(
     user_id: str = Query("default"),
     status: str | None = Query(None),
-    limit: int = Query(50, ge=1, le=500),
+    limit: int | None = Query(None, ge=1),
     offset: int = Query(0, ge=0),
     service: ResearchAssistantService = Depends(get_research_assistant_service),
 ) -> ResearchAssistantResponse:
@@ -699,7 +893,7 @@ def list_notifications(
 def list_reports(
     report_type: str | None = Query(None),
     status: str | None = Query(None),
-    limit: int = Query(50, ge=1, le=500),
+    limit: int | None = Query(None, ge=1),
     offset: int = Query(0, ge=0),
     service: ResearchAssistantService = Depends(get_research_assistant_service),
 ) -> ResearchAssistantResponse:
@@ -713,7 +907,7 @@ def list_reports(
 def list_agenda(
     namespace: str = Query("aistock"),
     status: str | None = Query(None),
-    limit: int = Query(50, ge=1, le=500),
+    limit: int | None = Query(None, ge=1),
     offset: int = Query(0, ge=0),
     service: ResearchAssistantService = Depends(get_research_assistant_service),
 ) -> ResearchAssistantResponse:

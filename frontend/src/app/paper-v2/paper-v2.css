@@ -279,6 +279,13 @@
 .ra-panel-row-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .ra-title { font-weight: 900; }
 .ra-subtitle { color: var(--pv2-muted); font-size: 12px; margin-top: 3px; }
+.ra-gate-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.ra-gate-card { border: 1px solid var(--pv2-line); border-radius: 16px; background: #fffaf1; padding: 12px; display: grid; gap: 8px; }
+.ra-gate-card p { margin: 0; color: var(--pv2-muted); font-size: 12px; line-height: 1.45; min-height: 34px; }
+.ra-gate-card button { width: 100%; }
+.ra-action-result-card { margin-top: 14px; border: 1px solid var(--pv2-line); border-radius: 18px; background: #fffaf1; padding: 16px; }
+.ra-action-result-card h3 { margin: 6px 0 8px; font-size: 18px; letter-spacing: -0.02em; }
+.ra-action-result-card p { margin: 6px 0 0; line-height: 1.55; }
 
 .ra-chat-shell {
   display: grid;
@@ -359,4 +366,5 @@
   .ra-chat-shell { grid-template-columns: 1fr; }
   .ra-chat-rail { position: static; }
   .ra-admin-grid { grid-template-columns: 1fr; }
+  .ra-gate-grid { grid-template-columns: 1fr; }
 }
