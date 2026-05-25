@@ -26,7 +26,7 @@ Use the active standard only when it is relevant to the current task:
 - `docs/standards/aistock_issue_fix_parallel_workflow_standard_20260514.md`
 - `docs/architecture/aistock_issue_workflow_opensource_cicd_design_v2_20260525.md`
 
-Do not read archived standards, old design notes, historical implementation logs, or module-specific restart plans unless the current task explicitly touches that module or the user asks for historical context.
+The current issue Context Pack, explicit user request, and relevant code paths are the default starting point. Open module design documents only when the task scope, issue evidence, or user request points to that module.
 
 ## Worktree And Branch Rules
 
@@ -41,10 +41,10 @@ Do not read archived standards, old design notes, historical implementation logs
 ## Context Budget Rules
 
 - Classify work before loading context: T0 quick fix, T1 standard issue, T2 same-module batch, T3 design or architecture work.
-- T0/T1 work must not load full memory, full standards, full designs, archived docs, or unrelated module plans by default.
-- Prefer compact context packs, issue JSON, selected standard sections, ownership catalogs, and relevant code snippets.
-- Module-specific design documents are opt-in: read them only when the current task is inside that module or the user explicitly asks.
-- Historical notes in this repository may be stale after implementation changes; verify against current code and tests before relying on them.
+- T0/T1 work starts from compact context packs, issue JSON, selected active-standard sections, ownership catalogs, and relevant code snippets.
+- Expand to full standards or design documents only when scope, risk, or explicit acceptance criteria require it.
+- Module-specific design documents are opt-in: open them only when the current task is inside that module, the issue cites them, or the user explicitly asks.
+- Treat historical notes as secondary evidence; verify against current code and tests before relying on them.
 
 ## Issue Workflow Rules
 
@@ -67,6 +67,7 @@ Do not read archived standards, old design notes, historical implementation logs
 
 - Do not restart production backend `8001`, frontend `3000`, TDX `19080`, or other production services unless the user explicitly asks.
 - Do not write production DB data or apply DDL without explicit approval.
+- Local validation ports are owned by `noxfile.py`, environment variables, and the active standard; use the workflow-provided defaults instead of hardcoding ad hoc ports here.
 - Runtime activation and code merge are separate steps.
 - Every completion report must state:
   - `production_ddl_gate`: `noop`, `applied_and_verified`, or `pending`.
