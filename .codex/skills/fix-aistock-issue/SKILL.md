@@ -14,6 +14,8 @@ English trigger example: `fix BUG-112 according to AIstock standards; do not mer
 - Start from latest `origin/main` in an isolated worktree and task branch; do not develop in the production root checkout.
 - Run `python scripts/aistock_issue_workflow.py doctor` before manual exploration.
 - Use `scripts/aistock_issue_workflow.py` as the high-level entrypoint and `scripts/issue_flow.py` only as a lower-level helper.
+- Do not write BUG JSON or allocator changes in the canonical root checkout. If registering a BUG, use a clean task/registry worktree/branch or the wrapper will block `submit-bug --apply`.
+- After validation passes, do not stop at `validation_passed`; commit task files, push the task branch, and create the PR when the user requested PR-ready workflow.
 - Do not merge to `main` unless the user explicitly asks for merge.
 - Do not touch production runtime services, write production DB, or apply DDL without explicit approval.
 - Preserve per-issue evidence even when batching same-module issues.
@@ -24,8 +26,8 @@ English trigger example: `fix BUG-112 according to AIstock standards; do not mer
 1. Health-check the environment:
    `python scripts/aistock_issue_workflow.py doctor`
 2. If the user asks to submit/register a new BUG, run:
-   `python scripts/aistock_issue_workflow.py submit-bug --title "<title>" --module <module> --severity P1 --description "<description>" --create-github --apply`
-   If the command cannot create or link GitHub Issue, stop before committing any BUG JSON.
+   `python scripts/aistock_issue_workflow.py submit-bug --title "<title>" --module <module> --severity P1 --description "<description>" --create-github --create-registry-worktree --apply`
+   If the command cannot create or link GitHub Issue, or if the registry guard says the target is canonical root/main/dirty, stop before committing any BUG JSON. Continue only from a clean issue/registry worktree.
 3. If the user names an existing BUG, run:
    `python scripts/aistock_issue_workflow.py run --bug-id BUG-XXX --mode plan --create-worktree`
    Compatibility fallback:
@@ -39,8 +41,9 @@ English trigger example: `fix BUG-112 according to AIstock standards; do not mer
 8. Run every required validation plan.
 9. Re-run `finish` or `run --mode pr` with `--validation-evidence` entries for the commands/results that passed.
 10. Commit only the task files. If the user requested automated PR flow and validation evidence exists, run `python scripts/aistock_issue_workflow.py run --bug-id BUG-XXX --mode pr --validation-evidence "<command> -> passed" --push --create-pr`.
-11. Stop before merge unless the user explicitly requested merge.
-12. After an approved merge, run:
+11. If PR automation reports canonical-root/main blocking, switch to the returned issue worktree and resume there. Never push/create PR from root main.
+12. Stop before merge unless the user explicitly requested merge.
+13. After an approved merge, run:
     `python scripts/aistock_issue_workflow.py close-sync --bug-id BUG-XXX --pr-url <PR_URL>`
     Then align BUG JSON and GitHub Issue status through the approved sync channel.
 
