@@ -23,9 +23,10 @@ from backend.services.research_assistant.models import (
     TraceEventCreate,
     WorkbenchDryRunExecuteRequest,
 )
-from backend.services.research_assistant.repository import DatabaseResearchAssistantRepository, InMemoryResearchAssistantRepository
+from backend.services.research_assistant.repository import DatabaseResearchAssistantRepository, InMemoryResearchAssistantRepository, TABLES
 from backend.services.research_assistant.service import (
     ASSISTANT_APPROVAL_CONFIRM,
+    FORBIDDEN_UNDEVELOPED_CAPABILITY_PHRASES,
     LlmCallResult,
     ResearchAssistantCatalogNotReadyError,
     ResearchAssistantService,
@@ -44,6 +45,43 @@ class FakeLlmClient:
             model="fake-primary",
             duration_ms=12,
             usage={"prompt_tokens": 100, "completion_tokens": 40},
+        )
+
+
+class PromptTooLongOnceLlmClient(FakeLlmClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failed_once = False
+
+    def complete(self, **kwargs: object) -> LlmCallResult:
+        self.calls.append(kwargs)
+        contents = "\n".join(str(message.get("content", "")) for message in kwargs.get("messages", []))  # type: ignore[union-attr]
+        is_main_call = "Context Pack 摘要" in contents
+        is_recovery_call = "上一次模型调用因为上下文过长" in contents
+        if is_main_call and not is_recovery_call and not self.failed_once:
+            self.failed_once = True
+            raise RuntimeError("prompt_too_long")
+        return LlmCallResult(
+            content="已在自动压缩后继续本轮回答，不需要用户重复背景。",
+            provider="fake",
+            model="fake-primary",
+            duration_ms=13,
+            usage={"prompt_tokens": 90, "completion_tokens": 35},
+        )
+
+
+class MainPromptTooLongLlmClient(FakeLlmClient):
+    def complete(self, **kwargs: object) -> LlmCallResult:
+        self.calls.append(kwargs)
+        contents = "\n".join(str(message.get("content", "")) for message in kwargs.get("messages", []))  # type: ignore[union-attr]
+        if "Context Pack 摘要" in contents:
+            raise RuntimeError("context_length_exceeded")
+        return LlmCallResult(
+            content="结构化摘要和关键事实提取成功。",
+            provider="fake",
+            model="fake-primary",
+            duration_ms=11,
+            usage={"prompt_tokens": 80, "completion_tokens": 30},
         )
 
 
@@ -345,7 +383,75 @@ def test_prompt_tree_selects_qe_multibranch_and_records_bundle() -> None:
     assert "tool_guard.mcp_qe" in keys
     assert "renderer.human_cards" in keys
     assert bundle["selection_trace_json"]["algorithm"] == "ancestor_closed_keyword_multibranch_v1"
+    assert bundle["activation_id"]
+    assert bundle["version_refs"]
+    assert bundle["selection_trace_json"]["prompt_activation_id"] == bundle["activation_id"]
     assert bundle["cache_path"]
+
+
+def test_bug117_prompt_and_health_do_not_expose_undeveloped_capability_bans() -> None:
+    svc = _chat_service()
+
+    root = svc.repository.find_one("prompt_nodes", {"prompt_key": "root.assistant", "status": "enabled"})
+    assert root is not None
+    root_text = str(root["prompt_text"])
+    for phrase in FORBIDDEN_UNDEVELOPED_CAPABILITY_PHRASES:
+        assert phrase not in root_text
+
+    health = svc.health()
+    serialized = str(health)
+    assert "mouse_keyboard_control" not in serialized
+    assert "code_write" not in serialized
+    assert health["implemented_capabilities"]["mcp_api_preflight"] is True
+    assert health["governance_boundaries"]["formal_github_issue_requires_approval"] is True
+
+
+def test_runtime_config_declares_api_list_limit_for_each_catalog() -> None:
+    svc = _service()
+
+    limits = svc.active_runtime_config()["query_limits"]
+    missing = sorted(f"api_list_{kind}" for kind in TABLES if f"api_list_{kind}" not in limits)
+
+    assert missing == []
+
+
+def test_runtime_config_controls_api_page_defaults_and_max() -> None:
+    svc = _service()
+    activation = svc.active_runtime_config_activation()
+    config = dict(activation["config_json"])
+    config["query_limits"] = dict(config["query_limits"])
+    config["query_limits"]["api_list_skills"] = 2
+    config["query_limits"]["api_list_max_page_size"] = 3
+    config["query_limits"]["router_mcp_servers"] = 1
+    svc.repository.update_record("runtime_config_activations", activation["activation_id"], {"config_json": config})
+
+    skills = svc.list_records("skills")
+    assert skills["page_size"] == 2
+    assert len(skills["items"]) == 2
+
+    mcp_servers = svc.list_records("mcp_servers", limit_key="router_mcp_servers")
+    assert mcp_servers["page_size"] == 1
+
+    with pytest.raises(ValueError, match="api_list_max_page_size"):
+        svc.list_records("skills", limit=4)
+    with pytest.raises(ValueError, match="limit must be positive"):
+        svc.list_records("skills", limit=0)
+
+
+def test_context_pack_token_budget_max_is_runtime_config_driven() -> None:
+    svc = _service()
+    activation = svc.active_runtime_config_activation()
+    config = dict(activation["config_json"])
+    config["query_limits"] = dict(config["query_limits"])
+    config["query_limits"]["context_pack_max_token_budget"] = 9
+    svc.repository.update_record("runtime_config_activations", activation["activation_id"], {"config_json": config})
+    task = svc.create_task(TaskCreate(title="context pack budget gate"))
+
+    with pytest.raises(ValueError, match="context_pack_max_token_budget"):
+        svc.build_context_pack(ContextPackBuildRequest(task_id=task["task_id"], token_budget=10))
+
+    pack = svc.build_context_pack(ContextPackBuildRequest(task_id=task["task_id"], token_budget=9))
+    assert pack["token_budget"] == 9
 
 
 def test_chat_turn_uses_llm_builds_cards_and_blocks_execution() -> None:
@@ -359,10 +465,22 @@ def test_chat_turn_uses_llm_builds_cards_and_blocks_execution() -> None:
     assert result["cards"]["plan_card"]["title"] == "本轮计划"
     assert "固定 PIT 股票池" in "\n".join(result["cards"]["plan_card"]["steps"])
     assert result["cards"]["clarification_card"]["questions"]
+    capability_keys = {item["capability_key"] for item in result["cards"]["capability_cards"]}
+    assert {"qe.create_experiment_draft", "qe.validate_template", "qe.run_experiment"} <= capability_keys
+    assert result["cards"]["missing_capability_keys"] == []
     assert result["cards"]["status_rail"][3] == {"label": "等待确认", "status": "current"}
     assert result["cards"]["safety"]["no_materialize_before_confirmation"] is True
     assert result["trace"]["status"] == "ok"
     assert result["prompt_bundle"]["selection_trace_json"]["algorithm"] == "ancestor_closed_keyword_multibranch_v1"
+    assert result["prompt_bundle"]["activation_id"]
+    assert result["context_pack"]["pack_summary"].startswith("Context Pack:")
+    assert fake.calls[0]["temperature"] == svc.active_runtime_config()["compaction"]["worker"]["temperature"]
+    assert fake.calls[0]["max_tokens"] == svc.active_runtime_config()["budget"]["response"]["max_tokens"]
+    assert result["context_health"]["show_badge"] is True
+    assert result["cards"]["context_health"]["config_driven"] is True
+    traces = svc.list_records("context_assembly_traces", filters={"conversation_id": result["conversation"]["conversation_id"]})
+    assert traces["total"] == 1
+    assert traces["items"][0]["runtime_config_activation_id"]
     event_types = {event["event_type"] for event in result["task_events"]}
     assert {"chat_received", "prompt_bundle_built", "context_pack_built", "llm_started", "llm_done", "action_proposed"} <= event_types
 
@@ -546,3 +664,148 @@ def test_chat_history_token_budget_drops_oldest_first() -> None:
     all_content = " ".join(str(m["content"]) for m in messages)
     assert "最新的消息" in all_content
     assert "当前消息" in all_content
+
+
+def test_long_chat_auto_compacts_with_key_facts_and_fresh_tail() -> None:
+    fake = FakeLlmClient()
+    svc = _chat_service(fake)
+    activation = svc.active_runtime_config_activation()
+    config = dict(activation["config_json"])
+    config["model_context"]["fallback_context_window_tokens"] = 10000
+    config["model_context"]["safety_buffer"]["ratio"] = 0.01
+    config["model_context"]["safety_buffer"]["min_tokens"] = 1
+    config["budget"]["response"]["reserved_ratio"] = 0.01
+    config["budget"]["response"]["min_reserved_tokens"] = 1
+    config["budget"]["response"]["max_tokens"] = 64
+    config["budget"]["context_pack"]["min_tokens"] = 1
+    config["history_fetch"]["page_size"] = 10
+    config["history_fetch"]["max_pages"] = 2
+    config["fresh_tail"]["min_messages"] = 1
+    config["compaction"]["trigger"]["min_turns_before_compaction"] = 1
+    config["compaction"]["trigger"]["min_messages_before_compaction"] = 2
+    config["compaction"]["trigger"]["proactive_utilization_ratio"] = 0.05
+    config["compaction"]["trigger"]["mandatory_utilization_ratio"] = 0.10
+    config["compaction"]["worker"]["max_output_ratio"] = 0.10
+    svc.repository.update_record("runtime_config_activations", activation["activation_id"], {"config_json": config})
+
+    conv_id = "conv_compact_001"
+    svc.repository.create_record("conversations", {
+        "conversation_id": conv_id,
+        "title": "compact test",
+        "user_id": "default",
+        "status": "active",
+    })
+    for idx in range(4):
+        svc.repository.create_record("conversation_messages", {
+            "message_id": f"msg_compact_{idx}",
+            "conversation_id": conv_id,
+            "role": "user" if idx % 2 == 0 else "assistant",
+            "content_text": f"历史消息 {idx}: " + ("重要参数A " * 80),
+        })
+
+    svc.chat_turn(ChatTurnRequest(message="继续刚才的重要参数A", conversation_id=conv_id))
+
+    assert len(fake.calls) == 3
+    assert fake.calls[0]["max_tokens"] == int((10000 - 100 - 100) * config["compaction"]["worker"]["max_output_ratio"])
+    segments = svc.list_records("context_segments", filters={"conversation_id": conv_id, "status": "active"})
+    facts = svc.list_records("context_key_facts", filters={"conversation_id": conv_id, "status": "active"})
+    traces = svc.list_records("context_assembly_traces", filters={"conversation_id": conv_id})
+    assert segments["total"] == 1
+    assert facts["total"] == 1
+    assert facts["items"][0]["fact_type"] == "key_fact_block"
+    assert facts["items"][0]["fact_json"]["prompt_key"] == "context.compaction.key_fact_extraction"
+    assert traces["total"] == 1
+    final_messages = fake.calls[-1]["messages"]
+    final_content = " ".join(str(m["content"]) for m in final_messages)
+    assert "QE 10 loop" in final_content
+    assert "3:" in final_content
+
+
+def test_reactive_context_overflow_compacts_and_retries_without_user_interruption() -> None:
+    fake = PromptTooLongOnceLlmClient()
+    svc = _chat_service(fake)
+    activation = svc.active_runtime_config_activation()
+    config = dict(activation["config_json"])
+    config["fresh_tail"]["min_messages"] = 1
+    config["compaction"]["trigger"]["min_turns_before_compaction"] = 1
+    config["compaction"]["trigger"]["min_messages_before_compaction"] = 2
+    config["compaction"]["worker"]["max_retries"] = 2
+    svc.repository.update_record("runtime_config_activations", activation["activation_id"], {"config_json": config})
+
+    conv_id = "conv_reactive_001"
+    svc.repository.create_record("conversations", {
+        "conversation_id": conv_id,
+        "title": "reactive compact test",
+        "user_id": "default",
+        "status": "active",
+    })
+    for idx in range(3):
+        svc.repository.create_record("conversation_messages", {
+            "message_id": f"msg_reactive_{idx}",
+            "conversation_id": conv_id,
+            "role": "user" if idx % 2 == 0 else "assistant",
+            "content_text": f"待保留关键上下文 {idx}: 用户已确认参数和风险边界。",
+        })
+
+    result = svc.chat_turn(ChatTurnRequest(message="继续，不要让我重复背景", conversation_id=conv_id))
+
+    assert fake.failed_once is True
+    assert result["assistant_message"]["content_text"].startswith("已在自动压缩后继续")
+    segments = svc.list_records("context_segments", filters={"conversation_id": conv_id, "status": "active"})
+    facts = svc.list_records("context_key_facts", filters={"conversation_id": conv_id, "status": "active"})
+    traces = svc.list_records("context_assembly_traces", filters={"conversation_id": conv_id})
+    assert segments["total"] == 1
+    assert facts["total"] == 1
+    assert traces["total"] == 2
+    assert {item["status"] for item in traces["items"]} == {"ok", "retry_after_compaction"}
+    retry_messages = fake.calls[-1]["messages"]
+    assert any("上一次模型调用因为上下文过长" in str(message["content"]) for message in retry_messages)
+
+
+def test_model_routing_uses_runtime_config_long_context_threshold() -> None:
+    svc = _service()
+    activation = svc.active_runtime_config_activation()
+    config = dict(activation["config_json"])
+    config["model_routing"]["long_context_trigger_tokens"] = 10
+    svc.repository.update_record("runtime_config_activations", activation["activation_id"], {"config_json": config})
+
+    route = svc.route_model(ModelRouteRequest(role="primary_reasoner", risk_level="medium", token_estimate=11))
+
+    assert route["policy"]["policy_id"] == "route_long_context_medium"
+    assert route["route_status"] == "fallback_selected"
+    assert route["model_profile"]["model_profile_id"] == "model_deepseek_v4_pro_primary"
+
+
+def test_high_risk_reactive_overflow_fail_fast_after_configured_retries() -> None:
+    fake = MainPromptTooLongLlmClient()
+    svc = _chat_service(fake)
+    activation = svc.active_runtime_config_activation()
+    config = dict(activation["config_json"])
+    config["fresh_tail"]["min_messages"] = 1
+    config["compaction"]["trigger"]["min_turns_before_compaction"] = 1
+    config["compaction"]["trigger"]["min_messages_before_compaction"] = 2
+    config["compaction"]["worker"]["max_retries"] = 1
+    svc.repository.update_record("runtime_config_activations", activation["activation_id"], {"config_json": config})
+
+    conv_id = "conv_fail_fast_001"
+    svc.repository.create_record("conversations", {
+        "conversation_id": conv_id,
+        "title": "fail fast compact test",
+        "user_id": "default",
+        "status": "active",
+    })
+    for idx in range(3):
+        svc.repository.create_record("conversation_messages", {
+            "message_id": f"msg_fail_fast_{idx}",
+            "conversation_id": conv_id,
+            "role": "user",
+            "content_text": f"高风险上下文 {idx}: 保留审批状态和风险边界。",
+        })
+
+    with pytest.raises(RuntimeError, match="High-risk Research Assistant task stopped"):
+        svc.chat_turn(ChatTurnRequest(message="高风险继续执行前检查", conversation_id=conv_id, risk_level="high"))
+
+    segments = svc.list_records("context_segments", filters={"conversation_id": conv_id, "status": "active"})
+    traces = svc.list_records("trace_events", filters={"status": "context_overflow_fail_fast"})
+    assert segments["total"] == 1
+    assert traces["total"] == 1

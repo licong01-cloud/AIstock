@@ -69,6 +69,8 @@ python scripts/aistock_issue_workflow.py doctor
 
 `doctor` checks the repo, GitHub CLI fallback, MCP/Codex config hints, repo/global skill presence, Claude Code command presence, canonical root cleanliness, and active standard/design files. It returns `workflow_gate=ready|warning|blocked`.
 
+Warnings about a dirty canonical root are not permission to write there. They mean root sync/cleanup must stop until the unrelated work is resolved. New issue registration and fixes should continue only in a clean task or registry worktree.
+
 ## Submit Or Register A New BUG
 
 When the user asks to register a new BUG, do not hand-write a local-only BUG JSON. Use the high-level submit command so the developer client creates the same candidate and BUG record format:
@@ -81,10 +83,21 @@ python scripts/aistock_issue_workflow.py submit-bug `
   --description "<observed problem>" `
   --reproduce-command "<command or n/a>" `
   --create-github `
+  --create-registry-worktree `
   --apply
 ```
 
 `--apply` requires GitHub linkage. Either pass `--create-github` so the command uses `gh issue create`, or supply both `--github-issue-number` and `--github-issue-url`. If GitHub is unavailable, keep the output as a draft and do not commit BUG JSON.
+
+`submit-bug --apply` also enforces a registry guard:
+
+- it refuses the canonical root checkout
+- it refuses `main`
+- it refuses a dirty registry target
+- it can create a clean registry worktree with `--create-registry-worktree`
+- it writes BUG JSON, allocator, candidate, and workflow state under the selected clean task/registry worktree
+
+If a client is launched from `F:\Dev\AIstock`, first create or switch to a clean task/registry worktree. Do not use root `main` for BUG JSON writes.
 
 ## Start Or Plan A Single BUG Fix
 
@@ -148,6 +161,8 @@ python scripts\aistock_issue_workflow.py run --bug-id BUG-XXX --mode pr --valida
 ```
 
 Add `--watch-ci` only when the user asked the agent to watch GitHub checks.
+
+Do not stop at `validation_passed`. That state means required local evidence exists, but the work is not PR-ready yet. Commit only task files, then run the PR command from the issue worktree. The wrapper blocks PR automation from canonical root or `main` so accidental root pollution cannot become a PR.
 
 ## Close And Sync After Merge
 

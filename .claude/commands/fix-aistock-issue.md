@@ -17,10 +17,12 @@ If `doctor` reports `workflow_gate=blocked`, stop and report the blocking items.
 For a new BUG report, create the GitHub-linked BUG record through the orchestrator instead of hand-writing JSON:
 
 ```powershell
-python F:\Dev\AIstock\scripts\aistock_issue_workflow.py submit-bug --title "<title>" --module <module> --severity P1 --description "<description>" --create-github --apply
+python F:\Dev\AIstock\scripts\aistock_issue_workflow.py submit-bug --title "<title>" --module <module> --severity P1 --description "<description>" --create-github --create-registry-worktree --apply
 ```
 
 If GitHub linkage cannot be created or supplied with `--github-issue-number` plus `--github-issue-url`, stop before committing BUG JSON.
+
+`submit-bug --apply` must run from a clean task/registry worktree and branch, not from the canonical root checkout or `main`. If the registry guard blocks the command, create or switch to an isolated registry worktree and retry there; do not bypass this in normal Claude Code workflows.
 
 ## Single BUG workflow
 
@@ -65,9 +67,12 @@ python scripts\aistock_issue_workflow.py run --bug-id BUG-XXX --mode pr --valida
 
 Use `tmp/issue_workflow/<BUG>/pr-body.md` as the PR body. If the user requested automation and validation evidence exists, add `--push --create-pr`; add `--watch-ci` only when explicitly asked to monitor CI.
 
+Do not stop at `validation_passed`. Commit only task files, then run the `run --mode pr --push --create-pr` command from the issue worktree. PR automation intentionally blocks canonical-root/main execution.
+
 ## Guardrails
 
 - Do not merge to `main` unless the user explicitly asked for merge.
+- Do not write BUG JSON or allocator changes in canonical root/main; use a clean issue or registry worktree.
 - Do not touch production backend `8001`, frontend `3000`, production DB, or DDL without explicit approval.
 - Keep BUG JSON and GitHub Issue linkage intact.
 - Preserve per-issue evidence when batching; use `start-batch` and `finish-batch` only for same-module, same-risk, same-validation BUG groups.

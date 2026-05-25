@@ -94,11 +94,57 @@ export type AssistantMcpTool = JsonObject & {
   tool_name: string;
   title?: string;
   risk_level?: string;
+  side_effect_level?: string;
   requires_approval?: boolean;
   input_schema_json?: JsonObject;
   preflight_schema_json?: JsonObject;
   required_confirmations?: string[];
   status?: string;
+};
+
+export type AssistantCapability = JsonObject & {
+  capability_id: string;
+  capability_key: string;
+  capability_type?: string;
+  title?: string;
+  description_for_llm?: string;
+  risk_level?: string;
+  side_effect_level?: string;
+  required_confirmations?: string[];
+  input_slots?: JsonObject;
+  output_cards?: string[];
+  mcp_tool_refs?: JsonObject[];
+  skill_refs?: string[];
+  status?: string;
+  checksum?: string;
+};
+
+export type AssistantActionProposal = JsonObject & {
+  action_proposal_id: string;
+  task_id?: string;
+  capability_key?: string;
+  proposal_type?: string;
+  title?: string;
+  summary?: string;
+  risk_level?: string;
+  side_effect_level?: string;
+  input_json?: JsonObject;
+  expected_result_json?: JsonObject;
+  plan_digest?: string;
+  approval_id?: string | null;
+  status?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type AssistantActionProposalResult = JsonObject & {
+  status?: string;
+  executed?: boolean;
+  proposal?: AssistantActionProposal;
+  tool_event?: JsonObject;
+  trace_id?: string;
+  human_cards?: JsonObject[];
+  error?: JsonObject;
 };
 
 export type AssistantSkill = JsonObject & {
@@ -281,6 +327,7 @@ export type AssistantChatTurnResult = JsonObject & {
   task_events?: AssistantTaskEvent[];
   prompt_bundle?: AssistantPromptBundle;
   context_pack?: JsonObject;
+  context_health?: JsonObject;
   trace?: JsonObject;
   cards?: JsonObject;
 };
@@ -454,6 +501,39 @@ export const researchAssistantApi = {
   },
   mcpTools(params: { server_key?: string; risk_level?: string; search?: string; limit?: number; offset?: number } = {}): Promise<AssistantPage<AssistantMcpTool>> {
     return unwrap<AssistantPage<AssistantMcpTool>>(appendQuery("/research-assistant/mcp/tools", { limit: 100, ...params }));
+  },
+  capabilities(params: { status?: string; risk_level?: string; search?: string; limit?: number; offset?: number } = {}): Promise<AssistantPage<AssistantCapability>> {
+    return unwrap<AssistantPage<AssistantCapability>>(appendQuery("/research-assistant/capabilities", { limit: 100, ...params }));
+  },
+  syncCapabilities(payload: JsonObject): Promise<JsonObject> {
+    return post<JsonObject>("/research-assistant/capabilities/sync", payload);
+  },
+  actionProposals(params: { task_id?: string; capability_key?: string; status?: string; limit?: number; offset?: number } = {}): Promise<AssistantPage<AssistantActionProposal>> {
+    return unwrap<AssistantPage<AssistantActionProposal>>(appendQuery("/research-assistant/actions", { limit: 100, ...params }));
+  },
+  createActionProposal(payload: JsonObject): Promise<AssistantActionProposal> {
+    return post<AssistantActionProposal>("/research-assistant/actions/propose", payload);
+  },
+  actionProposal(actionProposalId: string): Promise<JsonObject> {
+    return unwrap<JsonObject>(`/research-assistant/actions/${encodeURIComponent(actionProposalId)}`);
+  },
+  actionProposalEvents(actionProposalId: string): Promise<JsonObject> {
+    return unwrap<JsonObject>(`/research-assistant/actions/${encodeURIComponent(actionProposalId)}/events`);
+  },
+  confirmActionProposal(actionProposalId: string, payload: JsonObject): Promise<AssistantActionProposal> {
+    return post<AssistantActionProposal>(`/research-assistant/actions/${encodeURIComponent(actionProposalId)}/confirm`, payload);
+  },
+  rejectActionProposal(actionProposalId: string, payload: JsonObject): Promise<AssistantActionProposal> {
+    return post<AssistantActionProposal>(`/research-assistant/actions/${encodeURIComponent(actionProposalId)}/reject`, payload);
+  },
+  preflightActionProposal(actionProposalId: string, payload: JsonObject): Promise<JsonObject> {
+    return post<JsonObject>(`/research-assistant/actions/${encodeURIComponent(actionProposalId)}/preflight`, payload);
+  },
+  approveActionProposal(actionProposalId: string, payload: JsonObject): Promise<JsonObject> {
+    return post<JsonObject>(`/research-assistant/actions/${encodeURIComponent(actionProposalId)}/approve`, payload);
+  },
+  executeActionProposal(actionProposalId: string, payload: JsonObject): Promise<AssistantActionProposalResult> {
+    return post<AssistantActionProposalResult>(`/research-assistant/actions/${encodeURIComponent(actionProposalId)}/execute`, payload);
   },
   preflightMcpTool(payload: JsonObject): Promise<JsonObject> {
     return post<JsonObject>("/research-assistant/mcp/preflight", payload);
