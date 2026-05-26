@@ -20,6 +20,7 @@ from .callback_urls import build_aistock_callback_url
 from .experiment_config import DEFAULT_LABEL_HORIZON, normalize_label_horizon, normalize_qe_random_seed
 from .runtime_contract import build_qe_minute_runtime_contract, merge_qe_minute_runtime_contract
 from .seed_contract import ensure_loop_fixed_seed
+from .payload_summary import compact_loop_row, compact_task_row
 from .node_execution import (
     normalize_node_parallelism,
     preflight_qe_node,
@@ -1124,7 +1125,7 @@ class AutoEvolutionScheduler:
 
         # S2: 计算 consecutive_same_action（只统计当前 task 的 loops，不含 inherited）
         consecutive_same_action = {"action_type": None, "count": 0, "recent_ic_deltas": []}
-        current_loops = [l for l in loops if not l.get("inherited")]
+        current_loops = [loop_entry for loop_entry in loops if not loop_entry.get("inherited")]
         if current_loops:
             last_action = current_loops[-1]["action_type"]
             consecutive = 0
@@ -1696,7 +1697,6 @@ class AutoEvolutionScheduler:
             factor_list = config.get("factor_list", [])
             validation = self.validate_factor_availability(factor_list)
             if validation["has_issues"]:
-                removed = validation["deleted_factors"] + validation["unavailable_factors"]
                 # 严格模式：因子不可用时暂停任务，不静默移除
                 logger.error(
                     f"Loop {loop_index} 因子可用性检查失败。"
@@ -1805,7 +1805,7 @@ class AutoEvolutionScheduler:
         # 检查任务类型：策略演进走简化流程
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT task_type, base_experiment_id FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
+                cur.execute("SELECT task_type, base_experiment_id, label_horizon FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
                 task_row = cur.fetchone()
 
         if task_row and task_row.get("task_type") in ("strategy_evo", "custom_evo"):
@@ -1986,8 +1986,8 @@ class AutoEvolutionScheduler:
                 sota_config = self._get_sota_loop_config(task_id)
                 if sota_config:
                     logger.info(
-                        f"SOTA 回滚: 当前轮非 SOTA，回滚到 SOTA 配置为基础继续演进。"
-                        f"因子保护由 importance-based 机制管理。"
+                        "SOTA 回滚: 当前轮非 SOTA，回滚到 SOTA 配置为基础继续演进。"
+                        "因子保护由 importance-based 机制管理。"
                     )
                     config = sota_config
                     # 更新 factor_names 以匹配回滚后的配置
@@ -2124,7 +2124,7 @@ class AutoEvolutionScheduler:
                     next_config[key] = config[key]
             next_config = self._enforce_config_label_horizon(
                 next_config,
-                task.get("label_horizon"),
+                (task_row or {}).get("label_horizon"),
                 context=f"{task_id}/Loop{loop_index}.reviewer",
             )
 
@@ -2459,11 +2459,22 @@ class AutoEvolutionScheduler:
                     raise RuntimeError(f"Failed to mark loop/task as failed: {db_err}") from db_err
                 return
 
-    async def get_all_tasks(self) -> List[Dict[str, Any]]:
+    async def get_all_tasks(self, detail: str = "summary") -> List[Dict[str, Any]]:
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT * FROM qe_evolution_tasks ORDER BY created_at DESC")
-                return [dict(row) for row in cur.fetchall()]
+                if detail == "full":
+                    cur.execute("SELECT * FROM qe_evolution_tasks ORDER BY created_at DESC")
+                else:
+                    cur.execute("""
+                        SELECT task_id, task_name, target_desc, max_loops, current_loop,
+                               status, base_experiment_id, node_id, label_horizon,
+                               task_type, source_type, strategy_id, execution_algo,
+                               strategy_evo_execution_mode, created_at, updated_at
+                        FROM qe_evolution_tasks
+                        ORDER BY created_at DESC
+                    """)
+                rows = [dict(row) for row in cur.fetchall()]
+        return rows if detail == "full" else [compact_task_row(row) for row in rows]
 
     async def resume_task(self, task_id: str, additional_loops: int = 0, force_full_train: bool = False) -> dict:
         """
@@ -2705,15 +2716,62 @@ class AutoEvolutionScheduler:
         )
         return new_task_id
 
-    async def get_task_detail(self, task_id: str) -> Optional[Dict[str, Any]]:
+    async def get_task_detail(self, task_id: str, detail: str = "summary") -> Optional[Dict[str, Any]]:
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT * FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
+                if detail == "full":
+                    cur.execute("SELECT * FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
+                else:
+                    cur.execute("""
+                        SELECT task_id, task_name, target_desc, max_loops, current_loop,
+                               status, base_experiment_id, node_id, label_horizon,
+                               task_type, source_type, strategy_id, strategy_params,
+                               execution_algo, execution_algo_params, unfilled_handler,
+                               unfilled_handler_params, strategy_evo_execution_mode,
+                               created_at, updated_at
+                        FROM qe_evolution_tasks WHERE task_id = %s
+                    """, (task_id,))
                 task = cur.fetchone()
                 if not task:
                     return None
 
-                cur.execute("SELECT * FROM qe_evolution_loops WHERE task_id = %s ORDER BY loop_index ASC", (task_id,))
+                if detail == "full":
+                    cur.execute("SELECT * FROM qe_evolution_loops WHERE task_id = %s ORDER BY loop_index ASC", (task_id,))
+                else:
+                    cur.execute("""
+                        SELECT loop_id, task_id, loop_index, action_type,
+                               config_json->'factor_list' AS factor_list,
+                               config_json->'factor_names' AS factor_names,
+                               config_json->>'model_id' AS model_id,
+                               config_json->>'strategy_id' AS strategy_id,
+                               config_json->>'label_horizon' AS label_horizon,
+                               config_json->>'execution_algo' AS execution_algo,
+                               metrics_json->>'IC' AS ic,
+                               metrics_json->>'ICIR' AS icir,
+                               COALESCE(metrics_json->>'Rank_IC', metrics_json->>'Rank IC') AS rank_ic,
+                               COALESCE(metrics_json->>'Rank_ICIR', metrics_json->>'Rank ICIR') AS rank_icir,
+                               COALESCE(
+                                   metrics_json->>'annualized_return',
+                                   metrics_json->>'excess_return_with_cost_annualized',
+                                   metrics_json#>>'{summary,annualized_return}'
+                               ) AS annualized_return,
+                               COALESCE(
+                                   metrics_json->>'max_drawdown',
+                                   metrics_json->>'excess_return_with_cost_max_drawdown',
+                                   metrics_json#>>'{summary,max_drawdown}'
+                               ) AS max_drawdown,
+                               COALESCE(
+                                   metrics_json->>'information_ratio',
+                                   metrics_json->>'sharpe',
+                                   metrics_json->>'excess_return_with_cost_IR',
+                                   metrics_json#>>'{summary,information_ratio}'
+                               ) AS information_ratio,
+                               is_sota, status,
+                               node_id, experiment_id, created_at, updated_at
+                        FROM qe_evolution_loops
+                        WHERE task_id = %s
+                        ORDER BY loop_index ASC
+                    """, (task_id,))
                 loops = cur.fetchall()
 
                 result = dict(task)
@@ -2814,20 +2872,98 @@ class AutoEvolutionScheduler:
                 result['status'] = new_task_status
                 logger.info(f"[get_task_detail] auto-synced task {task_id} -> {new_task_status}")
 
-        try:
-            from .blacklist_snapshot import enrich_blacklist_snapshot_for_display
-            for loop_data in result.get("loops", []):
-                config_json = loop_data.get("config_json")
-                if not isinstance(config_json, dict):
-                    continue
-                model_params = config_json.get("model_params")
-                if isinstance(model_params, dict):
-                    config_json["model_params"] = enrich_blacklist_snapshot_for_display(model_params)
-                else:
-                    config_json["model_params"] = enrich_blacklist_snapshot_for_display(config_json)
-        except Exception as e:
-            raise RuntimeError(f"演进 Loop 行业黑名单快照解析失败: {e}") from e
+        if detail == "full":
+            try:
+                from .blacklist_snapshot import enrich_blacklist_snapshot_for_display
+                for loop_data in result.get("loops", []):
+                    config_json = loop_data.get("config_json")
+                    if not isinstance(config_json, dict):
+                        continue
+                    model_params = config_json.get("model_params")
+                    if isinstance(model_params, dict):
+                        config_json["model_params"] = enrich_blacklist_snapshot_for_display(model_params)
+                    else:
+                        config_json["model_params"] = enrich_blacklist_snapshot_for_display(config_json)
+            except Exception as e:
+                raise RuntimeError(f"演进 Loop 行业黑名单快照解析失败: {e}") from e
+        else:
+            result["loops"] = [compact_loop_row(loop_data) for loop_data in result.get("loops", [])]
+            result["detail"] = "summary"
 
+        return result
+
+    def get_loop_comparison(self, task_id: str) -> Optional[Dict[str, Any]]:
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT task_id, task_name, status, max_loops, current_loop, created_at, updated_at
+                    FROM qe_evolution_tasks
+                    WHERE task_id = %s
+                """, (task_id,))
+                task = cur.fetchone()
+                if not task:
+                    return None
+                cur.execute("""
+                    SELECT loop_id, task_id, loop_index, action_type,
+                           config_json->'factor_list' AS factor_list,
+                           config_json->'factor_names' AS factor_names,
+                           config_json->>'model_id' AS model_id,
+                           config_json->>'strategy_id' AS strategy_id,
+                           config_json->>'label_horizon' AS label_horizon,
+                           config_json->>'execution_algo' AS execution_algo,
+                           metrics_json->>'IC' AS ic,
+                           metrics_json->>'ICIR' AS icir,
+                           COALESCE(metrics_json->>'Rank_IC', metrics_json->>'Rank IC') AS rank_ic,
+                           COALESCE(metrics_json->>'Rank_ICIR', metrics_json->>'Rank ICIR') AS rank_icir,
+                           COALESCE(
+                               metrics_json->>'annualized_return',
+                               metrics_json->>'excess_return_with_cost_annualized',
+                               metrics_json#>>'{summary,annualized_return}'
+                           ) AS annualized_return,
+                           COALESCE(
+                               metrics_json->>'max_drawdown',
+                               metrics_json->>'excess_return_with_cost_max_drawdown',
+                               metrics_json#>>'{summary,max_drawdown}'
+                           ) AS max_drawdown,
+                           COALESCE(
+                               metrics_json->>'information_ratio',
+                               metrics_json->>'sharpe',
+                               metrics_json->>'excess_return_with_cost_IR',
+                               metrics_json#>>'{summary,information_ratio}'
+                           ) AS information_ratio,
+                           is_sota, status,
+                           node_id, experiment_id, created_at, updated_at
+                    FROM qe_evolution_loops
+                    WHERE task_id = %s
+                    ORDER BY loop_index ASC
+                """, (task_id,))
+                loops = [compact_loop_row(dict(row)) for row in cur.fetchall()]
+        result = compact_task_row(dict(task))
+        result["loops"] = loops
+        result["detail"] = "comparison"
+        return result
+
+    def get_loop_payload(self, task_id: str, loop_index: int, payload: str) -> Optional[Dict[str, Any]]:
+        if payload not in {"config", "metrics", "analysis"}:
+            raise ValueError(f"Unsupported loop payload: {payload}")
+        projection = {
+            "config": "config_json",
+            "metrics": "metrics_json",
+            "analysis": "agent_analysis",
+        }[payload]
+        sql = (
+            "SELECT loop_id, task_id, loop_index, status, action_type, "
+            + projection
+            + " FROM qe_evolution_loops WHERE task_id = %s AND loop_index = %s"
+        )
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(sql, (task_id, loop_index))
+                row = cur.fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        result["payload_type"] = payload
         return result
         
     async def stop_task(self, task_id: str) -> dict:
@@ -4200,9 +4336,6 @@ class AutoEvolutionScheduler:
             base_config["model_params"] = dict(source_config.get("model_params", {}))
             base_config["model_params"].update(strategy_params)
 
-        execution_algo = loop_config.get("execution_algo")
-        execution_algo_params = loop_config.get("execution_algo_params", {})
-
         evolution_loop_db_id = f"{task_id}_Loop{loop_index}"
         loop_id = f"Loop{loop_index}"
 
@@ -5455,7 +5588,6 @@ class AutoEvolutionScheduler:
         from .executors.backtest import BacktestExecutor, BacktestMode
         from .executors.base import ExecutionContext
         from .config_composer import ConfigComposer
-        from .qe_workspace_client import QEWorkspaceClient
 
         evolution_loop_db_id = f"{task_id}_Loop{loop_index}"
         loop_id = f"Loop{loop_index}"

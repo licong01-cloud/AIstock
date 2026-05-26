@@ -403,7 +403,7 @@ export default function ComposePage() {
     if (!priorExpId) return;
     setInheritLoading(true);
     try {
-      const res = await fetch(`${API}/quantevolver/experiments/${priorExpId}`);
+      const res = await fetch(`${API}/quantevolver/experiments/${priorExpId}?detail=full`);
       const d = await res.json();
       if (!d.ok) { alert("获取实验详情失败"); setInheritLoading(false); return; }
       const exp = d.experiment || d;
@@ -835,7 +835,7 @@ export default function ComposePage() {
           onClick={() => {
             setInheritExpanded(!inheritExpanded);
             if (!inheritExpanded && priorExperiments.length === 0) {
-              fetch(`${API}/quantevolver/experiments?limit=20`)
+              fetch(`${API}/quantevolver/experiments?limit=20&detail=summary`)
                 .then(r => r.json())
                 .then(d => { if (d.ok || d.items) setPriorExperiments(d.items || []); })
                 .catch(() => {});

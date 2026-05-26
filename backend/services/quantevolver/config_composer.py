@@ -14,12 +14,10 @@ import json
 import logging
 import os
 import re
-import uuid
 import hashlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import httpx
 
 from ...db.pg_pool import get_conn
 from ..strategy_package.workspace_policy import (
@@ -28,6 +26,7 @@ from ..strategy_package.workspace_policy import (
 )
 from .experiment_config import apply_qe_seed_to_model_params, ensure_qe_risk_policy, normalize_label_horizon
 from .runtime_contract import merge_qe_minute_runtime_contract
+from .payload_summary import compact_experiment_row
 
 logger = logging.getLogger("aistock.quantevolver.config_composer")
 
@@ -1837,16 +1836,21 @@ class ConfigComposer:
             for i, line in enumerate(lines):
                 stripped = line.strip()
                 if not stripped:
-                    insert_pos = i + 1; continue
+                    insert_pos = i + 1
+                    continue
                 if stripped.startswith("#"):
-                    insert_pos = i + 1; continue
+                    insert_pos = i + 1
+                    continue
                 if '"""' in stripped or "'''" in stripped:
                     in_docstring = not in_docstring
-                    insert_pos = i + 1; continue
+                    insert_pos = i + 1
+                    continue
                 if in_docstring:
-                    insert_pos = i + 1; continue
+                    insert_pos = i + 1
+                    continue
                 if stripped.startswith("import ") or stripped.startswith("from "):
-                    insert_pos = i + 1; continue
+                    insert_pos = i + 1
+                    continue
                 break
             for imp in import_lines:
                 lines.insert(insert_pos, imp)
@@ -1928,35 +1932,54 @@ class ConfigComposer:
         limit: int = 50,
         offset: int = 0,
         include_children: bool = False,
+        detail: str = "summary",
     ) -> Dict[str, Any]:
-        """获取实验列表。"""
+        """获取实验列表；默认只返回适合列表/MCP 使用的标量摘要。"""
         if include_children:
-            return self._list_experiment_history(limit=limit, offset=offset)
+            return self._list_experiment_history(limit=limit, offset=offset, detail=detail)
 
+        full_detail = detail == "full"
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT COUNT(*) FROM qe_experiments")
                 total = cur.fetchone()[0]
 
-                cur.execute("""
-                    SELECT experiment_id, experiment_name, status,
-                           factor_names, model_id, strategy_id,
-                           workspace_path, wsl_command,
-                           result_metrics, qe_task_id, qe_loop_id,
-                           loop_index, parent_experiment_id, is_evolution_loop,
-                           ic, icir, rank_ic, rank_icir,
-                           annualized_return, max_drawdown, information_ratio,
-                           annualized_return_no_cost, max_drawdown_no_cost, information_ratio_no_cost,
-                           created_at, updated_at, custom_params,
-                           alpha_mode, multi_alpha_config, parent_multi_alpha_id
-                    FROM qe_experiments
-                    ORDER BY created_at DESC
-                    LIMIT %s OFFSET %s
-                """, (limit, offset))
+                if full_detail:
+                    cur.execute("""
+                        SELECT experiment_id, experiment_name, status,
+                               factor_names, model_id, strategy_id,
+                               workspace_path, wsl_command,
+                               result_metrics, qe_task_id, qe_loop_id,
+                               loop_index, parent_experiment_id, is_evolution_loop,
+                               ic, icir, rank_ic, rank_icir,
+                               annualized_return, max_drawdown, information_ratio,
+                               annualized_return_no_cost, max_drawdown_no_cost, information_ratio_no_cost,
+                               created_at, updated_at, custom_params,
+                               alpha_mode, multi_alpha_config, parent_multi_alpha_id
+                        FROM qe_experiments
+                        ORDER BY created_at DESC
+                        LIMIT %s OFFSET %s
+                    """, (limit, offset))
+                else:
+                    cur.execute("""
+                        SELECT experiment_id, experiment_name, status,
+                               factor_names, model_id, strategy_id,
+                               qe_task_id, qe_loop_id,
+                               loop_index, parent_experiment_id, is_evolution_loop,
+                               ic, icir, rank_ic, rank_icir,
+                               annualized_return, max_drawdown, information_ratio,
+                               annualized_return_no_cost, max_drawdown_no_cost, information_ratio_no_cost,
+                               created_at, updated_at,
+                               alpha_mode, parent_multi_alpha_id
+                        FROM qe_experiments
+                        ORDER BY created_at DESC
+                        LIMIT %s OFFSET %s
+                    """, (limit, offset))
                 cols = [desc[0] for desc in cur.description]
                 rows = [dict(zip(cols, row)) for row in cur.fetchall()]
 
-        return {"ok": True, "total": total, "items": rows}
+        items = rows if full_detail else [compact_experiment_row(row) for row in rows]
+        return {"ok": True, "total": total, "items": items, "detail": "full" if full_detail else "summary"}
 
     @staticmethod
     def _normalize_history_parent_ids(
@@ -1982,6 +2005,7 @@ class ConfigComposer:
         self,
         limit: int = 50,
         offset: int = 0,
+        detail: str = "summary",
     ) -> Dict[str, Any]:
         """Return paged top-level QE history rows plus their evolution loops.
 
@@ -2026,8 +2050,22 @@ class ConfigComposer:
                 if not parent_ids:
                     return {"ok": True, "total": total, "items": []}
 
-                cur.execute("""
-                    SELECT e.experiment_id, e.experiment_name, e.status,
+                select_fields = """
+                           e.experiment_id, e.experiment_name, e.status,
+                           e.factor_names, e.model_id, e.strategy_id,
+                           e.qe_task_id, e.qe_loop_id,
+                           e.loop_index, e.parent_experiment_id, e.is_evolution_loop,
+                           e.ic, e.icir, e.rank_ic, e.rank_icir,
+                           e.annualized_return, e.max_drawdown, e.information_ratio,
+                           e.annualized_return_no_cost, e.max_drawdown_no_cost, e.information_ratio_no_cost,
+                           e.created_at, e.updated_at,
+                           e.alpha_mode, e.parent_multi_alpha_id,
+                           et.base_experiment_id AS _evolution_base_experiment_id,
+                           et.task_type AS _evolution_task_type
+                    """
+                if detail == "full":
+                    select_fields = """
+                           e.experiment_id, e.experiment_name, e.status,
                            e.factor_names, e.model_id, e.strategy_id,
                            e.workspace_path, e.wsl_command,
                            e.result_metrics, e.qe_task_id, e.qe_loop_id,
@@ -2039,6 +2077,10 @@ class ConfigComposer:
                            e.alpha_mode, e.multi_alpha_config, e.parent_multi_alpha_id,
                            et.base_experiment_id AS _evolution_base_experiment_id,
                            et.task_type AS _evolution_task_type
+                    """
+
+                cur.execute(f"""
+                    SELECT {select_fields}
                     FROM qe_experiments e
                     LEFT JOIN qe_evolution_tasks et
                       ON et.task_id = e.qe_task_id
@@ -2055,6 +2097,8 @@ class ConfigComposer:
                 rows = [dict(zip(cols, row)) for row in cur.fetchall()]
 
         normalized = self._normalize_history_parent_ids(rows, set(parent_ids))
+        if detail != "full":
+            normalized = [compact_experiment_row(row) for row in normalized]
         # Preserve parent page order, then place child loops under each parent.
         order = {experiment_id: idx for idx, experiment_id in enumerate(parent_ids)}
         normalized.sort(
@@ -2065,15 +2109,33 @@ class ConfigComposer:
                 str(exp.get("created_at") or ""),
             )
         )
-        return {"ok": True, "total": total, "items": normalized}
+        return {"ok": True, "total": total, "items": normalized, "detail": "full" if detail == "full" else "summary"}
 
-    def get_experiment_detail(self, experiment_id: str) -> Dict[str, Any]:
-        """获取实验详情。"""
+    def get_experiment_detail(self, experiment_id: str, detail: str = "summary") -> Dict[str, Any]:
+        """获取实验详情；默认排除 result_metrics 等大 JSONB。"""
+        full_detail = detail == "full"
         with get_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT * FROM qe_experiments WHERE experiment_id = %s
-                """, (experiment_id,))
+                if full_detail:
+                    cur.execute("""
+                        SELECT * FROM qe_experiments WHERE experiment_id = %s
+                    """, (experiment_id,))
+                else:
+                    cur.execute("""
+                        SELECT experiment_id, task_id, round_id, experiment_name, status,
+                               factor_names, model_id, strategy_id,
+                               data_split, custom_params, conf_yaml_path, workspace_path,
+                               qe_task_id, qe_loop_id, loop_index, parent_experiment_id,
+                               is_evolution_loop,
+                               ic, icir, rank_ic, rank_icir,
+                               annualized_return, max_drawdown, information_ratio,
+                               excess_return_with_cost_mean, excess_return_without_cost_mean,
+                               annualized_return_no_cost, max_drawdown_no_cost, information_ratio_no_cost,
+                               model_catalog_id, alpha_mode, multi_alpha_config, parent_multi_alpha_id,
+                               evolution_goal, llm_hypothesis, llm_feedback,
+                               created_at, started_at, completed_at
+                        FROM qe_experiments WHERE experiment_id = %s
+                    """, (experiment_id,))
                 row = cur.fetchone()
                 if not row:
                     return {"ok": False, "error": "实验不存在"}
@@ -2087,7 +2149,10 @@ class ConfigComposer:
                     experiment["custom_params"] = enrich_blacklist_snapshot_for_display(custom_params)
                 except Exception as e:
                     raise RuntimeError(f"行业黑名单快照解析失败: {e}") from e
-                return {"ok": True, "experiment": experiment}
+                if not full_detail:
+                    experiment["metrics_summary"] = compact_experiment_row(experiment).get("metrics_summary", {})
+                    experiment["result_metrics_available"] = True
+                return {"ok": True, "experiment": experiment, "detail": "full" if full_detail else "summary"}
 
     def regenerate_experiment(self, experiment_id: str) -> Dict[str, Any]:
         """重新生成实验脚本（复用同一实验ID和名称）。
@@ -2360,7 +2425,6 @@ class ConfigComposer:
         model_step_len: Optional[int] = None
 
         if model_info:
-            model_name = model_info.get("model_name", "")
             model_type = (model_info.get("model_type") or "").upper()
             code_text = model_info.get("code_text")
 
@@ -4159,7 +4223,7 @@ class ConfigComposer:
         ]
         if train_only:
             core_parts.append("export TRAIN_ONLY=1")
-        core_parts.extend([l for l in env_lines if l and not l.startswith("#")])
+        core_parts.extend([line for line in env_lines if line and not line.startswith("#")])
         core_parts.append(link_data_cmd)
         if has_custom_factors:
             core_parts.append("python prepare_factors.py")
@@ -4795,10 +4859,10 @@ model_cls = {nn_class_name}
         # 5. 检查 HMM 调用顺序：_apply_hmm_adjustment 必须在 None 检查之后
         if "_apply_hmm_adjustment" in source_code:
             lines = source_code.split("\n")
-            hmm_line = next((i for i, l in enumerate(lines) if "_apply_hmm_adjustment" in l), None)
-            none_check_line = next((i for i, l in enumerate(lines)
-                                    if ("is None" in l or "if not" in l) and
-                                    ("pred_score" in l or "all_pred_scores" in l or "scores" in l)
+            hmm_line = next((i for i, line in enumerate(lines) if "_apply_hmm_adjustment" in line), None)
+            none_check_line = next((i for i, line in enumerate(lines)
+                                    if ("is None" in line or "if not" in line) and
+                                    ("pred_score" in line or "all_pred_scores" in line or "scores" in line)
                                     and i < (hmm_line or 9999)), None)
             if hmm_line is not None and none_check_line is None:
                 result["warnings"].append(
