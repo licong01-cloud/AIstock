@@ -1,7 +1,10 @@
 {
   "allowed_write_scope": [
     "rdagent/scenarios/qlib/factor_experiment/remote_log_relay.py",
-    "frontend/src/components/multi-alpha/LogStream.tsx"
+    "frontend/src/components/multi-alpha/LogStream.tsx",
+    "backend/routers/quantevolver.py",
+    "frontend/src/app/quantevolver/components/MultiAlphaProgress.tsx",
+    "tests/aistock_validation/bugs/20260420_BUG-016-multi-alpha-ui-log-local-only.json"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-016",
