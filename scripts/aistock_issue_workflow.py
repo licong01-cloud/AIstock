@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -209,6 +210,7 @@ def _append_event(
     result: str = "ok",
     evidence: dict[str, Any] | None = None,
     root: Path | None = None,
+    duration_seconds: float | None = None,
 ) -> dict[str, Any]:
     event_payload = {
         "timestamp": _utc_now(),
@@ -218,7 +220,7 @@ def _append_event(
         "state": state,
         "command": command,
         "cwd": str((cwd or root or REPO_ROOT).resolve()),
-        "duration_seconds": None,
+        "duration_seconds": round(duration_seconds, 3) if duration_seconds is not None else None,
         "result": result,
         "evidence": evidence or {},
     }
@@ -227,6 +229,103 @@ def _append_event(
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(event_payload, ensure_ascii=False, sort_keys=True) + "\n")
     return event_payload
+
+
+def _parse_utc_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _event_phase(event: dict[str, Any]) -> str:
+    raw = str(event.get("event") or event.get("state") or "unknown")
+    if raw.startswith("state:"):
+        raw = raw.split(":", 1)[1]
+    if raw.startswith("command:"):
+        return raw.split(":", 1)[1] or "command"
+    if raw in {"active_worktree_decision"}:
+        return "active_worktree_guard"
+    return raw or "unknown"
+
+
+def _read_events(bug_id: str, root: Path | None = None) -> list[dict[str, Any]]:
+    path = _events_path(bug_id, root)
+    if not path.exists():
+        return []
+    events: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            events.append(payload)
+    return events
+
+
+def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str, Any]:
+    events = _read_events(bug_id, root)
+    events = sorted(events, key=lambda item: str(item.get("timestamp") or ""))
+    phases: dict[str, dict[str, Any]] = {}
+    previous_ts: datetime | None = None
+    started_at: str | None = None
+    ended_at: str | None = None
+    known_duration = 0.0
+    inferred_duration = 0.0
+
+    for event in events:
+        ts = _parse_utc_timestamp(str(event.get("timestamp") or ""))
+        if ts:
+            started_at = started_at or event.get("timestamp")
+            ended_at = event.get("timestamp")
+        phase = _event_phase(event)
+        bucket = phases.setdefault(
+            phase,
+            {
+                "event_count": 0,
+                "known_duration_seconds": 0.0,
+                "inferred_since_previous_seconds": 0.0,
+                "first_at": event.get("timestamp"),
+                "last_at": event.get("timestamp"),
+            },
+        )
+        bucket["event_count"] += 1
+        bucket["last_at"] = event.get("timestamp")
+        duration = event.get("duration_seconds")
+        if isinstance(duration, (int, float)):
+            bucket["known_duration_seconds"] = round(float(bucket["known_duration_seconds"]) + float(duration), 3)
+            known_duration += float(duration)
+        if ts and previous_ts:
+            delta = max(0.0, (ts - previous_ts).total_seconds())
+            bucket["inferred_since_previous_seconds"] = round(
+                float(bucket["inferred_since_previous_seconds"]) + delta,
+                3,
+            )
+            inferred_duration += delta
+        if ts:
+            previous_ts = ts
+
+    return {
+        "schema_version": "aistock_issue_workflow_timing_summary_v1",
+        "bug_id": bug_id,
+        "event_count": len(events),
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "known_duration_seconds": round(known_duration, 3),
+        "inferred_elapsed_seconds": round(inferred_duration, 3),
+        "phases": phases,
+        "code_repair_seconds": None,
+        "notes": [
+            "known_duration_seconds comes from command-level telemetry when available",
+            "inferred_elapsed_seconds is wall-clock distance between recorded events and may include human/CI wait time",
+            "code_repair_seconds is intentionally not guessed unless the agent records explicit repair events",
+        ],
+    }
 
 
 def _write_state(
@@ -1992,6 +2091,9 @@ def build_client_install_plan(*, apply: bool = False, codex_home: str | None = N
         payload["dry_run"] = False
         payload["installed"] = [{"target": str(target_skill)}]
         payload["client_manifest_after"] = _client_manifest(target_home)
+    manifest_path = REPO_ROOT / WORKFLOW_ROOT / "client-manifest.json"
+    _write_json(manifest_path, payload.get("client_manifest_after") or payload.get("client_manifest_before") or _client_manifest(target_home))
+    payload["client_manifest_path"] = _repo_rel(manifest_path)
     return payload
 
 
@@ -2041,6 +2143,97 @@ def build_resume_plan(*, bug_id: str, worktree: str | None = None, events_limit:
         "stop_conditions": ["commit task files before PR automation"] if dirty_stop else [],
         "next_command": _next_command_for_state(canonical_bug_id, state),
     }
+
+
+def build_postmortem_plan(*, bug_id: str, worktree: str | None = None, output_markdown: bool = True) -> dict[str, Any]:
+    canonical_bug_id = bug_id.strip().upper()
+    roots = [Path(worktree)] if worktree else _state_roots_for_bug(canonical_bug_id)
+    candidates = [(root, _load_state(canonical_bug_id, root)) for root in roots]
+    candidates = [(root, state) for root, state in candidates if state]
+    if not candidates:
+        raise WorkflowError(f"No workflow state found for {canonical_bug_id}; run start or run --mode plan first")
+    root, state = sorted(candidates, key=lambda item: str(item[0]))[-1]
+    events = _read_events(canonical_bug_id, root)
+    timing = _workflow_timing_summary(canonical_bug_id, root)
+    active = _active_workflows_for_bug(canonical_bug_id)
+    duplicate_active_count = max(0, len(active) - 1)
+    stale_pr_check = _stale_pr_check_for_bug(canonical_bug_id)
+    context_metrics = state.get("context_metrics") or {}
+    artifact_metrics = {}
+    finish_plan = root / WORKFLOW_ROOT / canonical_bug_id / "finish-plan.json"
+    pr_body = root / WORKFLOW_ROOT / canonical_bug_id / "pr-body.md"
+    if finish_plan.exists() or pr_body.exists():
+        artifact_metrics = {
+            "finish_plan": _size_and_token_estimate(finish_plan),
+            "pr_body": _size_and_token_estimate(pr_body),
+        }
+    payload = {
+        "schema_version": "aistock_issue_workflow_postmortem_v1",
+        "generated_at": _utc_now(),
+        "bug_id": canonical_bug_id,
+        "workflow_root": str(root),
+        "state": {
+            "state": state.get("state"),
+            "branch": state.get("branch"),
+            "worktree": state.get("worktree") or str(root),
+            "pr_url": state.get("pr_url"),
+            "commit": state.get("commit"),
+            "next_actions": state.get("next_actions") or [],
+        },
+        "timing_summary": timing,
+        "context_metrics": context_metrics,
+        "artifact_metrics": artifact_metrics,
+        "active_workflows": active,
+        "duplicate_active_count": duplicate_active_count,
+        "stale_pr_check": stale_pr_check,
+        "flow_overhead_estimate": {
+            "known_duration_seconds": timing.get("known_duration_seconds"),
+            "inferred_elapsed_seconds": timing.get("inferred_elapsed_seconds"),
+            "event_count": timing.get("event_count"),
+            "context_estimated_tokens": sum(
+                int(item.get("estimated_tokens") or 0)
+                for item in context_metrics.values()
+                if isinstance(item, dict)
+            ),
+        },
+        "production_gates": state.get("production_gates") or {},
+        "recent_events": events[-20:],
+    }
+    output_dir = root / WORKFLOW_ROOT / canonical_bug_id
+    if output_markdown:
+        lines = [
+            f"# {canonical_bug_id} Workflow Postmortem",
+            "",
+            f"- State: `{payload['state']['state']}`",
+            f"- Branch: `{payload['state']['branch'] or 'unknown'}`",
+            f"- PR: {payload['state']['pr_url'] or 'n/a'}",
+            f"- Events: `{timing.get('event_count')}`",
+            f"- Known command duration: `{timing.get('known_duration_seconds')}s`",
+            f"- Inferred elapsed duration: `{timing.get('inferred_elapsed_seconds')}s`",
+            f"- Duplicate active workflows: `{duplicate_active_count}`",
+            "",
+            "## Phase Timing",
+            "",
+            "| Phase | Events | Known seconds | Inferred seconds |",
+            "| --- | ---: | ---: | ---: |",
+        ]
+        for phase, item in sorted((timing.get("phases") or {}).items()):
+            lines.append(
+                f"| `{phase}` | {item.get('event_count')} | {item.get('known_duration_seconds')} | {item.get('inferred_since_previous_seconds')} |"
+            )
+        lines.extend(
+            [
+                "",
+                "## Production Gates",
+                "",
+                *[f"- {key}: `{value}`" for key, value in sorted((payload.get("production_gates") or {}).items())],
+            ]
+        )
+        _write_text(output_dir / "postmortem.md", "\n".join(lines))
+        payload["postmortem_md_path"] = _repo_rel(output_dir / "postmortem.md", root)
+    payload["postmortem_json_path"] = _repo_rel(output_dir / "postmortem.json", root)
+    _write_json(output_dir / "postmortem.json", payload)
+    return payload
 
 
 def _classify_ci_issue(summary: dict[str, Any], issue: dict[str, Any]) -> str:
@@ -2228,6 +2421,39 @@ def _execute_checked(args: list[str], *, cwd: Path | None = None, timeout: int =
     return result
 
 
+def _execute_workflow_command(
+    bug_id: str,
+    args: list[str],
+    *,
+    state: str,
+    cwd: Path | None = None,
+    timeout: int = 120,
+    event: str | None = None,
+    root: Path | None = None,
+) -> dict[str, Any]:
+    started = time.monotonic()
+    result = _run_command(args, cwd=cwd, timeout=timeout)
+    duration = time.monotonic() - started
+    _append_event(
+        bug_id,
+        event=event or f"command:{args[0]}",
+        state=state,
+        command=" ".join(args),
+        cwd=cwd,
+        root=root,
+        duration_seconds=duration,
+        result="ok" if result.get("ok") else "failed",
+        evidence={
+            "returncode": result.get("returncode"),
+            "stdout_excerpt": str(result.get("stdout") or "")[:1000],
+            "stderr_excerpt": str(result.get("stderr") or "")[:1000],
+        },
+    )
+    if not result.get("ok"):
+        raise WorkflowError(result.get("stderr") or result.get("stdout") or f"command failed: {' '.join(args)}")
+    return result
+
+
 def _path_is_artifact(path: str) -> bool:
     normalized = path.replace("\\", "/").strip("/")
     parts = [part for part in normalized.split("/") if part]
@@ -2378,15 +2604,30 @@ def _maybe_create_pr(
     if pre_pr_gate["workflow_gate"] != "passed":
         raise WorkflowError("; ".join(pre_pr_gate["blocking"]))
     if push:
-        actions.append({"command": f"git push -u origin {branch}", "result": _execute_checked(["git", "push", "-u", "origin", branch], cwd=REPO_ROOT, timeout=180)})
+        actions.append(
+            {
+                "command": f"git push -u origin {branch}",
+                "result": _execute_workflow_command(
+                    bug_id,
+                    ["git", "push", "-u", "origin", branch],
+                    state="pushed",
+                    cwd=REPO_ROOT,
+                    timeout=180,
+                    event="command:git_push",
+                ),
+            }
+        )
         _write_state(bug_id, state="pushed", branch=branch, next_actions=["create_pr_from_pr_body"])
     if create_pr:
         title = pr_title or f"{bug_id} issue workflow fix"
         body_path = str(REPO_ROOT / str(finish.get("pr_body_path")))
-        result = _execute_checked(
+        result = _execute_workflow_command(
+            bug_id,
             ["gh", "pr", "create", "--base", "main", "--head", branch, "--title", title, "--body-file", body_path],
+            state="pr_opened",
             cwd=REPO_ROOT,
             timeout=120,
+            event="command:gh_pr_create",
         )
         pr_url = str(result.get("stdout") or "").splitlines()[-1].strip()
         actions.append({"command": "gh pr create", "result": result})
@@ -2394,7 +2635,14 @@ def _maybe_create_pr(
     if watch_ci:
         if not pr_url:
             raise WorkflowError("--watch-ci requires --create-pr in this Phase 1 wrapper")
-        result = _execute_checked(["gh", "pr", "checks", pr_url, "--watch", "--interval", "10"], cwd=REPO_ROOT, timeout=900)
+        result = _execute_workflow_command(
+            bug_id,
+            ["gh", "pr", "checks", pr_url, "--watch", "--interval", "10"],
+            state="ci_running",
+            cwd=REPO_ROOT,
+            timeout=900,
+            event="command:gh_pr_checks_watch",
+        )
         actions.append({"command": "gh pr checks --watch", "result": result})
         check_text = "\n".join(str(result.get(key) or "") for key in ("stdout", "stderr"))
         check_ok = bool(result.get("ok")) and not re.search(
@@ -2433,6 +2681,42 @@ def _verify_pr_merged(pr_url: str, *, skip_github_check: bool = False) -> dict[s
     return {"checked": True, "merged": True, "pr": payload}
 
 
+def _sync_github_issue_after_close(record: dict[str, Any], evidence_payload: dict[str, Any]) -> dict[str, Any]:
+    issue_number = record.get("github_issue_number")
+    if not issue_number:
+        return {"status": "skipped_missing_issue_number"}
+    lines = [
+        f"AIstock workflow close-sync completed for `{record.get('bug_id')}`.",
+        "",
+        f"- PR: {evidence_payload.get('merged_pr') or 'n/a'}",
+        f"- Merge commit: `{evidence_payload.get('merge_commit') or 'unknown'}`",
+        "- BUG JSON status: `fixed`",
+        "",
+        "Validation evidence:",
+        *[f"- {item}" for item in evidence_payload.get("validation_evidence") or ["n/a"]],
+        "",
+        "Production gates:",
+        *[
+            f"- {key}: `{value}`"
+            for key, value in sorted((evidence_payload.get("production_gates") or {}).items())
+        ],
+    ]
+    tmp_comment = REPO_ROOT / WORKFLOW_ROOT / str(record.get("bug_id") or issue_number) / "github-close-comment.md"
+    _write_text(tmp_comment, "\n".join(lines))
+    comment = _run_command(
+        ["gh", "issue", "comment", str(issue_number), "--repo", GITHUB_REPO, "--body-file", str(tmp_comment)],
+        cwd=REPO_ROOT,
+        timeout=60,
+    )
+    close = _run_command(["gh", "issue", "close", str(issue_number), "--repo", GITHUB_REPO], cwd=REPO_ROOT, timeout=60)
+    return {
+        "status": "synced" if comment.get("ok") and close.get("ok") else "warning",
+        "comment": comment,
+        "close": close,
+        "comment_path": _repo_rel(tmp_comment),
+    }
+
+
 def _production_gates_payload(args: argparse.Namespace | None = None) -> dict[str, str]:
     if args is None:
         return {
@@ -2466,6 +2750,39 @@ def _merge_pr_if_ready(pr_url: str) -> dict[str, Any]:
     if failed or pending:
         raise WorkflowError(f"PR checks are not green; failed={failed}, pending={pending}")
     result = _execute_checked(["gh", "pr", "merge", pr_url, "--squash", "--delete-branch"], cwd=REPO_ROOT, timeout=180)
+    verified = _verify_pr_merged(pr_url)
+    return {"already_merged": False, "merge_result": result, "verified": verified}
+
+
+def _merge_pr_if_ready_for_bug(bug_id: str, pr_url: str) -> dict[str, Any]:
+    view = _execute_workflow_command(
+        bug_id,
+        ["gh", "pr", "view", pr_url, "--json", "state,mergeStateStatus,statusCheckRollup,url"],
+        state="ci_green",
+        cwd=REPO_ROOT,
+        timeout=60,
+        event="command:gh_pr_view_before_merge",
+    )
+    payload = json.loads(str(view.get("stdout") or "{}"))
+    checks = payload.get("statusCheckRollup") or []
+    failed = [
+        item.get("name") or item.get("workflowName") or item.get("__typename")
+        for item in checks
+        if str(item.get("conclusion") or "").upper() not in {"", "SUCCESS", "NEUTRAL", "SKIPPED"}
+    ]
+    pending = [item.get("name") for item in checks if str(item.get("status") or "").upper() != "COMPLETED"]
+    if payload.get("state") == "MERGED":
+        return {"already_merged": True, "view": payload}
+    if failed or pending:
+        raise WorkflowError(f"PR checks are not green; failed={failed}, pending={pending}")
+    result = _execute_workflow_command(
+        bug_id,
+        ["gh", "pr", "merge", pr_url, "--squash", "--delete-branch"],
+        state="merged",
+        cwd=REPO_ROOT,
+        timeout=180,
+        event="command:gh_pr_merge",
+    )
     verified = _verify_pr_merged(pr_url)
     return {"already_merged": False, "merge_result": result, "verified": verified}
 
@@ -2598,7 +2915,7 @@ def build_run_plan(
                 "workflow_gate": "merge_requires_explicit_flag",
                 "next_command": f"python scripts/aistock_issue_workflow.py run --bug-id {canonical_bug_id} --mode merge --pr-url {pr_url} --merge",
             }
-        merge_result = _merge_pr_if_ready(pr_url)
+        merge_result = _merge_pr_if_ready_for_bug(canonical_bug_id, pr_url)
         close_sync = build_close_sync_plan(
             bug_id=canonical_bug_id,
             issue_json=issue_json,
@@ -2695,6 +3012,7 @@ def build_close_sync_plan(
             raise WorkflowError("close-sync --apply requires --pr-url")
         if not evidence:
             raise WorkflowError("close-sync --apply requires at least one --validation-evidence")
+        started = time.monotonic()
         pr_check = _verify_pr_merged(pr_url, skip_github_check=skip_github_check)
         merge_commit = merge_commit or (
             ((pr_check.get("pr") or {}).get("mergeCommit") or {}).get("oid")
@@ -2721,7 +3039,14 @@ def build_close_sync_plan(
             "merge_commit": merge_commit,
             "updated_bug_json": _repo_rel(source_path),
         }
+        github_sync = (
+            {"status": "skipped_github_check_disabled"}
+            if skip_github_check
+            else _sync_github_issue_after_close(updated, evidence_payload)
+        )
+        evidence_payload["github_issue_sync"] = github_sync
         _write_json(output_dir / "close-sync-evidence.json", evidence_payload)
+        timing = _workflow_timing_summary(canonical_bug_id)
         _write_state(
             canonical_bug_id,
             state="close_synced",
@@ -2729,8 +3054,23 @@ def build_close_sync_plan(
             commit=merge_commit,
             validation_evidence=evidence,
             production_gates=gates,
+            github_issue_sync=github_sync,
+            timing_summary=timing,
             next_actions=["sync_local_main", "cleanup_after_merge"],
         )
+        _append_event(
+            canonical_bug_id,
+            event="close_sync_apply",
+            state="close_synced",
+            root=REPO_ROOT,
+            duration_seconds=time.monotonic() - started,
+            evidence={
+                "pr_url": pr_url,
+                "merge_commit": merge_commit,
+                "github_issue_sync_status": github_sync.get("status"),
+            },
+        )
+        evidence_payload["timing_summary"] = _workflow_timing_summary(canonical_bug_id)
         return evidence_payload
     return payload
 
@@ -2808,6 +3148,7 @@ def build_cleanup_after_merge_plan(
     if apply:
         if blocking:
             raise WorkflowError("; ".join(blocking))
+        started = time.monotonic()
         applied: list[dict[str, Any]] = []
         if sync_root:
             applied.append({"command": "git fetch origin --prune", "result": _execute_checked(["git", "fetch", "origin", "--prune"], cwd=root, timeout=120)})
@@ -2822,6 +3163,7 @@ def build_cleanup_after_merge_plan(
         payload["applied"] = applied
         payload["workflow_gate"] = "cleanup_done"
         payload["dry_run"] = False
+        payload["duration_seconds"] = round(time.monotonic() - started, 3)
         _write_json(output_dir / f"{_slug(branch)}-cleanup-evidence.json", payload)
     return payload
 
@@ -2997,6 +3339,16 @@ def cmd_resume(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_postmortem(args: argparse.Namespace) -> int:
+    payload = build_postmortem_plan(
+        bug_id=args.bug_id,
+        worktree=args.worktree,
+        output_markdown=not args.no_markdown,
+    )
+    _emit(payload, args.output)
+    return 0
+
+
 def cmd_close_sync(args: argparse.Namespace) -> int:
     payload = build_close_sync_plan(
         bug_id=args.bug_id,
@@ -3123,6 +3475,13 @@ def build_parser() -> argparse.ArgumentParser:
     resume.add_argument("--output")
     resume.set_defaults(func=cmd_resume)
 
+    postmortem = sub.add_parser("postmortem", help="Summarize workflow timing, context cost, active-worktree, and cleanup evidence.")
+    postmortem.add_argument("--bug-id", required=True)
+    postmortem.add_argument("--worktree")
+    postmortem.add_argument("--no-markdown", action="store_true")
+    postmortem.add_argument("--output")
+    postmortem.set_defaults(func=cmd_postmortem)
+
     start = sub.add_parser("start", help="Prepare a BUG fix workflow and context pack.")
     start.add_argument("--bug-id")
     start.add_argument("--issue-json")
@@ -3221,6 +3580,7 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 
 
 

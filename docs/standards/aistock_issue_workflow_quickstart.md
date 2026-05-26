@@ -103,6 +103,8 @@ python scripts/aistock_issue_workflow.py submit-bug `
 - it can create a clean registry worktree with `--create-registry-worktree`
 - it writes BUG JSON, allocator, candidate, and workflow state under the selected clean task/registry worktree
 
+Normal BUG intake continues directly into the fix workflow in the same task/registry worktree via the returned `fix_chain.run_next_command`; do not create a separate registry-only PR unless the user explicitly asks for intake-only tracking.
+
 If a client is launched from `F:\Dev\AIstock`, first create or switch to a clean task/registry worktree. Do not use root `main` for BUG JSON writes.
 
 ## Start Or Plan A Single BUG Fix
@@ -190,7 +192,7 @@ By default this is a dry-run plan. When the PR is already merged and validation 
 python scripts/aistock_issue_workflow.py close-sync --bug-id BUG-XXX --pr-url <PR_URL> --validation-evidence "python -m nox -s l0 -> passed" --apply
 ```
 
-`--apply` verifies the PR is merged through `gh`, updates the BUG JSON to `fixed`, writes `close-sync-evidence.json`, and records `state=close_synced`. It does not merge PRs and does not touch production services.
+`--apply` verifies the PR is merged through `gh`, updates the BUG JSON to `fixed`, posts a GitHub Issue close-sync comment, closes the linked GitHub Issue when needed, writes `close-sync-evidence.json`, and records `state=close_synced`. It does not merge PRs and does not touch production services.
 
 If the user explicitly asks the workflow to merge after validation, use:
 
@@ -218,6 +220,16 @@ python scripts/aistock_issue_workflow.py cleanup-after-merge `
   --pr-url https://github.com/licong01-cloud/AIstock/pull/195 `
   --sync-root
 ```
+
+## Timing And Postmortem
+
+After a PR is created, merged, or a workflow feels slow, generate the postmortem artifact instead of manually reconstructing timestamps from GitHub and reflog:
+
+```powershell
+python scripts/aistock_issue_workflow.py postmortem --bug-id BUG-XXX
+```
+
+The command writes `tmp/issue_workflow/<BUG>/postmortem.json` and `postmortem.md` with phase timing, command-duration telemetry, Context Pack token estimates, duplicate active-worktree count, stale PR check, production gates, and recent events. `known_duration_seconds` comes from commands run by the wrapper; `inferred_elapsed_seconds` includes wall-clock gaps such as human review and CI wait time, so do not treat it as pure code-repair time.
 
 ## Triage Current P0
 

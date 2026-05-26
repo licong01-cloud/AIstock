@@ -825,6 +825,72 @@ def test_run_plan_writes_state_and_resume_reads_it(isolated_workflow_root: Path)
     assert "finish --bug-id BUG-199" in resume["next_command"]
 
 
+def test_postmortem_reports_timing_context_and_duplicate_active_count(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "state.json",
+        {
+            "schema_version": "aistock_issue_workflow_state_v1",
+            "bug_id": "BUG-199",
+            "state": "validation_passed",
+            "branch": "bug/BUG-199-workflow",
+            "worktree": str(isolated_workflow_root),
+            "context_metrics": {
+                "context_pack_md": {"estimated_tokens": 12},
+                "fix_ready_json": {"estimated_tokens": 8},
+            },
+            "production_gates": {"production_ddl_gate": "noop"},
+        },
+    )
+    events_path = isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "events.jsonl"
+    events_path.parent.mkdir(parents=True, exist_ok=True)
+    events_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "timestamp": "2026-05-26T00:00:00Z",
+                        "event": "state:context_ready",
+                        "state": "context_ready",
+                        "duration_seconds": None,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-05-26T00:00:05Z",
+                        "event": "command:gh_pr_create",
+                        "state": "pr_opened",
+                        "duration_seconds": 2.5,
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_active_workflows_for_bug",
+        lambda bug_id: [
+            {"bug_id": bug_id, "worktree": str(isolated_workflow_root), "dirty": False},
+            {"bug_id": bug_id, "worktree": str(isolated_workflow_root / "other"), "dirty": False},
+        ],
+    )
+    monkeypatch.setattr(workflow, "_stale_pr_check_for_bug", lambda bug_id: {"status": "checked", "open_prs": [], "merged_prs": []})
+
+    payload = workflow.build_postmortem_plan(bug_id="BUG-199", worktree=str(isolated_workflow_root))
+
+    assert payload["schema_version"] == "aistock_issue_workflow_postmortem_v1"
+    assert payload["timing_summary"]["event_count"] == 2
+    assert payload["timing_summary"]["known_duration_seconds"] == 2.5
+    assert payload["flow_overhead_estimate"]["context_estimated_tokens"] == 20
+    assert payload["duplicate_active_count"] == 1
+    assert (isolated_workflow_root / payload["postmortem_json_path"]).exists()
+    assert (isolated_workflow_root / payload["postmortem_md_path"]).exists()
+
+
 def test_run_pr_mode_drafts_pr_automation_without_side_effects(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -889,6 +955,37 @@ def test_run_pr_mode_blocks_pr_automation_from_canonical_root(
             base="origin/main",
             head="HEAD",
         )
+
+
+def test_close_sync_apply_skips_github_sync_when_github_check_is_disabled(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _write_json(isolated_workflow_root / "bug.json", _bug(status="in_progress"))
+    called = False
+
+    def fake_sync(record: dict[str, Any], evidence_payload: dict[str, Any]) -> dict[str, Any]:
+        nonlocal called
+        called = True
+        return {"status": "synced"}
+
+    monkeypatch.setattr(workflow, "_sync_github_issue_after_close", fake_sync)
+
+    payload = workflow.build_close_sync_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        pr_url="https://github.example/pull/1",
+        apply=True,
+        allow_missing_linkage=False,
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        merge_commit="abc1234",
+        production_gates={"production_ddl_gate": "noop"},
+        skip_github_check=True,
+    )
+
+    assert payload["workflow_gate"] == "close_synced"
+    assert payload["github_issue_sync"]["status"] == "skipped_github_check_disabled"
+    assert called is False
 
 
 

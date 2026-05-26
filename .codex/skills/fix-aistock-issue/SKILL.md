@@ -29,6 +29,7 @@ English trigger example: `fix BUG-112 according to AIstock standards; do not mer
 2. If the user asks to submit/register a new BUG, run:
    `python scripts/aistock_issue_workflow.py submit-bug --title "<title>" --module <module> --severity P1 --description "<description>" --create-github --create-registry-worktree --apply`
    If the command cannot create or link GitHub Issue, or if the registry guard says the target is canonical root/main/dirty, stop before committing any BUG JSON. Continue only from a clean issue/registry worktree.
+   After successful submit, follow `fix_chain.run_next_command` in the same workflow instead of opening a separate registry-only PR, unless the user explicitly asked for intake-only registration.
 3. If the user names an existing BUG, run:
    `python scripts/aistock_issue_workflow.py run --bug-id BUG-XXX --mode plan --create-worktree`
    If an active state/worktree already exists, the wrapper returns `workflow_gate=resume` or `blocked`; follow `next_command` instead of creating another worktree. Use `--force-new-worktree --reason "<why>"` only for an audited recovery exception.
@@ -48,6 +49,9 @@ English trigger example: `fix BUG-112 according to AIstock standards; do not mer
 13. After an approved merge, run:
     `python scripts/aistock_issue_workflow.py close-sync --bug-id BUG-XXX --pr-url <PR_URL>`
     Then align BUG JSON and GitHub Issue status through the approved sync channel.
+14. When the workflow feels slow, or before final reporting after PR/merge, run:
+    `python scripts/aistock_issue_workflow.py postmortem --bug-id BUG-XXX`
+    Use the generated timing/context summary instead of manually rediscovering phase costs.
 
 ## P0 Triage and Batch
 
@@ -67,7 +71,7 @@ After the shared fix, run:
 
 ## Completion Report
 
-Report branch, PR URL, commit hash, changed files, validation evidence, production gates, and whether production runtime or DB was untouched.
+Report branch, PR URL, commit hash, changed files, validation evidence, production gates, postmortem timing/context summary, and whether production runtime or DB was untouched.
 
 ## Post-Merge Sync And Cleanup
 

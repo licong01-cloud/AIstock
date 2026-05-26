@@ -26,6 +26,8 @@ If GitHub linkage cannot be created or supplied with `--github-issue-number` plu
 
 `submit-bug --apply` must run from a clean task/registry worktree and branch, not from the canonical root checkout or `main`. If the registry guard blocks the command, create or switch to an isolated registry worktree and retry there; do not bypass this in normal Claude Code workflows.
 
+After successful submit, follow the returned `fix_chain.run_next_command` in the same workflow instead of opening a separate registry-only PR. Create a registry-only PR only when the user explicitly asks for intake-only tracking.
+
 ## Single BUG workflow
 
 For a named BUG:
@@ -75,6 +77,14 @@ The PR command runs a pre-PR gate: it blocks missing validation evidence, failed
 
 Do not stop at `validation_passed`. Commit only task files, then run the `run --mode pr --push --create-pr` command from the issue worktree. PR automation intentionally blocks canonical-root/main execution.
 
+After PR creation, after merge, or when the workflow feels slow, run:
+
+```powershell
+python scripts\aistock_issue_workflow.py postmortem --bug-id BUG-XXX
+```
+
+Use `postmortem.json` / `postmortem.md` for timing, context-token estimates, duplicate active-worktree count, stale PR checks, and final report evidence. Do not reconstruct phase cost by rereading the whole repo.
+
 ## Guardrails
 
 - Do not merge to `main` unless the user explicitly asked for merge.
@@ -82,7 +92,7 @@ Do not stop at `validation_passed`. Commit only task files, then run the `run --
 - Do not touch production backend `8001`, frontend `3000`, production DB, or DDL without explicit approval.
 - Keep BUG JSON and GitHub Issue linkage intact.
 - Preserve per-issue evidence when batching; use `start-batch` and `finish-batch` only for same-module, same-risk, same-validation BUG groups.
-- Final report must include branch, PR URL, commit, changed files, validation evidence, and production gates.
+- Final report must include branch, PR URL, commit, changed files, validation evidence, production gates, and postmortem timing/context summary.
 
 ## Post-Merge Sync And Cleanup
 
