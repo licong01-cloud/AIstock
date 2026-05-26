@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -610,6 +610,7 @@ def test_submit_bug_dry_run_requires_github_sync(isolated_workflow_root: Path) -
         create_github=False,
         apply=False,
         create_registry_worktree=False,
+        registry_pr_only=False,
         dry_run=False,
     )
 
@@ -647,6 +648,7 @@ def test_submit_bug_apply_with_existing_github_link_writes_registry(
         create_github=False,
         apply=True,
         create_registry_worktree=False,
+        registry_pr_only=False,
         dry_run=False,
     )
 
@@ -659,6 +661,46 @@ def test_submit_bug_apply_with_existing_github_link_writes_registry(
     assert record["production_ddl_gate"] == "noop"
     assert json.loads(allocator.read_text(encoding="utf-8"))["last_allocated"] == 118
     assert (isolated_workflow_root / payload["state_path"]).exists()
+    assert payload["fix_chain"]["continue_to_fix_in_same_workflow"] is True
+    active_index = isolated_workflow_root / "tmp" / "issue_workflow" / "index" / "active_bugs.json"
+    assert json.loads(active_index.read_text(encoding="utf-8"))["active_bugs"]["BUG-118"]["active_state"] == "discovered"
+
+
+def test_submit_bug_registry_pr_only_stops_after_intake(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
+    _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 117})
+    monkeypatch.setattr(workflow, "_validate_registry_apply_target", lambda root: {"blocking": [], "warnings": [], "target_root": str(root)})
+
+    payload = workflow.build_submit_bug_plan(
+        title="Paper v2 display regression",
+        module="paper_v2",
+        severity="P1",
+        description="The view shows stale data.",
+        expected="The view should show fresh data.",
+        actual="The view shows stale data.",
+        reproduce_command="n/a",
+        evidence_refs=["screenshot:paper-v2"],
+        changed_files=["frontend/src/app/paper-v2/page.tsx"],
+        plan_key=None,
+        nox_session=None,
+        candidate_type="bug",
+        bug_id=None,
+        github_issue_number="188",
+        github_issue_url="https://github.com/licong01-cloud/AIstock/issues/188",
+        create_github=False,
+        apply=True,
+        create_registry_worktree=False,
+        registry_pr_only=True,
+        dry_run=False,
+    )
+
+    assert payload["registry_pr_only"] is True
+    assert payload["fix_chain"]["registry_pr_required"] is True
+    assert payload["fix_chain"]["continue_to_fix_in_same_workflow"] is False
+    assert "git commit" in payload["next_command"]
 
 
 def test_submit_bug_apply_blocks_canonical_root_pollution(
@@ -694,7 +736,8 @@ def test_submit_bug_apply_blocks_canonical_root_pollution(
             create_github=False,
             apply=True,
             create_registry_worktree=False,
-            dry_run=False,
+        registry_pr_only=False,
+        dry_run=False,
         )
 
 
@@ -732,6 +775,7 @@ def test_submit_bug_apply_uses_registry_worktree_override(
         create_github=False,
         apply=True,
         create_registry_worktree=False,
+        registry_pr_only=False,
         dry_run=False,
     )
 
@@ -764,6 +808,7 @@ def test_submit_bug_can_plan_registry_worktree_without_writes(isolated_workflow_
         create_github=False,
         apply=False,
         create_registry_worktree=True,
+        registry_pr_only=False,
         dry_run=True,
     )
 
@@ -1111,6 +1156,41 @@ def test_cleanup_after_merge_dry_run_ready_for_merged_branch(
     assert {item["action"] for item in payload["actions"]} >= {"sync_root_main", "delete_local_branch", "delete_remote_branch"}
 
 
+def test_cleanup_after_merge_apply_can_mark_bug_complete(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    branch = "bug/BUG-199-workflow"
+
+    def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
+        if args[:2] == ["branch", "--show-current"]:
+            return "feature/current"
+        if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
+            return branch
+        if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
+            return branch
+        if args[:2] == ["ls-remote", "--heads"]:
+            return ""
+        return ""
+
+    monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {"ok": True, "branch": "main", "dirty": False, "dirty_count": 0, "head": "a", "origin_main": "a"},
+    )
+    monkeypatch.setattr(workflow, "_execute_checked", lambda *args, **kwargs: {"ok": True, "stdout": "", "stderr": "", "returncode": 0})
+
+    assert workflow.main(["cleanup-after-merge", "--branch", branch, "--bug-id", "BUG-199", "--apply"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["workflow_gate"] == "cleanup_done"
+    assert payload["complete_state"]["state"] == "complete"
+    assert json.loads((isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "state.json").read_text(encoding="utf-8"))["state"] == "complete"
+
+
 def test_cleanup_after_merge_allows_verified_squash_merge(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1304,3 +1384,9 @@ def test_promote_ci_issue_writes_bug_json_with_existing_github_issue(
     assert record["github_issue_url"] == "https://github.com/licong01-cloud/AIstock/issues/197"
     assert record["module"] == "paper_v2"
     assert record["production_ddl_gate"] == "noop"
+
+
+
+
+
+

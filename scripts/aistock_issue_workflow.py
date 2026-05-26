@@ -192,6 +192,10 @@ def _events_path(bug_id: str, root: Path | None = None) -> Path:
     return _workflow_dir(bug_id, root) / "events.jsonl"
 
 
+def _active_index_path(root: Path | None = None) -> Path:
+    return (root or REPO_ROOT) / WORKFLOW_ROOT / "index" / "active_bugs.json"
+
+
 def _load_state(bug_id: str, root: Path | None = None) -> dict[str, Any] | None:
     path = _state_path(bug_id, root)
     if not path.exists():
@@ -328,6 +332,38 @@ def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str,
     }
 
 
+def _update_active_index(bug_id: str, state_payload: dict[str, Any], *, root: Path | None = None) -> dict[str, Any]:
+    root = root or REPO_ROOT
+    path = _active_index_path(root)
+    existing: dict[str, Any] = {}
+    if path.exists():
+        try:
+            existing = _load_json(path)
+        except WorkflowError:
+            existing = {}
+    index = dict(existing.get("active_bugs") or existing)
+    key = bug_id.strip().upper()
+    if not _state_is_active(state_payload):
+        index.pop(key, None)
+    else:
+        index[key] = {
+            "bug_id": key,
+            "active_state": state_payload.get("state"),
+            "branch": state_payload.get("branch"),
+            "worktree": state_payload.get("worktree") or state_payload.get("cwd") or str(root),
+            "pr_url": state_payload.get("pr_url"),
+            "last_event_at": state_payload.get("updated_at"),
+            "next_command": _next_command_for_state(key, state_payload),
+        }
+    payload = {
+        "schema_version": "aistock_issue_workflow_active_index_v1",
+        "updated_at": _utc_now(),
+        "active_bugs": index,
+    }
+    _write_json(path, payload)
+    return payload
+
+
 def _write_state(
     bug_id: str,
     *,
@@ -359,6 +395,7 @@ def _write_state(
         root=root,
         evidence={key: payload.get(key) for key in ("branch", "worktree", "commit", "pr_url") if payload.get(key)},
     )
+    _update_active_index(bug_id, payload, root=root)
     return payload
 
 
@@ -848,6 +885,7 @@ def build_submit_bug_plan(
     apply: bool,
     allow_current_worktree: bool = False,
     create_registry_worktree: bool = False,
+    registry_pr_only: bool = False,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     effective_apply = apply and not dry_run
@@ -992,18 +1030,24 @@ def build_submit_bug_plan(
             "url": record.get("github_issue_url"),
         },
         "record": record,
+        "registry_pr_only": registry_pr_only,
         "stale_pr_check": _stale_pr_check_for_bug(canonical_bug_id) if effective_apply else {"status": "not_applicable_before_apply"},
         "next_agent_steps": [
             "switch_to_registry_worktree",
-            "continue_fix_in_same_task_branch_or_commit_registry_only_pr",
+            "commit_registry_only_pr_without_fix" if registry_pr_only else "continue_fix_in_same_task_branch",
             "do_not_write_bug_json_in_canonical_root",
         ] if effective_apply else [
             "create_or_switch_to_clean_registry_worktree",
             "rerun_submit_bug_with_github_linkage",
         ],
         "next_command": (
-            f"cd /d {registry_root} && python scripts/aistock_issue_workflow.py run "
-            f"--bug-id {canonical_bug_id} --mode plan"
+            f"cd /d {registry_root} && git status --short && git add tests/aistock_validation/bugs tmp/issue_workflow "
+            f"&& git commit -m \"chore(issue): register {canonical_bug_id}\""
+            if registry_pr_only
+            else (
+                f"cd /d {registry_root} && python scripts/aistock_issue_workflow.py run "
+                f"--bug-id {canonical_bug_id} --mode plan"
+            )
         )
         if effective_apply
         else (
@@ -1031,10 +1075,14 @@ def build_submit_bug_plan(
         payload["state_path"] = _repo_rel(_state_path(canonical_bug_id, registry_root), registry_root)
         payload["events_path"] = _repo_rel(_events_path(canonical_bug_id, registry_root), registry_root)
         payload["fix_chain"] = {
-            "registry_pr_required": False,
-            "continue_to_fix_in_same_workflow": True,
+            "registry_pr_required": registry_pr_only,
+            "continue_to_fix_in_same_workflow": not registry_pr_only,
             "run_next_command": payload["next_command"],
-            "note": "BUG registration now seeds workflow state so the same branch/worktree can continue to fix unless the user explicitly asks for a registry-only PR.",
+            "note": (
+                "User explicitly requested registry-only tracking; stop after the registry PR."
+                if registry_pr_only
+                else "BUG registration now seeds workflow state so the same branch/worktree can continue to fix unless the user explicitly asks for a registry-only PR."
+            ),
         }
     return payload
 
@@ -2383,6 +2431,7 @@ def build_promote_ci_issue_plan(
         github_issue_url=_github_issue_url(issue_number),
         create_github=False,
         apply=apply,
+        registry_pr_only=False,
     )
     return {
         "schema_version": "aistock_issue_workflow_promote_ci_issue_v1",
@@ -3267,6 +3316,7 @@ def cmd_submit_bug(args: argparse.Namespace) -> int:
         apply=args.apply,
         allow_current_worktree=args.allow_current_worktree,
         create_registry_worktree=args.create_registry_worktree,
+        registry_pr_only=args.registry_pr_only,
         dry_run=args.dry_run,
     )
     _emit(payload, args.output)
@@ -3374,6 +3424,30 @@ def cmd_cleanup_after_merge(args: argparse.Namespace) -> int:
         sync_root=args.sync_root,
         canonical_root=args.canonical_root,
     )
+    if payload.get("workflow_gate") == "cleanup_done" and args.bug_id:
+        bug_id = args.bug_id.strip().upper()
+        cleanup_evidence = {
+            key: payload.get(key)
+            for key in (
+                "schema_version",
+                "branch",
+                "worktree",
+                "canonical_root",
+                "sync_root",
+                "workflow_gate",
+                "actions",
+                "applied",
+                "duration_seconds",
+            )
+        }
+        state = _write_state(
+            bug_id,
+            state="complete",
+            root=REPO_ROOT,
+            cleanup_evidence=cleanup_evidence,
+            next_actions=[],
+        )
+        payload["complete_state"] = state
     _emit(payload, args.output)
     return 0 if payload.get("workflow_gate") in {"ready_for_cleanup", "cleanup_done"} else 2
 
@@ -3406,6 +3480,7 @@ def build_parser() -> argparse.ArgumentParser:
     submit_bug.add_argument("--create-github", action="store_true", help="Use gh to create the linked GitHub Issue when --apply is set.")
     submit_bug.add_argument("--apply", action="store_true", help="Write candidate/BUG JSON and update allocator after GitHub linkage exists.")
     submit_bug.add_argument("--create-registry-worktree", action="store_true", help="Create a clean registry worktree/branch from origin/main before writing BUG JSON.")
+    submit_bug.add_argument("--registry-pr-only", action="store_true", help="Stop after a registry-only BUG PR; normal workflows continue directly to fix.")
     submit_bug.add_argument("--dry-run", action="store_true", help="Plan registry worktree creation without writing files or creating a worktree.")
     submit_bug.add_argument(
         "--allow-current-worktree",
@@ -3557,6 +3632,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     cleanup = sub.add_parser("cleanup-after-merge", help="Safely sync root and clean merged issue worktrees/branches.")
     cleanup.add_argument("--branch", required=True)
+    cleanup.add_argument("--bug-id", help="Mark the BUG workflow complete after successful cleanup.")
     cleanup.add_argument("--worktree")
     cleanup.add_argument("--pr-url", help="Merged PR URL used to verify squash-merged branch cleanup.")
     cleanup.add_argument("--sync-root", action="store_true")
