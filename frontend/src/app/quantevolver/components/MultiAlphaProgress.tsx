@@ -1,6 +1,8 @@
 ﻿"use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, lazy, Suspense } from "react";
+
+const LogStream = lazy(() => import("../../../components/multi-alpha/LogStream"));
 
 interface GroupStatus {
   group_name: string;
@@ -206,6 +208,16 @@ export default function MultiAlphaProgress({
                 ? "等待结果收集"
                 : `等待 ${Math.max(groups.length - completedCount, 0)} 个组完成`}
         </span>
+      </div>
+
+      {/* Multi-node log stream */}
+      <div className="mt-2">
+        <div className="mb-1 text-xs font-medium text-gray-500">
+          多节点实时日志
+        </div>
+        <Suspense fallback={<div className="text-xs text-gray-400">加载日志组件...</div>}>
+          <LogStream experimentId={experimentId} className="rounded-lg border border-slate-700" />
+        </Suspense>
       </div>
     </div>
   );
