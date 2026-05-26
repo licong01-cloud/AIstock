@@ -130,6 +130,56 @@ def test_catalog_readiness_blocks_chat_until_seeded() -> None:
     assert svc.catalog_readiness()["ready"] is True
 
 
+def test_seed_catalogs_retires_superseded_active_activations() -> None:
+    repository = InMemoryResearchAssistantRepository()
+    svc = ResearchAssistantService(repository=repository)
+    repository.create_record(
+        "runtime_config_activations",
+        {
+            "activation_id": "runtime_config_activation_old_active",
+            "config_key": "research_assistant.runtime_context",
+            "config_version": "0.0.0",
+            "environment": svc.environment,
+            "source_id": "runtime_config_source_old",
+            "config_json": {},
+            "status": "active",
+        },
+    )
+    repository.create_record(
+        "prompt_activations",
+        {
+            "activation_id": "prompt_activation_old_active",
+            "assistant_key": "research_assistant",
+            "environment": svc.environment,
+            "pack_key": "old.prompt.pack",
+            "pack_version": "0.0.0",
+            "source_id": "prompt_source_old",
+            "version_refs": [],
+            "bundle_signature": "old",
+            "status": "active",
+        },
+    )
+
+    svc.seed_catalogs()
+    svc.seed_catalogs()
+
+    assert repository.get_record("runtime_config_activations", "runtime_config_activation_old_active")["status"] == "retired"
+    assert repository.get_record("prompt_activations", "prompt_activation_old_active")["status"] == "retired"
+    prompt_actives = repository.list_records(
+        "prompt_activations",
+        filters={"assistant_key": "research_assistant", "environment": svc.environment, "status": "active"},
+        limit=10,
+    )["items"]
+    runtime_actives = repository.list_records(
+        "runtime_config_activations",
+        filters={"config_key": "research_assistant.runtime_context", "environment": svc.environment, "status": "active"},
+        limit=10,
+    )["items"]
+    assert len(prompt_actives) == 1
+    assert len(runtime_actives) == 1
+    assert svc.catalog_readiness()["ready"] is True
+
+
 def test_service_runs_phase1_task_memory_context_approval_issue_flow() -> None:
     svc = _service()
 
