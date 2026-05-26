@@ -89,12 +89,12 @@ def test_research_assistant_tools_call_expected_http_contracts() -> None:
     tools["assistant_add_task_event"]("rat_1", {"event_type": "planned", "message": "ok"})
     assert calls[-1] == {"method": "POST", "path": "/api/v1/research-assistant/tasks/rat_1/events", "query": {}, "body": {"event_type": "planned", "message": "ok"}}
 
-    tools["assistant_chat_turn"]({"message": "帮我创建一个 QE 10 loop 实验，先不要执行。"})
+    tools["assistant_chat_turn"]({"message": "帮我设计一个 QE 实验草案，先不要执行。"})
     assert calls[-1]["method"] == "POST"
     assert calls[-1]["path"] == "/api/v1/research-assistant/chat/turn"
-    assert calls[-1]["body"]["message"].startswith("帮我创建一个 QE")
+    assert calls[-1]["body"]["message"].startswith("帮我设计一个 QE")
 
-    tools["assistant_build_prompt_bundle"]({"user_message": "QE 10 loop", "phase": "planning"})
+    tools["assistant_build_prompt_bundle"]({"user_message": "QE 实验草案", "phase": "planning"})
     assert calls[-1]["method"] == "POST"
     assert calls[-1]["path"] == "/api/v1/research-assistant/prompt-bundles"
 

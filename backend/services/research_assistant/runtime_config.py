@@ -66,6 +66,7 @@ def _validate_runtime_config(payload: dict[str, Any], path: Path) -> None:
         "assembly",
         "trace",
         "ui",
+        "dialogue_intent",
         "capability_sync",
         "planner",
         "execution",
@@ -106,6 +107,65 @@ def _validate_runtime_config(payload: dict[str, Any], path: Path) -> None:
         raise ValueError("approval_policy.production_sensitive_auto_execute must be false in Phase 1")
     if bool(payload["ui_execution"].get("raw_json_main_view")):
         raise ValueError("ui_execution.raw_json_main_view must be false")
+    dialogue_intent = payload["dialogue_intent"]
+    required_intent_keys = {
+        "explicit_task_verbs",
+        "capability_inquiry_patterns",
+        "concept_explanation_patterns",
+        "status_query_patterns",
+        "bug_terms",
+        "issue_terms",
+        "qe_terms",
+        "execution_terms",
+        "negated_execution_patterns",
+        "validation_terms",
+        "direct_answer_intents",
+        "fallback_reply",
+        "capability_summary",
+        "safety",
+        "status_rails",
+        "event_messages",
+        "card_templates",
+    }
+    missing_intent_keys = sorted(required_intent_keys - set(dialogue_intent))
+    if missing_intent_keys:
+        raise ValueError(f"dialogue_intent missing required keys: {missing_intent_keys}")
+    list_intent_keys = {
+        "explicit_task_verbs",
+        "capability_inquiry_patterns",
+        "concept_explanation_patterns",
+        "status_query_patterns",
+        "bug_terms",
+        "issue_terms",
+        "qe_terms",
+        "execution_terms",
+        "negated_execution_patterns",
+        "validation_terms",
+        "direct_answer_intents",
+    }
+    for key in list_intent_keys:
+        values = dialogue_intent[key]
+        if not isinstance(values, list) or not all(isinstance(item, str) and item for item in values):
+            raise ValueError(f"dialogue_intent.{key} must be a non-empty string list")
+    if not isinstance(dialogue_intent["fallback_reply"], str) or not dialogue_intent["fallback_reply"].strip():
+        raise ValueError("dialogue_intent.fallback_reply must be a non-empty string")
+    for key in ("capability_summary", "safety", "status_rails", "event_messages", "card_templates"):
+        if not isinstance(dialogue_intent[key], dict) or not dialogue_intent[key]:
+            raise ValueError(f"dialogue_intent.{key} must be a non-empty object")
+    required_event_messages = {
+        "prompt_bundle_built",
+        "chat_received",
+        "llm_started",
+        "llm_done",
+        "action_proposed",
+    }
+    event_messages = dialogue_intent["event_messages"]
+    missing_event_messages = sorted(required_event_messages - set(event_messages))
+    if missing_event_messages:
+        raise ValueError(f"dialogue_intent.event_messages missing required keys: {missing_event_messages}")
+    for key in required_event_messages:
+        if not isinstance(event_messages[key], str) or not event_messages[key].strip():
+            raise ValueError(f"dialogue_intent.event_messages.{key} must be a non-empty string")
     if int(payload["capability_sync"]["max_tools_per_server"]) <= 0:
         raise ValueError("capability_sync.max_tools_per_server must be positive")
     if int(payload["planner"]["candidate_capability_top_k"]) <= 0:

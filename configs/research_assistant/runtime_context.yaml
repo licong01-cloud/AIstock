@@ -121,6 +121,281 @@ ui:
   allow_user_expand_summary: true
   show_context_health_badge: true
 
+dialogue_intent:
+  explicit_task_verbs:
+    - "帮我"
+    - "请"
+    - "创建"
+    - "生成"
+    - "设计"
+    - "诊断"
+    - "分析"
+    - "提交"
+    - "登记"
+    - "校验"
+    - "验证"
+    - "执行"
+    - "运行"
+    - "物化"
+    - "修复"
+    - "处理"
+    - "排查"
+    - "materialize"
+    - "run"
+    - "submit"
+    - "create"
+    - "validate"
+    - "diagnose"
+  capability_inquiry_patterns:
+    - "是否可以"
+    - "能否"
+    - "能不能"
+    - "可以吗"
+    - "支持吗"
+    - "具备"
+    - "能力"
+    - "能做什么"
+    - "有哪些能力"
+    - "是否具备"
+  concept_explanation_patterns:
+    - "是什么"
+    - "为什么"
+    - "解释"
+    - "说明"
+    - "区别"
+    - "原理"
+    - "原因"
+  status_query_patterns:
+    - "目前"
+    - "现在"
+    - "状态"
+    - "进度"
+    - "完成了吗"
+    - "还有什么"
+    - "下一步"
+  bug_terms:
+    - "bug"
+    - "报错"
+    - "错误"
+    - "异常"
+    - "失败"
+    - "问题"
+  issue_terms:
+    - "issue"
+    - "github issue"
+    - "登记"
+    - "提交 issue"
+    - "创建 issue"
+  qe_terms:
+    - "qe"
+    - "quantevolver"
+    - "实验"
+    - "回测"
+    - "template"
+    - "custom_evo"
+  execution_terms:
+    - "执行"
+    - "运行"
+    - "物化"
+    - "materialize"
+    - "run"
+    - "submit"
+  negated_execution_patterns:
+    - "先不要执行"
+    - "不要执行"
+    - "不执行"
+    - "暂不执行"
+    - "先不要运行"
+    - "不要运行"
+    - "不运行"
+    - "暂不运行"
+    - "先不要物化"
+    - "不要物化"
+    - "不物化"
+    - "只生成草案"
+    - "仅生成草案"
+    - "draft only"
+    - "do not run"
+    - "no run"
+  validation_terms:
+    - "校验"
+    - "验证"
+    - "检查"
+    - "validate"
+  direct_answer_intents:
+    - capability_inquiry
+    - concept_explanation
+    - status_query
+    - ambiguous_request
+    - general_chat
+  fallback_reply: "我可以直接回答你的问题；如果你要我执行任务，请描述目标和边界。"
+  capability_summary:
+    mcp: "可按明确任务调用 Research Assistant、QE、Validation、GitHub 同步等已登记 MCP 能力。"
+    skill: "可按任务加载 QE 诊断、因子分析、Issue 处理等本地技能。"
+  safety:
+    no_materialize_before_confirmation: true
+    no_run_before_confirmation: true
+    no_raw_json_in_main_chat: true
+  status_rails:
+    answered:
+      - {label: "接收问题", status: "done"}
+      - {label: "理解意图", status: "done"}
+      - {label: "回答", status: "done"}
+      - {label: "等待任务指令", status: "idle"}
+      - {label: "MCP 预检查", status: "locked"}
+      - {label: "执行", status: "locked"}
+      - {label: "写入记忆", status: "locked"}
+    diagnosis_ready:
+      - {label: "接收任务", status: "done"}
+      - {label: "理解意图", status: "done"}
+      - {label: "等待诊断证据", status: "current"}
+      - {label: "只读分析", status: "idle"}
+      - {label: "MCP 预检查", status: "locked"}
+      - {label: "执行", status: "locked"}
+      - {label: "写入记忆", status: "locked"}
+    waiting_confirmation:
+      - {label: "接收任务", status: "done"}
+      - {label: "理解意图", status: "done"}
+      - {label: "构建上下文", status: "done"}
+      - {label: "等待确认", status: "current"}
+      - {label: "MCP 预检查", status: "locked"}
+      - {label: "执行", status: "locked"}
+      - {label: "写入记忆", status: "locked"}
+  event_messages:
+    prompt_bundle_built: "已按树型提示词选择必要分支，生成本轮提示词包。"
+    chat_received: "已接收用户对话并进入意图理解。"
+    llm_started: "主模型调用已开始。"
+    llm_done: "主模型已返回。"
+    action_proposed: "已提出候选动作；执行前需要按风险边界确认。"
+
+  card_templates:
+    capability_inquiry:
+      plan_title: "已直接回答"
+      plan_steps: []
+      clarification_title: "需要你确认"
+      clarification_questions: []
+      action_proposals: []
+      status_rail_ref: answered
+      include_qe_capabilities: true
+      capability_summary_extra:
+        answer_focus: "直接说明能力边界；不会因为关键词自动启动工作流。"
+        bug_diagnosis: "可分析错误现象、日志、实验记录、Trace 和配置差异，并整理修复或 Issue 证据。"
+    concept_explanation:
+      plan_title: "已直接解释"
+      plan_steps: []
+      clarification_title: "需要你确认"
+      clarification_questions: []
+      action_proposals: []
+      status_rail_ref: answered
+      include_qe_capabilities: false
+      capability_summary_extra: {}
+    status_query:
+      plan_title: "已直接回答状态"
+      plan_steps: []
+      clarification_title: "需要你确认"
+      clarification_questions: []
+      action_proposals: []
+      status_rail_ref: answered
+      include_qe_capabilities: false
+      capability_summary_extra: {}
+
+    ambiguous_request:
+      plan_title: "需要最少补充信息"
+      plan_steps: []
+      clarification_title: "需要你补充"
+      clarification_questions:
+        - "请补充要处理的对象、目标或证据；我会先按只读分析处理，除非你明确要求执行。"
+      action_proposals: []
+      status_rail_ref: answered
+      include_qe_capabilities: false
+      capability_summary_extra: {}
+    general_chat:
+      plan_title: "已直接回答"
+      plan_steps: []
+      clarification_title: "需要你确认"
+      clarification_questions: []
+      action_proposals: []
+      status_rail_ref: answered
+      include_qe_capabilities: false
+      capability_summary_extra: {}
+    bug_diagnosis_request:
+      plan_title: "Bug 诊断准备"
+      plan_steps:
+        - "定位错误现象、触发路径、日志和相关实验或任务记录。"
+        - "区分配置、数据、MCP、后端、前端或运行环境问题。"
+        - "输出根因、影响范围、证据和修复建议。"
+      clarification_title: "需要你提供"
+      clarification_questions:
+        - "请提供报错文本、任务 ID、实验 ID、页面路径或复现步骤中的任意一种。"
+      action_proposals: []
+      status_rail_ref: diagnosis_ready
+      include_qe_capabilities: false
+      capability_summary_extra: {}
+    issue_intake_request:
+      plan_title: "Issue 草案准备"
+      plan_steps:
+        - "整理问题标题、现象、影响范围、证据和期望结果。"
+        - "先生成可审阅 Issue 草案，不直接写 GitHub。"
+        - "用户确认后再走 GitHub 同步审批边界。"
+      clarification_title: "需要你确认"
+      clarification_questions:
+        - "请确认 Issue 类型、优先级和可公开的证据范围。"
+      action_proposals:
+        - {title: "生成 Issue 草案", risk: "medium", approval_required: false, status: "draft_only"}
+      status_rail_ref: waiting_confirmation
+      include_qe_capabilities: false
+      capability_summary_extra: {}
+    experiment_draft_request:
+      plan_title: "QE 实验草案准备"
+      plan_steps:
+        - "明确实验目标、股票池、时间窗、成本和风险边界。"
+        - "生成 QE template draft，不物化、不运行。"
+        - "用户确认后才进入 validate、preflight 或执行阶段。"
+      clarification_title: "需要你确认"
+      clarification_questions:
+        - "请提供股票池或默认回测股票池。"
+        - "请提供回测时间窗。"
+        - "如需要固定迭代数量，请明确给出。"
+      action_proposals:
+        - {title: "生成 QE 实验草案", risk: "medium", approval_required: false, status: "draft_only"}
+      status_rail_ref: waiting_confirmation
+      include_qe_capabilities: true
+      capability_summary_extra: {}
+    experiment_validation_request:
+      plan_title: "QE 实验草案准备"
+      plan_steps:
+        - "明确实验目标、股票池、时间窗、成本和风险边界。"
+        - "生成 QE template draft，不物化、不运行。"
+        - "用户确认后才进入 validate、preflight 或执行阶段。"
+      clarification_title: "需要你确认"
+      clarification_questions:
+        - "请提供股票池或默认回测股票池。"
+        - "请提供回测时间窗。"
+        - "如需要固定迭代数量，请明确给出。"
+      action_proposals:
+        - {title: "生成 QE 实验草案", risk: "medium", approval_required: false, status: "draft_only"}
+        - {title: "QE template validate + MCP preflight", risk: "high", approval_required: true, status: "waiting_confirmation"}
+      status_rail_ref: waiting_confirmation
+      include_qe_capabilities: true
+      capability_summary_extra: {}
+    experiment_execution_request:
+      plan_title: "QE 实验草案准备"
+      plan_steps:
+        - "明确实验目标、股票池、时间窗、成本和风险边界。"
+        - "生成 QE template draft，不物化、不运行。"
+        - "用户确认后才进入 validate、preflight 或执行阶段。"
+      clarification_title: "需要你确认"
+      clarification_questions:
+        - "请提供股票池或默认回测股票池。"
+        - "请提供回测时间窗。"
+        - "如需要固定迭代数量，请明确给出。"
+      action_proposals:
+        - {title: "生成 QE 实验草案", risk: "medium", approval_required: false, status: "draft_only"}
+        - {title: "QE materialize/run preflight", risk: "high", approval_required: true, status: "waiting_confirmation"}
+      status_rail_ref: waiting_confirmation
+      include_qe_capabilities: true
+      capability_summary_extra: {}
+
 capability_sync:
   enabled: true
   max_servers_per_run: 20
@@ -143,7 +418,7 @@ planner:
       title: "\u751f\u6210 QE \u5b9e\u9a8c\u8349\u6848"
       natural_language_triggers:
         - "\u521b\u5efa QE \u5b9e\u9a8c"
-        - "QE 10 loop"
+        - "\u8bbe\u8ba1 QE \u5b9e\u9a8c\u8349\u6848"
         - "\u56de\u6d4b\u5b9e\u9a8c\u8349\u7a3f"
         - "custom_evo \u8349\u6848"
       description_for_llm: "\u6839\u636e\u81ea\u7136\u8bed\u8a00\u751f\u6210 QE template draft \u548c\u786e\u8ba4\u5361\uff1b\u4e0d\u7269\u5316\u3001\u4e0d\u8fd0\u884c\u3002"
@@ -154,7 +429,7 @@ planner:
       preferred_model_role: primary_orchestrator
       input_slots:
         required: [template_kind, title, config_json]
-        business_required: [loop_count, stock_pool, backtest_window, cost_guard]
+        business_required: [iteration_count_if_user_specified, stock_pool, backtest_window, cost_guard]
       output_cards: [intent_summary, missing_slots, qe_draft, risk_confirmation]
       mcp_tool_refs:
         - server_key: aistock-qe-experiment
