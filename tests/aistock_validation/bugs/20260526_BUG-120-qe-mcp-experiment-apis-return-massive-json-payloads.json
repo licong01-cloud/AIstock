@@ -43,8 +43,8 @@
   "expected": "MCP list and default detail endpoints should return compact summaries by default: scalar columns and required identifiers only, no full result_metrics/metrics_json/config_json/agent_analysis unless explicitly requested. Cross-loop comparison should use a compact scalar comparison endpoint/detail level, with full enhanced metrics, loop config, loop metrics, and LLM analysis fetched only on demand. LoopbackApiClient should enforce a response-size guardrail or truncation warning for oversized MCP payloads.",
   "first_seen_at": "2026-05-25T16:03:09.497721Z",
   "fix_branch": "bug/BUG-120-qe-mcp-payload-clean",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "124b0e730563c30b02219ac71aa5c9973edbdbd7",
+  "fixed_at": "2026-05-26T04:26:41.037056Z",
   "github_issue_number": 223,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/223",
   "last_seen_at": "2026-05-25T16:03:09.497721Z",
@@ -52,6 +52,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/227",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -67,7 +68,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "qe_mcp"
   ],
@@ -76,5 +77,12 @@
     "fingerprint": "74a74a67615c0f95a0c73fc4",
     "source_event_id": "FE-20260526-74a74a67615c"
   },
+  "validation_evidence": [
+    "git diff --check -> passed",
+    "python -m ruff check changed Python files -> passed",
+    "python -m pytest backend/tests/test_aistock_qe_mcp_servers.py backend/tests/quantevolver -q -> 60 passed",
+    "python -m nox -s l0 -> passed",
+    "GitHub CI for PR #227 -> passed (14 checks; auto-register skip non-blocking)"
+  ],
   "verification_run_id": null
 }
