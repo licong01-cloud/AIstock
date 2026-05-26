@@ -121,6 +121,134 @@ ui:
   allow_user_expand_summary: true
   show_context_health_badge: true
 
+dialogue_modes:
+  default_mode: dialogue
+  modes:
+    dialogue:
+      prompt_nodes: [root.assistant, mode.dialogue]
+      allow_tools: false
+      allow_action_proposals: false
+      allowed_tool_side_effect: none
+      expose_context_pack: false
+      expose_audit_fields: false
+      max_clarification_questions: 0
+      raw_json_main_view: false
+      show_plan_card: false
+      show_clarification_card: false
+      show_context_health_badge: false
+      details_default_collapsed: true
+      forbidden_main_reply_phrases:
+        - "目标："
+        - "对象："
+        - "约束："
+        - "缺失信息："
+        - "风险级别："
+        - "下一步："
+        - "Context Pack"
+        - "可审计计划"
+        - "确认问题："
+    analysis:
+      prompt_nodes: [root.assistant, mode.analysis]
+      allow_tools: read_only
+      allow_action_proposals: false
+      allowed_tool_side_effect: read_only
+      expose_context_pack: false
+      expose_audit_fields: false
+      max_clarification_questions: 1
+      raw_json_main_view: false
+      show_plan_card: false
+      show_clarification_card: true
+      show_context_health_badge: false
+      details_default_collapsed: true
+      forbidden_main_reply_phrases:
+        - "目标："
+        - "对象："
+        - "约束："
+        - "风险级别："
+        - "Context Pack"
+        - "可审计计划"
+    planning:
+      prompt_nodes: [root.assistant, mode.planning, intent.planning]
+      allow_tools: read_only
+      allow_action_proposals: draft_only
+      allowed_tool_side_effect: draft_only
+      expose_context_pack: false
+      expose_audit_fields: true
+      max_clarification_questions: 3
+      raw_json_main_view: false
+      show_plan_card: true
+      show_clarification_card: true
+      show_context_health_badge: true
+      details_default_collapsed: false
+    preflight:
+      prompt_nodes: [root.assistant, mode.preflight, intent.planning]
+      allow_tools: preflight
+      allow_action_proposals: preflight
+      allowed_tool_side_effect: preflight
+      expose_context_pack: false
+      expose_audit_fields: true
+      max_clarification_questions: 3
+      approval_required: true
+      raw_json_main_view: false
+      show_plan_card: true
+      show_clarification_card: true
+      show_context_health_badge: true
+      details_default_collapsed: false
+    execution:
+      prompt_nodes: [root.assistant, mode.execution, intent.planning]
+      allow_tools: approved_execution
+      allow_action_proposals: approved_execution
+      allowed_tool_side_effect: approved_execution
+      expose_context_pack: false
+      expose_audit_fields: true
+      max_clarification_questions: 1
+      approval_required: true
+      raw_json_main_view: false
+      show_plan_card: true
+      show_clarification_card: true
+      show_context_health_badge: true
+      details_default_collapsed: false
+    audit:
+      prompt_nodes: [root.assistant, mode.audit]
+      allow_tools: read_only
+      allow_action_proposals: false
+      allowed_tool_side_effect: read_only
+      expose_context_pack: true
+      expose_audit_fields: true
+      max_clarification_questions: 1
+      raw_json_main_view: false
+      show_plan_card: true
+      show_clarification_card: true
+      show_context_health_badge: true
+      details_default_collapsed: false
+    recovery:
+      prompt_nodes: [root.assistant, mode.recovery]
+      allow_tools: read_only
+      allow_action_proposals: false
+      allowed_tool_side_effect: read_only
+      expose_context_pack: false
+      expose_audit_fields: false
+      max_clarification_questions: 1
+      raw_json_main_view: false
+      show_plan_card: false
+      show_clarification_card: true
+      show_context_health_badge: false
+      details_default_collapsed: true
+
+mode_router:
+  confidence_thresholds:
+    direct_answer_min: 0.55
+    task_request_min: 0.72
+    execution_request_min: 0.86
+  fallback:
+    low_confidence_mode: dialogue
+    ask_clarification_mode: analysis
+    max_questions: 1
+  user_overrides:
+    analysis_only_patterns: ["只做分析", "只读分析", "仅分析", "不改代码"]
+    execute_patterns: ["开始执行", "按方案执行", "确认执行"]
+    audit_patterns: ["展开证据", "列出 Trace", "验证矩阵", "审计记录", "trace"]
+
 dialogue_intent:
   explicit_task_verbs:
     - "帮我"

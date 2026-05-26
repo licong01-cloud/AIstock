@@ -74,6 +74,7 @@ APPROVAL_REQUEST_STATUSES = {"pending", "approved", "rejected", "expired"}
 CAPABILITY_TYPES = {"mcp_tool", "skill", "workflow_pack", "composite"}
 CAPABILITY_STATUSES = {"draft", "approved", "disabled", "deprecated", "blocked"}
 ACTION_PROPOSAL_TYPES = {"workflow_step", "mcp_tool", "skill", "workflow_pack"}
+DIALOGUE_MODES = {"dialogue", "analysis", "planning", "preflight", "execution", "audit", "recovery"}
 ACTION_PROPOSAL_STATUSES = {
     "proposed",
     "confirmed",
@@ -115,6 +116,7 @@ PROMPT_NODE_CATEGORIES = {
     "workflow",
     "tool_guard",
     "renderer",
+    "mode",
     "memory",
     "model_routing",
     "context",
@@ -549,6 +551,8 @@ class PromptBundleBuildRequest(StrictModel):
     task_id: str | None = None
     conversation_id: str | None = None
     phase: str = "planning"
+    dialogue_mode: str | None = None
+    mode_decision: dict[str, Any] = Field(default_factory=dict)
     model_profile_id: str | None = None
     required_prompt_keys: list[str] = Field(default_factory=list)
     namespace: str = "aistock"
@@ -561,6 +565,13 @@ class PromptBundleBuildRequest(StrictModel):
             raise ValueError(f"phase must be one of {sorted(PROMPT_PHASES)}")
         return value
 
+    @field_validator("dialogue_mode")
+    @classmethod
+    def _dialogue_mode(cls, value: str | None) -> str | None:
+        if value is not None and value not in DIALOGUE_MODES:
+            raise ValueError(f"dialogue_mode must be one of {sorted(DIALOGUE_MODES)}")
+        return value
+
 
 class ChatTurnRequest(StrictModel):
     message: str = Field(..., min_length=1)
@@ -568,6 +579,7 @@ class ChatTurnRequest(StrictModel):
     user_id: str = "default"
     created_by: str = "user"
     phase: str = "planning"
+    dialogue_mode_override: str | None = None
     risk_level: str = "medium"
     allow_execute: bool = False
     confirm_approval_id: str | None = None
@@ -578,6 +590,13 @@ class ChatTurnRequest(StrictModel):
     def _phase(cls, value: str) -> str:
         if value not in PROMPT_PHASES:
             raise ValueError(f"phase must be one of {sorted(PROMPT_PHASES)}")
+        return value
+
+    @field_validator("dialogue_mode_override")
+    @classmethod
+    def _dialogue_mode_override(cls, value: str | None) -> str | None:
+        if value is not None and value not in DIALOGUE_MODES:
+            raise ValueError(f"dialogue_mode_override must be one of {sorted(DIALOGUE_MODES)}")
         return value
 
     @field_validator("risk_level")
