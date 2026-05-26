@@ -125,6 +125,11 @@ def _codegraph_command() -> str | None:
     return shutil.which("codegraph")
 
 
+def _codegraph_bootstrap_command() -> str:
+    command = _codegraph_command() or "codegraph"
+    return f"{command} init -i"
+
+
 def _understand_graph_path(root: Path) -> Path:
     return root / ".understand-anything" / "knowledge-graph.json"
 
@@ -160,6 +165,7 @@ def codegraph_status(root: Path | None = None, *, skip_external: bool = False) -
         "git_commit": git.get("head"),
         "working_tree_dirty": git.get("dirty"),
         "channel": "mcp_or_cli",
+        "bootstrap_command": _codegraph_bootstrap_command(),
     }
 
 
@@ -340,7 +346,7 @@ def build_doctor_report(root: Path | None = None, *, skip_external: bool = False
     if not codegraph.get("available"):
         warnings.append("CodeGraph CLI is unavailable; issue workflow will fall back to existing rg/catalog context.")
     elif not codegraph.get("index_exists"):
-        warnings.append("CodeGraph index is missing; run codegraph init -i when code intelligence context is needed.")
+        warnings.append(f"CodeGraph index is missing; run {codegraph.get('bootstrap_command')} when code intelligence context is needed.")
     if not ua.get("graph_exists"):
         warnings.append("Understand Anything graph is missing; this is non-blocking for normal issue workflow.")
     return {
@@ -353,6 +359,10 @@ def build_doctor_report(root: Path | None = None, *, skip_external: bool = False
         "catalog": catalog,
         "codegraph": codegraph,
         "understand_anything": ua,
+        "bootstrap_commands": {
+            "codegraph": codegraph.get("bootstrap_command"),
+            "understand_anything": "defer to the configured Understand Anything client; normal issue workflow does not require this graph",
+        },
     }
 
 
