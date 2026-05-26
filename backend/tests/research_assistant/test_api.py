@@ -117,12 +117,18 @@ def test_research_assistant_api_phase1_smoke() -> None:
         json={"message": "目前助手是否可以生成 QE 实验和诊断 bug？", "allow_execute": False},
     ).json()["data"]
     assert capability_resp["cards"]["intent_type"] == "capability_inquiry"
+    assert capability_resp["mode_decision"]["mode"] == "dialogue"
     assert capability_resp["cards"]["action_proposals"] == []
-    assert capability_resp["cards"]["clarification_card"]["questions"] == []
-    assert client.post(
+    assert "plan_card" not in capability_resp["cards"]
+    assert "clarification_card" not in capability_resp["cards"]
+    assert capability_resp["context_health"]["show_badge"] is False
+    execute_resp = client.post(
         "/api/v1/research-assistant/chat/turn",
         json={"message": "确认执行 QE materialize", "allow_execute": True},
-    ).status_code == 400
+    )
+    assert execute_resp.status_code == 200
+    assert execute_resp.json()["data"]["mode_decision"]["mode"] == "execution"
+    assert execute_resp.json()["data"]["mode_decision"]["requires_approval"] is True
 
     preflight_resp = client.post(
         "/api/v1/research-assistant/mcp/preflight",

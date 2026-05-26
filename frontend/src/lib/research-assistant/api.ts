@@ -309,6 +309,18 @@ export type AssistantPromptBundle = JsonObject & {
   cache_path?: string | null;
 };
 
+export type AssistantModeDecision = JsonObject & {
+  mode?: "dialogue" | "analysis" | "planning" | "preflight" | "execution" | "audit" | "recovery" | string;
+  intent_type?: string;
+  confidence?: number;
+  mode_reason?: string;
+  requires_tool?: boolean;
+  allowed_tool_side_effect?: string;
+  requires_user_confirmation?: boolean;
+  requires_approval?: boolean;
+  visible_audit_default?: boolean;
+};
+
 export type AssistantConversationMessage = JsonObject & {
   message_id: string;
   conversation_id?: string;
@@ -330,6 +342,7 @@ export type AssistantChatTurnResult = JsonObject & {
   context_health?: JsonObject;
   trace?: JsonObject;
   cards?: JsonObject;
+  mode_decision?: AssistantModeDecision;
 };
 
 export type AssistantCatalogReadinessCheck = JsonObject & {

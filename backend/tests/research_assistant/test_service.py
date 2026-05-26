@@ -26,7 +26,6 @@ from backend.services.research_assistant.models import (
 from backend.services.research_assistant.repository import DatabaseResearchAssistantRepository, InMemoryResearchAssistantRepository, TABLES
 from backend.services.research_assistant.service import (
     ASSISTANT_APPROVAL_CONFIRM,
-    FORBIDDEN_UNDEVELOPED_CAPABILITY_PHRASES,
     LlmCallResult,
     ResearchAssistantCatalogNotReadyError,
     ResearchAssistantService,
@@ -386,13 +385,16 @@ def test_prompt_tree_capability_inquiry_does_not_trigger_qe_workflow() -> None:
     )
 
     keys = {node["prompt_key"] for node in bundle["node_refs"]}
-    assert {"root.assistant", "intent.planning"} <= keys
+    assert {"root.assistant", "mode.dialogue"} <= keys
+    assert "intent.planning" not in keys
     assert "domain.qe_experiment" not in keys
     assert "workflow.qe_draft_then_approval" not in keys
     assert "tool_guard.mcp_qe" not in keys
     assert "governance.no_silent_action" not in keys
-    assert bundle["selection_trace_json"]["algorithm"] == "intent_gated_prompt_tree_v1"
+    assert bundle["selection_trace_json"]["algorithm"] == "mode_routed_prompt_tree_v1"
     assert bundle["selection_trace_json"]["dialogue_intent"] == "capability_inquiry"
+    assert bundle["selection_trace_json"]["dialogue_mode"] == "dialogue"
+    assert bundle["selection_trace_json"]["mode_decision"]["allowed_tool_side_effect"] == "none"
     assert bundle["activation_id"]
     assert bundle["version_refs"]
     assert bundle["selection_trace_json"]["prompt_activation_id"] == bundle["activation_id"]
@@ -411,11 +413,12 @@ def test_prompt_tree_explicit_qe_draft_selects_qe_without_tool_guard() -> None:
     )
 
     keys = {node["prompt_key"] for node in bundle["node_refs"]}
-    assert {"root.assistant", "intent.planning", "domain.qe_experiment", "workflow.qe_draft_then_approval"} <= keys
+    assert {"root.assistant", "mode.planning", "intent.planning", "domain.qe_experiment", "workflow.qe_draft_then_approval"} <= keys
     assert "tool_guard.mcp_qe" not in keys
     assert "governance.no_silent_action" not in keys
-    assert bundle["selection_trace_json"]["algorithm"] == "intent_gated_prompt_tree_v1"
+    assert bundle["selection_trace_json"]["algorithm"] == "mode_routed_prompt_tree_v1"
     assert bundle["selection_trace_json"]["dialogue_intent"] == "experiment_draft_request"
+    assert bundle["selection_trace_json"]["dialogue_mode"] == "planning"
 
 
 def test_prompt_tree_qe_validate_selects_tool_guard() -> None:
@@ -424,8 +427,9 @@ def test_prompt_tree_qe_validate_selects_tool_guard() -> None:
     bundle = svc.build_prompt_bundle(PromptBundleBuildRequest(user_message="请验证 QE template。", phase="planning"))
 
     keys = {node["prompt_key"] for node in bundle["node_refs"]}
-    assert {"domain.qe_experiment", "workflow.qe_draft_then_approval", "tool_guard.mcp_qe"} <= keys
+    assert {"mode.preflight", "domain.qe_experiment", "workflow.qe_draft_then_approval", "tool_guard.mcp_qe"} <= keys
     assert bundle["selection_trace_json"]["dialogue_intent"] == "experiment_validation_request"
+    assert bundle["selection_trace_json"]["dialogue_mode"] == "preflight"
 
 
 def test_prompt_tree_ambiguous_task_does_not_start_qe_workflow() -> None:
@@ -434,21 +438,24 @@ def test_prompt_tree_ambiguous_task_does_not_start_qe_workflow() -> None:
     bundle = svc.build_prompt_bundle(PromptBundleBuildRequest(user_message="请处理一下。", phase="planning"))
 
     keys = {node["prompt_key"] for node in bundle["node_refs"]}
-    assert {"root.assistant", "intent.planning"} <= keys
+    assert {"root.assistant", "mode.analysis"} <= keys
+    assert "intent.planning" not in keys
     assert "domain.qe_experiment" not in keys
     assert "workflow.qe_draft_then_approval" not in keys
     assert "tool_guard.mcp_qe" not in keys
     assert bundle["selection_trace_json"]["dialogue_intent"] == "ambiguous_request"
+    assert bundle["selection_trace_json"]["dialogue_mode"] == "analysis"
 
 
 def test_bug117_prompt_and_health_do_not_expose_undeveloped_capability_bans() -> None:
     svc = _chat_service()
 
-    root = svc.repository.find_one("prompt_nodes", {"prompt_key": "root.assistant", "status": "enabled"})
-    assert root is not None
-    root_text = str(root["prompt_text"])
-    for phrase in FORBIDDEN_UNDEVELOPED_CAPABILITY_PHRASES:
-        assert phrase not in root_text
+    prompt_nodes = svc.repository.list_records("prompt_nodes", filters={"status": "enabled"}, limit=200)["items"]
+    assert prompt_nodes
+    for node in prompt_nodes:
+        prompt_text = str(node["prompt_text"])
+        for phrase in ["禁止控制鼠标键盘", "禁止写代码", "mouse_keyboard_control", "code_write"]:
+            assert phrase not in prompt_text
 
     health = svc.health()
     serialized = str(health)
@@ -530,15 +537,21 @@ def test_chat_turn_capability_inquiry_answers_without_workflow_noise() -> None:
     assert "请先确认" not in result["assistant_message"]["content_text"]
     assert "materialize/run" not in result["assistant_message"]["content_text"]
     assert result["cards"]["intent_type"] == "capability_inquiry"
-    assert result["cards"]["plan_card"]["steps"] == []
-    assert result["cards"]["clarification_card"]["questions"] == []
+    assert "plan_card" not in result["cards"]
+    assert "clarification_card" not in result["cards"]
+    assert result["cards"]["ui_display"]["show_plan_card"] is False
+    assert result["cards"]["ui_display"]["show_context_health_badge"] is False
     assert result["cards"]["action_proposals"] == []
     capability_keys = {item["capability_key"] for item in result["cards"]["capability_cards"]}
     assert {"qe.create_experiment_draft", "qe.validate_template", "qe.run_experiment"} <= capability_keys
     assert result["cards"]["status_rail"][2] == {"label": "回答", "status": "done"}
     assert result["trace"]["status"] == "ok"
-    assert result["prompt_bundle"]["selection_trace_json"]["algorithm"] == "intent_gated_prompt_tree_v1"
+    assert result["context_health"]["show_badge"] is False
+    assert result["mode_decision"]["mode"] == "dialogue"
+    assert result["mode_decision"]["allowed_tool_side_effect"] == "none"
+    assert result["prompt_bundle"]["selection_trace_json"]["algorithm"] == "mode_routed_prompt_tree_v1"
     assert result["prompt_bundle"]["selection_trace_json"]["dialogue_intent"] == "capability_inquiry"
+    assert result["prompt_bundle"]["selection_trace_json"]["dialogue_mode"] == "dialogue"
     event_types = {event["event_type"] for event in result["task_events"]}
     assert {"chat_received", "prompt_bundle_built", "context_pack_built", "llm_started", "llm_done"} <= event_types
     assert "action_proposed" not in event_types
@@ -552,8 +565,11 @@ def test_chat_turn_bug_diagnosis_request_is_first_class_intent() -> None:
 
     assert result["assistant_message"]["content_text"].startswith("可以诊断")
     assert result["cards"]["intent_type"] == "bug_diagnosis_request"
+    assert result["mode_decision"]["mode"] == "analysis"
+    assert "plan_card" not in result["cards"]
     assert result["cards"]["action_proposals"] == []
     assert result["cards"]["clarification_card"]["questions"]
+    assert result["context_health"]["show_badge"] is False
     assert result["cards"]["status_rail"][2] == {"label": "等待诊断证据", "status": "current"}
     assert result["prompt_bundle"]["selection_trace_json"]["dialogue_intent"] == "bug_diagnosis_request"
     keys = {node["prompt_key"] for node in result["prompt_bundle"]["node_refs"]}
@@ -568,12 +584,72 @@ def test_chat_turn_ambiguous_request_needs_minimal_clarification_only() -> None:
     result = svc.chat_turn(ChatTurnRequest(message="请处理一下。"))
 
     assert result["cards"]["intent_type"] == "ambiguous_request"
-    assert result["cards"]["plan_card"]["steps"] == []
+    assert result["mode_decision"]["mode"] == "analysis"
+    assert "plan_card" not in result["cards"]
     assert result["cards"]["clarification_card"]["questions"]
     assert result["cards"]["action_proposals"] == []
     keys = {node["prompt_key"] for node in result["prompt_bundle"]["node_refs"]}
     assert "domain.qe_experiment" not in keys
     assert "workflow.qe_draft_then_approval" not in keys
+
+
+def test_mode_router_m0_matrix_keeps_keywords_from_starting_workflow() -> None:
+    fake = FakeLlmClient()
+    svc = _chat_service(fake)
+
+    cases = [
+        ("你能做什么？", "capability_inquiry", "dialogue"),
+        ("通用能力", "capability_inquiry", "dialogue"),
+        ("QE 实验和 bug 诊断能力目前是什么状态？", "capability_inquiry", "dialogue"),
+        ("请展开验证矩阵和 Trace 证据", "audit_request", "audit"),
+    ]
+    for message, expected_intent, expected_mode in cases:
+        result = svc.chat_turn(ChatTurnRequest(message=message))
+        assert result["mode_decision"]["intent_type"] == expected_intent
+        assert result["mode_decision"]["mode"] == expected_mode
+        if expected_mode == "dialogue":
+            assert result["cards"]["action_proposals"] == []
+            assert "plan_card" not in result["cards"]
+            keys = {node["prompt_key"] for node in result["prompt_bundle"]["node_refs"]}
+            assert "workflow.qe_draft_then_approval" not in keys
+            assert "tool_guard.mcp_qe" not in keys
+            assert "Context Pack" not in result["assistant_message"]["content_text"]
+
+
+def test_dialogue_main_reply_pollution_guard_removes_planning_scaffolding() -> None:
+    class NoisyLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            return LlmCallResult(
+                content="可以回答。\n目标：自动创建任务。\n风险级别：高。\nContext Pack: 0 memories\n这部分应保留。",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    svc = _chat_service(NoisyLlmClient())
+    result = svc.chat_turn(ChatTurnRequest(message="你能做什么？"))
+
+    text = result["assistant_message"]["content_text"]
+    assert "可以回答" in text
+    assert "这部分应保留" in text
+    assert "目标：" not in text
+    assert "风险级别：" not in text
+    assert "Context Pack" not in text
+
+
+def test_mode_router_is_runtime_config_driven() -> None:
+    svc = _chat_service()
+    config = svc.active_runtime_config()
+
+    assert "dialogue_modes" in config
+    assert "mode_router" in config
+    assert set(config["dialogue_modes"]["modes"]) >= {"dialogue", "analysis", "planning", "preflight", "execution", "audit", "recovery"}
+    assert config["dialogue_modes"]["modes"]["dialogue"]["allowed_tool_side_effect"] == "none"
+    assert config["dialogue_modes"]["modes"]["dialogue"]["show_plan_card"] is False
+    assert config["dialogue_modes"]["modes"]["planning"]["show_plan_card"] is True
+    assert "只做分析" in config["mode_router"]["user_overrides"]["analysis_only_patterns"]
 
 
 
@@ -598,8 +674,10 @@ def test_chat_turn_explicit_qe_draft_builds_cards_and_blocks_execution() -> None
     assert result["cards"]["status_rail"][3] == {"label": "等待确认", "status": "current"}
     assert result["cards"]["safety"]["no_materialize_before_confirmation"] is True
     assert result["trace"]["status"] == "ok"
-    assert result["prompt_bundle"]["selection_trace_json"]["algorithm"] == "intent_gated_prompt_tree_v1"
+    assert result["mode_decision"]["mode"] == "planning"
+    assert result["prompt_bundle"]["selection_trace_json"]["algorithm"] == "mode_routed_prompt_tree_v1"
     assert result["prompt_bundle"]["selection_trace_json"]["dialogue_intent"] == "experiment_draft_request"
+    assert result["prompt_bundle"]["selection_trace_json"]["dialogue_mode"] == "planning"
     assert result["prompt_bundle"]["activation_id"]
     assert result["context_pack"]["pack_summary"].startswith("Context Pack:")
     assert fake.calls[0]["temperature"] == svc.active_runtime_config()["compaction"]["worker"]["temperature"]
@@ -612,8 +690,9 @@ def test_chat_turn_explicit_qe_draft_builds_cards_and_blocks_execution() -> None
     event_types = {event["event_type"] for event in result["task_events"]}
     assert {"chat_received", "prompt_bundle_built", "context_pack_built", "llm_started", "llm_done", "action_proposed"} <= event_types
 
-    with pytest.raises(ValueError, match="does not execute actions"):
-        svc.chat_turn(ChatTurnRequest(message="确认执行 QE materialize", allow_execute=True))
+    blocked = svc.chat_turn(ChatTurnRequest(message="确认执行 QE materialize", allow_execute=True))
+    assert blocked["mode_decision"]["mode"] == "execution"
+    assert blocked["mode_decision"]["requires_approval"] is True
 
 
 def test_chat_turn_prior_messages_injected_into_llm_context() -> None:
@@ -668,11 +747,10 @@ def test_new_conversation_has_no_prior_messages() -> None:
     messages = fake.calls[0]["messages"]
     assert isinstance(messages, list)
     non_system = [m for m in messages if m["role"] != "system"]
-    assert len(non_system) == 2
+    assert len(non_system) == 1
+    assert "Internal Context Pack" in " ".join(str(m["content"]) for m in messages if m["role"] == "system")
     assert non_system[0]["role"] == "user"
-    assert "Context Pack" in str(non_system[0]["content"])
-    assert non_system[1]["role"] == "user"
-    assert non_system[1]["content"] == "帮我设计一个 QE 实验草案，先不要执行。"
+    assert non_system[0]["content"] == "帮我设计一个 QE 实验草案，先不要执行。"
 
 
 def test_chat_history_includes_all_roles() -> None:

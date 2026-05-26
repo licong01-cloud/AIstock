@@ -66,6 +66,8 @@ def _validate_runtime_config(payload: dict[str, Any], path: Path) -> None:
         "assembly",
         "trace",
         "ui",
+        "dialogue_modes",
+        "mode_router",
         "dialogue_intent",
         "capability_sync",
         "planner",
@@ -107,6 +109,8 @@ def _validate_runtime_config(payload: dict[str, Any], path: Path) -> None:
         raise ValueError("approval_policy.production_sensitive_auto_execute must be false in Phase 1")
     if bool(payload["ui_execution"].get("raw_json_main_view")):
         raise ValueError("ui_execution.raw_json_main_view must be false")
+    _validate_dialogue_modes(payload["dialogue_modes"], path)
+    _validate_mode_router(payload["mode_router"], path)
     dialogue_intent = payload["dialogue_intent"]
     required_intent_keys = {
         "explicit_task_verbs",
@@ -221,6 +225,54 @@ def _validate_runtime_config(payload: dict[str, Any], path: Path) -> None:
         value = int(query_limits[key])
         if value <= 0:
             raise ValueError(f"query_limits.{key} must be positive")
+
+
+def _validate_dialogue_modes(dialogue_modes: dict[str, Any], path: Path) -> None:
+    if not isinstance(dialogue_modes, dict):
+        raise ValueError(f"runtime config {path} dialogue_modes must be an object")
+    required_modes = {"dialogue", "analysis", "planning", "preflight", "execution", "audit", "recovery"}
+    if dialogue_modes.get("default_mode") not in required_modes:
+        raise ValueError("dialogue_modes.default_mode must be a known mode")
+    modes = dialogue_modes.get("modes")
+    if not isinstance(modes, dict):
+        raise ValueError("dialogue_modes.modes must be an object")
+    missing = sorted(required_modes - set(modes))
+    if missing:
+        raise ValueError(f"dialogue_modes.modes missing modes: {missing}")
+    for mode in required_modes:
+        cfg = modes.get(mode)
+        if not isinstance(cfg, dict):
+            raise ValueError(f"dialogue_modes.modes.{mode} must be an object")
+        prompt_nodes = cfg.get("prompt_nodes")
+        if not isinstance(prompt_nodes, list) or not all(isinstance(item, str) and item for item in prompt_nodes):
+            raise ValueError(f"dialogue_modes.modes.{mode}.prompt_nodes must be a non-empty string list")
+        if bool(cfg.get("raw_json_main_view", False)):
+            raise ValueError(f"dialogue_modes.modes.{mode}.raw_json_main_view must be false")
+        for key in ("show_plan_card", "show_clarification_card", "show_context_health_badge", "details_default_collapsed"):
+            if key not in cfg or not isinstance(cfg[key], bool):
+                raise ValueError(f"dialogue_modes.modes.{mode}.{key} must be a boolean")
+
+
+def _validate_mode_router(mode_router: dict[str, Any], path: Path) -> None:
+    if not isinstance(mode_router, dict):
+        raise ValueError(f"runtime config {path} mode_router must be an object")
+    thresholds = mode_router.get("confidence_thresholds")
+    if not isinstance(thresholds, dict):
+        raise ValueError("mode_router.confidence_thresholds must be an object")
+    for key in ("direct_answer_min", "task_request_min", "execution_request_min"):
+        value = float(thresholds.get(key))
+        if value < 0 or value > 1:
+            raise ValueError(f"mode_router.confidence_thresholds.{key} must be between 0 and 1")
+    fallback = mode_router.get("fallback")
+    if not isinstance(fallback, dict) or int(fallback.get("max_questions", 0)) < 0:
+        raise ValueError("mode_router.fallback.max_questions must be non-negative")
+    user_overrides = mode_router.get("user_overrides")
+    if not isinstance(user_overrides, dict):
+        raise ValueError("mode_router.user_overrides must be an object")
+    for key in ("analysis_only_patterns", "execute_patterns", "audit_patterns"):
+        values = user_overrides.get(key)
+        if not isinstance(values, list) or not all(isinstance(item, str) and item for item in values):
+            raise ValueError(f"mode_router.user_overrides.{key} must be a non-empty string list")
 
 
 def _repo_relative(path: Path) -> str:

@@ -1,7 +1,7 @@
 schema_version: aistock_prompt_pack_v1
 assistant_key: research_assistant
 pack_key: research_assistant.main
-pack_version: 1.0.0
+pack_version: 1.1.0
 owner: research_assistant
 environment_scope:
   - dev
@@ -17,6 +17,76 @@ nodes:
     trigger_json:
       always: true
     prompt_file: nodes/root.assistant.md
+  - prompt_key: mode.dialogue
+    title: 对话模式提示词
+    category: mode
+    tree_path: /root/mode/dialogue
+    parent_key: root.assistant
+    phase: planning
+    risk_level: low
+    trigger_json:
+      modes: [dialogue]
+    prompt_file: nodes/mode.dialogue.md
+  - prompt_key: mode.analysis
+    title: 只读分析模式提示词
+    category: mode
+    tree_path: /root/mode/analysis
+    parent_key: root.assistant
+    phase: planning
+    risk_level: medium
+    trigger_json:
+      modes: [analysis]
+    prompt_file: nodes/mode.analysis.md
+  - prompt_key: mode.planning
+    title: 任务规划模式提示词
+    category: mode
+    tree_path: /root/mode/planning
+    parent_key: root.assistant
+    phase: planning
+    risk_level: medium
+    trigger_json:
+      modes: [planning]
+    prompt_file: nodes/mode.planning.md
+  - prompt_key: mode.preflight
+    title: 预检查模式提示词
+    category: mode
+    tree_path: /root/mode/preflight
+    parent_key: root.assistant
+    phase: preflight
+    risk_level: high
+    trigger_json:
+      modes: [preflight]
+    prompt_file: nodes/mode.preflight.md
+  - prompt_key: mode.execution
+    title: 执行模式提示词
+    category: mode
+    tree_path: /root/mode/execution
+    parent_key: root.assistant
+    phase: execution
+    risk_level: high
+    trigger_json:
+      modes: [execution]
+    prompt_file: nodes/mode.execution.md
+  - prompt_key: mode.audit
+    title: 审计模式提示词
+    category: mode
+    tree_path: /root/mode/audit
+    parent_key: root.assistant
+    phase: result
+    risk_level: medium
+    trigger_json:
+      modes: [audit]
+    prompt_file: nodes/mode.audit.md
+  - prompt_key: mode.recovery
+    title: 恢复模式提示词
+    category: mode
+    tree_path: /root/mode/recovery
+    parent_key: root.assistant
+    phase: reflection
+    risk_level: medium
+    trigger_json:
+      modes: [recovery]
+    prompt_file: nodes/mode.recovery.md
   - prompt_key: governance.no_silent_action
     title: 安全与审批根规则
     category: governance
@@ -30,8 +100,8 @@ nodes:
   - prompt_key: intent.planning
     title: 意图理解与澄清
     category: intent
-    tree_path: /root/intent/planning
-    parent_key: root.assistant
+    tree_path: /root/mode/planning/intent/planning
+    parent_key: mode.planning
     phase: planning
     risk_level: medium
     trigger_json:
@@ -40,7 +110,7 @@ nodes:
   - prompt_key: domain.qe_experiment
     title: QE 实验创建分支提示词
     category: domain
-    tree_path: /root/domain/qe_experiment
+    tree_path: /root/mode/planning/domain/qe_experiment
     parent_key: intent.planning
     phase: planning
     risk_level: high
@@ -50,7 +120,7 @@ nodes:
   - prompt_key: workflow.qe_draft_then_approval
     title: QE 草稿到审批工作流
     category: workflow
-    tree_path: /root/domain/qe_experiment/workflow/draft_then_approval
+    tree_path: /root/mode/planning/domain/qe_experiment/workflow/draft_then_approval
     parent_key: domain.qe_experiment
     phase: planning
     risk_level: high
@@ -60,7 +130,7 @@ nodes:
   - prompt_key: tool_guard.mcp_qe
     title: QE MCP 工具门禁
     category: tool_guard
-    tree_path: /root/domain/qe_experiment/tool_guard/mcp_qe
+    tree_path: /root/mode/preflight/domain/qe_experiment/tool_guard/mcp_qe
     parent_key: domain.qe_experiment
     phase: preflight
     risk_level: production_sensitive

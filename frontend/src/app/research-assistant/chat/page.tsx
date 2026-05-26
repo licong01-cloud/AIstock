@@ -36,6 +36,8 @@ type ContextHealth = {
 };
 
 type ChatCards = {
+  dialogue_mode?: string;
+  mode_decision?: Record<string, unknown>;
   plan_card?: PlanCard;
   clarification_card?: ClarificationCard;
   action_proposals?: Proposal[];
@@ -43,6 +45,12 @@ type ChatCards = {
   capability_summary?: Record<string, unknown>;
   safety?: Record<string, unknown>;
   context_health?: ContextHealth;
+  ui_display?: {
+    show_plan_card?: boolean;
+    show_clarification_card?: boolean;
+    show_context_health_badge?: boolean;
+    details_default_collapsed?: boolean;
+  };
 };
 
 type CatalogNotReadyDetail = {
@@ -53,8 +61,8 @@ type CatalogNotReadyDetail = {
 };
 
 const chatCopy = uiCopy.chat;
-const initialSteps: RailStep[] = chatCopy.initialSteps;
-const thinkingSteps: RailStep[] = chatCopy.thinkingSteps;
+const initialSteps: RailStep[] = chatCopy.initialSteps.map((step) => ({ ...step }));
+const thinkingSteps: RailStep[] = chatCopy.thinkingSteps.map((step) => ({ ...step }));
 
 const welcomeMessages: ThreadMessageLike[] = [
   {
@@ -109,6 +117,16 @@ function statusText(status: string): string {
 function proposalStatusText(status?: string): string {
   if (!status) return chatCopy.proposalStatusText.default;
   return chatCopy.proposalStatusText[status as keyof typeof chatCopy.proposalStatusText] || status;
+}
+
+function shouldShowSideDetails(latest: AssistantChatTurnResult | null, cards: ChatCards): boolean {
+  if (!latest) return true;
+  const showPlan = cards.ui_display?.show_plan_card !== false;
+  const showClarify = cards.ui_display?.show_clarification_card !== false;
+  const hasPlan = showPlan && Boolean(cards.plan_card?.title || cards.plan_card?.steps?.length);
+  const hasClarification = showClarify && Boolean(cards.clarification_card?.questions?.length);
+  const hasProposal = Boolean(cards.action_proposals?.length);
+  return hasPlan || hasClarification || hasProposal;
 }
 
 function createAdapter(
@@ -213,8 +231,9 @@ function ChatMessage() {
 
 function PlanSummary({ latest }: { latest: AssistantChatTurnResult | null }) {
   const cards = asCards(latest?.cards || latest?.assistant_message?.content_json?.cards);
-  const plan = cards.plan_card;
-  const clarify = cards.clarification_card;
+  if (!shouldShowSideDetails(latest, cards)) return null;
+  const plan = cards.ui_display?.show_plan_card === false ? undefined : cards.plan_card;
+  const clarify = cards.ui_display?.show_clarification_card === false ? undefined : cards.clarification_card;
   const proposals = cards.action_proposals || [];
   if (!latest) {
     return (
@@ -229,9 +248,11 @@ function PlanSummary({ latest }: { latest: AssistantChatTurnResult | null }) {
     <section className="ra-chat-card" data-testid="ra-chat-plan-card">
       <span className="ra-chat-eyebrow">{chatCopy.planSummary.detailEyebrow}</span>
       <h2>{plan?.title || chatCopy.planSummary.detailTitle}</h2>
-      <ul>
-        {(plan?.steps || []).map((step) => <li key={step}>{step}</li>)}
-      </ul>
+      {plan?.steps?.length ? (
+        <ul>
+          {plan.steps.map((step) => <li key={step}>{step}</li>)}
+        </ul>
+      ) : null}
       {clarify?.questions?.length ? (
         <div className="ra-chat-confirm-card" data-testid="ra-chat-confirm-card">
           <strong>{clarify.title || chatCopy.planSummary.clarificationTitle}</strong>
