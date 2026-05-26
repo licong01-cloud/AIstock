@@ -721,6 +721,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "reports": 0,
             "notifications": 0,
         }
+        runtime_config = load_runtime_config(environment=self.environment)
+        self._seed_runtime_config(runtime_config, seeded)
         for item in DEFAULT_SKILLS:
             payload = {
                 "skill_id": f"skill_{item['skill_key']}",
@@ -767,8 +769,6 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             seeded["routing_policies"] += 1
         prompt_pack = load_prompt_pack(DEFAULT_PROMPT_PACK_PATH)
         self._seed_prompt_pack(prompt_pack, seeded)
-        runtime_config = load_runtime_config(environment=self.environment)
-        self._seed_runtime_config(runtime_config, seeded)
         capability_sync = self.sync_capabilities({"apply": True, "requested_by": "seed_catalogs"})
         seeded["capabilities"] += int(capability_sync["applied_count"])
         self._ensure_default_reports_and_notifications(seeded)
@@ -865,6 +865,14 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         return result
 
     def _seed_prompt_pack(self, prompt_pack: PromptPackSnapshot, seeded: dict[str, int]) -> None:
+        active = self.repository.list_records(
+            "prompt_activations",
+            filters={"assistant_key": "research_assistant", "environment": self.environment, "status": "active"},
+            limit=self.configured_limit("api_list_prompt_activations"),
+        )["items"]
+        for item in active:
+            if item.get("activation_id") != prompt_pack.activation_id:
+                self.repository.update_record("prompt_activations", str(item["activation_id"]), {"status": "retired", "active_to": utc_now().isoformat()})
         source = self.repository.create_record(
             "prompt_sources",
             {
@@ -941,6 +949,14 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         seeded["prompt_activations"] += 1
 
     def _seed_runtime_config(self, runtime_config: RuntimeConfigSnapshot, seeded: dict[str, int]) -> None:
+        active = self.repository.list_records(
+            "runtime_config_activations",
+            filters={"config_key": runtime_config.config_key, "environment": runtime_config.environment, "status": "active"},
+            limit=int(runtime_config.config["query_limits"]["api_list_runtime_config_activations"]),
+        )["items"]
+        for item in active:
+            if item.get("activation_id") != runtime_config.activation_id:
+                self.repository.update_record("runtime_config_activations", str(item["activation_id"]), {"status": "retired", "active_to": utc_now().isoformat()})
         source = self.repository.create_record(
             "runtime_config_sources",
             {
