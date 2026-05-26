@@ -12,6 +12,8 @@ python F:\Dev\AIstock\scripts\aistock_issue_workflow.py doctor
 
 If `doctor` reports `workflow_gate=blocked`, stop and report the blocking items. If it reports warnings, continue only when the warning does not affect the requested workflow.
 
+If `doctor` reports `client_manifest.codex_skill_status=stale|missing_global` or `restart_recommended=true`, the repo CLI is still canonical for this run, but old Codex/Claude windows should be refreshed after `install-client --apply` lands on `main`.
+
 ## Submit/Register BUG workflow
 
 For a new BUG report, create the GitHub-linked BUG record through the orchestrator instead of hand-writing JSON:
@@ -31,6 +33,8 @@ For a named BUG:
 ```powershell
 python F:\Dev\AIstock\scripts\aistock_issue_workflow.py run --bug-id BUG-XXX --mode plan --create-worktree
 ```
+
+If the command returns `workflow_gate=resume`, do not create another worktree; switch to the returned existing worktree and run the returned `next_command`. If it returns `blocked` because an active worktree is dirty, inspect and rescue that worktree without `reset --hard` or `git clean -fd`. Use `--force-new-worktree --reason "<why>"` only as an audited recovery exception.
 
 Then switch to the returned worktree and read:
 
@@ -67,6 +71,8 @@ python scripts\aistock_issue_workflow.py run --bug-id BUG-XXX --mode pr --valida
 
 Use `tmp/issue_workflow/<BUG>/pr-body.md` as the PR body. If the user requested automation and validation evidence exists, add `--push --create-pr`; add `--watch-ci` only when explicitly asked to monitor CI.
 
+The PR command runs a pre-PR gate: it blocks missing validation evidence, failed allowed-scope checks, staged/untracked temp artifacts such as `.codex_tmp` or `.coverage`, and failed changed-file Ruff lint. Fix those in the same task worktree before creating the PR.
+
 Do not stop at `validation_passed`. Commit only task files, then run the `run --mode pr --push --create-pr` command from the issue worktree. PR automation intentionally blocks canonical-root/main execution.
 
 ## Guardrails
@@ -81,6 +87,8 @@ Do not stop at `validation_passed`. Commit only task files, then run the `run --
 ## Post-Merge Sync And Cleanup
 
 After an approved merge, run `python scripts/aistock_issue_workflow.py close-sync --bug-id BUG-XXX --pr-url <PR_URL> --validation-evidence "<command> -> passed" --apply`, then dry-run `cleanup-after-merge`; add `--pr-url <PR_URL>` for squash-merged PR cleanup and add `--apply` only when the cleanup gate is ready.
+
+If the user explicitly requests full merge automation, use `run --mode merge --pr-url <PR_URL> --merge --validation-evidence "<command> -> passed"` so the same state machine verifies green checks, merge, close-sync, and cleanup planning. Without `--merge`, stop before merging.
 
 ## Client Install
 

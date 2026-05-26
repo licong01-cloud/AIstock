@@ -386,6 +386,184 @@ def test_doctor_reports_ready_when_client_entries_exist(
     assert "run --bug-id BUG-XXX" in payload["next_command"]
 
 
+
+def test_doctor_reports_stale_global_skill_manifest(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (isolated_workflow_root / "scripts").mkdir()
+    (isolated_workflow_root / "scripts" / "aistock_issue_workflow.py").write_text("cli", encoding="utf-8")
+    repo_skill = isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue"
+    repo_skill.mkdir(parents=True)
+    (repo_skill / "SKILL.md").write_text("repo skill", encoding="utf-8")
+    (isolated_workflow_root / "scripts" / "issue_flow.py").write_text("", encoding="utf-8")
+    (isolated_workflow_root / ".claude" / "commands").mkdir(parents=True)
+    (isolated_workflow_root / ".claude" / "commands" / "fix-aistock-issue.md").write_text("claude", encoding="utf-8")
+    (isolated_workflow_root / "docs" / "standards").mkdir(parents=True)
+    (isolated_workflow_root / "docs" / "standards" / "aistock_development_standard_v1.5_20260523.md").write_text("", encoding="utf-8")
+    (isolated_workflow_root / "docs" / "architecture").mkdir(parents=True)
+    (isolated_workflow_root / "docs" / "architecture" / "aistock_issue_workflow_opensource_cicd_design_v2_20260525.md").write_text("", encoding="utf-8")
+    codex_home = isolated_workflow_root / "codex_home"
+    global_skill = codex_home / "skills" / "fix-aistock-issue"
+    global_skill.mkdir(parents=True)
+    (global_skill / "SKILL.md").write_text("old skill", encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {
+            "ok": True,
+            "branch": "main",
+            "head": "abc1234",
+            "origin_main": "abc1234",
+            "dirty": False,
+            "dirty_count": 0,
+            "status": "## main...origin/main",
+        },
+    )
+    monkeypatch.setattr(workflow, "_mcp_config_snapshot", lambda: {"files": [], "stale_worktree_config_files": []})
+    monkeypatch.setattr(
+        workflow.code_intelligence,
+        "build_doctor_report",
+        lambda root, skip_external=False: {
+            "schema_version": "aistock_code_intelligence_doctor_v1",
+            "workflow_gate": "ready",
+            "warnings": [],
+            "blocking": [],
+        },
+    )
+
+    payload = workflow.build_doctor_report(skip_external=True)
+
+    assert payload["workflow_gate"] == "warning"
+    assert payload["client_manifest"]["codex_skill_status"] == "stale"
+    assert payload["restart_recommended"] is True
+    assert "install-client --apply" in payload["install_client_next_command"]
+
+
+def test_run_plan_existing_clean_active_worktree_returns_resume(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _write_json(isolated_workflow_root / "bug.json", _bug())
+    active = isolated_workflow_root / "active-worktree"
+    active.mkdir()
+    state_dir = active / "tmp" / "issue_workflow" / "BUG-199"
+    _write_json(
+        state_dir / "state.json",
+        {
+            "schema_version": "aistock_issue_workflow_state_v1",
+            "bug_id": "BUG-199",
+            "state": "context_ready",
+            "worktree": str(active),
+            "branch": "bug/BUG-199-existing",
+            "next_actions": [],
+        },
+    )
+    monkeypatch.setattr(workflow, "_state_roots_for_bug", lambda bug_id: [active])
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {"ok": True, "branch": "bug/BUG-199-existing", "dirty": False, "dirty_count": 0},
+    )
+
+    payload = workflow.build_run_plan(
+        bug_id="BUG-199",
+        mode="plan",
+        issue_json=str(issue),
+        changed_files=[],
+        create_worktree=True,
+        dry_run=False,
+        validation_evidence=[],
+        task_slug=None,
+        allow_missing_linkage=False,
+        allow_closed=False,
+        base="origin/main",
+        head="HEAD",
+    )
+
+    assert payload["workflow_gate"] == "resume"
+    assert payload["active_decision"]["decision"] == "resume_existing"
+    assert "resume --bug-id BUG-199" in payload["next_command"]
+
+
+def test_run_plan_dirty_active_worktree_blocks_duplicate_creation(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _write_json(isolated_workflow_root / "bug.json", _bug())
+    active = isolated_workflow_root / "active-worktree"
+    active.mkdir()
+    state_dir = active / "tmp" / "issue_workflow" / "BUG-199"
+    _write_json(
+        state_dir / "state.json",
+        {
+            "schema_version": "aistock_issue_workflow_state_v1",
+            "bug_id": "BUG-199",
+            "state": "context_ready",
+            "worktree": str(active),
+            "branch": "bug/BUG-199-existing",
+            "next_actions": [],
+        },
+    )
+    monkeypatch.setattr(workflow, "_state_roots_for_bug", lambda bug_id: [active])
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {"ok": True, "branch": "bug/BUG-199-existing", "dirty": True, "dirty_count": 2},
+    )
+
+    payload = workflow.build_run_plan(
+        bug_id="BUG-199",
+        mode="plan",
+        issue_json=str(issue),
+        changed_files=[],
+        create_worktree=True,
+        dry_run=False,
+        validation_evidence=[],
+        task_slug=None,
+        allow_missing_linkage=False,
+        allow_closed=False,
+        base="origin/main",
+        head="HEAD",
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["active_decision"]["decision"] == "blocked_dirty_active"
+    assert "inspect_git_status_without_reset_or_clean" in payload["active_decision"]["rescue_checklist"]
+
+
+def test_pre_pr_gate_blocks_artifacts_and_scope_violation(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    finish = {
+        "changed_files": ["scripts/aistock_issue_workflow.py", "outside/scope.py"],
+        "scope_check": {"status": "failed", "violations": ["outside/scope.py"]},
+    }
+    monkeypatch.setattr(
+        workflow,
+        "_git_status_paths",
+        lambda root: [{"status": "??", "path": ".codex_tmp/debug.json"}],
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_run_changed_file_lint",
+        lambda changed_files, root: {"status": "passed", "python_files": changed_files, "commands": []},
+    )
+
+    payload = workflow._pre_pr_gate(
+        finish=finish,
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        root=isolated_workflow_root,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["artifact_guard"]["status"] == "failed"
+    assert any("scope check failed" in item for item in payload["blocking"])
+    assert any("temporary/cache artifacts" in item for item in payload["blocking"])
+
 def test_submit_bug_dry_run_requires_github_sync(isolated_workflow_root: Path) -> None:
     allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
     _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 117})
@@ -689,6 +867,28 @@ def test_run_pr_mode_blocks_pr_automation_from_canonical_root(
             head="HEAD",
         )
 
+
+
+def test_run_merge_mode_requires_explicit_authorization(isolated_workflow_root: Path) -> None:
+    payload = workflow.build_run_plan(
+        bug_id="BUG-199",
+        mode="merge",
+        issue_json=None,
+        changed_files=[],
+        create_worktree=False,
+        dry_run=False,
+        validation_evidence=[],
+        task_slug=None,
+        allow_missing_linkage=False,
+        allow_closed=False,
+        base="origin/main",
+        head="HEAD",
+        pr_url="https://github.com/licong01-cloud/AIstock/pull/999",
+        merge=False,
+    )
+
+    assert payload["workflow_gate"] == "merge_requires_explicit_flag"
+    assert "--merge" in payload["next_command"]
 
 def test_close_sync_is_dry_run_and_requires_pr_url(
     isolated_workflow_root: Path,
