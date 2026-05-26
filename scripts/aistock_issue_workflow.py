@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import hashlib
@@ -21,6 +21,7 @@ GITHUB_REPO = "licong01-cloud/AIstock"
 sys.path.insert(0, str(REPO_ROOT))
 from scripts import issue_flow as flow  # noqa: E402
 from scripts import ci_failure_issue_summary as ci_failure_summary  # noqa: E402
+from scripts import code_intelligence_adapter as code_intelligence  # noqa: E402
 
 
 class WorkflowError(ValueError):
@@ -756,6 +757,69 @@ def _bug_path_for_target(original_path: Path, target_root: Path) -> Path:
         return original_path
 
 
+def _issue_query(record: dict[str, Any], changed_files: list[str] | None = None) -> str:
+    parts = [
+        str(record.get("bug_id") or record.get("candidate_id") or "AIstock issue"),
+        str(record.get("title") or ""),
+        str(record.get("module") or record.get("module_guess") or ""),
+        str(record.get("description") or record.get("actual") or ""),
+    ]
+    if changed_files:
+        parts.extend(changed_files[:8])
+    return " ".join(part for part in parts if part).strip() or "AIstock issue"
+
+
+def _build_code_intelligence_summary(
+    *,
+    item_id: str,
+    record: dict[str, Any],
+    changed_files: list[str] | None,
+    root: Path,
+) -> dict[str, Any]:
+    return code_intelligence.build_summary(
+        item_id=item_id,
+        query=_issue_query(record, changed_files),
+        changed_files=changed_files or [],
+        root=root,
+        skip_external=False,
+    )
+
+
+def _batch_code_intelligence_query(records: list[dict[str, Any]], changed_files: list[str] | None = None) -> str:
+    parts = ["AIstock batch issue"]
+    parts.extend(
+        " ".join(
+            str(value)
+            for value in (
+                record.get("bug_id"),
+                record.get("title"),
+                record.get("module"),
+                record.get("description") or record.get("actual"),
+            )
+            if value
+        )
+        for record in records
+    )
+    if changed_files:
+        parts.extend(changed_files[:12])
+    return " ".join(part for part in parts if part).strip() or "AIstock batch issue"
+
+
+def _build_batch_code_intelligence_summary(
+    *,
+    batch_id: str,
+    records: list[dict[str, Any]],
+    changed_files: list[str] | None,
+    root: Path,
+) -> dict[str, Any]:
+    return code_intelligence.build_summary(
+        item_id=batch_id,
+        query=_batch_code_intelligence_query(records, changed_files),
+        changed_files=changed_files or [],
+        root=root,
+        skip_external=False,
+    )
+
 def build_start_plan(
     *,
     bug_id: str | None,
@@ -783,6 +847,22 @@ def build_start_plan(
     output_dir = target_root / WORKFLOW_ROOT / canonical_bug_id
     fix_ready = flow.build_fix_ready(record, changed_files)
     context_pack = flow.build_context_pack(record, changed_files)
+    code_intelligence_summary = _build_code_intelligence_summary(
+        item_id=canonical_bug_id,
+        record=record,
+        changed_files=changed_files,
+        root=target_root,
+    )
+    context_pack["code_intelligence"] = {
+        "provider": code_intelligence_summary.get("provider"),
+        "status": code_intelligence_summary.get("status"),
+        "context_ref": code_intelligence_summary.get("context_ref"),
+        "manifest_ref": code_intelligence_summary.get("manifest_ref"),
+        "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
+        "fallback_used": code_intelligence_summary.get("fallback_used"),
+        "understand_anything": code_intelligence_summary.get("understand_anything"),
+    }
+    fix_ready["code_intelligence"] = context_pack["code_intelligence"]
     fix_ready_path = output_dir / "fix-ready.json"
     context_json_path = output_dir / "context-pack.json"
     context_md_path = output_dir / "context-pack.md"
@@ -805,6 +885,7 @@ def build_start_plan(
             github_issue_number=record.get("github_issue_number"),
             github_issue_url=record.get("github_issue_url"),
             production_gates=fix_ready.get("validation_selection", {}).get("production_gates", {}),
+            code_intelligence=context_pack.get("code_intelligence"),
             next_actions=[
                 "switch_to_worktree_if_created",
                 "read_context_pack_md",
@@ -833,6 +914,7 @@ def build_start_plan(
         "required_verification": fix_ready.get("required_verification") or [],
         "recommended_verification": fix_ready.get("recommended_verification") or [],
         "production_gates": fix_ready.get("validation_selection", {}).get("production_gates", {}),
+        "code_intelligence": context_pack.get("code_intelligence"),
         "next_agent_steps": [
             "switch_to_worktree_if_created",
             "read_context_pack_md",
@@ -858,6 +940,15 @@ def build_finish_plan(
     changed = changed_files if changed_files is not None else flow.changed_files_from_git(base, head)
     validation = flow.select_validation(changed, module=record.get("module"))
     pr_quality = flow.build_pr_quality(base=base, head=head, issue_record=record, changed_files=changed)
+    code_intelligence_summary = _build_code_intelligence_summary(
+        item_id=canonical_bug_id,
+        record=record,
+        changed_files=changed,
+        root=REPO_ROOT,
+    )
+    codegraph_tests = code_intelligence_summary.get("affected_tests", {}).get("suggested_tests") or []
+    if codegraph_tests:
+        validation["codegraph_suggested_tests"] = codegraph_tests
     evidence = [item for item in validation_evidence if item.strip()]
     closure_ready = bool(evidence) or plan_only or allow_missing_evidence
     output_dir = REPO_ROOT / WORKFLOW_ROOT / canonical_bug_id
@@ -870,6 +961,7 @@ def build_finish_plan(
         "pr_quality": pr_quality,
         "validation_evidence": evidence,
         "closure_ready": closure_ready,
+        "code_intelligence": code_intelligence_summary,
     })
     _write_text(pr_body_path, pr_body)
     next_state = "validation_passed" if evidence else ("validation_planned" if plan_only else "blocked")
@@ -880,6 +972,12 @@ def build_finish_plan(
         validation_evidence=evidence,
         pr_body_path=_repo_rel(pr_body_path),
         production_gates=validation.get("production_gates") or {},
+        code_intelligence={
+            "status": code_intelligence_summary.get("status"),
+            "context_ref": code_intelligence_summary.get("context_ref"),
+            "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
+            "fallback_used": code_intelligence_summary.get("fallback_used"),
+        },
         stop_reason=None if closure_ready else "validation_evidence_missing",
         next_actions=[
             "commit_only_task_files",
@@ -898,6 +996,14 @@ def build_finish_plan(
         "recommended_verification": validation.get("recommended_plans") or [],
         "production_gates": validation.get("production_gates") or {},
         "scope_check": pr_quality.get("scope_check"),
+        "code_intelligence": {
+            "status": code_intelligence_summary.get("status"),
+            "context_ref": code_intelligence_summary.get("context_ref"),
+            "manifest_ref": code_intelligence_summary.get("manifest_ref"),
+            "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
+            "fallback_used": code_intelligence_summary.get("fallback_used"),
+        },
+        "codegraph_suggested_tests": codegraph_tests,
         "validation_evidence": evidence,
         "closure_ready": closure_ready,
         "workflow_gate": "ready_for_pr" if closure_ready else "validation_evidence_missing",
@@ -933,6 +1039,9 @@ def render_pr_body(
         "",
         "## Required validation",
         *[f"- `{plan}`" for plan in validation.get("required_plans") or ["l0"]],
+        "",
+        "## Code intelligence",
+        *[f"- CodeGraph suggested test: `{path}`" for path in validation.get("codegraph_suggested_tests") or ["none"]],
         "",
         "## Evidence",
         *[f"- {item}" for item in evidence or ["missing - run required validation before requesting merge"]],
@@ -1093,11 +1202,29 @@ def build_start_batch_plan(
     output_dir = target_root / WORKFLOW_ROOT / signature["batch_id"]
     context_dir = output_dir / "context-packs"
     fix_ready_dir = output_dir / "fix-ready"
+    code_intelligence_summary = _build_batch_code_intelligence_summary(
+        batch_id=signature["batch_id"],
+        records=records,
+        changed_files=batch_plan.get("shared_files") or [],
+        root=target_root,
+    )
+    batch_code_intelligence = {
+        "provider": code_intelligence_summary.get("provider"),
+        "status": code_intelligence_summary.get("status"),
+        "context_ref": code_intelligence_summary.get("context_ref"),
+        "manifest_ref": code_intelligence_summary.get("manifest_ref"),
+        "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
+        "fallback_used": code_intelligence_summary.get("fallback_used"),
+        "understand_anything": code_intelligence_summary.get("understand_anything"),
+    }
+    batch_plan["code_intelligence"] = batch_code_intelligence
     if not dry_run:
         for record, source_path in record_pairs:
             bug_id = str(record.get("bug_id"))
             context_pack = flow.build_context_pack(record, [])
             fix_ready = flow.build_fix_ready(record, [])
+            context_pack["code_intelligence"] = batch_code_intelligence
+            fix_ready["code_intelligence"] = batch_code_intelligence
             _write_json(context_dir / f"{bug_id}.json", context_pack)
             _write_text(context_dir / f"{bug_id}.md", flow.render_context_pack_markdown(context_pack))
             _write_json(fix_ready_dir / f"{bug_id}.json", fix_ready)
@@ -1130,6 +1257,7 @@ def build_start_batch_plan(
             batch_state_path=_repo_rel(output_dir / "batch-state.json", target_root),
             context_dir=_repo_rel(context_dir, target_root),
             fix_ready_dir=_repo_rel(fix_ready_dir, target_root),
+            code_intelligence=batch_code_intelligence,
             next_actions=[
                 "switch_to_batch_worktree_if_created",
                 "read_each_context_pack",
@@ -1149,6 +1277,7 @@ def build_start_batch_plan(
         "fix_ready_dir": _repo_rel(fix_ready_dir, target_root),
         "state_path": _repo_rel(_state_path(signature["batch_id"], target_root), target_root),
         "events_path": _repo_rel(_events_path(signature["batch_id"], target_root), target_root),
+        "code_intelligence": batch_code_intelligence,
         "workflow_gate": "ready_for_batch_fix",
         "next_command": f"python scripts/aistock_issue_workflow.py finish-batch --batch-id {signature['batch_id']} --plan-only",
     }
@@ -1183,9 +1312,11 @@ def render_batch_pr_body(
     validation: dict[str, Any],
     evidence: list[str],
     commit_map: dict[str, str],
+    code_intelligence_summary: dict[str, Any],
     closure_ready: bool,
 ) -> str:
     gates = validation.get("production_gates") or {}
+    codegraph_tests = code_intelligence_summary.get("affected_tests", {}).get("suggested_tests") or []
     lines = [
         f"## {batch_id} batch issue workflow summary",
         "",
@@ -1207,6 +1338,12 @@ def render_batch_pr_body(
         "",
         "## Required validation",
         *[f"- `{plan}`" for plan in validation.get("required_plans") or ["l0"]],
+        "",
+        "## Code intelligence",
+        f"- context_ref: `{code_intelligence_summary.get('context_ref') or 'not_generated'}`",
+        f"- affected_tests_ref: `{code_intelligence_summary.get('affected_tests_ref') or 'not_generated'}`",
+        f"- fallback_used: `{str(bool(code_intelligence_summary.get('fallback_used'))).lower()}`",
+        *[f"- CodeGraph suggested test: `{path}`" for path in codegraph_tests or ["none"]],
         "",
         "## Evidence",
         *[f"- {item}" for item in evidence or ["missing - run required validation before requesting merge"]],
@@ -1255,6 +1392,15 @@ def build_finish_batch_plan(
     canonical_batch_id = signature["batch_id"]
     changed = changed_files if changed_files is not None else flow.changed_files_from_git(base, head)
     validation = flow.select_validation(changed, module=signature["module"])
+    code_intelligence_summary = _build_batch_code_intelligence_summary(
+        batch_id=canonical_batch_id,
+        records=records,
+        changed_files=changed,
+        root=REPO_ROOT,
+    )
+    codegraph_tests = code_intelligence_summary.get("affected_tests", {}).get("suggested_tests") or []
+    if codegraph_tests:
+        validation["codegraph_suggested_tests"] = codegraph_tests
     evidence = [item for item in validation_evidence if item.strip()]
     closure_ready = bool(evidence) or plan_only or allow_missing_evidence
     commit_map = _parse_issue_commit_map(issue_commit)
@@ -1273,13 +1419,26 @@ def build_finish_batch_plan(
             str(record.get("bug_id")): flow._unique_strings(flow._as_list(record.get("closure_requirements")))
             for record in records
         },
+        "code_intelligence": code_intelligence_summary,
         "closure_ready": closure_ready,
         "production_gates": validation.get("production_gates") or {},
     }
     _write_json(output_dir / "finish-plan.json", finish_plan)
     if evidence:
         _write_json(output_dir / "validation-evidence.json", {"batch_id": canonical_batch_id, "items": evidence})
-    _write_text(pr_body_path, render_batch_pr_body(canonical_batch_id, records, changed, validation, evidence, commit_map, closure_ready))
+    _write_text(
+        pr_body_path,
+        render_batch_pr_body(
+            canonical_batch_id,
+            records,
+            changed,
+            validation,
+            evidence,
+            commit_map,
+            code_intelligence_summary,
+            closure_ready,
+        ),
+    )
     next_state = "validation_passed" if evidence else ("validation_planned" if plan_only else "blocked")
     _write_state(
         canonical_batch_id,
@@ -1290,6 +1449,12 @@ def build_finish_batch_plan(
         validation_evidence=evidence,
         pr_body_path=_repo_rel(pr_body_path),
         production_gates=validation.get("production_gates") or {},
+        code_intelligence={
+            "status": code_intelligence_summary.get("status"),
+            "context_ref": code_intelligence_summary.get("context_ref"),
+            "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
+            "fallback_used": code_intelligence_summary.get("fallback_used"),
+        },
         stop_reason=None if closure_ready else "validation_evidence_missing",
         next_actions=[
             "commit_only_batch_files",
@@ -1303,6 +1468,14 @@ def build_finish_batch_plan(
         "workflow_gate": "ready_for_pr" if closure_ready else "validation_evidence_missing",
         "required_verification": validation.get("required_plans") or [],
         "recommended_verification": validation.get("recommended_plans") or [],
+        "code_intelligence": {
+            "status": code_intelligence_summary.get("status"),
+            "context_ref": code_intelligence_summary.get("context_ref"),
+            "manifest_ref": code_intelligence_summary.get("manifest_ref"),
+            "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
+            "fallback_used": code_intelligence_summary.get("fallback_used"),
+        },
+        "codegraph_suggested_tests": codegraph_tests,
         "pr_body_path": _repo_rel(pr_body_path),
         "state_path": _repo_rel(_state_path(canonical_batch_id)),
         "events_path": _repo_rel(_events_path(canonical_batch_id)),
@@ -1397,6 +1570,12 @@ def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
     if mcp["stale_worktree_config_files"]:
         warnings.append("MCP/Codex config mentions AIstock_worktrees; verify it is not a stale server target")
 
+    code_intel = code_intelligence.build_doctor_report(REPO_ROOT, skip_external=skip_external)
+    for warning in code_intel.get("warnings") or []:
+        warnings.append(f"code intelligence: {warning}")
+    for item in code_intel.get("blocking") or []:
+        blocking.append(f"code intelligence: {item}")
+
     gate = "blocked" if blocking else ("warning" if warnings else "ready")
     next_command = f"python {REPO_ROOT / 'scripts' / 'aistock_issue_workflow.py'} run --bug-id BUG-XXX --mode plan --create-worktree"
     return {
@@ -1411,6 +1590,7 @@ def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
         "canonical_git": canonical_git,
         "github": github,
         "mcp": mcp,
+        "code_intelligence": code_intel,
         "next_command": next_command,
     }
 
@@ -2470,3 +2650,7 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+
+

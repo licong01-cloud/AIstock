@@ -697,6 +697,16 @@ def render_context_pack_markdown(pack: dict[str, Any]) -> str:
         "## Evidence",
         *[f"- {item}" for item in pack.get("evidence_refs") or ["n/a"]],
         "",
+        "## Code Intelligence",
+        *(
+            [
+                f"- {key}: `{value}`"
+                for key, value in (pack.get("code_intelligence") or {}).items()
+                if key in {"provider", "status", "context_ref", "affected_tests_ref", "fallback_used"}
+            ]
+            or ["- n/a"]
+        ),
+        "",
         "## Standards",
         *[f"- `{item}`" for item in pack.get("standards_refs") or []],
         "",

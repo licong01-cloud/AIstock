@@ -10,6 +10,22 @@ import yaml
 import scripts.aistock_issue_workflow as workflow
 
 
+def _fake_code_intelligence_summary(**overrides: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "schema_version": "aistock_code_intelligence_summary_v1",
+        "provider": "codegraph",
+        "status": "fallback",
+        "context_ref": "tmp/issue_workflow/BUG-199/codegraph-context.md",
+        "manifest_ref": "tmp/issue_workflow/BUG-199/code-intelligence.json",
+        "affected_tests_ref": "tmp/issue_workflow/BUG-199/affected-tests.json",
+        "fallback_used": True,
+        "affected_tests": {"suggested_tests": []},
+        "understand_anything": {"status": "not_required_missing"},
+    }
+    payload.update(overrides)
+    return payload
+
+
 def _bug(**overrides: Any) -> dict[str, Any]:
     record: dict[str, Any] = {
         "bug_id": "BUG-199",
@@ -99,8 +115,12 @@ def test_start_dry_run_returns_worktree_context_and_scope(isolated_workflow_root
     assert payload["next_agent_steps"][0] == "switch_to_worktree_if_created"
 
 
-def test_start_writes_fix_ready_and_context_pack(isolated_workflow_root: Path) -> None:
+def test_start_writes_fix_ready_and_context_pack(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     issue = _write_json(isolated_workflow_root / "bug.json", _bug())
+    monkeypatch.setattr(workflow, "_build_code_intelligence_summary", lambda **kwargs: _fake_code_intelligence_summary())
 
     payload = workflow.build_start_plan(
         bug_id=None,
@@ -118,7 +138,10 @@ def test_start_writes_fix_ready_and_context_pack(isolated_workflow_root: Path) -
     context_md = isolated_workflow_root / payload["context_pack_md"]
     assert fix_ready.exists()
     assert context_json.exists()
+    context_payload = json.loads(context_json.read_text(encoding="utf-8"))
     assert context_md.read_text(encoding="utf-8").startswith("# AIstock Context Pack")
+    assert context_payload["code_intelligence"]["provider"] == "codegraph"
+    assert payload["code_intelligence"]["affected_tests_ref"].endswith("affected-tests.json")
     assert json.loads(fix_ready.read_text(encoding="utf-8"))["workflow_gate"] == "allowed"
 
 
@@ -154,8 +177,18 @@ def test_finish_plan_selects_validation_and_requires_evidence(
     assert (isolated_workflow_root / ready["pr_body_path"]).exists()
 
 
-def test_finish_plan_only_can_draft_pr_body_without_evidence(isolated_workflow_root: Path) -> None:
+def test_finish_plan_only_can_draft_pr_body_without_evidence(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     issue = _write_json(isolated_workflow_root / "bug.json", _bug())
+    monkeypatch.setattr(
+        workflow,
+        "_build_code_intelligence_summary",
+        lambda **kwargs: _fake_code_intelligence_summary(
+            affected_tests={"suggested_tests": ["backend/tests/scripts/test_aistock_issue_workflow.py"]}
+        ),
+    )
 
     payload = workflow.build_finish_plan(
         bug_id=None,
@@ -169,8 +202,13 @@ def test_finish_plan_only_can_draft_pr_body_without_evidence(isolated_workflow_r
     )
 
     assert payload["closure_ready"] is True
+    assert payload["codegraph_suggested_tests"] == ["backend/tests/scripts/test_aistock_issue_workflow.py"]
+    assert payload["code_intelligence"]["affected_tests_ref"].endswith("affected-tests.json")
     pr_body = isolated_workflow_root / payload["pr_body_path"]
-    assert "missing - run required validation" in pr_body.read_text(encoding="utf-8")
+    pr_body_text = pr_body.read_text(encoding="utf-8")
+    assert "Code intelligence" in pr_body_text
+    assert "backend/tests/scripts/test_aistock_issue_workflow.py" in pr_body_text
+    assert "missing - run required validation" in pr_body_text
 
 
 def test_triage_p0_groups_open_issues_and_flags_missing_linkage(
@@ -222,10 +260,14 @@ def test_start_batch_rejects_incompatible_modules(isolated_workflow_root: Path) 
         )
 
 
-def test_start_batch_writes_batch_state_and_contexts(isolated_workflow_root: Path) -> None:
+def test_start_batch_writes_batch_state_and_contexts(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     bugs_root = workflow.BUGS_ROOT
     _write_json(bugs_root / "bug199.json", _bug())
     _write_json(bugs_root / "bug200.json", _bug(bug_id="BUG-200", github_issue_number=200, github_issue_url="https://github.example/issues/200"))
+    monkeypatch.setattr(workflow, "_build_batch_code_intelligence_summary", lambda **kwargs: _fake_code_intelligence_summary(item_id=kwargs["batch_id"]))
 
     payload = workflow.build_start_batch_plan(
         bug_ids=["BUG-199", "BUG-200"],
@@ -240,15 +282,29 @@ def test_start_batch_writes_batch_state_and_contexts(isolated_workflow_root: Pat
     assert payload["workflow_gate"] == "ready_for_batch_fix"
     assert payload["batch_id"].startswith("BATCH-validation-guardrails-")
     assert payload["bug_ids"] == ["BUG-199", "BUG-200"]
+    assert payload["code_intelligence"]["context_ref"].endswith("codegraph-context.md")
     assert (isolated_workflow_root / payload["batch_state_path"]).exists()
     assert (isolated_workflow_root / payload["context_dir"] / "BUG-199.md").exists()
     assert (isolated_workflow_root / payload["fix_ready_dir"] / "BUG-200.json").exists()
+    context_pack = json.loads((isolated_workflow_root / payload["context_dir"] / "BUG-199.json").read_text(encoding="utf-8"))
+    assert context_pack["code_intelligence"]["affected_tests_ref"].endswith("affected-tests.json")
 
 
-def test_finish_batch_plan_generates_per_issue_pr_body(isolated_workflow_root: Path) -> None:
+def test_finish_batch_plan_generates_per_issue_pr_body(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     bugs_root = workflow.BUGS_ROOT
     _write_json(bugs_root / "bug199.json", _bug())
     _write_json(bugs_root / "bug200.json", _bug(bug_id="BUG-200", github_issue_number=200, github_issue_url="https://github.example/issues/200"))
+    monkeypatch.setattr(
+        workflow,
+        "_build_batch_code_intelligence_summary",
+        lambda **kwargs: _fake_code_intelligence_summary(
+            item_id=kwargs["batch_id"],
+            affected_tests={"suggested_tests": ["backend/tests/scripts/test_aistock_issue_workflow.py"]},
+        ),
+    )
 
     payload = workflow.build_finish_batch_plan(
         batch_id=None,
@@ -265,10 +321,13 @@ def test_finish_batch_plan_generates_per_issue_pr_body(isolated_workflow_root: P
     assert payload["schema_version"] == "aistock_issue_workflow_finish_batch_v1"
     assert payload["workflow_gate"] == "ready_for_pr"
     assert payload["per_issue_commit_map"] == {"BUG-199": "abc1234", "BUG-200": "def5678"}
+    assert payload["codegraph_suggested_tests"] == ["backend/tests/scripts/test_aistock_issue_workflow.py"]
     pr_body = (isolated_workflow_root / payload["pr_body_path"]).read_text(encoding="utf-8")
     assert "Closes #199" in pr_body
     assert "Closes #200" in pr_body
     assert "Per-issue closure map" in pr_body
+    assert "Code intelligence" in pr_body
+    assert "backend/tests/scripts/test_aistock_issue_workflow.py" in pr_body
 
 
 def test_doctor_reports_ready_when_client_entries_exist(
@@ -305,12 +364,25 @@ def test_doctor_reports_ready_when_client_entries_exist(
         },
     )
     monkeypatch.setattr(workflow, "_mcp_config_snapshot", lambda: {"files": [], "stale_worktree_config_files": []})
+    monkeypatch.setattr(
+        workflow.code_intelligence,
+        "build_doctor_report",
+        lambda root, skip_external=False: {
+            "schema_version": "aistock_code_intelligence_doctor_v1",
+            "workflow_gate": "ready",
+            "warnings": [],
+            "blocking": [],
+            "codegraph": {"status": "ok"},
+            "understand_anything": {"status": "available"},
+        },
+    )
 
     payload = workflow.build_doctor_report(skip_external=True)
 
     assert payload["schema_version"] == "aistock_issue_workflow_doctor_v1"
     assert payload["workflow_gate"] == "ready"
     assert payload["blocking"] == []
+    assert payload["code_intelligence"]["codegraph"]["status"] == "ok"
     assert "run --bug-id BUG-XXX" in payload["next_command"]
 
 
