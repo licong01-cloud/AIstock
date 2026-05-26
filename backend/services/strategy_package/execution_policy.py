@@ -12,12 +12,14 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from backend.execution_algos import ALGO_REGISTRY
-from backend.services.trading_core.errors import StrategyPackageValidationError, UnsupportedFeatureError
+from backend.services.trading_core.errors import StrategyPackageValidationError
 
 
 class ExecutionPolicyValidationStatus(str, Enum):
     BACKTEST_VALIDATED = "BACKTEST_VALIDATED"
+
+
+BACKTEST_SUCCESS_STATUSES = {"SUCCEEDED", "COMPLETED", "BACKTEST_VALIDATED"}
 
 
 ALLOWED_POLICY_JSON_KEYS = {
@@ -32,9 +34,6 @@ ALLOWED_POLICY_JSON_KEYS = {
     "unfilled_handler",
     "unfilled_handler_params",
 }
-
-BACKTEST_SUCCESS_STATUSES = {"SUCCEEDED", "COMPLETED", "BACKTEST_VALIDATED"}
-
 
 def compute_execution_policy_sha256(policy_json: dict[str, Any]) -> str:
     encoded = json.dumps(
@@ -74,24 +73,6 @@ def normalize_execution_policy_json(policy_json: dict[str, Any]) -> dict[str, An
                 context={"max_participation_rate": normalized["algo_config"]["max_participation_rate"]},
             )
     return normalized
-
-
-def ensure_policy_can_enter_paper(policy: "ValidatedExecutionPolicy") -> None:
-    if policy.validation_status != ExecutionPolicyValidationStatus.BACKTEST_VALIDATED:
-        raise StrategyPackageValidationError(
-            "execution policy must be backtest validated before paper trading",
-            context={"policy_id": policy.policy_id, "validation_status": policy.validation_status.value},
-        )
-    if policy.source_backtest_status.upper() not in BACKTEST_SUCCESS_STATUSES:
-        raise StrategyPackageValidationError(
-            "execution policy source backtest did not succeed",
-            context={"policy_id": policy.policy_id, "source_backtest_status": policy.source_backtest_status},
-        )
-    if policy.algo_code not in ALGO_REGISTRY:
-        raise UnsupportedFeatureError(
-            "minute execution algorithm is not registered",
-            context={"policy_id": policy.policy_id, "algo_code": policy.algo_code, "registered_algos": sorted(ALGO_REGISTRY)},
-        )
 
 
 class ValidatedExecutionPolicy(BaseModel):
@@ -141,6 +122,4 @@ class ValidatedExecutionPolicy(BaseModel):
             raise ValueError("algo_code does not match policy_json.algo_code")
         for key, value in updates.items():
             object.__setattr__(self, key, value)
-        if self.paper_enabled:
-            ensure_policy_can_enter_paper(self)
         return self

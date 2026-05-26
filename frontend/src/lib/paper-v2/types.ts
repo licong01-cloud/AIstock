@@ -79,6 +79,7 @@ export type StrategyPackage = {
   created_at?: string;
   updated_at?: string;
   metrics_summary?: MetricsSummary;
+  asset_eligibility?: JsonObject;
   manifest?: JsonObject;
   runtime_config_contract?: JsonObject;
 };
@@ -163,6 +164,7 @@ export type SelectablePackage = {
   alpha_count?: number;
   portfolio_topk?: number;
   metrics_summary?: MetricsSummary;
+  asset_eligibility?: JsonObject;
   model_state?: ModelState | JsonObject;
   selection_health?: JsonObject;
   latest_selection_run?: LatestSelectionRun | null;
@@ -226,7 +228,6 @@ export type ExecutionPolicy = {
   algo_code?: string;
   algo_config?: JsonObject;
   validation_status?: string;
-  paper_enabled?: boolean;
   is_portfolio_default?: boolean;
   source_backtest_id?: string;
   source_backtest_status?: string;

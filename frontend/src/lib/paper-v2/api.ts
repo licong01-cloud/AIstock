@@ -221,14 +221,6 @@ export const strategyPackageApi = {
     const data = await apiFetch<{ execution_policies: ExecutionPolicy[] }>(`/strategy-packages/${packageId}/execution-policies`);
     return data.execution_policies || [];
   },
-  async enableSelection(packageId: string): Promise<StrategyPackage> {
-    const data = await apiFetch<{ package: StrategyPackage }>(`/strategy-packages/${packageId}/enable-selection`, { method: "POST" });
-    return data.package;
-  },
-  async enablePaper(packageId: string): Promise<StrategyPackage> {
-    const data = await apiFetch<{ package: StrategyPackage }>(`/strategy-packages/${packageId}/enable-paper`, { method: "POST" });
-    return data.package;
-  },
   async retire(packageId: string): Promise<StrategyPackage> {
     const data = await apiFetch<{ package: StrategyPackage }>(`/strategy-packages/${packageId}/retire`, { method: "POST" });
     return data.package;
@@ -249,6 +241,15 @@ export const strategyPackageApi = {
     const data = await apiFetch<{ jobs: JsonObject[] }>(`/strategy-packages/${packageId}/model-retrain/jobs`);
     return data.jobs || [];
   },
+  async deleteDependencies(packageId: string): Promise<JsonObject> {
+    return apiFetch(`/strategy-packages/${encodeURIComponent(packageId)}/delete-dependencies`);
+  },
+  async deletePackage(packageId: string): Promise<JsonObject> {
+    return apiFetch(`/strategy-packages/${encodeURIComponent(packageId)}`, {
+      method: "DELETE",
+      body: JSON.stringify({ confirm_delete: true }),
+    });
+  },
 };
 
 export const selectionCenterApi = {
@@ -263,6 +264,23 @@ export const selectionCenterApi = {
   async listRuns(limit = 100): Promise<SelectionRun[]> {
     const data = await apiFetch<{ runs: SelectionRun[] }>(`/selection-center/runs?limit=${limit}`);
     return data.runs || [];
+  },
+  async listRunsPage(params: { page?: number; pageSize?: number; limit?: number } = {}): Promise<{ runs: SelectionRun[]; pagination: JsonObject }> {
+    const qs = new URLSearchParams({
+      page: String(params.page || 1),
+      page_size: String(params.pageSize || params.limit || 20),
+      limit: String(params.limit || params.pageSize || 20),
+    });
+    const data = await apiFetch<{ runs: SelectionRun[]; pagination?: JsonObject }>(`/selection-center/runs?${qs.toString()}`);
+    return {
+      runs: data.runs || [],
+      pagination: data.pagination || {
+        page: params.page || 1,
+        page_size: params.pageSize || params.limit || 20,
+        total: data.runs?.length || 0,
+        total_pages: 1,
+      },
+    };
   },
   async getRun(runId: string): Promise<SelectionRun> {
     const data = await apiFetch<{ run: SelectionRun }>(`/selection-center/runs/${runId}`);
@@ -296,6 +314,15 @@ export const selectionCenterApi = {
   async createPaperPortfolio(runId: string, payload: JsonObject): Promise<{ portfolio: PaperPortfolio; link: JsonObject; paper_runtime_config: JsonObject }> {
     return apiFetch(`/selection-center/runs/${runId}/create-paper-portfolio`, body(payload));
   },
+  async deleteRun(runId: string): Promise<JsonObject> {
+    return apiFetch(`/selection-center/runs/${runId}`, { method: "DELETE" });
+  },
+  async deleteRuns(runIds: string[]): Promise<JsonObject> {
+    return apiFetch("/selection-center/runs/bulk-delete", {
+      method: "POST",
+      body: JSON.stringify({ run_ids: runIds, confirm_delete: true }),
+    });
+  },
 };
 
 export const paperV2Api = {
@@ -309,6 +336,37 @@ export const paperV2Api = {
   async listPortfolios(limit = 200): Promise<PaperPortfolio[]> {
     const data = await apiFetch<{ portfolios: PaperPortfolio[] }>(`/paper-v2/portfolios?limit=${limit}`);
     return data.portfolios || [];
+  },
+  async listPortfoliosPage(params: {
+    page?: number;
+    pageSize?: number;
+    limit?: number;
+    statuses?: string[];
+    search?: string;
+    sortBy?: string;
+    sortDir?: string;
+  } = {}): Promise<{ portfolios: PaperPortfolio[]; pagination: JsonObject }> {
+    const qs = new URLSearchParams({
+      page: String(params.page || 1),
+      page_size: String(params.pageSize || params.limit || 20),
+      limit: String(params.limit || params.pageSize || 20),
+      sort_by: params.sortBy || "created_at",
+      sort_dir: params.sortDir || "desc",
+    });
+    for (const status of params.statuses || []) {
+      if (status) qs.append("status", status);
+    }
+    if (params.search?.trim()) qs.set("search", params.search.trim());
+    const data = await apiFetch<{ portfolios: PaperPortfolio[]; pagination?: JsonObject }>(`/paper-v2/portfolios?${qs.toString()}`);
+    return {
+      portfolios: data.portfolios || [],
+      pagination: data.pagination || {
+        page: params.page || 1,
+        page_size: params.pageSize || params.limit || 20,
+        total: data.portfolios?.length || 0,
+        total_pages: 1,
+      },
+    };
   },
   async runningSummary(limit = 100, snapshotLimit = 30, positionLimit = 8): Promise<JsonObject[]> {
     const qs = new URLSearchParams({
@@ -373,6 +431,21 @@ export const paperV2Api = {
   async lifecycle(portfolioId: string, action: "pause" | "resume" | "complete" | "retire"): Promise<PaperPortfolio> {
     const data = await apiFetch<{ portfolio: PaperPortfolio }>(`/paper-v2/portfolios/${portfolioId}/${action}`, { method: "POST" });
     return data.portfolio;
+  },
+  async bulkLifecycle(portfolioIds: string[], action: "pause" | "resume" | "complete" | "retire"): Promise<JsonObject> {
+    return apiFetch("/paper-v2/portfolios/bulk-lifecycle", body({ portfolio_ids: portfolioIds, action }));
+  },
+  async deletePortfolio(portfolioId: string): Promise<JsonObject> {
+    return apiFetch(`/paper-v2/portfolios/${portfolioId}`, {
+      method: "DELETE",
+      body: JSON.stringify({ confirm_delete: true }),
+    });
+  },
+  async deletePortfolios(portfolioIds: string[]): Promise<JsonObject> {
+    return apiFetch("/paper-v2/portfolios/bulk-delete", {
+      method: "POST",
+      body: JSON.stringify({ portfolio_ids: portfolioIds, confirm_delete: true }),
+    });
   },
   async readiness(portfolioId: string, payload: { trade_date: string; runtime_config: JsonObject }): Promise<ReadinessResult> {
     const data = await apiFetch<{ readiness: ReadinessResult }>(`/paper-v2/portfolios/${portfolioId}/readiness`, body(payload));

@@ -57,7 +57,7 @@ function dailyPreviewSummary(value: JsonObject | null): JsonObject | null {
         }
       : existing,
     requires_wsl: value.requires_wsl,
-    confirm_text_required: value.confirm_text_required,
+    confirm_boolean_required: value.confirm_boolean_required,
   };
 }
 
@@ -254,7 +254,6 @@ export default function PaperV2ModelHmmPage() {
         lookback_days: lookbackDays,
         job_type: "rolling_retrain",
         confirm_retrain: true,
-        confirm_text: packageId,
       });
       setModelPreview(job);
       await loadModelDetail();
@@ -289,7 +288,7 @@ export default function PaperV2ModelHmmPage() {
         as_of_date: hmmAsOfDate,
         train_window_years: trainWindowYears,
         validation_window_months: validationMonths,
-        confirm_text: configId,
+        confirm_retrain: true,
       });
       setHmmPreview(job as unknown as JsonObject);
       await loadHmmDetail();
@@ -326,7 +325,7 @@ export default function PaperV2ModelHmmPage() {
     try {
       const job = await hmmTrainingApi.startDailyCoefficientJob(dailySnapshotId, {
         ...dailyPayload(),
-        confirm_text: dailySnapshotId,
+        confirm_generate: true,
       });
       setDailyJob(job);
       setDailyResult(job as unknown as JsonObject);
@@ -343,18 +342,14 @@ export default function PaperV2ModelHmmPage() {
   return (
     <main>
       <ErrorPanel error={error} title="模型与 HMM 操作失败" />
-      <NoticePanel title="人工维护边界" tone="info">
-        Paper Trading v2 与选股中心只消费已经冻结的 StrategyPackage 模型产物和已完成的 HMM 快照。模型重训、HMM 滚动训练、每日系数生成都必须由人工明确触发，并且缺少数据或产物时直接失败。
-      </NoticePanel>
-
       <div className="pv2-grid pv2-grid-4">
         <MetricCard label="策略包" value={packages.length} />
         <MetricCard label="模型状态" value={modelStatus} tone={modelStatus.includes("STALE") ? "warning" : "success"} />
         <MetricCard label="HMM 配置" value={configs.length} />
-        <MetricCard label="可用快照" value={readySnapshots.length} tone={readySnapshots.length ? "success" : "warning"} />
+        <MetricCard label="HMM 模型缓存" value={readySnapshots.length} hint="运行时按模型配置自动选择最新可用模型并计算每日系数" tone={readySnapshots.length ? "success" : "warning"} />
       </div>
 
-      <div className="pv2-grid pv2-grid-main">
+      <div style={{ display: "grid", gap: 16 }}>
         <SectionCard title="StrategyPackage 模型新鲜度" eyebrow="人工重训">
           <div className="pv2-form-grid">
             <div className="pv2-field"><label>策略包</label><select className="pv2-select" data-testid="model-package" value={packageId} onChange={(event) => setPackageId(event.target.value)}><option value="">选择策略包</option>{packages.map((item) => <option key={item.package_id} value={item.package_id}>{item.package_name} / {item.package_status}</option>)}</select></div>
@@ -367,10 +362,20 @@ export default function PaperV2ModelHmmPage() {
           </div>
           <div className="pv2-row-actions" style={{ marginTop: 12 }}>
             <button className="pv2-button" data-testid="model-retrain-preview" disabled={busy || !packageId} onClick={previewModelRetrain} type="button">预览重训方案</button>
-            <ConfirmAction label="提交重训任务" disabled={busy || !packageId} danger confirmText={packageId || "-"} onConfirm={startModelRetrain} />
+            <ConfirmAction label="提交重训任务" disabled={busy || !packageId} danger confirmText={packageId || "-"} onConfirm={startModelRetrain} mode="dialog" />
           </div>
           <h3>当前模型状态</h3>
-          {modelState ? <JsonPanel value={modelState} /> : <div className="pv2-muted">选择策略包后加载模型状态。</div>}
+          {modelState ? (
+            <div className="pv2-readable-panel">
+              <div className="pv2-readable-table">
+                <div className="pv2-readable-row"><div className="pv2-readable-key">策略包</div><div className="pv2-readable-value">{String(selectedPackage?.package_name || modelState.package_name || "-")}</div></div>
+                <div className="pv2-readable-row"><div className="pv2-readable-key">策略包ID</div><div className="pv2-readable-value pv2-mono">{String(selectedPackage?.package_id || modelState.package_id || "-")}</div></div>
+                <div className="pv2-readable-row"><div className="pv2-readable-key">模型状态</div><div className="pv2-readable-value"><StatusBadge status={modelStatus} /></div></div>
+                <div className="pv2-readable-row"><div className="pv2-readable-key">训练区间</div><div className="pv2-readable-value">{String(modelState.train_start_date || "-")}{" -> "}{String(modelState.train_end_date || "-")}</div></div>
+                <div className="pv2-readable-row"><div className="pv2-readable-key">最近重训</div><div className="pv2-readable-value">{String(modelState.last_retrained_at || modelState.trained_at || "-")}</div></div>
+              </div>
+            </div>
+          ) : <div className="pv2-muted">选择策略包后加载模型状态。</div>}
           {modelPreview ? <><h3>预览 / 任务响应</h3><JsonPanel value={modelPreview} /></> : null}
         </SectionCard>
 
@@ -387,41 +392,15 @@ export default function PaperV2ModelHmmPage() {
           </div>
           <div className="pv2-row-actions" style={{ marginTop: 12 }}>
             <button className="pv2-button" data-testid="hmm-rolling-preview" disabled={busy || !configId} onClick={previewHmmRolling} type="button">预览滚动切分</button>
-            <ConfirmAction label="触发 HMM 滚动训练" disabled={busy || !configId} danger confirmText={configId || "-"} onConfirm={triggerHmmRolling} />
+            <ConfirmAction label="触发 HMM 滚动训练" disabled={busy || !configId} danger confirmText={configId || "-"} onConfirm={triggerHmmRolling} mode="dialog" />
           </div>
           {hmmPreview ? <JsonPanel value={hmmPreview} /> : null}
         </SectionCard>
       </div>
 
-      <SectionCard title="HMM 每日系数生成" eyebrow="实盘/模拟盘预测">
-        <NoticePanel title="PIT 规则" tone="warning">
-          对交易日 D 使用的 HMM 系数必须由 D 之前最近一个已完成交易日的数据生成。系统只创建新的系数文件，不修改已有 HMM 模型权重，也不会在缺系数时回退到中性系数。
-        </NoticePanel>
-        <div className="pv2-form-grid" style={{ marginTop: 12 }}>
-          <div className="pv2-field"><label>快照版本</label><select className="pv2-select" data-testid="hmm-daily-snapshot" value={dailySnapshotId} onChange={(event) => setDailySnapshotId(event.target.value)}><option value="">选择已完成快照</option>{readySnapshots.map((item) => <option key={item.snapshot_id} value={item.snapshot_id}>{hmmSnapshotLabel(item)}</option>)}</select></div>
-          <div className="pv2-field"><label>信号预设</label><select className="pv2-select" data-testid="hmm-daily-preset" value={dailyPreset} onChange={(event) => setDailyPreset(event.target.value)}>{dailyPresetOptions.map((item) => <option key={item} value={item}>{item}</option>)}</select></div>
-          <div className="pv2-field"><label>数据截至日</label><input className="pv2-input" data-testid="hmm-daily-as-of-date" type="date" value={dailyAsOfDate} onChange={(event) => setDailyAsOfDate(event.target.value)} /><small>留空表示后端自动使用最新已完成公共数据日。</small></div>
-          <div className="pv2-field"><label>生效交易日</label><input className="pv2-input" data-testid="hmm-daily-effective-date" type="date" value={dailyEffectiveDate} onChange={(event) => setDailyEffectiveDate(event.target.value)} /><small>留空表示后端自动选择数据截至日后的下一个交易日。</small></div>
-        </div>
-        <div className="pv2-chip-row" style={{ marginTop: 12 }}>
-          <span className="pv2-chip">快照：{selectedDailySnapshot ? hmmSnapshotLabel(selectedDailySnapshot) : "-"}</span>
-          <span className="pv2-chip">产物数：{selectedDailySnapshot?.coefficient_artifacts?.length || 0}</span>
-        </div>
-        <div className="pv2-row-actions" style={{ marginTop: 12 }}>
-          <button className="pv2-button" data-testid="hmm-daily-preview" disabled={busy || !dailySnapshotId || !dailyPreset} onClick={previewDailyCoefficients} type="button">预览每日系数</button>
-          <ConfirmAction testId="hmm-daily-generate" label="生成每日系数" disabled={busy || !dailySnapshotId || !dailyPreset} danger confirmText={dailySnapshotId || "-"} onConfirm={generateDailyCoefficients} />
-        </div>
-        {dailyPreview ? <><h3>每日系数生成预览</h3><JsonPanel value={dailyPreviewSummary(dailyPreview)} /></> : null}
-        {dailyResult ? <><h3>每日系数生成任务</h3><JsonPanel value={dailyJobSummary(dailyResult)} /></> : null}
-        {dailyJob ? (
-          <div className="pv2-chip-row" data-testid="hmm-daily-job-status" style={{ marginTop: 12 }}>
-            <span className="pv2-chip">任务：{shortHash(dailyJob.job_id)}</span>
-            <span className="pv2-chip">状态：{dailyJob.status}</span>
-            <span className="pv2-chip">产物：{dailyJob.result_status || "-"}</span>
-            <span className="pv2-chip">SHA256：{shortHash(dailyJob.artifact_sha256)}</span>
-          </div>
-        ) : null}
-      </SectionCard>
+      <NoticePanel title="HMM 每日系数由平台自动计算" tone="info">
+        选股、AIstock 模拟盘和 MiniQMT 模拟盘只选择 HMM 模型配置与 preset。每日系数按交易日首次运行时自动计算并写入缓存，同一天后续运行直接复用；本页只展示模型缓存状态和历史任务审计。
+      </NoticePanel>
 
       <div className="pv2-grid pv2-grid-2">
         <SectionCard title="模型重训任务" eyebrow="StrategyPackage">
@@ -469,17 +448,16 @@ export default function PaperV2ModelHmmPage() {
         />
       </SectionCard>
 
-      <SectionCard title="HMM 快照与系数产物" eyebrow="运行时产物">
+      <SectionCard title="HMM 模型缓存状态" eyebrow="最新可用模型与已缓存日期">
         <PaperTable
           rows={snapshots}
-          empty="暂无 HMM 快照。启用 HMM 的选股运行会在缺少快照或系数产物时 fail-fast。"
+          empty="暂无 HMM 模型缓存。启用 HMM 的运行会在缺少可用模型时明确失败。"
           columns={[
-            { key: "snapshot", header: "快照版本", render: (row) => <span title={row.snapshot_id}>{hmmSnapshotLabel(row)}</span> },
-            { key: "id", header: "ID", render: (row) => <span className="pv2-mono">{shortHash(row.snapshot_id)}</span> },
+            { key: "snapshot", header: "模型", render: (row) => <span title={row.snapshot_id}>{hmmSnapshotLabel(row)}</span> },
             { key: "status", header: "状态", render: (row) => <StatusBadge status={row.status} /> },
             { key: "trained", header: "训练时间", render: (row) => row.trained_at },
             { key: "sectors", header: "行业数", render: (row) => row.sector_count },
-            { key: "artifacts", header: "系数覆盖", render: (row) => (row.coefficient_artifacts || []).map((item) => `${item.preset}:${item.start_date}~${item.end_date}`).join("；") || "无" },
+            { key: "artifacts", header: "最新缓存日期", render: (row) => (row.coefficient_artifacts || []).map((item) => `${item.preset}:${item.end_date || item.start_date}`).join("；") || "运行时自动生成" },
             { key: "asset", header: "模型产物", render: (row) => row.model_path ? <StatusBadge status="READY" /> : <StatusBadge status="NO_DATA" /> },
           ]}
         />

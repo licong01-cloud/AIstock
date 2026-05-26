@@ -705,12 +705,14 @@ class PaperTradingDayRunner:
 
     @staticmethod
     def _selection_data_source(portfolio: Any, runtime_config: dict[str, Any]) -> str:
+        explicit = (
+            (runtime_config.get("selection_artifact_config") or {}).get("signal_data_source")
+            or runtime_config.get("signal_data_source")
+        )
+        if explicit:
+            return str(explicit)
         if portfolio.broker_backend == "minqmt_sim":
-            return str(
-                (runtime_config.get("selection_artifact_config") or {}).get("signal_data_source")
-                or runtime_config.get("signal_data_source")
-                or MinuteDataSource.DB_HISTORICAL.value
-            )
+            return MinuteDataSource.DB_HISTORICAL.value
         return portfolio.data_source.value
 
     def _ensure_authoritative_selection_artifact(

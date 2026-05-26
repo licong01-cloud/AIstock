@@ -566,6 +566,83 @@ class PaperTradingV2Repository:
                     raise DataUnavailableError("paper v2 portfolio does not exist", context={"portfolio_id": portfolio_id})
         return self.get_portfolio(portfolio_id)
 
+    def delete_portfolio(self, portfolio_id: str) -> dict[str, int]:
+        self.get_portfolio(portfolio_id)
+        counts = {
+            "selection_paper_portfolio_link": 0,
+            "order_execution_state": 0,
+            "intraday_snapshots": 0,
+            "session_events": 0,
+            "session_day": 0,
+            "trade_session": 0,
+            "execution_policy_activation": 0,
+            "runtime_config_activation": 0,
+            "runtime_profile_version": 0,
+            "runtime_profile": 0,
+            "config_change_audit": 0,
+            "reset_audit": 0,
+            "errors": 0,
+            "order_events": 0,
+            "fills": 0,
+            "cash_ledger": 0,
+            "positions": 0,
+            "daily_snapshots": 0,
+            "run_events": 0,
+            "orders": 0,
+            "run": 0,
+            "portfolio": 0,
+        }
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT run_id FROM paper_v2.run WHERE portfolio_id = %s", (portfolio_id,))
+                run_ids = [row[0] for row in cur.fetchall()]
+                cur.execute("SELECT session_id FROM paper_v2.trade_session WHERE portfolio_id = %s", (portfolio_id,))
+                session_ids = [row[0] for row in cur.fetchall()]
+                cur.execute("SELECT profile_id FROM paper_v2.runtime_profile WHERE portfolio_id = %s", (portfolio_id,))
+                profile_ids = [row[0] for row in cur.fetchall()]
+
+                cur.execute("DELETE FROM selection.paper_portfolio_link WHERE portfolio_id = %s", (portfolio_id,))
+                counts["selection_paper_portfolio_link"] = cur.rowcount
+                if run_ids:
+                    cur.execute("DELETE FROM paper_v2.order_execution_state WHERE run_id = ANY(%s)", (run_ids,))
+                    counts["order_execution_state"] += cur.rowcount
+                    for table in ("order_events", "fills", "cash_ledger", "positions", "daily_snapshots", "run_events"):
+                        cur.execute(f"DELETE FROM paper_v2.{table} WHERE run_id = ANY(%s)", (run_ids,))
+                        counts[table] = cur.rowcount
+                    cur.execute("DELETE FROM paper_v2.orders WHERE run_id = ANY(%s)", (run_ids,))
+                    counts["orders"] = cur.rowcount
+                    cur.execute("DELETE FROM paper_v2.run WHERE run_id = ANY(%s)", (run_ids,))
+                    counts["run"] = cur.rowcount
+                if session_ids:
+                    cur.execute("DELETE FROM paper_v2.order_execution_state WHERE session_id = ANY(%s)", (session_ids,))
+                    counts["order_execution_state"] += cur.rowcount
+                    cur.execute("DELETE FROM paper_v2.session_events WHERE session_id = ANY(%s)", (session_ids,))
+                    counts["session_events"] = cur.rowcount
+                cur.execute("DELETE FROM paper_v2.intraday_snapshots WHERE portfolio_id = %s", (portfolio_id,))
+                counts["intraday_snapshots"] = cur.rowcount
+                cur.execute("DELETE FROM paper_v2.session_day WHERE portfolio_id = %s", (portfolio_id,))
+                counts["session_day"] = cur.rowcount
+                cur.execute("DELETE FROM paper_v2.trade_session WHERE portfolio_id = %s", (portfolio_id,))
+                counts["trade_session"] = cur.rowcount
+                cur.execute("DELETE FROM paper_v2.execution_policy_activation WHERE portfolio_id = %s", (portfolio_id,))
+                counts["execution_policy_activation"] = cur.rowcount
+                cur.execute("DELETE FROM paper_v2.runtime_config_activation WHERE portfolio_id = %s", (portfolio_id,))
+                counts["runtime_config_activation"] = cur.rowcount
+                if profile_ids:
+                    cur.execute("DELETE FROM paper_v2.runtime_profile_version WHERE profile_id = ANY(%s)", (profile_ids,))
+                    counts["runtime_profile_version"] = cur.rowcount
+                cur.execute("DELETE FROM paper_v2.runtime_profile WHERE portfolio_id = %s", (portfolio_id,))
+                counts["runtime_profile"] = cur.rowcount
+                cur.execute("DELETE FROM paper_v2.config_change_audit WHERE portfolio_id = %s", (portfolio_id,))
+                counts["config_change_audit"] = cur.rowcount
+                cur.execute("DELETE FROM paper_v2.reset_audit WHERE portfolio_id = %s", (portfolio_id,))
+                counts["reset_audit"] = cur.rowcount
+                cur.execute("DELETE FROM paper_v2.errors WHERE portfolio_id = %s", (portfolio_id,))
+                counts["errors"] = cur.rowcount
+                cur.execute("DELETE FROM paper_v2.portfolio WHERE portfolio_id = %s", (portfolio_id,))
+                counts["portfolio"] = cur.rowcount
+        return counts
+
     def create_run(self, run: PaperRun) -> PaperRun:
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
@@ -2387,6 +2464,56 @@ class InMemoryPaperTradingV2Repository:
         updated = portfolio.model_copy(update={"status": status, "updated_at": datetime.now(UTC)})
         self.portfolios[portfolio_id] = updated
         return updated
+
+    def delete_portfolio(self, portfolio_id: str) -> dict[str, int]:
+        self.get_portfolio(portfolio_id)
+        run_ids = [run_id for run_id, run in self.runs.items() if run.portfolio_id == portfolio_id]
+        session_ids = [session_id for session_id, session in self.sessions.items() if session.portfolio_id == portfolio_id]
+        profile_ids = [profile_id for profile_id, profile in self.runtime_profiles.items() if profile.portfolio_id == portfolio_id]
+        counts = self.reset_portfolio_runs(portfolio_id=portfolio_id)
+        counts.update(
+            {
+                "selection_paper_portfolio_link": 0,
+                "session_events": len([item for item in self.session_events if item.get("session_id") in session_ids]),
+                "session_day": len([key for key, day in self.session_days.items() if day.portfolio_id == portfolio_id]),
+                "trade_session": len(session_ids),
+                "execution_policy_activation": len([item for item in self.execution_policy_activations.values() if item.portfolio_id == portfolio_id]),
+                "runtime_config_activation": len([item for item in self.runtime_config_activations.values() if item.portfolio_id == portfolio_id]),
+                "runtime_profile_version": len([item for item in self.runtime_profile_versions.values() if item.profile_id in profile_ids]),
+                "runtime_profile": len(profile_ids),
+                "config_change_audit": len([item for item in self.config_change_audits if item.portfolio_id == portfolio_id]),
+                "reset_audit": len([item for item in self.reset_audits if item.get("portfolio_id") == portfolio_id]),
+                "portfolio": 1,
+            }
+        )
+        self.session_events = [item for item in self.session_events if item.get("session_id") not in session_ids]
+        for key, day in list(self.session_days.items()):
+            if day.portfolio_id == portfolio_id:
+                self.session_days.pop(key, None)
+        for session_id in session_ids:
+            self.sessions.pop(session_id, None)
+        for key, activation in list(self.execution_policy_activations.items()):
+            if activation.portfolio_id == portfolio_id:
+                self.execution_policy_activations.pop(key, None)
+        for key, activation in list(self.runtime_config_activations.items()):
+            if activation.portfolio_id == portfolio_id:
+                self.runtime_config_activations.pop(key, None)
+        for key, version in list(self.runtime_profile_versions.items()):
+            if version.profile_id in profile_ids:
+                self.runtime_profile_versions.pop(key, None)
+        for profile_id in profile_ids:
+            self.runtime_profiles.pop(profile_id, None)
+        self.config_change_audits = [item for item in self.config_change_audits if item.portfolio_id != portfolio_id]
+        self.reset_audits = [item for item in self.reset_audits if item.get("portfolio_id") != portfolio_id]
+        self.errors = [item for item in self.errors if item.get("portfolio_id") != portfolio_id]
+        for key, snapshot in list(self.intraday_snapshots.items()):
+            if snapshot.portfolio_id == portfolio_id:
+                self.intraday_snapshots.pop(key, None)
+        for key, state in list(self.order_execution_states.items()):
+            if state.run_id in run_ids or state.session_id in session_ids:
+                self.order_execution_states.pop(key, None)
+        self.portfolios.pop(portfolio_id, None)
+        return counts
 
     def create_run(self, run: PaperRun) -> PaperRun:
         self.runs[run.run_id] = run

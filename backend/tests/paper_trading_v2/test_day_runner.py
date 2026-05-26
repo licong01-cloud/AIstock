@@ -454,24 +454,25 @@ def runtime_with_authoritative_scores(
         }
     ]
     artifact_repo = InMemorySelectionScoreArtifactRepository()
-    artifact_repo.save(
-        SelectionScoreArtifact(
-            package_id=manifest.package_id,
-            manifest_sha256=manifest.manifest_sha256 or "",
-            trade_date=trade_date,
-            data_source=data_source,
-            runtime_config_hash=selection_artifact_runtime_hash(runtime_config or {}),
-            scores_json=score_rows,
-            score_count=len(score_rows),
-            universe_count=len(score_rows),
-            top_score_symbol=score_rows[0]["symbol"],
-            metadata={
-                "source_type": AUTHORITATIVE_SELECTION_SOURCE_TYPE,
-                "authority_scope": AUTHORITATIVE_SELECTION_SCOPE,
-                "test_seeded": True,
-            },
+    for source in {data_source, MinuteDataSource.DB_HISTORICAL.value}:
+        artifact_repo.save(
+            SelectionScoreArtifact(
+                package_id=manifest.package_id,
+                manifest_sha256=manifest.manifest_sha256 or "",
+                trade_date=trade_date,
+                data_source=source,
+                runtime_config_hash=selection_artifact_runtime_hash(runtime_config or {}),
+                scores_json=score_rows,
+                score_count=len(score_rows),
+                universe_count=len(score_rows),
+                top_score_symbol=score_rows[0]["symbol"],
+                metadata={
+                    "source_type": AUTHORITATIVE_SELECTION_SOURCE_TYPE,
+                    "authority_scope": AUTHORITATIVE_SELECTION_SCOPE,
+                    "test_seeded": True,
+                },
+            )
         )
-    )
     return StrategyPackageRuntime(artifact_repository=artifact_repo)
 
 
@@ -926,9 +927,10 @@ def test_paper_execution_policy_activation_accepts_versioned_policy_that_differs
     )
     listed = portfolio_service.list_execution_policies(portfolio.portfolio_id)
     listed_policy = next(item for item in listed if item["validated_execution_policy_id"] == policy.policy_id)
-    assert listed_policy["can_enter_paper"] is False
-    assert "not enabled for paper" in listed_policy["paper_check_error"]["message"]
-    package_repo.execution_policies[policy.policy_id] = policy.model_copy(update={"paper_enabled": True})
+    assert listed_policy["matches_portfolio_manifest"] is True
+    assert listed_policy["runtime_selectable"] is True
+    assert "can_enter_paper" not in listed_policy
+    assert "paper_check_error" not in listed_policy
 
     activation = portfolio_service.activate_execution_policy(
         portfolio_id=portfolio.portfolio_id,
@@ -1065,7 +1067,7 @@ def test_day_runner_consumes_validated_runtime_variant_candidate() -> None:
 
     stored_config = result.run.runtime_config
     assert stored_config["runtime_variant"]["variant_id"] == variant.variant_id
-    assert stored_config["runtime_variant"]["paper_candidate"] is True
+    assert stored_config["runtime_variant"]["paper_candidate"] is False
     assert stored_config["qe_backtest_runtime_contract"]["portfolio_strategy"]["params"]["topk"] == 1
     assert stored_config["qe_backtest_runtime_contract"]["portfolio_strategy"]["params"]["max_single_order_value"] == 10_000.0
     assert stored_config["validated_execution_policy"]["activation_source"] == "portfolio_default"

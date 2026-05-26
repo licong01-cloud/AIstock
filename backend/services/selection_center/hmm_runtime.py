@@ -458,7 +458,7 @@ class SectorHMMRuntime:
                 result = generator(
                     profile.model_snapshot_id,
                     signal_preset=profile.signal_preset,
-                    confirm_text=profile.model_snapshot_id,
+                    confirm_generate=True,
                     as_of_date=as_of_date,
                     effective_trade_date=trade_date,
                 )

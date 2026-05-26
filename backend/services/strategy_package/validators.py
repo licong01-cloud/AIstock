@@ -16,7 +16,7 @@ from backend.services.trading_core.errors import (
 
 from .execution_policy import normalize_execution_policy_json
 from .manifest import compute_manifest_sha256
-from .models import PackageStatus, StrategyPackageManifest
+from .models import StrategyPackageManifest
 
 
 class StrategyPackageValidator:
@@ -55,18 +55,6 @@ class StrategyPackageValidator:
         """
 
         self.validate_manifest(manifest)
-        if manifest.package_status not in {
-            PackageStatus.BACKTEST_APPROVED,
-            PackageStatus.SELECTION_ENABLED,
-            PackageStatus.PAPER_ENABLED,
-        }:
-            raise StrategyPackageValidationError(
-                "package is not approved for paper trading",
-                context={
-                    "package_id": manifest.package_id,
-                    "package_status": manifest.package_status.value,
-                },
-            )
 
     def validate_execution_policy_for_paper(
         self,

@@ -51,6 +51,18 @@ class FakeSelectionCenterService:
         assert limit > 0
         return [self.run]
 
+    def list_runs_page(self, *, page: int = 1, page_size: int = 20) -> dict:
+        assert page > 0
+        assert page_size > 0
+        return {
+            "runs": [self.run],
+            "pagination": {"page": page, "page_size": page_size, "total": 1, "total_pages": 1},
+        }
+
+    def delete_runs(self, run_ids: list[str]) -> dict:
+        assert run_ids == [self.run.run_id]
+        return {"run_ids": run_ids, "deleted_counts": {"run": 1}}
+
     def create_paper_portfolio_from_run(self, **kwargs):
         raise UnsupportedFeatureError(
             "creating a paper portfolio from multi-package selection requires a combined StrategyPackage",
@@ -193,6 +205,34 @@ def test_selection_center_api_aggregates_existing_runs() -> None:
     assert payload["run"]["run_id"] == "sel_weighted_api"
     assert service.calls[0]["source_run_ids"] == ["sel_a", "sel_b"]
     assert service.calls[0]["mode"] == SelectionMode.WEIGHTED_FUSION
+
+
+def test_selection_center_api_lists_runs_with_pagination() -> None:
+    service = FakeSelectionCenterService(_weighted_run())
+    client = _client(service)
+
+    response = client.get("/api/v1/selection-center/runs?page=1&page_size=20")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["runs"][0]["run_id"] == "sel_weighted_api"
+    assert payload["pagination"]["total"] == 1
+
+
+def test_selection_center_api_bulk_deletes_runs_with_confirmation() -> None:
+    service = FakeSelectionCenterService(_weighted_run())
+    client = _client(service)
+
+    response = client.post(
+        "/api/v1/selection-center/runs/bulk-delete",
+        json={"run_ids": ["sel_weighted_api"], "confirm_delete": True},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["deleted_counts"]["run"] == 1
 
 
 def test_selection_center_api_rejects_multi_package_paper_creation_fail_fast() -> None:

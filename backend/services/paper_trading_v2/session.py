@@ -550,7 +550,6 @@ class PaperTradingSessionService:
             "source_backtest_id": execution_policy.get("source_backtest_id"),
             "source_backtest_status": execution_policy.get("source_backtest_status"),
             "validation_status": execution_policy.get("validation_status"),
-            "paper_enabled": execution_policy.get("paper_enabled"),
             "policy_json": policy_json,
         }
 

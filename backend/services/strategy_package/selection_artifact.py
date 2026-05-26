@@ -75,6 +75,7 @@ def selection_artifact_runtime_hash(runtime_config: dict[str, Any] | None = None
     # they do not change model scores and must not fragment the artifact key.
     payload.pop("auto_generate", None)
     payload.pop("force_regenerate", None)
+    payload.pop("signal_data_source", None)
     return _canonical_json_sha256(payload)
 
 

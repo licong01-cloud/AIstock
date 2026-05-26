@@ -14,12 +14,11 @@ import ReadinessFailureCard from "@/components/paper-v2/ReadinessFailureCard";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import { hmmTrainingApi, paperV2Api } from "@/lib/paper-v2/api";
-import { dataSourceLabel, hmmSnapshotLabel, shortHash, todayIso } from "@/lib/paper-v2/format";
+import { dataSourceLabel, shortHash, todayIso } from "@/lib/paper-v2/format";
 import type {
   Activation,
   ExecutionPolicy,
   HmmConfig,
-  HmmSnapshot,
   JsonObject,
   PaperPortfolio,
   PaperRun,
@@ -104,10 +103,8 @@ export default function PaperV2RunConsolePage() {
   const [runtimeExcludeSuspended, setRuntimeExcludeSuspended] = useState(true);
   const [runtimeIndustryBlacklist, setRuntimeIndustryBlacklist] = useState<Sw2Entry[]>([]);
   const [runtimeHmmConfigs, setRuntimeHmmConfigs] = useState<HmmConfig[]>([]);
-  const [runtimeHmmSnapshots, setRuntimeHmmSnapshots] = useState<HmmSnapshot[]>([]);
   const [runtimeHmmEnabled, setRuntimeHmmEnabled] = useState(false);
   const [runtimeHmmConfigId, setRuntimeHmmConfigId] = useState("");
-  const [runtimeHmmSnapshotId, setRuntimeHmmSnapshotId] = useState("");
   const [runtimeHmmPreset, setRuntimeHmmPreset] = useState("preset_A");
   const [readiness, setReadiness] = useState<ReadinessResult | null>(null);
   const [runResult, setRunResult] = useState<JsonObject | null>(null);
@@ -144,7 +141,7 @@ export default function PaperV2RunConsolePage() {
   function buildRuntimeConfigForRange(startDate: string, endDate?: string | null, manualTickOnly = false, strict = true): JsonObject {
     const safeTopK = Number.isFinite(runtimeTopK) ? Math.min(50, Math.max(1, Math.trunc(runtimeTopK))) : 20;
     if (runtimeHmmEnabled) {
-      if (strict && !runtimeHmmConfigId && !runtimeHmmSnapshotId) throw new Error("HMM model config or trained snapshot is required before submitting Paper v2 runtime config.");
+      if (strict && !runtimeHmmConfigId) throw new Error("启用 HMM 时请选择模型配置；每日系数由平台按交易日自动计算并缓存。");
     }
     return {
       paper_v2_session: { signal_data_source: "DB_HISTORICAL", manual_tick_only: manualTickOnly },
@@ -157,7 +154,7 @@ export default function PaperV2RunConsolePage() {
         hmm: {
           enabled: runtimeHmmEnabled,
           model_config_id: runtimeHmmEnabled ? runtimeHmmConfigId || null : null,
-          model_snapshot_id: runtimeHmmEnabled ? runtimeHmmSnapshotId || null : null,
+          model_snapshot_id: null,
           signal_preset: runtimeHmmEnabled ? runtimeHmmPreset || null : null,
         },
       },
@@ -178,7 +175,7 @@ export default function PaperV2RunConsolePage() {
     const previewHmm: JsonObject = {
       enabled: runtimeHmmEnabled,
       model_config_id: runtimeHmmEnabled ? runtimeHmmConfigId || null : null,
-      model_snapshot_id: runtimeHmmEnabled ? runtimeHmmSnapshotId || null : null,
+      model_snapshot_id: null,
       signal_preset: runtimeHmmEnabled ? runtimeHmmPreset || null : null,
     };
     return {
@@ -192,7 +189,7 @@ export default function PaperV2RunConsolePage() {
         hmm: previewHmm,
       },
     };
-  }, [runtimeExcludeSuspended, runtimeHmmConfigId, runtimeHmmEnabled, runtimeHmmPreset, runtimeHmmSnapshotId, runtimeIndustryBlacklist, runtimeTopK]);
+  }, [runtimeExcludeSuspended, runtimeHmmConfigId, runtimeHmmEnabled, runtimeHmmPreset, runtimeIndustryBlacklist, runtimeTopK]);
 
   const load = useCallback(async () => {
     setError(null);
@@ -241,7 +238,7 @@ export default function PaperV2RunConsolePage() {
       setRuntimeHmmConfigs(hmmConfigRows);
       setRuntimeHmmConfigId((current) => current || hmmConfigRows[0]?.config_id || "");
       if (!policyId) {
-        const defaultPolicy = policyRows.find((item) => item.is_portfolio_default) || policyRows.find((item) => item.paper_enabled);
+        const defaultPolicy = policyRows.find((item) => item.is_portfolio_default) || policyRows[0];
         setPolicyId(defaultPolicy ? executionPolicyId(defaultPolicy) : "");
       }
       const nextProfileId = runtimeProfileId || runtimeProfileRows[0]?.profile_id || "";
@@ -253,24 +250,6 @@ export default function PaperV2RunConsolePage() {
   }, [portfolioId, policyId, runtimeActivationDate, runtimeProfileId]);
 
   useEffect(() => { load(); }, [load]);
-  useEffect(() => {
-    if (!runtimeHmmConfigId) {
-      setRuntimeHmmSnapshots([]);
-      setRuntimeHmmSnapshotId("");
-      return;
-    }
-    let alive = true;
-    hmmTrainingApi.snapshots(runtimeHmmConfigId).then((rows) => {
-      if (!alive) return;
-      const ready = rows.filter((item) => ["completed", "ready", "success", "succeeded"].includes(String(item.status || "").toLowerCase()));
-      setRuntimeHmmSnapshots(ready);
-      setRuntimeHmmSnapshotId((current) => (ready.find((item) => item.snapshot_id === current) ? current : ""));
-    }).catch((exc) => {
-      if (alive) setError(exc);
-    });
-    return () => { alive = false; };
-  }, [runtimeHmmConfigId]);
-
   useEffect(() => {
     if (!runtimeProfileId) {
       setRuntimeVersions([]);
@@ -603,13 +582,6 @@ export default function PaperV2RunConsolePage() {
                 </select>
               </div>
               <div className="pv2-field">
-                <label>HMM Snapshot</label>
-                <select className="pv2-select" data-testid="console-runtime-hmm-snapshot" disabled={!runtimeHmmEnabled || !runtimeHmmConfigId} value={runtimeHmmSnapshotId} onChange={(event) => setRuntimeHmmSnapshotId(event.target.value)}>
-                  <option value="">可选：默认使用模型配置的最新可用快照</option>
-                  {runtimeHmmSnapshots.map((item) => <option value={item.snapshot_id} key={item.snapshot_id}>{hmmSnapshotLabel(item)}</option>)}
-                </select>
-              </div>
-              <div className="pv2-field">
                 <label>HMM Preset</label>
                 <select className="pv2-select" data-testid="console-runtime-hmm-preset" disabled={!runtimeHmmEnabled} value={runtimeHmmPreset} onChange={(event) => setRuntimeHmmPreset(event.target.value)}>
                   <option value="preset_A">preset_A</option>
@@ -643,9 +615,9 @@ export default function PaperV2RunConsolePage() {
         <SectionCard title="执行策略激活" eyebrow="仅限已验证策略">
           <div className="pv2-form-grid">
             <div className="pv2-field"><label>交易日期</label><input className="pv2-input" data-testid="console-policy-date" type="date" value={activationDate} onChange={(event) => setActivationDate(event.target.value)} /></div>
-            <div className="pv2-field"><label>策略</label><select className="pv2-select" data-testid="console-policy-select" value={policyId} onChange={(event) => setPolicyId(event.target.value)}><option value="">选择已启用策略</option>{policies.map((policy) => {
+            <div className="pv2-field"><label>策略</label><select className="pv2-select" data-testid="console-policy-select" value={policyId} onChange={(event) => setPolicyId(event.target.value)}><option value="">平台默认执行策略</option>{policies.map((policy) => {
               const id = executionPolicyId(policy);
-              return <option value={id} key={id}>{policy.policy_name || id} / {policy.algo_code || "-"} / {policy.paper_enabled ? "可用于模拟盘" : "未启用"}</option>;
+              return <option value={id} key={id}>{policy.policy_name || id} / {policy.algo_code || "-"}</option>;
             })}</select></div>
             <div className="pv2-field"><label>替换已有记录</label><label className="pv2-chip"><input data-testid="console-policy-replace" type="checkbox" checked={replaceExisting} onChange={(event) => setReplaceExisting(event.target.checked)} /> 替换同日期记录</label></div>
           </div>
@@ -703,7 +675,7 @@ export default function PaperV2RunConsolePage() {
             <div className="pv2-field"><label>重跑策略</label><input className="pv2-input" value="reject_existing / reset_portfolio" readOnly /></div>
           </div>
           <NoticePanel title="场景含义" tone="info">
-            {SESSION_MODE_OPTIONS.find((item) => item.value === sessionMode)?.description} 会话创建、暂停、恢复、停止和切换均由后端校验非交易时间；交易时间内会返回 INVALID_STATE_TRANSITION。
+            {SESSION_MODE_OPTIONS.find((item) => item.value === sessionMode)?.description} 会话创建、暂停、恢复、停止和切换允许盘中执行；真实可成交性由交易日历、分钟线、涨跌停、停牌、broker/SIM 状态和订单提交检查 fail-fast 保证。
           </NoticePanel>
           <div className="pv2-row-actions" style={{ marginTop: 12 }}>
             <button className="pv2-button" data-testid="console-replay-reject" disabled={busy || sessionModeBlocked} onClick={() => replay("reject_existing")} type="button">{sessionMode === "LIVE_ONLY" ? "启动完全实时" : sessionMode === "CATCHUP_THEN_LIVE" ? "启动追赶后自动实时" : "启动仅历史追赶"}</button>
@@ -730,7 +702,7 @@ export default function PaperV2RunConsolePage() {
             <button className="pv2-button" data-testid="console-scheduler-stop" disabled={busy || !schedulerStatus?.running} onClick={() => schedulerAction("stop")} type="button">停止后台调度</button>
           </div>
           <div className="pv2-card" style={{ marginTop: 12 }}>
-            <div className="pv2-eyebrow">运行场景切换（仅非交易时间）</div>
+            <div className="pv2-eyebrow">运行场景切换（允许盘中恢复）</div>
             <div className="pv2-form-grid">
               <div className="pv2-field"><label>当前活跃会话</label><input className="pv2-input" value={activeSession ? `${activeSession.mode} / ${activeSession.status}` : "无活跃会话"} readOnly /></div>
               <div className="pv2-field"><label>目标场景</label><select className="pv2-select" data-testid="console-switch-mode" value={switchMode} onChange={(event) => setSwitchMode(event.target.value as PaperSessionMode)}>{SESSION_MODE_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></div>

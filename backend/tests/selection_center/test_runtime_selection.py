@@ -1468,7 +1468,7 @@ def test_selection_center_consumes_validated_runtime_variant_candidate() -> None
 
     package_config = run.runtime_config["package_runtime_configs"][manifest.package_id]
     assert package_config["runtime_variant"]["variant_id"] == variant.variant_id
-    assert package_config["runtime_variant"]["paper_candidate"] is True
+    assert package_config["runtime_variant"]["paper_candidate"] is False
     assert package_config["runtime_variant"]["variant_config"]["strategy_config"]["custom_params"]["topk"] == 1
     assert [item.symbol for item in run.package_results[manifest.package_id]] == ["000001.SZ"]
 
@@ -1489,7 +1489,7 @@ def test_selection_center_consumes_validated_runtime_variant_candidate() -> None
     assert st_pit_config["qe_backtest_runtime_contract"]["portfolio_strategy"]["params"]["topk"] == 1
 
 
-def test_selection_center_authoritative_mode_requires_platform_st_pit_profile() -> None:
+def test_selection_center_authoritative_mode_allows_runtime_st_pit_warning() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     manifest = freeze_manifest(
         make_manifest().model_copy(
@@ -1515,16 +1515,15 @@ def test_selection_center_authoritative_mode_requires_platform_st_pit_profile() 
         refresh_audit=NoopRefreshAudit(),
     )
 
-    with pytest.raises(StrategyPackageValidationError, match="health preflight") as exc_info:
-        service.run_single_package(
-            package_id=manifest.package_id,
-            trade_date=date(2024, 1, 2),
-            data_source="DB_HISTORICAL",
-            runtime_config=versioned_selection_runtime_config({"st_pit_authoritative": True}),
-        )
-    st_check = next(item for item in exc_info.value.context["checks"] if item["name"] == "st_pit_runtime_profile")
-    assert st_check["status"] == "BLOCKED"
-    assert "runtime_profile.risk_policy.enabled=true" in st_check["message"]
+    run = service.run_single_package(
+        package_id=manifest.package_id,
+        trade_date=date(2024, 1, 2),
+        data_source="DB_HISTORICAL",
+        runtime_config=versioned_selection_runtime_config({"st_pit_authoritative": True}),
+    )
+
+    assert run.status == SelectionRunStatus.SUCCEEDED
+    assert run.package_results[manifest.package_id][0].symbol == "000001.SZ"
 
 
 def test_selection_center_health_blocks_hmm_missing_stock_sector_map_before_inference(tmp_path) -> None:
@@ -1571,7 +1570,7 @@ def test_selection_center_health_blocks_hmm_missing_stock_sector_map_before_infe
         refresh_audit=NoopRefreshAudit(),
     )
 
-    with pytest.raises(StrategyPackageValidationError, match="health preflight") as exc_info:
+    with pytest.raises(DataUnavailableError, match="stock sector mapping") as exc_info:
         service.run_single_package(
             package_id=manifest.package_id,
             trade_date=date(2024, 1, 2),
@@ -1591,10 +1590,7 @@ def test_selection_center_health_blocks_hmm_missing_stock_sector_map_before_infe
             ),
         )
 
-    checks = exc_info.value.context["checks"]
-    hmm_check = next(item for item in checks if item["name"] == "hmm_artifact_status")
-    assert hmm_check["status"] == "BLOCKED"
-    assert "stock sector mapping" in hmm_check["message"]
+    assert exc_info.value.context["symbol"] == "000001.SZ"
 
 
 def test_selection_center_health_passes_hmm_artifact_preflight(tmp_path) -> None:
@@ -2179,11 +2175,11 @@ def test_strategy_package_runtime_auto_generates_hmm_coefficients_on_miss(tmp_pa
         def _list_trading_days(self, start_date, end_date):
             return [date(2024, 1, 1)]
 
-        def generate_daily_coefficients(self, snapshot_id, *, signal_preset, confirm_text, as_of_date=None, effective_trade_date=None):
+        def generate_daily_coefficients(self, snapshot_id, *, signal_preset, confirm_generate=False, confirm_text=None, as_of_date=None, effective_trade_date=None):
             self.calls.append({
                 "snapshot_id": snapshot_id,
                 "signal_preset": signal_preset,
-                "confirm_text": confirm_text,
+                "confirm_generate": confirm_generate,
                 "as_of_date": as_of_date,
                 "effective_trade_date": effective_trade_date,
             })
@@ -2228,7 +2224,7 @@ def test_strategy_package_runtime_auto_generates_hmm_coefficients_on_miss(tmp_pa
         {
             "snapshot_id": "hmm_001",
             "signal_preset": "preset_A",
-            "confirm_text": "hmm_001",
+            "confirm_generate": True,
             "as_of_date": date(2024, 1, 1),
             "effective_trade_date": date(2024, 1, 2),
         }

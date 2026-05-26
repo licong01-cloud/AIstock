@@ -331,7 +331,7 @@ def _runtime_variant_contract(runtime_config: dict[str, Any] | None) -> dict[str
         "variant_id": variant.get("variant_id"),
         "variant_hash": variant.get("variant_hash"),
         "variant_kind": variant.get("variant_kind"),
-        "paper_candidate": bool(variant.get("paper_candidate")),
+        "legacy_paper_candidate": bool(variant.get("paper_candidate")),
         "validation_status": variant.get("validation_status"),
         "strategy_config_overlay": "strategy_config" in variant_config,
         "portfolio_policy_overlay": "portfolio_policy" in variant_config,
@@ -427,16 +427,13 @@ def _effective_manifest_for_contract(
     variant = (runtime_config or {}).get("runtime_variant")
     if not isinstance(variant, dict):
         return manifest
-    if variant.get("validation_status") != RuntimeVariantValidationStatus.VALIDATION_PASSED.value or not bool(
-        variant.get("paper_candidate")
-    ):
+    if variant.get("validation_status") != RuntimeVariantValidationStatus.VALIDATION_PASSED.value:
         raise StrategyPackageValidationError(
-            "runtime variant must be a validated paper candidate before strategy contract use",
+            "runtime variant must be validated before strategy contract use",
             context={
                 "package_id": manifest.package_id,
                 "runtime_variant_id": variant.get("variant_id"),
                 "validation_status": variant.get("validation_status"),
-                "paper_candidate": variant.get("paper_candidate"),
             },
         )
     if variant.get("manifest_sha256") != manifest.manifest_sha256:

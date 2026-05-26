@@ -131,7 +131,7 @@ def build_runtime_variant(
             context={"variant_kind": variant_kind.value, "variant_keys": sorted(variant_config)},
         )
     validate_runtime_variant_config(variant_config)
-    _validate_paper_candidate(validation_status=validation_status, paper_candidate=paper_candidate)
+    _ = paper_candidate  # legacy request field; no longer a Paper/Selection admission gate.
     locked_core_hash = derive_locked_core_hash(manifest)
     variant_hash = canonical_json_sha256(
         {
@@ -151,7 +151,7 @@ def build_runtime_variant(
         variant_config=variant_config,
         variant_hash=variant_hash,
         validation_status=validation_status,
-        paper_candidate=paper_candidate,
+        paper_candidate=False,
         validation_evidence=validation_evidence or {},
         created_by=created_by.strip(),
     )
@@ -163,15 +163,6 @@ def ensure_runtime_variant_status(
     paper_candidate: bool,
     validation_evidence: dict[str, Any] | None = None,
 ) -> None:
-    _validate_paper_candidate(validation_status=validation_status, paper_candidate=paper_candidate)
+    _ = paper_candidate  # kept only for legacy schema/API compatibility.
     if validation_status == RuntimeVariantValidationStatus.VALIDATION_PASSED and not validation_evidence:
         raise StrategyPackageValidationError("passed runtime variant requires validation evidence")
-
-
-def _validate_paper_candidate(
-    *,
-    validation_status: RuntimeVariantValidationStatus,
-    paper_candidate: bool,
-) -> None:
-    if paper_candidate and validation_status != RuntimeVariantValidationStatus.VALIDATION_PASSED:
-        raise StrategyPackageValidationError("runtime variant must pass validation before becoming a paper candidate")

@@ -53,8 +53,8 @@ export function asText(value: unknown): string {
 
 export function statusTone(status: unknown): "success" | "danger" | "warning" | "info" | "neutral" {
   const s = String(status || "").toUpperCase();
-  if (["PASSED", "SUCCEEDED", "SUCCESS", "COMPLETED", "PAPER_ENABLED", "SELECTION_ENABLED", "ACTIVE", "CURRENT", "FILLED", "ALL_TRADED", "RUNNABLE"].includes(s)) return "success";
-  if (["FAILED", "ERROR", "REJECTED", "PAPER_FAILED", "BLOCKED", "PAPER_DATA_BLOCKED", "CANCELED", "CANCELLED", "EXPIRED"].includes(s)) return "danger";
+  if (["PASSED", "SUCCEEDED", "SUCCESS", "COMPLETED", "ACTIVE", "CURRENT", "FILLED", "ALL_TRADED", "RUNNABLE"].includes(s)) return "success";
+  if (["FAILED", "ERROR", "REJECTED", "BLOCKED", "PAPER_DATA_BLOCKED", "CANCELED", "CANCELLED", "EXPIRED"].includes(s)) return "danger";
   if (["STALE", "STALE_WARNING", "WARNING", "WARN", "LEGACY_NON_ST_PIT", "CACHE_ONLY", "PENDING", "DRAFT", "RETRAINING", "RUNNING", "PAUSED", "PREFLIGHTING", "REPLAYING", "CATCHING_UP", "SWITCHING_TO_LIVE", "LIVE_RUNNING", "LIVE_WAITING_FOR_BAR", "PARTIALLY_FILLED", "PARTIAL_FILLED", "NEW", "SUBMITTED"].includes(s)) return "warning";
   if (["READY", "CREATED", "STOPPED", "LIVE_WAITING_NEXT_TRADING_DAY", "UNSUPPORTED", "NOT_RUN", "NO_DATA"].includes(s)) return "info";
   return "neutral";
@@ -66,15 +66,12 @@ const STATUS_LABELS: Record<string, string> = {
   SUCCEEDED: "成功",
   SUCCESS: "成功",
   COMPLETED: "已完成",
-  PAPER_ENABLED: "已启用模拟盘",
-  SELECTION_ENABLED: "已启用选股",
   RUNNABLE: "可运行",
   ACTIVE: "生效中",
   CURRENT: "当前",
   FAILED: "失败",
   ERROR: "错误",
   REJECTED: "已拒绝",
-  PAPER_FAILED: "模拟盘失败",
   BLOCKED: "已阻断",
   STALE: "已过期",
   STALE_WARNING: "过期提醒",
@@ -197,8 +194,8 @@ export function paperV2WorkflowSteps(signals: PaperV2WorkflowSignals, currentKey
     },
     {
       key: "enable",
-      label: "2. 启用选股/模拟盘",
-      hint: "标记策略包可用于 Selection 或 Paper",
+      label: "2. 资产合格检查",
+      hint: "通过 manifest、hash、因子和模型资产检查即可进入选股/模拟盘",
       href: "/paper-v2/packages",
       done: signals.hasSelectionEnabledPackage || signals.hasPaperEnabledPackage,
       reachable: signals.hasPackages,
@@ -209,15 +206,15 @@ export function paperV2WorkflowSteps(signals: PaperV2WorkflowSignals, currentKey
       hint: "进入 Selection Center 选包并出候选",
       href: "/paper-v2/selection",
       done: signals.hasSelectionRun,
-      reachable: signals.hasSelectionEnabledPackage || signals.hasPaperEnabledPackage,
+      reachable: signals.hasPackages,
     },
     {
       key: "portfolio",
       label: "4. 创建模拟盘实例",
-      hint: "用 PAPER_ENABLED 策略包冻结模拟盘实例",
+      hint: "资产合格策略包可直接创建 AIstock 或 MiniQMT 模拟盘",
       href: "/paper-v2/portfolios",
       done: signals.hasPortfolio,
-      reachable: signals.hasPaperEnabledPackage,
+      reachable: signals.hasPackages,
     },
     {
       key: "run",

@@ -205,6 +205,172 @@ class StrategyPackageRepository:
                 rows = cur.fetchall()
         return [record for record in (self._record_from_row(dict(row), quarantine=True) for row in rows) if record is not None]
 
+    def package_delete_dependencies(self, package_id: str) -> dict[str, Any]:
+        self.get(package_id)
+        summary: dict[str, Any] = {
+            "paper_portfolios": [],
+            "active_paper_portfolios": [],
+            "selection_run_ids": [],
+            "qmt_bindings": [],
+            "live_approvals": [],
+            "strategy_runtime_releases": [],
+            "simulation_release_bindings": [],
+            "simulation_daily_runs": [],
+            "execution_plans": [],
+            "daily_selection_evidence": 0,
+            "selection_score_artifacts": 0,
+        }
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT portfolio_id, status
+                    FROM paper_v2.portfolio
+                    WHERE package_id = %s
+                    ORDER BY created_at DESC, portfolio_id ASC
+                    """,
+                    (package_id,),
+                )
+                portfolios = [dict(row) for row in cur.fetchall()]
+                summary["paper_portfolios"] = portfolios
+                summary["active_paper_portfolios"] = [
+                    row for row in portfolios if str(row.get("status") or "").upper() != "RETIRED"
+                ]
+                cur.execute(
+                    """
+                    SELECT DISTINCT run_id
+                    FROM (
+                        SELECT run_id FROM selection.package_result WHERE package_id = %s
+                        UNION
+                        SELECT run_id FROM selection.excluded_result WHERE package_id = %s
+                        UNION
+                        SELECT run_id FROM selection.paper_portfolio_link WHERE package_id = %s
+                        UNION
+                        SELECT run_id FROM selection.run WHERE package_ids ? %s
+                    ) refs
+                    ORDER BY run_id
+                    """,
+                    (package_id, package_id, package_id, package_id),
+                )
+                summary["selection_run_ids"] = [row["run_id"] for row in cur.fetchall()]
+                cur.execute("SELECT COUNT(*) AS cnt FROM selection.daily_selection_evidence WHERE package_id = %s", (package_id,))
+                summary["daily_selection_evidence"] = int((cur.fetchone() or {}).get("cnt") or 0)
+                cur.execute("SELECT COUNT(*) AS cnt FROM strategy_pkg.selection_score_artifact WHERE package_id = %s", (package_id,))
+                summary["selection_score_artifacts"] = int((cur.fetchone() or {}).get("cnt") or 0)
+                cur.execute(
+                    """
+                    SELECT approval_id, approval_status, portfolio_id
+                    FROM strategy_pkg.live_approval
+                    WHERE package_id = %s
+                    ORDER BY updated_at DESC, approval_id ASC
+                    """,
+                    (package_id,),
+                )
+                summary["live_approvals"] = [dict(row) for row in cur.fetchall()]
+                cur.execute(
+                    """
+                    SELECT release_id, validation_state
+                    FROM strategy_pkg.strategy_runtime_release
+                    WHERE package_id = %s
+                    ORDER BY created_at DESC, release_id ASC
+                    """,
+                    (package_id,),
+                )
+                summary["strategy_runtime_releases"] = [dict(row) for row in cur.fetchall()]
+                if self._table_exists(cur, "qmt_strategy.strategy_package_binding"):
+                    cur.execute(
+                        """
+                        SELECT binding_id, strategy_id, binding_status
+                        FROM qmt_strategy.strategy_package_binding
+                        WHERE package_id = %s
+                        ORDER BY updated_at DESC, binding_id ASC
+                        """,
+                        (package_id,),
+                    )
+                    summary["qmt_bindings"] = [dict(row) for row in cur.fetchall()]
+                for table, key in (
+                    ("paper_v2.simulation_release_binding", "simulation_release_bindings"),
+                    ("paper_v2.simulation_daily_run", "simulation_daily_runs"),
+                    ("paper_v2.execution_plan", "execution_plans"),
+                ):
+                    if self._table_exists(cur, table):
+                        cur.execute(
+                            f"""
+                            SELECT *
+                            FROM {table}
+                            WHERE package_id = %s
+                            LIMIT 50
+                            """,
+                            (package_id,),
+                        )
+                        summary[key] = [dict(row) for row in cur.fetchall()]
+        return summary
+
+    def delete_package(self, package_id: str) -> dict[str, Any]:
+        record = self.get(package_id)
+        dependencies = self.package_delete_dependencies(package_id)
+        blockers = self._package_delete_blockers(dependencies)
+        if blockers:
+            raise InvalidStateTransitionError(
+                "strategy package delete blocked by existing runtime references",
+                context={"package_id": package_id, "blockers": blockers, "dependencies": dependencies},
+            )
+        counts = {
+            "seed_fragility_score": 0,
+            "package_validation_run": 0,
+            "model_retrain_job": 0,
+            "model_state": 0,
+            "package_runtime_variant": 0,
+            "validated_execution_policy": 0,
+            "selection_score_artifact": 0,
+            "package_asset": 0,
+            "package_status_event": 0,
+            "package": 0,
+        }
+        with self._conn_factory() as conn:
+            original_autocommit = getattr(conn, "autocommit", None)
+            try:
+                if original_autocommit is not None:
+                    conn.autocommit = False
+                with conn.cursor() as cur:
+                    optional_tables = (
+                        ("strategy_pkg.seed_fragility_score", "seed_fragility_score"),
+                        ("strategy_pkg.package_validation_run", "package_validation_run"),
+                    )
+                    for table, key in optional_tables:
+                        if self._table_exists(cur, table):
+                            cur.execute(f"DELETE FROM {table} WHERE package_id = %s", (package_id,))
+                            counts[key] = cur.rowcount
+                    for table, key in (
+                        ("strategy_pkg.model_retrain_job", "model_retrain_job"),
+                        ("strategy_pkg.model_state", "model_state"),
+                        ("strategy_pkg.package_runtime_variant", "package_runtime_variant"),
+                        ("strategy_pkg.validated_execution_policy", "validated_execution_policy"),
+                        ("strategy_pkg.selection_score_artifact", "selection_score_artifact"),
+                        ("strategy_pkg.package_asset", "package_asset"),
+                        ("strategy_pkg.package_status_event", "package_status_event"),
+                    ):
+                        if self._table_exists(cur, table):
+                            cur.execute(f"DELETE FROM {table} WHERE package_id = %s", (package_id,))
+                            counts[key] = cur.rowcount
+                    cur.execute("DELETE FROM strategy_pkg.package WHERE package_id = %s", (package_id,))
+                    counts["package"] = cur.rowcount
+                if hasattr(conn, "commit"):
+                    conn.commit()
+            except Exception:
+                if hasattr(conn, "rollback"):
+                    conn.rollback()
+                raise
+            finally:
+                if original_autocommit is not None:
+                    conn.autocommit = original_autocommit
+        return {
+            "package_id": package_id,
+            "manifest_sha256": record.manifest_sha256,
+            "deleted_counts": counts,
+            "dependencies": dependencies,
+        }
+
     def transition_status(
         self,
         *,
@@ -282,6 +448,34 @@ class StrategyPackageRepository:
                 if original_autocommit is not None:
                     conn.autocommit = original_autocommit
         return self.get(package_id)
+
+    @staticmethod
+    def _package_delete_blockers(dependencies: dict[str, Any]) -> list[str]:
+        blockers: list[str] = []
+        for key in (
+            "paper_portfolios",
+            "selection_run_ids",
+            "qmt_bindings",
+            "live_approvals",
+            "strategy_runtime_releases",
+            "simulation_release_bindings",
+            "simulation_daily_runs",
+            "execution_plans",
+        ):
+            if dependencies.get(key):
+                blockers.append(key)
+        for key in ("daily_selection_evidence",):
+            if int(dependencies.get(key) or 0) > 0:
+                blockers.append(key)
+        return blockers
+
+    @staticmethod
+    def _table_exists(cur: Any, qualified_name: str) -> bool:
+        cur.execute("SELECT to_regclass(%s)", (qualified_name,))
+        row = cur.fetchone()
+        if isinstance(row, dict):
+            return bool(row.get("to_regclass"))
+        return bool(row and row[0])
 
     def mark_paper_portfolio_created(self, package_id: str, portfolio_id: str) -> StrategyPackageRecord:
         record = self.get(package_id)
@@ -396,6 +590,7 @@ class StrategyPackageRepository:
 
     def save_execution_policy(self, policy: ValidatedExecutionPolicy) -> ValidatedExecutionPolicy:
         self.get(policy.package_id)
+        policy = policy.model_copy(update={"paper_enabled": False})
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -483,6 +678,7 @@ class StrategyPackageRepository:
         policy_id: str,
         paper_enabled: bool,
     ) -> ValidatedExecutionPolicy:
+        _ = paper_enabled
         self.get_execution_policy(package_id, policy_id)
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
@@ -492,7 +688,7 @@ class StrategyPackageRepository:
                     SET paper_enabled = %s, updated_at = NOW()
                     WHERE package_id = %s AND policy_id = %s
                     """,
-                    (paper_enabled, package_id, policy_id),
+                    (False, package_id, policy_id),
                 )
         return self.get_execution_policy(package_id, policy_id)
 
@@ -784,6 +980,7 @@ class StrategyPackageRepository:
 
     def save_runtime_variant(self, variant: StrategyPackageRuntimeVariant) -> StrategyPackageRuntimeVariant:
         record = self.get(variant.package_id)
+        variant = variant.model_copy(update={"paper_candidate": False})
         _validate_variant_matches_package(variant, record)
         ensure_runtime_variant_status(
             validation_status=variant.validation_status,
@@ -892,6 +1089,7 @@ class StrategyPackageRepository:
         validation_evidence: dict[str, Any],
     ) -> StrategyPackageRuntimeVariant:
         self.get_runtime_variant(package_id, variant_id)
+        paper_candidate = False
         ensure_runtime_variant_status(
             validation_status=validation_status,
             paper_candidate=paper_candidate,
@@ -1441,6 +1639,75 @@ class InMemoryStrategyPackageRepository:
             result.append(record)
         return result
 
+    def package_delete_dependencies(self, package_id: str) -> dict[str, Any]:
+        self.get(package_id)
+        live_approvals = [
+            {
+                "approval_id": approval.approval_id,
+                "approval_status": approval.approval_status.value,
+                "portfolio_id": approval.portfolio_id,
+            }
+            for approval in self.live_approvals.values()
+            if approval.package_id == package_id
+        ]
+        return {
+            "paper_portfolios": [],
+            "active_paper_portfolios": [],
+            "selection_run_ids": [],
+            "qmt_bindings": [],
+            "live_approvals": live_approvals,
+            "strategy_runtime_releases": [],
+            "simulation_release_bindings": [],
+            "simulation_daily_runs": [],
+            "execution_plans": [],
+            "daily_selection_evidence": 0,
+            "selection_score_artifacts": 0,
+        }
+
+    def delete_package(self, package_id: str) -> dict[str, Any]:
+        record = self.get(package_id)
+        dependencies = self.package_delete_dependencies(package_id)
+        blockers = StrategyPackageRepository._package_delete_blockers(dependencies)
+        if blockers:
+            raise InvalidStateTransitionError(
+                "strategy package delete blocked by existing runtime references",
+                context={"package_id": package_id, "blockers": blockers, "dependencies": dependencies},
+            )
+        counts = {
+            "package_validation_run": len([run for run in self.validation_runs.values() if run.package_id == package_id]),
+            "model_retrain_job": len([job for job in self.model_retrain_jobs.values() if job.package_id == package_id]),
+            "model_state": 1 if package_id in self.model_states else 0,
+            "package_runtime_variant": len([variant for variant in self.runtime_variants.values() if variant.package_id == package_id]),
+            "validated_execution_policy": len([policy for policy in self.execution_policies.values() if policy.package_id == package_id]),
+            "package_asset": len([asset for asset in self.package_assets.values() if asset.package_id == package_id]),
+            "package_status_event": len([event for event in self.events if event.package_id == package_id]),
+            "package": 1,
+        }
+        self.validation_runs = {
+            run_id: run for run_id, run in self.validation_runs.items() if run.package_id != package_id
+        }
+        self.model_retrain_jobs = {
+            job_id: job for job_id, job in self.model_retrain_jobs.items() if job.package_id != package_id
+        }
+        self.model_states.pop(package_id, None)
+        self.runtime_variants = {
+            variant_id: variant for variant_id, variant in self.runtime_variants.items() if variant.package_id != package_id
+        }
+        self.execution_policies = {
+            policy_id: policy for policy_id, policy in self.execution_policies.items() if policy.package_id != package_id
+        }
+        self.package_assets = {
+            key: asset for key, asset in self.package_assets.items() if asset.package_id != package_id
+        }
+        self.events = [event for event in self.events if event.package_id != package_id]
+        self.records.pop(package_id, None)
+        return {
+            "package_id": package_id,
+            "manifest_sha256": record.manifest_sha256,
+            "deleted_counts": counts,
+            "dependencies": dependencies,
+        }
+
     def validate_manifest_integrity(self, *, limit: int = 500) -> dict[str, Any]:
         records = list(self.records.values())[:limit]
         drifted: list[dict[str, Any]] = []
@@ -1572,6 +1839,7 @@ class InMemoryStrategyPackageRepository:
 
     def save_execution_policy(self, policy: ValidatedExecutionPolicy) -> ValidatedExecutionPolicy:
         self.get(policy.package_id)
+        policy = policy.model_copy(update={"paper_enabled": False})
         for existing in self.execution_policies.values():
             if existing.package_id == policy.package_id and existing.policy_sha256 == policy.policy_sha256:
                 return existing
@@ -1598,8 +1866,9 @@ class InMemoryStrategyPackageRepository:
         policy_id: str,
         paper_enabled: bool,
     ) -> ValidatedExecutionPolicy:
+        _ = paper_enabled
         policy = self.get_execution_policy(package_id, policy_id)
-        updated = policy.model_copy(update={"paper_enabled": paper_enabled, "updated_at": datetime.now(timezone.utc)})
+        updated = policy.model_copy(update={"paper_enabled": False, "updated_at": datetime.now(timezone.utc)})
         self.execution_policies[policy_id] = updated
         return updated
 
@@ -1682,6 +1951,7 @@ class InMemoryStrategyPackageRepository:
 
     def save_runtime_variant(self, variant: StrategyPackageRuntimeVariant) -> StrategyPackageRuntimeVariant:
         record = self.get(variant.package_id)
+        variant = variant.model_copy(update={"paper_candidate": False})
         _validate_variant_matches_package(variant, record)
         ensure_runtime_variant_status(
             validation_status=variant.validation_status,
@@ -1734,6 +2004,7 @@ class InMemoryStrategyPackageRepository:
         validation_evidence: dict[str, Any],
     ) -> StrategyPackageRuntimeVariant:
         variant = self.get_runtime_variant(package_id, variant_id)
+        paper_candidate = False
         ensure_runtime_variant_status(
             validation_status=validation_status,
             paper_candidate=paper_candidate,

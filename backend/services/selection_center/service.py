@@ -13,9 +13,9 @@ from backend.services.paper_trading_v2.market_data import TradeCalendarProvider
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
 from backend.services.simulation_runtime import InMemorySimulationRuntimeRepository
 from backend.services.simulation_runtime.selection import StrategyPackageSelectionService
+from backend.services.strategy_package.asset_eligibility import StrategyPackageAssetEligibilityService
 from backend.services.strategy_package.metrics_summary import metrics_summary_from_record
 from backend.services.strategy_package.backtest_contract import normalize_runtime_config_with_backtest_contract
-from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.repository import StrategyPackageRepository
 from backend.services.strategy_package.runtime import StrategyPackageRuntime, apply_runtime_variant_config
 from backend.services.strategy_package.runtime_variant import RuntimeVariantValidationStatus
@@ -73,6 +73,7 @@ class SelectionCenterService:
         package_health_service: SelectionPackageHealthService | Any | None = None,
         strategy_selection_service: StrategyPackageSelectionService | Any | None = None,
         result_enrichment_service: SelectionResultEnrichmentService | Any | None = None,
+        asset_eligibility_service: StrategyPackageAssetEligibilityService | Any | None = None,
     ) -> None:
         self.package_repository = package_repository or StrategyPackageRepository()
         self.repository = repository or SelectionCenterRepository()
@@ -89,6 +90,7 @@ class SelectionCenterService:
         self.calendar_provider = calendar_provider or TradeCalendarProvider()
         self.risk_policy_service = risk_policy_service or StockRiskPolicyService()
         self.result_enrichment_service = result_enrichment_service or SelectionResultEnrichmentService()
+        self.asset_eligibility_service = asset_eligibility_service or StrategyPackageAssetEligibilityService()
         self.package_health_service = package_health_service or SelectionPackageHealthService(
             artifact_repository=getattr(self.runtime, "artifact_repository", None),
             runtime_source_resolver=getattr(self.selection_artifact_service, "runtime_asset_resolver", None),
@@ -108,6 +110,7 @@ class SelectionCenterService:
             calendar_provider=self.calendar_provider,
             risk_policy_service=self.risk_policy_service,
             package_health_service=self.package_health_service,
+            asset_eligibility_service=self.asset_eligibility_service,
             repository=selection_evidence_repository,
         )
 
@@ -212,17 +215,7 @@ class SelectionCenterService:
         package_health: dict[str, dict[str, Any]] = {}
         for package_id in package_ids:
             record = self.package_repository.get(package_id)
-            if record.package_status not in {
-                PackageStatus.BACKTEST_APPROVED,
-                PackageStatus.SELECTION_ENABLED,
-                PackageStatus.PAPER_ENABLED,
-                PackageStatus.PAPER_RUNNING,
-                PackageStatus.PAPER_PASSED,
-            }:
-                raise StrategyPackageValidationError(
-                    "package is not enabled for selection",
-                    context={"package_id": package_id, "package_status": record.package_status.value},
-                )
+            asset_eligibility = self.asset_eligibility_service.require_eligible(record)
             manifest = record.current_manifest()
             raw_package_config = self._package_runtime_config(config, package_id)
             variant = self._resolve_runtime_variant(record, raw_package_config)
@@ -233,12 +226,13 @@ class SelectionCenterService:
                 runtime_config=raw_package_config,
                 package_id=package_id,
             )
-            health = self.package_health_service.require_runnable(
+            health = self.package_health_service.summarize(
                 record,
                 runtime_config=package_config,
                 trade_date=trade_date,
                 data_source=data_source,
             )
+            health["asset_eligibility"] = asset_eligibility.to_dict()
             records_by_id[package_id] = record
             package_configs[package_id] = package_config
             package_health[package_id] = health
@@ -348,14 +342,13 @@ class SelectionCenterService:
                 context={"package_id": record.package_id},
             )
         variant = self.package_repository.get_runtime_variant(record.package_id, variant_id)
-        if variant.validation_status != RuntimeVariantValidationStatus.VALIDATION_PASSED or not variant.paper_candidate:
+        if variant.validation_status != RuntimeVariantValidationStatus.VALIDATION_PASSED:
             raise StrategyPackageValidationError(
-                "runtime variant must be a validated paper candidate before Selection Center use",
+                "runtime variant must be validated before Selection Center use",
                 context={
                     "package_id": record.package_id,
                     "runtime_variant_id": variant.variant_id,
                     "validation_status": variant.validation_status.value,
-                    "paper_candidate": variant.paper_candidate,
                 },
             )
         if variant.manifest_sha256 != record.manifest_sha256:
@@ -632,25 +625,26 @@ class SelectionCenterService:
     def list_runs(self, *, limit: int = 100) -> list[SelectionRun]:
         return self.repository.list_runs(limit=limit)
 
+    def list_runs_page(self, *, page: int = 1, page_size: int = 20) -> dict[str, Any]:
+        return self.repository.list_runs_page(page=page, page_size=page_size)
+
+    def delete_run(self, run_id: str) -> dict[str, Any]:
+        return self.repository.delete_run(run_id)
+
+    def delete_runs(self, run_ids: list[str]) -> dict[str, Any]:
+        return self.repository.delete_runs(run_ids)
+
     def list_selectable_packages(self, *, limit: int = 200) -> list[dict[str, Any]]:
         if limit <= 0:
             raise StrategyPackageValidationError("limit must be positive")
-        eligible_statuses = [
-            PackageStatus.BACKTEST_APPROVED,
-            PackageStatus.SELECTION_ENABLED,
-            PackageStatus.PAPER_ENABLED,
-            PackageStatus.PAPER_RUNNING,
-            PackageStatus.PAPER_PASSED,
-        ]
-        records_by_id = {}
-        for status in eligible_statuses:
-            for record in self.package_repository.list(status=status, limit=limit):
-                records_by_id[record.package_id] = record
-        records = sorted(records_by_id.values(), key=lambda item: item.created_at, reverse=True)[:limit]
+        records = self.package_repository.list(limit=max(limit * 5, limit))
         latest_runs = self._latest_run_by_package(limit=max(limit * 5, 200))
         package_service = StrategyPackageService(repository=self.package_repository)
         items: list[dict[str, Any]] = []
         for record in records:
+            asset_eligibility = self.asset_eligibility_service.summarize(record)
+            if not asset_eligibility.eligible:
+                continue
             manifest = record.current_manifest()
             model_state = package_service.get_model_state(record.package_id)
             latest_run = latest_runs.get(record.package_id)
@@ -673,11 +667,12 @@ class SelectionCenterService:
                     "updated_at": record.updated_at.isoformat(),
                     "metrics_summary": metrics_summary_from_record(record).model_dump(mode="json"),
                     "model_state": model_state.model_dump(mode="json"),
+                    "asset_eligibility": asset_eligibility.to_dict(),
                     "selection_health": health,
                     "latest_selection_run": self._selection_run_summary(latest_run) if latest_run else None,
                 }
             )
-        return items
+        return items[:limit]
 
     @staticmethod
     def _display_portfolio_topk(manifest: Any) -> int | None:

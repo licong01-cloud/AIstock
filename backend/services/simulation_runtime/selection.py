@@ -32,12 +32,12 @@ from backend.services.selection_center.runtime_profile import (
 )
 from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.strategy_package.backtest_contract import normalize_runtime_config_with_backtest_contract
+from backend.services.strategy_package.asset_eligibility import StrategyPackageAssetEligibilityService
 from backend.services.strategy_package.live_inference import (
     AUTHORITATIVE_SELECTION_SCOPE,
     AUTHORITATIVE_SELECTION_SOURCE_TYPE,
     LiveInferencePreflightResult,
 )
-from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.repository import StrategyPackageRepository
 from backend.services.strategy_package.runtime import StrategyPackageRuntime, apply_runtime_variant_config
 from backend.services.strategy_package.runtime_variant import RuntimeVariantValidationStatus
@@ -191,6 +191,7 @@ class StrategyPackageSelectionService:
         package_health_service: SelectionPackageHealthService | Any | None = None,
         repository: SimulationRuntimeRepository | InMemorySimulationRuntimeRepository | Any | None = None,
         signal_service: DailySelectionSignalService | None = None,
+        asset_eligibility_service: StrategyPackageAssetEligibilityService | Any | None = None,
     ) -> None:
         self.package_repository = package_repository or StrategyPackageRepository()
         self.runtime = runtime or StrategyPackageRuntime()
@@ -207,6 +208,7 @@ class StrategyPackageSelectionService:
             runtime_source_resolver=getattr(self.selection_artifact_service, "runtime_asset_resolver", None),
             hmm_runtime=getattr(self.runtime, "hmm_runtime", None),
         )
+        self.asset_eligibility_service = asset_eligibility_service or StrategyPackageAssetEligibilityService()
         self.repository = repository or SimulationRuntimeRepository()
         self.signal_service = signal_service or DailySelectionSignalService(
             runtime=self.runtime,
@@ -447,17 +449,7 @@ class StrategyPackageSelectionService:
         package_health: dict[str, dict[str, Any]] = {}
         for package_id in package_ids:
             record = self.package_repository.get(package_id)
-            if record.package_status not in {
-                PackageStatus.BACKTEST_APPROVED,
-                PackageStatus.SELECTION_ENABLED,
-                PackageStatus.PAPER_ENABLED,
-                PackageStatus.PAPER_RUNNING,
-                PackageStatus.PAPER_PASSED,
-            }:
-                raise StrategyPackageValidationError(
-                    "package is not enabled for selection",
-                    context={"package_id": package_id, "package_status": record.package_status.value},
-                )
+            asset_eligibility = self.asset_eligibility_service.require_eligible(record)
             manifest = record.current_manifest()
             raw_package_config = self._package_runtime_config(config, package_id)
             variant = self._resolve_runtime_variant(record, raw_package_config)
@@ -474,12 +466,13 @@ class StrategyPackageSelectionService:
                 context={"package_id": package_id, "path": "strategy_package_selection.package_runtime_config"},
                 require_trade_enabled=not is_non_trading_runtime_config(package_config),
             )
-            health = self.package_health_service.require_runnable(
+            health = self.package_health_service.summarize(
                 record,
                 runtime_config=package_config,
                 trade_date=trade_date,
                 data_source=data_source,
             )
+            health["asset_eligibility"] = asset_eligibility.to_dict()
             records_by_id[package_id] = record
             package_configs[package_id] = package_config
             package_health[package_id] = health
@@ -589,14 +582,13 @@ class StrategyPackageSelectionService:
                 context={"package_id": record.package_id},
             )
         variant = self.package_repository.get_runtime_variant(record.package_id, variant_id)
-        if variant.validation_status != RuntimeVariantValidationStatus.VALIDATION_PASSED or not variant.paper_candidate:
+        if variant.validation_status != RuntimeVariantValidationStatus.VALIDATION_PASSED:
             raise StrategyPackageValidationError(
-                "runtime variant must be a validated paper candidate before Selection Center use",
+                "runtime variant must be validated before Selection Center use",
                 context={
                     "package_id": record.package_id,
                     "runtime_variant_id": variant.variant_id,
                     "validation_status": variant.validation_status.value,
-                    "paper_candidate": variant.paper_candidate,
                 },
             )
         if variant.manifest_sha256 != record.manifest_sha256:

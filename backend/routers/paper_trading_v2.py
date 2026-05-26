@@ -55,6 +55,20 @@ class ReplayRequest(BaseModel):
     confirm_text: str | None = None
 
 
+class DeletePortfolioRequest(BaseModel):
+    confirm_delete: bool = False
+
+
+class BulkPortfolioLifecycleRequest(BaseModel):
+    portfolio_ids: list[str] = Field(default_factory=list)
+    action: Literal["pause", "resume", "complete", "retire"]
+
+
+class BulkDeletePortfolioRequest(BaseModel):
+    portfolio_ids: list[str] = Field(default_factory=list)
+    confirm_delete: bool = False
+
+
 class ReadinessRequest(BaseModel):
     trade_date: date
     runtime_config: dict[str, Any] = Field(default_factory=dict)
@@ -296,8 +310,26 @@ def create_portfolio(req: CreatePortfolioRequest) -> dict[str, Any]:
 
 
 @router.get("/portfolios")
-def list_portfolios(limit: int = 100) -> dict[str, Any]:
+def list_portfolios(
+    limit: int = Query(default=100, ge=1, le=1000),
+    page: int | None = Query(default=None, ge=1),
+    page_size: int | None = Query(default=None, ge=1, le=100),
+    status: list[str] | None = Query(default=None),
+    search: str | None = Query(default=None),
+    sort_by: str = Query(default="created_at"),
+    sort_dir: str = Query(default="desc"),
+) -> dict[str, Any]:
     try:
+        if page is not None or page_size is not None:
+            page_data = PaperTradingV2PortfolioService().list_portfolios_page(
+                page=page or 1,
+                page_size=page_size or min(limit, 50),
+                statuses=status,
+                search=search,
+                sort_by=sort_by,
+                sort_dir=sort_dir,
+            )
+            return {"ok": True, **page_data}
         portfolios = PaperTradingV2PortfolioService().list_portfolios(limit=limit)
         return {"ok": True, "portfolios": [item.model_dump(mode="json") for item in portfolios]}
     except TradingCoreError as exc:
@@ -335,6 +367,39 @@ def list_running_portfolio_summary(
             max_initial_cash=max_initial_cash,
         )
         return {"ok": True, **page_data}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/portfolios/bulk-lifecycle")
+def bulk_portfolio_lifecycle(req: BulkPortfolioLifecycleRequest) -> dict[str, Any]:
+    try:
+        if not req.portfolio_ids:
+            raise InvalidStateTransitionError(
+                "paper v2 bulk lifecycle requires at least one portfolio",
+                context={"portfolio_ids": req.portfolio_ids},
+            )
+        result = PaperTradingV2PortfolioService().bulk_lifecycle(req.portfolio_ids, req.action)
+        return {"ok": True, **result}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/portfolios/bulk-delete")
+def bulk_delete_portfolios(req: BulkDeletePortfolioRequest) -> dict[str, Any]:
+    try:
+        if not req.confirm_delete:
+            raise InvalidStateTransitionError(
+                "paper v2 portfolio bulk delete requires explicit confirmation",
+                context={"portfolio_ids": req.portfolio_ids, "confirm_delete": req.confirm_delete},
+            )
+        if not req.portfolio_ids:
+            raise InvalidStateTransitionError(
+                "paper v2 portfolio bulk delete requires at least one portfolio",
+                context={"portfolio_ids": req.portfolio_ids},
+            )
+        result = PaperTradingV2PortfolioService().bulk_delete_portfolios(req.portfolio_ids)
+        return {"ok": True, **result}
     except TradingCoreError as exc:
         _raise_http(exc)
 
@@ -396,6 +461,20 @@ def retire_portfolio(portfolio_id: str) -> dict[str, Any]:
         )
         portfolio = PaperTradingV2PortfolioService().retire_portfolio(portfolio_id)
         return {"ok": True, "portfolio": portfolio.model_dump(mode="json")}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.delete("/portfolios/{portfolio_id}")
+def delete_portfolio(portfolio_id: str, req: DeletePortfolioRequest) -> dict[str, Any]:
+    try:
+        if not req.confirm_delete:
+            raise InvalidStateTransitionError(
+                "paper v2 portfolio delete requires explicit confirmation",
+                context={"portfolio_id": portfolio_id, "confirm_delete": req.confirm_delete},
+            )
+        deleted_counts = PaperTradingV2PortfolioService().delete_portfolio(portfolio_id)
+        return {"ok": True, "portfolio_id": portfolio_id, "deleted_counts": deleted_counts}
     except TradingCoreError as exc:
         _raise_http(exc)
 

@@ -37,7 +37,6 @@ SENTINEL_QUANTITY = 100
 SENTINEL_INTENDED_PRICE = Decimal("10.00")
 SENTINEL_SOURCE = "paper_v2_coldstart_sanity"
 LOCAL_SIM_BACKEND = "local_sim"
-PAPER_ENABLED_STATUSES = ("PAPER_ENABLED", "PAPER_RUNNING", "PAPER_PASSED")
 SENTINEL_PORTFOLIO_PREFIX = "paper_v2_coldstart_sanity_"
 SENTINEL_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -76,7 +75,7 @@ class ColdstartSentinelService:
 
         with self._conn_factory() as conn:
             try:
-                package = self._select_enabled_package(conn, req["package_id"])
+                package = self._select_package(conn, req["package_id"])
                 self._require_capture_fields(conn)
                 result = self._record_rows(conn, req=req, package=package, now=now)
                 _commit(conn)
@@ -85,7 +84,7 @@ class ColdstartSentinelService:
                 _rollback(conn)
                 raise
 
-    def _select_enabled_package(self, conn: Any, package_id: str) -> dict[str, Any]:
+    def _select_package(self, conn: Any, package_id: str) -> dict[str, Any]:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
@@ -104,14 +103,18 @@ class ColdstartSentinelService:
                 context={"package_id": package_id},
             )
         package = dict(row)
-        if package["package_status"] not in PAPER_ENABLED_STATUSES:
+        if package["package_status"] == "RETIRED":
             raise InvalidStateTransitionError(
-                "paper v2 coldstart sentinel requires an enable_paper StrategyPackage",
+                "paper v2 coldstart sentinel cannot use a retired StrategyPackage",
                 context={
                     "package_id": package_id,
                     "package_status": package["package_status"],
-                    "allowed_statuses": list(PAPER_ENABLED_STATUSES),
                 },
+            )
+        if not package.get("manifest_sha256"):
+            raise InvalidStateTransitionError(
+                "paper v2 coldstart sentinel requires a frozen StrategyPackage manifest",
+                context={"package_id": package_id},
             )
         return package
 
