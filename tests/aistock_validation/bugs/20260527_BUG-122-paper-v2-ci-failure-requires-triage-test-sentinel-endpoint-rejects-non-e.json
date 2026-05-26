@@ -14,7 +14,8 @@
     "backend/tests/strategy_package",
     "backend/services/trading_core/errors.py",
     "backend/services/strategy_package",
-    "backend/services/selection_center/runtime_profile.py"
+    "backend/services/selection_center/runtime_profile.py",
+    "tests/aistock_validation/bugs/20260527_BUG-122-paper-v2-ci-failure-requires-triage-test-sentinel-endpoint-rejects-non-e.json"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-122",
@@ -42,6 +43,15 @@
         "backend/services/selection_center/runtime_profile.py"
       ],
       "note": "Local reproduction showed BUG-122 root causes in Trading Core error taxonomy, StrategyPackage enable_paper/asset eligibility, and generated runtime-profile binding refresh, not only Paper v2 test files.",
+      "timestamp": "2026-05-27T00:00:00Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "added_scope": [
+        "tests/aistock_validation/bugs/20260527_BUG-122-paper-v2-ci-failure-requires-triage-test-sentinel-endpoint-rejects-non-e.json"
+      ],
+      "note": "Allow the GitHub-linked BUG registry record itself to be included in the BUG-122 PR scope check.",
       "timestamp": "2026-05-27T00:00:00Z"
     }
   ],
