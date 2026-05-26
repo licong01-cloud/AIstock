@@ -6866,7 +6866,7 @@ async def stream_multi_node_logs(experiment_id: str):
         ]
 
         if not active_groups:
-            yield f"data: [System] 没有已分配节点的分组，无法拉取远端日志\n\n"
+            yield "data: [System] 没有已分配节点的分组，无法拉取远端日志\n\n"
             return
 
         yield f"data: [System] 已连接 {len(active_groups)} 个节点的日志流...\n\n"
