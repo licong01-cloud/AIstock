@@ -228,16 +228,28 @@ def test_sentinel_endpoint_rejects_unknown_package_id_before_capture_preflight(m
     assert not any("FROM information_schema.columns" in sql for sql, _ in conn.executed)
 
 
-def test_sentinel_endpoint_rejects_non_enabled_package_status_before_writes(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sentinel_endpoint_allows_backtest_approved_package_status(monkeypatch: pytest.MonkeyPatch) -> None:
     conn = FakeConnection(package_row=_manifest_row(status=PackageStatus.BACKTEST_APPROVED))
+    client = _client(monkeypatch, conn)
+
+    response = client.post("/api/v1/paper-v2/coldstart-sanity/sentinel-order", json=_payload(package_id=conn.package_row["package_id"]))
+
+    assert response.status_code == 200
+    assert response.json()["package_id"] == conn.package_row["package_id"]
+    assert conn.commits == 1
+    assert conn.rollbacks == 0
+    assert any("INSERT INTO paper_v2.fills" in sql for sql, _ in conn.executed)
+
+
+def test_sentinel_endpoint_rejects_retired_package_status_before_writes(monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = FakeConnection(package_row=_manifest_row(status=PackageStatus.RETIRED))
     client = _client(monkeypatch, conn)
 
     response = client.post("/api/v1/paper-v2/coldstart-sanity/sentinel-order", json=_payload(package_id=conn.package_row["package_id"]))
 
     assert response.status_code == 409
     detail = response.json()["detail"]
-    assert detail["context"]["package_status"] == PackageStatus.BACKTEST_APPROVED.value
-    assert "PAPER_ENABLED" in detail["context"]["allowed_statuses"]
+    assert detail["context"]["package_status"] == PackageStatus.RETIRED.value
     assert conn.commits == 0
     assert conn.rollbacks == 1
     assert not any("INSERT INTO" in sql for sql, _ in conn.executed)

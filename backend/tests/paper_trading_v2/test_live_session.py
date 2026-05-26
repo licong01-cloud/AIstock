@@ -23,6 +23,7 @@ from backend.services.paper_trading_v2.session import PaperTradingSessionRunner,
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
+from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELECTION_SCOPE, AUTHORITATIVE_SELECTION_SOURCE_TYPE
 from backend.services.strategy_package.service import StrategyPackageService
 from backend.services.trading_core.errors import DataUnavailableError
 from backend.services.trading_core.models import AccountSnapshot, MinuteBar, OrderIntent, OrderSide, PositionLot, RunStatus
@@ -178,8 +179,26 @@ class FakeTradabilityFilter:
         return candidates[:top_k], []
 
 
+class FakeSucceededArtifactStatus:
+    value = "SUCCEEDED"
+
+
+class FakeSelectionArtifactRepository:
+    def get(self, **kwargs):
+        class Artifact:
+            status = FakeSucceededArtifactStatus()
+            scores_json = [{"symbol": "000001.SZ", "score": 0.9, "rank": 1}]
+            metadata = {
+                "source_type": AUTHORITATIVE_SELECTION_SOURCE_TYPE,
+                "authority_scope": AUTHORITATIVE_SELECTION_SCOPE,
+            }
+
+        return Artifact()
+
+
 class FakeRuntime:
     def __init__(self, candidates: list[dict] | None = None) -> None:
+        self.artifact_repository = FakeSelectionArtifactRepository()
         self.candidates = candidates or [
             {"symbol": "000001.SZ", "score": 0.9, "rank": 1, "target_weight": 0.5, "reference_price": 10.0},
         ]

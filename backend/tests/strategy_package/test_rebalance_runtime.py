@@ -6,7 +6,7 @@ import pytest
 
 from backend.services.selection_center.models import TargetPosition
 from backend.services.strategy_package.runtime import RebalanceEngine
-from backend.services.trading_core.errors import StrategyPackageValidationError
+from backend.services.trading_core.errors import ArtifactGenerationFailedError
 from backend.services.trading_core.models import PositionLot
 
 
@@ -46,7 +46,7 @@ def test_rebalance_returns_empty_for_explicit_no_position_diff() -> None:
 
 
 def test_rebalance_still_fails_when_targets_are_missing() -> None:
-    with pytest.raises(StrategyPackageValidationError, match="target positions"):
+    with pytest.raises(ArtifactGenerationFailedError, match="target positions"):
         RebalanceEngine().build_order_intents(
             package_id="pkg_unit",
             portfolio_id="paper_unit",
