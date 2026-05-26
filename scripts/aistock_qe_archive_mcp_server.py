@@ -44,7 +44,7 @@ def qe_archive_health() -> dict[str, Any]:
 
 
 @mcp.tool()
-def qe_archive_list_runs(status: str | None = None, run_type: str | None = None, search: str | None = None, limit: int = 100) -> dict[str, Any]:
+def qe_archive_list_runs(status: str | None = None, run_type: str | None = None, search: str | None = None, limit: int = 20) -> dict[str, Any]:
     return _client().get("/runs", params={"status": status, "run_type": run_type, "search": search, "limit": limit})
 
 
@@ -55,17 +55,17 @@ def qe_archive_get_run_quality(run_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-def qe_archive_list_outbox(status: str | None = None, limit: int = 50) -> dict[str, Any]:
+def qe_archive_list_outbox(status: str | None = None, limit: int = 20) -> dict[str, Any]:
     return _client().get("/outbox", params={"status": status, "limit": limit})
 
 
 @mcp.tool()
-def qe_archive_list_jobs(status: str | None = None, limit: int = 50) -> dict[str, Any]:
+def qe_archive_list_jobs(status: str | None = None, limit: int = 20) -> dict[str, Any]:
     return _client().get("/jobs", params={"status": status, "limit": limit})
 
 
 @mcp.tool()
-def qe_archive_list_skips(archive_policy: str | None = None, source_type: str | None = None, limit: int = 100) -> dict[str, Any]:
+def qe_archive_list_skips(archive_policy: str | None = None, source_type: str | None = None, limit: int = 20) -> dict[str, Any]:
     return _client().get("/skips", params={"archive_policy": archive_policy, "source_type": source_type, "limit": limit})
 
 
@@ -195,7 +195,7 @@ def qe_archive_get_source_status(
 
 
 @mcp.tool()
-def qe_archive_list_backfill_runs(status: str | None = None, limit: int = 50) -> dict[str, Any]:
+def qe_archive_list_backfill_runs(status: str | None = None, limit: int = 20) -> dict[str, Any]:
     return _client().get("/backfill/runs", params={"status": status, "limit": limit})
 
 
@@ -213,7 +213,7 @@ def qe_archive_worker_run_once_confirmed(limit: int = 10, worker_id: str = "qe_a
 
 
 @mcp.tool()
-def qe_archive_query_factor_usage(limit: int = 50, min_runs: int = 1) -> dict[str, Any]:
+def qe_archive_query_factor_usage(limit: int = 20, min_runs: int = 1) -> dict[str, Any]:
     return _client().get("/query/factor-usage", params={"limit": limit, "min_runs": min_runs})
 
 
@@ -224,7 +224,7 @@ def qe_archive_query_factor_importance(
     loop_index: int | None = None,
     factor_name: str | None = None,
     method: str | None = None,
-    limit: int = 50,
+    limit: int = 10,
     order: str = "desc",
 ) -> dict[str, Any]:
     return _client().get(
@@ -246,7 +246,7 @@ def qe_archive_query_factor_importance_stability(
     factor_name: str | None = None,
     method: str | None = None,
     min_runs: int = 2,
-    limit: int = 50,
+    limit: int = 10,
 ) -> dict[str, Any]:
     return _client().get(
         "/query/factor-importance/stability",
@@ -260,17 +260,17 @@ def qe_archive_query_factor_importance_stability(
 
 
 @mcp.tool()
-def qe_archive_query_model_trials(model_type: str | None = None, limit: int = 50) -> dict[str, Any]:
+def qe_archive_query_model_trials(model_type: str | None = None, limit: int = 20) -> dict[str, Any]:
     return _client().get("/query/model-trials", params={"model_type": model_type, "limit": limit})
 
 
 @mcp.tool()
-def qe_archive_query_seed_trials(limit: int = 50) -> dict[str, Any]:
+def qe_archive_query_seed_trials(limit: int = 20) -> dict[str, Any]:
     return _client().get("/query/seed-trials", params={"limit": limit})
 
 
 @mcp.tool()
-def qe_archive_query_hyperparam_history(model_type: str | None = None, param_key: str | None = None, limit: int = 50) -> dict[str, Any]:
+def qe_archive_query_hyperparam_history(model_type: str | None = None, param_key: str | None = None, limit: int = 20) -> dict[str, Any]:
     return _client().get("/query/hyperparams", params={"model_type": model_type, "param_key": param_key, "limit": limit})
 
 

@@ -1,0 +1,86 @@
+{
+  "actual": "Several non-QE-experiment MCP wrappers still default to large responses or lack shared response truncation: backend/mcp/common.py has no max-response guard, qe_archive_list_runs/list_skips default to 100, qe_archive_query_factor_importance defaults to 50 on a heavy JOIN, research_list_artifact_refs/research_list_backtest_records default to 100, and validation issue/bug list wrappers can return large per-item payloads.",
+  "allowed_write_scope": [
+    "backend/mcp/common.py",
+    "backend/mcp/modules/research.py",
+    "scripts/aistock_qe_archive_mcp_server.py",
+    "scripts/aistock_mcp_server.py",
+    "backend/tests/mcp/test_research_module.py",
+    "backend/tests/test_aistock_qe_mcp_servers.py",
+    "backend/tests/test_aistock_mcp_server.py",
+    "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260526_BUG-121-mcp-audit-non-qe-experiment-tools-still-expose-high-token-default-respon.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-121",
+  "closed_at": null,
+  "closure_requirements": [
+    "Default MCP list/search tools return compact or bounded responses without removing explicit detail/full paths.",
+    "QE archive MCP wrappers use lower summary-first default limits for high-risk list/query tools.",
+    "Research MCP gateway client has a response-size guardrail consistent with other AIstock MCP clients.",
+    "Validation MCP bug/issue list/search tools expose compact defaults and full mode on demand.",
+    "Run required verification plans and keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-26T14:36:44.883556Z",
+  "description": "Several non-QE-experiment MCP wrappers still default to large responses or lack shared response truncation: backend/mcp/common.py has no max-response guard, qe_archive_list_runs/list_skips default to 100, qe_archive_query_factor_importance defaults to 50 on a heavy JOIN, research_list_artifact_refs/research_list_backtest_records default to 100, and validation issue/bug list wrappers can return large per-item payloads.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260526-6e585b985b92",
+      "timestamp": "2026-05-26T14:36:44.883552Z"
+    },
+    {
+      "timestamp": "2026-05-26T15:19:57Z",
+      "actor": "codex",
+      "action": "workflow_fix_ready",
+      "note": "Fix implemented and local validation passed; branch is PR-ready pending commit/push. GitHub Issue #234 updated with validation evidence."
+    }
+  ],
+  "evidence_uris": [
+    "docs/analysis/mcp_token_audit_20260526.md sections 4-8: QE archive, research, validation MCP token risks and implementation priorities"
+  ],
+  "expected": "MCP tools should be summary-first by default: bounded default limits, gateway-level response-size truncation metadata for oversized responses, and compact issue/bug listing options while preserving explicit full/detail paths for deeper analysis.",
+  "first_seen_at": "2026-05-26T14:36:44.883556Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 234,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/234",
+  "last_seen_at": "2026-05-26T14:36:44.883556Z",
+  "module": "mcp_gateway",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Review docs/analysis/mcp_token_audit_20260526.md and call high-risk MCP wrappers such as qe_archive_list_runs, qe_archive_query_factor_importance, research_list_backtest_records, list_bugs, or mcp_github_issue_list(source=both, page_size=50); observe unbounded or high-token default payloads compared with summary-first requirements.",
+  "required_verification": [
+    "l0",
+    "python -m pytest backend/tests/test_aistock_qe_mcp_servers.py backend/tests/test_aistock_mcp_server.py backend/tests/mcp/test_research_module.py backend/tests/scripts/test_aistock_mcp_github_issue_tools.py -q"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "mcp_gateway",
+    "qe_mcp",
+    "validation"
+  ],
+  "title": "MCP audit: non-QE experiment tools still expose high-token default responses",
+  "trigger_condition": {
+    "fingerprint": "6e585b985b924a4788af01f2",
+    "source_event_id": "FE-20260526-6e585b985b92"
+  },
+  "verification_run_id": null,
+  "validation_evidence": [
+    "python -m py_compile backend/mcp/common.py backend/mcp/modules/research.py scripts/aistock_qe_archive_mcp_server.py scripts/aistock_mcp_server.py -> passed",
+    "python -m ruff check changed MCP files and targeted tests -> passed",
+    "python -m pytest backend/tests/test_aistock_qe_mcp_servers.py backend/tests/test_aistock_mcp_server.py backend/tests/mcp/test_research_module.py backend/tests/scripts/test_aistock_mcp_github_issue_tools.py -q -p no:cacheprovider -> 97 passed",
+    "git diff --check -> passed",
+    "python -m nox -s l0 -> passed; guardrail blocking=0"
+  ]
+}

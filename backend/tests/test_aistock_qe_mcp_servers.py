@@ -296,6 +296,28 @@ def test_qe_archive_query_factor_usage_path(archive_mcp):
     assert captured["query"] == {"limit": "12", "min_runs": "2"}
 
 
+def test_qe_archive_mcp_uses_compact_default_limits(archive_mcp):
+    captured = []
+
+    def handler(request: httpx.Request):
+        captured.append((request.url.path, dict(request.url.params)))
+        return {"status": "success", "data": []}
+
+    _swap(archive_mcp, archive_mcp.LoopbackApiClient(base_url="http://127.0.0.1/api/v1/qe-archive", env_name="test", transport=_mock_transport(handler)))
+
+    archive_mcp.qe_archive_list_runs()
+    archive_mcp.qe_archive_list_skips()
+    archive_mcp.qe_archive_query_factor_importance()
+    archive_mcp.qe_archive_query_factor_importance_stability()
+    archive_mcp.qe_archive_query_seed_trials()
+
+    assert captured[0][1]["limit"] == "20"
+    assert captured[1][1]["limit"] == "20"
+    assert captured[2][1]["limit"] == "10"
+    assert captured[3][1]["limit"] == "10"
+    assert captured[4][1]["limit"] == "20"
+
+
 def test_qe_mcp_scripts_do_not_import_runtime_execution_paths() -> None:
     banned = ("AutoEvolutionScheduler", "backend.db", "get_conn", "RDAgent", "workspace_path", "QE_WORKSPACE_WIN")
     for rel in ("scripts/aistock_qe_experiment_mcp_server.py", "scripts/aistock_qe_archive_mcp_server.py"):

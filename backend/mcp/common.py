@@ -19,6 +19,8 @@ LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_BODY_EXCERPT_LIMIT = 500
+DEFAULT_MAX_RESPONSE_BYTES = 1_048_576
+TRUNCATED_PREVIEW_BYTES = 4096
 
 
 def assert_loopback_url(url: str, *, env_name: str = "base_url") -> str:
@@ -75,6 +77,16 @@ def _body_excerpt(response: httpx.Response, *, limit: int = DEFAULT_BODY_EXCERPT
     return text[:limit]
 
 
+def _int_from_env(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw in (None, ""):
+        return default
+    try:
+        return max(int(raw), 0)
+    except ValueError:
+        return default
+
+
 class AIstockApiClient:
     """Small JSON HTTP client for loopback-only AIstock MCP modules."""
 
@@ -86,12 +98,18 @@ class AIstockApiClient:
         timeout: float | None = None,
         unwrap_data: bool = False,
         transport: httpx.BaseTransport | None = None,
+        max_response_bytes: int | None = None,
     ) -> None:
         self.base_url = assert_loopback_url(base_url, env_name=env_name)
         self.env_name = env_name
         self.timeout = float(timeout if timeout is not None else os.environ.get("AISTOCK_HTTP_TIMEOUT", DEFAULT_TIMEOUT))
         self.unwrap_data = unwrap_data
         self._transport = transport
+        self.max_response_bytes = (
+            max(int(max_response_bytes), 0)
+            if max_response_bytes is not None
+            else _int_from_env("AISTOCK_MCP_MAX_RESPONSE_BYTES", DEFAULT_MAX_RESPONSE_BYTES)
+        )
 
     def _client(self) -> httpx.Client:
         return httpx.Client(
@@ -139,6 +157,20 @@ class AIstockApiClient:
                 f"{method} {path} failed with HTTP {response.status_code}: "
                 f"response body excerpt={body!r}"
             )
+        content = response.content
+        original_bytes = len(content)
+        if self.max_response_bytes and original_bytes > self.max_response_bytes:
+            preview = content[:TRUNCATED_PREVIEW_BYTES].decode(response.encoding or "utf-8", errors="replace")
+            return {
+                "status": "truncated",
+                "mcp_response_truncated": True,
+                "method": method,
+                "path": path,
+                "status_code": response.status_code,
+                "original_bytes": original_bytes,
+                "max_bytes": self.max_response_bytes,
+                "preview": preview,
+            }
         try:
             payload = response.json()
         except json.JSONDecodeError as exc:

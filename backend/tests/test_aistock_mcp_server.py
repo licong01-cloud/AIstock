@@ -115,6 +115,26 @@ def test_client_unwraps_data_envelope(mcp_module):
     assert captured["url"].endswith("/api/v1/validation/health")
 
 
+def test_client_truncates_large_success_response(mcp_module):
+    payload = {"data": {"items": ["x" * 200]}}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    client = mcp_module.ValidationCenterClient(
+        base_url="http://127.0.0.1/api/v1/validation",
+        transport=_mock_transport(handler),
+        max_response_bytes=64,
+    )
+    result = client.get("/bugs")
+
+    assert result["status"] == "truncated"
+    assert result["mcp_response_truncated"] is True
+    assert result["method"] == "GET"
+    assert result["path"] == "/bugs"
+    assert result["original_bytes"] > result["max_bytes"]
+
+
 def test_client_raises_on_http_error(mcp_module):
     transport = _mock_transport(lambda req: (500, {"detail": "boom"}))
     client = mcp_module.ValidationCenterClient(
@@ -236,8 +256,45 @@ def test_list_bugs_returns_envelope_inner(mcp_module):
             base_url="http://127.0.0.1/api/v1/validation", transport=transport
         ),
     )
-    result = mcp_module.list_bugs(status="open", severity="P1")
+    result = mcp_module.list_bugs(status="open", severity="P1", compact=False)
     assert result == bugs_payload
+
+
+def test_list_bugs_defaults_to_compact_page(mcp_module):
+    captured = {}
+    bugs_payload = {
+        "items": [
+            {
+                "bug_id": "BUG-001",
+                "title": "Large bug",
+                "description": "x" * 1000,
+                "reproduce_command": "pytest",
+                "module": "qe",
+                "severity": "P1",
+                "status": "open",
+            }
+        ],
+        "total": 1,
+    }
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured["query"] = dict(req.url.params)
+        return httpx.Response(200, json=_envelope(bugs_payload))
+
+    _swap_client(
+        mcp_module,
+        mcp_module.ValidationCenterClient(
+            base_url="http://127.0.0.1/api/v1/validation",
+            transport=_mock_transport(handler),
+        ),
+    )
+    result = mcp_module.list_bugs()
+
+    assert captured["query"]["page_size"] == "20"
+    assert result["compact"] is True
+    assert result["items"][0]["bug_id"] == "BUG-001"
+    assert "description" not in result["items"][0]
+    assert "reproduce_command" not in result["items"][0]
 
 
 def test_get_bug_agent_context_endpoint_path(mcp_module):

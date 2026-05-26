@@ -56,6 +56,8 @@ except ImportError as exc:  # pragma: no cover - installation guard
 SCHEMA_VERSION = "aistock_validation_bug_v1"
 DEFAULT_BASE_URL = "http://127.0.0.1:8001/api/v1/validation"
 DEFAULT_TIMEOUT = 30.0
+DEFAULT_MAX_RESPONSE_BYTES = 1_048_576
+TRUNCATED_PREVIEW_BYTES = 4096
 SEVERITY_VALUES = {"P0", "P1", "P2", "P3"}
 STATUS_VALUES = {"open", "in_progress", "fixed", "verified", "wontfix"}
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
@@ -272,6 +274,16 @@ def _today_yyyymmdd() -> str:
     return _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%d")
 
 
+def _int_from_env(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw in (None, ""):
+        return default
+    try:
+        return max(int(raw), 0)
+    except ValueError:
+        return default
+
+
 class ValidationCenterClient:
     """HTTP client for the Validation Center read-only + runner endpoints.
 
@@ -286,12 +298,18 @@ class ValidationCenterClient:
         base_url: str | None = None,
         timeout: float | None = None,
         transport: httpx.BaseTransport | None = None,
+        max_response_bytes: int | None = None,
     ) -> None:
         candidate = (base_url or os.environ.get("AISTOCK_VALIDATION_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
         _assert_loopback_url(candidate)
         self.base_url = candidate
         self.timeout = float(timeout if timeout is not None else os.environ.get("AISTOCK_HTTP_TIMEOUT", DEFAULT_TIMEOUT))
         self._transport = transport
+        self.max_response_bytes = (
+            max(int(max_response_bytes), 0)
+            if max_response_bytes is not None
+            else _int_from_env("AISTOCK_MCP_MAX_RESPONSE_BYTES", DEFAULT_MAX_RESPONSE_BYTES)
+        )
 
     def _client(self) -> httpx.Client:
         return httpx.Client(
@@ -310,6 +328,9 @@ class ValidationCenterClient:
                 f"Validation Center GET {path} failed with HTTP {response.status_code}: "
                 f"{response.text[:500]}"
             )
+        truncated = self._truncated_response(response, "GET", path)
+        if truncated is not None:
+            return truncated
         try:
             payload = response.json()
         except json.JSONDecodeError as exc:
@@ -330,6 +351,9 @@ class ValidationCenterClient:
                 f"Validation Center POST {path} failed with HTTP {response.status_code}: "
                 f"{response.text[:500]}"
             )
+        truncated = self._truncated_response(response, "POST", path)
+        if truncated is not None:
+            return truncated
         try:
             payload = response.json()
         except json.JSONDecodeError as exc:
@@ -341,6 +365,23 @@ class ValidationCenterClient:
                 f"Validation Center POST {path} returned unexpected envelope: keys={list(payload) if isinstance(payload, dict) else type(payload).__name__}"
             )
         return payload["data"]
+
+    def _truncated_response(self, response: httpx.Response, method: str, path: str) -> dict[str, Any] | None:
+        content = response.content
+        original_bytes = len(content)
+        if not self.max_response_bytes or original_bytes <= self.max_response_bytes:
+            return None
+        preview = content[:TRUNCATED_PREVIEW_BYTES].decode(response.encoding or "utf-8", errors="replace")
+        return {
+            "status": "truncated",
+            "mcp_response_truncated": True,
+            "method": method,
+            "path": path,
+            "status_code": response.status_code,
+            "original_bytes": original_bytes,
+            "max_bytes": self.max_response_bytes,
+            "preview": preview,
+        }
 
 
 def _slugify(value: str, *, max_length: int = 60) -> str:
@@ -716,6 +757,34 @@ def _normalize_registry_issue(record: dict[str, Any]) -> dict[str, Any]:
         "fingerprint": record.get("fingerprint"),
         "reproduce_command": record.get("reproduce_command"),
     }
+
+
+def _compact_issue_item(item: dict[str, Any]) -> dict[str, Any]:
+    compact = {
+        "source": item.get("source"),
+        "registry_is_source_of_truth": item.get("registry_is_source_of_truth"),
+        "bug_id": item.get("bug_id"),
+        "number": item.get("number"),
+        "title": item.get("title") or "",
+        "state": item.get("state"),
+        "status": item.get("status"),
+        "severity": item.get("severity"),
+        "module": item.get("module"),
+        "labels": item.get("labels") or [],
+        "html_url": item.get("html_url"),
+        "source_path": item.get("source_path"),
+    }
+    if isinstance(item.get("github_issue"), dict):
+        compact["github_issue"] = {
+            key: item["github_issue"].get(key)
+            for key in ("number", "state", "title", "html_url")
+            if item["github_issue"].get(key) is not None
+        }
+    return {key: value for key, value in compact.items() if value not in (None, "", [])}
+
+
+def _maybe_compact_issue_items(items: list[dict[str, Any]], *, compact: bool) -> list[dict[str, Any]]:
+    return [_compact_issue_item(item) for item in items] if compact else items
 
 
 def _normalize_source(source: str) -> str:
@@ -1290,10 +1359,11 @@ def list_bugs(
     severity: str | None = None,
     agent: str | None = None,
     page: int = 1,
-    page_size: int = 50,
+    page_size: int = 20,
+    compact: bool = True,
 ) -> dict[str, Any]:
     """List bug registry entries from ``tests/aistock_validation/bugs/`` via API."""
-    return _client().get(
+    payload = _client().get(
         "/bugs",
         params={
             "status": status,
@@ -1304,6 +1374,12 @@ def list_bugs(
             "page_size": page_size,
         },
     )
+    if not compact or not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+        return payload
+    result = dict(payload)
+    result["items"] = [_compact_issue_item({"source": "bug_json", **item}) for item in payload["items"] if isinstance(item, dict)]
+    result["compact"] = True
+    return result
 
 
 @mcp.tool()
@@ -1328,7 +1404,8 @@ def get_module_quality_summary(module: str | None = None, commit_limit: int = 50
     ``module_id`` for convenience. Pass ``module=None`` to get the full
     aggregate.
     """
-    summary = _client().get("/modules/quality-summary", params={"commit_limit": commit_limit})
+    params = {"commit_limit": commit_limit, "module": module}
+    summary = _client().get("/modules/quality-summary", params=params)
     if module is None:
         return summary
     if not isinstance(summary, dict):
@@ -1468,7 +1545,8 @@ def mcp_github_issue_list(
     labels: list[str] | None = None,
     source: str = "local",
     page: int = 1,
-    page_size: int = 50,
+    page_size: int = 20,
+    compact: bool = True,
 ) -> dict[str, Any]:
     """List AIstock GitHub-issue mirrors, defaulting to the local bugs JSON registry.
 
@@ -1493,6 +1571,7 @@ def mcp_github_issue_list(
         "source": source_norm,
         "registry_source": _repo_relative_path(BUG_ROOT),
         "registry_is_source_of_truth": True,
+        "compact": compact,
         "filters": {
             "state": state_norm,
             "module": module,
@@ -1501,7 +1580,7 @@ def mcp_github_issue_list(
             "labels": label_filter,
         },
         **pagination,
-        "items": page_items,
+        "items": _maybe_compact_issue_items(page_items, compact=compact),
     }
 
 
@@ -1515,7 +1594,8 @@ def mcp_github_issue_search(
     labels: list[str] | None = None,
     source: str = "local",
     page: int = 1,
-    page_size: int = 50,
+    page_size: int = 20,
+    compact: bool = True,
 ) -> dict[str, Any]:
     """Search AIstock issue mirrors across local JSON and optional live GitHub data."""
     if not isinstance(query, str) or not query.strip():
@@ -1542,6 +1622,7 @@ def mcp_github_issue_search(
         "registry_source": _repo_relative_path(BUG_ROOT),
         "registry_is_source_of_truth": True,
         "query": query.strip(),
+        "compact": compact,
         "filters": {
             "state": state_norm,
             "module": module,
@@ -1550,7 +1631,7 @@ def mcp_github_issue_search(
             "labels": label_filter,
         },
         **pagination,
-        "items": page_items,
+        "items": _maybe_compact_issue_items(page_items, compact=compact),
     }
 
 
