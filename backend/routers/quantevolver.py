@@ -6789,6 +6789,134 @@ async def stream_experiment_logs(experiment_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/experiments/{experiment_id}/multi-node-logs")
+async def stream_multi_node_logs(experiment_id: str):
+    """Fan-in log streams from all compute nodes assigned to multi-alpha groups.
+
+    For each running group in qe_multi_alpha_groups, opens an SSE connection
+    to the assigned node via QEWorkspaceClient and merges log lines tagged
+    with node_id into a single SSE response.
+    """
+    import asyncio
+
+    from ..services.quantevolver.qe_workspace_client import QEWorkspaceClient
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT group_name, assigned_node_id, qe_task_id, qe_loop_id, status
+                   FROM qe_multi_alpha_groups
+                   WHERE parent_experiment_id = %s
+                   ORDER BY group_name""",
+                (experiment_id,),
+            )
+            cols = [d[0] for d in cur.description]
+            groups = [dict(zip(cols, row)) for row in cur.fetchall()]
+
+            cur.execute(
+                "SELECT status, custom_params FROM qe_experiments WHERE experiment_id = %s",
+                (experiment_id,),
+            )
+            exp_row = cur.fetchone()
+            if not exp_row:
+                raise HTTPException(status_code=404, detail="实验不存在")
+
+    if not groups:
+        raise HTTPException(
+            status_code=400,
+            detail="该实验没有 multi-alpha 分组记录，请使用 /logs 端点",
+        )
+
+    exp_status, _ = exp_row
+
+    async def _stream_node(
+        group_name: str,
+        node_id: str,
+        qe_task_id: str,
+        queue: asyncio.Queue,
+    ):
+        try:
+            client = QEWorkspaceClient.for_node(node_id)
+            async with client:
+                async for line in client.stream_task_logs(qe_task_id):
+                    raw = line
+                    if raw.startswith("data:"):
+                        raw = raw[5:].strip()
+                    if not raw:
+                        continue
+                    try:
+                        payload = json.loads(raw)
+                        if isinstance(payload, dict) and "logs" in payload:
+                            for log_line in payload["logs"]:
+                                await queue.put(f"[{node_id}][{group_name}] {log_line}")
+                            continue
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                    for sub in raw.split("\n"):
+                        if sub:
+                            await queue.put(f"[{node_id}][{group_name}] {sub}")
+        except Exception as e:
+            await queue.put(f"[{node_id}][{group_name}] [ERROR] 日志流中断: {e}")
+
+    async def event_generator():
+        queue: asyncio.Queue[str] = asyncio.Queue(maxsize=2000)
+        active_groups = [
+            g for g in groups
+            if g.get("assigned_node_id") and g.get("qe_task_id")
+        ]
+
+        if not active_groups:
+            yield "data: [System] 没有已分配节点的分组，无法拉取远端日志\n\n"
+            return
+
+        yield f"data: [System] 已连接 {len(active_groups)} 个节点的日志流...\n\n"
+
+        active_count = len(active_groups)
+        done_count = 0
+        all_done = asyncio.Event()
+
+        async def _stream_node_tracked(gn, nid, tid):
+            nonlocal done_count
+            try:
+                await _stream_node(gn, nid, tid, queue)
+            finally:
+                done_count += 1
+                if done_count >= active_count:
+                    all_done.set()
+
+        tasks = [
+            asyncio.create_task(
+                _stream_node_tracked(
+                    g["group_name"], g["assigned_node_id"], g["qe_task_id"]
+                )
+            )
+            for g in active_groups
+        ]
+
+        try:
+            while not all_done.is_set() or not queue.empty():
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=5.0)
+                    yield f"data: {item}\n\n"
+                except asyncio.TimeoutError:
+                    if all_done.is_set() and queue.empty():
+                        break
+                    yield ": heartbeat\n\n"
+        finally:
+            for t in tasks:
+                t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.get("/experiments/{experiment_id}/enhanced-metrics")
 async def get_experiment_enhanced_metrics(experiment_id: str):
     """获取实验的增强诊断指标（IC 时序、Loss 曲线、收益曲线等）。
