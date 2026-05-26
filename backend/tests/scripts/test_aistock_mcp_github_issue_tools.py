@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import importlib
 import json
@@ -97,8 +97,11 @@ def test_github_issue_list_defaults_to_local_registry(mcp_module, tmp_path: Path
 
     assert result["source"] == "local"
     assert result["registry_is_source_of_truth"] is True
+    assert result["compact"] is True
     assert result["total"] == 1
     assert result["items"][0]["bug_id"] == "BUG-101"
+    assert "body" not in result["items"][0]
+    assert "reproduce_command" not in result["items"][0]
     assert result["items"][0]["labels"] == [
         "aistock:bug",
         "module:qe",
@@ -107,6 +110,16 @@ def test_github_issue_list_defaults_to_local_registry(mcp_module, tmp_path: Path
         "severity:p1",
         "status:open",
     ]
+
+
+def test_github_issue_list_full_mode_preserves_body(mcp_module, tmp_path: Path):
+    _write_bug(tmp_path, "BUG-101", title="Open QE bug", module="qe", status="open")
+
+    result = mcp_module.mcp_github_issue_list(compact=False)
+
+    assert result["compact"] is False
+    assert result["items"][0]["body"]
+    assert result["items"][0]["reproduce_command"]
 
 
 def test_github_issue_search_uses_local_registry_without_env(mcp_module, tmp_path: Path):
@@ -122,6 +135,7 @@ def test_github_issue_search_uses_local_registry_without_env(mcp_module, tmp_pat
     result = mcp_module.mcp_github_issue_search("needle", module="rdagent")
 
     assert result["source"] == "local"
+    assert result["compact"] is True
     assert result["total"] == 1
     assert result["items"][0]["bug_id"] == "BUG-201"
 
@@ -331,6 +345,7 @@ def test_github_issue_list_both_merges_live_mirror(mcp_module, tmp_path: Path, m
     assert item["source"] == "bug_json"
     assert item["registry_is_source_of_truth"] is True
     assert item["github_issue"]["number"] == 88
+    assert set(item["github_issue"]) == {"number", "state", "title", "html_url"}
     assert item["html_url"] == "https://github.example/issues/88"
 
 
@@ -574,8 +589,7 @@ def test_github_issue_search_skips_corrupted_registry_file(mcp_module, tmp_path:
 def test_github_issue_sync_tolerates_corrupted_unrelated_file(
     mcp_module, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ):
-    path = _write_bug(tmp_path, "BUG-303", status="open", title="sync me",
-                      github_issue_number=None)
+    _write_bug(tmp_path, "BUG-303", status="open", title="sync me", github_issue_number=None)
     _write_corrupted_json(_bugs_dir(tmp_path) / "20260520_BUG-CORRUPT.json")
 
     class FakeGitHubClient:
