@@ -1,10 +1,8 @@
-"""Invariant tests for enable_paper() fail-fast behavior.
+"""Invariant tests for enable_paper() compatibility behavior.
 
-Per T7 audit (commit adb362e + cross-tool drawer 7ee0dfe3): enable_paper() is
-currently fail-fast clean (3 fail-fast / 0 silent-swallow / 0 mixed). These
-tests guard against future regression to silent-fallback on:
-  (a) manifest_sha256 mismatch
-  (b) invalid status state transition
+Paper v2 gate purge keeps enable_paper() as a deprecated compatibility entry:
+asset identity still fails fast, but legacy PAPER_ENABLED is a no-op instead
+of a StrategyPackage lifecycle gate.
 
 Out of scope: validation_status / paper_candidate / retest gate wiring (T8-A,
 blocked on Codex Phase 3 schema integration into backend/services/validation/).
@@ -24,7 +22,6 @@ from backend.services.strategy_package.repository import (
 )
 from backend.services.strategy_package.service import StrategyPackageService
 from backend.services.trading_core.errors import (
-    InvalidStateTransitionError,
     StrategyPackageValidationError,
 )
 from backend.tests.strategy_package.test_enable_paper_router_409 import (
@@ -88,35 +85,18 @@ def test_enable_paper_raises_on_manifest_sha256_mismatch() -> None:
 
     err = exc_info.value
     context = err.context or {}
-    manifest_identity = context.get("alpha_core_identity") or {}
-    blockers_str = " ".join(manifest_identity.get("blockers") or [])
+    blockers_str = " ".join(context.get("blockers") or [])
     assert "alpha core" in str(err).lower()
-    assert context.get("paper_simulation_allowed") is False
+    assert context.get("eligible") is False
     # Underlying sha mismatch must remain discoverable in the admission context
     # so reviewers can tell tampering from drift.
-    assert "manifest_sha256" in blockers_str.lower() or "sha" in blockers_str.lower()
-    assert manifest_identity.get("manifest_sha256") == bad_digest
-    assert manifest_identity.get("passed") is False
+    assert "manifest_sha256" in blockers_str.lower() or "hash" in blockers_str.lower()
+    assert context.get("manifest_sha256") == bad_digest
+    assert str(context.get("status")).lower() == "blocked"
 
 
-def test_enable_paper_raises_on_invalid_status_transition() -> None:
-    """enable_paper must fail-fast when the persisted package_status is not in
-    STATUS_TRANSITIONS[PAPER_ENABLED] = {BACKTEST_APPROVED, SELECTION_ENABLED}.
-    Locks §4.3 row E of the T7 audit.
-
-    Audit-drift note: T7 §4.3 E example used 'DRAFT -> PAPER_ENABLED'. In the
-    actual source, a DRAFT record's manifest carries package_status=DRAFT,
-    which trips StrategyPackageValidator.validate_manifest_identity_for_paper_trading
-    (validators.py:62-73) FIRST, raising StrategyPackageValidationError before
-    the state-machine compare-and-set is reached. To assert specifically against
-    InvalidStateTransitionError (the state-machine invariant), we use an already
-    PAPER_ENABLED record: the validator's allowed-set
-    {BACKTEST_APPROVED, SELECTION_ENABLED, PAPER_ENABLED} accepts it, but
-    STATUS_TRANSITIONS[PAPER_ENABLED] = {BACKTEST_APPROVED, SELECTION_ENABLED}
-    rejects re-entry, raising InvalidStateTransitionError at
-    repository.transition_status (repository.py:678).
-    """
-
+def test_enable_paper_treats_legacy_paper_enabled_as_noop() -> None:
+    """PAPER_ENABLED is legacy metadata, not a Paper simulation admission gate."""
     repo = InMemoryStrategyPackageRepository()
     saved_manifest = freeze_manifest(
         make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
@@ -135,17 +115,6 @@ def test_enable_paper_raises_on_invalid_status_transition() -> None:
         update={"package_status": PackageStatus.PAPER_ENABLED}
     )
 
-    with pytest.raises(InvalidStateTransitionError) as exc_info:
-        service.enable_paper(record.package_id)
+    paper = service.enable_paper(record.package_id)
 
-    message = str(exc_info.value)
-    context = exc_info.value.context
-    # The current (offending) status name must appear so operators can diagnose.
-    assert PackageStatus.PAPER_ENABLED.value in message or context.get("from_status") == PackageStatus.PAPER_ENABLED.value
-    # The error must hint at the expected/allowed status set OR carry the
-    # target status in context (guarded against future refactors that drop
-    # diagnostics).
-    allowed_hints = {"expected", "allowed", "valid", "BACKTEST_APPROVED", "SELECTION_ENABLED"}
-    has_hint_in_message = any(hint.lower() in message.lower() for hint in allowed_hints)
-    has_hint_in_context = context.get("to_status") == PackageStatus.PAPER_ENABLED.value
-    assert has_hint_in_message or has_hint_in_context
+    assert paper.package_status == PackageStatus.PAPER_ENABLED

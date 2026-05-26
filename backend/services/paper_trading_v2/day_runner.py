@@ -26,8 +26,8 @@ from backend.services.strategy_package.runtime import (
 )
 from backend.services.strategy_package.selection_artifact import (
     StrategyPackageSelectionArtifactService,
-    selection_artifact_runtime_hash,
 )
+from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.strategy_package.live_inference import (
     AUTHORITATIVE_SELECTION_SCOPE,
     AUTHORITATIVE_SELECTION_SOURCE_TYPE,
@@ -52,6 +52,20 @@ from .models import PaperDayRunResult, PaperRun, PortfolioStatus
 from .repository import PaperTradingV2Repository
 from .risk_targets import overlay_risk_forced_exit_targets
 from .service import PaperTradingV2PortfolioService
+
+
+def _in_memory_package_repository_from_portfolios(repository: Any | None) -> Any | None:
+    """Let in-memory Paper tests resolve frozen package manifests without DB."""
+
+    portfolios = getattr(repository, "portfolios", None)
+    if not isinstance(portfolios, dict):
+        return None
+    package_repository = InMemoryStrategyPackageRepository()
+    for portfolio in portfolios.values():
+        manifest = getattr(portfolio, "frozen_manifest", None)
+        if manifest is not None:
+            package_repository.save_manifest(manifest)
+    return package_repository
 
 
 class PaperTradingDayRunner:
@@ -85,11 +99,12 @@ class PaperTradingDayRunner:
         self.oms = oms or OMS()
         self.execution_engine = execution_engine or MinuteExecutionEngine(oms=self.oms)
         self.validator = validator or StrategyPackageValidator()
-        self.package_repository = package_repository
+        self.package_repository = package_repository or _in_memory_package_repository_from_portfolios(repository)
         self.tradability_filter = tradability_filter or TradabilityFilter()
         self.refresh_audit = refresh_audit or DataRefreshAuditRepository()
         self.selection_artifact_service = selection_artifact_service or StrategyPackageSelectionArtifactService(
             artifact_repository=getattr(self.runtime, "artifact_repository", None),
+            package_repository=self.package_repository,
         )
         self.risk_policy_service = risk_policy_service or StockRiskPolicyService()
         self.minqmt_broker_factory = minqmt_broker_factory or MiniQMTSimBackend

@@ -343,7 +343,10 @@ def test_live_session_tick_processes_new_minute_bar_once() -> None:
         mode=PaperSessionMode.LIVE_ONLY,
         start_date=date(2024, 1, 2),
         live_data_source=MinuteDataSource.TDX_REALTIME,
-        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+        runtime_config={
+            "paper_v2_session": {"signal_data_source": "DB_HISTORICAL"},
+            "selection_artifact_config": {"auto_generate": False},
+        },
     )
     run = paper_repo.create_run(
         PaperRun(
@@ -469,7 +472,10 @@ def test_live_session_waits_for_preopen_stk_limit_until_0914() -> None:
         mode=PaperSessionMode.LIVE_ONLY,
         start_date=date(2024, 1, 2),
         live_data_source=MinuteDataSource.TDX_REALTIME,
-        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+        runtime_config={
+            "paper_v2_session": {"signal_data_source": "DB_HISTORICAL"},
+            "selection_artifact_config": {"auto_generate": False},
+        },
     )
     audit = MissingStkLimitAudit()
     live_executor = PaperTradingLiveMinuteExecutor(
@@ -500,7 +506,10 @@ def test_live_session_fails_if_stk_limit_missing_at_0914() -> None:
         mode=PaperSessionMode.LIVE_ONLY,
         start_date=date(2024, 1, 2),
         live_data_source=MinuteDataSource.TDX_REALTIME,
-        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+        runtime_config={
+            "paper_v2_session": {"signal_data_source": "DB_HISTORICAL"},
+            "selection_artifact_config": {"auto_generate": False},
+        },
     )
     live_executor = PaperTradingLiveMinuteExecutor(
         repository=paper_repo,
@@ -651,7 +660,10 @@ def test_live_prepare_seeds_order_cursor_after_existing_completed_bars() -> None
         mode=PaperSessionMode.LIVE_ONLY,
         start_date=date(2024, 1, 2),
         live_data_source=MinuteDataSource.TDX_REALTIME,
-        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+        runtime_config={
+            "paper_v2_session": {"signal_data_source": "DB_HISTORICAL"},
+            "selection_artifact_config": {"auto_generate": False},
+        },
     )
     bars = [
         bar.model_copy(update={"bar_time": datetime(2024, 1, 2, 9, 31) + timedelta(minutes=i)})
@@ -694,7 +706,10 @@ def test_live_tick_never_backfills_prepared_order_with_existing_bars() -> None:
         mode=PaperSessionMode.LIVE_ONLY,
         start_date=date(2024, 1, 2),
         live_data_source=MinuteDataSource.TDX_REALTIME,
-        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+        runtime_config={
+            "paper_v2_session": {"signal_data_source": "DB_HISTORICAL"},
+            "selection_artifact_config": {"auto_generate": False},
+        },
     )
     bars = [
         bar.model_copy(update={"bar_time": datetime(2024, 1, 2, 9, 31) + timedelta(minutes=i)})
