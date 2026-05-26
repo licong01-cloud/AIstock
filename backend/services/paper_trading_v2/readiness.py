@@ -26,7 +26,12 @@ from backend.services.strategy_package.runtime import (
 )
 from backend.services.strategy_package.selection_artifact import StrategyPackageSelectionArtifactService
 from backend.services.strategy_package.validators import StrategyPackageValidator
-from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, StrategyPackageValidationError
+from backend.services.trading_core.errors import (
+    DataUnavailableError,
+    InvalidStateTransitionError,
+    PackageAssetInvalidError,
+    RuntimeConfigInvalidError,
+)
 from backend.services.trading_core.models import PositionLot
 
 from .broker import MiniQMTSimBackend
@@ -92,7 +97,7 @@ class PaperTradingReadinessService:
                 context={"portfolio_id": portfolio_id, "status": portfolio.status.value},
             )
         if trade_date < portfolio.start_date:
-            raise StrategyPackageValidationError(
+            raise InvalidStateTransitionError(
                 "paper readiness trade_date cannot be before portfolio start_date",
                 context={
                     "portfolio_id": portfolio_id,
@@ -102,7 +107,7 @@ class PaperTradingReadinessService:
             )
         manifest = portfolio.frozen_manifest
         if manifest.package_id != portfolio.package_id or manifest.manifest_sha256 != portfolio.manifest_sha256:
-            raise StrategyPackageValidationError(
+            raise PackageAssetInvalidError(
                 "portfolio frozen manifest does not match frozen package invariants",
                 context={"portfolio_id": portfolio_id, "package_id": portfolio.package_id},
             )
@@ -153,7 +158,7 @@ class PaperTradingReadinessService:
 
         existing_run = self.repository.get_run_by_portfolio_date(portfolio_id, trade_date)
         if existing_run is not None:
-            raise StrategyPackageValidationError(
+            raise InvalidStateTransitionError(
                 "paper v2 run already exists for portfolio trade_date",
                 context={
                     "portfolio_id": portfolio_id,
@@ -242,7 +247,7 @@ class PaperTradingReadinessService:
             runtime_config=config,
         )
         if snapshot.valid_no_candidate and not (current_positions and runtime_profile.risk_policy.enabled):
-            raise StrategyPackageValidationError(
+            raise DataUnavailableError(
                 "valid_no_candidate snapshots cannot enter paper v2 trading readiness",
                 context={"package_id": manifest.package_id, "reason": snapshot.no_candidate_reason},
             )
@@ -343,7 +348,7 @@ class PaperTradingReadinessService:
             )
             require_day_features = PaperTradingDayRunner._policy_requires_day_features(execution_policy_json)
             if not checked_symbols:
-                raise StrategyPackageValidationError(
+                raise DataUnavailableError(
                     "paper readiness produced no symbols to check",
                     context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat()},
                 )
@@ -390,7 +395,7 @@ class PaperTradingReadinessService:
     def _require_runtime_top_k(runtime_profile: Any, manifest: Any) -> int:
         top_k = runtime_profile.selection.top_k
         if top_k is None:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "Paper v2 readiness requires runtime_profile.selection.top_k; StrategyPackage manifest cannot provide runtime top_k",
                 context={"package_id": manifest.package_id, "manifest_version": getattr(manifest, "manifest_version", None)},
             )
@@ -531,7 +536,7 @@ class PaperTradingReadinessService:
         if configured is not None:
             total = float(configured)
             if total <= 0:
-                raise StrategyPackageValidationError("runtime_config.total_equity must be positive")
+                raise RuntimeConfigInvalidError("runtime_config.total_equity must be positive")
             return total
         prices = runtime_config.get("current_prices") or {}
         if not current_positions:

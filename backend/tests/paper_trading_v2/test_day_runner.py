@@ -31,7 +31,7 @@ from backend.services.strategy_package.selection_artifact import (
     selection_artifact_runtime_hash,
 )
 from backend.services.strategy_package.service import StrategyPackageService
-from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, StrategyPackageValidationError
+from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, RuntimeConfigInvalidError, StrategyPackageValidationError
 from backend.services.trading_core.limit_price_provider import DailyLimitPrice
 from backend.services.trading_core.models import AccountSnapshot, MinuteBar, PositionLot, RunStatus
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
@@ -393,7 +393,7 @@ def test_create_portfolio_rejects_missing_execution_context_without_manifest_pol
     )
     package_repo.save_manifest(manifest)
 
-    with pytest.raises(StrategyPackageValidationError, match="platform execution policy"):
+    with pytest.raises(RuntimeConfigInvalidError, match="platform execution policy"):
         PaperTradingV2PortfolioService(
             package_repository=package_repo,
             repository=paper_repo,
@@ -800,7 +800,7 @@ def test_paper_trading_day_runner_rejects_raw_execution_policy_override() -> Non
         data_source=MinuteDataSource.TDX_REALTIME,
     )
 
-    with pytest.raises(StrategyPackageValidationError, match="backtest-validated execution policy"):
+    with pytest.raises(RuntimeConfigInvalidError, match="backtest-validated execution policy"):
         PaperTradingDayRunner(
             repository=paper_repo,
             calendar_provider=FakeCalendar(),
@@ -881,7 +881,7 @@ def test_paper_trading_day_runner_rejects_duplicate_portfolio_trade_date() -> No
     )
     paper_repo.create_run(existing)
 
-    with pytest.raises(StrategyPackageValidationError, match="already exists"):
+    with pytest.raises(InvalidStateTransitionError, match="already exists"):
         PaperTradingDayRunner(
             repository=paper_repo,
             calendar_provider=FakeCalendar(),
@@ -1100,7 +1100,7 @@ def test_paper_execution_policy_activation_rejects_existing_run() -> None:
         )
     )
 
-    with pytest.raises(StrategyPackageValidationError, match="after a paper run exists"):
+    with pytest.raises(InvalidStateTransitionError, match="after a paper run exists"):
         portfolio_service.activate_execution_policy(
             portfolio_id=portfolio.portfolio_id,
             trade_date=date(2024, 1, 2),
@@ -1140,7 +1140,7 @@ def test_paper_execution_policy_activation_replace_requires_explicit_reason() ->
             trade_date=date(2024, 1, 2),
             policy_id=policy_id,
         )
-    with pytest.raises(StrategyPackageValidationError, match="requires a reason"):
+    with pytest.raises(RuntimeConfigInvalidError, match="requires a reason"):
         portfolio_service.activate_execution_policy(
             portfolio_id=portfolio.portfolio_id,
             trade_date=date(2024, 1, 2),
@@ -1484,7 +1484,7 @@ def test_historical_replay_rejects_existing_runs_before_partial_replay() -> None
         day_runner=fake_day_runner,
     )
 
-    with pytest.raises(StrategyPackageValidationError, match="already has paper v2 runs"):
+    with pytest.raises(InvalidStateTransitionError, match="already has paper v2 runs"):
         replay.run(
             portfolio_id=portfolio.portfolio_id,
             start_date=date(2024, 1, 2),
@@ -1524,7 +1524,7 @@ def test_historical_replay_reset_requires_explicit_confirmation() -> None:
         day_runner=fake_day_runner,
     )
 
-    with pytest.raises(StrategyPackageValidationError, match="explicit confirmation"):
+    with pytest.raises(RuntimeConfigInvalidError, match="explicit confirmation"):
         replay.run(
             portfolio_id=portfolio.portfolio_id,
             start_date=date(2024, 1, 2),

@@ -33,7 +33,14 @@ from backend.services.strategy_package.live_inference import (
     AUTHORITATIVE_SELECTION_SOURCE_TYPE,
 )
 from backend.services.strategy_package.validators import StrategyPackageValidator
-from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, StrategyPackageValidationError, TradingCoreError
+from backend.services.trading_core.errors import (
+    ArtifactGenerationFailedError,
+    DataUnavailableError,
+    InvalidStateTransitionError,
+    PackageAssetInvalidError,
+    RuntimeConfigInvalidError,
+    TradingCoreError,
+)
 from backend.services.trading_core.execution_algo_capabilities import required_minute_bars_for_policy
 from backend.services.trading_core.ledger import FeeModel, InMemoryLedger
 from backend.services.trading_core.minute_execution import MinuteExecutionEngine
@@ -102,7 +109,7 @@ class PaperTradingDayRunner:
                 context={"portfolio_id": portfolio_id, "status": portfolio.status.value},
             )
         if trade_date < portfolio.start_date:
-            raise StrategyPackageValidationError(
+            raise InvalidStateTransitionError(
                 "paper run trade_date cannot be before portfolio start_date",
                 context={
                     "portfolio_id": portfolio_id,
@@ -112,7 +119,7 @@ class PaperTradingDayRunner:
             )
         manifest = portfolio.frozen_manifest
         if manifest.package_id != portfolio.package_id or manifest.manifest_sha256 != portfolio.manifest_sha256:
-            raise StrategyPackageValidationError(
+            raise PackageAssetInvalidError(
                 "portfolio frozen manifest does not match frozen package invariants",
                 context={"portfolio_id": portfolio_id, "package_id": portfolio.package_id},
             )
@@ -120,7 +127,7 @@ class PaperTradingDayRunner:
         self.calendar_provider.ensure_trading_day(trade_date)
         existing_run = self.repository.get_run_by_portfolio_date(portfolio_id, trade_date)
         if existing_run is not None:
-            raise StrategyPackageValidationError(
+            raise InvalidStateTransitionError(
                 "paper v2 run already exists for portfolio trade_date",
                 context={
                     "portfolio_id": portfolio_id,
@@ -438,7 +445,7 @@ class PaperTradingDayRunner:
             ledger.settle_trade_date(trade_date)
             if not intents:
                 if not ledger.positions:
-                    raise StrategyPackageValidationError(
+                    raise ArtifactGenerationFailedError(
                         "rebalance produced no order intents and portfolio has no positions to mark",
                         context={"portfolio_id": portfolio_id, "run_id": run.run_id, "trade_date": trade_date.isoformat()},
                     )
@@ -575,7 +582,7 @@ class PaperTradingDayRunner:
                 snapshot_prices[intent.symbol] = market_input.minute_bars[-1].close
 
             if not fills:
-                raise StrategyPackageValidationError(
+                raise ArtifactGenerationFailedError(
                     "paper v2 day run produced no fills; no-trade day is not yet modeled as a successful state",
                     context={
                         "portfolio_id": portfolio_id,
@@ -656,7 +663,7 @@ class PaperTradingDayRunner:
     ) -> list[dict[str, Any]]:
         ready: list[dict[str, Any]] = []
         if execution_policy_json is None:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "Paper v2 data readiness requires a validated execution policy snapshot",
                 context={"package_id": manifest.package_id, "manifest_version": getattr(manifest, "manifest_version", None)},
             )
@@ -697,7 +704,7 @@ class PaperTradingDayRunner:
     def _require_runtime_top_k(runtime_profile: Any, manifest: Any) -> int:
         top_k = runtime_profile.selection.top_k
         if top_k is None:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "Paper v2 runtime_profile.selection.top_k is required; StrategyPackage manifest cannot provide runtime top_k",
                 context={"package_id": manifest.package_id, "manifest_version": getattr(manifest, "manifest_version", None)},
             )
@@ -768,12 +775,12 @@ class PaperTradingDayRunner:
         try:
             parsed = date.fromisoformat(str(raw))
         except ValueError as exc:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "selection_artifact_config.cutoff_date must be YYYY-MM-DD",
                 context={"cutoff_date": raw},
             ) from exc
         if parsed > trade_date:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "selection_artifact_config.cutoff_date cannot be after trade_date",
                 context={"trade_date": trade_date.isoformat(), "cutoff_date": parsed.isoformat()},
             )
@@ -804,7 +811,7 @@ class PaperTradingDayRunner:
         if configured is not None:
             total = float(configured)
             if total <= 0:
-                raise StrategyPackageValidationError("runtime_config.total_equity must be positive")
+                raise RuntimeConfigInvalidError("runtime_config.total_equity must be positive")
             return total
         prices = runtime_config.get("current_prices") or {}
         if not current_positions:
@@ -945,7 +952,7 @@ class PaperTradingDayRunner:
 
     @staticmethod
     def _required_minute_bars_for_manifest(manifest) -> int:
-        raise StrategyPackageValidationError(
+        raise RuntimeConfigInvalidError(
             "Paper v2 requires a validated execution policy snapshot; manifest minute policy is not runtime authority",
             context={"package_id": manifest.package_id, "manifest_version": getattr(manifest, "manifest_version", None)},
         )
@@ -962,7 +969,7 @@ class PaperTradingDayRunner:
     def _data_requirements_for_policy(policy_json: dict[str, Any], *, package_id: str) -> dict[str, bool]:
         requirements = policy_json.get("data_requirements")
         if not isinstance(requirements, dict):
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "validated execution policy requires data_requirements",
                 context={"package_id": package_id, "algo_code": policy_json.get("algo_code")},
             )
@@ -974,7 +981,7 @@ class PaperTradingDayRunner:
         }
         missing = sorted(key for key in required_keys if key not in requirements)
         if missing:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "validated execution policy data_requirements are incomplete",
                 context={"package_id": package_id, "algo_code": policy_json.get("algo_code"), "missing_keys": missing},
             )
@@ -1172,7 +1179,7 @@ class PaperTradingDayRunner:
         }
         present = sorted(key for key in forbidden if key in runtime_config)
         if present:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "paper v2 runtime_config cannot override execution policy; use a backtest-validated execution policy",
                 context={"forbidden_keys": present},
             )
@@ -1184,7 +1191,7 @@ class PaperTradingDayRunner:
         policy_id = policy.get("validated_execution_policy_id")
         policy_sha256 = policy.get("policy_sha256")
         if not isinstance(policy_json, dict) or not policy_id or not policy_sha256:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "paper portfolio requires a backtest-validated execution policy snapshot",
                 context={"portfolio_id": portfolio.portfolio_id},
             )

@@ -4,6 +4,7 @@
 > 变更类型：项目级功能整改，不走 Issue/BUG 流程。
 > 适用范围：StrategyPackage、Selection Center、Paper Trading v2、AIstock LocalSim、MiniQMT SIM、Paper v2 UI、相关测试与迁移。
 > 非目标：本设计不实现代码、不关闭既有 Issue、不启用实盘、不重启生产 `8001`。
+> 2026-05-26 补充：`paper_v2_selection_runtime_gate_cleanup_addendum_20260526.md` 明确废止 Selection/Paper/MiniQMT 主路径中的 `runtime_profile_activation` 门禁，并规定 PIT 截止日/交易日校验必须自动解析并以 UI 提示呈现，不得成为策略包或选股准入门禁。该补充设计优先于本文中任何可能被解释为 runtime profile/versioned activation gate 的表述。
 
 ## 1. 背景和问题
 

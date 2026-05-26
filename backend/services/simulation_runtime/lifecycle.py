@@ -15,7 +15,11 @@ from backend.services.paper_trading_v2.broker.base import BrokerBackend
 from backend.services.qmt_strategy_ledger.order_service import QmtManagedOrderService
 from backend.services.selection_center.models import SignalSnapshot, TargetPosition
 from backend.services.strategy_package.models import StrategyPackageManifest
-from backend.services.trading_core.errors import StrategyPackageValidationError
+from backend.services.trading_core.errors import (
+    BrokerUnavailableError,
+    InvalidStateTransitionError,
+    RuntimeConfigInvalidError,
+)
 from backend.services.trading_core.models import PositionLot
 
 from .bridges import LocalSimExecutionBridge, MiniQMTExecutionBridge
@@ -218,7 +222,7 @@ class SimulationLifecycleOrchestrator:
 
         if binding.broker_backend == SimulationBrokerBackend.LOCAL_SIM:
             if local_broker is None:
-                raise StrategyPackageValidationError(
+                raise BrokerUnavailableError(
                     "LocalSim execution requires an injected LocalSim broker",
                     context={"run_id": run.run_id, "plan_id": plan.plan_id},
                 )
@@ -246,7 +250,7 @@ class SimulationLifecycleOrchestrator:
 
         if binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM:
             if managed_order_service is None:
-                raise StrategyPackageValidationError(
+                raise BrokerUnavailableError(
                     "MiniQMT execution requires QmtManagedOrderService",
                     context={"run_id": run.run_id, "plan_id": plan.plan_id},
                 )
@@ -282,7 +286,7 @@ class SimulationLifecycleOrchestrator:
                 broker_result=qmt_result,
             )
 
-        raise StrategyPackageValidationError(
+        raise RuntimeConfigInvalidError(
             "unsupported simulation broker backend",
             context={"broker_backend": binding.broker_backend.value},
         )
@@ -335,7 +339,7 @@ class SimulationLifecycleOrchestrator:
     @staticmethod
     def _validate_release_binding(*, runtime_release: StrategyRuntimeRelease, binding: SimulationReleaseBinding) -> None:
         if binding.release_id != runtime_release.release_id or binding.release_hash != runtime_release.release_hash:
-            raise StrategyPackageValidationError(
+            raise InvalidStateTransitionError(
                 "SimulationReleaseBinding does not match StrategyRuntimeRelease",
                 context={
                     "release_id": runtime_release.release_id,
@@ -347,7 +351,7 @@ class SimulationLifecycleOrchestrator:
     @staticmethod
     def _validate_trade_date(*, selection_evidence: DailySelectionEvidence, signal_snapshot: SignalSnapshot) -> None:
         if selection_evidence.target_trade_date != signal_snapshot.trade_date:
-            raise StrategyPackageValidationError(
+            raise InvalidStateTransitionError(
                 "selection evidence target_trade_date does not match signal snapshot trade_date",
                 context={
                     "evidence_id": selection_evidence.evidence_id,

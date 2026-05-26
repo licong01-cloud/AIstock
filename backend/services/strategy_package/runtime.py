@@ -29,8 +29,10 @@ from backend.services.strategy_package.live_inference import (
 )
 from backend.services.strategy_package.validators import StrategyPackageValidator
 from backend.services.trading_core.errors import (
+    ArtifactGenerationFailedError,
     DataUnavailableError,
-    StrategyPackageValidationError,
+    PackageAssetInvalidError,
+    RuntimeConfigInvalidError,
     UnsupportedFeatureError,
 )
 from backend.services.trading_core.models import OrderIntent, OrderSide, PositionLot
@@ -55,7 +57,7 @@ def apply_runtime_variant_config(
         return dict(runtime_config or {})
     config = dict(runtime_config or {})
     if config.get("runtime_variant"):
-        raise StrategyPackageValidationError(
+        raise RuntimeConfigInvalidError(
             "runtime_config already contains runtime_variant metadata",
             context={"runtime_variant_id": variant.variant_id},
         )
@@ -120,7 +122,7 @@ class StrategyPackageRuntime:
     ) -> SignalSnapshot:
         self.validator.validate_manifest(manifest)
         if not manifest.manifest_sha256:
-            raise StrategyPackageValidationError(
+            raise PackageAssetInvalidError(
                 "strategy package manifest must be frozen before runtime",
                 context={"package_id": manifest.package_id},
             )
@@ -146,7 +148,7 @@ class StrategyPackageRuntime:
                     valid_no_candidate=True,
                     no_candidate_reason=str(no_candidate_reason or "runtime declared no candidate"),
                 )
-            raise StrategyPackageValidationError(
+            raise DataUnavailableError(
                 "selection runtime produced no candidates",
                 context={"package_id": manifest.package_id, "trade_date": trade_date.isoformat()},
             )
@@ -179,7 +181,7 @@ class StrategyPackageRuntime:
         data_source: str,
     ) -> list[dict[str, Any]]:
         if "selection_scores" in config:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "runtime_config.selection_scores cannot be used as StrategyPackage signal input; "
                 "generate an authoritative live selection artifact first",
                 context={"package_id": manifest.package_id, "trade_date": trade_date.isoformat()},
@@ -220,14 +222,14 @@ class StrategyPackageRuntime:
             return artifact.scores_json
 
         if "scores" in selection_runtime:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "manifest strategy_config.selection_runtime.scores is not authoritative; "
                 "StrategyPackage runtime must use live/latest-data inference artifacts",
                 context={"package_id": manifest.package_id, "trade_date": trade_date.isoformat()},
             )
         scores_path = selection_runtime.get("scores_path")
         if scores_path:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "manifest strategy_config.selection_runtime.scores_path is not authoritative; "
                 "StrategyPackage runtime must use live/latest-data inference artifacts",
                 context={
@@ -266,7 +268,7 @@ class StrategyPackageRuntime:
     def _candidate_from_row(self, row: dict[str, Any], package_id: str) -> SelectionCandidate:
         missing = [key for key in ("symbol", "score", "rank") if row.get(key) is None]
         if missing:
-            raise StrategyPackageValidationError(
+            raise ArtifactGenerationFailedError(
                 "selection candidate is missing required score fields",
                 context={"package_id": package_id, "missing": missing, "row": row},
             )
@@ -315,14 +317,14 @@ class TargetPositionEngine:
         default_target_weight: float | None = None,
     ) -> list[TargetPosition]:
         if snapshot.valid_no_candidate:
-            raise StrategyPackageValidationError(
+            raise DataUnavailableError(
                 "valid_no_candidate snapshots cannot produce target positions",
                 context={"package_id": snapshot.package_id, "reason": snapshot.no_candidate_reason},
             )
         if total_equity <= 0:
-            raise StrategyPackageValidationError("total_equity must be positive for target positions")
+            raise RuntimeConfigInvalidError("total_equity must be positive for target positions")
         if top_k <= 0:
-            raise StrategyPackageValidationError("top_k must be positive for target positions")
+            raise RuntimeConfigInvalidError("top_k must be positive for target positions")
         if manifest is not None:
             return self._build_targets_from_backtest_contract(
                 snapshot=snapshot,
@@ -333,12 +335,12 @@ class TargetPositionEngine:
             )
         selected = sorted(snapshot.candidates, key=lambda item: item.rank)[:top_k]
         if not selected:
-            raise StrategyPackageValidationError("target position engine received no candidates")
+            raise ArtifactGenerationFailedError("target position engine received no candidates")
         targets: list[TargetPosition] = []
         for candidate in selected:
             if candidate.target_quantity is not None:
                 if candidate.target_quantity < 0:
-                    raise StrategyPackageValidationError(
+                    raise ArtifactGenerationFailedError(
                         "candidate target_quantity must be non-negative",
                         context={"package_id": snapshot.package_id, "symbol": candidate.symbol},
                     )
@@ -352,7 +354,7 @@ class TargetPositionEngine:
             else:
                 if candidate.target_weight is None:
                     if default_target_weight is None:
-                        raise StrategyPackageValidationError(
+                        raise ArtifactGenerationFailedError(
                             "candidate is missing target position information",
                             context={"package_id": snapshot.package_id, "symbol": candidate.symbol},
                         )
@@ -368,7 +370,7 @@ class TargetPositionEngine:
                 quantity = round_to_board_lot(raw_quantity, candidate.symbol, side="BUY")
                 target_weight = candidate_weight
             if quantity <= 0 and candidate.target_quantity is None:
-                raise StrategyPackageValidationError(
+                raise ArtifactGenerationFailedError(
                     "target position rounds to zero shares",
                     context={"package_id": snapshot.package_id, "symbol": candidate.symbol},
                 )
@@ -424,7 +426,7 @@ class TargetPositionEngine:
     ) -> list[TargetPosition]:
         ordered = sorted(snapshot.candidates, key=lambda item: (item.rank, -item.score, item.symbol))
         if not ordered:
-            raise StrategyPackageValidationError("target position engine received no candidates")
+            raise ArtifactGenerationFailedError("target position engine received no candidates")
 
         topk = int(params["topk"])
         max_n_drop = int(params["max_n_drop"])
@@ -599,7 +601,7 @@ class TargetPositionEngine:
                 for symbol, position in sorted(current_positions.items())
             ]
         if not targets:
-            raise StrategyPackageValidationError(
+            raise ArtifactGenerationFailedError(
                 "QE score-weighted strategy produced no target positions",
                 context={"package_id": snapshot.package_id, "candidate_count": len(snapshot.candidates)},
             )
@@ -715,7 +717,7 @@ class TargetPositionEngine:
             total = sum(exp_values) or 1.0
             weights = [value / total for value in exp_values]
         else:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "unsupported QE score-weighted weight_method",
                 context={"weight_method": method},
             )
@@ -780,7 +782,7 @@ class RebalanceEngine:
         target_positions: list[TargetPosition],
     ) -> list[OrderIntent]:
         if not target_positions:
-            raise StrategyPackageValidationError(
+            raise ArtifactGenerationFailedError(
                 "rebalance requires target positions",
                 context={"package_id": package_id, "portfolio_id": portfolio_id},
             )
@@ -835,14 +837,14 @@ class RebalanceEngine:
 def _merge_model_or_dict(current: Any, overlay: Any) -> Any:
     if hasattr(current, "model_copy"):
         if not isinstance(overlay, dict):
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "runtime variant model overlays must be objects",
                 context={"overlay_type": type(overlay).__name__},
             )
         return current.model_copy(update=overlay)
     if isinstance(current, dict):
         if not isinstance(overlay, dict):
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "runtime variant dict overlays must be objects",
                 context={"overlay_type": type(overlay).__name__},
             )

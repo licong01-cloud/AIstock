@@ -5,7 +5,6 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import ConfirmAction from "@/components/paper-v2/ConfirmAction";
 import ErrorPanel from "@/components/paper-v2/ErrorPanel";
-import JsonPanel from "@/components/paper-v2/JsonPanel";
 import MetricCard from "@/components/paper-v2/MetricCard";
 import NoticePanel from "@/components/paper-v2/NoticePanel";
 import PaperIndustryBlacklistSelector, { selectedIndustryCodes, selectedIndustryTrace, type Sw2Entry } from "@/components/paper-v2/PaperIndustryBlacklistSelector";
@@ -58,7 +57,7 @@ function isActiveSession(session: PaperSession | null | undefined): boolean {
 function CapabilityErrorList({ node }: { node: { can_start: boolean; errors: JsonObject[] } | undefined }) {
   if (!node) return <div className="pv2-muted">尚未加载能力诊断。</div>;
   const errors = (node.errors || []) as JsonObject[];
-  if (!errors.length) return <div className="pv2-muted">{node.can_start ? "可启动。" : "已禁用，但未返回具体错误。"}</div>;
+  if (!errors.length) return <div className="pv2-muted">{node.can_start ? "可启动。" : "后端返回能力不足，但未给出具体错误；仍可启动并由本次 session 记录结果。"}</div>;
   return (
     <ul className="pv2-readiness-context" style={{ paddingLeft: 16 }}>
       {errors.map((err, index) => {
@@ -75,6 +74,65 @@ function CapabilityErrorList({ node }: { node: { can_start: boolean; errors: Jso
   );
 }
 
+
+function RuntimeConfigSummary({ value }: { value: JsonObject }) {
+  const profile = (value.runtime_profile && typeof value.runtime_profile === "object" ? value.runtime_profile : {}) as JsonObject;
+  const selection = (profile.selection && typeof profile.selection === "object" ? profile.selection : {}) as JsonObject;
+  const tradability = (profile.tradability && typeof profile.tradability === "object" ? profile.tradability : {}) as JsonObject;
+  const hmm = (profile.hmm && typeof profile.hmm === "object" ? profile.hmm : {}) as JsonObject;
+  const blacklist = Array.isArray(profile.industry_blacklist) ? profile.industry_blacklist : [];
+  return (
+    <div className="pv2-readable-panel">
+      <div className="pv2-readable-table">
+        <div className="pv2-readable-row"><div className="pv2-readable-key">TopK</div><div className="pv2-readable-value">{String(selection.top_k ?? value.top_k ?? "-")}</div></div>
+        <div className="pv2-readable-row"><div className="pv2-readable-key">停牌处理</div><div className="pv2-readable-value">{tradability.exclude_suspended === false ? "保留" : "剔除"}</div></div>
+        <div className="pv2-readable-row"><div className="pv2-readable-key">行业黑名单</div><div className="pv2-readable-value">{blacklist.length ? blacklist.join(", ") : "未配置"}</div></div>
+        <div className="pv2-readable-row"><div className="pv2-readable-key">HMM</div><div className="pv2-readable-value">{hmm.enabled ? `启用 / ${String(hmm.model_config_id || "未选配置")} / ${String(hmm.signal_preset || "未选 preset")}` : "未启用"}</div></div>
+      </div>
+    </div>
+  );
+}
+
+function diagnosticText(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function textValue(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "-";
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "-";
+  if (typeof value === "boolean") return value ? "是" : "否";
+  return String(value);
+}
+
+function arrayValue(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function objectValue(value: unknown): JsonObject {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonObject) : {};
+}
+
+function DiagnosticSummary({ value, title = "诊断信息" }: { value: unknown; title?: string }) {
+  if (!value) return null;
+  const obj = objectValue(value);
+  const session = objectValue(obj.session);
+  const checks = arrayValue(obj.checks || obj.events || obj.errors);
+  const raw = diagnosticText(value);
+  return (
+    <div className="pv2-readable-panel">
+      <div className="pv2-readable-table">
+        <div className="pv2-readable-row"><div className="pv2-readable-key">{title}</div><div className="pv2-readable-value">{textValue(obj.status || obj.result_status || session.status || "已返回")}</div></div>
+        <div className="pv2-readable-row"><div className="pv2-readable-key">会话/运行</div><div className="pv2-readable-value pv2-mono">{textValue(obj.session_id || session.session_id || obj.run_id || obj.portfolio_id)}</div></div>
+        <div className="pv2-readable-row"><div className="pv2-readable-key">日期/数量</div><div className="pv2-readable-value">{textValue(obj.trade_date || session.start_date || obj.start_date)} / {checks.length ? `${checks.length} 条明细` : "无明细"}</div></div>
+        <div className="pv2-readable-row"><div className="pv2-readable-key">可复制诊断</div><div className="pv2-readable-value"><textarea className="pv2-input pv2-diagnostic-text" readOnly rows={5} value={raw} /></div></div>
+      </div>
+    </div>
+  );
+}
 export default function PaperV2RunConsolePage() {
   const params = useParams<{ portfolioId: string }>();
   const portfolioId = String(params.portfolioId || "");
@@ -130,6 +188,8 @@ export default function PaperV2RunConsolePage() {
   );
   const latestSession = useMemo(() => sessions[0] || null, [sessions]);
   const activeSession = useMemo(() => sessions.find((item) => isActiveSession(item)) || null, [sessions]);
+  const liveDataSource = portfolio?.broker_backend === "minqmt_sim" ? "MINIQMT_REALTIME" : "TDX_REALTIME";
+  const liveDataSourceLabel = dataSourceLabel(liveDataSource);
   const replayCapability = capabilities?.modes?.REPLAY_ONLY;
   const liveCapability = capabilities?.modes?.LIVE_ONLY;
   const catchupCapability = capabilities?.modes?.CATCHUP_THEN_LIVE;
@@ -137,7 +197,6 @@ export default function PaperV2RunConsolePage() {
   const liveBlocked = Boolean(liveCapability && !liveCapability.can_start);
   const catchupBlocked = Boolean(catchupCapability && !catchupCapability.can_start);
   const sessionModeBlocked = sessionMode === "REPLAY_ONLY" ? replayBlocked : sessionMode === "CATCHUP_THEN_LIVE" ? catchupBlocked : liveBlocked;
-  const switchModeBlocked = switchMode === "REPLAY_ONLY" ? replayBlocked : switchMode === "CATCHUP_THEN_LIVE" ? catchupBlocked : liveBlocked;
   function buildRuntimeConfigForRange(startDate: string, endDate?: string | null, manualTickOnly = false, strict = true): JsonObject {
     const safeTopK = Number.isFinite(runtimeTopK) ? Math.min(50, Math.max(1, Math.trunc(runtimeTopK))) : 20;
     if (runtimeHmmEnabled) {
@@ -315,7 +374,7 @@ export default function PaperV2RunConsolePage() {
         start_date: sessionMode === "LIVE_ONLY" ? liveStartDate : replayStart,
         end_date: isReplayOnly || isCatchupThenLive ? replayEnd : null,
         historical_data_source: isReplayOnly || isCatchupThenLive ? "DB_HISTORICAL" : null,
-        live_data_source: isCatchupThenLive || sessionMode === "LIVE_ONLY" ? "TDX_REALTIME" : null,
+        live_data_source: isCatchupThenLive || sessionMode === "LIVE_ONLY" ? liveDataSource : null,
         runtime_config: buildSessionRuntimeConfig(sessionMode === "LIVE_ONLY" ? liveStartDate : replayStart, isReplayOnly || isCatchupThenLive ? replayEnd : liveStartDate, false),
         rerun_policy: rerunPolicy,
         auto_switch_to_live: false,
@@ -347,7 +406,7 @@ export default function PaperV2RunConsolePage() {
       const session = await paperV2Api.createSession(portfolioId, {
         mode: "LIVE_ONLY",
         start_date: liveStartDate,
-        live_data_source: "TDX_REALTIME",
+        live_data_source: liveDataSource,
         runtime_config: buildSessionRuntimeConfig(liveStartDate, liveStartDate, false),
         rerun_policy: "reject_existing",
         created_by: "paper_v2_ui",
@@ -412,7 +471,7 @@ export default function PaperV2RunConsolePage() {
         start_date: switchMode === "LIVE_ONLY" ? liveStartDate : switchStart,
         end_date: isReplayOnly || isCatchupThenLive ? switchEnd : null,
         historical_data_source: isReplayOnly || isCatchupThenLive ? "DB_HISTORICAL" : null,
-        live_data_source: isCatchupThenLive || switchMode === "LIVE_ONLY" ? "TDX_REALTIME" : null,
+        live_data_source: isCatchupThenLive || switchMode === "LIVE_ONLY" ? liveDataSource : null,
         runtime_config: buildSessionRuntimeConfig(switchMode === "LIVE_ONLY" ? liveStartDate : switchStart, isReplayOnly || isCatchupThenLive ? switchEnd : liveStartDate, false),
         rerun_policy: "reject_existing",
         created_by: "paper_v2_ui",
@@ -597,19 +656,19 @@ export default function PaperV2RunConsolePage() {
                 </NoticePanel>
               ) : <input className="pv2-input" data-testid="console-runtime-hmm-coefficients" disabled value="" readOnly placeholder="HMM 未启用" />}
             </div>
-            <JsonPanel value={runtimeConfig} />
+            <RuntimeConfigSummary value={runtimeConfig} />
           </div>
           <div className="pv2-row-actions" style={{ marginTop: 12 }}>
             <button className="pv2-button" data-testid="console-readiness" disabled={busy} onClick={runReadiness} type="button">{busy ? "处理中..." : "执行就绪检查"}</button>
-            <button className="pv2-button-primary" data-testid="console-run-day" disabled={busy || !readinessPassed} onClick={runDay} type="button">执行单日模拟</button>
+            <button className="pv2-button-primary" data-testid="console-run-day" disabled={busy} onClick={runDay} type="button">执行单日模拟</button>
           </div>
           {!readinessPassed ? (
-            <NoticePanel title="就绪检查通过前禁止单日运行" tone="warning">
-              本页面严格遵守 v2 流程。同一交易日和同一运行配置通过后端就绪门禁前，单日运行保持禁用。
+            <NoticePanel title="就绪诊断提示（不阻断单日运行）" tone="warning">
+              就绪检查用于提前展示缺分钟线、昨收、涨跌停、停牌、HMM 输入或 broker 状态等运行风险；仍可启动单日模拟，真实缺失会记录为本次 run/session 失败，不会禁用策略包或组合。
             </NoticePanel>
           ) : null}
           {readiness ? <ReadinessFailureCard result={readiness} /> : null}
-          {runResult ? <JsonPanel value={runResult} /> : null}
+          {runResult ? <DiagnosticSummary title="daily run result" value={runResult} /> : null}
         </SectionCard>
 
         <SectionCard title="执行策略激活" eyebrow="仅限已验证策略">
@@ -660,7 +719,7 @@ export default function PaperV2RunConsolePage() {
               { key: "hash", header: "配置 Hash", render: (row) => shortHash(row.context?.config_sha256 as string | undefined) },
             ]}
           />
-          <JsonPanel value={{ runtime_profiles: runtimeProfiles, runtime_versions: runtimeVersions, config_change_audit: configAudit.slice(0, 6) }} />
+          <DiagnosticSummary title="runtime config audit" value={{ runtime_profile_count: runtimeProfiles.length, runtime_version_count: runtimeVersions.length, audit_count: configAudit.length, latest_audit: configAudit[0] || null }} />
         </SectionCard>
       </div>
 
@@ -671,32 +730,26 @@ export default function PaperV2RunConsolePage() {
             <div className="pv2-field"><label>历史追赶开始</label><input className="pv2-input" data-testid="console-replay-start" type="date" value={replayStart} onChange={(event) => setReplayStart(event.target.value)} disabled={sessionMode === "LIVE_ONLY"} /></div>
             <div className="pv2-field"><label>历史追赶结束</label><input className="pv2-input" data-testid="console-replay-end" type="date" value={replayEnd} onChange={(event) => setReplayEnd(event.target.value)} disabled={sessionMode === "LIVE_ONLY"} /></div>
             <div className="pv2-field"><label>实时开始日期</label><input className="pv2-input" data-testid="console-live-start-inline" type="date" value={liveStartDate} onChange={(event) => setLiveStartDate(event.target.value)} disabled={sessionMode !== "LIVE_ONLY"} /></div>
-            <div className="pv2-field"><label>数据源角色</label><input className="pv2-input" value={sessionMode === "LIVE_ONLY" ? dataSourceLabel("TDX_REALTIME") : sessionMode === "CATCHUP_THEN_LIVE" ? `${dataSourceLabel("DB_HISTORICAL")} → ${dataSourceLabel("TDX_REALTIME")}` : dataSourceLabel("DB_HISTORICAL")} readOnly /></div>
+            <div className="pv2-field"><label>数据源角色</label><input className="pv2-input" value={sessionMode === "LIVE_ONLY" ? liveDataSourceLabel : sessionMode === "CATCHUP_THEN_LIVE" ? `${dataSourceLabel("DB_HISTORICAL")} → ${liveDataSourceLabel}` : dataSourceLabel("DB_HISTORICAL")} readOnly /></div>
             <div className="pv2-field"><label>重跑策略</label><input className="pv2-input" value="reject_existing / reset_portfolio" readOnly /></div>
           </div>
-          <NoticePanel title="场景含义" tone="info">
-            {SESSION_MODE_OPTIONS.find((item) => item.value === sessionMode)?.description} 会话创建、暂停、恢复、停止和切换允许盘中执行；真实可成交性由交易日历、分钟线、涨跌停、停牌、broker/SIM 状态和订单提交检查 fail-fast 保证。
-          </NoticePanel>
           <div className="pv2-row-actions" style={{ marginTop: 12 }}>
-            <button className="pv2-button" data-testid="console-replay-reject" disabled={busy || sessionModeBlocked} onClick={() => replay("reject_existing")} type="button">{sessionMode === "LIVE_ONLY" ? "启动完全实时" : sessionMode === "CATCHUP_THEN_LIVE" ? "启动追赶后自动实时" : "启动仅历史追赶"}</button>
-            <ConfirmAction label="重置并重跑历史追赶" danger disabled={busy || sessionMode === "LIVE_ONLY" || sessionModeBlocked} confirmText={portfolioId} onConfirm={() => replay("reset_portfolio")} testId="console-replay-reset" />
+            <button className="pv2-button" data-testid="console-replay-reject" disabled={busy} onClick={() => replay("reject_existing")} type="button">{sessionMode === "LIVE_ONLY" ? "启动完全实时" : sessionMode === "CATCHUP_THEN_LIVE" ? "启动追赶后自动实时" : "启动仅历史追赶"}</button>
+            <ConfirmAction label="重置并重跑历史追赶" danger disabled={busy || sessionMode === "LIVE_ONLY"} confirmText={portfolioId} onConfirm={() => replay("reset_portfolio")} testId="console-replay-reset" />
           </div>
-          {sessionModeBlocked ? <NoticePanel title="当前场景被后端能力诊断禁用" tone="warning"><CapabilityErrorList node={sessionMode === "REPLAY_ONLY" ? replayCapability : sessionMode === "CATCHUP_THEN_LIVE" ? catchupCapability : liveCapability} /></NoticePanel> : null}
-          <NoticePanel title="重置会删除该组合账本历史" tone="warning">
-            重置只用于需要替换已有历史运行、订单、成交、现金、持仓、快照、事件和错误时使用；否则使用 reject_existing 追赶缺失交易日。
-          </NoticePanel>
-          {sessionProgress ? <JsonPanel value={sessionProgress} /> : null}
-          {replayResult ? <JsonPanel value={replayResult} /> : null}
+          {sessionModeBlocked ? <NoticePanel title="后端能力诊断提示（不阻断启动）" tone="warning"><CapabilityErrorList node={sessionMode === "REPLAY_ONLY" ? replayCapability : sessionMode === "CATCHUP_THEN_LIVE" ? catchupCapability : liveCapability} /></NoticePanel> : null}
+          {sessionProgress ? <DiagnosticSummary title="session progress" value={sessionProgress} /> : null}
+          {replayResult ? <DiagnosticSummary title="historical replay result" value={replayResult} /> : null}
         </SectionCard>
 
         <SectionCard title="实时模拟与后台调度" eyebrow="TDX 实时分钟线">
           <div className="pv2-form-grid">
             <div className="pv2-field"><label>实时开始日期</label><input className="pv2-input" data-testid="console-live-start" type="date" value={liveStartDate} onChange={(event) => setLiveStartDate(event.target.value)} /></div>
-            <div className="pv2-field"><label>实时数据源</label><input className="pv2-input" value={dataSourceLabel("TDX_REALTIME")} readOnly /></div>
+            <div className="pv2-field"><label>实时数据源</label><input className="pv2-input" value={liveDataSourceLabel} readOnly /></div>
             <div className="pv2-field"><label>调度间隔（秒）</label><input className="pv2-input" data-testid="console-scheduler-interval" type="number" min={1} max={3600} value={schedulerInterval} onChange={(event) => setSchedulerInterval(Number(event.target.value))} /></div>
           </div>
           <div className="pv2-row-actions" style={{ marginTop: 12 }}>
-            <button className="pv2-button-primary" data-testid="console-live-create" disabled={busy || liveBlocked} onClick={startLiveSession} type="button">创建实时会话并执行一次 Tick</button>
+            <button className="pv2-button-primary" data-testid="console-live-create" disabled={busy} onClick={startLiveSession} type="button">创建实时会话并执行一次 Tick</button>
             <button className="pv2-button" data-testid="console-scheduler-run-once" disabled={busy} onClick={() => schedulerAction("run_once")} type="button">后台调度执行一次</button>
             <button className="pv2-button" data-testid="console-scheduler-start" disabled={busy || schedulerStatus?.running} onClick={() => schedulerAction("start")} type="button">启动后台调度</button>
             <button className="pv2-button" data-testid="console-scheduler-stop" disabled={busy || !schedulerStatus?.running} onClick={() => schedulerAction("stop")} type="button">停止后台调度</button>
@@ -709,18 +762,15 @@ export default function PaperV2RunConsolePage() {
               <div className="pv2-field"><label>切换后开始日</label><input className="pv2-input" data-testid="console-switch-start" type="date" value={switchStart} onChange={(event) => setSwitchStart(event.target.value)} disabled={switchMode === "LIVE_ONLY"} /></div>
               <div className="pv2-field"><label>切换后追赶结束</label><input className="pv2-input" data-testid="console-switch-end" type="date" value={switchEnd} onChange={(event) => setSwitchEnd(event.target.value)} disabled={switchMode === "LIVE_ONLY"} /></div>
             </div>
-            <button className="pv2-button-primary" data-testid="console-switch-mode-apply" disabled={busy || !activeSession || switchModeBlocked} onClick={switchActiveSessionMode} type="button" style={{ marginTop: 12 }}>切换活跃任务场景</button>
-            <NoticePanel title="切换约束" tone="warning">切换会先停止原活跃会话，再按目标场景创建新会话；后端在 09:15-15:00 A 股交易时间内拒绝执行该操作。</NoticePanel>
+            <button className="pv2-button-primary" data-testid="console-switch-mode-apply" disabled={busy || !activeSession} onClick={switchActiveSessionMode} type="button" style={{ marginTop: 12 }}>切换活跃任务场景</button>
+
           </div>
-          {liveBlocked ? <NoticePanel title="实时模式被后端能力诊断禁用" tone="warning"><CapabilityErrorList node={liveCapability} /></NoticePanel> : null}
-          <NoticePanel title="后台调度不会改变业务逻辑" tone="info">
-            调度器只调用与页面相同的 session tick 接口。无新分钟线时进入等待状态；数据、算法或策略产物缺失会显示后端错误，不会降级到日频或其他算法。
-          </NoticePanel>
+          {liveBlocked ? <NoticePanel title="实时模式后端能力诊断提示（不阻断启动）" tone="warning"><CapabilityErrorList node={liveCapability} /></NoticePanel> : null}
           <div className="pv2-chip-row">
             <span className="pv2-chip">调度器: {schedulerStatus?.running ? "运行中" : "未运行"}</span>
             <span className="pv2-chip">最近会话: {latestSession ? `${latestSession.mode}/${latestSession.status}` : "暂无"}</span>
           </div>
-          {schedulerStatus ? <JsonPanel value={schedulerStatus} /> : null}
+          {schedulerStatus ? <DiagnosticSummary title="scheduler status" value={schedulerStatus} /> : null}
         </SectionCard>
       </div>
 
@@ -737,7 +787,7 @@ export default function PaperV2RunConsolePage() {
               { key: "actions", header: "操作", render: (row) => <div className="pv2-row-actions"><button className="pv2-link-button" disabled={busy} onClick={() => tickSession(row.session_id)} type="button">Tick</button><button className="pv2-link-button" disabled={busy || row.status === "PAUSED"} onClick={() => sessionLifecycle(row.session_id, "pause")} type="button">暂停</button><button className="pv2-link-button" disabled={busy || row.status !== "PAUSED"} onClick={() => sessionLifecycle(row.session_id, "resume")} type="button">恢复</button><button className="pv2-link-button" disabled={busy} onClick={() => sessionLifecycle(row.session_id, "stop")} type="button">停止</button></div> },
             ]}
           />
-          {sessionProgress ? <JsonPanel value={sessionProgress} /> : null}
+          {sessionProgress ? <DiagnosticSummary title="session progress" value={sessionProgress} /> : null}
         </SectionCard>
 
         <SectionCard title="运行时间线与错误" eyebrow="持久化追踪">

@@ -1,8 +1,7 @@
-"""Read-only StrategyPackage health checks for Selection Center.
+"""Read-only StrategyPackage health diagnostics for Selection Center.
 
-The health gate is intentionally conservative: it reports what is known before
-an operator starts live inference, and it blocks only product modes that require
-ST PIT authoritative behavior.
+Package health is diagnostic only in Selection/Paper/MiniQMT simulation paths:
+it may report runtime risks, but it must not decide StrategyPackage admission.
 """
 
 from __future__ import annotations
@@ -13,14 +12,13 @@ from typing import Any
 from backend.services.strategy_package.backtest_contract import build_backtest_runtime_contract
 from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELECTION_SOURCE_TYPE
 from backend.services.strategy_package.runtime import _candidate_selection_artifact_runtime_hashes
-from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError, TradingCoreError
+from backend.services.trading_core.errors import DataUnavailableError, TradingCoreError
 
 from .runtime_profile import parse_selection_runtime_profile
 
 
 PASS = "PASS"
 WARN = "WARN"
-BLOCKED = "BLOCKED"
 UNKNOWN = "UNKNOWN"
 
 
@@ -86,28 +84,26 @@ class SelectionPackageHealthService:
             )
 
         checks.extend(self._deferred_runtime_checks(self._hmm_artifact_check(manifest, config, trade_date)))
-        blocked = [item for item in checks if item["status"] == BLOCKED]
         extra_checks: list[dict[str, Any]] = []
         st_pit_authoritative = bool(config.get("st_pit_authoritative") or config.get("enforce_st_pit_contract"))
         if st_pit_authoritative:
             extra_checks.append(self._st_pit_runtime_profile_check(manifest, config))
-            blocked.extend(item for item in extra_checks if item["status"] == BLOCKED)
 
-        if blocked:
-            status = BLOCKED
-        elif legacy_non_st_pit:
+        all_checks = [*checks, *extra_checks]
+        if legacy_non_st_pit:
             status = "LEGACY_NON_ST_PIT"
-        elif any(item["status"] == WARN for item in checks):
+        elif any(item["status"] == WARN for item in all_checks):
             status = "WARN"
         else:
             status = "RUNNABLE"
 
         return {
             "status": status,
-            "runnable": not blocked and not legacy_non_st_pit,
+            "runnable": True,
+            "diagnostic_only": True,
             "st_pit_contract_status": st_pit_contract_status,
             "legacy_non_st_pit": legacy_non_st_pit,
-            "checks": [*checks, *extra_checks],
+            "checks": all_checks,
         }
 
     def require_runnable(
@@ -118,27 +114,18 @@ class SelectionPackageHealthService:
         trade_date: date,
         data_source: str,
     ) -> dict[str, Any]:
-        health = self.summarize(
+        """Compatibility wrapper: return diagnostics, never gate package use."""
+
+        return self.summarize(
             record,
             runtime_config=runtime_config,
             trade_date=trade_date,
             data_source=data_source,
         )
-        if bool(runtime_config.get("st_pit_authoritative") or runtime_config.get("enforce_st_pit_contract")):
-            if not health["runnable"]:
-                raise StrategyPackageValidationError(
-                    "strategy package is blocked by Selection Center health preflight",
-                    context={
-                        "package_id": record.package_id,
-                        "health_status": health["status"],
-                        "checks": health["checks"],
-                    },
-                )
-        return health
 
     @staticmethod
     def _blocked_check(name: str, message: str, context: dict[str, Any]) -> dict[str, Any]:
-        return {"name": name, "status": BLOCKED, "message": message, "context": context}
+        return {"name": name, "status": WARN, "severity": "runtime_warning", "message": message, "context": context}
 
     @staticmethod
     def _auto_generate(runtime_config: dict[str, Any]) -> bool:
@@ -155,14 +142,16 @@ class SelectionPackageHealthService:
         except TradingCoreError as exc:
             return {
                 "name": "st_pit_contract_status",
-                "status": BLOCKED,
+                "status": WARN,
+                "severity": "runtime_warning",
                 "message": exc.message,
                 "context": exc.context,
             }
         except Exception as exc:
             return {
                 "name": "st_pit_contract_status",
-                "status": BLOCKED,
+                "status": WARN,
+                "severity": "runtime_warning",
                 "message": str(exc),
                 "context": {"package_id": manifest.package_id},
             }
@@ -184,11 +173,12 @@ class SelectionPackageHealthService:
         try:
             profile = parse_selection_runtime_profile(runtime_config)
         except TradingCoreError as exc:
-            return {"name": "st_pit_runtime_profile", "status": BLOCKED, "message": exc.message, "context": exc.context}
+            return {"name": "st_pit_runtime_profile", "status": WARN, "severity": "runtime_warning", "message": exc.message, "context": exc.context}
         if not profile.risk_policy.enabled:
             return {
                 "name": "st_pit_runtime_profile",
-                "status": BLOCKED,
+                "status": WARN,
+                "severity": "runtime_warning",
                 "message": "ST PIT authoritative selection requires runtime_profile.risk_policy.enabled=true",
                 "context": {"package_id": manifest.package_id},
             }
@@ -203,7 +193,8 @@ class SelectionPackageHealthService:
         if missing:
             return {
                 "name": "st_pit_runtime_profile",
-                "status": BLOCKED,
+                "status": WARN,
+                "severity": "runtime_warning",
                 "message": "ST PIT runtime risk policy profile is incomplete",
                 "context": {"package_id": manifest.package_id, "missing": missing},
             }
@@ -234,11 +225,12 @@ class SelectionPackageHealthService:
                 limit=1,
             )
         except TradingCoreError as exc:
-            return {"name": "runtime_assets_ready", "status": WARN, "message": exc.message, "context": exc.context}
+            return {"name": "runtime_assets_ready", "status": WARN, "severity": "runtime_warning", "message": exc.message, "context": exc.context}
         if not artifacts:
             return {
                 "name": "runtime_assets_ready",
                 "status": WARN,
+                "severity": "runtime_warning",
                 "message": "no authoritative selection artifact is cached yet",
                 "context": {"package_id": manifest.package_id},
             }
@@ -304,12 +296,13 @@ class SelectionPackageHealthService:
                 }
             message = last_error.message if last_error else "requested selection artifact does not exist"
             context = last_error.context if last_error else {}
-            return {"name": "requested_selection_artifact", "status": BLOCKED, "message": message, "context": context}
+            return {"name": "requested_selection_artifact", "status": WARN, "severity": "runtime_warning", "message": message, "context": context}
         metadata = artifact.metadata or {}
         if metadata.get("source_type") != AUTHORITATIVE_SELECTION_SOURCE_TYPE:
             return {
                 "name": "requested_selection_artifact",
-                "status": BLOCKED,
+                "status": WARN,
+                "severity": "runtime_warning",
                 "message": "requested selection artifact is not authoritative live inference",
                 "context": {"artifact_id": artifact.artifact_id, "source_type": metadata.get("source_type")},
             }
@@ -349,7 +342,7 @@ class SelectionPackageHealthService:
             else:
                 self.runtime_source_resolver.load_source(record.source_id)
         except TradingCoreError as exc:
-            return {"name": "source_resolves", "status": BLOCKED, "message": exc.message, "context": exc.context}
+            return {"name": "source_resolves", "status": WARN, "severity": "runtime_warning", "message": exc.message, "context": exc.context}
         return {
             "name": "source_resolves",
             "status": PASS,
@@ -366,7 +359,7 @@ class SelectionPackageHealthService:
         try:
             profile = parse_selection_runtime_profile(runtime_config)
         except TradingCoreError as exc:
-            return {"name": "hmm_artifact_status", "status": BLOCKED, "message": exc.message, "context": exc.context}
+            return {"name": "hmm_artifact_status", "status": WARN, "severity": "runtime_warning", "message": exc.message, "context": exc.context}
         if not profile.hmm.enabled:
             return {
                 "name": "hmm_artifact_status",
@@ -377,14 +370,16 @@ class SelectionPackageHealthService:
         if trade_date is None:
             return {
                 "name": "hmm_artifact_status",
-                "status": BLOCKED,
+                "status": WARN,
+                "severity": "runtime_warning",
                 "message": "HMM artifact health requires trade_date",
                 "context": {"package_id": manifest.package_id},
             }
         if self.hmm_runtime is None or not hasattr(self.hmm_runtime, "preflight_coefficients"):
             return {
                 "name": "hmm_artifact_status",
-                "status": BLOCKED,
+                "status": WARN,
+                "severity": "runtime_warning",
                 "message": "HMM runtime is not available for artifact preflight",
                 "context": {"package_id": manifest.package_id},
             }
@@ -395,11 +390,12 @@ class SelectionPackageHealthService:
                 package_id=manifest.package_id,
             )
         except TradingCoreError as exc:
-            return {"name": "hmm_artifact_status", "status": BLOCKED, "message": exc.message, "context": exc.context}
+            return {"name": "hmm_artifact_status", "status": WARN, "severity": "runtime_warning", "message": exc.message, "context": exc.context}
         except Exception as exc:
             return {
                 "name": "hmm_artifact_status",
-                "status": BLOCKED,
+                "status": WARN,
+                "severity": "runtime_warning",
                 "message": str(exc),
                 "context": {"package_id": manifest.package_id},
             }

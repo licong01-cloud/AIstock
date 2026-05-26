@@ -1198,6 +1198,8 @@ class StrategyPackageService:
 
     def _manifest_identity_gate(self, record: StrategyPackageRecord, manifest: StrategyPackageManifest) -> dict[str, Any]:
         blockers: list[str] = []
+        if record.package_status == PackageStatus.DRAFT:
+            blockers.append("package_status=DRAFT")
         try:
             self.validator.validate_manifest(manifest)
         except StrategyPackageValidationError as exc:

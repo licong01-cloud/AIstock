@@ -5,7 +5,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import ConfirmAction from "@/components/paper-v2/ConfirmAction";
 import CopyChip from "@/components/paper-v2/CopyChip";
 import ErrorPanel from "@/components/paper-v2/ErrorPanel";
-import JsonPanel from "@/components/paper-v2/JsonPanel";
 import MetricCard from "@/components/paper-v2/MetricCard";
 import NoticePanel from "@/components/paper-v2/NoticePanel";
 import PaperTable from "@/components/paper-v2/PaperTable";
@@ -33,6 +32,68 @@ function lifecycleText(status: string): string {
     RETIRED: "已退役，只保留历史审计，不再进入新流程",
   };
   return labels[status] || "未知状态，请查看状态事件";
+}
+
+
+function textValue(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "-";
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "-";
+  if (typeof value === "boolean") return value ? "是" : "否";
+  return String(value);
+}
+
+function objectValue(value: unknown): JsonObject {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonObject) : {};
+}
+
+function arrayCount(value: unknown): number {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+function totalDependencyCount(deps: JsonObject | null): number {
+  if (!deps) return 0;
+  return Object.values(deps).reduce<number>((total, value) => total + arrayCount(value), 0);
+}
+
+function PackagePayloadSummary({ value, kind }: { value: JsonObject; kind: "source" | "dependencies" | "model" }) {
+  if (kind === "dependencies") {
+    const rows = Object.entries(value).map(([key, item]) => ({ key, count: arrayCount(item), value: item }));
+    return (
+      <div className="pv2-readable-panel">
+        <div className="pv2-readable-table">
+          <div className="pv2-readable-row"><div className="pv2-readable-key">删除依赖</div><div className="pv2-readable-value">共 {totalDependencyCount(value)} 条运行时引用</div></div>
+          {rows.map((row) => <div className="pv2-readable-row" key={row.key}><div className="pv2-readable-key">{row.key}</div><div className="pv2-readable-value">{row.count ? `${row.count} 条` : "无"}</div></div>)}
+        </div>
+      </div>
+    );
+  }
+  if (kind === "model") {
+    const model = objectValue(value.model_state || value.model || value);
+    const hmm = objectValue(value.hmm_state || value.hmm || {});
+    return (
+      <div className="pv2-readable-panel">
+        <div className="pv2-readable-table">
+          <div className="pv2-readable-row"><div className="pv2-readable-key">模型状态</div><div className="pv2-readable-value">{textValue(model.status || value.status)}</div></div>
+          <div className="pv2-readable-row"><div className="pv2-readable-key">模型资产</div><div className="pv2-readable-value">{textValue(model.model_id || model.model_path || model.artifact_uri)}</div></div>
+          <div className="pv2-readable-row"><div className="pv2-readable-key">HMM 缓存</div><div className="pv2-readable-value">{textValue(hmm.latest_trade_date || hmm.cache_trade_date || hmm.status || "平台按交易日自动计算/缓存")}</div></div>
+          <div className="pv2-readable-row"><div className="pv2-readable-key">诊断字段</div><div className="pv2-readable-value">{Object.keys(value).slice(0, 12).join(", ") || "-"}</div></div>
+        </div>
+      </div>
+    );
+  }
+  const manifest = objectValue(value.manifest || value.package_manifest || value);
+  const readiness = objectValue(value.readiness || value.paper_readiness || value.asset_eligibility || {});
+  return (
+    <div className="pv2-readable-panel">
+      <div className="pv2-readable-table">
+        <div className="pv2-readable-row"><div className="pv2-readable-key">策略包</div><div className="pv2-readable-value">{textValue(value.package_name || manifest.package_name || value.created_package_id)}</div></div>
+        <div className="pv2-readable-row"><div className="pv2-readable-key">资产合格</div><div className="pv2-readable-value">{readiness.eligible === false || readiness.status === "BLOCKED" ? "不合格，查看诊断信息" : "可进入选股/模拟盘"}</div></div>
+        <div className="pv2-readable-row"><div className="pv2-readable-key">manifest</div><div className="pv2-readable-value pv2-mono">{textValue(value.manifest_sha256 || manifest.manifest_sha256)}</div></div>
+        <div className="pv2-readable-row"><div className="pv2-readable-key">来源</div><div className="pv2-readable-value">{textValue(value.source_type || manifest.source_type || (objectValue(manifest.source).source_type))}</div></div>
+        <div className="pv2-readable-row"><div className="pv2-readable-key">诊断字段</div><div className="pv2-readable-value">{Object.keys(value).slice(0, 12).join(", ") || "-"}</div></div>
+      </div>
+    </div>
+  );
 }
 
 function dependencyCount(deps: JsonObject | null): number {
@@ -240,7 +301,7 @@ export default function PaperV2PackagesPage() {
         </div>
         <div className="pv2-help">策略包入场只检查资产与 manifest 完整性；HMM、黑名单、TopK、停牌剔除、交易日和行情源都属于运行时平台能力。</div>
         {!sources.length ? <NoticePanel title="暂无可打包 QE 来源" tone="info">没有找到尚未打包的 QE 实验或演进 Loop。</NoticePanel> : null}
-        {sourcePreview ? <JsonPanel value={sourcePreview} /> : null}
+        {sourcePreview ? <PackagePayloadSummary value={sourcePreview} kind="source" /> : null}
       </SectionCard>
 
       <SectionCard title="StrategyPackage 列表" eyebrow={loading ? "加载中" : `${packages.length} 个策略包`} action={<button className="pv2-button" onClick={load} type="button">刷新</button>}>
@@ -276,7 +337,7 @@ export default function PaperV2PackagesPage() {
             <NoticePanel title="退役与删除的区别" tone={depsCount ? "warning" : "info"}>
               退役只归档策略包，不删除历史组合和证据；彻底删除会物理删除没有任何运行时引用的策略包。当前删除依赖数量：{depsCount}。
             </NoticePanel>
-            {deleteDependencies ? <JsonPanel value={deleteDependencies} /> : null}
+            {deleteDependencies ? <PackagePayloadSummary value={deleteDependencies} kind="dependencies" /> : null}
             <div className="pv2-grid pv2-grid-3" style={{ marginTop: 14 }}>
               <MetricCard label="年化收益" value={formatPercent(metrics.annual_return)} />
               <MetricCard label="IC" value={formatPercent(metrics.ic)} />
@@ -290,7 +351,7 @@ export default function PaperV2PackagesPage() {
               <CopyChip label={`manifest ${shortHash(selected.manifest_sha256, 6)}`} value={selected.manifest_sha256} title={`完整 manifest_sha256：${selected.manifest_sha256}`} />
             </div>
             <h3>模型状态</h3>
-            {modelState ? <JsonPanel value={modelState} /> : <div className="pv2-muted">尚未获取模型状态。</div>}
+            {modelState ? <PackagePayloadSummary value={modelState} kind="model" /> : <div className="pv2-muted">尚未获取模型状态。</div>}
           </SectionCard>
 
           <SectionCard title="执行策略与状态事件" eyebrow="运行时配置，不作为准入门禁">

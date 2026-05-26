@@ -19,8 +19,9 @@ from backend.services.paper_trading_v2.market_data import (
 from backend.services.strategy_package.models import StrategyPackageManifest
 from backend.services.strategy_package.validators import StrategyPackageValidator
 from backend.services.trading_core.errors import (
+    ArtifactGenerationFailedError,
     DataUnavailableError,
-    StrategyPackageValidationError,
+    InvalidStateTransitionError,
 )
 from backend.services.trading_core.execution_algo_capabilities import required_minute_bars_for_policy
 from backend.services.trading_core.ledger import FeeModel, InMemoryLedger
@@ -201,7 +202,7 @@ class PaperTradingV2Runner:
 
         self.validator.validate_for_paper_trading(manifest)
         if not order_intents:
-            raise StrategyPackageValidationError(
+            raise ArtifactGenerationFailedError(
                 "order batch requires at least one order_intent",
                 context={"package_id": manifest.package_id, "portfolio_id": portfolio_id},
             )
@@ -276,7 +277,7 @@ class PaperTradingV2Runner:
         order_intent: OrderIntent,
     ) -> None:
         if order_intent.package_id != manifest.package_id:
-            raise StrategyPackageValidationError(
+            raise InvalidStateTransitionError(
                 "order_intent package_id does not match manifest",
                 context={
                     "intent_package_id": order_intent.package_id,
@@ -284,7 +285,7 @@ class PaperTradingV2Runner:
                 },
             )
         if order_intent.portfolio_id != portfolio_id:
-            raise StrategyPackageValidationError(
+            raise InvalidStateTransitionError(
                 "order_intent portfolio_id does not match run portfolio",
                 context={
                     "intent_portfolio_id": order_intent.portfolio_id,

@@ -24,7 +24,7 @@ from backend.services.paper_trading_v2.market_data import MinuteDataSource
 from backend.services.qe_archive.models import canonical_json_dumps, normalize_json, sha256_json
 from backend.services.trading_core.errors import (
     InvalidStateTransitionError,
-    StrategyPackageValidationError,
+    RuntimeConfigInvalidError,
     TradingCoreError,
 )
 from backend.services.trading_core.models import Fill, OrderIntent, OrderSide, OrderType
@@ -513,7 +513,7 @@ def _validate_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     if broker_backend != LOCAL_SIM_BACKEND:
         failures.append("broker_backend must be local_sim")
     if failures:
-        raise StrategyPackageValidationError(
+        raise RuntimeConfigInvalidError(
             "invalid paper v2 coldstart sentinel payload",
             context={"failures": failures},
         )

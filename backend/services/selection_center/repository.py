@@ -8,7 +8,7 @@ from typing import Any, Callable, Iterator
 import psycopg2.extras
 
 from backend.db.pg_pool import get_conn
-from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
+from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
 
 from .models import SelectionCandidate, SelectionExclusion, SelectionMode, SelectionPaperPortfolioLink, SelectionRun, SelectionRunStatus
 from .result_enrichment import component_scores_with_display_fields, display_fields_from_component_scores
@@ -210,7 +210,7 @@ class SelectionCenterRepository:
 
     def list_runs_page(self, *, page: int = 1, page_size: int = 20) -> dict[str, Any]:
         if page <= 0 or page_size <= 0:
-            raise StrategyPackageValidationError("selection run pagination requires positive page and page_size")
+            raise RuntimeConfigInvalidError("selection run pagination requires positive page and page_size")
         offset = (page - 1) * page_size
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
@@ -424,7 +424,7 @@ class SelectionCenterRepository:
 
     def delete_runs(self, run_ids: list[str]) -> dict[str, Any]:
         if not run_ids:
-            raise StrategyPackageValidationError("run_ids must not be empty")
+            raise RuntimeConfigInvalidError("run_ids must not be empty")
         total_counts: dict[str, int] = {}
         deleted: list[str] = []
         for run_id in run_ids:
@@ -468,7 +468,7 @@ class InMemorySelectionCenterRepository:
 
     def list_runs_page(self, *, page: int = 1, page_size: int = 20) -> dict[str, Any]:
         if page <= 0 or page_size <= 0:
-            raise StrategyPackageValidationError("selection run pagination requires positive page and page_size")
+            raise RuntimeConfigInvalidError("selection run pagination requires positive page and page_size")
         rows = list(self.runs.values())
         rows.sort(key=lambda item: item.created_at, reverse=True)
         total = len(rows)
@@ -512,7 +512,7 @@ class InMemorySelectionCenterRepository:
 
     def delete_runs(self, run_ids: list[str]) -> dict[str, Any]:
         if not run_ids:
-            raise StrategyPackageValidationError("run_ids must not be empty")
+            raise RuntimeConfigInvalidError("run_ids must not be empty")
         total_counts: dict[str, int] = {}
         deleted: list[str] = []
         for run_id in run_ids:
