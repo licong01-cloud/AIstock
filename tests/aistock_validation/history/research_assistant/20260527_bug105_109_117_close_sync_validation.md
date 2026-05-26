@@ -76,3 +76,24 @@ git diff --check
 ## Conclusion
 
 `BUG-105`, `BUG-109`, and `BUG-117` are fixed in current `origin/main` code. This close-sync pass records validation evidence, updates BUG JSON status to `fixed`, corrects the Research Assistant MCP tool-count test drift, and prepares GitHub issue status synchronization.
+
+## Post-Main-Sync Revalidation - 2026-05-27
+
+After PR #237 was merged with current `origin/main` through `33c600fd` (`BUG-121 compact MCP token-heavy responses`) and prior `BUG-122` Paper v2 CI closure, the close-sync branch was revalidated without touching production `8001`, `3000`, or the production DB.
+
+| Command | Result |
+|---|---|
+| `python -m pytest -q backend/tests/research_assistant backend/tests/mcp/test_research_assistant_module.py backend/tests/mcp/test_profiles_registry_gateway.py -p no:cacheprovider` | `60 passed in 17.83s` |
+| `python -m pytest -q backend/tests/scripts/test_aistock_mcp_github_issue_tools.py backend/tests/scripts/test_bug_github_sync.py backend/tests/mcp/test_profiles_registry_gateway.py -p no:cacheprovider` | `64 passed in 2.42s` |
+| `python -m pytest backend/tests/paper_trading_v2 backend/tests/selection_center backend/tests/strategy_package --ignore-glob=backend/tests/paper_trading_v2/*dev_db*.py --ignore=backend/tests/paper_trading_v2/test_runtime_enable_paper_compat.py -k 'not test_model_asset_resolver_uses_aistock_cache_without_wsl_unc_probe' -q -p no:cacheprovider` | `493 passed, 1 skipped, 1 deselected in 18.92s` |
+| `python -m ruff check --force-exclude backend/tests/mcp/test_profiles_registry_gateway.py` | `All checks passed` |
+| `python -m compileall backend/services/research_assistant backend/mcp/modules/research_assistant.py backend/tests/mcp/test_profiles_registry_gateway.py` | passed |
+| Static scan for BUG-109 legacy QE/cardText patterns | no matches |
+| Static scan for BUG-117 undeveloped capability patterns | no matches |
+| `gh issue view 168/177/186 --json number,title,state,labels,closedAt,url` | all three GitHub issues are `CLOSED` with `status:fixed` |
+
+Workflow notes after revalidation:
+
+- `finish-batch` still correctly refuses to batch these BUG records because their `required_verification` signatures differ.
+- Individual `finish --bug-id BUG-117 --plan-only` passes scope/pre-PR gate after the user-approved close-sync scope expansion.
+- Individual `finish --bug-id BUG-105` and `finish --bug-id BUG-109` report scope-check warnings only because the governance integrator branch intentionally carries shared same-module close-sync files; their BUG JSON records now explicitly include the approved shared test-drift/sync scope and the post-main-sync evidence.

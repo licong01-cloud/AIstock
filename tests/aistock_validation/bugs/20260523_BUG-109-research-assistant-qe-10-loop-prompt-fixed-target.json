@@ -52,7 +52,10 @@
     "backend/tests/mcp/test_research_assistant_module.py",
     "frontend/tests/research-assistant/research-assistant.spec.ts",
     "tests/aistock_validation/bugs/20260523_BUG-109-research-assistant-qe-10-loop-prompt-fixed-target.json",
-    "tests/aistock_validation/history/research_assistant"
+    "tests/aistock_validation/history/research_assistant",
+    "backend/tests/mcp/test_profiles_registry_gateway.py",
+    "tests/aistock_validation/bugs/20260523_BUG-105-research-assistant-chat-loses-conversation-context.json",
+    "tests/aistock_validation/bugs/20260524_BUG-117-research-assistant-prompt-forbids-undeveloped-mouse-keyboard.json"
   ],
   "suspected_modules": [
     "backend/services/research_assistant/service.py",
@@ -122,6 +125,12 @@
       "actor": "codex-app",
       "action": "github_issue_synced",
       "note": "Synced bug registry entry to GitHub issue #177."
+    },
+    {
+      "timestamp": "2026-05-26T18:55:00Z",
+      "actor": "codex-app",
+      "action": "post_main_sync_validation",
+      "note": "User-approved close-sync expansion recorded shared Research Assistant BUG-105/109/117 closure files and the MCP gateway tool-count drift correction."
     }
   ],
   "github_issue_number": 177,
@@ -137,7 +146,14 @@
     "npx playwright test tests/research-assistant/research-assistant.spec.ts --project chromium -> 3 passed in 18.5s",
     "static scans for BUG-109 legacy QE 10 loop/cardText patterns and BUG-117 undeveloped capability ban phrases in active runtime paths -> no matches",
     "git diff --check -> passed",
-    "python -m pytest -q backend/tests/scripts/test_aistock_mcp_github_issue_tools.py backend/tests/scripts/test_bug_github_sync.py backend/tests/mcp/test_profiles_registry_gateway.py -p no:cacheprovider -> 63 passed in 2.36s"
+    "python -m pytest -q backend/tests/scripts/test_aistock_mcp_github_issue_tools.py backend/tests/scripts/test_bug_github_sync.py backend/tests/mcp/test_profiles_registry_gateway.py -p no:cacheprovider -> 63 passed in 2.36s",
+    "post-merge origin/main=33c600fd: python -m pytest -q backend/tests/research_assistant backend/tests/mcp/test_research_assistant_module.py backend/tests/mcp/test_profiles_registry_gateway.py -p no:cacheprovider -> 60 passed in 17.83s",
+    "post-merge origin/main=33c600fd: python -m pytest -q backend/tests/scripts/test_aistock_mcp_github_issue_tools.py backend/tests/scripts/test_bug_github_sync.py backend/tests/mcp/test_profiles_registry_gateway.py -p no:cacheprovider -> 64 passed in 2.42s",
+    "post-merge origin/main=33c600fd: python -m pytest backend/tests/paper_trading_v2 backend/tests/selection_center backend/tests/strategy_package --ignore-glob=backend/tests/paper_trading_v2/*dev_db*.py --ignore=backend/tests/paper_trading_v2/test_runtime_enable_paper_compat.py -k 'not test_model_asset_resolver_uses_aistock_cache_without_wsl_unc_probe' -q -p no:cacheprovider -> 493 passed, 1 skipped, 1 deselected in 18.92s",
+    "post-merge origin/main=33c600fd: python -m ruff check --force-exclude backend/tests/mcp/test_profiles_registry_gateway.py -> All checks passed",
+    "post-merge origin/main=33c600fd: python -m compileall backend/services/research_assistant backend/mcp/modules/research_assistant.py backend/tests/mcp/test_profiles_registry_gateway.py -> passed",
+    "post-merge origin/main=33c600fd: static scans for BUG-109 legacy QE 10 loop/cardText patterns and BUG-117 undeveloped capability ban patterns in active runtime paths -> no matches",
+    "post-merge origin/main=33c600fd: gh issue view 168/177/186 -> CLOSED with status:fixed labels"
   ],
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
