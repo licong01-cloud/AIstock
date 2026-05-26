@@ -115,7 +115,7 @@ def test_client_unwraps_data_envelope(mcp_module):
     assert captured["url"].endswith("/api/v1/validation/health")
 
 
-def test_client_truncates_large_success_response(mcp_module):
+def test_client_requires_refinement_for_large_success_response(mcp_module):
     payload = {"data": {"items": ["x" * 200]}}
 
     def handler(_request: httpx.Request) -> httpx.Response:
@@ -128,11 +128,17 @@ def test_client_truncates_large_success_response(mcp_module):
     )
     result = client.get("/bugs")
 
-    assert result["status"] == "truncated"
-    assert result["mcp_response_truncated"] is True
+    assert result["status"] == "requires_refinement"
+    assert result["mcp_response_too_large"] is True
+    assert result["mcp_response_refinement_required"] is True
+    assert result["partial_payload_returned"] is False
     assert result["method"] == "GET"
     assert result["path"] == "/bugs"
     assert result["original_bytes"] > result["max_bytes"]
+    assert "preview" not in result
+    assert result["omitted_sections"] == ["response_payload"]
+    assert result["retry_with"]["params"]["compact"] is True
+    assert result["retry_with"]["params"]["page_size"] == 20
 
 
 def test_client_raises_on_http_error(mcp_module):

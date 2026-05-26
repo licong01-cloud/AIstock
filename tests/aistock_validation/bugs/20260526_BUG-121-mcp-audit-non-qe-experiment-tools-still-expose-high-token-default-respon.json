@@ -3,6 +3,7 @@
   "allowed_write_scope": [
     "backend/mcp/common.py",
     "backend/mcp/modules/research.py",
+    "scripts/aistock_mcp_common.py",
     "scripts/aistock_qe_archive_mcp_server.py",
     "scripts/aistock_mcp_server.py",
     "backend/tests/mcp/test_research_module.py",
@@ -19,6 +20,7 @@
     "Default MCP list/search tools return compact or bounded responses without removing explicit detail/full paths.",
     "QE archive MCP wrappers use lower summary-first default limits for high-risk list/query tools.",
     "Research MCP gateway client has a response-size guardrail consistent with other AIstock MCP clients.",
+    "Shared MCP response-size guards return structured requires_refinement guidance without partial previews or hard-truncated data.",
     "Validation MCP bug/issue list/search tools expose compact defaults and full mode on demand.",
     "Run required verification plans and keep BUG JSON and GitHub Issue synchronized."
   ],
@@ -36,12 +38,24 @@
       "actor": "codex",
       "action": "workflow_fix_ready",
       "note": "Fix implemented and local validation passed; branch is PR-ready pending commit/push. GitHub Issue #234 updated with validation evidence."
+    },
+    {
+      "timestamp": "2026-05-26T15:40:00Z",
+      "actor": "codex",
+      "action": "workflow_revision_no_hard_truncation",
+      "note": "User clarified MCP must avoid large token payloads without returning hard-truncated partial data; scope expanded to shared MCP client guardrail."
+    },
+    {
+      "timestamp": "2026-05-26T16:11:00Z",
+      "actor": "codex",
+      "action": "workflow_revision_validated",
+      "note": "Revised oversized MCP responses to requires_refinement with no partial preview; targeted tests, l0, validation_module_registry_l0, and validation_center_backend passed."
     }
   ],
   "evidence_uris": [
     "docs/analysis/mcp_token_audit_20260526.md sections 4-8: QE archive, research, validation MCP token risks and implementation priorities"
   ],
-  "expected": "MCP tools should be summary-first by default: bounded default limits, gateway-level response-size truncation metadata for oversized responses, and compact issue/bug listing options while preserving explicit full/detail paths for deeper analysis.",
+  "expected": "MCP tools should be summary-first by default: bounded default limits, compact issue/bug listing options, structured requires_refinement guidance for oversized responses, no partial preview/hard truncation as a normal response strategy, and explicit full/detail paths for deeper analysis.",
   "first_seen_at": "2026-05-26T14:36:44.883556Z",
   "fix_branch": null,
   "fix_commit": null,
@@ -77,10 +91,11 @@
   },
   "verification_run_id": null,
   "validation_evidence": [
-    "python -m py_compile backend/mcp/common.py backend/mcp/modules/research.py scripts/aistock_qe_archive_mcp_server.py scripts/aistock_mcp_server.py -> passed",
+    "python -m py_compile backend/mcp/common.py backend/mcp/modules/research.py scripts/aistock_mcp_common.py scripts/aistock_qe_archive_mcp_server.py scripts/aistock_mcp_server.py scripts/aistock_qe_experiment_mcp_server.py -> passed",
     "python -m ruff check changed MCP files and targeted tests -> passed",
     "python -m pytest backend/tests/test_aistock_qe_mcp_servers.py backend/tests/test_aistock_mcp_server.py backend/tests/mcp/test_research_module.py backend/tests/scripts/test_aistock_mcp_github_issue_tools.py -q -p no:cacheprovider -> 97 passed",
     "git diff --check -> passed",
-    "python -m nox -s l0 -> passed; guardrail blocking=0"
+    "python -m nox -s l0 -> passed; guardrail blocking=0",
+    "python -m nox -s validation_module_registry_l0 validation_center_backend -> passed; validation_center_backend 223 passed, coverage line=79.45 branch=61.3"
   ]
 }

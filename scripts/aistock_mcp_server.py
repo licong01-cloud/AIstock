@@ -57,7 +57,6 @@ SCHEMA_VERSION = "aistock_validation_bug_v1"
 DEFAULT_BASE_URL = "http://127.0.0.1:8001/api/v1/validation"
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_MAX_RESPONSE_BYTES = 1_048_576
-TRUNCATED_PREVIEW_BYTES = 4096
 SEVERITY_VALUES = {"P0", "P1", "P2", "P3"}
 STATUS_VALUES = {"open", "in_progress", "fixed", "verified", "wontfix"}
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
@@ -284,6 +283,60 @@ def _int_from_env(name: str, default: int) -> int:
         return default
 
 
+def _refinement_required_response(
+    *,
+    method: str,
+    path: str,
+    status_code: int,
+    original_bytes: int,
+    max_bytes: int,
+) -> dict[str, Any]:
+    """Return retry guidance instead of a misleading partial MCP payload."""
+
+    lower_path = path.lower()
+    retry_params: dict[str, Any] = {}
+    recommended_actions = [
+        "Retry with narrower filters before requesting full/detail data.",
+        "Use compact=True for issue/bug list and search tools, then fetch details for one id.",
+        "Use pagination with a smaller page_size or limit when a collection is required.",
+    ]
+    if any(token in lower_path for token in ("bugs", "issue")):
+        retry_params.setdefault("page_size", 20)
+        retry_params.setdefault("compact", True)
+    if any(token in lower_path for token in ("runs", "findings", "plans", "quality", "history")):
+        retry_params.setdefault("page_size", 20)
+    retry_with: dict[str, Any] = {"method": method, "path": path}
+    if retry_params:
+        retry_with["params"] = retry_params
+    if method == "POST":
+        retry_with.setdefault("json_body", {"limit": 20})
+
+    return {
+        "status": "requires_refinement",
+        "mcp_response_too_large": True,
+        "mcp_response_refinement_required": True,
+        "partial_payload_returned": False,
+        "method": method,
+        "path": path,
+        "status_code": status_code,
+        "original_bytes": original_bytes,
+        "max_bytes": max_bytes,
+        "message": (
+            "The backend returned a payload larger than the MCP response budget. "
+            "No partial preview was returned because truncated data can be misleading."
+        ),
+        "omitted_sections": ["response_payload"],
+        "available_detail_sections": [
+            "compact issue/bug fields",
+            "paginated result pages",
+            "specific BUG or GitHub Issue detail by id",
+            "explicit compact=False/full detail when the caller accepts the larger payload",
+        ],
+        "recommended_actions": recommended_actions,
+        "retry_with": retry_with,
+    }
+
+
 class ValidationCenterClient:
     """HTTP client for the Validation Center read-only + runner endpoints.
 
@@ -328,9 +381,9 @@ class ValidationCenterClient:
                 f"Validation Center GET {path} failed with HTTP {response.status_code}: "
                 f"{response.text[:500]}"
             )
-        truncated = self._truncated_response(response, "GET", path)
-        if truncated is not None:
-            return truncated
+        refinement = self._refinement_response(response, "GET", path)
+        if refinement is not None:
+            return refinement
         try:
             payload = response.json()
         except json.JSONDecodeError as exc:
@@ -351,9 +404,9 @@ class ValidationCenterClient:
                 f"Validation Center POST {path} failed with HTTP {response.status_code}: "
                 f"{response.text[:500]}"
             )
-        truncated = self._truncated_response(response, "POST", path)
-        if truncated is not None:
-            return truncated
+        refinement = self._refinement_response(response, "POST", path)
+        if refinement is not None:
+            return refinement
         try:
             payload = response.json()
         except json.JSONDecodeError as exc:
@@ -366,22 +419,18 @@ class ValidationCenterClient:
             )
         return payload["data"]
 
-    def _truncated_response(self, response: httpx.Response, method: str, path: str) -> dict[str, Any] | None:
+    def _refinement_response(self, response: httpx.Response, method: str, path: str) -> dict[str, Any] | None:
         content = response.content
         original_bytes = len(content)
         if not self.max_response_bytes or original_bytes <= self.max_response_bytes:
             return None
-        preview = content[:TRUNCATED_PREVIEW_BYTES].decode(response.encoding or "utf-8", errors="replace")
-        return {
-            "status": "truncated",
-            "mcp_response_truncated": True,
-            "method": method,
-            "path": path,
-            "status_code": response.status_code,
-            "original_bytes": original_bytes,
-            "max_bytes": self.max_response_bytes,
-            "preview": preview,
-        }
+        return _refinement_required_response(
+            method=method,
+            path=path,
+            status_code=response.status_code,
+            original_bytes=original_bytes,
+            max_bytes=self.max_response_bytes,
+        )
 
 
 def _slugify(value: str, *, max_length: int = 60) -> str:
