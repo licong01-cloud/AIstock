@@ -53,6 +53,13 @@ class WorkflowError(ValueError):
     """Raised when the high-level AIstock issue workflow cannot proceed safely."""
 
 
+def _estimate_tokens(text: str) -> int:
+    if not text:
+        return 0
+    # Conservative mixed Chinese/English estimate for workflow budgeting.
+    return max(1, (len(text) + 3) // 4)
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -81,6 +88,18 @@ def _load_json(path: Path) -> dict[str, Any]:
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _size_and_token_estimate(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {"path": str(path), "exists": False, "bytes": 0, "estimated_tokens": 0}
+    text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+    return {
+        "path": str(path),
+        "exists": True,
+        "bytes": path.stat().st_size,
+        "estimated_tokens": _estimate_tokens(text),
+    }
 
 
 def _write_text(path: Path, text: str) -> None:
@@ -1125,6 +1144,11 @@ def build_start_plan(
         _write_json(fix_ready_path, fix_ready)
         _write_json(context_json_path, context_pack)
         _write_text(context_md_path, flow.render_context_pack_markdown(context_pack))
+        context_metrics = {
+            "context_pack_md": _size_and_token_estimate(context_md_path),
+            "context_pack_json": _size_and_token_estimate(context_json_path),
+            "fix_ready_json": _size_and_token_estimate(fix_ready_path),
+        }
         _write_state(
             canonical_bug_id,
             state="context_ready",
@@ -1142,6 +1166,7 @@ def build_start_plan(
             production_gates=fix_ready.get("validation_selection", {}).get("production_gates", {}),
             code_intelligence=context_pack.get("code_intelligence"),
             active_decision=active_decision,
+            context_metrics=context_metrics,
             next_actions=[
                 "switch_to_worktree_if_created",
                 "read_context_pack_md",
@@ -1149,6 +1174,12 @@ def build_start_plan(
                 "run_finish_plan_before_reporting_done",
             ],
         )
+    else:
+        context_metrics = {
+            "context_pack_md": {"path": str(context_md_path), "exists": False, "bytes": 0, "estimated_tokens": 0},
+            "context_pack_json": {"path": str(context_json_path), "exists": False, "bytes": 0, "estimated_tokens": 0},
+            "fix_ready_json": {"path": str(fix_ready_path), "exists": False, "bytes": 0, "estimated_tokens": 0},
+        }
     return {
         "schema_version": "aistock_issue_workflow_start_v1",
         "generated_at": _utc_now(),
@@ -1172,6 +1203,7 @@ def build_start_plan(
         "production_gates": fix_ready.get("validation_selection", {}).get("production_gates", {}),
         "code_intelligence": context_pack.get("code_intelligence"),
         "active_decision": active_decision,
+        "context_metrics": context_metrics,
         "next_agent_steps": [
             "switch_to_worktree_if_created",
             "read_context_pack_md",
@@ -1267,6 +1299,10 @@ def build_finish_plan(
         "pr_body_path": _repo_rel(pr_body_path),
         "state_path": _repo_rel(_state_path(canonical_bug_id)),
         "events_path": _repo_rel(_events_path(canonical_bug_id)),
+        "artifact_metrics": {
+            "pr_body": _size_and_token_estimate(pr_body_path),
+            "finish_plan": _size_and_token_estimate(output_dir / "finish-plan.json"),
+        },
     }
     payload["pre_pr_gate"] = _pre_pr_gate(finish=payload, validation_evidence=evidence, root=REPO_ROOT, run_lint=False)
     if not closure_ready:
@@ -1476,6 +1512,7 @@ def build_start_batch_plan(
         "understand_anything": code_intelligence_summary.get("understand_anything"),
     }
     batch_plan["code_intelligence"] = batch_code_intelligence
+    context_metrics: dict[str, Any] = {}
     if not dry_run:
         for record, source_path in record_pairs:
             bug_id = str(record.get("bug_id"))
@@ -1486,6 +1523,11 @@ def build_start_batch_plan(
             _write_json(context_dir / f"{bug_id}.json", context_pack)
             _write_text(context_dir / f"{bug_id}.md", flow.render_context_pack_markdown(context_pack))
             _write_json(fix_ready_dir / f"{bug_id}.json", fix_ready)
+            context_metrics[bug_id] = {
+                "context_md": _size_and_token_estimate(context_dir / f"{bug_id}.md"),
+                "context_json": _size_and_token_estimate(context_dir / f"{bug_id}.json"),
+                "fix_ready_json": _size_and_token_estimate(fix_ready_dir / f"{bug_id}.json"),
+            }
             target_bug_path = _bug_path_for_target(source_path, target_root)
             batch_plan.setdefault("source_bug_json", {})[bug_id] = _repo_rel(source_path)
             batch_plan.setdefault("target_bug_json", {})[bug_id] = _repo_rel(target_bug_path, target_root)
@@ -1498,6 +1540,7 @@ def build_start_batch_plan(
             "batch_plan_path": _repo_rel(output_dir / "batch-plan.json", target_root),
             "context_dir": _repo_rel(context_dir, target_root),
             "fix_ready_dir": _repo_rel(fix_ready_dir, target_root),
+            "context_metrics": context_metrics,
             "updated_at": _utc_now(),
         })
         _write_state(
@@ -1516,6 +1559,7 @@ def build_start_batch_plan(
             context_dir=_repo_rel(context_dir, target_root),
             fix_ready_dir=_repo_rel(fix_ready_dir, target_root),
             code_intelligence=batch_code_intelligence,
+            context_metrics=context_metrics,
             next_actions=[
                 "switch_to_batch_worktree_if_created",
                 "read_each_context_pack",
@@ -1536,6 +1580,7 @@ def build_start_batch_plan(
         "state_path": _repo_rel(_state_path(signature["batch_id"], target_root), target_root),
         "events_path": _repo_rel(_events_path(signature["batch_id"], target_root), target_root),
         "code_intelligence": batch_code_intelligence,
+        "context_metrics": context_metrics,
         "workflow_gate": "ready_for_batch_fix",
         "next_command": f"python scripts/aistock_issue_workflow.py finish-batch --batch-id {signature['batch_id']} --plan-only",
     }

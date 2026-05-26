@@ -142,6 +142,8 @@ def test_start_writes_fix_ready_and_context_pack(
     assert context_md.read_text(encoding="utf-8").startswith("# AIstock Context Pack")
     assert context_payload["code_intelligence"]["provider"] == "codegraph"
     assert payload["code_intelligence"]["affected_tests_ref"].endswith("affected-tests.json")
+    assert payload["context_metrics"]["context_pack_md"]["estimated_tokens"] > 0
+    assert payload["context_metrics"]["fix_ready_json"]["bytes"] > 0
     assert json.loads(fix_ready.read_text(encoding="utf-8"))["workflow_gate"] == "allowed"
 
 
@@ -174,6 +176,7 @@ def test_finish_plan_selects_validation_and_requires_evidence(
     ready = json.loads(capsys.readouterr().out)
     assert ready["workflow_gate"] == "ready_for_pr"
     assert "l0" in ready["required_verification"]
+    assert ready["artifact_metrics"]["pr_body"]["estimated_tokens"] > 0
     assert (isolated_workflow_root / ready["pr_body_path"]).exists()
 
 
@@ -283,6 +286,7 @@ def test_start_batch_writes_batch_state_and_contexts(
     assert payload["batch_id"].startswith("BATCH-validation-guardrails-")
     assert payload["bug_ids"] == ["BUG-199", "BUG-200"]
     assert payload["code_intelligence"]["context_ref"].endswith("codegraph-context.md")
+    assert payload["context_metrics"]["BUG-199"]["context_md"]["estimated_tokens"] > 0
     assert (isolated_workflow_root / payload["batch_state_path"]).exists()
     assert (isolated_workflow_root / payload["context_dir"] / "BUG-199.md").exists()
     assert (isolated_workflow_root / payload["fix_ready_dir"] / "BUG-200.json").exists()
@@ -329,6 +333,25 @@ def test_finish_batch_plan_generates_per_issue_pr_body(
     assert "Code intelligence" in pr_body
     assert "backend/tests/scripts/test_aistock_issue_workflow.py" in pr_body
 
+
+
+def test_code_intelligence_doctor_reports_bootstrap_command(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(workflow.code_intelligence, "_codegraph_command", lambda: "codegraph")
+    monkeypatch.setattr(
+        workflow.code_intelligence,
+        "_git_snapshot",
+        lambda root: {"ok": True, "branch": "main", "head": "abc123", "dirty": False, "dirty_count": 0},
+    )
+
+    payload = workflow.code_intelligence.build_doctor_report(isolated_workflow_root, skip_external=True)
+
+    assert payload["workflow_gate"] == "warning"
+    assert payload["codegraph"]["bootstrap_command"] == "codegraph init -i"
+    assert payload["bootstrap_commands"]["codegraph"] == "codegraph init -i"
+    assert any("codegraph init -i" in item for item in payload["warnings"])
 
 def test_doctor_reports_ready_when_client_entries_exist(
     isolated_workflow_root: Path,
