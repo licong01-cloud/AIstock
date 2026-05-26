@@ -8,10 +8,10 @@ import threading
 import traceback
 from datetime import datetime
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, Future, as_completed
+from concurrent.futures import ThreadPoolExecutor, Future
 from typing import Callable, Dict, Any, List, Optional
 from pydantic import BaseModel, Field
-from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Request, Query, Body
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, Query, Body
 from fastapi.responses import Response, StreamingResponse
 import httpx
 
@@ -596,27 +596,50 @@ def resolve_factor_issues(task_id: str, req: FactorResolveRequest, background_ta
         raise HTTPException(500, detail=str(e))
 
 @router.get("/tasks", summary="获取所有演进任务列表")
-async def list_evolution_tasks():
+async def list_evolution_tasks(
+    detail: str = Query("summary", pattern="^(summary|full)$", description="summary 默认不返回大 JSON；full 保留旧完整字段"),
+):
     """
-    从数据库中读取所有 qe_evolution_tasks
+    从数据库中读取所有 qe_evolution_tasks。默认 summary，避免 MCP/列表返回大 JSON。
     """
     try:
-        tasks = await scheduler.get_all_tasks()
-        return {"status": "success", "data": tasks}
+        tasks = await scheduler.get_all_tasks(detail=detail)
+        return {"status": "success", "data": tasks, "detail": detail}
     except Exception as e:
         logger.error(f"Failed to list evolution tasks: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+def _task_detail_contains_full_loop_payloads(detail_data: dict) -> bool:
+    loops = detail_data.get("loops") if isinstance(detail_data, dict) else None
+    if not isinstance(loops, list):
+        return False
+    return any(
+        isinstance(loop, dict) and any(key in loop for key in ("config_json", "metrics_json", "agent_analysis"))
+        for loop in loops
+    )
+
+
 @router.get("/tasks/{task_id}", summary="获取单个演进任务的详细信息与所有 LOOP")
-async def get_evolution_task_detail(task_id: str):
+async def get_evolution_task_detail(
+    task_id: str,
+    detail: str = Query("summary", pattern="^(summary|full)$", description="summary 返回 compact loop 表；full 返回旧完整 JSON 字段"),
+):
     """
-    获取单个任务详情，包括其下属所有的 qe_evolution_loops
+    获取任务详情。默认 summary；前端深度页可显式 detail=full。
     """
     try:
-        detail = await scheduler.get_task_detail(task_id)
-        if not detail:
+        try:
+            detail_data = await scheduler.get_task_detail(task_id, detail=detail)
+        except TypeError as exc:
+            if "detail" not in str(exc):
+                raise
+            detail_data = await scheduler.get_task_detail(task_id)
+        if not detail_data:
             raise HTTPException(status_code=404, detail="Task not found")
-        for loop in detail.get("loops", []):
+        if detail != "full" and not _task_detail_contains_full_loop_payloads(detail_data):
+            return {"status": "success", "data": detail_data, "detail": detail}
+        for loop in detail_data.get("loops", []):
             metrics = loop.get("metrics_json")
             if isinstance(metrics, str):
                 try:
@@ -640,12 +663,69 @@ async def get_evolution_task_detail(task_id: str):
                 continue
             metrics["enhanced_metrics"] = enhanced
             loop["metrics_json"] = metrics
-        return {"status": "success", "data": detail}
+        return {"status": "success", "data": detail_data, "detail": detail}
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Failed to get task detail: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/tasks/{task_id}/loops/comparison", summary="获取任务所有 Loop 的标量对比表")
+def get_evolution_task_loop_comparison(task_id: str):
+    try:
+        result = scheduler.get_loop_comparison(task_id)
+        if not result:
+            raise HTTPException(status_code=404, detail="Task not found")
+        return {"status": "success", "data": result, "detail": "comparison"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get loop comparison for {task_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/tasks/{task_id}/loops/{loop_index}/config", summary="按需获取单个 Loop 配置")
+def get_evolution_loop_config(task_id: str, loop_index: int):
+    try:
+        result = scheduler.get_loop_payload(task_id, loop_index, "config")
+        if not result:
+            raise HTTPException(status_code=404, detail="Loop not found")
+        return {"status": "success", "data": result}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get loop config for {task_id}/{loop_index}: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/tasks/{task_id}/loops/{loop_index}/metrics", summary="按需获取单个 Loop 完整指标")
+def get_evolution_loop_metrics(task_id: str, loop_index: int):
+    try:
+        result = scheduler.get_loop_payload(task_id, loop_index, "metrics")
+        if not result:
+            raise HTTPException(status_code=404, detail="Loop not found")
+        return {"status": "success", "data": result}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get loop metrics for {task_id}/{loop_index}: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/tasks/{task_id}/loops/{loop_index}/analysis", summary="按需获取单个 Loop LLM 分析")
+def get_evolution_loop_analysis(task_id: str, loop_index: int):
+    try:
+        result = scheduler.get_loop_payload(task_id, loop_index, "analysis")
+        if not result:
+            raise HTTPException(status_code=404, detail="Loop not found")
+        return {"status": "success", "data": result}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get loop analysis for {task_id}/{loop_index}: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.post("/tasks/{task_id}/stop", summary="手动停止/暂停演进任务")
 async def stop_evolution_task(task_id: str):
@@ -1962,7 +2042,7 @@ _correlation_logs = _CorrelationLogBuffer()
 _correlation_event_emitter: Optional[Callable[[Dict[str, Any]], None]] = None
 
 
-def set_correlation_event_emitter(emitter: Optional[Callable[[Dict[str, Any]], None]]) -> None:
+def _set_local_correlation_event_emitter(emitter: Optional[Callable[[Dict[str, Any]], None]]) -> None:
     global _correlation_event_emitter
     _correlation_event_emitter = emitter
 
@@ -2182,13 +2262,12 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
     # 自动推导 data_date: as_of_date (YYYY-MM-DD) → data_date (YYYYMMDD)
     if not data_date and as_of_date:
         data_date = as_of_date.replace("-", "")
-    official_instruments = None
     if data_date:
-        official_instruments = EvaluationUniverseService().get_official_universe(
+        EvaluationUniverseService().get_official_universe(
             as_of_date=f"{data_date[:4]}-{data_date[4:6]}-{data_date[6:8]}"
         )
     elif as_of_date:
-        official_instruments = EvaluationUniverseService().get_official_universe(as_of_date=as_of_date)
+        EvaluationUniverseService().get_official_universe(as_of_date=as_of_date)
 
     global _latest_result
     timeout_timer = None
@@ -2207,7 +2286,6 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
             phase1_elapsed = 0.0
             phase2_elapsed = 0.0
             phase3_elapsed = 0.0
-            success_factors = []
 
             # ═══ 先收敛历史脏状态，保证当前 official 准入规则和 DB 一致 ═══
             reconcile_stats = _reconcile_correlation_state(reset_all=True)
@@ -2509,7 +2587,7 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
 
             # --- 完整汇总日志 ---
             _correlation_logs.append("=" * 50)
-            _correlation_logs.append(f"计算完成汇总")
+            _correlation_logs.append("计算完成汇总")
             _correlation_logs.append(f"  请求因子数: {_requested_count}")
             _correlation_logs.append(f"  成功因子数: {_success_count}")
             _correlation_logs.append(
@@ -3321,7 +3399,7 @@ async def get_correlation_pair(
                 "daily_correlations": pair_result.daily_correlations[-60:],
             }
         except Exception as e:
-            logger.warning("Daily correlation 计算失败: factor_a=%s, factor_b=%s, error=%s", factor_a, factor_b, e)
+            logger.warning("Daily correlation 计算失败: factor_a=%s, factor_b=%s, error=%s", fa, fb, e)
             daily_data = {"error": str(e)}
 
     # 无 DB 记录且无 daily_data 时，使用缓存计算（仅在 DB 无记录时触发，非 DB 故障兜底）
@@ -4292,15 +4370,14 @@ def get_system_logs(
     level: 过滤级别关键字，如 ERROR / WARN / INFO，空=全部。
     errors_only: True 则只读 errors.log。
     """
-    from pathlib import Path
     log_file = Path(__file__).parent.parent / "logs" / ("errors.log" if errors_only else "aistock.log")
     if not log_file.exists():
         return {"ok": True, "lines": [], "exists": False}
     with open(log_file, "r", encoding="utf-8", errors="replace") as f:
         lines = f.readlines()
     if level:
-        lines = [l for l in lines if f" {level.upper()} " in l]
-    return {"ok": True, "lines": [l.rstrip() for l in lines[-tail:]], "exists": True}
+        lines = [line for line in lines if f" {level.upper()} " in line]
+    return {"ok": True, "lines": [line.rstrip() for line in lines[-tail:]], "exists": True}
 
 
 # ================================================================

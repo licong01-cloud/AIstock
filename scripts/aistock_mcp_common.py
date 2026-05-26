@@ -18,6 +18,8 @@ import httpx
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 DEFAULT_TIMEOUT = 30.0
+DEFAULT_MAX_RESPONSE_BYTES = 1_048_576
+TRUNCATED_PREVIEW_BYTES = 4096
 
 
 def assert_loopback_url(url: str, *, env_name: str = "base_url") -> str:
@@ -54,6 +56,17 @@ def require_confirm(actual: str | None, expected: str, field_name: str) -> None:
         raise ValueError(f"{field_name} must equal {expected!r}")
 
 
+def _int_from_env(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw in (None, ""):
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(value, 0)
+
+
 class LoopbackApiClient:
     """Small JSON HTTP client for MCP wrappers.
 
@@ -69,9 +82,15 @@ class LoopbackApiClient:
         env_name: str,
         timeout: float | None = None,
         transport: httpx.BaseTransport | None = None,
+        max_response_bytes: int | None = None,
     ) -> None:
         self.base_url = assert_loopback_url(base_url, env_name=env_name)
         self.timeout = float(timeout if timeout is not None else os.environ.get("AISTOCK_HTTP_TIMEOUT", DEFAULT_TIMEOUT))
+        self.max_response_bytes = (
+            max(int(max_response_bytes), 0)
+            if max_response_bytes is not None
+            else _int_from_env("AISTOCK_MCP_MAX_RESPONSE_BYTES", DEFAULT_MAX_RESPONSE_BYTES)
+        )
         self._transport = transport
 
     def _client(self) -> httpx.Client:
@@ -99,10 +118,23 @@ class LoopbackApiClient:
             response = client.request("DELETE", path, json=json_body or {})
         return self._decode(response, "DELETE", path)
 
-    @staticmethod
-    def _decode(response: httpx.Response, method: str, path: str) -> Any:
+    def _decode(self, response: httpx.Response, method: str, path: str) -> Any:
         if response.status_code >= 400:
             raise RuntimeError(f"{method} {path} failed with HTTP {response.status_code}: {response.text[:500]}")
+        content = response.content
+        original_bytes = len(content)
+        if self.max_response_bytes and original_bytes > self.max_response_bytes:
+            preview = content[:TRUNCATED_PREVIEW_BYTES].decode(response.encoding or "utf-8", errors="replace")
+            return {
+                "status": "truncated",
+                "mcp_response_truncated": True,
+                "method": method,
+                "path": path,
+                "status_code": response.status_code,
+                "original_bytes": original_bytes,
+                "max_bytes": self.max_response_bytes,
+                "preview": preview,
+            }
         try:
             return response.json()
         except json.JSONDecodeError as exc:
