@@ -24,7 +24,7 @@ def _service() -> ResearchAssistantService:
 def _qe_payload() -> dict[str, object]:
     return {
         "template_kind": "custom_evo",
-        "title": "QE 10 loop draft",
+        "title": "QE experiment draft",
         "config_json": {
             "loops": [{"factor_keys": ["alpha001"], "model_id": "lightgbm"}],
             "stock_pool": "fixed_pit_pool",

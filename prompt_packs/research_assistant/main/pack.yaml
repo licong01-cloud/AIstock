@@ -25,7 +25,7 @@ nodes:
     phase: planning
     risk_level: high
     trigger_json:
-      always: true
+      explicit_action_only: true
     prompt_file: nodes/governance.no_silent_action.md
   - prompt_key: intent.planning
     title: 意图理解与澄清
@@ -45,7 +45,7 @@ nodes:
     phase: planning
     risk_level: high
     trigger_json:
-      keywords_any: [qe, quant, loop, 实验, 回测, 演进, 模板]
+      explicit_intents: [experiment_draft_request, experiment_validation_request, experiment_execution_request]
     prompt_file: nodes/domain.qe_experiment.md
   - prompt_key: workflow.qe_draft_then_approval
     title: QE 草稿到审批工作流
@@ -55,7 +55,7 @@ nodes:
     phase: planning
     risk_level: high
     trigger_json:
-      keywords_any: [qe, loop, materialize, run, 执行, 物化]
+      explicit_intents: [experiment_draft_request, experiment_validation_request, experiment_execution_request]
     prompt_file: nodes/workflow.qe_draft_then_approval.md
   - prompt_key: tool_guard.mcp_qe
     title: QE MCP 工具门禁
@@ -65,7 +65,7 @@ nodes:
     phase: preflight
     risk_level: production_sensitive
     trigger_json:
-      keywords_any: [mcp, materialize, run, 执行, 物化]
+      explicit_intents: [experiment_validation_request, experiment_execution_request]
     prompt_file: nodes/tool_guard.mcp_qe.md
   - prompt_key: renderer.human_cards
     title: 人类可读结果渲染

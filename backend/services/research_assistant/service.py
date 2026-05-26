@@ -11,6 +11,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
+from enum import Enum
 from datetime import date
 from pathlib import Path
 from time import perf_counter
@@ -68,6 +69,22 @@ logger = logging.getLogger("aistock.research_assistant.service")
 ASSISTANT_APPROVAL_CONFIRM = "APPROVE_RESEARCH_ASSISTANT_ACTION"
 PROMPT_CACHE_DIR = Path(os.getenv("AISTOCK_ASSISTANT_PROMPT_CACHE_DIR", "var/research_assistant/prompt_cache"))
 CATALOG_BOOTSTRAP_ACTION = "POST /api/v1/research-assistant/catalogs/seed"
+
+
+class DialogueIntent(str, Enum):
+    CAPABILITY_INQUIRY = "capability_inquiry"
+    CONCEPT_EXPLANATION = "concept_explanation"
+    STATUS_QUERY = "status_query"
+    BUG_DIAGNOSIS_REQUEST = "bug_diagnosis_request"
+    ISSUE_INTAKE_REQUEST = "issue_intake_request"
+    EXPERIMENT_DRAFT_REQUEST = "experiment_draft_request"
+    EXPERIMENT_VALIDATION_REQUEST = "experiment_validation_request"
+    EXPERIMENT_EXECUTION_REQUEST = "experiment_execution_request"
+    AMBIGUOUS_REQUEST = "ambiguous_request"
+    GENERAL_CHAT = "general_chat"
+
+
+DIALOGUE_INTENT_CONFIG_KEY = "dialogue_intent"
 
 
 class ResearchAssistantCatalogNotReadyError(RuntimeError):
@@ -960,6 +977,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
     def build_prompt_bundle(self, request: PromptBundleBuildRequest | dict[str, Any]) -> dict[str, Any]:
         data = request if isinstance(request, PromptBundleBuildRequest) else PromptBundleBuildRequest(**request)
         self.ensure_catalog_ready()
+        dialogue_intent = self._classify_dialogue_intent(data.user_message)
         activation = self.active_prompt_activation()
         version_refs = list(activation.get("version_refs") or [])
         available = self.repository.list_records("prompt_nodes", filters={"status": "enabled"}, limit=self.configured_limit("prompt_nodes_active"))["items"]
@@ -987,7 +1005,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "user_message_digest": sha256_json({"message": data.user_message}),
         }
         selection_trace = {
-            "algorithm": "ancestor_closed_keyword_multibranch_v1",
+            "algorithm": "intent_gated_prompt_tree_v1",
+            "dialogue_intent": dialogue_intent.value,
             "phase": data.phase,
             "prompt_activation_id": activation["activation_id"],
             "prompt_bundle_signature": activation.get("bundle_signature"),
@@ -1018,7 +1037,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 data.task_id,
                 TaskEventCreate(
                     event_type="prompt_bundle_built",
-                    message="已按树型提示词选择必要分支，生成本轮提示词包。",
+                    message=self._dialogue_event_message("prompt_bundle_built"),
                     payload_json={"prompt_bundle_id": bundle["prompt_bundle_id"], "prompt_keys": bundle_json["prompt_keys"], "checksum": checksum},
                 ),
             )
@@ -1026,25 +1045,23 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
 
     def _select_prompt_nodes(self, available: list[dict[str, Any]], data: PromptBundleBuildRequest) -> list[dict[str, Any]]:
         by_key = {str(item["prompt_key"]): item for item in available}
-        lower_message = data.user_message.lower()
+        intent = self._classify_dialogue_intent(data.user_message)
         selected_keys: set[str] = set(data.required_prompt_keys)
-        for item in available:
-            trigger = item.get("trigger_json") or {}
-            if trigger.get("always"):
-                selected_keys.add(str(item["prompt_key"]))
-                continue
-            if item.get("phase") == data.phase and self._trigger_matches(trigger, lower_message):
-                selected_keys.add(str(item["prompt_key"]))
-            if str(item.get("phase")) in {"preflight", "result"} and data.phase == str(item.get("phase")) and self._trigger_matches(trigger, lower_message):
-                selected_keys.add(str(item["prompt_key"]))
-        if any(key.startswith("domain.qe") or key.startswith("workflow.qe") for key in selected_keys):
+        selected_keys.update({"root.assistant", "intent.planning"})
+        if intent in {
+            DialogueIntent.EXPERIMENT_DRAFT_REQUEST,
+            DialogueIntent.EXPERIMENT_VALIDATION_REQUEST,
+            DialogueIntent.EXPERIMENT_EXECUTION_REQUEST,
+        }:
             selected_keys.add("domain.qe_experiment")
-            selected_keys.add("workflow.qe_draft_then_approval")
-            selected_keys.add("tool_guard.mcp_qe")
-        selected_keys.add("root.assistant")
-        selected_keys.add("governance.no_silent_action")
-        selected_keys.add("intent.planning")
-        selected_keys.add("renderer.human_cards")
+            if intent in {DialogueIntent.EXPERIMENT_DRAFT_REQUEST, DialogueIntent.EXPERIMENT_VALIDATION_REQUEST, DialogueIntent.EXPERIMENT_EXECUTION_REQUEST}:
+                selected_keys.add("workflow.qe_draft_then_approval")
+            if intent in {DialogueIntent.EXPERIMENT_VALIDATION_REQUEST, DialogueIntent.EXPERIMENT_EXECUTION_REQUEST}:
+                selected_keys.add("tool_guard.mcp_qe")
+        if intent in {DialogueIntent.ISSUE_INTAKE_REQUEST, DialogueIntent.EXPERIMENT_EXECUTION_REQUEST}:
+            selected_keys.add("governance.no_silent_action")
+        if data.phase in {"result", "preflight"}:
+            selected_keys.add("renderer.human_cards")
         closed_keys: set[str] = set()
         for key in list(selected_keys):
             current = by_key.get(key)
@@ -1057,10 +1074,55 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         ordered.sort(key=lambda item: (str(item.get("tree_path") or ""), str(item.get("prompt_key") or "")))
         return ordered
 
+    def _dialogue_intent_config(self) -> dict[str, Any]:
+        config = self.active_runtime_config().get(DIALOGUE_INTENT_CONFIG_KEY, {})
+        if not isinstance(config, dict):
+            return {}
+        return {str(key): value for key, value in config.items()}
+
+    def _dialogue_event_message(self, event_type: str) -> str:
+        event_messages = self._dialogue_intent_config().get("event_messages", {})
+        if not isinstance(event_messages, dict):
+            return event_type
+        return str(event_messages.get(event_type) or event_type)
+
     @staticmethod
-    def _trigger_matches(trigger: dict[str, Any], lower_message: str) -> bool:
-        keywords = [str(item).lower() for item in trigger.get("keywords_any") or []]
-        return any(keyword in lower_message for keyword in keywords)
+    def _has_any(text: str, terms: list[str]) -> bool:
+        return any(term.lower() in text for term in terms)
+
+    def _has_explicit_task_verb(self, text: str, intent_config: dict[str, list[str]]) -> bool:
+        return self._has_any(text, intent_config.get("explicit_task_verbs", []))
+
+    def _classify_dialogue_intent(self, user_message: str) -> DialogueIntent:
+        lower = user_message.lower()
+        intent_config = self._dialogue_intent_config()
+        has_qe = self._has_any(lower, intent_config.get("qe_terms", []))
+        has_bug = self._has_any(lower, intent_config.get("bug_terms", []))
+        has_issue = self._has_any(lower, intent_config.get("issue_terms", []))
+        explicit_task = self._has_explicit_task_verb(lower, intent_config)
+        asks_capability = self._has_any(lower, intent_config.get("capability_inquiry_patterns", []))
+        asks_concept = self._has_any(lower, intent_config.get("concept_explanation_patterns", []))
+        asks_status = self._has_any(lower, intent_config.get("status_query_patterns", []))
+
+        if asks_capability:
+            return DialogueIntent.CAPABILITY_INQUIRY
+        if has_bug and (explicit_task or asks_concept or asks_status):
+            return DialogueIntent.BUG_DIAGNOSIS_REQUEST
+        if asks_concept:
+            return DialogueIntent.CONCEPT_EXPLANATION
+        if asks_status and not explicit_task:
+            return DialogueIntent.STATUS_QUERY
+        if has_issue and explicit_task:
+            return DialogueIntent.ISSUE_INTAKE_REQUEST
+        if has_qe and explicit_task:
+            if self._has_any(lower, intent_config.get("execution_terms", [])) and not self._has_any(lower, intent_config.get("negated_execution_patterns", [])):
+                return DialogueIntent.EXPERIMENT_EXECUTION_REQUEST
+            if self._has_any(lower, intent_config.get("validation_terms", [])):
+                return DialogueIntent.EXPERIMENT_VALIDATION_REQUEST
+            return DialogueIntent.EXPERIMENT_DRAFT_REQUEST
+        if explicit_task:
+            return DialogueIntent.AMBIGUOUS_REQUEST
+        return DialogueIntent.GENERAL_CHAT
 
     @staticmethod
     def _write_prompt_cache(checksum: str, bundle_text: str, bundle_json: dict[str, Any], selection_trace: dict[str, Any]) -> str:
@@ -1104,12 +1166,13 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         if not conversation:
             raise KeyError(f"conversation not found: {data.conversation_id}")
         conversation_id = conversation["conversation_id"]
+        dialogue_intent = self._classify_dialogue_intent(data.message)
         task = self.create_task(
             TaskCreate(
                 title=self._conversation_title(data.message),
                 task_type="assistant_chat_turn",
                 risk_level=data.risk_level,
-                input_json={"user_message": data.message, "phase": data.phase, "allow_execute": data.allow_execute},
+                input_json={"user_message": data.message, "phase": data.phase, "allow_execute": data.allow_execute, "dialogue_intent": dialogue_intent.value},
                 created_by=data.created_by,
             )
         )
@@ -1119,10 +1182,17 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 role="user",
                 content_text=data.message,
                 task_id=task["task_id"],
-                content_json={"phase": data.phase},
+                content_json={"phase": data.phase, "dialogue_intent": dialogue_intent.value},
             )
         )
-        self.add_task_event(task["task_id"], TaskEventCreate(event_type="chat_received", message="已接收用户对话需求，进入理解与计划阶段。", payload_json={"conversation_id": conversation_id}))
+        self.add_task_event(
+            task["task_id"],
+            TaskEventCreate(
+                event_type="chat_received",
+                message=self._dialogue_event_message("chat_received"),
+                payload_json={"conversation_id": conversation_id, "dialogue_intent": dialogue_intent.value},
+            ),
+        )
 
         runtime_activation = self.active_runtime_config_activation()
         runtime_config = dict(runtime_activation["config_json"])
@@ -1187,7 +1257,14 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             context_pack=context_pack,
         )
         messages = self._chat_messages_for_llm(data.message, bundle, context_pack, prior_messages)
-        self.add_task_event(task["task_id"], TaskEventCreate(event_type="llm_started", message="主模型调用已开始。", payload_json={"model_profile_id": model_profile["model_profile_id"], "prompt_bundle_id": bundle["prompt_bundle_id"]}))
+        self.add_task_event(
+            task["task_id"],
+            TaskEventCreate(
+                event_type="llm_started",
+                message=self._dialogue_event_message("llm_started"),
+                payload_json={"model_profile_id": model_profile["model_profile_id"], "prompt_bundle_id": bundle["prompt_bundle_id"]},
+            ),
+        )
         llm_result, messages, budget_plan, prior_messages, assembly_trace = self._complete_chat_with_reactive_recovery(
             user_message=data.message,
             conversation_id=conversation_id,
@@ -1218,12 +1295,13 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                     "context_pack_id": context_pack["context_pack_id"],
                     "context_assembly_trace_id": assembly_trace["assembly_trace_id"],
                     "response_preview": self._preview_text(llm_result.content, budget_plan),
+                    "dialogue_intent": dialogue_intent.value,
                 },
                 cost_json={"usage": llm_result.usage},
             )
         )
         context_health = self._context_health_payload(conversation_id, budget_plan)
-        cards = self._build_human_cards(data.message, task, bundle, route)
+        cards = self._build_human_cards(data.message, task, bundle, route, dialogue_intent)
         cards["context_health"] = context_health
         assistant_text = self._compose_assistant_reply(data.message, llm_result.content, cards)
         assistant_message = self.add_conversation_message(
@@ -1233,6 +1311,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 content_text=assistant_text,
                 content_json={
                     "cards": cards,
+                    "dialogue_intent": dialogue_intent.value,
                     "audit_summary": {
                         "model_profile": model_profile["display_name"],
                         "prompt_bundle_checksum": bundle["checksum"],
@@ -1250,19 +1329,20 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             task["task_id"],
             TaskEventCreate(
                 event_type="llm_done",
-                message="主模型已返回，计划卡和确认卡已生成。",
-                payload_json={"assistant_message_id": assistant_message["message_id"], "trace_id": trace["trace_id"]},
+                message=self._dialogue_event_message("llm_done"),
+                payload_json={"assistant_message_id": assistant_message["message_id"], "trace_id": trace["trace_id"], "dialogue_intent": dialogue_intent.value},
             ),
         )
-        self.add_task_event(
-            task["task_id"],
-            TaskEventCreate(
-                event_type="action_proposed",
-                severity="warning",
-                message="已提出候选动作；确认前不会调用 materialize/run。",
-                payload_json={"proposal_count": len(cards.get("action_proposals", [])), "safety": cards["safety"]},
-            ),
-        )
+        if cards.get("action_proposals"):
+            self.add_task_event(
+                task["task_id"],
+                TaskEventCreate(
+                    event_type="action_proposed",
+                    severity="warning",
+                    message=self._dialogue_event_message("action_proposed"),
+                    payload_json={"proposal_count": len(cards.get("action_proposals", [])), "safety": cards["safety"], "dialogue_intent": dialogue_intent.value},
+                ),
+            )
         return {
             "conversation": self.repository.get_record("conversations", conversation_id),
             "user_message": user_message,
@@ -1718,89 +1798,95 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
     def _preview_text(text: str, budget_plan: ContextBudgetPlan) -> str:
         return text[: budget_plan.trace_response_preview_chars]
 
-    def _build_human_cards(self, user_message: str, task: dict[str, Any], bundle: dict[str, Any], route: dict[str, Any]) -> dict[str, Any]:
-        lower = user_message.lower()
-        is_qe = any(token in lower for token in ["qe", "loop", "实验", "回测", "演进", "quantevolver"])
-        if is_qe:
-            plan_steps = [
-                "复述 QE 实验目标、收益评估方向和本轮不执行的边界。",
-                "从 QE MCP 目录中选择模板创建、验证、预检查相关能力，并确认固定 PIT 股票池要求。",
-                "生成 10 个 loop 的草稿结构、候选因子来源、时间窗和成本约束。",
-                "等待用户确认后，才允许进入 validate、stock pool、节点健康和成本 preflight。",
-                "preflight 全部通过且用户再次确认后，后续阶段才能调用 materialize 或 run。",
-            ]
-            clarifications = [
-                "本次 QE 回测应使用哪个固定 PIT 股票池或默认回测股票池？",
-                "10 个 loop 的目标更偏向收益提升、稳定性、因子覆盖，还是模型结构探索？",
-                "确认前是否继续保持只生成草稿，不调用 materialize/run？",
-            ]
-            action_proposals = [
-                {"title": "生成 QE 10 loop 实验草稿", "risk": "medium", "approval_required": False, "status": "draft_only"},
-                {"title": "QE template validate + MCP preflight", "risk": "high", "approval_required": True, "status": "waiting_confirmation"},
-            ]
-            capabilities = self.repository.list_records(
-                "capabilities",
-                filters={"status": "approved"},
-                limit=self.configured_limit("api_list_capabilities"),
-            )["items"]
-            qe_capability_keys = set(self.active_runtime_config().get("planner", {}).get("qe_workflow_capability_keys", []))
-            available_keys = {str(item.get("capability_key")) for item in capabilities}
-            capability_cards = [
-                {
-                    "capability_key": str(item.get("capability_key")),
-                    "title": str(item.get("title") or item.get("capability_key")),
-                    "risk": str(item.get("risk_level") or "medium"),
-                    "side_effect": str(item.get("side_effect_level") or "read_only"),
-                    "status": "available",
-                    "required_confirmations": item.get("required_confirmations") or [],
-                }
-                for item in capabilities
-                if str(item.get("capability_key")) in qe_capability_keys
-            ]
-            missing_capability_keys = sorted(qe_capability_keys - available_keys)
-        else:
-            plan_steps = [
-                "复述你的研究目标和约束。",
-                "选择可能需要的 MCP、Skill、Memory 和模型配置。",
-                "列出缺失信息和风险等级。",
-                "在你确认后，再进入相应 MCP preflight 或草稿生成。",
-            ]
-            clarifications = ["请确认这次任务只需要我先规划和提问，还是还要准备某个 MCP 的预检查？"]
-            action_proposals = [{"title": "继续澄清并生成计划", "risk": "low", "approval_required": False, "status": "ready"}]
-            capability_cards = []
-            missing_capability_keys = []
+    def _build_human_cards(
+        self,
+        user_message: str,
+        task: dict[str, Any],
+        bundle: dict[str, Any],
+        route: dict[str, Any],
+        dialogue_intent: DialogueIntent,
+    ) -> dict[str, Any]:
+        del user_message, task
+        intent_config = self._dialogue_intent_config()
+        template = self._dialogue_card_template(dialogue_intent, intent_config)
+        capabilities = self.repository.list_records(
+            "capabilities",
+            filters={"status": "approved"},
+            limit=self.configured_limit("api_list_capabilities"),
+        )["items"]
+        qe_capability_keys = set(self.active_runtime_config().get("planner", {}).get("qe_workflow_capability_keys", []))
+        available_keys = {str(item.get("capability_key")) for item in capabilities}
+        include_qe_capabilities = bool(template.get("include_qe_capabilities"))
+        capability_cards = self._capability_cards(capabilities, qe_capability_keys) if include_qe_capabilities else []
+        missing_capability_keys = sorted(qe_capability_keys - available_keys) if include_qe_capabilities else []
+        prompt_branches = [item["prompt_key"] for item in bundle.get("node_refs", [])]
+        capability_summary_cfg = intent_config.get("capability_summary", {})
+        capability_summary = {
+            "mcp": str(capability_summary_cfg.get("mcp") or ""),
+            "skill": str(capability_summary_cfg.get("skill") or ""),
+            "model": route.get("model_profile", {}).get("display_name") or route.get("model_profile", {}).get("model_name"),
+            "prompt_branches": prompt_branches,
+        }
+        extra_summary = template.get("capability_summary_extra")
+        if isinstance(extra_summary, dict):
+            capability_summary.update({str(key): value for key, value in extra_summary.items()})
+        status_rail_ref = str(template.get("status_rail_ref") or "answered")
         return {
-            "plan_card": {"title": "本轮计划", "steps": plan_steps},
-            "clarification_card": {"title": "需要你确认", "questions": clarifications},
-            "action_proposals": action_proposals,
+            "intent_type": dialogue_intent.value,
+            "plan_card": {"title": str(template.get("plan_title") or ""), "steps": list(template.get("plan_steps") or [])},
+            "clarification_card": {"title": str(template.get("clarification_title") or ""), "questions": list(template.get("clarification_questions") or [])},
+            "action_proposals": list(template.get("action_proposals") or []),
             "capability_cards": capability_cards,
             "missing_capability_keys": missing_capability_keys,
-            "status_rail": [
-                {"label": "接收需求", "status": "done"},
-                {"label": "选择提示词", "status": "done"},
-                {"label": "构建上下文", "status": "done"},
-                {"label": "等待确认", "status": "current"},
-                {"label": "MCP 预检查", "status": "locked"},
-                {"label": "执行", "status": "locked"},
-                {"label": "写入记忆", "status": "locked"},
-            ],
-            "capability_summary": {
-                "mcp": "已识别 Research Assistant、QE、Validation 等 MCP 能力候选。",
-                "skill": "已纳入本地 Skill Catalog，后续可按任务加载 QE 诊断、因子分析等能力。",
-                "model": route.get("model_profile", {}).get("display_name") or route.get("model_profile", {}).get("model_name"),
-                "prompt_branches": [item["prompt_key"] for item in bundle.get("node_refs", [])],
-            },
-            "safety": {"no_materialize_before_confirmation": True, "no_run_before_confirmation": True, "no_raw_json_in_main_chat": True},
+            "status_rail": self._status_rail(status_rail_ref, intent_config),
+            "capability_summary": capability_summary,
+            "safety": dict(intent_config.get("safety") or {}),
         }
 
     @staticmethod
-    def _compose_assistant_reply(user_message: str, llm_text: str, cards: dict[str, Any]) -> str:
-        lines = [llm_text.strip()]
-        lines.append("\n我已先把本轮限制在理解、计划和确认阶段；不会在确认前执行 QE materialize/run 或其他高风险 MCP。")
-        if "qe" in user_message.lower() or "实验" in user_message or "回测" in user_message:
-            lines.append("我会把 QE 回测和实盘严格区分，回测默认要求固定 PIT 股票池或你明确指定的股票池。")
-        lines.append(f"请先确认：{cards['clarification_card']['questions'][0]}")
-        return "\n".join(lines)
+    def _dialogue_card_template(dialogue_intent: DialogueIntent, intent_config: dict[str, Any]) -> dict[str, Any]:
+        templates = intent_config.get("card_templates") if isinstance(intent_config, dict) else {}
+        if not isinstance(templates, dict):
+            return {}
+        template = templates.get(dialogue_intent.value) or templates.get(DialogueIntent.GENERAL_CHAT.value) or {}
+        return dict(template) if isinstance(template, dict) else {}
+
+    @staticmethod
+    def _capability_cards(capabilities: list[dict[str, Any]], capability_keys: set[str]) -> list[dict[str, Any]]:
+        return [
+            {
+                "capability_key": str(item.get("capability_key")),
+                "title": str(item.get("title") or item.get("capability_key")),
+                "risk": str(item.get("risk_level") or "medium"),
+                "side_effect": str(item.get("side_effect_level") or "read_only"),
+                "status": "available",
+                "required_confirmations": item.get("required_confirmations") or [],
+            }
+            for item in capabilities
+            if str(item.get("capability_key")) in capability_keys
+        ]
+
+    @staticmethod
+    def _status_rail(mode: str, intent_config: dict[str, Any]) -> list[dict[str, str]]:
+        rails = intent_config.get("status_rails") if isinstance(intent_config, dict) else {}
+        if not isinstance(rails, dict):
+            return []
+        selected = rails.get(mode) or rails.get("answered") or []
+        if not isinstance(selected, list):
+            return []
+        return [
+            {"label": str(item.get("label") or ""), "status": str(item.get("status") or "idle")}
+            for item in selected
+            if isinstance(item, dict)
+        ]
+
+    def _compose_assistant_reply(self, user_message: str, llm_text: str, cards: dict[str, Any]) -> str:
+        del cards
+        text = llm_text.strip()
+        if text:
+            return text
+        intent_config = self._dialogue_intent_config()
+        return str(intent_config.get("fallback_reply") or user_message)
 
     def add_task_event(self, task_id: str, request: TaskEventCreate | dict[str, Any]) -> dict[str, Any]:
         if not self.repository.get_record("tasks", task_id):

@@ -11,7 +11,7 @@ from backend.services.research_assistant.service import ASSISTANT_APPROVAL_CONFI
 class FakeLlmClient:
     def complete(self, **_kwargs: object) -> LlmCallResult:
         return LlmCallResult(
-            content="我理解你要创建 QE 10 loop 实验。本轮只生成计划和确认问题，不执行。",
+            content="已收到明确的 QE 实验草案任务。我会先整理目标、股票池、时间窗、成本和风险边界；不默认固定迭代数量。",
             provider="fake",
             model="fake-primary",
             duration_ms=9,
@@ -43,7 +43,7 @@ def test_research_assistant_catalog_readiness_api_is_explicit() -> None:
 
     chat_resp = client.post(
         "/api/v1/research-assistant/chat/turn",
-        json={"message": "帮我创建一个 QE 10 loop 实验，先不要执行。", "allow_execute": False},
+        json={"message": "帮我设计一个 QE 实验草案，先不要执行。", "allow_execute": False},
     )
     assert chat_resp.status_code == 409
     detail = chat_resp.json()["detail"]
@@ -55,7 +55,7 @@ def test_research_assistant_catalog_readiness_api_is_explicit() -> None:
     assert client.get("/api/v1/research-assistant/health").json()["data"]["status"] == "ok"
     assert client.post(
         "/api/v1/research-assistant/chat/turn",
-        json={"message": "帮我创建一个 QE 10 loop 实验，先不要执行。", "allow_execute": False},
+        json={"message": "帮我设计一个 QE 实验草案，先不要执行。", "allow_execute": False},
     ).status_code == 200
 
 
@@ -99,17 +99,26 @@ def test_research_assistant_api_phase1_smoke() -> None:
     assert prompt_nodes["total"] >= 1
     prompt_bundle = client.post(
         "/api/v1/research-assistant/prompt-bundles",
-        json={"user_message": "帮我创建一个 QE 10 loop 实验，先不要执行。", "phase": "planning"},
+        json={"user_message": "帮我设计一个 QE 实验草案，先不要执行。", "phase": "planning"},
     ).json()["data"]
     assert "domain.qe_experiment" in [node["prompt_key"] for node in prompt_bundle["node_refs"]]
 
     chat_resp = client.post(
         "/api/v1/research-assistant/chat/turn",
-        json={"message": "帮我创建一个 QE 10 loop 实验，先不要执行。", "allow_execute": False},
+        json={"message": "帮我设计一个 QE 实验草案，先不要执行。", "allow_execute": False},
     ).json()["data"]
-    assert chat_resp["assistant_message"]["content_text"].startswith("我理解你要创建 QE 10 loop")
+    assert chat_resp["assistant_message"]["content_text"].startswith("已收到明确的 QE 实验草案任务")
+    assert chat_resp["cards"]["intent_type"] == "experiment_draft_request"
     assert chat_resp["cards"]["status_rail"][3]["label"] == "等待确认"
     assert chat_resp["cards"]["safety"]["no_materialize_before_confirmation"] is True
+
+    capability_resp = client.post(
+        "/api/v1/research-assistant/chat/turn",
+        json={"message": "目前助手是否可以生成 QE 实验和诊断 bug？", "allow_execute": False},
+    ).json()["data"]
+    assert capability_resp["cards"]["intent_type"] == "capability_inquiry"
+    assert capability_resp["cards"]["action_proposals"] == []
+    assert capability_resp["cards"]["clarification_card"]["questions"] == []
     assert client.post(
         "/api/v1/research-assistant/chat/turn",
         json={"message": "确认执行 QE materialize", "allow_execute": True},
