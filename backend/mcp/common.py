@@ -19,6 +19,7 @@ LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_BODY_EXCERPT_LIMIT = 500
+DEFAULT_MAX_RESPONSE_BYTES = 1_048_576
 
 
 def assert_loopback_url(url: str, *, env_name: str = "base_url") -> str:
@@ -75,6 +76,74 @@ def _body_excerpt(response: httpx.Response, *, limit: int = DEFAULT_BODY_EXCERPT
     return text[:limit]
 
 
+def _int_from_env(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw in (None, ""):
+        return default
+    try:
+        return max(int(raw), 0)
+    except ValueError:
+        return default
+
+
+def _refinement_response(
+    *,
+    method: str,
+    path: str,
+    status_code: int,
+    original_bytes: int,
+    max_bytes: int,
+) -> dict[str, Any]:
+    """Return retry guidance instead of partial data for oversized MCP payloads."""
+
+    lower_path = path.lower()
+    retry_params: dict[str, Any] = {}
+    recommended_actions = [
+        "Retry with narrower filters before requesting full/detail data.",
+        "Use summary/compact mode for list/search calls, then request a specific detail endpoint by id.",
+        "Use pagination with a smaller limit/page_size when a collection is required.",
+    ]
+    if any(token in lower_path for token in ("list", "runs", "experiments", "records", "refs", "query")):
+        retry_params.setdefault("limit", 20)
+        retry_params.setdefault("offset", 0)
+    if any(token in lower_path for token in ("bugs", "issue")):
+        retry_params.setdefault("page_size", 20)
+        retry_params.setdefault("compact", True)
+    if any(token in lower_path for token in ("research", "experiment", "backtest", "quantevolver")):
+        retry_params.setdefault("detail", "summary")
+
+    retry_with: dict[str, Any] = {"method": method, "path": path}
+    if retry_params:
+        retry_with["params"] = retry_params
+    if method == "POST":
+        retry_with.setdefault("json_body", {"limit": 20})
+
+    return {
+        "status": "requires_refinement",
+        "mcp_response_too_large": True,
+        "mcp_response_refinement_required": True,
+        "partial_payload_returned": False,
+        "method": method,
+        "path": path,
+        "status_code": status_code,
+        "original_bytes": original_bytes,
+        "max_bytes": max_bytes,
+        "message": (
+            "The backend returned a payload larger than the MCP response budget. "
+            "No partial preview was returned because truncated data can be misleading."
+        ),
+        "omitted_sections": ["response_payload"],
+        "available_detail_sections": [
+            "summary list fields",
+            "paginated result pages",
+            "specific detail endpoint after selecting an id",
+            "explicit full/detail mode when the caller accepts the larger payload",
+        ],
+        "recommended_actions": recommended_actions,
+        "retry_with": retry_with,
+    }
+
+
 class AIstockApiClient:
     """Small JSON HTTP client for loopback-only AIstock MCP modules."""
 
@@ -86,12 +155,18 @@ class AIstockApiClient:
         timeout: float | None = None,
         unwrap_data: bool = False,
         transport: httpx.BaseTransport | None = None,
+        max_response_bytes: int | None = None,
     ) -> None:
         self.base_url = assert_loopback_url(base_url, env_name=env_name)
         self.env_name = env_name
         self.timeout = float(timeout if timeout is not None else os.environ.get("AISTOCK_HTTP_TIMEOUT", DEFAULT_TIMEOUT))
         self.unwrap_data = unwrap_data
         self._transport = transport
+        self.max_response_bytes = (
+            max(int(max_response_bytes), 0)
+            if max_response_bytes is not None
+            else _int_from_env("AISTOCK_MCP_MAX_RESPONSE_BYTES", DEFAULT_MAX_RESPONSE_BYTES)
+        )
 
     def _client(self) -> httpx.Client:
         return httpx.Client(
@@ -138,6 +213,16 @@ class AIstockApiClient:
             raise RuntimeError(
                 f"{method} {path} failed with HTTP {response.status_code}: "
                 f"response body excerpt={body!r}"
+            )
+        content = response.content
+        original_bytes = len(content)
+        if self.max_response_bytes and original_bytes > self.max_response_bytes:
+            return _refinement_response(
+                method=method,
+                path=path,
+                status_code=response.status_code,
+                original_bytes=original_bytes,
+                max_bytes=self.max_response_bytes,
             )
         try:
             payload = response.json()

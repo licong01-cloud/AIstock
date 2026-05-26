@@ -146,7 +146,7 @@ def test_qe_custom_evo_task_tools_use_summary_and_loop_payload_paths(experiment_
     assert captured[5] == ("GET", "/api/v1/quantevolver/evolution/tasks/task_1/loops/2/analysis", {})
 
 
-def test_loopback_client_truncates_large_success_response(experiment_mcp):
+def test_loopback_client_requires_refinement_for_large_success_response(experiment_mcp):
     payload = {"data": "x" * 200}
 
     def handler(request: httpx.Request):
@@ -160,13 +160,18 @@ def test_loopback_client_truncates_large_success_response(experiment_mcp):
     )
     result = client.get("/quantevolver/experiments")
 
-    assert result["status"] == "truncated"
-    assert result["mcp_response_truncated"] is True
+    assert result["status"] == "requires_refinement"
+    assert result["mcp_response_too_large"] is True
+    assert result["mcp_response_refinement_required"] is True
+    assert result["partial_payload_returned"] is False
     assert result["method"] == "GET"
     assert result["path"] == "/quantevolver/experiments"
     assert result["status_code"] == 200
     assert result["original_bytes"] > result["max_bytes"]
-    assert "preview" in result
+    assert "preview" not in result
+    assert result["omitted_sections"] == ["response_payload"]
+    assert result["retry_with"]["params"]["limit"] == 20
+    assert result["retry_with"]["params"]["detail"] == "summary"
 
 
 def test_qe_archive_execute_requires_confirm_before_http(archive_mcp):
@@ -294,6 +299,28 @@ def test_qe_archive_query_factor_usage_path(archive_mcp):
     assert result["status"] == "success"
     assert captured["path"].endswith("/qe-archive/query/factor-usage")
     assert captured["query"] == {"limit": "12", "min_runs": "2"}
+
+
+def test_qe_archive_mcp_uses_compact_default_limits(archive_mcp):
+    captured = []
+
+    def handler(request: httpx.Request):
+        captured.append((request.url.path, dict(request.url.params)))
+        return {"status": "success", "data": []}
+
+    _swap(archive_mcp, archive_mcp.LoopbackApiClient(base_url="http://127.0.0.1/api/v1/qe-archive", env_name="test", transport=_mock_transport(handler)))
+
+    archive_mcp.qe_archive_list_runs()
+    archive_mcp.qe_archive_list_skips()
+    archive_mcp.qe_archive_query_factor_importance()
+    archive_mcp.qe_archive_query_factor_importance_stability()
+    archive_mcp.qe_archive_query_seed_trials()
+
+    assert captured[0][1]["limit"] == "20"
+    assert captured[1][1]["limit"] == "20"
+    assert captured[2][1]["limit"] == "10"
+    assert captured[3][1]["limit"] == "10"
+    assert captured[4][1]["limit"] == "20"
 
 
 def test_qe_mcp_scripts_do_not_import_runtime_execution_paths() -> None:
