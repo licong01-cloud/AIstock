@@ -10,6 +10,8 @@ python scripts/aistock_issue_workflow.py doctor
 
 The skill/command/prompt layer is intentionally thin. The source of truth is `scripts/aistock_issue_workflow.py`; `scripts/issue_flow.py` remains the lower-level primitive helper.
 
+Next hardening baseline: `docs/architecture/aistock_issue_workflow_hardening_plan_v2_1_20260526.md`. Before continuing lower-priority issue workflow R&D, prioritize the v2.1 client-stale detection, single-active-worktree guard, pre-PR gate, close-sync, cleanup, and timing telemetry phases.
+
 ## Trigger Examples
 
 - `按规范修复 BUG-112，不要合入 main`
