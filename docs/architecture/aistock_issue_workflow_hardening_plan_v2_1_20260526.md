@@ -44,7 +44,9 @@
 
 ### 2.2 BUG-120 暴露的问题
 
-BUG-120 的最终修复 PR `#227` 已合入，GitHub Issue `#223` 已关闭，并且 BUG JSON 已记录 `fix_commit=124b0e73...`、`status=fixed`。但是整个过程暴露出以下 workflow 缺陷：
+BUG-120 的最终修复 PR `#227` 已合入，GitHub Issue `#223` 已关闭，并且 BUG JSON 已通过 `4286f02b chore(issue): close BUG-120 after merge` 完成 close-sync，记录了 `fix_commit=124b0e73...`、`status=fixed`。本文引用 BUG-120 不是说明该 BUG 当前仍未关闭，而是复盘它在处理过程中曾暴露出的流程缺陷：close-sync 需要后续补救、重复 worktree 需要人工判断、registry-only PR 和 fix PR 曾经分裂。下一阶段应把这些补救动作前移并状态机化。
+
+具体缺陷如下：
 
 | 现象 | 风险 | 应归属问题 |
 | --- | --- | --- |
