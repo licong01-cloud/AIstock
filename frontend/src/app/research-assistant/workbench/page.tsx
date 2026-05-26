@@ -147,8 +147,8 @@ export default function ResearchAssistantWorkbenchPage() {
   const [selectedTaskId, setSelectedTaskId] = useState("");
   const [payloadText, setPayloadText] = useState(DEFAULT_QE_DRAFT_PAYLOAD);
   const [legacyPayloadText, setLegacyPayloadText] = useState(LEGACY_DRY_RUN_PAYLOAD);
-  const [proposalTitle, setProposalTitle] = useState(workbenchCopy.defaultProposalTitle);
-  const [proposalSummary, setProposalSummary] = useState(workbenchCopy.defaultProposalSummary);
+  const [proposalTitle, setProposalTitle] = useState<string>(workbenchCopy.defaultProposalTitle);
+  const [proposalSummary, setProposalSummary] = useState<string>(workbenchCopy.defaultProposalSummary);
   const [confirmation, setConfirmation] = useState("CONFIRM_QE_DRAFT");
   const [approvalConfirmation, setApprovalConfirmation] = useState("CONFIRM_QE_DRAFT");
   const [preflight, setPreflight] = useState<unknown>(null);

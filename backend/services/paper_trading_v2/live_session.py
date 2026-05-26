@@ -35,9 +35,10 @@ from backend.services.strategy_package.validators import StrategyPackageValidato
 from backend.services.trading_core.errors import (
     DataUnavailableError,
     ExecutionAlgoError,
+    ArtifactGenerationFailedError,
     InvalidStateTransitionError,
+    RuntimeConfigInvalidError,
     SessionConfigError,
-    StrategyPackageValidationError,
     TradingCoreError,
 )
 from backend.services.trading_core.execution_algo_capabilities import require_execution_algo_supports_mode
@@ -795,7 +796,7 @@ class PaperTradingLiveMinuteExecutor:
         )
         if not intents:
             if not current_positions:
-                raise StrategyPackageValidationError(
+                raise ArtifactGenerationFailedError(
                     "live rebalance produced no order intents and portfolio has no positions to mark",
                     context={"session_id": session.session_id, "portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat()},
                 )
@@ -917,7 +918,7 @@ class PaperTradingLiveMinuteExecutor:
     def _require_runtime_top_k(runtime_profile: Any, manifest: Any) -> int:
         top_k = runtime_profile.selection.top_k
         if top_k is None:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "Paper v2 live session requires runtime_profile.selection.top_k; StrategyPackage manifest cannot provide runtime top_k",
                 context={"package_id": manifest.package_id, "manifest_version": getattr(manifest, "manifest_version", None)},
             )

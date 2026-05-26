@@ -44,7 +44,13 @@ from backend.services.quantevolver.qe_workspace_client import (
     QEWorkspaceClient,
     QEWorkspaceFileNotFound,
 )
-from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError, UnsupportedFeatureError
+from backend.services.trading_core.errors import (
+    DataUnavailableError,
+    HMMRuntimeUnavailableError,
+    InvalidStateTransitionError,
+    RuntimeConfigInvalidError,
+    UnsupportedFeatureError,
+)
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
 
@@ -299,7 +305,7 @@ def test_strategy_package_runtime_builds_signal_and_targets() -> None:
 def test_strategy_package_runtime_rejects_runtime_config_selection_scores() -> None:
     manifest = freeze_manifest(make_manifest().model_copy(update={"package_status": PackageStatus.SELECTION_ENABLED}))
 
-    with pytest.raises(StrategyPackageValidationError, match="selection_scores cannot be used"):
+    with pytest.raises(RuntimeConfigInvalidError, match="selection_scores cannot be used"):
         StrategyPackageRuntime().build_signal_snapshot(
             manifest=manifest,
             trade_date=date(2024, 1, 2),
@@ -331,7 +337,7 @@ def test_strategy_package_runtime_rejects_manifest_embedded_scores_without_artif
         )
     )
 
-    with pytest.raises(StrategyPackageValidationError, match="not authoritative"):
+    with pytest.raises(RuntimeConfigInvalidError, match="not authoritative"):
         StrategyPackageRuntime().build_signal_snapshot(
             manifest=manifest,
             trade_date=date(2024, 1, 2),
@@ -612,7 +618,7 @@ def test_selection_artifact_service_resolves_qe_evolution_loop_source(tmp_path) 
     ]
 
 
-def test_selection_center_rejects_unversioned_trading_runtime_config() -> None:
+def test_selection_center_generates_binding_for_ad_hoc_runtime_config() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     manifest = ready_manifest_with_scores("pkg_runtime_boundary", "000001.SZ", 0.9, 1)
     package_repo.save_manifest(manifest)
@@ -623,15 +629,17 @@ def test_selection_center_rejects_unversioned_trading_runtime_config() -> None:
         refresh_audit=NoopRefreshAudit(),
     )
 
-    with pytest.raises(StrategyPackageValidationError, match="versioned runtime profile activation") as exc_info:
-        service.run_single_package(
-            package_id=manifest.package_id,
-            trade_date=date(2024, 1, 2),
-            data_source="DB_HISTORICAL",
-            runtime_config={"top_k": 1},
-        )
+    run = service.run_single_package(
+        package_id=manifest.package_id,
+        trade_date=date(2024, 1, 2),
+        data_source="DB_HISTORICAL",
+        runtime_config={"top_k": 1},
+    )
+    binding = validate_runtime_profile_binding(run.runtime_config)
 
-    assert exc_info.value.context["behavior_keys"] == ["top_k"]
+    assert binding["source"] == "generated_effective_runtime_config"
+    assert binding["config_sha256"] == runtime_profile_config_sha256(run.runtime_config)
+    assert run.status == SelectionRunStatus.SUCCEEDED
 
 
 def test_selection_center_non_trading_preview_is_marked_and_cannot_create_paper_portfolio() -> None:
@@ -661,7 +669,7 @@ def test_selection_center_non_trading_preview_is_marked_and_cannot_create_paper_
     assert run.runtime_config["runtime_config_scope"] == "non_trading_preview"
     assert run.runtime_config["runtime_profile_binding"]["source"] == "ad_hoc_non_trading_preview"
     assert run.runtime_config["runtime_profile_binding"]["trade_enabled"] is False
-    with pytest.raises(StrategyPackageValidationError, match="non-trading"):
+    with pytest.raises(InvalidStateTransitionError, match="non-trading"):
         service.create_paper_portfolio_from_run(
             run_id=run.run_id,
             portfolio_name="preview should not trade",
@@ -791,6 +799,34 @@ def test_selection_center_pit_mode_resolves_previous_trading_day_and_passes_cuto
     assert provider.calls[-1]["trade_date"] == date(2024, 1, 3)
     assert provider.calls[-1]["cutoff_date"] == date(2024, 1, 2)
     assert [item.symbol for item in run.aggregate_results] == ["000001.SZ", "000002.SZ"]
+
+
+def test_selection_center_pit_mode_maps_non_trading_date_to_latest_completed_day() -> None:
+    class FakeCalendar:
+        def ensure_trading_day(self, trade_date: date) -> None:
+            raise DataUnavailableError("trade_date is not a trading day", context={"trade_date": trade_date.isoformat()})
+
+        def list_trading_days(self, start_date: date, end_date: date) -> list[date]:
+            if end_date == date(2024, 1, 6):
+                return [date(2024, 1, 4), date(2024, 1, 5)]
+            if end_date == date(2024, 1, 4):
+                return [date(2024, 1, 4)]
+            raise AssertionError(f"unexpected calendar range end: {end_date}")
+
+    service = SelectionCenterService(
+        package_repository=InMemoryStrategyPackageRepository(),
+        repository=InMemorySelectionCenterRepository(),
+        calendar_provider=FakeCalendar(),
+    )
+
+    context = service.resolve_point_in_time_context(
+        trade_date=date(2024, 1, 6),
+        pit_mode="PREVIOUS_TRADING_DAY_CLOSE",
+    )
+
+    assert context["requested_trade_date"] == "2024-01-06"
+    assert context["effective_trade_date"] == "2024-01-05"
+    assert context["cutoff_date"] == "2024-01-04"
 
 
 def test_selection_center_uses_frozen_artifact_when_node_preflight_fails() -> None:
@@ -1570,7 +1606,7 @@ def test_selection_center_health_blocks_hmm_missing_stock_sector_map_before_infe
         refresh_audit=NoopRefreshAudit(),
     )
 
-    with pytest.raises(DataUnavailableError, match="stock sector mapping") as exc_info:
+    with pytest.raises(HMMRuntimeUnavailableError, match="stock sector mapping") as exc_info:
         service.run_single_package(
             package_id=manifest.package_id,
             trade_date=date(2024, 1, 2),
@@ -1796,7 +1832,7 @@ def test_selection_center_aggregate_existing_runs_requires_same_date() -> None:
         data_source="DB_HISTORICAL",
     )
 
-    with pytest.raises(StrategyPackageValidationError, match="same trade_date"):
+    with pytest.raises(RuntimeConfigInvalidError, match="same trade_date"):
         service.aggregate_existing_runs(
             source_run_ids=[run_a.run_id, run_b.run_id],
             mode=SelectionMode.UNION,
@@ -1816,14 +1852,14 @@ def test_selection_center_weighted_fusion_requires_exact_positive_weights() -> N
         refresh_audit=NoopRefreshAudit(),
     )
 
-    with pytest.raises(StrategyPackageValidationError, match="package_weights"):
+    with pytest.raises(RuntimeConfigInvalidError, match="package_weights"):
         service.run_packages(
             package_ids=[manifest_a.package_id, manifest_b.package_id],
             mode=SelectionMode.WEIGHTED_FUSION,
             trade_date=date(2024, 1, 2),
             data_source="DB_HISTORICAL",
         )
-    with pytest.raises(StrategyPackageValidationError, match="positive finite"):
+    with pytest.raises(RuntimeConfigInvalidError, match="positive finite"):
         service.run_packages(
             package_ids=[manifest_a.package_id, manifest_b.package_id],
             mode=SelectionMode.WEIGHTED_FUSION,
@@ -1984,7 +2020,7 @@ def test_selection_center_industry_blacklist_requires_industry_metadata() -> Non
         refresh_audit=NoopRefreshAudit(),
     )
 
-    with pytest.raises(StrategyPackageValidationError, match="PIT industry metadata"):
+    with pytest.raises(DataUnavailableError, match="PIT industry metadata"):
         service.run_single_package(
             package_id=manifest.package_id,
             trade_date=date(2024, 1, 2),
@@ -2081,14 +2117,14 @@ def test_selection_center_hmm_runtime_profile_fails_fast() -> None:
         refresh_audit=NoopRefreshAudit(),
     )
 
-    with pytest.raises(StrategyPackageValidationError, match="model_snapshot_id"):
+    with pytest.raises(HMMRuntimeUnavailableError, match="model_snapshot_id"):
         service.run_single_package(
             package_id=manifest.package_id,
             trade_date=date(2024, 1, 2),
             data_source="DB_HISTORICAL",
             runtime_config=versioned_selection_runtime_config({"runtime_profile": {"hmm": {"enabled": True}}}),
         )
-    with pytest.raises(StrategyPackageValidationError, match="signal_preset"):
+    with pytest.raises(HMMRuntimeUnavailableError, match="signal_preset"):
         service.run_single_package(
             package_id=manifest.package_id,
             trade_date=date(2024, 1, 2),
@@ -2334,7 +2370,7 @@ def test_strategy_package_runtime_hmm_requires_stock_sector_map(tmp_path) -> Non
         )
     )
 
-    with pytest.raises(DataUnavailableError, match="stock sector mapping"):
+    with pytest.raises(HMMRuntimeUnavailableError, match="stock sector mapping"):
         runtime.build_signal_snapshot(
             manifest=manifest,
             trade_date=date(2024, 1, 2),
@@ -2458,7 +2494,7 @@ def test_selection_center_creates_paper_portfolio_after_default_pit_binding_fina
     )
 
     assert run.runtime_config["selection_artifact_config"]["cutoff_date"] == "2024-01-02"
-    assert binding["source"] == "platform_default"
+    assert binding["source"] == "generated_effective_runtime_config"
     assert binding["config_sha256"] == runtime_profile_config_sha256(run.runtime_config)
     assert result["paper_runtime_config"]["selection_runtime_profile_binding"]["config_sha256"] == binding["config_sha256"]
 
@@ -2653,5 +2689,5 @@ def test_selection_center_watchlist_import_rejects_missing_reference_price() -> 
         data_source="DB_HISTORICAL",
     )
 
-    with pytest.raises(StrategyPackageValidationError, match="requires reference_price"):
+    with pytest.raises(DataUnavailableError, match="requires reference_price"):
         service.add_run_to_watchlist(run_id=run.run_id, top_k=2)

@@ -53,8 +53,8 @@ type CatalogNotReadyDetail = {
 };
 
 const chatCopy = uiCopy.chat;
-const initialSteps: RailStep[] = chatCopy.initialSteps;
-const thinkingSteps: RailStep[] = chatCopy.thinkingSteps;
+const initialSteps: RailStep[] = [...chatCopy.initialSteps];
+const thinkingSteps: RailStep[] = [...chatCopy.thinkingSteps];
 
 const welcomeMessages: ThreadMessageLike[] = [
   {

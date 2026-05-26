@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import ErrorPanel from "@/components/paper-v2/ErrorPanel";
-import JsonPanel from "@/components/paper-v2/JsonPanel";
 import MetricCard from "@/components/paper-v2/MetricCard";
 import NoticePanel from "@/components/paper-v2/NoticePanel";
 import PaperTable from "@/components/paper-v2/PaperTable";
@@ -150,11 +149,6 @@ export default function PaperV2PerformancePage() {
         </SectionCard>
       </div>
 
-      {report ? (
-        <SectionCard title="原始报告 ??" eyebrow="调试追踪">
-          <JsonPanel value={report} />
-        </SectionCard>
-      ) : null}
     </main>
   );
 }

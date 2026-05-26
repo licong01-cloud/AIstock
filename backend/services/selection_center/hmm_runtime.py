@@ -19,7 +19,7 @@ from typing import Any, Protocol
 from backend.services.selection_center.models import SelectionCandidate
 from backend.services.selection_center.runtime_profile import RuntimeHMMProfile
 from backend.services.strategy_package.workspace_policy import ensure_not_forbidden_worker_workspace_path
-from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
+from backend.services.trading_core.errors import ArtifactGenerationFailedError, HMMRuntimeUnavailableError
 
 
 class HMMSnapshotProvider(Protocol):
@@ -58,12 +58,12 @@ class SectorHMMRuntime:
             return candidates
         profile = self._resolve_profile_snapshot(profile)
         if not profile.model_snapshot_id:
-            raise StrategyPackageValidationError(
+            raise HMMRuntimeUnavailableError(
                 "HMM runtime profile requires model_snapshot_id or model_config_id when enabled",
                 context={"package_id": package_id, "runtime_profile": profile.model_dump(mode="json")},
             )
         if not profile.signal_preset:
-            raise StrategyPackageValidationError(
+            raise HMMRuntimeUnavailableError(
                 "HMM runtime profile requires signal_preset when enabled",
                 context={"package_id": package_id, "runtime_profile": profile.model_dump(mode="json")},
             )
@@ -71,7 +71,7 @@ class SectorHMMRuntime:
         snapshot = self._load_snapshot(profile.model_snapshot_id)
         status = str(snapshot.get("status") or "").strip().casefold()
         if status not in self._READY_STATUSES:
-            raise DataUnavailableError(
+            raise HMMRuntimeUnavailableError(
                 "HMM snapshot is not ready",
                 context={
                     "package_id": package_id,
@@ -81,7 +81,7 @@ class SectorHMMRuntime:
             )
         model_path = _resolve_local_path(str(snapshot.get("model_path") or ""))
         if model_path is None or not model_path.exists() or not model_path.is_file():
-            raise DataUnavailableError(
+            raise HMMRuntimeUnavailableError(
                 "HMM model artifact does not exist",
                 context={
                     "package_id": package_id,
@@ -101,7 +101,7 @@ class SectorHMMRuntime:
         daily_coefficients = payload.get("daily_coefficients")
         stock_sector_map = payload.get("stock_sector_map")
         if not isinstance(daily_coefficients, dict) or not isinstance(stock_sector_map, dict):
-            raise StrategyPackageValidationError(
+            raise HMMRuntimeUnavailableError(
                 "HMM coefficient artifact is missing required keys",
                 context={
                     "package_id": package_id,
@@ -112,7 +112,7 @@ class SectorHMMRuntime:
             )
         day_coefficients = daily_coefficients.get(day_key)
         if not isinstance(day_coefficients, dict):
-            raise DataUnavailableError(
+            raise HMMRuntimeUnavailableError(
                 "HMM coefficient artifact has no coefficients for trade_date",
                 context={
                     "package_id": package_id,
@@ -126,7 +126,7 @@ class SectorHMMRuntime:
         for candidate in candidates:
             sector_code = stock_sector_map.get(candidate.symbol)
             if sector_code is None or not str(sector_code).strip():
-                raise DataUnavailableError(
+                raise HMMRuntimeUnavailableError(
                     "HMM coefficient artifact is missing stock sector mapping",
                     context={
                         "package_id": package_id,
@@ -196,12 +196,12 @@ class SectorHMMRuntime:
             return {"enabled": False}
         profile = self._resolve_profile_snapshot(profile)
         if not profile.model_snapshot_id:
-            raise StrategyPackageValidationError(
+            raise HMMRuntimeUnavailableError(
                 "HMM runtime profile requires model_snapshot_id or model_config_id when enabled",
                 context={"package_id": package_id, "runtime_profile": profile.model_dump(mode="json")},
             )
         if not profile.signal_preset:
-            raise StrategyPackageValidationError(
+            raise HMMRuntimeUnavailableError(
                 "HMM runtime profile requires signal_preset when enabled",
                 context={"package_id": package_id, "runtime_profile": profile.model_dump(mode="json")},
             )
@@ -209,7 +209,7 @@ class SectorHMMRuntime:
         snapshot = self._load_snapshot(profile.model_snapshot_id)
         status = str(snapshot.get("status") or "").strip().casefold()
         if status not in self._READY_STATUSES:
-            raise DataUnavailableError(
+            raise HMMRuntimeUnavailableError(
                 "HMM snapshot is not ready",
                 context={
                     "package_id": package_id,
@@ -219,7 +219,7 @@ class SectorHMMRuntime:
             )
         model_path = _resolve_local_path(str(snapshot.get("model_path") or ""))
         if model_path is None or not model_path.exists() or not model_path.is_file():
-            raise DataUnavailableError(
+            raise HMMRuntimeUnavailableError(
                 "HMM model artifact does not exist",
                 context={
                     "package_id": package_id,
@@ -237,7 +237,7 @@ class SectorHMMRuntime:
         daily_coefficients = artifact.payload.get("daily_coefficients")
         stock_sector_map = artifact.payload.get("stock_sector_map")
         if not isinstance(daily_coefficients, dict) or not isinstance(stock_sector_map, dict):
-            raise StrategyPackageValidationError(
+            raise HMMRuntimeUnavailableError(
                 "HMM coefficient artifact is missing required keys",
                 context={
                     "package_id": package_id,
@@ -249,7 +249,7 @@ class SectorHMMRuntime:
         day_key = trade_date.isoformat()
         day_coefficients = daily_coefficients.get(day_key)
         if not isinstance(day_coefficients, dict):
-            raise DataUnavailableError(
+            raise HMMRuntimeUnavailableError(
                 "HMM coefficient artifact has no coefficients for trade_date",
                 context={
                     "package_id": package_id,
@@ -259,7 +259,7 @@ class SectorHMMRuntime:
                 },
             )
         if not stock_sector_map:
-            raise DataUnavailableError(
+            raise HMMRuntimeUnavailableError(
                 "HMM coefficient artifact is missing stock sector mapping",
                 context={
                     "package_id": package_id,
@@ -289,7 +289,7 @@ class SectorHMMRuntime:
             provider = HMMTrainingService()
         snapshot = provider.get_snapshot(snapshot_id)
         if not snapshot:
-            raise DataUnavailableError(
+            raise HMMRuntimeUnavailableError(
                 "HMM snapshot does not exist",
                 context={"snapshot_id": snapshot_id},
             )
@@ -305,7 +305,7 @@ class SectorHMMRuntime:
             provider = HMMTrainingService()
         list_snapshots = getattr(provider, "list_snapshots", None)
         if not callable(list_snapshots):
-            raise DataUnavailableError(
+            raise HMMRuntimeUnavailableError(
                 "HMM runtime profile uses model_config_id but provider cannot list snapshots",
                 context={"model_config_id": profile.model_config_id},
             )
@@ -317,7 +317,7 @@ class SectorHMMRuntime:
             and str(row.get("snapshot_id") or "").strip()
         ]
         if not ready:
-            raise DataUnavailableError(
+            raise HMMRuntimeUnavailableError(
                 "HMM model config has no ready snapshot for runtime use",
                 context={"model_config_id": profile.model_config_id},
             )
@@ -335,7 +335,7 @@ class SectorHMMRuntime:
         if profile.coefficients_path:
             explicit = _resolve_local_path(profile.coefficients_path, base_dir=model_path.parent)
             if explicit is None or not explicit.exists() or not explicit.is_file():
-                raise DataUnavailableError(
+                raise HMMRuntimeUnavailableError(
                     "explicit HMM coefficient artifact does not exist",
                     context={
                         "package_id": package_id,
@@ -400,7 +400,7 @@ class SectorHMMRuntime:
                 "candidate_paths": [str(path) for path in matches],
             }
         if len(valid) > 1:
-            raise StrategyPackageValidationError(
+            raise HMMRuntimeUnavailableError(
                 "multiple HMM coefficient artifacts cover trade_date; specify coefficients_path",
                 context={
                     "package_id": package_id,
@@ -428,7 +428,7 @@ class SectorHMMRuntime:
             provider = HMMTrainingService()
         generator = getattr(provider, "generate_daily_coefficients", None)
         if generator is None:
-            raise DataUnavailableError(
+            raise HMMRuntimeUnavailableError(
                 "HMM coefficient artifact is missing and provider cannot auto-generate",
                 context={
                     "package_id": package_id,
@@ -463,7 +463,7 @@ class SectorHMMRuntime:
                     effective_trade_date=trade_date,
                 )
             except Exception as exc:
-                raise DataUnavailableError(
+                raise ArtifactGenerationFailedError(
                     "HMM coefficient auto-generation failed",
                     context={
                         "package_id": package_id,
@@ -476,7 +476,7 @@ class SectorHMMRuntime:
                 ) from exc
             output_path = _resolve_local_path(str(result.get("output_path") or ""), base_dir=model_path.parent)
         if output_path is None or not output_path.exists() or not output_path.is_file():
-            raise DataUnavailableError(
+            raise ArtifactGenerationFailedError(
                 "HMM coefficient auto-generation did not produce an artifact",
                 context={
                     "package_id": package_id,
@@ -513,17 +513,17 @@ def _read_coefficients(path: Path, *, package_id: str) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        raise StrategyPackageValidationError(
+        raise HMMRuntimeUnavailableError(
             "HMM coefficient artifact is not valid JSON",
             context={"package_id": package_id, "coefficients_path": str(path)},
         ) from exc
     except OSError as exc:
-        raise DataUnavailableError(
+        raise HMMRuntimeUnavailableError(
             "HMM coefficient artifact cannot be read",
             context={"package_id": package_id, "coefficients_path": str(path)},
         ) from exc
     if not isinstance(payload, dict):
-        raise StrategyPackageValidationError(
+        raise HMMRuntimeUnavailableError(
             "HMM coefficient artifact must be a JSON object",
             context={"package_id": package_id, "coefficients_path": str(path)},
         )
@@ -543,7 +543,7 @@ def _validate_preset(
 ) -> None:
     payload_preset = payload.get("preset_key")
     if payload_preset is not None and str(payload_preset).strip() != profile.signal_preset:
-        raise StrategyPackageValidationError(
+        raise HMMRuntimeUnavailableError(
             "HMM coefficient artifact preset does not match runtime profile",
             context={
                 "package_id": package_id,
@@ -570,14 +570,14 @@ def _finite_float(value: Any, *, message: str, context: dict[str, Any]) -> float
     try:
         number = float(value)
     except (TypeError, ValueError) as exc:
-        raise StrategyPackageValidationError(message, context=context) from exc
+        raise HMMRuntimeUnavailableError(message, context=context) from exc
     if not math.isfinite(number):
-        raise StrategyPackageValidationError(message, context=context)
+        raise HMMRuntimeUnavailableError(message, context=context)
     return number
 
 
 def _positive_finite_float(value: Any, *, message: str, context: dict[str, Any]) -> float:
     number = _finite_float(value, message=message, context=context)
     if number <= 0:
-        raise StrategyPackageValidationError(message, context=context)
+        raise HMMRuntimeUnavailableError(message, context=context)
     return number

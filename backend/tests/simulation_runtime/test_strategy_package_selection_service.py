@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import date
 
@@ -28,7 +28,7 @@ from backend.services.strategy_package.selection_artifact import (
     SelectionScoreArtifact,
     selection_artifact_runtime_hash,
 )
-from backend.services.trading_core.errors import StrategyPackageValidationError
+from backend.services.trading_core.errors import RuntimeConfigInvalidError
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
 
@@ -199,7 +199,7 @@ def test_strategy_package_selection_service_rejects_trading_and_broker_fields(ba
     )
     runtime_repo = InMemorySimulationRuntimeRepository()
 
-    with pytest.raises(StrategyPackageValidationError, match="Selection-only signal generation"):
+    with pytest.raises(RuntimeConfigInvalidError, match="Selection-only signal generation"):
         _selection_service(package_repo, runtime, runtime_repo).run_selection(
             package_ids=[manifest.package_id],
             mode=SelectionMode.SINGLE_PACKAGE,
@@ -268,7 +268,7 @@ def test_strategy_package_selection_refreshes_default_binding_after_pit_finaliza
     binding = validate_runtime_profile_binding(result.runtime_config)
     assert result.runtime_config["selection_artifact_config"]["cutoff_date"] == "2024-01-02"
     assert result.runtime_config["point_in_time_context"]["score_trade_date"] == "2024-01-02"
-    assert binding["source"] == "platform_default"
+    assert binding["source"] == "generated_effective_runtime_config"
     assert binding["config_sha256"] == runtime_profile_config_sha256(result.runtime_config)
     evidence = result.evidence_by_package[manifest.package_id]
     package_binding = result.runtime_config["package_runtime_configs"][manifest.package_id]["runtime_profile_binding"]

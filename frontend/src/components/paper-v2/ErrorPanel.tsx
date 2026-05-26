@@ -31,6 +31,20 @@ function buildDiagnostic(error: unknown): string {
   ].join("\n");
 }
 
+function businessSummary(errorCode: string | null | undefined, message: string): string {
+  if (!errorCode) return message;
+  if (errorCode === "STRATEGY_PACKAGE_VALIDATION_ERROR" && message.includes("runtime_config")) {
+    return "运行配置被旧门禁拦截：这属于平台运行配置问题，不应被解释为策略包资产不可用。";
+  }
+  if (errorCode.includes("DATA") || errorCode.includes("MARKET") || errorCode.includes("CALENDAR")) {
+    return "本次运行缺少平台数据或交易日历信息，不影响策略包资格。";
+  }
+  if (errorCode.includes("BROKER") || errorCode.includes("MINIQMT")) {
+    return "券商或 MiniQMT 运行时不可用，本次会话未完成，不影响策略包资格。";
+  }
+  return message;
+}
+
 export default function ErrorPanel({ error, title = "操作失败" }: { error: unknown; title?: string }) {
   const [copied, setCopied] = useState(false);
   const diagnostic = useMemo(() => (error ? buildDiagnostic(error) : ""), [error]);
@@ -38,6 +52,7 @@ export default function ErrorPanel({ error, title = "操作失败" }: { error: u
 
   const apiError = error instanceof PaperV2ApiError ? error : null;
   const message = error instanceof Error ? error.message : String(error);
+  const summary = businessSummary(apiError?.errorCode, message);
 
   async function copyDiagnostic() {
     await navigator.clipboard.writeText(diagnostic);
@@ -50,8 +65,9 @@ export default function ErrorPanel({ error, title = "操作失败" }: { error: u
       <div className="pv2-error-kicker">{title}</div>
       <div className="pv2-error-main">
         {apiError?.errorCode ? <strong>{apiError.errorCode}: </strong> : null}
-        {message}
+        {summary}
       </div>
+      {summary !== message ? <div className="pv2-error-meta">原始说明：{message}</div> : null}
       {apiError ? <div className="pv2-error-meta">HTTP {apiError.status}</div> : null}
       <textarea className="pv2-input pv2-diagnostic-text" readOnly rows={7} value={diagnostic} />
       <button className="pv2-button pv2-button-ghost" onClick={copyDiagnostic} type="button">

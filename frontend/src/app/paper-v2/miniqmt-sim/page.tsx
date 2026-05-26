@@ -191,7 +191,7 @@ export default function PaperV2MiniQMTSimPage() {
         AIstock 只生成买卖方向、代码、数量和提交时间；MiniQMT 是唯一委托、拒单、成交、资金和持仓权威。本页面不会用 TDX、DB、tick 或 LocalSim 补成交，也不会展示每策略真实资金池。
       </NoticePanel>
 
-      <SectionCard title="创建 MiniQMT 独占账号组合" eyebrow="exclusive account only" action={<button className="pv2-button-primary" onClick={createExclusivePortfolio} disabled={creating || !connected || !simMode || !packageId} type="button">{creating ? "创建中..." : "创建组合"}</button>}>
+      <SectionCard title="创建 MiniQMT 独占账号组合" eyebrow="exclusive account only" action={<button className="pv2-button-primary" onClick={createExclusivePortfolio} disabled={creating || !packageId} type="button">{creating ? "创建中..." : "创建组合"}</button>}>
         <div className="pv2-form-grid">
           <div className="pv2-field"><label>策略包</label><select className="pv2-select" value={packageId} onChange={(event) => setPackageId(event.target.value)}>{eligiblePackages.map((item) => <option value={item.package_id} key={item.package_id}>{item.package_name} / {item.package_status}</option>)}</select></div>
           <div className="pv2-field"><label>Validated execution policy</label><select className="pv2-select" value={policyId} onChange={(event) => setPolicyId(event.target.value)}><option value="">平台默认：使用 manifest 默认执行策略</option>{policies.map((item) => <option value={item.policy_id} key={item.policy_id}>{item.policy_name || item.policy_id} / {item.algo_code || "-"}</option>)}</select></div>
@@ -202,6 +202,11 @@ export default function PaperV2MiniQMTSimPage() {
         <NoticePanel title="资金口径" tone="info">
           这里的 initial_cash 仅用于兼容 Paper v2 组合 schema，不代表 MiniQMT 已分配独立资金；实际资金、持仓和成交必须以 MiniQMT 账号查询为准。
         </NoticePanel>
+        {(!connected || !simMode) ? (
+          <NoticePanel title="MiniQMT 运行时状态" tone="warning">
+            当前连接或 SIM 检查未通过，但创建组合不再被 broker 状态阻断；后续提交委托或执行 Tick 时会按 MiniQMT 实时状态 fail-fast。
+          </NoticePanel>
+        ) : null}
       </SectionCard>
 
       <div className="pv2-grid pv2-grid-2">

@@ -17,7 +17,7 @@ from backend.services.strategy_package.runtime_variant import (
     derive_locked_core_hash,
 )
 from backend.services.strategy_package.service import StrategyPackageService
-from backend.services.trading_core.errors import StrategyPackageValidationError
+from backend.services.trading_core.errors import RuntimeConfigInvalidError, StrategyPackageValidationError
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
 
@@ -94,7 +94,7 @@ def test_runtime_variant_preserves_locked_core_hash_and_changes_variant_hash() -
 def test_runtime_variant_rejects_frozen_core_mutation() -> None:
     service, package_id = _service_with_manifest()
 
-    with pytest.raises(StrategyPackageValidationError, match="frozen StrategyPackage core"):
+    with pytest.raises(RuntimeConfigInvalidError, match="frozen StrategyPackage core"):
         service.create_runtime_variant(
             package_id,
             variant_name="bad model swap",
@@ -103,7 +103,7 @@ def test_runtime_variant_rejects_frozen_core_mutation() -> None:
             created_by="unit_test",
         )
 
-    with pytest.raises(StrategyPackageValidationError, match="unsupported runtime keys"):
+    with pytest.raises(RuntimeConfigInvalidError, match="unsupported runtime keys"):
         service.create_runtime_variant(
             package_id,
             variant_name="unknown",
@@ -150,7 +150,7 @@ def test_runtime_variant_paper_candidate_is_legacy_metadata_not_admission_gate()
         variant_config={"risk_policy": {"max_position_weight": 0.04}},
         created_by="unit_test",
     )
-    with pytest.raises(StrategyPackageValidationError, match="validation evidence"):
+    with pytest.raises(RuntimeConfigInvalidError, match="validation evidence"):
         service.mark_runtime_variant_validation(
             package_id,
             variant.variant_id,
@@ -174,7 +174,7 @@ def test_runtime_variant_paper_candidate_is_legacy_metadata_not_admission_gate()
 def test_runtime_variant_rejects_hmm_overlay_as_platform_runtime_state() -> None:
     service, package_id = _service_with_manifest()
 
-    with pytest.raises(StrategyPackageValidationError, match="HMM is a platform runtime capability"):
+    with pytest.raises(RuntimeConfigInvalidError, match="HMM is a platform runtime capability"):
         service.create_runtime_variant(
             package_id,
             variant_name="bad hmm overlay",

@@ -19,9 +19,9 @@ from backend.services.selection_center.models import SelectionCandidate, Selecti
 from backend.services.selection_center.package_health import SelectionPackageHealthService
 from backend.services.selection_center.risk_policy import StockRiskPolicyService
 from backend.services.selection_center.runtime_profile import (
+    GENERATED_RUNTIME_PROFILE_VERSION_ID,
     RUNTIME_PROFILE_BINDING_KEY,
     attach_default_runtime_profile_binding,
-    ensure_runtime_config_version_boundary,
     is_non_trading_runtime_config,
     mark_non_trading_preview_runtime_config,
     normalize_selection_runtime_config,
@@ -45,7 +45,12 @@ from backend.services.strategy_package.selection_artifact import (
     StrategyPackageSelectionArtifactService,
     selection_artifact_runtime_hash,
 )
-from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
+from backend.services.trading_core.errors import (
+    ArtifactGenerationFailedError,
+    DataUnavailableError,
+    RuntimeConfigInvalidError,
+    TradingCalendarUnavailableError,
+)
 
 from .models import (
     DailySelectionEvidence,
@@ -162,7 +167,7 @@ class DailySelectionSignalService:
     ) -> LiveInferencePreflightResult:
         resolver = getattr(self.selection_artifact_service, "runtime_asset_resolver", None)
         if resolver is None or not hasattr(resolver, "require_preflight_or_raise"):
-            raise StrategyPackageValidationError(
+            raise ArtifactGenerationFailedError(
                 "selection_artifact_service.runtime_asset_resolver is not preflight-capable",
                 context={"package_id": record.package_id},
             )
@@ -236,11 +241,6 @@ class StrategyPackageSelectionService:
             "path": "strategy_package_selection.run_selection",
         }
         assert_selection_only_payload_boundary(raw_config, context=behavior_context)
-        ensure_runtime_config_version_boundary(
-            raw_config,
-            context=behavior_context,
-            allow_non_trading_preview=True,
-        )
         if is_non_trading_runtime_config(raw_config):
             raw_config = mark_non_trading_preview_runtime_config(
                 raw_config,
@@ -334,7 +334,7 @@ class StrategyPackageSelectionService:
                 valid_no_candidate = True
                 no_candidate_reason = str(config.get("no_candidate_reason") or "selection aggregation has no candidates")
             else:
-                raise StrategyPackageValidationError(
+                raise ArtifactGenerationFailedError(
                     "selection aggregation produced no candidates",
                     context={"mode": mode.value, "package_ids": package_ids},
                 )
@@ -371,7 +371,7 @@ class StrategyPackageSelectionService:
         package_ids: list[str],
     ) -> dict[str, Any]:
         if package_ids and (len(package_ids) != 1 or package_ids[0] != runtime_release.package_id):
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "StrategyRuntimeRelease can only bind selection for its own single StrategyPackage",
                 context={"release_package_id": runtime_release.package_id, "package_ids": package_ids},
             )
@@ -386,7 +386,7 @@ class StrategyPackageSelectionService:
                 or existing_hash
                 and existing_hash != runtime_release.runtime_profile_sha256
             ):
-                raise StrategyPackageValidationError(
+                raise RuntimeConfigInvalidError(
                     "runtime_profile_binding conflicts with StrategyRuntimeRelease runtime profile",
                     context={
                         "runtime_profile_binding": existing,
@@ -415,13 +415,13 @@ class StrategyPackageSelectionService:
     @staticmethod
     def _validate_request_shape(*, package_ids: list[str], mode: SelectionMode) -> None:
         if not package_ids:
-            raise StrategyPackageValidationError("selection run requires package_ids")
+            raise RuntimeConfigInvalidError("selection run requires package_ids")
         if len(set(package_ids)) != len(package_ids):
-            raise StrategyPackageValidationError("selection run package_ids must be unique")
+            raise RuntimeConfigInvalidError("selection run package_ids must be unique")
         if mode == SelectionMode.SINGLE_PACKAGE and len(package_ids) != 1:
-            raise StrategyPackageValidationError("single package selection requires exactly one package")
+            raise RuntimeConfigInvalidError("single package selection requires exactly one package")
         if mode in {SelectionMode.INTERSECTION, SelectionMode.UNION, SelectionMode.WEIGHTED_FUSION} and len(package_ids) < 2:
-            raise StrategyPackageValidationError("package aggregation requires at least two packages")
+            raise RuntimeConfigInvalidError("package aggregation requires at least two packages")
 
     def _require_data_ready(self, *, trade_date: date, runtime_config: dict[str, Any]) -> None:
         if parse_selection_runtime_profile(runtime_config).tradability.exclude_suspended:
@@ -430,7 +430,7 @@ class StrategyPackageSelectionService:
         for dataset in artifact_config.get("required_cutoff_audit_datasets") or []:
             cutoff = artifact_config.get("cutoff_date")
             if not cutoff:
-                raise StrategyPackageValidationError(
+                raise RuntimeConfigInvalidError(
                     "required_cutoff_audit_datasets requires selection_artifact_config.cutoff_date",
                     context={"required_cutoff_audit_datasets": artifact_config.get("required_cutoff_audit_datasets")},
                 )
@@ -524,7 +524,7 @@ class StrategyPackageSelectionService:
         elif isinstance(raw_profile, dict):
             profile = dict(raw_profile)
         else:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "runtime_config.runtime_profile must be an object",
                 context={"runtime_profile_type": type(raw_profile).__name__},
             )
@@ -545,12 +545,12 @@ class StrategyPackageSelectionService:
         try:
             display_top_n = int(value)
         except (TypeError, ValueError) as exc:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "selection display_top_n must be an integer",
                 context={"package_id": package_id, "display_top_n": value},
             ) from exc
         if display_top_n <= 0 or display_top_n > 50:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "selection display_top_n must be between 1 and 50",
                 context={"package_id": package_id, "display_top_n": display_top_n, "max_display_top_n": 50},
             )
@@ -577,13 +577,13 @@ class StrategyPackageSelectionService:
             return None
         variant_id = str(raw_id).strip()
         if not variant_id:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "runtime_variant_id cannot be empty",
                 context={"package_id": record.package_id},
             )
         variant = self.package_repository.get_runtime_variant(record.package_id, variant_id)
         if variant.validation_status != RuntimeVariantValidationStatus.VALIDATION_PASSED:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "runtime variant must be validated before Selection Center use",
                 context={
                     "package_id": record.package_id,
@@ -592,7 +592,7 @@ class StrategyPackageSelectionService:
                 },
             )
         if variant.manifest_sha256 != record.manifest_sha256:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "runtime variant manifest hash does not match StrategyPackage",
                 context={
                     "package_id": record.package_id,
@@ -614,13 +614,19 @@ class StrategyPackageSelectionService:
         if configured is None:
             configured = StrategyPackageSelectionService._contract_top_k(package_config)
         if configured is None:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "selection runtime_profile.selection.top_k is required; StrategyPackage manifest cannot provide runtime top_k",
                 context={"package_id": manifest.package_id, "manifest_version": getattr(manifest, "manifest_version", None)},
             )
-        top_k = int(configured)
+        try:
+            top_k = int(configured)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeConfigInvalidError(
+                "selection top_k must be an integer",
+                context={"package_id": manifest.package_id, "top_k": configured},
+            ) from exc
         if top_k <= 0 or top_k > 50:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "selection top_k must be between 1 and 50",
                 context={"package_id": manifest.package_id, "top_k": top_k, "max_top_k": 50},
             )
@@ -655,16 +661,26 @@ class StrategyPackageSelectionService:
                 "score_trade_date": explicit_cutoff_date.isoformat() if explicit_cutoff_date else trade_date.isoformat(),
                 "reference_price_trade_date": explicit_cutoff_date.isoformat() if explicit_cutoff_date else trade_date.isoformat(),
             }
-        self.calendar_provider.ensure_trading_day(trade_date)
-        cutoff = explicit_cutoff_date or self._previous_trading_day(trade_date)
-        if cutoff >= trade_date:
-            raise StrategyPackageValidationError(
+        effective_trade_date = self._selection_effective_trade_date(
+            trade_date=trade_date,
+            explicit_cutoff_date=explicit_cutoff_date,
+        )
+        cutoff = explicit_cutoff_date or self._previous_trading_day(effective_trade_date)
+        if cutoff >= effective_trade_date:
+            raise RuntimeConfigInvalidError(
                 "point-in-time selection cutoff_date must be before trade_date",
-                context={"trade_date": trade_date.isoformat(), "cutoff_date": cutoff.isoformat(), "pit_mode": normalized},
+                context={
+                    "trade_date": trade_date.isoformat(),
+                    "effective_trade_date": effective_trade_date.isoformat(),
+                    "cutoff_date": cutoff.isoformat(),
+                    "pit_mode": normalized,
+                },
             )
         return {
             "pit_mode": normalized,
             "trade_date": trade_date.isoformat(),
+            "requested_trade_date": trade_date.isoformat(),
+            "effective_trade_date": effective_trade_date.isoformat(),
             "cutoff_date": cutoff.isoformat(),
             "score_trade_date": cutoff.isoformat(),
             "reference_price_trade_date": cutoff.isoformat(),
@@ -706,7 +722,7 @@ class StrategyPackageSelectionService:
         if artifact_config is None:
             return {}
         if not isinstance(artifact_config, dict):
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "runtime_config.selection_artifact_config must be an object",
                 context={"selection_artifact_config_type": type(artifact_config).__name__},
             )
@@ -726,7 +742,7 @@ class StrategyPackageSelectionService:
         }
         normalized = aliases.get(text)
         if normalized is None:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "unsupported point-in-time selection mode",
                 context={"pit_mode": pit_mode, "supported": ["NONE", "PREVIOUS_TRADING_DAY_CLOSE"]},
             )
@@ -736,11 +752,31 @@ class StrategyPackageSelectionService:
         lookup_start = trade_date - timedelta(days=31)
         days = self.calendar_provider.list_trading_days(lookup_start, trade_date - timedelta(days=1))
         if not days:
-            raise DataUnavailableError(
+            raise TradingCalendarUnavailableError(
                 "trading calendar has no previous trading day for point-in-time selection",
                 context={"trade_date": trade_date.isoformat(), "lookup_start": lookup_start.isoformat()},
             )
         return days[-1]
+
+    def _selection_effective_trade_date(self, *, trade_date: date, explicit_cutoff_date: date | None) -> date:
+        if explicit_cutoff_date is not None:
+            return trade_date
+        try:
+            self.calendar_provider.ensure_trading_day(trade_date)
+            return trade_date
+        except DataUnavailableError:
+            return self._latest_trading_day_on_or_before(trade_date)
+
+    def _latest_trading_day_on_or_before(self, trade_date: date) -> date:
+        lookup_start = trade_date - timedelta(days=31)
+        days = self.calendar_provider.list_trading_days(lookup_start, trade_date)
+        eligible = [day for day in days if day <= trade_date]
+        if not eligible:
+            raise TradingCalendarUnavailableError(
+                "trading calendar has no completed trading day on or before requested selection date",
+                context={"trade_date": trade_date.isoformat(), "lookup_start": lookup_start.isoformat()},
+            )
+        return eligible[-1]
 
     @staticmethod
     def parse_selection_cutoff_date(
@@ -755,12 +791,12 @@ class StrategyPackageSelectionService:
         try:
             parsed = date.fromisoformat(str(raw))
         except ValueError as exc:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "selection_artifact_config.cutoff_date must be YYYY-MM-DD",
                 context={"cutoff_date": raw},
             ) from exc
         if parsed > trade_date or (strict_before and parsed >= trade_date):
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "selection_artifact_config.cutoff_date must be before trade_date",
                 context={"trade_date": trade_date.isoformat(), "cutoff_date": parsed.isoformat()},
             )
@@ -869,11 +905,15 @@ class StrategyPackageSelectionService:
     def _runtime_profile_binding_for_evidence(runtime_config: dict[str, Any], *, package_id: str) -> dict[str, Any]:
         binding = runtime_config.get(RUNTIME_PROFILE_BINDING_KEY)
         if not isinstance(binding, dict):
-            raise StrategyPackageValidationError(
-                "runtime_config requires runtime_profile_binding for daily selection evidence",
-                context={"package_id": package_id, "binding_key": RUNTIME_PROFILE_BINDING_KEY},
-            )
-        if binding.get("source") == "platform_default":
+            return {
+                "source": "generated_effective_runtime_config",
+                "profile_version_id": GENERATED_RUNTIME_PROFILE_VERSION_ID,
+                "config_sha256": runtime_profile_config_sha256(runtime_config),
+                "trade_enabled": True,
+                "generated_for": "daily_selection_evidence",
+                "package_id": package_id,
+            }
+        if binding.get("source") in {"platform_default", "generated_effective_runtime_config"}:
             effective = dict(binding)
             effective["config_sha256"] = runtime_profile_config_sha256(runtime_config)
             return effective
@@ -941,7 +981,7 @@ class StrategyPackageSelectionService:
             return next(iter(package_results.values()))
         if mode == SelectionMode.WEIGHTED_FUSION:
             if package_weights is None:
-                raise StrategyPackageValidationError("weighted package fusion requires package_weights")
+                raise RuntimeConfigInvalidError("weighted package fusion requires package_weights")
             return self._weighted_rank_fusion(package_results=package_results, package_weights=package_weights)
         symbol_sets = [set(candidate.symbol for candidate in rows) for rows in package_results.values()]
         symbols = set.union(*symbol_sets) if mode == SelectionMode.UNION else set.intersection(*symbol_sets)
@@ -977,22 +1017,28 @@ class StrategyPackageSelectionService:
     def _package_weights(config: dict[str, Any], package_ids: list[str]) -> dict[str, float]:
         raw = config.get("package_weights")
         if not isinstance(raw, dict):
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "weighted package fusion requires runtime_config.package_weights",
                 context={"package_ids": package_ids},
             )
         expected = set(package_ids)
         actual = {str(key) for key in raw}
         if actual != expected:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "runtime_config.package_weights must match package_ids exactly",
                 context={"package_ids": package_ids, "weight_keys": sorted(actual)},
             )
         weights: dict[str, float] = {}
         for package_id in package_ids:
-            value = float(raw[package_id])
+            try:
+                value = float(raw[package_id])
+            except (TypeError, ValueError) as exc:
+                raise RuntimeConfigInvalidError(
+                    "package weights must be numeric",
+                    context={"package_id": package_id, "weight": raw[package_id]},
+                ) from exc
             if not isfinite(value) or value <= 0:
-                raise StrategyPackageValidationError(
+                raise RuntimeConfigInvalidError(
                     "package weights must be positive finite numbers",
                     context={"package_id": package_id, "weight": raw[package_id]},
                 )

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import date
 
@@ -12,12 +12,13 @@ from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioSer
 from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.selection_center.runtime_profile import (
+    GENERATED_RUNTIME_PROFILE_VERSION_ID,
     attach_default_runtime_profile_binding,
     refresh_generated_runtime_profile_binding,
     runtime_profile_config_sha256,
     validate_runtime_profile_binding,
 )
-from backend.services.trading_core.errors import InvalidStateTransitionError, StrategyPackageValidationError
+from backend.services.trading_core.errors import InvalidStateTransitionError, RuntimeConfigInvalidError
 from backend.services.trading_core.models import RunStatus
 
 from backend.tests.paper_trading_v2.test_day_runner import (
@@ -57,7 +58,7 @@ def test_runtime_profile_version_hash_and_audit_are_persisted() -> None:
 
     profile, version = service.create_runtime_profile(
         portfolio_id=portfolio.portfolio_id,
-        profile_name="开盘前 Top2 配置",
+        profile_name="寮€鐩樺墠 Top2 閰嶇疆",
         config_json={"top_k": 2, "exclude_suspended": True},
         created_by="unit_test",
         reason="baseline runtime profile",
@@ -104,13 +105,13 @@ def test_runtime_profile_version_hash_and_audit_are_persisted() -> None:
 def test_runtime_profile_rejects_unknown_or_execution_keys() -> None:
     _package_repo, _paper_repo, service, _manifest, portfolio = _portfolio_fixture()
 
-    with pytest.raises(StrategyPackageValidationError, match="unsupported top-level keys"):
+    with pytest.raises(RuntimeConfigInvalidError, match="unsupported top-level keys"):
         service.create_runtime_profile(
             portfolio_id=portfolio.portfolio_id,
             profile_name="bad unknown",
             config_json={"runtime_profile": {}, "default_price": 10.0},
         )
-    with pytest.raises(StrategyPackageValidationError, match="execution/session overrides"):
+    with pytest.raises(RuntimeConfigInvalidError, match="execution/session overrides"):
         service.create_runtime_profile(
             portfolio_id=portfolio.portfolio_id,
             profile_name="bad algo override",
@@ -203,7 +204,7 @@ def test_runtime_profile_activation_replace_and_late_change_are_rejected() -> No
             data_source=MinuteDataSource.TDX_REALTIME,
         )
     )
-    with pytest.raises(StrategyPackageValidationError, match="after a paper run exists"):
+    with pytest.raises(InvalidStateTransitionError, match="after a paper run exists"):
         service.activate_runtime_config(
             portfolio_id=portfolio.portfolio_id,
             trade_date=date(2024, 1, 3),
@@ -255,7 +256,7 @@ def test_runtime_profile_rejects_event_signal_policy_without_platform_profile_id
         custom_params={"event_signal_policy": {"enabled": True}}
     )
 
-    with pytest.raises(StrategyPackageValidationError, match="event_signal_profile_id"):
+    with pytest.raises(RuntimeConfigInvalidError, match="event_signal_profile_id"):
         service.create_runtime_profile(
             portfolio_id=portfolio.portfolio_id,
             profile_name="bad event-signal profile",
@@ -280,8 +281,8 @@ def test_default_runtime_profile_binding_hash_is_post_contract_normalized() -> N
     )
 
     binding = runtime_config["runtime_profile_binding"]
-    assert binding["source"] == "platform_default"
-    assert binding["profile_version_id"] == "platform_default_runtime_profile_v1"
+    assert binding["source"] == "generated_effective_runtime_config"
+    assert binding["profile_version_id"] == GENERATED_RUNTIME_PROFILE_VERSION_ID
     assert binding["config_sha256"] == runtime_profile_config_sha256(runtime_config)
     assert runtime_config["runtime_profile"]["selection"]["top_k"] == 2
 
@@ -299,41 +300,44 @@ def test_default_runtime_profile_binding_can_refresh_after_system_generated_pit_
         "score_trade_date": "2024-01-02",
         "reference_price_trade_date": "2024-01-02",
     }
-    with pytest.raises(StrategyPackageValidationError, match="hash mismatch"):
+    with pytest.raises(RuntimeConfigInvalidError, match="hash mismatch"):
         validate_runtime_profile_binding(finalized)
 
     refreshed = refresh_generated_runtime_profile_binding(finalized)
     binding = validate_runtime_profile_binding(refreshed)
-    assert binding["source"] == "platform_default"
+    assert binding["source"] == "generated_effective_runtime_config"
     assert binding["config_sha256"] == runtime_profile_config_sha256(refreshed)
 
 
-def test_paper_day_runner_rejects_unversioned_runtime_profile_override() -> None:
+def test_paper_day_runner_accepts_unversioned_runtime_profile_override_with_generated_binding() -> None:
     _package_repo, paper_repo, _service, manifest, portfolio = _portfolio_fixture()
 
-    with pytest.raises(StrategyPackageValidationError, match="versioned runtime profile activation") as exc_info:
-        PaperTradingDayRunner(
-            repository=paper_repo,
-            calendar_provider=FakeCalendar(),
-            market_data_provider=PaperV2MinuteMarketDataProvider(
-                limit_price_provider=FakeLimitProvider(),
-                suspend_status_provider=FakeSuspendProvider(),
-                tdx_fetcher=lambda _symbol, _trade_date: make_raw_bars(),
-            ),
-            runtime=runtime_with_authoritative_scores(manifest, data_source=MinuteDataSource.TDX_REALTIME.value),
-            tradability_filter=TradabilityFilter(FakeSuspendLookup()),
-            refresh_audit=NoopRefreshAudit(),
-        ).run_day(
-            portfolio_id=portfolio.portfolio_id,
-            trade_date=date(2024, 1, 2),
-            runtime_config={"runtime_profile": {"selection": {"top_k": 1}}},
-        )
+    result = PaperTradingDayRunner(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=PaperV2MinuteMarketDataProvider(
+            limit_price_provider=FakeLimitProvider(),
+            suspend_status_provider=FakeSuspendProvider(),
+            tdx_fetcher=lambda _symbol, _trade_date: make_raw_bars(),
+        ),
+        runtime=runtime_with_authoritative_scores(manifest, data_source=MinuteDataSource.TDX_REALTIME.value),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+    ).run_day(
+        portfolio_id=portfolio.portfolio_id,
+        trade_date=date(2024, 1, 2),
+        runtime_config={"runtime_profile": {"selection": {"top_k": 1}}},
+    )
 
-    assert exc_info.value.context["behavior_keys"] == ["runtime_profile"]
-    assert not paper_repo.runs
+    binding = validate_runtime_profile_binding(result.run.runtime_config)
+    assert binding["source"] == "generated_effective_runtime_config"
+    assert binding["profile_version_id"] == GENERATED_RUNTIME_PROFILE_VERSION_ID
+    assert result.run.runtime_config["runtime_profile"]["selection"]["top_k"] == 1
+    assert len(result.orders) == 1
+    assert paper_repo.runs
 
 
-def test_paper_day_runner_rejects_platform_default_binding_for_behavior_override() -> None:
+def test_paper_day_runner_replaces_legacy_platform_default_binding_for_behavior_override() -> None:
     _package_repo, paper_repo, _service, manifest, portfolio = _portfolio_fixture()
     raw_config = {
         "runtime_profile": {"selection": {"top_k": 1}},
@@ -345,22 +349,24 @@ def test_paper_day_runner_rejects_platform_default_binding_for_behavior_override
         },
     }
 
-    with pytest.raises(StrategyPackageValidationError, match="platform default runtime profile"):
-        PaperTradingDayRunner(
-            repository=paper_repo,
-            calendar_provider=FakeCalendar(),
-            market_data_provider=PaperV2MinuteMarketDataProvider(
-                limit_price_provider=FakeLimitProvider(),
-                suspend_status_provider=FakeSuspendProvider(),
-                tdx_fetcher=lambda _symbol, _trade_date: make_raw_bars(),
-            ),
-            runtime=runtime_with_authoritative_scores(manifest, data_source=MinuteDataSource.TDX_REALTIME.value),
-            tradability_filter=TradabilityFilter(FakeSuspendLookup()),
-            refresh_audit=NoopRefreshAudit(),
-        ).run_day(
-            portfolio_id=portfolio.portfolio_id,
-            trade_date=date(2024, 1, 2),
-            runtime_config=raw_config,
-        )
+    result = PaperTradingDayRunner(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=PaperV2MinuteMarketDataProvider(
+            limit_price_provider=FakeLimitProvider(),
+            suspend_status_provider=FakeSuspendProvider(),
+            tdx_fetcher=lambda _symbol, _trade_date: make_raw_bars(),
+        ),
+        runtime=runtime_with_authoritative_scores(manifest, data_source=MinuteDataSource.TDX_REALTIME.value),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+    ).run_day(
+        portfolio_id=portfolio.portfolio_id,
+        trade_date=date(2024, 1, 2),
+        runtime_config=raw_config,
+    )
 
-    assert not paper_repo.runs
+    binding = validate_runtime_profile_binding(result.run.runtime_config)
+    assert binding["source"] == "generated_effective_runtime_config"
+    assert binding["profile_version_id"] == GENERATED_RUNTIME_PROFILE_VERSION_ID
+    assert len(result.orders) == 1
