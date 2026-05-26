@@ -89,6 +89,12 @@
       "actor": "codex-app",
       "action": "scope_expanded_for_close_sync",
       "note": "User approved scope expansion to update backend/tests/mcp/test_profiles_registry_gateway.py and the same-module BUG-105/109/117 closure records in one governance close-sync branch."
+    },
+    {
+      "timestamp": "2026-05-26T17:00:35Z",
+      "actor": "codex-app",
+      "action": "github_issue_synced",
+      "note": "Synced bug registry entry to GitHub issue #186."
     }
   ],
   "custom_github_labels": [

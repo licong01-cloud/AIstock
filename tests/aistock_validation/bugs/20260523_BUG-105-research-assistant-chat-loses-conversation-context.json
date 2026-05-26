@@ -103,6 +103,12 @@
       "actor": "codex-app",
       "action": "risk_label_normalized_for_github_sync",
       "note": "Normalized risk_area from 'conversation_state_and_llm_context' to existing GitHub label risk:prompt_runtime_correctness while preserving original value in risk_area_detail."
+    },
+    {
+      "timestamp": "2026-05-26T17:00:26Z",
+      "actor": "codex-app",
+      "action": "github_issue_synced",
+      "note": "Synced bug registry entry to GitHub issue #168."
     }
   ],
   "fix_commits": [

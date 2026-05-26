@@ -116,6 +116,12 @@
       "actor": "codex-app",
       "action": "workflow_close_sync_validation",
       "note": "Closed by human dialogue governance commits 05e5c7d4/55f56bb2 on main; final close-sync validation confirmed no fixed QE 10 loop/cardText legacy patterns remain in active scoped paths."
+    },
+    {
+      "timestamp": "2026-05-26T17:00:31Z",
+      "actor": "codex-app",
+      "action": "github_issue_synced",
+      "note": "Synced bug registry entry to GitHub issue #177."
     }
   ],
   "github_issue_number": 177,
