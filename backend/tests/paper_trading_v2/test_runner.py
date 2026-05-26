@@ -11,7 +11,11 @@ from backend.services.paper_trading_v2.market_data import (
 )
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import PackageStatus
-from backend.services.trading_core.errors import DataUnavailableError, ExecutionAlgoError, StrategyPackageValidationError
+from backend.services.trading_core.errors import (
+    ArtifactGenerationFailedError,
+    ExecutionAlgoError,
+    InvalidStateTransitionError,
+)
 from backend.services.trading_core.limit_price_provider import DailyLimitPrice
 from backend.services.trading_core.models import MinuteBar, OrderIntent, OrderSide, OrderStatus
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
@@ -169,7 +173,7 @@ def test_runner_batch_executes_multiple_buy_orders_on_one_ledger() -> None:
 def test_runner_batch_rejects_empty_order_list() -> None:
     manifest = make_ready_manifest(algo_code="TWAP")
 
-    with pytest.raises(StrategyPackageValidationError, match="at least one"):
+    with pytest.raises(ArtifactGenerationFailedError, match="at least one"):
         PaperTradingV2Runner().run_order_batch(
             manifest=manifest,
             portfolio_id="paper_1",
@@ -193,7 +197,7 @@ def test_runner_fails_for_package_mismatch() -> None:
         target_trade_date=date(2024, 1, 2),
     )
 
-    with pytest.raises(StrategyPackageValidationError, match="package_id"):
+    with pytest.raises(InvalidStateTransitionError, match="package_id"):
         PaperTradingV2Runner().run_single_order(
             manifest=manifest,
             portfolio_id="paper_1",

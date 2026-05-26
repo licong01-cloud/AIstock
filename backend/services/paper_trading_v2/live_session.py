@@ -17,6 +17,7 @@ from backend.services.paper_trading_v2.market_data import MinuteDataSource, Pape
 from backend.services.selection_center.risk_policy import StockRiskPolicyService
 from backend.services.selection_center.runtime_profile import (
     parse_selection_runtime_profile,
+    refresh_generated_runtime_profile_binding,
     validate_runtime_profile_binding,
 )
 from backend.services.selection_center.tradability import TradabilityFilter
@@ -44,7 +45,7 @@ from backend.services.trading_core.errors import (
 from backend.services.trading_core.execution_algo_capabilities import require_execution_algo_supports_mode
 from backend.services.trading_core.ledger import FeeModel, InMemoryLedger
 from backend.services.trading_core.minute_execution import MinuteExecutionEngine
-from backend.services.trading_core.models import AccountSnapshot, OrderStatus, PositionLot, RunStatus
+from backend.services.trading_core.models import AccountSnapshot, OrderStatus, RunStatus
 from backend.services.trading_core.oms import OMS
 
 from .models import (
@@ -584,6 +585,7 @@ class PaperTradingLiveMinuteExecutor:
             context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat(), "check": "live_session"},
             include_contract=True,
         )
+        config = refresh_generated_runtime_profile_binding(config)
         validate_runtime_profile_binding(
             config,
             context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat(), "check": "live_session"},

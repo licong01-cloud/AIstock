@@ -220,7 +220,7 @@ class StrategyPackageAssetEligibilityService:
         if result.eligible:
             return result
         raise PackageAssetInvalidError(
-            "strategy package asset eligibility failed",
+            "strategy package alpha core asset eligibility failed",
             context=result.to_dict(),
         )
 
