@@ -7,7 +7,6 @@ live work and it never switches data sources or algorithms implicitly.
 
 from __future__ import annotations
 
-import copy
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
@@ -573,7 +572,7 @@ class PaperTradingLiveMinuteExecutor:
             instantiate_runtime=False,
             require_runtime_assets=False,
         )
-        config = copy.deepcopy(session.runtime_config)
+        config = dict(session.runtime_config)
         config["validated_execution_policy"] = execution_policy_context
         config.setdefault("paper_v2_session", {})
         config["paper_v2_session"]["signal_data_source"] = self._signal_data_source(session, portfolio_data_source=portfolio.data_source)

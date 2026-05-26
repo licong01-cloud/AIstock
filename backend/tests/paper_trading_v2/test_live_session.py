@@ -23,7 +23,6 @@ from backend.services.paper_trading_v2.session import PaperTradingSessionRunner,
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
-from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELECTION_SCOPE, AUTHORITATIVE_SELECTION_SOURCE_TYPE
 from backend.services.strategy_package.service import StrategyPackageService
 from backend.services.trading_core.errors import DataUnavailableError
 from backend.services.trading_core.models import AccountSnapshot, MinuteBar, OrderIntent, OrderSide, PositionLot, RunStatus
@@ -179,26 +178,8 @@ class FakeTradabilityFilter:
         return candidates[:top_k], []
 
 
-class FakeSucceededArtifactStatus:
-    value = "SUCCEEDED"
-
-
-class FakeSelectionArtifactRepository:
-    def get(self, **kwargs):
-        class Artifact:
-            status = FakeSucceededArtifactStatus()
-            scores_json = [{"symbol": "000001.SZ", "score": 0.9, "rank": 1}]
-            metadata = {
-                "source_type": AUTHORITATIVE_SELECTION_SOURCE_TYPE,
-                "authority_scope": AUTHORITATIVE_SELECTION_SCOPE,
-            }
-
-        return Artifact()
-
-
 class FakeRuntime:
     def __init__(self, candidates: list[dict] | None = None) -> None:
-        self.artifact_repository = FakeSelectionArtifactRepository()
         self.candidates = candidates or [
             {"symbol": "000001.SZ", "score": 0.9, "rank": 1, "target_weight": 0.5, "reference_price": 10.0},
         ]
@@ -362,7 +343,10 @@ def test_live_session_tick_processes_new_minute_bar_once() -> None:
         mode=PaperSessionMode.LIVE_ONLY,
         start_date=date(2024, 1, 2),
         live_data_source=MinuteDataSource.TDX_REALTIME,
-        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+        runtime_config={
+            "paper_v2_session": {"signal_data_source": "DB_HISTORICAL"},
+            "selection_artifact_config": {"auto_generate": False},
+        },
     )
     run = paper_repo.create_run(
         PaperRun(
@@ -488,7 +472,10 @@ def test_live_session_waits_for_preopen_stk_limit_until_0914() -> None:
         mode=PaperSessionMode.LIVE_ONLY,
         start_date=date(2024, 1, 2),
         live_data_source=MinuteDataSource.TDX_REALTIME,
-        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+        runtime_config={
+            "paper_v2_session": {"signal_data_source": "DB_HISTORICAL"},
+            "selection_artifact_config": {"auto_generate": False},
+        },
     )
     audit = MissingStkLimitAudit()
     live_executor = PaperTradingLiveMinuteExecutor(
@@ -519,7 +506,10 @@ def test_live_session_fails_if_stk_limit_missing_at_0914() -> None:
         mode=PaperSessionMode.LIVE_ONLY,
         start_date=date(2024, 1, 2),
         live_data_source=MinuteDataSource.TDX_REALTIME,
-        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+        runtime_config={
+            "paper_v2_session": {"signal_data_source": "DB_HISTORICAL"},
+            "selection_artifact_config": {"auto_generate": False},
+        },
     )
     live_executor = PaperTradingLiveMinuteExecutor(
         repository=paper_repo,
@@ -670,7 +660,10 @@ def test_live_prepare_seeds_order_cursor_after_existing_completed_bars() -> None
         mode=PaperSessionMode.LIVE_ONLY,
         start_date=date(2024, 1, 2),
         live_data_source=MinuteDataSource.TDX_REALTIME,
-        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+        runtime_config={
+            "paper_v2_session": {"signal_data_source": "DB_HISTORICAL"},
+            "selection_artifact_config": {"auto_generate": False},
+        },
     )
     bars = [
         bar.model_copy(update={"bar_time": datetime(2024, 1, 2, 9, 31) + timedelta(minutes=i)})
@@ -713,7 +706,10 @@ def test_live_tick_never_backfills_prepared_order_with_existing_bars() -> None:
         mode=PaperSessionMode.LIVE_ONLY,
         start_date=date(2024, 1, 2),
         live_data_source=MinuteDataSource.TDX_REALTIME,
-        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+        runtime_config={
+            "paper_v2_session": {"signal_data_source": "DB_HISTORICAL"},
+            "selection_artifact_config": {"auto_generate": False},
+        },
     )
     bars = [
         bar.model_copy(update={"bar_time": datetime(2024, 1, 2, 9, 31) + timedelta(minutes=i)})

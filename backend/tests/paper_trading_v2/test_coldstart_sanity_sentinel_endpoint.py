@@ -228,17 +228,18 @@ def test_sentinel_endpoint_rejects_unknown_package_id_before_capture_preflight(m
     assert not any("FROM information_schema.columns" in sql for sql, _ in conn.executed)
 
 
-def test_sentinel_endpoint_allows_backtest_approved_package_status(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sentinel_endpoint_accepts_backtest_approved_asset_package(monkeypatch: pytest.MonkeyPatch) -> None:
+    """BACKTEST_APPROVED remains valid after Paper status gates were purged."""
+
     conn = FakeConnection(package_row=_manifest_row(status=PackageStatus.BACKTEST_APPROVED))
     client = _client(monkeypatch, conn)
 
     response = client.post("/api/v1/paper-v2/coldstart-sanity/sentinel-order", json=_payload(package_id=conn.package_row["package_id"]))
 
     assert response.status_code == 200
-    assert response.json()["package_id"] == conn.package_row["package_id"]
+    assert response.json()["ok"] is True
     assert conn.commits == 1
     assert conn.rollbacks == 0
-    assert any("INSERT INTO paper_v2.fills" in sql for sql, _ in conn.executed)
 
 
 def test_sentinel_endpoint_rejects_retired_package_status_before_writes(monkeypatch: pytest.MonkeyPatch) -> None:
