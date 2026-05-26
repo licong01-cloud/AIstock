@@ -562,7 +562,7 @@ BASE_DDL: list[str] = [
         checksum TEXT NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        CONSTRAINT ck_apn_category CHECK (category IN ('root','governance','intent','domain','workflow','tool_guard','renderer','memory','model_routing','context')),
+        CONSTRAINT ck_apn_category CHECK (category IN ('root','governance','intent','domain','workflow','tool_guard','renderer','memory','model_routing','context','mode')),
         CONSTRAINT ck_apn_phase CHECK (phase IN ('planning','preflight','execution','result','reflection')),
         CONSTRAINT ck_apn_risk CHECK (risk_level IN ('low','medium','high','production_sensitive')),
         CONSTRAINT ck_apn_status CHECK (status IN ('draft','enabled','disabled','deprecated'))
@@ -574,7 +574,7 @@ BASE_DDL: list[str] = [
     """,
     """
     ALTER TABLE assistant_prompt_nodes
-        ADD CONSTRAINT ck_apn_category CHECK (category IN ('root','governance','intent','domain','workflow','tool_guard','renderer','memory','model_routing','context'))
+        ADD CONSTRAINT ck_apn_category CHECK (category IN ('root','governance','intent','domain','workflow','tool_guard','renderer','memory','model_routing','context','mode'))
     """,
     "CREATE INDEX IF NOT EXISTS idx_apn_tree_phase ON assistant_prompt_nodes(tree_path, phase, status)",
     """

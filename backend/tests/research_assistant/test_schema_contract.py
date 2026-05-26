@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 
 from backend.db.init_research_assistant_schema_20260521 import DDL, RESEARCH_ASSISTANT_EVENT_TYPES, RESEARCH_ASSISTANT_SCHEMA_VERSION
-from backend.services.research_assistant.models import EVENT_TYPES
+from backend.services.research_assistant.models import EVENT_TYPES, PROMPT_NODE_CATEGORIES
 from backend.services.research_assistant.repository import TABLES
 from backend.services.research_assistant.service import (
     DEFAULT_MCP_SERVERS,
@@ -101,6 +101,11 @@ def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
     assert set(RESEARCH_ASSISTANT_EVENT_TYPES) == EVENT_TYPES
     assert "DROP CONSTRAINT IF EXISTS ck_ate_type" in sql
     assert "ADD CONSTRAINT ck_ate_type CHECK" in sql
+    category_constraints = re.findall(r"ck_apn_category CHECK \(category IN \(([^)]*)\)\)", sql)
+    assert category_constraints
+    for constraint in category_constraints:
+        values = {item.strip().strip("'") for item in constraint.split(",")}
+        assert values == PROMPT_NODE_CATEGORIES
 
 
 def test_research_assistant_service_payloads_match_schema_columns() -> None:
