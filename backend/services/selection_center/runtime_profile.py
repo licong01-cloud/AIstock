@@ -73,6 +73,8 @@ class RuntimeHMMProfile(BaseModel):
     model_snapshot_id: str | None = None
     signal_preset: str | None = None
     coefficients_path: str | None = None
+    auto_compute: bool = True
+    manual_snapshot_required: bool = False
 
     @field_validator("model_config_id", "model_snapshot_id", "signal_preset", "coefficients_path")
     @classmethod
@@ -263,6 +265,11 @@ def parse_selection_runtime_profile(runtime_config: dict[str, Any] | None) -> Se
         ) from exc
 
     if profile.hmm.enabled:
+        if profile.hmm.manual_snapshot_required and not profile.hmm.model_snapshot_id:
+            raise HMMRuntimeUnavailableError(
+                "HMM runtime profile requires model_snapshot_id when manual_snapshot_required=true",
+                context={"runtime_profile": profile.model_dump(mode="json")},
+            )
         if not profile.hmm.model_snapshot_id and not profile.hmm.model_config_id:
             raise HMMRuntimeUnavailableError(
                 "HMM runtime profile requires model_snapshot_id or model_config_id when enabled",

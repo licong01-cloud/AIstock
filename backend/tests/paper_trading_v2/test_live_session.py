@@ -24,7 +24,7 @@ from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.strategy_package.service import StrategyPackageService
-from backend.services.trading_core.errors import DataUnavailableError
+from backend.services.trading_core.errors import BrokerConnectivityError, DataUnavailableError
 from backend.services.trading_core.models import AccountSnapshot, MinuteBar, OrderIntent, OrderSide, PositionLot, RunStatus
 from backend.services.trading_core.oms import OMS
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
@@ -280,6 +280,25 @@ class FakeMiniQMTLiveDayHelper:
         )
 
 
+class BrokerDownMiniQMTLiveDayHelper:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def run_day(self, *, portfolio_id, trade_date, runtime_config=None, fee_model=None):
+        self.calls.append(
+            {
+                "portfolio_id": portfolio_id,
+                "trade_date": trade_date,
+                "runtime_config": runtime_config,
+                "fee_model": fee_model,
+            }
+        )
+        raise BrokerConnectivityError(
+            "miniQMT is not connected",
+            context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat()},
+        )
+
+
 def make_portfolio_repo(
     *,
     data_source: MinuteDataSource = MinuteDataSource.TDX_REALTIME,
@@ -483,6 +502,104 @@ def test_minqmt_live_session_passes_previous_trading_day_cutoff_to_day_runner() 
     assert runtime_config["selection_artifact_config"]["cutoff_date"] == "2024-01-03"
     assert runtime_config["paper_v2_session"]["selection_cutoff_date"] == "2024-01-03"
     assert "cutoff_date" not in session.runtime_config["selection_artifact_config"]
+
+
+def test_minqmt_live_session_waits_before_submit_window_without_orders() -> None:
+    paper_repo, portfolio_id = make_portfolio_repo(
+        data_source=MinuteDataSource.MINIQMT_REALTIME,
+        broker_backend="minqmt_sim",
+    )
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.MINIQMT_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+    )
+    live_executor = PaperTradingLiveMinuteExecutor(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=ExplodingLiveMarket(),  # type: ignore[arg-type]
+    )
+    fake_day_helper = FakeMiniQMTLiveDayHelper(paper_repo)
+    live_executor.day_helper = fake_day_helper  # type: ignore[assignment]
+
+    progress = PaperTradingSessionRunner(repository=paper_repo, live_executor=live_executor).tick(
+        session.session_id,
+        as_of_time=datetime(2024, 1, 2, 8, 0),
+    )
+
+    assert progress.session.status == PaperSessionStatus.LIVE_WAITING_MARKET_WINDOW
+    assert fake_day_helper.calls == []
+    assert paper_repo.runs == {}
+    event_types = [event["event_type"] for event in paper_repo.list_session_events(session.session_id)]
+    assert "MINIQMT_LIVE_WAITING_MARKET_WINDOW" in event_types
+
+
+def test_minqmt_live_session_waits_for_broker_before_cutoff() -> None:
+    paper_repo, portfolio_id = make_portfolio_repo(
+        data_source=MinuteDataSource.MINIQMT_REALTIME,
+        broker_backend="minqmt_sim",
+    )
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.MINIQMT_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+    )
+    live_executor = PaperTradingLiveMinuteExecutor(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=ExplodingLiveMarket(),  # type: ignore[arg-type]
+    )
+    broker_down = BrokerDownMiniQMTLiveDayHelper()
+    live_executor.day_helper = broker_down  # type: ignore[assignment]
+
+    progress = PaperTradingSessionRunner(repository=paper_repo, live_executor=live_executor).tick(
+        session.session_id,
+        as_of_time=datetime(2024, 1, 2, 13, 1),
+    )
+
+    assert progress.session.status == PaperSessionStatus.LIVE_WAITING_BROKER
+    assert broker_down.calls
+    assert paper_repo.runs == {}
+    event_types = [event["event_type"] for event in paper_repo.list_session_events(session.session_id)]
+    assert "MINIQMT_LIVE_WAITING_BROKER" in event_types
+
+
+def test_minqmt_live_session_after_cutoff_final_fails_without_fake_success() -> None:
+    paper_repo, portfolio_id = make_portfolio_repo(
+        data_source=MinuteDataSource.MINIQMT_REALTIME,
+        broker_backend="minqmt_sim",
+    )
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.MINIQMT_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+    )
+    live_executor = PaperTradingLiveMinuteExecutor(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=ExplodingLiveMarket(),  # type: ignore[arg-type]
+    )
+    fake_day_helper = FakeMiniQMTLiveDayHelper(paper_repo)
+    live_executor.day_helper = fake_day_helper  # type: ignore[assignment]
+
+    progress = PaperTradingSessionRunner(repository=paper_repo, live_executor=live_executor).tick(
+        session.session_id,
+        as_of_time=datetime(2024, 1, 2, 14, 56),
+    )
+
+    run = paper_repo.get_run_by_portfolio_date(portfolio_id, date(2024, 1, 2))
+    assert progress.session.status == PaperSessionStatus.FAILED
+    assert run is not None
+    assert run.status == RunStatus.FAILED
+    assert fake_day_helper.calls == []
+    assert paper_repo.get_portfolio(portfolio_id).status == PortfolioStatus.FAILED
+    assert paper_repo.list_errors(portfolio_id)
 
 
 def test_live_session_injects_previous_trading_day_selection_cutoff() -> None:

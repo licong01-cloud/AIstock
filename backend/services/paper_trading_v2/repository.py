@@ -16,10 +16,12 @@ from backend.services.trading_core.models import AccountSnapshot, Fill, Order, O
 
 from .market_data import MinuteDataSource
 from .models import (
+    BrokerAccountBindingStatus,
     ConfigChangeType,
     ExecutionPolicyActivationStatus,
     IntradaySnapshot,
     OrderExecutionState,
+    PaperBrokerAccountBinding,
     PaperConfigChangeAudit,
     PaperExecutionPolicyActivation,
     PaperPortfolio,
@@ -53,6 +55,10 @@ RUNNING_SUMMARY_TICKABLE_SESSION_STATUSES = {
     PaperSessionStatus.LIVE_RUNNING.value,
     PaperSessionStatus.LIVE_WAITING_FOR_BAR.value,
     PaperSessionStatus.LIVE_WAITING_NEXT_TRADING_DAY.value,
+    PaperSessionStatus.LIVE_WAITING_MARKET_WINDOW.value,
+    PaperSessionStatus.LIVE_WAITING_PLATFORM_DATA.value,
+    PaperSessionStatus.LIVE_WAITING_BROKER.value,
+    PaperSessionStatus.LIVE_RETRYING.value,
 }
 RUNNING_SUMMARY_SORT_COLUMNS = {
     "portfolio_name": "portfolio_name",
@@ -153,8 +159,9 @@ class PaperTradingV2Repository:
                         portfolio_id, portfolio_name, package_id, manifest_sha256,
                         frozen_manifest_json, initial_cash, start_date, data_source,
                         broker_backend, fee_policy, risk_policy, execution_policy, status,
-                        created_at, updated_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        auto_run_enabled, auto_run_config, auto_run_config_sha256,
+                        auto_run_updated_at, auto_run_updated_by, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         portfolio.portfolio_id,
@@ -170,6 +177,11 @@ class PaperTradingV2Repository:
                         psycopg2.extras.Json(portfolio.risk_policy),
                         psycopg2.extras.Json(portfolio.execution_policy),
                         portfolio.status.value,
+                        portfolio.auto_run_enabled,
+                        psycopg2.extras.Json(portfolio.auto_run_config),
+                        portfolio.auto_run_config_sha256,
+                        portfolio.auto_run_updated_at,
+                        portfolio.auto_run_updated_by,
                         portfolio.created_at,
                         portfolio.updated_at,
                     ),
@@ -566,9 +578,165 @@ class PaperTradingV2Repository:
                     raise DataUnavailableError("paper v2 portfolio does not exist", context={"portfolio_id": portfolio_id})
         return self.get_portfolio(portfolio_id)
 
+    def update_portfolio_auto_run(
+        self,
+        portfolio_id: str,
+        *,
+        enabled: bool,
+        config: dict[str, Any],
+        config_sha256: str,
+        updated_by: str | None = None,
+    ) -> PaperPortfolio:
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE paper_v2.portfolio
+                    SET auto_run_enabled = %s,
+                        auto_run_config = %s,
+                        auto_run_config_sha256 = %s,
+                        auto_run_updated_at = NOW(),
+                        auto_run_updated_by = %s,
+                        updated_at = NOW()
+                    WHERE portfolio_id = %s
+                    """,
+                    (
+                        enabled,
+                        psycopg2.extras.Json(config),
+                        config_sha256,
+                        updated_by,
+                        portfolio_id,
+                    ),
+                )
+                if cur.rowcount != 1:
+                    raise DataUnavailableError("paper v2 portfolio does not exist", context={"portfolio_id": portfolio_id})
+        return self.get_portfolio(portfolio_id)
+
+    def list_auto_run_portfolios(self, *, limit: int = 100) -> list[PaperPortfolio]:
+        rows = self._fetch_rows(
+            """
+            SELECT *
+            FROM paper_v2.portfolio
+            WHERE auto_run_enabled IS TRUE
+              AND status IN ('READY', 'RUNNING', 'PAUSED')
+            ORDER BY auto_run_updated_at DESC NULLS LAST, updated_at DESC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        return [self._portfolio_from_row(row) for row in rows]
+
+    def create_broker_account_binding(self, binding: PaperBrokerAccountBinding) -> PaperBrokerAccountBinding:
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                try:
+                    cur.execute(
+                        """
+                        INSERT INTO paper_v2.broker_account_binding (
+                            binding_id, broker_backend, broker_mode, broker_account_id,
+                            portfolio_id, binding_status, allocation_mode, initial_cash,
+                            created_at, updated_at, created_by
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            binding.binding_id,
+                            binding.broker_backend,
+                            binding.broker_mode,
+                            binding.broker_account_id,
+                            binding.portfolio_id,
+                            binding.binding_status.value,
+                            binding.allocation_mode,
+                            binding.initial_cash,
+                            binding.created_at,
+                            binding.updated_at,
+                            binding.created_by,
+                        ),
+                    )
+                except psycopg2.IntegrityError as exc:
+                    raise InvalidStateTransitionError(
+                        "MiniQMT account already has an active Paper v2 auto-run binding",
+                        context={
+                            "broker_backend": binding.broker_backend,
+                            "broker_mode": binding.broker_mode,
+                            "broker_account_id": binding.broker_account_id,
+                            "portfolio_id": binding.portfolio_id,
+                            "allocation_mode": binding.allocation_mode,
+                        },
+                    ) from exc
+        return binding
+
+    def get_active_broker_account_binding(
+        self,
+        *,
+        broker_backend: str,
+        broker_mode: str,
+        broker_account_id: str,
+    ) -> PaperBrokerAccountBinding | None:
+        rows = self._fetch_rows(
+            """
+            SELECT *
+            FROM paper_v2.broker_account_binding
+            WHERE broker_backend = %s
+              AND broker_mode = %s
+              AND broker_account_id = %s
+              AND binding_status = 'ACTIVE'
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (broker_backend, broker_mode, broker_account_id),
+        )
+        return self._broker_account_binding_from_row(rows[0]) if rows else None
+
+    def list_active_broker_account_bindings(self, portfolio_id: str | None = None) -> list[PaperBrokerAccountBinding]:
+        if portfolio_id:
+            rows = self._fetch_rows(
+                """
+                SELECT *
+                FROM paper_v2.broker_account_binding
+                WHERE portfolio_id = %s AND binding_status = 'ACTIVE'
+                ORDER BY updated_at DESC
+                """,
+                (portfolio_id,),
+            )
+        else:
+            rows = self._fetch_rows(
+                """
+                SELECT *
+                FROM paper_v2.broker_account_binding
+                WHERE binding_status = 'ACTIVE'
+                ORDER BY updated_at DESC
+                """,
+                (),
+            )
+        return [self._broker_account_binding_from_row(row) for row in rows]
+
+    def update_broker_account_binding_status(
+        self,
+        binding_id: str,
+        status: BrokerAccountBindingStatus,
+    ) -> PaperBrokerAccountBinding:
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE paper_v2.broker_account_binding
+                    SET binding_status = %s, updated_at = NOW()
+                    WHERE binding_id = %s
+                    """,
+                    (status.value, binding_id),
+                )
+                if cur.rowcount != 1:
+                    raise DataUnavailableError(
+                        "paper v2 broker account binding does not exist",
+                        context={"binding_id": binding_id},
+                    )
+        rows = self._fetch_rows("SELECT * FROM paper_v2.broker_account_binding WHERE binding_id = %s", (binding_id,))
+        return self._broker_account_binding_from_row(rows[0])
+
     def delete_portfolio(self, portfolio_id: str) -> dict[str, int]:
         self.get_portfolio(portfolio_id)
         counts = {
+            "broker_account_binding": 0,
             "selection_paper_portfolio_link": 0,
             "order_execution_state": 0,
             "intraday_snapshots": 0,
@@ -601,6 +769,11 @@ class PaperTradingV2Repository:
                 cur.execute("SELECT profile_id FROM paper_v2.runtime_profile WHERE portfolio_id = %s", (portfolio_id,))
                 profile_ids = [row[0] for row in cur.fetchall()]
 
+                cur.execute(
+                    "UPDATE paper_v2.broker_account_binding SET binding_status = 'RETIRED', updated_at = NOW() WHERE portfolio_id = %s AND binding_status = 'ACTIVE'",
+                    (portfolio_id,),
+                )
+                counts["broker_account_binding"] = cur.rowcount
                 cur.execute("DELETE FROM selection.paper_portfolio_link WHERE portfolio_id = %s", (portfolio_id,))
                 counts["selection_paper_portfolio_link"] = cur.rowcount
                 if run_ids:
@@ -2103,9 +2276,30 @@ class PaperTradingV2Repository:
             fee_policy=row["fee_policy"] or {},
             risk_policy=row["risk_policy"] or {},
             execution_policy=row["execution_policy"] or {},
+            auto_run_enabled=bool(row.get("auto_run_enabled", False)),
+            auto_run_config=row.get("auto_run_config") or {},
+            auto_run_config_sha256=row.get("auto_run_config_sha256"),
+            auto_run_updated_at=row.get("auto_run_updated_at"),
+            auto_run_updated_by=row.get("auto_run_updated_by"),
             status=PortfolioStatus(row["status"]),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+        )
+
+    @staticmethod
+    def _broker_account_binding_from_row(row: dict[str, Any]) -> PaperBrokerAccountBinding:
+        return PaperBrokerAccountBinding(
+            binding_id=row["binding_id"],
+            broker_backend=row["broker_backend"],
+            broker_mode=row["broker_mode"],
+            broker_account_id=row["broker_account_id"],
+            portfolio_id=row["portfolio_id"],
+            binding_status=BrokerAccountBindingStatus(row["binding_status"]),
+            allocation_mode=row.get("allocation_mode") or "exclusive_account",
+            initial_cash=float(row["initial_cash"]) if row.get("initial_cash") is not None else None,
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            created_by=row.get("created_by"),
         )
 
     @staticmethod
@@ -2295,6 +2489,7 @@ class InMemoryPaperTradingV2Repository:
         self.session_events: list[dict[str, Any]] = []
         self.order_execution_states: dict[str, OrderExecutionState] = {}
         self.intraday_snapshots: dict[tuple[str, datetime], IntradaySnapshot] = {}
+        self.broker_account_bindings: dict[str, PaperBrokerAccountBinding] = {}
 
     @contextmanager
     def session_tick_lock(self, session_id: str) -> Iterator[None]:
@@ -2465,6 +2660,101 @@ class InMemoryPaperTradingV2Repository:
         self.portfolios[portfolio_id] = updated
         return updated
 
+    def update_portfolio_auto_run(
+        self,
+        portfolio_id: str,
+        *,
+        enabled: bool,
+        config: dict[str, Any],
+        config_sha256: str,
+        updated_by: str | None = None,
+    ) -> PaperPortfolio:
+        portfolio = self.get_portfolio(portfolio_id)
+        updated = portfolio.model_copy(
+            update={
+                "auto_run_enabled": enabled,
+                "auto_run_config": config,
+                "auto_run_config_sha256": config_sha256,
+                "auto_run_updated_at": datetime.now(UTC),
+                "auto_run_updated_by": updated_by,
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        self.portfolios[portfolio_id] = updated
+        return updated
+
+    def list_auto_run_portfolios(self, *, limit: int = 100) -> list[PaperPortfolio]:
+        rows = [
+            portfolio
+            for portfolio in self.portfolios.values()
+            if portfolio.auto_run_enabled and portfolio.status in {PortfolioStatus.READY, PortfolioStatus.RUNNING, PortfolioStatus.PAUSED}
+        ]
+        rows.sort(key=lambda item: item.auto_run_updated_at or item.updated_at, reverse=True)
+        return rows[:limit]
+
+    def create_broker_account_binding(self, binding: PaperBrokerAccountBinding) -> PaperBrokerAccountBinding:
+        conflict = self.get_active_broker_account_binding(
+            broker_backend=binding.broker_backend,
+            broker_mode=binding.broker_mode,
+            broker_account_id=binding.broker_account_id,
+        )
+        if conflict is not None and conflict.portfolio_id != binding.portfolio_id:
+            raise InvalidStateTransitionError(
+                "MiniQMT account already has an active Paper v2 auto-run binding",
+                context={
+                    "broker_backend": binding.broker_backend,
+                    "broker_mode": binding.broker_mode,
+                    "broker_account_id": binding.broker_account_id,
+                    "existing_portfolio_id": conflict.portfolio_id,
+                    "portfolio_id": binding.portfolio_id,
+                },
+            )
+        self.broker_account_bindings[binding.binding_id] = binding
+        return binding
+
+    def get_active_broker_account_binding(
+        self,
+        *,
+        broker_backend: str,
+        broker_mode: str,
+        broker_account_id: str,
+    ) -> PaperBrokerAccountBinding | None:
+        for binding in self.broker_account_bindings.values():
+            if (
+                binding.broker_backend == broker_backend
+                and binding.broker_mode == broker_mode
+                and binding.broker_account_id == broker_account_id
+                and binding.binding_status == BrokerAccountBindingStatus.ACTIVE
+            ):
+                return binding
+        return None
+
+    def list_active_broker_account_bindings(self, portfolio_id: str | None = None) -> list[PaperBrokerAccountBinding]:
+        rows = [
+            binding
+            for binding in self.broker_account_bindings.values()
+            if binding.binding_status == BrokerAccountBindingStatus.ACTIVE
+            and (portfolio_id is None or binding.portfolio_id == portfolio_id)
+        ]
+        rows.sort(key=lambda item: item.updated_at, reverse=True)
+        return rows
+
+    def update_broker_account_binding_status(
+        self,
+        binding_id: str,
+        status: BrokerAccountBindingStatus,
+    ) -> PaperBrokerAccountBinding:
+        try:
+            binding = self.broker_account_bindings[binding_id]
+        except KeyError as exc:
+            raise DataUnavailableError(
+                "paper v2 broker account binding does not exist",
+                context={"binding_id": binding_id},
+            ) from exc
+        updated = binding.model_copy(update={"binding_status": status, "updated_at": datetime.now(UTC)})
+        self.broker_account_bindings[binding_id] = updated
+        return updated
+
     def delete_portfolio(self, portfolio_id: str) -> dict[str, int]:
         self.get_portfolio(portfolio_id)
         run_ids = [run_id for run_id, run in self.runs.items() if run.portfolio_id == portfolio_id]
@@ -2474,6 +2764,7 @@ class InMemoryPaperTradingV2Repository:
         counts.update(
             {
                 "selection_paper_portfolio_link": 0,
+                "broker_account_binding": len([item for item in self.broker_account_bindings.values() if item.portfolio_id == portfolio_id and item.binding_status == BrokerAccountBindingStatus.ACTIVE]),
                 "session_events": len([item for item in self.session_events if item.get("session_id") in session_ids]),
                 "session_day": len([key for key, day in self.session_days.items() if day.portfolio_id == portfolio_id]),
                 "trade_session": len(session_ids),
@@ -2506,6 +2797,11 @@ class InMemoryPaperTradingV2Repository:
         self.config_change_audits = [item for item in self.config_change_audits if item.portfolio_id != portfolio_id]
         self.reset_audits = [item for item in self.reset_audits if item.get("portfolio_id") != portfolio_id]
         self.errors = [item for item in self.errors if item.get("portfolio_id") != portfolio_id]
+        for key, binding in list(self.broker_account_bindings.items()):
+            if binding.portfolio_id == portfolio_id and binding.binding_status == BrokerAccountBindingStatus.ACTIVE:
+                self.broker_account_bindings[key] = binding.model_copy(
+                    update={"binding_status": BrokerAccountBindingStatus.RETIRED, "updated_at": datetime.now(UTC)}
+                )
         for key, snapshot in list(self.intraday_snapshots.items()):
             if snapshot.portfolio_id == portfolio_id:
                 self.intraday_snapshots.pop(key, None)

@@ -355,6 +355,18 @@ class SectorHMMRuntime:
         )
         if found["artifact"] is not None:
             return found["artifact"]
+        if not profile.auto_compute:
+            raise HMMRuntimeUnavailableError(
+                "HMM coefficient artifact is missing and auto_compute=false",
+                context={
+                    "package_id": package_id,
+                    "snapshot_id": profile.model_snapshot_id,
+                    "trade_date": trade_date.isoformat(),
+                    "model_dir": str(model_path.parent),
+                    "candidate_paths": found["candidate_paths"],
+                    "reason": found["reason"],
+                },
+            )
         if found["reason"] == "missing_artifact":
             return self._generate_coefficients_on_miss(
                 model_path=model_path,

@@ -42,6 +42,8 @@ def test_backtest_contract_never_reinjects_hmm_runtime_from_qe_config() -> None:
         "model_snapshot_id": None,
         "signal_preset": None,
         "coefficients_path": None,
+        "auto_compute": True,
+        "manual_snapshot_required": False,
     }
     assert disabled["qe_backtest_runtime_contract"]["runtime_features"]["hmm"] == {
         "enabled": False,

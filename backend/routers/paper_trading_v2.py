@@ -41,6 +41,40 @@ class CreatePortfolioRequest(BaseModel):
     execution_policy: dict[str, Any] | None = None
 
 
+class CreateMiniQMTAutoRunPortfolioRequest(BaseModel):
+    package_id: str = Field(min_length=1)
+    portfolio_name: str = Field(min_length=1)
+    initial_cash: float = Field(gt=0)
+    start_date: date
+    broker_account_id: str = Field(min_length=1)
+    top_k: int | None = Field(default=None, gt=0, le=100)
+    hmm: dict[str, Any] | None = None
+    industry_blacklist: list[str] = Field(default_factory=list)
+    fee_policy: dict[str, Any] | None = None
+    risk_policy: dict[str, Any] | None = None
+    execution_policy: dict[str, Any] | None = None
+    trade_window_policy: dict[str, Any] | None = None
+    auto_run_config: dict[str, Any] | None = None
+    created_by: str | None = None
+    create_session: bool = True
+
+
+class AutoRunEnableRequest(BaseModel):
+    broker_account_id: str = Field(min_length=1)
+    config: dict[str, Any] | None = None
+    updated_by: str | None = None
+    create_session: bool = True
+
+
+class AutoRunDisableRequest(BaseModel):
+    updated_by: str | None = None
+
+
+class AutoRunConfigPatchRequest(BaseModel):
+    patch: dict[str, Any] = Field(default_factory=dict)
+    updated_by: str | None = None
+
+
 class RunDayRequest(BaseModel):
     trade_date: date
     runtime_config: dict[str, Any] = Field(default_factory=dict)
@@ -205,6 +239,8 @@ def _raise_http(exc: TradingCoreError) -> None:
     status_code = 400
     if isinstance(exc, DataUnavailableError):
         status_code = 404
+    elif isinstance(exc, InvalidStateTransitionError):
+        status_code = 409
     elif isinstance(exc, UnsupportedFeatureError):
         status_code = 422
     raise HTTPException(status_code=status_code, detail=exc.to_dict()) from exc
@@ -309,6 +345,37 @@ def create_portfolio(req: CreatePortfolioRequest) -> dict[str, Any]:
         _raise_http(exc)
 
 
+@router.post("/auto-run/miniqmt-portfolios")
+def create_minqmt_auto_run_portfolio(req: CreateMiniQMTAutoRunPortfolioRequest) -> dict[str, Any]:
+    try:
+        result = PaperTradingV2PortfolioService().create_minqmt_auto_run_portfolio(
+            package_id=req.package_id,
+            portfolio_name=req.portfolio_name,
+            initial_cash=req.initial_cash,
+            start_date=req.start_date,
+            broker_account_id=req.broker_account_id,
+            top_k=req.top_k,
+            hmm=req.hmm,
+            industry_blacklist=req.industry_blacklist,
+            fee_policy=req.fee_policy,
+            risk_policy=req.risk_policy,
+            execution_policy=req.execution_policy,
+            trade_window_policy=req.trade_window_policy,
+            auto_run_config=req.auto_run_config,
+            created_by=req.created_by,
+            create_session=req.create_session,
+        )
+        return {
+            "ok": True,
+            "portfolio": result["portfolio"].model_dump(mode="json"),
+            "binding": result["binding"].model_dump(mode="json"),
+            "session": result["session"].model_dump(mode="json") if result.get("session") else None,
+            "auto_run": result["auto_run"],
+        }
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
 @router.get("/portfolios")
 def list_portfolios(
     limit: int = Query(default=100, ge=1, le=1000),
@@ -409,6 +476,69 @@ def get_portfolio(portfolio_id: str) -> dict[str, Any]:
     try:
         portfolio = PaperTradingV2PortfolioService().get_portfolio(portfolio_id)
         return {"ok": True, "portfolio": portfolio.model_dump(mode="json")}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/portfolios/{portfolio_id}/auto-run/status")
+def get_portfolio_auto_run_status(portfolio_id: str) -> dict[str, Any]:
+    try:
+        return {"ok": True, "auto_run": PaperTradingV2PortfolioService().auto_run_status(portfolio_id)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/portfolios/{portfolio_id}/auto-run/enable")
+def enable_portfolio_auto_run(portfolio_id: str, req: AutoRunEnableRequest) -> dict[str, Any]:
+    try:
+        result = PaperTradingV2PortfolioService().enable_auto_run(
+            portfolio_id,
+            broker_account_id=req.broker_account_id,
+            config=req.config,
+            updated_by=req.updated_by,
+            create_session=req.create_session,
+        )
+        return {
+            "ok": True,
+            "portfolio": result["portfolio"].model_dump(mode="json"),
+            "binding": result["binding"].model_dump(mode="json"),
+            "session": result["session"].model_dump(mode="json") if result.get("session") else None,
+            "auto_run": result["auto_run"],
+        }
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/portfolios/{portfolio_id}/auto-run/disable")
+def disable_portfolio_auto_run(portfolio_id: str, req: AutoRunDisableRequest | None = None) -> dict[str, Any]:
+    try:
+        result = PaperTradingV2PortfolioService().disable_auto_run(
+            portfolio_id,
+            updated_by=req.updated_by if req else None,
+        )
+        return {
+            "ok": True,
+            "portfolio": result["portfolio"].model_dump(mode="json"),
+            "retired_bindings": [item.model_dump(mode="json") for item in result["retired_bindings"]],
+            "auto_run": result["auto_run"],
+        }
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.patch("/portfolios/{portfolio_id}/auto-run/config")
+def patch_portfolio_auto_run_config(portfolio_id: str, req: AutoRunConfigPatchRequest) -> dict[str, Any]:
+    try:
+        result = PaperTradingV2PortfolioService().update_auto_run_config(
+            portfolio_id,
+            patch=req.patch,
+            updated_by=req.updated_by,
+        )
+        return {
+            "ok": True,
+            "portfolio": result["portfolio"].model_dump(mode="json"),
+            "auto_run": result["auto_run"],
+        }
     except TradingCoreError as exc:
         _raise_http(exc)
 
@@ -946,6 +1076,13 @@ def get_session_scheduler_status() -> dict[str, Any]:
     return {"ok": True, "scheduler": paper_trading_v2_scheduler.status()}
 
 
+@router.get("/session-scheduler/bootstrap-status")
+def get_session_scheduler_bootstrap_status() -> dict[str, Any]:
+    from backend.services.paper_trading_v2.scheduler import paper_trading_v2_scheduler
+
+    return {"ok": True, "bootstrap": paper_trading_v2_scheduler.bootstrap_status()}
+
+
 @router.post("/session-scheduler/start")
 def start_session_scheduler(req: SchedulerStartRequest) -> dict[str, Any]:
     from backend.services.paper_trading_v2.scheduler import paper_trading_v2_scheduler
@@ -965,6 +1102,21 @@ def run_session_scheduler_once(req: SchedulerRunOnceRequest) -> dict[str, Any]:
     from backend.services.paper_trading_v2.scheduler import paper_trading_v2_scheduler
 
     return {"ok": True, "result": paper_trading_v2_scheduler.run_once(limit=req.limit, as_of_time=req.as_of_time)}
+
+
+@router.post("/session-scheduler/recover-auto-run")
+def recover_session_scheduler_auto_run(req: SchedulerRunOnceRequest | None = None) -> dict[str, Any]:
+    from backend.services.paper_trading_v2.scheduler import paper_trading_v2_scheduler
+
+    limit = req.limit if req else 50
+    as_of_time = req.as_of_time if req else None
+    return {
+        "ok": True,
+        "recovery": paper_trading_v2_scheduler.auto_run_coordinator.recover_enabled_portfolios(
+            limit=limit,
+            as_of_time=as_of_time,
+        ),
+    }
 
 
 @router.post("/coldstart-sanity/sentinel-order")

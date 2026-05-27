@@ -248,9 +248,44 @@ export type PaperPortfolio = {
   fee_policy?: JsonObject;
   risk_policy?: JsonObject;
   execution_policy?: JsonObject;
+  auto_run_enabled?: boolean;
+  auto_run_config?: JsonObject;
+  auto_run_config_sha256?: string | null;
+  auto_run_updated_at?: string | null;
+  auto_run_updated_by?: string | null;
   status: string;
   created_at?: string;
   updated_at?: string;
+};
+
+export type BrokerAccountBinding = {
+  binding_id: string;
+  broker_backend: "local_sim" | "minqmt_sim" | string;
+  broker_mode: string;
+  broker_account_id: string;
+  portfolio_id: string;
+  binding_status: string;
+  allocation_mode?: string;
+  initial_cash?: number | null;
+  created_at?: string;
+  updated_at?: string;
+  created_by?: string | null;
+};
+
+export type PaperAutoRunSummary = {
+  enabled: boolean;
+  config_sha256?: string | null;
+  config?: JsonObject;
+  next_plan?: string | null;
+  bindings?: BrokerAccountBinding[];
+  active_sessions?: PaperSession[];
+};
+
+export type CreateMiniQMTAutoRunPortfolioResult = {
+  portfolio: PaperPortfolio;
+  binding: BrokerAccountBinding;
+  session?: PaperSession | null;
+  auto_run: PaperAutoRunSummary;
 };
 
 export type PaperRun = {
@@ -362,14 +397,25 @@ export type PaperSchedulerStatus = {
   tickable_statuses: string[];
   last_run_at?: string | null;
   last_result?: JsonObject | null;
+  auto_run?: JsonObject;
 };
 
 export type PaperSchedulerRunResult = {
   started_at: string;
+  auto_run_recovery?: JsonObject;
   completed_at?: string;
   session_count: number;
   processed: JsonObject[];
   errors: JsonObject[];
+};
+
+export type PaperSchedulerBootstrapStatus = {
+  scheduler_autostart_env?: boolean;
+  scheduler_env_raw?: string | null;
+  scheduler?: PaperSchedulerStatus;
+  auto_run?: JsonObject;
+  production_note?: string;
+  [key: string]: unknown;
 };
 
 export type SimulationRuntimeSchedulerStatus = JsonObject & {

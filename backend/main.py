@@ -279,6 +279,12 @@ async def _lifespan(app: FastAPI):
     # Paper Trading v2 session scheduler is opt-in so development ports do not
     # accidentally advance durable v2 sessions while production 8001 is running.
     enable_pt_v2 = (os.getenv("ENABLE_PAPER_TRADING_V2_SCHEDULER") or "").strip().lower()
+    logging.getLogger("uvicorn.error").info(
+        "Paper Trading v2 scheduler autostart=%s interval=%s auto_run=%s",
+        enable_pt_v2 in {"1", "true", "yes", "y", "on"},
+        os.getenv("PAPER_TRADING_V2_SCHEDULER_INTERVAL_SEC") or "30",
+        os.getenv("PAPER_V2_AUTO_RUN_ENABLED") or "true",
+    )
     if enable_pt_v2 in {"1", "true", "yes", "y", "on"}:
         from .services.paper_trading_v2.scheduler import paper_trading_v2_scheduler
         paper_trading_v2_scheduler.start()

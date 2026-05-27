@@ -75,6 +75,8 @@ def test_runtime_profile_version_hash_and_audit_are_persisted() -> None:
                 "model_snapshot_id": None,
                 "signal_preset": None,
                 "coefficients_path": None,
+                "auto_compute": True,
+                "manual_snapshot_required": False,
             },
             "tradability": {"exclude_suspended": True},
             "selection": {"top_k": 2},

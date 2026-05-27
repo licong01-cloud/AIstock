@@ -38,10 +38,12 @@ from backend.services.trading_core.errors import (
     DataUnavailableError,
     ExecutionAlgoError,
     ArtifactGenerationFailedError,
+    BrokerConnectivityError,
     InvalidStateTransitionError,
     RuntimeConfigInvalidError,
     SessionConfigError,
     TradingCoreError,
+    HMMRuntimeUnavailableError,
 )
 from backend.services.trading_core.execution_algo_capabilities import require_execution_algo_supports_mode
 from backend.services.trading_core.ledger import FeeModel, InMemoryLedger
@@ -70,6 +72,7 @@ MARKET_CLOSE = time(15, 0)
 LIVE_SESSION_TZ = ZoneInfo("Asia/Shanghai")
 STK_LIMIT_PREOPEN_READY_DEADLINE = time(9, 14)
 FINAL_ORDER_STATUSES = {OrderStatus.FILLED.value, OrderStatus.CANCELLED.value, OrderStatus.REJECTED.value}
+MINIQMT_RETRYABLE_DATA_ERRORS = (DataUnavailableError, ArtifactGenerationFailedError, HMMRuntimeUnavailableError)
 
 
 class PaperTradingLiveMinuteExecutor:
@@ -131,7 +134,7 @@ class PaperTradingLiveMinuteExecutor:
         )
 
     def tick(self, session: PaperTradingSession, *, as_of_time: datetime | None = None) -> PaperSessionProgress:
-        now = as_of_time or datetime.now()
+        now = as_of_time or datetime.now(LIVE_SESSION_TZ)
         if session.mode == PaperSessionMode.CATCHUP_THEN_LIVE:
             session = self._run_historical_catchup(session, as_of_time=now)
         try:
@@ -439,12 +442,33 @@ class PaperTradingLiveMinuteExecutor:
                 )
                 return self._progress(session.session_id)
             if existing.status == RunStatus.FAILED:
-                raise InvalidStateTransitionError(
-                    "cannot continue a failed MiniQMT live paper run",
-                    context={
-                        "session_id": session.session_id,
-                        "run_id": existing.run_id,
-                        "trade_date": existing.trade_date.isoformat(),
+                if self._miniqmt_is_before_final_cutoff(session, local_as_of):
+                    self.repository.reset_portfolio_runs(
+                        portfolio_id=session.portfolio_id,
+                        start_date=trade_date,
+                        end_date=trade_date,
+                    )
+                    return self._save_minqmt_waiting_status(
+                        session,
+                        trade_date=trade_date,
+                        status=PaperSessionStatus.LIVE_RETRYING,
+                        event_type="MINIQMT_LIVE_RETRYING_AFTER_FAILED_RUN",
+                        message="MiniQMT live run failed before cutoff; auto-run will retry from a clean persisted run slot",
+                        context={
+                            "failed_run_id": existing.run_id,
+                            "trade_date": trade_date.isoformat(),
+                            "as_of_time": local_as_of.isoformat(),
+                            "broker_backend": portfolio.broker_backend,
+                        },
+                    )
+                return self._mark_minqmt_day_cutoff_failed(
+                    session,
+                    trade_date=trade_date,
+                    as_of_time=local_as_of,
+                    reason={
+                        "error_code": "MINIQMT_LIVE_PREVIOUS_RUN_FAILED",
+                        "message": "cannot continue a failed MiniQMT live paper run after cutoff",
+                        "context": {"run_id": existing.run_id, "trade_date": existing.trade_date.isoformat()},
                     },
                 )
             self.repository.save_session_day(
@@ -468,11 +492,38 @@ class PaperTradingLiveMinuteExecutor:
             self.repository.update_portfolio_status(session.portfolio_id, PortfolioStatus.RUNNING)
             self.repository.update_session_status(
                 session.session_id,
-                status=PaperSessionStatus.PAUSED if self._manual_tick_only(session) else PaperSessionStatus.LIVE_WAITING_FOR_BAR,
+                status=PaperSessionStatus.PAUSED if self._manual_tick_only(session) else PaperSessionStatus.LIVE_RETRYING,
                 phase=PaperSessionPhase.LIVE_INTRADAY,
                 started_at=session.started_at or datetime.now(UTC),
             )
             return self._progress(session.session_id)
+
+        window_decision = self._miniqmt_trade_window_decision(session, local_as_of)
+        if window_decision["state"] == "wait":
+            return self._save_minqmt_waiting_status(
+                session,
+                trade_date=trade_date,
+                status=PaperSessionStatus.LIVE_WAITING_MARKET_WINDOW,
+                event_type="MINIQMT_LIVE_WAITING_MARKET_WINDOW",
+                message="MiniQMT live session is waiting for the configured submit window",
+                context={
+                    "trade_date": trade_date.isoformat(),
+                    "as_of_time": local_as_of.isoformat(),
+                    "window_decision": window_decision,
+                    "broker_backend": portfolio.broker_backend,
+                },
+            )
+        if window_decision["state"] == "cutoff":
+            return self._mark_minqmt_day_cutoff_failed(
+                session,
+                trade_date=trade_date,
+                as_of_time=local_as_of,
+                reason={
+                    "error_code": "MINIQMT_LIVE_CUTOFF_WITHOUT_SUBMIT",
+                    "message": "MiniQMT live session passed final submit cutoff without an order submission",
+                    "context": {"window_decision": window_decision},
+                },
+            )
 
         self.repository.save_session_event(
             session_id=session.session_id,
@@ -491,11 +542,46 @@ class PaperTradingLiveMinuteExecutor:
             self.repository.update_portfolio_status(session.portfolio_id, PortfolioStatus.READY)
         runtime_config = deepcopy(session.runtime_config)
         self._ensure_live_selection_cutoff(runtime_config, trade_date=trade_date)
-        result = self.day_helper.run_day(
-            portfolio_id=session.portfolio_id,
-            trade_date=trade_date,
-            runtime_config=runtime_config,
-        )
+        try:
+            result = self.day_helper.run_day(
+                portfolio_id=session.portfolio_id,
+                trade_date=trade_date,
+                runtime_config=runtime_config,
+            )
+        except BrokerConnectivityError as exc:
+            if self._miniqmt_is_before_final_cutoff(session, local_as_of):
+                self.repository.reset_portfolio_runs(
+                    portfolio_id=session.portfolio_id,
+                    start_date=trade_date,
+                    end_date=trade_date,
+                )
+                self.repository.update_portfolio_status(session.portfolio_id, PortfolioStatus.RUNNING)
+                return self._save_minqmt_waiting_status(
+                    session,
+                    trade_date=trade_date,
+                    status=PaperSessionStatus.LIVE_WAITING_BROKER,
+                    event_type="MINIQMT_LIVE_WAITING_BROKER",
+                    message="MiniQMT live session is waiting for broker connectivity before final cutoff",
+                    context={"trade_date": trade_date.isoformat(), "as_of_time": local_as_of.isoformat(), "reason": exc.to_dict()},
+                )
+            raise
+        except MINIQMT_RETRYABLE_DATA_ERRORS as exc:
+            if self._miniqmt_is_before_final_cutoff(session, local_as_of):
+                self.repository.reset_portfolio_runs(
+                    portfolio_id=session.portfolio_id,
+                    start_date=trade_date,
+                    end_date=trade_date,
+                )
+                self.repository.update_portfolio_status(session.portfolio_id, PortfolioStatus.RUNNING)
+                return self._save_minqmt_waiting_status(
+                    session,
+                    trade_date=trade_date,
+                    status=PaperSessionStatus.LIVE_WAITING_PLATFORM_DATA,
+                    event_type="MINIQMT_LIVE_WAITING_PLATFORM_DATA",
+                    message="MiniQMT live session is waiting for platform data or HMM cache before final cutoff",
+                    context={"trade_date": trade_date.isoformat(), "as_of_time": local_as_of.isoformat(), "reason": exc.to_dict()},
+                )
+            raise
         self.repository.save_session_day(
             PaperSessionDay(
                 session_id=session.session_id,
@@ -544,6 +630,213 @@ class PaperTradingLiveMinuteExecutor:
             status=PaperSessionStatus.PAUSED if self._manual_tick_only(session) else PaperSessionStatus.LIVE_WAITING_NEXT_TRADING_DAY,
             phase=PaperSessionPhase.WAITING_NEXT_DAY,
             started_at=session.started_at or datetime.now(UTC),
+        )
+        return self._progress(session.session_id)
+
+    def _miniqmt_trade_window_decision(
+        self,
+        session: PaperTradingSession,
+        local_as_of: datetime,
+    ) -> dict[str, Any]:
+        policy = self._miniqmt_trade_window_policy(session)
+        now_time = local_as_of.time()
+        prepare_start = self._parse_policy_time(policy.get("prepare_start", "08:50"), field_name="prepare_start")
+        final_cutoff = self._parse_policy_time(policy.get("final_submit_cutoff", "14:55"), field_name="final_submit_cutoff")
+        submit_windows = []
+        for raw_window in policy.get("submit_windows") or []:
+            if not isinstance(raw_window, dict):
+                raise SessionConfigError(
+                    "MiniQMT trade_window_policy.submit_windows entries must be objects",
+                    context={"session_id": session.session_id, "window": raw_window},
+                )
+            submit_windows.append(
+                {
+                    "start": self._parse_policy_time(raw_window.get("start"), field_name="submit_window.start"),
+                    "end": self._parse_policy_time(raw_window.get("end"), field_name="submit_window.end"),
+                    "raw": raw_window,
+                }
+            )
+        if not submit_windows:
+            submit_windows = [
+                {"start": time(9, 25), "end": time(11, 30), "raw": {"start": "09:25", "end": "11:30"}},
+                {"start": time(13, 0), "end": time(14, 55), "raw": {"start": "13:00", "end": "14:55"}},
+            ]
+        if now_time < prepare_start:
+            return {
+                "state": "wait",
+                "reason": "before_prepare_start",
+                "prepare_start": prepare_start.isoformat(timespec="minutes"),
+                "final_submit_cutoff": final_cutoff.isoformat(timespec="minutes"),
+                "submit_windows": [item["raw"] for item in submit_windows],
+            }
+        for window in submit_windows:
+            if window["start"] <= now_time <= window["end"]:
+                return {
+                    "state": "submit",
+                    "reason": "inside_submit_window",
+                    "window": window["raw"],
+                    "final_submit_cutoff": final_cutoff.isoformat(timespec="minutes"),
+                }
+            if now_time < window["start"]:
+                return {
+                    "state": "wait",
+                    "reason": "before_next_submit_window",
+                    "next_window": window["raw"],
+                    "final_submit_cutoff": final_cutoff.isoformat(timespec="minutes"),
+                    "submit_windows": [item["raw"] for item in submit_windows],
+                }
+        if now_time > final_cutoff:
+            return {
+                "state": "cutoff",
+                "reason": "after_final_submit_cutoff",
+                "final_submit_cutoff": final_cutoff.isoformat(timespec="minutes"),
+                "after_cutoff_policy": policy.get("after_cutoff_policy", "fail_day_without_submit"),
+                "submit_windows": [item["raw"] for item in submit_windows],
+            }
+        return {
+            "state": "wait",
+            "reason": "outside_submit_window_before_cutoff",
+            "final_submit_cutoff": final_cutoff.isoformat(timespec="minutes"),
+            "submit_windows": [item["raw"] for item in submit_windows],
+        }
+
+    def _miniqmt_is_before_final_cutoff(self, session: PaperTradingSession, local_as_of: datetime) -> bool:
+        policy = self._miniqmt_trade_window_policy(session)
+        final_cutoff = self._parse_policy_time(policy.get("final_submit_cutoff", "14:55"), field_name="final_submit_cutoff")
+        return local_as_of.time() <= final_cutoff
+
+    @staticmethod
+    def _miniqmt_trade_window_policy(session: PaperTradingSession) -> dict[str, Any]:
+        auto_run_config = session.runtime_config.get("auto_run_config")
+        if isinstance(auto_run_config, dict) and isinstance(auto_run_config.get("trade_window_policy"), dict):
+            return dict(auto_run_config["trade_window_policy"])
+        if isinstance(session.runtime_config.get("trade_window_policy"), dict):
+            return dict(session.runtime_config["trade_window_policy"])
+        return {
+            "prepare_start": "08:50",
+            "submit_windows": [{"start": "09:25", "end": "11:30"}, {"start": "13:00", "end": "14:55"}],
+            "final_submit_cutoff": "14:55",
+            "after_cutoff_policy": "fail_day_without_submit",
+        }
+
+    @staticmethod
+    def _parse_policy_time(value: Any, *, field_name: str) -> time:
+        if value is None:
+            raise SessionConfigError(
+                "MiniQMT trade window policy time is required",
+                context={"field_name": field_name},
+            )
+        try:
+            return time.fromisoformat(str(value))
+        except ValueError as exc:
+            raise SessionConfigError(
+                "MiniQMT trade window policy time must be HH:MM or HH:MM:SS",
+                context={"field_name": field_name, "value": value},
+            ) from exc
+
+    def _save_minqmt_waiting_status(
+        self,
+        session: PaperTradingSession,
+        *,
+        trade_date: date,
+        status: PaperSessionStatus,
+        event_type: str,
+        message: str,
+        context: dict[str, Any],
+    ) -> PaperSessionProgress:
+        effective_status = PaperSessionStatus.PAUSED if self._manual_tick_only(session) else status
+        self.repository.save_session_day(
+            PaperSessionDay(
+                session_id=session.session_id,
+                portfolio_id=session.portfolio_id,
+                trade_date=trade_date,
+                status=effective_status,
+                phase=PaperSessionPhase.LIVE_INTRADAY,
+                data_source=MinuteDataSource.MINIQMT_REALTIME,
+            )
+        )
+        self.repository.save_session_event(
+            session_id=session.session_id,
+            event_type=event_type,
+            message=message,
+            context=context,
+        )
+        self.repository.update_portfolio_status(session.portfolio_id, PortfolioStatus.RUNNING)
+        self.repository.update_session_status(
+            session.session_id,
+            status=effective_status,
+            phase=PaperSessionPhase.LIVE_INTRADAY,
+            started_at=session.started_at or datetime.now(UTC),
+            last_error=context.get("reason") if isinstance(context.get("reason"), dict) else None,
+        )
+        return self._progress(session.session_id)
+
+    def _mark_minqmt_day_cutoff_failed(
+        self,
+        session: PaperTradingSession,
+        *,
+        trade_date: date,
+        as_of_time: datetime,
+        reason: dict[str, Any],
+    ) -> PaperSessionProgress:
+        error = {
+            "error_code": reason.get("error_code") or "MINIQMT_LIVE_CUTOFF_FAILED",
+            "message": reason.get("message") or "MiniQMT live day failed before any broker-authoritative submission",
+            "context": {
+                **dict(reason.get("context") or {}),
+                "session_id": session.session_id,
+                "portfolio_id": session.portfolio_id,
+                "trade_date": trade_date.isoformat(),
+                "as_of_time": as_of_time.isoformat(),
+                "broker_backend": "minqmt_sim",
+            },
+        }
+        run = self.repository.get_run_by_portfolio_date(session.portfolio_id, trade_date)
+        if run is None:
+            run = self.repository.create_run(
+                PaperRun(
+                    portfolio_id=session.portfolio_id,
+                    trade_date=trade_date,
+                    status=RunStatus.RUNNING,
+                    data_source=MinuteDataSource.MINIQMT_REALTIME,
+                    runtime_config=deepcopy(session.runtime_config),
+                )
+            )
+        if run.status != RunStatus.FAILED:
+            self.repository.update_run_status(run, RunStatus.FAILED, error=error)
+        self.repository.save_error(run_id=run.run_id, portfolio_id=session.portfolio_id, error=error)
+        self.repository.save_run_event(
+            run_id=run.run_id,
+            event_type="MINIQMT_LIVE_FINAL_FAILED_NO_SUBMIT",
+            message=error["message"],
+            context=error["context"],
+        )
+        self.repository.save_session_day(
+            PaperSessionDay(
+                session_id=session.session_id,
+                portfolio_id=session.portfolio_id,
+                trade_date=trade_date,
+                run_id=run.run_id,
+                status=PaperSessionStatus.FAILED,
+                phase=PaperSessionPhase.LIVE_INTRADAY,
+                data_source=MinuteDataSource.MINIQMT_REALTIME,
+            )
+        )
+        self.repository.update_session_status(
+            session.session_id,
+            status=PaperSessionStatus.FAILED,
+            phase=PaperSessionPhase.LIVE_INTRADAY,
+            started_at=session.started_at or datetime.now(UTC),
+            completed_at=datetime.now(UTC),
+            last_error=error,
+        )
+        self.repository.update_portfolio_status(session.portfolio_id, PortfolioStatus.FAILED)
+        self.repository.save_session_event(
+            session_id=session.session_id,
+            run_id=run.run_id,
+            event_type="MINIQMT_LIVE_FINAL_FAILED_NO_SUBMIT",
+            message=error["message"],
+            context=error["context"],
         )
         return self._progress(session.session_id)
 

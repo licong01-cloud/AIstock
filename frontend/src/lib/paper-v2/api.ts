@@ -2,6 +2,7 @@ import type {
   Activation,
   CandidateStrategyPackage,
   CandidateStrategyPackageInput,
+  CreateMiniQMTAutoRunPortfolioResult,
   DataSource,
   TradingDayStatus,
   ExecutionPolicy,
@@ -11,8 +12,10 @@ import type {
   HmmSnapshot,
   JsonObject,
   PaperPortfolio,
+  PaperAutoRunSummary,
   PaperLiveDashboard,
   PaperRun,
+  PaperSchedulerBootstrapStatus,
   PaperSchedulerRunResult,
   PaperSchedulerStatus,
   PaperSession,
@@ -424,9 +427,52 @@ export const paperV2Api = {
     const data = await apiFetch<{ portfolio: PaperPortfolio }>("/paper-v2/portfolios", body(payload));
     return data.portfolio;
   },
+  async createMiniQMTAutoRunPortfolio(payload: {
+    package_id: string;
+    portfolio_name: string;
+    initial_cash: number;
+    start_date: string;
+    broker_account_id: string;
+    top_k?: number | null;
+    hmm?: JsonObject | null;
+    industry_blacklist?: string[];
+    fee_policy?: JsonObject | null;
+    risk_policy?: JsonObject | null;
+    execution_policy?: JsonObject | null;
+    trade_window_policy?: JsonObject | null;
+    auto_run_config?: JsonObject | null;
+    created_by?: string | null;
+    create_session?: boolean;
+  }): Promise<CreateMiniQMTAutoRunPortfolioResult> {
+    const data = await apiFetch<CreateMiniQMTAutoRunPortfolioResult & { ok?: boolean }>(
+      "/paper-v2/auto-run/miniqmt-portfolios",
+      body(payload),
+    );
+    return data;
+  },
   async getPortfolio(portfolioId: string): Promise<PaperPortfolio> {
     const data = await apiFetch<{ portfolio: PaperPortfolio }>(`/paper-v2/portfolios/${portfolioId}`);
     return data.portfolio;
+  },
+  async autoRunStatus(portfolioId: string): Promise<PaperAutoRunSummary> {
+    const data = await apiFetch<{ auto_run: PaperAutoRunSummary }>(`/paper-v2/portfolios/${portfolioId}/auto-run/status`);
+    return data.auto_run;
+  },
+  async enableAutoRun(portfolioId: string, payload: { broker_account_id: string; config?: JsonObject | null; updated_by?: string | null; create_session?: boolean }): Promise<CreateMiniQMTAutoRunPortfolioResult> {
+    const data = await apiFetch<CreateMiniQMTAutoRunPortfolioResult & { ok?: boolean }>(
+      `/paper-v2/portfolios/${portfolioId}/auto-run/enable`,
+      body(payload),
+    );
+    return data;
+  },
+  async disableAutoRun(portfolioId: string, payload: { updated_by?: string | null } = {}): Promise<{ portfolio: PaperPortfolio; retired_bindings: JsonObject[]; auto_run: PaperAutoRunSummary }> {
+    return apiFetch(`/paper-v2/portfolios/${portfolioId}/auto-run/disable`, body(payload));
+  },
+  async patchAutoRunConfig(portfolioId: string, payload: { patch: JsonObject; updated_by?: string | null }): Promise<{ portfolio: PaperPortfolio; auto_run: PaperAutoRunSummary }> {
+    return apiFetch(`/paper-v2/portfolios/${portfolioId}/auto-run/config`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
   },
   async lifecycle(portfolioId: string, action: "pause" | "resume" | "complete" | "retire"): Promise<PaperPortfolio> {
     const data = await apiFetch<{ portfolio: PaperPortfolio }>(`/paper-v2/portfolios/${portfolioId}/${action}`, { method: "POST" });
@@ -526,6 +572,10 @@ export const paperV2Api = {
     const data = await apiFetch<{ scheduler: PaperSchedulerStatus }>("/paper-v2/session-scheduler/status");
     return data.scheduler;
   },
+  async schedulerBootstrapStatus(): Promise<PaperSchedulerBootstrapStatus> {
+    const data = await apiFetch<{ bootstrap: PaperSchedulerBootstrapStatus }>("/paper-v2/session-scheduler/bootstrap-status");
+    return data.bootstrap;
+  },
   async startScheduler(payload: { interval_seconds?: number | null } = {}): Promise<PaperSchedulerStatus> {
     const data = await apiFetch<{ scheduler: PaperSchedulerStatus }>("/paper-v2/session-scheduler/start", body(payload));
     return data.scheduler;
@@ -537,6 +587,10 @@ export const paperV2Api = {
   async runSchedulerOnce(payload: { limit?: number; as_of_time?: string | null } = {}): Promise<PaperSchedulerRunResult> {
     const data = await apiFetch<{ result: PaperSchedulerRunResult }>("/paper-v2/session-scheduler/run-once", body(payload));
     return data.result;
+  },
+  async recoverAutoRun(payload: { limit?: number; as_of_time?: string | null } = {}): Promise<JsonObject> {
+    const data = await apiFetch<{ recovery: JsonObject }>("/paper-v2/session-scheduler/recover-auto-run", body(payload));
+    return data.recovery;
   },
   async executionPolicies(portfolioId: string): Promise<ExecutionPolicy[]> {
     const data = await apiFetch<{ execution_policies: ExecutionPolicy[] }>(`/paper-v2/portfolios/${portfolioId}/execution-policies`);
