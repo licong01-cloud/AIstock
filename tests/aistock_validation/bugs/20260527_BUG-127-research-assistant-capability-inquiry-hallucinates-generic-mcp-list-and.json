@@ -4,7 +4,9 @@
     "backend/services/research_assistant/service.py",
     "backend/tests/research_assistant/test_service.py",
     "backend/tests/research_assistant/test_api.py",
-    "frontend/tests/research-assistant/research-assistant.spec.ts"
+    "frontend/tests/research-assistant/research-assistant.spec.ts",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260527_BUG-127-research-assistant-capability-inquiry-hallucinates-generic-mcp-list-and.json"
   ],
   "assigned_agent": "codex",
   "bug_id": "BUG-127",
@@ -25,16 +27,22 @@
       "timestamp": "2026-05-27T06:17:51.739405Z"
     },
     {
-      "timestamp": "2026-05-27T06:37:31.0808083Z",
-      "actor": "codex",
       "action": "fixed",
-      "note": "Implemented runtime MCP catalog grounding for MCP tool-list capability inquiries and added regression coverage."
+      "actor": "codex",
+      "note": "Implemented runtime MCP catalog grounding for MCP tool-list capability inquiries and added regression coverage.",
+      "timestamp": "2026-05-27T06:37:31.0808083Z"
     },
     {
-      "timestamp": "2026-05-27T06:41:13.756953+00:00",
-      "actor": "codex",
       "action": "fix_commit_recorded",
-      "note": "Recorded branch fix commit b4eaa3de45f0debc4354cad2808c2842cbf505d8."
+      "actor": "codex",
+      "note": "Recorded branch fix commit b4eaa3de45f0debc4354cad2808c2842cbf505d8.",
+      "timestamp": "2026-05-27T06:41:13.756953+00:00"
+    },
+    {
+      "action": "scope_expanded_for_workflow_artifacts",
+      "actor": "codex",
+      "note": "Expanded allowed_write_scope to include workflow-required BUG JSON and allocator synchronization artifacts.",
+      "timestamp": "2026-05-27T06:46:45.995578+00:00"
     }
   ],
   "evidence_uris": [
@@ -74,7 +82,6 @@
     "fingerprint": "de6c7b3eae13a5ba939f9976",
     "source_event_id": "FE-20260527-de6c7b3eae13"
   },
-  "verification_run_id": null,
   "verification_evidence": [
     "python -m pytest backend/tests/research_assistant/test_service.py::test_chat_turn_mcp_tool_inquiry_uses_runtime_catalog_not_generic_tool_claims -q -p no:cacheprovider -> 1 passed",
     "python -m pytest backend/tests/research_assistant -q -p no:cacheprovider -> 48 passed",
@@ -85,5 +92,6 @@
     "python -m nox -s research_assistant_backend research_assistant_mcp_contract -> successful, 48 passed and 13 passed",
     "python -m nox -s research_assistant_ui -> successful, 3 passed after npm ci installed frontend dependencies in isolated worktree",
     "git diff --check -> passed"
-  ]
+  ],
+  "verification_run_id": null
 }
