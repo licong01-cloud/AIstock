@@ -88,6 +88,92 @@ def test_qe_experiment_mcp_rejects_bad_ids(experiment_mcp, bad_id: str):
         experiment_mcp.qe_experiment_get(bad_id)
 
 
+def test_qe_experiment_list_defaults_to_summary_detail(experiment_mcp):
+    captured = {}
+
+    def handler(request: httpx.Request):
+        captured["path"] = request.url.path
+        captured["query"] = dict(request.url.params)
+        return {"ok": True, "items": []}
+
+    _swap(experiment_mcp, experiment_mcp.LoopbackApiClient(base_url="http://127.0.0.1/api/v1", env_name="test", transport=_mock_transport(handler)))
+    result = experiment_mcp.qe_experiment_list(limit=7, include_children=True)
+
+    assert result["ok"] is True
+    assert captured["path"].endswith("/quantevolver/experiments")
+    assert captured["query"]["detail"] == "summary"
+    assert captured["query"]["limit"] == "7"
+    assert captured["query"]["include_children"] == "true"
+
+
+def test_qe_experiment_get_defaults_to_summary_detail(experiment_mcp):
+    captured = {}
+
+    def handler(request: httpx.Request):
+        captured["path"] = request.url.path
+        captured["query"] = dict(request.url.params)
+        return {"ok": True, "experiment": {"experiment_id": "qe_1"}}
+
+    _swap(experiment_mcp, experiment_mcp.LoopbackApiClient(base_url="http://127.0.0.1/api/v1", env_name="test", transport=_mock_transport(handler)))
+    result = experiment_mcp.qe_experiment_get("qe_1")
+
+    assert result["ok"] is True
+    assert captured["path"].endswith("/quantevolver/experiments/qe_1")
+    assert captured["query"] == {"detail": "summary"}
+
+
+def test_qe_custom_evo_task_tools_use_summary_and_loop_payload_paths(experiment_mcp):
+    captured = []
+
+    def handler(request: httpx.Request):
+        captured.append((request.method, request.url.path, dict(request.url.params)))
+        return {"status": "success", "data": {}}
+
+    _swap(experiment_mcp, experiment_mcp.LoopbackApiClient(base_url="http://127.0.0.1/api/v1", env_name="test", transport=_mock_transport(handler)))
+
+    experiment_mcp.qe_custom_evo_list_tasks(limit=3)
+    experiment_mcp.qe_custom_evo_get_task("task_1")
+    experiment_mcp.qe_custom_evo_loop_comparison("task_1")
+    experiment_mcp.qe_custom_evo_get_loop_config("task_1", 2)
+    experiment_mcp.qe_custom_evo_get_loop_metrics("task_1", 2)
+    experiment_mcp.qe_custom_evo_get_loop_analysis("task_1", 2)
+
+    assert captured[0] == ("GET", "/api/v1/quantevolver/evolution/tasks", {"limit": "3", "detail": "summary"})
+    assert captured[1] == ("GET", "/api/v1/quantevolver/evolution/tasks/task_1", {"detail": "summary"})
+    assert captured[2] == ("GET", "/api/v1/quantevolver/evolution/tasks/task_1/loops/comparison", {})
+    assert captured[3] == ("GET", "/api/v1/quantevolver/evolution/tasks/task_1/loops/2/config", {})
+    assert captured[4] == ("GET", "/api/v1/quantevolver/evolution/tasks/task_1/loops/2/metrics", {})
+    assert captured[5] == ("GET", "/api/v1/quantevolver/evolution/tasks/task_1/loops/2/analysis", {})
+
+
+def test_loopback_client_requires_refinement_for_large_success_response(experiment_mcp):
+    payload = {"data": "x" * 200}
+
+    def handler(request: httpx.Request):
+        return httpx.Response(200, json=payload)
+
+    client = experiment_mcp.LoopbackApiClient(
+        base_url="http://127.0.0.1/api/v1",
+        env_name="test",
+        transport=_mock_transport(handler),
+        max_response_bytes=64,
+    )
+    result = client.get("/quantevolver/experiments")
+
+    assert result["status"] == "requires_refinement"
+    assert result["mcp_response_too_large"] is True
+    assert result["mcp_response_refinement_required"] is True
+    assert result["partial_payload_returned"] is False
+    assert result["method"] == "GET"
+    assert result["path"] == "/quantevolver/experiments"
+    assert result["status_code"] == 200
+    assert result["original_bytes"] > result["max_bytes"]
+    assert "preview" not in result
+    assert result["omitted_sections"] == ["response_payload"]
+    assert result["retry_with"]["params"]["limit"] == 20
+    assert result["retry_with"]["params"]["detail"] == "summary"
+
+
 def test_qe_archive_execute_requires_confirm_before_http(archive_mcp):
     called = False
     def handler(request: httpx.Request):
@@ -213,6 +299,28 @@ def test_qe_archive_query_factor_usage_path(archive_mcp):
     assert result["status"] == "success"
     assert captured["path"].endswith("/qe-archive/query/factor-usage")
     assert captured["query"] == {"limit": "12", "min_runs": "2"}
+
+
+def test_qe_archive_mcp_uses_compact_default_limits(archive_mcp):
+    captured = []
+
+    def handler(request: httpx.Request):
+        captured.append((request.url.path, dict(request.url.params)))
+        return {"status": "success", "data": []}
+
+    _swap(archive_mcp, archive_mcp.LoopbackApiClient(base_url="http://127.0.0.1/api/v1/qe-archive", env_name="test", transport=_mock_transport(handler)))
+
+    archive_mcp.qe_archive_list_runs()
+    archive_mcp.qe_archive_list_skips()
+    archive_mcp.qe_archive_query_factor_importance()
+    archive_mcp.qe_archive_query_factor_importance_stability()
+    archive_mcp.qe_archive_query_seed_trials()
+
+    assert captured[0][1]["limit"] == "20"
+    assert captured[1][1]["limit"] == "20"
+    assert captured[2][1]["limit"] == "10"
+    assert captured[3][1]["limit"] == "10"
+    assert captured[4][1]["limit"] == "20"
 
 
 def test_qe_mcp_scripts_do_not_import_runtime_execution_paths() -> None:

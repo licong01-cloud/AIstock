@@ -5,7 +5,6 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import ErrorListCard from "@/components/paper-v2/ErrorListCard";
 import ErrorPanel from "@/components/paper-v2/ErrorPanel";
-import JsonPanel from "@/components/paper-v2/JsonPanel";
 import MetricCard from "@/components/paper-v2/MetricCard";
 import PaperTable from "@/components/paper-v2/PaperTable";
 import SectionCard from "@/components/paper-v2/SectionCard";
@@ -62,7 +61,14 @@ function OrderTraceDetail({ row, onClose }: { row: JsonObject; onClose: () => vo
         />
         <MetricCard label="成交数量" value={formatNumber(row.filled_quantity, 0)} />
       </div>
-      <JsonPanel value={row} />
+      <div className="pv2-readable-panel">
+        <div className="pv2-readable-table">
+          <div className="pv2-readable-row"><div className="pv2-readable-key">订单ID</div><div className="pv2-readable-value pv2-mono">{text(row, "order_id")}</div></div>
+          <div className="pv2-readable-row"><div className="pv2-readable-key">运行ID</div><div className="pv2-readable-value pv2-mono">{text(row, "run_id")}</div></div>
+          <div className="pv2-readable-row"><div className="pv2-readable-key">价格/数量</div><div className="pv2-readable-value">{formatNumber(row.price, 4)} / {formatNumber(row.quantity, 0)}</div></div>
+          <div className="pv2-readable-row"><div className="pv2-readable-key">诊断键</div><div className="pv2-readable-value">{Object.keys(row).slice(0, 20).join(", ")}</div></div>
+        </div>
+      </div>
     </div>
   );
 }

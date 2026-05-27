@@ -12,7 +12,7 @@ import StatusBadge from "@/components/paper-v2/StatusBadge";
 import WorkflowStepper from "@/components/paper-v2/WorkflowStepper";
 import { hmmTrainingApi, paperV2Api, strategyPackageApi } from "@/lib/paper-v2/api";
 import { dataSourceLabel, formatCompact, packageDisplayLabel, paperV2WorkflowSteps, shortHash, todayIso } from "@/lib/paper-v2/format";
-import type { DataSource, ExecutionPolicy, HmmConfig, JsonObject, PaperPortfolio, PaperSessionMode, PaperSessionProgress, RuntimeProfileVersion, StrategyPackage } from "@/lib/paper-v2/types";
+import type { DataSource, ExecutionPolicy, HmmConfig, JsonObject, PaperPortfolio, PaperSessionMode, PaperSessionProgress, StrategyPackage } from "@/lib/paper-v2/types";
 
 function daysAgoIso(days: number): string {
   const d = new Date();
@@ -66,7 +66,6 @@ export default function PaperV2PortfoliosPage() {
   const [showRetired, setShowRetired] = useState(false);
   const [selectedPortfolioIds, setSelectedPortfolioIds] = useState<Record<string, boolean>>({});
   const [created, setCreated] = useState<PaperPortfolio | null>(null);
-  const [createdRuntimeVersion, setCreatedRuntimeVersion] = useState<RuntimeProfileVersion | null>(null);
   const [sessionProgress, setSessionProgress] = useState<PaperSessionProgress | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(false);
@@ -167,7 +166,6 @@ export default function PaperV2PortfoliosPage() {
   async function createPortfolio() {
     setError(null);
     setCreated(null);
-    setCreatedRuntimeVersion(null);
     setSessionProgress(null);
     setBusy(true);
     try {
@@ -188,26 +186,14 @@ export default function PaperV2PortfoliosPage() {
         execution_policy: policyId ? { validated_execution_policy_id: policyId } : undefined,
       });
       setCreated(portfolio);
-      const runtimeProfile = await paperV2Api.createRuntimeProfile(portfolio.portfolio_id, {
-        profile_name: `${name} 运行配置`,
-        config_json: runtimeProfileConfig(),
-        created_by: "paper_v2_ui",
-        reason: "创建模拟盘时保存可变运行配置",
-      });
-      setCreatedRuntimeVersion(runtimeProfile.version);
-      await paperV2Api.activateRuntimeConfig(portfolio.portfolio_id, {
-        trade_date: portfolioStartDate,
-        profile_version_id: runtimeProfile.version.profile_version_id,
-        activated_by: "paper_v2_ui",
-          reason: "创建模拟盘时按开始日期激活运行配置",
-        });
+      const effectiveRuntimeConfig = sessionRuntimeConfig();
       const session = await paperV2Api.createSession(portfolio.portfolio_id, {
         mode: sessionMode,
         start_date: isLiveOnly ? startDate : replayStart,
         end_date: isReplayOnly || isCatchupThenLive ? replayEnd : null,
         historical_data_source: isReplayOnly || isCatchupThenLive ? "DB_HISTORICAL" : null,
         live_data_source: isCatchupThenLive || isLiveOnly ? "TDX_REALTIME" : null,
-        runtime_config: sessionRuntimeConfig(),
+        runtime_config: effectiveRuntimeConfig,
         rerun_policy: "reject_existing",
         auto_switch_to_live: false,
         created_by: "paper_v2_ui",

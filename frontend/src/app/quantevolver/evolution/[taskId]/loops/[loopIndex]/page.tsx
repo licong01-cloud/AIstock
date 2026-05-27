@@ -55,7 +55,7 @@ export default function LoopDetailPage({ params }: { params: { taskId: string; l
     if (!taskId || isNaN(loopIndex)) return;
     setLoading(true);
 
-    const fetchTask = fetch(`${API}/quantevolver/evolution/tasks/${taskId}`)
+    const fetchTask = fetch(`${API}/quantevolver/evolution/tasks/${taskId}?detail=full`)
       .then(r => r.ok ? r.json() : null)
       .catch(() => null);
 

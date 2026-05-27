@@ -13,7 +13,11 @@ from backend.services.selection_center.industry_provider import (
     industry_info_from_candidate,
 )
 from backend.services.selection_center.models import SelectionCandidate, SelectionExclusion
-from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
+from backend.services.trading_core.errors import (
+    ArtifactGenerationFailedError,
+    DataUnavailableError,
+    RuntimeConfigInvalidError,
+)
 
 ConnFactory = Callable[[], Iterator[Any]]
 
@@ -98,7 +102,7 @@ class TradabilityFilter:
         industry_blacklist: list[str] | None = None,
     ) -> tuple[list[SelectionCandidate], list[SelectionExclusion]]:
         if top_k <= 0:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "tradability filter requires positive top_k",
                 context={"package_id": package_id, "top_k": top_k},
             )
@@ -156,7 +160,7 @@ class TradabilityFilter:
                     candidate.component_scores,
                 )
                 if industry is None:
-                    raise StrategyPackageValidationError(
+                    raise DataUnavailableError(
                         "industry blacklist requires PIT industry metadata",
                         context={
                             "package_id": package_id,
@@ -205,7 +209,7 @@ class TradabilityFilter:
         if not selected:
             reasons = sorted({item.reason for item in excluded})
             if reasons == ["suspended_by_suspend_d"]:
-                raise StrategyPackageValidationError(
+                raise DataUnavailableError(
                     "all ranked candidates are suspended by suspend_d",
                     context={
                         "package_id": package_id,
@@ -215,7 +219,7 @@ class TradabilityFilter:
                         "excluded_count": len(excluded),
                     },
                 )
-            raise StrategyPackageValidationError(
+            raise ArtifactGenerationFailedError(
                 "all ranked candidates are excluded by runtime tradability filters",
                 context={
                     "package_id": package_id,

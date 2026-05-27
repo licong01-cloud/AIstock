@@ -6,21 +6,31 @@ const chatTurnResponse = {
     content_text: "可以。QE 实验方面我能生成草案、校验模板、做 preflight 并在确认后调用已登记 MCP；Bug 诊断方面我能分析报错、日志、Trace、实验记录和配置差异。",
     content_json: {},
   },
+  mode_decision: {
+    mode: "dialogue",
+    intent_type: "capability_inquiry",
+    confidence: 0.9,
+    requires_tool: false,
+    allowed_tool_side_effect: "none",
+    requires_user_confirmation: false,
+    requires_approval: false,
+    visible_audit_default: false,
+  },
   task: { title: "QE 能力询问", status: "planned" },
   task_events: [
     { event_type: "chat_received", message: "已接收用户对话并进入意图理解。" },
     { event_type: "llm_done", message: "主模型已返回。" },
   ],
   cards: {
-    plan_card: {
-      title: "已直接回答",
-      steps: [],
-    },
-    clarification_card: {
-      title: "需要你确认",
-      questions: [],
-    },
+    dialogue_mode: "dialogue",
+    mode_decision: { mode: "dialogue", intent_type: "capability_inquiry" },
     action_proposals: [],
+    ui_display: {
+      show_plan_card: false,
+      show_clarification_card: false,
+      show_context_health_badge: false,
+      details_default_collapsed: true,
+    },
     status_rail: [
       { label: "接收问题", status: "done" },
       { label: "理解意图", status: "done" },
@@ -126,8 +136,14 @@ test("Research Assistant main entry is a Codex-like LLM chat with readable cards
     const respond = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ status: status >= 400 ? "error" : "success", data }) });
     if (method !== "GET") writeMethods.push(`${method} ${path}`);
 
+    if (path.includes("/api/ingestion/alerts/")) return respond(path.endsWith("/unack-count") ? { count: 0 } : []);
     if (path.endsWith("/chat/turn")) return respond(chatTurnResponse);
     return respond(page([]));
+  });
+  await browserPage.route("**/api/ingestion/alerts/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const body = path.endsWith("/unack-count") ? { count: 0 } : { alerts: [] };
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
   });
 
   await browserPage.goto("/research-assistant");
@@ -139,8 +155,8 @@ test("Research Assistant main entry is a Codex-like LLM chat with readable cards
   await browserPage.getByRole("button", { name: "发送" }).click();
 
   await expect(browserPage.getByText("QE 实验方面我能生成草案").first()).toBeVisible();
-  await expect(browserPage.getByTestId("ra-chat-plan-card")).toContainText("已直接回答");
-  await expect(browserPage.getByTestId("ra-chat-plan-card")).not.toContainText("固定 PIT 股票池");
+  await expect(browserPage.getByTestId("ra-chat-plan-card")).toHaveCount(0);
+  await expect(browserPage.locator("[data-testid='ra-chat-main']")).not.toContainText("固定 PIT 股票池");
   await expect(browserPage.getByText("回答").first()).toBeVisible();
   await expect(browserPage.locator("[data-testid='ra-chat-main']")).not.toContainText("不会执行 QE materialize/run");
   await expect(browserPage.locator("[data-testid='ra-chat-main']")).not.toContainText("生成 QE 实验草案");

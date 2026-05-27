@@ -146,6 +146,7 @@ def test_gateway_loads_phase2_research_tools() -> None:
 
 def test_gateway_loads_research_assistant_tools() -> None:
     from backend.mcp import gateway
+    from backend.mcp.modules.research_assistant import TOOL_COUNT as RESEARCH_ASSISTANT_TOOL_COUNT
 
     _mcp, registry = gateway.create_gateway(
         profile="research_assistant",
@@ -153,8 +154,8 @@ def test_gateway_loads_research_assistant_tools() -> None:
         env_name="test",
     )
 
-    assert registry.tool_count("research_assistant") == 10
-    assert registry.total_tool_count() == 10
+    assert registry.tool_count("research_assistant") == RESEARCH_ASSISTANT_TOOL_COUNT
+    assert registry.total_tool_count() == RESEARCH_ASSISTANT_TOOL_COUNT
 
 
 def test_gateway_rejects_banned_future_profile_before_loading_modules() -> None:

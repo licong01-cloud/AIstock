@@ -343,7 +343,10 @@ def test_live_session_tick_processes_new_minute_bar_once() -> None:
         mode=PaperSessionMode.LIVE_ONLY,
         start_date=date(2024, 1, 2),
         live_data_source=MinuteDataSource.TDX_REALTIME,
-        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+        runtime_config={
+            "paper_v2_session": {"signal_data_source": "DB_HISTORICAL"},
+            "selection_artifact_config": {"auto_generate": False},
+        },
     )
     run = paper_repo.create_run(
         PaperRun(
@@ -448,6 +451,40 @@ def test_minqmt_live_session_tick_uses_broker_day_path_without_tdx_market() -> N
     assert "MINIQMT_LIVE_TICK_RECONCILED" in event_types
 
 
+def test_minqmt_live_session_passes_previous_trading_day_cutoff_to_day_runner() -> None:
+    paper_repo, portfolio_id = make_portfolio_repo(
+        data_source=MinuteDataSource.MINIQMT_REALTIME,
+        broker_backend="minqmt_sim",
+    )
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.MINIQMT_REALTIME,
+        runtime_config={
+            "paper_v2_session": {"signal_data_source": "DB_HISTORICAL"},
+            "selection_artifact_config": {"auto_generate": True, "inference_backend": "wsl"},
+        },
+    )
+    live_executor = PaperTradingLiveMinuteExecutor(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=ExplodingLiveMarket(),  # type: ignore[arg-type]
+    )
+    fake_day_helper = FakeMiniQMTLiveDayHelper(paper_repo)
+    live_executor.day_helper = fake_day_helper  # type: ignore[assignment]
+
+    PaperTradingSessionRunner(repository=paper_repo, live_executor=live_executor).tick(
+        session.session_id,
+        as_of_time=datetime(2024, 1, 4, 10, 0),
+    )
+
+    runtime_config = fake_day_helper.calls[0]["runtime_config"]
+    assert runtime_config["selection_artifact_config"]["cutoff_date"] == "2024-01-03"
+    assert runtime_config["paper_v2_session"]["selection_cutoff_date"] == "2024-01-03"
+    assert "cutoff_date" not in session.runtime_config["selection_artifact_config"]
+
+
 def test_live_session_injects_previous_trading_day_selection_cutoff() -> None:
     executor = PaperTradingLiveMinuteExecutor(
         repository=InMemoryPaperTradingV2Repository(),
@@ -469,7 +506,10 @@ def test_live_session_waits_for_preopen_stk_limit_until_0914() -> None:
         mode=PaperSessionMode.LIVE_ONLY,
         start_date=date(2024, 1, 2),
         live_data_source=MinuteDataSource.TDX_REALTIME,
-        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+        runtime_config={
+            "paper_v2_session": {"signal_data_source": "DB_HISTORICAL"},
+            "selection_artifact_config": {"auto_generate": False},
+        },
     )
     audit = MissingStkLimitAudit()
     live_executor = PaperTradingLiveMinuteExecutor(
@@ -500,7 +540,10 @@ def test_live_session_fails_if_stk_limit_missing_at_0914() -> None:
         mode=PaperSessionMode.LIVE_ONLY,
         start_date=date(2024, 1, 2),
         live_data_source=MinuteDataSource.TDX_REALTIME,
-        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+        runtime_config={
+            "paper_v2_session": {"signal_data_source": "DB_HISTORICAL"},
+            "selection_artifact_config": {"auto_generate": False},
+        },
     )
     live_executor = PaperTradingLiveMinuteExecutor(
         repository=paper_repo,
@@ -651,7 +694,10 @@ def test_live_prepare_seeds_order_cursor_after_existing_completed_bars() -> None
         mode=PaperSessionMode.LIVE_ONLY,
         start_date=date(2024, 1, 2),
         live_data_source=MinuteDataSource.TDX_REALTIME,
-        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+        runtime_config={
+            "paper_v2_session": {"signal_data_source": "DB_HISTORICAL"},
+            "selection_artifact_config": {"auto_generate": False},
+        },
     )
     bars = [
         bar.model_copy(update={"bar_time": datetime(2024, 1, 2, 9, 31) + timedelta(minutes=i)})
@@ -694,7 +740,10 @@ def test_live_tick_never_backfills_prepared_order_with_existing_bars() -> None:
         mode=PaperSessionMode.LIVE_ONLY,
         start_date=date(2024, 1, 2),
         live_data_source=MinuteDataSource.TDX_REALTIME,
-        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+        runtime_config={
+            "paper_v2_session": {"signal_data_source": "DB_HISTORICAL"},
+            "selection_artifact_config": {"auto_generate": False},
+        },
     )
     bars = [
         bar.model_copy(update={"bar_time": datetime(2024, 1, 2, 9, 31) + timedelta(minutes=i)})

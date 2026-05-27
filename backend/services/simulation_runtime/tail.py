@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from backend.services.paper_trading_v2.broker.base import BrokerBackend, OrderHandle, OrderHandleStatus
-from backend.services.trading_core.errors import StrategyPackageValidationError
+from backend.services.trading_core.errors import ArtifactGenerationFailedError, RuntimeConfigInvalidError
 
 from .models import ExecutionPlan
 
@@ -91,7 +91,7 @@ class TailHandlingPolicyService:
         handles_by_intent = {handle.intent_id: handle for handle in handles}
         missing = [intent.intent_id for intent in plan.intents if intent.intent_id not in handles_by_intent]
         if missing:
-            raise StrategyPackageValidationError(
+            raise ArtifactGenerationFailedError(
                 "TailHandlingPolicy requires one broker handle for every execution plan intent",
                 context={"plan_id": plan.plan_id, "missing_intent_ids": missing},
             )
@@ -121,12 +121,12 @@ class TailHandlingPolicyService:
             policy = policy_payload.get("policy") or policy_payload.get("unfilled_policy")
         policy_text = str(policy or "").strip()
         if not policy_text:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "TailHandlingPolicy execution requires explicit policy payload",
                 context={"plan_id": plan.plan_id, "tail_policy_version_id": plan.tail_policy_version_id},
             )
         if policy_text not in SUPPORTED_TAIL_POLICIES:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "unsupported TailHandlingPolicy",
                 context={
                     "plan_id": plan.plan_id,

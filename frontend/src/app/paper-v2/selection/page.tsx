@@ -182,7 +182,12 @@ export default function PaperV2SelectionPage() {
       const packageIds = selectedPackages.map((item) => item.package_id);
       if (topK < 1 || topK > 50) throw new Error("TopK 必须在 1 到 50 之间。");
       if (hmmEnabled && !hmmConfigId) throw new Error("HMM enabled: select a model config; daily coefficients are computed and cached automatically.");
-      if (pitMode !== "NONE" && !pitContext?.cutoff_date) throw new Error("历史时点选股必须先解析出前一交易日截止日。");
+      if (pitMode !== "NONE") {
+        const pitMessage = pitContext?.cutoff_date
+          ? `本次选股将按 ${tradeDate} 的上一交易日 ${pitContext.cutoff_date} 作为 PIT 截止日，入池参考价使用 ${pitContext.reference_price_trade_date || pitContext.cutoff_date} 的收盘价。是否继续？`
+          : `本次选股将由后端官方交易日服务自动解析 ${tradeDate} 的上一交易日 PIT 截止日；如果交易日历缺失，本次 run 会失败并给出诊断，但不会禁用策略包。是否继续？`;
+        if (!window.confirm(pitMessage)) return;
+      }
       if (singlePackageMode && packageIds.length !== 1) throw new Error("单策略包模式必须且只能选择一个 StrategyPackage。");
       if (!singlePackageMode && packageIds.length < 2) throw new Error("多策略包聚合至少需要两个 StrategyPackage。");
       const next = await selectionCenterApi.runSelection({ package_ids: packageIds, trade_date: tradeDate, data_source: dataSource, mode, runtime_config: runtimeConfig() });

@@ -26,14 +26,19 @@ from backend.services.simulation_runtime import (
     DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID,
     StrategyRuntimeReleaseService,
 )
-from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, StrategyPackageValidationError, TradingCoreError
+from backend.services.trading_core.errors import (
+    DataUnavailableError,
+    InvalidStateTransitionError,
+    LiveApprovalRequiredError,
+    PackageAssetInvalidError,
+    RuntimeConfigInvalidError,
+    TradingCoreError,
+)
 from backend.services.trading_core.ledger import FeeModel
 from backend.services.selection_center.runtime_profile import (
     attach_activation_runtime_profile_binding,
     attach_default_runtime_profile_binding,
-    ensure_runtime_config_version_boundary,
     normalize_selection_runtime_config,
-    runtime_behavior_keys,
     validate_runtime_profile_binding,
 )
 from backend.services.strategy_package.backtest_contract import (
@@ -150,7 +155,7 @@ class PaperTradingV2PortfolioService:
         manifest = record.current_manifest()
         self.asset_eligibility_service.require_eligible(record)
         if not manifest.manifest_sha256:
-            raise StrategyPackageValidationError(
+            raise PackageAssetInvalidError(
                 "paper portfolio requires frozen strategy package manifest",
                 context={"package_id": package_id},
             )
@@ -159,7 +164,7 @@ class PaperTradingV2PortfolioService:
         # validator; this layer additionally restricts to Paper-v2-creatable
         # backends (minqmt_live is admission-flow only, see main design section 11).
         if broker_backend not in PAPER_V2_CREATABLE_BROKER_BACKENDS:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "broker_backend not allowed for paper v2 portfolio creation",
                 context={
                     "broker_backend": broker_backend,
@@ -537,7 +542,7 @@ class PaperTradingV2PortfolioService:
     ) -> PaperExecutionPolicyActivation:
         portfolio = self.repository.get_portfolio(portfolio_id)
         if trade_date < portfolio.start_date:
-            raise StrategyPackageValidationError(
+            raise InvalidStateTransitionError(
                 "execution policy activation trade_date cannot be before portfolio start_date",
                 context={
                     "portfolio_id": portfolio_id,
@@ -547,7 +552,7 @@ class PaperTradingV2PortfolioService:
             )
         existing_run = self.repository.get_run_by_portfolio_date(portfolio_id, trade_date)
         if existing_run is not None:
-            raise StrategyPackageValidationError(
+            raise InvalidStateTransitionError(
                 "cannot activate execution policy after a paper run exists for the trade_date",
                 context={
                     "portfolio_id": portfolio_id,
@@ -568,7 +573,7 @@ class PaperTradingV2PortfolioService:
                     },
                 )
             if not reason:
-                raise StrategyPackageValidationError(
+                raise RuntimeConfigInvalidError(
                     "replacing an execution policy activation requires a reason",
                     context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat()},
                 )
@@ -590,7 +595,7 @@ class PaperTradingV2PortfolioService:
 
         policy = self.package_repository.get_execution_policy(portfolio.package_id, policy_id)
         if policy.manifest_sha256 != portfolio.manifest_sha256:
-            raise StrategyPackageValidationError(
+            raise PackageAssetInvalidError(
                 "validated execution policy manifest hash does not match paper portfolio manifest",
                 context={
                     "portfolio_id": portfolio_id,
@@ -707,7 +712,7 @@ class PaperTradingV2PortfolioService:
         portfolio = self.repository.get_portfolio(portfolio_id)
         profile = self.repository.get_runtime_profile(profile_id)
         if profile.portfolio_id != portfolio_id:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "runtime profile does not belong to portfolio",
                 context={"portfolio_id": portfolio_id, "profile_id": profile_id},
             )
@@ -769,7 +774,7 @@ class PaperTradingV2PortfolioService:
     ) -> PaperRuntimeConfigActivation:
         portfolio = self.repository.get_portfolio(portfolio_id)
         if trade_date < portfolio.start_date:
-            raise StrategyPackageValidationError(
+            raise InvalidStateTransitionError(
                 "runtime config activation trade_date cannot be before portfolio start_date",
                 context={
                     "portfolio_id": portfolio_id,
@@ -779,7 +784,7 @@ class PaperTradingV2PortfolioService:
             )
         existing_run = self.repository.get_run_by_portfolio_date(portfolio_id, trade_date)
         if existing_run is not None:
-            raise StrategyPackageValidationError(
+            raise InvalidStateTransitionError(
                 "cannot activate runtime config after a paper run exists for the trade_date",
                 context={
                     "portfolio_id": portfolio_id,
@@ -791,7 +796,7 @@ class PaperTradingV2PortfolioService:
         version = self.repository.get_runtime_profile_version(profile_version_id)
         profile = self.repository.get_runtime_profile(version.profile_id)
         if profile.portfolio_id != portfolio_id:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "runtime profile version does not belong to portfolio",
                 context={
                     "portfolio_id": portfolio_id,
@@ -805,7 +810,7 @@ class PaperTradingV2PortfolioService:
                 context={"profile_id": profile.profile_id, "status": profile.status.value},
             )
         if version.validation_status != RuntimeProfileValidationStatus.VALIDATED:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "runtime profile version must be validated before activation",
                 context={
                     "profile_version_id": profile_version_id,
@@ -835,7 +840,7 @@ class PaperTradingV2PortfolioService:
                     },
                 )
             if not reason:
-                raise StrategyPackageValidationError(
+                raise RuntimeConfigInvalidError(
                     "replacing a runtime config activation requires a reason",
                     context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat()},
                 )
@@ -917,7 +922,7 @@ class PaperTradingV2PortfolioService:
         portfolio = self.repository.get_portfolio(portfolio_id)
         runtime_activation = self.repository.get_active_runtime_config_activation(portfolio_id, trade_date)
         if runtime_activation is None:
-            raise StrategyPackageValidationError(
+            raise LiveApprovalRequiredError(
                 "live approval candidate requires an active runtime profile activation for the trade_date",
                 context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat()},
             )
@@ -925,7 +930,7 @@ class PaperTradingV2PortfolioService:
         runtime_profile = self.repository.get_runtime_profile(runtime_version.profile_id)
         execution_activation = self.repository.get_active_execution_policy_activation(portfolio_id, trade_date)
         if execution_activation is None:
-            raise StrategyPackageValidationError(
+            raise LiveApprovalRequiredError(
                 "live approval candidate requires an active execution policy activation for the trade_date",
                 context={"portfolio_id": portfolio_id, "trade_date": trade_date.isoformat()},
             )
@@ -1137,15 +1142,20 @@ class PaperTradingV2PortfolioService:
         config = dict(runtime_config or {})
         runtime_variant = self._resolve_runtime_variant_for_portfolio(portfolio, config)
         config = self._config_without_runtime_variant_selector(apply_runtime_variant_config(config, runtime_variant))
-        ensure_runtime_config_version_boundary(
-            config,
-            context={
-                "portfolio_id": portfolio.portfolio_id,
-                "trade_date": trade_date.isoformat(),
-                "broker_backend": portfolio.broker_backend,
-                "path": "paper_v2.resolve_runtime_config_for_date",
-            },
-        )
+        session_opts = config.get("paper_v2_session") if isinstance(config.get("paper_v2_session"), dict) else {}
+        if session_opts.get("freeze_runtime_profile"):
+            config = self._with_platform_runtime_defaults(portfolio, config)
+            normalized = normalize_runtime_config_with_backtest_contract(
+                portfolio.frozen_manifest,
+                config,
+                context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat()},
+            )
+            normalized = attach_default_runtime_profile_binding(normalized)
+            validate_runtime_profile_binding(
+                normalized,
+                context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat()},
+            )
+            return normalized
         if config.get("runtime_profile_activation"):
             config = self._with_platform_runtime_defaults(portfolio, config)
             config = attach_activation_runtime_profile_binding(
@@ -1162,32 +1172,8 @@ class PaperTradingV2PortfolioService:
                 context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat()},
             )
             return normalized
-        session_opts = config.get("paper_v2_session") if isinstance(config.get("paper_v2_session"), dict) else {}
-        if session_opts.get("freeze_runtime_profile"):
-            config = self._with_platform_runtime_defaults(portfolio, config)
-            normalized = normalize_runtime_config_with_backtest_contract(
-                portfolio.frozen_manifest,
-                config,
-                context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat()},
-            )
-            validate_runtime_profile_binding(
-                normalized,
-                context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat()},
-            )
-            return normalized
         activation = self.repository.get_active_runtime_config_activation(portfolio.portfolio_id, trade_date)
         if activation is None:
-            behavior_keys = runtime_behavior_keys(config)
-            if behavior_keys:
-                raise StrategyPackageValidationError(
-                    "runtime_config changes trading behavior without an active runtime profile activation",
-                    context={
-                        "portfolio_id": portfolio.portfolio_id,
-                        "trade_date": trade_date.isoformat(),
-                        "broker_backend": portfolio.broker_backend,
-                        "behavior_keys": behavior_keys,
-                    },
-                )
             config = self._with_platform_runtime_defaults(portfolio, config)
             normalized = normalize_runtime_config_with_backtest_contract(
                 portfolio.frozen_manifest,
@@ -1200,21 +1186,10 @@ class PaperTradingV2PortfolioService:
                 context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat()},
             )
             return normalized
-        conflicting = sorted(key for key in config if key in RUNTIME_PROFILE_INPUT_KEYS)
-        if conflicting:
-            raise StrategyPackageValidationError(
-                "runtime_config conflicts with active runtime profile activation",
-                context={
-                    "portfolio_id": portfolio.portfolio_id,
-                    "trade_date": trade_date.isoformat(),
-                    "activation_id": activation.activation_id,
-                    "conflicting_keys": conflicting,
-                },
-            )
         version = self.repository.get_runtime_profile_version(activation.profile_version_id)
         profile = self.repository.get_runtime_profile(version.profile_id)
         if profile.portfolio_id != portfolio.portfolio_id:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "active runtime config activation references another portfolio",
                 context={
                     "portfolio_id": portfolio.portfolio_id,
@@ -1258,13 +1233,13 @@ class PaperTradingV2PortfolioService:
             return None
         variant_id = str(raw_id).strip()
         if not variant_id:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "runtime_variant_id cannot be empty",
                 context={"portfolio_id": portfolio.portfolio_id, "package_id": portfolio.package_id},
             )
         variant = self.package_repository.get_runtime_variant(portfolio.package_id, variant_id)
         if variant.validation_status != RuntimeVariantValidationStatus.VALIDATION_PASSED:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "runtime variant must be validated before Paper v2 use",
                 context={
                     "portfolio_id": portfolio.portfolio_id,
@@ -1274,7 +1249,7 @@ class PaperTradingV2PortfolioService:
                 },
             )
         if variant.manifest_sha256 != portfolio.manifest_sha256:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "runtime variant manifest hash does not match paper portfolio manifest",
                 context={
                     "portfolio_id": portfolio.portfolio_id,
@@ -1300,11 +1275,11 @@ class PaperTradingV2PortfolioService:
         manifest: Any | None = None,
     ) -> dict[str, Any]:
         if not isinstance(config_json, dict) or not config_json:
-            raise StrategyPackageValidationError("runtime profile config_json must be a non-empty object")
+            raise RuntimeConfigInvalidError("runtime profile config_json must be a non-empty object")
         self._reject_runtime_profile_execution_overrides(config_json)
         unknown = sorted(set(config_json).difference(RUNTIME_PROFILE_INPUT_KEYS))
         if unknown:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "runtime profile config contains unsupported top-level keys",
                 context={
                     "unknown_fields": unknown,
@@ -1325,7 +1300,7 @@ class PaperTradingV2PortfolioService:
         self._drop_unset_daily_strategy_defaults(normalized, config_json)
         unknown_after = sorted(set(normalized).difference(RUNTIME_PROFILE_VERSION_ALLOWED_KEYS))
         if unknown_after:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "normalized runtime profile config contains unsupported top-level keys",
                 context={
                     "unknown_fields": unknown_after,
@@ -1380,7 +1355,7 @@ class PaperTradingV2PortfolioService:
         }
         present = sorted(key for key in forbidden if key in config_json)
         if present:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "runtime profile cannot contain execution/session overrides",
                 context={"forbidden_keys": present},
             )
@@ -1437,13 +1412,13 @@ class PaperTradingV2PortfolioService:
             allowed_keys = {"validated_execution_policy_id", "policy_id"}
             unknown = sorted(set(requested_policy).difference(allowed_keys))
             if unknown:
-                raise StrategyPackageValidationError(
+                raise RuntimeConfigInvalidError(
                     "paper v2 execution_policy must reference a backtest-validated policy id",
                     context={"unknown_fields": unknown, "allowed_fields": sorted(allowed_keys)},
                 )
             policy_id = requested_policy.get("validated_execution_policy_id") or requested_policy.get("policy_id")
             if not policy_id:
-                raise StrategyPackageValidationError("validated_execution_policy_id is required")
+                raise RuntimeConfigInvalidError("validated_execution_policy_id is required")
             policy = self.package_repository.get_execution_policy(package_id, str(policy_id))
         else:
             if manifest_execution_policy is None:
@@ -1458,7 +1433,7 @@ class PaperTradingV2PortfolioService:
                 manifest_execution_policy=manifest_execution_policy,
             )
         if policy.manifest_sha256 != manifest_sha256:
-            raise StrategyPackageValidationError(
+            raise PackageAssetInvalidError(
                 "validated execution policy manifest hash does not match paper portfolio manifest",
                 context={
                     "package_id": package_id,
@@ -1478,13 +1453,13 @@ class PaperTradingV2PortfolioService:
     ) -> dict[str, Any]:
         execution = (getattr(manifest, "backtest_context", None) or {}).get("execution")
         if not isinstance(execution, dict):
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "Paper v2 requires a platform execution policy or QE backtest execution evidence",
                 context={"package_id": package_id, "manifest_sha256": manifest_sha256},
             )
         algo_code = str(execution.get("execution_algo") or "").strip().upper()
         if not algo_code:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "Paper v2 requires execution_algo evidence before deriving a platform execution policy",
                 context={"package_id": package_id, "manifest_sha256": manifest_sha256},
             )
@@ -1494,7 +1469,7 @@ class PaperTradingV2PortfolioService:
         elif backtest_freq in {"1min", "1m", "minute", ""}:
             bar_freq = "1m"
         else:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "Paper v2 can only derive minute execution policy from minute backtest evidence",
                 context={
                     "package_id": package_id,
@@ -1587,7 +1562,7 @@ class PaperTradingV2PortfolioService:
             return "minqmt_sim"
         if normalized in {"local_sim", "minqmt_sim"}:
             return normalized
-        raise StrategyPackageValidationError(
+        raise RuntimeConfigInvalidError(
             "live approval candidate target broker is not supported by simulation binding",
             context={
                 "target_broker_backend": target_broker_backend,

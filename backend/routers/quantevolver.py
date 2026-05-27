@@ -3099,12 +3099,13 @@ def list_experiments(
     offset: int = Query(0, ge=0),
     alpha_mode: Optional[str] = Query(None, description="过滤 alpha_mode: single/multi"),
     include_children: bool = Query(False, description="按历史页分组返回父实验及其演进 Loop"),
+    detail: str = Query("summary", pattern="^(summary|full)$", description="summary 默认不返回 result_metrics/custom_params 大 JSON；full 保留旧完整字段"),
 ):
-    """获取实验列表。支持按 alpha_mode 过滤。"""
+    """获取实验列表。默认 summary，避免列表/MCP 返回超大 JSONB。"""
     try:
         from ..services.quantevolver.config_composer import ConfigComposer
         cc = ConfigComposer()
-        result = cc.list_experiments(limit=limit, offset=offset, include_children=include_children)
+        result = cc.list_experiments(limit=limit, offset=offset, include_children=include_children, detail=detail)
         # alpha_mode 过滤（在应用层过滤，避免改动 ConfigComposer 内部查询）
         if alpha_mode and result.get("ok") and result.get("items"):
             result["items"] = [
@@ -3118,12 +3119,15 @@ def list_experiments(
 
 
 @router.get("/experiments/{experiment_id}")
-def get_experiment_detail(experiment_id: str):
-    """获取实验详情。"""
+def get_experiment_detail(
+    experiment_id: str,
+    detail: str = Query("summary", pattern="^(summary|full)$", description="summary 默认不返回 result_metrics；full 保留旧完整字段"),
+):
+    """获取实验详情。默认 summary，完整指标请使用 enhanced-metrics/trade-stats 等专用端点。"""
     try:
         from ..services.quantevolver.config_composer import ConfigComposer
         cc = ConfigComposer()
-        result = cc.get_experiment_detail(experiment_id)
+        result = cc.get_experiment_detail(experiment_id, detail=detail)
         if not result.get("ok"):
             raise HTTPException(status_code=404, detail=result.get("error", "实验不存在"))
         return result
@@ -6783,6 +6787,134 @@ async def stream_experiment_logs(experiment_id: str):
     except Exception as e:
         logger.exception(f"???????: {experiment_id}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/experiments/{experiment_id}/multi-node-logs")
+async def stream_multi_node_logs(experiment_id: str):
+    """Fan-in log streams from all compute nodes assigned to multi-alpha groups.
+
+    For each running group in qe_multi_alpha_groups, opens an SSE connection
+    to the assigned node via QEWorkspaceClient and merges log lines tagged
+    with node_id into a single SSE response.
+    """
+    import asyncio
+
+    from ..services.quantevolver.qe_workspace_client import QEWorkspaceClient
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT group_name, assigned_node_id, qe_task_id, qe_loop_id, status
+                   FROM qe_multi_alpha_groups
+                   WHERE parent_experiment_id = %s
+                   ORDER BY group_name""",
+                (experiment_id,),
+            )
+            cols = [d[0] for d in cur.description]
+            groups = [dict(zip(cols, row)) for row in cur.fetchall()]
+
+            cur.execute(
+                "SELECT status, custom_params FROM qe_experiments WHERE experiment_id = %s",
+                (experiment_id,),
+            )
+            exp_row = cur.fetchone()
+            if not exp_row:
+                raise HTTPException(status_code=404, detail="实验不存在")
+
+    if not groups:
+        raise HTTPException(
+            status_code=400,
+            detail="该实验没有 multi-alpha 分组记录，请使用 /logs 端点",
+        )
+
+    exp_status, _ = exp_row
+
+    async def _stream_node(
+        group_name: str,
+        node_id: str,
+        qe_task_id: str,
+        queue: asyncio.Queue,
+    ):
+        try:
+            client = QEWorkspaceClient.for_node(node_id)
+            async with client:
+                async for line in client.stream_task_logs(qe_task_id):
+                    raw = line
+                    if raw.startswith("data:"):
+                        raw = raw[5:].strip()
+                    if not raw:
+                        continue
+                    try:
+                        payload = json.loads(raw)
+                        if isinstance(payload, dict) and "logs" in payload:
+                            for log_line in payload["logs"]:
+                                await queue.put(f"[{node_id}][{group_name}] {log_line}")
+                            continue
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                    for sub in raw.split("\n"):
+                        if sub:
+                            await queue.put(f"[{node_id}][{group_name}] {sub}")
+        except Exception as e:
+            await queue.put(f"[{node_id}][{group_name}] [ERROR] 日志流中断: {e}")
+
+    async def event_generator():
+        queue: asyncio.Queue[str] = asyncio.Queue(maxsize=2000)
+        active_groups = [
+            g for g in groups
+            if g.get("assigned_node_id") and g.get("qe_task_id")
+        ]
+
+        if not active_groups:
+            yield "data: [System] 没有已分配节点的分组，无法拉取远端日志\n\n"
+            return
+
+        yield f"data: [System] 已连接 {len(active_groups)} 个节点的日志流...\n\n"
+
+        active_count = len(active_groups)
+        done_count = 0
+        all_done = asyncio.Event()
+
+        async def _stream_node_tracked(gn, nid, tid):
+            nonlocal done_count
+            try:
+                await _stream_node(gn, nid, tid, queue)
+            finally:
+                done_count += 1
+                if done_count >= active_count:
+                    all_done.set()
+
+        tasks = [
+            asyncio.create_task(
+                _stream_node_tracked(
+                    g["group_name"], g["assigned_node_id"], g["qe_task_id"]
+                )
+            )
+            for g in active_groups
+        ]
+
+        try:
+            while not all_done.is_set() or not queue.empty():
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=5.0)
+                    yield f"data: {item}\n\n"
+                except asyncio.TimeoutError:
+                    if all_done.is_set() and queue.empty():
+                        break
+                    yield ": heartbeat\n\n"
+        finally:
+            for t in tasks:
+                t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/experiments/{experiment_id}/enhanced-metrics")

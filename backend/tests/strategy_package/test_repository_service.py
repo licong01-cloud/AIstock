@@ -17,7 +17,7 @@ from backend.services.strategy_package.validation_run import (
     PackageValidationStatus,
     PackageValidationType,
 )
-from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, StrategyPackageValidationError
+from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, RuntimeConfigInvalidError, StrategyPackageValidationError
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
 import pytest
@@ -508,7 +508,7 @@ def test_strategy_package_execution_policy_rejects_unknown_fields() -> None:
     repo.save_manifest(manifest)
     service = StrategyPackageService(repository=repo)
 
-    with pytest.raises(StrategyPackageValidationError, match="outside the backtest contract"):
+    with pytest.raises(RuntimeConfigInvalidError, match="outside the backtest contract"):
         service.create_execution_policy(
             package_id=manifest.package_id,
             policy_name="paper only override",

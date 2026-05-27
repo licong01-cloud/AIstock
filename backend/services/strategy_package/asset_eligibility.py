@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from backend.services.trading_core.errors import StrategyPackageValidationError
+from backend.services.trading_core.errors import PackageAssetInvalidError, StrategyPackageValidationError
 
 from .manifest import compute_manifest_sha256
 from .models import PackageStatus
@@ -219,8 +219,8 @@ class StrategyPackageAssetEligibilityService:
         result = self.summarize(record)
         if result.eligible:
             return result
-        raise StrategyPackageValidationError(
-            "strategy package asset eligibility failed",
+        raise PackageAssetInvalidError(
+            "strategy package alpha core asset eligibility failed",
             context=result.to_dict(),
         )
 

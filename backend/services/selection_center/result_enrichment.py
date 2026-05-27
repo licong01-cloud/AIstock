@@ -247,8 +247,8 @@ def _non_negative_float(value: Any) -> float | None:
 def _tdx_pre_close_entry_source(source: str | None) -> str:
     label = str(source or "").strip()
     if not label or "tdx" in label.casefold():
-        label = "TDX_REALTIME"
-    return f"{label}.latest_close_pre_close"
+        return "TDX latest close / pre_close"
+    return f"{label} latest close / pre_close"
 
 
 def _iso_or_none(value: Any) -> str | None:

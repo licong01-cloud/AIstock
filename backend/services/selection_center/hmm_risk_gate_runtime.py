@@ -12,6 +12,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from backend.services.trading_core.errors import DataUnavailableError, HMMRuntimeUnavailableError
+
 
 class HMMRiskGateEntry(BaseModel):
     state: str
@@ -50,7 +52,7 @@ class HMMRiskGateArtifactLoader:
                 )
             raw = json.loads(path.read_text(encoding="utf-8"))
             if raw.get("artifact_type") != "hmm_risk_gate_v1":
-                raise StrategyPackageValidationError(
+                raise HMMRuntimeUnavailableError(
                     f"Invalid artifact type: {raw.get('artifact_type')}, expected hmm_risk_gate_v1"
                 )
             artifact = HMMRiskGateArtifact(**raw)
@@ -79,11 +81,3 @@ class HMMRiskGateArtifactLoader:
         self, artifact: HMMRiskGateArtifact, symbol: str
     ) -> str | None:
         return artifact.stock_sector_map.get(symbol)
-
-
-class DataUnavailableError(RuntimeError):
-    pass
-
-
-class StrategyPackageValidationError(ValueError):
-    pass

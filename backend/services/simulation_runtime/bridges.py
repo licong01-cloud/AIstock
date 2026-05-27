@@ -16,7 +16,14 @@ from backend.services.qmt_strategy_ledger.order_service import (
     OrderPreflightResult,
     QmtManagedOrderService,
 )
-from backend.services.trading_core.errors import StrategyPackageValidationError
+from backend.services.trading_core.errors import (
+    ArtifactGenerationFailedError,
+    BrokerUnavailableError,
+    InvalidStateTransitionError,
+    LiveApprovalRequiredError,
+    MarketDataUnavailableError,
+    RuntimeConfigInvalidError,
+)
 from backend.services.trading_core.models import OrderIntent, OrderSide, OrderType
 
 from .models import ExecutionPlan, ExecutionPlanIntent, SimulationReleaseBinding
@@ -102,12 +109,12 @@ class MiniQMTExecutionBridge:
         effective_strategy_name = str(strategy_name or binding.strategy_name or binding.strategy_id).strip()
         effective_prefix = str(order_remark_prefix or binding.order_remark_prefix or "aistock").strip()
         if not effective_account:
-            raise StrategyPackageValidationError(
+            raise BrokerUnavailableError(
                 "MiniQMTExecutionBridge requires broker account_id",
                 context={"plan_id": plan.plan_id, "binding_id": binding.binding_id},
             )
         if not effective_strategy_name:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "MiniQMTExecutionBridge requires strategy_name",
                 context={"plan_id": plan.plan_id, "binding_id": binding.binding_id},
             )
@@ -157,10 +164,10 @@ class MiniQMTExecutionBridge:
     def submit_plan(self, **kwargs: Any) -> ManagedBatchSubmitResult:
         requests = self.build_managed_order_requests(**kwargs)
         if not requests:
-            raise StrategyPackageValidationError("MiniQMTExecutionBridge requires at least one plan intent")
+            raise ArtifactGenerationFailedError("MiniQMTExecutionBridge requires at least one plan intent")
         mode = str(kwargs.get("mode") or "SIM").strip().upper()
         if mode != "SIM":
-            raise StrategyPackageValidationError(
+            raise LiveApprovalRequiredError(
                 "MiniQMTExecutionBridge only submits SIM orders; LIVE requires separate approval path",
                 context={"mode": mode},
             )
@@ -169,17 +176,17 @@ class MiniQMTExecutionBridge:
     @staticmethod
     def _validate_plan_binding(*, plan: ExecutionPlan, binding: SimulationReleaseBinding, mode: str) -> None:
         if plan.binding_id != binding.binding_id or plan.binding_hash != binding.binding_hash:
-            raise StrategyPackageValidationError(
+            raise InvalidStateTransitionError(
                 "execution plan binding does not match MiniQMT simulation binding",
                 context={"plan_id": plan.plan_id, "binding_id": binding.binding_id},
             )
         if binding.broker_backend.value != "minqmt_sim":
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "MiniQMTExecutionBridge requires a minqmt_sim binding",
                 context={"binding_id": binding.binding_id, "broker_backend": binding.broker_backend.value},
             )
         if str(mode or "SIM").strip().upper() != "SIM":
-            raise StrategyPackageValidationError(
+            raise LiveApprovalRequiredError(
                 "MiniQMTExecutionBridge build path currently accepts SIM mode only",
                 context={"mode": mode},
             )
@@ -194,7 +201,7 @@ class MiniQMTExecutionBridge:
             return Decimal(str(intent.price_policy["reference_price"]))
         if intent.side == OrderSide.SELL:
             return Decimal("0")
-        raise StrategyPackageValidationError(
+        raise MarketDataUnavailableError(
             "MiniQMT BUY managed order requires reference price or explicit price_by_symbol",
             context={"intent_id": intent.intent_id, "symbol": intent.symbol},
         )

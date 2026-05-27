@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
@@ -22,6 +22,8 @@ const FactorList = dynamic(() => import("../components/FactorList"), { ssr: fals
 const ModelList = dynamic(() => import("../components/ModelList"), { ssr: false });
 
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
+const EVOLUTION_TASK_DETAIL_FULL = "detail=full";
+const EXPERIMENT_DETAIL_FULL = "detail=full";
 const QE_ARCHIVE_WRITE_CONFIRM = "QE_ARCHIVE_WRITE";
 const TERMINAL_LOG_STATUSES = new Set([
   "completed",
@@ -41,9 +43,9 @@ function isValidQeRandomSeed(value: number) {
   return Number.isInteger(value) && value >= 0 && value <= QE_RANDOM_SEED_MAX;
 }
 
-function parseQeRandomSeedInput(value: string, fallback = DEFAULT_QE_RANDOM_SEED) {
+function parseQeRandomSeedInput(value: string, seedDefault = DEFAULT_QE_RANDOM_SEED) {
   const parsed = Number(value);
-  return isValidQeRandomSeed(parsed) ? parsed : fallback;
+  return isValidQeRandomSeed(parsed) ? parsed : seedDefault;
 }
 
 function extractQeRandomSeed(...sources: any[]) {
@@ -211,6 +213,32 @@ interface Task {
   strategy_evo_config?: Record<string, any>;
   strategy_evo_execution_mode?: string;
   node_id?: string;
+}
+
+function normalizeSummaryLoop(loop: Loop): Loop {
+  const configSummary = (loop as any).config_summary || {};
+  const metricsSummary = (loop as any).metrics_summary || {};
+  return {
+    ...loop,
+    config_json: loop.config_json || {
+      ...configSummary,
+      factor_list: (loop as any).factors || configSummary.factors || configSummary.factor_list || [],
+      model_id: configSummary.model_id || (loop as any).model_id,
+      strategy_id: configSummary.strategy_id || (loop as any).strategy_id,
+      label_horizon: configSummary.label_horizon || (loop as any).label_horizon,
+      execution_algo: configSummary.execution_algo || (loop as any).execution_algo,
+    },
+    metrics_json: loop.metrics_json || {
+      ...metricsSummary,
+      IC: metricsSummary.ic ?? (loop as any).ic,
+      ICIR: metricsSummary.icir ?? (loop as any).icir,
+      Rank_IC: metricsSummary.rank_ic ?? (loop as any).rank_ic,
+      Rank_ICIR: metricsSummary.rank_icir ?? (loop as any).rank_icir,
+      annualized_return: metricsSummary.annualized_return ?? (loop as any).annualized_return,
+      max_drawdown: metricsSummary.max_drawdown ?? (loop as any).max_drawdown,
+      information_ratio: metricsSummary.information_ratio ?? (loop as any).information_ratio,
+    },
+  };
 }
 
 export default function EvolutionDashboard() {
@@ -686,7 +714,7 @@ export default function EvolutionDashboard() {
 
   const loadCustomEvoFromExperiment = async (expId: string) => {
     try {
-      const res = await fetch(`${API}/quantevolver/experiments/${expId}`);
+      const res = await fetch(`${API}/quantevolver/experiments/${expId}?${EXPERIMENT_DETAIL_FULL}`);
       if (!res.ok) { alert(`加载实验失败 (HTTP ${res.status})`); return; }
       const data = await res.json();
       if (!data.ok) { alert(`加载实验失败: ${data.error || "未知错误"}`); return; }
@@ -729,7 +757,7 @@ export default function EvolutionDashboard() {
   };
   const loadCustomEvoFromEvolutionLoop = async (taskId: string, loopIndex: number) => {
     try {
-      const res = await fetch(`${API}/quantevolver/evolution/tasks/${taskId}`);
+      const res = await fetch(`${API}/quantevolver/evolution/tasks/${taskId}?${EVOLUTION_TASK_DETAIL_FULL}`);
       if (!res.ok) { alert(`加载演进任务失败 (HTTP ${res.status})`); return; }
       const data = await res.json();
       const taskData = data.data || data;
@@ -1015,7 +1043,7 @@ export default function EvolutionDashboard() {
       const res = await fetch(`${API}/quantevolver/evolution/tasks/${taskId}`);
       const data = await res.json();
       if (data.status === "success" && data.data) {
-        setLoops(data.data.loops || []);
+        setLoops((data.data.loops || []).map(normalizeSummaryLoop));
         // 仅在需要自动选中时（首次加载/切换任务后）选中 loop
         if (autoSelectLoopRef.current && data.data.loops && data.data.loops.length > 0) {
           const sotaLoop = data.data.loops.find((l: Loop) => l.is_sota);
@@ -1714,7 +1742,7 @@ export default function EvolutionDashboard() {
     if (!activeTaskId) return;
     const task = tasks.find(t => t.task_id === activeTaskId) as any;
     const sourceLoop = loops.find(l => l.loop_index === loopIndex) as any;
-    const cfg = sourceLoop?.config_json || {};
+    const cfg = (sourceLoop as any)?.config_json || (sourceLoop as any)?.config_summary || {};
     const mp = cfg?.model_params || {};
     const sourceHorizon = ([1, 3, 5, 10, 20].includes(Number(mp.label_horizon || cfg.label_horizon || task?.label_horizon || 1))
       ? Number(mp.label_horizon || cfg.label_horizon || task?.label_horizon || 1)
@@ -1791,7 +1819,7 @@ export default function EvolutionDashboard() {
     const sourceLoop = loops.find(l => l.loop_index === showForkDialog);
     if (!sourceLoop) return;
 
-    const config = sourceLoop.config_json || {};
+    const config = (sourceLoop as any).config_json || (sourceLoop as any).config_summary || {};
     const newLoop = {
       loop_index: strategyEvoLoops.length + 1,
       label: `Loop ${strategyEvoLoops.length + 1} (源配置)`,
@@ -2219,7 +2247,38 @@ export default function EvolutionDashboard() {
   };
 
   // ── 性能优化: useCallback 稳定引用（传给 React.memo 子组件） ──
-  const handleSelectLoop = useCallback((idx: number) => setActiveLoopIndex(idx), []);
+  const handleSelectLoop = useCallback((idx: number) => {
+    setActiveLoopIndex(idx);
+    if (!activeTaskId) return;
+    setLoops(prev => {
+      const selected = prev.find(loop => loop.loop_index === idx);
+      if (!selected || (selected.config_json && selected.metrics_json && selected.agent_analysis !== undefined)) {
+        return prev;
+      }
+      const patchLoopPayload = async () => {
+        const [configRes, metricsRes, analysisRes] = await Promise.all([
+          fetch(`${API}/quantevolver/evolution/tasks/${activeTaskId}/loops/${idx}/config`),
+          fetch(`${API}/quantevolver/evolution/tasks/${activeTaskId}/loops/${idx}/metrics`),
+          fetch(`${API}/quantevolver/evolution/tasks/${activeTaskId}/loops/${idx}/analysis`),
+        ]);
+        const [configJson, metricsJson, analysisJson] = await Promise.all(
+          [configRes, metricsRes, analysisRes].map(async (res) => (res.ok ? res.json() : { data: {} }))
+        );
+        setLoops(current => current.map(loop => (
+          loop.loop_index === idx
+            ? {
+                ...loop,
+                config_json: configJson?.data?.config_json ?? loop.config_json,
+                metrics_json: metricsJson?.data?.metrics_json ?? loop.metrics_json,
+                agent_analysis: analysisJson?.data?.agent_analysis ?? loop.agent_analysis ?? null,
+              }
+            : loop
+        )));
+      };
+      patchLoopPayload().catch(e => console.error(`[QE] Loop payload error for Loop${idx}:`, e));
+      return prev;
+    });
+  }, [activeTaskId]);
   const handleToggleLogs = useCallback(() => setLogsCollapsed(prev => !prev), []);
   const handleSetDetailTab = useCallback((tab: string) => setDetailTab(tab), []);
   const handleSetRightPanelView = useCallback((v: "loop" | "trajectory") => {
@@ -2464,7 +2523,7 @@ export default function EvolutionDashboard() {
                           : "默认";
                         const eName = (task as any).execution_algo || "收盘价成交";
                         const firstLoop = loops.find((l: Loop) => l.loop_index === 1);
-                        const cfg: any = firstLoop?.config_json || {};
+                        const cfg: any = (firstLoop as any)?.config_json || (firstLoop as any)?.config_summary || {};
                         const fList: string[] = cfg.factor_list || cfg.factor_names || [];
                         const mId: string = cfg.model_id || "";
                         const lblMap: Record<string, string> = { close: "收盘价", open: "开盘价", vwap: "VWAP" };
@@ -3210,7 +3269,7 @@ export default function EvolutionDashboard() {
                         setForkSourceLoops([]);
                         if (tid) {
                           try {
-                            const res = await fetch(`${API}/quantevolver/evolution/tasks/${tid}`);
+                            const res = await fetch(`${API}/quantevolver/evolution/tasks/${tid}?${EVOLUTION_TASK_DETAIL_FULL}`);
                             if (!res.ok) throw new Error(`HTTP ${res.status}`);
                             const data = await res.json();
                             const taskData = data?.data || data;
@@ -3246,9 +3305,9 @@ export default function EvolutionDashboard() {
                       >
                         <option value={-1}>-- 请选择已完成的 Loop --</option>
                         {forkSourceLoops.map((l: any) => {
-                          const raw = l.metrics_json || {};
+                          const raw = l.metrics_json || l.metrics_summary || {};
                           const m = typeof raw === "string" ? (() => { try { return JSON.parse(raw); } catch { return {}; } })() : raw;
-                          const ic = typeof m === "object" && m !== null ? m.IC : null;
+                          const ic = typeof m === "object" && m !== null ? (m.IC ?? m.ic) : null;
                           return (
                             <option key={l.loop_index} value={l.loop_index}>
                               Loop {l.loop_index} — {l.action_type || "initial"}
@@ -3714,7 +3773,7 @@ export default function EvolutionDashboard() {
                       setCustomEvoSourceLoopIdx(-1);
                       if (tid) {
                         try {
-                          const r = await fetch(`${API}/quantevolver/evolution/tasks/${tid}`);
+                          const r = await fetch(`${API}/quantevolver/evolution/tasks/${tid}?${EVOLUTION_TASK_DETAIL_FULL}`);
                           if (r.ok) { const d = await r.json(); setCustomEvoForkLoops((d.data || d).loops?.filter((l: any) => l.status === "completed") || []); }
                           else { alert(`加载任务 Loop 列表失败 (HTTP ${r.status})`); setCustomEvoForkLoops([]); }
                         } catch (e: any) { alert(`加载失败: ${e?.message || "网络错误"}`); setCustomEvoForkLoops([]); }
@@ -4439,7 +4498,7 @@ export default function EvolutionDashboard() {
                   {(() => {
                     const sourceLoop = loops.find(l => l.loop_index === showForkDialog);
                     if (!sourceLoop) return null;
-                    const config = sourceLoop.config_json || {};
+                    const config = (sourceLoop as any).config_json || (sourceLoop as any).config_summary || {};
                     const sourceHorizon = config?.model_params?.label_horizon || config?.label_horizon || forkForm.label_horizon || 1;
                     return (
                       <div style={{ fontSize: "12px", color: "#475569" }}>

@@ -22,11 +22,6 @@ import jsonschema
 from .context_budget import ContextBudgetPlan, ContextBudgetPlanner
 from .execution import ResearchAssistantExecutionMixin
 from .models import (
-    ActionProposalApprovalRequest,
-    ActionProposalCreate,
-    ActionProposalDecisionRequest,
-    ActionProposalExecuteRequest,
-    ActionProposalPreflightRequest,
     ApprovalCreate,
     CapabilitySyncRequest,
     ChatTurnRequest,
@@ -56,7 +51,6 @@ from .models import (
 )
 from .prompt_pack import (
     DEFAULT_PROMPT_PACK_PATH,
-    FORBIDDEN_UNDEVELOPED_CAPABILITY_PHRASES as FORBIDDEN_UNDEVELOPED_CAPABILITY_PHRASES,
     PromptPackSnapshot,
     load_prompt_pack,
 )
@@ -82,9 +76,49 @@ class DialogueIntent(str, Enum):
     EXPERIMENT_EXECUTION_REQUEST = "experiment_execution_request"
     AMBIGUOUS_REQUEST = "ambiguous_request"
     GENERAL_CHAT = "general_chat"
+    AUDIT_REQUEST = "audit_request"
+    RECOVERY_REQUEST = "recovery_request"
 
 
 DIALOGUE_INTENT_CONFIG_KEY = "dialogue_intent"
+DIALOGUE_MODES_CONFIG_KEY = "dialogue_modes"
+MODE_ROUTER_CONFIG_KEY = "mode_router"
+
+
+class DialogueMode(str, Enum):
+    DIALOGUE = "dialogue"
+    ANALYSIS = "analysis"
+    PLANNING = "planning"
+    PREFLIGHT = "preflight"
+    EXECUTION = "execution"
+    AUDIT = "audit"
+    RECOVERY = "recovery"
+
+
+@dataclass(frozen=True)
+class ModeDecision:
+    mode: DialogueMode
+    intent_type: DialogueIntent
+    confidence: float
+    mode_reason: str
+    requires_tool: bool
+    allowed_tool_side_effect: str
+    requires_user_confirmation: bool
+    requires_approval: bool
+    visible_audit_default: bool
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "mode": self.mode.value,
+            "intent_type": self.intent_type.value,
+            "confidence": self.confidence,
+            "mode_reason": self.mode_reason,
+            "requires_tool": self.requires_tool,
+            "allowed_tool_side_effect": self.allowed_tool_side_effect,
+            "requires_user_confirmation": self.requires_user_confirmation,
+            "requires_approval": self.requires_approval,
+            "visible_audit_default": self.visible_audit_default,
+        }
 
 
 class ResearchAssistantCatalogNotReadyError(RuntimeError):
@@ -681,6 +715,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "reports": 0,
             "notifications": 0,
         }
+        runtime_config = load_runtime_config(environment=self.environment)
+        self._seed_runtime_config(runtime_config, seeded)
         for item in DEFAULT_SKILLS:
             payload = {
                 "skill_id": f"skill_{item['skill_key']}",
@@ -727,8 +763,6 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             seeded["routing_policies"] += 1
         prompt_pack = load_prompt_pack(DEFAULT_PROMPT_PACK_PATH)
         self._seed_prompt_pack(prompt_pack, seeded)
-        runtime_config = load_runtime_config(environment=self.environment)
-        self._seed_runtime_config(runtime_config, seeded)
         capability_sync = self.sync_capabilities({"apply": True, "requested_by": "seed_catalogs"})
         seeded["capabilities"] += int(capability_sync["applied_count"])
         self._ensure_default_reports_and_notifications(seeded)
@@ -825,6 +859,14 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         return result
 
     def _seed_prompt_pack(self, prompt_pack: PromptPackSnapshot, seeded: dict[str, int]) -> None:
+        active = self.repository.list_records(
+            "prompt_activations",
+            filters={"assistant_key": "research_assistant", "environment": self.environment, "status": "active"},
+            limit=self.configured_limit("api_list_prompt_activations"),
+        )["items"]
+        for item in active:
+            if item.get("activation_id") != prompt_pack.activation_id:
+                self.repository.update_record("prompt_activations", str(item["activation_id"]), {"status": "retired", "active_to": utc_now().isoformat()})
         source = self.repository.create_record(
             "prompt_sources",
             {
@@ -901,6 +943,14 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         seeded["prompt_activations"] += 1
 
     def _seed_runtime_config(self, runtime_config: RuntimeConfigSnapshot, seeded: dict[str, int]) -> None:
+        active = self.repository.list_records(
+            "runtime_config_activations",
+            filters={"config_key": runtime_config.config_key, "environment": runtime_config.environment, "status": "active"},
+            limit=int(runtime_config.config["query_limits"]["api_list_runtime_config_activations"]),
+        )["items"]
+        for item in active:
+            if item.get("activation_id") != runtime_config.activation_id:
+                self.repository.update_record("runtime_config_activations", str(item["activation_id"]), {"status": "retired", "active_to": utc_now().isoformat()})
         source = self.repository.create_record(
             "runtime_config_sources",
             {
@@ -978,6 +1028,17 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         data = request if isinstance(request, PromptBundleBuildRequest) else PromptBundleBuildRequest(**request)
         self.ensure_catalog_ready()
         dialogue_intent = self._classify_dialogue_intent(data.user_message)
+        mode_decision = data.mode_decision or self._decide_dialogue_mode(
+            data.user_message,
+            dialogue_intent=dialogue_intent,
+            phase=data.phase,
+            allow_execute=False,
+            risk_level="medium",
+            override=data.dialogue_mode,
+        ).as_dict()
+        dialogue_mode = str(data.dialogue_mode or mode_decision.get("mode") or self._dialogue_modes_config().get("default_mode") or DialogueMode.DIALOGUE.value)
+        data.mode_decision = mode_decision
+        data.dialogue_mode = dialogue_mode
         activation = self.active_prompt_activation()
         version_refs = list(activation.get("version_refs") or [])
         available = self.repository.list_records("prompt_nodes", filters={"status": "enabled"}, limit=self.configured_limit("prompt_nodes_active"))["items"]
@@ -1000,13 +1061,16 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         bundle_text = "\n\n".join(f"### {item['title']}\n{item['prompt_text']}" for item in selected)
         bundle_json = {
             "phase": data.phase,
+            "dialogue_mode": dialogue_mode,
             "node_count": len(selected),
             "prompt_keys": [item["prompt_key"] for item in selected],
             "user_message_digest": sha256_json({"message": data.user_message}),
         }
         selection_trace = {
-            "algorithm": "intent_gated_prompt_tree_v1",
+            "algorithm": "mode_routed_prompt_tree_v1",
             "dialogue_intent": dialogue_intent.value,
+            "dialogue_mode": dialogue_mode,
+            "mode_decision": mode_decision,
             "phase": data.phase,
             "prompt_activation_id": activation["activation_id"],
             "prompt_bundle_signature": activation.get("bundle_signature"),
@@ -1046,9 +1110,16 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
     def _select_prompt_nodes(self, available: list[dict[str, Any]], data: PromptBundleBuildRequest) -> list[dict[str, Any]]:
         by_key = {str(item["prompt_key"]): item for item in available}
         intent = self._classify_dialogue_intent(data.user_message)
+        mode = str(data.dialogue_mode or (data.mode_decision or {}).get("mode") or self._dialogue_modes_config().get("default_mode") or DialogueMode.DIALOGUE.value)
+        mode_cfg = self._dialogue_mode_config(mode)
         selected_keys: set[str] = set(data.required_prompt_keys)
-        selected_keys.update({"root.assistant", "intent.planning"})
-        if intent in {
+        configured_prompt_nodes = mode_cfg.get("prompt_nodes")
+        if isinstance(configured_prompt_nodes, list) and configured_prompt_nodes:
+            selected_keys.update(str(key) for key in configured_prompt_nodes)
+        else:
+            selected_keys.update({"root.assistant", f"mode.{mode}"})
+        task_modes = {DialogueMode.PLANNING.value, DialogueMode.PREFLIGHT.value, DialogueMode.EXECUTION.value}
+        if mode in task_modes and intent in {
             DialogueIntent.EXPERIMENT_DRAFT_REQUEST,
             DialogueIntent.EXPERIMENT_VALIDATION_REQUEST,
             DialogueIntent.EXPERIMENT_EXECUTION_REQUEST,
@@ -1056,9 +1127,9 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             selected_keys.add("domain.qe_experiment")
             if intent in {DialogueIntent.EXPERIMENT_DRAFT_REQUEST, DialogueIntent.EXPERIMENT_VALIDATION_REQUEST, DialogueIntent.EXPERIMENT_EXECUTION_REQUEST}:
                 selected_keys.add("workflow.qe_draft_then_approval")
-            if intent in {DialogueIntent.EXPERIMENT_VALIDATION_REQUEST, DialogueIntent.EXPERIMENT_EXECUTION_REQUEST}:
+            if mode in {DialogueMode.PREFLIGHT.value, DialogueMode.EXECUTION.value} or intent in {DialogueIntent.EXPERIMENT_VALIDATION_REQUEST, DialogueIntent.EXPERIMENT_EXECUTION_REQUEST}:
                 selected_keys.add("tool_guard.mcp_qe")
-        if intent in {DialogueIntent.ISSUE_INTAKE_REQUEST, DialogueIntent.EXPERIMENT_EXECUTION_REQUEST}:
+        if mode in task_modes and intent in {DialogueIntent.ISSUE_INTAKE_REQUEST, DialogueIntent.EXPERIMENT_EXECUTION_REQUEST}:
             selected_keys.add("governance.no_silent_action")
         if data.phase in {"result", "preflight"}:
             selected_keys.add("renderer.human_cards")
@@ -1080,6 +1151,25 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             return {}
         return {str(key): value for key, value in config.items()}
 
+    def _dialogue_modes_config(self) -> dict[str, Any]:
+        config = self.active_runtime_config().get(DIALOGUE_MODES_CONFIG_KEY, {})
+        if not isinstance(config, dict):
+            return {}
+        return {str(key): value for key, value in config.items()}
+
+    def _dialogue_mode_config(self, mode: str) -> dict[str, Any]:
+        modes = self._dialogue_modes_config().get("modes", {})
+        if not isinstance(modes, dict):
+            return {}
+        cfg = modes.get(mode, {})
+        return dict(cfg) if isinstance(cfg, dict) else {}
+
+    def _mode_router_config(self) -> dict[str, Any]:
+        config = self.active_runtime_config().get(MODE_ROUTER_CONFIG_KEY, {})
+        if not isinstance(config, dict):
+            return {}
+        return {str(key): value for key, value in config.items()}
+
     def _dialogue_event_message(self, event_type: str) -> str:
         event_messages = self._dialogue_intent_config().get("event_messages", {})
         if not isinstance(event_messages, dict):
@@ -1093,9 +1183,79 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
     def _has_explicit_task_verb(self, text: str, intent_config: dict[str, list[str]]) -> bool:
         return self._has_any(text, intent_config.get("explicit_task_verbs", []))
 
+    def _decide_dialogue_mode(
+        self,
+        user_message: str,
+        *,
+        dialogue_intent: DialogueIntent,
+        phase: str,
+        allow_execute: bool,
+        risk_level: str,
+        override: str | None = None,
+    ) -> ModeDecision:
+        lower = user_message.lower()
+        router_cfg = self._mode_router_config()
+        overrides = router_cfg.get("user_overrides", {}) if isinstance(router_cfg.get("user_overrides"), dict) else {}
+        thresholds = router_cfg.get("confidence_thresholds", {}) if isinstance(router_cfg.get("confidence_thresholds"), dict) else {}
+
+        if override:
+            mode = DialogueMode(override)
+            reason = "user_override"
+            confidence = 1.0
+        elif self._has_any(lower, list(overrides.get("audit_patterns", []))):
+            mode = DialogueMode.AUDIT
+            reason = "audit_pattern"
+            confidence = 0.92
+        elif self._has_any(lower, list(overrides.get("analysis_only_patterns", []))):
+            mode = DialogueMode.ANALYSIS
+            reason = "analysis_only_override"
+            confidence = 0.95
+        elif allow_execute or self._has_any(lower, list(overrides.get("execute_patterns", []))):
+            mode = DialogueMode.EXECUTION
+            reason = "execution_request_requires_existing_proposal"
+            confidence = float(thresholds.get("execution_request_min", 0.86))
+        elif phase == "preflight" or dialogue_intent in {DialogueIntent.EXPERIMENT_VALIDATION_REQUEST, DialogueIntent.EXPERIMENT_EXECUTION_REQUEST}:
+            mode = DialogueMode.PREFLIGHT
+            reason = "explicit_preflight_or_validation_request"
+            confidence = float(thresholds.get("task_request_min", 0.72))
+        elif dialogue_intent in {DialogueIntent.EXPERIMENT_DRAFT_REQUEST, DialogueIntent.ISSUE_INTAKE_REQUEST}:
+            mode = DialogueMode.PLANNING
+            reason = "explicit_task_request"
+            confidence = float(thresholds.get("task_request_min", 0.72))
+        elif dialogue_intent in {DialogueIntent.BUG_DIAGNOSIS_REQUEST, DialogueIntent.CONCEPT_EXPLANATION, DialogueIntent.STATUS_QUERY, DialogueIntent.AMBIGUOUS_REQUEST}:
+            mode = DialogueMode.ANALYSIS
+            reason = "read_only_analysis_intent"
+            confidence = float(thresholds.get("direct_answer_min", 0.55))
+        else:
+            mode = DialogueMode.DIALOGUE
+            reason = "direct_answer_intent"
+            confidence = float(thresholds.get("direct_answer_min", 0.55))
+
+        mode_cfg = self._dialogue_mode_config(mode.value)
+        allowed_side_effect = str(mode_cfg.get("allowed_tool_side_effect") or "none")
+        requires_approval = bool(mode_cfg.get("approval_required")) or risk_level == "production_sensitive"
+        requires_confirmation = mode in {DialogueMode.PREFLIGHT, DialogueMode.EXECUTION} or bool(mode_cfg.get("approval_required"))
+        requires_tool = mode in {DialogueMode.PREFLIGHT, DialogueMode.EXECUTION}
+        visible_audit = bool(mode_cfg.get("expose_audit_fields")) and mode not in {DialogueMode.DIALOGUE, DialogueMode.ANALYSIS}
+        return ModeDecision(
+            mode=mode,
+            intent_type=dialogue_intent,
+            confidence=round(confidence, 3),
+            mode_reason=reason,
+            requires_tool=requires_tool,
+            allowed_tool_side_effect=allowed_side_effect,
+            requires_user_confirmation=requires_confirmation,
+            requires_approval=requires_approval,
+            visible_audit_default=visible_audit,
+        )
+
     def _classify_dialogue_intent(self, user_message: str) -> DialogueIntent:
         lower = user_message.lower()
         intent_config = self._dialogue_intent_config()
+        router_cfg = self._mode_router_config()
+        overrides = router_cfg.get("user_overrides", {}) if isinstance(router_cfg.get("user_overrides"), dict) else {}
+        if self._has_any(lower, list(overrides.get("audit_patterns", []))):
+            return DialogueIntent.AUDIT_REQUEST
         has_qe = self._has_any(lower, intent_config.get("qe_terms", []))
         has_bug = self._has_any(lower, intent_config.get("bug_terms", []))
         has_issue = self._has_any(lower, intent_config.get("issue_terms", []))
@@ -1104,7 +1264,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         asks_concept = self._has_any(lower, intent_config.get("concept_explanation_patterns", []))
         asks_status = self._has_any(lower, intent_config.get("status_query_patterns", []))
 
-        if asks_capability:
+        if asks_capability or self._is_mcp_tool_catalog_inquiry(lower):
             return DialogueIntent.CAPABILITY_INQUIRY
         if has_bug and (explicit_task or asks_concept or asks_status):
             return DialogueIntent.BUG_DIAGNOSIS_REQUEST
@@ -1155,8 +1315,6 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
 
     def chat_turn(self, request: ChatTurnRequest | dict[str, Any]) -> dict[str, Any]:
         data = request if isinstance(request, ChatTurnRequest) else ChatTurnRequest(**request)
-        if data.allow_execute:
-            raise ValueError("Phase 1 chat turn does not execute actions; create approval/preflight plan first")
         self.ensure_catalog_ready()
         conversation = (
             self.repository.get_record("conversations", data.conversation_id)
@@ -1167,12 +1325,28 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             raise KeyError(f"conversation not found: {data.conversation_id}")
         conversation_id = conversation["conversation_id"]
         dialogue_intent = self._classify_dialogue_intent(data.message)
+        mode_decision = self._decide_dialogue_mode(
+            data.message,
+            dialogue_intent=dialogue_intent,
+            phase=data.phase,
+            allow_execute=data.allow_execute,
+            risk_level=data.risk_level,
+            override=data.dialogue_mode_override,
+        )
+        mode_decision_json = mode_decision.as_dict()
         task = self.create_task(
             TaskCreate(
                 title=self._conversation_title(data.message),
                 task_type="assistant_chat_turn",
                 risk_level=data.risk_level,
-                input_json={"user_message": data.message, "phase": data.phase, "allow_execute": data.allow_execute, "dialogue_intent": dialogue_intent.value},
+                input_json={
+                    "user_message": data.message,
+                    "phase": data.phase,
+                    "allow_execute": data.allow_execute,
+                    "dialogue_intent": dialogue_intent.value,
+                    "dialogue_mode": mode_decision.mode.value,
+                    "mode_decision": mode_decision_json,
+                },
                 created_by=data.created_by,
             )
         )
@@ -1182,7 +1356,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 role="user",
                 content_text=data.message,
                 task_id=task["task_id"],
-                content_json={"phase": data.phase, "dialogue_intent": dialogue_intent.value},
+                content_json={"phase": data.phase, "dialogue_intent": dialogue_intent.value, "dialogue_mode": mode_decision.mode.value, "mode_decision": mode_decision_json},
             )
         )
         self.add_task_event(
@@ -1190,7 +1364,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             TaskEventCreate(
                 event_type="chat_received",
                 message=self._dialogue_event_message("chat_received"),
-                payload_json={"conversation_id": conversation_id, "dialogue_intent": dialogue_intent.value},
+                payload_json={"conversation_id": conversation_id, "dialogue_intent": dialogue_intent.value, "dialogue_mode": mode_decision.mode.value, "mode_decision": mode_decision_json},
             ),
         )
 
@@ -1210,6 +1384,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 task_id=task["task_id"],
                 conversation_id=conversation_id,
                 phase=data.phase,
+                dialogue_mode=mode_decision.mode.value,
+                mode_decision=mode_decision_json,
                 model_profile_id=model_profile["model_profile_id"],
             )
         )
@@ -1256,7 +1432,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             prior_messages=prior_messages,
             context_pack=context_pack,
         )
-        messages = self._chat_messages_for_llm(data.message, bundle, context_pack, prior_messages)
+        messages = self._chat_messages_for_llm(data.message, bundle, context_pack, prior_messages, mode_decision=mode_decision_json, runtime_config=runtime_config)
         self.add_task_event(
             task["task_id"],
             TaskEventCreate(
@@ -1296,14 +1472,16 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                     "context_assembly_trace_id": assembly_trace["assembly_trace_id"],
                     "response_preview": self._preview_text(llm_result.content, budget_plan),
                     "dialogue_intent": dialogue_intent.value,
+                    "dialogue_mode": mode_decision.mode.value,
+                    "mode_decision": mode_decision_json,
                 },
                 cost_json={"usage": llm_result.usage},
             )
         )
-        context_health = self._context_health_payload(conversation_id, budget_plan)
-        cards = self._build_human_cards(data.message, task, bundle, route, dialogue_intent)
+        context_health = self._context_health_payload(conversation_id, budget_plan, mode_decision=mode_decision)
+        cards = self._build_human_cards(data.message, task, bundle, route, dialogue_intent, mode_decision)
         cards["context_health"] = context_health
-        assistant_text = self._compose_assistant_reply(data.message, llm_result.content, cards)
+        assistant_text = self._compose_assistant_reply(data.message, llm_result.content, cards, mode_decision)
         assistant_message = self.add_conversation_message(
             ConversationMessageCreate(
                 conversation_id=conversation_id,
@@ -1312,6 +1490,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 content_json={
                     "cards": cards,
                     "dialogue_intent": dialogue_intent.value,
+                    "dialogue_mode": mode_decision.mode.value,
+                    "mode_decision": mode_decision_json,
                     "audit_summary": {
                         "model_profile": model_profile["display_name"],
                         "prompt_bundle_checksum": bundle["checksum"],
@@ -1330,7 +1510,13 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             TaskEventCreate(
                 event_type="llm_done",
                 message=self._dialogue_event_message("llm_done"),
-                payload_json={"assistant_message_id": assistant_message["message_id"], "trace_id": trace["trace_id"], "dialogue_intent": dialogue_intent.value},
+                payload_json={
+                    "assistant_message_id": assistant_message["message_id"],
+                    "trace_id": trace["trace_id"],
+                    "dialogue_intent": dialogue_intent.value,
+                    "dialogue_mode": mode_decision.mode.value,
+                    "mode_decision": mode_decision_json,
+                },
             ),
         )
         if cards.get("action_proposals"):
@@ -1352,6 +1538,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "prompt_bundle": self._public_prompt_bundle(bundle),
             "context_pack": {"context_pack_id": context_pack["context_pack_id"], "pack_summary": context_pack["pack_summary"], "checksum": context_pack["checksum"]},
             "trace": {"trace_id": trace["trace_id"], "status": trace["status"], "duration_ms": trace.get("duration_ms"), "model_profile_id": trace.get("model_profile_id")},
+            "mode_decision": mode_decision_json,
             "context_health": context_health,
             "cards": cards,
         }
@@ -1373,21 +1560,98 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "cache_path": bundle.get("cache_path"),
         }
 
-    @staticmethod
-    def _chat_messages_for_llm(user_message: str, bundle: dict[str, Any], context_pack: dict[str, Any], prior_messages: list[dict[str, str]] | None = None) -> list[dict[str, str]]:
+    def _chat_messages_for_llm(
+        self,
+        user_message: str,
+        bundle: dict[str, Any],
+        context_pack: dict[str, Any],
+        prior_messages: list[dict[str, str]] | None = None,
+        *,
+        mode_decision: dict[str, Any] | None = None,
+        runtime_config: dict[str, Any] | None = None,
+    ) -> list[dict[str, str]]:
         system = str(bundle["bundle_text"])
-        context = (
-            f"Context Pack 摘要：{context_pack.get('pack_summary')}\n"
-            "请基于这些已审计上下文进行回答；缺失信息时先向用户确认。"
-        )
         messages: list[dict[str, str]] = [
             {"role": "system", "content": system},
-            {"role": "user", "content": context},
         ]
+        mode = str((mode_decision or {}).get("mode") or DialogueMode.DIALOGUE.value)
+        mode_cfg = self._dialogue_mode_config(mode)
+        expose_context_pack = bool(mode_cfg.get("expose_context_pack"))
+        if expose_context_pack:
+            context = (
+                f"Context Pack 摘要：{context_pack.get('pack_summary')}\n"
+                "请基于这些已审计上下文进行回答；缺失信息时先向用户确认。"
+            )
+            messages.append({"role": "user", "content": context})
+        else:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        f"Internal Context Pack 摘要：{context_pack.get('pack_summary')}\n"
+                        "Do not mention Context Pack, memory counts, token budget, prompt bundle, or compression summaries unless the user asks for audit details."
+                    ),
+                }
+            )
         if prior_messages:
             messages.extend(prior_messages)
+        mcp_catalog_context = self._mcp_tool_catalog_context_for_llm(user_message)
+        if mcp_catalog_context:
+            messages.append({"role": "system", "content": mcp_catalog_context})
         messages.append({"role": "user", "content": user_message})
         return messages
+
+    @staticmethod
+    def _is_mcp_tool_catalog_inquiry(user_message: str) -> bool:
+        lower = user_message.lower()
+        if "mcp" not in lower:
+            return False
+        tool_terms = ("tool", "tools", "工具", "能力", "列表", "哪些", "可用", "使用", "access", "available", "use")
+        return any(term in lower for term in tool_terms)
+
+    def _mcp_tool_catalog_snapshot(self) -> dict[str, Any]:
+        servers = [
+            item
+            for item in self.repository.list_records("mcp_servers", limit=self.configured_limit("router_mcp_servers"))["items"]
+            if str(item.get("status") or "") in {"ready", "enabled", "ok"}
+        ]
+        tools = [
+            item
+            for item in self.repository.list_records("mcp_tools", limit=self.configured_limit("api_list_mcp_tools"))["items"]
+            if str(item.get("status") or "") in {"enabled", "ready", "approved"}
+        ]
+        capabilities = [
+            item
+            for item in self.repository.list_records("capabilities", filters={"status": "approved"}, limit=self.configured_limit("api_list_capabilities"))["items"]
+        ]
+        tools_by_server: dict[str, list[dict[str, Any]]] = {}
+        for tool in sorted(tools, key=lambda item: (str(item.get("server_key") or ""), str(item.get("tool_name") or ""))):
+            tools_by_server.setdefault(str(tool.get("server_key") or "unknown"), []).append(tool)
+        return {
+            "source": "assistant_mcp_tools_runtime_catalog",
+            "server_count": len(servers),
+            "tool_count": len(tools),
+            "capability_count": len(capabilities),
+            "servers": servers,
+            "tools": tools,
+            "tools_by_server": tools_by_server,
+            "capabilities": capabilities,
+        }
+
+    def _mcp_tool_catalog_context_for_llm(self, user_message: str) -> str | None:
+        if not self._is_mcp_tool_catalog_inquiry(user_message):
+            return None
+        catalog = self._mcp_tool_catalog_snapshot()
+        lines = [
+            "Runtime MCP catalog snapshot from assistant_mcp_tools; answer only from this audited catalog.",
+            f"Enabled servers: {catalog['server_count']}; enabled tools: {catalog['tool_count']}; approved capabilities: {catalog['capability_count']}.",
+            "Do not claim generic filesystem, shell, Git, HTTP, browser, or data-warehouse tools unless they are listed here.",
+            "If a requested capability is absent, say it is not registered in the Research Assistant runtime catalog.",
+        ]
+        for server_key, tools in catalog["tools_by_server"].items():
+            tool_names = ", ".join(str(tool.get("tool_name") or "") for tool in tools)
+            lines.append(f"- {server_key}: {tool_names}")
+        return "\n".join(lines)
 
     def _complete_chat_with_reactive_recovery(
         self,
@@ -1485,7 +1749,14 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 status="retry_after_compaction",
                 extra_assembly={"reactive_retry_attempt": attempt, "compaction_segment_id": segment["segment_id"]},
             )
-            retry_messages = self._chat_messages_for_llm(user_message, bundle, context_pack, retry_prior_messages)
+            retry_messages = self._chat_messages_for_llm(
+                user_message,
+                bundle,
+                context_pack,
+                retry_prior_messages,
+                mode_decision=(bundle.get("selection_trace_json") or {}).get("mode_decision"),
+                runtime_config=retry_budget.runtime_config,
+            )
             retry_messages.insert(1, {"role": "system", "content": self._prompt_text("context.recovery.prompt_too_long_retry")})
             try:
                 result = self.llm_client.complete(
@@ -1526,11 +1797,15 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         codes = runtime_config["compaction"]["trigger"]["reactive_error_codes"]
         return any(str(code).lower() in error_text for code in codes)
 
-    def _context_health_payload(self, conversation_id: str, budget_plan: ContextBudgetPlan) -> dict[str, Any]:
+    def _context_health_payload(self, conversation_id: str, budget_plan: ContextBudgetPlan, *, mode_decision: ModeDecision | None = None) -> dict[str, Any]:
+        mode_cfg = self._dialogue_mode_config(mode_decision.mode.value) if mode_decision else {}
+        show_badge = bool(budget_plan.runtime_config["ui"]["show_context_health_badge"])
+        if "show_context_health_badge" in mode_cfg:
+            show_badge = show_badge and bool(mode_cfg.get("show_context_health_badge"))
         return {
             "status": "compacted_or_ready" if budget_plan.should_compact else "healthy",
             "notify_mode": budget_plan.runtime_config["ui"]["notify_auto_compaction"],
-            "show_badge": bool(budget_plan.runtime_config["ui"]["show_context_health_badge"]),
+            "show_badge": show_badge,
             "allow_user_expand_summary": bool(budget_plan.runtime_config["ui"]["allow_user_expand_summary"]),
             "utilization_ratio": round(budget_plan.utilization_ratio, 4),
             "estimated_input_tokens": budget_plan.estimated_input_tokens,
@@ -1805,10 +2080,12 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         bundle: dict[str, Any],
         route: dict[str, Any],
         dialogue_intent: DialogueIntent,
+        mode_decision: ModeDecision,
     ) -> dict[str, Any]:
-        del user_message, task
+        del task
         intent_config = self._dialogue_intent_config()
         template = self._dialogue_card_template(dialogue_intent, intent_config)
+        mode_cfg = self._dialogue_mode_config(mode_decision.mode.value)
         capabilities = self.repository.list_records(
             "capabilities",
             filters={"status": "approved"},
@@ -1831,17 +2108,54 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         if isinstance(extra_summary, dict):
             capability_summary.update({str(key): value for key, value in extra_summary.items()})
         status_rail_ref = str(template.get("status_rail_ref") or "answered")
-        return {
+        plan_steps = list(template.get("plan_steps") or [])
+        clarification_questions = list(template.get("clarification_questions") or [])
+        action_proposals = list(template.get("action_proposals") or [])
+        show_plan_card = bool(mode_cfg.get("show_plan_card", True))
+        show_clarification_card = bool(mode_cfg.get("show_clarification_card", True))
+        details_default_collapsed = bool(mode_cfg.get("details_default_collapsed", mode_decision.mode in {DialogueMode.DIALOGUE, DialogueMode.ANALYSIS}))
+        if mode_decision.mode in {DialogueMode.DIALOGUE, DialogueMode.ANALYSIS}:
+            max_questions = int(mode_cfg.get("max_clarification_questions", 0))
+            clarification_questions = clarification_questions[:max_questions]
+            action_proposals = []
+            plan_steps = []
+        cards = {
             "intent_type": dialogue_intent.value,
-            "plan_card": {"title": str(template.get("plan_title") or ""), "steps": list(template.get("plan_steps") or [])},
-            "clarification_card": {"title": str(template.get("clarification_title") or ""), "questions": list(template.get("clarification_questions") or [])},
-            "action_proposals": list(template.get("action_proposals") or []),
+            "dialogue_mode": mode_decision.mode.value,
+            "mode_decision": mode_decision.as_dict(),
+            "action_proposals": action_proposals,
             "capability_cards": capability_cards,
             "missing_capability_keys": missing_capability_keys,
             "status_rail": self._status_rail(status_rail_ref, intent_config),
             "capability_summary": capability_summary,
             "safety": dict(intent_config.get("safety") or {}),
+            "main_reply_policy": {
+                "expose_context_pack": bool(mode_cfg.get("expose_context_pack")),
+                "expose_audit_fields": bool(mode_cfg.get("expose_audit_fields")),
+                "raw_json_main_view": bool(mode_cfg.get("raw_json_main_view", False)),
+            },
+            "ui_display": {
+                "show_plan_card": show_plan_card,
+                "show_clarification_card": show_clarification_card,
+                "show_context_health_badge": bool(mode_cfg.get("show_context_health_badge", True)),
+                "details_default_collapsed": details_default_collapsed,
+            },
         }
+        if self._is_mcp_tool_catalog_inquiry(user_message):
+            cards["runtime_mcp_catalog"] = self._mcp_tool_catalog_snapshot()
+        if show_plan_card:
+            cards["plan_card"] = {
+                "title": str(template.get("plan_title") or ""),
+                "steps": plan_steps,
+                "default_collapsed": details_default_collapsed,
+            }
+        if show_clarification_card and clarification_questions:
+            cards["clarification_card"] = {
+                "title": str(template.get("clarification_title") or ""),
+                "questions": clarification_questions,
+                "default_collapsed": details_default_collapsed,
+            }
+        return cards
 
     @staticmethod
     def _dialogue_card_template(dialogue_intent: DialogueIntent, intent_config: dict[str, Any]) -> dict[str, Any]:
@@ -1880,13 +2194,50 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             if isinstance(item, dict)
         ]
 
-    def _compose_assistant_reply(self, user_message: str, llm_text: str, cards: dict[str, Any]) -> str:
-        del cards
+    def _compose_assistant_reply(self, user_message: str, llm_text: str, cards: dict[str, Any], mode_decision: ModeDecision) -> str:
         text = llm_text.strip()
+        if mode_decision.intent_type == DialogueIntent.CAPABILITY_INQUIRY and self._is_mcp_tool_catalog_inquiry(user_message):
+            catalog = cards.get("runtime_mcp_catalog") if isinstance(cards, dict) else None
+            if isinstance(catalog, dict):
+                return self._apply_main_reply_policy(self._render_mcp_tool_catalog_reply(catalog), mode_decision)
         if text:
-            return text
+            return self._apply_main_reply_policy(text, mode_decision)
         intent_config = self._dialogue_intent_config()
-        return str(intent_config.get("fallback_reply") or user_message)
+        return self._apply_main_reply_policy(str(intent_config.get("fallback_reply") or user_message), mode_decision)
+
+    @staticmethod
+    def _render_mcp_tool_catalog_reply(catalog: dict[str, Any]) -> str:
+        lines = [
+            "当前 Research Assistant 只能按已登记的运行时 MCP 目录使用工具，不具备未登记的通用文件、Shell、Git、HTTP 或数仓直连工具。",
+            f"已启用 MCP server：{catalog.get('server_count', 0)} 个；已启用 MCP tool：{catalog.get('tool_count', 0)} 个；已批准能力：{catalog.get('capability_count', 0)} 个。",
+        ]
+        tools_by_server = catalog.get("tools_by_server") if isinstance(catalog.get("tools_by_server"), dict) else {}
+        if tools_by_server:
+            lines.append("已登记 MCP tools：")
+            for server_key in sorted(str(key) for key in tools_by_server):
+                tools = tools_by_server.get(server_key) or []
+                names = ", ".join(str(tool.get("tool_name") or "") for tool in tools if isinstance(tool, dict))
+                lines.append(f"- {server_key}: {names or '无启用工具'}")
+        else:
+            lines.append("当前没有启用的 MCP tool；需要先完成目录初始化或能力同步。")
+        lines.append("如需执行具体动作，还要经过对应 preflight、确认和审批边界；普通能力询问不会自动调用 MCP。")
+        return "\n".join(lines)
+
+    def _apply_main_reply_policy(self, text: str, mode_decision: ModeDecision) -> str:
+        if mode_decision.mode not in {DialogueMode.DIALOGUE, DialogueMode.ANALYSIS}:
+            return text
+        mode_cfg = self._dialogue_mode_config(mode_decision.mode.value)
+        forbidden = [str(item) for item in mode_cfg.get("forbidden_main_reply_phrases", []) if str(item)]
+        if not forbidden:
+            return text
+        kept_lines: list[str] = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if any(stripped.startswith(phrase) or phrase in stripped for phrase in forbidden):
+                continue
+            kept_lines.append(line)
+        cleaned = "\n".join(kept_lines).strip()
+        return cleaned or text
 
     def add_task_event(self, task_id: str, request: TaskEventCreate | dict[str, Any]) -> dict[str, Any]:
         if not self.repository.get_record("tasks", task_id):

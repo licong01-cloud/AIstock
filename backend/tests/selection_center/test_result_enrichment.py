@@ -132,11 +132,11 @@ def test_current_day_selection_uses_tdx_pre_close_before_first_live_price() -> N
     assert candidate.reference_price == pytest.approx(12.8)
     assert candidate.previous_close == pytest.approx(12.8)
     assert candidate.current_price is None
-    assert candidate.selection_entry_price_source == "TDX_REALTIME.latest_close_pre_close"
+    assert candidate.selection_entry_price_source == "TDX latest close / pre_close"
 
     display = display_fields_from_component_scores(candidate.component_scores)
     assert display["selection_entry_price"] == pytest.approx(12.8)
-    assert display["selection_entry_price_source"] == "TDX_REALTIME.latest_close_pre_close"
+    assert display["selection_entry_price_source"] == "TDX latest close / pre_close"
     assert display["current_price"] is None
 
 

@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import ConfirmAction from "@/components/paper-v2/ConfirmAction";
 import ErrorPanel from "@/components/paper-v2/ErrorPanel";
-import JsonPanel from "@/components/paper-v2/JsonPanel";
 import MetricCard from "@/components/paper-v2/MetricCard";
 import NoticePanel from "@/components/paper-v2/NoticePanel";
 import PaperTable from "@/components/paper-v2/PaperTable";
@@ -88,6 +87,20 @@ function compactError(value: unknown): string {
   const head = text.split("; stderr_tail=")[0].split("\n")[0].trim();
   if (!head) return "任务失败，详细诊断已记录在后台日志";
   return head.length > 180 ? `${head.slice(0, 180)}...` : head;
+}
+
+function PreviewSummary({ value }: { value: JsonObject | null }) {
+  if (!value) return null;
+  return (
+    <div className="pv2-readable-panel">
+      <div className="pv2-readable-table">
+        <div className="pv2-readable-row"><div className="pv2-readable-key">状态</div><div className="pv2-readable-value">{String(value.status || value.result_status || "已生成")}</div></div>
+        <div className="pv2-readable-row"><div className="pv2-readable-key">任务</div><div className="pv2-readable-value pv2-mono">{shortHash(value.job_id || value.task_id || value.request_id)}</div></div>
+        <div className="pv2-readable-row"><div className="pv2-readable-key">日期</div><div className="pv2-readable-value">{String(value.as_of_date || value.as_of_trade_date || "-")}{" -> "}{String(value.effective_trade_date || value.end_date || "-")}</div></div>
+        <div className="pv2-readable-row"><div className="pv2-readable-key">说明</div><div className="pv2-readable-value">{String(value.message || value.reason || value.error_message || "已返回，可复制诊断给 Codex 分析")}</div></div>
+      </div>
+    </div>
+  );
 }
 
 export default function PaperV2ModelHmmPage() {
@@ -376,7 +389,7 @@ export default function PaperV2ModelHmmPage() {
               </div>
             </div>
           ) : <div className="pv2-muted">选择策略包后加载模型状态。</div>}
-          {modelPreview ? <><h3>预览 / 任务响应</h3><JsonPanel value={modelPreview} /></> : null}
+          {modelPreview ? <><h3>预览 / 任务响应</h3><PreviewSummary value={modelPreview} /></> : null}
         </SectionCard>
 
         <SectionCard title="HMM 滚动训练" eyebrow="WSL 执行维护">
@@ -394,7 +407,7 @@ export default function PaperV2ModelHmmPage() {
             <button className="pv2-button" data-testid="hmm-rolling-preview" disabled={busy || !configId} onClick={previewHmmRolling} type="button">预览滚动切分</button>
             <ConfirmAction label="触发 HMM 滚动训练" disabled={busy || !configId} danger confirmText={configId || "-"} onConfirm={triggerHmmRolling} mode="dialog" />
           </div>
-          {hmmPreview ? <JsonPanel value={hmmPreview} /> : null}
+          {hmmPreview ? <PreviewSummary value={hmmPreview} /> : null}
         </SectionCard>
       </div>
 
@@ -424,7 +437,7 @@ export default function PaperV2ModelHmmPage() {
             columns={[
               { key: "job", header: "任务", render: (row) => <span className="pv2-mono">{shortHash(row.job_id)}</span> },
               { key: "status", header: "状态", render: (row) => <StatusBadge status={row.status} /> },
-              { key: "snapshot", header: "快照", render: (row) => row.snapshot_id ? <span title={row.snapshot_id}>{snapshotLabelById.get(row.snapshot_id) || shortHash(row.snapshot_id)}</span> : "-" },
+              { key: "snapshot", header: "模型缓存", render: (row) => row.snapshot_id ? <span title={row.snapshot_id}>{snapshotLabelById.get(row.snapshot_id) || shortHash(row.snapshot_id)}</span> : "-" },
               { key: "started", header: "开始时间", render: (row) => row.started_at || "-" },
               { key: "error", header: "错误", render: (row) => <span title={row.error_message || ""}>{compactError(row.error_message)}</span> },
             ]}
