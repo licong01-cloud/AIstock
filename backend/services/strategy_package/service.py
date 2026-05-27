@@ -16,11 +16,11 @@ from .candidate import (
     CandidateStrategyPackageService,
     CandidateStrategyPackageStatus,
 )
+from .asset_eligibility import StrategyPackageAssetEligibilityService
 from .execution_policy import (
     BACKTEST_SUCCESS_STATUSES,
     ExecutionPolicyValidationStatus,
     ValidatedExecutionPolicy,
-    ensure_policy_can_enter_paper,
     normalize_execution_policy_json,
 )
 from .manifest import freeze_manifest
@@ -62,20 +62,8 @@ logger = logging.getLogger(__name__)
 STATUS_TRANSITIONS: dict[PackageStatus, set[PackageStatus]] = {
     PackageStatus.ASSET_VALIDATED: {PackageStatus.DRAFT},
     PackageStatus.BACKTEST_APPROVED: {PackageStatus.DRAFT, PackageStatus.ASSET_VALIDATED},
-    PackageStatus.SELECTION_ENABLED: {PackageStatus.BACKTEST_APPROVED},
-    PackageStatus.PAPER_ENABLED: {PackageStatus.BACKTEST_APPROVED, PackageStatus.SELECTION_ENABLED},
-    PackageStatus.PAPER_RUNNING: {PackageStatus.PAPER_ENABLED},
-    PackageStatus.PAPER_PASSED: {PackageStatus.PAPER_RUNNING},
-    PackageStatus.PAPER_FAILED: {PackageStatus.PAPER_RUNNING, PackageStatus.PAPER_ENABLED},
     PackageStatus.RETIRED: {
-        PackageStatus.DRAFT,
-        PackageStatus.ASSET_VALIDATED,
-        PackageStatus.BACKTEST_APPROVED,
-        PackageStatus.SELECTION_ENABLED,
-        PackageStatus.PAPER_ENABLED,
-        PackageStatus.PAPER_RUNNING,
-        PackageStatus.PAPER_PASSED,
-        PackageStatus.PAPER_FAILED,
+        status for status in PackageStatus if status != PackageStatus.RETIRED
     },
 }
 
@@ -98,7 +86,17 @@ SIM_VALIDATION_SUCCESS_STATUSES = {"PASSED", "SUCCEEDED", "VERIFIED", "PASS", "S
 REQUIRED_LIVE_SIM_VALIDATION_KEYS = {"paper_v2", "miniqmt_sim"}
 BROKER_COMPATIBILITY_SUCCESS_STATUSES = {"PASSED", "VERIFIED", "COMPATIBLE"}
 
-PAPER_READY_GOVERNANCE_LIMIT = 10_000
+LIVE_STRICT_GOVERNANCE_LIMIT = 10_000
+
+
+def _is_deprecated_runtime_admission_status(status: PackageStatus) -> bool:
+    core_statuses = {
+        PackageStatus.DRAFT,
+        PackageStatus.ASSET_VALIDATED,
+        PackageStatus.BACKTEST_APPROVED,
+        PackageStatus.RETIRED,
+    }
+    return status not in core_statuses
 
 
 class StrategyPackageService:
@@ -109,11 +107,13 @@ class StrategyPackageService:
         resolver: QEExperimentSourceResolver | None = None,
         validator: StrategyPackageValidator | None = None,
         candidate_service: CandidateStrategyPackageService | None = None,
+        asset_eligibility: StrategyPackageAssetEligibilityService | None = None,
     ) -> None:
         self.repository = repository or StrategyPackageRepository()
         self.resolver = resolver or QEExperimentSourceResolver()
         self.validator = validator or StrategyPackageValidator()
         self.candidate_service = candidate_service or CandidateStrategyPackageService()
+        self.asset_eligibility = asset_eligibility or StrategyPackageAssetEligibilityService(validator=self.validator)
 
     def create_from_qe_experiment(
         self,
@@ -396,19 +396,16 @@ class StrategyPackageService:
         reason: str,
         context: dict[str, Any] | None = None,
     ) -> StrategyPackageRecord:
+        if _is_deprecated_runtime_admission_status(to_status):
+            record = self.repository.get(package_id)
+            self.asset_eligibility.require_eligible(record)
+            return record
         allowed = STATUS_TRANSITIONS.get(to_status)
         if not allowed:
             raise StrategyPackageValidationError(
                 "unsupported strategy package target status",
                 context={"package_id": package_id, "to_status": to_status.value},
             )
-        if to_status == PackageStatus.PAPER_ENABLED:
-            record = self.repository.get(package_id)
-            # StrategyPackage freezes factor/model lineage. Minute execution
-            # policies are selected later from backtest-validated policy rows,
-            # so enabling the package for Paper v2 must not validate an obsolete
-            # manifest-embedded V24/V25 runtime asset path.
-            self._require_governance_paper_ready(record)
         return self.repository.transition_status(
             package_id=package_id,
             to_status=to_status,
@@ -418,18 +415,14 @@ class StrategyPackageService:
         )
 
     def enable_selection(self, package_id: str) -> StrategyPackageRecord:
-        return self.transition_status(
-            package_id=package_id,
-            to_status=PackageStatus.SELECTION_ENABLED,
-            reason="enable_selection",
-        )
+        record = self.repository.get(package_id)
+        self.asset_eligibility.require_eligible(record)
+        return record
 
     def enable_paper(self, package_id: str) -> StrategyPackageRecord:
-        return self.transition_status(
-            package_id=package_id,
-            to_status=PackageStatus.PAPER_ENABLED,
-            reason="enable_paper",
-        )
+        record = self.repository.get(package_id)
+        self.asset_eligibility.require_eligible(record)
+        return record
 
     def retire(self, package_id: str, *, reason: str = "retire_package") -> StrategyPackageRecord:
         return self.transition_status(
@@ -437,6 +430,18 @@ class StrategyPackageService:
             to_status=PackageStatus.RETIRED,
             reason=reason,
         )
+
+    def package_delete_dependencies(self, package_id: str) -> dict[str, Any]:
+        return self.repository.package_delete_dependencies(package_id)
+
+    def delete_package(self, package_id: str) -> dict[str, Any]:
+        return self.repository.delete_package(package_id)
+
+    def validate_manifest_integrity(self, *, limit: int = 500) -> dict[str, Any]:
+        return self.repository.validate_manifest_integrity(limit=limit)
+
+    def repair_manifest_hash(self, package_id: str, *, operator: str = "paper_v2_gate_decoupling") -> StrategyPackageRecord:
+        return self.repository.repair_manifest_hash(package_id, operator=operator)
 
     def list_status_events(self, package_id: str, *, limit: int = 200) -> list[PackageStatusEvent]:
         return self.repository.list_status_events(package_id, limit=limit)
@@ -480,6 +485,7 @@ class StrategyPackageService:
         source_backtest_status: str,
         paper_enabled: bool = False,
     ) -> ValidatedExecutionPolicy:
+        _ = paper_enabled  # legacy request field; Paper readiness is decided by asset eligibility and runtime checks.
         record = self.repository.get(package_id)
         normalized = normalize_execution_policy_json(policy_json)
         normalized_status = source_backtest_status.strip().upper()
@@ -501,16 +507,8 @@ class StrategyPackageService:
             source_backtest_id=source_backtest_id,
             source_backtest_status=normalized_status,
             validation_status=ExecutionPolicyValidationStatus.BACKTEST_VALIDATED,
-            paper_enabled=paper_enabled,
+            paper_enabled=False,
         )
-        if paper_enabled:
-            ensure_policy_can_enter_paper(policy)
-            self.validator.validate_execution_policy_for_paper(
-                package_id=package_id,
-                policy_json=policy.policy_json,
-                instantiate_runtime=False,
-                require_runtime_assets=False,
-            )
         return self.repository.save_execution_policy(policy)
 
     def list_execution_policies(self, package_id: str) -> list[ValidatedExecutionPolicy]:
@@ -520,27 +518,12 @@ class StrategyPackageService:
         return self.repository.get_execution_policy(package_id, policy_id)
 
     def enable_execution_policy_for_paper(self, package_id: str, policy_id: str) -> ValidatedExecutionPolicy:
-        policy = self.repository.get_execution_policy(package_id, policy_id)
-        ensure_policy_can_enter_paper(policy)
-        self.validator.validate_execution_policy_for_paper(
-            package_id=package_id,
-            policy_json=policy.policy_json,
-            instantiate_runtime=False,
-            require_runtime_assets=False,
-        )
-        self.repository.get(package_id)
-        return self.repository.set_execution_policy_paper_enabled(
-            package_id=package_id,
-            policy_id=policy_id,
-            paper_enabled=True,
-        )
+        self.asset_eligibility.require_eligible(self.repository.get(package_id))
+        return self.repository.get_execution_policy(package_id, policy_id)
 
     def disable_execution_policy_for_paper(self, package_id: str, policy_id: str) -> ValidatedExecutionPolicy:
-        return self.repository.set_execution_policy_paper_enabled(
-            package_id=package_id,
-            policy_id=policy_id,
-            paper_enabled=False,
-        )
+        self.repository.get(package_id)
+        return self.repository.get_execution_policy(package_id, policy_id)
 
     def get_model_state(self, package_id: str, *, as_of_date: date | None = None) -> StrategyPackageModelState:
         record = self.repository.get(package_id)
@@ -592,15 +575,14 @@ class StrategyPackageService:
         job_type: str = "rolling_retrain",
         config: dict[str, Any] | None = None,
         confirm_retrain: bool = False,
-        confirm_text: str | None = None,
     ) -> StrategyPackageModelRetrainJob:
-        if not confirm_retrain or confirm_text != package_id:
+        if not confirm_retrain:
             raise StrategyPackageValidationError(
-                "model retrain start requires manual confirmation text matching package_id",
+                "model retrain start requires explicit confirmation",
                 context={
                     "package_id": package_id,
                     "confirm_retrain": confirm_retrain,
-                    "confirm_text_matches": confirm_text == package_id,
+                    "confirmation_mode": "dialog_boolean",
                 },
             )
         preview = self.preview_model_retrain(
@@ -1032,7 +1014,9 @@ class StrategyPackageService:
             "package_id": package_id,
             "manifest_sha256": record.manifest_sha256,
             "package_status": record.package_status.value,
-            "paper_ready": not blockers,
+            "live_strict_ready": not blockers,
+            "readiness_semantics": "live_strict_governance_readiness",
+            "does_not_block_paper_simulation": True,
             "blockers": blockers,
             "satisfied_gates": satisfied_gates,
             "manifest_identity": manifest_identity,
@@ -1042,23 +1026,58 @@ class StrategyPackageService:
             "runtime_variant_candidate_status": runtime_variants,
         }
 
-    def _require_original_fixed_weight_retest_passed(self, record: StrategyPackageRecord) -> None:
-        report = self._original_fixed_weight_retest_gate(record)
-        if report["passed"]:
-            return
-        raise StrategyPackageValidationError(
-            "original fixed-weight validation must pass before enabling Paper",
-            context=report,
-        )
+    def paper_simulation_admission(
+        self,
+        package_id: str,
+        *,
+        metric_key: str = "annual_return",
+        governance_limit: int = LIVE_STRICT_GOVERNANCE_LIMIT,
+    ) -> dict[str, Any]:
+        """Return the Paper v2 simulation admission summary for a package.
 
-    def _require_governance_paper_ready(self, record: StrategyPackageRecord) -> None:
-        eligibility = self.governance_eligibility(record.package_id, limit=PAPER_READY_GOVERNANCE_LIMIT)
-        if eligibility["paper_ready"]:
-            return
-        raise StrategyPackageValidationError(
-            "governance eligibility must be paper_ready before enabling Paper",
-            context=eligibility,
-        )
+        This is deliberately narrower than ``governance_eligibility``. Paper v2
+        simulation may run a backtest-approved QE alpha core even when live-like
+        governance evidence is incomplete. Runtime failures are reported by the
+        concrete Selection/Paper preflight instead of invalidating the package.
+        """
+
+        record = self.repository.get(package_id)
+        asset_eligibility = self.asset_eligibility.summarize(record)
+        warnings: list[str] = []
+        governance: dict[str, Any] | None = None
+        if governance_limit > 0:
+            governance = self.governance_eligibility(package_id, metric_key=metric_key, limit=governance_limit)
+            for blocker in governance.get("blockers") or []:
+                warning = f"live_strict_governance:{blocker}"
+                if warning not in warnings:
+                    warnings.append(warning)
+
+        return {
+            "package_id": package_id,
+            "manifest_sha256": record.manifest_sha256,
+            "package_status": record.package_status.value,
+            "asset_eligible": asset_eligibility.eligible,
+            "paper_simulation_allowed": asset_eligibility.eligible,
+            "blockers": list(asset_eligibility.blockers),
+            "warnings": warnings,
+            "runtime_preflight_required": True,
+            "live_strict_governance": governance,
+            "asset_eligibility": asset_eligibility.to_dict(),
+            "admission_policy": {
+                "name": "strategy_package_asset_eligibility_v1",
+                "non_blocking_governance": [
+                    "original_fixed_weight_retest",
+                    "seed_stability",
+                    "regime_stability",
+                    "protected_asset_ledger",
+                    "runtime_variant_candidate",
+                    "rolling_retrain_evidence",
+                ],
+            },
+        }
+
+    def _require_paper_simulation_admission(self, record: StrategyPackageRecord) -> None:
+        self.asset_eligibility.require_eligible(record)
 
     @staticmethod
     def _require_live_identity_match(
@@ -1179,17 +1198,8 @@ class StrategyPackageService:
 
     def _manifest_identity_gate(self, record: StrategyPackageRecord, manifest: StrategyPackageManifest) -> dict[str, Any]:
         blockers: list[str] = []
-        allowed_statuses = [
-            PackageStatus.BACKTEST_APPROVED.value,
-            PackageStatus.SELECTION_ENABLED.value,
-            PackageStatus.PAPER_ENABLED.value,
-        ]
-        if record.package_status not in {
-            PackageStatus.BACKTEST_APPROVED,
-            PackageStatus.SELECTION_ENABLED,
-            PackageStatus.PAPER_ENABLED,
-        }:
-            blockers.append(f"package_status={record.package_status.value}")
+        if record.package_status == PackageStatus.DRAFT:
+            blockers.append("package_status=DRAFT")
         try:
             self.validator.validate_manifest(manifest)
         except StrategyPackageValidationError as exc:
@@ -1199,7 +1209,6 @@ class StrategyPackageService:
             "passed": passed,
             "status": "READY" if passed else "BLOCKED",
             "package_status": record.package_status.value,
-            "allowed_package_statuses": allowed_statuses,
             "manifest_sha256": record.manifest_sha256,
             "blockers": blockers,
         }
@@ -1289,20 +1298,20 @@ class StrategyPackageService:
 
     def _runtime_variant_candidate_gate(self, package_id: str) -> dict[str, Any]:
         variants = self.list_runtime_variants(package_id)
-        candidates = [
+        validated = [
             variant
             for variant in variants
-            if variant.paper_candidate and variant.validation_status == RuntimeVariantValidationStatus.VALIDATION_PASSED
+            if variant.validation_status == RuntimeVariantValidationStatus.VALIDATION_PASSED
         ]
-        blockers = [] if candidates else ["runtime_variant_paper_candidate_missing"]
         return {
-            "passed": bool(candidates),
-            "status": "READY" if candidates else "BLOCKED",
+            "passed": True,
+            "status": "INFO",
             "runtime_variant_count": len(variants),
-            "paper_candidate_count": len(candidates),
-            "paper_candidate_variant_ids": [variant.variant_id for variant in candidates[:10]],
-            "paper_candidate_variant_names": [variant.variant_name for variant in candidates[:10]],
-            "blockers": blockers,
+            "validated_variant_count": len(validated),
+            "validated_variant_ids": [variant.variant_id for variant in validated[:10]],
+            "validated_variant_names": [variant.variant_name for variant in validated[:10]],
+            "blockers": [],
+            "warnings": [] if validated else ["validated_runtime_variant_missing"],
         }
 
     @staticmethod

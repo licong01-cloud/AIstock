@@ -31,11 +31,6 @@ export type StrategyPackageSummary = {
   updated_at?: string | null;
 };
 
-export type EnablePaperResult = {
-  ok: boolean;
-  package?: StrategyPackageSummary;
-};
-
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
 
@@ -93,12 +88,6 @@ export const governanceApi = {
     }
     return data as GovernanceEligibility;
   },
-  enablePaper: async (packageId: string): Promise<EnablePaperResult> => {
-    return jsonFetch<EnablePaperResult>(
-      `${API_BASE}/strategy-packages/${encodeURIComponent(packageId)}/enable-paper`,
-      { method: "POST" },
-    );
-  },
 };
 
 export const EVIDENCE_KEYS = [
@@ -116,5 +105,5 @@ export const EVIDENCE_LABELS: Record<EvidenceKey, string> = {
   original_fixed_weight_retest: "原始固定权重复测",
   validation_stability: "验证稳定性",
   protected_asset_ledger: "受保护资产账本",
-  runtime_variant_paper_candidate: "运行时 paper 候选",
+  runtime_variant_paper_candidate: "历史 runtime 候选证据",
 };

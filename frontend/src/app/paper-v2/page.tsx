@@ -20,7 +20,7 @@ import {
   statusFilterToStatuses,
   type RunningPortfolioSummary,
 } from "@/lib/paper-v2/running-summary";
-import type { RunningSummaryPagination, RunningSummarySortBy, RunningSummarySortDir, SelectablePackage, StrategyPackage } from "@/lib/paper-v2/types";
+import type { RunningSummaryPagination, RunningSummarySortBy, RunningSummarySortDir, SelectablePackage, StrategyPackage, TradingDayStatus } from "@/lib/paper-v2/types";
 
 function cashParam(value: string): number | null {
   if (!value.trim()) return null;
@@ -38,6 +38,7 @@ export default function PaperV2OverviewPage() {
   const [packages, setPackages] = useState<StrategyPackage[]>([]);
   const [selectable, setSelectable] = useState<SelectablePackage[]>([]);
   const [rows, setRows] = useState<RunningPortfolioSummary[]>([]);
+  const [tradingDayStatus, setTradingDayStatus] = useState<TradingDayStatus | null>(null);
   const [pagination, setPagination] = useState<RunningSummaryPagination | null>(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
@@ -55,7 +56,7 @@ export default function PaperV2OverviewPage() {
     setLoading(true);
     setError(null);
     try {
-      const [pkgRows, selectableRows, runningPage] = await Promise.all([
+      const [pkgRows, selectableRows, runningPage, tradingStatus] = await Promise.all([
         strategyPackageApi.list(undefined, 200),
         selectionCenterApi.selectablePackages(300),
         paperV2Api.runningSummaryPage({
@@ -71,11 +72,13 @@ export default function PaperV2OverviewPage() {
           minInitialCash: cashParam(minCash),
           maxInitialCash: cashParam(maxCash),
         }),
+        paperV2Api.tradingDayStatus(),
       ]);
       setPackages(pkgRows);
       setSelectable(selectableRows);
       setRows(runningPage.summaries.map(parseRunningSummaryItem));
       setPagination(runningPage.pagination);
+      setTradingDayStatus(tradingStatus);
     } catch (exc) {
       setError(exc);
     } finally {
@@ -85,7 +88,7 @@ export default function PaperV2OverviewPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  const readyPackages = packages.filter((item) => ["SELECTION_ENABLED", "PAPER_ENABLED", "PAPER_RUNNING", "PAPER_PASSED"].includes(item.package_status)).length;
+  const readyPackages = packages.filter((item) => String(item.package_status || "").toUpperCase() !== "RETIRED").length;
   const activeTotal = pagination?.total ?? rows.length;
   const blockingErrors = rows.reduce((total, item) => total + item.counts.errors, 0);
   const latestRuns = rows.filter((item) => item.latestRun).length;
@@ -101,8 +104,8 @@ export default function PaperV2OverviewPage() {
 
   const workflowSteps = paperV2WorkflowSteps({
     hasPackages: packages.length > 0,
-    hasSelectionEnabledPackage: packages.some((item) => ["SELECTION_ENABLED", "PAPER_ENABLED", "PAPER_RUNNING", "PAPER_PASSED"].includes(item.package_status)),
-    hasPaperEnabledPackage: packages.some((item) => ["PAPER_ENABLED", "PAPER_RUNNING", "PAPER_PASSED"].includes(item.package_status)),
+    hasSelectionEnabledPackage: readyPackages > 0,
+    hasPaperEnabledPackage: readyPackages > 0,
     hasSelectionRun: selectable.some((item) => item.latest_selection_run),
     hasPortfolio: rows.length > 0 || (pagination?.total ?? 0) > 0,
     hasReadyRun: latestRuns > 0,
@@ -120,9 +123,25 @@ export default function PaperV2OverviewPage() {
 
       <ErrorPanel error={error} title="总览加载失败" />
 
+      <SectionCard title="官方交易日状态" eyebrow="market.trading_calendar / 文件缓存">
+        <div className="pv2-grid pv2-grid-4">
+          <MetricCard label="今日状态" value={tradingDayStatus?.is_trading_day ? "交易日" : "非交易日"} hint={tradingDayStatus?.as_of_date || "-"} tone={tradingDayStatus?.is_trading_day ? "success" : "warning"} />
+          <MetricCard label="最近结束交易日" value={tradingDayStatus?.latest_completed_trading_day || "-"} hint="统一交易日服务返回" />
+          <MetricCard label="最快下个交易日" value={tradingDayStatus?.next_trading_day || "-"} hint="禁止本地周末推断兜底" />
+          <MetricCard label="缓存行数" value={String(tradingDayStatus?.cache?.calendar_row_count ?? "-")} hint={String(tradingDayStatus?.cache?.refresh_reason || "file cache")} tone="info" />
+        </div>
+        {tradingDayStatus?.warnings?.length ? (
+          <NoticePanel title="交易日表覆盖范围警告" tone="warning">
+            {tradingDayStatus.warnings.map((warning, index) => (
+              <div key={`${String(warning.code || "warning")}-${index}`}>{String(warning.message || warning.code || "交易日表需要更新")}</div>
+            ))}
+          </NoticePanel>
+        ) : null}
+      </SectionCard>
+
       <SectionCard title="流程看板" eyebrow="v2 正确流程" action={<Link className="pv2-button" href="/paper-v2/selection">运行选股</Link>}>
         <div className="pv2-grid pv2-grid-4">
-          <MetricCard label="1. 策略包已启用" value={readyPackages} hint="可进入选股/模拟盘" />
+          <MetricCard label="1. 资产合格策略包" value={readyPackages} hint="资产合格即可进入选股/模拟盘" />
           <MetricCard label="2. 选股可执行" value={selectable.length} hint="策略包选股中心" />
           <MetricCard label="3. 模拟盘已就绪" value={activeTotal} hint="后端分页统计" />
           <MetricCard label="4. 本页运行记录" value={latestRuns} hint="最近运行/回放" />

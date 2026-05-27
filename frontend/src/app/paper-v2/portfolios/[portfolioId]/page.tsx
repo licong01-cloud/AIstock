@@ -6,9 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import CopyChip from "@/components/paper-v2/CopyChip";
 import ErrorListCard from "@/components/paper-v2/ErrorListCard";
 import ErrorPanel from "@/components/paper-v2/ErrorPanel";
-import JsonPanel from "@/components/paper-v2/JsonPanel";
 import MetricCard from "@/components/paper-v2/MetricCard";
-import NoticePanel from "@/components/paper-v2/NoticePanel";
 import PaperTable from "@/components/paper-v2/PaperTable";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
@@ -34,6 +32,32 @@ function packageSource(portfolio: PaperPortfolio): string {
   return String(portfolio.frozen_manifest?.source_id || portfolio.frozen_manifest?.run_id || portfolio.package_id || "-");
 }
 
+function CompactPolicySummary({ title, value }: { title: string; value: unknown }) {
+  const data = value && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : {};
+  return (
+    <div className="pv2-readable-panel">
+      <div className="pv2-readable-table">
+        <div className="pv2-readable-row"><div className="pv2-readable-key">{title}</div><div className="pv2-readable-value">{Object.keys(data).length ? "已配置" : "未配置"}</div></div>
+        <div className="pv2-readable-row"><div className="pv2-readable-key">字段</div><div className="pv2-readable-value">{Object.keys(data).slice(0, 8).join(", ") || "-"}</div></div>
+      </div>
+    </div>
+  );
+}
+
+function SnapshotSummary({ value }: { value: JsonObject | undefined }) {
+  if (!value) return <div className="pv2-muted">暂无快照</div>;
+  return (
+    <div className="pv2-readable-panel">
+      <div className="pv2-readable-table">
+        <div className="pv2-readable-row"><div className="pv2-readable-key">交易日</div><div className="pv2-readable-value">{String(value.trade_date || "-")}</div></div>
+        <div className="pv2-readable-row"><div className="pv2-readable-key">净值</div><div className="pv2-readable-value">{formatNumber(value.nav, 2)}</div></div>
+        <div className="pv2-readable-row"><div className="pv2-readable-key">现金</div><div className="pv2-readable-value">{formatNumber(value.cash, 2)}</div></div>
+        <div className="pv2-readable-row"><div className="pv2-readable-key">市值</div><div className="pv2-readable-value">{formatNumber(value.market_value, 2)}</div></div>
+      </div>
+    </div>
+  );
+}
+
 export default function PaperV2PortfolioDetailPage() {
   const params = useParams<{ portfolioId: string }>();
   const portfolioId = String(params.portfolioId || "");
@@ -44,7 +68,6 @@ export default function PaperV2PortfolioDetailPage() {
   const [orders, setOrders] = useState<JsonObject[]>([]);
   const [fills, setFills] = useState<JsonObject[]>([]);
   const [positions, setPositions] = useState<JsonObject[]>([]);
-  const [performance, setPerformance] = useState<JsonObject | null>(null);
   const [activations, setActivations] = useState<Activation[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -71,7 +94,6 @@ export default function PaperV2PortfolioDetailPage() {
       setOrders(orderRows);
       setFills(fillRows);
       setPositions(positionRows);
-      setPerformance(snapshotRows.length ? await paperV2Api.performanceOrNull(portfolioId) : null);
     } catch (exc) {
       setError(exc);
     } finally {
@@ -168,7 +190,6 @@ export default function PaperV2PortfolioDetailPage() {
               <Link className="pv2-button" href={`/paper-v2/portfolios/${portfolioId}/performance`}>查看收益分析</Link>
               <Link className="pv2-button" href={`/paper-v2/portfolios/${portfolioId}/run-console`}>打开运行控制台</Link>
             </div>
-            {performance ? <JsonPanel value={{ summary: performance }} /> : null}
           </SectionCard>
 
           <SectionCard
@@ -192,19 +213,16 @@ export default function PaperV2PortfolioDetailPage() {
               <CopyChip label={`package_id ${shortHash(portfolio.package_id, 6)}`} value={portfolio.package_id} title={`完整 package_id：${portfolio.package_id}`} />
               <CopyChip label={`manifest ${shortHash(portfolio.manifest_sha256, 6)}`} value={portfolio.manifest_sha256} title={`完整 manifest_sha256：${portfolio.manifest_sha256}`} />
             </div>
-            <NoticePanel title="冻结合约" tone="info">
-              package_id、manifest_sha256、initial_cash、start_date、data_source、fee_policy、risk_policy 和默认 execution_policy 都是不可变的组合创建事实。每日执行策略变更必须记录为带日期的激活记录。
-            </NoticePanel>
           </SectionCard>
 
           <div className="pv2-grid pv2-grid-main">
             <SectionCard title="冻结策略" eyebrow="Manifest 锁定">
               <h3>执行策略</h3>
-              <JsonPanel value={portfolio.execution_policy || {}} />
+              <CompactPolicySummary title="Execution Policy" value={portfolio.execution_policy || {}} />
               <h3>费用策略</h3>
-              <JsonPanel value={portfolio.fee_policy || {}} />
+              <CompactPolicySummary title="Fee Policy" value={portfolio.fee_policy || {}} />
               <h3>风控策略</h3>
-              <JsonPanel value={portfolio.risk_policy || {}} />
+              <CompactPolicySummary title="Risk Policy" value={portfolio.risk_policy || {}} />
             </SectionCard>
 
             <SectionCard title="操作入口" eyebrow="下一步">
@@ -216,7 +234,7 @@ export default function PaperV2PortfolioDetailPage() {
                 <Link className="pv2-button-ghost" href="/paper-v2/model-hmm">模型与 HMM 维护</Link>
               </div>
               <h3>最新快照</h3>
-              {latestSnapshot ? <JsonPanel value={latestSnapshot} /> : <div className="pv2-muted">暂无日快照。</div>}
+              <SnapshotSummary value={latestSnapshot} />
             </SectionCard>
           </div>
 

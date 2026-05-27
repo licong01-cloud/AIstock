@@ -1,0 +1,88 @@
+{
+  "actual": "Current MCP tools return oversized payloads by default: qe_experiment_list includes full result_metrics for up to 50 experiments; qe_experiment_get selects all qe_experiments columns including full JSONB fields; qe_custom_evo_get_task returns all loops with full config_json, metrics_json, and agent_analysis. A 10-loop task can return hundreds of KB to tens of MB, and a 50-experiment list can potentially return 2.5MB to 100MB.",
+  "allowed_write_scope": [
+    "backend/services/quantevolver",
+    "backend/routers/quantevolver.py",
+    "backend/routers/quantevolver_evolution.py",
+    "scripts/aistock_qe_experiment_mcp_server.py",
+    "scripts/aistock_mcp_common.py",
+    "backend/tests/test_aistock_qe_mcp_servers.py",
+    "backend/tests/quantevolver",
+    "frontend/src/app/quantevolver/evolution/page.tsx",
+    "frontend/src/app/quantevolver/evolution/[taskId]/page.tsx",
+    "frontend/src/app/quantevolver/evolution/[taskId]/loops/[loopIndex]/page.tsx",
+    "frontend/src/app/quantevolver/experiments/[id]/page.tsx",
+    "frontend/src/app/quantevolver/compose/page.tsx",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260526_BUG-120-qe-mcp-experiment-apis-return-massive-json-payloads.json",
+    "frontend/src/app/quantevolver/evolution/*/page.tsx",
+    "frontend/src/app/quantevolver/evolution/*/loops/*/page.tsx",
+    "frontend/src/app/quantevolver/experiments/*/page.tsx"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-120",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-25T16:03:09.497721Z",
+  "description": "Current MCP tools return oversized payloads by default: qe_experiment_list includes full result_metrics for up to 50 experiments; qe_experiment_get selects all qe_experiments columns including full JSONB fields; qe_custom_evo_get_task returns all loops with full config_json, metrics_json, and agent_analysis. A 10-loop task can return hundreds of KB to tens of MB, and a 50-experiment list can potentially return 2.5MB to 100MB.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260526-74a74a67615c",
+      "timestamp": "2026-05-25T16:03:09.497718Z"
+    }
+  ],
+  "evidence_uris": [
+    "User-provided analysis: qe_experiment_list selects result_metrics; qe_experiment_get uses SELECT *; qe_custom_evo_get_task returns all loop JSONB fields; qe_evolution_service.py comment notes enhanced_metrics can overflow context when accumulated across loops."
+  ],
+  "expected": "MCP list and default detail endpoints should return compact summaries by default: scalar columns and required identifiers only, no full result_metrics/metrics_json/config_json/agent_analysis unless explicitly requested. Cross-loop comparison should use a compact scalar comparison endpoint/detail level, with full enhanced metrics, loop config, loop metrics, and LLM analysis fetched only on demand. LoopbackApiClient should enforce a response-size guardrail or truncation warning for oversized MCP payloads.",
+  "first_seen_at": "2026-05-25T16:03:09.497721Z",
+  "fix_branch": "bug/BUG-120-qe-mcp-payload-clean",
+  "fix_commit": "124b0e730563c30b02219ac71aa5c9973edbdbd7",
+  "fixed_at": "2026-05-26T04:26:41.037056Z",
+  "github_issue_number": 223,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/223",
+  "last_seen_at": "2026-05-25T16:03:09.497721Z",
+  "module": "qe_mcp",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/227",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Call MCP tools qe_experiment_list, qe_experiment_get, or qe_custom_evo_get_task on QE evolution data containing enhanced_metrics/stock_trades; observe multi-MB JSON payloads and token explosion.",
+  "required_verification": [
+    "l0",
+    "qe_read_l3",
+    "qe_data_contract_backend",
+    "qe_archive_l3",
+    "validation_center_backend",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "qe_mcp"
+  ],
+  "title": "QE MCP experiment APIs return massive JSON payloads",
+  "trigger_condition": {
+    "fingerprint": "74a74a67615c0f95a0c73fc4",
+    "source_event_id": "FE-20260526-74a74a67615c"
+  },
+  "validation_evidence": [
+    "git diff --check -> passed",
+    "python -m ruff check changed Python files -> passed",
+    "python -m pytest backend/tests/test_aistock_qe_mcp_servers.py backend/tests/quantevolver -q -> 60 passed",
+    "python -m nox -s l0 -> passed",
+    "GitHub CI for PR #227 -> passed (14 checks; auto-register skip non-blocking)"
+  ],
+  "verification_run_id": null
+}

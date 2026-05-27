@@ -24,7 +24,7 @@ from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioSer
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.trading_core.errors import (
     BrokerMarketSourceMismatchError,
-    StrategyPackageValidationError,
+    RuntimeConfigInvalidError,
 )
 
 from backend.tests.paper_trading_v2.test_day_runner import (
@@ -101,7 +101,7 @@ def test_create_portfolio_rejects_unknown_broker_backend() -> None:
         package_repository=package_repo,
         repository=paper_repo,
     )
-    with pytest.raises(StrategyPackageValidationError) as exc_info:
+    with pytest.raises(RuntimeConfigInvalidError) as exc_info:
         service.create_portfolio(
             package_id=manifest.package_id,
             portfolio_name="bad backend",
@@ -116,14 +116,14 @@ def test_create_portfolio_rejects_unknown_broker_backend() -> None:
 
 
 def test_create_portfolio_rejects_minqmt_live_through_paper_v2() -> None:
-    """minqmt_live is admission-flow only (main design §11), not creatable here."""
+    """minqmt_live is admission-flow only (main design 搂11), not creatable here."""
     package_repo, manifest = _seed_paper_enabled_package()
     paper_repo = InMemoryPaperTradingV2Repository()
     service = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,
     )
-    with pytest.raises(StrategyPackageValidationError):
+    with pytest.raises(RuntimeConfigInvalidError):
         service.create_portfolio(
             package_id=manifest.package_id,
             portfolio_name="live attempt",
@@ -201,7 +201,7 @@ def test_broker_backend_immutable_after_create_via_status_update() -> None:
         data_source=MinuteDataSource.TDX_REALTIME,
         broker_backend="local_sim",
     )
-    # In-memory repo update_portfolio_status mirrors the SQL one — it must not
+    # In-memory repo update_portfolio_status mirrors the SQL one 鈥?it must not
     # touch broker_backend.
     paper_repo.portfolios[portfolio.portfolio_id] = portfolio.model_copy(
         update={"status": PortfolioStatus.PAUSED}

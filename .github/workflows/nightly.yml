@@ -176,6 +176,36 @@ jobs:
           path: tmp/paper_v2/
           if-no-files-found: ignore
 
+  code-intelligence-weekly:
+    name: Code intelligence weekly graph summary
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Understand Anything summary placeholders
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "schedule" ] && [ "$(date -u +%u)" != "7" ]; then
+            echo "Skipping weekly code intelligence graph summary outside Sunday UTC."
+            exit 0
+          fi
+          source "$(conda info --base)/etc/profile.d/conda.sh"
+          conda activate AIstock
+          OUT_DIR="tmp/validation/code-intelligence/${{ github.run_id }}"
+          mkdir -p "${OUT_DIR}"
+          python scripts/code_intelligence_adapter.py ua-summary-all \
+            --output-dir "${OUT_DIR}" \
+            --output "${OUT_DIR}/ua-summary-manifest.stdout.json"
+
+      - name: Upload code intelligence graph summaries
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-intelligence-weekly-${{ github.run_id }}
+          path: tmp/validation/code-intelligence/
+          if-no-files-found: ignore
+
   full-summary:
     name: Nightly summary + auto-bug on failure
     needs: [dr-snapshot, dr-validate, nightly-l3, paper-v2-live]

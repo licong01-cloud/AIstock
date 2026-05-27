@@ -14,6 +14,7 @@ from backend.services.strategy_package.candidate import (
     CandidateStrategyPackageService,
     CandidateStrategyPackageStatus,
 )
+from backend.services.strategy_package.asset_eligibility import StrategyPackageAssetEligibilityService
 from backend.services.strategy_package.metrics_summary import metrics_summary_from_record
 from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.package_asset import StrategyPackageAssetType
@@ -103,6 +104,10 @@ class DeleteCandidateStrategyPackageRequest(BaseModel):
     delete_reason: str | None = None
 
 
+class DeleteStrategyPackageRequest(BaseModel):
+    confirm_delete: bool = False
+
+
 class RefreshCandidateStrategyPackageRequest(BaseModel):
     refreshed_by: str = Field(default="aistock_api", min_length=1)
 
@@ -116,6 +121,10 @@ class TransitionPackageStatusRequest(BaseModel):
     to_status: PackageStatus
     reason: str | None = None
     context: dict[str, Any] = Field(default_factory=dict)
+
+
+class RepairManifestHashRequest(BaseModel):
+    operator: str = Field(default="paper_v2_gate_decoupling", min_length=1)
 
 
 class CreateExecutionPolicyRequest(BaseModel):
@@ -148,7 +157,6 @@ class ModelRetrainStartRequest(BaseModel):
     job_type: str = Field(default="rolling_retrain", min_length=1)
     config: dict[str, Any] = Field(default_factory=dict)
     confirm_retrain: bool = False
-    confirm_text: str | None = None
 
 
 class CreateRuntimeVariantRequest(BaseModel):
@@ -211,6 +219,7 @@ def _raise_http(exc: TradingCoreError) -> None:
 
 def _record_payload(record: StrategyPackageRecord) -> dict[str, Any]:
     manifest = record.current_manifest()
+    asset_eligibility = StrategyPackageAssetEligibilityService().summarize(record)
     return {
         "package_id": record.package_id,
         "package_name": record.package_name,
@@ -225,6 +234,7 @@ def _record_payload(record: StrategyPackageRecord) -> dict[str, Any]:
         "created_at": record.created_at.isoformat(),
         "updated_at": record.updated_at.isoformat(),
         "metrics_summary": metrics_summary_from_record(record).model_dump(mode="json"),
+        "asset_eligibility": asset_eligibility.to_dict(),
         "manifest": manifest.model_dump(mode="json"),
         "runtime_config_contract": build_default_runtime_config_bundle(manifest),
     }
@@ -235,7 +245,9 @@ def _candidate_payload(record: CandidateStrategyPackageRecord) -> dict[str, Any]
 
 
 def _execution_policy_payload(policy) -> dict[str, Any]:
-    return policy.model_dump(mode="json")
+    payload = policy.model_dump(mode="json")
+    payload.pop("paper_enabled", None)
+    return payload
 
 
 def _package_asset_payload(asset) -> dict[str, Any]:
@@ -418,6 +430,27 @@ def get_candidate_strategy_package(candidate_id: str) -> dict[str, Any]:
     try:
         record = CandidateStrategyPackageService().get_candidate(candidate_id)
         return {"ok": True, "candidate": _candidate_payload(record)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/manifest-integrity")
+def get_strategy_package_manifest_integrity(limit: int = 500) -> dict[str, Any]:
+    try:
+        report = StrategyPackageService().validate_manifest_integrity(limit=limit)
+        return {"ok": True, "report": report}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/{package_id}/repair-manifest-hash")
+def repair_strategy_package_manifest_hash(package_id: str, req: RepairManifestHashRequest | None = None) -> dict[str, Any]:
+    try:
+        record = StrategyPackageService().repair_manifest_hash(
+            package_id,
+            operator=(req.operator if req else "paper_v2_gate_decoupling"),
+        )
+        return {"ok": True, "package": _record_payload(record)}
     except TradingCoreError as exc:
         _raise_http(exc)
 
@@ -706,7 +739,6 @@ def start_strategy_package_model_retrain(package_id: str, req: ModelRetrainStart
             job_type=req.job_type,
             config=req.config,
             confirm_retrain=req.confirm_retrain,
-            confirm_text=req.confirm_text,
         )
         return {"ok": True, "job": job.model_dump(mode="json")}
     except TradingCoreError as exc:
@@ -876,6 +908,29 @@ def get_strategy_package_governance_eligibility(
         _raise_http(exc)
 
 
+@router.get("/{package_id}/paper-simulation-admission")
+def get_strategy_package_paper_simulation_admission(
+    package_id: str,
+    metric_key: str = "annual_return",
+    governance_limit: int = 500,
+) -> dict[str, Any]:
+    """Return alpha-core admission for Paper v2 simulation.
+
+    This endpoint is intentionally separate from live-strict governance so the
+    UI can explain warnings without blocking backtest-approved simulation.
+    """
+
+    try:
+        admission = StrategyPackageService().paper_simulation_admission(
+            package_id,
+            metric_key=metric_key,
+            governance_limit=governance_limit,
+        )
+        return {"ok": True, "package_id": package_id, "admission": admission}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
 @router.post("/{package_id}/validate")
 def validate_strategy_package(package_id: str) -> dict[str, Any]:
     try:
@@ -922,6 +977,29 @@ def retire_strategy_package(package_id: str, req: TransitionStatusRequest | None
     try:
         record = StrategyPackageService().retire(package_id, reason=(req.reason if req else None) or "retire_package")
         return {"ok": True, "package": _record_payload(record)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/{package_id}/delete-dependencies")
+def get_strategy_package_delete_dependencies(package_id: str) -> dict[str, Any]:
+    try:
+        dependencies = StrategyPackageService().package_delete_dependencies(package_id)
+        return {"ok": True, "package_id": package_id, "dependencies": dependencies}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.delete("/{package_id}")
+def delete_strategy_package(package_id: str, req: DeleteStrategyPackageRequest) -> dict[str, Any]:
+    try:
+        if not req.confirm_delete:
+            raise InvalidStateTransitionError(
+                "strategy package delete requires explicit confirmation",
+                context={"package_id": package_id, "confirm_delete": req.confirm_delete},
+            )
+        result = StrategyPackageService().delete_package(package_id)
+        return {"ok": True, **result}
     except TradingCoreError as exc:
         _raise_http(exc)
 

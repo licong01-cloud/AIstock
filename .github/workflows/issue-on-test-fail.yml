@@ -45,11 +45,50 @@ jobs:
     name: File P0/P1 failure issue
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Issue writes are restricted to failed monitored workflows or explicit manual dispatch.
+    # Issue writes are restricted to failed default-branch monitored workflows or explicit manual dispatch.
+    # Pull-request branch failures stay on the PR checks surface unless a human dispatches this workflow.
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'failure')
+      (
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'failure' &&
+        github.event.workflow_run.head_branch == github.event.repository.default_branch
+      )
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Build failure issue summary
+        id: failure_summary
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_RUN_URL: ${{ github.event.inputs.run_url || '' }}
+          INPUT_SEVERITY: ${{ github.event.inputs.severity || 'P1' }}
+          INPUT_SUMMARY: ${{ github.event.inputs.summary || '' }}
+          INPUT_DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          mkdir -p tmp/validation/ci_failure_issue
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            python scripts/ci_failure_issue_summary.py \
+              --repo "${{ github.repository }}" \
+              --run-id "${{ github.run_id }}" \
+              --run-url "${INPUT_RUN_URL}" \
+              --severity "${INPUT_SEVERITY}" \
+              --manual-summary "${INPUT_SUMMARY}" \
+              --source-name "manual dispatch" \
+              --branch "${GITHUB_REF_NAME}" \
+              --commit "${GITHUB_SHA}" \
+              --output tmp/validation/ci_failure_issue/summary.json \
+              --markdown-output tmp/validation/ci_failure_issue/body.md
+          else
+            python scripts/ci_failure_issue_summary.py \
+              --repo "${{ github.repository }}" \
+              --run-id "${{ github.event.workflow_run.id }}" \
+              --run-url "${{ github.event.workflow_run.html_url }}" \
+              --severity "P1" \
+              --output tmp/validation/ci_failure_issue/summary.json \
+              --markdown-output tmp/validation/ci_failure_issue/body.md
+          fi
+
       - name: Create or update failure issue
         uses: actions/github-script@v7
         env:
@@ -57,64 +96,75 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
+            const fs = require('fs');
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const isManual = context.eventName === 'workflow_dispatch';
             const dryRun = isManual && String(process.env.INPUT_DRY_RUN || '').toLowerCase() === 'true';
-
-            let severity;
-            let sourceName;
-            let runId;
-            let runUrl;
-            let headBranch;
-            let headSha;
-            let summary;
-
-            if (isManual) {
-              severity = core.getInput('severity', { required: true });
-              if (!['P0', 'P1'].includes(severity)) {
-                core.setFailed('Only P0/P1 auto-file behavior is allowed.');
-                return;
-              }
-              sourceName = 'manual dispatch';
-              runId = String(context.runId);
-              runUrl = core.getInput('run_url', { required: true });
-              headBranch = context.ref.replace('refs/heads/', '');
-              headSha = context.sha;
-              summary = core.getInput('summary', { required: true });
-            } else {
-              const run = context.payload.workflow_run;
-              sourceName = run.name;
-              runId = String(run.id);
-              runUrl = run.html_url;
-              headBranch = run.head_branch;
-              headSha = run.head_sha;
-              severity = sourceName === 'AIstock Nightly L3 + DR' ? 'P1' : 'P1';
-              summary = `${sourceName} failed on ${headBranch}`;
+            const summary = JSON.parse(fs.readFileSync('tmp/validation/ci_failure_issue/summary.json', 'utf8'));
+            const severity = summary.severity || 'P1';
+            if (!['P0', 'P1'].includes(severity)) {
+              core.setFailed('Only P0/P1 auto-file behavior is allowed.');
+              return;
             }
-
-            const marker = `<!-- aistock-issue-on-test-fail:${runId} -->`;
-            const title = `[${severity}] ${summary}`;
+            const runId = String(summary.run_id || context.runId);
+            const runUrl = summary.run_url || `${context.serverUrl}/${owner}/${repo}/actions/runs/${runId}`;
+            const fingerprint = summary.fingerprint || `run-${runId}`;
+            const marker = `<!-- aistock-ci-failure-fingerprint:${fingerprint} -->`;
+            const runMarker = `<!-- aistock-issue-on-test-fail:${runId} -->`;
+            const title = summary.issue_title || `[${severity}] ${summary.workflow || 'AIstock CI'} failed on ${summary.branch || 'unknown'}`;
             const query = `repo:${owner}/${repo} is:issue in:body ${marker}`;
             const existing = await github.rest.search.issuesAndPullRequests({ q: query, per_page: 1 });
-
-            const body = [
+            const failedJobs = summary.failed_jobs || [];
+            const moduleLabelAllowlist = new Set([
+              'module:validation',
+              'module:validation.center',
+              'module:paper_v2',
+              'module:paper_v2_selection_center',
+              'module:qe_archive',
+              'module:qe',
+              'module:quantevolver',
+              'module:strategy_package',
+              'module:research_assistant',
+              'module:simulation_runtime',
+              'module:rl_execution',
+              'module:scripts',
+            ]);
+            const moduleLabels = (summary.suspected_modules || [])
+              .map((module) => `module:${module}`)
+              .filter((label) => moduleLabelAllowlist.has(label));
+            const detailBody = [
               marker,
+              runMarker,
+              `<!-- aistock-ci-diagnostic-status:${summary.diagnostic_status || 'partial'} -->`,
+              '',
+              fs.readFileSync('tmp/validation/ci_failure_issue/body.md', 'utf8').trimEnd(),
+            ].join('\n');
+            const body = [
+              detailBody,
+              '',
+              '---',
+              '',
+              marker,
+              runMarker,
               '## Automated AIstock test failure issue',
               '',
               `Severity: ${severity}`,
-              `Workflow/source: ${sourceName}`,
+              `Workflow/source: ${summary.workflow || 'unknown'}`,
               `Run: ${runUrl}`,
-              `Branch: ${headBranch}`,
-              `Commit: ${headSha}`,
+              `Branch: ${summary.branch || 'unknown'}`,
+              `Commit: ${summary.commit || 'unknown'}`,
+              `Diagnostic status: ${summary.diagnostic_status || 'partial'}`,
+              `Fingerprint: ${fingerprint}`,
               '',
-              'This workflow auto-files P0/P1 only. The GitHub Issue is a workflow layer; `tests/aistock_validation/bugs/` remains the canonical bug registry when a BUG-NNN record is required.',
+              'This workflow auto-files P0/P1 only for default-branch failures or explicit manual dispatch. The GitHub Issue is a workflow layer; `tests/aistock_validation/bugs/` remains the canonical bug registry when a BUG-NNN record is required.',
               '',
               '### Triage checklist',
               '',
               '- [ ] Confirm whether this is a real regression or infrastructure-only failure.',
               '- [ ] If real, mirror or link a BUG-NNN entry under `tests/aistock_validation/bugs/`.',
-              '- [ ] Attach the minimal failing nox session, Validation Center run id, or Actions job log.',
+              '- [ ] Confirm the extracted failed job/session/test/error details above.',
+              '- [ ] If diagnostic_status is partial, inspect the linked run log before assigning fix scope.',
               '- [ ] Link the fixing PR with `Fixes #NNN` or `Closes #NNN`.',
               '',
               '### Safety',
@@ -132,17 +182,33 @@ jobs:
 
             if (existing.data.items.length) {
               const issue = existing.data.items[0];
+              const recurrenceBody = [
+                `### Recurrence observed for fingerprint ${fingerprint}`,
+                '',
+                `- Latest run: ${runUrl}`,
+                `- Branch: ${summary.branch || 'unknown'}`,
+                `- Commit: ${summary.commit || 'unknown'}`,
+                `- Diagnostic status: ${summary.diagnostic_status || 'partial'}`,
+                `- Failed jobs: ${failedJobs.map((job) => job.job_name).filter(Boolean).join(', ') || 'unknown'}`,
+              ].join('\n');
               await github.rest.issues.createComment({
                 owner,
                 repo,
                 issue_number: issue.number,
-                body: `Observed another failure for this run marker. Latest run: ${runUrl}`,
+                body: recurrenceBody,
               });
-              core.info(`Existing issue #${issue.number} already tracks run ${runId}.`);
+              core.info(`Existing issue #${issue.number} already tracks fingerprint ${fingerprint}.`);
               return;
             }
 
-            const labels = ['bug', 'ci', 'auto-filed', severity];
+            const labels = [
+              'bug',
+              'ci',
+              'auto-filed',
+              severity,
+              summary.diagnostic_status === 'complete' ? 'status:open' : 'risk:observability',
+              ...moduleLabels,
+            ];
             try {
               const created = await github.rest.issues.create({
                 owner,

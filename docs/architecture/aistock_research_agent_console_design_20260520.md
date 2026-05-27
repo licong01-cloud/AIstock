@@ -2274,3 +2274,9 @@ Phase 1 UI 必须展示：
 - Temporal Platform Docs：`https://docs.temporal.io/temporal`
 - PostgreSQL LISTEN/NOTIFY：`https://www.postgresql.org/docs/current/sql-notify.html`
 - Redis Pub/Sub：`https://redis.io/docs/latest/develop/pubsub/`
+
+## 18. 2026-05-25 MCP/Skill 执行闭环补充设计
+
+Research Assistant Phase 1 修复版中的 MCP/Skill 真实执行闭环以 `docs/architecture/research_assistant_mcp_skill_execution_closure_design_20260525.md` 为实施级补充设计。该补充不改变本文研发方向，只把既有 `Conversation -> Planner -> Action Proposal -> Confirmation -> Preflight -> MCP/Skill -> Trace -> Human Report` 链路细化为可开发、可验证的 Capability Registry、Action Proposal、Execution Gateway、QE workflow 与 E1-E18 验收矩阵。
+
+约束：助手只能调用已注册、已批准、可审计的 MCP/Skill capability；dry-run 不得伪装成执行；高风险动作必须绑定 confirmation、preflight、approval、plan digest 和 trace；完成 QE 创建实验端到端 workflow 前，不得宣称 Research Assistant 已具备完整任务执行能力或可调用所有 MCP。

@@ -7,8 +7,6 @@ QE experiment orchestration change.
 """
 from __future__ import annotations
 
-import gc
-import json
 import logging
 import os
 import threading
@@ -339,7 +337,6 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
             phase1_elapsed = 0.0
             phase2_elapsed = 0.0
             phase3_elapsed = 0.0
-            success_factors = []
 
             # ═══ 先收敛历史脏状态，保证当前 official 准入规则和 DB 一致 ═══
             reconcile_stats = _reconcile_correlation_state(reset_all=True)
@@ -443,6 +440,22 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
                     + (f"... 等 {len(missing_factors)} 个" if len(missing_factors) > 10 else ""),
                     "WARN",
                 )
+                if len(missing_factors) == len(factor_names):
+                    _error_msg = (
+                        f"全部 {len(factor_names)} 个因子均无独立指标缓存 (single/*.parquet)。"
+                        "请先通过 /api/v1/quantevolver/official-evaluation/compute 完成独立指标计算，"
+                        "然后再触发相关性计算。"
+                    )
+                    _correlation_logs.append(f"[缓存检查] {_error_msg}", "ERROR")
+                    _correlation_progress.finish("failed", _error_msg)
+                    _update_job_status(job_id, "failed")
+                    return {
+                        "success": False,
+                        "status": "failed",
+                        "error": _error_msg,
+                        "missing_factors": missing_factors,
+                        "hint": "run_official_evaluation_first",
+                    }
 
             compute_factors = [f for f in factor_names if f in cached_names]
 
@@ -641,7 +654,7 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
 
             # --- 完整汇总日志 ---
             _correlation_logs.append("=" * 50)
-            _correlation_logs.append(f"计算完成汇总")
+            _correlation_logs.append("计算完成汇总")
             _correlation_logs.append(f"  请求因子数: {_requested_count}")
             _correlation_logs.append(f"  成功因子数: {_success_count}")
             _correlation_logs.append(

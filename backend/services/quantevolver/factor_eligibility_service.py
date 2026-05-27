@@ -119,15 +119,6 @@ class FactorEligibilityService:
                 "is_available": is_available,
                 "qe_code_path": qe_code_path,
             }
-        if not is_available:
-            return {
-                "factor_name": name,
-                "eligible": False,
-                "reason": "factor_disabled",
-                "transformation_status": transformation_status,
-                "is_available": is_available,
-                "qe_code_path": qe_code_path,
-            }
         if not qe_code_path:
             return {
                 "factor_name": name,

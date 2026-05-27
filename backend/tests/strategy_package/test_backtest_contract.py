@@ -5,7 +5,7 @@ import pytest
 from backend.services.strategy_package.backtest_contract import normalize_runtime_config_with_backtest_contract
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import PackageStatus, PortfolioPolicy
-from backend.services.trading_core.errors import StrategyPackageValidationError
+from backend.services.trading_core.errors import RuntimeConfigInvalidError
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
 
@@ -38,9 +38,12 @@ def test_backtest_contract_never_reinjects_hmm_runtime_from_qe_config() -> None:
     disabled = normalize_runtime_config_with_backtest_contract(manifest, {}, include_contract=True)
     assert disabled["runtime_profile"]["hmm"] == {
         "enabled": False,
+        "model_config_id": None,
         "model_snapshot_id": None,
         "signal_preset": None,
         "coefficients_path": None,
+        "auto_compute": True,
+        "manual_snapshot_required": False,
     }
     assert disabled["qe_backtest_runtime_contract"]["runtime_features"]["hmm"] == {
         "enabled": False,
@@ -98,7 +101,7 @@ def test_backtest_contract_allows_audited_runtime_topk_and_platform_hmm() -> Non
 def test_backtest_contract_rejects_invalid_runtime_topk_boundaries() -> None:
     manifest = _paper_manifest(topk=50)
 
-    with pytest.raises(StrategyPackageValidationError, match="top_k must be between"):
+    with pytest.raises(RuntimeConfigInvalidError, match="top_k must be between"):
         normalize_runtime_config_with_backtest_contract(
             manifest,
             {"runtime_profile": {"selection": {"top_k": 0}}},

@@ -68,18 +68,6 @@ def test_research_profile_is_only_current_module() -> None:
     assert resolve_modules(profile="research") == ["research"]
     assert resolve_modules(profile="research_assistant") == ["research_assistant"]
     assert resolve_modules(profile="research_with_assistant") == ["research", "research_assistant"]
-    assert resolve_modules(profile="local_data") == ["local_data"]
-    assert resolve_modules(profile="assistant_with_local_data") == ["research_assistant", "local_data"]
-    assert resolve_modules(profile="research_with_assistant_local_data") == [
-        "research",
-        "research_assistant",
-        "local_data",
-    ]
-
-
-def test_local_data_module_is_allowed_for_explicit_gateway_modules() -> None:
-    assert resolve_modules(modules="local_data") == ["local_data"]
-    assert resolve_modules(modules=["research_assistant", "local_data"]) == ["research_assistant", "local_data"]
 
 
 @pytest.mark.parametrize("profile", ["full", "operations", "research_with_qe", "paper_v2"])
@@ -158,6 +146,7 @@ def test_gateway_loads_phase2_research_tools() -> None:
 
 def test_gateway_loads_research_assistant_tools() -> None:
     from backend.mcp import gateway
+    from backend.mcp.modules.research_assistant import TOOL_COUNT as RESEARCH_ASSISTANT_TOOL_COUNT
 
     _mcp, registry = gateway.create_gateway(
         profile="research_assistant",
@@ -165,8 +154,9 @@ def test_gateway_loads_research_assistant_tools() -> None:
         env_name="test",
     )
 
-    assert registry.tool_count("research_assistant") == 13
-    assert registry.total_tool_count() == 13
+    assert registry.tool_count("research_assistant") == RESEARCH_ASSISTANT_TOOL_COUNT
+    assert registry.total_tool_count() == RESEARCH_ASSISTANT_TOOL_COUNT
+
 
 
 def test_gateway_loads_local_data_tools() -> None:

@@ -13,9 +13,9 @@ from backend.services.paper_trading_v2.market_data import TradeCalendarProvider
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
 from backend.services.simulation_runtime import InMemorySimulationRuntimeRepository
 from backend.services.simulation_runtime.selection import StrategyPackageSelectionService
+from backend.services.strategy_package.asset_eligibility import StrategyPackageAssetEligibilityService
 from backend.services.strategy_package.metrics_summary import metrics_summary_from_record
 from backend.services.strategy_package.backtest_contract import normalize_runtime_config_with_backtest_contract
-from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.repository import StrategyPackageRepository
 from backend.services.strategy_package.runtime import StrategyPackageRuntime, apply_runtime_variant_config
 from backend.services.strategy_package.runtime_variant import RuntimeVariantValidationStatus
@@ -32,8 +32,11 @@ from backend.services.strategy_package.live_inference import (
 from backend.services.strategy_package.service import StrategyPackageService
 from backend.services import watchlist_service
 from backend.services.trading_core.errors import (
+    ArtifactGenerationFailedError,
     DataUnavailableError,
-    StrategyPackageValidationError,
+    InvalidStateTransitionError,
+    RuntimeConfigInvalidError,
+    TradingCalendarUnavailableError,
     TradingCoreError,
     UnsupportedFeatureError,
 )
@@ -41,16 +44,18 @@ from backend.services.trading_core.errors import (
 from .models import SelectionCandidate, SelectionMode, SelectionPaperPortfolioLink, SelectionRun, SelectionRunStatus
 from .package_health import SelectionPackageHealthService
 from .repository import SelectionCenterRepository
+from .result_enrichment import SelectionResultEnrichmentService
 from .risk_policy import StockRiskPolicyService
 from .runtime_profile import (
+    GENERATED_RUNTIME_PROFILE_VERSION_ID,
     RUNTIME_PROFILE_BINDING_KEY,
     attach_default_runtime_profile_binding,
-    ensure_runtime_config_version_boundary,
     is_non_trading_runtime_config,
     mark_non_trading_preview_runtime_config,
     normalize_selection_runtime_config,
     parse_selection_runtime_profile,
     runtime_config_scope,
+    runtime_profile_config_sha256,
     validate_runtime_profile_binding,
 )
 from .tradability import TradabilityFilter
@@ -71,6 +76,8 @@ class SelectionCenterService:
         risk_policy_service: StockRiskPolicyService | Any | None = None,
         package_health_service: SelectionPackageHealthService | Any | None = None,
         strategy_selection_service: StrategyPackageSelectionService | Any | None = None,
+        result_enrichment_service: SelectionResultEnrichmentService | Any | None = None,
+        asset_eligibility_service: StrategyPackageAssetEligibilityService | Any | None = None,
     ) -> None:
         self.package_repository = package_repository or StrategyPackageRepository()
         self.repository = repository or SelectionCenterRepository()
@@ -86,6 +93,8 @@ class SelectionCenterService:
         )
         self.calendar_provider = calendar_provider or TradeCalendarProvider()
         self.risk_policy_service = risk_policy_service or StockRiskPolicyService()
+        self.result_enrichment_service = result_enrichment_service or SelectionResultEnrichmentService()
+        self.asset_eligibility_service = asset_eligibility_service or StrategyPackageAssetEligibilityService()
         self.package_health_service = package_health_service or SelectionPackageHealthService(
             artifact_repository=getattr(self.runtime, "artifact_repository", None),
             runtime_source_resolver=getattr(self.selection_artifact_service, "runtime_asset_resolver", None),
@@ -105,6 +114,7 @@ class SelectionCenterService:
             calendar_provider=self.calendar_provider,
             risk_policy_service=self.risk_policy_service,
             package_health_service=self.package_health_service,
+            asset_eligibility_service=self.asset_eligibility_service,
             repository=selection_evidence_repository,
         )
 
@@ -150,11 +160,24 @@ class SelectionCenterService:
                 runtime_config=runtime_config or {},
                 created_by="selection_center",
             )
+            package_results = {
+                package_id: self.result_enrichment_service.enrich_candidates(
+                    candidates,
+                    trade_date=trade_date,
+                    runtime_config=selection.runtime_config,
+                )
+                for package_id, candidates in selection.package_results.items()
+            }
+            aggregate_results = self.result_enrichment_service.enrich_candidates(
+                selection.aggregate_results,
+                trade_date=trade_date,
+                runtime_config=selection.runtime_config,
+            )
             completed = run.model_copy(
                 update={
                     "runtime_config": selection.runtime_config,
-                    "package_results": selection.package_results,
-                    "aggregate_results": selection.aggregate_results,
+                    "package_results": package_results,
+                    "aggregate_results": aggregate_results,
                     "excluded_results": selection.excluded_results,
                     "manifest_sha256_by_package": selection.manifest_sha256_by_package,
                     "valid_no_candidate": selection.valid_no_candidate,
@@ -177,7 +200,7 @@ class SelectionCenterService:
         for dataset in artifact_config.get("required_cutoff_audit_datasets") or []:
             cutoff = artifact_config.get("cutoff_date")
             if not cutoff:
-                raise StrategyPackageValidationError(
+                raise RuntimeConfigInvalidError(
                     "required_cutoff_audit_datasets requires selection_artifact_config.cutoff_date",
                     context={"required_cutoff_audit_datasets": artifact_config.get("required_cutoff_audit_datasets")},
             )
@@ -196,15 +219,7 @@ class SelectionCenterService:
         package_health: dict[str, dict[str, Any]] = {}
         for package_id in package_ids:
             record = self.package_repository.get(package_id)
-            if record.package_status not in {
-                PackageStatus.BACKTEST_APPROVED,
-                PackageStatus.SELECTION_ENABLED,
-                PackageStatus.PAPER_ENABLED,
-            }:
-                raise StrategyPackageValidationError(
-                    "package is not enabled for selection",
-                    context={"package_id": package_id, "package_status": record.package_status.value},
-                )
+            asset_eligibility = self.asset_eligibility_service.require_eligible(record)
             manifest = record.current_manifest()
             raw_package_config = self._package_runtime_config(config, package_id)
             variant = self._resolve_runtime_variant(record, raw_package_config)
@@ -215,12 +230,13 @@ class SelectionCenterService:
                 runtime_config=raw_package_config,
                 package_id=package_id,
             )
-            health = self.package_health_service.require_runnable(
+            health = self.package_health_service.summarize(
                 record,
                 runtime_config=package_config,
                 trade_date=trade_date,
                 data_source=data_source,
             )
+            health["asset_eligibility"] = asset_eligibility.to_dict()
             records_by_id[package_id] = record
             package_configs[package_id] = package_config
             package_health[package_id] = health
@@ -272,7 +288,7 @@ class SelectionCenterService:
         elif isinstance(raw_profile, dict):
             profile = dict(raw_profile)
         else:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "runtime_config.runtime_profile must be an object",
                 context={"runtime_profile_type": type(raw_profile).__name__},
             )
@@ -293,12 +309,12 @@ class SelectionCenterService:
         try:
             display_top_n = int(value)
         except (TypeError, ValueError) as exc:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "selection display_top_n must be an integer",
                 context={"package_id": package_id, "display_top_n": value},
             ) from exc
         if display_top_n <= 0 or display_top_n > 50:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "selection display_top_n must be between 1 and 50",
                 context={"package_id": package_id, "display_top_n": display_top_n, "max_display_top_n": 50},
             )
@@ -325,23 +341,22 @@ class SelectionCenterService:
             return None
         variant_id = str(raw_id).strip()
         if not variant_id:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "runtime_variant_id cannot be empty",
                 context={"package_id": record.package_id},
             )
         variant = self.package_repository.get_runtime_variant(record.package_id, variant_id)
-        if variant.validation_status != RuntimeVariantValidationStatus.VALIDATION_PASSED or not variant.paper_candidate:
-            raise StrategyPackageValidationError(
-                "runtime variant must be a validated paper candidate before Selection Center use",
+        if variant.validation_status != RuntimeVariantValidationStatus.VALIDATION_PASSED:
+            raise RuntimeConfigInvalidError(
+                "runtime variant must be validated before Selection Center use",
                 context={
                     "package_id": record.package_id,
                     "runtime_variant_id": variant.variant_id,
                     "validation_status": variant.validation_status.value,
-                    "paper_candidate": variant.paper_candidate,
                 },
             )
         if variant.manifest_sha256 != record.manifest_sha256:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "runtime variant manifest hash does not match StrategyPackage",
                 context={
                     "package_id": record.package_id,
@@ -363,13 +378,19 @@ class SelectionCenterService:
         if configured is None:
             configured = SelectionCenterService._contract_top_k(package_config)
         if configured is None:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "selection runtime_profile.selection.top_k is required; StrategyPackage manifest cannot provide runtime top_k",
                 context={"package_id": manifest.package_id, "manifest_version": getattr(manifest, "manifest_version", None)},
             )
-        top_k = int(configured)
+        try:
+            top_k = int(configured)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeConfigInvalidError(
+                "selection top_k must be an integer",
+                context={"package_id": manifest.package_id, "top_k": configured},
+            ) from exc
         if top_k <= 0 or top_k > 50:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "selection top_k must be between 1 and 50",
                 context={"package_id": manifest.package_id, "top_k": top_k, "max_top_k": 50},
             )
@@ -461,7 +482,7 @@ class SelectionCenterService:
 
         resolver = getattr(self.selection_artifact_service, "runtime_asset_resolver", None)
         if resolver is None or not hasattr(resolver, "require_preflight_or_raise"):
-            raise StrategyPackageValidationError(
+            raise ArtifactGenerationFailedError(
                 "selection_artifact_service.runtime_asset_resolver is not preflight-capable",
                 context={"package_id": record.package_id},
             )
@@ -497,16 +518,26 @@ class SelectionCenterService:
                 "score_trade_date": explicit_cutoff_date.isoformat() if explicit_cutoff_date else trade_date.isoformat(),
                 "reference_price_trade_date": explicit_cutoff_date.isoformat() if explicit_cutoff_date else trade_date.isoformat(),
             }
-        self.calendar_provider.ensure_trading_day(trade_date)
-        cutoff = explicit_cutoff_date or self._previous_trading_day(trade_date)
-        if cutoff >= trade_date:
-            raise StrategyPackageValidationError(
+        effective_trade_date = self._selection_effective_trade_date(
+            trade_date=trade_date,
+            explicit_cutoff_date=explicit_cutoff_date,
+        )
+        cutoff = explicit_cutoff_date or self._previous_trading_day(effective_trade_date)
+        if cutoff >= effective_trade_date:
+            raise RuntimeConfigInvalidError(
                 "point-in-time selection cutoff_date must be before trade_date",
-                context={"trade_date": trade_date.isoformat(), "cutoff_date": cutoff.isoformat(), "pit_mode": normalized},
+                context={
+                    "trade_date": trade_date.isoformat(),
+                    "effective_trade_date": effective_trade_date.isoformat(),
+                    "cutoff_date": cutoff.isoformat(),
+                    "pit_mode": normalized,
+                },
             )
         return {
             "pit_mode": normalized,
             "trade_date": trade_date.isoformat(),
+            "requested_trade_date": trade_date.isoformat(),
+            "effective_trade_date": effective_trade_date.isoformat(),
             "cutoff_date": cutoff.isoformat(),
             "score_trade_date": cutoff.isoformat(),
             "reference_price_trade_date": cutoff.isoformat(),
@@ -548,7 +579,7 @@ class SelectionCenterService:
         if artifact_config is None:
             return {}
         if not isinstance(artifact_config, dict):
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "runtime_config.selection_artifact_config must be an object",
                 context={"selection_artifact_config_type": type(artifact_config).__name__},
             )
@@ -568,7 +599,7 @@ class SelectionCenterService:
         }
         normalized = aliases.get(text)
         if normalized is None:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "unsupported point-in-time selection mode",
                 context={"pit_mode": pit_mode, "supported": ["NONE", "PREVIOUS_TRADING_DAY_CLOSE"]},
             )
@@ -578,11 +609,31 @@ class SelectionCenterService:
         lookup_start = trade_date - timedelta(days=31)
         days = self.calendar_provider.list_trading_days(lookup_start, trade_date - timedelta(days=1))
         if not days:
-            raise DataUnavailableError(
+            raise TradingCalendarUnavailableError(
                 "trading calendar has no previous trading day for point-in-time selection",
                 context={"trade_date": trade_date.isoformat(), "lookup_start": lookup_start.isoformat()},
             )
         return days[-1]
+
+    def _selection_effective_trade_date(self, *, trade_date: date, explicit_cutoff_date: date | None) -> date:
+        if explicit_cutoff_date is not None:
+            return trade_date
+        try:
+            self.calendar_provider.ensure_trading_day(trade_date)
+            return trade_date
+        except DataUnavailableError:
+            return self._latest_trading_day_on_or_before(trade_date)
+
+    def _latest_trading_day_on_or_before(self, trade_date: date) -> date:
+        lookup_start = trade_date - timedelta(days=31)
+        days = self.calendar_provider.list_trading_days(lookup_start, trade_date)
+        eligible = [day for day in days if day <= trade_date]
+        if not eligible:
+            raise TradingCalendarUnavailableError(
+                "trading calendar has no completed trading day on or before requested selection date",
+                context={"trade_date": trade_date.isoformat(), "lookup_start": lookup_start.isoformat()},
+            )
+        return eligible[-1]
 
     @staticmethod
     def _parse_selection_cutoff_date(
@@ -597,12 +648,12 @@ class SelectionCenterService:
         try:
             parsed = date.fromisoformat(str(raw))
         except ValueError as exc:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "selection_artifact_config.cutoff_date must be YYYY-MM-DD",
                 context={"cutoff_date": raw},
             ) from exc
         if parsed > trade_date or (strict_before and parsed >= trade_date):
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "selection_artifact_config.cutoff_date must be before trade_date",
                 context={"trade_date": trade_date.isoformat(), "cutoff_date": parsed.isoformat()},
             )
@@ -614,23 +665,26 @@ class SelectionCenterService:
     def list_runs(self, *, limit: int = 100) -> list[SelectionRun]:
         return self.repository.list_runs(limit=limit)
 
+    def list_runs_page(self, *, page: int = 1, page_size: int = 20) -> dict[str, Any]:
+        return self.repository.list_runs_page(page=page, page_size=page_size)
+
+    def delete_run(self, run_id: str) -> dict[str, Any]:
+        return self.repository.delete_run(run_id)
+
+    def delete_runs(self, run_ids: list[str]) -> dict[str, Any]:
+        return self.repository.delete_runs(run_ids)
+
     def list_selectable_packages(self, *, limit: int = 200) -> list[dict[str, Any]]:
         if limit <= 0:
-            raise StrategyPackageValidationError("limit must be positive")
-        eligible_statuses = [
-            PackageStatus.BACKTEST_APPROVED,
-            PackageStatus.SELECTION_ENABLED,
-            PackageStatus.PAPER_ENABLED,
-        ]
-        records_by_id = {}
-        for status in eligible_statuses:
-            for record in self.package_repository.list(status=status, limit=limit):
-                records_by_id[record.package_id] = record
-        records = sorted(records_by_id.values(), key=lambda item: item.created_at, reverse=True)[:limit]
+            raise RuntimeConfigInvalidError("limit must be positive")
+        records = self.package_repository.list(limit=max(limit * 5, limit))
         latest_runs = self._latest_run_by_package(limit=max(limit * 5, 200))
         package_service = StrategyPackageService(repository=self.package_repository)
         items: list[dict[str, Any]] = []
         for record in records:
+            asset_eligibility = self.asset_eligibility_service.summarize(record)
+            if not asset_eligibility.eligible:
+                continue
             manifest = record.current_manifest()
             model_state = package_service.get_model_state(record.package_id)
             latest_run = latest_runs.get(record.package_id)
@@ -653,11 +707,12 @@ class SelectionCenterService:
                     "updated_at": record.updated_at.isoformat(),
                     "metrics_summary": metrics_summary_from_record(record).model_dump(mode="json"),
                     "model_state": model_state.model_dump(mode="json"),
+                    "asset_eligibility": asset_eligibility.to_dict(),
                     "selection_health": health,
                     "latest_selection_run": self._selection_run_summary(latest_run) if latest_run else None,
                 }
             )
-        return items
+        return items[:limit]
 
     @staticmethod
     def _display_portfolio_topk(manifest: Any) -> int | None:
@@ -681,11 +736,6 @@ class SelectionCenterService:
             "mode": mode.value,
             "path": "selection_center.aggregate_existing_runs",
         }
-        ensure_runtime_config_version_boundary(
-            raw_config,
-            context=behavior_context,
-            allow_non_trading_preview=True,
-        )
         if is_non_trading_runtime_config(raw_config):
             raw_config = mark_non_trading_preview_runtime_config(
                 raw_config,
@@ -700,22 +750,22 @@ class SelectionCenterService:
             require_trade_enabled=not is_non_trading_runtime_config(config),
         )
         if len(source_run_ids) < 2:
-            raise StrategyPackageValidationError("aggregate existing runs requires at least two source_run_ids")
+            raise RuntimeConfigInvalidError("aggregate existing runs requires at least two source_run_ids")
         if len(set(source_run_ids)) != len(source_run_ids):
-            raise StrategyPackageValidationError("source_run_ids must be unique")
+            raise RuntimeConfigInvalidError("source_run_ids must be unique")
         if mode == SelectionMode.SINGLE_PACKAGE:
-            raise StrategyPackageValidationError("aggregate existing runs requires an aggregation mode")
+            raise RuntimeConfigInvalidError("aggregate existing runs requires an aggregation mode")
 
         source_runs = [self.repository.get_run(run_id) for run_id in source_run_ids]
         trade_dates = {run.trade_date for run in source_runs}
         data_sources = {run.data_source for run in source_runs}
         if len(trade_dates) != 1:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "source selection runs must share the same trade_date",
                 context={"source_run_ids": source_run_ids, "trade_dates": sorted(item.isoformat() for item in trade_dates)},
             )
         if len(data_sources) != 1:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "source selection runs must share the same data_source",
                 context={"source_run_ids": source_run_ids, "data_sources": sorted(data_sources)},
             )
@@ -725,30 +775,30 @@ class SelectionCenterService:
         manifest_sha: dict[str, str] = {}
         for source_run in source_runs:
             if source_run.status != SelectionRunStatus.SUCCEEDED:
-                raise StrategyPackageValidationError(
+                raise InvalidStateTransitionError(
                     "source selection run must be succeeded",
                     context={"run_id": source_run.run_id, "status": source_run.status.value},
                 )
             if source_run.mode != SelectionMode.SINGLE_PACKAGE or len(source_run.package_ids) != 1:
-                raise StrategyPackageValidationError(
+                raise RuntimeConfigInvalidError(
                     "source selection run must be a single-package run",
                     context={"run_id": source_run.run_id, "mode": source_run.mode.value, "package_ids": source_run.package_ids},
                 )
             if not source_run.aggregate_results:
-                raise StrategyPackageValidationError(
+                raise DataUnavailableError(
                     "source selection run has no aggregate results",
                     context={"run_id": source_run.run_id},
                 )
             package_id = source_run.package_ids[0]
             if package_id in package_results:
-                raise StrategyPackageValidationError(
+                raise RuntimeConfigInvalidError(
                     "source selection runs must reference unique packages",
                     context={"package_id": package_id, "source_run_ids": source_run_ids},
                 )
             package_ids.append(package_id)
             manifest_sha256 = source_run.manifest_sha256_by_package.get(package_id)
             if not manifest_sha256:
-                raise StrategyPackageValidationError(
+                raise DataUnavailableError(
                     "source selection run is missing manifest hash",
                     context={"run_id": source_run.run_id, "package_id": package_id},
                 )
@@ -773,6 +823,11 @@ class SelectionCenterService:
         self.repository.create_run(run)
         try:
             aggregate = self._aggregate(mode=mode, package_results=package_results, package_weights=weights)
+            aggregate = self.result_enrichment_service.enrich_candidates(
+                aggregate,
+                trade_date=run.trade_date,
+                runtime_config=run.runtime_config,
+            )
             aggregate = [
                 item.model_copy(
                     update={
@@ -797,7 +852,7 @@ class SelectionCenterService:
                         }
                     )
                     return self.repository.complete_run(completed)
-                raise StrategyPackageValidationError(
+                raise ArtifactGenerationFailedError(
                     "existing selection run aggregation produced no candidates",
                     context={"mode": mode.value, "source_run_ids": source_run_ids},
                 )
@@ -831,12 +886,12 @@ class SelectionCenterService:
     ) -> dict[str, Any]:
         run = self.repository.get_run(run_id)
         if run.status != SelectionRunStatus.SUCCEEDED:
-            raise StrategyPackageValidationError(
+            raise InvalidStateTransitionError(
                 "only successful selection runs can create paper portfolios",
                 context={"run_id": run_id, "status": run.status.value},
             )
         if not run.aggregate_results:
-            raise StrategyPackageValidationError(
+            raise DataUnavailableError(
                 "selection run has no aggregate results for paper portfolio creation",
                 context={"run_id": run_id},
             )
@@ -845,13 +900,8 @@ class SelectionCenterService:
                 "creating a paper portfolio from multi-package selection requires a combined StrategyPackage",
                 context={"run_id": run_id, "mode": run.mode.value, "package_ids": run.package_ids},
             )
-        validate_runtime_profile_binding(
-            run.runtime_config,
-            context={"run_id": run_id, "path": "selection_center.create_paper_portfolio_from_run"},
-            require_trade_enabled=True,
-        )
         if is_non_trading_runtime_config(run.runtime_config):
-            raise StrategyPackageValidationError(
+            raise InvalidStateTransitionError(
                 "non-trading selection preview cannot create a Paper v2 portfolio",
                 context={
                     "run_id": run_id,
@@ -864,7 +914,7 @@ class SelectionCenterService:
         manifest = record.current_manifest()
         manifest_sha256 = run.manifest_sha256_by_package.get(package_id)
         if manifest_sha256 != manifest.manifest_sha256:
-            raise StrategyPackageValidationError(
+            raise InvalidStateTransitionError(
                 "selection run manifest hash does not match current strategy package",
                 context={
                     "run_id": run_id,
@@ -914,23 +964,23 @@ class SelectionCenterService:
         on_conflict: str = "ignore",
     ) -> dict[str, Any]:
         if top_k <= 0 or top_k > 50:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "watchlist import top_k must be between 1 and 50",
                 context={"run_id": run_id, "top_k": top_k},
             )
         if on_conflict not in {"ignore", "move"}:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "watchlist import on_conflict must be ignore or move",
                 context={"run_id": run_id, "on_conflict": on_conflict},
             )
         run = self.repository.get_run(run_id)
         if run.status != SelectionRunStatus.SUCCEEDED:
-            raise StrategyPackageValidationError(
+            raise InvalidStateTransitionError(
                 "only successful selection runs can be added to watchlist",
                 context={"run_id": run_id, "status": run.status.value},
             )
         if not run.aggregate_results:
-            raise StrategyPackageValidationError(
+            raise DataUnavailableError(
                 "selection run has no aggregate results to add to watchlist",
                 context={"run_id": run_id},
             )
@@ -941,7 +991,7 @@ class SelectionCenterService:
             if item.reference_price is None or float(item.reference_price) <= 0
         ]
         if missing_prices:
-            raise StrategyPackageValidationError(
+            raise DataUnavailableError(
                 "selection watchlist import requires reference_price for every selected symbol",
                 context={
                     "run_id": run_id,
@@ -980,7 +1030,7 @@ class SelectionCenterService:
             entry_source=source_label,
         )
         if not result.get("ok") or result.get("errors"):
-            raise StrategyPackageValidationError(
+            raise InvalidStateTransitionError(
                 "selection watchlist import failed",
                 context={
                     "run_id": run_id,
@@ -1007,7 +1057,7 @@ class SelectionCenterService:
     ) -> int:
         if category_id is not None:
             if int(category_id) <= 0:
-                raise StrategyPackageValidationError(
+                raise RuntimeConfigInvalidError(
                     "watchlist category_id must be positive",
                     context={"run_id": run.run_id, "category_id": category_id},
                 )
@@ -1074,11 +1124,7 @@ class SelectionCenterService:
 
     @staticmethod
     def _paper_runtime_config_from_selection_run(run: SelectionRun) -> dict[str, Any]:
-        binding = validate_runtime_profile_binding(
-            run.runtime_config,
-            context={"run_id": run.run_id, "path": "selection_center.paper_runtime_config_from_selection_run"},
-            require_trade_enabled=True,
-        )
+        binding = SelectionCenterService._runtime_profile_binding_for_selection_trace(run)
         return {
             "selection_source": {
                 "run_id": run.run_id,
@@ -1094,6 +1140,28 @@ class SelectionCenterService:
             "selection_runtime_profile_binding": dict(binding),
         }
 
+    @staticmethod
+    def _runtime_profile_binding_for_selection_trace(run: SelectionRun) -> dict[str, Any]:
+        binding = run.runtime_config.get(RUNTIME_PROFILE_BINDING_KEY)
+        if not isinstance(binding, dict):
+            return {
+                "source": "generated_effective_runtime_config",
+                "profile_version_id": GENERATED_RUNTIME_PROFILE_VERSION_ID,
+                "config_sha256": runtime_profile_config_sha256(run.runtime_config),
+                "trade_enabled": True,
+                "generated_for": "selection_run_trace",
+                "run_id": run.run_id,
+            }
+        if binding.get("source") in {"platform_default", "generated_effective_runtime_config"}:
+            effective = dict(binding)
+            effective["config_sha256"] = runtime_profile_config_sha256(run.runtime_config)
+            return effective
+        return validate_runtime_profile_binding(
+            run.runtime_config,
+            context={"run_id": run.run_id, "path": "selection_center.paper_runtime_config_from_selection_run"},
+            require_trade_enabled=True,
+        )
+
     def _aggregate(
         self,
         *,
@@ -1105,7 +1173,7 @@ class SelectionCenterService:
             return next(iter(package_results.values()))
         if mode == SelectionMode.WEIGHTED_FUSION:
             if package_weights is None:
-                raise StrategyPackageValidationError("weighted package fusion requires package_weights")
+                raise RuntimeConfigInvalidError("weighted package fusion requires package_weights")
             return self._weighted_rank_fusion(package_results=package_results, package_weights=package_weights)
         symbol_sets = [set(candidate.symbol for candidate in rows) for rows in package_results.values()]
         symbols = set.union(*symbol_sets) if mode == SelectionMode.UNION else set.intersection(*symbol_sets)
@@ -1144,22 +1212,28 @@ class SelectionCenterService:
     def _package_weights(config: dict[str, Any], package_ids: list[str]) -> dict[str, float]:
         raw = config.get("package_weights")
         if not isinstance(raw, dict):
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "weighted package fusion requires runtime_config.package_weights",
                 context={"package_ids": package_ids},
             )
         expected = set(package_ids)
         actual = {str(key) for key in raw}
         if actual != expected:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "runtime_config.package_weights must match package_ids exactly",
                 context={"package_ids": package_ids, "weight_keys": sorted(actual)},
             )
         weights: dict[str, float] = {}
         for package_id in package_ids:
-            value = float(raw[package_id])
+            try:
+                value = float(raw[package_id])
+            except (TypeError, ValueError) as exc:
+                raise RuntimeConfigInvalidError(
+                    "package weights must be numeric",
+                    context={"package_id": package_id, "weight": raw[package_id]},
+                ) from exc
             if not isfinite(value) or value <= 0:
-                raise StrategyPackageValidationError(
+                raise RuntimeConfigInvalidError(
                     "package weights must be positive finite numbers",
                     context={"package_id": package_id, "weight": raw[package_id]},
                 )

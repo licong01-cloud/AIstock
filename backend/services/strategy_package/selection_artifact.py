@@ -22,7 +22,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend.db.pg_pool import get_conn
 from backend.services.selection_center.runtime_profile import parse_selection_runtime_profile
-from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
+from backend.services.trading_core.errors import (
+    ArtifactGenerationFailedError,
+    DataUnavailableError,
+    PackageAssetInvalidError,
+    RuntimeConfigInvalidError,
+)
 
 from .live_inference import (
     AUTHORITATIVE_SELECTION_SCOPE,
@@ -66,7 +71,7 @@ def selection_artifact_runtime_hash(runtime_config: dict[str, Any] | None = None
     if payload is None:
         payload = {}
     if not isinstance(payload, dict):
-        raise StrategyPackageValidationError(
+        raise RuntimeConfigInvalidError(
             "runtime_config.selection_artifact_config must be an object",
             context={"selection_artifact_config_type": type(payload).__name__},
         )
@@ -75,6 +80,7 @@ def selection_artifact_runtime_hash(runtime_config: dict[str, Any] | None = None
     # they do not change model scores and must not fragment the artifact key.
     payload.pop("auto_generate", None)
     payload.pop("force_regenerate", None)
+    payload.pop("signal_data_source", None)
     return _canonical_json_sha256(payload)
 
 
@@ -213,7 +219,7 @@ class StrategyPackageSelectionArtifactRepository:
         limit: int = 100,
     ) -> list[SelectionScoreArtifact]:
         if limit <= 0:
-            raise StrategyPackageValidationError("limit must be positive")
+            raise RuntimeConfigInvalidError("limit must be positive")
         sql = """
             SELECT *
             FROM strategy_pkg.selection_score_artifact
@@ -372,12 +378,12 @@ class StrategyPackageSelectionArtifactService:
                 context={"package_id": package_id, "data_source": data_source},
             )
         if not trade_dates:
-            raise StrategyPackageValidationError("live selection artifact generation requires trade_dates")
+            raise RuntimeConfigInvalidError("live selection artifact generation requires trade_dates")
         unique_dates = sorted(set(trade_dates))
         record = self.package_repository.get(package_id)
         manifest = record.current_manifest()
         if not manifest.manifest_sha256:
-            raise StrategyPackageValidationError(
+            raise PackageAssetInvalidError(
                 "strategy package manifest must be frozen before generating live selection artifacts",
                 context={"package_id": package_id},
             )
@@ -497,12 +503,12 @@ class StrategyPackageSelectionArtifactService:
         """
 
         if not trade_dates:
-            raise StrategyPackageValidationError("selection artifact generation requires trade_dates")
+            raise RuntimeConfigInvalidError("selection artifact generation requires trade_dates")
         unique_dates = sorted(set(trade_dates))
         record = self.package_repository.get(package_id)
         manifest = record.current_manifest()
         if not manifest.manifest_sha256:
-            raise StrategyPackageValidationError(
+            raise PackageAssetInvalidError(
                 "strategy package manifest must be frozen before generating selection artifacts",
                 context={"package_id": package_id},
             )
@@ -571,7 +577,7 @@ class StrategyPackageSelectionArtifactService:
             return int(daily_strategy["topk"])
         if getattr(manifest, "is_legacy_runtime_manifest", False) and manifest.portfolio_policy is not None:
             return int(manifest.portfolio_policy.topk)
-        raise StrategyPackageValidationError(
+        raise RuntimeConfigInvalidError(
             "selection artifact generation requires runtime_profile.selection.top_k; StrategyPackage manifest cannot provide runtime top_k",
             context={"package_id": manifest.package_id, "manifest_version": getattr(manifest, "manifest_version", None)},
         )
@@ -627,7 +633,7 @@ class StrategyPackageSelectionArtifactService:
         if isinstance(pred, pd.Series):
             pred = pred.to_frame(name="score")
         if not isinstance(pred, pd.DataFrame):
-            raise StrategyPackageValidationError(
+            raise ArtifactGenerationFailedError(
                 "QE prediction artifact must be a pandas DataFrame or Series",
                 context={"prediction_path": str(path), "artifact_type": type(pred).__name__},
             )
@@ -635,18 +641,18 @@ class StrategyPackageSelectionArtifactService:
             if len(pred.columns) == 1:
                 pred = pred.rename(columns={pred.columns[0]: "score"})
             else:
-                raise StrategyPackageValidationError(
+                raise ArtifactGenerationFailedError(
                     "QE prediction artifact is missing score column",
                     context={"prediction_path": str(path), "columns": [str(col) for col in pred.columns]},
                 )
         if not isinstance(pred.index, pd.MultiIndex):
-            raise StrategyPackageValidationError(
+            raise ArtifactGenerationFailedError(
                 "QE prediction artifact index must be MultiIndex(datetime, instrument)",
                 context={"prediction_path": str(path), "index_type": type(pred.index).__name__},
             )
         names = list(pred.index.names)
         if "datetime" not in names or "instrument" not in names:
-            raise StrategyPackageValidationError(
+            raise ArtifactGenerationFailedError(
                 "QE prediction artifact index must contain datetime and instrument levels",
                 context={"prediction_path": str(path), "index_names": names},
             )
@@ -679,7 +685,7 @@ class StrategyPackageSelectionArtifactService:
         day["score"] = pd.to_numeric(day["score"], errors="coerce")
         invalid_count = int((~day["score"].map(lambda value: math.isfinite(float(value)) if pd.notna(value) else False)).sum())
         if invalid_count:
-            raise StrategyPackageValidationError(
+            raise ArtifactGenerationFailedError(
                 "QE prediction artifact contains invalid scores",
                 context={"package_id": package_id, "trade_date": trade_date.isoformat(), "invalid_score_count": invalid_count},
             )
@@ -727,7 +733,7 @@ class StrategyPackageSelectionArtifactService:
         config = runtime_config or {}
         artifact_config = config.get("selection_artifact_config") or config.get("selection_artifact") or {}
         if artifact_config and not isinstance(artifact_config, dict):
-            raise StrategyPackageValidationError("selection_artifact_config must be an object")
+            raise RuntimeConfigInvalidError("selection_artifact_config must be an object")
         backend = str(
             (artifact_config or {}).get("inference_backend")
             or os.getenv("STRATEGY_PACKAGE_SELECTION_INFERENCE_BACKEND")
@@ -737,7 +743,7 @@ class StrategyPackageSelectionArtifactService:
             return WslStrategyPackageInferenceProvider(), "wsl"
         if backend == "local":
             return LocalStrategyPackageInferenceProvider(), "local"
-        raise StrategyPackageValidationError(
+        raise RuntimeConfigInvalidError(
             "unsupported live selection inference_backend",
             context={"inference_backend": backend, "supported": ["wsl", "local"]},
         )
@@ -761,13 +767,13 @@ class StrategyPackageSelectionArtifactService:
         for row in rows:
             missing = [key for key in ("symbol", "score", "rank") if row.get(key) is None]
             if missing:
-                raise StrategyPackageValidationError(
+                raise ArtifactGenerationFailedError(
                     "live inference score row is missing required fields",
                     context={"package_id": package_id, "missing": missing, "row": row},
                 )
             score = float(row["score"])
             if not math.isfinite(score):
-                raise StrategyPackageValidationError(
+                raise ArtifactGenerationFailedError(
                     "live inference score row contains non-finite score",
                     context={"package_id": package_id, "row": row},
                 )

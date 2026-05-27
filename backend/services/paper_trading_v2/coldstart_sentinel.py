@@ -24,7 +24,7 @@ from backend.services.paper_trading_v2.market_data import MinuteDataSource
 from backend.services.qe_archive.models import canonical_json_dumps, normalize_json, sha256_json
 from backend.services.trading_core.errors import (
     InvalidStateTransitionError,
-    StrategyPackageValidationError,
+    RuntimeConfigInvalidError,
     TradingCoreError,
 )
 from backend.services.trading_core.models import Fill, OrderIntent, OrderSide, OrderType
@@ -37,7 +37,6 @@ SENTINEL_QUANTITY = 100
 SENTINEL_INTENDED_PRICE = Decimal("10.00")
 SENTINEL_SOURCE = "paper_v2_coldstart_sanity"
 LOCAL_SIM_BACKEND = "local_sim"
-PAPER_ENABLED_STATUSES = ("PAPER_ENABLED", "PAPER_RUNNING", "PAPER_PASSED")
 SENTINEL_PORTFOLIO_PREFIX = "paper_v2_coldstart_sanity_"
 SENTINEL_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -68,15 +67,6 @@ class ColdstartSentinelService:
     def record_sentinel_order(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         req = _validate_payload(payload)
         now = self._now_factory().astimezone(SENTINEL_TZ)
-        if _is_a_share_trading_window(now):
-            raise InvalidStateTransitionError(
-                "paper v2 coldstart sentinel is blocked during A-share trading hours",
-                context={
-                    "as_of_time": now.isoformat(),
-                    "timezone": "Asia/Shanghai",
-                    "blocked_windows": ["09:30-11:30", "13:00-15:00"],
-                },
-            )
         if not self._daemon_checker(self._daemon_process_name):
             raise PaperV2DaemonUnavailableError(
                 "paper v2 daemon process is not running",
@@ -85,7 +75,7 @@ class ColdstartSentinelService:
 
         with self._conn_factory() as conn:
             try:
-                package = self._select_enabled_package(conn, req["package_id"])
+                package = self._select_package(conn, req["package_id"])
                 self._require_capture_fields(conn)
                 result = self._record_rows(conn, req=req, package=package, now=now)
                 _commit(conn)
@@ -94,7 +84,7 @@ class ColdstartSentinelService:
                 _rollback(conn)
                 raise
 
-    def _select_enabled_package(self, conn: Any, package_id: str) -> dict[str, Any]:
+    def _select_package(self, conn: Any, package_id: str) -> dict[str, Any]:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
@@ -113,14 +103,18 @@ class ColdstartSentinelService:
                 context={"package_id": package_id},
             )
         package = dict(row)
-        if package["package_status"] not in PAPER_ENABLED_STATUSES:
+        if package["package_status"] == "RETIRED":
             raise InvalidStateTransitionError(
-                "paper v2 coldstart sentinel requires an enable_paper StrategyPackage",
+                "paper v2 coldstart sentinel cannot use a retired StrategyPackage",
                 context={
                     "package_id": package_id,
                     "package_status": package["package_status"],
-                    "allowed_statuses": list(PAPER_ENABLED_STATUSES),
                 },
+            )
+        if not package.get("manifest_sha256"):
+            raise InvalidStateTransitionError(
+                "paper v2 coldstart sentinel requires a frozen StrategyPackage manifest",
+                context={"package_id": package_id},
             )
         return package
 
@@ -519,7 +513,7 @@ def _validate_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     if broker_backend != LOCAL_SIM_BACKEND:
         failures.append("broker_backend must be local_sim")
     if failures:
-        raise StrategyPackageValidationError(
+        raise RuntimeConfigInvalidError(
             "invalid paper v2 coldstart sentinel payload",
             context={"failures": failures},
         )
@@ -567,13 +561,6 @@ def _fill_market_context(*, req: dict[str, Any], now: dt.datetime) -> dict[str, 
         "limit_up": "11.00",
         "limit_down": "9.00",
     }
-
-
-def _is_a_share_trading_window(now: dt.datetime) -> bool:
-    if now.weekday() >= 5:
-        return False
-    local = now.astimezone(SENTINEL_TZ).time()
-    return dt.time(9, 30) <= local <= dt.time(11, 30) or dt.time(13, 0) <= local <= dt.time(15, 0)
 
 
 def _now_cst() -> dt.datetime:

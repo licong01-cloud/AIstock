@@ -11,17 +11,19 @@ import json
 import logging
 import os
 from dataclasses import dataclass
+from enum import Enum
 from datetime import date
 from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-logger = logging.getLogger("aistock.research_assistant.service")
-
 import jsonschema
 
+from .context_budget import ContextBudgetPlan, ContextBudgetPlanner
+from .execution import ResearchAssistantExecutionMixin
 from .models import (
     ApprovalCreate,
+    CapabilitySyncRequest,
     ChatTurnRequest,
     ConversationCreate,
     ConversationMessageCreate,
@@ -47,12 +49,77 @@ from .models import (
     sha256_json,
     utc_now,
 )
+from .prompt_pack import (
+    DEFAULT_PROMPT_PACK_PATH,
+    PromptPackSnapshot,
+    load_prompt_pack,
+)
 from .repository import DatabaseResearchAssistantRepository
+from .runtime_config import DEFAULT_ENVIRONMENT, RUNTIME_CONFIG_KEY, RuntimeConfigSnapshot, load_runtime_config
 
+
+logger = logging.getLogger("aistock.research_assistant.service")
 
 ASSISTANT_APPROVAL_CONFIRM = "APPROVE_RESEARCH_ASSISTANT_ACTION"
 PROMPT_CACHE_DIR = Path(os.getenv("AISTOCK_ASSISTANT_PROMPT_CACHE_DIR", "var/research_assistant/prompt_cache"))
 CATALOG_BOOTSTRAP_ACTION = "POST /api/v1/research-assistant/catalogs/seed"
+
+
+class DialogueIntent(str, Enum):
+    CAPABILITY_INQUIRY = "capability_inquiry"
+    CONCEPT_EXPLANATION = "concept_explanation"
+    STATUS_QUERY = "status_query"
+    BUG_DIAGNOSIS_REQUEST = "bug_diagnosis_request"
+    ISSUE_INTAKE_REQUEST = "issue_intake_request"
+    EXPERIMENT_DRAFT_REQUEST = "experiment_draft_request"
+    EXPERIMENT_VALIDATION_REQUEST = "experiment_validation_request"
+    EXPERIMENT_EXECUTION_REQUEST = "experiment_execution_request"
+    LOCAL_DATA_MANAGEMENT_REQUEST = "local_data_management_request"
+    AMBIGUOUS_REQUEST = "ambiguous_request"
+    GENERAL_CHAT = "general_chat"
+    AUDIT_REQUEST = "audit_request"
+    RECOVERY_REQUEST = "recovery_request"
+
+
+DIALOGUE_INTENT_CONFIG_KEY = "dialogue_intent"
+DIALOGUE_MODES_CONFIG_KEY = "dialogue_modes"
+MODE_ROUTER_CONFIG_KEY = "mode_router"
+
+
+class DialogueMode(str, Enum):
+    DIALOGUE = "dialogue"
+    ANALYSIS = "analysis"
+    PLANNING = "planning"
+    PREFLIGHT = "preflight"
+    EXECUTION = "execution"
+    AUDIT = "audit"
+    RECOVERY = "recovery"
+
+
+@dataclass(frozen=True)
+class ModeDecision:
+    mode: DialogueMode
+    intent_type: DialogueIntent
+    confidence: float
+    mode_reason: str
+    requires_tool: bool
+    allowed_tool_side_effect: str
+    requires_user_confirmation: bool
+    requires_approval: bool
+    visible_audit_default: bool
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "mode": self.mode.value,
+            "intent_type": self.intent_type.value,
+            "confidence": self.confidence,
+            "mode_reason": self.mode_reason,
+            "requires_tool": self.requires_tool,
+            "allowed_tool_side_effect": self.allowed_tool_side_effect,
+            "requires_user_confirmation": self.requires_user_confirmation,
+            "requires_approval": self.requires_approval,
+            "visible_audit_default": self.visible_audit_default,
+        }
 
 
 class ResearchAssistantCatalogNotReadyError(RuntimeError):
@@ -91,7 +158,7 @@ DEFAULT_SKILLS: list[dict[str, Any]] = [
     {
         "skill_key": "develop-factor",
         "title": "Factor research task package",
-        "description": "Phase 1 registers planning capability only; assistant cannot write or submit code.",
+        "description": "Registers a planning and approval handoff for factor research tasks.",
         "domain": "factor_research",
         "risk_level": "high",
         "permission_scope": "plan_only",
@@ -124,10 +191,7 @@ DEFAULT_SKILLS: list[dict[str, Any]] = [
     {
         "skill_key": "local_data_management",
         "title": "Local data management capability",
-        "description": (
-            "Inspect local data readiness, sync targets, ingestion evidence, and repair plans through "
-            "the aistock-local-data MCP server; confirmed repair or sync execution requires approval."
-        ),
+        "description": "Inspect local data readiness, sync targets, ingestion evidence, and repair plans through the aistock-local-data MCP server; confirmed repair or sync execution requires approval.",
         "domain": "data_sync",
         "risk_level": "production_sensitive",
         "permission_scope": "read_plan_confirmed_write",
@@ -170,7 +234,9 @@ DEFAULT_MCP_TOOLS: list[dict[str, Any]] = [
     {
         "server_key": "research-assistant",
         "tool_name": "assistant_create_task",
-        "title": "Data health check",
+        "title": "创建研究助理任务",
+        "description": "创建 Research Assistant Task Ledger 记录，仅写入助理任务账本。",
+        "side_effect_level": "draft_only",
         "risk_level": "medium",
         "requires_approval": False,
         "input_schema_json": {"type": "object", "required": ["title"]},
@@ -181,7 +247,9 @@ DEFAULT_MCP_TOOLS: list[dict[str, Any]] = [
     {
         "server_key": "research-assistant",
         "tool_name": "assistant_build_context_pack",
-        "title": "Build Context Pack",
+        "title": "构建上下文包",
+        "description": "根据已审批 Memory/Graph/Temp Memory 构建 Context Pack，不触发外部执行。",
+        "side_effect_level": "read_only",
         "risk_level": "low",
         "requires_approval": False,
         "input_schema_json": {"type": "object"},
@@ -192,7 +260,9 @@ DEFAULT_MCP_TOOLS: list[dict[str, Any]] = [
     {
         "server_key": "research-assistant",
         "tool_name": "assistant_create_memory_candidate",
-        "title": "Create memory candidate",
+        "title": "创建候选记忆",
+        "description": "创建 draft memory candidate，不直接批准长期记忆。",
+        "side_effect_level": "draft_only",
         "risk_level": "medium",
         "requires_approval": False,
         "input_schema_json": {"type": "object", "required": ["memory_type", "subject_key", "title"]},
@@ -203,13 +273,80 @@ DEFAULT_MCP_TOOLS: list[dict[str, Any]] = [
     {
         "server_key": "research-assistant",
         "tool_name": "assistant_create_issue_candidate",
-        "title": "Create issue candidate",
+        "title": "创建候选 Issue",
+        "description": "创建本地候选 Issue，不直接创建正式 GitHub Issue。",
+        "side_effect_level": "draft_only",
         "risk_level": "medium",
         "requires_approval": False,
         "input_schema_json": {"type": "object", "required": ["title", "problem_statement"]},
         "output_schema_json": {"type": "object", "required": ["candidate_id", "status"]},
         "preflight_schema_json": {"checks": ["dedupe_key", "evidence_refs", "draft_only", "github_formal_issue_blocked"]},
         "required_confirmations": [],
+    },
+    {
+        "server_key": "aistock-qe-experiment",
+        "tool_name": "qe_template_materialize_confirmed",
+        "title": "物化 QE pending experiment",
+        "description": "在二次确认和审批后调用 QE template materialize。",
+        "side_effect_level": "high_cost_compute",
+        "risk_level": "production_sensitive",
+        "requires_approval": True,
+        "input_schema_json": {"type": "object", "required": ["template_id", "confirm_template"]},
+        "output_schema_json": {"type": "object"},
+        "preflight_schema_json": {"checks": ["stock_pool", "node_health", "cost", "approval"]},
+        "required_confirmations": ["MATERIALIZE_QE_TEMPLATE"],
+    },
+    {
+        "server_key": "aistock-qe-experiment",
+        "tool_name": "qe_template_create",
+        "title": "创建 QE template 草案",
+        "description": "创建 QE template draft，默认不 materialize、不 run。",
+        "risk_level": "medium",
+        "side_effect_level": "draft_only",
+        "requires_approval": False,
+        "input_schema_json": {"type": "object", "required": ["template_kind", "title", "config_json"]},
+        "output_schema_json": {"type": "object", "required": ["template_id", "status"]},
+        "preflight_schema_json": {"checks": ["schema", "fixed_seed", "draft_only"]},
+        "required_confirmations": ["CONFIRM_QE_DRAFT"],
+    },
+    {
+        "server_key": "aistock-qe-experiment",
+        "tool_name": "qe_template_validate",
+        "title": "校验 QE template",
+        "description": "校验 QE template 并返回 diff/summary，不 materialize、不 run。",
+        "risk_level": "medium",
+        "side_effect_level": "write_nonprod",
+        "requires_approval": False,
+        "input_schema_json": {"type": "object", "required": ["template_id"]},
+        "output_schema_json": {"type": "object", "required": ["validation"]},
+        "preflight_schema_json": {"checks": ["template_exists", "schema", "diff_summary"]},
+        "required_confirmations": ["CONFIRM_QE_VALIDATE"],
+    },
+    {
+        "server_key": "aistock-qe-experiment",
+        "tool_name": "qe_template_run_confirmed",
+        "title": "运行 QE experiment",
+        "description": "在 materialize 后启动 QE run，高成本，必须审批和成本确认。",
+        "risk_level": "high",
+        "side_effect_level": "high_cost_compute",
+        "requires_approval": True,
+        "input_schema_json": {"type": "object", "required": ["template_id", "confirm_run"]},
+        "output_schema_json": {"type": "object"},
+        "preflight_schema_json": {"checks": ["materialized_template", "cost_guard", "node_health", "approval"]},
+        "required_confirmations": ["CONFIRM_QE_RUN"],
+    },
+    {
+        "server_key": "aistock-validation",
+        "tool_name": "mcp_github_issue_create",
+        "title": "创建正式 GitHub Issue",
+        "description": "正式 GitHub Issue 创建，高风险，必须人工审批。",
+        "side_effect_level": "write_nonprod",
+        "risk_level": "high",
+        "requires_approval": True,
+        "input_schema_json": {"type": "object", "required": ["title"]},
+        "output_schema_json": {"type": "object"},
+        "preflight_schema_json": {"checks": ["github_token", "repository", "human_approval"]},
+        "required_confirmations": [ASSISTANT_APPROVAL_CONFIRM],
     },
     {
         "server_key": "aistock-local-data",
@@ -219,9 +356,9 @@ DEFAULT_MCP_TOOLS: list[dict[str, Any]] = [
         "risk_level": "low",
         "side_effect_level": "read_only",
         "requires_approval": False,
-        "input_schema_json": {"type": "object", "additionalProperties": True},
-        "output_schema_json": {"type": "object", "required": ["summary"]},
-        "preflight_schema_json": {"checks": ["server_health", "read_only", "readiness_authority"]},
+        "input_schema_json": {"type": "object"},
+        "output_schema_json": {"type": "object"},
+        "preflight_schema_json": {"checks": ["read_only", "facade"]},
         "required_confirmations": [],
     },
     {
@@ -232,9 +369,9 @@ DEFAULT_MCP_TOOLS: list[dict[str, Any]] = [
         "risk_level": "low",
         "side_effect_level": "read_only",
         "requires_approval": False,
-        "input_schema_json": {"type": "object", "required": ["dataset"], "properties": {"dataset": {"type": "string"}}},
-        "output_schema_json": {"type": "object", "required": ["dataset", "status"]},
-        "preflight_schema_json": {"checks": ["server_health", "dataset_key", "read_only"]},
+        "input_schema_json": {"type": "object", "required": ["dataset"]},
+        "output_schema_json": {"type": "object"},
+        "preflight_schema_json": {"checks": ["read_only", "facade"]},
         "required_confirmations": [],
     },
     {
@@ -245,9 +382,9 @@ DEFAULT_MCP_TOOLS: list[dict[str, Any]] = [
         "risk_level": "low",
         "side_effect_level": "read_only",
         "requires_approval": False,
-        "input_schema_json": {"type": "object", "additionalProperties": True},
-        "output_schema_json": {"type": "object", "required": ["items"]},
-        "preflight_schema_json": {"checks": ["server_health", "read_only", "target_status_filters"]},
+        "input_schema_json": {"type": "object"},
+        "output_schema_json": {"type": "object"},
+        "preflight_schema_json": {"checks": ["read_only", "facade"]},
         "required_confirmations": [],
     },
     {
@@ -258,9 +395,9 @@ DEFAULT_MCP_TOOLS: list[dict[str, Any]] = [
         "risk_level": "low",
         "side_effect_level": "read_only",
         "requires_approval": False,
-        "input_schema_json": {"type": "object", "additionalProperties": True},
-        "output_schema_json": {"type": "object", "required": ["items"]},
-        "preflight_schema_json": {"checks": ["server_health", "read_only", "attempt_filters"]},
+        "input_schema_json": {"type": "object"},
+        "output_schema_json": {"type": "object"},
+        "preflight_schema_json": {"checks": ["read_only", "facade"]},
         "required_confirmations": [],
     },
     {
@@ -269,11 +406,11 @@ DEFAULT_MCP_TOOLS: list[dict[str, Any]] = [
         "title": "Local data repair plan",
         "description": "Plan-only repair proposal built from health, gaps, jobs, alerts, and sync targets; does not execute.",
         "risk_level": "medium",
-        "side_effect_level": "plan_only",
+        "side_effect_level": "draft_only",
         "requires_approval": False,
-        "input_schema_json": {"type": "object", "additionalProperties": True},
-        "output_schema_json": {"type": "object", "required": ["plan", "approval_required"]},
-        "preflight_schema_json": {"checks": ["server_health", "read_only_inputs", "no_execution"]},
+        "input_schema_json": {"type": "object"},
+        "output_schema_json": {"type": "object"},
+        "preflight_schema_json": {"checks": ["plan_only", "no_execution"]},
         "required_confirmations": [],
     },
     {
@@ -284,38 +421,18 @@ DEFAULT_MCP_TOOLS: list[dict[str, Any]] = [
         "risk_level": "production_sensitive",
         "side_effect_level": "run_data_job",
         "requires_approval": True,
-        "input_schema_json": {
-            "type": "object",
-            "required": ["repair_plan_id", "confirm_apply"],
-            "properties": {"repair_plan_id": {"type": "string"}, "confirm_apply": {"type": "string"}},
-        },
-        "output_schema_json": {"type": "object", "required": ["status"]},
-        "preflight_schema_json": {"checks": ["server_health", "approval", "plan_digest", "business_state_write"]},
-        "required_confirmations": [ASSISTANT_APPROVAL_CONFIRM],
-    },
-    {
-        "server_key": "aistock-qe-experiment",
-        "tool_name": "qe_template_materialize_confirmed",
-        "title": "Materialize QE pending experiment",
-        "risk_level": "production_sensitive",
-        "requires_approval": True,
-        "input_schema_json": {"type": "object", "required": ["template_id", "confirm_template"]},
+        "input_schema_json": {"type": "object", "required": ["plan_id", "confirmation_text"]},
         "output_schema_json": {"type": "object"},
-        "preflight_schema_json": {"checks": ["stock_pool", "node_health", "cost", "approval"]},
-        "required_confirmations": ["MATERIALIZE_QE_TEMPLATE"],
-    },
-    {
-        "server_key": "aistock-validation",
-        "tool_name": "mcp_github_issue_create",
-        "title": "Create formal GitHub Issue",
-        "risk_level": "high",
-        "requires_approval": True,
-        "input_schema_json": {"type": "object", "required": ["title"]},
-        "output_schema_json": {"type": "object"},
-        "preflight_schema_json": {"checks": ["github_token", "repository", "human_approval"]},
+        "preflight_schema_json": {"checks": ["confirmation_text", "plan_id", "facade", "approval"]},
         "required_confirmations": [ASSISTANT_APPROVAL_CONFIRM],
     },
 ]
+
+
+DEFAULT_WORKFLOW_CAPABILITIES: list[dict[str, Any]] = [
+    dict(item) for item in load_runtime_config(environment=DEFAULT_ENVIRONMENT).config["planner"]["workflow_capabilities"]
+]
+
 
 
 DEFAULT_MODEL_PROFILES: list[dict[str, Any]] = [
@@ -377,192 +494,8 @@ DEFAULT_ROUTING_POLICIES: list[dict[str, Any]] = [
         "risk_level": "medium",
         "model_profile_id": "model_qwen_long_context",
         "status": "enabled",
-        "selector_json": {"token_estimate_gte": 64000},
+        "selector_json": {"token_estimate_gte_config_path": "model_routing.long_context_trigger_tokens"},
         "fallback_json": {"allow_fallback": True, "fallback_profile_id": "model_deepseek_v4_pro_primary"},
-    },
-]
-
-
-DEFAULT_PROMPT_NODES: list[dict[str, Any]] = [
-    {
-        "prompt_key": "root.assistant",
-        "title": "研究助理根提示词",
-        "category": "root",
-        "tree_path": "/root",
-        "phase": "planning",
-        "risk_level": "medium",
-        "trigger_json": {"always": True},
-        "prompt_text": (
-            "你是 AIstock 研究与实验综合助理。你必须先理解用户意图、用中文复述目标、提出必要确认问题，"
-            "再生成可审计计划。禁止控制鼠标键盘，禁止写代码，禁止绕过 MCP/API、审批、Trace 和 Memory。"
-        ),
-    },
-    {
-        "prompt_key": "governance.no_silent_action",
-        "title": "安全与审批根规则",
-        "category": "governance",
-        "tree_path": "/root/governance/no_silent_action",
-        "parent_key": "root.assistant",
-        "phase": "planning",
-        "risk_level": "high",
-        "trigger_json": {"always": True},
-        "prompt_text": (
-            "任何会创建实验、物化模板、运行任务、同步 GitHub、写长期记忆或影响生产数据的操作，都必须先输出计划卡和确认卡。"
-            "用户确认前只能做只读分析、草稿生成、preflight 或候选记录。"
-        ),
-    },
-    {
-        "prompt_key": "intent.planning",
-        "title": "意图理解与澄清",
-        "category": "intent",
-        "tree_path": "/root/intent/planning",
-        "parent_key": "root.assistant",
-        "phase": "planning",
-        "risk_level": "medium",
-        "trigger_json": {"always": True},
-        "prompt_text": (
-            "把用户输入拆成：目标、对象、约束、缺失信息、风险级别、下一步。"
-            "如果缺少必要参数，先问不超过 3 个关键问题。"
-        ),
-    },
-    {
-        "prompt_key": "prompt.local_data_management",
-        "title": "本地数据管理提示词分支",
-        "category": "domain",
-        "tree_path": "/root/domain/local_data_management",
-        "parent_key": "intent.planning",
-        "phase": "planning",
-        "risk_level": "production_sensitive",
-        "trigger_json": {
-            "keywords_any": [
-                "本地数据",
-                "数据同步",
-                "数据入库",
-                "同步目标",
-                "local_data",
-                "local data",
-                "data sync",
-                "dataset",
-                "ingestion",
-                "dataset_date_refresh_audit",
-                "data_sync_targets",
-                "cyq_perf",
-                "tushare",
-                "tdx",
-            ]
-        },
-        "prompt_text": (
-            "本地数据管理任务必须通过 aistock-local-data MCP 能力处理。"
-            "确认前只能调用 local_data_health_overview、local_data_get_dataset_status、"
-            "local_data_list_sync_targets、local_data_list_sync_attempts 等只读工具，或生成 local_data_plan_repair 修复计划。"
-            "不得在确认前启动同步、刷新、repair apply、直接写库或绕过 backend facade。"
-        ),
-    },
-    {
-        "prompt_key": "workflow.local_data_check_repair",
-        "title": "本地数据检查到修复计划工作流",
-        "category": "workflow",
-        "tree_path": "/root/domain/local_data_management/workflow/check_repair",
-        "parent_key": "prompt.local_data_management",
-        "phase": "planning",
-        "risk_level": "production_sensitive",
-        "trigger_json": {"keywords_any": ["检查", "排查", "修复", "恢复", "补齐", "同步", "健康", "repair", "fix", "sync", "refresh", "status"]},
-        "prompt_text": (
-            "本地数据检查/修复流程必须包含：1) 复述数据范围和只读边界；2) 读取 readiness、job、alert、target 证据；"
-            "3) 基于 dataset_date_refresh_audit 和 data_sync_targets 生成修复计划；4) 明确影响模块和风险；"
-            "5) 等待用户确认；6) 确认后才调用 *_confirmed 工具；7) 执行后复查状态。"
-        ),
-    },
-    {
-        "prompt_key": "tool_guard.mcp_local_data",
-        "title": "Local Data MCP 工具门禁",
-        "category": "tool_guard",
-        "tree_path": "/root/domain/local_data_management/tool_guard/mcp_local_data",
-        "parent_key": "prompt.local_data_management",
-        "phase": "preflight",
-        "risk_level": "production_sensitive",
-        "trigger_json": {
-            "tools_any": [
-                "local_data_apply_repair_confirmed",
-                "local_data_run_dataset_sync_confirmed",
-                "local_data_sync_tushare_all_confirmed",
-            ]
-        },
-        "prompt_text": (
-            "Local Data MCP 的写入型或运行型工具必须先校验工具目录、输入 schema、计划摘要、审批文本和生产边界。"
-            "任何 confirmed 工具缺少用户确认时必须保持 locked，只输出只读检查结果或修复计划。"
-        ),
-    },
-    {
-        "prompt_key": "domain.qe_experiment",
-        "title": "QE 实验创建分支提示词",
-        "category": "domain",
-        "tree_path": "/root/domain/qe_experiment",
-        "parent_key": "intent.planning",
-        "phase": "planning",
-        "risk_level": "high",
-        "trigger_json": {"keywords_any": ["qe", "quant", "loop", "实验", "回测", "演进", "模板"]},
-        "prompt_text": (
-            "QE 回测实验必须区分回测与实盘：回测优先使用固定 PIT 股票池或用户指定股票池，不得默认使用最新实盘股票池。"
-            "创建 QE 10 loop 这类任务时，先生成 loop 草稿、股票池/时间窗/因子来源确认点和 MCP preflight 计划，"
-            "不得在确认前调用 materialize 或 run。"
-        ),
-    },
-    {
-        "prompt_key": "workflow.qe_draft_then_approval",
-        "title": "QE 草稿到审批工作流",
-        "category": "workflow",
-        "tree_path": "/root/domain/qe_experiment/workflow/draft_then_approval",
-        "parent_key": "domain.qe_experiment",
-        "phase": "planning",
-        "risk_level": "high",
-        "trigger_json": {"keywords_any": ["创建", "生成", "10 loop", "实验"]},
-        "prompt_text": (
-            "QE 创建计划必须包含：1) 目标复述；2) 缺失参数；3) loop 草稿生成；4) 模板 validate；"
-            "5) stock pool / node / cost preflight；6) 等待用户确认；7) 确认后才进入物化/执行。"
-        ),
-    },
-    {
-        "prompt_key": "tool_guard.mcp_qe",
-        "title": "QE MCP 工具门禁",
-        "category": "tool_guard",
-        "tree_path": "/root/domain/qe_experiment/tool_guard/mcp_qe",
-        "parent_key": "domain.qe_experiment",
-        "phase": "preflight",
-        "risk_level": "production_sensitive",
-        "trigger_json": {"tools_any": ["qe_template_materialize_confirmed", "qe_custom_evo_run_confirmed"]},
-        "prompt_text": (
-            "调用 QE MCP 前必须检查工具目录、输入 schema、固定股票池文件、节点健康、成本和审批状态。"
-            "未通过检查时必须停止并报告具体阻断原因。"
-        ),
-    },
-    {
-        "prompt_key": "renderer.human_cards",
-        "title": "人类可读结果渲染",
-        "category": "renderer",
-        "tree_path": "/root/renderer/human_cards",
-        "parent_key": "root.assistant",
-        "phase": "result",
-        "risk_level": "low",
-        "trigger_json": {"always": True},
-        "prompt_text": (
-            "面向用户的主对话只能展示自然语言、计划卡、确认卡、结果卡和状态摘要。"
-            "禁止展示 raw JSON、payload、数据库 ID、trace ID、后台日志或乱码。"
-        ),
-    },
-    {
-        "prompt_key": "memory.candidate_only",
-        "title": "长期记忆候选规则",
-        "category": "memory",
-        "tree_path": "/root/memory/candidate_only",
-        "parent_key": "root.assistant",
-        "phase": "reflection",
-        "risk_level": "medium",
-        "trigger_json": {"keywords_any": ["记住", "长期", "偏好", "规则", "反思"]},
-        "prompt_text": (
-            "用户偏好、失败案例、研究结论和操作习惯只能先写入候选记忆或临时记忆，并绑定证据。"
-            "核心规则必须经主模型复核和用户审批后才能进入长期记忆。"
-        ),
     },
 ]
 
@@ -605,14 +538,7 @@ DEFAULT_MEMORY_SEEDS: list[dict[str, Any]] = [
             "再生成 repair plan；用户确认前不得启动同步、刷新、repair apply 或直接写库；执行后必须复查状态。"
         ),
         "content_json": {
-            "steps": [
-                "read_only_overview",
-                "collect_dataset_and_target_evidence",
-                "plan_repair_without_execution",
-                "request_user_confirmation",
-                "execute_confirmed_tools_only_after_confirmation",
-                "post_repair_recheck",
-            ],
+            "steps": ["readiness_check", "repair_plan", "confirmation_gate", "confirmed_execution", "post_repair_recheck"],
             "blocked_before_confirmation": ["local_data_apply_repair_confirmed", "local_data_run_dataset_sync_confirmed"],
         },
         "source_type": "design_seed",
@@ -624,31 +550,6 @@ DEFAULT_MEMORY_SEEDS: list[dict[str, Any]] = [
         "created_by": "system_seed",
         "approved_by": "design_seed",
     },
-    {
-        "memory_id": "mem_architecture_data_readiness_audit_authority",
-        "memory_type": "architecture",
-        "namespace": "aistock",
-        "subject_key": "architecture.data_readiness.audit_authority",
-        "title": "Dataset readiness audit authority",
-        "content_text": (
-            "market.dataset_date_refresh_audit 是数据 readiness 权威源；data_stats 是可重建缓存，"
-            "ingestion_jobs 是执行证据，data_sync_targets/data_sync_attempts 是同步目标和修复计划依据。"
-        ),
-        "content_json": {
-            "authority": "market.dataset_date_refresh_audit",
-            "cache": "market.data_stats",
-            "execution_evidence": "market.ingestion_jobs",
-            "repair_state": ["market.data_sync_targets", "market.data_sync_attempts"],
-        },
-        "source_type": "design_seed",
-        "source_ref": "docs/architecture/local_data_management_mcp_gateway_design_20260523.md",
-        "confidence": 0.96,
-        "approval_status": "approved",
-        "risk_level": "medium",
-        "evidence_refs": ["docs/architecture/local_data_management_mcp_gateway_design_20260523.md#memory-seeds"],
-        "created_by": "system_seed",
-        "approved_by": "design_seed",
-    },
 ]
 
 
@@ -657,13 +558,7 @@ DEFAULT_GRAPH_ENTITIES: list[dict[str, Any]] = [
         "entity_key": "module.research_assistant",
         "entity_type": "module",
         "title": "Research Assistant",
-        "summary": "AIstock assistant catalog, prompt, memory, and MCP orchestration layer.",
-    },
-    {
-        "entity_key": "module.data_sync",
-        "entity_type": "module",
-        "title": "Data sync and local data health",
-        "summary": "Local data synchronization, readiness, and repair-planning module.",
+        "summary": "Assistant orchestration, prompt, memory, graph, and MCP safety layer.",
     },
     {
         "entity_key": "capability.local_data_management",
@@ -688,18 +583,6 @@ DEFAULT_GRAPH_ENTITIES: list[dict[str, Any]] = [
         "entity_type": "process",
         "title": "Local data check and repair flow",
         "summary": "Read-only check, repair plan, confirmation, confirmed execution, and post-repair recheck.",
-    },
-    {
-        "entity_key": "data.dataset_date_refresh_audit",
-        "entity_type": "data_source",
-        "title": "dataset_date_refresh_audit",
-        "summary": "Readiness authority for dataset/date availability.",
-    },
-    {
-        "entity_key": "data.data_sync_targets",
-        "entity_type": "data_source",
-        "title": "data_sync_targets and attempts",
-        "summary": "Status sources for expected sync targets, attempts, retry, and final blocking states.",
     },
 ]
 
@@ -729,19 +612,11 @@ DEFAULT_GRAPH_RELATIONS: list[dict[str, Any]] = [
         "target_entity_key": "mcp.local_data",
         "relation_type": "uses",
     },
-    {
-        "relation_key": "local_data_facade_reads_audit_authority",
-        "source_entity_key": "api.local_data_facade",
-        "target_entity_key": "data.dataset_date_refresh_audit",
-        "relation_type": "reads",
-    },
-    {
-        "relation_key": "local_data_facade_reads_sync_targets",
-        "source_entity_key": "api.local_data_facade",
-        "target_entity_key": "data.data_sync_targets",
-        "relation_type": "reads",
-    },
 ]
+
+
+DEFAULT_PROMPT_PACK: PromptPackSnapshot = load_prompt_pack(DEFAULT_PROMPT_PACK_PATH)
+DEFAULT_PROMPT_NODES: list[dict[str, Any]] = DEFAULT_PROMPT_PACK.nodes
 
 
 CATALOG_READINESS_REQUIREMENTS: list[dict[str, Any]] = [
@@ -764,6 +639,12 @@ CATALOG_READINESS_REQUIREMENTS: list[dict[str, Any]] = [
         "filters": {"status": "enabled"},
     },
     {
+        "catalog": "capabilities",
+        "label": "Capability Registry",
+        "expected_min": len(DEFAULT_WORKFLOW_CAPABILITIES),
+        "filters": {"status": "approved"},
+    },
+    {
         "catalog": "model_profiles",
         "label": "Primary Model Profiles",
         "expected_min": 1,
@@ -781,6 +662,18 @@ CATALOG_READINESS_REQUIREMENTS: list[dict[str, Any]] = [
         "expected_min": len(DEFAULT_PROMPT_NODES),
         "filters": {"status": "enabled"},
     },
+    {
+        "catalog": "prompt_activations",
+        "label": "Prompt Pack Activation",
+        "expected_min": 1,
+        "filters": {"status": "active", "assistant_key": "research_assistant"},
+    },
+    {
+        "catalog": "runtime_config_activations",
+        "label": "Runtime Context Config Activation",
+        "expected_min": 1,
+        "filters": {"status": "active", "config_key": RUNTIME_CONFIG_KEY},
+    },
 ]
 
 
@@ -793,6 +686,12 @@ class LlmCallResult:
     usage: dict[str, Any]
 
 
+
+
+def _default_workflow_capabilities() -> list[dict[str, Any]]:
+    return DEFAULT_WORKFLOW_CAPABILITIES
+
+
 class ResearchAssistantLlmClient:
     """Small LiteLLM wrapper for assistant chat turns.
 
@@ -800,7 +699,7 @@ class ResearchAssistantLlmClient:
     credentials are missing; there is no canned success fallback.
     """
 
-    def complete(self, *, messages: list[dict[str, str]], model_profile: dict[str, Any], temperature: float = 0.2, max_tokens: int = 1200) -> LlmCallResult:
+    def complete(self, *, messages: list[dict[str, str]], model_profile: dict[str, Any], temperature: float, max_tokens: int) -> LlmCallResult:
         provider = str(model_profile.get("provider") or "").strip()
         model_name = str(model_profile.get("model_name") or "").strip()
         if not provider or not model_name:
@@ -835,10 +734,25 @@ class ResearchAssistantLlmClient:
         return LlmCallResult(content=content, provider=provider, model=model_id, duration_ms=duration_ms, usage=usage)
 
 
-class ResearchAssistantService:
-    def __init__(self, repository: Any | None = None, llm_client: Any | None = None) -> None:
+class ResearchAssistantService(ResearchAssistantExecutionMixin):
+    @staticmethod
+    def default_workflow_capabilities() -> list[dict[str, Any]]:
+        return _default_workflow_capabilities()
+
+    def __init__(self, repository: Any | None = None, llm_client: Any | None = None, *, environment: str = DEFAULT_ENVIRONMENT) -> None:
         self.repository = repository or DatabaseResearchAssistantRepository()
         self.llm_client = llm_client or ResearchAssistantLlmClient()
+        self.environment = environment
+        self.context_budget_planner = ContextBudgetPlanner()
+
+
+    def _workflow_capabilities(self) -> list[dict[str, Any]]:
+        configured = self.active_runtime_config().get("planner", {}).get("workflow_capabilities")
+        if configured is None:
+            return self.default_workflow_capabilities()
+        if not isinstance(configured, list):
+            raise ValueError("planner.workflow_capabilities must be a list when configured")
+        return [dict(item) for item in configured]
 
     def health(self) -> dict[str, Any]:
         repository_health = self.repository.health()
@@ -861,12 +775,22 @@ class ResearchAssistantService:
             "status": status,
             "repository": repository_health,
             "catalog_readiness": catalog_readiness,
-            "phase": "phase1",
-            "runtime_boundaries": {
-                "mouse_keyboard_control": False,
-                "code_write": False,
-                "auto_github_issue": False,
-                "production_trading_path": False,
+            "phase": "mcp_skill_execution_closure",
+            "implemented_capabilities": {
+                "mcp_api_preflight": True,
+                "approval_gates": True,
+                "trace_audit": True,
+                "memory_audit": True,
+                "prompt_pack_activation": True,
+                "runtime_context_config": True,
+                "capability_registry": True,
+                "action_proposals": True,
+                "execution_gateway": True,
+                "qe_create_experiment_workflow": True,
+            },
+            "governance_boundaries": {
+                "formal_github_issue_requires_approval": True,
+                "production_trading_requires_external_gate": True,
                 "silent_fallback": False,
             },
         }
@@ -915,6 +839,43 @@ class ResearchAssistantService:
         if not readiness["ready"]:
             raise ResearchAssistantCatalogNotReadyError(readiness)
         return readiness
+
+    def active_runtime_config(self) -> dict[str, Any]:
+        activation = self.repository.find_one(
+            "runtime_config_activations",
+            {"config_key": RUNTIME_CONFIG_KEY, "environment": self.environment, "status": "active"},
+        )
+        if not activation:
+            raise RuntimeError("Research Assistant runtime config activation is missing; run catalog seed/import first")
+        return dict(activation["config_json"])
+
+    def active_runtime_config_activation(self) -> dict[str, Any]:
+        activation = self.repository.find_one(
+            "runtime_config_activations",
+            {"config_key": RUNTIME_CONFIG_KEY, "environment": self.environment, "status": "active"},
+        )
+        if not activation:
+            raise RuntimeError("Research Assistant runtime config activation is missing; run catalog seed/import first")
+        return activation
+
+    def active_prompt_activation(self) -> dict[str, Any]:
+        activation = self.repository.find_one(
+            "prompt_activations",
+            {"assistant_key": "research_assistant", "environment": self.environment, "status": "active"},
+        )
+        if not activation:
+            raise RuntimeError("Research Assistant prompt activation is missing; run catalog seed/import first")
+        return activation
+
+    def configured_limit(self, key: str) -> int:
+        config = self.active_runtime_config()
+        limits = config.get("query_limits") or {}
+        if key not in limits:
+            raise KeyError(f"Research Assistant runtime query limit is missing: {key}")
+        value = int(limits[key])
+        if value <= 0:
+            raise ValueError(f"Research Assistant runtime query limit must be positive: {key}")
+        return value
 
     def overview(self) -> dict[str, Any]:
         task_status = self.repository.counts("tasks", "status")
@@ -969,41 +930,57 @@ class ResearchAssistantService:
             "skills": 0,
             "mcp_servers": 0,
             "mcp_tools": 0,
+            "capabilities": 0,
             "model_profiles": 0,
             "routing_policies": 0,
             "prompt_nodes": 0,
+            "prompt_node_versions": 0,
+            "prompt_activations": 0,
+            "runtime_config_activations": 0,
             "memory_items": 0,
             "graph_entities": 0,
             "graph_relations": 0,
             "reports": 0,
             "notifications": 0,
         }
+        runtime_config = load_runtime_config(environment=self.environment)
+        self._seed_runtime_config(runtime_config, seeded)
         for item in DEFAULT_SKILLS:
-            risk_level = item["risk_level"]
-            permission_scope = item["permission_scope"]
             payload = {
                 "skill_id": f"skill_{item['skill_key']}",
                 "version": "1.0.0",
-                "skill_type": item.get("skill_type", "local_codex_skill"),
-                "entrypoint_type": item.get("entrypoint_type", "local_skill"),
-                "entrypoint_ref": item.get("entrypoint_ref", item["skill_key"]),
-                "allowed_side_effect_level": item.get("allowed_side_effect_level", "none" if permission_scope == "read_analysis" else "draft_only"),
-                "required_approval_level": item.get("required_approval_level", "L0" if risk_level == "low" else "L1" if risk_level == "medium" else "L2"),
+                "skill_type": "local_codex_skill",
+                "entrypoint_type": "local_skill",
+                "entrypoint_ref": item["skill_key"],
+                "allowed_side_effect_level": "none" if item["permission_scope"] == "read_analysis" else "draft_only",
+                "required_approval_level": "L1" if item["risk_level"] == "medium" else "L2",
                 "owner": "codex",
-                "source_ref": item.get("source_ref", f"C:/Users/lc999/.codex/skills/{item['skill_key']}/SKILL.md"),
+                "source_ref": f"C:/Users/lc999/.codex/skills/{item['skill_key']}/SKILL.md",
                 "status": "approved",
                 "checksum": sha256_json(item),
-                "required_mcp_tools": item.get("required_mcp_tools", []),
+                "required_mcp_tools": [],
                 "skill_key": item["skill_key"],
                 "title": item["title"],
                 "description": item["description"],
                 "domain": item["domain"],
-                "risk_level": risk_level,
-                "permission_scope": permission_scope,
+                "risk_level": item["risk_level"],
+                "permission_scope": item["permission_scope"],
                 "tags_json": item["tags_json"],
                 "input_schema_json": item["input_schema_json"],
                 "output_schema_json": item["output_schema_json"],
             }
+            payload.update(
+                {
+                    "skill_type": item.get("skill_type", payload["skill_type"]),
+                    "entrypoint_type": item.get("entrypoint_type", payload["entrypoint_type"]),
+                    "entrypoint_ref": item.get("entrypoint_ref", payload["entrypoint_ref"]),
+                    "allowed_side_effect_level": item.get("allowed_side_effect_level", payload["allowed_side_effect_level"]),
+                    "required_approval_level": item.get("required_approval_level", payload["required_approval_level"]),
+                    "source_ref": item.get("source_ref", payload["source_ref"]),
+                    "status": item.get("status", payload["status"]),
+                    "required_mcp_tools": item.get("required_mcp_tools", payload["required_mcp_tools"]),
+                }
+            )
             self.repository.create_record("skills", payload)
             seeded["skills"] += 1
         for item in DEFAULT_MCP_SERVERS:
@@ -1024,16 +1001,13 @@ class ResearchAssistantService:
             policy["fallback_profile_id"] = policy.get("fallback_json", {}).get("fallback_profile_id")
             self.repository.create_record("routing_policies", policy)
             seeded["routing_policies"] += 1
-        for item in DEFAULT_PROMPT_NODES:
-            prompt = PromptNodeCreate(**item)
-            payload = prompt.model_dump()
-            payload["prompt_node_id"] = f"prompt_{prompt.prompt_key.replace('.', '_')}"
-            payload["checksum"] = sha256_json({"prompt_key": prompt.prompt_key, "version": prompt.version, "prompt_text": prompt.prompt_text})
-            self.repository.create_record("prompt_nodes", payload)
-            seeded["prompt_nodes"] += 1
+        prompt_pack = load_prompt_pack(DEFAULT_PROMPT_PACK_PATH)
+        self._seed_prompt_pack(prompt_pack, seeded)
+        capability_sync = self.sync_capabilities({"apply": True, "requested_by": "seed_catalogs"})
+        seeded["capabilities"] += int(capability_sync["applied_count"])
         self._seed_default_memory_graph(seeded)
         self._ensure_default_reports_and_notifications(seeded)
-        return {"seeded": seeded, "catalog_version": "research_assistant_phase1_chat_prompt_catalog_20260524"}
+        return {"seeded": seeded, "catalog_version": "research_assistant_mcp_skill_execution_20260525"}
 
     def _seed_default_memory_graph(self, seeded: dict[str, int]) -> None:
         for item in DEFAULT_MEMORY_SEEDS:
@@ -1082,8 +1056,240 @@ class ResearchAssistantService:
             )
             seeded["graph_relations"] += 1
 
-    def list_records(self, kind: str, *, filters: dict[str, Any] | None = None, search: str | None = None, limit: int = 50, offset: int = 0) -> dict[str, Any]:
-        return self.repository.list_records(kind, filters=filters, search=search, limit=limit, offset=offset)
+
+    def _normalize_capability_catalog(self, *, include_disabled: bool = False) -> list[dict[str, Any]]:
+        capabilities: list[dict[str, Any]] = []
+        approved_tools = {
+            (str(tool.get("server_key")), str(tool.get("tool_name"))): tool
+            for tool in self.repository.list_records("mcp_tools", limit=self.configured_limit("api_list_mcp_tools"))["items"]
+            if include_disabled or str(tool.get("status")) in {"enabled", "approved", "ready"}
+        }
+        approved_skills = {
+            str(skill.get("skill_key")): skill
+            for skill in self.repository.list_records("skills", limit=self.configured_limit("api_list_skills"))["items"]
+            if include_disabled or str(skill.get("status")) == "approved"
+        }
+        now = utc_now().isoformat()
+        for item in self._workflow_capabilities():
+            mcp_refs = list(item.get("mcp_tool_refs") or [])
+            skill_refs = [str(ref) for ref in item.get("skill_refs") or []]
+            missing_refs = [ref for ref in mcp_refs if (str(ref.get("server_key")), str(ref.get("tool_name"))) not in approved_tools]
+            missing_skills = [ref for ref in skill_refs if ref not in approved_skills]
+            status = str(item.get("status") or "approved")
+            if missing_refs or missing_skills:
+                status = "blocked"
+            if not include_disabled and status in {"disabled", "deprecated", "blocked"}:
+                continue
+            payload = {
+                "capability_id": f"cap_{str(item['capability_key']).replace('.', '_').replace('-', '_')}",
+                "last_synced_at": now,
+                **item,
+                "status": status,
+            }
+            checksum_payload = {k: v for k, v in payload.items() if k not in {"capability_id", "last_synced_at", "checksum", "created_at", "updated_at"}}
+            if missing_refs or missing_skills:
+                checksum_payload["missing_refs"] = {"mcp": missing_refs, "skills": missing_skills}
+            payload["checksum"] = sha256_json(checksum_payload)
+            capabilities.append(payload)
+        return capabilities
+
+    def sync_capabilities(self, request: CapabilitySyncRequest | dict[str, Any] | None = None) -> dict[str, Any]:
+        data = request if isinstance(request, CapabilitySyncRequest) else CapabilitySyncRequest(**(request or {}))
+        runtime_config = self.active_runtime_config()
+        sync_cfg = runtime_config["capability_sync"]
+        if not bool(sync_cfg.get("enabled", True)):
+            raise ValueError("capability sync is disabled by runtime config")
+        capabilities = self._normalize_capability_catalog(include_disabled=data.include_disabled)
+        max_tools = int(sync_cfg["max_tools_per_server"])
+        if len(capabilities) > max_tools:
+            raise ValueError(f"capability sync exceeded runtime limit: {max_tools}")
+        existing_page = self.repository.list_records("capabilities", limit=self.configured_limit("api_list_capabilities"))
+        existing_by_key = {str(item.get("capability_key")): item for item in existing_page["items"]}
+        diff: list[dict[str, Any]] = []
+        applied_count = 0
+        for capability in capabilities:
+            current = existing_by_key.get(str(capability["capability_key"]))
+            change = "create" if not current else "unchanged" if current.get("checksum") == capability["checksum"] and current.get("status") == capability["status"] else "update"
+            diff.append(
+                {
+                    "capability_key": capability["capability_key"],
+                    "change": change,
+                    "status": capability["status"],
+                    "risk_level": capability["risk_level"],
+                    "side_effect_level": capability["side_effect_level"],
+                    "checksum": capability["checksum"],
+                }
+            )
+            if data.apply and change in {"create", "update"}:
+                self.repository.create_record("capabilities", capability)
+                applied_count += 1
+        result = {
+            "dry_run": not data.apply,
+            "requested_by": data.requested_by,
+            "source_count": len(capabilities),
+            "applied_count": applied_count,
+            "diff": diff,
+            "blocked_or_disabled_excluded": not data.include_disabled,
+            "runtime_config": {
+                "max_tools_per_server": max_tools,
+                "timeout_seconds": sync_cfg["timeout_seconds"],
+                "require_checksum": sync_cfg["require_checksum"],
+            },
+        }
+        self.create_trace_event(
+            TraceEventCreate(
+                event_type="capability_sync",
+                component="research_assistant.capability_sync",
+                status="applied" if data.apply else "dry_run",
+                payload_json={"source_count": len(capabilities), "applied_count": applied_count, "diff": diff[:20]},
+            )
+        )
+        return result
+
+    def _seed_prompt_pack(self, prompt_pack: PromptPackSnapshot, seeded: dict[str, int]) -> None:
+        active = self.repository.list_records(
+            "prompt_activations",
+            filters={"assistant_key": "research_assistant", "environment": self.environment, "status": "active"},
+            limit=self.configured_limit("api_list_prompt_activations"),
+        )["items"]
+        for item in active:
+            if item.get("activation_id") != prompt_pack.activation_id:
+                self.repository.update_record("prompt_activations", str(item["activation_id"]), {"status": "retired", "active_to": utc_now().isoformat()})
+        source = self.repository.create_record(
+            "prompt_sources",
+            {
+                "source_id": prompt_pack.source_id,
+                "pack_key": prompt_pack.pack_key,
+                "pack_version": prompt_pack.pack_version,
+                "source_path": prompt_pack.source_path,
+                "source_sha256": prompt_pack.source_sha256,
+                "status": "approved",
+                "metadata_json": {"schema": "aistock_prompt_pack_v1"},
+                "imported_by": "seed_catalogs",
+            },
+        )
+        version_refs: list[dict[str, Any]] = []
+        for item in prompt_pack.nodes:
+            prompt = PromptNodeCreate(**{k: v for k, v in item.items() if k != "checksum"})
+            payload = prompt.model_dump()
+            payload["prompt_node_id"] = f"prompt_{prompt.prompt_key.replace('.', '_')}"
+            payload["checksum"] = item.get("checksum") or sha256_json({"prompt_key": prompt.prompt_key, "version": prompt.version, "prompt_text": prompt.prompt_text})
+            self.repository.create_record("prompt_nodes", payload)
+            seeded["prompt_nodes"] += 1
+            version_id = f"prompt_version_{prompt.prompt_key.replace('.', '_')}_{payload['checksum'][:16]}"
+            version = self.repository.create_record(
+                "prompt_node_versions",
+                {
+                    "version_id": version_id,
+                    "source_id": source["source_id"],
+                    "pack_key": prompt_pack.pack_key,
+                    "pack_version": prompt_pack.pack_version,
+                    "prompt_key": prompt.prompt_key,
+                    "prompt_node_id": payload["prompt_node_id"],
+                    "title": prompt.title,
+                    "category": prompt.category,
+                    "tree_path": prompt.tree_path,
+                    "parent_key": prompt.parent_key,
+                    "phase": prompt.phase,
+                    "trigger_json": prompt.trigger_json,
+                    "prompt_text": prompt.prompt_text,
+                    "risk_level": prompt.risk_level,
+                    "source_ref": prompt.source_ref or item.get("source_ref") or prompt_pack.source_path,
+                    "checksum": payload["checksum"],
+                    "status": "approved",
+                    "metadata_json": {"source_path": prompt_pack.source_path},
+                },
+            )
+            version_refs.append({"prompt_key": prompt.prompt_key, "version_id": version["version_id"], "checksum": payload["checksum"]})
+            seeded["prompt_node_versions"] += 1
+        self.repository.create_record(
+            "prompt_activations",
+            {
+                "activation_id": prompt_pack.activation_id,
+                "assistant_key": "research_assistant",
+                "environment": self.environment,
+                "pack_key": prompt_pack.pack_key,
+                "pack_version": prompt_pack.pack_version,
+                "source_id": source["source_id"],
+                "version_refs": version_refs,
+                "bundle_signature": sha256_json(version_refs),
+                "status": "active",
+                "activated_by": "seed_catalogs",
+                "activation_metadata_json": {"source_sha256": prompt_pack.source_sha256},
+            },
+        )
+        self.repository.create_record(
+            "prompt_activation_events",
+            {
+                "event_id": new_id("pactevt"),
+                "activation_id": prompt_pack.activation_id,
+                "event_type": "seed_or_refresh",
+                "actor": "seed_catalogs",
+                "event_json": {"pack_key": prompt_pack.pack_key, "pack_version": prompt_pack.pack_version},
+            },
+        )
+        seeded["prompt_activations"] += 1
+
+    def _seed_runtime_config(self, runtime_config: RuntimeConfigSnapshot, seeded: dict[str, int]) -> None:
+        active = self.repository.list_records(
+            "runtime_config_activations",
+            filters={"config_key": runtime_config.config_key, "environment": runtime_config.environment, "status": "active"},
+            limit=int(runtime_config.config["query_limits"]["api_list_runtime_config_activations"]),
+        )["items"]
+        for item in active:
+            if item.get("activation_id") != runtime_config.activation_id:
+                self.repository.update_record("runtime_config_activations", str(item["activation_id"]), {"status": "retired", "active_to": utc_now().isoformat()})
+        source = self.repository.create_record(
+            "runtime_config_sources",
+            {
+                "source_id": runtime_config.source_id,
+                "config_key": runtime_config.config_key,
+                "config_version": runtime_config.config_version,
+                "source_path": runtime_config.source_path,
+                "source_sha256": runtime_config.source_sha256,
+                "config_json": runtime_config.config,
+                "status": "approved",
+                "metadata_json": {"schema": runtime_config.config.get("schema_version")},
+                "imported_by": "seed_catalogs",
+            },
+        )
+        self.repository.create_record(
+            "runtime_config_activations",
+            {
+                "activation_id": runtime_config.activation_id,
+                "config_key": runtime_config.config_key,
+                "config_version": runtime_config.config_version,
+                "environment": runtime_config.environment,
+                "source_id": source["source_id"],
+                "config_json": runtime_config.config,
+                "status": "active",
+                "activated_by": "seed_catalogs",
+                "activation_metadata_json": {"source_sha256": runtime_config.source_sha256},
+            },
+        )
+        seeded["runtime_config_activations"] += 1
+
+    def list_records(
+        self,
+        kind: str,
+        *,
+        filters: dict[str, Any] | None = None,
+        search: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+        limit_key: str | None = None,
+    ) -> dict[str, Any]:
+        resolved_limit = int(limit) if limit is not None else self.configured_limit(limit_key or self._default_query_limit_key(kind))
+        if resolved_limit < 1:
+            raise ValueError("limit must be positive")
+        max_limit = self.configured_limit("api_list_max_page_size")
+        if resolved_limit > max_limit:
+            raise ValueError(f"limit exceeds configured api_list_max_page_size: {max_limit}")
+        return self.repository.list_records(kind, filters=filters, search=search, limit=resolved_limit, offset=offset)
+
+    @staticmethod
+    def _default_query_limit_key(kind: str) -> str:
+        return f"api_list_{kind}"
 
     def create_conversation(self, request: ConversationCreate | dict[str, Any]) -> dict[str, Any]:
         data = request if isinstance(request, ConversationCreate) else ConversationCreate(**request)
@@ -1093,7 +1299,7 @@ class ResearchAssistantService:
         conversation = self.repository.get_record("conversations", conversation_id)
         if not conversation:
             raise KeyError(f"conversation not found: {conversation_id}")
-        messages = self.repository.list_records("conversation_messages", filters={"conversation_id": conversation_id}, limit=500)["items"]
+        messages = self.repository.list_records("conversation_messages", filters={"conversation_id": conversation_id}, limit=self.configured_limit("conversation_messages_full"))["items"]
         messages.sort(key=lambda item: str(item.get("created_at") or ""))
         return {"conversation": conversation, "messages": messages}
 
@@ -1109,7 +1315,21 @@ class ResearchAssistantService:
     def build_prompt_bundle(self, request: PromptBundleBuildRequest | dict[str, Any]) -> dict[str, Any]:
         data = request if isinstance(request, PromptBundleBuildRequest) else PromptBundleBuildRequest(**request)
         self.ensure_catalog_ready()
-        available = self.repository.list_records("prompt_nodes", filters={"status": "enabled"}, limit=500)["items"]
+        dialogue_intent = self._classify_dialogue_intent(data.user_message)
+        mode_decision = data.mode_decision or self._decide_dialogue_mode(
+            data.user_message,
+            dialogue_intent=dialogue_intent,
+            phase=data.phase,
+            allow_execute=False,
+            risk_level="medium",
+            override=data.dialogue_mode,
+        ).as_dict()
+        dialogue_mode = str(data.dialogue_mode or mode_decision.get("mode") or self._dialogue_modes_config().get("default_mode") or DialogueMode.DIALOGUE.value)
+        data.mode_decision = mode_decision
+        data.dialogue_mode = dialogue_mode
+        activation = self.active_prompt_activation()
+        version_refs = list(activation.get("version_refs") or [])
+        available = self.repository.list_records("prompt_nodes", filters={"status": "enabled"}, limit=self.configured_limit("prompt_nodes_active"))["items"]
         if not available:
             raise RuntimeError("Prompt Tree is empty; run /research-assistant/catalogs/seed before chat")
         selected = self._select_prompt_nodes(available, data)
@@ -1129,13 +1349,19 @@ class ResearchAssistantService:
         bundle_text = "\n\n".join(f"### {item['title']}\n{item['prompt_text']}" for item in selected)
         bundle_json = {
             "phase": data.phase,
+            "dialogue_mode": dialogue_mode,
             "node_count": len(selected),
             "prompt_keys": [item["prompt_key"] for item in selected],
             "user_message_digest": sha256_json({"message": data.user_message}),
         }
         selection_trace = {
-            "algorithm": "ancestor_closed_keyword_multibranch_v1",
+            "algorithm": "mode_routed_prompt_tree_v1",
+            "dialogue_intent": dialogue_intent.value,
+            "dialogue_mode": dialogue_mode,
+            "mode_decision": mode_decision,
             "phase": data.phase,
+            "prompt_activation_id": activation["activation_id"],
+            "prompt_bundle_signature": activation.get("bundle_signature"),
             "matched_prompt_keys": bundle_json["prompt_keys"],
             "required_prompt_keys": data.required_prompt_keys,
             "cache_enabled": data.cache_enabled,
@@ -1148,6 +1374,8 @@ class ResearchAssistantService:
             "conversation_id": data.conversation_id,
             "phase": data.phase,
             "model_profile_id": data.model_profile_id,
+            "activation_id": activation["activation_id"],
+            "version_refs": version_refs,
             "node_refs": node_refs,
             "selection_trace_json": selection_trace,
             "bundle_json": bundle_json,
@@ -1161,7 +1389,7 @@ class ResearchAssistantService:
                 data.task_id,
                 TaskEventCreate(
                     event_type="prompt_bundle_built",
-                    message="已按树型提示词选择必要分支，生成本轮提示词包。",
+                    message=self._dialogue_event_message("prompt_bundle_built"),
                     payload_json={"prompt_bundle_id": bundle["prompt_bundle_id"], "prompt_keys": bundle_json["prompt_keys"], "checksum": checksum},
                 ),
             )
@@ -1169,36 +1397,34 @@ class ResearchAssistantService:
 
     def _select_prompt_nodes(self, available: list[dict[str, Any]], data: PromptBundleBuildRequest) -> list[dict[str, Any]]:
         by_key = {str(item["prompt_key"]): item for item in available}
-        lower_message = data.user_message.lower()
-        is_qe_request = self._is_qe_request(data.user_message)
+        intent = self._classify_dialogue_intent(data.user_message)
+        mode = str(data.dialogue_mode or (data.mode_decision or {}).get("mode") or self._dialogue_modes_config().get("default_mode") or DialogueMode.DIALOGUE.value)
+        mode_cfg = self._dialogue_mode_config(mode)
         selected_keys: set[str] = set(data.required_prompt_keys)
-        for item in available:
-            trigger = item.get("trigger_json") or {}
-            if trigger.get("always"):
-                selected_keys.add(str(item["prompt_key"]))
-                continue
-            prompt_key = str(item["prompt_key"])
-            if item.get("phase") == data.phase and self._trigger_matches(trigger, lower_message):
-                if prompt_key.startswith("workflow.qe") and not is_qe_request:
-                    continue
-                selected_keys.add(prompt_key)
-            if str(item.get("phase")) in {"preflight", "result"} and data.phase == str(item.get("phase")) and self._trigger_matches(trigger, lower_message):
-                selected_keys.add(prompt_key)
-        if any(key.startswith("domain.qe") or key.startswith("workflow.qe") for key in selected_keys):
+        configured_prompt_nodes = mode_cfg.get("prompt_nodes")
+        if isinstance(configured_prompt_nodes, list) and configured_prompt_nodes:
+            selected_keys.update(str(key) for key in configured_prompt_nodes)
+        else:
+            selected_keys.update({"root.assistant", f"mode.{mode}"})
+        task_modes = {DialogueMode.PLANNING.value, DialogueMode.PREFLIGHT.value, DialogueMode.EXECUTION.value}
+        if mode in task_modes and intent in {
+            DialogueIntent.EXPERIMENT_DRAFT_REQUEST,
+            DialogueIntent.EXPERIMENT_VALIDATION_REQUEST,
+            DialogueIntent.EXPERIMENT_EXECUTION_REQUEST,
+        }:
             selected_keys.add("domain.qe_experiment")
-            selected_keys.add("workflow.qe_draft_then_approval")
-            selected_keys.add("tool_guard.mcp_qe")
-        if self._is_local_data_management_request(data.user_message) or any(
-            key in {"prompt.local_data_management", "workflow.local_data_check_repair", "tool_guard.mcp_local_data"}
-            for key in selected_keys
-        ):
+            if intent in {DialogueIntent.EXPERIMENT_DRAFT_REQUEST, DialogueIntent.EXPERIMENT_VALIDATION_REQUEST, DialogueIntent.EXPERIMENT_EXECUTION_REQUEST}:
+                selected_keys.add("workflow.qe_draft_then_approval")
+            if mode in {DialogueMode.PREFLIGHT.value, DialogueMode.EXECUTION.value} or intent in {DialogueIntent.EXPERIMENT_VALIDATION_REQUEST, DialogueIntent.EXPERIMENT_EXECUTION_REQUEST}:
+                selected_keys.add("tool_guard.mcp_qe")
+        if mode in task_modes and intent == DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST:
             selected_keys.add("prompt.local_data_management")
             selected_keys.add("workflow.local_data_check_repair")
             selected_keys.add("tool_guard.mcp_local_data")
-        selected_keys.add("root.assistant")
-        selected_keys.add("governance.no_silent_action")
-        selected_keys.add("intent.planning")
-        selected_keys.add("renderer.human_cards")
+        if mode in task_modes and intent in {DialogueIntent.ISSUE_INTAKE_REQUEST, DialogueIntent.EXPERIMENT_EXECUTION_REQUEST}:
+            selected_keys.add("governance.no_silent_action")
+        if data.phase in {"result", "preflight"}:
+            selected_keys.add("renderer.human_cards")
         closed_keys: set[str] = set()
         for key in list(selected_keys):
             current = by_key.get(key)
@@ -1211,15 +1437,147 @@ class ResearchAssistantService:
         ordered.sort(key=lambda item: (str(item.get("tree_path") or ""), str(item.get("prompt_key") or "")))
         return ordered
 
-    @staticmethod
-    def _trigger_matches(trigger: dict[str, Any], lower_message: str) -> bool:
-        keywords = [str(item).lower() for item in trigger.get("keywords_any") or []]
-        return any(keyword in lower_message for keyword in keywords)
+    def _dialogue_intent_config(self) -> dict[str, Any]:
+        config = self.active_runtime_config().get(DIALOGUE_INTENT_CONFIG_KEY, {})
+        if not isinstance(config, dict):
+            return {}
+        return {str(key): value for key, value in config.items()}
+
+    def _dialogue_modes_config(self) -> dict[str, Any]:
+        config = self.active_runtime_config().get(DIALOGUE_MODES_CONFIG_KEY, {})
+        if not isinstance(config, dict):
+            return {}
+        return {str(key): value for key, value in config.items()}
+
+    def _dialogue_mode_config(self, mode: str) -> dict[str, Any]:
+        modes = self._dialogue_modes_config().get("modes", {})
+        if not isinstance(modes, dict):
+            return {}
+        cfg = modes.get(mode, {})
+        return dict(cfg) if isinstance(cfg, dict) else {}
+
+    def _mode_router_config(self) -> dict[str, Any]:
+        config = self.active_runtime_config().get(MODE_ROUTER_CONFIG_KEY, {})
+        if not isinstance(config, dict):
+            return {}
+        return {str(key): value for key, value in config.items()}
+
+    def _dialogue_event_message(self, event_type: str) -> str:
+        event_messages = self._dialogue_intent_config().get("event_messages", {})
+        if not isinstance(event_messages, dict):
+            return event_type
+        return str(event_messages.get(event_type) or event_type)
 
     @staticmethod
-    def _is_qe_request(user_message: str) -> bool:
+    def _has_any(text: str, terms: list[str]) -> bool:
+        return any(term.lower() in text for term in terms)
+
+    def _has_explicit_task_verb(self, text: str, intent_config: dict[str, list[str]]) -> bool:
+        return self._has_any(text, intent_config.get("explicit_task_verbs", []))
+
+    def _decide_dialogue_mode(
+        self,
+        user_message: str,
+        *,
+        dialogue_intent: DialogueIntent,
+        phase: str,
+        allow_execute: bool,
+        risk_level: str,
+        override: str | None = None,
+    ) -> ModeDecision:
         lower = user_message.lower()
-        return any(token in lower for token in ["qe", "loop", "回测", "演进", "quantevolver", "quant evolver", "量化实验"])
+        router_cfg = self._mode_router_config()
+        overrides = router_cfg.get("user_overrides", {}) if isinstance(router_cfg.get("user_overrides"), dict) else {}
+        thresholds = router_cfg.get("confidence_thresholds", {}) if isinstance(router_cfg.get("confidence_thresholds"), dict) else {}
+
+        if override:
+            mode = DialogueMode(override)
+            reason = "user_override"
+            confidence = 1.0
+        elif self._has_any(lower, list(overrides.get("audit_patterns", []))):
+            mode = DialogueMode.AUDIT
+            reason = "audit_pattern"
+            confidence = 0.92
+        elif self._has_any(lower, list(overrides.get("analysis_only_patterns", []))):
+            mode = DialogueMode.ANALYSIS
+            reason = "analysis_only_override"
+            confidence = 0.95
+        elif allow_execute or self._has_any(lower, list(overrides.get("execute_patterns", []))):
+            mode = DialogueMode.EXECUTION
+            reason = "execution_request_requires_existing_proposal"
+            confidence = float(thresholds.get("execution_request_min", 0.86))
+        elif phase == "preflight" or dialogue_intent in {DialogueIntent.EXPERIMENT_VALIDATION_REQUEST, DialogueIntent.EXPERIMENT_EXECUTION_REQUEST}:
+            mode = DialogueMode.PREFLIGHT
+            reason = "explicit_preflight_or_validation_request"
+            confidence = float(thresholds.get("task_request_min", 0.72))
+        elif dialogue_intent in {DialogueIntent.EXPERIMENT_DRAFT_REQUEST, DialogueIntent.ISSUE_INTAKE_REQUEST, DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST}:
+            mode = DialogueMode.PLANNING
+            reason = "explicit_task_request"
+            confidence = float(thresholds.get("task_request_min", 0.72))
+        elif dialogue_intent in {DialogueIntent.BUG_DIAGNOSIS_REQUEST, DialogueIntent.CONCEPT_EXPLANATION, DialogueIntent.STATUS_QUERY, DialogueIntent.AMBIGUOUS_REQUEST}:
+            mode = DialogueMode.ANALYSIS
+            reason = "read_only_analysis_intent"
+            confidence = float(thresholds.get("direct_answer_min", 0.55))
+        else:
+            mode = DialogueMode.DIALOGUE
+            reason = "direct_answer_intent"
+            confidence = float(thresholds.get("direct_answer_min", 0.55))
+
+        mode_cfg = self._dialogue_mode_config(mode.value)
+        allowed_side_effect = str(mode_cfg.get("allowed_tool_side_effect") or "none")
+        requires_approval = bool(mode_cfg.get("approval_required")) or risk_level == "production_sensitive"
+        requires_confirmation = mode in {DialogueMode.PREFLIGHT, DialogueMode.EXECUTION} or bool(mode_cfg.get("approval_required"))
+        requires_tool = mode in {DialogueMode.PREFLIGHT, DialogueMode.EXECUTION}
+        visible_audit = bool(mode_cfg.get("expose_audit_fields")) and mode not in {DialogueMode.DIALOGUE, DialogueMode.ANALYSIS}
+        return ModeDecision(
+            mode=mode,
+            intent_type=dialogue_intent,
+            confidence=round(confidence, 3),
+            mode_reason=reason,
+            requires_tool=requires_tool,
+            allowed_tool_side_effect=allowed_side_effect,
+            requires_user_confirmation=requires_confirmation,
+            requires_approval=requires_approval,
+            visible_audit_default=visible_audit,
+        )
+
+    def _classify_dialogue_intent(self, user_message: str) -> DialogueIntent:
+        lower = user_message.lower()
+        intent_config = self._dialogue_intent_config()
+        router_cfg = self._mode_router_config()
+        overrides = router_cfg.get("user_overrides", {}) if isinstance(router_cfg.get("user_overrides"), dict) else {}
+        if self._has_any(lower, list(overrides.get("audit_patterns", []))):
+            return DialogueIntent.AUDIT_REQUEST
+        has_qe = self._has_any(lower, intent_config.get("qe_terms", []))
+        has_bug = self._has_any(lower, intent_config.get("bug_terms", []))
+        has_issue = self._has_any(lower, intent_config.get("issue_terms", []))
+        has_local_data = self._is_local_data_management_request(lower)
+        explicit_task = self._has_explicit_task_verb(lower, intent_config)
+        asks_capability = self._has_any(lower, intent_config.get("capability_inquiry_patterns", []))
+        asks_concept = self._has_any(lower, intent_config.get("concept_explanation_patterns", []))
+        asks_status = self._has_any(lower, intent_config.get("status_query_patterns", []))
+
+        if asks_capability or self._is_mcp_tool_catalog_inquiry(lower):
+            return DialogueIntent.CAPABILITY_INQUIRY
+        if has_local_data:
+            return DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST
+        if has_bug and (explicit_task or asks_concept or asks_status):
+            return DialogueIntent.BUG_DIAGNOSIS_REQUEST
+        if asks_concept:
+            return DialogueIntent.CONCEPT_EXPLANATION
+        if asks_status and not explicit_task:
+            return DialogueIntent.STATUS_QUERY
+        if has_issue and explicit_task:
+            return DialogueIntent.ISSUE_INTAKE_REQUEST
+        if has_qe and explicit_task:
+            if self._has_any(lower, intent_config.get("execution_terms", [])) and not self._has_any(lower, intent_config.get("negated_execution_patterns", [])):
+                return DialogueIntent.EXPERIMENT_EXECUTION_REQUEST
+            if self._has_any(lower, intent_config.get("validation_terms", [])):
+                return DialogueIntent.EXPERIMENT_VALIDATION_REQUEST
+            return DialogueIntent.EXPERIMENT_DRAFT_REQUEST
+        if explicit_task:
+            return DialogueIntent.AMBIGUOUS_REQUEST
+        return DialogueIntent.GENERAL_CHAT
 
     @staticmethod
     def _is_local_data_management_request(user_message: str) -> bool:
@@ -1231,25 +1589,21 @@ class ResearchAssistantService:
             "入库任务",
             "同步目标",
             "刷新审计",
+            "湰鍦版暟",
+            "鏈湴鏁版嵁",
+            "鏁版嵁鍚屾",
+            "鏁版嵁鍏ュ簱",
             "local_data",
             "local data",
             "data sync",
             "data_sync",
             "data-stats",
             "data_stats",
-            "dataset",
-            "ingestion",
             "dataset_date_refresh_audit",
             "data_sync_targets",
-            "cyq_perf",
-            "tushare",
-            "tdx",
+            "ingestion",
         ]
-        if any(marker in lower for marker in local_markers):
-            return True
-        data_terms = ["数据", "行情", "日历", "dataset", "calendar", "audit"]
-        action_terms = ["检查", "排查", "修复", "恢复", "补齐", "刷新", "同步", "health", "repair", "fix", "refresh", "sync", "status"]
-        return any(term in lower for term in data_terms) and any(term in lower for term in action_terms) and "github" not in lower
+        return any(marker.lower() in lower for marker in local_markers)
 
     @staticmethod
     def _write_prompt_cache(checksum: str, bundle_text: str, bundle_json: dict[str, Any], selection_trace: dict[str, Any]) -> str:
@@ -1263,7 +1617,7 @@ class ResearchAssistantService:
         task = self.repository.get_record("tasks", task_id)
         if not task:
             raise KeyError(f"task not found: {task_id}")
-        events = self.repository.list_records("task_events", filters={"task_id": task_id}, limit=200)["items"]
+        events = self.repository.list_records("task_events", filters={"task_id": task_id}, limit=self.configured_limit("task_events_detail"))["items"]
         return {"task": task, "events": events}
 
     def create_task(self, request: TaskCreate | dict[str, Any]) -> dict[str, Any]:
@@ -1282,8 +1636,6 @@ class ResearchAssistantService:
 
     def chat_turn(self, request: ChatTurnRequest | dict[str, Any]) -> dict[str, Any]:
         data = request if isinstance(request, ChatTurnRequest) else ChatTurnRequest(**request)
-        if data.allow_execute:
-            raise ValueError("Phase 1 chat turn does not execute actions; create approval/preflight plan first")
         self.ensure_catalog_ready()
         conversation = (
             self.repository.get_record("conversations", data.conversation_id)
@@ -1293,12 +1645,29 @@ class ResearchAssistantService:
         if not conversation:
             raise KeyError(f"conversation not found: {data.conversation_id}")
         conversation_id = conversation["conversation_id"]
+        dialogue_intent = self._classify_dialogue_intent(data.message)
+        mode_decision = self._decide_dialogue_mode(
+            data.message,
+            dialogue_intent=dialogue_intent,
+            phase=data.phase,
+            allow_execute=data.allow_execute,
+            risk_level=data.risk_level,
+            override=data.dialogue_mode_override,
+        )
+        mode_decision_json = mode_decision.as_dict()
         task = self.create_task(
             TaskCreate(
                 title=self._conversation_title(data.message),
                 task_type="assistant_chat_turn",
                 risk_level=data.risk_level,
-                input_json={"user_message": data.message, "phase": data.phase, "allow_execute": data.allow_execute},
+                input_json={
+                    "user_message": data.message,
+                    "phase": data.phase,
+                    "allow_execute": data.allow_execute,
+                    "dialogue_intent": dialogue_intent.value,
+                    "dialogue_mode": mode_decision.mode.value,
+                    "mode_decision": mode_decision_json,
+                },
                 created_by=data.created_by,
             )
         )
@@ -1308,15 +1677,24 @@ class ResearchAssistantService:
                 role="user",
                 content_text=data.message,
                 task_id=task["task_id"],
-                content_json={"phase": data.phase},
+                content_json={"phase": data.phase, "dialogue_intent": dialogue_intent.value, "dialogue_mode": mode_decision.mode.value, "mode_decision": mode_decision_json},
             )
         )
-        self.add_task_event(task["task_id"], TaskEventCreate(event_type="chat_received", message="已接收用户对话需求，进入理解与计划阶段。", payload_json={"conversation_id": conversation_id}))
+        self.add_task_event(
+            task["task_id"],
+            TaskEventCreate(
+                event_type="chat_received",
+                message=self._dialogue_event_message("chat_received"),
+                payload_json={"conversation_id": conversation_id, "dialogue_intent": dialogue_intent.value, "dialogue_mode": mode_decision.mode.value, "mode_decision": mode_decision_json},
+            ),
+        )
 
-        prior_messages = self._load_prior_chat_messages(conversation_id, data.message)
-        history_tokens = sum(self._estimate_tokens(m["content"]) for m in prior_messages)
-        estimated_total_tokens = len(data.message) * 2 + history_tokens + 32000  # system + context pack overhead
-
+        runtime_activation = self.active_runtime_config_activation()
+        runtime_config = dict(runtime_activation["config_json"])
+        initial_prior_messages = self._fetch_prior_chat_messages(conversation_id, data.message, runtime_config)
+        initial_overhead = int(runtime_config["model_routing"]["initial_context_overhead_tokens"])
+        history_tokens = sum(self.context_budget_planner.estimate_tokens(m["content"], runtime_config) for m in initial_prior_messages)
+        estimated_total_tokens = self.context_budget_planner.estimate_tokens(data.message, runtime_config) + history_tokens + initial_overhead
         route = self.route_model(ModelRouteRequest(role="primary_reasoner", risk_level=data.risk_level, token_estimate=estimated_total_tokens))
         model_profile = route.get("model_profile")
         if not model_profile:
@@ -1327,34 +1705,78 @@ class ResearchAssistantService:
                 task_id=task["task_id"],
                 conversation_id=conversation_id,
                 phase=data.phase,
+                dialogue_mode=mode_decision.mode.value,
+                mode_decision=mode_decision_json,
                 model_profile_id=model_profile["model_profile_id"],
             )
+        )
+        preliminary_budget = self.context_budget_planner.plan(
+            model_profile=model_profile,
+            runtime_config=runtime_config,
+            prompt_bundle_text=bundle["bundle_text"],
+            prior_messages=initial_prior_messages,
+            current_user_message=data.message,
         )
         context_pack = self.build_context_pack(
             ContextPackBuildRequest(
                 task_id=task["task_id"],
                 agent_id="research_assistant_primary",
                 model_profile=model_profile["model_profile_id"],
-                token_budget=64000,
+                token_budget=preliminary_budget.context_pack_budget_tokens,
             )
         )
-        messages = self._chat_messages_for_llm(data.message, bundle, context_pack, prior_messages)
-        self.add_task_event(task["task_id"], TaskEventCreate(event_type="llm_started", message="主模型调用已开始。", payload_json={"model_profile_id": model_profile["model_profile_id"], "prompt_bundle_id": bundle["prompt_bundle_id"]}))
-        try:
-            llm_result = self.llm_client.complete(messages=messages, model_profile=model_profile, temperature=0.2, max_tokens=1600)
-        except Exception as exc:
-            trace = self.create_trace_event(
-                TraceEventCreate(
-                    task_id=task["task_id"],
-                    event_type="llm_call",
-                    component="research_assistant.chat_turn",
-                    status="failed",
-                    model_profile_id=model_profile["model_profile_id"],
-                    payload_json={"prompt_bundle_id": bundle["prompt_bundle_id"], "error": str(exc)},
-                )
-            )
-            self.add_task_event(task["task_id"], TaskEventCreate(event_type="llm_failed", severity="error", message=f"主模型调用失败：{exc}", payload_json={"trace_id": trace["trace_id"]}))
-            raise
+        budget_plan = self.context_budget_planner.plan(
+            model_profile=model_profile,
+            runtime_config=runtime_config,
+            prompt_bundle_text=bundle["bundle_text"],
+            context_pack_summary=str(context_pack.get("pack_summary") or ""),
+            prior_messages=initial_prior_messages,
+            compact_summaries=self._active_context_segments(conversation_id),
+            current_user_message=data.message,
+        )
+        prior_messages = self._prepare_prior_chat_messages(
+            conversation_id=conversation_id,
+            current_message=data.message,
+            candidates=initial_prior_messages,
+            budget_plan=budget_plan,
+            model_profile=model_profile,
+            bundle=bundle,
+            task_id=task["task_id"],
+            runtime_activation=runtime_activation,
+        )
+        assembly_trace = self._record_context_assembly_trace(
+            conversation_id=conversation_id,
+            task_id=task["task_id"],
+            bundle=bundle,
+            runtime_activation=runtime_activation,
+            budget_plan=budget_plan,
+            prior_messages=prior_messages,
+            context_pack=context_pack,
+        )
+        messages = self._chat_messages_for_llm(data.message, bundle, context_pack, prior_messages, mode_decision=mode_decision_json, runtime_config=runtime_config)
+        self.add_task_event(
+            task["task_id"],
+            TaskEventCreate(
+                event_type="llm_started",
+                message=self._dialogue_event_message("llm_started"),
+                payload_json={"model_profile_id": model_profile["model_profile_id"], "prompt_bundle_id": bundle["prompt_bundle_id"]},
+            ),
+        )
+        llm_result, messages, budget_plan, prior_messages, assembly_trace = self._complete_chat_with_reactive_recovery(
+            user_message=data.message,
+            conversation_id=conversation_id,
+            task_id=task["task_id"],
+            risk_level=data.risk_level,
+            messages=messages,
+            bundle=bundle,
+            context_pack=context_pack,
+            initial_candidates=initial_prior_messages,
+            prior_messages=prior_messages,
+            budget_plan=budget_plan,
+            model_profile=model_profile,
+            runtime_activation=runtime_activation,
+            assembly_trace=assembly_trace,
+        )
         trace = self.create_trace_event(
             TraceEventCreate(
                 task_id=task["task_id"],
@@ -1368,13 +1790,19 @@ class ResearchAssistantService:
                     "model": llm_result.model,
                     "prompt_bundle_id": bundle["prompt_bundle_id"],
                     "context_pack_id": context_pack["context_pack_id"],
-                    "response_preview": llm_result.content[:500],
+                    "context_assembly_trace_id": assembly_trace["assembly_trace_id"],
+                    "response_preview": self._preview_text(llm_result.content, budget_plan),
+                    "dialogue_intent": dialogue_intent.value,
+                    "dialogue_mode": mode_decision.mode.value,
+                    "mode_decision": mode_decision_json,
                 },
                 cost_json={"usage": llm_result.usage},
             )
         )
-        cards = self._build_human_cards(data.message, task, bundle, route)
-        assistant_text = self._compose_assistant_reply(data.message, llm_result.content, cards)
+        context_health = self._context_health_payload(conversation_id, budget_plan, mode_decision=mode_decision)
+        cards = self._build_human_cards(data.message, task, bundle, route, dialogue_intent, mode_decision)
+        cards["context_health"] = context_health
+        assistant_text = self._compose_assistant_reply(data.message, llm_result.content, cards, mode_decision)
         assistant_message = self.add_conversation_message(
             ConversationMessageCreate(
                 conversation_id=conversation_id,
@@ -1382,6 +1810,9 @@ class ResearchAssistantService:
                 content_text=assistant_text,
                 content_json={
                     "cards": cards,
+                    "dialogue_intent": dialogue_intent.value,
+                    "dialogue_mode": mode_decision.mode.value,
+                    "mode_decision": mode_decision_json,
                     "audit_summary": {
                         "model_profile": model_profile["display_name"],
                         "prompt_bundle_checksum": bundle["checksum"],
@@ -1399,28 +1830,37 @@ class ResearchAssistantService:
             task["task_id"],
             TaskEventCreate(
                 event_type="llm_done",
-                message="主模型已返回，计划卡和确认卡已生成。",
-                payload_json={"assistant_message_id": assistant_message["message_id"], "trace_id": trace["trace_id"]},
+                message=self._dialogue_event_message("llm_done"),
+                payload_json={
+                    "assistant_message_id": assistant_message["message_id"],
+                    "trace_id": trace["trace_id"],
+                    "dialogue_intent": dialogue_intent.value,
+                    "dialogue_mode": mode_decision.mode.value,
+                    "mode_decision": mode_decision_json,
+                },
             ),
         )
-        self.add_task_event(
-            task["task_id"],
-            TaskEventCreate(
-                event_type="action_proposed",
-                severity="warning",
-                message="已提出候选动作；确认前不会调用 materialize/run。",
-                payload_json={"proposal_count": len(cards.get("action_proposals", [])), "safety": cards["safety"]},
-            ),
-        )
+        if cards.get("action_proposals"):
+            self.add_task_event(
+                task["task_id"],
+                TaskEventCreate(
+                    event_type="action_proposed",
+                    severity="warning",
+                    message=self._dialogue_event_message("action_proposed"),
+                    payload_json={"proposal_count": len(cards.get("action_proposals", [])), "safety": cards["safety"], "dialogue_intent": dialogue_intent.value},
+                ),
+            )
         return {
             "conversation": self.repository.get_record("conversations", conversation_id),
             "user_message": user_message,
             "assistant_message": assistant_message,
             "task": self.repository.get_record("tasks", task["task_id"]),
-            "task_events": self.repository.list_records("task_events", filters={"task_id": task["task_id"]}, limit=200)["items"],
+            "task_events": self.repository.list_records("task_events", filters={"task_id": task["task_id"]}, limit=self.configured_limit("task_events_detail"))["items"],
             "prompt_bundle": self._public_prompt_bundle(bundle),
             "context_pack": {"context_pack_id": context_pack["context_pack_id"], "pack_summary": context_pack["pack_summary"], "checksum": context_pack["checksum"]},
             "trace": {"trace_id": trace["trace_id"], "status": trace["status"], "duration_ms": trace.get("duration_ms"), "model_profile_id": trace.get("model_profile_id")},
+            "mode_decision": mode_decision_json,
+            "context_health": context_health,
             "cards": cards,
         }
 
@@ -1434,87 +1874,573 @@ class ResearchAssistantService:
             "prompt_bundle_id": bundle["prompt_bundle_id"],
             "phase": bundle["phase"],
             "checksum": bundle["checksum"],
+            "activation_id": bundle.get("activation_id"),
+            "version_refs": bundle.get("version_refs") or [],
             "node_refs": bundle["node_refs"],
             "selection_trace_json": bundle["selection_trace_json"],
             "cache_path": bundle.get("cache_path"),
         }
 
-    @staticmethod
-    def _chat_messages_for_llm(user_message: str, bundle: dict[str, Any], context_pack: dict[str, Any], prior_messages: list[dict[str, str]] | None = None) -> list[dict[str, str]]:
-        system = (
-            f"{bundle['bundle_text']}\n\n"
-            "你必须用中文、自然语言和结构化计划说明来回复用户。主对话严禁输出 raw JSON、数据库 ID、Trace ID、payload 或后台日志。"
-            "如果需要使用 MCP 或 Skill，只能说明拟使用能力与确认点，不能在本轮直接执行高风险操作。"
-        )
-        context = (
-            f"Context Pack 摘要：{context_pack.get('pack_summary')}\n"
-            "请基于这些已审计上下文进行回答；缺失信息时先向用户确认。"
-        )
+    def _chat_messages_for_llm(
+        self,
+        user_message: str,
+        bundle: dict[str, Any],
+        context_pack: dict[str, Any],
+        prior_messages: list[dict[str, str]] | None = None,
+        *,
+        mode_decision: dict[str, Any] | None = None,
+        runtime_config: dict[str, Any] | None = None,
+    ) -> list[dict[str, str]]:
+        system = str(bundle["bundle_text"])
         messages: list[dict[str, str]] = [
             {"role": "system", "content": system},
-            {"role": "user", "content": context},
         ]
+        mode = str((mode_decision or {}).get("mode") or DialogueMode.DIALOGUE.value)
+        mode_cfg = self._dialogue_mode_config(mode)
+        expose_context_pack = bool(mode_cfg.get("expose_context_pack"))
+        if expose_context_pack:
+            context = (
+                f"Context Pack 摘要：{context_pack.get('pack_summary')}\n"
+                "请基于这些已审计上下文进行回答；缺失信息时先向用户确认。"
+            )
+            messages.append({"role": "user", "content": context})
+        else:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        f"Internal Context Pack 摘要：{context_pack.get('pack_summary')}\n"
+                        "Do not mention Context Pack, memory counts, token budget, prompt bundle, or compression summaries unless the user asks for audit details."
+                    ),
+                }
+            )
         if prior_messages:
             messages.extend(prior_messages)
+        mcp_catalog_context = self._mcp_tool_catalog_context_for_llm(user_message)
+        if mcp_catalog_context:
+            messages.append({"role": "system", "content": mcp_catalog_context})
         messages.append({"role": "user", "content": user_message})
         return messages
 
-    # Budget reserved for system prompt, context pack, and assistant response.
-    # Model context window is 1M tokens; we reserve ~200K for non-history content
-    # and use the remaining ~800K for conversation history.
-    _PRIOR_MESSAGES_TOKEN_BUDGET = 800_000
-    _TOKEN_ESTIMATE_CHARS_PER_TOKEN = 2.0
+    @staticmethod
+    def _is_mcp_tool_catalog_inquiry(user_message: str) -> bool:
+        lower = user_message.lower()
+        if "mcp" not in lower:
+            return False
+        tool_terms = ("tool", "tools", "工具", "能力", "列表", "哪些", "可用", "使用", "access", "available", "use")
+        return any(term in lower for term in tool_terms)
 
-    @classmethod
-    def _estimate_tokens(cls, text: str) -> int:
-        return max(1, int(len(text) / cls._TOKEN_ESTIMATE_CHARS_PER_TOKEN))
+    def _mcp_tool_catalog_snapshot(self) -> dict[str, Any]:
+        servers = [
+            item
+            for item in self.repository.list_records("mcp_servers", limit=self.configured_limit("router_mcp_servers"))["items"]
+            if str(item.get("status") or "") in {"ready", "enabled", "ok"}
+        ]
+        tools = [
+            item
+            for item in self.repository.list_records("mcp_tools", limit=self.configured_limit("api_list_mcp_tools"))["items"]
+            if str(item.get("status") or "") in {"enabled", "ready", "approved"}
+        ]
+        capabilities = [
+            item
+            for item in self.repository.list_records("capabilities", filters={"status": "approved"}, limit=self.configured_limit("api_list_capabilities"))["items"]
+        ]
+        tools_by_server: dict[str, list[dict[str, Any]]] = {}
+        for tool in sorted(tools, key=lambda item: (str(item.get("server_key") or ""), str(item.get("tool_name") or ""))):
+            tools_by_server.setdefault(str(tool.get("server_key") or "unknown"), []).append(tool)
+        return {
+            "source": "assistant_mcp_tools_runtime_catalog",
+            "server_count": len(servers),
+            "tool_count": len(tools),
+            "capability_count": len(capabilities),
+            "servers": servers,
+            "tools": tools,
+            "tools_by_server": tools_by_server,
+            "capabilities": capabilities,
+        }
 
-    def _load_prior_chat_messages(self, conversation_id: str, current_message: str) -> list[dict[str, str]]:
+    def _mcp_tool_catalog_context_for_llm(self, user_message: str) -> str | None:
+        if not self._is_mcp_tool_catalog_inquiry(user_message):
+            return None
+        catalog = self._mcp_tool_catalog_snapshot()
+        lines = [
+            "Runtime MCP catalog snapshot from assistant_mcp_tools; answer only from this audited catalog.",
+            f"Enabled servers: {catalog['server_count']}; enabled tools: {catalog['tool_count']}; approved capabilities: {catalog['capability_count']}.",
+            "Do not claim generic filesystem, shell, Git, HTTP, browser, or data-warehouse tools unless they are listed here.",
+            "If a requested capability is absent, say it is not registered in the Research Assistant runtime catalog.",
+        ]
+        for server_key, tools in catalog["tools_by_server"].items():
+            tool_names = ", ".join(str(tool.get("tool_name") or "") for tool in tools)
+            lines.append(f"- {server_key}: {tool_names}")
+        return "\n".join(lines)
+
+    def _complete_chat_with_reactive_recovery(
+        self,
+        *,
+        user_message: str,
+        conversation_id: str,
+        task_id: str,
+        risk_level: str,
+        messages: list[dict[str, str]],
+        bundle: dict[str, Any],
+        context_pack: dict[str, Any],
+        initial_candidates: list[dict[str, Any]],
+        prior_messages: list[dict[str, str]],
+        budget_plan: ContextBudgetPlan,
+        model_profile: dict[str, Any],
+        runtime_activation: dict[str, Any],
+        assembly_trace: dict[str, Any],
+    ) -> tuple[LlmCallResult, list[dict[str, str]], ContextBudgetPlan, list[dict[str, str]], dict[str, Any]]:
         try:
+            result = self.llm_client.complete(
+                messages=messages,
+                model_profile=model_profile,
+                temperature=budget_plan.llm_temperature,
+                max_tokens=budget_plan.llm_max_tokens,
+            )
+            return result, messages, budget_plan, prior_messages, assembly_trace
+        except Exception as exc:
+            runtime_config = budget_plan.runtime_config
+            if not self._is_reactive_context_error(exc, runtime_config):
+                self._record_llm_failure(task_id, model_profile, bundle, exc, status="failed")
+                raise
+            overflow_trace = self.create_trace_event(
+                TraceEventCreate(
+                    task_id=task_id,
+                    event_type="llm_call",
+                    component="research_assistant.chat_turn",
+                    status="prompt_too_long_reactive",
+                    model_profile_id=model_profile["model_profile_id"],
+                    payload_json={"prompt_bundle_id": bundle["prompt_bundle_id"], "error": str(exc), "assembly_trace_id": assembly_trace["assembly_trace_id"]},
+                )
+            )
+            self.add_task_event(
+                task_id,
+                TaskEventCreate(
+                    event_type="llm_failed",
+                    severity="warning",
+                    message="模型返回上下文超限，已按 runtime config 触发 reactive compact。",
+                    payload_json={"error": str(exc), "assembly_trace_id": assembly_trace["assembly_trace_id"], "trace_id": overflow_trace["trace_id"]},
+                ),
+            )
+            last_exc: Exception = exc
+
+        max_retries = int(budget_plan.runtime_config["compaction"]["worker"]["max_retries"])
+        for attempt in range(1, max_retries + 1):
+            segment = self._maybe_compact_prior_messages(
+                conversation_id=conversation_id,
+                candidates=initial_candidates,
+                budget_plan=budget_plan,
+                model_profile=model_profile,
+                bundle=bundle,
+                task_id=task_id,
+                runtime_activation=runtime_activation,
+                force=True,
+                trigger_reason="reactive_context_overflow",
+            )
+            if segment is None:
+                break
+            retry_budget = self.context_budget_planner.plan(
+                model_profile=model_profile,
+                runtime_config=budget_plan.runtime_config,
+                prompt_bundle_text=bundle["bundle_text"],
+                context_pack_summary=str(context_pack.get("pack_summary") or ""),
+                prior_messages=initial_candidates,
+                compact_summaries=self._active_context_segments(conversation_id),
+                current_user_message=user_message,
+            )
+            retry_prior_messages = self._prepare_prior_chat_messages(
+                conversation_id=conversation_id,
+                current_message=user_message,
+                candidates=initial_candidates,
+                budget_plan=retry_budget,
+                model_profile=model_profile,
+                bundle=bundle,
+                task_id=task_id,
+                runtime_activation=runtime_activation,
+            )
+            retry_trace = self._record_context_assembly_trace(
+                conversation_id=conversation_id,
+                task_id=task_id,
+                bundle=bundle,
+                runtime_activation=runtime_activation,
+                budget_plan=retry_budget,
+                prior_messages=retry_prior_messages,
+                context_pack=context_pack,
+                status="retry_after_compaction",
+                extra_assembly={"reactive_retry_attempt": attempt, "compaction_segment_id": segment["segment_id"]},
+            )
+            retry_messages = self._chat_messages_for_llm(
+                user_message,
+                bundle,
+                context_pack,
+                retry_prior_messages,
+                mode_decision=(bundle.get("selection_trace_json") or {}).get("mode_decision"),
+                runtime_config=retry_budget.runtime_config,
+            )
+            retry_messages.insert(1, {"role": "system", "content": self._prompt_text("context.recovery.prompt_too_long_retry")})
+            try:
+                result = self.llm_client.complete(
+                    messages=retry_messages,
+                    model_profile=model_profile,
+                    temperature=retry_budget.llm_temperature,
+                    max_tokens=retry_budget.llm_max_tokens,
+                )
+                return result, retry_messages, retry_budget, retry_prior_messages, retry_trace
+            except Exception as retry_exc:
+                last_exc = retry_exc
+                if not self._is_reactive_context_error(retry_exc, retry_budget.runtime_config):
+                    self._record_llm_failure(task_id, model_profile, bundle, retry_exc, status="failed_after_reactive_compaction")
+                    raise
+
+        self._record_llm_failure(task_id, model_profile, bundle, last_exc, status="context_overflow_fail_fast")
+        if risk_level in {"high", "production_sensitive"}:
+            raise RuntimeError("High-risk Research Assistant task stopped after context compaction retry; no degraded answer was generated.") from last_exc
+        raise last_exc
+
+    def _record_llm_failure(self, task_id: str, model_profile: dict[str, Any], bundle: dict[str, Any], exc: Exception, *, status: str) -> dict[str, Any]:
+        trace = self.create_trace_event(
+            TraceEventCreate(
+                task_id=task_id,
+                event_type="llm_call",
+                component="research_assistant.chat_turn",
+                status=status,
+                model_profile_id=model_profile["model_profile_id"],
+                payload_json={"prompt_bundle_id": bundle["prompt_bundle_id"], "error": str(exc)},
+            )
+        )
+        self.add_task_event(task_id, TaskEventCreate(event_type="llm_failed", severity="error", message=f"主模型调用失败：{exc}", payload_json={"trace_id": trace["trace_id"], "status": status}))
+        return trace
+
+    @staticmethod
+    def _is_reactive_context_error(exc: Exception, runtime_config: dict[str, Any]) -> bool:
+        error_text = str(exc).lower()
+        codes = runtime_config["compaction"]["trigger"]["reactive_error_codes"]
+        return any(str(code).lower() in error_text for code in codes)
+
+    def _context_health_payload(self, conversation_id: str, budget_plan: ContextBudgetPlan, *, mode_decision: ModeDecision | None = None) -> dict[str, Any]:
+        mode_cfg = self._dialogue_mode_config(mode_decision.mode.value) if mode_decision else {}
+        show_badge = bool(budget_plan.runtime_config["ui"]["show_context_health_badge"])
+        if "show_context_health_badge" in mode_cfg:
+            show_badge = show_badge and bool(mode_cfg.get("show_context_health_badge"))
+        return {
+            "status": "compacted_or_ready" if budget_plan.should_compact else "healthy",
+            "notify_mode": budget_plan.runtime_config["ui"]["notify_auto_compaction"],
+            "show_badge": show_badge,
+            "allow_user_expand_summary": bool(budget_plan.runtime_config["ui"]["allow_user_expand_summary"]),
+            "utilization_ratio": round(budget_plan.utilization_ratio, 4),
+            "estimated_input_tokens": budget_plan.estimated_input_tokens,
+            "effective_window_tokens": budget_plan.effective_window_tokens,
+            "fresh_tail_min_messages": budget_plan.fresh_tail_min_messages,
+            "compact_summary_count": len(self._active_context_segments(conversation_id)),
+            "key_fact_count": len(self._active_key_facts(conversation_id)),
+            "config_driven": True,
+        }
+
+
+    def _active_context_segments(self, conversation_id: str) -> list[dict[str, Any]]:
+        return self.repository.list_records(
+            "context_segments",
+            filters={"conversation_id": conversation_id, "status": "active"},
+            limit=self.configured_limit("active_context_segments"),
+        )["items"]
+
+    def _active_key_facts(self, conversation_id: str) -> list[dict[str, Any]]:
+        return self.repository.list_records(
+            "context_key_facts",
+            filters={"conversation_id": conversation_id, "status": "active"},
+            limit=self.configured_limit("active_context_key_facts"),
+        )["items"]
+
+    def _fetch_prior_chat_messages(self, conversation_id: str, current_message: str, runtime_config: dict[str, Any]) -> list[dict[str, Any]]:
+        history_cfg = runtime_config["history_fetch"]
+        page_size = int(history_cfg["page_size"])
+        max_pages = int(history_cfg["max_pages"])
+        include_roles = {str(role) for role in history_cfg["include_roles"]}
+        items: list[dict[str, Any]] = []
+        for page_index in range(max_pages):
             result = self.repository.list_records(
                 "conversation_messages",
                 filters={"conversation_id": conversation_id},
-                limit=500,
+                limit=page_size,
+                offset=page_index * page_size,
             )
-            items = sorted(result["items"], key=lambda item: str(item.get("created_at") or ""))
-        except Exception:
-            return []
-        candidates: list[dict[str, str]] = []
-        for item in items:
+            items.extend(result["items"])
+            if not result.get("has_more"):
+                break
+        candidates: list[dict[str, Any]] = []
+        for item in sorted(items, key=lambda row: str(row.get("created_at") or "")):
             content = str(item.get("content_text") or "").strip()
-            if not content:
-                continue
-            if content == current_message:
+            if not content or content == current_message:
                 continue
             role = str(item.get("role") or "")
-            candidates.append({"role": role, "content": content})
-        # Sliding window: newest first, keep as many full messages as fit in budget.
-        # Never truncate individual messages — drop oldest when budget is exceeded.
+            if role not in include_roles:
+                continue
+            candidates.append(
+                {
+                    "message_id": str(item.get("message_id") or ""),
+                    "role": role,
+                    "content": content,
+                    "created_at": item.get("created_at"),
+                }
+            )
+        return candidates
+
+    def _prepare_prior_chat_messages(
+        self,
+        *,
+        conversation_id: str,
+        current_message: str,
+        candidates: list[dict[str, Any]],
+        budget_plan: ContextBudgetPlan,
+        model_profile: dict[str, Any],
+        bundle: dict[str, Any],
+        task_id: str,
+        runtime_activation: dict[str, Any],
+    ) -> list[dict[str, str]]:
+        self._maybe_compact_prior_messages(
+            conversation_id=conversation_id,
+            candidates=candidates,
+            budget_plan=budget_plan,
+            model_profile=model_profile,
+            bundle=bundle,
+            task_id=task_id,
+            runtime_activation=runtime_activation,
+        )
+        summary_messages = [
+            {"role": "system", "content": f"Historical compact summary: {segment['content_text']}"}
+            for segment in reversed(self._active_context_segments(conversation_id))
+        ]
+        key_fact_messages = [
+            {"role": "system", "content": f"Locked key facts: {fact['fact_text']}"}
+            for fact in reversed(self._active_key_facts(conversation_id))
+        ]
+        raw_messages = self._select_history_window(candidates, budget_plan)
+        return [*summary_messages, *key_fact_messages, *raw_messages]
+
+    def _select_history_window(self, candidates: list[dict[str, Any]], budget_plan: ContextBudgetPlan) -> list[dict[str, str]]:
         selected: list[dict[str, str]] = []
         tokens_used = 0
         for msg in reversed(candidates):
-            msg_tokens = self._estimate_tokens(msg["content"])
-            if tokens_used + msg_tokens > self._PRIOR_MESSAGES_TOKEN_BUDGET and selected:
+            content = str(msg["content"])
+            msg_tokens = self.context_budget_planner.estimate_tokens(content, budget_plan.runtime_config)
+            if tokens_used + msg_tokens > budget_plan.history_budget_tokens and selected:
                 break
-            selected.append(msg)
+            selected.append({"role": str(msg["role"]), "content": content})
             tokens_used += msg_tokens
         selected.reverse()
         if len(selected) < len(candidates):
             logger.info(
-                "chat history window: kept %d/%d messages (~%d estimated tokens), dropped %d oldest due to budget %d",
-                len(selected), len(candidates), tokens_used, len(candidates) - len(selected), self._PRIOR_MESSAGES_TOKEN_BUDGET,
+                "chat history window: kept %d/%d messages (~%d estimated tokens), dropped %d oldest due to config budget %d",
+                len(selected), len(candidates), tokens_used, len(candidates) - len(selected), budget_plan.history_budget_tokens,
             )
         return selected
 
+    def _maybe_compact_prior_messages(
+        self,
+        *,
+        conversation_id: str,
+        candidates: list[dict[str, Any]],
+        budget_plan: ContextBudgetPlan,
+        model_profile: dict[str, Any],
+        bundle: dict[str, Any],
+        task_id: str,
+        runtime_activation: dict[str, Any],
+        force: bool = False,
+        trigger_reason: str = "proactive_threshold",
+    ) -> dict[str, Any] | None:
+        if not budget_plan.compaction_allowed_by_config or (not force and not budget_plan.should_compact):
+            return None
+        fresh_tail_count = max(1, budget_plan.fresh_tail_min_messages)
+        old_messages = candidates[:-fresh_tail_count] if len(candidates) > fresh_tail_count else []
+        if not old_messages:
+            return None
+        covered_ids = [item["message_id"] for item in old_messages if item.get("message_id")]
+        already_active = self._active_context_segments(conversation_id)
+        covered_by_active = {mid for segment in already_active for mid in (segment.get("source_message_ids") or [])}
+        if covered_ids and set(covered_ids).issubset(covered_by_active):
+            return None
+        prompt_text = self._prompt_text("context.compaction.structured_summary")
+        compact_input = "\n".join(
+            f"[{item.get('message_id')}] {item.get('role')}: {item.get('content')}" for item in old_messages
+        )
+        compact_result = self.llm_client.complete(
+            messages=[
+                {"role": "system", "content": prompt_text},
+                {"role": "user", "content": compact_input},
+            ],
+            model_profile=model_profile,
+            temperature=budget_plan.llm_temperature,
+            max_tokens=budget_plan.compaction_max_output_tokens,
+        )
+        source_sha = sha256_json([{"message_id": item.get("message_id"), "content": item.get("content")} for item in old_messages])
+        segment = self.repository.create_record(
+            "context_segments",
+            {
+                "segment_id": new_id("ctxseg"),
+                "conversation_id": conversation_id,
+                "segment_type": "compact_summary",
+                "summary_depth": 1,
+                "content_text": compact_result.content,
+                "content_json": {
+                    "format": budget_plan.runtime_config["compaction"]["output"]["format"],
+                    "source_message_count": len(old_messages),
+                    "usage": compact_result.usage,
+                },
+                "source_message_ids": covered_ids,
+                "source_sha256": source_sha,
+                "prompt_activation_id": bundle.get("activation_id"),
+                "runtime_config_activation_id": runtime_activation["activation_id"],
+                "status": "active",
+                "metadata_json": {
+                    "task_id": task_id,
+                    "mandatory_compaction": budget_plan.mandatory_compaction,
+                    "tools_enabled": budget_plan.runtime_config["compaction"]["worker"]["tools_enabled"],
+                },
+            },
+        )
+        fact_prompt = self._prompt_text("context.compaction.key_fact_extraction")
+        fact_result = self.llm_client.complete(
+            messages=[
+                {"role": "system", "content": fact_prompt},
+                {"role": "user", "content": compact_result.content},
+            ],
+            model_profile=model_profile,
+            temperature=budget_plan.llm_temperature,
+            max_tokens=budget_plan.compaction_max_output_tokens,
+        )
+        fact = self.repository.create_record(
+            "context_key_facts",
+            {
+                "fact_id": new_id("ctxfact"),
+                "conversation_id": conversation_id,
+                "segment_id": segment["segment_id"],
+                "fact_type": "key_fact_block",
+                "fact_text": fact_result.content,
+                "fact_json": {
+                    "source_sha256": source_sha,
+                    "summary_segment_id": segment["segment_id"],
+                    "prompt_key": "context.compaction.key_fact_extraction",
+                    "usage": fact_result.usage,
+                },
+                "source_message_ids": covered_ids,
+                "confidence": 0.8,
+                "status": "active",
+                "metadata_json": {"task_id": task_id},
+            },
+        )
+        self.add_task_event(
+            task_id,
+            TaskEventCreate(
+                event_type="context_compacted",
+                message="Active runtime config triggered context compaction.",
+                payload_json={
+                    "segment_id": segment["segment_id"],
+                    "fact_id": fact["fact_id"],
+                    "source_message_count": len(old_messages),
+                    "trigger_reason": trigger_reason,
+                },
+            ),
+        )
+        return segment
+
+    def _record_context_assembly_trace(
+        self,
+        *,
+        conversation_id: str,
+        task_id: str,
+        bundle: dict[str, Any],
+        runtime_activation: dict[str, Any],
+        budget_plan: ContextBudgetPlan,
+        prior_messages: list[dict[str, str]],
+        context_pack: dict[str, Any],
+        status: str = "ok",
+        extra_assembly: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        assembly_json = {
+            "order": budget_plan.runtime_config["assembly"]["order"],
+            "prior_message_count": len(prior_messages),
+            "context_pack_id": context_pack["context_pack_id"],
+            "trace_every_turn": budget_plan.runtime_config["assembly"]["trace_every_turn"],
+        }
+        if extra_assembly:
+            assembly_json.update(extra_assembly)
+        return self.repository.create_record(
+            "context_assembly_traces",
+            {
+                "assembly_trace_id": new_id("ctxasm"),
+                "conversation_id": conversation_id,
+                "task_id": task_id,
+                "prompt_activation_id": bundle.get("activation_id"),
+                "runtime_config_activation_id": runtime_activation["activation_id"],
+                "budget_json": budget_plan.as_trace_payload(),
+                "assembly_json": assembly_json,
+                "source_refs_json": {
+                    "prompt_bundle_id": bundle["prompt_bundle_id"],
+                    "prompt_activation_id": bundle.get("activation_id"),
+                    "runtime_config_activation_id": runtime_activation["activation_id"],
+                },
+                "status": status,
+            },
+        )
+
+    def _prompt_text(self, prompt_key: str) -> str:
+        node = self.repository.find_one("prompt_nodes", {"prompt_key": prompt_key, "status": "enabled"})
+        if not node:
+            raise RuntimeError(f"active prompt node is missing: {prompt_key}")
+        return str(node["prompt_text"])
+
     @staticmethod
-    def _build_human_cards(user_message: str, task: dict[str, Any], bundle: dict[str, Any], route: dict[str, Any]) -> dict[str, Any]:
-        is_local_data = ResearchAssistantService._is_local_data_management_request(user_message)
-        is_qe = ResearchAssistantService._is_qe_request(user_message)
-        capability_mcp = "已识别 Research Assistant、QE、Validation 等 MCP 能力候选。"
-        capability_skill = "已纳入本地 Skill Catalog，后续可按任务加载 QE 诊断、因子分析等能力。"
-        capability_tools: list[str] = []
-        safety = {"no_materialize_before_confirmation": True, "no_run_before_confirmation": True, "no_raw_json_in_main_chat": True}
+    def _preview_text(text: str, budget_plan: ContextBudgetPlan) -> str:
+        return text[: budget_plan.trace_response_preview_chars]
+
+    def _build_human_cards(
+        self,
+        user_message: str,
+        task: dict[str, Any],
+        bundle: dict[str, Any],
+        route: dict[str, Any],
+        dialogue_intent: DialogueIntent,
+        mode_decision: ModeDecision,
+    ) -> dict[str, Any]:
+        del task
+        intent_config = self._dialogue_intent_config()
+        template = self._dialogue_card_template(dialogue_intent, intent_config)
+        mode_cfg = self._dialogue_mode_config(mode_decision.mode.value)
+        capabilities = self.repository.list_records(
+            "capabilities",
+            filters={"status": "approved"},
+            limit=self.configured_limit("api_list_capabilities"),
+        )["items"]
+        qe_capability_keys = set(self.active_runtime_config().get("planner", {}).get("qe_workflow_capability_keys", []))
+        available_keys = {str(item.get("capability_key")) for item in capabilities}
+        include_qe_capabilities = bool(template.get("include_qe_capabilities"))
+        is_local_data = dialogue_intent == DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST or self._is_local_data_management_request(user_message)
+        local_data_capability_keys = set(self.active_runtime_config().get("planner", {}).get("local_data_workflow_capability_keys", []))
+        capability_card_keys: set[str] = set()
+        if include_qe_capabilities:
+            capability_card_keys.update(qe_capability_keys)
         if is_local_data:
+            capability_card_keys.update(local_data_capability_keys)
+        capability_cards = self._capability_cards(capabilities, capability_card_keys) if capability_card_keys else []
+        missing_capability_keys = sorted(capability_card_keys - available_keys) if capability_card_keys else []
+        prompt_branches = [item["prompt_key"] for item in bundle.get("node_refs", [])]
+        capability_summary_cfg = intent_config.get("capability_summary", {})
+        capability_summary = {
+            "mcp": str(capability_summary_cfg.get("mcp") or ""),
+            "skill": str(capability_summary_cfg.get("skill") or ""),
+            "model": route.get("model_profile", {}).get("display_name") or route.get("model_profile", {}).get("model_name"),
+            "prompt_branches": prompt_branches,
+        }
+        extra_summary = template.get("capability_summary_extra")
+        if isinstance(extra_summary, dict):
+            capability_summary.update({str(key): value for key, value in extra_summary.items()})
+        status_rail_ref = str(template.get("status_rail_ref") or "answered")
+        plan_steps = list(template.get("plan_steps") or [])
+        clarification_questions = list(template.get("clarification_questions") or [])
+        action_proposals = list(template.get("action_proposals") or [])
+        if is_local_data:
+            status_rail_ref = "waiting_confirmation"
             plan_steps = [
                 "复述本地数据检查范围、影响模块和本轮只读边界。",
                 "从 aistock-local-data MCP 目录中选择健康概览、数据集状态、同步目标和修复计划能力。",
@@ -1522,91 +2448,170 @@ class ResearchAssistantService:
                 "如需修复，只生成 local_data_plan_repair 计划、确认点、风险和影响说明。",
                 "用户确认后才允许进入 *_confirmed 工具或修复执行，并在执行后复查状态。",
             ]
-            clarifications = [
+            clarification_questions = [
                 "要检查全部本地数据，还是指定 dataset、schedule 或 sync target？",
                 "是否确认本轮只做只读检查和修复计划，不启动同步/刷新/repair job？",
-                "是否需要特别关注 dataset_date_refresh_audit、data_sync_targets 或 ingestion_jobs 中的某类证据？",
             ]
             action_proposals = [
                 {"title": "Local data health overview", "risk": "low", "approval_required": False, "status": "read_only"},
                 {"title": "生成 local_data_plan_repair 修复计划", "risk": "medium", "approval_required": False, "status": "plan_only"},
                 {"title": "local_data_apply_repair_confirmed", "risk": "production_sensitive", "approval_required": True, "status": "waiting_confirmation"},
             ]
-            capability_mcp = (
-                "已识别 aistock-local-data MCP：优先使用 local_data_health_overview、"
-                "local_data_get_dataset_status、local_data_list_sync_targets 和 local_data_plan_repair；"
-                "确认前不调用 repair/sync confirmed 工具。"
-            )
-            capability_skill = "已纳入 local_data_management capability，用于本地数据健康检查、同步目标排查和修复计划。"
-            capability_tools = [
-                "local_data_health_overview",
-                "local_data_get_dataset_status",
-                "local_data_list_sync_targets",
-                "local_data_plan_repair",
-                "local_data_apply_repair_confirmed",
-            ]
-            safety.update({"local_data_read_only_before_confirmation": True, "no_data_job_before_confirmation": True})
-        elif is_qe:
-            plan_steps = [
-                "复述 QE 实验目标、收益评估方向和本轮不执行的边界。",
-                "从 QE MCP 目录中选择模板创建、验证、预检查相关能力，并确认固定 PIT 股票池要求。",
-                "生成 10 个 loop 的草稿结构、候选因子来源、时间窗和成本约束。",
-                "等待用户确认后，才允许进入 validate、stock pool、节点健康和成本 preflight。",
-                "preflight 全部通过且用户再次确认后，后续阶段才能调用 materialize 或 run。",
-            ]
-            clarifications = [
-                "本次 QE 回测应使用哪个固定 PIT 股票池或默认回测股票池？",
-                "10 个 loop 的目标更偏向收益提升、稳定性、因子覆盖，还是模型结构探索？",
-                "确认前是否继续保持只生成草稿，不调用 materialize/run？",
-            ]
-            action_proposals = [
-                {"title": "生成 QE 10 loop 实验草稿", "risk": "medium", "approval_required": False, "status": "draft_only"},
-                {"title": "QE template validate + MCP preflight", "risk": "high", "approval_required": True, "status": "waiting_confirmation"},
-            ]
-        else:
-            plan_steps = [
-                "复述你的研究目标和约束。",
-                "选择可能需要的 MCP、Skill、Memory 和模型配置。",
-                "列出缺失信息和风险等级。",
-                "在你确认后，再进入相应 MCP preflight 或草稿生成。",
-            ]
-            clarifications = ["请确认这次任务只需要我先规划和提问，还是还要准备某个 MCP 的预检查？"]
-            action_proposals = [{"title": "继续澄清并生成计划", "risk": "low", "approval_required": False, "status": "ready"}]
-        capability_summary = {
-            "mcp": capability_mcp,
-            "skill": capability_skill,
-            "model": route.get("model_profile", {}).get("display_name") or route.get("model_profile", {}).get("model_name"),
-            "prompt_branches": [item["prompt_key"] for item in bundle.get("node_refs", [])],
-        }
-        if capability_tools:
-            capability_summary["mcp_tools"] = capability_tools
-        return {
-            "plan_card": {"title": "本轮计划", "steps": plan_steps},
-            "clarification_card": {"title": "需要你确认", "questions": clarifications},
+        show_plan_card = bool(mode_cfg.get("show_plan_card", True))
+        show_clarification_card = bool(mode_cfg.get("show_clarification_card", True))
+        details_default_collapsed = bool(mode_cfg.get("details_default_collapsed", mode_decision.mode in {DialogueMode.DIALOGUE, DialogueMode.ANALYSIS}))
+        if mode_decision.mode in {DialogueMode.DIALOGUE, DialogueMode.ANALYSIS}:
+            max_questions = int(mode_cfg.get("max_clarification_questions", 0))
+            clarification_questions = clarification_questions[:max_questions]
+            action_proposals = []
+            plan_steps = []
+        cards = {
+            "intent_type": dialogue_intent.value,
+            "dialogue_mode": mode_decision.mode.value,
+            "mode_decision": mode_decision.as_dict(),
             "action_proposals": action_proposals,
-            "status_rail": [
-                {"label": "接收需求", "status": "done"},
-                {"label": "选择提示词", "status": "done"},
-                {"label": "构建上下文", "status": "done"},
-                {"label": "等待确认", "status": "current"},
-                {"label": "MCP 预检查", "status": "locked"},
-                {"label": "执行", "status": "locked"},
-                {"label": "写入记忆", "status": "locked"},
-            ],
+            "capability_cards": capability_cards,
+            "missing_capability_keys": missing_capability_keys,
+            "status_rail": self._status_rail(status_rail_ref, intent_config),
             "capability_summary": capability_summary,
-            "safety": safety,
+            "safety": dict(intent_config.get("safety") or {}),
+            "main_reply_policy": {
+                "expose_context_pack": bool(mode_cfg.get("expose_context_pack")),
+                "expose_audit_fields": bool(mode_cfg.get("expose_audit_fields")),
+                "raw_json_main_view": bool(mode_cfg.get("raw_json_main_view", False)),
+            },
+            "ui_display": {
+                "show_plan_card": show_plan_card,
+                "show_clarification_card": show_clarification_card,
+                "show_context_health_badge": bool(mode_cfg.get("show_context_health_badge", True)),
+                "details_default_collapsed": details_default_collapsed,
+            },
         }
+        if is_local_data:
+            cards["capability_summary"].update(
+                {
+                    "mcp": "已识别 aistock-local-data MCP：优先使用 local_data_health_overview、local_data_get_dataset_status、local_data_list_sync_targets 和 local_data_plan_repair；确认前不调用 repair/sync confirmed 工具。",
+                    "skill": "已纳入 local_data_management capability，用于本地数据健康检查、同步目标排查和修复计划。",
+                    "local_data_management": "本地数据管理按检查、计划、确认、执行、复查闭环处理。",
+                    "mcp_tools": [
+                        "local_data_health_overview",
+                        "local_data_get_dataset_status",
+                        "local_data_list_sync_targets",
+                        "local_data_plan_repair",
+                        "local_data_apply_repair_confirmed",
+                    ],
+                }
+            )
+            cards["safety"].update({"local_data_read_only_before_confirmation": True, "no_data_job_before_confirmation": True})
+            cards["local_data_management"] = {
+                "capability_key": "local_data_management",
+                "mcp_server": "aistock-local-data",
+                "phases": [
+                    {"key": "check", "status": "done"},
+                    {"key": "plan", "status": "done"},
+                    {"key": "confirm", "status": "current"},
+                    {"key": "execute", "status": "locked"},
+                    {"key": "review", "status": "locked"},
+                ],
+            }
+            cards["local_data_phases"] = cards["local_data_management"]["phases"]
+        if self._is_mcp_tool_catalog_inquiry(user_message):
+            cards["runtime_mcp_catalog"] = self._mcp_tool_catalog_snapshot()
+        if show_plan_card:
+            cards["plan_card"] = {
+                "title": str(template.get("plan_title") or ""),
+                "steps": plan_steps,
+                "default_collapsed": details_default_collapsed,
+            }
+        if show_clarification_card and clarification_questions:
+            cards["clarification_card"] = {
+                "title": str(template.get("clarification_title") or ""),
+                "questions": clarification_questions,
+                "default_collapsed": details_default_collapsed,
+            }
+        return cards
 
     @staticmethod
-    def _compose_assistant_reply(user_message: str, llm_text: str, cards: dict[str, Any]) -> str:
-        lines = [llm_text.strip()]
-        lines.append("\n我已先把本轮限制在理解、计划和确认阶段；不会在确认前执行 QE materialize/run、本地数据 repair/sync 或其他高风险 MCP。")
-        if ResearchAssistantService._is_local_data_management_request(user_message):
-            lines.append("本地数据同步我会先走 aistock-local-data MCP 的只读检查和 repair plan；你确认前不启动同步、刷新或修复 job。")
-        if ResearchAssistantService._is_qe_request(user_message):
-            lines.append("我会把 QE 回测和实盘严格区分，回测默认要求固定 PIT 股票池或你明确指定的股票池。")
-        lines.append(f"请先确认：{cards['clarification_card']['questions'][0]}")
+    def _dialogue_card_template(dialogue_intent: DialogueIntent, intent_config: dict[str, Any]) -> dict[str, Any]:
+        templates = intent_config.get("card_templates") if isinstance(intent_config, dict) else {}
+        if not isinstance(templates, dict):
+            return {}
+        template = templates.get(dialogue_intent.value) or templates.get(DialogueIntent.GENERAL_CHAT.value) or {}
+        return dict(template) if isinstance(template, dict) else {}
+
+    @staticmethod
+    def _capability_cards(capabilities: list[dict[str, Any]], capability_keys: set[str]) -> list[dict[str, Any]]:
+        return [
+            {
+                "capability_key": str(item.get("capability_key")),
+                "title": str(item.get("title") or item.get("capability_key")),
+                "risk": str(item.get("risk_level") or "medium"),
+                "side_effect": str(item.get("side_effect_level") or "read_only"),
+                "status": "available",
+                "required_confirmations": item.get("required_confirmations") or [],
+            }
+            for item in capabilities
+            if str(item.get("capability_key")) in capability_keys
+        ]
+
+    @staticmethod
+    def _status_rail(mode: str, intent_config: dict[str, Any]) -> list[dict[str, str]]:
+        rails = intent_config.get("status_rails") if isinstance(intent_config, dict) else {}
+        if not isinstance(rails, dict):
+            return []
+        selected = rails.get(mode) or rails.get("answered") or []
+        if not isinstance(selected, list):
+            return []
+        return [
+            {"label": str(item.get("label") or ""), "status": str(item.get("status") or "idle")}
+            for item in selected
+            if isinstance(item, dict)
+        ]
+
+    def _compose_assistant_reply(self, user_message: str, llm_text: str, cards: dict[str, Any], mode_decision: ModeDecision) -> str:
+        text = llm_text.strip()
+        if mode_decision.intent_type == DialogueIntent.CAPABILITY_INQUIRY and self._is_mcp_tool_catalog_inquiry(user_message):
+            catalog = cards.get("runtime_mcp_catalog") if isinstance(cards, dict) else None
+            if isinstance(catalog, dict):
+                return self._apply_main_reply_policy(self._render_mcp_tool_catalog_reply(catalog), mode_decision)
+        if text:
+            return self._apply_main_reply_policy(text, mode_decision)
+        intent_config = self._dialogue_intent_config()
+        return self._apply_main_reply_policy(str(intent_config.get("fallback_reply") or user_message), mode_decision)
+
+    @staticmethod
+    def _render_mcp_tool_catalog_reply(catalog: dict[str, Any]) -> str:
+        lines = [
+            "当前 Research Assistant 只能按已登记的运行时 MCP 目录使用工具，不具备未登记的通用文件、Shell、Git、HTTP 或数仓直连工具。",
+            f"已启用 MCP server：{catalog.get('server_count', 0)} 个；已启用 MCP tool：{catalog.get('tool_count', 0)} 个；已批准能力：{catalog.get('capability_count', 0)} 个。",
+        ]
+        tools_by_server = catalog.get("tools_by_server") if isinstance(catalog.get("tools_by_server"), dict) else {}
+        if tools_by_server:
+            lines.append("已登记 MCP tools：")
+            for server_key in sorted(str(key) for key in tools_by_server):
+                tools = tools_by_server.get(server_key) or []
+                names = ", ".join(str(tool.get("tool_name") or "") for tool in tools if isinstance(tool, dict))
+                lines.append(f"- {server_key}: {names or '无启用工具'}")
+        else:
+            lines.append("当前没有启用的 MCP tool；需要先完成目录初始化或能力同步。")
+        lines.append("如需执行具体动作，还要经过对应 preflight、确认和审批边界；普通能力询问不会自动调用 MCP。")
         return "\n".join(lines)
+
+    def _apply_main_reply_policy(self, text: str, mode_decision: ModeDecision) -> str:
+        if mode_decision.mode not in {DialogueMode.DIALOGUE, DialogueMode.ANALYSIS}:
+            return text
+        mode_cfg = self._dialogue_mode_config(mode_decision.mode.value)
+        forbidden = [str(item) for item in mode_cfg.get("forbidden_main_reply_phrases", []) if str(item)]
+        if not forbidden:
+            return text
+        kept_lines: list[str] = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if any(stripped.startswith(phrase) or phrase in stripped for phrase in forbidden):
+                continue
+            kept_lines.append(line)
+        cleaned = "\n".join(kept_lines).strip()
+        return cleaned or text
 
     def add_task_event(self, task_id: str, request: TaskEventCreate | dict[str, Any]) -> dict[str, Any]:
         if not self.repository.get_record("tasks", task_id):
@@ -1681,15 +2686,19 @@ class ResearchAssistantService:
             page = self.repository.list_records(
                 "memory_items",
                 filters={"namespace": data.namespace, "memory_type": memory_type, "approval_status": "approved"},
-                limit=50,
+                limit=self.configured_limit("memory_items_context_pack"),
             )
             refs = [item["memory_id"] for item in page["items"]]
             refs_by_type[memory_type] = refs
             memory_items.extend(page["items"])
         temp_refs = []
         if data.task_id:
-            temp_page = self.repository.list_records("temp_memories", filters={"task_id": data.task_id}, limit=50)
+            temp_page = self.repository.list_records("temp_memories", filters={"task_id": data.task_id}, limit=self.configured_limit("temp_memories_context_pack"))
             temp_refs = [item["temp_memory_id"] for item in temp_page["items"]]
+        max_context_budget = self.configured_limit("context_pack_max_token_budget")
+        token_budget = data.token_budget or self.configured_limit("default_context_pack_token_budget")
+        if token_budget > max_context_budget:
+            raise ValueError(f"token_budget exceeds configured context_pack_max_token_budget: {max_context_budget}")
         pack_json = {
             "mandatory_rules": [
                 "Memory Ledger 是事实源，RAG/向量只能辅助召回。",
@@ -1699,7 +2708,7 @@ class ResearchAssistantService:
             "memory_items": memory_items,
             "task_id": data.task_id,
             "agent_id": data.agent_id,
-            "token_budget": data.token_budget,
+            "token_budget": token_budget,
         }
         context_pack_id = new_id("ctx")
         row = {
@@ -1707,7 +2716,7 @@ class ResearchAssistantService:
             "task_id": data.task_id,
             "agent_id": data.agent_id,
             "model_profile": data.model_profile,
-            "token_budget": data.token_budget,
+            "token_budget": token_budget,
             "core_memory_refs": refs_by_type.get("core", []),
             "procedural_memory_refs": refs_by_type.get("procedural", []),
             "architecture_memory_refs": refs_by_type.get("architecture", []),
@@ -1737,7 +2746,7 @@ class ResearchAssistantService:
                     },
                     "used_in_prompt": True,
                     "payload_json": {
-                        "token_budget": data.token_budget,
+                        "token_budget": token_budget,
                         "model_profile": data.model_profile,
                     },
                 },
@@ -1760,8 +2769,8 @@ class ResearchAssistantService:
         entity = self.repository.get_record("entities", entity_id)
         if not entity:
             raise KeyError(f"entity not found: {entity_id}")
-        outgoing = self.repository.list_records("relations", filters={"source_entity_id": entity_id}, limit=200)["items"]
-        incoming = self.repository.list_records("relations", filters={"target_entity_id": entity_id}, limit=200)["items"]
+        outgoing = self.repository.list_records("relations", filters={"source_entity_id": entity_id}, limit=self.configured_limit("graph_entity_relations"))["items"]
+        incoming = self.repository.list_records("relations", filters={"target_entity_id": entity_id}, limit=self.configured_limit("graph_entity_relations"))["items"]
         return {"entity": entity, "outgoing_relations": outgoing, "incoming_relations": incoming}
 
     def create_graph_relation(self, request: GraphRelationCreate | dict[str, Any]) -> dict[str, Any]:
@@ -1795,9 +2804,9 @@ class ResearchAssistantService:
         return path
 
     def graph_summary(self, *, namespace: str = "aistock") -> dict[str, Any]:
-        entities = self.repository.list_records("entities", filters={"namespace": namespace}, limit=500)
-        relations = self.repository.list_records("relations", limit=500)
-        paths = self.repository.list_records("evolution_paths", limit=100)
+        entities = self.repository.list_records("entities", filters={"namespace": namespace}, limit=self.configured_limit("graph_summary_entities"))
+        relations = self.repository.list_records("relations", limit=self.configured_limit("graph_summary_relations"))
+        paths = self.repository.list_records("evolution_paths", limit=self.configured_limit("graph_summary_paths"))
         return {
             "namespace": namespace,
             "entity_count": entities["total"],
@@ -1817,7 +2826,8 @@ class ResearchAssistantService:
         if not server:
             raise KeyError(f"MCP server not registered: {data.server_key}")
         risk = str(tool.get("risk_level") or "medium")
-        requires_approval = bool(tool.get("requires_approval")) or risk in {"high", "production_sensitive"}
+        side_effect = str(tool.get("side_effect_level") or "read_only")
+        requires_approval = bool(tool.get("requires_approval")) or self._side_effect_requires_approval(side_effect, risk)
         failures: list[dict[str, Any]] = []
         if tool.get("status") not in {"enabled", "ready", "approved"}:
             failures.append({"check": "tool_status", "status": "failed", "detail": tool.get("status")})
@@ -1836,6 +2846,7 @@ class ResearchAssistantService:
             "server_key": data.server_key,
             "tool_name": data.tool_name,
             "risk_level": risk,
+            "side_effect_level": side_effect,
             "requires_approval": requires_approval,
             "passed": passed,
             "approval_required": requires_approval,
@@ -2043,9 +3054,27 @@ class ResearchAssistantService:
 
     def route_model(self, request: ModelRouteRequest | dict[str, Any]) -> dict[str, Any]:
         data = request if isinstance(request, ModelRouteRequest) else ModelRouteRequest(**request)
-        policies = self.repository.list_records("routing_policies", filters={"role": data.role, "risk_level": data.risk_level, "status": "enabled"}, limit=20)["items"]
+        runtime_config = self.active_runtime_config()
+        policies = self.repository.list_records(
+            "routing_policies",
+            filters={"role": data.role, "risk_level": data.risk_level, "status": "enabled"},
+            limit=self.configured_limit("routing_policy_primary"),
+        )["items"]
         if not policies:
-            policies = self.repository.list_records("routing_policies", filters={"role": data.role, "status": "enabled"}, limit=20)["items"]
+            policies = self.repository.list_records(
+                "routing_policies",
+                filters={"role": data.role, "status": "enabled"},
+                limit=self.configured_limit("routing_policy_role_fallback"),
+            )["items"]
+        policies = [policy for policy in policies if self._routing_selector_matches(policy, data, runtime_config)]
+        if data.role == "primary_reasoner" and data.risk_level not in {"high", "production_sensitive"}:
+            long_context_policies = self.repository.list_records(
+                "routing_policies",
+                filters={"role": "long_context", "status": "enabled"},
+                limit=self.configured_limit("routing_policy_role_fallback"),
+            )["items"]
+            long_context_policies = [policy for policy in long_context_policies if self._routing_selector_matches(policy, data, runtime_config)]
+            policies = [*long_context_policies, *policies]
         selected = policies[0] if policies else None
         profile_id = selected.get("model_profile_id") or selected.get("primary_profile_id") if selected else None
         profile = self.repository.get_record("model_profiles", profile_id) if profile_id else None
@@ -2058,10 +3087,18 @@ class ResearchAssistantService:
                 profile = None
             else:
                 fallback_reason = f"profile {profile_id} is {profile.get('status')}"
-                selected = None
-                profile = None
-                route_status = "fallback_selected"
-                for policy in self.repository.list_records("routing_policies", filters={"status": "enabled"}, limit=100)["items"]:
+                fallback_id = (selected.get("fallback_json") or {}).get("fallback_profile_id") if selected else None
+                fallback_profile = self.repository.get_record("model_profiles", fallback_id) if fallback_id else None
+                if fallback_profile and fallback_profile.get("status") == "enabled":
+                    profile = fallback_profile
+                    route_status = "fallback_selected"
+                else:
+                    selected = None
+                    profile = None
+                    route_status = "fallback_selected"
+                for policy in self.repository.list_records("routing_policies", filters={"status": "enabled"}, limit=self.configured_limit("routing_policy_scan"))["items"]:
+                    if profile is not None:
+                        break
                     candidate_id = policy.get("model_profile_id") or policy.get("primary_profile_id")
                     candidate = self.repository.get_record("model_profiles", candidate_id) if candidate_id else None
                     if candidate and candidate.get("status") == "enabled":
@@ -2080,6 +3117,23 @@ class ResearchAssistantService:
             "fallback_reason": fallback_reason,
             "temp_memory_only_for_low_cost": bool(profile and profile.get("role") == "cheap_worker"),
         }
+
+    def _routing_selector_matches(self, policy: dict[str, Any], request: ModelRouteRequest, runtime_config: dict[str, Any]) -> bool:
+        selector = policy.get("selector_json") or {}
+        threshold_path = selector.get("token_estimate_gte_config_path")
+        if threshold_path:
+            threshold = int(self._config_path_value(runtime_config, str(threshold_path)))
+            return request.token_estimate >= threshold
+        return True
+
+    @staticmethod
+    def _config_path_value(config: dict[str, Any], path: str) -> Any:
+        current: Any = config
+        for part in path.split("."):
+            if not isinstance(current, dict) or part not in current:
+                raise KeyError(f"runtime config path not found: {path}")
+            current = current[part]
+        return current
 
     def create_temp_memory(self, payload: dict[str, Any]) -> dict[str, Any]:
         content_json = payload.get("content_json") or {}
@@ -2110,16 +3164,16 @@ class ResearchAssistantService:
         )
 
     def notification_summary(self, user_id: str = "default") -> dict[str, Any]:
-        page = self.repository.list_records("notifications", filters={"user_id": user_id}, limit=100)
+        page = self.repository.list_records("notifications", filters={"user_id": user_id}, limit=self.configured_limit("notification_summary_items"))
         counts: dict[str, int] = {}
         for item in page["items"]:
             status = str(item.get("status") or "unknown")
             counts[status] = counts.get(status, 0) + 1
-        return {"user_id": user_id, "counts": counts, "unread": counts.get("unread", 0), "items": page["items"][:10]}
+        return {"user_id": user_id, "counts": counts, "unread": counts.get("unread", 0), "items": page["items"][: self.configured_limit("notification_summary_preview")]}
 
     def validation_discovery_summary(self) -> dict[str, Any]:
-        reports = self.repository.list_records("validation_discovery_reports", limit=20)
-        candidates = self.repository.list_records("issue_candidates", filters={"status": "needs_review"}, limit=50)
+        reports = self.repository.list_records("validation_discovery_reports", limit=self.configured_limit("validation_reports"))
+        candidates = self.repository.list_records("issue_candidates", filters={"status": "needs_review"}, limit=self.configured_limit("validation_issue_candidates"))
         return {"latest_reports": reports["items"], "candidate_issues_needing_review": candidates["items"], "generated_at": utc_now().isoformat()}
 
     def _ensure_default_reports_and_notifications(self, seeded: dict[str, int]) -> None:

@@ -1,12 +1,12 @@
 {
   "schema_version": "aistock_validation_bug_v1",
   "bug_id": "BUG-109",
-  "title": "Research Assistant ?? QE 10 loop ??????????????",
-  "description": "Expected: Research Assistant ???QE 10 loop????????????????????????????????????????? loop ???????? loop ?????????????????? 10 loop ??????????????????\nActual: ?????? backend/services/research_assistant/service.py ? DEFAULT_PROMPT_NODES ? _build_human_cards() ???QE 10 loop / 10 ? loop????????????????????????? action title??????? QE ???????????? 10 ? loop???????????????????????? QE ?????",
+  "title": "Research Assistant hardcoded QE 10 loop example misleads prompts and task cards",
+  "description": "Research Assistant used to contain fixed QE 10 loop examples in prompt/card/frontend surfaces, causing capability inquiries or draft requests to look as if 10 loops were the default target. The fix moved the assistant to intent-gated dialogue governance: loop count now comes only from explicit user input, runtime configuration or audited context, and ordinary capability/status/concept turns do not select QE workflow branches or action proposals.",
   "module": "research_assistant",
   "severity": "P1",
   "risk_area": "prompt_runtime_correctness",
-  "status": "open",
+  "status": "fixed",
   "trigger_condition": {
     "scenario": "reported_via_mcp_allocator_fallback",
     "files": [
@@ -18,7 +18,7 @@
       "frontend/tests/research-assistant/research-assistant.spec.ts"
     ]
   },
-  "reproduce_command": "rg -n --glob '!node_modules' --glob '!.git' --glob '!frontend/.next*' \\\"10\\\\s*?\\\\s*loop|10\\\\s*loop|??\\\\s*loop|QE\\\\s*10|loop ???\\\" F:\\\\Dev\\\\AIstock\\\\backend F:\\\\Dev\\\\AIstock\\\\frontend F:\\\\Dev\\\\AIstock\\\\docs F:\\\\Dev\\\\AIstock\\\\scripts F:\\\\Dev\\\\AIstock\\\\tests",
+  "reproduce_command": "rg -n \"QE 10 loop|generate 10 loops|10 loop target|create a QE 10 loop|cardText\\(\" backend/services backend/tests frontend/src/app/research-assistant frontend/src/lib/research-assistant frontend/tests/research-assistant configs/research_assistant prompt_packs/research_assistant/main",
   "failing_run_id": null,
   "evidence_uris": [
     "file:backend/services/research_assistant/service.py",
@@ -27,17 +27,21 @@
     "file:backend/tests/research_assistant/test_api.py",
     "file:backend/tests/mcp/test_research_assistant_module.py",
     "file:frontend/tests/research-assistant/research-assistant.spec.ts",
-    "https://github.com/licong01-cloud/AIstock/issues/177"
+    "https://github.com/licong01-cloud/AIstock/issues/177",
+    "github:https://github.com/licong01-cloud/AIstock/issues/177",
+    "github:https://github.com/licong01-cloud/AIstock/commit/05e5c7d44c2b1f08bbd8c45199e07e7ab2a20c38",
+    "file:tests/aistock_validation/history/research_assistant/20260526_human_dialogue_governance_validation.md",
+    "file:tests/aistock_validation/history/research_assistant/20260527_bug105_109_117_close_sync_validation.md"
   ],
   "fingerprint": "a91c2d7f75199324",
   "assigned_agent": null,
-  "fix_branch": null,
-  "fix_commit": null,
-  "verification_run_id": null,
+  "fix_branch": "feature/research-assistant-human-dialogue-20260526",
+  "fix_commit": "05e5c7d44c2b1f08bbd8c45199e07e7ab2a20c38",
+  "verification_run_id": "tests/aistock_validation/history/research_assistant/20260527_bug105_109_117_close_sync_validation.md",
   "created_at": "2026-05-23T05:22:45Z",
   "first_seen_at": "2026-05-23T05:22:45Z",
-  "last_seen_at": "2026-05-23T05:22:45Z",
-  "fixed_at": null,
+  "last_seen_at": "2026-05-26T16:45:00Z",
+  "fixed_at": "2026-05-26T16:45:00Z",
   "submitted_at": "2026-05-23T05:22:45Z",
   "closed_at": null,
   "allowed_write_scope": [
@@ -46,7 +50,12 @@
     "backend/tests/research_assistant/test_service.py",
     "backend/tests/research_assistant/test_api.py",
     "backend/tests/mcp/test_research_assistant_module.py",
-    "frontend/tests/research-assistant/research-assistant.spec.ts"
+    "frontend/tests/research-assistant/research-assistant.spec.ts",
+    "tests/aistock_validation/bugs/20260523_BUG-109-research-assistant-qe-10-loop-prompt-fixed-target.json",
+    "tests/aistock_validation/history/research_assistant",
+    "backend/tests/mcp/test_profiles_registry_gateway.py",
+    "tests/aistock_validation/bugs/20260523_BUG-105-research-assistant-chat-loses-conversation-context.json",
+    "tests/aistock_validation/bugs/20260524_BUG-117-research-assistant-prompt-forbids-undeveloped-mouse-keyboard.json"
   ],
   "suspected_modules": [
     "backend/services/research_assistant/service.py",
@@ -57,16 +66,16 @@
     "frontend/tests/research-assistant/research-assistant.spec.ts"
   ],
   "required_verification": [
-    "??? loop ?? QE ??????????? 10 loop?",
-    "??? 10 loop ?? QE ??????????????????????",
-    "?? 10 loop ??????????????????????",
-    "????????????? QE ????? 10 loop ????"
+    "Static scan confirms active Research Assistant prompt/config/frontend/runtime paths no longer contain fixed QE 10 loop defaults or appended cardText workflow boilerplate.",
+    "Backend tests confirm capability inquiry, concept/status turns and ambiguous requests do not trigger QE workflow prompt branches or action proposals.",
+    "Frontend Playwright tests confirm the main chat answer stays readable and does not append raw plan/confirmation/payload details.",
+    "BUG JSON and GitHub issue #177 are synchronized with fix commit, validation evidence and production gates."
   ],
   "closure_requirements": [
-    "?? DEFAULT_PROMPT_NODES ?? QE ??????? 10 loop ????",
-    "?? _build_human_cards()?? loop ?????????????",
-    "???????????????? loop??? 5 loop??? 10 loop?",
-    "????????????????????/?????"
+    "Default prompt and human-card templates do not hardcode 10 loop as a QE target.",
+    "Loop/iteration count is sourced from user input, runtime config or audited context rather than a prompt example.",
+    "Capability or status questions do not start QE planning/preflight/execution workflow by keyword alone.",
+    "Validation evidence records static scans, backend tests, frontend E2E and production gates."
   ],
   "events": [
     {
@@ -104,8 +113,52 @@
       "actor": "codex-app",
       "action": "github_issue_created",
       "note": "Created GitHub mirror #177 after Validation MCP live sync was blocked by a stale MCP worktree/BOM read failure."
+    },
+    {
+      "timestamp": "2026-05-26T16:45:00Z",
+      "actor": "codex-app",
+      "action": "workflow_close_sync_validation",
+      "note": "Closed by human dialogue governance commits 05e5c7d4/55f56bb2 on main; final close-sync validation confirmed no fixed QE 10 loop/cardText legacy patterns remain in active scoped paths."
+    },
+    {
+      "timestamp": "2026-05-26T17:00:31Z",
+      "actor": "codex-app",
+      "action": "github_issue_synced",
+      "note": "Synced bug registry entry to GitHub issue #177."
+    },
+    {
+      "timestamp": "2026-05-26T18:55:00Z",
+      "actor": "codex-app",
+      "action": "post_main_sync_validation",
+      "note": "User-approved close-sync expansion recorded shared Research Assistant BUG-105/109/117 closure files and the MCP gateway tool-count drift correction."
     }
   ],
   "github_issue_number": 177,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/177"
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/177",
+  "fix_commits": [
+    "05e5c7d44c2b1f08bbd8c45199e07e7ab2a20c38",
+    "55f56bb2b5e5ee6e6ba5b44bdc0e7b39b9f52746"
+  ],
+  "validation_evidence": [
+    "python -m pytest -q backend/tests/research_assistant backend/tests/mcp/test_research_assistant_module.py backend/tests/mcp/test_profiles_registry_gateway.py -p no:cacheprovider -> 60 passed in 19.32s",
+    "python -m compileall backend/services/research_assistant backend/mcp/modules/research_assistant.py backend/tests/mcp/test_profiles_registry_gateway.py -> passed",
+    "npm --prefix frontend run build -> passed; only pre-existing unrelated react-hooks/exhaustive-deps warnings",
+    "npx playwright test tests/research-assistant/research-assistant.spec.ts --project chromium -> 3 passed in 18.5s",
+    "static scans for BUG-109 legacy QE 10 loop/cardText patterns and BUG-117 undeveloped capability ban phrases in active runtime paths -> no matches",
+    "git diff --check -> passed",
+    "python -m pytest -q backend/tests/scripts/test_aistock_mcp_github_issue_tools.py backend/tests/scripts/test_bug_github_sync.py backend/tests/mcp/test_profiles_registry_gateway.py -p no:cacheprovider -> 63 passed in 2.36s",
+    "post-merge origin/main=33c600fd: python -m pytest -q backend/tests/research_assistant backend/tests/mcp/test_research_assistant_module.py backend/tests/mcp/test_profiles_registry_gateway.py -p no:cacheprovider -> 60 passed in 17.83s",
+    "post-merge origin/main=33c600fd: python -m pytest -q backend/tests/scripts/test_aistock_mcp_github_issue_tools.py backend/tests/scripts/test_bug_github_sync.py backend/tests/mcp/test_profiles_registry_gateway.py -p no:cacheprovider -> 64 passed in 2.42s",
+    "post-merge origin/main=33c600fd: python -m pytest backend/tests/paper_trading_v2 backend/tests/selection_center backend/tests/strategy_package --ignore-glob=backend/tests/paper_trading_v2/*dev_db*.py --ignore=backend/tests/paper_trading_v2/test_runtime_enable_paper_compat.py -k 'not test_model_asset_resolver_uses_aistock_cache_without_wsl_unc_probe' -q -p no:cacheprovider -> 493 passed, 1 skipped, 1 deselected in 18.92s",
+    "post-merge origin/main=33c600fd: python -m ruff check --force-exclude backend/tests/mcp/test_profiles_registry_gateway.py -> All checks passed",
+    "post-merge origin/main=33c600fd: python -m compileall backend/services/research_assistant backend/mcp/modules/research_assistant.py backend/tests/mcp/test_profiles_registry_gateway.py -> passed",
+    "post-merge origin/main=33c600fd: static scans for BUG-109 legacy QE 10 loop/cardText patterns and BUG-117 undeveloped capability ban patterns in active runtime paths -> no matches",
+    "post-merge origin/main=33c600fd: gh issue view 168/177/186 -> CLOSED with status:fixed labels"
+  ],
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "production_backend_dependency_gate": "noop",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ]
 }

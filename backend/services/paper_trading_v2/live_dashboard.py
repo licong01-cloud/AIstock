@@ -30,6 +30,10 @@ TICKABLE_SESSION_STATUSES = {
     PaperSessionStatus.LIVE_RUNNING,
     PaperSessionStatus.LIVE_WAITING_FOR_BAR,
     PaperSessionStatus.LIVE_WAITING_NEXT_TRADING_DAY,
+    PaperSessionStatus.LIVE_WAITING_MARKET_WINDOW,
+    PaperSessionStatus.LIVE_WAITING_PLATFORM_DATA,
+    PaperSessionStatus.LIVE_WAITING_BROKER,
+    PaperSessionStatus.LIVE_RETRYING,
 }
 
 
@@ -175,7 +179,7 @@ class PaperTradingLiveDashboardService:
         if no_operable:
             hint = (
                 "Portfolio status is active but no scheduler-tickable live/replay session exists. "
-                "Review the latest terminal session, then create or resume a session outside the 09:15-15:00 state-change block."
+                "Review the latest terminal session, then create or resume a session; intraday recovery is allowed."
             )
         return {
             "has_sessions": bool(sessions),

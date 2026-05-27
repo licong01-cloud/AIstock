@@ -52,6 +52,11 @@ class PaperPortfolio(BaseModel):
     fee_policy: dict[str, Any] = Field(default_factory=dict)
     risk_policy: dict[str, Any] = Field(default_factory=dict)
     execution_policy: dict[str, Any] = Field(default_factory=dict)
+    auto_run_enabled: bool = False
+    auto_run_config: dict[str, Any] = Field(default_factory=dict)
+    auto_run_config_sha256: str | None = None
+    auto_run_updated_at: datetime | None = None
+    auto_run_updated_by: str | None = None
     status: PortfolioStatus = PortfolioStatus.READY
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -76,6 +81,28 @@ class PaperPortfolio(BaseModel):
             )
         assert_broker_market_source_match(self.broker_backend, self.data_source)
         return self
+
+
+class BrokerAccountBindingStatus(str, Enum):
+    ACTIVE = "ACTIVE"
+    PAUSED = "PAUSED"
+    RETIRED = "RETIRED"
+
+
+class PaperBrokerAccountBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    binding_id: str = Field(default_factory=lambda: f"pbab_{uuid4().hex}")
+    broker_backend: BrokerBackendId
+    broker_mode: str = "SIM"
+    broker_account_id: str
+    portfolio_id: str
+    binding_status: BrokerAccountBindingStatus = BrokerAccountBindingStatus.ACTIVE
+    allocation_mode: str = "exclusive_account"
+    initial_cash: float | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    created_by: str | None = None
 
 
 ModelParamsOrigin = Literal["node", "cache", "unavailable"]
@@ -290,6 +317,10 @@ class PaperSessionStatus(str, Enum):
     LIVE_RUNNING = "LIVE_RUNNING"
     LIVE_WAITING_FOR_BAR = "LIVE_WAITING_FOR_BAR"
     LIVE_WAITING_NEXT_TRADING_DAY = "LIVE_WAITING_NEXT_TRADING_DAY"
+    LIVE_WAITING_MARKET_WINDOW = "LIVE_WAITING_MARKET_WINDOW"
+    LIVE_WAITING_PLATFORM_DATA = "LIVE_WAITING_PLATFORM_DATA"
+    LIVE_WAITING_BROKER = "LIVE_WAITING_BROKER"
+    LIVE_RETRYING = "LIVE_RETRYING"
     PAUSED = "PAUSED"
     STOPPING = "STOPPING"
     STOPPED = "STOPPED"

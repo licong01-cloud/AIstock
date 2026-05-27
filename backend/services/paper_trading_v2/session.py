@@ -9,9 +9,8 @@ created.
 from __future__ import annotations
 
 import threading
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime
 from typing import Any, Literal
-from zoneinfo import ZoneInfo
 
 from backend.services.trading_core.errors import (
     DataUnavailableError,
@@ -48,10 +47,14 @@ from .service import PaperTradingV2PortfolioService
 
 
 SUPPORTED_HISTORICAL_SESSION_SOURCES = {MinuteDataSource.DB_HISTORICAL}
-SUPPORTED_LIVE_SESSION_SOURCES = {MinuteDataSource.TDX_REALTIME}
-SESSION_STATE_CHANGE_BLOCK_START = time(9, 15)
-SESSION_STATE_CHANGE_BLOCK_END = time(15, 0)
-SESSION_STATE_CHANGE_TZ = ZoneInfo("Asia/Shanghai")
+SUPPORTED_LIVE_SESSION_SOURCES_BY_BROKER = {
+    "local_sim": {MinuteDataSource.TDX_REALTIME},
+    "minqmt_sim": {MinuteDataSource.MINIQMT_REALTIME},
+    "minqmt_live": {MinuteDataSource.MINIQMT_REALTIME},
+}
+SUPPORTED_LIVE_SESSION_SOURCES = {
+    source for sources in SUPPORTED_LIVE_SESSION_SOURCES_BY_BROKER.values() for source in sources
+}
 TERMINAL_SESSION_STATUSES = {
     PaperSessionStatus.SUCCEEDED,
     PaperSessionStatus.FAILED,
@@ -65,6 +68,10 @@ PAUSED_RESUMABLE_STATUSES = {
     PaperSessionStatus.LIVE_RUNNING,
     PaperSessionStatus.LIVE_WAITING_FOR_BAR,
     PaperSessionStatus.LIVE_WAITING_NEXT_TRADING_DAY,
+    PaperSessionStatus.LIVE_WAITING_MARKET_WINDOW,
+    PaperSessionStatus.LIVE_WAITING_PLATFORM_DATA,
+    PaperSessionStatus.LIVE_WAITING_BROKER,
+    PaperSessionStatus.LIVE_RETRYING,
 }
 TICKABLE_SESSION_STATUSES = {
     PaperSessionStatus.CREATED,
@@ -75,6 +82,10 @@ TICKABLE_SESSION_STATUSES = {
     PaperSessionStatus.LIVE_RUNNING,
     PaperSessionStatus.LIVE_WAITING_FOR_BAR,
     PaperSessionStatus.LIVE_WAITING_NEXT_TRADING_DAY,
+    PaperSessionStatus.LIVE_WAITING_MARKET_WINDOW,
+    PaperSessionStatus.LIVE_WAITING_PLATFORM_DATA,
+    PaperSessionStatus.LIVE_WAITING_BROKER,
+    PaperSessionStatus.LIVE_RETRYING,
 }
 _SESSION_TICK_LOCKS: dict[str, threading.Lock] = {}
 _SESSION_TICK_LOCKS_GUARD = threading.RLock()
@@ -102,7 +113,7 @@ class PaperTradingSessionService:
     ) -> None:
         self.repository = repository or PaperTradingV2Repository()
         self.package_repository = package_repository
-        self.calendar_provider = calendar_provider
+        self.calendar_provider = calendar_provider or TradeCalendarProvider()
         self.enforce_non_trading_window = enforce_non_trading_window
 
     def create_session(
@@ -156,7 +167,7 @@ class PaperTradingSessionService:
                 )
             session_mode = PaperSessionMode.CATCHUP_THEN_LIVE
             if live_source is None:
-                live_source = MinuteDataSource.TDX_REALTIME
+                live_source = self._default_live_source_for_broker(portfolio.broker_backend)
         self._validate_dates(
             mode=session_mode,
             portfolio_start_date=portfolio.start_date,
@@ -165,6 +176,7 @@ class PaperTradingSessionService:
         )
         self._validate_sources(
             mode=session_mode,
+            broker_backend=portfolio.broker_backend,
             portfolio_data_source=portfolio.data_source,
             historical_data_source=historical_source,
             live_data_source=live_source,
@@ -358,16 +370,19 @@ class PaperTradingSessionService:
         capabilities: dict[str, Any] = {
             "portfolio_id": portfolio_id,
             "portfolio_data_source": portfolio.data_source.value,
+            "broker_backend": portfolio.broker_backend,
             "algo_code": policy_context.get("algo_code"),
             "validated_execution_policy_id": policy_context.get("validated_execution_policy_id"),
             "modes": {},
         }
+        live_source = self._default_live_source_for_broker(portfolio.broker_backend)
         for mode in PaperSessionMode:
             mode_payload: dict[str, Any] = {"can_start": False, "errors": []}
             try:
                 if mode == PaperSessionMode.REPLAY_ONLY:
                     self._validate_sources(
                         mode=mode,
+                        broker_backend=portfolio.broker_backend,
                         portfolio_data_source=portfolio.data_source,
                         historical_data_source=MinuteDataSource.DB_HISTORICAL,
                         live_data_source=None,
@@ -381,9 +396,10 @@ class PaperTradingSessionService:
                 elif mode == PaperSessionMode.LIVE_ONLY:
                     self._validate_sources(
                         mode=mode,
+                        broker_backend=portfolio.broker_backend,
                         portfolio_data_source=portfolio.data_source,
                         historical_data_source=None,
-                        live_data_source=MinuteDataSource.TDX_REALTIME,
+                        live_data_source=live_source,
                     )
                     require_execution_algo_supports_mode(
                         policy_json,
@@ -394,9 +410,10 @@ class PaperTradingSessionService:
                 elif mode == PaperSessionMode.CATCHUP_THEN_LIVE:
                     self._validate_sources(
                         mode=mode,
+                        broker_backend=portfolio.broker_backend,
                         portfolio_data_source=portfolio.data_source,
                         historical_data_source=MinuteDataSource.DB_HISTORICAL,
-                        live_data_source=MinuteDataSource.TDX_REALTIME,
+                        live_data_source=live_source,
                     )
                     require_execution_algo_supports_mode(
                         policy_json,
@@ -500,45 +517,19 @@ class PaperTradingSessionService:
         session_id: str | None = None,
         as_of_time: datetime | None = None,
     ) -> None:
-        if not self.enforce_non_trading_window:
-            return
-        now = self._operation_time(as_of_time)
-        if not self._is_trading_day_for_operation(now.date()):
-            return
-        if SESSION_STATE_CHANGE_BLOCK_START <= now.time() <= SESSION_STATE_CHANGE_BLOCK_END:
-            raise InvalidStateTransitionError(
-                "paper v2 session state changes are blocked during A-share trading hours",
-                context={
-                    "action": action,
-                    "portfolio_id": portfolio_id,
-                    "session_id": session_id,
-                    "as_of_time": now.isoformat(),
-                    "timezone": "Asia/Shanghai",
-                    "blocked_window": {
-                        "start": SESSION_STATE_CHANGE_BLOCK_START.isoformat(),
-                        "end": SESSION_STATE_CHANGE_BLOCK_END.isoformat(),
-                    },
-                    "reason": "change session mode/state before open, after close, or on a non-trading day",
-                },
-            )
+        """Allow intraday operational recovery while keeping execution fail-fast.
 
-    @staticmethod
-    def _operation_time(as_of_time: datetime | None) -> datetime:
-        value = as_of_time or datetime.now(SESSION_STATE_CHANGE_TZ)
-        if value.tzinfo is None:
-            return value.replace(tzinfo=SESSION_STATE_CHANGE_TZ)
-        return value.astimezone(SESSION_STATE_CHANGE_TZ)
-
-    def _is_trading_day_for_operation(self, trade_date: date) -> bool:
-        if self.calendar_provider is not None:
-            try:
-                self.calendar_provider.ensure_trading_day(trade_date)
-                return True
-            except DataUnavailableError:
-                return False
-            except Exception:
-                return trade_date.weekday() < 5
-        return trade_date.weekday() < 5
+        Older Paper v2 APIs used this hook to block all session and portfolio
+        state changes from 09:15 to 15:00. That prevented real recovery
+        scenarios, for example MiniQMT being unavailable in the morning and
+        becoming usable after lunch. The time window is no longer a safety
+        gate: local_sim, minqmt_sim, and future live paths may be started or
+        stopped intraday. Actual trading safety remains enforced by runtime
+        preflight, broker health checks, explicit MiniQMT/live authorization,
+        order submission checks, and fail-fast data validation.
+        """
+        _ = (action, portfolio_id, session_id, as_of_time, self.enforce_non_trading_window)
+        return
 
     def _has_running_run(self, portfolio_id: str) -> bool:
         try:
@@ -567,7 +558,6 @@ class PaperTradingSessionService:
             "source_backtest_id": execution_policy.get("source_backtest_id"),
             "source_backtest_status": execution_policy.get("source_backtest_status"),
             "validation_status": execution_policy.get("validation_status"),
-            "paper_enabled": execution_policy.get("paper_enabled"),
             "policy_json": policy_json,
         }
 
@@ -618,6 +608,7 @@ class PaperTradingSessionService:
     def _validate_sources(
         *,
         mode: PaperSessionMode,
+        broker_backend: str,
         portfolio_data_source: MinuteDataSource,
         historical_data_source: MinuteDataSource | None,
         live_data_source: MinuteDataSource | None,
@@ -646,26 +637,31 @@ class PaperTradingSessionService:
                 raise SessionConfigError("LIVE_ONLY session requires live_data_source")
             if historical_data_source is not None:
                 raise SessionConfigError("LIVE_ONLY session must not set historical_data_source")
-            if live_data_source not in SUPPORTED_LIVE_SESSION_SOURCES:
-                raise SessionSourceUnsupportedError(
-                    "live Paper v2 sessions require an implemented live source",
-                    context={"live_data_source": live_data_source.value},
-                )
+            PaperTradingSessionService._require_live_source_supported(
+                broker_backend=broker_backend,
+                live_data_source=live_data_source,
+                mode=mode,
+            )
             if portfolio_data_source != live_data_source:
                 return
         elif mode == PaperSessionMode.CATCHUP_THEN_LIVE:
             if historical_data_source is None or live_data_source is None:
                 raise SessionConfigError("CATCHUP_THEN_LIVE session requires both historical_data_source and live_data_source")
+            if broker_backend != "local_sim":
+                raise SessionSourceUnsupportedError(
+                    "catch-up then live is not implemented for this broker backend",
+                    context={"broker_backend": broker_backend, "mode": mode.value},
+                )
             if historical_data_source not in SUPPORTED_HISTORICAL_SESSION_SOURCES:
                 raise SessionSourceUnsupportedError(
                     "catch-up historical source is not implemented",
                     context={"historical_data_source": historical_data_source.value},
                 )
-            if live_data_source not in SUPPORTED_LIVE_SESSION_SOURCES:
-                raise SessionSourceUnsupportedError(
-                    "catch-up live source is not implemented",
-                    context={"live_data_source": live_data_source.value},
-                )
+            PaperTradingSessionService._require_live_source_supported(
+                broker_backend=broker_backend,
+                live_data_source=live_data_source,
+                mode=mode,
+            )
             if portfolio_data_source != historical_data_source:
                 raise SessionConfigError(
                     "CATCHUP_THEN_LIVE historical replay currently requires portfolio data_source to match historical_data_source",
@@ -674,6 +670,40 @@ class PaperTradingSessionService:
                         "historical_data_source": historical_data_source.value,
                     },
                 )
+
+    @staticmethod
+    def _default_live_source_for_broker(broker_backend: str) -> MinuteDataSource:
+        sources = SUPPORTED_LIVE_SESSION_SOURCES_BY_BROKER.get(str(broker_backend or "").strip().lower())
+        if not sources:
+            raise SessionSourceUnsupportedError(
+                "paper v2 broker backend has no implemented live session source",
+                context={
+                    "broker_backend": broker_backend,
+                    "supported_broker_backends": sorted(SUPPORTED_LIVE_SESSION_SOURCES_BY_BROKER),
+                },
+            )
+        return sorted(sources, key=lambda item: item.value)[0]
+
+    @staticmethod
+    def _require_live_source_supported(
+        *,
+        broker_backend: str,
+        live_data_source: MinuteDataSource,
+        mode: PaperSessionMode,
+    ) -> None:
+        broker_id = str(broker_backend or "").strip().lower()
+        supported = SUPPORTED_LIVE_SESSION_SOURCES_BY_BROKER.get(broker_id)
+        if not supported or live_data_source not in supported:
+            raise SessionSourceUnsupportedError(
+                "live Paper v2 sessions require the broker-bound live source",
+                context={
+                    "mode": mode.value,
+                    "broker_backend": broker_backend,
+                    "live_data_source": live_data_source.value,
+                    "supported_live_sources": sorted(item.value for item in (supported or set())),
+                    "supported_broker_backends": sorted(SUPPORTED_LIVE_SESSION_SOURCES_BY_BROKER),
+                },
+            )
 
     @staticmethod
     def _reject_raw_execution_overrides(runtime_config: dict[str, Any]) -> None:

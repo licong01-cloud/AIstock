@@ -16,6 +16,7 @@ from typing import Any
 
 from backend.services.trading_core.errors import TradingCoreError
 
+from .auto_run import AutoRunCoordinator
 from .repository import PaperTradingV2Repository
 from .session import TICKABLE_SESSION_STATUSES, PaperTradingSessionRunner
 
@@ -30,9 +31,11 @@ class PaperTradingV2SessionScheduler:
         *,
         repository: PaperTradingV2Repository | Any | None = None,
         runner: PaperTradingSessionRunner | None = None,
+        auto_run_coordinator: AutoRunCoordinator | Any | None = None,
     ) -> None:
         self.repository = repository or PaperTradingV2Repository()
         self.runner = runner or PaperTradingSessionRunner(repository=self.repository)
+        self.auto_run_coordinator = auto_run_coordinator or AutoRunCoordinator(repository=self.repository)
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._lock = threading.RLock()
@@ -76,15 +79,32 @@ class PaperTradingV2SessionScheduler:
             "tickable_statuses": sorted(item.value for item in TICKABLE_SESSION_STATUSES),
             "last_run_at": self._last_run_at.isoformat() if self._last_run_at else None,
             "last_result": self._last_result,
+            "auto_run": self.auto_run_coordinator.status(),
+        }
+
+    def bootstrap_status(self) -> dict[str, Any]:
+        env_scheduler = (os.getenv("ENABLE_PAPER_TRADING_V2_SCHEDULER") or "").strip().lower()
+        scheduler_autostart = env_scheduler in {"1", "true", "yes", "on"}
+        return {
+            "scheduler_autostart_env": bool(scheduler_autostart),
+            "scheduler_env_raw": env_scheduler or None,
+            "scheduler": self.status(),
+            "auto_run": self.auto_run_coordinator.status(),
+            "production_note": "backend process restart only auto-runs when ENABLE_PAPER_TRADING_V2_SCHEDULER is true-like",
         }
 
     def run_once(self, *, limit: int = 50, as_of_time: datetime | None = None) -> dict[str, Any]:
         if limit <= 0 or limit > 500:
             raise ValueError("paper v2 scheduler run_once limit must be in 1..500")
         started = datetime.now(UTC)
+        auto_run_recovery = self.auto_run_coordinator.recover_enabled_portfolios(
+            limit=limit,
+            as_of_time=as_of_time,
+        )
         sessions = self.repository.list_tickable_sessions(statuses=TICKABLE_SESSION_STATUSES, limit=limit)
         result: dict[str, Any] = {
             "started_at": started.isoformat(),
+            "auto_run_recovery": auto_run_recovery,
             "session_count": len(sessions),
             "processed": [],
             "errors": [],

@@ -8,11 +8,41 @@ from typing import Any, Callable, Iterator
 import psycopg2.extras
 
 from backend.db.pg_pool import get_conn
-from backend.services.trading_core.errors import DataUnavailableError
+from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
 
 from .models import SelectionCandidate, SelectionExclusion, SelectionMode, SelectionPaperPortfolioLink, SelectionRun, SelectionRunStatus
+from .result_enrichment import component_scores_with_display_fields, display_fields_from_component_scores
 
 ConnFactory = Callable[[], Iterator[Any]]
+
+
+def _optional_float(value: Any) -> float | None:
+    return float(value) if value is not None else None
+
+
+def _selection_candidate_from_aggregate_row(item: dict[str, Any]) -> SelectionCandidate:
+    component_scores = item["explanation"] or {}
+    display_fields = display_fields_from_component_scores(component_scores)
+    entry_price = display_fields.get("selection_entry_price")
+    reference_price = entry_price if entry_price is not None else item["reference_price"]
+    return SelectionCandidate(
+        symbol=item["symbol"],
+        score=float(item["score"]),
+        rank=int(item["rank"]),
+        target_weight=_optional_float(item["target_weight"]),
+        target_quantity=int(item["target_quantity"]) if item["target_quantity"] is not None else None,
+        reference_price=_optional_float(reference_price),
+        stock_name=display_fields.get("stock_name"),
+        selection_entry_price=_optional_float(entry_price),
+        selection_entry_price_source=display_fields.get("selection_entry_price_source"),
+        selection_entry_price_time=display_fields.get("selection_entry_price_time"),
+        previous_close=_optional_float(display_fields.get("previous_close")),
+        volume=_optional_float(display_fields.get("volume")),
+        current_price=_optional_float(display_fields.get("current_price")),
+        current_price_source=display_fields.get("current_price_source"),
+        current_price_time=display_fields.get("current_price_time"),
+        component_scores=component_scores,
+    )
 
 
 class SelectionCenterRepository:
@@ -93,7 +123,7 @@ class SelectionCenterRepository:
                                 candidate.target_weight,
                                 candidate.target_quantity,
                                 candidate.reference_price,
-                                psycopg2.extras.Json(candidate.component_scores),
+                                psycopg2.extras.Json(component_scores_with_display_fields(candidate)),
                                 candidate.reason,
                             ),
                         )
@@ -115,7 +145,7 @@ class SelectionCenterRepository:
                             candidate.target_quantity,
                             candidate.reference_price,
                             psycopg2.extras.Json(source_package_ids),
-                            psycopg2.extras.Json(candidate.component_scores),
+                            psycopg2.extras.Json(component_scores_with_display_fields(candidate)),
                         ),
                     )
                 for package_id, exclusions in completed.excluded_results.items():
@@ -178,6 +208,34 @@ class SelectionCenterRepository:
                 run_ids = [row[0] for row in cur.fetchall()]
         return [self.get_run(run_id) for run_id in run_ids]
 
+    def list_runs_page(self, *, page: int = 1, page_size: int = 20) -> dict[str, Any]:
+        if page <= 0 or page_size <= 0:
+            raise RuntimeConfigInvalidError("selection run pagination requires positive page and page_size")
+        offset = (page - 1) * page_size
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM selection.run")
+                total = int((cur.fetchone() or [0])[0] or 0)
+                cur.execute(
+                    """
+                    SELECT run_id
+                    FROM selection.run
+                    ORDER BY created_at DESC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (page_size, offset),
+                )
+                run_ids = [row[0] for row in cur.fetchall()]
+        return {
+            "runs": [self.get_run(run_id) for run_id in run_ids],
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+                "total_pages": (total + page_size - 1) // page_size,
+            },
+        }
+
     def get_run(self, run_id: str) -> SelectionRun:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -224,6 +282,9 @@ class SelectionCenterRepository:
         for item in package_rows:
             package_id = item["package_id"]
             manifest_sha[package_id] = item["manifest_sha256"]
+            component_scores = item["component_scores"] or {}
+            display_fields = display_fields_from_component_scores(component_scores)
+            entry_price = display_fields.get("selection_entry_price")
             package_results.setdefault(package_id, []).append(
                 SelectionCandidate(
                     symbol=item["symbol"],
@@ -231,21 +292,22 @@ class SelectionCenterRepository:
                     rank=int(item["rank"]),
                     target_weight=float(item["target_weight"]) if item["target_weight"] is not None else None,
                     target_quantity=int(item["target_quantity"]) if item["target_quantity"] is not None else None,
-                    reference_price=float(item["reference_price"]) if item["reference_price"] is not None else None,
-                    component_scores=item["component_scores"] or {},
+                    reference_price=float(entry_price or item["reference_price"]) if (entry_price or item["reference_price"]) is not None else None,
+                    stock_name=display_fields.get("stock_name"),
+                    selection_entry_price=float(entry_price) if entry_price is not None else None,
+                    selection_entry_price_source=display_fields.get("selection_entry_price_source"),
+                    selection_entry_price_time=display_fields.get("selection_entry_price_time"),
+                    previous_close=float(display_fields["previous_close"]) if display_fields.get("previous_close") is not None else None,
+                    volume=float(display_fields["volume"]) if display_fields.get("volume") is not None else None,
+                    current_price=float(display_fields["current_price"]) if display_fields.get("current_price") is not None else None,
+                    current_price_source=display_fields.get("current_price_source"),
+                    current_price_time=display_fields.get("current_price_time"),
+                    component_scores=component_scores,
                     reason=item["reason"],
                 )
             )
         aggregate = [
-            SelectionCandidate(
-                symbol=item["symbol"],
-                score=float(item["score"]),
-                rank=int(item["rank"]),
-                target_weight=float(item["target_weight"]) if item["target_weight"] is not None else None,
-                target_quantity=int(item["target_quantity"]) if item["target_quantity"] is not None else None,
-                reference_price=float(item["reference_price"]) if item["reference_price"] is not None else None,
-                component_scores=item["explanation"] or {},
-            )
+            _selection_candidate_from_aggregate_row(item)
             for item in aggregate_rows
         ]
         excluded_results: dict[str, list[SelectionExclusion]] = {}
@@ -342,6 +404,36 @@ class SelectionCenterRepository:
             for row in rows
         ]
 
+    def delete_run(self, run_id: str) -> dict[str, int]:
+        self.get_run(run_id)
+        counts = {
+            "paper_portfolio_link": 0,
+            "excluded_result": 0,
+            "aggregate_result": 0,
+            "package_result": 0,
+            "run": 0,
+        }
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                for table in ("paper_portfolio_link", "excluded_result", "aggregate_result", "package_result"):
+                    cur.execute(f"DELETE FROM selection.{table} WHERE run_id = %s", (run_id,))
+                    counts[table] = cur.rowcount
+                cur.execute("DELETE FROM selection.run WHERE run_id = %s", (run_id,))
+                counts["run"] = cur.rowcount
+        return counts
+
+    def delete_runs(self, run_ids: list[str]) -> dict[str, Any]:
+        if not run_ids:
+            raise RuntimeConfigInvalidError("run_ids must not be empty")
+        total_counts: dict[str, int] = {}
+        deleted: list[str] = []
+        for run_id in run_ids:
+            counts = self.delete_run(run_id)
+            deleted.append(run_id)
+            for key, value in counts.items():
+                total_counts[key] = total_counts.get(key, 0) + int(value)
+        return {"run_ids": deleted, "deleted_counts": total_counts}
+
 
 class InMemorySelectionCenterRepository:
     def __init__(self) -> None:
@@ -374,6 +466,23 @@ class InMemorySelectionCenterRepository:
         rows.sort(key=lambda item: item.created_at, reverse=True)
         return rows[:limit]
 
+    def list_runs_page(self, *, page: int = 1, page_size: int = 20) -> dict[str, Any]:
+        if page <= 0 or page_size <= 0:
+            raise RuntimeConfigInvalidError("selection run pagination requires positive page and page_size")
+        rows = list(self.runs.values())
+        rows.sort(key=lambda item: item.created_at, reverse=True)
+        total = len(rows)
+        offset = (page - 1) * page_size
+        return {
+            "runs": rows[offset: offset + page_size],
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+                "total_pages": (total + page_size - 1) // page_size,
+            },
+        }
+
     def get_run(self, run_id: str) -> SelectionRun:
         run = self.runs.get(run_id)
         if run is None:
@@ -387,3 +496,28 @@ class InMemorySelectionCenterRepository:
 
     def list_paper_portfolio_links(self, run_id: str) -> list[SelectionPaperPortfolioLink]:
         return [link for link in self.paper_links if link.run_id == run_id]
+
+    def delete_run(self, run_id: str) -> dict[str, int]:
+        self.get_run(run_id)
+        link_count = len([link for link in self.paper_links if link.run_id == run_id])
+        self.paper_links = [link for link in self.paper_links if link.run_id != run_id]
+        self.runs.pop(run_id, None)
+        return {
+            "paper_portfolio_link": link_count,
+            "excluded_result": 0,
+            "aggregate_result": 0,
+            "package_result": 0,
+            "run": 1,
+        }
+
+    def delete_runs(self, run_ids: list[str]) -> dict[str, Any]:
+        if not run_ids:
+            raise RuntimeConfigInvalidError("run_ids must not be empty")
+        total_counts: dict[str, int] = {}
+        deleted: list[str] = []
+        for run_id in run_ids:
+            counts = self.delete_run(run_id)
+            deleted.append(run_id)
+            for key, value in counts.items():
+                total_counts[key] = total_counts.get(key, 0) + int(value)
+        return {"run_ids": deleted, "deleted_counts": total_counts}

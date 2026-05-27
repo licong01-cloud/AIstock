@@ -1,0 +1,60 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-125",
+  "title": "qe_archive_list_outbox has no hard upper limit, 6342 pending items could exhaust tokens",
+  "description": "Expected: Hard cap at 100 items regardless of client-specified limit. Safe upper bound enforced server-side.\nActual: No server-side hard cap. Client can request limit=10000 and receive all 6342+ pending events with full nested payloads (~800 chars each = ~5M chars worst case).",
+  "module": "mcp.qe_archive",
+  "severity": "P2",
+  "risk_area": "unspecified",
+  "status": "fixed",
+  "trigger_condition": {
+    "scenario": "reported_via_mcp",
+    "files": [
+      "mcp_server/handlers/qe_archive.py"
+    ]
+  },
+  "reproduce_command": "curl -s \"http://localhost:8001/api/qe/archive/outbox?limit=10000\" | wc -c",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:mcp_server/handlers/qe_archive.py"
+  ],
+  "fingerprint": "2fec7de594415605",
+  "assigned_agent": null,
+  "fix_branch": "fix/mcp-token-bloat-123-126",
+  "fix_commit": "b17a9427",
+  "verification_run_id": null,
+  "created_at": "2026-05-27T05:48:41Z",
+  "first_seen_at": "2026-05-27T05:48:41Z",
+  "last_seen_at": "2026-05-27T05:59:21Z",
+  "fixed_at": "2026-05-27T05:59:21Z",
+  "submitted_at": "2026-05-27T05:48:41Z",
+  "closed_at": null,
+  "allowed_write_scope": [
+    "mcp_server/handlers/qe_archive.py"
+  ],
+  "suspected_modules": [
+    "mcp_server/handlers/qe_archive.py"
+  ],
+  "required_verification": [],
+  "closure_requirements": [],
+  "events": [
+    {
+      "timestamp": "2026-05-27T05:48:41Z",
+      "actor": "unknown",
+      "action": "discovered",
+      "note": "Reported via aistock_mcp_server.report_bug. Comments: 1"
+    },
+    {
+      "timestamp": "2026-05-27T05:48:41Z",
+      "actor": "unknown",
+      "action": "comment",
+      "note": "Diagnosed 2026-05-27: 6342 pending events. Each has nested payload. Need server-side MAX_OUTBOX_LIMIT=100."
+    },
+    {
+      "timestamp": "2026-05-27T05:59:21Z",
+      "actor": "mcp_agent",
+      "action": "status_changed",
+      "note": "Outbox limit reduced: max 500→100, default 50→20. Validated with qe_archive_backend L2."
+    }
+  ]
+}

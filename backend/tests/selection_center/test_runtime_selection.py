@@ -44,13 +44,44 @@ from backend.services.quantevolver.qe_workspace_client import (
     QEWorkspaceClient,
     QEWorkspaceFileNotFound,
 )
-from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError, UnsupportedFeatureError
+from backend.services.trading_core.errors import (
+    DataUnavailableError,
+    HMMRuntimeUnavailableError,
+    InvalidStateTransitionError,
+    RuntimeConfigInvalidError,
+    UnsupportedFeatureError,
+)
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
 
 class NoopRefreshAudit:
     def require_success(self, **_kwargs):
         return None
+
+
+class NoopSelectionResultEnrichment:
+    def enrich_candidates(self, candidates, *, trade_date, runtime_config=None):
+        return list(candidates)
+
+
+class FixedEntryPriceEnrichment:
+    def __init__(self, entry_prices: dict[str, float]) -> None:
+        self.entry_prices = entry_prices
+
+    def enrich_candidates(self, candidates, *, trade_date, runtime_config=None):
+        enriched = []
+        for candidate in candidates:
+            entry_price = self.entry_prices.get(candidate.symbol, candidate.reference_price)
+            enriched.append(
+                candidate.model_copy(
+                    update={
+                        "selection_entry_price": entry_price,
+                        "current_price": 999.0,
+                        "reference_price": entry_price,
+                    }
+                )
+            )
+        return enriched
 
 
 class RecordingRefreshAudit:
@@ -274,7 +305,7 @@ def test_strategy_package_runtime_builds_signal_and_targets() -> None:
 def test_strategy_package_runtime_rejects_runtime_config_selection_scores() -> None:
     manifest = freeze_manifest(make_manifest().model_copy(update={"package_status": PackageStatus.SELECTION_ENABLED}))
 
-    with pytest.raises(StrategyPackageValidationError, match="selection_scores cannot be used"):
+    with pytest.raises(RuntimeConfigInvalidError, match="selection_scores cannot be used"):
         StrategyPackageRuntime().build_signal_snapshot(
             manifest=manifest,
             trade_date=date(2024, 1, 2),
@@ -306,7 +337,7 @@ def test_strategy_package_runtime_rejects_manifest_embedded_scores_without_artif
         )
     )
 
-    with pytest.raises(StrategyPackageValidationError, match="not authoritative"):
+    with pytest.raises(RuntimeConfigInvalidError, match="not authoritative"):
         StrategyPackageRuntime().build_signal_snapshot(
             manifest=manifest,
             trade_date=date(2024, 1, 2),
@@ -587,7 +618,7 @@ def test_selection_artifact_service_resolves_qe_evolution_loop_source(tmp_path) 
     ]
 
 
-def test_selection_center_rejects_unversioned_trading_runtime_config() -> None:
+def test_selection_center_generates_binding_for_ad_hoc_runtime_config() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     manifest = ready_manifest_with_scores("pkg_runtime_boundary", "000001.SZ", 0.9, 1)
     package_repo.save_manifest(manifest)
@@ -598,15 +629,17 @@ def test_selection_center_rejects_unversioned_trading_runtime_config() -> None:
         refresh_audit=NoopRefreshAudit(),
     )
 
-    with pytest.raises(StrategyPackageValidationError, match="versioned runtime profile activation") as exc_info:
-        service.run_single_package(
-            package_id=manifest.package_id,
-            trade_date=date(2024, 1, 2),
-            data_source="DB_HISTORICAL",
-            runtime_config={"top_k": 1},
-        )
+    run = service.run_single_package(
+        package_id=manifest.package_id,
+        trade_date=date(2024, 1, 2),
+        data_source="DB_HISTORICAL",
+        runtime_config={"top_k": 1},
+    )
+    binding = validate_runtime_profile_binding(run.runtime_config)
 
-    assert exc_info.value.context["behavior_keys"] == ["top_k"]
+    assert binding["source"] == "generated_effective_runtime_config"
+    assert binding["config_sha256"] == runtime_profile_config_sha256(run.runtime_config)
+    assert run.status == SelectionRunStatus.SUCCEEDED
 
 
 def test_selection_center_non_trading_preview_is_marked_and_cannot_create_paper_portfolio() -> None:
@@ -636,7 +669,7 @@ def test_selection_center_non_trading_preview_is_marked_and_cannot_create_paper_
     assert run.runtime_config["runtime_config_scope"] == "non_trading_preview"
     assert run.runtime_config["runtime_profile_binding"]["source"] == "ad_hoc_non_trading_preview"
     assert run.runtime_config["runtime_profile_binding"]["trade_enabled"] is False
-    with pytest.raises(StrategyPackageValidationError, match="non-trading"):
+    with pytest.raises(InvalidStateTransitionError, match="non-trading"):
         service.create_paper_portfolio_from_run(
             run_id=run.run_id,
             portfolio_name="preview should not trade",
@@ -766,6 +799,34 @@ def test_selection_center_pit_mode_resolves_previous_trading_day_and_passes_cuto
     assert provider.calls[-1]["trade_date"] == date(2024, 1, 3)
     assert provider.calls[-1]["cutoff_date"] == date(2024, 1, 2)
     assert [item.symbol for item in run.aggregate_results] == ["000001.SZ", "000002.SZ"]
+
+
+def test_selection_center_pit_mode_maps_non_trading_date_to_latest_completed_day() -> None:
+    class FakeCalendar:
+        def ensure_trading_day(self, trade_date: date) -> None:
+            raise DataUnavailableError("trade_date is not a trading day", context={"trade_date": trade_date.isoformat()})
+
+        def list_trading_days(self, start_date: date, end_date: date) -> list[date]:
+            if end_date == date(2024, 1, 6):
+                return [date(2024, 1, 4), date(2024, 1, 5)]
+            if end_date == date(2024, 1, 4):
+                return [date(2024, 1, 4)]
+            raise AssertionError(f"unexpected calendar range end: {end_date}")
+
+    service = SelectionCenterService(
+        package_repository=InMemoryStrategyPackageRepository(),
+        repository=InMemorySelectionCenterRepository(),
+        calendar_provider=FakeCalendar(),
+    )
+
+    context = service.resolve_point_in_time_context(
+        trade_date=date(2024, 1, 6),
+        pit_mode="PREVIOUS_TRADING_DAY_CLOSE",
+    )
+
+    assert context["requested_trade_date"] == "2024-01-06"
+    assert context["effective_trade_date"] == "2024-01-05"
+    assert context["cutoff_date"] == "2024-01-04"
 
 
 def test_selection_center_uses_frozen_artifact_when_node_preflight_fails() -> None:
@@ -1443,7 +1504,7 @@ def test_selection_center_consumes_validated_runtime_variant_candidate() -> None
 
     package_config = run.runtime_config["package_runtime_configs"][manifest.package_id]
     assert package_config["runtime_variant"]["variant_id"] == variant.variant_id
-    assert package_config["runtime_variant"]["paper_candidate"] is True
+    assert package_config["runtime_variant"]["paper_candidate"] is False
     assert package_config["runtime_variant"]["variant_config"]["strategy_config"]["custom_params"]["topk"] == 1
     assert [item.symbol for item in run.package_results[manifest.package_id]] == ["000001.SZ"]
 
@@ -1464,7 +1525,7 @@ def test_selection_center_consumes_validated_runtime_variant_candidate() -> None
     assert st_pit_config["qe_backtest_runtime_contract"]["portfolio_strategy"]["params"]["topk"] == 1
 
 
-def test_selection_center_authoritative_mode_requires_platform_st_pit_profile() -> None:
+def test_selection_center_authoritative_mode_allows_runtime_st_pit_warning() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     manifest = freeze_manifest(
         make_manifest().model_copy(
@@ -1490,16 +1551,15 @@ def test_selection_center_authoritative_mode_requires_platform_st_pit_profile() 
         refresh_audit=NoopRefreshAudit(),
     )
 
-    with pytest.raises(StrategyPackageValidationError, match="health preflight") as exc_info:
-        service.run_single_package(
-            package_id=manifest.package_id,
-            trade_date=date(2024, 1, 2),
-            data_source="DB_HISTORICAL",
-            runtime_config=versioned_selection_runtime_config({"st_pit_authoritative": True}),
-        )
-    st_check = next(item for item in exc_info.value.context["checks"] if item["name"] == "st_pit_runtime_profile")
-    assert st_check["status"] == "BLOCKED"
-    assert "runtime_profile.risk_policy.enabled=true" in st_check["message"]
+    run = service.run_single_package(
+        package_id=manifest.package_id,
+        trade_date=date(2024, 1, 2),
+        data_source="DB_HISTORICAL",
+        runtime_config=versioned_selection_runtime_config({"st_pit_authoritative": True}),
+    )
+
+    assert run.status == SelectionRunStatus.SUCCEEDED
+    assert run.package_results[manifest.package_id][0].symbol == "000001.SZ"
 
 
 def test_selection_center_health_blocks_hmm_missing_stock_sector_map_before_inference(tmp_path) -> None:
@@ -1546,7 +1606,7 @@ def test_selection_center_health_blocks_hmm_missing_stock_sector_map_before_infe
         refresh_audit=NoopRefreshAudit(),
     )
 
-    with pytest.raises(StrategyPackageValidationError, match="health preflight") as exc_info:
+    with pytest.raises(HMMRuntimeUnavailableError, match="stock sector mapping") as exc_info:
         service.run_single_package(
             package_id=manifest.package_id,
             trade_date=date(2024, 1, 2),
@@ -1566,10 +1626,7 @@ def test_selection_center_health_blocks_hmm_missing_stock_sector_map_before_infe
             ),
         )
 
-    checks = exc_info.value.context["checks"]
-    hmm_check = next(item for item in checks if item["name"] == "hmm_artifact_status")
-    assert hmm_check["status"] == "BLOCKED"
-    assert "stock sector mapping" in hmm_check["message"]
+    assert exc_info.value.context["symbol"] == "000001.SZ"
 
 
 def test_selection_center_health_passes_hmm_artifact_preflight(tmp_path) -> None:
@@ -1775,7 +1832,7 @@ def test_selection_center_aggregate_existing_runs_requires_same_date() -> None:
         data_source="DB_HISTORICAL",
     )
 
-    with pytest.raises(StrategyPackageValidationError, match="same trade_date"):
+    with pytest.raises(RuntimeConfigInvalidError, match="same trade_date"):
         service.aggregate_existing_runs(
             source_run_ids=[run_a.run_id, run_b.run_id],
             mode=SelectionMode.UNION,
@@ -1795,14 +1852,14 @@ def test_selection_center_weighted_fusion_requires_exact_positive_weights() -> N
         refresh_audit=NoopRefreshAudit(),
     )
 
-    with pytest.raises(StrategyPackageValidationError, match="package_weights"):
+    with pytest.raises(RuntimeConfigInvalidError, match="package_weights"):
         service.run_packages(
             package_ids=[manifest_a.package_id, manifest_b.package_id],
             mode=SelectionMode.WEIGHTED_FUSION,
             trade_date=date(2024, 1, 2),
             data_source="DB_HISTORICAL",
         )
-    with pytest.raises(StrategyPackageValidationError, match="positive finite"):
+    with pytest.raises(RuntimeConfigInvalidError, match="positive finite"):
         service.run_packages(
             package_ids=[manifest_a.package_id, manifest_b.package_id],
             mode=SelectionMode.WEIGHTED_FUSION,
@@ -1963,7 +2020,7 @@ def test_selection_center_industry_blacklist_requires_industry_metadata() -> Non
         refresh_audit=NoopRefreshAudit(),
     )
 
-    with pytest.raises(StrategyPackageValidationError, match="PIT industry metadata"):
+    with pytest.raises(DataUnavailableError, match="PIT industry metadata"):
         service.run_single_package(
             package_id=manifest.package_id,
             trade_date=date(2024, 1, 2),
@@ -2060,14 +2117,14 @@ def test_selection_center_hmm_runtime_profile_fails_fast() -> None:
         refresh_audit=NoopRefreshAudit(),
     )
 
-    with pytest.raises(StrategyPackageValidationError, match="model_snapshot_id"):
+    with pytest.raises(HMMRuntimeUnavailableError, match="model_snapshot_id"):
         service.run_single_package(
             package_id=manifest.package_id,
             trade_date=date(2024, 1, 2),
             data_source="DB_HISTORICAL",
             runtime_config=versioned_selection_runtime_config({"runtime_profile": {"hmm": {"enabled": True}}}),
         )
-    with pytest.raises(StrategyPackageValidationError, match="signal_preset"):
+    with pytest.raises(HMMRuntimeUnavailableError, match="signal_preset"):
         service.run_single_package(
             package_id=manifest.package_id,
             trade_date=date(2024, 1, 2),
@@ -2142,6 +2199,149 @@ def test_strategy_package_runtime_applies_hmm_coefficients(tmp_path) -> None:
     assert snapshot.candidates[0].component_scores["hmm"]["coefficients_path"] == str(coeff_path)
 
 
+def test_strategy_package_runtime_auto_generates_hmm_coefficients_on_miss(tmp_path) -> None:
+    model_path = tmp_path / "models.json"
+    model_path.write_text("{}", encoding="utf-8")
+
+    class AutoGenerateHMMSnapshotProvider(FakeHMMSnapshotProvider):
+        def __init__(self) -> None:
+            super().__init__({"hmm_001": {"snapshot_id": "hmm_001", "model_path": str(model_path), "status": "completed"}})
+            self.calls = []
+
+        def _list_trading_days(self, start_date, end_date):
+            return [date(2024, 1, 1)]
+
+        def generate_daily_coefficients(self, snapshot_id, *, signal_preset, confirm_generate=False, confirm_text=None, as_of_date=None, effective_trade_date=None):
+            self.calls.append({
+                "snapshot_id": snapshot_id,
+                "signal_preset": signal_preset,
+                "confirm_generate": confirm_generate,
+                "as_of_date": as_of_date,
+                "effective_trade_date": effective_trade_date,
+            })
+            output = tmp_path / "coefficients_preset_A_2024-01-02_2024-01-02.json"
+            output.write_text(
+                json.dumps(
+                    {
+                        "generation_mode": "daily_asof_prediction_v1",
+                        "snapshot_id": snapshot_id,
+                        "config_id": "cfg_001",
+                        "preset_key": signal_preset,
+                        "as_of_trade_date": as_of_date.isoformat(),
+                        "effective_trade_date": effective_trade_date.isoformat(),
+                        "daily_coefficients": {"2024-01-02": {"801780.SI": 1.20}},
+                        "stock_sector_map": {"000001.SZ": "801780.SI"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return {"status": "CREATED", "output_path": str(output)}
+
+    provider = AutoGenerateHMMSnapshotProvider()
+    manifest = ready_manifest_with_scores("pkg_hmm_auto_cache", "000001.SZ", 1.0, 1)
+    runtime = StrategyPackageRuntime(hmm_runtime=SectorHMMRuntime(snapshot_provider=provider))
+
+    snapshot = runtime.build_signal_snapshot(
+        manifest=manifest,
+        trade_date=date(2024, 1, 2),
+        data_source="DB_HISTORICAL",
+        runtime_config={
+            "runtime_profile": {
+                "hmm": {
+                    "enabled": True,
+                    "model_snapshot_id": "hmm_001",
+                    "signal_preset": "preset_A",
+                }
+            }
+        },
+    )
+
+    assert provider.calls == [
+        {
+            "snapshot_id": "hmm_001",
+            "signal_preset": "preset_A",
+            "confirm_generate": True,
+            "as_of_date": date(2024, 1, 1),
+            "effective_trade_date": date(2024, 1, 2),
+        }
+    ]
+    assert snapshot.candidates[0].score == pytest.approx(1.2)
+    assert snapshot.candidates[0].component_scores["hmm"]["coefficient"] == pytest.approx(1.2)
+
+    cached = runtime.build_signal_snapshot(
+        manifest=manifest,
+        trade_date=date(2024, 1, 2),
+        data_source="DB_HISTORICAL",
+        runtime_config={
+            "runtime_profile": {
+                "hmm": {
+                    "enabled": True,
+                    "model_snapshot_id": "hmm_001",
+                    "signal_preset": "preset_A",
+                }
+            }
+        },
+    )
+
+    assert len(provider.calls) == 1
+    assert cached.candidates[0].component_scores["hmm"]["coefficients_path"] == snapshot.candidates[0].component_scores["hmm"]["coefficients_path"]
+
+
+def test_strategy_package_runtime_resolves_latest_ready_hmm_snapshot_from_model_config(tmp_path) -> None:
+    old_model_path = tmp_path / "old_models.json"
+    new_model_path = tmp_path / "new_models.json"
+    old_model_path.write_text("{}", encoding="utf-8")
+    new_model_path.write_text("{}", encoding="utf-8")
+    (tmp_path / "coefficients_preset_A_latest_2024-01-02.json").write_text(
+        json.dumps(
+            {
+                "preset_key": "preset_A",
+                "daily_coefficients": {"2024-01-02": {"801780.SI": 1.15}},
+                "stock_sector_map": {"000001.SZ": "801780.SI"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class ConfigResolvingProvider(FakeHMMSnapshotProvider):
+        def __init__(self) -> None:
+            super().__init__(
+                {
+                    "hmm_old": {"snapshot_id": "hmm_old", "model_path": str(old_model_path), "status": "completed", "trained_at": "2024-01-01T00:00:00"},
+                    "hmm_latest": {"snapshot_id": "hmm_latest", "model_path": str(new_model_path), "status": "completed", "trained_at": "2024-01-03T00:00:00"},
+                    "hmm_failed": {"snapshot_id": "hmm_failed", "model_path": str(new_model_path), "status": "failed", "trained_at": "2024-01-04T00:00:00"},
+                }
+            )
+            self.list_calls: list[str] = []
+
+        def list_snapshots(self, config_id: str):
+            self.list_calls.append(config_id)
+            return list(self.snapshots.values())
+
+    provider = ConfigResolvingProvider()
+    manifest = ready_manifest_with_scores("pkg_hmm_config", "000001.SZ", 1.0, 1)
+    runtime = StrategyPackageRuntime(hmm_runtime=SectorHMMRuntime(snapshot_provider=provider))
+
+    snapshot = runtime.build_signal_snapshot(
+        manifest=manifest,
+        trade_date=date(2024, 1, 2),
+        data_source="DB_HISTORICAL",
+        runtime_config={
+            "runtime_profile": {
+                "hmm": {
+                    "enabled": True,
+                    "model_config_id": "cfg_hmm",
+                    "signal_preset": "preset_A",
+                }
+            }
+        },
+    )
+
+    assert provider.list_calls == ["cfg_hmm"]
+    assert snapshot.candidates[0].score == pytest.approx(1.15)
+    assert snapshot.candidates[0].component_scores["hmm"]["model_snapshot_id"] == "hmm_latest"
+
+
 def test_strategy_package_runtime_hmm_requires_stock_sector_map(tmp_path) -> None:
     model_path = tmp_path / "models.json"
     model_path.write_text("{}", encoding="utf-8")
@@ -2170,7 +2370,7 @@ def test_strategy_package_runtime_hmm_requires_stock_sector_map(tmp_path) -> Non
         )
     )
 
-    with pytest.raises(DataUnavailableError, match="stock sector mapping"):
+    with pytest.raises(HMMRuntimeUnavailableError, match="stock sector mapping"):
         runtime.build_signal_snapshot(
             manifest=manifest,
             trade_date=date(2024, 1, 2),
@@ -2294,7 +2494,7 @@ def test_selection_center_creates_paper_portfolio_after_default_pit_binding_fina
     )
 
     assert run.runtime_config["selection_artifact_config"]["cutoff_date"] == "2024-01-02"
-    assert binding["source"] == "platform_default"
+    assert binding["source"] == "generated_effective_runtime_config"
     assert binding["config_sha256"] == runtime_profile_config_sha256(run.runtime_config)
     assert result["paper_runtime_config"]["selection_runtime_profile_binding"]["config_sha256"] == binding["config_sha256"]
 
@@ -2349,6 +2549,7 @@ def test_selection_center_adds_selection_run_to_watchlist_with_trace(monkeypatch
         repository=InMemorySelectionCenterRepository(),
         tradability_filter=TradabilityFilter(FakeSuspendLookup()),
         refresh_audit=NoopRefreshAudit(),
+        result_enrichment_service=NoopSelectionResultEnrichment(),
     )
     run = service.run_single_package(
         package_id=manifest.package_id,
@@ -2412,6 +2613,59 @@ def test_selection_center_adds_selection_run_to_watchlist_with_trace(monkeypatch
     assert "Selection Center single_package" in items[0]["note"]
 
 
+def test_selection_center_watchlist_import_uses_selection_entry_price_not_current_price(monkeypatch) -> None:
+    package_repo = InMemoryStrategyPackageRepository()
+    manifest = ready_manifest_with_score_rows(
+        "qe_watchlist_entry_pkg",
+        [
+            {"symbol": "000001.SZ", "score": 0.99, "rank": 1, "target_weight": 0.03, "reference_price": 10.5},
+            {"symbol": "000002.SZ", "score": 0.88, "rank": 2, "target_weight": 0.03, "reference_price": 11.5},
+        ],
+    )
+    package_repo.save_manifest(manifest)
+    service = SelectionCenterService(
+        package_repository=package_repo,
+        repository=InMemorySelectionCenterRepository(),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+        result_enrichment_service=FixedEntryPriceEnrichment({"000001.SZ": 21.5, "000002.SZ": 22.5}),
+    )
+    run = service.run_single_package(
+        package_id=manifest.package_id,
+        trade_date=date(2024, 1, 2),
+        data_source="DB_HISTORICAL",
+    )
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr("backend.services.selection_center.service.watchlist_service.list_categories", lambda: [])
+    monkeypatch.setattr(
+        "backend.services.selection_center.service.watchlist_service.create_category",
+        lambda name, description: 901,
+    )
+
+    def fake_add_items_bulk_from_task_selection(**kwargs):
+        captured["watchlist_call"] = kwargs
+        return {
+            "ok": True,
+            "added": len(kwargs["items"]),
+            "skipped": 0,
+            "moved": 0,
+            "errors": [],
+            "item_ids_by_code": {},
+        }
+
+    monkeypatch.setattr(
+        "backend.services.selection_center.service.watchlist_service.add_items_bulk_from_task_selection",
+        fake_add_items_bulk_from_task_selection,
+    )
+
+    result = service.add_run_to_watchlist(run_id=run.run_id, category_name="EntryPrice", top_k=2)
+
+    assert result["ok"] is True
+    items = captured["watchlist_call"]["items"]
+    assert [item["entry_price"] for item in items] == [21.5, 22.5]
+
+
 def test_selection_center_watchlist_import_rejects_missing_reference_price() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     manifest = ready_manifest_with_score_rows(
@@ -2427,6 +2681,7 @@ def test_selection_center_watchlist_import_rejects_missing_reference_price() -> 
         repository=InMemorySelectionCenterRepository(),
         tradability_filter=TradabilityFilter(FakeSuspendLookup()),
         refresh_audit=NoopRefreshAudit(),
+        result_enrichment_service=NoopSelectionResultEnrichment(),
     )
     run = service.run_single_package(
         package_id=manifest.package_id,
@@ -2434,5 +2689,5 @@ def test_selection_center_watchlist_import_rejects_missing_reference_price() -> 
         data_source="DB_HISTORICAL",
     )
 
-    with pytest.raises(StrategyPackageValidationError, match="requires reference_price"):
+    with pytest.raises(DataUnavailableError, match="requires reference_price"):
         service.add_run_to_watchlist(run_id=run.run_id, top_k=2)

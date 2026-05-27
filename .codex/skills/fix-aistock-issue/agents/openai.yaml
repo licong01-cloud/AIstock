@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fix AIstock Issue"
+  short_description: "Run the AIstock issue-fix workflow."
+  default_prompt: "按规范修复 BUG-XXX，不要合入 main。"

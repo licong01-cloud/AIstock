@@ -1,0 +1,81 @@
+﻿{
+    "schema_version":  "aistock_validation_bug_v1",
+    "bug_id":  "BUG-111",
+    "title":  "Selection Center no-HMM package selection is blocked by Paper runtime-profile trading gate",
+    "description":  "Expected: Selection and Paper/MiniQMT simulation are separate product branches. A newly created valid StrategyPackage should be able to run basic Selection Center stock selection with HMM disabled without requiring the operator to manually activate a Paper/MiniQMT runtime profile. The program should create or classify the correct auditable selection runtime context, while keeping Paper/MiniQMT execution authorization separately gated by execution-specific versioning. Actual: a newly created StrategyPackage selection run can fail with STRATEGY_PACKAGE_VALIDATION_ERROR: runtime_config changes trading behavior without a versioned runtime profile activation because the default frontend selection request serializes behavior-changing runtime_config fields and the backend applies the execution-profile gate at the standalone selection step.",
+    "module":  "paper_v2",
+    "severity":  "P0",
+    "risk_area":  "selection_execution_branch_boundary",
+    "status":  "open",
+    "trigger_condition":  {
+                              "scenario":  "reported_selection_center_no_hmm_new_package_failure_20260524",
+                              "strategy_package_context":  "qe_20260520_215627_abbc",
+                              "files":  [
+                                            "frontend/src/app/paper-v2/selection/page.tsx",
+                                            "backend/services/selection_center/runtime_profile.py",
+                                            "backend/services/simulation_runtime/selection.py",
+                                            "backend/services/selection_center/service.py",
+                                            "backend/tests/selection_center/test_runtime_selection.py"
+                                        ]
+                          },
+    "reproduce_command":  "Create or select a valid StrategyPackage such as qe_20260520_215627_abbc, open /paper-v2/selection, leave HMM disabled, run selection, and observe STRATEGY_PACKAGE_VALIDATION_ERROR: runtime_config changes trading behavior without a versioned runtime profile activation.",
+    "failing_run_id":  null,
+    "evidence_uris":  [
+                          "github:https://github.com/licong01-cloud/AIstock/issues/181",
+                          "file:frontend/src/app/paper-v2/selection/page.tsx",
+                          "file:backend/services/selection_center/runtime_profile.py",
+                          "file:backend/services/simulation_runtime/selection.py",
+                          "file:backend/services/selection_center/service.py",
+                          "related:BUG-086/GitHub#108",
+                          "related:BUG-096/GitHub#149",
+                          "related:BUG-065/GitHub#76"
+                      ],
+    "fingerprint":  "selection-no-hmm-runtime-gate-qe_20260520_215627_abbc",
+    "github_issue_number":  181,
+    "github_issue_url":  "https://github.com/licong01-cloud/AIstock/issues/181",
+    "fix_owner":  "paper_v2",
+    "assigned_agent":  null,
+    "fix_branch":  null,
+    "fix_commit":  null,
+    "verification_run_id":  null,
+    "created_at":  "2026-05-24T02:35:04Z",
+    "first_seen_at":  "2026-05-24T02:35:04Z",
+    "last_seen_at":  "2026-05-24T02:35:04Z",
+    "submitted_at":  "2026-05-24T02:35:04Z",
+    "closed_at":  null,
+    "allowed_write_scope":  [
+                                "frontend/src/app/paper-v2/selection/page.tsx",
+                                "backend/services/selection_center/runtime_profile.py",
+                                "backend/services/simulation_runtime/selection.py",
+                                "backend/services/selection_center/service.py",
+                                "backend/tests/selection_center/test_runtime_selection.py",
+                                "tests/aistock_validation/bugs/20260524_BUG-111-selection-center-no-hmm-package-selection-runtime-gate.json"
+                            ],
+    "suspected_modules":  [
+                              "frontend/src/app/paper-v2/selection/page.tsx",
+                              "backend/services/selection_center/runtime_profile.py",
+                              "backend/services/simulation_runtime/selection.py",
+                              "backend/services/selection_center/service.py",
+                              "backend/tests/selection_center/test_runtime_selection.py"
+                          ],
+    "required_verification":  [
+                                  "Newly created valid StrategyPackage can run Selection Center with HMM disabled without manual Paper/MiniQMT runtime profile activation.",
+                                  "Selection runtime context is generated or classified programmatically and remains auditable.",
+                                  "Selection evidence/artifacts remain separate from Paper/MiniQMT execution authorization.",
+                                  "Paper/MiniQMT execution paths still require proper versioned runtime activation before orders, ledger, cash, holdings, NAV, or simulated execution can be affected.",
+                                  "Regression coverage includes default frontend runtime_config with HMM disabled and proves the low-level runtime profile activation error is not exposed for basic selection."
+                              ],
+    "closure_requirements":  [
+                                 "Selection Center and Paper/MiniQMT execution branch boundaries are explicit in code and tests.",
+                                 "Basic selection is not blocked by execution-profile requirements that belong only to Paper/MiniQMT activation.",
+                                 "The fix does not weaken BUG-086 runtime behavior-change protections on execution paths."
+                             ],
+    "events":  [
+                   {
+                       "timestamp":  "2026-05-24T02:35:04Z",
+                       "actor":  "codex-app",
+                       "action":  "reported",
+                       "note":  "User clarified that selection and simulation are separate branches and simulation gates must not block basic selection. Registered GitHub issue and local BUG JSON with direct linkage; no code fix performed."
+                   }
+               ]
+}

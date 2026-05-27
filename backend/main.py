@@ -53,6 +53,7 @@ from .routers import (
     strategy_packages,
     selection_center,
     paper_trading_v2,
+    trading_calendar,
     validation,
     prometheus_admin,
     rdagent,
@@ -279,6 +280,12 @@ async def _lifespan(app: FastAPI):
     # Paper Trading v2 session scheduler is opt-in so development ports do not
     # accidentally advance durable v2 sessions while production 8001 is running.
     enable_pt_v2 = (os.getenv("ENABLE_PAPER_TRADING_V2_SCHEDULER") or "").strip().lower()
+    logging.getLogger("uvicorn.error").info(
+        "Paper Trading v2 scheduler autostart=%s interval=%s auto_run=%s",
+        enable_pt_v2 in {"1", "true", "yes", "y", "on"},
+        os.getenv("PAPER_TRADING_V2_SCHEDULER_INTERVAL_SEC") or "30",
+        os.getenv("PAPER_V2_AUTO_RUN_ENABLED") or "true",
+    )
     if enable_pt_v2 in {"1", "true", "yes", "y", "on"}:
         from .services.paper_trading_v2.scheduler import paper_trading_v2_scheduler
         paper_trading_v2_scheduler.start()
@@ -519,6 +526,7 @@ def create_app() -> FastAPI:
     app.include_router(strategy_packages.router, prefix="/api/v1")
     app.include_router(selection_center.router, prefix="/api/v1")
     app.include_router(paper_trading_v2.router, prefix="/api/v1")
+    app.include_router(trading_calendar.router, prefix="/api/v1")
     app.include_router(simulation_runtime.router, prefix="/api/v1")
     app.include_router(validation.router, prefix="/api/v1")
     app.include_router(prometheus_admin.router, prefix="/api/v1")

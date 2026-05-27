@@ -3,76 +3,106 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import ConfirmAction from "@/components/paper-v2/ConfirmAction";
+import CopyChip from "@/components/paper-v2/CopyChip";
 import ErrorPanel from "@/components/paper-v2/ErrorPanel";
-import JsonPanel from "@/components/paper-v2/JsonPanel";
 import MetricCard from "@/components/paper-v2/MetricCard";
 import NoticePanel from "@/components/paper-v2/NoticePanel";
 import PaperTable from "@/components/paper-v2/PaperTable";
 import SectionCard from "@/components/paper-v2/SectionCard";
-import CopyChip from "@/components/paper-v2/CopyChip";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import WorkflowStepper from "@/components/paper-v2/WorkflowStepper";
 import { strategyPackageApi } from "@/lib/paper-v2/api";
 import { formatPercent, packageDisplayLabel, paperV2WorkflowSteps, shortHash } from "@/lib/paper-v2/format";
 import type { ExecutionPolicy, JsonObject, QEPackagingSource, StrategyPackage } from "@/lib/paper-v2/types";
 
+function sourceKey(source: QEPackagingSource): string {
+  return `${source.source_kind}:${source.experiment_id}:${source.qe_task_id || ""}:${source.qe_loop_id || ""}`;
+}
+
 function metricText(source: QEPackagingSource): string {
   const m = source.metrics_summary || {};
   return `年化 ${formatPercent(m.annual_return)} / IC ${formatPercent(m.ic)} / 回撤 ${formatPercent(m.max_drawdown)}`;
 }
 
-const SELECTION_RUNNABLE_STATUSES = new Set(["BACKTEST_APPROVED", "SELECTION_ENABLED", "PAPER_ENABLED"]);
-const SELECTION_MARKABLE_STATUSES = new Set(["BACKTEST_APPROVED"]);
-const PAPER_MARKABLE_STATUSES = new Set(["BACKTEST_APPROVED", "SELECTION_ENABLED"]);
-
-function packageLifecycleText(status: string): string {
+function lifecycleText(status: string): string {
   const labels: Record<string, string> = {
-    DRAFT: "草稿，尚未完成资产校验",
-    ASSET_VALIDATED: "资产已校验，等待回测批准",
-    BACKTEST_APPROVED: "回测已批准，可进入选股/模拟盘准入",
-    SELECTION_ENABLED: "已标记可用于选股",
-    PAPER_ENABLED: "已标记可用于模拟盘",
-    PAPER_RUNNING: "已有模拟盘运行历史，谨慎新建",
-    PAPER_PASSED: "模拟盘验证通过历史状态",
-    PAPER_FAILED: "模拟盘验证失败历史状态",
-    RETIRED: "已退役，仅保留审计",
+    DRAFT: "草稿或资产尚未完成校验",
+    ASSET_VALIDATED: "资产已校验",
+    BACKTEST_APPROVED: "回测已批准，资产合格即可进入选股/模拟盘",
+    RETIRED: "已退役，只保留历史审计，不再进入新流程",
   };
   return labels[status] || "未知状态，请查看状态事件";
 }
 
-function selectionCapability(status: string): { ok: boolean; title: string; detail: string } {
-  if (status === "RETIRED") {
-    return { ok: false, title: "不可选股", detail: "策略包已退役，不应再进入新的选股流程。" };
-  }
-  if (status === "SELECTION_ENABLED" || status === "PAPER_ENABLED") {
-    return { ok: true, title: "可以选股", detail: "已完成选股准入标记，可进入 Selection Center。" };
-  }
-  if (status === "BACKTEST_APPROVED") {
-    return { ok: true, title: "可以选股", detail: "回测已批准；建议先点击“标记可用于选股”留下状态事件。" };
-  }
-  return { ok: false, title: "不可选股", detail: "需要至少达到“回测已批准”状态。" };
+
+function textValue(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "-";
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "-";
+  if (typeof value === "boolean") return value ? "是" : "否";
+  return String(value);
 }
 
-function paperCapability(
-  status: string,
-  paperReadyPolicyCount: number,
-  policyCount: number,
-): { ok: boolean; title: string; detail: string } {
-  if (status === "RETIRED") {
-    return { ok: false, title: "不可新建模拟盘", detail: "策略包已退役，仅保留历史组合和审计记录。" };
+function objectValue(value: unknown): JsonObject {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonObject) : {};
+}
+
+function arrayCount(value: unknown): number {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+function totalDependencyCount(deps: JsonObject | null): number {
+  if (!deps) return 0;
+  return Object.values(deps).reduce<number>((total, value) => total + arrayCount(value), 0);
+}
+
+function PackagePayloadSummary({ value, kind }: { value: JsonObject; kind: "source" | "dependencies" | "model" }) {
+  if (kind === "dependencies") {
+    const rows = Object.entries(value).map(([key, item]) => ({ key, count: arrayCount(item), value: item }));
+    return (
+      <div className="pv2-readable-panel">
+        <div className="pv2-readable-table">
+          <div className="pv2-readable-row"><div className="pv2-readable-key">删除依赖</div><div className="pv2-readable-value">共 {totalDependencyCount(value)} 条运行时引用</div></div>
+          {rows.map((row) => <div className="pv2-readable-row" key={row.key}><div className="pv2-readable-key">{row.key}</div><div className="pv2-readable-value">{row.count ? `${row.count} 条` : "无"}</div></div>)}
+        </div>
+      </div>
+    );
   }
-  if (status === "PAPER_ENABLED") {
-    const policyText = paperReadyPolicyCount > 0
-      ? `已有 ${paperReadyPolicyCount} 个可用于模拟盘的已验证执行策略。`
-      : policyCount > 0
-        ? "已有执行策略，但尚未启用用于模拟盘；创建时仍会 fail-fast 校验。"
-        : "尚未列出执行策略；创建时会尝试导入并校验 manifest 默认策略。";
-    return { ok: true, title: "可以创建模拟盘实例", detail: policyText };
+  if (kind === "model") {
+    const model = objectValue(value.model_state || value.model || value);
+    const hmm = objectValue(value.hmm_state || value.hmm || {});
+    return (
+      <div className="pv2-readable-panel">
+        <div className="pv2-readable-table">
+          <div className="pv2-readable-row"><div className="pv2-readable-key">模型状态</div><div className="pv2-readable-value">{textValue(model.status || value.status)}</div></div>
+          <div className="pv2-readable-row"><div className="pv2-readable-key">模型资产</div><div className="pv2-readable-value">{textValue(model.model_id || model.model_path || model.artifact_uri)}</div></div>
+          <div className="pv2-readable-row"><div className="pv2-readable-key">HMM 缓存</div><div className="pv2-readable-value">{textValue(hmm.latest_trade_date || hmm.cache_trade_date || hmm.status || "平台按交易日自动计算/缓存")}</div></div>
+          <div className="pv2-readable-row"><div className="pv2-readable-key">诊断字段</div><div className="pv2-readable-value">{Object.keys(value).slice(0, 12).join(", ") || "-"}</div></div>
+        </div>
+      </div>
+    );
   }
-  if (PAPER_MARKABLE_STATUSES.has(status)) {
-    return { ok: false, title: "未完成模拟盘准入", detail: "先点击“标记可用于模拟盘”，再创建具体模拟盘。" };
-  }
-  return { ok: false, title: "不可新建模拟盘", detail: "需要至少达到“回测已批准”状态，并完成模拟盘准入。" };
+  const manifest = objectValue(value.manifest || value.package_manifest || value);
+  const readiness = objectValue(value.readiness || value.paper_readiness || value.asset_eligibility || {});
+  return (
+    <div className="pv2-readable-panel">
+      <div className="pv2-readable-table">
+        <div className="pv2-readable-row"><div className="pv2-readable-key">策略包</div><div className="pv2-readable-value">{textValue(value.package_name || manifest.package_name || value.created_package_id)}</div></div>
+        <div className="pv2-readable-row"><div className="pv2-readable-key">资产合格</div><div className="pv2-readable-value">{readiness.eligible === false || readiness.status === "BLOCKED" ? "不合格，查看诊断信息" : "可进入选股/模拟盘"}</div></div>
+        <div className="pv2-readable-row"><div className="pv2-readable-key">manifest</div><div className="pv2-readable-value pv2-mono">{textValue(value.manifest_sha256 || manifest.manifest_sha256)}</div></div>
+        <div className="pv2-readable-row"><div className="pv2-readable-key">来源</div><div className="pv2-readable-value">{textValue(value.source_type || manifest.source_type || (objectValue(manifest.source).source_type))}</div></div>
+        <div className="pv2-readable-row"><div className="pv2-readable-key">诊断字段</div><div className="pv2-readable-value">{Object.keys(value).slice(0, 12).join(", ") || "-"}</div></div>
+      </div>
+    </div>
+  );
+}
+
+function dependencyCount(deps: JsonObject | null): number {
+  if (!deps) return 0;
+  return Object.values(deps).reduce<number>((total, value) => {
+    if (Array.isArray(value)) return total + value.length;
+    if (typeof value === "number") return total + value;
+    return total;
+  }, 0);
 }
 
 export default function PaperV2PackagesPage() {
@@ -80,18 +110,25 @@ export default function PaperV2PackagesPage() {
   const [sources, setSources] = useState<QEPackagingSource[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [sourceKind, setSourceKind] = useState<"all" | "qe_experiment" | "qe_evolution_loop">("all");
-  const [sourceKey, setSourceKey] = useState("");
+  const [sourceKeyValue, setSourceKeyValue] = useState("");
   const [resolveRuntimeAssets, setResolveRuntimeAssets] = useState(true);
   const [policies, setPolicies] = useState<ExecutionPolicy[]>([]);
   const [events, setEvents] = useState<JsonObject[]>([]);
   const [modelState, setModelState] = useState<JsonObject | null>(null);
+  const [deleteDependencies, setDeleteDependencies] = useState<JsonObject | null>(null);
   const [sourcePreview, setSourcePreview] = useState<JsonObject | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
-  const selected = packages.find((item) => item.package_id === selectedId) || packages[0];
-  const selectedSource = useMemo(() => sources.find((item) => `${item.source_kind}:${item.experiment_id}:${item.qe_task_id || ""}:${item.qe_loop_id || ""}` === sourceKey) || sources[0], [sources, sourceKey]);
+  const selected = useMemo(
+    () => packages.find((item) => item.package_id === selectedId) || packages[0],
+    [packages, selectedId],
+  );
+  const selectedSource = useMemo(
+    () => sources.find((item) => sourceKey(item) === sourceKeyValue) || sources[0],
+    [sources, sourceKeyValue],
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -104,16 +141,15 @@ export default function PaperV2PackagesPage() {
       setPackages(packageRows);
       setSources(sourceRows);
       if (!selectedId && packageRows[0]) setSelectedId(packageRows[0].package_id);
-      if (!sourceRows.find((item) => `${item.source_kind}:${item.experiment_id}:${item.qe_task_id || ""}:${item.qe_loop_id || ""}` === sourceKey)) {
-        const first = sourceRows[0];
-        setSourceKey(first ? `${first.source_kind}:${first.experiment_id}:${first.qe_task_id || ""}:${first.qe_loop_id || ""}` : "");
+      if (!sourceRows.some((item) => sourceKey(item) === sourceKeyValue)) {
+        setSourceKeyValue(sourceRows[0] ? sourceKey(sourceRows[0]) : "");
       }
     } catch (exc) {
       setError(exc);
     } finally {
       setLoading(false);
     }
-  }, [selectedId, sourceKind, sourceKey]);
+  }, [selectedId, sourceKind, sourceKeyValue]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -123,16 +159,18 @@ export default function PaperV2PackagesPage() {
     async function loadDetail() {
       setError(null);
       try {
-        const [policyRows, eventRows, state] = await Promise.all([
+        const [policyRows, eventRows, state, deps] = await Promise.all([
           strategyPackageApi.executionPolicies(selected.package_id).catch(() => []),
           strategyPackageApi.statusEvents(selected.package_id).catch(() => []),
           strategyPackageApi.modelState(selected.package_id).catch(() => null),
+          strategyPackageApi.deleteDependencies(selected.package_id).catch(() => null),
         ]);
-        if (alive) {
-          setPolicies(policyRows);
-          setEvents(eventRows);
-          setModelState(state);
-        }
+        if (!alive) return;
+        setPolicies(policyRows);
+        setEvents(eventRows);
+        setModelState(state);
+        const depPayload = deps && typeof deps === "object" ? (deps.dependencies as JsonObject | undefined) : undefined;
+        setDeleteDependencies(depPayload || null);
       } catch (exc) {
         if (alive) setError(exc);
       }
@@ -141,14 +179,27 @@ export default function PaperV2PackagesPage() {
     return () => { alive = false; };
   }, [selected]);
 
-  async function transition(action: "enableSelection" | "enablePaper" | "retire") {
+  async function retireSelected() {
     if (!selected) return;
-    setError(null);
     setBusy(true);
+    setError(null);
     try {
-      if (action === "enableSelection") await strategyPackageApi.enableSelection(selected.package_id);
-      if (action === "enablePaper") await strategyPackageApi.enablePaper(selected.package_id);
-      if (action === "retire") await strategyPackageApi.retire(selected.package_id);
+      await strategyPackageApi.retire(selected.package_id);
+      await load();
+    } catch (exc) {
+      setError(exc);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteSelected() {
+    if (!selected) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await strategyPackageApi.deletePackage(selected.package_id);
+      setSelectedId("");
       await load();
     } catch (exc) {
       setError(exc);
@@ -161,18 +212,16 @@ export default function PaperV2PackagesPage() {
     setError(null);
     setSourcePreview(null);
     if (!selectedSource) {
-      setError(new Error("请先选择一个未打包的 QE 来源。"));
+      setError(new Error("请先选择一个 QE 来源。"));
       return;
     }
     setBusy(true);
     try {
       if (action === "preview") {
         setSourcePreview(await strategyPackageApi.qeExperimentManifest(selectedSource.experiment_id));
-      }
-      if (action === "readiness") {
+      } else if (action === "readiness") {
         setSourcePreview(await strategyPackageApi.qeExperimentPaperReadiness(selectedSource.experiment_id));
-      }
-      if (action === "create") {
+      } else {
         const created = selectedSource.source_kind === "qe_evolution_loop"
           ? await strategyPackageApi.createFromQEEvolutionLoop({
               qe_task_id: selectedSource.qe_task_id || "",
@@ -199,20 +248,18 @@ export default function PaperV2PackagesPage() {
     }
   }
 
-  const metrics = selected?.metrics_summary || {};
   const selectedStatus = selected?.package_status || "";
-  const paperReadyPolicies = policies.filter((item) => item.paper_enabled);
-  const canMarkSelection = SELECTION_MARKABLE_STATUSES.has(selectedStatus);
-  const canMarkPaper = PAPER_MARKABLE_STATUSES.has(selectedStatus);
-  const canCreatePortfolio = selectedStatus === "PAPER_ENABLED";
-  const canRetirePackage = Boolean(selected && selectedStatus !== "RETIRED");
-  const selectionState = selectionCapability(selectedStatus);
-  const paperState = paperCapability(selectedStatus, paperReadyPolicies.length, policies.length);
+  const assetEligibility = (selected?.asset_eligibility || {}) as JsonObject;
+  const assetEligible = selectedStatus !== "RETIRED" && assetEligibility.eligible !== false;
+  const usablePackages = packages.filter((item) => String(item.package_status || "").toUpperCase() !== "RETIRED").length;
+  const depsCount = dependencyCount(deleteDependencies);
+  const canDelete = Boolean(selected && depsCount === 0);
+  const metrics = selected?.metrics_summary || {};
 
   const workflowSteps = paperV2WorkflowSteps({
     hasPackages: packages.length > 0,
-    hasSelectionEnabledPackage: packages.some((item) => ["SELECTION_ENABLED", "PAPER_ENABLED", "PAPER_RUNNING", "PAPER_PASSED"].includes(item.package_status)),
-    hasPaperEnabledPackage: packages.some((item) => ["PAPER_ENABLED", "PAPER_RUNNING", "PAPER_PASSED"].includes(item.package_status)),
+    hasSelectionEnabledPackage: usablePackages > 0,
+    hasPaperEnabledPackage: usablePackages > 0,
     hasSelectionRun: false,
     hasPortfolio: false,
     hasReadyRun: false,
@@ -222,7 +269,8 @@ export default function PaperV2PackagesPage() {
     <main>
       <WorkflowStepper steps={workflowSteps} compact />
       <ErrorPanel error={error} title="策略包操作失败" />
-      <SectionCard title="从 QE 创建策略包" eyebrow="只显示未打包来源" action={<button className="pv2-button" onClick={load} disabled={loading} type="button">刷新来源</button>}>
+
+      <SectionCard title="从 QE 创建策略包" eyebrow="StrategyPackage 只能来自 QE" action={<button className="pv2-button" onClick={load} disabled={loading} type="button">刷新来源</button>}>
         <div className="pv2-form-grid">
           <div className="pv2-field">
             <label>来源类型</label>
@@ -233,10 +281,10 @@ export default function PaperV2PackagesPage() {
             </select>
           </div>
           <div className="pv2-field pv2-field-wide">
-            <label>QE 来源（名称后显示年化、IC、最大回撤）</label>
-            <select className="pv2-select" value={sourceKey} onChange={(event) => setSourceKey(event.target.value)}>
+            <label>QE 来源</label>
+            <select className="pv2-select" value={sourceKeyValue} onChange={(event) => setSourceKeyValue(event.target.value)}>
               {sources.map((item) => {
-                const key = `${item.source_kind}:${item.experiment_id}:${item.qe_task_id || ""}:${item.qe_loop_id || ""}`;
+                const key = sourceKey(item);
                 return <option value={key} key={key}>{item.display_name || `${item.experiment_name} | ${metricText(item)}`}</option>;
               })}
             </select>
@@ -244,33 +292,30 @@ export default function PaperV2PackagesPage() {
         </div>
         <label className="pv2-chip" style={{ marginTop: 12 }}>
           <input type="checkbox" checked={resolveRuntimeAssets} onChange={(event) => setResolveRuntimeAssets(event.target.checked)} />
-          创建时解析并复制运行时资产（V24/V25 等模型型执行策略需要）
+          创建时解析并复制运行资产
         </label>
         <div className="pv2-row-actions" style={{ marginTop: 12 }}>
           <button className="pv2-button" onClick={() => sourceAction("preview")} disabled={busy || !selectedSource} type="button">预览 Manifest</button>
-          <button className="pv2-button" onClick={() => sourceAction("readiness")} disabled={busy || !selectedSource} type="button">验证模拟盘就绪</button>
+          <button className="pv2-button" onClick={() => sourceAction("readiness")} disabled={busy || !selectedSource} type="button">检查资产合格性</button>
           <button className="pv2-button-primary" onClick={() => sourceAction("create")} disabled={busy || !selectedSource} type="button">创建 StrategyPackage</button>
         </div>
-        <div className="pv2-help">
-          晋级规则：仅 QE 单次实验或 QE 演进 Loop 可创建 StrategyPackage；Manifest JSON 与 manifest_sha256 创建后冻结，状态流转不进入 hash；HMM、行业黑名单、TopK、停牌剔除属于运行时配置；启用模拟盘会校验分钟线执行策略。
-        </div>
-        {!sources.length ? <NoticePanel title="暂无可打包 QE 来源" tone="info">符合条件且尚未加入策略包的 QE 单次实验或演进 Loop 为空。</NoticePanel> : null}
-        {sourcePreview ? <JsonPanel value={sourcePreview} /> : null}
+        <div className="pv2-help">策略包入场只检查资产与 manifest 完整性；HMM、黑名单、TopK、停牌剔除、交易日和行情源都属于运行时平台能力。</div>
+        {!sources.length ? <NoticePanel title="暂无可打包 QE 来源" tone="info">没有找到尚未打包的 QE 实验或演进 Loop。</NoticePanel> : null}
+        {sourcePreview ? <PackagePayloadSummary value={sourcePreview} kind="source" /> : null}
       </SectionCard>
 
-      <SectionCard title="StrategyPackage 策略包中心" eyebrow={loading ? "加载中" : `${packages.length} 个策略包`} action={<button className="pv2-button" onClick={load} type="button">刷新</button>}>
+      <SectionCard title="StrategyPackage 列表" eyebrow={loading ? "加载中" : `${packages.length} 个策略包`} action={<button className="pv2-button" onClick={load} type="button">刷新</button>}>
         <PaperTable
           rows={packages}
           empty="暂无 StrategyPackage。请先从 QE 创建策略包。"
           columns={[
             { key: "name", header: "名称", render: (row) => <button className="pv2-link-button" onClick={() => setSelectedId(row.package_id)} type="button">{row.package_name}</button> },
             { key: "status", header: "状态", render: (row) => <StatusBadge status={row.package_status} /> },
+            { key: "eligibility", header: "资产合格", render: (row) => <StatusBadge status={((row.asset_eligibility || {}) as JsonObject).eligible === false ? "BLOCKED" : "ELIGIBLE"} /> },
             { key: "source", header: "来源", render: (row) => <span>{row.source_type}<br /><span className="pv2-muted pv2-mono">{shortHash(row.source_id, 8)}</span></span> },
             { key: "annual", header: "年化", render: (row) => formatPercent(row.metrics_summary?.annual_return) },
             { key: "ic", header: "IC", render: (row) => formatPercent(row.metrics_summary?.ic) },
             { key: "rank", header: "RankIC", render: (row) => formatPercent(row.metrics_summary?.rank_ic) },
-            { key: "sharpe", header: "夏普", render: (row) => row.metrics_summary?.sharpe?.toFixed(2) || "-" },
-            { key: "mdd", header: "最大回撤", render: (row) => formatPercent(row.metrics_summary?.max_drawdown) },
             { key: "hash", header: "Manifest", render: (row) => <span className="pv2-mono">{shortHash(row.manifest_sha256)}</span> },
           ]}
         />
@@ -278,79 +323,46 @@ export default function PaperV2PackagesPage() {
 
       {selected ? (
         <div className="pv2-grid pv2-grid-main">
-          <SectionCard
-            title={selected.package_name}
-            eyebrow="当前策略包"
-          >
+          <SectionCard title={selected.package_name} eyebrow="当前策略包">
             <div className="pv2-grid pv2-grid-3" style={{ marginBottom: 14 }}>
-              <MetricCard
-                label="生命周期状态"
-                value={selectedStatus || "-"}
-                hint={packageLifecycleText(selectedStatus)}
-                tone={selectedStatus === "RETIRED" ? "danger" : canCreatePortfolio ? "success" : SELECTION_RUNNABLE_STATUSES.has(selectedStatus) ? "info" : "warning"}
-              />
-              <MetricCard
-                label="选股能力"
-                value={selectionState.title}
-                hint={selectionState.detail}
-                tone={selectionState.ok ? "success" : "warning"}
-              />
-              <MetricCard
-                label="模拟盘能力"
-                value={paperState.title}
-                hint={paperState.detail}
-                tone={paperState.ok ? "success" : selectedStatus === "RETIRED" ? "danger" : "warning"}
-              />
+              <MetricCard label="生命周期状态" value={selectedStatus || "-"} hint={lifecycleText(selectedStatus)} tone={selectedStatus === "RETIRED" ? "danger" : assetEligible ? "success" : "warning"} />
+              <MetricCard label="选股准入" value={assetEligible ? "可进入选股" : "不可进入"} hint="只看资产合格性；平台数据问题只影响本次 run。" tone={assetEligible ? "success" : "warning"} />
+              <MetricCard label="模拟盘准入" value={assetEligible ? "可创建模拟盘" : "不可创建"} hint="不再需要旧的模拟盘启用状态或治理就绪状态。" tone={assetEligible ? "success" : "warning"} />
             </div>
-            <div className="pv2-card" style={{ marginBottom: 14, padding: 14 }}>
-              <div className="pv2-eyebrow">下一步操作</div>
-              <div className="pv2-row-actions" style={{ marginTop: 10 }}>
-                <button className="pv2-button" onClick={() => transition("enableSelection")} disabled={busy || !canMarkSelection} type="button">标记可用于选股</button>
-                <button className="pv2-button" onClick={() => transition("enablePaper")} disabled={busy || !canMarkPaper} type="button">标记可用于模拟盘</button>
-                {canCreatePortfolio ? (
-                  <Link className="pv2-button-primary" href={`/paper-v2/portfolios?package_id=${selected.package_id}`}>用此包创建模拟盘</Link>
-                ) : (
-                  <button className="pv2-button-primary" disabled type="button">用此包创建模拟盘</button>
-                )}
-                <ConfirmAction
-                  label="退役策略包"
-                  confirmText={selected.package_id}
-                  onConfirm={() => transition("retire")}
-                  danger
-                  disabled={busy || !canRetirePackage}
-                  testId="strategy-package-retire"
-                />
-              </div>
-              <div className="pv2-help">
-                “标记”只推进策略包准入状态；“创建模拟盘实例”会进入组合创建页并冻结资金、日期、数据源和执行策略。退役不会删除历史，只会阻止新的准入使用。
-              </div>
+            <div className="pv2-row-actions" style={{ marginBottom: 12 }}>
+              <Link className={assetEligible ? "pv2-button-primary" : "pv2-button"} href={`/paper-v2/portfolios?package_id=${selected.package_id}`}>用此包创建模拟盘</Link>
+              <ConfirmAction label="退役策略包" confirmText={selected.package_id} onConfirm={retireSelected} danger disabled={busy || selectedStatus === "RETIRED"} testId="strategy-package-retire" mode="dialog" />
+              <ConfirmAction label="彻底删除策略包" confirmText={selected.package_id} onConfirm={deleteSelected} danger disabled={busy || !canDelete} testId="strategy-package-delete" mode="dialog" />
             </div>
-            <div className="pv2-grid pv2-grid-3">
+            <NoticePanel title="退役与删除的区别" tone={depsCount ? "warning" : "info"}>
+              退役只归档策略包，不删除历史组合和证据；彻底删除会物理删除没有任何运行时引用的策略包。当前删除依赖数量：{depsCount}。
+            </NoticePanel>
+            {deleteDependencies ? <PackagePayloadSummary value={deleteDependencies} kind="dependencies" /> : null}
+            <div className="pv2-grid pv2-grid-3" style={{ marginTop: 14 }}>
               <MetricCard label="年化收益" value={formatPercent(metrics.annual_return)} />
               <MetricCard label="IC" value={formatPercent(metrics.ic)} />
               <MetricCard label="最大回撤" value={formatPercent(metrics.max_drawdown)} />
             </div>
             <div className="pv2-chip-row" style={{ marginTop: 14 }}>
               <span className="pv2-chip">{packageDisplayLabel(selected)}</span>
-              {selected.created_at ? <span className="pv2-chip">创建于 {String(selected.created_at).slice(0, 10)}</span> : null}
               <span className="pv2-chip">模拟盘数: {selected.paper_portfolio_count || 0}</span>
-              <span className="pv2-chip">执行策略: {policies.length} 个 / 可模拟盘 {paperReadyPolicies.length} 个</span>
-              <CopyChip label={`package_id ${shortHash(selected.package_id, 6)}`} value={selected.package_id} title={`完整 package_id：${selected.package_id}`} />
+              <span className="pv2-chip">执行策略: {policies.length}</span>
+              <CopyChip label={`package ${shortHash(selected.package_id, 6)}`} value={selected.package_id} title={`完整 package_id：${selected.package_id}`} />
               <CopyChip label={`manifest ${shortHash(selected.manifest_sha256, 6)}`} value={selected.manifest_sha256} title={`完整 manifest_sha256：${selected.manifest_sha256}`} />
             </div>
             <h3>模型状态</h3>
-            {modelState ? <JsonPanel value={modelState} /> : <div className="pv2-muted">尚未获取模型状态。</div>}
+            {modelState ? <PackagePayloadSummary value={modelState} kind="model" /> : <div className="pv2-muted">尚未获取模型状态。</div>}
           </SectionCard>
 
-          <SectionCard title="执行策略与状态事件" eyebrow="仅允许回测验证策略">
+          <SectionCard title="执行策略与状态事件" eyebrow="运行时配置，不作为准入门禁">
             <PaperTable
               rows={policies}
-              empty="暂无已验证执行策略；创建模拟盘时会尝试使用 manifest 默认策略并进行校验。"
+              empty="暂无已验证执行策略；创建模拟盘时会尝试使用 manifest 默认策略并在运行前 fail-fast。"
               columns={[
                 { key: "name", header: "名称", render: (row) => row.policy_name || row.policy_id },
                 { key: "algo", header: "算法", render: (row) => row.algo_code || "-" },
                 { key: "validation", header: "验证状态", render: (row) => <StatusBadge status={row.validation_status || "unknown"} /> },
-                { key: "paper", header: "模拟盘", render: (row) => <StatusBadge status={row.paper_enabled ? "READY" : "DISABLED"} /> },
+                { key: "paper", header: "用途", render: () => <span className="pv2-muted">运行时可选，不作门禁</span> },
                 { key: "hash", header: "策略 Hash", render: (row) => <span className="pv2-mono">{shortHash(row.policy_sha256)}</span> },
               ]}
             />

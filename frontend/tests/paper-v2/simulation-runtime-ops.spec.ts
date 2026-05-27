@@ -17,8 +17,21 @@ const schedulerPayload = {
     scheduler: "simulation_lifecycle_scheduler",
     autostart: false,
     default_submit: false,
-    read_only_ops_api: true,
-    manual_tick_endpoint_enabled: false,
+    read_only_status_api: true,
+    read_only_ops_api: false,
+    controlled_ops_api: true,
+    scheduler_control_api_enabled: true,
+    manual_tick_endpoint_enabled: true,
+    context_provider_mode: "production",
+    context_provider: {
+      provider_mode: "production",
+      provider_name: "ProductionSimulationRunContextProvider",
+      ready: true,
+      localsim_state_source: "paper_v2_portfolio",
+      miniqmt_state_source: "qmt_strategy_virtual_ledger",
+      miniqmt_preview_enabled: true,
+      miniqmt_submit_enabled: false,
+    },
     approval_states: ["SIM_VALIDATING", "SIM_PASSED"],
     restart_recovery_mode: "persisted_state_only",
     schedule_windows: [
@@ -29,8 +42,8 @@ const schedulerPayload = {
     ],
     summary: {
       label: "simulation lifecycle scheduler",
-      next_action: "monitor persisted scheduler windows and runs",
-      safety_note: "This read-only API does not submit broker orders; execution uses the controlled scheduler path.",
+      next_action: "monitor scheduler windows, or use the controlled start/stop/tick APIs",
+      safety_note: "Status is read-only. start/stop/tick are controlled operations; default_submit remains false unless explicitly enabled.",
     },
   },
 };
@@ -227,7 +240,7 @@ async function mockApi(page: Page) {
   return writeMethods;
 }
 
-test("simulation runtime ops page displays read-only scheduler, shared run trace, and filters", async ({ page }) => {
+test("simulation runtime ops page displays controlled scheduler, provider, shared run trace, and filters", async ({ page }) => {
   const pageErrors: string[] = [];
   const consoleErrors: string[] = [];
   const badResponses: string[] = [];
@@ -250,7 +263,8 @@ test("simulation runtime ops page displays read-only scheduler, shared run trace
   await expect(page.getByTestId("sim-runtime-scheduler-status")).toContainText("simulation_lifecycle_scheduler");
   await expect(page.getByTestId("sim-runtime-restart-recovery-mode")).toContainText("persisted_state_only");
   await expect(page.getByText("execution_plan")).toBeVisible();
-  await expect(page.getByTestId("sim-runtime-scheduler-status")).toContainText("未启用");
+  await expect(page.getByTestId("sim-runtime-scheduler-status")).toContainText("ENABLED");
+  await expect(page.getByTestId("sim-runtime-provider-mode")).toContainText("production");
 
   await expect(page.getByText("strategy_local_ops")).toBeVisible();
   await expect(page.getByText("strategy_miniqmt_ops")).toBeVisible();

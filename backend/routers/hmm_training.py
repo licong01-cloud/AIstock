@@ -92,7 +92,7 @@ class RollingTrainingPreviewRequest(BaseModel):
 
 
 class RollingTrainingTriggerRequest(RollingTrainingPreviewRequest):
-    confirm_text: str
+    confirm_retrain: bool = False
 
 
 class DailyCoefficientPreviewRequest(BaseModel):
@@ -102,7 +102,7 @@ class DailyCoefficientPreviewRequest(BaseModel):
 
 
 class DailyCoefficientGenerateRequest(DailyCoefficientPreviewRequest):
-    confirm_text: str
+    confirm_generate: bool = False
 
 
 class DailyCoefficientJobResponse(BaseModel):
@@ -228,7 +228,7 @@ def trigger_rolling_training(
     try:
         job = service.trigger_rolling_training(
             config_id,
-            confirm_text=req.confirm_text,
+            confirm_retrain=req.confirm_retrain,
             as_of_date=req.as_of_date,
             train_window_years=req.train_window_years,
             validation_window_months=req.validation_window_months,
@@ -304,7 +304,7 @@ def generate_daily_coefficients(snapshot_id: str, req: DailyCoefficientGenerateR
             signal_preset=req.signal_preset,
             as_of_date=req.as_of_date,
             effective_trade_date=req.effective_trade_date,
-            confirm_text=req.confirm_text,
+            confirm_generate=req.confirm_generate,
         )
     except Exception as exc:
         raise _http_error(exc)
@@ -326,7 +326,7 @@ def create_daily_coefficients_job(
             signal_preset=req.signal_preset,
             as_of_date=req.as_of_date,
             effective_trade_date=req.effective_trade_date,
-            confirm_text=req.confirm_text,
+            confirm_generate=req.confirm_generate,
         )
         background_tasks.add_task(service.run_daily_coefficients_job, job["job_id"])
         return _stringify_row(job)

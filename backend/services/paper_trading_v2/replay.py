@@ -8,7 +8,11 @@ from typing import Any
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
 from backend.services.paper_trading_v2.market_data import MinuteDataSource, TradeCalendarProvider
 from backend.services.strategy_package.repository import StrategyPackageRepository
-from backend.services.trading_core.errors import StrategyPackageValidationError, UnsupportedFeatureError
+from backend.services.trading_core.errors import (
+    InvalidStateTransitionError,
+    RuntimeConfigInvalidError,
+    UnsupportedFeatureError,
+)
 
 from .models import PaperReplayDayResult, PaperReplayResult
 from .repository import PaperTradingV2Repository
@@ -57,12 +61,12 @@ class PaperTradingHistoricalReplay:
             )
         portfolio = self.repository.get_portfolio(portfolio_id)
         if portfolio.data_source != MinuteDataSource.DB_HISTORICAL:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "historical replay requires DB_HISTORICAL data_source",
                 context={"portfolio_id": portfolio_id, "data_source": portfolio.data_source.value},
             )
         if start_date < portfolio.start_date:
-            raise StrategyPackageValidationError(
+            raise InvalidStateTransitionError(
                 "historical replay start_date cannot be before portfolio start_date",
                 context={
                     "portfolio_id": portfolio_id,
@@ -74,7 +78,7 @@ class PaperTradingHistoricalReplay:
         existing_runs = self._existing_runs(portfolio_id=portfolio_id, trading_days=trading_days)
         reset_audit: dict[str, Any] | None = None
         if existing_runs and rerun_policy == "reject_existing":
-            raise StrategyPackageValidationError(
+            raise InvalidStateTransitionError(
                 "historical replay range already has paper v2 runs",
                 context={
                     "portfolio_id": portfolio_id,
@@ -84,7 +88,7 @@ class PaperTradingHistoricalReplay:
             )
         if rerun_policy == "reset_portfolio":
             if not confirm_reset or confirm_text != portfolio_id:
-                raise StrategyPackageValidationError(
+                raise RuntimeConfigInvalidError(
                     "reset_portfolio replay requires explicit confirmation text matching portfolio_id",
                     context={
                         "portfolio_id": portfolio_id,

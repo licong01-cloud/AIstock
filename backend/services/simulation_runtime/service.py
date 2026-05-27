@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from backend.services.trading_core.errors import StrategyPackageValidationError
+from backend.services.trading_core.errors import RuntimeConfigInvalidError
 
 from .models import (
     DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID,
@@ -61,7 +61,7 @@ class StrategyRuntimeReleaseService:
         }
         missing = [key for key, value in required.items() if not str(value or "").strip()]
         if missing:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "StrategyRuntimeRelease requires all runtime, daily, execution and tail version identifiers",
                 context={"missing_fields": missing},
             )

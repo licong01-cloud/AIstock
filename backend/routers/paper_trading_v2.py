@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 from datetime import date
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -21,8 +22,11 @@ from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioSer
 from backend.services.paper_trading_v2.session import PaperTradingSessionRunner, PaperTradingSessionService
 from backend.services.paper_trading_v2.models import BrokerBackendId, PaperSessionMode
 from backend.services.paper_trading_v2.symbol_names import PaperV2SymbolNameResolver
+from backend.services.trading_calendar_status import TradingCalendarStatusService
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, TradingCoreError, UnsupportedFeatureError
 router = APIRouter(prefix="/paper-v2", tags=["paper-v2"])
+
+CHINA_TZ = ZoneInfo("Asia/Shanghai")
 
 
 class CreatePortfolioRequest(BaseModel):
@@ -37,6 +41,40 @@ class CreatePortfolioRequest(BaseModel):
     execution_policy: dict[str, Any] | None = None
 
 
+class CreateMiniQMTAutoRunPortfolioRequest(BaseModel):
+    package_id: str = Field(min_length=1)
+    portfolio_name: str = Field(min_length=1)
+    initial_cash: float = Field(gt=0)
+    start_date: date
+    broker_account_id: str = Field(min_length=1)
+    top_k: int | None = Field(default=None, gt=0, le=100)
+    hmm: dict[str, Any] | None = None
+    industry_blacklist: list[str] = Field(default_factory=list)
+    fee_policy: dict[str, Any] | None = None
+    risk_policy: dict[str, Any] | None = None
+    execution_policy: dict[str, Any] | None = None
+    trade_window_policy: dict[str, Any] | None = None
+    auto_run_config: dict[str, Any] | None = None
+    created_by: str | None = None
+    create_session: bool = True
+
+
+class AutoRunEnableRequest(BaseModel):
+    broker_account_id: str = Field(min_length=1)
+    config: dict[str, Any] | None = None
+    updated_by: str | None = None
+    create_session: bool = True
+
+
+class AutoRunDisableRequest(BaseModel):
+    updated_by: str | None = None
+
+
+class AutoRunConfigPatchRequest(BaseModel):
+    patch: dict[str, Any] = Field(default_factory=dict)
+    updated_by: str | None = None
+
+
 class RunDayRequest(BaseModel):
     trade_date: date
     runtime_config: dict[str, Any] = Field(default_factory=dict)
@@ -49,6 +87,20 @@ class ReplayRequest(BaseModel):
     rerun_policy: Literal["reject_existing", "reset_portfolio"] = "reject_existing"
     confirm_reset: bool = False
     confirm_text: str | None = None
+
+
+class DeletePortfolioRequest(BaseModel):
+    confirm_delete: bool = False
+
+
+class BulkPortfolioLifecycleRequest(BaseModel):
+    portfolio_ids: list[str] = Field(default_factory=list)
+    action: Literal["pause", "resume", "complete", "retire"]
+
+
+class BulkDeletePortfolioRequest(BaseModel):
+    portfolio_ids: list[str] = Field(default_factory=list)
+    confirm_delete: bool = False
 
 
 class ReadinessRequest(BaseModel):
@@ -187,6 +239,8 @@ def _raise_http(exc: TradingCoreError) -> None:
     status_code = 400
     if isinstance(exc, DataUnavailableError):
         status_code = 404
+    elif isinstance(exc, InvalidStateTransitionError):
+        status_code = 409
     elif isinstance(exc, UnsupportedFeatureError):
         status_code = 422
     raise HTTPException(status_code=status_code, detail=exc.to_dict()) from exc
@@ -208,8 +262,10 @@ def get_trading_day_defaults(
 ) -> dict[str, Any]:
     if lookback_trading_days <= 0 or lookback_trading_days > 250:
         raise HTTPException(status_code=400, detail="lookback_trading_days must be between 1 and 250")
-    as_of = as_of_date or dt.date.today()
+    as_of = as_of_date or dt.datetime.now(CHINA_TZ).date()
     try:
+        calendar_service = TradingCalendarStatusService()
+        status = calendar_service.status(as_of_date=as_of)
         with get_conn() as conn:
             with conn.cursor() as cur:
                 data_ready_latest_date: date | None = None
@@ -230,26 +286,9 @@ def get_trading_day_defaults(
                     if data_ready_row and data_ready_row[0]:
                         data_ready_latest_date = data_ready_row[0]
                         effective_end = min(as_of, data_ready_latest_date)
-                cur.execute(
-                    """
-                    SELECT cal_date
-                    FROM market.trading_calendar
-                    WHERE cal_date <= %s AND is_trading = TRUE
-                    ORDER BY cal_date DESC
-                    LIMIT %s
-                    """,
-                    (effective_end, lookback_trading_days),
-                )
-                rows = cur.fetchall()
-                cur.execute(
-                    """
-                    SELECT MIN(cal_date)
-                    FROM market.trading_calendar
-                    WHERE cal_date > %s AND is_trading = TRUE
-                    """,
-                    (as_of,),
-                )
-                next_row = cur.fetchone()
+        lookup_start = effective_end - dt.timedelta(days=max(lookback_trading_days * 3, 31))
+        all_days = calendar_service.list_trading_days(lookup_start, effective_end)
+        dates = list(reversed(all_days[-lookback_trading_days:]))
     except Exception as exc:
         _raise_http(DataUnavailableError(
             "trading calendar defaults query failed",
@@ -260,7 +299,7 @@ def get_trading_day_defaults(
                 "error": str(exc),
             },
         ))
-    if not rows:
+    if not dates:
         _raise_http(DataUnavailableError(
             "trading calendar has no completed trading day for defaults",
             context={
@@ -269,13 +308,12 @@ def get_trading_day_defaults(
                 "require_minute_data": require_minute_data,
             },
         ))
-    dates = [row[0] for row in rows]
     latest = dates[0]
     replay_start = dates[-1]
-    next_trading_day = next_row[0] if next_row and next_row[0] else None
     return {
         "ok": True,
         "as_of_date": as_of.isoformat(),
+        "trading_day_status": status,
         "lookback_trading_days": lookback_trading_days,
         "require_minute_data": require_minute_data,
         "data_ready_latest_date": data_ready_latest_date.isoformat() if data_ready_latest_date else None,
@@ -283,7 +321,7 @@ def get_trading_day_defaults(
         "replay_start_date": replay_start.isoformat(),
         "replay_end_date": latest.isoformat(),
         "available_trading_day_count": len(dates),
-        "next_trading_day": next_trading_day.isoformat() if next_trading_day else None,
+        "next_trading_day": status.get("next_trading_day"),
     }
 
 
@@ -307,9 +345,58 @@ def create_portfolio(req: CreatePortfolioRequest) -> dict[str, Any]:
         _raise_http(exc)
 
 
-@router.get("/portfolios")
-def list_portfolios(limit: int = 100) -> dict[str, Any]:
+@router.post("/auto-run/miniqmt-portfolios")
+def create_minqmt_auto_run_portfolio(req: CreateMiniQMTAutoRunPortfolioRequest) -> dict[str, Any]:
     try:
+        result = PaperTradingV2PortfolioService().create_minqmt_auto_run_portfolio(
+            package_id=req.package_id,
+            portfolio_name=req.portfolio_name,
+            initial_cash=req.initial_cash,
+            start_date=req.start_date,
+            broker_account_id=req.broker_account_id,
+            top_k=req.top_k,
+            hmm=req.hmm,
+            industry_blacklist=req.industry_blacklist,
+            fee_policy=req.fee_policy,
+            risk_policy=req.risk_policy,
+            execution_policy=req.execution_policy,
+            trade_window_policy=req.trade_window_policy,
+            auto_run_config=req.auto_run_config,
+            created_by=req.created_by,
+            create_session=req.create_session,
+        )
+        return {
+            "ok": True,
+            "portfolio": result["portfolio"].model_dump(mode="json"),
+            "binding": result["binding"].model_dump(mode="json"),
+            "session": result["session"].model_dump(mode="json") if result.get("session") else None,
+            "auto_run": result["auto_run"],
+        }
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/portfolios")
+def list_portfolios(
+    limit: int = Query(default=100, ge=1, le=1000),
+    page: int | None = Query(default=None, ge=1),
+    page_size: int | None = Query(default=None, ge=1, le=100),
+    status: list[str] | None = Query(default=None),
+    search: str | None = Query(default=None),
+    sort_by: str = Query(default="created_at"),
+    sort_dir: str = Query(default="desc"),
+) -> dict[str, Any]:
+    try:
+        if page is not None or page_size is not None:
+            page_data = PaperTradingV2PortfolioService().list_portfolios_page(
+                page=page or 1,
+                page_size=page_size or min(limit, 50),
+                statuses=status,
+                search=search,
+                sort_by=sort_by,
+                sort_dir=sort_dir,
+            )
+            return {"ok": True, **page_data}
         portfolios = PaperTradingV2PortfolioService().list_portfolios(limit=limit)
         return {"ok": True, "portfolios": [item.model_dump(mode="json") for item in portfolios]}
     except TradingCoreError as exc:
@@ -351,11 +438,107 @@ def list_running_portfolio_summary(
         _raise_http(exc)
 
 
+@router.post("/portfolios/bulk-lifecycle")
+def bulk_portfolio_lifecycle(req: BulkPortfolioLifecycleRequest) -> dict[str, Any]:
+    try:
+        if not req.portfolio_ids:
+            raise InvalidStateTransitionError(
+                "paper v2 bulk lifecycle requires at least one portfolio",
+                context={"portfolio_ids": req.portfolio_ids},
+            )
+        result = PaperTradingV2PortfolioService().bulk_lifecycle(req.portfolio_ids, req.action)
+        return {"ok": True, **result}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/portfolios/bulk-delete")
+def bulk_delete_portfolios(req: BulkDeletePortfolioRequest) -> dict[str, Any]:
+    try:
+        if not req.confirm_delete:
+            raise InvalidStateTransitionError(
+                "paper v2 portfolio bulk delete requires explicit confirmation",
+                context={"portfolio_ids": req.portfolio_ids, "confirm_delete": req.confirm_delete},
+            )
+        if not req.portfolio_ids:
+            raise InvalidStateTransitionError(
+                "paper v2 portfolio bulk delete requires at least one portfolio",
+                context={"portfolio_ids": req.portfolio_ids},
+            )
+        result = PaperTradingV2PortfolioService().bulk_delete_portfolios(req.portfolio_ids)
+        return {"ok": True, **result}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
 @router.get("/portfolios/{portfolio_id}")
 def get_portfolio(portfolio_id: str) -> dict[str, Any]:
     try:
         portfolio = PaperTradingV2PortfolioService().get_portfolio(portfolio_id)
         return {"ok": True, "portfolio": portfolio.model_dump(mode="json")}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/portfolios/{portfolio_id}/auto-run/status")
+def get_portfolio_auto_run_status(portfolio_id: str) -> dict[str, Any]:
+    try:
+        return {"ok": True, "auto_run": PaperTradingV2PortfolioService().auto_run_status(portfolio_id)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/portfolios/{portfolio_id}/auto-run/enable")
+def enable_portfolio_auto_run(portfolio_id: str, req: AutoRunEnableRequest) -> dict[str, Any]:
+    try:
+        result = PaperTradingV2PortfolioService().enable_auto_run(
+            portfolio_id,
+            broker_account_id=req.broker_account_id,
+            config=req.config,
+            updated_by=req.updated_by,
+            create_session=req.create_session,
+        )
+        return {
+            "ok": True,
+            "portfolio": result["portfolio"].model_dump(mode="json"),
+            "binding": result["binding"].model_dump(mode="json"),
+            "session": result["session"].model_dump(mode="json") if result.get("session") else None,
+            "auto_run": result["auto_run"],
+        }
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/portfolios/{portfolio_id}/auto-run/disable")
+def disable_portfolio_auto_run(portfolio_id: str, req: AutoRunDisableRequest | None = None) -> dict[str, Any]:
+    try:
+        result = PaperTradingV2PortfolioService().disable_auto_run(
+            portfolio_id,
+            updated_by=req.updated_by if req else None,
+        )
+        return {
+            "ok": True,
+            "portfolio": result["portfolio"].model_dump(mode="json"),
+            "retired_bindings": [item.model_dump(mode="json") for item in result["retired_bindings"]],
+            "auto_run": result["auto_run"],
+        }
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.patch("/portfolios/{portfolio_id}/auto-run/config")
+def patch_portfolio_auto_run_config(portfolio_id: str, req: AutoRunConfigPatchRequest) -> dict[str, Any]:
+    try:
+        result = PaperTradingV2PortfolioService().update_auto_run_config(
+            portfolio_id,
+            patch=req.patch,
+            updated_by=req.updated_by,
+        )
+        return {
+            "ok": True,
+            "portfolio": result["portfolio"].model_dump(mode="json"),
+            "auto_run": result["auto_run"],
+        }
     except TradingCoreError as exc:
         _raise_http(exc)
 
@@ -408,6 +591,20 @@ def retire_portfolio(portfolio_id: str) -> dict[str, Any]:
         )
         portfolio = PaperTradingV2PortfolioService().retire_portfolio(portfolio_id)
         return {"ok": True, "portfolio": portfolio.model_dump(mode="json")}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.delete("/portfolios/{portfolio_id}")
+def delete_portfolio(portfolio_id: str, req: DeletePortfolioRequest) -> dict[str, Any]:
+    try:
+        if not req.confirm_delete:
+            raise InvalidStateTransitionError(
+                "paper v2 portfolio delete requires explicit confirmation",
+                context={"portfolio_id": portfolio_id, "confirm_delete": req.confirm_delete},
+            )
+        deleted_counts = PaperTradingV2PortfolioService().delete_portfolio(portfolio_id)
+        return {"ok": True, "portfolio_id": portfolio_id, "deleted_counts": deleted_counts}
     except TradingCoreError as exc:
         _raise_http(exc)
 
@@ -879,6 +1076,13 @@ def get_session_scheduler_status() -> dict[str, Any]:
     return {"ok": True, "scheduler": paper_trading_v2_scheduler.status()}
 
 
+@router.get("/session-scheduler/bootstrap-status")
+def get_session_scheduler_bootstrap_status() -> dict[str, Any]:
+    from backend.services.paper_trading_v2.scheduler import paper_trading_v2_scheduler
+
+    return {"ok": True, "bootstrap": paper_trading_v2_scheduler.bootstrap_status()}
+
+
 @router.post("/session-scheduler/start")
 def start_session_scheduler(req: SchedulerStartRequest) -> dict[str, Any]:
     from backend.services.paper_trading_v2.scheduler import paper_trading_v2_scheduler
@@ -898,6 +1102,21 @@ def run_session_scheduler_once(req: SchedulerRunOnceRequest) -> dict[str, Any]:
     from backend.services.paper_trading_v2.scheduler import paper_trading_v2_scheduler
 
     return {"ok": True, "result": paper_trading_v2_scheduler.run_once(limit=req.limit, as_of_time=req.as_of_time)}
+
+
+@router.post("/session-scheduler/recover-auto-run")
+def recover_session_scheduler_auto_run(req: SchedulerRunOnceRequest | None = None) -> dict[str, Any]:
+    from backend.services.paper_trading_v2.scheduler import paper_trading_v2_scheduler
+
+    limit = req.limit if req else 50
+    as_of_time = req.as_of_time if req else None
+    return {
+        "ok": True,
+        "recovery": paper_trading_v2_scheduler.auto_run_coordinator.recover_enabled_portfolios(
+            limit=limit,
+            as_of_time=as_of_time,
+        ),
+    }
 
 
 @router.post("/coldstart-sanity/sentinel-order")

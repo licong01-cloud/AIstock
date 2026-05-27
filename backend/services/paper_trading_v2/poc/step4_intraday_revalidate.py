@@ -24,11 +24,15 @@ import time
 from datetime import datetime
 
 from backend.services.paper_trading_v2.poc._common import bootstrap
+from backend.services.trading_calendar_status import TradingCalendarStatusService
+from backend.services.trading_core.errors import TradingCoreError
 
 
 def _now_in_trading_hours() -> bool:
     now = datetime.now()
-    if now.weekday() >= 5:
+    try:
+        TradingCalendarStatusService().ensure_trading_day(now.date())
+    except TradingCoreError:
         return False
     hm = now.hour * 100 + now.minute
     return 930 <= hm <= 1130 or 1300 <= hm <= 1500
@@ -222,7 +226,7 @@ def main() -> int:
     if not _now_in_trading_hours():
         print(f"[step3] WARN: not in trading hours ({datetime.now()}); "
               f"V2 will likely return zero ticks and V3 will skip. "
-              f"Re-run during 09:30-11:30 or 13:00-15:00 on a weekday.")
+              f"Re-run during 09:30-11:30 or 13:00-15:00 on an official trading day.")
 
     cfg = bootstrap()
     print(f"[step3] cfg: account={cfg['account_id']} session={cfg['session_id']} "

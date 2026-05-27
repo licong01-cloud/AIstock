@@ -9,6 +9,7 @@ export default function ConfirmAction({
   danger = false,
   disabled = false,
   testId,
+  mode = "text",
 }: {
   label: string;
   confirmText: string;
@@ -16,15 +17,39 @@ export default function ConfirmAction({
   danger?: boolean;
   disabled?: boolean;
   testId?: string;
+  mode?: "text" | "dialog";
 }) {
   const [armed, setArmed] = useState(false);
   const [text, setText] = useState("");
   const [running, setRunning] = useState(false);
   const canConfirm = text === confirmText && !running && !disabled;
 
+  async function runConfirmed() {
+    setRunning(true);
+    try {
+      await onConfirm();
+      setArmed(false);
+      setText("");
+    } finally {
+      setRunning(false);
+    }
+  }
+
   if (!armed) {
     return (
-      <button className={danger ? "pv2-button pv2-button-danger" : "pv2-button"} data-testid={testId} disabled={disabled} onClick={() => setArmed(true)} type="button">
+      <button
+        className={danger ? "pv2-button pv2-button-danger" : "pv2-button"}
+        data-testid={testId}
+        disabled={disabled}
+        onClick={async () => {
+          if (mode === "dialog") {
+            if (window.confirm(`确认执行：${label}？`)) await runConfirmed();
+            return;
+          }
+          setArmed(true);
+        }}
+        type="button"
+      >
         {label}
       </button>
     );
@@ -39,16 +64,7 @@ export default function ConfirmAction({
           className={danger ? "pv2-button pv2-button-danger" : "pv2-button"}
           data-testid={testId ? `${testId}-confirm` : undefined}
           disabled={!canConfirm}
-          onClick={async () => {
-            setRunning(true);
-            try {
-              await onConfirm();
-              setArmed(false);
-              setText("");
-            } finally {
-              setRunning(false);
-            }
-          }}
+          onClick={runConfirmed}
           type="button"
         >
           {running ? "执行中..." : "确认"}

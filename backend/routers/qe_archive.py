@@ -112,7 +112,7 @@ def get_qe_archive_health():
 @router.get("/outbox", summary="Recent QE archive outbox events")
 def list_qe_archive_outbox(
     status: str | None = Query(None, description="Optional outbox status filter."),
-    limit: int = Query(50, ge=1, le=500),
+    limit: int = Query(20, ge=1, le=100),
 ):
     return {
         "status": "success",

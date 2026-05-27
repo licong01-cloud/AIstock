@@ -1,0 +1,24 @@
+rules:
+  - id: aistock-no-wsl-unc-runtime-path
+    message: "Do not access WSL through Windows UNC paths in AIstock runtime code."
+    severity: ERROR
+    languages: [python, typescript, javascript]
+    pattern-regex: '\\\\wsl(\$|\.localhost)'
+
+  - id: aistock-no-local-workstation-path
+    message: "Do not hardcode local workstation paths; use config/catalog/runtime inputs."
+    severity: WARNING
+    languages: [python, typescript, javascript]
+    pattern-regex: '([A-Za-z]:\\Users\\|F:\\Dev\\AIstock|/mnt/[a-z]/Dev/AIstock)'
+
+  - id: aistock-no-silent-empty-success
+    message: "Do not silently return empty/default success from broad exception handlers."
+    severity: ERROR
+    languages: [python]
+    pattern-regex: 'except\s+Exception[^\n]*:\s*(\n\s*){0,3}return\s+(\[\]|\{\}|None|True)'
+
+  - id: aistock-review-raw-json-ui
+    message: "Review raw JSON rendering; operator UI must be readable and use the approved new UI standard."
+    severity: WARNING
+    languages: [typescript, javascript]
+    pattern-regex: 'JSON\.stringify|<pre>|JsonPanel'

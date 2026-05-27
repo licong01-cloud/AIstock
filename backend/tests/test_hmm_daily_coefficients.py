@@ -127,7 +127,7 @@ def test_generate_daily_coefficients_is_idempotent_for_matching_existing_artifac
     result = svc.generate_daily_coefficients(
         "snapshot_1",
         signal_preset="preset_A",
-        confirm_text="snapshot_1",
+        confirm_generate=True,
     )
 
     assert result["status"] == "EXISTS"
@@ -160,7 +160,7 @@ def test_generate_daily_coefficients_passes_pit_dates_to_wsl_script(tmp_path: Pa
     result = svc.generate_daily_coefficients(
         "snapshot_1",
         signal_preset="preset_A",
-        confirm_text="snapshot_1",
+        confirm_generate=True,
     )
 
     assert result["status"] == "CREATED"
@@ -198,7 +198,7 @@ def test_start_daily_coefficients_job_persists_validated_plan(tmp_path: Path, mo
     job = svc.start_daily_coefficients_job(
         "snapshot_1",
         signal_preset="preset_A",
-        confirm_text="snapshot_1",
+        confirm_generate=True,
     )
 
     assert job["status"] == "PENDING"

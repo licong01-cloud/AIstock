@@ -170,15 +170,19 @@ def client(repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str])
     return TestClient(app)
 
 
-def test_scheduler_status_is_read_only_and_does_not_claim_autostart(client: TestClient) -> None:
+def test_scheduler_status_reports_controlled_ops_and_does_not_claim_autostart(client: TestClient) -> None:
     response = client.get("/api/v1/simulation-runtime/scheduler/status")
 
     assert response.status_code == 200
     scheduler = response.json()["scheduler"]
     assert scheduler["autostart"] is False
     assert scheduler["default_submit"] is False
-    assert scheduler["read_only_ops_api"] is True
-    assert scheduler["manual_tick_endpoint_enabled"] is False
+    assert scheduler["read_only_status_api"] is True
+    assert scheduler["read_only_ops_api"] is False
+    assert scheduler["controlled_ops_api"] is True
+    assert scheduler["manual_tick_endpoint_enabled"] is True
+    assert scheduler["scheduler_control_api_enabled"] is False
+    assert scheduler["context_provider_mode"] == "fail_fast"
     assert scheduler["restart_recovery_mode"] == "persisted_state_only"
     assert [window["window_id"] for window in scheduler["schedule_windows"]] == [
         "pre_open",
@@ -233,6 +237,21 @@ def test_run_and_execution_plan_detail_include_traceability(
     assert plan_payload["plan_id"] == plan_id
     assert plan_payload["intent_count"] == 1
     assert plan_payload["intents"][0]["symbol"] == "000001.SZ"
+
+
+def test_scheduler_tick_api_is_controlled_dry_run_by_default(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/simulation-runtime/scheduler/tick",
+        json="2026-05-21T09:22:00+00:00",
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["action"] == "scheduler_tick"
+    assert payload["trade_date"] == "2026-05-21"
+    assert payload["submit"] is False
+    assert payload["total_bindings"] >= 0
+    assert "results" in payload
 
 
 def test_missing_run_maps_to_404(client: TestClient) -> None:

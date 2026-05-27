@@ -70,3 +70,25 @@
 2. 本次没有 production DDL，合入后无需执行生产迁移；仍需由用户按规范重启后端使新增 router/MCP profile 生效。
 3. 本次没有触碰生产服务和生产数据库；验证使用单元测试、MCP MockTransport、FastAPI TestClient 和 Playwright mock API。
 4. 分支具备创建 PR 和进入用户确认合入环节的条件；未获得用户确认前不得合入 `main`。
+
+## 5. 2026-05-27 同步 `origin/main` 后复验
+
+> 同步背景：PR #180 原始实现 commit `98d4511634623b9a54f39518e3dd4407a0a89ca8` 已落后最新 `origin/main`；本轮将 `origin/main` 合入 `feature/local-data-mcp-gateway-20260524`，以主线 Research Assistant prompt pack、runtime config、dialogue mode、capability sync、MCP catalog grounding 和 action proposal 架构为基底，重新接入 Local Data MCP 能力。
+
+| 序号 | 命令 | 结果 |
+| --- | --- | --- |
+| 1 | `python -m compileall backend/services/local_data_management.py backend/routers/local_data.py backend/mcp/modules/local_data.py backend/services/research_assistant` | 通过。 |
+| 2 | `python -m pytest -q backend/tests/test_local_data_management_facade.py backend/tests/mcp/test_local_data_module.py backend/tests/mcp/test_profiles_registry_gateway.py backend/tests/research_assistant/test_service.py backend/tests/research_assistant/test_api.py -p no:cacheprovider` | 通过，`101 passed in 34.06s`。 |
+| 3 | `npm run lint`（frontend） | 通过；仅有既有跨模块 `react-hooks/exhaustive-deps` warnings，无 error。 |
+| 4 | `npx tsc --noEmit --incremental false`（frontend） | 通过，`TypeScript: No errors found`。 |
+| 5 | `npx playwright test tests/research-assistant/research-assistant.spec.ts --project=chromium`（frontend） | 通过，`PASS (4) FAIL (0)`；使用 Playwright 临时 `3012`，未触碰生产 `3000`。 |
+| 6 | `npm run build`（frontend） | 通过，Next.js production build completed；仅有既有 lint warnings。 |
+| 7 | `git diff --check` | 通过，无空白错误。 |
+
+### 5.1 同步后保留/迁移点
+
+- `backend/services/research_assistant/service.py` 保留主线 dialogue mode、capability sync、runtime MCP catalog grounding，同时新增 `local_data_management_request` 意图、Local Data MCP skill/server/tool catalog、Prompt Tree 选择、Memory/Graph seed 与安全卡片。
+- `configs/research_assistant/runtime_context.yaml` 新增 `local_data.health_overview`、`local_data.plan_repair`、`local_data.apply_repair_confirmed` workflow capability；不改变 QE workflow capability 语义。
+- `prompt_packs/research_assistant/main/pack.yaml` 新增 `prompt.local_data_management`、`workflow.local_data_check_repair`、`tool_guard.mcp_local_data`，并落到 prompt-pack 节点文件，避免回退到旧版硬编码 Prompt Tree。
+- 前端 `chat`、`workbench`、`mcp-tools` 保留主线无 raw JSON 主视图和 capability inquiry 行为，仅在 Local Data 语境或真实目录命中时展示本地数据检查、计划、确认、执行、复查卡。
+- `production_ddl_gate=noop`；`production_backend_dependency_gate=noop`；`production_frontend_dependency_gate=noop`；未启动、停止或重启生产 backend `8001` / frontend `3000`，未写生产数据库。

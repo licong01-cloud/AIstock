@@ -1,0 +1,31 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "dependencyDashboard": true,
+  "labels": ["dependencies", "automation", "aistock:deps"],
+  "enabledManagers": ["github-actions", "npm", "pip_requirements", "pep621"],
+  "ignorePaths": [
+    "requirements.txt",
+    "requirements.lock.txt",
+    "tmp/**",
+    "frontend/.next/**"
+  ],
+  "packageRules": [
+    {
+      "matchManagers": ["github-actions"],
+      "groupName": "github-actions",
+      "schedule": ["before 06:00 on monday"]
+    },
+    {
+      "matchFileNames": ["frontend/package.json"],
+      "groupName": "frontend npm dependencies",
+      "schedule": ["before 06:00 on monday"]
+    },
+    {
+      "matchManagers": ["pip_requirements", "pep621"],
+      "groupName": "python tooling dependencies",
+      "schedule": ["before 06:00 on monday"]
+    }
+  ],
+  "prConcurrentLimit": 3,
+  "rangeStrategy": "bump"
+}

@@ -361,22 +361,22 @@ class HMMTrainingService:
             **plan,
             "rolling_config_json": rolling_config,
             "manual_confirm_required": True,
-            "confirm_text_required": config_id,
+            "confirm_boolean_required": True,
         }
 
     def trigger_rolling_training(
         self,
         config_id: str,
         *,
-        confirm_text: str,
+        confirm_retrain: bool = False,
         as_of_date: date | None = None,
         train_window_years: float = DEFAULT_ROLLING_TRAIN_YEARS,
         validation_window_months: int = DEFAULT_VALIDATION_WINDOW_MONTHS,
     ) -> Dict[str, Any]:
         """Persist a rolling plan on the config and create a pending job."""
 
-        if str(confirm_text or "").strip() != config_id:
-            raise ValueError("rolling HMM training requires explicit confirmation text matching config_id")
+        if not confirm_retrain:
+            raise ValueError("rolling HMM training requires explicit boolean confirmation")
         preview = self.preview_rolling_training(
             config_id,
             as_of_date=as_of_date,
@@ -660,7 +660,7 @@ class HMMTrainingService:
             "existing_artifact": existing,
             "existing_artifact_status": existing_status,
             "requires_wsl": True,
-            "confirm_text_required": snapshot_id,
+            "confirm_boolean_required": True,
         }
 
     def _validate_existing_daily_artifact(
@@ -733,13 +733,13 @@ class HMMTrainingService:
         snapshot_id: str,
         *,
         signal_preset: str,
-        confirm_text: str,
+        confirm_generate: bool = False,
         as_of_date: date | None = None,
         effective_trade_date: date | None = None,
     ) -> Dict[str, Any]:
-        if str(confirm_text or "").strip() != snapshot_id:
+        if not confirm_generate:
             raise ValueError(
-                "HMM daily coefficient generation requires explicit confirmation text matching snapshot_id"
+                "HMM daily coefficient generation requires explicit boolean confirmation"
             )
         plan = self._resolve_daily_coefficient_plan(
             snapshot_id=snapshot_id,
@@ -885,7 +885,7 @@ class HMMTrainingService:
         snapshot_id: str,
         *,
         signal_preset: str,
-        confirm_text: str,
+        confirm_generate: bool = False,
         as_of_date: date | None = None,
         effective_trade_date: date | None = None,
     ) -> Dict[str, Any]:
@@ -894,9 +894,9 @@ class HMMTrainingService:
         The WSL generation itself runs in ``run_daily_coefficients_job`` so UI
         calls do not depend on a long-lived Next.js dev proxy connection.
         """
-        if str(confirm_text or "").strip() != snapshot_id:
+        if not confirm_generate:
             raise ValueError(
-                "HMM daily coefficient generation requires explicit confirmation text matching snapshot_id"
+                "HMM daily coefficient generation requires explicit boolean confirmation"
             )
         plan = self._resolve_daily_coefficient_plan(
             snapshot_id=snapshot_id,

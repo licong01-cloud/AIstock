@@ -92,7 +92,9 @@ full_sync_results.json
 test_loops_response.json
 
 # Claude config
-.claude/
+.claude/*
+!.claude/commands/
+!.claude/commands/*.md
 
 # QuantEvolver data directories
 qe_data/
@@ -140,9 +142,12 @@ report/
 
 # Environment files (already tracked by mistake — untrack separately)
 .env
-.claude/
 aistock_models/aistock_models.egg-info/
 
 # Local dev DB schema dumps belong in E:/DEV backup/aistock_pg_snapshots/ (DR playbook 20260511)
 # Dev DB schema snapshots (T17, 2026-05-10) — large, regenerable from prod
 backend/db/dev/
+
+# Code intelligence local indexes and generated graph artifacts
+.codegraph/
+.understand-anything/

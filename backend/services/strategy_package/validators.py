@@ -10,13 +10,14 @@ from backend.services.trading_core.execution_algo_capabilities import (
 )
 from backend.services.trading_core.errors import (
     ExecutionAlgoError,
-    StrategyPackageValidationError,
+    PackageAssetInvalidError,
+    RuntimeConfigInvalidError,
     UnsupportedFeatureError,
 )
 
 from .execution_policy import normalize_execution_policy_json
 from .manifest import compute_manifest_sha256
-from .models import PackageStatus, StrategyPackageManifest
+from .models import StrategyPackageManifest
 
 
 class StrategyPackageValidator:
@@ -25,14 +26,14 @@ class StrategyPackageValidator:
     def validate_manifest(self, manifest: StrategyPackageManifest) -> None:
         failed = [check for check in manifest.asset_checks if not check.passed]
         if failed:
-            raise StrategyPackageValidationError(
+            raise PackageAssetInvalidError(
                 "strategy package has failed asset checks",
                 context={"failed_checks": [check.model_dump() for check in failed]},
             )
         if manifest.manifest_sha256:
             actual = compute_manifest_sha256(manifest)
             if manifest.manifest_sha256 != actual:
-                raise StrategyPackageValidationError(
+                raise PackageAssetInvalidError(
                     "manifest_sha256 does not match manifest payload",
                     context={
                         "expected": manifest.manifest_sha256,
@@ -55,18 +56,6 @@ class StrategyPackageValidator:
         """
 
         self.validate_manifest(manifest)
-        if manifest.package_status not in {
-            PackageStatus.BACKTEST_APPROVED,
-            PackageStatus.SELECTION_ENABLED,
-            PackageStatus.PAPER_ENABLED,
-        }:
-            raise StrategyPackageValidationError(
-                "package is not approved for paper trading",
-                context={
-                    "package_id": manifest.package_id,
-                    "package_status": manifest.package_status.value,
-                },
-            )
 
     def validate_execution_policy_for_paper(
         self,
@@ -89,7 +78,7 @@ class StrategyPackageValidator:
             )
         algo_config = dict(normalized_policy.get("algo_config") or {})
         if algo_code == "V25_TWO_STAGE" and bool(algo_config.get("allow_default_day_features")):
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "V25_TWO_STAGE allow_default_day_features is diagnostic-only and cannot enter Paper Trading v2",
                 context={"package_id": package_id, "algo_code": algo_code},
             )

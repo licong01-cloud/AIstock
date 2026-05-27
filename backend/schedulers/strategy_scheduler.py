@@ -24,6 +24,7 @@ from ..strategies.volatility_breakout_strategy import VolatilityBreakoutStrategy
 from ..infra.strategy_executor import SimpleStrategyExecutor
 from ..data_service import api as data_api
 from ..infra.qmt_client import get_qmt_client_singleton, QMTNotAvailableError
+from ..services.trading_calendar_status import TradingCalendarStatusService
 
 load_dotenv(override=True)
 
@@ -44,11 +45,16 @@ class StrategyScheduler:
         self._realtime_enabled_strategies: Dict[str, List[str]] = {}  # strategy_id -> stocks
         self._realtime_threads: Dict[str, threading.Thread] = {}  # strategy_id -> thread
         self._realtime_stop_events: Dict[str, threading.Event] = {}  # strategy_id -> stop_event
+        self._trading_calendar_status = TradingCalendarStatusService()
 
     def _is_trading_time(self, now: Optional[datetime] = None) -> bool:
         dt = now or datetime.now()
-        # Monday=0 ... Sunday=6
-        if dt.weekday() >= 5:
+        try:
+            calendar_status = self._trading_calendar_status.status(as_of_date=dt.date())
+        except Exception:
+            logger.error("official trading calendar status is unavailable; realtime strategy execution is blocked", exc_info=True)
+            return False
+        if not calendar_status.get("is_trading_day"):
             return False
         t = dt.time()
         morning_start = dt_time(9, 15)

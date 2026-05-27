@@ -2,7 +2,9 @@ import type {
   Activation,
   CandidateStrategyPackage,
   CandidateStrategyPackageInput,
+  CreateMiniQMTAutoRunPortfolioResult,
   DataSource,
+  TradingDayStatus,
   ExecutionPolicy,
   HmmConfig,
   HmmDailyCoefficientJob,
@@ -10,8 +12,10 @@ import type {
   HmmSnapshot,
   JsonObject,
   PaperPortfolio,
+  PaperAutoRunSummary,
   PaperLiveDashboard,
   PaperRun,
+  PaperSchedulerBootstrapStatus,
   PaperSchedulerRunResult,
   PaperSchedulerStatus,
   PaperSession,
@@ -220,14 +224,6 @@ export const strategyPackageApi = {
     const data = await apiFetch<{ execution_policies: ExecutionPolicy[] }>(`/strategy-packages/${packageId}/execution-policies`);
     return data.execution_policies || [];
   },
-  async enableSelection(packageId: string): Promise<StrategyPackage> {
-    const data = await apiFetch<{ package: StrategyPackage }>(`/strategy-packages/${packageId}/enable-selection`, { method: "POST" });
-    return data.package;
-  },
-  async enablePaper(packageId: string): Promise<StrategyPackage> {
-    const data = await apiFetch<{ package: StrategyPackage }>(`/strategy-packages/${packageId}/enable-paper`, { method: "POST" });
-    return data.package;
-  },
   async retire(packageId: string): Promise<StrategyPackage> {
     const data = await apiFetch<{ package: StrategyPackage }>(`/strategy-packages/${packageId}/retire`, { method: "POST" });
     return data.package;
@@ -248,6 +244,15 @@ export const strategyPackageApi = {
     const data = await apiFetch<{ jobs: JsonObject[] }>(`/strategy-packages/${packageId}/model-retrain/jobs`);
     return data.jobs || [];
   },
+  async deleteDependencies(packageId: string): Promise<JsonObject> {
+    return apiFetch(`/strategy-packages/${encodeURIComponent(packageId)}/delete-dependencies`);
+  },
+  async deletePackage(packageId: string): Promise<JsonObject> {
+    return apiFetch(`/strategy-packages/${encodeURIComponent(packageId)}`, {
+      method: "DELETE",
+      body: JSON.stringify({ confirm_delete: true }),
+    });
+  },
 };
 
 export const selectionCenterApi = {
@@ -255,9 +260,30 @@ export const selectionCenterApi = {
     const data = await apiFetch<{ packages: SelectablePackage[] }>(`/selection-center/selectable-packages?limit=${limit}`);
     return data.packages || [];
   },
+  async industryTree(): Promise<JsonObject[]> {
+    const data = await apiFetch<{ tree: JsonObject[] }>("/selection-center/industry-tree");
+    return data.tree || [];
+  },
   async listRuns(limit = 100): Promise<SelectionRun[]> {
     const data = await apiFetch<{ runs: SelectionRun[] }>(`/selection-center/runs?limit=${limit}`);
     return data.runs || [];
+  },
+  async listRunsPage(params: { page?: number; pageSize?: number; limit?: number } = {}): Promise<{ runs: SelectionRun[]; pagination: JsonObject }> {
+    const qs = new URLSearchParams({
+      page: String(params.page || 1),
+      page_size: String(params.pageSize || params.limit || 20),
+      limit: String(params.limit || params.pageSize || 20),
+    });
+    const data = await apiFetch<{ runs: SelectionRun[]; pagination?: JsonObject }>(`/selection-center/runs?${qs.toString()}`);
+    return {
+      runs: data.runs || [],
+      pagination: data.pagination || {
+        page: params.page || 1,
+        page_size: params.pageSize || params.limit || 20,
+        total: data.runs?.length || 0,
+        total_pages: 1,
+      },
+    };
   },
   async getRun(runId: string): Promise<SelectionRun> {
     const data = await apiFetch<{ run: SelectionRun }>(`/selection-center/runs/${runId}`);
@@ -291,6 +317,15 @@ export const selectionCenterApi = {
   async createPaperPortfolio(runId: string, payload: JsonObject): Promise<{ portfolio: PaperPortfolio; link: JsonObject; paper_runtime_config: JsonObject }> {
     return apiFetch(`/selection-center/runs/${runId}/create-paper-portfolio`, body(payload));
   },
+  async deleteRun(runId: string): Promise<JsonObject> {
+    return apiFetch(`/selection-center/runs/${runId}`, { method: "DELETE" });
+  },
+  async deleteRuns(runIds: string[]): Promise<JsonObject> {
+    return apiFetch("/selection-center/runs/bulk-delete", {
+      method: "POST",
+      body: JSON.stringify({ run_ids: runIds, confirm_delete: true }),
+    });
+  },
 };
 
 export const paperV2Api = {
@@ -298,9 +333,43 @@ export const paperV2Api = {
     const data = await apiFetch<TradingDayDefaults>(`/paper-v2/trading-days/defaults?lookback_trading_days=${lookbackTradingDays}`);
     return data;
   },
+  async tradingDayStatus(): Promise<TradingDayStatus> {
+    return apiFetch<TradingDayStatus>("/trading-calendar/status");
+  },
   async listPortfolios(limit = 200): Promise<PaperPortfolio[]> {
     const data = await apiFetch<{ portfolios: PaperPortfolio[] }>(`/paper-v2/portfolios?limit=${limit}`);
     return data.portfolios || [];
+  },
+  async listPortfoliosPage(params: {
+    page?: number;
+    pageSize?: number;
+    limit?: number;
+    statuses?: string[];
+    search?: string;
+    sortBy?: string;
+    sortDir?: string;
+  } = {}): Promise<{ portfolios: PaperPortfolio[]; pagination: JsonObject }> {
+    const qs = new URLSearchParams({
+      page: String(params.page || 1),
+      page_size: String(params.pageSize || params.limit || 20),
+      limit: String(params.limit || params.pageSize || 20),
+      sort_by: params.sortBy || "created_at",
+      sort_dir: params.sortDir || "desc",
+    });
+    for (const status of params.statuses || []) {
+      if (status) qs.append("status", status);
+    }
+    if (params.search?.trim()) qs.set("search", params.search.trim());
+    const data = await apiFetch<{ portfolios: PaperPortfolio[]; pagination?: JsonObject }>(`/paper-v2/portfolios?${qs.toString()}`);
+    return {
+      portfolios: data.portfolios || [],
+      pagination: data.pagination || {
+        page: params.page || 1,
+        page_size: params.pageSize || params.limit || 20,
+        total: data.portfolios?.length || 0,
+        total_pages: 1,
+      },
+    };
   },
   async runningSummary(limit = 100, snapshotLimit = 30, positionLimit = 8): Promise<JsonObject[]> {
     const qs = new URLSearchParams({
@@ -358,13 +427,71 @@ export const paperV2Api = {
     const data = await apiFetch<{ portfolio: PaperPortfolio }>("/paper-v2/portfolios", body(payload));
     return data.portfolio;
   },
+  async createMiniQMTAutoRunPortfolio(payload: {
+    package_id: string;
+    portfolio_name: string;
+    initial_cash: number;
+    start_date: string;
+    broker_account_id: string;
+    top_k?: number | null;
+    hmm?: JsonObject | null;
+    industry_blacklist?: string[];
+    fee_policy?: JsonObject | null;
+    risk_policy?: JsonObject | null;
+    execution_policy?: JsonObject | null;
+    trade_window_policy?: JsonObject | null;
+    auto_run_config?: JsonObject | null;
+    created_by?: string | null;
+    create_session?: boolean;
+  }): Promise<CreateMiniQMTAutoRunPortfolioResult> {
+    const data = await apiFetch<CreateMiniQMTAutoRunPortfolioResult & { ok?: boolean }>(
+      "/paper-v2/auto-run/miniqmt-portfolios",
+      body(payload),
+    );
+    return data;
+  },
   async getPortfolio(portfolioId: string): Promise<PaperPortfolio> {
     const data = await apiFetch<{ portfolio: PaperPortfolio }>(`/paper-v2/portfolios/${portfolioId}`);
     return data.portfolio;
   },
+  async autoRunStatus(portfolioId: string): Promise<PaperAutoRunSummary> {
+    const data = await apiFetch<{ auto_run: PaperAutoRunSummary }>(`/paper-v2/portfolios/${portfolioId}/auto-run/status`);
+    return data.auto_run;
+  },
+  async enableAutoRun(portfolioId: string, payload: { broker_account_id: string; config?: JsonObject | null; updated_by?: string | null; create_session?: boolean }): Promise<CreateMiniQMTAutoRunPortfolioResult> {
+    const data = await apiFetch<CreateMiniQMTAutoRunPortfolioResult & { ok?: boolean }>(
+      `/paper-v2/portfolios/${portfolioId}/auto-run/enable`,
+      body(payload),
+    );
+    return data;
+  },
+  async disableAutoRun(portfolioId: string, payload: { updated_by?: string | null } = {}): Promise<{ portfolio: PaperPortfolio; retired_bindings: JsonObject[]; auto_run: PaperAutoRunSummary }> {
+    return apiFetch(`/paper-v2/portfolios/${portfolioId}/auto-run/disable`, body(payload));
+  },
+  async patchAutoRunConfig(portfolioId: string, payload: { patch: JsonObject; updated_by?: string | null }): Promise<{ portfolio: PaperPortfolio; auto_run: PaperAutoRunSummary }> {
+    return apiFetch(`/paper-v2/portfolios/${portfolioId}/auto-run/config`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+  },
   async lifecycle(portfolioId: string, action: "pause" | "resume" | "complete" | "retire"): Promise<PaperPortfolio> {
     const data = await apiFetch<{ portfolio: PaperPortfolio }>(`/paper-v2/portfolios/${portfolioId}/${action}`, { method: "POST" });
     return data.portfolio;
+  },
+  async bulkLifecycle(portfolioIds: string[], action: "pause" | "resume" | "complete" | "retire"): Promise<JsonObject> {
+    return apiFetch("/paper-v2/portfolios/bulk-lifecycle", body({ portfolio_ids: portfolioIds, action }));
+  },
+  async deletePortfolio(portfolioId: string): Promise<JsonObject> {
+    return apiFetch(`/paper-v2/portfolios/${portfolioId}`, {
+      method: "DELETE",
+      body: JSON.stringify({ confirm_delete: true }),
+    });
+  },
+  async deletePortfolios(portfolioIds: string[]): Promise<JsonObject> {
+    return apiFetch("/paper-v2/portfolios/bulk-delete", {
+      method: "POST",
+      body: JSON.stringify({ portfolio_ids: portfolioIds, confirm_delete: true }),
+    });
   },
   async readiness(portfolioId: string, payload: { trade_date: string; runtime_config: JsonObject }): Promise<ReadinessResult> {
     const data = await apiFetch<{ readiness: ReadinessResult }>(`/paper-v2/portfolios/${portfolioId}/readiness`, body(payload));
@@ -445,6 +572,10 @@ export const paperV2Api = {
     const data = await apiFetch<{ scheduler: PaperSchedulerStatus }>("/paper-v2/session-scheduler/status");
     return data.scheduler;
   },
+  async schedulerBootstrapStatus(): Promise<PaperSchedulerBootstrapStatus> {
+    const data = await apiFetch<{ bootstrap: PaperSchedulerBootstrapStatus }>("/paper-v2/session-scheduler/bootstrap-status");
+    return data.bootstrap;
+  },
   async startScheduler(payload: { interval_seconds?: number | null } = {}): Promise<PaperSchedulerStatus> {
     const data = await apiFetch<{ scheduler: PaperSchedulerStatus }>("/paper-v2/session-scheduler/start", body(payload));
     return data.scheduler;
@@ -456,6 +587,10 @@ export const paperV2Api = {
   async runSchedulerOnce(payload: { limit?: number; as_of_time?: string | null } = {}): Promise<PaperSchedulerRunResult> {
     const data = await apiFetch<{ result: PaperSchedulerRunResult }>("/paper-v2/session-scheduler/run-once", body(payload));
     return data.result;
+  },
+  async recoverAutoRun(payload: { limit?: number; as_of_time?: string | null } = {}): Promise<JsonObject> {
+    const data = await apiFetch<{ recovery: JsonObject }>("/paper-v2/session-scheduler/recover-auto-run", body(payload));
+    return data.recovery;
   },
   async executionPolicies(portfolioId: string): Promise<ExecutionPolicy[]> {
     const data = await apiFetch<{ execution_policies: ExecutionPolicy[] }>(`/paper-v2/portfolios/${portfolioId}/execution-policies`);

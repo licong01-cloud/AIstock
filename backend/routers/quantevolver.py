@@ -45,10 +45,25 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import httpx
+from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, ConfigDict, Field
+
 from backend.services.quantevolver.factor_cache_coverage import (
     DEFAULT_WARMUP_TOLERANCE_DAYS,
     factor_cache_covers_window,
 )
+from ..db.pg_pool import get_conn
+from ..services.quantevolver.callback_urls import build_aistock_callback_url
+from ..services.quantevolver.experiment_config import ensure_qe_risk_policy, normalize_label_horizon
+from ..services.quantevolver.label_horizon_schema import ensure_qe_label_horizon_schema
+from ..services.quantevolver.node_execution import (
+    QENodePreflightError,
+    preflight_qe_node,
+    resolve_default_qe_node_id,
+)
+from ..services.quantevolver.seed_contract import normalize_single_experiment_seed_config
+from .model_registry import router as model_registry_router
 
 AISTOCK_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -170,26 +185,9 @@ def _build_multi_alpha_group_command(gc: dict[str, Any], node_label: str | None 
     )
 
 
-from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Query, Request
-from pydantic import ConfigDict
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
-
-from ..db.pg_pool import get_conn
-from ..services.quantevolver.callback_urls import build_aistock_callback_url
-from ..services.quantevolver.experiment_config import ensure_qe_risk_policy, normalize_label_horizon
-from ..services.quantevolver.seed_contract import normalize_single_experiment_seed_config
-from ..services.quantevolver.label_horizon_schema import ensure_qe_label_horizon_schema
-from ..services.quantevolver.node_execution import (
-    QENodePreflightError,
-    preflight_qe_node,
-    resolve_default_qe_node_id,
-)
-
 logger = logging.getLogger("aistock.routers.quantevolver")
 
 router = APIRouter(prefix="/quantevolver", tags=["QuantEvolver"])
-from .model_registry import router as model_registry_router
 
 router.include_router(model_registry_router)
 
@@ -400,7 +398,6 @@ def sync_model_task(task_id: str, req: SyncModelTaskRequest = None):
         task_dir = req.task_dir if req and req.task_dir else None
         if not task_dir:
             # 使用默认路径
-            from pathlib import Path
             default_root = AISTOCK_PROJECT_ROOT / "rdagent_assets" / "rdagent_tasks" / task_id
             default_root.mkdir(parents=True, exist_ok=True)
             task_dir = str(default_root)
@@ -1200,14 +1197,14 @@ class ManualFactorValidate(BaseModel):
 
 class BatchComputeMetricsUnified(BaseModel):
     factor_names: Optional[List[str]] = Field(None, description="指定因子名列表")
-    all_available: bool = Field(False, description="True=全部 is_available 因子")
+    all_available: bool = Field(True, description="True=全部可用因子（含 disabled）；legacy 接口，请使用 official-evaluation/compute")
     data_date: Optional[str] = Field(None, description="快照日期 (YYYYMMDD)，指定后使用磁盘快照数据")
 
 
 class OfficialEvaluationComputeRequest(BaseModel):
     factor_names: Optional[List[str]] = Field(None, description="指定因子名列表；为空时计算全部符合 official 准入规则的因子")
     data_date: str = Field(..., description="评估快照日期 (YYYYMMDD)")
-    include_disabled: bool = Field(False, description="是否包含 is_available=false 的因子")
+    include_disabled: bool = Field(True, description="是否包含 is_available=false 的因子；默认 True 以支持 disabled 因子指标计算")
     max_workers: int = Field(4, ge=1, le=16, description="并行 worker 数")
     timeout_per_factor: int = Field(600, ge=60, le=3600, description="单因子超时秒数")
 
@@ -2337,8 +2334,6 @@ def create_strategy(req: CreateStrategyRequest):
     """新建策略。"""
     try:
         import json as _json
-        import os
-        from pathlib import Path
         from ..db.pg_pool import get_conn
         
         # 保存源码到文件系统
@@ -2389,7 +2384,6 @@ def update_strategy(strategy_id: str, req: UpdateStrategyRequest):
     """编辑策略。"""
     try:
         import json as _json
-        from pathlib import Path
         from ..db.pg_pool import get_conn
 
         set_parts = []
@@ -2475,7 +2469,6 @@ def clone_strategy(strategy_id: str, req: CreateStrategyRequest):
     """从现有策略模板创建新策略。"""
     try:
         import json as _json
-        from pathlib import Path
         from ..db.pg_pool import get_conn
         
         # 保存源码到文件系统
@@ -3106,12 +3099,13 @@ def list_experiments(
     offset: int = Query(0, ge=0),
     alpha_mode: Optional[str] = Query(None, description="过滤 alpha_mode: single/multi"),
     include_children: bool = Query(False, description="按历史页分组返回父实验及其演进 Loop"),
+    detail: str = Query("summary", pattern="^(summary|full)$", description="summary 默认不返回 result_metrics/custom_params 大 JSON；full 保留旧完整字段"),
 ):
-    """获取实验列表。支持按 alpha_mode 过滤。"""
+    """获取实验列表。默认 summary，避免列表/MCP 返回超大 JSONB。"""
     try:
         from ..services.quantevolver.config_composer import ConfigComposer
         cc = ConfigComposer()
-        result = cc.list_experiments(limit=limit, offset=offset, include_children=include_children)
+        result = cc.list_experiments(limit=limit, offset=offset, include_children=include_children, detail=detail)
         # alpha_mode 过滤（在应用层过滤，避免改动 ConfigComposer 内部查询）
         if alpha_mode and result.get("ok") and result.get("items"):
             result["items"] = [
@@ -3125,12 +3119,15 @@ def list_experiments(
 
 
 @router.get("/experiments/{experiment_id}")
-def get_experiment_detail(experiment_id: str):
-    """获取实验详情。"""
+def get_experiment_detail(
+    experiment_id: str,
+    detail: str = Query("summary", pattern="^(summary|full)$", description="summary 默认不返回 result_metrics；full 保留旧完整字段"),
+):
+    """获取实验详情。默认 summary，完整指标请使用 enhanced-metrics/trade-stats 等专用端点。"""
     try:
         from ..services.quantevolver.config_composer import ConfigComposer
         cc = ConfigComposer()
-        result = cc.get_experiment_detail(experiment_id)
+        result = cc.get_experiment_detail(experiment_id, detail=detail)
         if not result.get("ok"):
             raise HTTPException(status_code=404, detail=result.get("error", "实验不存在"))
         return result
@@ -4901,7 +4898,7 @@ def get_available_llm_models():
                         "model_category": row[4],
                         "source": "aistock_db"
                     })
-    except Exception as e:
+    except Exception:
         logger.exception("获取可用LLM模型列表失败")
         
     return {"ok": True, "models": models}
@@ -6792,6 +6789,134 @@ async def stream_experiment_logs(experiment_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/experiments/{experiment_id}/multi-node-logs")
+async def stream_multi_node_logs(experiment_id: str):
+    """Fan-in log streams from all compute nodes assigned to multi-alpha groups.
+
+    For each running group in qe_multi_alpha_groups, opens an SSE connection
+    to the assigned node via QEWorkspaceClient and merges log lines tagged
+    with node_id into a single SSE response.
+    """
+    import asyncio
+
+    from ..services.quantevolver.qe_workspace_client import QEWorkspaceClient
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT group_name, assigned_node_id, qe_task_id, qe_loop_id, status
+                   FROM qe_multi_alpha_groups
+                   WHERE parent_experiment_id = %s
+                   ORDER BY group_name""",
+                (experiment_id,),
+            )
+            cols = [d[0] for d in cur.description]
+            groups = [dict(zip(cols, row)) for row in cur.fetchall()]
+
+            cur.execute(
+                "SELECT status, custom_params FROM qe_experiments WHERE experiment_id = %s",
+                (experiment_id,),
+            )
+            exp_row = cur.fetchone()
+            if not exp_row:
+                raise HTTPException(status_code=404, detail="实验不存在")
+
+    if not groups:
+        raise HTTPException(
+            status_code=400,
+            detail="该实验没有 multi-alpha 分组记录，请使用 /logs 端点",
+        )
+
+    exp_status, _ = exp_row
+
+    async def _stream_node(
+        group_name: str,
+        node_id: str,
+        qe_task_id: str,
+        queue: asyncio.Queue,
+    ):
+        try:
+            client = QEWorkspaceClient.for_node(node_id)
+            async with client:
+                async for line in client.stream_task_logs(qe_task_id):
+                    raw = line
+                    if raw.startswith("data:"):
+                        raw = raw[5:].strip()
+                    if not raw:
+                        continue
+                    try:
+                        payload = json.loads(raw)
+                        if isinstance(payload, dict) and "logs" in payload:
+                            for log_line in payload["logs"]:
+                                await queue.put(f"[{node_id}][{group_name}] {log_line}")
+                            continue
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                    for sub in raw.split("\n"):
+                        if sub:
+                            await queue.put(f"[{node_id}][{group_name}] {sub}")
+        except Exception as e:
+            await queue.put(f"[{node_id}][{group_name}] [ERROR] 日志流中断: {e}")
+
+    async def event_generator():
+        queue: asyncio.Queue[str] = asyncio.Queue(maxsize=2000)
+        active_groups = [
+            g for g in groups
+            if g.get("assigned_node_id") and g.get("qe_task_id")
+        ]
+
+        if not active_groups:
+            yield "data: [System] 没有已分配节点的分组，无法拉取远端日志\n\n"
+            return
+
+        yield f"data: [System] 已连接 {len(active_groups)} 个节点的日志流...\n\n"
+
+        active_count = len(active_groups)
+        done_count = 0
+        all_done = asyncio.Event()
+
+        async def _stream_node_tracked(gn, nid, tid):
+            nonlocal done_count
+            try:
+                await _stream_node(gn, nid, tid, queue)
+            finally:
+                done_count += 1
+                if done_count >= active_count:
+                    all_done.set()
+
+        tasks = [
+            asyncio.create_task(
+                _stream_node_tracked(
+                    g["group_name"], g["assigned_node_id"], g["qe_task_id"]
+                )
+            )
+            for g in active_groups
+        ]
+
+        try:
+            while not all_done.is_set() or not queue.empty():
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=5.0)
+                    yield f"data: {item}\n\n"
+                except asyncio.TimeoutError:
+                    if all_done.is_set() and queue.empty():
+                        break
+                    yield ": heartbeat\n\n"
+        finally:
+            for t in tasks:
+                t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.get("/experiments/{experiment_id}/enhanced-metrics")
 async def get_experiment_enhanced_metrics(experiment_id: str):
     """获取实验的增强诊断指标（IC 时序、Loss 曲线、收益曲线等）。
@@ -7705,7 +7830,8 @@ def generate_stock_pool(date: Optional[str] = None):
     调用 generate_stock_pool.py 生成 filtered_pool_{date}.txt。
     date: YYYY-MM-DD，默认今日。返回生成的 WSL 路径。
     """
-    import subprocess, sys
+    import subprocess
+    import sys
     from pathlib import Path
     from datetime import date as date_cls
 

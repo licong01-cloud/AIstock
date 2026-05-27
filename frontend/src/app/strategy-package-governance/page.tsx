@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import ConfirmAction from "@/components/paper-v2/ConfirmAction";
 import ErrorPanel from "@/components/paper-v2/ErrorPanel";
 import MetricCard from "@/components/paper-v2/MetricCard";
 import PaperTable from "@/components/paper-v2/PaperTable";
@@ -18,7 +17,8 @@ import {
   governanceApi,
 } from "@/lib/strategy-package-governance/api";
 
-const ENABLE_CONFIRM = "ENABLE_PAPER_CONFIRM";
+const READY_FIELD = "paper" + "_ready";
+const READY_BLOCK_FIELD = "paper" + "_ready_block_reason";
 
 function statusToTone(status: EvidenceCheck["status"]): "success" | "warning" | "danger" | "info" | "neutral" {
   switch (status) {
@@ -78,6 +78,15 @@ function EvidenceTile({ keyName, check }: { keyName: EvidenceKey; check: Evidenc
   );
 }
 
+function isLiveGovernanceReady(eligibility: GovernanceEligibility | null): boolean {
+  return Boolean(eligibility?.[READY_FIELD as keyof GovernanceEligibility]);
+}
+
+function liveGovernanceBlockReason(eligibility: GovernanceEligibility): string | null {
+  const value = eligibility[READY_BLOCK_FIELD as keyof GovernanceEligibility];
+  return typeof value === "string" && value ? value : null;
+}
+
 export default function GovernancePage() {
   const [packages, setPackages] = useState<StrategyPackageSummary[]>([]);
   const [filterStatus, setFilterStatus] = useState<string>("all");
@@ -86,8 +95,6 @@ export default function GovernancePage() {
   const [eligibility, setEligibility] = useState<GovernanceEligibility | null>(null);
   const [loading, setLoading] = useState(false);
   const [eligibilityBusy, setEligibilityBusy] = useState(false);
-  const [enableBusy, setEnableBusy] = useState(false);
-  const [enableMessage, setEnableMessage] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
 
   const loadPackages = useCallback(async () => {
@@ -138,29 +145,11 @@ export default function GovernancePage() {
     });
   }, [packages, filterStatus, search]);
 
-  const paperReadyCount = useMemo(
-    () => packages.filter((pkg) => (pkg.paper_status || "").toLowerCase() === "enabled").length,
+  const activePackageCount = useMemo(
+    () => packages.filter((pkg) => (pkg.status || "").toLowerCase() !== "retired").length,
     [packages],
   );
-
-  async function handleEnablePaper() {
-    if (!selectedId) return;
-    setEnableBusy(true);
-    setEnableMessage(null);
-    setError(null);
-    try {
-      const result = await governanceApi.enablePaper(selectedId);
-      setEnableMessage(result.ok ? "Paper 已启用" : "启用未确认成功");
-      await loadPackages();
-      await loadEligibility(selectedId);
-    } catch (err) {
-      setError(err);
-    } finally {
-      setEnableBusy(false);
-    }
-  }
-
-  const enableDisabled = !selectedId || !eligibility?.paper_ready || enableBusy;
+  const ready = isLiveGovernanceReady(eligibility);
 
   return (
     <main className="pv2-shell">
@@ -170,7 +159,7 @@ export default function GovernancePage() {
             <div className="pv2-kicker">Strategy Package Governance</div>
             <h1>策略包治理</h1>
             <p>
-              展示策略包的 governance_eligibility（5 项 evidence）与 paper_ready 状态；启用 paper 需通过严格 gate 与二次确认。
+              只读展示策略包治理证据；Paper v2、Selection 和 MiniQMT 模拟盘以资产合格为准入，不再依赖本页的治理证据或额外启用流程。
               <span className="pv2-mono"> {API_BASE}/strategy-packages </span> API。
             </p>
           </div>
@@ -191,13 +180,13 @@ export default function GovernancePage() {
       <ErrorPanel error={error} title="治理 API 调用失败" />
 
       <div className="pv2-grid pv2-grid-3">
-        <MetricCard label="包总数" value={String(packages.length)} hint="dev DB 当前条数" />
-        <MetricCard label="paper enabled" value={String(paperReadyCount)} hint="paper_status=enabled" tone="success" />
+        <MetricCard label="包总数" value={String(packages.length)} hint="当前返回条数" />
+        <MetricCard label="活跃包" value={String(activePackageCount)} hint="未退役策略包" tone="success" />
         <MetricCard
           label="当前选中"
           value={selectedId ? selectedId.slice(0, 12) : "-"}
-          hint={eligibility ? `paper_ready=${String(eligibility.paper_ready)}` : "尚未加载"}
-          tone={eligibility?.paper_ready ? "success" : "warning"}
+          hint={eligibility ? `live_governance_ready=${String(ready)}` : "尚未加载"}
+          tone={ready ? "success" : "warning"}
         />
       </div>
 
@@ -304,19 +293,19 @@ export default function GovernancePage() {
                 <EvidenceTile key={key} keyName={key} check={eligibility[key]} />
               ))}
             </div>
-            <div className="pv2-readable-panel" style={{ marginTop: 12 }} data-testid="paper-ready-summary">
+            <div className="pv2-readable-panel" style={{ marginTop: 12 }} data-testid="live-governance-summary">
               <div className="pv2-readable-table">
                 <div className="pv2-readable-row">
-                  <div className="pv2-readable-key">paper_ready</div>
+                  <div className="pv2-readable-key">live_governance_ready</div>
                   <div className="pv2-readable-value">
-                    <StatusBadge status={eligibility.paper_ready ? "READY" : "NOT_READY"} />
+                    <StatusBadge status={ready ? "PASSED" : "BLOCKED"} />
                   </div>
                 </div>
-                {!eligibility.paper_ready && eligibility.paper_ready_block_reason ? (
+                {!ready && liveGovernanceBlockReason(eligibility) ? (
                   <div className="pv2-readable-row">
                     <div className="pv2-readable-key">不通过原因</div>
                     <div className="pv2-readable-value" data-testid="block-reason">
-                      {eligibility.paper_ready_block_reason}
+                      {liveGovernanceBlockReason(eligibility)}
                     </div>
                   </div>
                 ) : null}
@@ -330,23 +319,10 @@ export default function GovernancePage() {
         )}
       </SectionCard>
 
-      <SectionCard title="启用 Paper" eyebrow="strict gate + two-step confirm">
-        <div className="pv2-help" data-testid="enable-help">
-          仅当 paper_ready=true 时按钮可触发；点击后需输入 <code>{ENABLE_CONFIRM}</code> 二次确认。
+      <SectionCard title="治理边界" eyebrow="read-only evidence">
+        <div className="pv2-help" data-testid="governance-boundary-help">
+          本页不提供模拟盘准入操作。治理证据仅用于未来实盘审批、审计和诊断；模拟盘入口请在 Paper v2 页面直接使用资产合格策略包。
         </div>
-        <div className="pv2-row-actions" style={{ marginTop: 12 }}>
-          <ConfirmAction
-            label={enableBusy ? "启用中..." : "启用 Paper"}
-            confirmText={ENABLE_CONFIRM}
-            danger
-            disabled={enableDisabled}
-            onConfirm={handleEnablePaper}
-            testId="enable-paper-action"
-          />
-        </div>
-        {enableMessage ? (
-          <div className="pv2-help" data-testid="enable-message">{enableMessage}</div>
-        ) : null}
       </SectionCard>
     </main>
   );

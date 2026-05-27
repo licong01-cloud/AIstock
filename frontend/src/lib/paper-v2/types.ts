@@ -2,8 +2,18 @@ export type JsonValue = string | number | boolean | null | JsonValue[] | { [key:
 export type JsonObject = Record<string, unknown>;
 
 export type DataSource = "DB_HISTORICAL" | "TDX_REALTIME" | "MINIQMT_REALTIME";
+export type SelectionDataSource = "DB_HISTORICAL";
 export type SelectionMode = "single_package" | "intersection" | "union" | "weighted_fusion";
 export type PaperSessionMode = "REPLAY_ONLY" | "LIVE_ONLY" | "CATCHUP_THEN_LIVE";
+export type TradingDayStatus = {
+  as_of_date: string;
+  is_trading_day: boolean;
+  latest_completed_trading_day?: string | null;
+  previous_trading_day?: string | null;
+  next_trading_day?: string | null;
+  warnings?: JsonObject[];
+  cache?: JsonObject;
+};
 
 export type TradingDayDefaults = {
   as_of_date: string;
@@ -15,6 +25,7 @@ export type TradingDayDefaults = {
   replay_end_date: string;
   available_trading_day_count: number;
   next_trading_day?: string | null;
+  trading_day_status?: TradingDayStatus;
 };
 
 export type BackendErrorDetail = {
@@ -68,6 +79,7 @@ export type StrategyPackage = {
   created_at?: string;
   updated_at?: string;
   metrics_summary?: MetricsSummary;
+  asset_eligibility?: JsonObject;
   manifest?: JsonObject;
   runtime_config_contract?: JsonObject;
 };
@@ -152,6 +164,7 @@ export type SelectablePackage = {
   alpha_count?: number;
   portfolio_topk?: number;
   metrics_summary?: MetricsSummary;
+  asset_eligibility?: JsonObject;
   model_state?: ModelState | JsonObject;
   selection_health?: JsonObject;
   latest_selection_run?: LatestSelectionRun | null;
@@ -159,10 +172,19 @@ export type SelectablePackage = {
 
 export type SelectionCandidate = {
   symbol: string;
+  stock_name?: string | null;
   score: number;
   rank: number;
   target_weight?: number | null;
   reference_price?: number | null;
+  selection_entry_price?: number | null;
+  selection_entry_price_source?: string | null;
+  selection_entry_price_time?: string | null;
+  previous_close?: number | null;
+  volume?: number | null;
+  current_price?: number | null;
+  current_price_source?: string | null;
+  current_price_time?: string | null;
   component_scores?: JsonObject;
   reason?: string | null;
   context?: JsonObject;
@@ -206,7 +228,6 @@ export type ExecutionPolicy = {
   algo_code?: string;
   algo_config?: JsonObject;
   validation_status?: string;
-  paper_enabled?: boolean;
   is_portfolio_default?: boolean;
   source_backtest_id?: string;
   source_backtest_status?: string;
@@ -227,9 +248,44 @@ export type PaperPortfolio = {
   fee_policy?: JsonObject;
   risk_policy?: JsonObject;
   execution_policy?: JsonObject;
+  auto_run_enabled?: boolean;
+  auto_run_config?: JsonObject;
+  auto_run_config_sha256?: string | null;
+  auto_run_updated_at?: string | null;
+  auto_run_updated_by?: string | null;
   status: string;
   created_at?: string;
   updated_at?: string;
+};
+
+export type BrokerAccountBinding = {
+  binding_id: string;
+  broker_backend: "local_sim" | "minqmt_sim" | string;
+  broker_mode: string;
+  broker_account_id: string;
+  portfolio_id: string;
+  binding_status: string;
+  allocation_mode?: string;
+  initial_cash?: number | null;
+  created_at?: string;
+  updated_at?: string;
+  created_by?: string | null;
+};
+
+export type PaperAutoRunSummary = {
+  enabled: boolean;
+  config_sha256?: string | null;
+  config?: JsonObject;
+  next_plan?: string | null;
+  bindings?: BrokerAccountBinding[];
+  active_sessions?: PaperSession[];
+};
+
+export type CreateMiniQMTAutoRunPortfolioResult = {
+  portfolio: PaperPortfolio;
+  binding: BrokerAccountBinding;
+  session?: PaperSession | null;
+  auto_run: PaperAutoRunSummary;
 };
 
 export type PaperRun = {
@@ -341,22 +397,38 @@ export type PaperSchedulerStatus = {
   tickable_statuses: string[];
   last_run_at?: string | null;
   last_result?: JsonObject | null;
+  auto_run?: JsonObject;
 };
 
 export type PaperSchedulerRunResult = {
   started_at: string;
+  auto_run_recovery?: JsonObject;
   completed_at?: string;
   session_count: number;
   processed: JsonObject[];
   errors: JsonObject[];
 };
 
+export type PaperSchedulerBootstrapStatus = {
+  scheduler_autostart_env?: boolean;
+  scheduler_env_raw?: string | null;
+  scheduler?: PaperSchedulerStatus;
+  auto_run?: JsonObject;
+  production_note?: string;
+  [key: string]: unknown;
+};
+
 export type SimulationRuntimeSchedulerStatus = JsonObject & {
   scheduler?: string;
   autostart?: boolean;
   default_submit?: boolean;
+  read_only_status_api?: boolean;
   read_only_ops_api?: boolean;
+  controlled_ops_api?: boolean;
+  scheduler_control_api_enabled?: boolean;
   manual_tick_endpoint_enabled?: boolean;
+  context_provider_mode?: string;
+  context_provider?: JsonObject;
   approval_states?: string[];
   schedule_windows?: Array<JsonObject & {
     window_id?: string;

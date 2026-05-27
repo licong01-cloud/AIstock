@@ -139,7 +139,7 @@ def test_local_correlation_compute_path_is_service_owned_and_db_safe(monkeypatch
         "reset_all_catalog": 0,
     })
     monkeypatch.setattr(svc, "_update_job_status", lambda *args, **kwargs: None)
-    monkeypatch.setattr(svc, "_persist_correlations_batch", lambda records: len(records))
+    monkeypatch.setattr(svc, "_persist_correlations_batch", lambda records, **kwargs: len(records))
     monkeypatch.setattr(svc, "_persist_correlation_metadata", lambda result: None)
     monkeypatch.setattr(svc, "CorrelationEngine", FakeCorrelationEngine)
     monkeypatch.setattr(svc.FactorValueLoader, "invalidate_single_cache", lambda factor_name=None: None)

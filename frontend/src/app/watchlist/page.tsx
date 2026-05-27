@@ -150,7 +150,6 @@ interface SearchFilters {
   name: string;
   category: string;
   rating: string;
-  entry_task: string;
   entry_rank: NumericFilter;
   num: {
     last: NumericFilter;
@@ -354,16 +353,12 @@ function WatchlistPage() {
   const [pricesRefreshed, setPricesRefreshed] = useState(false);
   const [refreshingPrices, setRefreshingPrices] = useState(false);
 
-  const [sourceTasks, setSourceTasks] = useState<Task[]>([]);
-  const [selectedSourceTaskId, setSelectedSourceTaskId] = useState<string>("");
-
   const [searchActive, setSearchActive] = useState(false);
   const [searchFilters, setSearchFilters] = useState<SearchFilters>({
     code: "",
     name: "",
     category: "",
     rating: "",
-    entry_task: "",
     entry_rank: { ...DEFAULT_NUMERIC_FILTER },
     num: {
       last: { ...DEFAULT_NUMERIC_FILTER },
@@ -495,18 +490,6 @@ function WatchlistPage() {
     return map;
   }, [categories]);
 
-  async function loadSourceTasks() {
-    try {
-      const res = await fetch(`${API_BASE}/watchlist/items/source-tasks`);
-      if (!res.ok) throw new Error(`来源TASK请求失败: ${res.status}`);
-      const data: Task[] = await res.json();
-      console.log("[DEBUG] source-tasks API返回:", data);
-      setSourceTasks(data || []);
-    } catch (err: any) {
-      console.error("[DEBUG] loadSourceTasks错误:", err);
-      setSourceTasks([]);
-    }
-  }
 
   async function loadCategories() {
     try {
@@ -532,14 +515,8 @@ function WatchlistPage() {
     return (item.category_names || "").includes(catName);
   }
 
-  function matchesSourceTask(item: WatchlistItem): boolean {
-    if (!selectedSourceTaskId) return true;
-    return item.entry_task_id === selectedSourceTaskId;
-  }
-
   function applyFiltersAndSort(nextItems: WatchlistItem[]) {
     let filtered = nextItems.filter((item) => matchesCategory(item));
-    filtered = filtered.filter((item) => matchesSourceTask(item));
 
     if (searchActive) {
       const f = searchFilters;
@@ -547,7 +524,6 @@ function WatchlistPage() {
       const tName = f.name.trim().toLowerCase();
       const tCat = f.category.trim().toLowerCase();
       const tRating = f.rating.trim().toLowerCase();
-      const tEntryTask = f.entry_task.trim().toLowerCase();
 
       function okText(it: WatchlistItem): boolean {
         const ts = (it.code || "").toLowerCase();
@@ -559,11 +535,6 @@ function WatchlistPage() {
         if (
           tRating &&
           !(it.last_rating || "").toLowerCase().includes(tRating)
-        )
-          return false;
-        if (
-          tEntryTask &&
-          !(it.entry_task_id || "").toLowerCase().includes(tEntryTask)
         )
           return false;
         return true;
@@ -691,7 +662,6 @@ function WatchlistPage() {
     setError(null);
     try {
       let filtered = allItems.filter((item) => matchesCategory(item));
-      filtered = filtered.filter((item) => matchesSourceTask(item));
       const codes = filtered.map((item) => item.code).filter(Boolean);
       if (codes.length === 0) {
         setPricesRefreshed(true);
@@ -855,9 +825,8 @@ function WatchlistPage() {
 
       let filtered = all.filter((it) => okText(it) && okNumeric(it) && okDate(it));
 
-      // 分类和来源TASK筛选（在搜索模式下也需要应用）
+      // 分类筛选（在搜索模式下也需要应用）
       filtered = filtered.filter((item) => matchesCategory(item));
-      filtered = filtered.filter((item) => matchesSourceTask(item));
 
       // 排序
       if (PERSISTENT_SORT_KEYS.includes(sortBy as SortByPersistent)) {
@@ -883,7 +852,6 @@ function WatchlistPage() {
 
   useEffect(() => {
     loadCategories();
-    loadSourceTasks();
     loadAllItems();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -902,7 +870,6 @@ function WatchlistPage() {
     page,
     pageSize,
     searchActive,
-    selectedSourceTaskId,
     pricesRefreshed,
     allItems,
   ]);
@@ -927,7 +894,6 @@ function WatchlistPage() {
     page,
     pageSize,
     searchActive,
-    selectedSourceTaskId,
     pricesRefreshed,
     allItems,
   ]);
@@ -1301,27 +1267,6 @@ function WatchlistPage() {
             {categories.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <span style={{ marginRight: 6 }}>来源TASK：</span>
-          <select
-            data-testid="watchlist-source-task-filter"
-            title="来源TASK"
-            value={selectedSourceTaskId}
-            onChange={(e) => {
-              setSelectedSourceTaskId(e.target.value);
-              setPage(1);
-            }}
-            style={{ minWidth: 160 }}
-          >
-            <option value="">全部</option>
-            {sourceTasks.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name || t.id}
               </option>
             ))}
           </select>
@@ -1920,23 +1865,6 @@ function WatchlistPage() {
               border: "1px solid #e5e7eb",
             }}
           />
-          <input
-            title="来源TASK包含"
-            value={searchFilters.entry_task}
-            onChange={(e) =>
-              setSearchFilters((prev) => ({
-                ...prev,
-                entry_task: e.target.value,
-              }))
-            }
-            placeholder="来源TASK包含"
-            style={{
-              minWidth: 160,
-              padding: "4px 6px",
-              borderRadius: 6,
-              border: "1px solid #e5e7eb",
-            }}
-          />
         </div>
 
         {/* Entry Rank 条件 */}
@@ -2241,7 +2169,6 @@ function WatchlistPage() {
                 name: "",
                 category: "",
                 rating: "",
-                entry_task: "",
                 entry_rank: { ...DEFAULT_NUMERIC_FILTER },
                 num: {
                   last: { ...DEFAULT_NUMERIC_FILTER },
@@ -2338,8 +2265,6 @@ function WatchlistPage() {
                 >
                   分类 {sortBy === "category" && (sortDir === "asc" ? "↑" : "↓")}
                 </th>
-                <th style={{ padding: 6, textAlign: "left" }}>来源</th>
-                <th style={{ padding: 6, textAlign: "left" }}>来源Run</th>
                 <th
                   style={{ padding: 6, textAlign: "right", cursor: "pointer" }}
                   onClick={() => toggleSort("entry_rank")}
@@ -2510,12 +2435,6 @@ function WatchlistPage() {
                     </td>
                     <td style={{ padding: 6 }}>{row.name}</td>
                     <td style={{ padding: 6 }}>{row.category_names || "-"}</td>
-                    <td data-testid={`watchlist-cell-source-${row.code}`} style={{ padding: 6, color: "#374151" }}>
-                      {row.entry_source || "-"}
-                    </td>
-                    <td data-testid={`watchlist-cell-source-id-${row.code}`} style={{ padding: 6, fontFamily: "monospace", color: "#6b7280" }}>
-                      {row.entry_task_id || "-"}
-                    </td>
                     <td data-testid={`watchlist-cell-rank-${row.code}`} style={{ padding: 6, textAlign: "right", color: "#6b7280" }}>
                       {row.entry_rank != null ? String(row.entry_rank) : "-"}
                     </td>

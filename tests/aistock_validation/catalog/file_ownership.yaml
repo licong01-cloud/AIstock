@@ -76,6 +76,9 @@ rules:
       - scripts/aistock_validate.py
       - scripts/aistock_guardrail_scan.py
       - scripts/aistock_module_ownership_scan.py
+      - scripts/aistock_issue_workflow.py
+      - scripts/issue_flow.py
+      - scripts/ci_failure_issue_summary.py
       - scripts/validation_center_*.py
     primary_module: validation.guardrails
     impact_modules: [validation.center, validation.runner, validation.module_quality]
@@ -91,12 +94,31 @@ rules:
     layer: test_runner
     risk_level: high
     ownership_reason: noxfile.py defines allowlisted local validation sessions.
+  - rule_id: dev_quality_tooling
+    priority: 100
+    include:
+      - .github/ISSUE_TEMPLATE/*.yml
+      - .github/workflows/*.yml
+      - .pre-commit-config.yaml
+      - .semgrep.yml
+      - .semgrep/**
+      - pyproject.toml
+      - ruff.toml
+      - .github/renovate.json
+    primary_module: validation.guardrails
+    impact_modules: [validation.runner, validation.center, platform.config]
+    layer: dev_quality_tooling
+    risk_level: high
+    ownership_reason: Open-source CI/CD and local quality tool configs define issue workflow automation gates.
   - rule_id: validation_backend_tests
     priority: 95
     include:
       - backend/tests/test_validation*.py
       - backend/tests/test_aistock_validate_*.py
       - backend/tests/test_aistock_guardrail_scan.py
+      - backend/tests/scripts/test_aistock_issue_workflow.py
+      - backend/tests/scripts/test_issue_flow.py
+      - backend/tests/scripts/test_ci_failure_issue_summary.py
     primary_module: tests.backend
     impact_modules: [validation.center, validation.runner, validation.coverage, validation.guardrails, validation.module_quality]
     layer: backend_test
@@ -304,6 +326,7 @@ rules:
     include:
       - AGENTS.override.md
       - docs/codex_project_memory.md
+      - .codex/skills/fix-aistock-issue/**
       - .codex/skills/verify-aistock-feature/**
     primary_module: docs.standards
     impact_modules: [validation.guardrails, validation.module_quality]
