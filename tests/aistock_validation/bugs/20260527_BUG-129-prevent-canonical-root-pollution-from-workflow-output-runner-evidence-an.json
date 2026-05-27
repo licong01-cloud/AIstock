@@ -12,7 +12,9 @@
     "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
     "backend/tests/test_validation_execution_runner.py",
     "backend/tests/scripts/test_issue_flow.py",
-    "backend/tests/scripts/test_code_intelligence_adapter.py"
+    "backend/tests/scripts/test_code_intelligence_adapter.py",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260527_BUG-129-prevent-canonical-root-pollution-from-workflow-output-runner-evidence-an.json"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-129",
