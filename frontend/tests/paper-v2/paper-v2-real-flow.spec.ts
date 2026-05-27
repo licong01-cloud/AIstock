@@ -495,6 +495,11 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await page.goto("/paper-v2/selection");
     const history = await openSection(page, "历史选股记录与动态聚合");
     await expect(history).toContainText("点击记录可显示结果");
+    await expect(page.getByTestId("selection-history-select-page")).toBeVisible();
+    await page.getByTestId("selection-history-select-page").click();
+    await expect(history.locator('tbody input[type="checkbox"]:checked').first()).toBeVisible();
+    await page.getByTestId("selection-history-clear-page").click();
+    await expect(history.locator('tbody input[type="checkbox"]:checked')).toHaveCount(0);
     await history.locator("tbody button").first().click();
     await expect(results.locator("tbody tr").first()).toBeVisible();
   });
@@ -714,6 +719,18 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await expect(page.locator("body")).toContainText("分钟执行时间轴");
     await expect(page.locator("body")).toContainText(/实时资产曲线|分钟资产快照缺失/);
     await expectNoRawJsonUi(page);
+
+    await page.goto("/paper-v2/miniqmt-sim");
+    await expect(page.getByTestId("miniqmt-local-fields-help")).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByTestId("miniqmt-position-sort-code")).toBeVisible();
+    await expect(page.getByTestId("miniqmt-trades-toggle")).toBeVisible();
+    await expect(page.getByTestId("miniqmt-trades-table")).toHaveCount(0);
+    await page.getByTestId("miniqmt-trades-toggle").click();
+    await expect(page.getByTestId("miniqmt-trades-table")).toBeVisible();
+    await expect(page.getByTestId("miniqmt-trade-sort-name")).toBeVisible();
+    await page.getByTestId("miniqmt-position-sort-code").click();
+    await page.getByTestId("miniqmt-position-sort-code").click();
+    await page.getByTestId("miniqmt-position-sort-code").click();
 
     await page.goto("/paper-v2/settings");
     await expect(page.locator('a[href="/paper-v2/packages"]').first()).toBeVisible();

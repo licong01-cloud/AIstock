@@ -283,6 +283,19 @@ export default function PaperV2SelectionPage() {
   const runTotalPages = Math.max(1, Number(runPagination.total_pages || 1));
   const runPageSafe = Math.min(runPage, runTotalPages);
   const visibleRuns = runs;
+  const visibleRunIds = visibleRuns.map((item) => item.run_id);
+  const selectedVisibleRunCount = visibleRunIds.filter((runId) => selectedRuns[runId]).length;
+  const allVisibleRunsSelected = visibleRunIds.length > 0 && selectedVisibleRunCount === visibleRunIds.length;
+
+  function setCurrentPageRunSelection(checked: boolean) {
+    setSelectedRuns((current) => {
+      const next = { ...current };
+      for (const runId of visibleRunIds) {
+        next[runId] = checked;
+      }
+      return next;
+    });
+  }
 
   const workflowSteps = paperV2WorkflowSteps({
     hasPackages: packages.length > 0,
@@ -297,7 +310,24 @@ export default function PaperV2SelectionPage() {
     <main>
       <WorkflowStepper steps={workflowSteps} compact />
       <ErrorPanel error={error} title="选股操作失败" />
-      <div className="pv2-grid pv2-grid-main">
+      <div className="pv2-grid pv2-grid-main" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <SectionCard title="策略包选择器" eyebrow={`${selectedPackages.length} 个已选择`}>
+          <PaperTable
+            rows={packages}
+            empty="No asset-eligible StrategyPackage. Create a QE package and pass asset checks first."
+            columns={[
+              { key: "pick", header: "选择", render: (row) => <input data-testid={`selection-package-${row.package_id}`} type="checkbox" checked={Boolean(selected[row.package_id])} onChange={(event) => updatePackageSelection(row.package_id, event.target.checked)} /> },
+              { key: "name", header: "策略包", render: (row) => <><strong>{row.package_name}</strong><br /><span className="pv2-muted pv2-mono">{shortHash(row.package_id, 7)}</span></> },
+              { key: "status", header: "状态", render: (row) => <StatusBadge status={row.package_status} /> },
+              { key: "health", header: "Runtime diagnostics", render: (row) => <><StatusBadge status={packageHealthStatus(row)} /><br /><span className="pv2-muted">{packageHealthHint(row)}</span></> },
+              { key: "annual", header: "年化", render: (row) => formatPercent(row.metrics_summary?.annual_return) },
+              { key: "ic", header: "IC", render: (row) => formatPercent(row.metrics_summary?.ic) },
+              { key: "model", header: "模型", render: (row) => <StatusBadge status={String(row.model_state?.staleness_status || "unknown")} /> },
+              { key: "weight", header: "权重", render: (row) => <input className="pv2-input" data-testid={`selection-weight-${row.package_id}`} type="number" step="0.1" value={weights[row.package_id] ?? 1} disabled={mode !== "weighted_fusion"} onChange={(event) => setWeights((prev) => ({ ...prev, [row.package_id]: Number(event.target.value) }))} /> },
+            ]}
+          />
+        </SectionCard>
+
         <SectionCard title="选股控制" eyebrow="StrategyPackage 权威推理" action={<button className="pv2-button" onClick={loadPackages} disabled={loading} type="button">刷新策略包</button>}>
           <div className="pv2-form-grid">
             <div className="pv2-field"><label>模式</label><select className="pv2-select" data-testid="selection-mode" value={mode} onChange={(event) => updateMode(event.target.value as SelectionMode)}><option value="single_package">单策略包</option><option value="weighted_fusion">加权融合</option><option value="intersection">交集</option><option value="union">并集</option></select></div>
@@ -336,23 +366,6 @@ export default function PaperV2SelectionPage() {
             ) : null}
           </div>
           <button className="pv2-button-primary" data-testid="selection-run" disabled={running} onClick={runSelection} type="button">{running ? "运行中..." : "运行选股"}</button>
-        </SectionCard>
-
-        <SectionCard title="策略包选择器" eyebrow={`${selectedPackages.length} 个已选择`}>
-          <PaperTable
-            rows={packages}
-            empty="No asset-eligible StrategyPackage. Create a QE package and pass asset checks first."
-            columns={[
-              { key: "pick", header: "选择", render: (row) => <input data-testid={`selection-package-${row.package_id}`} type="checkbox" checked={Boolean(selected[row.package_id])} onChange={(event) => updatePackageSelection(row.package_id, event.target.checked)} /> },
-              { key: "name", header: "策略包", render: (row) => <><strong>{row.package_name}</strong><br /><span className="pv2-muted pv2-mono">{shortHash(row.package_id, 7)}</span></> },
-              { key: "status", header: "状态", render: (row) => <StatusBadge status={row.package_status} /> },
-              { key: "health", header: "Runtime diagnostics", render: (row) => <><StatusBadge status={packageHealthStatus(row)} /><br /><span className="pv2-muted">{packageHealthHint(row)}</span></> },
-              { key: "annual", header: "年化", render: (row) => formatPercent(row.metrics_summary?.annual_return) },
-              { key: "ic", header: "IC", render: (row) => formatPercent(row.metrics_summary?.ic) },
-              { key: "model", header: "模型", render: (row) => <StatusBadge status={String(row.model_state?.staleness_status || "unknown")} /> },
-              { key: "weight", header: "权重", render: (row) => <input className="pv2-input" data-testid={`selection-weight-${row.package_id}`} type="number" step="0.1" value={weights[row.package_id] ?? 1} disabled={mode !== "weighted_fusion"} onChange={(event) => setWeights((prev) => ({ ...prev, [row.package_id]: Number(event.target.value) }))} /> },
-            ]}
-          />
         </SectionCard>
       </div>
 
@@ -420,9 +433,11 @@ export default function PaperV2SelectionPage() {
       <SectionCard title="历史选股记录与动态聚合" eyebrow="点击记录可显示结果">
         <div className="pv2-row-actions" style={{ marginBottom: 12 }}>
           <button className="pv2-button" onClick={loadPackages} disabled={loading} type="button">刷新记录</button>
+          <button className="pv2-button" data-testid="selection-history-select-page" onClick={() => setCurrentPageRunSelection(true)} disabled={!visibleRunIds.length || allVisibleRunsSelected} type="button">全选本页</button>
+          <button className="pv2-button-ghost" data-testid="selection-history-clear-page" onClick={() => setCurrentPageRunSelection(false)} disabled={!selectedVisibleRunCount} type="button">取消本页</button>
           <button className="pv2-button-primary" data-testid="selection-aggregate-runs" onClick={aggregateSelectedRuns} disabled={!aggregateEnabled} type="button">聚合已选股票</button>
           <button className="pv2-button-danger" data-testid="selection-delete-runs" onClick={deleteSelectedRuns} disabled={running || !sourceRunIds.length} type="button">删除选中 {sourceRunIds.length || ""}</button>
-          <span className="pv2-muted">已选 {sourceRunIds.length} 条；聚合模式不能为单策略包。</span>
+          <span className="pv2-muted">本页已选 {selectedVisibleRunCount}/{visibleRunIds.length}；合计已选 {sourceRunIds.length} 条</span>
         </div>
         <PaperTable
           rows={visibleRuns}
