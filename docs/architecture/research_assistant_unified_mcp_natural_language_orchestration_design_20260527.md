@@ -363,78 +363,402 @@ backend/tests/research_assistant/test_natural_language_mcp_routing.py
 | MCP 目录 | `assistant_list_mcp_tools`、`assistant_preflight_mcp_tool` | “你有哪些工具 / 先预检这个工具。” |
 | Issue 候选 | `assistant_create_issue_candidate` | “先生成 issue 候选。” |
 
-## 10. 未来 MCP 统一纳入方式
+## 10. 新 MCP Server 模块统一设计
 
-未来新增因子、模型、策略、执行策略 MCP 时，不再单独写散落方案，而必须按本方案接入：
+未来新增因子库、因子独立指标、因子相关性、模型库、策略库、执行策略库 MCP 时，**不再新增独立脚本式 MCP server**，统一使用 `backend/mcp/gateway.py` + `backend/mcp/modules/<module>.py` + `scripts/aistock_mcp_gateway.py --profile=<profile>` 的 Gateway 形态。
 
 ```mermaid
 flowchart LR
-  API["Backend facade API"] --> MCP["Domain MCP server"]
-  MCP --> CAT["mcp_capability_catalog.yaml"]
-  CAT --> RA["Research Assistant Capability Registry"]
-  RA --> ROUTER["Natural Language Tool Router"]
-  ROUTER --> USER["自然语言可用"]
+  USER["自然语言"] --> RA["Research Assistant Tool Router"]
+  RA --> CAT["MCP Capability Catalog"]
+  CAT --> GW["scripts/aistock_mcp_gateway.py --profile=<domain>"]
+  GW --> MOD["backend/mcp/modules/<domain>.py"]
+  MOD --> API["Backend Facade API /api/v1/<domain>"]
+  API --> SVC["Domain Service"]
+  SVC --> DB["DB / Artifact Store / Async Job"]
+  API --> AUDIT["Trace / Audit / Approval"]
 ```
 
-### 10.1 因子库 MCP
+### 10.1 统一 Gateway 规则
+
+| 规则 | 要求 |
+|---|---|
+| 模块位置 | 新 MCP 模块必须放在 `backend/mcp/modules/`，例如 `factor_library.py`、`factor_metrics.py`。 |
+| Profile | 新增 profile 必须登记到 `backend/mcp/profiles.py`，例如 `factor_library`、`factor_research`、`model_registry`、`strategy_governance`。 |
+| 启动入口 | 统一用 `scripts/aistock_mcp_gateway.py --profile=<profile>`；不再为每个新领域新增 `scripts/aistock_xxx_mcp_server.py`。 |
+| 后端访问 | MCP module 只调用 loopback backend façade API，不直接连接 DB、不直接 import 业务 service、不直接跑脚本。 |
+| 工具命名 | 工具名使用 `<domain>_<action>`，confirmed 写入使用 `_confirmed` 后缀。 |
+| 结果策略 | 默认 summary-first，列表默认 limit，矩阵/大表必须返回摘要和 artifact/job 引用。 |
+| 风险策略 | read-only 自动；plan/preview 可自动；submit/execute/register/freeze/delete 必须 preflight + confirmation。 |
+| 异步任务 | 大计算统一走 backend async job，不在 MCP stdio 进程内长时间计算。 |
+| 能力登记 | 每个 server/tool 必须进入 `mcp_capability_catalog.yaml`、Research Assistant DB catalog 和外部客户端配置。 |
+| 可观测性 | preflight、confirmed action、job submit、job result、失败必须写 Trace/Audit。 |
+
+### 10.2 统一目录与 profile 命名
+
+```text
+backend/mcp/modules/factor_library.py
+backend/mcp/modules/factor_metrics.py
+backend/mcp/modules/factor_correlation.py
+backend/mcp/modules/model_registry.py
+backend/mcp/modules/strategy_governance.py
+backend/mcp/modules/execution_policy.py
+
+backend/services/research_assistant/mcp_capability_catalog.yaml
+backend/services/research_assistant/domain_ontology.py
+backend/services/research_assistant/tool_router.py
+```
+
+建议 profile：
+
+| profile | modules | 对外 server key |
+|---|---|---|
+| `factor_library` | `['factor_library']` | `aistock-factor-library` |
+| `factor_metrics` | `['factor_metrics']` | `aistock-factor-metrics` |
+| `factor_correlation` | `['factor_correlation']` | `aistock-factor-correlation` |
+| `model_registry` | `['model_registry']` | `aistock-model-registry` |
+| `strategy_governance` | `['strategy_governance']` | `aistock-strategy-governance` |
+| `execution_policy` | `['execution_policy']` | `aistock-execution-policy` |
+| `factor_research` | `['factor_library','factor_metrics','factor_correlation']` | `aistock-factor-research` 可选组合 profile |
+| `strategy_ops` | `['strategy_governance','execution_policy']` | `aistock-strategy-ops` 可选组合 profile |
+| `research_full` | `['research','research_assistant','local_data','factor_library','factor_metrics','factor_correlation','model_registry','strategy_governance','execution_policy']` | 仅限内部验证，不建议普通客户端默认启用 |
+
+### 10.3 后端 façade 统一要求
+
+每个新 MCP 不直接实现业务逻辑，而是通过后端 API façade：
+
+| MCP | 后端 façade 建议 | 说明 |
+|---|---|---|
+| 因子库 | `/api/v1/factor-library/*` | 查因子元数据、覆盖率、指标缓存、版本和标签。 |
+| 因子独立指标 | `/api/v1/factor-metrics/*` | plan/submit/job/result；计算 IC/RankIC/分组收益等。 |
+| 因子相关性 | `/api/v1/factor-correlation/*` | plan/submit/job/matrix/top-pairs/replacement suggestions。 |
+| 模型库 | `/api/v1/model-registry/*` | 查 model trial、artifact manifest、seed、hyperparam、freeze/register plan。 |
+| 策略库 | `/api/v1/strategy-governance/*` | 查 StrategyPackage、Selection/Paper readiness、promotion/retirement plan。 |
+| 执行策略库 | `/api/v1/execution-policy/*` | 查 execution algo、适用性、风险限制、策略适配验证。 |
+
+后端 façade 必须：
+
+1. 控制分页、limit、时间范围和字段投影。
+2. 对大计算返回 job，而不是同步计算。
+3. 对写入型动作提供 plan/preview，再由 confirmed API 执行。
+4. 返回中文可读摘要字段，如 `summary_zh`、`business_impact`、`next_actions`。
+5. 保留 `trace_id`、`job_id`、`artifact_ref`、`source_refs`。
+6. DB schema 如有新增，必须有 PostgreSQL COMMENT 和 production DDL gate。
+
+### 10.4 因子库 MCP：`aistock-factor-library`
+
+定位：让助手理解“因子库有什么、因子来自哪里、覆盖到哪天、质量如何、是否适合继续用于 QE/模型/策略”。
 
 | 项 | 设计 |
 |---|---|
-| server | `aistock-factor-library` |
-| 范围 | 因子元数据、版本、来源、覆盖率、指标缓存、质量标签 |
-| 首批工具 | `factor_library_list`、`factor_library_get`、`factor_library_search`、`factor_library_get_coverage`、`factor_library_get_metric_summary` |
-| 自然语言 | “因子库有哪些动量因子？”、“这个因子覆盖到哪天？”、“IC 最近怎么样？” |
-| 风险 | 默认只读；新增/废弃因子需确认。 |
+| Gateway module | `backend/mcp/modules/factor_library.py` |
+| Profile | `factor_library` |
+| Server key | `aistock-factor-library` |
+| 后端 façade | `/api/v1/factor-library/*` |
+| 数据来源 | 因子 registry、指标缓存、ST PIT 官方指标、QE Archive 因子使用统计、artifact manifest。 |
+| 默认策略 | 只读自动，注册/废弃/改标签需确认。 |
+| 自然语言 | “因子库有哪些动量因子？”、“这个因子覆盖到哪天？”、“哪些因子最近 IC 稳定？”、“这个因子能用于 ST PIT QE 吗？” |
 
-### 10.2 因子独立指标 MCP
+首批工具：
 
-| 项 | 设计 |
-|---|---|
-| server | `aistock-factor-metrics` |
-| 范围 | IC/RankIC、分组收益、稳定性、覆盖率、OOS 指标 |
-| 首批工具 | `factor_metrics_plan`、`factor_metrics_submit_confirmed`、`factor_metrics_get_job`、`factor_metrics_get_result` |
-| 自然语言 | “帮我算这个因子的独立 IC。”、“最近 3 年 RankIC 稳定吗？” |
-| 风险 | 大计算异步 job；submit 需确认；结果 summary-first。 |
+| 工具 | 类型 | 功能 | 策略 |
+|---|---|---|---|
+| `factor_library_list` | read_only | 按类型、来源、状态、标签列因子 | 自动。 |
+| `factor_library_search` | read_only | 按自然语言/关键词搜索因子 | 自动。 |
+| `factor_library_get` | read_only | 获取单因子元数据、版本、来源和质量标签 | 自动。 |
+| `factor_library_get_coverage` | read_only | 返回覆盖日期、股票数、缺失率、ST PIT 兼容情况 | 自动。 |
+| `factor_library_get_metric_summary` | read_only | 返回已缓存 IC/RankIC/稳定性摘要 | 自动。 |
+| `factor_library_get_usage_summary` | read_only | 汇总 QE Archive 中因子使用和重要性历史 | 自动。 |
+| `factor_library_plan_register` | draft_only | 生成新因子登记计划，不写入 | 自动。 |
+| `factor_library_register_confirmed` | write_nonprod/controlled_write | 登记或更新因子 registry | preflight + confirmation。 |
+| `factor_library_plan_deprecate` | draft_only | 生成废弃/替换计划 | 自动。 |
+| `factor_library_deprecate_confirmed` | controlled_write | 废弃因子或改状态 | approval + confirmation。 |
 
-### 10.3 因子相关性 MCP
+工具示例：
 
-| 项 | 设计 |
-|---|---|
-| server | `aistock-factor-correlation` |
-| 范围 | 因子相关性矩阵、冗余聚类、替换建议 |
-| 首批工具 | `factor_corr_plan`、`factor_corr_submit_confirmed`、`factor_corr_get_matrix`、`factor_corr_suggest_replacements` |
-| 自然语言 | “这些因子是不是太像？”、“帮我找低相关替代。” |
-| 风险 | 大矩阵必须限范围/异步；默认返回 top pairs 和摘要。 |
+```python
+@registry.mcp.tool(name="factor_library_search")
+def factor_library_search(query: str, factor_type: str | None = None, limit: int = 20) -> Any:
+    """Search factor registry with business aliases and quality filters."""
+    return client.get("/search", params={"query": query, "factor_type": factor_type, "limit": limit})
+```
 
-### 10.4 模型库 MCP
+### 10.5 因子独立指标 MCP：`aistock-factor-metrics`
 
-| 项 | 设计 |
-|---|---|
-| server | `aistock-model-registry` |
-| 范围 | 模型 trial、seed、超参、训练指标、artifact manifest、冻结版本 |
-| 首批工具 | `model_registry_list`、`model_registry_get`、`model_registry_compare_trials`、`model_registry_get_artifacts` |
-| 自然语言 | “这个模型和上次 trial 差在哪？”、“seed 稳定吗？” |
-| 风险 | 默认只读；注册/冻结/删除需确认。 |
-
-### 10.5 策略库 MCP
+定位：把“给某个因子算独立 IC / RankIC / 分组收益 / 稳定性”的需求做成可审计异步计算能力。
 
 | 项 | 设计 |
 |---|---|
-| server | `aistock-strategy-governance` |
-| 范围 | StrategyPackage、Selection Center、Paper readiness、候选策略推广/退役 |
-| 首批工具 | `strategy_list_packages`、`strategy_get_health`、`strategy_get_selection_readiness`、`strategy_plan_promotion` |
-| 自然语言 | “这个策略能进 Paper v2 吗？”、“哪些包不可运行？” |
-| 风险 | 推广/退役/状态变更需确认和 validation gate。 |
+| Gateway module | `backend/mcp/modules/factor_metrics.py` |
+| Profile | `factor_metrics` |
+| Server key | `aistock-factor-metrics` |
+| 后端 façade | `/api/v1/factor-metrics/*` |
+| 数据来源 | 因子库、Qlib/H5、ST PIT universe、收益标签、指标缓存、QE Archive。 |
+| 默认策略 | plan/read 自动；submit 计算需确认；结果 summary-first。 |
+| 自然语言 | “帮我算这个因子最近三年 RankIC。”、“这个因子的分组收益稳定吗？”、“重新算一下独立指标。” |
 
-### 10.6 执行策略库 MCP
+首批工具：
+
+| 工具 | 类型 | 功能 | 策略 |
+|---|---|---|---|
+| `factor_metrics_plan` | draft_only | 生成计算计划，包含 universe、时间窗、label、资源估计 | 自动。 |
+| `factor_metrics_validate_inputs` | read_only/preflight | 校验因子、标签、数据范围、ST PIT 覆盖 | 自动。 |
+| `factor_metrics_submit_confirmed` | high_cost_compute | 提交异步指标计算 job | preflight + confirmation。 |
+| `factor_metrics_get_job` | read_only | 查询 job 状态、进度和失败原因 | 自动。 |
+| `factor_metrics_get_result` | read_only | 获取 summary、IC/RankIC、分组收益、稳定性 | 自动，默认摘要。 |
+| `factor_metrics_compare_versions` | read_only | 比较不同版本/时间窗指标 | 自动。 |
+| `factor_metrics_export_result_ref` | read_only | 返回 artifact_ref，不直接返回大表 | 自动。 |
+
+异步 job contract：
+
+```json
+{
+  "job_id": "factor_metrics_...",
+  "factor_name": "...",
+  "universe_key": "shsz_st_pit_active_v1",
+  "date_range": ["2021-01-01", "2026-05-27"],
+  "label_horizons": ["1d", "5d", "20d"],
+  "status": "queued|running|succeeded|failed",
+  "summary_ref": "artifact://factor_metrics/.../summary.json",
+  "detail_ref": "artifact://factor_metrics/.../detail.parquet"
+}
+```
+
+### 10.6 因子相关性 MCP：`aistock-factor-correlation`
+
+定位：处理“因子是否冗余、哪些因子相似、是否有替代因子”的自然语言问题。该 MCP 与因子独立指标分开，避免相关性大矩阵计算污染单因子指标链路。
 
 | 项 | 设计 |
 |---|---|
-| server | `aistock-execution-policy` |
-| 范围 | minute execution algo、TWAP/VWAP/POV、风险限制、适用市场状态 |
-| 首批工具 | `execution_policy_list`、`execution_policy_get`、`execution_policy_validate_for_strategy` |
-| 自然语言 | “哪些 minute algo 可用？”、“这个策略适合 POV 吗？” |
-| 风险 | 只读优先；实盘或半实盘路径必须最高审批。 |
+| Gateway module | `backend/mcp/modules/factor_correlation.py` |
+| Profile | `factor_correlation` |
+| Server key | `aistock-factor-correlation` |
+| 后端 façade | `/api/v1/factor-correlation/*` |
+| 数据来源 | 因子库、factor metrics cache、Qlib/H5、QE Archive 因子重要性。 |
+| 默认策略 | plan/top-pairs 自动；submit 大矩阵需确认；默认不返回完整矩阵。 |
+| 自然语言 | “这些因子是不是太像？”、“找低相关替代。”、“最近新因子和旧因子相关性高吗？” |
+
+首批工具：
+
+| 工具 | 类型 | 功能 | 策略 |
+|---|---|---|---|
+| `factor_corr_plan` | draft_only | 生成相关性计算计划，估算矩阵规模和内存 | 自动。 |
+| `factor_corr_validate_inputs` | preflight | 校验 factor set、日期、universe、缺失率 | 自动。 |
+| `factor_corr_submit_confirmed` | high_cost_compute | 提交异步相关性计算 job | confirmation。 |
+| `factor_corr_get_job` | read_only | 查询 job 状态 | 自动。 |
+| `factor_corr_get_top_pairs` | read_only | 返回 top 正/负相关因子对 | 自动。 |
+| `factor_corr_get_clusters` | read_only | 返回冗余簇/主题簇 | 自动。 |
+| `factor_corr_suggest_replacements` | read_only/analysis | 根据相关性 + 指标给替换建议 | 自动。 |
+| `factor_corr_get_matrix_ref` | read_only | 返回矩阵 artifact_ref，不直接输出大矩阵 | 自动。 |
+
+大矩阵边界：
+
+- 默认最多返回 top 50 pairs。
+- 完整矩阵必须通过 artifact_ref 下载或 UI 展示。
+- job 必须记录 row/column count、date range、universe、factor count、内存估计。
+
+### 10.7 模型库 MCP：`aistock-model-registry`
+
+定位：把模型 trial、seed、超参、训练产物、artifact manifest 和冻结版本纳入可查询、可比较、可审计的模型库能力。
+
+| 项 | 设计 |
+|---|---|
+| Gateway module | `backend/mcp/modules/model_registry.py` |
+| Profile | `model_registry` |
+| Server key | `aistock-model-registry` |
+| 后端 façade | `/api/v1/model-registry/*` |
+| 数据来源 | QE Archive model trials、MLflow/artifact manifest、StrategyPackage manifest、训练记录。 |
+| 默认策略 | 查询自动；注册/冻结/废弃/删除需确认。 |
+| 自然语言 | “这个模型和上次 trial 差在哪？”、“seed 稳定吗？”、“这个模型能冻结成候选吗？” |
+
+首批工具：
+
+| 工具 | 类型 | 功能 | 策略 |
+|---|---|---|---|
+| `model_registry_list` | read_only | 按模型类型、状态、任务列模型 | 自动。 |
+| `model_registry_get` | read_only | 获取模型元数据、训练窗口、feature schema、artifact refs | 自动。 |
+| `model_registry_compare_trials` | read_only | 比较 trial 指标、seed、超参、训练数据 | 自动。 |
+| `model_registry_get_seed_stability` | read_only | 查看 seed 稳定性 | 自动。 |
+| `model_registry_get_hyperparam_history` | read_only | 查看超参历史 | 自动。 |
+| `model_registry_get_artifacts` | read_only | 返回模型 artifact manifest | 自动。 |
+| `model_registry_plan_register` | draft_only | 生成模型登记/冻结计划 | 自动。 |
+| `model_registry_register_confirmed` | controlled_write | 登记模型或冻结候选版本 | approval + confirmation。 |
+| `model_registry_deprecate_confirmed` | controlled_write | 废弃模型版本 | approval + confirmation。 |
+
+模型库必须检查：
+
+- feature schema 是否与推理数据一致。
+- artifact manifest 是否包含 sha256、size、producer、source_task、source_loop。
+- 是否违反 protected asset 规则。
+- 是否需要 StrategyPackage / Paper v2 联动验证。
+
+### 10.8 策略库 MCP：`aistock-strategy-governance`
+
+定位：让助手回答“有哪些策略包、哪个可运行、能否进入 Selection/Paper、推广或退役需要什么条件”。
+
+| 项 | 设计 |
+|---|---|
+| Gateway module | `backend/mcp/modules/strategy_governance.py` |
+| Profile | `strategy_governance` |
+| Server key | `aistock-strategy-governance` |
+| 后端 façade | `/api/v1/strategy-governance/*` |
+| 数据来源 | StrategyPackage、Selection Center、Paper v2 readiness、QE Archive、Validation Center。 |
+| 默认策略 | 查询和 promotion plan 自动；状态变更、推广、退役需确认。 |
+| 自然语言 | “这个策略能进 Paper v2 吗？”、“哪些策略包不可运行？”、“帮我生成推广计划。” |
+
+首批工具：
+
+| 工具 | 类型 | 功能 | 策略 |
+|---|---|---|---|
+| `strategy_governance_list_packages` | read_only | 列策略包和状态 | 自动。 |
+| `strategy_governance_get_package` | read_only | 获取 manifest 摘要和冻结状态 | 自动。 |
+| `strategy_governance_get_health` | read_only | 查询 strategy package health/preflight | 自动。 |
+| `strategy_governance_get_selection_readiness` | read_only | Selection Center 可运行性 | 自动。 |
+| `strategy_governance_get_paper_readiness` | read_only | Paper v2 readiness | 自动。 |
+| `strategy_governance_plan_promotion` | draft_only | 生成策略推广计划和 validation gate | 自动。 |
+| `strategy_governance_plan_retirement` | draft_only | 生成退役/替换计划 | 自动。 |
+| `strategy_governance_promote_confirmed` | controlled_write | 推广策略状态 | approval + confirmation。 |
+| `strategy_governance_retire_confirmed` | controlled_write | 退役策略 | approval + confirmation。 |
+
+策略库 MCP 不得修改 frozen manifest；如果需要新版本，必须生成新 StrategyPackage 或 promotion record。
+
+### 10.9 执行策略库 MCP：`aistock-execution-policy`
+
+定位：让助手能理解“执行策略库、minute algo、TWAP/VWAP/POV、适用市场状态、交易约束”，并将其与策略包或 Paper/实盘前置验证连接。
+
+| 项 | 设计 |
+|---|---|
+| Gateway module | `backend/mcp/modules/execution_policy.py` |
+| Profile | `execution_policy` |
+| Server key | `aistock-execution-policy` |
+| 后端 façade | `/api/v1/execution-policy/*` |
+| 数据来源 | execution algo registry、Paper v2 execution config、minute execution algo、risk limit、validation records。 |
+| 默认策略 | 只读和适用性校验自动；绑定到策略或实盘相关配置需最高审批。 |
+| 自然语言 | “有哪些 minute algo 可用？”、“这个策略适合 POV 吗？”、“执行策略风险限制是什么？” |
+
+首批工具：
+
+| 工具 | 类型 | 功能 | 策略 |
+|---|---|---|---|
+| `execution_policy_list_algos` | read_only | 列执行算法：TWAP/VWAP/POV/自研 minute algo | 自动。 |
+| `execution_policy_get_algo` | read_only | 获取算法参数、适用场景、风险限制 | 自动。 |
+| `execution_policy_validate_for_strategy` | read_only/preflight | 校验某策略是否适配某执行算法 | 自动。 |
+| `execution_policy_get_market_state_constraints` | read_only | 返回停牌、涨跌停、无 bar、流动性等约束 | 自动。 |
+| `execution_policy_plan_binding` | draft_only | 生成策略-执行算法绑定计划 | 自动。 |
+| `execution_policy_bind_confirmed` | production_sensitive | 确认绑定或变更执行策略 | approval + confirmation。 |
+| `execution_policy_retire_confirmed` | production_sensitive | 退役执行策略 | approval + confirmation。 |
+
+执行策略 MCP 红线：
+
+- 不直接触发实盘交易。
+- 不默认降级到 TWAP。
+- 不用缺省价格、缺省成交量、缺省资金伪装成功。
+- 与 Paper v2 / QMT / future live path 相关动作都必须最高风险审批。
+
+### 10.10 新 MCP 模块代码骨架
+
+所有新模块遵循同一骨架：
+
+```python
+"""<Domain> MCP tool wrappers.
+
+This module is a thin MCP Gateway layer. It validates identifiers and confirmation
+text, then calls the loopback backend facade API. It does not connect to the DB,
+import business services, run scripts, or perform long-running compute locally.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from backend.mcp.registry import ModuleRegistry
+
+TOOL_NAMES = (
+    "<domain>_health",
+    "<domain>_list",
+    "<domain>_get",
+    "<domain>_plan_<action>",
+    "<domain>_<action>_confirmed",
+)
+TOOL_COUNT = len(TOOL_NAMES)
+
+
+def register(registry: ModuleRegistry) -> None:
+    client = registry.client("<backend-facade-prefix>")
+
+    @registry.mcp.tool(name="<domain>_list")
+    def list_items(limit: int = 20) -> Any:
+        """List <domain> records with summary-first output."""
+        return client.get("/items", params={"limit": limit})
+
+    @registry.mcp.tool(name="<domain>_<action>_confirmed")
+    def action_confirmed(item_id: str, confirmation_text: str | None = None) -> Any:
+        """Execute confirmed <domain> action after backend preflight."""
+        registry.require_confirmation(confirmation_text, "CONFIRM_<DOMAIN>_<ACTION>", "confirmation_text")
+        return client.post(f"/items/{item_id}/actions/<action>", {"confirmation_text": confirmation_text})
+
+    registry.register_tool_count("<module_name>", TOOL_COUNT)
+```
+
+如当前 `ModuleRegistry` 尚无 `require_confirmation` helper，可沿用 `backend/mcp/common.py` 或 `scripts/aistock_mcp_common.py` 的确认模式，并在统一 gateway 中补一个共享 helper。
+
+### 10.11 外部 MCP client 配置模板
+
+项目 `.mcp.json` 和 Codex/Claude Code 配置应使用统一 gateway：
+
+```json
+{
+  "mcpServers": {
+    "aistock-factor-library": {
+      "command": "python",
+      "args": ["scripts/aistock_mcp_gateway.py", "--profile=factor_library"],
+      "env": {"AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8001/api/v1"}
+    },
+    "aistock-factor-metrics": {
+      "command": "python",
+      "args": ["scripts/aistock_mcp_gateway.py", "--profile=factor_metrics"],
+      "env": {"AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8001/api/v1"}
+    },
+    "aistock-factor-correlation": {
+      "command": "python",
+      "args": ["scripts/aistock_mcp_gateway.py", "--profile=factor_correlation"],
+      "env": {"AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8001/api/v1"}
+    },
+    "aistock-model-registry": {
+      "command": "python",
+      "args": ["scripts/aistock_mcp_gateway.py", "--profile=model_registry"],
+      "env": {"AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8001/api/v1"}
+    },
+    "aistock-strategy-governance": {
+      "command": "python",
+      "args": ["scripts/aistock_mcp_gateway.py", "--profile=strategy_governance"],
+      "env": {"AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8001/api/v1"}
+    },
+    "aistock-execution-policy": {
+      "command": "python",
+      "args": ["scripts/aistock_mcp_gateway.py", "--profile=execution_policy"],
+      "env": {"AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8001/api/v1"}
+    }
+  }
+}
+```
+
+旧会话可能缓存 MCP tool schema；配置落地后应在新 Codex/Claude 会话中验证。
+
+### 10.12 新 MCP Design Acceptance Index
+
+| 编号 | 要求 | 验收标准 |
+|---|---|---|
+| NEW-MCP-001 | 新 MCP 必须使用统一 Gateway | 不新增 `scripts/aistock_<domain>_mcp_server.py`；使用 `scripts/aistock_mcp_gateway.py --profile=<profile>`。 |
+| NEW-MCP-002 | 新 MCP module 必须薄封装 | `backend/mcp/modules/*.py` 不直接 DB、不 import business service、不 subprocess。 |
+| NEW-MCP-003 | 每个新 MCP 有 backend façade | `/api/v1/<domain>/*` 提供分页、summary、preflight、confirmed API。 |
+| NEW-MCP-004 | 因子库 MCP 完整定义 | `factor_library` profile、tools、catalog、路由、测试计划齐全。 |
+| NEW-MCP-005 | 因子独立指标 MCP 完整定义 | plan/validate/submit/job/result 异步闭环齐全。 |
+| NEW-MCP-006 | 因子相关性 MCP 完整定义 | plan/submit/top-pairs/clusters/replacement/matrix-ref 齐全。 |
+| NEW-MCP-007 | 模型库 MCP 完整定义 | trial/seed/hyperparam/artifact/register/deprecate 齐全。 |
+| NEW-MCP-008 | 策略库 MCP 完整定义 | package health、selection/paper readiness、promotion/retirement 齐全。 |
+| NEW-MCP-009 | 执行策略库 MCP 完整定义 | algo list/get/validate/bind/retire 和实盘红线齐全。 |
+| NEW-MCP-010 | 自然语言路由可识别新增领域 | 因子/模型/策略/执行策略自然语言单测通过。 |
 
 ## 11. 实施路线
 
