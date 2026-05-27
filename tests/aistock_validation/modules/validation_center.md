@@ -196,3 +196,13 @@ The route-level UI target catalog is the first durable coverage map between the 
 - API payloads enrich each route with module quality, latest validation run when available, warnings, and an explicit `proven_by_real_business_evidence` boolean; missing evidence must be warnings, not fake success.
 - The Validation Center page displays the route catalog inside the page body, grouped by catalog/navigation metadata, without covering or replacing the global sidebar.
 - Mock UI and real-port UI smokes must prove the page consumes `/ui-targets` and `/ui-targets/summary`, shows warnings/gaps, and supports selecting a route detail panel.
+
+## Nightly Runner Preflight Contract
+
+AIstock Nightly L3 + DR must fail fast with actionable evidence when the required self-hosted Windows runner is unavailable.
+
+- The `runner-preflight` job runs on GitHub-hosted Ubuntu before any self-hosted job is queued.
+- `scripts/aistock_runner_health.py doctor` checks repository Actions runners for online labels `self-hosted` and `windows`, writes `runner-health.json` and `runner-health.md`, and exits non-zero when no matching runner is available.
+- The preflight is read-only: it queries GitHub Actions metadata only and must not touch production DB, production ports, or runtime services.
+- `full-summary` must run on GitHub-hosted Ubuntu and include `runner-preflight` in the nightly summary so missing runner capacity can create an actionable issue instead of leaving the workflow queued for hours.
+- If `runner-preflight` fails, downstream self-hosted DR/L3 jobs remain skipped, and the auto-filed issue should tell operators to restart or register the self-hosted Windows runner and inspect the runner-health artifact.
