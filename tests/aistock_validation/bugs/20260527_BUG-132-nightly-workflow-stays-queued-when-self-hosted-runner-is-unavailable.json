@@ -1,0 +1,73 @@
+{
+  "actual": "Recent Nightly runs remain queued while repository Actions runners report total_count=0.",
+  "allowed_write_scope": [
+    ".github/workflows/nightly.yml",
+    "scripts/aistock_runner_health.py",
+    "backend/tests/scripts/test_aistock_runner_health.py",
+    "tests/aistock_validation/modules/validation_center.md",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260527_BUG-132-nightly-workflow-stays-queued-when-self-hosted-runner-is-unavailable.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-132",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-27T14:47:11.018442Z",
+  "description": "Recent Nightly runs remain queued while repository Actions runners report total_count=0.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260527-a57b1f5b1c5a",
+      "timestamp": "2026-05-27T14:47:11.018438Z"
+    },
+    {
+      "timestamp": "2026-05-27T14:55:00Z",
+      "actor": "codex",
+      "action": "renumber_due_to_parallel_allocator_conflict",
+      "note": "Renumbered from BUG-131 to BUG-132 because another active worktree already linked BUG-131 to GitHub Issue #252."
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/actions/workflows/nightly.yml"
+  ],
+  "expected": "Nightly should run a GitHub-hosted preflight that detects missing self-hosted Windows runners, produces runner-health evidence, and fails fast so an actionable issue can be filed.",
+  "first_seen_at": "2026-05-27T14:47:11.018442Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 253,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/253",
+  "last_seen_at": "2026-05-27T14:47:11.018442Z",
+  "module": "validation.runner",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "gh run list --repo licong01-cloud/AIstock --workflow nightly.yml --limit 5; gh api repos/licong01-cloud/AIstock/actions/runners",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files",
+    "validation_catalog_integrity",
+    "validation_center_backend"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation.runner"
+  ],
+  "title": "Nightly workflow stays queued when self-hosted runner is unavailable",
+  "trigger_condition": {
+    "fingerprint": "a57b1f5b1c5a750c7f54c606",
+    "source_event_id": "FE-20260527-a57b1f5b1c5a"
+  },
+  "verification_run_id": null
+}

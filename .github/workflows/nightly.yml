@@ -17,10 +17,52 @@ env:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
+  runner-preflight:
+    name: Runner preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check self-hosted runner availability
+        env:
+          # Listing self-hosted runners requires repository Administration read permission.
+          # If the default GITHUB_TOKEN is insufficient, configure this repository secret.
+          AISTOCK_RUNNER_HEALTH_TOKEN: ${{ secrets.AISTOCK_RUNNER_HEALTH_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p tmp/validation/runner_health
+          python scripts/aistock_runner_health.py doctor \
+            --repo "${{ github.repository }}" \
+            --workflow "nightly.yml" \
+            --required-label self-hosted \
+            --required-label windows \
+            --stale-queued-minutes 30 \
+            --output-json tmp/validation/runner_health/runner-health.json \
+            --output-md tmp/validation/runner_health/runner-health.md
+
+      - name: Print runner health evidence
+        if: always()
+        run: |
+          cat tmp/validation/runner_health/runner-health.md || true
+
+      - name: Upload runner health evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runner-health-${{ github.run_id }}
+          path: tmp/validation/runner_health/
+          if-no-files-found: ignore
+
   dr-snapshot:
     name: DR snapshot prod DB
+    needs: runner-preflight
     # self-hosted is mandatory because the DR job needs to read the local
     # production DB at 127.0.0.1:5432; GitHub-hosted runners cannot reach it.
     runs-on: [self-hosted, windows]
@@ -178,6 +220,7 @@ jobs:
 
   code-intelligence-weekly:
     name: Code intelligence weekly graph summary
+    needs: runner-preflight
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: [self-hosted, windows]
     timeout-minutes: 15
@@ -208,13 +251,14 @@ jobs:
 
   full-summary:
     name: Nightly summary + auto-bug on failure
-    needs: [dr-snapshot, dr-validate, nightly-l3, paper-v2-live]
+    needs: [runner-preflight, dr-snapshot, dr-validate, nightly-l3, paper-v2-live]
     if: always()
-    runs-on: [self-hosted, windows]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
       issues: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
 
@@ -225,6 +269,7 @@ jobs:
         # omitted it -- a dr-validate failure would not surface in the
         # checked-in nightly summary md.
         env:
+          RUNNER_PREFLIGHT_RESULT: ${{ needs.runner-preflight.result }}
           DR_RESULT: ${{ needs.dr-snapshot.result }}
           DR_VALIDATE_RESULT: ${{ needs.dr-validate.result }}
           L3_RESULT: ${{ needs.nightly-l3.result }}
@@ -238,6 +283,7 @@ jobs:
           cat <<EOF > "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
           # Nightly run ${RUN_ID} ${DATE}
 
+          - runner-preflight: ${RUNNER_PREFLIGHT_RESULT}
           - dr-snapshot: ${DR_RESULT}
           - dr-validate: ${DR_VALIDATE_RESULT}
           - nightly-l3: ${L3_RESULT}
@@ -247,75 +293,140 @@ jobs:
           EOF
           cat "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
 
-      - name: Auto-register failure as BUG (cross_tool_review_dispatch)
-        if: failure() || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure'
+      - name: Auto-register failure as actionable GitHub Issue
+        if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure'
+        uses: actions/github-script@v7
         env:
+          RUNNER_PREFLIGHT_RESULT: ${{ needs.runner-preflight.result }}
           DR_RESULT: ${{ needs.dr-snapshot.result }}
           DR_VALIDATE_RESULT: ${{ needs.dr-validate.result }}
           L3_RESULT: ${{ needs.nightly-l3.result }}
           LIVE_RESULT: ${{ needs.paper-v2-live.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          source "$(conda info --base)/etc/profile.d/conda.sh"
-          conda activate AIstock
-          python - <<'PY'
-          # Compose a single P1 finding for the failed nightly job(s) and dispatch
-          # it through cross_tool_review_dispatch.py so the BUG is filed via the
-          # canonical MCP report_bug path. Filed by: nightly_runner agent.
-          import json, os, subprocess, sys, tempfile
+        with:
+          script: |
+            const statuses = {
+              runnerPreflight: process.env.RUNNER_PREFLIGHT_RESULT || "?",
+              drSnapshot: process.env.DR_RESULT || "?",
+              drValidate: process.env.DR_VALIDATE_RESULT || "?",
+              nightlyL3: process.env.L3_RESULT || "?",
+              paperV2Live: process.env.LIVE_RESULT || "?",
+            };
+            const runId = process.env.GITHUB_RUN_ID || "0";
+            const runUrl = process.env.RUN_URL;
+            const runnerFailed = statuses.runnerPreflight === "failure";
+            const fingerprint = runnerFailed
+              ? "runner-preflight-unavailable"
+              : `nightly-${statuses.runnerPreflight}-${statuses.drSnapshot}-${statuses.drValidate}-${statuses.nightlyL3}-${statuses.paperV2Live}`;
+            const marker = `<!-- aistock-nightly-failure:${fingerprint} -->`;
+            const title = runnerFailed
+              ? "P1 Nightly blocked: self-hosted Windows runner unavailable"
+              : `P1 Nightly failed: runner=${statuses.runnerPreflight} dr=${statuses.drSnapshot}/${statuses.drValidate} l3=${statuses.nightlyL3} live=${statuses.paperV2Live}`;
 
-          # Per Codex r4 P1.2 review (drawer d09a0a0): the inline Python
-          # payload MUST read DR_VALIDATE_RESULT from env and include it
-          # in the finding's title/actual fields. The env was already
-          # exported in r1 but the Python body never read it, so a
-          # dr-validate failure would silently miss the BUG payload.
-          run_id = os.environ.get("GITHUB_RUN_ID", "0")
-          run_url = os.environ["RUN_URL"]
-          dr = os.environ.get("DR_RESULT", "?")
-          dr_validate = os.environ.get("DR_VALIDATE_RESULT", "?")
-          l3 = os.environ.get("L3_RESULT", "?")
-          live = os.environ.get("LIVE_RESULT", "?")
-          findings = {
-              "schema_version": "aistock_cross_tool_review_findings_v1",
-              "reviewer": "human",
-              "target_branch": os.environ.get("GITHUB_REF", "unknown"),
-              "commit_list": [os.environ.get("GITHUB_SHA", "unknown")],
-              "findings": [
-                  {
-                      "title": (
-                          f"Nightly run {run_id} failed "
-                          f"(dr-snapshot={dr} dr-validate={dr_validate} "
-                          f"l3={l3} live={live})"
-                      ),
-                      "severity": "P1",
-                      "module": "validation.runner",
-                      "files": [".github/workflows/nightly.yml"],
-                      "reproduce_command": f"see {run_url}",
-                      "expected": "all jobs succeed",
-                      "actual": (
-                          f"dr-snapshot={dr}, dr-validate={dr_validate}, "
-                          f"nightly-l3={l3}, paper-v2-live={live}"
-                      ),
-                      "fix_owner": "human",
-                      "comments": [
-                          f"Auto-filed by nightly full-summary job. "
-                          f"Run URL: {run_url}"
-                      ],
-                  }
-              ],
-          }
-          with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
-              json.dump(findings, fh)
-              path = fh.name
-          rc = subprocess.call([
-              sys.executable, "scripts/cross_tool_review_dispatch.py",
-              "--findings-json", path,
-              "--target-tool", "claude_code",
-              "--severity-filter", "P0,P1",
-              "--apply",
-          ])
-          sys.exit(rc)
-          PY
+            const {owner, repo} = context.repo;
+            const allLabels = await github.paginate(github.rest.issues.listLabelsForRepo, {
+              owner,
+              repo,
+              per_page: 100,
+            });
+            const existingLabels = new Set(allLabels.map((label) => label.name));
+            const labels = ["aistock:bug", "severity:P1", "module:validation.runner", "source:nightly"]
+              .filter((label) => existingLabels.has(label));
+
+            const openIssues = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: "open",
+              per_page: 100,
+            });
+            const existing = openIssues.find((issue) =>
+              !issue.pull_request && ((issue.body || "").includes(marker) || issue.title === title)
+            );
+
+            const buildBody = (issueNumber) => [
+              marker,
+              "# AIstock Nightly failure",
+              "",
+              "## Summary",
+              "- severity: P1",
+              "- module: validation.runner",
+              "- workflow: AIstock Nightly L3 + DR",
+              `- run: [${runId}](${runUrl})`,
+              `- runner-preflight: ${statuses.runnerPreflight}`,
+              `- dr-snapshot: ${statuses.drSnapshot}`,
+              `- dr-validate: ${statuses.drValidate}`,
+              `- nightly-l3: ${statuses.nightlyL3}`,
+              `- paper-v2-live: ${statuses.paperV2Live}`,
+              "",
+              "## Expected",
+              "Nightly should either run on the self-hosted Windows runner or fail fast with actionable runner-health evidence.",
+              "",
+              "## Actual",
+              runnerFailed
+                ? "The GitHub-hosted runner-preflight job failed before self-hosted jobs were queued."
+                : "One or more Nightly jobs failed or were skipped.",
+              "",
+              "## Diagnostics",
+              "- Required self-hosted runner labels: self-hosted, windows.",
+              `- Runner health artifact: runner-health-${runId}.`,
+              "- If runner-preflight failed, inspect the artifact and either restart/register the Windows runner or configure AISTOCK_RUNNER_HEALTH_TOKEN with repository Administration read permission.",
+              "- This issue was filed by GitHub Actions without writing BUG JSON in the production root checkout.",
+              "",
+              "## Next command",
+              "```powershell",
+              `python scripts/aistock_issue_workflow.py triage-ci-issue --issue ${issueNumber}`,
+              `python scripts/aistock_issue_workflow.py promote-ci-issue --issue ${issueNumber} --apply`,
+              "```",
+              "",
+              "## Production gates",
+              "- production_ddl_gate: noop",
+              "- production_frontend_dependency_gate: noop",
+              "- production_backend_dependency_gate: noop",
+              "",
+            ].join("\n");
+
+            let issueNumber;
+            if (existing) {
+              issueNumber = existing.number;
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                body: `Nightly failure repeated in run [${runId}](${runUrl}).\n\n` +
+                  `runner-preflight=${statuses.runnerPreflight}, dr-snapshot=${statuses.drSnapshot}, ` +
+                  `dr-validate=${statuses.drValidate}, nightly-l3=${statuses.nightlyL3}, paper-v2-live=${statuses.paperV2Live}.`,
+              });
+              const updateParams = {
+                owner,
+                repo,
+                issue_number: issueNumber,
+                title,
+                body: buildBody(issueNumber),
+              };
+              if (labels.length > 0) {
+                updateParams.labels = labels;
+              }
+              await github.rest.issues.update(updateParams);
+            } else {
+              const createParams = {
+                owner,
+                repo,
+                title,
+                body: "Preparing actionable Nightly diagnostics...",
+              };
+              if (labels.length > 0) {
+                createParams.labels = labels;
+              }
+              const created = await github.rest.issues.create(createParams);
+              issueNumber = created.data.number;
+              await github.rest.issues.update({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                body: buildBody(issueNumber),
+              });
+            }
+            core.info(`Nightly failure issue: #${issueNumber}`);
 
       - name: Upload summary
         if: always()
