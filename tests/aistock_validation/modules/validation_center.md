@@ -58,10 +58,12 @@ The controlled runner is the first execution-capable Validation Center loop. It 
 
 ## L3 Runner Auto Archive And Detail Contract
 
-Every completed controlled-runner job must create a standard Validation History record so runner evidence does not remain only in transient `tmp/validation/runner/jobs`.
+Every completed controlled-runner job must create a standard Validation History record or an explicit tmp-only archive, so runner evidence does not remain only in the live job queue.
 
 - A job starts with `archive.status=pending` when archive is enabled; after terminal completion it must become `archive.status=archived` or explicit `archive.status=failed`.
-- Archive output lives under `tests/aistock_validation/history/<module>/` and includes Markdown run record, run metadata JSON, standard evidence manifest JSON, runner job JSON, runner log TXT, and runner evidence JSON.
+- Archive output for task worktrees lives under that worktree's `tests/aistock_validation/history/<module>/` and includes Markdown run record, run metadata JSON, standard evidence manifest JSON, runner job JSON, runner log TXT, and runner evidence JSON.
+- The canonical root `main` checkout is a sync/runtime target, not the default validation workspace. MCP/agent-triggered validation must pass a task worktree `workspace_path`; root `main` runs require the explicit tmp-only confirmation string and must not write in-repo Validation History artifacts.
+- Curated evidence that should become part of project history must be copied or generated intentionally in the relevant task branch; automatic runner output must not leave the canonical root dirty.
 - Copied Markdown artifacts must not pollute Validation History run lists; guardrail Markdown artifacts are archived as TXT for new runs, and legacy `*-guardrail-md.md` / `*-l0-guardrail.md` evidence files are ignored by run-history discovery.
 - Run metadata must use schema `aistock_validation_run_v1`; standard evidence must use schema `aistock_validation_evidence_manifest_v1`; runner evidence remains `aistock_validation_runner_evidence_v1`.
 - The archived run metadata must include runner job id, plan key, nox session, archive paths, quality gates, `pass_scope`, and `business_assertion`.
