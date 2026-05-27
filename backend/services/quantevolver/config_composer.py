@@ -1963,7 +1963,8 @@ class ConfigComposer:
                 else:
                     cur.execute("""
                         SELECT experiment_id, experiment_name, status,
-                               factor_names, model_id, strategy_id,
+                               jsonb_array_length(COALESCE(factor_names, '[]'::jsonb)) AS factor_count,
+                               model_id, strategy_id,
                                qe_task_id, qe_loop_id,
                                loop_index, parent_experiment_id, is_evolution_loop,
                                ic, icir, rank_ic, rank_icir,
