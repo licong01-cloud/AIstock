@@ -29,8 +29,8 @@
   "expected": "MCP/agent-triggered validation must refuse canonical root main by default and instruct agents to pass a task worktree; existing legacy runner artifacts are backed up then removed so root git status is clean.",
   "first_seen_at": "2026-05-27T12:28:49.102409Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "49f20d76f5e85e6c8f47797b437ef75b697f564b",
+  "fixed_at": "2026-05-27T12:48:23.030598Z",
   "github_issue_number": 249,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/249",
   "last_seen_at": "2026-05-27T12:28:49.102409Z",
@@ -38,6 +38,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/250",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -53,7 +54,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation_platform"
   ],
@@ -62,5 +63,8 @@
     "fingerprint": "1e151748252a44e1fd38b562",
     "source_event_id": "FE-20260527-1e151748252a"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/test_validation_execution_runner.py -q -p no:cacheprovider -> 17 passed; python -m ruff check backend/services/validation/execution_runner.py backend/tests/test_validation_execution_runner.py -> passed; python -m nox -s l0 -> passed (blocking=0); GitHub PR #250 checks -> green"
+  ],
   "verification_run_id": null
 }
