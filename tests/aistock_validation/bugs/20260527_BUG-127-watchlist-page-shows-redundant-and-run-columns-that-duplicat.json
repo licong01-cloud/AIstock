@@ -6,7 +6,7 @@
   "module": "aistock_frontend",
   "severity": "P3",
   "risk_area": "unspecified",
-  "status": "open",
+  "status": "verified",
   "trigger_condition": {
     "scenario": "reported_via_mcp",
     "files": [
@@ -20,15 +20,15 @@
   ],
   "fingerprint": "d8e6b2017f728eb4",
   "assigned_agent": null,
-  "fix_branch": null,
-  "fix_commit": null,
-  "verification_run_id": null,
+  "fix_branch": "fix/watchlist-remove-source-cols-127",
+  "fix_commit": "c9a458d0",
+  "verification_run_id": "validation-center_20260527_063346_l0_l0_628f7e9a_runner-validation__3e39758524",
   "created_at": "2026-05-27T06:22:51Z",
   "first_seen_at": "2026-05-27T06:22:51Z",
-  "last_seen_at": "2026-05-27T06:22:51Z",
+  "last_seen_at": "2026-05-27T06:34:48Z",
   "fixed_at": null,
   "submitted_at": "2026-05-27T06:22:51Z",
-  "closed_at": null,
+  "closed_at": "2026-05-27T06:34:48Z",
   "allowed_write_scope": [
     "frontend/src/app/watchlist/page.tsx"
   ],
@@ -55,6 +55,12 @@
       "actor": "unknown",
       "action": "comment",
       "note": "Source-task filter dropdown also removed — category filter provides equivalent functionality."
+    },
+    {
+      "timestamp": "2026-05-27T06:34:48Z",
+      "actor": "mcp_agent",
+      "action": "status_changed",
+      "note": "Merged to main, pushed to GitHub. Post-merge L0 passed. Removed 82 lines: 2 table columns, source-task filter, search field, state, filter function, useEffect deps."
     }
   ]
 }
