@@ -520,3 +520,48 @@ Final report 必须生成阶段表：
 9. 输出 timing report、production gates、cleanup 状态。
 
 最终标准：流程耗时可以被量化，流程错误可以被阻断，所有窗口都走同一 repo CLI，代码质量不降低，后续研发不再被 issue workflow 本身反复拖慢。
+
+## 12. BUG-016 复盘后的 v2.1a 增量
+
+### 12.1 事件结论
+
+BUG-016 的代码修复 PR `#236` 已在 2026-05-26 合入，但后续 close-sync 曾直接把 BUG JSON 写入 canonical root `F:\Dev\AIstock`，导致 root dirty，`sync_local_main` 和 `cleanup_after_merge` 长时间无法完成。后续通过独立 close-sync PR `#241` 将 registry 状态持久化到 `origin/main` 后，root 才能安全同步并完成 cleanup。
+
+该事件说明缺陷主要在 workflow 工具缺少硬防护，而不是某个客户端单点失误。Codex、Claude Code、Cursor 或人工只要从 root 调用同一命令，都可能产生同样污染。因此 v2.1a 追加以下强制边界。
+
+### 12.2 新增硬边界
+
+| 编号 | 边界 | 门禁强度 | 目的 |
+| --- | --- | --- | --- |
+| HWF-016-001 | `close-sync --apply` 不得在 canonical root 或 `main` 上写 BUG JSON | hard block | 防止 root registry 污染 |
+| HWF-016-002 | 正常 close-sync 使用 `--create-registry-worktree` 自动创建 `chore/BUG-XXX-close-sync-*` 分支 | default path | 让 close-sync 可 PR 化、可审计 |
+| HWF-016-003 | `cleanup-after-merge` 识别 root 中与 `origin/main` 等价的脏文件 | safe recovery | 自动恢复已合入重复 registry 修改，避免人工 stash |
+| HWF-016-004 | PR check 分类把 `SKIPPED` / `NEUTRAL` 记录为 non-blocking | hard for merge logic | 避免把 `Auto-register CI failures as BUGs` skipped 误判为失败 |
+| HWF-016-005 | `close_synced` 仍不是 complete | hard state rule | 必须完成 root sync + cleanup 才能进入 complete |
+
+### 12.3 不增加过度门禁的原则
+
+v2.1a 的目标不是增加人工流程，而是把高风险误操作自动阻断并让低风险步骤自动化：
+
+- registry-only close-sync 只需要 JSON/schema、linkage、production gates、l0/PR Quality 等轻量验证；不应人为扩大到无关全量分析。
+- CodeGraph 和 Understand Anything 缺失继续 warning-only，不阻断 issue 修复。
+- P2 guardrail 和 historical baseline blocker 不阻断 registry-only close-sync。
+- 当前 PR 引入的 blocking CI failure 才阻断 merge；已知 main baseline 或已修复的历史 blocker 必须分类记录。
+
+### 12.4 v2.1a 验收补充
+
+| ID | 要求 | 验收方式 |
+| --- | --- | --- |
+| HWF-F-015 | close-sync root 写入被阻断 | 在 canonical root/main 模拟 `close-sync --apply`，期望 WorkflowError |
+| HWF-F-016 | close-sync 可自动创建 registry worktree | `close-sync --create-registry-worktree --apply` 写入独立 worktree |
+| HWF-F-017 | skipped check 非阻断 | PR check summary 中 `SKIPPED` / `NEUTRAL` 不进入 failed |
+| HWF-F-018 | origin-equivalent dirty 可安全 cleanup | root dirty 文件与 `origin/main` 等价时 cleanup ready，并 apply 前 restore |
+
+### 12.5 预期效率影响
+
+该增量会让正常 close-sync 多一个 registry branch/PR，但可以避免数小时级 root dirty 诊断和人工恢复。对用户和 agent 来说，入口仍是同一条命令；复杂度主要封装在 CLI 内部。预期结果是 token 和时间总体下降：
+
+- 少读 git diff / GitHub Issue / PR 状态。
+- 少做人工 stash/reset 风险判断。
+- 少因 skipped check 或历史 blocker 误判而重复诊断。
+- close-sync 和 cleanup 输出唯一 next command，减少多窗口分叉。

@@ -189,10 +189,10 @@ python scripts/aistock_issue_workflow.py close-sync --bug-id BUG-XXX --pr-url <P
 By default this is a dry-run plan. When the PR is already merged and validation evidence plus production gates are known, use the safe apply gate:
 
 ```powershell
-python scripts/aistock_issue_workflow.py close-sync --bug-id BUG-XXX --pr-url <PR_URL> --validation-evidence "python -m nox -s l0 -> passed" --apply
+python scripts/aistock_issue_workflow.py close-sync --bug-id BUG-XXX --pr-url <PR_URL> --validation-evidence "python -m nox -s l0 -> passed" --create-registry-worktree --apply
 ```
 
-`--apply` verifies the PR is merged through `gh`, updates the BUG JSON to `fixed`, posts a GitHub Issue close-sync comment, closes the linked GitHub Issue when needed, writes `close-sync-evidence.json`, and records `state=close_synced`. It does not merge PRs and does not touch production services.
+`--apply` verifies the PR is merged through `gh`, updates the BUG JSON to `fixed`, posts a GitHub Issue close-sync comment, closes the linked GitHub Issue when needed, writes `close-sync-evidence.json`, and records `state=close_synced`. It refuses to write BUG registry files from the canonical root checkout or from `main`; use `--create-registry-worktree` for normal close-sync so the wrapper creates an isolated `chore/BUG-XXX-close-sync-*` branch. It does not merge PRs and does not touch production services.
 
 If the user explicitly asks the workflow to merge after validation, use:
 
@@ -200,7 +200,7 @@ If the user explicitly asks the workflow to merge after validation, use:
 python scripts/aistock_issue_workflow.py run --bug-id BUG-XXX --mode merge --pr-url <PR_URL> --merge --validation-evidence "python -m nox -s l0 -> passed"
 ```
 
-Without `--merge`, `run --mode merge` stops at an authorization gate. With `--merge`, the wrapper verifies PR checks are green, merges, runs close-sync, and prepares cleanup state. Merge automation still does not touch production runtime or DB.
+Without `--merge`, `run --mode merge` stops at an authorization gate. With `--merge`, the wrapper verifies PR checks are green, merges, runs close-sync through an isolated registry worktree, and prepares cleanup state. Merge automation still does not touch production runtime or DB.
 
 
 ## Cleanup After Merge
@@ -211,7 +211,7 @@ After a PR is merged and close-sync is complete, dry-run cleanup first:
 python scripts/aistock_issue_workflow.py cleanup-after-merge --branch bug/BUG-XXX-scope --worktree F:/Dev/AIstock_worktrees/BUG-XXX-scope --sync-root
 ```
 
-Only add `--apply` when the plan reports `workflow_gate=ready_for_cleanup`. The apply path refuses dirty worktrees, dirty canonical root, or the currently checked-out branch. For squash-merged PRs, pass `--pr-url <PR_URL>` so cleanup can verify the merged PR and tree equivalence before deleting the local branch:
+Only add `--apply` when the plan reports `workflow_gate=ready_for_cleanup`. The apply path refuses dirty worktrees, non-equivalent dirty canonical root, or the currently checked-out branch. If the only root dirty files are byte-equivalent to `origin/main` because a previous close-sync wrote the same registry content locally, cleanup records `origin_equivalent_dirty_files` and safely restores those paths from `origin/main` before fast-forwarding. For squash-merged PRs, pass `--pr-url <PR_URL>` so cleanup can verify the merged PR and tree equivalence before deleting the local branch:
 
 ```powershell
 python scripts/aistock_issue_workflow.py cleanup-after-merge `
