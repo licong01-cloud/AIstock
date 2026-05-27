@@ -6,7 +6,7 @@
   "module": "paper_v2_selection_center",
   "severity": "P1",
   "risk_area": "selection_result_price_display",
-  "status": "open",
+  "status": "fixed",
   "trigger_condition": {
     "scenario": "reported_selection_results_need_stock_names_pit_entry_price_and_tdx_current_price_20260524",
     "runtime_paths": [
@@ -32,17 +32,20 @@
     "file:frontend/src/app/paper-v2/portfolios/[portfolioId]/live-dashboard/page.tsx:55",
     "file:backend/services/paper_trading_v2/symbol_names.py",
     "file:backend/services/selection_center/models.py:29",
-    "file:backend/services/selection_center/repository.py:100"
+    "file:backend/services/selection_center/repository.py:100",
+    "commit:07e66ac6ebf20feccc95eb39f4cd65a32ada8a65",
+    "commit:62dc1b12eb29d6047ee545f6e7cbf8b4f57ef916",
+    "file:tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md"
   ],
   "fingerprint": "7978b09f94bc7cfc",
   "assigned_agent": "paper_v2",
-  "fix_branch": null,
-  "fix_commit": null,
-  "verification_run_id": null,
+  "fix_branch": "feature/paper-v2-gate-decoupling-impl-20260525",
+  "fix_commit": "62dc1b12eb29d6047ee545f6e7cbf8b4f57ef916",
+  "verification_run_id": "tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md",
   "created_at": "2026-05-24T04:22:44Z",
   "first_seen_at": "2026-05-24T04:22:44Z",
   "last_seen_at": "2026-05-24T06:03:58Z",
-  "fixed_at": null,
+  "fixed_at": "2026-05-27T06:22:22Z",
   "submitted_at": "2026-05-24T04:22:44Z",
   "closed_at": null,
   "allowed_write_scope": [
@@ -115,6 +118,12 @@
       "actor": "codex-app",
       "action": "scope_updated",
       "note": "Updated BUG-113 scope per user clarification: split PIT selection entry price, watchlist entry price, and display-only TDX current price; keep TDX out of factor computation."
+    },
+    {
+      "timestamp": "2026-05-27T06:22:22Z",
+      "actor": "codex-app",
+      "action": "close_sync_audit_ready",
+      "note": "Merged implementation evidence was re-audited on chore/paper-v2-issue-close-sync-audit-20260527; BUG JSON is marked fixed and GitHub issue should close when the audit PR merges. Audit record: tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md."
     }
   ],
   "custom_github_labels": [
@@ -126,5 +135,17 @@
   ],
   "github_issue_number": 183,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/183",
-  "batch_id": "paper_v2_selection_runtime_ui_20260524"
+  "batch_id": "paper_v2_selection_runtime_ui_20260524",
+  "validation_evidence": [
+    "backend/services/selection_center/result_enrichment.py adds stock name, PIT entry price, current quote fields, and display-only current price semantics",
+    "backend/tests/selection_center/test_result_enrichment.py -> covers current-date TDX price, historical PIT reference close, and pre-open TDX pre_close fallback",
+    "backend/tests/selection_center/test_runtime_selection.py::test_selection_center_watchlist_import_uses_selection_entry_price_not_current_price -> covered",
+    "python -m nox -s paper_v2_backend -> 501 passed, 1 skipped, 2 xfailed",
+    "GitHub main CI run 26490758645 at 8be68bea -> success; paper_v2_backend check -> success",
+    "GET http://127.0.0.1:8001/api/v1/strategy-packages?limit=20 -> 200; package listing no longer globally blocked by manifest drift",
+    "Close-sync audit record: tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md"
+  ],
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "production_backend_dependency_gate": "noop"
 }

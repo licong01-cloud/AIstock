@@ -6,7 +6,7 @@
   "module": "paper_v2_selection_center",
   "severity": "P1",
   "risk_area": "paper_v2_platform_data_boundary",
-  "status": "open",
+  "status": "fixed",
   "batch_id": "paper_v2_selection_runtime_ui_20260524",
   "trigger_condition": {
     "scenario": "selection_industry_blacklist_text_input_cannot_support_package_level_customization_20260524",
@@ -27,17 +27,19 @@
     "file:frontend/src/app/quantevolver/components/SectorBlacklistPanel.tsx:110",
     "file:frontend/src/app/quantevolver/evolution/page.tsx:4033",
     "file:backend/services/selection_center/tradability.py:153",
-    "file:backend/services/selection_center/industry_provider.py:44"
+    "file:backend/services/selection_center/industry_provider.py:44",
+    "commit:07e66ac6ebf20feccc95eb39f4cd65a32ada8a65",
+    "file:tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md"
   ],
   "fingerprint": "867177eb1019e655",
   "assigned_agent": "paper_v2",
-  "fix_branch": null,
-  "fix_commit": null,
-  "verification_run_id": null,
+  "fix_branch": "feature/paper-v2-gate-decoupling-impl-20260525",
+  "fix_commit": "07e66ac6ebf20feccc95eb39f4cd65a32ada8a65",
+  "verification_run_id": "tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md",
   "created_at": "2026-05-24T06:03:58Z",
   "first_seen_at": "2026-05-24T06:03:58Z",
   "last_seen_at": "2026-05-24T06:03:58Z",
-  "fixed_at": null,
+  "fixed_at": "2026-05-27T06:22:22Z",
   "submitted_at": "2026-05-24T06:03:58Z",
   "closed_at": null,
   "allowed_write_scope": [
@@ -105,6 +107,12 @@
       "actor": "codex-app",
       "action": "github_issue_created",
       "note": "Created GitHub issue #185 and mirrored BUG-115 JSON."
+    },
+    {
+      "timestamp": "2026-05-27T06:22:22Z",
+      "actor": "codex-app",
+      "action": "close_sync_audit_ready",
+      "note": "Merged implementation evidence was re-audited on chore/paper-v2-issue-close-sync-audit-20260527; BUG JSON is marked fixed and GitHub issue should close when the audit PR merges. Audit record: tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md."
     }
   ],
   "custom_github_labels": [
@@ -116,5 +124,17 @@
     "risk:platform_data_boundary"
   ],
   "github_issue_number": 185,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/185"
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/185",
+  "validation_evidence": [
+    "frontend/src/components/paper-v2/PaperIndustryBlacklistSelector.tsx provides Paper-local QE-style industry tree selection",
+    "Selection, portfolio creation, and run-console pages consume Paper-scoped industry blacklist config without writing QE global blacklist or frozen manifests",
+    "backend/tests/selection_center/test_runtime_selection.py and backend/tests/strategy_package/test_backtest_contract.py cover Paper runtime blacklist boundaries",
+    "python -m nox -s paper_v2_backend -> 501 passed, 1 skipped, 2 xfailed",
+    "GitHub main CI run 26490758645 at 8be68bea -> success; paper_v2_backend check -> success",
+    "GET http://127.0.0.1:8001/api/v1/strategy-packages?limit=20 -> 200; package listing no longer globally blocked by manifest drift",
+    "Close-sync audit record: tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md"
+  ],
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "production_backend_dependency_gate": "noop"
 }
