@@ -84,6 +84,7 @@
 | 5 | `npx playwright test tests/research-assistant/research-assistant.spec.ts --project=chromium`（frontend） | 通过，`PASS (4) FAIL (0)`；使用 Playwright 临时 `3012`，未触碰生产 `3000`。 |
 | 6 | `npm run build`（frontend） | 通过，Next.js production build completed；仅有既有 lint warnings。 |
 | 7 | `git diff --check` | 通过，无空白错误。 |
+| 8 | `$files = @(git diff --name-only origin/main...HEAD -- '*.py'); python -m ruff check --force-exclude $files` | 通过，覆盖 PR 的 `11` 个 Python 改动文件。 |
 
 ### 5.1 同步后保留/迁移点
 
@@ -92,3 +93,9 @@
 - `prompt_packs/research_assistant/main/pack.yaml` 新增 `prompt.local_data_management`、`workflow.local_data_check_repair`、`tool_guard.mcp_local_data`，并落到 prompt-pack 节点文件，避免回退到旧版硬编码 Prompt Tree。
 - 前端 `chat`、`workbench`、`mcp-tools` 保留主线无 raw JSON 主视图和 capability inquiry 行为，仅在 Local Data 语境或真实目录命中时展示本地数据检查、计划、确认、执行、复查卡。
 - `production_ddl_gate=noop`；`production_backend_dependency_gate=noop`；`production_frontend_dependency_gate=noop`；未启动、停止或重启生产 backend `8001` / frontend `3000`，未写生产数据库。
+
+### 5.2 PR Quality 门禁跟进
+
+- PR #180 同步主线后的首次 `Context, scope, and open-source tooling dry-run` 失败原因为 `backend/main.py` 的既有启动顺序：该文件必须先设置项目路径并加载 `.env`，再导入内部 router；本 PR 新增 `local_data` router 使该文件进入 changed-file Ruff 检测范围，从而触发 `E402`。
+- `backend/main.py` 已增加文件级 `# ruff: noqa: E402`，显式保留上述启动约束，不改变 Local Data router 的已验证挂载或任何生产运行态。
+- 本地复验已按 PR Quality 的 changed-Python 范围运行 Ruff 并通过；后续以 GitHub Actions 重新触发的结果作为合入门禁。
