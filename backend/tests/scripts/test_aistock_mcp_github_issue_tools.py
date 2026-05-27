@@ -552,6 +552,22 @@ def test_sync_github_to_json_backfills_status_label_and_link(
     assert payload["events"][-1]["action"] == "github_issue_synced_to_json"
 
 
+def test_update_bug_status_blocks_canonical_root_main(
+    mcp_module,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    path = _write_bug(tmp_path, "BUG-405", status="open")
+    monkeypatch.setattr(mcp_module, "_git_toplevel", lambda _path: Path(mcp_module.REPO_ROOT))
+    monkeypatch.setattr(mcp_module, "_canonical_root", lambda: Path(mcp_module.REPO_ROOT))
+    monkeypatch.setattr(mcp_module, "_git_branch", lambda _root: "main")
+
+    with pytest.raises(RuntimeError, match="canonical root main"):
+        mcp_module.update_bug_status("BUG-405", "verified", actor="pytest")
+
+    assert json.loads(path.read_text(encoding="utf-8"))["status"] == "open"
+
+
 # ---------------------------------------------------------------------------
 # BUG-102 regression: parse errors on individual BUG JSON files must not
 # abort the entire registry scan.  A single corrupted file must be skipped

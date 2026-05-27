@@ -119,9 +119,10 @@ def _dedupe_paths(paths: list[Path]) -> list[Path]:
 
 
 def _git_toplevel(path: Path) -> Path | None:
+    anchor = path if path.exists() else path.parent
     try:
         completed = subprocess.run(
-            ["git", "-C", str(path), "rev-parse", "--show-toplevel"],
+            ["git", "-C", str(anchor), "rev-parse", "--show-toplevel"],
             capture_output=True,
             check=False,
             text=True,
@@ -133,6 +134,46 @@ def _git_toplevel(path: Path) -> Path | None:
         return None
     value = completed.stdout.strip()
     return Path(value).resolve() if value else None
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    return str(left.resolve()).casefold() == str(right.resolve()).casefold()
+
+
+def _canonical_root() -> Path | None:
+    override = os.environ.get("AISTOCK_CANONICAL_ROOT") or os.environ.get("AISTOCK_ROOT")
+    if override:
+        return Path(override).resolve()
+    default = Path("F:/Dev/AIstock")
+    return default.resolve() if default.exists() else None
+
+
+def _git_branch(root: Path) -> str | None:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(root), "branch", "--show-current"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    return completed.stdout.strip() or None
+
+
+def _require_bug_json_write_target(path: Path) -> None:
+    repo_root = _git_toplevel(path)
+    canonical = _canonical_root()
+    if repo_root is None or canonical is None:
+        return
+    if _same_path(repo_root, canonical) and _git_branch(repo_root) == "main":
+        raise RuntimeError(
+            "refusing to write BUG JSON in canonical root main; use "
+            "scripts/aistock_issue_workflow.py with a registry or close-sync worktree"
+        )
 
 
 def _candidate_repo_roots() -> list[Path]:
@@ -500,6 +541,7 @@ class _BugIdAllocatorLock:
 
 
 def _write_bug_id_allocator(last_allocated: int) -> None:
+    _require_bug_json_write_target(BUG_ID_ALLOCATOR_PATH)
     BUG_ROOT.mkdir(parents=True, exist_ok=True)
     payload = {
         "schema_version": BUG_ID_ALLOCATOR_SCHEMA,
@@ -627,14 +669,16 @@ def _build_bug_record(
 
 
 def _write_bug_record(record: dict[str, Any], slug: str) -> Path:
-    BUG_ROOT.mkdir(parents=True, exist_ok=True)
     filename = f"{_today_yyyymmdd()}_{record['bug_id']}-{slug}.json"
     path = BUG_ROOT / filename
+    _require_bug_json_write_target(path)
+    BUG_ROOT.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(record, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return path
 
 
 def _write_existing_bug_record(path: Path, record: dict[str, Any]) -> None:
+    _require_bug_json_write_target(path)
     payload = dict(record)
     payload.pop("_source_path", None)
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -1193,6 +1237,8 @@ def _sync_record_to_github(
     apply: bool,
     actor: str,
 ) -> dict[str, Any]:
+    if apply:
+        _require_bug_json_write_target(path)
     issues = client.list_issues(state="all", labels=[GITHUB_BUG_LABEL])
     existing = _find_matching_github_issue(record, issues)
     desired = _desired_github_issue(record, existing_labels=existing.get("labels") if existing else None)
@@ -1282,6 +1328,8 @@ def _sync_github_to_record(
     apply: bool,
     actor: str,
 ) -> dict[str, Any]:
+    if apply:
+        _require_bug_json_write_target(path)
     issues = client.list_issues(state="all", labels=[GITHUB_BUG_LABEL])
     existing = _find_matching_github_issue(record, issues)
     if existing is None:

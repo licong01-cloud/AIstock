@@ -384,6 +384,29 @@ def test_workspace_path_accepted_for_allowlisted_worktree(tmp_path: Path) -> Non
     assert str(worktree.resolve()) in job["workspace_path"]
 
 
+def test_default_archive_root_follows_workspace_path(tmp_path: Path) -> None:
+    worktree = tmp_path / "worktrees" / "bug-xxx"
+    worktree.mkdir(parents=True)
+    _init_git_repo(worktree)
+
+    catalog_path = tmp_path / "plans.yaml"
+    _write_catalog(catalog_path, runner_enabled=True)
+    runner = ValidationExecutionRunner(
+        plan_catalog=ValidationPlanCatalog(catalog_path),
+        execution_root=tmp_path / "jobs",
+        repo_root=tmp_path,
+        run_inline=True,
+        executor=lambda c, e, cwd, t: RunnerResult(return_code=0, output="ok"),
+    )
+
+    job = runner.start_job(plan_key="l0", workspace_path=str(worktree))
+
+    run_record = Path(job["archive"]["run_record_path"])
+    assert worktree / "tests" / "aistock_validation" / "history" in run_record.parents
+    assert not (tmp_path / "tests" / "aistock_validation" / "history").exists()
+    assert runner.get_job_evidence(job["job_id"])["standard_evidence"]["schema_version"] == EVIDENCE_SCHEMA
+
+
 def test_workspace_path_rejects_path_outside_allowlist(tmp_path: Path) -> None:
     catalog_path = tmp_path / "plans.yaml"
     _write_catalog(catalog_path, runner_enabled=True)
@@ -434,6 +457,25 @@ def test_workspace_path_none_defaults_to_repo_root(tmp_path: Path) -> None:
     assert job["status"] == "passed"
     assert job["workspace_is_root"] is True
     assert tmp_path.resolve() == Path(job["workspace_path"]).resolve()
+
+
+def test_default_root_workspace_archives_to_runner_tmp(tmp_path: Path) -> None:
+    catalog_path = tmp_path / "plans.yaml"
+    _write_catalog(catalog_path, runner_enabled=True)
+    execution_root = tmp_path / "jobs"
+    runner = ValidationExecutionRunner(
+        plan_catalog=ValidationPlanCatalog(catalog_path),
+        execution_root=execution_root,
+        repo_root=tmp_path,
+        run_inline=True,
+        executor=lambda c, e, cwd, t: RunnerResult(return_code=0, output="ok"),
+    )
+
+    job = runner.start_job(plan_key="l0")
+
+    run_record = Path(job["archive"]["run_record_path"])
+    assert execution_root / "history" in run_record.parents
+    assert not (tmp_path / "tests" / "aistock_validation" / "history").exists()
 
 
 def test_expected_branch_mismatch_rejected(tmp_path: Path) -> None:
