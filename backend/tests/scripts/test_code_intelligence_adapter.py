@@ -83,6 +83,87 @@ def test_build_summary_links_context_and_affected_refs(tmp_path: Path, monkeypat
     assert payload["affected_tests_ref"].endswith("affected-tests.json")
 
 
+def test_affected_tests_supplements_codegraph_with_repo_import_scan(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    script = tmp_path / "scripts" / "code_intelligence_adapter.py"
+    test_file = tmp_path / "backend" / "tests" / "scripts" / "test_code_intelligence_adapter.py"
+    script.parent.mkdir(parents=True)
+    test_file.parent.mkdir(parents=True)
+    script.write_text("def build_summary():\n    return {}\n", encoding="utf-8")
+    test_file.write_text("import scripts.code_intelligence_adapter as adapter\n", encoding="utf-8")
+    monkeypatch.setattr(
+        adapter,
+        "codegraph_status",
+        lambda root, skip_external=False: {
+            "available": True,
+            "index_exists": True,
+            "command": "codegraph",
+            "version": "0.9.4",
+        },
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_run_command",
+        lambda args, cwd=None, timeout=30: {"ok": True, "stdout": "", "stderr": ""},
+    )
+
+    payload = adapter.build_affected_tests_artifact(
+        item_id="BUG-199",
+        changed_files=["scripts/code_intelligence_adapter.py"],
+        root=tmp_path,
+    )
+
+    assert payload["status"] == "ok"
+    assert payload["codegraph_suggested_tests"] == []
+    assert payload["repo_fallback_suggested_tests"] == [
+        "backend/tests/scripts/test_code_intelligence_adapter.py"
+    ]
+    assert payload["suggested_tests"] == ["backend/tests/scripts/test_code_intelligence_adapter.py"]
+    assert payload["test_discovery_fallback"]["used"] is True
+    assert payload["quality"] == "partial_codegraph_plus_repo_fallback"
+
+
+def test_affected_tests_filter_applies_to_repo_import_scan(tmp_path: Path, monkeypatch) -> None:
+    script = tmp_path / "scripts" / "aistock_issue_workflow.py"
+    backend_test = tmp_path / "backend" / "tests" / "scripts" / "test_aistock_issue_workflow.py"
+    other_test = tmp_path / "tests" / "smoke" / "test_aistock_issue_workflow.py"
+    script.parent.mkdir(parents=True)
+    backend_test.parent.mkdir(parents=True)
+    other_test.parent.mkdir(parents=True)
+    script.write_text("def build_run_plan():\n    return {}\n", encoding="utf-8")
+    backend_test.write_text("import scripts.aistock_issue_workflow as workflow\n", encoding="utf-8")
+    other_test.write_text("import scripts.aistock_issue_workflow as workflow\n", encoding="utf-8")
+    monkeypatch.setattr(
+        adapter,
+        "codegraph_status",
+        lambda root, skip_external=False: {
+            "available": True,
+            "index_exists": True,
+            "command": "codegraph",
+            "version": "0.9.4",
+        },
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_run_command",
+        lambda args, cwd=None, timeout=30: {"ok": True, "stdout": "", "stderr": ""},
+    )
+
+    payload = adapter.build_affected_tests_artifact(
+        item_id="BUG-199",
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        root=tmp_path,
+        filter_glob="backend/tests/**/*.py",
+    )
+
+    assert payload["suggested_tests"] == ["backend/tests/scripts/test_aistock_issue_workflow.py"]
+    assert payload["test_discovery_fallback"]["matched_tests"] == {
+        "backend/tests/scripts/test_aistock_issue_workflow.py": ["scripts.aistock_issue_workflow"]
+    }
+
+
 def test_doctor_reads_code_intelligence_catalog(tmp_path: Path, monkeypatch) -> None:
     catalog = tmp_path / "tests" / "aistock_validation" / "catalog" / "code_intelligence.yaml"
     catalog.parent.mkdir(parents=True)
@@ -120,6 +201,7 @@ def test_summary_markdown_contains_warning_only_artifact_refs(tmp_path: Path, mo
     assert "## Code Intelligence Summary" in markdown
     assert "scripts/code_intelligence_adapter.py" in markdown
     assert "affected-tests.json" in markdown
+    assert "affected_quality" in markdown
     assert "warning-only" in markdown
 
 

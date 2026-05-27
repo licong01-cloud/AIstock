@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
 import re
@@ -434,6 +435,76 @@ def build_context_artifacts(
     return {**manifest, "manifest_path": _repo_rel(manifest_path, root)}
 
 
+def _norm_repo_path(path: str | Path) -> str:
+    return str(path).replace("\\", "/").lstrip("./")
+
+
+def _read_text_if_exists(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _module_name_from_changed_file(path: str) -> str | None:
+    normalized = _norm_repo_path(path)
+    if not normalized.endswith(".py"):
+        return None
+    if not (
+        normalized.startswith("scripts/")
+        or normalized.startswith("backend/")
+        or normalized.startswith("tests/")
+    ):
+        return None
+    return normalized[:-3].replace("/", ".")
+
+
+def _candidate_test_files(root: Path, changed_files: list[str]) -> list[str]:
+    candidates: list[str] = []
+    for pattern in ("backend/tests/**/*.py", "tests/**/*.py"):
+        candidates.extend(
+            _norm_repo_path(path.relative_to(root))
+            for path in root.glob(pattern)
+            if path.is_file()
+        )
+    for changed in changed_files:
+        normalized = _norm_repo_path(changed)
+        path = root / normalized
+        if path.is_file() and re.search(r"(^|/)test_.*\.py$", normalized):
+            candidates.append(normalized)
+    return sorted(set(candidates))
+
+
+def _discover_repo_test_fallbacks(
+    *,
+    root: Path,
+    changed_files: list[str],
+    filter_glob: str | None,
+) -> tuple[list[str], dict[str, Any]]:
+    """Find obvious tests when CodeGraph affected-tests under-recognizes Python refs."""
+    modules = {
+        module
+        for changed in changed_files
+        if (module := _module_name_from_changed_file(changed))
+    }
+    discovered: dict[str, list[str]] = {}
+    for test_path in _candidate_test_files(root, changed_files):
+        if filter_glob and not fnmatch.fnmatch(test_path, filter_glob):
+            continue
+        text = _read_text_if_exists(root / test_path)
+        if not text:
+            continue
+        hits = sorted(module for module in modules if module in text)
+        if hits:
+            discovered[test_path] = hits
+    return sorted(discovered), {
+        "strategy": "python_import_text_scan",
+        "modules": sorted(modules),
+        "matched_tests": discovered,
+        "enabled": bool(modules),
+    }
+
+
 def build_affected_tests_artifact(
     *,
     item_id: str,
@@ -462,6 +533,20 @@ def build_affected_tests_artifact(
             fallback_reason = None
         else:
             fallback_reason = result.get("stderr") or result.get("stdout") or "codegraph_affected_failed"
+    codegraph_suggested = list(suggested)
+    test_fallback_suggested, test_discovery = _discover_repo_test_fallbacks(
+        root=root,
+        changed_files=changed,
+        filter_glob=filter_glob,
+    )
+    supplement = [path for path in test_fallback_suggested if path not in suggested]
+    if supplement:
+        suggested.extend(supplement)
+    quality = "ok"
+    if fallback_used:
+        quality = "codegraph_fallback"
+    elif supplement:
+        quality = "partial_codegraph_plus_repo_fallback"
     payload = {
         "schema_version": "aistock_codegraph_affected_tests_v1",
         "generated_at": _utc_now(),
@@ -469,10 +554,19 @@ def build_affected_tests_artifact(
         "tool_version": status.get("version") or status.get("expected_version"),
         "changed_files": changed,
         "suggested_tests": suggested,
+        "codegraph_suggested_tests": codegraph_suggested,
+        "repo_fallback_suggested_tests": supplement,
         "filter": filter_glob,
         "status": "fallback" if fallback_used else "ok",
         "fallback": {"used": fallback_used, "reason": fallback_reason},
-        "source": "codegraph affected" if not fallback_used else "aistock fallback",
+        "test_discovery_fallback": {
+            "used": bool(supplement),
+            **test_discovery,
+        },
+        "quality": quality,
+        "source": "codegraph affected"
+        if not fallback_used and not supplement
+        else ("codegraph affected + aistock repo fallback" if not fallback_used else "aistock fallback"),
     }
     _write_json(out_path, payload)
     return {**payload, "artifact_path": _repo_rel(out_path, root)}
@@ -532,12 +626,16 @@ def render_summary_markdown(payload: dict[str, Any]) -> str:
         warnings.append(f"context fallback: {context_fallback.get('reason') or 'unknown'}")
     if affected_fallback.get("used"):
         warnings.append(f"affected-tests fallback: {affected_fallback.get('reason') or 'unknown'}")
+    test_discovery = affected.get("test_discovery_fallback") or {}
+    if test_discovery.get("used"):
+        warnings.append("affected-tests supplemented by repo-local Python import scan")
     lines = [
         "## Code Intelligence Summary",
         "",
         f"- provider: `{payload.get('provider') or 'codegraph'}`",
         f"- status: `{payload.get('status') or 'unknown'}`",
         f"- fallback_used: `{str(bool(payload.get('fallback_used'))).lower()}`",
+        f"- affected_quality: `{affected.get('quality') or 'unknown'}`",
         f"- context_ref: `{payload.get('context_ref') or 'not_generated'}`",
         f"- affected_tests_ref: `{payload.get('affected_tests_ref') or 'not_generated'}`",
         f"- changed_files: `{_inline(affected.get('changed_files') or context.get('changed_files'))}`",
