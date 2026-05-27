@@ -445,6 +445,125 @@ backend/services/research_assistant/tool_router.py
 5. 保留 `trace_id`、`job_id`、`artifact_ref`、`source_refs`。
 6. DB schema 如有新增，必须有 PostgreSQL COMMENT 和 production DDL gate。
 
+### 10.3.1 MCP 返回数据与 Token 预算硬契约
+
+所有 MCP server 和 backend façade 必须遵守 **summary-first / detail-on-demand** 契约。任何列表、搜索、概览、对比、矩阵、日志、历史查询都不得默认返回大 JSON、全量指标、全量配置、全量明细、全量矩阵或长日志。默认返回应足够让助手判断下一步，但不能把完整数据塞进一次 MCP response。
+
+#### 10.3.1.1 返回层级
+
+| 层级 | 适用工具 | 默认返回 | 禁止默认返回 |
+|---|---|---|---|
+| `list_summary` | list/search/query list | id、name/title、status、type、updated_at、关键 3-8 个摘要指标、detail_ref 或 `get_*` 提示 | 全量 JSONB、完整指标序列、完整 config、完整 artifact 内容、所有字段。 |
+| `overview` | health/overview/dashboard | 总数、状态分布、最近异常、top risks、next_actions | 全量对象列表、全量历史、全量日志。 |
+| `detail` | get by id | 单对象完整业务详情，但仍要裁剪大字段并提供 refs | 关联对象全量展开、长日志、全量矩阵、大表。 |
+| `diagnostic` | preflight/validate/plan | 检查项、PASS/FAIL、阻塞原因、影响范围、估算成本、确认要求 | 原始中间数据、完整扫描结果。 |
+| `job_result_summary` | get job/result | job 状态、摘要指标、top findings、artifact_ref | 全量计算结果、完整 dataframe/parquet 内容。 |
+| `artifact_ref` | matrix/log/detail export | URI/ref、sha256、row_count、schema、生成时间 | 直接把 artifact 内容内联返回。 |
+
+#### 10.3.1.2 默认预算
+
+| 类型 | 默认上限 | 说明 |
+|---|---:|---|
+| list/search 默认 `limit` | 20 | 用户未指定时不能超过 20。 |
+| list/search 最大 `limit` | 100 | 超过必须拒绝或要求 artifact export。 |
+| 单个 MCP response 推荐 token | <= 2,000 tokens | 普通工具目标预算。 |
+| 单个 MCP response 硬上限 | <= 6,000 tokens | 超过必须返回摘要 + `detail_ref` / `artifact_ref`。 |
+| 日志默认 tail | 200 行以内 | 更长日志必须 `log_ref`。 |
+| top findings/pairs | 20-50 | 相关性、异常、失败项默认返回 top subset。 |
+| 矩阵/表格 | 不内联全量 | 返回 shape、top pairs、artifact_ref。 |
+
+如果 backend API 原始结果较大，MCP module 必须请求 summary endpoint 或 summary 参数；不得在 MCP 侧拿全量再简单截断后丢失审计语义。后端 façade 应提供稳定的 summary/detail endpoint。
+
+#### 10.3.1.3 通用响应 Schema
+
+每个 MCP 工具应返回下列通用字段的子集：
+
+```json
+{
+  "response_mode": "summary|detail|diagnostic|job_result_summary|artifact_ref",
+  "summary_zh": "给用户看的中文摘要",
+  "items": [],
+  "item_count": 0,
+  "returned_count": 0,
+  "truncated": false,
+  "next_actions": [],
+  "detail_tool": "<server>/<get_detail_tool>",
+  "detail_args_hint": {},
+  "artifact_ref": null,
+  "trace_id": "...",
+  "warnings": []
+}
+```
+
+当 `truncated=true` 时必须提供 `detail_tool`、`detail_args_hint`、`artifact_ref` 或下一步查询方式，不能只丢弃数据。
+
+#### 10.3.1.4 分领域返回约束
+
+| MCP | 列表/概览默认返回 | 详情工具才允许返回 | 大字段处理 |
+|---|---|---|---|
+| `aistock-factor-library` | 因子名、类型、状态、coverage 摘要、最近 IC/RankIC 摘要、质量标签 | 单因子的完整元数据、指标摘要、版本历史、来源、使用记录摘要 | 完整指标序列、全量 coverage 明细、因子值样本必须 artifact_ref。 |
+| `aistock-factor-metrics` | job 列表、factor、窗口、状态、核心指标摘要 | 单 job 的指标详情和诊断 | IC time series、分组收益明细、全量 OOS 表必须 artifact_ref。 |
+| `aistock-factor-correlation` | 任务摘要、factor_count、top correlated pairs、cluster 摘要 | 单 job 的 top pairs、cluster、替换建议 | 完整相关性矩阵必须 artifact_ref，禁止内联。 |
+| `aistock-model-registry` | model_id、类型、状态、主要指标、seed 稳定性摘要、artifact 状态 | 单模型 trial、feature schema 摘要、artifact manifest、超参摘要 | 模型权重、完整训练日志、完整 feature importance 表必须 ref。 |
+| `aistock-strategy-governance` | package_id、状态、health、readiness、阻塞原因摘要 | 单策略包 manifest 摘要、promotion plan、validation gates | frozen manifest 可摘要展示，完整 manifest 走 detail/ref。 |
+| `aistock-execution-policy` | algo 名称、适用场景、风险等级、支持状态 | 单算法参数、约束、适配诊断 | 长回测/仿真/逐笔执行结果必须 artifact_ref。 |
+| `aistock-qe-archive` | run/outbox/job/skips 摘要、质量状态、top issues | 单 run quality、source status、backfill preview | 完整 payload、全量 run_config、长事件历史必须 ref。 |
+| `aistock-qe-experiment` | experiment/task/loop 摘要、核心指标、状态 | 单实验/loop 详情、配置摘要、日志 tail | 完整 config_json、metrics_json、agent_analysis、长日志必须 detail/ref。 |
+| `aistock-local-data` | dataset readiness、gap 摘要、job/schedule 状态 | 单 dataset/job/schedule 详情 | 大范围 gap 明细、日志、全量 data_stats 必须 ref 或分页。 |
+| `aistock-validation` | BUG/issue/run/finding 摘要 | 单 BUG agent context、validation run detail | 长验证日志、完整 GitHub body/history 必须 ref/tail。 |
+
+#### 10.3.1.5 因子库示例契约
+
+`factor_library_list` 默认只能返回概要：
+
+```json
+{
+  "response_mode": "summary",
+  "items": [
+    {
+      "factor_name": "price_volume_corr_20d",
+      "factor_type": "price_volume",
+      "status": "active",
+      "coverage_end": "2026-05-27",
+      "quality_label": "usable",
+      "latest_rank_ic": 0.031,
+      "stability_label": "medium",
+      "detail_tool": "aistock-factor-library/factor_library_get",
+      "detail_args_hint": {"factor_name": "price_volume_corr_20d"}
+    }
+  ],
+  "returned_count": 20,
+  "truncated": true,
+  "next_actions": ["如需某个因子的完整指标和版本历史，请调用 factor_library_get。"]
+}
+```
+
+`factor_library_get` 只针对一个因子返回详情；如果指标序列很长，仍必须拆为 summary + artifact_ref：
+
+```json
+{
+  "response_mode": "detail",
+  "factor_name": "price_volume_corr_20d",
+  "metadata": {},
+  "metric_summary": {},
+  "version_history": [],
+  "usage_summary": {},
+  "long_metric_series_ref": "artifact://factor_library/price_volume_corr_20d/metrics.parquet",
+  "truncated": true
+}
+```
+
+#### 10.3.1.6 测试要求
+
+每个 MCP server 必须有 payload budget 测试：
+
+1. list/search 不包含禁止字段，例如 `metrics_json`、`config_json`、`agent_analysis`、`full_matrix`、`raw_rows`、`full_manifest`、`log_text`。
+2. list/search 默认 limit 为 20。
+3. 大字段存在时返回 `artifact_ref` 或 detail tool hint。
+4. 单个 response 序列化后大小低于配置阈值。
+5. detail 工具只对单 id/factor/model/package 返回详情，拒绝无范围全量 detail。
+6. 相关性矩阵、日志、parquet、模型权重、因子值明细永不内联。
+
 ### 10.4 因子库 MCP：`aistock-factor-library`
 
 定位：让助手理解“因子库有什么、因子来自哪里、覆盖到哪天、质量如何、是否适合继续用于 QE/模型/策略”。
@@ -839,6 +958,48 @@ def register(registry: ModuleRegistry) -> None:
 | U-MCP-008 | 不再限制公告式回复 | 第 7.3、11E | 能力问答 snapshot 不出现大段“只能/不具备”清单。 |
 | U-MCP-009 | 高风险仍受控 | 第 7.2 | 写入/运行/补录/GitHub sync 均需 preflight/confirm/approval。 |
 | U-MCP-010 | 未来 MCP 可扩展 | 第 10、11G | 因子、模型、策略、执行策略 MCP 都有统一接入模板。 |
+| TOKEN-MCP-001 | MCP 返回不得占用大量 token | 第 10.3.1 | list/search/overview 默认 summary-first，禁止全量详情。 |
+| TOKEN-MCP-002 | 因子库列表不得返回全量指标 | 第 10.3.1.4、10.3.1.5 | `factor_library_list` 只返回概要，单因子详情走 `factor_library_get`。 |
+| TOKEN-MCP-003 | 大矩阵/日志/明细必须 artifact_ref | 第 10.3.1.2、10.3.1.4 | correlation matrix、长日志、parquet、权重不内联。 |
+| FULL-MCP-001 | 禁止最小实现/简化版/POC | 第 12A | 六个新增 MCP、catalog、router、tests、client config 全部完成才可称完整。 |
+
+## 12A. 完整实现门禁：禁止最小实现、简化版和 POC
+
+本项目明确禁止把本方案落地为“最小实现”“简化版”“子集版”“占位版”“mock-only”“只登记目录不实现工具”“只做一个示例 MCP”“只做 read-only 但声称完整”“只做后端不接 Research Assistant 路由”“只做 catalog 不接外部 MCP client”。
+
+### 12A.1 完整实现定义
+
+完整实现必须同时满足：
+
+1. **六个新增 MCP server 全部实现**：`aistock-factor-library`、`aistock-factor-metrics`、`aistock-factor-correlation`、`aistock-model-registry`、`aistock-strategy-governance`、`aistock-execution-policy`。
+2. **统一 Gateway 全部接入**：每个 MCP 都有 `backend/mcp/modules/<module>.py`、`backend/mcp/profiles.py` profile、`.mcp.json` / Codex / Claude 配置模板、direct list_tools 验证。
+3. **后端 façade 全部具备**：每个 MCP 有对应 `/api/v1/<domain>/*` summary/detail/preflight/confirmed 或 job API；不能只写 MCP wrapper。
+4. **Research Assistant 全部可见**：每个 server/tool 进入 `mcp_capability_catalog.yaml`、DB seed/sync、自然语言领域词表、Tool Router、prompt guard、humanized response。
+5. **自然语言路由全部覆盖**：因子库、因子指标、因子相关性、模型库、策略库、执行策略库都有多表达方式测试。
+6. **Token 契约全部落实**：每个 list/search/overview/query 工具都有 payload budget 测试和 summary-first 返回。
+7. **风险闭环全部具备**：read/plan/preflight/submit/confirmed/approval/trace 的边界按工具类型落实。
+8. **异步计算闭环全部具备**：因子指标、因子相关性等大计算必须有 job submit/status/result/artifact_ref，不允许同步长计算。
+9. **文档和验收矩阵全部同步**：Design Acceptance Index 每一项都有实现位置和验证命令。
+10. **生产门禁明确**：DDL、backend dependency、frontend dependency、运行时重启需求必须逐项报告。
+
+### 12A.2 禁止交付形态
+
+| 禁止形态 | 说明 |
+|---|---|
+| 只实现 `factor_library` 一个 MCP | 不满足六个新增 MCP 全部接入。 |
+| 只写设计，不写 catalog/router/tests，却声称可用 | 不满足 Research Assistant 可用性。 |
+| 只在 `.mcp.json` 登记 server，但无 backend façade | 不满足工具闭环。 |
+| MCP wrapper 直接查 DB 或执行脚本 | 违反统一 Gateway 和 façade 原则。 |
+| list 工具返回全量详情 | 违反 token 契约。 |
+| 大计算同步阻塞 MCP stdio | 违反异步 job 契约。 |
+| 只有 mock API / mock data | 不满足真实业务可用。 |
+| 只做 read-only，却声称完整支持修复/注册/推广 | 违反完整实现定义。 |
+| 跳过 Codex/Claude client 注册 | 不满足“所有 MCP 工具可被助手/外部 agent 使用”。 |
+| 没有测试或只有 smoke | 不满足完整验收。 |
+
+### 12A.3 分阶段可以拆，但最终不能降级
+
+允许开发执行上分 PR / 分阶段推进，但每个阶段都必须明确“尚未完整”，不得合并后宣称最终完成。只有所有 DAI / NEW-MCP / TOKEN-MCP 验收项全部通过，才能报告“完整实现完成”。
 
 ## 13. 测试计划
 
