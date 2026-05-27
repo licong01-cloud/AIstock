@@ -192,7 +192,6 @@ def compact_experiment_row(row: Mapping[str, Any], *, include_config_summary: bo
         "experiment_id",
         "experiment_name",
         "status",
-        "factor_names",
         "model_id",
         "strategy_id",
         "qe_task_id",
@@ -208,9 +207,15 @@ def compact_experiment_row(row: Mapping[str, Any], *, include_config_summary: bo
         "completed_at",
     )
     item = {key: row.get(key) for key in base_keys if key in row}
+    if "factor_count" in row:
+        item["factor_count"] = row["factor_count"]
+    else:
+        factor_names = row.get("factor_names")
+        item["factor_count"] = len(factor_names) if isinstance(factor_names, (list, tuple)) else 0
     metrics = compact_metric_summary(row.get("result_metrics"), row=row)
     item.update(metrics)
-    item["metrics_summary"] = metrics
+    if metrics:
+        item["metrics_summary"] = metrics
     if include_config_summary:
         config_summary = compact_config_summary(row.get("custom_params"))
         if config_summary:
