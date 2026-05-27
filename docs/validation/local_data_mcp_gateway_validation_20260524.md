@@ -99,3 +99,5 @@
 - PR #180 同步主线后的首次 `Context, scope, and open-source tooling dry-run` 失败原因为 `backend/main.py` 的既有启动顺序：该文件必须先设置项目路径并加载 `.env`，再导入内部 router；本 PR 新增 `local_data` router 使该文件进入 changed-file Ruff 检测范围，从而触发 `E402`。
 - `backend/main.py` 已增加文件级 `# ruff: noqa: E402`，显式保留上述启动约束，不改变 Local Data router 的已验证挂载或任何生产运行态。
 - 本地复验已按 PR Quality 的 changed-Python 范围运行 Ruff 并通过；后续以 GitHub Actions 重新触发的结果作为合入门禁。
+- Ruff 修复 push 后，第二次 PR Quality 在构建 summary 时报告 `origin/main...HEAD: no merge base`；RCA 表明 workflow 虽使用 `fetch-depth: 0`，却又以 `git fetch origin "${BASE_REF}" --depth=1` 将最新 base 置为 shallow 边界，无法处理已合并最新 `main` 的长生命周期 PR。
+- `.github/workflows/pr-quality.yml` 已改为保留 base 历史的普通 fetch，使 `issue_flow.py pr-check` 与后续 three-dot diff 能在同步主线后的分支上正常计算 merge base；此变更仅修复 PR 门禁路径，不影响产品运行态。
