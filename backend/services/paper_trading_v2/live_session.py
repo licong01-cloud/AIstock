@@ -7,6 +7,7 @@ live work and it never switches data sources or algorithms implicitly.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
@@ -488,10 +489,12 @@ class PaperTradingLiveMinuteExecutor:
             # The live session keeps the portfolio operational between days;
             # the strict day runner still expects READY before creating a run.
             self.repository.update_portfolio_status(session.portfolio_id, PortfolioStatus.READY)
+        runtime_config = deepcopy(session.runtime_config)
+        self._ensure_live_selection_cutoff(runtime_config, trade_date=trade_date)
         result = self.day_helper.run_day(
             portfolio_id=session.portfolio_id,
             trade_date=trade_date,
-            runtime_config=session.runtime_config,
+            runtime_config=runtime_config,
         )
         self.repository.save_session_day(
             PaperSessionDay(
@@ -572,7 +575,7 @@ class PaperTradingLiveMinuteExecutor:
             instantiate_runtime=False,
             require_runtime_assets=False,
         )
-        config = dict(session.runtime_config)
+        config = deepcopy(session.runtime_config)
         config["validated_execution_policy"] = execution_policy_context
         config.setdefault("paper_v2_session", {})
         config["paper_v2_session"]["signal_data_source"] = self._signal_data_source(session, portfolio_data_source=portfolio.data_source)
