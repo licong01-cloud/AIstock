@@ -1,7 +1,7 @@
 ﻿# Paper v2 MiniQMT 无人值守自动运行详细设计（2026-05-27）
 
 > 状态：详细设计，待按阶段实现  
-> 分支：`docs/miniqmt-auto-run-design-20260527`  
+> 分支：`docs/miniqmt-auto-run-design-20260527`；Issue 生命周期矩阵补充分支：`docs/miniqmt-auto-run-issue-matrix-20260527`  
 > 范围：Paper Trading v2、MiniQMT SIM、StrategyPackage 接入模拟盘、自动调度、后端重启恢复、组合级运行配置、UI 可观测性、验证矩阵  
 > 非范围：MiniQMT live 实盘下单、QE 训练流程重构、StrategyPackage alpha core 修改、多个 MiniQMT 真实账户的券商侧开户/登录自动化
 
@@ -629,7 +629,50 @@ Invoke-RestMethod http://127.0.0.1:8001/api/v1/paper-v2/session-scheduler/status
 
 当前已存在的 MiniQMT session 如果仍为 `LIVE_WAITING_NEXT_TRADING_DAY` 且 MiniQMT 客户端保持 `SIM` 登录，重启后 scheduler 会继续 tick。注意：在交易窗口等待逻辑正式实现前，仍建议明早人工观察一次，防止过早 tick 被 MiniQMT 拒绝后进入失败状态。
 
-## 13. 合入标准
+## 13. 相关 Issue 生命周期处理矩阵
+
+本设计必须把“代码已修复但 lifecycle/close-sync 未关闭”和“尚不能关闭、仍有未完成证据”的问题分开处理，避免把未验收问题误关闭，也避免已修复问题长期停留在 OPEN 状态干扰后续排期。当前口径以 2026-05-27 的主线和 PR 状态为准：PR `#244` 仍未合入 `main`，因此 GitHub Issue 暂时全部保持 OPEN；本节只补充处理方案，不在本文档变更中执行 close-sync 或关闭 GitHub Issue。
+
+### 13.1 已修复，待 PR #244 合入后执行 close-sync
+
+这些问题的代码修复已经完成，剩余工作是把 BUG JSON / 审计记录随 PR `#244` 合入 `main` 后，通过标准 close-sync 流程关闭 GitHub Issue。关闭动作必须发生在修复和审计记录已经进入主线之后，不得在 PR `#244` 合入前提前关闭。
+
+| Issue | 当前修复状态 | 当前证据状态 | PR #244 合入后的动作 | 禁止动作 |
+|---|---|---|---|---|
+| `BUG-104` / `#173` | 代码已修复；SimulationRuntime 生产运行上下文和自动/手动入口不再作为当前 MiniQMT/Paper v2 阻断。 | BUG JSON 已在审计分支标记 `fixed`；GitHub Issue 仍 OPEN。 | 确认 fixed 状态和审计记录已进入 `main` 后执行 `close-sync`，关闭 `#173`。 | 不得因 `#173` 仍 OPEN 阻止 MiniQMT auto-run 设计和实现；不得在审计记录未进主线前提前关闭。 |
+| `BUG-111` / `#181` | 代码已修复；Selection Center no-HMM 选股不应再被 Paper runtime-profile trading gate 阻断。 | BUG JSON 在 PR `#244` 中标记 `fixed`；GitHub Issue 仍 OPEN。 | PR `#244` 合入后执行 `close-sync`，关闭 `#181`。 | 不得重新引入 runtime profile activation 作为选股/模拟盘策略包门禁。 |
+| `BUG-112` / `#182` | 代码已修复；HMM 平台运行从手工 snapshot 模式转向每日自动 compute/cache。 | BUG JSON 在 PR `#244` 中标记 `fixed`；GitHub Issue 仍 OPEN。 | PR `#244` 合入后执行 `close-sync`，关闭 `#182`。 | 不得恢复“每天手工选择/生成 HMM snapshot 才能运行”的模式。 |
+| `BUG-113` / `#183` | 代码已修复；选股结果显示股票名称、PIT 入场价格和 TDX 当前价格。 | BUG JSON 在 PR `#244` 中标记 `fixed`；GitHub Issue 仍 OPEN。 | PR `#244` 合入后执行 `close-sync`，关闭 `#183`。 | 不得把当前价写成入池价；历史日期选股必须使用 PIT 截止价。 |
+| `BUG-114` / `#184` | 代码已修复；选股 UI 不再暴露可运行但必失败的实时数据源选项。 | BUG JSON 在 PR `#244` 中标记 `fixed`；GitHub Issue 仍 OPEN。 | PR `#244` 合入后执行 `close-sync`，关闭 `#184`。 | 不得把 `TDX_REALTIME` / `MINIQMT_REALTIME` 作为因子计算数据源重新列出。 |
+| `BUG-115` / `#185` | 代码已修复；Paper v2 策略包级行业黑名单 UI 不再依赖 QE 全局配置。 | BUG JSON 在 PR `#244` 中标记 `fixed`；GitHub Issue 仍 OPEN。 | PR `#244` 合入后执行 `close-sync`，关闭 `#185`。 | 不得引入 AIstock 全局黑名单；QE 全局只属于 QE 实验域。 |
+| GitHub-only `#222` | stale/duplicate CI issue；当前主线和 PR `#244` CI 已绿，缺陷已被后续修复覆盖。 | 无 BUG JSON；GitHub Issue 仍 OPEN。 | PR `#244` 合入并确认 CI 仍绿后，用 GitHub issue 关闭说明标记 stale/duplicate resolved。 | 不得新建 BUG JSON 反向补录；不得把它作为新的 Paper v2 blocker。 |
+| GitHub-only `#228` | stale/duplicate CI issue；当前主线和 PR `#244` CI 已绿，缺陷已被后续修复覆盖。 | 无 BUG JSON；GitHub Issue 仍 OPEN。 | PR `#244` 合入并确认 CI 仍绿后，用 GitHub issue 关闭说明标记 stale/duplicate resolved。 | 不得新建 BUG JSON 反向补录；不得把它作为新的 Paper v2 blocker。 |
+
+关闭执行顺序：
+
+1. 合入 PR `#244`，确认 BUG JSON、共享验证历史和审计记录均已进入 `main`。
+2. 确认 `main` / GitHub CI 对 PR `#244` 合入结果仍为 green。
+3. 对 `BUG-104`、`BUG-111`、`BUG-112`、`BUG-113`、`BUG-114`、`BUG-115` 逐个执行标准 `close-sync`，关闭 GitHub Issue `#173`、`#181`、`#182`、`#183`、`#184`、`#185`。
+4. 对 GitHub-only `#222`、`#228` 写明 stale/duplicate CI 原因和当前 green 证据后关闭。
+5. 关闭完成后保留 close-sync 记录；不得把这些 Issue 再作为 MiniQMT auto-run 或选股准入 blocker。
+
+### 13.2 尚不能关闭，必须保留 OPEN
+
+以下问题不是单纯 lifecycle/close-sync 漏关闭，而是仍缺生产数据修复证据或完整验收。它们必须继续 OPEN，并在 MiniQMT auto-run 开发和验收中作为风险/依赖追踪。
+
+| Issue | 已完成部分 | 未完成证据/验收 | 对本设计的影响 | 关闭前必须满足 |
+|---|---|---|---|---|
+| `BUG-103` / `#172` | 已完成“manifest 漂移隔离/不全局阻塞”的部分修复，避免 drift 直接阻断所有 Selection Center / Paper v2 路径。 | `live manifest-integrity` 仍有 `drifted_count=10`；缺生产数据 repair/quarantine 证据。 | MiniQMT auto-run 不得把未修复漂移当成已清零；策略包入场仍只允许资产完整性检查，但漂移包必须被隔离或明确提示。 | 生产 manifest drift 修复或 quarantine 完成；`drifted_count=0` 或有逐包隔离证据；验证记录进入主线；GitHub Issue 才能 close-sync。 |
+| `BUG-116` / `#187` | Paper v2 官方交易日状态 service/API 已实现一部分，并已禁止 weekday fallback。 | Local Data 状态展示、`/api/calendar/sync` 后 cache refresh/invalidation、完整 freshness/timezone 语义仍未完全验收。 | 本设计必须使用官方交易日接口，但不能宣称 Local Data 和全平台 calendar freshness 已全部完成。 | Local Data 页面展示接入；calendar sync 后文件缓存自动 refresh/invalidate；Asia/Shanghai 时区、最近/下一交易日、缓存覆盖告警完整验收后才能 close-sync。 |
+
+保留 OPEN 的执行要求：
+
+1. `BUG-103/#172` 必须继续作为生产数据 repair/quarantine 任务，不得用“已隔离不阻塞”替代“数据已修复”。
+2. `BUG-116/#187` 必须继续作为全平台交易日状态完整化任务；MiniQMT auto-run 实现可调用现有官方接口，但必须在风险说明中标注 Local Data/cache invalidation 尚未完全闭环。
+3. 后续开发如果发现上述问题影响 MiniQMT auto-run 验证，只能补充证据或修复，不得为了跑通演示而关闭 Issue。
+4. close-sync 前必须重新核对 GitHub Issue、BUG JSON、验证历史和 `main` 代码状态，避免仅凭旧审计记录关闭。
+
+## 14. 合入标准
 
 代码实现合入 main 前必须满足：
 
@@ -639,3 +682,4 @@ Invoke-RestMethod http://127.0.0.1:8001/api/v1/paper-v2/session-scheduler/status
 4. `production_frontend_dependency_gate` 明确：UI 如新增依赖必须 build 验证。
 5. MiniQMT SIM 验证只允许 SIM 账号；不得触发 live 实盘。
 6. 不允许把未实现的 Phase 报告为完成。
+
