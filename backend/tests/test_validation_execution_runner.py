@@ -13,6 +13,7 @@ from importlib.util import module_from_spec, spec_from_file_location
 
 from backend.services.validation.execution_runner import (
     JOB_SCHEMA_VERSION,
+    ROOT_MAIN_VALIDATION_CONFIRM_TEXT,
     RunnerResult,
     ValidationExecutionRunner,
     ValidationRunnerError,
@@ -360,6 +361,11 @@ def _init_git_repo(path: Path) -> None:
     subprocess.run(["git", "checkout", "-q", "-b", "feature/test-branch"], cwd=str(path), check=True, shell=False)
 
 
+def _init_git_main_repo(path: Path) -> None:
+    _init_git_repo(path)
+    subprocess.run(["git", "checkout", "-q", "-B", "main"], cwd=str(path), check=True, shell=False)
+
+
 def test_workspace_path_accepted_for_allowlisted_worktree(tmp_path: Path) -> None:
     worktree = tmp_path / "worktrees" / "bug-xxx"
     worktree.mkdir(parents=True)
@@ -475,6 +481,66 @@ def test_default_root_workspace_archives_to_runner_tmp(tmp_path: Path) -> None:
 
     run_record = Path(job["archive"]["run_record_path"])
     assert execution_root / "history" in run_record.parents
+    assert not (tmp_path / "tests" / "aistock_validation" / "history").exists()
+
+
+def test_canonical_root_main_workspace_rejected_by_default(tmp_path: Path) -> None:
+    _init_git_main_repo(tmp_path)
+    catalog_path = tmp_path / "plans.yaml"
+    _write_catalog(catalog_path, runner_enabled=True)
+    runner = ValidationExecutionRunner(
+        plan_catalog=ValidationPlanCatalog(catalog_path),
+        execution_root=tmp_path / "jobs",
+        repo_root=tmp_path,
+        run_inline=True,
+        executor=lambda c, e, cwd, t: RunnerResult(return_code=0, output="ok"),
+    )
+
+    with pytest.raises(ValidationRunnerError, match="canonical root main"):
+        runner.start_job(plan_key="l0")
+
+    assert not (tmp_path / "tests" / "aistock_validation" / "history").exists()
+    assert runner.list_jobs(page=1, page_size=20)["total"] == 0
+
+
+def test_canonical_root_main_workspace_confirmed_run_uses_runner_tmp(tmp_path: Path) -> None:
+    _init_git_main_repo(tmp_path)
+    catalog_path = tmp_path / "plans.yaml"
+    _write_catalog(catalog_path, runner_enabled=True)
+    execution_root = tmp_path / "jobs"
+    runner = ValidationExecutionRunner(
+        plan_catalog=ValidationPlanCatalog(catalog_path),
+        execution_root=execution_root,
+        repo_root=tmp_path,
+        run_inline=True,
+        executor=lambda c, e, cwd, t: RunnerResult(return_code=0, output="ok"),
+    )
+
+    job = runner.start_job(plan_key="l0", confirm_text=ROOT_MAIN_VALIDATION_CONFIRM_TEXT)
+
+    run_record = Path(job["archive"]["run_record_path"])
+    assert job["workspace_is_root"] is True
+    assert job["workspace_branch"] == "main"
+    assert execution_root / "history" in run_record.parents
+    assert not (tmp_path / "tests" / "aistock_validation" / "history").exists()
+
+
+def test_canonical_root_main_rejects_in_repo_explicit_history_root(tmp_path: Path) -> None:
+    _init_git_main_repo(tmp_path)
+    catalog_path = tmp_path / "plans.yaml"
+    _write_catalog(catalog_path, runner_enabled=True)
+    runner = ValidationExecutionRunner(
+        plan_catalog=ValidationPlanCatalog(catalog_path),
+        execution_root=tmp_path / "jobs",
+        history_root=tmp_path / "tests" / "aistock_validation" / "history",
+        repo_root=tmp_path,
+        run_inline=True,
+        executor=lambda c, e, cwd, t: RunnerResult(return_code=0, output="ok"),
+    )
+
+    with pytest.raises(ValidationRunnerError, match="explicit history_root"):
+        runner.start_job(plan_key="l0", confirm_text=ROOT_MAIN_VALIDATION_CONFIRM_TEXT)
+
     assert not (tmp_path / "tests" / "aistock_validation" / "history").exists()
 
 

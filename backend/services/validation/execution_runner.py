@@ -20,6 +20,7 @@ from backend.services.validation.plan_catalog import FORBIDDEN_BACKEND_PORTS, RE
 
 DEFAULT_EXECUTION_ROOT = REPO_ROOT / "tmp" / "validation" / "runner" / "jobs"
 HISTORY_RELATIVE_ROOT = Path("tests") / "aistock_validation" / "history"
+ROOT_MAIN_VALIDATION_CONFIRM_TEXT = "ALLOW_ROOT_MAIN_VALIDATION_TMP_ONLY"
 JOB_SCHEMA_VERSION = "aistock_validation_execution_job_v1"
 EVIDENCE_SCHEMA_VERSION = "aistock_validation_runner_evidence_v1"
 JOB_ID_RE = re.compile(r"^valjob_[0-9]{8}_[0-9]{6}_[0-9a-f]{8}$")
@@ -367,17 +368,18 @@ class ValidationExecutionRunner:
     ) -> dict[str, Any]:
         plan = self._validate_plan(plan_key, confirm_text=confirm_text)
         resolved_cwd = self._validate_workspace_path(workspace_path, self.repo_root)
+        workspace_branch = _git_branch(resolved_cwd)
+        workspace_commit = _git_commit(resolved_cwd)
+        self._validate_root_main_workspace(resolved_cwd, workspace_branch, confirm_text)
         if expected_branch:
-            actual_branch = _git_branch(resolved_cwd)
-            if actual_branch != expected_branch:
+            if workspace_branch != expected_branch:
                 raise ValidationRunnerError(
-                    f"expected_branch {expected_branch!r} does not match actual branch {actual_branch!r}"
+                    f"expected_branch {expected_branch!r} does not match actual branch {workspace_branch!r}"
                 )
         if expected_commit:
-            actual_commit = _git_commit(resolved_cwd)
-            if actual_commit != expected_commit:
+            if workspace_commit != expected_commit:
                 raise ValidationRunnerError(
-                    f"expected_commit {expected_commit!r} does not match actual commit {actual_commit!r}"
+                    f"expected_commit {expected_commit!r} does not match actual commit {workspace_commit!r}"
                 )
         resolved_backend_port = self._resolve_port(plan, backend_port, "backend")
         resolved_frontend_port = self._resolve_port(plan, frontend_port, "frontend")
@@ -385,8 +387,6 @@ class ValidationExecutionRunner:
         job_id = f"valjob_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
         command = [sys.executable, "-m", "nox", "-s", str(plan["nox_session"])]
         env = self._runner_env(plan, resolved_backend_port, resolved_frontend_port, resolved_cwd)
-        workspace_branch = _git_branch(resolved_cwd)
-        workspace_commit = _git_commit(resolved_cwd)
         job = {
             "schema_version": JOB_SCHEMA_VERSION,
             "job_id": job_id,
@@ -432,6 +432,22 @@ class ValidationExecutionRunner:
         thread.start()
         current = self.get_job(job_id)
         return current or job
+
+    def _validate_root_main_workspace(self, workspace: Path, branch: str | None, confirm_text: str | None) -> None:
+        is_root_main = workspace.resolve() == self.repo_root.resolve() and branch == "main"
+        if not is_root_main:
+            return
+        if self._history_root_explicit and _is_inside(self.history_root, self.repo_root):
+            raise ValidationRunnerError(
+                "canonical root main cannot be used with an in-repo explicit history_root; "
+                "run validation in a task worktree or use ignored runner tmp storage"
+            )
+        if confirm_text != ROOT_MAIN_VALIDATION_CONFIRM_TEXT:
+            raise ValidationRunnerError(
+                "canonical root main cannot be used as the default validation workspace; "
+                "pass a task worktree workspace_path, or use "
+                f"confirm_text={ROOT_MAIN_VALIDATION_CONFIRM_TEXT!r} for an audited tmp-only root run"
+            )
 
     def _validate_plan(self, plan_key: str, *, confirm_text: str | None) -> dict[str, Any]:
         plan = self.plan_catalog.get_plan(plan_key)
