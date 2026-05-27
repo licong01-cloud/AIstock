@@ -41,8 +41,8 @@
   "expected": "Issue and validation workflows write only inside isolated task worktrees or stdout/transient storage; canonical root main remains a runtime and sync target.",
   "first_seen_at": "2026-05-27T11:02:59.324424Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "039a5a2521151806b73ce564a074c8b84cf58dae",
+  "fixed_at": "2026-05-27T11:37:09.546447Z",
   "github_issue_number": 247,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/247",
   "last_seen_at": "2026-05-27T11:02:59.324424Z",
@@ -50,6 +50,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/248",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -65,7 +66,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation_platform"
   ],
@@ -74,5 +75,8 @@
     "fingerprint": "68728db2d6b49dceb9a1628d",
     "source_event_id": "FE-20260527-68728db2d6b4"
   },
+  "validation_evidence": [
+    "PR #248 CI green and merged"
+  ],
   "verification_run_id": null
 }
