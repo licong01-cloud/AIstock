@@ -6,10 +6,10 @@
     "backend/tests/research_assistant/test_api.py",
     "frontend/tests/research-assistant/research-assistant.spec.ts",
     "tests/aistock_validation/bugs/.bug_id_allocator.json",
-    "tests/aistock_validation/bugs/20260527_BUG-127-research-assistant-capability-inquiry-hallucinates-generic-mcp-list-and.json"
+    "tests/aistock_validation/bugs/20260527_BUG-128-research-assistant-capability-inquiry-hallucinates-generic-mcp-list-and.json"
   ],
   "assigned_agent": "codex",
-  "bug_id": "BUG-127",
+  "bug_id": "BUG-128",
   "closed_at": null,
   "closure_requirements": [
     "MCP/tools capability inquiry is answered from assistant_mcp_tools runtime catalog, not a generic LLM tool list.",
@@ -43,6 +43,18 @@
       "actor": "codex",
       "note": "Expanded allowed_write_scope to include workflow-required BUG JSON and allocator synchronization artifacts.",
       "timestamp": "2026-05-27T06:46:45.995578+00:00"
+    },
+    {
+      "action": "bug_id_renumbered_due_to_allocator_collision",
+      "actor": "codex",
+      "note": "Renumbered Research Assistant MCP capability issue from BUG-127 to BUG-128 because origin/main already registered BUG-127 for the watchlist redundant-columns issue.",
+      "timestamp": "2026-05-27T06:54:28.283684+00:00"
+    },
+    {
+      "action": "pr_opened",
+      "actor": "codex",
+      "note": "Opened PR #245 for Research Assistant MCP capability grounding fix.",
+      "timestamp": "2026-05-27T06:54:28.283699+00:00"
     }
   ],
   "evidence_uris": [
@@ -60,6 +72,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/245",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
