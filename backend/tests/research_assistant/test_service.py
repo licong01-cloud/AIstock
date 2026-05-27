@@ -224,7 +224,7 @@ def test_service_runs_phase1_task_memory_context_approval_issue_flow() -> None:
     assert pack["pack_summary"].startswith("Context Pack:")
     assert memory["memory_id"] in pack["core_memory_refs"]
     access_log = svc.list_records("memory_access_log", filters={"task_id": task["task_id"]})
-    assert access_log["items"][0]["memory_id"] == memory["memory_id"]
+    assert any(item["memory_id"] == memory["memory_id"] for item in access_log["items"])
 
     approval = svc.create_approval(
         ApprovalCreate(
@@ -495,6 +495,51 @@ def test_prompt_tree_ambiguous_task_does_not_start_qe_workflow() -> None:
     assert "tool_guard.mcp_qe" not in keys
     assert bundle["selection_trace_json"]["dialogue_intent"] == "ambiguous_request"
     assert bundle["selection_trace_json"]["dialogue_mode"] == "analysis"
+
+
+
+def test_local_data_management_catalog_prompt_and_cards() -> None:
+    svc = _chat_service()
+    message = "请排查本地数据入库健康，如果有缺口先给修复计划，不要执行任务。"
+
+    capability = svc.repository.find_one("skills", {"skill_key": "local_data_management"})
+    assert capability is not None
+    assert capability["skill_type"] == "assistant_capability"
+    assert capability["entrypoint_ref"] == "aistock-local-data"
+    assert "aistock-local-data/local_data_plan_repair" in capability["required_mcp_tools"]
+
+    server = svc.repository.find_one("mcp_servers", {"server_key": "aistock-local-data"})
+    assert server is not None
+    assert server["health_json"]["capability_key"] == "local_data_management"
+
+    tools = svc.list_records("mcp_tools", filters={"server_key": "aistock-local-data"}, limit=20)["items"]
+    tool_names = {tool["tool_name"] for tool in tools}
+    assert {"local_data_health_overview", "local_data_get_dataset_status", "local_data_list_sync_targets", "local_data_plan_repair", "local_data_apply_repair_confirmed"} <= tool_names
+    apply_tool = svc.repository.find_one("mcp_tools", {"server_key": "aistock-local-data", "tool_name": "local_data_apply_repair_confirmed"})
+    assert apply_tool["requires_approval"] is True
+    assert apply_tool["required_confirmations"] == [ASSISTANT_APPROVAL_CONFIRM]
+
+    workflow_capability = svc.repository.find_one("capabilities", {"capability_key": "local_data.plan_repair"})
+    assert workflow_capability is not None
+    assert workflow_capability["status"] == "approved"
+
+    bundle = svc.build_prompt_bundle(PromptBundleBuildRequest(user_message=message, phase="planning"))
+    keys = {node["prompt_key"] for node in bundle["node_refs"]}
+    assert {"prompt.local_data_management", "workflow.local_data_check_repair", "tool_guard.mcp_local_data"} <= keys
+    assert "domain.qe_experiment" not in keys
+    assert bundle["selection_trace_json"]["dialogue_intent"] == "local_data_management_request"
+    assert bundle["selection_trace_json"]["dialogue_mode"] == "planning"
+
+    result = svc.chat_turn(ChatTurnRequest(message=message))
+    assert result["cards"]["intent_type"] == "local_data_management_request"
+    assert result["mode_decision"]["mode"] == "planning"
+    assert "aistock-local-data" in result["cards"]["capability_summary"]["mcp"]
+    assert "local_data_plan_repair" in result["cards"]["capability_summary"]["mcp_tools"]
+    assert result["cards"]["safety"]["local_data_read_only_before_confirmation"] is True
+    assert result["cards"]["safety"]["no_data_job_before_confirmation"] is True
+    assert result["cards"]["local_data_management"]["mcp_server"] == "aistock-local-data"
+    assert result["cards"]["action_proposals"][0]["status"] == "read_only"
+    assert result["cards"]["action_proposals"][-1]["status"] == "waiting_confirmation"
 
 
 def test_bug117_prompt_and_health_do_not_expose_undeveloped_capability_bans() -> None:

@@ -1,3 +1,5 @@
+# ruff: noqa: E402
+
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,6 +29,7 @@ from .routers import (
     config_env,
     health,
     ingestion,
+    local_data,
     monitor,
     news,
     portfolio,
@@ -535,6 +538,7 @@ def create_app() -> FastAPI:
     if rl_execution is not None:
         app.include_router(rl_execution.router, prefix="/api/v1")
     app.include_router(market_regime.router, prefix="/api/v1")
+    app.include_router(local_data.router, prefix="/api/v1")
 
     # ingestion / 本地数据管理接口：保持与旧 tdx_backend 相同的 /api/* 路径
     app.include_router(ingestion.router, prefix="")

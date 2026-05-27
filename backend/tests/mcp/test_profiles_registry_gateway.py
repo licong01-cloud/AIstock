@@ -158,6 +158,21 @@ def test_gateway_loads_research_assistant_tools() -> None:
     assert registry.total_tool_count() == RESEARCH_ASSISTANT_TOOL_COUNT
 
 
+
+def test_gateway_loads_local_data_tools() -> None:
+    from backend.mcp import gateway
+    from backend.mcp.modules import local_data
+
+    _mcp, registry = gateway.create_gateway(
+        profile="local_data",
+        base_url="http://127.0.0.1:8001/api/v1",
+        env_name="test",
+    )
+
+    assert registry.tool_count("local_data") == local_data.TOOL_COUNT
+    assert registry.total_tool_count() == local_data.TOOL_COUNT
+
+
 def test_gateway_rejects_banned_future_profile_before_loading_modules() -> None:
     from backend.mcp import gateway
 

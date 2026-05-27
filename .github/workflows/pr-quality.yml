@@ -49,7 +49,8 @@ jobs:
           BASE_REF: ${{ github.base_ref || inputs.base_ref || 'main' }}
         run: |
           mkdir -p tmp/validation/pr_quality
-          git fetch origin "${BASE_REF}" --depth=1 || true
+          # Keep base history available for three-dot diffs on branches that merge main.
+          git fetch origin "${BASE_REF}" --no-tags || true
           BASE_COMMIT="origin/${BASE_REF}"
           git rev-parse --verify "${BASE_COMMIT}" >/dev/null 2>&1 || BASE_COMMIT="FETCH_HEAD"
           python scripts/issue_flow.py pr-check \

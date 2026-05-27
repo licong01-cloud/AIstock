@@ -107,6 +107,36 @@ nodes:
     trigger_json:
       always: true
     prompt_file: nodes/intent.planning.md
+  - prompt_key: prompt.local_data_management
+    title: Local Data management prompt branch
+    category: domain
+    tree_path: /root/mode/planning/domain/local_data_management
+    parent_key: intent.planning
+    phase: planning
+    risk_level: production_sensitive
+    trigger_json:
+      keywords_any: [本地数据, 数据同步, 数据入库, 同步目标, local_data, local data, data sync, dataset, ingestion]
+    prompt_file: nodes/prompt.local_data_management.md
+  - prompt_key: workflow.local_data_check_repair
+    title: Local Data check and repair workflow
+    category: workflow
+    tree_path: /root/mode/planning/domain/local_data_management/workflow/check_repair
+    parent_key: prompt.local_data_management
+    phase: planning
+    risk_level: production_sensitive
+    trigger_json:
+      keywords_any: [检查, 排查, 修复, 恢复, 补齐, 同步, 健康, repair, fix, sync, refresh, status]
+    prompt_file: nodes/workflow.local_data_check_repair.md
+  - prompt_key: tool_guard.mcp_local_data
+    title: Local Data MCP tool guard
+    category: tool_guard
+    tree_path: /root/mode/preflight/domain/local_data_management/tool_guard/mcp_local_data
+    parent_key: prompt.local_data_management
+    phase: preflight
+    risk_level: production_sensitive
+    trigger_json:
+      tools_any: [local_data_apply_repair_confirmed, local_data_run_dataset_sync_confirmed, local_data_sync_tushare_all_confirmed]
+    prompt_file: nodes/tool_guard.mcp_local_data.md
   - prompt_key: domain.qe_experiment
     title: QE 实验创建分支提示词
     category: domain

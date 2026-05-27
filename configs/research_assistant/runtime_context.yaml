@@ -540,7 +540,81 @@ planner:
     - qe.materialize_template
     - qe.run_experiment
     - qe.analyze_result
+  local_data_workflow_capability_keys:
+    - local_data.health_overview
+    - local_data.plan_repair
+    - local_data.apply_repair_confirmed
   workflow_capabilities:
+    - capability_key: local_data.health_overview
+      capability_type: mcp_tool
+      title: "本地数据健康总览"
+      natural_language_triggers:
+        - "检查本地数据"
+        - "本地数据同步状态"
+        - "local data health"
+      description_for_llm: "只读读取本地数据 readiness、告警、近期任务和同步目标总览；不启动数据任务。"
+      risk_level: low
+      side_effect_level: read_only
+      required_confirmations: []
+      preferred_model_role: primary_orchestrator
+      input_slots:
+        required: []
+      output_cards: [local_data_health, evidence_refs, next_step]
+      mcp_tool_refs:
+        - server_key: aistock-local-data
+          tool_name: local_data_health_overview
+      skill_refs:
+        - local_data_management
+      workflow_pack_ref: local_data.check_repair
+      status: approved
+      source_ref: "docs/architecture/local_data_management_mcp_gateway_design_20260523.md"
+    - capability_key: local_data.plan_repair
+      capability_type: mcp_tool
+      title: "生成本地数据修复计划"
+      natural_language_triggers:
+        - "生成本地数据修复计划"
+        - "排查数据入库缺口"
+        - "local_data_plan_repair"
+      description_for_llm: "基于健康、缺口、任务、告警和同步目标生成 plan-only 修复方案；不执行写操作。"
+      risk_level: medium
+      side_effect_level: draft_only
+      required_confirmations: []
+      preferred_model_role: primary_orchestrator
+      input_slots:
+        required: [request]
+      output_cards: [repair_plan, risk_confirmation, evidence_refs]
+      mcp_tool_refs:
+        - server_key: aistock-local-data
+          tool_name: local_data_plan_repair
+      skill_refs:
+        - local_data_management
+      workflow_pack_ref: local_data.check_repair
+      status: approved
+      source_ref: "docs/architecture/local_data_management_mcp_gateway_design_20260523.md"
+    - capability_key: local_data.apply_repair_confirmed
+      capability_type: mcp_tool
+      title: "确认后执行本地数据修复"
+      natural_language_triggers:
+        - "执行本地数据修复"
+        - "确认修复本地数据"
+        - "local_data_apply_repair_confirmed"
+      description_for_llm: "用户确认、preflight 和审批后才可执行本地数据修复计划；失败必须停止并返回证据。"
+      risk_level: production_sensitive
+      side_effect_level: production_sensitive
+      required_confirmations:
+        - APPROVE_RESEARCH_ASSISTANT_ACTION
+      preferred_model_role: primary_orchestrator
+      input_slots:
+        required: [plan_id, confirmation_text]
+      output_cards: [approval_gate, execution_trace, post_repair_recheck]
+      mcp_tool_refs:
+        - server_key: aistock-local-data
+          tool_name: local_data_apply_repair_confirmed
+      skill_refs:
+        - local_data_management
+      workflow_pack_ref: local_data.check_repair
+      status: approved
+      source_ref: "docs/architecture/local_data_management_mcp_gateway_design_20260523.md"
     - capability_key: qe.create_experiment_draft
       capability_type: workflow_pack
       title: "\u751f\u6210 QE \u5b9e\u9a8c\u8349\u6848"

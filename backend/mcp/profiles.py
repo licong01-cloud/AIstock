@@ -7,6 +7,9 @@ INITIAL_PROFILES: dict[str, list[str]] = {
     "research_assistant": ["research_assistant"],
     "assistant": ["research_assistant"],
     "research_with_assistant": ["research", "research_assistant"],
+    "local_data": ["local_data"],
+    "assistant_with_local_data": ["research_assistant", "local_data"],
+    "research_with_assistant_local_data": ["research", "research_assistant", "local_data"],
 }
 
 FUTURE_PROFILES: dict[str, list[str]] = {
@@ -16,7 +19,7 @@ FUTURE_PROFILES: dict[str, list[str]] = {
     "full": ["research", "qe_archive", "qe_experiment", "validation"],
 }
 
-_PHASE0_5_MODULES = {"research", "research_assistant"}
+_PHASE0_5_MODULES = {"research", "research_assistant", "local_data"}
 
 
 def parse_modules(value: str | list[str] | tuple[str, ...] | None) -> list[str] | None:
@@ -54,5 +57,6 @@ def resolve_modules(
         raise ValueError(f"Profile {selected!r} is future-only in Phase 0-5")
     raise ValueError(
         f"Unknown MCP profile {selected!r}; allowed Phase 0-5 profiles: "
-        "'research', 'research_assistant', 'assistant', 'research_with_assistant'"
+        "'research', 'research_assistant', 'assistant', 'research_with_assistant', "
+        "'local_data', 'assistant_with_local_data', 'research_with_assistant_local_data'"
     )

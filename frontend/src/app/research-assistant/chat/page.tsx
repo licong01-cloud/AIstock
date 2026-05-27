@@ -16,10 +16,15 @@ import Link from "next/link";
 import { useCallback, useMemo, useState } from "react";
 
 import {
+  LOCAL_DATA_MANAGEMENT_CAPABILITY,
+  LOCAL_DATA_MANAGEMENT_PHASES,
   ResearchAssistantApiError,
+  localDataRiskLabel,
   researchAssistantApi,
   type AssistantCatalogReadiness,
   type AssistantChatTurnResult,
+  type LocalDataPhase,
+  type LocalDataPhaseKey,
 } from "@/lib/research-assistant/api";
 import uiCopy from "@/lib/research-assistant/ui-copy";
 
@@ -27,6 +32,7 @@ type RailStep = { label: string; status: string };
 type PlanCard = { title?: string; steps?: string[] };
 type ClarificationCard = { title?: string; questions?: string[] };
 type Proposal = { title?: string; risk?: string; approval_required?: boolean; status?: string };
+type LocalDataPhaseCard = { key?: string; phase?: string; title?: string; label?: string; status?: string; description?: string };
 type ContextHealth = {
   status?: string;
   utilization_ratio?: number;
@@ -43,6 +49,9 @@ type ChatCards = {
   action_proposals?: Proposal[];
   status_rail?: RailStep[];
   capability_summary?: Record<string, unknown>;
+  local_data_management?: Record<string, unknown>;
+  local_data_card?: Record<string, unknown>;
+  local_data_phases?: LocalDataPhaseCard[];
   safety?: Record<string, unknown>;
   context_health?: ContextHealth;
   ui_display?: {
@@ -119,6 +128,54 @@ function proposalStatusText(status?: string): string {
   return chatCopy.proposalStatusText[status as keyof typeof chatCopy.proposalStatusText] || status;
 }
 
+
+function phaseRecordStatus(records: LocalDataPhaseCard[], phase: LocalDataPhase): string | null {
+  const matched = records.find((record) => {
+    const key = String(record.key || record.phase || "").toLowerCase();
+    const title = String(record.title || record.label || "");
+    return key === phase.key || key === phase.shortTitle || title.includes(phase.shortTitle) || title.includes(phase.title);
+  });
+  return matched?.status || null;
+}
+
+function localDataPhaseRows(cards: ChatCards, hasLatest: boolean): Array<LocalDataPhase & { status: string }> {
+  const localDataCard = asRecord(cards.local_data_management) || asRecord(cards.local_data_card) || {};
+  const explicitRecords = [
+    ...(Array.isArray(cards.local_data_phases) ? cards.local_data_phases : []),
+    ...(Array.isArray(localDataCard.phases) ? (localDataCard.phases as LocalDataPhaseCard[]) : []),
+    ...(Array.isArray(localDataCard.stage_statuses) ? (localDataCard.stage_statuses as LocalDataPhaseCard[]) : []),
+  ];
+  const fallback: Record<LocalDataPhaseKey, string> = hasLatest
+    ? { check: "done", plan: "done", confirm: "current", execute: "locked", review: "locked" }
+    : { check: "idle", plan: "idle", confirm: "locked", execute: "locked", review: "locked" };
+
+  return LOCAL_DATA_MANAGEMENT_PHASES.map((phase) => ({
+    ...phase,
+    status: phaseRecordStatus(explicitRecords, phase) || fallback[phase.key],
+  }));
+}
+
+function hasLocalDataContext(cards: ChatCards): boolean {
+  const capability = cards.capability_summary || {};
+  const promptBranches = Array.isArray(capability.prompt_branches) ? capability.prompt_branches : [];
+  return Boolean(
+    cards.local_data_management ||
+      cards.local_data_card ||
+      cards.local_data_phases?.length ||
+      capability.local_data_management ||
+      String(capability.mcp || "").includes("aistock-local-data") ||
+      promptBranches.some((item) => String(item).includes("local_data")),
+  );
+}
+
+function localDataCapabilityText(capability: Record<string, unknown>): string {
+  return String(
+    capability.local_data_management ||
+      capability.local_data ||
+      `${LOCAL_DATA_MANAGEMENT_CAPABILITY.displayName} 按检查、计划、确认、执行、复查闭环处理，确认前不会启动数据任务。`,
+  );
+}
+
 function shouldShowSideDetails(latest: AssistantChatTurnResult | null, cards: ChatCards): boolean {
   if (!latest) return true;
   const showPlan = cards.ui_display?.show_plan_card !== false;
@@ -126,7 +183,7 @@ function shouldShowSideDetails(latest: AssistantChatTurnResult | null, cards: Ch
   const hasPlan = showPlan && Boolean(cards.plan_card?.title || cards.plan_card?.steps?.length);
   const hasClarification = showClarify && Boolean(cards.clarification_card?.questions?.length);
   const hasProposal = Boolean(cards.action_proposals?.length);
-  return hasPlan || hasClarification || hasProposal;
+  return hasPlan || hasClarification || hasProposal || hasLocalDataContext(cards);
 }
 
 function createAdapter(
@@ -173,6 +230,8 @@ function TaskProgressRail({ steps, latest }: { steps: RailStep[]; latest: Assist
   const cards = asCards(latest?.cards || latest?.assistant_message?.content_json?.cards);
   const capability = cards.capability_summary || {};
   const contextHealth = cards.context_health;
+  const showLocalData = hasLocalDataContext(cards);
+  const localDataRows = localDataPhaseRows(cards, Boolean(latest));
   return (
     <aside className="ra-chat-rail" aria-label={chatCopy.rail.ariaLabel}>
       <div className="ra-chat-rail-head">
@@ -197,6 +256,18 @@ function TaskProgressRail({ steps, latest }: { steps: RailStep[]; latest: Assist
         <p>{String(capability.skill || chatCopy.rail.defaultSkill)}</p>
         <p>{String(capability.model || chatCopy.rail.defaultModel)}</p>
       </div>
+      {showLocalData ? (
+        <div className="ra-chat-capability" data-testid="ra-local-data-phase-card" style={{ marginTop: 12 }}>
+          <span className="ra-chat-eyebrow">local_data_management</span>
+          <strong>{LOCAL_DATA_MANAGEMENT_CAPABILITY.displayName}闭环</strong>
+          <p>{localDataCapabilityText(capability)}</p>
+          {localDataRows.map((phase) => (
+            <p key={phase.key}>
+              {phase.shortTitle}：{statusText(phase.status)} · {localDataRiskLabel(phase.riskLevel)}
+            </p>
+          ))}
+        </div>
+      ) : null}
       {contextHealth?.show_badge ? (
         <div className="ra-chat-capability">
           <span className="ra-chat-eyebrow">{chatCopy.rail.contextEyebrow}</span>
@@ -235,12 +306,18 @@ function PlanSummary({ latest }: { latest: AssistantChatTurnResult | null }) {
   const plan = cards.ui_display?.show_plan_card === false ? undefined : cards.plan_card;
   const clarify = cards.ui_display?.show_clarification_card === false ? undefined : cards.clarification_card;
   const proposals = cards.action_proposals || [];
+  const showLocalData = hasLocalDataContext(cards);
+  const localDataRows = localDataPhaseRows(cards, Boolean(latest));
   if (!latest) {
     return (
       <section className="ra-chat-card ra-chat-card-welcome">
         <span className="ra-chat-eyebrow">{chatCopy.planSummary.welcomeEyebrow}</span>
         <h2>{chatCopy.planSummary.welcomeTitle}</h2>
         <p>{chatCopy.planSummary.welcomeExample}</p>
+        <div className="ra-chat-confirm-card">
+          <strong>也可以直接说：检查本地数据同步情况并生成修复计划</strong>
+          <p>助理会按“检查、计划、确认、执行、复查”展示中文卡片，确认前不启动同步任务或修复任务。</p>
+        </div>
       </section>
     );
   }
@@ -265,6 +342,16 @@ function PlanSummary({ latest }: { latest: AssistantChatTurnResult | null }) {
             <span className="ra-chat-proposal" key={`${proposal.title}-${proposal.status}`}>
               {proposal.title}{chatCopy.planSummary.proposalSeparator}{proposalStatusText(proposal.status)}
             </span>
+          ))}
+        </div>
+      ) : null}
+      {showLocalData ? (
+        <div className="ra-chat-confirm-card" data-testid="ra-local-data-plan-card">
+          <strong>本地数据管理执行阶段</strong>
+          {localDataRows.map((phase) => (
+            <p key={phase.key}>
+              {phase.title}：{statusText(phase.status)}。{phase.description}
+            </p>
           ))}
         </div>
       ) : null}

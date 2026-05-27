@@ -74,6 +74,7 @@ class DialogueIntent(str, Enum):
     EXPERIMENT_DRAFT_REQUEST = "experiment_draft_request"
     EXPERIMENT_VALIDATION_REQUEST = "experiment_validation_request"
     EXPERIMENT_EXECUTION_REQUEST = "experiment_execution_request"
+    LOCAL_DATA_MANAGEMENT_REQUEST = "local_data_management_request"
     AMBIGUOUS_REQUEST = "ambiguous_request"
     GENERAL_CHAT = "general_chat"
     AUDIT_REQUEST = "audit_request"
@@ -187,6 +188,31 @@ DEFAULT_SKILLS: list[dict[str, Any]] = [
         "input_schema_json": {"type": "object"},
         "output_schema_json": {"type": "object", "required": ["findings"]},
     },
+    {
+        "skill_key": "local_data_management",
+        "title": "Local data management capability",
+        "description": "Inspect local data readiness, sync targets, ingestion evidence, and repair plans through the aistock-local-data MCP server; confirmed repair or sync execution requires approval.",
+        "domain": "data_sync",
+        "risk_level": "production_sensitive",
+        "permission_scope": "read_plan_confirmed_write",
+        "tags_json": ["local_data", "data_sync", "dataset_readiness", "repair_plan"],
+        "input_schema_json": {"type": "object", "properties": {"request": {"type": "string"}}},
+        "output_schema_json": {"type": "object", "required": ["capability_summary", "approval_required"]},
+        "required_mcp_tools": [
+            "aistock-local-data/local_data_health_overview",
+            "aistock-local-data/local_data_get_dataset_status",
+            "aistock-local-data/local_data_list_sync_targets",
+            "aistock-local-data/local_data_plan_repair",
+            "aistock-local-data/local_data_apply_repair_confirmed",
+        ],
+        "skill_type": "assistant_capability",
+        "entrypoint_type": "mcp_composite",
+        "entrypoint_ref": "aistock-local-data",
+        "allowed_side_effect_level": "controlled_write",
+        "required_approval_level": "L2",
+        "source_ref": "docs/architecture/local_data_management_mcp_gateway_design_20260523.md#research-assistant-seed",
+        "status": "approved",
+    },
 ]
 
 
@@ -195,6 +221,12 @@ DEFAULT_MCP_SERVERS: list[dict[str, Any]] = [
     {"server_key": "aistock-qe-archive", "title": "QE archive MCP", "status": "ready", "health_json": {"mode": "loopback"}},
     {"server_key": "aistock-validation", "title": "Validation MCP", "status": "ready", "health_json": {"mode": "loopback"}},
     {"server_key": "research-assistant", "title": "Research assistant MCP", "status": "ready", "health_json": {"mode": "loopback"}},
+    {
+        "server_key": "aistock-local-data",
+        "title": "Local data management MCP",
+        "status": "ready",
+        "health_json": {"mode": "loopback", "module": "local_data", "capability_key": "local_data_management"},
+    },
 ]
 
 
@@ -316,6 +348,84 @@ DEFAULT_MCP_TOOLS: list[dict[str, Any]] = [
         "preflight_schema_json": {"checks": ["github_token", "repository", "human_approval"]},
         "required_confirmations": [ASSISTANT_APPROVAL_CONFIRM],
     },
+    {
+        "server_key": "aistock-local-data",
+        "tool_name": "local_data_health_overview",
+        "title": "Local data health overview",
+        "description": "Read-only overview of dataset readiness, alerts, recent jobs, and sync targets.",
+        "risk_level": "low",
+        "side_effect_level": "read_only",
+        "requires_approval": False,
+        "input_schema_json": {"type": "object"},
+        "output_schema_json": {"type": "object"},
+        "preflight_schema_json": {"checks": ["read_only", "facade"]},
+        "required_confirmations": [],
+    },
+    {
+        "server_key": "aistock-local-data",
+        "tool_name": "local_data_get_dataset_status",
+        "title": "Local data dataset status",
+        "description": "Read-only status for one dataset, including audit, physical, cache, and last-job evidence.",
+        "risk_level": "low",
+        "side_effect_level": "read_only",
+        "requires_approval": False,
+        "input_schema_json": {"type": "object", "required": ["dataset"]},
+        "output_schema_json": {"type": "object"},
+        "preflight_schema_json": {"checks": ["read_only", "facade"]},
+        "required_confirmations": [],
+    },
+    {
+        "server_key": "aistock-local-data",
+        "tool_name": "local_data_list_sync_targets",
+        "title": "Local data sync targets",
+        "description": "Read-only list of pending, retry, blocked, or reconciled data sync targets.",
+        "risk_level": "low",
+        "side_effect_level": "read_only",
+        "requires_approval": False,
+        "input_schema_json": {"type": "object"},
+        "output_schema_json": {"type": "object"},
+        "preflight_schema_json": {"checks": ["read_only", "facade"]},
+        "required_confirmations": [],
+    },
+    {
+        "server_key": "aistock-local-data",
+        "tool_name": "local_data_list_sync_attempts",
+        "title": "Local data sync attempts",
+        "description": "Read-only timeline of data sync attempts for a dataset or target.",
+        "risk_level": "low",
+        "side_effect_level": "read_only",
+        "requires_approval": False,
+        "input_schema_json": {"type": "object"},
+        "output_schema_json": {"type": "object"},
+        "preflight_schema_json": {"checks": ["read_only", "facade"]},
+        "required_confirmations": [],
+    },
+    {
+        "server_key": "aistock-local-data",
+        "tool_name": "local_data_plan_repair",
+        "title": "Local data repair plan",
+        "description": "Plan-only repair proposal built from health, gaps, jobs, alerts, and sync targets; does not execute.",
+        "risk_level": "medium",
+        "side_effect_level": "draft_only",
+        "requires_approval": False,
+        "input_schema_json": {"type": "object"},
+        "output_schema_json": {"type": "object"},
+        "preflight_schema_json": {"checks": ["plan_only", "no_execution"]},
+        "required_confirmations": [],
+    },
+    {
+        "server_key": "aistock-local-data",
+        "tool_name": "local_data_apply_repair_confirmed",
+        "title": "Apply local data repair plan",
+        "description": "Confirmed execution of a local data repair plan; must stop on first failed step and report evidence.",
+        "risk_level": "production_sensitive",
+        "side_effect_level": "run_data_job",
+        "requires_approval": True,
+        "input_schema_json": {"type": "object", "required": ["plan_id", "confirmation_text"]},
+        "output_schema_json": {"type": "object"},
+        "preflight_schema_json": {"checks": ["confirmation_text", "plan_id", "facade", "approval"]},
+        "required_confirmations": [ASSISTANT_APPROVAL_CONFIRM],
+    },
 ]
 
 
@@ -386,6 +496,121 @@ DEFAULT_ROUTING_POLICIES: list[dict[str, Any]] = [
         "status": "enabled",
         "selector_json": {"token_estimate_gte_config_path": "model_routing.long_context_trigger_tokens"},
         "fallback_json": {"allow_fallback": True, "fallback_profile_id": "model_deepseek_v4_pro_primary"},
+    },
+]
+
+
+DEFAULT_MEMORY_SEEDS: list[dict[str, Any]] = [
+    {
+        "memory_id": "mem_architecture_local_data_management_mcp_gateway",
+        "memory_type": "architecture",
+        "namespace": "aistock",
+        "subject_key": "architecture.local_data_management.mcp_gateway",
+        "title": "Local data management MCP gateway",
+        "content_text": (
+            "本地数据管理能力由 aistock-local-data MCP server 通过统一 MCP Gateway 暴露；"
+            "MCP 只能经 backend local-data facade 或受控 job/migration 路径访问，不直接写数据库或脚本。"
+        ),
+        "content_json": {
+            "capability_key": "local_data_management",
+            "mcp_server": "aistock-local-data",
+            "prompt_branch": "prompt.local_data_management",
+            "read_only_tools": ["local_data_health_overview", "local_data_get_dataset_status", "local_data_list_sync_targets"],
+            "confirmed_tools": ["local_data_apply_repair_confirmed"],
+        },
+        "source_type": "design_seed",
+        "source_ref": "docs/architecture/local_data_management_mcp_gateway_design_20260523.md",
+        "confidence": 0.96,
+        "approval_status": "approved",
+        "risk_level": "medium",
+        "evidence_refs": ["docs/architecture/local_data_management_mcp_gateway_design_20260523.md#research-assistant-seed"],
+        "created_by": "system_seed",
+        "approved_by": "design_seed",
+    },
+    {
+        "memory_id": "mem_process_local_data_check_repair_confirm",
+        "memory_type": "procedural",
+        "namespace": "aistock",
+        "subject_key": "process.local_data.check_repair_confirm",
+        "title": "Local data check and repair confirmation flow",
+        "content_text": (
+            "本地数据检查/修复流程必须先只读检查 readiness、jobs、alerts、sync targets，"
+            "再生成 repair plan；用户确认前不得启动同步、刷新、repair apply 或直接写库；执行后必须复查状态。"
+        ),
+        "content_json": {
+            "steps": ["readiness_check", "repair_plan", "confirmation_gate", "confirmed_execution", "post_repair_recheck"],
+            "blocked_before_confirmation": ["local_data_apply_repair_confirmed", "local_data_run_dataset_sync_confirmed"],
+        },
+        "source_type": "design_seed",
+        "source_ref": "docs/architecture/local_data_management_mcp_gateway_design_20260523.md",
+        "confidence": 0.96,
+        "approval_status": "approved",
+        "risk_level": "production_sensitive",
+        "evidence_refs": ["docs/architecture/local_data_management_mcp_gateway_design_20260523.md#repair-flow"],
+        "created_by": "system_seed",
+        "approved_by": "design_seed",
+    },
+]
+
+
+DEFAULT_GRAPH_ENTITIES: list[dict[str, Any]] = [
+    {
+        "entity_key": "module.research_assistant",
+        "entity_type": "module",
+        "title": "Research Assistant",
+        "summary": "Assistant orchestration, prompt, memory, graph, and MCP safety layer.",
+    },
+    {
+        "entity_key": "capability.local_data_management",
+        "entity_type": "capability",
+        "title": "Local data management capability",
+        "summary": "Assistant-facing capability for local data health checks, sync-target inspection, and repair planning.",
+    },
+    {
+        "entity_key": "mcp.local_data",
+        "entity_type": "mcp_server",
+        "title": "aistock-local-data MCP",
+        "summary": "MCP server exposing local_data read-only tools and confirmed repair/sync tools.",
+    },
+    {
+        "entity_key": "api.local_data_facade",
+        "entity_type": "api",
+        "title": "Local data backend facade",
+        "summary": "Backend facade used by MCP tools; direct DB/script writes are not part of assistant execution.",
+    },
+    {
+        "entity_key": "process.local_data_check_repair",
+        "entity_type": "process",
+        "title": "Local data check and repair flow",
+        "summary": "Read-only check, repair plan, confirmation, confirmed execution, and post-repair recheck.",
+    },
+]
+
+
+DEFAULT_GRAPH_RELATIONS: list[dict[str, Any]] = [
+    {
+        "relation_key": "research_assistant_uses_local_data_management",
+        "source_entity_key": "module.research_assistant",
+        "target_entity_key": "capability.local_data_management",
+        "relation_type": "uses",
+    },
+    {
+        "relation_key": "local_data_management_exposes_mcp_local_data",
+        "source_entity_key": "capability.local_data_management",
+        "target_entity_key": "mcp.local_data",
+        "relation_type": "exposes",
+    },
+    {
+        "relation_key": "mcp_local_data_wraps_local_data_facade",
+        "source_entity_key": "mcp.local_data",
+        "target_entity_key": "api.local_data_facade",
+        "relation_type": "wraps",
+    },
+    {
+        "relation_key": "local_data_process_uses_mcp_local_data",
+        "source_entity_key": "process.local_data_check_repair",
+        "target_entity_key": "mcp.local_data",
+        "relation_type": "uses",
     },
 ]
 
@@ -712,6 +937,9 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "prompt_node_versions": 0,
             "prompt_activations": 0,
             "runtime_config_activations": 0,
+            "memory_items": 0,
+            "graph_entities": 0,
+            "graph_relations": 0,
             "reports": 0,
             "notifications": 0,
         }
@@ -741,6 +969,18 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 "input_schema_json": item["input_schema_json"],
                 "output_schema_json": item["output_schema_json"],
             }
+            payload.update(
+                {
+                    "skill_type": item.get("skill_type", payload["skill_type"]),
+                    "entrypoint_type": item.get("entrypoint_type", payload["entrypoint_type"]),
+                    "entrypoint_ref": item.get("entrypoint_ref", payload["entrypoint_ref"]),
+                    "allowed_side_effect_level": item.get("allowed_side_effect_level", payload["allowed_side_effect_level"]),
+                    "required_approval_level": item.get("required_approval_level", payload["required_approval_level"]),
+                    "source_ref": item.get("source_ref", payload["source_ref"]),
+                    "status": item.get("status", payload["status"]),
+                    "required_mcp_tools": item.get("required_mcp_tools", payload["required_mcp_tools"]),
+                }
+            )
             self.repository.create_record("skills", payload)
             seeded["skills"] += 1
         for item in DEFAULT_MCP_SERVERS:
@@ -765,8 +1005,56 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         self._seed_prompt_pack(prompt_pack, seeded)
         capability_sync = self.sync_capabilities({"apply": True, "requested_by": "seed_catalogs"})
         seeded["capabilities"] += int(capability_sync["applied_count"])
+        self._seed_default_memory_graph(seeded)
         self._ensure_default_reports_and_notifications(seeded)
         return {"seeded": seeded, "catalog_version": "research_assistant_mcp_skill_execution_20260525"}
+
+    def _seed_default_memory_graph(self, seeded: dict[str, int]) -> None:
+        for item in DEFAULT_MEMORY_SEEDS:
+            payload = dict(item)
+            payload["checksum"] = sha256_json(
+                {
+                    "memory_type": payload["memory_type"],
+                    "subject_key": payload["subject_key"],
+                    "content_text": payload["content_text"],
+                    "content_json": payload["content_json"],
+                }
+            )
+            self.repository.create_record("memory_items", payload)
+            seeded["memory_items"] += 1
+
+        entity_ids: dict[str, str] = {}
+        for item in DEFAULT_GRAPH_ENTITIES:
+            entity_id = f"entity_{item['entity_key'].replace('.', '_').replace('-', '_')}"
+            entity_ids[item["entity_key"]] = entity_id
+            self.repository.create_record(
+                "entities",
+                {
+                    "entity_id": entity_id,
+                    "namespace": "aistock",
+                    "approval_status": "approved",
+                    "confidence": 0.96,
+                    "source_refs": ["docs/architecture/local_data_management_mcp_gateway_design_20260523.md#memory-graph-seed"],
+                    **item,
+                },
+            )
+            seeded["graph_entities"] += 1
+
+        for item in DEFAULT_GRAPH_RELATIONS:
+            relation_id = f"rel_{item['relation_key'].replace('.', '_').replace('-', '_')}"
+            self.repository.create_record(
+                "relations",
+                {
+                    "relation_id": relation_id,
+                    "source_entity_id": entity_ids[item["source_entity_key"]],
+                    "target_entity_id": entity_ids[item["target_entity_key"]],
+                    "relation_type": item["relation_type"],
+                    "evidence_refs": ["docs/architecture/local_data_management_mcp_gateway_design_20260523.md#memory-graph-seed"],
+                    "approval_status": "approved",
+                    "confidence": 0.96,
+                },
+            )
+            seeded["graph_relations"] += 1
 
 
     def _normalize_capability_catalog(self, *, include_disabled: bool = False) -> list[dict[str, Any]]:
@@ -1129,6 +1417,10 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 selected_keys.add("workflow.qe_draft_then_approval")
             if mode in {DialogueMode.PREFLIGHT.value, DialogueMode.EXECUTION.value} or intent in {DialogueIntent.EXPERIMENT_VALIDATION_REQUEST, DialogueIntent.EXPERIMENT_EXECUTION_REQUEST}:
                 selected_keys.add("tool_guard.mcp_qe")
+        if mode in task_modes and intent == DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST:
+            selected_keys.add("prompt.local_data_management")
+            selected_keys.add("workflow.local_data_check_repair")
+            selected_keys.add("tool_guard.mcp_local_data")
         if mode in task_modes and intent in {DialogueIntent.ISSUE_INTAKE_REQUEST, DialogueIntent.EXPERIMENT_EXECUTION_REQUEST}:
             selected_keys.add("governance.no_silent_action")
         if data.phase in {"result", "preflight"}:
@@ -1218,7 +1510,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             mode = DialogueMode.PREFLIGHT
             reason = "explicit_preflight_or_validation_request"
             confidence = float(thresholds.get("task_request_min", 0.72))
-        elif dialogue_intent in {DialogueIntent.EXPERIMENT_DRAFT_REQUEST, DialogueIntent.ISSUE_INTAKE_REQUEST}:
+        elif dialogue_intent in {DialogueIntent.EXPERIMENT_DRAFT_REQUEST, DialogueIntent.ISSUE_INTAKE_REQUEST, DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST}:
             mode = DialogueMode.PLANNING
             reason = "explicit_task_request"
             confidence = float(thresholds.get("task_request_min", 0.72))
@@ -1259,6 +1551,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         has_qe = self._has_any(lower, intent_config.get("qe_terms", []))
         has_bug = self._has_any(lower, intent_config.get("bug_terms", []))
         has_issue = self._has_any(lower, intent_config.get("issue_terms", []))
+        has_local_data = self._is_local_data_management_request(lower)
         explicit_task = self._has_explicit_task_verb(lower, intent_config)
         asks_capability = self._has_any(lower, intent_config.get("capability_inquiry_patterns", []))
         asks_concept = self._has_any(lower, intent_config.get("concept_explanation_patterns", []))
@@ -1266,6 +1559,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
 
         if asks_capability or self._is_mcp_tool_catalog_inquiry(lower):
             return DialogueIntent.CAPABILITY_INQUIRY
+        if has_local_data:
+            return DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST
         if has_bug and (explicit_task or asks_concept or asks_status):
             return DialogueIntent.BUG_DIAGNOSIS_REQUEST
         if asks_concept:
@@ -1283,6 +1578,32 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         if explicit_task:
             return DialogueIntent.AMBIGUOUS_REQUEST
         return DialogueIntent.GENERAL_CHAT
+
+    @staticmethod
+    def _is_local_data_management_request(user_message: str) -> bool:
+        lower = user_message.lower()
+        local_markers = [
+            "本地数据",
+            "数据同步",
+            "数据入库",
+            "入库任务",
+            "同步目标",
+            "刷新审计",
+            "湰鍦版暟",
+            "鏈湴鏁版嵁",
+            "鏁版嵁鍚屾",
+            "鏁版嵁鍏ュ簱",
+            "local_data",
+            "local data",
+            "data sync",
+            "data_sync",
+            "data-stats",
+            "data_stats",
+            "dataset_date_refresh_audit",
+            "data_sync_targets",
+            "ingestion",
+        ]
+        return any(marker.lower() in lower for marker in local_markers)
 
     @staticmethod
     def _write_prompt_cache(checksum: str, bundle_text: str, bundle_json: dict[str, Any], selection_trace: dict[str, Any]) -> str:
@@ -2094,8 +2415,15 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         qe_capability_keys = set(self.active_runtime_config().get("planner", {}).get("qe_workflow_capability_keys", []))
         available_keys = {str(item.get("capability_key")) for item in capabilities}
         include_qe_capabilities = bool(template.get("include_qe_capabilities"))
-        capability_cards = self._capability_cards(capabilities, qe_capability_keys) if include_qe_capabilities else []
-        missing_capability_keys = sorted(qe_capability_keys - available_keys) if include_qe_capabilities else []
+        is_local_data = dialogue_intent == DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST or self._is_local_data_management_request(user_message)
+        local_data_capability_keys = set(self.active_runtime_config().get("planner", {}).get("local_data_workflow_capability_keys", []))
+        capability_card_keys: set[str] = set()
+        if include_qe_capabilities:
+            capability_card_keys.update(qe_capability_keys)
+        if is_local_data:
+            capability_card_keys.update(local_data_capability_keys)
+        capability_cards = self._capability_cards(capabilities, capability_card_keys) if capability_card_keys else []
+        missing_capability_keys = sorted(capability_card_keys - available_keys) if capability_card_keys else []
         prompt_branches = [item["prompt_key"] for item in bundle.get("node_refs", [])]
         capability_summary_cfg = intent_config.get("capability_summary", {})
         capability_summary = {
@@ -2111,6 +2439,24 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         plan_steps = list(template.get("plan_steps") or [])
         clarification_questions = list(template.get("clarification_questions") or [])
         action_proposals = list(template.get("action_proposals") or [])
+        if is_local_data:
+            status_rail_ref = "waiting_confirmation"
+            plan_steps = [
+                "复述本地数据检查范围、影响模块和本轮只读边界。",
+                "从 aistock-local-data MCP 目录中选择健康概览、数据集状态、同步目标和修复计划能力。",
+                "先读取 readiness、recent jobs、alerts、data_sync_targets 等证据，不直接写库或启动同步。",
+                "如需修复，只生成 local_data_plan_repair 计划、确认点、风险和影响说明。",
+                "用户确认后才允许进入 *_confirmed 工具或修复执行，并在执行后复查状态。",
+            ]
+            clarification_questions = [
+                "要检查全部本地数据，还是指定 dataset、schedule 或 sync target？",
+                "是否确认本轮只做只读检查和修复计划，不启动同步/刷新/repair job？",
+            ]
+            action_proposals = [
+                {"title": "Local data health overview", "risk": "low", "approval_required": False, "status": "read_only"},
+                {"title": "生成 local_data_plan_repair 修复计划", "risk": "medium", "approval_required": False, "status": "plan_only"},
+                {"title": "local_data_apply_repair_confirmed", "risk": "production_sensitive", "approval_required": True, "status": "waiting_confirmation"},
+            ]
         show_plan_card = bool(mode_cfg.get("show_plan_card", True))
         show_clarification_card = bool(mode_cfg.get("show_clarification_card", True))
         details_default_collapsed = bool(mode_cfg.get("details_default_collapsed", mode_decision.mode in {DialogueMode.DIALOGUE, DialogueMode.ANALYSIS}))
@@ -2141,6 +2487,34 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 "details_default_collapsed": details_default_collapsed,
             },
         }
+        if is_local_data:
+            cards["capability_summary"].update(
+                {
+                    "mcp": "已识别 aistock-local-data MCP：优先使用 local_data_health_overview、local_data_get_dataset_status、local_data_list_sync_targets 和 local_data_plan_repair；确认前不调用 repair/sync confirmed 工具。",
+                    "skill": "已纳入 local_data_management capability，用于本地数据健康检查、同步目标排查和修复计划。",
+                    "local_data_management": "本地数据管理按检查、计划、确认、执行、复查闭环处理。",
+                    "mcp_tools": [
+                        "local_data_health_overview",
+                        "local_data_get_dataset_status",
+                        "local_data_list_sync_targets",
+                        "local_data_plan_repair",
+                        "local_data_apply_repair_confirmed",
+                    ],
+                }
+            )
+            cards["safety"].update({"local_data_read_only_before_confirmation": True, "no_data_job_before_confirmation": True})
+            cards["local_data_management"] = {
+                "capability_key": "local_data_management",
+                "mcp_server": "aistock-local-data",
+                "phases": [
+                    {"key": "check", "status": "done"},
+                    {"key": "plan", "status": "done"},
+                    {"key": "confirm", "status": "current"},
+                    {"key": "execute", "status": "locked"},
+                    {"key": "review", "status": "locked"},
+                ],
+            }
+            cards["local_data_phases"] = cards["local_data_management"]["phases"]
         if self._is_mcp_tool_catalog_inquiry(user_message):
             cards["runtime_mcp_catalog"] = self._mcp_tool_catalog_snapshot()
         if show_plan_card:

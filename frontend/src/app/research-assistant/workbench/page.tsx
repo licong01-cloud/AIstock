@@ -8,6 +8,12 @@ import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import { ApiErrorBox, DetailDrawer, EmptyState, asObject, display, formatDateTime } from "@/components/research-assistant/AssistantShared";
 import {
+  LOCAL_DATA_MANAGEMENT_CAPABILITY,
+  LOCAL_DATA_MANAGEMENT_PHASES,
+  isLocalDataManagementTool,
+  localDataRiskLabel,
+  localDataToolPhase,
+  localDataToolTitle,
   researchAssistantApi,
   type AssistantActionProposal,
   type AssistantActionProposalResult,
@@ -169,6 +175,13 @@ export default function ResearchAssistantWorkbenchPage() {
   const preflightSummary = preflight ? summarizePreflight(preflight) : null;
   const proposalType = selectedCapability?.capability_type === "workflow_pack" ? "workflow_pack" : selectedCapability?.capability_type === "skill" ? "skill" : "mcp_tool";
   const disabled = (step: ExecutionStep) => disabledReason(step, { capability: selectedCapability, taskId: selectedTaskId, payload: parsedPayload, proposal: selectedAction, confirmation, approvalConfirmation, busy: busy !== null });
+  const localDataTools = useMemo(() => tools.filter(isLocalDataManagementTool), [tools]);
+  const selectedToolPhase = selectedTool ? localDataToolPhase(selectedTool.tool_name) : undefined;
+  const selectedIsLocalData = selectedTool ? isLocalDataManagementTool(selectedTool) : false;
+  const localDataPhaseRows = LOCAL_DATA_MANAGEMENT_PHASES.map((phase) => ({
+    ...phase,
+    status: selectedToolPhase?.key === phase.key ? "current" : phase.requiresConfirmation ? "locked" : localDataTools.length ? "idle" : "locked",
+  }));
 
   const refreshActions = useCallback(async (preferredId?: string) => {
     const page = await researchAssistantApi.actionProposals({ limit: 100 });
@@ -310,6 +323,28 @@ export default function ResearchAssistantWorkbenchPage() {
   return (
     <main>
       <ApiErrorBox error={error} />
+      <SectionCard title="本地数据 MCP 工作台" eyebrow="local_data_management / check-plan-confirm">
+        <div className="pv2-readable-panel" data-testid="ra-local-data-workbench-card">
+          <div className="pv2-readable-table">
+            <div className="pv2-readable-row"><div className="pv2-readable-key">能力</div><div className="pv2-readable-value">{LOCAL_DATA_MANAGEMENT_CAPABILITY.displayName}（{LOCAL_DATA_MANAGEMENT_CAPABILITY.capabilityKey}）</div></div>
+            <div className="pv2-readable-row"><div className="pv2-readable-key">Gateway module</div><div className="pv2-readable-value">{LOCAL_DATA_MANAGEMENT_CAPABILITY.gatewayModule}</div></div>
+            <div className="pv2-readable-row"><div className="pv2-readable-key">当前目录</div><div className="pv2-readable-value">{localDataTools.length ? `已读取 ${localDataTools.length} 个本地数据工具` : "尚未读取到 local_data 工具，不使用静态假工具冒充可执行能力"}</div></div>
+            <div className="pv2-readable-row"><div className="pv2-readable-key">选中工具</div><div className="pv2-readable-value">{selectedTool ? `${selectedTool.server_key}/${selectedTool.tool_name}` : "未选择工具"}</div></div>
+            <div className="pv2-readable-row"><div className="pv2-readable-key">所属能力</div><div className="pv2-readable-value">{selectedIsLocalData ? "local_data_management" : "当前选中工具不是本地数据工具"}</div></div>
+          </div>
+        </div>
+        <div className="pv2-readable-list" style={{ marginTop: 12 }}>
+          {localDataPhaseRows.map((phase) => (
+            <div className="pv2-readable-item" key={phase.key}>
+              <strong>{phase.title}</strong> <StatusBadge status={phase.status === "idle" ? "pending" : phase.status} />
+              <p className="pv2-muted">{phase.description}</p>
+              <span className="pv2-chip">{localDataRiskLabel(phase.riskLevel)}</span>
+              {phase.requiresConfirmation ? <span className="pv2-chip">需要确认</span> : <span className="pv2-chip">无需确认</span>}
+            </div>
+          ))}
+        </div>
+      </SectionCard>
+
       <ApiErrorBox error={actionError} title={workbenchCopy.sections.actionErrorTitle} />
       <div className="ra-two-column">
         <SectionCard title={workbenchCopy.sections.consoleTitle} eyebrow={workbenchCopy.sections.consoleEyebrow}>
@@ -431,6 +466,27 @@ export default function ResearchAssistantWorkbenchPage() {
           {dryRunResult ? <DetailDrawer title="dry-run / preflight debug payload" data={dryRunResult} /> : <EmptyState title={workbenchCopy.sections.waitingDryRunTitle} hint={workbenchCopy.sections.waitingDryRunHint} />}
         </SectionCard>
       </div>
+
+      <SectionCard title="本地数据工具目录" eyebrow="real catalog / readable cards">
+        {localDataTools.length ? (
+          <div className="pv2-readable-list" data-testid="ra-local-data-tool-cards">
+            {localDataTools.map((tool) => {
+              const phase = localDataToolPhase(tool.tool_name);
+              return (
+                <div className="pv2-readable-item" key={tool.tool_id}>
+                  <strong>{localDataToolTitle(tool)}</strong>
+                  <p className="pv2-muted">{phase?.description || tool.description || "本地数据管理工具，具体入参和 trace 保留在审计详情中。"}</p>
+                  <span className="pv2-chip">{phase?.title || "未分配阶段"}</span>
+                  <span className="pv2-chip">{localDataRiskLabel(tool.risk_level || phase?.riskLevel)}</span>
+                  <span className="pv2-chip">{tool.requires_approval || phase?.requiresConfirmation ? "需要确认" : "无需确认"}</span>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <EmptyState title="尚未读取到 local_data 工具" hint="请等待后端 Capability Registry / MCP Catalog 写入真实目录；页面不会用静态假工具冒充可执行能力。" />
+        )}
+      </SectionCard>
 
       <SectionCard title={workbenchCopy.sections.catalogTitle} eyebrow={workbenchCopy.sections.catalogEyebrow}>
         <PaperTable
