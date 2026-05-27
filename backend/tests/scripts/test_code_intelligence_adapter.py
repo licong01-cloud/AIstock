@@ -6,6 +6,15 @@ from pathlib import Path
 import scripts.code_intelligence_adapter as adapter
 
 
+def test_emit_dash_writes_stdout_without_dash_file(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    adapter._emit({"ok": True}, "-")
+
+    assert json.loads(capsys.readouterr().out) == {"ok": True}
+    assert not (tmp_path / "-").exists()
+
+
 def test_code_intelligence_doctor_falls_back_without_codegraph(
     tmp_path: Path,
     monkeypatch,

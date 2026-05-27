@@ -349,6 +349,28 @@ def test_apply_issues_to_json_plan_records_status_event(tmp_path: Path) -> None:
     assert payload["events"][-1]["action"] == "status_synced_from_github_issue"
 
 
+def test_apply_issues_to_json_plan_blocks_canonical_root_main(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_bug(tmp_path, bug_id="BUG-916", severity="P1", status="open")
+    target = tmp_path / "20260512_BUG-916.json"
+    plan = [
+        {
+            "action": "update_json",
+            "bug_id": "BUG-916",
+            "issue_number": 916,
+            "path": str(target),
+            "changes": {"status": "verified"},
+        }
+    ]
+    monkeypatch.setattr(sync, "_git_toplevel", lambda _path: tmp_path)
+    monkeypatch.setattr(sync, "_canonical_root", lambda: tmp_path)
+    monkeypatch.setattr(sync, "_git_branch", lambda _root: "main")
+
+    with pytest.raises(sync.BugGitHubSyncError, match="canonical root main"):
+        sync.apply_issues_to_json_plan(plan)
+
+    assert json.loads(target.read_text(encoding="utf-8"))["status"] == "open"
+
+
 def test_apply_issues_to_json_plan_refuses_overwrite(tmp_path: Path) -> None:
     target = tmp_path / "existing.json"
     target.write_text("{}", encoding="utf-8")

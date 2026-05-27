@@ -44,6 +44,15 @@ def _write_json(path: Path, payload: dict[str, object]) -> Path:
     return path
 
 
+def test_write_json_dash_writes_stdout_without_dash_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    flow._write_json(Path("-"), {"ok": True})
+
+    assert json.loads(capsys.readouterr().out) == {"ok": True}
+    assert not (tmp_path / "-").exists()
+
+
 def test_candidate_create_outputs_event_candidate_and_stable_fingerprint(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     args = [
         "candidate-create",

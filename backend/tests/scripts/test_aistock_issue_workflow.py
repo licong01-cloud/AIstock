@@ -52,6 +52,15 @@ def _write_json(path: Path, payload: dict[str, Any]) -> Path:
     return path
 
 
+def test_emit_dash_writes_stdout_without_dash_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    workflow._emit({"ok": True}, "-")
+
+    assert json.loads(capsys.readouterr().out) == {"ok": True}
+    assert not (tmp_path / "-").exists()
+
+
 @pytest.fixture
 def isolated_workflow_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(workflow, "REPO_ROOT", tmp_path)
