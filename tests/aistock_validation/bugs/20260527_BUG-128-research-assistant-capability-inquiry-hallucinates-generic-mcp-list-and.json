@@ -69,8 +69,8 @@
   "expected": "When users ask what MCP/tools are available, Research Assistant should answer from the audited runtime catalog or clearly state execution boundaries; it must not invent generic file/HTTP/Git capabilities and should expose enabled MCP tools/capabilities consistently with /mcp/tools and /capabilities.",
   "first_seen_at": "2026-05-27T06:17:51.739410Z",
   "fix_branch": "bug/registry-research-assistant-research-assistant-capability-inqu-20260527-288eae",
-  "fix_commit": "b4eaa3de45f0debc4354cad2808c2842cbf505d8",
-  "fixed_at": "2026-05-27T06:37:31.0747955Z",
+  "fix_commit": "d952b4be610ae8a3de3a1a3f0ba0706f2ebd0b25",
+  "fixed_at": "2026-05-27T07:10:33.466995Z",
   "github_issue_number": 243,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/243",
   "last_seen_at": "2026-05-27T06:17:51.739410Z",
@@ -101,6 +101,17 @@
     "fingerprint": "de6c7b3eae13a5ba939f9976",
     "source_event_id": "FE-20260527-de6c7b3eae13"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/research_assistant/test_service.py::test_chat_turn_mcp_tool_inquiry_uses_runtime_catalog_not_generic_tool_claims -q -p no:cacheprovider -> 1 passed",
+    "python -m pytest backend/tests/research_assistant -q -p no:cacheprovider -> 48 passed",
+    "python -m pytest backend/tests/mcp/test_research_assistant_module.py backend/tests/mcp/test_profiles_registry_gateway.py -q -p no:cacheprovider -> 13 passed",
+    "python -m compileall backend/services/research_assistant backend/tests/research_assistant/test_service.py -> passed",
+    "python -m ruff check backend/services/research_assistant/service.py backend/tests/research_assistant/test_service.py -> All checks passed",
+    "python -m nox -s l0 -> successful",
+    "python -m nox -s research_assistant_backend research_assistant_mcp_contract -> successful, 48 passed and 13 passed",
+    "python -m nox -s research_assistant_ui -> successful, 3 passed after npm ci installed frontend dependencies in isolated worktree",
+    "git diff --check -> passed"
+  ],
   "verification_evidence": [
     "python -m pytest backend/tests/research_assistant/test_service.py::test_chat_turn_mcp_tool_inquiry_uses_runtime_catalog_not_generic_tool_claims -q -p no:cacheprovider -> 1 passed",
     "python -m pytest backend/tests/research_assistant -q -p no:cacheprovider -> 48 passed",
