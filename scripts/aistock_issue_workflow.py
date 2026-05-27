@@ -137,7 +137,7 @@ def _sha256_tree(path: Path) -> str | None:
 
 
 def _emit(payload: dict[str, Any], output: str | None = None) -> None:
-    if output:
+    if output and output != "-":
         _write_json(Path(output), payload)
     sys.stdout.write(json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n")
 

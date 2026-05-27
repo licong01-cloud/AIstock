@@ -19,6 +19,7 @@ from backend.services.validation.plan_catalog import FORBIDDEN_BACKEND_PORTS, RE
 
 
 DEFAULT_EXECUTION_ROOT = REPO_ROOT / "tmp" / "validation" / "runner" / "jobs"
+HISTORY_RELATIVE_ROOT = Path("tests") / "aistock_validation" / "history"
 JOB_SCHEMA_VERSION = "aistock_validation_execution_job_v1"
 EVIDENCE_SCHEMA_VERSION = "aistock_validation_runner_evidence_v1"
 JOB_ID_RE = re.compile(r"^valjob_[0-9]{8}_[0-9]{6}_[0-9a-f]{8}$")
@@ -60,6 +61,19 @@ def _repo_path(path: Path) -> str:
         return path.resolve().relative_to(REPO_ROOT.resolve()).as_posix()
     except ValueError:
         return str(path)
+
+
+def _is_inside(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _is_allowlisted_workspace_path(path: Path) -> bool:
+    resolved = str(path.resolve()).replace("\\", "/")
+    return any(resolved.startswith(prefix.replace("\\", "/")) for prefix in _WORKSPACE_PATH_ALLOWLIST)
 
 
 def _safe_slug(value: Any, *, default: str = "validation") -> str:
@@ -195,6 +209,7 @@ class ValidationExecutionRunner:
         self.plan_catalog = plan_catalog or ValidationPlanCatalog()
         self.execution_root = Path(execution_root or DEFAULT_EXECUTION_ROOT)
         self.history_root = Path(history_root or DEFAULT_HISTORY_ROOT)
+        self._history_root_explicit = history_root is not None
         self.repo_root = Path(repo_root or REPO_ROOT)
         self.executor = executor or default_runner_executor
         self.run_inline = run_inline
@@ -533,12 +548,18 @@ class ValidationExecutionRunner:
 
     def _archive_job(self, job: dict[str, Any]) -> dict[str, Any]:
         archive_paths = self._archive_paths(job)
-        copied_artifacts = self._copy_discovered_artifacts(job, str(archive_paths["base_stem"]))
+        history_root = archive_paths["history_root"]  # type: ignore[assignment]
+        copied_artifacts = self._copy_discovered_artifacts(
+            job,
+            str(archive_paths["base_stem"]),
+            history_root=history_root,  # type: ignore[arg-type]
+        )
         coverage_copy = next((item for item in copied_artifacts if item["kind"] == "coverage_snapshot"), None)
-        run_id = _history_id_for_path(archive_paths["markdown_path"], self.history_root)  # type: ignore[arg-type]
+        run_id = _history_id_for_path(archive_paths["markdown_path"], history_root)  # type: ignore[arg-type]
         archive = {
             "status": "archived",
             "run_id": run_id,
+            "history_root": _repo_path(history_root),  # type: ignore[arg-type]
             "run_record_path": _repo_path(archive_paths["markdown_path"]),  # type: ignore[arg-type]
             "metadata_path": _repo_path(archive_paths["metadata_path"]),  # type: ignore[arg-type]
             "evidence_manifest_path": _repo_path(archive_paths["standard_evidence_path"]),  # type: ignore[arg-type]
@@ -564,14 +585,25 @@ class ValidationExecutionRunner:
         _write_json(archive_paths["standard_evidence_path"], evidence_manifest)  # type: ignore[arg-type]
         return job
 
+    def _history_root_for_job(self, job: dict[str, Any]) -> Path:
+        if self._history_root_explicit:
+            return self.history_root
+        workspace = Path(job.get("workspace_path", str(self.repo_root))).resolve()
+        if workspace != self.repo_root.resolve():
+            return workspace / HISTORY_RELATIVE_ROOT
+        # Root-targeted ad hoc runs keep evidence in ignored runner storage.
+        return self.execution_root / "history"
+
     def _archive_paths(self, job: dict[str, Any]) -> dict[str, Path | str]:
         module_slug = _safe_slug(job.get("module"), default="validation")
         level_slug = _safe_slug(job.get("level"), default="lx")
         plan_slug = _safe_slug(job.get("plan_key"), default="runner")
         base_stem = f"{_filename_timestamp()}_{level_slug}_{plan_slug}_{str(job['job_id'])[-8:]}_runner"
-        out_dir = self.history_root / module_slug
+        history_root = self._history_root_for_job(job)
+        out_dir = history_root / module_slug
         return {
             "base_stem": base_stem,
+            "history_root": history_root,
             "markdown_path": out_dir / f"{base_stem}-validation.md",
             "metadata_path": out_dir / f"{base_stem}-validation.json",
             "standard_evidence_path": out_dir / f"{base_stem}-evidence.json",
@@ -580,7 +612,7 @@ class ValidationExecutionRunner:
             "runner_evidence_path": out_dir / f"{base_stem}-runner-evidence.json",
         }
 
-    def _copy_discovered_artifacts(self, job: dict[str, Any], base_stem: str) -> list[dict[str, Any]]:
+    def _copy_discovered_artifacts(self, job: dict[str, Any], base_stem: str, *, history_root: Path) -> list[dict[str, Any]]:
         copied: list[dict[str, Any]] = []
         for kind, source in self._artifact_candidates(job):
             if not source.exists() or not source.is_file():
@@ -590,7 +622,7 @@ class ValidationExecutionRunner:
                 if not payload or payload.get("schema_version") != COVERAGE_SCHEMA:
                     continue
             suffix = ARTIFACT_KIND_SUFFIXES.get(kind, source.suffix or ".artifact")
-            target = self.history_root / _safe_slug(job.get("module"), default="validation") / f"{base_stem}-{_safe_slug(kind)}{suffix}"
+            target = history_root / _safe_slug(job.get("module"), default="validation") / f"{base_stem}-{_safe_slug(kind)}{suffix}"
             _copy_if_exists(source, target)
             copied.append({"kind": kind, "source_path": _repo_path(source), "path": _repo_path(target)})
         return copied
@@ -872,11 +904,9 @@ class ValidationExecutionRunner:
         path = Path(raw_path)
         if not path.is_absolute():
             path = self.repo_root / path
-        try:
-            path.resolve().relative_to(self.repo_root.resolve())
-        except ValueError:
-            return None
-        return path
+        if _is_inside(path, self.repo_root) or _is_inside(path, self.execution_root) or _is_allowlisted_workspace_path(path):
+            return path
+        return None
 
     def _archive_path_from_job(self, job: dict[str, Any], key: str) -> Path | None:
         archive = job.get("archive")
@@ -888,8 +918,7 @@ class ValidationExecutionRunner:
         path = self._path_from_repo_path(str(raw))
         if path is None:
             return None
-        try:
-            path.resolve().relative_to(self.history_root.resolve())
-        except ValueError:
+        history_root = self._history_root_for_job(job)
+        if not _is_inside(path, history_root):
             return None
         return path

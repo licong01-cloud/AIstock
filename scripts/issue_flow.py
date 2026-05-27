@@ -112,7 +112,7 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 def _write_json(path: Path | None, payload: dict[str, Any]) -> None:
     text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    if path is None:
+    if path is None or str(path) == "-":
         sys.stdout.write(text)
         return
     path.parent.mkdir(parents=True, exist_ok=True)
