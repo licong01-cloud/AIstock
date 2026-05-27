@@ -8,7 +8,22 @@ if TYPE_CHECKING:
     from backend.mcp.registry import ModuleRegistry
 
 
-TOOL_COUNT = 13
+TOOL_NAMES = (
+    "assistant_health",
+    "assistant_create_task",
+    "assistant_add_task_event",
+    "assistant_chat_turn",
+    "assistant_build_prompt_bundle",
+    "assistant_list_prompt_nodes",
+    "assistant_create_memory_candidate",
+    "assistant_build_context_pack",
+    "assistant_list_mcp_tools",
+    "assistant_preflight_mcp_tool",
+    "assistant_create_issue_candidate",
+    "assistant_list_approvals",
+    "assistant_create_temp_memory",
+)
+TOOL_COUNT = len(TOOL_NAMES)
 
 
 def register(registry: "ModuleRegistry") -> None:

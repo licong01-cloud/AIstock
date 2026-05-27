@@ -1,4 +1,4 @@
-"""Thin CLI entry for the phased AIstock MCP gateway."""
+"""Thin CLI entry for the unified AIstock MCP gateway."""
 
 from __future__ import annotations
 
@@ -16,8 +16,8 @@ from backend.mcp.gateway import DEFAULT_BASE_URL, run_gateway
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the AIstock MCP gateway")
-    parser.add_argument("--profile", default="research", help="Phase 0-5 allows only: research")
-    parser.add_argument("--modules", default=None, help="Comma-separated modules; Phase 0-5 allows only: research")
+    parser.add_argument("--profile", default="research", help="Gateway profile, e.g. research, research_assistant, local_data, factor_research, strategy_ops, research_full, full")
+    parser.add_argument("--modules", default=None, help="Comma-separated gateway modules, e.g. research,factor_library,model_registry")
     parser.add_argument(
         "--base-url",
         default=None,

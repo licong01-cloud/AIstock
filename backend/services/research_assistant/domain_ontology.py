@@ -1,0 +1,233 @@
+"""Domain ontology for Research Assistant MCP routing."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any
+
+
+class McpDomain(str, Enum):
+    MCP_CAPABILITY = "mcp_capability"
+    LOCAL_DATA = "local_data"
+    QE_EXPERIMENT = "qe_experiment"
+    QE_WAREHOUSE = "qe_warehouse"
+    VALIDATION_ISSUE = "validation_issue"
+    RESEARCH_PIPELINE = "research_pipeline"
+    FACTOR_LIBRARY = "factor_library"
+    FACTOR_METRICS = "factor_metrics"
+    FACTOR_CORRELATION = "factor_correlation"
+    MODEL_REGISTRY = "model_registry"
+    STRATEGY_GOVERNANCE = "strategy_governance"
+    EXECUTION_POLICY = "execution_policy"
+    GENERAL = "general"
+
+
+@dataclass(frozen=True)
+class DomainSpec:
+    domain: McpDomain
+    intent_value: str
+    server_key: str
+    default_tool: str
+    risk_policy: str
+    summary_zh: str
+    synonyms: tuple[str, ...]
+    read_tools: tuple[str, ...] = ()
+    plan_tools: tuple[str, ...] = ()
+    confirmed_tools: tuple[str, ...] = ()
+    prompt_key: str | None = None
+
+
+DOMAIN_SPECS: dict[McpDomain, DomainSpec] = {
+    McpDomain.MCP_CAPABILITY: DomainSpec(
+        domain=McpDomain.MCP_CAPABILITY,
+        intent_value="mcp_capability_inquiry",
+        server_key="research-assistant",
+        default_tool="assistant_list_mcp_tools",
+        risk_policy="read_only_catalog",
+        summary_zh="MCP capability catalog and tool preflight",
+        synonyms=("mcp", "tool", "server", "tools", "capability", "capabilities", "catalog", "what can you do", "available tools", "mcp list", "gongju", "nengli"),
+        read_tools=("assistant_list_mcp_tools",),
+        prompt_key="domain.mcp_capability_router",
+    ),
+    McpDomain.LOCAL_DATA: DomainSpec(
+        domain=McpDomain.LOCAL_DATA,
+        intent_value="local_data_management_request",
+        server_key="aistock-local-data",
+        default_tool="local_data_health_overview",
+        risk_policy="read_plan_confirmed_write",
+        summary_zh="Local market-data readiness, sync target, schedule, job and repair orchestration",
+        synonyms=("local data", "local_data", "trade_date", "dataset", "calendar", "tushare", "source test", "sync target", "data_sync", "local-data", "ben di shu ju", "bendi shuju"),
+        read_tools=("local_data_health_overview", "local_data_get_dataset_status", "local_data_list_sync_targets", "local_data_list_sync_attempts"),
+        plan_tools=("local_data_plan_repair",),
+        confirmed_tools=("local_data_apply_repair_confirmed",),
+        prompt_key="prompt.local_data_management",
+    ),
+    McpDomain.QE_EXPERIMENT: DomainSpec(
+        domain=McpDomain.QE_EXPERIMENT,
+        intent_value="experiment_draft_request",
+        server_key="aistock-qe-experiment",
+        default_tool="qe_experiment_list",
+        risk_policy="draft_validate_confirmed_run",
+        summary_zh="QE experiment, custom_evo loop, template materialization and run management",
+        synonyms=("qe", "quantevolver", "experiment", "custom_evo", "loop", "template", "materialize", "run experiment", "evolution", "qe task"),
+        read_tools=("qe_experiment_list", "qe_experiment_get", "qe_custom_evo_get_task", "qe_custom_evo_loop_comparison"),
+        plan_tools=("qe_template_create", "qe_template_validate"),
+        confirmed_tools=("qe_template_materialize_confirmed", "qe_template_run_confirmed"),
+        prompt_key="domain.qe_experiment",
+    ),
+    McpDomain.QE_WAREHOUSE: DomainSpec(
+        domain=McpDomain.QE_WAREHOUSE,
+        intent_value="qe_warehouse_request",
+        server_key="aistock-qe-archive",
+        default_tool="qe_archive_health",
+        risk_policy="read_preview_confirmed_backfill",
+        summary_zh="QE archive warehouse, ingestion, outbox, backfill and historical query operations",
+        synonyms=("warehouse", "archive", "outbox", "backfill", "archived", "archive job", "skips", "source status", "ingestion", "data warehouse", "ruku", "shucang", "guidang", "bulu", "louruku"),
+        read_tools=("qe_archive_health", "qe_archive_list_runs", "qe_archive_list_outbox", "qe_archive_get_source_status"),
+        plan_tools=("qe_archive_backfill_preview", "qe_archive_backfill_selection_preview"),
+        confirmed_tools=("qe_archive_backfill_execute_confirmed", "qe_archive_backfill_selection_execute_confirmed"),
+        prompt_key="domain.qe_warehouse",
+    ),
+    McpDomain.VALIDATION_ISSUE: DomainSpec(
+        domain=McpDomain.VALIDATION_ISSUE,
+        intent_value="validation_issue_request",
+        server_key="aistock-validation",
+        default_tool="mcp_github_issue_search",
+        risk_policy="issue_json_then_github_sync_confirmed",
+        summary_zh="Validation Center, BUG JSON and GitHub issue lifecycle",
+        synonyms=("bug", "issue", "github issue", "validation", "finding", "bug json", "agent context", "assign", "status", "sync issue", "close issue"),
+        read_tools=("mcp_github_issue_list", "mcp_github_issue_search", "get_bug_agent_context", "list_validation_runs"),
+        plan_tools=("report_bug",),
+        confirmed_tools=("mcp_github_issue_create", "mcp_github_issue_sync_bug", "update_bug_status", "assign_bug"),
+        prompt_key="domain.validation_issue",
+    ),
+    McpDomain.RESEARCH_PIPELINE: DomainSpec(
+        domain=McpDomain.RESEARCH_PIPELINE,
+        intent_value="research_pipeline_request",
+        server_key="aistock-research",
+        default_tool="research_list_experiments",
+        risk_policy="read_stage_then_confirmed_stage_run",
+        summary_zh="Research Pipeline experiments, stages, artifact refs, backtest records and HMM backfill",
+        synonyms=("research pipeline", "research experiment", "research stage", "stage", "artifact", "artifact refs", "hmm backfill", "promote", "reject", "pipeline"),
+        read_tools=("research_list_experiments", "research_get_experiment", "research_list_artifact_refs", "research_list_backtest_records"),
+        plan_tools=("research_create_experiment", "research_hmm_backfill_preview"),
+        confirmed_tools=("research_run_stage", "research_retry_stage", "research_promote", "research_reject"),
+        prompt_key="domain.research_pipeline",
+    ),
+    McpDomain.FACTOR_LIBRARY: DomainSpec(
+        domain=McpDomain.FACTOR_LIBRARY,
+        intent_value="factor_library_request",
+        server_key="aistock-factor-library",
+        default_tool="factor_library_list",
+        risk_policy="summary_list_detail_on_demand_confirmed_registration",
+        summary_zh="Factor catalog, metadata, coverage, quality labels and usage summaries",
+        synonyms=("factor library", "factor catalog", "factor list", "factor coverage", "factor quality", "factor registry", "factor metadata", "rankic", "ic", "yinzi ku", "yinzi zhibiao"),
+        read_tools=("factor_library_list", "factor_library_search", "factor_library_get", "factor_library_get_coverage"),
+        plan_tools=("factor_library_plan_register", "factor_library_plan_deprecate"),
+        confirmed_tools=("factor_library_register_confirmed", "factor_library_deprecate_confirmed"),
+        prompt_key="domain.factor_library",
+    ),
+    McpDomain.FACTOR_METRICS: DomainSpec(
+        domain=McpDomain.FACTOR_METRICS,
+        intent_value="factor_metrics_request",
+        server_key="aistock-factor-metrics",
+        default_tool="factor_metrics_plan",
+        risk_policy="async_job_preflight_confirmed_submit",
+        summary_zh="Independent factor metric calculation, IC, RankIC, group return and stability jobs",
+        synonyms=("factor metrics", "independent metrics", "official evaluation", "rankic calculation", "ic calculation", "group return", "factor score", "stability", "yinzi duli zhibiao", "calculate factor"),
+        read_tools=("factor_metrics_get_job", "factor_metrics_get_result", "factor_metrics_compare_versions"),
+        plan_tools=("factor_metrics_plan", "factor_metrics_validate_inputs"),
+        confirmed_tools=("factor_metrics_submit_confirmed",),
+        prompt_key="domain.factor_metrics",
+    ),
+    McpDomain.FACTOR_CORRELATION: DomainSpec(
+        domain=McpDomain.FACTOR_CORRELATION,
+        intent_value="factor_correlation_request",
+        server_key="aistock-factor-correlation",
+        default_tool="factor_corr_plan",
+        risk_policy="async_matrix_job_artifact_ref_only",
+        summary_zh="Factor correlation, redundant pairs, clusters, replacement suggestions and matrix refs",
+        synonyms=("factor correlation", "correlation", "corr", "factor corr", "top pairs", "cluster", "matrix", "replacement", "redundant factors", "yinzi xiangguan"),
+        read_tools=("factor_corr_get_top_pairs", "factor_corr_get_clusters", "factor_corr_suggest_replacements", "factor_corr_get_matrix_ref"),
+        plan_tools=("factor_corr_plan", "factor_corr_validate_inputs"),
+        confirmed_tools=("factor_corr_submit_confirmed",),
+        prompt_key="domain.factor_correlation",
+    ),
+    McpDomain.MODEL_REGISTRY: DomainSpec(
+        domain=McpDomain.MODEL_REGISTRY,
+        intent_value="model_registry_request",
+        server_key="aistock-model-registry",
+        default_tool="model_registry_list",
+        risk_policy="summary_detail_artifact_refs_confirmed_lifecycle",
+        summary_zh="Model registry, model trials, seed stability, hyperparameter history and artifact refs",
+        synonyms=("model registry", "model library", "model trial", "trial", "seed", "seed stability", "hyperparam", "artifact", "model artifact", "moxing ku", "model version"),
+        read_tools=("model_registry_list", "model_registry_get", "model_registry_compare_trials", "model_registry_get_seed_stability"),
+        plan_tools=("model_registry_plan_register",),
+        confirmed_tools=("model_registry_register_confirmed", "model_registry_deprecate_confirmed"),
+        prompt_key="domain.model_registry",
+    ),
+    McpDomain.STRATEGY_GOVERNANCE: DomainSpec(
+        domain=McpDomain.STRATEGY_GOVERNANCE,
+        intent_value="strategy_governance_request",
+        server_key="aistock-strategy-governance",
+        default_tool="strategy_governance_list_packages",
+        risk_policy="readiness_plan_confirmed_promotion_retirement",
+        summary_zh="StrategyPackage governance, health, Selection/Paper readiness, promotion and retirement",
+        synonyms=("strategy governance", "strategy package", "strategy library", "selection readiness", "paper readiness", "paper v2", "promotion", "retirement", "strategy health", "celue ku", "package health"),
+        read_tools=("strategy_governance_list_packages", "strategy_governance_get_package", "strategy_governance_get_health"),
+        plan_tools=("strategy_governance_plan_promotion", "strategy_governance_plan_retirement"),
+        confirmed_tools=("strategy_governance_promote_confirmed", "strategy_governance_retire_confirmed"),
+        prompt_key="domain.strategy_governance",
+    ),
+    McpDomain.EXECUTION_POLICY: DomainSpec(
+        domain=McpDomain.EXECUTION_POLICY,
+        intent_value="execution_policy_request",
+        server_key="aistock-execution-policy",
+        default_tool="execution_policy_list_algos",
+        risk_policy="read_validate_plan_confirmed_binding_no_real_trade",
+        summary_zh="Execution policy library, minute algos, market-state constraints and strategy binding validation",
+        synonyms=("execution policy", "execution algo", "minute algo", "twap", "vwap", "pov", "algo", "market state", "execution binding", "zhixing celue", "fen zhong"),
+        read_tools=("execution_policy_list_algos", "execution_policy_get_algo", "execution_policy_get_market_state_constraints"),
+        plan_tools=("execution_policy_validate_for_strategy", "execution_policy_plan_binding"),
+        confirmed_tools=("execution_policy_bind_confirmed", "execution_policy_retire_confirmed"),
+        prompt_key="domain.execution_policy",
+    ),
+}
+
+WAREHOUSE_TERMS = DOMAIN_SPECS[McpDomain.QE_WAREHOUSE].synonyms
+
+
+def spec_for_domain(domain: McpDomain | str) -> DomainSpec:
+    if not isinstance(domain, McpDomain):
+        domain = McpDomain(str(domain))
+    return DOMAIN_SPECS[domain]
+
+
+def all_domain_specs() -> list[DomainSpec]:
+    return list(DOMAIN_SPECS.values())
+
+
+def domain_prompt_key(intent_value: str) -> str | None:
+    for spec in DOMAIN_SPECS.values():
+        if spec.intent_value == intent_value:
+            return spec.prompt_key
+    return None
+
+
+def domain_catalog() -> dict[str, Any]:
+    return {
+        spec.domain.value: {
+            "intent_value": spec.intent_value,
+            "server_key": spec.server_key,
+            "default_tool": spec.default_tool,
+            "risk_policy": spec.risk_policy,
+            "summary_zh": spec.summary_zh,
+            "synonyms": list(spec.synonyms),
+            "read_tools": list(spec.read_tools),
+            "plan_tools": list(spec.plan_tools),
+            "confirmed_tools": list(spec.confirmed_tools),
+            "prompt_key": spec.prompt_key,
+        }
+        for spec in DOMAIN_SPECS.values()
+    }

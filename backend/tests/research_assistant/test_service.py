@@ -500,7 +500,7 @@ def test_prompt_tree_ambiguous_task_does_not_start_qe_workflow() -> None:
 
 def test_local_data_management_catalog_prompt_and_cards() -> None:
     svc = _chat_service()
-    message = "请排查本地数据入库健康，如果有缺口先给修复计划，不要执行任务。"
+    message = "local data sync health check and repair plan before execute"
 
     capability = svc.repository.find_one("skills", {"skill_key": "local_data_management"})
     assert capability is not None
