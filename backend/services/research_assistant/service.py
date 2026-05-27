@@ -22,18 +22,12 @@ import jsonschema
 from .context_budget import ContextBudgetPlan, ContextBudgetPlanner
 from .execution import ResearchAssistantExecutionMixin
 from .models import (
-    ActionProposalApprovalRequest,
-    ActionProposalCreate,
-    ActionProposalDecisionRequest,
-    ActionProposalExecuteRequest,
-    ActionProposalPreflightRequest,
     ApprovalCreate,
     CapabilitySyncRequest,
     ChatTurnRequest,
     ConversationCreate,
     ConversationMessageCreate,
     ContextPackBuildRequest,
-    DIALOGUE_MODES,
     EvolutionPathCreate,
     ExternalAgentEventCreate,
     ExternalAgentSessionCreate,
@@ -1270,7 +1264,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         asks_concept = self._has_any(lower, intent_config.get("concept_explanation_patterns", []))
         asks_status = self._has_any(lower, intent_config.get("status_query_patterns", []))
 
-        if asks_capability:
+        if asks_capability or self._is_mcp_tool_catalog_inquiry(lower):
             return DialogueIntent.CAPABILITY_INQUIRY
         if has_bug and (explicit_task or asks_concept or asks_status):
             return DialogueIntent.BUG_DIAGNOSIS_REQUEST
@@ -1601,8 +1595,63 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             )
         if prior_messages:
             messages.extend(prior_messages)
+        mcp_catalog_context = self._mcp_tool_catalog_context_for_llm(user_message)
+        if mcp_catalog_context:
+            messages.append({"role": "system", "content": mcp_catalog_context})
         messages.append({"role": "user", "content": user_message})
         return messages
+
+    @staticmethod
+    def _is_mcp_tool_catalog_inquiry(user_message: str) -> bool:
+        lower = user_message.lower()
+        if "mcp" not in lower:
+            return False
+        tool_terms = ("tool", "tools", "工具", "能力", "列表", "哪些", "可用", "使用", "access", "available", "use")
+        return any(term in lower for term in tool_terms)
+
+    def _mcp_tool_catalog_snapshot(self) -> dict[str, Any]:
+        servers = [
+            item
+            for item in self.repository.list_records("mcp_servers", limit=self.configured_limit("router_mcp_servers"))["items"]
+            if str(item.get("status") or "") in {"ready", "enabled", "ok"}
+        ]
+        tools = [
+            item
+            for item in self.repository.list_records("mcp_tools", limit=self.configured_limit("api_list_mcp_tools"))["items"]
+            if str(item.get("status") or "") in {"enabled", "ready", "approved"}
+        ]
+        capabilities = [
+            item
+            for item in self.repository.list_records("capabilities", filters={"status": "approved"}, limit=self.configured_limit("api_list_capabilities"))["items"]
+        ]
+        tools_by_server: dict[str, list[dict[str, Any]]] = {}
+        for tool in sorted(tools, key=lambda item: (str(item.get("server_key") or ""), str(item.get("tool_name") or ""))):
+            tools_by_server.setdefault(str(tool.get("server_key") or "unknown"), []).append(tool)
+        return {
+            "source": "assistant_mcp_tools_runtime_catalog",
+            "server_count": len(servers),
+            "tool_count": len(tools),
+            "capability_count": len(capabilities),
+            "servers": servers,
+            "tools": tools,
+            "tools_by_server": tools_by_server,
+            "capabilities": capabilities,
+        }
+
+    def _mcp_tool_catalog_context_for_llm(self, user_message: str) -> str | None:
+        if not self._is_mcp_tool_catalog_inquiry(user_message):
+            return None
+        catalog = self._mcp_tool_catalog_snapshot()
+        lines = [
+            "Runtime MCP catalog snapshot from assistant_mcp_tools; answer only from this audited catalog.",
+            f"Enabled servers: {catalog['server_count']}; enabled tools: {catalog['tool_count']}; approved capabilities: {catalog['capability_count']}.",
+            "Do not claim generic filesystem, shell, Git, HTTP, browser, or data-warehouse tools unless they are listed here.",
+            "If a requested capability is absent, say it is not registered in the Research Assistant runtime catalog.",
+        ]
+        for server_key, tools in catalog["tools_by_server"].items():
+            tool_names = ", ".join(str(tool.get("tool_name") or "") for tool in tools)
+            lines.append(f"- {server_key}: {tool_names}")
+        return "\n".join(lines)
 
     def _complete_chat_with_reactive_recovery(
         self,
@@ -2033,7 +2082,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         dialogue_intent: DialogueIntent,
         mode_decision: ModeDecision,
     ) -> dict[str, Any]:
-        del user_message, task
+        del task
         intent_config = self._dialogue_intent_config()
         template = self._dialogue_card_template(dialogue_intent, intent_config)
         mode_cfg = self._dialogue_mode_config(mode_decision.mode.value)
@@ -2092,6 +2141,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 "details_default_collapsed": details_default_collapsed,
             },
         }
+        if self._is_mcp_tool_catalog_inquiry(user_message):
+            cards["runtime_mcp_catalog"] = self._mcp_tool_catalog_snapshot()
         if show_plan_card:
             cards["plan_card"] = {
                 "title": str(template.get("plan_title") or ""),
@@ -2144,12 +2195,33 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         ]
 
     def _compose_assistant_reply(self, user_message: str, llm_text: str, cards: dict[str, Any], mode_decision: ModeDecision) -> str:
-        del cards
         text = llm_text.strip()
+        if mode_decision.intent_type == DialogueIntent.CAPABILITY_INQUIRY and self._is_mcp_tool_catalog_inquiry(user_message):
+            catalog = cards.get("runtime_mcp_catalog") if isinstance(cards, dict) else None
+            if isinstance(catalog, dict):
+                return self._apply_main_reply_policy(self._render_mcp_tool_catalog_reply(catalog), mode_decision)
         if text:
             return self._apply_main_reply_policy(text, mode_decision)
         intent_config = self._dialogue_intent_config()
         return self._apply_main_reply_policy(str(intent_config.get("fallback_reply") or user_message), mode_decision)
+
+    @staticmethod
+    def _render_mcp_tool_catalog_reply(catalog: dict[str, Any]) -> str:
+        lines = [
+            "当前 Research Assistant 只能按已登记的运行时 MCP 目录使用工具，不具备未登记的通用文件、Shell、Git、HTTP 或数仓直连工具。",
+            f"已启用 MCP server：{catalog.get('server_count', 0)} 个；已启用 MCP tool：{catalog.get('tool_count', 0)} 个；已批准能力：{catalog.get('capability_count', 0)} 个。",
+        ]
+        tools_by_server = catalog.get("tools_by_server") if isinstance(catalog.get("tools_by_server"), dict) else {}
+        if tools_by_server:
+            lines.append("已登记 MCP tools：")
+            for server_key in sorted(str(key) for key in tools_by_server):
+                tools = tools_by_server.get(server_key) or []
+                names = ", ".join(str(tool.get("tool_name") or "") for tool in tools if isinstance(tool, dict))
+                lines.append(f"- {server_key}: {names or '无启用工具'}")
+        else:
+            lines.append("当前没有启用的 MCP tool；需要先完成目录初始化或能力同步。")
+        lines.append("如需执行具体动作，还要经过对应 preflight、确认和审批边界；普通能力询问不会自动调用 MCP。")
+        return "\n".join(lines)
 
     def _apply_main_reply_policy(self, text: str, mode_decision: ModeDecision) -> str:
         if mode_decision.mode not in {DialogueMode.DIALOGUE, DialogueMode.ANALYSIS}:

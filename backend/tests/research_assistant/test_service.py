@@ -607,6 +607,47 @@ def test_chat_turn_capability_inquiry_answers_without_workflow_noise() -> None:
     assert "action_proposed" not in event_types
 
 
+def test_chat_turn_mcp_tool_inquiry_uses_runtime_catalog_not_generic_tool_claims() -> None:
+    class GenericToolHallucinationLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            return LlmCallResult(
+                content="I can use MCP tools for reading files, writing files, editing files, Git operations, HTTP requests, and no direct warehouse tool.",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    fake = GenericToolHallucinationLlmClient()
+    svc = _chat_service(fake)
+
+    result = svc.chat_turn(ChatTurnRequest(message="What MCP tools are available?"))
+
+    assert len(fake.calls) == 1
+    messages = fake.calls[0]["messages"]
+    assert isinstance(messages, list)
+    catalog_context = "\n".join(str(item.get("content", "")) for item in messages if isinstance(item, dict))
+    assert "Runtime MCP catalog snapshot" in catalog_context
+    assert "assistant_create_task" in catalog_context
+    assert "qe_template_create" in catalog_context
+    assert "mcp_github_issue_create" in catalog_context
+
+    text = result["assistant_message"]["content_text"]
+    assert "assistant_create_issue_candidate" in text
+    assert "qe_template_create" in text
+    assert "mcp_github_issue_create" in text
+    assert "reading files" not in text
+    assert "writing files" not in text
+    assert "HTTP requests" not in text
+    assert "no direct warehouse tool" not in text
+    catalog = result["cards"]["runtime_mcp_catalog"]
+    assert catalog["source"] == "assistant_mcp_tools_runtime_catalog"
+    assert catalog["tool_count"] == len(svc.repository.list_records("mcp_tools", limit=100)["items"])
+    assert result["mode_decision"]["intent_type"] == "capability_inquiry"
+    assert result["cards"]["action_proposals"] == []
+
+
 def test_chat_turn_bug_diagnosis_request_is_first_class_intent() -> None:
     fake = FakeLlmClient()
     svc = _chat_service(fake)
