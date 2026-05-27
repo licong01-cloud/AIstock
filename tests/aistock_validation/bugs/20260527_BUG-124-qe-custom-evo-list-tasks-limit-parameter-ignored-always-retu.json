@@ -6,7 +6,7 @@
   "module": "mcp.qe_experiment",
   "severity": "P2",
   "risk_area": "unspecified",
-  "status": "fixed",
+  "status": "verified",
   "trigger_condition": {
     "scenario": "reported_via_mcp",
     "files": [
@@ -22,13 +22,13 @@
   "assigned_agent": null,
   "fix_branch": "fix/mcp-token-bloat-123-126",
   "fix_commit": "b17a9427",
-  "verification_run_id": null,
+  "verification_run_id": "validation-center_20260527_060252_l0_l0_dedb2d31_runner-validation__2925424794",
   "created_at": "2026-05-27T05:48:40Z",
   "first_seen_at": "2026-05-27T05:48:40Z",
-  "last_seen_at": "2026-05-27T05:59:21Z",
+  "last_seen_at": "2026-05-27T06:03:33Z",
   "fixed_at": "2026-05-27T05:59:21Z",
   "submitted_at": "2026-05-27T05:48:40Z",
-  "closed_at": null,
+  "closed_at": "2026-05-27T06:03:33Z",
   "allowed_write_scope": [
     "mcp_server/handlers/qe_experiment.py"
   ],
@@ -55,6 +55,12 @@
       "actor": "mcp_agent",
       "action": "status_changed",
       "note": "Added limit and status params to list_evolution_tasks endpoint and get_all_tasks SQL. Validated with qe_archive_backend L2 + L0."
+    },
+    {
+      "timestamp": "2026-05-27T06:03:33Z",
+      "actor": "mcp_agent",
+      "action": "status_changed",
+      "note": "Merged to main (9f2853d2), pushed to GitHub. Post-merge L0 passed."
     }
   ]
 }
