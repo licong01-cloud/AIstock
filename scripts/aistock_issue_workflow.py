@@ -2906,6 +2906,7 @@ def _execute_workflow_command(
     timeout: int = 120,
     event: str | None = None,
     root: Path | None = None,
+    allow_failure: bool = False,
 ) -> dict[str, Any]:
     started = time.monotonic()
     result = _run_command(args, cwd=cwd, timeout=timeout)
@@ -2925,7 +2926,7 @@ def _execute_workflow_command(
             "stderr_excerpt": str(result.get("stderr") or "")[:1000],
         },
     )
-    if not result.get("ok"):
+    if not result.get("ok") and not allow_failure:
         raise WorkflowError(result.get("stderr") or result.get("stdout") or f"command failed: {' '.join(args)}")
     return result
 
@@ -3166,6 +3167,14 @@ def _verify_pr_merged(pr_url: str, *, skip_github_check: bool = False) -> dict[s
     return {"checked": True, "merged": True, "pr": payload}
 
 
+def _merge_commit_from_pr_check(pr_check: dict[str, Any] | None) -> str | None:
+    pr = (pr_check or {}).get("pr") or {}
+    merge_commit = pr.get("mergeCommit") if isinstance(pr, dict) else None
+    if isinstance(merge_commit, dict):
+        return str(merge_commit.get("oid") or "") or None
+    return str(merge_commit or "") or None
+
+
 def _sync_github_issue_after_close(
     record: dict[str, Any],
     evidence_payload: dict[str, Any],
@@ -3265,9 +3274,179 @@ def _merge_pr_if_ready_for_bug(bug_id: str, pr_url: str) -> dict[str, Any]:
         cwd=REPO_ROOT,
         timeout=180,
         event="command:gh_pr_merge",
+        allow_failure=True,
     )
-    verified = _verify_pr_merged(pr_url)
+    try:
+        verified = _verify_pr_merged(pr_url)
+    except WorkflowError as exc:
+        if not result.get("ok"):
+            raise WorkflowError(
+                result.get("stderr") or result.get("stdout") or f"gh pr merge failed before verification: {exc}"
+            ) from exc
+        raise
+    if not result.get("ok"):
+        _append_event(
+            bug_id,
+            event="merge_remote_verified_after_local_error",
+            state="merged",
+            result="recovered",
+            evidence={
+                "pr_url": pr_url,
+                "merge_error": result.get("stderr") or result.get("stdout"),
+                "merge_commit": _merge_commit_from_pr_check(verified),
+            },
+        )
+        return {
+            "already_merged": True,
+            "check_summary": check_summary,
+            "merge_result": result,
+            "verified": verified,
+            "recovered_from_local_merge_error": True,
+        }
     return {"already_merged": False, "check_summary": check_summary, "merge_result": result, "verified": verified}
+
+
+def _close_sync_changed_files(close_sync: dict[str, Any]) -> list[str]:
+    root = Path(str(close_sync.get("registry_root") or REPO_ROOT))
+    updated = str(close_sync.get("updated_bug_json") or close_sync.get("source_bug_json") or "")
+    files: list[str] = []
+    status = _run_command(["git", "status", "--porcelain=v1", "--", "tests/aistock_validation/bugs"], cwd=root)
+    if status.get("ok"):
+        for line in str(status.get("stdout") or "").splitlines():
+            rel = line[3:].strip() if len(line) > 3 else ""
+            if rel and rel.replace("\\", "/").startswith("tests/aistock_validation/bugs/"):
+                files.append(rel.replace("\\", "/"))
+    elif updated:
+        files.append(updated.replace("\\", "/"))
+    return sorted(set(files))
+
+
+def _maybe_commit_and_pr_close_sync(
+    *,
+    bug_id: str,
+    close_sync: dict[str, Any],
+    validation_evidence: list[str],
+) -> dict[str, Any]:
+    root = Path(str(close_sync.get("registry_root") or ""))
+    branch = ((close_sync.get("registry_worktree_plan") or {}).get("branch") or "")
+    if not root.exists() or not branch:
+        return {"workflow_gate": "skipped", "reason": "missing_close_sync_worktree"}
+    changed_files = _close_sync_changed_files(close_sync)
+    if not changed_files:
+        return {"workflow_gate": "no_changes", "root": str(root), "branch": branch}
+
+    dirty = _dirty_files(root)
+    unexpected_dirty = sorted(
+        path for path in dirty if not path.replace("\\", "/").startswith("tests/aistock_validation/bugs/")
+    )
+    if unexpected_dirty:
+        raise WorkflowError(
+            "close-sync worktree has unexpected dirty files outside BUG registry: "
+            + ", ".join(unexpected_dirty[:10])
+        )
+
+    started = time.monotonic()
+    actions: list[dict[str, Any]] = []
+    add = _run_command(["git", "add", *changed_files], cwd=root, timeout=60)
+    actions.append({"command": f"git add {' '.join(changed_files)}", "result": add})
+    if not add.get("ok"):
+        raise WorkflowError(add.get("stderr") or add.get("stdout") or "close-sync git add failed")
+    commit = _run_command(["git", "commit", "-m", f"chore(issue): close-sync {bug_id} after merge"], cwd=root, timeout=120)
+    actions.append({"command": f"git commit -m chore(issue): close-sync {bug_id} after merge", "result": commit})
+    if not commit.get("ok") and "nothing to commit" not in f"{commit.get('stdout')}\n{commit.get('stderr')}".lower():
+        raise WorkflowError(commit.get("stderr") or commit.get("stdout") or "close-sync git commit failed")
+    commit_sha = _run_command(["git", "rev-parse", "--short=12", "HEAD"], cwd=root, timeout=30)
+
+    push = _run_command(["git", "push", "-u", "origin", branch], cwd=root, timeout=180)
+    actions.append({"command": f"git push -u origin {branch}", "result": push})
+    if not push.get("ok"):
+        raise WorkflowError(push.get("stderr") or push.get("stdout") or "close-sync git push failed")
+
+    body_path = root / WORKFLOW_ROOT / bug_id / "close-sync-pr-body.md"
+    body_lines = [
+        f"## {bug_id} close-sync",
+        "",
+        f"- Source PR: {close_sync.get('merged_pr') or 'n/a'}",
+        f"- Merge commit: `{close_sync.get('merge_commit') or 'unknown'}`",
+        "- BUG JSON status: `fixed`",
+        "",
+        "## Validation",
+        *[f"- {item}" for item in validation_evidence or close_sync.get("validation_evidence") or ["n/a"]],
+        "",
+        "## Production gates",
+        *[f"- {key}: `{value}`" for key, value in sorted((close_sync.get("production_gates") or {}).items())],
+    ]
+    _write_text(body_path, "\n".join(body_lines) + "\n")
+    pr = _run_command(
+        [
+            "gh",
+            "pr",
+            "create",
+            "--repo",
+            GITHUB_REPO,
+            "--base",
+            "main",
+            "--head",
+            branch,
+            "--title",
+            f"chore(issue): close-sync {bug_id}",
+            "--body-file",
+            str(body_path),
+        ],
+        cwd=root,
+        timeout=120,
+    )
+    actions.append({"command": "gh pr create close-sync", "result": pr})
+    pr_url = str(pr.get("stdout") or "").splitlines()[-1].strip() if pr.get("ok") else None
+    if not pr.get("ok"):
+        text = f"{pr.get('stdout')}\n{pr.get('stderr')}"
+        if "already exists" not in text.lower():
+            raise WorkflowError(pr.get("stderr") or pr.get("stdout") or "close-sync PR create failed")
+        existing = _run_command(
+            [
+                "gh",
+                "pr",
+                "list",
+                "--repo",
+                GITHUB_REPO,
+                "--head",
+                branch,
+                "--state",
+                "open",
+                "--json",
+                "url",
+                "--limit",
+                "1",
+            ],
+            cwd=root,
+            timeout=60,
+        )
+        if existing.get("ok"):
+            try:
+                rows = json.loads(str(existing.get("stdout") or "[]"))
+                if rows:
+                    pr_url = rows[0].get("url")
+            except json.JSONDecodeError:
+                pr_url = None
+    result = {
+        "workflow_gate": "pr_opened" if pr.get("ok") or pr_url else "committed",
+        "root": str(root),
+        "branch": branch,
+        "changed_files": changed_files,
+        "actions": actions,
+        "commit": str(commit_sha.get("stdout") or "").strip() if commit_sha.get("ok") else None,
+        "pr_url": pr_url,
+        "duration_seconds": round(time.monotonic() - started, 3),
+    }
+    _append_event(
+        bug_id,
+        event="close_sync_persisted",
+        state="close_synced",
+        root=root,
+        duration_seconds=result["duration_seconds"],
+        evidence={"branch": branch, "commit": result["commit"], "pr_url": pr_url, "changed_files": changed_files},
+    )
+    return result
 
 
 def build_run_plan(
@@ -3399,6 +3578,8 @@ def build_run_plan(
                 "next_command": f"python scripts/aistock_issue_workflow.py run --bug-id {canonical_bug_id} --mode merge --pr-url {pr_url} --merge",
             }
         merge_result = _merge_pr_if_ready_for_bug(canonical_bug_id, pr_url)
+        close_sync_pr_check = merge_result.get("verified") if isinstance(merge_result, dict) else None
+        close_sync_merge_commit = _merge_commit_from_pr_check(close_sync_pr_check)
         close_sync = build_close_sync_plan(
             bug_id=canonical_bug_id,
             issue_json=issue_json,
@@ -3406,8 +3587,14 @@ def build_run_plan(
             apply=True,
             allow_missing_linkage=allow_missing_linkage,
             validation_evidence=validation_evidence,
+            merge_commit=close_sync_merge_commit,
             production_gates=production_gates or _production_gates_payload(),
             create_registry_worktree=True,
+        )
+        close_sync_commit = _maybe_commit_and_pr_close_sync(
+            bug_id=canonical_bug_id,
+            close_sync=close_sync,
+            validation_evidence=validation_evidence,
         )
         cleanup = None
         if branch:
@@ -3420,12 +3607,13 @@ def build_run_plan(
             )
         _write_state(
             canonical_bug_id,
-            state="merged",
+            state="close_synced",
             pr_url=pr_url,
-            commit=close_sync.get("merge_commit"),
+            commit=close_sync.get("merge_commit") or close_sync_merge_commit,
             close_sync=close_sync,
+            close_sync_commit=close_sync_commit,
             cleanup_plan=cleanup,
-            next_actions=["run_cleanup_after_merge_apply_when_ready"],
+            next_actions=["merge_close_sync_pr_when_ready", "run_cleanup_after_merge_apply_when_ready"],
         )
         return {
             "schema_version": "aistock_issue_workflow_run_v1",
@@ -3435,6 +3623,7 @@ def build_run_plan(
             "workflow_gate": "merged_close_synced",
             "merge": merge_result,
             "close_sync": close_sync,
+            "close_sync_commit": close_sync_commit,
             "cleanup": cleanup,
         }
     raise WorkflowError(f"Unsupported run mode for Phase 1: {mode}")
@@ -3519,11 +3708,7 @@ def build_close_sync_plan(
             raise WorkflowError("close-sync --apply requires at least one --validation-evidence")
         started = time.monotonic()
         pr_check = _verify_pr_merged(pr_url, skip_github_check=skip_github_check)
-        merge_commit = merge_commit or (
-            ((pr_check.get("pr") or {}).get("mergeCommit") or {}).get("oid")
-            if isinstance((pr_check.get("pr") or {}).get("mergeCommit"), dict)
-            else None
-        )
+        merge_commit = merge_commit or _merge_commit_from_pr_check(pr_check)
         updated = dict(record)
         updated.update(
             {
