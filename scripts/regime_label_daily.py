@@ -123,6 +123,27 @@ def fetch_csi300_60d_volatility(conn, trade_date: dt.date) -> float | None:
         return float(row[0]) if row and row[0] is not None else None
 
 
+def fetch_csi300_trading_dates(
+    conn,
+    start: dt.date,
+    end: dt.date,
+    *,
+    index_code: str = CSI300_INDEX_CODE,
+) -> list[dt.date]:
+    """Actual index trading dates in [start, end], excluding market holidays."""
+    sql = """
+        SELECT trade_date
+        FROM market.index_daily
+        WHERE index_code = %s
+          AND trade_date >= %s
+          AND trade_date <= %s
+        ORDER BY trade_date ASC
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (index_code, start, end))
+        return [row[0] for row in cur.fetchall()]
+
+
 def fetch_percentile(conn, trade_date: dt.date, value: float, signal: str) -> float | None:
     """Percentile rank of `value` against last 5 years of similar signals.
 
@@ -326,17 +347,14 @@ def main() -> int:
                 parser.error("--backfill requires --start and --end")
             start = dt.date.fromisoformat(args.start)
             end = dt.date.fromisoformat(args.end)
-            curr = start
-            while curr <= end:
-                if curr.weekday() < 5:  # weekdays only
-                    try:
-                        label = compute_regime_for_date(conn, curr, method=args.method)
-                        if not args.dry_run:
-                            upsert_regime_label(conn, label)
-                        logger.info("%s %s confidence=%.3f", curr, label.regime, label.confidence)
-                    except (ValueError, NotImplementedError) as exc:
-                        logger.warning("skip %s: %s", curr, exc)
-                curr += dt.timedelta(days=1)
+            for trade_date in fetch_csi300_trading_dates(conn, start, end):
+                try:
+                    label = compute_regime_for_date(conn, trade_date, method=args.method)
+                    if not args.dry_run:
+                        upsert_regime_label(conn, label)
+                    logger.info("%s %s confidence=%.3f", trade_date, label.regime, label.confidence)
+                except (ValueError, NotImplementedError) as exc:
+                    logger.warning("skip %s: %s", trade_date, exc)
         else:
             target = dt.date.fromisoformat(args.date) if args.date else dt.date.today()
             label = compute_regime_for_date(conn, target, method=args.method)

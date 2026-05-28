@@ -51,7 +51,9 @@ from regime_label_daily import (  # noqa: E402  module-level import after sys.pa
     classify_simple_quadrant,
     compute_regime_for_date,
     fetch_csi300_6m_return,
+    fetch_csi300_trading_dates,
     fetch_percentile,
+    main,
     upsert_regime_label,
 )
 
@@ -123,6 +125,30 @@ class TestFetchCsi300Return:
             "000300.SH",
             dt.date(2026, 5, 10),
             SIX_MONTH_TRADING_SESSIONS,
+        )
+
+
+@_skeleton_skipif
+class TestFetchTradingDates:
+    def test_fetches_index_trading_dates_only(self):
+        dates = [dt.date(2026, 2, 6), dt.date(2026, 2, 16)]
+        conn, cur = _mock_conn_with_rows([(d,) for d in dates])
+
+        result = fetch_csi300_trading_dates(
+            conn,
+            dt.date(2026, 2, 1),
+            dt.date(2026, 2, 20),
+        )
+
+        sql_text = cur.execute.call_args.args[0]
+        params = cur.execute.call_args.args[1]
+        assert result == dates
+        assert "FROM market.index_daily" in sql_text
+        assert "ORDER BY trade_date ASC" in sql_text
+        assert params == (
+            "000300.SH",
+            dt.date(2026, 2, 1),
+            dt.date(2026, 2, 20),
         )
 
 
@@ -302,3 +328,47 @@ class TestComputeRegimeForDate:
         assert label.source_method == "simple_quadrant"
         assert label.source_signal.csi300_6m_ret == 0.20
         assert label.source_signal.ret_pct_5y == 0.85
+
+
+@_skeleton_skipif
+class TestBackfillTradingCalendar:
+    def test_backfill_iterates_actual_trading_dates_not_weekdays(self, monkeypatch):
+        import regime_label_daily as mod
+
+        conn = MagicMock()
+        trading_dates = [dt.date(2026, 2, 6), dt.date(2026, 2, 16)]
+        processed = []
+        writes = []
+
+        monkeypatch.setattr(mod, "_connect_pg", lambda: conn)
+        monkeypatch.setattr(mod, "fetch_csi300_trading_dates", lambda c, s, e: trading_dates)
+
+        def fake_compute(_conn, trade_date, method="simple_quadrant"):
+            processed.append(trade_date)
+            return RegimeLabel(
+                trade_date=trade_date,
+                regime="oscillation",
+                confidence=0.1,
+                source_method=method,
+                source_signal=RegimeSignal(trade_date, 0.0, 0.0, 0.5, 0.5),
+            )
+
+        monkeypatch.setattr(mod, "compute_regime_for_date", fake_compute)
+        monkeypatch.setattr(mod, "upsert_regime_label", lambda _conn, label: writes.append(label.trade_date))
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "regime_label_daily.py",
+                "--backfill",
+                "--start",
+                "2026-02-01",
+                "--end",
+                "2026-02-20",
+            ],
+        )
+
+        assert main() == 0
+        assert processed == trading_dates
+        assert writes == trading_dates
+        conn.close.assert_called_once()
