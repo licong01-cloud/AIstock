@@ -80,6 +80,43 @@ def test_extract_signal_preset_coefficients_supports_nested_shape() -> None:
     assert coeffs == {"trending": 1.02, "neutral": 1.0, "fading": 0.98}
 
 
+def test_extract_signal_preset_coefficients_ignores_metadata_keys() -> None:
+    coeffs = HMMTrainingService._extract_signal_preset_coefficients(
+        {
+            "signal_presets": {
+                "preset_A": {
+                    "label": "HMM preset A",
+                    "description": "operator-facing metadata must not be parsed as a coefficient",
+                    "coefficients": {
+                        "1": {"trending": "1.05", "neutral": 1.0, "fading": 0.96},
+                    },
+                }
+            }
+        },
+        "preset_A",
+    )
+
+    assert coeffs == {"trending": 1.05, "neutral": 1.0, "fading": 0.96}
+
+
+def test_extract_signal_preset_coefficients_ignores_flat_metadata_without_coefficients_key() -> None:
+    coeffs = HMMTrainingService._extract_signal_preset_coefficients(
+        {
+            "signal_presets": {
+                "preset_A": {
+                    "label": "HMM preset A",
+                    "trending": "1.05",
+                    "neutral": 1.0,
+                    "fading": 0.96,
+                }
+            }
+        },
+        "preset_A",
+    )
+
+    assert coeffs == {"trending": 1.05, "neutral": 1.0, "fading": 0.96}
+
+
 def test_preview_daily_coefficients_uses_latest_asof_and_next_trading_day(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     svc, model_path = _service_with_snapshot(tmp_path, monkeypatch)
 

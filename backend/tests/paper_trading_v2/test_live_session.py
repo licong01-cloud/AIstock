@@ -986,6 +986,68 @@ def test_live_mark_to_market_continues_after_orders_filled() -> None:
     assert events[-1]["event_type"] == "LIVE_MARK_TO_MARKET_SNAPSHOT"
 
 
+def test_live_snapshot_price_waits_until_first_observed_minute_bar() -> None:
+    paper_repo, portfolio_id = make_portfolio_repo()
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+    )
+    prior_run = paper_repo.create_run(
+        PaperRun(
+            portfolio_id=portfolio_id,
+            trade_date=date(2024, 1, 1),
+            status=RunStatus.SUCCEEDED,
+            data_source=MinuteDataSource.DB_HISTORICAL,
+        )
+    )
+    paper_repo.save_positions(
+        run_id=prior_run.run_id,
+        trade_date=prior_run.trade_date,
+        positions=[
+            PositionLot(
+                portfolio_id=portfolio_id,
+                symbol="000001.SZ",
+                quantity=600,
+                available_quantity=600,
+                avg_cost=10.1,
+                trade_date=prior_run.trade_date,
+            )
+        ],
+        prices={"000001.SZ": 10.1},
+    )
+    live_executor = PaperTradingLiveMinuteExecutor(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=FakeLiveMarket([]),
+        runtime=FakeRuntime(),
+        target_engine=FakeTargetEngine(),
+        refresh_audit=FakeRefreshAuditOk(),
+        risk_policy_service=FakeRiskPolicyService(),
+        tradability_filter=FakeTradabilityFilter(),
+    )
+
+    progress = PaperTradingSessionRunner(repository=paper_repo, live_executor=live_executor).tick(
+        session.session_id,
+        as_of_time=datetime(2024, 1, 2, 9, 10),
+    )
+
+    assert progress.session.status == PaperSessionStatus.LIVE_WAITING_FOR_BAR
+    assert progress.session.last_error is not None
+    assert progress.session.last_error["message"] == "live snapshot price requires at least one observed minute bar"
+    assert paper_repo.get_run_by_portfolio_date(portfolio_id, date(2024, 1, 2)) is None
+    assert paper_repo.get_portfolio(portfolio_id).status == PortfolioStatus.RUNNING
+    assert paper_repo.list_errors(portfolio_id) == []
+    events = paper_repo.list_session_events(session.session_id)
+    assert events[-1]["event_type"] == "LIVE_DATA_FETCH_RETRYABLE"
+    assert events[-1]["context"]["retryable"] is True
+    days = paper_repo.list_session_days(session.session_id)
+    assert days[-1].run_id is None
+    assert days[-1].last_processed_bar_time is None
+
+
 def test_live_tdx_fetch_failure_waits_without_failing_session() -> None:
     paper_repo, portfolio_id = make_portfolio_repo()
     session = PaperTradingSessionService(repository=paper_repo).create_session(

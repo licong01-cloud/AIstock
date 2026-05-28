@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -69,6 +70,7 @@ class FakeQMTClient:
         self.place_calls: list[dict] = []
         self.cancel_calls: list[str] = []
         self.orders: list[dict] = []
+        self.trades: list[dict] = []
         self.account = {
             "available_cash": 123456.78,
             "total_asset": 234567.89,
@@ -125,6 +127,9 @@ class FakeQMTClient:
     def get_orders(self, cancelable_only: bool = False):
         return list(self.orders)
 
+    def get_trades(self):
+        return list(self.trades)
+
     def get_account_info(self):
         return dict(self.account)
 
@@ -178,6 +183,7 @@ def _intent(
     *,
     portfolio_id: str = "paper_mq_1",
     package_id: str = "pkg_mq_1",
+    symbol: str = "000001.SZ",
     side: OrderSide = OrderSide.BUY,
     order_type: OrderType = OrderType.MARKET,
     limit_price: float | None = None,
@@ -186,7 +192,7 @@ def _intent(
     return OrderIntent(
         package_id=package_id,
         portfolio_id=portfolio_id,
-        symbol="000001.SZ",
+        symbol=symbol,
         side=side,
         quantity=200,
         order_type=order_type,
@@ -396,6 +402,96 @@ def _portfolio_backend_factory(client: FakeQMTClient):
     return lambda **kwargs: MiniQMTSimBackend(qmt_client=client, **kwargs)
 
 
+class _RecordingMiniQMTBroker:
+    def __init__(self, *, account=None, positions=None, prices=None) -> None:
+        self.submitted: list[OrderIntent] = []
+        self._account = account or BrokerAccountSnapshot(
+            backend_id="minqmt_sim",
+            cash=Decimal("100000"),
+            nav=Decimal("100000"),
+            margin_used=None,
+            as_of=datetime(2024, 1, 2, 15, 0, tzinfo=UTC),
+        )
+        self._positions = positions or {}
+        self._prices = prices or {}
+        self._statuses: dict[str, OrderHandleStatus] = {}
+        self._trades: dict[str, list[dict]] = {}
+
+    def submit_order_intent(self, intent: OrderIntent) -> OrderHandle:
+        self.submitted.append(intent)
+        handle = OrderHandle(
+            handle_id=f"handle_{len(self.submitted)}",
+            backend_id="minqmt_sim",
+            submitted_at=datetime(2024, 1, 2, 9, 31, tzinfo=UTC),
+            intent_id=intent.intent_id,
+        )
+        self._statuses[handle.handle_id] = OrderHandleStatus(
+            handle_id=handle.handle_id,
+            state="pending",
+            filled_quantity=0,
+            avg_fill_price=None,
+            last_event_at=handle.submitted_at,
+            rejection_reason=None,
+        )
+        return handle
+
+    def order_context(self, handle: OrderHandle) -> dict[str, str]:
+        return {
+            "handle_id": handle.handle_id,
+            "intent_id": handle.intent_id,
+            "miniqmt_order_id": f"native_{handle.intent_id}",
+            "strategy_name": "slot_alpha",
+            "order_remark": f"remark_{handle.intent_id}",
+        }
+
+    def query_status(self, handle: OrderHandle) -> OrderHandleStatus:
+        return self._statuses[handle.handle_id]
+
+    def query_trades(self, handle: OrderHandle) -> list[dict]:
+        return list(self._trades.get(handle.handle_id, []))
+
+    def query_account(self) -> BrokerAccountSnapshot:
+        return self._account
+
+    def query_position_marks(self):
+        return self._positions, self._prices
+
+    def shutdown(self) -> None:
+        return None
+
+
+class _FilledTradeMiniQMTBroker(_RecordingMiniQMTBroker):
+    def submit_order_intent(self, intent: OrderIntent) -> OrderHandle:
+        handle = super().submit_order_intent(intent)
+        self._statuses[handle.handle_id] = OrderHandleStatus(
+            handle_id=handle.handle_id,
+            state="filled",
+            filled_quantity=intent.quantity,
+            avg_fill_price=Decimal("10.88"),
+            last_event_at=handle.submitted_at,
+            rejection_reason=None,
+        )
+        context = self.order_context(handle)
+        self._trades[handle.handle_id] = [
+            {
+                "traded_id": f"trade_{handle.intent_id}",
+                "stock_code": intent.symbol,
+                "stock_name": "Unit Test Stock",
+                "order_type": 23 if intent.side == OrderSide.BUY else 24,
+                "traded_time": "093105",
+                "traded_price": 10.88,
+                "traded_volume": intent.quantity,
+                "traded_amount": 10.88 * intent.quantity,
+                "order_id": context["miniqmt_order_id"],
+                "order_sysid": f"sys_{handle.intent_id}",
+                "commission": 5.0,
+                "strategy_name": context["strategy_name"],
+                "order_remark": context["order_remark"],
+            }
+        ]
+        return handle
+
+
 def test_query_status_from_native_reconciles_after_process_restart() -> None:
     client = FakeQMTClient()
     backend = _backend(client=client)
@@ -415,6 +511,36 @@ def test_query_status_from_native_reconciles_after_process_restart() -> None:
     assert status.state == "filled"
     assert status.filled_quantity == 200
     assert status.avg_fill_price == Decimal("10.88")
+
+
+def test_query_trades_maps_miniqmt_native_trade_rows() -> None:
+    client = FakeQMTClient()
+    backend = _backend(client=client)
+    handle = backend.submit_order_intent(_intent())
+    context = backend.order_context(handle)
+    client.trades.append(
+        {
+            "traded_id": "trade_1",
+            "stock_code": "000001.SZ",
+            "stock_name": "Ping An Bank",
+            "order_type": 23,
+            "traded_time": "093105",
+            "traded_price": 10.88,
+            "traded_volume": 200,
+            "traded_amount": 2176.0,
+            "order_id": context["miniqmt_order_id"],
+            "order_sysid": "sys_1",
+            "commission": 5.0,
+            "strategy_name": context["strategy_name"],
+            "order_remark": context["order_remark"],
+        }
+    )
+
+    trades = backend.query_trades(handle)
+
+    assert len(trades) == 1
+    assert trades[0]["traded_id"] == "trade_1"
+    assert trades[0]["order_id"] == context["miniqmt_order_id"]
 
 
 def test_market_data_channel_and_bind_capacity_document_exclusive_account() -> None:
@@ -471,6 +597,10 @@ class _SnapshotOnlyRepository:
         self.events: list[dict] = []
         self.saved_positions: list[dict] = []
         self.snapshots: list[dict] = []
+        self.orders: list[Any] = []
+        self.fills: list[Any] = []
+        self.order_events: list[Any] = []
+        self.execution_states: list[Any] = []
 
     def save_run_event(self, *, run_id: str, event_type: str, message: str, context: dict | None = None) -> None:
         self.events.append({"run_id": run_id, "event_type": event_type, "message": message, "context": context or {}})
@@ -482,6 +612,26 @@ class _SnapshotOnlyRepository:
 
     def save_daily_snapshot(self, *, run_id: str, trade_date: date, snapshot, metadata: dict) -> None:
         self.snapshots.append({"run_id": run_id, "trade_date": trade_date, "snapshot": snapshot, "metadata": metadata})
+
+    def save_order(self, run_id: str, order) -> None:
+        self.orders.append(order)
+
+    def save_fill(self, run_id: str, fill, *, intended_price: float | None = None, fill_market_context: dict | None = None) -> None:
+        self.fills.append(
+            {
+                "run_id": run_id,
+                "fill": fill,
+                "intended_price": intended_price,
+                "fill_market_context": fill_market_context,
+            }
+        )
+
+    def save_order_event(self, run_id: str, event) -> None:
+        self.order_events.append(event)
+
+    def save_order_execution_state(self, state):
+        self.execution_states.append(state)
+        return state
 
     def update_run_status(self, run: PaperRun, status: RunStatus, error: dict | None = None) -> PaperRun:
         return run.model_copy(update={"status": status, "error": error})
@@ -532,6 +682,108 @@ def test_day_runner_minqmt_no_intents_reconciles_broker_snapshot_without_fills()
     assert repository.snapshots[0]["metadata"]["authority_source"] == "MINIQMT_QUERY"
     assert repository.snapshots[0]["metadata"]["miniqmt_no_local_fills"] is True
     assert any(event["event_type"] == "MINIQMT_NO_ORDER_INTENTS" for event in repository.events)
+
+
+def test_day_runner_minqmt_submits_sell_intents_before_buy_intents() -> None:
+    manifest = make_paper_enabled_manifest()
+    portfolio = PaperPortfolio(
+        portfolio_id="paper_mq_1",
+        portfolio_name="mini qmt sell before buy",
+        package_id=manifest.package_id,
+        manifest_sha256=manifest.manifest_sha256,
+        frozen_manifest=manifest,
+        initial_cash=100_000,
+        start_date=TRADE_DATE,
+        data_source=MinuteDataSource.MINIQMT_REALTIME,
+        broker_backend="minqmt_sim",
+    )
+    run = PaperRun(
+        portfolio_id=portfolio.portfolio_id,
+        trade_date=TRADE_DATE,
+        status=RunStatus.RUNNING,
+        data_source=MinuteDataSource.MINIQMT_REALTIME,
+    )
+    buy = _intent(portfolio_id=portfolio.portfolio_id, package_id=manifest.package_id, symbol="000003.SZ", side=OrderSide.BUY)
+    sell = _intent(portfolio_id=portfolio.portfolio_id, package_id=manifest.package_id, symbol="000002.SZ", side=OrderSide.SELL)
+    broker = _RecordingMiniQMTBroker()
+    repository = _SnapshotOnlyRepository(portfolio)
+
+    PaperTradingDayRunner(repository=repository)._run_minqmt_sim_orders(
+        portfolio=portfolio,
+        run=run,
+        manifest=manifest,
+        trade_date=TRADE_DATE,
+        intents=[buy, sell],
+        broker=broker,  # type: ignore[arg-type]
+    )
+
+    assert [intent.side for intent in broker.submitted] == [OrderSide.SELL, OrderSide.BUY]
+    assert all(order.filled_quantity == 0 for order in repository.orders)
+    assert all(order.status.value == "SUBMITTED" for order in repository.orders)
+
+
+def test_day_runner_minqmt_persists_native_trade_fills_and_order_events() -> None:
+    manifest = make_paper_enabled_manifest()
+    portfolio = PaperPortfolio(
+        portfolio_id="paper_mq_1",
+        portfolio_name="mini qmt fill reconciliation",
+        package_id=manifest.package_id,
+        manifest_sha256=manifest.manifest_sha256,
+        frozen_manifest=manifest,
+        initial_cash=100_000,
+        start_date=TRADE_DATE,
+        data_source=MinuteDataSource.MINIQMT_REALTIME,
+        broker_backend="minqmt_sim",
+    )
+    run = PaperRun(
+        portfolio_id=portfolio.portfolio_id,
+        trade_date=TRADE_DATE,
+        status=RunStatus.RUNNING,
+        data_source=MinuteDataSource.MINIQMT_REALTIME,
+        runtime_config={"paper_v2_session": {"session_id": "psess_unit"}},
+    )
+    repository = _SnapshotOnlyRepository(portfolio)
+    broker = _FilledTradeMiniQMTBroker(
+        account=BrokerAccountSnapshot(
+            backend_id="minqmt_sim",
+            cash=Decimal("97500"),
+            nav=Decimal("99700"),
+            margin_used=None,
+            as_of=datetime(2024, 1, 2, 15, 0, tzinfo=UTC),
+        ),
+        positions={
+            "000001.SZ": PositionLot(
+                portfolio_id=portfolio.portfolio_id,
+                symbol="000001.SZ",
+                quantity=200,
+                available_quantity=0,
+                avg_cost=10.88,
+                trade_date=TRADE_DATE,
+            )
+        },
+        prices={"000001.SZ": 11.0},
+    )
+
+    result = PaperTradingDayRunner(repository=repository)._run_minqmt_sim_orders(
+        portfolio=portfolio,
+        run=run,
+        manifest=manifest,
+        trade_date=TRADE_DATE,
+        intents=[_intent(portfolio_id=portfolio.portfolio_id, package_id=manifest.package_id)],
+        broker=broker,  # type: ignore[arg-type]
+    )
+
+    assert len(result.fills) == 1
+    assert result.fills[0].fill_id.startswith("fill_minqmt_trade_")
+    assert result.fills[0].order_id == result.orders[0].order_id
+    assert result.orders[0].status.value == "FILLED"
+    assert result.orders[0].filled_quantity == 200
+    assert repository.fills[0]["fill_market_context"]["data_source"] == "MINIQMT_REALTIME"
+    assert repository.order_events[0].event_type.value == "FILLED"
+    assert repository.execution_states[0].session_id == "psess_unit"
+    assert repository.execution_states[0].status == "FILLED"
+    assert repository.snapshots[0]["metadata"]["fill_count"] == 1
+    assert repository.snapshots[0]["metadata"]["miniqmt_no_local_fills"] is False
 
 
 def _miniqmt_portfolio_fixture(*, custom_params: dict | None = None):

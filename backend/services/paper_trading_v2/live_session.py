@@ -150,7 +150,10 @@ class PaperTradingLiveMinuteExecutor:
 
     @staticmethod
     def _is_retryable_live_minute_fetch_error(exc: DataUnavailableError) -> bool:
-        return exc.message == "TDX minute data fetch failed"
+        return exc.message in {
+            "TDX minute data fetch failed",
+            "live snapshot price requires at least one observed minute bar",
+        }
 
     def _record_retryable_live_minute_fetch_error(
         self,
@@ -541,6 +544,7 @@ class PaperTradingLiveMinuteExecutor:
             # the strict day runner still expects READY before creating a run.
             self.repository.update_portfolio_status(session.portfolio_id, PortfolioStatus.READY)
         runtime_config = deepcopy(session.runtime_config)
+        runtime_config.setdefault("paper_v2_session", {})["session_id"] = session.session_id
         self._ensure_live_selection_cutoff(runtime_config, trade_date=trade_date)
         try:
             result = self.day_helper.run_day(
