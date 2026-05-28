@@ -6,7 +6,7 @@
   "module": "qe_archive",
   "severity": "P3",
   "risk_area": "data_correctness",
-  "status": "open",
+  "status": "fixed",
   "trigger_condition": {
     "scenario": "future_query_pattern_subject_type_filter",
     "current_workaround": "JSON_VALUE(old_value_json, '$.subject_type')"
@@ -19,20 +19,21 @@
     "commit:9079ee5"
   ],
   "fingerprint": "qe_archive::config_change_audit::action_vs_subject_split",
-  "assigned_agent": "claude_code",
-  "fix_branch": null,
+  "assigned_agent": "codex",
+  "fix_branch": "bug/BUG-010-qe-archive-config-change-action-decision-2026052-20260529",
   "fix_commit": null,
   "verification_run_id": null,
   "created_at": "2026-05-10T00:00:00Z",
   "first_seen_at": "2026-05-10T00:00:00Z",
   "last_seen_at": "2026-05-10T00:00:00Z",
-  "fixed_at": null,
+  "fixed_at": "2026-05-29T05:40:29+08:00",
   "submitted_at": null,
   "closed_at": null,
   "allowed_write_scope": [
     "backend/db/init_qe_archive_paper_v2_extension_20260510.sql",
     "backend/services/qe_archive/handlers/paper_v2_archive_handler.py",
-    "docs/architecture/data_warehouse_extension_design_20260510.md"
+    "docs/architecture/data_warehouse_extension_design_20260510.md",
+    "tests/aistock_validation/bugs/20260510_BUG-010-config-change-audit-action-vs-subject.json"
   ],
   "suspected_modules": [
     "backend/services/qe_archive/handlers/",
@@ -51,6 +52,27 @@
       "actor": "claude_code",
       "action": "discovered",
       "note": "Round-2 P1.4 audit fixed semantic but flagged split as deferred design pass"
+    },
+    {
+      "timestamp": "2026-05-29T05:40:29+08:00",
+      "actor": "codex_app",
+      "action": "github_issue_linked",
+      "note": "Linked BUG-010 to GitHub Issue #321 for standard workflow tracking."
+    },
+    {
+      "timestamp": "2026-05-29T05:40:29+08:00",
+      "actor": "codex_app",
+      "action": "decision_recorded",
+      "note": "Recorded that change_type remains the source action enum and subject/category queries must inspect JSON payloads unless a future migration adds subject_type."
     }
+  ],
+  "github_issue_number": 321,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/321",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "production_backend_dependency_gate": "noop",
+  "validation_evidence": [
+    "Architecture decision recorded in docs/architecture/data_warehouse_extension_design_20260510.md §5.18.",
+    "No SQL or handler code change required; existing handler and SQL already enforce source action enum CREATE/ACTIVATE/DEACTIVATE/MODIFY."
   ]
 }
