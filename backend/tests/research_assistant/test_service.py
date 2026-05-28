@@ -707,6 +707,58 @@ def test_chat_turn_mcp_tool_inquiry_uses_runtime_catalog_not_generic_tool_claims
     assert result["cards"]["action_proposals"] == []
 
 
+def test_chat_turn_chinese_factor_library_request_does_not_surface_mock_counts() -> None:
+    class FactorHallucinationLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            return LlmCallResult(
+                content="因子库目前有 10 个已注册因子：alpha_001、alpha_002 等。",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    svc = _chat_service(FactorHallucinationLlmClient())
+
+    result = svc.chat_turn(ChatTurnRequest(message="帮我看看因子库有哪些可用因子"))
+
+    text = result["assistant_message"]["content_text"]
+    assert "10 个已注册因子" not in text
+    assert "aistock-factor-library/factor_library_list" in text
+    assert "summary-first" in text
+    assert result["mode_decision"]["intent_type"] == "factor_library_request"
+    assert result["cards"]["mcp_route_decision"]["domain"] == "factor_library"
+    assert result["cards"]["mcp_route_decision"]["summary_first"] is True
+    keys = {node["prompt_key"] for node in result["prompt_bundle"]["node_refs"]}
+    assert "domain.factor_library" in keys
+
+
+def test_chat_turn_tool_choice_markup_is_replaced_with_route_card_text() -> None:
+    class ToolChoiceMarkupLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            return LlmCallResult(
+                content="<assistant_tool_choice>{\"tool\":\"mcp_github_issue_sync_bug\"}</assistant_tool_choice>",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    svc = _chat_service(ToolChoiceMarkupLlmClient())
+
+    result = svc.chat_turn(ChatTurnRequest(message="同步 BUG-120 GitHub issue 状态"))
+
+    text = result["assistant_message"]["content_text"]
+    assert "<assistant_tool_choice>" not in text
+    assert "</assistant_tool_choice>" not in text
+    assert "aistock-validation/mcp_github_issue_sync_bug" in text
+    assert "确认前不会执行" in text
+    assert result["mode_decision"]["intent_type"] == "validation_issue_request"
+    assert result["cards"]["mcp_route_decision"]["confirmation_required"] is True
+
+
 def test_chat_turn_bug_diagnosis_request_is_first_class_intent() -> None:
     fake = FakeLlmClient()
     svc = _chat_service(fake)

@@ -6,7 +6,11 @@
     "backend/services/research_assistant/service.py",
     "backend/tests/research_assistant/test_service.py",
     "frontend/src/app/research-assistant/chat/page.tsx",
-    "frontend/src/app/research-assistant/mcp-tools/page.tsx"
+    "frontend/src/app/research-assistant/mcp-tools/page.tsx",
+    "backend/services/research_assistant/domain_ontology.py",
+    "backend/services/research_assistant/tool_router.py",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260528_BUG-136-research-assistant-ui-shows-mock-mcp-results-and-stale-server-readiness.json"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-136",
@@ -32,6 +36,18 @@
       "note": "Initial allocation BUG-133 conflicted with existing Paper v2 BUG-133/GitHub #258; Research Assistant issue kept GitHub #262 and was renumbered to BUG-136 before implementation.",
       "old_bug_id": "BUG-133",
       "new_bug_id": "BUG-136"
+    },
+    {
+      "action": "expand_allowed_write_scope_for_root_cause",
+      "actor": "codex_issue_workflow",
+      "timestamp": "2026-05-28T03:50:00Z",
+      "note": "Root cause includes Chinese natural-language MCP domain routing; BUG-136 fix must update domain ontology and tool router before UI/backend rendering can be truthful."
+    },
+    {
+      "action": "include_issue_registry_files_in_scope_for_pr_gate",
+      "actor": "codex_issue_workflow",
+      "timestamp": "2026-05-28T03:56:00Z",
+      "note": "Registration commit and BUG-136 JSON updates are part of this issue workflow branch, so PR scope gate must include the issue registry artifacts alongside code files."
     }
   ],
   "evidence_uris": [

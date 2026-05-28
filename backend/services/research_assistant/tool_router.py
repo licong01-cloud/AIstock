@@ -10,10 +10,11 @@ from .domain_ontology import DOMAIN_SPECS, McpDomain, WAREHOUSE_TERMS, spec_for_
 WRITE_TERMS = (
     "create", "register", "submit", "run", "execute", "sync", "backfill", "bind", "retire", "promote", "deprecate",
     "repair", "materialize", "rerun", "retry", "close", "finish", "update", "write",
+    "创建", "登记", "提交", "运行", "执行", "同步", "补录", "绑定", "退役", "晋升", "废弃", "修复", "关闭", "完成", "更新", "写入",
 )
-PLAN_TERMS = ("plan", "preview", "preflight", "validate", "check", "diagnose", "dry run", "proposal", "prepare")
-DETAIL_TERMS = ("get", "detail", "details", "show", "inspect", "explain", "single", "one", "specific")
-SEARCH_TERMS = ("search", "find", "list", "which", "what", "overview", "summary", "status")
+PLAN_TERMS = ("plan", "preview", "preflight", "validate", "check", "diagnose", "dry run", "proposal", "prepare", "计划", "预检查", "校验", "检查", "诊断", "方案", "准备")
+DETAIL_TERMS = ("get", "detail", "details", "show", "inspect", "explain", "single", "one", "specific", "详情", "查看", "解释", "单个", "具体")
+SEARCH_TERMS = ("search", "find", "list", "which", "what", "overview", "summary", "status", "搜索", "查找", "列表", "哪些", "有什么", "有哪些", "概览", "概要", "状态", "可用", "看看")
 
 TOOL_HINTS: tuple[tuple[McpDomain, tuple[str, ...], str], ...] = (
     (McpDomain.MCP_CAPABILITY, ("tool", "server", "capability", "mcp"), "assistant_list_mcp_tools"),
@@ -24,31 +25,31 @@ TOOL_HINTS: tuple[tuple[McpDomain, tuple[str, ...], str], ...] = (
     (McpDomain.QE_WAREHOUSE, ("source status", "source"), "qe_archive_get_source_status"),
     (McpDomain.QE_EXPERIMENT, ("template", "materialize"), "qe_template_create"),
     (McpDomain.QE_EXPERIMENT, ("loop", "compare"), "qe_custom_evo_loop_comparison"),
-    (McpDomain.VALIDATION_ISSUE, ("sync", "close", "finish"), "mcp_github_issue_sync_bug"),
+    (McpDomain.VALIDATION_ISSUE, ("sync", "close", "finish", "同步", "关闭", "完成"), "mcp_github_issue_sync_bug"),
     (McpDomain.VALIDATION_ISSUE, ("agent context", "context"), "get_bug_agent_context"),
     (McpDomain.RESEARCH_PIPELINE, ("artifact", "refs"), "research_list_artifact_refs"),
-    (McpDomain.FACTOR_LIBRARY, ("search", "find"), "factor_library_search"),
-    (McpDomain.FACTOR_LIBRARY, ("coverage",), "factor_library_get_coverage"),
-    (McpDomain.FACTOR_LIBRARY, ("register",), "factor_library_plan_register"),
-    (McpDomain.FACTOR_LIBRARY, ("deprecate", "retire"), "factor_library_plan_deprecate"),
-    (McpDomain.FACTOR_METRICS, ("submit", "run", "calculate", "calc"), "factor_metrics_plan"),
-    (McpDomain.FACTOR_METRICS, ("result", "ic", "rankic"), "factor_metrics_get_result"),
-    (McpDomain.FACTOR_CORRELATION, ("top", "pairs"), "factor_corr_get_top_pairs"),
-    (McpDomain.FACTOR_CORRELATION, ("cluster",), "factor_corr_get_clusters"),
-    (McpDomain.FACTOR_CORRELATION, ("replacement", "replace"), "factor_corr_suggest_replacements"),
-    (McpDomain.FACTOR_CORRELATION, ("matrix",), "factor_corr_get_matrix_ref"),
-    (McpDomain.MODEL_REGISTRY, ("trial", "compare"), "model_registry_compare_trials"),
-    (McpDomain.MODEL_REGISTRY, ("seed",), "model_registry_get_seed_stability"),
-    (McpDomain.MODEL_REGISTRY, ("hyperparam",), "model_registry_get_hyperparam_history"),
-    (McpDomain.MODEL_REGISTRY, ("artifact",), "model_registry_get_artifacts"),
-    (McpDomain.STRATEGY_GOVERNANCE, ("health",), "strategy_governance_get_health"),
-    (McpDomain.STRATEGY_GOVERNANCE, ("selection",), "strategy_governance_get_selection_readiness"),
-    (McpDomain.STRATEGY_GOVERNANCE, ("paper",), "strategy_governance_get_paper_readiness"),
-    (McpDomain.STRATEGY_GOVERNANCE, ("promote", "promotion"), "strategy_governance_plan_promotion"),
-    (McpDomain.STRATEGY_GOVERNANCE, ("retire", "retirement"), "strategy_governance_plan_retirement"),
-    (McpDomain.EXECUTION_POLICY, ("market state", "constraint"), "execution_policy_get_market_state_constraints"),
-    (McpDomain.EXECUTION_POLICY, ("validate", "fit", "suitable"), "execution_policy_validate_for_strategy"),
-    (McpDomain.EXECUTION_POLICY, ("bind", "binding"), "execution_policy_plan_binding"),
+    (McpDomain.FACTOR_LIBRARY, ("search", "find", "搜索", "查找"), "factor_library_search"),
+    (McpDomain.FACTOR_LIBRARY, ("coverage", "覆盖"), "factor_library_get_coverage"),
+    (McpDomain.FACTOR_LIBRARY, ("register", "登记", "注册"), "factor_library_plan_register"),
+    (McpDomain.FACTOR_LIBRARY, ("deprecate", "retire", "废弃", "退役"), "factor_library_plan_deprecate"),
+    (McpDomain.FACTOR_METRICS, ("submit", "run", "calculate", "calc", "提交", "运行", "计算"), "factor_metrics_plan"),
+    (McpDomain.FACTOR_METRICS, ("result", "ic", "rankic", "结果"), "factor_metrics_get_result"),
+    (McpDomain.FACTOR_CORRELATION, ("top", "pairs", "top pairs", "高相关"), "factor_corr_get_top_pairs"),
+    (McpDomain.FACTOR_CORRELATION, ("cluster", "聚类"), "factor_corr_get_clusters"),
+    (McpDomain.FACTOR_CORRELATION, ("replacement", "replace", "替换"), "factor_corr_suggest_replacements"),
+    (McpDomain.FACTOR_CORRELATION, ("matrix", "矩阵"), "factor_corr_get_matrix_ref"),
+    (McpDomain.MODEL_REGISTRY, ("trial", "compare", "试验", "比较"), "model_registry_compare_trials"),
+    (McpDomain.MODEL_REGISTRY, ("seed", "种子"), "model_registry_get_seed_stability"),
+    (McpDomain.MODEL_REGISTRY, ("hyperparam", "超参"), "model_registry_get_hyperparam_history"),
+    (McpDomain.MODEL_REGISTRY, ("artifact", "产物"), "model_registry_get_artifacts"),
+    (McpDomain.STRATEGY_GOVERNANCE, ("health", "健康"), "strategy_governance_get_health"),
+    (McpDomain.STRATEGY_GOVERNANCE, ("selection", "选股"), "strategy_governance_get_selection_readiness"),
+    (McpDomain.STRATEGY_GOVERNANCE, ("paper", "模拟盘"), "strategy_governance_get_paper_readiness"),
+    (McpDomain.STRATEGY_GOVERNANCE, ("promote", "promotion", "晋升"), "strategy_governance_plan_promotion"),
+    (McpDomain.STRATEGY_GOVERNANCE, ("retire", "retirement", "退役"), "strategy_governance_plan_retirement"),
+    (McpDomain.EXECUTION_POLICY, ("market state", "constraint", "市场状态", "约束"), "execution_policy_get_market_state_constraints"),
+    (McpDomain.EXECUTION_POLICY, ("validate", "fit", "suitable", "校验", "适配", "适合"), "execution_policy_validate_for_strategy"),
+    (McpDomain.EXECUTION_POLICY, ("bind", "binding", "绑定"), "execution_policy_plan_binding"),
 )
 
 def _norm(text: str) -> str:
@@ -90,17 +91,17 @@ def score_domains(message: str) -> list[dict[str, Any]]:
         ):
             score += 8
         if spec.domain == McpDomain.FACTOR_METRICS and (
-            any(token in lower for token in ("calculate", "calc", "independent", "official evaluation", "compare", "version", "submit", "metrics"))
-            and ("factor" in lower or "rankic" in lower or re.search(r"(?<![a-z0-9_])ic(?![a-z0-9_])", lower))
+            any(token in lower for token in ("calculate", "calc", "independent", "official evaluation", "compare", "version", "submit", "metrics", "计算", "独立指标", "评价", "版本", "提交"))
+            and ("factor" in lower or "因子" in lower or "rankic" in lower or re.search(r"(?<![a-z0-9_])ic(?![a-z0-9_])", lower))
         ):
             score += 10
         if spec.domain == McpDomain.FACTOR_LIBRARY and (
-            any(token in lower for token in ("deprecate", "register", "catalog", "library", "coverage", "search"))
-            and "factor" in lower
+            any(token in lower for token in ("deprecate", "register", "catalog", "library", "coverage", "search", "因子库", "因子目录", "可用", "列表", "覆盖", "搜索"))
+            and ("factor" in lower or "因子" in lower)
         ):
             score += 8
         if spec.domain == McpDomain.FACTOR_CORRELATION and (
-            "factor" in lower and any(token in lower for token in ("correlation", "corr", "cluster", "matrix", "replacement", "redundant", "top pairs"))
+            ("factor" in lower or "因子" in lower) and any(token in lower for token in ("correlation", "corr", "cluster", "matrix", "replacement", "redundant", "top pairs", "相关", "聚类", "矩阵", "替换", "冗余"))
         ):
             score += 8
         if score > 0:

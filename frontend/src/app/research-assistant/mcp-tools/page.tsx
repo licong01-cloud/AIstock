@@ -18,6 +18,27 @@ import {
   type AssistantMcpTool,
 } from "@/lib/research-assistant/api";
 
+function mcpStatusLabel(status: unknown): string {
+  const value = String(status || "unknown").toLowerCase();
+  if (["ready", "enabled", "approved", "ok"].includes(value)) return "已就绪";
+  if (["disabled", "blocked", "failed", "error"].includes(value)) return "不可用";
+  if (["pending", "initializing", "unknown"].includes(value)) return "待检查";
+  return String(status || "unknown");
+}
+
+function mcpStatusTone(status: unknown): "success" | "danger" | "warning" | "neutral" {
+  const value = String(status || "unknown").toLowerCase();
+  if (["ready", "enabled", "approved", "ok"].includes(value)) return "success";
+  if (["disabled", "blocked", "failed", "error"].includes(value)) return "danger";
+  if (["pending", "initializing", "unknown"].includes(value)) return "warning";
+  return "neutral";
+}
+
+function McpStatusBadge({ status }: { status: unknown }) {
+  const tone = mcpStatusTone(status);
+  return <span className={`pv2-badge pv2-badge-${tone}`} title={String(status || "unknown")}>{mcpStatusLabel(status)}</span>;
+}
+
 export default function ResearchAssistantMcpToolsPage() {
   const [servers, setServers] = useState<AssistantMcpServer[]>([]);
   const [tools, setTools] = useState<AssistantMcpTool[]>([]);
@@ -93,7 +114,7 @@ export default function ResearchAssistantMcpToolsPage() {
           empty="暂无 MCP server 目录。"
           columns={[
             { key: "server", header: "Server", render: (row) => <><span className="ra-title">{row.title}</span><br /><span className="pv2-muted pv2-mono">{row.server_key}</span></> },
-            { key: "status", header: "状态", render: (row) => <StatusBadge status={row.status} /> },
+            { key: "status", header: "状态", render: (row) => <McpStatusBadge status={row.status} /> },
             { key: "health", header: "健康详情", render: (row) => <DetailDrawer title="health_json" data={row.health_json || row} /> },
           ]}
         />
@@ -107,6 +128,7 @@ export default function ResearchAssistantMcpToolsPage() {
             { key: "tool", header: "工具", render: (row) => <><span className="ra-title">{isLocalDataManagementTool(row) ? localDataToolTitle(row) : row.title || row.tool_name}</span><br /><span className="pv2-muted pv2-mono">{row.server_key}/{row.tool_name}</span></> },
             { key: "phase", header: "本地数据阶段", render: (row) => localDataToolPhase(row.tool_name)?.title || "-" },
             { key: "risk", header: "风险", render: (row) => <StatusBadge status={row.risk_level} /> },
+            { key: "status", header: "状态", render: (row) => <McpStatusBadge status={row.status} /> },
             { key: "approval", header: "审批", render: (row) => row.requires_approval ? "需要" : "不需要" },
             { key: "schema", header: "审计详情", render: (row) => <DetailDrawer title="input / preflight / confirmations" data={row} /> },
           ]}

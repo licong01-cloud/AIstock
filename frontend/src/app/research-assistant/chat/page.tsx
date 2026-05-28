@@ -33,6 +33,17 @@ type PlanCard = { title?: string; steps?: string[] };
 type ClarificationCard = { title?: string; questions?: string[] };
 type Proposal = { title?: string; risk?: string; approval_required?: boolean; status?: string };
 type LocalDataPhaseCard = { key?: string; phase?: string; title?: string; label?: string; status?: string; description?: string };
+type McpRouteDecision = {
+  domain?: string;
+  server_key?: string | null;
+  tool_name?: string | null;
+  reason?: string;
+  policy?: string;
+  side_effect?: string;
+  summary_first?: boolean;
+  preflight_required?: boolean;
+  confirmation_required?: boolean;
+};
 type ContextHealth = {
   status?: string;
   utilization_ratio?: number;
@@ -52,6 +63,7 @@ type ChatCards = {
   local_data_management?: Record<string, unknown>;
   local_data_card?: Record<string, unknown>;
   local_data_phases?: LocalDataPhaseCard[];
+  mcp_route_decision?: McpRouteDecision;
   safety?: Record<string, unknown>;
   context_health?: ContextHealth;
   ui_display?: {
@@ -96,6 +108,21 @@ function asCards(value: unknown): ChatCards {
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function routeDecision(cards: ChatCards): McpRouteDecision | null {
+  const route = asRecord(cards.mcp_route_decision);
+  if (!route?.server_key || !route?.tool_name) return null;
+  return route as McpRouteDecision;
+}
+
+function stripAssistantToolChoiceMarkup(text: string, route: McpRouteDecision | null): string {
+  if (!text.toLowerCase().includes("<assistant_tool_choice")) return text;
+  const cleaned = text.replace(/<assistant_tool_choice\b[^>]*>[\s\S]*?<\/assistant_tool_choice>/gi, "").trim();
+  const prefix = route
+    ? `我已完成 MCP route decision：${route.domain || "mcp"} -> ${route.server_key}/${route.tool_name}。确认前只展示 preflight、计划和 summary-first 结果，不直接执行写操作。`
+    : "我已识别到需要工具选择，会先展示 route decision、preflight 和确认边界，不直接执行写操作。";
+  return [prefix, cleaned].filter(Boolean).join("\n\n");
 }
 
 function catalogNotReadyDetail(error: unknown): CatalogNotReadyDetail | null {
@@ -183,7 +210,7 @@ function shouldShowSideDetails(latest: AssistantChatTurnResult | null, cards: Ch
   const hasPlan = showPlan && Boolean(cards.plan_card?.title || cards.plan_card?.steps?.length);
   const hasClarification = showClarify && Boolean(cards.clarification_card?.questions?.length);
   const hasProposal = Boolean(cards.action_proposals?.length);
-  return hasPlan || hasClarification || hasProposal || hasLocalDataContext(cards);
+  return hasPlan || hasClarification || hasProposal || Boolean(routeDecision(cards)) || hasLocalDataContext(cards);
 }
 
 function createAdapter(
@@ -220,7 +247,7 @@ function createAdapter(
       onTurn(result);
       const cards = asCards(result.cards || result.assistant_message?.content_json?.cards);
       if (cards.status_rail?.length) onStage(cards.status_rail);
-      const reply = result.assistant_message?.content_text || chatCopy.fallbackReply;
+      const reply = stripAssistantToolChoiceMarkup(result.assistant_message?.content_text || chatCopy.fallbackReply, routeDecision(cards));
       return { content: [{ type: "text", text: reply }] };
     },
   };
@@ -306,6 +333,7 @@ function PlanSummary({ latest }: { latest: AssistantChatTurnResult | null }) {
   const plan = cards.ui_display?.show_plan_card === false ? undefined : cards.plan_card;
   const clarify = cards.ui_display?.show_clarification_card === false ? undefined : cards.clarification_card;
   const proposals = cards.action_proposals || [];
+  const route = routeDecision(cards);
   const showLocalData = hasLocalDataContext(cards);
   const localDataRows = localDataPhaseRows(cards, Boolean(latest));
   if (!latest) {
@@ -343,6 +371,15 @@ function PlanSummary({ latest }: { latest: AssistantChatTurnResult | null }) {
               {proposal.title}{chatCopy.planSummary.proposalSeparator}{proposalStatusText(proposal.status)}
             </span>
           ))}
+        </div>
+      ) : null}
+      {route ? (
+        <div className="ra-chat-confirm-card" data-testid="ra-mcp-route-card">
+          <strong>MCP route decision</strong>
+          <p>{route.domain || "mcp"} -> {route.server_key}/{route.tool_name}</p>
+          <p>{route.summary_first ? "summary-first：列表只展示概要，详情按需展开。" : "按工具返回结果展示。"}</p>
+          <p>{route.confirmation_required ? "需要确认和审批后才可执行。" : route.preflight_required ? "先执行 preflight/计划，不直接写入。" : "只读查询，不执行写操作。"}</p>
+          {route.reason ? <p>{route.reason}</p> : null}
         </div>
       ) : null}
       {showLocalData ? (
