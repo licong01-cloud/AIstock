@@ -1,0 +1,75 @@
+{
+  "actual": "The UI replied to a factor-library query with 10 mock-looking factors while live factor-library facade reports total=778; BUG-120 sync displayed raw <assistant_tool_choice>; /research-assistant/mcp-tools showed ready MCP servers as not ready.",
+  "allowed_write_scope": [
+    "frontend/src/lib/research-assistant/api.ts",
+    "frontend/tests/research-assistant/research-assistant.spec.ts",
+    "backend/services/research_assistant/service.py",
+    "backend/tests/research_assistant/test_service.py",
+    "frontend/src/app/research-assistant/chat/page.tsx",
+    "frontend/src/app/research-assistant/mcp-tools/page.tsx"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-136",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-28T03:12:17.986770Z",
+  "description": "The UI replied to a factor-library query with 10 mock-looking factors while live factor-library facade reports total=778; BUG-120 sync displayed raw <assistant_tool_choice>; /research-assistant/mcp-tools showed ready MCP servers as not ready.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260528-56614959f016",
+      "timestamp": "2026-05-28T03:12:17.986765Z"
+    },
+    {
+      "action": "renumber_bug_id_after_duplicate_detection",
+      "actor": "codex_issue_workflow",
+      "timestamp": "2026-05-28T03:29:58.285632Z",
+      "note": "Initial allocation BUG-133 conflicted with existing Paper v2 BUG-133/GitHub #258; Research Assistant issue kept GitHub #262 and was renumbered to BUG-136 before implementation.",
+      "old_bug_id": "BUG-133",
+      "new_bug_id": "BUG-136"
+    }
+  ],
+  "evidence_uris": [
+    "F:/Dev/AIstock_artifacts/research_assistant_ui_smoke_20260528"
+  ],
+  "expected": "Research Assistant chat must either use live MCP query/plan/preflight outputs or ask for missing parameters before presenting business facts; tool choices must render as readable cards with confirmation boundaries; MCP server readiness in the UI must match backend catalog readiness.",
+  "first_seen_at": "2026-05-28T03:12:17.986770Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 262,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/262",
+  "last_seen_at": "2026-05-28T03:12:17.986770Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Open http://127.0.0.1:3000/research-assistant, ask What MCP tools are available?, then ask factor/QE/BUG sync questions; open /research-assistant/mcp-tools and compare server readiness with GET /api/v1/research-assistant/catalogs/readiness.",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Research Assistant UI shows mock MCP results and stale server readiness",
+  "trigger_condition": {
+    "fingerprint": "56614959f0165ef2d5fdbdce",
+    "source_event_id": "FE-20260528-56614959f016"
+  },
+  "verification_run_id": null
+}
