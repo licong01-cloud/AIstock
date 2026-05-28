@@ -542,9 +542,28 @@ def list_skill_usage_events(
 @router.get("/mcp/servers", response_model=ResearchAssistantResponse)
 def list_mcp_servers(service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
     try:
-        return _success(service.list_records("mcp_servers", limit_key="router_mcp_servers"))
+        page = service.list_records("mcp_servers", limit_key="router_mcp_servers")
+        page["items"] = [_summarize_mcp_server_record(dict(item)) for item in page["items"]]
+        page["summary_first"] = True
+        return _success(page)
     except Exception as exc:
         raise _map_error(exc) from exc
+
+
+def _summarize_mcp_server_record(server: dict[str, Any]) -> dict[str, Any]:
+    item = dict(server)
+    health = item.get("health_json") if isinstance(item.get("health_json"), dict) else {}
+    display_name_zh = health.get("display_name_zh")
+    aliases = health.get("business_aliases_zh")
+    summary_zh = health.get("summary_zh")
+    if display_name_zh:
+        item["display_name_zh"] = display_name_zh
+    if aliases:
+        item["business_aliases_zh"] = aliases
+    if summary_zh:
+        item["summary_zh"] = summary_zh
+    item["display_title"] = display_name_zh or item.get("title") or item.get("server_key")
+    return item
 
 
 MCP_TOOL_SUMMARY_FIELDS = {

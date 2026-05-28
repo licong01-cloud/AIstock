@@ -1808,12 +1808,14 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         tools_by_server: dict[str, list[dict[str, Any]]] = {}
         for tool in sorted(tools, key=lambda item: (str(item.get("server_key") or ""), str(item.get("tool_name") or ""))):
             tools_by_server.setdefault(str(tool.get("server_key") or "unknown"), []).append(tool)
+        servers_by_key = {str(server.get("server_key") or ""): server for server in servers}
         return {
             "source": "assistant_mcp_tools_runtime_catalog",
             "server_count": len(servers),
             "tool_count": len(tools),
             "capability_count": len(capabilities),
             "servers": servers,
+            "servers_by_key": servers_by_key,
             "tools": tools,
             "tools_by_server": tools_by_server,
             "capabilities": capabilities,
@@ -1829,9 +1831,15 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "Explain capabilities in a human, task-oriented style. Avoid limitation-first phrasing.",
             "Mention that list/overview tools are summary-first and large matrices/logs/model weights use artifact_ref.",
         ]
+        servers_by_key = catalog.get("servers_by_key") if isinstance(catalog.get("servers_by_key"), dict) else {}
         for server_key, tools in catalog["tools_by_server"].items():
+            server = servers_by_key.get(server_key) if isinstance(servers_by_key.get(server_key), dict) else {}
+            health = server.get("health_json") if isinstance(server.get("health_json"), dict) else {}
+            display_name = health.get("display_name_zh") or server.get("title") or server_key
+            aliases = health.get("business_aliases_zh") if isinstance(health.get("business_aliases_zh"), list) else []
+            alias_text = f" aliases={', '.join(str(item) for item in aliases[:4])}" if aliases else ""
             tool_names = ", ".join(str(tool.get("tool_name") or "") for tool in tools)
-            lines.append(f"- {server_key}: {tool_names}")
+            lines.append(f"- {display_name} ({server_key}{alias_text}): {tool_names}")
         return "\n".join(lines)
 
     def _complete_chat_with_reactive_recovery(
@@ -2522,10 +2530,16 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "默认采用 summary-first：先看概要、状态、top risks 和分页列表；需要某个对象详情时再展开，矩阵、日志、parquet/raw payload 只返回 artifact_ref 或 detail 引用。",
         ]
         tools_by_server = catalog.get("tools_by_server") if isinstance(catalog.get("tools_by_server"), dict) else {}
+        servers_by_key = catalog.get("servers_by_key") if isinstance(catalog.get("servers_by_key"), dict) else {}
         if tools_by_server:
             lines.append("已登记 MCP 工具概览：")
             for server_key in sorted(str(key) for key in tools_by_server):
                 tools = tools_by_server.get(server_key) or []
+                server = servers_by_key.get(server_key) if isinstance(servers_by_key.get(server_key), dict) else {}
+                health = server.get("health_json") if isinstance(server.get("health_json"), dict) else {}
+                display_name = str(health.get("display_name_zh") or server.get("title") or server_key)
+                aliases = health.get("business_aliases_zh") if isinstance(health.get("business_aliases_zh"), list) else []
+                alias_text = f"（{', '.join(str(item) for item in aliases[:3])}）" if aliases else ""
                 sample = [str(tool.get("tool_name") or "") for tool in tools if isinstance(tool, dict)]
                 important = [
                     name
@@ -2540,7 +2554,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                         break
                 preview = ", ".join(preview_names)
                 suffix = f" ... count {len(sample)}" if len(sample) > 12 else f"(count {len(sample)})"
-                lines.append(f"- {server_key}: {preview}{suffix}")
+                lines.append(f"- {display_name}{alias_text} / {server_key}: {preview}{suffix}")
         else:
             lines.append("我会先刷新 MCP 目录，再给你可调用的工具概览。")
         lines.append("你直接描述目标即可，例如补 trade_date、检查 QE 入仓、计算因子 RankIC、比较模型 seed 稳定性、判断策略能否进入 Paper v2；我会给出 route decision、工具和确认边界。")

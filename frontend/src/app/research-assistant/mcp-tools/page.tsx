@@ -39,6 +39,16 @@ function McpStatusBadge({ status }: { status: unknown }) {
   return <span className={`pv2-badge pv2-badge-${tone}`} title={String(status || "unknown")}>{mcpStatusLabel(status)}</span>;
 }
 
+
+function mcpServerDisplay(server: AssistantMcpServer): string {
+  return server.display_name_zh || server.display_title || server.title || server.server_key;
+}
+
+function mcpServerAliases(server: AssistantMcpServer): string {
+  const aliases = Array.isArray(server.business_aliases_zh) ? server.business_aliases_zh : [];
+  return aliases.slice(0, 4).join(" / ");
+}
+
 export default function ResearchAssistantMcpToolsPage() {
   const [servers, setServers] = useState<AssistantMcpServer[]>([]);
   const [tools, setTools] = useState<AssistantMcpTool[]>([]);
@@ -113,7 +123,7 @@ export default function ResearchAssistantMcpToolsPage() {
           rows={servers}
           empty="暂无 MCP server 目录。"
           columns={[
-            { key: "server", header: "Server", render: (row) => <><span className="ra-title">{row.title}</span><br /><span className="pv2-muted pv2-mono">{row.server_key}</span></> },
+            { key: "server", header: "Server", render: (row) => <><span className="ra-title">{mcpServerDisplay(row)}</span><br /><span className="pv2-muted">{mcpServerAliases(row) || row.title}</span><br /><span className="pv2-muted pv2-mono">{row.server_key}</span></> },
             { key: "status", header: "状态", render: (row) => <McpStatusBadge status={row.status} /> },
             { key: "health", header: "健康详情", render: (row) => <DetailDrawer title="health_json" data={row.health_json || row} /> },
           ]}

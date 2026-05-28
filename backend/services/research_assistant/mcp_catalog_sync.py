@@ -8,7 +8,6 @@ natural-language prompts.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
 from backend.mcp.modules import local_data, research, research_assistant
@@ -17,21 +16,21 @@ try:  # New gateway modules are imported after their files are generated in this
     from backend.mcp.modules import execution_policy, factor_correlation, factor_library, factor_metrics, model_registry, strategy_governance
 except ImportError:  # pragma: no cover - keeps early static imports usable during partial generation.
     execution_policy = factor_correlation = factor_library = factor_metrics = model_registry = strategy_governance = None
-from backend.services.research_assistant.domain_ontology import DOMAIN_SPECS, McpDomain, all_domain_specs
+from backend.services.research_assistant.domain_ontology import McpDomain, all_domain_specs
 
 SERVER_DEFS: tuple[dict[str, Any], ...] = (
-    {"server_key": "research-assistant", "title": "Research Assistant MCP", "domain": "mcp_capability", "module": "research_assistant", "summary_zh": "Assistant task, prompt, memory, tool catalog and preflight orchestration"},
-    {"server_key": "aistock-research", "title": "Research Pipeline MCP", "domain": "research_pipeline", "module": "research", "summary_zh": "Research pipeline experiments, stages, artifact refs and backtest records"},
-    {"server_key": "aistock-local-data", "title": "Local Data Management MCP", "domain": "local_data", "module": "local_data", "summary_zh": "Local market-data readiness, sync, schedules, jobs and repair plans"},
-    {"server_key": "aistock-qe-experiment", "title": "QE Experiment MCP", "domain": "qe_experiment", "module": "legacy_script", "summary_zh": "QE experiment, custom_evo, loop comparison, template materialization and run management"},
-    {"server_key": "aistock-qe-archive", "title": "QE Archive MCP", "domain": "qe_warehouse", "module": "legacy_script", "summary_zh": "QE archive warehouse, outbox, backfill and archive queries"},
-    {"server_key": "aistock-validation", "title": "Validation / Issue MCP", "domain": "validation_issue", "module": "legacy_script", "summary_zh": "Validation Center, BUG JSON and GitHub issue list/search/create/sync"},
-    {"server_key": "aistock-factor-library", "title": "Factor Library MCP", "domain": "factor_library", "module": "factor_library", "summary_zh": "Factor catalog, metadata, coverage, metric summary and lifecycle plans"},
-    {"server_key": "aistock-factor-metrics", "title": "Factor Metrics MCP", "domain": "factor_metrics", "module": "factor_metrics", "summary_zh": "Factor independent metrics plan, validate, submit, job, result and export refs"},
-    {"server_key": "aistock-factor-correlation", "title": "Factor Correlation MCP", "domain": "factor_correlation", "module": "factor_correlation", "summary_zh": "Factor correlation top pairs, clusters, replacement suggestions and matrix refs"},
-    {"server_key": "aistock-model-registry", "title": "Model Registry MCP", "domain": "model_registry", "module": "model_registry", "summary_zh": "Model registry trials, seed stability, hyperparameter history, artifact refs and lifecycle"},
-    {"server_key": "aistock-strategy-governance", "title": "Strategy Governance MCP", "domain": "strategy_governance", "module": "strategy_governance", "summary_zh": "StrategyPackage health, Selection/Paper readiness, promotion and retirement"},
-    {"server_key": "aistock-execution-policy", "title": "Execution Policy MCP", "domain": "execution_policy", "module": "execution_policy", "summary_zh": "Execution policy library, minute algos, market-state constraints and binding validation"},
+    {"server_key": "research-assistant", "title": "Research Assistant MCP", "display_name_zh": "智能助理", "business_aliases_zh": ["研究助理", "助手工具目录", "MCP能力目录"], "domain": "mcp_capability", "module": "research_assistant", "summary_zh": "Assistant task, prompt, memory, tool catalog and preflight orchestration"},
+    {"server_key": "aistock-research", "title": "Research Pipeline MCP", "display_name_zh": "研究流水线", "business_aliases_zh": ["研究管线", "实验流水线", "Research Pipeline"], "domain": "research_pipeline", "module": "research", "summary_zh": "Research pipeline experiments, stages, artifact refs and backtest records"},
+    {"server_key": "aistock-local-data", "title": "Local Data Management MCP", "display_name_zh": "本地数据管理", "business_aliases_zh": ["本地数据", "数据同步", "数据集健康"], "domain": "local_data", "module": "local_data", "summary_zh": "Local market-data readiness, sync, schedules, jobs and repair plans"},
+    {"server_key": "aistock-qe-experiment", "title": "QE Experiment MCP", "display_name_zh": "QE实验", "business_aliases_zh": ["量化实验", "QE模板", "自定义进化"], "domain": "qe_experiment", "module": "legacy_script", "summary_zh": "QE experiment, custom_evo, loop comparison, template materialization and run management"},
+    {"server_key": "aistock-qe-archive", "title": "QE Archive MCP", "display_name_zh": "QE数仓", "business_aliases_zh": ["数仓", "归档", "入仓", "Archive"], "domain": "qe_warehouse", "module": "legacy_script", "summary_zh": "QE archive warehouse, outbox, backfill and archive queries"},
+    {"server_key": "aistock-validation", "title": "Validation / Issue MCP", "display_name_zh": "验证与Issue", "business_aliases_zh": ["问题单", "BUG流程", "验证中心"], "domain": "validation_issue", "module": "legacy_script", "summary_zh": "Validation Center, BUG JSON and GitHub issue list/search/create/sync"},
+    {"server_key": "aistock-factor-library", "title": "Factor Library MCP", "display_name_zh": "因子库", "business_aliases_zh": ["因子目录", "因子列表", "因子元数据"], "domain": "factor_library", "module": "factor_library", "summary_zh": "Factor catalog, metadata, coverage, metric summary and lifecycle plans"},
+    {"server_key": "aistock-factor-metrics", "title": "Factor Metrics MCP", "display_name_zh": "因子独立指标", "business_aliases_zh": ["因子指标计算", "RankIC", "IC", "因子评价"], "domain": "factor_metrics", "module": "factor_metrics", "summary_zh": "Factor independent metrics plan, validate, submit, job, result and export refs"},
+    {"server_key": "aistock-factor-correlation", "title": "Factor Correlation MCP", "display_name_zh": "因子相关性", "business_aliases_zh": ["相关矩阵", "高相关因子", "冗余因子"], "domain": "factor_correlation", "module": "factor_correlation", "summary_zh": "Factor correlation top pairs, clusters, replacement suggestions and matrix refs"},
+    {"server_key": "aistock-model-registry", "title": "Model Registry MCP", "display_name_zh": "模型库", "business_aliases_zh": ["模型注册", "模型版本", "模型试验", "模型产物"], "domain": "model_registry", "module": "model_registry", "summary_zh": "Model registry trials, seed stability, hyperparameter history, artifact refs and lifecycle"},
+    {"server_key": "aistock-strategy-governance", "title": "Strategy Governance MCP", "display_name_zh": "策略库", "business_aliases_zh": ["策略包", "策略治理", "选股就绪", "模拟盘就绪"], "domain": "strategy_governance", "module": "strategy_governance", "summary_zh": "StrategyPackage health, Selection/Paper readiness, promotion and retirement"},
+    {"server_key": "aistock-execution-policy", "title": "Execution Policy MCP", "display_name_zh": "执行策略库", "business_aliases_zh": ["执行策略", "分钟算法", "TWAP", "VWAP", "POV"], "domain": "execution_policy", "module": "execution_policy", "summary_zh": "Execution policy library, minute algos, market-state constraints and binding validation"},
 )
 
 TOOL_NAMES_BY_SERVER: dict[str, tuple[str, ...]] = {
@@ -221,6 +220,8 @@ def default_mcp_servers() -> list[dict[str, Any]]:
                 "mode": "loopback",
                 "module": item["module"],
                 "domain": item["domain"],
+                "display_name_zh": item["display_name_zh"],
+                "business_aliases_zh": item["business_aliases_zh"],
                 "summary_zh": item["summary_zh"],
                 "summary_first_payload": True,
                 **({"capability_key": "local_data_management"} if item["server_key"] == "aistock-local-data" else {}),
