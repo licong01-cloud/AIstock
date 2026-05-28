@@ -48,6 +48,14 @@
       "actor": "codex_issue_workflow",
       "timestamp": "2026-05-28T03:56:00Z",
       "note": "Registration commit and BUG-136 JSON updates are part of this issue workflow branch, so PR scope gate must include the issue registry artifacts alongside code files."
+    },
+    {
+      "action": "mark_fixed_with_validation_evidence",
+      "actor": "codex_issue_workflow",
+      "timestamp": "2026-05-28T03:57:23.954126Z",
+      "fix_branch": "bug/BUG-136-research-assistant-ui-shows-mock-mcp-results-and-20260528",
+      "fix_commit": "26abcad20631d3cf098c4a9e375cf7697c5c06ac",
+      "note": "Implemented truthful MCP route rendering, Chinese domain routing, raw tool-choice sanitization, and MCP ready-status UI correction; local validation gates passed."
     }
   ],
   "evidence_uris": [
@@ -55,9 +63,9 @@
   ],
   "expected": "Research Assistant chat must either use live MCP query/plan/preflight outputs or ask for missing parameters before presenting business facts; tool choices must render as readable cards with confirmation boundaries; MCP server readiness in the UI must match backend catalog readiness.",
   "first_seen_at": "2026-05-28T03:12:17.986770Z",
-  "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_branch": "bug/BUG-136-research-assistant-ui-shows-mock-mcp-results-and-20260528",
+  "fix_commit": "26abcad20631d3cf098c4a9e375cf7697c5c06ac",
+  "fixed_at": "2026-05-28T03:57:23.954126Z",
   "github_issue_number": 262,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/262",
   "last_seen_at": "2026-05-28T03:12:17.986770Z",
@@ -73,12 +81,13 @@
     "l0",
     "research_assistant_backend",
     "research_assistant_mcp_contract",
-    "validation_center_backend"
+    "validation_center_backend",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -87,5 +96,15 @@
     "fingerprint": "56614959f0165ef2d5fdbdce",
     "source_event_id": "FE-20260528-56614959f016"
   },
-  "verification_run_id": null
+  "verification_run_id": "codex-local-validation-BUG-136-20260528",
+  "validation_evidence": [
+    "rtk proxy python -m pytest backend/tests/research_assistant/test_service.py -q -p no:cacheprovider -> 39 passed",
+    "rtk proxy python -m pytest backend/tests/research_assistant/test_natural_language_mcp_routing.py -q -p no:cacheprovider -> 4 passed",
+    "rtk proxy python -m pytest backend/tests/mcp backend/tests/research_assistant -q -p no:cacheprovider -> 186 passed",
+    "rtk proxy npx playwright test tests/research-assistant/research-assistant.spec.ts --project=chromium --reporter=list -> 6 passed",
+    "rtk proxy python -m nox -s research_assistant_backend research_assistant_mcp_contract validation_center_backend --no-error-on-missing-interpreters -> all 3 sessions successful",
+    "rtk proxy python -m nox -s validation_module_registry_l0 --no-error-on-missing-interpreters -> successful",
+    "rtk proxy python -m nox -s l0 --no-error-on-missing-interpreters -> successful",
+    "rtk proxy git diff --check -> passed"
+  ]
 }
