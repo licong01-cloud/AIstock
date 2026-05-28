@@ -51,7 +51,9 @@
     "file:backend/routers/paper_trading_v2.py:204",
     "file:backend/routers/ingestion.py:2790",
     "file:frontend/src/app/local-data/page.tsx:538",
-    "file:frontend/src/app/local-data/page.tsx:1701"
+    "file:frontend/src/app/local-data/page.tsx:1701",
+    "commit:07e66ac6ebf20feccc95eb39f4cd65a32ada8a65",
+    "file:tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md"
   ],
   "fingerprint": "351f01b82f204e2d",
   "assigned_agent": "platform_runtime",
@@ -60,7 +62,7 @@
   "verification_run_id": null,
   "created_at": "2026-05-24T06:16:41Z",
   "first_seen_at": "2026-05-24T06:16:41Z",
-  "last_seen_at": "2026-05-24T07:07:04Z",
+  "last_seen_at": "2026-05-27T06:22:22Z",
   "fixed_at": null,
   "submitted_at": "2026-05-24T06:16:41Z",
   "closed_at": null,
@@ -167,6 +169,12 @@
       "actor": "codex-app",
       "action": "scope_updated",
       "note": "User required removal of all weekday fallback logic, automatic filesystem cache backed by market.trading_calendar, monthly coverage warning, and Paper v2 overview trading-day status display."
+    },
+    {
+      "timestamp": "2026-05-27T06:22:22Z",
+      "actor": "codex-app",
+      "action": "close_sync_audit_keep_open",
+      "note": "Audit keeps BUG-116 open: backend TradingCalendarStatusService/API and Paper v2 overview status exist and live /api/v1/trading-calendar/status returns 200, but Local Data status display plus /api/calendar/sync cache refresh/invalidation and full freshness/timezone semantics are not fully proven."
     }
   ],
   "custom_github_labels": [

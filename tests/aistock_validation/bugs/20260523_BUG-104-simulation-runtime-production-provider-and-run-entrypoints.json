@@ -29,13 +29,15 @@
     "file:docs/architecture/simulation_remediation_project_design_20260521.md",
     "github:https://github.com/licong01-cloud/AIstock/issues/173",
     "commit:f385ac6",
-    "file:tests/aistock_validation/history/simulation_runtime/20260523_BUG-104-simulation-runtime-provider-validation.md"
+    "file:tests/aistock_validation/history/simulation_runtime/20260523_BUG-104-simulation-runtime-provider-validation.md",
+    "commit:f385ac6bfad9a025751a94bd1a7df6f3901a2bab",
+    "file:tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md"
   ],
   "fingerprint": "b0520ad64a4f7c87",
   "assigned_agent": "codex-app",
   "fix_branch": "bug/BUG-104-simulation-runtime-provider-20260523",
-  "fix_commit": "f385ac6",
-  "verification_run_id": "tests/aistock_validation/history/simulation_runtime/20260523_BUG-104-simulation-runtime-provider-validation.md",
+  "fix_commit": "f385ac6bfad9a025751a94bd1a7df6f3901a2bab",
+  "verification_run_id": "tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md",
   "created_at": "2026-05-23T02:24:32Z",
   "first_seen_at": "2026-05-23T02:24:32Z",
   "last_seen_at": "2026-05-23T02:24:32Z",
@@ -108,6 +110,12 @@
       "actor": "codex-app",
       "action": "github_sync_deferred",
       "note": "MCP update_bug_status(sync_github=True) failed on an unrelated BOM registry file in another worktree; GitHub #173 was updated directly via gh.exe with status/module/severity labels and issue comment https://github.com/licong01-cloud/AIstock/issues/173#issuecomment-4526148588."
+    },
+    {
+      "timestamp": "2026-05-27T06:22:22Z",
+      "actor": "codex-app",
+      "action": "close_sync_audit_ready",
+      "note": "Merged implementation evidence was re-audited on chore/paper-v2-issue-close-sync-audit-20260527; BUG JSON is marked fixed and GitHub issue should close when the audit PR merges. Audit record: tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md."
     }
   ],
   "task_tier": "T2",
@@ -122,5 +130,16 @@
     "This registry-only commit does not implement the fix.",
     "Do not start or restart production backend as part of issue registration.",
     "Do not mutate production StrategyPackage data or submit MiniQMT orders as part of issue registration."
-  ]
+  ],
+  "validation_evidence": [
+    "tests/aistock_validation/history/simulation_runtime/20260523_BUG-104-simulation-runtime-provider-validation.md -> simulation_runtime 62 passed; scheduler/ops 33 passed; Playwright simulation runtime ops 1 passed",
+    "main contains f385ac6bfad9a025751a94bd1a7df6f3901a2bab and prior BUG-104 validation commit 3418a14",
+    "python -m nox -s paper_v2_backend -> 501 passed, 1 skipped, 2 xfailed",
+    "GitHub main CI run 26490758645 at 8be68bea -> success; paper_v2_backend check -> success",
+    "GET http://127.0.0.1:8001/api/v1/strategy-packages?limit=20 -> 200; package listing no longer globally blocked by manifest drift",
+    "Close-sync audit record: tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md"
+  ],
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "production_backend_dependency_gate": "noop"
 }

@@ -6,7 +6,7 @@
   "module": "paper_v2",
   "severity": "P0",
   "risk_area": "paper_v2_platform_capability_boundary",
-  "status": "open",
+  "status": "fixed",
   "trigger_condition": {
     "scenario": "reported_hmm_platform_runtime_requires_manual_snapshot_20260524",
     "runtime_paths": [
@@ -39,17 +39,20 @@
     "file:backend/services/hmm_training_service.py",
     "related:BUG-065/GitHub#76",
     "related:BUG-076/GitHub#103",
-    "related:BUG-111/GitHub#181"
+    "related:BUG-111/GitHub#181",
+    "commit:07e66ac6ebf20feccc95eb39f4cd65a32ada8a65",
+    "file:tests/aistock_validation/history/paper_trading_v2/20260525_042120_l3_paper-v2-gate-decoupling-implementation.md",
+    "file:tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md"
   ],
   "fingerprint": "b9913018e123b3b9",
   "assigned_agent": "paper_v2",
-  "fix_branch": null,
-  "fix_commit": null,
-  "verification_run_id": null,
+  "fix_branch": "feature/paper-v2-gate-decoupling-impl-20260525",
+  "fix_commit": "07e66ac6ebf20feccc95eb39f4cd65a32ada8a65",
+  "verification_run_id": "tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md",
   "created_at": "2026-05-24T03:39:24Z",
   "first_seen_at": "2026-05-24T03:39:24Z",
   "last_seen_at": "2026-05-24T03:39:24Z",
-  "fixed_at": null,
+  "fixed_at": "2026-05-27T06:22:22Z",
   "submitted_at": "2026-05-24T03:39:24Z",
   "closed_at": null,
   "allowed_write_scope": [
@@ -112,6 +115,12 @@
       "actor": "codex-app",
       "action": "registry_cleanup",
       "note": "Normalized BUG-112 local JSON after MCP create timed out but completed GitHub issue #182; removed duplicate local-only BUG-113 draft."
+    },
+    {
+      "timestamp": "2026-05-27T06:22:22Z",
+      "actor": "codex-app",
+      "action": "close_sync_audit_ready",
+      "note": "Merged implementation evidence was re-audited on chore/paper-v2-issue-close-sync-audit-20260527; BUG JSON is marked fixed and GitHub issue should close when the audit PR merges. Audit record: tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md."
     }
   ],
   "custom_github_labels": [
@@ -123,5 +132,18 @@
     "P0"
   ],
   "github_issue_number": 182,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/182"
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/182",
+  "validation_evidence": [
+    "backend/services/selection_center/hmm_runtime.py implements model/config resolver, compute-on-miss, cache reuse, per-key lock, and fail-fast no neutral fallback",
+    "backend/tests/selection_center/test_runtime_selection.py::test_strategy_package_runtime_auto_generates_hmm_coefficients_on_miss -> covered",
+    "backend/tests/selection_center/test_runtime_selection.py::test_strategy_package_runtime_resolves_latest_ready_hmm_snapshot_from_model_config -> covered",
+    "frontend/tests/paper-v2/paper-v2-hmm-runtime-coefficients.spec.ts -> covered in implementation validation record",
+    "python -m nox -s paper_v2_backend -> 501 passed, 1 skipped, 2 xfailed",
+    "GitHub main CI run 26490758645 at 8be68bea -> success; paper_v2_backend check -> success",
+    "GET http://127.0.0.1:8001/api/v1/strategy-packages?limit=20 -> 200; package listing no longer globally blocked by manifest drift",
+    "Close-sync audit record: tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md"
+  ],
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "production_backend_dependency_gate": "noop"
 }
