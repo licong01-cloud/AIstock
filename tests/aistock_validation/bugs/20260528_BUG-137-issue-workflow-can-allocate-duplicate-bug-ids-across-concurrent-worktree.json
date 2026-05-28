@@ -32,8 +32,8 @@
   "expected": "BUG registration must allocate a globally unique BUG-NNN id across local worktrees and GitHub Issues, or fail fast before creating a GitHub Issue/BUG JSON when a duplicate risk exists.",
   "first_seen_at": "2026-05-28T03:38:08.757944Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b609565f44153848b3c80d843cb79ef7b758dc27",
+  "fixed_at": "2026-05-28T04:59:17.823270Z",
   "github_issue_number": 264,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/264",
   "last_seen_at": "2026-05-28T03:38:08.757944Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/267",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -56,7 +57,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -65,5 +66,8 @@
     "fingerprint": "0d9b6148bcc7c77e5757adef",
     "source_event_id": "FE-20260528-0d9b6148bcc7"
   },
+  "validation_evidence": [
+    "python -m nox -s guardrail_changed_files validation_module_registry_l0 validation_catalog_integrity validation_coverage_backend validation_center_backend -> passed"
+  ],
   "verification_run_id": null
 }
