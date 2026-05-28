@@ -5,6 +5,7 @@
     "backend/routers/quantevolver.py",
     "frontend/src/app/quantevolver/components/MultiAlphaProgress.tsx",
     "frontend/src/app/quantevolver/multi-alpha/diagnostics/[expId]/page.tsx",
+    "frontend/src/app/quantevolver/multi-alpha/diagnostics/*/page.tsx",
     "backend/tests/unified_engine/test_multi_alpha_command_generation.py",
     "tests/aistock_validation/bugs/20260421_BUG-015-multi-alpha-no-master-backtest.json"
   ],
@@ -28,7 +29,7 @@
       "action": "scope_corrected",
       "actor": "codex",
       "timestamp": "2026-05-28T17:20:48Z",
-      "note": "BUG-015 legacy RD-Agent paths were superseded by current AIstock QuantEvolver multi-alpha collector/router/UI paths; scope updated before code changes so workflow PR checks remain accurate.",
+      "note": "BUG-015 legacy RD-Agent paths were superseded by current AIstock QuantEvolver multi-alpha collector/router/UI paths; scope updated before code changes so workflow PR checks remain accurate. Added glob-compatible dynamic route pattern for issue_flow fnmatch, because literal [expId] is interpreted as a character class.",
       "old_scope": [
         "rdagent/app/fin_factor/multi_alpha_scheduler.py",
         "rdagent/scenarios/qlib/factor_experiment/multi_alpha_runner.py"
@@ -39,6 +40,7 @@
         "backend/routers/quantevolver.py",
         "frontend/src/app/quantevolver/components/MultiAlphaProgress.tsx",
         "frontend/src/app/quantevolver/multi-alpha/diagnostics/[expId]/page.tsx",
+        "frontend/src/app/quantevolver/multi-alpha/diagnostics/*/page.tsx",
         "backend/tests/unified_engine/test_multi_alpha_command_generation.py",
         "tests/aistock_validation/bugs/20260421_BUG-015-multi-alpha-no-master-backtest.json"
       ]
