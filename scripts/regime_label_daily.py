@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 CSI300_INDEX_CODE = "000300.SH"  # adjust if market.index_daily uses different convention
 HISTORY_LOOKBACK_YEARS = 5  # for percentile baseline
+SIX_MONTH_TRADING_SESSIONS = 126
 
 
 @dataclass(frozen=True)
@@ -84,21 +85,20 @@ def fetch_csi300_6m_return(conn, trade_date: dt.date) -> float | None:
     """6-month (126 trading days) CSI300 return ending on trade_date."""
     # TODO: confirm market.index_daily column names with actual schema
     sql = """
-        SELECT
-            (today.close / lookback.close - 1.0) AS ret_6m
-        FROM market.index_daily AS today
-        JOIN LATERAL (
-            SELECT close
+        WITH ranked AS (
+            SELECT close, ROW_NUMBER() OVER (ORDER BY trade_date DESC) AS rn
             FROM market.index_daily
-            WHERE index_code = %s AND trade_date <= %s - INTERVAL '180 days'
-            ORDER BY trade_date DESC
-            LIMIT 1
-        ) AS lookback ON TRUE
-        WHERE today.index_code = %s AND today.trade_date = %s
+            WHERE index_code = %s AND trade_date <= %s
+        )
+        SELECT today.close / lookback.close - 1.0 AS ret_6m
+        FROM ranked AS today
+        JOIN ranked AS lookback
+          ON lookback.rn = today.rn + %s
+        WHERE today.rn = 1
         LIMIT 1
     """
     with conn.cursor() as cur:
-        cur.execute(sql, (CSI300_INDEX_CODE, trade_date, CSI300_INDEX_CODE, trade_date))
+        cur.execute(sql, (CSI300_INDEX_CODE, trade_date, SIX_MONTH_TRADING_SESSIONS))
         row = cur.fetchone()
         return float(row[0]) if row and row[0] is not None else None
 
@@ -151,27 +151,28 @@ def fetch_percentile(conn, trade_date: dt.date, value: float, signal: str) -> fl
     if signal == "ret_6m":
         sql = """
             WITH base AS (
-                SELECT trade_date, close
+                SELECT
+                    trade_date,
+                    close,
+                    LAG(close, %s) OVER (ORDER BY trade_date) AS lookback_close
                 FROM market.index_daily
                 WHERE index_code = %s
                   AND trade_date <= %s
-                  AND trade_date >= %s - INTERVAL '180 days'
+                  AND trade_date >= %s - INTERVAL '2 years'
             )
-            SELECT
-                today.trade_date,
-                today.close / lookback.close - 1.0 AS ret
-            FROM base AS today
-            JOIN LATERAL (
-                SELECT close
-                FROM base AS prior
-                WHERE prior.trade_date <= today.trade_date - INTERVAL '180 days'
-                ORDER BY prior.trade_date DESC
-                LIMIT 1
-            ) AS lookback ON TRUE
-            WHERE today.trade_date >= %s
-              AND today.trade_date < %s
+            SELECT trade_date, close / lookback_close - 1.0 AS ret
+            FROM base
+            WHERE trade_date >= %s
+              AND trade_date < %s
         """
-        params = (CSI300_INDEX_CODE, trade_date, history_start, history_start, trade_date)
+        params = (
+            SIX_MONTH_TRADING_SESSIONS,
+            CSI300_INDEX_CODE,
+            trade_date,
+            history_start,
+            history_start,
+            trade_date,
+        )
     elif signal == "vol_60d":
         sql = """
             WITH returns AS (

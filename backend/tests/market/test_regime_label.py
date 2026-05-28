@@ -47,8 +47,10 @@ if str(SCRIPTS_DIR) not in sys.path:
 from regime_label_daily import (  # noqa: E402  module-level import after sys.path patch
     RegimeLabel,
     RegimeSignal,
+    SIX_MONTH_TRADING_SESSIONS,
     classify_simple_quadrant,
     compute_regime_for_date,
+    fetch_csi300_6m_return,
     fetch_percentile,
     upsert_regime_label,
 )
@@ -106,6 +108,25 @@ def _mock_conn_with_rows(rows):
 # ---------- fetch_percentile ----------
 
 @_skeleton_skipif
+class TestFetchCsi300Return:
+    def test_uses_126_trading_session_lag_not_calendar_days(self):
+        conn, cur = _mock_conn_with_rows([(0.12,)])
+        value = fetch_csi300_6m_return(conn, dt.date(2026, 5, 10))
+
+        sql_text = cur.execute.call_args.args[0]
+        params = cur.execute.call_args.args[1]
+
+        assert value == 0.12
+        assert "ROW_NUMBER() OVER (ORDER BY trade_date DESC)" in sql_text
+        assert "INTERVAL '180 days'" not in sql_text
+        assert params == (
+            "000300.SH",
+            dt.date(2026, 5, 10),
+            SIX_MONTH_TRADING_SESSIONS,
+        )
+
+
+@_skeleton_skipif
 class TestFetchPercentile:
     def _hist(self, n, value_fn=lambda i: float(i)):
         base = dt.date(2024, 1, 1)
@@ -116,6 +137,19 @@ class TestFetchPercentile:
         conn, _ = _mock_conn_with_rows(history)
         pct = fetch_percentile(conn, dt.date(2026, 5, 10), 49.0, "ret_6m")
         assert pct == 0.5
+
+    def test_ret_6m_history_uses_trading_session_lag(self):
+        history = self._hist(100)
+        conn, cur = _mock_conn_with_rows(history)
+        pct = fetch_percentile(conn, dt.date(2026, 5, 10), 49.0, "ret_6m")
+
+        sql_text = cur.execute.call_args.args[0]
+        params = cur.execute.call_args.args[1]
+
+        assert pct == 0.5
+        assert "LAG(close, %s) OVER (ORDER BY trade_date)" in sql_text
+        assert "INTERVAL '180 days'" not in sql_text
+        assert params[0] == SIX_MONTH_TRADING_SESSIONS
 
     def test_value_above_all_history_returns_one(self):
         history = self._hist(100)
