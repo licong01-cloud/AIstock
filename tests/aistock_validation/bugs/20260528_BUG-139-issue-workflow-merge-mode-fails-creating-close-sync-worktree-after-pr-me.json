@@ -1,0 +1,85 @@
+{
+  "actual": "After PR #265 was merged, the command failed with fatal: 'main' is already used by worktree at 'F:/Dev/AIstock', leaving the operator to perform manual close-sync fallback.",
+  "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/*.json"
+  ],
+  "assigned_agent": "codex",
+  "bug_id": "BUG-139",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-28T05:12:30.925681Z",
+  "description": "After PR #265 was merged, the command failed with fatal: 'main' is already used by worktree at 'F:/Dev/AIstock', leaving the operator to perform manual close-sync fallback.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260528-605cc4320f23",
+      "timestamp": "2026-05-28T05:12:30.925677Z"
+    },
+    {
+      "action": "start_fix_and_correct_scope",
+      "actor": "codex_issue_workflow",
+      "timestamp": "2026-05-28T05:16:54.158411Z",
+      "note": "Corrected allowed_write_scope to the actual issue workflow test path and started the fix in the registry/fix worktree created by submit-bug."
+    },
+    {
+      "action": "mark_fixed_with_validation_evidence",
+      "actor": "codex_issue_workflow",
+      "timestamp": "2026-05-28T05:21:45.158870Z",
+      "note": "Introduced a shared git worktree creation helper with branch option before path, updated all workflow worktree creation paths, and added regression coverage for close-sync worktree creation argument order."
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "run --mode merge --merge completes PR merge plus close-sync planning/apply without invoking git worktree add in a way that conflicts with the canonical main worktree; if persistence requires a registry PR, the CLI returns a clear close-sync PR path and cleanup commands.",
+  "first_seen_at": "2026-05-28T05:12:30.925681Z",
+  "fix_branch": "bug/registry-validation-issue-workflow-merge-mode-fails-cr-20260528-303edd",
+  "fix_commit": null,
+  "fixed_at": "2026-05-28T05:22:13.480254Z",
+  "github_issue_number": 270,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/270",
+  "last_seen_at": "2026-05-28T05:12:30.925681Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/aistock_issue_workflow.py run --bug-id BUG-136 --mode merge --pr-url https://github.com/licong01-cloud/AIstock/pull/265 --merge --branch bug/BUG-136-research-assistant-ui-shows-mock-mcp-results-and-20260528 --worktree F:/Dev/AIstock_worktrees/BUG-136-research-assistant-ui-shows-mock-mcp-results-and-20260528 --sync-root --validation-evidence '<passed>'",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "guardrail_changed_files",
+    "validation_catalog_integrity",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Issue workflow merge mode fails creating close-sync worktree after PR merge",
+  "trigger_condition": {
+    "fingerprint": "605cc4320f233cc9d27a89b8",
+    "source_event_id": "FE-20260528-605cc4320f23"
+  },
+  "verification_run_id": "codex-local-validation-BUG-139-20260528",
+  "validation_evidence": [
+    "rtk proxy python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -p no:cacheprovider -> 48 passed",
+    "rtk proxy python -m ruff check scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow.py -> passed",
+    "rtk proxy git diff --check -> passed",
+    "rtk proxy python -m nox -s validation_module_registry_l0 validation_center_backend --no-error-on-missing-interpreters -> success; validation_center_backend 242 passed",
+    "rtk proxy python -m nox -s l0 --no-error-on-missing-interpreters -> success",
+    "rtk proxy python -m nox -s guardrail_changed_files validation_catalog_integrity --no-error-on-missing-interpreters -> success",
+    "rtk proxy python -m json.tool BUG-139 JSON and .bug_id_allocator.json -> passed"
+  ]
+}
