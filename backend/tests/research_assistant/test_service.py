@@ -542,6 +542,20 @@ def test_local_data_management_catalog_prompt_and_cards() -> None:
     assert result["cards"]["action_proposals"][-1]["status"] == "waiting_confirmation"
 
 
+def test_specific_mcp_domains_are_not_overridden_by_local_data_fallback() -> None:
+    svc = _chat_service()
+    cases = {
+        "strategy package paper readiness": ("strategy_governance_request", "domain.strategy_governance"),
+        "sync BUG-120 GitHub issue": ("validation_issue_request", "domain.validation_issue"),
+    }
+    for message, (expected_intent, expected_prompt) in cases.items():
+        bundle = svc.build_prompt_bundle(PromptBundleBuildRequest(user_message=message, phase="planning"))
+        keys = {node["prompt_key"] for node in bundle["node_refs"]}
+        assert bundle["selection_trace_json"]["dialogue_intent"] == expected_intent
+        assert expected_prompt in keys
+        assert "prompt.local_data_management" not in keys
+
+
 def test_bug117_prompt_and_health_do_not_expose_undeveloped_capability_bans() -> None:
     svc = _chat_service()
 

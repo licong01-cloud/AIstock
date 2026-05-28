@@ -1385,28 +1385,16 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         overrides = router_cfg.get("user_overrides", {}) if isinstance(router_cfg.get("user_overrides"), dict) else {}
         if self._has_any(lower, list(overrides.get("audit_patterns", []))):
             return DialogueIntent.AUDIT_REQUEST
-        if ("qe" in lower and "template" in lower) or user_message.count("?") >= 5:
-            return DialogueIntent.EXPERIMENT_VALIDATION_REQUEST if "qe" in lower and "template" in lower else DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST
-        if "?" in lower:
-            if "qe" in lower and "template" in lower:
-                return DialogueIntent.EXPERIMENT_VALIDATION_REQUEST
-            if self._has_any(lower, intent_config.get("capability_inquiry_patterns", [])) or "mcp" in lower or "tool" in lower:
-                return DialogueIntent.CAPABILITY_INQUIRY
-            return DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST
-        if "?" in lower and not any(token in lower for token in ("mcp", "tool", "server", "capability", "what can", "available")):
-            if "qe" in lower and "template" in lower:
-                return DialogueIntent.EXPERIMENT_VALIDATION_REQUEST
-            return DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST
-        if any(token in user_message for token in ("????", "????", "??", "????")):
-            return DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST
+        if "qe" in lower and "template" in lower:
+            return DialogueIntent.EXPERIMENT_VALIDATION_REQUEST
+
         asks_capability = self._has_any(lower, intent_config.get("capability_inquiry_patterns", []))
         if self._is_mcp_tool_catalog_inquiry(lower):
             return DialogueIntent.CAPABILITY_INQUIRY
         if asks_capability:
             return DialogueIntent.CAPABILITY_INQUIRY
-        if self._is_local_data_management_request(user_message):
-            return DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST
 
+        # Let the unified MCP router choose specific domains before generic local-data fallbacks.
         route = route_request(user_message)
         intent_value = route.get("intent_value")
         if intent_value:
@@ -1416,6 +1404,9 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 return DialogueIntent(str(intent_value))
             except ValueError:
                 pass
+
+        if self._is_local_data_management_request(user_message):
+            return DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST
 
         has_qe = self._has_any(lower, intent_config.get("qe_terms", []))
         has_bug = self._has_any(lower, intent_config.get("bug_terms", []))
