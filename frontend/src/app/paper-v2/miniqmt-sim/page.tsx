@@ -39,6 +39,158 @@ function todayIso(): string {
   return new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
 }
 
+
+type SortDirection = "asc" | "desc";
+type SortState = { key: string; direction: SortDirection } | null;
+
+function firstTextValue(row: JsonObject | null | undefined, keys: string[]): string {
+  for (const key of keys) {
+    const raw = row?.[key];
+    if (raw !== null && raw !== undefined && raw !== "") return String(raw);
+  }
+  return "-";
+}
+
+function firstNumberValue(row: JsonObject | null | undefined, keys: string[]): number | null {
+  for (const key of keys) {
+    const raw = row?.[key];
+    if (raw === null || raw === undefined || raw === "") continue;
+    const value = typeof raw === "number" ? raw : Number(raw);
+    if (Number.isFinite(value)) return value;
+  }
+  return null;
+}
+
+function firstPositiveNumberValue(row: JsonObject | null | undefined, keys: string[]): number | null {
+  for (const key of keys) {
+    const value = firstNumberValue(row, [key]);
+    if (value !== null && value > 0) return value;
+  }
+  return firstNumberValue(row, keys);
+}
+
+function positionCode(row: JsonObject): string {
+  return firstTextValue(row, ["stock_code", "symbol", "ts_code", "code"]);
+}
+
+function positionName(row: JsonObject): string {
+  return firstTextValue(row, ["stock_name", "instrument_name", "name", "security_name"]);
+}
+
+function positionQuantity(row: JsonObject): number | null {
+  return firstNumberValue(row, ["quantity", "volume", "current_amount"]);
+}
+
+function positionCostPrice(row: JsonObject): number | null {
+  return firstPositiveNumberValue(row, ["cost_price", "avg_cost", "avg_price", "open_price"]);
+}
+
+function positionCurrentPrice(row: JsonObject): number | null {
+  return firstPositiveNumberValue(row, ["current_price", "last_price", "market_price"]);
+}
+
+function positionMarketValue(row: JsonObject): number | null {
+  const direct = firstNumberValue(row, ["market_value", "marketValue"]);
+  if (direct !== null && direct !== 0) return direct;
+  const quantity = positionQuantity(row);
+  const price = positionCurrentPrice(row);
+  if (quantity !== null && quantity > 0 && price !== null && price > 0) return quantity * price;
+  return direct;
+}
+
+function positionMarketValueSource(row: JsonObject): string {
+  const direct = firstNumberValue(row, ["market_value", "marketValue"]);
+  const quantity = positionQuantity(row);
+  const price = positionCurrentPrice(row);
+  if (direct !== null && direct !== 0) return "MiniQMT market_value";
+  if (quantity !== null && quantity > 0 && price !== null && price > 0) return "估算：数量 * 当前价";
+  return "MiniQMT market_value 为空或为 0";
+}
+
+function tradeCode(row: JsonObject): string {
+  return firstTextValue(row, ["stock_code", "symbol", "ts_code", "code"]);
+}
+
+function tradeName(row: JsonObject): string {
+  return firstTextValue(row, ["stock_name", "instrument_name", "name", "security_name"]);
+}
+
+function tradeTime(row: JsonObject): string {
+  return firstTextValue(row, ["traded_time", "trade_time", "created_at", "updated_at"]);
+}
+
+function tradeDate(row: JsonObject): string {
+  const explicit = firstTextValue(row, ["trade_date", "trading_day", "date"]);
+  if (explicit !== "-") return explicit.slice(0, 10);
+  const created = firstTextValue(row, ["created_at", "updated_at"]);
+  return created !== "-" && /^\d{4}-\d{2}-\d{2}/.test(created) ? created.slice(0, 10) : "";
+}
+
+function tradeAmount(row: JsonObject): number | null {
+  const direct = firstNumberValue(row, ["traded_amount", "amount", "trade_amount"]);
+  if (direct !== null) return direct;
+  const price = firstNumberValue(row, ["traded_price", "price"]);
+  const volume = firstNumberValue(row, ["traded_volume", "quantity", "volume"]);
+  return price !== null && volume !== null ? price * volume : null;
+}
+
+function positionSortValue(row: JsonObject, key: string): string | number | null {
+  if (key === "code") return positionCode(row);
+  if (key === "name") return positionName(row);
+  if (key === "quantity") return positionQuantity(row);
+  if (key === "can_sell") return firstNumberValue(row, ["can_sell", "can_use_volume", "available_quantity"]);
+  if (key === "open_price") return firstNumberValue(row, ["open_price"]);
+  if (key === "cost_price") return positionCostPrice(row);
+  if (key === "current_price") return positionCurrentPrice(row);
+  if (key === "market_value") return positionMarketValue(row);
+  if (key === "position_profit") return firstNumberValue(row, ["position_profit", "unrealized_pnl", "profit"]);
+  if (key === "float_profit") return firstNumberValue(row, ["float_profit", "day_profit"]);
+  if (key === "profit_rate") return firstNumberValue(row, ["profit_rate"]);
+  return firstTextValue(row, [key]);
+}
+
+function tradeSortValue(row: JsonObject, key: string): string | number | null {
+  if (key === "time") return tradeTime(row);
+  if (key === "code") return tradeCode(row);
+  if (key === "name") return tradeName(row);
+  if (key === "side") return firstTextValue(row, ["order_type_name", "side", "direction"]);
+  if (key === "quantity") return firstNumberValue(row, ["traded_volume", "quantity", "volume"]);
+  if (key === "price") return firstNumberValue(row, ["traded_price", "price"]);
+  if (key === "amount") return tradeAmount(row);
+  if (key === "strategy") return firstTextValue(row, ["strategy_name", "strategy", "order_remark"]);
+  if (key === "order_id") return firstTextValue(row, ["order_id", "order_sysid", "traded_id"]);
+  return firstTextValue(row, [key]);
+}
+
+function nextSortState(current: SortState, key: string): SortState {
+  if (!current || current.key !== key) return { key, direction: "asc" };
+  if (current.direction === "asc") return { key, direction: "desc" };
+  return null;
+}
+
+function compareSortValues(left: string | number | null, right: string | number | null): number {
+  const leftMissing = left === null || left === "" || left === "-";
+  const rightMissing = right === null || right === "" || right === "-";
+  if (leftMissing && rightMissing) return 0;
+  if (leftMissing) return 1;
+  if (rightMissing) return -1;
+  if (typeof left === "number" && typeof right === "number") return left - right;
+  return String(left).localeCompare(String(right), "zh-CN", { numeric: true, sensitivity: "base" });
+}
+
+function sortRows(rows: JsonObject[], sort: SortState, valueGetter: (row: JsonObject, key: string) => string | number | null): JsonObject[] {
+  if (!sort) return rows;
+  const direction = sort.direction === "asc" ? 1 : -1;
+  return [...rows].sort((left, right) => direction * compareSortValues(valueGetter(left, sort.key), valueGetter(right, sort.key)));
+}
+
+function SortHeader({ label, sortKey, sort, onSort, testId }: { label: string; sortKey: string; sort: SortState; onSort: (key: string) => void; testId: string }) {
+  const active = sort?.key === sortKey;
+  const suffix = active ? (sort.direction === "asc" ? " ↑" : " ↓") : "";
+  const title = active && sort.direction === "desc" ? "点击清空排序" : active ? "点击切换降序" : "点击升序";
+  return <button className="pv2-link-button" data-testid={testId} onClick={() => onSort(sortKey)} title={title} type="button">{label}{suffix}</button>;
+}
+
 function packageAssetEligible(pkg: StrategyPackage): boolean {
   const eligibility = pkg.asset_eligibility as JsonObject | undefined;
   if (typeof eligibility?.eligible === "boolean") return eligibility.eligible;
@@ -67,6 +219,10 @@ export default function PaperV2MiniQMTSimPage() {
   const [creating, setCreating] = useState(false);
   const [recovering, setRecovering] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const [positionSort, setPositionSort] = useState<SortState>(null);
+  const [tradeSort, setTradeSort] = useState<SortState>(null);
+  const [tradesExpanded, setTradesExpanded] = useState(false);
+  const [tradePage, setTradePage] = useState(1);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -132,6 +288,23 @@ export default function PaperV2MiniQMTSimPage() {
     [packages],
   );
   const provider = status?.provider || "-";
+  const sortedPositions = useMemo(() => sortRows(positions, positionSort, positionSortValue), [positions, positionSort]);
+  const currentTradeDate = useMemo(() => trades.map(tradeDate).find(Boolean) || "", [trades]);
+  const currentTrades = useMemo(() => currentTradeDate ? trades.filter((row) => tradeDate(row) === currentTradeDate) : trades, [currentTradeDate, trades]);
+  const sortedTrades = useMemo(() => sortRows(currentTrades, tradeSort, tradeSortValue), [currentTrades, tradeSort]);
+  const tradePageSize = 10;
+  const tradeTotalPages = Math.max(1, Math.ceil(sortedTrades.length / tradePageSize));
+  const tradePageSafe = Math.min(tradePage, tradeTotalPages);
+  const visibleTrades = sortedTrades.slice((tradePageSafe - 1) * tradePageSize, tradePageSafe * tradePageSize);
+
+  function togglePositionSort(key: string) {
+    setPositionSort((current) => nextSortState(current, key));
+  }
+
+  function toggleTradeSort(key: string) {
+    setTradeSort((current) => nextSortState(current, key));
+    setTradePage(1);
+  }
 
   useEffect(() => {
     if (!packageId && eligiblePackages.length) {
@@ -299,32 +472,43 @@ export default function PaperV2MiniQMTSimPage() {
       </div>
 
       <SectionCard title="MiniQMT 组合清单" eyebrow="exclusive account auto-run">
-          <PaperTable
-            rows={miniPortfolios}
-            empty="暂无 broker_backend=minqmt_sim 的 Paper v2 组合。"
-            columns={[
-              { key: "name", header: "名称", render: (row) => <span>{row.portfolio_name}<br /><span className="pv2-muted pv2-mono">{row.portfolio_id}</span></span> },
-              { key: "status", header: "状态", render: (row) => <StatusBadge status={row.status} /> },
-              { key: "auto", header: "自动运行", render: (row) => <StatusBadge status={row.auto_run_enabled ? "ENABLED" : "DISABLED"} /> },
-              { key: "source", header: "通道", render: (row) => dataSourceLabel(row.data_source) },
-              { key: "plan", header: "下次计划", render: (row) => autoRunByPortfolio[row.portfolio_id]?.next_plan || "-" },
-              { key: "cash", header: "本地字段", render: (row) => <span title="仅兼容旧 schema，不代表 MiniQMT 真实分配资金">{formatCompact(row.initial_cash)}</span> },
-              { key: "actions", header: "操作", render: (row) => <div className="pv2-row-actions"><Link className="pv2-button" href={`/paper-v2/portfolios/${row.portfolio_id}/run-console`}>运行控制台</Link><button className="pv2-button" type="button" onClick={() => toggleAutoRun(row)}>{row.auto_run_enabled ? "停用自动运行" : "启用自动运行"}</button></div> },
-            ]}
-          />
+        <NoticePanel title="本地字段说明" tone="info">
+          <span data-testid="miniqmt-local-fields-help">“本地字段”来自 AIstock Paper v2 本地 portfolio schema，用于兼容创建流程、列表排序和 auto-run 控制；它不代表 MiniQMT 账户已分配的真实资金。真实资金、持仓、成本、市值和成交以 MiniQMT broker query 为准。</span>
+        </NoticePanel>
+        <PaperTable
+          rows={miniPortfolios}
+          empty="暂无 broker_backend=minqmt_sim 的 Paper v2 组合。"
+          columns={[
+            { key: "name", header: "组合", render: (row) => <span>{row.portfolio_name}<br /><span className="pv2-muted pv2-mono">{row.portfolio_id}</span></span> },
+            { key: "status", header: "状态", render: (row) => <StatusBadge status={row.status} /> },
+            { key: "auto", header: "自动运行", render: (row) => <StatusBadge status={row.auto_run_enabled ? "ENABLED" : "DISABLED"} /> },
+            { key: "source", header: "通道", render: (row) => dataSourceLabel(row.data_source) },
+            { key: "plan", header: "下次计划", render: (row) => autoRunByPortfolio[row.portfolio_id]?.next_plan || "-" },
+            { key: "cash", header: "本地字段", render: (row) => <span title="portfolio.initial_cash is local schema metadata; broker cash uses MiniQMT account query">{formatCompact(row.initial_cash)}<br /><span className="pv2-muted">initial_cash / schema</span></span> },
+            { key: "actions", header: "操作", render: (row) => <div className="pv2-row-actions"><Link className="pv2-button" href={`/paper-v2/portfolios/${row.portfolio_id}/run-console`}>运行控制台</Link><button className="pv2-button" type="button" onClick={() => toggleAutoRun(row)}>{row.auto_run_enabled ? "停用自动运行" : "启用自动运行"}</button></div> },
+          ]}
+        />
       </SectionCard>
 
       <div className="pv2-grid pv2-grid-2">
-        <SectionCard title="MiniQMT 持仓" eyebrow="query_stock_positions">
+        <SectionCard title="MiniQMT 持仓" eyebrow={`query_stock_positions / ${sortedPositions.length} 条`}>
+          <NoticePanel title="持仓成本和市值口径" tone="info">
+            成本优先显示 MiniQMT 返回的 cost_price/avg_price/avg_cost；若这些字段为 0，再显示 open_price 作为券商可读成本口径。市值优先显示 MiniQMT market_value；若 broker 未返回市值但有数量和现价，表格会明示“估算”。数量为 0 表示 MiniQMT 当前查询返回零剩余持仓，可能是今日已卖出/清仓后保留的券商行，不应单独等同于今日清仓；需结合当日成交和委托确认。
+          </NoticePanel>
           <PaperTable
-            rows={positions}
+            rows={sortedPositions}
             empty={connected ? "MiniQMT 当前无持仓。" : "未连接 MiniQMT。"}
             columns={[
-              { key: "symbol", header: "股票", render: (row) => <span>{textValue(row, "stock_code")} {textValue(row, "stock_name") !== "-" ? asText(row.stock_name) : ""}</span> },
-              { key: "qty", header: "数量", render: (row) => fmt(numberValue(row, "quantity"), 0) },
-              { key: "sell", header: "可卖", render: (row) => fmt(numberValue(row, "can_sell"), 0) },
-              { key: "price", header: "现价/成本", render: (row) => `${fmt(numberValue(row, "current_price"))} / ${fmt(numberValue(row, "cost_price"))}` },
-              { key: "mv", header: "市值", render: (row) => fmt(numberValue(row, "market_value")) },
+              { key: "code", header: <SortHeader label="股票代码" sortKey="code" sort={positionSort} onSort={togglePositionSort} testId="miniqmt-position-sort-code" />, render: (row) => <span className="pv2-mono">{positionCode(row)}</span> },
+              { key: "name", header: <SortHeader label="股票名称" sortKey="name" sort={positionSort} onSort={togglePositionSort} testId="miniqmt-position-sort-name" />, render: (row) => positionName(row) },
+              { key: "qty", header: <SortHeader label="数量" sortKey="quantity" sort={positionSort} onSort={togglePositionSort} testId="miniqmt-position-sort-quantity" />, render: (row) => { const quantity = positionQuantity(row); return <span>{fmt(quantity, 0)}{quantity === 0 ? <span className="pv2-muted"> 可能已清仓</span> : null}</span>; } },
+              { key: "sell", header: <SortHeader label="可卖" sortKey="can_sell" sort={positionSort} onSort={togglePositionSort} testId="miniqmt-position-sort-can-sell" />, render: (row) => fmt(firstNumberValue(row, ["can_sell", "can_use_volume", "available_quantity"]), 0) },
+              { key: "cost", header: <SortHeader label="成本" sortKey="cost_price" sort={positionSort} onSort={togglePositionSort} testId="miniqmt-position-sort-cost" />, render: (row) => fmt(positionCostPrice(row), 4) },
+              { key: "price", header: <SortHeader label="现价" sortKey="current_price" sort={positionSort} onSort={togglePositionSort} testId="miniqmt-position-sort-price" />, render: (row) => fmt(positionCurrentPrice(row), 4) },
+              { key: "mv", header: <SortHeader label="市值" sortKey="market_value" sort={positionSort} onSort={togglePositionSort} testId="miniqmt-position-sort-market-value" />, render: (row) => { const source = positionMarketValueSource(row); return <span title={source}>{fmt(positionMarketValue(row))}{source.includes("估算") ? <span className="pv2-muted"> 估算</span> : null}</span>; } },
+              { key: "profit", header: <SortHeader label="持仓盈亏" sortKey="position_profit" sort={positionSort} onSort={togglePositionSort} testId="miniqmt-position-sort-profit" />, render: (row) => fmt(firstNumberValue(row, ["position_profit", "unrealized_pnl", "profit"])) },
+              { key: "dayProfit", header: <SortHeader label="当日盈亏" sortKey="float_profit" sort={positionSort} onSort={togglePositionSort} testId="miniqmt-position-sort-day-profit" />, render: (row) => fmt(firstNumberValue(row, ["float_profit", "day_profit"])) },
+              { key: "rate", header: <SortHeader label="盈亏率" sortKey="profit_rate" sort={positionSort} onSort={togglePositionSort} testId="miniqmt-position-sort-profit-rate" />, render: (row) => fmt(firstNumberValue(row, ["profit_rate"]) ?? null, 4) },
             ]}
           />
         </SectionCard>
@@ -345,20 +529,40 @@ export default function PaperV2MiniQMTSimPage() {
         </SectionCard>
       </div>
 
-      <SectionCard title="当日成交" eyebrow="query_stock_trades">
-        <PaperTable
-          rows={trades}
-          empty={connected ? "MiniQMT 当前无成交。" : "未连接 MiniQMT。"}
-          columns={[
-            { key: "time", header: "时间", render: (row) => textValue(row, "traded_time") },
-            { key: "symbol", header: "股票", render: (row) => textValue(row, "stock_code") },
-            { key: "side", header: "方向", render: (row) => textValue(row, "order_type_name") },
-            { key: "qty", header: "数量", render: (row) => fmt(numberValue(row, "traded_volume"), 0) },
-            { key: "price", header: "价格", render: (row) => fmt(numberValue(row, "traded_price")) },
-            { key: "amount", header: "金额", render: (row) => fmt(numberValue(row, "traded_amount")) },
-            { key: "strategy", header: "归因", render: (row) => <span className="pv2-mono">{textValue(row, "strategy_name")}</span> },
-          ]}
-        />
+      <SectionCard
+        title="当日成交"
+        eyebrow={`query_stock_trades / ${currentTrades.length} 条${currentTradeDate ? ` / ${currentTradeDate}` : ""}`}
+        action={<button className="pv2-button" data-testid="miniqmt-trades-toggle" onClick={() => setTradesExpanded((current) => !current)} type="button">{tradesExpanded ? "收起当日成交" : `展开当日成交 (${currentTrades.length})`}</button>}
+      >
+        <NoticePanel title="成交表格默认收起" tone="info">
+          MiniQMT query_stock_trades 一般返回当日成交。为避免首屏过长，表格默认隐藏；展开后可按表头在所有显示字段上升序/降序/清空排序，并使用翻页查看全部成交。
+        </NoticePanel>
+        {tradesExpanded ? (
+          <>
+            <div data-testid="miniqmt-trades-table">
+              <PaperTable
+                rows={visibleTrades}
+                empty={connected ? "MiniQMT 当前无成交。" : "未连接 MiniQMT。"}
+                columns={[
+                  { key: "time", header: <SortHeader label="时间" sortKey="time" sort={tradeSort} onSort={toggleTradeSort} testId="miniqmt-trade-sort-time" />, render: (row) => tradeTime(row) },
+                  { key: "code", header: <SortHeader label="股票代码" sortKey="code" sort={tradeSort} onSort={toggleTradeSort} testId="miniqmt-trade-sort-code" />, render: (row) => <span className="pv2-mono">{tradeCode(row)}</span> },
+                  { key: "name", header: <SortHeader label="股票名称" sortKey="name" sort={tradeSort} onSort={toggleTradeSort} testId="miniqmt-trade-sort-name" />, render: (row) => tradeName(row) },
+                  { key: "side", header: <SortHeader label="方向" sortKey="side" sort={tradeSort} onSort={toggleTradeSort} testId="miniqmt-trade-sort-side" />, render: (row) => firstTextValue(row, ["order_type_name", "side", "direction"]) },
+                  { key: "qty", header: <SortHeader label="数量" sortKey="quantity" sort={tradeSort} onSort={toggleTradeSort} testId="miniqmt-trade-sort-quantity" />, render: (row) => fmt(firstNumberValue(row, ["traded_volume", "quantity", "volume"]), 0) },
+                  { key: "price", header: <SortHeader label="价格" sortKey="price" sort={tradeSort} onSort={toggleTradeSort} testId="miniqmt-trade-sort-price" />, render: (row) => fmt(firstNumberValue(row, ["traded_price", "price"]), 4) },
+                  { key: "amount", header: <SortHeader label="金额" sortKey="amount" sort={tradeSort} onSort={toggleTradeSort} testId="miniqmt-trade-sort-amount" />, render: (row) => fmt(tradeAmount(row)) },
+                  { key: "strategy", header: <SortHeader label="策略" sortKey="strategy" sort={tradeSort} onSort={toggleTradeSort} testId="miniqmt-trade-sort-strategy" />, render: (row) => <span className="pv2-mono">{firstTextValue(row, ["strategy_name", "strategy", "order_remark"])}</span> },
+                  { key: "order", header: <SortHeader label="委托/成交ID" sortKey="order_id" sort={tradeSort} onSort={toggleTradeSort} testId="miniqmt-trade-sort-order" />, render: (row) => <span className="pv2-mono">{firstTextValue(row, ["order_id", "order_sysid", "traded_id"])}</span> },
+                ]}
+              />
+            </div>
+            <div className="pv2-row-actions" style={{ marginTop: 12, justifyContent: "flex-end" }}>
+              <button className="pv2-button-ghost" data-testid="miniqmt-trades-prev" disabled={tradePageSafe <= 1 || loading} onClick={() => setTradePage((current) => Math.max(1, current - 1))} type="button">上一页</button>
+              <span className="pv2-muted">第 {tradePageSafe} / {tradeTotalPages} 页</span>
+              <button className="pv2-button-ghost" data-testid="miniqmt-trades-next" disabled={tradePageSafe >= tradeTotalPages || loading} onClick={() => setTradePage((current) => current + 1)} type="button">下一页</button>
+            </div>
+          </>
+        ) : null}
       </SectionCard>
     </main>
   );
