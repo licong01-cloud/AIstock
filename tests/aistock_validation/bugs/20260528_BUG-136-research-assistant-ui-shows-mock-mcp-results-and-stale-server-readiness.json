@@ -56,6 +56,13 @@
       "fix_branch": "bug/BUG-136-research-assistant-ui-shows-mock-mcp-results-and-20260528",
       "fix_commit": "26abcad20631d3cf098c4a9e375cf7697c5c06ac",
       "note": "Implemented truthful MCP route rendering, Chinese domain routing, raw tool-choice sanitization, and MCP ready-status UI correction; local validation gates passed."
+    },
+    {
+      "action": "refresh_fix_commit_after_lint_gate",
+      "actor": "codex_issue_workflow",
+      "timestamp": "2026-05-28T04:00:02.144824Z",
+      "fix_commit": "14e0747470558b2d8ecf0ae94967d5774df94836",
+      "note": "Updated fix_commit after changed-file Ruff gate required a service import cleanup; reran Research Assistant service tests and Ruff."
     }
   ],
   "evidence_uris": [
@@ -64,8 +71,8 @@
   "expected": "Research Assistant chat must either use live MCP query/plan/preflight outputs or ask for missing parameters before presenting business facts; tool choices must render as readable cards with confirmation boundaries; MCP server readiness in the UI must match backend catalog readiness.",
   "first_seen_at": "2026-05-28T03:12:17.986770Z",
   "fix_branch": "bug/BUG-136-research-assistant-ui-shows-mock-mcp-results-and-20260528",
-  "fix_commit": "26abcad20631d3cf098c4a9e375cf7697c5c06ac",
-  "fixed_at": "2026-05-28T03:57:23.954126Z",
+  "fix_commit": "14e0747470558b2d8ecf0ae94967d5774df94836",
+  "fixed_at": "2026-05-28T04:00:02.144824Z",
   "github_issue_number": 262,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/262",
   "last_seen_at": "2026-05-28T03:12:17.986770Z",
@@ -105,6 +112,7 @@
     "rtk proxy python -m nox -s research_assistant_backend research_assistant_mcp_contract validation_center_backend --no-error-on-missing-interpreters -> all 3 sessions successful",
     "rtk proxy python -m nox -s validation_module_registry_l0 --no-error-on-missing-interpreters -> successful",
     "rtk proxy python -m nox -s l0 --no-error-on-missing-interpreters -> successful",
-    "rtk proxy git diff --check -> passed"
+    "rtk proxy git diff --check -> passed",
+    "rtk proxy python -m ruff check backend/services/research_assistant/domain_ontology.py backend/services/research_assistant/service.py backend/services/research_assistant/tool_router.py backend/tests/research_assistant/test_service.py -> passed"
   ]
 }
