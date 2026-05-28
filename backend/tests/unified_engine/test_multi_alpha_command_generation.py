@@ -759,6 +759,7 @@ class TestRouterMultiAlphaResultsFallback:
                         "meta_method": "equal",
                         "meta_weights": {"g1": 0.4},
                         "combined_ic": 0.15,
+                        "unified_backtest": {"loop_id": "Loop2", "primary_node_id": "wsl2-5080"},
                         "group_results": [
                             {
                                 "group_name": "g1",
@@ -795,6 +796,8 @@ class TestRouterMultiAlphaResultsFallback:
                 "error_message": None,
             }
         ]
+        assert result["unified_backtest"]["loop_id"] == "Loop2"
+        assert result["backtest_loop_id"] == "Loop2"
         assert result["meta_weights_history"] == [
             {
                 "as_of_date": None,
@@ -863,6 +866,7 @@ class TestRouterMultiAlphaDiagnosticsFallback:
                 "multi_alpha_detail": {
                     "meta_method": "equal",
                     "combined_ic": 0.15,
+                    "unified_backtest": {"loop_id": "Loop2", "primary_node_id": "wsl2-5080"},
                     "group_results": [
                         {
                             "group_name": "g1",
@@ -912,6 +916,7 @@ class TestRouterMultiAlphaDiagnosticsFallback:
         assert diagnostics["groups"][0]["group_name"] == "g1"
         assert diagnostics["groups"][0]["group_ic"] == 0.1
         assert diagnostics["groups"][0]["status"] == "completed"
+        assert diagnostics["unified_backtest"]["loop_id"] == "Loop2"
 
     def test_diagnostics_merges_unified_metrics_into_db_groups(self):
         from backend.services.quantevolver.multi_alpha_diagnostics import GroupMetrics, MultiAlphaDiagnostics
@@ -1208,6 +1213,89 @@ class TestMultiAlphaResultCollectorFailFast:
         assert analysis["group_diagnostics"][0]["training_diagnostics"]["final_train_loss"] == 0.9
         assert result["enhanced_metrics"]["multi_alpha_analysis"]["schema_version"] == 1
         assert any(g["rule_id"] == "negative_weighted_group" for g in analysis["optimization_guidance"])
+
+
+    def test_trigger_unified_backtest_submits_combined_prediction_as_binary_b64(self):
+        import base64
+        import pickle
+
+        import pandas as pd
+
+        collector = MultiAlphaResultCollector()
+        created_payload = {}
+
+        class DummyClient:
+            def __init__(self, node_id):
+                self.node_id = node_id
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                return None
+
+            async def get_workspace_file(self, task_id, loop_id, file_path):
+                return f"content:{file_path}"
+
+            async def create_and_run_loop(self, **kwargs):
+                created_payload.update(kwargs)
+                return "Loop2"
+
+            async def get_loop_status(self, task_id, loop_id):
+                return {"status": "completed"}
+
+            async def get_loop_metrics(self, task_id, loop_id):
+                return {"summary": {"IC": 0.12, "annualized_return": 0.2}}
+
+        def for_node(node_id):
+            return DummyClient(node_id)
+
+        pred = pd.DataFrame({"score": [0.1, 0.2]})
+        with patch("backend.services.quantevolver.qe_workspace_client.QEWorkspaceClient.for_node", side_effect=for_node), \
+             patch("asyncio.sleep", AsyncMock()):
+            result = asyncio.run(collector._trigger_unified_backtest(
+                "task_x",
+                pred,
+                [
+                    {"group_name": "g1", "assigned_node_id": "rdagent-node1", "qe_loop_id": "Loop7"},
+                    {"group_name": "g2", "assigned_node_id": "wsl2-5080", "qe_loop_id": "Loop8"},
+                ],
+                {},
+            ))
+
+        files = created_payload["experiment_files"]
+        assert "combined_prediction.pkl.b64" in files
+        assert "combined_prediction.pkl" not in files
+        decoded = pickle.loads(base64.b64decode(files["combined_prediction.pkl.b64"]))
+        assert decoded.equals(pred)
+        assert "--pred-backtest combined_prediction.pkl" in created_payload["wsl_command"]
+        assert result["_unified_backtest"]["loop_id"] == "Loop2"
+        assert result["_unified_backtest"]["primary_node_id"] == "wsl2-5080"
+
+    def test_build_result_metrics_persists_unified_backtest_lifecycle(self):
+        collector = MultiAlphaResultCollector()
+        result = collector._build_result_metrics(
+            {
+                "IC": 0.12,
+                "_enhanced_metrics": {"summary": {"IC": 0.12}},
+                "_unified_backtest": {
+                    "task_id": "task_x",
+                    "loop_id": "Loop2",
+                    "primary_node_id": "wsl2-5080",
+                    "artifact_status": "ready",
+                },
+            },
+            "equal",
+            {"g1": 1.0},
+            [{"group_name": "g1", "ic": 0.1, "icir": 1.0, "sharpe": 1.2, "meta_weight": 1.0, "factor_count": 1, "model_id": "m1"}],
+            {},
+            {},
+            {},
+        )
+
+        assert result["multi_alpha_lifecycle"]["backtest_loop_id"] == "Loop2"
+        assert result["multi_alpha_detail"]["unified_backtest"]["primary_node_id"] == "wsl2-5080"
+        assert result["enhanced_metrics"]["multi_alpha_lifecycle"]["artifact_status"] == "ready"
 
     def test_collect_and_persist_requires_qe_loop_id(self):
         collector = MultiAlphaResultCollector()

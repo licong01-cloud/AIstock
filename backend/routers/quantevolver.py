@@ -1883,6 +1883,14 @@ def get_multi_alpha_results(experiment_id: str):
                 ),
             )
 
+        unified_backtest = {}
+        if isinstance(lifecycle.get("unified_backtest"), dict):
+            unified_backtest = lifecycle["unified_backtest"]
+        elif isinstance(multi_detail.get("unified_backtest"), dict):
+            unified_backtest = multi_detail["unified_backtest"]
+        backtest_loop_id = lifecycle.get("backtest_loop_id") or unified_backtest.get("loop_id")
+        primary_node_id = lifecycle.get("primary_node_id") or unified_backtest.get("primary_node_id")
+
         return {
             "ok": True,
             "experiment_id": experiment_id,
@@ -1891,6 +1899,9 @@ def get_multi_alpha_results(experiment_id: str):
             "stage": lifecycle.get("stage") or ("completed" if ready else exp_status),
             "artifact_status": lifecycle.get("artifact_status") or ("ready" if ready else "pending"),
             "artifact_errors": lifecycle.get("errors", []),
+            "backtest_loop_id": backtest_loop_id,
+            "primary_node_id": primary_node_id,
+            "unified_backtest": unified_backtest or None,
             "groups": groups,
             "meta_weights_history": meta_history,
             "multi_alpha_analysis": result_metrics.get("multi_alpha_analysis") if isinstance(result_metrics, dict) else None,
@@ -6512,12 +6523,26 @@ async def get_experiment_run_status(experiment_id: str):
                 except Exception:
                     lifecycle_source = {}
             lifecycle = lifecycle_source.get("multi_alpha_lifecycle") if isinstance(lifecycle_source, dict) else None
+            detail_source = lifecycle_source.get("multi_alpha_detail") if isinstance(lifecycle_source, dict) else None
             if isinstance(lifecycle, dict):
                 multi_alpha_status["stage"] = lifecycle.get("stage", multi_alpha_status["stage"])
                 multi_alpha_status["artifact_status"] = lifecycle.get(
                     "artifact_status", multi_alpha_status["artifact_status"]
                 )
                 multi_alpha_status["artifact_errors"] = lifecycle.get("errors", [])
+                if lifecycle.get("backtest_loop_id"):
+                    multi_alpha_status["backtest_loop_id"] = lifecycle.get("backtest_loop_id")
+                if lifecycle.get("primary_node_id"):
+                    multi_alpha_status["primary_node_id"] = lifecycle.get("primary_node_id")
+                if isinstance(lifecycle.get("unified_backtest"), dict):
+                    multi_alpha_status["unified_backtest"] = lifecycle.get("unified_backtest")
+            elif isinstance(detail_source, dict) and isinstance(detail_source.get("unified_backtest"), dict):
+                unified_backtest = detail_source["unified_backtest"]
+                multi_alpha_status["unified_backtest"] = unified_backtest
+                if unified_backtest.get("loop_id"):
+                    multi_alpha_status["backtest_loop_id"] = unified_backtest.get("loop_id")
+                if unified_backtest.get("primary_node_id"):
+                    multi_alpha_status["primary_node_id"] = unified_backtest.get("primary_node_id")
             result["multi_alpha"] = multi_alpha_status
             result["multi_alpha_stage"] = multi_alpha_status["stage"]
             result["artifact_status"] = multi_alpha_status["artifact_status"]
@@ -6554,6 +6579,15 @@ async def get_experiment_run_status(experiment_id: str):
                         )
                         fresh_multi_alpha_status["stage"] = "completed"
                         fresh_multi_alpha_status["artifact_status"] = "ready"
+                        result_metrics = result["result_metrics"] if isinstance(result["result_metrics"], dict) else {}
+                        lifecycle = result_metrics.get("multi_alpha_lifecycle") if isinstance(result_metrics, dict) else None
+                        if isinstance(lifecycle, dict):
+                            if lifecycle.get("backtest_loop_id"):
+                                fresh_multi_alpha_status["backtest_loop_id"] = lifecycle.get("backtest_loop_id")
+                            if lifecycle.get("primary_node_id"):
+                                fresh_multi_alpha_status["primary_node_id"] = lifecycle.get("primary_node_id")
+                            if isinstance(lifecycle.get("unified_backtest"), dict):
+                                fresh_multi_alpha_status["unified_backtest"] = lifecycle.get("unified_backtest")
                         result["multi_alpha"] = fresh_multi_alpha_status
                         _archive_experiment_best_effort(experiment_id)
                     except Exception as me:
