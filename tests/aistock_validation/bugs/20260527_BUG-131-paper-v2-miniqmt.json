@@ -36,8 +36,8 @@
   "expected": "选股中心策略包选择器置顶纵向展示；选股历史支持选择/取消当前页所有记录；MiniQMT 持仓显示成本、市值、代码/名称分列、零数量含义说明和全字段三态排序；当日成交默认折叠、可展开后分页、显示股票名称并支持排序；MiniQMT 组合清单对本地字段提供可读说明。",
   "first_seen_at": "2026-05-27T14:23:37.629086Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "bf82bf8b1948a2ee536da01cfa49f25c12dd757f",
+  "fixed_at": "2026-05-28T01:00:58.405659Z",
   "github_issue_number": 252,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/252",
   "last_seen_at": "2026-05-27T14:23:37.629086Z",
@@ -45,6 +45,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/255",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -58,7 +59,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -67,5 +68,9 @@
     "fingerprint": "05ccd6419ff6557b8115582b",
     "source_event_id": "FE-20260527-05ccd6419ff6"
   },
+  "validation_evidence": [
+    "GitHub PR #255 merged; checks passed after final rebase",
+    "local pre-merge validation passed: build, l0, paper_v2_backend, validation_center_backend, validation_module_registry_l0, targeted Playwright smoke"
+  ],
   "verification_run_id": null
 }
