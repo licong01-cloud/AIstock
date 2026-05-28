@@ -15,7 +15,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from backend.db.pg_pool import get_conn
 from backend.services.selection_center.models import SelectionCandidate, SelectionExclusion
 from backend.services.selection_center.runtime_profile import RuntimeRiskPolicyProfile
-from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
+from backend.services.trading_core.errors import (
+    ArtifactGenerationFailedError,
+    DataUnavailableError,
+    RuntimeConfigInvalidError,
+    UnsupportedFeatureError,
+)
 from backend.services.trading_core.models import PositionLot
 
 
@@ -230,7 +235,7 @@ class AnnouncementRiskDecisionProvider:
         profile: RuntimeRiskPolicyProfile,
         current_positions: dict[str, PositionLot] | None = None,
     ) -> dict[str, RiskDecision]:
-        raise StrategyPackageValidationError(
+        raise UnsupportedFeatureError(
             "announcement_risk provider is not implemented yet",
             context={"trade_date": trade_date.isoformat(), "symbol_count": len(symbols)},
         )
@@ -261,7 +266,7 @@ class StockRiskPolicyService:
         for provider_name in profile.providers:
             provider = self.providers.get(provider_name)
             if provider is None:
-                raise StrategyPackageValidationError(
+                raise RuntimeConfigInvalidError(
                     "risk policy provider is not registered",
                     context={"provider": provider_name, "registered": sorted(self.providers)},
                 )
@@ -287,7 +292,7 @@ class StockRiskPolicyService:
         allow_empty: bool = False,
     ) -> tuple[list[SelectionCandidate], list[SelectionExclusion]]:
         if top_k <= 0:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "risk policy candidate filter requires positive top_k",
                 context={"package_id": package_id, "top_k": top_k},
             )
@@ -362,7 +367,7 @@ class StockRiskPolicyService:
         if not reranked and allow_empty:
             return [], excluded
         if not reranked:
-            raise StrategyPackageValidationError(
+            raise ArtifactGenerationFailedError(
                 "all ranked candidates are excluded by risk policy",
                 context={
                     "package_id": package_id,

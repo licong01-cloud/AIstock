@@ -17,7 +17,7 @@ from backend.services.selection_center.runtime_profile import (
 )
 from backend.services.strategy_package.models import StrategyPackageManifest
 from backend.services.strategy_package.runtime_variant import RuntimeVariantValidationStatus
-from backend.services.trading_core.errors import StrategyPackageValidationError, UnsupportedFeatureError
+from backend.services.trading_core.errors import RuntimeConfigInvalidError, UnsupportedFeatureError
 
 
 SCORE_WEIGHTED_V1_IDS = {
@@ -169,7 +169,7 @@ def normalize_runtime_config_with_backtest_contract(
     """
 
     if runtime_config is not None and not isinstance(runtime_config, dict):
-        raise StrategyPackageValidationError(
+        raise RuntimeConfigInvalidError(
             "runtime_config must be an object",
             context={**(context or {}), "runtime_config_type": type(runtime_config).__name__},
         )
@@ -178,7 +178,7 @@ def normalize_runtime_config_with_backtest_contract(
     contract = build_backtest_runtime_contract(manifest, config)
     raw_profile = config.get("runtime_profile")
     if raw_profile is not None and not isinstance(raw_profile, dict):
-        raise StrategyPackageValidationError(
+        raise RuntimeConfigInvalidError(
             "runtime_config.runtime_profile must be an object",
             context={**(context or {}), "runtime_profile_type": type(raw_profile).__name__},
         )
@@ -237,7 +237,7 @@ def _portfolio_strategy_params(
     topk = custom_params.get("topk") or _runtime_topk(manifest)
     n_drop = custom_params.get("n_drop") or _runtime_n_drop(manifest)
     if topk is None:
-        raise StrategyPackageValidationError(
+        raise RuntimeConfigInvalidError(
             "runtime profile selection.top_k is required for alpha-core StrategyPackage contracts",
             context={"package_id": manifest.package_id, "strategy_marker": strategy_marker},
         )
@@ -331,7 +331,7 @@ def _runtime_variant_contract(runtime_config: dict[str, Any] | None) -> dict[str
         "variant_id": variant.get("variant_id"),
         "variant_hash": variant.get("variant_hash"),
         "variant_kind": variant.get("variant_kind"),
-        "paper_candidate": bool(variant.get("paper_candidate")),
+        "legacy_paper_candidate": bool(variant.get("paper_candidate")),
         "validation_status": variant.get("validation_status"),
         "strategy_config_overlay": "strategy_config" in variant_config,
         "portfolio_policy_overlay": "portfolio_policy" in variant_config,
@@ -407,12 +407,12 @@ def _normalize_selection_profile(
         try:
             top_k = int(selection_payload["top_k"])
         except (TypeError, ValueError) as exc:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "Paper v2 runtime top_k must be an integer",
                 context={**context, "runtime_top_k": selection_payload["top_k"]},
             ) from exc
         if top_k <= 0 or top_k > 50:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "Paper v2 runtime top_k must be between 1 and 50",
                 context={**context, "runtime_top_k": top_k, "max_top_k": 50},
             )
@@ -427,20 +427,17 @@ def _effective_manifest_for_contract(
     variant = (runtime_config or {}).get("runtime_variant")
     if not isinstance(variant, dict):
         return manifest
-    if variant.get("validation_status") != RuntimeVariantValidationStatus.VALIDATION_PASSED.value or not bool(
-        variant.get("paper_candidate")
-    ):
-        raise StrategyPackageValidationError(
-            "runtime variant must be a validated paper candidate before strategy contract use",
+    if variant.get("validation_status") != RuntimeVariantValidationStatus.VALIDATION_PASSED.value:
+        raise RuntimeConfigInvalidError(
+            "runtime variant must be validated before strategy contract use",
             context={
                 "package_id": manifest.package_id,
                 "runtime_variant_id": variant.get("variant_id"),
                 "validation_status": variant.get("validation_status"),
-                "paper_candidate": variant.get("paper_candidate"),
             },
         )
     if variant.get("manifest_sha256") != manifest.manifest_sha256:
-        raise StrategyPackageValidationError(
+        raise RuntimeConfigInvalidError(
             "runtime variant manifest hash does not match StrategyPackage manifest",
             context={
                 "package_id": manifest.package_id,
@@ -466,14 +463,14 @@ def _effective_manifest_for_contract(
 def _merge_model_or_dict(current: Any, overlay: Any) -> Any:
     if hasattr(current, "model_copy"):
         if not isinstance(overlay, dict):
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "runtime variant model overlays must be objects",
                 context={"overlay_type": type(overlay).__name__},
             )
         return current.model_copy(update=overlay)
     if isinstance(current, dict):
         if not isinstance(overlay, dict):
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "runtime variant dict overlays must be objects",
                 context={"overlay_type": type(overlay).__name__},
             )

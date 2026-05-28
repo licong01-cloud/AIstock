@@ -2,31 +2,36 @@
   "schema_version": "aistock_validation_bug_v1",
   "bug_id": "BUG-117",
   "title": "Research Assistant prompt forbids undeveloped mouse/keyboard and code-write capabilities",
-  "description": "Expected: Research Assistant primary prompt should describe only implemented behavior and real governance boundaries. It must not warn users that the assistant is forbidden from using mouse/keyboard control or writing code when those capabilities are not implemented.\n\nActual: The enabled root assistant prompt includes `禁止控制鼠标键盘，禁止写代码`, and `/health` exposes runtime boundaries such as `mouse_keyboard_control=false` and `code_write=false`. This makes the product appear to forbid unavailable capabilities rather than simply describing the supported MCP/API/approval workflow.\n\nEvidence:\n- `backend/services/research_assistant/service.py:281` hardcodes `禁止控制鼠标键盘，禁止写代码` in `DEFAULT_PROMPT_NODES[root.assistant]`.\n- The live `GET /api/v1/research-assistant/prompt-nodes?status=enabled&limit=500` response was reported to return the same text for `root.assistant`.\n- `backend/services/research_assistant/service.py:505-506` exposes `mouse_keyboard_control=false` and `code_write=false` in `/health` runtime boundaries.\n\nClosure requirements:\n1. Remove `禁止控制鼠标键盘` and `禁止写代码` from the Research Assistant root prompt source.\n2. Backfill/update the current DB `assistant_prompt_nodes.root.assistant` record so live chat no longer uses the stale text.\n3. Replace negative unavailable-capability metadata (`mouse_keyboard_control=false`, `code_write=false`) with a positive implemented-capability summary or remove it from user-facing health payloads.\n4. Keep real governance boundaries: high-risk operations still require MCP/API, approval, traceability, and memory/audit discipline.\n5. Add/update backend tests proving the root prompt and live prompt-node listing do not contain those two forbidden undeveloped-capability phrases.",
+  "description": "Research Assistant prompt/runtime surfaces previously exposed negative unavailable-capability language such as forbidding mouse/keyboard control or code writing. The fix moved active prompts into Prompt Pack files, removed the obsolete negative capability bans from active prompt and health/runtime payloads, and keeps real governance boundaries as positive implemented capabilities: MCP/API, approval, Trace and Memory/Audit discipline.",
   "module": "research_assistant",
   "severity": "P1",
   "risk_area": "prompt_runtime_correctness",
-  "status": "open",
+  "status": "fixed",
   "trigger_condition": {
     "scenario": "research_assistant_root_prompt_contains_unimplemented_capability_bans"
   },
-  "reproduce_command": "cd F:\\Dev\\AIstock && rg -n \"禁止控制鼠标键盘|禁止写代码|mouse_keyboard_control|code_write\" backend\\services\\research_assistant\\service.py",
+  "reproduce_command": "rg -n \"mouse_keyboard_control|code_write|legacy Chinese mouse/keyboard ban phrase|legacy Chinese code-write ban phrase\" backend/services/research_assistant prompt_packs/research_assistant/main configs/research_assistant frontend/src/app/research-assistant backend/mcp/modules/research_assistant.py",
   "failing_run_id": null,
   "evidence_uris": [
     "github:https://github.com/licong01-cloud/AIstock/issues/186",
     "file:backend/services/research_assistant/service.py:281",
     "file:backend/services/research_assistant/service.py:505",
-    "file:backend/services/research_assistant/service.py:506"
+    "file:backend/services/research_assistant/service.py:506",
+    "github:https://github.com/licong01-cloud/AIstock/pull/198",
+    "github:https://github.com/licong01-cloud/AIstock/commit/d393d2039e96a36d7b009022182650a28d975ae2",
+    "file:tests/aistock_validation/history/research_assistant/20260525_l3_prompt_context_runtime_governance_validation.md",
+    "file:tests/aistock_validation/history/research_assistant/20260526_final_runtime_activation_validation.md",
+    "file:tests/aistock_validation/history/research_assistant/20260527_bug105_109_117_close_sync_validation.md"
   ],
   "fingerprint": "2ebcba19571c8e84",
   "assigned_agent": "codex",
-  "fix_branch": null,
-  "fix_commit": null,
-  "verification_run_id": null,
+  "fix_branch": "feature/research-assistant-prompt-context-runtime-20260525; feature/research-assistant-mode-router-20260526",
+  "fix_commit": "d393d2039e96a36d7b009022182650a28d975ae2",
+  "verification_run_id": "tests/aistock_validation/history/research_assistant/20260527_bug105_109_117_close_sync_validation.md",
   "created_at": "2026-05-24T06:07:58Z",
   "first_seen_at": "2026-05-24T06:07:58Z",
-  "last_seen_at": "2026-05-24T06:40:00Z",
-  "fixed_at": null,
+  "last_seen_at": "2026-05-26T16:45:00Z",
+  "fixed_at": "2026-05-26T16:45:00Z",
   "submitted_at": "2026-05-24T06:40:00Z",
   "closed_at": null,
   "allowed_write_scope": [
@@ -34,26 +39,31 @@
     "backend/db/init_research_assistant_schema_20260521.py",
     "backend/tests/research_assistant",
     "tests/aistock_validation/bugs/20260524_BUG-117-research-assistant-prompt-forbids-undeveloped-mouse-keyboard.json",
-    "tests/aistock_validation/history/research_assistant"
+    "tests/aistock_validation/history/research_assistant",
+    "backend/tests/mcp/test_profiles_registry_gateway.py",
+    "tests/aistock_validation/bugs/20260523_BUG-105-research-assistant-chat-loses-conversation-context.json",
+    "tests/aistock_validation/bugs/20260523_BUG-109-research-assistant-qe-10-loop-prompt-fixed-target.json"
   ],
   "suspected_modules": [
     "research_assistant"
   ],
   "required_verification": [
-    "Static grep confirms the root prompt no longer contains `禁止控制鼠标键盘` or `禁止写代码`.",
-    "Live prompt-node listing for `root.assistant` no longer contains those phrases after DB backfill.",
-    "Health/runtime capability payload describes implemented capabilities positively or omits unavailable capability booleans.",
-    "Prompt governance boundaries still require MCP/API, approval, trace and memory/audit discipline."
+    "Static scan confirms active root prompt, prompt pack, runtime config, Research Assistant frontend route and MCP module do not contain undeveloped mouse/keyboard or code-write ban phrases.",
+    "Backend tests cover enabled prompt-node listing and health payload so negative unavailable-capability metadata is not user-facing.",
+    "Health/runtime payload describes implemented capabilities and governance boundaries positively.",
+    "Production DDL for prior prompt/runtime schema changes was applied and verified before runtime activation; this closure PR adds no new DDL or dependencies."
   ],
   "closure_requirements": [
-    "Prompt source and live DB prompt-node record are both updated.",
-    "Unavailable mouse/keyboard and code-write capability bans are not user-facing.",
-    "Tests cover root prompt source and prompt-node listing."
+    "Prompt source and active prompt-node records no longer expose undeveloped mouse/keyboard or code-write bans.",
+    "Unavailable capability booleans are not user-facing in health/runtime payloads.",
+    "MCP/API approval, traceability and audit boundaries remain enforced.",
+    "Tests and static scans cover prompt source, prompt-node listing and runtime capability payloads."
   ],
   "non_goals": [
     "Do not implement mouse/keyboard control in this issue.",
     "Do not implement code-writing capability in Research Assistant chat in this issue.",
-    "Do not weaken MCP/API approval, traceability, or audit boundaries."
+    "Do not weaken MCP/API approval, traceability, or audit boundaries.",
+    "Do not restart production runtime services without explicit approval."
   ],
   "events": [
     {
@@ -67,6 +77,30 @@
       "actor": "codex-app",
       "action": "renumbered_after_origin_sync",
       "note": "origin/main already contained BUG-114 through BUG-116; registered this prompt defect as BUG-117 while preserving GitHub issue #186."
+    },
+    {
+      "timestamp": "2026-05-26T16:45:00Z",
+      "actor": "codex-app",
+      "action": "workflow_close_sync_validation",
+      "note": "Closed by PR #198 plus later main commits that removed stale prompt-pack validation phrase residue and verified runtime activation; final close-sync validation confirmed active scoped paths are clean."
+    },
+    {
+      "timestamp": "2026-05-26T16:45:00Z",
+      "actor": "codex-app",
+      "action": "scope_expanded_for_close_sync",
+      "note": "User approved scope expansion to update backend/tests/mcp/test_profiles_registry_gateway.py and the same-module BUG-105/109/117 closure records in one governance close-sync branch."
+    },
+    {
+      "timestamp": "2026-05-26T17:00:35Z",
+      "actor": "codex-app",
+      "action": "github_issue_synced",
+      "note": "Synced bug registry entry to GitHub issue #186."
+    },
+    {
+      "timestamp": "2026-05-26T18:55:00Z",
+      "actor": "codex-app",
+      "action": "post_main_sync_validation",
+      "note": "Post-main-sync verification reran Research Assistant, issue-sync and Paper v2 parity checks after merging origin/main through BUG-121/122 closure commits."
     }
   ],
   "custom_github_labels": [
@@ -74,5 +108,32 @@
     "prompt_runtime_correctness"
   ],
   "github_issue_number": 186,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/186"
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/186",
+  "fix_commits": [
+    "05db2171c1a0d9bec5dabcdc01ac8c03baf5f9c8",
+    "aa6ebebdc9fa8f90055cb1076f56f79b052f427a",
+    "b7649f63",
+    "d393d2039e96a36d7b009022182650a28d975ae2"
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/198",
+  "validation_evidence": [
+    "python -m pytest -q backend/tests/research_assistant backend/tests/mcp/test_research_assistant_module.py backend/tests/mcp/test_profiles_registry_gateway.py -p no:cacheprovider -> 60 passed in 19.32s",
+    "python -m compileall backend/services/research_assistant backend/mcp/modules/research_assistant.py backend/tests/mcp/test_profiles_registry_gateway.py -> passed",
+    "npm --prefix frontend run build -> passed; only pre-existing unrelated react-hooks/exhaustive-deps warnings",
+    "npx playwright test tests/research-assistant/research-assistant.spec.ts --project chromium -> 3 passed in 18.5s",
+    "static scans for BUG-109 legacy QE 10 loop/cardText patterns and BUG-117 undeveloped capability ban phrases in active runtime paths -> no matches",
+    "git diff --check -> passed",
+    "tests/aistock_validation/history/research_assistant/20260526_final_runtime_activation_validation.md -> production DDL applied_and_verified for prompt/runtime schema on 2026-05-26",
+    "python -m pytest -q backend/tests/scripts/test_aistock_mcp_github_issue_tools.py backend/tests/scripts/test_bug_github_sync.py backend/tests/mcp/test_profiles_registry_gateway.py -p no:cacheprovider -> 63 passed in 2.36s",
+    "post-merge origin/main=33c600fd: python -m pytest -q backend/tests/research_assistant backend/tests/mcp/test_research_assistant_module.py backend/tests/mcp/test_profiles_registry_gateway.py -p no:cacheprovider -> 60 passed in 17.83s",
+    "post-merge origin/main=33c600fd: python -m pytest -q backend/tests/scripts/test_aistock_mcp_github_issue_tools.py backend/tests/scripts/test_bug_github_sync.py backend/tests/mcp/test_profiles_registry_gateway.py -p no:cacheprovider -> 64 passed in 2.42s",
+    "post-merge origin/main=33c600fd: python -m pytest backend/tests/paper_trading_v2 backend/tests/selection_center backend/tests/strategy_package --ignore-glob=backend/tests/paper_trading_v2/*dev_db*.py --ignore=backend/tests/paper_trading_v2/test_runtime_enable_paper_compat.py -k 'not test_model_asset_resolver_uses_aistock_cache_without_wsl_unc_probe' -q -p no:cacheprovider -> 493 passed, 1 skipped, 1 deselected in 18.92s",
+    "post-merge origin/main=33c600fd: python -m ruff check --force-exclude backend/tests/mcp/test_profiles_registry_gateway.py -> All checks passed",
+    "post-merge origin/main=33c600fd: python -m compileall backend/services/research_assistant backend/mcp/modules/research_assistant.py backend/tests/mcp/test_profiles_registry_gateway.py -> passed",
+    "post-merge origin/main=33c600fd: static scans for BUG-109 legacy QE 10 loop/cardText patterns and BUG-117 undeveloped capability ban patterns in active runtime paths -> no matches",
+    "post-merge origin/main=33c600fd: gh issue view 168/177/186 -> CLOSED with status:fixed labels"
+  ],
+  "production_ddl_gate": "applied_and_verified_for_prior_prompt_runtime_schema; closure_pr_noop",
+  "production_frontend_dependency_gate": "noop",
+  "production_backend_dependency_gate": "noop"
 }

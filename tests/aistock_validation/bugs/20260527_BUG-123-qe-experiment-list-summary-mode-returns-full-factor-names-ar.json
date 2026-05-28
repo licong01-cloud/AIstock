@@ -1,0 +1,70 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-123",
+  "title": "qe_experiment_list summary mode returns full factor_names array (~156K tokens worst case)",
+  "description": "Expected: detail=summary returns factor_count: N instead of full factor_names array. Each item ~200 chars.\nActual: detail=summary returns full factor_names array with 57 names per experiment. Each item ~1700 chars. 367 experiments * 1700 = ~156K tokens worst case.",
+  "module": "mcp.qe_experiment",
+  "severity": "P1",
+  "risk_area": "unspecified",
+  "status": "verified",
+  "trigger_condition": {
+    "scenario": "reported_via_mcp",
+    "files": [
+      "mcp_server/handlers/qe_experiment.py",
+      "mcp_server/routes/qe_experiment.py"
+    ]
+  },
+  "reproduce_command": "curl -s http://localhost:8001/api/qe/experiments?detail=summary&limit=50 | python -c \"import sys,json; d=json.load(sys.stdin); print(f'items={len(d[\\\"items\\\"])}, factor_names_len={sum(len(i.get(\\\"factor_names\\\",[])) for i in d[\\\"items\\\"])}')\"",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:mcp_server/handlers/qe_experiment.py",
+    "file:mcp_server/routes/qe_experiment.py"
+  ],
+  "fingerprint": "8153723ace9858bf",
+  "assigned_agent": null,
+  "fix_branch": "fix/mcp-token-bloat-123-126",
+  "fix_commit": "b17a9427",
+  "verification_run_id": "validation-center_20260527_060252_l0_l0_dedb2d31_runner-validation__2925424794",
+  "created_at": "2026-05-27T05:48:40Z",
+  "first_seen_at": "2026-05-27T05:48:40Z",
+  "last_seen_at": "2026-05-27T06:03:33Z",
+  "fixed_at": "2026-05-27T05:59:21Z",
+  "submitted_at": "2026-05-27T05:48:40Z",
+  "closed_at": "2026-05-27T06:03:33Z",
+  "allowed_write_scope": [
+    "mcp_server/handlers/qe_experiment.py",
+    "mcp_server/routes/qe_experiment.py"
+  ],
+  "suspected_modules": [
+    "mcp_server/handlers/qe_experiment.py",
+    "mcp_server/routes/qe_experiment.py"
+  ],
+  "required_verification": [],
+  "closure_requirements": [],
+  "events": [
+    {
+      "timestamp": "2026-05-27T05:48:40Z",
+      "actor": "unknown",
+      "action": "discovered",
+      "note": "Reported via aistock_mcp_server.report_bug. Comments: 1"
+    },
+    {
+      "timestamp": "2026-05-27T05:48:40Z",
+      "actor": "unknown",
+      "action": "comment",
+      "note": "Diagnosed 2026-05-27: factor_names is the dominant token cost in qe_experiment_list. Even limit=1 returns 57 factor names. Fix: detail=summary should return factor_count:int, detail=full keeps factor_names."
+    },
+    {
+      "timestamp": "2026-05-27T05:59:21Z",
+      "actor": "mcp_agent",
+      "action": "status_changed",
+      "note": "All 3 validation plans passed: L0, research_mcp_contract L2, qe_archive_backend L2. Summary mode now returns factor_count:int instead of factor_names:array. Empty metrics_summary omitted."
+    },
+    {
+      "timestamp": "2026-05-27T06:03:33Z",
+      "actor": "mcp_agent",
+      "action": "status_changed",
+      "note": "Merged to main (9f2853d2), pushed to GitHub. Post-merge L0 passed. Validation evidence: L0, qe_archive_backend L2, research_mcp_contract L2."
+    }
+  ]
+}

@@ -11,7 +11,7 @@ from backend.services.research_assistant.service import ASSISTANT_APPROVAL_CONFI
 class FakeLlmClient:
     def complete(self, **_kwargs: object) -> LlmCallResult:
         return LlmCallResult(
-            content="我理解你要创建 QE 10 loop 实验。本轮只生成计划和确认问题，不执行。",
+            content="已收到明确的 QE 实验草案任务。我会先整理目标、股票池、时间窗、成本和风险边界；不默认固定迭代数量。",
             provider="fake",
             model="fake-primary",
             duration_ms=9,
@@ -43,7 +43,7 @@ def test_research_assistant_catalog_readiness_api_is_explicit() -> None:
 
     chat_resp = client.post(
         "/api/v1/research-assistant/chat/turn",
-        json={"message": "帮我创建一个 QE 10 loop 实验，先不要执行。", "allow_execute": False},
+        json={"message": "帮我设计一个 QE 实验草案，先不要执行。", "allow_execute": False},
     )
     assert chat_resp.status_code == 409
     detail = chat_resp.json()["detail"]
@@ -55,7 +55,7 @@ def test_research_assistant_catalog_readiness_api_is_explicit() -> None:
     assert client.get("/api/v1/research-assistant/health").json()["data"]["status"] == "ok"
     assert client.post(
         "/api/v1/research-assistant/chat/turn",
-        json={"message": "帮我创建一个 QE 10 loop 实验，先不要执行。", "allow_execute": False},
+        json={"message": "帮我设计一个 QE 实验草案，先不要执行。", "allow_execute": False},
     ).status_code == 200
 
 
@@ -99,21 +99,36 @@ def test_research_assistant_api_phase1_smoke() -> None:
     assert prompt_nodes["total"] >= 1
     prompt_bundle = client.post(
         "/api/v1/research-assistant/prompt-bundles",
-        json={"user_message": "帮我创建一个 QE 10 loop 实验，先不要执行。", "phase": "planning"},
+        json={"user_message": "帮我设计一个 QE 实验草案，先不要执行。", "phase": "planning"},
     ).json()["data"]
     assert "domain.qe_experiment" in [node["prompt_key"] for node in prompt_bundle["node_refs"]]
 
     chat_resp = client.post(
         "/api/v1/research-assistant/chat/turn",
-        json={"message": "帮我创建一个 QE 10 loop 实验，先不要执行。", "allow_execute": False},
+        json={"message": "帮我设计一个 QE 实验草案，先不要执行。", "allow_execute": False},
     ).json()["data"]
-    assert chat_resp["assistant_message"]["content_text"].startswith("我理解你要创建 QE 10 loop")
+    assert chat_resp["assistant_message"]["content_text"].startswith("已收到明确的 QE 实验草案任务")
+    assert chat_resp["cards"]["intent_type"] == "experiment_draft_request"
     assert chat_resp["cards"]["status_rail"][3]["label"] == "等待确认"
     assert chat_resp["cards"]["safety"]["no_materialize_before_confirmation"] is True
-    assert client.post(
+
+    capability_resp = client.post(
+        "/api/v1/research-assistant/chat/turn",
+        json={"message": "目前助手是否可以生成 QE 实验和诊断 bug？", "allow_execute": False},
+    ).json()["data"]
+    assert capability_resp["cards"]["intent_type"] == "capability_inquiry"
+    assert capability_resp["mode_decision"]["mode"] == "dialogue"
+    assert capability_resp["cards"]["action_proposals"] == []
+    assert "plan_card" not in capability_resp["cards"]
+    assert "clarification_card" not in capability_resp["cards"]
+    assert capability_resp["context_health"]["show_badge"] is False
+    execute_resp = client.post(
         "/api/v1/research-assistant/chat/turn",
         json={"message": "确认执行 QE materialize", "allow_execute": True},
-    ).status_code == 400
+    )
+    assert execute_resp.status_code == 200
+    assert execute_resp.json()["data"]["mode_decision"]["mode"] == "execution"
+    assert execute_resp.json()["data"]["mode_decision"]["requires_approval"] is True
 
     preflight_resp = client.post(
         "/api/v1/research-assistant/mcp/preflight",
@@ -219,8 +234,73 @@ def test_research_assistant_api_phase1_smoke() -> None:
     assert client.get("/api/v1/research-assistant/validation-discovery/summary").status_code == 200
 
 
+def test_research_assistant_api_exposes_local_data_management_catalog() -> None:
+    client = _client()
+    message = "local data sync health check and repair plan before execute"
+
+    servers = client.get("/api/v1/research-assistant/mcp/servers").json()["data"]["items"]
+    assert "aistock-local-data" in {item["server_key"] for item in servers}
+
+    tools = client.get("/api/v1/research-assistant/mcp/tools", params={"server_key": "aistock-local-data"}).json()["data"]["items"]
+    tool_names = {item["tool_name"] for item in tools}
+    assert {"local_data_health_overview", "local_data_list_sync_targets", "local_data_plan_repair", "local_data_apply_repair_confirmed"} <= tool_names
+
+    prompt_bundle = client.post(
+        "/api/v1/research-assistant/prompt-bundles",
+        json={"user_message": message, "phase": "planning"},
+    ).json()["data"]
+    prompt_keys = {node["prompt_key"] for node in prompt_bundle["node_refs"]}
+    assert "prompt.local_data_management" in prompt_keys
+    assert "tool_guard.mcp_local_data" in prompt_keys
+    assert "domain.qe_experiment" not in prompt_keys
+
+    memories = client.get(
+        "/api/v1/research-assistant/memories",
+        params={"memory_type": "architecture", "approval_status": "approved", "search": "local_data_management"},
+    ).json()["data"]
+    assert any(item["subject_key"] == "architecture.local_data_management.mcp_gateway" for item in memories["items"])
+
+    graph_entities = client.get(
+        "/api/v1/research-assistant/graph/entities",
+        params={"entity_type": "capability", "approval_status": "approved", "search": "local_data_management"},
+    ).json()["data"]
+    assert any(item["entity_key"] == "capability.local_data_management" for item in graph_entities["items"])
+
+    chat_resp = client.post(
+        "/api/v1/research-assistant/chat/turn",
+        json={"message": message, "allow_execute": False},
+    ).json()["data"]
+    assert "aistock-local-data" in chat_resp["cards"]["capability_summary"]["mcp"]
+    assert chat_resp["cards"]["safety"]["local_data_read_only_before_confirmation"] is True
+    assert chat_resp["cards"]["action_proposals"][0]["status"] == "read_only"
+
+
 def test_research_assistant_api_errors_are_explicit() -> None:
     client = _client()
 
     assert client.get("/api/v1/research-assistant/tasks/rat_missing").status_code == 404
     assert client.post("/api/v1/research-assistant/temp-memories", json={"content_text": "missing scope"}).status_code == 400
+
+
+def test_mcp_tools_endpoint_defaults_to_compact_summary_first_payload() -> None:
+    client = _client()
+
+    compact = client.get("/api/v1/research-assistant/mcp/tools").json()["data"]
+    assert compact["page_size"] <= 50
+    assert compact["summary_first"] is True
+    assert compact["detail_available"] is True
+    assert compact["items"]
+    assert "input_schema_json" not in compact["items"][0]
+    assert "output_schema_json" not in compact["items"][0]
+    assert "preflight_schema_json" not in compact["items"][0]
+    assert compact["items"][0]["detail_available"] is True
+
+    compact_large_limit = client.get("/api/v1/research-assistant/mcp/tools", params={"limit": 200}).json()["data"]
+    assert compact_large_limit["page_size"] == 50
+    assert compact_large_limit["has_more"] is True
+
+    detail = client.get("/api/v1/research-assistant/mcp/tools", params={"limit": 1, "include_schema": True}).json()["data"]
+    assert detail["page_size"] == 1
+    assert detail["summary_first"] is False
+    assert "input_schema_json" in detail["items"][0]
+    assert "preflight_schema_json" in detail["items"][0]

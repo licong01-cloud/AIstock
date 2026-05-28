@@ -9,8 +9,8 @@ import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import WorkflowStepper from "@/components/paper-v2/WorkflowStepper";
 import { hmmTrainingApi, paperV2Api, selectionCenterApi } from "@/lib/paper-v2/api";
-import { asText, dataSourceLabel, formatNumber, formatPercent, hmmSnapshotLabel, paperV2WorkflowSteps, selectionRunLabel, shortHash, statusLabel, todayIso } from "@/lib/paper-v2/format";
-import type { HmmConfig, HmmSnapshot, JsonObject, SelectablePackage, SelectionDataSource, SelectionMode, SelectionRun, SelectionWatchlistImportResult } from "@/lib/paper-v2/types";
+import { asText, dataSourceLabel, formatNumber, formatPercent, paperV2WorkflowSteps, selectionRunLabel, shortHash, statusLabel, todayIso } from "@/lib/paper-v2/format";
+import type { HmmConfig, JsonObject, SelectablePackage, SelectionDataSource, SelectionMode, SelectionRun, SelectionWatchlistImportResult } from "@/lib/paper-v2/types";
 
 function runLabel(run: SelectionRun): string {
   return `${run.trade_date} / ${statusLabel(run.mode)} / ${run.package_ids.map((item) => shortHash(item, 5)).join(", ")}`;
@@ -22,10 +22,6 @@ function packageHealth(packageRow: SelectablePackage): JsonObject {
 
 function packageHealthStatus(packageRow: SelectablePackage): string {
   return String(packageHealth(packageRow).status || "UNKNOWN");
-}
-
-function packageHealthRunnable(packageRow: SelectablePackage): boolean {
-  return packageHealth(packageRow).runnable === true;
 }
 
 function packageHealthHint(packageRow: SelectablePackage): string {
@@ -40,6 +36,8 @@ export default function PaperV2SelectionPage() {
   const [runs, setRuns] = useState<SelectionRun[]>([]);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [selectedRuns, setSelectedRuns] = useState<Record<string, boolean>>({});
+  const [runPage, setRunPage] = useState(1);
+  const [runPagination, setRunPagination] = useState<JsonObject>({ page: 1, page_size: 20, total: 0, total_pages: 1 });
   const [weights, setWeights] = useState<Record<string, number>>({});
   const [mode, setMode] = useState<SelectionMode>("single_package");
   const [tradeDate, setTradeDate] = useState(todayIso());
@@ -51,9 +49,7 @@ export default function PaperV2SelectionPage() {
   const [excludeSuspended, setExcludeSuspended] = useState(true);
   const [hmmEnabled, setHmmEnabled] = useState(false);
   const [hmmConfigs, setHmmConfigs] = useState<HmmConfig[]>([]);
-  const [hmmSnapshots, setHmmSnapshots] = useState<HmmSnapshot[]>([]);
   const [hmmConfigId, setHmmConfigId] = useState("");
-  const [hmmSnapshotId, setHmmSnapshotId] = useState("");
   const [hmmPreset, setHmmPreset] = useState("preset_A");
   const [run, setRun] = useState<SelectionRun | null>(null);
   const [excluded, setExcluded] = useState<Record<string, unknown[]> | null>(null);
@@ -67,25 +63,24 @@ export default function PaperV2SelectionPage() {
   const sourceRunIds = useMemo(() => runs.filter((item) => selectedRuns[item.run_id]).map((item) => item.run_id), [runs, selectedRuns]);
   const singlePackageMode = mode === "single_package";
   const selectedPackageName = selectedPackages[0]?.package_name || "策略包";
-  const selectedHmmSnapshot = useMemo(() => hmmSnapshots.find((item) => item.snapshot_id === hmmSnapshotId) || null, [hmmSnapshotId, hmmSnapshots]);
-
   const loadPackages = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const [rows, runRows, configRows] = await Promise.all([
         selectionCenterApi.selectablePackages(300),
-        selectionCenterApi.listRuns(200),
+        selectionCenterApi.listRunsPage({ page: runPage, pageSize: 20 }),
         hmmTrainingApi.configs(),
       ]);
       setPackages(rows);
-      setRuns(runRows);
+      setRuns(runRows.runs);
+      setRunPagination(runRows.pagination);
       setHmmConfigs(configRows);
       setWeights((prev) => Object.fromEntries(rows.map((item) => [item.package_id, prev[item.package_id] ?? 1])));
-      const firstRunnable = rows.find((item) => packageHealthRunnable(item))?.package_id;
+      const firstPackageId = rows[0]?.package_id;
       setSelected((prev) => Object.fromEntries(rows.map((item) => [
         item.package_id,
-        packageHealthRunnable(item) && Boolean(prev[item.package_id] ?? item.package_id === firstRunnable),
+        Boolean(prev[item.package_id] ?? item.package_id === firstPackageId),
       ])));
       if (!hmmConfigId && configRows[0]) setHmmConfigId(configRows[0].config_id);
     } catch (exc) {
@@ -93,7 +88,7 @@ export default function PaperV2SelectionPage() {
     } finally {
       setLoading(false);
     }
-  }, [hmmConfigId]);
+  }, [hmmConfigId, runPage]);
 
   useEffect(() => { loadPackages(); }, [loadPackages]);
 
@@ -107,28 +102,6 @@ export default function PaperV2SelectionPage() {
     });
     return () => { alive = false; };
   }, []);
-
-  useEffect(() => {
-    if (!hmmConfigId) {
-      setHmmSnapshots([]);
-      setHmmSnapshotId("");
-      return;
-    }
-    let alive = true;
-    hmmTrainingApi.snapshots(hmmConfigId).then((rows) => {
-      if (!alive) return;
-      const ready = rows.filter((item) => ["completed", "ready", "success", "succeeded"].includes(String(item.status || "").toLowerCase()));
-      setHmmSnapshots(ready);
-      setHmmSnapshotId((current) => (ready.find((item) => item.snapshot_id === current) ? current : ""));
-    }).catch((exc) => {
-      if (alive) {
-        setHmmSnapshots([]);
-        setHmmSnapshotId("");
-        setError(exc);
-      }
-    });
-    return () => { alive = false; };
-  }, [hmmConfigId]);
 
   useEffect(() => {
     let alive = true;
@@ -169,7 +142,7 @@ export default function PaperV2SelectionPage() {
       hmm: {
         enabled: hmmEnabled,
         model_config_id: hmmEnabled ? hmmConfigId : null,
-        model_snapshot_id: hmmEnabled ? hmmSnapshotId || null : null,
+        model_snapshot_id: null,
         signal_preset: hmmEnabled ? hmmPreset : null,
       },
     };
@@ -208,17 +181,21 @@ export default function PaperV2SelectionPage() {
     try {
       const packageIds = selectedPackages.map((item) => item.package_id);
       if (topK < 1 || topK > 50) throw new Error("TopK 必须在 1 到 50 之间。");
-      if (hmmEnabled && !hmmConfigId && !hmmSnapshotId) throw new Error("启用 HMM 时必须选择模型配置或已训练模型快照。");
-      if (pitMode !== "NONE" && !pitContext?.cutoff_date) throw new Error("历史时点选股必须先解析出前一交易日截止日。");
+      if (hmmEnabled && !hmmConfigId) throw new Error("HMM enabled: select a model config; daily coefficients are computed and cached automatically.");
+      if (pitMode !== "NONE") {
+        const pitMessage = pitContext?.cutoff_date
+          ? `本次选股将按 ${tradeDate} 的上一交易日 ${pitContext.cutoff_date} 作为 PIT 截止日，入池参考价使用 ${pitContext.reference_price_trade_date || pitContext.cutoff_date} 的收盘价。是否继续？`
+          : `本次选股将由后端官方交易日服务自动解析 ${tradeDate} 的上一交易日 PIT 截止日；如果交易日历缺失，本次 run 会失败并给出诊断，但不会禁用策略包。是否继续？`;
+        if (!window.confirm(pitMessage)) return;
+      }
       if (singlePackageMode && packageIds.length !== 1) throw new Error("单策略包模式必须且只能选择一个 StrategyPackage。");
       if (!singlePackageMode && packageIds.length < 2) throw new Error("多策略包聚合至少需要两个 StrategyPackage。");
-      const blockedPackages = selectedPackages.filter((item) => !packageHealthRunnable(item));
-      if (blockedPackages.length) {
-        throw new Error(`策略包健康预检未通过：${blockedPackages.map((item) => `${item.package_name}: ${packageHealthStatus(item)}`).join("; ")}`);
-      }
       const next = await selectionCenterApi.runSelection({ package_ids: packageIds, trade_date: tradeDate, data_source: dataSource, mode, runtime_config: runtimeConfig() });
       await hydrateRun(next);
-      setRuns(await selectionCenterApi.listRuns(200));
+      setRunPage(1);
+      const pageRows = await selectionCenterApi.listRunsPage({ page: 1, pageSize: 20 });
+      setRuns(pageRows.runs);
+      setRunPagination(pageRows.pagination);
     } catch (exc) {
       setError(exc);
     } finally {
@@ -237,7 +214,10 @@ export default function PaperV2SelectionPage() {
       if (mode === "single_package") throw new Error("聚合已有选股记录必须选择交集、并集或加权融合模式。");
       const next = await selectionCenterApi.aggregateRuns({ source_run_ids: sourceRunIds, mode, runtime_config: runtimeConfig() });
       await hydrateRun(next);
-      setRuns(await selectionCenterApi.listRuns(200));
+      setRunPage(1);
+      const pageRows = await selectionCenterApi.listRunsPage({ page: 1, pageSize: 20 });
+      setRuns(pageRows.runs);
+      setRunPagination(pageRows.pagination);
     } catch (exc) {
       setError(exc);
     } finally {
@@ -272,16 +252,55 @@ export default function PaperV2SelectionPage() {
     }
   }
 
+  async function deleteSelectedRuns() {
+    const ids = Object.entries(selectedRuns).filter(([, checked]) => checked).map(([id]) => id);
+    if (!ids.length) return;
+    if (!window.confirm(`确认删除 ${ids.length} 条历史选股记录？已加入自选股票池的股票不受影响。`)) return;
+    setRunning(true);
+    setError(null);
+    try {
+      await selectionCenterApi.deleteRuns(ids);
+      setSelectedRuns({});
+      const pageRows = await selectionCenterApi.listRunsPage({ page: runPage, pageSize: 20 });
+      setRuns(pageRows.runs);
+      setRunPagination(pageRows.pagination);
+      if (run && ids.includes(run.run_id)) {
+        setRun(null);
+        setExcluded(null);
+      }
+    } catch (exc) {
+      setError(exc);
+    } finally {
+      setRunning(false);
+    }
+  }
+
   const excludedFlat = Object.entries(excluded || {}).flatMap(([packageId, rows]) => rows.map((row) => ({ packageId, row: row as JsonObject })));
   const aggregateEnabled = !running && mode !== "single_package" && sourceRunIds.length >= 2;
-  const selectedPackageBlocked = selectedPackages.some((item) => !packageHealthRunnable(item));
   const resultRows = run?.aggregate_results || [];
   const visibleResultRows = resultRows.slice(0, topK);
+  const runPageSize = 20;
+  const runTotalPages = Math.max(1, Number(runPagination.total_pages || 1));
+  const runPageSafe = Math.min(runPage, runTotalPages);
+  const visibleRuns = runs;
+  const visibleRunIds = visibleRuns.map((item) => item.run_id);
+  const selectedVisibleRunCount = visibleRunIds.filter((runId) => selectedRuns[runId]).length;
+  const allVisibleRunsSelected = visibleRunIds.length > 0 && selectedVisibleRunCount === visibleRunIds.length;
+
+  function setCurrentPageRunSelection(checked: boolean) {
+    setSelectedRuns((current) => {
+      const next = { ...current };
+      for (const runId of visibleRunIds) {
+        next[runId] = checked;
+      }
+      return next;
+    });
+  }
 
   const workflowSteps = paperV2WorkflowSteps({
     hasPackages: packages.length > 0,
     hasSelectionEnabledPackage: packages.length > 0,
-    hasPaperEnabledPackage: packages.some((item) => packageHealthRunnable(item)),
+    hasPaperEnabledPackage: packages.length > 0,
     hasSelectionRun: runs.length > 0,
     hasPortfolio: false,
     hasReadyRun: false,
@@ -291,7 +310,24 @@ export default function PaperV2SelectionPage() {
     <main>
       <WorkflowStepper steps={workflowSteps} compact />
       <ErrorPanel error={error} title="选股操作失败" />
-      <div className="pv2-grid pv2-grid-main">
+      <div className="pv2-grid pv2-grid-main" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <SectionCard title="策略包选择器" eyebrow={`${selectedPackages.length} 个已选择`}>
+          <PaperTable
+            rows={packages}
+            empty="No asset-eligible StrategyPackage. Create a QE package and pass asset checks first."
+            columns={[
+              { key: "pick", header: "选择", render: (row) => <input data-testid={`selection-package-${row.package_id}`} type="checkbox" checked={Boolean(selected[row.package_id])} onChange={(event) => updatePackageSelection(row.package_id, event.target.checked)} /> },
+              { key: "name", header: "策略包", render: (row) => <><strong>{row.package_name}</strong><br /><span className="pv2-muted pv2-mono">{shortHash(row.package_id, 7)}</span></> },
+              { key: "status", header: "状态", render: (row) => <StatusBadge status={row.package_status} /> },
+              { key: "health", header: "Runtime diagnostics", render: (row) => <><StatusBadge status={packageHealthStatus(row)} /><br /><span className="pv2-muted">{packageHealthHint(row)}</span></> },
+              { key: "annual", header: "年化", render: (row) => formatPercent(row.metrics_summary?.annual_return) },
+              { key: "ic", header: "IC", render: (row) => formatPercent(row.metrics_summary?.ic) },
+              { key: "model", header: "模型", render: (row) => <StatusBadge status={String(row.model_state?.staleness_status || "unknown")} /> },
+              { key: "weight", header: "权重", render: (row) => <input className="pv2-input" data-testid={`selection-weight-${row.package_id}`} type="number" step="0.1" value={weights[row.package_id] ?? 1} disabled={mode !== "weighted_fusion"} onChange={(event) => setWeights((prev) => ({ ...prev, [row.package_id]: Number(event.target.value) }))} /> },
+            ]}
+          />
+        </SectionCard>
+
         <SectionCard title="选股控制" eyebrow="StrategyPackage 权威推理" action={<button className="pv2-button" onClick={loadPackages} disabled={loading} type="button">刷新策略包</button>}>
           <div className="pv2-form-grid">
             <div className="pv2-field"><label>模式</label><select className="pv2-select" data-testid="selection-mode" value={mode} onChange={(event) => updateMode(event.target.value as SelectionMode)}><option value="single_package">单策略包</option><option value="weighted_fusion">加权融合</option><option value="intersection">交集</option><option value="union">并集</option></select></div>
@@ -316,10 +352,6 @@ export default function PaperV2SelectionPage() {
                 <option value="">选择模型版本</option>
                 {hmmConfigs.map((item) => <option value={item.config_id} key={item.config_id}>{item.display_name} / {item.model_type}</option>)}
               </select>
-              <select className="pv2-select" data-testid="selection-hmm-snapshot" value={hmmSnapshotId} disabled={!hmmEnabled || !hmmConfigId} onChange={(event) => setHmmSnapshotId(event.target.value)} style={{ maxWidth: 280 }}>
-                <option value="">可选：指定已训练模型快照</option>
-                {hmmSnapshots.map((item) => <option value={item.snapshot_id} key={item.snapshot_id}>{hmmSnapshotLabel(item)}</option>)}
-              </select>
               <select className="pv2-select" data-testid="selection-hmm-preset" value={hmmPreset} disabled={!hmmEnabled} onChange={(event) => setHmmPreset(event.target.value)} style={{ maxWidth: 150 }}>
                 <option value="preset_A">preset_A</option>
                 <option value="preset_B">preset_B</option>
@@ -333,25 +365,7 @@ export default function PaperV2SelectionPage() {
               </div>
             ) : null}
           </div>
-          <button className="pv2-button-primary" data-testid="selection-run" disabled={running || selectedPackageBlocked} onClick={runSelection} type="button">{running ? "运行中..." : "运行选股"}</button>
-          {selectedPackageBlocked ? <NoticePanel title="策略包健康预检阻断" tone="warning">当前选择包含 {statusLabel("BLOCKED")} 或 {statusLabel("LEGACY_NON_ST_PIT")} 策略包。请换用通过 ST PIT 合约的新包，或先重建/修复旧包。</NoticePanel> : null}
-        </SectionCard>
-
-        <SectionCard title="策略包选择器" eyebrow={`${selectedPackages.length} 个已选择`}>
-          <PaperTable
-            rows={packages}
-            empty="暂无可选 StrategyPackage。请先启用策略包选股。"
-            columns={[
-              { key: "pick", header: "选择", render: (row) => <input data-testid={`selection-package-${row.package_id}`} type="checkbox" checked={Boolean(selected[row.package_id])} disabled={!packageHealthRunnable(row)} onChange={(event) => updatePackageSelection(row.package_id, event.target.checked)} /> },
-              { key: "name", header: "策略包", render: (row) => <><strong>{row.package_name}</strong><br /><span className="pv2-muted pv2-mono">{shortHash(row.package_id, 7)}</span></> },
-              { key: "status", header: "状态", render: (row) => <StatusBadge status={row.package_status} /> },
-              { key: "health", header: "预检", render: (row) => <><StatusBadge status={packageHealthStatus(row)} /><br /><span className="pv2-muted">{packageHealthHint(row)}</span></> },
-              { key: "annual", header: "年化", render: (row) => formatPercent(row.metrics_summary?.annual_return) },
-              { key: "ic", header: "IC", render: (row) => formatPercent(row.metrics_summary?.ic) },
-              { key: "model", header: "模型", render: (row) => <StatusBadge status={String(row.model_state?.staleness_status || "unknown")} /> },
-              { key: "weight", header: "权重", render: (row) => <input className="pv2-input" data-testid={`selection-weight-${row.package_id}`} type="number" step="0.1" value={weights[row.package_id] ?? 1} disabled={mode !== "weighted_fusion"} onChange={(event) => setWeights((prev) => ({ ...prev, [row.package_id]: Number(event.target.value) }))} /> },
-            ]}
-          />
+          <button className="pv2-button-primary" data-testid="selection-run" disabled={running} onClick={runSelection} type="button">{running ? "运行中..." : "运行选股"}</button>
         </SectionCard>
       </div>
 
@@ -409,7 +423,7 @@ export default function PaperV2SelectionPage() {
               <div className="pv2-readable-row"><div className="pv2-readable-key">数据源</div><div className="pv2-readable-value">{dataSourceLabel(dataSource)}</div></div>
               <div className="pv2-readable-row"><div className="pv2-readable-key">TopK</div><div className="pv2-readable-value">{formatNumber(topK, 0)}</div></div>
               <div className="pv2-readable-row"><div className="pv2-readable-key">停牌过滤</div><div className="pv2-readable-value">{excludeSuspended ? "启用，按后续排名补位" : "关闭"}</div></div>
-              <div className="pv2-readable-row"><div className="pv2-readable-key">HMM</div><div className="pv2-readable-value">{hmmEnabled ? `${hmmConfigId || hmmSnapshotId || "未选择"} / ${hmmPreset}` : "未启用"}</div></div>
+              <div className="pv2-readable-row"><div className="pv2-readable-key">HMM</div><div className="pv2-readable-value">{hmmEnabled ? `${hmmConfigId || "not selected"} / ${hmmPreset} / auto daily cache` : "not enabled"}</div></div>
               <div className="pv2-readable-row"><div className="pv2-readable-key">策略包</div><div className="pv2-readable-value">{selectedPackages.map((item) => item.package_name).join(", ") || "-"}</div></div>
             </div>
           </div>
@@ -419,11 +433,14 @@ export default function PaperV2SelectionPage() {
       <SectionCard title="历史选股记录与动态聚合" eyebrow="点击记录可显示结果">
         <div className="pv2-row-actions" style={{ marginBottom: 12 }}>
           <button className="pv2-button" onClick={loadPackages} disabled={loading} type="button">刷新记录</button>
+          <button className="pv2-button" data-testid="selection-history-select-page" onClick={() => setCurrentPageRunSelection(true)} disabled={!visibleRunIds.length || allVisibleRunsSelected} type="button">全选本页</button>
+          <button className="pv2-button-ghost" data-testid="selection-history-clear-page" onClick={() => setCurrentPageRunSelection(false)} disabled={!selectedVisibleRunCount} type="button">取消本页</button>
           <button className="pv2-button-primary" data-testid="selection-aggregate-runs" onClick={aggregateSelectedRuns} disabled={!aggregateEnabled} type="button">聚合已选股票</button>
-          <span className="pv2-muted">已选 {sourceRunIds.length} 条；聚合模式不能为单策略包。</span>
+          <button className="pv2-button-danger" data-testid="selection-delete-runs" onClick={deleteSelectedRuns} disabled={running || !sourceRunIds.length} type="button">删除选中 {sourceRunIds.length || ""}</button>
+          <span className="pv2-muted">本页已选 {selectedVisibleRunCount}/{visibleRunIds.length}；合计已选 {sourceRunIds.length} 条</span>
         </div>
         <PaperTable
-          rows={runs}
+          rows={visibleRuns}
           empty="暂无选股运行。"
           columns={[
             { key: "pick", header: "聚合", render: (row) => <input data-testid={`selection-run-checkbox-${row.run_id}`} type="checkbox" checked={Boolean(selectedRuns[row.run_id])} onChange={(event) => setSelectedRuns((prev) => ({ ...prev, [row.run_id]: event.target.checked }))} /> },
@@ -434,6 +451,11 @@ export default function PaperV2SelectionPage() {
             { key: "count", header: "候选数", render: (row) => row.aggregate_results?.length || 0 },
           ]}
         />
+        <div className="pv2-row-actions" style={{ marginTop: 12, justifyContent: "flex-end" }}>
+          <button className="pv2-button-ghost" disabled={runPageSafe <= 1 || loading} onClick={() => setRunPage((current) => Math.max(1, current - 1))} type="button">上一页</button>
+          <span className="pv2-muted">第 {runPageSafe} / {runTotalPages} 页</span>
+          <button className="pv2-button-ghost" disabled={runPageSafe >= runTotalPages || loading} onClick={() => setRunPage((current) => current + 1)} type="button">下一页</button>
+        </div>
       </SectionCard>
     </main>
   );

@@ -49,7 +49,8 @@ jobs:
           BASE_REF: ${{ github.base_ref || inputs.base_ref || 'main' }}
         run: |
           mkdir -p tmp/validation/pr_quality
-          git fetch origin "${BASE_REF}" --depth=1 || true
+          # Keep base history available for three-dot diffs on branches that merge main.
+          git fetch origin "${BASE_REF}" --no-tags || true
           BASE_COMMIT="origin/${BASE_REF}"
           git rev-parse --verify "${BASE_COMMIT}" >/dev/null 2>&1 || BASE_COMMIT="FETCH_HEAD"
           python scripts/issue_flow.py pr-check \
@@ -58,6 +59,22 @@ jobs:
             --output-json tmp/validation/pr_quality/summary.json \
             --output-md tmp/validation/pr_quality/summary.md
           cat tmp/validation/pr_quality/summary.md
+
+      - name: Build code intelligence PR artifact
+        env:
+          BASE_REF: ${{ github.base_ref || inputs.base_ref || 'main' }}
+        run: |
+          BASE_COMMIT="origin/${BASE_REF}"
+          git rev-parse --verify "${BASE_COMMIT}" >/dev/null 2>&1 || BASE_COMMIT="FETCH_HEAD"
+          git diff --name-only "${BASE_COMMIT}...HEAD" > tmp/validation/pr_quality/changed_files.txt
+          python scripts/code_intelligence_adapter.py summary \
+            --item-id "PR-${{ github.event.pull_request.number || github.run_id }}" \
+            --query "AIstock PR ${{ github.event.pull_request.number || github.run_id }} impact and affected tests" \
+            --changed-files-file tmp/validation/pr_quality/changed_files.txt \
+            --skip-external \
+            --output tmp/validation/pr_quality/code-intelligence-summary.json \
+            --output-md tmp/validation/pr_quality/code-intelligence-summary.md
+          cat tmp/validation/pr_quality/code-intelligence-summary.md
 
       - name: Ruff changed Python files
         env:
@@ -85,8 +102,10 @@ jobs:
             const fs = require('fs');
             const marker = '<!-- aistock-pr-quality-summary -->';
             const summaryPath = 'tmp/validation/pr_quality/summary.md';
+            const codeIntelPath = 'tmp/validation/pr_quality/code-intelligence-summary.md';
             const summary = fs.existsSync(summaryPath) ? fs.readFileSync(summaryPath, 'utf8') : 'PR quality summary was not generated.';
-            const body = `${marker}\n${summary}\n\nSemgrep is report-only in the Phase 2 rollout; existing AIstock CI remains the blocking gate.`;
+            const codeIntel = fs.existsSync(codeIntelPath) ? fs.readFileSync(codeIntelPath, 'utf8') : 'Code intelligence summary was not generated.';
+            const body = `${marker}\n${summary}\n\n${codeIntel}\n\nSemgrep and code intelligence are report-only in this rollout; existing AIstock CI remains the blocking gate.`;
             const { owner, repo } = context.repo;
             const issue_number = context.issue.number;
             const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number, per_page: 100 });

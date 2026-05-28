@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+import hashlib
+import json
+from datetime import UTC, date, datetime
 from typing import Any, Callable
 
 from backend.services.data_refresh_audit import DataRefreshAuditRepository
@@ -26,25 +28,56 @@ from backend.services.strategy_package.runtime import (
 )
 from backend.services.strategy_package.selection_artifact import (
     StrategyPackageSelectionArtifactService,
-    selection_artifact_runtime_hash,
 )
+from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.strategy_package.live_inference import (
     AUTHORITATIVE_SELECTION_SCOPE,
     AUTHORITATIVE_SELECTION_SOURCE_TYPE,
 )
 from backend.services.strategy_package.validators import StrategyPackageValidator
-from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, StrategyPackageValidationError, TradingCoreError
+from backend.services.trading_core.errors import (
+    ArtifactGenerationFailedError,
+    DataUnavailableError,
+    InvalidStateTransitionError,
+    PackageAssetInvalidError,
+    RuntimeConfigInvalidError,
+    TradingCoreError,
+)
 from backend.services.trading_core.execution_algo_capabilities import required_minute_bars_for_policy
 from backend.services.trading_core.ledger import FeeModel, InMemoryLedger
 from backend.services.trading_core.minute_execution import MinuteExecutionEngine
-from backend.services.trading_core.models import AccountSnapshot, OrderStatus, PositionLot, RunStatus
+from backend.services.trading_core.models import (
+    AccountSnapshot,
+    Fill,
+    OrderEvent,
+    OrderEventType,
+    OrderIntent,
+    OrderSide,
+    OrderStatus,
+    PositionLot,
+    RunStatus,
+)
 from backend.services.trading_core.oms import OMS
 
 from .broker import MiniQMTSimBackend
-from .models import PaperDayRunResult, PaperRun, PortfolioStatus
+from .models import OrderExecutionState, PaperDayRunResult, PaperRun, PortfolioStatus
 from .repository import PaperTradingV2Repository
 from .risk_targets import overlay_risk_forced_exit_targets
 from .service import PaperTradingV2PortfolioService
+
+
+def _in_memory_package_repository_from_portfolios(repository: Any | None) -> Any | None:
+    """Let in-memory Paper tests resolve frozen package manifests without DB."""
+
+    portfolios = getattr(repository, "portfolios", None)
+    if not isinstance(portfolios, dict):
+        return None
+    package_repository = InMemoryStrategyPackageRepository()
+    for portfolio in portfolios.values():
+        manifest = getattr(portfolio, "frozen_manifest", None)
+        if manifest is not None:
+            package_repository.save_manifest(manifest)
+    return package_repository
 
 
 class PaperTradingDayRunner:
@@ -78,11 +111,12 @@ class PaperTradingDayRunner:
         self.oms = oms or OMS()
         self.execution_engine = execution_engine or MinuteExecutionEngine(oms=self.oms)
         self.validator = validator or StrategyPackageValidator()
-        self.package_repository = package_repository
+        self.package_repository = package_repository or _in_memory_package_repository_from_portfolios(repository)
         self.tradability_filter = tradability_filter or TradabilityFilter()
         self.refresh_audit = refresh_audit or DataRefreshAuditRepository()
         self.selection_artifact_service = selection_artifact_service or StrategyPackageSelectionArtifactService(
             artifact_repository=getattr(self.runtime, "artifact_repository", None),
+            package_repository=self.package_repository,
         )
         self.risk_policy_service = risk_policy_service or StockRiskPolicyService()
         self.minqmt_broker_factory = minqmt_broker_factory or MiniQMTSimBackend
@@ -102,7 +136,7 @@ class PaperTradingDayRunner:
                 context={"portfolio_id": portfolio_id, "status": portfolio.status.value},
             )
         if trade_date < portfolio.start_date:
-            raise StrategyPackageValidationError(
+            raise InvalidStateTransitionError(
                 "paper run trade_date cannot be before portfolio start_date",
                 context={
                     "portfolio_id": portfolio_id,
@@ -112,7 +146,7 @@ class PaperTradingDayRunner:
             )
         manifest = portfolio.frozen_manifest
         if manifest.package_id != portfolio.package_id or manifest.manifest_sha256 != portfolio.manifest_sha256:
-            raise StrategyPackageValidationError(
+            raise PackageAssetInvalidError(
                 "portfolio frozen manifest does not match frozen package invariants",
                 context={"portfolio_id": portfolio_id, "package_id": portfolio.package_id},
             )
@@ -120,7 +154,7 @@ class PaperTradingDayRunner:
         self.calendar_provider.ensure_trading_day(trade_date)
         existing_run = self.repository.get_run_by_portfolio_date(portfolio_id, trade_date)
         if existing_run is not None:
-            raise StrategyPackageValidationError(
+            raise InvalidStateTransitionError(
                 "paper v2 run already exists for portfolio trade_date",
                 context={
                     "portfolio_id": portfolio_id,
@@ -438,7 +472,7 @@ class PaperTradingDayRunner:
             ledger.settle_trade_date(trade_date)
             if not intents:
                 if not ledger.positions:
-                    raise StrategyPackageValidationError(
+                    raise ArtifactGenerationFailedError(
                         "rebalance produced no order intents and portfolio has no positions to mark",
                         context={"portfolio_id": portfolio_id, "run_id": run.run_id, "trade_date": trade_date.isoformat()},
                     )
@@ -575,7 +609,7 @@ class PaperTradingDayRunner:
                 snapshot_prices[intent.symbol] = market_input.minute_bars[-1].close
 
             if not fills:
-                raise StrategyPackageValidationError(
+                raise ArtifactGenerationFailedError(
                     "paper v2 day run produced no fills; no-trade day is not yet modeled as a successful state",
                     context={
                         "portfolio_id": portfolio_id,
@@ -656,7 +690,7 @@ class PaperTradingDayRunner:
     ) -> list[dict[str, Any]]:
         ready: list[dict[str, Any]] = []
         if execution_policy_json is None:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "Paper v2 data readiness requires a validated execution policy snapshot",
                 context={"package_id": manifest.package_id, "manifest_version": getattr(manifest, "manifest_version", None)},
             )
@@ -697,7 +731,7 @@ class PaperTradingDayRunner:
     def _require_runtime_top_k(runtime_profile: Any, manifest: Any) -> int:
         top_k = runtime_profile.selection.top_k
         if top_k is None:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "Paper v2 runtime_profile.selection.top_k is required; StrategyPackage manifest cannot provide runtime top_k",
                 context={"package_id": manifest.package_id, "manifest_version": getattr(manifest, "manifest_version", None)},
             )
@@ -705,12 +739,14 @@ class PaperTradingDayRunner:
 
     @staticmethod
     def _selection_data_source(portfolio: Any, runtime_config: dict[str, Any]) -> str:
+        explicit = (
+            (runtime_config.get("selection_artifact_config") or {}).get("signal_data_source")
+            or runtime_config.get("signal_data_source")
+        )
+        if explicit:
+            return str(explicit)
         if portfolio.broker_backend == "minqmt_sim":
-            return str(
-                (runtime_config.get("selection_artifact_config") or {}).get("signal_data_source")
-                or runtime_config.get("signal_data_source")
-                or MinuteDataSource.DB_HISTORICAL.value
-            )
+            return MinuteDataSource.DB_HISTORICAL.value
         return portfolio.data_source.value
 
     def _ensure_authoritative_selection_artifact(
@@ -766,12 +802,12 @@ class PaperTradingDayRunner:
         try:
             parsed = date.fromisoformat(str(raw))
         except ValueError as exc:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "selection_artifact_config.cutoff_date must be YYYY-MM-DD",
                 context={"cutoff_date": raw},
             ) from exc
         if parsed > trade_date:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "selection_artifact_config.cutoff_date cannot be after trade_date",
                 context={"trade_date": trade_date.isoformat(), "cutoff_date": parsed.isoformat()},
             )
@@ -802,7 +838,7 @@ class PaperTradingDayRunner:
         if configured is not None:
             total = float(configured)
             if total <= 0:
-                raise StrategyPackageValidationError("runtime_config.total_equity must be positive")
+                raise RuntimeConfigInvalidError("runtime_config.total_equity must be positive")
             return total
         prices = runtime_config.get("current_prices") or {}
         if not current_positions:
@@ -943,7 +979,7 @@ class PaperTradingDayRunner:
 
     @staticmethod
     def _required_minute_bars_for_manifest(manifest) -> int:
-        raise StrategyPackageValidationError(
+        raise RuntimeConfigInvalidError(
             "Paper v2 requires a validated execution policy snapshot; manifest minute policy is not runtime authority",
             context={"package_id": manifest.package_id, "manifest_version": getattr(manifest, "manifest_version", None)},
         )
@@ -960,7 +996,7 @@ class PaperTradingDayRunner:
     def _data_requirements_for_policy(policy_json: dict[str, Any], *, package_id: str) -> dict[str, bool]:
         requirements = policy_json.get("data_requirements")
         if not isinstance(requirements, dict):
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "validated execution policy requires data_requirements",
                 context={"package_id": package_id, "algo_code": policy_json.get("algo_code")},
             )
@@ -972,7 +1008,7 @@ class PaperTradingDayRunner:
         }
         missing = sorted(key for key in required_keys if key not in requirements)
         if missing:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "validated execution policy data_requirements are incomplete",
                 context={"package_id": package_id, "algo_code": policy_json.get("algo_code"), "missing_keys": missing},
             )
@@ -995,7 +1031,9 @@ class PaperTradingDayRunner:
             strategy_slot_id=portfolio.portfolio_id,
         )
         orders = []
+        fills = []
         events = []
+        session_id = self._miniqmt_session_id_from_run(run)
         try:
             if not intents:
                 self.repository.save_run_event(
@@ -1008,7 +1046,28 @@ class PaperTradingDayRunner:
                         "broker_backend": "minqmt_sim",
                     },
                 )
-            for intent in intents:
+            ordered_intents = self._miniqmt_order_submission_sequence(intents)
+            if ordered_intents:
+                self.repository.save_run_event(
+                    run_id=run.run_id,
+                    event_type="MINIQMT_ORDER_SUBMISSION_SEQUENCE",
+                    message="MiniQMT order intents sequenced sell-before-buy to release broker cash before buy legs",
+                    context={
+                        "portfolio_id": portfolio.portfolio_id,
+                        "trade_date": trade_date.isoformat(),
+                        "broker_backend": "minqmt_sim",
+                        "sequence": [
+                            {
+                                "intent_id": intent.intent_id,
+                                "symbol": intent.symbol,
+                                "side": intent.side.value,
+                                "quantity": intent.quantity,
+                            }
+                            for intent in ordered_intents
+                        ],
+                    },
+                )
+            for intent in ordered_intents:
                 order = self.oms.create_order(intent)
                 try:
                     handle = broker.submit_order_intent(intent)
@@ -1041,25 +1100,126 @@ class PaperTradingDayRunner:
                         **native,
                     }
                 )
-                state = OrderStatus.SUBMITTED
-                if status.state == "rejected":
-                    state = OrderStatus.REJECTED
-                elif status.state == "cancelled":
-                    state = OrderStatus.CANCELLED
-                elif status.state == "filled":
-                    state = OrderStatus.FILLED
-                elif status.state == "partial_filled":
-                    state = OrderStatus.PARTIALLY_FILLED
-                final_order = order.model_copy(
+                order = order.model_copy(update={"metadata": metadata})
+                order_fills = self._miniqmt_fills_from_trades(
+                    broker.query_trades(handle),
+                    order=order,
+                    native=native,
+                    trade_date=trade_date,
+                )
+                final_order = order
+                order_events = []
+                for fill in order_fills:
+                    final_order, event = self.oms.apply_fill(final_order, fill)
+                    self.repository.save_fill(
+                        run.run_id,
+                        fill,
+                        intended_price=order.limit_price,
+                        fill_market_context=self._miniqmt_fill_market_context(
+                            trade=fill.metadata.get("miniqmt_trade_raw") if isinstance(fill.metadata, dict) else {},
+                            native=native,
+                            trade_date=trade_date,
+                        ),
+                    )
+                    self.repository.save_order_event(run.run_id, event)
+                    order_events.append(event)
+                broker_state = self._miniqmt_order_status_from_handle(status)
+                if not order_fills and broker_state in {OrderStatus.REJECTED, OrderStatus.CANCELLED}:
+                    if broker_state == OrderStatus.REJECTED:
+                        final_order, event = self.oms.reject_order(order, status.rejection_reason or "MiniQMT order rejected")
+                    else:
+                        final_order, event = self.oms.cancel_order(order, status.rejection_reason or "MiniQMT order cancelled")
+                    self.repository.save_order_event(run.run_id, event)
+                    order_events.append(event)
+                elif (
+                    final_order.status != broker_state
+                    and broker_state in {OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED}
+                    and status.filled_quantity > 0
+                    and status.filled_quantity >= final_order.filled_quantity
+                ):
+                    previous_status = final_order.status
+                    reconciled_update: dict[str, Any] = {
+                        "status": broker_state,
+                        "filled_quantity": min(status.filled_quantity, final_order.quantity),
+                    }
+                    if status.avg_fill_price is not None:
+                        reconciled_update["avg_fill_price"] = float(status.avg_fill_price)
+                    final_order = final_order.model_copy(update=reconciled_update)
+                    if broker_state in {OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED} and previous_status != broker_state:
+                        event = OrderEvent(
+                            order_id=final_order.order_id,
+                            event_type=(
+                                OrderEventType.FILLED
+                                if broker_state == OrderStatus.FILLED
+                                else OrderEventType.PARTIALLY_FILLED
+                            ),
+                            reason="MiniQMT order status reconciled without visible trade rows",
+                            metadata={
+                                "broker_backend": "minqmt_sim",
+                                "authority_source": "MINIQMT_ORDER_STATUS",
+                                "broker_status": status.state,
+                                "broker_handle_id": handle.handle_id,
+                                "miniqmt_order_id": native["miniqmt_order_id"],
+                                "visible_trade_count": 0,
+                            },
+                        )
+                        self.repository.save_order_event(run.run_id, event)
+                        order_events.append(event)
+                    if broker_state in {OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED} and not order_fills:
+                        self.repository.save_run_event(
+                            run_id=run.run_id,
+                            event_type="MINIQMT_ORDER_FILLED_WITHOUT_VISIBLE_TRADE_ROWS",
+                            message="MiniQMT order status reported fills but no trade rows were visible during reconciliation",
+                            context={
+                                "order_id": final_order.order_id,
+                                "symbol": final_order.symbol,
+                                "side": final_order.side.value,
+                                "filled_quantity": final_order.filled_quantity,
+                                "broker_status": status.state,
+                                "broker_handle_id": handle.handle_id,
+                                "miniqmt_order_id": native["miniqmt_order_id"],
+                            },
+                        )
+                final_order = final_order.model_copy(
                     update={
-                        "metadata": metadata,
-                        "status": state,
-                        "filled_quantity": status.filled_quantity,
-                        "avg_fill_price": float(status.avg_fill_price) if status.avg_fill_price is not None else None,
+                        "metadata": {
+                            **dict(final_order.metadata or {}),
+                            "broker_backend": "minqmt_sim",
+                            "authority_source": "MINIQMT",
+                            "broker_handle_id": handle.handle_id,
+                            "broker_status": status.state,
+                            "miniqmt_trade_count": len(order_fills),
+                            **native,
+                        },
+                        "avg_fill_price": float(final_order.avg_fill_price) if final_order.avg_fill_price is not None else None,
                     }
                 )
                 self.repository.save_order(run.run_id, final_order)
+                if session_id:
+                    self.repository.save_order_execution_state(
+                        OrderExecutionState(
+                            session_id=session_id,
+                            run_id=run.run_id,
+                            order_id=final_order.order_id,
+                            symbol=final_order.symbol,
+                            trade_date=trade_date,
+                            algo_code="MINIQMT_BROKER_AUTHORITY",
+                            algo_state={
+                                "broker_backend": "minqmt_sim",
+                                "authority_source": "MINIQMT",
+                                "broker_handle_id": handle.handle_id,
+                                "miniqmt_order_id": native["miniqmt_order_id"],
+                                "broker_status": status.state,
+                                "trade_count": len(order_fills),
+                            },
+                            filled_quantity=final_order.filled_quantity,
+                            remaining_quantity=final_order.remaining_quantity,
+                            status=final_order.status.value,
+                        )
+                    )
                 orders.append(final_order)
+                fills.extend(order_fills)
+                events.extend(order_events)
                 self.repository.save_run_event(
                     run_id=run.run_id,
                     event_type="MINIQMT_ORDER_SUBMITTED",
@@ -1073,6 +1233,9 @@ class PaperTradingDayRunner:
                         "broker_handle_id": handle.handle_id,
                         "miniqmt_order_id": native["miniqmt_order_id"],
                         "broker_status": status.state,
+                        "fill_count": len(order_fills),
+                        "paper_order_status": final_order.status.value,
+                        "filled_quantity": final_order.filled_quantity,
                     },
                 )
 
@@ -1082,6 +1245,7 @@ class PaperTradingDayRunner:
                 trade_date=trade_date,
                 broker=broker,
                 orders=orders,
+                fills=fills,
                 events=events,
             )
         finally:
@@ -1096,7 +1260,9 @@ class PaperTradingDayRunner:
         trade_date: date,
         broker: MiniQMTSimBackend,
         orders: list[Any],
+        fills: list[Fill],
         events: list[Any],
+        fill_count_override: int | None = None,
     ) -> PaperDayRunResult:
         account = broker.query_account()
         positions, prices = broker.query_position_marks()
@@ -1121,6 +1287,7 @@ class PaperTradingDayRunner:
             positions=position_list,
             prices=prices,
         )
+        fill_count = len(fills) if fill_count_override is None else int(fill_count_override)
         self.repository.save_daily_snapshot(
             run_id=run.run_id,
             trade_date=trade_date,
@@ -1128,10 +1295,10 @@ class PaperTradingDayRunner:
             metadata={
                 "position_count": len(position_list),
                 "order_count": len(orders),
-                "fill_count": 0,
+                "fill_count": fill_count,
                 "broker_backend": "minqmt_sim",
                 "authority_source": "MINIQMT_QUERY",
-                "miniqmt_no_local_fills": True,
+                "miniqmt_no_local_fills": fill_count == 0,
             },
         )
         succeeded = self.repository.update_run_status(run, RunStatus.SUCCEEDED)
@@ -1142,6 +1309,8 @@ class PaperTradingDayRunner:
             message="MiniQMT broker-authoritative snapshots persisted without LocalSim fills",
             context={
                 "order_count": len(orders),
+                "fill_count": fill_count,
+                "new_fill_count": len(fills),
                 "position_count": len(position_list),
                 "cash": float(account.cash),
                 "nav": float(account.nav),
@@ -1151,11 +1320,422 @@ class PaperTradingDayRunner:
             portfolio=ready_portfolio,
             run=succeeded,
             orders=orders,
-            fills=[],
+            fills=fills,
             events=events,
             positions=position_list,
             account_snapshot=snapshot,
         )
+
+    def reconcile_minqmt_native_run(
+        self,
+        *,
+        portfolio: Any,
+        run: PaperRun,
+        trade_date: date,
+        broker: MiniQMTSimBackend | None = None,
+    ) -> PaperDayRunResult:
+        """Idempotently refresh local Paper v2 order/fill state from MiniQMT."""
+
+        owns_broker = broker is None
+        broker = broker or self.minqmt_broker_factory(
+            portfolio_id=portfolio.portfolio_id,
+            package_id=portfolio.package_id,
+            data_source=MinuteDataSource.MINIQMT_REALTIME,
+            strategy_slot_id=portfolio.portfolio_id,
+        )
+        session_id = self._miniqmt_session_id_from_run(run)
+        new_fills: list[Fill] = []
+        order_events: list[OrderEvent] = []
+        reconciled_orders = []
+        try:
+            existing_rows = self._miniqmt_existing_fill_rows(run.run_id)
+            existing_fill_ids = {str(row.get("fill_id") or "") for row in existing_rows if row.get("fill_id")}
+            existing_fill_order_ids = {str(row.get("order_id") or "") for row in existing_rows if row.get("order_id")}
+            for order in self.repository.list_orders_for_run(run.run_id):
+                native = self._miniqmt_native_context_from_order(order)
+                if native is None:
+                    reconciled_orders.append(order)
+                    self.repository.save_run_event(
+                        run_id=run.run_id,
+                        event_type="MINIQMT_NATIVE_RECONCILE_SKIPPED",
+                        message="MiniQMT native reconciliation skipped an order without persisted native ids",
+                        context={"order_id": order.order_id, "symbol": order.symbol},
+                    )
+                    continue
+                intent = self._miniqmt_intent_from_order(order, trade_date=trade_date)
+                status = broker.query_status_from_native(intent=intent, **native)
+                trade_rows = broker.query_trades_from_native(intent=intent, **native)
+                candidate_fills = self._miniqmt_fills_from_trades(
+                    trade_rows,
+                    order=order,
+                    native=native,
+                    trade_date=trade_date,
+                )
+                final_order = order
+                if (
+                    candidate_fills
+                    and order.status in {OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.REJECTED}
+                    and order.order_id not in existing_fill_order_ids
+                ):
+                    final_order = order.model_copy(
+                        update={"status": OrderStatus.SUBMITTED, "filled_quantity": 0, "avg_fill_price": None}
+                    )
+                for fill in candidate_fills:
+                    if fill.fill_id in existing_fill_ids:
+                        continue
+                    final_order, event = self.oms.apply_fill(final_order, fill)
+                    self.repository.save_fill(
+                        run.run_id,
+                        fill,
+                        intended_price=order.limit_price,
+                        fill_market_context=self._miniqmt_fill_market_context(
+                            trade=fill.metadata.get("miniqmt_trade_raw") if isinstance(fill.metadata, dict) else {},
+                            native=native,
+                            trade_date=trade_date,
+                        ),
+                    )
+                    self.repository.save_order_event(run.run_id, event)
+                    existing_fill_ids.add(fill.fill_id)
+                    existing_fill_order_ids.add(order.order_id)
+                    new_fills.append(fill)
+                    order_events.append(event)
+                final_order = self._reconcile_minqmt_order_status(
+                    final_order,
+                    status=status,
+                    native=native,
+                    visible_trade_count=len(trade_rows),
+                )
+                self.repository.save_order(run.run_id, final_order)
+                if session_id:
+                    self.repository.save_order_execution_state(
+                        OrderExecutionState(
+                            session_id=session_id,
+                            run_id=run.run_id,
+                            order_id=final_order.order_id,
+                            symbol=final_order.symbol,
+                            trade_date=trade_date,
+                            algo_code="MINIQMT_BROKER_AUTHORITY",
+                            algo_state={
+                                "broker_backend": "minqmt_sim",
+                                "authority_source": "MINIQMT_NATIVE_RECONCILE",
+                                "broker_handle_id": native["handle_id"],
+                                "miniqmt_order_id": native["miniqmt_order_id"],
+                                "broker_status": status.state,
+                                "trade_count": len(trade_rows),
+                            },
+                            filled_quantity=final_order.filled_quantity,
+                            remaining_quantity=final_order.remaining_quantity,
+                            status=final_order.status.value,
+                        )
+                    )
+                reconciled_orders.append(final_order)
+            persisted_fill_count = len(self._miniqmt_existing_fill_rows(run.run_id))
+            result = self._persist_minqmt_authority_snapshot(
+                portfolio=portfolio,
+                run=run,
+                trade_date=trade_date,
+                broker=broker,
+                orders=reconciled_orders,
+                fills=new_fills,
+                events=order_events,
+                fill_count_override=persisted_fill_count,
+            )
+            self.repository.save_run_event(
+                run_id=run.run_id,
+                event_type="MINIQMT_NATIVE_RUN_RECONCILED",
+                message="MiniQMT native order and trade state reconciled into Paper v2 ledger",
+                context={
+                    "order_count": len(reconciled_orders),
+                    "new_fill_count": len(new_fills),
+                    "persisted_fill_count": persisted_fill_count,
+                    "broker_backend": "minqmt_sim",
+                    "authority_source": "MINIQMT_NATIVE_RECONCILE",
+                },
+            )
+            return result
+        finally:
+            if owns_broker and broker is not None:
+                broker.shutdown()
+
+    @staticmethod
+    def _miniqmt_order_submission_sequence(intents: list[Any]) -> list[Any]:
+        return sorted(
+            intents,
+            key=lambda intent: (
+                0 if intent.side == OrderSide.SELL else 1,
+                str(intent.symbol),
+                str(intent.intent_id),
+            ),
+        )
+
+    @staticmethod
+    def _miniqmt_order_status_from_handle(status: Any) -> OrderStatus:
+        if status.state == "rejected":
+            return OrderStatus.REJECTED
+        if status.state == "cancelled":
+            return OrderStatus.CANCELLED
+        if status.state == "filled":
+            return OrderStatus.FILLED
+        if status.state == "partial_filled":
+            return OrderStatus.PARTIALLY_FILLED
+        return OrderStatus.SUBMITTED
+
+    def _reconcile_minqmt_order_status(
+        self,
+        order: Any,
+        *,
+        status: Any,
+        native: dict[str, Any],
+        visible_trade_count: int,
+    ) -> Any:
+        broker_state = self._miniqmt_order_status_from_handle(status)
+        if broker_state in {OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED} and status.filled_quantity > order.filled_quantity:
+            update: dict[str, Any] = {
+                "status": broker_state,
+                "filled_quantity": min(status.filled_quantity, order.quantity),
+            }
+            if status.avg_fill_price is not None:
+                update["avg_fill_price"] = float(status.avg_fill_price)
+            return order.model_copy(update=update)
+        if broker_state in {OrderStatus.REJECTED, OrderStatus.CANCELLED} and order.status != broker_state:
+            update = {"status": broker_state}
+            if status.rejection_reason:
+                update["metadata"] = {
+                    **dict(order.metadata or {}),
+                    "broker_status": status.state,
+                    "broker_rejection_reason": status.rejection_reason,
+                    "visible_trade_count": visible_trade_count,
+                    **native,
+                }
+            return order.model_copy(update=update)
+        if order.status != broker_state and broker_state in {OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED}:
+            return order.model_copy(update={"status": broker_state})
+        return order
+
+    @staticmethod
+    def _miniqmt_session_id_from_run(run: PaperRun) -> str | None:
+        session = run.runtime_config.get("paper_v2_session") if isinstance(run.runtime_config, dict) else None
+        if not isinstance(session, dict):
+            return None
+        session_id = str(session.get("session_id") or "").strip()
+        return session_id or None
+
+    @staticmethod
+    def _miniqmt_native_context_from_order(order: Any) -> dict[str, str] | None:
+        metadata = dict(order.metadata or {})
+        miniqmt_order_id = str(metadata.get("miniqmt_order_id") or "").strip()
+        if not miniqmt_order_id:
+            return None
+        handle_id = str(metadata.get("broker_handle_id") or metadata.get("handle_id") or f"native_{miniqmt_order_id}")
+        return {
+            "handle_id": handle_id,
+            "miniqmt_order_id": miniqmt_order_id,
+            "strategy_name": str(metadata.get("strategy_name") or ""),
+            "order_remark": str(metadata.get("order_remark") or ""),
+        }
+
+    @staticmethod
+    def _miniqmt_intent_from_order(order: Any, *, trade_date: date) -> OrderIntent:
+        return OrderIntent(
+            intent_id=order.intent_id,
+            package_id=order.package_id,
+            portfolio_id=order.portfolio_id,
+            symbol=order.symbol,
+            side=order.side,
+            quantity=order.quantity,
+            order_type=order.order_type,
+            limit_price=order.limit_price,
+            target_trade_date=trade_date,
+            metadata=dict(order.metadata or {}),
+        )
+
+    def _miniqmt_existing_fill_rows(self, run_id: str) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.repository.list_fills_for_run(run_id)]
+
+    @classmethod
+    def _miniqmt_fills_from_trades(
+        cls,
+        trades: list[dict[str, Any]],
+        *,
+        order: Any,
+        native: dict[str, Any],
+        trade_date: date,
+    ) -> list[Fill]:
+        unique: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for trade in trades:
+            fill_id = cls._miniqmt_fill_id(trade, order_id=order.order_id)
+            if fill_id in seen:
+                continue
+            seen.add(fill_id)
+            unique.append(dict(trade))
+        if not unique:
+            return []
+        if len(unique) == 1:
+            try:
+                return [cls._miniqmt_fill_from_trade(unique[0], order=order, native=native, trade_date=trade_date)]
+            except ValueError:
+                pass
+        return cls._miniqmt_aggregate_fill_from_trades(unique, order=order, native=native, trade_date=trade_date)
+
+    @classmethod
+    def _miniqmt_aggregate_fill_from_trades(
+        cls,
+        trades: list[dict[str, Any]],
+        *,
+        order: Any,
+        native: dict[str, Any],
+        trade_date: date,
+    ) -> list[Fill]:
+        total_quantity = sum(max(0, int(trade.get("traded_volume") or 0)) for trade in trades)
+        if total_quantity <= 0:
+            return []
+        total_amount = sum(
+            max(0, int(trade.get("traded_volume") or 0)) * float(trade.get("traded_price") or 0.0)
+            for trade in trades
+        )
+        avg_price = total_amount / total_quantity if total_quantity else 0.0
+        trade_times = [cls._parse_minqmt_trade_time(trade_date, trade.get("traded_time")) for trade in trades]
+        trade_time = max(trade_times) if trade_times else datetime.now(UTC)
+        raw = dict(trades[-1])
+        raw.update(
+            {
+                "traded_volume": total_quantity,
+                "traded_price": avg_price,
+                "traded_amount": total_amount,
+                "order_id": native.get("miniqmt_order_id"),
+            }
+        )
+        payload = {
+            "order_id": order.order_id,
+            "miniqmt_order_id": native.get("miniqmt_order_id"),
+            "trade_keys": [
+                {
+                    "traded_id": str(trade.get("traded_id") or ""),
+                    "order_sysid": str(trade.get("order_sysid") or ""),
+                    "traded_time": str(trade.get("traded_time") or ""),
+                    "quantity": int(trade.get("traded_volume") or 0),
+                    "price": float(trade.get("traded_price") or 0.0),
+                }
+                for trade in trades
+            ],
+        }
+        digest = hashlib.sha256(json.dumps(payload, ensure_ascii=True, sort_keys=True).encode("utf-8")).hexdigest()
+        metadata = {
+            "broker_backend": "minqmt_sim",
+            "authority_source": "MINIQMT_TRADE_AGGREGATE",
+            "miniqmt_order_id": native.get("miniqmt_order_id"),
+            "strategy_name": str(raw.get("strategy_name") or native.get("strategy_name") or ""),
+            "order_remark": str(raw.get("order_remark") or native.get("order_remark") or ""),
+            "trade_count": len(trades),
+            "miniqmt_trade_raw": raw,
+            "miniqmt_trade_raw_rows": trades,
+        }
+        try:
+            return [
+                Fill(
+                    fill_id=f"fill_minqmt_agg_{digest[:24]}",
+                    order_id=order.order_id,
+                    symbol=order.symbol,
+                    side=order.side,
+                    quantity=total_quantity,
+                    price=avg_price,
+                    trade_time=trade_time,
+                    bar_time=trade_time,
+                    reason="miniqmt_trade_reconciliation_aggregate",
+                    metadata=metadata,
+                )
+            ]
+        except ValueError:
+            return []
+
+    @classmethod
+    def _miniqmt_fill_from_trade(
+        cls,
+        trade: dict[str, Any],
+        *,
+        order: Any,
+        native: dict[str, Any],
+        trade_date: date,
+    ) -> Fill:
+        trade_time = cls._parse_minqmt_trade_time(trade_date, trade.get("traded_time"))
+        metadata = {
+            "broker_backend": "minqmt_sim",
+            "authority_source": "MINIQMT_TRADE",
+            "traded_id": str(trade.get("traded_id") or ""),
+            "miniqmt_order_id": native.get("miniqmt_order_id"),
+            "order_sysid": str(trade.get("order_sysid") or ""),
+            "strategy_name": str(trade.get("strategy_name") or native.get("strategy_name") or ""),
+            "order_remark": str(trade.get("order_remark") or native.get("order_remark") or ""),
+            "commission": float(trade.get("commission") or 0.0),
+            "secu_account": str(trade.get("secu_account") or ""),
+            "miniqmt_trade_raw": dict(trade),
+        }
+        return Fill(
+            fill_id=cls._miniqmt_fill_id(trade, order_id=order.order_id),
+            order_id=order.order_id,
+            symbol=order.symbol,
+            side=order.side,
+            quantity=int(trade.get("traded_volume") or 0),
+            price=float(trade.get("traded_price") or 0.0),
+            trade_time=trade_time,
+            bar_time=trade_time,
+            reason="miniqmt_trade_reconciliation",
+            metadata=metadata,
+        )
+
+    @staticmethod
+    def _parse_minqmt_trade_time(trade_date: date, value: Any) -> datetime:
+        text = str(value or "").strip()
+        for fmt in ("%H%M%S", "%H:%M:%S"):
+            try:
+                parsed = datetime.strptime(text, fmt)
+                return datetime.combine(trade_date, parsed.time(), tzinfo=UTC)
+            except ValueError:
+                continue
+        return datetime.now(UTC)
+
+    @staticmethod
+    def _miniqmt_fill_id(trade: dict[str, Any], *, order_id: str) -> str:
+        traded_id = str(trade.get("traded_id") or "").strip()
+        if traded_id:
+            return f"fill_minqmt_{traded_id}"
+        payload = {
+            "order_id": order_id,
+            "miniqmt_order_id": str(trade.get("order_id") or ""),
+            "order_sysid": str(trade.get("order_sysid") or ""),
+            "symbol": str(trade.get("stock_code") or ""),
+            "side": str(trade.get("order_type") or ""),
+            "traded_time": str(trade.get("traded_time") or ""),
+            "quantity": int(trade.get("traded_volume") or 0),
+            "price": float(trade.get("traded_price") or 0.0),
+        }
+        digest = hashlib.sha256(json.dumps(payload, ensure_ascii=True, sort_keys=True).encode("utf-8")).hexdigest()
+        return f"fill_minqmt_{digest[:24]}"
+
+    @staticmethod
+    def _miniqmt_fill_market_context(*, trade: dict[str, Any], native: dict[str, Any], trade_date: date) -> dict[str, Any]:
+        price = float(trade.get("traded_price") or 0.0)
+        quantity = int(trade.get("traded_volume") or 0)
+        return {
+            "stock_id": str(trade.get("stock_code") or ""),
+            "trade_date": trade_date.isoformat(),
+            "data_source": MinuteDataSource.MINIQMT_REALTIME.value,
+            "prev_close": None,
+            "limit_up": None,
+            "limit_down": None,
+            "suspend_status": "MINIQMT_AUTHORITY",
+            "full_day_open": price,
+            "full_day_close": price,
+            "full_day_volume": quantity,
+            "full_day_high": price,
+            "full_day_low": price,
+            "generated_at": datetime.now(UTC).isoformat(),
+            "broker_backend": "minqmt_sim",
+            "authority_source": "MINIQMT_TRADE",
+            "miniqmt_order_id": native.get("miniqmt_order_id"),
+            "traded_id": str(trade.get("traded_id") or ""),
+        }
 
     @staticmethod
     def _reject_raw_execution_overrides(runtime_config: dict[str, Any]) -> None:
@@ -1170,7 +1750,7 @@ class PaperTradingDayRunner:
         }
         present = sorted(key for key in forbidden if key in runtime_config)
         if present:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "paper v2 runtime_config cannot override execution policy; use a backtest-validated execution policy",
                 context={"forbidden_keys": present},
             )
@@ -1182,7 +1762,7 @@ class PaperTradingDayRunner:
         policy_id = policy.get("validated_execution_policy_id")
         policy_sha256 = policy.get("policy_sha256")
         if not isinstance(policy_json, dict) or not policy_id or not policy_sha256:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "paper portfolio requires a backtest-validated execution policy snapshot",
                 context={"portfolio_id": portfolio.portfolio_id},
             )

@@ -12,7 +12,7 @@ from backend.services.paper_trading_v2.market_data import MinuteDataSource
 from backend.services.selection_center.models import SelectionMode
 from backend.services.selection_center.industry_tree import SelectionIndustryTreeService
 from backend.services.selection_center.service import SelectionCenterService
-from backend.services.trading_core.errors import DataUnavailableError, TradingCoreError, UnsupportedFeatureError
+from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError, TradingCoreError, UnsupportedFeatureError
 
 router = APIRouter(prefix="/selection-center", tags=["selection-center"])
 
@@ -46,6 +46,11 @@ class AddSelectionRunToWatchlistRequest(BaseModel):
     category_name: str | None = None
     top_k: int = Field(default=20, gt=0, le=50)
     on_conflict: str = "ignore"
+
+
+class DeleteSelectionRunsRequest(BaseModel):
+    run_ids: list[str] = Field(min_length=1)
+    confirm_delete: bool = False
 
 
 def _raise_http(exc: TradingCoreError) -> None:
@@ -124,9 +129,18 @@ def aggregate_existing_selection_runs(
 @router.get("/runs")
 def list_selection_runs(
     limit: int = 100,
+    page: int | None = None,
+    page_size: int | None = None,
     service: SelectionCenterService = Depends(get_selection_center_service),
 ) -> dict[str, Any]:
     try:
+        if page is not None or page_size is not None:
+            page_data = service.list_runs_page(page=page or 1, page_size=page_size or min(limit, 50))
+            return {
+                "ok": True,
+                "runs": [run.model_dump(mode="json") for run in page_data["runs"]],
+                "pagination": page_data["pagination"],
+            }
         runs = service.list_runs(limit=limit)
         return {"ok": True, "runs": [run.model_dump(mode="json") for run in runs]}
     except TradingCoreError as exc:
@@ -161,6 +175,35 @@ def get_selection_run(
     try:
         run = service.get_run(run_id)
         return {"ok": True, "run": run.model_dump(mode="json")}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.delete("/runs/{run_id}")
+def delete_selection_run(
+    run_id: str,
+    service: SelectionCenterService = Depends(get_selection_center_service),
+) -> dict[str, Any]:
+    try:
+        deleted_counts = service.delete_run(run_id)
+        return {"ok": True, "run_id": run_id, "deleted_counts": deleted_counts}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/runs/bulk-delete")
+def delete_selection_runs(
+    req: DeleteSelectionRunsRequest,
+    service: SelectionCenterService = Depends(get_selection_center_service),
+) -> dict[str, Any]:
+    try:
+        if not req.confirm_delete:
+            raise StrategyPackageValidationError(
+                "selection run delete requires explicit confirmation",
+                context={"run_ids": req.run_ids, "confirm_delete": req.confirm_delete},
+            )
+        result = service.delete_runs(req.run_ids)
+        return {"ok": True, **result}
     except TradingCoreError as exc:
         _raise_http(exc)
 

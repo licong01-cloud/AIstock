@@ -80,6 +80,40 @@ def test_research_module_registers_exactly_16_tools() -> None:
     }
 
 
+def test_research_mcp_uses_compact_defaults_and_refines_large_payloads() -> None:
+    registry, mcp, calls = _registry_with_capture()
+    tools = mcp.tools
+
+    tools["research_list_experiments"]()
+    assert calls[-1]["query"]["limit"] == "20"
+
+    tools["research_list_artifact_refs"]("exp_1")
+    assert calls[-1]["query"]["limit"] == "20"
+
+    tools["research_list_backtest_records"]("exp_1")
+    assert calls[-1]["query"]["limit"] == "10"
+    assert calls[-1]["query"]["detail"] == "summary"
+
+    large = {"data": "x" * 200}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=large)
+
+    client = registry.client("research-pipeline")
+    client.max_response_bytes = 64
+    client._transport = httpx.MockTransport(handler)
+    result = client.get("/experiments")
+
+    assert result["status"] == "requires_refinement"
+    assert result["mcp_response_too_large"] is True
+    assert result["mcp_response_refinement_required"] is True
+    assert result["partial_payload_returned"] is False
+    assert result["path"] == "/experiments"
+    assert "preview" not in result
+    assert result["retry_with"]["params"]["limit"] == 20
+    assert result["retry_with"]["params"]["detail"] == "summary"
+
+
 def test_research_tools_call_expected_http_contracts() -> None:
     _registry, mcp, calls = _registry_with_capture()
     tools = mcp.tools
@@ -109,6 +143,7 @@ def test_research_tools_call_expected_http_contracts() -> None:
     tools["research_get_experiment"]("exp_1")
     assert calls[-1]["method"] == "GET"
     assert calls[-1]["path"] == "/api/v1/research-pipeline/experiments/exp_1"
+    assert calls[-1]["query"] == {"detail": "summary"}
 
     tools["research_run_stage"](
         "exp_1",
@@ -139,6 +174,7 @@ def test_research_tools_call_expected_http_contracts() -> None:
     tools["research_get_stage_result"]("exp_1", "qe_shadow")
     assert calls[-1]["method"] == "GET"
     assert calls[-1]["path"] == "/api/v1/research-pipeline/experiments/exp_1/stages/qe_shadow"
+    assert calls[-1]["query"] == {"detail": "summary"}
 
     tools["research_compare_baseline"]("exp_1", {"baseline": "v25_1"})
     assert calls[-1] == {
@@ -179,6 +215,7 @@ def test_research_tools_call_expected_http_contracts() -> None:
             "non_hmm_config_sig": "base_sig",
             "limit": "9",
             "offset": "2",
+            "detail": "summary",
         },
         "body": {},
     }

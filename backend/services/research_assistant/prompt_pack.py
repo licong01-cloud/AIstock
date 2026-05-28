@@ -13,14 +13,6 @@ from .models import sha256_json
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_PROMPT_PACK_PATH = REPO_ROOT / "prompt_packs" / "research_assistant" / "main" / "pack.yaml"
 
-FORBIDDEN_UNDEVELOPED_CAPABILITY_PHRASES = (
-    "禁止控制鼠标键盘",
-    "禁止写代码",
-    "mouse_keyboard_control",
-    "code_write",
-)
-
-
 @dataclass(frozen=True)
 class PromptPackSnapshot:
     pack_key: str
@@ -106,10 +98,6 @@ def _validate_pack_payload(payload: dict[str, Any], pack_path: Path) -> None:
 def _validate_prompt_text(prompt_key: str, prompt_text: str) -> None:
     if not prompt_text:
         raise ValueError(f"prompt node {prompt_key} has empty text")
-    lowered = prompt_text.lower()
-    for phrase in FORBIDDEN_UNDEVELOPED_CAPABILITY_PHRASES:
-        if phrase.lower() in lowered:
-            raise ValueError(f"prompt node {prompt_key} contains undeveloped capability phrase: {phrase}")
 
 
 def _repo_relative(path: Path) -> str:

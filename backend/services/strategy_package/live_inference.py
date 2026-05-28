@@ -41,7 +41,13 @@ from backend.services.quantevolver.qe_workspace_client import (
     QEWorkspaceClient,
     QEWorkspaceFileNotFound,
 )
-from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
+from backend.services.trading_core.errors import (
+    ArtifactGenerationFailedError,
+    DataUnavailableError,
+    PackageAssetInvalidError,
+    RuntimeConfigInvalidError,
+    TradingCoreError,
+)
 
 from .workspace_policy import ensure_not_forbidden_worker_workspace_path
 
@@ -189,7 +195,7 @@ class LiveInferencePreflightResult:
         }
 
 
-class LiveInferencePreflightError(StrategyPackageValidationError):
+class LiveInferencePreflightError(ArtifactGenerationFailedError):
     """Live inference cold-start preflight failed.
 
     Surfaced fail-fast before Selection Center commits to a heavy
@@ -237,7 +243,7 @@ def _parse_jsonish(value: Any) -> Any:
         try:
             return json.loads(value)
         except json.JSONDecodeError as exc:
-            raise StrategyPackageValidationError(
+            raise PackageAssetInvalidError(
                 "invalid JSON payload in QE experiment runtime source",
                 context={"value_preview": value[:200]},
             ) from exc
@@ -251,14 +257,14 @@ def _load_qe_conf_yaml(conf_path: Path, *, purpose: str) -> dict[str, Any]:
     except Exception as first_exc:
         sanitized, changed = _sanitize_unresolved_jinja_for_yaml(text)
         if not changed:
-            raise StrategyPackageValidationError(
+            raise PackageAssetInvalidError(
                 f"failed to parse QE conf.yaml for {purpose}",
                 context={"conf_path": str(conf_path), "error": str(first_exc)},
             ) from first_exc
         try:
             loaded = yaml.safe_load(sanitized) or {}
         except Exception as second_exc:
-            raise StrategyPackageValidationError(
+            raise PackageAssetInvalidError(
                 f"failed to parse QE conf.yaml for {purpose}",
                 context={
                     "conf_path": str(conf_path),
@@ -268,7 +274,7 @@ def _load_qe_conf_yaml(conf_path: Path, *, purpose: str) -> dict[str, Any]:
                 },
             ) from second_exc
     if not isinstance(loaded, dict):
-        raise StrategyPackageValidationError(
+        raise PackageAssetInvalidError(
             f"QE conf.yaml must be a mapping for {purpose}",
             context={"conf_path": str(conf_path), "actual_type": type(loaded).__name__},
         )
@@ -371,15 +377,15 @@ def _safe_cache_component(value: str) -> str:
 def _remote_relpath(value: str) -> str:
     text = str(value or "").strip().replace("\\", "/")
     if not text:
-        raise StrategyPackageValidationError("remote workspace file path is empty")
+        raise RuntimeConfigInvalidError("remote workspace file path is empty")
     if ":" in text:
-        raise StrategyPackageValidationError(
+        raise RuntimeConfigInvalidError(
             "absolute or drive-qualified QE workspace paths are not allowed",
             context={"path": value},
         )
     pure = PurePosixPath(text)
     if pure.is_absolute() or any(part in {"", ".", ".."} for part in pure.parts):
-        raise StrategyPackageValidationError(
+        raise RuntimeConfigInvalidError(
             "QE workspace file path must be a safe relative path",
             context={"path": value},
         )
@@ -398,18 +404,18 @@ def _score_rows_from_frame(df_scores: pd.DataFrame, expected_date: date) -> list
         if len(df_scores.columns) == 1:
             df_scores = df_scores.rename(columns={df_scores.columns[0]: "score"})
         else:
-            raise StrategyPackageValidationError(
+            raise ArtifactGenerationFailedError(
                 "live QE model inference output is missing score column",
                 context={"columns": [str(item) for item in df_scores.columns]},
             )
     if not isinstance(df_scores.index, pd.MultiIndex):
-        raise StrategyPackageValidationError(
+        raise ArtifactGenerationFailedError(
             "live QE model inference output must use MultiIndex(datetime, instrument)",
             context={"index_type": type(df_scores.index).__name__},
         )
     names = list(df_scores.index.names)
     if "datetime" not in names or "instrument" not in names:
-        raise StrategyPackageValidationError(
+        raise ArtifactGenerationFailedError(
             "live QE model inference output index must contain datetime and instrument",
             context={"index_names": names},
         )
@@ -428,7 +434,7 @@ def _score_rows_from_frame(df_scores: pd.DataFrame, expected_date: date) -> list
     day["symbol"] = day["instrument"].astype(str)
     day["score"] = pd.to_numeric(day["score"], errors="coerce")
     if not day["score"].map(lambda value: pd.notna(value) and math.isfinite(float(value))).all():
-        raise StrategyPackageValidationError(
+        raise ArtifactGenerationFailedError(
             "live QE model inference output contains invalid scores",
             context={"row_count": int(len(day))},
         )
@@ -459,7 +465,7 @@ class QEExperimentRuntimeAssetResolver:
     def load_source(self, experiment_id: str) -> QEExperimentRuntimeSource:
         experiment_id = str(experiment_id or "").strip()
         if not experiment_id:
-            raise StrategyPackageValidationError("QE experiment_id is required for live inference")
+            raise RuntimeConfigInvalidError("QE experiment_id is required for live inference")
         row = self._load_experiment_row_by_id(experiment_id)
         return self._source_from_experiment_row(row, source_lookup={"experiment_id": experiment_id})
 
@@ -504,12 +510,12 @@ class QEExperimentRuntimeAssetResolver:
 
         if normalized_type == "qe_experiment":
             if not normalized_source_id:
-                raise StrategyPackageValidationError("QE experiment source_id is required for live inference")
+                raise RuntimeConfigInvalidError("QE experiment source_id is required for live inference")
             return self.load_source(normalized_source_id)
 
         if normalized_type == "candidate_strategy_package":
             if not normalized_source_id:
-                raise StrategyPackageValidationError("Candidate StrategyPackage source_id is required for live inference")
+                raise RuntimeConfigInvalidError("Candidate StrategyPackage source_id is required for live inference")
             candidate = self._load_candidate_strategy_package_source(normalized_source_id)
             candidate_source_type = str(candidate.get("source_type") or "").strip()
             if candidate_source_type == "qe_evolution_loop":
@@ -544,7 +550,7 @@ class QEExperimentRuntimeAssetResolver:
                         context={"candidate_id": normalized_source_id, "candidate_source": candidate},
                     )
                 return self.load_source(experiment_id)
-            raise StrategyPackageValidationError(
+            raise PackageAssetInvalidError(
                 "unsupported Candidate StrategyPackage source_type for live inference",
                 context={
                     "candidate_id": normalized_source_id,
@@ -553,7 +559,7 @@ class QEExperimentRuntimeAssetResolver:
                 },
             )
 
-        raise StrategyPackageValidationError(
+        raise PackageAssetInvalidError(
             "unsupported StrategyPackage source_type for live inference",
             context={
                 "source_type": normalized_type,
@@ -626,7 +632,7 @@ class QEExperimentRuntimeAssetResolver:
                 loop_id=loop_id,
                 run_id=run_id,
             )
-        except (DataUnavailableError, StrategyPackageValidationError) as exc:
+        except TradingCoreError as exc:
             checks.append(
                 LiveInferencePreflightCheck(
                     name=PREFLIGHT_CHECK_QE_SOURCE,
@@ -922,7 +928,7 @@ class QEExperimentRuntimeAssetResolver:
                 context={"candidate_id": candidate_id},
             )
         if str(row.get("status") or "").upper() != "ACTIVE":
-            raise StrategyPackageValidationError(
+            raise PackageAssetInvalidError(
                 "Candidate StrategyPackage must be ACTIVE for live inference",
                 context={"candidate_id": candidate_id, "status": row.get("status")},
             )
@@ -947,22 +953,22 @@ class QEExperimentRuntimeAssetResolver:
     ) -> QEExperimentRuntimeSource:
         experiment_id = str(row["experiment_id"])
         if str(row["status"]).lower() != "completed":
-            raise StrategyPackageValidationError(
+            raise PackageAssetInvalidError(
                 "QE experiment must be completed before live inference",
                 context={"experiment_id": experiment_id, "status": row["status"]},
             )
         factor_names = _parse_jsonish(row.get("factor_names")) or []
         if not isinstance(factor_names, list) or not factor_names:
-            raise StrategyPackageValidationError(
+            raise PackageAssetInvalidError(
                 "QE experiment has no factor_names for live inference",
                 context={"experiment_id": experiment_id},
             )
         custom_params = _parse_jsonish(row.get("custom_params")) or {}
         data_split = _parse_jsonish(row.get("data_split")) or {}
         if not isinstance(custom_params, dict):
-            raise StrategyPackageValidationError("QE experiment custom_params must be an object")
+            raise PackageAssetInvalidError("QE experiment custom_params must be an object")
         if not isinstance(data_split, dict):
-            raise StrategyPackageValidationError("QE experiment data_split must be an object")
+            raise PackageAssetInvalidError("QE experiment data_split must be an object")
         result_metrics = _parse_jsonish(row.get("result_metrics")) or {}
         if not isinstance(result_metrics, dict):
             result_metrics = {}
@@ -1029,7 +1035,7 @@ class QEExperimentRuntimeAssetResolver:
         config = runtime_config or {}
         artifact_config = config.get("selection_artifact_config") or config.get("selection_artifact") or {}
         if artifact_config and not isinstance(artifact_config, dict):
-            raise StrategyPackageValidationError("selection_artifact_config must be an object")
+            raise RuntimeConfigInvalidError("selection_artifact_config must be an object")
 
         source_conf = self._resolve_conf_path(source)
         factor_source_dir = self._resolve_factor_source_dir(source)
@@ -1335,7 +1341,7 @@ class QEExperimentRuntimeAssetResolver:
         try:
             resolved = _run_async_blocking(_download)
             return resolved, origin_holder["origin"]
-        except StrategyPackageValidationError:
+        except TradingCoreError:
             raise
         except DataUnavailableError:
             raise
@@ -1356,7 +1362,7 @@ class QEExperimentRuntimeAssetResolver:
         cache_root = self.cache_root.resolve(strict=False)
         target = path.resolve(strict=False)
         if target == cache_root or cache_root not in target.parents:
-            raise StrategyPackageValidationError(
+            raise ArtifactGenerationFailedError(
                 "refusing to reset a path outside the StrategyPackage runtime cache",
                 context={"path": str(path), "cache_root": str(self.cache_root)},
             )
@@ -1376,7 +1382,7 @@ class QEExperimentRuntimeAssetResolver:
         target = target_path.resolve(strict=False)
         cache_root = self.cache_root.resolve(strict=False)
         if cache_root not in target.parents:
-            raise StrategyPackageValidationError(
+            raise ArtifactGenerationFailedError(
                 "refusing to write QE runtime asset outside the StrategyPackage runtime cache",
                 context={"target_path": str(target_path), "cache_root": str(self.cache_root)},
             )
@@ -1390,13 +1396,13 @@ class QEExperimentRuntimeAssetResolver:
             members = archive.getmembers()
             for member in members:
                 if member.issym() or member.islnk():
-                    raise StrategyPackageValidationError(
+                    raise ArtifactGenerationFailedError(
                         "QE mlruns params archive must not contain links",
                         context={"member": member.name},
                     )
                 target = (dest_dir / member.name).resolve(strict=False)
                 if target != dest_root and dest_root not in target.parents:
-                    raise StrategyPackageValidationError(
+                    raise ArtifactGenerationFailedError(
                         "QE mlruns params archive contains an unsafe path",
                         context={"member": member.name},
                     )
@@ -1449,7 +1455,7 @@ class QEExperimentRuntimeAssetResolver:
         resolved_dest = dest.resolve(strict=False)
         resolved_source = source_dir.resolve(strict=False)
         if resolved_source not in resolved_dest.parents:
-            raise StrategyPackageValidationError(
+            raise ArtifactGenerationFailedError(
                 "refusing to copy cached QE params outside the materialized source cache",
                 context={"dest": str(dest), "source_dir": str(source_dir)},
             )
@@ -1519,13 +1525,13 @@ class QEExperimentRuntimeAssetResolver:
             dynamic_factor_source = "qe_experiments.factor_names"
         factor_order = [*alpha158_factors, *dynamic_factors]
         if not factor_order:
-            raise StrategyPackageValidationError(
+            raise ArtifactGenerationFailedError(
                 "live inference factor_order is empty",
                 context={"experiment_id": source.experiment_id},
             )
         duplicates = sorted({item for item in factor_order if factor_order.count(item) > 1})
         if duplicates:
-            raise StrategyPackageValidationError(
+            raise ArtifactGenerationFailedError(
                 "live inference factor_order contains duplicates",
                 context={"experiment_id": source.experiment_id, "duplicates": duplicates},
             )
@@ -1633,7 +1639,7 @@ class QEExperimentRuntimeAssetResolver:
 
                 names = list(pq.ParquetFile(path).schema_arrow.names)
             except Exception as exc:
-                raise StrategyPackageValidationError(
+                raise ArtifactGenerationFailedError(
                     "failed to read parquet feature schema for live inference",
                     context={"path": str(path), "error": str(exc)},
                 ) from exc
@@ -1651,7 +1657,7 @@ class QEExperimentRuntimeAssetResolver:
                     factors.append(parsed)
             return factors
 
-        raise StrategyPackageValidationError(
+        raise ArtifactGenerationFailedError(
             "unsupported StaticDataLoader feature-order artifact format for live inference",
             context={"path": str(path), "suffix": suffix},
         )

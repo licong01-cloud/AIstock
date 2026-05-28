@@ -43,14 +43,21 @@ def _client() -> LoopbackApiClient:
 
 
 @mcp.tool()
-def qe_experiment_list(limit: int = 50, offset: int = 0, include_children: bool = False) -> dict[str, Any]:
-    return _client().get("/quantevolver/experiments", params={"limit": limit, "offset": offset, "include_children": include_children})
+def qe_experiment_list(limit: int = 50, offset: int = 0, include_children: bool = False, detail: str = "summary") -> dict[str, Any]:
+    if detail not in {"summary", "full"}:
+        raise ValueError("detail must be summary or full")
+    return _client().get(
+        "/quantevolver/experiments",
+        params={"limit": limit, "offset": offset, "include_children": include_children, "detail": detail},
+    )
 
 
 @mcp.tool()
-def qe_experiment_get(experiment_id: str) -> dict[str, Any]:
+def qe_experiment_get(experiment_id: str, detail: str = "summary") -> dict[str, Any]:
+    if detail not in {"summary", "full"}:
+        raise ValueError("detail must be summary or full")
     safe = sanitize_identifier(experiment_id, "experiment_id")
-    return _client().get(f"/quantevolver/experiments/{safe}")
+    return _client().get(f"/quantevolver/experiments/{safe}", params={"detail": detail})
 
 
 @mcp.tool()
@@ -94,14 +101,48 @@ def qe_experiment_stop_confirmed(experiment_id: str, confirm_stop: str | None = 
 
 
 @mcp.tool()
-def qe_custom_evo_list_tasks(status: str | None = None, limit: int = 50) -> dict[str, Any]:
-    return _client().get("/quantevolver/evolution/tasks", params={"status": status, "limit": limit})
+def qe_custom_evo_list_tasks(status: str | None = None, limit: int = 50, detail: str = "summary") -> dict[str, Any]:
+    if detail not in {"summary", "full"}:
+        raise ValueError("detail must be summary or full")
+    return _client().get("/quantevolver/evolution/tasks", params={"status": status, "limit": limit, "detail": detail})
 
 
 @mcp.tool()
-def qe_custom_evo_get_task(task_id: str) -> dict[str, Any]:
+def qe_custom_evo_get_task(task_id: str, detail: str = "summary") -> dict[str, Any]:
+    if detail not in {"summary", "full"}:
+        raise ValueError("detail must be summary or full")
     safe = sanitize_identifier(task_id, "task_id")
-    return _client().get(f"/quantevolver/evolution/tasks/{safe}")
+    return _client().get(f"/quantevolver/evolution/tasks/{safe}", params={"detail": detail})
+
+
+@mcp.tool()
+def qe_custom_evo_loop_comparison(task_id: str) -> dict[str, Any]:
+    safe = sanitize_identifier(task_id, "task_id")
+    return _client().get(f"/quantevolver/evolution/tasks/{safe}/loops/comparison")
+
+
+@mcp.tool()
+def qe_custom_evo_get_loop_config(task_id: str, loop_index: int) -> dict[str, Any]:
+    safe = sanitize_identifier(task_id, "task_id")
+    if int(loop_index) < 1:
+        raise ValueError("loop_index must be >= 1")
+    return _client().get(f"/quantevolver/evolution/tasks/{safe}/loops/{int(loop_index)}/config")
+
+
+@mcp.tool()
+def qe_custom_evo_get_loop_metrics(task_id: str, loop_index: int) -> dict[str, Any]:
+    safe = sanitize_identifier(task_id, "task_id")
+    if int(loop_index) < 1:
+        raise ValueError("loop_index must be >= 1")
+    return _client().get(f"/quantevolver/evolution/tasks/{safe}/loops/{int(loop_index)}/metrics")
+
+
+@mcp.tool()
+def qe_custom_evo_get_loop_analysis(task_id: str, loop_index: int) -> dict[str, Any]:
+    safe = sanitize_identifier(task_id, "task_id")
+    if int(loop_index) < 1:
+        raise ValueError("loop_index must be >= 1")
+    return _client().get(f"/quantevolver/evolution/tasks/{safe}/loops/{int(loop_index)}/analysis")
 
 
 @mcp.tool()

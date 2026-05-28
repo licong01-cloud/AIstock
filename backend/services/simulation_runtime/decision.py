@@ -15,7 +15,11 @@ from backend.execution_algos.board_lot import board_lot_rule, round_to_board_lot
 from backend.services.selection_center.models import SignalSnapshot, TargetPosition
 from backend.services.strategy_package.models import StrategyPackageManifest
 from backend.services.strategy_package.runtime import TargetPositionEngine
-from backend.services.trading_core.errors import StrategyPackageValidationError
+from backend.services.trading_core.errors import (
+    ArtifactGenerationFailedError,
+    InvalidStateTransitionError,
+    RuntimeConfigInvalidError,
+)
 from backend.services.trading_core.models import OrderIntent, OrderSide, OrderType, PositionLot
 
 from .models import (
@@ -66,7 +70,7 @@ class TargetPositionService:
             return []
         equity = float(total_equity if total_equity is not None else binding.capital_allocation if binding else 0)
         if equity <= 0:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "TargetPositionService requires positive total_equity or binding capital_allocation",
                 context={"package_id": runtime_release.package_id, "release_id": runtime_release.release_id},
             )
@@ -108,17 +112,17 @@ class TargetPositionService:
             "release_id": runtime_release.release_id,
         }
         if selection_evidence.package_id != signal_snapshot.package_id:
-            raise StrategyPackageValidationError("selection evidence package does not match signal snapshot", context=context)
+            raise InvalidStateTransitionError("selection evidence package does not match signal snapshot", context=context)
         if selection_evidence.package_id != runtime_release.package_id:
-            raise StrategyPackageValidationError("selection evidence package does not match runtime release", context=context)
+            raise InvalidStateTransitionError("selection evidence package does not match runtime release", context=context)
         if selection_evidence.manifest_sha256 != signal_snapshot.manifest_sha256:
-            raise StrategyPackageValidationError("selection evidence manifest does not match signal snapshot", context=context)
+            raise InvalidStateTransitionError("selection evidence manifest does not match signal snapshot", context=context)
         if selection_evidence.manifest_sha256 != runtime_release.manifest_sha256:
-            raise StrategyPackageValidationError("selection evidence manifest does not match runtime release", context=context)
+            raise InvalidStateTransitionError("selection evidence manifest does not match runtime release", context=context)
         if selection_evidence.release_id and selection_evidence.release_id != runtime_release.release_id:
-            raise StrategyPackageValidationError("selection evidence release_id does not match runtime release", context=context)
+            raise InvalidStateTransitionError("selection evidence release_id does not match runtime release", context=context)
         if selection_evidence.release_hash and selection_evidence.release_hash != runtime_release.release_hash:
-            raise StrategyPackageValidationError("selection evidence release_hash does not match runtime release", context=context)
+            raise InvalidStateTransitionError("selection evidence release_hash does not match runtime release", context=context)
 
 
 class TradingRuleService:
@@ -265,7 +269,7 @@ class RebalanceIntentService:
             # existing holdings that dropped out of the authoritative signal.
             target_positions = []
         elif not target_positions:
-            raise StrategyPackageValidationError(
+            raise ArtifactGenerationFailedError(
                 "RebalanceIntentService requires target positions",
                 context={"package_id": package_id, "portfolio_id": portfolio_id, "strategy_id": strategy_id},
             )
@@ -370,13 +374,13 @@ class ExecutionPlanCompiler:
             if intent.metadata.get("trading_rule_decision_id") not in decision_by_id
         ]
         if missing:
-            raise StrategyPackageValidationError(
+            raise ArtifactGenerationFailedError(
                 "ExecutionPlanCompiler requires every intent to reference a TradingRuleDecision",
                 context={"missing_trading_rule_decision_ids": missing},
             )
         effective_portfolio_id = str(portfolio_id or (order_intents[0].portfolio_id if order_intents else binding.strategy_id)).strip()
         if not effective_portfolio_id:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "ExecutionPlanCompiler requires portfolio_id",
                 context={"release_id": runtime_release.release_id, "binding_id": binding.binding_id},
             )
@@ -514,19 +518,19 @@ class ExecutionPlanCompiler:
             "evidence_id": selection_evidence.evidence_id,
         }
         if binding.release_id != runtime_release.release_id or binding.release_hash != runtime_release.release_hash:
-            raise StrategyPackageValidationError("simulation binding does not match runtime release", context=context)
+            raise InvalidStateTransitionError("simulation binding does not match runtime release", context=context)
         if selection_evidence.package_id != runtime_release.package_id:
-            raise StrategyPackageValidationError("selection evidence does not match runtime release package", context=context)
+            raise InvalidStateTransitionError("selection evidence does not match runtime release package", context=context)
         if selection_evidence.release_id and selection_evidence.release_id != runtime_release.release_id:
-            raise StrategyPackageValidationError("selection evidence release_id does not match runtime release", context=context)
+            raise InvalidStateTransitionError("selection evidence release_id does not match runtime release", context=context)
         if selection_evidence.release_hash and selection_evidence.release_hash != runtime_release.release_hash:
-            raise StrategyPackageValidationError("selection evidence release_hash does not match runtime release", context=context)
+            raise InvalidStateTransitionError("selection evidence release_hash does not match runtime release", context=context)
 
     @staticmethod
     def _reject_paper_only_policy(policy: dict[str, Any]) -> None:
         algo_code = str(policy.get("algo_code") or policy.get("policy_version_id") or "").strip().lower()
         if bool(policy.get("paper_only")) or algo_code in {"paper_only", "selection_order_builder", "manual"}:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "ExecutionPlanCompiler only accepts validated execution policies, not paper-only or manual algorithms",
                 context={"execution_policy": policy},
             )

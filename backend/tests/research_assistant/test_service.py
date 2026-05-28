@@ -26,26 +26,36 @@ from backend.services.research_assistant.models import (
 from backend.services.research_assistant.repository import DatabaseResearchAssistantRepository, InMemoryResearchAssistantRepository, TABLES
 from backend.services.research_assistant.service import (
     ASSISTANT_APPROVAL_CONFIRM,
-    FORBIDDEN_UNDEVELOPED_CAPABILITY_PHRASES,
     LlmCallResult,
     ResearchAssistantCatalogNotReadyError,
     ResearchAssistantService,
 )
 
 
-class FakeLlmClient:
+class DialogueAwareFakeLlmClient:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
 
     def complete(self, **kwargs: object) -> LlmCallResult:
         self.calls.append(kwargs)
+        messages = kwargs.get("messages", [])
+        current_message = str(messages[-1].get("content", "")) if isinstance(messages, list) and messages else ""  # type: ignore[union-attr]
+        if "是否可以" in current_message or "能生成 QE 实验和诊断 bug" in current_message:
+            content = "可以。我能生成 QE 实验草案、校验模板并在确认后进入 MCP preflight；也能诊断 bug，分析报错、日志、Trace、实验记录和配置差异。"
+        elif "诊断" in current_message and ("报错" in current_message or "bug" in current_message):
+            content = "可以诊断。请提供报错文本、任务 ID、实验 ID、页面路径或复现步骤中的任意一种，我会先做只读根因分析。"
+        else:
+            content = "已收到明确的 QE 实验草案任务。我会先整理目标、股票池、时间窗、成本和风险边界；不默认固定迭代数量。"
         return LlmCallResult(
-            content="我理解你要创建 QE 10 loop 回测实验。本轮我会先复述目标、确认固定 PIT 股票池，并生成计划，不执行物化或运行。",
+            content=content,
             provider="fake",
             model="fake-primary",
             duration_ms=12,
             usage={"prompt_tokens": 100, "completion_tokens": 40},
         )
+
+
+FakeLlmClient = DialogueAwareFakeLlmClient
 
 
 class PromptTooLongOnceLlmClient(FakeLlmClient):
@@ -107,12 +117,12 @@ def test_catalog_readiness_blocks_chat_until_seeded() -> None:
     assert "prompt_nodes" in health["catalog_readiness"]["missing_catalogs"]
 
     with pytest.raises(ResearchAssistantCatalogNotReadyError) as excinfo:
-        svc.chat_turn(ChatTurnRequest(message="帮我创建一个 QE 10 loop 实验，先不要执行。"))
+        svc.chat_turn(ChatTurnRequest(message="帮我设计一个 QE 实验草案，先不要执行。"))
     assert excinfo.value.readiness["operator_action"] == "POST /api/v1/research-assistant/catalogs/seed"
     assert fake.calls == []
 
     with pytest.raises(ResearchAssistantCatalogNotReadyError):
-        svc.build_prompt_bundle(PromptBundleBuildRequest(user_message="QE 10 loop", phase="planning"))
+        svc.build_prompt_bundle(PromptBundleBuildRequest(user_message="QE 实验草案", phase="planning"))
 
     seed_result = svc.seed_catalogs()
     assert seed_result["seeded"]["prompt_nodes"] >= 1
@@ -120,10 +130,60 @@ def test_catalog_readiness_blocks_chat_until_seeded() -> None:
     assert svc.catalog_readiness()["ready"] is True
 
 
+def test_seed_catalogs_retires_superseded_active_activations() -> None:
+    repository = InMemoryResearchAssistantRepository()
+    svc = ResearchAssistantService(repository=repository)
+    repository.create_record(
+        "runtime_config_activations",
+        {
+            "activation_id": "runtime_config_activation_old_active",
+            "config_key": "research_assistant.runtime_context",
+            "config_version": "0.0.0",
+            "environment": svc.environment,
+            "source_id": "runtime_config_source_old",
+            "config_json": {},
+            "status": "active",
+        },
+    )
+    repository.create_record(
+        "prompt_activations",
+        {
+            "activation_id": "prompt_activation_old_active",
+            "assistant_key": "research_assistant",
+            "environment": svc.environment,
+            "pack_key": "old.prompt.pack",
+            "pack_version": "0.0.0",
+            "source_id": "prompt_source_old",
+            "version_refs": [],
+            "bundle_signature": "old",
+            "status": "active",
+        },
+    )
+
+    svc.seed_catalogs()
+    svc.seed_catalogs()
+
+    assert repository.get_record("runtime_config_activations", "runtime_config_activation_old_active")["status"] == "retired"
+    assert repository.get_record("prompt_activations", "prompt_activation_old_active")["status"] == "retired"
+    prompt_actives = repository.list_records(
+        "prompt_activations",
+        filters={"assistant_key": "research_assistant", "environment": svc.environment, "status": "active"},
+        limit=10,
+    )["items"]
+    runtime_actives = repository.list_records(
+        "runtime_config_activations",
+        filters={"config_key": "research_assistant.runtime_context", "environment": svc.environment, "status": "active"},
+        limit=10,
+    )["items"]
+    assert len(prompt_actives) == 1
+    assert len(runtime_actives) == 1
+    assert svc.catalog_readiness()["ready"] is True
+
+
 def test_service_runs_phase1_task_memory_context_approval_issue_flow() -> None:
     svc = _service()
 
-    task = svc.create_task(TaskCreate(title="QE 10 loop 规划", idempotency_key="idem-1"))
+    task = svc.create_task(TaskCreate(title="QE 实验规划", idempotency_key="idem-1"))
     assert task["status"] == "planned"
     assert svc.create_task(TaskCreate(title="duplicate", idempotency_key="idem-1"))["task_id"] == task["task_id"]
 
@@ -164,7 +224,7 @@ def test_service_runs_phase1_task_memory_context_approval_issue_flow() -> None:
     assert pack["pack_summary"].startswith("Context Pack:")
     assert memory["memory_id"] in pack["core_memory_refs"]
     access_log = svc.list_records("memory_access_log", filters={"task_id": task["task_id"]})
-    assert access_log["items"][0]["memory_id"] == memory["memory_id"]
+    assert any(item["memory_id"] == memory["memory_id"] for item in access_log["items"])
 
     approval = svc.create_approval(
         ApprovalCreate(
@@ -363,40 +423,148 @@ def test_candidate_issue_github_sync_gate_never_creates_github_issue() -> None:
     assert formal_blocked["github_issue_url"] is None
 
 
-def test_prompt_tree_selects_qe_multibranch_and_records_bundle() -> None:
+def test_prompt_tree_capability_inquiry_does_not_trigger_qe_workflow() -> None:
     svc = _chat_service()
 
     bundle = svc.build_prompt_bundle(
         PromptBundleBuildRequest(
-            user_message="帮我创建一个 QE 10 loop 实验，先不要执行。",
+            user_message="目前助手是否可以生成 QE 实验和诊断 bug？",
             phase="planning",
             model_profile_id="model_deepseek_v4_pro_primary",
         )
     )
 
     keys = {node["prompt_key"] for node in bundle["node_refs"]}
-    assert "root.assistant" in keys
-    assert "governance.no_silent_action" in keys
-    assert "intent.planning" in keys
-    assert "domain.qe_experiment" in keys
-    assert "workflow.qe_draft_then_approval" in keys
-    assert "tool_guard.mcp_qe" in keys
-    assert "renderer.human_cards" in keys
-    assert bundle["selection_trace_json"]["algorithm"] == "ancestor_closed_keyword_multibranch_v1"
+    assert {"root.assistant", "mode.dialogue"} <= keys
+    assert "intent.planning" not in keys
+    assert "domain.qe_experiment" not in keys
+    assert "workflow.qe_draft_then_approval" not in keys
+    assert "tool_guard.mcp_qe" not in keys
+    assert "governance.no_silent_action" not in keys
+    assert bundle["selection_trace_json"]["algorithm"] == "mode_routed_prompt_tree_v1"
+    assert bundle["selection_trace_json"]["dialogue_intent"] == "capability_inquiry"
+    assert bundle["selection_trace_json"]["dialogue_mode"] == "dialogue"
+    assert bundle["selection_trace_json"]["mode_decision"]["allowed_tool_side_effect"] == "none"
     assert bundle["activation_id"]
     assert bundle["version_refs"]
     assert bundle["selection_trace_json"]["prompt_activation_id"] == bundle["activation_id"]
     assert bundle["cache_path"]
 
 
+def test_prompt_tree_explicit_qe_draft_selects_qe_without_tool_guard() -> None:
+    svc = _chat_service()
+
+    bundle = svc.build_prompt_bundle(
+        PromptBundleBuildRequest(
+            user_message="帮我设计一个 QE 实验草案，先不要执行。",
+            phase="planning",
+            model_profile_id="model_deepseek_v4_pro_primary",
+        )
+    )
+
+    keys = {node["prompt_key"] for node in bundle["node_refs"]}
+    assert {"root.assistant", "mode.planning", "intent.planning", "domain.qe_experiment", "workflow.qe_draft_then_approval"} <= keys
+    assert "tool_guard.mcp_qe" not in keys
+    assert "governance.no_silent_action" not in keys
+    assert bundle["selection_trace_json"]["algorithm"] == "mode_routed_prompt_tree_v1"
+    assert bundle["selection_trace_json"]["dialogue_intent"] == "experiment_draft_request"
+    assert bundle["selection_trace_json"]["dialogue_mode"] == "planning"
+
+
+def test_prompt_tree_qe_validate_selects_tool_guard() -> None:
+    svc = _chat_service()
+
+    bundle = svc.build_prompt_bundle(PromptBundleBuildRequest(user_message="请验证 QE template。", phase="planning"))
+
+    keys = {node["prompt_key"] for node in bundle["node_refs"]}
+    assert {"mode.preflight", "domain.qe_experiment", "workflow.qe_draft_then_approval", "tool_guard.mcp_qe"} <= keys
+    assert bundle["selection_trace_json"]["dialogue_intent"] == "experiment_validation_request"
+    assert bundle["selection_trace_json"]["dialogue_mode"] == "preflight"
+
+
+def test_prompt_tree_ambiguous_task_does_not_start_qe_workflow() -> None:
+    svc = _chat_service()
+
+    bundle = svc.build_prompt_bundle(PromptBundleBuildRequest(user_message="请处理一下。", phase="planning"))
+
+    keys = {node["prompt_key"] for node in bundle["node_refs"]}
+    assert {"root.assistant", "mode.analysis"} <= keys
+    assert "intent.planning" not in keys
+    assert "domain.qe_experiment" not in keys
+    assert "workflow.qe_draft_then_approval" not in keys
+    assert "tool_guard.mcp_qe" not in keys
+    assert bundle["selection_trace_json"]["dialogue_intent"] == "ambiguous_request"
+    assert bundle["selection_trace_json"]["dialogue_mode"] == "analysis"
+
+
+
+def test_local_data_management_catalog_prompt_and_cards() -> None:
+    svc = _chat_service()
+    message = "local data sync health check and repair plan before execute"
+
+    capability = svc.repository.find_one("skills", {"skill_key": "local_data_management"})
+    assert capability is not None
+    assert capability["skill_type"] == "assistant_capability"
+    assert capability["entrypoint_ref"] == "aistock-local-data"
+    assert "aistock-local-data/local_data_plan_repair" in capability["required_mcp_tools"]
+
+    server = svc.repository.find_one("mcp_servers", {"server_key": "aistock-local-data"})
+    assert server is not None
+    assert server["health_json"]["capability_key"] == "local_data_management"
+
+    tools = svc.list_records("mcp_tools", filters={"server_key": "aistock-local-data"}, limit=20)["items"]
+    tool_names = {tool["tool_name"] for tool in tools}
+    assert {"local_data_health_overview", "local_data_get_dataset_status", "local_data_list_sync_targets", "local_data_plan_repair", "local_data_apply_repair_confirmed"} <= tool_names
+    apply_tool = svc.repository.find_one("mcp_tools", {"server_key": "aistock-local-data", "tool_name": "local_data_apply_repair_confirmed"})
+    assert apply_tool["requires_approval"] is True
+    assert apply_tool["required_confirmations"] == [ASSISTANT_APPROVAL_CONFIRM]
+
+    workflow_capability = svc.repository.find_one("capabilities", {"capability_key": "local_data.plan_repair"})
+    assert workflow_capability is not None
+    assert workflow_capability["status"] == "approved"
+
+    bundle = svc.build_prompt_bundle(PromptBundleBuildRequest(user_message=message, phase="planning"))
+    keys = {node["prompt_key"] for node in bundle["node_refs"]}
+    assert {"prompt.local_data_management", "workflow.local_data_check_repair", "tool_guard.mcp_local_data"} <= keys
+    assert "domain.qe_experiment" not in keys
+    assert bundle["selection_trace_json"]["dialogue_intent"] == "local_data_management_request"
+    assert bundle["selection_trace_json"]["dialogue_mode"] == "planning"
+
+    result = svc.chat_turn(ChatTurnRequest(message=message))
+    assert result["cards"]["intent_type"] == "local_data_management_request"
+    assert result["mode_decision"]["mode"] == "planning"
+    assert "aistock-local-data" in result["cards"]["capability_summary"]["mcp"]
+    assert "local_data_plan_repair" in result["cards"]["capability_summary"]["mcp_tools"]
+    assert result["cards"]["safety"]["local_data_read_only_before_confirmation"] is True
+    assert result["cards"]["safety"]["no_data_job_before_confirmation"] is True
+    assert result["cards"]["local_data_management"]["mcp_server"] == "aistock-local-data"
+    assert result["cards"]["action_proposals"][0]["status"] == "read_only"
+    assert result["cards"]["action_proposals"][-1]["status"] == "waiting_confirmation"
+
+
+def test_specific_mcp_domains_are_not_overridden_by_local_data_fallback() -> None:
+    svc = _chat_service()
+    cases = {
+        "strategy package paper readiness": ("strategy_governance_request", "domain.strategy_governance"),
+        "sync BUG-120 GitHub issue": ("validation_issue_request", "domain.validation_issue"),
+    }
+    for message, (expected_intent, expected_prompt) in cases.items():
+        bundle = svc.build_prompt_bundle(PromptBundleBuildRequest(user_message=message, phase="planning"))
+        keys = {node["prompt_key"] for node in bundle["node_refs"]}
+        assert bundle["selection_trace_json"]["dialogue_intent"] == expected_intent
+        assert expected_prompt in keys
+        assert "prompt.local_data_management" not in keys
+
+
 def test_bug117_prompt_and_health_do_not_expose_undeveloped_capability_bans() -> None:
     svc = _chat_service()
 
-    root = svc.repository.find_one("prompt_nodes", {"prompt_key": "root.assistant", "status": "enabled"})
-    assert root is not None
-    root_text = str(root["prompt_text"])
-    for phrase in FORBIDDEN_UNDEVELOPED_CAPABILITY_PHRASES:
-        assert phrase not in root_text
+    prompt_nodes = svc.repository.list_records("prompt_nodes", filters={"status": "enabled"}, limit=200)["items"]
+    assert prompt_nodes
+    for node in prompt_nodes:
+        prompt_text = str(node["prompt_text"])
+        for phrase in ["禁止控制鼠标键盘", "禁止写代码", "mouse_keyboard_control", "code_write"]:
+            assert phrase not in prompt_text
 
     health = svc.health()
     serialized = str(health)
@@ -404,6 +572,18 @@ def test_bug117_prompt_and_health_do_not_expose_undeveloped_capability_bans() ->
     assert "code_write" not in serialized
     assert health["implemented_capabilities"]["mcp_api_preflight"] is True
     assert health["governance_boundaries"]["formal_github_issue_requires_approval"] is True
+
+
+def test_research_assistant_active_prompt_and_runtime_have_no_default_qe_loop_count() -> None:
+    svc = _chat_service()
+
+    prompt_text = "\n".join(str(item["prompt_text"]) for item in svc.list_records("prompt_nodes", limit=100)["items"])
+    runtime_text = str(svc.active_runtime_config())
+
+    forbidden = ["QE " + "10 loop", "10" + " 个 loop", "生成 " + "10 个 loop", "10 个 loop" + " 的目标"]
+    for phrase in forbidden:
+        assert phrase not in prompt_text
+        assert phrase not in runtime_text
 
 
 def test_runtime_config_declares_api_list_limit_for_each_catalog() -> None:
@@ -454,24 +634,283 @@ def test_context_pack_token_budget_max_is_runtime_config_driven() -> None:
     assert pack["token_budget"] == 9
 
 
-def test_chat_turn_uses_llm_builds_cards_and_blocks_execution() -> None:
+def test_chat_turn_capability_inquiry_answers_without_workflow_noise() -> None:
     fake = FakeLlmClient()
     svc = _chat_service(fake)
 
-    result = svc.chat_turn(ChatTurnRequest(message="帮我创建一个 QE 10 loop 实验，先不要执行。"))
+    result = svc.chat_turn(ChatTurnRequest(message="目前助手是否可以生成 QE 实验和诊断 bug？"))
 
     assert len(fake.calls) == 1
-    assert result["assistant_message"]["content_text"].startswith("我理解你要创建 QE 10 loop")
-    assert result["cards"]["plan_card"]["title"] == "本轮计划"
-    assert "固定 PIT 股票池" in "\n".join(result["cards"]["plan_card"]["steps"])
+    assert result["assistant_message"]["content_text"].startswith("可以。我能生成 QE 实验草案")
+    assert "诊断 bug" in result["assistant_message"]["content_text"]
+    assert "请先确认" not in result["assistant_message"]["content_text"]
+    assert "materialize/run" not in result["assistant_message"]["content_text"]
+    assert result["cards"]["intent_type"] == "capability_inquiry"
+    assert "plan_card" not in result["cards"]
+    assert "clarification_card" not in result["cards"]
+    assert result["cards"]["ui_display"]["show_plan_card"] is False
+    assert result["cards"]["ui_display"]["show_context_health_badge"] is False
+    assert result["cards"]["action_proposals"] == []
+    capability_keys = {item["capability_key"] for item in result["cards"]["capability_cards"]}
+    assert {"qe.create_experiment_draft", "qe.validate_template", "qe.run_experiment"} <= capability_keys
+    assert result["cards"]["status_rail"][2] == {"label": "回答", "status": "done"}
+    assert result["trace"]["status"] == "ok"
+    assert result["context_health"]["show_badge"] is False
+    assert result["mode_decision"]["mode"] == "dialogue"
+    assert result["mode_decision"]["allowed_tool_side_effect"] == "none"
+    assert result["prompt_bundle"]["selection_trace_json"]["algorithm"] == "mode_routed_prompt_tree_v1"
+    assert result["prompt_bundle"]["selection_trace_json"]["dialogue_intent"] == "capability_inquiry"
+    assert result["prompt_bundle"]["selection_trace_json"]["dialogue_mode"] == "dialogue"
+    event_types = {event["event_type"] for event in result["task_events"]}
+    assert {"chat_received", "prompt_bundle_built", "context_pack_built", "llm_started", "llm_done"} <= event_types
+    assert "action_proposed" not in event_types
+
+
+def test_chat_turn_mcp_tool_inquiry_uses_runtime_catalog_not_generic_tool_claims() -> None:
+    class GenericToolHallucinationLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            return LlmCallResult(
+                content="I can use MCP tools for reading files, writing files, editing files, Git operations, HTTP requests, and no direct warehouse tool.",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    fake = GenericToolHallucinationLlmClient()
+    svc = _chat_service(fake)
+
+    result = svc.chat_turn(ChatTurnRequest(message="What MCP tools are available?"))
+
+    assert len(fake.calls) == 1
+    messages = fake.calls[0]["messages"]
+    assert isinstance(messages, list)
+    catalog_context = "\n".join(str(item.get("content", "")) for item in messages if isinstance(item, dict))
+    assert "Runtime MCP catalog snapshot" in catalog_context
+    assert "assistant_create_task" in catalog_context
+    assert "qe_template_create" in catalog_context
+    assert "mcp_github_issue_create" in catalog_context
+
+    text = result["assistant_message"]["content_text"]
+    assert "assistant_create_issue_candidate" in text
+    assert "qe_template_create" in text
+    assert "mcp_github_issue_create" in text
+    assert "reading files" not in text
+    assert "writing files" not in text
+    assert "HTTP requests" not in text
+    assert "no direct warehouse tool" not in text
+    catalog = result["cards"]["runtime_mcp_catalog"]
+    assert catalog["source"] == "assistant_mcp_tools_runtime_catalog"
+    assert catalog["tool_count"] == len(svc.repository.list_records("mcp_tools", limit=100)["items"])
+    assert result["mode_decision"]["intent_type"] == "capability_inquiry"
+    assert result["cards"]["action_proposals"] == []
+
+
+def test_chat_turn_chinese_factor_library_request_does_not_surface_mock_counts() -> None:
+    class FactorHallucinationLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            return LlmCallResult(
+                content="因子库目前有 10 个已注册因子：alpha_001、alpha_002 等。",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    svc = _chat_service(FactorHallucinationLlmClient())
+
+    result = svc.chat_turn(ChatTurnRequest(message="帮我看看因子库有哪些可用因子"))
+
+    text = result["assistant_message"]["content_text"]
+    assert "10 个已注册因子" not in text
+    assert "aistock-factor-library/factor_library_list" in text
+    assert "summary-first" in text
+    assert result["mode_decision"]["intent_type"] == "factor_library_request"
+    assert result["cards"]["mcp_route_decision"]["domain"] == "factor_library"
+    assert result["cards"]["mcp_route_decision"]["summary_first"] is True
+    keys = {node["prompt_key"] for node in result["prompt_bundle"]["node_refs"]}
+    assert "domain.factor_library" in keys
+
+
+def test_chat_turn_chinese_execution_policy_catalog_uses_read_only_list() -> None:
+    class ExecutionPolicyHallucinationLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            return LlmCallResult(
+                content="我可以直接校验这个策略是否适合某个算法。",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    svc = _chat_service(ExecutionPolicyHallucinationLlmClient())
+
+    result = svc.chat_turn(ChatTurnRequest(message="执行策略库里有什么 minute algo？"))
+
+    text = result["assistant_message"]["content_text"]
+    assert "aistock-execution-policy/execution_policy_list_algos" in text
+    assert "execution_policy_validate_for_strategy" not in text
+    assert "只读工具" in text
+    assert result["mode_decision"]["intent_type"] == "execution_policy_request"
+    route = result["cards"]["mcp_route_decision"]
+    assert route["domain"] == "execution_policy"
+    assert route["tool_name"] == "execution_policy_list_algos"
+    assert route["side_effect"] == "read_only"
+    assert route["preflight_required"] is False
+    assert route["summary_first"] is True
+    keys = {node["prompt_key"] for node in result["prompt_bundle"]["node_refs"]}
+    assert "domain.execution_policy" in keys
+
+
+def test_chat_turn_tool_choice_markup_is_replaced_with_route_card_text() -> None:
+    class ToolChoiceMarkupLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            return LlmCallResult(
+                content="<assistant_tool_choice>{\"tool\":\"mcp_github_issue_sync_bug\"}</assistant_tool_choice>",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    svc = _chat_service(ToolChoiceMarkupLlmClient())
+
+    result = svc.chat_turn(ChatTurnRequest(message="同步 BUG-120 GitHub issue 状态"))
+
+    text = result["assistant_message"]["content_text"]
+    assert "<assistant_tool_choice>" not in text
+    assert "</assistant_tool_choice>" not in text
+    assert "aistock-validation/mcp_github_issue_sync_bug" in text
+    assert "确认前不会执行" in text
+    assert result["mode_decision"]["intent_type"] == "validation_issue_request"
+    assert result["cards"]["mcp_route_decision"]["confirmation_required"] is True
+
+
+def test_chat_turn_bug_diagnosis_request_is_first_class_intent() -> None:
+    fake = FakeLlmClient()
+    svc = _chat_service(fake)
+
+    result = svc.chat_turn(ChatTurnRequest(message="请帮我诊断这个报错是什么原因，只做分析。"))
+
+    assert result["assistant_message"]["content_text"].startswith("可以诊断")
+    assert result["cards"]["intent_type"] == "bug_diagnosis_request"
+    assert result["mode_decision"]["mode"] == "analysis"
+    assert "plan_card" not in result["cards"]
+    assert result["cards"]["action_proposals"] == []
     assert result["cards"]["clarification_card"]["questions"]
+    assert result["context_health"]["show_badge"] is False
+    assert result["cards"]["status_rail"][2] == {"label": "等待诊断证据", "status": "current"}
+    assert result["prompt_bundle"]["selection_trace_json"]["dialogue_intent"] == "bug_diagnosis_request"
+    keys = {node["prompt_key"] for node in result["prompt_bundle"]["node_refs"]}
+    assert "domain.qe_experiment" not in keys
+    assert "workflow.qe_draft_then_approval" not in keys
+
+
+def test_chat_turn_ambiguous_request_needs_minimal_clarification_only() -> None:
+    fake = FakeLlmClient()
+    svc = _chat_service(fake)
+
+    result = svc.chat_turn(ChatTurnRequest(message="请处理一下。"))
+
+    assert result["cards"]["intent_type"] == "ambiguous_request"
+    assert result["mode_decision"]["mode"] == "analysis"
+    assert "plan_card" not in result["cards"]
+    assert result["cards"]["clarification_card"]["questions"]
+    assert result["cards"]["action_proposals"] == []
+    keys = {node["prompt_key"] for node in result["prompt_bundle"]["node_refs"]}
+    assert "domain.qe_experiment" not in keys
+    assert "workflow.qe_draft_then_approval" not in keys
+
+
+def test_mode_router_m0_matrix_keeps_keywords_from_starting_workflow() -> None:
+    fake = FakeLlmClient()
+    svc = _chat_service(fake)
+
+    cases = [
+        ("你能做什么？", "capability_inquiry", "dialogue"),
+        ("通用能力", "capability_inquiry", "dialogue"),
+        ("QE 实验和 bug 诊断能力目前是什么状态？", "capability_inquiry", "dialogue"),
+        ("请展开验证矩阵和 Trace 证据", "audit_request", "audit"),
+    ]
+    for message, expected_intent, expected_mode in cases:
+        result = svc.chat_turn(ChatTurnRequest(message=message))
+        assert result["mode_decision"]["intent_type"] == expected_intent
+        assert result["mode_decision"]["mode"] == expected_mode
+        if expected_mode == "dialogue":
+            assert result["cards"]["action_proposals"] == []
+            assert "plan_card" not in result["cards"]
+            keys = {node["prompt_key"] for node in result["prompt_bundle"]["node_refs"]}
+            assert "workflow.qe_draft_then_approval" not in keys
+            assert "tool_guard.mcp_qe" not in keys
+            assert "Context Pack" not in result["assistant_message"]["content_text"]
+
+
+def test_dialogue_main_reply_pollution_guard_removes_planning_scaffolding() -> None:
+    class NoisyLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            return LlmCallResult(
+                content="可以回答。\n目标：自动创建任务。\n风险级别：高。\nContext Pack: 0 memories\n这部分应保留。",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    svc = _chat_service(NoisyLlmClient())
+    result = svc.chat_turn(ChatTurnRequest(message="你能做什么？"))
+
+    text = result["assistant_message"]["content_text"]
+    assert "可以回答" in text
+    assert "这部分应保留" in text
+    assert "目标：" not in text
+    assert "风险级别：" not in text
+    assert "Context Pack" not in text
+
+
+def test_mode_router_is_runtime_config_driven() -> None:
+    svc = _chat_service()
+    config = svc.active_runtime_config()
+
+    assert "dialogue_modes" in config
+    assert "mode_router" in config
+    assert set(config["dialogue_modes"]["modes"]) >= {"dialogue", "analysis", "planning", "preflight", "execution", "audit", "recovery"}
+    assert config["dialogue_modes"]["modes"]["dialogue"]["allowed_tool_side_effect"] == "none"
+    assert config["dialogue_modes"]["modes"]["dialogue"]["show_plan_card"] is False
+    assert config["dialogue_modes"]["modes"]["planning"]["show_plan_card"] is True
+    assert "只做分析" in config["mode_router"]["user_overrides"]["analysis_only_patterns"]
+
+
+
+def test_chat_turn_explicit_qe_draft_builds_cards_and_blocks_execution() -> None:
+    fake = FakeLlmClient()
+    svc = _chat_service(fake)
+
+    result = svc.chat_turn(ChatTurnRequest(message="帮我设计一个 QE 实验草案，先不要执行。"))
+
+    assert len(fake.calls) == 1
+    assert result["assistant_message"]["content_text"].startswith("已收到明确的 QE 实验草案任务")
+    assert result["cards"]["intent_type"] == "experiment_draft_request"
+    assert result["cards"]["plan_card"]["title"] == "QE 实验草案准备"
+    plan_text = "\n".join(result["cards"]["plan_card"]["steps"])
+    assert "股票池" in plan_text
+    assert "template draft" in plan_text
+    assert result["cards"]["clarification_card"]["questions"]
+    assert "如需要固定迭代数量" in "\n".join(result["cards"]["clarification_card"]["questions"])
     capability_keys = {item["capability_key"] for item in result["cards"]["capability_cards"]}
     assert {"qe.create_experiment_draft", "qe.validate_template", "qe.run_experiment"} <= capability_keys
     assert result["cards"]["missing_capability_keys"] == []
     assert result["cards"]["status_rail"][3] == {"label": "等待确认", "status": "current"}
     assert result["cards"]["safety"]["no_materialize_before_confirmation"] is True
     assert result["trace"]["status"] == "ok"
-    assert result["prompt_bundle"]["selection_trace_json"]["algorithm"] == "ancestor_closed_keyword_multibranch_v1"
+    assert result["mode_decision"]["mode"] == "planning"
+    assert result["prompt_bundle"]["selection_trace_json"]["algorithm"] == "mode_routed_prompt_tree_v1"
+    assert result["prompt_bundle"]["selection_trace_json"]["dialogue_intent"] == "experiment_draft_request"
+    assert result["prompt_bundle"]["selection_trace_json"]["dialogue_mode"] == "planning"
     assert result["prompt_bundle"]["activation_id"]
     assert result["context_pack"]["pack_summary"].startswith("Context Pack:")
     assert fake.calls[0]["temperature"] == svc.active_runtime_config()["compaction"]["worker"]["temperature"]
@@ -484,8 +923,9 @@ def test_chat_turn_uses_llm_builds_cards_and_blocks_execution() -> None:
     event_types = {event["event_type"] for event in result["task_events"]}
     assert {"chat_received", "prompt_bundle_built", "context_pack_built", "llm_started", "llm_done", "action_proposed"} <= event_types
 
-    with pytest.raises(ValueError, match="does not execute actions"):
-        svc.chat_turn(ChatTurnRequest(message="确认执行 QE materialize", allow_execute=True))
+    blocked = svc.chat_turn(ChatTurnRequest(message="确认执行 QE materialize", allow_execute=True))
+    assert blocked["mode_decision"]["mode"] == "execution"
+    assert blocked["mode_decision"]["requires_approval"] is True
 
 
 def test_chat_turn_prior_messages_injected_into_llm_context() -> None:
@@ -534,17 +974,16 @@ def test_new_conversation_has_no_prior_messages() -> None:
     fake = FakeLlmClient()
     svc = _chat_service(fake)
 
-    svc.chat_turn(ChatTurnRequest(message="帮我创建一个 QE 10 loop 实验，先不要执行。"))
+    svc.chat_turn(ChatTurnRequest(message="帮我设计一个 QE 实验草案，先不要执行。"))
 
     assert len(fake.calls) == 1
     messages = fake.calls[0]["messages"]
     assert isinstance(messages, list)
     non_system = [m for m in messages if m["role"] != "system"]
-    assert len(non_system) == 2
+    assert len(non_system) == 1
+    assert "Internal Context Pack" in " ".join(str(m["content"]) for m in messages if m["role"] == "system")
     assert non_system[0]["role"] == "user"
-    assert "Context Pack" in str(non_system[0]["content"])
-    assert non_system[1]["role"] == "user"
-    assert non_system[1]["content"] == "帮我创建一个 QE 10 loop 实验，先不要执行。"
+    assert non_system[0]["content"] == "帮我设计一个 QE 实验草案，先不要执行。"
 
 
 def test_chat_history_includes_all_roles() -> None:
@@ -717,7 +1156,7 @@ def test_long_chat_auto_compacts_with_key_facts_and_fresh_tail() -> None:
     assert traces["total"] == 1
     final_messages = fake.calls[-1]["messages"]
     final_content = " ".join(str(m["content"]) for m in final_messages)
-    assert "QE 10 loop" in final_content
+    assert "重要参数A" in final_content
     assert "3:" in final_content
 
 

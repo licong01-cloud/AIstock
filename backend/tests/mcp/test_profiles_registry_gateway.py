@@ -70,9 +70,28 @@ def test_research_profile_is_only_current_module() -> None:
     assert resolve_modules(profile="research_with_assistant") == ["research", "research_assistant"]
 
 
-@pytest.mark.parametrize("profile", ["full", "operations", "research_with_qe", "paper_v2"])
-def test_future_profiles_are_banned_in_phase0_5(profile: str) -> None:
-    with pytest.raises(ValueError, match="future|Phase 0-5|not available|Unknown"):
+@pytest.mark.parametrize(
+    ("profile", "expected"),
+    [
+        ("factor_library", ["factor_library"]),
+        ("factor_metrics", ["factor_metrics"]),
+        ("factor_correlation", ["factor_correlation"]),
+        ("model_registry", ["model_registry"]),
+        ("strategy_governance", ["strategy_governance"]),
+        ("execution_policy", ["execution_policy"]),
+        ("factor_research", ["factor_library", "factor_metrics", "factor_correlation"]),
+        ("strategy_ops", ["strategy_governance", "execution_policy"]),
+        ("research_full", ["research", "research_assistant", "local_data", "factor_library", "factor_metrics", "factor_correlation", "model_registry", "strategy_governance", "execution_policy"]),
+        ("full", ["research", "research_assistant", "local_data", "factor_library", "factor_metrics", "factor_correlation", "model_registry", "strategy_governance", "execution_policy"]),
+    ],
+)
+def test_unified_profiles_are_available(profile: str, expected: list[str]) -> None:
+    assert resolve_modules(profile=profile) == expected
+
+
+@pytest.mark.parametrize("profile", ["operations", "research_with_qe", "paper_v2"])
+def test_unknown_or_script_backed_profiles_are_rejected(profile: str) -> None:
+    with pytest.raises(ValueError, match="Unknown|Script-backed"):
         resolve_modules(profile=profile)
 
 
@@ -146,6 +165,7 @@ def test_gateway_loads_phase2_research_tools() -> None:
 
 def test_gateway_loads_research_assistant_tools() -> None:
     from backend.mcp import gateway
+    from backend.mcp.modules.research_assistant import TOOL_COUNT as RESEARCH_ASSISTANT_TOOL_COUNT
 
     _mcp, registry = gateway.create_gateway(
         profile="research_assistant",
@@ -153,16 +173,41 @@ def test_gateway_loads_research_assistant_tools() -> None:
         env_name="test",
     )
 
-    assert registry.tool_count("research_assistant") == 10
-    assert registry.total_tool_count() == 10
+    assert registry.tool_count("research_assistant") == RESEARCH_ASSISTANT_TOOL_COUNT
+    assert registry.total_tool_count() == RESEARCH_ASSISTANT_TOOL_COUNT
 
 
-def test_gateway_rejects_banned_future_profile_before_loading_modules() -> None:
+
+def test_gateway_loads_local_data_tools() -> None:
+    from backend.mcp import gateway
+    from backend.mcp.modules import local_data
+
+    _mcp, registry = gateway.create_gateway(
+        profile="local_data",
+        base_url="http://127.0.0.1:8001/api/v1",
+        env_name="test",
+    )
+
+    assert registry.tool_count("local_data") == local_data.TOOL_COUNT
+    assert registry.total_tool_count() == local_data.TOOL_COUNT
+
+
+def test_gateway_loads_research_full_profile() -> None:
     from backend.mcp import gateway
 
-    with pytest.raises(ValueError, match="future|Phase 0-5"):
-        gateway.create_gateway(
-            profile="full",
-            base_url="http://127.0.0.1:8001/api/v1",
-            env_name="test",
-        )
+    _mcp, registry = gateway.create_gateway(
+        profile="research_full",
+        base_url="http://127.0.0.1:8001/api/v1",
+        env_name="test",
+    )
+
+    assert registry.tool_count("research") == 16
+    assert registry.tool_count("research_assistant") == 13
+    assert registry.tool_count("local_data") == 47
+    assert registry.tool_count("factor_library") == 10
+    assert registry.tool_count("factor_metrics") == 7
+    assert registry.tool_count("factor_correlation") == 8
+    assert registry.tool_count("model_registry") == 9
+    assert registry.tool_count("strategy_governance") == 9
+    assert registry.tool_count("execution_policy") == 7
+    assert registry.total_tool_count() == 126

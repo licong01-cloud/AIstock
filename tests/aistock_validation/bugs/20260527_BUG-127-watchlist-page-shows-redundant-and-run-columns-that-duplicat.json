@@ -1,0 +1,66 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-127",
+  "title": "Watchlist page shows redundant \"来源\" and \"来源Run\" columns that duplicate category name information",
+  "description": "Expected: Category name alone provides sufficient source information. \"来源\" and \"来源Run\" columns should be removed from the table display. Source-task filter dropdown can also be removed since category filter serves the same purpose.\nActual: Two redundant columns displayed: \"来源\" (entry_source) and \"来源Run\" (entry_task_id). The \"来源Run\" column is machine-readable only (run IDs). The \"来源\" column duplicates info already in category names. Both waste horizontal space.",
+  "module": "aistock_frontend",
+  "severity": "P3",
+  "risk_area": "unspecified",
+  "status": "verified",
+  "trigger_condition": {
+    "scenario": "reported_via_mcp",
+    "files": [
+      "frontend/src/app/watchlist/page.tsx"
+    ]
+  },
+  "reproduce_command": "Open watchlist page, select a category created by Selection Center. Observe \"来源\" and \"来源Run\" columns showing data already encoded in the category name (e.g. \"选股中心-2026-05-25-qe_xxx 策略回测16\").",
+  "failing_run_id": null,
+  "evidence_uris": [
+    "file:frontend/src/app/watchlist/page.tsx"
+  ],
+  "fingerprint": "d8e6b2017f728eb4",
+  "assigned_agent": null,
+  "fix_branch": "fix/watchlist-remove-source-cols-127",
+  "fix_commit": "c9a458d0",
+  "verification_run_id": "validation-center_20260527_063346_l0_l0_628f7e9a_runner-validation__3e39758524",
+  "created_at": "2026-05-27T06:22:51Z",
+  "first_seen_at": "2026-05-27T06:22:51Z",
+  "last_seen_at": "2026-05-27T06:34:48Z",
+  "fixed_at": null,
+  "submitted_at": "2026-05-27T06:22:51Z",
+  "closed_at": "2026-05-27T06:34:48Z",
+  "allowed_write_scope": [
+    "frontend/src/app/watchlist/page.tsx"
+  ],
+  "suspected_modules": [
+    "frontend/src/app/watchlist/page.tsx"
+  ],
+  "required_verification": [],
+  "closure_requirements": [],
+  "events": [
+    {
+      "timestamp": "2026-05-27T06:22:51Z",
+      "actor": "unknown",
+      "action": "discovered",
+      "note": "Reported via aistock_mcp_server.report_bug. Comments: 2"
+    },
+    {
+      "timestamp": "2026-05-27T06:22:51Z",
+      "actor": "unknown",
+      "action": "comment",
+      "note": "Backend fields entry_source/entry_task_id retained for programmatic use (Selection Center, QE archive). Only frontend display columns removed."
+    },
+    {
+      "timestamp": "2026-05-27T06:22:51Z",
+      "actor": "unknown",
+      "action": "comment",
+      "note": "Source-task filter dropdown also removed — category filter provides equivalent functionality."
+    },
+    {
+      "timestamp": "2026-05-27T06:34:48Z",
+      "actor": "mcp_agent",
+      "action": "status_changed",
+      "note": "Merged to main, pushed to GitHub. Post-merge L0 passed. Removed 82 lines: 2 table columns, source-task filter, search field, state, filter function, useEffect deps."
+    }
+  ]
+}

@@ -88,7 +88,7 @@ export default function PaperV2OverviewPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  const readyPackages = packages.filter((item) => ["SELECTION_ENABLED", "PAPER_ENABLED", "PAPER_RUNNING", "PAPER_PASSED"].includes(item.package_status)).length;
+  const readyPackages = packages.filter((item) => String(item.package_status || "").toUpperCase() !== "RETIRED").length;
   const activeTotal = pagination?.total ?? rows.length;
   const blockingErrors = rows.reduce((total, item) => total + item.counts.errors, 0);
   const latestRuns = rows.filter((item) => item.latestRun).length;
@@ -104,8 +104,8 @@ export default function PaperV2OverviewPage() {
 
   const workflowSteps = paperV2WorkflowSteps({
     hasPackages: packages.length > 0,
-    hasSelectionEnabledPackage: packages.some((item) => ["SELECTION_ENABLED", "PAPER_ENABLED", "PAPER_RUNNING", "PAPER_PASSED"].includes(item.package_status)),
-    hasPaperEnabledPackage: packages.some((item) => ["PAPER_ENABLED", "PAPER_RUNNING", "PAPER_PASSED"].includes(item.package_status)),
+    hasSelectionEnabledPackage: readyPackages > 0,
+    hasPaperEnabledPackage: readyPackages > 0,
     hasSelectionRun: selectable.some((item) => item.latest_selection_run),
     hasPortfolio: rows.length > 0 || (pagination?.total ?? 0) > 0,
     hasReadyRun: latestRuns > 0,
@@ -141,7 +141,7 @@ export default function PaperV2OverviewPage() {
 
       <SectionCard title="流程看板" eyebrow="v2 正确流程" action={<Link className="pv2-button" href="/paper-v2/selection">运行选股</Link>}>
         <div className="pv2-grid pv2-grid-4">
-          <MetricCard label="1. 策略包已启用" value={readyPackages} hint="可进入选股/模拟盘" />
+          <MetricCard label="1. 资产合格策略包" value={readyPackages} hint="资产合格即可进入选股/模拟盘" />
           <MetricCard label="2. 选股可执行" value={selectable.length} hint="策略包选股中心" />
           <MetricCard label="3. 模拟盘已就绪" value={activeTotal} hint="后端分页统计" />
           <MetricCard label="4. 本页运行记录" value={latestRuns} hint="最近运行/回放" />

@@ -342,6 +342,11 @@ class MiniQMTSimBackend(BrokerBackend):
             record.status = status
         return status
 
+    def query_trades(self, handle: OrderHandle) -> list[dict[str, Any]]:
+        self._ensure_alive()
+        record = self._record_for(handle)
+        return self._find_qmt_trades(record)
+
     def order_context(self, handle: OrderHandle) -> dict[str, str]:
         """Return broker-native identifiers that callers must persist.
 
@@ -401,6 +406,38 @@ class MiniQMTSimBackend(BrokerBackend):
         if order is None:
             return pending
         return self._status_from_order(record, order)
+
+    def query_trades_from_native(
+        self,
+        *,
+        handle_id: str,
+        intent: OrderIntent,
+        miniqmt_order_id: str,
+        strategy_name: str,
+        order_remark: str,
+    ) -> list[dict[str, Any]]:
+        handle = OrderHandle(
+            handle_id=handle_id,
+            backend_id=self.backend_id,
+            submitted_at=datetime.now(UTC),
+            intent_id=intent.intent_id,
+        )
+        record = _OrderRecord(
+            handle=handle,
+            intent=intent,
+            miniqmt_order_id=str(miniqmt_order_id),
+            strategy_name=strategy_name,
+            order_remark=order_remark,
+            status=OrderHandleStatus(
+                handle_id=handle_id,
+                state="pending",
+                filled_quantity=0,
+                avg_fill_price=None,
+                last_event_at=datetime.now(UTC),
+                rejection_reason=None,
+            ),
+        )
+        return self._find_qmt_trades(record)
 
     def subscribe_fill_callback(self, cb: Callable[[FillEvent], None]) -> SubscriptionHandle:
         self._ensure_alive()
@@ -561,6 +598,29 @@ class MiniQMTSimBackend(BrokerBackend):
             if str(order.get("order_remark") or "") == record.order_remark:
                 return order
         return None
+
+    def _find_qmt_trades(self, record: _OrderRecord) -> list[dict[str, Any]]:
+        try:
+            trades = self._qmt_client.get_trades()
+        except QMTNotAvailableError as exc:
+            raise BrokerConnectivityError(
+                "MiniQMT trade query failed",
+                context={"handle_id": record.handle.handle_id, "reason": str(exc)},
+            ) from exc
+        except Exception as exc:
+            raise BrokerConnectivityError(
+                "MiniQMT trade query failed",
+                context={"handle_id": record.handle.handle_id, "reason": f"{type(exc).__name__}: {exc}"},
+            ) from exc
+        matched: list[dict[str, Any]] = []
+        for trade in trades or []:
+            if str(trade.get("order_id") or "") == record.miniqmt_order_id:
+                matched.append(dict(trade))
+                continue
+            if str(trade.get("order_remark") or "") == record.order_remark:
+                matched.append(dict(trade))
+        matched.sort(key=lambda item: (str(item.get("traded_time") or ""), str(item.get("traded_id") or "")))
+        return matched
 
     def _status_from_order(self, record: _OrderRecord, raw: dict[str, Any]) -> OrderHandleStatus:
         raw_status = _int_or_none(raw.get("order_status"))

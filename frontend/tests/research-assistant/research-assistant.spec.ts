@@ -1,48 +1,48 @@
-import { expect, test } from "@playwright/test";
+﻿import { expect, test } from "@playwright/test";
 
 const chatTurnResponse = {
-  conversation: { title: "QE 10 loop 实验" },
+  conversation: { title: "QE 实验草案" },
   assistant_message: {
-    content_text: "我理解你要创建 QE 10 loop 回测实验。本轮我会先确认固定 PIT 股票池、生成计划卡，并等待你确认，不执行物化或运行。",
+    content_text: "可以。QE 实验方面我能生成草案、校验模板、做 preflight 并在确认后调用已登记 MCP；Bug 诊断方面我能分析报错、日志、Trace、实验记录和配置差异。",
     content_json: {},
   },
-  task: { title: "QE 10 loop 实验", status: "planned" },
+  mode_decision: {
+    mode: "dialogue",
+    intent_type: "capability_inquiry",
+    confidence: 0.9,
+    requires_tool: false,
+    allowed_tool_side_effect: "none",
+    requires_user_confirmation: false,
+    requires_approval: false,
+    visible_audit_default: false,
+  },
+  task: { title: "QE 能力询问", status: "planned" },
   task_events: [
-    { event_type: "chat_received", message: "已接收用户对话需求，进入理解与计划阶段。" },
-    { event_type: "llm_done", message: "主模型已返回，计划卡和确认卡已生成。" },
+    { event_type: "chat_received", message: "已接收用户对话并进入意图理解。" },
+    { event_type: "llm_done", message: "主模型已返回。" },
   ],
   cards: {
-    plan_card: {
-      title: "本轮计划",
-      steps: [
-        "复述 QE 实验目标、收益评估方向和本轮不执行的边界。",
-        "从 QE MCP 目录中选择模板创建、验证、预检查相关能力，并确认固定 PIT 股票池要求。",
-        "生成 10 个 loop 的草稿结构、候选因子来源、时间窗和成本约束。",
-      ],
+    dialogue_mode: "dialogue",
+    mode_decision: { mode: "dialogue", intent_type: "capability_inquiry" },
+    action_proposals: [],
+    ui_display: {
+      show_plan_card: false,
+      show_clarification_card: false,
+      show_context_health_badge: false,
+      details_default_collapsed: true,
     },
-    clarification_card: {
-      title: "需要你确认",
-      questions: [
-        "本次 QE 回测应使用哪个固定 PIT 股票池或默认回测股票池？",
-        "确认前是否继续保持只生成草稿，不调用 materialize/run？",
-      ],
-    },
-    action_proposals: [
-      { title: "生成 QE 10 loop 实验草稿", risk: "medium", approval_required: false, status: "draft_only" },
-      { title: "QE template validate + MCP preflight", risk: "high", approval_required: true, status: "waiting_confirmation" },
-    ],
     status_rail: [
-      { label: "接收需求", status: "done" },
-      { label: "选择提示词", status: "done" },
-      { label: "构建上下文", status: "done" },
-      { label: "等待确认", status: "current" },
+      { label: "接收问题", status: "done" },
+      { label: "理解意图", status: "done" },
+      { label: "回答", status: "done" },
+      { label: "等待任务指令", status: "idle" },
       { label: "MCP 预检查", status: "locked" },
       { label: "执行", status: "locked" },
       { label: "写入记忆", status: "locked" },
     ],
     capability_summary: {
-      mcp: "已识别 Research Assistant、QE、Validation 等 MCP 能力候选。",
-      skill: "已纳入本地 Skill Catalog，后续可按任务加载 QE 诊断、因子分析等能力。",
+      mcp: "可按明确任务调用 Research Assistant、QE、Validation、GitHub 同步等已登记 MCP 能力。",
+      skill: "可按任务加载 QE 诊断、因子分析、Issue 处理等本地技能。",
       model: "DeepSeek primary",
     },
     safety: {
@@ -105,7 +105,7 @@ test("Research Assistant chat shows readable catalog setup state instead of back
   });
 
   await browserPage.goto("/research-assistant");
-  await browserPage.getByPlaceholder(/直接描述你的研究目标/).fill("帮我创建一个 QE 10 loop 实验，先不要执行。");
+  await browserPage.getByPlaceholder(/直接提问或描述任务/).fill("你能生成 QE 实验和诊断 bug 吗？");
   await browserPage.getByRole("button", { name: "发送" }).click();
 
   await expect(browserPage.getByText("助理目录尚未初始化完整").first()).toBeVisible();
@@ -136,24 +136,31 @@ test("Research Assistant main entry is a Codex-like LLM chat with readable cards
     const respond = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ status: status >= 400 ? "error" : "success", data }) });
     if (method !== "GET") writeMethods.push(`${method} ${path}`);
 
+    if (path.includes("/api/ingestion/alerts/")) return respond(path.endsWith("/unack-count") ? { count: 0 } : []);
     if (path.endsWith("/chat/turn")) return respond(chatTurnResponse);
     return respond(page([]));
   });
+  await browserPage.route("**/api/ingestion/alerts/**", async (route) => {
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+    const body = path.endsWith("/unack-count") ? { count: 0 } : { alerts: [] };
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+  });
 
   await browserPage.goto("/research-assistant");
-  await expect(browserPage.getByRole("heading", { name: "像 Codex 一样对话，由 MCP 安全执行" })).toBeVisible();
+  await expect(browserPage.getByRole("heading", { name: "像研究搭档一样对话，由 MCP 安全执行" })).toBeVisible();
   await expect(browserPage.getByText("助理正在做什么")).toBeVisible();
-  await expect(browserPage.getByText("主界面不显示 JSON")).toBeVisible();
+  await expect(browserPage.getByText("计划、确认、Trace 和 payload 留在可折叠详情或审计页面")).toBeVisible();
 
-  await browserPage.getByPlaceholder(/直接描述你的研究目标/).fill("帮我创建一个 QE 10 loop 实验，先不要执行。");
+  await browserPage.getByPlaceholder(/直接提问或描述任务/).fill("你能生成 QE 实验和诊断 bug 吗？");
   await browserPage.getByRole("button", { name: "发送" }).click();
 
-  await expect(browserPage.getByText("我理解你要创建 QE 10 loop 回测实验").first()).toBeVisible();
-  await expect(browserPage.getByTestId("ra-chat-plan-card")).toContainText("本轮计划");
-  await expect(browserPage.getByTestId("ra-chat-confirm-card")).toContainText("固定 PIT 股票池");
-  await expect(browserPage.getByText("等待确认").first()).toBeVisible();
-  await expect(browserPage.getByText("不会执行 QE materialize/run").first()).toBeVisible();
-  await expect(browserPage.getByText("生成 QE 10 loop 实验草稿").first()).toBeVisible();
+  await expect(browserPage.getByText("QE 实验方面我能生成草案").first()).toBeVisible();
+  await expect(browserPage.getByTestId("ra-chat-plan-card")).toHaveCount(0);
+  await expect(browserPage.locator("[data-testid='ra-chat-main']")).not.toContainText("固定 PIT 股票池");
+  await expect(browserPage.getByText("回答").first()).toBeVisible();
+  await expect(browserPage.locator("[data-testid='ra-chat-main']")).not.toContainText("不会执行 QE materialize/run");
+  await expect(browserPage.locator("[data-testid='ra-chat-main']")).not.toContainText("生成 QE 实验草案");
 
   await expect(browserPage.locator("[data-testid='ra-chat-main']")).not.toContainText("payload_json");
   await expect(browserPage.locator("[data-testid='ra-chat-main']")).not.toContainText("trace_id");
@@ -163,6 +170,71 @@ test("Research Assistant main entry is a Codex-like LLM chat with readable cards
   expect(writeMethods).toEqual(["POST /api/v1/research-assistant/chat/turn"]);
   expect(pageErrors).toEqual([]);
   expect(consoleErrors.filter((message) => !message.includes("Failed to load resource"))).toEqual([]);
+});
+
+test("Research Assistant chat renders tool choice markup as readable MCP route cards", async ({ page: browserPage }) => {
+  const response = {
+    ...chatTurnResponse,
+    assistant_message: {
+      content_text: "<assistant_tool_choice>{\"tool\":\"mcp_github_issue_sync_bug\"}</assistant_tool_choice>",
+      content_json: {},
+    },
+    cards: {
+      ...chatTurnResponse.cards,
+      ui_display: { show_plan_card: false, show_clarification_card: false, show_context_health_badge: false, details_default_collapsed: true },
+      mcp_route_decision: {
+        domain: "validation_issue",
+        server_key: "aistock-validation",
+        tool_name: "mcp_github_issue_sync_bug",
+        reason: "Matched Validation Center issue sync.",
+        side_effect: "confirmed_action",
+        summary_first: true,
+        preflight_required: true,
+        confirmation_required: true,
+      },
+    },
+  };
+
+  await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const respond = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ status: status >= 400 ? "error" : "success", data }) });
+    if (path.endsWith("/chat/turn")) return respond(response);
+    return respond(page([]));
+  });
+
+  await browserPage.goto("/research-assistant");
+  await browserPage.getByPlaceholder(/直接提问或描述任务/).fill("同步 BUG-120 GitHub issue 状态");
+  await browserPage.getByRole("button", { name: "发送" }).click();
+
+  await expect(browserPage.getByTestId("ra-chat-main")).not.toContainText("<assistant_tool_choice>");
+  await expect(browserPage.getByTestId("ra-chat-main")).toContainText("aistock-validation/mcp_github_issue_sync_bug");
+  await expect(browserPage.getByTestId("ra-mcp-route-card")).toContainText("需要确认和审批后才可执行");
+});
+
+test("Research Assistant MCP tools page treats ready servers as ready", async ({ page: browserPage }) => {
+  await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+    const respond = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ status: status >= 400 ? "error" : "success", data }) });
+    if (path.endsWith("/mcp/servers")) {
+      return respond(page([
+        { server_id: "srv_factor_library", server_key: "aistock-factor-library", title: "Factor Library MCP", status: "ready", health_json: { domain: "factor_library" } },
+      ]));
+    }
+    if (path.endsWith("/mcp/tools")) {
+      expect(url.searchParams.get("limit")).toBe("50");
+      expect(url.searchParams.get("include_schema")).toBe("false");
+      return respond(page([
+        { tool_id: "tool_factor_library_list", server_key: "aistock-factor-library", tool_name: "factor_library_list", title: "factor library list", risk_level: "low", requires_approval: false, status: "enabled", detail_available: true, detail_fields: ["input_schema_json", "preflight_schema_json"] },
+      ]));
+    }
+    return respond(page([]));
+  });
+
+  await browserPage.goto("/research-assistant/mcp-tools");
+  await expect(browserPage.getByText("Factor Library MCP")).toBeVisible();
+  await expect(browserPage.getByText("已就绪").first()).toBeVisible();
+  await expect(browserPage.getByText("未就绪")).toHaveCount(0);
 });
 
 test("Research Assistant admin page separates audit tools from the chat entry", async ({ page: browserPage }) => {
@@ -186,7 +258,7 @@ test("Research Assistant admin page separates audit tools from the chat entry", 
         },
       ]));
     }
-    if (path.endsWith("/tasks")) return respond(page([{ task_id: "rat_demo_1", title: "QE 10 loop 实验规划", status: "running" }]));
+    if (path.endsWith("/tasks")) return respond(page([{ task_id: "rat_demo_1", title: "QE 实验规划", status: "running" }]));
     if (path.endsWith("/mcp/preflight")) return respond({ passed: false, approval_required: true, missing_confirmations: ["APPROVE_RESEARCH_ASSISTANT_ACTION"], trace_event: { event_type: "approval_required" }, deep_links: ["/research-assistant/approvals"] });
     return respond(page([]));
   });
@@ -195,9 +267,59 @@ test("Research Assistant admin page separates audit tools from the chat entry", 
   await expect(browserPage.getByRole("heading", { name: "旧版表格与 JSON 详情保留在这里" })).toBeVisible();
   await expect(browserPage.getByText("后台管理区面向开发、审计和问题排查")).toBeVisible();
 
-  await browserPage.getByRole("link", { name: /MCP 执行工作台/ }).click();
-  await expect(browserPage.getByRole("heading", { name: "MCP 执行工作台" })).toBeVisible();
-  await expect(browserPage.getByText("配置草稿 JSON")).toBeVisible();
+  await browserPage.goto("/research-assistant/workbench");
+  await expect(browserPage.getByRole("heading", { name: "Action Proposal 执行控制台" })).toBeVisible();
+  await expect(browserPage.getByText("输入 JSON")).toBeVisible();
   await browserPage.getByRole("button", { name: "执行 preflight" }).click();
+  await browserPage.getByText("dry-run / preflight debug payload").click();
   await expect(browserPage.getByText("Missing Confirmations").first()).toBeVisible();
+});
+
+
+test("Research Assistant workbench surfaces local data MCP tools as readable cards", async ({ page: browserPage }) => {
+  await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+    const respond = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ status: status >= 400 ? "error" : "success", data }) });
+    if (path.endsWith("/capabilities")) return respond(page([]));
+    if (path.endsWith("/actions")) return respond(page([]));
+    if (path.endsWith("/tasks")) return respond(page([{ task_id: "rat_local_data_1", title: "本地数据检查", status: "running" }]));
+    if (path.endsWith("/mcp/tools")) {
+      return respond(page([
+        {
+          tool_id: "mcp_tool_local_data_health",
+          server_key: "aistock-local-data",
+          tool_name: "local_data_health_overview",
+          title: "数据健康总览",
+          risk_level: "read_only",
+          requires_approval: false,
+          status: "enabled",
+          input_schema_json: { type: "object" },
+          preflight_schema_json: { checks: ["dataset", "alerts", "jobs"] },
+          required_confirmations: [],
+        },
+        {
+          tool_id: "mcp_tool_local_data_plan_repair",
+          server_key: "aistock-local-data",
+          tool_name: "local_data_plan_repair",
+          title: "生成本地数据修复计划",
+          risk_level: "plan_only",
+          requires_approval: false,
+          status: "enabled",
+          input_schema_json: { type: "object" },
+          preflight_schema_json: { checks: ["overview", "gaps", "targets"] },
+          required_confirmations: [],
+        },
+      ]));
+    }
+    return respond(page([]));
+  });
+
+  await browserPage.goto("/research-assistant/workbench");
+  await expect(browserPage.getByRole("heading", { name: "本地数据 MCP 工作台" })).toBeVisible();
+  await expect(browserPage.getByTestId("ra-local-data-workbench-card")).toContainText("local_data_management");
+  await expect(browserPage.getByText("本地数据检查").first()).toBeVisible();
+  await expect(browserPage.getByText("本地数据工具目录")).toBeVisible();
+  await expect(browserPage.getByTestId("ra-local-data-tool-cards")).toContainText("数据健康总览");
+  await expect(browserPage.getByTestId("ra-local-data-tool-cards")).toContainText("生成本地数据修复计划");
 });

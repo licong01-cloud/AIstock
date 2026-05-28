@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import importlib
 import json
@@ -42,6 +42,9 @@ def _install_stub_fastmcp() -> None:
 @pytest.fixture()
 def mcp_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("AISTOCK_REPO_ROOT", str(tmp_path))
+    monkeypatch.setenv("AISTOCK_CANONICAL_ROOT", str(tmp_path))
+    monkeypatch.setenv("AISTOCK_WORKTREE_ROOT", str(tmp_path / "worktrees"))
+    monkeypatch.setenv("AISTOCK_BUG_ID_RESERVATION_ROOT", str(tmp_path / "bug-id-reservations"))
     monkeypatch.setenv("AISTOCK_VALIDATION_BASE_URL", "http://127.0.0.1/api/v1/validation")
     monkeypatch.setenv("AISTOCK_GITHUB_SKIP_ENV_FILE", "1")
     monkeypatch.setenv("AISTOCK_GITHUB_DISABLE_GH_CLI_TOKEN", "1")
@@ -97,8 +100,11 @@ def test_github_issue_list_defaults_to_local_registry(mcp_module, tmp_path: Path
 
     assert result["source"] == "local"
     assert result["registry_is_source_of_truth"] is True
+    assert result["compact"] is True
     assert result["total"] == 1
     assert result["items"][0]["bug_id"] == "BUG-101"
+    assert "body" not in result["items"][0]
+    assert "reproduce_command" not in result["items"][0]
     assert result["items"][0]["labels"] == [
         "aistock:bug",
         "module:qe",
@@ -107,6 +113,16 @@ def test_github_issue_list_defaults_to_local_registry(mcp_module, tmp_path: Path
         "severity:p1",
         "status:open",
     ]
+
+
+def test_github_issue_list_full_mode_preserves_body(mcp_module, tmp_path: Path):
+    _write_bug(tmp_path, "BUG-101", title="Open QE bug", module="qe", status="open")
+
+    result = mcp_module.mcp_github_issue_list(compact=False)
+
+    assert result["compact"] is False
+    assert result["items"][0]["body"]
+    assert result["items"][0]["reproduce_command"]
 
 
 def test_github_issue_search_uses_local_registry_without_env(mcp_module, tmp_path: Path):
@@ -122,6 +138,7 @@ def test_github_issue_search_uses_local_registry_without_env(mcp_module, tmp_pat
     result = mcp_module.mcp_github_issue_search("needle", module="rdagent")
 
     assert result["source"] == "local"
+    assert result["compact"] is True
     assert result["total"] == 1
     assert result["items"][0]["bug_id"] == "BUG-201"
 
@@ -172,6 +189,43 @@ def test_github_issue_create_writes_registry_and_dedupes_without_github_env(mcp_
 
     assert second["deduplicated"] is True
     assert second["existing"]["bug_id"] == first["bug_id"]
+
+
+def test_github_issue_create_blocks_canonical_root_before_allocation_or_github(
+    mcp_module,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured: dict[str, Any] = {"github_called": False}
+    allocator = Path(mcp_module.BUG_ID_ALLOCATOR_PATH)
+
+    class FakeGitHubClient:
+        def __init__(self, *, repo: str, token: str) -> None:
+            self.repo = repo
+            self.token = token
+
+        def create_issue(self, *, title: str, body: str, labels: list[str]) -> dict[str, Any]:
+            captured["github_called"] = True
+            return {"number": 77, "state": "open", "html_url": "https://github.example/issues/77"}
+
+    monkeypatch.setattr(mcp_module, "_git_toplevel", lambda _path: Path(mcp_module.REPO_ROOT))
+    monkeypatch.setattr(mcp_module, "_canonical_root", lambda: Path(mcp_module.REPO_ROOT))
+    monkeypatch.setattr(mcp_module, "_git_branch", lambda _root: "main")
+    monkeypatch.setenv("GH_TOKEN", "pytest-token")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setattr(mcp_module, "_github_client_factory", FakeGitHubClient)
+
+    with pytest.raises(RuntimeError, match="submit-bug --create-registry-worktree"):
+        mcp_module.mcp_github_issue_create(
+            title="Must use registry worktree",
+            body="MCP clients must not allocate or create GitHub issues from canonical root main.",
+            severity="P1",
+            module="validation",
+            create_github=True,
+        )
+
+    assert captured["github_called"] is False
+    assert not allocator.exists()
 
 
 def test_github_issue_create_live_requires_explicit_env(mcp_module):
@@ -331,6 +385,7 @@ def test_github_issue_list_both_merges_live_mirror(mcp_module, tmp_path: Path, m
     assert item["source"] == "bug_json"
     assert item["registry_is_source_of_truth"] is True
     assert item["github_issue"]["number"] == 88
+    assert set(item["github_issue"]) == {"number", "state", "title", "html_url"}
     assert item["html_url"] == "https://github.example/issues/88"
 
 
@@ -537,6 +592,22 @@ def test_sync_github_to_json_backfills_status_label_and_link(
     assert payload["events"][-1]["action"] == "github_issue_synced_to_json"
 
 
+def test_update_bug_status_blocks_canonical_root_main(
+    mcp_module,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    path = _write_bug(tmp_path, "BUG-405", status="open")
+    monkeypatch.setattr(mcp_module, "_git_toplevel", lambda _path: Path(mcp_module.REPO_ROOT))
+    monkeypatch.setattr(mcp_module, "_canonical_root", lambda: Path(mcp_module.REPO_ROOT))
+    monkeypatch.setattr(mcp_module, "_git_branch", lambda _root: "main")
+
+    with pytest.raises(RuntimeError, match="canonical root main"):
+        mcp_module.update_bug_status("BUG-405", "verified", actor="pytest")
+
+    assert json.loads(path.read_text(encoding="utf-8"))["status"] == "open"
+
+
 # ---------------------------------------------------------------------------
 # BUG-102 regression: parse errors on individual BUG JSON files must not
 # abort the entire registry scan.  A single corrupted file must be skipped
@@ -574,8 +645,7 @@ def test_github_issue_search_skips_corrupted_registry_file(mcp_module, tmp_path:
 def test_github_issue_sync_tolerates_corrupted_unrelated_file(
     mcp_module, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ):
-    path = _write_bug(tmp_path, "BUG-303", status="open", title="sync me",
-                      github_issue_number=None)
+    _write_bug(tmp_path, "BUG-303", status="open", title="sync me", github_issue_number=None)
     _write_corrupted_json(_bugs_dir(tmp_path) / "20260520_BUG-CORRUPT.json")
 
     class FakeGitHubClient:

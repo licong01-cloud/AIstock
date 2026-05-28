@@ -1,0 +1,99 @@
+{
+  "actual": "Failure summary: assert 200 == 409",
+  "allowed_write_scope": [
+    "backend/tests/paper_trading_v2/test_coldstart_sanity_sentinel_endpoint.py",
+    "backend/tests/paper_trading_v2/test_live_approval_candidate.py",
+    "backend/tests/paper_trading_v2/test_live_session.py",
+    "backend/tests/paper_trading_v2/test_runner.py",
+    "backend/tests/strategy_package/test_backtest_contract.py",
+    "backend/tests/strategy_package/test_enable_paper_invariants.py",
+    "backend/tests/strategy_package/test_rebalance_runtime.py",
+    "backend/services/paper_trading_v2",
+    "backend/tests/paper_trading_v2",
+    "backend/tests/selection_center",
+    "backend/tests/strategy_package",
+    "backend/services/trading_core/errors.py",
+    "backend/services/strategy_package",
+    "backend/services/selection_center/runtime_profile.py",
+    "tests/aistock_validation/bugs/20260527_BUG-122-paper-v2-ci-failure-requires-triage-test-sentinel-endpoint-rejects-non-e.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-122",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-26T16:28:10.213884Z",
+  "description": "Failure summary: assert 200 == 409",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260527-9fcbae453395",
+      "timestamp": "2026-05-26T16:28:10.213877Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "added_scope": [
+        "backend/services/trading_core/errors.py",
+        "backend/services/strategy_package",
+        "backend/services/selection_center/runtime_profile.py"
+      ],
+      "note": "Local reproduction showed BUG-122 root causes in Trading Core error taxonomy, StrategyPackage enable_paper/asset eligibility, and generated runtime-profile binding refresh, not only Paper v2 test files.",
+      "timestamp": "2026-05-27T00:00:00Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "added_scope": [
+        "tests/aistock_validation/bugs/20260527_BUG-122-paper-v2-ci-failure-requires-triage-test-sentinel-endpoint-rejects-non-e.json"
+      ],
+      "note": "Allow the GitHub-linked BUG registry record itself to be included in the BUG-122 PR scope check.",
+      "timestamp": "2026-05-27T00:00:00Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/actions/runs/26450038418",
+    "https://github.com/licong01-cloud/AIstock/issues/233"
+  ],
+  "expected": "CI/Nightly failure issues include enough diagnostic detail to enter the BUG JSON workflow without manual log rediscovery.",
+  "first_seen_at": "2026-05-26T16:28:10.213884Z",
+  "fix_branch": null,
+  "fix_commit": "da7ea5a73676fccfa128bc2ab68223251bebbad8",
+  "fixed_at": "2026-05-26T18:14:57.745208Z",
+  "github_issue_number": 233,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/233",
+  "last_seen_at": "2026-05-26T16:28:10.213884Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/238",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m pytest backend/tests/paper_trading_v2/test_coldstart_sanity_sentinel_endpoint.py::test_sentinel_endpoint_rejects_non_enabled_package_status_before_writes -q -p no:cacheprovider",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "paper_v2 CI failure requires triage: test_sentinel_endpoint_rejects_non_enabled_package_status_before_writes",
+  "trigger_condition": {
+    "fingerprint": "9fcbae4533950780537bc31e",
+    "source_event_id": "FE-20260527-9fcbae453395"
+  },
+  "validation_evidence": [
+    "PR #238 merged; GitHub CI CLEAN; paper_v2_backend 500 passed, 1 skipped, 2 xfailed; l0 passed; PAPER_V2_L3_SKIP_UI=1 paper_v2_l3 passed"
+  ],
+  "verification_run_id": null
+}

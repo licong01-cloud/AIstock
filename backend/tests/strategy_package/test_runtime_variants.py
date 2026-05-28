@@ -17,7 +17,7 @@ from backend.services.strategy_package.runtime_variant import (
     derive_locked_core_hash,
 )
 from backend.services.strategy_package.service import StrategyPackageService
-from backend.services.trading_core.errors import StrategyPackageValidationError
+from backend.services.trading_core.errors import RuntimeConfigInvalidError, StrategyPackageValidationError
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
 
@@ -61,7 +61,7 @@ def test_phase6_runtime_variant_migration_is_additive_and_commented() -> None:
     assert "COMMENT ON TABLE strategy_pkg.package_runtime_variant" in sql
     for column in _table_columns(sql):
         assert f"COMMENT ON COLUMN strategy_pkg.package_runtime_variant.{column}" in sql
-    assert "paper_candidate = FALSE OR validation_status = 'VALIDATION_PASSED'" in sql
+    assert "paper_candidate" in _table_columns(sql)
 
 
 def test_runtime_variant_preserves_locked_core_hash_and_changes_variant_hash() -> None:
@@ -94,7 +94,7 @@ def test_runtime_variant_preserves_locked_core_hash_and_changes_variant_hash() -
 def test_runtime_variant_rejects_frozen_core_mutation() -> None:
     service, package_id = _service_with_manifest()
 
-    with pytest.raises(StrategyPackageValidationError, match="frozen StrategyPackage core"):
+    with pytest.raises(RuntimeConfigInvalidError, match="frozen StrategyPackage core"):
         service.create_runtime_variant(
             package_id,
             variant_name="bad model swap",
@@ -103,7 +103,7 @@ def test_runtime_variant_rejects_frozen_core_mutation() -> None:
             created_by="unit_test",
         )
 
-    with pytest.raises(StrategyPackageValidationError, match="unsupported runtime keys"):
+    with pytest.raises(RuntimeConfigInvalidError, match="unsupported runtime keys"):
         service.create_runtime_variant(
             package_id,
             variant_name="unknown",
@@ -130,18 +130,18 @@ def test_runtime_variant_repository_rejects_manifest_or_core_hash_mismatch() -> 
         repo.save_runtime_variant(variant.model_copy(update={"locked_core_hash": "wrong"}))
 
 
-def test_runtime_variant_paper_candidate_requires_passed_validation_and_evidence() -> None:
+def test_runtime_variant_paper_candidate_is_legacy_metadata_not_admission_gate() -> None:
     service, package_id = _service_with_manifest()
 
-    with pytest.raises(StrategyPackageValidationError, match="pass validation"):
-        service.create_runtime_variant(
-            package_id,
-            variant_name="paper too early",
-            variant_kind=RuntimeVariantKind.RISK_POLICY,
-            variant_config={"risk_policy": {"max_position_weight": 0.04}},
-            paper_candidate=True,
-            created_by="unit_test",
-        )
+    draft = service.create_runtime_variant(
+        package_id,
+        variant_name="legacy paper flag ignored",
+        variant_kind=RuntimeVariantKind.RISK_POLICY,
+        variant_config={"risk_policy": {"max_position_weight": 0.04}},
+        paper_candidate=True,
+        created_by="unit_test",
+    )
+    assert draft.paper_candidate is False
 
     variant = service.create_runtime_variant(
         package_id,
@@ -150,7 +150,7 @@ def test_runtime_variant_paper_candidate_requires_passed_validation_and_evidence
         variant_config={"risk_policy": {"max_position_weight": 0.04}},
         created_by="unit_test",
     )
-    with pytest.raises(StrategyPackageValidationError, match="validation evidence"):
+    with pytest.raises(RuntimeConfigInvalidError, match="validation evidence"):
         service.mark_runtime_variant_validation(
             package_id,
             variant.variant_id,
@@ -167,14 +167,14 @@ def test_runtime_variant_paper_candidate_requires_passed_validation_and_evidence
         validation_evidence={"validation_run_id": "vr_1", "status": "passed"},
     )
 
-    assert passed.paper_candidate is True
+    assert passed.paper_candidate is False
     assert passed.validation_status == RuntimeVariantValidationStatus.VALIDATION_PASSED
 
 
 def test_runtime_variant_rejects_hmm_overlay_as_platform_runtime_state() -> None:
     service, package_id = _service_with_manifest()
 
-    with pytest.raises(StrategyPackageValidationError, match="HMM is a platform runtime capability"):
+    with pytest.raises(RuntimeConfigInvalidError, match="HMM is a platform runtime capability"):
         service.create_runtime_variant(
             package_id,
             variant_name="bad hmm overlay",
@@ -260,7 +260,7 @@ def test_runtime_variant_router_exposes_create_list_and_validation_routes(monkey
     assert listed.status_code == 200
     assert listed.json()["runtime_variants"] == []
     assert marked.status_code == 200
-    assert marked.json()["runtime_variant"]["paper_candidate"] is True
+    assert marked.json()["runtime_variant"]["paper_candidate"] is False
 
 
 def test_postgres_runtime_variant_repository_uses_append_only_create_and_no_manifest_update() -> None:
