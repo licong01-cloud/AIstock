@@ -1,51 +1,4 @@
 {
-  "schema_version": "aistock_validation_bug_v1",
-  "bug_id": "BUG-104",
-  "title": "P0: SimulationRuntime lacks production run context provider and automatic/manual run entrypoints",
-  "description": "SimulationRuntime has scheduler and lifecycle abstractions but lacks a production SimulationRunContextProvider and controlled automatic/manual run entrypoints, so it cannot run AIstock LocalSim or MiniQMT simulation unattended in production.",
-  "module": "simulation_runtime",
-  "severity": "P0",
-  "risk_area": "paper_v2_unattended_selection_and_simulation_runtime",
-  "status": "fixed",
-  "trigger_condition": {
-    "scenario": "simulation_runtime_scheduler_cannot_run_production_context_or_manual_tick",
-    "live_date": "2026-05-23",
-    "backend": "http://127.0.0.1:8001",
-    "status_endpoint": "/api/v1/simulation-runtime/scheduler/status",
-    "observed_status": {
-      "autostart": false,
-      "default_submit": false,
-      "manual_tick_endpoint_enabled": false,
-      "read_only_ops_api": true,
-      "restart_recovery_mode": "persisted_state_only"
-    }
-  },
-  "reproduce_command": "powershell -NoProfile -Command \"Invoke-RestMethod http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status; Invoke-RestMethod http://127.0.0.1:8001/api/v1/simulation-runtime/runs?limit=10; Invoke-RestMethod http://127.0.0.1:8001/api/v1/paper-v2/session-scheduler/status; Invoke-RestMethod http://127.0.0.1:8001/api/v1/paper-v2/running-summary\"",
-  "evidence_uris": [
-    "file:backend/services/simulation_runtime/scheduler.py",
-    "file:backend/services/simulation_runtime/lifecycle.py",
-    "file:backend/services/simulation_runtime/service.py",
-    "file:backend/routers/simulation_runtime.py",
-    "file:docs/architecture/simulation_remediation_project_design_20260521.md",
-    "github:https://github.com/licong01-cloud/AIstock/issues/173",
-    "commit:f385ac6",
-    "file:tests/aistock_validation/history/simulation_runtime/20260523_BUG-104-simulation-runtime-provider-validation.md",
-    "commit:f385ac6bfad9a025751a94bd1a7df6f3901a2bab",
-    "file:tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md"
-  ],
-  "fingerprint": "b0520ad64a4f7c87",
-  "assigned_agent": "codex-app",
-  "fix_branch": "bug/BUG-104-simulation-runtime-provider-20260523",
-  "fix_commit": "f385ac6bfad9a025751a94bd1a7df6f3901a2bab",
-  "verification_run_id": "tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md",
-  "created_at": "2026-05-23T02:24:32Z",
-  "first_seen_at": "2026-05-23T02:24:32Z",
-  "last_seen_at": "2026-05-23T02:24:32Z",
-  "fixed_at": "2026-05-23T18:02:42Z",
-  "submitted_at": "2026-05-23T02:24:32Z",
-  "closed_at": null,
-  "github_issue_number": 173,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/173",
   "allowed_write_scope": [
     "backend/services/simulation_runtime/",
     "backend/routers/simulation_runtime.py",
@@ -59,15 +12,89 @@
     "tests/aistock_validation/bugs/",
     "tests/aistock_validation/history/"
   ],
-  "suspected_modules": [
-    "SimulationLifecycleScheduler",
-    "SimulationLifecycleBackgroundScheduler",
-    "FailFastSimulationRunContextProvider",
-    "simulation-runtime router ops APIs",
-    "LocalSim broker bridge",
-    "MiniQMT execution bridge",
-    "qmt_strategy_ledger attribution/reconciliation"
+  "assigned_agent": "codex-app",
+  "batch_id": "BATCH-PAPER-V2-READINESS-20260523",
+  "batch_issues": [
+    "BUG-103",
+    "BUG-104"
   ],
+  "batch_strategy": "shared_registry_worktree",
+  "bug_id": "BUG-104",
+  "closed_at": null,
+  "closure_requirements": [
+    "SimulationRuntime can be started in production with a real provider when explicitly enabled; otherwise it fails fast with actionable configuration diagnostics.",
+    "Operators can trigger a controlled manual pre-open/open/tick/run without code injection or direct Python shell calls.",
+    "LocalSim and MiniQMT share signal/target/rebalance/execution-plan generation and diverge only at broker bridge.",
+    "No stale selection binding is used for a new trading day; fresh daily evidence is required.",
+    "The implementation is not a simplified/POC-only path and is validated against the remediation design acceptance points.",
+    "The fix report includes production_ddl_gate, production_backend_dependency_gate, and production_frontend_dependency_gate."
+  ],
+  "created_at": "2026-05-23T02:24:32Z",
+  "description": "SimulationRuntime has scheduler and lifecycle abstractions but lacks a production SimulationRunContextProvider and controlled automatic/manual run entrypoints, so it cannot run AIstock LocalSim or MiniQMT simulation unattended in production.",
+  "events": [
+    {
+      "action": "github_issue_created",
+      "actor": "codex-app",
+      "note": "Mirrored to GitHub issue #173 after explicit local+origin BUG id scan selected unique BUG-104.",
+      "timestamp": "2026-05-23T02:24:32Z"
+    },
+    {
+      "action": "discovered",
+      "actor": "codex-app",
+      "note": "Found during Paper v2 readiness audit for unattended AIstock selection, LocalSim paper trading, and MiniQMT paper-sim operation.",
+      "timestamp": "2026-05-23T02:24:32Z"
+    },
+    {
+      "action": "fixed",
+      "actor": "codex-app",
+      "note": "Fix commit f385ac6 adds production SimulationRunContextProvider, controlled dry-run tick/status reporting, LocalSim persisted-state seeding, MiniQMT preview-only ledger evidence without default broker submit, stale-evidence guard, and UI provider/control display. Validation record saved under tests/aistock_validation/history/simulation_runtime/20260523_BUG-104-simulation-runtime-provider-validation.md. Production 8001 not touched.",
+      "timestamp": "2026-05-23T18:02:42Z"
+    },
+    {
+      "action": "github_sync_deferred",
+      "actor": "codex-app",
+      "note": "MCP update_bug_status(sync_github=True) failed on an unrelated BOM registry file in another worktree; GitHub #173 was updated directly via gh.exe with status/module/severity labels and issue comment https://github.com/licong01-cloud/AIstock/issues/173#issuecomment-4526148588.",
+      "timestamp": "2026-05-23T18:02:42Z"
+    },
+    {
+      "action": "close_sync_audit_ready",
+      "actor": "codex-app",
+      "note": "Merged implementation evidence was re-audited on chore/paper-v2-issue-close-sync-audit-20260527; BUG JSON is marked fixed and GitHub issue should close when the audit PR merges. Audit record: tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md.",
+      "timestamp": "2026-05-27T06:22:22Z"
+    }
+  ],
+  "evidence_uris": [
+    "file:backend/services/simulation_runtime/scheduler.py",
+    "file:backend/services/simulation_runtime/lifecycle.py",
+    "file:backend/services/simulation_runtime/service.py",
+    "file:backend/routers/simulation_runtime.py",
+    "file:docs/architecture/simulation_remediation_project_design_20260521.md",
+    "github:https://github.com/licong01-cloud/AIstock/issues/173",
+    "commit:f385ac6",
+    "file:tests/aistock_validation/history/simulation_runtime/20260523_BUG-104-simulation-runtime-provider-validation.md",
+    "commit:f385ac6bfad9a025751a94bd1a7df6f3901a2bab",
+    "file:tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md"
+  ],
+  "fingerprint": "b0520ad64a4f7c87",
+  "first_seen_at": "2026-05-23T02:24:32Z",
+  "fix_branch": "bug/BUG-104-simulation-runtime-provider-20260523",
+  "fix_commit": "f385ac6bfad9a025751a94bd1a7df6f3901a2bab",
+  "fixed_at": "2026-05-28T11:47:57.876022Z",
+  "github_issue_number": 173,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/173",
+  "last_seen_at": "2026-05-23T02:24:32Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "This registry-only commit does not implement the fix.",
+    "Do not start or restart production backend as part of issue registration.",
+    "Do not mutate production StrategyPackage data or submit MiniQMT orders as part of issue registration."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/244",
+  "process_level": "B",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "powershell -NoProfile -Command \"Invoke-RestMethod http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status; Invoke-RestMethod http://127.0.0.1:8001/api/v1/simulation-runtime/runs?limit=10; Invoke-RestMethod http://127.0.0.1:8001/api/v1/paper-v2/session-scheduler/status; Invoke-RestMethod http://127.0.0.1:8001/api/v1/paper-v2/running-summary\"",
   "required_verification": [
     "Unit tests prove production SimulationRunContextProvider builds contexts from persisted StrategyRuntimeRelease and SimulationReleaseBinding state without fake providers.",
     "Integration dry-run generates SimulationDailyRun, DailySelectionEvidence, and ExecutionPlan for LocalSim binding.",
@@ -78,68 +105,37 @@
     "API smoke covers scheduler status, runs list/detail, execution plan detail, LocalSim dry run, and MiniQMT dry run/preview.",
     "BUG registry JSON and GitHub issue remain synchronized."
   ],
-  "closure_requirements": [
-    "SimulationRuntime can be started in production with a real provider when explicitly enabled; otherwise it fails fast with actionable configuration diagnostics.",
-    "Operators can trigger a controlled manual pre-open/open/tick/run without code injection or direct Python shell calls.",
-    "LocalSim and MiniQMT share signal/target/rebalance/execution-plan generation and diverge only at broker bridge.",
-    "No stale selection binding is used for a new trading day; fresh daily evidence is required.",
-    "The implementation is not a simplified/POC-only path and is validated against the remediation design acceptance points.",
-    "The fix report includes production_ddl_gate, production_backend_dependency_gate, and production_frontend_dependency_gate."
-  ],
-  "events": [
-    {
-      "timestamp": "2026-05-23T02:24:32Z",
-      "actor": "codex-app",
-      "action": "github_issue_created",
-      "note": "Mirrored to GitHub issue #173 after explicit local+origin BUG id scan selected unique BUG-104."
-    },
-    {
-      "timestamp": "2026-05-23T02:24:32Z",
-      "actor": "codex-app",
-      "action": "discovered",
-      "note": "Found during Paper v2 readiness audit for unattended AIstock selection, LocalSim paper trading, and MiniQMT paper-sim operation."
-    },
-    {
-      "timestamp": "2026-05-23T18:02:42Z",
-      "actor": "codex-app",
-      "action": "fixed",
-      "note": "Fix commit f385ac6 adds production SimulationRunContextProvider, controlled dry-run tick/status reporting, LocalSim persisted-state seeding, MiniQMT preview-only ledger evidence without default broker submit, stale-evidence guard, and UI provider/control display. Validation record saved under tests/aistock_validation/history/simulation_runtime/20260523_BUG-104-simulation-runtime-provider-validation.md. Production 8001 not touched."
-    },
-    {
-      "timestamp": "2026-05-23T18:02:42Z",
-      "actor": "codex-app",
-      "action": "github_sync_deferred",
-      "note": "MCP update_bug_status(sync_github=True) failed on an unrelated BOM registry file in another worktree; GitHub #173 was updated directly via gh.exe with status/module/severity labels and issue comment https://github.com/licong01-cloud/AIstock/issues/173#issuecomment-4526148588."
-    },
-    {
-      "timestamp": "2026-05-27T06:22:22Z",
-      "actor": "codex-app",
-      "action": "close_sync_audit_ready",
-      "note": "Merged implementation evidence was re-audited on chore/paper-v2-issue-close-sync-audit-20260527; BUG JSON is marked fixed and GitHub issue should close when the audit PR merges. Audit record: tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md."
-    }
+  "risk_area": "paper_v2_unattended_selection_and_simulation_runtime",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "submitted_at": "2026-05-23T02:24:32Z",
+  "suspected_modules": [
+    "SimulationLifecycleScheduler",
+    "SimulationLifecycleBackgroundScheduler",
+    "FailFastSimulationRunContextProvider",
+    "simulation-runtime router ops APIs",
+    "LocalSim broker bridge",
+    "MiniQMT execution bridge",
+    "qmt_strategy_ledger attribution/reconciliation"
   ],
   "task_tier": "T2",
-  "process_level": "B",
-  "batch_id": "BATCH-PAPER-V2-READINESS-20260523",
-  "batch_issues": [
-    "BUG-103",
-    "BUG-104"
-  ],
-  "batch_strategy": "shared_registry_worktree",
-  "non_goals": [
-    "This registry-only commit does not implement the fix.",
-    "Do not start or restart production backend as part of issue registration.",
-    "Do not mutate production StrategyPackage data or submit MiniQMT orders as part of issue registration."
-  ],
+  "title": "P0: SimulationRuntime lacks production run context provider and automatic/manual run entrypoints",
+  "trigger_condition": {
+    "backend": "http://127.0.0.1:8001",
+    "live_date": "2026-05-23",
+    "observed_status": {
+      "autostart": false,
+      "default_submit": false,
+      "manual_tick_endpoint_enabled": false,
+      "read_only_ops_api": true,
+      "restart_recovery_mode": "persisted_state_only"
+    },
+    "scenario": "simulation_runtime_scheduler_cannot_run_production_context_or_manual_tick",
+    "status_endpoint": "/api/v1/simulation-runtime/scheduler/status"
+  },
   "validation_evidence": [
-    "tests/aistock_validation/history/simulation_runtime/20260523_BUG-104-simulation-runtime-provider-validation.md -> simulation_runtime 62 passed; scheduler/ops 33 passed; Playwright simulation runtime ops 1 passed",
-    "main contains f385ac6bfad9a025751a94bd1a7df6f3901a2bab and prior BUG-104 validation commit 3418a14",
-    "python -m nox -s paper_v2_backend -> 501 passed, 1 skipped, 2 xfailed",
-    "GitHub main CI run 26490758645 at 8be68bea -> success; paper_v2_backend check -> success",
-    "GET http://127.0.0.1:8001/api/v1/strategy-packages?limit=20 -> 200; package listing no longer globally blocked by manifest drift",
-    "Close-sync audit record: tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md"
+    "PR #244 merged Paper v2 issue closure audit; BUG-104 evidence includes simulation_runtime validation, nox paper_v2_backend 501 passed/1 skipped/2 xfailed, and GitHub main CI success; production gates noop."
   ],
-  "production_ddl_gate": "noop",
-  "production_frontend_dependency_gate": "noop",
-  "production_backend_dependency_gate": "noop"
+  "verification_run_id": "tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md"
 }
