@@ -1,126 +1,132 @@
 {
-    "schema_version": "aistock_validation_bug_v1",
-    "bug_id": "BUG-091",
-    "title": "Validation MCP controlled runner cannot validate independent bug-fix worktrees",
-    "description": "Expected: Validation MCP must support the AIstock one-issue-one-branch-one-worktree workflow. A controlled validation request must either execute in the explicitly requested allowed worktree or fail fast before running. Each validation job and archived evidence must record the resolved absolute cwd, git branch, git commit, remote tracking status, dirty status, detached state, ahead/behind counts, and changed-file summary. Branch/worktree validation must not be attributed to a bug fix unless the job actually executed in that worktree/commit. QE-specific plans such as qe_mcp_l3 and qe_template_ui must be runner-enabled or represented by an equivalent controlled QE parent plan. BUG/Issue registry writes must allocate IDs against the current source-of-truth checkout and must not reuse BUG IDs from stale MCP roots.\nActual: Validation MCP controlled executions are bound to the MCP service configured repo root and expose no workspace_path/cwd/branch/commit parameter. In the BUG-085 flow, start_validation_execution jobs were launched from a Codex session whose active worktree was F:\\Dev\\AIstock_worktrees\\bug-085-qe-pending-template-ui, but the job records reported cwd='.' under the MCP service root. guardrail_changed_files scanned zero changed files and qe_archive_backend/l0 jobs validated the root checkout rather than the bug-fix worktree. This creates a false-positive risk: an operator may believe a bug branch was validated by Validation MCP while the runner actually validated a different checkout. The same stale-root risk also appeared in issue creation: an initial MCP-created draft attempted to allocate BUG-089 although latest origin/main already contained BUG-089 and BUG-090.",
-    "module": "validation.runner",
-    "severity": "P0",
-    "risk_area": "validation_governance_false_positive",
-    "status": "fixed_pending_review",
-    "trigger_condition": {
-        "scenario": "manual_github_sync_after_mcp_stale_root_duplicate_id",
-        "files": [
-            "backend/services/validation/runner.py",
-            "backend/services/validation/plan_catalog.py",
-            "backend/routers/validation.py",
-            "scripts/aistock_validate.py",
-            "noxfile.py",
-            "tests/aistock_validation/catalog/test_plans.yaml",
-            "tests/aistock_validation/catalog/file_ownership.yaml",
-            "tests/aistock_validation/bugs"
-        ]
+  "allowed_write_scope": [
+    "backend/services/validation/runner.py",
+    "backend/services/validation/plan_catalog.py",
+    "backend/routers/validation.py",
+    "scripts/aistock_validate.py",
+    "noxfile.py",
+    "tests/aistock_validation/catalog/test_plans.yaml",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "tests/aistock_validation/bugs",
+    "backend/services/validation/execution_runner.py",
+    "backend/tests/test_validation_execution_runner.py",
+    "backend/tests/test_validation_catalog_integrity.py",
+    "tests/aistock_validation/catalog/module_registry.yaml"
+  ],
+  "assigned_agent": "codex-app",
+  "bug_id": "BUG-091",
+  "closed_at": null,
+  "closure_requirements": [
+    "start_validation_execution accepts an allowlisted workspace_path or worktree_id plus optional expected branch and commit constraints.",
+    "Runner path allowlist permits only F:\\Dev\\AIstock_worktrees\\* and the configured repo root; arbitrary filesystem execution remains forbidden.",
+    "Root-scoped jobs are clearly marked root-scoped and cannot be attached as worktree or branch verification evidence unless the requested target is the root checkout.",
+    "Validation evidence/history/UI include absolute cwd and complete git metadata for the executed checkout.",
+    "QE MCP / template UI validation plans can be executed through the controlled Validation MCP path.",
+    "BUG registry ID allocation is based on the current source-of-truth checkout and duplicate BUG-NNN records are prevented."
+  ],
+  "created_at": "2026-05-20T15:55:16Z",
+  "description": "Expected: Validation MCP must support the AIstock one-issue-one-branch-one-worktree workflow. A controlled validation request must either execute in the explicitly requested allowed worktree or fail fast before running. Each validation job and archived evidence must record the resolved absolute cwd, git branch, git commit, remote tracking status, dirty status, detached state, ahead/behind counts, and changed-file summary. Branch/worktree validation must not be attributed to a bug fix unless the job actually executed in that worktree/commit. QE-specific plans such as qe_mcp_l3 and qe_template_ui must be runner-enabled or represented by an equivalent controlled QE parent plan. BUG/Issue registry writes must allocate IDs against the current source-of-truth checkout and must not reuse BUG IDs from stale MCP roots.\nActual: Validation MCP controlled executions are bound to the MCP service configured repo root and expose no workspace_path/cwd/branch/commit parameter. In the BUG-085 flow, start_validation_execution jobs were launched from a Codex session whose active worktree was F:\\Dev\\AIstock_worktrees\\bug-085-qe-pending-template-ui, but the job records reported cwd='.' under the MCP service root. guardrail_changed_files scanned zero changed files and qe_archive_backend/l0 jobs validated the root checkout rather than the bug-fix worktree. This creates a false-positive risk: an operator may believe a bug branch was validated by Validation MCP while the runner actually validated a different checkout. The same stale-root risk also appeared in issue creation: an initial MCP-created draft attempted to allocate BUG-089 although latest origin/main already contained BUG-089 and BUG-090.",
+  "events": [
+    {
+      "action": "discovered",
+      "actor": "codex-app",
+      "note": "Discovered during BUG-085 merge review: branch-local qe_mcp_l3 passed, but Validation MCP controlled jobs were root-scoped and could not validate the independent bug-fix worktree.",
+      "timestamp": "2026-05-20T15:55:16Z"
     },
-    "reproduce_command": "From F:\\Dev\\AIstock_worktrees\\bug-085-qe-pending-template-ui, call Validation MCP start_validation_execution for guardrail_changed_files or qe_archive_backend; then inspect get_validation_execution_status/log and observe cwd='.' in the MCP configured root plus guardrail_changed_files files=0 instead of the bug worktree changes. Also attempt BUG creation from a stale MCP root and observe duplicate ID risk when origin/main already contains newer BUG records.",
-    "failing_run_id": "valjob_20260520_144828_b234cdb2;valjob_20260520_144829_2fad17ef;valjob_20260520_144828_bcd3ca6a",
-    "evidence_uris": [
-        "file:backend/services/validation/runner.py",
-        "file:backend/services/validation/plan_catalog.py",
-        "file:backend/routers/validation.py",
-        "file:scripts/aistock_validate.py",
-        "file:noxfile.py",
-        "file:tests/aistock_validation/catalog/test_plans.yaml",
-        "file:tests/aistock_validation/catalog/file_ownership.yaml",
-        "github:https://github.com/licong01-cloud/AIstock/issues/121"
+    {
+      "action": "github_issue_created",
+      "actor": "codex-app",
+      "note": "Mirrored to GitHub issue #121 with labels bug, aistock:bug, P0, severity:p0, module:validation, status:open.",
+      "timestamp": "2026-05-20T15:55:16Z"
+    },
+    {
+      "action": "comment",
+      "actor": "codex-app",
+      "note": "P0 impact: this can create false-positive validation evidence and can allow a bug fix to be merged based on tests that ran against a different checkout.",
+      "timestamp": "2026-05-20T15:55:16Z"
+    },
+    {
+      "action": "comment",
+      "actor": "codex-app",
+      "note": "Security boundary: worktree execution must be allowlisted and must not become arbitrary filesystem command execution.",
+      "timestamp": "2026-05-20T15:55:16Z"
+    },
+    {
+      "action": "comment",
+      "actor": "codex-app",
+      "note": "Related registry risk: stale MCP roots must not allocate duplicate BUG IDs; an initial draft attempted BUG-089 while latest origin/main already had BUG-089 and BUG-090.",
+      "timestamp": "2026-05-20T15:55:16Z"
+    },
+    {
+      "action": "fix_pending_review",
+      "actor": "codex-app",
+      "note": "Implemented controlled-runner worktree evidence hardening: job records now include full git metadata and workspace scope, expected_commit accepts full or short SHA only when it matches, artifacts are discovered from the requested workspace, guardrail_changed_files uses --changed-only through controlled runner plan args, and qe_mcp_backend is available as a controlled QE backend plan. Local validation passed: targeted pytest 61 passed; ruff passed; validation_catalog_integrity passed finding_count=0; validation_module_registry_l0 passed; guardrail_changed_files passed changed_only files=7 blocking=0; qe_mcp_backend 35 passed; validation_center_backend 257 passed; validation_coverage_backend 10 passed; l0 passed; git diff --check passed. production_ddl_gate=noop.",
+      "timestamp": "2026-05-28T11:39:07.339932+00:00"
+    }
+  ],
+  "evidence_uris": [
+    "file:backend/services/validation/runner.py",
+    "file:backend/services/validation/plan_catalog.py",
+    "file:backend/routers/validation.py",
+    "file:scripts/aistock_validate.py",
+    "file:noxfile.py",
+    "file:tests/aistock_validation/catalog/test_plans.yaml",
+    "file:tests/aistock_validation/catalog/file_ownership.yaml",
+    "github:https://github.com/licong01-cloud/AIstock/issues/121"
+  ],
+  "failing_run_id": "valjob_20260520_144828_b234cdb2;valjob_20260520_144829_2fad17ef;valjob_20260520_144828_bcd3ca6a",
+  "fingerprint": "ccd68eb7625c1f05",
+  "first_seen_at": "2026-05-20T15:55:16Z",
+  "fix_branch": "bug/BUG-091-validation-mcp-controlled-runner-cannot-validate-20260528",
+  "fix_commit": "2ef5c5f7390e80c51c04d896c8dbb6f8b6ec88a7",
+  "fixed_at": "2026-05-28T12:09:04.287648Z",
+  "github_issue_number": 121,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/121",
+  "last_seen_at": "2026-05-20T15:55:16Z",
+  "module": "validation.runner",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/296",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "From F:\\Dev\\AIstock_worktrees\\bug-085-qe-pending-template-ui, call Validation MCP start_validation_execution for guardrail_changed_files or qe_archive_backend; then inspect get_validation_execution_status/log and observe cwd='.' in the MCP configured root plus guardrail_changed_files files=0 instead of the bug worktree changes. Also attempt BUG creation from a stale MCP root and observe duplicate ID risk when origin/main already contains newer BUG records.",
+  "required_verification": [
+    "Controlled Validation MCP run from a non-root worktree records that exact absolute cwd, branch, HEAD commit, upstream commit, dirty status, detached state, and changed-file summary.",
+    "Mismatched expected branch or commit fails before plan execution and archives no passing branch evidence.",
+    "guardrail_changed_files reports the target worktree changed files rather than the configured root checkout.",
+    "qe_mcp_l3 and qe_template_ui, or an equivalent QE parent plan, are runner-enabled through Validation MCP.",
+    "BUG/Issue registry creation cannot allocate an already-used BUG ID when the MCP root is stale relative to origin/main."
+  ],
+  "risk_area": "validation_governance_false_positive",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "submitted_at": "2026-05-20T15:55:16Z",
+  "suspected_modules": [
+    "backend/services/validation/runner.py",
+    "backend/services/validation/plan_catalog.py",
+    "backend/routers/validation.py",
+    "scripts/aistock_validate.py",
+    "noxfile.py",
+    "tests/aistock_validation/catalog/test_plans.yaml",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "tests/aistock_validation/bugs"
+  ],
+  "title": "Validation MCP controlled runner cannot validate independent bug-fix worktrees",
+  "trigger_condition": {
+    "files": [
+      "backend/services/validation/runner.py",
+      "backend/services/validation/plan_catalog.py",
+      "backend/routers/validation.py",
+      "scripts/aistock_validate.py",
+      "noxfile.py",
+      "tests/aistock_validation/catalog/test_plans.yaml",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "tests/aistock_validation/bugs"
     ],
-    "fingerprint": "ccd68eb7625c1f05",
-    "assigned_agent": "codex-app",
-    "fix_branch": "bug/BUG-091-validation-mcp-controlled-runner-cannot-validate-20260528",
-    "fix_commit": "544f4c98",
-    "verification_run_id": "targeted pytest; ruff; validation_catalog_integrity; validation_module_registry_l0; guardrail_changed_files; qe_mcp_backend; validation_center_backend; validation_coverage_backend; l0; git diff --check",
-    "created_at": "2026-05-20T15:55:16Z",
-    "first_seen_at": "2026-05-20T15:55:16Z",
-    "last_seen_at": "2026-05-20T15:55:16Z",
-    "fixed_at": "2026-05-28T11:39:07.339910+00:00",
-    "submitted_at": "2026-05-20T15:55:16Z",
-    "closed_at": null,
-    "allowed_write_scope": [
-        "backend/services/validation/runner.py",
-        "backend/services/validation/plan_catalog.py",
-        "backend/routers/validation.py",
-        "scripts/aistock_validate.py",
-        "noxfile.py",
-        "tests/aistock_validation/catalog/test_plans.yaml",
-        "tests/aistock_validation/catalog/file_ownership.yaml",
-        "tests/aistock_validation/bugs",
-        "backend/services/validation/execution_runner.py",
-        "backend/tests/test_validation_execution_runner.py",
-        "backend/tests/test_validation_catalog_integrity.py",
-        "tests/aistock_validation/catalog/module_registry.yaml"
-    ],
-    "suspected_modules": [
-        "backend/services/validation/runner.py",
-        "backend/services/validation/plan_catalog.py",
-        "backend/routers/validation.py",
-        "scripts/aistock_validate.py",
-        "noxfile.py",
-        "tests/aistock_validation/catalog/test_plans.yaml",
-        "tests/aistock_validation/catalog/file_ownership.yaml",
-        "tests/aistock_validation/bugs"
-    ],
-    "required_verification": [
-        "Controlled Validation MCP run from a non-root worktree records that exact absolute cwd, branch, HEAD commit, upstream commit, dirty status, detached state, and changed-file summary.",
-        "Mismatched expected branch or commit fails before plan execution and archives no passing branch evidence.",
-        "guardrail_changed_files reports the target worktree changed files rather than the configured root checkout.",
-        "qe_mcp_l3 and qe_template_ui, or an equivalent QE parent plan, are runner-enabled through Validation MCP.",
-        "BUG/Issue registry creation cannot allocate an already-used BUG ID when the MCP root is stale relative to origin/main."
-    ],
-    "closure_requirements": [
-        "start_validation_execution accepts an allowlisted workspace_path or worktree_id plus optional expected branch and commit constraints.",
-        "Runner path allowlist permits only F:\\Dev\\AIstock_worktrees\\* and the configured repo root; arbitrary filesystem execution remains forbidden.",
-        "Root-scoped jobs are clearly marked root-scoped and cannot be attached as worktree or branch verification evidence unless the requested target is the root checkout.",
-        "Validation evidence/history/UI include absolute cwd and complete git metadata for the executed checkout.",
-        "QE MCP / template UI validation plans can be executed through the controlled Validation MCP path.",
-        "BUG registry ID allocation is based on the current source-of-truth checkout and duplicate BUG-NNN records are prevented."
-    ],
-    "events": [
-        {
-            "timestamp": "2026-05-20T15:55:16Z",
-            "actor": "codex-app",
-            "action": "discovered",
-            "note": "Discovered during BUG-085 merge review: branch-local qe_mcp_l3 passed, but Validation MCP controlled jobs were root-scoped and could not validate the independent bug-fix worktree."
-        },
-        {
-            "timestamp": "2026-05-20T15:55:16Z",
-            "actor": "codex-app",
-            "action": "github_issue_created",
-            "note": "Mirrored to GitHub issue #121 with labels bug, aistock:bug, P0, severity:p0, module:validation, status:open."
-        },
-        {
-            "timestamp": "2026-05-20T15:55:16Z",
-            "actor": "codex-app",
-            "action": "comment",
-            "note": "P0 impact: this can create false-positive validation evidence and can allow a bug fix to be merged based on tests that ran against a different checkout."
-        },
-        {
-            "timestamp": "2026-05-20T15:55:16Z",
-            "actor": "codex-app",
-            "action": "comment",
-            "note": "Security boundary: worktree execution must be allowlisted and must not become arbitrary filesystem command execution."
-        },
-        {
-            "timestamp": "2026-05-20T15:55:16Z",
-            "actor": "codex-app",
-            "action": "comment",
-            "note": "Related registry risk: stale MCP roots must not allocate duplicate BUG IDs; an initial draft attempted BUG-089 while latest origin/main already had BUG-089 and BUG-090."
-        },
-        {
-            "timestamp": "2026-05-28T11:39:07.339932+00:00",
-            "actor": "codex-app",
-            "action": "fix_pending_review",
-            "note": "Implemented controlled-runner worktree evidence hardening: job records now include full git metadata and workspace scope, expected_commit accepts full or short SHA only when it matches, artifacts are discovered from the requested workspace, guardrail_changed_files uses --changed-only through controlled runner plan args, and qe_mcp_backend is available as a controlled QE backend plan. Local validation passed: targeted pytest 61 passed; ruff passed; validation_catalog_integrity passed finding_count=0; validation_module_registry_l0 passed; guardrail_changed_files passed changed_only files=7 blocking=0; qe_mcp_backend 35 passed; validation_center_backend 257 passed; validation_coverage_backend 10 passed; l0 passed; git diff --check passed. production_ddl_gate=noop."
-        }
-    ],
-    "github_issue_number": 121,
-    "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/121",
-    "pr_url": "https://github.com/licong01-cloud/AIstock/pull/296"
+    "scenario": "manual_github_sync_after_mcp_stale_root_duplicate_id"
+  },
+  "validation_evidence": [
+    "PR #296 CI all checks success; local validations: pytest execution_runner/catalog/aistock_mcp_server 61 passed; validation_catalog_integrity, module_registry_l0, guardrail_changed_files, qe_mcp_backend, validation_center_backend, validation_coverage_backend, l0 all passed; git diff --check passed"
+  ],
+  "verification_run_id": "targeted pytest; ruff; validation_catalog_integrity; validation_module_registry_l0; guardrail_changed_files; qe_mcp_backend; validation_center_backend; validation_coverage_backend; l0; git diff --check"
 }
