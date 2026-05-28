@@ -31,24 +31,24 @@
       "timestamp": "2026-05-28T10:58:21.798770Z"
     },
     {
-      "timestamp": "2026-05-28T11:08:00Z",
-      "actor": "codex",
       "action": "scope_expanded_for_alias_tests_and_ui_display",
-      "note": "Add Research Assistant catalog sync regression test and MCP tools page display update to allowed scope for BUG-145. No non-Research Assistant files included."
+      "actor": "codex",
+      "note": "Add Research Assistant catalog sync regression test and MCP tools page display update to allowed scope for BUG-145. No non-Research Assistant files included.",
+      "timestamp": "2026-05-28T11:08:00Z"
     },
     {
-      "timestamp": "2026-05-28T11:34:30Z",
-      "actor": "codex",
       "action": "scope_expanded_for_issue_registry_files",
-      "note": "Add BUG-145 BUG JSON and allocator registry files to allowed scope so the issue workflow PR gate can include the required registration artifacts."
+      "actor": "codex",
+      "note": "Add BUG-145 BUG JSON and allocator registry files to allowed scope so the issue workflow PR gate can include the required registration artifacts.",
+      "timestamp": "2026-05-28T11:34:30Z"
     }
   ],
   "evidence_uris": [],
   "expected": "MCP server/tool catalog and capability replies include Chinese business aliases/display names for model library, strategy library, factor library, factor metrics, factor correlation, execution policy and related domains. Natural language routing continues to use safe internal server_key/tool_name. Summary-first payload behavior remains unchanged.",
   "first_seen_at": "2026-05-28T10:58:21.798774Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "44ab9cfbd2d4f79567799e8906e0f4c265a9cbac",
+  "fixed_at": "2026-05-28T16:36:49.736035Z",
   "github_issue_number": 294,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/294",
   "last_seen_at": "2026-05-28T10:58:21.798774Z",
@@ -56,6 +56,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/295",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -69,7 +70,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -78,5 +79,16 @@
     "fingerprint": "a055296aa06ce08140dd3fd9",
     "source_event_id": "FE-20260528-a055296aa06c"
   },
+  "validation_evidence": [
+    "python -m compileall -b backend/services/research_assistant backend/routers/research_assistant.py -> passed after rebase",
+    "python -m pytest backend/tests/research_assistant/test_mcp_catalog_sync.py backend/tests/research_assistant/test_api.py backend/tests/research_assistant/test_natural_language_mcp_routing.py -q -p no:cacheprovider -> 14 passed after scope update",
+    "python -m ruff check backend/routers/research_assistant.py backend/services/research_assistant/mcp_catalog_sync.py backend/services/research_assistant/service.py backend/tests/research_assistant/test_api.py backend/tests/research_assistant/test_mcp_catalog_sync.py -> passed after rebase",
+    "python -m nox -s l0 research_assistant_backend research_assistant_mcp_contract --no-error-on-missing-interpreters -> passed (l0 success; backend 64 passed; mcp_contract 23 passed)",
+    "python -m nox -s validation_center_backend --no-error-on-missing-interpreters -> passed (254 passed; coverage line=79.55 branch=61.5)",
+    "python -m nox -s validation_module_registry_l0 --no-error-on-missing-interpreters -> passed (8 passed; ownership files=12 mapped=12)",
+    "python -m nox -s research_assistant_ui --no-error-on-missing-interpreters -> 6 passed",
+    "PR #295 CI -> passed/non-blocking skipped only",
+    "git diff --check -> passed after scope update"
+  ],
   "verification_run_id": null
 }
