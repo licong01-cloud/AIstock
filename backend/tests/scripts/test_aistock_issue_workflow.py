@@ -61,6 +61,34 @@ def test_emit_dash_writes_stdout_without_dash_file(tmp_path: Path, monkeypatch: 
     assert not (tmp_path / "-").exists()
 
 
+def test_emit_rejects_format_token_without_creating_root_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(workflow, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: tmp_path)
+
+    with pytest.raises(workflow.WorkflowError, match="JSON file path"):
+        workflow._emit({"ok": True}, "json")
+
+    assert not (tmp_path / "json").exists()
+
+
+def test_emit_rejects_root_level_bare_output_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(workflow, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: tmp_path)
+
+    with pytest.raises(workflow.WorkflowError, match="root-level bare file"):
+        workflow._emit({"ok": True}, str(tmp_path / "workflow-output"))
+
+    assert not (tmp_path / "workflow-output").exists()
+
+
 @pytest.fixture
 def isolated_workflow_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(workflow, "REPO_ROOT", tmp_path)
@@ -1025,7 +1053,101 @@ def test_run_plan_writes_state_and_resume_reads_it(isolated_workflow_root: Path)
     resume = workflow.build_resume_plan(bug_id="BUG-199", worktree=str(isolated_workflow_root))
     assert resume["schema_version"] == "aistock_issue_workflow_resume_v1"
     assert resume["state"]["context_pack_md"].endswith("context-pack.md")
-    assert "finish --bug-id BUG-199" in resume["next_command"]
+    assert resume["worktree"] is None
+    assert "run --bug-id BUG-199 --mode plan --create-worktree" in resume["next_command"]
+
+
+def test_run_plan_without_create_worktree_records_planned_not_actual_worktree(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _write_json(isolated_workflow_root / "bug.json", _bug())
+    planned = isolated_workflow_root.parent / "planned-worktree"
+    monkeypatch.setattr(workflow, "_target_names", lambda record, bug_id, task_slug=None: ("bug/BUG-199-planned", planned))
+    monkeypatch.setattr(workflow, "_build_code_intelligence_summary", lambda **kwargs: _fake_code_intelligence_summary())
+
+    payload = workflow.build_run_plan(
+        bug_id="BUG-199",
+        mode="plan",
+        issue_json=str(issue),
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        create_worktree=False,
+        dry_run=False,
+        validation_evidence=[],
+        task_slug=None,
+        allow_missing_linkage=False,
+        allow_closed=False,
+        base="origin/main",
+        head="HEAD",
+    )
+    state = json.loads((isolated_workflow_root / payload["start"]["state_path"]).read_text(encoding="utf-8"))
+
+    assert state.get("worktree") is None
+    assert state["planned_worktree"] == str(planned)
+    assert state.get("branch") is None
+    assert state["planned_branch"] == "bug/BUG-199-planned"
+
+    resume = workflow.build_resume_plan(bug_id="BUG-199", worktree=str(isolated_workflow_root))
+    assert resume["worktree"] is None
+    assert resume["planned_worktree"] == str(planned)
+    assert any("planned worktree has not been created" in item for item in resume["stop_conditions"])
+    assert resume["next_command"].endswith("run --bug-id BUG-199 --mode plan --create-worktree")
+
+
+def test_resume_missing_recorded_worktree_recovers_as_planned_state(isolated_workflow_root: Path) -> None:
+    missing = isolated_workflow_root / "missing-worktree"
+    _write_json(
+        isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "state.json",
+        {
+            "schema_version": "aistock_issue_workflow_state_v1",
+            "bug_id": "BUG-199",
+            "state": "context_ready",
+            "branch": "bug/BUG-199-missing",
+            "worktree": str(missing),
+            "context_pack_md": "tmp/issue_workflow/BUG-199/context-pack.md",
+        },
+    )
+
+    resume = workflow.build_resume_plan(bug_id="BUG-199", worktree=str(isolated_workflow_root))
+
+    assert resume["worktree"] is None
+    assert resume["planned_worktree"] == str(missing)
+    assert any("planned worktree has not been created" in item for item in resume["stop_conditions"])
+    assert resume["next_command"].endswith("run --bug-id BUG-199 --mode plan --create-worktree")
+
+
+def test_start_plan_with_created_worktree_records_actual_worktree(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _write_json(isolated_workflow_root / "bug.json", _bug())
+    actual = isolated_workflow_root / "actual-worktree"
+    monkeypatch.setattr(workflow, "_target_names", lambda record, bug_id, task_slug=None: ("bug/BUG-199-actual", actual))
+    monkeypatch.setattr(workflow, "_build_code_intelligence_summary", lambda **kwargs: _fake_code_intelligence_summary())
+
+    def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
+        if args[:2] == ["worktree", "add"]:
+            actual.mkdir(parents=True)
+        return ""
+
+    monkeypatch.setattr(workflow, "_git", fake_git)
+
+    payload = workflow.build_start_plan(
+        bug_id="BUG-199",
+        issue_json=str(issue),
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        create_worktree=True,
+        dry_run=False,
+        task_slug=None,
+        allow_missing_linkage=False,
+        allow_closed=False,
+    )
+    state = json.loads((actual / payload["state_path"]).read_text(encoding="utf-8"))
+
+    assert payload["worktree_plan"]["created"] is True
+    assert state["worktree"] == str(actual)
+    assert "planned_worktree" not in state
+    assert state["branch"] == "bug/BUG-199-actual"
 
 
 def test_postmortem_reports_timing_context_and_duplicate_active_count(

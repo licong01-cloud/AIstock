@@ -77,6 +77,8 @@ Code intelligence is non-blocking in KG-1/KG-3. If CodeGraph is installed and `.
 
 Warnings about a dirty canonical root are not permission to write there. They mean root sync/cleanup must stop until the unrelated work is resolved. New issue registration and fixes should continue only in a clean task or registry worktree.
 
+`--output` is a JSON file path, not an output format selector. Omit it for stdout or use `--output -`; do not pass `--output json`. File outputs should use an explicit path, preferably under `tmp/issue_workflow/` or `tmp/validation/`, so a client typo cannot create root-level files such as `json`.
+
 ## Submit Or Register A New BUG
 
 When the user asks to register a new BUG, do not hand-write a local-only BUG JSON. Use the high-level submit command so the developer client creates the same candidate and BUG record format:
@@ -133,6 +135,8 @@ python scripts/aistock_issue_workflow.py run --bug-id BUG-XXX --mode plan --crea
 ```
 
 The command enforces a single active workflow per BUG. If an existing clean state/worktree is found, it returns `workflow_gate=resume` plus a `next_command`; follow that instead of creating a duplicate worktree. If an active worktree is dirty, it returns `workflow_gate=blocked` and a rescue checklist. `--force-new-worktree --reason "<why>"` is only for audited recovery exceptions.
+
+If `run --mode plan` is executed without `--create-worktree`, it writes planning artifacts in the current workflow root only. The state records `planned_worktree` instead of `worktree`, and `resume` will direct the agent to rerun plan with `--create-worktree` before editing code.
 
 For compatibility with older scripts, the lower high-level start command still works:
 

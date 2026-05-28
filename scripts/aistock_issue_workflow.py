@@ -45,6 +45,8 @@ ARTIFACT_PATH_PATTERNS = (
     "node_modules",
 )
 BUG_ID_RE = re.compile(r"\bBUG-(\d{3,})\b", re.IGNORECASE)
+OUTPUT_FORMAT_TOKENS = {"json", "yaml", "yml", "text", "txt", "stdout", "stderr", "console"}
+SAFE_OUTPUT_DIRS = (WORKFLOW_ROOT, Path("tmp") / "validation")
 
 sys.path.insert(0, str(REPO_ROOT))
 from scripts import issue_flow as flow  # noqa: E402
@@ -137,9 +139,39 @@ def _sha256_tree(path: Path) -> str | None:
     return digest.hexdigest()
 
 
+def _resolve_output_path(output: str | None) -> Path | None:
+    if not output or output == "-":
+        return None
+    raw = output.strip()
+    if not raw:
+        return None
+    if raw.lower() in OUTPUT_FORMAT_TOKENS:
+        raise WorkflowError("--output expects a JSON file path; omit it or use --output - for stdout")
+
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+
+    roots = [REPO_ROOT.resolve()]
+    canonical = _canonical_root().resolve()
+    if canonical not in roots:
+        roots.append(canonical)
+    safe_roots = [root / safe_dir for root in roots for safe_dir in SAFE_OUTPUT_DIRS]
+    in_safe_dir = any(_is_inside(path, safe_root) for safe_root in safe_roots)
+    parent = path.parent.resolve()
+    if not path.suffix and parent in roots:
+        raise WorkflowError(
+            "--output refuses a root-level bare file; use --output - or write under tmp/issue_workflow/"
+        )
+    if not path.suffix and not in_safe_dir:
+        raise WorkflowError("--output path must include a file suffix or be under tmp/issue_workflow/ or tmp/validation/")
+    return path
+
+
 def _emit(payload: dict[str, Any], output: str | None = None) -> None:
-    if output and output != "-":
-        _write_json(Path(output), payload)
+    output_path = _resolve_output_path(output)
+    if output_path:
+        _write_json(output_path, payload)
     sys.stdout.write(json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n")
 
 
@@ -364,11 +396,14 @@ def _update_active_index(bug_id: str, state_payload: dict[str, Any], *, root: Pa
     if not _state_is_active(state_payload):
         index.pop(key, None)
     else:
+        active_worktree = state_payload.get("worktree") or state_payload.get("cwd") or str(root)
         index[key] = {
             "bug_id": key,
             "active_state": state_payload.get("state"),
             "branch": state_payload.get("branch"),
-            "worktree": state_payload.get("worktree") or state_payload.get("cwd") or str(root),
+            "planned_branch": state_payload.get("planned_branch"),
+            "worktree": active_worktree,
+            "planned_worktree": state_payload.get("planned_worktree"),
             "pr_url": state_payload.get("pr_url"),
             "last_event_at": state_payload.get("updated_at"),
             "next_command": _next_command_for_state(key, state_payload),
@@ -403,6 +438,9 @@ def _write_state(
         "cwd": str(root.resolve()),
         "next_actions": next_actions or fields.get("next_actions") or [],
     }
+    for key, value in fields.items():
+        if value is None:
+            payload.pop(key, None)
     if stop_reason:
         payload["stop_reason"] = stop_reason
     _write_json(_state_path(bug_id, root), payload)
@@ -982,6 +1020,8 @@ def _state_is_active(state: dict[str, Any]) -> bool:
     value = str(state.get("state") or "")
     if not value:
         return False
+    if state.get("planned_worktree") and not state.get("worktree"):
+        return False
     if value in TERMINAL_WORKFLOW_STATES:
         return False
     return value in ACTIVE_WORKFLOW_STATES or value not in {"fixed", "verified", "wontfix"}
@@ -997,6 +1037,8 @@ def _active_workflows_for_bug(bug_id: str) -> list[dict[str, Any]]:
         worktree = Path(str(state.get("worktree") or root))
         if not worktree.is_absolute():
             worktree = root / worktree
+        if state.get("worktree") and not worktree.exists():
+            continue
         git = _git_snapshot(worktree) if worktree.exists() else {"ok": False, "error": f"workflow worktree missing: {worktree}"}
         active.append(
             {
@@ -1558,6 +1600,13 @@ def _maybe_create_worktree(
     return plan
 
 
+def _actual_and_planned_worktree(worktree_plan: dict[str, Any]) -> tuple[str | None, str | None]:
+    worktree = str(worktree_plan.get("worktree") or "").strip() or None
+    if worktree_plan.get("created"):
+        return worktree, None
+    return None, worktree
+
+
 def _maybe_create_named_worktree(
     *,
     branch: str,
@@ -1676,7 +1725,10 @@ def build_start_plan(
         dry_run=dry_run,
         task_slug=task_slug,
     )
-    target_root = Path(worktree_plan["worktree"]) if create_worktree and not dry_run else REPO_ROOT
+    actual_worktree, planned_worktree = _actual_and_planned_worktree(worktree_plan)
+    actual_branch = worktree_plan.get("branch") if actual_worktree else None
+    planned_branch = worktree_plan.get("branch") if planned_worktree else None
+    target_root = Path(actual_worktree) if actual_worktree else REPO_ROOT
     target_bug_path = _bug_path_for_target(source_path, target_root)
     output_dir = target_root / WORKFLOW_ROOT / canonical_bug_id
     fix_ready = flow.build_fix_ready(record, changed_files)
@@ -1713,8 +1765,10 @@ def build_start_plan(
             canonical_bug_id,
             state="context_ready",
             root=target_root,
-            branch=worktree_plan.get("branch"),
-            worktree=worktree_plan.get("worktree"),
+            branch=actual_branch,
+            planned_branch=planned_branch,
+            worktree=actual_worktree,
+            planned_worktree=planned_worktree,
             base=worktree_plan.get("base"),
             source_bug_json=_repo_rel(source_path),
             target_bug_json=_repo_rel(target_bug_path, target_root),
@@ -2589,19 +2643,29 @@ def build_resume_plan(*, bug_id: str, worktree: str | None = None, events_limit:
         events = [json.loads(line) for line in lines if line.strip()]
     git = _git_snapshot(root) if root.exists() else {"ok": False, "error": f"workflow root missing: {root}"}
     dirty_stop = bool(git.get("dirty") and state.get("state") == "validation_passed")
+    state_worktree = str(state.get("worktree") or "").strip()
+    missing_state_worktree = bool(state_worktree and not Path(state_worktree).exists())
+    actual_worktree = None if missing_state_worktree else state.get("worktree")
+    planned_worktree = state.get("planned_worktree") or (state_worktree if missing_state_worktree else None)
+    planned_only = bool(planned_worktree and not actual_worktree)
+    stop_conditions = ["commit task files before PR automation"] if dirty_stop else []
+    if planned_only:
+        stop_conditions.append("planned worktree has not been created; rerun plan with --create-worktree")
     return {
         "schema_version": "aistock_issue_workflow_resume_v1",
         "generated_at": _utc_now(),
         "bug_id": canonical_bug_id,
         "workflow_root": str(root),
         "workflow_git": git,
-        "worktree": state.get("worktree") or str(root),
+        "worktree": actual_worktree,
+        "planned_worktree": planned_worktree,
         "branch": state.get("branch") or git.get("branch"),
+        "planned_branch": state.get("planned_branch"),
         "state_path": _repo_rel(_state_path(canonical_bug_id, root), root),
         "events_path": _repo_rel(events_path, root),
         "state": state,
         "recent_events": events,
-        "stop_conditions": ["commit task files before PR automation"] if dirty_stop else [],
+        "stop_conditions": stop_conditions,
         "next_command": _next_command_for_state(canonical_bug_id, state),
     }
 
@@ -2860,7 +2924,11 @@ def build_promote_ci_issue_plan(
 def _next_command_for_state(bug_id: str, state: dict[str, Any]) -> str:
     current = str(state.get("state") or "")
     worktree = str(state.get("worktree") or state.get("cwd") or "").strip()
-    prefix = f"cd /d {worktree} && " if worktree else ""
+    state_worktree = str(state.get("worktree") or "").strip()
+    has_missing_state_worktree = bool(state_worktree and not Path(state_worktree).exists())
+    prefix = f"cd /d {worktree} && " if worktree and not has_missing_state_worktree else ""
+    if (state.get("planned_worktree") and not state.get("worktree")) or has_missing_state_worktree:
+        return f"python scripts/aistock_issue_workflow.py run --bug-id {bug_id} --mode plan --create-worktree"
     if current in {"context_ready", "fix_in_progress"}:
         return f"{prefix}python scripts/aistock_issue_workflow.py finish --bug-id {bug_id} --plan-only"
     if current in {"validation_planned", "blocked"}:
