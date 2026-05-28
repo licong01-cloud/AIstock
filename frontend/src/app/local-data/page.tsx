@@ -155,6 +155,26 @@ interface IncrementalPrefill {
   hasData?: boolean;
 }
 
+interface TradingDayStatus {
+  ok?: boolean;
+  as_of_date?: string;
+  timezone?: string;
+  is_trading_day?: boolean;
+  latest_completed_trading_day?: string | null;
+  previous_trading_day?: string | null;
+  next_trading_day?: string | null;
+  source?: string;
+  warnings?: Array<{ code?: string; message?: string; [key: string]: any }>;
+  cache?: {
+    generated_at?: string | null;
+    coverage_start?: string | null;
+    coverage_end?: string | null;
+    calendar_row_count?: number | null;
+    checksum?: string | null;
+    refresh_reason?: string | null;
+  };
+}
+
 function classNames(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(" ");
 }
@@ -232,6 +252,10 @@ export default function LocalDataPage() {
   const [pingLoading, setPingLoading] = useState(false);
   const [incrementalPrefill, setIncrementalPrefill] =
     useState<IncrementalPrefill | null>(null);
+  const [tradingDayStatus, setTradingDayStatus] =
+    useState<TradingDayStatus | null>(null);
+  const [tradingDayStatusLoading, setTradingDayStatusLoading] = useState(false);
+  const [tradingDayStatusError, setTradingDayStatusError] = useState<string | null>(null);
 
   const backendBaseDisplay = useMemo(
     () => TDX_BASE.replace(/\/$/, ""),
@@ -255,6 +279,22 @@ export default function LocalDataPage() {
       });
     } finally {
       setPingLoading(false);
+    }
+  }, []);
+
+  const loadTradingDayStatus = useCallback(async () => {
+    setTradingDayStatusLoading(true);
+    setTradingDayStatusError(null);
+    try {
+      const data = await backendRequest<TradingDayStatus>(
+        "GET",
+        "/api/v1/trading-calendar/status",
+      );
+      setTradingDayStatus(data);
+    } catch (e: any) {
+      setTradingDayStatusError(e?.message || "统一交易日状态加载失败");
+    } finally {
+      setTradingDayStatusLoading(false);
     }
   }, []);
 
@@ -346,6 +386,10 @@ export default function LocalDataPage() {
     // 首次进入页面时，不自动 ping，避免阻塞渲染；交给用户手动测试。
   }, []);
 
+  useEffect(() => {
+    void loadTradingDayStatus();
+  }, [loadTradingDayStatus]);
+
   const tabs: { key: LocalDataTab; label: string }[] = [
     { key: "init", label: "初始化" },
     { key: "incremental", label: "增量" },
@@ -407,6 +451,74 @@ export default function LocalDataPage() {
         </div>
       </section>
 
+      <section
+        className={`${styles.contentCard} ${styles.sectionBlock}`}
+        data-testid="local-data-trading-day-status"
+      >
+        <div className={styles.rowBetweenWrap}>
+          <div>
+            <h2 className={styles.headingSmall}>统一交易日状态</h2>
+            <p className={styles.textMuted}>
+              来源：{tradingDayStatus?.source || "market.trading_calendar:file_cache"} ·
+              时区：{tradingDayStatus?.timezone || "Asia/Shanghai"}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void loadTradingDayStatus()}
+            disabled={tradingDayStatusLoading}
+            className={styles.btnSecondary}
+          >
+            {tradingDayStatusLoading ? "刷新中..." : "刷新状态"}
+          </button>
+        </div>
+        {tradingDayStatusError ? (
+          <p className={styles.textDangerSmall}>{tradingDayStatusError}</p>
+        ) : (
+          <div className={styles.gridTwo}>
+            <div>
+              <span className={styles.labelSmall}>当前日期</span>
+              <strong>{tradingDayStatus?.as_of_date || "-"}</strong>
+            </div>
+            <div>
+              <span className={styles.labelSmall}>今日状态</span>
+              <strong>{tradingDayStatus?.is_trading_day ? "交易日" : "非交易日"}</strong>
+            </div>
+            <div>
+              <span className={styles.labelSmall}>最新已结束交易日</span>
+              <strong>{tradingDayStatus?.latest_completed_trading_day || "-"}</strong>
+            </div>
+            <div>
+              <span className={styles.labelSmall}>上一 / 下一交易日</span>
+              <strong>
+                {tradingDayStatus?.previous_trading_day || "-"} / {" "}
+                {tradingDayStatus?.next_trading_day || "-"}
+              </strong>
+            </div>
+            <div>
+              <span className={styles.labelSmall}>缓存覆盖</span>
+              <strong>
+                {tradingDayStatus?.cache?.coverage_start || "-"} ~ {" "}
+                {tradingDayStatus?.cache?.coverage_end || "-"}
+              </strong>
+            </div>
+            <div>
+              <span className={styles.labelSmall}>缓存刷新原因</span>
+              <strong>{tradingDayStatus?.cache?.refresh_reason || "-"}</strong>
+            </div>
+          </div>
+        )}
+        {(tradingDayStatus?.warnings || []).length > 0 && (
+          <div className={styles.mt8}>
+            {tradingDayStatus?.warnings?.map((warning, index) => (
+              <p key={`${warning.code || "warning"}-${index}`} className={styles.textDangerSmall}>
+                {warning.code || "WARNING"}：{warning.message || JSON.stringify(warning)}
+              </p>
+            ))}
+          </div>
+        )}
+      </section>
+
       {/* Tab 切换 */}
       <section className={styles.sectionBlock}>
         <div className={styles.tabBar}>
@@ -429,11 +541,12 @@ export default function LocalDataPage() {
 
       {/* 内容区域 */}
       <section className={styles.contentCard}>
-        {activeTab === "init" && <InitTab />}
+        {activeTab === "init" && <InitTab onCalendarSynced={loadTradingDayStatus} />}
         {activeTab === "incremental" && (
           <IncrementalTab
             prefill={incrementalPrefill}
             onPrefillConsumed={() => setIncrementalPrefill(null)}
+            onCalendarSynced={loadTradingDayStatus}
           />
         )}
         {activeTab === "adjust" && <AdjustTab />}
@@ -451,7 +564,7 @@ export default function LocalDataPage() {
   );
 }
 
-function InitTab() {
+function InitTab({ onCalendarSynced }: { onCalendarSynced?: () => void }) {
   const [dataSource, setDataSource] = useState<DataSource>("TDX");
   const [dataset, setDataset] = useState<string>("kline_daily_raw_go");
   const [tradeAggScope, setTradeAggScope] = useState<"all" | "watchlist">("all");
@@ -762,6 +875,7 @@ function InitTab() {
             ? `已同步 ${inserted} 条交易日历记录。`
             : "交易日历同步完成。",
         );
+        onCalendarSynced?.();
         return;
       }
 
@@ -1180,9 +1294,11 @@ function InitTab() {
 function IncrementalTab({
   prefill,
   onPrefillConsumed,
+  onCalendarSynced,
 }: {
   prefill?: IncrementalPrefill | null;
   onPrefillConsumed?: () => void;
+  onCalendarSynced?: () => void;
 }) {
   const [dataSource, setDataSource] = useState<DataSource>("TDX");
   const [dataset, setDataset] = useState<string>("kline_daily_raw");
@@ -1523,6 +1639,7 @@ function IncrementalTab({
               ? `已同步 ${inserted} 条交易日历记录。`
               : "交易日历同步完成。",
           );
+          onCalendarSynced?.();
         } else {
           let effectiveStart: string | null = startDate || null;
           const effectiveEnd: string | null = endDate || date || null;
