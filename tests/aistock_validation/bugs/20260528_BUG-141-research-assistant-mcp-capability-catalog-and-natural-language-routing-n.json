@@ -5,7 +5,9 @@
     "backend/routers/research_assistant.py",
     "frontend/tests/research-assistant/**",
     "backend/tests/research_assistant/**",
-    "backend/tests/mcp/**"
+    "backend/tests/mcp/**",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260528_BUG-141-research-assistant-mcp-capability-catalog-and-natural-language-routing-n.json"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-141",

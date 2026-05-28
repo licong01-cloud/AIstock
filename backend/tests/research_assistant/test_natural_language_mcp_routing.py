@@ -65,3 +65,19 @@ def test_new_domain_routes_select_expected_tools() -> None:
         route = route_request(message)
         assert route["server_key"] == server
         assert route["tool_name"] == tool
+
+
+def test_chinese_catalog_questions_choose_summary_first_read_tools() -> None:
+    cases = {
+        "数仓有没有漏入仓？": ("qe_warehouse", "aistock-qe-archive", "qe_archive_health", "read_only"),
+        "帮我看看因子库有哪些可用因子": ("factor_library", "aistock-factor-library", "factor_library_list", "read_only"),
+        "最近因子库哪些因子相关性太高？": ("factor_correlation", "aistock-factor-correlation", "factor_corr_get_top_pairs", "read_only"),
+        "这个模型 trial 和之前 seed 表现差异大吗？": ("model_registry", "aistock-model-registry", "model_registry_compare_trials", "read_only"),
+        "执行策略库里有什么 minute algo？": ("execution_policy", "aistock-execution-policy", "execution_policy_list_algos", "read_only"),
+    }
+    for message, (domain, server, tool, side_effect) in cases.items():
+        route = route_request(message)
+        assert route["domain"] == domain
+        assert route["server_key"] == server
+        assert route["tool_name"] == tool
+        assert route["side_effect"] == side_effect

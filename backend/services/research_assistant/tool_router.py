@@ -50,6 +50,7 @@ TOOL_HINTS: tuple[tuple[McpDomain, tuple[str, ...], str], ...] = (
     (McpDomain.EXECUTION_POLICY, ("market state", "constraint", "市场状态", "约束"), "execution_policy_get_market_state_constraints"),
     (McpDomain.EXECUTION_POLICY, ("validate", "fit", "suitable", "校验", "适配", "适合"), "execution_policy_validate_for_strategy"),
     (McpDomain.EXECUTION_POLICY, ("bind", "binding", "绑定"), "execution_policy_plan_binding"),
+    (McpDomain.EXECUTION_POLICY, ("execution policy list", "minute algo", "执行策略库", "有什么", "有哪些", "可用"), "execution_policy_list_algos"),
 )
 
 def _norm(text: str) -> str:
