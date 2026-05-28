@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from enum import Enum
 from datetime import date
@@ -56,7 +57,7 @@ from .prompt_pack import (
 )
 from .repository import DatabaseResearchAssistantRepository
 from .runtime_config import DEFAULT_ENVIRONMENT, RUNTIME_CONFIG_KEY, RuntimeConfigSnapshot, load_runtime_config
-from .domain_ontology import DOMAIN_SPECS, McpDomain, domain_prompt_key
+from .domain_ontology import domain_prompt_key
 from .mcp_catalog_sync import default_mcp_servers, default_mcp_tools, workflow_capabilities as catalog_workflow_capabilities
 from .tool_router import route_request
 
@@ -2281,10 +2282,19 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             capability_card_keys.update(qe_capability_keys)
         if is_local_data:
             capability_card_keys.update(local_data_capability_keys)
-        mcp_route = route_request(user_message)
+        mcp_route = dict(route_request(user_message))
         route_capability_keys = set()
         if mcp_route.get("domain") and mcp_route.get("domain") != "general":
             route_capability_keys.add(f"{mcp_route['domain']}.mcp_orchestration")
+            side_effect = str(mcp_route.get("side_effect") or "read_only")
+            mcp_route.update(
+                {
+                    "summary_first": True,
+                    "preflight_required": side_effect != "read_only",
+                    "confirmation_required": side_effect == "confirmed_action",
+                    "ui_card": "mcp_route_decision",
+                }
+            )
         if route_capability_keys:
             capability_card_keys.update(route_capability_keys)
         capability_cards = self._capability_cards(capabilities, capability_card_keys) if capability_card_keys else []
@@ -2438,15 +2448,71 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         ]
 
     def _compose_assistant_reply(self, user_message: str, llm_text: str, cards: dict[str, Any], mode_decision: ModeDecision) -> str:
-        text = llm_text.strip()
+        raw_text = llm_text.strip()
+        text = self._strip_assistant_tool_choice_markup(raw_text)
         if mode_decision.intent_type in {DialogueIntent.CAPABILITY_INQUIRY, DialogueIntent.MCP_CAPABILITY_INQUIRY} and (self._is_mcp_tool_catalog_inquiry(user_message) or "mcp" in user_message.lower() or "tool" in user_message.lower()):
             catalog = cards.get("runtime_mcp_catalog") if isinstance(cards, dict) else None
             if isinstance(catalog, dict):
                 return self._apply_main_reply_policy(self._render_mcp_tool_catalog_reply(catalog), mode_decision)
+        route = cards.get("mcp_route_decision") if isinstance(cards, dict) else None
+        if self._should_render_mcp_route_reply(route, mode_decision, raw_text):
+            return self._apply_main_reply_policy(self._render_mcp_route_reply(route), mode_decision)
         if text:
             return self._apply_main_reply_policy(text, mode_decision)
         intent_config = self._dialogue_intent_config()
         return self._apply_main_reply_policy(str(intent_config.get("fallback_reply") or user_message), mode_decision)
+
+    @staticmethod
+    def _strip_assistant_tool_choice_markup(text: str) -> str:
+        cleaned = re.sub(r"<assistant_tool_choice\b[^>]*>.*?</assistant_tool_choice>", "", text, flags=re.IGNORECASE | re.DOTALL)
+        return cleaned.strip()
+
+    @staticmethod
+    def _should_render_mcp_route_reply(route: Any, mode_decision: ModeDecision, raw_text: str) -> bool:
+        if not isinstance(route, dict) or not route.get("server_key") or not route.get("tool_name"):
+            return False
+        if "<assistant_tool_choice" in raw_text.lower():
+            return True
+        guarded_intents = {
+            DialogueIntent.VALIDATION_ISSUE_REQUEST,
+            DialogueIntent.FACTOR_LIBRARY_REQUEST,
+            DialogueIntent.FACTOR_METRICS_REQUEST,
+            DialogueIntent.FACTOR_CORRELATION_REQUEST,
+            DialogueIntent.MODEL_REGISTRY_REQUEST,
+            DialogueIntent.STRATEGY_GOVERNANCE_REQUEST,
+            DialogueIntent.EXECUTION_POLICY_REQUEST,
+            DialogueIntent.QE_WAREHOUSE_REQUEST,
+            DialogueIntent.RESEARCH_PIPELINE_REQUEST,
+        }
+        return mode_decision.intent_type in guarded_intents
+
+    @staticmethod
+    def _render_mcp_route_reply(route: Any) -> str:
+        if not isinstance(route, dict):
+            return "我会先做 MCP route decision 和 preflight，不会用模型猜业务数据。"
+        server_key = str(route.get("server_key") or "unknown-server")
+        tool_name = str(route.get("tool_name") or "unknown-tool")
+        domain = str(route.get("domain") or "unknown")
+        side_effect = str(route.get("side_effect") or "read_only")
+        lines = [
+            "我先把这类业务问题交给 MCP 路由处理，不会用模型猜因子数量、Issue 状态或其他业务事实。",
+            f"Route decision：{domain} -> {server_key}/{tool_name}。",
+            "返回边界：summary-first；列表/概览只返回数量、分页和关键字段，具体对象详情再用 get/detail 工具展开，矩阵、日志和原始 payload 只给 artifact_ref 或 detail 引用。",
+        ]
+        if side_effect == "read_only":
+            lines.append("当前选择的是只读工具，可以继续做真实查询；我会只展示 MCP 返回的概要数据。")
+        elif side_effect == "plan_or_preflight":
+            lines.append("当前选择的是计划/预检查工具，只生成方案和校验结果，不会执行写入或长任务。")
+        else:
+            lines.append("当前选择涉及 confirmed action；必须先展示 preflight、确认口令和审批边界，确认前不会执行。")
+        reason = str(route.get("reason") or "").strip()
+        if reason:
+            lines.append(f"选择依据：{reason}")
+        read_tools = route.get("read_tools") if isinstance(route.get("read_tools"), list) else []
+        if read_tools:
+            preview = ", ".join(str(item) for item in read_tools[:4])
+            lines.append(f"可先使用的只读工具：{preview}。")
+        return "\n".join(lines)
 
     @staticmethod
     def _render_mcp_tool_catalog_reply(catalog: dict[str, Any]) -> str:

@@ -171,6 +171,68 @@ test("Research Assistant main entry is a Codex-like LLM chat with readable cards
   expect(consoleErrors.filter((message) => !message.includes("Failed to load resource"))).toEqual([]);
 });
 
+test("Research Assistant chat renders tool choice markup as readable MCP route cards", async ({ page: browserPage }) => {
+  const response = {
+    ...chatTurnResponse,
+    assistant_message: {
+      content_text: "<assistant_tool_choice>{\"tool\":\"mcp_github_issue_sync_bug\"}</assistant_tool_choice>",
+      content_json: {},
+    },
+    cards: {
+      ...chatTurnResponse.cards,
+      ui_display: { show_plan_card: false, show_clarification_card: false, show_context_health_badge: false, details_default_collapsed: true },
+      mcp_route_decision: {
+        domain: "validation_issue",
+        server_key: "aistock-validation",
+        tool_name: "mcp_github_issue_sync_bug",
+        reason: "Matched Validation Center issue sync.",
+        side_effect: "confirmed_action",
+        summary_first: true,
+        preflight_required: true,
+        confirmation_required: true,
+      },
+    },
+  };
+
+  await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const respond = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ status: status >= 400 ? "error" : "success", data }) });
+    if (path.endsWith("/chat/turn")) return respond(response);
+    return respond(page([]));
+  });
+
+  await browserPage.goto("/research-assistant");
+  await browserPage.getByPlaceholder(/直接提问或描述任务/).fill("同步 BUG-120 GitHub issue 状态");
+  await browserPage.getByRole("button", { name: "发送" }).click();
+
+  await expect(browserPage.getByTestId("ra-chat-main")).not.toContainText("<assistant_tool_choice>");
+  await expect(browserPage.getByTestId("ra-chat-main")).toContainText("aistock-validation/mcp_github_issue_sync_bug");
+  await expect(browserPage.getByTestId("ra-mcp-route-card")).toContainText("需要确认和审批后才可执行");
+});
+
+test("Research Assistant MCP tools page treats ready servers as ready", async ({ page: browserPage }) => {
+  await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const respond = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ status: status >= 400 ? "error" : "success", data }) });
+    if (path.endsWith("/mcp/servers")) {
+      return respond(page([
+        { server_id: "srv_factor_library", server_key: "aistock-factor-library", title: "Factor Library MCP", status: "ready", health_json: { domain: "factor_library" } },
+      ]));
+    }
+    if (path.endsWith("/mcp/tools")) {
+      return respond(page([
+        { tool_id: "tool_factor_library_list", server_key: "aistock-factor-library", tool_name: "factor_library_list", title: "factor library list", risk_level: "low", requires_approval: false, status: "enabled" },
+      ]));
+    }
+    return respond(page([]));
+  });
+
+  await browserPage.goto("/research-assistant/mcp-tools");
+  await expect(browserPage.getByText("Factor Library MCP")).toBeVisible();
+  await expect(browserPage.getByText("已就绪").first()).toBeVisible();
+  await expect(browserPage.getByText("未就绪")).toHaveCount(0);
+});
+
 test("Research Assistant admin page separates audit tools from the chat entry", async ({ page: browserPage }) => {
   await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
     const url = new URL(route.request().url());

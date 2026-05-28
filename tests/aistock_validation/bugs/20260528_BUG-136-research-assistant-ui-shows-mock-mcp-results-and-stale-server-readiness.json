@@ -1,0 +1,118 @@
+{
+  "actual": "The UI replied to a factor-library query with 10 mock-looking factors while live factor-library facade reports total=778; BUG-120 sync displayed raw <assistant_tool_choice>; /research-assistant/mcp-tools showed ready MCP servers as not ready.",
+  "allowed_write_scope": [
+    "frontend/src/lib/research-assistant/api.ts",
+    "frontend/tests/research-assistant/research-assistant.spec.ts",
+    "backend/services/research_assistant/service.py",
+    "backend/tests/research_assistant/test_service.py",
+    "frontend/src/app/research-assistant/chat/page.tsx",
+    "frontend/src/app/research-assistant/mcp-tools/page.tsx",
+    "backend/services/research_assistant/domain_ontology.py",
+    "backend/services/research_assistant/tool_router.py",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260528_BUG-136-research-assistant-ui-shows-mock-mcp-results-and-stale-server-readiness.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-136",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-28T03:12:17.986770Z",
+  "description": "The UI replied to a factor-library query with 10 mock-looking factors while live factor-library facade reports total=778; BUG-120 sync displayed raw <assistant_tool_choice>; /research-assistant/mcp-tools showed ready MCP servers as not ready.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260528-56614959f016",
+      "timestamp": "2026-05-28T03:12:17.986765Z"
+    },
+    {
+      "action": "renumber_bug_id_after_duplicate_detection",
+      "actor": "codex_issue_workflow",
+      "timestamp": "2026-05-28T03:29:58.285632Z",
+      "note": "Initial allocation BUG-133 conflicted with existing Paper v2 BUG-133/GitHub #258; Research Assistant issue kept GitHub #262 and was renumbered to BUG-136 before implementation.",
+      "old_bug_id": "BUG-133",
+      "new_bug_id": "BUG-136"
+    },
+    {
+      "action": "expand_allowed_write_scope_for_root_cause",
+      "actor": "codex_issue_workflow",
+      "timestamp": "2026-05-28T03:50:00Z",
+      "note": "Root cause includes Chinese natural-language MCP domain routing; BUG-136 fix must update domain ontology and tool router before UI/backend rendering can be truthful."
+    },
+    {
+      "action": "include_issue_registry_files_in_scope_for_pr_gate",
+      "actor": "codex_issue_workflow",
+      "timestamp": "2026-05-28T03:56:00Z",
+      "note": "Registration commit and BUG-136 JSON updates are part of this issue workflow branch, so PR scope gate must include the issue registry artifacts alongside code files."
+    },
+    {
+      "action": "mark_fixed_with_validation_evidence",
+      "actor": "codex_issue_workflow",
+      "timestamp": "2026-05-28T03:57:23.954126Z",
+      "fix_branch": "bug/BUG-136-research-assistant-ui-shows-mock-mcp-results-and-20260528",
+      "fix_commit": "26abcad20631d3cf098c4a9e375cf7697c5c06ac",
+      "note": "Implemented truthful MCP route rendering, Chinese domain routing, raw tool-choice sanitization, and MCP ready-status UI correction; local validation gates passed."
+    },
+    {
+      "action": "refresh_fix_commit_after_lint_gate",
+      "actor": "codex_issue_workflow",
+      "timestamp": "2026-05-28T04:00:02.144824Z",
+      "fix_commit": "14e0747470558b2d8ecf0ae94967d5774df94836",
+      "note": "Updated fix_commit after changed-file Ruff gate required a service import cleanup; reran Research Assistant service tests and Ruff."
+    }
+  ],
+  "evidence_uris": [
+    "F:/Dev/AIstock_artifacts/research_assistant_ui_smoke_20260528"
+  ],
+  "expected": "Research Assistant chat must either use live MCP query/plan/preflight outputs or ask for missing parameters before presenting business facts; tool choices must render as readable cards with confirmation boundaries; MCP server readiness in the UI must match backend catalog readiness.",
+  "first_seen_at": "2026-05-28T03:12:17.986770Z",
+  "fix_branch": "bug/BUG-136-research-assistant-ui-shows-mock-mcp-results-and-20260528",
+  "fix_commit": "14e0747470558b2d8ecf0ae94967d5774df94836",
+  "fixed_at": "2026-05-28T04:00:02.144824Z",
+  "github_issue_number": 262,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/262",
+  "last_seen_at": "2026-05-28T03:12:17.986770Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Open http://127.0.0.1:3000/research-assistant, ask What MCP tools are available?, then ask factor/QE/BUG sync questions; open /research-assistant/mcp-tools and compare server readiness with GET /api/v1/research-assistant/catalogs/readiness.",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "validation_center_backend",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Research Assistant UI shows mock MCP results and stale server readiness",
+  "trigger_condition": {
+    "fingerprint": "56614959f0165ef2d5fdbdce",
+    "source_event_id": "FE-20260528-56614959f016"
+  },
+  "verification_run_id": "codex-local-validation-BUG-136-20260528",
+  "validation_evidence": [
+    "rtk proxy python -m pytest backend/tests/research_assistant/test_service.py -q -p no:cacheprovider -> 39 passed",
+    "rtk proxy python -m pytest backend/tests/research_assistant/test_natural_language_mcp_routing.py -q -p no:cacheprovider -> 4 passed",
+    "rtk proxy python -m pytest backend/tests/mcp backend/tests/research_assistant -q -p no:cacheprovider -> 186 passed",
+    "rtk proxy npx playwright test tests/research-assistant/research-assistant.spec.ts --project=chromium --reporter=list -> 6 passed",
+    "rtk proxy python -m nox -s research_assistant_backend research_assistant_mcp_contract validation_center_backend --no-error-on-missing-interpreters -> all 3 sessions successful",
+    "rtk proxy python -m nox -s validation_module_registry_l0 --no-error-on-missing-interpreters -> successful",
+    "rtk proxy python -m nox -s l0 --no-error-on-missing-interpreters -> successful",
+    "rtk proxy git diff --check -> passed",
+    "rtk proxy python -m ruff check backend/services/research_assistant/domain_ontology.py backend/services/research_assistant/service.py backend/services/research_assistant/tool_router.py backend/tests/research_assistant/test_service.py -> passed"
+  ]
+}

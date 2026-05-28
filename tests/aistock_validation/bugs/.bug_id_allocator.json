@@ -1,6 +1,6 @@
 {
-  "last_allocated": 132,
+  "last_allocated": 136,
   "schema_version": "aistock_bug_id_allocator_v1",
-  "updated_at": "2026-05-27T14:55:00Z",
-  "updated_by": "codex_manual_conflict_resolution"
+  "updated_at": "2026-05-28T03:29:58.285632Z",
+  "updated_by": "codex_duplicate_correction"
 }
