@@ -530,6 +530,62 @@ class HMMTrainingService:
             "preset_B": {"trending": 1.10, "neutral": 1.00, "fading": 0.92},
         }
 
+
+    @staticmethod
+    def _signal_preset_metadata_keys() -> set[str]:
+        return {
+            "label",
+            "name",
+            "display_name",
+            "description",
+            "comment",
+            "comments",
+            "note",
+            "notes",
+            "metadata",
+            "version",
+        }
+
+    @classmethod
+    def _coefficient_mapping_from_preset(
+        cls,
+        preset_coeffs: Any,
+        *,
+        signal_preset: str,
+    ) -> Dict[str, Any] | None:
+        if not isinstance(preset_coeffs, dict):
+            return None
+        if "coefficients" in preset_coeffs:
+            nested = preset_coeffs.get("coefficients")
+            if isinstance(nested, dict):
+                if "1" in nested and isinstance(nested["1"], dict):
+                    return nested["1"]
+                for value in nested.values():
+                    if isinstance(value, dict):
+                        return value
+                return nested
+            return None
+
+        metadata_keys = cls._signal_preset_metadata_keys()
+        scalar_coeffs = {
+            str(key): value
+            for key, value in preset_coeffs.items()
+            if str(key) not in metadata_keys and not isinstance(value, dict)
+        }
+        if scalar_coeffs:
+            return scalar_coeffs
+
+        nested_candidates = {
+            str(key): value
+            for key, value in preset_coeffs.items()
+            if str(key) not in metadata_keys and isinstance(value, dict)
+        }
+        if "1" in nested_candidates:
+            return nested_candidates["1"]
+        if nested_candidates:
+            return next(iter(nested_candidates.values()))
+        return None
+
     @classmethod
     def _extract_signal_preset_coefficients(
         cls,
@@ -543,10 +599,10 @@ class HMMTrainingService:
         if signal_preset not in presets:
             raise ValueError(f"HMM signal_preset does not exist in config: {signal_preset}")
         preset_coeffs = presets[signal_preset]
-        if isinstance(preset_coeffs, dict) and "coefficients" in preset_coeffs:
-            nested = preset_coeffs.get("coefficients")
-            if isinstance(nested, dict):
-                preset_coeffs = nested.get("1") or next(iter(nested.values()), None)
+        preset_coeffs = cls._coefficient_mapping_from_preset(
+            preset_coeffs,
+            signal_preset=signal_preset,
+        )
         if not isinstance(preset_coeffs, dict) or not preset_coeffs:
             raise ValueError(f"HMM signal_preset has no coefficients: {signal_preset}")
         result: Dict[str, float] = {}
@@ -1516,15 +1572,10 @@ class HMMTrainingService:
 
         generated_count = 0
         for preset_key, preset_coeffs in signal_presets.items():
-            # 提取实际系数（可能是嵌套结构 {label, coefficients: {1: {...}}}）
-            if isinstance(preset_coeffs, dict) and "coefficients" in preset_coeffs:
-                actual_coeffs = preset_coeffs["coefficients"].get("1") or \
-                                next(iter(preset_coeffs["coefficients"].values()), None)
-            else:
-                actual_coeffs = preset_coeffs
-
-            if not actual_coeffs:
-                raise RuntimeError(f"HMM signal preset has no coefficients: {preset_key}")
+            actual_coeffs = self._extract_signal_preset_coefficients(
+                {"signal_presets": {preset_key: preset_coeffs}},
+                str(preset_key),
+            )
 
             coeff_filename = f"coefficients_{preset_key}_{test_start}_{backtest_end}.json"
             coeff_path = os.path.join(model_dir, coeff_filename)

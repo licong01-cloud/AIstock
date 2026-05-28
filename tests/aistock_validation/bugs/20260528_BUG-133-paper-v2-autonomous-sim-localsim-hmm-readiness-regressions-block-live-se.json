@@ -5,7 +5,9 @@
     "backend/services/selection_center/hmm_runtime.py",
     "backend/services/selection_center/package_health.py",
     "backend/tests/paper_trading_v2/test_live_session.py",
-    "backend/tests/selection_center/test_runtime_selection.py"
+    "backend/tests/selection_center/test_runtime_selection.py",
+    "backend/services/hmm_training_service.py",
+    "backend/tests/test_hmm_daily_coefficients.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-133",
@@ -23,6 +25,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260528-8bff05ac6e51",
       "timestamp": "2026-05-28T01:32:32.980728Z"
+    },
+    {
+      "action": "scope_expanded",
+      "actor": "codex",
+      "note": "HMM coefficient auto-generation root cause is in HMMTrainingService preset coefficient extraction; added provider and daily-coefficient tests to allowed_write_scope before code changes.",
+      "timestamp": "2026-05-28T02:57:04Z"
     }
   ],
   "evidence_uris": [
@@ -35,7 +43,7 @@
   "fixed_at": null,
   "github_issue_number": 258,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/258",
-  "last_seen_at": "2026-05-28T01:32:32.980732Z",
+  "last_seen_at": "2026-05-28T02:57:04Z",
   "module": "paper_v2",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
