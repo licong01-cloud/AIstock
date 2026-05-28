@@ -124,9 +124,19 @@ def _copy_if_exists(src: Path, dst: Path) -> bool:
 
 
 def _git_commit(repo_root: Path) -> str | None:
+    value = _git_output(repo_root, ["git", "rev-parse", "--short", "HEAD"])
+    return value or None
+
+
+def _git_commit_full(repo_root: Path) -> str | None:
+    value = _git_output(repo_root, ["git", "rev-parse", "HEAD"])
+    return value or None
+
+
+def _git_output(repo_root: Path, command: list[str]) -> str | None:
     try:
         completed = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
+            command,
             cwd=str(repo_root),
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -140,27 +150,78 @@ def _git_commit(repo_root: Path) -> str | None:
     except (OSError, subprocess.TimeoutExpired):
         return None
     value = (completed.stdout or "").strip()
-    return value or None
+    return value if completed.returncode == 0 and value else None
 
 
 def _git_branch(repo_root: Path) -> str | None:
-    try:
-        completed = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=str(repo_root),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            shell=False,
-            check=False,
-            timeout=5,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    value = (completed.stdout or "").strip()
-    return value or None
+    return _git_output(repo_root, ["git", "rev-parse", "--abbrev-ref", "HEAD"])
+
+
+def _parse_porcelain_paths(lines: list[str]) -> list[str]:
+    paths: list[str] = []
+    for line in lines:
+        if not line or line.startswith("##"):
+            continue
+        raw_path = line[3:] if len(line) > 3 else line
+        if " -> " in raw_path:
+            raw_path = raw_path.split(" -> ", 1)[1]
+        path = raw_path.strip().strip('"')
+        if path:
+            paths.append(path)
+    return paths
+
+
+def _git_workspace_metadata(repo_root: Path) -> dict[str, Any]:
+    status_text = _git_output(repo_root, ["git", "status", "--porcelain=v1", "--branch", "-uall"]) or ""
+    status_lines = status_text.splitlines()
+    status_header = next((line for line in status_lines if line.startswith("##")), None)
+    changed_files = _parse_porcelain_paths(status_lines)
+    branch = _git_branch(repo_root)
+    upstream = _git_output(repo_root, ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])
+    ahead: int | None = None
+    behind: int | None = None
+    if upstream:
+        counts = _git_output(repo_root, ["git", "rev-list", "--left-right", "--count", "HEAD...@{upstream}"])
+        if counts:
+            parts = counts.split()
+            if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                ahead = int(parts[0])
+                behind = int(parts[1])
+    detached = branch in {None, "HEAD"}
+    return {
+        "path": str(repo_root.resolve()),
+        "branch": branch,
+        "commit": _git_commit(repo_root),
+        "commit_full": _git_commit_full(repo_root),
+        "upstream": upstream,
+        "upstream_commit": _git_output(repo_root, ["git", "rev-parse", "--short", "@{upstream}"]) if upstream else None,
+        "ahead": ahead,
+        "behind": behind,
+        "dirty": bool(changed_files),
+        "dirty_count": len(changed_files),
+        "detached": detached,
+        "status_header": status_header,
+        "changed_file_count": len(changed_files),
+        "changed_files": changed_files[:100],
+        "changed_files_truncated": len(changed_files) > 100,
+    }
+
+
+def _expected_commit_matches(actual_full: str | None, actual_short: str | None, expected: str) -> bool:
+    value = str(expected or "").strip()
+    if not value:
+        return True
+    return bool((actual_full and actual_full.startswith(value)) or (actual_short and actual_short == value))
+
+
+def _plan_nox_posargs(plan: dict[str, Any]) -> list[str]:
+    raw = plan.get("nox_posargs") or []
+    if not isinstance(raw, list):
+        raise ValidationRunnerError(f"validation plan {plan.get('plan_key')} has invalid nox_posargs")
+    posargs = [str(item).strip() for item in raw]
+    if any(not item for item in posargs):
+        raise ValidationRunnerError(f"validation plan {plan.get('plan_key')} has empty nox_posargs item")
+    return posargs
 
 
 def _history_id_for_path(path: Path, history_root: Path) -> str:
@@ -368,8 +429,10 @@ class ValidationExecutionRunner:
     ) -> dict[str, Any]:
         plan = self._validate_plan(plan_key, confirm_text=confirm_text)
         resolved_cwd = self._validate_workspace_path(workspace_path, self.repo_root)
-        workspace_branch = _git_branch(resolved_cwd)
-        workspace_commit = _git_commit(resolved_cwd)
+        workspace_metadata = _git_workspace_metadata(resolved_cwd)
+        workspace_branch = workspace_metadata.get("branch")
+        workspace_commit = workspace_metadata.get("commit")
+        workspace_commit_full = workspace_metadata.get("commit_full")
         self._validate_root_main_workspace(resolved_cwd, workspace_branch, confirm_text)
         if expected_branch:
             if workspace_branch != expected_branch:
@@ -377,15 +440,22 @@ class ValidationExecutionRunner:
                     f"expected_branch {expected_branch!r} does not match actual branch {workspace_branch!r}"
                 )
         if expected_commit:
-            if workspace_commit != expected_commit:
+            if not _expected_commit_matches(
+                str(workspace_commit_full or ""),
+                str(workspace_commit or ""),
+                expected_commit,
+            ):
                 raise ValidationRunnerError(
-                    f"expected_commit {expected_commit!r} does not match actual commit {workspace_commit!r}"
+                    f"expected_commit {expected_commit!r} does not match actual commit {workspace_commit_full!r}"
                 )
         resolved_backend_port = self._resolve_port(plan, backend_port, "backend")
         resolved_frontend_port = self._resolve_port(plan, frontend_port, "frontend")
         timeout = self._resolve_timeout(plan, timeout_seconds)
         job_id = f"valjob_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+        nox_posargs = _plan_nox_posargs(plan)
         command = [sys.executable, "-m", "nox", "-s", str(plan["nox_session"])]
+        if nox_posargs:
+            command.extend(["--", *nox_posargs])
         env = self._runner_env(plan, resolved_backend_port, resolved_frontend_port, resolved_cwd)
         job = {
             "schema_version": JOB_SCHEMA_VERSION,
@@ -397,12 +467,16 @@ class ValidationExecutionRunner:
             "level": plan.get("level"),
             "command_key": plan.get("command_key"),
             "nox_session": plan.get("nox_session"),
+            "nox_posargs": nox_posargs,
             "command": command,
             "cwd": _repo_path(resolved_cwd),
             "workspace_path": str(resolved_cwd),
             "workspace_branch": workspace_branch,
             "workspace_commit": workspace_commit,
+            "workspace_commit_full": workspace_commit_full,
+            "workspace_git": workspace_metadata,
             "workspace_is_root": resolved_cwd == self.repo_root.resolve(),
+            "workspace_scope": "root" if resolved_cwd == self.repo_root.resolve() else "worktree",
             "expected_branch": expected_branch,
             "expected_commit": expected_commit,
             "requested_by": requested_by,
@@ -649,37 +723,45 @@ class ValidationExecutionRunner:
             text = str(value or "").strip()
             if text and text not in names:
                 names.append(text)
+        workspace = Path(job.get("workspace_path", str(self.repo_root))).resolve()
+        artifact_roots = [workspace]
+        if workspace == self.repo_root.resolve():
+            artifact_roots = [self.repo_root]
         candidates: list[tuple[str, Path]] = []
-        for name in names:
-            candidates.extend(
-                [
-                    ("coverage_snapshot", self.repo_root / "tmp" / "validation" / "coverage" / f"{name}_snapshot.json"),
-                    ("coverage_json", self.repo_root / "tmp" / "validation" / "coverage" / f"{name}.json"),
-                    ("coverage_xml", self.repo_root / "tmp" / "validation" / "coverage" / f"{name}.xml"),
-                ]
-            )
+        for root in artifact_roots:
+            for name in names:
+                candidates.extend(
+                    [
+                        ("coverage_snapshot", root / "tmp" / "validation" / "coverage" / f"{name}_snapshot.json"),
+                        ("coverage_json", root / "tmp" / "validation" / "coverage" / f"{name}.json"),
+                        ("coverage_xml", root / "tmp" / "validation" / "coverage" / f"{name}.xml"),
+                    ]
+                )
         nox_session = str(job.get("nox_session") or "")
         if nox_session == "validation_center_live_readonly":
-            candidates.extend(
-                [
-                    ("smoke_json", self.repo_root / "tmp" / "validation" / "validation_center" / "readonly_smoke.json"),
-                    ("evidence_json", self.repo_root / "tmp" / "validation" / "validation_center" / "readonly_smoke_evidence.json"),
-                ]
-            )
+            for root in artifact_roots:
+                candidates.extend(
+                    [
+                        ("smoke_json", root / "tmp" / "validation" / "validation_center" / "readonly_smoke.json"),
+                        ("evidence_json", root / "tmp" / "validation" / "validation_center" / "readonly_smoke_evidence.json"),
+                    ]
+                )
         if nox_session == "guardrail_changed_files":
-            candidates.extend(
-                [
-                    ("guardrail_json", self.repo_root / "tmp" / "validation" / "guardrails" / "changed_files.json"),
-                    ("guardrail_md", self.repo_root / "tmp" / "validation" / "guardrails" / "changed_files.md"),
-                ]
-            )
+            for root in artifact_roots:
+                candidates.extend(
+                    [
+                        ("guardrail_json", root / "tmp" / "validation" / "guardrails" / "changed_files.json"),
+                        ("guardrail_md", root / "tmp" / "validation" / "guardrails" / "changed_files.md"),
+                    ]
+                )
         if nox_session == "l0":
-            candidates.extend(
-                [
-                    ("guardrail_json", self.repo_root / "tmp" / "validation" / "guardrails" / "l0_paths.json"),
-                    ("guardrail_md", self.repo_root / "tmp" / "validation" / "guardrails" / "l0_paths.md"),
-                ]
-            )
+            for root in artifact_roots:
+                candidates.extend(
+                    [
+                        ("guardrail_json", root / "tmp" / "validation" / "guardrails" / "l0_paths.json"),
+                        ("guardrail_md", root / "tmp" / "validation" / "guardrails" / "l0_paths.md"),
+                    ]
+                )
         seen: set[Path] = set()
         unique: list[tuple[str, Path]] = []
         for kind, path in candidates:
@@ -705,9 +787,12 @@ class ValidationExecutionRunner:
                 "path": job.get("workspace_path"),
                 "branch": job.get("workspace_branch"),
                 "commit": job.get("workspace_commit"),
+                "commit_full": job.get("workspace_commit_full"),
                 "is_root": job.get("workspace_is_root"),
+                "scope": job.get("workspace_scope"),
                 "expected_branch": job.get("expected_branch"),
                 "expected_commit": job.get("expected_commit"),
+                "git": job.get("workspace_git"),
             },
             "started_at": job.get("started_at") or job.get("requested_at"),
             "finished_at": job.get("finished_at"),
@@ -805,9 +890,12 @@ class ValidationExecutionRunner:
             f"- Status: {job.get('status')}\n"
             f"- Return code: {job.get('return_code')}\n"
             f"- Workspace: `{job.get('workspace_path', 'N/A')}`\n"
+            f"- Workspace scope: `{job.get('workspace_scope', 'N/A')}`\n"
             f"- Branch: `{job.get('workspace_branch', 'N/A')}`\n"
             f"- Commit: `{job.get('workspace_commit', 'N/A')}`\n"
+            f"- Full commit: `{job.get('workspace_commit_full', 'N/A')}`\n"
             f"- Is root: {job.get('workspace_is_root', True)}\n"
+            f"- Dirty files: {(job.get('workspace_git') or {}).get('dirty_count', 'N/A')}\n"
             f"- Started at: {job.get('started_at')}\n"
             f"- Finished at: {job.get('finished_at')}\n"
             f"- Production 8001 touched: {job.get('production_8001_touched')}\n"

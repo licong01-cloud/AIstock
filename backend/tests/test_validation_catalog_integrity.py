@@ -6,7 +6,6 @@ from pathlib import Path
 
 from backend.services.validation.catalog_integrity import (
     CATALOG_INTEGRITY_SCHEMA,
-    CatalogIntegrityChecker,
     run_catalog_integrity,
 )
 from scripts.aistock_validation_catalog_integrity import main as catalog_integrity_main
@@ -74,6 +73,22 @@ def _write_pass_repo(repo_root: Path) -> None:
             writes_business_state: false
             runner_enabled: false
             max_duration_seconds: 900
+          - plan_key: qe_mcp_backend
+            title: QE MCP backend
+            module: qe
+            level: L2
+            command_key: nox_qe_mcp_backend
+            nox_session: qe_mcp_backend
+            enabled: true
+            requires_backend: false
+            requires_frontend: false
+            allowed_backend_ports: []
+            allowed_frontend_ports: []
+            writes_database: false
+            writes_artifacts: false
+            writes_business_state: false
+            runner_enabled: true
+            max_duration_seconds: 300
         """,
     )
     _write(
@@ -101,6 +116,8 @@ def _write_pass_repo(repo_root: Path) -> None:
             display_name: QE
             module_type: product_feature
             risk_level: high
+            test_plans:
+              recommended: [qe_mcp_backend]
           - module_id: qe.archive
             display_name: QE Archive
             parent_module: qe
@@ -180,6 +197,10 @@ def _write_pass_repo(repo_root: Path) -> None:
             pass
 
         @nox.session(venv_backend="none")
+        def qe_mcp_backend(session):
+            pass
+
+        @nox.session(venv_backend="none")
         def qe_archive_l3(session):
             pass
         """,
@@ -235,8 +256,8 @@ def test_catalog_integrity_passes_on_aligned_catalogs(tmp_path: Path) -> None:
     assert report["state"] == "passed"
     assert report["summary"]["error_count"] == 0
     assert report["summary"]["warning_count"] == 0
-    assert report["summary"]["plans"] == 3
-    assert report["summary"]["runner_enabled_plans"] == 2
+    assert report["summary"]["plans"] == 4
+    assert report["summary"]["runner_enabled_plans"] == 3
     assert report["findings"] == []
 
 
