@@ -440,8 +440,20 @@ class StrategyPackageService:
     def validate_manifest_integrity(self, *, limit: int = 500) -> dict[str, Any]:
         return self.repository.validate_manifest_integrity(limit=limit)
 
-    def repair_manifest_hash(self, package_id: str, *, operator: str = "paper_v2_gate_decoupling") -> StrategyPackageRecord:
-        return self.repository.repair_manifest_hash(package_id, operator=operator)
+    def repair_manifest_hash(
+        self,
+        package_id: str,
+        *,
+        operator: str = "paper_v2_gate_decoupling",
+        confirm_stored_sha256: str | None = None,
+        confirm_computed_sha256: str | None = None,
+    ) -> StrategyPackageRecord:
+        return self.repository.repair_manifest_hash(
+            package_id,
+            operator=operator,
+            confirm_stored_sha256=confirm_stored_sha256,
+            confirm_computed_sha256=confirm_computed_sha256,
+        )
 
     def list_status_events(self, package_id: str, *, limit: int = 200) -> list[PackageStatusEvent]:
         return self.repository.list_status_events(package_id, limit=limit)

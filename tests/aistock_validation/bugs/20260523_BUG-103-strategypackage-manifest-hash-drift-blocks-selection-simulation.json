@@ -42,6 +42,7 @@
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/172",
   "allowed_write_scope": [
     "backend/services/strategy_package/",
+    "backend/routers/strategy_packages.py",
     "backend/services/selection_center/",
     "backend/services/simulation_runtime/",
     "backend/services/qmt_strategy_ledger/",
@@ -95,6 +96,12 @@
       "actor": "codex-app",
       "action": "close_sync_audit_keep_open",
       "note": "Audit keeps BUG-103 open: 6650cc64 isolated/quarantined corrupt package drift and added manifest-integrity/repair APIs, but live /api/v1/strategy-packages/manifest-integrity?limit=500 still reports drifted_count=10. Operator-reviewed production repair/quarantine evidence and fresh daily selection evidence are still required."
+    },
+    {
+      "timestamp": "2026-05-29T02:56:00+08:00",
+      "actor": "codex-app",
+      "action": "scope_expanded_router_repair_api",
+      "note": "Expanded BUG-103 repair scope to include the StrategyPackage router endpoint that passes explicit manifest hash confirmation fields to the service layer; no production data mutation is performed."
     }
   ],
   "task_tier": "T2",
