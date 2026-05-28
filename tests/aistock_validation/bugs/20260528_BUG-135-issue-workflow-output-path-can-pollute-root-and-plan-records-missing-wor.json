@@ -39,8 +39,8 @@
   "expected": "Workflow CLI output options should not create root-level files by mistake, and state should distinguish planned worktree paths from actually created worktrees so Codex and Claude Code can resume without ambiguity.",
   "first_seen_at": "2026-05-28T02:51:05.821037Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "9adb19fbcd17dcf64779d2dc96b2eaec09dc86ec",
+  "fixed_at": "2026-05-28T09:43:44.358225Z",
   "github_issue_number": 261,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/261",
   "last_seen_at": "2026-05-28T02:51:05.821037Z",
@@ -48,6 +48,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/263",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -63,7 +64,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -72,5 +73,10 @@
     "fingerprint": "32d65e8a52ac1a1fc4247751",
     "source_event_id": "FE-20260528-32d65e8a52ac"
   },
+  "validation_evidence": [
+    "python -m ruff check scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow.py -> passed",
+    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -p no:cacheprovider -> 58 passed",
+    "git diff --check origin/main..HEAD -> passed"
+  ],
   "verification_run_id": null
 }
