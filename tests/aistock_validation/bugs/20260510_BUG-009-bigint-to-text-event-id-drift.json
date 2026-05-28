@@ -6,7 +6,7 @@
   "module": "qe_archive",
   "severity": "P3",
   "risk_area": "data_correctness",
-  "status": "open",
+  "status": "fixed",
   "trigger_condition": {
     "scenario": "T14b_PaperV2ArchiveHandler_event_archive",
     "type_cast_int_to_str": true
@@ -18,18 +18,20 @@
     "branch:origin/claude/dw-foundation-20260510"
   ],
   "fingerprint": "qe_archive::event_id::bigint_vs_text_drift",
-  "assigned_agent": "claude_code",
-  "fix_branch": null,
+  "assigned_agent": "codex",
+  "fix_branch": "bug/BUG-009-qe-archive-event-id-cast-20260529-20260529",
   "fix_commit": null,
   "verification_run_id": null,
   "created_at": "2026-05-10T00:00:00Z",
   "first_seen_at": "2026-05-10T00:00:00Z",
   "last_seen_at": "2026-05-10T00:00:00Z",
-  "fixed_at": null,
+  "fixed_at": "2026-05-29T05:15:00+08:00",
   "submitted_at": null,
   "closed_at": null,
   "allowed_write_scope": [
-    "backend/services/qe_archive/handlers/paper_v2_archive_handler.py"
+    "backend/services/qe_archive/handlers/paper_v2_archive_handler.py",
+    "backend/tests/qe_archive/test_paper_v2_archive_handler.py",
+    "tests/aistock_validation/bugs/20260510_BUG-009-bigint-to-text-event-id-drift.json"
   ],
   "suspected_modules": [
     "backend/services/qe_archive/handlers/"
@@ -48,6 +50,27 @@
       "actor": "claude_code",
       "action": "discovered",
       "note": "Round-2 P1.3 audit flagged bigint→TEXT drift as acceptable but design-pass follow-up"
+    },
+    {
+      "timestamp": "2026-05-29T05:15:00+08:00",
+      "actor": "codex_app",
+      "action": "github_issue_linked",
+      "note": "Linked BUG-009 to GitHub Issue #320 for standard workflow tracking."
+    },
+    {
+      "timestamp": "2026-05-29T05:15:00+08:00",
+      "actor": "codex_app",
+      "action": "mark_fixed_pending_validation",
+      "note": "Applied canonical raw decimal TEXT id conversion helper and int64 max order event idempotency coverage."
     }
+  ],
+  "github_issue_number": 320,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/320",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "production_backend_dependency_gate": "noop",
+  "validation_evidence": [
+    "Implemented _archive_text_id canonical raw decimal TEXT conversion and applied it to session event, order event, config audit, and reset audit archive keys.",
+    "Added int64 max boundary and idempotency test coverage for order event event_id casting."
   ]
 }
