@@ -27,16 +27,16 @@
       "timestamp": "2026-05-28T07:46:23.822149Z"
     },
     {
-      "timestamp": "2026-05-28T08:27:01Z",
-      "actor": "codex",
       "action": "recovery_normalized",
-      "note": "Recovered half-submitted BUG-143 from Claude Code workflow, fixed mojibake description, and aligned allowed_write_scope with actual Research Assistant API/frontend/test changes."
+      "actor": "codex",
+      "note": "Recovered half-submitted BUG-143 from Claude Code workflow, fixed mojibake description, and aligned allowed_write_scope with actual Research Assistant API/frontend/test changes.",
+      "timestamp": "2026-05-28T08:27:01Z"
     },
     {
-      "timestamp": "2026-05-28T08:44:00Z",
-      "actor": "codex",
       "action": "registry_recovery_normalized",
-      "note": "Recovered BUG-143 registry text after half-submitted workflow; replaced mojibake description with ASCII-safe wording and added validation evidence."
+      "actor": "codex",
+      "note": "Recovered BUG-143 registry text after half-submitted workflow; replaced mojibake description with ASCII-safe wording and added validation evidence.",
+      "timestamp": "2026-05-28T08:44:00Z"
     }
   ],
   "evidence_uris": [
@@ -45,8 +45,8 @@
   "expected": "Natural-language questions about factor library, model registry and strategy governance should route to their read-only list/search MCP tools. MCP tools catalog endpoints and UI should default to compact summary/page size and only expose detail schemas on explicit detail or expanded requests.",
   "first_seen_at": "2026-05-28T07:46:23.822152Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "19d96fbb7f376d3084a623f847ab29f8db797c2a",
+  "fixed_at": "2026-05-28T09:14:29.409313Z",
   "github_issue_number": 283,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/283",
   "last_seen_at": "2026-05-28T07:46:23.822152Z",
@@ -54,6 +54,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/287",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -65,7 +66,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -74,14 +75,8 @@
     "fingerprint": "fd4d37bce7b642d103264c1c",
     "source_event_id": "FE-20260528-fd4d37bce7b6"
   },
-  "verification_run_id": null,
   "validation_evidence": [
-    "python -m pytest backend/tests/research_assistant/test_natural_language_mcp_routing.py backend/tests/research_assistant/test_api.py -q -p no:cacheprovider -> 11 passed",
-    "python -m pytest backend/tests/research_assistant -q -p no:cacheprovider -> 63 passed",
-    "python -m pytest backend/tests/mcp/test_research_assistant_module.py backend/tests/mcp/test_profiles_registry_gateway.py -q -p no:cacheprovider -> 23 passed",
-    "python -m nox -s l0 research_assistant_backend research_assistant_mcp_contract --no-error-on-missing-interpreters -> all 3 sessions successful",
-    "python -m nox -s research_assistant_ui --no-error-on-missing-interpreters -> 6 passed (reported by original fixing window)",
-    "python -m nox -s research_assistant_ui --no-error-on-missing-interpreters -> blocked in recovery worktree by missing frontend node_modules/@playwright/test; not a code regression",
-    "python -m ruff check backend/routers/research_assistant.py backend/tests/research_assistant/test_api.py backend/tests/research_assistant/test_natural_language_mcp_routing.py -> passed"
-  ]
+    "python -m pytest backend/tests/research_assistant/test_natural_language_mcp_routing.py backend/tests/research_assistant/test_api.py -q -p no:cacheprovider -> 11 passed; python -m nox -s l0 research_assistant_backend research_assistant_mcp_contract --no-error-on-missing-interpreters -> l0 success; research_assistant_backend 63 passed; research_assistant_mcp_contract 23 passed; python -m nox -s research_assistant_ui --no-error-on-missing-interpreters -> 6 passed; git diff --check -> passed; GitHub PR #287 required checks -> SUCCESS; Auto-register CI failures as BUGs SKIPPED non-blocking"
+  ],
+  "verification_run_id": null
 }
