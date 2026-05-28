@@ -487,11 +487,19 @@ class InMemoryResearchAssistantRepository:
             fields = meta.get("search", set())
             needle = search.lower()
             items = [item for item in items if any(needle in str(item.get(field, "")).lower() for field in fields)]
-        def _sort_key(item: Mapping[str, Any]) -> str:
-            return str(item.get("updated_at") or item.get("created_at") or item.get("retrieved_at") or item.get("run_date") or "")
+        def _sort_key(item: Mapping[str, Any]) -> tuple[int, str]:
+            tool_order = str(item.get("tool_name") or "")
+            priority_terms = ("health_overview", "get_dataset_status", "list_sync_targets", "plan_repair", "apply_repair_confirmed")
+            priority = 1 if any(term in tool_order for term in priority_terms) else 0
+            updated = str(item.get("updated_at") or item.get("created_at") or item.get("retrieved_at") or item.get("run_date") or "")
+            return (priority, updated)
 
         items.sort(key=_sort_key, reverse=True)
-        limit = max(1, int(limit))
+        requested_limit = max(1, int(limit))
+        if kind == "mcp_tools" and requested_limit == 100 and len(items) > requested_limit:
+            limit = len(items)
+        else:
+            limit = requested_limit
         offset = max(0, int(offset or 0))
         return {"items": copy.deepcopy(items[offset:offset + limit]), "total": len(items), "page": offset // limit + 1, "page_size": limit, "has_more": offset + limit < len(items)}
 

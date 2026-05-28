@@ -20,7 +20,25 @@ if TYPE_CHECKING:
     from backend.mcp.registry import ModuleRegistry
 
 
-TOOL_COUNT = 16
+TOOL_NAMES = (
+    "research_create_experiment",
+    "research_list_experiments",
+    "research_get_experiment",
+    "research_run_stage",
+    "research_retry_stage",
+    "research_get_stage_result",
+    "research_compare_baseline",
+    "research_list_artifact_refs",
+    "research_list_backtest_records",
+    "research_hmm_backfill_preview",
+    "research_hmm_backfill_execute",
+    "research_get_backfill_run",
+    "research_get_pipeline_types",
+    "research_create_issue",
+    "research_promote",
+    "research_reject",
+)
+TOOL_COUNT = len(TOOL_NAMES)
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]

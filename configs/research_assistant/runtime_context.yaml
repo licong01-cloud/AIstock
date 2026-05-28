@@ -544,6 +544,16 @@ planner:
     - local_data.health_overview
     - local_data.plan_repair
     - local_data.apply_repair_confirmed
+  factor_workflow_capability_keys:
+    - factor_library.mcp_orchestration
+    - factor_metrics.mcp_orchestration
+    - factor_correlation.mcp_orchestration
+  model_workflow_capability_keys:
+    - model_registry.mcp_orchestration
+  strategy_workflow_capability_keys:
+    - strategy_governance.mcp_orchestration
+  execution_policy_workflow_capability_keys:
+    - execution_policy.mcp_orchestration
   workflow_capabilities:
     - capability_key: local_data.health_overview
       capability_type: mcp_tool
@@ -901,9 +911,9 @@ query_limits:
   api_list_skills: 100
   api_list_skill_events: 50
   api_list_mcp_servers: 200
-  api_list_mcp_tools: 100
+  api_list_mcp_tools: 300
   api_list_mcp_tool_events: 50
-  api_list_capabilities: 100
+  api_list_capabilities: 300
   api_list_action_proposals: 100
   api_list_approvals: 50
   api_list_issue_candidates: 50

@@ -1,7 +1,7 @@
 schema_version: aistock_prompt_pack_v1
 assistant_key: research_assistant
 pack_key: research_assistant.main
-pack_version: 1.1.0
+pack_version: 1.2.0
 owner: research_assistant
 environment_scope:
   - dev
@@ -257,3 +257,134 @@ nodes:
     trigger_json:
       context_runtime: true
     prompt_file: nodes/context.renderer.context_health.md
+
+  - prompt_key: domain.qe_warehouse
+    title: QE warehouse MCP routing
+    category: domain
+    tree_path: /root/mode/planning/domain/qe_warehouse
+    parent_key: intent.planning
+    phase: planning
+    risk_level: high
+    trigger_json:
+      explicit_intents: [qe_warehouse_request]
+    prompt_file: nodes/domain.qe_warehouse.md
+  - prompt_key: domain.mcp_capability_router
+    title: MCP capability router
+    category: domain
+    tree_path: /root/mode/planning/domain/mcp_capability_router
+    parent_key: intent.planning
+    phase: planning
+    risk_level: low
+    trigger_json:
+      explicit_intents: [mcp_capability_inquiry]
+    prompt_file: nodes/domain.mcp_capability_router.md
+  - prompt_key: domain.factor_library
+    title: Factor library MCP routing
+    category: domain
+    tree_path: /root/mode/planning/domain/factor_library
+    parent_key: intent.planning
+    phase: planning
+    risk_level: medium
+    trigger_json:
+      explicit_intents: [factor_library_request]
+    prompt_file: nodes/domain.factor_library.md
+  - prompt_key: domain.factor_metrics
+    title: Factor metrics MCP routing
+    category: domain
+    tree_path: /root/mode/planning/domain/factor_metrics
+    parent_key: intent.planning
+    phase: planning
+    risk_level: high
+    trigger_json:
+      explicit_intents: [factor_metrics_request]
+    prompt_file: nodes/domain.factor_metrics.md
+  - prompt_key: domain.factor_correlation
+    title: Factor correlation MCP routing
+    category: domain
+    tree_path: /root/mode/planning/domain/factor_correlation
+    parent_key: intent.planning
+    phase: planning
+    risk_level: high
+    trigger_json:
+      explicit_intents: [factor_correlation_request]
+    prompt_file: nodes/domain.factor_correlation.md
+  - prompt_key: domain.model_registry
+    title: Model registry MCP routing
+    category: domain
+    tree_path: /root/mode/planning/domain/model_registry
+    parent_key: intent.planning
+    phase: planning
+    risk_level: high
+    trigger_json:
+      explicit_intents: [model_registry_request]
+    prompt_file: nodes/domain.model_registry.md
+  - prompt_key: domain.strategy_governance
+    title: Strategy governance MCP routing
+    category: domain
+    tree_path: /root/mode/planning/domain/strategy_governance
+    parent_key: intent.planning
+    phase: planning
+    risk_level: production_sensitive
+    trigger_json:
+      explicit_intents: [strategy_governance_request]
+    prompt_file: nodes/domain.strategy_governance.md
+  - prompt_key: domain.execution_policy
+    title: Execution policy MCP routing
+    category: domain
+    tree_path: /root/mode/planning/domain/execution_policy
+    parent_key: intent.planning
+    phase: planning
+    risk_level: production_sensitive
+    trigger_json:
+      explicit_intents: [execution_policy_request]
+    prompt_file: nodes/domain.execution_policy.md
+  - prompt_key: domain.research_pipeline
+    title: Research pipeline MCP routing
+    category: domain
+    tree_path: /root/mode/planning/domain/research_pipeline
+    parent_key: intent.planning
+    phase: planning
+    risk_level: high
+    trigger_json:
+      explicit_intents: [research_pipeline_request]
+    prompt_file: nodes/domain.research_pipeline.md
+  - prompt_key: domain.validation_issue
+    title: Validation issue MCP routing
+    category: domain
+    tree_path: /root/mode/planning/domain/validation_issue
+    parent_key: intent.planning
+    phase: planning
+    risk_level: high
+    trigger_json:
+      explicit_intents: [validation_issue_request]
+    prompt_file: nodes/domain.validation_issue.md
+  - prompt_key: tool_guard.mcp_payload_budget
+    title: MCP payload budget guard
+    category: tool_guard
+    tree_path: /root/mode/preflight/tool_guard/mcp_payload_budget
+    parent_key: root.assistant
+    phase: preflight
+    risk_level: high
+    trigger_json:
+      tools_any: [assistant_list_mcp_tools, factor_library_list, factor_metrics_get_result, factor_corr_get_matrix_ref, model_registry_list, strategy_governance_list_packages, execution_policy_list_algos]
+    prompt_file: nodes/tool_guard.mcp_payload_budget.md
+  - prompt_key: tool_guard.mcp_all
+    title: Unified MCP tool guard
+    category: tool_guard
+    tree_path: /root/mode/preflight/tool_guard/mcp_all
+    parent_key: root.assistant
+    phase: preflight
+    risk_level: production_sensitive
+    trigger_json:
+      mcp_all: true
+    prompt_file: nodes/tool_guard.mcp_all.md
+  - prompt_key: renderer.humanized_response
+    title: Humanized MCP response renderer
+    category: renderer
+    tree_path: /root/renderer/humanized_response
+    parent_key: root.assistant
+    phase: result
+    risk_level: medium
+    trigger_json:
+      always: true
+    prompt_file: nodes/renderer.humanized_response.md

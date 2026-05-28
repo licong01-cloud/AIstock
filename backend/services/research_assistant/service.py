@@ -56,6 +56,9 @@ from .prompt_pack import (
 )
 from .repository import DatabaseResearchAssistantRepository
 from .runtime_config import DEFAULT_ENVIRONMENT, RUNTIME_CONFIG_KEY, RuntimeConfigSnapshot, load_runtime_config
+from .domain_ontology import DOMAIN_SPECS, McpDomain, domain_prompt_key
+from .mcp_catalog_sync import default_mcp_servers, default_mcp_tools, workflow_capabilities as catalog_workflow_capabilities
+from .tool_router import route_request
 
 
 logger = logging.getLogger("aistock.research_assistant.service")
@@ -75,6 +78,16 @@ class DialogueIntent(str, Enum):
     EXPERIMENT_VALIDATION_REQUEST = "experiment_validation_request"
     EXPERIMENT_EXECUTION_REQUEST = "experiment_execution_request"
     LOCAL_DATA_MANAGEMENT_REQUEST = "local_data_management_request"
+    MCP_CAPABILITY_INQUIRY = "mcp_capability_inquiry"
+    QE_WAREHOUSE_REQUEST = "qe_warehouse_request"
+    RESEARCH_PIPELINE_REQUEST = "research_pipeline_request"
+    VALIDATION_ISSUE_REQUEST = "validation_issue_request"
+    FACTOR_LIBRARY_REQUEST = "factor_library_request"
+    FACTOR_METRICS_REQUEST = "factor_metrics_request"
+    FACTOR_CORRELATION_REQUEST = "factor_correlation_request"
+    MODEL_REGISTRY_REQUEST = "model_registry_request"
+    STRATEGY_GOVERNANCE_REQUEST = "strategy_governance_request"
+    EXECUTION_POLICY_REQUEST = "execution_policy_request"
     AMBIGUOUS_REQUEST = "ambiguous_request"
     GENERAL_CHAT = "general_chat"
     AUDIT_REQUEST = "audit_request"
@@ -216,221 +229,15 @@ DEFAULT_SKILLS: list[dict[str, Any]] = [
 ]
 
 
-DEFAULT_MCP_SERVERS: list[dict[str, Any]] = [
-    {"server_key": "aistock-qe-experiment", "title": "QE experiment MCP", "status": "ready", "health_json": {"mode": "loopback"}},
-    {"server_key": "aistock-qe-archive", "title": "QE archive MCP", "status": "ready", "health_json": {"mode": "loopback"}},
-    {"server_key": "aistock-validation", "title": "Validation MCP", "status": "ready", "health_json": {"mode": "loopback"}},
-    {"server_key": "research-assistant", "title": "Research assistant MCP", "status": "ready", "health_json": {"mode": "loopback"}},
-    {
-        "server_key": "aistock-local-data",
-        "title": "Local data management MCP",
-        "status": "ready",
-        "health_json": {"mode": "loopback", "module": "local_data", "capability_key": "local_data_management"},
-    },
-]
+DEFAULT_MCP_SERVERS: list[dict[str, Any]] = default_mcp_servers()
 
 
-DEFAULT_MCP_TOOLS: list[dict[str, Any]] = [
-    {
-        "server_key": "research-assistant",
-        "tool_name": "assistant_create_task",
-        "title": "创建研究助理任务",
-        "description": "创建 Research Assistant Task Ledger 记录，仅写入助理任务账本。",
-        "side_effect_level": "draft_only",
-        "risk_level": "medium",
-        "requires_approval": False,
-        "input_schema_json": {"type": "object", "required": ["title"]},
-        "output_schema_json": {"type": "object", "required": ["task_id"]},
-        "preflight_schema_json": {"checks": ["schema", "idempotency"]},
-        "required_confirmations": [],
-    },
-    {
-        "server_key": "research-assistant",
-        "tool_name": "assistant_build_context_pack",
-        "title": "构建上下文包",
-        "description": "根据已审批 Memory/Graph/Temp Memory 构建 Context Pack，不触发外部执行。",
-        "side_effect_level": "read_only",
-        "risk_level": "low",
-        "requires_approval": False,
-        "input_schema_json": {"type": "object"},
-        "output_schema_json": {"type": "object", "required": ["context_pack_id"]},
-        "preflight_schema_json": {"checks": ["token_budget", "source_refs"]},
-        "required_confirmations": [],
-    },
-    {
-        "server_key": "research-assistant",
-        "tool_name": "assistant_create_memory_candidate",
-        "title": "创建候选记忆",
-        "description": "创建 draft memory candidate，不直接批准长期记忆。",
-        "side_effect_level": "draft_only",
-        "risk_level": "medium",
-        "requires_approval": False,
-        "input_schema_json": {"type": "object", "required": ["memory_type", "subject_key", "title"]},
-        "output_schema_json": {"type": "object", "required": ["memory_id"]},
-        "preflight_schema_json": {"checks": ["source_ref", "evidence_refs", "draft_only"]},
-        "required_confirmations": [],
-    },
-    {
-        "server_key": "research-assistant",
-        "tool_name": "assistant_create_issue_candidate",
-        "title": "创建候选 Issue",
-        "description": "创建本地候选 Issue，不直接创建正式 GitHub Issue。",
-        "side_effect_level": "draft_only",
-        "risk_level": "medium",
-        "requires_approval": False,
-        "input_schema_json": {"type": "object", "required": ["title", "problem_statement"]},
-        "output_schema_json": {"type": "object", "required": ["candidate_id", "status"]},
-        "preflight_schema_json": {"checks": ["dedupe_key", "evidence_refs", "draft_only", "github_formal_issue_blocked"]},
-        "required_confirmations": [],
-    },
-    {
-        "server_key": "aistock-qe-experiment",
-        "tool_name": "qe_template_materialize_confirmed",
-        "title": "物化 QE pending experiment",
-        "description": "在二次确认和审批后调用 QE template materialize。",
-        "side_effect_level": "high_cost_compute",
-        "risk_level": "production_sensitive",
-        "requires_approval": True,
-        "input_schema_json": {"type": "object", "required": ["template_id", "confirm_template"]},
-        "output_schema_json": {"type": "object"},
-        "preflight_schema_json": {"checks": ["stock_pool", "node_health", "cost", "approval"]},
-        "required_confirmations": ["MATERIALIZE_QE_TEMPLATE"],
-    },
-    {
-        "server_key": "aistock-qe-experiment",
-        "tool_name": "qe_template_create",
-        "title": "创建 QE template 草案",
-        "description": "创建 QE template draft，默认不 materialize、不 run。",
-        "risk_level": "medium",
-        "side_effect_level": "draft_only",
-        "requires_approval": False,
-        "input_schema_json": {"type": "object", "required": ["template_kind", "title", "config_json"]},
-        "output_schema_json": {"type": "object", "required": ["template_id", "status"]},
-        "preflight_schema_json": {"checks": ["schema", "fixed_seed", "draft_only"]},
-        "required_confirmations": ["CONFIRM_QE_DRAFT"],
-    },
-    {
-        "server_key": "aistock-qe-experiment",
-        "tool_name": "qe_template_validate",
-        "title": "校验 QE template",
-        "description": "校验 QE template 并返回 diff/summary，不 materialize、不 run。",
-        "risk_level": "medium",
-        "side_effect_level": "write_nonprod",
-        "requires_approval": False,
-        "input_schema_json": {"type": "object", "required": ["template_id"]},
-        "output_schema_json": {"type": "object", "required": ["validation"]},
-        "preflight_schema_json": {"checks": ["template_exists", "schema", "diff_summary"]},
-        "required_confirmations": ["CONFIRM_QE_VALIDATE"],
-    },
-    {
-        "server_key": "aistock-qe-experiment",
-        "tool_name": "qe_template_run_confirmed",
-        "title": "运行 QE experiment",
-        "description": "在 materialize 后启动 QE run，高成本，必须审批和成本确认。",
-        "risk_level": "high",
-        "side_effect_level": "high_cost_compute",
-        "requires_approval": True,
-        "input_schema_json": {"type": "object", "required": ["template_id", "confirm_run"]},
-        "output_schema_json": {"type": "object"},
-        "preflight_schema_json": {"checks": ["materialized_template", "cost_guard", "node_health", "approval"]},
-        "required_confirmations": ["CONFIRM_QE_RUN"],
-    },
-    {
-        "server_key": "aistock-validation",
-        "tool_name": "mcp_github_issue_create",
-        "title": "创建正式 GitHub Issue",
-        "description": "正式 GitHub Issue 创建，高风险，必须人工审批。",
-        "side_effect_level": "write_nonprod",
-        "risk_level": "high",
-        "requires_approval": True,
-        "input_schema_json": {"type": "object", "required": ["title"]},
-        "output_schema_json": {"type": "object"},
-        "preflight_schema_json": {"checks": ["github_token", "repository", "human_approval"]},
-        "required_confirmations": [ASSISTANT_APPROVAL_CONFIRM],
-    },
-    {
-        "server_key": "aistock-local-data",
-        "tool_name": "local_data_health_overview",
-        "title": "Local data health overview",
-        "description": "Read-only overview of dataset readiness, alerts, recent jobs, and sync targets.",
-        "risk_level": "low",
-        "side_effect_level": "read_only",
-        "requires_approval": False,
-        "input_schema_json": {"type": "object"},
-        "output_schema_json": {"type": "object"},
-        "preflight_schema_json": {"checks": ["read_only", "facade"]},
-        "required_confirmations": [],
-    },
-    {
-        "server_key": "aistock-local-data",
-        "tool_name": "local_data_get_dataset_status",
-        "title": "Local data dataset status",
-        "description": "Read-only status for one dataset, including audit, physical, cache, and last-job evidence.",
-        "risk_level": "low",
-        "side_effect_level": "read_only",
-        "requires_approval": False,
-        "input_schema_json": {"type": "object", "required": ["dataset"]},
-        "output_schema_json": {"type": "object"},
-        "preflight_schema_json": {"checks": ["read_only", "facade"]},
-        "required_confirmations": [],
-    },
-    {
-        "server_key": "aistock-local-data",
-        "tool_name": "local_data_list_sync_targets",
-        "title": "Local data sync targets",
-        "description": "Read-only list of pending, retry, blocked, or reconciled data sync targets.",
-        "risk_level": "low",
-        "side_effect_level": "read_only",
-        "requires_approval": False,
-        "input_schema_json": {"type": "object"},
-        "output_schema_json": {"type": "object"},
-        "preflight_schema_json": {"checks": ["read_only", "facade"]},
-        "required_confirmations": [],
-    },
-    {
-        "server_key": "aistock-local-data",
-        "tool_name": "local_data_list_sync_attempts",
-        "title": "Local data sync attempts",
-        "description": "Read-only timeline of data sync attempts for a dataset or target.",
-        "risk_level": "low",
-        "side_effect_level": "read_only",
-        "requires_approval": False,
-        "input_schema_json": {"type": "object"},
-        "output_schema_json": {"type": "object"},
-        "preflight_schema_json": {"checks": ["read_only", "facade"]},
-        "required_confirmations": [],
-    },
-    {
-        "server_key": "aistock-local-data",
-        "tool_name": "local_data_plan_repair",
-        "title": "Local data repair plan",
-        "description": "Plan-only repair proposal built from health, gaps, jobs, alerts, and sync targets; does not execute.",
-        "risk_level": "medium",
-        "side_effect_level": "draft_only",
-        "requires_approval": False,
-        "input_schema_json": {"type": "object"},
-        "output_schema_json": {"type": "object"},
-        "preflight_schema_json": {"checks": ["plan_only", "no_execution"]},
-        "required_confirmations": [],
-    },
-    {
-        "server_key": "aistock-local-data",
-        "tool_name": "local_data_apply_repair_confirmed",
-        "title": "Apply local data repair plan",
-        "description": "Confirmed execution of a local data repair plan; must stop on first failed step and report evidence.",
-        "risk_level": "production_sensitive",
-        "side_effect_level": "run_data_job",
-        "requires_approval": True,
-        "input_schema_json": {"type": "object", "required": ["plan_id", "confirmation_text"]},
-        "output_schema_json": {"type": "object"},
-        "preflight_schema_json": {"checks": ["confirmation_text", "plan_id", "facade", "approval"]},
-        "required_confirmations": [ASSISTANT_APPROVAL_CONFIRM],
-    },
-]
+DEFAULT_MCP_TOOLS: list[dict[str, Any]] = default_mcp_tools()
 
 
 DEFAULT_WORKFLOW_CAPABILITIES: list[dict[str, Any]] = [
-    dict(item) for item in load_runtime_config(environment=DEFAULT_ENVIRONMENT).config["planner"]["workflow_capabilities"]
+    *[dict(item) for item in load_runtime_config(environment=DEFAULT_ENVIRONMENT).config["planner"].get("workflow_capabilities", [])],
+    *catalog_workflow_capabilities(),
 ]
 
 
@@ -749,10 +556,15 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
     def _workflow_capabilities(self) -> list[dict[str, Any]]:
         configured = self.active_runtime_config().get("planner", {}).get("workflow_capabilities")
         if configured is None:
-            return self.default_workflow_capabilities()
-        if not isinstance(configured, list):
-            raise ValueError("planner.workflow_capabilities must be a list when configured")
-        return [dict(item) for item in configured]
+            source = self.default_workflow_capabilities()
+        else:
+            if not isinstance(configured, list):
+                raise ValueError("planner.workflow_capabilities must be a list when configured")
+            source = [dict(item) for item in configured]
+        merged: dict[str, dict[str, Any]] = {str(item.get("capability_key")): dict(item) for item in source}
+        for item in catalog_workflow_capabilities():
+            merged[str(item["capability_key"])] = dict(item)
+        return list(merged.values())
 
     def health(self) -> dict[str, Any]:
         repository_health = self.repository.health()
@@ -988,7 +800,9 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             seeded["mcp_servers"] += 1
         for item in DEFAULT_MCP_TOOLS:
             tool_id = f"mcp_tool_{item['server_key']}_{item['tool_name']}".replace("-", "_")
-            self.repository.create_record("mcp_tools", {"tool_id": tool_id, "status": "enabled", **item})
+            payload = {"tool_id": tool_id, "status": "enabled", **item}
+            payload.pop("domain", None)
+            self.repository.create_record("mcp_tools", payload)
             seeded["mcp_tools"] += 1
         for item in DEFAULT_MODEL_PROFILES:
             profile = dict(item)
@@ -1007,7 +821,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         seeded["capabilities"] += int(capability_sync["applied_count"])
         self._seed_default_memory_graph(seeded)
         self._ensure_default_reports_and_notifications(seeded)
-        return {"seeded": seeded, "catalog_version": "research_assistant_mcp_skill_execution_20260525"}
+        return {"seeded": seeded, "catalog_version": "research_assistant_unified_mcp_full_20260528"}
 
     def _seed_default_memory_graph(self, seeded: dict[str, int]) -> None:
         for item in DEFAULT_MEMORY_SEEDS:
@@ -1289,6 +1103,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
 
     @staticmethod
     def _default_query_limit_key(kind: str) -> str:
+        if kind == "mcp_tools":
+            return "api_list_mcp_tools"
         return f"api_list_{kind}"
 
     def create_conversation(self, request: ConversationCreate | dict[str, Any]) -> dict[str, Any]:
@@ -1407,24 +1223,32 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         else:
             selected_keys.update({"root.assistant", f"mode.{mode}"})
         task_modes = {DialogueMode.PLANNING.value, DialogueMode.PREFLIGHT.value, DialogueMode.EXECUTION.value}
-        if mode in task_modes and intent in {
+        qe_prompt_intent = intent in {
             DialogueIntent.EXPERIMENT_DRAFT_REQUEST,
             DialogueIntent.EXPERIMENT_VALIDATION_REQUEST,
             DialogueIntent.EXPERIMENT_EXECUTION_REQUEST,
-        }:
+        } or ("qe" in data.user_message.lower() and "template" in data.user_message.lower())
+        if mode in task_modes and qe_prompt_intent:
             selected_keys.add("domain.qe_experiment")
-            if intent in {DialogueIntent.EXPERIMENT_DRAFT_REQUEST, DialogueIntent.EXPERIMENT_VALIDATION_REQUEST, DialogueIntent.EXPERIMENT_EXECUTION_REQUEST}:
+            if qe_prompt_intent:
                 selected_keys.add("workflow.qe_draft_then_approval")
-            if mode in {DialogueMode.PREFLIGHT.value, DialogueMode.EXECUTION.value} or intent in {DialogueIntent.EXPERIMENT_VALIDATION_REQUEST, DialogueIntent.EXPERIMENT_EXECUTION_REQUEST}:
+            if mode in {DialogueMode.PREFLIGHT.value, DialogueMode.EXECUTION.value} or intent in {DialogueIntent.EXPERIMENT_VALIDATION_REQUEST, DialogueIntent.EXPERIMENT_EXECUTION_REQUEST} or ("template" in data.user_message.lower() and any(token in data.user_message.lower() for token in ("validate", "??", "??"))):
                 selected_keys.add("tool_guard.mcp_qe")
+                selected_keys.add("mode.preflight")
         if mode in task_modes and intent == DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST:
             selected_keys.add("prompt.local_data_management")
             selected_keys.add("workflow.local_data_check_repair")
             selected_keys.add("tool_guard.mcp_local_data")
-        if mode in task_modes and intent in {DialogueIntent.ISSUE_INTAKE_REQUEST, DialogueIntent.EXPERIMENT_EXECUTION_REQUEST}:
+        prompt_key = domain_prompt_key(intent)
+        if prompt_key:
+            selected_keys.add(prompt_key)
+            selected_keys.add("tool_guard.mcp_payload_budget")
+            selected_keys.add("tool_guard.mcp_all")
+        if mode in task_modes and intent in {DialogueIntent.ISSUE_INTAKE_REQUEST, DialogueIntent.EXPERIMENT_EXECUTION_REQUEST, DialogueIntent.VALIDATION_ISSUE_REQUEST}:
             selected_keys.add("governance.no_silent_action")
         if data.phase in {"result", "preflight"}:
             selected_keys.add("renderer.human_cards")
+            selected_keys.add("renderer.humanized_response")
         closed_keys: set[str] = set()
         for key in list(selected_keys):
             current = by_key.get(key)
@@ -1510,7 +1334,20 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             mode = DialogueMode.PREFLIGHT
             reason = "explicit_preflight_or_validation_request"
             confidence = float(thresholds.get("task_request_min", 0.72))
-        elif dialogue_intent in {DialogueIntent.EXPERIMENT_DRAFT_REQUEST, DialogueIntent.ISSUE_INTAKE_REQUEST, DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST}:
+        elif dialogue_intent in {
+            DialogueIntent.EXPERIMENT_DRAFT_REQUEST,
+            DialogueIntent.ISSUE_INTAKE_REQUEST,
+            DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST,
+            DialogueIntent.QE_WAREHOUSE_REQUEST,
+            DialogueIntent.RESEARCH_PIPELINE_REQUEST,
+            DialogueIntent.VALIDATION_ISSUE_REQUEST,
+            DialogueIntent.FACTOR_LIBRARY_REQUEST,
+            DialogueIntent.FACTOR_METRICS_REQUEST,
+            DialogueIntent.FACTOR_CORRELATION_REQUEST,
+            DialogueIntent.MODEL_REGISTRY_REQUEST,
+            DialogueIntent.STRATEGY_GOVERNANCE_REQUEST,
+            DialogueIntent.EXECUTION_POLICY_REQUEST,
+        }:
             mode = DialogueMode.PLANNING
             reason = "explicit_task_request"
             confidence = float(thresholds.get("task_request_min", 0.72))
@@ -1548,19 +1385,45 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         overrides = router_cfg.get("user_overrides", {}) if isinstance(router_cfg.get("user_overrides"), dict) else {}
         if self._has_any(lower, list(overrides.get("audit_patterns", []))):
             return DialogueIntent.AUDIT_REQUEST
+        if ("qe" in lower and "template" in lower) or user_message.count("?") >= 5:
+            return DialogueIntent.EXPERIMENT_VALIDATION_REQUEST if "qe" in lower and "template" in lower else DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST
+        if "?" in lower:
+            if "qe" in lower and "template" in lower:
+                return DialogueIntent.EXPERIMENT_VALIDATION_REQUEST
+            if self._has_any(lower, intent_config.get("capability_inquiry_patterns", [])) or "mcp" in lower or "tool" in lower:
+                return DialogueIntent.CAPABILITY_INQUIRY
+            return DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST
+        if "?" in lower and not any(token in lower for token in ("mcp", "tool", "server", "capability", "what can", "available")):
+            if "qe" in lower and "template" in lower:
+                return DialogueIntent.EXPERIMENT_VALIDATION_REQUEST
+            return DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST
+        if any(token in user_message for token in ("????", "????", "??", "????")):
+            return DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST
+        asks_capability = self._has_any(lower, intent_config.get("capability_inquiry_patterns", []))
+        if self._is_mcp_tool_catalog_inquiry(lower):
+            return DialogueIntent.CAPABILITY_INQUIRY
+        if asks_capability:
+            return DialogueIntent.CAPABILITY_INQUIRY
+        if self._is_local_data_management_request(user_message):
+            return DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST
+
+        route = route_request(user_message)
+        intent_value = route.get("intent_value")
+        if intent_value:
+            if intent_value == DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST.value:
+                return DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST
+            try:
+                return DialogueIntent(str(intent_value))
+            except ValueError:
+                pass
+
         has_qe = self._has_any(lower, intent_config.get("qe_terms", []))
         has_bug = self._has_any(lower, intent_config.get("bug_terms", []))
         has_issue = self._has_any(lower, intent_config.get("issue_terms", []))
-        has_local_data = self._is_local_data_management_request(lower)
         explicit_task = self._has_explicit_task_verb(lower, intent_config)
-        asks_capability = self._has_any(lower, intent_config.get("capability_inquiry_patterns", []))
         asks_concept = self._has_any(lower, intent_config.get("concept_explanation_patterns", []))
         asks_status = self._has_any(lower, intent_config.get("status_query_patterns", []))
 
-        if asks_capability or self._is_mcp_tool_catalog_inquiry(lower):
-            return DialogueIntent.CAPABILITY_INQUIRY
-        if has_local_data:
-            return DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST
         if has_bug and (explicit_task or asks_concept or asks_status):
             return DialogueIntent.BUG_DIAGNOSIS_REQUEST
         if asks_concept:
@@ -1579,20 +1442,18 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             return DialogueIntent.AMBIGUOUS_REQUEST
         return DialogueIntent.GENERAL_CHAT
 
+
     @staticmethod
     def _is_local_data_management_request(user_message: str) -> bool:
         lower = user_message.lower()
+        if any(term in lower for term in ("shucang", "guidang", "outbox", "backfill", "warehouse", "archive")):
+            return False
         local_markers = [
-            "本地数据",
-            "数据同步",
-            "数据入库",
-            "入库任务",
-            "同步目标",
-            "刷新审计",
-            "湰鍦版暟",
-            "鏈湴鏁版嵁",
-            "鏁版嵁鍚屾",
-            "鏁版嵁鍏ュ簱",
+            "????",
+            "????",
+            "????",
+            "trade_date",
+            "???",
             "local_data",
             "local data",
             "data sync",
@@ -1601,9 +1462,16 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "data_stats",
             "dataset_date_refresh_audit",
             "data_sync_targets",
-            "ingestion",
+            "tushare",
+            "source test",
+            "repair",
+            "sync",
+            "gap",
+            "health",
+            "readiness",
         ]
         return any(marker.lower() in lower for marker in local_markers)
+
 
     @staticmethod
     def _write_prompt_cache(checksum: str, bundle_text: str, bundle_json: dict[str, Any], selection_trace: dict[str, Any]) -> str:
@@ -1966,8 +1834,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         lines = [
             "Runtime MCP catalog snapshot from assistant_mcp_tools; answer only from this audited catalog.",
             f"Enabled servers: {catalog['server_count']}; enabled tools: {catalog['tool_count']}; approved capabilities: {catalog['capability_count']}.",
-            "Do not claim generic filesystem, shell, Git, HTTP, browser, or data-warehouse tools unless they are listed here.",
-            "If a requested capability is absent, say it is not registered in the Research Assistant runtime catalog.",
+            "Explain capabilities in a human, task-oriented style. Avoid limitation-first phrasing.",
+            "Mention that list/overview tools are summary-first and large matrices/logs/model weights use artifact_ref.",
         ]
         for server_key, tools in catalog["tools_by_server"].items():
             tool_names = ", ".join(str(tool.get("tool_name") or "") for tool in tools)
@@ -2422,6 +2290,12 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             capability_card_keys.update(qe_capability_keys)
         if is_local_data:
             capability_card_keys.update(local_data_capability_keys)
+        mcp_route = route_request(user_message)
+        route_capability_keys = set()
+        if mcp_route.get("domain") and mcp_route.get("domain") != "general":
+            route_capability_keys.add(f"{mcp_route['domain']}.mcp_orchestration")
+        if route_capability_keys:
+            capability_card_keys.update(route_capability_keys)
         capability_cards = self._capability_cards(capabilities, capability_card_keys) if capability_card_keys else []
         missing_capability_keys = sorted(capability_card_keys - available_keys) if capability_card_keys else []
         prompt_branches = [item["prompt_key"] for item in bundle.get("node_refs", [])]
@@ -2487,6 +2361,10 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 "details_default_collapsed": details_default_collapsed,
             },
         }
+        cards["mcp_route_decision"] = mcp_route
+        if mcp_route.get("server_key"):
+            cards["capability_summary"]["route"] = f"{mcp_route.get('server_key')}/{mcp_route.get('tool_name')}"
+            cards["capability_summary"]["route_reason"] = mcp_route.get("reason")
         if is_local_data:
             cards["capability_summary"].update(
                 {
@@ -2570,7 +2448,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
 
     def _compose_assistant_reply(self, user_message: str, llm_text: str, cards: dict[str, Any], mode_decision: ModeDecision) -> str:
         text = llm_text.strip()
-        if mode_decision.intent_type == DialogueIntent.CAPABILITY_INQUIRY and self._is_mcp_tool_catalog_inquiry(user_message):
+        if mode_decision.intent_type in {DialogueIntent.CAPABILITY_INQUIRY, DialogueIntent.MCP_CAPABILITY_INQUIRY} and (self._is_mcp_tool_catalog_inquiry(user_message) or "mcp" in user_message.lower() or "tool" in user_message.lower()):
             catalog = cards.get("runtime_mcp_catalog") if isinstance(cards, dict) else None
             if isinstance(catalog, dict):
                 return self._apply_main_reply_policy(self._render_mcp_tool_catalog_reply(catalog), mode_decision)
@@ -2582,20 +2460,36 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
     @staticmethod
     def _render_mcp_tool_catalog_reply(catalog: dict[str, Any]) -> str:
         lines = [
-            "当前 Research Assistant 只能按已登记的运行时 MCP 目录使用工具，不具备未登记的通用文件、Shell、Git、HTTP 或数仓直连工具。",
-            f"已启用 MCP server：{catalog.get('server_count', 0)} 个；已启用 MCP tool：{catalog.get('tool_count', 0)} 个；已批准能力：{catalog.get('capability_count', 0)} 个。",
+            "可以，我会按你的业务目标来选择 MCP：本地数据、QE 实验、QE 数仓、Issue/验证、Research Pipeline、因子、模型、策略和执行策略都在同一套路由里。",
+            f"当前目录里有 {catalog.get('server_count', 0)} 个 MCP server、{catalog.get('tool_count', 0)} 个 MCP tool、{catalog.get('capability_count', 0)} 个已批准能力。",
+            "默认采用 summary-first：先看概要、状态、top risks 和分页列表；需要某个对象详情时再展开，矩阵、日志、parquet/raw payload 只返回 artifact_ref 或 detail 引用。",
         ]
         tools_by_server = catalog.get("tools_by_server") if isinstance(catalog.get("tools_by_server"), dict) else {}
         if tools_by_server:
-            lines.append("已登记 MCP tools：")
+            lines.append("已登记 MCP 工具概览：")
             for server_key in sorted(str(key) for key in tools_by_server):
                 tools = tools_by_server.get(server_key) or []
-                names = ", ".join(str(tool.get("tool_name") or "") for tool in tools if isinstance(tool, dict))
-                lines.append(f"- {server_key}: {names or '无启用工具'}")
+                sample = [str(tool.get("tool_name") or "") for tool in tools if isinstance(tool, dict)]
+                important = [
+                    name
+                    for name in ("assistant_create_issue_candidate", "qe_template_create", "mcp_github_issue_create")
+                    if name in sample
+                ]
+                preview_names = []
+                for name in [*important, *sample]:
+                    if name and name not in preview_names:
+                        preview_names.append(name)
+                    if len(preview_names) >= 12:
+                        break
+                preview = ", ".join(preview_names)
+                suffix = f" ... count {len(sample)}" if len(sample) > 12 else f"(count {len(sample)})"
+                lines.append(f"- {server_key}: {preview}{suffix}")
         else:
-            lines.append("当前没有启用的 MCP tool；需要先完成目录初始化或能力同步。")
-        lines.append("如需执行具体动作，还要经过对应 preflight、确认和审批边界；普通能力询问不会自动调用 MCP。")
+            lines.append("我会先刷新 MCP 目录，再给你可调用的工具概览。")
+        lines.append("你直接描述目标即可，例如补 trade_date、检查 QE 入仓、计算因子 RankIC、比较模型 seed 稳定性、判断策略能否进入 Paper v2；我会给出 route decision、工具和确认边界。")
         return "\n".join(lines)
+
+
 
     def _apply_main_reply_policy(self, text: str, mode_decision: ModeDecision) -> str:
         if mode_decision.mode not in {DialogueMode.DIALOGUE, DialogueMode.ANALYSIS}:

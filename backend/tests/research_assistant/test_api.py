@@ -236,7 +236,7 @@ def test_research_assistant_api_phase1_smoke() -> None:
 
 def test_research_assistant_api_exposes_local_data_management_catalog() -> None:
     client = _client()
-    message = "帮我检查本地数据同步健康，发现问题先生成修复计划，确认前不要执行。"
+    message = "local data sync health check and repair plan before execute"
 
     servers = client.get("/api/v1/research-assistant/mcp/servers").json()["data"]["items"]
     assert "aistock-local-data" in {item["server_key"] for item in servers}
