@@ -1241,6 +1241,21 @@ def test_run_merge_mode_requires_explicit_authorization(isolated_workflow_root: 
     assert "--merge" in payload["next_command"]
 
 
+def test_parse_git_porcelain_path_handles_stripped_modified_line() -> None:
+    assert (
+        workflow._parse_git_porcelain_path(
+            "M tests/aistock_validation/bugs/bug199.json",
+        )
+        == "tests/aistock_validation/bugs/bug199.json"
+    )
+    assert (
+        workflow._parse_git_porcelain_path(
+            " M tests/aistock_validation/bugs/bug199.json",
+        )
+        == "tests/aistock_validation/bugs/bug199.json"
+    )
+
+
 def test_merge_recovers_when_remote_merge_succeeds_after_local_error(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1314,7 +1329,7 @@ def test_close_sync_pr_commit_only_stages_bug_registry_files(
             return {
                 "ok": True,
                 "returncode": 0,
-                "stdout": " M tests/aistock_validation/bugs/bug199.json",
+                "stdout": "M tests/aistock_validation/bugs/bug199.json",
                 "stderr": "",
             }
         if args[:2] == ["git", "status"]:

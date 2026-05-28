@@ -182,6 +182,22 @@ def _run_command(args: list[str], cwd: Path | None = None, timeout: int = 30) ->
         return {"ok": False, "returncode": None, "stdout": "", "stderr": str(exc)}
 
 
+def _parse_git_porcelain_path(line: str) -> str:
+    raw = line.rstrip()
+    if not raw.strip():
+        return ""
+    if len(raw) >= 3 and raw[2] == " ":
+        path = raw[3:]
+    elif len(raw) >= 2 and raw[1] == " ":
+        # _run_command strips stdout; recover paths from lines like "M path".
+        path = raw[2:]
+    else:
+        path = raw[3:] if len(raw) > 3 else raw
+    if " -> " in path:
+        path = path.split(" -> ", 1)[1]
+    return path.strip().strip('"')
+
+
 def _workflow_dir(bug_id: str, root: Path | None = None) -> Path:
     return (root or REPO_ROOT) / WORKFLOW_ROOT / bug_id
 
@@ -874,10 +890,9 @@ def _dirty_files(root: Path) -> list[str]:
     for line in str(status.get("stdout") or "").splitlines():
         if not line.strip():
             continue
-        path = line[3:] if len(line) > 3 else line
-        if " -> " in path:
-            path = path.split(" -> ", 1)[1]
-        files.append(path.strip().strip('"'))
+        path = _parse_git_porcelain_path(line)
+        if path:
+            files.append(path)
     return files
 
 
@@ -2946,9 +2961,7 @@ def _git_status_paths(root: Path) -> list[dict[str, str]]:
         if len(line) < 4:
             continue
         status = line[:2]
-        raw_path = line[3:].strip()
-        if " -> " in raw_path:
-            raw_path = raw_path.split(" -> ", 1)[1].strip()
+        raw_path = _parse_git_porcelain_path(line)
         rows.append({"status": status, "path": raw_path})
     return rows
 
@@ -3313,7 +3326,7 @@ def _close_sync_changed_files(close_sync: dict[str, Any]) -> list[str]:
     status = _run_command(["git", "status", "--porcelain=v1", "--", "tests/aistock_validation/bugs"], cwd=root)
     if status.get("ok"):
         for line in str(status.get("stdout") or "").splitlines():
-            rel = line[3:].strip() if len(line) > 3 else ""
+            rel = _parse_git_porcelain_path(line)
             if rel and rel.replace("\\", "/").startswith("tests/aistock_validation/bugs/"):
                 files.append(rel.replace("\\", "/"))
     elif updated:
