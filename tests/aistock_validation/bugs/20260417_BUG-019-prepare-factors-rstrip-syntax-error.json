@@ -2,7 +2,7 @@
   "allowed_write_scope": [
     "scripts/prepare_factors.py"
   ],
-  "assigned_agent": null,
+  "assigned_agent": "codex-app",
   "bug_id": "BUG-019",
   "closed_at": null,
   "closure_requirements": [
@@ -16,6 +16,12 @@
       "actor": "claude_code",
       "note": "Found during multi-alpha worker setup on Windows host",
       "timestamp": "2026-04-17T00:00:00Z"
+    },
+    {
+      "action": "verified_current_main_fixed",
+      "actor": "codex-app",
+      "note": "Current main already contains the generated prepare_factors.py rstrip fix; persisted BUG close metadata without changing runtime code.",
+      "timestamp": "2026-05-28T12:31:00Z"
     }
   ],
   "evidence_uris": [
@@ -24,13 +30,16 @@
   "failing_run_id": null,
   "fingerprint": "scripts::prepare_factors::rstrip_unescaped_backslash",
   "first_seen_at": "2026-04-17T00:00:00Z",
-  "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_branch": "bug/BUG-019-prepare-factors-py-syntaxerror-rstrip-20260528",
+  "fix_commit": "8e0dc6d4e4d66caaf82ff173a36d5f247cba98a8",
+  "fixed_at": "2026-05-28T12:31:00Z",
   "github_issue_number": 5,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5",
   "last_seen_at": "2026-05-13T07:03:20Z",
   "module": "scripts",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
   "reproduce_command": "python scripts/prepare_factors.py --workdir 'F:/Dev/...'  # SyntaxError or wrong path normalization",
   "required_verification": [
     "python -m py_compile scripts/prepare_factors.py",
@@ -39,7 +48,7 @@
   "risk_area": "runtime_crash",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "submitted_at": null,
   "suspected_modules": [
     "scripts/"
@@ -48,5 +57,12 @@
   "trigger_condition": {
     "scenario": "prepare_factors_invocation_on_windows"
   },
-  "verification_run_id": null
+  "validation_evidence": [
+    "Current source no longer has scripts/prepare_factors.py; generated prepare_factors.py is produced by backend/services/quantevolver/config_composer.py.",
+    "Commit 8e0dc6d4e4d66caaf82ff173a36d5f247cba98a8 introduced a raw-string generated line: RAW_FACTOR_CACHE_DIR.rstrip('/\\\\').",
+    "pytest backend/tests/unified_engine/test_multi_alpha_command_generation.py::TestConfigComposerCommandGeneration::test_compose_prepare_factors_generates_valid_python backend/tests/test_factor_cache_wsl_env.py::test_qe_prepare_factors_default_window_uses_current_signal_end_and_records_cache_window backend/tests/test_factor_cache_wsl_env.py::test_qe_prepare_factors_keeps_cache_hits_when_expected_fingerprint_missing -q -p no:cacheprovider -> 3 passed",
+    "generated prepare_factors compile and path-style rstrip smoke -> passed for Windows and Unix cache paths",
+    "python -m nox -s l0 --no-error-on-missing-interpreters -> successful"
+  ],
+  "verification_run_id": "targeted generated prepare_factors pytest; path-style smoke; l0"
 }
