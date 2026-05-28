@@ -9,7 +9,9 @@
     "backend/tests/research_assistant/test_api.py",
     "backend/tests/research_assistant/test_natural_language_mcp_routing.py",
     "backend/tests/research_assistant/test_mcp_catalog_sync.py",
-    "frontend/src/app/research-assistant/mcp-tools/page.tsx"
+    "frontend/src/app/research-assistant/mcp-tools/page.tsx",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260528_BUG-145-research-assistant-mcp-server-catalog-lacks-chinese-business-aliases.json"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-145",
@@ -33,6 +35,12 @@
       "actor": "codex",
       "action": "scope_expanded_for_alias_tests_and_ui_display",
       "note": "Add Research Assistant catalog sync regression test and MCP tools page display update to allowed scope for BUG-145. No non-Research Assistant files included."
+    },
+    {
+      "timestamp": "2026-05-28T11:34:30Z",
+      "actor": "codex",
+      "action": "scope_expanded_for_issue_registry_files",
+      "note": "Add BUG-145 BUG JSON and allocator registry files to allowed scope so the issue workflow PR gate can include the required registration artifacts."
     }
   ],
   "evidence_uris": [],
