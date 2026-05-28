@@ -96,7 +96,7 @@ class TradingCalendarStatusService:
                 context={"trade_date": trade_date.isoformat()},
             )
 
-    def list_trading_days(self, start_date: date, end_date: date) -> list[date]:
+    def list_trading_days(self, start_date: date, end_date: date, *, allow_empty: bool = False) -> list[date]:
         if start_date > end_date:
             raise DataUnavailableError(
                 "start_date cannot be after end_date",
@@ -104,13 +104,203 @@ class TradingCalendarStatusService:
             )
         cache = self._load_or_refresh_cache(end_date)
         calendar_map = self._calendar_map(cache)
-        missing_start = start_date < date.fromisoformat(str(cache["coverage_start"]))
-        missing_end = end_date > date.fromisoformat(str(cache["coverage_end"]))
+        coverage_start = date.fromisoformat(str(cache["coverage_start"]))
+        coverage_end = date.fromisoformat(str(cache["coverage_end"]))
+        missing_start = start_date < coverage_start
+        missing_end = end_date > coverage_end
         if missing_start or missing_end:
             cache = self._refresh_cache(f"range_miss:{start_date.isoformat()}:{end_date.isoformat()}")
             calendar_map = self._calendar_map(cache)
+            coverage_start = date.fromisoformat(str(cache["coverage_start"]))
+            coverage_end = date.fromisoformat(str(cache["coverage_end"]))
+            if start_date < coverage_start or end_date > coverage_end:
+                raise DataUnavailableError(
+                    "trading calendar coverage does not include requested range",
+                    context={
+                        "start_date": start_date.isoformat(),
+                        "end_date": end_date.isoformat(),
+                        "coverage_start": coverage_start.isoformat(),
+                        "coverage_end": coverage_end.isoformat(),
+                    },
+                )
+        missing_dates = _missing_calendar_dates(calendar_map, start_date, end_date)
+        if missing_dates:
+            cache = self._refresh_cache(f"range_row_miss:{start_date.isoformat()}:{end_date.isoformat()}")
+            calendar_map = self._calendar_map(cache)
+            missing_dates = _missing_calendar_dates(calendar_map, start_date, end_date)
+            if missing_dates:
+                raise DataUnavailableError(
+                    "trading calendar rows are missing in requested range",
+                    context={
+                        "start_date": start_date.isoformat(),
+                        "end_date": end_date.isoformat(),
+                        "missing_dates": [day.isoformat() for day in missing_dates[:10]],
+                        "missing_count": len(missing_dates),
+                    },
+                )
         days = [day for day, is_trading in sorted(calendar_map.items()) if start_date <= day <= end_date and is_trading]
         if not days:
+            if allow_empty:
+                return []
+            raise DataUnavailableError(
+                "trading calendar has no trading days in range",
+                context={"start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
+            )
+        return days
+
+    def is_trading_day(self, trade_date: date) -> bool:
+        cache = self._load_or_refresh_cache(trade_date)
+        calendar_map = self._calendar_map(cache)
+        if trade_date not in calendar_map:
+            raise DataUnavailableError(
+                "trade calendar row is required for trading-day check",
+                context={"trade_date": trade_date.isoformat()},
+            )
+        return bool(calendar_map[trade_date])
+
+    def latest_trading_day_on_or_before(self, as_of_date: date) -> date | None:
+        cache = self._load_or_refresh_cache(as_of_date)
+        calendar_map = self._calendar_map(cache)
+        if as_of_date not in calendar_map:
+            cache = self._refresh_cache(f"latest_row_miss:{as_of_date.isoformat()}")
+            calendar_map = self._calendar_map(cache)
+            if as_of_date not in calendar_map:
+                raise DataUnavailableError(
+                    "trade calendar row is required for latest trading-day lookup",
+                    context={"as_of_date": as_of_date.isoformat()},
+                )
+        days = [day for day, is_trading in calendar_map.items() if is_trading and day <= as_of_date]
+        if not days:
+            cache = self._refresh_cache(f"latest_miss:{as_of_date.isoformat()}")
+            calendar_map = self._calendar_map(cache)
+            days = [day for day, is_trading in calendar_map.items() if is_trading and day <= as_of_date]
+        latest_day = _max_day(days)
+        if latest_day is None:
+            return None
+        missing_dates = _missing_calendar_dates(calendar_map, latest_day, as_of_date)
+        if missing_dates:
+            cache = self._refresh_cache(f"latest_intermediate_row_miss:{as_of_date.isoformat()}")
+            calendar_map = self._calendar_map(cache)
+            days = [day for day, is_trading in calendar_map.items() if is_trading and day <= as_of_date]
+            latest_day = _max_day(days)
+            if latest_day is None:
+                return None
+            missing_dates = _missing_calendar_dates(calendar_map, latest_day, as_of_date)
+            if missing_dates:
+                raise DataUnavailableError(
+                    "trading calendar rows are missing before latest trading day",
+                    context={
+                        "as_of_date": as_of_date.isoformat(),
+                        "latest_trading_day": latest_day.isoformat(),
+                        "missing_dates": [day.isoformat() for day in missing_dates[:10]],
+                        "missing_count": len(missing_dates),
+                    },
+                )
+        return latest_day
+
+    def next_trading_day(self, anchor_date: date, *, inclusive: bool = False) -> date:
+        start_date = anchor_date if inclusive else anchor_date + timedelta(days=1)
+        cache = self._load_or_refresh_cache(start_date)
+        calendar_map = self._calendar_map(cache)
+        coverage_start = date.fromisoformat(str(cache["coverage_start"]))
+        coverage_end = date.fromisoformat(str(cache["coverage_end"]))
+        if start_date < coverage_start or start_date > coverage_end:
+            cache = self._refresh_cache(f"next_miss:{anchor_date.isoformat()}:{inclusive}")
+            calendar_map = self._calendar_map(cache)
+            coverage_start = date.fromisoformat(str(cache["coverage_start"]))
+            coverage_end = date.fromisoformat(str(cache["coverage_end"]))
+            if start_date < coverage_start or start_date > coverage_end:
+                raise DataUnavailableError(
+                    "trading calendar coverage does not include next-day lookup",
+                    context={
+                        "anchor_date": anchor_date.isoformat(),
+                        "inclusive": inclusive,
+                        "coverage_start": coverage_start.isoformat(),
+                        "coverage_end": coverage_end.isoformat(),
+                    },
+                )
+        days = [day for day, is_trading in calendar_map.items() if is_trading and day >= start_date]
+        if not days:
+            cache = self._refresh_cache(f"next_not_found:{anchor_date.isoformat()}:{inclusive}")
+            calendar_map = self._calendar_map(cache)
+            days = [day for day, is_trading in calendar_map.items() if is_trading and day >= start_date]
+        next_day = _min_day(days)
+        if next_day is None:
+            raise DataUnavailableError(
+                "trading calendar has no next trading day",
+                context={"anchor_date": anchor_date.isoformat(), "inclusive": inclusive},
+            )
+        missing_dates = _missing_calendar_dates(calendar_map, start_date, next_day)
+        if missing_dates:
+            cache = self._refresh_cache(f"next_row_miss:{anchor_date.isoformat()}:{inclusive}")
+            calendar_map = self._calendar_map(cache)
+            days = [day for day, is_trading in calendar_map.items() if is_trading and day >= start_date]
+            next_day = _min_day(days)
+            if next_day is None:
+                raise DataUnavailableError(
+                    "trading calendar has no next trading day",
+                    context={"anchor_date": anchor_date.isoformat(), "inclusive": inclusive},
+                )
+            missing_dates = _missing_calendar_dates(calendar_map, start_date, next_day)
+            if missing_dates:
+                raise DataUnavailableError(
+                    "trading calendar rows are missing before next trading day",
+                    context={
+                        "anchor_date": anchor_date.isoformat(),
+                        "inclusive": inclusive,
+                        "missing_dates": [day.isoformat() for day in missing_dates[:10]],
+                        "missing_count": len(missing_dates),
+                    },
+                )
+        return next_day
+
+    @staticmethod
+    def list_trading_days_from_conn(
+        conn: Any,
+        start_date: date,
+        end_date: date,
+        *,
+        allow_empty: bool = False,
+    ) -> list[date]:
+        if start_date > end_date:
+            raise DataUnavailableError(
+                "start_date cannot be after end_date",
+                context={"start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
+            )
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT cal_date, is_trading
+                FROM market.trading_calendar
+                WHERE cal_date >= %s
+                  AND cal_date <= %s
+                ORDER BY cal_date
+                """,
+                (start_date, end_date),
+            )
+            rows = cur.fetchall()
+        calendar_map: dict[date, bool] = {}
+        for row in rows:
+            value = row["cal_date"] if isinstance(row, dict) else row[0]
+            is_trading = row["is_trading"] if isinstance(row, dict) else row[1]
+            if isinstance(value, date):
+                cal_date = value
+            else:
+                cal_date = date.fromisoformat(str(value))
+            calendar_map[cal_date] = bool(is_trading)
+        missing_dates = _missing_calendar_dates(calendar_map, start_date, end_date)
+        if missing_dates:
+            raise DataUnavailableError(
+                "trading calendar rows are missing in requested range",
+                context={
+                    "start_date": start_date.isoformat(),
+                    "end_date": end_date.isoformat(),
+                    "missing_dates": [day.isoformat() for day in missing_dates[:10]],
+                    "missing_count": len(missing_dates),
+                },
+            )
+        days = [day for day, is_trading in sorted(calendar_map.items()) if is_trading]
+        if not days and not allow_empty:
             raise DataUnavailableError(
                 "trading calendar has no trading days in range",
                 context={"start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
@@ -172,10 +362,15 @@ class TradingCalendarStatusService:
             ) from exc
         if not rows:
             raise DataUnavailableError("market.trading_calendar has no rows")
-        calendar_rows = [
-            {"date": row["cal_date"].isoformat(), "is_trading": bool(row["is_trading"])}
-            for row in rows
-        ]
+        calendar_rows = []
+        for row in rows:
+            if isinstance(row, dict):
+                cal_date = row["cal_date"]
+                is_trading = row["is_trading"]
+            else:
+                cal_date = row[0]
+                is_trading = row[1] if len(row) > 1 else True
+            calendar_rows.append({"date": cal_date.isoformat(), "is_trading": bool(is_trading)})
         checksum = hashlib.sha256(json.dumps(calendar_rows, sort_keys=True).encode("utf-8")).hexdigest()
         payload = {
             "schema_version": 1,
@@ -226,3 +421,13 @@ def _max_day(days: list[date]) -> date | None:
 
 def _min_day(days: list[date]) -> date | None:
     return min(days) if days else None
+
+
+def _missing_calendar_dates(calendar_map: dict[date, bool], start_date: date, end_date: date) -> list[date]:
+    missing: list[date] = []
+    current = start_date
+    while current <= end_date:
+        if current not in calendar_map:
+            missing.append(current)
+        current += timedelta(days=1)
+    return missing

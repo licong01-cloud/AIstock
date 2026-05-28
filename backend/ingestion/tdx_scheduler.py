@@ -33,15 +33,16 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from zoneinfo import ZoneInfo
 
-import psycopg2
 import psycopg2.extras as pgx
 import requests
 import schedule
 import logging
 from dotenv import load_dotenv
 
+from ..db.pg_pool import get_conn
 from ..services.tushare_dataset_specs import DATASET_REGISTRY
 from ..services.tushare_sync_engine import TushareSyncEngine
+from ..services.trading_calendar_status import TradingCalendarStatusService
 from ..services.audit_backed_data_health import AuditBackedDataHealthChecker
 from ..services.data_completeness import DATASET_TABLE_MAP
 from ..services.data_refresh_audit import DataRefreshAuditRepository
@@ -158,9 +159,6 @@ def _coerce_int(value: Any) -> Optional[int]:
 
 def _is_zero_update_success(status: str, inserted_rows: Any) -> bool:
     return (status or "").lower() == "success" and _coerce_int(inserted_rows) == 0
-
-
-from ..db.pg_pool import get_conn
 
 
 @contextmanager
@@ -832,7 +830,7 @@ class TDXScheduler:
     def _scheduled_testing_run(self, schedule_id: str, options: Dict[str, Any]) -> None:
         if self._tracker.is_running(f"testing:{schedule_id}"):
             return
-        run_id = self._submit_testing(schedule_id, "schedule", options)
+        self._submit_testing(schedule_id, "schedule", options)
         if schedule_id:
             self._update_testing_schedule(
                 schedule_id,
@@ -843,13 +841,18 @@ class TDXScheduler:
 
     # ------------------------------------------------------------------
     # auto-range & trading-day helpers for scheduled runs
+    def _trading_calendar_service(self) -> TradingCalendarStatusService:
+        return TradingCalendarStatusService()
+
     def _is_trading_day(self, d: dt.date) -> bool:
-        """Check if *d* is a trading day according to market.trading_calendar."""
-        rows = self._fetchall(
-            "SELECT 1 FROM market.trading_calendar WHERE cal_date = %s AND is_trading = TRUE",
-            (d,),
-        )
-        return len(rows) > 0
+        """Check if *d* is a trading day via the canonical calendar service."""
+        return self._trading_calendar_service().is_trading_day(d)
+
+    def _latest_trading_day(self, as_of_date: Optional[dt.date] = None) -> Optional[dt.date]:
+        return self._trading_calendar_service().latest_trading_day_on_or_before(as_of_date or dt.date.today())
+
+    def _next_trading_day(self, anchor_date: dt.date, *, inclusive: bool = False) -> dt.date:
+        return self._trading_calendar_service().next_trading_day(anchor_date, inclusive=inclusive)
 
     def _compute_auto_range(self, dataset: str) -> Tuple[Optional[dt.date], Optional[dt.date]]:
         """Return (start_date, end_date) for incremental catch-up.
@@ -907,10 +910,7 @@ class TDXScheduler:
         if use_calendar_dates:
             latest_date: Optional[dt.date] = dt.date.today()
         else:
-            ltd_rows = self._fetchall(
-                "SELECT MAX(cal_date) AS latest FROM market.trading_calendar WHERE is_trading = TRUE AND cal_date <= CURRENT_DATE"
-            )
-            latest_date = ltd_rows[0].get("latest") if ltd_rows else None
+            latest_date = self._latest_trading_day()
         if latest_date is None:
             return None, None
 
@@ -923,11 +923,7 @@ class TDXScheduler:
         if use_calendar_dates:
             start_date = current_max + dt.timedelta(days=1)
         else:
-            next_rows = self._fetchall(
-                "SELECT MIN(cal_date) AS nxt FROM market.trading_calendar WHERE is_trading = TRUE AND cal_date > %s",
-                (current_max,),
-            )
-            start_date = next_rows[0].get("nxt") if next_rows else None
+            start_date = self._next_trading_day(current_max)
         if start_date is None or start_date > latest_date:
             return None, None
 
@@ -951,19 +947,10 @@ class TDXScheduler:
         current_is_trading = self._is_trading_day(today)
 
         def next_trading_day(strictly_after: bool) -> dt.date:
-            op = ">" if strictly_after else ">="
-            rows = self._fetchall(
-                f"""
-                SELECT MIN(cal_date) AS trade_date
-                FROM market.trading_calendar
-                WHERE is_trading = TRUE AND cal_date {op} %s
-                """,
-                (today,),
-            )
-            value = rows[0].get("trade_date") if rows else None
-            if value is None:
-                raise RuntimeError("trading_calendar has no next trading day for suspend_d refresh")
-            return value
+            try:
+                return self._next_trading_day(today, inclusive=not strictly_after)
+            except Exception as exc:
+                raise RuntimeError("trading_calendar has no next trading day for suspend_d refresh") from exc
 
         if strategy == "current_trading_day":
             if not current_is_trading:
@@ -1077,7 +1064,7 @@ class TDXScheduler:
                 _logger.error("failed to create job record for %s: %s", dataset, exc)
 
         try:
-            run_id = self._submit_ingestion(schedule_id, dataset, mode, "schedule", effective_options)
+            self._submit_ingestion(schedule_id, dataset, mode, "schedule", effective_options)
         except Exception as exc:  # noqa: BLE001
             _logger.exception("scheduled ingestion submit failed for %s/%s: %s", dataset, mode, exc)
             self._mark_job_failed_before_start(
@@ -1235,18 +1222,7 @@ class TDXScheduler:
                     return dt.date.fromisoformat(str(raw))
                 except ValueError:
                     continue
-        rows = self._fetchall(
-            "SELECT MAX(cal_date) AS latest FROM market.trading_calendar WHERE is_trading = TRUE AND cal_date <= CURRENT_DATE"
-        )
-        value = rows[0].get("latest") if rows else None
-        if isinstance(value, dt.date):
-            return value
-        if value:
-            try:
-                return dt.date.fromisoformat(str(value))
-            except ValueError:
-                return None
-        return None
+        return self._latest_trading_day()
 
     def _final_deadline_for_target(self, dataset: str, target_date: Optional[dt.date]) -> Optional[dt.datetime]:
         if target_date is None:
@@ -3904,7 +3880,7 @@ class TDXScheduler:
             if raw:
                 try:
                     base = json.loads(raw) if isinstance(raw, str) else dict(raw)
-                except Exception:  # noqa: BLE001
+                except Exception as exc:  # noqa: BLE001
                     _logger.warning("_update_ingestion_job_status: failed to parse existing summary for job %s: %s", job_id, exc)
                     base = {}
         base.update(summary or {})

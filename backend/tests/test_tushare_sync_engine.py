@@ -16,6 +16,14 @@ from backend.services.tushare_dataset_specs import (
 from backend.services.tushare_sync_engine import TushareSyncEngine
 
 
+class _NoopTargetRepository:
+    def upsert_target(self, record):
+        return {"target_id": "test-target"}
+
+    def record_attempt(self, record):
+        return {"attempt_id": "test-attempt"}
+
+
 class _FakeCursor:
     def __init__(self, conn):
         self._conn = conn
@@ -241,6 +249,96 @@ class _RowsConn(_FakeConn):
         return _RowsCursor(self)
 
 
+def test_trade_date_tushare_specs_use_trading_day_sequence():
+    for name in {"daily_basic", "adj_factor", "bak_basic", "margin_detail", "stk_limit", "cyq_perf"}:
+        spec = DATASET_REGISTRY[name]
+        assert spec.query_mode == QueryMode.BY_DATE
+        assert spec.date_column == "trade_date"
+        assert spec.trading_day_only is True
+
+    assert DATASET_REGISTRY["stock_st_events"].trading_day_only is False
+    assert DATASET_REGISTRY["stock_st_events"].date_column == "pub_date"
+    assert DATASET_REGISTRY["suspend_d"].trading_day_only is False
+    assert DATASET_REGISTRY["suspend_d"].replace_existing_dates is True
+    assert "suspend_d" in sync_engine.ZERO_ROW_VALID_DATASETS
+    assert "stk_limit" not in sync_engine.ZERO_ROW_VALID_DATASETS
+    assert "margin_detail" not in sync_engine.ZERO_ROW_VALID_DATASETS
+
+
+def test_trading_day_sequence_uses_calendar_service_for_trade_date_specs(monkeypatch):
+    engine = TushareSyncEngine(target_repository=None)
+    calls = []
+
+    def _list_trading_days_from_conn(conn, start_date, end_date, *, allow_empty=False):
+        calls.append((conn, start_date, end_date, allow_empty))
+        return [dt.date(2026, 5, 25)]
+
+    monkeypatch.setattr(
+        sync_engine.TradingCalendarStatusService,
+        "list_trading_days_from_conn",
+        staticmethod(_list_trading_days_from_conn),
+    )
+    conn = _FakeConn()
+
+    days = engine._date_sequence_for_by_date(
+        conn,
+        DATASET_REGISTRY["stk_limit"],
+        dt.date(2026, 5, 23),
+        dt.date(2026, 5, 25),
+    )
+
+    assert days == [dt.date(2026, 5, 25)]
+    assert calls == [(conn, dt.date(2026, 5, 23), dt.date(2026, 5, 25), True)]
+
+
+def test_sync_by_date_skips_non_trading_days_for_stk_limit_and_margin_detail(monkeypatch):
+    for dataset in ["stk_limit", "margin_detail"]:
+        engine = TushareSyncEngine(target_repository=_NoopTargetRepository())
+        conn = _FakeConn()
+        fetched = []
+
+        def _list_trading_days_from_conn(conn, start_date, end_date, *, allow_empty=False):
+            assert start_date == dt.date(2026, 5, 23)
+            assert end_date == dt.date(2026, 5, 25)
+            return [dt.date(2026, 5, 25)]
+
+        monkeypatch.setattr(
+            sync_engine.TradingCalendarStatusService,
+            "list_trading_days_from_conn",
+            staticmethod(_list_trading_days_from_conn),
+        )
+        monkeypatch.setattr(
+            engine,
+            "_fetch_from_tushare",
+            lambda spec, params: fetched.append((spec.name, params)) or [
+                {"trade_date": "20260525", "ts_code": "000001.SZ"}
+            ],
+        )
+        monkeypatch.setattr(engine, "_upsert_batch", lambda _conn, _spec, rows: len(rows))
+        monkeypatch.setattr(engine, "_update_progress", lambda _conn, _job_id, _result: None)
+        monkeypatch.setattr(sync_engine.time, "sleep", lambda seconds: None)
+
+        result = engine._sync_by_date(
+            conn,
+            DATASET_REGISTRY[dataset],
+            dt.date(2026, 5, 23),
+            dt.date(2026, 5, 25),
+            uuid.uuid4(),
+        )
+
+        assert result.ok is True
+        assert result.total_batches == 1
+        assert result.success_batches == 1
+        assert result.failed_batches == 0
+        assert fetched == [(dataset, {"trade_date": "20260525"})]
+        failure_audits = [
+            params
+            for sql, params in conn.executed
+            if "INSERT INTO market.dataset_date_refresh_audit" in sql and params[4] == "failed"
+        ]
+        assert failure_audits == []
+
+
 def test_cyq_dataset_specs_are_registered_with_independent_tables_and_limits():
     assert DATASET_REGISTRY["cyq_perf"] is CYQ_PERF
     assert "cyq_chips" not in DATASET_REGISTRY
@@ -319,7 +417,12 @@ def test_resolve_incremental_start_seeds_physical_rows_then_uses_first_gap():
     conn = _RowsConn([
         [],  # no audit rows
         [(dt.date(2026, 5, 15), 42), (dt.date(2026, 5, 18), 43)],  # physical row counts
-        [(dt.date(2026, 5, 15),), (dt.date(2026, 5, 18),)],  # trading-date sequence
+        [
+            (dt.date(2026, 5, 15), True),
+            (dt.date(2026, 5, 16), False),
+            (dt.date(2026, 5, 17), False),
+            (dt.date(2026, 5, 18), True),
+        ],  # trading-date sequence
         [],  # INSERT for 2026-05-15 audit row
         [],  # INSERT for 2026-05-18 audit row
     ])
@@ -487,7 +590,7 @@ def test_sync_incremental_reconciles_audit_before_fetching_first_gap(monkeypatch
 def test_sync_by_date_rejects_provider_contract_date_mismatch(monkeypatch):
     engine = TushareSyncEngine()
     conn = _RowsConn([
-        [(dt.date(2026, 5, 18),)],  # trading days
+        [(dt.date(2026, 5, 18), True)],  # trading days
         [],  # create target swallowed by repo fallback
         [],  # audit failure insert
         [],  # progress update

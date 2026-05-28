@@ -78,6 +78,7 @@ DAILY_BASIC = DatasetSpec(
     },
     batch_sleep=0.12,
     rate_per_minute=500,
+    trading_day_only=True,
 )
 
 ADJ_FACTOR = DatasetSpec(
@@ -93,6 +94,7 @@ ADJ_FACTOR = DatasetSpec(
     },
     batch_sleep=0.12,
     rate_per_minute=500,
+    trading_day_only=True,
 )
 
 INDEX_DAILY = DatasetSpec(
@@ -233,6 +235,7 @@ BAK_BASIC = DatasetSpec(
     api_field_map={"pe_dyn": "pe"},  # Tushare returns "pe", DB column is "pe_dyn"
     batch_sleep=0.2,
     rate_per_minute=300,
+    trading_day_only=True,
 )
 
 MARGIN_DETAIL = DatasetSpec(
@@ -255,6 +258,7 @@ MARGIN_DETAIL = DatasetSpec(
     },
     batch_sleep=0.2,
     rate_per_minute=500,
+    trading_day_only=True,
 )
 
 CYQ_PERF = DatasetSpec(
@@ -301,6 +305,7 @@ STK_LIMIT = DatasetSpec(
     },
     batch_sleep=0.3,
     rate_per_minute=200,
+    trading_day_only=True,
 )
 
 SUSPEND_D = DatasetSpec(
