@@ -1,60 +1,4 @@
 {
-  "schema_version": "aistock_validation_bug_v1",
-  "bug_id": "BUG-112",
-  "title": "P0: HMM platform runtime forces manual snapshot/coefficients instead of automatic daily compute-cache",
-  "description": "Expected: Selection Center, Paper v2 simulation, MiniQMT simulation, and future live paths treat HMM as a platform runtime capability. Operators select an HMM model/config and signal preset; the first use for a model/preset/as-of/effective trade date automatically computes and persists audited daily HMM coefficients, and later same-key runs reuse the deterministic cache. Daily manual snapshot selection or manual coefficient generation is forbidden for runtime use.\nActual: The current Paper v2 Selection UI requires hmmConfigId plus hmmSnapshotId and requires a selected coefficient artifact covering trade_date. backend/services/selection_center/runtime_profile.py requires model_snapshot_id when HMM is enabled. backend/services/selection_center/hmm_runtime.py only reads precomputed coefficient artifacts and fail-fast when trade_date coverage is missing. backend/services/hmm_training_service.py has daily coefficient preview/generate/job support, but generation is an operator-confirmed snapshot flow and is not automatically resolved by Selection/Paper/Live runtime.",
-  "module": "paper_v2",
-  "severity": "P0",
-  "risk_area": "paper_v2_platform_capability_boundary",
-  "status": "fixed",
-  "trigger_condition": {
-    "scenario": "reported_hmm_platform_runtime_requires_manual_snapshot_20260524",
-    "runtime_paths": [
-      "Selection Center",
-      "Paper v2 readiness/day-run/replay/live-session",
-      "MiniQMT simulation",
-      "future live trading"
-    ],
-    "user_requirement": "Select model once; first use auto-computes daily HMM parameters; same-day same-key runs use cache; no daily manual snapshot generation.",
-    "files": [
-      "frontend/src/app/paper-v2/selection/page.tsx",
-      "backend/services/selection_center/runtime_profile.py",
-      "backend/services/selection_center/hmm_runtime.py",
-      "backend/services/selection_center/package_health.py",
-      "backend/services/strategy_package/runtime.py",
-      "backend/services/hmm_training_service.py",
-      "backend/services/paper_trading_v2/readiness.py",
-      "backend/services/paper_trading_v2/day_runner.py",
-      "backend/services/paper_trading_v2/live_session.py"
-    ]
-  },
-  "reproduce_command": "Open /paper-v2/selection, enable HMM, choose an HMM config/model for a trade_date without a precomputed coefficient artifact, then run selection; current UI/backend requires a ready snapshot and manual coefficient generation instead of compute-on-miss cache.",
-  "failing_run_id": null,
-  "evidence_uris": [
-    "github:https://github.com/licong01-cloud/AIstock/issues/182",
-    "file:frontend/src/app/paper-v2/selection/page.tsx",
-    "file:backend/services/selection_center/runtime_profile.py",
-    "file:backend/services/selection_center/hmm_runtime.py",
-    "file:backend/services/selection_center/package_health.py",
-    "file:backend/services/hmm_training_service.py",
-    "related:BUG-065/GitHub#76",
-    "related:BUG-076/GitHub#103",
-    "related:BUG-111/GitHub#181",
-    "commit:07e66ac6ebf20feccc95eb39f4cd65a32ada8a65",
-    "file:tests/aistock_validation/history/paper_trading_v2/20260525_042120_l3_paper-v2-gate-decoupling-implementation.md",
-    "file:tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md"
-  ],
-  "fingerprint": "b9913018e123b3b9",
-  "assigned_agent": "paper_v2",
-  "fix_branch": "feature/paper-v2-gate-decoupling-impl-20260525",
-  "fix_commit": "07e66ac6ebf20feccc95eb39f4cd65a32ada8a65",
-  "verification_run_id": "tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md",
-  "created_at": "2026-05-24T03:39:24Z",
-  "first_seen_at": "2026-05-24T03:39:24Z",
-  "last_seen_at": "2026-05-24T03:39:24Z",
-  "fixed_at": "2026-05-27T06:22:22Z",
-  "submitted_at": "2026-05-24T03:39:24Z",
-  "closed_at": null,
   "allowed_write_scope": [
     "backend/services/selection_center/runtime_profile.py",
     "backend/services/selection_center/hmm_runtime.py",
@@ -76,6 +20,89 @@
     "tests/aistock_validation/bugs/20260524_BUG-112-p0-hmm-platform-runtime-forces-manual-snapshot-coefficients.json",
     "tests/aistock_validation/history/paper_v2_selection_center"
   ],
+  "assigned_agent": "paper_v2",
+  "bug_id": "BUG-112",
+  "closed_at": null,
+  "closure_requirements": [
+    "HMM runtime model selection is platform-owned and not dependent on per-day manual snapshot selection for Selection/Paper/Live runtime.",
+    "Compute-on-miss plus deterministic cache reuse is shared by Selection Center, Paper v2, MiniQMT simulation, and future live entry points.",
+    "Backtest/research snapshot workflows may remain for offline research, but they are not required for daily runtime operation.",
+    "Fail-fast data/model/coefficient validation remains strict and no neutral-coefficient or silent-success fallback is introduced.",
+    "BUG-065, BUG-076, and BUG-111 protections remain intact and are covered by regression tests."
+  ],
+  "created_at": "2026-05-24T03:39:24Z",
+  "custom_github_labels": [
+    "paper_v2",
+    "selection_center",
+    "hmm",
+    "platform-runtime",
+    "simulation-runtime",
+    "P0"
+  ],
+  "description": "Expected: Selection Center, Paper v2 simulation, MiniQMT simulation, and future live paths treat HMM as a platform runtime capability. Operators select an HMM model/config and signal preset; the first use for a model/preset/as-of/effective trade date automatically computes and persists audited daily HMM coefficients, and later same-key runs reuse the deterministic cache. Daily manual snapshot selection or manual coefficient generation is forbidden for runtime use.\nActual: The current Paper v2 Selection UI requires hmmConfigId plus hmmSnapshotId and requires a selected coefficient artifact covering trade_date. backend/services/selection_center/runtime_profile.py requires model_snapshot_id when HMM is enabled. backend/services/selection_center/hmm_runtime.py only reads precomputed coefficient artifacts and fail-fast when trade_date coverage is missing. backend/services/hmm_training_service.py has daily coefficient preview/generate/job support, but generation is an operator-confirmed snapshot flow and is not automatically resolved by Selection/Paper/Live runtime.",
+  "events": [
+    {
+      "action": "discovered",
+      "actor": "paper_v2",
+      "note": "Reported via aistock_mcp_server.report_bug. Comments: 0",
+      "timestamp": "2026-05-24T03:39:24Z"
+    },
+    {
+      "action": "registry_cleanup",
+      "actor": "codex-app",
+      "note": "Normalized BUG-112 local JSON after MCP create timed out but completed GitHub issue #182; removed duplicate local-only BUG-113 draft.",
+      "timestamp": "2026-05-24T03:50:00Z"
+    },
+    {
+      "action": "close_sync_audit_ready",
+      "actor": "codex-app",
+      "note": "Merged implementation evidence was re-audited on chore/paper-v2-issue-close-sync-audit-20260527; BUG JSON is marked fixed and GitHub issue should close when the audit PR merges. Audit record: tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md.",
+      "timestamp": "2026-05-27T06:22:22Z"
+    }
+  ],
+  "evidence_uris": [
+    "github:https://github.com/licong01-cloud/AIstock/issues/182",
+    "file:frontend/src/app/paper-v2/selection/page.tsx",
+    "file:backend/services/selection_center/runtime_profile.py",
+    "file:backend/services/selection_center/hmm_runtime.py",
+    "file:backend/services/selection_center/package_health.py",
+    "file:backend/services/hmm_training_service.py",
+    "related:BUG-065/GitHub#76",
+    "related:BUG-076/GitHub#103",
+    "related:BUG-111/GitHub#181",
+    "commit:07e66ac6ebf20feccc95eb39f4cd65a32ada8a65",
+    "file:tests/aistock_validation/history/paper_trading_v2/20260525_042120_l3_paper-v2-gate-decoupling-implementation.md",
+    "file:tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md"
+  ],
+  "failing_run_id": null,
+  "fingerprint": "b9913018e123b3b9",
+  "first_seen_at": "2026-05-24T03:39:24Z",
+  "fix_branch": "feature/paper-v2-gate-decoupling-impl-20260525",
+  "fix_commit": "07e66ac6ebf20feccc95eb39f4cd65a32ada8a65",
+  "fixed_at": "2026-05-28T16:40:17.732525Z",
+  "github_issue_number": 182,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/182",
+  "last_seen_at": "2026-05-24T03:39:24Z",
+  "module": "paper_v2",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/244",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Open /paper-v2/selection, enable HMM, choose an HMM config/model for a trade_date without a precomputed coefficient artifact, then run selection; current UI/backend requires a ready snapshot and manual coefficient generation instead of compute-on-miss cache.",
+  "required_verification": [
+    "Selection Center HMM-on flow accepts model/config plus signal_preset without operator-provided snapshot_id or coefficients_path, and first run auto-generates the daily coefficient artifact/record.",
+    "A second Selection Center run for the same model/config, signal_preset, as_of_trade_date, effective_trade_date, and data freshness fingerprint hits cache and does not regenerate coefficients.",
+    "Paper v2 readiness, day-run, replay, live-session, and MiniQMT simulation paths use the same HMM platform resolver and no longer require manual snapshot generation.",
+    "Concurrent same-key requests are serialized or idempotent and produce one cache artifact/record with auditable wait/reuse behavior.",
+    "Missing model artifact, stale or insufficient input data, sector mapping gaps, non-positive/non-finite coefficients, cache metadata mismatch, and generator failure all fail fast with real context and never fall back to neutral coefficients.",
+    "Frontend UX shows model selection, auto-compute/cache-hit/in-progress/failure states, cache evidence, and audit context; it does not instruct daily manual snapshot generation for runtime use.",
+    "Validation record includes design-compliance matrix and explicitly reports production_ddl_gate, production_frontend_dependency_gate, production_backend_dependency_gate, and whether 8001/3000 were touched."
+  ],
+  "risk_area": "paper_v2_platform_capability_boundary",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "submitted_at": "2026-05-24T03:39:24Z",
   "suspected_modules": [
     "frontend/src/app/paper-v2/selection/page.tsx",
     "backend/services/selection_center/runtime_profile.py",
@@ -87,63 +114,30 @@
     "backend/services/paper_trading_v2/day_runner.py",
     "backend/services/paper_trading_v2/live_session.py"
   ],
-  "required_verification": [
-    "Selection Center HMM-on flow accepts model/config plus signal_preset without operator-provided snapshot_id or coefficients_path, and first run auto-generates the daily coefficient artifact/record.",
-    "A second Selection Center run for the same model/config, signal_preset, as_of_trade_date, effective_trade_date, and data freshness fingerprint hits cache and does not regenerate coefficients.",
-    "Paper v2 readiness, day-run, replay, live-session, and MiniQMT simulation paths use the same HMM platform resolver and no longer require manual snapshot generation.",
-    "Concurrent same-key requests are serialized or idempotent and produce one cache artifact/record with auditable wait/reuse behavior.",
-    "Missing model artifact, stale or insufficient input data, sector mapping gaps, non-positive/non-finite coefficients, cache metadata mismatch, and generator failure all fail fast with real context and never fall back to neutral coefficients.",
-    "Frontend UX shows model selection, auto-compute/cache-hit/in-progress/failure states, cache evidence, and audit context; it does not instruct daily manual snapshot generation for runtime use.",
-    "Validation record includes design-compliance matrix and explicitly reports production_ddl_gate, production_frontend_dependency_gate, production_backend_dependency_gate, and whether 8001/3000 were touched."
-  ],
-  "closure_requirements": [
-    "HMM runtime model selection is platform-owned and not dependent on per-day manual snapshot selection for Selection/Paper/Live runtime.",
-    "Compute-on-miss plus deterministic cache reuse is shared by Selection Center, Paper v2, MiniQMT simulation, and future live entry points.",
-    "Backtest/research snapshot workflows may remain for offline research, but they are not required for daily runtime operation.",
-    "Fail-fast data/model/coefficient validation remains strict and no neutral-coefficient or silent-success fallback is introduced.",
-    "BUG-065, BUG-076, and BUG-111 protections remain intact and are covered by regression tests."
-  ],
-  "events": [
-    {
-      "timestamp": "2026-05-24T03:39:24Z",
-      "actor": "paper_v2",
-      "action": "discovered",
-      "note": "Reported via aistock_mcp_server.report_bug. Comments: 0"
-    },
-    {
-      "timestamp": "2026-05-24T03:50:00Z",
-      "actor": "codex-app",
-      "action": "registry_cleanup",
-      "note": "Normalized BUG-112 local JSON after MCP create timed out but completed GitHub issue #182; removed duplicate local-only BUG-113 draft."
-    },
-    {
-      "timestamp": "2026-05-27T06:22:22Z",
-      "actor": "codex-app",
-      "action": "close_sync_audit_ready",
-      "note": "Merged implementation evidence was re-audited on chore/paper-v2-issue-close-sync-audit-20260527; BUG JSON is marked fixed and GitHub issue should close when the audit PR merges. Audit record: tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md."
-    }
-  ],
-  "custom_github_labels": [
-    "paper_v2",
-    "selection_center",
-    "hmm",
-    "platform-runtime",
-    "simulation-runtime",
-    "P0"
-  ],
-  "github_issue_number": 182,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/182",
+  "title": "P0: HMM platform runtime forces manual snapshot/coefficients instead of automatic daily compute-cache",
+  "trigger_condition": {
+    "files": [
+      "frontend/src/app/paper-v2/selection/page.tsx",
+      "backend/services/selection_center/runtime_profile.py",
+      "backend/services/selection_center/hmm_runtime.py",
+      "backend/services/selection_center/package_health.py",
+      "backend/services/strategy_package/runtime.py",
+      "backend/services/hmm_training_service.py",
+      "backend/services/paper_trading_v2/readiness.py",
+      "backend/services/paper_trading_v2/day_runner.py",
+      "backend/services/paper_trading_v2/live_session.py"
+    ],
+    "runtime_paths": [
+      "Selection Center",
+      "Paper v2 readiness/day-run/replay/live-session",
+      "MiniQMT simulation",
+      "future live trading"
+    ],
+    "scenario": "reported_hmm_platform_runtime_requires_manual_snapshot_20260524",
+    "user_requirement": "Select model once; first use auto-computes daily HMM parameters; same-day same-key runs use cache; no daily manual snapshot generation."
+  },
   "validation_evidence": [
-    "backend/services/selection_center/hmm_runtime.py implements model/config resolver, compute-on-miss, cache reuse, per-key lock, and fail-fast no neutral fallback",
-    "backend/tests/selection_center/test_runtime_selection.py::test_strategy_package_runtime_auto_generates_hmm_coefficients_on_miss -> covered",
-    "backend/tests/selection_center/test_runtime_selection.py::test_strategy_package_runtime_resolves_latest_ready_hmm_snapshot_from_model_config -> covered",
-    "frontend/tests/paper-v2/paper-v2-hmm-runtime-coefficients.spec.ts -> covered in implementation validation record",
-    "python -m nox -s paper_v2_backend -> 501 passed, 1 skipped, 2 xfailed",
-    "GitHub main CI run 26490758645 at 8be68bea -> success; paper_v2_backend check -> success",
-    "GET http://127.0.0.1:8001/api/v1/strategy-packages?limit=20 -> 200; package listing no longer globally blocked by manifest drift",
-    "Close-sync audit record: tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md"
+    "HMM runtime auto-generation/cache is fixed by 07e66ac6; runtime resolver/cache tests, Paper v2 HMM UI E2E, nox paper_v2_backend, and GitHub main CI passed; Paper v2 issue closure audit PR #244 confirms BUG-112 is ready to close; production gates noop."
   ],
-  "production_ddl_gate": "noop",
-  "production_frontend_dependency_gate": "noop",
-  "production_backend_dependency_gate": "noop"
+  "verification_run_id": "tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md"
 }
