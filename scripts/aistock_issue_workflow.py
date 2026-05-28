@@ -2823,6 +2823,21 @@ def build_triage_ci_issue_plan(
     suggested_title = (
         f"{module} CI failure requires triage: {failed_test or first_job.get('error_signature') or issue.get('title')}"
     )
+    output_dir = REPO_ROOT / WORKFLOW_ROOT / f"ci-issue-{issue.get('number')}"
+    github_issue_url = issue.get("url") or _github_issue_url(issue.get("number"))
+    failure_event = ci_failure_summary.build_failure_event(
+        summary,
+        github_issue_number=issue.get("number"),
+        github_issue_url=github_issue_url,
+    )
+    context_pack = ci_failure_summary.build_context_pack(
+        summary,
+        github_issue_number=issue.get("number"),
+        github_issue_url=github_issue_url,
+    )
+    failure_event_path = output_dir / "failure-event.json"
+    context_pack_json_path = output_dir / "context-pack.json"
+    context_pack_md_path = output_dir / "context-pack.md"
     payload = {
         "schema_version": "aistock_issue_workflow_triage_ci_issue_v1",
         "generated_at": _utc_now(),
@@ -2834,6 +2849,11 @@ def build_triage_ci_issue_plan(
         },
         "detected_run_id": detected_run_id,
         "summary": summary,
+        "failure_event": failure_event,
+        "failure_event_path": _repo_rel(failure_event_path),
+        "context_pack": context_pack,
+        "context_pack_json_path": _repo_rel(context_pack_json_path),
+        "context_pack_md_path": _repo_rel(context_pack_md_path),
         "classification_recommendation": classification,
         "linked_bug": {"bug_id": linked[0].get("bug_id"), "path": _repo_rel(linked[1])} if linked else None,
         "needs_bug_json": linked is None and classification != "infra_flaky",
@@ -2842,12 +2862,8 @@ def build_triage_ci_issue_plan(
             "severity": summary.get("severity") or "P1",
             "title": suggested_title[:180],
             "risk_area": "ci_failure_intake",
-            "allowed_write_scope": summary.get("suspected_files") or [],
-            "required_verification": [
-                "Reproduce the failed job or focused test when applicable.",
-                "Run issue-specific validation selected by the promoted BUG JSON.",
-                "Keep BUG JSON and GitHub Issue synchronized.",
-            ],
+            "allowed_write_scope": context_pack.get("allowed_write_scope") or [],
+            "required_verification": context_pack.get("required_verification") or [],
         },
         "next_command": (
             f"python scripts/aistock_issue_workflow.py promote-ci-issue --issue {issue.get('number')} --apply"
@@ -2855,7 +2871,10 @@ def build_triage_ci_issue_plan(
             else f"python scripts/aistock_issue_workflow.py run --bug-id {linked[0].get('bug_id')} --mode plan --create-worktree"
         ),
     }
-    _write_json(REPO_ROOT / WORKFLOW_ROOT / f"ci-issue-{issue.get('number')}" / "triage-ci-issue.json", payload)
+    _write_json(failure_event_path, failure_event)
+    _write_json(context_pack_json_path, context_pack)
+    _write_text(context_pack_md_path, ci_failure_summary.render_context_pack_markdown(context_pack))
+    _write_json(output_dir / "triage-ci-issue.json", payload)
     return payload
 
 
@@ -2886,10 +2905,16 @@ def build_promote_ci_issue_plan(
     first_job = (summary.get("failed_jobs") or [{}])[0]
     failed_tests = first_job.get("failed_tests") or []
     error_signature = first_job.get("error_signature")
-    details = ci_failure_summary.render_issue_markdown(summary)
+    details = ci_failure_summary.render_issue_markdown(summary, github_issue_number=issue_number)
     changed_files = list(suggested.get("allowed_write_scope") or [])
-    if not changed_files:
-        changed_files = ["scripts/aistock_issue_workflow.py"]
+    evidence_refs = flow._unique_strings(
+        [
+            str(summary.get("run_url") or ""),
+            _github_issue_url(issue_number),
+            str(triage.get("failure_event_path") or ""),
+            str(triage.get("context_pack_md_path") or ""),
+        ]
+    )
     plan = build_submit_bug_plan(
         title=suggested["title"],
         module=suggested["module"],
@@ -2898,7 +2923,7 @@ def build_promote_ci_issue_plan(
         expected="CI/Nightly failure issues include enough diagnostic detail to enter the BUG JSON workflow without manual log rediscovery.",
         actual=f"Failure summary: {error_signature or (failed_tests[0] if failed_tests else 'diagnostic extraction incomplete')}",
         reproduce_command=str(summary.get("reproduce_command") or "Inspect linked CI run log."),
-        evidence_refs=[str(summary.get("run_url") or ""), _github_issue_url(issue_number)],
+        evidence_refs=evidence_refs,
         changed_files=changed_files,
         plan_key="ci_failure_issue_intake",
         nox_session=first_job.get("nox_session"),

@@ -1975,7 +1975,14 @@ def test_triage_ci_issue_extracts_run_summary_and_recommends_promotion(
     assert payload["needs_bug_json"] is True
     assert payload["suggested_bug"]["module"] == "paper_v2"
     assert "promote-ci-issue --issue 197" in payload["next_command"]
-    assert (isolated_workflow_root / "tmp" / "issue_workflow" / "ci-issue-197" / "triage-ci-issue.json").exists()
+    ci_dir = isolated_workflow_root / "tmp" / "issue_workflow" / "ci-issue-197"
+    assert (ci_dir / "triage-ci-issue.json").exists()
+    assert (ci_dir / "failure-event.json").exists()
+    assert (ci_dir / "context-pack.json").exists()
+    assert (ci_dir / "context-pack.md").exists()
+    assert payload["failure_event"]["schema_version"] == "aistock_failure_event_v1"
+    assert payload["context_pack"]["schema_version"] == "aistock_ci_failure_context_pack_v1"
+    assert payload["context_pack"]["agent_handoff"]["workflow_entrypoints"]["promote"].endswith("--issue 197 --apply")
 
 
 def test_promote_ci_issue_writes_bug_json_with_existing_github_issue(
@@ -2043,6 +2050,7 @@ def test_promote_ci_issue_writes_bug_json_with_existing_github_issue(
     assert record["github_issue_number"] == 197
     assert record["github_issue_url"] == "https://github.com/licong01-cloud/AIstock/issues/197"
     assert record["module"] == "paper_v2"
+    assert "tmp/issue_workflow/ci-issue-197/context-pack.md" in record["evidence_uris"]
     assert record["production_ddl_gate"] == "noop"
 
 
