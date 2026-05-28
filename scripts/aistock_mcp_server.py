@@ -120,7 +120,7 @@ def _dedupe_paths(paths: list[Path]) -> list[Path]:
 
 
 def _git_toplevel(path: Path) -> Path | None:
-    anchor = path if path.exists() else path.parent
+    anchor = path.parent if path.exists() and path.is_file() else (path if path.exists() else path.parent)
     try:
         completed = subprocess.run(
             ["git", "-C", str(anchor), "rev-parse", "--show-toplevel"],
@@ -173,8 +173,14 @@ def _require_bug_json_write_target(path: Path) -> None:
     if _same_path(repo_root, canonical) and _git_branch(repo_root) == "main":
         raise RuntimeError(
             "refusing to write BUG JSON in canonical root main; use "
-            "scripts/aistock_issue_workflow.py with a registry or close-sync worktree"
+            "scripts/aistock_issue_workflow.py submit-bug --create-registry-worktree "
+            "--apply with a registry or close-sync worktree"
         )
+
+
+def _require_bug_intake_write_target() -> None:
+    _require_bug_json_write_target(BUG_ID_ALLOCATOR_PATH)
+    _require_bug_json_write_target(BUG_ROOT / f"{_today_yyyymmdd()}_BUG-000-preflight.json")
 
 
 def _candidate_repo_roots() -> list[Path]:
@@ -1882,6 +1888,7 @@ def mcp_github_issue_create(
             "registry_is_source_of_truth": True,
         }
 
+    _require_bug_intake_write_target()
     bug_id = _next_bug_id()
     now_iso = _utcnow_iso()
     record = _build_bug_record(

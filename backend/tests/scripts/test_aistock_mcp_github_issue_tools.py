@@ -191,6 +191,43 @@ def test_github_issue_create_writes_registry_and_dedupes_without_github_env(mcp_
     assert second["existing"]["bug_id"] == first["bug_id"]
 
 
+def test_github_issue_create_blocks_canonical_root_before_allocation_or_github(
+    mcp_module,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured: dict[str, Any] = {"github_called": False}
+    allocator = Path(mcp_module.BUG_ID_ALLOCATOR_PATH)
+
+    class FakeGitHubClient:
+        def __init__(self, *, repo: str, token: str) -> None:
+            self.repo = repo
+            self.token = token
+
+        def create_issue(self, *, title: str, body: str, labels: list[str]) -> dict[str, Any]:
+            captured["github_called"] = True
+            return {"number": 77, "state": "open", "html_url": "https://github.example/issues/77"}
+
+    monkeypatch.setattr(mcp_module, "_git_toplevel", lambda _path: Path(mcp_module.REPO_ROOT))
+    monkeypatch.setattr(mcp_module, "_canonical_root", lambda: Path(mcp_module.REPO_ROOT))
+    monkeypatch.setattr(mcp_module, "_git_branch", lambda _root: "main")
+    monkeypatch.setenv("GH_TOKEN", "pytest-token")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setattr(mcp_module, "_github_client_factory", FakeGitHubClient)
+
+    with pytest.raises(RuntimeError, match="submit-bug --create-registry-worktree"):
+        mcp_module.mcp_github_issue_create(
+            title="Must use registry worktree",
+            body="MCP clients must not allocate or create GitHub issues from canonical root main.",
+            severity="P1",
+            module="validation",
+            create_github=True,
+        )
+
+    assert captured["github_called"] is False
+    assert not allocator.exists()
+
+
 def test_github_issue_create_live_requires_explicit_env(mcp_module):
     with pytest.raises(ValueError, match="GH_TOKEN"):
         mcp_module.mcp_github_issue_create(
