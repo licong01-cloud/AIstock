@@ -3,7 +3,11 @@
   "allowed_write_scope": [
     "backend/services/paper_trading_v2/broker/minqmtsim.py",
     "backend/services/paper_trading_v2/live_session.py",
-    "backend/services/paper_trading_v2/day_runner.py"
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+    "backend/tests/paper_trading_v2/test_live_session.py",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260528_BUG-142-paper-v2-miniqmt-native-fills-are-not-reconciled-after-broker-authoritat.json"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-142",
@@ -21,6 +25,18 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260528-1dd5da447c3d",
       "timestamp": "2026-05-28T07:19:03.967757Z"
+    },
+    {
+      "timestamp": "2026-05-28T07:22:50Z",
+      "actor": "codex",
+      "action": "scope_expanded",
+      "note": "Added Paper v2 regression tests to allowed_write_scope before code changes for MiniQMT native fill reconciliation."
+    },
+    {
+      "timestamp": "2026-05-28T07:34:04Z",
+      "actor": "codex",
+      "action": "scope_expanded",
+      "note": "Added BUG registry JSON and allocator files to allowed_write_scope so workflow finish can validate the registration and fix branch together."
     }
   ],
   "evidence_uris": [

@@ -418,6 +418,11 @@ class PaperTradingLiveMinuteExecutor:
         existing = self.repository.get_run_by_portfolio_date(session.portfolio_id, trade_date)
         if existing is not None:
             if existing.status == RunStatus.SUCCEEDED:
+                self.day_helper.reconcile_minqmt_native_run(
+                    portfolio=portfolio,
+                    run=existing,
+                    trade_date=trade_date,
+                )
                 self.repository.save_session_day(
                     PaperSessionDay(
                         session_id=session.session_id,
