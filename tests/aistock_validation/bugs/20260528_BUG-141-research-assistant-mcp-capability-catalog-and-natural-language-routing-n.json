@@ -1,0 +1,69 @@
+{
+  "actual": "Static catalog and prompt nodes exist, but end-to-end runtime/UI validation is not complete; a Chinese execution policy catalog question routes to execution_policy_validate_for_strategy instead of execution_policy_list_algos; user-facing capability wording has previously remained restriction-heavy.",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/**",
+    "backend/routers/research_assistant.py",
+    "frontend/tests/research-assistant/**",
+    "backend/tests/research_assistant/**",
+    "backend/tests/mcp/**",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260528_BUG-141-research-assistant-mcp-capability-catalog-and-natural-language-routing-n.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-141",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-28T05:57:32.982254Z",
+  "description": "Static catalog and prompt nodes exist, but end-to-end runtime/UI validation is not complete; a Chinese execution policy catalog question routes to execution_policy_validate_for_strategy instead of execution_policy_list_algos; user-facing capability wording has previously remained restriction-heavy.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260528-8db2f875b0b5",
+      "timestamp": "2026-05-28T05:57:32.982252Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/research_assistant_unified_mcp_natural_language_orchestration_design_20260527.md",
+    "backend/services/research_assistant/tool_router.py",
+    "backend/services/research_assistant/mcp_catalog_sync.py"
+  ],
+  "expected": "Research Assistant can answer MCP capability questions in a humanized way, expose all registered MCP servers/tools, map Chinese natural language to the right MCP domain/tool, choose read-only summary/list tools for catalog questions, preserve summary-first payload policy, and require preflight/confirmation only for write/high-cost actions.",
+  "first_seen_at": "2026-05-28T05:57:32.982254Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 275,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/275",
+  "last_seen_at": "2026-05-28T05:57:32.982254Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m pytest backend/tests/research_assistant/test_natural_language_mcp_routing.py backend/tests/research_assistant/test_mcp_catalog_sync.py -q -p no:cacheprovider",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Research Assistant MCP capability catalog and natural-language routing need full runtime closure",
+  "trigger_condition": {
+    "fingerprint": "8db2f875b0b5229882734ab6",
+    "source_event_id": "FE-20260528-8db2f875b0b5"
+  },
+  "verification_run_id": null
+}

@@ -734,6 +734,37 @@ def test_chat_turn_chinese_factor_library_request_does_not_surface_mock_counts()
     assert "domain.factor_library" in keys
 
 
+def test_chat_turn_chinese_execution_policy_catalog_uses_read_only_list() -> None:
+    class ExecutionPolicyHallucinationLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            return LlmCallResult(
+                content="我可以直接校验这个策略是否适合某个算法。",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    svc = _chat_service(ExecutionPolicyHallucinationLlmClient())
+
+    result = svc.chat_turn(ChatTurnRequest(message="执行策略库里有什么 minute algo？"))
+
+    text = result["assistant_message"]["content_text"]
+    assert "aistock-execution-policy/execution_policy_list_algos" in text
+    assert "execution_policy_validate_for_strategy" not in text
+    assert "只读工具" in text
+    assert result["mode_decision"]["intent_type"] == "execution_policy_request"
+    route = result["cards"]["mcp_route_decision"]
+    assert route["domain"] == "execution_policy"
+    assert route["tool_name"] == "execution_policy_list_algos"
+    assert route["side_effect"] == "read_only"
+    assert route["preflight_required"] is False
+    assert route["summary_first"] is True
+    keys = {node["prompt_key"] for node in result["prompt_bundle"]["node_refs"]}
+    assert "domain.execution_policy" in keys
+
+
 def test_chat_turn_tool_choice_markup_is_replaced_with_route_card_text() -> None:
     class ToolChoiceMarkupLlmClient(FakeLlmClient):
         def complete(self, **kwargs: object) -> LlmCallResult:
