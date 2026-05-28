@@ -1,73 +1,77 @@
-﻿{
-    "actual":  "Claude Code and other MCP clients can call mcp_github_issue_create directly. The tool can create a GitHub Issue and update BUG allocator or BUG JSON outside the unified aistock_issue_workflow registry worktree flow, leaving half-submitted BUG records, stale reservations, root allocator drift, or long-running tool calls without progress. The fix must make MCP issue creation delegate to or return the standard workflow path, refuse canonical root main writes before allocation/GitHub creation, preserve enough recovery information, and add regression tests for no root pollution.",
-    "allowed_write_scope":  [
-                                "scripts/aistock_mcp_server.py",
-                                "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
-                                "tests\\aistock_validation\\bugs\\20260528_BUG-144-issue-workflow-mcp-create-bug-can-leave-half-submitted-registry-state-an.json",
-                                "tests/aistock_validation/bugs/.bug_id_allocator.json"
-                            ],
-    "assigned_agent":  null,
-    "bug_id":  "BUG-144",
-    "closed_at":  null,
-    "closure_requirements":  [
-                                 "Fix the observed behavior.",
-                                 "Run required verification plans.",
-                                 "Keep BUG JSON and GitHub Issue synchronized."
-                             ],
-    "created_at":  "2026-05-28T08:08:32.589203Z",
-    "description":  "Claude Code and other MCP clients can call mcp_github_issue_create directly. The tool can create a GitHub Issue and update BUG allocator or BUG JSON outside the unified aistock_issue_workflow registry worktree flow, leaving half-submitted BUG records, stale reservations, root allocator drift, or long-running tool calls without progress. The fix must make MCP issue creation delegate to or return the standard workflow path, refuse canonical root main writes before allocation/GitHub creation, preserve enough recovery information, and add regression tests for no root pollution.",
-    "events":  [
-                   {
-                       "action":  "promote_candidate_to_bug",
-                       "actor":  "issue_flow",
-                       "note":  "Promoted from IC-20260528-4db01804f684",
-                       "timestamp":  "2026-05-28T08:08:32.589199Z"
-                   },
-                   {
-                       "timestamp":  "2026-05-28T08:14:39Z",
-                       "actor":  "codex",
-                       "action":  "scope_expanded",
-                       "note":  "Added MCP issue intake implementation, regression tests, BUG registry JSON, and allocator to allowed_write_scope for BUG-144 workflow fix."
-                   }
-               ],
-    "evidence_uris":  [
-
-                      ],
-    "expected":  "Expected behavior should be restored.",
-    "first_seen_at":  "2026-05-28T08:08:32.589203Z",
-    "fix_branch":  null,
-    "fix_commit":  null,
-    "fixed_at":  null,
-    "github_issue_number":  285,
-    "github_issue_url":  "https://github.com/licong01-cloud/AIstock/issues/285",
-    "last_seen_at":  "2026-05-28T08:08:32.589203Z",
-    "module":  "validation",
-    "non_goals":  [
-                      "Do not restart production runtime services without explicit approval."
-                  ],
-    "production_backend_dependency_gate":  "noop",
-    "production_ddl_gate":  "noop",
-    "production_frontend_dependency_gate":  "noop",
-    "reproduce_command":  "n/a",
-    "required_verification":  [
-                                  "python -m ruff check scripts/aistock_mcp_server.py backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
-                                  "python -m pytest backend/tests/scripts/test_aistock_mcp_github_issue_tools.py -q -p no:cacheprovider",
-                                  "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -p no:cacheprovider"
-                              ],
-    "risk_area":  "bug",
-    "schema_version":  "aistock_validation_bug_v1",
-    "severity":  "P1",
-    "status":  "open",
-    "suspected_modules":  [
-                              "validation",
-                              "mcp",
-                              "issue_workflow"
-                          ],
-    "title":  "Issue workflow MCP create bug can leave half-submitted registry state and root allocator drift",
-    "trigger_condition":  {
-                              "fingerprint":  "4db01804f68448666b6f9f1d",
-                              "source_event_id":  "FE-20260528-4db01804f684"
-                          },
-    "verification_run_id":  null,
-    "workflow_gate":  "triage_only_until_allowed_write_scope_is_set"
+{
+  "actual": "Claude Code and other MCP clients can call mcp_github_issue_create directly. The tool can create a GitHub Issue and update BUG allocator or BUG JSON outside the unified aistock_issue_workflow registry worktree flow, leaving half-submitted BUG records, stale reservations, root allocator drift, or long-running tool calls without progress. The fix must make MCP issue creation delegate to or return the standard workflow path, refuse canonical root main writes before allocation/GitHub creation, preserve enough recovery information, and add regression tests for no root pollution.",
+  "allowed_write_scope": [
+    "scripts/aistock_mcp_server.py",
+    "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+    "tests\\aistock_validation\\bugs\\20260528_BUG-144-issue-workflow-mcp-create-bug-can-leave-half-submitted-registry-state-an.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-144",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-28T08:08:32.589203Z",
+  "description": "Claude Code and other MCP clients can call mcp_github_issue_create directly. The tool can create a GitHub Issue and update BUG allocator or BUG JSON outside the unified aistock_issue_workflow registry worktree flow, leaving half-submitted BUG records, stale reservations, root allocator drift, or long-running tool calls without progress. The fix must make MCP issue creation delegate to or return the standard workflow path, refuse canonical root main writes before allocation/GitHub creation, preserve enough recovery information, and add regression tests for no root pollution.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260528-4db01804f684",
+      "timestamp": "2026-05-28T08:08:32.589199Z"
+    },
+    {
+      "action": "scope_expanded",
+      "actor": "codex",
+      "note": "Added MCP issue intake implementation, regression tests, BUG registry JSON, and allocator to allowed_write_scope for BUG-144 workflow fix.",
+      "timestamp": "2026-05-28T08:14:39Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-05-28T08:08:32.589203Z",
+  "fix_branch": null,
+  "fix_commit": "68ab262857e09e2d710d8fa9f1df7938e528212d",
+  "fixed_at": "2026-05-28T09:04:24.821228Z",
+  "github_issue_number": 285,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/285",
+  "last_seen_at": "2026-05-28T08:08:32.589203Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/286",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "python -m ruff check scripts/aistock_mcp_server.py backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+    "python -m pytest backend/tests/scripts/test_aistock_mcp_github_issue_tools.py -q -p no:cacheprovider",
+    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -p no:cacheprovider"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation",
+    "mcp",
+    "issue_workflow"
+  ],
+  "title": "Issue workflow MCP create bug can leave half-submitted registry state and root allocator drift",
+  "trigger_condition": {
+    "fingerprint": "4db01804f68448666b6f9f1d",
+    "source_event_id": "FE-20260528-4db01804f684"
+  },
+  "validation_evidence": [
+    "python -m ruff check scripts/aistock_mcp_server.py backend/tests/scripts/test_aistock_mcp_github_issue_tools.py -> passed",
+    "python -m pytest backend/tests/scripts/test_aistock_mcp_github_issue_tools.py -q -p no:cacheprovider -> 22 passed",
+    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -p no:cacheprovider -> 53 passed"
+  ],
+  "verification_run_id": null,
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
 }
