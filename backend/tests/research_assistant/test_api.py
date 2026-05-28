@@ -280,3 +280,27 @@ def test_research_assistant_api_errors_are_explicit() -> None:
 
     assert client.get("/api/v1/research-assistant/tasks/rat_missing").status_code == 404
     assert client.post("/api/v1/research-assistant/temp-memories", json={"content_text": "missing scope"}).status_code == 400
+
+
+def test_mcp_tools_endpoint_defaults_to_compact_summary_first_payload() -> None:
+    client = _client()
+
+    compact = client.get("/api/v1/research-assistant/mcp/tools").json()["data"]
+    assert compact["page_size"] <= 50
+    assert compact["summary_first"] is True
+    assert compact["detail_available"] is True
+    assert compact["items"]
+    assert "input_schema_json" not in compact["items"][0]
+    assert "output_schema_json" not in compact["items"][0]
+    assert "preflight_schema_json" not in compact["items"][0]
+    assert compact["items"][0]["detail_available"] is True
+
+    compact_large_limit = client.get("/api/v1/research-assistant/mcp/tools", params={"limit": 200}).json()["data"]
+    assert compact_large_limit["page_size"] == 50
+    assert compact_large_limit["has_more"] is True
+
+    detail = client.get("/api/v1/research-assistant/mcp/tools", params={"limit": 1, "include_schema": True}).json()["data"]
+    assert detail["page_size"] == 1
+    assert detail["summary_first"] is False
+    assert "input_schema_json" in detail["items"][0]
+    assert "preflight_schema_json" in detail["items"][0]

@@ -699,8 +699,11 @@ export const researchAssistantApi = {
   mcpServers(): Promise<AssistantPage<AssistantMcpServer>> {
     return unwrap<AssistantPage<AssistantMcpServer>>("/research-assistant/mcp/servers");
   },
-  mcpTools(params: { server_key?: string; risk_level?: string; search?: string; limit?: number; offset?: number } = {}): Promise<AssistantPage<AssistantMcpTool>> {
-    return unwrap<AssistantPage<AssistantMcpTool>>(appendQuery("/research-assistant/mcp/tools", { limit: 100, ...params }));
+  mcpTools(params: { server_key?: string; risk_level?: string; search?: string; limit?: number; offset?: number; include_schema?: boolean } = {}): Promise<AssistantPage<AssistantMcpTool>> {
+    const includeSchema = params.include_schema === true;
+    const requestedLimit = params.limit ?? 50;
+    const compactLimit = Math.min(requestedLimit, 50);
+    return unwrap<AssistantPage<AssistantMcpTool>>(appendQuery("/research-assistant/mcp/tools", { ...params, limit: includeSchema ? requestedLimit : compactLimit, include_schema: includeSchema }));
   },
   capabilities(params: { status?: string; risk_level?: string; search?: string; limit?: number; offset?: number } = {}): Promise<AssistantPage<AssistantCapability>> {
     return unwrap<AssistantPage<AssistantCapability>>(appendQuery("/research-assistant/capabilities", { limit: 100, ...params }));

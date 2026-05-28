@@ -141,7 +141,8 @@ test("Research Assistant main entry is a Codex-like LLM chat with readable cards
     return respond(page([]));
   });
   await browserPage.route("**/api/ingestion/alerts/**", async (route) => {
-    const path = new URL(route.request().url()).pathname;
+    const url = new URL(route.request().url());
+    const path = url.pathname;
     const body = path.endsWith("/unack-count") ? { count: 0 } : { alerts: [] };
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
   });
@@ -212,7 +213,8 @@ test("Research Assistant chat renders tool choice markup as readable MCP route c
 
 test("Research Assistant MCP tools page treats ready servers as ready", async ({ page: browserPage }) => {
   await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
-    const path = new URL(route.request().url()).pathname;
+    const url = new URL(route.request().url());
+    const path = url.pathname;
     const respond = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ status: status >= 400 ? "error" : "success", data }) });
     if (path.endsWith("/mcp/servers")) {
       return respond(page([
@@ -220,8 +222,10 @@ test("Research Assistant MCP tools page treats ready servers as ready", async ({
       ]));
     }
     if (path.endsWith("/mcp/tools")) {
+      expect(url.searchParams.get("limit")).toBe("50");
+      expect(url.searchParams.get("include_schema")).toBe("false");
       return respond(page([
-        { tool_id: "tool_factor_library_list", server_key: "aistock-factor-library", tool_name: "factor_library_list", title: "factor library list", risk_level: "low", requires_approval: false, status: "enabled" },
+        { tool_id: "tool_factor_library_list", server_key: "aistock-factor-library", tool_name: "factor_library_list", title: "factor library list", risk_level: "low", requires_approval: false, status: "enabled", detail_available: true, detail_fields: ["input_schema_json", "preflight_schema_json"] },
       ]));
     }
     return respond(page([]));

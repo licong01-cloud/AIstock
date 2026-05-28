@@ -1,0 +1,72 @@
+{
+    "actual":  "Questions like 因子库里有哪些可用因子？模型库里有什么模型？策略库目前有哪些策略？ incorrectly route to domain=general/tool=null. GET /api/v1/research-assistant/mcp/tools without an explicit detail request returns a huge payload (total=191, page_size=300) including input/output/preflight schemas for every item.",
+    "allowed_write_scope":  [
+                                "backend/routers/research_assistant.py",
+                                "backend/tests/research_assistant/test_api.py",
+                                "backend/tests/research_assistant/test_natural_language_mcp_routing.py",
+                                "frontend/src/lib/research-assistant/api.ts",
+                                "frontend/tests/research-assistant/research-assistant.spec.ts",
+                                "tests\\aistock_validation\\bugs\\20260528_BUG-143-research-assistant-natural-language-mcp-routing-misses-factor-model-stra.json",
+                                "tests/aistock_validation/bugs/.bug_id_allocator.json"
+                            ],
+    "assigned_agent":  null,
+    "bug_id":  "BUG-143",
+    "closed_at":  null,
+    "closure_requirements":  [
+                                 "Fix the observed behavior.",
+                                 "Run required verification plans.",
+                                 "Keep BUG JSON and GitHub Issue synchronized."
+                             ],
+    "created_at":  "2026-05-28T07:46:23.822152Z",
+    "description":  "Questions like 因子库里有哪些可用因子？模型库里有什么模型？策略库目前有哪些策略？ incorrectly route to domain=general/tool=null. GET /api/v1/research-assistant/mcp/tools without an explicit detail request returns a huge payload (total=191, page_size=300) including input/output/preflight schemas for every item.",
+    "events":  [
+                   {
+                       "action":  "promote_candidate_to_bug",
+                       "actor":  "issue_flow",
+                       "note":  "Promoted from IC-20260528-fd4d37bce7b6",
+                       "timestamp":  "2026-05-28T07:46:23.822149Z"
+                   },
+                   {
+                       "timestamp":  "2026-05-28T08:27:01Z",
+                       "actor":  "codex",
+                       "action":  "recovery_normalized",
+                       "note":  "Recovered half-submitted BUG-143 from Claude Code workflow, fixed mojibake description, and aligned allowed_write_scope with actual Research Assistant API/frontend/test changes."
+                   }
+               ],
+    "evidence_uris":  [
+                          "Live 8001 PID 60092 after user restart: health ready, BUG-141 execution_policy_list_algos passes, factor/model/strategy route general, /mcp/tools default page_size=300 total=191; Playwright research_assistant_ui 6 passed twice."
+                      ],
+    "expected":  "Natural-language questions about factor library, model registry and strategy governance should route to their read-only list/search MCP tools. MCP tools catalog endpoints and UI should default to compact summary/page size and only expose detail schemas on explicit detail or expanded requests.",
+    "first_seen_at":  "2026-05-28T07:46:23.822152Z",
+    "fix_branch":  null,
+    "fix_commit":  null,
+    "fixed_at":  null,
+    "github_issue_number":  283,
+    "github_issue_url":  "https://github.com/licong01-cloud/AIstock/issues/283",
+    "last_seen_at":  "2026-05-28T07:46:23.822152Z",
+    "module":  "research_assistant",
+    "non_goals":  [
+                      "Do not restart production runtime services without explicit approval."
+                  ],
+    "production_backend_dependency_gate":  "noop",
+    "production_ddl_gate":  "noop",
+    "production_frontend_dependency_gate":  "noop",
+    "reproduce_command":  "python live probe against http://127.0.0.1:8001/api/v1/research-assistant/chat/turn and /mcp/tools; python -m nox -s research_assistant_ui --no-error-on-missing-interpreters",
+    "required_verification":  [
+                                  "python -m ruff check backend/routers/research_assistant.py backend/tests/research_assistant/test_api.py backend/tests/research_assistant/test_natural_language_mcp_routing.py",
+                                  "python -m pytest backend/tests/research_assistant/test_api.py backend/tests/research_assistant/test_natural_language_mcp_routing.py -q -p no:cacheprovider"
+                              ],
+    "risk_area":  "bug",
+    "schema_version":  "aistock_validation_bug_v1",
+    "severity":  "P1",
+    "status":  "open",
+    "suspected_modules":  [
+                              "research_assistant"
+                          ],
+    "title":  "Research Assistant natural-language MCP routing misses factor model strategy catalog and MCP tools default payload is too large",
+    "trigger_condition":  {
+                              "fingerprint":  "fd4d37bce7b642d103264c1c",
+                              "source_event_id":  "FE-20260528-fd4d37bce7b6"
+                          },
+    "verification_run_id":  null
+}
