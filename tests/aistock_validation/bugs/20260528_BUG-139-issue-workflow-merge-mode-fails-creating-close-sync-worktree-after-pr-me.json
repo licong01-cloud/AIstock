@@ -40,7 +40,7 @@
   "expected": "run --mode merge --merge completes PR merge plus close-sync planning/apply without invoking git worktree add in a way that conflicts with the canonical main worktree; if persistence requires a registry PR, the CLI returns a clear close-sync PR path and cleanup commands.",
   "first_seen_at": "2026-05-28T05:12:30.925681Z",
   "fix_branch": "bug/registry-validation-issue-workflow-merge-mode-fails-cr-20260528-303edd",
-  "fix_commit": null,
+  "fix_commit": "ee76f7ee23a0ee0e4db3c0dbb1356a7583c2abbc",
   "fixed_at": "2026-05-28T05:22:13.480254Z",
   "github_issue_number": 270,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/270",
