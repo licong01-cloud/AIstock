@@ -78,7 +78,9 @@ jobs:
               --branch "${GITHUB_REF_NAME}" \
               --commit "${GITHUB_SHA}" \
               --output tmp/validation/ci_failure_issue/summary.json \
-              --markdown-output tmp/validation/ci_failure_issue/body.md
+              --markdown-output tmp/validation/ci_failure_issue/body.md \
+              --context-output tmp/validation/ci_failure_issue/context-pack.json \
+              --context-markdown-output tmp/validation/ci_failure_issue/context-pack.md
           else
             python scripts/ci_failure_issue_summary.py \
               --repo "${{ github.repository }}" \
@@ -86,8 +88,18 @@ jobs:
               --run-url "${{ github.event.workflow_run.html_url }}" \
               --severity "P1" \
               --output tmp/validation/ci_failure_issue/summary.json \
-              --markdown-output tmp/validation/ci_failure_issue/body.md
+              --markdown-output tmp/validation/ci_failure_issue/body.md \
+              --context-output tmp/validation/ci_failure_issue/context-pack.json \
+              --context-markdown-output tmp/validation/ci_failure_issue/context-pack.md
           fi
+
+      - name: Upload failure issue context
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-failure-issue-context
+          path: tmp/validation/ci_failure_issue/
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Create or update failure issue
         uses: actions/github-script@v7

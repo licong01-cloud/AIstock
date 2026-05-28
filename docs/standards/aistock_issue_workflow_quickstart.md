@@ -79,6 +79,36 @@ Warnings about a dirty canonical root are not permission to write there. They me
 
 `--output` is a JSON file path, not an output format selector. Omit it for stdout or use `--output -`; do not pass `--output json`. File outputs should use an explicit path, preferably under `tmp/issue_workflow/` or `tmp/validation/`, so a client typo cannot create root-level files such as `json`.
 
+## CI / Nightly Failure Intake
+
+Auto-filed CI or Nightly P0/P1 GitHub Issues must contain actionable diagnostics plus an agent handoff. A valid issue body includes:
+
+- the Actions run, branch, commit, fingerprint, failed job/session/test, and reproduce command
+- an `Agent Handoff` block with `triage-ci-issue`, `promote-ci-issue`, and post-promotion `run --bug-id` commands
+- token policy stating that the issue and Context Pack are the first context source, while full logs and historical design docs are loaded only when triage requires them
+- production gates, defaulting to `noop` unless the failure proves otherwise
+
+For an auto-filed issue, start with:
+
+```powershell
+python scripts/aistock_issue_workflow.py triage-ci-issue --issue <issue-number>
+```
+
+The command writes only ignored workflow artifacts under `tmp/issue_workflow/ci-issue-<issue-number>/`:
+
+- `triage-ci-issue.json`
+- `failure-event.json`
+- `context-pack.json`
+- `context-pack.md`
+
+If the triage result is a real regression candidate and no BUG JSON is linked yet, promote it from a clean task or registry worktree:
+
+```powershell
+python scripts/aistock_issue_workflow.py promote-ci-issue --issue <issue-number> --apply
+```
+
+After promotion, continue through the normal BUG workflow returned by `next_command`. CI/Nightly intake must not write BUG JSON directly from GitHub Actions or from the canonical root `main` checkout.
+
 ## Submit Or Register A New BUG
 
 When the user asks to register a new BUG, do not hand-write a local-only BUG JSON. Use the high-level submit command so the developer client creates the same candidate and BUG record format:

@@ -170,7 +170,8 @@ def parse_job_log(log_text: str, *, job_name: str = "", job_url: str | None = No
         stripped = line.strip()
         if any(pattern in stripped for pattern in excerpt_patterns):
             excerpt_candidates.append(stripped)
-    key_log_excerpt = _unique(excerpt_candidates)[:12]
+    unique_excerpts = _unique(excerpt_candidates)
+    key_log_excerpt = unique_excerpts[:12]
     module = _infer_module(job_name, nox_session, failed_tests)
     return {
         "job_name": job_name,
@@ -182,6 +183,7 @@ def parse_job_log(log_text: str, *, job_name: str = "", job_url: str | None = No
         "failed_tests": failed_tests,
         "error_signature": error_signature,
         "key_log_excerpt": key_log_excerpt,
+        "key_log_excerpt_omitted_count": max(0, len(unique_excerpts) - len(key_log_excerpt)),
         "suspected_module": module,
         "suspected_files": _module_files(module, failed_tests),
     }
@@ -235,7 +237,257 @@ def finalize_summary(summary: dict[str, Any]) -> dict[str, Any]:
     summary.setdefault("production_ddl_gate", "noop")
     summary.setdefault("production_frontend_dependency_gate", "noop")
     summary.setdefault("production_backend_dependency_gate", "noop")
+    summary["failure_event"] = build_failure_event(summary)
+    summary["agent_handoff"] = build_agent_handoff(summary)
     return summary
+
+
+def _github_issue_url(issue_number: int | str | None, repo: str = DEFAULT_REPO) -> str | None:
+    if issue_number in {None, ""}:
+        return None
+    return f"https://github.com/{repo}/issues/{issue_number}"
+
+
+def _first_failed_job(summary: dict[str, Any]) -> dict[str, Any]:
+    failed_jobs = summary.get("failed_jobs") or []
+    return failed_jobs[0] if failed_jobs else {}
+
+
+def _all_failed_tests(summary: dict[str, Any]) -> list[str]:
+    return _unique(
+        [
+            str(test)
+            for job in summary.get("failed_jobs") or []
+            for test in (job.get("failed_tests") or [])
+            if test
+        ]
+    )
+
+
+def _all_error_signatures(summary: dict[str, Any]) -> list[str]:
+    return _unique(
+        [
+            str(item)
+            for job in summary.get("failed_jobs") or []
+            for item in [job.get("error_signature"), job.get("pytest_summary")]
+            if item
+        ]
+    )
+
+
+def _primary_failure(summary: dict[str, Any]) -> str:
+    first_job = _first_failed_job(summary)
+    failed_tests = first_job.get("failed_tests") or []
+    if failed_tests:
+        return str(failed_tests[0])
+    if first_job.get("error_signature"):
+        return str(first_job["error_signature"])
+    if summary.get("manual_summary"):
+        return str(summary["manual_summary"])
+    return "diagnostic extraction incomplete"
+
+
+def _safe_command(command: str | None) -> str | None:
+    if not command:
+        return None
+    command = command.strip()
+    if not command or command.startswith("http") or command.startswith("Inspect "):
+        return None
+    return command
+
+
+def build_failure_event(
+    summary: dict[str, Any],
+    *,
+    github_issue_number: int | str | None = None,
+    github_issue_url: str | None = None,
+) -> dict[str, Any]:
+    """Return an agent-neutral FailureEvent seed without embedding full logs."""
+    first_job = _first_failed_job(summary)
+    issue_url = github_issue_url or _github_issue_url(github_issue_number)
+    evidence_refs = _unique([str(item) for item in [summary.get("run_url"), issue_url] if item])
+    modules = summary.get("suspected_modules") or []
+    fingerprint = str(summary.get("fingerprint") or "ci-unknown")
+    return {
+        "schema_version": "aistock_failure_event_v1",
+        "event_id": f"FE-CI-{fingerprint.replace('ci-', '')[:16]}",
+        "source": "github_actions",
+        "timestamp": summary.get("generated_at") or _utc_now(),
+        "repo": DEFAULT_REPO,
+        "branch": summary.get("branch"),
+        "commit": summary.get("commit"),
+        "workflow": summary.get("workflow"),
+        "run_id": str(summary.get("run_id") or ""),
+        "run_url": summary.get("run_url"),
+        "github_issue_number": str(github_issue_number) if github_issue_number else None,
+        "github_issue_url": issue_url,
+        "plan_key": "ci_failure_issue_intake",
+        "nox_session": first_job.get("nox_session"),
+        "module_guess": modules[0] if modules else (first_job.get("suspected_module") or "validation"),
+        "severity_guess": summary.get("severity") or "P1",
+        "diagnostic_status": summary.get("diagnostic_status") or "partial",
+        "normalized_error": _primary_failure(summary),
+        "failed_tests": _all_failed_tests(summary),
+        "error_signatures": _all_error_signatures(summary),
+        "fingerprint": fingerprint,
+        "reproduce_command": summary.get("reproduce_command") or "Inspect the linked CI run log.",
+        "evidence_refs": evidence_refs,
+        "changed_files": summary.get("suspected_files") or [],
+        "candidate_status": "new",
+        "log_policy": {
+            "full_log_embedded": False,
+            "full_log_ref": summary.get("run_url"),
+            "reason": "Keep GitHub Issues and Context Packs compact; use the Actions run URL for full logs.",
+        },
+    }
+
+
+def build_agent_handoff(
+    summary: dict[str, Any],
+    *,
+    github_issue_number: int | str | None = None,
+) -> dict[str, Any]:
+    issue_arg = str(github_issue_number) if github_issue_number else "<issue-number>"
+    reproduce = _safe_command(str(summary.get("reproduce_command") or ""))
+    required_verification = [
+        item
+        for item in [
+            reproduce,
+            "Run the validation plan selected after BUG JSON promotion.",
+            "Keep GitHub Issue, BUG JSON, PR, and validation evidence synchronized.",
+        ]
+        if item
+    ]
+    suspected_files = list(summary.get("suspected_files") or [])
+    stop_conditions = []
+    if summary.get("diagnostic_status") != "complete":
+        stop_conditions.append("Diagnostic extraction is partial; inspect the linked CI run before assigning fix scope.")
+    if not suspected_files:
+        stop_conditions.append("No suspected files were extracted; run triage before editing code.")
+    return {
+        "schema_version": "aistock_ci_failure_agent_handoff_v1",
+        "intended_clients": ["Codex", "Claude Code", "Cursor", "generic CLI/IDE agent"],
+        "workflow_entrypoints": {
+            "triage": f"python scripts/aistock_issue_workflow.py triage-ci-issue --issue {issue_arg}",
+            "promote": f"python scripts/aistock_issue_workflow.py promote-ci-issue --issue {issue_arg} --apply",
+            "fix_after_promotion": "python scripts/aistock_issue_workflow.py run --bug-id <BUG-ID> --mode plan --create-worktree",
+        },
+        "next_commands": [
+            f"python scripts/aistock_issue_workflow.py triage-ci-issue --issue {issue_arg}",
+            f"python scripts/aistock_issue_workflow.py promote-ci-issue --issue {issue_arg} --apply",
+            "python scripts/aistock_issue_workflow.py run --bug-id <BUG-ID> --mode plan --create-worktree",
+        ],
+        "allowed_write_scope": suspected_files,
+        "required_verification": required_verification,
+        "token_budget": {
+            "target_tokens": 4000,
+            "max_tokens": 8000,
+            "full_logs_included": False,
+            "full_docs_allowed": False,
+            "full_log_ref": summary.get("run_url"),
+        },
+        "stop_conditions": stop_conditions,
+        "production_gates": {
+            "production_ddl_gate": summary.get("production_ddl_gate") or "noop",
+            "production_frontend_dependency_gate": summary.get("production_frontend_dependency_gate") or "noop",
+            "production_backend_dependency_gate": summary.get("production_backend_dependency_gate") or "noop",
+        },
+    }
+
+
+def build_context_pack(
+    summary: dict[str, Any],
+    *,
+    github_issue_number: int | str | None = None,
+    github_issue_url: str | None = None,
+) -> dict[str, Any]:
+    event = build_failure_event(
+        summary,
+        github_issue_number=github_issue_number,
+        github_issue_url=github_issue_url,
+    )
+    handoff = build_agent_handoff(summary, github_issue_number=github_issue_number)
+    failed_jobs = []
+    for job in summary.get("failed_jobs") or []:
+        failed_jobs.append(
+            {
+                "job_name": job.get("job_name"),
+                "job_url": job.get("job_url"),
+                "nox_session": job.get("nox_session"),
+                "command": job.get("command"),
+                "failed_tests": job.get("failed_tests") or [],
+                "error_signature": job.get("error_signature"),
+                "key_log_excerpt": job.get("key_log_excerpt") or [],
+                "key_log_excerpt_omitted_count": job.get("key_log_excerpt_omitted_count") or 0,
+            }
+        )
+    return {
+        "schema_version": "aistock_ci_failure_context_pack_v1",
+        "pack_id": f"CP-CI-{str(summary.get('fingerprint') or 'unknown').replace('ci-', '')[:16]}",
+        "phase": "ci_failure_intake",
+        "task_tier": "T1",
+        "module": event["module_guess"],
+        "severity": event["severity_guess"],
+        "diagnostic_status": event["diagnostic_status"],
+        "problem_statement": _primary_failure(summary),
+        "github_issue_number": str(github_issue_number) if github_issue_number else None,
+        "github_issue_url": github_issue_url or _github_issue_url(github_issue_number),
+        "failure_event": event,
+        "agent_handoff": handoff,
+        "reproduce_command": summary.get("reproduce_command") or "Inspect the linked CI run log.",
+        "allowed_write_scope": handoff["allowed_write_scope"],
+        "required_verification": handoff["required_verification"],
+        "evidence_refs": event["evidence_refs"],
+        "failed_jobs": failed_jobs,
+        "extraction_errors": summary.get("extraction_errors") or [],
+        "token_budget": handoff["token_budget"],
+        "omitted_details": {
+            "full_job_logs": "Not embedded. Use run_url/full_log_ref for complete logs.",
+            "historical_design_docs": "Not embedded. Load only if the promoted BUG scope requires them.",
+        },
+    }
+
+
+def render_context_pack_markdown(context_pack: dict[str, Any]) -> str:
+    handoff = context_pack.get("agent_handoff") or {}
+    lines = [
+        "# AIstock CI Failure Context Pack",
+        "",
+        "## Problem",
+        "",
+        f"- Module: `{context_pack.get('module') or 'unknown'}`",
+        f"- Severity: `{context_pack.get('severity') or 'unknown'}`",
+        f"- Diagnostic status: `{context_pack.get('diagnostic_status') or 'partial'}`",
+        f"- Problem: `{context_pack.get('problem_statement') or 'unknown'}`",
+        "",
+        "## Agent Handoff",
+        "",
+    ]
+    for command in handoff.get("next_commands") or []:
+        lines.append(f"- `{command}`")
+    lines.extend(
+        [
+            "",
+            "## Scope",
+            "",
+            *[f"- `{item}`" for item in context_pack.get("allowed_write_scope") or ["triage required before editing"]],
+            "",
+            "## Required Verification",
+            "",
+            *[f"- `{item}`" for item in context_pack.get("required_verification") or ["selected validation after promotion"]],
+            "",
+            "## Evidence",
+            "",
+            *[f"- {item}" for item in context_pack.get("evidence_refs") or ["n/a"]],
+            "",
+            "## Token Budget",
+            "",
+            f"- target_tokens: `{(context_pack.get('token_budget') or {}).get('target_tokens')}`",
+            f"- max_tokens: `{(context_pack.get('token_budget') or {}).get('max_tokens')}`",
+            "- full_logs_included: `False`",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def summarize_manual(args: argparse.Namespace) -> dict[str, Any]:
@@ -332,7 +584,8 @@ def summarize_actions_run(
     )
 
 
-def render_issue_markdown(summary: dict[str, Any]) -> str:
+def render_issue_markdown(summary: dict[str, Any], *, github_issue_number: int | str | None = None) -> str:
+    handoff = build_agent_handoff(summary, github_issue_number=github_issue_number)
     lines = [
         "## Failure Summary",
         "",
@@ -366,13 +619,27 @@ def render_issue_markdown(summary: dict[str, Any]) -> str:
         if job.get("error_signature"):
             lines.append(f"- Error signature: `{job['error_signature']}`")
         for excerpt in job.get("key_log_excerpt") or []:
-            lines.append(f"- Log excerpt: `{excerpt[:500]}`")
+            lines.append(f"- Log excerpt: `{excerpt}`")
+        if job.get("key_log_excerpt_omitted_count"):
+            lines.append(
+                f"- Additional matching log lines omitted from issue body: `{job['key_log_excerpt_omitted_count']}`; use the run URL for full logs."
+            )
     if summary.get("extraction_errors"):
         lines.extend(["", "## Extraction Errors", ""])
         for error in summary.get("extraction_errors") or []:
-            lines.append(f"- `{str(error)[:500]}`")
+            lines.append(f"- `{str(error)}`")
     lines.extend(
         [
+            "",
+            "## Agent Handoff",
+            "",
+            "Run these commands from a clean AIstock worktree. They are agent-neutral and work for Codex, Claude Code, Cursor, or a human operator.",
+            "",
+            "```bash",
+            *handoff["next_commands"],
+            "```",
+            "",
+            "Token policy: use this issue and the generated Context Pack first; do not scan full logs or historical design docs unless the triage output says they are needed.",
             "",
             "## Reproduce",
             "",
@@ -432,6 +699,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--job-name", default="")
     parser.add_argument("--output")
     parser.add_argument("--markdown-output")
+    parser.add_argument("--context-output")
+    parser.add_argument("--context-markdown-output")
     return parser
 
 
@@ -463,6 +732,9 @@ def main(argv: list[str] | None = None) -> int:
 
     _write_json(args.output, summary)
     _write_text(args.markdown_output, render_issue_markdown(summary))
+    context_pack = build_context_pack(summary)
+    _write_json(args.context_output, context_pack)
+    _write_text(args.context_markdown_output, render_context_pack_markdown(context_pack))
     sys.stdout.write(json.dumps(summary, ensure_ascii=True, indent=2, sort_keys=True) + "\n")
     return 0
 
