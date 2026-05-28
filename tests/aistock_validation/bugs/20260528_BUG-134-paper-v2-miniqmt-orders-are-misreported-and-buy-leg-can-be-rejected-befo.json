@@ -6,7 +6,8 @@
                                 "backend/services/paper_trading_v2/broker/minqmtsim.py",
                                 "backend/tests/paper_trading_v2/test_live_session.py",
                                 "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
-                                "backend/tests/paper_trading_v2/test_day_runner.py"
+                                "backend/tests/paper_trading_v2/test_day_runner.py",
+                                "tests/aistock_validation/bugs/20260528_BUG-134-paper-v2-miniqmt-orders-are-misreported-and-buy-leg-can-be-rejected-befo.json"
                             ],
     "assigned_agent":  null,
     "bug_id":  "BUG-134",
