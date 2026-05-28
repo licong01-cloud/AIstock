@@ -1325,6 +1325,36 @@ def test_close_sync_apply_can_create_registry_worktree(
     assert json.loads(target.read_text(encoding="utf-8"))["fix_commit"] == "abc1234"
 
 
+def test_worktree_creation_puts_branch_option_before_path(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
+        calls.append(args)
+        return ""
+
+    monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(
+        workflow,
+        "_close_sync_worktree_names",
+        lambda bug_id: ("chore/BUG-199-close-sync", isolated_workflow_root / "worktrees" / "BUG-199-close-sync"),
+    )
+
+    payload = workflow._maybe_create_close_sync_worktree(bug_id="BUG-199", create=True, dry_run=False)
+
+    assert payload["created"] is True
+    assert calls[-1] == [
+        "worktree",
+        "add",
+        "-b",
+        "chore/BUG-199-close-sync",
+        str(isolated_workflow_root / "worktrees" / "BUG-199-close-sync"),
+        "origin/main",
+    ]
+
+
 def test_pr_check_summary_treats_skipped_as_non_blocking() -> None:
     summary = workflow._classify_pr_checks(
         [

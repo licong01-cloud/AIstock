@@ -789,9 +789,14 @@ def _maybe_create_registry_worktree(
     if worktree.exists():
         raise WorkflowError(f"target registry worktree already exists: {worktree}")
     _git(["fetch", "origin", "main"])
-    _git(["worktree", "add", str(worktree), "-b", branch, "origin/main"])
+    _git_worktree_add_new_branch(worktree=worktree, branch=branch)
     plan["created"] = True
     return plan
+
+
+def _git_worktree_add_new_branch(*, worktree: Path, branch: str, base: str = "origin/main") -> None:
+    # Keep options before the path; some Git versions otherwise infer `main` from origin/main in linked worktrees.
+    _git(["worktree", "add", "-b", branch, str(worktree), base])
 
 
 def _maybe_create_close_sync_worktree(*, bug_id: str, create: bool, dry_run: bool) -> dict[str, Any]:
@@ -808,7 +813,7 @@ def _maybe_create_close_sync_worktree(*, bug_id: str, create: bool, dry_run: boo
     if worktree.exists():
         raise WorkflowError(f"target close-sync worktree already exists: {worktree}")
     _git(["fetch", "origin", "main"])
-    _git(["worktree", "add", str(worktree), "-b", branch, "origin/main"])
+    _git_worktree_add_new_branch(worktree=worktree, branch=branch)
     plan["created"] = True
     return plan
 
@@ -1533,7 +1538,7 @@ def _maybe_create_worktree(
     if worktree.exists():
         raise WorkflowError(f"target worktree already exists: {worktree}")
     _git(["fetch", "origin", "main"])
-    _git(["worktree", "add", str(worktree), "-b", branch, "origin/main"])
+    _git_worktree_add_new_branch(worktree=worktree, branch=branch)
     plan["created"] = True
     return plan
 
@@ -1557,7 +1562,7 @@ def _maybe_create_named_worktree(
     if worktree.exists():
         raise WorkflowError(f"target worktree already exists: {worktree}")
     _git(["fetch", "origin", "main"])
-    _git(["worktree", "add", str(worktree), "-b", branch, "origin/main"])
+    _git_worktree_add_new_branch(worktree=worktree, branch=branch)
     plan["created"] = True
     return plan
 
