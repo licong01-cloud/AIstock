@@ -17,10 +17,10 @@
       "timestamp": "2026-05-13T07:47:28Z"
     },
     {
-      "timestamp": "2026-05-13T13:23:21Z",
-      "actor": "codex_app",
       "action": "triage_report_added",
-      "note": "Classified 44 new P0/P1 guardrail fingerprints; no business-code remediation in this step. See docs/operations/guardrail_delta_triage_20260513.md."
+      "actor": "codex_app",
+      "note": "Classified 44 new P0/P1 guardrail fingerprints; no business-code remediation in this step. See docs/operations/guardrail_delta_triage_20260513.md.",
+      "timestamp": "2026-05-13T13:23:21Z"
     }
   ],
   "evidence_uris": [
@@ -36,10 +36,16 @@
   ],
   "fingerprint": "historical_scan::p1::guardrail_delta_20260513",
   "first_seen_at": "2026-05-13T06:48:21Z",
+  "fix_commit": "189826897faf1a5cd4d8fe3a24310aea3c2005d1",
+  "fixed_at": "2026-05-28T13:09:23.593765Z",
   "github_issue_number": 19,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/19",
   "last_seen_at": "2026-05-13T13:23:21Z",
   "module": "validation.center",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/21",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
   "reproduce_command": "python scripts/aistock_guardrail_scan.py --baseline --baseline-json tests/aistock_validation/guardrails_baseline_20260511.json --fail-new-only --fail-on-severity NONE --output-json tmp/guardrail_delta_triage_20260513/guardrail_delta_current_vs_20260511.json --summary-md tmp/guardrail_delta_triage_20260513/guardrail_delta_current_vs_20260511.md",
   "required_verification": [
     "Review new P0/P1 fingerprints by owner and module before any remediation.",
@@ -50,13 +56,16 @@
   "risk_area": "guardrail_delta_triage",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "in_progress",
+  "status": "fixed",
   "title": "Historical guardrail delta triage aggregate for 2026-05-13 rescan",
+  "triage_report": "docs/operations/guardrail_delta_triage_20260513.md",
   "trigger_condition": {
     "new_fingerprints_total": 195,
     "new_p0_p1_total": 44,
     "scan_date": "2026-05-13",
     "scenario": "new guardrail fingerprints relative to 20260511 baseline"
   },
-  "triage_report": "docs/operations/guardrail_delta_triage_20260513.md"
+  "validation_evidence": [
+    "PR #21 merged and triage doc docs/operations/guardrail_delta_triage_20260513.md records P0/P1 classifications; current l0 successful; no production runtime/DB touched"
+  ]
 }
