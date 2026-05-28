@@ -6,10 +6,14 @@
   "module": "qe_archive",
   "severity": "P2",
   "risk_area": "design_clarity",
-  "status": "open",
+  "status": "fixed",
   "trigger_condition": {
     "scenario": "T14b_PaperV2ArchiveHandler_design_review",
-    "blocks": ["BUG-006", "BUG-007", "BUG-008"]
+    "blocks": [
+      "BUG-006",
+      "BUG-007",
+      "BUG-008"
+    ]
   },
   "reproduce_command": "ls docs/architecture/data_warehouse_extension_design_20260510.md  # current design doc lacks unified handler-derived fields section",
   "failing_run_id": null,
@@ -19,19 +23,20 @@
     "file:docs/architecture/data_warehouse_extension_design_20260510.md"
   ],
   "fingerprint": "qe_archive::handler_derived_fields::unified_design_pass",
-  "assigned_agent": "claude_code",
-  "fix_branch": null,
+  "assigned_agent": "codex",
+  "fix_branch": "bug/BUG-011-qe-archive-derived-fields-design-20260529-20260529",
   "fix_commit": null,
   "verification_run_id": null,
   "created_at": "2026-05-10T00:00:00Z",
   "first_seen_at": "2026-05-10T00:00:00Z",
   "last_seen_at": "2026-05-10T00:00:00Z",
-  "fixed_at": null,
+  "fixed_at": "2026-05-29T05:05:00+08:00",
   "submitted_at": null,
   "closed_at": null,
   "allowed_write_scope": [
     "docs/architecture/data_warehouse_extension_design_20260510.md",
-    "docs/design/handler_derived_fields_design_pass_20260511.md"
+    "docs/design/handler_derived_fields_design_pass_20260511.md",
+    "tests/aistock_validation/bugs/20260510_BUG-011-handler-derive-fields-design-pass.json"
   ],
   "suspected_modules": [
     "docs/architecture/",
@@ -52,6 +57,30 @@
       "actor": "claude_code",
       "action": "discovered",
       "note": "Round-2 audit revealed multiple handler-derived fields with no unified design"
+    },
+    {
+      "timestamp": "2026-05-29T05:05:00+08:00",
+      "actor": "codex_app",
+      "action": "github_issue_linked",
+      "note": "Linked BUG-011 to GitHub Issue #322 for standard workflow tracking."
+    },
+    {
+      "timestamp": "2026-05-29T05:05:00+08:00",
+      "actor": "codex_app",
+      "action": "design_pass_committed",
+      "note": "Added handler-derived fields design pass and architecture pointer; BUG-008 remains open for stronger actual_bar_count truth, while BUG-009/010 decisions are recorded."
     }
+  ],
+  "github_issue_number": 322,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/322",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "production_backend_dependency_gate": "noop",
+  "validation_evidence": [
+    "Design pass committed at docs/design/handler_derived_fields_design_pass_20260511.md and architecture appendix added to docs/architecture/data_warehouse_extension_design_20260510.md",
+    "python -m pytest backend/tests/qe_archive/test_synthesize.py backend/tests/qe_archive/test_paper_v2_archive_handler.py -q -p no:cacheprovider -> 52 passed, 1 skipped",
+    "python -m nox -s qe_archive_backend -> 118 passed",
+    "python -m nox -s l0 validation_module_registry_l0 --no-error-on-missing-interpreters -> success; l0 blocking=0; validation_module_registry_l0 8 passed",
+    "python -m nox -s validation_center_backend --no-error-on-missing-interpreters -> 257 passed; coverage line=79.64 branch=61.71; session successful"
   ]
 }
