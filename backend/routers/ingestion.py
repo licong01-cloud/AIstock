@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import importlib
 import json
 import logging
 import os
@@ -2839,8 +2840,6 @@ def calendar_sync(
     """
 
     try:
-        import importlib
-
         token = os.getenv("TUSHARE_TOKEN")
         if not token:
             raise HTTPException(status_code=500, detail="TUSHARE_TOKEN not set")
@@ -2882,7 +2881,22 @@ def calendar_sync(
                         rows,
                     )
 
-        return {"inserted_or_updated": len(rows)}
+        calendar_status_cache = None
+        if rows:
+            try:
+                refreshed = _trading_calendar_service()._refresh_cache("calendar_sync")
+                calendar_status_cache = {
+                    "generated_at": refreshed.get("generated_at"),
+                    "coverage_start": refreshed.get("coverage_start"),
+                    "coverage_end": refreshed.get("coverage_end"),
+                    "calendar_row_count": len(refreshed.get("calendar") or []),
+                    "checksum": refreshed.get("checksum"),
+                    "refresh_reason": refreshed.get("_refresh_reason"),
+                }
+            except DataUnavailableError as exc:
+                _raise_trading_calendar_unavailable(exc)
+
+        return {"inserted_or_updated": len(rows), "calendar_status_cache": calendar_status_cache}
     except HTTPException:
         # 直接透传业务性错误
         raise
