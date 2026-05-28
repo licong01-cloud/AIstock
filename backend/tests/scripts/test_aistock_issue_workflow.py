@@ -1240,6 +1240,225 @@ def test_run_merge_mode_requires_explicit_authorization(isolated_workflow_root: 
     assert payload["workflow_gate"] == "merge_requires_explicit_flag"
     assert "--merge" in payload["next_command"]
 
+
+def test_merge_recovers_when_remote_merge_succeeds_after_local_error(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        commands.append(args)
+        if args[:3] == ["gh", "pr", "view"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": json.dumps(
+                    {
+                        "state": "OPEN",
+                        "statusCheckRollup": [
+                            {"name": "unit", "status": "COMPLETED", "conclusion": "SUCCESS"}
+                        ],
+                    }
+                ),
+                "stderr": "",
+            }
+        if args[:3] == ["gh", "pr", "merge"]:
+            return {
+                "ok": False,
+                "returncode": 1,
+                "stdout": "",
+                "stderr": "fatal: 'main' is already used by worktree at 'F:/Dev/AIstock'",
+            }
+        return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url: {
+            "checked": True,
+            "merged": True,
+            "pr": {"url": pr_url, "mergeCommit": {"oid": "merge123"}},
+        },
+    )
+
+    payload = workflow._merge_pr_if_ready_for_bug("BUG-199", "https://github.example/pull/199")
+
+    assert payload["recovered_from_local_merge_error"] is True
+    assert payload["verified"]["merged"] is True
+    assert any(args[:3] == ["gh", "pr", "merge"] for args in commands)
+    events = (isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "events.jsonl").read_text(
+        encoding="utf-8"
+    )
+    assert "merge_remote_verified_after_local_error" in events
+
+
+def test_close_sync_pr_commit_only_stages_bug_registry_files(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = isolated_workflow_root / "registry"
+    bug_path = registry / "tests" / "aistock_validation" / "bugs" / "bug199.json"
+    _write_json(bug_path, _bug(status="fixed"))
+    (registry / "tmp" / "issue_workflow" / "BUG-199").mkdir(parents=True)
+    (registry / "tmp" / "issue_workflow" / "BUG-199" / "close-sync-evidence.json").write_text(
+        "local artifact",
+        encoding="utf-8",
+    )
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], cwd: Path | None = None, **kwargs: Any) -> dict[str, Any]:
+        calls.append(args)
+        if args[:2] == ["git", "status"] and "--" in args:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": " M tests/aistock_validation/bugs/bug199.json",
+                "stderr": "",
+            }
+        if args[:2] == ["git", "status"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": " M tests/aistock_validation/bugs/bug199.json",
+                "stderr": "",
+            }
+        if args[:3] == ["git", "rev-parse", "--short=12"]:
+            return {"ok": True, "returncode": 0, "stdout": "abc123def456", "stderr": ""}
+        if args[:2] == ["gh", "pr"]:
+            return {"ok": True, "returncode": 0, "stdout": "https://github.example/pull/299", "stderr": ""}
+        return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    payload = workflow._maybe_commit_and_pr_close_sync(
+        bug_id="BUG-199",
+        close_sync={
+            "registry_root": str(registry),
+            "registry_worktree_plan": {"branch": "chore/BUG-199-close-sync"},
+            "updated_bug_json": "tests/aistock_validation/bugs/bug199.json",
+            "merged_pr": "https://github.example/pull/199",
+            "merge_commit": "merge123",
+            "production_gates": {"production_ddl_gate": "noop"},
+        },
+        validation_evidence=["python -m nox -s l0 -> passed"],
+    )
+
+    assert payload["workflow_gate"] == "pr_opened"
+    assert payload["commit"] == "abc123def456"
+    assert payload["pr_url"] == "https://github.example/pull/299"
+    assert ["git", "add", "tests/aistock_validation/bugs/bug199.json"] in calls
+    assert not any("close-sync-evidence.json" in " ".join(args) for args in calls if args[:2] == ["git", "add"])
+
+
+def test_close_sync_pr_commit_blocks_unexpected_dirty_files(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = isolated_workflow_root / "registry"
+    bug_path = registry / "tests" / "aistock_validation" / "bugs" / "bug199.json"
+    _write_json(bug_path, _bug(status="fixed"))
+
+    def fake_run(args: list[str], cwd: Path | None = None, **kwargs: Any) -> dict[str, Any]:
+        if args[:2] == ["git", "status"] and "--" in args:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": " M tests/aistock_validation/bugs/bug199.json",
+                "stderr": "",
+            }
+        if args[:2] == ["git", "status"]:
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": " M tests/aistock_validation/bugs/bug199.json\n M scripts/aistock_issue_workflow.py",
+                "stderr": "",
+            }
+        return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    with pytest.raises(workflow.WorkflowError, match="unexpected dirty files"):
+        workflow._maybe_commit_and_pr_close_sync(
+            bug_id="BUG-199",
+            close_sync={
+                "registry_root": str(registry),
+                "registry_worktree_plan": {"branch": "chore/BUG-199-close-sync"},
+                "updated_bug_json": "tests/aistock_validation/bugs/bug199.json",
+            },
+            validation_evidence=["python -m nox -s l0 -> passed"],
+        )
+
+
+def test_run_merge_mode_continues_to_close_sync_pr_after_recovered_merge(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _write_json(isolated_workflow_root / "bug.json", _bug(status="in_progress"))
+    close_sync_payload = {
+        "workflow_gate": "close_synced",
+        "registry_root": str(isolated_workflow_root / "registry"),
+        "registry_worktree_plan": {"branch": "chore/BUG-199-close-sync"},
+        "merge_commit": "merge123",
+        "updated_bug_json": "tests/aistock_validation/bugs/bug199.json",
+    }
+
+    monkeypatch.setattr(
+        workflow,
+        "_merge_pr_if_ready_for_bug",
+        lambda bug_id, pr_url: {
+            "already_merged": True,
+            "recovered_from_local_merge_error": True,
+            "verified": {"checked": True, "merged": True, "pr": {"mergeCommit": {"oid": "merge123"}}},
+        },
+    )
+
+    captured: dict[str, Any] = {}
+
+    def fake_close_sync(**kwargs: Any) -> dict[str, Any]:
+        captured.update(kwargs)
+        return close_sync_payload
+
+    monkeypatch.setattr(workflow, "build_close_sync_plan", fake_close_sync)
+    monkeypatch.setattr(
+        workflow,
+        "_maybe_commit_and_pr_close_sync",
+        lambda **kwargs: {"workflow_gate": "pr_opened", "pr_url": "https://github.example/pull/299"},
+    )
+    monkeypatch.setattr(
+        workflow,
+        "build_cleanup_after_merge_plan",
+        lambda **kwargs: {"workflow_gate": "ready_for_cleanup", "branch": kwargs["branch"]},
+    )
+
+    payload = workflow.build_run_plan(
+        bug_id="BUG-199",
+        mode="merge",
+        issue_json=str(issue),
+        changed_files=[],
+        create_worktree=False,
+        dry_run=False,
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        task_slug=None,
+        allow_missing_linkage=False,
+        allow_closed=False,
+        base="origin/main",
+        head="HEAD",
+        pr_url="https://github.example/pull/199",
+        merge=True,
+        branch="bug/BUG-199-workflow",
+        worktree=str(isolated_workflow_root / "task"),
+    )
+
+    assert payload["workflow_gate"] == "merged_close_synced"
+    assert payload["merge"]["recovered_from_local_merge_error"] is True
+    assert captured["create_registry_worktree"] is True
+    assert captured["merge_commit"] == "merge123"
+    assert payload["close_sync_commit"]["pr_url"] == "https://github.example/pull/299"
+    assert payload["cleanup"]["workflow_gate"] == "ready_for_cleanup"
+
+
 def test_close_sync_is_dry_run_and_requires_pr_url(
     isolated_workflow_root: Path,
     capsys: pytest.CaptureFixture[str],

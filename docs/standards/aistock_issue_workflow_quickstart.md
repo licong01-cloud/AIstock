@@ -217,7 +217,7 @@ If the user explicitly asks the workflow to merge after validation, use:
 python scripts/aistock_issue_workflow.py run --bug-id BUG-XXX --mode merge --pr-url <PR_URL> --merge --validation-evidence "python -m nox -s l0 -> passed"
 ```
 
-Without `--merge`, `run --mode merge` stops at an authorization gate. With `--merge`, the wrapper verifies PR checks are green, merges, runs close-sync through an isolated registry worktree, and prepares cleanup state. Merge automation still does not touch production runtime or DB.
+Without `--merge`, `run --mode merge` stops at an authorization gate. With `--merge`, the wrapper verifies PR checks are green, merges, runs close-sync through an isolated registry worktree, commits the BUG registry close-sync change, opens or reuses a close-sync PR, and prepares cleanup state. If `gh pr merge` exits non-zero after GitHub has already merged the PR, the wrapper must re-check the PR state, record `recovered_from_local_merge_error`, and continue to close-sync instead of leaving a manual fallback. Merge automation still does not touch production runtime or DB, and it commits only `tests/aistock_validation/bugs/**` from the close-sync worktree; unexpected dirty files block the close-sync PR.
 
 
 ## Cleanup After Merge
