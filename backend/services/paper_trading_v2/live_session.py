@@ -150,7 +150,10 @@ class PaperTradingLiveMinuteExecutor:
 
     @staticmethod
     def _is_retryable_live_minute_fetch_error(exc: DataUnavailableError) -> bool:
-        return exc.message == "TDX minute data fetch failed"
+        return exc.message in {
+            "TDX minute data fetch failed",
+            "live snapshot price requires at least one observed minute bar",
+        }
 
     def _record_retryable_live_minute_fetch_error(
         self,
