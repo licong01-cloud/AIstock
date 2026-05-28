@@ -37,6 +37,7 @@ from ..services.quantevolver.experiment_config import (
     normalize_qe_random_seed,
     split_qe_runtime_metadata,
 )
+from ..services.qe_templates.validator import validate_qe_historical_stock_pool_window
 from ..services.quantevolver.factor_official_evaluation_service import CALC_ENGINE
 from ..services.quantevolver.label_horizon_schema import ensure_qe_label_horizon_schema
 from ..services.quantevolver.seed_contract import ensure_loop_fixed_seed, raise_http_seed_error
@@ -1293,6 +1294,12 @@ async def _prepare_custom_evo_loop_configs(
             f"custom_loop[{pos}].strategy_params",
         )
         _hoist_runtime_metadata_from_strategy_params(cfg_dict)
+        stock_pool_errors = validate_qe_historical_stock_pool_window(
+            cfg_dict,
+            context=f"custom_evo.loops[{pos}]",
+        )
+        if stock_pool_errors:
+            raise HTTPException(status_code=400, detail=stock_pool_errors[0])
         try:
             ensure_loop_fixed_seed(cfg_dict, context=f"custom_loop[{pos}]")
         except ValueError as exc:

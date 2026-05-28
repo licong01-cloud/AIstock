@@ -38,6 +38,53 @@ def test_custom_evo_warns_when_runtime_metadata_is_nested_in_strategy_params() -
     assert any("runtime metadata" in warning for warning in result["warnings"])
 
 
+def test_custom_evo_rejects_future_stock_pool_for_default_historical_window() -> None:
+    result = validate_template_payload(
+        "custom_evo",
+        {
+            "loops": [
+                {
+                    "factor_keys": ["Alpha001||alpha158"],
+                    "model_id": "model_lgbm_v1",
+                    "stock_pool": "filtered_pool_20260519",
+                    "runtime_flags": {"random_seed": 20260529},
+                }
+            ]
+        },
+    )
+
+    assert result["valid"] is False
+    assert any("QE_STOCK_POOL_DATE_OUT_OF_WINDOW" in error for error in result["errors"])
+
+
+def test_custom_evo_accepts_pit_stock_pool_at_test_end() -> None:
+    result = validate_template_payload(
+        "custom_evo",
+        {
+            "data_split": {
+                "train_start": "2018-08-01",
+                "train_end": "2022-12-31",
+                "valid_start": "2023-01-01",
+                "valid_end": "2024-06-30",
+                "test_start": "2024-07-01",
+                "test_end": "2026-04-28",
+                "backtest_end": "2026-04-27",
+            },
+            "loops": [
+                {
+                    "factor_keys": ["Alpha001||alpha158"],
+                    "model_id": "model_lgbm_v1",
+                    "strategy_params": {"topk": 20, "stock_pool": "filtered_pool_20260428"},
+                    "runtime_flags": {"random_seed": 20260529},
+                }
+            ],
+        },
+    )
+
+    assert result["valid"] is True
+    assert result["errors"] == []
+
+
 def test_template_record_hashes_config_and_normalizes_archive_policy() -> None:
     record = QETemplateRecord(
         template_kind="single_experiment",

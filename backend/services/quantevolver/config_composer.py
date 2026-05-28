@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import hashlib
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -267,6 +268,26 @@ class ConfigComposer:
             if data_split["test_end"] >= QE_DEFAULT_SIGNAL_END
             else data_split["test_end"]
         )
+
+    @staticmethod
+    def _validate_historical_stock_pool_window(
+        custom_params: Optional[Dict[str, Any]],
+        data_split: Dict[str, str],
+    ) -> None:
+        stock_pool = (custom_params or {}).get("stock_pool")
+        if not stock_pool:
+            return
+        match = re.search(r"filtered_pool[_-](\d{8})", str(stock_pool))
+        if not match:
+            return
+        pool_date = datetime.strptime(match.group(1), "%Y%m%d")
+        test_end = datetime.strptime(data_split["test_end"], "%Y-%m-%d")
+        if pool_date > test_end:
+            raise ValueError(
+                "QE_STOCK_POOL_DATE_OUT_OF_WINDOW: "
+                f"stock_pool={stock_pool!r} uses filtered_pool date {pool_date:%Y-%m-%d} "
+                f"after data_split.test_end={data_split['test_end']}"
+            )
 
     def _fetch_workspace_config(self, node_id: Optional[str] = None) -> Dict[str, str]:
         """
@@ -1155,6 +1176,7 @@ class ConfigComposer:
             data_split = dict(RDAGENT_DEFAULT_DATA_SPLIT)
         self._validate_data_split(data_split)
         self._ensure_backtest_end(data_split)
+        self._validate_historical_stock_pool_window(custom_params, data_split)
 
         # 获取因子信息
         factors_info = self._get_factors_info(factor_names, factor_sources)
@@ -1461,6 +1483,7 @@ class ConfigComposer:
             data_split = dict(RDAGENT_DEFAULT_DATA_SPLIT)
         self._validate_data_split(data_split)
         self._ensure_backtest_end(data_split)
+        self._validate_historical_stock_pool_window(custom_params, data_split)
 
         # ── 获取因子 / 模型 / 策略信息 ──
         factors_info = self._get_factors_info(factor_names, factor_sources)
@@ -2200,6 +2223,7 @@ class ConfigComposer:
             data_split = dict(RDAGENT_DEFAULT_DATA_SPLIT)
         self._validate_data_split(data_split)
         self._ensure_backtest_end(data_split)
+        self._validate_historical_stock_pool_window(custom_params, data_split)
 
         # 获取因子信息
         factors_info = self._get_factors_info(factor_names)

@@ -347,6 +347,29 @@ def test_non_latest_user_window_uses_test_end_as_safe_backtest_end():
     assert split["backtest_end"] == "2021-12-31"
 
 
+def test_historical_stock_pool_date_must_not_exceed_test_end():
+    with pytest.raises(ValueError, match="QE_STOCK_POOL_DATE_OUT_OF_WINDOW"):
+        ConfigComposer._validate_historical_stock_pool_window(
+            {"stock_pool": "filtered_pool_20260519"},
+            {
+                **RDAGENT_DEFAULT_DATA_SPLIT,
+                "test_end": QE_DEFAULT_SIGNAL_END,
+                "backtest_end": QE_DEFAULT_BACKTEST_END,
+            },
+        )
+
+
+def test_historical_stock_pool_date_allows_pit_pool_at_test_end():
+    ConfigComposer._validate_historical_stock_pool_window(
+        {"stock_pool": "filtered_pool_20260428"},
+        {
+            **RDAGENT_DEFAULT_DATA_SPLIT,
+            "test_end": QE_DEFAULT_SIGNAL_END,
+            "backtest_end": QE_DEFAULT_BACKTEST_END,
+        },
+    )
+
+
 def _base_yaml(**kwargs):
     params = {
         "factors_info": [],

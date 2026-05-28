@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 
 from starlette.background import BackgroundTasks
 
@@ -245,9 +245,9 @@ def test_prepare_custom_evo_loop_configs_syncs_each_stock_pool_once_per_node(mon
     loops_config, loop1_node_id, node_parallelism = asyncio.run(
         qe._prepare_custom_evo_loop_configs(
             [
-                _loop("a", node_id="node-a", stock_pool="filtered_pool_20260501"),
-                _loop("b", node_id="node-a", stock_pool="filtered_pool_20260501"),
-                _loop("c", node_id="node-b", stock_pool="filtered_pool_20260501"),
+                _loop("a", node_id="node-a", stock_pool="filtered_pool_20260428"),
+                _loop("b", node_id="node-a", stock_pool="filtered_pool_20260428"),
+                _loop("c", node_id="node-b", stock_pool="filtered_pool_20260428"),
             ],
             request_node_id="node-a",
             node_parallelism_payload={"node-a": 2, "node-b": 1},
@@ -258,9 +258,34 @@ def test_prepare_custom_evo_loop_configs_syncs_each_stock_pool_once_per_node(mon
     assert node_parallelism == {"node-a": 2, "node-b": 1}
     assert [loop["node_id"] for loop in loops_config] == ["node-a", "node-a", "node-b"]
     assert sync_calls == [
-        ("filtered_pool_20260501", "node-a"),
-        ("filtered_pool_20260501", "node-b"),
+        ("filtered_pool_20260428", "node-a"),
+        ("filtered_pool_20260428", "node-b"),
     ]
+
+
+def test_prepare_custom_evo_loop_configs_rejects_future_stock_pool_before_sync(monkeypatch):
+    _patch_non_qe_dependencies(monkeypatch)
+    sync_calls = []
+    monkeypatch.setattr(
+        qe,
+        "_sync_stock_pool_to_remote",
+        lambda stock_pool, node: sync_calls.append((stock_pool, node["node_id"])),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            qe._prepare_custom_evo_loop_configs(
+                [
+                    _loop("future-pool", node_id="node-a", stock_pool="filtered_pool_20260519"),
+                ],
+                request_node_id="node-a",
+                node_parallelism_payload={"node-a": 1},
+            )
+        )
+
+    assert exc.value.status_code == 400
+    assert "QE_STOCK_POOL_DATE_OUT_OF_WINDOW" in str(exc.value.detail)
+    assert sync_calls == []
 
 
 def test_custom_evo_clone_create_keeps_loop_nodes_and_parallelism(monkeypatch):
