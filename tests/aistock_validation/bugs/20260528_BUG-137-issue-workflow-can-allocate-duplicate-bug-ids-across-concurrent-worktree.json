@@ -1,0 +1,69 @@
+{
+  "actual": "A stale registry worktree allocated BUG-133 even though another window already used BUG-133; BUG-135 then had to be manually renumbered. This can recur for future multi-window issue intake.",
+  "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    "scripts/aistock_mcp_server.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+    "backend/tests/test_aistock_mcp_server.py",
+    "docs/standards/aistock_issue_workflow_quickstart.md",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260528_BUG-137-issue-workflow-can-allocate-duplicate-bug-ids-across-concurrent-worktree.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-137",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-28T03:38:08.757944Z",
+  "description": "A stale registry worktree allocated BUG-133 even though another window already used BUG-133; BUG-135 then had to be manually renumbered. This can recur for future multi-window issue intake.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260528-0d9b6148bcc7",
+      "timestamp": "2026-05-28T03:38:08.757941Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "BUG registration must allocate a globally unique BUG-NNN id across local worktrees and GitHub Issues, or fail fast before creating a GitHub Issue/BUG JSON when a duplicate risk exists.",
+  "first_seen_at": "2026-05-28T03:38:08.757944Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 264,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/264",
+  "last_seen_at": "2026-05-28T03:38:08.757944Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Open two registry worktrees from stale origin/main with the same .bug_id_allocator.json, then run submit-bug --create-github --create-registry-worktree --apply in both before either registry change lands in main.",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "guardrail_changed_files",
+    "validation_catalog_integrity",
+    "validation_module_registry_l0",
+    "validation_coverage_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Issue workflow can allocate duplicate BUG ids across concurrent worktrees",
+  "trigger_condition": {
+    "fingerprint": "0d9b6148bcc7c77e5757adef",
+    "source_event_id": "FE-20260528-0d9b6148bcc7"
+  },
+  "verification_run_id": null
+}

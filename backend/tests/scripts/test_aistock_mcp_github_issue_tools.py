@@ -42,6 +42,9 @@ def _install_stub_fastmcp() -> None:
 @pytest.fixture()
 def mcp_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("AISTOCK_REPO_ROOT", str(tmp_path))
+    monkeypatch.setenv("AISTOCK_CANONICAL_ROOT", str(tmp_path))
+    monkeypatch.setenv("AISTOCK_WORKTREE_ROOT", str(tmp_path / "worktrees"))
+    monkeypatch.setenv("AISTOCK_BUG_ID_RESERVATION_ROOT", str(tmp_path / "bug-id-reservations"))
     monkeypatch.setenv("AISTOCK_VALIDATION_BASE_URL", "http://127.0.0.1/api/v1/validation")
     monkeypatch.setenv("AISTOCK_GITHUB_SKIP_ENV_FILE", "1")
     monkeypatch.setenv("AISTOCK_GITHUB_DISABLE_GH_CLI_TOKEN", "1")

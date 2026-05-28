@@ -44,6 +44,7 @@ ARTIFACT_PATH_PATTERNS = (
     ".next",
     "node_modules",
 )
+BUG_ID_RE = re.compile(r"\bBUG-(\d{3,})\b", re.IGNORECASE)
 
 sys.path.insert(0, str(REPO_ROOT))
 from scripts import issue_flow as flow  # noqa: E402
@@ -424,20 +425,313 @@ def _allocator_path(root: Path | None = None) -> Path:
     return _bugs_root(root) / ".bug_id_allocator.json"
 
 
-def _next_bug_id(root: Path | None = None) -> tuple[str, int]:
-    allocator = _allocator_path(root)
-    last_allocated = 0
-    if allocator.exists():
-        payload = _load_json(allocator)
+def _bug_id_number(value: str | None) -> int | None:
+    match = BUG_ID_RE.search(value or "")
+    return int(match.group(1)) if match else None
+
+
+def _unique_existing_paths(paths: list[Path]) -> list[Path]:
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for path in paths:
         try:
-            last_allocated = int(payload.get("last_allocated") or 0)
-        except (TypeError, ValueError) as exc:
-            raise WorkflowError(f"invalid bug id allocator: {allocator}") from exc
-    next_number = last_allocated + 1
+            key = str(path.resolve()).lower()
+        except OSError:
+            key = str(path.absolute()).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        if path.exists():
+            unique.append(path)
+    return unique
+
+
+def _bug_id_scan_roots(root: Path | None = None) -> list[Path]:
+    repo_root = root or REPO_ROOT
+    candidates = [
+        _bugs_root(repo_root),
+        _bugs_root(REPO_ROOT),
+        _bugs_root(_canonical_root()),
+    ]
+    worktree_root = _default_worktree_root()
+    if worktree_root.exists():
+        for child in worktree_root.iterdir():
+            if child.is_dir():
+                candidates.append(_bugs_root(child))
+    for item in _parse_worktree_list():
+        worktree = item.get("worktree")
+        if worktree:
+            candidates.append(_bugs_root(Path(worktree)))
+    return _unique_existing_paths(candidates)
+
+
+def _bug_id_reservation_root() -> Path:
+    override = os.environ.get("AISTOCK_BUG_ID_RESERVATION_ROOT")
+    return Path(override) if override else _default_worktree_root() / ".locks" / "bug-id-reservations"
+
+
+def _scan_bug_id_reservations() -> list[dict[str, Any]]:
+    reservation_root = _bug_id_reservation_root()
+    if not reservation_root.exists():
+        return []
+    sources: list[dict[str, Any]] = []
+    for path in sorted(reservation_root.glob("BUG-*.json")):
+        number = _bug_id_number(path.name)
+        if not number:
+            continue
+        sources.append(
+            {
+                "bug_id": f"BUG-{number:03d}",
+                "number": number,
+                "kind": "reservation",
+                "source": str(path),
+            }
+        )
+    return sources
+
+
+def _scan_bug_registry_ids(root: Path | None = None) -> list[dict[str, Any]]:
+    sources: list[dict[str, Any]] = []
+    for bugs_root in _bug_id_scan_roots(root):
+        allocator = bugs_root / ".bug_id_allocator.json"
+        if allocator.exists():
+            try:
+                payload = _load_json(allocator)
+                number = int(payload.get("last_allocated") or 0)
+            except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+                raise WorkflowError(f"invalid bug id allocator: {allocator}") from exc
+            if number > 0:
+                sources.append(
+                    {
+                        "bug_id": f"BUG-{number:03d}",
+                        "number": number,
+                        "kind": "allocator",
+                        "source": str(allocator),
+                    }
+                )
+        for path in sorted(p for p in bugs_root.glob("*.json") if not p.name.startswith(".")):
+            bug_id: str | None = None
+            try:
+                payload = _load_json(path)
+                bug_id = str(payload.get("bug_id") or "")
+            except (OSError, json.JSONDecodeError, WorkflowError):
+                bug_id = None
+            number = _bug_id_number(bug_id) or _bug_id_number(path.name)
+            if number:
+                sources.append(
+                    {
+                        "bug_id": f"BUG-{number:03d}",
+                        "number": number,
+                        "kind": "bug_json",
+                        "source": str(path),
+                    }
+                )
+    return sources
+
+
+def _scan_github_bug_ids(*, limit: int = 1000, timeout: int = 30) -> tuple[list[dict[str, Any]], list[str]]:
+    result = _run_command(
+        [
+            "gh",
+            "issue",
+            "list",
+            "--repo",
+            GITHUB_REPO,
+            "--state",
+            "all",
+            "--limit",
+            str(limit),
+            "--json",
+            "number,title,url,state",
+        ],
+        timeout=timeout,
+    )
+    if not result.get("ok"):
+        message = result.get("stderr") or result.get("stdout") or "gh issue list failed"
+        return [], [f"github BUG id scan unavailable: {message}"]
+    try:
+        issues = json.loads(str(result.get("stdout") or "[]"))
+    except json.JSONDecodeError as exc:
+        return [], [f"github BUG id scan returned invalid JSON: {exc}"]
+    sources: list[dict[str, Any]] = []
+    for issue in issues if isinstance(issues, list) else []:
+        if not isinstance(issue, dict):
+            continue
+        title = str(issue.get("title") or "")
+        number = _bug_id_number(title)
+        if not number:
+            continue
+        sources.append(
+            {
+                "bug_id": f"BUG-{number:03d}",
+                "number": number,
+                "kind": "github_issue",
+                "source": issue.get("url") or f"github_issue:{issue.get('number')}",
+                "github_issue_number": issue.get("number"),
+                "github_state": issue.get("state"),
+            }
+        )
+    if len(issues) >= limit:
+        sources.append(
+            {
+                "bug_id": "BUG-000",
+                "number": 0,
+                "kind": "github_scan_limit_warning",
+                "source": f"gh issue list reached limit {limit}; increase limit if BUG ids exceed this window",
+            }
+        )
+    return sources, []
+
+
+def _bug_id_allocation_report(
+    root: Path | None = None,
+    *,
+    include_github: bool = False,
+    github_required: bool = False,
+) -> dict[str, Any]:
+    sources = _scan_bug_registry_ids(root)
+    sources.extend(_scan_bug_id_reservations())
+    warnings: list[str] = []
+    if include_github:
+        github_sources, github_warnings = _scan_github_bug_ids()
+        sources.extend(github_sources)
+        warnings.extend(github_warnings)
+        if github_required and github_warnings:
+            raise WorkflowError("; ".join(github_warnings))
+    max_number = max((int(source.get("number") or 0) for source in sources), default=0)
+    return {
+        "schema_version": "aistock_bug_id_allocation_report_v1",
+        "max_number": max_number,
+        "next_number": max_number + 1,
+        "sources": sources,
+        "warnings": warnings,
+        "github_scanned": include_github,
+    }
+
+
+def _duplicate_bug_id_sources(
+    report: dict[str, Any],
+    bug_id: str,
+    *,
+    allowed_github_issue_number: int | str | None = None,
+) -> list[dict[str, Any]]:
+    number = _bug_id_number(bug_id)
+    allowed_issue = str(allowed_github_issue_number) if allowed_github_issue_number is not None else None
+    duplicates: list[dict[str, Any]] = []
+    for source in report.get("sources", []):
+        if int(source.get("number") or 0) != number:
+            continue
+        kind = source.get("kind")
+        if kind == "allocator":
+            continue
+        if kind == "github_issue" and allowed_issue and str(source.get("github_issue_number")) == allowed_issue:
+            continue
+        duplicates.append(source)
+    return duplicates
+
+
+def _reserve_bug_id(
+    root: Path | None,
+    *,
+    bug_id: str | None,
+    include_github: bool,
+    github_required: bool,
+    allowed_github_issue_number: int | str | None,
+) -> tuple[str, int, dict[str, Any], Path]:
+    with _GlobalBugIdAllocatorLock():
+        report = _bug_id_allocation_report(root, include_github=include_github, github_required=github_required)
+        if bug_id:
+            canonical_bug_id = bug_id.strip().upper()
+            number = _bug_id_number(canonical_bug_id)
+            if not number or not re.fullmatch(r"BUG-\d{3,}", canonical_bug_id):
+                raise WorkflowError("--bug-id must match BUG-NNN when provided")
+            duplicates = _duplicate_bug_id_sources(
+                report,
+                canonical_bug_id,
+                allowed_github_issue_number=allowed_github_issue_number,
+            )
+            if duplicates:
+                detail = "; ".join(f"{item.get('kind')}:{item.get('source')}" for item in duplicates[:5])
+                raise WorkflowError(f"{canonical_bug_id} already exists in global BUG id scan: {detail}")
+        else:
+            number = int(report["next_number"])
+            canonical_bug_id = f"BUG-{number:03d}"
+        reservation_root = _bug_id_reservation_root()
+        reservation_path = reservation_root / f"{canonical_bug_id}.json"
+        if reservation_path.exists():
+            raise WorkflowError(f"{canonical_bug_id} is already reserved: {reservation_path}")
+        _write_json(
+            reservation_path,
+            {
+                "schema_version": "aistock_bug_id_reservation_v1",
+                "bug_id": canonical_bug_id,
+                "reserved_at": _utc_now(),
+                "reserved_by": "aistock_issue_workflow.py",
+                "root": str((root or REPO_ROOT).resolve()),
+            },
+        )
+    return canonical_bug_id, number, report, reservation_path
+
+
+def _release_bug_id_reservation(path: Path | None) -> None:
+    if not path:
+        return
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
+class _GlobalBugIdAllocatorLock:
+    def __init__(self, *, timeout: float = 30.0) -> None:
+        self.timeout = timeout
+        self.path = Path(os.environ.get("AISTOCK_BUG_ID_LOCK_PATH") or (_default_worktree_root() / ".locks" / "bug-id-allocator.lock"))
+        self._fd: int | None = None
+
+    def __enter__(self) -> "_GlobalBugIdAllocatorLock":
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        deadline = time.monotonic() + self.timeout
+        while True:
+            try:
+                self._fd = os.open(str(self.path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.write(self._fd, f"{os.getpid()}\n{_utc_now()}\n".encode("ascii"))
+                return self
+            except FileExistsError as exc:
+                if time.monotonic() >= deadline:
+                    raise WorkflowError(f"timed out waiting for global BUG id allocator lock: {self.path}") from exc
+                time.sleep(0.1)
+
+    def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
+        if self._fd is not None:
+            os.close(self._fd)
+        try:
+            self.path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _next_bug_id(
+    root: Path | None = None,
+    *,
+    include_github: bool = False,
+    github_required: bool = False,
+) -> tuple[str, int]:
+    report = _bug_id_allocation_report(root, include_github=include_github, github_required=github_required)
+    next_number = int(report["next_number"])
     return f"BUG-{next_number:03d}", next_number
 
 
 def _write_allocator(next_number: int, root: Path | None = None) -> None:
+    allocator = _allocator_path(root)
+    current = 0
+    if allocator.exists():
+        try:
+            current = int(_load_json(allocator).get("last_allocated") or 0)
+        except (TypeError, ValueError) as exc:
+            raise WorkflowError(f"invalid bug id allocator: {allocator}") from exc
+    if current > next_number:
+        next_number = current
+    allocator = _allocator_path(root)
     _write_json(
         _allocator_path(root),
         {
@@ -973,101 +1267,125 @@ def build_submit_bug_plan(
     registry_guard = _validate_registry_apply_target(registry_root) if effective_apply else None
     if registry_guard and registry_guard["blocking"] and not allow_current_worktree:
         raise WorkflowError("; ".join(registry_guard["blocking"]))
-    canonical_bug_id = (bug_id or "").strip().upper() or None
-    allocated_number: int | None = None
-    if not canonical_bug_id:
-        canonical_bug_id, allocated_number = _next_bug_id(allocation_root)
-    else:
-        match = re.fullmatch(r"BUG-(\d{3,})", canonical_bug_id)
-        if not match:
-            raise WorkflowError("--bug-id must match BUG-NNN when provided")
-        allocated_number = int(match.group(1))
+    reservation_path: Path | None = None
+    include_github_scan = create_github or bool(github_issue_number and github_issue_url)
+    canonical_bug_id: str
+    allocated_number: int
+    allocation_report: dict[str, Any]
+    try:
+        if effective_apply:
+            canonical_bug_id, allocated_number, allocation_report, reservation_path = _reserve_bug_id(
+                allocation_root,
+                bug_id=bug_id,
+                include_github=include_github_scan,
+                github_required=create_github,
+                allowed_github_issue_number=github_issue_number,
+            )
+        else:
+            allocation_report = _bug_id_allocation_report(
+                allocation_root,
+                include_github=include_github_scan,
+                github_required=False,
+            )
+            canonical_bug_id = (bug_id or "").strip().upper() or f"BUG-{int(allocation_report['next_number']):03d}"
+            number = _bug_id_number(canonical_bug_id)
+            if not number or not re.fullmatch(r"BUG-\d{3,}", canonical_bug_id):
+                raise WorkflowError("--bug-id must match BUG-NNN when provided")
+            duplicates = _duplicate_bug_id_sources(
+                allocation_report,
+                canonical_bug_id,
+                allowed_github_issue_number=github_issue_number,
+            )
+            if duplicates:
+                detail = "; ".join(f"{item.get('kind')}:{item.get('source')}" for item in duplicates[:5])
+                raise WorkflowError(f"{canonical_bug_id} already exists in global BUG id scan: {detail}")
+            allocated_number = number
 
-    event_args = argparse.Namespace(
-        source="manual",
-        source_json=None,
-        title=title,
-        module=module,
-        severity_guess=severity,
-        actual=actual or description or title,
-        plan_key=plan_key,
-        nox_session=nox_session,
-        reproduce_command=reproduce_command,
-        evidence_ref=evidence_refs,
-        changed_file=changed_files,
-    )
-    event = flow.build_failure_event(event_args)
-    candidate = flow.candidate_from_event(
-        event,
-        title=title,
-        candidate_type=candidate_type,
-        expected=expected,
-        actual=actual or description,
-    )
-    record = flow.promote_candidate_to_bug(
-        candidate,
-        bug_id=canonical_bug_id,
-        github_issue_number=github_issue_number,
-        github_issue_url=github_issue_url,
-    )
-    now = _utc_now()
-    record.setdefault("created_at", now)
-    record.setdefault("first_seen_at", now)
-    record.setdefault("last_seen_at", now)
-    record.setdefault("assigned_agent", None)
-    record.setdefault("fix_branch", None)
-    record.setdefault("fix_commit", None)
-    record.setdefault("verification_run_id", None)
-    record.setdefault("github_issue_number", None)
-    record.setdefault("github_issue_url", None)
-    record.setdefault("fixed_at", None)
-    record.setdefault("closed_at", None)
-    record.setdefault("production_ddl_gate", "noop")
-    record.setdefault("production_frontend_dependency_gate", "noop")
-    record.setdefault("production_backend_dependency_gate", "noop")
-
-    output_dir = registry_root / WORKFLOW_ROOT / canonical_bug_id
-    candidate_path = output_dir / "candidate.json"
-    github_body_path = output_dir / "github-issue-body.md"
-    bug_path = _bug_json_path(record, registry_root)
-    github_result: dict[str, Any] | None = None
-
-    if effective_apply and bug_path.exists():
-        raise WorkflowError(f"BUG JSON already exists: {bug_path}")
-
-    if create_github and not record.get("github_issue_url") and effective_apply:
-        _write_text(github_body_path, _render_github_issue_body(record, candidate))
-        github_title = f"{canonical_bug_id} {severity}: {title}"
-        result = _execute_checked(
-            [
-                "gh",
-                "issue",
-                "create",
-                "--repo",
-                GITHUB_REPO,
-                "--title",
-                github_title,
-                "--body-file",
-                str(github_body_path),
-            ],
-            cwd=registry_root,
-            timeout=120,
+        event_args = argparse.Namespace(
+            source="manual",
+            source_json=None,
+            title=title,
+            module=module,
+            severity_guess=severity,
+            actual=actual or description or title,
+            plan_key=plan_key,
+            nox_session=nox_session,
+            reproduce_command=reproduce_command,
+            evidence_ref=evidence_refs,
+            changed_file=changed_files,
         )
-        issue_url = str(result.get("stdout") or "").splitlines()[-1].strip()
-        issue_number = _github_issue_number_from_url(issue_url)
-        if not issue_url or not issue_number:
-            raise WorkflowError(f"cannot parse created GitHub issue URL: {issue_url!r}")
-        record["github_issue_url"] = issue_url
-        record["github_issue_number"] = issue_number
-        github_result = {"created": True, "url": issue_url, "number": issue_number}
-    elif create_github and not record.get("github_issue_url"):
-        github_result = {"created": False, "planned": True, "body_path": _repo_rel(github_body_path, registry_root)}
+        event = flow.build_failure_event(event_args)
+        candidate = flow.candidate_from_event(
+            event,
+            title=title,
+            candidate_type=candidate_type,
+            expected=expected,
+            actual=actual or description,
+        )
+        record = flow.promote_candidate_to_bug(
+            candidate,
+            bug_id=canonical_bug_id,
+            github_issue_number=github_issue_number,
+            github_issue_url=github_issue_url,
+        )
+        now = _utc_now()
+        record.setdefault("created_at", now)
+        record.setdefault("first_seen_at", now)
+        record.setdefault("last_seen_at", now)
+        record.setdefault("assigned_agent", None)
+        record.setdefault("fix_branch", None)
+        record.setdefault("fix_commit", None)
+        record.setdefault("verification_run_id", None)
+        record.setdefault("github_issue_number", None)
+        record.setdefault("github_issue_url", None)
+        record.setdefault("fixed_at", None)
+        record.setdefault("closed_at", None)
+        record.setdefault("production_ddl_gate", "noop")
+        record.setdefault("production_frontend_dependency_gate", "noop")
+        record.setdefault("production_backend_dependency_gate", "noop")
 
-    has_linkage = bool(record.get("github_issue_number") and record.get("github_issue_url"))
-    if effective_apply and not has_linkage:
-        raise WorkflowError("--apply requires --create-github or existing --github-issue-number and --github-issue-url")
+        output_dir = registry_root / WORKFLOW_ROOT / canonical_bug_id
+        candidate_path = output_dir / "candidate.json"
+        github_body_path = output_dir / "github-issue-body.md"
+        bug_path = _bug_json_path(record, registry_root)
+        github_result: dict[str, Any] | None = None
 
-    payload = {
+        if effective_apply and bug_path.exists():
+            raise WorkflowError(f"BUG JSON already exists: {bug_path}")
+
+        if create_github and not record.get("github_issue_url") and effective_apply:
+            _write_text(github_body_path, _render_github_issue_body(record, candidate))
+            github_title = f"{canonical_bug_id} {severity}: {title}"
+            result = _execute_checked(
+                [
+                    "gh",
+                    "issue",
+                    "create",
+                    "--repo",
+                    GITHUB_REPO,
+                    "--title",
+                    github_title,
+                    "--body-file",
+                    str(github_body_path),
+                ],
+                cwd=registry_root,
+                timeout=120,
+            )
+            issue_url = str(result.get("stdout") or "").splitlines()[-1].strip()
+            issue_number = _github_issue_number_from_url(issue_url)
+            if not issue_url or not issue_number:
+                raise WorkflowError(f"cannot parse created GitHub issue URL: {issue_url!r}")
+            record["github_issue_url"] = issue_url
+            record["github_issue_number"] = issue_number
+            github_result = {"created": True, "url": issue_url, "number": issue_number}
+        elif create_github and not record.get("github_issue_url"):
+            github_result = {"created": False, "planned": True, "body_path": _repo_rel(github_body_path, registry_root)}
+
+        has_linkage = bool(record.get("github_issue_number") and record.get("github_issue_url"))
+        if effective_apply and not has_linkage:
+            raise WorkflowError("--apply requires --create-github or existing --github-issue-number and --github-issue-url")
+
+        payload = {
         "schema_version": "aistock_issue_workflow_submit_bug_v1",
         "generated_at": now,
         "bug_id": canonical_bug_id,
@@ -1098,6 +1416,13 @@ def build_submit_bug_plan(
         "record": record,
         "registry_pr_only": registry_pr_only,
         "stale_pr_check": _stale_pr_check_for_bug(canonical_bug_id) if effective_apply else {"status": "not_applicable_before_apply"},
+        "bug_id_allocation": {
+            "allocator_root": str(allocation_root),
+            "global_max_number": allocation_report.get("max_number"),
+            "github_scanned": allocation_report.get("github_scanned"),
+            "warnings": allocation_report.get("warnings", []),
+            "reservation_path": str(reservation_path) if reservation_path else None,
+        },
         "next_agent_steps": [
             "switch_to_registry_worktree",
             "commit_registry_only_pr_without_fix" if registry_pr_only else "continue_fix_in_same_task_branch",
@@ -1120,37 +1445,39 @@ def build_submit_bug_plan(
             f"python scripts/aistock_issue_workflow.py submit-bug --title \"{title}\" --module {module} "
             f"--severity {severity} --create-github --create-registry-worktree --apply"
         ),
-    }
-
-    if effective_apply:
-        _write_json(candidate_path, {"event": event, "candidate": candidate})
-        _write_text(github_body_path, _render_github_issue_body(record, candidate))
-        _write_json(bug_path, record)
-        if bug_id is None:
-            _write_allocator(int(allocated_number or canonical_bug_id.split("-")[1]), registry_root)
-        _write_state(
-            canonical_bug_id,
-            state="discovered",
-            root=registry_root,
-            source_bug_json=_repo_rel(bug_path, registry_root),
-            candidate_path=_repo_rel(candidate_path, registry_root),
-            github_issue_number=record.get("github_issue_number"),
-            github_issue_url=record.get("github_issue_url"),
-            next_actions=["run_issue_workflow_plan", "create_worktree", "read_context_pack"],
-        )
-        payload["state_path"] = _repo_rel(_state_path(canonical_bug_id, registry_root), registry_root)
-        payload["events_path"] = _repo_rel(_events_path(canonical_bug_id, registry_root), registry_root)
-        payload["fix_chain"] = {
-            "registry_pr_required": registry_pr_only,
-            "continue_to_fix_in_same_workflow": not registry_pr_only,
-            "run_next_command": payload["next_command"],
-            "note": (
-                "User explicitly requested registry-only tracking; stop after the registry PR."
-                if registry_pr_only
-                else "BUG registration now seeds workflow state so the same branch/worktree can continue to fix unless the user explicitly asks for a registry-only PR."
-            ),
         }
-    return payload
+
+        if effective_apply:
+            _write_json(candidate_path, {"event": event, "candidate": candidate})
+            _write_text(github_body_path, _render_github_issue_body(record, candidate))
+            _write_json(bug_path, record)
+            _write_allocator(allocated_number, registry_root)
+            _write_state(
+                canonical_bug_id,
+                state="discovered",
+                root=registry_root,
+                source_bug_json=_repo_rel(bug_path, registry_root),
+                candidate_path=_repo_rel(candidate_path, registry_root),
+                github_issue_number=record.get("github_issue_number"),
+                github_issue_url=record.get("github_issue_url"),
+                next_actions=["run_issue_workflow_plan", "create_worktree", "read_context_pack"],
+            )
+            payload["state_path"] = _repo_rel(_state_path(canonical_bug_id, registry_root), registry_root)
+            payload["events_path"] = _repo_rel(_events_path(canonical_bug_id, registry_root), registry_root)
+            payload["fix_chain"] = {
+                "registry_pr_required": registry_pr_only,
+                "continue_to_fix_in_same_workflow": not registry_pr_only,
+                "run_next_command": payload["next_command"],
+                "note": (
+                    "User explicitly requested registry-only tracking; stop after the registry PR."
+                    if registry_pr_only
+                    else "BUG registration now seeds workflow state so the same branch/worktree can continue to fix unless the user explicitly asks for a registry-only PR."
+                ),
+            }
+        return payload
+    except Exception:
+        _release_bug_id_reservation(reservation_path)
+        raise
 
 
 def _require_github_linkage(record: dict[str, Any], *, allow_missing: bool = False) -> list[str]:

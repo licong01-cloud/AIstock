@@ -65,6 +65,10 @@ def test_emit_dash_writes_stdout_without_dash_file(tmp_path: Path, monkeypatch: 
 def isolated_workflow_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(workflow, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(workflow, "BUGS_ROOT", tmp_path / "tests" / "aistock_validation" / "bugs")
+    monkeypatch.setenv("AISTOCK_CANONICAL_ROOT", str(tmp_path))
+    monkeypatch.setenv("AISTOCK_WORKTREE_ROOT", str(tmp_path / "worktrees"))
+    monkeypatch.setenv("AISTOCK_BUG_ID_RESERVATION_ROOT", str(tmp_path / "bug-id-reservations"))
+    monkeypatch.setattr(workflow, "_scan_github_bug_ids", lambda **_kwargs: ([], []))
     return tmp_path
 
 
@@ -826,6 +830,151 @@ def test_submit_bug_can_plan_registry_worktree_without_writes(isolated_workflow_
     assert payload["registry_worktree_plan"]["dry_run"] is True
     assert payload["registry_worktree_plan"]["branch"].startswith("bug/registry-paper-v2-")
     assert not (isolated_workflow_root / payload["bug_json_path"]).exists()
+
+
+def test_submit_bug_allocator_scans_stale_worktrees(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
+    _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 132})
+    stale = isolated_workflow_root / "worktrees" / "stale-registry" / "tests" / "aistock_validation" / "bugs"
+    _write_json(stale / "20260528_BUG-136-other-window.json", {"bug_id": "BUG-136", "title": "Other window"})
+    monkeypatch.setattr(workflow, "_validate_registry_apply_target", lambda root: {"blocking": [], "warnings": [], "target_root": str(root)})
+
+    payload = workflow.build_submit_bug_plan(
+        title="Duplicate allocator regression",
+        module="validation",
+        severity="P1",
+        description="A stale worktree should not reuse an existing BUG id.",
+        expected="The next BUG id should be globally unique.",
+        actual="The stale allocator points at BUG-133.",
+        reproduce_command="n/a",
+        evidence_refs=[],
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        plan_key=None,
+        nox_session=None,
+        candidate_type="bug",
+        bug_id=None,
+        github_issue_number="264",
+        github_issue_url="https://github.com/licong01-cloud/AIstock/issues/264",
+        create_github=False,
+        apply=True,
+        create_registry_worktree=False,
+        registry_pr_only=False,
+        dry_run=False,
+    )
+
+    assert payload["bug_id"] == "BUG-137"
+    assert payload["bug_id_allocation"]["global_max_number"] == 136
+    assert json.loads(allocator.read_text(encoding="utf-8"))["last_allocated"] == 137
+
+
+def test_submit_bug_explicit_duplicate_fails_before_github_create(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_json(workflow.BUGS_ROOT / "20260528_BUG-137-existing.json", {"bug_id": "BUG-137", "title": "Existing"})
+    monkeypatch.setattr(workflow, "_validate_registry_apply_target", lambda root: {"blocking": [], "warnings": [], "target_root": str(root)})
+
+    def fail_if_called(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("gh issue create must not run for duplicate explicit BUG id")
+
+    monkeypatch.setattr(workflow, "_execute_checked", fail_if_called)
+
+    with pytest.raises(workflow.WorkflowError, match="BUG-137 already exists"):
+        workflow.build_submit_bug_plan(
+            title="Duplicate explicit id",
+            module="validation",
+            severity="P1",
+            description="Duplicate id should fail before GitHub creation.",
+            expected="No GitHub issue is created.",
+            actual="Duplicate id could be embedded in GitHub.",
+            reproduce_command="n/a",
+            evidence_refs=[],
+            changed_files=["scripts/aistock_issue_workflow.py"],
+            plan_key=None,
+            nox_session=None,
+            candidate_type="bug",
+            bug_id="BUG-137",
+            github_issue_number=None,
+            github_issue_url=None,
+            create_github=True,
+            apply=True,
+            create_registry_worktree=False,
+            registry_pr_only=False,
+            dry_run=False,
+        )
+
+
+def test_submit_bug_explicit_new_id_bumps_allocator(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
+    _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 132})
+    monkeypatch.setattr(workflow, "_validate_registry_apply_target", lambda root: {"blocking": [], "warnings": [], "target_root": str(root)})
+
+    payload = workflow.build_submit_bug_plan(
+        title="Explicit allocator bump",
+        module="validation",
+        severity="P1",
+        description="Explicit new ids must advance future allocation.",
+        expected="Allocator is bumped to explicit id.",
+        actual="Allocator stayed stale.",
+        reproduce_command="n/a",
+        evidence_refs=[],
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        plan_key=None,
+        nox_session=None,
+        candidate_type="bug",
+        bug_id="BUG-137",
+        github_issue_number="264",
+        github_issue_url="https://github.com/licong01-cloud/AIstock/issues/264",
+        create_github=False,
+        apply=True,
+        create_registry_worktree=False,
+        registry_pr_only=False,
+        dry_run=False,
+    )
+
+    assert payload["bug_id"] == "BUG-137"
+    assert json.loads(allocator.read_text(encoding="utf-8"))["last_allocated"] == 137
+
+
+def test_submit_bug_offline_github_scan_warns_but_uses_local_scan(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
+    _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 132})
+    monkeypatch.setattr(workflow, "_scan_github_bug_ids", lambda **_kwargs: ([], ["github BUG id scan unavailable: offline"]))
+
+    payload = workflow.build_submit_bug_plan(
+        title="Offline GitHub scan",
+        module="validation",
+        severity="P1",
+        description="Dry-run should not require GitHub.",
+        expected="Local allocation still works with a warning.",
+        actual="GitHub is offline.",
+        reproduce_command="n/a",
+        evidence_refs=[],
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        plan_key=None,
+        nox_session=None,
+        candidate_type="bug",
+        bug_id=None,
+        github_issue_number="264",
+        github_issue_url="https://github.com/licong01-cloud/AIstock/issues/264",
+        create_github=False,
+        apply=False,
+        create_registry_worktree=False,
+        registry_pr_only=False,
+        dry_run=False,
+    )
+
+    assert payload["bug_id"] == "BUG-133"
+    assert payload["bug_id_allocation"]["warnings"]
 
 
 def test_install_client_plan_can_copy_global_codex_skill(
