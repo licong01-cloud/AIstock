@@ -15,9 +15,9 @@ export default function PaperV2SettingsPage() {
         <SectionCard title="支持流程" eyebrow="权威入口">
           <ol>
             <li>从 QE 生成或批准 StrategyPackage。</li>
-            <li>启用策略包进入选股中心和模拟盘 v2。</li>
+            <li>资产合格策略包可直接进入选股中心和模拟盘 v2。</li>
             <li>执行单策略包或多策略包选股；只有单策略包选股可以创建模拟盘 v2 实例。</li>
-            <li>创建模拟盘实例并冻结策略包、manifest hash、资金、数据源和已验证执行策略。</li>
+            <li>创建模拟盘实例并冻结策略包、manifest hash、资金、数据源和执行策略快照。</li>
             <li>先执行就绪检查，再执行单日运行或历史回放。</li>
             <li>复核订单、成交、现金流水、持仓、快照、事件、错误和绩效。</li>
           </ol>

@@ -119,7 +119,7 @@ export default function PaperV2RunningPage() {
       </div>
 
       <NoticePanel title="运行状态语义" tone="info">
-        READY 显示为未就绪/未运行，不再归入正在运行；本页默认只展示 RUNNING / PAUSED。运行任务分为仅历史追赶、历史追赶后自动实时、完全实时三种场景，状态切换必须在非交易时间执行。
+        READY 显示为未就绪/未运行，不再归入正在运行；本页默认只展示 RUNNING / PAUSED。运行任务分为仅历史追赶、历史追赶后自动实时、完全实时三种场景，盘中也允许恢复、启动或切换，实际下单仍由运行时和 broker fail-fast 校验。
       </NoticePanel>
 
       <SectionCard title="运行/追赶模拟盘列表" eyebrow={loading ? "加载中" : `${pageStart}-${pageEnd} / ${pagination?.total || 0} 个模拟盘`} action={<button className="pv2-button" onClick={load} disabled={loading} type="button">刷新</button>}>

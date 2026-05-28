@@ -1,0 +1,32 @@
+﻿schema_version: aistock_code_intelligence_catalog_v1
+codegraph:
+  enabled: true
+  required_for_p0: false
+  version: "0.9.4"
+  install_mode: global_or_npx
+  mcp_server: "codegraph serve --mcp"
+  project_index_dir: ".codegraph"
+  commit_index: false
+  ci_mode: warning
+  max_context_symbols_t1: 8
+  max_context_symbols_t2: 16
+  max_impact_depth: 3
+understand_anything:
+  enabled: true
+  version: "v2.7.3"
+  install_mode: agent_plugin_or_installer
+  project_graph_dir: ".understand-anything"
+  commit_graph: false
+  default_language: zh
+  auto_update: false
+  ci_mode: off
+  research_assistant_mode: summary_only
+  max_context_nodes_t2: 20
+  max_context_nodes_t3: 60
+fallback:
+  issue_workflow_blocks_when_unavailable: false
+  fallback_sources:
+    - file_ownership.yaml
+    - module_registry.yaml
+    - test_plans.yaml
+    - targeted_rg

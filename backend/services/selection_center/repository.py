@@ -8,7 +8,7 @@ from typing import Any, Callable, Iterator
 import psycopg2.extras
 
 from backend.db.pg_pool import get_conn
-from backend.services.trading_core.errors import DataUnavailableError
+from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
 
 from .models import SelectionCandidate, SelectionExclusion, SelectionMode, SelectionPaperPortfolioLink, SelectionRun, SelectionRunStatus
 from .result_enrichment import component_scores_with_display_fields, display_fields_from_component_scores
@@ -208,6 +208,34 @@ class SelectionCenterRepository:
                 run_ids = [row[0] for row in cur.fetchall()]
         return [self.get_run(run_id) for run_id in run_ids]
 
+    def list_runs_page(self, *, page: int = 1, page_size: int = 20) -> dict[str, Any]:
+        if page <= 0 or page_size <= 0:
+            raise RuntimeConfigInvalidError("selection run pagination requires positive page and page_size")
+        offset = (page - 1) * page_size
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM selection.run")
+                total = int((cur.fetchone() or [0])[0] or 0)
+                cur.execute(
+                    """
+                    SELECT run_id
+                    FROM selection.run
+                    ORDER BY created_at DESC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (page_size, offset),
+                )
+                run_ids = [row[0] for row in cur.fetchall()]
+        return {
+            "runs": [self.get_run(run_id) for run_id in run_ids],
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+                "total_pages": (total + page_size - 1) // page_size,
+            },
+        }
+
     def get_run(self, run_id: str) -> SelectionRun:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -376,6 +404,36 @@ class SelectionCenterRepository:
             for row in rows
         ]
 
+    def delete_run(self, run_id: str) -> dict[str, int]:
+        self.get_run(run_id)
+        counts = {
+            "paper_portfolio_link": 0,
+            "excluded_result": 0,
+            "aggregate_result": 0,
+            "package_result": 0,
+            "run": 0,
+        }
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                for table in ("paper_portfolio_link", "excluded_result", "aggregate_result", "package_result"):
+                    cur.execute(f"DELETE FROM selection.{table} WHERE run_id = %s", (run_id,))
+                    counts[table] = cur.rowcount
+                cur.execute("DELETE FROM selection.run WHERE run_id = %s", (run_id,))
+                counts["run"] = cur.rowcount
+        return counts
+
+    def delete_runs(self, run_ids: list[str]) -> dict[str, Any]:
+        if not run_ids:
+            raise RuntimeConfigInvalidError("run_ids must not be empty")
+        total_counts: dict[str, int] = {}
+        deleted: list[str] = []
+        for run_id in run_ids:
+            counts = self.delete_run(run_id)
+            deleted.append(run_id)
+            for key, value in counts.items():
+                total_counts[key] = total_counts.get(key, 0) + int(value)
+        return {"run_ids": deleted, "deleted_counts": total_counts}
+
 
 class InMemorySelectionCenterRepository:
     def __init__(self) -> None:
@@ -408,6 +466,23 @@ class InMemorySelectionCenterRepository:
         rows.sort(key=lambda item: item.created_at, reverse=True)
         return rows[:limit]
 
+    def list_runs_page(self, *, page: int = 1, page_size: int = 20) -> dict[str, Any]:
+        if page <= 0 or page_size <= 0:
+            raise RuntimeConfigInvalidError("selection run pagination requires positive page and page_size")
+        rows = list(self.runs.values())
+        rows.sort(key=lambda item: item.created_at, reverse=True)
+        total = len(rows)
+        offset = (page - 1) * page_size
+        return {
+            "runs": rows[offset: offset + page_size],
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+                "total_pages": (total + page_size - 1) // page_size,
+            },
+        }
+
     def get_run(self, run_id: str) -> SelectionRun:
         run = self.runs.get(run_id)
         if run is None:
@@ -421,3 +496,28 @@ class InMemorySelectionCenterRepository:
 
     def list_paper_portfolio_links(self, run_id: str) -> list[SelectionPaperPortfolioLink]:
         return [link for link in self.paper_links if link.run_id == run_id]
+
+    def delete_run(self, run_id: str) -> dict[str, int]:
+        self.get_run(run_id)
+        link_count = len([link for link in self.paper_links if link.run_id == run_id])
+        self.paper_links = [link for link in self.paper_links if link.run_id != run_id]
+        self.runs.pop(run_id, None)
+        return {
+            "paper_portfolio_link": link_count,
+            "excluded_result": 0,
+            "aggregate_result": 0,
+            "package_result": 0,
+            "run": 1,
+        }
+
+    def delete_runs(self, run_ids: list[str]) -> dict[str, Any]:
+        if not run_ids:
+            raise RuntimeConfigInvalidError("run_ids must not be empty")
+        total_counts: dict[str, int] = {}
+        deleted: list[str] = []
+        for run_id in run_ids:
+            counts = self.delete_run(run_id)
+            deleted.append(run_id)
+            for key, value in counts.items():
+                total_counts[key] = total_counts.get(key, 0) + int(value)
+        return {"run_ids": deleted, "deleted_counts": total_counts}

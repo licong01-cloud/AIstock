@@ -20,7 +20,25 @@ if TYPE_CHECKING:
     from backend.mcp.registry import ModuleRegistry
 
 
-TOOL_COUNT = 16
+TOOL_NAMES = (
+    "research_create_experiment",
+    "research_list_experiments",
+    "research_get_experiment",
+    "research_run_stage",
+    "research_retry_stage",
+    "research_get_stage_result",
+    "research_compare_baseline",
+    "research_list_artifact_refs",
+    "research_list_backtest_records",
+    "research_hmm_backfill_preview",
+    "research_hmm_backfill_execute",
+    "research_get_backfill_run",
+    "research_get_pipeline_types",
+    "research_create_issue",
+    "research_promote",
+    "research_reject",
+)
+TOOL_COUNT = len(TOOL_NAMES)
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -54,6 +72,11 @@ def register(registry: ModuleRegistry) -> None:
 
     client = registry.client("research-pipeline")
 
+    def _detail_params(detail: str) -> dict[str, str]:
+        if detail not in {"summary", "full"}:
+            raise ValueError("detail must be summary or full")
+        return {"detail": detail}
+
     @registry.mcp.tool(name="research_create_experiment")
     def research_create_experiment(payload: dict[str, Any]) -> Any:
         """Create a Research Pipeline experiment."""
@@ -65,7 +88,7 @@ def register(registry: ModuleRegistry) -> None:
         status: str | None = None,
         pipeline_type: str | None = None,
         search: str | None = None,
-        limit: int = 50,
+        limit: int = 20,
         offset: int = 0,
     ) -> Any:
         """List Research Pipeline experiments."""
@@ -82,11 +105,11 @@ def register(registry: ModuleRegistry) -> None:
         )
 
     @registry.mcp.tool(name="research_get_experiment")
-    def research_get_experiment(experiment_id: str) -> Any:
+    def research_get_experiment(experiment_id: str, detail: str = "summary") -> Any:
         """Get a Research Pipeline experiment detail record."""
 
         safe_experiment_id = registry.sanitize(experiment_id, "experiment_id")
-        return client.get(f"/experiments/{safe_experiment_id}")
+        return client.get(f"/experiments/{safe_experiment_id}", params=_detail_params(detail))
 
     @registry.mcp.tool(name="research_run_stage")
     def research_run_stage(
@@ -121,12 +144,12 @@ def register(registry: ModuleRegistry) -> None:
         return client.post(f"/experiments/{safe_experiment_id}/stages/{safe_stage_name}/retry", body)
 
     @registry.mcp.tool(name="research_get_stage_result")
-    def research_get_stage_result(experiment_id: str, stage_name: str) -> Any:
+    def research_get_stage_result(experiment_id: str, stage_name: str, detail: str = "summary") -> Any:
         """Get a stage status and attempt history."""
 
         safe_experiment_id = registry.sanitize(experiment_id, "experiment_id")
         safe_stage_name = registry.sanitize(stage_name, "stage_name")
-        return client.get(f"/experiments/{safe_experiment_id}/stages/{safe_stage_name}")
+        return client.get(f"/experiments/{safe_experiment_id}/stages/{safe_stage_name}", params=_detail_params(detail))
 
     @registry.mcp.tool(name="research_compare_baseline")
     def research_compare_baseline(experiment_id: str, payload: dict[str, Any] | None = None) -> Any:
@@ -140,7 +163,7 @@ def register(registry: ModuleRegistry) -> None:
         experiment_id: str,
         domain_type: str | None = None,
         status: str | None = None,
-        limit: int = 100,
+        limit: int = 20,
     ) -> Any:
         """List artifact references without claiming asset ownership."""
 
@@ -159,8 +182,9 @@ def register(registry: ModuleRegistry) -> None:
         source_task_id: str | None = None,
         hmm_config_sig: str | None = None,
         non_hmm_config_sig: str | None = None,
-        limit: int = 100,
+        limit: int = 10,
         offset: int = 0,
+        detail: str = "summary",
     ) -> Any:
         """List HMM backtest timeline records for an experiment."""
 
@@ -176,6 +200,7 @@ def register(registry: ModuleRegistry) -> None:
                 "non_hmm_config_sig": non_hmm_config_sig,
                 "limit": limit,
                 "offset": offset,
+                **_detail_params(detail),
             },
         )
 

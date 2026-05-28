@@ -293,3 +293,82 @@ def test_auto_retry_exhaustion_before_final_deadline_marks_retry_not_alert(monke
     assert any(call[0] == "retry" for call in calls)
     assert not any(call[0] == "final" for call in calls)
     assert not any(call[0] == "alert" for call in calls)
+
+
+def test_auto_range_uses_calendar_service_for_trade_date_dataset():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls = []
+
+    def _fetchall(sql, params=()):
+        calls.append((sql, params))
+        if "FROM market.data_stats_config" in sql:
+            return [
+                {
+                    "table_name": "market.stk_limit",
+                    "date_column": "trade_date",
+                    "extra_info": {},
+                }
+            ]
+        if "MAX(trade_date)" in sql:
+            return [{"mx": dt.date(2026, 5, 22)}]
+        return []
+
+    scheduler._fetchall = _fetchall
+    scheduler._latest_trading_day = lambda as_of_date=None: dt.date(2026, 5, 25)
+    scheduler._next_trading_day = lambda anchor_date, *, inclusive=False: dt.date(2026, 5, 25)
+
+    assert scheduler._compute_auto_range("stk_limit") == (dt.date(2026, 5, 25), dt.date(2026, 5, 25))
+    assert not any("market.trading_calendar" in sql for sql, _params in calls)
+
+
+def test_auto_range_calendar_dataset_keeps_natural_day_progression():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls = []
+
+    def _fetchall(sql, params=()):
+        calls.append((sql, params))
+        if "FROM market.data_stats_config" in sql:
+            return [
+                {
+                    "table_name": "market.stock_st_events",
+                    "date_column": "pub_date",
+                    "extra_info": {"date_sequence": "calendar"},
+                }
+            ]
+        if "MAX(pub_date)" in sql:
+            return [{"mx": dt.date.today() - dt.timedelta(days=1)}]
+        return []
+
+    scheduler._fetchall = _fetchall
+    scheduler._latest_trading_day = lambda as_of_date=None: (_ for _ in ()).throw(AssertionError("trading service unused"))
+    scheduler._next_trading_day = lambda anchor_date, *, inclusive=False: (_ for _ in ()).throw(AssertionError("next service unused"))
+
+    start, end = scheduler._compute_auto_range("stock_st_events")
+
+    assert start == dt.date.today()
+    assert end == dt.date.today()
+    assert not any("market.trading_calendar" in sql for sql, _params in calls)
+
+
+def test_suspend_d_refresh_range_uses_calendar_service_without_direct_sql():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._fetchall = lambda sql, params=(): (_ for _ in ()).throw(AssertionError(sql))
+    scheduler._is_trading_day = lambda day: False
+    scheduler._next_trading_day = lambda anchor_date, *, inclusive=False: dt.date(2026, 5, 25)
+
+    assert scheduler._resolve_suspend_d_refresh_range(
+        "current_or_next_trading_day",
+        today=dt.date(2026, 5, 24),
+    ) == (dt.date(2026, 5, 25), dt.date(2026, 5, 25))
+
+
+def test_suspend_d_current_trading_day_rejects_non_trading_day():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._is_trading_day = lambda day: False
+
+    try:
+        scheduler._resolve_suspend_d_refresh_range("current_trading_day", today=dt.date(2026, 5, 24))
+    except RuntimeError as exc:
+        assert "non-trading day" in str(exc)
+    else:
+        raise AssertionError("expected current_trading_day to reject non-trading day")

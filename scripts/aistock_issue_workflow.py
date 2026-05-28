@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import hashlib
@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -17,13 +18,51 @@ BUGS_ROOT = REPO_ROOT / "tests" / "aistock_validation" / "bugs"
 WORKFLOW_ROOT = Path("tmp") / "issue_workflow"
 ALLOWED_FIX_STATUSES = {"open", "in_progress"}
 GITHUB_REPO = "licong01-cloud/AIstock"
+ACTIVE_WORKFLOW_STATES = {
+    "discovered",
+    "context_ready",
+    "fix_in_progress",
+    "fix_applied",
+    "validation_planned",
+    "validation_running",
+    "validation_passed",
+    "pushed",
+    "pr_opened",
+    "ci_running",
+    "ci_green",
+}
+TERMINAL_WORKFLOW_STATES = {"merged", "close_synced", "cleanup_done", "complete"}
+NON_BLOCKING_CHECK_CONCLUSIONS = {"SUCCESS", "NEUTRAL", "SKIPPED"}
+ARTIFACT_PATH_PATTERNS = (
+    ".codex_tmp",
+    ".coverage",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    "__pycache__",
+    "catboost_info",
+    ".next",
+    "node_modules",
+)
+BUG_ID_RE = re.compile(r"\bBUG-(\d{3,})\b", re.IGNORECASE)
+OUTPUT_FORMAT_TOKENS = {"json", "yaml", "yml", "text", "txt", "stdout", "stderr", "console"}
+SAFE_OUTPUT_DIRS = (WORKFLOW_ROOT, Path("tmp") / "validation")
 
 sys.path.insert(0, str(REPO_ROOT))
 from scripts import issue_flow as flow  # noqa: E402
+from scripts import ci_failure_issue_summary as ci_failure_summary  # noqa: E402
+from scripts import code_intelligence_adapter as code_intelligence  # noqa: E402
 
 
 class WorkflowError(ValueError):
     """Raised when the high-level AIstock issue workflow cannot proceed safely."""
+
+
+def _estimate_tokens(text: str) -> int:
+    if not text:
+        return 0
+    # Conservative mixed Chinese/English estimate for workflow budgeting.
+    return max(1, (len(text) + 3) // 4)
 
 
 def _utc_now() -> str:
@@ -56,14 +95,83 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _size_and_token_estimate(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {"path": str(path), "exists": False, "bytes": 0, "estimated_tokens": 0}
+    text = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+    return {
+        "path": str(path),
+        "exists": True,
+        "bytes": path.stat().st_size,
+        "estimated_tokens": _estimate_tokens(text),
+    }
+
+
 def _write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text.rstrip() + "\n", encoding="utf-8")
 
 
+def _sha256_file(path: Path) -> str | None:
+    if not path.exists() or not path.is_file():
+        return None
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _sha256_tree(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    if path.is_file():
+        return _sha256_file(path)
+    digest = hashlib.sha256()
+    for child in sorted(item for item in path.rglob("*") if item.is_file()):
+        if ".git" in child.parts:
+            continue
+        rel = child.relative_to(path).as_posix()
+        digest.update(rel.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update((_sha256_file(child) or "").encode("ascii"))
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _resolve_output_path(output: str | None) -> Path | None:
+    if not output or output == "-":
+        return None
+    raw = output.strip()
+    if not raw:
+        return None
+    if raw.lower() in OUTPUT_FORMAT_TOKENS:
+        raise WorkflowError("--output expects a JSON file path; omit it or use --output - for stdout")
+
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+
+    roots = [REPO_ROOT.resolve()]
+    canonical = _canonical_root().resolve()
+    if canonical not in roots:
+        roots.append(canonical)
+    safe_roots = [root / safe_dir for root in roots for safe_dir in SAFE_OUTPUT_DIRS]
+    in_safe_dir = any(_is_inside(path, safe_root) for safe_root in safe_roots)
+    parent = path.parent.resolve()
+    if not path.suffix and parent in roots:
+        raise WorkflowError(
+            "--output refuses a root-level bare file; use --output - or write under tmp/issue_workflow/"
+        )
+    if not path.suffix and not in_safe_dir:
+        raise WorkflowError("--output path must include a file suffix or be under tmp/issue_workflow/ or tmp/validation/")
+    return path
+
+
 def _emit(payload: dict[str, Any], output: str | None = None) -> None:
-    if output:
-        _write_json(Path(output), payload)
+    output_path = _resolve_output_path(output)
+    if output_path:
+        _write_json(output_path, payload)
     sys.stdout.write(json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n")
 
 
@@ -106,6 +214,22 @@ def _run_command(args: list[str], cwd: Path | None = None, timeout: int = 30) ->
         return {"ok": False, "returncode": None, "stdout": "", "stderr": str(exc)}
 
 
+def _parse_git_porcelain_path(line: str) -> str:
+    raw = line.rstrip()
+    if not raw.strip():
+        return ""
+    if len(raw) >= 3 and raw[2] == " ":
+        path = raw[3:]
+    elif len(raw) >= 2 and raw[1] == " ":
+        # _run_command strips stdout; recover paths from lines like "M path".
+        path = raw[2:]
+    else:
+        path = raw[3:] if len(raw) > 3 else raw
+    if " -> " in path:
+        path = path.split(" -> ", 1)[1]
+    return path.strip().strip('"')
+
+
 def _workflow_dir(bug_id: str, root: Path | None = None) -> Path:
     return (root or REPO_ROOT) / WORKFLOW_ROOT / bug_id
 
@@ -116,6 +240,10 @@ def _state_path(bug_id: str, root: Path | None = None) -> Path:
 
 def _events_path(bug_id: str, root: Path | None = None) -> Path:
     return _workflow_dir(bug_id, root) / "events.jsonl"
+
+
+def _active_index_path(root: Path | None = None) -> Path:
+    return (root or REPO_ROOT) / WORKFLOW_ROOT / "index" / "active_bugs.json"
 
 
 def _load_state(bug_id: str, root: Path | None = None) -> dict[str, Any] | None:
@@ -136,14 +264,17 @@ def _append_event(
     result: str = "ok",
     evidence: dict[str, Any] | None = None,
     root: Path | None = None,
+    duration_seconds: float | None = None,
 ) -> dict[str, Any]:
     event_payload = {
         "timestamp": _utc_now(),
+        "client": os.environ.get("AISTOCK_WORKFLOW_CLIENT") or os.environ.get("CODEX_WORKFLOW_CLIENT") or "unknown",
         "actor": actor,
         "event": event,
         "state": state,
         "command": command,
         "cwd": str((cwd or root or REPO_ROOT).resolve()),
+        "duration_seconds": round(duration_seconds, 3) if duration_seconds is not None else None,
         "result": result,
         "evidence": evidence or {},
     }
@@ -152,6 +283,138 @@ def _append_event(
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(event_payload, ensure_ascii=False, sort_keys=True) + "\n")
     return event_payload
+
+
+def _parse_utc_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _event_phase(event: dict[str, Any]) -> str:
+    raw = str(event.get("event") or event.get("state") or "unknown")
+    if raw.startswith("state:"):
+        raw = raw.split(":", 1)[1]
+    if raw.startswith("command:"):
+        return raw.split(":", 1)[1] or "command"
+    if raw in {"active_worktree_decision"}:
+        return "active_worktree_guard"
+    return raw or "unknown"
+
+
+def _read_events(bug_id: str, root: Path | None = None) -> list[dict[str, Any]]:
+    path = _events_path(bug_id, root)
+    if not path.exists():
+        return []
+    events: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            events.append(payload)
+    return events
+
+
+def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str, Any]:
+    events = _read_events(bug_id, root)
+    events = sorted(events, key=lambda item: str(item.get("timestamp") or ""))
+    phases: dict[str, dict[str, Any]] = {}
+    previous_ts: datetime | None = None
+    started_at: str | None = None
+    ended_at: str | None = None
+    known_duration = 0.0
+    inferred_duration = 0.0
+
+    for event in events:
+        ts = _parse_utc_timestamp(str(event.get("timestamp") or ""))
+        if ts:
+            started_at = started_at or event.get("timestamp")
+            ended_at = event.get("timestamp")
+        phase = _event_phase(event)
+        bucket = phases.setdefault(
+            phase,
+            {
+                "event_count": 0,
+                "known_duration_seconds": 0.0,
+                "inferred_since_previous_seconds": 0.0,
+                "first_at": event.get("timestamp"),
+                "last_at": event.get("timestamp"),
+            },
+        )
+        bucket["event_count"] += 1
+        bucket["last_at"] = event.get("timestamp")
+        duration = event.get("duration_seconds")
+        if isinstance(duration, (int, float)):
+            bucket["known_duration_seconds"] = round(float(bucket["known_duration_seconds"]) + float(duration), 3)
+            known_duration += float(duration)
+        if ts and previous_ts:
+            delta = max(0.0, (ts - previous_ts).total_seconds())
+            bucket["inferred_since_previous_seconds"] = round(
+                float(bucket["inferred_since_previous_seconds"]) + delta,
+                3,
+            )
+            inferred_duration += delta
+        if ts:
+            previous_ts = ts
+
+    return {
+        "schema_version": "aistock_issue_workflow_timing_summary_v1",
+        "bug_id": bug_id,
+        "event_count": len(events),
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "known_duration_seconds": round(known_duration, 3),
+        "inferred_elapsed_seconds": round(inferred_duration, 3),
+        "phases": phases,
+        "code_repair_seconds": None,
+        "notes": [
+            "known_duration_seconds comes from command-level telemetry when available",
+            "inferred_elapsed_seconds is wall-clock distance between recorded events and may include human/CI wait time",
+            "code_repair_seconds is intentionally not guessed unless the agent records explicit repair events",
+        ],
+    }
+
+
+def _update_active_index(bug_id: str, state_payload: dict[str, Any], *, root: Path | None = None) -> dict[str, Any]:
+    root = root or REPO_ROOT
+    path = _active_index_path(root)
+    existing: dict[str, Any] = {}
+    if path.exists():
+        try:
+            existing = _load_json(path)
+        except WorkflowError:
+            existing = {}
+    index = dict(existing.get("active_bugs") or existing)
+    key = bug_id.strip().upper()
+    if not _state_is_active(state_payload):
+        index.pop(key, None)
+    else:
+        active_worktree = state_payload.get("worktree") or state_payload.get("cwd") or str(root)
+        index[key] = {
+            "bug_id": key,
+            "active_state": state_payload.get("state"),
+            "branch": state_payload.get("branch"),
+            "planned_branch": state_payload.get("planned_branch"),
+            "worktree": active_worktree,
+            "planned_worktree": state_payload.get("planned_worktree"),
+            "pr_url": state_payload.get("pr_url"),
+            "last_event_at": state_payload.get("updated_at"),
+            "next_command": _next_command_for_state(key, state_payload),
+        }
+    payload = {
+        "schema_version": "aistock_issue_workflow_active_index_v1",
+        "updated_at": _utc_now(),
+        "active_bugs": index,
+    }
+    _write_json(path, payload)
+    return payload
 
 
 def _write_state(
@@ -175,6 +438,9 @@ def _write_state(
         "cwd": str(root.resolve()),
         "next_actions": next_actions or fields.get("next_actions") or [],
     }
+    for key, value in fields.items():
+        if value is None:
+            payload.pop(key, None)
     if stop_reason:
         payload["stop_reason"] = stop_reason
     _write_json(_state_path(bug_id, root), payload)
@@ -185,6 +451,7 @@ def _write_state(
         root=root,
         evidence={key: payload.get(key) for key in ("branch", "worktree", "commit", "pr_url") if payload.get(key)},
     )
+    _update_active_index(bug_id, payload, root=root)
     return payload
 
 
@@ -204,26 +471,323 @@ def _bug_files(bugs_root: Path | None = None) -> list[Path]:
     return sorted(path for path in bugs_root.glob("*.json") if not path.name.startswith("."))
 
 
-def _allocator_path() -> Path:
-    return BUGS_ROOT / ".bug_id_allocator.json"
+def _bugs_root(root: Path | None = None) -> Path:
+    return (root / "tests" / "aistock_validation" / "bugs") if root else BUGS_ROOT
 
 
-def _next_bug_id() -> tuple[str, int]:
-    allocator = _allocator_path()
-    last_allocated = 0
-    if allocator.exists():
-        payload = _load_json(allocator)
+def _allocator_path(root: Path | None = None) -> Path:
+    return _bugs_root(root) / ".bug_id_allocator.json"
+
+
+def _bug_id_number(value: str | None) -> int | None:
+    match = BUG_ID_RE.search(value or "")
+    return int(match.group(1)) if match else None
+
+
+def _unique_existing_paths(paths: list[Path]) -> list[Path]:
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for path in paths:
         try:
-            last_allocated = int(payload.get("last_allocated") or 0)
-        except (TypeError, ValueError) as exc:
-            raise WorkflowError(f"invalid bug id allocator: {allocator}") from exc
-    next_number = last_allocated + 1
+            key = str(path.resolve()).lower()
+        except OSError:
+            key = str(path.absolute()).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        if path.exists():
+            unique.append(path)
+    return unique
+
+
+def _bug_id_scan_roots(root: Path | None = None) -> list[Path]:
+    repo_root = root or REPO_ROOT
+    candidates = [
+        _bugs_root(repo_root),
+        _bugs_root(REPO_ROOT),
+        _bugs_root(_canonical_root()),
+    ]
+    worktree_root = _default_worktree_root()
+    if worktree_root.exists():
+        for child in worktree_root.iterdir():
+            if child.is_dir():
+                candidates.append(_bugs_root(child))
+    for item in _parse_worktree_list():
+        worktree = item.get("worktree")
+        if worktree:
+            candidates.append(_bugs_root(Path(worktree)))
+    return _unique_existing_paths(candidates)
+
+
+def _bug_id_reservation_root() -> Path:
+    override = os.environ.get("AISTOCK_BUG_ID_RESERVATION_ROOT")
+    return Path(override) if override else _default_worktree_root() / ".locks" / "bug-id-reservations"
+
+
+def _scan_bug_id_reservations() -> list[dict[str, Any]]:
+    reservation_root = _bug_id_reservation_root()
+    if not reservation_root.exists():
+        return []
+    sources: list[dict[str, Any]] = []
+    for path in sorted(reservation_root.glob("BUG-*.json")):
+        number = _bug_id_number(path.name)
+        if not number:
+            continue
+        sources.append(
+            {
+                "bug_id": f"BUG-{number:03d}",
+                "number": number,
+                "kind": "reservation",
+                "source": str(path),
+            }
+        )
+    return sources
+
+
+def _scan_bug_registry_ids(root: Path | None = None) -> list[dict[str, Any]]:
+    sources: list[dict[str, Any]] = []
+    for bugs_root in _bug_id_scan_roots(root):
+        allocator = bugs_root / ".bug_id_allocator.json"
+        if allocator.exists():
+            try:
+                payload = _load_json(allocator)
+                number = int(payload.get("last_allocated") or 0)
+            except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+                raise WorkflowError(f"invalid bug id allocator: {allocator}") from exc
+            if number > 0:
+                sources.append(
+                    {
+                        "bug_id": f"BUG-{number:03d}",
+                        "number": number,
+                        "kind": "allocator",
+                        "source": str(allocator),
+                    }
+                )
+        for path in sorted(p for p in bugs_root.glob("*.json") if not p.name.startswith(".")):
+            bug_id: str | None = None
+            try:
+                payload = _load_json(path)
+                bug_id = str(payload.get("bug_id") or "")
+            except (OSError, json.JSONDecodeError, WorkflowError):
+                bug_id = None
+            number = _bug_id_number(bug_id) or _bug_id_number(path.name)
+            if number:
+                sources.append(
+                    {
+                        "bug_id": f"BUG-{number:03d}",
+                        "number": number,
+                        "kind": "bug_json",
+                        "source": str(path),
+                    }
+                )
+    return sources
+
+
+def _scan_github_bug_ids(*, limit: int = 1000, timeout: int = 30) -> tuple[list[dict[str, Any]], list[str]]:
+    result = _run_command(
+        [
+            "gh",
+            "issue",
+            "list",
+            "--repo",
+            GITHUB_REPO,
+            "--state",
+            "all",
+            "--limit",
+            str(limit),
+            "--json",
+            "number,title,url,state",
+        ],
+        timeout=timeout,
+    )
+    if not result.get("ok"):
+        message = result.get("stderr") or result.get("stdout") or "gh issue list failed"
+        return [], [f"github BUG id scan unavailable: {message}"]
+    try:
+        issues = json.loads(str(result.get("stdout") or "[]"))
+    except json.JSONDecodeError as exc:
+        return [], [f"github BUG id scan returned invalid JSON: {exc}"]
+    sources: list[dict[str, Any]] = []
+    for issue in issues if isinstance(issues, list) else []:
+        if not isinstance(issue, dict):
+            continue
+        title = str(issue.get("title") or "")
+        number = _bug_id_number(title)
+        if not number:
+            continue
+        sources.append(
+            {
+                "bug_id": f"BUG-{number:03d}",
+                "number": number,
+                "kind": "github_issue",
+                "source": issue.get("url") or f"github_issue:{issue.get('number')}",
+                "github_issue_number": issue.get("number"),
+                "github_state": issue.get("state"),
+            }
+        )
+    if len(issues) >= limit:
+        sources.append(
+            {
+                "bug_id": "BUG-000",
+                "number": 0,
+                "kind": "github_scan_limit_warning",
+                "source": f"gh issue list reached limit {limit}; increase limit if BUG ids exceed this window",
+            }
+        )
+    return sources, []
+
+
+def _bug_id_allocation_report(
+    root: Path | None = None,
+    *,
+    include_github: bool = False,
+    github_required: bool = False,
+) -> dict[str, Any]:
+    sources = _scan_bug_registry_ids(root)
+    sources.extend(_scan_bug_id_reservations())
+    warnings: list[str] = []
+    if include_github:
+        github_sources, github_warnings = _scan_github_bug_ids()
+        sources.extend(github_sources)
+        warnings.extend(github_warnings)
+        if github_required and github_warnings:
+            raise WorkflowError("; ".join(github_warnings))
+    max_number = max((int(source.get("number") or 0) for source in sources), default=0)
+    return {
+        "schema_version": "aistock_bug_id_allocation_report_v1",
+        "max_number": max_number,
+        "next_number": max_number + 1,
+        "sources": sources,
+        "warnings": warnings,
+        "github_scanned": include_github,
+    }
+
+
+def _duplicate_bug_id_sources(
+    report: dict[str, Any],
+    bug_id: str,
+    *,
+    allowed_github_issue_number: int | str | None = None,
+) -> list[dict[str, Any]]:
+    number = _bug_id_number(bug_id)
+    allowed_issue = str(allowed_github_issue_number) if allowed_github_issue_number is not None else None
+    duplicates: list[dict[str, Any]] = []
+    for source in report.get("sources", []):
+        if int(source.get("number") or 0) != number:
+            continue
+        kind = source.get("kind")
+        if kind == "allocator":
+            continue
+        if kind == "github_issue" and allowed_issue and str(source.get("github_issue_number")) == allowed_issue:
+            continue
+        duplicates.append(source)
+    return duplicates
+
+
+def _reserve_bug_id(
+    root: Path | None,
+    *,
+    bug_id: str | None,
+    include_github: bool,
+    github_required: bool,
+    allowed_github_issue_number: int | str | None,
+) -> tuple[str, int, dict[str, Any], Path]:
+    with _GlobalBugIdAllocatorLock():
+        report = _bug_id_allocation_report(root, include_github=include_github, github_required=github_required)
+        if bug_id:
+            canonical_bug_id = bug_id.strip().upper()
+            number = _bug_id_number(canonical_bug_id)
+            if not number or not re.fullmatch(r"BUG-\d{3,}", canonical_bug_id):
+                raise WorkflowError("--bug-id must match BUG-NNN when provided")
+            duplicates = _duplicate_bug_id_sources(
+                report,
+                canonical_bug_id,
+                allowed_github_issue_number=allowed_github_issue_number,
+            )
+            if duplicates:
+                detail = "; ".join(f"{item.get('kind')}:{item.get('source')}" for item in duplicates[:5])
+                raise WorkflowError(f"{canonical_bug_id} already exists in global BUG id scan: {detail}")
+        else:
+            number = int(report["next_number"])
+            canonical_bug_id = f"BUG-{number:03d}"
+        reservation_root = _bug_id_reservation_root()
+        reservation_path = reservation_root / f"{canonical_bug_id}.json"
+        if reservation_path.exists():
+            raise WorkflowError(f"{canonical_bug_id} is already reserved: {reservation_path}")
+        _write_json(
+            reservation_path,
+            {
+                "schema_version": "aistock_bug_id_reservation_v1",
+                "bug_id": canonical_bug_id,
+                "reserved_at": _utc_now(),
+                "reserved_by": "aistock_issue_workflow.py",
+                "root": str((root or REPO_ROOT).resolve()),
+            },
+        )
+    return canonical_bug_id, number, report, reservation_path
+
+
+def _release_bug_id_reservation(path: Path | None) -> None:
+    if not path:
+        return
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
+class _GlobalBugIdAllocatorLock:
+    def __init__(self, *, timeout: float = 30.0) -> None:
+        self.timeout = timeout
+        self.path = Path(os.environ.get("AISTOCK_BUG_ID_LOCK_PATH") or (_default_worktree_root() / ".locks" / "bug-id-allocator.lock"))
+        self._fd: int | None = None
+
+    def __enter__(self) -> "_GlobalBugIdAllocatorLock":
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        deadline = time.monotonic() + self.timeout
+        while True:
+            try:
+                self._fd = os.open(str(self.path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.write(self._fd, f"{os.getpid()}\n{_utc_now()}\n".encode("ascii"))
+                return self
+            except FileExistsError as exc:
+                if time.monotonic() >= deadline:
+                    raise WorkflowError(f"timed out waiting for global BUG id allocator lock: {self.path}") from exc
+                time.sleep(0.1)
+
+    def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
+        if self._fd is not None:
+            os.close(self._fd)
+        try:
+            self.path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _next_bug_id(
+    root: Path | None = None,
+    *,
+    include_github: bool = False,
+    github_required: bool = False,
+) -> tuple[str, int]:
+    report = _bug_id_allocation_report(root, include_github=include_github, github_required=github_required)
+    next_number = int(report["next_number"])
     return f"BUG-{next_number:03d}", next_number
 
 
-def _write_allocator(next_number: int) -> None:
+def _write_allocator(next_number: int, root: Path | None = None) -> None:
+    allocator = _allocator_path(root)
+    current = 0
+    if allocator.exists():
+        try:
+            current = int(_load_json(allocator).get("last_allocated") or 0)
+        except (TypeError, ValueError) as exc:
+            raise WorkflowError(f"invalid bug id allocator: {allocator}") from exc
+    if current > next_number:
+        next_number = current
+    allocator = _allocator_path(root)
     _write_json(
-        _allocator_path(),
+        _allocator_path(root),
         {
             "schema_version": "aistock_bug_id_allocator_v1",
             "last_allocated": next_number,
@@ -233,14 +797,436 @@ def _write_allocator(next_number: int) -> None:
     )
 
 
-def _bug_json_path(record: dict[str, Any]) -> Path:
+def _bug_json_path(record: dict[str, Any], root: Path | None = None) -> Path:
     bug_id = str(record["bug_id"])
-    return BUGS_ROOT / f"{_today_compact()}_{bug_id}-{_slug(str(record.get('title') or bug_id))}.json"
+    return _bugs_root(root) / f"{_today_compact()}_{bug_id}-{_slug(str(record.get('title') or bug_id))}.json"
+
+
+def _registry_target_root() -> Path:
+    override = os.environ.get("AISTOCK_ISSUE_REGISTRY_ROOT")
+    return Path(override) if override else REPO_ROOT
+
+
+def _registry_worktree_names(*, title: str, module: str, severity: str) -> tuple[str, Path]:
+    title_slug = _slug(title, max_len=34)
+    module_slug = _slug(module, max_len=22)
+    suffix = _short_hash(title, module, severity, _utc_now(), length=6)
+    name = f"registry-{module_slug}-{title_slug}-{_today_compact()}-{suffix}"
+    branch = f"bug/{name}"
+    return branch, _default_worktree_root() / name
+
+
+def _close_sync_worktree_names(*, bug_id: str) -> tuple[str, Path]:
+    name = f"{bug_id.strip().upper()}-close-sync-{_today_compact()}"
+    branch = f"chore/{name}"
+    return branch, _default_worktree_root() / name
+
+
+def _maybe_create_registry_worktree(
+    *,
+    title: str,
+    module: str,
+    severity: str,
+    create: bool,
+    dry_run: bool,
+) -> dict[str, Any]:
+    branch, worktree = _registry_worktree_names(title=title, module=module, severity=severity)
+    plan = {
+        "create_worktree": create,
+        "dry_run": dry_run,
+        "branch": branch,
+        "worktree": str(worktree),
+        "base": "origin/main",
+    }
+    if not create or dry_run:
+        return plan
+    if worktree.exists():
+        raise WorkflowError(f"target registry worktree already exists: {worktree}")
+    _git(["fetch", "origin", "main"])
+    _git_worktree_add_new_branch(worktree=worktree, branch=branch)
+    plan["created"] = True
+    return plan
+
+
+def _git_worktree_add_new_branch(*, worktree: Path, branch: str, base: str = "origin/main") -> None:
+    # Keep options before the path; some Git versions otherwise infer `main` from origin/main in linked worktrees.
+    _git(["worktree", "add", "-b", branch, str(worktree), base])
+
+
+def _maybe_create_close_sync_worktree(*, bug_id: str, create: bool, dry_run: bool) -> dict[str, Any]:
+    branch, worktree = _close_sync_worktree_names(bug_id=bug_id)
+    plan = {
+        "create_worktree": create,
+        "dry_run": dry_run,
+        "branch": branch,
+        "worktree": str(worktree),
+        "base": "origin/main",
+    }
+    if not create or dry_run:
+        return plan
+    if worktree.exists():
+        raise WorkflowError(f"target close-sync worktree already exists: {worktree}")
+    _git(["fetch", "origin", "main"])
+    _git_worktree_add_new_branch(worktree=worktree, branch=branch)
+    plan["created"] = True
+    return plan
+
+
+def _validate_registry_apply_target(target_root: Path) -> dict[str, Any]:
+    target = target_root.resolve()
+    canonical = _canonical_root().resolve()
+    git = _git_snapshot(target_root)
+    blocking: list[str] = []
+    warnings: list[str] = []
+
+    if not git.get("ok"):
+        blocking.append(str(git.get("error") or f"not a git checkout: {target_root}"))
+    if target == canonical:
+        blocking.append(
+            "refusing to write BUG registry files in canonical root; use a task/registry worktree and branch"
+        )
+    if git.get("branch") == "main":
+        blocking.append("refusing to write BUG registry files on main; use a task/registry branch")
+    if git.get("dirty"):
+        blocking.append(f"registry target is dirty ({git.get('dirty_count')} file(s)); start from a clean task worktree")
+    if (
+        target_root.name.lower() == "aistock"
+        and not _is_inside(target_root, _default_worktree_root())
+        and target != canonical
+    ):
+        warnings.append("registry target does not look like an isolated AIstock worktree")
+
+    return {
+        "target_root": str(target),
+        "canonical_root": str(canonical),
+        "git": git,
+        "blocking": blocking,
+        "warnings": warnings,
+    }
+
+
+def _validate_close_sync_apply_target(target_root: Path) -> dict[str, Any]:
+    guard = _validate_registry_apply_target(target_root)
+    blocking = list(guard.get("blocking") or [])
+    if blocking:
+        guard["blocking"] = [
+            item.replace("write BUG registry files", "close-sync BUG registry files")
+            for item in blocking
+        ]
+        guard["next_command_hint"] = (
+            "Run close-sync from a clean registry/task worktree, or rerun with "
+            "--create-registry-worktree so the wrapper creates an isolated branch."
+        )
+    return guard
+
+
+def _dirty_files(root: Path) -> list[str]:
+    status = _run_command(["git", "status", "--porcelain=v1"], cwd=root)
+    if not status.get("ok"):
+        return []
+    files: list[str] = []
+    for line in str(status.get("stdout") or "").splitlines():
+        if not line.strip():
+            continue
+        path = _parse_git_porcelain_path(line)
+        if path:
+            files.append(path)
+    return files
+
+
+def _origin_equivalent_dirty_files(root: Path, files: list[str]) -> list[str]:
+    equivalent: list[str] = []
+    for rel in files:
+        if not rel:
+            continue
+        if _run_command(["git", "diff", "--quiet", "origin/main", "--", rel], cwd=root).get("ok"):
+            equivalent.append(rel)
+    return equivalent
 
 
 def _github_issue_number_from_url(url: str) -> int | None:
     match = re.search(r"/issues/(\d+)(?:$|[?#])", url.strip())
     return int(match.group(1)) if match else None
+
+
+def _is_inside(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _canonical_root() -> Path:
+    override = os.environ.get("AISTOCK_CANONICAL_ROOT") or os.environ.get("AISTOCK_ROOT")
+    if override:
+        return Path(override)
+    default = Path("F:/Dev/AIstock")
+    return default if default.exists() else REPO_ROOT
+
+
+def _git_snapshot(root: Path) -> dict[str, Any]:
+    if not (root / ".git").exists() and not (root / ".git").is_file():
+        return {"ok": False, "error": f"not a git checkout: {root}"}
+    status = _run_command(["git", "status", "--porcelain=v1", "-b"], cwd=root)
+    branch = _run_command(["git", "branch", "--show-current"], cwd=root)
+    head = _run_command(["git", "rev-parse", "--short", "HEAD"], cwd=root)
+    upstream = _run_command(["git", "rev-parse", "--short", "@{u}"], cwd=root)
+    origin_main = _run_command(["git", "rev-parse", "--short", "origin/main"], cwd=root)
+    porcelain = status.get("stdout", "")
+    dirty_lines = [line for line in porcelain.splitlines()[1:] if line.strip()]
+    return {
+        "ok": bool(status.get("ok")),
+        "branch": branch.get("stdout"),
+        "head": head.get("stdout"),
+        "upstream": upstream.get("stdout"),
+        "origin_main": origin_main.get("stdout"),
+        "status": porcelain,
+        "dirty": bool(dirty_lines),
+        "dirty_count": len(dirty_lines),
+    }
+
+
+def _parse_worktree_list() -> list[dict[str, str]]:
+    result = _run_command(["git", "worktree", "list", "--porcelain"], cwd=REPO_ROOT, timeout=30)
+    if not result.get("ok"):
+        return []
+    items: list[dict[str, str]] = []
+    current: dict[str, str] = {}
+    for line in str(result.get("stdout") or "").splitlines():
+        if not line.strip():
+            if current:
+                items.append(current)
+                current = {}
+            continue
+        key, _, value = line.partition(" ")
+        current[key] = value
+    if current:
+        items.append(current)
+    return items
+
+
+def _branch_for_path(path: Path) -> str | None:
+    target = str(path.resolve()).replace("\\", "/").lower()
+    for item in _parse_worktree_list():
+        worktree = item.get("worktree")
+        if worktree and str(Path(worktree).resolve()).replace("\\", "/").lower() == target:
+            branch_ref = item.get("branch") or ""
+            return branch_ref.removeprefix("refs/heads/") or None
+    return None
+
+
+def _state_is_active(state: dict[str, Any]) -> bool:
+    value = str(state.get("state") or "")
+    if not value:
+        return False
+    if state.get("planned_worktree") and not state.get("worktree"):
+        return False
+    if value in TERMINAL_WORKFLOW_STATES:
+        return False
+    return value in ACTIVE_WORKFLOW_STATES or value not in {"fixed", "verified", "wontfix"}
+
+
+def _active_workflows_for_bug(bug_id: str) -> list[dict[str, Any]]:
+    canonical_bug_id = bug_id.strip().upper()
+    active: list[dict[str, Any]] = []
+    for root in _state_roots_for_bug(canonical_bug_id):
+        state = _load_state(canonical_bug_id, root)
+        if not state or not _state_is_active(state):
+            continue
+        worktree = Path(str(state.get("worktree") or root))
+        if not worktree.is_absolute():
+            worktree = root / worktree
+        if state.get("worktree") and not worktree.exists():
+            continue
+        git = _git_snapshot(worktree) if worktree.exists() else {"ok": False, "error": f"workflow worktree missing: {worktree}"}
+        active.append(
+            {
+                "bug_id": canonical_bug_id,
+                "root": str(root),
+                "worktree": str(worktree),
+                "branch": state.get("branch") or git.get("branch") or _branch_for_path(worktree),
+                "state": state.get("state"),
+                "state_path": _repo_rel(_state_path(canonical_bug_id, root), root),
+                "dirty": bool(git.get("dirty")),
+                "dirty_count": git.get("dirty_count"),
+                "git": git,
+                "next_command": _next_command_for_state(canonical_bug_id, state),
+            }
+        )
+    return active
+
+
+def _active_worktree_decision(
+    *,
+    bug_id: str,
+    create_worktree: bool,
+    force_new_worktree: bool,
+    force_reason: str | None,
+) -> dict[str, Any]:
+    active = _active_workflows_for_bug(bug_id)
+    decision: dict[str, Any] = {
+        "bug_id": bug_id,
+        "create_worktree_requested": create_worktree,
+        "force_new_worktree": force_new_worktree,
+        "force_reason": force_reason,
+        "active_workflows": active,
+        "decision": "create_or_continue",
+        "workflow_gate": "ready",
+        "blocking": [],
+        "warnings": [],
+        "next_command": None,
+        "rescue_checklist": [],
+    }
+    if not create_worktree or not active:
+        return decision
+    dirty = [item for item in active if item.get("dirty")]
+    if force_new_worktree:
+        if not str(force_reason or "").strip():
+            decision["decision"] = "blocked_dirty_active" if dirty else "blocked_requires_force_reason"
+            decision["workflow_gate"] = "blocked"
+            decision["blocking"].append("--force-new-worktree requires --reason so the exception is auditable")
+            return decision
+        decision["decision"] = "force_new_worktree"
+        decision["workflow_gate"] = "warning"
+        decision["warnings"].append("active workflow exists, but --force-new-worktree was supplied with a reason")
+        return decision
+    first = active[0]
+    if dirty:
+        dirty_first = dirty[0]
+        decision["decision"] = "blocked_dirty_active"
+        decision["workflow_gate"] = "blocked"
+        decision["blocking"].append(f"active workflow worktree is dirty: {dirty_first.get('worktree')}")
+        decision["next_command"] = f"python scripts/aistock_issue_workflow.py resume --bug-id {bug_id} --worktree \"{dirty_first.get('worktree')}\""
+        decision["rescue_checklist"] = [
+            "switch_to_active_worktree",
+            "inspect_git_status_without_reset_or_clean",
+            "commit_or_stash_task_files_if_they_belong_to_this_issue",
+            "rerun_resume_and_continue_existing_workflow",
+            "use_force_new_worktree_only_with_an_audited_reason",
+        ]
+        return decision
+    decision["decision"] = "resume_existing"
+    decision["workflow_gate"] = "resume"
+    decision["next_command"] = f"python scripts/aistock_issue_workflow.py resume --bug-id {bug_id} --worktree \"{first.get('worktree')}\""
+    return decision
+
+
+def _github_issue_url(number: int | str) -> str:
+    return f"https://github.com/{GITHUB_REPO}/issues/{number}"
+
+
+def _extract_run_id_from_issue_body(body: str) -> str | None:
+    marker = re.search(r"aistock-issue-on-test-fail:(\d+)", body or "")
+    if marker:
+        return marker.group(1)
+    run_url = re.search(r"github\.com/[^/]+/[^/]+/actions/runs/(\d+)", body or "")
+    return run_url.group(1) if run_url else None
+
+
+def _load_github_issue(issue_number: int | str) -> dict[str, Any]:
+    result = _execute_checked(
+        [
+            "gh",
+            "issue",
+            "view",
+            str(issue_number),
+            "--repo",
+            GITHUB_REPO,
+            "--json",
+            "number,title,state,body,url,labels,createdAt,updatedAt",
+        ],
+        cwd=REPO_ROOT,
+        timeout=60,
+    )
+    try:
+        payload = json.loads(str(result.get("stdout") or "{}"))
+    except json.JSONDecodeError as exc:
+        raise WorkflowError(f"cannot parse GitHub issue #{issue_number}: {exc}") from exc
+    if not payload.get("number"):
+        raise WorkflowError(f"GitHub issue not found or unreadable: {issue_number}")
+    return payload
+
+
+def _stale_pr_check_for_bug(bug_id: str) -> dict[str, Any]:
+    if not (REPO_ROOT / ".git").exists():
+        return {"status": "skipped_no_git_checkout", "open_prs": [], "merged_prs": []}
+    result_open = _run_command(
+        [
+            "gh",
+            "pr",
+            "list",
+            "--repo",
+            GITHUB_REPO,
+            "--state",
+            "open",
+            "--search",
+            f"{bug_id} in:title,body",
+            "--json",
+            "number,title,url,headRefName",
+            "--limit",
+            "20",
+        ],
+        cwd=REPO_ROOT,
+        timeout=20,
+    )
+    result_merged = _run_command(
+        [
+            "gh",
+            "pr",
+            "list",
+            "--repo",
+            GITHUB_REPO,
+            "--state",
+            "merged",
+            "--search",
+            f"{bug_id} in:title,body",
+            "--json",
+            "number,title,url,headRefName,mergedAt",
+            "--limit",
+            "20",
+        ],
+        cwd=REPO_ROOT,
+        timeout=20,
+    )
+    if not result_open.get("ok") and not result_merged.get("ok"):
+        return {
+            "status": "unavailable",
+            "open_prs": [],
+            "merged_prs": [],
+            "error": result_open.get("stderr") or result_merged.get("stderr") or "gh pr list failed",
+        }
+
+    def parse(result: dict[str, Any]) -> list[dict[str, Any]]:
+        if not result.get("ok"):
+            return []
+        try:
+            data = json.loads(str(result.get("stdout") or "[]"))
+        except json.JSONDecodeError:
+            return []
+        return data if isinstance(data, list) else []
+
+    open_prs = parse(result_open)
+    merged_prs = parse(result_merged)
+    cleanup_needed = bool(open_prs and merged_prs)
+    return {
+        "status": "cleanup_recommended" if cleanup_needed else "checked",
+        "open_prs": open_prs,
+        "merged_prs": merged_prs,
+        "cleanup_plan": [
+            "inspect open registry-only PRs for this BUG",
+            "close stale registry-only PR if a merged fix PR already resolved the BUG",
+        ] if cleanup_needed else [],
+    }
+
+
+def _find_bug_by_github_issue(issue_number: int | str) -> tuple[dict[str, Any], Path] | None:
+    target = int(issue_number)
+    for path in _bug_files():
+        record = _load_json(path)
+        if int(record.get("github_issue_number") or 0) == target:
+            return record, path
+    return None
 
 
 def find_bug_record(bug_id: str | None = None, issue_json: str | None = None) -> tuple[dict[str, Any], Path]:
@@ -319,72 +1305,118 @@ def build_submit_bug_plan(
     github_issue_url: str | None,
     create_github: bool,
     apply: bool,
+    allow_current_worktree: bool = False,
+    create_registry_worktree: bool = False,
+    registry_pr_only: bool = False,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
-    canonical_bug_id = (bug_id or "").strip().upper() or None
-    allocated_number: int | None = None
-    if not canonical_bug_id:
-        canonical_bug_id, allocated_number = _next_bug_id()
-    else:
-        match = re.fullmatch(r"BUG-(\d{3,})", canonical_bug_id)
-        if not match:
-            raise WorkflowError("--bug-id must match BUG-NNN when provided")
-        allocated_number = int(match.group(1))
-
-    event_args = argparse.Namespace(
-        source="manual",
-        source_json=None,
+    effective_apply = apply and not dry_run
+    if effective_apply and not create_github and not (github_issue_number and github_issue_url):
+        raise WorkflowError("--apply requires --create-github or existing --github-issue-number and --github-issue-url")
+    registry_worktree_plan = _maybe_create_registry_worktree(
         title=title,
         module=module,
-        severity_guess=severity,
-        actual=actual or description or title,
-        plan_key=plan_key,
-        nox_session=nox_session,
-        reproduce_command=reproduce_command,
-        evidence_ref=evidence_refs,
-        changed_file=changed_files,
+        severity=severity,
+        create=create_registry_worktree,
+        dry_run=dry_run or not apply,
     )
-    event = flow.build_failure_event(event_args)
-    candidate = flow.candidate_from_event(
-        event,
-        title=title,
-        candidate_type=candidate_type,
-        expected=expected,
-        actual=actual or description,
+    registry_root = (
+        Path(registry_worktree_plan["worktree"])
+        if create_registry_worktree
+        else _registry_target_root()
     )
-    record = flow.promote_candidate_to_bug(
-        candidate,
-        bug_id=canonical_bug_id,
-        github_issue_number=github_issue_number,
-        github_issue_url=github_issue_url,
-    )
-    now = _utc_now()
-    record.setdefault("created_at", now)
-    record.setdefault("first_seen_at", now)
-    record.setdefault("last_seen_at", now)
-    record.setdefault("assigned_agent", None)
-    record.setdefault("fix_branch", None)
-    record.setdefault("fix_commit", None)
-    record.setdefault("verification_run_id", None)
-    record.setdefault("github_issue_number", None)
-    record.setdefault("github_issue_url", None)
-    record.setdefault("fixed_at", None)
-    record.setdefault("closed_at", None)
-    record.setdefault("production_ddl_gate", "noop")
-    record.setdefault("production_frontend_dependency_gate", "noop")
-    record.setdefault("production_backend_dependency_gate", "noop")
+    allocation_root = registry_root if registry_root.exists() else _registry_target_root()
+    registry_guard = _validate_registry_apply_target(registry_root) if effective_apply else None
+    if registry_guard and registry_guard["blocking"] and not allow_current_worktree:
+        raise WorkflowError("; ".join(registry_guard["blocking"]))
+    reservation_path: Path | None = None
+    include_github_scan = create_github or bool(github_issue_number and github_issue_url)
+    canonical_bug_id: str
+    allocated_number: int
+    allocation_report: dict[str, Any]
+    try:
+        if effective_apply:
+            canonical_bug_id, allocated_number, allocation_report, reservation_path = _reserve_bug_id(
+                allocation_root,
+                bug_id=bug_id,
+                include_github=include_github_scan,
+                github_required=create_github,
+                allowed_github_issue_number=github_issue_number,
+            )
+        else:
+            allocation_report = _bug_id_allocation_report(
+                allocation_root,
+                include_github=include_github_scan,
+                github_required=False,
+            )
+            canonical_bug_id = (bug_id or "").strip().upper() or f"BUG-{int(allocation_report['next_number']):03d}"
+            number = _bug_id_number(canonical_bug_id)
+            if not number or not re.fullmatch(r"BUG-\d{3,}", canonical_bug_id):
+                raise WorkflowError("--bug-id must match BUG-NNN when provided")
+            duplicates = _duplicate_bug_id_sources(
+                allocation_report,
+                canonical_bug_id,
+                allowed_github_issue_number=github_issue_number,
+            )
+            if duplicates:
+                detail = "; ".join(f"{item.get('kind')}:{item.get('source')}" for item in duplicates[:5])
+                raise WorkflowError(f"{canonical_bug_id} already exists in global BUG id scan: {detail}")
+            allocated_number = number
 
-    output_dir = REPO_ROOT / WORKFLOW_ROOT / canonical_bug_id
-    candidate_path = output_dir / "candidate.json"
-    github_body_path = output_dir / "github-issue-body.md"
-    bug_path = _bug_json_path(record)
-    github_result: dict[str, Any] | None = None
+        event_args = argparse.Namespace(
+            source="manual",
+            source_json=None,
+            title=title,
+            module=module,
+            severity_guess=severity,
+            actual=actual or description or title,
+            plan_key=plan_key,
+            nox_session=nox_session,
+            reproduce_command=reproduce_command,
+            evidence_ref=evidence_refs,
+            changed_file=changed_files,
+        )
+        event = flow.build_failure_event(event_args)
+        candidate = flow.candidate_from_event(
+            event,
+            title=title,
+            candidate_type=candidate_type,
+            expected=expected,
+            actual=actual or description,
+        )
+        record = flow.promote_candidate_to_bug(
+            candidate,
+            bug_id=canonical_bug_id,
+            github_issue_number=github_issue_number,
+            github_issue_url=github_issue_url,
+        )
+        now = _utc_now()
+        record.setdefault("created_at", now)
+        record.setdefault("first_seen_at", now)
+        record.setdefault("last_seen_at", now)
+        record.setdefault("assigned_agent", None)
+        record.setdefault("fix_branch", None)
+        record.setdefault("fix_commit", None)
+        record.setdefault("verification_run_id", None)
+        record.setdefault("github_issue_number", None)
+        record.setdefault("github_issue_url", None)
+        record.setdefault("fixed_at", None)
+        record.setdefault("closed_at", None)
+        record.setdefault("production_ddl_gate", "noop")
+        record.setdefault("production_frontend_dependency_gate", "noop")
+        record.setdefault("production_backend_dependency_gate", "noop")
 
-    if apply and bug_path.exists():
-        raise WorkflowError(f"BUG JSON already exists: {bug_path}")
+        output_dir = registry_root / WORKFLOW_ROOT / canonical_bug_id
+        candidate_path = output_dir / "candidate.json"
+        github_body_path = output_dir / "github-issue-body.md"
+        bug_path = _bug_json_path(record, registry_root)
+        github_result: dict[str, Any] | None = None
 
-    if create_github and not record.get("github_issue_url"):
-        _write_text(github_body_path, _render_github_issue_body(record, candidate))
-        if apply:
+        if effective_apply and bug_path.exists():
+            raise WorkflowError(f"BUG JSON already exists: {bug_path}")
+
+        if create_github and not record.get("github_issue_url") and effective_apply:
+            _write_text(github_body_path, _render_github_issue_body(record, candidate))
             github_title = f"{canonical_bug_id} {severity}: {title}"
             result = _execute_checked(
                 [
@@ -398,7 +1430,7 @@ def build_submit_bug_plan(
                     "--body-file",
                     str(github_body_path),
                 ],
-                cwd=REPO_ROOT,
+                cwd=registry_root,
                 timeout=120,
             )
             issue_url = str(result.get("stdout") or "").splitlines()[-1].strip()
@@ -408,52 +1440,106 @@ def build_submit_bug_plan(
             record["github_issue_url"] = issue_url
             record["github_issue_number"] = issue_number
             github_result = {"created": True, "url": issue_url, "number": issue_number}
-        else:
-            github_result = {"created": False, "planned": True, "body_path": _repo_rel(github_body_path)}
+        elif create_github and not record.get("github_issue_url"):
+            github_result = {"created": False, "planned": True, "body_path": _repo_rel(github_body_path, registry_root)}
 
-    has_linkage = bool(record.get("github_issue_number") and record.get("github_issue_url"))
-    if apply and not has_linkage:
-        raise WorkflowError("--apply requires --create-github or existing --github-issue-number and --github-issue-url")
+        has_linkage = bool(record.get("github_issue_number") and record.get("github_issue_url"))
+        if effective_apply and not has_linkage:
+            raise WorkflowError("--apply requires --create-github or existing --github-issue-number and --github-issue-url")
 
-    payload = {
+        payload = {
         "schema_version": "aistock_issue_workflow_submit_bug_v1",
         "generated_at": now,
         "bug_id": canonical_bug_id,
         "candidate_id": candidate.get("candidate_id"),
-        "dry_run": not apply,
-        "workflow_gate": "submitted" if apply else ("ready_for_apply" if has_linkage or create_github else "needs_github_sync"),
-        "candidate_path": _repo_rel(candidate_path),
-        "github_issue_body_path": _repo_rel(github_body_path),
-        "bug_json_path": _repo_rel(bug_path),
+        "dry_run": not effective_apply,
+        "workflow_gate": "submitted" if effective_apply else ("ready_for_apply" if has_linkage or create_github else "needs_github_sync"),
+        "registry_root": str(registry_root),
+        "registry_guard": registry_guard or (
+            {
+                "target_root": str(registry_root),
+                "canonical_root": str(_canonical_root().resolve()),
+                "blocking": [],
+                "warnings": ["registry worktree will be created on apply"],
+                "planned": True,
+            }
+            if create_registry_worktree and not registry_root.exists()
+            else _validate_registry_apply_target(registry_root)
+        ),
+        "registry_worktree_plan": registry_worktree_plan,
+        "candidate_path": _repo_rel(candidate_path, registry_root),
+        "github_issue_body_path": _repo_rel(github_body_path, registry_root),
+        "bug_json_path": _repo_rel(bug_path, registry_root),
         "github": github_result or {
             "created": False,
             "number": record.get("github_issue_number"),
             "url": record.get("github_issue_url"),
         },
         "record": record,
-        "next_command": f"python scripts/aistock_issue_workflow.py run --bug-id {canonical_bug_id} --mode plan --create-worktree"
-        if apply
-        else f"python scripts/aistock_issue_workflow.py submit-bug --title \"{title}\" --module {module} --severity {severity} --create-github --apply",
-    }
-
-    if apply:
-        _write_json(candidate_path, {"event": event, "candidate": candidate})
-        _write_text(github_body_path, _render_github_issue_body(record, candidate))
-        _write_json(bug_path, record)
-        if bug_id is None:
-            _write_allocator(int(allocated_number or canonical_bug_id.split("-")[1]))
-        _write_state(
-            canonical_bug_id,
-            state="discovered",
-            source_bug_json=_repo_rel(bug_path),
-            candidate_path=_repo_rel(candidate_path),
-            github_issue_number=record.get("github_issue_number"),
-            github_issue_url=record.get("github_issue_url"),
-            next_actions=["run_issue_workflow_plan", "create_worktree", "read_context_pack"],
+        "registry_pr_only": registry_pr_only,
+        "stale_pr_check": _stale_pr_check_for_bug(canonical_bug_id) if effective_apply else {"status": "not_applicable_before_apply"},
+        "bug_id_allocation": {
+            "allocator_root": str(allocation_root),
+            "global_max_number": allocation_report.get("max_number"),
+            "github_scanned": allocation_report.get("github_scanned"),
+            "warnings": allocation_report.get("warnings", []),
+            "reservation_path": str(reservation_path) if reservation_path else None,
+        },
+        "next_agent_steps": [
+            "switch_to_registry_worktree",
+            "commit_registry_only_pr_without_fix" if registry_pr_only else "continue_fix_in_same_task_branch",
+            "do_not_write_bug_json_in_canonical_root",
+        ] if effective_apply else [
+            "create_or_switch_to_clean_registry_worktree",
+            "rerun_submit_bug_with_github_linkage",
+        ],
+        "next_command": (
+            f"cd /d {registry_root} && git status --short && git add tests/aistock_validation/bugs tmp/issue_workflow "
+            f"&& git commit -m \"chore(issue): register {canonical_bug_id}\""
+            if registry_pr_only
+            else (
+                f"cd /d {registry_root} && python scripts/aistock_issue_workflow.py run "
+                f"--bug-id {canonical_bug_id} --mode plan"
+            )
         )
-        payload["state_path"] = _repo_rel(_state_path(canonical_bug_id))
-        payload["events_path"] = _repo_rel(_events_path(canonical_bug_id))
-    return payload
+        if effective_apply
+        else (
+            f"python scripts/aistock_issue_workflow.py submit-bug --title \"{title}\" --module {module} "
+            f"--severity {severity} --create-github --create-registry-worktree --apply"
+        ),
+        }
+
+        if effective_apply:
+            _write_json(candidate_path, {"event": event, "candidate": candidate})
+            _write_text(github_body_path, _render_github_issue_body(record, candidate))
+            _write_json(bug_path, record)
+            _write_allocator(allocated_number, registry_root)
+            _write_state(
+                canonical_bug_id,
+                state="discovered",
+                root=registry_root,
+                source_bug_json=_repo_rel(bug_path, registry_root),
+                candidate_path=_repo_rel(candidate_path, registry_root),
+                github_issue_number=record.get("github_issue_number"),
+                github_issue_url=record.get("github_issue_url"),
+                next_actions=["run_issue_workflow_plan", "create_worktree", "read_context_pack"],
+            )
+            payload["state_path"] = _repo_rel(_state_path(canonical_bug_id, registry_root), registry_root)
+            payload["events_path"] = _repo_rel(_events_path(canonical_bug_id, registry_root), registry_root)
+            payload["fix_chain"] = {
+                "registry_pr_required": registry_pr_only,
+                "continue_to_fix_in_same_workflow": not registry_pr_only,
+                "run_next_command": payload["next_command"],
+                "note": (
+                    "User explicitly requested registry-only tracking; stop after the registry PR."
+                    if registry_pr_only
+                    else "BUG registration now seeds workflow state so the same branch/worktree can continue to fix unless the user explicitly asks for a registry-only PR."
+                ),
+            }
+        return payload
+    except Exception:
+        _release_bug_id_reservation(reservation_path)
+        raise
 
 
 def _require_github_linkage(record: dict[str, Any], *, allow_missing: bool = False) -> list[str]:
@@ -509,9 +1595,16 @@ def _maybe_create_worktree(
     if worktree.exists():
         raise WorkflowError(f"target worktree already exists: {worktree}")
     _git(["fetch", "origin", "main"])
-    _git(["worktree", "add", str(worktree), "-b", branch, "origin/main"])
+    _git_worktree_add_new_branch(worktree=worktree, branch=branch)
     plan["created"] = True
     return plan
+
+
+def _actual_and_planned_worktree(worktree_plan: dict[str, Any]) -> tuple[str | None, str | None]:
+    worktree = str(worktree_plan.get("worktree") or "").strip() or None
+    if worktree_plan.get("created"):
+        return worktree, None
+    return None, worktree
 
 
 def _maybe_create_named_worktree(
@@ -533,7 +1626,7 @@ def _maybe_create_named_worktree(
     if worktree.exists():
         raise WorkflowError(f"target worktree already exists: {worktree}")
     _git(["fetch", "origin", "main"])
-    _git(["worktree", "add", str(worktree), "-b", branch, "origin/main"])
+    _git_worktree_add_new_branch(worktree=worktree, branch=branch)
     plan["created"] = True
     return plan
 
@@ -546,6 +1639,69 @@ def _bug_path_for_target(original_path: Path, target_root: Path) -> Path:
         return original_path
 
 
+def _issue_query(record: dict[str, Any], changed_files: list[str] | None = None) -> str:
+    parts = [
+        str(record.get("bug_id") or record.get("candidate_id") or "AIstock issue"),
+        str(record.get("title") or ""),
+        str(record.get("module") or record.get("module_guess") or ""),
+        str(record.get("description") or record.get("actual") or ""),
+    ]
+    if changed_files:
+        parts.extend(changed_files[:8])
+    return " ".join(part for part in parts if part).strip() or "AIstock issue"
+
+
+def _build_code_intelligence_summary(
+    *,
+    item_id: str,
+    record: dict[str, Any],
+    changed_files: list[str] | None,
+    root: Path,
+) -> dict[str, Any]:
+    return code_intelligence.build_summary(
+        item_id=item_id,
+        query=_issue_query(record, changed_files),
+        changed_files=changed_files or [],
+        root=root,
+        skip_external=False,
+    )
+
+
+def _batch_code_intelligence_query(records: list[dict[str, Any]], changed_files: list[str] | None = None) -> str:
+    parts = ["AIstock batch issue"]
+    parts.extend(
+        " ".join(
+            str(value)
+            for value in (
+                record.get("bug_id"),
+                record.get("title"),
+                record.get("module"),
+                record.get("description") or record.get("actual"),
+            )
+            if value
+        )
+        for record in records
+    )
+    if changed_files:
+        parts.extend(changed_files[:12])
+    return " ".join(part for part in parts if part).strip() or "AIstock batch issue"
+
+
+def _build_batch_code_intelligence_summary(
+    *,
+    batch_id: str,
+    records: list[dict[str, Any]],
+    changed_files: list[str] | None,
+    root: Path,
+) -> dict[str, Any]:
+    return code_intelligence.build_summary(
+        item_id=batch_id,
+        query=_batch_code_intelligence_query(records, changed_files),
+        changed_files=changed_files or [],
+        root=root,
+        skip_external=False,
+    )
+
 def build_start_plan(
     *,
     bug_id: str | None,
@@ -556,6 +1712,7 @@ def build_start_plan(
     task_slug: str | None,
     allow_missing_linkage: bool,
     allow_closed: bool,
+    active_decision: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     record, source_path = find_bug_record(bug_id=bug_id, issue_json=issue_json)
     canonical_bug_id = str(record.get("bug_id") or bug_id or source_path.stem).upper()
@@ -568,11 +1725,30 @@ def build_start_plan(
         dry_run=dry_run,
         task_slug=task_slug,
     )
-    target_root = Path(worktree_plan["worktree"]) if create_worktree and not dry_run else REPO_ROOT
+    actual_worktree, planned_worktree = _actual_and_planned_worktree(worktree_plan)
+    actual_branch = worktree_plan.get("branch") if actual_worktree else None
+    planned_branch = worktree_plan.get("branch") if planned_worktree else None
+    target_root = Path(actual_worktree) if actual_worktree else REPO_ROOT
     target_bug_path = _bug_path_for_target(source_path, target_root)
     output_dir = target_root / WORKFLOW_ROOT / canonical_bug_id
     fix_ready = flow.build_fix_ready(record, changed_files)
     context_pack = flow.build_context_pack(record, changed_files)
+    code_intelligence_summary = _build_code_intelligence_summary(
+        item_id=canonical_bug_id,
+        record=record,
+        changed_files=changed_files,
+        root=target_root,
+    )
+    context_pack["code_intelligence"] = {
+        "provider": code_intelligence_summary.get("provider"),
+        "status": code_intelligence_summary.get("status"),
+        "context_ref": code_intelligence_summary.get("context_ref"),
+        "manifest_ref": code_intelligence_summary.get("manifest_ref"),
+        "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
+        "fallback_used": code_intelligence_summary.get("fallback_used"),
+        "understand_anything": code_intelligence_summary.get("understand_anything"),
+    }
+    fix_ready["code_intelligence"] = context_pack["code_intelligence"]
     fix_ready_path = output_dir / "fix-ready.json"
     context_json_path = output_dir / "context-pack.json"
     context_md_path = output_dir / "context-pack.md"
@@ -580,12 +1756,19 @@ def build_start_plan(
         _write_json(fix_ready_path, fix_ready)
         _write_json(context_json_path, context_pack)
         _write_text(context_md_path, flow.render_context_pack_markdown(context_pack))
+        context_metrics = {
+            "context_pack_md": _size_and_token_estimate(context_md_path),
+            "context_pack_json": _size_and_token_estimate(context_json_path),
+            "fix_ready_json": _size_and_token_estimate(fix_ready_path),
+        }
         _write_state(
             canonical_bug_id,
             state="context_ready",
             root=target_root,
-            branch=worktree_plan.get("branch"),
-            worktree=worktree_plan.get("worktree"),
+            branch=actual_branch,
+            planned_branch=planned_branch,
+            worktree=actual_worktree,
+            planned_worktree=planned_worktree,
             base=worktree_plan.get("base"),
             source_bug_json=_repo_rel(source_path),
             target_bug_json=_repo_rel(target_bug_path, target_root),
@@ -595,6 +1778,9 @@ def build_start_plan(
             github_issue_number=record.get("github_issue_number"),
             github_issue_url=record.get("github_issue_url"),
             production_gates=fix_ready.get("validation_selection", {}).get("production_gates", {}),
+            code_intelligence=context_pack.get("code_intelligence"),
+            active_decision=active_decision,
+            context_metrics=context_metrics,
             next_actions=[
                 "switch_to_worktree_if_created",
                 "read_context_pack_md",
@@ -602,6 +1788,12 @@ def build_start_plan(
                 "run_finish_plan_before_reporting_done",
             ],
         )
+    else:
+        context_metrics = {
+            "context_pack_md": {"path": str(context_md_path), "exists": False, "bytes": 0, "estimated_tokens": 0},
+            "context_pack_json": {"path": str(context_json_path), "exists": False, "bytes": 0, "estimated_tokens": 0},
+            "fix_ready_json": {"path": str(fix_ready_path), "exists": False, "bytes": 0, "estimated_tokens": 0},
+        }
     return {
         "schema_version": "aistock_issue_workflow_start_v1",
         "generated_at": _utc_now(),
@@ -623,6 +1815,9 @@ def build_start_plan(
         "required_verification": fix_ready.get("required_verification") or [],
         "recommended_verification": fix_ready.get("recommended_verification") or [],
         "production_gates": fix_ready.get("validation_selection", {}).get("production_gates", {}),
+        "code_intelligence": context_pack.get("code_intelligence"),
+        "active_decision": active_decision,
+        "context_metrics": context_metrics,
         "next_agent_steps": [
             "switch_to_worktree_if_created",
             "read_context_pack_md",
@@ -648,6 +1843,15 @@ def build_finish_plan(
     changed = changed_files if changed_files is not None else flow.changed_files_from_git(base, head)
     validation = flow.select_validation(changed, module=record.get("module"))
     pr_quality = flow.build_pr_quality(base=base, head=head, issue_record=record, changed_files=changed)
+    code_intelligence_summary = _build_code_intelligence_summary(
+        item_id=canonical_bug_id,
+        record=record,
+        changed_files=changed,
+        root=REPO_ROOT,
+    )
+    codegraph_tests = code_intelligence_summary.get("affected_tests", {}).get("suggested_tests") or []
+    if codegraph_tests:
+        validation["codegraph_suggested_tests"] = codegraph_tests
     evidence = [item for item in validation_evidence if item.strip()]
     closure_ready = bool(evidence) or plan_only or allow_missing_evidence
     output_dir = REPO_ROOT / WORKFLOW_ROOT / canonical_bug_id
@@ -660,6 +1864,7 @@ def build_finish_plan(
         "pr_quality": pr_quality,
         "validation_evidence": evidence,
         "closure_ready": closure_ready,
+        "code_intelligence": code_intelligence_summary,
     })
     _write_text(pr_body_path, pr_body)
     next_state = "validation_passed" if evidence else ("validation_planned" if plan_only else "blocked")
@@ -670,6 +1875,12 @@ def build_finish_plan(
         validation_evidence=evidence,
         pr_body_path=_repo_rel(pr_body_path),
         production_gates=validation.get("production_gates") or {},
+        code_intelligence={
+            "status": code_intelligence_summary.get("status"),
+            "context_ref": code_intelligence_summary.get("context_ref"),
+            "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
+            "fallback_used": code_intelligence_summary.get("fallback_used"),
+        },
         stop_reason=None if closure_ready else "validation_evidence_missing",
         next_actions=[
             "commit_only_task_files",
@@ -688,13 +1899,26 @@ def build_finish_plan(
         "recommended_verification": validation.get("recommended_plans") or [],
         "production_gates": validation.get("production_gates") or {},
         "scope_check": pr_quality.get("scope_check"),
+        "code_intelligence": {
+            "status": code_intelligence_summary.get("status"),
+            "context_ref": code_intelligence_summary.get("context_ref"),
+            "manifest_ref": code_intelligence_summary.get("manifest_ref"),
+            "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
+            "fallback_used": code_intelligence_summary.get("fallback_used"),
+        },
+        "codegraph_suggested_tests": codegraph_tests,
         "validation_evidence": evidence,
         "closure_ready": closure_ready,
         "workflow_gate": "ready_for_pr" if closure_ready else "validation_evidence_missing",
         "pr_body_path": _repo_rel(pr_body_path),
         "state_path": _repo_rel(_state_path(canonical_bug_id)),
         "events_path": _repo_rel(_events_path(canonical_bug_id)),
+        "artifact_metrics": {
+            "pr_body": _size_and_token_estimate(pr_body_path),
+            "finish_plan": _size_and_token_estimate(output_dir / "finish-plan.json"),
+        },
     }
+    payload["pre_pr_gate"] = _pre_pr_gate(finish=payload, validation_evidence=evidence, root=REPO_ROOT, run_lint=False)
     if not closure_ready:
         payload["error"] = "validation evidence is required unless --plan-only or --allow-missing-evidence is used"
     return payload
@@ -723,6 +1947,9 @@ def render_pr_body(
         "",
         "## Required validation",
         *[f"- `{plan}`" for plan in validation.get("required_plans") or ["l0"]],
+        "",
+        "## Code intelligence",
+        *[f"- CodeGraph suggested test: `{path}`" for path in validation.get("codegraph_suggested_tests") or ["none"]],
         "",
         "## Evidence",
         *[f"- {item}" for item in evidence or ["missing - run required validation before requesting merge"]],
@@ -883,14 +2110,38 @@ def build_start_batch_plan(
     output_dir = target_root / WORKFLOW_ROOT / signature["batch_id"]
     context_dir = output_dir / "context-packs"
     fix_ready_dir = output_dir / "fix-ready"
+    code_intelligence_summary = _build_batch_code_intelligence_summary(
+        batch_id=signature["batch_id"],
+        records=records,
+        changed_files=batch_plan.get("shared_files") or [],
+        root=target_root,
+    )
+    batch_code_intelligence = {
+        "provider": code_intelligence_summary.get("provider"),
+        "status": code_intelligence_summary.get("status"),
+        "context_ref": code_intelligence_summary.get("context_ref"),
+        "manifest_ref": code_intelligence_summary.get("manifest_ref"),
+        "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
+        "fallback_used": code_intelligence_summary.get("fallback_used"),
+        "understand_anything": code_intelligence_summary.get("understand_anything"),
+    }
+    batch_plan["code_intelligence"] = batch_code_intelligence
+    context_metrics: dict[str, Any] = {}
     if not dry_run:
         for record, source_path in record_pairs:
             bug_id = str(record.get("bug_id"))
             context_pack = flow.build_context_pack(record, [])
             fix_ready = flow.build_fix_ready(record, [])
+            context_pack["code_intelligence"] = batch_code_intelligence
+            fix_ready["code_intelligence"] = batch_code_intelligence
             _write_json(context_dir / f"{bug_id}.json", context_pack)
             _write_text(context_dir / f"{bug_id}.md", flow.render_context_pack_markdown(context_pack))
             _write_json(fix_ready_dir / f"{bug_id}.json", fix_ready)
+            context_metrics[bug_id] = {
+                "context_md": _size_and_token_estimate(context_dir / f"{bug_id}.md"),
+                "context_json": _size_and_token_estimate(context_dir / f"{bug_id}.json"),
+                "fix_ready_json": _size_and_token_estimate(fix_ready_dir / f"{bug_id}.json"),
+            }
             target_bug_path = _bug_path_for_target(source_path, target_root)
             batch_plan.setdefault("source_bug_json", {})[bug_id] = _repo_rel(source_path)
             batch_plan.setdefault("target_bug_json", {})[bug_id] = _repo_rel(target_bug_path, target_root)
@@ -903,6 +2154,7 @@ def build_start_batch_plan(
             "batch_plan_path": _repo_rel(output_dir / "batch-plan.json", target_root),
             "context_dir": _repo_rel(context_dir, target_root),
             "fix_ready_dir": _repo_rel(fix_ready_dir, target_root),
+            "context_metrics": context_metrics,
             "updated_at": _utc_now(),
         })
         _write_state(
@@ -920,6 +2172,8 @@ def build_start_batch_plan(
             batch_state_path=_repo_rel(output_dir / "batch-state.json", target_root),
             context_dir=_repo_rel(context_dir, target_root),
             fix_ready_dir=_repo_rel(fix_ready_dir, target_root),
+            code_intelligence=batch_code_intelligence,
+            context_metrics=context_metrics,
             next_actions=[
                 "switch_to_batch_worktree_if_created",
                 "read_each_context_pack",
@@ -939,6 +2193,8 @@ def build_start_batch_plan(
         "fix_ready_dir": _repo_rel(fix_ready_dir, target_root),
         "state_path": _repo_rel(_state_path(signature["batch_id"], target_root), target_root),
         "events_path": _repo_rel(_events_path(signature["batch_id"], target_root), target_root),
+        "code_intelligence": batch_code_intelligence,
+        "context_metrics": context_metrics,
         "workflow_gate": "ready_for_batch_fix",
         "next_command": f"python scripts/aistock_issue_workflow.py finish-batch --batch-id {signature['batch_id']} --plan-only",
     }
@@ -973,9 +2229,11 @@ def render_batch_pr_body(
     validation: dict[str, Any],
     evidence: list[str],
     commit_map: dict[str, str],
+    code_intelligence_summary: dict[str, Any],
     closure_ready: bool,
 ) -> str:
     gates = validation.get("production_gates") or {}
+    codegraph_tests = code_intelligence_summary.get("affected_tests", {}).get("suggested_tests") or []
     lines = [
         f"## {batch_id} batch issue workflow summary",
         "",
@@ -997,6 +2255,12 @@ def render_batch_pr_body(
         "",
         "## Required validation",
         *[f"- `{plan}`" for plan in validation.get("required_plans") or ["l0"]],
+        "",
+        "## Code intelligence",
+        f"- context_ref: `{code_intelligence_summary.get('context_ref') or 'not_generated'}`",
+        f"- affected_tests_ref: `{code_intelligence_summary.get('affected_tests_ref') or 'not_generated'}`",
+        f"- fallback_used: `{str(bool(code_intelligence_summary.get('fallback_used'))).lower()}`",
+        *[f"- CodeGraph suggested test: `{path}`" for path in codegraph_tests or ["none"]],
         "",
         "## Evidence",
         *[f"- {item}" for item in evidence or ["missing - run required validation before requesting merge"]],
@@ -1045,6 +2309,15 @@ def build_finish_batch_plan(
     canonical_batch_id = signature["batch_id"]
     changed = changed_files if changed_files is not None else flow.changed_files_from_git(base, head)
     validation = flow.select_validation(changed, module=signature["module"])
+    code_intelligence_summary = _build_batch_code_intelligence_summary(
+        batch_id=canonical_batch_id,
+        records=records,
+        changed_files=changed,
+        root=REPO_ROOT,
+    )
+    codegraph_tests = code_intelligence_summary.get("affected_tests", {}).get("suggested_tests") or []
+    if codegraph_tests:
+        validation["codegraph_suggested_tests"] = codegraph_tests
     evidence = [item for item in validation_evidence if item.strip()]
     closure_ready = bool(evidence) or plan_only or allow_missing_evidence
     commit_map = _parse_issue_commit_map(issue_commit)
@@ -1063,13 +2336,26 @@ def build_finish_batch_plan(
             str(record.get("bug_id")): flow._unique_strings(flow._as_list(record.get("closure_requirements")))
             for record in records
         },
+        "code_intelligence": code_intelligence_summary,
         "closure_ready": closure_ready,
         "production_gates": validation.get("production_gates") or {},
     }
     _write_json(output_dir / "finish-plan.json", finish_plan)
     if evidence:
         _write_json(output_dir / "validation-evidence.json", {"batch_id": canonical_batch_id, "items": evidence})
-    _write_text(pr_body_path, render_batch_pr_body(canonical_batch_id, records, changed, validation, evidence, commit_map, closure_ready))
+    _write_text(
+        pr_body_path,
+        render_batch_pr_body(
+            canonical_batch_id,
+            records,
+            changed,
+            validation,
+            evidence,
+            commit_map,
+            code_intelligence_summary,
+            closure_ready,
+        ),
+    )
     next_state = "validation_passed" if evidence else ("validation_planned" if plan_only else "blocked")
     _write_state(
         canonical_batch_id,
@@ -1080,6 +2366,12 @@ def build_finish_batch_plan(
         validation_evidence=evidence,
         pr_body_path=_repo_rel(pr_body_path),
         production_gates=validation.get("production_gates") or {},
+        code_intelligence={
+            "status": code_intelligence_summary.get("status"),
+            "context_ref": code_intelligence_summary.get("context_ref"),
+            "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
+            "fallback_used": code_intelligence_summary.get("fallback_used"),
+        },
         stop_reason=None if closure_ready else "validation_evidence_missing",
         next_actions=[
             "commit_only_batch_files",
@@ -1093,6 +2385,14 @@ def build_finish_batch_plan(
         "workflow_gate": "ready_for_pr" if closure_ready else "validation_evidence_missing",
         "required_verification": validation.get("required_plans") or [],
         "recommended_verification": validation.get("recommended_plans") or [],
+        "code_intelligence": {
+            "status": code_intelligence_summary.get("status"),
+            "context_ref": code_intelligence_summary.get("context_ref"),
+            "manifest_ref": code_intelligence_summary.get("manifest_ref"),
+            "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
+            "fallback_used": code_intelligence_summary.get("fallback_used"),
+        },
+        "codegraph_suggested_tests": codegraph_tests,
         "pr_body_path": _repo_rel(pr_body_path),
         "state_path": _repo_rel(_state_path(canonical_batch_id)),
         "events_path": _repo_rel(_events_path(canonical_batch_id)),
@@ -1115,36 +2415,6 @@ def _codex_home() -> Path:
     return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
 
 
-def _canonical_root() -> Path:
-    override = os.environ.get("AISTOCK_CANONICAL_ROOT") or os.environ.get("AISTOCK_ROOT")
-    if override:
-        return Path(override)
-    default = Path("F:/Dev/AIstock")
-    return default if default.exists() else REPO_ROOT
-
-
-def _git_snapshot(root: Path) -> dict[str, Any]:
-    if not (root / ".git").exists() and not (root / ".git").is_file():
-        return {"ok": False, "error": f"not a git checkout: {root}"}
-    status = _run_command(["git", "status", "--porcelain=v1", "-b"], cwd=root)
-    branch = _run_command(["git", "branch", "--show-current"], cwd=root)
-    head = _run_command(["git", "rev-parse", "--short", "HEAD"], cwd=root)
-    upstream = _run_command(["git", "rev-parse", "--short", "@{u}"], cwd=root)
-    origin_main = _run_command(["git", "rev-parse", "--short", "origin/main"], cwd=root)
-    porcelain = status.get("stdout", "")
-    dirty_lines = [line for line in porcelain.splitlines()[1:] if line.strip()]
-    return {
-        "ok": bool(status.get("ok")),
-        "branch": branch.get("stdout"),
-        "head": head.get("stdout"),
-        "upstream": upstream.get("stdout"),
-        "origin_main": origin_main.get("stdout"),
-        "status": porcelain,
-        "dirty": bool(dirty_lines),
-        "dirty_count": len(dirty_lines),
-    }
-
-
 def _mcp_config_snapshot() -> dict[str, Any]:
     candidates = [
         _codex_home() / "config.toml",
@@ -1164,6 +2434,44 @@ def _mcp_config_snapshot() -> dict[str, Any]:
                 stale_paths.append(str(path))
         files.append(item)
     return {"files": files, "stale_worktree_config_files": stale_paths}
+
+
+def _client_manifest(codex_home: Path | None = None) -> dict[str, Any]:
+    codex_home = codex_home or _codex_home()
+    repo_skill = REPO_ROOT / ".codex" / "skills" / "fix-aistock-issue"
+    global_skill = codex_home / "skills" / "fix-aistock-issue"
+    repo_claude = REPO_ROOT / ".claude" / "commands" / "fix-aistock-issue.md"
+    cli = REPO_ROOT / "scripts" / "aistock_issue_workflow.py"
+    repo_head = _run_command(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, timeout=15)
+    repo_skill_sha = _sha256_tree(repo_skill)
+    global_skill_sha = _sha256_tree(global_skill)
+    claude_sha = _sha256_file(repo_claude)
+    cli_sha = _sha256_file(cli)
+    codex_status = "missing_global"
+    if repo_skill_sha and global_skill_sha:
+        codex_status = "current" if repo_skill_sha == global_skill_sha else "stale"
+    elif repo_skill_sha and not global_skill_sha:
+        codex_status = "missing_global"
+    elif not repo_skill_sha:
+        codex_status = "missing_repo_skill"
+    return {
+        "schema_version": "aistock_issue_workflow_client_manifest_v1",
+        "repo_commit": repo_head.get("stdout") if repo_head.get("ok") else None,
+        "workflow_cli_sha256": cli_sha,
+        "codex_skill_sha256": repo_skill_sha,
+        "global_codex_skill_sha256": global_skill_sha,
+        "claude_command_sha256": claude_sha,
+        "codex_skill_status": codex_status,
+        "claude_command_status": "present" if claude_sha else "missing",
+        "paths": {
+            "repo_codex_skill": str(repo_skill),
+            "global_codex_skill": str(global_skill),
+            "claude_command": str(repo_claude),
+            "workflow_cli": str(cli),
+        },
+        "restart_recommended": codex_status != "current",
+        "install_client_next_command": f"python {REPO_ROOT / 'scripts' / 'aistock_issue_workflow.py'} install-client --apply",
+    }
 
 
 def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
@@ -1217,6 +2525,20 @@ def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
     if mcp["stale_worktree_config_files"]:
         warnings.append("MCP/Codex config mentions AIstock_worktrees; verify it is not a stale server target")
 
+    client_manifest = _client_manifest()
+    if client_manifest["codex_skill_status"] in {"stale", "missing_global"}:
+        warnings.append("global Codex issue skill is missing or stale; run install-client --apply and restart old client windows")
+    elif client_manifest["codex_skill_status"] == "missing_repo_skill":
+        blocking.append("repo Codex issue skill is missing")
+    if client_manifest["claude_command_status"] == "missing":
+        warnings.append("Claude Code issue command is missing; Claude can still call the repo CLI directly")
+
+    code_intel = code_intelligence.build_doctor_report(REPO_ROOT, skip_external=skip_external)
+    for warning in code_intel.get("warnings") or []:
+        warnings.append(f"code intelligence: {warning}")
+    for item in code_intel.get("blocking") or []:
+        blocking.append(f"code intelligence: {item}")
+
     gate = "blocked" if blocking else ("warning" if warnings else "ready")
     next_command = f"python {REPO_ROOT / 'scripts' / 'aistock_issue_workflow.py'} run --bug-id BUG-XXX --mode plan --create-worktree"
     return {
@@ -1231,6 +2553,10 @@ def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
         "canonical_git": canonical_git,
         "github": github,
         "mcp": mcp,
+        "code_intelligence": code_intel,
+        "client_manifest": client_manifest,
+        "restart_recommended": client_manifest.get("restart_recommended"),
+        "install_client_next_command": client_manifest.get("install_client_next_command"),
         "next_command": next_command,
     }
 
@@ -1267,6 +2593,7 @@ def build_client_install_plan(*, apply: bool = False, codex_home: str | None = N
         "blocking": blocking,
         "actions": actions,
         "codex_home": str(target_home),
+        "client_manifest_before": _client_manifest(target_home),
     }
     if apply:
         if blocking:
@@ -1278,6 +2605,10 @@ def build_client_install_plan(*, apply: bool = False, codex_home: str | None = N
         payload["workflow_gate"] = "installed"
         payload["dry_run"] = False
         payload["installed"] = [{"target": str(target_skill)}]
+        payload["client_manifest_after"] = _client_manifest(target_home)
+    manifest_path = REPO_ROOT / WORKFLOW_ROOT / "client-manifest.json"
+    _write_json(manifest_path, payload.get("client_manifest_after") or payload.get("client_manifest_before") or _client_manifest(target_home))
+    payload["client_manifest_path"] = _repo_rel(manifest_path)
     return payload
 
 
@@ -1310,30 +2641,332 @@ def build_resume_plan(*, bug_id: str, worktree: str | None = None, events_limit:
     if events_path.exists():
         lines = events_path.read_text(encoding="utf-8").splitlines()[-events_limit:]
         events = [json.loads(line) for line in lines if line.strip()]
+    git = _git_snapshot(root) if root.exists() else {"ok": False, "error": f"workflow root missing: {root}"}
+    dirty_stop = bool(git.get("dirty") and state.get("state") == "validation_passed")
+    state_worktree = str(state.get("worktree") or "").strip()
+    missing_state_worktree = bool(state_worktree and not Path(state_worktree).exists())
+    actual_worktree = None if missing_state_worktree else state.get("worktree")
+    planned_worktree = state.get("planned_worktree") or (state_worktree if missing_state_worktree else None)
+    planned_only = bool(planned_worktree and not actual_worktree)
+    stop_conditions = ["commit task files before PR automation"] if dirty_stop else []
+    if planned_only:
+        stop_conditions.append("planned worktree has not been created; rerun plan with --create-worktree")
     return {
         "schema_version": "aistock_issue_workflow_resume_v1",
         "generated_at": _utc_now(),
         "bug_id": canonical_bug_id,
         "workflow_root": str(root),
+        "workflow_git": git,
+        "worktree": actual_worktree,
+        "planned_worktree": planned_worktree,
+        "branch": state.get("branch") or git.get("branch"),
+        "planned_branch": state.get("planned_branch"),
         "state_path": _repo_rel(_state_path(canonical_bug_id, root), root),
         "events_path": _repo_rel(events_path, root),
         "state": state,
         "recent_events": events,
+        "stop_conditions": stop_conditions,
         "next_command": _next_command_for_state(canonical_bug_id, state),
+    }
+
+
+def build_postmortem_plan(*, bug_id: str, worktree: str | None = None, output_markdown: bool = True) -> dict[str, Any]:
+    canonical_bug_id = bug_id.strip().upper()
+    roots = [Path(worktree)] if worktree else _state_roots_for_bug(canonical_bug_id)
+    candidates = [(root, _load_state(canonical_bug_id, root)) for root in roots]
+    candidates = [(root, state) for root, state in candidates if state]
+    if not candidates:
+        raise WorkflowError(f"No workflow state found for {canonical_bug_id}; run start or run --mode plan first")
+    root, state = sorted(candidates, key=lambda item: str(item[0]))[-1]
+    events = _read_events(canonical_bug_id, root)
+    timing = _workflow_timing_summary(canonical_bug_id, root)
+    active = _active_workflows_for_bug(canonical_bug_id)
+    duplicate_active_count = max(0, len(active) - 1)
+    stale_pr_check = _stale_pr_check_for_bug(canonical_bug_id)
+    context_metrics = state.get("context_metrics") or {}
+    artifact_metrics = {}
+    finish_plan = root / WORKFLOW_ROOT / canonical_bug_id / "finish-plan.json"
+    pr_body = root / WORKFLOW_ROOT / canonical_bug_id / "pr-body.md"
+    if finish_plan.exists() or pr_body.exists():
+        artifact_metrics = {
+            "finish_plan": _size_and_token_estimate(finish_plan),
+            "pr_body": _size_and_token_estimate(pr_body),
+        }
+    payload = {
+        "schema_version": "aistock_issue_workflow_postmortem_v1",
+        "generated_at": _utc_now(),
+        "bug_id": canonical_bug_id,
+        "workflow_root": str(root),
+        "state": {
+            "state": state.get("state"),
+            "branch": state.get("branch"),
+            "worktree": state.get("worktree") or str(root),
+            "pr_url": state.get("pr_url"),
+            "commit": state.get("commit"),
+            "next_actions": state.get("next_actions") or [],
+        },
+        "timing_summary": timing,
+        "context_metrics": context_metrics,
+        "artifact_metrics": artifact_metrics,
+        "active_workflows": active,
+        "duplicate_active_count": duplicate_active_count,
+        "stale_pr_check": stale_pr_check,
+        "flow_overhead_estimate": {
+            "known_duration_seconds": timing.get("known_duration_seconds"),
+            "inferred_elapsed_seconds": timing.get("inferred_elapsed_seconds"),
+            "event_count": timing.get("event_count"),
+            "context_estimated_tokens": sum(
+                int(item.get("estimated_tokens") or 0)
+                for item in context_metrics.values()
+                if isinstance(item, dict)
+            ),
+        },
+        "production_gates": state.get("production_gates") or {},
+        "recent_events": events[-20:],
+    }
+    output_dir = root / WORKFLOW_ROOT / canonical_bug_id
+    if output_markdown:
+        lines = [
+            f"# {canonical_bug_id} Workflow Postmortem",
+            "",
+            f"- State: `{payload['state']['state']}`",
+            f"- Branch: `{payload['state']['branch'] or 'unknown'}`",
+            f"- PR: {payload['state']['pr_url'] or 'n/a'}",
+            f"- Events: `{timing.get('event_count')}`",
+            f"- Known command duration: `{timing.get('known_duration_seconds')}s`",
+            f"- Inferred elapsed duration: `{timing.get('inferred_elapsed_seconds')}s`",
+            f"- Duplicate active workflows: `{duplicate_active_count}`",
+            "",
+            "## Phase Timing",
+            "",
+            "| Phase | Events | Known seconds | Inferred seconds |",
+            "| --- | ---: | ---: | ---: |",
+        ]
+        for phase, item in sorted((timing.get("phases") or {}).items()):
+            lines.append(
+                f"| `{phase}` | {item.get('event_count')} | {item.get('known_duration_seconds')} | {item.get('inferred_since_previous_seconds')} |"
+            )
+        lines.extend(
+            [
+                "",
+                "## Production Gates",
+                "",
+                *[f"- {key}: `{value}`" for key, value in sorted((payload.get("production_gates") or {}).items())],
+            ]
+        )
+        _write_text(output_dir / "postmortem.md", "\n".join(lines))
+        payload["postmortem_md_path"] = _repo_rel(output_dir / "postmortem.md", root)
+    payload["postmortem_json_path"] = _repo_rel(output_dir / "postmortem.json", root)
+    _write_json(output_dir / "postmortem.json", payload)
+    return payload
+
+
+def _classify_ci_issue(summary: dict[str, Any], issue: dict[str, Any]) -> str:
+    title_body = f"{issue.get('title') or ''}\n{issue.get('body') or ''}".lower()
+    errors = "\n".join(
+        str(item)
+        for job in summary.get("failed_jobs") or []
+        for item in [job.get("error_signature"), *(job.get("key_log_excerpt") or [])]
+        if item
+    ).lower()
+    if any(token in title_body for token in ["flaky", "timeout", "network", "runner"]):
+        return "infra_flaky"
+    if any(token in errors for token in ["relation ", "does not exist", "fixture", "test fixture"]):
+        return "test_fixture_gap_or_real_regression"
+    if summary.get("diagnostic_status") == "complete":
+        return "real_regression_candidate"
+    return "needs_log_triage"
+
+
+def build_triage_ci_issue_plan(
+    *,
+    issue_number: int | str,
+    run_id: str | None = None,
+    summary_json: str | None = None,
+    skip_github_summary: bool = False,
+) -> dict[str, Any]:
+    issue = _load_github_issue(issue_number)
+    linked = _find_bug_by_github_issue(issue["number"])
+    body = str(issue.get("body") or "")
+    detected_run_id = run_id or _extract_run_id_from_issue_body(body)
+    summary: dict[str, Any]
+    extraction_errors: list[str] = []
+    if summary_json:
+        summary = _load_json(Path(summary_json))
+    elif detected_run_id and not skip_github_summary:
+        summary = ci_failure_summary.summarize_actions_run(
+            repo=GITHUB_REPO,
+            run_id=detected_run_id,
+            run_url=None,
+            severity="P1",
+        )
+    else:
+        extraction_errors.append("No Actions run id was found in the GitHub Issue body.")
+        summary = ci_failure_summary.finalize_summary(
+            {
+                "schema_version": "aistock_ci_failure_summary_v1",
+                "generated_at": _utc_now(),
+                "severity": "P1",
+                "workflow": "unknown",
+                "run_id": detected_run_id or "",
+                "run_url": None,
+                "branch": None,
+                "commit": None,
+                "failed_jobs": [],
+                "extraction_errors": extraction_errors,
+            }
+        )
+    classification = _classify_ci_issue(summary, issue)
+    module = (summary.get("suspected_modules") or ["validation"])[0]
+    first_job = (summary.get("failed_jobs") or [{}])[0]
+    failed_test = ((first_job.get("failed_tests") or [None])[0] or "").split("::")[-1]
+    suggested_title = (
+        f"{module} CI failure requires triage: {failed_test or first_job.get('error_signature') or issue.get('title')}"
+    )
+    output_dir = REPO_ROOT / WORKFLOW_ROOT / f"ci-issue-{issue.get('number')}"
+    github_issue_url = issue.get("url") or _github_issue_url(issue.get("number"))
+    failure_event = ci_failure_summary.build_failure_event(
+        summary,
+        github_issue_number=issue.get("number"),
+        github_issue_url=github_issue_url,
+    )
+    context_pack = ci_failure_summary.build_context_pack(
+        summary,
+        github_issue_number=issue.get("number"),
+        github_issue_url=github_issue_url,
+    )
+    failure_event_path = output_dir / "failure-event.json"
+    context_pack_json_path = output_dir / "context-pack.json"
+    context_pack_md_path = output_dir / "context-pack.md"
+    payload = {
+        "schema_version": "aistock_issue_workflow_triage_ci_issue_v1",
+        "generated_at": _utc_now(),
+        "github_issue": {
+            "number": issue.get("number"),
+            "url": issue.get("url"),
+            "title": issue.get("title"),
+            "state": issue.get("state"),
+        },
+        "detected_run_id": detected_run_id,
+        "summary": summary,
+        "failure_event": failure_event,
+        "failure_event_path": _repo_rel(failure_event_path),
+        "context_pack": context_pack,
+        "context_pack_json_path": _repo_rel(context_pack_json_path),
+        "context_pack_md_path": _repo_rel(context_pack_md_path),
+        "classification_recommendation": classification,
+        "linked_bug": {"bug_id": linked[0].get("bug_id"), "path": _repo_rel(linked[1])} if linked else None,
+        "needs_bug_json": linked is None and classification != "infra_flaky",
+        "suggested_bug": {
+            "module": module,
+            "severity": summary.get("severity") or "P1",
+            "title": suggested_title[:180],
+            "risk_area": "ci_failure_intake",
+            "allowed_write_scope": context_pack.get("allowed_write_scope") or [],
+            "required_verification": context_pack.get("required_verification") or [],
+        },
+        "next_command": (
+            f"python scripts/aistock_issue_workflow.py promote-ci-issue --issue {issue.get('number')} --apply"
+            if linked is None
+            else f"python scripts/aistock_issue_workflow.py run --bug-id {linked[0].get('bug_id')} --mode plan --create-worktree"
+        ),
+    }
+    _write_json(failure_event_path, failure_event)
+    _write_json(context_pack_json_path, context_pack)
+    _write_text(context_pack_md_path, ci_failure_summary.render_context_pack_markdown(context_pack))
+    _write_json(output_dir / "triage-ci-issue.json", payload)
+    return payload
+
+
+def build_promote_ci_issue_plan(
+    *,
+    issue_number: int | str,
+    apply: bool,
+    bug_id: str | None = None,
+    summary_json: str | None = None,
+    skip_github_summary: bool = False,
+) -> dict[str, Any]:
+    triage = build_triage_ci_issue_plan(
+        issue_number=issue_number,
+        summary_json=summary_json,
+        skip_github_summary=skip_github_summary,
+    )
+    if triage.get("linked_bug"):
+        return {
+            "schema_version": "aistock_issue_workflow_promote_ci_issue_v1",
+            "generated_at": _utc_now(),
+            "workflow_gate": "already_linked",
+            "dry_run": not apply,
+            "triage": triage,
+            "next_command": f"python scripts/aistock_issue_workflow.py run --bug-id {triage['linked_bug']['bug_id']} --mode plan --create-worktree",
+        }
+    summary = triage["summary"]
+    suggested = triage["suggested_bug"]
+    first_job = (summary.get("failed_jobs") or [{}])[0]
+    failed_tests = first_job.get("failed_tests") or []
+    error_signature = first_job.get("error_signature")
+    details = ci_failure_summary.render_issue_markdown(summary, github_issue_number=issue_number)
+    changed_files = list(suggested.get("allowed_write_scope") or [])
+    evidence_refs = flow._unique_strings(
+        [
+            str(summary.get("run_url") or ""),
+            _github_issue_url(issue_number),
+            str(triage.get("failure_event_path") or ""),
+            str(triage.get("context_pack_md_path") or ""),
+        ]
+    )
+    plan = build_submit_bug_plan(
+        title=suggested["title"],
+        module=suggested["module"],
+        severity=suggested["severity"],
+        description=f"Auto-filed CI issue #{issue_number} requires actionable triage and repair.\n\n{details}",
+        expected="CI/Nightly failure issues include enough diagnostic detail to enter the BUG JSON workflow without manual log rediscovery.",
+        actual=f"Failure summary: {error_signature or (failed_tests[0] if failed_tests else 'diagnostic extraction incomplete')}",
+        reproduce_command=str(summary.get("reproduce_command") or "Inspect linked CI run log."),
+        evidence_refs=evidence_refs,
+        changed_files=changed_files,
+        plan_key="ci_failure_issue_intake",
+        nox_session=first_job.get("nox_session"),
+        candidate_type="regression",
+        bug_id=bug_id,
+        github_issue_number=str(issue_number),
+        github_issue_url=_github_issue_url(issue_number),
+        create_github=False,
+        apply=apply,
+        registry_pr_only=False,
+    )
+    return {
+        "schema_version": "aistock_issue_workflow_promote_ci_issue_v1",
+        "generated_at": _utc_now(),
+        "workflow_gate": "promoted" if apply else "ready_for_apply",
+        "dry_run": not apply,
+        "triage": triage,
+        "submit_bug": plan,
+        "next_command": plan.get("next_command"),
     }
 
 
 def _next_command_for_state(bug_id: str, state: dict[str, Any]) -> str:
     current = str(state.get("state") or "")
+    worktree = str(state.get("worktree") or state.get("cwd") or "").strip()
+    state_worktree = str(state.get("worktree") or "").strip()
+    has_missing_state_worktree = bool(state_worktree and not Path(state_worktree).exists())
+    prefix = f"cd /d {worktree} && " if worktree and not has_missing_state_worktree else ""
+    if (state.get("planned_worktree") and not state.get("worktree")) or has_missing_state_worktree:
+        return f"python scripts/aistock_issue_workflow.py run --bug-id {bug_id} --mode plan --create-worktree"
     if current in {"context_ready", "fix_in_progress"}:
-        return f"python scripts/aistock_issue_workflow.py finish --bug-id {bug_id} --plan-only"
+        return f"{prefix}python scripts/aistock_issue_workflow.py finish --bug-id {bug_id} --plan-only"
     if current in {"validation_planned", "blocked"}:
-        return f"python scripts/aistock_issue_workflow.py finish --bug-id {bug_id} --validation-evidence \"<command> -> passed\""
+        return f"{prefix}python scripts/aistock_issue_workflow.py finish --bug-id {bug_id} --validation-evidence \"<command> -> passed\""
     if current == "validation_passed":
-        return "commit, push, and create PR from tmp/issue_workflow/<BUG>/pr-body.md"
+        return (
+            f"{prefix}git status --short && git add <task files> && git commit -m \"fix: resolve {bug_id}\" && "
+            f"python scripts/aistock_issue_workflow.py run --bug-id {bug_id} --mode pr "
+            "--validation-evidence \"<command> -> passed\" --push --create-pr"
+        )
     if current in {"pr_opened", "ci_running"}:
         return "watch CI and rerun finish if changes are needed"
-    return f"python scripts/aistock_issue_workflow.py run --bug-id {bug_id} --mode plan"
+    return f"{prefix}python scripts/aistock_issue_workflow.py run --bug-id {bug_id} --mode plan"
 
 
 def _execute_checked(args: list[str], *, cwd: Path | None = None, timeout: int = 120) -> dict[str, Any]:
@@ -1343,6 +2976,152 @@ def _execute_checked(args: list[str], *, cwd: Path | None = None, timeout: int =
     return result
 
 
+def _check_name(item: dict[str, Any]) -> str:
+    return str(item.get("name") or item.get("workflowName") or item.get("__typename") or "unknown")
+
+
+def _classify_pr_checks(checks: list[dict[str, Any]]) -> dict[str, list[str]]:
+    failed: list[str] = []
+    pending: list[str] = []
+    non_blocking: list[str] = []
+    passed: list[str] = []
+    for item in checks:
+        name = _check_name(item)
+        status = str(item.get("status") or "").upper()
+        conclusion = str(item.get("conclusion") or "").upper()
+        if status != "COMPLETED":
+            pending.append(name)
+        elif conclusion in NON_BLOCKING_CHECK_CONCLUSIONS:
+            passed.append(name)
+            if conclusion in {"NEUTRAL", "SKIPPED"}:
+                non_blocking.append(name)
+        elif conclusion:
+            failed.append(name)
+    return {
+        "failed": failed,
+        "pending": pending,
+        "non_blocking": non_blocking,
+        "passed": passed,
+    }
+
+
+def _execute_workflow_command(
+    bug_id: str,
+    args: list[str],
+    *,
+    state: str,
+    cwd: Path | None = None,
+    timeout: int = 120,
+    event: str | None = None,
+    root: Path | None = None,
+    allow_failure: bool = False,
+) -> dict[str, Any]:
+    started = time.monotonic()
+    result = _run_command(args, cwd=cwd, timeout=timeout)
+    duration = time.monotonic() - started
+    _append_event(
+        bug_id,
+        event=event or f"command:{args[0]}",
+        state=state,
+        command=" ".join(args),
+        cwd=cwd,
+        root=root,
+        duration_seconds=duration,
+        result="ok" if result.get("ok") else "failed",
+        evidence={
+            "returncode": result.get("returncode"),
+            "stdout_excerpt": str(result.get("stdout") or "")[:1000],
+            "stderr_excerpt": str(result.get("stderr") or "")[:1000],
+        },
+    )
+    if not result.get("ok") and not allow_failure:
+        raise WorkflowError(result.get("stderr") or result.get("stdout") or f"command failed: {' '.join(args)}")
+    return result
+
+
+def _path_is_artifact(path: str) -> bool:
+    normalized = path.replace("\\", "/").strip("/")
+    parts = [part for part in normalized.split("/") if part]
+    return any(pattern in parts or normalized == pattern or normalized.startswith(pattern + "/") for pattern in ARTIFACT_PATH_PATTERNS)
+
+
+def _git_status_paths(root: Path) -> list[dict[str, str]]:
+    result = _run_command(["git", "status", "--porcelain=v1", "-uall"], cwd=root, timeout=30)
+    if not result.get("ok"):
+        return []
+    rows: list[dict[str, str]] = []
+    for line in str(result.get("stdout") or "").splitlines():
+        if len(line) < 4:
+            continue
+        status = line[:2]
+        raw_path = _parse_git_porcelain_path(line)
+        rows.append({"status": status, "path": raw_path})
+    return rows
+
+
+def _run_changed_file_lint(changed_files: list[str], *, root: Path) -> dict[str, Any]:
+    python_files = [path for path in changed_files if path.endswith(".py") and (root / path).exists()]
+    if not python_files:
+        return {"status": "not_required", "python_files": [], "commands": []}
+    candidates = [
+        ["ruff", "check", *python_files],
+        [sys.executable, "-m", "ruff", "check", *python_files],
+    ]
+    commands: list[dict[str, Any]] = []
+    for command in candidates:
+        result = _run_command(command, cwd=root, timeout=120)
+        commands.append({"command": " ".join(command), "result": result})
+        if result.get("ok"):
+            return {"status": "passed", "python_files": python_files, "commands": commands}
+        combined = f"{result.get('stdout')}\n{result.get('stderr')}".lower()
+        if "no module named ruff" in combined or "not recognized" in combined or "no such file" in combined:
+            continue
+        return {"status": "failed", "python_files": python_files, "commands": commands}
+    return {"status": "unavailable", "python_files": python_files, "commands": commands}
+
+
+def _pre_pr_gate(
+    *,
+    finish: dict[str, Any],
+    validation_evidence: list[str],
+    root: Path,
+    run_lint: bool = True,
+) -> dict[str, Any]:
+    changed_files = [str(item) for item in finish.get("changed_files") or []]
+    scope_check = finish.get("scope_check") or {}
+    status_rows = _git_status_paths(root)
+    artifact_rows = [row for row in status_rows if _path_is_artifact(row["path"])]
+    blocking: list[str] = []
+    warnings: list[str] = []
+    if not validation_evidence:
+        blocking.append("validation evidence is required before PR creation")
+    if scope_check.get("status") not in {None, "passed"}:
+        blocking.append(f"scope check failed: {scope_check.get('violations') or scope_check.get('status')}")
+    if artifact_rows:
+        blocking.append(f"temporary/cache artifacts are present in git status: {[row['path'] for row in artifact_rows]}")
+    lint = _run_changed_file_lint(changed_files, root=root) if run_lint else {"status": "skipped", "python_files": []}
+    if lint.get("status") == "failed":
+        blocking.append("changed-file Ruff lint failed")
+    elif lint.get("status") == "unavailable" and lint.get("python_files"):
+        warnings.append("Ruff is unavailable; run the required nox/pytest validation before PR")
+    return {
+        "schema_version": "aistock_issue_workflow_pre_pr_gate_v1",
+        "generated_at": _utc_now(),
+        "workflow_gate": "passed" if not blocking else "blocked",
+        "blocking": blocking,
+        "warnings": warnings,
+        "changed_files": changed_files,
+        "scope_check": scope_check,
+        "artifact_guard": {
+            "status": "passed" if not artifact_rows else "failed",
+            "artifact_paths": artifact_rows,
+            "patterns": list(ARTIFACT_PATH_PATTERNS),
+        },
+        "lint": lint,
+        "validation_evidence_present": bool(validation_evidence),
+    }
+
+
 def _current_branch(root: Path | None = None) -> str:
     branch = _git(["branch", "--show-current"], cwd=root or REPO_ROOT)
     if not branch:
@@ -1350,6 +3129,30 @@ def _current_branch(root: Path | None = None) -> str:
     if branch == "main":
         raise WorkflowError("refusing to create an issue PR from main")
     return branch
+
+
+def _pr_worktree_guard(root: Path | None = None) -> dict[str, Any]:
+    work_root = root or REPO_ROOT
+    canonical = _canonical_root().resolve()
+    git = _git_snapshot(work_root)
+    blocking: list[str] = []
+    warnings: list[str] = []
+    target = work_root.resolve()
+    if not git.get("ok"):
+        blocking.append(str(git.get("error") or f"not a git checkout: {work_root}"))
+    if target == canonical:
+        blocking.append("refusing PR automation from canonical root; continue in the issue worktree")
+    if git.get("branch") == "main":
+        blocking.append("refusing PR automation from main; continue on the task branch")
+    if git.get("dirty"):
+        warnings.append(f"task worktree has {git.get('dirty_count')} uncommitted file(s); commit only task files before push/PR")
+    return {
+        "root": str(target),
+        "canonical_root": str(canonical),
+        "git": git,
+        "blocking": blocking,
+        "warnings": warnings,
+    }
 
 
 def _maybe_create_pr(
@@ -1363,11 +3166,17 @@ def _maybe_create_pr(
 ) -> dict[str, Any]:
     actions: list[dict[str, Any]] = []
     pr_url: str | None = None
+    guard = _pr_worktree_guard()
+    if guard["blocking"]:
+        raise WorkflowError("; ".join(guard["blocking"]))
     branch = _current_branch()
+    pre_pr_gate = _pre_pr_gate(finish=finish, validation_evidence=finish.get("validation_evidence") or [], root=REPO_ROOT)
     if not (push or create_pr or watch_ci):
         return {
             "branch": branch,
             "dry_run": True,
+            "worktree_guard": guard,
+            "pre_pr_gate": pre_pr_gate,
             "next_commands": [
                 f"git push -u origin {branch}",
                 f"gh pr create --base main --head {branch} --title \"{pr_title or bug_id + ' issue workflow fix'}\" --body-file {finish.get('pr_body_path')}",
@@ -1375,16 +3184,33 @@ def _maybe_create_pr(
         }
     if not finish.get("validation_evidence"):
         raise WorkflowError("validation evidence is required before push/create-pr automation")
+    if pre_pr_gate["workflow_gate"] != "passed":
+        raise WorkflowError("; ".join(pre_pr_gate["blocking"]))
     if push:
-        actions.append({"command": f"git push -u origin {branch}", "result": _execute_checked(["git", "push", "-u", "origin", branch], cwd=REPO_ROOT, timeout=180)})
+        actions.append(
+            {
+                "command": f"git push -u origin {branch}",
+                "result": _execute_workflow_command(
+                    bug_id,
+                    ["git", "push", "-u", "origin", branch],
+                    state="pushed",
+                    cwd=REPO_ROOT,
+                    timeout=180,
+                    event="command:git_push",
+                ),
+            }
+        )
         _write_state(bug_id, state="pushed", branch=branch, next_actions=["create_pr_from_pr_body"])
     if create_pr:
         title = pr_title or f"{bug_id} issue workflow fix"
         body_path = str(REPO_ROOT / str(finish.get("pr_body_path")))
-        result = _execute_checked(
+        result = _execute_workflow_command(
+            bug_id,
             ["gh", "pr", "create", "--base", "main", "--head", branch, "--title", title, "--body-file", body_path],
+            state="pr_opened",
             cwd=REPO_ROOT,
             timeout=120,
+            event="command:gh_pr_create",
         )
         pr_url = str(result.get("stdout") or "").splitlines()[-1].strip()
         actions.append({"command": "gh pr create", "result": result})
@@ -1392,10 +3218,39 @@ def _maybe_create_pr(
     if watch_ci:
         if not pr_url:
             raise WorkflowError("--watch-ci requires --create-pr in this Phase 1 wrapper")
-        result = _execute_checked(["gh", "pr", "checks", pr_url, "--watch", "--interval", "10"], cwd=REPO_ROOT, timeout=900)
+        result = _execute_workflow_command(
+            bug_id,
+            ["gh", "pr", "checks", pr_url, "--watch", "--interval", "10"],
+            state="ci_running",
+            cwd=REPO_ROOT,
+            timeout=900,
+            event="command:gh_pr_checks_watch",
+        )
         actions.append({"command": "gh pr checks --watch", "result": result})
-        _write_state(bug_id, state="ci_green", branch=branch, pr_url=pr_url, next_actions=["merge_only_if_user_authorized"])
-    return {"branch": branch, "dry_run": False, "pr_url": pr_url, "actions": actions}
+        checks_view: dict[str, Any] = {"failed": [], "pending": [], "non_blocking": [], "passed": []}
+        check_ok = bool(result.get("ok"))
+        if check_ok:
+            view = _run_command(
+                ["gh", "pr", "view", pr_url, "--json", "statusCheckRollup"],
+                cwd=REPO_ROOT,
+                timeout=60,
+            )
+            if view.get("ok"):
+                try:
+                    checks_view = _classify_pr_checks(json.loads(str(view.get("stdout") or "{}")).get("statusCheckRollup") or [])
+                    check_ok = not checks_view["failed"] and not checks_view["pending"]
+                except json.JSONDecodeError:
+                    check_ok = False
+        _write_state(
+            bug_id,
+            state="ci_green" if check_ok else "ci_running",
+            branch=branch,
+            pr_url=pr_url,
+            checks=checks_view,
+            next_actions=["merge_only_if_user_authorized"] if check_ok else ["inspect_ci_failure", "fix_on_same_task_branch"],
+            stop_reason=None if check_ok else "ci_not_green",
+        )
+    return {"branch": branch, "dry_run": False, "pr_url": pr_url, "actions": actions, "worktree_guard": guard, "pre_pr_gate": pre_pr_gate}
 
 
 def _verify_pr_merged(pr_url: str, *, skip_github_check: bool = False) -> dict[str, Any]:
@@ -1418,6 +3273,56 @@ def _verify_pr_merged(pr_url: str, *, skip_github_check: bool = False) -> dict[s
     return {"checked": True, "merged": True, "pr": payload}
 
 
+def _merge_commit_from_pr_check(pr_check: dict[str, Any] | None) -> str | None:
+    pr = (pr_check or {}).get("pr") or {}
+    merge_commit = pr.get("mergeCommit") if isinstance(pr, dict) else None
+    if isinstance(merge_commit, dict):
+        return str(merge_commit.get("oid") or "") or None
+    return str(merge_commit or "") or None
+
+
+def _sync_github_issue_after_close(
+    record: dict[str, Any],
+    evidence_payload: dict[str, Any],
+    *,
+    root: Path | None = None,
+) -> dict[str, Any]:
+    root = root or REPO_ROOT
+    issue_number = record.get("github_issue_number")
+    if not issue_number:
+        return {"status": "skipped_missing_issue_number"}
+    lines = [
+        f"AIstock workflow close-sync completed for `{record.get('bug_id')}`.",
+        "",
+        f"- PR: {evidence_payload.get('merged_pr') or 'n/a'}",
+        f"- Merge commit: `{evidence_payload.get('merge_commit') or 'unknown'}`",
+        "- BUG JSON status: `fixed`",
+        "",
+        "Validation evidence:",
+        *[f"- {item}" for item in evidence_payload.get("validation_evidence") or ["n/a"]],
+        "",
+        "Production gates:",
+        *[
+            f"- {key}: `{value}`"
+            for key, value in sorted((evidence_payload.get("production_gates") or {}).items())
+        ],
+    ]
+    tmp_comment = root / WORKFLOW_ROOT / str(record.get("bug_id") or issue_number) / "github-close-comment.md"
+    _write_text(tmp_comment, "\n".join(lines))
+    comment = _run_command(
+        ["gh", "issue", "comment", str(issue_number), "--repo", GITHUB_REPO, "--body-file", str(tmp_comment)],
+        cwd=root,
+        timeout=60,
+    )
+    close = _run_command(["gh", "issue", "close", str(issue_number), "--repo", GITHUB_REPO], cwd=root, timeout=60)
+    return {
+        "status": "synced" if comment.get("ok") and close.get("ok") else "warning",
+        "comment": comment,
+        "close": close,
+        "comment_path": _repo_rel(tmp_comment, root),
+    }
+
+
 def _production_gates_payload(args: argparse.Namespace | None = None) -> dict[str, str]:
     if args is None:
         return {
@@ -1430,6 +3335,224 @@ def _production_gates_payload(args: argparse.Namespace | None = None) -> dict[st
         "production_frontend_dependency_gate": args.production_frontend_dependency_gate,
         "production_backend_dependency_gate": args.production_backend_dependency_gate,
     }
+
+
+def _merge_pr_if_ready(pr_url: str) -> dict[str, Any]:
+    view = _execute_checked(
+        ["gh", "pr", "view", pr_url, "--json", "state,mergeStateStatus,statusCheckRollup,url"],
+        cwd=REPO_ROOT,
+        timeout=60,
+    )
+    payload = json.loads(str(view.get("stdout") or "{}"))
+    check_summary = _classify_pr_checks(payload.get("statusCheckRollup") or [])
+    failed = check_summary["failed"]
+    pending = check_summary["pending"]
+    if payload.get("state") == "MERGED":
+        return {"already_merged": True, "view": payload}
+    if failed or pending:
+        raise WorkflowError(f"PR checks are not green; failed={failed}, pending={pending}")
+    result = _execute_checked(["gh", "pr", "merge", pr_url, "--squash", "--delete-branch"], cwd=REPO_ROOT, timeout=180)
+    verified = _verify_pr_merged(pr_url)
+    return {"already_merged": False, "check_summary": check_summary, "merge_result": result, "verified": verified}
+
+
+def _merge_pr_if_ready_for_bug(bug_id: str, pr_url: str) -> dict[str, Any]:
+    view = _execute_workflow_command(
+        bug_id,
+        ["gh", "pr", "view", pr_url, "--json", "state,mergeStateStatus,statusCheckRollup,url"],
+        state="ci_green",
+        cwd=REPO_ROOT,
+        timeout=60,
+        event="command:gh_pr_view_before_merge",
+    )
+    payload = json.loads(str(view.get("stdout") or "{}"))
+    check_summary = _classify_pr_checks(payload.get("statusCheckRollup") or [])
+    failed = check_summary["failed"]
+    pending = check_summary["pending"]
+    if payload.get("state") == "MERGED":
+        return {"already_merged": True, "view": payload}
+    if failed or pending:
+        raise WorkflowError(f"PR checks are not green; failed={failed}, pending={pending}")
+    result = _execute_workflow_command(
+        bug_id,
+        ["gh", "pr", "merge", pr_url, "--squash", "--delete-branch"],
+        state="merged",
+        cwd=REPO_ROOT,
+        timeout=180,
+        event="command:gh_pr_merge",
+        allow_failure=True,
+    )
+    try:
+        verified = _verify_pr_merged(pr_url)
+    except WorkflowError as exc:
+        if not result.get("ok"):
+            raise WorkflowError(
+                result.get("stderr") or result.get("stdout") or f"gh pr merge failed before verification: {exc}"
+            ) from exc
+        raise
+    if not result.get("ok"):
+        _append_event(
+            bug_id,
+            event="merge_remote_verified_after_local_error",
+            state="merged",
+            result="recovered",
+            evidence={
+                "pr_url": pr_url,
+                "merge_error": result.get("stderr") or result.get("stdout"),
+                "merge_commit": _merge_commit_from_pr_check(verified),
+            },
+        )
+        return {
+            "already_merged": True,
+            "check_summary": check_summary,
+            "merge_result": result,
+            "verified": verified,
+            "recovered_from_local_merge_error": True,
+        }
+    return {"already_merged": False, "check_summary": check_summary, "merge_result": result, "verified": verified}
+
+
+def _close_sync_changed_files(close_sync: dict[str, Any]) -> list[str]:
+    root = Path(str(close_sync.get("registry_root") or REPO_ROOT))
+    updated = str(close_sync.get("updated_bug_json") or close_sync.get("source_bug_json") or "")
+    files: list[str] = []
+    status = _run_command(["git", "status", "--porcelain=v1", "--", "tests/aistock_validation/bugs"], cwd=root)
+    if status.get("ok"):
+        for line in str(status.get("stdout") or "").splitlines():
+            rel = _parse_git_porcelain_path(line)
+            if rel and rel.replace("\\", "/").startswith("tests/aistock_validation/bugs/"):
+                files.append(rel.replace("\\", "/"))
+    elif updated:
+        files.append(updated.replace("\\", "/"))
+    return sorted(set(files))
+
+
+def _maybe_commit_and_pr_close_sync(
+    *,
+    bug_id: str,
+    close_sync: dict[str, Any],
+    validation_evidence: list[str],
+) -> dict[str, Any]:
+    root = Path(str(close_sync.get("registry_root") or ""))
+    branch = ((close_sync.get("registry_worktree_plan") or {}).get("branch") or "")
+    if not root.exists() or not branch:
+        return {"workflow_gate": "skipped", "reason": "missing_close_sync_worktree"}
+    changed_files = _close_sync_changed_files(close_sync)
+    if not changed_files:
+        return {"workflow_gate": "no_changes", "root": str(root), "branch": branch}
+
+    dirty = _dirty_files(root)
+    unexpected_dirty = sorted(
+        path for path in dirty if not path.replace("\\", "/").startswith("tests/aistock_validation/bugs/")
+    )
+    if unexpected_dirty:
+        raise WorkflowError(
+            "close-sync worktree has unexpected dirty files outside BUG registry: "
+            + ", ".join(unexpected_dirty[:10])
+        )
+
+    started = time.monotonic()
+    actions: list[dict[str, Any]] = []
+    add = _run_command(["git", "add", *changed_files], cwd=root, timeout=60)
+    actions.append({"command": f"git add {' '.join(changed_files)}", "result": add})
+    if not add.get("ok"):
+        raise WorkflowError(add.get("stderr") or add.get("stdout") or "close-sync git add failed")
+    commit = _run_command(["git", "commit", "-m", f"chore(issue): close-sync {bug_id} after merge"], cwd=root, timeout=120)
+    actions.append({"command": f"git commit -m chore(issue): close-sync {bug_id} after merge", "result": commit})
+    if not commit.get("ok") and "nothing to commit" not in f"{commit.get('stdout')}\n{commit.get('stderr')}".lower():
+        raise WorkflowError(commit.get("stderr") or commit.get("stdout") or "close-sync git commit failed")
+    commit_sha = _run_command(["git", "rev-parse", "--short=12", "HEAD"], cwd=root, timeout=30)
+
+    push = _run_command(["git", "push", "-u", "origin", branch], cwd=root, timeout=180)
+    actions.append({"command": f"git push -u origin {branch}", "result": push})
+    if not push.get("ok"):
+        raise WorkflowError(push.get("stderr") or push.get("stdout") or "close-sync git push failed")
+
+    body_path = root / WORKFLOW_ROOT / bug_id / "close-sync-pr-body.md"
+    body_lines = [
+        f"## {bug_id} close-sync",
+        "",
+        f"- Source PR: {close_sync.get('merged_pr') or 'n/a'}",
+        f"- Merge commit: `{close_sync.get('merge_commit') or 'unknown'}`",
+        "- BUG JSON status: `fixed`",
+        "",
+        "## Validation",
+        *[f"- {item}" for item in validation_evidence or close_sync.get("validation_evidence") or ["n/a"]],
+        "",
+        "## Production gates",
+        *[f"- {key}: `{value}`" for key, value in sorted((close_sync.get("production_gates") or {}).items())],
+    ]
+    _write_text(body_path, "\n".join(body_lines) + "\n")
+    pr = _run_command(
+        [
+            "gh",
+            "pr",
+            "create",
+            "--repo",
+            GITHUB_REPO,
+            "--base",
+            "main",
+            "--head",
+            branch,
+            "--title",
+            f"chore(issue): close-sync {bug_id}",
+            "--body-file",
+            str(body_path),
+        ],
+        cwd=root,
+        timeout=120,
+    )
+    actions.append({"command": "gh pr create close-sync", "result": pr})
+    pr_url = str(pr.get("stdout") or "").splitlines()[-1].strip() if pr.get("ok") else None
+    if not pr.get("ok"):
+        text = f"{pr.get('stdout')}\n{pr.get('stderr')}"
+        if "already exists" not in text.lower():
+            raise WorkflowError(pr.get("stderr") or pr.get("stdout") or "close-sync PR create failed")
+        existing = _run_command(
+            [
+                "gh",
+                "pr",
+                "list",
+                "--repo",
+                GITHUB_REPO,
+                "--head",
+                branch,
+                "--state",
+                "open",
+                "--json",
+                "url",
+                "--limit",
+                "1",
+            ],
+            cwd=root,
+            timeout=60,
+        )
+        if existing.get("ok"):
+            try:
+                rows = json.loads(str(existing.get("stdout") or "[]"))
+                if rows:
+                    pr_url = rows[0].get("url")
+            except json.JSONDecodeError:
+                pr_url = None
+    result = {
+        "workflow_gate": "pr_opened" if pr.get("ok") or pr_url else "committed",
+        "root": str(root),
+        "branch": branch,
+        "changed_files": changed_files,
+        "actions": actions,
+        "commit": str(commit_sha.get("stdout") or "").strip() if commit_sha.get("ok") else None,
+        "pr_url": pr_url,
+        "duration_seconds": round(time.monotonic() - started, 3),
+    }
+    _append_event(
+        bug_id,
+        event="close_sync_persisted",
+        state="close_synced",
+        root=root,
+        duration_seconds=result["duration_seconds"],
+        evidence={"branch": branch, "commit": result["commit"], "pr_url": pr_url, "changed_files": changed_files},
+    )
+    return result
 
 
 def build_run_plan(
@@ -1450,9 +3573,44 @@ def build_run_plan(
     create_pr: bool = False,
     watch_ci: bool = False,
     pr_title: str | None = None,
+    force_new_worktree: bool = False,
+    force_reason: str | None = None,
+    pr_url: str | None = None,
+    merge: bool = False,
+    sync_root: bool = False,
+    branch: str | None = None,
+    worktree: str | None = None,
+    production_gates: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     canonical_bug_id = bug_id.strip().upper()
     if mode in {"plan", "fix"}:
+        active_decision = _active_worktree_decision(
+            bug_id=canonical_bug_id,
+            create_worktree=create_worktree,
+            force_new_worktree=force_new_worktree,
+            force_reason=force_reason,
+        )
+        if active_decision["workflow_gate"] in {"resume", "blocked"}:
+            event_root = Path(str((active_decision.get("active_workflows") or [{}])[0].get("root") or REPO_ROOT))
+            _append_event(
+                canonical_bug_id,
+                event="active_worktree_decision",
+                state="blocked" if active_decision["workflow_gate"] == "blocked" else "context_ready",
+                result=str(active_decision["decision"]),
+                evidence=active_decision,
+                root=event_root,
+            )
+            return {
+                "schema_version": "aistock_issue_workflow_run_v1",
+                "generated_at": _utc_now(),
+                "bug_id": canonical_bug_id,
+                "mode": mode,
+                "workflow_gate": active_decision["workflow_gate"],
+                "active_decision": active_decision,
+                "blocking": active_decision["blocking"],
+                "warnings": active_decision["warnings"],
+                "next_command": active_decision["next_command"],
+            }
         start = build_start_plan(
             bug_id=canonical_bug_id,
             issue_json=issue_json,
@@ -1462,6 +3620,7 @@ def build_run_plan(
             task_slug=task_slug,
             allow_missing_linkage=allow_missing_linkage,
             allow_closed=allow_closed,
+            active_decision=active_decision,
         )
         gate = "ready_for_fix" if mode == "fix" else "planned"
         return {
@@ -1512,6 +3671,67 @@ def build_run_plan(
             if finish.get("validation_evidence")
             else f"python scripts/aistock_issue_workflow.py finish --bug-id {canonical_bug_id} --validation-evidence \"<command> -> passed\"",
         }
+    if mode == "merge":
+        if not pr_url:
+            raise WorkflowError("run --mode merge requires --pr-url")
+        if not merge:
+            return {
+                "schema_version": "aistock_issue_workflow_run_v1",
+                "generated_at": _utc_now(),
+                "bug_id": canonical_bug_id,
+                "mode": mode,
+                "workflow_gate": "merge_requires_explicit_flag",
+                "next_command": f"python scripts/aistock_issue_workflow.py run --bug-id {canonical_bug_id} --mode merge --pr-url {pr_url} --merge",
+            }
+        merge_result = _merge_pr_if_ready_for_bug(canonical_bug_id, pr_url)
+        close_sync_pr_check = merge_result.get("verified") if isinstance(merge_result, dict) else None
+        close_sync_merge_commit = _merge_commit_from_pr_check(close_sync_pr_check)
+        close_sync = build_close_sync_plan(
+            bug_id=canonical_bug_id,
+            issue_json=issue_json,
+            pr_url=pr_url,
+            apply=True,
+            allow_missing_linkage=allow_missing_linkage,
+            validation_evidence=validation_evidence,
+            merge_commit=close_sync_merge_commit,
+            production_gates=production_gates or _production_gates_payload(),
+            create_registry_worktree=True,
+        )
+        close_sync_commit = _maybe_commit_and_pr_close_sync(
+            bug_id=canonical_bug_id,
+            close_sync=close_sync,
+            validation_evidence=validation_evidence,
+        )
+        cleanup = None
+        if branch:
+            cleanup = build_cleanup_after_merge_plan(
+                branch=branch,
+                worktree=worktree,
+                pr_url=pr_url,
+                apply=False,
+                sync_root=sync_root,
+            )
+        _write_state(
+            canonical_bug_id,
+            state="close_synced",
+            pr_url=pr_url,
+            commit=close_sync.get("merge_commit") or close_sync_merge_commit,
+            close_sync=close_sync,
+            close_sync_commit=close_sync_commit,
+            cleanup_plan=cleanup,
+            next_actions=["merge_close_sync_pr_when_ready", "run_cleanup_after_merge_apply_when_ready"],
+        )
+        return {
+            "schema_version": "aistock_issue_workflow_run_v1",
+            "generated_at": _utc_now(),
+            "bug_id": canonical_bug_id,
+            "mode": mode,
+            "workflow_gate": "merged_close_synced",
+            "merge": merge_result,
+            "close_sync": close_sync,
+            "close_sync_commit": close_sync_commit,
+            "cleanup": cleanup,
+        }
     raise WorkflowError(f"Unsupported run mode for Phase 1: {mode}")
 
 
@@ -1526,6 +3746,8 @@ def build_close_sync_plan(
     merge_commit: str | None = None,
     production_gates: dict[str, str] | None = None,
     skip_github_check: bool = False,
+    create_registry_worktree: bool = False,
+    allow_current_worktree: bool = False,
 ) -> dict[str, Any]:
     record, source_path = find_bug_record(bug_id=bug_id, issue_json=issue_json)
     canonical_bug_id = str(record.get("bug_id") or bug_id or source_path.stem).upper()
@@ -1535,13 +3757,32 @@ def build_close_sync_plan(
         raise WorkflowError(f"{canonical_bug_id} has invalid status for close/sync: {status!r}")
     evidence = [item for item in validation_evidence or [] if item.strip()]
     gates = production_gates or _production_gates_payload()
-    output_dir = REPO_ROOT / WORKFLOW_ROOT / canonical_bug_id
+    registry_worktree_plan = _maybe_create_close_sync_worktree(
+        bug_id=canonical_bug_id,
+        create=create_registry_worktree,
+        dry_run=not apply,
+    )
+    close_sync_root = Path(registry_worktree_plan["worktree"]) if create_registry_worktree else REPO_ROOT
+    if create_registry_worktree and apply:
+        rel_source = source_path.resolve().relative_to(REPO_ROOT.resolve())
+        target_source = close_sync_root / rel_source
+        if not target_source.exists():
+            raise WorkflowError(f"BUG JSON does not exist in close-sync worktree: {target_source}")
+        record = _load_json(target_source)
+        source_path = target_source
+    apply_guard = _validate_close_sync_apply_target(close_sync_root) if apply else None
+    if apply_guard and apply_guard["blocking"] and not allow_current_worktree:
+        raise WorkflowError("; ".join(apply_guard["blocking"]))
+    output_dir = close_sync_root / WORKFLOW_ROOT / canonical_bug_id
     workflow_gate = "ready_for_apply" if pr_url and evidence else ("missing_validation_evidence" if pr_url else "missing_pr_url")
     payload = {
         "schema_version": "aistock_issue_workflow_close_sync_v1",
         "generated_at": _utc_now(),
         "bug_id": canonical_bug_id,
-        "source_bug_json": _repo_rel(source_path),
+        "source_bug_json": _repo_rel(source_path, close_sync_root),
+        "registry_root": str(close_sync_root),
+        "registry_worktree_plan": registry_worktree_plan,
+        "apply_guard": apply_guard,
         "current_status": status,
         "github_issue_number": record.get("github_issue_number"),
         "github_issue_url": record.get("github_issue_url"),
@@ -1560,7 +3801,7 @@ def build_close_sync_plan(
         ],
         "next_agent_steps": [
             "verify_closure_requirements_item_by_item",
-            "run_close_sync_apply_after_pr_merge",
+            "run_close_sync_apply_from_clean_registry_worktree",
             "sync_github_issue_status_with_gh_or_mcp",
             "record_final_production_gates",
         ],
@@ -1571,12 +3812,9 @@ def build_close_sync_plan(
             raise WorkflowError("close-sync --apply requires --pr-url")
         if not evidence:
             raise WorkflowError("close-sync --apply requires at least one --validation-evidence")
+        started = time.monotonic()
         pr_check = _verify_pr_merged(pr_url, skip_github_check=skip_github_check)
-        merge_commit = merge_commit or (
-            ((pr_check.get("pr") or {}).get("mergeCommit") or {}).get("oid")
-            if isinstance((pr_check.get("pr") or {}).get("mergeCommit"), dict)
-            else None
-        )
+        merge_commit = merge_commit or _merge_commit_from_pr_check(pr_check)
         updated = dict(record)
         updated.update(
             {
@@ -1595,18 +3833,41 @@ def build_close_sync_plan(
             "dry_run": False,
             "pr_check": pr_check,
             "merge_commit": merge_commit,
-            "updated_bug_json": _repo_rel(source_path),
+            "updated_bug_json": _repo_rel(source_path, close_sync_root),
         }
+        github_sync = (
+            {"status": "skipped_github_check_disabled"}
+            if skip_github_check
+            else _sync_github_issue_after_close(updated, evidence_payload, root=close_sync_root)
+        )
+        evidence_payload["github_issue_sync"] = github_sync
         _write_json(output_dir / "close-sync-evidence.json", evidence_payload)
+        timing = _workflow_timing_summary(canonical_bug_id, root=close_sync_root)
         _write_state(
             canonical_bug_id,
             state="close_synced",
+            root=close_sync_root,
             pr_url=pr_url,
             commit=merge_commit,
             validation_evidence=evidence,
             production_gates=gates,
+            github_issue_sync=github_sync,
+            timing_summary=timing,
             next_actions=["sync_local_main", "cleanup_after_merge"],
         )
+        _append_event(
+            canonical_bug_id,
+            event="close_sync_apply",
+            state="close_synced",
+            root=close_sync_root,
+            duration_seconds=time.monotonic() - started,
+            evidence={
+                "pr_url": pr_url,
+                "merge_commit": merge_commit,
+                "github_issue_sync_status": github_sync.get("status"),
+            },
+        )
+        evidence_payload["timing_summary"] = _workflow_timing_summary(canonical_bug_id, root=close_sync_root)
         return evidence_payload
     return payload
 
@@ -1638,7 +3899,10 @@ def build_cleanup_after_merge_plan(
     if worktree_path and worktree_path.exists():
         worktree_clean = _run_command(["git", "status", "--porcelain=v1"], cwd=worktree_path).get("stdout") == ""
     root_git = _git_snapshot(root) if root.exists() else {"ok": False, "error": "canonical root missing"}
+    root_dirty_files = _dirty_files(root) if root.exists() else []
+    origin_equivalent_dirty_files = _origin_equivalent_dirty_files(root, root_dirty_files) if root_dirty_files else []
     blocking: list[str] = []
+    warnings: list[str] = []
     if branch == current_branch and apply:
         blocking.append("refusing to cleanup the currently checked-out branch")
     if not (merged or squash_merge_verified):
@@ -1648,8 +3912,10 @@ def build_cleanup_after_merge_plan(
     if sync_root:
         if not root.exists():
             blocking.append(f"canonical root missing: {root}")
-        elif root_git.get("dirty"):
+        elif root_git.get("dirty") and set(root_dirty_files) != set(origin_equivalent_dirty_files):
             blocking.append(f"canonical root is dirty: {root}")
+        elif root_git.get("dirty"):
+            warnings.append("canonical root has only origin/main-equivalent dirty file(s); cleanup apply can restore them safely")
         elif root_git.get("branch") != "main":
             blocking.append(f"canonical root is not on main: {root_git.get('branch')}")
     actions = []
@@ -1674,7 +3940,10 @@ def build_cleanup_after_merge_plan(
         "pr_check": pr_check,
         "worktree_clean": worktree_clean,
         "root_git": root_git,
+        "root_dirty_files": root_dirty_files,
+        "origin_equivalent_dirty_files": origin_equivalent_dirty_files,
         "blocking": blocking,
+        "warnings": warnings,
         "actions": actions,
         "dry_run": not apply,
         "workflow_gate": "ready_for_cleanup" if not blocking else "blocked",
@@ -1684,9 +3953,21 @@ def build_cleanup_after_merge_plan(
     if apply:
         if blocking:
             raise WorkflowError("; ".join(blocking))
+        started = time.monotonic()
         applied: list[dict[str, Any]] = []
         if sync_root:
             applied.append({"command": "git fetch origin --prune", "result": _execute_checked(["git", "fetch", "origin", "--prune"], cwd=root, timeout=120)})
+            if origin_equivalent_dirty_files:
+                applied.append(
+                    {
+                        "command": "git restore origin/main-equivalent dirty file(s)",
+                        "result": _execute_checked(
+                            ["git", "restore", "--source=origin/main", "--", *origin_equivalent_dirty_files],
+                            cwd=root,
+                            timeout=120,
+                        ),
+                    }
+                )
             applied.append({"command": "git merge --ff-only origin/main", "result": _execute_checked(["git", "merge", "--ff-only", "origin/main"], cwd=root, timeout=120)})
         if worktree_path and worktree_path.exists():
             applied.append({"command": f"git worktree remove {worktree_path}", "result": _execute_checked(["git", "worktree", "remove", str(worktree_path)], cwd=REPO_ROOT, timeout=120)})
@@ -1698,6 +3979,7 @@ def build_cleanup_after_merge_plan(
         payload["applied"] = applied
         payload["workflow_gate"] = "cleanup_done"
         payload["dry_run"] = False
+        payload["duration_seconds"] = round(time.monotonic() - started, 3)
         _write_json(output_dir / f"{_slug(branch)}-cleanup-evidence.json", payload)
     return payload
 
@@ -1712,6 +3994,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         task_slug=args.task_slug,
         allow_missing_linkage=args.allow_missing_linkage,
         allow_closed=args.allow_closed,
+        active_decision=None,
     )
     _emit(payload, args.output)
     return 0
@@ -1798,6 +4081,10 @@ def cmd_submit_bug(args: argparse.Namespace) -> int:
         github_issue_url=args.github_issue_url,
         create_github=args.create_github,
         apply=args.apply,
+        allow_current_worktree=args.allow_current_worktree,
+        create_registry_worktree=args.create_registry_worktree,
+        registry_pr_only=args.registry_pr_only,
+        dry_run=args.dry_run,
     )
     _emit(payload, args.output)
     return 0 if payload.get("workflow_gate") in {"ready_for_apply", "submitted"} else 2
@@ -1807,6 +4094,29 @@ def cmd_install_client(args: argparse.Namespace) -> int:
     payload = build_client_install_plan(apply=args.apply, codex_home=args.codex_home)
     _emit(payload, args.output)
     return 0 if payload.get("workflow_gate") in {"ready_for_install", "installed"} else 2
+
+
+def cmd_triage_ci_issue(args: argparse.Namespace) -> int:
+    payload = build_triage_ci_issue_plan(
+        issue_number=args.issue,
+        run_id=args.run_id,
+        summary_json=args.summary_json,
+        skip_github_summary=args.skip_github_summary,
+    )
+    _emit(payload, args.output)
+    return 0
+
+
+def cmd_promote_ci_issue(args: argparse.Namespace) -> int:
+    payload = build_promote_ci_issue_plan(
+        issue_number=args.issue,
+        apply=args.apply,
+        bug_id=args.bug_id,
+        summary_json=args.summary_json,
+        skip_github_summary=args.skip_github_summary,
+    )
+    _emit(payload, args.output)
+    return 0 if payload.get("workflow_gate") in {"ready_for_apply", "promoted", "already_linked"} else 2
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -1827,6 +4137,14 @@ def cmd_run(args: argparse.Namespace) -> int:
         create_pr=args.create_pr,
         watch_ci=args.watch_ci,
         pr_title=args.pr_title,
+        force_new_worktree=args.force_new_worktree,
+        force_reason=args.reason,
+        pr_url=args.pr_url,
+        merge=args.merge,
+        sync_root=args.sync_root,
+        branch=args.branch,
+        worktree=args.worktree,
+        production_gates=_production_gates_payload(args),
     )
     _emit(payload, args.output)
     return 0 if payload.get("workflow_gate") not in {"validation_evidence_missing", "blocked"} else 2
@@ -1834,6 +4152,16 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 def cmd_resume(args: argparse.Namespace) -> int:
     payload = build_resume_plan(bug_id=args.bug_id, worktree=args.worktree, events_limit=args.events_limit)
+    _emit(payload, args.output)
+    return 0
+
+
+def cmd_postmortem(args: argparse.Namespace) -> int:
+    payload = build_postmortem_plan(
+        bug_id=args.bug_id,
+        worktree=args.worktree,
+        output_markdown=not args.no_markdown,
+    )
     _emit(payload, args.output)
     return 0
 
@@ -1849,6 +4177,8 @@ def cmd_close_sync(args: argparse.Namespace) -> int:
         merge_commit=args.merge_commit,
         production_gates=_production_gates_payload(args),
         skip_github_check=args.skip_github_check,
+        create_registry_worktree=args.create_registry_worktree,
+        allow_current_worktree=args.allow_current_worktree,
     )
     _emit(payload, args.output)
     return 0 if payload.get("workflow_gate") in {"ready_for_apply", "close_synced"} else 2
@@ -1863,6 +4193,30 @@ def cmd_cleanup_after_merge(args: argparse.Namespace) -> int:
         sync_root=args.sync_root,
         canonical_root=args.canonical_root,
     )
+    if payload.get("workflow_gate") == "cleanup_done" and args.bug_id:
+        bug_id = args.bug_id.strip().upper()
+        cleanup_evidence = {
+            key: payload.get(key)
+            for key in (
+                "schema_version",
+                "branch",
+                "worktree",
+                "canonical_root",
+                "sync_root",
+                "workflow_gate",
+                "actions",
+                "applied",
+                "duration_seconds",
+            )
+        }
+        state = _write_state(
+            bug_id,
+            state="complete",
+            root=REPO_ROOT,
+            cleanup_evidence=cleanup_evidence,
+            next_actions=[],
+        )
+        payload["complete_state"] = state
     _emit(payload, args.output)
     return 0 if payload.get("workflow_gate") in {"ready_for_cleanup", "cleanup_done"} else 2
 
@@ -1894,6 +4248,14 @@ def build_parser() -> argparse.ArgumentParser:
     submit_bug.add_argument("--github-issue-url")
     submit_bug.add_argument("--create-github", action="store_true", help="Use gh to create the linked GitHub Issue when --apply is set.")
     submit_bug.add_argument("--apply", action="store_true", help="Write candidate/BUG JSON and update allocator after GitHub linkage exists.")
+    submit_bug.add_argument("--create-registry-worktree", action="store_true", help="Create a clean registry worktree/branch from origin/main before writing BUG JSON.")
+    submit_bug.add_argument("--registry-pr-only", action="store_true", help="Stop after a registry-only BUG PR; normal workflows continue directly to fix.")
+    submit_bug.add_argument("--dry-run", action="store_true", help="Plan registry worktree creation without writing files or creating a worktree.")
+    submit_bug.add_argument(
+        "--allow-current-worktree",
+        action="store_true",
+        help="Override the registry guard for emergency/manual use. Normal agent workflows must not use this on canonical main.",
+    )
     submit_bug.add_argument("--output")
     submit_bug.set_defaults(func=cmd_submit_bug)
 
@@ -1903,10 +4265,27 @@ def build_parser() -> argparse.ArgumentParser:
     install_client.add_argument("--output")
     install_client.set_defaults(func=cmd_install_client)
 
+    triage_ci = sub.add_parser("triage-ci-issue", help="Summarize and classify an auto-filed CI/Nightly GitHub Issue.")
+    triage_ci.add_argument("--issue", required=True, help="GitHub Issue number to triage.")
+    triage_ci.add_argument("--run-id", help="Override or provide the Actions run id.")
+    triage_ci.add_argument("--summary-json", help="Use an existing CI failure summary JSON instead of querying Actions.")
+    triage_ci.add_argument("--skip-github-summary", action="store_true", help="Do not query Actions logs; emit a partial triage summary.")
+    triage_ci.add_argument("--output")
+    triage_ci.set_defaults(func=cmd_triage_ci_issue)
+
+    promote_ci = sub.add_parser("promote-ci-issue", help="Promote a triaged CI GitHub Issue into the BUG JSON workflow.")
+    promote_ci.add_argument("--issue", required=True, help="GitHub Issue number to promote.")
+    promote_ci.add_argument("--bug-id", help="Use an already reserved BUG-NNN id.")
+    promote_ci.add_argument("--summary-json", help="Use an existing CI failure summary JSON instead of querying Actions.")
+    promote_ci.add_argument("--skip-github-summary", action="store_true", help="Do not query Actions logs; promote with partial diagnostics.")
+    promote_ci.add_argument("--apply", action="store_true")
+    promote_ci.add_argument("--output")
+    promote_ci.set_defaults(func=cmd_promote_ci_issue)
+
     run = sub.add_parser("run", help="Run the Phase 1 issue workflow state machine for one BUG.")
     run.add_argument("--bug-id", required=True)
     run.add_argument("--issue-json")
-    run.add_argument("--mode", choices=["plan", "fix", "pr"], default="plan")
+    run.add_argument("--mode", choices=["plan", "fix", "pr", "merge"], default="plan")
     run.add_argument("--changed-file", action="append")
     run.add_argument("--create-worktree", action="store_true")
     run.add_argument("--dry-run", action="store_true")
@@ -1920,6 +4299,16 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--create-pr", action="store_true", help="Create a GitHub PR from the generated PR body after validation evidence exists.")
     run.add_argument("--watch-ci", action="store_true", help="Watch GitHub PR checks after creating the PR.")
     run.add_argument("--pr-title")
+    run.add_argument("--force-new-worktree", action="store_true", help="Override the single-active-workflow guard; requires --reason.")
+    run.add_argument("--reason", help="Auditable reason for --force-new-worktree.")
+    run.add_argument("--pr-url", help="Merged or merge-ready PR URL for --mode merge.")
+    run.add_argument("--merge", action="store_true", help="Explicitly authorize --mode merge to merge the PR when checks are green.")
+    run.add_argument("--branch", help="Task branch for post-merge cleanup planning.")
+    run.add_argument("--worktree", help="Task worktree for post-merge cleanup planning.")
+    run.add_argument("--sync-root", action="store_true", help="Plan canonical root fast-forward after merge.")
+    run.add_argument("--production-ddl-gate", default="noop")
+    run.add_argument("--production-frontend-dependency-gate", default="noop")
+    run.add_argument("--production-backend-dependency-gate", default="noop")
     run.add_argument("--output")
     run.set_defaults(func=cmd_run)
 
@@ -1929,6 +4318,13 @@ def build_parser() -> argparse.ArgumentParser:
     resume.add_argument("--events-limit", type=int, default=8)
     resume.add_argument("--output")
     resume.set_defaults(func=cmd_resume)
+
+    postmortem = sub.add_parser("postmortem", help="Summarize workflow timing, context cost, active-worktree, and cleanup evidence.")
+    postmortem.add_argument("--bug-id", required=True)
+    postmortem.add_argument("--worktree")
+    postmortem.add_argument("--no-markdown", action="store_true")
+    postmortem.add_argument("--output")
+    postmortem.set_defaults(func=cmd_postmortem)
 
     start = sub.add_parser("start", help="Prepare a BUG fix workflow and context pack.")
     start.add_argument("--bug-id")
@@ -2000,11 +4396,18 @@ def build_parser() -> argparse.ArgumentParser:
     close.add_argument("--production-frontend-dependency-gate", default="noop")
     close.add_argument("--production-backend-dependency-gate", default="noop")
     close.add_argument("--skip-github-check", action="store_true")
+    close.add_argument("--create-registry-worktree", action="store_true")
+    close.add_argument(
+        "--allow-current-worktree",
+        action="store_true",
+        help="Override close-sync root/main guard for tests or audited recovery only.",
+    )
     close.add_argument("--output")
     close.set_defaults(func=cmd_close_sync)
 
     cleanup = sub.add_parser("cleanup-after-merge", help="Safely sync root and clean merged issue worktrees/branches.")
     cleanup.add_argument("--branch", required=True)
+    cleanup.add_argument("--bug-id", help="Mark the BUG workflow complete after successful cleanup.")
     cleanup.add_argument("--worktree")
     cleanup.add_argument("--pr-url", help="Merged PR URL used to verify squash-merged branch cleanup.")
     cleanup.add_argument("--sync-root", action="store_true")
@@ -2028,3 +4431,8 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+
+
+

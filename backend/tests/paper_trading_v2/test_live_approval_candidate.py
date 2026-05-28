@@ -12,7 +12,7 @@ from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import LiveApprovalStatus, PackageStatus
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.strategy_package.runtime_variant import derive_locked_core_hash
-from backend.services.trading_core.errors import StrategyPackageValidationError
+from backend.services.trading_core.errors import LiveApprovalRequiredError
 from backend.tests.paper_trading_v2.test_day_runner import save_manifest_with_default_execution_policy
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
@@ -60,7 +60,7 @@ def test_paper_v2_live_approval_candidate_requires_runtime_and_execution_activat
     )
     sim_evidence, broker_compatibility = _evidence()
 
-    with pytest.raises(StrategyPackageValidationError, match="runtime profile activation"):
+    with pytest.raises(LiveApprovalRequiredError, match="runtime profile activation"):
         service.create_live_approval_candidate(
             portfolio_id=portfolio.portfolio_id,
             trade_date=TRADE_DATE,
@@ -84,7 +84,7 @@ def test_paper_v2_live_approval_candidate_requires_runtime_and_execution_activat
         reason="activate runtime before live approval",
     )
 
-    with pytest.raises(StrategyPackageValidationError, match="execution policy activation"):
+    with pytest.raises(LiveApprovalRequiredError, match="execution policy activation"):
         service.create_live_approval_candidate(
             portfolio_id=portfolio.portfolio_id,
             trade_date=TRADE_DATE,

@@ -68,6 +68,10 @@ PAUSED_RESUMABLE_STATUSES = {
     PaperSessionStatus.LIVE_RUNNING,
     PaperSessionStatus.LIVE_WAITING_FOR_BAR,
     PaperSessionStatus.LIVE_WAITING_NEXT_TRADING_DAY,
+    PaperSessionStatus.LIVE_WAITING_MARKET_WINDOW,
+    PaperSessionStatus.LIVE_WAITING_PLATFORM_DATA,
+    PaperSessionStatus.LIVE_WAITING_BROKER,
+    PaperSessionStatus.LIVE_RETRYING,
 }
 TICKABLE_SESSION_STATUSES = {
     PaperSessionStatus.CREATED,
@@ -78,6 +82,10 @@ TICKABLE_SESSION_STATUSES = {
     PaperSessionStatus.LIVE_RUNNING,
     PaperSessionStatus.LIVE_WAITING_FOR_BAR,
     PaperSessionStatus.LIVE_WAITING_NEXT_TRADING_DAY,
+    PaperSessionStatus.LIVE_WAITING_MARKET_WINDOW,
+    PaperSessionStatus.LIVE_WAITING_PLATFORM_DATA,
+    PaperSessionStatus.LIVE_WAITING_BROKER,
+    PaperSessionStatus.LIVE_RETRYING,
 }
 _SESSION_TICK_LOCKS: dict[str, threading.Lock] = {}
 _SESSION_TICK_LOCKS_GUARD = threading.RLock()
@@ -550,7 +558,6 @@ class PaperTradingSessionService:
             "source_backtest_id": execution_policy.get("source_backtest_id"),
             "source_backtest_status": execution_policy.get("source_backtest_status"),
             "validation_status": execution_policy.get("validation_status"),
-            "paper_enabled": execution_policy.get("paper_enabled"),
             "policy_json": policy_json,
         }
 

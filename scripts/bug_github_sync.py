@@ -49,9 +49,10 @@ def _dedupe_paths(paths: list[Path]) -> list[Path]:
 
 
 def _git_toplevel(path: Path) -> Path | None:
+    anchor = path if path.exists() else path.parent
     try:
         completed = subprocess.run(
-            ["git", "-C", str(path), "rev-parse", "--show-toplevel"],
+            ["git", "-C", str(anchor), "rev-parse", "--show-toplevel"],
             capture_output=True,
             check=False,
             text=True,
@@ -63,6 +64,46 @@ def _git_toplevel(path: Path) -> Path | None:
         return None
     value = completed.stdout.strip()
     return Path(value).resolve() if value else None
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    return str(left.resolve()).casefold() == str(right.resolve()).casefold()
+
+
+def _canonical_root() -> Path | None:
+    override = os.environ.get("AISTOCK_CANONICAL_ROOT") or os.environ.get("AISTOCK_ROOT")
+    if override:
+        return Path(override).resolve()
+    default = Path("F:/Dev/AIstock")
+    return default.resolve() if default.exists() else None
+
+
+def _git_branch(root: Path) -> str | None:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(root), "branch", "--show-current"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    return completed.stdout.strip() or None
+
+
+def _require_bug_json_write_target(path: Path) -> None:
+    repo_root = _git_toplevel(path)
+    canonical = _canonical_root()
+    if repo_root is None or canonical is None:
+        return
+    if _same_path(repo_root, canonical) and _git_branch(repo_root) == "main":
+        raise BugGitHubSyncError(
+            "refusing to write BUG JSON in canonical root main; run issues-to-json sync "
+            "from an isolated workflow/close-sync worktree instead"
+        )
 
 
 def _candidate_repo_roots() -> list[Path]:
@@ -546,6 +587,7 @@ def apply_issues_to_json_plan(plan: list[dict[str, Any]]) -> list[dict[str, Any]
             continue
         path = Path(str(item["path"]))
         if action == "create_json":
+            _require_bug_json_write_target(path)
             path.parent.mkdir(parents=True, exist_ok=True)
             if path.exists():
                 raise BugGitHubSyncError(f"refusing to overwrite existing bug JSON: {path}")
@@ -553,6 +595,7 @@ def apply_issues_to_json_plan(plan: list[dict[str, Any]]) -> list[dict[str, Any]
             results.append({"bug_id": item["bug_id"], "issue_number": item.get("issue_number"), "action": "created_json", "path": str(path)})
             continue
         if action == "update_json":
+            _require_bug_json_write_target(path)
             if not path.exists():
                 raise BugGitHubSyncError(f"cannot update missing bug JSON: {path}")
             payload = json.loads(path.read_text(encoding="utf-8-sig"))
@@ -775,6 +818,10 @@ def run(config: SyncConfig) -> dict[str, Any]:
         "plan": plan,
         "issues_to_json_plan": issues_to_json_plan,
     }
+    if config.apply:
+        for item in issues_to_json_plan:
+            if item.get("action") not in {"skip", "noop"}:
+                _require_bug_json_write_target(Path(str(item["path"])))
     if config.apply and client is not None:
         result["results"] = apply_plan(plan, client)
     if config.apply and issues_to_json_plan:

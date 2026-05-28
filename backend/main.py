@@ -1,3 +1,5 @@
+# ruff: noqa: E402
+
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,8 +27,15 @@ from .routers import (
     analysis,
     cloud_screening,
     config_env,
+    execution_policy,
+    strategy_governance,
+    model_registry,
+    factor_correlation,
+    factor_metrics,
+    factor_library,
     health,
     ingestion,
+    local_data,
     monitor,
     news,
     portfolio,
@@ -279,6 +288,12 @@ async def _lifespan(app: FastAPI):
     # Paper Trading v2 session scheduler is opt-in so development ports do not
     # accidentally advance durable v2 sessions while production 8001 is running.
     enable_pt_v2 = (os.getenv("ENABLE_PAPER_TRADING_V2_SCHEDULER") or "").strip().lower()
+    logging.getLogger("uvicorn.error").info(
+        "Paper Trading v2 scheduler autostart=%s interval=%s auto_run=%s",
+        enable_pt_v2 in {"1", "true", "yes", "y", "on"},
+        os.getenv("PAPER_TRADING_V2_SCHEDULER_INTERVAL_SEC") or "30",
+        os.getenv("PAPER_V2_AUTO_RUN_ENABLED") or "true",
+    )
     if enable_pt_v2 in {"1", "true", "yes", "y", "on"}:
         from .services.paper_trading_v2.scheduler import paper_trading_v2_scheduler
         paper_trading_v2_scheduler.start()
@@ -512,6 +527,12 @@ def create_app() -> FastAPI:
     app.include_router(quantevolver.router, prefix="/api/v1")
     app.include_router(quantevolver_evolution.router, prefix="/api/v1")
     app.include_router(quantevolver_evolution.factor_metrics_router, prefix="/api/v1")
+    app.include_router(factor_library.router, prefix="/api/v1")
+    app.include_router(factor_metrics.router, prefix="/api/v1")
+    app.include_router(factor_correlation.router, prefix="/api/v1")
+    app.include_router(model_registry.router, prefix="/api/v1")
+    app.include_router(strategy_governance.router, prefix="/api/v1")
+    app.include_router(execution_policy.router, prefix="/api/v1")
     app.include_router(qe_archive.router, prefix="/api/v1")
     app.include_router(qe_templates.router, prefix="/api/v1")
     app.include_router(research_assistant.router, prefix="/api/v1")
@@ -529,6 +550,7 @@ def create_app() -> FastAPI:
     if rl_execution is not None:
         app.include_router(rl_execution.router, prefix="/api/v1")
     app.include_router(market_regime.router, prefix="/api/v1")
+    app.include_router(local_data.router, prefix="/api/v1")
 
     # ingestion / 本地数据管理接口：保持与旧 tdx_backend 相同的 /api/* 路径
     app.include_router(ingestion.router, prefix="")

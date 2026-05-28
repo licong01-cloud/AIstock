@@ -44,10 +44,7 @@ from backend.services.strategy_package.models import (
 )
 from backend.services.strategy_package.repository import StrategyPackageRepository
 from backend.services.strategy_package.service import StrategyPackageService
-from backend.services.trading_core.errors import (
-    InvalidStateTransitionError,
-    StrategyPackageValidationError,
-)
+from backend.services.trading_core.errors import StrategyPackageValidationError
 from backend.tests.paper_trading_v2.fixtures_dev_db import _dev_dsn
 from backend.tests.strategy_package.test_enable_paper_router_409 import (
     _seed_paper_ready_package,
@@ -174,48 +171,26 @@ def _seed_test_package(
 
 
 # ---------------------------------------------------------------------------
-# INT-6a — InvalidStateTransitionError on already-PAPER_ENABLED package
+# INT-6a - legacy PAPER_ENABLED remains compatible metadata
 # ---------------------------------------------------------------------------
 
 
-def test_runtime_handles_invalid_state_409(dev_pkg_repo: StrategyPackageRepository) -> None:
-    """enable_paper on an already-PAPER_ENABLED package raises
-    InvalidStateTransitionError — the state-machine compare-and-set in
-    repository.transition_status (line 198-207) blocks re-entry.
-
-    This is the exception that T8-C (commit 4528a32) maps to HTTP 409 in
-    the router layer. We test the service-layer raise here; HTTP wiring is
-    covered by ``backend/tests/strategy_package/test_enable_paper_router_409.py``.
-    """
+def test_runtime_enable_paper_legacy_status_is_noop_compat(
+    dev_pkg_repo: StrategyPackageRepository,
+) -> None:
+    """Legacy PAPER_ENABLED rows no longer block or mutate package admission."""
     pkg_id = _seed_test_package(
         dev_pkg_repo,
         persisted_status=PackageStatus.PAPER_ENABLED,
         asset_checks_passing=True,
     )
     service = StrategyPackageService(repository=dev_pkg_repo)
-    # R6: governance gate prereq seed; reaches legacy state-machine raise
-    # post-gate. Without this, _require_governance_paper_ready would block
-    # before the InvalidStateTransitionError state-machine compare-and-set.
     _seed_paper_ready_package(service, pkg_id)
 
-    with pytest.raises(InvalidStateTransitionError) as exc_info:
-        service.enable_paper(pkg_id)
+    record = service.enable_paper(pkg_id)
+    assert record.package_status == PackageStatus.PAPER_ENABLED
 
-    err = exc_info.value
-    context = getattr(err, "context", {}) or {}
-    # Either the error message or the context must surface the from_status
-    # so an operator can diagnose without database access.
-    msg = str(err)
-    surfaces_state = (
-        PackageStatus.PAPER_ENABLED.value in msg
-        or context.get("from_status") == PackageStatus.PAPER_ENABLED.value
-    )
-    assert surfaces_state, (
-        f"InvalidStateTransitionError must surface from_status; got msg={msg!r} "
-        f"context={context!r}"
-    )
-
-    # Also verify no silent state mutation: the row must remain PAPER_ENABLED.
+    # Compatibility endpoint is a no-op: legacy row remains PAPER_ENABLED.
     conn = psycopg2.connect(**_dev_dsn())
     try:
         with conn.cursor() as cur:
@@ -227,9 +202,7 @@ def test_runtime_handles_invalid_state_409(dev_pkg_repo: StrategyPackageReposito
     finally:
         conn.close()
     assert row is not None
-    assert row[0] == PackageStatus.PAPER_ENABLED.value, (
-        f"enable_paper must NOT mutate state on raise; got {row[0]!r}"
-    )
+    assert row[0] == PackageStatus.PAPER_ENABLED.value
 
 
 # ---------------------------------------------------------------------------

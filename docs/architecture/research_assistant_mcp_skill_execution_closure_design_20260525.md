@@ -1,16 +1,345 @@
-﻿# Research Assistant MCP/Skill 执行闭环补充设计
+# Research Assistant MCP/Skill 执行闭环补充设计
 
 > 日期: 2026-05-25
-> 状态: Implementation design, pending code development
-> 适用范围: Research Assistant Phase 1 修复版中尚未完成的 MCP/Skill 真实执行闭环
+> 状态: Implementation design, pending code development；2026-05-26 补充 P0 类人对话治理前置整改；2026-05-26 追加自动模式切换架构作为最高优先级
+> 适用范围: Research Assistant 下一阶段研发；先完成自动模式切换与类人主对话治理，再补齐 MCP/Skill 真实执行闭环
 > 设计来源:
 > - `docs/architecture/aistock_research_agent_console_design_20260520.md`
 > - `docs/architecture/research_assistant_prompt_context_runtime_governance_design_20260524.md`
+> - `docs/architecture/research_assistant_context_compression_design_20260524.md`
 > - `tests/aistock_validation/history/research_assistant/20260525_l3_prompt_context_runtime_governance_validation.md`
+> - 参考理念：Anthropic workflow/agent 分离、LangGraph checkpoint/human-in-the-loop、AutoGen human input mode、OpenHands agent loop、Aider/Continue 模式分离、Letta/MemGPT stateful memory、ReAct/Reflexion/Generative Agents、Microsoft Human-AI Interaction Guidelines；仅吸收设计原则，不引入替换性框架。
+
+## -1. P-1 最高优先级：自动模式切换的人类助手架构
+
+本节必须放在所有后续研发方案之前执行。它不是替换现有 Research Assistant 架构，而是在现有 Prompt Pack、Runtime Config、MCP catalog、Capability Registry、Approval、Trace、Context Pack 和 Workbench 之上增加一层 `Dialogue Mode Router + Mode State Machine`。后续所有 P0 类人对话治理、MCP/Skill 执行闭环、QE workflow、Issue workflow、Memory/Context 压缩与 UI 方案均必须与本节保持一致；如有冲突，必须先更新后续章节。
+
+### -1.1 参考理念与取舍
+
+| 参考对象 | 可借鉴理念 | AIstock 采用方式 | 不采用内容 |
+| --- | --- | --- | --- |
+| Anthropic workflow/agent 分离 | workflow 适合确定流程，agent 适合动态判断 | QE、Issue、Memory、MCP 执行作为 workflow；能力问答、概念解释、状态询问作为 direct dialogue | 不把所有对话都包装成 workflow |
+| LangGraph checkpoint / human-in-the-loop | 状态可恢复，人工审批是状态节点 | 任务模式记录 `mode_state`、`approval_state`、`checkpoint_ref`；执行前从 task/action proposal 恢复 | 不引入 LangGraph 替换现有 FastAPI/DB 状态机 |
+| AutoGen human input mode | 人类介入等级可配置 | 用 runtime config 定义 read-only、draft-only、write_nonprod、high_cost、production_sensitive 的确认/审批要求 | 不让模型自行决定高风险执行 |
+| OpenHands agent loop | observe -> think -> act -> observe，但过程可追踪 | 内部保留 trace/event loop；主回答只给自然结果，过程进审计视图 | 不在主聊天展示 Thought/Action/Observation |
+| Aider / Continue 模式分离 | Ask/Plan/Agent/Act 分离 | 自动路由到 `dialogue`、`analysis`、`planning`、`preflight`、`execution`、`audit`、`recovery` | 不要求用户手动切换模式作为默认入口 |
+| Letta/MemGPT stateful memory | 记忆是 agent 状态，不是回答模板 | Context Pack 和压缩摘要只作为内部上下文；用户主动展开时才展示 | 不在普通回答中暴露 `Context Pack: 0 memories` |
+| ReAct / Reflexion | 工具使用和复盘提升任务质量 | 用于内部工具编排、失败恢复、验证后复盘 | 不外显推理链，不把反思当成每轮回答 |
+| Generative Agents / HAI Guidelines | 行为要符合人类预期、少打扰、可恢复 | 默认直接回答、最少澄清、主动但克制、错误可恢复 | 不做电影化角色扮演或夸张人格化 |
+
+### -1.2 总体目标
+
+1. **自动模式切换**：用户不需要手工选择模式；系统根据本轮消息、上下文、风险、任务状态和显式用户覆盖指令自动选择模式。
+2. **默认对话优先**：普通问题、能力询问、概念解释、状态询问、方案讨论默认进入 `dialogue` 或 `analysis`，不启动任务 workflow。
+3. **显式任务才规划**：只有用户明确要求创建、设计、诊断、修复、提交、校验、物化、运行、同步等任务时，才进入 `planning`、`preflight` 或 `execution`。
+4. **风险门禁代码化**：高风险动作由状态机、approval policy、preflight 和 capability side-effect level 控制；不能只依赖 prompt。
+5. **主回答类人化**：主聊天气泡只显示自然语言结论、必要澄清和简短结果；计划、Trace、Context Pack、raw JSON、工具事件默认进侧栏、Workbench 或 Audit 页面。
+6. **现有架构增量整合**：保留现有数据库、Prompt Pack、runtime config、MCP/Skill、Trace、Approval、Context Pack 和 UI 页面，不引入替换性外部 agent 框架。
+
+### -1.3 模式定义
+
+| mode | 典型触发 | 主回答风格 | 工具权限 | 审计展示 |
+| --- | --- | --- | --- | --- |
+| `dialogue` | 问候、能力询问、概念解释、普通追问 | 直接、简洁、自然；不展示计划字段 | 默认不调用工具 | 不展示 |
+| `analysis` | 只读原因分析、方案比较、状态说明、bug 可能原因 | 先给结论和依据，再给建议 | 只读工具可选，不能写 | 默认折叠 |
+| `planning` | 明确要求制定方案、设计草案、整理执行步骤 | 给方案、参数、缺口和验收点；不执行 | 只读/草案能力 | 可显示简要计划 |
+| `preflight` | 用户要求后续执行且参数基本齐全 | 展示检查结果、阻塞项、是否可执行 | 仅 preflight/validate 工具 | 展示必要检查 |
+| `execution` | 用户明确确认执行且审批满足 | 汇报进度、结果和失败恢复 | 已批准执行工具 | Trace 默认折叠 |
+| `audit` | 用户要求展开证据、Trace、验证矩阵、上下文 | 结构化证据和引用 | 只读审计工具 | 展示 |
+| `recovery` | 上下文超限、工具失败、恢复任务、中断续跑 | 尽量无感；必要时简短说明恢复状态 | 压缩/恢复/只读检查 | 默认折叠 |
+
+### -1.4 自动模式路由
+
+模式路由必须是代码可测的决策层，输出结构化 `mode_decision`，至少包含：
+
+```json
+{
+  "mode": "dialogue|analysis|planning|preflight|execution|audit|recovery",
+  "intent_type": "capability_inquiry|concept_explanation|status_query|bug_diagnosis_request|issue_intake_request|experiment_draft_request|experiment_validation_request|experiment_execution_request|ambiguous_request|general_chat|audit_request|recovery_request",
+  "confidence": 0.0,
+  "mode_reason": "short machine readable reason",
+  "requires_tool": false,
+  "allowed_tool_side_effect": "none|read_only|draft_only|preflight|approved_execution",
+  "requires_user_confirmation": false,
+  "requires_approval": false,
+  "visible_audit_default": false
+}
+```
+
+路由规则：
+
+1. 用户问“能否、是否可以、有什么能力、是什么、为什么、目前状态、是否已完成”时，默认 `dialogue` 或 `analysis`。
+2. 用户说“帮我做、设计、创建、诊断、修复、提交、校验、物化、运行、同步”且对象明确时，才进入任务模式。
+3. `QE`、`实验`、`回测`、`bug`、`Issue`、`MCP` 仅作为候选能力召回信号，不得单独改变模式到 workflow。
+4. 用户显式说“只做分析、不改代码、不执行、不提交”时，强制不超过 `analysis`。
+5. 用户显式说“确认执行、开始执行、按方案执行”时，也必须检查当前是否存在可执行 proposal、preflight、approval 和确认文本；不能直接执行。
+6. 低置信度时问一个最小澄清问题；不得生成多项计划、不得追问股票池/时间窗等领域参数，除非已经是明确任务模式。
+
+### -1.5 模式状态机
+
+```text
+user message
+  -> mode router
+  -> mode state update
+  -> prompt node selection by mode + intent + risk
+  -> context assembly by mode
+  -> LLM response
+  -> optional cards/trace/proposal
+  -> persisted mode_decision and checkpoint
+```
+
+允许流转：
+
+```text
+dialogue
+  -> dialogue        # 普通追问、能力询问、概念解释
+  -> analysis        # 原因分析、只读诊断
+  -> planning        # 明确要求方案/草案
+  -> audit           # 要求证据/Trace
+
+analysis
+  -> dialogue        # 回到普通问答
+  -> planning        # 用户要求形成方案
+  -> preflight       # 用户要求检查是否可执行
+  -> audit           # 用户要求展开证据
+
+planning
+  -> dialogue        # 用户取消任务或改问普通问题
+  -> analysis        # 继续只读分析
+  -> preflight       # 参数齐全且用户要求执行前检查
+  -> audit           # 查看计划依据
+
+preflight
+  -> planning        # 检查失败或需补参数
+  -> execution       # 检查通过且用户确认/审批满足
+  -> audit           # 查看检查证据
+
+execution
+  -> recovery        # 工具失败、上下文超限、中断恢复
+  -> audit           # 查看执行证据
+  -> dialogue        # 任务结束后回到对话
+
+recovery
+  -> analysis        # 恢复后解释原因
+  -> planning        # 需要修正方案
+  -> execution       # 幂等恢复后继续已批准执行
+```
+
+禁止流转：
+
+- `dialogue` 直接进入 `execution`。
+- `capability_inquiry` 进入 `preflight` 或 `execution`。
+- `concept_explanation` 生成 Action Proposal。
+- 未经 preflight/approval 的 `planning` 进入高风险 MCP run。
+- `recovery` 静默继续新的高风险动作。
+
+### -1.6 Prompt Pack 选取原则
+
+Prompt Pack 必须按模式隔离，不再让 direct-answer 场景加载 planning/workflow 节点：
+
+| 模式 | 允许节点 | 禁止节点 |
+| --- | --- | --- |
+| `dialogue` | `root.identity`、`mode.dialogue`、必要的轻量领域说明 | `intent.planning`、`workflow.*`、`tool_guard.*`、任务审计模板 |
+| `analysis` | `root.identity`、`mode.analysis`、只读领域节点 | `workflow.*` execution guard、Action Proposal 模板 |
+| `planning` | `root.identity`、`mode.planning`、相关 domain/workflow draft 节点 | execute 节点、run guard，除非用户明确进入后续阶段 |
+| `preflight` | `root.identity`、`mode.preflight`、`tool_guard.*` | 普通能力营销话术 |
+| `execution` | `root.identity`、`mode.execution`、risk/approval/result renderer | 未批准工具说明 |
+| `audit` | `root.identity`、`mode.audit`、trace/context renderer | 新任务 proposal |
+| `recovery` | `root.identity`、`mode.recovery`、context compaction renderer | 新执行动作 |
+
+`root.identity` 只能定义身份、总边界和主风格；不得包含“任务工作流必须说明目标、对象、约束、缺失信息、风险级别和下一步”这类会污染普通对话的模板。此类字段只允许出现在 `mode.planning`、`mode.preflight`、`mode.audit`，且仅在对应模式加载。
+
+### -1.7 Context Pack 与上下文压缩展示原则
+
+1. `dialogue`、`analysis` 默认不得向用户展示 `Context Pack`、`0 approved memories`、`0 temp memories`、prompt bundle、token budget 或压缩摘要。
+2. Context Pack 作为内部上下文注入时，必须使用系统/开发者不可外显说明，明确“不要在回答中提及本上下文包或记忆数量，除非用户要求审计”。
+3. 空 Context Pack 不应注入用户可见消息；避免诱导模型回答“当前上下文 0 条”。
+4. 自动压缩应尽量无感执行；只有压缩失败、需要用户补充原始信息或用户主动要求展开时，才进入 `recovery` 或 `audit` 可见说明。
+5. 压缩摘要、key facts、source ids 和 context assembly trace 必须保留在审计层，不能丢失用户确认、审批、风险边界、未完成任务和否定约束。
+
+### -1.8 Runtime Config 新增项
+
+所有模式、阈值、禁用词、展示策略和确认策略必须配置化，不得硬编码：
+
+```yaml
+dialogue_modes:
+  default_mode: dialogue
+  modes:
+    dialogue:
+      prompt_nodes: [root.identity, mode.dialogue]
+      allow_tools: false
+      allow_action_proposals: false
+      expose_context_pack: false
+      expose_audit_fields: false
+      max_clarification_questions: 0
+      forbidden_main_reply_phrases:
+        - "目标："
+        - "对象："
+        - "约束："
+        - "缺失信息："
+        - "风险级别："
+        - "下一步："
+        - "Context Pack"
+        - "可审计计划"
+    analysis:
+      prompt_nodes: [root.identity, mode.analysis]
+      allow_tools: read_only
+      allow_action_proposals: false
+      expose_context_pack: false
+      max_clarification_questions: 1
+    planning:
+      prompt_nodes: [root.identity, mode.planning]
+      allow_tools: read_only
+      allow_action_proposals: draft_only
+      expose_context_pack: false
+      max_clarification_questions: 3
+    preflight:
+      prompt_nodes: [root.identity, mode.preflight]
+      allow_tools: preflight
+      approval_required: true
+    execution:
+      prompt_nodes: [root.identity, mode.execution]
+      allow_tools: approved_execution
+      approval_required: true
+    audit:
+      prompt_nodes: [root.identity, mode.audit]
+      allow_tools: read_only
+      expose_audit_fields: true
+    recovery:
+      prompt_nodes: [root.identity, mode.recovery]
+      allow_tools: read_only
+      expose_audit_fields: false
+
+mode_router:
+  confidence_thresholds:
+    direct_answer_min: 0.55
+    task_request_min: 0.72
+    execution_request_min: 0.86
+  fallback:
+    low_confidence_mode: dialogue
+    ask_clarification_mode: analysis
+    max_questions: 1
+  user_overrides:
+    analysis_only_patterns: ["只做分析", "不改代码", "不要执行", "只读分析"]
+    execute_patterns: ["开始执行", "按方案执行", "确认执行"]
+    audit_patterns: ["展开证据", "列出 Trace", "验证矩阵", "审计记录"]
+```
+
+### -1.9 主回答污染防护
+
+`dialogue` 和 `analysis` 模式的主回答必须通过污染防护测试。以下内容默认禁止出现在主气泡中，除非用户明确要求展开审计或进入任务计划：
+
+- `目标：`
+- `对象：`
+- `约束：`
+- `缺失信息：`
+- `风险级别：`
+- `下一步：`
+- `Context Pack`
+- `0 条已审计记忆`
+- `可审计计划`
+- `我将生成计划`
+- `请选择角色或模式`
+- `确认问题：`
+- raw JSON、trace id、task id、prompt bundle id
+
+前端允许在侧栏显示状态，但默认应极简；普通对话不显示计划卡，或计划卡为空且折叠。
+
+### -1.10 数据与 API 增量
+
+建议在不破坏现有表的前提下增量记录：
+
+- `research_agent_tasks.input_json.dialogue_mode`
+- `research_agent_tasks.input_json.mode_decision`
+- `assistant_conversation_messages.content_json.dialogue_mode`
+- `assistant_conversation_messages.content_json.intent_type`
+- `assistant_conversation_messages.content_json.mode_decision`
+- `assistant_trace_events.payload_json.mode_decision`
+- `assistant_action_proposals.mode_required` 或等价字段
+
+如后续新增正式字段，必须走 DDL gate，并为表/字段添加 PostgreSQL comment。
+
+### -1.11 P-1 验收矩阵
+
+| 编号 | 验收项 | 标准 |
+| --- | --- | --- |
+| M0A | 自动模式路由 | 每轮返回 `mode_decision`，包含 mode、intent、confidence、tool/approval 边界 |
+| M0B | 能力询问保持 dialogue | “你能做什么”“能否生成 QE 实验和诊断 bug”直接回答，不进入 planning/preflight/execution |
+| M0C | 多轮模式切换 | “你能做什么” -> “通用能力” 仍保持 direct answer，不输出计划模板 |
+| M0D | 关键词不触发模式升级 | 含 QE/bug/Issue/MCP 的能力、概念、状态问题不得生成 Action Proposal |
+| M0E | 显式任务进入 planning | “帮我设计一个 QE 实验，先不运行” 进入 planning，只生成草案，不执行 |
+| M0F | 确认执行必须经 preflight/approval | “确认执行” 没有有效 proposal/preflight/approval 时不能执行 |
+| M0G | Context Pack 不外显 | direct-answer 主回复不得出现 Context Pack、记忆条数、token budget |
+| M0H | 主回答污染防护 | dialogue/analysis 不出现目标/对象/约束/风险级别/下一步等计划字段 |
+| M0I | 审计可展开 | 用户要求 Trace/验证矩阵时进入 audit，能展示证据且不创建新任务动作 |
+| M0J | 配置化 | 模式、阈值、禁用词、工具权限、展示策略全部来自 runtime config/Prompt Pack/UI copy/DB activation |
+
+### -1.12 与后续章节的关系
+
+- 原 `P0 类人对话治理` 升级为本模式架构下的第一个落地切片，继续保留 E0A-E0H，但必须补充 M0A-M0J。
+- 原 `Capability Registry`、`Action Proposal`、`Execution Gateway` 和 `QE workflow` 只允许从 `planning/preflight/execution` 模式进入。
+- 原 `Context Compression` 设计并入 `recovery` 与内部 context layer；压缩不得打断用户连续使用，且不得丢失关键事实。
+- 原 `Prompt Pack Runtime Governance` 继续作为配置与激活机制；但 prompt 选取必须由 mode router 控制，不再只按 intent 选取。
+- 后续实现报告必须先证明 M0A-M0J，再证明 E0A-E0H 和 E1-E18。
+
+## 0. P0 前置整改：类人对话治理与默认示例清理
+
+本节是 `Phase -1` 自动模式切换通过后的第一落地切片，必须排在 Capability Registry、Action Proposal、MCP/Skill Execution Gateway 和 QE workflow 之前。后续任何方案、实现、测试或 UI 文案如果与 `Phase -1` 或本节冲突，均以 `Phase -1` 和本节为准并必须更新。
+
+### 0.1 整改目标
+
+1. **直接回答用户真实问题**：能力询问、概念解释、状态查询应先给结论；不得输出解释用户意图分类或声明“不执行动作”的元话术。
+2. **先理解意图，再选择流程**：模型或意图层必须区分 `capability_inquiry`、`concept_explanation`、`status_query`、`bug_diagnosis_request`、`issue_intake_request`、`experiment_draft_request`、`experiment_validation_request`、`experiment_execution_request`、`ambiguous_request`、`general_chat`。
+3. **关键词只用于候选召回，不能启动 workflow**：`QE`、`实验`、`回测`、`bug`、`issue`、`MCP` 等词只能帮助检索能力目录或上下文，不能单独触发草案、确认卡、preflight、materialize、run 或 issue 创建流程。
+4. **彻底清理固定 QE loop 示例污染**：active prompt、runtime config、backend card、frontend 示例/placeholder、测试夹具和文档中的执行型示例不得把固定 loop 数当作默认任务；只有用户明确提出时才保留该参数。
+5. **Bug 诊断是一等能力**：用户问“能否诊断 bug”或请求诊断时，应回答诊断能力、所需证据和可用入口；不得被 QE 草案流程覆盖。
+6. **主回答保持简洁**：普通对话只显示必要结论和最少澄清；计划卡、确认卡、上下文健康、trace、候选能力和过程细节默认折叠到 side panel/debug drawer，不能拼接进主气泡。
+7. **用户可见话术全部治理化**：能力说明、澄清问题、计划卡标题、确认文案、欢迎语、placeholder、示例问题和 workflow renderer 模板必须来自 Prompt Pack、runtime config、capability catalog、UI copy config 或 DB activation；不得硬编码在 Python/TSX 中。
+8. **JARVIS-like 是交互风格，不是角色扮演**：目标是冷静、简洁、上下文感知、主动但克制、风险时一句话提醒、需要授权时清楚等待；不得加入电影化口癖、夸张自述或无关过程。
+
+### 0.2 已确认的清理目标
+
+下一阶段实现必须优先扫描并移除以下 active/runtime 可见默认示例，替换为参数化、非默认化或按用户输入生成的内容：
+
+| 位置 | 当前问题 | 整改要求 |
+| --- | --- | --- |
+| `configs/research_assistant/runtime_context.yaml` | 示例能力文案包含固定 QE loop 数 | 改为通用 QE 实验草案示例，loop 数仅来自用户输入 |
+| `backend/services/research_assistant/service.py` | `_build_human_cards()` 等路径含固定 QE loop 草案和确认问题 | 删除固定 loop 数；按 intent 和 capability schema 动态生成 |
+| `prompt_packs/research_assistant/main/nodes/domain.qe_experiment.md` | domain 示例把特定 loop 任务作为触发样例 | 改为能力说明与条件化模板，不默认启动流程 |
+| `frontend/src/app/research-assistant/chat/page.tsx` | chat 示例和 placeholder 暗示固定 QE loop 任务 | 改为能力问答、诊断、草案等中性示例 |
+| `frontend/src/app/research-assistant/workbench/page.tsx` | workbench mock/dry-run 标题含固定 QE loop draft | 改为 generic draft 或从 proposal.title 读取 |
+
+### 0.3 与执行闭环的关系
+
+执行闭环仍然是下一阶段目标，但入口必须从“用户明确提出任务请求”开始，而不是从关键词匹配开始：
+
+```text
+User Message
+  -> Intent Understanding
+  -> Direct Answer or Clarification
+  -> Capability Candidate Recall
+  -> Action Proposal only for explicit task requests
+  -> Confirmation / Preflight / Execute
+```
+
+因此，`Conversation -> Planner -> Action Proposal -> Confirmation -> Preflight -> MCP/Skill -> Trace -> Human Report` 只适用于 `experiment_draft_request`、`experiment_validation_request`、`experiment_execution_request`、`issue_intake_request` 等明确任务请求；不适用于能力询问、概念解释、状态查询和普通对话。
+
+### 0.4 P0 验收用例
+
+| 编号 | 验收项 | 标准 |
+| --- | --- | --- |
+| E0A | 能力询问直答 | 用户问“能否生成 QE 实验和诊断 bug”时，回答能力范围和所需输入；不输出意图分类元话术，不生成计划卡 |
+| E0B | Bug 诊断直答 | 用户问 bug 诊断能力时必须覆盖诊断流程、可用证据和边界，不被 QE 草案覆盖 |
+| E0C | 关键词不触发 workflow | 含 `QE`、`实验`、`bug`、`issue` 的概念/能力/状态问题不得创建 Action Proposal、preflight 或确认卡 |
+| E0D | 默认 loop 清零 | active prompt、runtime config、backend、frontend 用户可见文案和测试不再包含固定 QE loop 执行型任务 |
+| E0E | 显式任务才规划 | 只有用户明确要求“帮我设计/创建/运行/提交”时，才进入草案、确认或执行链路 |
+| E0F | 主回答瘦身 | 主气泡不拼接过程卡；计划、trace、候选能力、上下文健康默认折叠或在 side panel 展示 |
+| E0G | 用户可见文案外置 | 能力说明、确认问题、计划卡标题、placeholder、示例问题不得硬编码在 `.py` 或 `.tsx` 业务逻辑中 |
+| E0H | 风格一致性 | 回答保持类人助手风格：少说过程、多给结论；风险和授权点简短明确 |
 
 ## 1. 目的与边界
 
-本设计不是新的研发方向，而是补齐既有 Research Assistant 设计中的执行闭环部分。
+本设计不是新的研发方向，而是在 `Phase -1` 自动模式切换和 P0 类人对话治理通过后，补齐既有 Research Assistant 设计中的执行闭环部分。
 
 原设计已经定义 Phase 1 必须实现的主链路:
 
@@ -20,7 +349,7 @@ Conversation -> Planner -> Action Proposal -> Confirmation -> Preflight -> MCP/S
 
 当前 PR `#198` 已完成 Prompt Pack、Runtime Config、上下文预算、自动压缩、Reactive compact、key facts、MCP/Skill 基础目录、preflight、approval、trace 和 dry-run 基础能力；但尚未实现真实 MCP/Skill 执行和端到端任务闭环。
 
-本设计补齐以下内容:
+在 `Phase -1` 与 P0 整改验收通过后，本设计补齐以下内容:
 
 1. Capability Registry 与 MCP/Skill 能力同步。
 2. Action Proposal、Confirmation、Approval 与 plan digest 绑定。
@@ -53,22 +382,26 @@ Conversation -> Planner -> Action Proposal -> Confirmation -> Preflight -> MCP/S
 | MCP preflight | 已具备 | `/api/v1/research-assistant/mcp/preflight` |
 | Approval request | 已具备 | `assistant_approval_requests` |
 | Workbench dry-run | 已具备 | `/api/v1/research-assistant/workbench/dry-run-execute` returns `executed=false` |
+| 自动模式切换 | 待实现 | 本设计 P-1 新增要求；当前仅有 intent-gated Prompt Tree 的第一版切片 |
 | 真实 MCP/Skill execute | 未具备 | 需要本设计实现 |
 | 全量能力同步 | 未具备 | 需要本设计实现 |
 | QE 创建实验端到端 | 未具备 | 需要本设计实现 |
 
 ## 4. 设计原则
 
-1. **Capability first**: 助手只能从已同步、已批准、可审计的 Capability Registry 中选择能力。
-2. **MCP/API first**: 所有业务动作通过 MCP/API/Skill gateway，不通过 UI 点击或隐式脚本。
-3. **Proposal before execution**: 任何有副作用动作必须先生成 Action Proposal。
-4. **Confirmation before preflight/execute**: 未确认不得进入有副作用 preflight 或 execute。
-5. **Preflight before execute**: preflight 失败不得执行。
-6. **Approval for high risk**: 高风险和 production-sensitive 必须绑定 approval、plan digest、config/version 和确认文本。
-7. **Trace everything**: plan、preflight、approval、execute、result、failure 都必须可回放。
-8. **Fail fast, no silent fallback**: 失败必须结构化返回，不得把失败伪装成成功。
-9. **Runtime configurable**: retry、timeout、page size、catalog sync limit、risk policy 等可调参数进入 runtime config 或 DB activation。
-10. **Original facts preserved**: 用户确认、参数、审批、执行结果和错误是结构化事实源，不依赖自然语言摘要。
+1. **Mode first**: 每轮先由可测试的 Mode Router 决定 `dialogue`、`analysis`、`planning`、`preflight`、`execution`、`audit` 或 `recovery`，再选择 prompt、context、tool 和 UI 展示密度。
+2. **Dialogue first**: 先回答用户真实问题；能力问答、概念解释和状态查询不进入执行链路。
+3. **Intent before workflow**: 先分类意图，再召回 capability；关键词不得单独触发 workflow。
+4. **Capability first**: 助手只能从已同步、已批准、可审计的 Capability Registry 中选择能力。
+5. **MCP/API first**: 所有业务动作通过 MCP/API/Skill gateway，不通过 UI 点击或隐式脚本。
+6. **Proposal before execution**: 任何有副作用动作必须先生成 Action Proposal。
+7. **Confirmation before preflight/execute**: 未确认不得进入有副作用 preflight 或 execute。
+8. **Preflight before execute**: preflight 失败不得执行。
+9. **Approval for high risk**: 高风险和 production-sensitive 必须绑定 approval、plan digest、config/version 和确认文本。
+10. **Trace everything**: plan、preflight、approval、execute、result、failure 都必须可回放。
+11. **Fail fast, no silent fallback**: 失败必须结构化返回，不得把失败伪装成成功。
+12. **Runtime configurable**: retry、timeout、page size、catalog sync limit、risk policy、用户可见 copy 和 UI 展示开关等可调项进入 runtime config、Prompt Pack、UI copy config 或 DB activation。
+13. **Original facts preserved**: 用户确认、参数、审批、执行结果和错误是结构化事实源，不依赖自然语言摘要。
 
 ## 5. 数据模型补充
 
@@ -240,24 +573,23 @@ Planner 不直接执行工具，只输出结构化 Action Proposal:
 
 ```json
 {
-  "capability_key": "qe.create_experiment",
+  "capability_key": "qe.create_experiment_draft",
   "proposal_type": "workflow_pack",
-  "title": "创建 QE 10 loop 实验草案",
-  "risk_level": "high",
-  "side_effect_level": "high_cost_compute",
+  "title": "创建 QE 实验草案",
+  "risk_level": "medium",
+  "side_effect_level": "draft_only",
   "input_json": {
-    "loop_count": 10,
-    "stock_pool": "pending_confirmation",
-    "backtest_window": "pending_confirmation",
+    "intent_type": "experiment_draft_request",
+    "loop_count": "unspecified_until_user_provides",
+    "stock_pool": "pending_if_required",
+    "backtest_window": "pending_if_required",
     "materialize": false,
     "run": false
   },
   "required_confirmations": [
-    "CONFIRM_QE_DRAFT",
-    "CONFIRM_QE_MATERIALIZE",
-    "CONFIRM_QE_RUN"
+    "CONFIRM_QE_DRAFT_PARAMETERS"
   ],
-  "next_step": "ask_confirmation"
+  "next_step": "ask_only_missing_required_inputs"
 }
 ```
 
@@ -386,7 +718,7 @@ execution:
 
 ## 10. Workflow Pack: `qe.create_experiment`
 
-`qe.create_experiment` 是 Phase 1 修复版强制验收场景。实现顺序必须与原设计一致。
+`qe.create_experiment` 是 Phase 1 修复版强制验收场景，但必须在 P0 类人对话治理通过后实施。实现顺序必须与原设计一致：先确认用户明确要求创建、校验、物化或运行实验，再进入 workflow。
 
 ### 10.1 Workflow steps
 
@@ -395,7 +727,7 @@ execution:
 | 1 | 理解实验目标和边界 | planner | medium | 无副作用 |
 | 2 | 读取 QE MCP/Skill 目录 | capability lookup | read_only | trace |
 | 3 | 加载相关 Memory/规则 | context pack | read_only | trace |
-| 4 | 询问 loop、窗口、股票池、模型资源 | chat confirmation | medium | 用户确认 |
+| 4 | 询问缺失的窗口、股票池、模型资源和用户明确需要的迭代数量 | chat confirmation | medium | 用户确认；不得默认固定 loop 数 |
 | 5 | 生成实验草案 | workflow_pack | draft_only | C1 |
 | 6 | 创建/校验 template | mcp_tool | write_nonprod | C2 approval |
 | 7 | 展示 validate diff/summary | renderer | read_only | trace |
@@ -405,6 +737,8 @@ execution:
 
 ### 10.2 强制 guard
 
+- 能力询问、概念解释、状态查询不得进入本 workflow。
+- 不得因 QE、实验、回测、bug 等关键词自动进入本 workflow。
 - 未确认不得 materialize。
 - 未二次确认不得 run。
 - 股票池、回测窗口、成本、节点健康、模板 diff 必须展示。
@@ -429,7 +763,7 @@ execution:
 
 ### 11.1 Chat 主入口
 
-Chat 返回必须以人类可读卡片呈现:
+Chat 主入口必须先按模式决定展示密度。`dialogue` / `analysis` 主气泡只展示自然语言结论、必要依据和最多一个澄清问题；以下卡片只在任务模式或侧栏/折叠区呈现:
 
 - Intent summary card
 - Missing slots card
@@ -438,6 +772,8 @@ Chat 返回必须以人类可读卡片呈现:
 - Preflight result card
 - Execute progress card
 - Result / failure card
+
+普通对话不得把目标、对象、约束、风险级别、下一步、Context Pack 或计划卡拼接到主气泡；任务模式也应优先给用户可读摘要，raw JSON 只能进入调试抽屉。
 
 ### 11.2 Workbench
 
@@ -511,6 +847,8 @@ ui_execution:
 
 | 编号 | 验收项 | 标准 |
 | --- | --- | --- |
+| M0A-M0J | P-1 自动模式切换与主回答隔离 | 先通过本设计第 -1.11 节全部验收；否则不得进入 P0、Capability Registry 或执行闭环开发验收 |
+| E0A-E0H | P0 类人对话治理 | 依赖 M0A-M0J 通过；再通过本设计第 0.4 节全部验收，否则不得进入执行闭环开发验收 |
 | E1 | Capability sync | 从 approved MCP/Skill 来源同步 catalog；disabled/blocked 不进入可选列表 |
 | E2 | Capability schema | 每个 capability 有 schema、risk、side_effect、checksum、中文说明 |
 | E3 | Planner proposal | 有副作用任务只生成 Action Proposal，不直接 execute |
@@ -531,6 +869,22 @@ ui_execution:
 | E18 | Design compliance | 实现报告逐条映射本矩阵到代码、测试、API/UI/trace 证据 |
 
 ## 15. 实施阶段
+
+### Phase -1: 自动模式切换与主回答隔离
+
+- 实现 Mode Router，持久化 `mode_decision`，覆盖 `dialogue`、`analysis`、`planning`、`preflight`、`execution`、`audit`、`recovery`。
+- 按模式隔离 Prompt Pack：`dialogue` / `analysis` 不加载 planning、workflow、tool_guard 等任务模板；`planning` / `preflight` / `audit` 才加载对应节点。
+- 按模式隔离 Context Pack：direct-answer 场景不外显 Context Pack、记忆条数、token budget 或压缩摘要；Context Pack 只作为内部上下文和审计证据。
+- 增加主回答污染防护，覆盖目标、对象、约束、风险级别、下一步、Context Pack、可审计计划、确认问题、raw JSON 等不应出现在普通对话主气泡的内容。
+- 验证 M0A-M0J，未通过前不得启动 Phase 0 或 Phase A-F 的完成验收。
+
+### Phase 0: P0 类人对话治理与默认示例清理
+
+- 在 Mode Router 基础上实现 intent understanding，明确区分能力问答、概念解释、状态查询、bug 诊断、issue intake、实验草案、实验校验和实验执行。
+- 清理 active prompt、runtime config、backend card、frontend 示例和测试中的固定 QE loop 执行型内容；loop 数只能来自用户输入、任务参数或 capability schema。
+- 将用户可见能力说明、澄清问题、计划卡标题、placeholder 和示例问题迁移到 Prompt Pack、runtime config、capability catalog、UI copy config 或 DB activation。
+- 修改 chat 主气泡渲染，默认不拼接 plan、clarification、proposal、context health；这些内容进入折叠面板或 side panel。
+- 验证 E0A-E0H，且必须依赖 M0A-M0J 通过；未通过前不得启动 Phase A-F 的完成验收。
 
 ### Phase A: Capability Registry 与 sync dry-run
 
@@ -599,6 +953,12 @@ PR `#198` 提供本设计的前置能力:
 
 ## 18. 结论
 
-下一阶段方向与既有研发设计一致，但必须表述为“Phase 1 修复版中尚未完成的 MCP/Skill 真实执行闭环”，而不是新路线。
+下一阶段方向与既有研发设计一致，不是新的替换路线，也不引入替换性外部 agent/workflow 框架。本次调整只是把多个工具与研究中的可借鉴理念，整合到 AIstock 现有 Research Assistant 架构中，形成更接近人类助手习惯的自动模式切换、主回答隔离和可审计任务执行链路。
 
-开发前应以本设计的 E1-E18 验证矩阵作为准入和验收标准。完成 QE 创建实验端到端 workflow 前，Research Assistant 不应宣称具备完整任务执行能力或可调用所有 MCP。
+后续优先级必须调整为：
+
+1. 先完成 `Phase -1` 自动模式切换与主回答隔离。
+2. 再完成 `Phase 0` 类人对话治理、固定示例清理和用户可见 copy 外置。
+3. 最后进入 `Phase A-F`，补齐 Phase 1 修复版中尚未完成的 MCP/Skill 真实执行闭环。
+
+开发前应以本设计的 M0A-M0J、E0A-E0H 与 E1-E18 验证矩阵作为准入和验收标准，顺序不能倒置。M0A-M0J 未通过时，不得验收 P0 类人对话治理；E0A-E0H 未通过时，不得继续宣称或验收 MCP/Skill 执行闭环；完成 QE 创建实验端到端 workflow 前，Research Assistant 不应宣称具备完整任务执行能力或可调用所有 MCP。

@@ -1,0 +1,82 @@
+{
+  "actual": "Output, validation archive, and status-sync paths can write files directly under canonical root main and leave it dirty.",
+  "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    "scripts/issue_flow.py",
+    "scripts/code_intelligence_adapter.py",
+    "scripts/bug_github_sync.py",
+    "scripts/aistock_mcp_server.py",
+    "backend/services/validation/execution_runner.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "backend/tests/scripts/test_bug_github_sync.py",
+    "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+    "backend/tests/test_validation_execution_runner.py",
+    "backend/tests/scripts/test_issue_flow.py",
+    "backend/tests/scripts/test_code_intelligence_adapter.py",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260527_BUG-129-prevent-canonical-root-pollution-from-workflow-output-runner-evidence-an.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-129",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-27T11:02:59.324424Z",
+  "description": "Output, validation archive, and status-sync paths can write files directly under canonical root main and leave it dirty.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260527-68728db2d6b4",
+      "timestamp": "2026-05-27T11:02:59.324419Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:\\Dev\\AIstock\\-",
+    "F:\\Dev\\AIstock\\tests\\aistock_validation\\history\\validation-center\\20260527_063346_l0_l0_628f7e9a_runner-validation.md"
+  ],
+  "expected": "Issue and validation workflows write only inside isolated task worktrees or stdout/transient storage; canonical root main remains a runtime and sync target.",
+  "first_seen_at": "2026-05-27T11:02:59.324424Z",
+  "fix_branch": null,
+  "fix_commit": "039a5a2521151806b73ce564a074c8b84cf58dae",
+  "fixed_at": "2026-05-27T11:37:09.546447Z",
+  "github_issue_number": 247,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/247",
+  "last_seen_at": "2026-05-27T11:02:59.324424Z",
+  "module": "validation_platform",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/248",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/aistock_issue_workflow.py triage-ci-issue --issue 214 --output -",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files",
+    "validation_center_backend",
+    "validation_catalog_integrity",
+    "validation_module_registry_l0",
+    "validation_coverage_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation_platform"
+  ],
+  "title": "Prevent canonical-root pollution from workflow output, runner evidence, and BUG status sync",
+  "trigger_condition": {
+    "fingerprint": "68728db2d6b49dceb9a1628d",
+    "source_event_id": "FE-20260527-68728db2d6b4"
+  },
+  "validation_evidence": [
+    "PR #248 CI green and merged"
+  ],
+  "verification_run_id": null
+}

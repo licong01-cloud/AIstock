@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from backend.services.trading_core.errors import StrategyPackageValidationError
+from backend.services.trading_core.errors import PackageAssetInvalidError, RuntimeConfigInvalidError
 
 from .models import StrategyPackageManifest
 
@@ -92,17 +92,17 @@ def derive_locked_core_hash(manifest: StrategyPackageManifest) -> str:
 
 def validate_runtime_variant_config(variant_config: dict[str, Any]) -> None:
     if not variant_config:
-        raise StrategyPackageValidationError("runtime variant config is required")
+        raise RuntimeConfigInvalidError("runtime variant config is required")
     keys = set(variant_config)
     forbidden = sorted(keys.intersection(_FORBIDDEN_CORE_KEYS))
     if forbidden:
-        raise StrategyPackageValidationError(
+        raise RuntimeConfigInvalidError(
             "runtime variant cannot modify frozen StrategyPackage core",
             context={"forbidden_keys": forbidden},
         )
     unknown = sorted(keys.difference(_ALLOWED_RUNTIME_KEYS))
     if unknown:
-        raise StrategyPackageValidationError(
+        raise RuntimeConfigInvalidError(
             "runtime variant contains unsupported runtime keys",
             context={"unsupported_keys": unknown, "allowed_keys": sorted(_ALLOWED_RUNTIME_KEYS)},
         )
@@ -120,18 +120,18 @@ def build_runtime_variant(
     created_by: str = "aistock_api",
 ) -> StrategyPackageRuntimeVariant:
     if not manifest.manifest_sha256:
-        raise StrategyPackageValidationError("runtime variant requires a frozen manifest_sha256")
+        raise PackageAssetInvalidError("runtime variant requires a frozen manifest_sha256")
     if not variant_name.strip():
-        raise StrategyPackageValidationError("runtime variant name is required")
+        raise RuntimeConfigInvalidError("runtime variant name is required")
     if not created_by.strip():
-        raise StrategyPackageValidationError("runtime variant created_by is required")
+        raise RuntimeConfigInvalidError("runtime variant created_by is required")
     if variant_kind.value == "hmm_overlay" or "hmm_overlay" in variant_config:
-        raise StrategyPackageValidationError(
+        raise RuntimeConfigInvalidError(
             "HMM is a platform runtime capability and cannot be saved as a StrategyPackage runtime variant",
             context={"variant_kind": variant_kind.value, "variant_keys": sorted(variant_config)},
         )
     validate_runtime_variant_config(variant_config)
-    _validate_paper_candidate(validation_status=validation_status, paper_candidate=paper_candidate)
+    _ = paper_candidate  # legacy request field; no longer a Paper/Selection admission gate.
     locked_core_hash = derive_locked_core_hash(manifest)
     variant_hash = canonical_json_sha256(
         {
@@ -151,7 +151,7 @@ def build_runtime_variant(
         variant_config=variant_config,
         variant_hash=variant_hash,
         validation_status=validation_status,
-        paper_candidate=paper_candidate,
+        paper_candidate=False,
         validation_evidence=validation_evidence or {},
         created_by=created_by.strip(),
     )
@@ -163,15 +163,6 @@ def ensure_runtime_variant_status(
     paper_candidate: bool,
     validation_evidence: dict[str, Any] | None = None,
 ) -> None:
-    _validate_paper_candidate(validation_status=validation_status, paper_candidate=paper_candidate)
+    _ = paper_candidate  # kept only for legacy schema/API compatibility.
     if validation_status == RuntimeVariantValidationStatus.VALIDATION_PASSED and not validation_evidence:
-        raise StrategyPackageValidationError("passed runtime variant requires validation evidence")
-
-
-def _validate_paper_candidate(
-    *,
-    validation_status: RuntimeVariantValidationStatus,
-    paper_candidate: bool,
-) -> None:
-    if paper_candidate and validation_status != RuntimeVariantValidationStatus.VALIDATION_PASSED:
-        raise StrategyPackageValidationError("runtime variant must pass validation before becoming a paper candidate")
+        raise RuntimeConfigInvalidError("passed runtime variant requires validation evidence")

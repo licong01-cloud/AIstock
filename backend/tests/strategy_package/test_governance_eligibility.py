@@ -143,7 +143,7 @@ def test_governance_eligibility_returns_read_only_summary_with_all_gates_ready()
 
     assert eligibility["package_id"] == package_id
     assert eligibility["manifest_sha256"] == service.get_package(package_id).manifest_sha256
-    assert eligibility["paper_ready"] is True
+    assert eligibility["live_strict_ready"] is True
     assert eligibility["blockers"] == []
     assert eligibility["satisfied_gates"] == [
         "manifest_identity",
@@ -159,7 +159,7 @@ def test_governance_eligibility_returns_read_only_summary_with_all_gates_ready()
     assert eligibility["protected_asset_status"]["passed"] is True
     assert eligibility["protected_asset_status"]["protected_asset_count"] == 1
     assert eligibility["runtime_variant_candidate_status"]["passed"] is True
-    assert eligibility["runtime_variant_candidate_status"]["paper_candidate_count"] == 1
+    assert eligibility["runtime_variant_candidate_status"]["validated_variant_count"] == 1
     assert [event.reason for event in service.list_status_events(package_id)] == before_events
 
 
@@ -172,14 +172,14 @@ def test_governance_eligibility_blocks_missing_protected_asset_ledger() -> None:
 
     eligibility = service.governance_eligibility(package_id, metric_key="annual_return")
 
-    assert eligibility["paper_ready"] is False
+    assert eligibility["live_strict_ready"] is False
     assert "protected_asset_ledger_missing" in eligibility["blockers"]
     assert "protected_assets" not in eligibility["satisfied_gates"]
     assert eligibility["protected_asset_status"]["passed"] is False
     assert eligibility["protected_asset_status"]["asset_count"] == 0
 
 
-def test_governance_eligibility_blocks_missing_runtime_candidate() -> None:
+def test_governance_eligibility_treats_missing_runtime_candidate_as_warning() -> None:
     service, package_id = _service_with_manifest()
     completed_at = datetime.now(timezone.utc) - timedelta(days=2)
     _record_protected_model_asset(service, package_id)
@@ -188,11 +188,12 @@ def test_governance_eligibility_blocks_missing_runtime_candidate() -> None:
 
     eligibility = service.governance_eligibility(package_id, metric_key="annual_return")
 
-    assert eligibility["paper_ready"] is False
-    assert "runtime_variant_paper_candidate_missing" in eligibility["blockers"]
-    assert "runtime_variant_candidate" not in eligibility["satisfied_gates"]
-    assert eligibility["runtime_variant_candidate_status"]["passed"] is False
-    assert eligibility["runtime_variant_candidate_status"]["paper_candidate_count"] == 0
+    assert eligibility["live_strict_ready"] is True
+    assert "runtime_variant_paper_candidate_missing" not in eligibility["blockers"]
+    assert "runtime_variant_candidate" in eligibility["satisfied_gates"]
+    assert eligibility["runtime_variant_candidate_status"]["passed"] is True
+    assert eligibility["runtime_variant_candidate_status"]["validated_variant_count"] == 0
+    assert "validated_runtime_variant_missing" in eligibility["runtime_variant_candidate_status"]["warnings"]
 
 
 def test_governance_eligibility_blocks_fragile_validation_stability() -> None:
@@ -205,7 +206,7 @@ def test_governance_eligibility_blocks_fragile_validation_stability() -> None:
 
     eligibility = service.governance_eligibility(package_id, metric_key="annual_return")
 
-    assert eligibility["paper_ready"] is False
+    assert eligibility["live_strict_ready"] is False
     assert "seed_stability=FRAGILE" in eligibility["blockers"]
     assert "validation_stability" not in eligibility["satisfied_gates"]
     assert eligibility["validation_stability"]["passed"] is False
@@ -219,7 +220,7 @@ def test_governance_eligibility_blocks_disallowed_package_status() -> None:
 
     eligibility = service.governance_eligibility(package_id, metric_key="annual_return")
 
-    assert eligibility["paper_ready"] is False
+    assert eligibility["live_strict_ready"] is False
     assert "package_status=DRAFT" in eligibility["blockers"]
     assert "manifest_identity" not in eligibility["satisfied_gates"]
     assert eligibility["manifest_identity"]["passed"] is False
@@ -248,5 +249,5 @@ def test_governance_eligibility_router_exposes_read_only_summary(monkeypatch) ->
     assert response.status_code == 200
     payload = response.json()
     assert payload["package_id"] == "pkg_1"
-    assert payload["eligibility"]["paper_ready"] is True
+    assert payload["eligibility"]["live_strict_ready"] is True
     assert payload["eligibility"]["original_fixed_weight_retest"]["status"] == "READY"

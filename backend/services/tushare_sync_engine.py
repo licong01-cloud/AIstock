@@ -19,6 +19,7 @@ import psycopg2
 import psycopg2.extras as pgx
 
 from ..db.pg_pool import get_conn
+from .trading_calendar_status import TradingCalendarStatusService
 from .data_refresh_audit import DataRefreshAuditRepository
 from .data_sync_targets import (
     DataSyncAttemptRecord,
@@ -1031,19 +1032,12 @@ class TushareSyncEngine:
         return result
 
     def _trading_dates_between(self, conn, start_date: dt.date, end_date: dt.date) -> List[dt.date]:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT cal_date
-                FROM market.trading_calendar
-                WHERE is_trading = TRUE
-                  AND cal_date >= %s
-                  AND cal_date <= %s
-                ORDER BY cal_date
-                """,
-                (start_date, end_date),
-            )
-            return [row[0] for row in cur.fetchall()]
+        return TradingCalendarStatusService.list_trading_days_from_conn(
+            conn,
+            start_date,
+            end_date,
+            allow_empty=True,
+        )
 
     def _table_row_counts_by_date(
         self,

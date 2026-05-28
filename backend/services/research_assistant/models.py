@@ -6,7 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -31,6 +31,7 @@ EVENT_TYPES = {
     "chat_received",
     "prompt_bundle_built",
     "context_pack_built",
+    "context_compacted",
     "llm_started",
     "llm_done",
     "llm_failed",
@@ -38,7 +39,9 @@ EVENT_TYPES = {
     "mcp_preflight_started",
     "mcp_preflight_passed",
     "mcp_preflight_failed",
+    "mcp_execution_timeout",
     "mcp_started",
+    "mcp_retry",
     "mcp_done",
     "mcp_failed",
     "skill_started",
@@ -54,6 +57,7 @@ EVENT_TYPES = {
 SEVERITIES = {"debug", "info", "warning", "error", "critical"}
 SKILL_USAGE_STATUSES = {"started", "completed", "failed", "cancelled"}
 RISK_LEVELS = {"low", "medium", "high", "production_sensitive"}
+SIDE_EFFECT_LEVELS = {"read_only", "draft_only", "write_nonprod", "high_cost_compute", "production_sensitive"}
 MEMORY_TYPES = {
     "core",
     "procedural",
@@ -67,6 +71,24 @@ MEMORY_TYPES = {
 }
 APPROVAL_STATUSES = {"draft", "approved", "rejected", "expired", "superseded"}
 APPROVAL_REQUEST_STATUSES = {"pending", "approved", "rejected", "expired"}
+CAPABILITY_TYPES = {"mcp_tool", "skill", "workflow_pack", "composite"}
+CAPABILITY_STATUSES = {"draft", "approved", "disabled", "deprecated", "blocked"}
+ACTION_PROPOSAL_TYPES = {"workflow_step", "mcp_tool", "skill", "workflow_pack"}
+DIALOGUE_MODES = {"dialogue", "analysis", "planning", "preflight", "execution", "audit", "recovery"}
+ACTION_PROPOSAL_STATUSES = {
+    "proposed",
+    "confirmed",
+    "preflight_passed",
+    "approval_required",
+    "approved",
+    "executing",
+    "succeeded",
+    "rejected",
+    "expired",
+    "preflight_failed",
+    "failed",
+    "cancelled",
+}
 ISSUE_CANDIDATE_STATUSES = {
     "draft",
     "needs_review",
@@ -94,8 +116,10 @@ PROMPT_NODE_CATEGORIES = {
     "workflow",
     "tool_guard",
     "renderer",
+    "mode",
     "memory",
     "model_routing",
+    "context",
 }
 PROMPT_PHASES = {"planning", "preflight", "execution", "result", "reflection"}
 
@@ -343,6 +367,56 @@ class TraceEventCreate(StrictModel):
     cost_json: dict[str, Any] = Field(default_factory=dict)
 
 
+class CapabilitySyncRequest(StrictModel):
+    apply: bool = False
+    include_disabled: bool = False
+    requested_by: str = "assistant"
+
+
+class ActionProposalCreate(StrictModel):
+    task_id: str = Field(..., min_length=1)
+    conversation_id: str | None = None
+    capability_key: str = Field(..., min_length=1)
+    proposal_type: str = "workflow_pack"
+    title: str = Field(..., min_length=1)
+    summary: str = Field(..., min_length=1)
+    input_json: dict[str, Any] = Field(default_factory=dict)
+    expected_result_json: dict[str, Any] = Field(default_factory=dict)
+    context_pack_id: str | None = None
+    idempotency_key: str | None = None
+    expires_in_minutes: int | None = Field(None, ge=1)
+    created_by: str = "assistant"
+
+    @field_validator("proposal_type")
+    @classmethod
+    def _proposal_type(cls, value: str) -> str:
+        if value not in ACTION_PROPOSAL_TYPES:
+            raise ValueError(f"proposal_type must be one of {sorted(ACTION_PROPOSAL_TYPES)}")
+        return value
+
+
+class ActionProposalDecisionRequest(StrictModel):
+    confirmation_text: str | None = None
+    decided_by: str = "user"
+
+
+class ActionProposalPreflightRequest(StrictModel):
+    payload_json: dict[str, Any] | None = None
+    idempotency_key: str | None = None
+
+
+class ActionProposalApprovalRequest(StrictModel):
+    confirmation_text: str | None = None
+    approved_by: str = "user"
+
+
+class ActionProposalExecuteRequest(StrictModel):
+    dry_run: bool = False
+    actor_role: str = "primary_orchestrator"
+    payload_json: dict[str, Any] | None = None
+    idempotency_key: str | None = None
+
+
 class IssueCandidateGithubSyncRequest(StrictModel):
     mode: str = "dry_run"
     approval_id: str | None = None
@@ -384,7 +458,7 @@ class ContextPackBuildRequest(StrictModel):
     agent_id: str | None = None
     model_profile: str | None = None
     namespace: str = "aistock"
-    token_budget: int = Field(16000, ge=1000, le=1000000)
+    token_budget: int | None = Field(None, ge=1)
     include_memory_types: list[str] = Field(default_factory=lambda: ["core", "procedural", "architecture", "task_state", "experiment", "roadmap"])
 
 
@@ -477,6 +551,8 @@ class PromptBundleBuildRequest(StrictModel):
     task_id: str | None = None
     conversation_id: str | None = None
     phase: str = "planning"
+    dialogue_mode: str | None = None
+    mode_decision: dict[str, Any] = Field(default_factory=dict)
     model_profile_id: str | None = None
     required_prompt_keys: list[str] = Field(default_factory=list)
     namespace: str = "aistock"
@@ -489,6 +565,13 @@ class PromptBundleBuildRequest(StrictModel):
             raise ValueError(f"phase must be one of {sorted(PROMPT_PHASES)}")
         return value
 
+    @field_validator("dialogue_mode")
+    @classmethod
+    def _dialogue_mode(cls, value: str | None) -> str | None:
+        if value is not None and value not in DIALOGUE_MODES:
+            raise ValueError(f"dialogue_mode must be one of {sorted(DIALOGUE_MODES)}")
+        return value
+
 
 class ChatTurnRequest(StrictModel):
     message: str = Field(..., min_length=1)
@@ -496,6 +579,7 @@ class ChatTurnRequest(StrictModel):
     user_id: str = "default"
     created_by: str = "user"
     phase: str = "planning"
+    dialogue_mode_override: str | None = None
     risk_level: str = "medium"
     allow_execute: bool = False
     confirm_approval_id: str | None = None
@@ -506,6 +590,13 @@ class ChatTurnRequest(StrictModel):
     def _phase(cls, value: str) -> str:
         if value not in PROMPT_PHASES:
             raise ValueError(f"phase must be one of {sorted(PROMPT_PHASES)}")
+        return value
+
+    @field_validator("dialogue_mode_override")
+    @classmethod
+    def _dialogue_mode_override(cls, value: str | None) -> str | None:
+        if value is not None and value not in DIALOGUE_MODES:
+            raise ValueError(f"dialogue_mode_override must be one of {sorted(DIALOGUE_MODES)}")
         return value
 
     @field_validator("risk_level")

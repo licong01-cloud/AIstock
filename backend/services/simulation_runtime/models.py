@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from backend.services.trading_core.errors import StrategyPackageValidationError
+from backend.services.trading_core.errors import RuntimeConfigInvalidError
 from backend.services.trading_core.models import OrderSide
 
 
@@ -186,7 +186,7 @@ def assert_release_payload_boundary(payload: dict[str, Any], *, context: dict[st
     forbidden = ALPHA_CORE_RELEASE_FORBIDDEN_KEYS | BROKER_BINDING_RELEASE_FORBIDDEN_KEYS
     matches = find_forbidden_key_paths(payload, forbidden)
     if matches:
-        raise StrategyPackageValidationError(
+        raise RuntimeConfigInvalidError(
             "StrategyRuntimeRelease cannot contain alpha-core or broker-binding fields",
             context={**(context or {}), "forbidden_paths": matches, "forbidden_keys": sorted(forbidden)},
         )
@@ -195,7 +195,7 @@ def assert_release_payload_boundary(payload: dict[str, Any], *, context: dict[st
 def assert_binding_payload_boundary(payload: dict[str, Any], *, context: dict[str, Any] | None = None) -> None:
     unknown = sorted(set(payload).difference(SIMULATION_RELEASE_BINDING_CONFIG_KEYS))
     if unknown:
-        raise StrategyPackageValidationError(
+        raise RuntimeConfigInvalidError(
             "SimulationReleaseBinding contains unsupported top-level fields",
             context={
                 **(context or {}),
@@ -206,7 +206,7 @@ def assert_binding_payload_boundary(payload: dict[str, Any], *, context: dict[st
     forbidden = ALPHA_CORE_RELEASE_FORBIDDEN_KEYS | POLICY_BINDING_FORBIDDEN_KEYS
     matches = find_forbidden_key_paths(payload, forbidden)
     if matches:
-        raise StrategyPackageValidationError(
+        raise RuntimeConfigInvalidError(
             "SimulationReleaseBinding cannot contain alpha-core or runtime-policy fields",
             context={**(context or {}), "forbidden_paths": matches, "forbidden_keys": sorted(forbidden)},
         )
@@ -215,7 +215,7 @@ def assert_binding_payload_boundary(payload: dict[str, Any], *, context: dict[st
 def assert_selection_only_payload_boundary(payload: dict[str, Any], *, context: dict[str, Any] | None = None) -> None:
     matches = find_forbidden_key_paths(payload, SELECTION_ONLY_FORBIDDEN_KEYS)
     if matches:
-        raise StrategyPackageValidationError(
+        raise RuntimeConfigInvalidError(
             "Selection-only signal generation cannot contain broker, capital, target, rebalance or execution fields",
             context={
                 **(context or {}),

@@ -301,10 +301,10 @@ def test_package_binding_still_requires_explicit_replace_for_changed_strategy_id
 def test_package_binding_rejects_unavailable_package_selection_and_manifest_mismatch() -> None:
     repo = _repo()
 
-    with pytest.raises(StrategyPackageValidationError, match="not enabled"):
+    with pytest.raises(StrategyPackageValidationError, match="asset eligibility"):
         QmtStrategyPackageBindingService(
             repository=repo,
-            package_reader=FakePackageReader(FakePackageRecord("pkg_a", PackageStatus.DRAFT, "sha_a")),
+            package_reader=FakePackageReader(FakePackageRecord("pkg_a", PackageStatus.RETIRED, "sha_a")),
             selection_reader=FakeSelectionReader(_run()),
         ).bind(PackageBindingRequest(strategy_id="strat_a", package_id="pkg_a", selection_run_id="sel_a"))
 

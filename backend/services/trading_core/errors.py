@@ -31,6 +31,38 @@ class StrategyPackageValidationError(TradingCoreError):
     error_code = "STRATEGY_PACKAGE_VALIDATION_ERROR"
 
 
+class PackageAssetInvalidError(StrategyPackageValidationError):
+    error_code = "PACKAGE_ASSET_INVALID"
+
+
+class RuntimeConfigInvalidError(TradingCoreError):
+    error_code = "RUNTIME_CONFIG_INVALID"
+
+
+class TradingCalendarUnavailableError(TradingCoreError):
+    error_code = "TRADING_CALENDAR_UNAVAILABLE"
+
+
+class MarketDataUnavailableError(TradingCoreError):
+    error_code = "MARKET_DATA_UNAVAILABLE"
+
+
+class HMMRuntimeUnavailableError(TradingCoreError):
+    error_code = "HMM_RUNTIME_UNAVAILABLE"
+
+
+class ArtifactGenerationFailedError(TradingCoreError):
+    error_code = "ARTIFACT_GENERATION_FAILED"
+
+
+class LiveApprovalRequiredError(TradingCoreError):
+    error_code = "LIVE_APPROVAL_REQUIRED"
+
+
+class BrokerUnavailableError(TradingCoreError):
+    error_code = "BROKER_UNAVAILABLE"
+
+
 class DataUnavailableError(TradingCoreError):
     error_code = "DATA_UNAVAILABLE"
 

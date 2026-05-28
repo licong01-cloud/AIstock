@@ -80,6 +80,43 @@ def test_extract_signal_preset_coefficients_supports_nested_shape() -> None:
     assert coeffs == {"trending": 1.02, "neutral": 1.0, "fading": 0.98}
 
 
+def test_extract_signal_preset_coefficients_ignores_metadata_keys() -> None:
+    coeffs = HMMTrainingService._extract_signal_preset_coefficients(
+        {
+            "signal_presets": {
+                "preset_A": {
+                    "label": "HMM preset A",
+                    "description": "operator-facing metadata must not be parsed as a coefficient",
+                    "coefficients": {
+                        "1": {"trending": "1.05", "neutral": 1.0, "fading": 0.96},
+                    },
+                }
+            }
+        },
+        "preset_A",
+    )
+
+    assert coeffs == {"trending": 1.05, "neutral": 1.0, "fading": 0.96}
+
+
+def test_extract_signal_preset_coefficients_ignores_flat_metadata_without_coefficients_key() -> None:
+    coeffs = HMMTrainingService._extract_signal_preset_coefficients(
+        {
+            "signal_presets": {
+                "preset_A": {
+                    "label": "HMM preset A",
+                    "trending": "1.05",
+                    "neutral": 1.0,
+                    "fading": 0.96,
+                }
+            }
+        },
+        "preset_A",
+    )
+
+    assert coeffs == {"trending": 1.05, "neutral": 1.0, "fading": 0.96}
+
+
 def test_preview_daily_coefficients_uses_latest_asof_and_next_trading_day(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     svc, model_path = _service_with_snapshot(tmp_path, monkeypatch)
 
@@ -127,7 +164,7 @@ def test_generate_daily_coefficients_is_idempotent_for_matching_existing_artifac
     result = svc.generate_daily_coefficients(
         "snapshot_1",
         signal_preset="preset_A",
-        confirm_text="snapshot_1",
+        confirm_generate=True,
     )
 
     assert result["status"] == "EXISTS"
@@ -160,7 +197,7 @@ def test_generate_daily_coefficients_passes_pit_dates_to_wsl_script(tmp_path: Pa
     result = svc.generate_daily_coefficients(
         "snapshot_1",
         signal_preset="preset_A",
-        confirm_text="snapshot_1",
+        confirm_generate=True,
     )
 
     assert result["status"] == "CREATED"
@@ -198,7 +235,7 @@ def test_start_daily_coefficients_job_persists_validated_plan(tmp_path: Path, mo
     job = svc.start_daily_coefficients_job(
         "snapshot_1",
         signal_preset="preset_A",
-        confirm_text="snapshot_1",
+        confirm_generate=True,
     )
 
     assert job["status"] == "PENDING"

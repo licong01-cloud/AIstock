@@ -2,7 +2,7 @@
 
 - **版本**: v1.1
 - **日期**: 2026-05-24
-- **状态**: 已并入统一 Runtime Governance 设计；本文继续作为 Prompt Pack 子方案
+- **状态**: 已并入统一 Runtime Governance 设计；本文继续作为 Prompt Pack 子方案；2026-05-26 补充 P0 类人对话治理要求
 - **适用范围**: Research Assistant 主提示词、压缩提示词、恢复提示词、Prompt Tree、运行时 Prompt Bundle、Prompt 版本发布与回滚
 - **关联问题**: GitHub Issue #186 / `BUG-117`（删除未开发 mouse/keyboard 与 code-write 能力的负向禁用提示）
 - **统一方案**: `docs/architecture/research_assistant_prompt_context_runtime_governance_design_20260524.md`
@@ -17,6 +17,7 @@ AIstock 的提示词存储不应在“文件”和“数据库”之间二选一
 3. **内存热缓存是聊天热路径**：每个 backend 进程在启动或 activation 变化时加载 active bundle 到内存；每轮聊天只从内存取 active prompt，并写入 bundle audit，不在热路径反复读文件或查 DB。
 4. **Python 代码只保留最小 bootstrap**：业务提示词不得再硬编码在 `.py` 中；Python 只保留 schema、loader、selector、错误提示和“无法加载 prompt pack 时失败”的最小引导。
 5. **安全边界由代码强制，不靠提示词表达**：MCP/API gate、approval、权限、DB role、tool risk policy、测试和审计是硬边界；prompt 只能解释流程，不能替代权限控制。
+6. **用户可见话术必须可治理**：能力问答、澄清问题、确认文案、计划卡标题、欢迎语、placeholder、示例问题和 workflow renderer 模板不得硬编码在 Python/TSX 中。
 
 这套结构同时满足效率、审计、可回滚、多人协作和生产安全：文件适合治理和版本管理，DB 适合运行状态和审计，内存缓存负责性能。
 
@@ -31,9 +32,13 @@ Prompt Pack 改造必须与上下文压缩方案合并为同一个项目：`Rese
 3. `context.compaction.summary_of_summaries`：多摘要再压缩提示词；
 4. `context.recovery.continue_after_compaction`：压缩后无感继续提示词；
 5. `context.recovery.prompt_too_long_retry`：provider 返回上下文超限后的恢复提示词；
-6. `context.renderer.context_health`：上下文健康状态渲染提示词。
+6. `context.renderer.context_health`：上下文健康状态渲染提示词；
+7. `dialogue.intent.classification_policy`：意图分类与歧义澄清策略；
+8. `dialogue.capability.answer_style`：能力问答的直接回答风格；
+9. `dialogue.workflow.card_renderer`：计划卡、确认卡、候选能力和过程信息的折叠渲染模板；
+10. `dialogue.ui_copy.examples`：欢迎语、placeholder 和示例问题的治理来源。
 
-所有这些 prompt 都必须走同一条 Git 文件权威源、DB version/activation、内存 active snapshot 和运行审计链路，不能以 Python 常量或内联字符串形式硬编码。
+所有这些 prompt 和用户可见 copy 都必须走同一条 Git 文件权威源、DB version/activation、内存 active snapshot、UI copy config 和运行审计链路，不能以 Python 常量、TSX 常量或内联字符串形式硬编码。
 
 同时，Prompt Pack 不再承载可调运行参数。所有 token 预算、fresh tail 长度、压缩阈值、temperature、max output、重试次数、历史分页、检索 top-k 等参数必须进入 runtime config，并由 `docs/architecture/research_assistant_prompt_context_runtime_governance_design_20260524.md` 定义的 config activation 管理。
 
@@ -49,8 +54,10 @@ Prompt Pack 改造必须与上下文压缩方案合并为同一个项目：`Rese
 | Prompt Bundle 运行时拼接 | `backend/services/research_assistant/service.py:686` 至 `:735` | 已具备 bundle/audit 雏形，但 source、version、activation、cache 责任边界不清 |
 | 聊天系统后缀仍在 Python 中拼接 | `backend/services/research_assistant/service.py:974` 至 `:979` | 运行时行为规则与业务 prompt 混在代码中，未来难以统一治理 |
 | `/health` 暴露负向能力布尔值 | `backend/services/research_assistant/service.py:505` 至 `:506` | 对用户或上层 UI 暗示存在被禁用的未开发能力 |
+| 默认 QE loop 示例分散在 prompt/config/backend/frontend | `runtime_context.yaml`、`service.py`、`domain.qe_experiment.md`、Research Assistant chat/workbench TSX | 用户询问能力或概念时被误导成创建特定实验任务 |
+| 关键词式流程触发 | backend human card / prompt branch selector 以 QE、实验、回测等词直接进入流程 | 不能理解用户真实意图，导致能力问答也出现计划卡和确认问题 |
 
-`BUG-117` 应单独修复这些负向禁用项；本设计不直接删除运行时代码中的文本。
+`BUG-117` 的负向禁用项修复应并入 P0 类人对话治理开发包统一实现、统一验证；本设计文档更新不直接删除运行时代码中的文本。
 
 ### 2.2 已有可复用基础
 
@@ -400,7 +407,7 @@ sequenceDiagram
 5. 是否允许高风险工具调用。
 6. 是否允许生产 backend/frontend restart。
 
-Prompt 只能向用户解释“将通过哪些已实现能力、需要哪些确认、会留下哪些审计记录”。如果某能力未实现，不应该写成“禁止使用该能力”，而应该从 capability registry 中不暴露该能力。
+Prompt 只能向用户解释“将通过哪些已实现能力、需要哪些确认、会留下哪些审计记录”。如果某能力未实现，不应该写成“禁止使用该能力”，而应该从 capability registry 中不暴露该能力。能力询问应直接给出正向能力范围，不应附带内部分类说明或不执行声明。
 
 ### 10.2 Capability Registry 与 Prompt 的关系
 
@@ -413,17 +420,21 @@ Prompt 只能向用户解释“将通过哪些已实现能力、需要哪些确�
 
 ## 11. 实施路线
 
-### Phase 0: 立即修复 `BUG-117`
+### Phase 0: P0 类人对话治理与 `BUG-117` 合并整改
 
-范围：只处理当前发现的误导性提示词和 health metadata。
+范围：先处理会直接影响用户对话体验的提示词、copy、selector 和 health metadata，再进入文件化与 activation。
 
 验收：
 
 1. `root.assistant` 源文本不再包含未开发 mouse/keyboard 与 code-write 能力的负向禁用项。
-2. 现有 DB `assistant_prompt_nodes.root.assistant` 已 backfill。
-3. `/health` 对外只展示正向已实现能力，或不展示未实现能力布尔值。
-4. 保留 MCP/API、approval、Trace、Memory/Audit 真实边界。
-5. 后端测试覆盖源 prompt 与 live prompt-node listing。
+2. Active prompt、runtime config、backend/frontend 用户可见文案不再包含默认 `10 loop` 或 `10 个 loop` 执行型示例。
+3. 能力询问、概念解释、状态查询不触发 Action Proposal、preflight、确认卡或 QE 草案流程。
+4. Bug 诊断能力问答必须直接覆盖诊断能力、所需证据和边界。
+5. 主气泡不默认拼接计划卡、澄清卡、候选能力、上下文健康或 trace；这些信息进入折叠区域或 side panel。
+6. 现有 DB `assistant_prompt_nodes.root.assistant` 已 backfill。
+7. `/health` 对外只展示正向已实现能力，或不展示未实现能力布尔值。
+8. 保留 MCP/API、approval、Trace、Memory/Audit 真实边界。
+9. 后端、前端和 prompt-pack 测试覆盖源 prompt、live prompt-node listing、意图分类和 UI 渲染。
 
 ### Phase 1: Research Assistant prompt pack 文件化
 
@@ -469,6 +480,9 @@ Prompt 只能向用户解释“将通过哪些已实现能力、需要哪些确�
 | --- | --- | --- |
 | 静态检查 | `.py` 中不得新增完整业务 prompt 文本 | 允许短错误消息、schema、loader；禁止多段业务提示词常量 |
 | 静态检查 | 禁用短语扫描 | Research Assistant active prompt 不包含未开发能力的负向禁用项 |
+| 静态检查 | 默认 loop 清理 | active prompt、runtime config、backend/frontend copy 和测试夹具不包含默认 `10 loop` 或 `10 个 loop` 执行型示例 |
+| 意图测试 | 能力问答不触发 workflow | 能力/概念/状态输入不创建 proposal、不显示确认卡、不询问股票池或 loop 参数 |
+| UI | 过程信息折叠 | 主气泡只显示结论和必要澄清，计划/trace/context health 在折叠区或 side panel |
 | Schema 检查 | prompt pack YAML/Markdown | 必填字段完整，版本合法，checksum 稳定 |
 | Import dry-run | 文件到 DB diff | 能展示新增/修改/删除节点，不写 DB |
 | Import apply | immutable version 写入 | 同一 checksum 幂等，不重复写版本 |
@@ -501,10 +515,11 @@ Prompt 只能向用户解释“将通过哪些已实现能力、需要哪些确�
 
 ## 15. 推荐落地优先级
 
-1. **先修 BUG-117**：删除误导性未开发能力禁用项，并 backfill 当前 DB。
-2. **再做文件化**：将 Research Assistant 当前 prompt tree 迁移到 `prompt_packs/research_assistant/main`。
-3. **再做 activation**：引入 immutable version 和 active registry。
-4. **最后做跨模块治理**：统一 QE、RD-Agent、local-data、memory graph 的 prompt 生命周期。
+1. **先做 P0 类人对话治理**：删除默认 loop 示例、关键词式流程触发、主气泡过程卡拼接和冗余元话术。
+2. **合并修复 BUG-117**：删除误导性未开发能力禁用项，并 backfill 当前 DB。
+3. **再做文件化**：将 Research Assistant 当前 prompt tree 和用户可见 copy 迁移到 `prompt_packs/research_assistant/main`、capability catalog 或 UI copy config。
+4. **再做 activation**：引入 immutable version 和 active registry。
+5. **最后做跨模块治理**：统一 QE、RD-Agent、local-data、memory graph 的 prompt 生命周期。
 
 ## 16. 参考资料
 

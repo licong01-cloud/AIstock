@@ -1,0 +1,390 @@
+schema_version: aistock_prompt_pack_v1
+assistant_key: research_assistant
+pack_key: research_assistant.main
+pack_version: 1.2.0
+owner: research_assistant
+environment_scope:
+  - dev
+  - staging
+  - production
+nodes:
+  - prompt_key: root.assistant
+    title: 研究助理根提示词
+    category: root
+    tree_path: /root
+    phase: planning
+    risk_level: medium
+    trigger_json:
+      always: true
+    prompt_file: nodes/root.assistant.md
+  - prompt_key: mode.dialogue
+    title: 对话模式提示词
+    category: mode
+    tree_path: /root/mode/dialogue
+    parent_key: root.assistant
+    phase: planning
+    risk_level: low
+    trigger_json:
+      modes: [dialogue]
+    prompt_file: nodes/mode.dialogue.md
+  - prompt_key: mode.analysis
+    title: 只读分析模式提示词
+    category: mode
+    tree_path: /root/mode/analysis
+    parent_key: root.assistant
+    phase: planning
+    risk_level: medium
+    trigger_json:
+      modes: [analysis]
+    prompt_file: nodes/mode.analysis.md
+  - prompt_key: mode.planning
+    title: 任务规划模式提示词
+    category: mode
+    tree_path: /root/mode/planning
+    parent_key: root.assistant
+    phase: planning
+    risk_level: medium
+    trigger_json:
+      modes: [planning]
+    prompt_file: nodes/mode.planning.md
+  - prompt_key: mode.preflight
+    title: 预检查模式提示词
+    category: mode
+    tree_path: /root/mode/preflight
+    parent_key: root.assistant
+    phase: preflight
+    risk_level: high
+    trigger_json:
+      modes: [preflight]
+    prompt_file: nodes/mode.preflight.md
+  - prompt_key: mode.execution
+    title: 执行模式提示词
+    category: mode
+    tree_path: /root/mode/execution
+    parent_key: root.assistant
+    phase: execution
+    risk_level: high
+    trigger_json:
+      modes: [execution]
+    prompt_file: nodes/mode.execution.md
+  - prompt_key: mode.audit
+    title: 审计模式提示词
+    category: mode
+    tree_path: /root/mode/audit
+    parent_key: root.assistant
+    phase: result
+    risk_level: medium
+    trigger_json:
+      modes: [audit]
+    prompt_file: nodes/mode.audit.md
+  - prompt_key: mode.recovery
+    title: 恢复模式提示词
+    category: mode
+    tree_path: /root/mode/recovery
+    parent_key: root.assistant
+    phase: reflection
+    risk_level: medium
+    trigger_json:
+      modes: [recovery]
+    prompt_file: nodes/mode.recovery.md
+  - prompt_key: governance.no_silent_action
+    title: 安全与审批根规则
+    category: governance
+    tree_path: /root/governance/no_silent_action
+    parent_key: root.assistant
+    phase: planning
+    risk_level: high
+    trigger_json:
+      explicit_action_only: true
+    prompt_file: nodes/governance.no_silent_action.md
+  - prompt_key: intent.planning
+    title: 意图理解与澄清
+    category: intent
+    tree_path: /root/mode/planning/intent/planning
+    parent_key: mode.planning
+    phase: planning
+    risk_level: medium
+    trigger_json:
+      always: true
+    prompt_file: nodes/intent.planning.md
+  - prompt_key: prompt.local_data_management
+    title: Local Data management prompt branch
+    category: domain
+    tree_path: /root/mode/planning/domain/local_data_management
+    parent_key: intent.planning
+    phase: planning
+    risk_level: production_sensitive
+    trigger_json:
+      keywords_any: [本地数据, 数据同步, 数据入库, 同步目标, local_data, local data, data sync, dataset, ingestion]
+    prompt_file: nodes/prompt.local_data_management.md
+  - prompt_key: workflow.local_data_check_repair
+    title: Local Data check and repair workflow
+    category: workflow
+    tree_path: /root/mode/planning/domain/local_data_management/workflow/check_repair
+    parent_key: prompt.local_data_management
+    phase: planning
+    risk_level: production_sensitive
+    trigger_json:
+      keywords_any: [检查, 排查, 修复, 恢复, 补齐, 同步, 健康, repair, fix, sync, refresh, status]
+    prompt_file: nodes/workflow.local_data_check_repair.md
+  - prompt_key: tool_guard.mcp_local_data
+    title: Local Data MCP tool guard
+    category: tool_guard
+    tree_path: /root/mode/preflight/domain/local_data_management/tool_guard/mcp_local_data
+    parent_key: prompt.local_data_management
+    phase: preflight
+    risk_level: production_sensitive
+    trigger_json:
+      tools_any: [local_data_apply_repair_confirmed, local_data_run_dataset_sync_confirmed, local_data_sync_tushare_all_confirmed]
+    prompt_file: nodes/tool_guard.mcp_local_data.md
+  - prompt_key: domain.qe_experiment
+    title: QE 实验创建分支提示词
+    category: domain
+    tree_path: /root/mode/planning/domain/qe_experiment
+    parent_key: intent.planning
+    phase: planning
+    risk_level: high
+    trigger_json:
+      explicit_intents: [experiment_draft_request, experiment_validation_request, experiment_execution_request]
+    prompt_file: nodes/domain.qe_experiment.md
+  - prompt_key: workflow.qe_draft_then_approval
+    title: QE 草稿到审批工作流
+    category: workflow
+    tree_path: /root/mode/planning/domain/qe_experiment/workflow/draft_then_approval
+    parent_key: domain.qe_experiment
+    phase: planning
+    risk_level: high
+    trigger_json:
+      explicit_intents: [experiment_draft_request, experiment_validation_request, experiment_execution_request]
+    prompt_file: nodes/workflow.qe_draft_then_approval.md
+  - prompt_key: tool_guard.mcp_qe
+    title: QE MCP 工具门禁
+    category: tool_guard
+    tree_path: /root/mode/preflight/domain/qe_experiment/tool_guard/mcp_qe
+    parent_key: domain.qe_experiment
+    phase: preflight
+    risk_level: production_sensitive
+    trigger_json:
+      explicit_intents: [experiment_validation_request, experiment_execution_request]
+    prompt_file: nodes/tool_guard.mcp_qe.md
+  - prompt_key: renderer.human_cards
+    title: 人类可读结果渲染
+    category: renderer
+    tree_path: /root/renderer/human_cards
+    parent_key: root.assistant
+    phase: result
+    risk_level: medium
+    trigger_json:
+      always: true
+    prompt_file: nodes/renderer.human_cards.md
+  - prompt_key: memory.candidate_only
+    title: 长期记忆候选规则
+    category: memory
+    tree_path: /root/memory/candidate_only
+    parent_key: root.assistant
+    phase: reflection
+    risk_level: high
+    trigger_json:
+      keywords_any: [记忆, memory, 长期, 保存]
+    prompt_file: nodes/memory.candidate_only.md
+  - prompt_key: context.budget.runtime_policy
+    title: 上下文预算运行策略
+    category: context
+    tree_path: /root/context/budget/runtime_policy
+    parent_key: root.assistant
+    phase: reflection
+    risk_level: medium
+    trigger_json:
+      context_runtime: true
+    prompt_file: nodes/context.budget.runtime_policy.md
+  - prompt_key: context.compaction.structured_summary
+    title: 结构化上下文压缩提示词
+    category: context
+    tree_path: /root/context/compaction/structured_summary
+    parent_key: context.budget.runtime_policy
+    phase: reflection
+    risk_level: medium
+    trigger_json:
+      context_runtime: true
+    prompt_file: nodes/context.compaction.structured_summary.md
+  - prompt_key: context.compaction.key_fact_extraction
+    title: 关键事实提取提示词
+    category: context
+    tree_path: /root/context/compaction/key_fact_extraction
+    parent_key: context.budget.runtime_policy
+    phase: reflection
+    risk_level: medium
+    trigger_json:
+      context_runtime: true
+    prompt_file: nodes/context.compaction.key_fact_extraction.md
+  - prompt_key: context.compaction.summary_of_summaries
+    title: 二级摘要压缩提示词
+    category: context
+    tree_path: /root/context/compaction/summary_of_summaries
+    parent_key: context.budget.runtime_policy
+    phase: reflection
+    risk_level: medium
+    trigger_json:
+      context_runtime: true
+    prompt_file: nodes/context.compaction.summary_of_summaries.md
+  - prompt_key: context.recovery.continue_after_compaction
+    title: 压缩后连续对话恢复提示词
+    category: context
+    tree_path: /root/context/recovery/continue_after_compaction
+    parent_key: context.budget.runtime_policy
+    phase: reflection
+    risk_level: medium
+    trigger_json:
+      context_runtime: true
+    prompt_file: nodes/context.recovery.continue_after_compaction.md
+  - prompt_key: context.recovery.prompt_too_long_retry
+    title: 上下文超限重试提示词
+    category: context
+    tree_path: /root/context/recovery/prompt_too_long_retry
+    parent_key: context.budget.runtime_policy
+    phase: reflection
+    risk_level: medium
+    trigger_json:
+      context_runtime: true
+    prompt_file: nodes/context.recovery.prompt_too_long_retry.md
+  - prompt_key: context.renderer.context_health
+    title: 上下文健康展示提示词
+    category: context
+    tree_path: /root/context/renderer/context_health
+    parent_key: context.budget.runtime_policy
+    phase: result
+    risk_level: medium
+    trigger_json:
+      context_runtime: true
+    prompt_file: nodes/context.renderer.context_health.md
+
+  - prompt_key: domain.qe_warehouse
+    title: QE warehouse MCP routing
+    category: domain
+    tree_path: /root/mode/planning/domain/qe_warehouse
+    parent_key: intent.planning
+    phase: planning
+    risk_level: high
+    trigger_json:
+      explicit_intents: [qe_warehouse_request]
+    prompt_file: nodes/domain.qe_warehouse.md
+  - prompt_key: domain.mcp_capability_router
+    title: MCP capability router
+    category: domain
+    tree_path: /root/mode/planning/domain/mcp_capability_router
+    parent_key: intent.planning
+    phase: planning
+    risk_level: low
+    trigger_json:
+      explicit_intents: [mcp_capability_inquiry]
+    prompt_file: nodes/domain.mcp_capability_router.md
+  - prompt_key: domain.factor_library
+    title: Factor library MCP routing
+    category: domain
+    tree_path: /root/mode/planning/domain/factor_library
+    parent_key: intent.planning
+    phase: planning
+    risk_level: medium
+    trigger_json:
+      explicit_intents: [factor_library_request]
+    prompt_file: nodes/domain.factor_library.md
+  - prompt_key: domain.factor_metrics
+    title: Factor metrics MCP routing
+    category: domain
+    tree_path: /root/mode/planning/domain/factor_metrics
+    parent_key: intent.planning
+    phase: planning
+    risk_level: high
+    trigger_json:
+      explicit_intents: [factor_metrics_request]
+    prompt_file: nodes/domain.factor_metrics.md
+  - prompt_key: domain.factor_correlation
+    title: Factor correlation MCP routing
+    category: domain
+    tree_path: /root/mode/planning/domain/factor_correlation
+    parent_key: intent.planning
+    phase: planning
+    risk_level: high
+    trigger_json:
+      explicit_intents: [factor_correlation_request]
+    prompt_file: nodes/domain.factor_correlation.md
+  - prompt_key: domain.model_registry
+    title: Model registry MCP routing
+    category: domain
+    tree_path: /root/mode/planning/domain/model_registry
+    parent_key: intent.planning
+    phase: planning
+    risk_level: high
+    trigger_json:
+      explicit_intents: [model_registry_request]
+    prompt_file: nodes/domain.model_registry.md
+  - prompt_key: domain.strategy_governance
+    title: Strategy governance MCP routing
+    category: domain
+    tree_path: /root/mode/planning/domain/strategy_governance
+    parent_key: intent.planning
+    phase: planning
+    risk_level: production_sensitive
+    trigger_json:
+      explicit_intents: [strategy_governance_request]
+    prompt_file: nodes/domain.strategy_governance.md
+  - prompt_key: domain.execution_policy
+    title: Execution policy MCP routing
+    category: domain
+    tree_path: /root/mode/planning/domain/execution_policy
+    parent_key: intent.planning
+    phase: planning
+    risk_level: production_sensitive
+    trigger_json:
+      explicit_intents: [execution_policy_request]
+    prompt_file: nodes/domain.execution_policy.md
+  - prompt_key: domain.research_pipeline
+    title: Research pipeline MCP routing
+    category: domain
+    tree_path: /root/mode/planning/domain/research_pipeline
+    parent_key: intent.planning
+    phase: planning
+    risk_level: high
+    trigger_json:
+      explicit_intents: [research_pipeline_request]
+    prompt_file: nodes/domain.research_pipeline.md
+  - prompt_key: domain.validation_issue
+    title: Validation issue MCP routing
+    category: domain
+    tree_path: /root/mode/planning/domain/validation_issue
+    parent_key: intent.planning
+    phase: planning
+    risk_level: high
+    trigger_json:
+      explicit_intents: [validation_issue_request]
+    prompt_file: nodes/domain.validation_issue.md
+  - prompt_key: tool_guard.mcp_payload_budget
+    title: MCP payload budget guard
+    category: tool_guard
+    tree_path: /root/mode/preflight/tool_guard/mcp_payload_budget
+    parent_key: root.assistant
+    phase: preflight
+    risk_level: high
+    trigger_json:
+      tools_any: [assistant_list_mcp_tools, factor_library_list, factor_metrics_get_result, factor_corr_get_matrix_ref, model_registry_list, strategy_governance_list_packages, execution_policy_list_algos]
+    prompt_file: nodes/tool_guard.mcp_payload_budget.md
+  - prompt_key: tool_guard.mcp_all
+    title: Unified MCP tool guard
+    category: tool_guard
+    tree_path: /root/mode/preflight/tool_guard/mcp_all
+    parent_key: root.assistant
+    phase: preflight
+    risk_level: production_sensitive
+    trigger_json:
+      mcp_all: true
+    prompt_file: nodes/tool_guard.mcp_all.md
+  - prompt_key: renderer.humanized_response
+    title: Humanized MCP response renderer
+    category: renderer
+    tree_path: /root/renderer/humanized_response
+    parent_key: root.assistant
+    phase: result
+    risk_level: medium
+    trigger_json:
+      always: true
+    prompt_file: nodes/renderer.humanized_response.md

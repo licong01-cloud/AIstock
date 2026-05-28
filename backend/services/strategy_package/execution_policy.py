@@ -12,12 +12,14 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from backend.execution_algos import ALGO_REGISTRY
-from backend.services.trading_core.errors import StrategyPackageValidationError, UnsupportedFeatureError
+from backend.services.trading_core.errors import RuntimeConfigInvalidError
 
 
 class ExecutionPolicyValidationStatus(str, Enum):
     BACKTEST_VALIDATED = "BACKTEST_VALIDATED"
+
+
+BACKTEST_SUCCESS_STATUSES = {"SUCCEEDED", "COMPLETED", "BACKTEST_VALIDATED"}
 
 
 ALLOWED_POLICY_JSON_KEYS = {
@@ -33,9 +35,6 @@ ALLOWED_POLICY_JSON_KEYS = {
     "unfilled_handler_params",
 }
 
-BACKTEST_SUCCESS_STATUSES = {"SUCCEEDED", "COMPLETED", "BACKTEST_VALIDATED"}
-
-
 def compute_execution_policy_sha256(policy_json: dict[str, Any]) -> str:
     encoded = json.dumps(
         policy_json,
@@ -48,50 +47,32 @@ def compute_execution_policy_sha256(policy_json: dict[str, Any]) -> str:
 
 def normalize_execution_policy_json(policy_json: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(policy_json, dict) or not policy_json:
-        raise StrategyPackageValidationError("execution policy JSON must be a non-empty object")
+        raise RuntimeConfigInvalidError("execution policy JSON must be a non-empty object")
     unknown = sorted(set(policy_json).difference(ALLOWED_POLICY_JSON_KEYS))
     if unknown:
-        raise StrategyPackageValidationError(
+        raise RuntimeConfigInvalidError(
             "execution policy contains fields outside the backtest contract",
             context={"unknown_fields": unknown, "allowed_fields": sorted(ALLOWED_POLICY_JSON_KEYS)},
         )
     normalized = dict(policy_json)
     algo_code = str(normalized.get("algo_code") or "").strip().upper()
     if not algo_code:
-        raise StrategyPackageValidationError("execution policy requires algo_code")
+        raise RuntimeConfigInvalidError("execution policy requires algo_code")
     normalized["algo_code"] = algo_code
     normalized.setdefault("algo_config", {})
     if not isinstance(normalized["algo_config"], dict):
-        raise StrategyPackageValidationError("execution policy algo_config must be an object")
+        raise RuntimeConfigInvalidError("execution policy algo_config must be an object")
     normalized.setdefault("unfilled_handler_params", {})
     if not isinstance(normalized["unfilled_handler_params"], dict):
-        raise StrategyPackageValidationError("unfilled_handler_params must be an object")
+        raise RuntimeConfigInvalidError("unfilled_handler_params must be an object")
     if "max_participation_rate" in normalized["algo_config"]:
         value = float(normalized["algo_config"]["max_participation_rate"])
         if not isfinite(value) or value <= 0 or value > 1:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "max_participation_rate must be in (0, 1]",
                 context={"max_participation_rate": normalized["algo_config"]["max_participation_rate"]},
             )
     return normalized
-
-
-def ensure_policy_can_enter_paper(policy: "ValidatedExecutionPolicy") -> None:
-    if policy.validation_status != ExecutionPolicyValidationStatus.BACKTEST_VALIDATED:
-        raise StrategyPackageValidationError(
-            "execution policy must be backtest validated before paper trading",
-            context={"policy_id": policy.policy_id, "validation_status": policy.validation_status.value},
-        )
-    if policy.source_backtest_status.upper() not in BACKTEST_SUCCESS_STATUSES:
-        raise StrategyPackageValidationError(
-            "execution policy source backtest did not succeed",
-            context={"policy_id": policy.policy_id, "source_backtest_status": policy.source_backtest_status},
-        )
-    if policy.algo_code not in ALGO_REGISTRY:
-        raise UnsupportedFeatureError(
-            "minute execution algorithm is not registered",
-            context={"policy_id": policy.policy_id, "algo_code": policy.algo_code, "registered_algos": sorted(ALGO_REGISTRY)},
-        )
 
 
 class ValidatedExecutionPolicy(BaseModel):
@@ -141,6 +122,4 @@ class ValidatedExecutionPolicy(BaseModel):
             raise ValueError("algo_code does not match policy_json.algo_code")
         for key, value in updates.items():
             object.__setattr__(self, key, value)
-        if self.paper_enabled:
-            ensure_policy_can_enter_paper(self)
         return self

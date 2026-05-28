@@ -1,0 +1,940 @@
+schema_version: aistock_research_assistant_runtime_config_v1
+config_key: research_assistant.runtime_context
+config_version: 1.0.0
+owner: research_assistant
+environment_scope: [dev, staging, production]
+
+model_context:
+  window_source: model_profile
+  fallback_context_window_tokens: 1048576
+  token_estimator:
+    provider_report_preferred: true
+    fallback_strategy: chars_per_token
+    fallback_chars_per_token: 2.0
+  safety_buffer:
+    mode: ratio
+    ratio: 0.08
+    min_tokens: 8192
+
+model_routing:
+  initial_context_overhead_tokens: 32000
+  long_context_trigger_tokens: 64000
+
+budget:
+  planner: proportional_with_minimums
+  prompt_bundle:
+    max_ratio: 0.12
+  context_pack:
+    max_ratio: 0.12
+    min_tokens: 16000
+  compact_summaries:
+    max_ratio: 0.18
+  fresh_tail:
+    max_ratio: 0.30
+  retrieved_raw_snippets:
+    max_ratio: 0.12
+  history:
+    max_ratio: 0.46
+  response:
+    reserved_ratio: 0.10
+    min_reserved_tokens: 4096
+    max_tokens: 1600
+  overflow_action_order:
+    - compact_old_history
+    - retrieve_key_facts
+    - reduce_low_priority_context_pack
+    - reduce_raw_snippets
+    - fail_fast_for_high_risk_if_still_over_budget
+
+history_fetch:
+  page_size: 200
+  max_pages: 20
+  include_roles: [user, assistant, system, tool]
+  stop_condition: budget_satisfied
+  preserve_message_integrity: true
+
+fresh_tail:
+  unit: turns
+  min_turns: 8
+  min_messages: 16
+  max_budget_ratio: 0.30
+  never_compact_current_turn: true
+
+compaction:
+  enabled: true
+  trigger:
+    proactive_utilization_ratio: 0.60
+    mandatory_utilization_ratio: 0.80
+    min_turns_before_compaction: 8
+    min_messages_before_compaction: 16
+    reactive_error_codes:
+      - prompt_too_long
+      - context_length_exceeded
+  worker:
+    model_profile_policy: dedicated_low_cost_or_current_provider
+    temperature: 0.2
+    max_output_ratio: 0.08
+    tools_enabled: false
+    timeout_seconds: 90
+    max_retries: 2
+  output:
+    format: xml_with_typed_json_payload
+    require_source_message_ids: true
+    require_source_sha256: true
+    require_key_facts: true
+    require_open_tasks: true
+    require_decisions: true
+    require_approval_state: true
+  lifecycle:
+    store_original_messages: always
+    store_summary_as_derivative: true
+    allow_summary_of_summaries: true
+    max_summary_depth: 2
+
+retrieval:
+  enabled: true
+  strategy: source_refs_then_text_search
+  top_k: 8
+  include_raw_snippets_when:
+    - user_refs_previous_decision
+    - key_fact_confidence_low
+    - high_risk_task
+
+assembly:
+  order:
+    - active_prompt_bundle
+    - runtime_policy_summary
+    - approved_context_pack
+    - compact_summaries
+    - key_facts
+    - retrieved_raw_snippets
+    - fresh_tail
+    - current_user_message
+  trace_every_turn: true
+  record_budget_breakdown: true
+
+trace:
+  response_preview_chars: 500
+
+ui:
+  notify_auto_compaction: silent_by_default
+  allow_user_expand_summary: true
+  show_context_health_badge: true
+
+dialogue_modes:
+  default_mode: dialogue
+  modes:
+    dialogue:
+      prompt_nodes: [root.assistant, mode.dialogue]
+      allow_tools: false
+      allow_action_proposals: false
+      allowed_tool_side_effect: none
+      expose_context_pack: false
+      expose_audit_fields: false
+      max_clarification_questions: 0
+      raw_json_main_view: false
+      show_plan_card: false
+      show_clarification_card: false
+      show_context_health_badge: false
+      details_default_collapsed: true
+      forbidden_main_reply_phrases:
+        - "目标："
+        - "对象："
+        - "约束："
+        - "缺失信息："
+        - "风险级别："
+        - "下一步："
+        - "Context Pack"
+        - "可审计计划"
+        - "确认问题："
+    analysis:
+      prompt_nodes: [root.assistant, mode.analysis]
+      allow_tools: read_only
+      allow_action_proposals: false
+      allowed_tool_side_effect: read_only
+      expose_context_pack: false
+      expose_audit_fields: false
+      max_clarification_questions: 1
+      raw_json_main_view: false
+      show_plan_card: false
+      show_clarification_card: true
+      show_context_health_badge: false
+      details_default_collapsed: true
+      forbidden_main_reply_phrases:
+        - "目标："
+        - "对象："
+        - "约束："
+        - "风险级别："
+        - "Context Pack"
+        - "可审计计划"
+    planning:
+      prompt_nodes: [root.assistant, mode.planning, intent.planning]
+      allow_tools: read_only
+      allow_action_proposals: draft_only
+      allowed_tool_side_effect: draft_only
+      expose_context_pack: false
+      expose_audit_fields: true
+      max_clarification_questions: 3
+      raw_json_main_view: false
+      show_plan_card: true
+      show_clarification_card: true
+      show_context_health_badge: true
+      details_default_collapsed: false
+    preflight:
+      prompt_nodes: [root.assistant, mode.preflight, intent.planning]
+      allow_tools: preflight
+      allow_action_proposals: preflight
+      allowed_tool_side_effect: preflight
+      expose_context_pack: false
+      expose_audit_fields: true
+      max_clarification_questions: 3
+      approval_required: true
+      raw_json_main_view: false
+      show_plan_card: true
+      show_clarification_card: true
+      show_context_health_badge: true
+      details_default_collapsed: false
+    execution:
+      prompt_nodes: [root.assistant, mode.execution, intent.planning]
+      allow_tools: approved_execution
+      allow_action_proposals: approved_execution
+      allowed_tool_side_effect: approved_execution
+      expose_context_pack: false
+      expose_audit_fields: true
+      max_clarification_questions: 1
+      approval_required: true
+      raw_json_main_view: false
+      show_plan_card: true
+      show_clarification_card: true
+      show_context_health_badge: true
+      details_default_collapsed: false
+    audit:
+      prompt_nodes: [root.assistant, mode.audit]
+      allow_tools: read_only
+      allow_action_proposals: false
+      allowed_tool_side_effect: read_only
+      expose_context_pack: true
+      expose_audit_fields: true
+      max_clarification_questions: 1
+      raw_json_main_view: false
+      show_plan_card: true
+      show_clarification_card: true
+      show_context_health_badge: true
+      details_default_collapsed: false
+    recovery:
+      prompt_nodes: [root.assistant, mode.recovery]
+      allow_tools: read_only
+      allow_action_proposals: false
+      allowed_tool_side_effect: read_only
+      expose_context_pack: false
+      expose_audit_fields: false
+      max_clarification_questions: 1
+      raw_json_main_view: false
+      show_plan_card: false
+      show_clarification_card: true
+      show_context_health_badge: false
+      details_default_collapsed: true
+
+mode_router:
+  confidence_thresholds:
+    direct_answer_min: 0.55
+    task_request_min: 0.72
+    execution_request_min: 0.86
+  fallback:
+    low_confidence_mode: dialogue
+    ask_clarification_mode: analysis
+    max_questions: 1
+  user_overrides:
+    analysis_only_patterns: ["只做分析", "只读分析", "仅分析", "不改代码"]
+    execute_patterns: ["开始执行", "按方案执行", "确认执行"]
+    audit_patterns: ["展开证据", "列出 Trace", "验证矩阵", "审计记录", "trace"]
+
+dialogue_intent:
+  explicit_task_verbs:
+    - "帮我"
+    - "请"
+    - "创建"
+    - "生成"
+    - "设计"
+    - "诊断"
+    - "分析"
+    - "提交"
+    - "登记"
+    - "校验"
+    - "验证"
+    - "执行"
+    - "运行"
+    - "物化"
+    - "修复"
+    - "处理"
+    - "排查"
+    - "materialize"
+    - "run"
+    - "submit"
+    - "create"
+    - "validate"
+    - "diagnose"
+  capability_inquiry_patterns:
+    - "是否可以"
+    - "能否"
+    - "能不能"
+    - "可以吗"
+    - "支持吗"
+    - "具备"
+    - "能力"
+    - "能做什么"
+    - "有哪些能力"
+    - "是否具备"
+  concept_explanation_patterns:
+    - "是什么"
+    - "为什么"
+    - "解释"
+    - "说明"
+    - "区别"
+    - "原理"
+    - "原因"
+  status_query_patterns:
+    - "目前"
+    - "现在"
+    - "状态"
+    - "进度"
+    - "完成了吗"
+    - "还有什么"
+    - "下一步"
+  bug_terms:
+    - "bug"
+    - "报错"
+    - "错误"
+    - "异常"
+    - "失败"
+    - "问题"
+  issue_terms:
+    - "issue"
+    - "github issue"
+    - "登记"
+    - "提交 issue"
+    - "创建 issue"
+  qe_terms:
+    - "qe"
+    - "quantevolver"
+    - "实验"
+    - "回测"
+    - "template"
+    - "custom_evo"
+  execution_terms:
+    - "执行"
+    - "运行"
+    - "物化"
+    - "materialize"
+    - "run"
+    - "submit"
+  negated_execution_patterns:
+    - "先不要执行"
+    - "不要执行"
+    - "不执行"
+    - "暂不执行"
+    - "先不要运行"
+    - "不要运行"
+    - "不运行"
+    - "暂不运行"
+    - "先不要物化"
+    - "不要物化"
+    - "不物化"
+    - "只生成草案"
+    - "仅生成草案"
+    - "draft only"
+    - "do not run"
+    - "no run"
+  validation_terms:
+    - "校验"
+    - "验证"
+    - "检查"
+    - "validate"
+  direct_answer_intents:
+    - capability_inquiry
+    - concept_explanation
+    - status_query
+    - ambiguous_request
+    - general_chat
+  fallback_reply: "我可以直接回答你的问题；如果你要我执行任务，请描述目标和边界。"
+  capability_summary:
+    mcp: "可按明确任务调用 Research Assistant、QE、Validation、GitHub 同步等已登记 MCP 能力。"
+    skill: "可按任务加载 QE 诊断、因子分析、Issue 处理等本地技能。"
+  safety:
+    no_materialize_before_confirmation: true
+    no_run_before_confirmation: true
+    no_raw_json_in_main_chat: true
+  status_rails:
+    answered:
+      - {label: "接收问题", status: "done"}
+      - {label: "理解意图", status: "done"}
+      - {label: "回答", status: "done"}
+      - {label: "等待任务指令", status: "idle"}
+      - {label: "MCP 预检查", status: "locked"}
+      - {label: "执行", status: "locked"}
+      - {label: "写入记忆", status: "locked"}
+    diagnosis_ready:
+      - {label: "接收任务", status: "done"}
+      - {label: "理解意图", status: "done"}
+      - {label: "等待诊断证据", status: "current"}
+      - {label: "只读分析", status: "idle"}
+      - {label: "MCP 预检查", status: "locked"}
+      - {label: "执行", status: "locked"}
+      - {label: "写入记忆", status: "locked"}
+    waiting_confirmation:
+      - {label: "接收任务", status: "done"}
+      - {label: "理解意图", status: "done"}
+      - {label: "构建上下文", status: "done"}
+      - {label: "等待确认", status: "current"}
+      - {label: "MCP 预检查", status: "locked"}
+      - {label: "执行", status: "locked"}
+      - {label: "写入记忆", status: "locked"}
+  event_messages:
+    prompt_bundle_built: "已按树型提示词选择必要分支，生成本轮提示词包。"
+    chat_received: "已接收用户对话并进入意图理解。"
+    llm_started: "主模型调用已开始。"
+    llm_done: "主模型已返回。"
+    action_proposed: "已提出候选动作；执行前需要按风险边界确认。"
+
+  card_templates:
+    capability_inquiry:
+      plan_title: "已直接回答"
+      plan_steps: []
+      clarification_title: "需要你确认"
+      clarification_questions: []
+      action_proposals: []
+      status_rail_ref: answered
+      include_qe_capabilities: true
+      capability_summary_extra:
+        answer_focus: "直接说明能力边界；不会因为关键词自动启动工作流。"
+        bug_diagnosis: "可分析错误现象、日志、实验记录、Trace 和配置差异，并整理修复或 Issue 证据。"
+    concept_explanation:
+      plan_title: "已直接解释"
+      plan_steps: []
+      clarification_title: "需要你确认"
+      clarification_questions: []
+      action_proposals: []
+      status_rail_ref: answered
+      include_qe_capabilities: false
+      capability_summary_extra: {}
+    status_query:
+      plan_title: "已直接回答状态"
+      plan_steps: []
+      clarification_title: "需要你确认"
+      clarification_questions: []
+      action_proposals: []
+      status_rail_ref: answered
+      include_qe_capabilities: false
+      capability_summary_extra: {}
+
+    ambiguous_request:
+      plan_title: "需要最少补充信息"
+      plan_steps: []
+      clarification_title: "需要你补充"
+      clarification_questions:
+        - "请补充要处理的对象、目标或证据；我会先按只读分析处理，除非你明确要求执行。"
+      action_proposals: []
+      status_rail_ref: answered
+      include_qe_capabilities: false
+      capability_summary_extra: {}
+    general_chat:
+      plan_title: "已直接回答"
+      plan_steps: []
+      clarification_title: "需要你确认"
+      clarification_questions: []
+      action_proposals: []
+      status_rail_ref: answered
+      include_qe_capabilities: false
+      capability_summary_extra: {}
+    bug_diagnosis_request:
+      plan_title: "Bug 诊断准备"
+      plan_steps:
+        - "定位错误现象、触发路径、日志和相关实验或任务记录。"
+        - "区分配置、数据、MCP、后端、前端或运行环境问题。"
+        - "输出根因、影响范围、证据和修复建议。"
+      clarification_title: "需要你提供"
+      clarification_questions:
+        - "请提供报错文本、任务 ID、实验 ID、页面路径或复现步骤中的任意一种。"
+      action_proposals: []
+      status_rail_ref: diagnosis_ready
+      include_qe_capabilities: false
+      capability_summary_extra: {}
+    issue_intake_request:
+      plan_title: "Issue 草案准备"
+      plan_steps:
+        - "整理问题标题、现象、影响范围、证据和期望结果。"
+        - "先生成可审阅 Issue 草案，不直接写 GitHub。"
+        - "用户确认后再走 GitHub 同步审批边界。"
+      clarification_title: "需要你确认"
+      clarification_questions:
+        - "请确认 Issue 类型、优先级和可公开的证据范围。"
+      action_proposals:
+        - {title: "生成 Issue 草案", risk: "medium", approval_required: false, status: "draft_only"}
+      status_rail_ref: waiting_confirmation
+      include_qe_capabilities: false
+      capability_summary_extra: {}
+    experiment_draft_request:
+      plan_title: "QE 实验草案准备"
+      plan_steps:
+        - "明确实验目标、股票池、时间窗、成本和风险边界。"
+        - "生成 QE template draft，不物化、不运行。"
+        - "用户确认后才进入 validate、preflight 或执行阶段。"
+      clarification_title: "需要你确认"
+      clarification_questions:
+        - "请提供股票池或默认回测股票池。"
+        - "请提供回测时间窗。"
+        - "如需要固定迭代数量，请明确给出。"
+      action_proposals:
+        - {title: "生成 QE 实验草案", risk: "medium", approval_required: false, status: "draft_only"}
+      status_rail_ref: waiting_confirmation
+      include_qe_capabilities: true
+      capability_summary_extra: {}
+    experiment_validation_request:
+      plan_title: "QE 实验草案准备"
+      plan_steps:
+        - "明确实验目标、股票池、时间窗、成本和风险边界。"
+        - "生成 QE template draft，不物化、不运行。"
+        - "用户确认后才进入 validate、preflight 或执行阶段。"
+      clarification_title: "需要你确认"
+      clarification_questions:
+        - "请提供股票池或默认回测股票池。"
+        - "请提供回测时间窗。"
+        - "如需要固定迭代数量，请明确给出。"
+      action_proposals:
+        - {title: "生成 QE 实验草案", risk: "medium", approval_required: false, status: "draft_only"}
+        - {title: "QE template validate + MCP preflight", risk: "high", approval_required: true, status: "waiting_confirmation"}
+      status_rail_ref: waiting_confirmation
+      include_qe_capabilities: true
+      capability_summary_extra: {}
+    experiment_execution_request:
+      plan_title: "QE 实验草案准备"
+      plan_steps:
+        - "明确实验目标、股票池、时间窗、成本和风险边界。"
+        - "生成 QE template draft，不物化、不运行。"
+        - "用户确认后才进入 validate、preflight 或执行阶段。"
+      clarification_title: "需要你确认"
+      clarification_questions:
+        - "请提供股票池或默认回测股票池。"
+        - "请提供回测时间窗。"
+        - "如需要固定迭代数量，请明确给出。"
+      action_proposals:
+        - {title: "生成 QE 实验草案", risk: "medium", approval_required: false, status: "draft_only"}
+        - {title: "QE materialize/run preflight", risk: "high", approval_required: true, status: "waiting_confirmation"}
+      status_rail_ref: waiting_confirmation
+      include_qe_capabilities: true
+      capability_summary_extra: {}
+
+capability_sync:
+  enabled: true
+  max_servers_per_run: 20
+  max_tools_per_server: 500
+  timeout_seconds: 30
+  require_checksum: true
+
+planner:
+  candidate_capability_top_k: 12
+  require_action_proposal_for_side_effects: true
+  qe_workflow_capability_keys:
+    - qe.create_experiment_draft
+    - qe.validate_template
+    - qe.materialize_template
+    - qe.run_experiment
+    - qe.analyze_result
+  local_data_workflow_capability_keys:
+    - local_data.health_overview
+    - local_data.plan_repair
+    - local_data.apply_repair_confirmed
+  factor_workflow_capability_keys:
+    - factor_library.mcp_orchestration
+    - factor_metrics.mcp_orchestration
+    - factor_correlation.mcp_orchestration
+  model_workflow_capability_keys:
+    - model_registry.mcp_orchestration
+  strategy_workflow_capability_keys:
+    - strategy_governance.mcp_orchestration
+  execution_policy_workflow_capability_keys:
+    - execution_policy.mcp_orchestration
+  workflow_capabilities:
+    - capability_key: local_data.health_overview
+      capability_type: mcp_tool
+      title: "本地数据健康总览"
+      natural_language_triggers:
+        - "检查本地数据"
+        - "本地数据同步状态"
+        - "local data health"
+      description_for_llm: "只读读取本地数据 readiness、告警、近期任务和同步目标总览；不启动数据任务。"
+      risk_level: low
+      side_effect_level: read_only
+      required_confirmations: []
+      preferred_model_role: primary_orchestrator
+      input_slots:
+        required: []
+      output_cards: [local_data_health, evidence_refs, next_step]
+      mcp_tool_refs:
+        - server_key: aistock-local-data
+          tool_name: local_data_health_overview
+      skill_refs:
+        - local_data_management
+      workflow_pack_ref: local_data.check_repair
+      status: approved
+      source_ref: "docs/architecture/local_data_management_mcp_gateway_design_20260523.md"
+    - capability_key: local_data.plan_repair
+      capability_type: mcp_tool
+      title: "生成本地数据修复计划"
+      natural_language_triggers:
+        - "生成本地数据修复计划"
+        - "排查数据入库缺口"
+        - "local_data_plan_repair"
+      description_for_llm: "基于健康、缺口、任务、告警和同步目标生成 plan-only 修复方案；不执行写操作。"
+      risk_level: medium
+      side_effect_level: draft_only
+      required_confirmations: []
+      preferred_model_role: primary_orchestrator
+      input_slots:
+        required: [request]
+      output_cards: [repair_plan, risk_confirmation, evidence_refs]
+      mcp_tool_refs:
+        - server_key: aistock-local-data
+          tool_name: local_data_plan_repair
+      skill_refs:
+        - local_data_management
+      workflow_pack_ref: local_data.check_repair
+      status: approved
+      source_ref: "docs/architecture/local_data_management_mcp_gateway_design_20260523.md"
+    - capability_key: local_data.apply_repair_confirmed
+      capability_type: mcp_tool
+      title: "确认后执行本地数据修复"
+      natural_language_triggers:
+        - "执行本地数据修复"
+        - "确认修复本地数据"
+        - "local_data_apply_repair_confirmed"
+      description_for_llm: "用户确认、preflight 和审批后才可执行本地数据修复计划；失败必须停止并返回证据。"
+      risk_level: production_sensitive
+      side_effect_level: production_sensitive
+      required_confirmations:
+        - APPROVE_RESEARCH_ASSISTANT_ACTION
+      preferred_model_role: primary_orchestrator
+      input_slots:
+        required: [plan_id, confirmation_text]
+      output_cards: [approval_gate, execution_trace, post_repair_recheck]
+      mcp_tool_refs:
+        - server_key: aistock-local-data
+          tool_name: local_data_apply_repair_confirmed
+      skill_refs:
+        - local_data_management
+      workflow_pack_ref: local_data.check_repair
+      status: approved
+      source_ref: "docs/architecture/local_data_management_mcp_gateway_design_20260523.md"
+    - capability_key: qe.create_experiment_draft
+      capability_type: workflow_pack
+      title: "\u751f\u6210 QE \u5b9e\u9a8c\u8349\u6848"
+      natural_language_triggers:
+        - "\u521b\u5efa QE \u5b9e\u9a8c"
+        - "\u8bbe\u8ba1 QE \u5b9e\u9a8c\u8349\u6848"
+        - "\u56de\u6d4b\u5b9e\u9a8c\u8349\u7a3f"
+        - "custom_evo \u8349\u6848"
+      description_for_llm: "\u6839\u636e\u81ea\u7136\u8bed\u8a00\u751f\u6210 QE template draft \u548c\u786e\u8ba4\u5361\uff1b\u4e0d\u7269\u5316\u3001\u4e0d\u8fd0\u884c\u3002"
+      risk_level: medium
+      side_effect_level: draft_only
+      required_confirmations:
+        - CONFIRM_QE_DRAFT
+      preferred_model_role: primary_orchestrator
+      input_slots:
+        required: [template_kind, title, config_json]
+        business_required: [iteration_count_if_user_specified, stock_pool, backtest_window, cost_guard]
+      output_cards: [intent_summary, missing_slots, qe_draft, risk_confirmation]
+      mcp_tool_refs:
+        - server_key: aistock-qe-experiment
+          tool_name: qe_template_create
+      skill_refs: []
+      workflow_pack_ref: qe.create_experiment
+      status: approved
+      source_ref: "docs/architecture/research_assistant_mcp_skill_execution_closure_design_20260525.md#10"
+    - capability_key: qe.validate_template
+      capability_type: mcp_tool
+      title: "\u6821\u9a8c QE template"
+      natural_language_triggers:
+        - "\u6821\u9a8c QE \u6a21\u677f"
+        - "validate template"
+        - "\u68c0\u67e5 QE \u914d\u7f6e"
+      description_for_llm: "\u5728\u7528\u6237\u786e\u8ba4\u540e\u6821\u9a8c QE template\uff0c\u5c55\u793a diff/summary\uff1b\u4e0d\u7269\u5316\u3001\u4e0d\u8fd0\u884c\u3002"
+      risk_level: medium
+      side_effect_level: write_nonprod
+      required_confirmations:
+        - CONFIRM_QE_VALIDATE
+      preferred_model_role: primary_orchestrator
+      input_slots:
+        required: [template_id]
+      output_cards: [preflight_result, validation_diff, next_step]
+      mcp_tool_refs:
+        - server_key: aistock-qe-experiment
+          tool_name: qe_template_validate
+      skill_refs: []
+      workflow_pack_ref: qe.create_experiment
+      status: approved
+      source_ref: "scripts/aistock_qe_experiment_mcp_server.py:qe_template_validate"
+    - capability_key: qe.materialize_template
+      capability_type: mcp_tool
+      title: "\u7269\u5316 QE template"
+      natural_language_triggers:
+        - "\u7269\u5316 QE \u6a21\u677f"
+        - "materialize template"
+        - "\u521b\u5efa pending experiment"
+      description_for_llm: "\u4e8c\u6b21\u786e\u8ba4\u3001preflight\u3001approval \u540e\u624d\u53ef\u7269\u5316 QE template\u3002"
+      risk_level: high
+      side_effect_level: high_cost_compute
+      required_confirmations:
+        - CONFIRM_QE_MATERIALIZE
+        - MATERIALIZE_QE_TEMPLATE
+      preferred_model_role: primary_orchestrator
+      input_slots:
+        required: [template_id, confirm_template]
+      output_cards: [approval_gate, execute_progress, artifact_refs]
+      mcp_tool_refs:
+        - server_key: aistock-qe-experiment
+          tool_name: qe_template_materialize_confirmed
+      skill_refs: []
+      workflow_pack_ref: qe.create_experiment
+      status: approved
+      source_ref: "scripts/aistock_qe_experiment_mcp_server.py:qe_template_materialize_confirmed"
+    - capability_key: qe.run_experiment
+      capability_type: mcp_tool
+      title: "\u8fd0\u884c QE experiment"
+      natural_language_triggers:
+        - "\u8fd0\u884c QE"
+        - "\u542f\u52a8 loop"
+        - "submit QE experiment"
+      description_for_llm: "\u9ad8\u6210\u672c\u8fd0\u884c QE experiment\uff1b\u5fc5\u987b run confirmation\u3001cost guard\u3001approval \u540e\u624d\u53ef\u6267\u884c\u3002"
+      risk_level: high
+      side_effect_level: high_cost_compute
+      required_confirmations:
+        - CONFIRM_QE_RUN
+        - QE_EXPERIMENT_RUN
+      preferred_model_role: primary_orchestrator
+      input_slots:
+        required: [template_id, confirm_run]
+        optional: [node_id]
+      output_cards: [cost_guard, execute_progress, status_query, failure_recovery]
+      mcp_tool_refs:
+        - server_key: aistock-qe-experiment
+          tool_name: qe_template_run_confirmed
+      skill_refs: []
+      workflow_pack_ref: qe.create_experiment
+      status: approved
+      source_ref: "scripts/aistock_qe_experiment_mcp_server.py:qe_template_run_confirmed"
+    - capability_key: qe.analyze_result
+      capability_type: skill
+      title: "\u5206\u6790 QE \u7ed3\u679c"
+      natural_language_triggers:
+        - "\u5206\u6790 QE \u7ed3\u679c"
+        - "QE diagnostics"
+        - "loop \u6307\u6807\u5206\u6790"
+      description_for_llm: "\u8c03\u7528 QE diagnostics skill \u8bfb\u53d6\u7ed3\u679c\u548c\u8bc1\u636e\uff0c\u751f\u6210\u5206\u6790\u5361\u3002"
+      risk_level: medium
+      side_effect_level: read_only
+      required_confirmations: []
+      preferred_model_role: secondary_worker
+      input_slots:
+        required: [experiment_id]
+      output_cards: [metrics_summary, risk_findings, evidence_refs]
+      mcp_tool_refs: []
+      skill_refs:
+        - qe-evolution-diagnostics
+      workflow_pack_ref: qe.create_experiment
+      status: approved
+      source_ref: "C:/Users/lc999/.codex/skills/qe-evolution-diagnostics/SKILL.md"
+    - capability_key: issue.create_candidate
+      capability_type: mcp_tool
+      title: "\u521b\u5efa\u5019\u9009 Issue"
+      natural_language_triggers:
+        - "\u767b\u8bb0\u5019\u9009\u95ee\u9898"
+        - "\u521b\u5efa issue \u8349\u6848"
+        - "bug candidate"
+      description_for_llm: "\u53ea\u5199\u5019\u9009 Issue\uff0c\u4e0d\u76f4\u63a5\u521b\u5efa\u6b63\u5f0f GitHub Issue\u3002"
+      risk_level: medium
+      side_effect_level: draft_only
+      required_confirmations: []
+      preferred_model_role: primary_orchestrator
+      input_slots:
+        required: [title, problem_statement]
+      output_cards: [issue_candidate, sync_policy]
+      mcp_tool_refs:
+        - server_key: research-assistant
+          tool_name: assistant_create_issue_candidate
+      skill_refs: []
+      workflow_pack_ref: issue.intake
+      status: approved
+      source_ref: "backend/services/research_assistant/service.py:assistant_create_issue_candidate"
+    - capability_key: issue.sync_github
+      capability_type: mcp_tool
+      title: "\u540c\u6b65 GitHub Issue"
+      natural_language_triggers:
+        - "\u540c\u6b65 GitHub"
+        - "\u521b\u5efa\u6b63\u5f0f issue"
+        - "mcp_github_issue_sync"
+      description_for_llm: "GitHub \u6b63\u5f0f\u540c\u6b65\u5fc5\u987b\u5ba1\u6279\uff0c\u5e76\u4fdd\u6301 BUG JSON \u4e0e GitHub \u72b6\u6001\u4e00\u81f4\u3002"
+      risk_level: high
+      side_effect_level: write_nonprod
+      required_confirmations:
+        - APPROVE_RESEARCH_ASSISTANT_ACTION
+      preferred_model_role: primary_orchestrator
+      input_slots:
+        required: [candidate_id, mode]
+      output_cards: [approval_gate, sync_result, audit_link]
+      mcp_tool_refs:
+        - server_key: aistock-validation
+          tool_name: mcp_github_issue_create
+      skill_refs: []
+      workflow_pack_ref: issue.github_sync
+      status: approved
+      source_ref: "scripts/aistock_mcp_server.py:mcp_github_issue_create"
+    - capability_key: memory.write_candidate
+      capability_type: mcp_tool
+      title: "\u521b\u5efa\u5019\u9009\u8bb0\u5fc6"
+      natural_language_triggers:
+        - "\u5199\u5165\u5019\u9009\u8bb0\u5fc6"
+        - "\u4fdd\u5b58\u9879\u76ee\u8bb0\u5fc6"
+        - "memory candidate"
+      description_for_llm: "\u521b\u5efa draft memory candidate\uff0c\u6279\u51c6\u524d\u4e0d\u8fdb\u5165\u957f\u671f\u8bb0\u5fc6\u3002"
+      risk_level: medium
+      side_effect_level: draft_only
+      required_confirmations: []
+      preferred_model_role: primary_orchestrator
+      input_slots:
+        required: [memory_type, subject_key, title]
+      output_cards: [memory_candidate, approval_policy]
+      mcp_tool_refs:
+        - server_key: research-assistant
+          tool_name: assistant_create_memory_candidate
+      skill_refs: []
+      workflow_pack_ref: memory.intake
+      status: approved
+      source_ref: "backend/services/research_assistant/service.py:assistant_create_memory_candidate"
+    - capability_key: factor.analyze_library
+      capability_type: skill
+      title: "\u5206\u6790\u56e0\u5b50\u5e93"
+      natural_language_triggers:
+        - "\u5206\u6790\u56e0\u5b50\u5e93"
+        - "factor library"
+        - "IC \u8986\u76d6"
+      description_for_llm: "\u8c03\u7528\u56e0\u5b50\u5e93\u5206\u6790 skill\uff0c\u4ec5\u8bfb\u53d6\u548c\u6c47\u603b\u8bc1\u636e\u3002"
+      risk_level: medium
+      side_effect_level: read_only
+      required_confirmations: []
+      preferred_model_role: secondary_worker
+      input_slots:
+        required: [question]
+      output_cards: [factor_coverage, ic_summary, replacement_candidates]
+      mcp_tool_refs: []
+      skill_refs:
+        - analyze-factor-library
+      workflow_pack_ref: factor.analysis
+      status: approved
+      source_ref: "C:/Users/lc999/.codex/skills/analyze-factor-library/SKILL.md"
+    - capability_key: rdagent.analyze_task
+      capability_type: skill
+      title: "\u5206\u6790 RDAgent \u4efb\u52a1"
+      natural_language_triggers:
+        - "\u5206\u6790 rdagent"
+        - "\u4efb\u52a1\u8bca\u65ad"
+        - "rdagent log"
+      description_for_llm: "\u8c03\u7528 RDAgent task analyzer\uff0c\u4ec5\u8bfb\u53d6\u4efb\u52a1\u65e5\u5fd7\u548c\u6307\u6807\u3002"
+      risk_level: medium
+      side_effect_level: read_only
+      required_confirmations: []
+      preferred_model_role: secondary_worker
+      input_slots:
+        required: [task_id]
+      output_cards: [task_metrics, failure_findings, next_actions]
+      mcp_tool_refs: []
+      skill_refs:
+        - rdagent-task-analyzer
+      workflow_pack_ref: rdagent.analysis
+      status: approved
+      source_ref: "C:/Users/lc999/.codex/skills/rdagent-task-analyzer/SKILL.md"
+
+execution:
+  default_timeout_seconds: 60
+  high_cost_timeout_seconds: 600
+  max_retries: 1
+  retryable_error_codes: [timeout, transient_network, rate_limited]
+  non_retryable_error_codes: [approval_missing, schema_invalid, risk_policy_blocked]
+  cancel_check_interval_seconds: 2
+
+approval_policy:
+  approval_ttl_minutes: 60
+  expire_on_input_change: true
+  expire_on_tool_checksum_change: true
+  expire_on_runtime_config_change: true
+  production_sensitive_auto_execute: false
+
+ui_execution:
+  event_poll_interval_seconds: 2
+  show_raw_json_debug_drawer: true
+  raw_json_main_view: false
+
+query_limits:
+  conversation_messages_full: 500
+  prompt_nodes_active: 500
+  task_events_detail: 200
+  active_context_segments: 200
+  active_context_key_facts: 200
+  memory_items_context_pack: 50
+  temp_memories_context_pack: 50
+  graph_entity_relations: 200
+  graph_summary_entities: 500
+  graph_summary_relations: 500
+  graph_summary_paths: 100
+  routing_policy_primary: 20
+  routing_policy_role_fallback: 20
+  routing_policy_scan: 100
+  notification_summary_items: 100
+  notification_summary_preview: 10
+  validation_reports: 20
+  validation_issue_candidates: 50
+  router_mcp_servers: 200
+  router_model_profiles: 200
+  router_routing_policies: 200
+  default_context_pack_token_budget: 16000
+  context_pack_max_token_budget: 1000000
+  api_list_max_page_size: 500
+  api_list_tasks: 50
+  api_list_task_events: 200
+  api_list_conversations: 50
+  api_list_conversation_messages: 200
+  api_list_memory_items: 50
+  api_list_memory_access_log: 50
+  api_list_context_packs: 50
+  api_list_entities: 50
+  api_list_relations: 50
+  api_list_evolution_paths: 50
+  api_list_skills: 100
+  api_list_skill_events: 50
+  api_list_mcp_servers: 200
+  api_list_mcp_tools: 300
+  api_list_mcp_tool_events: 50
+  api_list_capabilities: 300
+  api_list_action_proposals: 100
+  api_list_approvals: 50
+  api_list_issue_candidates: 50
+  api_list_external_sessions: 50
+  api_list_external_events: 50
+  api_list_model_profiles: 200
+  api_list_routing_policies: 200
+  api_list_prompt_nodes: 100
+  api_list_prompt_sources: 50
+  api_list_prompt_node_versions: 50
+  api_list_prompt_activations: 50
+  api_list_prompt_activation_events: 50
+  api_list_prompt_bundles: 50
+  api_list_runtime_config_sources: 50
+  api_list_runtime_config_activations: 50
+  api_list_context_segments: 50
+  api_list_context_key_facts: 50
+  api_list_context_assembly_traces: 50
+  api_list_temp_memories: 50
+  api_list_notifications: 50
+  api_list_reports: 50
+  api_list_agenda_items: 50
+  api_list_validation_discovery_reports: 50
+  api_list_trace_events: 50

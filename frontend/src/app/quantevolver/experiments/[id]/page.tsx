@@ -56,7 +56,7 @@ export default function ExperimentDetailPage({ params }: { params: { id: string 
     setLoading(true);
 
     // 尝试从 DB 获取实验基础信息
-    const fetchExperiment = fetch(`${API}/quantevolver/experiments/${experimentId}`)
+    const fetchExperiment = fetch(`${API}/quantevolver/experiments/${experimentId}?detail=full`)
       .then(r => r.ok ? r.json() : null)
       .catch(() => null);
 

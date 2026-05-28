@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.services.trading_core.execution_algo_capabilities import required_runtime_asset_keys
-from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
+from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError, TradingCoreError
 
 from .manifest import freeze_manifest
 from .models import StrategyPackageManifest
@@ -61,12 +61,12 @@ class ModelAssetResolver:
         """
 
         if manifest.is_alpha_core_manifest:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "alpha-core StrategyPackage cannot rewrite execution model assets inside the frozen manifest; use a validated execution policy artifact instead",
                 context={"package_id": manifest.package_id, "manifest_version": manifest.manifest_version},
             )
         if manifest.minute_execution_policy is None:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "legacy runtime asset resolution requires manifest.minute_execution_policy",
                 context={"package_id": manifest.package_id, "manifest_version": manifest.manifest_version},
             )
@@ -124,7 +124,7 @@ class ModelAssetResolver:
         copy_missing: bool = True,
     ) -> ResolvedModelAsset:
         if manifest.minute_execution_policy is None:
-            raise StrategyPackageValidationError(
+            raise RuntimeConfigInvalidError(
                 "runtime asset resolution requires manifest.minute_execution_policy",
                 context={"package_id": manifest.package_id, "manifest_version": manifest.manifest_version},
             )
@@ -390,7 +390,7 @@ class ModelAssetResolver:
                 original_path,
                 purpose="StrategyPackage model asset source path",
             )
-        except StrategyPackageValidationError as exc:
+        except TradingCoreError as exc:
             raise DataUnavailableError(
                 f"{algo_code} {config_key} points to a worker workspace path",
                 context={

@@ -56,6 +56,7 @@ except ImportError as exc:  # pragma: no cover - installation guard
 SCHEMA_VERSION = "aistock_validation_bug_v1"
 DEFAULT_BASE_URL = "http://127.0.0.1:8001/api/v1/validation"
 DEFAULT_TIMEOUT = 30.0
+DEFAULT_MAX_RESPONSE_BYTES = 1_048_576
 SEVERITY_VALUES = {"P0", "P1", "P2", "P3"}
 STATUS_VALUES = {"open", "in_progress", "fixed", "verified", "wontfix"}
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
@@ -68,6 +69,7 @@ GITHUB_CLOSED_STATUSES = {"closed", "fixed", "resolved", "verified", "wontfix"}
 GITHUB_MANAGED_LABEL_PREFIXES = ("severity:", "module:", "status:", "risk:")
 GITHUB_MARKER_RE = re.compile(r"<!--\s*aistock-bug-id:\s*([^>\s]+)\s*-->", re.I)
 TITLE_PREFIX_RE = re.compile(r"^\[([^\]]+)\]")
+BUG_ID_RE = re.compile(r"\bBUG-(\d{3,})\b", re.I)
 LOCAL_ENV_FILE = ".env.github-issues-local"
 
 
@@ -118,9 +120,10 @@ def _dedupe_paths(paths: list[Path]) -> list[Path]:
 
 
 def _git_toplevel(path: Path) -> Path | None:
+    anchor = path.parent if path.exists() and path.is_file() else (path if path.exists() else path.parent)
     try:
         completed = subprocess.run(
-            ["git", "-C", str(path), "rev-parse", "--show-toplevel"],
+            ["git", "-C", str(anchor), "rev-parse", "--show-toplevel"],
             capture_output=True,
             check=False,
             text=True,
@@ -132,6 +135,52 @@ def _git_toplevel(path: Path) -> Path | None:
         return None
     value = completed.stdout.strip()
     return Path(value).resolve() if value else None
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    return str(left.resolve()).casefold() == str(right.resolve()).casefold()
+
+
+def _canonical_root() -> Path | None:
+    override = os.environ.get("AISTOCK_CANONICAL_ROOT") or os.environ.get("AISTOCK_ROOT")
+    if override:
+        return Path(override).resolve()
+    default = Path("F:/Dev/AIstock")
+    return default.resolve() if default.exists() else None
+
+
+def _git_branch(root: Path) -> str | None:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(root), "branch", "--show-current"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    return completed.stdout.strip() or None
+
+
+def _require_bug_json_write_target(path: Path) -> None:
+    repo_root = _git_toplevel(path)
+    canonical = _canonical_root()
+    if repo_root is None or canonical is None:
+        return
+    if _same_path(repo_root, canonical) and _git_branch(repo_root) == "main":
+        raise RuntimeError(
+            "refusing to write BUG JSON in canonical root main; use "
+            "scripts/aistock_issue_workflow.py submit-bug --create-registry-worktree "
+            "--apply with a registry or close-sync worktree"
+        )
+
+
+def _require_bug_intake_write_target() -> None:
+    _require_bug_json_write_target(BUG_ID_ALLOCATOR_PATH)
+    _require_bug_json_write_target(BUG_ROOT / f"{_today_yyyymmdd()}_BUG-000-preflight.json")
 
 
 def _candidate_repo_roots() -> list[Path]:
@@ -260,7 +309,6 @@ def _resolve_repo_root() -> Path:
 REPO_ROOT = _resolve_repo_root()
 BUG_ROOT = REPO_ROOT / "tests" / "aistock_validation" / "bugs"
 BUG_ID_ALLOCATOR_PATH = BUG_ROOT / ".bug_id_allocator.json"
-BUG_ID_ALLOCATOR_LOCK_PATH = BUG_ROOT / ".bug_id_allocator.lock"
 BUG_ID_ALLOCATOR_SCHEMA = "aistock_bug_id_allocator_v1"
 
 
@@ -270,6 +318,70 @@ def _utcnow_iso() -> str:
 
 def _today_yyyymmdd() -> str:
     return _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%d")
+
+
+def _int_from_env(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw in (None, ""):
+        return default
+    try:
+        return max(int(raw), 0)
+    except ValueError:
+        return default
+
+
+def _refinement_required_response(
+    *,
+    method: str,
+    path: str,
+    status_code: int,
+    original_bytes: int,
+    max_bytes: int,
+) -> dict[str, Any]:
+    """Return retry guidance instead of a misleading partial MCP payload."""
+
+    lower_path = path.lower()
+    retry_params: dict[str, Any] = {}
+    recommended_actions = [
+        "Retry with narrower filters before requesting full/detail data.",
+        "Use compact=True for issue/bug list and search tools, then fetch details for one id.",
+        "Use pagination with a smaller page_size or limit when a collection is required.",
+    ]
+    if any(token in lower_path for token in ("bugs", "issue")):
+        retry_params.setdefault("page_size", 20)
+        retry_params.setdefault("compact", True)
+    if any(token in lower_path for token in ("runs", "findings", "plans", "quality", "history")):
+        retry_params.setdefault("page_size", 20)
+    retry_with: dict[str, Any] = {"method": method, "path": path}
+    if retry_params:
+        retry_with["params"] = retry_params
+    if method == "POST":
+        retry_with.setdefault("json_body", {"limit": 20})
+
+    return {
+        "status": "requires_refinement",
+        "mcp_response_too_large": True,
+        "mcp_response_refinement_required": True,
+        "partial_payload_returned": False,
+        "method": method,
+        "path": path,
+        "status_code": status_code,
+        "original_bytes": original_bytes,
+        "max_bytes": max_bytes,
+        "message": (
+            "The backend returned a payload larger than the MCP response budget. "
+            "No partial preview was returned because truncated data can be misleading."
+        ),
+        "omitted_sections": ["response_payload"],
+        "available_detail_sections": [
+            "compact issue/bug fields",
+            "paginated result pages",
+            "specific BUG or GitHub Issue detail by id",
+            "explicit compact=False/full detail when the caller accepts the larger payload",
+        ],
+        "recommended_actions": recommended_actions,
+        "retry_with": retry_with,
+    }
 
 
 class ValidationCenterClient:
@@ -286,12 +398,18 @@ class ValidationCenterClient:
         base_url: str | None = None,
         timeout: float | None = None,
         transport: httpx.BaseTransport | None = None,
+        max_response_bytes: int | None = None,
     ) -> None:
         candidate = (base_url or os.environ.get("AISTOCK_VALIDATION_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
         _assert_loopback_url(candidate)
         self.base_url = candidate
         self.timeout = float(timeout if timeout is not None else os.environ.get("AISTOCK_HTTP_TIMEOUT", DEFAULT_TIMEOUT))
         self._transport = transport
+        self.max_response_bytes = (
+            max(int(max_response_bytes), 0)
+            if max_response_bytes is not None
+            else _int_from_env("AISTOCK_MCP_MAX_RESPONSE_BYTES", DEFAULT_MAX_RESPONSE_BYTES)
+        )
 
     def _client(self) -> httpx.Client:
         return httpx.Client(
@@ -310,6 +428,9 @@ class ValidationCenterClient:
                 f"Validation Center GET {path} failed with HTTP {response.status_code}: "
                 f"{response.text[:500]}"
             )
+        refinement = self._refinement_response(response, "GET", path)
+        if refinement is not None:
+            return refinement
         try:
             payload = response.json()
         except json.JSONDecodeError as exc:
@@ -330,6 +451,9 @@ class ValidationCenterClient:
                 f"Validation Center POST {path} failed with HTTP {response.status_code}: "
                 f"{response.text[:500]}"
             )
+        refinement = self._refinement_response(response, "POST", path)
+        if refinement is not None:
+            return refinement
         try:
             payload = response.json()
         except json.JSONDecodeError as exc:
@@ -341,6 +465,19 @@ class ValidationCenterClient:
                 f"Validation Center POST {path} returned unexpected envelope: keys={list(payload) if isinstance(payload, dict) else type(payload).__name__}"
             )
         return payload["data"]
+
+    def _refinement_response(self, response: httpx.Response, method: str, path: str) -> dict[str, Any] | None:
+        content = response.content
+        original_bytes = len(content)
+        if not self.max_response_bytes or original_bytes <= self.max_response_bytes:
+            return None
+        return _refinement_required_response(
+            method=method,
+            path=path,
+            status_code=response.status_code,
+            original_bytes=original_bytes,
+            max_bytes=self.max_response_bytes,
+        )
 
 
 def _slugify(value: str, *, max_length: int = 60) -> str:
@@ -385,18 +522,111 @@ def _read_bug_id_allocator_last() -> int:
         return 0
 
 
+def _worktree_root() -> Path:
+    override = os.environ.get("AISTOCK_WORKTREE_ROOT")
+    if override:
+        return Path(override)
+    if REPO_ROOT.parent.name == "AIstock_worktrees":
+        return REPO_ROOT.parent
+    if REPO_ROOT.name.lower() == "aistock":
+        return REPO_ROOT.parent / "AIstock_worktrees"
+    return REPO_ROOT.parent / "AIstock_worktrees"
+
+
+def _bug_id_lock_path() -> Path:
+    return Path(os.environ.get("AISTOCK_BUG_ID_LOCK_PATH") or (_worktree_root() / ".locks" / "bug-id-allocator.lock"))
+
+
+def _bug_id_reservation_root() -> Path:
+    return Path(os.environ.get("AISTOCK_BUG_ID_RESERVATION_ROOT") or (_worktree_root() / ".locks" / "bug-id-reservations"))
+
+
+def _bug_root_for(repo_root: Path) -> Path:
+    return repo_root / "tests" / "aistock_validation" / "bugs"
+
+
+def _bug_id_number(value: str | None) -> int | None:
+    match = BUG_ID_RE.search(value or "")
+    return int(match.group(1)) if match else None
+
+
+def _unique_existing_paths(paths: list[Path]) -> list[Path]:
+    seen: set[str] = set()
+    result: list[Path] = []
+    for path in paths:
+        try:
+            key = str(path.resolve()).casefold()
+        except OSError:
+            key = str(path.absolute()).casefold()
+        if key in seen or not path.exists():
+            continue
+        seen.add(key)
+        result.append(path)
+    return result
+
+
+def _bug_id_scan_roots() -> list[Path]:
+    candidates = [_bug_root_for(REPO_ROOT)]
+    canonical = _canonical_root()
+    if canonical is not None:
+        candidates.append(_bug_root_for(canonical))
+    worktree_root = _worktree_root()
+    if worktree_root.exists():
+        candidates.extend(_bug_root_for(child) for child in worktree_root.iterdir() if child.is_dir())
+    return _unique_existing_paths(candidates)
+
+
+def _scan_global_bug_ids() -> set[int]:
+    ids = set(_scan_existing_bug_ids())
+    for bugs_root in _bug_id_scan_roots():
+        allocator = bugs_root / ".bug_id_allocator.json"
+        if allocator.exists():
+            try:
+                payload = json.loads(allocator.read_text(encoding="utf-8-sig"))
+                number = int(payload.get("last_allocated") or 0)
+            except (OSError, json.JSONDecodeError, TypeError, ValueError):
+                number = 0
+            if number > 0:
+                ids.add(number)
+        for path in bugs_root.glob("*.json"):
+            number = _bug_id_number(path.name)
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8-sig"))
+                number = _bug_id_number(str(payload.get("bug_id") or "")) or number
+            except (OSError, json.JSONDecodeError):
+                pass
+            if number:
+                ids.add(number)
+    reservation_root = _bug_id_reservation_root()
+    if reservation_root.exists():
+        for path in reservation_root.glob("BUG-*.json"):
+            number = _bug_id_number(path.name)
+            if number:
+                ids.add(number)
+    try:
+        for issue in _github_issue_client_from_env().list_issues(state="all", labels=None):
+            number = _bug_id_number(str(issue.get("bug_id") or "")) or _bug_id_number(str(issue.get("title") or ""))
+            if number:
+                ids.add(number)
+    except Exception:
+        pass
+    return ids
+
+
 class _BugIdAllocatorLock:
     def __enter__(self) -> "_BugIdAllocatorLock":
-        BUG_ROOT.mkdir(parents=True, exist_ok=True)
+        lock_path = _bug_id_lock_path()
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock_path = lock_path
         deadline = time.monotonic() + 10
         while True:
             try:
-                self._fd = os.open(str(BUG_ID_ALLOCATOR_LOCK_PATH), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                self._fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
                 os.write(self._fd, f"{os.getpid()}\n".encode("ascii"))
                 return self
             except FileExistsError:
                 if time.monotonic() >= deadline:
-                    raise RuntimeError(f"timed out waiting for bug id allocator lock: {_repo_relative_path(BUG_ID_ALLOCATOR_LOCK_PATH)}")
+                    raise RuntimeError(f"timed out waiting for bug id allocator lock: {lock_path}")
                 time.sleep(0.1)
 
     def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
@@ -404,12 +634,13 @@ class _BugIdAllocatorLock:
         if fd is not None:
             os.close(fd)
         try:
-            BUG_ID_ALLOCATOR_LOCK_PATH.unlink()
+            self._lock_path.unlink()
         except FileNotFoundError:
             pass
 
 
 def _write_bug_id_allocator(last_allocated: int) -> None:
+    _require_bug_json_write_target(BUG_ID_ALLOCATOR_PATH)
     BUG_ROOT.mkdir(parents=True, exist_ok=True)
     payload = {
         "schema_version": BUG_ID_ALLOCATOR_SCHEMA,
@@ -424,8 +655,27 @@ def _write_bug_id_allocator(last_allocated: int) -> None:
 
 def _allocate_next_bug_id() -> str:
     with _BugIdAllocatorLock():
-        registry_max = max(_scan_existing_bug_ids() or {0})
+        registry_max = max(_scan_global_bug_ids() or {0})
         next_int = max(_read_bug_id_allocator_last(), registry_max) + 1
+        reservation_root = _bug_id_reservation_root()
+        reservation_root.mkdir(parents=True, exist_ok=True)
+        reservation = reservation_root / f"BUG-{next_int:03d}.json"
+        if reservation.exists():
+            raise RuntimeError(f"BUG-{next_int:03d} is already reserved: {reservation}")
+        reservation.write_text(
+            json.dumps(
+                {
+                    "schema_version": "aistock_bug_id_reservation_v1",
+                    "bug_id": f"BUG-{next_int:03d}",
+                    "reserved_at": _utcnow_iso(),
+                    "reserved_by": "aistock_mcp_server.py",
+                    "root": str(REPO_ROOT),
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         _write_bug_id_allocator(next_int)
     return f"BUG-{next_int:03d}"
 
@@ -537,14 +787,16 @@ def _build_bug_record(
 
 
 def _write_bug_record(record: dict[str, Any], slug: str) -> Path:
-    BUG_ROOT.mkdir(parents=True, exist_ok=True)
     filename = f"{_today_yyyymmdd()}_{record['bug_id']}-{slug}.json"
     path = BUG_ROOT / filename
+    _require_bug_json_write_target(path)
+    BUG_ROOT.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(record, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return path
 
 
 def _write_existing_bug_record(path: Path, record: dict[str, Any]) -> None:
+    _require_bug_json_write_target(path)
     payload = dict(record)
     payload.pop("_source_path", None)
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -716,6 +968,34 @@ def _normalize_registry_issue(record: dict[str, Any]) -> dict[str, Any]:
         "fingerprint": record.get("fingerprint"),
         "reproduce_command": record.get("reproduce_command"),
     }
+
+
+def _compact_issue_item(item: dict[str, Any]) -> dict[str, Any]:
+    compact = {
+        "source": item.get("source"),
+        "registry_is_source_of_truth": item.get("registry_is_source_of_truth"),
+        "bug_id": item.get("bug_id"),
+        "number": item.get("number"),
+        "title": item.get("title") or "",
+        "state": item.get("state"),
+        "status": item.get("status"),
+        "severity": item.get("severity"),
+        "module": item.get("module"),
+        "labels": item.get("labels") or [],
+        "html_url": item.get("html_url"),
+        "source_path": item.get("source_path"),
+    }
+    if isinstance(item.get("github_issue"), dict):
+        compact["github_issue"] = {
+            key: item["github_issue"].get(key)
+            for key in ("number", "state", "title", "html_url")
+            if item["github_issue"].get(key) is not None
+        }
+    return {key: value for key, value in compact.items() if value not in (None, "", [])}
+
+
+def _maybe_compact_issue_items(items: list[dict[str, Any]], *, compact: bool) -> list[dict[str, Any]]:
+    return [_compact_issue_item(item) for item in items] if compact else items
 
 
 def _normalize_source(source: str) -> str:
@@ -1075,6 +1355,8 @@ def _sync_record_to_github(
     apply: bool,
     actor: str,
 ) -> dict[str, Any]:
+    if apply:
+        _require_bug_json_write_target(path)
     issues = client.list_issues(state="all", labels=[GITHUB_BUG_LABEL])
     existing = _find_matching_github_issue(record, issues)
     desired = _desired_github_issue(record, existing_labels=existing.get("labels") if existing else None)
@@ -1164,6 +1446,8 @@ def _sync_github_to_record(
     apply: bool,
     actor: str,
 ) -> dict[str, Any]:
+    if apply:
+        _require_bug_json_write_target(path)
     issues = client.list_issues(state="all", labels=[GITHUB_BUG_LABEL])
     existing = _find_matching_github_issue(record, issues)
     if existing is None:
@@ -1290,10 +1574,11 @@ def list_bugs(
     severity: str | None = None,
     agent: str | None = None,
     page: int = 1,
-    page_size: int = 50,
+    page_size: int = 20,
+    compact: bool = True,
 ) -> dict[str, Any]:
     """List bug registry entries from ``tests/aistock_validation/bugs/`` via API."""
-    return _client().get(
+    payload = _client().get(
         "/bugs",
         params={
             "status": status,
@@ -1304,6 +1589,12 @@ def list_bugs(
             "page_size": page_size,
         },
     )
+    if not compact or not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+        return payload
+    result = dict(payload)
+    result["items"] = [_compact_issue_item({"source": "bug_json", **item}) for item in payload["items"] if isinstance(item, dict)]
+    result["compact"] = True
+    return result
 
 
 @mcp.tool()
@@ -1328,7 +1619,8 @@ def get_module_quality_summary(module: str | None = None, commit_limit: int = 50
     ``module_id`` for convenience. Pass ``module=None`` to get the full
     aggregate.
     """
-    summary = _client().get("/modules/quality-summary", params={"commit_limit": commit_limit})
+    params = {"commit_limit": commit_limit, "module": module}
+    summary = _client().get("/modules/quality-summary", params=params)
     if module is None:
         return summary
     if not isinstance(summary, dict):
@@ -1468,7 +1760,8 @@ def mcp_github_issue_list(
     labels: list[str] | None = None,
     source: str = "local",
     page: int = 1,
-    page_size: int = 50,
+    page_size: int = 20,
+    compact: bool = True,
 ) -> dict[str, Any]:
     """List AIstock GitHub-issue mirrors, defaulting to the local bugs JSON registry.
 
@@ -1493,6 +1786,7 @@ def mcp_github_issue_list(
         "source": source_norm,
         "registry_source": _repo_relative_path(BUG_ROOT),
         "registry_is_source_of_truth": True,
+        "compact": compact,
         "filters": {
             "state": state_norm,
             "module": module,
@@ -1501,7 +1795,7 @@ def mcp_github_issue_list(
             "labels": label_filter,
         },
         **pagination,
-        "items": page_items,
+        "items": _maybe_compact_issue_items(page_items, compact=compact),
     }
 
 
@@ -1515,7 +1809,8 @@ def mcp_github_issue_search(
     labels: list[str] | None = None,
     source: str = "local",
     page: int = 1,
-    page_size: int = 50,
+    page_size: int = 20,
+    compact: bool = True,
 ) -> dict[str, Any]:
     """Search AIstock issue mirrors across local JSON and optional live GitHub data."""
     if not isinstance(query, str) or not query.strip():
@@ -1542,6 +1837,7 @@ def mcp_github_issue_search(
         "registry_source": _repo_relative_path(BUG_ROOT),
         "registry_is_source_of_truth": True,
         "query": query.strip(),
+        "compact": compact,
         "filters": {
             "state": state_norm,
             "module": module,
@@ -1550,7 +1846,7 @@ def mcp_github_issue_search(
             "labels": label_filter,
         },
         **pagination,
-        "items": page_items,
+        "items": _maybe_compact_issue_items(page_items, compact=compact),
     }
 
 
@@ -1592,6 +1888,7 @@ def mcp_github_issue_create(
             "registry_is_source_of_truth": True,
         }
 
+    _require_bug_intake_write_target()
     bug_id = _next_bug_id()
     now_iso = _utcnow_iso()
     record = _build_bug_record(

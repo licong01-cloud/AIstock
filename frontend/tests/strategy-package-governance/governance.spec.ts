@@ -72,25 +72,13 @@ type MockOptions = {
   packagesStatus?: number;
   eligibilityByPackage?: Record<string, unknown>;
   eligibilityStatus?: number;
-  enableResult?: { ok: boolean; package?: unknown };
-  enableStatus?: number;
-  enableSpy?: { count: number };
 };
 
 async function mockApi(page: Page, options: MockOptions = {}) {
   await page.route("**/api/v1/strategy-packages**", async (route) => {
     const url = route.request().url();
-    const method = route.request().method();
     const respond = (data: unknown, status = 200) =>
       route.fulfill({ status, contentType: "application/json", body: JSON.stringify(data) });
-
-    if (method === "POST" && url.includes("/enable-paper")) {
-      if (options.enableSpy) options.enableSpy.count += 1;
-      if (options.enableStatus && options.enableStatus >= 400) {
-        return respond({ detail: "enable_paper_blocked" }, options.enableStatus);
-      }
-      return respond(options.enableResult ?? { ok: true });
-    }
 
     if (url.includes("/governance-eligibility")) {
       if (options.eligibilityStatus && options.eligibilityStatus >= 400) {
@@ -118,10 +106,11 @@ test("governance page lists strategy packages and selects first ready package by
     },
   });
   await page.goto("/strategy-package-governance");
-  await expect(page.getByText("策略包治理")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "策略包治理" })).toBeVisible();
   await expect(page.getByText("pkg_demo_ready")).toBeVisible();
   await expect(page.getByText("Demo Ready Package")).toBeVisible();
-  await expect(page.getByTestId("paper-ready-summary")).toContainText("READY");
+  await expect(page.getByTestId("live-governance-summary")).toContainText("已通过");
+  await expect(page.getByTestId("governance-boundary-help")).toContainText("不提供模拟盘准入操作");
 });
 
 test("status filter narrows the visible package list", async ({ page }) => {
@@ -140,7 +129,7 @@ test("status filter narrows the visible package list", async ({ page }) => {
   await expect(page.getByText("pkg_demo_ready")).toBeVisible();
 });
 
-test("blocked package shows missing evidence and disables enable_paper", async ({ page }) => {
+test("blocked package shows missing evidence while governance stays read-only", async ({ page }) => {
   await mockApi(page, {
     eligibilityByPackage: {
       pkg_demo_ready: READY_ELIGIBILITY,
@@ -149,31 +138,11 @@ test("blocked package shows missing evidence and disables enable_paper", async (
   });
   await page.goto("/strategy-package-governance");
   await page.getByTestId("select-pkg_demo_blocked").click();
-  await expect(page.getByTestId("paper-ready-summary")).toContainText("NOT_READY");
+  await expect(page.getByTestId("live-governance-summary")).toContainText("已阻断");
   await expect(page.getByTestId("block-reason")).toContainText("validation_stability=INSUFFICIENT_EVIDENCE");
   await expect(page.getByTestId("evidence-validation_stability-reason")).toContainText("INSUFFICIENT_EVIDENCE");
   await expect(page.getByTestId("evidence-protected_asset_ledger-reason")).toContainText("ledger_missing");
-  // Enable button is rendered but disabled because paper_ready=false
-  const enableButton = page.getByRole("button", { name: /启用 Paper/ });
-  await expect(enableButton).toBeDisabled();
-});
-
-test("enable_paper requires the two-step confirm and posts to the API", async ({ page }) => {
-  const spy = { count: 0 };
-  await mockApi(page, {
-    eligibilityByPackage: { pkg_demo_ready: READY_ELIGIBILITY },
-    packages: [PACKAGE_FIXTURES[0]],
-    enableSpy: spy,
-  });
-  await page.goto("/strategy-package-governance");
-  await expect(page.getByTestId("paper-ready-summary")).toContainText("READY");
-  // Open the confirm box via the action button
-  await page.getByTestId("enable-paper-action").click();
-  // Type confirmation token
-  await page.getByTestId("enable-paper-action-input").fill("ENABLE_PAPER_CONFIRM");
-  await page.getByTestId("enable-paper-action-confirm").click();
-  await expect.poll(() => spy.count).toBe(1);
-  await expect(page.getByTestId("enable-message")).toContainText("Paper 已启用");
+  await expect(page.getByTestId("governance-boundary-help")).toContainText("仅用于未来实盘审批");
 });
 
 test("packages API failure surfaces the error panel without crashing", async ({ page }) => {
@@ -182,6 +151,6 @@ test("packages API failure surfaces the error panel without crashing", async ({ 
   await mockApi(page, { packagesStatus: 500 });
   await page.goto("/strategy-package-governance");
   await expect(page.getByText("治理 API 调用失败")).toBeVisible();
-  await expect(page.getByText("策略包治理")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "策略包治理" })).toBeVisible();
   expect(pageErrors).toEqual([]);
 });

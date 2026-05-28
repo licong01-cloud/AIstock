@@ -1,0 +1,76 @@
+{
+  "actual": "当前页面控件横向拥挤，历史记录无法页面内全选，MiniQMT 持仓和成交缺少关键可读字段、排序/分页/折叠能力，本地字段含义对操作员不透明。",
+  "allowed_write_scope": [
+    "frontend/src/app/paper-v2/selection/page.tsx",
+    "frontend/src/app/paper-v2/portfolios/page.tsx",
+    "frontend/src/app/paper-v2/portfolios/[portfolioId]/page.tsx",
+    "frontend/src/lib/paper-v2/api.ts",
+    "frontend/src/lib/paper-v2/types.ts",
+    "frontend/tests/paper-v2/paper-v2-real-flow.spec.ts",
+    "tests/aistock_validation/history/paper_v2_selection_center",
+    "frontend/src/app/paper-v2/miniqmt-sim/page.tsx",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260527_BUG-131-paper-v2-miniqmt.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-131",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-27T14:23:37.629086Z",
+  "description": "当前页面控件横向拥挤，历史记录无法页面内全选，MiniQMT 持仓和成交缺少关键可读字段、排序/分页/折叠能力，本地字段含义对操作员不透明。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260527-05ccd6419ff6",
+      "timestamp": "2026-05-27T14:23:37.629081Z"
+    }
+  ],
+  "evidence_uris": [
+    "user request 2026-05-27"
+  ],
+  "expected": "选股中心策略包选择器置顶纵向展示；选股历史支持选择/取消当前页所有记录；MiniQMT 持仓显示成本、市值、代码/名称分列、零数量含义说明和全字段三态排序；当日成交默认折叠、可展开后分页、显示股票名称并支持排序；MiniQMT 组合清单对本地字段提供可读说明。",
+  "first_seen_at": "2026-05-27T14:23:37.629086Z",
+  "fix_branch": null,
+  "fix_commit": "bf82bf8b1948a2ee536da01cfa49f25c12dd757f",
+  "fixed_at": "2026-05-28T01:00:58.405659Z",
+  "github_issue_number": 252,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/252",
+  "last_seen_at": "2026-05-27T14:23:37.629086Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/255",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "打开 /paper-v2/selection 与 /paper-v2/portfolios 中 MiniQMT 组合详情，检查策略包选择器、历史记录批量选择、持仓/成交表格与组合清单字段说明。",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "paper_v2_backend",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "Paper v2 选股中心与 MiniQMT 表格交互可用性缺口",
+  "trigger_condition": {
+    "fingerprint": "05ccd6419ff6557b8115582b",
+    "source_event_id": "FE-20260527-05ccd6419ff6"
+  },
+  "validation_evidence": [
+    "GitHub PR #255 merged; checks passed after final rebase",
+    "local pre-merge validation passed: build, l0, paper_v2_backend, validation_center_backend, validation_module_registry_l0, targeted Playwright smoke"
+  ],
+  "verification_run_id": null
+}

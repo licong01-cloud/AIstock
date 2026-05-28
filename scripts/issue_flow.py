@@ -112,7 +112,7 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 def _write_json(path: Path | None, payload: dict[str, Any]) -> None:
     text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    if path is None:
+    if path is None or str(path) == "-":
         sys.stdout.write(text)
         return
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -696,6 +696,16 @@ def render_context_pack_markdown(pack: dict[str, Any]) -> str:
         "",
         "## Evidence",
         *[f"- {item}" for item in pack.get("evidence_refs") or ["n/a"]],
+        "",
+        "## Code Intelligence",
+        *(
+            [
+                f"- {key}: `{value}`"
+                for key, value in (pack.get("code_intelligence") or {}).items()
+                if key in {"provider", "status", "context_ref", "affected_tests_ref", "fallback_used"}
+            ]
+            or ["- n/a"]
+        ),
         "",
         "## Standards",
         *[f"- `{item}`" for item in pack.get("standards_refs") or []],

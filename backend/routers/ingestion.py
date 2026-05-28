@@ -11,12 +11,12 @@ import psycopg2.extras as pgx
 from fastapi import APIRouter, Body, HTTPException, Path, Query
 from pydantic import BaseModel, Field
 import requests
-from requests import exceptions as req_exc
 
 from ..db.pg_pool import get_conn
 from ..ingestion.tdx_scheduler import scheduler  # 1:1 复用现有调度器实现
 from ..services.tushare_dataset_specs import DATASET_REGISTRY
-from ..services.tushare_sync_engine import TushareSyncEngine
+from ..services.trading_calendar_status import TradingCalendarStatusService
+from ..services.trading_core.errors import DataUnavailableError
 
 
 router = APIRouter(prefix="/api", tags=["ingestion"])
@@ -62,6 +62,29 @@ def _uses_refresh_audit_cursor(extra_info: Any) -> bool:
     if not isinstance(info, dict):
         return False
     return str(info.get("cursor_source") or "").strip().lower() in {"refresh_audit", "audit"}
+
+
+def _trading_calendar_service() -> TradingCalendarStatusService:
+    return TradingCalendarStatusService()
+
+
+def _latest_trading_day_on_or_before(as_of_date: Optional[dt.date] = None) -> Optional[dt.date]:
+    return _trading_calendar_service().latest_trading_day_on_or_before(as_of_date or dt.date.today())
+
+
+def _next_trading_day_after(anchor_date: dt.date) -> dt.date:
+    return _trading_calendar_service().next_trading_day(anchor_date)
+
+
+def _raise_trading_calendar_unavailable(exc: DataUnavailableError) -> None:
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error_code": exc.error_code,
+            "message": exc.message,
+            "context": exc.context,
+        },
+    ) from exc
 
 
 def _isoformat(value: Optional[dt.datetime]) -> Optional[str]:
@@ -454,7 +477,7 @@ def _job_status(job_id: uuid.UUID) -> Dict[str, Any]:
             try:
                 avg_progress = int(float((avg_rows[0] or {}).get("avg_progress") or 0))
             except Exception:  # noqa: BLE001
-                import logging; logging.getLogger(__name__).debug("progress parse fallback: avg_progress")
+                logging.getLogger(__name__).debug("progress parse fallback: avg_progress")
                 avg_progress = 0
             percent = max(percent, min(100, avg_progress))
     else:
@@ -481,7 +504,7 @@ def _job_status(job_id: uuid.UUID) -> Dict[str, Any]:
                 total_c = int(counters_from_summary.get("total") or 0)
                 done_c = int(counters_from_summary.get("done") or 0)
             except Exception:  # noqa: BLE001
-                import logging; logging.getLogger(__name__).debug("progress parse fallback: total_c")
+                logging.getLogger(__name__).debug("progress parse fallback: total_c")
                 total_c = 0
                 done_c = 0
             if total_c > 0:
@@ -499,7 +522,7 @@ def _job_status(job_id: uuid.UUID) -> Dict[str, Any]:
                     else:
                         percent = min(100, int((done / total) * 100))
                 except Exception:  # noqa: BLE001
-                    import logging; logging.getLogger(__name__).debug("progress parse fallback: percent")
+                    logging.getLogger(__name__).debug("progress parse fallback: percent")
                     percent = min(100, int((done / total) * 100)) if total > 0 else 0
 
     log_rows = _fetchall(
@@ -722,7 +745,7 @@ def _batch_job_statuses(job_ids: List[uuid.UUID]) -> List[Dict[str, Any]]:
                     total_c = int(counters_from_summary.get("total") or 0)
                     done_c = int(counters_from_summary.get("done") or 0)
                 except Exception:  # noqa: BLE001
-                    import logging; logging.getLogger(__name__).debug("progress parse fallback: total_c")
+                    logging.getLogger(__name__).debug("progress parse fallback: total_c")
                     total_c = 0
                     done_c = 0
                 if total_c > 0:
@@ -739,7 +762,7 @@ def _batch_job_statuses(job_ids: List[uuid.UUID]) -> List[Dict[str, Any]]:
                         else:
                             percent = min(100, int((done / total) * 100))
                     except Exception:  # noqa: BLE001
-                        import logging; logging.getLogger(__name__).debug("progress parse fallback: percent")
+                        logging.getLogger(__name__).debug("progress parse fallback: percent")
                         percent = min(100, int((done / total) * 100)) if total > 0 else 0
 
         inserted_rows = int(
@@ -2574,15 +2597,10 @@ def get_ingestion_auto_range(
     if use_calendar_dates:
         latest_date: Optional[dt.date] = dt.date.today()
     else:
-        latest_rows = _fetchall(
-            """
-            SELECT MAX(cal_date) AS latest
-              FROM market.trading_calendar
-             WHERE is_trading = TRUE
-               AND cal_date <= CURRENT_DATE
-            """,
-        )
-        latest_date = latest_rows[0].get("latest") if latest_rows else None
+        try:
+            latest_date = _latest_trading_day_on_or_before()
+        except DataUnavailableError as exc:
+            _raise_trading_calendar_unavailable(exc)
         if latest_date is None:
             raise HTTPException(status_code=400, detail="no trading_calendar rows; please sync calendar first")
 
@@ -2605,17 +2623,10 @@ def get_ingestion_auto_range(
         elif use_calendar_dates:
             start_date = current_max_date + dt.timedelta(days=1)
         else:
-            next_rows = _fetchall(
-                """
-                SELECT MIN(cal_date) AS next_trading
-                  FROM market.trading_calendar
-                 WHERE is_trading = TRUE
-                   AND cal_date > %s
-                """,
-                (current_max_date,),
-            )
-            next_trading: Optional[dt.date] = next_rows[0].get("next_trading") if next_rows else None
-            start_date = latest_date if next_trading is None else next_trading
+            try:
+                start_date = _next_trading_day_after(current_max_date)
+            except DataUnavailableError as exc:
+                _raise_trading_calendar_unavailable(exc)
         has_data = True
 
     return {
@@ -2926,7 +2937,7 @@ def get_active_alerts(
                      AND severity IN %s
                    ORDER BY created_at DESC
                    LIMIT %s""",
-                (tuple(s for s, l in sev_order.items() if l >= min_level), limit),
+                (tuple(severity for severity, level in sev_order.items() if level >= min_level), limit),
             )
             rows = cur.fetchall()
             return {"alerts": [_serialize_alert(r) for r in rows], "count": len(rows)}
