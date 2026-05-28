@@ -1,53 +1,4 @@
 {
-  "schema_version": "aistock_validation_bug_v1",
-  "bug_id": "BUG-113",
-  "title": "P1: Selection results must show stock names, PIT entry price, and TDX current price",
-  "description": "Expected: Selection Center results display stock code plus stock name, replace the main Trace/?? key-list column with useful result fields, and split price semantics explicitly. For current-date selection, the selection entry/watchlist price is resolved from TDX latest available quote or close at run time with quote timestamp/source. For historical selection, e.g. selecting 2026-05-13, factors and scores must use data available no later than 2026-05-12, and the selection entry/watchlist price must use the PIT cutoff close such as 2026-05-12 close. A separate current_price column may use TDX latest quote for display only and must not be used by watchlist import. Raw component_scores remain available in a secondary audit detail surface.\nActual: SelectionCandidate currently carries symbol/score/rank/target fields/reference_price/component_scores/reason but no explicit stock_name, selection_entry_price, or display-only current_price. The UI renders selected stocks as row.symbol only and renders Trace/?? as Object.keys(row.component_scores).join(\", \"), which shows repeated audit key names. Current reference_price is loaded from market.kline_daily_raw.close_li and is not a TDX current quote.",
-  "module": "paper_v2_selection_center",
-  "severity": "P1",
-  "risk_area": "selection_result_price_display",
-  "status": "fixed",
-  "trigger_condition": {
-    "scenario": "reported_selection_results_need_stock_names_pit_entry_price_and_tdx_current_price_20260524",
-    "runtime_paths": [
-      "Selection Center fresh run",
-      "Selection Center historical run detail",
-      "Selection Center add-to-watchlist",
-      "Selection result current quote display"
-    ],
-    "user_requirement": "Show stock names; use PIT/run-time selection entry price for watchlist import; show a separate TDX current price that is display-only; remove the meaningless primary Trace key-list column.",
-    "price_semantics": {
-      "current_date_selection_entry_price": "TDX latest available quote/close at selection run time, with quote_time/source",
-      "historical_selection_entry_price": "PIT cutoff close, for example target 2026-05-13 uses 2026-05-12-or-earlier allowed close",
-      "current_price": "TDX latest quote for display only; not used by watchlist import",
-      "reference_price": "existing artifact/runtime field; must not be silently repurposed as TDX current quote"
-    }
-  },
-  "reproduce_command": "Open /paper-v2/selection, run or load a Selection Center run, inspect the selection results table: the stock column shows only the symbol and the Trace/?? column shows comma-separated component_scores keys that are nearly identical across rows instead of useful market fields such as stock name, volume, and previous close.",
-  "failing_run_id": null,
-  "evidence_uris": [
-    "github:https://github.com/licong01-cloud/AIstock/issues/183",
-    "file:frontend/src/app/paper-v2/selection/page.tsx:397",
-    "file:frontend/src/app/paper-v2/selection/page.tsx:403",
-    "file:frontend/src/app/paper-v2/portfolios/[portfolioId]/live-dashboard/page.tsx:55",
-    "file:backend/services/paper_trading_v2/symbol_names.py",
-    "file:backend/services/selection_center/models.py:29",
-    "file:backend/services/selection_center/repository.py:100",
-    "commit:07e66ac6ebf20feccc95eb39f4cd65a32ada8a65",
-    "commit:62dc1b12eb29d6047ee545f6e7cbf8b4f57ef916",
-    "file:tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md"
-  ],
-  "fingerprint": "7978b09f94bc7cfc",
-  "assigned_agent": "paper_v2",
-  "fix_branch": "feature/paper-v2-gate-decoupling-impl-20260525",
-  "fix_commit": "62dc1b12eb29d6047ee545f6e7cbf8b4f57ef916",
-  "verification_run_id": "tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md",
-  "created_at": "2026-05-24T04:22:44Z",
-  "first_seen_at": "2026-05-24T04:22:44Z",
-  "last_seen_at": "2026-05-24T06:03:58Z",
-  "fixed_at": "2026-05-27T06:22:22Z",
-  "submitted_at": "2026-05-24T04:22:44Z",
-  "closed_at": null,
   "allowed_write_scope": [
     "backend/services/selection_center/models.py",
     "backend/services/selection_center/service.py",
@@ -67,6 +18,99 @@
     "backend/infra/realtime_quote_subscriber.py",
     "backend/data_service/tdx_adapter.py"
   ],
+  "assigned_agent": "paper_v2",
+  "batch_id": "paper_v2_selection_runtime_ui_20260524",
+  "bug_id": "BUG-113",
+  "closed_at": null,
+  "closure_requirements": [
+    "Selection Center result UI shows stock code plus name consistently with Paper v2 simulation/trading views.",
+    "Selection entry/watchlist price and display-only current TDX price are distinct fields with explicit source/time semantics.",
+    "Historical selection price respects PIT cutoff rules; current-date selection can use TDX run-time quote/close.",
+    "Watchlist import uses the selection entry price, not the display-only current price.",
+    "component_scores/audit trace is preserved outside the primary table, and no selection/trading decision behavior is changed by display enrichment."
+  ],
+  "created_at": "2026-05-24T04:22:44Z",
+  "custom_github_labels": [
+    "paper-v2",
+    "selection-center",
+    "P1",
+    "risk:feature_gap",
+    "risk:observability"
+  ],
+  "description": "Expected: Selection Center results display stock code plus stock name, replace the main Trace/?? key-list column with useful result fields, and split price semantics explicitly. For current-date selection, the selection entry/watchlist price is resolved from TDX latest available quote or close at run time with quote timestamp/source. For historical selection, e.g. selecting 2026-05-13, factors and scores must use data available no later than 2026-05-12, and the selection entry/watchlist price must use the PIT cutoff close such as 2026-05-12 close. A separate current_price column may use TDX latest quote for display only and must not be used by watchlist import. Raw component_scores remain available in a secondary audit detail surface.\nActual: SelectionCandidate currently carries symbol/score/rank/target fields/reference_price/component_scores/reason but no explicit stock_name, selection_entry_price, or display-only current_price. The UI renders selected stocks as row.symbol only and renders Trace/?? as Object.keys(row.component_scores).join(\", \"), which shows repeated audit key names. Current reference_price is loaded from market.kline_daily_raw.close_li and is not a TDX current quote.",
+  "events": [
+    {
+      "action": "discovered",
+      "actor": "codex-app",
+      "note": "User reported Selection Center result UI gap: stock names missing while Paper v2 simulation displays them, and Trace/?? column is low-value repetitive component_scores key metadata.",
+      "timestamp": "2026-05-24T04:22:44Z"
+    },
+    {
+      "action": "github_issue_created",
+      "actor": "codex-app",
+      "note": "Validation MCP create timed out after partially advancing allocator in root; created GitHub issue #183 via gh CLI and mirrored fields into BUG-113 JSON before commit.",
+      "timestamp": "2026-05-24T04:22:44Z"
+    },
+    {
+      "action": "scope_updated",
+      "actor": "codex-app",
+      "note": "Updated BUG-113 scope per user clarification: split PIT selection entry price, watchlist entry price, and display-only TDX current price; keep TDX out of factor computation.",
+      "timestamp": "2026-05-24T06:03:58Z"
+    },
+    {
+      "action": "close_sync_audit_ready",
+      "actor": "codex-app",
+      "note": "Merged implementation evidence was re-audited on chore/paper-v2-issue-close-sync-audit-20260527; BUG JSON is marked fixed and GitHub issue should close when the audit PR merges. Audit record: tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md.",
+      "timestamp": "2026-05-27T06:22:22Z"
+    }
+  ],
+  "evidence_uris": [
+    "github:https://github.com/licong01-cloud/AIstock/issues/183",
+    "file:frontend/src/app/paper-v2/selection/page.tsx:397",
+    "file:frontend/src/app/paper-v2/selection/page.tsx:403",
+    "file:frontend/src/app/paper-v2/portfolios/[portfolioId]/live-dashboard/page.tsx:55",
+    "file:backend/services/paper_trading_v2/symbol_names.py",
+    "file:backend/services/selection_center/models.py:29",
+    "file:backend/services/selection_center/repository.py:100",
+    "commit:07e66ac6ebf20feccc95eb39f4cd65a32ada8a65",
+    "commit:62dc1b12eb29d6047ee545f6e7cbf8b4f57ef916",
+    "file:tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md"
+  ],
+  "failing_run_id": null,
+  "fingerprint": "7978b09f94bc7cfc",
+  "first_seen_at": "2026-05-24T04:22:44Z",
+  "fix_branch": "feature/paper-v2-gate-decoupling-impl-20260525",
+  "fix_commit": "62dc1b12eb29d6047ee545f6e7cbf8b4f57ef916",
+  "fixed_at": "2026-05-28T16:40:32.533347Z",
+  "github_issue_number": 183,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/183",
+  "last_seen_at": "2026-05-24T06:03:58Z",
+  "module": "paper_v2_selection_center",
+  "non_goals": [
+    "Do not change selection scoring, ranking, HMM, ST PIT, StrategyPackage manifest, or Paper v2 order execution.",
+    "Do not make TDX a factor-computation data source.",
+    "Do not use display-only current TDX price as watchlist entry price or historical selection entry price."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/244",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Open /paper-v2/selection, run or load a Selection Center run, inspect the selection results table: the stock column shows only the symbol and the Trace/?? column shows comma-separated component_scores keys that are nearly identical across rows instead of useful market fields such as stock name, volume, and previous close.",
+  "required_verification": [
+    "Selection result rows display stock code plus stock name consistently with Paper v2 simulation/trading display-only resolver priority.",
+    "Current-date selection records a TDX-sourced selection_entry_price/watchlist_entry_price with quote timestamp/source and does not fabricate prices when TDX is unavailable.",
+    "Historical selection records PIT cutoff close as selection_entry_price/watchlist_entry_price; for example target 2026-05-13 uses 2026-05-12-or-earlier allowed close, not 2026-05-13 future data or current TDX quote.",
+    "Selection results include a separate current_price/current_quote field from TDX latest quote for display only.",
+    "Add-to-watchlist uses selection_entry_price/watchlist_entry_price and never uses display-only current_price.",
+    "Raw component_scores remain accessible in a secondary detail surface; the primary table no longer renders comma-separated trace key names by default.",
+    "No rank, score, HMM, ST PIT, industry filter, StrategyPackage, or Paper v2 execution behavior changes because of display/price enrichment.",
+    "Validation record includes DESIGN-COMPLIANCE-001 item-by-item matrix and reports production_ddl_gate, production_frontend_dependency_gate, production_backend_dependency_gate, and whether production 8001/3000 were touched."
+  ],
+  "risk_area": "selection_result_price_display",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "submitted_at": "2026-05-24T04:22:44Z",
   "suspected_modules": [
     "backend/data_service/tdx_adapter.py",
     "backend/services/paper_trading_v2/symbol_names.py",
@@ -78,74 +122,25 @@
     "frontend/src/app/paper-v2/selection/page.tsx",
     "frontend/src/lib/paper-v2/types.ts"
   ],
-  "required_verification": [
-    "Selection result rows display stock code plus stock name consistently with Paper v2 simulation/trading display-only resolver priority.",
-    "Current-date selection records a TDX-sourced selection_entry_price/watchlist_entry_price with quote timestamp/source and does not fabricate prices when TDX is unavailable.",
-    "Historical selection records PIT cutoff close as selection_entry_price/watchlist_entry_price; for example target 2026-05-13 uses 2026-05-12-or-earlier allowed close, not 2026-05-13 future data or current TDX quote.",
-    "Selection results include a separate current_price/current_quote field from TDX latest quote for display only.",
-    "Add-to-watchlist uses selection_entry_price/watchlist_entry_price and never uses display-only current_price.",
-    "Raw component_scores remain accessible in a secondary detail surface; the primary table no longer renders comma-separated trace key names by default.",
-    "No rank, score, HMM, ST PIT, industry filter, StrategyPackage, or Paper v2 execution behavior changes because of display/price enrichment.",
-    "Validation record includes DESIGN-COMPLIANCE-001 item-by-item matrix and reports production_ddl_gate, production_frontend_dependency_gate, production_backend_dependency_gate, and whether production 8001/3000 were touched."
-  ],
-  "closure_requirements": [
-    "Selection Center result UI shows stock code plus name consistently with Paper v2 simulation/trading views.",
-    "Selection entry/watchlist price and display-only current TDX price are distinct fields with explicit source/time semantics.",
-    "Historical selection price respects PIT cutoff rules; current-date selection can use TDX run-time quote/close.",
-    "Watchlist import uses the selection entry price, not the display-only current price.",
-    "component_scores/audit trace is preserved outside the primary table, and no selection/trading decision behavior is changed by display enrichment."
-  ],
-  "non_goals": [
-    "Do not change selection scoring, ranking, HMM, ST PIT, StrategyPackage manifest, or Paper v2 order execution.",
-    "Do not make TDX a factor-computation data source.",
-    "Do not use display-only current TDX price as watchlist entry price or historical selection entry price."
-  ],
-  "events": [
-    {
-      "timestamp": "2026-05-24T04:22:44Z",
-      "actor": "codex-app",
-      "action": "discovered",
-      "note": "User reported Selection Center result UI gap: stock names missing while Paper v2 simulation displays them, and Trace/?? column is low-value repetitive component_scores key metadata."
+  "title": "P1: Selection results must show stock names, PIT entry price, and TDX current price",
+  "trigger_condition": {
+    "price_semantics": {
+      "current_date_selection_entry_price": "TDX latest available quote/close at selection run time, with quote_time/source",
+      "current_price": "TDX latest quote for display only; not used by watchlist import",
+      "historical_selection_entry_price": "PIT cutoff close, for example target 2026-05-13 uses 2026-05-12-or-earlier allowed close",
+      "reference_price": "existing artifact/runtime field; must not be silently repurposed as TDX current quote"
     },
-    {
-      "timestamp": "2026-05-24T04:22:44Z",
-      "actor": "codex-app",
-      "action": "github_issue_created",
-      "note": "Validation MCP create timed out after partially advancing allocator in root; created GitHub issue #183 via gh CLI and mirrored fields into BUG-113 JSON before commit."
-    },
-    {
-      "timestamp": "2026-05-24T06:03:58Z",
-      "actor": "codex-app",
-      "action": "scope_updated",
-      "note": "Updated BUG-113 scope per user clarification: split PIT selection entry price, watchlist entry price, and display-only TDX current price; keep TDX out of factor computation."
-    },
-    {
-      "timestamp": "2026-05-27T06:22:22Z",
-      "actor": "codex-app",
-      "action": "close_sync_audit_ready",
-      "note": "Merged implementation evidence was re-audited on chore/paper-v2-issue-close-sync-audit-20260527; BUG JSON is marked fixed and GitHub issue should close when the audit PR merges. Audit record: tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md."
-    }
-  ],
-  "custom_github_labels": [
-    "paper-v2",
-    "selection-center",
-    "P1",
-    "risk:feature_gap",
-    "risk:observability"
-  ],
-  "github_issue_number": 183,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/183",
-  "batch_id": "paper_v2_selection_runtime_ui_20260524",
+    "runtime_paths": [
+      "Selection Center fresh run",
+      "Selection Center historical run detail",
+      "Selection Center add-to-watchlist",
+      "Selection result current quote display"
+    ],
+    "scenario": "reported_selection_results_need_stock_names_pit_entry_price_and_tdx_current_price_20260524",
+    "user_requirement": "Show stock names; use PIT/run-time selection entry price for watchlist import; show a separate TDX current price that is display-only; remove the meaningless primary Trace key-list column."
+  },
   "validation_evidence": [
-    "backend/services/selection_center/result_enrichment.py adds stock name, PIT entry price, current quote fields, and display-only current price semantics",
-    "backend/tests/selection_center/test_result_enrichment.py -> covers current-date TDX price, historical PIT reference close, and pre-open TDX pre_close fallback",
-    "backend/tests/selection_center/test_runtime_selection.py::test_selection_center_watchlist_import_uses_selection_entry_price_not_current_price -> covered",
-    "python -m nox -s paper_v2_backend -> 501 passed, 1 skipped, 2 xfailed",
-    "GitHub main CI run 26490758645 at 8be68bea -> success; paper_v2_backend check -> success",
-    "GET http://127.0.0.1:8001/api/v1/strategy-packages?limit=20 -> 200; package listing no longer globally blocked by manifest drift",
-    "Close-sync audit record: tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md"
+    "Selection result enrichment is fixed by 62dc1b12; result_enrichment tests, runtime selection watchlist import coverage, nox paper_v2_backend, and GitHub main CI passed; Paper v2 issue closure audit PR #244 confirms BUG-113 is ready to close; production gates noop."
   ],
-  "production_ddl_gate": "noop",
-  "production_frontend_dependency_gate": "noop",
-  "production_backend_dependency_gate": "noop"
+  "verification_run_id": "tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md"
 }
