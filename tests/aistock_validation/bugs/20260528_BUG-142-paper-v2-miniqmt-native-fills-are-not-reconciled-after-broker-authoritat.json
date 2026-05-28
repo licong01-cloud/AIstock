@@ -27,16 +27,16 @@
       "timestamp": "2026-05-28T07:19:03.967757Z"
     },
     {
-      "timestamp": "2026-05-28T07:22:50Z",
-      "actor": "codex",
       "action": "scope_expanded",
-      "note": "Added Paper v2 regression tests to allowed_write_scope before code changes for MiniQMT native fill reconciliation."
+      "actor": "codex",
+      "note": "Added Paper v2 regression tests to allowed_write_scope before code changes for MiniQMT native fill reconciliation.",
+      "timestamp": "2026-05-28T07:22:50Z"
     },
     {
-      "timestamp": "2026-05-28T07:34:04Z",
-      "actor": "codex",
       "action": "scope_expanded",
-      "note": "Added BUG registry JSON and allocator files to allowed_write_scope so workflow finish can validate the registration and fix branch together."
+      "actor": "codex",
+      "note": "Added BUG registry JSON and allocator files to allowed_write_scope so workflow finish can validate the registration and fix branch together.",
+      "timestamp": "2026-05-28T07:34:04Z"
     }
   ],
   "evidence_uris": [
@@ -45,8 +45,8 @@
   "expected": "For minqmt_sim broker-authoritative runs, Paper v2 should either keep reconciling native orders/trades until terminal broker states are observed or expose an idempotent reconcile action that updates local orders/fills/positions/snapshots from MiniQMT native order_id/trade rows without duplicate submissions.",
   "first_seen_at": "2026-05-28T07:19:03.967761Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "990d2b3230563bab7d912733602b083ddba5c133",
+  "fixed_at": "2026-05-28T07:49:55.246360Z",
   "github_issue_number": 280,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/280",
   "last_seen_at": "2026-05-28T07:19:03.967761Z",
@@ -54,7 +54,8 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
-  "production_backend_dependency_gate": "noop",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/282",
+  "production_backend_dependency_gate": "pending_user_restart",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "GET /api/v1/qmt/orders?cancelable_only=false; GET /api/v1/qmt/trades; GET /api/v1/paper-v2/portfolios/paper_1d9b1f03700f4810aef8351124c8ab6c/orders?limit=50; GET /api/v1/paper-v2/portfolios/paper_1d9b1f03700f4810aef8351124c8ab6c/fills?limit=50. Compare native MiniQMT traded_volume for 1098944947/1098944948 with local Paper v2 order/fill state. Evidence: F:\\Dev\\AIstock_artifacts\\paper_v2_recovery\\20260528_151129_post_recovery_status_snapshot.json",
@@ -66,7 +67,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -75,5 +76,9 @@
     "fingerprint": "1dd5da447c3d33bd2f1fec3e",
     "source_event_id": "FE-20260528-1dd5da447c3d"
   },
+  "validation_evidence": [
+    "python -m ruff check backend/services/paper_trading_v2/day_runner.py backend/services/paper_trading_v2/live_session.py backend/tests/paper_trading_v2/test_minqmtsim_backend.py -> passed",
+    "python -m pytest backend/tests/paper_trading_v2/test_minqmtsim_backend.py backend/tests/paper_trading_v2/test_live_session.py -q -p no:cacheprovider -> 47 passed"
+  ],
   "verification_run_id": null
 }
