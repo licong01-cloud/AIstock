@@ -54,6 +54,31 @@ def _write_catalog(path: Path, *, runner_enabled: bool = True, writes_business_s
     )
 
 
+def _write_guardrail_catalog(path: Path) -> None:
+    path.write_text(
+        "schema_version: aistock_validation_plans_v1\n"
+        "plans:\n"
+        "  - plan_key: guardrail_changed_files\n"
+        "    title: Changed files guardrail gate\n"
+        "    module: development_guardrails\n"
+        "    level: L0\n"
+        "    command_key: nox_guardrail_changed_files\n"
+        "    nox_session: guardrail_changed_files\n"
+        "    enabled: true\n"
+        "    requires_backend: false\n"
+        "    requires_frontend: false\n"
+        "    allowed_backend_ports: []\n"
+        "    allowed_frontend_ports: []\n"
+        "    writes_database: false\n"
+        "    writes_artifacts: true\n"
+        "    writes_business_state: false\n"
+        "    runner_enabled: true\n"
+        "    max_duration_seconds: 60\n"
+        "    nox_posargs: [--changed-only]\n",
+        encoding="utf-8",
+    )
+
+
 def _write_backend_catalog(path: Path) -> None:
     path.write_text(
         "schema_version: aistock_validation_plans_v1\n"
@@ -307,6 +332,31 @@ def test_runner_executes_data_sync_autonomy_allowlisted_nox_session(tmp_path: Pa
     assert job["production_8001_touched"] is False
 
 
+def test_runner_adds_plan_posargs_for_guardrail_changed_files(tmp_path: Path) -> None:
+    catalog_path = tmp_path / "plans.yaml"
+    _write_guardrail_catalog(catalog_path)
+    calls: list[list[str]] = []
+
+    def fake_executor(command, _env, _cwd, _timeout_seconds):
+        calls.append(command)
+        return RunnerResult(return_code=0, output="guardrail ok\n")
+
+    runner = ValidationExecutionRunner(
+        plan_catalog=ValidationPlanCatalog(catalog_path),
+        execution_root=tmp_path / "jobs",
+        history_root=tmp_path / "history",
+        repo_root=tmp_path,
+        executor=fake_executor,
+        run_inline=True,
+    )
+
+    job = runner.start_job(plan_key="guardrail_changed_files")
+
+    assert job["status"] == "passed"
+    assert job["nox_posargs"] == ["--changed-only"]
+    assert calls[0][-2:] == ["--", "--changed-only"]
+
+
 def test_validation_execution_api_starts_and_lists_job(tmp_path: Path) -> None:
     catalog_path = tmp_path / "plans.yaml"
     _write_catalog(catalog_path, runner_enabled=True)
@@ -385,8 +435,13 @@ def test_workspace_path_accepted_for_allowlisted_worktree(tmp_path: Path) -> Non
 
     assert job["status"] == "passed"
     assert job["workspace_is_root"] is False
+    assert job["workspace_scope"] == "worktree"
     assert job["workspace_branch"] == "feature/test-branch"
     assert job["workspace_commit"] is not None
+    assert job["workspace_commit_full"] is not None
+    assert job["workspace_git"]["branch"] == "feature/test-branch"
+    assert job["workspace_git"]["dirty"] is False
+    assert job["workspace_git"]["detached"] is False
     assert str(worktree.resolve()) in job["workspace_path"]
 
 
@@ -560,3 +615,61 @@ def test_expected_branch_mismatch_rejected(tmp_path: Path) -> None:
     )
     with pytest.raises(ValidationRunnerError, match="expected_branch.*does not match"):
         runner.start_job(plan_key="l0", workspace_path=str(worktree), expected_branch="wrong-branch")
+
+
+def test_expected_commit_accepts_full_or_short_commit(tmp_path: Path) -> None:
+    worktree = tmp_path / "worktrees" / "bug-xxx"
+    worktree.mkdir(parents=True)
+    _init_git_repo(worktree)
+    full_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=str(worktree), text=True).strip()
+
+    catalog_path = tmp_path / "plans.yaml"
+    _write_catalog(catalog_path, runner_enabled=True)
+    runner = ValidationExecutionRunner(
+        plan_catalog=ValidationPlanCatalog(catalog_path),
+        execution_root=tmp_path / "jobs",
+        history_root=tmp_path / "history",
+        repo_root=tmp_path,
+        run_inline=True,
+        executor=lambda c, e, cwd, t: RunnerResult(return_code=0, output="ok"),
+    )
+
+    short_job = runner.start_job(plan_key="l0", workspace_path=str(worktree), expected_commit=full_commit[:8])
+    assert short_job["status"] == "passed"
+    full_job = runner.start_job(plan_key="l0", workspace_path=str(worktree), expected_commit=full_commit)
+    assert full_job["status"] == "passed"
+
+    with pytest.raises(ValidationRunnerError, match="expected_commit.*does not match"):
+        runner.start_job(plan_key="l0", workspace_path=str(worktree), expected_commit="deadbeef")
+
+
+def test_workspace_artifacts_are_copied_from_target_worktree(tmp_path: Path) -> None:
+    worktree = tmp_path / "worktrees" / "bug-xxx"
+    worktree.mkdir(parents=True)
+    _init_git_repo(worktree)
+    artifact_dir = worktree / "tmp" / "validation" / "guardrails"
+    artifact_dir.mkdir(parents=True)
+    (artifact_dir / "l0_paths.json").write_text('{"files": ["branch_only.py"]}', encoding="utf-8")
+    (artifact_dir / "l0_paths.md").write_text("# branch only\n", encoding="utf-8")
+
+    root_artifact_dir = tmp_path / "tmp" / "validation" / "guardrails"
+    root_artifact_dir.mkdir(parents=True)
+    (root_artifact_dir / "l0_paths.json").write_text('{"files": []}', encoding="utf-8")
+
+    catalog_path = tmp_path / "plans.yaml"
+    _write_catalog(catalog_path, runner_enabled=True)
+    runner = ValidationExecutionRunner(
+        plan_catalog=ValidationPlanCatalog(catalog_path),
+        execution_root=tmp_path / "jobs",
+        repo_root=tmp_path,
+        run_inline=True,
+        executor=lambda c, e, cwd, t: RunnerResult(return_code=0, output="ok"),
+    )
+
+    job = runner.start_job(plan_key="l0", workspace_path=str(worktree))
+    archive = runner.get_job_evidence(job["job_id"])["job"]["archive"]
+    artifact_paths = archive["artifact_paths"]
+    guardrail_paths = [Path(path) for path in artifact_paths if "guardrail-json" in path]
+    assert guardrail_paths
+    copied_payload = json.loads(guardrail_paths[0].read_text(encoding="utf-8"))
+    assert copied_payload["files"] == ["branch_only.py"]

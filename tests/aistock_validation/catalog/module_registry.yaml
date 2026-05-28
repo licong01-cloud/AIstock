@@ -10,7 +10,7 @@ modules:
     api_routes: [/api/v1/quantevolver/*, /api/v1/qe-archive/*]
     test_plans:
       required_on_change: [l0]
-      recommended: [qe_read_l3, qe_data_contract_backend, qe_archive_l3]
+      recommended: [qe_read_l3, qe_data_contract_backend, qe_archive_l3, qe_mcp_backend]
   - module_id: qe.core
     display_name: QE core services
     parent_module: qe
