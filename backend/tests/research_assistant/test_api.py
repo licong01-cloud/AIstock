@@ -296,6 +296,26 @@ def test_mcp_servers_endpoint_exposes_chinese_business_aliases() -> None:
     assert servers["aistock-execution-policy"]["display_name_zh"] == "执行策略库"
 
 
+def test_mcp_servers_endpoint_backfills_aliases_for_legacy_runtime_rows() -> None:
+    client = _client()
+    service = client.app.dependency_overrides[research_assistant.get_research_assistant_service]()
+    server = service.repository.find_one("mcp_servers", {"server_key": "aistock-model-registry"})
+    assert server is not None
+    legacy_health = dict(server["health_json"])
+    legacy_health.pop("display_name_zh", None)
+    legacy_health.pop("business_aliases_zh", None)
+    service.repository.update_record("mcp_servers", server["server_id"], {"health_json": legacy_health})
+
+    page = client.get("/api/v1/research-assistant/mcp/servers").json()["data"]
+    model_server = {item["server_key"]: item for item in page["items"]}["aistock-model-registry"]
+
+    assert model_server["display_name_zh"] == "模型库"
+    assert model_server["display_title"] == "模型库"
+    assert "模型版本" in model_server["business_aliases_zh"]
+    assert model_server["health_json"]["display_name_zh"] == "模型库"
+    assert "模型试验" in model_server["health_json"]["business_aliases_zh"]
+
+
 def test_mcp_tools_endpoint_defaults_to_compact_summary_first_payload() -> None:
     client = _client()
 
