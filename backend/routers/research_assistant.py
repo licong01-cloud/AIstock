@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from typing import Any
-from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -95,7 +94,7 @@ def _map_error(exc: Exception) -> HTTPException:
             status_code=409,
             detail={
                 "code": "research_assistant_catalog_not_ready",
-                "message": "研究助理目录尚未初始化完整，请先初始化 Prompt Tree、MCP、Skill 与模型路由目录。",
+                "message": "Research Assistant catalogs are not ready; seed Prompt Tree, MCP, Skill and model routing catalogs first.",
                 "operator_action": exc.readiness.get("operator_action"),
                 "readiness": exc.readiness,
             },
@@ -548,6 +547,38 @@ def list_mcp_servers(service: ResearchAssistantService = Depends(get_research_as
         raise _map_error(exc) from exc
 
 
+MCP_TOOL_SUMMARY_FIELDS = {
+    "tool_id",
+    "server_key",
+    "tool_name",
+    "title",
+    "description",
+    "risk_level",
+    "side_effect_level",
+    "requires_approval",
+    "status",
+    "created_at",
+    "updated_at",
+}
+MCP_TOOL_DETAIL_FIELDS = {
+    "input_schema_json",
+    "output_schema_json",
+    "preflight_schema_json",
+    "required_confirmations",
+}
+
+
+def _summarize_mcp_tool_record(tool: dict[str, Any], *, include_schema: bool) -> dict[str, Any]:
+    fields = set(MCP_TOOL_SUMMARY_FIELDS)
+    if include_schema:
+        fields.update(MCP_TOOL_DETAIL_FIELDS)
+    item = {key: value for key, value in tool.items() if key in fields}
+    item["detail_available"] = any(key in tool for key in MCP_TOOL_DETAIL_FIELDS)
+    if not include_schema:
+        item["detail_fields"] = sorted(key for key in MCP_TOOL_DETAIL_FIELDS if key in tool)
+    return item
+
+
 @router.get("/mcp/tools", response_model=ResearchAssistantResponse)
 def list_mcp_tools(
     server_key: str | None = Query(None),
@@ -555,10 +586,21 @@ def list_mcp_tools(
     search: str | None = Query(None),
     limit: int | None = Query(None, ge=1),
     offset: int = Query(0, ge=0),
+    include_schema: bool = Query(False, description="Return full input/output/preflight schemas for detail views only."),
     service: ResearchAssistantService = Depends(get_research_assistant_service),
 ) -> ResearchAssistantResponse:
     try:
-        return _success(service.list_records("mcp_tools", filters={"server_key": server_key, "risk_level": risk_level}, search=search, limit=limit, offset=offset))
+        compact_default_limit = 50
+        resolved_limit = limit or compact_default_limit
+        if not include_schema:
+            resolved_limit = min(resolved_limit, compact_default_limit)
+        page = service.list_records("mcp_tools", filters={"server_key": server_key, "risk_level": risk_level}, search=search, limit=resolved_limit, offset=offset)
+        page["items"] = [_summarize_mcp_tool_record(dict(item), include_schema=include_schema) for item in page["items"]]
+        page["summary_first"] = not include_schema
+        page["detail_available"] = True
+        if not include_schema:
+            page["detail_hint"] = "Set include_schema=true for explicit schema/detail inspection; default list responses stay compact."
+        return _success(page)
     except Exception as exc:
         raise _map_error(exc) from exc
 
@@ -923,3 +965,5 @@ def validation_discovery_summary(service: ResearchAssistantService = Depends(get
         return _success(service.validation_discovery_summary())
     except Exception as exc:
         raise _map_error(exc) from exc
+
+

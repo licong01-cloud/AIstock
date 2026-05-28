@@ -81,3 +81,17 @@ def test_chinese_catalog_questions_choose_summary_first_read_tools() -> None:
         assert route["server_key"] == server
         assert route["tool_name"] == tool
         assert route["side_effect"] == side_effect
+
+
+def test_utf8_chinese_catalog_questions_route_to_summary_first_read_tools() -> None:
+    cases = {
+        "因子库里有哪些可用因子？先给概要": ("factor_library", "aistock-factor-library", "factor_library_list", "read_only"),
+        "模型库里有什么模型？": ("model_registry", "aistock-model-registry", "model_registry_list", "read_only"),
+        "策略库目前有哪些策略？": ("strategy_governance", "aistock-strategy-governance", "strategy_governance_list_packages", "read_only"),
+    }
+    for message, (domain, server, tool, side_effect) in cases.items():
+        route = route_request(message)
+        assert route["domain"] == domain
+        assert route["server_key"] == server
+        assert route["tool_name"] == tool
+        assert route["side_effect"] == side_effect
