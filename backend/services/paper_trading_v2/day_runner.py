@@ -1101,15 +1101,12 @@ class PaperTradingDayRunner:
                     }
                 )
                 order = order.model_copy(update={"metadata": metadata})
-                order_fills = [
-                    self._miniqmt_fill_from_trade(
-                        trade,
-                        order=order,
-                        native=native,
-                        trade_date=trade_date,
-                    )
-                    for trade in broker.query_trades(handle)
-                ]
+                order_fills = self._miniqmt_fills_from_trades(
+                    broker.query_trades(handle),
+                    order=order,
+                    native=native,
+                    trade_date=trade_date,
+                )
                 final_order = order
                 order_events = []
                 for fill in order_fills:
@@ -1368,15 +1365,12 @@ class PaperTradingDayRunner:
                 intent = self._miniqmt_intent_from_order(order, trade_date=trade_date)
                 status = broker.query_status_from_native(intent=intent, **native)
                 trade_rows = broker.query_trades_from_native(intent=intent, **native)
-                candidate_fills = [
-                    self._miniqmt_fill_from_trade(
-                        trade,
-                        order=order,
-                        native=native,
-                        trade_date=trade_date,
-                    )
-                    for trade in trade_rows
-                ]
+                candidate_fills = self._miniqmt_fills_from_trades(
+                    trade_rows,
+                    order=order,
+                    native=native,
+                    trade_date=trade_date,
+                )
                 final_order = order
                 if (
                     candidate_fills
@@ -1557,6 +1551,103 @@ class PaperTradingDayRunner:
 
     def _miniqmt_existing_fill_rows(self, run_id: str) -> list[dict[str, Any]]:
         return [dict(row) for row in self.repository.list_fills_for_run(run_id)]
+
+    @classmethod
+    def _miniqmt_fills_from_trades(
+        cls,
+        trades: list[dict[str, Any]],
+        *,
+        order: Any,
+        native: dict[str, Any],
+        trade_date: date,
+    ) -> list[Fill]:
+        unique: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for trade in trades:
+            fill_id = cls._miniqmt_fill_id(trade, order_id=order.order_id)
+            if fill_id in seen:
+                continue
+            seen.add(fill_id)
+            unique.append(dict(trade))
+        if not unique:
+            return []
+        if len(unique) == 1:
+            try:
+                return [cls._miniqmt_fill_from_trade(unique[0], order=order, native=native, trade_date=trade_date)]
+            except ValueError:
+                pass
+        return cls._miniqmt_aggregate_fill_from_trades(unique, order=order, native=native, trade_date=trade_date)
+
+    @classmethod
+    def _miniqmt_aggregate_fill_from_trades(
+        cls,
+        trades: list[dict[str, Any]],
+        *,
+        order: Any,
+        native: dict[str, Any],
+        trade_date: date,
+    ) -> list[Fill]:
+        total_quantity = sum(max(0, int(trade.get("traded_volume") or 0)) for trade in trades)
+        if total_quantity <= 0:
+            return []
+        total_amount = sum(
+            max(0, int(trade.get("traded_volume") or 0)) * float(trade.get("traded_price") or 0.0)
+            for trade in trades
+        )
+        avg_price = total_amount / total_quantity if total_quantity else 0.0
+        trade_times = [cls._parse_minqmt_trade_time(trade_date, trade.get("traded_time")) for trade in trades]
+        trade_time = max(trade_times) if trade_times else datetime.now(UTC)
+        raw = dict(trades[-1])
+        raw.update(
+            {
+                "traded_volume": total_quantity,
+                "traded_price": avg_price,
+                "traded_amount": total_amount,
+                "order_id": native.get("miniqmt_order_id"),
+            }
+        )
+        payload = {
+            "order_id": order.order_id,
+            "miniqmt_order_id": native.get("miniqmt_order_id"),
+            "trade_keys": [
+                {
+                    "traded_id": str(trade.get("traded_id") or ""),
+                    "order_sysid": str(trade.get("order_sysid") or ""),
+                    "traded_time": str(trade.get("traded_time") or ""),
+                    "quantity": int(trade.get("traded_volume") or 0),
+                    "price": float(trade.get("traded_price") or 0.0),
+                }
+                for trade in trades
+            ],
+        }
+        digest = hashlib.sha256(json.dumps(payload, ensure_ascii=True, sort_keys=True).encode("utf-8")).hexdigest()
+        metadata = {
+            "broker_backend": "minqmt_sim",
+            "authority_source": "MINIQMT_TRADE_AGGREGATE",
+            "miniqmt_order_id": native.get("miniqmt_order_id"),
+            "strategy_name": str(raw.get("strategy_name") or native.get("strategy_name") or ""),
+            "order_remark": str(raw.get("order_remark") or native.get("order_remark") or ""),
+            "trade_count": len(trades),
+            "miniqmt_trade_raw": raw,
+            "miniqmt_trade_raw_rows": trades,
+        }
+        try:
+            return [
+                Fill(
+                    fill_id=f"fill_minqmt_agg_{digest[:24]}",
+                    order_id=order.order_id,
+                    symbol=order.symbol,
+                    side=order.side,
+                    quantity=total_quantity,
+                    price=avg_price,
+                    trade_time=trade_time,
+                    bar_time=trade_time,
+                    reason="miniqmt_trade_reconciliation_aggregate",
+                    metadata=metadata,
+                )
+            ]
+        except ValueError:
+            return []
 
     @classmethod
     def _miniqmt_fill_from_trade(
