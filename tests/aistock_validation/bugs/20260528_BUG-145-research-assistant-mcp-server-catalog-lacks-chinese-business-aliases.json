@@ -1,0 +1,74 @@
+{
+  "actual": "API validation shows functionality exists, but model library and strategy library are shown only as aistock-model-registry / Model Registry MCP and aistock-strategy-governance / Strategy Governance MCP, which does not match the Chinese business terms users ask for.",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/mcp_catalog_sync.py",
+    "backend/services/research_assistant/service.py",
+    "backend/routers/research_assistant.py",
+    "frontend/src/lib/research-assistant/api.ts",
+    "frontend/tests/research-assistant/research-assistant.spec.ts",
+    "backend/tests/research_assistant/test_api.py",
+    "backend/tests/research_assistant/test_natural_language_mcp_routing.py",
+    "backend/tests/research_assistant/test_mcp_catalog_sync.py",
+    "frontend/src/app/research-assistant/mcp-tools/page.tsx"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-145",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-28T10:58:21.798774Z",
+  "description": "API validation shows functionality exists, but model library and strategy library are shown only as aistock-model-registry / Model Registry MCP and aistock-strategy-governance / Strategy Governance MCP, which does not match the Chinese business terms users ask for.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260528-a055296aa06c",
+      "timestamp": "2026-05-28T10:58:21.798770Z"
+    },
+    {
+      "timestamp": "2026-05-28T11:08:00Z",
+      "actor": "codex",
+      "action": "scope_expanded_for_alias_tests_and_ui_display",
+      "note": "Add Research Assistant catalog sync regression test and MCP tools page display update to allowed scope for BUG-145. No non-Research Assistant files included."
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "MCP server/tool catalog and capability replies include Chinese business aliases/display names for model library, strategy library, factor library, factor metrics, factor correlation, execution policy and related domains. Natural language routing continues to use safe internal server_key/tool_name. Summary-first payload behavior remains unchanged.",
+  "first_seen_at": "2026-05-28T10:58:21.798774Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 294,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/294",
+  "last_seen_at": "2026-05-28T10:58:21.798774Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "GET /api/v1/research-assistant/mcp/servers and POST /api/v1/research-assistant/chat/turn with an MCP capability inquiry; inspect model and strategy server display names.",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Research Assistant MCP server catalog lacks Chinese business aliases",
+  "trigger_condition": {
+    "fingerprint": "a055296aa06ce08140dd3fd9",
+    "source_event_id": "FE-20260528-a055296aa06c"
+  },
+  "verification_run_id": null
+}

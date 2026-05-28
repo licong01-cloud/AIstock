@@ -282,6 +282,20 @@ def test_research_assistant_api_errors_are_explicit() -> None:
     assert client.post("/api/v1/research-assistant/temp-memories", json={"content_text": "missing scope"}).status_code == 400
 
 
+def test_mcp_servers_endpoint_exposes_chinese_business_aliases() -> None:
+    client = _client()
+
+    page = client.get("/api/v1/research-assistant/mcp/servers").json()["data"]
+    servers = {item["server_key"]: item for item in page["items"]}
+    assert page["summary_first"] is True
+    assert servers["aistock-model-registry"]["display_name_zh"] == "模型库"
+    assert servers["aistock-model-registry"]["display_title"] == "模型库"
+    assert "模型版本" in servers["aistock-model-registry"]["business_aliases_zh"]
+    assert servers["aistock-strategy-governance"]["display_name_zh"] == "策略库"
+    assert "策略包" in servers["aistock-strategy-governance"]["business_aliases_zh"]
+    assert servers["aistock-execution-policy"]["display_name_zh"] == "执行策略库"
+
+
 def test_mcp_tools_endpoint_defaults_to_compact_summary_first_payload() -> None:
     client = _client()
 

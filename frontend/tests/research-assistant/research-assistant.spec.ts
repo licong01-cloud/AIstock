@@ -218,7 +218,9 @@ test("Research Assistant MCP tools page treats ready servers as ready", async ({
     const respond = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ status: status >= 400 ? "error" : "success", data }) });
     if (path.endsWith("/mcp/servers")) {
       return respond(page([
-        { server_id: "srv_factor_library", server_key: "aistock-factor-library", title: "Factor Library MCP", status: "ready", health_json: { domain: "factor_library" } },
+        { server_id: "srv_factor_library", server_key: "aistock-factor-library", title: "Factor Library MCP", display_title: "因子库", display_name_zh: "因子库", business_aliases_zh: ["因子目录", "因子列表"], status: "ready", health_json: { domain: "factor_library", display_name_zh: "因子库", business_aliases_zh: ["因子目录", "因子列表"] } },
+        { server_id: "srv_model_registry", server_key: "aistock-model-registry", title: "Model Registry MCP", display_title: "模型库", display_name_zh: "模型库", business_aliases_zh: ["模型版本", "模型试验"], status: "ready", health_json: { domain: "model_registry", display_name_zh: "模型库", business_aliases_zh: ["模型版本", "模型试验"] } },
+        { server_id: "srv_strategy_governance", server_key: "aistock-strategy-governance", title: "Strategy Governance MCP", display_title: "策略库", display_name_zh: "策略库", business_aliases_zh: ["策略包", "策略治理"], status: "ready", health_json: { domain: "strategy_governance", display_name_zh: "策略库", business_aliases_zh: ["策略包", "策略治理"] } },
       ]));
     }
     if (path.endsWith("/mcp/tools")) {
@@ -232,7 +234,10 @@ test("Research Assistant MCP tools page treats ready servers as ready", async ({
   });
 
   await browserPage.goto("/research-assistant/mcp-tools");
-  await expect(browserPage.getByText("Factor Library MCP")).toBeVisible();
+  await expect(browserPage.getByText("因子库").first()).toBeVisible();
+  await expect(browserPage.getByText("模型库").first()).toBeVisible();
+  await expect(browserPage.getByText("策略库").first()).toBeVisible();
+  await expect(browserPage.getByText("模型版本 / 模型试验")).toBeVisible();
   await expect(browserPage.getByText("已就绪").first()).toBeVisible();
   await expect(browserPage.getByText("未就绪")).toHaveCount(0);
 });

@@ -23,6 +23,16 @@ def test_default_catalog_contains_all_current_and_new_mcp_tools() -> None:
         "aistock-strategy-governance",
         "aistock-execution-policy",
     }
+    servers = {item["server_key"]: item for item in default_mcp_servers()}
+    assert servers["aistock-model-registry"]["health_json"]["display_name_zh"] == "模型库"
+    assert "模型版本" in servers["aistock-model-registry"]["health_json"]["business_aliases_zh"]
+    assert servers["aistock-strategy-governance"]["health_json"]["display_name_zh"] == "策略库"
+    assert "策略包" in servers["aistock-strategy-governance"]["health_json"]["business_aliases_zh"]
+    assert servers["aistock-factor-library"]["health_json"]["display_name_zh"] == "因子库"
+    assert servers["aistock-factor-metrics"]["health_json"]["display_name_zh"] == "因子独立指标"
+    assert servers["aistock-factor-correlation"]["health_json"]["display_name_zh"] == "因子相关性"
+    assert servers["aistock-execution-policy"]["health_json"]["display_name_zh"] == "执行策略库"
+
     local_data_tools = [tool for tool in default_mcp_tools() if tool["server_key"] == "aistock-local-data"]
     assert len(local_data_tools) == 47
 
@@ -45,3 +55,7 @@ def test_seed_catalogs_registers_all_mcp_tools_and_capability_reply_is_humanized
     assert "summary-first" in reply
     assert "aistock-qe-archive" in reply
     assert "aistock-factor-library" in reply
+    assert "模型库" in reply
+    assert "策略库" in reply
+    assert "因子独立指标" in reply
+    assert "执行策略库" in reply

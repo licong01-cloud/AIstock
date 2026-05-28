@@ -84,6 +84,10 @@ export type AssistantMcpServer = JsonObject & {
   server_id: string;
   server_key: string;
   title?: string;
+  display_title?: string;
+  display_name_zh?: string;
+  business_aliases_zh?: string[];
+  summary_zh?: string;
   status?: string;
   health_json?: JsonObject;
 };
