@@ -1,71 +1,4 @@
 {
-  "schema_version": "aistock_validation_bug_v1",
-  "bug_id": "BUG-116",
-  "title": "P1: Platform trading-day status service missing for Paper v2 and Local Data",
-  "description": "Expected: AIstock should expose a shared read-only platform trading-day status service backed by market.trading_calendar so Paper v2, Local Data management, simulation runtime, and future live paths read one canonical current-day calendar answer. The service should cache briefly and invalidate after calendar sync, but the database table remains the source of truth. Actual: multiple modules query market.trading_calendar directly or expose module-local helpers; Paper v2 session guard code may fall back to weekday logic on provider errors, and Local Data owns calendar sync UX without publishing a shared status contract. Supplement 2026-05-24: all weekday fallback logic must be removed. The official service must build and maintain an AIstock-owned filesystem cache from market.trading_calendar so normal API reads do not query PostgreSQL on every request. Cache rebuild/refresh must be automatic, monthly-aware, and warn when DB calendar rows do not cover the next full calendar month. Paper v2 overview must display current trading-day status, latest ended trading day, and earliest next trading day from the unified API.",
-  "module": "platform_trading_calendar",
-  "severity": "P1",
-  "risk_area": "trading_day_status_contract",
-  "status": "open",
-  "trigger_condition": {
-    "scenario": "paper_v2_local_data_and_future_live_paths_need_shared_current_trading_day_status_20260524",
-    "user_requirement": "Local Data management and Paper v2 same-day behavior both need to know whether today is a trading day; future modules should read one shared status instead of each module duplicating calendar SQL.",
-    "required_contract": [
-      "today_asia_shanghai",
-      "is_trading_day",
-      "latest_trading_day_lte_today",
-      "previous_trading_day",
-      "next_trading_day",
-      "calendar_source",
-      "calendar_coverage",
-      "source_updated_at_or_audit",
-      "status_ok_missing_or_stale"
-    ],
-    "source_of_truth": "market.trading_calendar",
-    "forbidden_design": [
-      "manually edited global trading-day flag",
-      "weekday-only fallback in trading-sensitive paths",
-      "Paper v2-only hidden global state"
-    ],
-    "must_remove_all_weekday_fallback": true,
-    "filesystem_cache_requirement": {
-      "source_of_truth": "market.trading_calendar",
-      "normal_api_reads": "filesystem_cache_not_database_per_request",
-      "cache_refresh": "automatic_on_missing_stale_month_boundary_or_calendar_sync",
-      "manual_intervention": "not_required",
-      "warning_condition": "database_calendar_does_not_cover_next_full_calendar_month"
-    },
-    "paper_v2_homepage_display": [
-      "current_date_is_trading_day",
-      "latest_ended_trading_day",
-      "earliest_next_trading_day",
-      "calendar_cache_warning_if_any"
-    ]
-  },
-  "reproduce_command": "rg -n \"trading_calendar|TradeCalendarProvider|get_latest_trading_day|is_trading_day|trade_cal\" backend frontend/src/app/local-data -g \"*.py\" -g \"*.tsx\" -g \"*.ts\"",
-  "failing_run_id": null,
-  "evidence_uris": [
-    "github:https://github.com/licong01-cloud/AIstock/issues/187",
-    "file:backend/services/paper_trading_v2/market_data.py:890",
-    "file:backend/services/paper_trading_v2/session.py:532",
-    "file:backend/routers/paper_trading_v2.py:204",
-    "file:backend/routers/ingestion.py:2790",
-    "file:frontend/src/app/local-data/page.tsx:538",
-    "file:frontend/src/app/local-data/page.tsx:1701",
-    "commit:07e66ac6ebf20feccc95eb39f4cd65a32ada8a65",
-    "file:tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md"
-  ],
-  "fingerprint": "351f01b82f204e2d",
-  "assigned_agent": "platform_runtime",
-  "fix_branch": null,
-  "fix_commit": null,
-  "verification_run_id": null,
-  "created_at": "2026-05-24T06:16:41Z",
-  "first_seen_at": "2026-05-24T06:16:41Z",
-  "last_seen_at": "2026-05-27T06:22:22Z",
-  "fixed_at": null,
-  "submitted_at": "2026-05-24T06:16:41Z",
-  "closed_at": null,
   "allowed_write_scope": [
     "backend/services/market_calendar",
     "backend/services/platform_calendar_status.py",
@@ -98,20 +31,91 @@
     "backend/tests/platform_calendar/test_trading_day_status_cache.py",
     "frontend/tests/paper-v2/trading-day-status.spec.ts"
   ],
-  "suspected_modules": [
-    "backend/services/paper_trading_v2/market_data.py",
-    "backend/services/paper_trading_v2/session.py",
-    "backend/routers/paper_trading_v2.py",
-    "backend/routers/ingestion.py",
-    "backend/services/simulation_runtime/selection.py",
-    "backend/services/qmt_strategy_ledger/lot_availability.py",
-    "frontend/src/app/local-data/page.tsx",
-    "backend/services/paper_trading_v2/live_session.py",
-    "backend/services/paper_trading_v2/coldstart_sentinel.py",
-    "backend/services/paper_trading_v2/broker/minqmtsim.py",
-    "frontend/src/app/paper-v2/page.tsx",
-    "frontend/src/lib/paper-v2/format.ts"
+  "assigned_agent": "platform_runtime",
+  "bug_id": "BUG-116",
+  "closed_at": null,
+  "closure_requirements": [
+    "All modules have a documented shared current trading-day status contract backed by market.trading_calendar.",
+    "Paper v2 and Local Data consume the shared status instead of maintaining separate current-day semantics.",
+    "No trading-sensitive path silently falls back to weekday-only logic when the calendar provider fails.",
+    "The service exposes freshness and coverage diagnostics so operators can distinguish non-trading day from missing/stale calendar data.",
+    "Future modules can call the same service/API without duplicating SQL.",
+    "BUG-116 implementation removes all weekday fallback behavior from trading-sensitive calendar decisions.",
+    "Unified trading-day status API serves normal requests from an automatically maintained filesystem cache derived from market.trading_calendar.",
+    "The service warns before calendar coverage expires for the next full month and never requires manual cache generation.",
+    "Paper v2 homepage shows current trading-day status, latest ended trading day, and earliest next trading day from the unified API.",
+    "Paper v2 runtime, readiness, session, live, replay, and MiniQMT-adjacent paths use the unified calendar provider contract."
   ],
+  "created_at": "2026-05-24T06:16:41Z",
+  "custom_github_labels": [
+    "P1",
+    "module:paper_v2",
+    "platform-runtime",
+    "risk:data_freshness_policy",
+    "status:open"
+  ],
+  "description": "Expected: AIstock should expose a shared read-only platform trading-day status service backed by market.trading_calendar so Paper v2, Local Data management, simulation runtime, and future live paths read one canonical current-day calendar answer. The service should cache briefly and invalidate after calendar sync, but the database table remains the source of truth. Actual: multiple modules query market.trading_calendar directly or expose module-local helpers; Paper v2 session guard code may fall back to weekday logic on provider errors, and Local Data owns calendar sync UX without publishing a shared status contract. Supplement 2026-05-24: all weekday fallback logic must be removed. The official service must build and maintain an AIstock-owned filesystem cache from market.trading_calendar so normal API reads do not query PostgreSQL on every request. Cache rebuild/refresh must be automatic, monthly-aware, and warn when DB calendar rows do not cover the next full calendar month. Paper v2 overview must display current trading-day status, latest ended trading day, and earliest next trading day from the unified API.",
+  "events": [
+    {
+      "action": "discovered",
+      "actor": "codex-app",
+      "note": "User asked whether Paper v2, Local Data, and future modules should share a global current trading-day status based on the synced annual trading calendar.",
+      "timestamp": "2026-05-24T06:16:41Z"
+    },
+    {
+      "action": "github_issue_created",
+      "actor": "codex-app",
+      "note": "Created GitHub issue #187 and mirrored BUG-116 JSON.",
+      "timestamp": "2026-05-24T06:16:41Z"
+    },
+    {
+      "action": "scope_updated",
+      "actor": "codex-app",
+      "note": "User required removal of all weekday fallback logic, automatic filesystem cache backed by market.trading_calendar, monthly coverage warning, and Paper v2 overview trading-day status display.",
+      "timestamp": "2026-05-24T07:07:04Z"
+    },
+    {
+      "action": "close_sync_audit_keep_open",
+      "actor": "codex-app",
+      "note": "Audit keeps BUG-116 open: backend TradingCalendarStatusService/API and Paper v2 overview status exist and live /api/v1/trading-calendar/status returns 200, but Local Data status display plus /api/calendar/sync cache refresh/invalidation and full freshness/timezone semantics are not fully proven.",
+      "timestamp": "2026-05-27T06:22:22Z"
+    }
+  ],
+  "evidence_uris": [
+    "github:https://github.com/licong01-cloud/AIstock/issues/187",
+    "file:backend/services/paper_trading_v2/market_data.py:890",
+    "file:backend/services/paper_trading_v2/session.py:532",
+    "file:backend/routers/paper_trading_v2.py:204",
+    "file:backend/routers/ingestion.py:2790",
+    "file:frontend/src/app/local-data/page.tsx:538",
+    "file:frontend/src/app/local-data/page.tsx:1701",
+    "commit:07e66ac6ebf20feccc95eb39f4cd65a32ada8a65",
+    "file:tests/aistock_validation/history/paper_v2_selection_center/20260527_paper_v2_issue_close_sync_audit.md"
+  ],
+  "failing_run_id": null,
+  "fingerprint": "351f01b82f204e2d",
+  "first_seen_at": "2026-05-24T06:16:41Z",
+  "fix_branch": null,
+  "fix_commit": "f150d57df9d14f2cb0e11f53e466a3d2a84de09f",
+  "fixed_at": "2026-05-28T18:08:44.811717Z",
+  "github_issue_number": 187,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/187",
+  "last_seen_at": "2026-05-27T06:22:22Z",
+  "module": "platform_trading_calendar",
+  "non_goals": [
+    "Do not replace market.trading_calendar as the source of truth.",
+    "Do not add a manually editable AIstock global trading-day flag.",
+    "Do not change QE/backtest historical calendar semantics.",
+    "Do not start or restart production 8001/3000 as part of issue registration.",
+    "Do not keep any weekday fallback as a compatibility mode for trading-sensitive paths.",
+    "Do not require operators to manually generate or refresh the filesystem cache.",
+    "Do not make the filesystem cache a new source of truth; it is a derived cache from market.trading_calendar."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/309",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "rg -n \"trading_calendar|TradeCalendarProvider|get_latest_trading_day|is_trading_day|trade_cal\" backend frontend/src/app/local-data -g \"*.py\" -g \"*.tsx\" -g \"*.ts\"",
   "required_verification": [
     "A shared platform calendar status service/API returns today, is_trading_day, latest_trading_day_lte_today, previous_trading_day, next_trading_day, source, coverage, and freshness/audit status from market.trading_calendar.",
     "The service uses a bounded per-process cache or request cache with explicit invalidation after successful /calendar/sync; it does not create a manually edited global flag.",
@@ -130,60 +134,67 @@
     "API tests instrument or fake the repository to prove repeated status calls use filesystem cache and do not hit the database every time.",
     "Paper v2 timezone-sensitive defaults use Asia/Shanghai business date from the unified service, not dt.date.today(), datetime.now() naive, or frontend UTC ISO slicing."
   ],
-  "closure_requirements": [
-    "All modules have a documented shared current trading-day status contract backed by market.trading_calendar.",
-    "Paper v2 and Local Data consume the shared status instead of maintaining separate current-day semantics.",
-    "No trading-sensitive path silently falls back to weekday-only logic when the calendar provider fails.",
-    "The service exposes freshness and coverage diagnostics so operators can distinguish non-trading day from missing/stale calendar data.",
-    "Future modules can call the same service/API without duplicating SQL.",
-    "BUG-116 implementation removes all weekday fallback behavior from trading-sensitive calendar decisions.",
-    "Unified trading-day status API serves normal requests from an automatically maintained filesystem cache derived from market.trading_calendar.",
-    "The service warns before calendar coverage expires for the next full month and never requires manual cache generation.",
-    "Paper v2 homepage shows current trading-day status, latest ended trading day, and earliest next trading day from the unified API.",
-    "Paper v2 runtime, readiness, session, live, replay, and MiniQMT-adjacent paths use the unified calendar provider contract."
+  "risk_area": "trading_day_status_contract",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "submitted_at": "2026-05-24T06:16:41Z",
+  "suspected_modules": [
+    "backend/services/paper_trading_v2/market_data.py",
+    "backend/services/paper_trading_v2/session.py",
+    "backend/routers/paper_trading_v2.py",
+    "backend/routers/ingestion.py",
+    "backend/services/simulation_runtime/selection.py",
+    "backend/services/qmt_strategy_ledger/lot_availability.py",
+    "frontend/src/app/local-data/page.tsx",
+    "backend/services/paper_trading_v2/live_session.py",
+    "backend/services/paper_trading_v2/coldstart_sentinel.py",
+    "backend/services/paper_trading_v2/broker/minqmtsim.py",
+    "frontend/src/app/paper-v2/page.tsx",
+    "frontend/src/lib/paper-v2/format.ts"
   ],
-  "non_goals": [
-    "Do not replace market.trading_calendar as the source of truth.",
-    "Do not add a manually editable AIstock global trading-day flag.",
-    "Do not change QE/backtest historical calendar semantics.",
-    "Do not start or restart production 8001/3000 as part of issue registration.",
-    "Do not keep any weekday fallback as a compatibility mode for trading-sensitive paths.",
-    "Do not require operators to manually generate or refresh the filesystem cache.",
-    "Do not make the filesystem cache a new source of truth; it is a derived cache from market.trading_calendar."
-  ],
-  "events": [
-    {
-      "timestamp": "2026-05-24T06:16:41Z",
-      "actor": "codex-app",
-      "action": "discovered",
-      "note": "User asked whether Paper v2, Local Data, and future modules should share a global current trading-day status based on the synced annual trading calendar."
+  "title": "P1: Platform trading-day status service missing for Paper v2 and Local Data",
+  "trigger_condition": {
+    "filesystem_cache_requirement": {
+      "cache_refresh": "automatic_on_missing_stale_month_boundary_or_calendar_sync",
+      "manual_intervention": "not_required",
+      "normal_api_reads": "filesystem_cache_not_database_per_request",
+      "source_of_truth": "market.trading_calendar",
+      "warning_condition": "database_calendar_does_not_cover_next_full_calendar_month"
     },
-    {
-      "timestamp": "2026-05-24T06:16:41Z",
-      "actor": "codex-app",
-      "action": "github_issue_created",
-      "note": "Created GitHub issue #187 and mirrored BUG-116 JSON."
-    },
-    {
-      "timestamp": "2026-05-24T07:07:04Z",
-      "actor": "codex-app",
-      "action": "scope_updated",
-      "note": "User required removal of all weekday fallback logic, automatic filesystem cache backed by market.trading_calendar, monthly coverage warning, and Paper v2 overview trading-day status display."
-    },
-    {
-      "timestamp": "2026-05-27T06:22:22Z",
-      "actor": "codex-app",
-      "action": "close_sync_audit_keep_open",
-      "note": "Audit keeps BUG-116 open: backend TradingCalendarStatusService/API and Paper v2 overview status exist and live /api/v1/trading-calendar/status returns 200, but Local Data status display plus /api/calendar/sync cache refresh/invalidation and full freshness/timezone semantics are not fully proven."
-    }
+    "forbidden_design": [
+      "manually edited global trading-day flag",
+      "weekday-only fallback in trading-sensitive paths",
+      "Paper v2-only hidden global state"
+    ],
+    "must_remove_all_weekday_fallback": true,
+    "paper_v2_homepage_display": [
+      "current_date_is_trading_day",
+      "latest_ended_trading_day",
+      "earliest_next_trading_day",
+      "calendar_cache_warning_if_any"
+    ],
+    "required_contract": [
+      "today_asia_shanghai",
+      "is_trading_day",
+      "latest_trading_day_lte_today",
+      "previous_trading_day",
+      "next_trading_day",
+      "calendar_source",
+      "calendar_coverage",
+      "source_updated_at_or_audit",
+      "status_ok_missing_or_stale"
+    ],
+    "scenario": "paper_v2_local_data_and_future_live_paths_need_shared_current_trading_day_status_20260524",
+    "source_of_truth": "market.trading_calendar",
+    "user_requirement": "Local Data management and Paper v2 same-day behavior both need to know whether today is a trading day; future modules should read one shared status instead of each module duplicating calendar SQL."
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/platform_calendar/test_calendar_sync_cache_refresh.py backend/tests/ingestion/test_ingestion_router_auto_range.py backend/tests/test_local_data_management_facade.py -q -> 11 passed",
+    "Push-Location frontend; .\\\\node_modules\\\\.bin\\\\next.cmd lint --file src/app/local-data/page.tsx; Pop-Location -> completed with pre-existing react-hooks warnings only",
+    "Push-Location frontend; .\\\\node_modules\\\\.bin\\\\playwright.cmd test tests/local-data/trading-day-status.spec.ts --project=chromium; Pop-Location -> 1 passed",
+    "python -m nox -s l0 -> successful; guardrail scan blocking=0",
+    "GitHub PR #309 checks -> required checks success; auto-register skipped only"
   ],
-  "custom_github_labels": [
-    "P1",
-    "module:paper_v2",
-    "platform-runtime",
-    "risk:data_freshness_policy",
-    "status:open"
-  ],
-  "github_issue_number": 187,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/187"
+  "verification_run_id": null
 }
