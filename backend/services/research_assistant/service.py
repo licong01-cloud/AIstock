@@ -57,7 +57,7 @@ from .prompt_pack import (
 )
 from .repository import DatabaseResearchAssistantRepository
 from .runtime_config import DEFAULT_ENVIRONMENT, RUNTIME_CONFIG_KEY, RuntimeConfigSnapshot, load_runtime_config
-from .domain_ontology import DOMAIN_SPECS, McpDomain, domain_prompt_key
+from .domain_ontology import domain_prompt_key
 from .mcp_catalog_sync import default_mcp_servers, default_mcp_tools, workflow_capabilities as catalog_workflow_capabilities
 from .tool_router import route_request
 
