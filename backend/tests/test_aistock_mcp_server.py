@@ -15,6 +15,7 @@ functions and the underlying ``ValidationCenterClient`` directly.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import types
 from pathlib import Path
@@ -60,6 +61,9 @@ def mcp_module(tmp_path, monkeypatch):
     on demand by report_bug, so we just point AISTOCK_REPO_ROOT at tmp_path.
     """
     monkeypatch.setenv("AISTOCK_REPO_ROOT", str(tmp_path))
+    monkeypatch.setenv("AISTOCK_CANONICAL_ROOT", str(tmp_path))
+    monkeypatch.setenv("AISTOCK_WORKTREE_ROOT", str(tmp_path / "worktrees"))
+    monkeypatch.setenv("AISTOCK_BUG_ID_RESERVATION_ROOT", str(tmp_path / "bug-id-reservations"))
     monkeypatch.setenv("AISTOCK_VALIDATION_BASE_URL", "http://127.0.0.1/api/v1/validation")
     import importlib
     _install_stub_fastmcp()
@@ -69,6 +73,7 @@ def mcp_module(tmp_path, monkeypatch):
     assert Path(module.BUG_ROOT).resolve() == expected_bug_root, (
         f"BUG_ROOT did not redirect: {module.BUG_ROOT} vs {expected_bug_root}"
     )
+    module._github_client_factory = lambda **_kwargs: types.SimpleNamespace(list_issues=lambda **_params: [])
     yield module
     sys.modules.pop("scripts.aistock_mcp_server", None)
 
@@ -528,6 +533,37 @@ def test_report_bug_uses_registry_max_when_allocator_is_stale(mcp_module):
     assert result["bug_id"] == "BUG-106"
     allocator = json.loads(Path(mcp_module.BUG_ID_ALLOCATOR_PATH).read_text(encoding="utf-8"))
     assert allocator["last_allocated"] == 106
+
+
+def test_report_bug_uses_worktree_registry_max_when_allocator_is_stale(mcp_module):
+    mcp_module.BUG_ROOT.mkdir(parents=True, exist_ok=True)
+    mcp_module._write_bug_id_allocator(12)
+    worktree_bug_root = (
+        Path(os.environ["AISTOCK_WORKTREE_ROOT"])
+        / "other-window"
+        / "tests"
+        / "aistock_validation"
+        / "bugs"
+    )
+    worktree_bug_root.mkdir(parents=True, exist_ok=True)
+    (worktree_bug_root / "20260528_BUG-136-other-window.json").write_text(
+        json.dumps({"schema_version": mcp_module.SCHEMA_VERSION, "bug_id": "BUG-136"}),
+        encoding="utf-8",
+    )
+
+    result = mcp_module.report_bug(
+        title="worktree registry ahead",
+        severity="P3",
+        module="allocator_mod",
+        files=["bar.py"],
+        reproduce_command="cmd worktree registry",
+        expected="x",
+        actual="y",
+    )
+
+    assert result["bug_id"] == "BUG-137"
+    allocator = json.loads(Path(mcp_module.BUG_ID_ALLOCATOR_PATH).read_text(encoding="utf-8"))
+    assert allocator["last_allocated"] == 137
 
 
 def test_report_bug_rejects_invalid_severity(mcp_module):

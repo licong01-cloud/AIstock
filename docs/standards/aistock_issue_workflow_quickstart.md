@@ -103,6 +103,23 @@ python scripts/aistock_issue_workflow.py submit-bug `
 - it can create a clean registry worktree with `--create-registry-worktree`
 - it writes BUG JSON, allocator, candidate, and workflow state under the selected clean task/registry worktree
 
+BUG id allocation is global, not local to one stale worktree. Before creating a
+GitHub Issue or writing BUG JSON, `submit-bug --apply` must scan the selected
+registry root, canonical root, known worktrees under `AIstock_worktrees`, local
+allocator files, active reservations, and GitHub Issue titles when GitHub
+linkage is involved. If any existing BUG JSON or GitHub Issue already uses the
+requested `BUG-NNN`, the command must fail before `gh issue create`.
+
+Manual `--bug-id BUG-NNN` is only for audited recovery or migration. It does
+not bypass uniqueness checks; when accepted, it bumps the selected registry
+allocator so later automatic allocations cannot move backward. Do not guess the
+next id by reading `.bug_id_allocator.json` in a stale worktree.
+
+MCP intake paths such as `report_bug` and `mcp_github_issue_create` must follow
+the same allocation rule. They may write local BUG JSON only from an approved
+task/registry worktree, and their allocator must use the shared
+`AIstock_worktrees/.locks/bug-id-allocator.lock` plus the global BUG id scan.
+
 Normal BUG intake continues directly into the fix workflow in the same task/registry worktree via the returned `fix_chain.run_next_command`; do not create a separate registry-only PR unless the user explicitly asks for intake-only tracking.
 
 If a client is launched from `F:\Dev\AIstock`, first create or switch to a clean task/registry worktree. Do not use root `main` for BUG JSON writes.

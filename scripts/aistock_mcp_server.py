@@ -69,6 +69,7 @@ GITHUB_CLOSED_STATUSES = {"closed", "fixed", "resolved", "verified", "wontfix"}
 GITHUB_MANAGED_LABEL_PREFIXES = ("severity:", "module:", "status:", "risk:")
 GITHUB_MARKER_RE = re.compile(r"<!--\s*aistock-bug-id:\s*([^>\s]+)\s*-->", re.I)
 TITLE_PREFIX_RE = re.compile(r"^\[([^\]]+)\]")
+BUG_ID_RE = re.compile(r"\bBUG-(\d{3,})\b", re.I)
 LOCAL_ENV_FILE = ".env.github-issues-local"
 
 
@@ -302,7 +303,6 @@ def _resolve_repo_root() -> Path:
 REPO_ROOT = _resolve_repo_root()
 BUG_ROOT = REPO_ROOT / "tests" / "aistock_validation" / "bugs"
 BUG_ID_ALLOCATOR_PATH = BUG_ROOT / ".bug_id_allocator.json"
-BUG_ID_ALLOCATOR_LOCK_PATH = BUG_ROOT / ".bug_id_allocator.lock"
 BUG_ID_ALLOCATOR_SCHEMA = "aistock_bug_id_allocator_v1"
 
 
@@ -516,18 +516,111 @@ def _read_bug_id_allocator_last() -> int:
         return 0
 
 
+def _worktree_root() -> Path:
+    override = os.environ.get("AISTOCK_WORKTREE_ROOT")
+    if override:
+        return Path(override)
+    if REPO_ROOT.parent.name == "AIstock_worktrees":
+        return REPO_ROOT.parent
+    if REPO_ROOT.name.lower() == "aistock":
+        return REPO_ROOT.parent / "AIstock_worktrees"
+    return REPO_ROOT.parent / "AIstock_worktrees"
+
+
+def _bug_id_lock_path() -> Path:
+    return Path(os.environ.get("AISTOCK_BUG_ID_LOCK_PATH") or (_worktree_root() / ".locks" / "bug-id-allocator.lock"))
+
+
+def _bug_id_reservation_root() -> Path:
+    return Path(os.environ.get("AISTOCK_BUG_ID_RESERVATION_ROOT") or (_worktree_root() / ".locks" / "bug-id-reservations"))
+
+
+def _bug_root_for(repo_root: Path) -> Path:
+    return repo_root / "tests" / "aistock_validation" / "bugs"
+
+
+def _bug_id_number(value: str | None) -> int | None:
+    match = BUG_ID_RE.search(value or "")
+    return int(match.group(1)) if match else None
+
+
+def _unique_existing_paths(paths: list[Path]) -> list[Path]:
+    seen: set[str] = set()
+    result: list[Path] = []
+    for path in paths:
+        try:
+            key = str(path.resolve()).casefold()
+        except OSError:
+            key = str(path.absolute()).casefold()
+        if key in seen or not path.exists():
+            continue
+        seen.add(key)
+        result.append(path)
+    return result
+
+
+def _bug_id_scan_roots() -> list[Path]:
+    candidates = [_bug_root_for(REPO_ROOT)]
+    canonical = _canonical_root()
+    if canonical is not None:
+        candidates.append(_bug_root_for(canonical))
+    worktree_root = _worktree_root()
+    if worktree_root.exists():
+        candidates.extend(_bug_root_for(child) for child in worktree_root.iterdir() if child.is_dir())
+    return _unique_existing_paths(candidates)
+
+
+def _scan_global_bug_ids() -> set[int]:
+    ids = set(_scan_existing_bug_ids())
+    for bugs_root in _bug_id_scan_roots():
+        allocator = bugs_root / ".bug_id_allocator.json"
+        if allocator.exists():
+            try:
+                payload = json.loads(allocator.read_text(encoding="utf-8-sig"))
+                number = int(payload.get("last_allocated") or 0)
+            except (OSError, json.JSONDecodeError, TypeError, ValueError):
+                number = 0
+            if number > 0:
+                ids.add(number)
+        for path in bugs_root.glob("*.json"):
+            number = _bug_id_number(path.name)
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8-sig"))
+                number = _bug_id_number(str(payload.get("bug_id") or "")) or number
+            except (OSError, json.JSONDecodeError):
+                pass
+            if number:
+                ids.add(number)
+    reservation_root = _bug_id_reservation_root()
+    if reservation_root.exists():
+        for path in reservation_root.glob("BUG-*.json"):
+            number = _bug_id_number(path.name)
+            if number:
+                ids.add(number)
+    try:
+        for issue in _github_issue_client_from_env().list_issues(state="all", labels=None):
+            number = _bug_id_number(str(issue.get("bug_id") or "")) or _bug_id_number(str(issue.get("title") or ""))
+            if number:
+                ids.add(number)
+    except Exception:
+        pass
+    return ids
+
+
 class _BugIdAllocatorLock:
     def __enter__(self) -> "_BugIdAllocatorLock":
-        BUG_ROOT.mkdir(parents=True, exist_ok=True)
+        lock_path = _bug_id_lock_path()
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock_path = lock_path
         deadline = time.monotonic() + 10
         while True:
             try:
-                self._fd = os.open(str(BUG_ID_ALLOCATOR_LOCK_PATH), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                self._fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
                 os.write(self._fd, f"{os.getpid()}\n".encode("ascii"))
                 return self
             except FileExistsError:
                 if time.monotonic() >= deadline:
-                    raise RuntimeError(f"timed out waiting for bug id allocator lock: {_repo_relative_path(BUG_ID_ALLOCATOR_LOCK_PATH)}")
+                    raise RuntimeError(f"timed out waiting for bug id allocator lock: {lock_path}")
                 time.sleep(0.1)
 
     def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
@@ -535,7 +628,7 @@ class _BugIdAllocatorLock:
         if fd is not None:
             os.close(fd)
         try:
-            BUG_ID_ALLOCATOR_LOCK_PATH.unlink()
+            self._lock_path.unlink()
         except FileNotFoundError:
             pass
 
@@ -556,8 +649,27 @@ def _write_bug_id_allocator(last_allocated: int) -> None:
 
 def _allocate_next_bug_id() -> str:
     with _BugIdAllocatorLock():
-        registry_max = max(_scan_existing_bug_ids() or {0})
+        registry_max = max(_scan_global_bug_ids() or {0})
         next_int = max(_read_bug_id_allocator_last(), registry_max) + 1
+        reservation_root = _bug_id_reservation_root()
+        reservation_root.mkdir(parents=True, exist_ok=True)
+        reservation = reservation_root / f"BUG-{next_int:03d}.json"
+        if reservation.exists():
+            raise RuntimeError(f"BUG-{next_int:03d} is already reserved: {reservation}")
+        reservation.write_text(
+            json.dumps(
+                {
+                    "schema_version": "aistock_bug_id_reservation_v1",
+                    "bug_id": f"BUG-{next_int:03d}",
+                    "reserved_at": _utcnow_iso(),
+                    "reserved_by": "aistock_mcp_server.py",
+                    "root": str(REPO_ROOT),
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         _write_bug_id_allocator(next_int)
     return f"BUG-{next_int:03d}"
 
