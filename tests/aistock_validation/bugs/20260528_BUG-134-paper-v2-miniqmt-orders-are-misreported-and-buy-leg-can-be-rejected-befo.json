@@ -1,73 +1,77 @@
-﻿{
-    "actual":  "QMT shows four same-day orders and ten trade callbacks, but Paper v2 orders remain SUBMITTED with filled_quantity=0 and Paper v2 fills are empty. Buy orders 1098907739 and 1098907740 are rejected while sell orders 1098907741 and 1098907742 are fully filled.",
-    "allowed_write_scope":  [
-                                "backend/services/paper_trading_v2/live_session.py",
-                                "backend/services/paper_trading_v2/day_runner.py",
-                                "backend/services/paper_trading_v2/broker/minqmtsim.py",
-                                "backend/tests/paper_trading_v2/test_live_session.py",
-                                "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
-                                "backend/tests/paper_trading_v2/test_day_runner.py",
-                                "tests/aistock_validation/bugs/20260528_BUG-134-paper-v2-miniqmt-orders-are-misreported-and-buy-leg-can-be-rejected-befo.json"
-                            ],
-    "assigned_agent":  null,
-    "bug_id":  "BUG-134",
-    "closed_at":  null,
-    "closure_requirements":  [
-                                 "Fix the observed behavior.",
-                                 "Run required verification plans.",
-                                 "Keep BUG JSON and GitHub Issue synchronized."
-                             ],
-    "created_at":  "2026-05-28T02:15:47.217181Z",
-    "description":  "QMT shows four same-day orders and ten trade callbacks, but Paper v2 orders remain SUBMITTED with filled_quantity=0 and Paper v2 fills are empty. Buy orders 1098907739 and 1098907740 are rejected while sell orders 1098907741 and 1098907742 are fully filled.",
-    "events":  [
-                   {
-                       "action":  "promote_candidate_to_bug",
-                       "actor":  "issue_flow",
-                       "note":  "Promoted from IC-20260528-fc97fe810fe8",
-                       "timestamp":  "2026-05-28T02:15:47.217176Z"
-                   },
-                   {
-                       "timestamp":  "2026-05-28T02:17:02.9036858Z",
-                       "actor":  "aistock_issue_workflow.py",
-                       "action":  "renumber_bug_after_registry_collision",
-                       "note":  "Renumbered from BUG-133 to BUG-134 because BUG-133 is already linked to GitHub Issue #258 in an active registry workflow."
-                   }
-               ],
-    "evidence_uris":  [
-                          "readonly 8001 MiniQMT checks 2026-05-28T09:40-09:42+08:00: QMT connected SIM account 62266303; 4 orders; 10 trade callbacks; Paper v2 fills empty"
-                      ],
-    "expected":  "MiniQMT Paper v2 must show broker-authoritative same-day orders/trades in Paper v2 status, reconcile QMT order/fill states after submission, and avoid submitting buy legs before required sell cash is available or clearly mark cash-wait/deferred/rejected reasons.",
-    "first_seen_at":  "2026-05-28T02:15:47.217181Z",
-    "fix_branch":  null,
-    "fix_commit":  null,
-    "fixed_at":  null,
-    "github_issue_number":  260,
-    "github_issue_url":  "https://github.com/licong01-cloud/AIstock/issues/260",
-    "last_seen_at":  "2026-05-28T02:15:47.217181Z",
-    "module":  "paper_v2",
-    "non_goals":  [
-                      "Do not restart production runtime services without explicit approval."
-                  ],
-    "production_backend_dependency_gate":  "noop",
-    "production_ddl_gate":  "noop",
-    "production_frontend_dependency_gate":  "noop",
-    "reproduce_command":  "GET /api/v1/qmt/orders?cancelable_only=false; GET /api/v1/qmt/trades; GET /api/v1/paper-v2/portfolios/paper_1d9b1f03700f4810aef8351124c8ab6c/orders; GET /api/v1/paper-v2/portfolios/paper_1d9b1f03700f4810aef8351124c8ab6c/fills",
-    "required_verification":  [
-                                  "l0",
-                                  "paper_v2_l3",
-                                  "paper_v2_backend"
-                              ],
-    "risk_area":  "bug",
-    "schema_version":  "aistock_validation_bug_v1",
-    "severity":  "P1",
-    "status":  "open",
-    "suspected_modules":  [
-                              "paper_v2"
-                          ],
-    "title":  "Paper v2 MiniQMT orders are misreported and buy leg can be rejected before sell cash is released",
-    "trigger_condition":  {
-                              "fingerprint":  "fc97fe810fe896ede7015227",
-                              "source_event_id":  "FE-20260528-fc97fe810fe8"
-                          },
-    "verification_run_id":  null
+{
+  "actual": "QMT shows four same-day orders and ten trade callbacks, but Paper v2 orders remain SUBMITTED with filled_quantity=0 and Paper v2 fills are empty. Buy orders 1098907739 and 1098907740 are rejected while sell orders 1098907741 and 1098907742 are fully filled.",
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/live_session.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/paper_trading_v2/broker/minqmtsim.py",
+    "backend/tests/paper_trading_v2/test_live_session.py",
+    "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+    "backend/tests/paper_trading_v2/test_day_runner.py",
+    "tests/aistock_validation/bugs/20260528_BUG-134-paper-v2-miniqmt-orders-are-misreported-and-buy-leg-can-be-rejected-befo.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-134",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-28T02:15:47.217181Z",
+  "description": "QMT shows four same-day orders and ten trade callbacks, but Paper v2 orders remain SUBMITTED with filled_quantity=0 and Paper v2 fills are empty. Buy orders 1098907739 and 1098907740 are rejected while sell orders 1098907741 and 1098907742 are fully filled.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260528-fc97fe810fe8",
+      "timestamp": "2026-05-28T02:15:47.217176Z"
+    },
+    {
+      "action": "renumber_bug_after_registry_collision",
+      "actor": "aistock_issue_workflow.py",
+      "note": "Renumbered from BUG-133 to BUG-134 because BUG-133 is already linked to GitHub Issue #258 in an active registry workflow.",
+      "timestamp": "2026-05-28T02:17:02.9036858Z"
+    }
+  ],
+  "evidence_uris": [
+    "readonly 8001 MiniQMT checks 2026-05-28T09:40-09:42+08:00: QMT connected SIM account 62266303; 4 orders; 10 trade callbacks; Paper v2 fills empty"
+  ],
+  "expected": "MiniQMT Paper v2 must show broker-authoritative same-day orders/trades in Paper v2 status, reconcile QMT order/fill states after submission, and avoid submitting buy legs before required sell cash is available or clearly mark cash-wait/deferred/rejected reasons.",
+  "first_seen_at": "2026-05-28T02:15:47.217181Z",
+  "fix_branch": null,
+  "fix_commit": "a1879f71e26d3ce8c503fcdb3c59c9f1283f54dd",
+  "fixed_at": "2026-05-28T07:20:36.948531Z",
+  "github_issue_number": 260,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/260",
+  "last_seen_at": "2026-05-28T02:15:47.217181Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/273",
+  "production_backend_dependency_gate": "deployed_existing_env",
+  "production_ddl_gate": "verified_existing",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "GET /api/v1/qmt/orders?cancelable_only=false; GET /api/v1/qmt/trades; GET /api/v1/paper-v2/portfolios/paper_1d9b1f03700f4810aef8351124c8ab6c/orders; GET /api/v1/paper-v2/portfolios/paper_1d9b1f03700f4810aef8351124c8ab6c/fills",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "Paper v2 MiniQMT orders are misreported and buy leg can be rejected before sell cash is released",
+  "trigger_condition": {
+    "fingerprint": "fc97fe810fe896ede7015227",
+    "source_event_id": "FE-20260528-fc97fe810fe8"
+  },
+  "validation_evidence": [
+    "PR #273 merged at a1879f71; validation in PR body passed: ruff, pytest 56 passed, nox paper_v2_backend 515 passed/1 skipped/2 xfailed, validation modules/l0; production 8001 restarted on PID 93120; scheduler_autostart_env=true running=true thread_alive=true; qmt connected=true mode=SIM account_id=62266303; MiniQMT 2026-05-28 run prun_9c169546ee2e4554a2e384e7cb8b170f SUCCEEDED; evidence F:\\Dev\\AIstock_artifacts\\paper_v2_recovery\\20260528_151129_post_recovery_status_snapshot.json"
+  ],
+  "verification_run_id": null
 }
