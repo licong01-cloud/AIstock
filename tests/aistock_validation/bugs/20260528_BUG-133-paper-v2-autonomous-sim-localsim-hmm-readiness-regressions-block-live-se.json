@@ -39,8 +39,8 @@
   "expected": "MiniQMT and LocalSim Paper v2 sessions must wait for configured market/data windows instead of false-failing; HMM coefficient auto-generation must produce/validate numeric sector coefficients or fail with actionable preflight before live simulation; today reset/recreate flow must be auditable and safe when no orders/fills/snapshots exist.",
   "first_seen_at": "2026-05-28T01:32:32.980732Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a1879f71e26d3ce8c503fcdb3c59c9f1283f54dd",
+  "fixed_at": "2026-05-28T07:16:42.318235Z",
   "github_issue_number": 258,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/258",
   "last_seen_at": "2026-05-28T02:57:04Z",
@@ -48,8 +48,9 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
-  "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "noop",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/273",
+  "production_backend_dependency_gate": "deployed_existing_env",
+  "production_ddl_gate": "verified_existing",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "GET /api/v1/paper-v2/sessions/psess_c04eb92ff8c04bbca804466ffc5229a3 shows FAILED; trigger HMM-enabled selection/readiness for pkg_378eb9c91e104c64935404e257e932ee trade_date=2026-05-28 and observe ARTIFACT_GENERATION_FAILED.",
   "required_verification": [
@@ -60,7 +61,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -69,5 +70,8 @@
     "fingerprint": "8bff05ac6e51a00501778aa4",
     "source_event_id": "FE-20260528-8bff05ac6e51"
   },
+  "validation_evidence": [
+    "PR #273 merged at a1879f71; validation in PR body passed: ruff, pytest 56 passed, nox paper_v2_backend 515 passed/1 skipped/2 xfailed, validation modules/l0; production 8001 restarted on PID 93120; scheduler_autostart_env=true running=true thread_alive=true; qmt connected=true mode=SIM account_id=62266303; MiniQMT 2026-05-28 run prun_9c169546ee2e4554a2e384e7cb8b170f SUCCEEDED; LocalSim next session psess_96707b66ff5446d3a575fc385e848275 LIVE_WAITING_NEXT_TRADING_DAY; evidence F:\\Dev\\AIstock_artifacts\\paper_v2_recovery\\20260528_151129_post_recovery_status_snapshot.json"
+  ],
   "verification_run_id": null
 }
