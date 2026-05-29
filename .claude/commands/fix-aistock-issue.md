@@ -104,6 +104,21 @@ After an approved merge, run `python scripts/aistock_issue_workflow.py close-syn
 
 If the user explicitly requests full merge automation, use `run --mode merge --pr-url <PR_URL> --merge --validation-evidence "<command> -> passed"` so the same state machine verifies green checks, merge, close-sync, and cleanup planning. Without `--merge`, stop before merging.
 
+If the source PR is already merged, use the v2.3 finalizer rather than manually chaining commands:
+
+```powershell
+python scripts\aistock_issue_workflow.py merge-finalizer `
+  --bug-id BUG-XXX `
+  --source-pr-url <PR_URL> `
+  --source-branch <branch> `
+  --source-worktree <worktree> `
+  --validation-evidence "<command> -> passed" `
+  --sync-root `
+  --apply
+```
+
+Add `--merge-close-sync-pr --cleanup` only when the user authorized the full aftercare loop and checks are green.
+
 ## Client Install
 
 After the workflow branch is merged into the canonical checkout, run `python scripts/aistock_issue_workflow.py install-client --apply` to refresh the global Codex skill. Before merge, use `install-client` without `--apply` as a dry-run.

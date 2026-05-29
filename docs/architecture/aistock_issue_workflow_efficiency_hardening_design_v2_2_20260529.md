@@ -113,6 +113,18 @@ Every PR-ready or merged workflow should expose a `postmortem` next command. Thi
 | v2.4 | Nightly CodeGraph freshness artifact | Depends on self-hosted runner restoration |
 | v2.5 | Understand Anything weekly graph | Not needed for small issue workflow |
 
+## 6.1 v2.3 Merge Finalizer Implementation Baseline
+
+The first v2.3 slice adds a `merge-finalizer` command to reduce post-merge manual chaining without adding a hard gate to normal issue repair:
+
+- Verify the source/fix PR is already merged.
+- Run `close-sync` through an isolated registry worktree and reuse an existing clean close-sync worktree when a previous attempt was interrupted.
+- Commit and open or reuse the close-sync PR while staging only `tests/aistock_validation/bugs/**`.
+- Optionally merge the close-sync PR and run cleanup only when the user authorized the full aftercare loop.
+- Always return next actions and postmortem data so a restarted Codex or Claude Code window can continue without rediscovery.
+
+This keeps the default safe path unchanged: normal agents can stop at a close-sync PR, while authorized full aftercare can proceed to cleanup. It does not touch production runtime, DB, DDL, or dependencies.
+
 ## 7. Acceptance Matrix
 
 | ID | Requirement | Validation |

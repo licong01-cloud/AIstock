@@ -885,10 +885,21 @@ def _maybe_create_close_sync_worktree(*, bug_id: str, create: bool, dry_run: boo
     }
     if not create or dry_run:
         return plan
-    if worktree.exists():
-        raise WorkflowError(f"target close-sync worktree already exists: {worktree}")
     _git(["fetch", "origin", "main"])
-    _git_worktree_add_new_branch(worktree=worktree, branch=branch)
+    if worktree.exists():
+        git = _git_snapshot(worktree)
+        if not git.get("ok"):
+            raise WorkflowError(f"target close-sync worktree is not a git checkout: {worktree}")
+        if git.get("dirty"):
+            raise WorkflowError(f"target close-sync worktree is dirty: {worktree}")
+        plan["reused"] = True
+        plan["git"] = git
+        return plan
+    if _git_ref_exists(branch):
+        _git(["worktree", "add", str(worktree), branch])
+        plan["reused_branch"] = True
+    else:
+        _git_worktree_add_new_branch(worktree=worktree, branch=branch)
     plan["created"] = True
     return plan
 
@@ -4138,6 +4149,188 @@ def _maybe_commit_and_pr_close_sync(
     return result
 
 
+def _pr_url_from_create_output(result: dict[str, Any]) -> str | None:
+    text = f"{result.get('stdout') or ''}\n{result.get('stderr') or ''}"
+    match = re.search(r"https://github\.com/[^\s]+/pull/\d+", text)
+    return match.group(0) if match else None
+
+
+def _merge_close_sync_pr_if_ready(
+    *,
+    bug_id: str,
+    close_sync_commit: dict[str, Any],
+    auto_merge: bool,
+) -> dict[str, Any]:
+    pr_url = str(close_sync_commit.get("pr_url") or "").strip()
+    if not pr_url:
+        return {
+            "workflow_gate": "skipped",
+            "reason": "missing_close_sync_pr_url",
+            "auto_merge": auto_merge,
+        }
+    if not auto_merge:
+        return {
+            "workflow_gate": "ready_for_merge",
+            "auto_merge": False,
+            "pr_url": pr_url,
+            "next_command": f"gh pr merge {pr_url} --squash --delete-branch",
+        }
+    try:
+        result = _merge_pr_if_ready_for_bug(bug_id, pr_url)
+    except WorkflowError as exc:
+        return {
+            "workflow_gate": "blocked",
+            "auto_merge": True,
+            "pr_url": pr_url,
+            "blocking": [str(exc)],
+            "next_command": f"gh pr checks {pr_url} --watch",
+        }
+    return {
+        "workflow_gate": "merged",
+        "auto_merge": True,
+        "pr_url": pr_url,
+        "merge": result,
+        "merge_commit": _merge_commit_from_pr_check(result.get("verified")) if isinstance(result, dict) else None,
+    }
+
+
+def build_merge_finalizer_plan(
+    *,
+    bug_id: str,
+    source_pr_url: str,
+    source_branch: str | None,
+    source_worktree: str | None,
+    validation_evidence: list[str],
+    issue_json: str | None = None,
+    allow_missing_linkage: bool = False,
+    production_gates: dict[str, str] | None = None,
+    sync_root: bool = True,
+    merge_close_sync_pr: bool = False,
+    cleanup: bool = False,
+    apply: bool = False,
+    source_pr_check: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    canonical_bug_id = bug_id.strip().upper()
+    evidence = [item for item in validation_evidence if item.strip()]
+    blocking: list[str] = []
+    warnings: list[str] = []
+    if apply and not evidence:
+        blocking.append("validation evidence is required before merge finalizer apply")
+    if cleanup and not source_branch:
+        blocking.append("--cleanup requires --source-branch")
+    if cleanup and not source_worktree:
+        warnings.append("--source-worktree is missing; cleanup can delete branches but cannot remove the task worktree")
+
+    payload: dict[str, Any] = {
+        "schema_version": "aistock_issue_workflow_merge_finalizer_v1",
+        "generated_at": _utc_now(),
+        "bug_id": canonical_bug_id,
+        "source_pr_url": source_pr_url,
+        "source_branch": source_branch,
+        "source_worktree": source_worktree,
+        "merge_close_sync_pr": merge_close_sync_pr,
+        "cleanup_requested": cleanup,
+        "sync_root": sync_root,
+        "dry_run": not apply,
+        "blocking": blocking,
+        "warnings": warnings,
+        "production_gates": production_gates or _production_gates_payload(),
+    }
+    if blocking:
+        payload["workflow_gate"] = "blocked"
+        return payload
+    if not apply:
+        payload["workflow_gate"] = "ready_for_apply"
+        payload["next_command"] = (
+            f"python scripts/aistock_issue_workflow.py merge-finalizer --bug-id {canonical_bug_id} "
+            f"--source-pr-url {source_pr_url} --validation-evidence \"<command> -> passed\" --apply"
+        )
+        return payload
+
+    source_pr_check = source_pr_check or _verify_pr_merged(source_pr_url)
+    merge_commit = _merge_commit_from_pr_check(source_pr_check)
+    close_sync = build_close_sync_plan(
+        bug_id=canonical_bug_id,
+        issue_json=issue_json,
+        pr_url=source_pr_url,
+        apply=True,
+        allow_missing_linkage=allow_missing_linkage,
+        validation_evidence=evidence,
+        merge_commit=merge_commit,
+        production_gates=production_gates or _production_gates_payload(),
+        create_registry_worktree=True,
+    )
+    close_sync_commit = _maybe_commit_and_pr_close_sync(
+        bug_id=canonical_bug_id,
+        close_sync=close_sync,
+        validation_evidence=evidence,
+    )
+    close_sync_pr_merge = _merge_close_sync_pr_if_ready(
+        bug_id=canonical_bug_id,
+        close_sync_commit=close_sync_commit,
+        auto_merge=merge_close_sync_pr,
+    )
+
+    cleanup_plan = None
+    if cleanup and source_branch:
+        cleanup_plan = build_cleanup_after_merge_plan(
+            branch=source_branch,
+            worktree=source_worktree,
+            pr_url=source_pr_url,
+            apply=merge_close_sync_pr,
+            sync_root=sync_root,
+        )
+    try:
+        postmortem = build_postmortem_plan(bug_id=canonical_bug_id)
+    except WorkflowError as exc:
+        postmortem = {
+            "schema_version": "aistock_issue_workflow_postmortem_v1",
+            "workflow_gate": "skipped",
+            "reason": str(exc),
+        }
+    final_blocking = []
+    if close_sync_pr_merge.get("workflow_gate") == "blocked":
+        final_blocking.extend(close_sync_pr_merge.get("blocking") or [])
+    if cleanup_plan and cleanup_plan.get("workflow_gate") == "blocked":
+        final_blocking.extend(cleanup_plan.get("blocking") or [])
+
+    payload.update(
+        {
+            "workflow_gate": "blocked" if final_blocking else (
+                "complete" if cleanup_plan and cleanup_plan.get("workflow_gate") == "cleanup_done" else "close_sync_persisted"
+            ),
+            "blocking": final_blocking,
+            "source_pr_check": source_pr_check,
+            "source_merge_commit": merge_commit,
+            "close_sync": close_sync,
+            "close_sync_commit": close_sync_commit,
+            "close_sync_pr_merge": close_sync_pr_merge,
+            "cleanup": cleanup_plan,
+            "postmortem": postmortem,
+            "next_actions": [],
+        }
+    )
+    if close_sync_pr_merge.get("workflow_gate") == "ready_for_merge":
+        payload["next_actions"].append("merge_close_sync_pr_after_checks_are_green")
+    if cleanup_plan is None and source_branch:
+        payload["next_actions"].append("run_cleanup_after_merge")
+    if cleanup_plan and cleanup_plan.get("workflow_gate") == "ready_for_cleanup":
+        payload["next_actions"].append("rerun_cleanup_after_merge_with_apply")
+    _write_state(
+        canonical_bug_id,
+        state="complete" if payload["workflow_gate"] == "complete" else "close_synced",
+        pr_url=source_pr_url,
+        commit=merge_commit,
+        close_sync=close_sync,
+        close_sync_commit=close_sync_commit,
+        close_sync_pr_merge=close_sync_pr_merge,
+        cleanup_plan=cleanup_plan,
+        postmortem=postmortem,
+        next_actions=payload["next_actions"],
+    )
+    return payload
+
+
 def build_run_plan(
     *,
     bug_id: str,
@@ -4267,41 +4460,31 @@ def build_run_plan(
                 "next_command": f"python scripts/aistock_issue_workflow.py run --bug-id {canonical_bug_id} --mode merge --pr-url {pr_url} --merge",
             }
         merge_result = _merge_pr_if_ready_for_bug(canonical_bug_id, pr_url)
-        close_sync_pr_check = merge_result.get("verified") if isinstance(merge_result, dict) else None
-        close_sync_merge_commit = _merge_commit_from_pr_check(close_sync_pr_check)
-        close_sync = build_close_sync_plan(
+        finalizer = build_merge_finalizer_plan(
             bug_id=canonical_bug_id,
+            source_pr_url=pr_url,
+            source_branch=branch,
+            source_worktree=worktree,
+            validation_evidence=validation_evidence,
             issue_json=issue_json,
-            pr_url=pr_url,
-            apply=True,
             allow_missing_linkage=allow_missing_linkage,
-            validation_evidence=validation_evidence,
-            merge_commit=close_sync_merge_commit,
             production_gates=production_gates or _production_gates_payload(),
-            create_registry_worktree=True,
+            sync_root=sync_root,
+            merge_close_sync_pr=False,
+            cleanup=bool(branch),
+            apply=True,
+            source_pr_check=merge_result.get("verified") if isinstance(merge_result, dict) else None,
         )
-        close_sync_commit = _maybe_commit_and_pr_close_sync(
-            bug_id=canonical_bug_id,
-            close_sync=close_sync,
-            validation_evidence=validation_evidence,
-        )
-        cleanup = None
-        if branch:
-            cleanup = build_cleanup_after_merge_plan(
-                branch=branch,
-                worktree=worktree,
-                pr_url=pr_url,
-                apply=False,
-                sync_root=sync_root,
-            )
         _write_state(
             canonical_bug_id,
             state="close_synced",
             pr_url=pr_url,
-            commit=close_sync.get("merge_commit") or close_sync_merge_commit,
-            close_sync=close_sync,
-            close_sync_commit=close_sync_commit,
-            cleanup_plan=cleanup,
+            commit=finalizer.get("source_merge_commit"),
+            merge=merge_result,
+            finalizer=finalizer,
+            close_sync=finalizer.get("close_sync"),
+            close_sync_commit=finalizer.get("close_sync_commit"),
+            cleanup_plan=finalizer.get("cleanup"),
             next_actions=["merge_close_sync_pr_when_ready", "run_cleanup_after_merge_apply_when_ready"],
         )
         return {
@@ -4311,9 +4494,10 @@ def build_run_plan(
             "mode": mode,
             "workflow_gate": "merged_close_synced",
             "merge": merge_result,
-            "close_sync": close_sync,
-            "close_sync_commit": close_sync_commit,
-            "cleanup": cleanup,
+            "finalizer": finalizer,
+            "close_sync": finalizer.get("close_sync"),
+            "close_sync_commit": finalizer.get("close_sync_commit"),
+            "cleanup": finalizer.get("cleanup"),
         }
     raise WorkflowError(f"Unsupported run mode for Phase 1: {mode}")
 
@@ -4827,6 +5011,25 @@ def cmd_cleanup_after_merge(args: argparse.Namespace) -> int:
     return 0 if payload.get("workflow_gate") in {"ready_for_cleanup", "cleanup_done"} else 2
 
 
+def cmd_merge_finalizer(args: argparse.Namespace) -> int:
+    payload = build_merge_finalizer_plan(
+        bug_id=args.bug_id,
+        source_pr_url=args.source_pr_url,
+        source_branch=args.source_branch,
+        source_worktree=args.source_worktree,
+        validation_evidence=list(args.validation_evidence or []),
+        issue_json=args.issue_json,
+        allow_missing_linkage=args.allow_missing_linkage,
+        production_gates=_production_gates_payload(args),
+        sync_root=args.sync_root,
+        merge_close_sync_pr=args.merge_close_sync_pr,
+        cleanup=args.cleanup,
+        apply=args.apply,
+    )
+    _emit(payload, args.output)
+    return 0 if payload.get("workflow_gate") not in {"blocked"} else 2
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AIstock high-level issue-fix workflow orchestrator.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -5039,6 +5242,24 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup.add_argument("--apply", action="store_true")
     cleanup.add_argument("--output")
     cleanup.set_defaults(func=cmd_cleanup_after_merge)
+
+    finalizer = sub.add_parser("merge-finalizer", help="Finalize a merged issue PR through close-sync, optional close-sync PR merge, cleanup, and postmortem.")
+    finalizer.add_argument("--bug-id", required=True)
+    finalizer.add_argument("--issue-json")
+    finalizer.add_argument("--source-pr-url", required=True, help="Merged source/fix PR URL.")
+    finalizer.add_argument("--source-branch", help="Source/fix PR branch for cleanup.")
+    finalizer.add_argument("--source-worktree", help="Source/fix worktree for cleanup.")
+    finalizer.add_argument("--validation-evidence", action="append")
+    finalizer.add_argument("--allow-missing-linkage", action="store_true")
+    finalizer.add_argument("--sync-root", action="store_true", help="Fast-forward the canonical root during cleanup.")
+    finalizer.add_argument("--merge-close-sync-pr", action="store_true", help="Also merge the generated close-sync PR when checks are green.")
+    finalizer.add_argument("--cleanup", action="store_true", help="Run cleanup-after-merge after close-sync is persisted.")
+    finalizer.add_argument("--apply", action="store_true")
+    finalizer.add_argument("--production-ddl-gate", default="noop")
+    finalizer.add_argument("--production-frontend-dependency-gate", default="noop")
+    finalizer.add_argument("--production-backend-dependency-gate", default="noop")
+    finalizer.add_argument("--output")
+    finalizer.set_defaults(func=cmd_merge_finalizer)
 
     return parser
 
