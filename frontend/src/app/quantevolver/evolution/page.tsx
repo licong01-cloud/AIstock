@@ -25,6 +25,7 @@ const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
 const EVOLUTION_TASK_DETAIL_FULL = "detail=full";
 const EXPERIMENT_DETAIL_FULL = "detail=full";
 const QE_ARCHIVE_WRITE_CONFIRM = "QE_ARCHIVE_WRITE";
+const EVOLUTION_TASK_LIST_PAGE_SIZE = 200;
 const TERMINAL_LOG_STATUSES = new Set([
   "completed",
   "failed",
@@ -195,6 +196,7 @@ interface Task {
   base_experiment_id: string;
   source_type?: string;
   task_type?: string;  // 'evolution' | 'strategy_evo'
+  hmm_enabled?: boolean;
   created_at: string;
   updated_at: string;
   // Extended fields from SELECT *
@@ -213,6 +215,10 @@ interface Task {
   strategy_evo_config?: Record<string, any>;
   strategy_evo_execution_mode?: string;
   node_id?: string;
+}
+
+function isHmmTask(task: Task): boolean {
+  return Boolean(task.hmm_enabled);
 }
 
 function normalizeSummaryLoop(loop: Loop): Loop {
@@ -911,13 +917,16 @@ export default function EvolutionDashboard() {
   // 获取任务列表
   const fetchTasks = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/quantevolver/evolution/tasks`);
-      const data = await res.json();
-      if (data.status === "success" && data.data) {
-        const nextTasks = data.data as Task[];
-        setTasks(nextTasks);
-        void loadArchiveStatusForTasks(nextTasks);
+      const allTasks: Task[] = [];
+      for (let offset = 0; offset < 10000; offset += EVOLUTION_TASK_LIST_PAGE_SIZE) {
+        const res = await fetch(`${API}/quantevolver/evolution/tasks?limit=${EVOLUTION_TASK_LIST_PAGE_SIZE}&offset=${offset}`);
+        const data = await res.json();
+        if (data.status !== "success" || !Array.isArray(data.data)) break;
+        allTasks.push(...(data.data as Task[]));
+        if (data.data.length < EVOLUTION_TASK_LIST_PAGE_SIZE) break;
       }
+      setTasks(allTasks);
+      void loadArchiveStatusForTasks(allTasks);
     } catch (e) {
       console.error("Failed to fetch tasks:", e);
     }
@@ -929,6 +938,19 @@ export default function EvolutionDashboard() {
     () => tasks.some(t => ACTIVE_POLL_STATUSES.has(String(t.status || "").toLowerCase())),
     [tasks]
   );
+  const taskVisibilitySummary = useMemo(() => {
+    const statusCounts = tasks.reduce((acc: Record<string, number>, task) => {
+      const key = String(task.status || "unknown").toLowerCase();
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {});
+    const loopSlots = tasks.reduce((sum, task) => sum + Number(task.max_loops || 0), 0);
+    return {
+      hmmCount: tasks.filter(isHmmTask).length,
+      loopSlots,
+      statusText: Object.entries(statusCounts).map(([key, count]) => `${key}:${count}`).join(" | "),
+    };
+  }, [tasks]);
 
   useEffect(() => {
     fetchTasks();
@@ -2347,6 +2369,13 @@ export default function EvolutionDashboard() {
                 {hasRunningTask ? "运行中10s" : "手动"}
               </span>
             </button>
+            <div style={{ display: "grid", gap: 4, padding: "8px 10px", borderRadius: 8, backgroundColor: "#fff", border: "1px solid #e2e8f0", fontSize: 11, color: "#475569", lineHeight: 1.35 }}>
+              <strong style={{ color: "#0f172a", fontSize: 12 }}>Full task view</strong>
+              <span>Tasks {tasks.length}</span>
+              <span>Loop slots {taskVisibilitySummary.loopSlots}</span>
+              <span>HMM {taskVisibilitySummary.hmmCount}</span>
+              <span title={taskVisibilitySummary.statusText}>{taskVisibilitySummary.statusText || "status:none"}</span>
+            </div>
           </div>
 
           {/* 右侧: 任务列表表格 */}

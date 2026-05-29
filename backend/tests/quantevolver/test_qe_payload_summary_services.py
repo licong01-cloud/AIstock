@@ -180,3 +180,38 @@ def test_get_task_detail_full_keeps_loop_jsonb(monkeypatch):
     assert result["loops"][0]["config_json"]["factor_list"] == ["a"]
     assert result["loops"][0]["metrics_json"] == {"IC": 0.2}
     assert result["loops"][0]["agent_analysis"] == {"analysis": "ok"}
+
+
+def test_get_all_tasks_uses_offset_for_full_visibility(monkeypatch):
+    import backend.services.quantevolver.qe_evolution_service as module
+
+    captured = []
+    script = [
+        {
+            "capture": captured,
+            "cols": [
+                "task_id", "task_name", "target_desc", "max_loops", "current_loop", "status",
+                "base_experiment_id", "node_id", "label_horizon", "task_type", "source_type",
+                "strategy_id", "strategy_params", "strategy_evo_config", "execution_algo", "strategy_evo_execution_mode", "created_at", "updated_at",
+            ],
+            "rows": [
+                ("task_201", "Task 201", "goal", 1, 1, "completed", "qe_base", "node", 1, "evolution", None, None, {"enable_sector_hmm": True}, None, None, None, None),
+            ],
+        },
+    ]
+    _patch_conn(monkeypatch, module, script)
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+
+    result = asyncio.run(scheduler.get_all_tasks(limit=200, offset=200))
+
+    assert result[0]["task_id"] == "task_201"
+    assert result[0]["hmm_enabled"] is True
+    assert "strategy_params" not in result[0]
+    assert "LIMIT %s OFFSET %s" in captured[0]
+
+
+def test_compact_task_row_hmm_enabled_rejects_false_string():
+    from backend.services.quantevolver.payload_summary import compact_task_row
+
+    assert compact_task_row({"strategy_params": {"enable_sector_hmm": "false"}})["hmm_enabled"] is False
+    assert compact_task_row({"strategy_params": {"hmm_model_version_id": "snap_001"}})["hmm_enabled"] is True

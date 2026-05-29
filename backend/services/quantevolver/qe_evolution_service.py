@@ -2459,29 +2459,36 @@ class AutoEvolutionScheduler:
                     raise RuntimeError(f"Failed to mark loop/task as failed: {db_err}") from db_err
                 return
 
-    async def get_all_tasks(self, detail: str = "summary", status: str | None = None, limit: int = 50) -> List[Dict[str, Any]]:
+    async def get_all_tasks(
+        self,
+        detail: str = "summary",
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 where_clause = "WHERE status = %s" if status else ""
                 params: list = [status] if status else []
                 if detail == "full":
                     cur.execute(
-                        f"SELECT * FROM qe_evolution_tasks {where_clause} ORDER BY created_at DESC LIMIT %s",
-                        params + [limit],
+                        f"SELECT * FROM qe_evolution_tasks {where_clause} ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                        params + [limit, offset],
                     )
                 else:
                     cur.execute(
                         f"""
                         SELECT task_id, task_name, target_desc, max_loops, current_loop,
                                status, base_experiment_id, node_id, label_horizon,
-                               task_type, source_type, strategy_id, execution_algo,
+                               task_type, source_type, strategy_id, strategy_params,
+                               strategy_evo_config, execution_algo,
                                strategy_evo_execution_mode, created_at, updated_at
                         FROM qe_evolution_tasks
                         {where_clause}
                         ORDER BY created_at DESC
-                        LIMIT %s
+                        LIMIT %s OFFSET %s
                         """,
-                        params + [limit],
+                        params + [limit, offset],
                     )
                 rows = [dict(row) for row in cur.fetchall()]
         return rows if detail == "full" else [compact_task_row(row) for row in rows]

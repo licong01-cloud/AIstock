@@ -270,4 +270,34 @@ def compact_task_row(row: Mapping[str, Any]) -> dict[str, Any]:
         "created_at",
         "updated_at",
     )
-    return {key: row.get(key) for key in keys if key in row}
+    item = {key: row.get(key) for key in keys if key in row}
+    item["hmm_enabled"] = _has_hmm_marker(row.get("strategy_params")) or _has_hmm_marker(row.get("strategy_evo_config"))
+    return item
+
+
+def _has_hmm_marker(value: Any) -> bool:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return "hmm" in value.lower()
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            key_text = str(key).lower()
+            if key_text in {"enable_sector_hmm", "hmm_enabled", "enable_hmm", "use_hmm"}:
+                if _truthy_hmm_value(nested):
+                    return True
+                continue
+            if _has_hmm_marker(nested):
+                return True
+            if "hmm" in key_text and nested not in (None, "", False):
+                return True
+    if isinstance(value, list):
+        return any(_has_hmm_marker(item) for item in value)
+    return False
+
+
+def _truthy_hmm_value(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
+    return bool(value)

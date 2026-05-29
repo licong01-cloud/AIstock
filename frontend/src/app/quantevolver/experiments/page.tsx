@@ -16,6 +16,7 @@ const ReturnCurveChart = dynamic(() => import("../components/charts/ReturnCurveC
 
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
 const QE_ARCHIVE_WRITE_CONFIRM = "QE_ARCHIVE_WRITE";
+const EXPERIMENT_HISTORY_BATCH_SIZE = 200;
 
 type Experiment = {
   experiment_id: string;
@@ -228,6 +229,22 @@ function summarizeBackfillReport(report: BackfillReport): string {
   return `\u5019\u9009 ${candidate} \u6761\uff0c\u53ef\u5165\u4ed3 ${willArchive} \u6761\uff0c\u5df2\u5199\u5165 ${written} \u6761\uff0c\u8df3\u8fc7 ${skipped} \u6761\uff0c\u5931\u8d25 ${failed} \u6761`;
 }
 
+function isHmmExperiment(exp: Experiment): boolean {
+  const haystack = [
+    exp.experiment_id,
+    exp.experiment_name,
+    exp.qe_task_id,
+    exp.qe_loop_id,
+    exp.model_id,
+    exp.strategy_id,
+    JSON.stringify(exp.custom_params || {}),
+    JSON.stringify(exp.model_config || {}),
+    JSON.stringify(exp.training_config || {}),
+    JSON.stringify(exp.daily_strategy_config || {}),
+  ].join(" ").toLowerCase();
+  return haystack.includes("hmm");
+}
+
 export default function ExperimentsPage() {
   const [experiments, setExperiments] = useState<Experiment[]>([]);
   const [total, setTotal] = useState(0);
@@ -244,6 +261,7 @@ export default function ExperimentsPage() {
   const [archiveStatusLoading, setArchiveStatusLoading] = useState(false);
   const [selectedArchiveKeys, setSelectedArchiveKeys] = useState<Set<string>>(new Set());
   const [archiveActionLoading, setArchiveActionLoading] = useState<"preview" | "execute" | null>(null);
+  const [allExperimentsLoaded, setAllExperimentsLoaded] = useState(true);
 
   // 分页状态
   const [currentPage, setCurrentPage] = useState(1);
@@ -254,7 +272,7 @@ export default function ExperimentsPage() {
   const [logsExpId, setLogsExpId] = useState<string | null>(null);
   const sse = useExperimentSSE({
     pollAfterDisconnect: true,
-    onDisconnect: () => loadExperiments(),
+    onDisconnect: () => loadAllExperiments(),
   });
 
   const showToast = useCallback((msg: string, ok: boolean) => {
@@ -300,6 +318,29 @@ export default function ExperimentsPage() {
     }
   }
 
+  function refreshRunningStatuses(items: Experiment[], reload: () => void) {
+    const runningIds = items
+      .filter((exp: Experiment) => exp.status === "running")
+      .map((exp: Experiment) => exp.experiment_id)
+      .slice(0, 10);
+    if (runningIds.length === 0) return;
+
+    void Promise.allSettled(
+      runningIds.map((id: string) =>
+        fetch(`${API}/quantevolver/experiments/${id}/run-status`)
+          .then((r) => r.ok ? r.json() : null)
+      )
+    ).then((results) => {
+      const changed = results.some((r) => (
+        r.status === "fulfilled"
+        && r.value
+        && r.value.status
+        && r.value.status !== "running"
+      ));
+      if (changed) reload();
+    });
+  }
+
   async function loadExperiments(page?: number) {
     setLoading(true);
     setError(null);
@@ -312,35 +353,51 @@ export default function ExperimentsPage() {
       setExperiments(items);
       setTotal(data.total || 0);
       setSelectedArchiveKeys(new Set());
+      setAllExperimentsLoaded(items.filter((exp: Experiment) => !exp.parent_experiment_id).length >= (data.total || 0));
       void loadArchiveStatusForExperiments(items);
       if (page !== undefined) setCurrentPage(page);
-      const runningIds = items
-        .filter((exp: Experiment) => exp.status === "running")
-        .map((exp: Experiment) => exp.experiment_id)
-        .slice(0, 10);
-      if (runningIds.length > 0) {
-        void Promise.allSettled(
-          runningIds.map((id: string) =>
-            fetch(`${API}/quantevolver/experiments/${id}/run-status`)
-              .then((r) => r.ok ? r.json() : null)
-          )
-        ).then((results) => {
-          const changed = results.some((r) => (
-            r.status === "fulfilled"
-            && r.value
-            && r.value.status
-            && r.value.status !== "running"
-          ));
-          if (changed) loadExperiments(targetPage);
-        });
-      }
+      refreshRunningStatuses(items, () => loadExperiments(targetPage));
     } catch (e: any) {
       setError(e?.message || "加载失败");
     }
     setLoading(false);
   }
 
-  useEffect(() => { loadExperiments(1); }, []);
+  async function loadAllExperiments() {
+    setLoading(true);
+    setError(null);
+    try {
+      let offset = 0;
+      let expectedTotal = 0;
+      const allItems: Experiment[] = [];
+      for (let guard = 0; guard < 100; guard += 1) {
+        const res = await fetch(`${API}/quantevolver/experiments?limit=${EXPERIMENT_HISTORY_BATCH_SIZE}&offset=${offset}&include_children=true`);
+        const data = await res.json();
+        if (!res.ok || data.ok === false) {
+          throw new Error(data.detail || data.error || `HTTP ${res.status}`);
+        }
+        const items: Experiment[] = data.items || [];
+        expectedTotal = data.total || expectedTotal;
+        allItems.push(...items);
+        const parentCount = allItems.filter((exp: Experiment) => !exp.parent_experiment_id).length;
+        if (parentCount >= expectedTotal || items.length === 0) break;
+        offset += EXPERIMENT_HISTORY_BATCH_SIZE;
+      }
+      setExperiments(allItems);
+      setTotal(expectedTotal);
+      setCurrentPage(1);
+      setSelectedArchiveKeys(new Set());
+      const loadedParentCount = allItems.filter((exp: Experiment) => !exp.parent_experiment_id).length;
+      setAllExperimentsLoaded(expectedTotal === 0 || loadedParentCount >= expectedTotal);
+      void loadArchiveStatusForExperiments(allItems);
+      refreshRunningStatuses(allItems, () => loadAllExperiments());
+    } catch (e: any) {
+      setError(e?.message || "Load failed");
+    }
+    setLoading(false);
+  }
+
+  useEffect(() => { loadAllExperiments(); }, []);
 
   // 页面加载后自动连接第一个 running 实验的日志流
   useEffect(() => {
@@ -357,7 +414,7 @@ export default function ExperimentsPage() {
   // 自动刷新：仅在用户开启时按设定间隔刷新
   useEffect(() => {
     if (!autoRefresh) return;
-    const timer = setInterval(() => loadExperiments(currentPage), refreshInterval * 1000);
+    const timer = setInterval(() => loadAllExperiments(), refreshInterval * 1000);
     return () => clearInterval(timer);
   }, [autoRefresh, refreshInterval]);
 
@@ -369,7 +426,7 @@ export default function ExperimentsPage() {
       const data = await res.json();
       if (data.ok) {
         showToast("同步成功！回测指标已更新", true);
-        loadExperiments();
+        loadAllExperiments();
       } else {
         showToast("同步失败: " + (data.error || "未知错误"), false);
       }
@@ -388,7 +445,7 @@ export default function ExperimentsPage() {
       const data = await res.json();
       if (data.ok) {
         showToast(`脚本已重新生成 (${data.factor_count} 个因子)`, true);
-        loadExperiments();
+        loadAllExperiments();
       } else {
         showToast("重新生成失败: " + (data.error || "未知错误"), false);
       }
@@ -409,7 +466,7 @@ export default function ExperimentsPage() {
       setExpandedId(expId);
       await sse.startRun(expId, inheritedNodeId);
       showToast(inheritedNodeId ? `Submitted to ${inheritedNodeId}` : "Submitted run", true);
-      loadExperiments();
+      loadAllExperiments();
     } catch (e: any) {
       showToast("Run failed: " + (e?.message || ""), false);
     }
@@ -438,7 +495,7 @@ export default function ExperimentsPage() {
       const res = await fetch(`${API}/quantevolver/experiments/${experimentId}?cleanup_workspace=true`, { method: "DELETE" });
       const data = await res.json();
       if (data.ok) {
-        loadExperiments();
+        loadAllExperiments();
         showToast("实验已删除", true);
       } else {
         alert(`删除失败: ${data.detail || "未知错误"}`);
@@ -459,7 +516,7 @@ export default function ExperimentsPage() {
         // 后端已自动同步 DB（completed/failed/interrupted）
         const label = STATUS_MAP[data.status]?.label || data.status;
         showToast(`状态已更新: ${label}`, true);
-        loadExperiments();
+        loadAllExperiments();
       } else {
         showToast("实验仍在执行中", true);
       }
@@ -757,6 +814,14 @@ export default function ExperimentsPage() {
     });
   }, [experiments]);
   const selectedArchiveCount = selectedArchiveKeys.size;
+  const loadedParentCount = groupedExperiments.length;
+  const loadedLoopCount = experiments.filter(e => e.parent_experiment_id).length;
+  const hmmRecordCount = experiments.filter(isHmmExperiment).length;
+  const expandedLoopGroupCount = loopsExpandedIds.size;
+  const expandAllLoops = () => {
+    setLoopsExpandedIds(new Set(groupedExperiments.filter(exp => exp.childLoops.length > 0).map(exp => exp.experiment_id)));
+  };
+  const collapseAllLoops = () => setLoopsExpandedIds(new Set());
   const visiblePendingArchiveCount = groupedExperiments.reduce((count, exp) => {
     const self = canSelectExperimentForArchive(exp) ? 1 : 0;
     const childCount = exp.childLoops.filter(child => canSelectLoopForArchive(child, exp.qe_task_id)).length;
@@ -792,11 +857,13 @@ export default function ExperimentsPage() {
       {/* 工具栏 */}
       <section style={{ background: "#fff", borderRadius: 12, padding: 16, marginBottom: 16, boxShadow: "0 1px 3px rgba(0,0,0,0.08)" }}>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <button onClick={() => loadExperiments(currentPage)} disabled={loading} style={{ padding: "6px 12px", fontSize: 12, cursor: "pointer", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff" }}>
-            {loading ? "加载中..." : "手动刷新"}
+          <button onClick={() => loadAllExperiments()} disabled={loading} style={{ padding: "6px 12px", fontSize: 12, cursor: "pointer", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff" }}>
+            {loading ? "Loading..." : "Refresh all"}
           </button>
-          <span style={{ fontSize: 12, color: "#9ca3af" }}>共 {total} 条 | 第 {currentPage}/{totalPages} 页</span>
-
+          <button onClick={() => loadExperiments(currentPage)} disabled={loading} style={{ padding: "6px 12px", fontSize: 12, cursor: "pointer", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff" }}>
+            Refresh page
+          </button>
+          <span style={{ fontSize: 12, color: "#9ca3af" }}>Parents {loadedParentCount}/{total} | Loops {loadedLoopCount} | Visible {experiments.length} | HMM {hmmRecordCount} | {allExperimentsLoaded ? "all loaded" : `page ${currentPage}/${totalPages}`}</span>
           <select
             value={pageSize}
             onChange={e => { setPageSize(Number(e.target.value)); loadExperiments(1); }}
@@ -804,6 +871,13 @@ export default function ExperimentsPage() {
           >
             {[10, 20, 50, 100, 200].map(n => <option key={n} value={n}>{n} 条/页</option>)}
           </select>
+
+          <button onClick={expandAllLoops} disabled={loading || loadedLoopCount === 0} style={{ padding: "6px 12px", fontSize: 12, cursor: loadedLoopCount === 0 ? "not-allowed" : "pointer", borderRadius: 6, border: "1px solid #bae6fd", background: "#f0f9ff", color: "#0369a1", fontWeight: 600 }}>
+            Expand all loops
+          </button>
+          <button onClick={collapseAllLoops} disabled={loading || expandedLoopGroupCount === 0} style={{ padding: "6px 12px", fontSize: 12, cursor: expandedLoopGroupCount === 0 ? "not-allowed" : "pointer", borderRadius: 6, border: "1px solid #e5e7eb", background: "#fff", color: "#475569" }}>
+            Collapse loops
+          </button>
 
           <span style={{ width: 1, height: 16, background: "#e5e7eb" }} />
 
@@ -873,6 +947,9 @@ export default function ExperimentsPage() {
           >
             刷新数仓状态
           </button>
+          <span style={{ padding: "4px 8px", borderRadius: 999, background: allExperimentsLoaded ? "#ecfdf5" : "#fffbeb", color: allExperimentsLoaded ? "#047857" : "#b45309", fontWeight: 700, fontSize: 11 }}>
+            {allExperimentsLoaded ? "Full view: all saved experiments are visible" : "Paged view: refresh all to inspect every experiment"}
+          </span>
         </div>
         {error && <div style={{ marginTop: 8, padding: 8, background: "#fee2e2", borderRadius: 6, fontSize: 12, color: "#991b1b" }}>{error}</div>}
       </section>
@@ -1365,7 +1442,7 @@ export default function ExperimentsPage() {
       </div>
 
       {/* 分页控件 */}
-      {total > 0 && (
+      {total > 0 && !allExperimentsLoaded && (
         <div style={{ display: "flex", justifyContent: "center", alignItems: "center", marginTop: 16, gap: 6 }}>
           <button onClick={() => loadExperiments(1)} disabled={currentPage <= 1 || loading}
             style={{ padding: "4px 8px", fontSize: 11, cursor: currentPage <= 1 ? "not-allowed" : "pointer", borderRadius: 4, border: "1px solid #d1d5db", background: currentPage <= 1 ? "#f3f4f6" : "#fff" }}>
