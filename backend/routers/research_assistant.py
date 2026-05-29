@@ -35,6 +35,7 @@ from backend.services.research_assistant.models import (
     WorkbenchDryRunExecuteRequest,
 )
 from backend.services.research_assistant.repository import ResearchAssistantSchemaMissingError
+from backend.services.research_assistant.mcp_catalog_sync import enrich_mcp_server_record
 from backend.services.research_assistant.service import ResearchAssistantCatalogNotReadyError, ResearchAssistantService
 
 router = APIRouter(prefix="/research-assistant", tags=["research-assistant"])
@@ -551,7 +552,7 @@ def list_mcp_servers(service: ResearchAssistantService = Depends(get_research_as
 
 
 def _summarize_mcp_server_record(server: dict[str, Any]) -> dict[str, Any]:
-    item = dict(server)
+    item = enrich_mcp_server_record(server)
     health = item.get("health_json") if isinstance(item.get("health_json"), dict) else {}
     display_name_zh = health.get("display_name_zh")
     aliases = health.get("business_aliases_zh")

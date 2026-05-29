@@ -1,0 +1,78 @@
+{
+  "actual": "Live /api/v1/research-assistant/mcp/servers returns display_name_zh=null and business_aliases_zh=[] for the affected servers; live /research-assistant/mcp-tools shows English titles such as Model Registry MCP and Factor Library MCP instead of Chinese business aliases.",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/mcp_catalog_sync.py",
+    "backend/services/research_assistant/service.py",
+    "backend/routers/research_assistant.py",
+    "backend/tests/research_assistant/test_api.py",
+    "backend/tests/research_assistant/test_mcp_catalog_sync.py",
+    "frontend/tests/research-assistant/research-assistant.spec.ts",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260529_BUG-146-research-assistant-live-mcp-server-catalog-lacks-chinese-aliases-after-b.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-146",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-28T17:49:17.968278Z",
+  "description": "Live /api/v1/research-assistant/mcp/servers returns display_name_zh=null and business_aliases_zh=[] for the affected servers; live /research-assistant/mcp-tools shows English titles such as Model Registry MCP and Factor Library MCP instead of Chinese business aliases.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260529-d4346eb4cfda",
+      "timestamp": "2026-05-28T17:49:17.968275Z"
+    },
+    {
+      "timestamp": "2026-05-28T17:59:30Z",
+      "actor": "codex",
+      "action": "expand_allowed_write_scope",
+      "note": "Add BUG-146 registry JSON and allocator files required by the issue workflow PR gate; no non-Research Assistant implementation files added."
+    }
+  ],
+  "evidence_uris": [
+    "runtime API check 2026-05-29: /mcp/servers payload_chars=7769 summary_first=true but all expected display_name_zh/business_aliases_zh missing",
+    "live Playwright 2026-05-29: /research-assistant/mcp-tools has Model Registry MCP and Factor Library MCP, lacks ???/???/???/?????/QE?? aliases",
+    "python -X utf8 -m pytest -q backend/tests/research_assistant/test_api.py::test_mcp_servers_endpoint_exposes_chinese_business_aliases backend/tests/research_assistant/test_api.py::test_mcp_servers_endpoint_backfills_aliases_for_legacy_runtime_rows backend/tests/research_assistant/test_api.py::test_mcp_tools_endpoint_defaults_to_compact_summary_first_payload backend/tests/research_assistant/test_mcp_catalog_sync.py -> passed (5 passed in 12.83s)",
+    "python -m nox -s research_assistant_backend research_assistant_mcp_contract --no-error-on-missing-interpreters -> passed (65 backend tests, 23 MCP contract tests)",
+    "python -m nox -s l0 --no-error-on-missing-interpreters -> passed"
+  ],
+  "expected": "Live /api/v1/research-assistant/mcp/servers and the MCP tools UI expose Chinese business display names and aliases such as ???, ???, ???, ??????, ?????, ????? and QE?? while preserving server_key/tool_name and summary-first payload boundaries.",
+  "first_seen_at": "2026-05-28T17:49:17.968278Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 308,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/308",
+  "last_seen_at": "2026-05-28T17:49:17.968278Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -X utf8 -m pytest -q backend/tests/research_assistant/test_api.py::test_mcp_servers_endpoint_exposes_chinese_business_aliases backend/tests/research_assistant/test_api.py::test_mcp_tools_endpoint_defaults_to_compact_summary_first_payload backend/tests/research_assistant/test_mcp_catalog_sync.py && cd frontend && PLAYWRIGHT_SKIP_WEBSERVER=1 FRONTEND_BASE_URL=http://127.0.0.1:3000 NEXT_PUBLIC_API_BASE=http://127.0.0.1:8001/api/v1 npx playwright test tests/research-assistant/research-assistant.spec.ts --project chromium --reporter=list",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Research Assistant live MCP server catalog lacks Chinese aliases after BUG-145 merge",
+  "trigger_condition": {
+    "fingerprint": "d4346eb4cfdaf1366ba7e5a2",
+    "source_event_id": "FE-20260529-d4346eb4cfda"
+  },
+  "verification_run_id": null
+}

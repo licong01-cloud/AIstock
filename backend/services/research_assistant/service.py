@@ -58,7 +58,7 @@ from .prompt_pack import (
 from .repository import DatabaseResearchAssistantRepository
 from .runtime_config import DEFAULT_ENVIRONMENT, RUNTIME_CONFIG_KEY, RuntimeConfigSnapshot, load_runtime_config
 from .domain_ontology import domain_prompt_key
-from .mcp_catalog_sync import default_mcp_servers, default_mcp_tools, workflow_capabilities as catalog_workflow_capabilities
+from .mcp_catalog_sync import enrich_mcp_server_record, default_mcp_servers, default_mcp_tools, workflow_capabilities as catalog_workflow_capabilities
 from .tool_router import route_request
 
 
@@ -1792,7 +1792,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
 
     def _mcp_tool_catalog_snapshot(self) -> dict[str, Any]:
         servers = [
-            item
+            enrich_mcp_server_record(item)
             for item in self.repository.list_records("mcp_servers", limit=self.configured_limit("router_mcp_servers"))["items"]
             if str(item.get("status") or "") in {"ready", "enabled", "ok"}
         ]
