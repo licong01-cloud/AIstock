@@ -1875,7 +1875,13 @@ def test_cleanup_after_merge_allows_verified_squash_merge(
         lambda root: {"ok": True, "branch": "main", "dirty": False, "dirty_count": 0, "head": "a", "origin_main": "a"},
     )
     monkeypatch.setattr(workflow, "_verify_pr_merged", lambda pr_url: {"checked": True, "merged": True, "pr": {"url": pr_url}})
-    monkeypatch.setattr(workflow, "_run_command", lambda *args, **kwargs: {"ok": True, "stdout": "", "stderr": "", "returncode": 0})
+    monkeypatch.setattr(
+        workflow,
+        "_git_squash_head_equivalent_to_origin",
+        lambda head_oid: {"verified": False, "reason": "missing_head_oid"},
+    )
+    monkeypatch.setattr(workflow, "_git_ref_exists", lambda ref, cwd=None: ref in {branch, "origin/main"})
+    monkeypatch.setattr(workflow, "_git_refs_tree_equivalent", lambda left, right, cwd=None: left == branch and right == "origin/main")
 
     payload = workflow.build_cleanup_after_merge_plan(
         branch=branch,
@@ -1887,6 +1893,122 @@ def test_cleanup_after_merge_allows_verified_squash_merge(
     assert payload["merged_into_origin_main"] is False
     assert payload["squash_merge_verified"] is True
     assert payload["tree_equivalent_to_origin_main"] is True
+    assert payload["merge_verification"]["method"] == "squash_merge_branch_tree_equivalent"
+
+
+def test_cleanup_after_merge_allows_squash_merge_when_remote_branch_deleted(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "feature/deleted-after-squash"
+
+    def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
+        if args[:2] == ["branch", "--show-current"]:
+            return "main"
+        if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
+            return branch
+        if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
+            return ""
+        if args[:2] == ["ls-remote", "--heads"]:
+            return ""
+        return ""
+
+    monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {"ok": True, "branch": "main", "dirty": False, "dirty_count": 0, "head": "merge123", "origin_main": "merge123"},
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url: {
+            "checked": True,
+            "merged": True,
+            "pr": {
+                "url": pr_url,
+                "headRefName": branch,
+                "headRefOid": "feature123",
+                "mergeCommit": {"oid": "merge123"},
+            },
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_git_squash_head_equivalent_to_origin",
+        lambda head_oid: {
+            "head_ref": head_oid,
+            "base_ref": "origin/main",
+            "base": "base123",
+            "changed_files": ["scripts/aistock_issue_workflow.py"],
+            "verified": True,
+            "reason": "changed_paths_equivalent",
+        },
+    )
+    monkeypatch.setattr(workflow, "_git_ref_exists", lambda ref, cwd=None: ref in {"origin/main"})
+    monkeypatch.setattr(workflow, "_git_refs_tree_equivalent", lambda left, right, cwd=None: False)
+
+    payload = workflow.build_cleanup_after_merge_plan(
+        branch=branch,
+        pr_url="https://github.example/pull/355",
+        sync_root=True,
+    )
+
+    assert payload["workflow_gate"] == "ready_for_cleanup"
+    assert payload["merged_into_origin_main"] is False
+    assert payload["squash_merge_verified"] is True
+    assert payload["tree_equivalent_to_origin_main"] is False
+    assert payload["merge_verification"]["method"] == "squash_merge_head_oid_changed_paths_equivalent"
+    assert payload["merge_verification"]["tree_equivalence_ref"] == "feature123"
+    assert payload["merge_verification"]["path_equivalence"]["changed_files"] == ["scripts/aistock_issue_workflow.py"]
+
+
+def test_cleanup_after_merge_blocks_when_squash_pr_head_tree_differs(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "feature/not-equivalent"
+
+    def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
+        if args[:2] == ["branch", "--show-current"]:
+            return "main"
+        if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
+            return branch
+        if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
+            return ""
+        if args[:2] == ["ls-remote", "--heads"]:
+            return ""
+        return ""
+
+    monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {"ok": True, "branch": "main", "dirty": False, "dirty_count": 0, "head": "merge123", "origin_main": "merge123"},
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url: {"checked": True, "merged": True, "pr": {"url": pr_url, "headRefOid": "feature123"}},
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_git_squash_head_equivalent_to_origin",
+        lambda head_oid: {"verified": False, "reason": "changed_paths_differ", "changed_files": ["scripts/aistock_issue_workflow.py"]},
+    )
+    monkeypatch.setattr(workflow, "_git_ref_exists", lambda ref, cwd=None: ref in {"feature123", branch, "origin/main"})
+    monkeypatch.setattr(workflow, "_git_refs_tree_equivalent", lambda left, right, cwd=None: False)
+
+    payload = workflow.build_cleanup_after_merge_plan(
+        branch=branch,
+        pr_url="https://github.example/pull/356",
+        sync_root=True,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["squash_merge_verified"] is False
+    assert payload["merge_verification"]["verified"] is False
+    assert payload["blocking"] == [f"branch is not merged into origin/main: {branch}"]
 
 
 def test_repo_skill_and_quickstart_are_parseable() -> None:
