@@ -30,28 +30,28 @@
       "timestamp": "2026-05-29T13:21:39.736969Z"
     },
     {
-      "timestamp": "2026-05-29T13:32:00Z",
-      "actor": "codex",
       "action": "scope_expansion_for_metadata_persistence",
-      "note": "Added repository.py because Paper v2 save_order ON CONFLICT did not update metadata, blocking broker diagnostic persistence during native reconciliation."
+      "actor": "codex",
+      "note": "Added repository.py because Paper v2 save_order ON CONFLICT did not update metadata, blocking broker diagnostic persistence during native reconciliation.",
+      "timestamp": "2026-05-29T13:32:00Z"
     },
     {
-      "timestamp": "2026-05-29T13:34:00Z",
-      "actor": "codex",
       "action": "scope_expansion_for_api_diagnostic_exposure",
-      "note": "Added paper_trading_v2 router to expose persisted broker_status_msg/error_msg/broker_diagnostic as first-class order API fields for operator diagnosis."
+      "actor": "codex",
+      "note": "Added paper_trading_v2 router to expose persisted broker_status_msg/error_msg/broker_diagnostic as first-class order API fields for operator diagnosis.",
+      "timestamp": "2026-05-29T13:34:00Z"
     },
     {
-      "timestamp": "2026-05-29T13:40:00Z",
-      "actor": "codex",
       "action": "scope_expansion_for_repository_regression_test",
-      "note": "Added test_symbol_names.py to assert save_order conflict updates metadata, the persistence path required for broker diagnostics."
+      "actor": "codex",
+      "note": "Added test_symbol_names.py to assert save_order conflict updates metadata, the persistence path required for broker diagnostics.",
+      "timestamp": "2026-05-29T13:40:00Z"
     },
     {
-      "timestamp": "2026-05-29T15:58:00Z",
-      "actor": "codex",
       "action": "validation_passed",
-      "note": "MiniQMT order diagnostics, broker audit snapshots, API top-level fields, metadata upsert, and broker-authoritative data-quality gates passed locally without touching production runtime or DB."
+      "actor": "codex",
+      "note": "MiniQMT order diagnostics, broker audit snapshots, API top-level fields, metadata upsert, and broker-authoritative data-quality gates passed locally without touching production runtime or DB.",
+      "timestamp": "2026-05-29T15:58:00Z"
     }
   ],
   "evidence_uris": [
@@ -65,8 +65,8 @@
   "expected": "Every MiniQMT order submission and reconciliation must persist broker-authoritative raw order status, status message, reject/error context, order handle/native id, cash/position before-after evidence, reconciliation source and diagnostic package; stale SUBMITTED orders must be reconciled to broker-authoritative terminal/deferred states or explicitly marked unknown with actionable diagnostics.",
   "first_seen_at": "2026-05-29T13:21:39.736973Z",
   "fix_branch": "bug/BUG-163-miniqmt-order-diagnostics-20260529-refresh",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "693b7c65fa34dca18bc67f473e0b47a43ef1092d",
+  "fixed_at": "2026-05-29T16:30:18.377023Z",
   "github_issue_number": 386,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/386",
   "last_seen_at": "2026-05-29T13:21:39.736973Z",
@@ -74,6 +74,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/402",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -86,7 +87,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -95,9 +96,6 @@
     "fingerprint": "04044fa79b3caff608ba047f",
     "source_event_id": "FE-20260529-04044fa79b3c"
   },
-  "verification_run_id": "BUG-163-local-validation-20260529T2358Z",
-  "workflow_gate": "allowed",
-  "worktree_path": "F:\\Dev\\AIstock_worktrees\\BUG-163-miniqmt-order-diagnostics-20260529-refresh",
   "validation_evidence": [
     "python -m ruff check backend/services/paper_trading_v2/day_runner.py backend/services/paper_trading_v2/repository.py backend/routers/paper_trading_v2.py backend/tests/paper_trading_v2/test_minqmtsim_backend.py backend/tests/paper_trading_v2/test_symbol_names.py backend/tests/paper_trading_v2/test_minqmt_vnpy_execution_adapter.py -> passed",
     "python -m pytest backend/tests/paper_trading_v2/test_minqmtsim_backend.py backend/tests/paper_trading_v2/test_symbol_names.py backend/tests/paper_trading_v2/test_minqmt_vnpy_execution_adapter.py -q -> 42 passed",
@@ -108,6 +106,11 @@
     "python -m nox -s paper_v2_data_quality -> passed",
     "python -m nox -s data_quality_deep -> 10 passed, 21 skipped",
     "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> 5 sessions passed",
-    "python scripts/aistock_data_quality_smoke.py --scope paper_v2_selection_center --portfolio-id paper_1d9b1f03700f4810aef8351124c8ab6c --output tmp/paper_v2_data_quality_bug163_minqmt_after_bug167.json -> passed for MiniQMT portfolio"
-  ]
+    "python scripts/aistock_data_quality_smoke.py --scope paper_v2_selection_center --portfolio-id paper_1d9b1f03700f4810aef8351124c8ab6c --output tmp/paper_v2_data_quality_bug163_minqmt_after_bug167.json -> passed for MiniQMT portfolio",
+    "python -m nox -s validation_center_backend -> 275 passed, coverage line=79.64 branch=61.61",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed, module ownership scan mapped=12 unmapped=0 ambiguous=0"
+  ],
+  "verification_run_id": "BUG-163-local-validation-20260529T2358Z",
+  "workflow_gate": "allowed",
+  "worktree_path": "F:\\Dev\\AIstock_worktrees\\BUG-163-miniqmt-order-diagnostics-20260529-refresh"
 }
