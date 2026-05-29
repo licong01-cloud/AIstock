@@ -1,4 +1,4 @@
-﻿"""Portfolio-level autonomous auto-run for Paper v2 MiniQMT SIM."""
+﻿"""Portfolio-level autonomous auto-run for Paper v2 broker backends."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from backend.services.trading_core.errors import TradingCoreError
+from backend.services.trading_core.errors import RuntimeConfigInvalidError, TradingCoreError
 
 from .market_data import MinuteDataSource
 from .models import (
@@ -32,6 +32,32 @@ DEFAULT_TRADE_WINDOW_POLICY: dict[str, Any] = {
     "allow_intraday_start": True,
     "after_cutoff_policy": "fail_day_without_submit",
 }
+
+AUTO_RUN_BROKER_DEFAULTS: dict[str, dict[str, str]] = {
+    "local_sim": {
+        "live_data_source": MinuteDataSource.TDX_REALTIME.value,
+        "authority_source": "LOCAL_SIM_LEDGER",
+        "account_binding_mode": "virtual_portfolio",
+    },
+    "minqmt_sim": {
+        "live_data_source": MinuteDataSource.MINIQMT_REALTIME.value,
+        "authority_source": "MINIQMT_QUERY",
+        "account_binding_mode": "exclusive_account_phase1",
+    },
+}
+
+
+def auto_run_live_source_for_broker(broker_backend: str) -> MinuteDataSource:
+    defaults = AUTO_RUN_BROKER_DEFAULTS.get(str(broker_backend or "").strip().lower())
+    if defaults is None:
+        raise RuntimeConfigInvalidError(
+            "Paper v2 auto-run broker backend is not supported",
+            context={
+                "broker_backend": broker_backend,
+                "supported_broker_backends": sorted(AUTO_RUN_BROKER_DEFAULTS),
+            },
+        )
+    return MinuteDataSource(defaults["live_data_source"])
 
 
 def canonical_auto_run_json(config: dict[str, Any]) -> str:
@@ -81,13 +107,43 @@ def normalize_auto_run_config(
     runtime_profile["industry_blacklist"] = list(industry_blacklist if industry_blacklist is not None else runtime_profile.get("industry_blacklist") or [])
 
     broker = deepcopy(raw.get("broker") or {})
-    broker["broker_backend"] = str(broker.get("broker_backend") or broker_backend)
+    raw_broker_backend = str(broker.get("broker_backend") or "").strip().lower()
+    effective_broker_backend = str(broker_backend or raw_broker_backend or "minqmt_sim").strip().lower()
+    if raw_broker_backend and raw_broker_backend != effective_broker_backend:
+        raise RuntimeConfigInvalidError(
+            "Paper v2 auto-run config broker_backend does not match the portfolio broker backend",
+            context={
+                "config_broker_backend": raw_broker_backend,
+                "portfolio_broker_backend": effective_broker_backend,
+            },
+        )
+    broker_defaults = AUTO_RUN_BROKER_DEFAULTS.get(effective_broker_backend)
+    if broker_defaults is None:
+        raise RuntimeConfigInvalidError(
+            "Paper v2 auto-run broker backend is not supported",
+            context={
+                "broker_backend": effective_broker_backend,
+                "supported_broker_backends": sorted(AUTO_RUN_BROKER_DEFAULTS),
+            },
+        )
+    raw_live_data_source = str(broker.get("live_data_source") or "").strip()
+    expected_live_data_source = broker_defaults["live_data_source"]
+    if raw_live_data_source and raw_live_data_source != expected_live_data_source:
+        raise RuntimeConfigInvalidError(
+            "Paper v2 auto-run config live_data_source does not match the portfolio broker backend",
+            context={
+                "broker_backend": effective_broker_backend,
+                "config_live_data_source": raw_live_data_source,
+                "expected_live_data_source": expected_live_data_source,
+            },
+        )
+    broker["broker_backend"] = effective_broker_backend
     broker["broker_mode"] = str(broker.get("broker_mode") or broker_mode).upper()
     if broker_account_id is not None:
         broker["account_id"] = str(broker_account_id)
-    broker.setdefault("live_data_source", MinuteDataSource.MINIQMT_REALTIME.value)
-    broker.setdefault("authority_source", "MINIQMT_QUERY")
-    broker.setdefault("account_binding_mode", "exclusive_account_phase1")
+    broker["live_data_source"] = expected_live_data_source
+    broker.setdefault("authority_source", broker_defaults["authority_source"])
+    broker.setdefault("account_binding_mode", broker_defaults["account_binding_mode"])
     broker.setdefault("strategy_name_template", "paper_{portfolio_id_short}")
     broker.setdefault("order_remark_schema", "aistock_paper_v2_json_v1")
 
@@ -250,7 +306,11 @@ class AutoRunCoordinator:
         return result
 
     def _recover_portfolio(self, portfolio: PaperPortfolio, *, as_of_time: datetime | None) -> dict[str, Any]:
-        config = normalize_auto_run_config(portfolio.auto_run_config, package_id=portfolio.package_id)
+        config = normalize_auto_run_config(
+            portfolio.auto_run_config,
+            package_id=portfolio.package_id,
+            broker_backend=portfolio.broker_backend,
+        )
         active_sessions = self.repository.list_active_sessions(portfolio.portfolio_id)
         if active_sessions:
             return {
@@ -289,11 +349,12 @@ class AutoRunCoordinator:
         session_config["auto_run_config"] = deepcopy(config)
         session_config.setdefault("paper_v2_session", {})["manual_tick_only"] = bool(policy.get("manual_tick_only", False))
         local_today = self._local_date(as_of_time)
+        live_data_source = auto_run_live_source_for_broker(portfolio.broker_backend)
         session = self.session_service.create_session(
             portfolio_id=portfolio.portfolio_id,
             mode=PaperSessionMode.LIVE_ONLY,
             start_date=max(portfolio.start_date, local_today),
-            live_data_source=MinuteDataSource.MINIQMT_REALTIME,
+            live_data_source=live_data_source,
             runtime_config=session_config,
             created_by="auto_run_coordinator",
             as_of_time=as_of_time,
@@ -331,6 +392,7 @@ class AutoRunCoordinator:
 __all__ = [
     "AUTO_RUN_SCHEMA_VERSION",
     "DEFAULT_TRADE_WINDOW_POLICY",
+    "auto_run_live_source_for_broker",
     "AutoRunCoordinator",
     "canonical_auto_run_json",
     "compute_auto_run_config_sha256",
