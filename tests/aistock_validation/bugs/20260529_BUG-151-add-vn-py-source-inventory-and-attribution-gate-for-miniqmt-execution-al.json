@@ -28,30 +28,30 @@
       "timestamp": "2026-05-29T03:58:37.285804Z"
     },
     {
-      "timestamp": "2026-05-29T04:00:00Z",
-      "actor": "codex",
       "action": "triage_scope_update",
-      "note": "Set allowed_write_scope and closure requirements for vnpy source inventory/license gate per design plan."
+      "actor": "codex",
+      "note": "Set allowed_write_scope and closure requirements for vnpy source inventory/license gate per design plan.",
+      "timestamp": "2026-05-29T04:00:00Z"
     },
     {
-      "timestamp": "2026-05-29T04:10:00Z",
-      "actor": "codex",
       "action": "scope_adjustment",
-      "note": "Removed standalone .json inventory from allowed scope because repository .gitignore ignores *.json; inventory is recorded in markdown for this gate."
+      "actor": "codex",
+      "note": "Removed standalone .json inventory from allowed scope because repository .gitignore ignores *.json; inventory is recorded in markdown for this gate.",
+      "timestamp": "2026-05-29T04:10:00Z"
     },
     {
-      "timestamp": "2026-05-29T04:42:32.053935Z",
-      "actor": "codex",
       "action": "validation_plan_alignment",
-      "note": "Aligned required_verification with issue workflow finish plan and completed local validation evidence for PR readiness."
+      "actor": "codex",
+      "note": "Aligned required_verification with issue workflow finish plan and completed local validation evidence for PR readiness.",
+      "timestamp": "2026-05-29T04:42:32.053935Z"
     }
   ],
   "evidence_uris": [],
   "expected": "Before any Sniper/BestLimit/TWAP implementation begins, AIstock has a file-level vn.py source inventory and MIT attribution gate that maximizes direct reuse of vnpy_algotrading code while defining the AIstock adapter boundaries.",
   "first_seen_at": "2026-05-29T03:58:37.285808Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "86930f2ca43c197ecc9f89ccbc9953dfd6f360ac",
+  "fixed_at": "2026-05-29T05:24:35.700056Z",
   "github_issue_number": 340,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/340",
   "last_seen_at": "2026-05-29T03:58:37.285808Z",
@@ -63,6 +63,7 @@
     "Do not restart production runtime services without explicit approval.",
     "Do not write production DB or apply DDL."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/344",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -77,7 +78,7 @@
   "risk_area": "feature",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2.execution"
   ],
@@ -86,6 +87,13 @@
     "fingerprint": "9f213e8ab63d9a09cb9eb9fb",
     "source_event_id": "FE-20260529-9f213e8ab63d"
   },
+  "validation_evidence": [
+    "git diff --check origin/main...HEAD -> passed after rebase",
+    "content check: source inventory includes upstream commit, MIT License, sniper_algo.py, best_limit_algo.py, twap_algo.py, template.py, base.py, engine.py, iceberg_algo.py, stop_algo.py, direct AIstock target mapping, characterization tests -> passed after rebase",
+    "python -m json.tool BUG-151 JSON -> passed after rebase",
+    "python -m nox -s l0 validation_module_registry_l0 validation_center_backend -> passed before rebase (l0 success; validation_module_registry_l0 8 passed; validation_center_backend 257 passed, coverage line=79.64 branch=61.71)",
+    "GitHub PR #344 checks -> SUCCESS for required checks after rebase; Auto-register CI failures skipped non-blocking; mergeStateStatus=CLEAN"
+  ],
   "verification_run_id": null,
   "workflow_gate": "allowed"
 }
