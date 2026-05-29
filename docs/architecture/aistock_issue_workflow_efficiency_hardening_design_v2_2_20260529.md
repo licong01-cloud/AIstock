@@ -1,0 +1,138 @@
+﻿# AIstock Issue Workflow Efficiency Hardening Design v2.2
+
+Version: v2.2
+Date: 2026-05-29
+Status: implementation baseline
+Scope: issue workflow, CI/CD intake, PR quality, merge/close-sync/cleanup telemetry
+Non-goals: historical business BUG fixes, Paper v2 business changes, StrategyPackage manifest repair, Research Assistant feature repair, production DB/runtime changes
+
+## 1. Executive Summary
+
+AIstock issue handling is currently correct in intent but still too expensive in practice. Small and medium issues can become several-hour tasks because developer windows repeatedly rediscover context, split registration from repair, create duplicate worktrees, run overly broad validation, and manually recover after merge/close-sync/cleanup gaps.
+
+This design keeps the current governance and quality model intact while reducing waste. The main change is to make `scripts/aistock_issue_workflow.py` and CI gates the enforceable workflow source of truth for Codex, Claude Code, Cursor, and generic CLI/IDE agents.
+
+The expected result is not lower standards. The expected result is that time shifts back from workflow recovery to actual code repair and required validation.
+
+## 2. Current Workflow Model
+
+```mermaid
+flowchart TD
+  A["User asks to fix/register/triage issue"] --> B["Client entry: Codex skill / Claude command / CLI"]
+  B --> C["aistock_issue_workflow.py doctor"]
+  C --> D{Existing BUG or new issue?}
+  D -->|Existing BUG| E["run --bug-id --mode plan --create-worktree"]
+  D -->|New user BUG| F["submit-bug --apply"]
+  D -->|CI/Nightly issue| G["triage-ci-issue"]
+  G --> H{Code regression or infra blocker?}
+  H -->|Code regression| I["promote-ci-issue --apply"]
+  H -->|Infra blocker| J["infra action card; do not create code BUG"]
+  F --> E
+  I --> E
+  E --> K["Context Pack + Fix Ready + Validation Plan"]
+  K --> L["Fix in isolated worktree"]
+  L --> M["Pre-PR gate"]
+  M --> N["Commit + Push + PR"]
+  N --> O["CI watch"]
+  O --> P{User authorized merge?}
+  P -->|No| Q["Stop at PR-ready with evidence"]
+  P -->|Yes| R["Merge main"]
+  R --> S["close-sync in registry worktree"]
+  S --> T["root sync"]
+  T --> U["cleanup worktree/branch"]
+  U --> V["postmortem timing/context report"]
+```
+
+## 3. Failure Modes Observed
+
+| Area | Symptom | Cost impact | Required hardening |
+| --- | --- | --- | --- |
+| Startup context | Agents read old project memory, archived designs, or full module plans | Tens of thousands of tokens before code | Context Pack and CodeGraph first, historical docs only on demand |
+| Registration | BUG JSON, GitHub Issue, registry PR, fix PR split | 30-60 minutes before repair | `submit-bug` must continue to fix by default |
+| Worktree state | Dirty or duplicate worktrees | Manual recovery and duplicated validation | Single-active worktree guard and resume-first behavior |
+| CI/Nightly intake | Runner outage promoted as code BUG | Wasted repair loops | Classify infra blockers and stop before BUG promotion |
+| Validation | T0/T1 changes run T2/T3 style validation | Slow feedback | Risk-tiered selector and batch shared validation |
+| PR quality | `linked_issues: none`, `scope_check: not_provided` | Manual review and merge risk | PR Quality must infer BUG linkage and scope evidence |
+| Merge close | close-sync and cleanup require manual fallback | 10-60 minutes after merge | Merge finalizer and cleanup evidence |
+| Telemetry | Timing is reconstructed manually | Repeated debates without data | Default postmortem in PR/final report |
+
+## 4. Design Principles
+
+1. Preserve quality gates. Do not skip validation, production gates, or GitHub/BUG sync.
+2. Make the repo CLI authoritative. Skills and commands are thin entry wrappers.
+3. Prevent wrong paths instead of documenting them repeatedly.
+4. Optimize by risk tier and scope, not by weakening checks.
+5. Batch only compatible same-module issues and keep per-issue evidence.
+6. Treat CodeGraph and Understand Anything as accelerators, not truth sources.
+7. Keep root `F:\Dev\AIstock` clean; generated artifacts must stay under ignored workflow/artifact directories.
+8. Do not touch production backend `8001`, frontend `3000`, DB, DDL, or dependencies in this hardening slice.
+
+## 5. Immediate Implementation Scope
+
+### 5.1 CI/Nightly Infra Classification
+
+`triage-ci-issue` already detects `infra_flaky` for runner outage signatures. This phase makes the behavior enforceable:
+
+- `promote-ci-issue --apply` must refuse infra-only issues unless explicitly overridden in a future audited mode.
+- The output must contain an infra action card instead of a code BUG next command.
+- Nightly auto-filed issues must use normalized labels such as `severity:p1`, `module:validation`, and `source:nightly` when available.
+- Runner health diagnostics must use `AISTOCK_RUNNER_HEALTH_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, and then `gh auth token` fallback for local diagnostics.
+
+### 5.2 Submit-Bug Continue-To-Fix
+
+`submit-bug` should make the normal path obvious:
+
+- Default `next_command` after successful submit points to `run --bug-id <id> --mode plan --create-worktree`.
+- `registry-pr-only` is explicitly marked as intake-only and not the default repair path.
+- The output includes `fix_chain` with `next_command`, `stop_reason`, and `registry_pr_only`.
+
+### 5.3 PR Quality Linkage And Scope Inference
+
+PR Quality currently comments but can miss linkage and scope. This phase improves evidence without becoming overly strict:
+
+- Infer linked BUG IDs from PR title, body, branch name, commit messages, and changed BUG JSON filenames.
+- Pass PR title/body into PR Quality through `AISTOCK_PR_TITLE` and `AISTOCK_PR_BODY` so GitHub issue references can be inferred without an extra API call.
+- Infer GitHub issue numbers from BUG JSON changed in the PR when available.
+- Report `scope_source=inferred_from_bug_json`, `scope_source=issue_record`, or `scope_check=missing` instead of ambiguous `not_provided`.
+- Keep this warning-only initially; do not block unrelated open PRs.
+
+### 5.4 Postmortem Default Path
+
+Every PR-ready or merged workflow should expose a `postmortem` next command. This phase ensures:
+
+- PR body and final output mention the postmortem command.
+- `postmortem` includes phase timing, known command durations, context token estimates, duplicate worktree count, stale PR check, and production gates.
+
+## 6. Deferred But Required Follow-Up
+
+| Phase | Item | Reason for deferral |
+| --- | --- | --- |
+| v2.3 | Full merge finalizer including close-sync PR merge authorization loop | Needs careful GitHub merge edge-case testing |
+| v2.3 | Batch validation selector hardening | Needs module-specific validation catalog review |
+| v2.4 | PR Quality warning-to-blocking for P0/P1 workflow evidence | Should bake in warning mode first |
+| v2.4 | Nightly CodeGraph freshness artifact | Depends on self-hosted runner restoration |
+| v2.5 | Understand Anything weekly graph | Not needed for small issue workflow |
+
+## 7. Acceptance Matrix
+
+| ID | Requirement | Validation |
+| --- | --- | --- |
+| IWEH-001 | Infra Nightly runner issues are not promoted as code BUGs | Unit test for `promote-ci-issue` with runner outage summary |
+| IWEH-002 | Runner health local diagnostics can use `gh auth token` fallback | Unit test with mocked token provider |
+| IWEH-003 | Submit BUG output returns fix-chain next command | Unit test for `submit-bug` dry-run/apply payload |
+| IWEH-004 | PR Quality can infer BUG linkage from branch/body/BUG JSON | Unit test or script dry-run with representative inputs |
+| IWEH-005 | PR Quality reports scope evidence instead of `not_provided` when BUG JSON is present | PR Quality script/test output |
+| IWEH-006 | Quickstart documents infra stop, continue-to-fix, and postmortem defaults | Markdown review |
+| IWEH-007 | Root remains clean after validation | `git status -sb --untracked-files=all` |
+| IWEH-008 | PR title/body issue references are available to PR Quality without GitHub API calls | Workflow env review plus unit test for `AISTOCK_PR_TITLE`/`AISTOCK_PR_BODY` |
+
+## 8. Expected Efficiency Impact
+
+| Issue type | Current common waste | Expected improvement |
+| --- | --- | --- |
+| T0 docs/registry/workflow | Registration and close-sync overhead | 30-60% faster |
+| T1 single-module bug | Context rediscovery and PR aftercare | 25-50% faster |
+| T2 cross-module bug | Repeated validation and scope uncertainty | 15-35% faster |
+| Infra/CI blocker | Misrouted code repair attempts | Avoids wasted repair loop entirely |
+
+The key success metric is not a fixed minute target. The key metric is code/verification time as the majority of total elapsed time, with workflow overhead becoming bounded and visible.

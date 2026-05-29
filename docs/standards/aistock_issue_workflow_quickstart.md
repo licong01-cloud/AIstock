@@ -109,6 +109,13 @@ python scripts/aistock_issue_workflow.py promote-ci-issue --issue <issue-number>
 
 After promotion, continue through the normal BUG workflow returned by `next_command`. CI/Nightly intake must not write BUG JSON directly from GitHub Actions or from the canonical root `main` checkout.
 
+If `triage-ci-issue` returns `classification_recommendation=infra_blocker` or
+`infra_flaky`, do not promote it into a code BUG. Follow the returned
+`infra_action` instead. Typical examples are missing self-hosted Windows
+runners, runner API permission failures, or missing
+`AISTOCK_RUNNER_HEALTH_TOKEN`. These issues should restore infrastructure and
+rerun CI/Nightly, not consume a developer window as a code repair.
+
 ## Submit Or Register A New BUG
 
 When the user asks to register a new BUG, do not hand-write a local-only BUG JSON. Use the high-level submit command so the developer client creates the same candidate and BUG record format:
@@ -152,7 +159,11 @@ the same allocation rule. They may write local BUG JSON only from an approved
 task/registry worktree, and their allocator must use the shared
 `AIstock_worktrees/.locks/bug-id-allocator.lock` plus the global BUG id scan.
 
-Normal BUG intake continues directly into the fix workflow in the same task/registry worktree via the returned `fix_chain.run_next_command`; do not create a separate registry-only PR unless the user explicitly asks for intake-only tracking.
+Normal BUG intake continues directly into the fix workflow in the same
+task/registry worktree via the returned `fix_chain.run_next_command` and
+`fix_chain.next_command`; do not create a separate registry-only PR unless the
+user explicitly asks for intake-only tracking. A registry-only PR is an
+intake-only exception, not the default fix path.
 
 If a client is launched from `F:\Dev\AIstock`, first create or switch to a clean task/registry worktree. Do not use root `main` for BUG JSON writes.
 

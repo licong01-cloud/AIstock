@@ -2054,6 +2054,57 @@ def test_promote_ci_issue_writes_bug_json_with_existing_github_issue(
     assert record["production_ddl_gate"] == "noop"
 
 
+def test_promote_ci_issue_blocks_infra_runner_outage(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = {
+        "number": 257,
+        "title": "P1 Nightly blocked: self-hosted Windows runner unavailable",
+        "state": "OPEN",
+        "url": "https://github.com/licong01-cloud/AIstock/issues/257",
+        "body": "<!-- aistock-nightly-failure:runner-preflight-unavailable -->",
+        "labels": [],
+    }
+    summary = {
+        "schema_version": "aistock_ci_failure_summary_v1",
+        "diagnostic_status": "complete",
+        "severity": "P1",
+        "workflow": "AIstock Nightly L3 + DR",
+        "run_id": "26602696543",
+        "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/26602696543",
+        "branch": "main",
+        "commit": "9798a0b",
+        "failed_jobs": [
+            {
+                "job_name": "Runner preflight",
+                "failed_tests": [],
+                "error_signature": "unable to query GitHub runner health; no online GitHub Actions runner matches required labels: self-hosted, windows",
+                "key_log_excerpt": ["Process completed with exit code 2."],
+                "suspected_module": "validation",
+                "suspected_files": [],
+            }
+        ],
+        "suspected_modules": ["validation"],
+        "suspected_files": [],
+        "fingerprint": "ci-runner",
+        "issue_title": "P1 Nightly blocked: self-hosted Windows runner unavailable",
+        "reproduce_command": "python scripts/aistock_runner_health.py doctor",
+    }
+
+    monkeypatch.setattr(workflow, "_load_github_issue", lambda issue_number: issue)
+    monkeypatch.setattr(workflow, "_find_bug_by_github_issue", lambda issue_number: None)
+    monkeypatch.setattr(workflow.ci_failure_summary, "summarize_actions_run", lambda **kwargs: summary)
+
+    payload = workflow.build_promote_ci_issue_plan(issue_number=257, apply=True, bug_id=None)
+
+    assert payload["workflow_gate"] == "blocked_infra_issue_not_code_bug"
+    assert payload["triage"]["needs_bug_json"] is False
+    assert payload["triage"]["next_command"] == "infra_action_required_no_code_bug"
+    assert payload["infra_action"]["workflow_gate"] == "infra_action_required"
+    assert not list((isolated_workflow_root / "tests" / "aistock_validation" / "bugs").glob("*BUG-*.json"))
+
+
 
 
 
