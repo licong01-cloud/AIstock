@@ -1,0 +1,66 @@
+{
+  "actual": "Five 2026-05-29 rejected buy orders remain missing broker_status_msg/status_msg/broker_rejection_reason/error_msg/broker_diagnostic in Paper v2 API, while QMT raw orders show order_status=57 and status_msg='[COUNTER][260200][...' for matching native order ids 1090519218-1090519222.",
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/paper_trading_v2/broker/minqmtsim.py",
+    "backend/routers/paper_trading_v2.py",
+    "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260530_BUG-169-paper-v2-miniqmt-historical-rejected-orders-still-lack-full-broker-diagn.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-169",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-29T18:56:57.061924Z",
+  "description": "Five 2026-05-29 rejected buy orders remain missing broker_status_msg/status_msg/broker_rejection_reason/error_msg/broker_diagnostic in Paper v2 API, while QMT raw orders show order_status=57 and status_msg='[COUNTER][260200][...' for matching native order ids 1090519218-1090519222.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260530-64a9239c04cb",
+      "timestamp": "2026-05-29T18:56:57.061921Z"
+    }
+  ],
+  "evidence_uris": [
+    "2026-05-30 read-only 8001 validation: Paper v2 orders rejected_missing_diagnostics=5; qmt rejected order_status=57 status_msg starts [COUNTER][260200]; run_events lack per-order reject diagnostic context"
+  ],
+  "expected": "Every persisted MiniQMT rejected order, including orders reconciled after BUG-163, exposes broker raw status, full or best-available status_msg, rejection classification, broker_diagnostic, broker audit, native order id, and an explicit gap marker if the broker only returns truncated text. Historical rows should either be repairable by an audited reconciliation/backfill flow or clearly marked as pre-fix diagnostic gaps without pretending complete evidence exists.",
+  "first_seen_at": "2026-05-29T18:56:57.061924Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 407,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/407",
+  "last_seen_at": "2026-05-29T18:56:57.061924Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "GET /api/v1/paper-v2/portfolios/paper_1d9b1f03700f4810aef8351124c8ab6c/orders?limit=200; GET /api/v1/qmt/orders; GET /api/v1/paper-v2/portfolios/paper_1d9b1f03700f4810aef8351124c8ab6c/run-events?run_id=prun_0a54d99c9e94458da9a5d0053bb9008b&limit=200",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "Paper v2 MiniQMT historical rejected orders still lack full broker diagnostics after BUG-163",
+  "trigger_condition": {
+    "fingerprint": "64a9239c04cb90cfeb92aeed",
+    "source_event_id": "FE-20260530-64a9239c04cb"
+  },
+  "verification_run_id": null
+}
