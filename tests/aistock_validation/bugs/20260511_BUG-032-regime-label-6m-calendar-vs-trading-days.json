@@ -6,10 +6,13 @@
   "module": "market.regime_label",
   "severity": "P2",
   "risk_area": "calculation_precision",
-  "status": "open",
+  "status": "fixed",
   "trigger_condition": {
     "scenario": "6m_return_computed_near_extended_holidays",
-    "examples": ["Spring Festival cluster", "Oct golden week"]
+    "examples": [
+      "Spring Festival cluster",
+      "Oct golden week"
+    ]
   },
   "reproduce_command": "manual: pytest scripts/test_regime_label.py + check 126 trading days vs 180 calendar days bias",
   "failing_run_id": null,
@@ -20,20 +23,21 @@
     "file:scripts/regime_label_daily.py"
   ],
   "fingerprint": "market.regime_label::6m_return::calendar_lookback_approximation",
-  "assigned_agent": "claude_code",
-  "fix_branch": null,
+  "assigned_agent": "codex",
+  "fix_branch": "bug/registry-market-regime-label-regime-label-6m-return-uses-calend-20260529-f595e1",
   "fix_commit": null,
   "verification_run_id": null,
   "created_at": "2026-05-11T00:00:00Z",
   "first_seen_at": "2026-05-11T00:43:21Z",
   "last_seen_at": "2026-05-11T00:43:21Z",
-  "fixed_at": null,
+  "fixed_at": "2026-05-29T06:01:15+08:00",
   "submitted_at": "2026-05-11T01:30:00Z",
   "closed_at": null,
   "allowed_write_scope": [
     "scripts/regime_label_daily.py",
     "scripts/test_regime_label.py",
-    "backend/tests/market/test_regime_label.py"
+    "backend/tests/market/test_regime_label.py",
+    "tests/aistock_validation/bugs/20260511_BUG-032-regime-label-6m-calendar-vs-trading-days.json"
   ],
   "suspected_modules": [
     "scripts/regime_label_daily.py"
@@ -52,6 +56,28 @@
       "actor": "codex_app",
       "action": "discovered",
       "note": "REV-7 T16 regime_label P2.2 - 6m calendar 180d vs 126 trading sessions"
+    },
+    {
+      "timestamp": "2026-05-29T05:57:00+08:00",
+      "actor": "codex_app",
+      "action": "github_issue_linked",
+      "note": "Linked historical BUG-032 to GitHub Issue #326 for standard workflow tracking."
+    },
+    {
+      "timestamp": "2026-05-29T06:01:15+08:00",
+      "actor": "codex_app",
+      "action": "fix_applied",
+      "note": "Replaced 180-calendar-day CSI300 6m return lookup with a 126-trading-session lag and added regression tests for SQL shape and parameters."
     }
+  ],
+  "github_issue_number": 326,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/326",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "production_backend_dependency_gate": "noop",
+  "validation_evidence": [
+    "Implemented SIX_MONTH_TRADING_SESSIONS=126 and changed fetch_csi300_6m_return to row-number based trading-session lag.",
+    "Changed ret_6m historical percentile series to LAG(close, 126) over trading rows instead of calendar 180-day lateral lookup.",
+    "Added backend/tests/market/test_regime_label.py coverage that rejects INTERVAL 180 days for the 6m return path."
   ]
 }

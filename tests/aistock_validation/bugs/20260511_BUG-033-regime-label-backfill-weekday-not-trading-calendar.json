@@ -6,10 +6,13 @@
   "module": "market.regime_label",
   "severity": "P2",
   "risk_area": "operational",
-  "status": "open",
+  "status": "fixed",
   "trigger_condition": {
     "scenario": "backfill_runs_on_holiday",
-    "examples": ["Spring Festival 2026-02-09 to 2026-02-15", "Oct golden week 2026-10-01 to 2026-10-07"]
+    "examples": [
+      "Spring Festival 2026-02-09 to 2026-02-15",
+      "Oct golden week 2026-10-01 to 2026-10-07"
+    ]
   },
   "reproduce_command": "python scripts/regime_label_daily.py --backfill --start 2026-02-01 --end 2026-02-20",
   "failing_run_id": null,
@@ -20,19 +23,20 @@
     "file:scripts/regime_label_daily.py"
   ],
   "fingerprint": "market.regime_label::backfill::weekday_loop_no_calendar",
-  "assigned_agent": "claude_code",
-  "fix_branch": null,
+  "assigned_agent": "codex",
+  "fix_branch": "bug/registry-market-regime-label-regime-label-6m-return-uses-calend-20260529-f595e1",
   "fix_commit": null,
   "verification_run_id": null,
   "created_at": "2026-05-11T00:00:00Z",
   "first_seen_at": "2026-05-11T00:43:21Z",
   "last_seen_at": "2026-05-11T00:43:21Z",
-  "fixed_at": null,
+  "fixed_at": "2026-05-29T06:09:12+08:00",
   "submitted_at": "2026-05-11T01:30:00Z",
   "closed_at": null,
   "allowed_write_scope": [
     "scripts/regime_label_daily.py",
-    "backend/tests/market/test_regime_label.py"
+    "backend/tests/market/test_regime_label.py",
+    "tests/aistock_validation/bugs/20260511_BUG-033-regime-label-backfill-weekday-not-trading-calendar.json"
   ],
   "suspected_modules": [
     "scripts/regime_label_daily.py"
@@ -52,6 +56,28 @@
       "actor": "codex_app",
       "action": "discovered",
       "note": "REV-7 T16 regime_label P2.3 - weekday loop vs trading calendar"
+    },
+    {
+      "timestamp": "2026-05-29T06:09:12+08:00",
+      "actor": "codex_app",
+      "action": "github_issue_linked",
+      "note": "Linked historical BUG-033 to GitHub Issue #328 for standard workflow tracking."
+    },
+    {
+      "timestamp": "2026-05-29T06:09:12+08:00",
+      "actor": "codex_app",
+      "action": "fix_applied",
+      "note": "Backfill now fetches actual CSI300 index trading dates from market.index_daily instead of iterating Mon-Fri weekdays."
     }
+  ],
+  "github_issue_number": 328,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/328",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "production_backend_dependency_gate": "noop",
+  "validation_evidence": [
+    "Implemented fetch_csi300_trading_dates(conn, start, end) using market.index_daily actual index trading rows.",
+    "Backfill loop now iterates fetched trading dates, avoiding holiday false warnings from weekday-only iteration.",
+    "Added tests covering trading-date query shape and main() backfill iteration over actual trading dates only."
   ]
 }
