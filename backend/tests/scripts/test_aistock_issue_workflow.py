@@ -729,6 +729,110 @@ def test_run_plan_existing_clean_active_worktree_returns_resume(
     assert "resume --bug-id BUG-199" in payload["next_command"]
 
 
+def test_run_plan_registry_intake_creates_separate_fix_worktree(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = isolated_workflow_root / "registry-worktree"
+    _write_json(registry / "tests" / "aistock_validation" / "bugs" / "BUG-199.json", _bug())
+    _write_json(
+        registry / "tmp" / "issue_workflow" / "BUG-199" / "state.json",
+        {
+            "schema_version": "aistock_issue_workflow_state_v1",
+            "bug_id": "BUG-199",
+            "state": "discovered",
+            "workflow_role": "registry_intake",
+            "source_bug_json": "tests/aistock_validation/bugs/BUG-199.json",
+            "branch": "bug/registry-validation-smoke",
+            "worktree": str(registry),
+        },
+    )
+    fix = isolated_workflow_root / "fix-worktree"
+    monkeypatch.setattr(workflow, "_state_roots_for_bug", lambda bug_id: [registry])
+    monkeypatch.setattr(workflow, "_target_names", lambda record, bug_id, task_slug=None: ("bug/BUG-199-fix", fix))
+    monkeypatch.setattr(workflow, "_build_code_intelligence_summary", lambda **kwargs: _fake_code_intelligence_summary())
+
+    def fake_git_snapshot(root: Path) -> dict[str, Any]:
+        branch = "bug/registry-validation-smoke" if root == registry else "bug/BUG-199-fix"
+        return {"ok": True, "branch": branch, "dirty": False, "dirty_count": 0}
+
+    def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
+        if args[:2] == ["worktree", "add"]:
+            fix.mkdir(parents=True)
+        return ""
+
+    monkeypatch.setattr(workflow, "_git_snapshot", fake_git_snapshot)
+    monkeypatch.setattr(workflow, "_git", fake_git)
+
+    payload = workflow.build_run_plan(
+        bug_id="BUG-199",
+        mode="plan",
+        issue_json=None,
+        changed_files=[],
+        create_worktree=True,
+        dry_run=False,
+        validation_evidence=[],
+        task_slug=None,
+        allow_missing_linkage=False,
+        allow_closed=False,
+        base="origin/main",
+        head="HEAD",
+    )
+
+    assert payload["workflow_gate"] == "planned"
+    assert payload["start"]["source_bug_json"].endswith("registry-worktree/tests/aistock_validation/bugs/BUG-199.json")
+    assert payload["start"]["worktree_plan"]["created"] is True
+    assert payload["start"]["active_decision"]["decision"] == "create_fix_from_registry_intake"
+    state = json.loads((fix / payload["start"]["state_path"]).read_text(encoding="utf-8"))
+    assert state["workflow_role"] == "fix"
+    assert state["worktree"] == str(fix)
+
+
+def test_run_plan_dirty_registry_intake_blocks_until_registry_commit(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = isolated_workflow_root / "registry-worktree"
+    issue = _write_json(registry / "tests" / "aistock_validation" / "bugs" / "BUG-199.json", _bug())
+    _write_json(
+        registry / "tmp" / "issue_workflow" / "BUG-199" / "state.json",
+        {
+            "schema_version": "aistock_issue_workflow_state_v1",
+            "bug_id": "BUG-199",
+            "state": "discovered",
+            "workflow_role": "registry_intake",
+            "source_bug_json": str(issue),
+            "branch": "bug/registry-validation-smoke",
+            "worktree": str(registry),
+        },
+    )
+    monkeypatch.setattr(workflow, "_state_roots_for_bug", lambda bug_id: [registry])
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {"ok": True, "branch": "bug/registry-validation-smoke", "dirty": True, "dirty_count": 2},
+    )
+
+    payload = workflow.build_run_plan(
+        bug_id="BUG-199",
+        mode="plan",
+        issue_json=None,
+        changed_files=[],
+        create_worktree=True,
+        dry_run=False,
+        validation_evidence=[],
+        task_slug=None,
+        allow_missing_linkage=False,
+        allow_closed=False,
+        base="origin/main",
+        head="HEAD",
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["active_decision"]["decision"] == "blocked_dirty_registry_intake"
+    assert "git commit" in payload["next_command"]
+
+
 def test_run_plan_dirty_active_worktree_blocks_duplicate_creation(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -880,8 +984,12 @@ def test_submit_bug_apply_with_existing_github_link_writes_registry(
     assert json.loads(allocator.read_text(encoding="utf-8"))["last_allocated"] == 118
     assert (isolated_workflow_root / payload["state_path"]).exists()
     assert payload["fix_chain"]["continue_to_fix_in_same_workflow"] is True
+    assert "--issue-json" in payload["fix_chain"]["next_command"]
+    assert "--create-worktree" in payload["fix_chain"]["next_command"]
     active_index = isolated_workflow_root / "tmp" / "issue_workflow" / "index" / "active_bugs.json"
-    assert json.loads(active_index.read_text(encoding="utf-8"))["active_bugs"]["BUG-118"]["active_state"] == "discovered"
+    active_entry = json.loads(active_index.read_text(encoding="utf-8"))["active_bugs"]["BUG-118"]
+    assert active_entry["active_state"] == "discovered"
+    assert active_entry["branch"] is None
 
 
 def test_submit_bug_registry_pr_only_stops_after_intake(
@@ -1391,6 +1499,46 @@ def test_postmortem_reports_timing_context_and_duplicate_active_count(
     assert payload["duplicate_active_count"] == 1
     assert (isolated_workflow_root / payload["postmortem_json_path"]).exists()
     assert (isolated_workflow_root / payload["postmortem_md_path"]).exists()
+
+
+def test_postmortem_prefers_fix_workflow_over_registry_intake(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = isolated_workflow_root / "registry-worktree"
+    fix = isolated_workflow_root / "fix-worktree"
+    _write_json(
+        registry / "tmp" / "issue_workflow" / "BUG-199" / "state.json",
+        {
+            "schema_version": "aistock_issue_workflow_state_v1",
+            "bug_id": "BUG-199",
+            "state": "validation_planned",
+            "workflow_role": "registry_intake",
+            "worktree": str(registry),
+            "branch": "bug/registry-validation-smoke",
+        },
+    )
+    _write_json(
+        fix / "tmp" / "issue_workflow" / "BUG-199" / "state.json",
+        {
+            "schema_version": "aistock_issue_workflow_state_v1",
+            "bug_id": "BUG-199",
+            "state": "pr_opened",
+            "workflow_role": "fix",
+            "worktree": str(fix),
+            "branch": "bug/BUG-199-fix",
+            "pr_url": "https://github.example/pull/199",
+        },
+    )
+    monkeypatch.setattr(workflow, "_state_roots_for_bug", lambda bug_id: [registry, fix])
+    monkeypatch.setattr(workflow, "_active_workflows_for_bug", lambda bug_id: [])
+    monkeypatch.setattr(workflow, "_stale_pr_check_for_bug", lambda bug_id: {"status": "checked", "open_prs": [], "merged_prs": []})
+
+    payload = workflow.build_postmortem_plan(bug_id="BUG-199")
+
+    assert payload["workflow_root"] == str(fix)
+    assert payload["state"]["state"] == "pr_opened"
+    assert payload["state"]["pr_url"] == "https://github.example/pull/199"
 
 
 def test_run_pr_mode_drafts_pr_automation_without_side_effects(
