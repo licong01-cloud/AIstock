@@ -1818,18 +1818,21 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                     payload_json={"proposal_count": len(cards.get("action_proposals", [])), "safety": cards["safety"], "dialogue_intent": dialogue_intent.value},
                 ),
             )
+        task_events = self.repository.list_records("task_events", filters={"task_id": task["task_id"]}, limit=self.configured_limit("task_events_detail"))["items"]
+        public_cards = self._public_chat_cards(cards)
         return {
-            "conversation": self.repository.get_record("conversations", conversation_id),
-            "user_message": user_message,
-            "assistant_message": assistant_message,
-            "task": self.repository.get_record("tasks", task["task_id"]),
-            "task_events": self.repository.list_records("task_events", filters={"task_id": task["task_id"]}, limit=self.configured_limit("task_events_detail"))["items"],
+            "conversation": self._public_conversation(self.repository.get_record("conversations", conversation_id)),
+            "user_message": self._public_conversation_message(user_message),
+            "assistant_message": self._public_conversation_message(assistant_message),
+            "task": self._public_task(self.repository.get_record("tasks", task["task_id"])),
+            "task_events": self._public_task_events(task_events),
+            "task_events_ref": {"endpoint": f"/api/v1/research-assistant/tasks/{task['task_id']}/events", "default_limit": self.configured_limit("task_events_detail")},
             "prompt_bundle": self._public_prompt_bundle(bundle),
             "context_pack": {"context_pack_id": context_pack["context_pack_id"], "pack_summary": context_pack["pack_summary"], "checksum": context_pack["checksum"]},
             "trace": {"trace_id": trace["trace_id"], "status": trace["status"], "duration_ms": trace.get("duration_ms"), "model_profile_id": trace.get("model_profile_id")},
             "mode_decision": mode_decision_json,
             "context_health": context_health,
-            "cards": cards,
+            "cards": public_cards,
         }
 
     @staticmethod
@@ -1837,16 +1840,141 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         return (message.strip().replace("\n", " ")[:48] or "新的对话")
 
     @staticmethod
+    def _public_conversation(conversation: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not isinstance(conversation, dict):
+            return None
+        return {
+            "conversation_id": conversation.get("conversation_id"),
+            "user_id": conversation.get("user_id"),
+            "title": conversation.get("title"),
+            "status": conversation.get("status"),
+            "created_at": conversation.get("created_at"),
+            "updated_at": conversation.get("updated_at"),
+        }
+
+    @staticmethod
+    def _public_conversation_message(message: dict[str, Any]) -> dict[str, Any]:
+        content_json = message.get("content_json") if isinstance(message.get("content_json"), dict) else {}
+        public: dict[str, Any] = {
+            "message_id": message.get("message_id"),
+            "conversation_id": message.get("conversation_id"),
+            "role": message.get("role"),
+            "content_text": message.get("content_text"),
+            "task_id": message.get("task_id"),
+            "prompt_bundle_id": message.get("prompt_bundle_id"),
+            "trace_id": message.get("trace_id"),
+            "is_visible": message.get("is_visible"),
+            "created_at": message.get("created_at"),
+            "updated_at": message.get("updated_at"),
+        }
+        if message.get("role") == "assistant":
+            public["content_json"] = {
+                "audit_summary": content_json.get("audit_summary") if isinstance(content_json.get("audit_summary"), dict) else {},
+            }
+        else:
+            public["content_json"] = {
+                "phase": content_json.get("phase"),
+                "dialogue_intent": content_json.get("dialogue_intent"),
+                "dialogue_mode": content_json.get("dialogue_mode"),
+            }
+        return public
+
+    @staticmethod
+    def _public_task(task: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not isinstance(task, dict):
+            return None
+        return {
+            "task_id": task.get("task_id"),
+            "task_type": task.get("task_type"),
+            "title": task.get("title"),
+            "status": task.get("status"),
+            "risk_level": task.get("risk_level"),
+            "created_by": task.get("created_by"),
+            "created_at": task.get("created_at"),
+            "updated_at": task.get("updated_at"),
+            "completed_at": task.get("completed_at"),
+        }
+
+    @staticmethod
+    def _public_task_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            {
+                "event_id": event.get("event_id"),
+                "task_id": event.get("task_id"),
+                "event_type": event.get("event_type"),
+                "severity": event.get("severity"),
+                "message": event.get("message"),
+                "created_at": event.get("created_at"),
+            }
+            for event in events
+            if isinstance(event, dict)
+        ]
+
+    @classmethod
+    def _public_chat_cards(cls, cards: dict[str, Any]) -> dict[str, Any]:
+        public_keys = {
+            "intent_type",
+            "dialogue_mode",
+            "mode_decision",
+            "action_proposals",
+            "capability_cards",
+            "missing_capability_keys",
+            "status_rail",
+            "capability_summary",
+            "safety",
+            "main_reply_policy",
+            "ui_display",
+            "mcp_route_decision",
+            "runtime_mcp_catalog",
+            "plan_card",
+            "clarification_card",
+            "context_health",
+            "runtime_code",
+            "local_data_management",
+            "local_data_phases",
+            "mcp_summary_result",
+            "mcp_result_cards",
+            "mcp_tool_event",
+            "mcp_execution_result",
+        }
+        public = {key: value for key, value in cards.items() if key in public_keys}
+        if isinstance(public.get("mcp_summary_result"), dict):
+            public["mcp_summary_result"] = cls._compact_chat_mcp_summary_result(public["mcp_summary_result"])
+        if isinstance(public.get("mcp_result_cards"), list):
+            public["mcp_result_cards"] = public["mcp_result_cards"][:3]
+        if isinstance(public.get("mcp_execution_result"), dict):
+            execution = dict(public["mcp_execution_result"])
+            if isinstance(execution.get("human_cards"), list):
+                execution["human_cards"] = execution["human_cards"][:3]
+            public["mcp_execution_result"] = execution
+        return public
+
+    @staticmethod
+    def _compact_chat_mcp_summary_result(summary: dict[str, Any]) -> dict[str, Any]:
+        compact = dict(summary)
+        items = compact.get("items") if isinstance(compact.get("items"), list) else []
+        compact["items"] = items[:3]
+        compact["items_truncated"] = max(0, len(items) - len(compact["items"]))
+        if isinstance(compact.get("artifact_refs"), list):
+            compact["artifact_refs"] = compact["artifact_refs"][:3]
+        return compact
+
+    @staticmethod
     def _public_prompt_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
+        selection_trace = bundle.get("selection_trace_json") if isinstance(bundle.get("selection_trace_json"), dict) else {}
         return {
             "prompt_bundle_id": bundle["prompt_bundle_id"],
             "phase": bundle["phase"],
             "checksum": bundle["checksum"],
             "activation_id": bundle.get("activation_id"),
-            "version_refs": bundle.get("version_refs") or [],
-            "node_refs": bundle["node_refs"],
-            "selection_trace_json": bundle["selection_trace_json"],
-            "cache_path": bundle.get("cache_path"),
+            "node_count": len(bundle.get("node_refs") or []),
+            "selected_prompt_keys": [str(item.get("prompt_key")) for item in bundle.get("node_refs", []) if isinstance(item, dict)],
+            "selection_trace_json": {
+                "algorithm": selection_trace.get("algorithm"),
+                "dialogue_intent": selection_trace.get("dialogue_intent"),
+                "dialogue_mode": selection_trace.get("dialogue_mode"),
+                "phase": selection_trace.get("phase"),
+            },
         }
 
     def _chat_messages_for_llm(

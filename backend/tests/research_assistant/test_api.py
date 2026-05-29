@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -302,6 +304,34 @@ def test_bug_158_api_routes_chinese_business_mcp_overviews() -> None:
         assert route["summary_first"] is True
         assert data["cards"].get("local_data_management") is None
         assert data["cards"]["capability_summary"]["route"] == f"{server}/{tool}"
+
+
+def test_bug_161_api_chat_turn_is_summary_first_and_does_not_leak_unrelated_prompt_nodes() -> None:
+    client = _client()
+    cases = {
+        "因子库有哪些因子？只要概要列表，不要全量详情。": ("aistock-factor-library", "factor_library_list"),
+        "查看因子独立指标计算能力概要。": ("aistock-factor-metrics", "factor_metrics_plan"),
+        "查看因子相关性计算能力概要。": ("aistock-factor-correlation", "factor_corr_plan"),
+        "查看模型库概要。": ("aistock-model-registry", "model_registry_list"),
+        "查看策略库概要。": ("aistock-strategy-governance", "strategy_governance_list_packages"),
+        "查看执行策略库概要。": ("aistock-execution-policy", "execution_policy_list_algos"),
+    }
+    for message, (server, tool) in cases.items():
+        data = client.post(
+            "/api/v1/research-assistant/chat/turn",
+            json={"message": message, "allow_execute": False},
+        ).json()["data"]
+        body_text = str(data)
+        route = data["cards"]["mcp_route_decision"]
+        assert route["server_key"] == server
+        assert route["tool_name"] == tool
+        assert "node_refs" not in data["prompt_bundle"]
+        assert "prompt.local_data_management" not in body_text
+        assert "workflow.local_data_check_repair" not in body_text
+        assert "tool_guard.mcp_local_data" not in body_text
+        assert "cards" not in data["assistant_message"]["content_json"]
+        assert "payload_json" not in str(data["task_events"])
+        assert len(json.dumps(data, ensure_ascii=False).encode("utf-8")) < 20000
 
 
 def test_research_assistant_api_errors_are_explicit() -> None:

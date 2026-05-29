@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from backend.services.research_assistant.models import (
@@ -779,7 +781,7 @@ def test_chat_turn_chinese_factor_library_request_does_not_surface_mock_counts()
     assert result["mode_decision"]["intent_type"] == "factor_library_request"
     assert result["cards"]["mcp_route_decision"]["domain"] == "factor_library"
     assert result["cards"]["mcp_route_decision"]["summary_first"] is True
-    keys = {node["prompt_key"] for node in result["prompt_bundle"]["node_refs"]}
+    keys = set(result["prompt_bundle"]["selected_prompt_keys"])
     assert "domain.factor_library" in keys
 
 
@@ -828,6 +830,36 @@ def test_chat_turn_auto_executes_read_only_mcp_summary_cards() -> None:
     assert any(event["event_type"] == "mcp_done" for event in result["task_events"])
 
 
+def test_bug_161_chat_turn_public_response_is_compact_and_hides_unrelated_prompt_nodes() -> None:
+    class FactorOverviewLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            return LlmCallResult(
+                content="There are exactly 999 factors: fake_alpha.",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    svc = _chat_service(FactorOverviewLlmClient())
+
+    result = svc.chat_turn(ChatTurnRequest(message="因子库有哪些因子？只要概要列表，不要全量详情。"))
+    body = json.dumps(result, ensure_ascii=False)
+
+    assert "prompt.local_data_management" not in body
+    assert "workflow.local_data_check_repair" not in body
+    assert "tool_guard.mcp_local_data" not in body
+    assert "node_refs" not in result["prompt_bundle"]
+    assert "selected_prompt_keys" in result["prompt_bundle"]
+    assert "cards" not in result["assistant_message"]["content_json"]
+    assert "payload_json" not in body
+    assert len(body.encode("utf-8")) < 20000
+    assert result["cards"]["mcp_route_decision"]["server_key"] == "aistock-factor-library"
+    assert result["cards"]["mcp_route_decision"]["tool_name"] == "factor_library_list"
+    assert result["cards"]["mcp_summary_result"]["items_truncated"] >= 0
+
+
 def test_chat_turn_includes_runtime_code_visibility_card() -> None:
     svc = _chat_service(FakeLlmClient())
 
@@ -839,7 +871,8 @@ def test_chat_turn_includes_runtime_code_visibility_card() -> None:
     assert runtime_code["runtime_loaded_git_commit_short"]
     assert runtime_code["current_repo_git_commit_short"]
     assert runtime_code["operator_message"]
-    assert "runtime_code" in result["assistant_message"]["content_json"]["cards"]
+    assert "runtime_code" in result["cards"]
+    assert "cards" not in result["assistant_message"]["content_json"]
 
 
 def test_chat_turn_chinese_factor_library_overview_auto_executes_summary_list() -> None:
@@ -901,7 +934,7 @@ def test_chat_turn_chinese_execution_policy_catalog_uses_read_only_list() -> Non
     assert route["side_effect"] == "read_only"
     assert route["preflight_required"] is False
     assert route["summary_first"] is True
-    keys = {node["prompt_key"] for node in result["prompt_bundle"]["node_refs"]}
+    keys = set(result["prompt_bundle"]["selected_prompt_keys"])
     assert "domain.execution_policy" in keys
 
 
@@ -949,7 +982,7 @@ def test_chat_turn_bug_diagnosis_request_is_first_class_intent() -> None:
     assert result["context_health"]["show_badge"] is False
     assert result["cards"]["status_rail"][2] == {"label": "等待诊断证据", "status": "current"}
     assert result["prompt_bundle"]["selection_trace_json"]["dialogue_intent"] == "bug_diagnosis_request"
-    keys = {node["prompt_key"] for node in result["prompt_bundle"]["node_refs"]}
+    keys = set(result["prompt_bundle"]["selected_prompt_keys"])
     assert "domain.qe_experiment" not in keys
     assert "workflow.qe_draft_then_approval" not in keys
 
@@ -965,7 +998,7 @@ def test_chat_turn_ambiguous_request_needs_minimal_clarification_only() -> None:
     assert "plan_card" not in result["cards"]
     assert result["cards"]["clarification_card"]["questions"]
     assert result["cards"]["action_proposals"] == []
-    keys = {node["prompt_key"] for node in result["prompt_bundle"]["node_refs"]}
+    keys = set(result["prompt_bundle"]["selected_prompt_keys"])
     assert "domain.qe_experiment" not in keys
     assert "workflow.qe_draft_then_approval" not in keys
 
@@ -987,7 +1020,7 @@ def test_mode_router_m0_matrix_keeps_keywords_from_starting_workflow() -> None:
         if expected_mode == "dialogue":
             assert result["cards"]["action_proposals"] == []
             assert "plan_card" not in result["cards"]
-            keys = {node["prompt_key"] for node in result["prompt_bundle"]["node_refs"]}
+            keys = set(result["prompt_bundle"]["selected_prompt_keys"])
             assert "workflow.qe_draft_then_approval" not in keys
             assert "tool_guard.mcp_qe" not in keys
             assert "Context Pack" not in result["assistant_message"]["content_text"]

@@ -1,0 +1,63 @@
+{
+  "actual": "chat/turn returns top-level prompt_bundle, task_events, assistant_message.content_json and cards with duplicated verbose data; prompt_bundle contains prompt.local_data_management and related local-data nodes; six live prompts produce roughly 28-39KB responses.",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/service.py",
+    "backend/tests/research_assistant/test_service.py",
+    "backend/tests/research_assistant/test_api.py",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260529_BUG-161-research-assistant-chat-turn-leaks-unrelated-local-data-prompt-nodes-and.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-161",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-29T11:32:55.647664Z",
+  "description": "chat/turn returns top-level prompt_bundle, task_events, assistant_message.content_json and cards with duplicated verbose data; prompt_bundle contains prompt.local_data_management and related local-data nodes; six live prompts produce roughly 28-39KB responses.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260529-b068ed586a95",
+      "timestamp": "2026-05-29T11:32:55.647661Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "chat/turn responses for summary-style MCP overview prompts should be compact, should expose only relevant route/card summaries and detail refs, and should not leak unrelated prompt.local_data_management/tool guard node refs in the public response.",
+  "first_seen_at": "2026-05-29T11:32:55.647664Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 381,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/381",
+  "last_seen_at": "2026-05-29T11:32:55.647664Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "POST http://127.0.0.1:8001/api/v1/research-assistant/chat/turn with message='因子库有哪些因子？只要概要列表，不要全量详情。' and allow_execute=false; inspect response bytes and prompt_bundle.node_refs for prompt.local_data_management",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Research Assistant chat turn leaks unrelated local-data prompt nodes and heavy MCP payloads",
+  "trigger_condition": {
+    "fingerprint": "b068ed586a958b2daf2c0163",
+    "source_event_id": "FE-20260529-b068ed586a95"
+  },
+  "verification_run_id": null
+}
