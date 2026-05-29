@@ -30,6 +30,12 @@
       "actor": "codex",
       "note": "Registry-only metadata cleanup scope limited to BUG-152/153/154/156 records, BUG-157 record, and allocator; no product code/runtime files are in scope.",
       "timestamp": "2026-05-29T07:59:42Z"
+    },
+    {
+      "action": "final_metadata_cleanup",
+      "actor": "codex",
+      "note": "Removed BUG-157 residual workflow_gate after close-sync so fixed Research Assistant BUG records have no non-final workflow gate metadata.",
+      "timestamp": "2026-05-29T08:38:56Z"
     }
   ],
   "evidence_uris": [],
@@ -74,6 +80,5 @@
     "python -m nox -s l0 research_assistant_backend research_assistant_mcp_contract --no-error-on-missing-interpreters -> 3 sessions successful; research_assistant_backend 73 passed; research_assistant_mcp_contract 26 passed",
     "python -m nox -s validation_center_backend validation_module_registry_l0 --no-error-on-missing-interpreters -> 2 sessions successful; validation_center_backend 262 passed; validation_module_registry_l0 8 passed"
   ],
-  "verification_run_id": null,
-  "workflow_gate": "allowed"
+  "verification_run_id": null
 }
