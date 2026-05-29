@@ -108,7 +108,7 @@ Every PR-ready or merged workflow should expose a `postmortem` next command. Thi
 | Phase | Item | Reason for deferral |
 | --- | --- | --- |
 | v2.3 | Full merge finalizer including close-sync PR merge authorization loop | Needs careful GitHub merge edge-case testing |
-| v2.3 | Batch validation selector hardening | Needs module-specific validation catalog review |
+| v2.3 | Batch validation selector hardening | Implemented baseline; continue module catalog tuning as real batches expose gaps |
 | v2.4 | PR Quality warning-to-blocking for P0/P1 workflow evidence | Should bake in warning mode first |
 | v2.4 | Nightly CodeGraph freshness artifact | Depends on self-hosted runner restoration |
 | v2.5 | Understand Anything weekly graph | Not needed for small issue workflow |
@@ -125,6 +125,18 @@ The first v2.3 slice adds a `merge-finalizer` command to reduce post-merge manua
 
 This keeps the default safe path unchanged: normal agents can stop at a close-sync PR, while authorized full aftercare can proceed to cleanup. It does not touch production runtime, DB, DDL, or dependencies.
 
+## 6.2 v2.3 Batch Validation Selector Implementation Baseline
+
+The second v2.3 slice hardens same-module batching without making ordinary single-issue repair slower:
+
+- `start-batch` now emits `batch_selector` with shared allowed scope, selected required plans, production/dependency gates, and per-issue validation coverage.
+- `start-batch` blocks records that have no `allowed_write_scope` / `suggested_scope`, so a batch cannot start with ambiguous write ownership.
+- `finish-batch` re-runs the selector against the actual changed files and emits `scope_check`; changed files outside the shared scope return `workflow_gate=blocked`.
+- Batch scope expansion, non-noop production gates, or missing shared validation coverage require a split batch or explicit issue scope correction before PR.
+- The selector reuses `test_plans.yaml` / ownership catalog selection instead of introducing a new validation truth source.
+
+This improves efficiency by allowing compatible issues to share context and validation while preserving per-issue evidence and preventing hidden cross-scope changes.
+
 ## 7. Acceptance Matrix
 
 | ID | Requirement | Validation |
@@ -137,6 +149,8 @@ This keeps the default safe path unchanged: normal agents can stop at a close-sy
 | IWEH-006 | Quickstart documents infra stop, continue-to-fix, and postmortem defaults | Markdown review |
 | IWEH-007 | Root remains clean after validation | `git status -sb --untracked-files=all` |
 | IWEH-008 | PR title/body issue references are available to PR Quality without GitHub API calls | Workflow env review plus unit test for `AISTOCK_PR_TITLE`/`AISTOCK_PR_BODY` |
+| IWEH-009 | Batch selector records shared scope and validation coverage | Unit test for `start-batch` payload and batch state |
+| IWEH-010 | Batch finish blocks changed files outside shared scope | Unit test for `finish-batch` with out-of-scope changed file |
 
 ## 8. Expected Efficiency Impact
 

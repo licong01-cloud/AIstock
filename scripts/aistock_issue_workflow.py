@@ -1729,6 +1729,106 @@ def _batch_code_intelligence_query(records: list[dict[str, Any]], changed_files:
     return " ".join(part for part in parts if part).strip() or "AIstock batch issue"
 
 
+def _record_scope(record: dict[str, Any]) -> list[str]:
+    return flow._unique_strings(
+        flow._as_list(record.get("allowed_write_scope")) or flow._as_list(record.get("suggested_scope"))
+    )
+
+
+def _record_required_verification(record: dict[str, Any]) -> list[str]:
+    return flow._unique_strings(
+        flow._as_list(record.get("required_verification")) or flow._as_list(record.get("suggested_validation"))
+    )
+
+
+def _path_matches_scope(path: str, scope: list[str]) -> bool:
+    normalized = path.replace("\\", "/").lstrip("./")
+    for item in scope:
+        allowed = str(item).replace("\\", "/").lstrip("./").rstrip("/")
+        if normalized and (
+            normalized == allowed
+            or normalized.startswith(allowed + "/")
+            or flow._pattern_matches(allowed, normalized)
+            or flow._pattern_matches(allowed.rstrip("/") + "/**", normalized)
+        ):
+            return True
+    return False
+
+
+def _batch_scope_check(changed_files: list[str], allowed_scope: list[str]) -> dict[str, Any]:
+    changed = _normalize_changed_files(changed_files)
+    if not changed:
+        return {
+            "schema_version": "aistock_batch_scope_check_v1",
+            "status": "skipped_no_changed_files",
+            "allowed_scope": allowed_scope,
+            "changed_files": [],
+            "violations": [],
+        }
+    violations = [path for path in changed if not _path_matches_scope(path, allowed_scope)]
+    return {
+        "schema_version": "aistock_batch_scope_check_v1",
+        "status": "passed" if not violations else "failed",
+        "allowed_scope": allowed_scope,
+        "changed_files": changed,
+        "violations": violations,
+    }
+
+
+def _batch_validation_selector(
+    records: list[dict[str, Any]],
+    *,
+    module: str,
+    changed_files: list[str] | None = None,
+) -> dict[str, Any]:
+    per_issue: dict[str, dict[str, Any]] = {}
+    blocking: list[str] = []
+    warnings: list[str] = []
+    shared_scope = flow._unique_strings(path for record in records for path in _record_scope(record))
+    selector_files = _normalize_changed_files(changed_files) or shared_scope
+    selected = flow.select_validation(selector_files, module=module)
+    required_plans = flow._unique_strings(selected.get("required_plans") or [])
+    required_set = set(required_plans)
+
+    for record in records:
+        bug_id = str(record.get("bug_id") or record.get("candidate_id") or record.get("title"))
+        scope = _record_scope(record)
+        required = _record_required_verification(record)
+        missing_required = [plan for plan in required if plan and plan not in required_set]
+        if not scope:
+            blocking.append(f"{bug_id} has no allowed_write_scope/suggested_scope for safe batching")
+        if missing_required:
+            blocking.append(f"{bug_id} required verification not covered by shared selector: {missing_required}")
+        per_issue[bug_id] = {
+            "allowed_write_scope": scope,
+            "required_verification": required,
+            "missing_required_plans": missing_required,
+            "covered_by_shared_validation": not missing_required,
+        }
+
+    gates = selected.get("production_gates") or {}
+    special_gates = {key: value for key, value in gates.items() if value != "noop"}
+    if special_gates:
+        blocking.append(f"batch includes production/dependency gates and must be split or handled explicitly: {special_gates}")
+    if len(shared_scope) > 20:
+        warnings.append("batch shared scope is broad; consider splitting before PR if review becomes unclear")
+
+    return {
+        "schema_version": "aistock_batch_validation_selector_v1",
+        "module": module,
+        "shared_files": shared_scope,
+        "selector_files": selector_files,
+        "selected_validation": selected,
+        "required_plans": required_plans,
+        "recommended_plans": flow._unique_strings(selected.get("recommended_plans") or []),
+        "production_gates": gates,
+        "per_issue": per_issue,
+        "blocking": blocking,
+        "warnings": warnings,
+        "workflow_gate": "compatible" if not blocking else "blocked",
+    }
+
+
 def _build_batch_code_intelligence_summary(
     *,
     batch_id: str,
@@ -2493,6 +2593,9 @@ def _batch_signature(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
     if len(verification_signatures) != 1:
         raise WorkflowError("batch issues must share the same required_verification signature")
+    selector = _batch_validation_selector(records, module=modules[0])
+    if selector["workflow_gate"] != "compatible":
+        raise WorkflowError("; ".join(selector["blocking"]))
     bug_ids = [str(record.get("bug_id")) for record in records]
     batch_id = f"BATCH-{_slug(modules[0], max_len=32)}-{_today_compact()}-{_short_hash(*bug_ids)}"
     return {
@@ -2501,6 +2604,7 @@ def _batch_signature(records: list[dict[str, Any]]) -> dict[str, Any]:
         "risk_tier": risks[0],
         "bug_ids": bug_ids,
         "required_verification": list(next(iter(verification_signatures))),
+        "batch_selector": selector,
     }
 
 
@@ -2522,6 +2626,9 @@ def build_start_batch_plan(
     signature = _batch_signature(records)
     batch_plan = flow.build_batch_plan(records)
     batch_plan["batch_id"] = signature["batch_id"]
+    batch_plan["batch_selector"] = signature["batch_selector"]
+    batch_plan["shared_files"] = signature["batch_selector"]["shared_files"]
+    batch_plan["shared_validation"] = signature["batch_selector"]["required_plans"]
     branch, worktree = _batch_target_names(signature["batch_id"], signature["module"], task_slug)
     worktree_plan = _maybe_create_named_worktree(
         branch=branch,
@@ -2578,6 +2685,7 @@ def build_start_batch_plan(
             "context_dir": _repo_rel(context_dir, target_root),
             "fix_ready_dir": _repo_rel(fix_ready_dir, target_root),
             "context_metrics": context_metrics,
+            "batch_selector": signature["batch_selector"],
             "updated_at": _utc_now(),
         })
         _write_state(
@@ -2596,6 +2704,7 @@ def build_start_batch_plan(
             context_dir=_repo_rel(context_dir, target_root),
             fix_ready_dir=_repo_rel(fix_ready_dir, target_root),
             code_intelligence=batch_code_intelligence,
+            batch_selector=signature["batch_selector"],
             context_metrics=context_metrics,
             next_actions=[
                 "switch_to_batch_worktree_if_created",
@@ -2617,6 +2726,7 @@ def build_start_batch_plan(
         "state_path": _repo_rel(_state_path(signature["batch_id"], target_root), target_root),
         "events_path": _repo_rel(_events_path(signature["batch_id"], target_root), target_root),
         "code_intelligence": batch_code_intelligence,
+        "batch_selector": signature["batch_selector"],
         "context_metrics": context_metrics,
         "workflow_gate": "ready_for_batch_fix",
         "next_command": f"python scripts/aistock_issue_workflow.py finish-batch --batch-id {signature['batch_id']} --plan-only",
@@ -2732,6 +2842,11 @@ def build_finish_batch_plan(
     canonical_batch_id = signature["batch_id"]
     changed = changed_files if changed_files is not None else flow.changed_files_from_git(base, head)
     validation = flow.select_validation(changed, module=signature["module"])
+    batch_selector = _batch_validation_selector(records, module=signature["module"], changed_files=changed)
+    scope_check = _batch_scope_check(changed, batch_selector["shared_files"])
+    selector_blocking = list(batch_selector.get("blocking") or [])
+    if scope_check["status"] == "failed":
+        selector_blocking.append(f"batch changed files exceed shared scope: {scope_check['violations']}")
     code_intelligence_summary = _build_batch_code_intelligence_summary(
         batch_id=canonical_batch_id,
         records=records,
@@ -2742,7 +2857,7 @@ def build_finish_batch_plan(
     if codegraph_tests:
         validation["codegraph_suggested_tests"] = codegraph_tests
     evidence = [item for item in validation_evidence if item.strip()]
-    closure_ready = bool(evidence) or plan_only or allow_missing_evidence
+    closure_ready = (bool(evidence) or plan_only or allow_missing_evidence) and not selector_blocking
     commit_map = _parse_issue_commit_map(issue_commit)
     output_dir = REPO_ROOT / WORKFLOW_ROOT / canonical_batch_id
     pr_body_path = output_dir / "pr-body.md"
@@ -2753,6 +2868,8 @@ def build_finish_batch_plan(
         "batch_id": canonical_batch_id,
         "changed_files": changed,
         "selected_validation": validation,
+        "batch_selector": batch_selector,
+        "scope_check": scope_check,
         "validation_evidence": evidence,
         "per_issue_commit_map": commit_map,
         "per_issue_closure_map": {
@@ -2762,6 +2879,7 @@ def build_finish_batch_plan(
         "code_intelligence": code_intelligence_summary,
         "closure_ready": closure_ready,
         "production_gates": validation.get("production_gates") or {},
+        "blocking": selector_blocking,
     }
     _write_json(output_dir / "finish-plan.json", finish_plan)
     if evidence:
@@ -2795,7 +2913,7 @@ def build_finish_batch_plan(
             "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
             "fallback_used": code_intelligence_summary.get("fallback_used"),
         },
-        stop_reason=None if closure_ready else "validation_evidence_missing",
+        stop_reason=None if closure_ready else ("; ".join(selector_blocking) if selector_blocking else "validation_evidence_missing"),
         next_actions=[
             "commit_only_batch_files",
             "push_task_branch",
@@ -2805,7 +2923,7 @@ def build_finish_batch_plan(
     )
     payload = {
         **finish_plan,
-        "workflow_gate": "ready_for_pr" if closure_ready else "validation_evidence_missing",
+        "workflow_gate": "ready_for_pr" if closure_ready else ("blocked" if selector_blocking else "validation_evidence_missing"),
         "required_verification": validation.get("required_plans") or [],
         "recommended_verification": validation.get("recommended_plans") or [],
         "code_intelligence": {
@@ -2821,7 +2939,7 @@ def build_finish_batch_plan(
         "events_path": _repo_rel(_events_path(canonical_batch_id)),
     }
     if not closure_ready:
-        payload["error"] = "validation evidence is required unless --plan-only or --allow-missing-evidence is used"
+        payload["error"] = "; ".join(selector_blocking) if selector_blocking else "validation evidence is required unless --plan-only or --allow-missing-evidence is used"
     return payload
 
 

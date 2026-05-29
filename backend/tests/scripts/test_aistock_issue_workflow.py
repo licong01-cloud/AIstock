@@ -327,12 +327,33 @@ def test_start_batch_writes_batch_state_and_contexts(
     assert payload["batch_id"].startswith("BATCH-validation-guardrails-")
     assert payload["bug_ids"] == ["BUG-199", "BUG-200"]
     assert payload["code_intelligence"]["context_ref"].endswith("codegraph-context.md")
+    assert payload["batch_selector"]["workflow_gate"] == "compatible"
+    assert payload["batch_selector"]["shared_files"] == ["scripts/aistock_issue_workflow.py"]
     assert payload["context_metrics"]["BUG-199"]["context_md"]["estimated_tokens"] > 0
     assert (isolated_workflow_root / payload["batch_state_path"]).exists()
     assert (isolated_workflow_root / payload["context_dir"] / "BUG-199.md").exists()
     assert (isolated_workflow_root / payload["fix_ready_dir"] / "BUG-200.json").exists()
     context_pack = json.loads((isolated_workflow_root / payload["context_dir"] / "BUG-199.json").read_text(encoding="utf-8"))
     assert context_pack["code_intelligence"]["affected_tests_ref"].endswith("affected-tests.json")
+
+
+def test_start_batch_rejects_missing_scope(isolated_workflow_root: Path) -> None:
+    bugs_root = workflow.BUGS_ROOT
+    _write_json(bugs_root / "bug199.json", _bug(allowed_write_scope=[]))
+    _write_json(
+        bugs_root / "bug200.json",
+        _bug(bug_id="BUG-200", github_issue_number=200, github_issue_url="https://github.example/issues/200"),
+    )
+
+    with pytest.raises(workflow.WorkflowError, match="no allowed_write_scope"):
+        workflow.build_start_batch_plan(
+            bug_ids=["BUG-199", "BUG-200"],
+            create_worktree=False,
+            dry_run=True,
+            task_slug=None,
+            allow_missing_linkage=False,
+            allow_closed=False,
+        )
 
 
 def test_finish_batch_plan_generates_per_issue_pr_body(
@@ -365,6 +386,7 @@ def test_finish_batch_plan_generates_per_issue_pr_body(
 
     assert payload["schema_version"] == "aistock_issue_workflow_finish_batch_v1"
     assert payload["workflow_gate"] == "ready_for_pr"
+    assert payload["scope_check"]["status"] == "passed"
     assert payload["per_issue_commit_map"] == {"BUG-199": "abc1234", "BUG-200": "def5678"}
     assert payload["codegraph_suggested_tests"] == ["backend/tests/scripts/test_aistock_issue_workflow.py"]
     pr_body = (isolated_workflow_root / payload["pr_body_path"]).read_text(encoding="utf-8")
@@ -373,6 +395,71 @@ def test_finish_batch_plan_generates_per_issue_pr_body(
     assert "Per-issue closure map" in pr_body
     assert "Code intelligence" in pr_body
     assert "backend/tests/scripts/test_aistock_issue_workflow.py" in pr_body
+
+
+def test_finish_batch_blocks_scope_expansion(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bugs_root = workflow.BUGS_ROOT
+    _write_json(bugs_root / "bug199.json", _bug())
+    _write_json(
+        bugs_root / "bug200.json",
+        _bug(bug_id="BUG-200", github_issue_number=200, github_issue_url="https://github.example/issues/200"),
+    )
+    monkeypatch.setattr(workflow, "_build_batch_code_intelligence_summary", lambda **kwargs: _fake_code_intelligence_summary(item_id=kwargs["batch_id"]))
+
+    payload = workflow.build_finish_batch_plan(
+        batch_id=None,
+        bug_ids=["BUG-199", "BUG-200"],
+        changed_files=["frontend/src/app/page.tsx"],
+        base="origin/main",
+        head="HEAD",
+        validation_evidence=["python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> passed"],
+        issue_commit=["BUG-199=abc1234", "BUG-200=def5678"],
+        plan_only=False,
+        allow_missing_evidence=False,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["scope_check"]["status"] == "failed"
+    assert "exceed shared scope" in payload["error"]
+
+
+def test_finish_batch_scope_check_accepts_glob_scope(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bugs_root = workflow.BUGS_ROOT
+    _write_json(
+        bugs_root / "bug199.json",
+        _bug(allowed_write_scope=["tests/aistock_validation/bugs/**"]),
+    )
+    _write_json(
+        bugs_root / "bug200.json",
+        _bug(
+            bug_id="BUG-200",
+            github_issue_number=200,
+            github_issue_url="https://github.example/issues/200",
+            allowed_write_scope=["tests/aistock_validation/bugs/**"],
+        ),
+    )
+    monkeypatch.setattr(workflow, "_build_batch_code_intelligence_summary", lambda **kwargs: _fake_code_intelligence_summary(item_id=kwargs["batch_id"]))
+
+    payload = workflow.build_finish_batch_plan(
+        batch_id=None,
+        bug_ids=["BUG-199", "BUG-200"],
+        changed_files=["tests/aistock_validation/bugs/BUG-199.json"],
+        base="origin/main",
+        head="HEAD",
+        validation_evidence=["python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> passed"],
+        issue_commit=["BUG-199=abc1234", "BUG-200=def5678"],
+        plan_only=False,
+        allow_missing_evidence=False,
+    )
+
+    assert payload["workflow_gate"] == "ready_for_pr"
+    assert payload["scope_check"]["status"] == "passed"
 
 
 def test_fast_path_classifies_docs_only_as_t0(isolated_workflow_root: Path) -> None:

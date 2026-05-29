@@ -355,7 +355,7 @@ python scripts/aistock_issue_workflow.py start-batch `
   --create-worktree
 ```
 
-The command writes one batch state plus per-issue Context Packs under `tmp/issue_workflow/<BATCH-ID>/`. In KG-4, the batch state and per-issue Context Packs also include a shared `code_intelligence` block so Codex / Claude Code can reuse one CodeGraph context and affected-tests artifact instead of repeating code exploration for every BUG. After the shared fix and required validation:
+The command writes one batch state plus per-issue Context Packs under `tmp/issue_workflow/<BATCH-ID>/`. The batch payload includes `batch_selector`, which records the shared allowed scope, selected required validation plans, production/dependency gates, and per-issue coverage. In KG-4, the batch state and per-issue Context Packs also include a shared `code_intelligence` block so Codex / Claude Code can reuse one CodeGraph context and affected-tests artifact instead of repeating code exploration for every BUG. After the shared fix and required validation:
 
 ```powershell
 python scripts/aistock_issue_workflow.py finish-batch `
@@ -365,7 +365,7 @@ python scripts/aistock_issue_workflow.py finish-batch `
   --issue-commit BUG-016=<sha>
 ```
 
-Batch PR bodies must preserve per-issue closure maps, shared code-intelligence refs, and `Closes #...` lines for every linked GitHub Issue.
+`finish-batch` re-checks the actual changed files against the selector scope and returns `scope_check`. If any changed file exceeds the shared scope, or if the selector finds production/dependency gates that cannot be safely shared, the workflow returns `workflow_gate=blocked`; split the batch or update the issue scopes before continuing. Batch PR bodies must preserve per-issue closure maps, shared code-intelligence refs, and `Closes #...` lines for every linked GitHub Issue.
 
 ## Stop Conditions
 
