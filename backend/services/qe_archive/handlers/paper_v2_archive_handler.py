@@ -18,6 +18,10 @@ Idempotency strategy (per D5 Q3.b):
                                   insert new version if absent or differs
   - all fact / event tables     INSERT ... ON CONFLICT (natural_key) DO NOTHING
 
+ID canonicalization (BUG-009):
+  - source BIGINT event/audit ids are archived as raw decimal TEXT strings
+  - no table prefixes, no float conversion, no locale formatting
+
 Boundary:
   - Reads from paper_v2.* schema in the SAME connection (single-DB design)
   - Writes to qe_archive.* schema in the SAME transaction
@@ -35,8 +39,7 @@ import json
 from collections.abc import Mapping
 from typing import Any, Callable, ClassVar
 
-import psycopg2
-from psycopg2.extras import Json, RealDictCursor
+from psycopg2.extras import RealDictCursor
 
 from ..models import ArchiveJobRecord, ClaimedOutboxEvent
 from . import _synthesize as synth
@@ -64,6 +67,11 @@ ORDER_STATUS_ALLOWED = (
     "SUBMITTED", "PARTIALLY_FILLED", "FILLED", "CANCELLED", "REJECTED", "EXPIRED",
 )
 CONFIG_CHANGE_ACTION_ALLOWED = ("CREATE", "ACTIVATE", "DEACTIVATE", "MODIFY")
+
+
+def _archive_text_id(value: Any) -> str:
+    """Canonical archive TEXT natural key for source integer/text ids."""
+    return str(value)
 
 
 def _default_get_conn() -> Any:
@@ -514,7 +522,7 @@ class PaperV2ArchiveHandler(ArchiveHandler):
                 ON CONFLICT (event_id) DO NOTHING
                 """,
                 (
-                    str(ev["event_id"]), run_id, ev.get("session_id"),
+                    _archive_text_id(ev["event_id"]), run_id, ev.get("session_id"),
                     ev.get("created_at").date() if ev.get("created_at") else None,
                     ev.get("event_type"),
                     json.dumps(ev.get("context") or {"message": ev.get("message")}),
@@ -625,7 +633,7 @@ class PaperV2ArchiveHandler(ArchiveHandler):
                     ON CONFLICT (event_id) DO NOTHING
                     """,
                     (
-                        ev["event_id"], ev["order_id"], run_id,
+                        _archive_text_id(ev["event_id"]), ev["order_id"], run_id,
                         ev.get("event_time").date() if ev.get("event_time") else None,
                         event_type,
                         json.dumps({
@@ -1053,7 +1061,7 @@ class PaperV2ArchiveHandler(ArchiveHandler):
                 ON CONFLICT (audit_id) DO NOTHING
                 """,
                 (
-                    str(row["audit_id"]), row.get("portfolio_id"), change_type,
+                    _archive_text_id(row["audit_id"]), row.get("portfolio_id"), change_type,
                     json.dumps(row.get("before_json") or {}, default=str),
                     json.dumps(row.get("after_json") or {}, default=str),
                     row.get("created_by"), row.get("created_at"),
@@ -1347,7 +1355,7 @@ class PaperV2ArchiveHandler(ArchiveHandler):
                 ON CONFLICT (audit_id) DO NOTHING
                 """,
                 (
-                    str(r["audit_id"]), r["portfolio_id"], reset_type, reset_reason,
+                    _archive_text_id(r["audit_id"]), r["portfolio_id"], reset_type, reset_reason,
                     json.dumps(snapshot_before, default=str),
                     r.get("created_at"),
                 ),
