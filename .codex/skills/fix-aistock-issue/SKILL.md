@@ -13,6 +13,7 @@ English trigger example: `fix BUG-112 according to AIstock standards; do not mer
 
 - Start from latest `origin/main` in an isolated worktree and task branch; do not develop in the production root checkout.
 - Run `python scripts/aistock_issue_workflow.py doctor` before manual exploration.
+- For small or unclear scope, run `python scripts/aistock_issue_workflow.py fast-path --bug-id BUG-XXX --changed-file <path>` after `doctor` to get the T0/T1/T2/T3 context and validation plan before loading more files.
 - If `doctor` reports stale or missing client wrappers, run `install-client --apply` after this workflow branch is merged, then restart old Codex/Claude windows before judging workflow behavior.
 - Use `scripts/aistock_issue_workflow.py` as the high-level entrypoint and `scripts/issue_flow.py` only as a lower-level helper.
 - Do not write BUG JSON or allocator changes in the canonical root checkout. If registering a BUG, use a clean task/registry worktree/branch or the wrapper will block `submit-bug --apply`.
@@ -49,7 +50,8 @@ English trigger example: `fix BUG-112 according to AIstock standards; do not mer
 13. After an approved merge, run:
     `python scripts/aistock_issue_workflow.py close-sync --bug-id BUG-XXX --pr-url <PR_URL>`
     Then align BUG JSON and GitHub Issue status through the approved sync channel.
-14. When the workflow feels slow, or before final reporting after PR/merge, run:
+14. After workflow CLI/client changes, run `python scripts/aistock_issue_workflow.py workflow-smoke --changed-file <path> --module <module>`; it must report `workflow_gate=passed` and `unexpected_dirty_paths=[]` without GitHub/PR/DB writes.
+15. When the workflow feels slow, or before final reporting after PR/merge, run:
     `python scripts/aistock_issue_workflow.py postmortem --bug-id BUG-XXX`
     Use the generated timing/context summary instead of manually rediscovering phase costs.
 
