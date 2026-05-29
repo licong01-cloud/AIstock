@@ -3311,7 +3311,7 @@ def _verify_pr_merged(pr_url: str, *, skip_github_check: bool = False) -> dict[s
     if skip_github_check:
         return {"checked": False, "merged": True, "reason": "skip_github_check"}
     result = _run_command(
-        ["gh", "pr", "view", pr_url, "--json", "state,mergedAt,mergeCommit,url"],
+        ["gh", "pr", "view", pr_url, "--json", "state,mergedAt,mergeCommit,url,headRefName,headRefOid"],
         cwd=REPO_ROOT,
         timeout=30,
     )
@@ -3333,6 +3333,133 @@ def _merge_commit_from_pr_check(pr_check: dict[str, Any] | None) -> str | None:
     if isinstance(merge_commit, dict):
         return str(merge_commit.get("oid") or "") or None
     return str(merge_commit or "") or None
+
+
+def _pr_head_oid_from_pr_check(pr_check: dict[str, Any] | None) -> str | None:
+    pr = (pr_check or {}).get("pr") or {}
+    if not isinstance(pr, dict):
+        return None
+    head_ref_oid = str(pr.get("headRefOid") or "").strip()
+    return head_ref_oid or None
+
+
+def _git_ref_exists(ref: str, *, cwd: Path | None = None) -> bool:
+    if not ref:
+        return False
+    return bool(_run_command(["git", "rev-parse", "--verify", "--quiet", ref], cwd=cwd or REPO_ROOT).get("ok"))
+
+
+def _git_refs_tree_equivalent(left: str, right: str, *, cwd: Path | None = None) -> bool:
+    if not left or not right:
+        return False
+    root = cwd or REPO_ROOT
+    if not _git_ref_exists(left, cwd=root) or not _git_ref_exists(right, cwd=root):
+        return False
+    return bool(_run_command(["git", "diff", "--quiet", left, right], cwd=root).get("ok"))
+
+
+def _git_changed_files(base: str, head: str, *, cwd: Path | None = None) -> list[str]:
+    if not base or not head:
+        return []
+    result = _run_command(["git", "diff", "--name-only", base, head], cwd=cwd or REPO_ROOT)
+    if not result.get("ok"):
+        return []
+    return [line.strip() for line in str(result.get("stdout") or "").splitlines() if line.strip()]
+
+
+def _git_merge_base(left: str, right: str, *, cwd: Path | None = None) -> str | None:
+    result = _run_command(["git", "merge-base", left, right], cwd=cwd or REPO_ROOT)
+    if not result.get("ok"):
+        return None
+    value = str(result.get("stdout") or "").strip()
+    return value or None
+
+
+def _git_paths_equivalent(left: str, right: str, paths: list[str], *, cwd: Path | None = None) -> bool:
+    if not left or not right or not paths:
+        return False
+    root = cwd or REPO_ROOT
+    if not _git_ref_exists(left, cwd=root) or not _git_ref_exists(right, cwd=root):
+        return False
+    return bool(_run_command(["git", "diff", "--quiet", left, right, "--", *paths], cwd=root).get("ok"))
+
+
+def _git_squash_head_equivalent_to_origin(head_oid: str, *, cwd: Path | None = None) -> dict[str, Any]:
+    root = cwd or REPO_ROOT
+    payload: dict[str, Any] = {
+        "head_ref": head_oid,
+        "base_ref": "origin/main",
+        "base": None,
+        "changed_files": [],
+        "verified": False,
+        "reason": None,
+    }
+    if not _git_ref_exists(head_oid, cwd=root) or not _git_ref_exists("origin/main", cwd=root):
+        payload["reason"] = "missing_ref"
+        return payload
+    if _git_refs_tree_equivalent(head_oid, "origin/main", cwd=root):
+        payload["verified"] = True
+        payload["reason"] = "full_tree_equivalent"
+        return payload
+    base = _git_merge_base(head_oid, "origin/main", cwd=root)
+    payload["base"] = base
+    if not base:
+        payload["reason"] = "missing_merge_base"
+        return payload
+    changed_files = _git_changed_files(base, head_oid, cwd=root)
+    payload["changed_files"] = changed_files
+    if not changed_files:
+        payload["reason"] = "empty_pr_diff"
+        return payload
+    payload["verified"] = _git_paths_equivalent(head_oid, "origin/main", changed_files, cwd=root)
+    payload["reason"] = "changed_paths_equivalent" if payload["verified"] else "changed_paths_differ"
+    return payload
+
+
+def _cleanup_merge_verification(branch: str, pr_url: str | None, merged: bool) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "method": "git_merged_branch" if merged else None,
+        "verified": bool(merged),
+        "squash_merge_verified": False,
+        "tree_equivalent_to_origin_main": bool(merged),
+        "tree_equivalence_ref": "branch" if merged else None,
+        "pr_check": None,
+        "path_equivalence": None,
+    }
+    if merged or not pr_url:
+        return payload
+
+    pr_check = _verify_pr_merged(pr_url)
+    payload["pr_check"] = pr_check
+    if not pr_check.get("merged"):
+        return payload
+
+    head_oid = _pr_head_oid_from_pr_check(pr_check)
+    head_equivalence = _git_squash_head_equivalent_to_origin(head_oid) if head_oid else {"verified": False, "reason": "missing_head_oid"}
+    payload["path_equivalence"] = head_equivalence
+    if head_oid and head_equivalence.get("verified"):
+        payload.update(
+            {
+                "method": f"squash_merge_head_oid_{head_equivalence.get('reason')}",
+                "verified": True,
+                "squash_merge_verified": True,
+                "tree_equivalent_to_origin_main": head_equivalence.get("reason") == "full_tree_equivalent",
+                "tree_equivalence_ref": head_oid,
+            }
+        )
+        return payload
+
+    if _git_ref_exists(branch) and _git_refs_tree_equivalent(branch, "origin/main"):
+        payload.update(
+            {
+                "method": "squash_merge_branch_tree_equivalent",
+                "verified": True,
+                "squash_merge_verified": True,
+                "tree_equivalent_to_origin_main": True,
+                "tree_equivalence_ref": branch,
+            }
+        )
+    return payload
 
 
 def _sync_github_issue_after_close(
@@ -3941,13 +4068,11 @@ def build_cleanup_after_merge_plan(
     remote_ref = _git(["ls-remote", "--heads", "origin", branch], check=False)
     merged_refs = set(_git(["branch", "--format=%(refname:short)", "--merged", "origin/main"], check=False).splitlines())
     merged = branch in merged_refs
-    squash_merge_verified = False
-    pr_check: dict[str, Any] | None = None
-    tree_equivalent = False
-    if not merged and pr_url:
-        pr_check = _verify_pr_merged(pr_url)
-        tree_equivalent = bool(_run_command(["git", "diff", "--quiet", branch, "origin/main"], cwd=REPO_ROOT).get("ok"))
-        squash_merge_verified = bool(pr_check.get("merged")) and tree_equivalent
+    merge_verification = _cleanup_merge_verification(branch, pr_url, merged)
+    squash_merge_verified = bool(merge_verification["squash_merge_verified"])
+    pr_check = merge_verification["pr_check"]
+    tree_equivalent = bool(merge_verification["tree_equivalent_to_origin_main"])
+    merge_verified = bool(merge_verification["verified"])
     worktree_path = Path(worktree) if worktree else None
     worktree_clean = True
     if worktree_path and worktree_path.exists():
@@ -3959,7 +4084,7 @@ def build_cleanup_after_merge_plan(
     warnings: list[str] = []
     if branch == current_branch and apply:
         blocking.append("refusing to cleanup the currently checked-out branch")
-    if not (merged or squash_merge_verified):
+    if not merge_verified:
         blocking.append(f"branch is not merged into origin/main: {branch}")
     if worktree_path and worktree_path.exists() and not worktree_clean:
         blocking.append(f"worktree is dirty: {worktree_path}")
@@ -3976,11 +4101,11 @@ def build_cleanup_after_merge_plan(
     if sync_root:
         actions.append({"action": "sync_root_main", "root": str(root), "safe": not any("canonical root" in item for item in blocking)})
     if worktree_path and worktree_path.exists():
-        actions.append({"action": "remove_worktree", "worktree": str(worktree_path), "safe": (merged or squash_merge_verified) and worktree_clean})
+        actions.append({"action": "remove_worktree", "worktree": str(worktree_path), "safe": merge_verified and worktree_clean})
     if branch in local_branches:
-        actions.append({"action": "delete_local_branch", "branch": branch, "safe": merged or squash_merge_verified})
+        actions.append({"action": "delete_local_branch", "branch": branch, "safe": merge_verified})
     if remote_ref:
-        actions.append({"action": "delete_remote_branch", "branch": branch, "safe": merged or squash_merge_verified})
+        actions.append({"action": "delete_remote_branch", "branch": branch, "safe": merge_verified})
     payload = {
         "schema_version": "aistock_issue_workflow_cleanup_v1",
         "generated_at": _utc_now(),
@@ -3989,6 +4114,7 @@ def build_cleanup_after_merge_plan(
         "canonical_root": str(root),
         "sync_root": sync_root,
         "merged_into_origin_main": merged,
+        "merge_verification": merge_verification,
         "squash_merge_verified": squash_merge_verified,
         "tree_equivalent_to_origin_main": tree_equivalent,
         "pr_check": pr_check,
