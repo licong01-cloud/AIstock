@@ -12,6 +12,8 @@ python F:\Dev\AIstock\scripts\aistock_issue_workflow.py doctor
 
 If `doctor` reports `workflow_gate=blocked`, stop and report the blocking items. If it reports warnings, continue only when the warning does not affect the requested workflow.
 
+For small or unclear scope, run `python F:\Dev\AIstock\scripts\aistock_issue_workflow.py fast-path --bug-id BUG-XXX --changed-file <path>` after `doctor` to get the T0/T1/T2/T3 context strategy and selected validation before loading additional files.
+
 If `doctor` reports `client_manifest.codex_skill_status=stale|missing_global` or `restart_recommended=true`, the repo CLI is still canonical for this run, but old Codex/Claude windows should be refreshed after `install-client --apply` lands on `main`.
 
 ## Submit/Register BUG workflow
@@ -76,6 +78,8 @@ Use `tmp/issue_workflow/<BUG>/pr-body.md` as the PR body. If the user requested 
 The PR command runs a pre-PR gate: it blocks missing validation evidence, failed allowed-scope checks, staged/untracked temp artifacts such as `.codex_tmp` or `.coverage`, and failed changed-file Ruff lint. Fix those in the same task worktree before creating the PR.
 
 Do not stop at `validation_passed`. Commit only task files, then run the `run --mode pr --push --create-pr` command from the issue worktree. PR automation intentionally blocks canonical-root/main execution.
+
+After workflow CLI/client changes, run `python scripts\aistock_issue_workflow.py workflow-smoke --changed-file <path> --module <module>` and require `workflow_gate=passed` plus `unexpected_dirty_paths=[]`; it is a dry-run and must not create GitHub Issues, PRs, runtime restarts, or DB writes.
 
 After PR creation, after merge, or when the workflow feels slow, run:
 

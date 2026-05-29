@@ -47,6 +47,27 @@ ARTIFACT_PATH_PATTERNS = (
 BUG_ID_RE = re.compile(r"\bBUG-(\d{3,})\b", re.IGNORECASE)
 OUTPUT_FORMAT_TOKENS = {"json", "yaml", "yml", "text", "txt", "stdout", "stderr", "console"}
 SAFE_OUTPUT_DIRS = (WORKFLOW_ROOT, Path("tmp") / "validation")
+FAST_PATH_TIER_ORDER = {"T0": 0, "T1": 1, "T2": 2, "T3": 3}
+FAST_PATH_REGISTRY_PREFIXES = ("tests/aistock_validation/bugs/",)
+FAST_PATH_CATALOG_PREFIXES = ("tests/aistock_validation/catalog/",)
+FAST_PATH_WORKFLOW_FILES = {
+    "scripts/aistock_issue_workflow.py",
+    "scripts/issue_flow.py",
+    "scripts/ci_failure_issue_summary.py",
+    "scripts/code_intelligence_adapter.py",
+}
+FAST_PATH_DEPENDENCY_FILES = {
+    "frontend/package.json",
+    "frontend/package-lock.json",
+    "frontend/pnpm-lock.yaml",
+    "package.json",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "requirements.txt",
+    "requirements-dev.txt",
+    "requirements.lock.txt",
+    "pyproject.toml",
+}
 
 sys.path.insert(0, str(REPO_ROOT))
 from scripts import issue_flow as flow  # noqa: E402
@@ -1712,6 +1733,369 @@ def _build_batch_code_intelligence_summary(
         skip_external=False,
     )
 
+
+def _normalize_changed_files(changed_files: list[str] | None) -> list[str]:
+    return flow._unique_strings(
+        [
+            str(path).replace("\\", "/").lstrip("./")
+            for path in changed_files or []
+            if str(path).strip()
+        ]
+    )
+
+
+def _path_in_prefixes(path: str, prefixes: tuple[str, ...]) -> bool:
+    normalized = path.replace("\\", "/").lstrip("./")
+    return any(normalized == prefix.rstrip("/") or normalized.startswith(prefix) for prefix in prefixes)
+
+
+def _tier_ge(left: str, right: str) -> bool:
+    return FAST_PATH_TIER_ORDER[left] >= FAST_PATH_TIER_ORDER[right]
+
+
+def _bump_fast_path_tier(current: str, candidate: str) -> str:
+    return candidate if _tier_ge(candidate, current) else current
+
+
+def _plans_to_commands(plan_keys: list[str]) -> list[str]:
+    plans = flow._plans_by_key()
+    commands: list[str] = []
+    for key in plan_keys:
+        plan = plans.get(key) or {}
+        session = str(plan.get("nox_session") or "").strip()
+        if session:
+            commands.append(f"python -m nox -s {session}")
+        elif key:
+            commands.append(f"python -m nox -s {key}")
+    return flow._unique_strings(commands)
+
+
+def _file_category(path: str) -> str:
+    normalized = path.replace("\\", "/").lstrip("./")
+    if normalized in FAST_PATH_WORKFLOW_FILES:
+        return "workflow"
+    if _path_in_prefixes(normalized, FAST_PATH_REGISTRY_PREFIXES):
+        return "bug_registry"
+    if _path_in_prefixes(normalized, FAST_PATH_CATALOG_PREFIXES):
+        return "validation_catalog"
+    if normalized.startswith("docs/"):
+        return "docs"
+    if normalized.startswith(".codex/") or normalized.startswith(".claude/"):
+        return "client_wrapper"
+    if normalized in FAST_PATH_DEPENDENCY_FILES or normalized.endswith((".sql",)):
+        return "production_gate_sensitive"
+    if "/migrations/" in normalized:
+        return "production_gate_sensitive"
+    if normalized.startswith("frontend/"):
+        return "frontend"
+    if normalized.startswith("backend/"):
+        return "backend"
+    if normalized.startswith("tests/"):
+        return "tests"
+    if normalized.startswith("scripts/"):
+        return "scripts"
+    return "other"
+
+
+def _infer_fast_path_tier(
+    *,
+    record: dict[str, Any] | None,
+    changed_files: list[str],
+    validation: dict[str, Any],
+    ownership: dict[str, Any],
+) -> tuple[str, list[str]]:
+    reasons: list[str] = []
+    tier = "T0"
+    categories = {_file_category(path) for path in changed_files}
+    metadata_only = bool(categories) and categories <= {"docs", "client_wrapper", "bug_registry"} and not record
+    severity_parts = str((record or {}).get("severity") or "").upper().split()
+    severity = severity_parts[0] if severity_parts else ""
+    module = str((record or {}).get("module") or "").strip()
+
+    if record:
+        tier = _bump_fast_path_tier(tier, "T1")
+        reasons.append("linked BUG/GitHub issue requires standard issue traceability")
+    if severity in {"P0", "P1"}:
+        tier = _bump_fast_path_tier(tier, "T1")
+        reasons.append(f"{severity} issue keeps at least T1 validation and evidence")
+    if not changed_files:
+        reasons.append("no changed files supplied; plan uses issue metadata and l0 fallback")
+    if metadata_only:
+        reasons.append("docs/client/registry-only scope can stay T0")
+    if categories & {"workflow", "validation_catalog", "backend", "frontend", "scripts", "tests"}:
+        tier = _bump_fast_path_tier(tier, "T1")
+        reasons.append("code, workflow, test, or validation catalog files require T1")
+    if categories & {"production_gate_sensitive"}:
+        tier = _bump_fast_path_tier(tier, "T2")
+        reasons.append("dependency, migration, or DDL-sensitive files require expanded gate checks")
+    matched_rules = ownership.get("matched_rules") or []
+    primary_modules = flow._unique_strings([item.get("primary_module") for item in matched_rules if item.get("primary_module")])
+    if not metadata_only and len(primary_modules) > 1:
+        tier = _bump_fast_path_tier(tier, "T2")
+        reasons.append("multiple primary modules require shared validation planning")
+    risk_levels = {str(item).lower() for item in ownership.get("risk_levels") or []}
+    if "critical" in risk_levels:
+        tier = _bump_fast_path_tier(tier, "T2")
+        reasons.append("critical ownership risk requires T2")
+    if module in {"paper_v2", "strategy_package", "research_assistant"} and changed_files:
+        tier = _bump_fast_path_tier(tier, "T2")
+        reasons.append(f"{module} is high-risk product scope; avoid T0 shortcut")
+    if any(path.startswith("docs/architecture/") for path in changed_files):
+        tier = _bump_fast_path_tier(tier, "T3")
+        reasons.append("architecture/design documents require T3 design review context")
+    return tier, flow._unique_strings(reasons)
+
+
+def build_fast_path_plan(
+    *,
+    bug_id: str | None,
+    issue_json: str | None,
+    changed_files: list[str] | None,
+    module: str | None = None,
+    allow_missing_linkage: bool = False,
+    allow_closed: bool = False,
+) -> dict[str, Any]:
+    changed = _normalize_changed_files(changed_files)
+    record: dict[str, Any] | None = None
+    source_path: Path | None = None
+    canonical_bug_id: str | None = bug_id.strip().upper() if bug_id else None
+    missing_linkage: list[str] = []
+    status: str | None = None
+    if bug_id or issue_json:
+        record, source_path = find_bug_record(bug_id=bug_id, issue_json=issue_json)
+        canonical_bug_id = str(record.get("bug_id") or canonical_bug_id or source_path.stem).upper()
+        missing_linkage = _require_github_linkage(record, allow_missing=allow_missing_linkage)
+        status = _require_fixable_status(record, allow_closed=allow_closed)
+        module = str(record.get("module") or module or "").strip() or None
+
+    validation = flow.select_validation(changed, module=module)
+    ownership = validation.get("ownership") or flow.match_changed_files(changed)
+    tier, reasons = _infer_fast_path_tier(
+        record=record,
+        changed_files=changed,
+        validation=validation,
+        ownership=ownership,
+    )
+    required = [str(item) for item in validation.get("required_plans") or []]
+    recommended = [str(item) for item in validation.get("recommended_plans") or []]
+    context_strategy = {
+        "primary_sources": [
+            "current BUG/GitHub issue body" if record else "explicit user request",
+            "tmp/issue_workflow/<BUG>/context-pack.md when a BUG is linked",
+            "changed-file ownership and test plan catalogs",
+            "CodeGraph/Understand Anything refs only when available and relevant",
+        ],
+        "avoid_by_default": [
+            "archived standards",
+            "old design notes",
+            "full module restart plans",
+            "full logs unless triage requires the failing excerpt",
+        ],
+        "max_initial_files": 4 if tier in {"T0", "T1"} else 8,
+    }
+    if tier == "T0":
+        context_strategy["goal"] = "metadata-only or docs/registry fast path; do not load module history"
+    elif tier == "T1":
+        context_strategy["goal"] = "single issue context pack plus targeted code snippets"
+    elif tier == "T2":
+        context_strategy["goal"] = "shared same-module or multi-impact context with selected validation"
+    else:
+        context_strategy["goal"] = "design/architecture review with broader acceptance evidence"
+
+    stop_conditions = [
+        "doctor reports workflow_gate=blocked",
+        "required validation cannot run",
+        "production runtime, production DB, or DDL action is needed without explicit user approval",
+    ]
+    if record:
+        stop_conditions.extend(
+            [
+                "BUG JSON lacks github_issue_number or github_issue_url",
+                "fix requires files outside allowed_write_scope",
+            ]
+        )
+
+    if canonical_bug_id:
+        next_command = f"python scripts/aistock_issue_workflow.py run --bug-id {canonical_bug_id} --mode plan --create-worktree"
+    else:
+        next_command = "python scripts/aistock_issue_workflow.py doctor"
+
+    return {
+        "schema_version": "aistock_issue_workflow_fast_path_v1",
+        "generated_at": _utc_now(),
+        "workflow_gate": "planned",
+        "bug_id": canonical_bug_id,
+        "module": module,
+        "status": status,
+        "source_bug_json": _repo_rel(source_path) if source_path else None,
+        "missing_github_linkage": missing_linkage,
+        "changed_files": changed,
+        "file_categories": {path: _file_category(path) for path in changed},
+        "task_tier": tier,
+        "tier_reasons": reasons,
+        "context_strategy": context_strategy,
+        "validation": validation,
+        "required_validation": required,
+        "recommended_validation": recommended,
+        "required_commands": _plans_to_commands(required),
+        "recommended_commands": _plans_to_commands(recommended),
+        "production_gates": validation.get("production_gates") or {},
+        "estimated_workflow_steps": _estimated_fast_path_steps(tier, has_bug=bool(record)),
+        "stop_conditions": stop_conditions,
+        "next_command": next_command,
+    }
+
+
+def _estimated_fast_path_steps(tier: str, *, has_bug: bool) -> list[str]:
+    if tier == "T0":
+        return [
+            "doctor once",
+            "targeted diff or metadata edit",
+            "changed-file lint or l0 only when code/catalog changed",
+            "commit and PR evidence",
+        ]
+    if tier == "T1":
+        return [
+            "doctor once",
+            "run plan/create worktree and read compact Context Pack",
+            "targeted fix within allowed_write_scope",
+            "finish plan-only, selected validation, PR automation",
+        ]
+    if tier == "T2":
+        return [
+            "doctor once",
+            "run-p0/start-batch when issues share module and validation",
+            "shared context/code-intelligence refs",
+            "selected module validation plus per-issue evidence",
+        ]
+    return [
+        "doctor once",
+        "design/architecture doc and acceptance matrix",
+        "implementation with broader scope review",
+        "full required validation and production gates",
+    ]
+
+
+def build_workflow_smoke_plan(
+    *,
+    bug_id: str | None = None,
+    issue_json: str | None = None,
+    changed_files: list[str] | None = None,
+    module: str | None = None,
+) -> dict[str, Any]:
+    synthetic_record = False
+    cleanup_paths: list[Path] = []
+    if not bug_id and not issue_json:
+        synthetic_record = True
+        smoke_bug_id = "BUG-000"
+        smoke_dir = REPO_ROOT / WORKFLOW_ROOT / "smoke"
+        issue_path = smoke_dir / "synthetic-BUG-000.json"
+        record = {
+            "bug_id": smoke_bug_id,
+            "title": "Workflow smoke synthetic issue",
+            "module": module or "validation.guardrails",
+            "severity": "P2",
+            "status": "open",
+            "description": "Synthetic issue used to dry-run the workflow state machine.",
+            "reproduce_command": "python scripts/aistock_issue_workflow.py workflow-smoke",
+            "allowed_write_scope": ["scripts/aistock_issue_workflow.py", "backend/tests/scripts/test_aistock_issue_workflow.py"],
+            "required_verification": ["l0"],
+            "github_issue_number": 999999,
+            "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/999999",
+        }
+        _write_json(issue_path, record)
+        cleanup_paths.append(issue_path)
+        issue_json = str(issue_path)
+        bug_id = smoke_bug_id
+
+    changed = _normalize_changed_files(changed_files) or ["scripts/aistock_issue_workflow.py"]
+    blocking: list[str] = []
+    warnings: list[str] = []
+    dirty_before = _git_status_paths(REPO_ROOT)
+    fast_path: dict[str, Any] | None = None
+    start: dict[str, Any] | None = None
+    finish: dict[str, Any] | None = None
+    postmortem_preview: dict[str, Any] | None = None
+    try:
+        fast_path = build_fast_path_plan(
+            bug_id=bug_id,
+            issue_json=issue_json,
+            changed_files=changed,
+            module=module,
+            allow_missing_linkage=True,
+            allow_closed=True,
+        )
+        start = build_start_plan(
+            bug_id=bug_id,
+            issue_json=issue_json,
+            changed_files=changed,
+            create_worktree=True,
+            dry_run=True,
+            task_slug="workflow-smoke",
+            allow_missing_linkage=True,
+            allow_closed=True,
+        )
+        finish = build_finish_plan(
+            bug_id=bug_id,
+            issue_json=issue_json,
+            changed_files=changed,
+            base="origin/main",
+            head="HEAD",
+            validation_evidence=[],
+            plan_only=True,
+            allow_missing_evidence=False,
+        )
+        postmortem_preview = {
+            "schema_version": "aistock_issue_workflow_smoke_postmortem_preview_v1",
+            "bug_id": start["bug_id"],
+            "timing_summary": _workflow_timing_summary(start["bug_id"], root=REPO_ROOT),
+            "state_path": start.get("state_path"),
+            "finish_plan_path": (finish or {}).get("artifact_metrics", {}).get("finish_plan", {}).get("path"),
+            "stale_pr_check": "skipped_in_smoke_to_avoid_external_github_reads",
+        }
+    except Exception as exc:
+        blocking.append(str(exc))
+    dirty_after = _git_status_paths(REPO_ROOT)
+    before_paths = {row["path"] for row in dirty_before}
+    after_paths = {row["path"] for row in dirty_after}
+    new_paths = sorted(after_paths - before_paths)
+    allowed_prefixes = (
+        f"{WORKFLOW_ROOT.as_posix()}/{(bug_id or 'BUG-000').upper()}",
+        f"{WORKFLOW_ROOT.as_posix()}/smoke",
+    )
+    unexpected = [
+        path
+        for path in new_paths
+        if not any(path == prefix or path.startswith(prefix + "/") for prefix in allowed_prefixes)
+    ]
+    if unexpected:
+        blocking.append(f"workflow smoke created unexpected git-status paths: {unexpected}")
+    if synthetic_record:
+        warnings.append("used synthetic BUG-000 record under ignored tmp/issue_workflow/smoke")
+    return {
+        "schema_version": "aistock_issue_workflow_smoke_v1",
+        "generated_at": _utc_now(),
+        "workflow_gate": "passed" if not blocking else "blocked",
+        "blocking": blocking,
+        "warnings": warnings,
+        "dry_run": True,
+        "synthetic_record": synthetic_record,
+        "changed_files": changed,
+        "dirty_paths_before": dirty_before,
+        "dirty_paths_after": dirty_after,
+        "new_dirty_paths": new_paths,
+        "unexpected_dirty_paths": unexpected,
+        "fast_path": fast_path,
+        "start": start,
+        "finish": finish,
+        "postmortem_preview": postmortem_preview,
+        "cleanup_paths": [_repo_rel(path) for path in cleanup_paths],
+        "production_gates": (fast_path or {}).get("production_gates") or _production_gates_payload(),
+        "next_command": f"python scripts/aistock_issue_workflow.py fast-path --bug-id {bug_id} --changed-file <path>"
+        if bug_id
+        else "python scripts/aistock_issue_workflow.py doctor",
+    }
+
 def build_start_plan(
     *,
     bug_id: str | None,
@@ -1748,6 +2132,14 @@ def build_start_plan(
         record=record,
         changed_files=changed_files,
         root=target_root,
+    )
+    fast_path = build_fast_path_plan(
+        bug_id=canonical_bug_id,
+        issue_json=str(source_path),
+        changed_files=changed_files,
+        module=record.get("module"),
+        allow_missing_linkage=True,
+        allow_closed=True,
     )
     context_pack["code_intelligence"] = {
         "provider": code_intelligence_summary.get("provider"),
@@ -1789,6 +2181,7 @@ def build_start_plan(
             github_issue_url=record.get("github_issue_url"),
             production_gates=fix_ready.get("validation_selection", {}).get("production_gates", {}),
             code_intelligence=context_pack.get("code_intelligence"),
+            fast_path=fast_path,
             active_decision=active_decision,
             context_metrics=context_metrics,
             next_actions=[
@@ -1826,6 +2219,7 @@ def build_start_plan(
         "recommended_verification": fix_ready.get("recommended_verification") or [],
         "production_gates": fix_ready.get("validation_selection", {}).get("production_gates", {}),
         "code_intelligence": context_pack.get("code_intelligence"),
+        "fast_path": fast_path,
         "active_decision": active_decision,
         "context_metrics": context_metrics,
         "next_agent_steps": [
@@ -1905,6 +2299,14 @@ def build_finish_plan(
         "bug_id": canonical_bug_id,
         "source_bug_json": _repo_rel(source_path),
         "changed_files": changed,
+        "fast_path": build_fast_path_plan(
+            bug_id=canonical_bug_id,
+            issue_json=str(source_path),
+            changed_files=changed,
+            module=record.get("module"),
+            allow_missing_linkage=True,
+            allow_closed=True,
+        ),
         "required_verification": validation.get("required_plans") or [],
         "recommended_verification": validation.get("recommended_plans") or [],
         "production_gates": validation.get("production_gates") or {},
@@ -4236,6 +4638,30 @@ def cmd_finish_batch(args: argparse.Namespace) -> int:
     return 0 if payload.get("closure_ready") else 2
 
 
+def cmd_fast_path(args: argparse.Namespace) -> int:
+    payload = build_fast_path_plan(
+        bug_id=args.bug_id,
+        issue_json=args.issue_json,
+        changed_files=list(args.changed_file or []),
+        module=args.module,
+        allow_missing_linkage=args.allow_missing_linkage,
+        allow_closed=args.allow_closed,
+    )
+    _emit(payload, args.output)
+    return 0
+
+
+def cmd_workflow_smoke(args: argparse.Namespace) -> int:
+    payload = build_workflow_smoke_plan(
+        bug_id=args.bug_id,
+        issue_json=args.issue_json,
+        changed_files=list(args.changed_file or []),
+        module=args.module,
+    )
+    _emit(payload, args.output)
+    return 0 if payload.get("workflow_gate") == "passed" else 2
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     payload = build_doctor_report(skip_external=args.skip_external)
     _emit(payload, args.output)
@@ -4563,6 +4989,24 @@ def build_parser() -> argparse.ArgumentParser:
     finish_batch.add_argument("--allow-missing-evidence", action="store_true")
     finish_batch.add_argument("--output")
     finish_batch.set_defaults(func=cmd_finish_batch)
+
+    fast_path = sub.add_parser("fast-path", help="Plan the lightest safe T0/T1/T2/T3 issue workflow path.")
+    fast_path.add_argument("--bug-id")
+    fast_path.add_argument("--issue-json")
+    fast_path.add_argument("--changed-file", action="append")
+    fast_path.add_argument("--module")
+    fast_path.add_argument("--allow-missing-linkage", action="store_true")
+    fast_path.add_argument("--allow-closed", action="store_true")
+    fast_path.add_argument("--output")
+    fast_path.set_defaults(func=cmd_fast_path)
+
+    workflow_smoke = sub.add_parser("workflow-smoke", help="Dry-run the issue workflow chain without GitHub/PR/DB writes.")
+    workflow_smoke.add_argument("--bug-id")
+    workflow_smoke.add_argument("--issue-json")
+    workflow_smoke.add_argument("--changed-file", action="append")
+    workflow_smoke.add_argument("--module")
+    workflow_smoke.add_argument("--output")
+    workflow_smoke.set_defaults(func=cmd_workflow_smoke)
 
     close = sub.add_parser("close-sync", help="Prepare a dry-run close/sync plan after PR merge.")
     close.add_argument("--bug-id")

@@ -78,6 +78,32 @@ Code intelligence is non-blocking in KG-1/KG-3. If CodeGraph is installed and `.
 Warnings about a dirty canonical root are not permission to write there. They mean root sync/cleanup must stop until the unrelated work is resolved. New issue registration and fixes should continue only in a clean task or registry worktree.
 
 `--output` is a JSON file path, not an output format selector. Omit it for stdout or use `--output -`; do not pass `--output json`. File outputs should use an explicit path, preferably under `tmp/issue_workflow/` or `tmp/validation/`, so a client typo cannot create root-level files such as `json`.
+## Fast Path And Smoke Check
+
+Use `fast-path` when a client needs a cheap, machine-readable plan before loading more context:
+
+```powershell
+python scripts/aistock_issue_workflow.py fast-path --bug-id BUG-XXX --changed-file <path>
+# or, before a BUG exists:
+python scripts/aistock_issue_workflow.py fast-path --module validation.guardrails --changed-file scripts/aistock_issue_workflow.py
+```
+
+The output classifies the task as `T0`, `T1`, `T2`, or `T3`, returns selected validation commands, production gates, context strategy, stop conditions, and the next workflow command. Treat it as an optimization layer only: it does not replace GitHub/BUG linkage, validation evidence, PR quality, close-sync, or cleanup.
+
+Fast-path intent:
+
+- `T0`: docs/client/registry metadata changes; use targeted context and changed-file/l0 validation only as selected.
+- `T1`: single BUG or single workflow/module code change; use Context Pack plus targeted snippets, not old module histories.
+- `T2`: critical or multi-impact/product scope; batch only compatible same-module work and share validation evidence carefully.
+- `T3`: design or architecture work; keep an acceptance matrix and broader review.
+
+Use `workflow-smoke` after workflow CLI/client changes, or before judging whether Codex/Claude can still follow the issue flow:
+
+```powershell
+python scripts/aistock_issue_workflow.py workflow-smoke --changed-file scripts/aistock_issue_workflow.py --module validation.guardrails
+```
+
+`workflow-smoke` dry-runs the core chain with a synthetic ignored issue record: fast-path -> start dry-run -> finish plan-only -> postmortem preview. It must not create GitHub Issues, PRs, production DB writes, runtime restarts, or tracked root files. A passing smoke check reports `workflow_gate=passed` and `unexpected_dirty_paths=[]`.
 
 ## CI / Nightly Failure Intake
 

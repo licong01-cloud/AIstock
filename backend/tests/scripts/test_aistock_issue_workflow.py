@@ -375,6 +375,96 @@ def test_finish_batch_plan_generates_per_issue_pr_body(
     assert "backend/tests/scripts/test_aistock_issue_workflow.py" in pr_body
 
 
+def test_fast_path_classifies_docs_only_as_t0(isolated_workflow_root: Path) -> None:
+    payload = workflow.build_fast_path_plan(
+        bug_id=None,
+        issue_json=None,
+        changed_files=["docs/standards/aistock_issue_workflow_quickstart.md"],
+    )
+
+    assert payload["schema_version"] == "aistock_issue_workflow_fast_path_v1"
+    assert payload["task_tier"] == "T0"
+    assert payload["context_strategy"]["max_initial_files"] == 4
+    assert "archived standards" in payload["context_strategy"]["avoid_by_default"]
+    assert payload["production_gates"]["ddl"] == "noop"
+    assert "python -m nox -s l0" in payload["required_commands"]
+
+
+def test_fast_path_classifies_workflow_script_as_t1(isolated_workflow_root: Path) -> None:
+    payload = workflow.build_fast_path_plan(
+        bug_id=None,
+        issue_json=None,
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        module="validation.guardrails",
+    )
+
+    assert payload["task_tier"] == "T1"
+    assert payload["file_categories"]["scripts/aistock_issue_workflow.py"] == "workflow"
+    assert payload["context_strategy"]["goal"] == "single issue context pack plus targeted code snippets"
+    assert payload["production_gates"] == {
+        "ddl": "noop",
+        "frontend_dependency": "noop",
+        "backend_dependency": "noop",
+    }
+    assert "python -m nox -s guardrail_changed_files" in payload["required_commands"]
+
+
+def test_start_and_finish_embed_fast_path(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _write_json(isolated_workflow_root / "bug.json", _bug())
+    monkeypatch.setattr(workflow, "_build_code_intelligence_summary", lambda **kwargs: _fake_code_intelligence_summary())
+
+    start = workflow.build_start_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        create_worktree=False,
+        dry_run=True,
+        task_slug=None,
+        allow_missing_linkage=False,
+        allow_closed=False,
+    )
+    finish = workflow.build_finish_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        base="origin/main",
+        head="HEAD",
+        validation_evidence=[],
+        plan_only=True,
+        allow_missing_evidence=False,
+    )
+
+    assert start["fast_path"]["task_tier"] == "T1"
+    assert finish["fast_path"]["task_tier"] == "T1"
+    assert start["fast_path"]["next_command"].endswith("run --bug-id BUG-199 --mode plan --create-worktree")
+
+
+def test_workflow_smoke_uses_synthetic_issue_and_no_unexpected_dirty_paths(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(workflow, "_build_code_intelligence_summary", lambda **kwargs: _fake_code_intelligence_summary())
+    monkeypatch.setattr(workflow, "_git_status_paths", lambda root: [])
+
+    payload = workflow.build_workflow_smoke_plan(
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        module="validation.guardrails",
+    )
+
+    assert payload["schema_version"] == "aistock_issue_workflow_smoke_v1"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["dry_run"] is True
+    assert payload["synthetic_record"] is True
+    assert payload["unexpected_dirty_paths"] == []
+    assert payload["fast_path"]["task_tier"] == "T1"
+    assert payload["start"]["worktree_plan"]["dry_run"] is True
+    assert payload["finish"]["workflow_gate"] == "ready_for_pr"
+    assert payload["postmortem_preview"]["stale_pr_check"] == "skipped_in_smoke_to_avoid_external_github_reads"
+    assert not list((isolated_workflow_root / "tests" / "aistock_validation" / "bugs").glob("*BUG-000*.json"))
+
 
 def test_code_intelligence_doctor_reports_bootstrap_command(
     isolated_workflow_root: Path,
