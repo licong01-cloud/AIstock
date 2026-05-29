@@ -44,18 +44,18 @@
       "timestamp": "2026-05-29T06:45:10.219514Z"
     },
     {
-      "timestamp": "2026-05-29T07:05:00Z",
-      "actor": "codex",
       "action": "scope_and_closure_expansion",
-      "note": "Expanded BUG-155 into full vn.py-style execution policy asset implementation scope; explicitly prohibits simplified/POC/skeleton delivery."
+      "actor": "codex",
+      "note": "Expanded BUG-155 into full vn.py-style execution policy asset implementation scope; explicitly prohibits simplified/POC/skeleton delivery.",
+      "timestamp": "2026-05-29T07:05:00Z"
     }
   ],
   "evidence_uris": [],
   "expected": "AIstock has complete vn.py-style execution strategy asset infrastructure and complete first asset set: execution policies are versioned/identifiable assets, Paper v2 portfolios/sessions can select a supported execution strategy, MiniQMT simulation receives orders through the selected strategy, order/fill/cancel/reject diagnostics remain traceable, and the algorithm core is reusable by future QE integration without Paper-only semantics.",
   "first_seen_at": "2026-05-29T06:45:10.219521Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "fb620d2cb5fc47e793ba7afdcc79aab52439c0eb",
+  "fixed_at": "2026-05-29T08:54:15.310833Z",
   "github_issue_number": 357,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/357",
   "last_seen_at": "2026-05-29T06:45:10.219521Z",
@@ -67,6 +67,7 @@
     "Do not mutate StrategyPackage frozen manifests, model weights, HMM snapshots, QE workspaces, or validated production assets.",
     "Do not introduce vn.py EventEngine, AlgoEngine, MainEngine, or gateway runtime as a second production engine."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/366",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -81,7 +82,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2.execution"
   ],
@@ -90,5 +91,12 @@
     "fingerprint": "93b8ebb123c8363ef78ab97b",
     "source_event_id": "FE-20260529-93b8ebb123c8"
   },
+  "validation_evidence": [
+    "git diff --check origin/main...HEAD -> passed",
+    "python -m json.tool tests\\aistock_validation\\bugs\\20260529_BUG-155-implement-vn-py-style-execution-strategy-assets-for-paper-v2-and-qe-read.json -> passed",
+    "python -m pytest backend/tests/trading_core backend/tests/paper_trading_v2 -q -p no:cacheprovider -> 359 passed, 1 skipped, 2 xfailed",
+    "python -m nox -s l0 validation_module_registry_l0 -> success",
+    "ruff check changed Python files -> passed"
+  ],
   "verification_run_id": null
 }
