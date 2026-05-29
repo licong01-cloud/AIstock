@@ -1,0 +1,98 @@
+{
+  "actual": "因子库、因子独立指标、因子相关性、模型库、策略库、执行策略库概要查询均命中 local_data_management_request/aistock-local-data。",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/tool_router.py",
+    "backend/services/research_assistant/domain_ontology.py",
+    "backend/tests/research_assistant/test_natural_language_mcp_routing.py",
+    "backend/tests/research_assistant/test_api.py",
+    "backend/services/research_assistant/service.py",
+    "backend/tests/research_assistant/test_service.py",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260529_BUG-158-research-assistant-mcp.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-158",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-29T09:20:40.417437Z",
+  "description": "因子库、因子独立指标、因子相关性、模型库、策略库、执行策略库概要查询均命中 local_data_management_request/aistock-local-data。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260529-fd94706200dd",
+      "timestamp": "2026-05-29T09:20:40.417432Z"
+    },
+    {
+      "timestamp": "2026-05-29T09:32:00Z",
+      "actor": "codex",
+      "action": "scope_expand_same_module",
+      "note": "Root cause includes ResearchAssistantService legacy local-data fallback markers and chat card construction, so service.py/test_service.py are required alongside tool_router regression coverage. Scope remains limited to research_assistant."
+    },
+    {
+      "timestamp": "2026-05-29T09:56:02Z",
+      "actor": "codex",
+      "action": "scope_expand_issue_registry_metadata",
+      "note": "Added BUG registry JSON and allocator paths to allowed_write_scope so the issue workflow can validate all metadata files changed by BUG registration and closure evidence. Scope remains Research Assistant plus issue registry metadata."
+    },
+    {
+      "timestamp": "2026-05-29T09:56:30Z",
+      "actor": "codex",
+      "action": "validation_completed",
+      "note": "git diff --check -> passed; python -m json.tool tests\\aistock_validation\\bugs\\.bug_id_allocator.json and tests\\aistock_validation\\bugs\\20260529_BUG-158-research-assistant-mcp.json -> passed; python -m pytest -q backend/tests/research_assistant/test_api.py::test_research_assistant_api_phase1_smoke backend/tests/research_assistant/test_service.py::test_prompt_tree_capability_inquiry_does_not_trigger_qe_workflow backend/tests/research_assistant/test_service.py::test_chat_turn_capability_inquiry_answers_without_workflow_noise backend/tests/research_assistant/test_service.py::test_mode_router_m0_matrix_keeps_keywords_from_starting_workflow backend/tests/research_assistant/test_natural_language_mcp_routing.py backend/tests/research_assistant/test_service.py::test_specific_mcp_domains_are_not_overridden_by_local_data_fallback backend/tests/research_assistant/test_api.py::test_bug_158_api_routes_chinese_business_mcp_overviews -> 13 passed; python -m nox -s research_assistant_backend research_assistant_mcp_contract l0 --no-error-on-missing-interpreters -> passed (research_assistant_backend 75 passed; research_assistant_mcp_contract 26 passed; l0 succeeded)"
+    },
+    {
+      "timestamp": "2026-05-29T10:04:00Z",
+      "actor": "codex",
+      "action": "validation_extended",
+      "note": "Added CodeGraph-suggested Research Assistant tests and registry-triggered validation center/module registry evidence after commit-time finish plan expanded required validation."
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "自然语言业务查询应映射到对应 MCP domain/server/tool；概要类只返回 summary-first 小 payload；低风险只读概要可生成 read_only/auto-execute 路由，不误判成本地数据管理。",
+  "first_seen_at": "2026-05-29T09:20:40.417437Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 371,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/371",
+  "last_seen_at": "2026-05-29T09:20:40.417437Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "POST http://127.0.0.1:8001/api/v1/research-assistant/chat/turn message='查看执行策略库概要。' allow_execute=false",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Research Assistant 中文业务 MCP 路由误判为本地数据管理",
+  "trigger_condition": {
+    "fingerprint": "fd94706200dd65a477624775",
+    "source_event_id": "FE-20260529-fd94706200dd"
+  },
+  "verification_run_id": "BUG-158-20260529-local-validation",
+  "validation_evidence": [
+    "git diff --check -> passed",
+    "python -m json.tool tests\\aistock_validation\\bugs\\.bug_id_allocator.json and tests\\aistock_validation\\bugs\\20260529_BUG-158-research-assistant-mcp.json -> passed",
+    "python -m pytest -q backend/tests/research_assistant/test_api.py::test_research_assistant_api_phase1_smoke backend/tests/research_assistant/test_service.py::test_prompt_tree_capability_inquiry_does_not_trigger_qe_workflow backend/tests/research_assistant/test_service.py::test_chat_turn_capability_inquiry_answers_without_workflow_noise backend/tests/research_assistant/test_service.py::test_mode_router_m0_matrix_keeps_keywords_from_starting_workflow backend/tests/research_assistant/test_natural_language_mcp_routing.py backend/tests/research_assistant/test_service.py::test_specific_mcp_domains_are_not_overridden_by_local_data_fallback backend/tests/research_assistant/test_api.py::test_bug_158_api_routes_chinese_business_mcp_overviews -> 13 passed",
+    "python -m nox -s research_assistant_backend research_assistant_mcp_contract l0 --no-error-on-missing-interpreters -> passed (research_assistant_backend 75 passed; research_assistant_mcp_contract 26 passed; l0 succeeded)",
+    "python -m pytest -q backend/tests/research_assistant/test_execution_closure.py backend/tests/research_assistant/test_mcp_catalog_sync.py backend/tests/research_assistant/test_schema_contract.py -> 17 passed",
+    "python -m nox -s validation_center_backend validation_module_registry_l0 --no-error-on-missing-interpreters -> passed (validation_center_backend 266 passed; validation_module_registry_l0 8 passed)"
+  ]
+}

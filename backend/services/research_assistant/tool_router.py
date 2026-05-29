@@ -35,6 +35,7 @@ TOOL_HINTS: tuple[tuple[McpDomain, tuple[str, ...], str], ...] = (
     (McpDomain.FACTOR_LIBRARY, ("deprecate", "retire", "废弃", "退役"), "factor_library_plan_deprecate"),
     (McpDomain.FACTOR_METRICS, ("submit", "run", "calculate", "calc", "提交", "运行", "计算"), "factor_metrics_plan"),
     (McpDomain.FACTOR_METRICS, ("result", "ic", "rankic", "结果"), "factor_metrics_get_result"),
+    (McpDomain.FACTOR_CORRELATION, ("overview", "summary", "\u6982\u8981", "\u6982\u89c8"), "factor_corr_plan"),
     (McpDomain.FACTOR_CORRELATION, ("top", "pairs", "top pairs", "高相关"), "factor_corr_get_top_pairs"),
     (McpDomain.FACTOR_CORRELATION, ("cluster", "聚类"), "factor_corr_get_clusters"),
     (McpDomain.FACTOR_CORRELATION, ("replacement", "replace", "替换"), "factor_corr_suggest_replacements"),
@@ -106,6 +107,8 @@ def score_domains(message: str) -> list[dict[str, Any]]:
             ("factor" in lower or "因子" in lower) and any(token in lower for token in ("correlation", "corr", "cluster", "matrix", "replacement", "redundant", "top pairs", "相关", "聚类", "矩阵", "替换", "冗余"))
         ):
             score += 8
+        if spec.domain == McpDomain.EXECUTION_POLICY and ("执行策略库" in lower or "执行策略" in lower):
+            score += 8
         if score > 0:
             scores.append({"domain": spec.domain, "score": score, "matched_terms": matched})
     scores.sort(key=lambda item: item["score"], reverse=True)
@@ -122,19 +125,28 @@ def classify_domain(message: str) -> McpDomain:
 def select_tool(domain: McpDomain, message: str) -> str:
     lower = _norm(message)
     spec = spec_for_domain(domain)
+    summary_terms = ('overview', 'summary', 'catalog', 'list', 'available', '概要', '概览', '列表', '有哪些', '有什么', '可用')
+    if _contains_any(lower, summary_terms):
+        for hint_domain, terms, tool in TOOL_HINTS:
+            if hint_domain == domain and _contains_any(lower, terms):
+                return tool
+        if domain in {McpDomain.FACTOR_METRICS, McpDomain.FACTOR_CORRELATION} and spec.plan_tools:
+            return spec.plan_tools[0]
+        if spec.read_tools:
+            return spec.read_tools[0]
     for hint_domain, terms, tool in TOOL_HINTS:
         if hint_domain == domain and _contains_any(lower, terms):
             return tool
-    if _contains_any(lower, DETAIL_TERMS) and spec.read_tools:
-        for tool in spec.read_tools:
-            if tool.endswith("_get") or "_get_" in tool:
-                return tool
     if _contains_any(lower, PLAN_TERMS) and spec.plan_tools:
         return spec.plan_tools[0]
     if _contains_any(lower, WRITE_TERMS) and spec.confirmed_tools:
         return spec.plan_tools[0] if spec.plan_tools else spec.confirmed_tools[0]
     if _contains_any(lower, SEARCH_TERMS) and spec.read_tools:
         return spec.read_tools[0]
+    if _contains_any(lower, DETAIL_TERMS) and spec.read_tools:
+        for tool in spec.read_tools:
+            if tool.endswith("_get") or "_get_" in tool:
+                return tool
     return spec.default_tool
 
 

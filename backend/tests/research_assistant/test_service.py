@@ -544,16 +544,37 @@ def test_local_data_management_catalog_prompt_and_cards() -> None:
 
 def test_specific_mcp_domains_are_not_overridden_by_local_data_fallback() -> None:
     svc = _chat_service()
-    cases = {
+    prompt_only_cases = {
         "strategy package paper readiness": ("strategy_governance_request", "domain.strategy_governance"),
         "sync BUG-120 GitHub issue": ("validation_issue_request", "domain.validation_issue"),
     }
-    for message, (expected_intent, expected_prompt) in cases.items():
+    for message, (expected_intent, expected_prompt) in prompt_only_cases.items():
         bundle = svc.build_prompt_bundle(PromptBundleBuildRequest(user_message=message, phase="planning"))
         keys = {node["prompt_key"] for node in bundle["node_refs"]}
         assert bundle["selection_trace_json"]["dialogue_intent"] == expected_intent
         assert expected_prompt in keys
         assert "prompt.local_data_management" not in keys
+
+    bug_158_cases = {
+        "因子库有哪些因子？只要概要列表，不要全量详情。": ("factor_library_request", "domain.factor_library", "aistock-factor-library"),
+        "查看因子独立指标计算能力概要。": ("factor_metrics_request", "domain.factor_metrics", "aistock-factor-metrics"),
+        "查看因子相关性计算能力概要。": ("factor_correlation_request", "domain.factor_correlation", "aistock-factor-correlation"),
+        "查看模型库概要。": ("model_registry_request", "domain.model_registry", "aistock-model-registry"),
+        "查看策略库概要。": ("strategy_governance_request", "domain.strategy_governance", "aistock-strategy-governance"),
+        "查看执行策略库概要。": ("execution_policy_request", "domain.execution_policy", "aistock-execution-policy"),
+    }
+    for message, (expected_intent, expected_prompt, expected_server) in bug_158_cases.items():
+        bundle = svc.build_prompt_bundle(PromptBundleBuildRequest(user_message=message, phase="planning"))
+        keys = {node["prompt_key"] for node in bundle["node_refs"]}
+        assert bundle["selection_trace_json"]["dialogue_intent"] == expected_intent
+        assert expected_prompt in keys
+        assert "prompt.local_data_management" not in keys
+
+        result = svc.chat_turn(ChatTurnRequest(message=message))
+        assert result["mode_decision"]["intent_type"] == expected_intent
+        assert result["cards"].get("local_data_management") is None
+        assert result["cards"]["mcp_route_decision"]["server_key"] == expected_server
+        assert "local_data" not in result["cards"]["capability_summary"].get("route", "")
 
 
 def test_bug117_prompt_and_health_do_not_expose_undeveloped_capability_bans() -> None:
