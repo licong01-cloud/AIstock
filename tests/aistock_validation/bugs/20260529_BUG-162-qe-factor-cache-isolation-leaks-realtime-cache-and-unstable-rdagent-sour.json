@@ -31,8 +31,8 @@
   "expected": "QE backtests and the factor library use only rdagent_assets/factor_values backtest cache. factor_values_realtime is invisible to QE cache display/stats/hit logic. Missing or invalid backtest cache recomputes and writes factor_values; next identical backtest hits. Factor catalog code_text is the only QE factor code authority.",
   "first_seen_at": "2026-05-29T13:03:30.350129Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a1defd6647ceb9e1d767b67ad9efad7b5968a3d5",
+  "fixed_at": "2026-05-29T14:34:51.271160Z",
   "github_issue_number": 385,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/385",
   "last_seen_at": "2026-05-29T13:03:30.350129Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/392",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -54,7 +55,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -63,5 +64,17 @@
     "fingerprint": "d69ca003749778b274883fb8",
     "source_event_id": "FE-20260529-d69ca0037497"
   },
+  "validation_evidence": [
+    "PR #392 GitHub checks all green and merged; close-sync PR #394 GitHub checks all green (Auto-register CI failures skipped/non-blocking) -> passed",
+    "python -m pytest backend/tests/test_factor_cache_wsl_env.py backend/tests/unified_engine/test_multi_alpha_command_generation.py::TestConfigComposerCommandGeneration::test_build_auto_wsl_command_parts_uses_factor_cache_root backend/tests/unified_engine/test_multi_alpha_command_generation.py::TestConfigComposerCommandGeneration::test_generate_auto_wsl_command_keeps_legacy_cd_prefix backend/tests/unified_engine/test_multi_alpha_command_generation.py::TestConfigComposerCommandGeneration::test_compose_prepare_factors_generates_valid_python -q -> 19 passed",
+    "git diff --check -> passed",
+    "python -m ruff check backend/routers/quantevolver.py backend/services/quantevolver/config_composer.py backend/tests/test_factor_cache_wsl_env.py scripts/backfill_factor_cache.py -> passed",
+    "python -m nox -s l0 -> passed",
+    "QE_READ_L3_SKIP_UI=1 python -m nox -s qe_read_l3 -> passed (qe_read_l3 + qe_read_backend; UI sub-gate skipped by supported env toggle)",
+    "python -m nox -s qe_data_contract_backend -> passed (17 passed)",
+    "with F:\\Dev\\AIstock\\.env DB vars, python -m nox -s qe_archive_l3 -> passed",
+    "python -m nox -s validation_center_backend -> passed (272 passed; coverage line 79.64 branch 61.71)",
+    "python -m nox -s validation_module_registry_l0 -> passed (8 passed; ownership scan mapped=12 unmapped=0 ambiguous=0)"
+  ],
   "verification_run_id": null
 }
