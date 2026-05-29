@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from backend.execution_algos.vnpy_style import VNPY_STYLE_ASSETS, is_vnpy_style_algo, validate_vnpy_style_config
 from backend.services.mcp_payload_budget import artifact_ref, strip_forbidden_fields, summary_envelope
 from backend.services.strategy_package.execution_policy import normalize_execution_policy_json
 from backend.services.strategy_package.service import StrategyPackageService
@@ -120,6 +120,8 @@ def _algo_catalog() -> dict[str, dict[str, Any]]:
         loaded = _load_yaml_algo(config_dir / name)
         if loaded:
             algos[loaded["algo_code"]] = loaded
+    for algo_code, spec in VNPY_STYLE_ASSETS.items():
+        algos[algo_code] = spec.catalog_entry()
     return algos
 
 
@@ -137,6 +139,34 @@ def _policy_summary(policy: Any) -> dict[str, Any]:
     return strip_forbidden_fields(payload)
 
 
+_REQUIREMENT_FLAG_KEYS: dict[str, tuple[str, ...]] = {
+    "minute_bar": ("requires_minute_bar", "minute_bar_required"),
+    "pre_close": ("requires_pre_close", "pre_close_required"),
+    "limit": ("requires_limit_price", "requires_limit", "limit_up_down_required"),
+    "suspend_d": ("requires_suspend_status", "requires_suspend_d", "suspend_d_required"),
+    "day_features": ("requires_day_features", "day_features_required"),
+    "model_artifact": ("requires_model_artifact", "model_artifact_required"),
+    "trade_calendar": ("requires_trade_calendar", "trade_calendar_required"),
+    "broker_quote": ("requires_broker_quote", "broker_quote_required"),
+    "broker_order_status": ("requires_broker_order_status", "broker_order_status_required"),
+    "broker_trade_report": ("requires_broker_trade_report", "broker_trade_report_required"),
+}
+
+
+def _required_data_requirements(policy_json: dict[str, Any]) -> set[str]:
+    requirements = policy_json.get("data_requirements")
+    if isinstance(requirements, list):
+        return {str(item).strip() for item in requirements if str(item).strip()}
+    if not isinstance(requirements, dict):
+        return set()
+    required = requirements.get("required") or []
+    result = {str(item).strip() for item in required if str(item).strip()} if isinstance(required, list) else set()
+    for requirement, flag_keys in _REQUIREMENT_FLAG_KEYS.items():
+        if any(requirements.get(flag_key) is True for flag_key in flag_keys):
+            result.add(requirement)
+    return result
+
+
 def _validate_policy_contract(policy_json: dict[str, Any], algo_code: str | None = None) -> list[str]:
     blockers: list[str] = []
     try:
@@ -150,8 +180,18 @@ def _validate_policy_contract(policy_json: dict[str, Any], algo_code: str | None
         blockers.append("unknown_algo_code")
     if normalized.get("fallback_algo_code") and not normalized.get("fallback_policy"):
         blockers.append("fallback_policy_required_when_fallback_algo_code_is_set")
-    requirements = set((normalized.get("data_requirements") or {}).get("required", []) if isinstance(normalized.get("data_requirements"), dict) else [])
-    expected = {"minute_bar", "pre_close", "limit", "suspend_d"}
+    if is_vnpy_style_algo(selected_algo):
+        try:
+            normalized_config = validate_vnpy_style_config(selected_algo, dict(normalized.get("algo_config") or {}))
+            if "data_requirements" not in normalized:
+                normalized = VNPY_STYLE_ASSETS[selected_algo].execution_policy_json(normalized_config)
+        except Exception as exc:
+            blockers.append(f"invalid_algo_config:{type(exc).__name__}:{exc}")
+    requirements = _required_data_requirements(normalized)
+    if is_vnpy_style_algo(selected_algo):
+        expected = set(VNPY_STYLE_ASSETS[selected_algo].data_requirements)
+    else:
+        expected = {"minute_bar", "pre_close", "limit", "suspend_d"}
     missing_contract = sorted(expected.difference(requirements))
     if missing_contract:
         blockers.append("missing_data_requirements:" + ",".join(missing_contract))
