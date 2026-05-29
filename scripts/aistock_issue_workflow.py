@@ -46,6 +46,7 @@ ARTIFACT_PATH_PATTERNS = (
 )
 BUG_ID_RE = re.compile(r"\bBUG-(\d{3,})\b", re.IGNORECASE)
 OUTPUT_FORMAT_TOKENS = {"json", "yaml", "yml", "text", "txt", "stdout", "stderr", "console"}
+OUTPUT_FORMAT_CHOICES = ("compact", "summary", "full-json")
 SAFE_OUTPUT_DIRS = (WORKFLOW_ROOT, Path("tmp") / "validation")
 FAST_PATH_TIER_ORDER = {"T0": 0, "T1": 1, "T2": 2, "T3": 3}
 FAST_PATH_REGISTRY_PREFIXES = ("tests/aistock_validation/bugs/",)
@@ -189,11 +190,288 @@ def _resolve_output_path(output: str | None) -> Path | None:
     return path
 
 
-def _emit(payload: dict[str, Any], output: str | None = None) -> None:
+def _pick(payload: dict[str, Any], *keys: str) -> dict[str, Any]:
+    return {key: payload.get(key) for key in keys if key in payload}
+
+
+def _compact_count(value: Any) -> int | None:
+    if isinstance(value, (list, tuple, set, dict)):
+        return len(value)
+    return None
+
+
+def _compact_check_summary(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    summary: dict[str, Any] = {}
+    for key in ("failed", "pending", "non_blocking", "passed"):
+        items = value.get(key)
+        count = _compact_count(items)
+        if count is not None:
+            summary[f"{key}_count"] = count
+            if key in {"failed", "pending"} and items:
+                summary[key] = list(items)[:5]
+    return summary
+
+
+def _compact_pr_automation(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    compact = _pick(value, "branch", "dry_run", "pr_url")
+    if "pre_pr_gate" in value:
+        compact["pre_pr_gate"] = _pick(value["pre_pr_gate"], "workflow_gate", "blocking")
+    actions = value.get("actions")
+    if isinstance(actions, list):
+        compact["actions_count"] = len(actions)
+    if value.get("next_commands"):
+        compact["next_commands"] = value.get("next_commands")
+    return compact
+
+
+def _compact_timing_summary(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    return _pick(
+        value,
+        "event_count",
+        "known_duration_seconds",
+        "inferred_elapsed_seconds",
+        "code_repair_seconds",
+        "started_at",
+        "ended_at",
+    )
+
+
+def _compact_start(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    compact = _pick(
+        value,
+        "bug_id",
+        "module",
+        "status",
+        "workflow_gate",
+        "source_bug_json",
+        "context_pack_md",
+        "fix_ready_path",
+        "state_path",
+        "events_path",
+        "github_issue_url",
+    )
+    worktree_plan = value.get("worktree_plan")
+    if isinstance(worktree_plan, dict):
+        compact["worktree_plan"] = _pick(worktree_plan, "branch", "worktree", "created", "dry_run")
+    if "required_verification" in value:
+        compact["required_verification"] = value.get("required_verification")
+    if "production_gates" in value:
+        compact["production_gates"] = value.get("production_gates")
+    return compact
+
+
+def _compact_finish(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    compact = _pick(
+        value,
+        "bug_id",
+        "workflow_gate",
+        "closure_ready",
+        "changed_files",
+        "required_verification",
+        "recommended_verification",
+        "production_gates",
+        "pr_body_path",
+        "state_path",
+        "events_path",
+        "error",
+    )
+    if "validation_evidence" in value:
+        compact["validation_evidence_count"] = len(value.get("validation_evidence") or [])
+    if "scope_check" in value:
+        compact["scope_check"] = _pick(value["scope_check"], "status", "violations", "status_source")
+    if "code_intelligence" in value:
+        compact["code_intelligence"] = _pick(value["code_intelligence"], "status", "context_ref", "affected_tests_ref", "fallback_used")
+    if "pre_pr_gate" in value:
+        compact["pre_pr_gate"] = _pick(value["pre_pr_gate"], "workflow_gate", "blocking")
+    return compact
+
+
+def _compact_postmortem(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    compact = _pick(
+        value,
+        "bug_id",
+        "workflow_root",
+        "state",
+        "duplicate_active_count",
+        "flow_overhead_estimate",
+        "production_gates",
+        "postmortem_md_path",
+        "postmortem_json_path",
+    )
+    timing_summary = _compact_timing_summary(value.get("timing_summary"))
+    if timing_summary:
+        compact["timing_summary"] = timing_summary
+    active = value.get("active_workflows")
+    if isinstance(active, list):
+        compact["active_workflow_count"] = len(active)
+    stale = value.get("stale_pr_check")
+    if isinstance(stale, dict):
+        compact["stale_pr_check"] = _pick(stale, "status", "open_prs", "merged_prs")
+    elif stale is not None:
+        compact["stale_pr_check"] = stale
+    return compact
+
+
+def _compact_finalizer(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    compact = _pick(value, "workflow_gate", "blocking", "source_merge_commit", "next_actions")
+    if "close_sync" in value:
+        compact["close_sync"] = _pick(value["close_sync"], "workflow_gate", "registry_root", "updated_bug_json", "merge_commit")
+    if "close_sync_commit" in value:
+        compact["close_sync_commit"] = _pick(value["close_sync_commit"], "workflow_gate", "branch", "pr_url", "commit", "next_command")
+    if "close_sync_pr_merge" in value:
+        compact["close_sync_pr_merge"] = _pick(value["close_sync_pr_merge"], "workflow_gate", "merge_commit", "blocking")
+    if "cleanup" in value and isinstance(value["cleanup"], dict):
+        compact["cleanup"] = _pick(value["cleanup"], "workflow_gate", "branch", "worktree", "sync_root", "blocking", "warnings")
+    if "postmortem" in value:
+        compact["postmortem"] = _compact_postmortem(value["postmortem"])
+    return compact
+
+
+def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    schema = str(payload.get("schema_version") or "")
+    if not schema:
+        return payload
+    compact = _pick(payload, "schema_version", "workflow_gate", "bug_id", "mode", "next_command")
+    if payload.get("blocking"):
+        compact["blocking"] = payload.get("blocking")
+    if payload.get("warnings"):
+        compact["warnings_count"] = len(payload.get("warnings") or [])
+
+    if schema.endswith("_run_v1"):
+        compact.update(_pick(payload, "mode"))
+        if "start" in payload:
+            compact["start"] = _compact_start(payload["start"])
+        if "finish" in payload:
+            compact["finish"] = _compact_finish(payload["finish"])
+        if "pr_automation" in payload:
+            compact["pr_automation"] = _compact_pr_automation(payload["pr_automation"])
+        if "merge" in payload:
+            compact["merge"] = _pick(payload["merge"], "already_merged", "merge_commit", "verified")
+            if isinstance(payload["merge"], dict) and "check_summary" in payload["merge"]:
+                compact["merge"]["check_summary"] = _compact_check_summary(payload["merge"]["check_summary"])
+        if "finalizer" in payload:
+            compact["finalizer"] = _compact_finalizer(payload["finalizer"])
+        if "close_sync" in payload and "finalizer" not in payload:
+            compact["close_sync"] = _pick(payload["close_sync"], "workflow_gate", "registry_root", "updated_bug_json", "merge_commit")
+        if "close_sync_commit" in payload and "finalizer" not in payload:
+            compact["close_sync_commit"] = _pick(payload["close_sync_commit"], "workflow_gate", "branch", "pr_url", "commit")
+        if "cleanup" in payload and isinstance(payload["cleanup"], dict):
+            compact["cleanup"] = _pick(payload["cleanup"], "workflow_gate", "branch", "worktree", "sync_root", "blocking", "warnings")
+        if "active_decision" in payload:
+            compact["active_decision"] = _pick(payload["active_decision"], "decision", "workflow_gate", "next_command", "blocking", "warnings")
+    elif schema.endswith("_start_v1"):
+        compact.update(_compact_start(payload) or {})
+    elif schema.endswith("_finish_v1") or schema.endswith("_finish_batch_v1"):
+        compact.update(_compact_finish(payload) or {})
+        if "batch_id" in payload:
+            compact["batch_id"] = payload.get("batch_id")
+            compact["bug_ids"] = payload.get("bug_ids")
+    elif schema.endswith("_smoke_v1"):
+        compact.update(
+            _pick(
+                payload,
+                "dry_run",
+                "unexpected_dirty_paths",
+                "production_gates",
+            )
+        )
+        compact["changed_files_count"] = len(payload.get("changed_files") or [])
+        if isinstance(payload.get("fast_path"), dict):
+            compact["fast_path"] = _pick(payload["fast_path"], "task_tier", "module", "workflow_gate")
+        if "postmortem_preview" in payload:
+            preview = _compact_postmortem(payload["postmortem_preview"])
+            if preview:
+                compact["postmortem_preview"] = _pick(preview, "bug_id", "timing_summary", "stale_pr_check")
+    elif schema.endswith("_postmortem_v1"):
+        compact.update(_compact_postmortem(payload) or {})
+    elif schema.endswith("_close_sync_v1"):
+        compact.update(
+            _pick(
+                payload,
+                "source_bug_json",
+                "registry_root",
+                "current_status",
+                "github_issue_url",
+                "merged_pr",
+                "merge_commit",
+                "production_gates",
+                "dry_run",
+                "updated_bug_json",
+                "timing_summary",
+            )
+        )
+        compact["validation_evidence_count"] = len(payload.get("validation_evidence") or [])
+        if "github_issue_sync" in payload:
+            compact["github_issue_sync"] = _pick(payload["github_issue_sync"], "status", "channel", "fallback_used")
+    elif schema.endswith("_cleanup_v1"):
+        compact.update(
+            _pick(
+                payload,
+                "branch",
+                "worktree",
+                "canonical_root",
+                "sync_root",
+                "merged_into_origin_main",
+                "worktree_clean",
+                "dry_run",
+                "duration_seconds",
+                "blocking",
+                "warnings",
+            )
+        )
+        if "actions" in payload:
+            compact["actions_count"] = len(payload.get("actions") or [])
+        if "applied" in payload:
+            compact["applied_count"] = len(payload.get("applied") or [])
+        if "complete_state" in payload:
+            compact["complete_state"] = _pick(payload["complete_state"], "state", "updated_at")
+    elif schema.endswith("_merge_finalizer_v1"):
+        compact.update(_compact_finalizer(payload) or {})
+    else:
+        for key in (
+            "module",
+            "status",
+            "task_tier",
+            "required_verification",
+            "recommended_verification",
+            "production_gates",
+            "pr_url",
+            "branch",
+            "worktree",
+            "state_path",
+            "events_path",
+        ):
+            if key in payload:
+                compact[key] = payload[key]
+
+    compact["full_payload"] = "use --output-format full-json or --output <tmp/issue_workflow/...json> for details"
+    return compact
+
+
+def _emit(payload: dict[str, Any], output: str | None = None, output_format: str = "compact") -> None:
     output_path = _resolve_output_path(output)
     if output_path:
         _write_json(output_path, payload)
-    sys.stdout.write(json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n")
+    stdout_payload = payload if output_format == "full-json" else _compact_payload(payload)
+    sys.stdout.write(json.dumps(stdout_payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n")
+
+
+def _emit_args(payload: dict[str, Any], args: argparse.Namespace) -> None:
+    _emit(payload, getattr(args, "output", None), getattr(args, "output_format", "compact"))
 
 
 def _repo_rel(path: Path, root: Path | None = None) -> str:
@@ -5018,7 +5296,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         allow_closed=args.allow_closed,
         active_decision=None,
     )
-    _emit(payload, args.output)
+    _emit_args(payload, args)
     return 0
 
 
@@ -5033,19 +5311,19 @@ def cmd_finish(args: argparse.Namespace) -> int:
         plan_only=args.plan_only,
         allow_missing_evidence=args.allow_missing_evidence,
     )
-    _emit(payload, args.output)
+    _emit_args(payload, args)
     return 0 if payload.get("closure_ready") else 2
 
 
 def cmd_triage_p0(args: argparse.Namespace) -> int:
     payload = build_triage_p0(include_fixed=args.include_fixed)
-    _emit(payload, args.output)
+    _emit_args(payload, args)
     return 0
 
 
 def cmd_run_p0(args: argparse.Namespace) -> int:
     payload = build_run_p0_plan(module=args.module, include_fixed=args.include_fixed)
-    _emit(payload, args.output)
+    _emit_args(payload, args)
     return 0
 
 
@@ -5058,7 +5336,7 @@ def cmd_start_batch(args: argparse.Namespace) -> int:
         allow_missing_linkage=args.allow_missing_linkage,
         allow_closed=args.allow_closed,
     )
-    _emit(payload, args.output)
+    _emit_args(payload, args)
     return 0
 
 
@@ -5074,7 +5352,7 @@ def cmd_finish_batch(args: argparse.Namespace) -> int:
         plan_only=args.plan_only,
         allow_missing_evidence=args.allow_missing_evidence,
     )
-    _emit(payload, args.output)
+    _emit_args(payload, args)
     return 0 if payload.get("closure_ready") else 2
 
 
@@ -5087,7 +5365,7 @@ def cmd_fast_path(args: argparse.Namespace) -> int:
         allow_missing_linkage=args.allow_missing_linkage,
         allow_closed=args.allow_closed,
     )
-    _emit(payload, args.output)
+    _emit_args(payload, args)
     return 0
 
 
@@ -5098,13 +5376,13 @@ def cmd_workflow_smoke(args: argparse.Namespace) -> int:
         changed_files=list(args.changed_file or []),
         module=args.module,
     )
-    _emit(payload, args.output)
+    _emit_args(payload, args)
     return 0 if payload.get("workflow_gate") == "passed" else 2
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
     payload = build_doctor_report(skip_external=args.skip_external)
-    _emit(payload, args.output)
+    _emit_args(payload, args)
     return 0 if payload.get("workflow_gate") != "blocked" else 2
 
 
@@ -5132,13 +5410,13 @@ def cmd_submit_bug(args: argparse.Namespace) -> int:
         registry_pr_only=args.registry_pr_only,
         dry_run=args.dry_run,
     )
-    _emit(payload, args.output)
+    _emit_args(payload, args)
     return 0 if payload.get("workflow_gate") in {"ready_for_apply", "submitted"} else 2
 
 
 def cmd_install_client(args: argparse.Namespace) -> int:
     payload = build_client_install_plan(apply=args.apply, codex_home=args.codex_home)
-    _emit(payload, args.output)
+    _emit_args(payload, args)
     return 0 if payload.get("workflow_gate") in {"ready_for_install", "installed"} else 2
 
 
@@ -5149,7 +5427,7 @@ def cmd_triage_ci_issue(args: argparse.Namespace) -> int:
         summary_json=args.summary_json,
         skip_github_summary=args.skip_github_summary,
     )
-    _emit(payload, args.output)
+    _emit_args(payload, args)
     return 0
 
 
@@ -5161,7 +5439,7 @@ def cmd_promote_ci_issue(args: argparse.Namespace) -> int:
         summary_json=args.summary_json,
         skip_github_summary=args.skip_github_summary,
     )
-    _emit(payload, args.output)
+    _emit_args(payload, args)
     return 0 if payload.get("workflow_gate") in {"ready_for_apply", "promoted", "already_linked"} else 2
 
 
@@ -5192,13 +5470,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         worktree=args.worktree,
         production_gates=_production_gates_payload(args),
     )
-    _emit(payload, args.output)
+    _emit_args(payload, args)
     return 0 if payload.get("workflow_gate") not in {"validation_evidence_missing", "blocked"} else 2
 
 
 def cmd_resume(args: argparse.Namespace) -> int:
     payload = build_resume_plan(bug_id=args.bug_id, worktree=args.worktree, events_limit=args.events_limit)
-    _emit(payload, args.output)
+    _emit_args(payload, args)
     return 0
 
 
@@ -5208,7 +5486,7 @@ def cmd_postmortem(args: argparse.Namespace) -> int:
         worktree=args.worktree,
         output_markdown=not args.no_markdown,
     )
-    _emit(payload, args.output)
+    _emit_args(payload, args)
     return 0
 
 
@@ -5226,7 +5504,7 @@ def cmd_close_sync(args: argparse.Namespace) -> int:
         create_registry_worktree=args.create_registry_worktree,
         allow_current_worktree=args.allow_current_worktree,
     )
-    _emit(payload, args.output)
+    _emit_args(payload, args)
     return 0 if payload.get("workflow_gate") in {"ready_for_apply", "close_synced"} else 2
 
 
@@ -5263,7 +5541,7 @@ def cmd_cleanup_after_merge(args: argparse.Namespace) -> int:
             next_actions=[],
         )
         payload["complete_state"] = state
-    _emit(payload, args.output)
+    _emit_args(payload, args)
     return 0 if payload.get("workflow_gate") in {"ready_for_cleanup", "cleanup_done"} else 2
 
 
@@ -5282,7 +5560,7 @@ def cmd_merge_finalizer(args: argparse.Namespace) -> int:
         cleanup=args.cleanup,
         apply=args.apply,
     )
-    _emit(payload, args.output)
+    _emit_args(payload, args)
     return 0 if payload.get("workflow_gate") not in {"blocked"} else 2
 
 
@@ -5290,9 +5568,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AIstock high-level issue-fix workflow orchestrator.")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    def add_output_options(command_parser: argparse.ArgumentParser) -> None:
+        command_parser.add_argument("--output")
+        command_parser.add_argument(
+            "--output-format",
+            choices=OUTPUT_FORMAT_CHOICES,
+            default="compact",
+            help="Stdout format. Default compact keeps success output short; --output still writes the full JSON artifact.",
+        )
     doctor = sub.add_parser("doctor", help="Check repo, GitHub, MCP, and client-entry readiness.")
     doctor.add_argument("--skip-external", action="store_true", help="Skip gh/network-style checks for offline tests.")
-    doctor.add_argument("--output")
+    add_output_options(doctor)
     doctor.set_defaults(func=cmd_doctor)
 
     submit_bug = sub.add_parser("submit-bug", help="Create a normalized BUG candidate and optionally sync GitHub/BUG JSON.")
@@ -5321,13 +5607,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Override the registry guard for emergency/manual use. Normal agent workflows must not use this on canonical main.",
     )
-    submit_bug.add_argument("--output")
+    add_output_options(submit_bug)
     submit_bug.set_defaults(func=cmd_submit_bug)
 
     install_client = sub.add_parser("install-client", help="Install or dry-run developer-client entry wrappers.")
     install_client.add_argument("--apply", action="store_true")
     install_client.add_argument("--codex-home")
-    install_client.add_argument("--output")
+    add_output_options(install_client)
     install_client.set_defaults(func=cmd_install_client)
 
     triage_ci = sub.add_parser("triage-ci-issue", help="Summarize and classify an auto-filed CI/Nightly GitHub Issue.")
@@ -5335,7 +5621,7 @@ def build_parser() -> argparse.ArgumentParser:
     triage_ci.add_argument("--run-id", help="Override or provide the Actions run id.")
     triage_ci.add_argument("--summary-json", help="Use an existing CI failure summary JSON instead of querying Actions.")
     triage_ci.add_argument("--skip-github-summary", action="store_true", help="Do not query Actions logs; emit a partial triage summary.")
-    triage_ci.add_argument("--output")
+    add_output_options(triage_ci)
     triage_ci.set_defaults(func=cmd_triage_ci_issue)
 
     promote_ci = sub.add_parser("promote-ci-issue", help="Promote a triaged CI GitHub Issue into the BUG JSON workflow.")
@@ -5344,7 +5630,7 @@ def build_parser() -> argparse.ArgumentParser:
     promote_ci.add_argument("--summary-json", help="Use an existing CI failure summary JSON instead of querying Actions.")
     promote_ci.add_argument("--skip-github-summary", action="store_true", help="Do not query Actions logs; promote with partial diagnostics.")
     promote_ci.add_argument("--apply", action="store_true")
-    promote_ci.add_argument("--output")
+    add_output_options(promote_ci)
     promote_ci.set_defaults(func=cmd_promote_ci_issue)
 
     run = sub.add_parser("run", help="Run the Phase 1 issue workflow state machine for one BUG.")
@@ -5374,21 +5660,21 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--production-ddl-gate", default="noop")
     run.add_argument("--production-frontend-dependency-gate", default="noop")
     run.add_argument("--production-backend-dependency-gate", default="noop")
-    run.add_argument("--output")
+    add_output_options(run)
     run.set_defaults(func=cmd_run)
 
     resume = sub.add_parser("resume", help="Resume a BUG workflow from state.json/events.jsonl.")
     resume.add_argument("--bug-id", required=True)
     resume.add_argument("--worktree")
     resume.add_argument("--events-limit", type=int, default=8)
-    resume.add_argument("--output")
+    add_output_options(resume)
     resume.set_defaults(func=cmd_resume)
 
     postmortem = sub.add_parser("postmortem", help="Summarize workflow timing, context cost, active-worktree, and cleanup evidence.")
     postmortem.add_argument("--bug-id", required=True)
     postmortem.add_argument("--worktree")
     postmortem.add_argument("--no-markdown", action="store_true")
-    postmortem.add_argument("--output")
+    add_output_options(postmortem)
     postmortem.set_defaults(func=cmd_postmortem)
 
     start = sub.add_parser("start", help="Prepare a BUG fix workflow and context pack.")
@@ -5400,7 +5686,7 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--task-slug")
     start.add_argument("--allow-missing-linkage", action="store_true")
     start.add_argument("--allow-closed", action="store_true")
-    start.add_argument("--output")
+    add_output_options(start)
     start.set_defaults(func=cmd_start)
 
     finish = sub.add_parser("finish", help="Select validation and generate a PR-ready finish plan.")
@@ -5412,18 +5698,18 @@ def build_parser() -> argparse.ArgumentParser:
     finish.add_argument("--validation-evidence", action="append")
     finish.add_argument("--plan-only", action="store_true")
     finish.add_argument("--allow-missing-evidence", action="store_true")
-    finish.add_argument("--output")
+    add_output_options(finish)
     finish.set_defaults(func=cmd_finish)
 
     triage = sub.add_parser("triage-p0", help="List and group open/in-progress P0 BUG records.")
     triage.add_argument("--include-fixed", action="store_true")
-    triage.add_argument("--output")
+    add_output_options(triage)
     triage.set_defaults(func=cmd_triage_p0)
 
     run_p0 = sub.add_parser("run-p0", help="Plan current P0 handling and recommend the next issue command.")
     run_p0.add_argument("--module")
     run_p0.add_argument("--include-fixed", action="store_true")
-    run_p0.add_argument("--output")
+    add_output_options(run_p0)
     run_p0.set_defaults(func=cmd_run_p0)
 
     start_batch = sub.add_parser("start-batch", help="Prepare a same-module batch BUG workflow and context packs.")
@@ -5433,7 +5719,7 @@ def build_parser() -> argparse.ArgumentParser:
     start_batch.add_argument("--task-slug")
     start_batch.add_argument("--allow-missing-linkage", action="store_true")
     start_batch.add_argument("--allow-closed", action="store_true")
-    start_batch.add_argument("--output")
+    add_output_options(start_batch)
     start_batch.set_defaults(func=cmd_start_batch)
 
     finish_batch = sub.add_parser("finish-batch", help="Select validation and generate a PR-ready batch finish plan.")
@@ -5446,7 +5732,7 @@ def build_parser() -> argparse.ArgumentParser:
     finish_batch.add_argument("--issue-commit", action="append", help="Per-issue commit map entry, e.g. BUG-123=<sha>.")
     finish_batch.add_argument("--plan-only", action="store_true")
     finish_batch.add_argument("--allow-missing-evidence", action="store_true")
-    finish_batch.add_argument("--output")
+    add_output_options(finish_batch)
     finish_batch.set_defaults(func=cmd_finish_batch)
 
     fast_path = sub.add_parser("fast-path", help="Plan the lightest safe T0/T1/T2/T3 issue workflow path.")
@@ -5456,7 +5742,7 @@ def build_parser() -> argparse.ArgumentParser:
     fast_path.add_argument("--module")
     fast_path.add_argument("--allow-missing-linkage", action="store_true")
     fast_path.add_argument("--allow-closed", action="store_true")
-    fast_path.add_argument("--output")
+    add_output_options(fast_path)
     fast_path.set_defaults(func=cmd_fast_path)
 
     workflow_smoke = sub.add_parser("workflow-smoke", help="Dry-run the issue workflow chain without GitHub/PR/DB writes.")
@@ -5464,7 +5750,7 @@ def build_parser() -> argparse.ArgumentParser:
     workflow_smoke.add_argument("--issue-json")
     workflow_smoke.add_argument("--changed-file", action="append")
     workflow_smoke.add_argument("--module")
-    workflow_smoke.add_argument("--output")
+    add_output_options(workflow_smoke)
     workflow_smoke.set_defaults(func=cmd_workflow_smoke)
 
     close = sub.add_parser("close-sync", help="Prepare a dry-run close/sync plan after PR merge.")
@@ -5485,7 +5771,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Override close-sync root/main guard for tests or audited recovery only.",
     )
-    close.add_argument("--output")
+    add_output_options(close)
     close.set_defaults(func=cmd_close_sync)
 
     cleanup = sub.add_parser("cleanup-after-merge", help="Safely sync root and clean merged issue worktrees/branches.")
@@ -5496,7 +5782,7 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup.add_argument("--sync-root", action="store_true")
     cleanup.add_argument("--canonical-root")
     cleanup.add_argument("--apply", action="store_true")
-    cleanup.add_argument("--output")
+    add_output_options(cleanup)
     cleanup.set_defaults(func=cmd_cleanup_after_merge)
 
     finalizer = sub.add_parser("merge-finalizer", help="Finalize a merged issue PR through close-sync, optional close-sync PR merge, cleanup, and postmortem.")
@@ -5514,7 +5800,7 @@ def build_parser() -> argparse.ArgumentParser:
     finalizer.add_argument("--production-ddl-gate", default="noop")
     finalizer.add_argument("--production-frontend-dependency-gate", default="noop")
     finalizer.add_argument("--production-backend-dependency-gate", default="noop")
-    finalizer.add_argument("--output")
+    add_output_options(finalizer)
     finalizer.set_defaults(func=cmd_merge_finalizer)
 
     return parser

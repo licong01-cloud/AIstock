@@ -1023,6 +1023,7 @@ def validation_coverage_backend(session: nox.Session) -> None:
     coverage_xml = coverage_dir / "validation_coverage_backend.xml"
     coverage_json = coverage_dir / "validation_coverage_backend.json"
     coverage_snapshot = coverage_dir / "validation_coverage_backend_snapshot.json"
+    coverage_data = coverage_dir / ".coverage.validation_coverage_backend"
     session.run(
         sys.executable,
         "-m",
@@ -1043,7 +1044,7 @@ def validation_coverage_backend(session: nox.Session) -> None:
         "-q",
         "-p",
         "no:cacheprovider",
-        env=_env(),
+        env=_env({"COVERAGE_FILE": str(coverage_data)}),
         external=True,
     )
     session.run(
@@ -1149,6 +1150,7 @@ def validation_center_backend(session: nox.Session) -> None:
     coverage_xml = coverage_dir / "validation_center_backend.xml"
     coverage_json = coverage_dir / "validation_center_backend.json"
     coverage_snapshot = coverage_dir / "validation_center_backend_snapshot.json"
+    coverage_data = coverage_dir / ".coverage.validation_center_backend"
     session.run(
         sys.executable,
         "-m",
@@ -1201,7 +1203,7 @@ def validation_center_backend(session: nox.Session) -> None:
         "-q",
         "-p",
         "no:cacheprovider",
-        env=_env(),
+        env=_env({"COVERAGE_FILE": str(coverage_data)}),
         external=True,
     )
     session.run(
