@@ -30,6 +30,7 @@ TOOL_HINTS: tuple[tuple[McpDomain, tuple[str, ...], str], ...] = (
     (McpDomain.RESEARCH_PIPELINE, ("artifact", "refs"), "research_list_artifact_refs"),
     (McpDomain.FACTOR_LIBRARY, ("search", "find", "搜索", "查找"), "factor_library_search"),
     (McpDomain.FACTOR_LIBRARY, ("coverage", "覆盖"), "factor_library_get_coverage"),
+    (McpDomain.FACTOR_LIBRARY, ("overview", "summary", "list", "available", "catalog", "有哪些", "有什么", "概要", "概览", "列表", "可用", "看看"), "factor_library_list"),
     (McpDomain.FACTOR_LIBRARY, ("register", "登记", "注册"), "factor_library_plan_register"),
     (McpDomain.FACTOR_LIBRARY, ("deprecate", "retire", "废弃", "退役"), "factor_library_plan_deprecate"),
     (McpDomain.FACTOR_METRICS, ("submit", "run", "calculate", "calc", "提交", "运行", "计算"), "factor_metrics_plan"),

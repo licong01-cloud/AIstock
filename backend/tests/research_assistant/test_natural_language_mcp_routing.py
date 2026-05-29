@@ -70,6 +70,7 @@ def test_new_domain_routes_select_expected_tools() -> None:
 def test_chinese_catalog_questions_choose_summary_first_read_tools() -> None:
     cases = {
         "数仓有没有漏入仓？": ("qe_warehouse", "aistock-qe-archive", "qe_archive_health", "read_only"),
+        "查看因子库概要": ("factor_library", "aistock-factor-library", "factor_library_list", "read_only"),
         "帮我看看因子库有哪些可用因子": ("factor_library", "aistock-factor-library", "factor_library_list", "read_only"),
         "最近因子库哪些因子相关性太高？": ("factor_correlation", "aistock-factor-correlation", "factor_corr_get_top_pairs", "read_only"),
         "这个模型 trial 和之前 seed 表现差异大吗？": ("model_registry", "aistock-model-registry", "model_registry_compare_trials", "read_only"),

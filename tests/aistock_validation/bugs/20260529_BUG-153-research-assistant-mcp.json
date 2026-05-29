@@ -1,0 +1,73 @@
+{
+  "actual": "Live API validation on 2026-05-29: POST /api/v1/research-assistant/chat/turn with message '查看因子库概要' correctly routes to aistock-factor-library/factor_library_get, but response cards only include mcp_route_decision. It does not return mcp_execution_result, mcp_summary_result, or mcp_result_cards, so the Chat UI cannot render the expected summary-first MCP result card for a read-only factor-library summary query.",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/tool_router.py",
+    "backend/tests/research_assistant/test_natural_language_mcp_routing.py",
+    "backend/tests/research_assistant/test_service.py",
+    "frontend/tests/research-assistant/research-assistant.spec.ts",
+    "tests/aistock_validation/bugs/20260529_BUG-153-research-assistant-mcp.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-153",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-29T05:24:52.890669Z",
+  "description": "Live API validation on 2026-05-29: POST /api/v1/research-assistant/chat/turn with message '查看因子库概要' correctly routes to aistock-factor-library/factor_library_get, but response cards only include mcp_route_decision. It does not return mcp_execution_result, mcp_summary_result, or mcp_result_cards, so the Chat UI cannot render the expected summary-first MCP result card for a read-only factor-library summary query.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260529-673ae6379ae0",
+      "timestamp": "2026-05-29T05:24:52.890664Z"
+    },
+    {
+      "action": "set_allowed_write_scope",
+      "actor": "codex",
+      "note": "Scope set for Research Assistant MCP natural-language router, targeted backend chat/routing tests, UI regression evidence, and BUG registry files.",
+      "timestamp": "2026-05-29T05:36:00Z"
+    }
+  ],
+  "evidence_uris": [
+    "live-api:2026-05-29 POST /api/v1/research-assistant/chat/turn message=查看因子库概要 returned only mcp_route_decision before fix"
+  ],
+  "expected": "Chinese and English factor-library overview/list requests route to the summary-first read-only factor_library_list tool and auto-execute through the Research Assistant MCP summary adapter, returning mcp_execution_result, mcp_summary_result, and mcp_result_cards without exposing raw payloads.",
+  "first_seen_at": "2026-05-29T05:24:52.890669Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 350,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/350",
+  "last_seen_at": "2026-05-29T05:24:52.890669Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "POST /api/v1/research-assistant/chat/turn with message='查看因子库概要', phase='planning', risk_level='medium', allow_execute=false",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Research Assistant 因子库只读 MCP 摘要路由未自动执行",
+  "trigger_condition": {
+    "fingerprint": "673ae6379ae0c39dc3e3f4a5",
+    "source_event_id": "FE-20260529-673ae6379ae0"
+  },
+  "verification_run_id": null,
+  "workflow_gate": "open"
+}
