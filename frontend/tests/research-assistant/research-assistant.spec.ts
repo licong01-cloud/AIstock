@@ -1,4 +1,4 @@
-﻿import { expect, test } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
 const chatTurnResponse = {
   conversation: { title: "QE 实验草案" },
@@ -323,9 +323,12 @@ test("Research Assistant MCP tools page treats ready servers as ready", async ({
     const respond = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ status: status >= 400 ? "error" : "success", data }) });
     if (path.endsWith("/mcp/servers")) {
       return respond(page([
-        { server_id: "srv_factor_library", server_key: "aistock-factor-library", title: "Factor Library MCP", display_title: "因子库", display_name_zh: "因子库", business_aliases_zh: ["因子目录", "因子列表"], status: "ready", health_json: { domain: "factor_library", display_name_zh: "因子库", business_aliases_zh: ["因子目录", "因子列表"] } },
+        { server_id: "srv_factor_library", server_key: "aistock-factor-library", title: "Factor Library MCP", display_title: "因子库", display_name_zh: "因子库", business_aliases_zh: ["因子目录", "因子列表"], summary_zh: "查询因子概要，详情按需展开。", status: "ready", health_json: { domain: "factor_library", display_name_zh: "因子库", business_aliases_zh: ["因子目录", "因子列表"] } },
+        { server_id: "srv_factor_metrics", server_key: "aistock-factor-metrics", title: "Factor Metrics MCP", display_title: "因子独立指标", display_name_zh: "因子独立指标", business_aliases_zh: ["IC", "RankIC", "稳定性"], status: "ready", health_json: { domain: "factor_metrics" } },
+        { server_id: "srv_factor_corr", server_key: "aistock-factor-correlation", title: "Factor Correlation MCP", display_title: "因子相关性", display_name_zh: "因子相关性", business_aliases_zh: ["相关性矩阵", "替换建议"], status: "ready", health_json: { domain: "factor_correlation" } },
         { server_id: "srv_model_registry", server_key: "aistock-model-registry", title: "Model Registry MCP", display_title: "模型库", display_name_zh: "模型库", business_aliases_zh: ["模型版本", "模型试验"], status: "ready", health_json: { domain: "model_registry", display_name_zh: "模型库", business_aliases_zh: ["模型版本", "模型试验"] } },
         { server_id: "srv_strategy_governance", server_key: "aistock-strategy-governance", title: "Strategy Governance MCP", display_title: "策略库", display_name_zh: "策略库", business_aliases_zh: ["策略包", "策略治理"], status: "ready", health_json: { domain: "strategy_governance", display_name_zh: "策略库", business_aliases_zh: ["策略包", "策略治理"] } },
+        { server_id: "srv_execution_policy", server_key: "aistock-execution-policy", title: "Execution Policy MCP", display_title: "执行策略库", display_name_zh: "执行策略库", business_aliases_zh: ["minute algo", "TWAP", "VWAP"], status: "ready", health_json: { domain: "execution_policy" } },
       ]));
     }
     if (path.endsWith("/mcp/tools")) {
@@ -333,20 +336,27 @@ test("Research Assistant MCP tools page treats ready servers as ready", async ({
       expect(url.searchParams.get("include_schema")).toBe("false");
       return respond(page([
         { tool_id: "tool_factor_library_list", server_key: "aistock-factor-library", tool_name: "factor_library_list", title: "factor library list", risk_level: "low", requires_approval: false, status: "enabled", detail_available: true, detail_fields: ["input_schema_json", "preflight_schema_json"] },
+        { tool_id: "tool_factor_metrics_plan", server_key: "aistock-factor-metrics", tool_name: "factor_metrics_plan", title: "factor metrics plan", risk_level: "plan_only", requires_approval: false, status: "enabled" },
+        { tool_id: "tool_factor_corr_plan", server_key: "aistock-factor-correlation", tool_name: "factor_corr_plan", title: "factor corr plan", risk_level: "plan_only", requires_approval: false, status: "enabled" },
+        { tool_id: "tool_model_registry_list", server_key: "aistock-model-registry", tool_name: "model_registry_list", title: "model registry list", risk_level: "low", requires_approval: false, status: "enabled" },
+        { tool_id: "tool_strategy_governance_list", server_key: "aistock-strategy-governance", tool_name: "strategy_governance_list_packages", title: "strategy package list", risk_level: "low", requires_approval: false, status: "enabled" },
+        { tool_id: "tool_execution_policy_list", server_key: "aistock-execution-policy", tool_name: "execution_policy_list_algos", title: "execution algo list", risk_level: "low", requires_approval: false, status: "enabled" },
       ]));
     }
     return respond(page([]));
   });
 
   await browserPage.goto("/research-assistant/mcp-tools");
-  await expect(browserPage.getByText("因子库").first()).toBeVisible();
-  await expect(browserPage.getByText("模型库").first()).toBeVisible();
-  await expect(browserPage.getByText("策略库").first()).toBeVisible();
+  for (const label of ["因子库", "因子独立指标", "因子相关性", "模型库", "策略库", "执行策略库"]) {
+    await expect(browserPage.getByText(label).first()).toBeVisible();
+  }
   await expect(browserPage.getByText("模型版本 / 模型试验")).toBeVisible();
+  await expect(browserPage.getByText("summary-first").first()).toBeVisible();
+  await expect(browserPage.getByText("limit=50&include_schema=false")).toBeVisible();
   await expect(browserPage.getByText("已就绪").first()).toBeVisible();
-  await expect(browserPage.getByText("未就绪")).toHaveCount(0);
+  await expect(browserPage.locator("body")).not.toContainText("鎴");
+  await expect(browserPage.locator("body")).not.toContainText("锛");
 });
-
 test("Research Assistant admin page separates audit tools from the chat entry", async ({ page: browserPage }) => {
   await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
     const url = new URL(route.request().url());

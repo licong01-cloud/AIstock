@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 
-import "@/app/paper-v2/paper-v2.css";
+import "./research-assistant.css";
 
 const TABS = [
   { href: "/research-assistant", label: "对话", exact: true },
@@ -27,25 +27,25 @@ const TABS = [
 export default function ResearchAssistantLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   return (
-    <div className="pv2-shell">
-      <header className="pv2-hero">
-        <div className="pv2-hero-top">
+    <div className="ra-shell">
+      <header className="ra-hero-shell">
+        <div className="ra-hero-top">
           <div>
-            <div className="pv2-kicker">AIstock Research Assistant / MCP + Skill</div>
+            <div className="ra-kicker">AIstock Research Assistant / MCP + Skill</div>
             <h1>研究与实验综合助理</h1>
-            <p>主入口是 Codex 式对话窗口；后台管理页面只用于审计、Trace、MCP 目录和任务账本，不作为用户主操作界面。</p>
+            <p>主入口是自然语言对话；后台页面只用于审计、Trace、MCP 目录和任务账本。</p>
           </div>
-          <div className="pv2-chip-row">
-            <span className="pv2-chip">LLM 先理解</span>
-            <span className="pv2-chip">确认后才执行 MCP</span>
-            <span className="pv2-chip">主界面不显示 JSON</span>
-            <span className="pv2-chip">全链路可审计</span>
+          <div className="ra-chip-row">
+            <span className="ra-chip">LLM 先理解</span>
+            <span className="ra-chip">确认后才执行 MCP</span>
+            <span className="ra-chip">主界面不显示 JSON</span>
+            <span className="ra-chip">全链路可审计</span>
           </div>
         </div>
-        <nav className="pv2-tabs" aria-label="研究助理功能导航">
+        <nav className="ra-tabs" aria-label="研究助理功能导航">
           {TABS.map((tab) => {
             const active = tab.exact ? pathname === tab.href : pathname === tab.href || pathname?.startsWith(`${tab.href}/`);
-            return <Link className={`pv2-tab ${active ? "pv2-tab-active" : ""}`} href={tab.href} key={tab.href}>{tab.label}</Link>;
+            return <Link className={`ra-tab ${active ? "ra-tab-active" : ""}`} href={tab.href} key={tab.href}>{tab.label}</Link>;
           })}
         </nav>
       </header>
