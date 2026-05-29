@@ -30,8 +30,8 @@
   "expected": "LocalSim paper_v2 portfolios can be marked auto-run enabled and recovered by scheduler into LIVE_ONLY sessions using TDX_REALTIME, while MiniQMT keeps MINIQMT_REALTIME exclusive-account behavior.",
   "first_seen_at": "2026-05-29T00:59:22.134650Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "8ae12a902e9f27bd9e141e353b74fb52cd2eb993",
+  "fixed_at": "2026-05-29T01:37:46.805766Z",
   "github_issue_number": 330,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/330",
   "last_seen_at": "2026-05-29T00:59:22.134650Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/333",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_trading_v2"
   ],
@@ -60,5 +61,14 @@
     "fingerprint": "17ae77b7644cb23e4da8ff20",
     "source_event_id": "FE-20260529-17ae77b7644c"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/paper_trading_v2/test_auto_run.py -q -> passed: 10 passed",
+    "python -m pytest backend/tests/paper_trading_v2/test_auto_run.py backend/tests/paper_trading_v2/test_session.py -q -> passed: 34 passed",
+    "python -m compileall backend/services/paper_trading_v2/auto_run.py backend/services/paper_trading_v2/service.py -> passed",
+    "git diff --check -> passed",
+    "ruff check backend/services/paper_trading_v2/auto_run.py backend/services/paper_trading_v2/service.py backend/tests/paper_trading_v2/test_auto_run.py -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s paper_v2_backend -> passed: 526 passed, 1 skipped, 2 xfailed"
+  ],
   "verification_run_id": null
 }
