@@ -577,6 +577,27 @@ def test_specific_mcp_domains_are_not_overridden_by_local_data_fallback() -> Non
         assert "local_data" not in result["cards"]["capability_summary"].get("route", "")
 
 
+def test_bug_160_utf8_business_overviews_keep_specific_mcp_cards() -> None:
+    svc = _chat_service()
+    cases = {
+        "\u56e0\u5b50\u5e93\u6709\u54ea\u4e9b\u56e0\u5b50\uff1f\u53ea\u8981\u6982\u8981\u5217\u8868\uff0c\u4e0d\u8981\u5168\u91cf\u8be6\u60c5\u3002": ("factor_library_request", "aistock-factor-library", "factor_library_list"),
+        "\u67e5\u770b\u56e0\u5b50\u72ec\u7acb\u6307\u6807\u8ba1\u7b97\u80fd\u529b\u6982\u8981\u3002": ("factor_metrics_request", "aistock-factor-metrics", "factor_metrics_plan"),
+        "\u67e5\u770b\u56e0\u5b50\u76f8\u5173\u6027\u8ba1\u7b97\u80fd\u529b\u6982\u8981\u3002": ("factor_correlation_request", "aistock-factor-correlation", "factor_corr_plan"),
+        "\u67e5\u770b\u6a21\u578b\u5e93\u6982\u8981\u3002": ("model_registry_request", "aistock-model-registry", "model_registry_list"),
+        "\u67e5\u770b\u7b56\u7565\u5e93\u6982\u8981\u3002": ("strategy_governance_request", "aistock-strategy-governance", "strategy_governance_list_packages"),
+        "\u67e5\u770b\u6267\u884c\u7b56\u7565\u5e93\u6982\u8981\u3002": ("execution_policy_request", "aistock-execution-policy", "execution_policy_list_algos"),
+    }
+    for message, (intent, server, tool) in cases.items():
+        result = svc.chat_turn(ChatTurnRequest(message=message, allow_execute=False))
+        route = result["cards"]["mcp_route_decision"]
+        assert result["mode_decision"]["intent_type"] == intent
+        assert route["server_key"] == server
+        assert route["tool_name"] == tool
+        assert route["summary_first"] is True
+        assert result["cards"].get("local_data_management") is None
+        assert result["cards"]["capability_summary"]["route"] == f"{server}/{tool}"
+
+
 def test_bug117_prompt_and_health_do_not_expose_undeveloped_capability_bans() -> None:
     svc = _chat_service()
 

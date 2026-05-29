@@ -98,6 +98,24 @@ def test_utf8_chinese_catalog_questions_route_to_summary_first_read_tools() -> N
         assert route["side_effect"] == side_effect
 
 
+def test_bug_160_utf8_chinese_business_mcp_overviews_are_routed() -> None:
+    cases = {
+        "\u56e0\u5b50\u5e93\u6709\u54ea\u4e9b\u56e0\u5b50\uff1f\u53ea\u8981\u6982\u8981\u5217\u8868\uff0c\u4e0d\u8981\u5168\u91cf\u8be6\u60c5\u3002": ("factor_library", "aistock-factor-library", "factor_library_list"),
+        "\u67e5\u770b\u56e0\u5b50\u72ec\u7acb\u6307\u6807\u8ba1\u7b97\u80fd\u529b\u6982\u8981\u3002": ("factor_metrics", "aistock-factor-metrics", "factor_metrics_plan"),
+        "\u67e5\u770b\u56e0\u5b50\u76f8\u5173\u6027\u8ba1\u7b97\u80fd\u529b\u6982\u8981\u3002": ("factor_correlation", "aistock-factor-correlation", "factor_corr_plan"),
+        "\u67e5\u770b\u6a21\u578b\u5e93\u6982\u8981\u3002": ("model_registry", "aistock-model-registry", "model_registry_list"),
+        "\u67e5\u770b\u7b56\u7565\u5e93\u6982\u8981\u3002": ("strategy_governance", "aistock-strategy-governance", "strategy_governance_list_packages"),
+        "\u67e5\u770b\u6267\u884c\u7b56\u7565\u5e93\u6982\u8981\u3002": ("execution_policy", "aistock-execution-policy", "execution_policy_list_algos"),
+    }
+    for message, (domain, server, tool) in cases.items():
+        route = route_request(message)
+        assert route["domain"] == domain
+        assert route["server_key"] == server
+        assert route["tool_name"] == tool
+        assert route["side_effect"] in {"read_only", "plan_or_preflight"}
+        assert route["server_key"] != "aistock-local-data"
+
+
 def test_bug_158_chinese_business_mcp_overviews_do_not_route_to_local_data() -> None:
     cases = {
         "因子库有哪些因子？只要概要列表，不要全量详情。": ("factor_library", "aistock-factor-library", "factor_library_list"),
