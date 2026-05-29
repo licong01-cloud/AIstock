@@ -1,0 +1,91 @@
+{
+  "actual": "AIstock production MCP servers are explicitly required to connect to production backend port 8001. Project .mcp.json and Codex global MCP env use 8001, but backend/mcp/gateway.py, scripts/aistock_qe_experiment_mcp_server.py, and scripts/aistock_qe_archive_mcp_server.py still define DEFAULT_BASE_URL values on 8011. If a client launches an MCP server without the env override, the MCP connects to the test port, violating the production MCP port policy. Fix all MCP default URLs to 8001 and add regression checks so registered/default MCP server URLs cannot point to 8011.",
+  "allowed_write_scope": [
+    "backend/mcp/gateway.py",
+    "scripts/aistock_qe_experiment_mcp_server.py",
+    "scripts/aistock_qe_archive_mcp_server.py",
+    "backend/tests/mcp/test_profiles_registry_gateway.py",
+    "backend/tests/test_aistock_qe_mcp_servers.py",
+    "tests/aistock_validation/bugs/20260529_BUG-156-aistock-mcp-server-default-base-urls-still-fall-back-to-8011-test-port.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-156",
+  "closed_at": null,
+  "closure_requirements": [
+    "All AIstock MCP production/client config entries keep loopback base URLs on 8001 and contain no 8011 test-port target.",
+    "All MCP server code default base URLs use 8001 so missing env overrides cannot fall back to 8011.",
+    "Add regression tests covering gateway defaults, QE MCP defaults, and repo MCP config port policy.",
+    "Run targeted MCP tests plus required issue workflow validation evidence.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-29T06:54:40.945259Z",
+  "description": "AIstock production MCP servers are explicitly required to connect to production backend port 8001. Project .mcp.json and Codex global MCP env use 8001, but backend/mcp/gateway.py, scripts/aistock_qe_experiment_mcp_server.py, and scripts/aistock_qe_archive_mcp_server.py still define DEFAULT_BASE_URL values on 8011. If a client launches an MCP server without the env override, the MCP connects to the test port, violating the production MCP port policy. Fix all MCP default URLs to 8001 and add regression checks so registered/default MCP server URLs cannot point to 8011.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260529-8f4aa6eaee4a",
+      "timestamp": "2026-05-29T06:54:40.945254Z"
+    },
+    {
+      "action": "scope_updated",
+      "actor": "codex",
+      "note": "Set allowed_write_scope for MCP default-port fix, targeted regression tests, BUG registry JSON, and allocator; production runtime restart remains out of scope.",
+      "timestamp": "2026-05-29T07:00:05.037307Z"
+    },
+    {
+      "action": "validation_passed",
+      "actor": "codex",
+      "note": "MCP default-port fix validated: targeted pytest 47 passed; research_assistant_mcp_contract 26 passed; research_mcp_contract 130 passed; research_assistant_backend 73 passed; validation_module_registry_l0 8 passed; validation_center_backend 260 passed; l0 passed; config/default scan confirms MCP entrypoints/config do not target 8011.",
+      "timestamp": "2026-05-29T07:12:29.538796Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-05-29T06:54:40.945259Z",
+  "fix_branch": "bug/registry-research-assistant-aistock-mcp-server-default-base-ur-20260529-c03e51",
+  "fix_commit": "bfcd459ad765fcd818efb6165ddeba1abd96f3b2",
+  "fixed_at": "2026-05-29T07:30:27.396515Z",
+  "github_issue_number": 358,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/358",
+  "last_seen_at": "2026-05-29T06:54:40.945259Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/360",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "python -m ruff check backend/mcp/gateway.py scripts/aistock_qe_experiment_mcp_server.py scripts/aistock_qe_archive_mcp_server.py backend/tests/mcp/test_profiles_registry_gateway.py backend/tests/test_aistock_qe_mcp_servers.py",
+    "python -m py_compile backend/mcp/gateway.py scripts/aistock_qe_experiment_mcp_server.py scripts/aistock_qe_archive_mcp_server.py",
+    "python -m pytest backend/tests/mcp/test_profiles_registry_gateway.py backend/tests/test_aistock_qe_mcp_servers.py -q -p no:cacheprovider",
+    "git diff --check",
+    "python -m nox -s research_assistant_mcp_contract research_mcp_contract research_assistant_backend validation_module_registry_l0 validation_center_backend l0 --no-error-on-missing-interpreters",
+    "MCP port audit for .mcp.json, Codex config.toml, Codex config.json, and MCP entrypoint/default URL scan"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "AIstock MCP server default base URLs still fall back to 8011 test port",
+  "trigger_condition": {
+    "fingerprint": "8f4aa6eaee4af3ba0c15fd40",
+    "source_event_id": "FE-20260529-8f4aa6eaee4a"
+  },
+  "validation_evidence": [
+    "python -m ruff check backend/mcp/gateway.py scripts/aistock_qe_experiment_mcp_server.py scripts/aistock_qe_archive_mcp_server.py backend/tests/mcp/test_profiles_registry_gateway.py backend/tests/test_aistock_qe_mcp_servers.py -> passed",
+    "python -m pytest backend/tests/mcp/test_profiles_registry_gateway.py backend/tests/test_aistock_qe_mcp_servers.py -q -p no:cacheprovider -> 47 passed",
+    "python -m nox -s research_assistant_mcp_contract research_mcp_contract research_assistant_backend validation_module_registry_l0 validation_center_backend l0 --no-error-on-missing-interpreters -> passed",
+    "GitHub PR #360 checks -> SUCCESS; mergeStateStatus=CLEAN",
+    "MCP port audit -> AIstock/research-assistant MCP config/defaults use 8001 and targeted MCP scan has no 8011 hits"
+  ],
+  "verification_run_id": null,
+  "workflow_gate": "ready_for_pr"
+}

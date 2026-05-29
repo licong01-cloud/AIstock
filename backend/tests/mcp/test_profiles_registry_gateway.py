@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
@@ -105,6 +107,40 @@ def test_registry_client_applies_path_prefix_and_tracks_tool_count() -> None:
     assert registry.tool_count("research") == 16
     assert registry.total_tool_count() == 16
     assert _registry_tool_counts(registry)["research"] == 16
+
+
+def test_gateway_default_base_url_uses_production_loopback_port() -> None:
+    from backend.mcp import gateway
+
+    assert gateway.DEFAULT_BASE_URL == "http://127.0.0.1:8001/api/v1"
+    assert ":8011" not in gateway.DEFAULT_BASE_URL
+
+
+def test_gateway_uses_production_port_when_env_override_is_missing(monkeypatch) -> None:
+    from backend.mcp import gateway
+
+    monkeypatch.delenv("AISTOCK_MCP_BASE_URL", raising=False)
+
+    _mcp, registry = gateway.create_gateway(
+        profile="research_assistant",
+        env_name="AISTOCK_MCP_BASE_URL",
+    )
+
+    assert registry.base_url == "http://127.0.0.1:8001/api/v1"
+    assert ":8011" not in registry.base_url
+
+
+def test_repo_aistock_mcp_config_uses_production_port_only() -> None:
+    config = json.loads(Path(".mcp.json").read_text(encoding="utf-8"))
+    for name, server in config["mcpServers"].items():
+        if not name.startswith("aistock") and name != "research-assistant":
+            continue
+        env_values = server.get("env", {}).values()
+        base_urls = [value for value in env_values if isinstance(value, str) and "127.0.0.1" in value]
+        assert base_urls, f"{name} must define an explicit loopback backend URL"
+        for value in base_urls:
+            assert ":8001" in value, f"{name} must target production backend port 8001"
+            assert ":8011" not in value, f"{name} must not target test backend port 8011"
 
 
 def test_registry_exposes_common_sanitize_and_confirm_helpers() -> None:
