@@ -38,8 +38,8 @@
   "expected": "Chinese and English factor-library overview/list requests route to the summary-first read-only factor_library_list tool and auto-execute through the Research Assistant MCP summary adapter, returning mcp_execution_result, mcp_summary_result, and mcp_result_cards without exposing raw payloads.",
   "first_seen_at": "2026-05-29T05:24:52.890669Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "eb7e0c26181a32c0eb22583a3a16db59060ad74d",
+  "fixed_at": "2026-05-29T05:50:22.922356Z",
   "github_issue_number": 350,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/350",
   "last_seen_at": "2026-05-29T05:24:52.890669Z",
@@ -47,6 +47,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/351",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -59,7 +60,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -68,6 +69,11 @@
     "fingerprint": "673ae6379ae0c39dc3e3f4a5",
     "source_event_id": "FE-20260529-673ae6379ae0"
   },
+  "validation_evidence": [
+    "python -X utf8 -m pytest backend/tests/research_assistant/test_natural_language_mcp_routing.py backend/tests/research_assistant/test_service.py::test_chat_turn_chinese_factor_library_overview_auto_executes_summary_list backend/tests/research_assistant/test_service.py::test_chat_turn_auto_executes_read_only_mcp_summary_cards -q -p no:cacheprovider -> 8 passed",
+    "python -X utf8 -m pytest backend/tests/research_assistant/test_service.py backend/tests/research_assistant/test_api.py backend/tests/research_assistant/test_natural_language_mcp_routing.py backend/tests/research_assistant/test_mcp_catalog_sync.py backend/tests/research_assistant/test_execution_closure.py -q -p no:cacheprovider -> 70 passed",
+    "python -m nox -s l0 research_assistant_backend research_assistant_mcp_contract validation_center_backend validation_module_registry_l0 --no-error-on-missing-interpreters -> 5 sessions successful"
+  ],
   "verification_run_id": null,
   "workflow_gate": "open"
 }
