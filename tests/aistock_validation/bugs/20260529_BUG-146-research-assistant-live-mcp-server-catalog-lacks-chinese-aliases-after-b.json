@@ -28,10 +28,10 @@
       "timestamp": "2026-05-28T17:49:17.968275Z"
     },
     {
-      "timestamp": "2026-05-28T17:59:30Z",
-      "actor": "codex",
       "action": "expand_allowed_write_scope",
-      "note": "Add BUG-146 registry JSON and allocator files required by the issue workflow PR gate; no non-Research Assistant implementation files added."
+      "actor": "codex",
+      "note": "Add BUG-146 registry JSON and allocator files required by the issue workflow PR gate; no non-Research Assistant implementation files added.",
+      "timestamp": "2026-05-28T17:59:30Z"
     }
   ],
   "evidence_uris": [
@@ -44,8 +44,8 @@
   "expected": "Live /api/v1/research-assistant/mcp/servers and the MCP tools UI expose Chinese business display names and aliases such as ???, ???, ???, ??????, ?????, ????? and QE?? while preserving server_key/tool_name and summary-first payload boundaries.",
   "first_seen_at": "2026-05-28T17:49:17.968278Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "732ad0cec7da9cec857263ff326bc3eaa571cac0",
+  "fixed_at": "2026-05-29T00:45:59.628005Z",
   "github_issue_number": 308,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/308",
   "last_seen_at": "2026-05-28T17:49:17.968278Z",
@@ -53,6 +53,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/310",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -65,7 +66,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -74,5 +75,11 @@
     "fingerprint": "d4346eb4cfdaf1366ba7e5a2",
     "source_event_id": "FE-20260529-d4346eb4cfda"
   },
+  "validation_evidence": [
+    "python -X utf8 -m pytest -q backend/tests/research_assistant/test_api.py::test_mcp_servers_endpoint_exposes_chinese_business_aliases backend/tests/research_assistant/test_api.py::test_mcp_servers_endpoint_backfills_aliases_for_legacy_runtime_rows backend/tests/research_assistant/test_api.py::test_mcp_tools_endpoint_defaults_to_compact_summary_first_payload backend/tests/research_assistant/test_mcp_catalog_sync.py -> passed (5 passed in 12.83s)",
+    "python -m nox -s research_assistant_backend research_assistant_mcp_contract --no-error-on-missing-interpreters -> passed (65 backend tests, 23 MCP contract tests)",
+    "python -m nox -s l0 --no-error-on-missing-interpreters -> passed",
+    "GitHub PR #310 checks -> all green, mergeStateStatus=CLEAN"
+  ],
   "verification_run_id": null
 }
