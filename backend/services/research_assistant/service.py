@@ -11,6 +11,8 @@ import json
 import logging
 import os
 import re
+import hashlib
+import subprocess
 from dataclasses import dataclass
 from enum import Enum
 from datetime import date
@@ -59,7 +61,7 @@ from .prompt_pack import (
     load_prompt_pack,
 )
 from .repository import DatabaseResearchAssistantRepository
-from .runtime_config import DEFAULT_ENVIRONMENT, RUNTIME_CONFIG_KEY, RuntimeConfigSnapshot, load_runtime_config
+from .runtime_config import DEFAULT_ENVIRONMENT, REPO_ROOT, RUNTIME_CONFIG_KEY, RuntimeConfigSnapshot, load_runtime_config
 from .domain_ontology import domain_prompt_key
 from .mcp_catalog_sync import enrich_mcp_server_record, default_mcp_servers, default_mcp_tools, workflow_capabilities as catalog_workflow_capabilities
 from .tool_router import route_request
@@ -70,6 +72,40 @@ logger = logging.getLogger("aistock.research_assistant.service")
 ASSISTANT_APPROVAL_CONFIRM = "APPROVE_RESEARCH_ASSISTANT_ACTION"
 PROMPT_CACHE_DIR = Path(os.getenv("AISTOCK_ASSISTANT_PROMPT_CACHE_DIR", "var/research_assistant/prompt_cache"))
 CATALOG_BOOTSTRAP_ACTION = "POST /api/v1/research-assistant/catalogs/seed"
+SERVICE_MODULE_PATH = Path(__file__).resolve()
+
+
+def _git_output(args: list[str]) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), *args],
+            capture_output=True,
+            check=False,
+            encoding="utf-8",
+            errors="replace",
+            timeout=2,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def _file_sha256(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _short_hash(value: str | None) -> str | None:
+    return value[:8] if value else None
+
+
+SERVICE_LOADED_AT = utc_now().isoformat()
+SERVICE_LOADED_GIT_COMMIT = _git_output(["rev-parse", "HEAD"])
+SERVICE_LOADED_SOURCE_SHA256 = _file_sha256(SERVICE_MODULE_PATH)
 
 
 class DialogueIntent(str, Enum):
@@ -556,6 +592,46 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         self.environment = environment
         self.context_budget_planner = ContextBudgetPlanner()
 
+    def runtime_code_visibility(self) -> dict[str, Any]:
+        current_commit = _git_output(["rev-parse", "HEAD"])
+        origin_main = _git_output(["rev-parse", "origin/main"])
+        current_source_sha = _file_sha256(SERVICE_MODULE_PATH)
+        loaded_source_matches_disk = bool(
+            SERVICE_LOADED_SOURCE_SHA256 and current_source_sha and SERVICE_LOADED_SOURCE_SHA256 == current_source_sha
+        )
+        loaded_commit_matches_repo = bool(
+            SERVICE_LOADED_GIT_COMMIT and current_commit and SERVICE_LOADED_GIT_COMMIT == current_commit
+        )
+        repo_matches_origin_main = bool(current_commit and origin_main and current_commit == origin_main)
+        runtime_matches_origin_main = bool(SERVICE_LOADED_GIT_COMMIT and origin_main and SERVICE_LOADED_GIT_COMMIT == origin_main)
+        status = "current" if loaded_source_matches_disk and loaded_commit_matches_repo and repo_matches_origin_main else "stale_or_unverified"
+        return {
+            "schema_version": "aistock_research_assistant_runtime_code_visibility_v1",
+            "service": "research-assistant",
+            "status": status,
+            "runtime_loaded_at": SERVICE_LOADED_AT,
+            "runtime_loaded_git_commit": SERVICE_LOADED_GIT_COMMIT,
+            "runtime_loaded_git_commit_short": _short_hash(SERVICE_LOADED_GIT_COMMIT),
+            "runtime_loaded_source_sha256": SERVICE_LOADED_SOURCE_SHA256,
+            "runtime_loaded_source_sha256_short": _short_hash(SERVICE_LOADED_SOURCE_SHA256),
+            "current_repo_git_commit": current_commit,
+            "current_repo_git_commit_short": _short_hash(current_commit),
+            "origin_main_git_commit": origin_main,
+            "origin_main_git_commit_short": _short_hash(origin_main),
+            "current_source_sha256": current_source_sha,
+            "current_source_sha256_short": _short_hash(current_source_sha),
+            "loaded_source_matches_disk": loaded_source_matches_disk,
+            "loaded_commit_matches_repo": loaded_commit_matches_repo,
+            "repo_matches_origin_main": repo_matches_origin_main,
+            "runtime_matches_origin_main": runtime_matches_origin_main,
+            "restart_required_to_activate_main": not loaded_commit_matches_repo or not loaded_source_matches_disk,
+            "operator_message": (
+                "Running Research Assistant code matches local/origin main."
+                if status == "current"
+                else "Running Research Assistant code may not match the synced repository; restart the backend only when you want to activate merged code."
+            ),
+        }
+
 
     def _workflow_capabilities(self) -> list[dict[str, Any]]:
         configured = self.active_runtime_config().get("planner", {}).get("workflow_capabilities")
@@ -591,6 +667,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "status": status,
             "repository": repository_health,
             "catalog_readiness": catalog_readiness,
+            "runtime_code": self.runtime_code_visibility(),
             "phase": "mcp_skill_execution_closure",
             "implemented_capabilities": {
                 "mcp_api_preflight": True,
@@ -1673,6 +1750,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             mode_decision=mode_decision,
         )
         cards["context_health"] = context_health
+        cards["runtime_code"] = self.runtime_code_visibility()
         assistant_text = self._compose_assistant_reply(data.message, llm_result.content, cards, mode_decision)
         assistant_message = self.add_conversation_message(
             ConversationMessageCreate(

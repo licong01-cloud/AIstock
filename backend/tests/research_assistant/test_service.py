@@ -572,6 +572,13 @@ def test_bug117_prompt_and_health_do_not_expose_undeveloped_capability_bans() ->
     assert "code_write" not in serialized
     assert health["implemented_capabilities"]["mcp_api_preflight"] is True
     assert health["governance_boundaries"]["formal_github_issue_requires_approval"] is True
+    runtime_code = health["runtime_code"]
+    assert runtime_code["schema_version"] == "aistock_research_assistant_runtime_code_visibility_v1"
+    assert runtime_code["runtime_loaded_at"]
+    assert runtime_code["runtime_loaded_git_commit_short"]
+    assert runtime_code["current_repo_git_commit_short"]
+    assert isinstance(runtime_code["loaded_source_matches_disk"], bool)
+    assert isinstance(runtime_code["restart_required_to_activate_main"], bool)
 
 
 def test_research_assistant_active_prompt_and_runtime_have_no_default_qe_loop_count() -> None:
@@ -777,6 +784,20 @@ def test_chat_turn_auto_executes_read_only_mcp_summary_cards() -> None:
 
     walk(summary)
     assert any(event["event_type"] == "mcp_done" for event in result["task_events"])
+
+
+def test_chat_turn_includes_runtime_code_visibility_card() -> None:
+    svc = _chat_service(FakeLlmClient())
+
+    result = svc.chat_turn(ChatTurnRequest(message="What MCP tools are available?"))
+
+    runtime_code = result["cards"]["runtime_code"]
+    assert runtime_code["schema_version"] == "aistock_research_assistant_runtime_code_visibility_v1"
+    assert runtime_code["runtime_loaded_at"]
+    assert runtime_code["runtime_loaded_git_commit_short"]
+    assert runtime_code["current_repo_git_commit_short"]
+    assert runtime_code["operator_message"]
+    assert "runtime_code" in result["assistant_message"]["content_json"]["cards"]
 
 
 def test_chat_turn_chinese_factor_library_overview_auto_executes_summary_list() -> None:
