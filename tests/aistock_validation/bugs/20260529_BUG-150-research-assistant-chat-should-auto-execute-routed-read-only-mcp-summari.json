@@ -26,16 +26,16 @@
       "timestamp": "2026-05-29T03:40:54.022752Z"
     },
     {
-      "timestamp": "2026-05-29T04:08:36Z",
-      "actor": "codex",
       "action": "scope_sync",
-      "note": "Included BUG-150 registry JSON and allocator in allowed_write_scope so registration and fix evidence can travel in the same issue PR."
+      "actor": "codex",
+      "note": "Included BUG-150 registry JSON and allocator in allowed_write_scope so registration and fix evidence can travel in the same issue PR.",
+      "timestamp": "2026-05-29T04:08:36Z"
     },
     {
-      "timestamp": "2026-05-29T04:08:36Z",
-      "actor": "codex",
       "action": "validation_passed",
-      "note": "Implemented chat/API auto preflight and execution for low-risk read-only MCP summary routes; confirmed and high-risk routes remain gated."
+      "actor": "codex",
+      "note": "Implemented chat/API auto preflight and execution for low-risk read-only MCP summary routes; confirmed and high-risk routes remain gated.",
+      "timestamp": "2026-05-29T04:08:36Z"
     }
   ],
   "evidence_uris": [
@@ -46,8 +46,8 @@
   "expected": "For natural-language requests that route to low-risk read-only MCP tools, Research Assistant chat/API creates auditable execution trace, invokes the selected summary-first tool path, returns human-readable result cards with compact payload and artifact/detail refs, and avoids large raw data. Plan/confirmed/high-risk tools continue to produce gated proposals only.",
   "first_seen_at": "2026-05-29T03:40:54.022756Z",
   "fix_branch": "bug/registry-research-assistant-research-assistant-chat-should-aut-20260529-4bdd79",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "42bbe12569a8855679f25820ffda291a41558ff8",
+  "fixed_at": "2026-05-29T04:19:01.180288Z",
   "github_issue_number": 339,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/339",
   "last_seen_at": "2026-05-29T03:40:54.022756Z",
@@ -55,6 +55,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/341",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -67,7 +68,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "in_progress",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -76,14 +77,13 @@
     "fingerprint": "5bd0ce77dc461a5ed2a551d7",
     "source_event_id": "FE-20260529-5bd0ce77dc46"
   },
-  "verification_run_id": "BUG-150-local-20260529T0356Z",
   "validation_evidence": [
-    "python -X utf8 -m pytest backend/tests/research_assistant/test_service.py::test_chat_turn_chinese_factor_library_request_does_not_surface_mock_counts backend/tests/research_assistant/test_service.py::test_chat_turn_chinese_execution_policy_catalog_uses_read_only_list backend/tests/research_assistant/test_service.py::test_chat_turn_tool_choice_markup_is_replaced_with_route_card_text -q -p no:cacheprovider -> 3 passed",
-    "python -X utf8 -m pytest backend/tests/research_assistant/test_service.py::test_chat_turn_auto_executes_read_only_mcp_summary_cards backend/tests/research_assistant/test_service.py::test_chat_turn_tool_choice_markup_is_replaced_with_route_card_text -q -p no:cacheprovider -> 2 passed",
     "python -X utf8 -m pytest backend/tests/research_assistant/test_service.py backend/tests/research_assistant/test_execution_closure.py -q -p no:cacheprovider -> 53 passed",
     "python -X utf8 -m pytest backend/tests/research_assistant/test_api.py -q -p no:cacheprovider -> 7 passed",
-    "python -X utf8 -m py_compile backend/services/research_assistant/service.py backend/services/research_assistant/execution.py backend/tests/research_assistant/test_service.py backend/tests/research_assistant/test_execution_closure.py -> passed",
-    "git diff --check -> passed",
-    "python -m nox -s l0 research_assistant_backend research_assistant_mcp_contract --no-error-on-missing-interpreters -> 3 sessions successful"
-  ]
+    "python -m nox -s l0 research_assistant_backend research_assistant_mcp_contract --no-error-on-missing-interpreters -> 3 sessions successful",
+    "python -m nox -s validation_center_backend validation_module_registry_l0 --no-error-on-missing-interpreters -> 2 sessions successful",
+    "python -m ruff check backend/services/research_assistant/service.py backend/tests/research_assistant/test_service.py -> All checks passed",
+    "git diff --check; python -X utf8 -m py_compile backend/services/research_assistant/service.py backend/services/research_assistant/execution.py backend/tests/research_assistant/test_service.py backend/tests/research_assistant/test_execution_closure.py -> passed"
+  ],
+  "verification_run_id": "BUG-150-local-20260529T0356Z"
 }
