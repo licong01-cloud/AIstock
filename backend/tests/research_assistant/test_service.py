@@ -734,6 +734,51 @@ def test_chat_turn_chinese_factor_library_request_does_not_surface_mock_counts()
     assert "domain.factor_library" in keys
 
 
+def test_chat_turn_auto_executes_read_only_mcp_summary_cards() -> None:
+    class FactorHallucinationLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            return LlmCallResult(
+                content="There are exactly 999 factors: fake_alpha.",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    svc = _chat_service(FactorHallucinationLlmClient())
+
+    result = svc.chat_turn(ChatTurnRequest(message="List available factor library entries as a compact summary."))
+
+    text = result["assistant_message"]["content_text"]
+    assert "999 factors" not in text
+    assert "aistock-factor-library/factor_library_list" in text
+    execution = result["cards"]["mcp_execution_result"]
+    assert execution["auto_executed"] is True
+    assert execution["status"] == "succeeded"
+    assert execution["route"] == "aistock-factor-library/factor_library_list"
+    assert execution["summary_first"] is True
+    assert execution["response_summary"]["returned_count"] >= 1
+    assert result["cards"]["mcp_tool_event"]["transport"] == "research_assistant_catalog_summary_adapter"
+    summary = result["cards"]["mcp_summary_result"]
+    assert summary["summary_first"] is True
+    assert summary["response_mode"] == "summary"
+    assert summary["artifact_refs"]
+    forbidden = {"metrics_json", "config_json", "raw_payload", "matrix", "logs", "rows", "model_weights", "training_curves"}
+
+    def walk(value: object) -> None:
+        if isinstance(value, dict):
+            assert not (set(value) & forbidden)
+            for item in value.values():
+                walk(item)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item)
+
+    walk(summary)
+    assert any(event["event_type"] == "mcp_done" for event in result["task_events"])
+
+
 def test_chat_turn_chinese_execution_policy_catalog_uses_read_only_list() -> None:
     class ExecutionPolicyHallucinationLlmClient(FakeLlmClient):
         def complete(self, **kwargs: object) -> LlmCallResult:
@@ -788,6 +833,10 @@ def test_chat_turn_tool_choice_markup_is_replaced_with_route_card_text() -> None
     assert "确认前不会执行" in text
     assert result["mode_decision"]["intent_type"] == "validation_issue_request"
     assert result["cards"]["mcp_route_decision"]["confirmation_required"] is True
+    assert result["cards"]["mcp_route_decision"]["auto_execute"]["eligible"] is False
+    assert result["cards"]["mcp_route_decision"]["auto_execute"]["reason"] == "route_not_read_only"
+    assert "mcp_execution_result" not in result["cards"]
+    assert svc.repository.list_records("mcp_tool_events", limit=100)["total"] == 0
 
 
 def test_chat_turn_bug_diagnosis_request_is_first_class_intent() -> None:

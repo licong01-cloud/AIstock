@@ -23,6 +23,9 @@ import jsonschema
 from .context_budget import ContextBudgetPlan, ContextBudgetPlanner
 from .execution import ResearchAssistantExecutionMixin
 from .models import (
+    ActionProposalCreate,
+    ActionProposalExecuteRequest,
+    ActionProposalPreflightRequest,
     ApprovalCreate,
     CapabilitySyncRequest,
     ChatTurnRequest,
@@ -1661,6 +1664,14 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         )
         context_health = self._context_health_payload(conversation_id, budget_plan, mode_decision=mode_decision)
         cards = self._build_human_cards(data.message, task, bundle, route, dialogue_intent, mode_decision)
+        self._maybe_auto_execute_read_only_mcp_route(
+            user_message=data.message,
+            conversation_id=conversation_id,
+            task=task,
+            context_pack=context_pack,
+            cards=cards,
+            mode_decision=mode_decision,
+        )
         cards["context_health"] = context_health
         assistant_text = self._compose_assistant_reply(data.message, llm_result.content, cards, mode_decision)
         assistant_message = self.add_conversation_message(
@@ -2418,6 +2429,182 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             }
         return cards
 
+    def _maybe_auto_execute_read_only_mcp_route(
+        self,
+        *,
+        user_message: str,
+        conversation_id: str,
+        task: dict[str, Any],
+        context_pack: dict[str, Any],
+        cards: dict[str, Any],
+        mode_decision: ModeDecision,
+    ) -> None:
+        route = cards.get("mcp_route_decision")
+        if not isinstance(route, dict):
+            return
+        eligibility = self._read_only_mcp_auto_execution_eligibility(route, mode_decision)
+        route["auto_execute"] = eligibility
+        if not eligibility["eligible"]:
+            return
+        server_key = str(route["server_key"])
+        tool_name = str(route["tool_name"])
+        capability_key = f"{route['domain']}.mcp_orchestration"
+        payload = {
+            "request": user_message,
+            "route": route,
+            "mcp_route_decision": route,
+            "limit": 20,
+        }
+        try:
+            proposal = self.create_action_proposal(
+                ActionProposalCreate(
+                    task_id=task["task_id"],
+                    conversation_id=conversation_id,
+                    capability_key=capability_key,
+                    proposal_type="mcp_tool",
+                    title=f"Summary-first MCP read: {server_key}/{tool_name}",
+                    summary=f"Auto-execute low-risk read-only MCP summary for route {server_key}/{tool_name}.",
+                    input_json=payload,
+                    expected_result_json={"summary_first": True, "server_key": server_key, "tool_name": tool_name},
+                    context_pack_id=context_pack.get("context_pack_id"),
+                    idempotency_key=sha256_json({"task_id": task["task_id"], "auto_mcp_read": server_key, "tool_name": tool_name, "payload": payload}),
+                    created_by="research_assistant_auto_read_only_route",
+                )
+            )
+            preflight = self.preflight_action_proposal(
+                proposal["action_proposal_id"],
+                ActionProposalPreflightRequest(payload_json=payload, idempotency_key=proposal["idempotency_key"]),
+            )
+            if preflight["proposal"]["status"] != "preflight_passed":
+                cards["mcp_execution_result"] = {
+                    "auto_executed": False,
+                    "status": "preflight_blocked",
+                    "route": f"{server_key}/{tool_name}",
+                    "server_key": server_key,
+                    "tool_name": tool_name,
+                    "action_proposal_id": proposal["action_proposal_id"],
+                    "preflight": preflight["preflight"],
+                    "summary_first": True,
+                }
+                return
+            executed = self.execute_action_proposal(
+                proposal["action_proposal_id"],
+                ActionProposalExecuteRequest(payload_json=payload, idempotency_key=proposal["idempotency_key"]),
+            )
+        except Exception as exc:  # pragma: no cover - defensive path keeps chat usable when catalog drifts.
+            logger.exception("read-only MCP auto execution failed for %s/%s", server_key, tool_name)
+            cards["mcp_execution_result"] = {
+                "auto_executed": False,
+                "status": "failed",
+                "route": f"{server_key}/{tool_name}",
+                "server_key": server_key,
+                "tool_name": tool_name,
+                "summary_first": True,
+                "error": {"code": "auto_mcp_execution_failed", "message": str(exc)},
+            }
+            self.add_task_event(
+                task["task_id"],
+                TaskEventCreate(
+                    event_type="mcp_auto_execute_failed",
+                    severity="warning",
+                    message=f"Read-only MCP auto execution failed: {server_key}/{tool_name}",
+                    payload_json={"server_key": server_key, "tool_name": tool_name, "error": str(exc)},
+                ),
+            )
+            return
+
+        tool_event = executed.get("tool_event") if isinstance(executed.get("tool_event"), dict) else {}
+        summary_result = tool_event.get("response_json") if isinstance(tool_event.get("response_json"), dict) else {}
+        cards["mcp_summary_result"] = summary_result
+        cards["mcp_result_cards"] = list(executed.get("human_cards") or [])
+        cards["mcp_tool_event"] = {
+            "tool_event_id": tool_event.get("tool_event_id"),
+            "server_key": tool_event.get("server_key"),
+            "tool_name": tool_event.get("tool_name"),
+            "status": tool_event.get("status"),
+            "transport": tool_event.get("transport"),
+            "duration_ms": tool_event.get("duration_ms"),
+            "artifact_refs": tool_event.get("artifact_refs") or [],
+        }
+        cards["mcp_execution_result"] = {
+            "auto_executed": bool(executed.get("executed")),
+            "status": executed.get("status"),
+            "executed": bool(executed.get("executed")),
+            "route": f"{server_key}/{tool_name}",
+            "server_key": server_key,
+            "tool_name": tool_name,
+            "action_proposal_id": proposal["action_proposal_id"],
+            "proposal_status": (executed.get("proposal") or {}).get("status") if isinstance(executed.get("proposal"), dict) else None,
+            "tool_event_id": tool_event.get("tool_event_id"),
+            "trace_id": executed.get("trace_id"),
+            "summary_first": bool(summary_result.get("summary_first", True)),
+            "response_summary": self._compact_mcp_summary_for_cards(summary_result),
+            "human_cards": list(executed.get("human_cards") or []),
+        }
+        cards["status_rail"] = self._mcp_executed_status_rail()
+
+    def _read_only_mcp_auto_execution_eligibility(self, route: dict[str, Any], mode_decision: ModeDecision) -> dict[str, Any]:
+        if not route.get("server_key") or not route.get("tool_name") or not route.get("domain"):
+            return {"eligible": False, "reason": "route_missing_tool"}
+        if route.get("domain") in {"general"}:
+            return {"eligible": False, "reason": "general_route"}
+        if str(route.get("side_effect") or "read_only") != "read_only":
+            return {"eligible": False, "reason": "route_not_read_only"}
+        if mode_decision.allowed_tool_side_effect == "none":
+            return {"eligible": False, "reason": "dialogue_mode_disallows_tools"}
+        tool = self.repository.find_one("mcp_tools", {"server_key": str(route["server_key"]), "tool_name": str(route["tool_name"])})
+        if not tool:
+            return {"eligible": False, "reason": "tool_not_registered"}
+        if str(tool.get("status") or "") not in {"enabled", "ready", "approved"}:
+            return {"eligible": False, "reason": "tool_not_enabled", "tool_status": tool.get("status")}
+        if str(tool.get("risk_level") or "") != "low" or str(tool.get("side_effect_level") or "") != "read_only":
+            return {
+                "eligible": False,
+                "reason": "tool_requires_gate",
+                "risk_level": tool.get("risk_level"),
+                "side_effect_level": tool.get("side_effect_level"),
+            }
+        capability_key = f"{route['domain']}.mcp_orchestration"
+        capability = self.repository.find_one("capabilities", {"capability_key": capability_key, "status": "approved"})
+        if not capability:
+            return {"eligible": False, "reason": "capability_not_approved", "capability_key": capability_key}
+        return {
+            "eligible": True,
+            "reason": "low_risk_read_only_summary_first",
+            "capability_key": capability_key,
+            "risk_level": tool.get("risk_level"),
+            "side_effect_level": tool.get("side_effect_level"),
+        }
+
+    @staticmethod
+    def _compact_mcp_summary_for_cards(summary_result: dict[str, Any]) -> dict[str, Any]:
+        items = summary_result.get("items") if isinstance(summary_result.get("items"), list) else []
+        return {
+            "source": summary_result.get("source"),
+            "domain": summary_result.get("domain"),
+            "total": summary_result.get("total"),
+            "returned_count": len(items),
+            "limit": summary_result.get("limit"),
+            "offset": summary_result.get("offset"),
+            "summary_first": summary_result.get("summary_first"),
+            "response_mode": summary_result.get("response_mode"),
+            "detail_tool": summary_result.get("detail_tool"),
+            "detail_args_hint": summary_result.get("detail_args_hint") if isinstance(summary_result.get("detail_args_hint"), dict) else {},
+            "artifact_ref_count": len(summary_result.get("artifact_refs") or []),
+            "omitted_sections": list(summary_result.get("omitted_sections") or []),
+        }
+
+    @staticmethod
+    def _mcp_executed_status_rail() -> list[dict[str, str]]:
+        return [
+            {"label": "接收任务", "status": "done"},
+            {"label": "理解意图", "status": "done"},
+            {"label": "MCP 路由", "status": "done"},
+            {"label": "MCP 预检", "status": "done"},
+            {"label": "只读执行", "status": "done"},
+            {"label": "详情按需展开", "status": "idle"},
+        ]
+
     @staticmethod
     def _dialogue_card_template(dialogue_intent: DialogueIntent, intent_config: dict[str, Any]) -> dict[str, Any]:
         templates = intent_config.get("card_templates") if isinstance(intent_config, dict) else {}
@@ -2458,6 +2645,10 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
     def _compose_assistant_reply(self, user_message: str, llm_text: str, cards: dict[str, Any], mode_decision: ModeDecision) -> str:
         raw_text = llm_text.strip()
         text = self._strip_assistant_tool_choice_markup(raw_text)
+        execution = cards.get("mcp_execution_result") if isinstance(cards, dict) else None
+        if isinstance(execution, dict) and execution.get("auto_executed"):
+            summary = cards.get("mcp_summary_result") if isinstance(cards.get("mcp_summary_result"), dict) else {}
+            return self._apply_main_reply_policy(self._render_mcp_execution_reply(execution, summary), mode_decision)
         if mode_decision.intent_type in {DialogueIntent.CAPABILITY_INQUIRY, DialogueIntent.MCP_CAPABILITY_INQUIRY} and (self._is_mcp_tool_catalog_inquiry(user_message) or "mcp" in user_message.lower() or "tool" in user_message.lower()):
             catalog = cards.get("runtime_mcp_catalog") if isinstance(cards, dict) else None
             if isinstance(catalog, dict):
@@ -2469,6 +2660,34 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             return self._apply_main_reply_policy(text, mode_decision)
         intent_config = self._dialogue_intent_config()
         return self._apply_main_reply_policy(str(intent_config.get("fallback_reply") or user_message), mode_decision)
+
+    @staticmethod
+    def _render_mcp_execution_reply(execution: dict[str, Any], summary: dict[str, Any]) -> str:
+        route = str(execution.get("route") or "unknown/unknown")
+        items = summary.get("items") if isinstance(summary.get("items"), list) else []
+        lines = [
+            "已通过只读工具完成 MCP summary-first 查询；我只展示概要，不展开原始行、矩阵、日志或模型权重。",
+            f"Route decision：{route}。",
+            f"结果概要：total={summary.get('total', len(items))}，returned={len(items)}，limit={summary.get('limit')}，offset={summary.get('offset')}。",
+        ]
+        for item in items[:3]:
+            if not isinstance(item, dict):
+                continue
+            title = item.get("title") or item.get("tool_name") or item.get("item_type") or item.get("server_key") or "item"
+            detail = []
+            for key in ("server_key", "tool_name", "risk_level", "side_effect_level", "status"):
+                if item.get(key) is not None:
+                    detail.append(f"{key}={item.get(key)}")
+            lines.append(f"- {title}: {', '.join(detail[:5])}")
+        if summary.get("detail_tool"):
+            lines.append(f"需要单项详情时再调用 detail tool：{summary.get('detail_tool')}。")
+        artifact_refs = summary.get("artifact_refs") if isinstance(summary.get("artifact_refs"), list) else []
+        omitted = summary.get("omitted_sections") if isinstance(summary.get("omitted_sections"), list) else []
+        if artifact_refs:
+            lines.append(f"大对象已收敛为 artifact_ref：{len(artifact_refs)} 个。")
+        if omitted:
+            lines.append(f"已按 payload budget 省略：{', '.join(str(item) for item in omitted[:6])}。")
+        return "\n".join(lines)
 
     @staticmethod
     def _strip_assistant_tool_choice_markup(text: str) -> str:
