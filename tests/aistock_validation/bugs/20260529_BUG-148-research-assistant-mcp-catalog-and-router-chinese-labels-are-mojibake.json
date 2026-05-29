@@ -43,8 +43,8 @@
   "expected": "Research Assistant MCP catalog, domain ontology, tool router, tests, and user-facing capability replies use valid UTF-8 Chinese business names and aliases; real Chinese prompts route to the correct summary-first read tools; mojibake is rejected by regression tests.",
   "first_seen_at": "2026-05-29T01:24:24.540691Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e43b46ba9f02d890f9ae8f902d62a277909b5cb3",
+  "fixed_at": "2026-05-29T02:10:48.640937Z",
   "github_issue_number": 332,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/332",
   "last_seen_at": "2026-05-29T01:24:24.540691Z",
@@ -52,6 +52,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/335",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -66,7 +67,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -75,5 +76,12 @@
     "fingerprint": "ae116a2b160c8a610731a1a5",
     "source_event_id": "FE-20260529-ae116a2b160c"
   },
+  "validation_evidence": [
+    "python -X utf8 direct source scan for Research Assistant catalog/router/test UTF-8 labels -> valid Chinese labels present; common mojibake signatures absent",
+    "python -X utf8 -m pytest backend/tests/research_assistant/test_mcp_catalog_sync.py backend/tests/research_assistant/test_natural_language_mcp_routing.py -q -p no:cacheprovider -> 9 passed",
+    "python -X utf8 -m pytest backend/tests/research_assistant/test_api.py -q -p no:cacheprovider -> 7 passed",
+    "python -m nox -s l0 research_assistant_backend research_assistant_mcp_contract validation_center_backend validation_module_registry_l0 --no-error-on-missing-interpreters -> all 5 sessions successful",
+    "runtime route sanity for 数仓/因子库/模型库/策略库/执行策略库 prompts -> expected summary-first read tools selected"
+  ],
   "verification_run_id": null
 }
