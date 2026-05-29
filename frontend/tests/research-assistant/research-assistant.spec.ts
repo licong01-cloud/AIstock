@@ -211,6 +211,94 @@ test("Research Assistant chat renders tool choice markup as readable MCP route c
   await expect(browserPage.getByTestId("ra-mcp-route-card")).toContainText("需要确认和审批后才可执行");
 });
 
+test("Research Assistant chat renders auto-executed MCP summary result cards", async ({ page: browserPage }) => {
+  const response = {
+    ...chatTurnResponse,
+    assistant_message: {
+      content_text: "已通过只读工具完成 MCP summary-first 查询；我只展示概要，不展开原始行、矩阵、日志或模型权重。",
+      content_json: {},
+    },
+    cards: {
+      ...chatTurnResponse.cards,
+      ui_display: { show_plan_card: false, show_clarification_card: false, show_context_health_badge: false, details_default_collapsed: true },
+      mcp_route_decision: {
+        domain: "factor_library",
+        server_key: "aistock-factor-library",
+        tool_name: "factor_library_list",
+        reason: "Matched factor library list request.",
+        side_effect: "read_only",
+        summary_first: true,
+        preflight_required: false,
+        confirmation_required: false,
+      },
+      mcp_execution_result: {
+        auto_executed: true,
+        status: "succeeded",
+        executed: true,
+        route: "aistock-factor-library/factor_library_list",
+        server_key: "aistock-factor-library",
+        tool_name: "factor_library_list",
+        summary_first: true,
+        response_summary: { returned_count: 2, total_count: 47 },
+      },
+      mcp_summary_result: {
+        summary_first: true,
+        response_mode: "summary",
+        returned_count: 2,
+        total_count: 47,
+        items: [
+          { factor_name: "alpha_momentum_20d", category: "momentum", status: "ready" },
+          { factor_name: "alpha_value_quality", category: "quality", status: "ready" },
+        ],
+        omitted_sections: ["raw_payload", "matrix", "factor_value_rows"],
+        artifact_refs: ["mcp://summary/factor_library/list"],
+        detail_tool: "factor_library_get_detail",
+        next_step: "Use the referenced detail tool when one factor needs full metadata.",
+      },
+      mcp_result_cards: [
+        {
+          title: "aistock-factor-library/factor_library_list",
+          summary: "Prepared a summary-first MCP result envelope for factor_library; heavy sections are omitted or referenced.",
+          route: "aistock-factor-library/factor_library_list",
+          summary_first: true,
+          next_step: "Use the referenced detail tool when one factor needs full metadata.",
+        },
+      ],
+      mcp_tool_event: {
+        status: "succeeded",
+        server_key: "aistock-factor-library",
+        tool_name: "factor_library_list",
+        transport: "research_assistant_catalog_summary_adapter",
+        artifact_refs: ["mcp://summary/factor_library/list"],
+      },
+    },
+  };
+
+  await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const respond = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ status: status >= 400 ? "error" : "success", data }) });
+    if (path.endsWith("/chat/turn")) return respond(response);
+    return respond(page([]));
+  });
+
+  await browserPage.goto("/research-assistant");
+  await browserPage.getByPlaceholder(/直接提问或描述任务/).fill("查看因子库概要");
+  await browserPage.getByRole("button", { name: "发送" }).click();
+
+  const main = browserPage.getByTestId("ra-chat-main");
+  await expect(browserPage.getByTestId("ra-mcp-summary-card")).toBeVisible();
+  await expect(browserPage.getByTestId("ra-mcp-summary-card")).toContainText("已执行只读 MCP 摘要查询");
+  await expect(browserPage.getByTestId("ra-mcp-summary-card")).toContainText("aistock-factor-library/factor_library_list");
+  await expect(browserPage.getByTestId("ra-mcp-summary-card")).toContainText("返回 2 / 总计 47");
+  await expect(browserPage.getByTestId("ra-mcp-summary-card")).toContainText("alpha_momentum_20d");
+  await expect(browserPage.getByTestId("ra-mcp-summary-card")).toContainText("原始 payload / 矩阵 / 因子明细行");
+  await expect(browserPage.getByTestId("ra-mcp-summary-card")).toContainText("factor_library_get_detail");
+  await expect(main).not.toContainText("raw_payload");
+  await expect(main).not.toContainText("factor_value_rows");
+  await expect(main).not.toContainText('"items"');
+  await expect(main).not.toContainText("{");
+});
+
 test("Research Assistant MCP tools page treats ready servers as ready", async ({ page: browserPage }) => {
   await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
     const url = new URL(route.request().url());
