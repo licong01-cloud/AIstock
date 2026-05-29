@@ -39,6 +39,12 @@
       "actor": "codex",
       "note": "MCP default-port fix validated: targeted pytest 47 passed; research_assistant_mcp_contract 26 passed; research_mcp_contract 130 passed; research_assistant_backend 73 passed; validation_module_registry_l0 8 passed; validation_center_backend 260 passed; l0 passed; config/default scan confirms MCP entrypoints/config do not target 8011.",
       "timestamp": "2026-05-29T07:12:29.538796Z"
+    },
+    {
+      "action": "metadata_cleanup",
+      "actor": "codex",
+      "note": "BUG-157 registry-only cleanup removed stale non-final workflow_gate from fixed Research Assistant BUG record; no runtime/code behavior changed.",
+      "timestamp": "2026-05-29T07:59:42Z"
     }
   ],
   "evidence_uris": [],
@@ -86,6 +92,5 @@
     "GitHub PR #360 checks -> SUCCESS; mergeStateStatus=CLEAN",
     "MCP port audit -> AIstock/research-assistant MCP config/defaults use 8001 and targeted MCP scan has no 8011 hits"
   ],
-  "verification_run_id": null,
-  "workflow_gate": "ready_for_pr"
+  "verification_run_id": null
 }
