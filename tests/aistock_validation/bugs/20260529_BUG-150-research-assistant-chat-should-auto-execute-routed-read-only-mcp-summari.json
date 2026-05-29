@@ -1,0 +1,89 @@
+{
+  "actual": "Chat/API can route and explain MCP tool choices, while actual execution currently requires separate action proposal execution paths and is not yet automatically surfaced in ordinary assistant turns.",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/service.py",
+    "backend/services/research_assistant/execution.py",
+    "backend/tests/research_assistant/test_service.py",
+    "backend/tests/research_assistant/test_execution_closure.py",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260529_BUG-150-research-assistant-chat-should-auto-execute-routed-read-only-mcp-summari.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-150",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-29T03:40:54.022756Z",
+  "description": "Chat/API can route and explain MCP tool choices, while actual execution currently requires separate action proposal execution paths and is not yet automatically surfaced in ordinary assistant turns.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260529-5bd0ce77dc46",
+      "timestamp": "2026-05-29T03:40:54.022752Z"
+    },
+    {
+      "timestamp": "2026-05-29T04:08:36Z",
+      "actor": "codex",
+      "action": "scope_sync",
+      "note": "Included BUG-150 registry JSON and allocator in allowed_write_scope so registration and fix evidence can travel in the same issue PR."
+    },
+    {
+      "timestamp": "2026-05-29T04:08:36Z",
+      "actor": "codex",
+      "action": "validation_passed",
+      "note": "Implemented chat/API auto preflight and execution for low-risk read-only MCP summary routes; confirmed and high-risk routes remain gated."
+    }
+  ],
+  "evidence_uris": [
+    "backend/services/research_assistant/service.py",
+    "backend/services/research_assistant/execution.py",
+    "docs/architecture/research_assistant_unified_mcp_natural_language_orchestration_design_20260527.md"
+  ],
+  "expected": "For natural-language requests that route to low-risk read-only MCP tools, Research Assistant chat/API creates auditable execution trace, invokes the selected summary-first tool path, returns human-readable result cards with compact payload and artifact/detail refs, and avoids large raw data. Plan/confirmed/high-risk tools continue to produce gated proposals only.",
+  "first_seen_at": "2026-05-29T03:40:54.022756Z",
+  "fix_branch": "bug/registry-research-assistant-research-assistant-chat-should-aut-20260529-4bdd79",
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 339,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/339",
+  "last_seen_at": "2026-05-29T03:40:54.022756Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -X utf8 -m pytest backend/tests/research_assistant/test_service.py backend/tests/research_assistant/test_execution_closure.py -q -p no:cacheprovider",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "in_progress",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Research Assistant chat should auto-execute routed read-only MCP summaries",
+  "trigger_condition": {
+    "fingerprint": "5bd0ce77dc461a5ed2a551d7",
+    "source_event_id": "FE-20260529-5bd0ce77dc46"
+  },
+  "verification_run_id": "BUG-150-local-20260529T0356Z",
+  "validation_evidence": [
+    "python -X utf8 -m pytest backend/tests/research_assistant/test_service.py::test_chat_turn_chinese_factor_library_request_does_not_surface_mock_counts backend/tests/research_assistant/test_service.py::test_chat_turn_chinese_execution_policy_catalog_uses_read_only_list backend/tests/research_assistant/test_service.py::test_chat_turn_tool_choice_markup_is_replaced_with_route_card_text -q -p no:cacheprovider -> 3 passed",
+    "python -X utf8 -m pytest backend/tests/research_assistant/test_service.py::test_chat_turn_auto_executes_read_only_mcp_summary_cards backend/tests/research_assistant/test_service.py::test_chat_turn_tool_choice_markup_is_replaced_with_route_card_text -q -p no:cacheprovider -> 2 passed",
+    "python -X utf8 -m pytest backend/tests/research_assistant/test_service.py backend/tests/research_assistant/test_execution_closure.py -q -p no:cacheprovider -> 53 passed",
+    "python -X utf8 -m pytest backend/tests/research_assistant/test_api.py -q -p no:cacheprovider -> 7 passed",
+    "python -X utf8 -m py_compile backend/services/research_assistant/service.py backend/services/research_assistant/execution.py backend/tests/research_assistant/test_service.py backend/tests/research_assistant/test_execution_closure.py -> passed",
+    "git diff --check -> passed",
+    "python -m nox -s l0 research_assistant_backend research_assistant_mcp_contract --no-error-on-missing-interpreters -> 3 sessions successful"
+  ]
+}
