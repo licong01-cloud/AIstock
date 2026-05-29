@@ -298,6 +298,9 @@ class MiniQMTSimBackend(BrokerBackend):
                 avg_fill_price=None,
                 last_event_at=submitted_at,
                 rejection_reason=None,
+                raw_status="submitted",
+                status_msg=None,
+                raw={"miniqmt_order_id": str(order_id), "message": str(message or "")},
             )
             self._records[handle.handle_id] = _OrderRecord(
                 handle=handle,
@@ -393,6 +396,9 @@ class MiniQMTSimBackend(BrokerBackend):
             avg_fill_price=None,
             last_event_at=datetime.now(UTC),
             rejection_reason=None,
+            raw_status="reconcile_pending",
+            status_msg=None,
+            raw={"miniqmt_order_id": str(miniqmt_order_id), "order_remark": str(order_remark)},
         )
         record = _OrderRecord(
             handle=handle,
@@ -472,6 +478,35 @@ class MiniQMTSimBackend(BrokerBackend):
     def query_positions(self) -> dict[str, PositionLot]:
         positions, _prices = self.query_position_marks()
         return positions
+
+    def query_quote(self, symbol: str) -> dict[str, object] | None:
+        """Return L1 quote from the underlying MiniQMT client when available."""
+
+        self._ensure_alive()
+        getter = getattr(self._qmt_client, "get_full_tick", None)
+        if not callable(getter):
+            return None
+        try:
+            data = getter([symbol])
+        except QMTNotAvailableError as exc:
+            raise BrokerConnectivityError("MiniQMT quote query failed", context={"symbol": symbol, "reason": str(exc)}) from exc
+        except Exception as exc:
+            raise BrokerConnectivityError(
+                "MiniQMT quote query failed",
+                context={"symbol": symbol, "reason": f"{type(exc).__name__}: {exc}"},
+            ) from exc
+        if not data:
+            return None
+        row = data.get(symbol) if isinstance(data, dict) else None
+        if row is None and isinstance(data, dict):
+            raw_code = str(symbol).split(".")[0]
+            for key, value in data.items():
+                if str(key).split(".")[0] == raw_code:
+                    row = value
+                    break
+        if not isinstance(row, dict):
+            return None
+        return _normalize_quote_row(symbol, row)
 
     def query_position_marks(self) -> tuple[dict[str, PositionLot], dict[str, float]]:
         """Return MiniQMT-authoritative positions plus mark prices.
@@ -652,6 +687,9 @@ class MiniQMTSimBackend(BrokerBackend):
             avg_fill_price=avg_price,
             last_event_at=datetime.now(UTC),
             rejection_reason=status_msg if state == "rejected" else None,
+            raw_status=raw_status,
+            status_msg=status_msg,
+            raw=dict(raw),
         )
 
     @staticmethod
@@ -663,6 +701,9 @@ class MiniQMTSimBackend(BrokerBackend):
             avg_fill_price=None,
             last_event_at=event_at,
             rejection_reason=reason,
+            raw_status="submit_rejected",
+            status_msg=reason,
+            raw={"message": reason},
         )
 
     def _safe_status(self) -> Any | None:
@@ -798,3 +839,33 @@ def _position_mark_price(row: dict[str, Any], *, quantity: int) -> float | None:
 
 
 __all__ = ["MiniQMTSimBackend"]
+
+
+def _normalize_quote_row(symbol: str, row: dict[str, Any]) -> dict[str, object]:
+    def first(keys: tuple[str, ...], default: object = None) -> object:
+        for key in keys:
+            value = row.get(key)
+            if value is not None:
+                return value
+        return default
+
+    bid_prices = first(("bidPrice", "bid_price", "bidPrice1", "bid"), [])
+    ask_prices = first(("askPrice", "ask_price", "askPrice1", "ask"), [])
+    bid_volumes = first(("bidVol", "bid_volume", "bidVol1", "bidVolume"), [])
+    ask_volumes = first(("askVol", "ask_volume", "askVol1", "askVolume"), [])
+
+    def level(value: object) -> object:
+        if isinstance(value, (list, tuple)) and value:
+            return value[0]
+        return value
+
+    normalized = {
+        "symbol": symbol,
+        "bid_price_1": level(bid_prices),
+        "ask_price_1": level(ask_prices),
+        "bid_volume_1": level(bid_volumes),
+        "ask_volume_1": level(ask_volumes),
+        "time": first(("time", "timetag", "datetime"), None),
+        "raw": dict(row),
+    }
+    return normalized

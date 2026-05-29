@@ -13,3 +13,4 @@ from . import tail_substitute_algo  # noqa: F401
 from . import v24_plan_algo  # noqa: F401
 from . import v25_two_stage_algo  # noqa: F401
 from . import v25_1_small_cap_algo  # noqa: F401
+from .vnpy_style import legacy_adapter  # noqa: F401

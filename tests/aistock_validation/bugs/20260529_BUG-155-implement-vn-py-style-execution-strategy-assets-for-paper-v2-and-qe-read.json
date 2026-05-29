@@ -12,6 +12,7 @@
     "backend/services/strategy_package/validators.py",
     "backend/services/paper_trading_v2/execution/**",
     "backend/services/paper_trading_v2/day_runner.py",
+    "backend/infra/qmt_client.py",
     "backend/services/paper_trading_v2/broker/base.py",
     "backend/services/paper_trading_v2/broker/minqmtsim.py",
     "backend/tests/trading_core/**",

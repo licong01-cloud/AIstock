@@ -43,6 +43,7 @@ from backend.services.trading_core.errors import (
     RuntimeConfigInvalidError,
     TradingCoreError,
 )
+from backend.execution_algos.vnpy_style import is_vnpy_style_algo
 from backend.services.trading_core.execution_algo_capabilities import required_minute_bars_for_policy
 from backend.services.trading_core.ledger import FeeModel, InMemoryLedger
 from backend.services.trading_core.minute_execution import MinuteExecutionEngine
@@ -60,6 +61,7 @@ from backend.services.trading_core.models import (
 from backend.services.trading_core.oms import OMS
 
 from .broker import MiniQMTSimBackend
+from .execution import MiniQMTAlgoExecutionResult, MiniQMTLiveAlgoAdapter
 from .models import OrderExecutionState, PaperDayRunResult, PaperRun, PortfolioStatus
 from .repository import PaperTradingV2Repository
 from .risk_targets import overlay_risk_forced_exit_targets
@@ -460,6 +462,7 @@ class PaperTradingDayRunner:
                     trade_date=trade_date,
                     intents=intents,
                     broker=minqmt_broker,
+                    execution_policy_context=execution_policy_context,
                 )
 
             ledger = InMemoryLedger(
@@ -1023,6 +1026,7 @@ class PaperTradingDayRunner:
         trade_date: date,
         intents: list[Any],
         broker: MiniQMTSimBackend | None = None,
+        execution_policy_context: dict[str, Any] | None = None,
     ) -> PaperDayRunResult:
         broker = broker or self.minqmt_broker_factory(
             portfolio_id=portfolio.portfolio_id,
@@ -1067,7 +1071,22 @@ class PaperTradingDayRunner:
                         ],
                     },
                 )
+            use_vnpy_style_execution = self._miniqmt_uses_vnpy_style_execution(execution_policy_context)
             for intent in ordered_intents:
+                if use_vnpy_style_execution:
+                    algo_result = self._run_minqmt_vnpy_style_intent(
+                        run=run,
+                        trade_date=trade_date,
+                        intent=intent,
+                        broker=broker,
+                        execution_policy_context=execution_policy_context or {},
+                        session_id=session_id,
+                    )
+                    orders.extend(algo_result["orders"])
+                    fills.extend(algo_result["fills"])
+                    events.extend(algo_result["events"])
+                    continue
+
                 order = self.oms.create_order(intent)
                 try:
                     handle = broker.submit_order_intent(intent)
@@ -1251,6 +1270,215 @@ class PaperTradingDayRunner:
         finally:
             if broker is not None:
                 broker.shutdown()
+
+    @staticmethod
+    def _miniqmt_uses_vnpy_style_execution(execution_policy_context: dict[str, Any] | None) -> bool:
+        policy_json = execution_policy_context.get("policy_json") if isinstance(execution_policy_context, dict) else None
+        return isinstance(policy_json, dict) and is_vnpy_style_algo(policy_json.get("algo_code"))
+
+    def _run_minqmt_vnpy_style_intent(
+        self,
+        *,
+        run: PaperRun,
+        trade_date: date,
+        intent: OrderIntent,
+        broker: MiniQMTSimBackend,
+        execution_policy_context: dict[str, Any],
+        session_id: str | None,
+    ) -> dict[str, list[Any]]:
+        adapter = MiniQMTLiveAlgoAdapter(
+            broker=broker,
+            policy_context=execution_policy_context,
+            quote_provider=self._miniqmt_quote_provider(broker),
+        )
+        result = adapter.execute_intent(intent, trade_date=trade_date)
+        self.repository.save_run_event(
+            run_id=run.run_id,
+            event_type="MINIQMT_VNPY_STYLE_EXECUTION_STARTED",
+            message="MiniQMT order intent routed through selected vn.py-style execution asset",
+            context={
+                "parent_intent_id": intent.intent_id,
+                "symbol": intent.symbol,
+                "side": intent.side.value,
+                "quantity": intent.quantity,
+                "algo_code": result.algo_code,
+                "policy_id": result.policy_context.get("validated_execution_policy_id"),
+                "policy_sha256": result.policy_sha256,
+                "asset_version": result.asset_metadata.get("asset_version"),
+            },
+        )
+        orders: list[Any] = []
+        fills: list[Fill] = []
+        events: list[Any] = []
+        if not result.child_orders:
+            order = self.oms.create_order(intent)
+            final_order, event = self.oms.cancel_order(order, f"{result.algo_code} produced no executable child order")
+            final_order = final_order.model_copy(
+                update={
+                    "metadata": {
+                        **dict(final_order.metadata or {}),
+                        "broker_backend": "minqmt_sim",
+                        "authority_source": "MINIQMT_VNPY_STYLE",
+                        "execution_algo_code": result.algo_code,
+                        "execution_policy_id": result.policy_context.get("validated_execution_policy_id"),
+                        "execution_policy_sha256": result.policy_sha256,
+                        "execution_terminal_state": result.terminal_state,
+                        "execution_diagnostic": result.diagnostic,
+                    }
+                }
+            )
+            self.repository.save_order(run.run_id, final_order)
+            self.repository.save_order_event(run.run_id, event)
+            orders.append(final_order)
+            events.append(event)
+        for child in result.child_orders:
+            order = self.oms.create_order(child.intent)
+            order = order.model_copy(update={"metadata": self._miniqmt_child_order_metadata(order.metadata, child, result)})
+            final_order = order
+            order_events: list[Any] = []
+            if child.handle is None:
+                reason = self._miniqmt_child_error_reason(child)
+                final_order, event = self.oms.reject_order(order, reason)
+                final_order = final_order.model_copy(
+                    update={"metadata": self._miniqmt_child_order_metadata(final_order.metadata, child, result)}
+                )
+                self.repository.save_order_event(run.run_id, event)
+                order_events.append(event)
+            else:
+                native = dict(child.native_context or {})
+                order_fills = self._miniqmt_fills_from_trades(
+                    child.trades,
+                    order=order,
+                    native=native,
+                    trade_date=trade_date,
+                )
+                for fill in order_fills:
+                    final_order, event = self.oms.apply_fill(final_order, fill)
+                    self.repository.save_fill(
+                        run.run_id,
+                        fill,
+                        intended_price=order.limit_price,
+                        fill_market_context=self._miniqmt_fill_market_context(
+                            trade=fill.metadata.get("miniqmt_trade_raw") if isinstance(fill.metadata, dict) else {},
+                            native=native,
+                            trade_date=trade_date,
+                        ),
+                    )
+                    self.repository.save_order_event(run.run_id, event)
+                    order_events.append(event)
+                broker_state = self._miniqmt_order_status_from_handle(child.status)
+                if not order_fills and broker_state in {OrderStatus.REJECTED, OrderStatus.CANCELLED}:
+                    if broker_state == OrderStatus.REJECTED:
+                        final_order, event = self.oms.reject_order(order, child.status.rejection_reason or "MiniQMT child order rejected")
+                    else:
+                        final_order, event = self.oms.cancel_order(order, child.status.rejection_reason or "MiniQMT child order cancelled")
+                    self.repository.save_order_event(run.run_id, event)
+                    order_events.append(event)
+                elif (
+                    final_order.status != broker_state
+                    and broker_state in {OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED}
+                    and child.status is not None
+                    and child.status.filled_quantity > 0
+                    and child.status.filled_quantity >= final_order.filled_quantity
+                ):
+                    final_order = final_order.model_copy(
+                        update={
+                            "status": broker_state,
+                            "filled_quantity": min(child.status.filled_quantity, final_order.quantity),
+                            "avg_fill_price": float(child.status.avg_fill_price) if child.status.avg_fill_price else final_order.avg_fill_price,
+                        }
+                    )
+                final_order = final_order.model_copy(
+                    update={"metadata": self._miniqmt_child_order_metadata(final_order.metadata, child, result)}
+                )
+                fills.extend(order_fills)
+            self.repository.save_order(run.run_id, final_order)
+            if session_id:
+                self.repository.save_order_execution_state(
+                    OrderExecutionState(
+                        session_id=session_id,
+                        run_id=run.run_id,
+                        order_id=final_order.order_id,
+                        symbol=final_order.symbol,
+                        trade_date=trade_date,
+                        algo_code=result.algo_code,
+                        algo_state={
+                            "broker_backend": "minqmt_sim",
+                            "authority_source": "MINIQMT_VNPY_STYLE",
+                            "execution_terminal_state": result.terminal_state,
+                            "diagnostic": result.diagnostic,
+                        },
+                        plan={"asset_metadata": result.asset_metadata, "policy_context": result.policy_context},
+                        plan_sha256=result.policy_sha256,
+                        filled_quantity=final_order.filled_quantity,
+                        remaining_quantity=final_order.remaining_quantity,
+                        status=final_order.status.value,
+                    )
+                )
+            orders.append(final_order)
+            events.extend(order_events)
+        self.repository.save_run_event(
+            run_id=run.run_id,
+            event_type="MINIQMT_VNPY_STYLE_EXECUTION_COMPLETED",
+            message="MiniQMT vn.py-style execution asset completed for order intent",
+            context={
+                "parent_intent_id": intent.intent_id,
+                "algo_code": result.algo_code,
+                "terminal_state": result.terminal_state,
+                "child_order_count": len(result.child_orders),
+                "submitted_child_count": result.submitted_child_count,
+                "policy_id": result.policy_context.get("validated_execution_policy_id"),
+                "policy_sha256": result.policy_sha256,
+                "diagnostic": result.diagnostic,
+            },
+        )
+        return {"orders": orders, "fills": fills, "events": events}
+
+    @staticmethod
+    def _miniqmt_child_order_metadata(
+        metadata: dict[str, Any],
+        child: Any,
+        result: MiniQMTAlgoExecutionResult,
+    ) -> dict[str, Any]:
+        status_payload = child.status.model_dump(mode="json") if child.status else None
+        native = dict(child.native_context or {})
+        return {
+            **dict(metadata or {}),
+            "broker_backend": "minqmt_sim",
+            "authority_source": "MINIQMT_VNPY_STYLE",
+            "execution_algo_code": result.algo_code,
+            "execution_asset_version": result.asset_metadata.get("asset_version"),
+            "execution_policy_id": result.policy_context.get("validated_execution_policy_id"),
+            "execution_policy_sha256": result.policy_sha256,
+            "execution_terminal_state": result.terminal_state,
+            "execution_source_attribution": result.asset_metadata.get("source_attribution"),
+            "parent_intent_id": result.parent_intent.intent_id,
+            "vnpy_vt_orderid": child.vt_orderid,
+            "broker_handle_id": child.handle.handle_id if child.handle else None,
+            "broker_status": child.status.state if child.status else None,
+            "broker_raw_status": child.status.raw_status if child.status else None,
+            "broker_status_msg": child.status.status_msg if child.status else None,
+            "broker_status_raw": child.status.raw if child.status else None,
+            "miniqmt_trade_count": len(child.trades),
+            "child_submit_error": child.submit_error,
+            **native,
+        }
+
+    @staticmethod
+    def _miniqmt_child_error_reason(child: Any) -> str:
+        error = child.submit_error or {}
+        context = error.get("context") if isinstance(error, dict) else None
+        if isinstance(context, dict) and context.get("reason"):
+            return str(context["reason"])
+        if isinstance(error, dict) and error.get("message"):
+            return str(error["message"])
+        return "MiniQMT vn.py-style child order submit failed"
+
+    @staticmethod
+    def _miniqmt_quote_provider(broker: MiniQMTSimBackend):
+        if hasattr(broker, "query_quote"):
+            return lambda symbol: broker.query_quote(symbol)  # type: ignore[attr-defined]
+        return None
 
     def _persist_minqmt_authority_snapshot(
         self,
@@ -1628,6 +1856,11 @@ class PaperTradingDayRunner:
             "strategy_name": str(raw.get("strategy_name") or native.get("strategy_name") or ""),
             "order_remark": str(raw.get("order_remark") or native.get("order_remark") or ""),
             "trade_count": len(trades),
+            "broker_reported_commission": sum(float(trade.get("commission") or 0.0) for trade in trades),
+            "broker_reported_fee_total": sum(float(trade.get("commission") or 0.0) for trade in trades),
+            "trade_amount": total_amount,
+            "cost_precision_level": "broker_aggregate",
+            "cost_breakdown_source": "broker_reported_aggregate",
             "miniqmt_trade_raw": raw,
             "miniqmt_trade_raw_rows": trades,
         }
@@ -1668,6 +1901,11 @@ class PaperTradingDayRunner:
             "strategy_name": str(trade.get("strategy_name") or native.get("strategy_name") or ""),
             "order_remark": str(trade.get("order_remark") or native.get("order_remark") or ""),
             "commission": float(trade.get("commission") or 0.0),
+            "broker_reported_commission": float(trade.get("commission") or 0.0),
+            "broker_reported_fee_total": float(trade.get("commission") or 0.0),
+            "trade_amount": float(trade.get("traded_amount") or 0.0),
+            "cost_precision_level": "broker_aggregate",
+            "cost_breakdown_source": "broker_reported_aggregate",
             "secu_account": str(trade.get("secu_account") or ""),
             "miniqmt_trade_raw": dict(trade),
         }
