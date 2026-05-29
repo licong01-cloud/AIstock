@@ -112,6 +112,9 @@ class BaseQMTClient:
     def get_trading_calendar(self, market: str = "SH") -> List[str]:
         raise NotImplementedError
 
+    def get_full_tick(self, stock_list: List[str]) -> Dict[str, Any]:
+        raise NotImplementedError
+
 
 def get_qmt_client_singleton() -> BaseQMTClient:
     """Return process-wide QMT client singleton."""
@@ -927,6 +930,17 @@ Notes:
                 self._active_tasks[task_id] = {}
             self._active_tasks[task_id].update(status_data)
             self._active_tasks[task_id]["updated_at"] = time.time()
+
+    def get_full_tick(self, stock_list: List[str]) -> Dict[str, Any]:
+        with self._lock:
+            try:
+                self._ensure_xtquant()
+                from xtquant import xtdata
+
+                timeout_s = _env_float("MINIQMT_QUERY_TIMEOUT_SECONDS", default=2.0)
+                return _call_with_timeout(lambda: xtdata.get_full_tick(stock_list), timeout_s) or {}
+            except Exception as e:  # noqa: BLE001
+                raise QMTNotAvailableError(f"?? miniQMT tick ????: {e!r}") from e
 
     def get_latest_trading_day(self) -> str:
         """获取最新交易日，带有超时保护."""
