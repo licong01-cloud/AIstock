@@ -26,6 +26,12 @@
       "actor": "claude_code_strategy",
       "note": "T14b/c fix round 3 dispatched to dw-foundation Lead via docs/cross_tool/20260511_strategy_to_dw_foundation_DISPATCH_t14bc_fix_round_3.md",
       "timestamp": "2026-05-11T01:00:00Z"
+    },
+    {
+      "timestamp": "2026-05-29T04:15:00+08:00",
+      "actor": "codex_app",
+      "action": "close_sync_source_corrected",
+      "note": "Corrected close-sync source from PR #140 to historical implementation commit 7912b9f6502ff8c145bbf8a273aa376b3fef5b97; PR #315 only persists BUG registry state."
     }
   ],
   "evidence_uris": [
@@ -33,18 +39,22 @@
     "drawer:cross-tool/codex-claude-coord/525dca9f77ca5a16d962187f",
     "branch:origin/claude/dw-foundation-20260510",
     "commit:a77a7d8",
-    "file:backend/services/qe_archive/handlers/paper_v2_archive_handler.py"
+    "file:backend/services/qe_archive/handlers/paper_v2_archive_handler.py",
+    "commit:7912b9f6502ff8c145bbf8a273aa376b3fef5b97"
   ],
   "failing_run_id": null,
   "fingerprint": "qe_archive::paper_v2_archive_handler::scd2_replay_no_completion_marker",
   "first_seen_at": "2026-05-11T00:43:21Z",
-  "fix_branch": "claude/dw-foundation-20260510",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_branch": "main",
+  "fix_commit": "7912b9f6502ff8c145bbf8a273aa376b3fef5b97",
+  "fixed_at": "2026-05-28T20:05:25.362540Z",
   "github_issue_number": 13,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/13",
   "last_seen_at": "2026-05-13T07:03:20Z",
   "module": "qe_archive",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "applied_and_verified",
+  "production_frontend_dependency_gate": "noop",
   "reproduce_command": "pytest backend/tests/qe_archive/test_paper_v2_archive_handler.py::test_replay_partial_archive_retries_complete_mirror -q",
   "required_verification": [
     "test_replay_partial_archive_retries_complete_mirror",
@@ -55,7 +65,7 @@
   "risk_area": "data_integrity",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "in_progress",
+  "status": "fixed",
   "submitted_at": "2026-05-11T01:30:00Z",
   "suspected_modules": [
     "backend/services/qe_archive/handlers/paper_v2_archive_handler.py"
@@ -69,5 +79,13 @@
     ],
     "scenario": "partial_archive_then_replay"
   },
-  "verification_run_id": null
+  "validation_evidence": [
+    "pytest backend/tests/qe_archive/test_round3_fixes.py::TestArchiveCompleteMarker -q -p no:cacheprovider -> 3 passed",
+    "pytest backend/tests/qe_archive/test_paper_v2_archive_handler.py -q -p no:cacheprovider -> 27 passed, 1 skipped",
+    "dev DB qe_archive.paper_v2_run has archive_complete/archive_completed_at columns on port 5433 -> verified",
+    "python -m nox -s l0 -> passed (blocking=0; existing guardrail findings only)",
+    "python -m nox -s qe_archive_backend -> 118 passed"
+  ],
+  "verification_run_id": null,
+  "close_sync_pr_url": "https://github.com/licong01-cloud/AIstock/pull/315"
 }
