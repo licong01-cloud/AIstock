@@ -12,7 +12,7 @@ from backend.services.paper_trading_v2.broker import (
 )
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
 from backend.services.paper_trading_v2.market_data import MinuteDataSource
-from backend.services.paper_trading_v2.models import PaperPortfolio, PaperRun, PortfolioStatus
+from backend.services.paper_trading_v2.models import PaperPortfolio, PaperRun
 from backend.services.trading_core.models import OrderIntent, OrderSide, OrderType, PositionLot, RunStatus
 from backend.tests.paper_trading_v2.test_day_runner import make_paper_enabled_manifest
 from backend.tests.paper_trading_v2.test_minqmtsim_backend import TRADE_DATE, _SnapshotOnlyRepository

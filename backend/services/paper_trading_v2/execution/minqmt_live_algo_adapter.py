@@ -25,8 +25,8 @@ from backend.execution_algos.vnpy_style import (
     is_vnpy_style_algo,
 )
 from backend.services.paper_trading_v2.broker.base import BrokerBackend, OrderHandle, OrderHandleStatus
-from backend.services.trading_core.errors import BrokerConnectivityError, TradingCoreError
-from backend.services.trading_core.models import Fill, OrderIntent, OrderSide, OrderType
+from backend.services.trading_core.errors import TradingCoreError
+from backend.services.trading_core.models import OrderIntent, OrderSide, OrderType
 
 from .minqmt_order_state import (
     board_lot_for_symbol,

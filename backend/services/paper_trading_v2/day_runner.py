@@ -1440,7 +1440,6 @@ class PaperTradingDayRunner:
         child: Any,
         result: MiniQMTAlgoExecutionResult,
     ) -> dict[str, Any]:
-        status_payload = child.status.model_dump(mode="json") if child.status else None
         native = dict(child.native_context or {})
         return {
             **dict(metadata or {}),
