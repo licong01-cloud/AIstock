@@ -11,6 +11,8 @@ import json
 import logging
 import os
 import re
+import hashlib
+import subprocess
 from dataclasses import dataclass
 from enum import Enum
 from datetime import date
@@ -23,6 +25,9 @@ import jsonschema
 from .context_budget import ContextBudgetPlan, ContextBudgetPlanner
 from .execution import ResearchAssistantExecutionMixin
 from .models import (
+    ActionProposalCreate,
+    ActionProposalExecuteRequest,
+    ActionProposalPreflightRequest,
     ApprovalCreate,
     CapabilitySyncRequest,
     ChatTurnRequest,
@@ -56,9 +61,9 @@ from .prompt_pack import (
     load_prompt_pack,
 )
 from .repository import DatabaseResearchAssistantRepository
-from .runtime_config import DEFAULT_ENVIRONMENT, RUNTIME_CONFIG_KEY, RuntimeConfigSnapshot, load_runtime_config
+from .runtime_config import DEFAULT_ENVIRONMENT, REPO_ROOT, RUNTIME_CONFIG_KEY, RuntimeConfigSnapshot, load_runtime_config
 from .domain_ontology import domain_prompt_key
-from .mcp_catalog_sync import default_mcp_servers, default_mcp_tools, workflow_capabilities as catalog_workflow_capabilities
+from .mcp_catalog_sync import enrich_mcp_server_record, default_mcp_servers, default_mcp_tools, workflow_capabilities as catalog_workflow_capabilities
 from .tool_router import route_request
 
 
@@ -67,6 +72,40 @@ logger = logging.getLogger("aistock.research_assistant.service")
 ASSISTANT_APPROVAL_CONFIRM = "APPROVE_RESEARCH_ASSISTANT_ACTION"
 PROMPT_CACHE_DIR = Path(os.getenv("AISTOCK_ASSISTANT_PROMPT_CACHE_DIR", "var/research_assistant/prompt_cache"))
 CATALOG_BOOTSTRAP_ACTION = "POST /api/v1/research-assistant/catalogs/seed"
+SERVICE_MODULE_PATH = Path(__file__).resolve()
+
+
+def _git_output(args: list[str]) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), *args],
+            capture_output=True,
+            check=False,
+            encoding="utf-8",
+            errors="replace",
+            timeout=2,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def _file_sha256(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _short_hash(value: str | None) -> str | None:
+    return value[:8] if value else None
+
+
+SERVICE_LOADED_AT = utc_now().isoformat()
+SERVICE_LOADED_GIT_COMMIT = _git_output(["rev-parse", "HEAD"])
+SERVICE_LOADED_SOURCE_SHA256 = _file_sha256(SERVICE_MODULE_PATH)
 
 
 class DialogueIntent(str, Enum):
@@ -553,6 +592,46 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         self.environment = environment
         self.context_budget_planner = ContextBudgetPlanner()
 
+    def runtime_code_visibility(self) -> dict[str, Any]:
+        current_commit = _git_output(["rev-parse", "HEAD"])
+        origin_main = _git_output(["rev-parse", "origin/main"])
+        current_source_sha = _file_sha256(SERVICE_MODULE_PATH)
+        loaded_source_matches_disk = bool(
+            SERVICE_LOADED_SOURCE_SHA256 and current_source_sha and SERVICE_LOADED_SOURCE_SHA256 == current_source_sha
+        )
+        loaded_commit_matches_repo = bool(
+            SERVICE_LOADED_GIT_COMMIT and current_commit and SERVICE_LOADED_GIT_COMMIT == current_commit
+        )
+        repo_matches_origin_main = bool(current_commit and origin_main and current_commit == origin_main)
+        runtime_matches_origin_main = bool(SERVICE_LOADED_GIT_COMMIT and origin_main and SERVICE_LOADED_GIT_COMMIT == origin_main)
+        status = "current" if loaded_source_matches_disk and loaded_commit_matches_repo and repo_matches_origin_main else "stale_or_unverified"
+        return {
+            "schema_version": "aistock_research_assistant_runtime_code_visibility_v1",
+            "service": "research-assistant",
+            "status": status,
+            "runtime_loaded_at": SERVICE_LOADED_AT,
+            "runtime_loaded_git_commit": SERVICE_LOADED_GIT_COMMIT,
+            "runtime_loaded_git_commit_short": _short_hash(SERVICE_LOADED_GIT_COMMIT),
+            "runtime_loaded_source_sha256": SERVICE_LOADED_SOURCE_SHA256,
+            "runtime_loaded_source_sha256_short": _short_hash(SERVICE_LOADED_SOURCE_SHA256),
+            "current_repo_git_commit": current_commit,
+            "current_repo_git_commit_short": _short_hash(current_commit),
+            "origin_main_git_commit": origin_main,
+            "origin_main_git_commit_short": _short_hash(origin_main),
+            "current_source_sha256": current_source_sha,
+            "current_source_sha256_short": _short_hash(current_source_sha),
+            "loaded_source_matches_disk": loaded_source_matches_disk,
+            "loaded_commit_matches_repo": loaded_commit_matches_repo,
+            "repo_matches_origin_main": repo_matches_origin_main,
+            "runtime_matches_origin_main": runtime_matches_origin_main,
+            "restart_required_to_activate_main": not loaded_commit_matches_repo or not loaded_source_matches_disk,
+            "operator_message": (
+                "Running Research Assistant code matches local/origin main."
+                if status == "current"
+                else "Running Research Assistant code may not match the synced repository; restart the backend only when you want to activate merged code."
+            ),
+        }
+
 
     def _workflow_capabilities(self) -> list[dict[str, Any]]:
         configured = self.active_runtime_config().get("planner", {}).get("workflow_capabilities")
@@ -588,6 +667,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "status": status,
             "repository": repository_health,
             "catalog_readiness": catalog_readiness,
+            "runtime_code": self.runtime_code_visibility(),
             "phase": "mcp_skill_execution_closure",
             "implemented_capabilities": {
                 "mcp_api_preflight": True,
@@ -1389,18 +1469,25 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         if "qe" in lower and "template" in lower:
             return DialogueIntent.EXPERIMENT_VALIDATION_REQUEST
 
+        # Let the unified MCP router choose specific business domains before broad
+        # capability-inquiry and local-data keyword fallbacks.
+        route = route_request(user_message)
+        intent_value = route.get("intent_value")
+        if intent_value and str(route.get("domain") or "") != "mcp_capability":
+            if intent_value == DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST.value:
+                return DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST
+            if self._is_business_mcp_overview_request(user_message, route):
+                try:
+                    return DialogueIntent(str(intent_value))
+                except ValueError:
+                    pass
+
         asks_capability = self._has_any(lower, intent_config.get("capability_inquiry_patterns", []))
         if self._is_mcp_tool_catalog_inquiry(lower):
             return DialogueIntent.CAPABILITY_INQUIRY
         if asks_capability:
             return DialogueIntent.CAPABILITY_INQUIRY
-
-        # Let the unified MCP router choose specific domains before generic local-data fallbacks.
-        route = route_request(user_message)
-        intent_value = route.get("intent_value")
         if intent_value:
-            if intent_value == DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST.value:
-                return DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST
             try:
                 return DialogueIntent(str(intent_value))
             except ValueError:
@@ -1433,6 +1520,18 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         if explicit_task:
             return DialogueIntent.AMBIGUOUS_REQUEST
         return DialogueIntent.GENERAL_CHAT
+
+
+
+    @staticmethod
+    def _is_business_mcp_overview_request(user_message: str, route: dict[str, Any]) -> bool:
+        domain = str(route.get("domain") or "")
+        if domain in {"", "general", "mcp_capability", "local_data", "validation_issue", "qe_experiment"}:
+            return False
+        lower = user_message.lower()
+        overview_terms = ('overview', 'summary', 'catalog', 'list', 'available', '概要', '概览', '列表', '有哪些', '有什么', '可用')
+        business_terms = ('因子库', '因子独立指标', '因子相关性', '模型库', '策略库', '执行策略库', 'factor library', 'factor metrics', 'factor correlation', 'model registry', 'strategy library', 'execution policy')
+        return any(term in lower for term in overview_terms) and any(term in lower for term in business_terms)
 
 
     @staticmethod
@@ -1661,7 +1760,16 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         )
         context_health = self._context_health_payload(conversation_id, budget_plan, mode_decision=mode_decision)
         cards = self._build_human_cards(data.message, task, bundle, route, dialogue_intent, mode_decision)
+        self._maybe_auto_execute_read_only_mcp_route(
+            user_message=data.message,
+            conversation_id=conversation_id,
+            task=task,
+            context_pack=context_pack,
+            cards=cards,
+            mode_decision=mode_decision,
+        )
         cards["context_health"] = context_health
+        cards["runtime_code"] = self.runtime_code_visibility()
         assistant_text = self._compose_assistant_reply(data.message, llm_result.content, cards, mode_decision)
         assistant_message = self.add_conversation_message(
             ConversationMessageCreate(
@@ -1710,18 +1818,21 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                     payload_json={"proposal_count": len(cards.get("action_proposals", [])), "safety": cards["safety"], "dialogue_intent": dialogue_intent.value},
                 ),
             )
+        task_events = self.repository.list_records("task_events", filters={"task_id": task["task_id"]}, limit=self.configured_limit("task_events_detail"))["items"]
+        public_cards = self._public_chat_cards(cards)
         return {
-            "conversation": self.repository.get_record("conversations", conversation_id),
-            "user_message": user_message,
-            "assistant_message": assistant_message,
-            "task": self.repository.get_record("tasks", task["task_id"]),
-            "task_events": self.repository.list_records("task_events", filters={"task_id": task["task_id"]}, limit=self.configured_limit("task_events_detail"))["items"],
+            "conversation": self._public_conversation(self.repository.get_record("conversations", conversation_id)),
+            "user_message": self._public_conversation_message(user_message),
+            "assistant_message": self._public_conversation_message(assistant_message),
+            "task": self._public_task(self.repository.get_record("tasks", task["task_id"])),
+            "task_events": self._public_task_events(task_events),
+            "task_events_ref": {"endpoint": f"/api/v1/research-assistant/tasks/{task['task_id']}/events", "default_limit": self.configured_limit("task_events_detail")},
             "prompt_bundle": self._public_prompt_bundle(bundle),
             "context_pack": {"context_pack_id": context_pack["context_pack_id"], "pack_summary": context_pack["pack_summary"], "checksum": context_pack["checksum"]},
             "trace": {"trace_id": trace["trace_id"], "status": trace["status"], "duration_ms": trace.get("duration_ms"), "model_profile_id": trace.get("model_profile_id")},
             "mode_decision": mode_decision_json,
             "context_health": context_health,
-            "cards": cards,
+            "cards": public_cards,
         }
 
     @staticmethod
@@ -1729,16 +1840,141 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         return (message.strip().replace("\n", " ")[:48] or "新的对话")
 
     @staticmethod
+    def _public_conversation(conversation: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not isinstance(conversation, dict):
+            return None
+        return {
+            "conversation_id": conversation.get("conversation_id"),
+            "user_id": conversation.get("user_id"),
+            "title": conversation.get("title"),
+            "status": conversation.get("status"),
+            "created_at": conversation.get("created_at"),
+            "updated_at": conversation.get("updated_at"),
+        }
+
+    @staticmethod
+    def _public_conversation_message(message: dict[str, Any]) -> dict[str, Any]:
+        content_json = message.get("content_json") if isinstance(message.get("content_json"), dict) else {}
+        public: dict[str, Any] = {
+            "message_id": message.get("message_id"),
+            "conversation_id": message.get("conversation_id"),
+            "role": message.get("role"),
+            "content_text": message.get("content_text"),
+            "task_id": message.get("task_id"),
+            "prompt_bundle_id": message.get("prompt_bundle_id"),
+            "trace_id": message.get("trace_id"),
+            "is_visible": message.get("is_visible"),
+            "created_at": message.get("created_at"),
+            "updated_at": message.get("updated_at"),
+        }
+        if message.get("role") == "assistant":
+            public["content_json"] = {
+                "audit_summary": content_json.get("audit_summary") if isinstance(content_json.get("audit_summary"), dict) else {},
+            }
+        else:
+            public["content_json"] = {
+                "phase": content_json.get("phase"),
+                "dialogue_intent": content_json.get("dialogue_intent"),
+                "dialogue_mode": content_json.get("dialogue_mode"),
+            }
+        return public
+
+    @staticmethod
+    def _public_task(task: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not isinstance(task, dict):
+            return None
+        return {
+            "task_id": task.get("task_id"),
+            "task_type": task.get("task_type"),
+            "title": task.get("title"),
+            "status": task.get("status"),
+            "risk_level": task.get("risk_level"),
+            "created_by": task.get("created_by"),
+            "created_at": task.get("created_at"),
+            "updated_at": task.get("updated_at"),
+            "completed_at": task.get("completed_at"),
+        }
+
+    @staticmethod
+    def _public_task_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            {
+                "event_id": event.get("event_id"),
+                "task_id": event.get("task_id"),
+                "event_type": event.get("event_type"),
+                "severity": event.get("severity"),
+                "message": event.get("message"),
+                "created_at": event.get("created_at"),
+            }
+            for event in events
+            if isinstance(event, dict)
+        ]
+
+    @classmethod
+    def _public_chat_cards(cls, cards: dict[str, Any]) -> dict[str, Any]:
+        public_keys = {
+            "intent_type",
+            "dialogue_mode",
+            "mode_decision",
+            "action_proposals",
+            "capability_cards",
+            "missing_capability_keys",
+            "status_rail",
+            "capability_summary",
+            "safety",
+            "main_reply_policy",
+            "ui_display",
+            "mcp_route_decision",
+            "runtime_mcp_catalog",
+            "plan_card",
+            "clarification_card",
+            "context_health",
+            "runtime_code",
+            "local_data_management",
+            "local_data_phases",
+            "mcp_summary_result",
+            "mcp_result_cards",
+            "mcp_tool_event",
+            "mcp_execution_result",
+        }
+        public = {key: value for key, value in cards.items() if key in public_keys}
+        if isinstance(public.get("mcp_summary_result"), dict):
+            public["mcp_summary_result"] = cls._compact_chat_mcp_summary_result(public["mcp_summary_result"])
+        if isinstance(public.get("mcp_result_cards"), list):
+            public["mcp_result_cards"] = public["mcp_result_cards"][:3]
+        if isinstance(public.get("mcp_execution_result"), dict):
+            execution = dict(public["mcp_execution_result"])
+            if isinstance(execution.get("human_cards"), list):
+                execution["human_cards"] = execution["human_cards"][:3]
+            public["mcp_execution_result"] = execution
+        return public
+
+    @staticmethod
+    def _compact_chat_mcp_summary_result(summary: dict[str, Any]) -> dict[str, Any]:
+        compact = dict(summary)
+        items = compact.get("items") if isinstance(compact.get("items"), list) else []
+        compact["items"] = items[:3]
+        compact["items_truncated"] = max(0, len(items) - len(compact["items"]))
+        if isinstance(compact.get("artifact_refs"), list):
+            compact["artifact_refs"] = compact["artifact_refs"][:3]
+        return compact
+
+    @staticmethod
     def _public_prompt_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
+        selection_trace = bundle.get("selection_trace_json") if isinstance(bundle.get("selection_trace_json"), dict) else {}
         return {
             "prompt_bundle_id": bundle["prompt_bundle_id"],
             "phase": bundle["phase"],
             "checksum": bundle["checksum"],
             "activation_id": bundle.get("activation_id"),
-            "version_refs": bundle.get("version_refs") or [],
-            "node_refs": bundle["node_refs"],
-            "selection_trace_json": bundle["selection_trace_json"],
-            "cache_path": bundle.get("cache_path"),
+            "node_count": len(bundle.get("node_refs") or []),
+            "selected_prompt_keys": [str(item.get("prompt_key")) for item in bundle.get("node_refs", []) if isinstance(item, dict)],
+            "selection_trace_json": {
+                "algorithm": selection_trace.get("algorithm"),
+                "dialogue_intent": selection_trace.get("dialogue_intent"),
+                "dialogue_mode": selection_trace.get("dialogue_mode"),
+                "phase": selection_trace.get("phase"),
+            },
         }
 
     def _chat_messages_for_llm(
@@ -1792,7 +2028,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
 
     def _mcp_tool_catalog_snapshot(self) -> dict[str, Any]:
         servers = [
-            item
+            enrich_mcp_server_record(item)
             for item in self.repository.list_records("mcp_servers", limit=self.configured_limit("router_mcp_servers"))["items"]
             if str(item.get("status") or "") in {"ready", "enabled", "ok"}
         ]
@@ -2283,14 +2519,17 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         qe_capability_keys = set(self.active_runtime_config().get("planner", {}).get("qe_workflow_capability_keys", []))
         available_keys = {str(item.get("capability_key")) for item in capabilities}
         include_qe_capabilities = bool(template.get("include_qe_capabilities"))
-        is_local_data = dialogue_intent == DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST or self._is_local_data_management_request(user_message)
+        mcp_route = dict(route_request(user_message))
+        route_domain = str(mcp_route.get("domain") or "general")
+        is_local_data = dialogue_intent == DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST or (
+            route_domain in {"local_data", "general"} and self._is_local_data_management_request(user_message)
+        )
         local_data_capability_keys = set(self.active_runtime_config().get("planner", {}).get("local_data_workflow_capability_keys", []))
         capability_card_keys: set[str] = set()
         if include_qe_capabilities:
             capability_card_keys.update(qe_capability_keys)
         if is_local_data:
             capability_card_keys.update(local_data_capability_keys)
-        mcp_route = dict(route_request(user_message))
         route_capability_keys = set()
         if mcp_route.get("domain") and mcp_route.get("domain") != "general":
             route_capability_keys.add(f"{mcp_route['domain']}.mcp_orchestration")
@@ -2418,6 +2657,182 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             }
         return cards
 
+    def _maybe_auto_execute_read_only_mcp_route(
+        self,
+        *,
+        user_message: str,
+        conversation_id: str,
+        task: dict[str, Any],
+        context_pack: dict[str, Any],
+        cards: dict[str, Any],
+        mode_decision: ModeDecision,
+    ) -> None:
+        route = cards.get("mcp_route_decision")
+        if not isinstance(route, dict):
+            return
+        eligibility = self._read_only_mcp_auto_execution_eligibility(route, mode_decision)
+        route["auto_execute"] = eligibility
+        if not eligibility["eligible"]:
+            return
+        server_key = str(route["server_key"])
+        tool_name = str(route["tool_name"])
+        capability_key = f"{route['domain']}.mcp_orchestration"
+        payload = {
+            "request": user_message,
+            "route": route,
+            "mcp_route_decision": route,
+            "limit": 20,
+        }
+        try:
+            proposal = self.create_action_proposal(
+                ActionProposalCreate(
+                    task_id=task["task_id"],
+                    conversation_id=conversation_id,
+                    capability_key=capability_key,
+                    proposal_type="mcp_tool",
+                    title=f"Summary-first MCP read: {server_key}/{tool_name}",
+                    summary=f"Auto-execute low-risk read-only MCP summary for route {server_key}/{tool_name}.",
+                    input_json=payload,
+                    expected_result_json={"summary_first": True, "server_key": server_key, "tool_name": tool_name},
+                    context_pack_id=context_pack.get("context_pack_id"),
+                    idempotency_key=sha256_json({"task_id": task["task_id"], "auto_mcp_read": server_key, "tool_name": tool_name, "payload": payload}),
+                    created_by="research_assistant_auto_read_only_route",
+                )
+            )
+            preflight = self.preflight_action_proposal(
+                proposal["action_proposal_id"],
+                ActionProposalPreflightRequest(payload_json=payload, idempotency_key=proposal["idempotency_key"]),
+            )
+            if preflight["proposal"]["status"] != "preflight_passed":
+                cards["mcp_execution_result"] = {
+                    "auto_executed": False,
+                    "status": "preflight_blocked",
+                    "route": f"{server_key}/{tool_name}",
+                    "server_key": server_key,
+                    "tool_name": tool_name,
+                    "action_proposal_id": proposal["action_proposal_id"],
+                    "preflight": preflight["preflight"],
+                    "summary_first": True,
+                }
+                return
+            executed = self.execute_action_proposal(
+                proposal["action_proposal_id"],
+                ActionProposalExecuteRequest(payload_json=payload, idempotency_key=proposal["idempotency_key"]),
+            )
+        except Exception as exc:  # pragma: no cover - defensive path keeps chat usable when catalog drifts.
+            logger.exception("read-only MCP auto execution failed for %s/%s", server_key, tool_name)
+            cards["mcp_execution_result"] = {
+                "auto_executed": False,
+                "status": "failed",
+                "route": f"{server_key}/{tool_name}",
+                "server_key": server_key,
+                "tool_name": tool_name,
+                "summary_first": True,
+                "error": {"code": "auto_mcp_execution_failed", "message": str(exc)},
+            }
+            self.add_task_event(
+                task["task_id"],
+                TaskEventCreate(
+                    event_type="mcp_auto_execute_failed",
+                    severity="warning",
+                    message=f"Read-only MCP auto execution failed: {server_key}/{tool_name}",
+                    payload_json={"server_key": server_key, "tool_name": tool_name, "error": str(exc)},
+                ),
+            )
+            return
+
+        tool_event = executed.get("tool_event") if isinstance(executed.get("tool_event"), dict) else {}
+        summary_result = tool_event.get("response_json") if isinstance(tool_event.get("response_json"), dict) else {}
+        cards["mcp_summary_result"] = summary_result
+        cards["mcp_result_cards"] = list(executed.get("human_cards") or [])
+        cards["mcp_tool_event"] = {
+            "tool_event_id": tool_event.get("tool_event_id"),
+            "server_key": tool_event.get("server_key"),
+            "tool_name": tool_event.get("tool_name"),
+            "status": tool_event.get("status"),
+            "transport": tool_event.get("transport"),
+            "duration_ms": tool_event.get("duration_ms"),
+            "artifact_refs": tool_event.get("artifact_refs") or [],
+        }
+        cards["mcp_execution_result"] = {
+            "auto_executed": bool(executed.get("executed")),
+            "status": executed.get("status"),
+            "executed": bool(executed.get("executed")),
+            "route": f"{server_key}/{tool_name}",
+            "server_key": server_key,
+            "tool_name": tool_name,
+            "action_proposal_id": proposal["action_proposal_id"],
+            "proposal_status": (executed.get("proposal") or {}).get("status") if isinstance(executed.get("proposal"), dict) else None,
+            "tool_event_id": tool_event.get("tool_event_id"),
+            "trace_id": executed.get("trace_id"),
+            "summary_first": bool(summary_result.get("summary_first", True)),
+            "response_summary": self._compact_mcp_summary_for_cards(summary_result),
+            "human_cards": list(executed.get("human_cards") or []),
+        }
+        cards["status_rail"] = self._mcp_executed_status_rail()
+
+    def _read_only_mcp_auto_execution_eligibility(self, route: dict[str, Any], mode_decision: ModeDecision) -> dict[str, Any]:
+        if not route.get("server_key") or not route.get("tool_name") or not route.get("domain"):
+            return {"eligible": False, "reason": "route_missing_tool"}
+        if route.get("domain") in {"general"}:
+            return {"eligible": False, "reason": "general_route"}
+        if str(route.get("side_effect") or "read_only") != "read_only":
+            return {"eligible": False, "reason": "route_not_read_only"}
+        if mode_decision.allowed_tool_side_effect == "none":
+            return {"eligible": False, "reason": "dialogue_mode_disallows_tools"}
+        tool = self.repository.find_one("mcp_tools", {"server_key": str(route["server_key"]), "tool_name": str(route["tool_name"])})
+        if not tool:
+            return {"eligible": False, "reason": "tool_not_registered"}
+        if str(tool.get("status") or "") not in {"enabled", "ready", "approved"}:
+            return {"eligible": False, "reason": "tool_not_enabled", "tool_status": tool.get("status")}
+        if str(tool.get("risk_level") or "") != "low" or str(tool.get("side_effect_level") or "") != "read_only":
+            return {
+                "eligible": False,
+                "reason": "tool_requires_gate",
+                "risk_level": tool.get("risk_level"),
+                "side_effect_level": tool.get("side_effect_level"),
+            }
+        capability_key = f"{route['domain']}.mcp_orchestration"
+        capability = self.repository.find_one("capabilities", {"capability_key": capability_key, "status": "approved"})
+        if not capability:
+            return {"eligible": False, "reason": "capability_not_approved", "capability_key": capability_key}
+        return {
+            "eligible": True,
+            "reason": "low_risk_read_only_summary_first",
+            "capability_key": capability_key,
+            "risk_level": tool.get("risk_level"),
+            "side_effect_level": tool.get("side_effect_level"),
+        }
+
+    @staticmethod
+    def _compact_mcp_summary_for_cards(summary_result: dict[str, Any]) -> dict[str, Any]:
+        items = summary_result.get("items") if isinstance(summary_result.get("items"), list) else []
+        return {
+            "source": summary_result.get("source"),
+            "domain": summary_result.get("domain"),
+            "total": summary_result.get("total"),
+            "returned_count": len(items),
+            "limit": summary_result.get("limit"),
+            "offset": summary_result.get("offset"),
+            "summary_first": summary_result.get("summary_first"),
+            "response_mode": summary_result.get("response_mode"),
+            "detail_tool": summary_result.get("detail_tool"),
+            "detail_args_hint": summary_result.get("detail_args_hint") if isinstance(summary_result.get("detail_args_hint"), dict) else {},
+            "artifact_ref_count": len(summary_result.get("artifact_refs") or []),
+            "omitted_sections": list(summary_result.get("omitted_sections") or []),
+        }
+
+    @staticmethod
+    def _mcp_executed_status_rail() -> list[dict[str, str]]:
+        return [
+            {"label": "接收任务", "status": "done"},
+            {"label": "理解意图", "status": "done"},
+            {"label": "MCP 路由", "status": "done"},
+            {"label": "MCP 预检", "status": "done"},
+            {"label": "只读执行", "status": "done"},
+            {"label": "详情按需展开", "status": "idle"},
+        ]
+
     @staticmethod
     def _dialogue_card_template(dialogue_intent: DialogueIntent, intent_config: dict[str, Any]) -> dict[str, Any]:
         templates = intent_config.get("card_templates") if isinstance(intent_config, dict) else {}
@@ -2458,6 +2873,10 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
     def _compose_assistant_reply(self, user_message: str, llm_text: str, cards: dict[str, Any], mode_decision: ModeDecision) -> str:
         raw_text = llm_text.strip()
         text = self._strip_assistant_tool_choice_markup(raw_text)
+        execution = cards.get("mcp_execution_result") if isinstance(cards, dict) else None
+        if isinstance(execution, dict) and execution.get("auto_executed"):
+            summary = cards.get("mcp_summary_result") if isinstance(cards.get("mcp_summary_result"), dict) else {}
+            return self._apply_main_reply_policy(self._render_mcp_execution_reply(execution, summary), mode_decision)
         if mode_decision.intent_type in {DialogueIntent.CAPABILITY_INQUIRY, DialogueIntent.MCP_CAPABILITY_INQUIRY} and (self._is_mcp_tool_catalog_inquiry(user_message) or "mcp" in user_message.lower() or "tool" in user_message.lower()):
             catalog = cards.get("runtime_mcp_catalog") if isinstance(cards, dict) else None
             if isinstance(catalog, dict):
@@ -2469,6 +2888,34 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             return self._apply_main_reply_policy(text, mode_decision)
         intent_config = self._dialogue_intent_config()
         return self._apply_main_reply_policy(str(intent_config.get("fallback_reply") or user_message), mode_decision)
+
+    @staticmethod
+    def _render_mcp_execution_reply(execution: dict[str, Any], summary: dict[str, Any]) -> str:
+        route = str(execution.get("route") or "unknown/unknown")
+        items = summary.get("items") if isinstance(summary.get("items"), list) else []
+        lines = [
+            "已通过只读工具完成 MCP summary-first 查询；我只展示概要，不展开原始行、矩阵、日志或模型权重。",
+            f"Route decision：{route}。",
+            f"结果概要：total={summary.get('total', len(items))}，returned={len(items)}，limit={summary.get('limit')}，offset={summary.get('offset')}。",
+        ]
+        for item in items[:3]:
+            if not isinstance(item, dict):
+                continue
+            title = item.get("title") or item.get("tool_name") or item.get("item_type") or item.get("server_key") or "item"
+            detail = []
+            for key in ("server_key", "tool_name", "risk_level", "side_effect_level", "status"):
+                if item.get(key) is not None:
+                    detail.append(f"{key}={item.get(key)}")
+            lines.append(f"- {title}: {', '.join(detail[:5])}")
+        if summary.get("detail_tool"):
+            lines.append(f"需要单项详情时再调用 detail tool：{summary.get('detail_tool')}。")
+        artifact_refs = summary.get("artifact_refs") if isinstance(summary.get("artifact_refs"), list) else []
+        omitted = summary.get("omitted_sections") if isinstance(summary.get("omitted_sections"), list) else []
+        if artifact_refs:
+            lines.append(f"大对象已收敛为 artifact_ref：{len(artifact_refs)} 个。")
+        if omitted:
+            lines.append(f"已按 payload budget 省略：{', '.join(str(item) for item in omitted[:6])}。")
+        return "\n".join(lines)
 
     @staticmethod
     def _strip_assistant_tool_choice_markup(text: str) -> str:

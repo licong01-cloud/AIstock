@@ -12,6 +12,8 @@ python F:\Dev\AIstock\scripts\aistock_issue_workflow.py doctor
 
 If `doctor` reports `workflow_gate=blocked`, stop and report the blocking items. If it reports warnings, continue only when the warning does not affect the requested workflow.
 
+For small or unclear scope, run `python F:\Dev\AIstock\scripts\aistock_issue_workflow.py fast-path --bug-id BUG-XXX --changed-file <path>` after `doctor` to get the T0/T1/T2/T3 context strategy and selected validation before loading additional files.
+
 If `doctor` reports `client_manifest.codex_skill_status=stale|missing_global` or `restart_recommended=true`, the repo CLI is still canonical for this run, but old Codex/Claude windows should be refreshed after `install-client --apply` lands on `main`.
 
 ## Submit/Register BUG workflow
@@ -77,6 +79,8 @@ The PR command runs a pre-PR gate: it blocks missing validation evidence, failed
 
 Do not stop at `validation_passed`. Commit only task files, then run the `run --mode pr --push --create-pr` command from the issue worktree. PR automation intentionally blocks canonical-root/main execution.
 
+After workflow CLI/client changes, run `python scripts\aistock_issue_workflow.py workflow-smoke --changed-file <path> --module <module>` and require `workflow_gate=passed` plus `unexpected_dirty_paths=[]`; it is a dry-run and must not create GitHub Issues, PRs, runtime restarts, or DB writes.
+
 After PR creation, after merge, or when the workflow feels slow, run:
 
 ```powershell
@@ -99,6 +103,21 @@ Use `postmortem.json` / `postmortem.md` for timing, context-token estimates, dup
 After an approved merge, run `python scripts/aistock_issue_workflow.py close-sync --bug-id BUG-XXX --pr-url <PR_URL> --validation-evidence "<command> -> passed" --apply`, then dry-run `cleanup-after-merge`; add `--pr-url <PR_URL>` for squash-merged PR cleanup and add `--apply` only when the cleanup gate is ready.
 
 If the user explicitly requests full merge automation, use `run --mode merge --pr-url <PR_URL> --merge --validation-evidence "<command> -> passed"` so the same state machine verifies green checks, merge, close-sync, and cleanup planning. Without `--merge`, stop before merging.
+
+If the source PR is already merged, use the v2.3 finalizer rather than manually chaining commands:
+
+```powershell
+python scripts\aistock_issue_workflow.py merge-finalizer `
+  --bug-id BUG-XXX `
+  --source-pr-url <PR_URL> `
+  --source-branch <branch> `
+  --source-worktree <worktree> `
+  --validation-evidence "<command> -> passed" `
+  --sync-root `
+  --apply
+```
+
+Add `--merge-close-sync-pr --cleanup` only when the user authorized the full aftercare loop and checks are green.
 
 ## Client Install
 

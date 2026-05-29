@@ -88,6 +88,27 @@ EXECUTION_ALGO_CAPABILITIES: dict[str, ExecutionAlgoCapability] = {
         plan_horizon_bars=240,
         runtime_asset_keys=("early_model_path", "late_model_path"),
     ),
+    "SNIPER_MINIQMT": ExecutionAlgoCapability(
+        algo_code="SNIPER_MINIQMT",
+        historical_min_required_bars=1,
+        live_supported=True,
+        live_min_start_bars=1,
+        live_step_mode="miniqmt_event_driven_tick",
+    ),
+    "BEST_LIMIT_MINIQMT": ExecutionAlgoCapability(
+        algo_code="BEST_LIMIT_MINIQMT",
+        historical_min_required_bars=1,
+        live_supported=True,
+        live_min_start_bars=1,
+        live_step_mode="miniqmt_event_driven_tick",
+    ),
+    "TWAP_LITE_MINIQMT": ExecutionAlgoCapability(
+        algo_code="TWAP_LITE_MINIQMT",
+        historical_min_required_bars=1,
+        live_supported=True,
+        live_min_start_bars=1,
+        live_step_mode="miniqmt_event_driven_timer",
+    ),
 }
 
 

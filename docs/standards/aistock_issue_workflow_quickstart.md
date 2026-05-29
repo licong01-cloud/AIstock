@@ -78,6 +78,32 @@ Code intelligence is non-blocking in KG-1/KG-3. If CodeGraph is installed and `.
 Warnings about a dirty canonical root are not permission to write there. They mean root sync/cleanup must stop until the unrelated work is resolved. New issue registration and fixes should continue only in a clean task or registry worktree.
 
 `--output` is a JSON file path, not an output format selector. Omit it for stdout or use `--output -`; do not pass `--output json`. File outputs should use an explicit path, preferably under `tmp/issue_workflow/` or `tmp/validation/`, so a client typo cannot create root-level files such as `json`.
+## Fast Path And Smoke Check
+
+Use `fast-path` when a client needs a cheap, machine-readable plan before loading more context:
+
+```powershell
+python scripts/aistock_issue_workflow.py fast-path --bug-id BUG-XXX --changed-file <path>
+# or, before a BUG exists:
+python scripts/aistock_issue_workflow.py fast-path --module validation.guardrails --changed-file scripts/aistock_issue_workflow.py
+```
+
+The output classifies the task as `T0`, `T1`, `T2`, or `T3`, returns selected validation commands, production gates, context strategy, stop conditions, and the next workflow command. Treat it as an optimization layer only: it does not replace GitHub/BUG linkage, validation evidence, PR quality, close-sync, or cleanup.
+
+Fast-path intent:
+
+- `T0`: docs/client/registry metadata changes; use targeted context and changed-file/l0 validation only as selected.
+- `T1`: single BUG or single workflow/module code change; use Context Pack plus targeted snippets, not old module histories.
+- `T2`: critical or multi-impact/product scope; batch only compatible same-module work and share validation evidence carefully.
+- `T3`: design or architecture work; keep an acceptance matrix and broader review.
+
+Use `workflow-smoke` after workflow CLI/client changes, or before judging whether Codex/Claude can still follow the issue flow:
+
+```powershell
+python scripts/aistock_issue_workflow.py workflow-smoke --changed-file scripts/aistock_issue_workflow.py --module validation.guardrails
+```
+
+`workflow-smoke` dry-runs the core chain with a synthetic ignored issue record: fast-path -> start dry-run -> finish plan-only -> postmortem preview. It must not create GitHub Issues, PRs, production DB writes, runtime restarts, or tracked root files. A passing smoke check reports `workflow_gate=passed` and `unexpected_dirty_paths=[]`.
 
 ## CI / Nightly Failure Intake
 
@@ -108,6 +134,13 @@ python scripts/aistock_issue_workflow.py promote-ci-issue --issue <issue-number>
 ```
 
 After promotion, continue through the normal BUG workflow returned by `next_command`. CI/Nightly intake must not write BUG JSON directly from GitHub Actions or from the canonical root `main` checkout.
+
+If `triage-ci-issue` returns `classification_recommendation=infra_blocker` or
+`infra_flaky`, do not promote it into a code BUG. Follow the returned
+`infra_action` instead. Typical examples are missing self-hosted Windows
+runners, runner API permission failures, or missing
+`AISTOCK_RUNNER_HEALTH_TOKEN`. These issues should restore infrastructure and
+rerun CI/Nightly, not consume a developer window as a code repair.
 
 ## Submit Or Register A New BUG
 
@@ -152,7 +185,11 @@ the same allocation rule. They may write local BUG JSON only from an approved
 task/registry worktree, and their allocator must use the shared
 `AIstock_worktrees/.locks/bug-id-allocator.lock` plus the global BUG id scan.
 
-Normal BUG intake continues directly into the fix workflow in the same task/registry worktree via the returned `fix_chain.run_next_command`; do not create a separate registry-only PR unless the user explicitly asks for intake-only tracking.
+Normal BUG intake continues directly into the fix workflow in the same
+task/registry worktree via the returned `fix_chain.run_next_command` and
+`fix_chain.next_command`; do not create a separate registry-only PR unless the
+user explicitly asks for intake-only tracking. A registry-only PR is an
+intake-only exception, not the default fix path.
 
 If a client is launched from `F:\Dev\AIstock`, first create or switch to a clean task/registry worktree. Do not use root `main` for BUG JSON writes.
 
@@ -253,6 +290,21 @@ python scripts/aistock_issue_workflow.py run --bug-id BUG-XXX --mode merge --pr-
 
 Without `--merge`, `run --mode merge` stops at an authorization gate. With `--merge`, the wrapper verifies PR checks are green, merges, runs close-sync through an isolated registry worktree, commits the BUG registry close-sync change, opens or reuses a close-sync PR, and prepares cleanup state. If `gh pr merge` exits non-zero after GitHub has already merged the PR, the wrapper must re-check the PR state, record `recovered_from_local_merge_error`, and continue to close-sync instead of leaving a manual fallback. Merge automation still does not touch production runtime or DB, and it commits only `tests/aistock_validation/bugs/**` from the close-sync worktree; unexpected dirty files block the close-sync PR.
 
+If the source/fix PR has already been merged, use the v2.3 finalizer instead of manually chaining close-sync, cleanup, and postmortem commands:
+
+```powershell
+python scripts/aistock_issue_workflow.py merge-finalizer `
+  --bug-id BUG-XXX `
+  --source-pr-url <PR_URL> `
+  --source-branch bug/BUG-XXX-scope `
+  --source-worktree F:/Dev/AIstock_worktrees/BUG-XXX-scope `
+  --validation-evidence "python -m nox -s l0 -> passed" `
+  --sync-root `
+  --apply
+```
+
+The finalizer verifies the source PR is merged, runs close-sync in an isolated registry worktree, commits and opens or reuses the close-sync PR, records postmortem output, and returns the remaining next actions. Add `--merge-close-sync-pr --cleanup` only when the user authorized the full aftercare loop and checks are green; otherwise stop with a merge-ready close-sync PR.
+
 
 ## Cleanup After Merge
 
@@ -303,7 +355,7 @@ python scripts/aistock_issue_workflow.py start-batch `
   --create-worktree
 ```
 
-The command writes one batch state plus per-issue Context Packs under `tmp/issue_workflow/<BATCH-ID>/`. In KG-4, the batch state and per-issue Context Packs also include a shared `code_intelligence` block so Codex / Claude Code can reuse one CodeGraph context and affected-tests artifact instead of repeating code exploration for every BUG. After the shared fix and required validation:
+The command writes one batch state plus per-issue Context Packs under `tmp/issue_workflow/<BATCH-ID>/`. The batch payload includes `batch_selector`, which records the shared allowed scope, selected required validation plans, production/dependency gates, and per-issue coverage. In KG-4, the batch state and per-issue Context Packs also include a shared `code_intelligence` block so Codex / Claude Code can reuse one CodeGraph context and affected-tests artifact instead of repeating code exploration for every BUG. After the shared fix and required validation:
 
 ```powershell
 python scripts/aistock_issue_workflow.py finish-batch `
@@ -313,7 +365,7 @@ python scripts/aistock_issue_workflow.py finish-batch `
   --issue-commit BUG-016=<sha>
 ```
 
-Batch PR bodies must preserve per-issue closure maps, shared code-intelligence refs, and `Closes #...` lines for every linked GitHub Issue.
+`finish-batch` re-checks the actual changed files against the selector scope and returns `scope_check`. If any changed file exceeds the shared scope, or if the selector finds production/dependency gates that cannot be safely shared, the workflow returns `workflow_gate=blocked`; split the batch or update the issue scopes before continuing. Batch PR bodies must preserve per-issue closure maps, shared code-intelligence refs, and `Closes #...` lines for every linked GitHub Issue.
 
 ## Stop Conditions
 

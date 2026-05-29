@@ -1616,8 +1616,13 @@ class AutoEvolutionScheduler:
             return None
 
         if task.get("task_type") == "custom_evo":
-            next_loop_index = (task["current_loop"] or 0) + 1
-            return await self.submit_custom_evo_loop(task_id, next_loop_index)
+            logger.info(
+                "Task %s is custom_evo; continuing through submit_custom_evo_all_loops "
+                "to preserve strategy_evo_execution_mode and node_parallelism",
+                task_id,
+            )
+            await self.submit_custom_evo_all_loops(task_id)
+            return None
 
         current_loop = task['current_loop']
         max_loops = task['max_loops']
@@ -2263,10 +2268,17 @@ class AutoEvolutionScheduler:
             # 判断是否还有剩余 Loop → 提交下一轮
             with get_conn() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    cur.execute("SELECT current_loop, max_loops, status FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
+                    cur.execute("SELECT current_loop, max_loops, status, task_type FROM qe_evolution_tasks WHERE task_id = %s", (task_id,))
                     task = cur.fetchone()
 
-            if task and task['status'] == 'running' and task['current_loop'] < task['max_loops']:
+            if task and task.get("task_type") == "custom_evo":
+                logger.info(
+                    "Custom evolution task %s is managed by submit_custom_evo_all_loops; "
+                    "skip generic submit_next_loop after Loop %s",
+                    task_id,
+                    loop_index,
+                )
+            elif task and task['status'] == 'running' and task['current_loop'] < task['max_loops']:
                 _next_task = asyncio.create_task(self.submit_next_loop(task_id))
                 _next_task.add_done_callback(
                     lambda t: logger.error(f"submit_next_loop failed: {t.exception()}") if t.exception() else None
@@ -2459,29 +2471,36 @@ class AutoEvolutionScheduler:
                     raise RuntimeError(f"Failed to mark loop/task as failed: {db_err}") from db_err
                 return
 
-    async def get_all_tasks(self, detail: str = "summary", status: str | None = None, limit: int = 50) -> List[Dict[str, Any]]:
+    async def get_all_tasks(
+        self,
+        detail: str = "summary",
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 where_clause = "WHERE status = %s" if status else ""
                 params: list = [status] if status else []
                 if detail == "full":
                     cur.execute(
-                        f"SELECT * FROM qe_evolution_tasks {where_clause} ORDER BY created_at DESC LIMIT %s",
-                        params + [limit],
+                        f"SELECT * FROM qe_evolution_tasks {where_clause} ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                        params + [limit, offset],
                     )
                 else:
                     cur.execute(
                         f"""
                         SELECT task_id, task_name, target_desc, max_loops, current_loop,
                                status, base_experiment_id, node_id, label_horizon,
-                               task_type, source_type, strategy_id, execution_algo,
+                               task_type, source_type, strategy_id, strategy_params,
+                               strategy_evo_config, execution_algo,
                                strategy_evo_execution_mode, created_at, updated_at
                         FROM qe_evolution_tasks
                         {where_clause}
                         ORDER BY created_at DESC
-                        LIMIT %s
+                        LIMIT %s OFFSET %s
                         """,
-                        params + [limit],
+                        params + [limit, offset],
                     )
                 rows = [dict(row) for row in cur.fetchall()]
         return rows if detail == "full" else [compact_task_row(row) for row in rows]

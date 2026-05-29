@@ -269,3 +269,151 @@ def test_execution_gateway_does_not_retry_non_retryable_errors(monkeypatch: pyte
     assert result["error"]["code"] == "schema_invalid"
     assert result["error"]["retryable"] is False
     assert calls["count"] == 1
+
+
+
+def _summary_read_proposal(svc: ResearchAssistantService, *, message: str, capability_key: str, route: dict[str, object]) -> dict[str, object]:
+    task = svc.create_task(TaskCreate(title=f"Summary read: {capability_key}"))
+    return svc.create_action_proposal(
+        ActionProposalCreate(
+            task_id=task["task_id"],
+            capability_key=capability_key,
+            proposal_type="mcp_tool",
+            title="Summary-first MCP read",
+            summary=message,
+            input_json={"request": message, "route": route, "limit": 5},
+        )
+    )
+
+
+def _assert_summary_response(payload: dict[str, object]) -> None:
+    forbidden = {"metrics_json", "config_json", "raw_payload", "matrix", "logs", "rows", "model_weights", "training_curves"}
+
+    def walk(value: object) -> None:
+        if isinstance(value, dict):
+            assert not (set(value) & forbidden)
+            for item in value.values():
+                walk(item)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item)
+
+    assert payload["summary_first"] is True
+    assert payload["response_mode"] == "summary"
+    assert payload["source"] == "research_assistant_catalog_summary_adapter"
+    assert payload["live_backend_called"] is False
+    assert payload["items"]
+    assert payload["omitted_sections"]
+    assert payload["artifact_refs"]
+    walk(payload)
+
+
+def test_routed_read_only_mcp_tool_executes_summary_first_without_confirmation() -> None:
+    svc = _service()
+    route = {
+        "domain": "factor_library",
+        "server_key": "aistock-factor-library",
+        "tool_name": "factor_library_list",
+        "side_effect": "read_only",
+    }
+    proposal = _summary_read_proposal(
+        svc,
+        message="List available factor library entries as a compact summary.",
+        capability_key="factor_library.mcp_orchestration",
+        route=route,
+    )
+
+    assert proposal["status"] == "proposed"
+    assert proposal["risk_level"] == "low"
+    assert proposal["side_effect_level"] == "read_only"
+
+    preflight = svc.preflight_action_proposal(proposal["action_proposal_id"], ActionProposalPreflightRequest())
+    assert preflight["proposal"]["status"] == "preflight_passed"
+    assert preflight["preflight"]["approval_required"] is False
+    assert preflight["preflight"]["tool_name"] == "factor_library_list"
+
+    result = svc.execute_action_proposal(proposal["action_proposal_id"], ActionProposalExecuteRequest())
+    assert result["executed"] is True
+    assert result["tool_event"]["server_key"] == "aistock-factor-library"
+    assert result["tool_event"]["tool_name"] == "factor_library_list"
+    assert result["tool_event"]["transport"] == "research_assistant_catalog_summary_adapter"
+    _assert_summary_response(result["tool_event"]["response_json"])
+
+
+def test_routed_read_only_uses_selected_tool_not_first_capability_ref() -> None:
+    svc = _service()
+    route = {
+        "domain": "execution_policy",
+        "server_key": "aistock-execution-policy",
+        "tool_name": "execution_policy_get_market_state_constraints",
+        "side_effect": "read_only",
+    }
+    proposal = _summary_read_proposal(
+        svc,
+        message="Show execution policy market-state constraints.",
+        capability_key="execution_policy.mcp_orchestration",
+        route=route,
+    )
+    svc.preflight_action_proposal(proposal["action_proposal_id"], {})
+    result = svc.execute_action_proposal(proposal["action_proposal_id"], {})
+
+    assert result["executed"] is True
+    assert result["tool_event"]["tool_name"] == "execution_policy_get_market_state_constraints"
+    assert result["tool_event"]["tool_name"] != "execution_policy_list_algos"
+    _assert_summary_response(result["tool_event"]["response_json"])
+
+
+def test_summary_read_rejects_route_tool_outside_capability_refs() -> None:
+    svc = _service()
+    task = svc.create_task(TaskCreate(title="Rejected route"))
+    with pytest.raises(ValueError, match="selected MCP tool is not allowed"):
+        svc.create_action_proposal(
+            ActionProposalCreate(
+                task_id=task["task_id"],
+                capability_key="factor_library.mcp_orchestration",
+                proposal_type="mcp_tool",
+                title="Bad route",
+                summary="should fail",
+                input_json={
+                    "request": "use the wrong tool",
+                    "route": {
+                        "server_key": "aistock-execution-policy",
+                        "tool_name": "execution_policy_bind_confirmed",
+                    },
+                },
+            )
+        )
+
+
+def test_route_selected_confirmed_tool_still_requires_confirmation_and_approval() -> None:
+    svc = _service()
+    task = svc.create_task(TaskCreate(title="Confirmed route"))
+    proposal = svc.create_action_proposal(
+        ActionProposalCreate(
+            task_id=task["task_id"],
+            capability_key="execution_policy.mcp_orchestration",
+            proposal_type="mcp_tool",
+            title="Bind execution policy",
+            summary="confirmed action remains gated",
+            input_json={
+                "request": "??????",
+                "route": {
+                    "domain": "execution_policy",
+                    "server_key": "aistock-execution-policy",
+                    "tool_name": "execution_policy_bind_confirmed",
+                    "side_effect": "confirmed_action",
+                },
+            },
+        )
+    )
+
+    assert proposal["risk_level"] == "production_sensitive"
+    assert proposal["side_effect_level"] == "production_sensitive"
+    with pytest.raises(ValueError, match="confirmation_text"):
+        svc.confirm_action_proposal(proposal["action_proposal_id"], {"confirmation_text": "WRONG"})
+    svc.confirm_action_proposal(proposal["action_proposal_id"], {"confirmation_text": "BIND_EXECUTION_POLICY"})
+    preflight = svc.preflight_action_proposal(proposal["action_proposal_id"], {})
+    assert preflight["proposal"]["status"] == "approval_required"
+    result = svc.execute_action_proposal(proposal["action_proposal_id"], {})
+    assert result["executed"] is False
+    assert result["error"]["code"] == "production_boundary_blocked"

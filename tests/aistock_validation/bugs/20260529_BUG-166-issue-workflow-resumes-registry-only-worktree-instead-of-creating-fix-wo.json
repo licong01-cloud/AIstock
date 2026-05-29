@@ -1,0 +1,81 @@
+{
+  "actual": "The workflow resumed the registry-only worktree for BUG-164, required manual --issue-json and --force-new-worktree, and postmortem defaulted to registry validation_planned state even after the fix PR was open.",
+  "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260529_BUG-166-issue-workflow-resumes-registry-only-worktree-instead-of-creating-fix-wo.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-166",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-29T14:25:29.984585Z",
+  "description": "The workflow resumed the registry-only worktree for BUG-164, required manual --issue-json and --force-new-worktree, and postmortem defaulted to registry validation_planned state even after the fix PR was open.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260529-61e30188cbdc",
+      "timestamp": "2026-05-29T14:25:29.984581Z"
+    },
+    {
+      "action": "scope_expanded_for_regression_tests",
+      "actor": "aistock_issue_workflow.py",
+      "note": "BUG-166 fix requires tests covering registry-intake handoff and postmortem state selection.",
+      "timestamp": "2026-05-29T14:32:00Z"
+    }
+  ],
+  "evidence_uris": [
+    "BUG-164 / PR #388 / PR #390 / PR #391 workflow validation on 2026-05-29"
+  ],
+  "expected": "After submit-bug creates or finds a registry-only BUG PR, the workflow should expose a deterministic fix_chain handoff that creates a separate fix worktree/branch from latest origin/main while using the registry BUG JSON as source, and postmortem/resume should prefer the active fix workflow over registry-only state or clearly report both with next commands.",
+  "first_seen_at": "2026-05-29T14:25:29.984585Z",
+  "fix_branch": null,
+  "fix_commit": "3b1a74b6bdf25e90fe561c3892895fafd6e8bcb8",
+  "fixed_at": "2026-05-29T15:37:09.784226Z",
+  "github_issue_number": 393,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/393",
+  "last_seen_at": "2026-05-29T14:25:29.984585Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/399",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/aistock_issue_workflow.py submit-bug --create-registry-worktree --apply; python scripts/aistock_issue_workflow.py run --bug-id BUG-XXX --mode plan --create-worktree before the registry PR is merged; python scripts/aistock_issue_workflow.py postmortem --bug-id BUG-XXX after a separate fix worktree exists",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "guardrail_changed_files",
+    "validation_catalog_integrity",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Issue workflow resumes registry-only worktree instead of creating fix worktree before registry PR merge",
+  "trigger_condition": {
+    "fingerprint": "61e30188cbdcb3e63f651ee0",
+    "source_event_id": "FE-20260529-61e30188cbdc"
+  },
+  "validation_evidence": [
+    "python -m ruff check scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow.py -> passed",
+    "python -m py_compile scripts/aistock_issue_workflow.py -> passed",
+    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> 74 passed",
+    "python -m nox -s guardrail_changed_files validation_catalog_integrity validation_module_registry_l0 validation_coverage_backend -> passed",
+    "python -m nox -s l0 validation_center_backend -> passed",
+    "GitHub Actions PR #399 -> required checks passed"
+  ],
+  "verification_run_id": null
+}

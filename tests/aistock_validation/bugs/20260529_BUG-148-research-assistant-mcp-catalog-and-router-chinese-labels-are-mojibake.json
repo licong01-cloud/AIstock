@@ -1,0 +1,87 @@
+{
+  "actual": "PowerShell/Get-Content display made Research Assistant MCP catalog/router/test Chinese labels look like mojibake. Direct UTF-8 reads showed current source already contains valid Chinese, but there was no regression guard to reject common mojibake signatures.",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/**",
+    "backend/tests/research_assistant/**",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260529_BUG-148-research-assistant-mcp-catalog-and-router-chinese-labels-are-mojibake.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-148",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-29T01:24:24.540691Z",
+  "description": "PowerShell/Get-Content display made Research Assistant MCP catalog/router/test Chinese labels look like mojibake. Direct UTF-8 reads showed current source already contains valid Chinese, but there was no regression guard to reject common mojibake signatures.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260529-ae116a2b160c",
+      "timestamp": "2026-05-29T01:24:24.540687Z"
+    },
+    {
+      "action": "verified_false_positive_and_added_utf8_regression_guard",
+      "actor": "codex",
+      "note": "Direct Python UTF-8 reads found valid Chinese labels and no mojibake signatures; added a Research Assistant regression test that rejects common UTF-8-as-GBK mojibake signatures and asserts required Chinese catalog labels remain present.",
+      "timestamp": "2026-05-29T01:40:00Z"
+    }
+  ],
+  "evidence_uris": [
+    "backend/services/research_assistant/mcp_catalog_sync.py",
+    "backend/services/research_assistant/domain_ontology.py",
+    "backend/services/research_assistant/tool_router.py",
+    "backend/tests/research_assistant/test_mcp_catalog_sync.py",
+    "backend/tests/research_assistant/test_natural_language_mcp_routing.py",
+    "python -X utf8 direct source scan 2026-05-29: valid Chinese labels present; mojibake signatures absent",
+    "backend/tests/research_assistant/test_mcp_catalog_sync.py::test_research_assistant_catalog_sources_keep_real_utf8_chinese",
+    "python -X utf8 -m pytest backend/tests/research_assistant/test_mcp_catalog_sync.py backend/tests/research_assistant/test_natural_language_mcp_routing.py -q -p no:cacheprovider -> 9 passed"
+  ],
+  "expected": "Research Assistant MCP catalog, domain ontology, tool router, tests, and user-facing capability replies use valid UTF-8 Chinese business names and aliases; real Chinese prompts route to the correct summary-first read tools; mojibake is rejected by regression tests.",
+  "first_seen_at": "2026-05-29T01:24:24.540691Z",
+  "fix_branch": null,
+  "fix_commit": "e43b46ba9f02d890f9ae8f902d62a277909b5cb3",
+  "fixed_at": "2026-05-29T02:10:48.640937Z",
+  "github_issue_number": 332,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/332",
+  "last_seen_at": "2026-05-29T01:24:24.540691Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/335",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m pytest backend/tests/research_assistant/test_mcp_catalog_sync.py backend/tests/research_assistant/test_natural_language_mcp_routing.py -q -p no:cacheprovider",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "validation_center_backend",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Research Assistant MCP catalog and router Chinese labels are mojibake",
+  "trigger_condition": {
+    "fingerprint": "ae116a2b160c8a610731a1a5",
+    "source_event_id": "FE-20260529-ae116a2b160c"
+  },
+  "validation_evidence": [
+    "python -X utf8 direct source scan for Research Assistant catalog/router/test UTF-8 labels -> valid Chinese labels present; common mojibake signatures absent",
+    "python -X utf8 -m pytest backend/tests/research_assistant/test_mcp_catalog_sync.py backend/tests/research_assistant/test_natural_language_mcp_routing.py -q -p no:cacheprovider -> 9 passed",
+    "python -X utf8 -m pytest backend/tests/research_assistant/test_api.py -q -p no:cacheprovider -> 7 passed",
+    "python -m nox -s l0 research_assistant_backend research_assistant_mcp_contract validation_center_backend validation_module_registry_l0 --no-error-on-missing-interpreters -> all 5 sessions successful",
+    "runtime route sanity for 数仓/因子库/模型库/策略库/执行策略库 prompts -> expected summary-first read tools selected"
+  ],
+  "verification_run_id": null
+}

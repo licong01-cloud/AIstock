@@ -68,6 +68,9 @@ class OrderHandleStatus(BaseModel):
     avg_fill_price: Decimal | None = None
     last_event_at: datetime
     rejection_reason: str | None = None  # populated iff state == "rejected"
+    raw_status: int | str | None = None
+    status_msg: str | None = None
+    raw: dict[str, object] = Field(default_factory=dict)
 
 
 class FillEvent(BaseModel):
@@ -209,6 +212,16 @@ class BrokerBackend(ABC):
         """Return {symbol: PositionLot}. PositionLot reuses
         ``trading_core.models.PositionLot`` (portfolio dimension; Lead
         2026-05-08 decision (2))."""
+
+    def query_quote(self, symbol: str) -> dict[str, object] | None:
+        """Return best bid/ask quote when the broker can provide one.
+
+        Event-driven execution assets call this optional method. Backends that
+        cannot provide L1 quotes must return ``None`` so callers fail fast or
+        use an explicit limit-price-derived synthetic quote.
+        """
+
+        return None
 
     # ----- Channel + capacity introspection -----
     @abstractmethod

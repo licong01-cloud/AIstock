@@ -1,0 +1,115 @@
+{
+  "actual": "Backend returns mcp_execution_result, mcp_summary_result, mcp_tool_event, and mcp_result_cards, but the chat UI renders only mcp_route_decision and hides the actual result cards.",
+  "allowed_write_scope": [
+    "frontend/src/app/research-assistant/chat/page.tsx",
+    "frontend/src/lib/research-assistant/api.ts",
+    "backend/tests/research_assistant/test_api.py",
+    "backend/tests/research_assistant/test_service.py",
+    "tests/aistock_validation/bugs/20260529_BUG-152-research-assistant-chat-ui-hides-auto-executed-mcp-summary-result-cards.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "frontend/tests/research-assistant/research-assistant.spec.ts"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-152",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-29T04:40:54.515523Z",
+  "description": "BUG-150 added backend auto-execution for routed read-only MCP summaries and returns mcp_execution_result, mcp_summary_result, mcp_tool_event, and mcp_result_cards. The Research Assistant chat UI still renders only the MCP route decision and does not show the actual auto-executed summary/result cards, so users cannot verify the tool result from the main chat experience. Fix must render summary-first auto-execution result cards without raw JSON in the main view, keep audit/debug details collapsed, and validate via frontend/API tests.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260529-6ca9ec7fd993",
+      "timestamp": "2026-05-29T04:40:54.515518Z"
+    },
+    {
+      "action": "set_allowed_write_scope",
+      "actor": "codex",
+      "note": "Scope set for Research Assistant chat UI card rendering plus targeted backend tests and BUG registry files.",
+      "timestamp": "2026-05-29T04:42:44.8063371Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Added Research Assistant Playwright UI spec and existing RA CSS host file for summary-result card rendering validation/styling.",
+      "timestamp": "2026-05-29T04:47:09.5853434Z"
+    },
+    {
+      "action": "narrow_allowed_write_scope",
+      "actor": "codex",
+      "note": "Removed paper-v2 CSS from scope; BUG-152 will render cards using existing Research Assistant chat classes and avoid non-assistant module edits.",
+      "timestamp": "2026-05-29T04:47:37.2471430Z"
+    },
+    {
+      "action": "fix_implemented_validation_passed",
+      "actor": "codex",
+      "note": "Rendered auto-executed MCP summary cards in Research Assistant chat and validated frontend/backend/nox gates before PR.",
+      "timestamp": "2026-05-29T05:03:02.1666147Z"
+    },
+    {
+      "action": "rebase_on_origin_main",
+      "actor": "codex",
+      "note": "Rebased BUG-152 fix branch onto latest origin/main before PR; commit hash updated.",
+      "timestamp": "2026-05-29T05:04:24.4548099Z"
+    },
+    {
+      "action": "metadata_cleanup",
+      "actor": "codex",
+      "note": "BUG-157 registry-only cleanup removed stale non-final workflow_gate from fixed Research Assistant BUG record; no runtime/code behavior changed.",
+      "timestamp": "2026-05-29T07:59:42Z"
+    }
+  ],
+  "evidence_uris": [
+    "npx eslint src/app/research-assistant/chat/page.tsx tests/research-assistant/research-assistant.spec.ts -> passed",
+    "npx tsc --noEmit --pretty false -> passed",
+    "npx playwright test tests/research-assistant/research-assistant.spec.ts --grep 'auto-executed MCP summary result cards' --project=chromium -> 1 passed",
+    "python -X utf8 -m pytest backend/tests/research_assistant/test_service.py backend/tests/research_assistant/test_api.py -q -p no:cacheprovider -> 48 passed",
+    "python -m nox -s l0 research_assistant_backend research_assistant_mcp_contract validation_center_backend validation_module_registry_l0 --no-error-on-missing-interpreters -> 5 sessions successful"
+  ],
+  "expected": "Research Assistant chat renders summary-first auto-executed MCP result cards in the main side panel, keeps raw/audit payloads collapsed, and still shows route/preflight boundaries.",
+  "first_seen_at": "2026-05-29T04:40:54.515523Z",
+  "fix_branch": "bug/registry-research-assistant-research-assistant-chat-ui-hides-a-20260529-387f32",
+  "fix_commit": "f0c52c0efb04cc7b92371be629aa51c2f0102732",
+  "fixed_at": "2026-05-29T05:11:00.212361Z",
+  "github_issue_number": 343,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/343",
+  "last_seen_at": "2026-05-29T04:40:54.515523Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/346",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Open Research Assistant chat, ask a read-only MCP summary query such as \"查看因子库概要\", and observe that the UI only shows MCP route decision while backend cards include mcp_summary_result/mcp_result_cards.",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Research Assistant chat UI hides auto-executed MCP summary result cards",
+  "trigger_condition": {
+    "fingerprint": "6ca9ec7fd9938cd8e8f27f6c",
+    "source_event_id": "FE-20260529-6ca9ec7fd993"
+  },
+  "validation_evidence": [
+    "npx eslint src/app/research-assistant/chat/page.tsx tests/research-assistant/research-assistant.spec.ts -> passed",
+    "npx tsc --noEmit --pretty false -> passed",
+    "npx playwright test tests/research-assistant/research-assistant.spec.ts --grep 'auto-executed MCP summary result cards' --project=chromium -> 1 passed",
+    "python -X utf8 -m pytest backend/tests/research_assistant/test_service.py backend/tests/research_assistant/test_api.py -q -p no:cacheprovider -> 48 passed",
+    "python -m nox -s l0 research_assistant_backend research_assistant_mcp_contract validation_center_backend validation_module_registry_l0 --no-error-on-missing-interpreters -> 5 sessions successful"
+  ],
+  "verification_run_id": null
+}

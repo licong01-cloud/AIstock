@@ -299,6 +299,81 @@ def test_close_sync_and_cleanup_apply_are_dry_run_only(tmp_path: Path, capsys: p
     assert "intentionally not implemented" in capsys.readouterr().err
 
 
+def test_pr_check_infers_linkage_and_scope_from_bug_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(flow, "REPO_ROOT", tmp_path)
+    bug_path = tmp_path / "tests" / "aistock_validation" / "bugs" / "20260529_BUG-155-workflow-efficiency.json"
+    bug_path.parent.mkdir(parents=True, exist_ok=True)
+    bug_path.write_text(
+        json.dumps(
+            {
+                "bug_id": "BUG-155",
+                "github_issue_number": 355,
+                "module": "validation",
+                "allowed_write_scope": ["scripts/issue_flow.py", "tests/aistock_validation/bugs/**"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(flow, "_git_output", lambda args, cwd=flow.REPO_ROOT, check=True: "bug/BUG-155-workflow-efficiency" if args[:2] == ["branch", "--show-current"] else "fix BUG-155")
+
+    assert flow.main(
+        [
+            "pr-check",
+            "--changed-file",
+            "scripts/issue_flow.py",
+            "--changed-file",
+            "tests/aistock_validation/bugs/20260529_BUG-155-workflow-efficiency.json",
+        ]
+    ) == 0
+    summary = json.loads(capsys.readouterr().out)
+
+    assert "BUG-155" in summary["linked_issues"]
+    assert "#355" in summary["linked_issues"]
+    assert summary["scope_check"]["status"] == "passed"
+    assert summary["scope_check"]["status_source"] == "inferred_from_bug_json"
+    assert summary["linkage_inference"]["status"] == "inferred"
+
+
+def test_pr_check_infers_linkage_from_pr_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    issue = _write_json(
+        tmp_path / "bug.json",
+        {
+            "module": "validation",
+            "allowed_write_scope": ["scripts/issue_flow.py"],
+        },
+    )
+    monkeypatch.setattr(flow, "REPO_ROOT", tmp_path)
+    monkeypatch.setenv("AISTOCK_PR_TITLE", "Fixes BUG-156")
+    monkeypatch.setenv("AISTOCK_PR_BODY", "Closes #356")
+    monkeypatch.setattr(flow, "_git_output", lambda args, cwd=flow.REPO_ROOT, check=True: "")
+
+    assert flow.main(
+        [
+            "pr-check",
+            "--issue-json",
+            str(issue),
+            "--changed-file",
+            "scripts/issue_flow.py",
+        ]
+    ) == 0
+    summary = json.loads(capsys.readouterr().out)
+
+    assert "BUG-156" in summary["linked_issues"]
+    assert "#356" in summary["linked_issues"]
+    assert summary["scope_check"]["status"] == "passed"
+    assert summary["scope_check"]["status_source"] == "issue_record"
+    assert summary["linkage_inference"]["pr_metadata_present"] is True
+    assert summary["linkage_inference"]["status"] == "inferred"
+
+
 def test_open_source_tooling_configs_are_parseable() -> None:
     assert yaml.safe_load(Path(".pre-commit-config.yaml").read_text(encoding="utf-8"))["repos"]
     assert yaml.safe_load(Path(".semgrep.yml").read_text(encoding="utf-8"))["rules"]

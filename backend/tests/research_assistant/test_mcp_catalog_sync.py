@@ -1,8 +1,46 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from backend.services.research_assistant.mcp_catalog_sync import default_mcp_servers, default_mcp_tools, load_catalog
 from backend.services.research_assistant.repository import InMemoryResearchAssistantRepository
 from backend.services.research_assistant.service import ResearchAssistantService
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_UTF8_CATALOG_FILES = (
+    "backend/services/research_assistant/mcp_catalog_sync.py",
+    "backend/services/research_assistant/domain_ontology.py",
+    "backend/services/research_assistant/tool_router.py",
+    "backend/tests/research_assistant/test_mcp_catalog_sync.py",
+    "backend/tests/research_assistant/test_natural_language_mcp_routing.py",
+)
+_MOJIBAKE_SIGNATURES = tuple(
+    chr(codepoint)
+    for codepoint in (
+        0x93C5,  # UTF-8 Chinese bytes decoded as GBK, e.g. "智能" -> mojibake.
+        0x59AF,
+        0x7EDB,
+        0x9365,
+        0x93B5,
+        0x93C1,
+        0x6960,
+        0x6434,
+        0x9419,
+        0x93AC,
+        0xFFFD,
+    )
+)
+
+
+def test_research_assistant_catalog_sources_keep_real_utf8_chinese() -> None:
+    for relative_path in _UTF8_CATALOG_FILES:
+        text = (_REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        hits = [signature for signature in _MOJIBAKE_SIGNATURES if signature in text]
+        assert not hits, f"{relative_path} contains mojibake signatures: {hits!r}"
+
+    catalog_text = (_REPO_ROOT / "backend/services/research_assistant/mcp_catalog_sync.py").read_text(encoding="utf-8")
+    for phrase in ["智能助理", "QE数仓", "因子库", "因子独立指标", "因子相关性", "模型库", "策略库", "执行策略库"]:
+        assert phrase in catalog_text
 
 
 def test_default_catalog_contains_all_current_and_new_mcp_tools() -> None:

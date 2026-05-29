@@ -600,12 +600,13 @@ async def list_evolution_tasks(
     detail: str = Query("summary", pattern="^(summary|full)$", description="summary 默认不返回大 JSON；full 保留旧完整字段"),
     status: str | None = Query(None, description="Optional status filter (e.g. completed, running, failed)"),
     limit: int = Query(50, ge=1, le=200, description="Maximum tasks to return"),
+    offset: int = Query(0, ge=0, description="Tasks to skip before returning the current page"),
 ):
     """
     从数据库中读取所有 qe_evolution_tasks。默认 summary，避免 MCP/列表返回大 JSON。
     """
     try:
-        tasks = await scheduler.get_all_tasks(detail=detail, status=status, limit=limit)
+        tasks = await scheduler.get_all_tasks(detail=detail, status=status, limit=limit, offset=offset)
         return {"status": "success", "data": tasks, "detail": detail}
     except Exception as e:
         logger.error(f"Failed to list evolution tasks: {str(e)}")

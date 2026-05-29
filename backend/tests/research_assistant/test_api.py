@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -35,6 +37,7 @@ def test_research_assistant_catalog_readiness_api_is_explicit() -> None:
 
     health = client.get("/api/v1/research-assistant/health").json()["data"]
     assert health["status"] == "catalog_not_ready"
+    assert health["runtime_code"]["schema_version"] == "aistock_research_assistant_runtime_code_visibility_v1"
     assert health["catalog_readiness"]["ready"] is False
     assert "prompt_nodes" in health["catalog_readiness"]["missing_catalogs"]
 
@@ -52,7 +55,9 @@ def test_research_assistant_catalog_readiness_api_is_explicit() -> None:
 
     seed_result = client.post("/api/v1/research-assistant/catalogs/seed").json()["data"]
     assert seed_result["seeded"]["prompt_nodes"] >= 1
-    assert client.get("/api/v1/research-assistant/health").json()["data"]["status"] == "ok"
+    seeded_health = client.get("/api/v1/research-assistant/health").json()["data"]
+    assert seeded_health["status"] == "ok"
+    assert seeded_health["runtime_code"]["current_repo_git_commit_short"]
     assert client.post(
         "/api/v1/research-assistant/chat/turn",
         json={"message": "帮我设计一个 QE 实验草案，先不要执行。", "allow_execute": False},
@@ -119,6 +124,8 @@ def test_research_assistant_api_phase1_smoke() -> None:
     assert capability_resp["cards"]["intent_type"] == "capability_inquiry"
     assert capability_resp["mode_decision"]["mode"] == "dialogue"
     assert capability_resp["cards"]["action_proposals"] == []
+    assert capability_resp["cards"]["runtime_code"]["runtime_loaded_git_commit_short"]
+    assert capability_resp["cards"]["runtime_code"]["schema_version"] == "aistock_research_assistant_runtime_code_visibility_v1"
     assert "plan_card" not in capability_resp["cards"]
     assert "clarification_card" not in capability_resp["cards"]
     assert capability_resp["context_health"]["show_badge"] is False
@@ -275,6 +282,58 @@ def test_research_assistant_api_exposes_local_data_management_catalog() -> None:
     assert chat_resp["cards"]["action_proposals"][0]["status"] == "read_only"
 
 
+def test_bug_158_api_routes_chinese_business_mcp_overviews() -> None:
+    client = _client()
+    cases = {
+        "\u56e0\u5b50\u5e93\u6709\u54ea\u4e9b\u56e0\u5b50\uff1f\u53ea\u8981\u6982\u8981\u5217\u8868\uff0c\u4e0d\u8981\u5168\u91cf\u8be6\u60c5\u3002": ("factor_library_request", "aistock-factor-library", "factor_library_list"),
+        "\u67e5\u770b\u56e0\u5b50\u72ec\u7acb\u6307\u6807\u8ba1\u7b97\u80fd\u529b\u6982\u8981\u3002": ("factor_metrics_request", "aistock-factor-metrics", "factor_metrics_plan"),
+        "\u67e5\u770b\u56e0\u5b50\u76f8\u5173\u6027\u8ba1\u7b97\u80fd\u529b\u6982\u8981\u3002": ("factor_correlation_request", "aistock-factor-correlation", "factor_corr_plan"),
+        "\u67e5\u770b\u6a21\u578b\u5e93\u6982\u8981\u3002": ("model_registry_request", "aistock-model-registry", "model_registry_list"),
+        "\u67e5\u770b\u7b56\u7565\u5e93\u6982\u8981\u3002": ("strategy_governance_request", "aistock-strategy-governance", "strategy_governance_list_packages"),
+        "\u67e5\u770b\u6267\u884c\u7b56\u7565\u5e93\u6982\u8981\u3002": ("execution_policy_request", "aistock-execution-policy", "execution_policy_list_algos"),
+    }
+    for message, (intent, server, tool) in cases.items():
+        data = client.post(
+            "/api/v1/research-assistant/chat/turn",
+            json={"message": message, "allow_execute": False},
+        ).json()["data"]
+        route = data["cards"]["mcp_route_decision"]
+        assert data["mode_decision"]["intent_type"] == intent
+        assert route["server_key"] == server
+        assert route["tool_name"] == tool
+        assert route["summary_first"] is True
+        assert data["cards"].get("local_data_management") is None
+        assert data["cards"]["capability_summary"]["route"] == f"{server}/{tool}"
+
+
+def test_bug_161_api_chat_turn_is_summary_first_and_does_not_leak_unrelated_prompt_nodes() -> None:
+    client = _client()
+    cases = {
+        "因子库有哪些因子？只要概要列表，不要全量详情。": ("aistock-factor-library", "factor_library_list"),
+        "查看因子独立指标计算能力概要。": ("aistock-factor-metrics", "factor_metrics_plan"),
+        "查看因子相关性计算能力概要。": ("aistock-factor-correlation", "factor_corr_plan"),
+        "查看模型库概要。": ("aistock-model-registry", "model_registry_list"),
+        "查看策略库概要。": ("aistock-strategy-governance", "strategy_governance_list_packages"),
+        "查看执行策略库概要。": ("aistock-execution-policy", "execution_policy_list_algos"),
+    }
+    for message, (server, tool) in cases.items():
+        data = client.post(
+            "/api/v1/research-assistant/chat/turn",
+            json={"message": message, "allow_execute": False},
+        ).json()["data"]
+        body_text = str(data)
+        route = data["cards"]["mcp_route_decision"]
+        assert route["server_key"] == server
+        assert route["tool_name"] == tool
+        assert "node_refs" not in data["prompt_bundle"]
+        assert "prompt.local_data_management" not in body_text
+        assert "workflow.local_data_check_repair" not in body_text
+        assert "tool_guard.mcp_local_data" not in body_text
+        assert "cards" not in data["assistant_message"]["content_json"]
+        assert "payload_json" not in str(data["task_events"])
+        assert len(json.dumps(data, ensure_ascii=False).encode("utf-8")) < 20000
+
+
 def test_research_assistant_api_errors_are_explicit() -> None:
     client = _client()
 
@@ -294,6 +353,26 @@ def test_mcp_servers_endpoint_exposes_chinese_business_aliases() -> None:
     assert servers["aistock-strategy-governance"]["display_name_zh"] == "策略库"
     assert "策略包" in servers["aistock-strategy-governance"]["business_aliases_zh"]
     assert servers["aistock-execution-policy"]["display_name_zh"] == "执行策略库"
+
+
+def test_mcp_servers_endpoint_backfills_aliases_for_legacy_runtime_rows() -> None:
+    client = _client()
+    service = client.app.dependency_overrides[research_assistant.get_research_assistant_service]()
+    server = service.repository.find_one("mcp_servers", {"server_key": "aistock-model-registry"})
+    assert server is not None
+    legacy_health = dict(server["health_json"])
+    legacy_health.pop("display_name_zh", None)
+    legacy_health.pop("business_aliases_zh", None)
+    service.repository.update_record("mcp_servers", server["server_id"], {"health_json": legacy_health})
+
+    page = client.get("/api/v1/research-assistant/mcp/servers").json()["data"]
+    model_server = {item["server_key"]: item for item in page["items"]}["aistock-model-registry"]
+
+    assert model_server["display_name_zh"] == "模型库"
+    assert model_server["display_title"] == "模型库"
+    assert "模型版本" in model_server["business_aliases_zh"]
+    assert model_server["health_json"]["display_name_zh"] == "模型库"
+    assert "模型试验" in model_server["health_json"]["business_aliases_zh"]
 
 
 def test_mcp_tools_endpoint_defaults_to_compact_summary_first_payload() -> None:

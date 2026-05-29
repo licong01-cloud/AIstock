@@ -1,4 +1,4 @@
-﻿import { expect, test } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
 const chatTurnResponse = {
   conversation: { title: "QE 实验草案" },
@@ -49,6 +49,19 @@ const chatTurnResponse = {
       no_materialize_before_confirmation: true,
       no_run_before_confirmation: true,
       no_raw_json_in_main_chat: true,
+    },
+    runtime_code: {
+      schema_version: "aistock_research_assistant_runtime_code_visibility_v1",
+      status: "current",
+      runtime_loaded_at: "2026-05-29T06:00:00Z",
+      runtime_loaded_git_commit_short: "1d917189",
+      current_repo_git_commit_short: "1d917189",
+      origin_main_git_commit_short: "1d917189",
+      loaded_source_matches_disk: true,
+      loaded_commit_matches_repo: true,
+      repo_matches_origin_main: true,
+      restart_required_to_activate_main: false,
+      operator_message: "Running Research Assistant code matches local/origin main.",
     },
   },
 };
@@ -156,6 +169,10 @@ test("Research Assistant main entry is a Codex-like LLM chat with readable cards
   await browserPage.getByRole("button", { name: "发送" }).click();
 
   await expect(browserPage.getByText("QE 实验方面我能生成草案").first()).toBeVisible();
+  await expect(browserPage.getByTestId("ra-runtime-code-card")).toBeVisible();
+  await expect(browserPage.getByTestId("ra-runtime-code-card")).toContainText("运行时代码可见性");
+  await expect(browserPage.getByTestId("ra-runtime-code-card")).toContainText("运行中 commit：1d917189");
+  await expect(browserPage.getByTestId("ra-runtime-code-card")).toContainText("本地 main：1d917189");
   await expect(browserPage.getByTestId("ra-chat-plan-card")).toHaveCount(0);
   await expect(browserPage.locator("[data-testid='ra-chat-main']")).not.toContainText("固定 PIT 股票池");
   await expect(browserPage.getByText("回答").first()).toBeVisible();
@@ -211,6 +228,94 @@ test("Research Assistant chat renders tool choice markup as readable MCP route c
   await expect(browserPage.getByTestId("ra-mcp-route-card")).toContainText("需要确认和审批后才可执行");
 });
 
+test("Research Assistant chat renders auto-executed MCP summary result cards", async ({ page: browserPage }) => {
+  const response = {
+    ...chatTurnResponse,
+    assistant_message: {
+      content_text: "已通过只读工具完成 MCP summary-first 查询；我只展示概要，不展开原始行、矩阵、日志或模型权重。",
+      content_json: {},
+    },
+    cards: {
+      ...chatTurnResponse.cards,
+      ui_display: { show_plan_card: false, show_clarification_card: false, show_context_health_badge: false, details_default_collapsed: true },
+      mcp_route_decision: {
+        domain: "factor_library",
+        server_key: "aistock-factor-library",
+        tool_name: "factor_library_list",
+        reason: "Matched factor library list request.",
+        side_effect: "read_only",
+        summary_first: true,
+        preflight_required: false,
+        confirmation_required: false,
+      },
+      mcp_execution_result: {
+        auto_executed: true,
+        status: "succeeded",
+        executed: true,
+        route: "aistock-factor-library/factor_library_list",
+        server_key: "aistock-factor-library",
+        tool_name: "factor_library_list",
+        summary_first: true,
+        response_summary: { returned_count: 2, total_count: 47 },
+      },
+      mcp_summary_result: {
+        summary_first: true,
+        response_mode: "summary",
+        returned_count: 2,
+        total_count: 47,
+        items: [
+          { factor_name: "alpha_momentum_20d", category: "momentum", status: "ready" },
+          { factor_name: "alpha_value_quality", category: "quality", status: "ready" },
+        ],
+        omitted_sections: ["raw_payload", "matrix", "factor_value_rows"],
+        artifact_refs: ["mcp://summary/factor_library/list"],
+        detail_tool: "factor_library_get_detail",
+        next_step: "Use the referenced detail tool when one factor needs full metadata.",
+      },
+      mcp_result_cards: [
+        {
+          title: "aistock-factor-library/factor_library_list",
+          summary: "Prepared a summary-first MCP result envelope for factor_library; heavy sections are omitted or referenced.",
+          route: "aistock-factor-library/factor_library_list",
+          summary_first: true,
+          next_step: "Use the referenced detail tool when one factor needs full metadata.",
+        },
+      ],
+      mcp_tool_event: {
+        status: "succeeded",
+        server_key: "aistock-factor-library",
+        tool_name: "factor_library_list",
+        transport: "research_assistant_catalog_summary_adapter",
+        artifact_refs: ["mcp://summary/factor_library/list"],
+      },
+    },
+  };
+
+  await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const respond = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ status: status >= 400 ? "error" : "success", data }) });
+    if (path.endsWith("/chat/turn")) return respond(response);
+    return respond(page([]));
+  });
+
+  await browserPage.goto("/research-assistant");
+  await browserPage.getByPlaceholder(/直接提问或描述任务/).fill("查看因子库概要");
+  await browserPage.getByRole("button", { name: "发送" }).click();
+
+  const main = browserPage.getByTestId("ra-chat-main");
+  await expect(browserPage.getByTestId("ra-mcp-summary-card")).toBeVisible();
+  await expect(browserPage.getByTestId("ra-mcp-summary-card")).toContainText("已执行只读 MCP 摘要查询");
+  await expect(browserPage.getByTestId("ra-mcp-summary-card")).toContainText("aistock-factor-library/factor_library_list");
+  await expect(browserPage.getByTestId("ra-mcp-summary-card")).toContainText("返回 2 / 总计 47");
+  await expect(browserPage.getByTestId("ra-mcp-summary-card")).toContainText("alpha_momentum_20d");
+  await expect(browserPage.getByTestId("ra-mcp-summary-card")).toContainText("原始 payload / 矩阵 / 因子明细行");
+  await expect(browserPage.getByTestId("ra-mcp-summary-card")).toContainText("factor_library_get_detail");
+  await expect(main).not.toContainText("raw_payload");
+  await expect(main).not.toContainText("factor_value_rows");
+  await expect(main).not.toContainText('"items"');
+  await expect(main).not.toContainText("{");
+});
+
 test("Research Assistant MCP tools page treats ready servers as ready", async ({ page: browserPage }) => {
   await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
     const url = new URL(route.request().url());
@@ -218,9 +323,12 @@ test("Research Assistant MCP tools page treats ready servers as ready", async ({
     const respond = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ status: status >= 400 ? "error" : "success", data }) });
     if (path.endsWith("/mcp/servers")) {
       return respond(page([
-        { server_id: "srv_factor_library", server_key: "aistock-factor-library", title: "Factor Library MCP", display_title: "因子库", display_name_zh: "因子库", business_aliases_zh: ["因子目录", "因子列表"], status: "ready", health_json: { domain: "factor_library", display_name_zh: "因子库", business_aliases_zh: ["因子目录", "因子列表"] } },
+        { server_id: "srv_factor_library", server_key: "aistock-factor-library", title: "Factor Library MCP", display_title: "因子库", display_name_zh: "因子库", business_aliases_zh: ["因子目录", "因子列表"], summary_zh: "查询因子概要，详情按需展开。", status: "ready", health_json: { domain: "factor_library", display_name_zh: "因子库", business_aliases_zh: ["因子目录", "因子列表"] } },
+        { server_id: "srv_factor_metrics", server_key: "aistock-factor-metrics", title: "Factor Metrics MCP", display_title: "因子独立指标", display_name_zh: "因子独立指标", business_aliases_zh: ["IC", "RankIC", "稳定性"], status: "ready", health_json: { domain: "factor_metrics" } },
+        { server_id: "srv_factor_corr", server_key: "aistock-factor-correlation", title: "Factor Correlation MCP", display_title: "因子相关性", display_name_zh: "因子相关性", business_aliases_zh: ["相关性矩阵", "替换建议"], status: "ready", health_json: { domain: "factor_correlation" } },
         { server_id: "srv_model_registry", server_key: "aistock-model-registry", title: "Model Registry MCP", display_title: "模型库", display_name_zh: "模型库", business_aliases_zh: ["模型版本", "模型试验"], status: "ready", health_json: { domain: "model_registry", display_name_zh: "模型库", business_aliases_zh: ["模型版本", "模型试验"] } },
         { server_id: "srv_strategy_governance", server_key: "aistock-strategy-governance", title: "Strategy Governance MCP", display_title: "策略库", display_name_zh: "策略库", business_aliases_zh: ["策略包", "策略治理"], status: "ready", health_json: { domain: "strategy_governance", display_name_zh: "策略库", business_aliases_zh: ["策略包", "策略治理"] } },
+        { server_id: "srv_execution_policy", server_key: "aistock-execution-policy", title: "Execution Policy MCP", display_title: "执行策略库", display_name_zh: "执行策略库", business_aliases_zh: ["minute algo", "TWAP", "VWAP"], status: "ready", health_json: { domain: "execution_policy" } },
       ]));
     }
     if (path.endsWith("/mcp/tools")) {
@@ -228,20 +336,27 @@ test("Research Assistant MCP tools page treats ready servers as ready", async ({
       expect(url.searchParams.get("include_schema")).toBe("false");
       return respond(page([
         { tool_id: "tool_factor_library_list", server_key: "aistock-factor-library", tool_name: "factor_library_list", title: "factor library list", risk_level: "low", requires_approval: false, status: "enabled", detail_available: true, detail_fields: ["input_schema_json", "preflight_schema_json"] },
+        { tool_id: "tool_factor_metrics_plan", server_key: "aistock-factor-metrics", tool_name: "factor_metrics_plan", title: "factor metrics plan", risk_level: "plan_only", requires_approval: false, status: "enabled" },
+        { tool_id: "tool_factor_corr_plan", server_key: "aistock-factor-correlation", tool_name: "factor_corr_plan", title: "factor corr plan", risk_level: "plan_only", requires_approval: false, status: "enabled" },
+        { tool_id: "tool_model_registry_list", server_key: "aistock-model-registry", tool_name: "model_registry_list", title: "model registry list", risk_level: "low", requires_approval: false, status: "enabled" },
+        { tool_id: "tool_strategy_governance_list", server_key: "aistock-strategy-governance", tool_name: "strategy_governance_list_packages", title: "strategy package list", risk_level: "low", requires_approval: false, status: "enabled" },
+        { tool_id: "tool_execution_policy_list", server_key: "aistock-execution-policy", tool_name: "execution_policy_list_algos", title: "execution algo list", risk_level: "low", requires_approval: false, status: "enabled" },
       ]));
     }
     return respond(page([]));
   });
 
   await browserPage.goto("/research-assistant/mcp-tools");
-  await expect(browserPage.getByText("因子库").first()).toBeVisible();
-  await expect(browserPage.getByText("模型库").first()).toBeVisible();
-  await expect(browserPage.getByText("策略库").first()).toBeVisible();
+  for (const label of ["因子库", "因子独立指标", "因子相关性", "模型库", "策略库", "执行策略库"]) {
+    await expect(browserPage.getByText(label).first()).toBeVisible();
+  }
   await expect(browserPage.getByText("模型版本 / 模型试验")).toBeVisible();
+  await expect(browserPage.getByText("summary-first").first()).toBeVisible();
+  await expect(browserPage.getByText("limit=50&include_schema=false")).toBeVisible();
   await expect(browserPage.getByText("已就绪").first()).toBeVisible();
-  await expect(browserPage.getByText("未就绪")).toHaveCount(0);
+  await expect(browserPage.locator("body")).not.toContainText("鎴");
+  await expect(browserPage.locator("body")).not.toContainText("锛");
 });
-
 test("Research Assistant admin page separates audit tools from the chat entry", async ({ page: browserPage }) => {
   await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
     const url = new URL(route.request().url());

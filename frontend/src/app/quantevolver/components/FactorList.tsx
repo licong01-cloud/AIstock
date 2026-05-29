@@ -2102,7 +2102,7 @@ export default function FactorList({
                   {cacheStats.total_size_mb > 1024 ? `${(cacheStats.total_size_mb / 1024).toFixed(1)} GB` : `${cacheStats.total_size_mb} MB`} |
                   {" "}{cacheStats.date_range_dominant}
                   {cacheStats.by_source && (
-                    <> | 回测{cacheStats.by_source.backtest || 0} / 官方{cacheStats.by_source.realtime_snapshot || 0}</>
+                    <> | QE回测{cacheStats.by_source.backtest || 0}</>
                   )}
                 </span>
                 {cacheStats.disabled_total > 0 && (
@@ -2885,7 +2885,7 @@ export default function FactorList({
                   return !best || Math.abs(value) > Math.abs(best.value) ? { label: item.label, value } : best;
                 }, null);
                 const bestRankIcAbs = f.ind_rank_ic_best_abs ?? (bestHorizonRankIc ? Math.abs(bestHorizonRankIc.value) : null);
-                const cacheSourceLabel = f.cache_source_label || (f.cache_source === "realtime_snapshot" ? "官方快照" : f.cache_source === "backtest" ? "回测缓存" : "");
+                const cacheSourceLabel = f.cache_source_label || (f.cache_source === "backtest" ? "QE回测缓存" : "");
                 const cacheTitleSuffix = [
                   cacheSourceLabel ? `来源: ${cacheSourceLabel}` : null,
                   f.cache_data_source_mode ? `数据模式: ${f.cache_data_source_mode}` : null,

@@ -6,10 +6,14 @@
   "module": "qe_archive",
   "severity": "P2",
   "risk_area": "data_integrity",
-  "status": "in_progress",
+  "status": "fixed",
   "trigger_condition": {
     "scenario": "runtime_profile_drift_replay",
-    "preconditions": ["dim row exists with is_current=true", "source profile attributes drifted", "run.completed event re-emitted"]
+    "preconditions": [
+      "dim row exists with is_current=true",
+      "source profile attributes drifted",
+      "run.completed event re-emitted"
+    ]
   },
   "reproduce_command": "pytest backend/tests/qe_archive/test_paper_v2_archive_handler.py::test_runtime_profile_scd2_close_old_current_on_drift -q",
   "failing_run_id": null,
@@ -17,17 +21,18 @@
     "drawer:cross-tool/codex-claude-coord/de61c45a1c2dbc1de36758ae",
     "branch:origin/claude/dw-foundation-20260510",
     "commit:a77a7d8",
-    "file:backend/services/qe_archive/handlers/paper_v2_archive_handler.py:_upsert_runtime_profile_dim"
+    "file:backend/services/qe_archive/handlers/paper_v2_archive_handler.py:_upsert_runtime_profile_dim",
+    "commit:7912b9f6502ff8c145bbf8a273aa376b3fef5b97"
   ],
   "fingerprint": "qe_archive::paper_v2_archive_handler::runtime_profile_scd2_no_close",
   "assigned_agent": "claude_code",
-  "fix_branch": "claude/dw-foundation-20260510",
-  "fix_commit": null,
+  "fix_branch": "main",
+  "fix_commit": "7912b9f6502ff8c145bbf8a273aa376b3fef5b97",
   "verification_run_id": null,
   "created_at": "2026-05-11T00:00:00Z",
   "first_seen_at": "2026-05-11T00:43:21Z",
   "last_seen_at": "2026-05-11T00:43:21Z",
-  "fixed_at": null,
+  "fixed_at": "2026-05-29T04:30:00+08:00",
   "submitted_at": "2026-05-11T01:30:00Z",
   "closed_at": null,
   "allowed_write_scope": [
@@ -57,6 +62,29 @@
       "actor": "claude_code_strategy",
       "action": "dispatched",
       "note": "T14b/c fix round 3 dispatched"
+    },
+    {
+      "timestamp": "2026-05-29T04:24:00+08:00",
+      "actor": "codex_app",
+      "action": "github_issue_linked",
+      "note": "Linked historical BUG-030 registry record to GitHub Issue #317 for standard close-sync workflow."
+    },
+    {
+      "timestamp": "2026-05-29T04:30:00+08:00",
+      "actor": "codex_app",
+      "action": "close_sync_batch_fixed",
+      "note": "Validated historical Round 3 implementation commit 7912b9f6502ff8c145bbf8a273aa376b3fef5b97 and marked BUG-030 fixed via PR #319."
     }
+  ],
+  "github_issue_number": 317,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/317",
+  "close_sync_pr_url": "https://github.com/licong01-cloud/AIstock/pull/319",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "production_backend_dependency_gate": "noop",
+  "validation_evidence": [
+    "python -m pytest backend/tests/qe_archive/test_round3_fixes.py::TestFactorValueDataBoundsFilter backend/tests/qe_archive/test_round3_fixes.py::TestFactorValueLoaderHonorsDataBounds backend/tests/qe_archive/test_round3_fixes.py::TestRuntimeProfileScd2CloseCurrent backend/tests/qe_archive/test_round3_fixes.py::TestDailySnapshotBenchmarkAndRegimeJoin -q -p no:cacheprovider -> 8 passed",
+    "python -m nox -s qe_archive_backend -> 118 passed",
+    "PR #319 GitHub Actions -> all required checks passed; Auto-register CI failures as BUGs skipped/non-blocking"
   ]
 }

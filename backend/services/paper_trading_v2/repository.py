@@ -1730,6 +1730,7 @@ class PaperTradingV2Repository:
                         status = EXCLUDED.status,
                         filled_quantity = EXCLUDED.filled_quantity,
                         avg_fill_price = EXCLUDED.avg_fill_price,
+                        metadata = EXCLUDED.metadata,
                         stock_name = COALESCE(orders.stock_name, EXCLUDED.stock_name),
                         updated_at = EXCLUDED.updated_at
                     """,

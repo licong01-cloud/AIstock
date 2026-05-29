@@ -20,6 +20,7 @@ export type AssistantHealth = JsonObject & {
   status?: string;
   repository?: JsonObject;
   runtime_boundaries?: JsonObject;
+  runtime_code?: JsonObject;
 };
 
 export type AssistantOverview = JsonObject & {

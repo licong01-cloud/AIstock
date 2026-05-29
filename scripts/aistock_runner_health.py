@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -37,6 +38,28 @@ def _parse_time(value: str | None) -> datetime | None:
 
 def _read_json(path: str | Path) -> Any:
     return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def resolve_github_token() -> tuple[str | None, str]:
+    """Resolve a GitHub token for local and Actions runner-health checks."""
+    for name in ("AISTOCK_RUNNER_HEALTH_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
+        value = os.environ.get(name)
+        if value:
+            return value, name
+    try:
+        proc = subprocess.run(
+            ["gh", "auth", "token"],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+    except Exception:
+        return None, "missing"
+    token = proc.stdout.strip()
+    if proc.returncode == 0 and token:
+        return token, "gh_auth_token"
+    return None, "missing"
 
 
 def _github_get(path: str, *, token: str | None) -> Any:
@@ -259,11 +282,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    token = (
-        os.environ.get("AISTOCK_RUNNER_HEALTH_TOKEN")
-        or os.environ.get("GH_TOKEN")
-        or os.environ.get("GITHUB_TOKEN")
-    )
+    token, token_source = resolve_github_token()
     required = args.required_label or ["self-hosted", "windows"]
     runners_payload = _read_json(args.runners_json) if args.runners_json else None
     runs_payload = _read_json(args.runs_json) if args.runs_json else None
@@ -276,6 +295,7 @@ def main(argv: list[str] | None = None) -> int:
         runs_payload=runs_payload,
         token=token,
     )
+    report["token_source"] = token_source
     _write_outputs(report, output_json=args.output_json, output_md=args.output_md)
     print(json.dumps(report, indent=2, ensure_ascii=True))
     if report["workflow_gate"] != "ready" and os.environ.get("GITHUB_ACTIONS"):

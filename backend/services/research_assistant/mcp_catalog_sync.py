@@ -169,6 +169,25 @@ def _server_def(server_key: str) -> dict[str, Any]:
     return {"server_key": server_key, "title": server_key, "domain": "unknown", "summary_zh": ""}
 
 
+def enrich_mcp_server_record(server: dict[str, Any]) -> dict[str, Any]:
+    """Overlay canonical display metadata on legacy runtime server rows."""
+    item = dict(server)
+    server_key = str(item.get("server_key") or "")
+    canonical = _server_def(server_key)
+    health = dict(item.get("health_json") if isinstance(item.get("health_json"), dict) else {})
+    for key in ("display_name_zh", "business_aliases_zh", "summary_zh"):
+        if not health.get(key) and canonical.get(key):
+            health[key] = canonical[key]
+    if canonical.get("domain") and not health.get("domain"):
+        health["domain"] = canonical["domain"]
+    if canonical.get("module") and not health.get("module"):
+        health["module"] = canonical["module"]
+    if "summary_first_payload" not in health:
+        health["summary_first_payload"] = True
+    item["health_json"] = health
+    return item
+
+
 def _tool_metadata(server_key: str, tool_name: str) -> dict[str, Any]:
     confirmed = tool_name.endswith("_confirmed")
     is_plan = "plan" in tool_name or "preview" in tool_name or "validate" in tool_name or tool_name == "qe_template_create"

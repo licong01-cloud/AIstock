@@ -4,6 +4,7 @@ import argparse
 import fnmatch
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -754,12 +755,14 @@ def _git_output(args: list[str], cwd: Path = REPO_ROOT, check: bool = True) -> s
         ["git", *args],
         cwd=str(cwd),
         text=True,
+        encoding="utf-8",
+        errors="replace",
         capture_output=True,
         check=False,
     )
     if check and proc.returncode != 0:
         raise IssueFlowError(proc.stderr.strip() or proc.stdout.strip() or f"git {' '.join(args)} failed")
-    return proc.stdout.strip()
+    return (proc.stdout or "").strip()
 
 
 def changed_files_from_git(base: str, head: str) -> list[str]:
@@ -787,6 +790,72 @@ def scope_check(changed_files: list[str], allowed_scope: list[str]) -> dict[str,
     }
 
 
+def _infer_bug_ids_from_text(*values: str) -> list[str]:
+    found: list[str] = []
+    for value in values:
+        found.extend(re.findall(r"\bBUG-\d{3,}\b", value or "", flags=re.IGNORECASE))
+    return _unique_strings(item.upper() for item in found)
+
+
+def _infer_github_issue_refs_from_text(*values: str) -> list[str]:
+    found: list[str] = []
+    for value in values:
+        found.extend(re.findall(r"(?<!#)#(\d{1,7})\b", value or ""))
+    return _unique_strings(f"#{item}" for item in found)
+
+
+def _infer_pr_quality_context(changed_files: list[str], *, base: str, head: str) -> dict[str, Any]:
+    branch = _git_output(["branch", "--show-current"], check=False)
+    commit_subjects = _git_output(["log", "--format=%s%n%b", f"{base}...{head}"], check=False)
+    if not commit_subjects:
+        commit_subjects = _git_output(["log", "--format=%s%n%b", "-n", "20"], check=False)
+    pr_title = os.environ.get("AISTOCK_PR_TITLE", "")
+    pr_body = os.environ.get("AISTOCK_PR_BODY", "")
+    bug_json_paths = [
+        path
+        for path in changed_files
+        if path.startswith("tests/aistock_validation/bugs/") and path.endswith(".json")
+    ]
+    bug_records: list[dict[str, Any]] = []
+    for rel_path in bug_json_paths:
+        path = REPO_ROOT / rel_path
+        if not path.exists():
+            continue
+        try:
+            payload = _load_json(path)
+        except Exception:
+            continue
+        bug_records.append(payload)
+    linked = _unique_strings(
+        _infer_bug_ids_from_text(branch, commit_subjects, pr_title, pr_body, *changed_files)
+        + _infer_github_issue_refs_from_text(pr_title, pr_body, commit_subjects)
+        + [
+            str(item.get("bug_id") or "").upper()
+            for item in bug_records
+            if item.get("bug_id")
+        ]
+        + [
+            f"#{item.get('github_issue_number')}"
+            for item in bug_records
+            if item.get("github_issue_number")
+        ]
+    )
+    inferred_scope: list[str] = []
+    for record in bug_records:
+        inferred_scope.extend(str(item) for item in _as_list(record.get("allowed_write_scope")))
+    if bug_json_paths:
+        inferred_scope.extend(bug_json_paths)
+        inferred_scope.append("tests/aistock_validation/bugs/**")
+    return {
+        "branch": branch,
+        "bug_json_paths": bug_json_paths,
+        "bug_records": bug_records,
+        "pr_metadata_present": bool(pr_title or pr_body),
+        "linked_issues": linked,
+        "inferred_allowed_scope": _unique_strings(inferred_scope),
+    }
+
+
 def build_pr_quality(
     *,
     base: str,
@@ -795,17 +864,33 @@ def build_pr_quality(
     changed_files: list[str] | None = None,
 ) -> dict[str, Any]:
     changed_files = changed_files if changed_files is not None else changed_files_from_git(base, head)
+    inferred = _infer_pr_quality_context(changed_files, base=base, head=head)
     validation = select_validation(changed_files, module=(issue_record or {}).get("module"))
-    scope = _as_list((issue_record or {}).get("allowed_write_scope"))
-    scope_result = scope_check(changed_files, [str(item) for item in scope]) if issue_record else {
-        "status": "not_provided",
-        "violations": [],
-        "allowed_write_scope": [],
-    }
+    record_scope = _as_list((issue_record or {}).get("allowed_write_scope"))
+    inferred_scope = inferred["inferred_allowed_scope"]
+    scope = record_scope or inferred_scope
+    if scope:
+        scope_result = scope_check(changed_files, [str(item) for item in scope])
+        scope_result["status_source"] = "issue_record" if record_scope else "inferred_from_bug_json"
+    elif issue_record:
+        scope_result = {
+            "status": "missing_scope",
+            "status_source": "issue_record_missing",
+            "violations": changed_files,
+            "allowed_write_scope": [],
+        }
+    else:
+        scope_result = {
+            "status": "missing",
+            "status_source": "not_provided",
+            "violations": [],
+            "allowed_write_scope": [],
+        }
     linked = _unique_strings(
         _as_list((issue_record or {}).get("bug_id"))
         + _as_list((issue_record or {}).get("github_issue_number"))
         + _as_list((issue_record or {}).get("candidate_id"))
+        + inferred["linked_issues"]
     )
     return {
         "schema_version": "aistock_pr_quality_summary_v1",
@@ -816,6 +901,12 @@ def build_pr_quality(
         "changed_files": changed_files,
         "impacted_modules": validation["impacted_modules"],
         "scope_check": scope_result,
+        "linkage_inference": {
+            "branch": inferred["branch"],
+            "bug_json_paths": inferred["bug_json_paths"],
+            "pr_metadata_present": inferred["pr_metadata_present"],
+            "status": "inferred" if inferred["linked_issues"] else "missing",
+        },
         "selected_validation": validation,
         "validation_results": "not_run_by_pr_quality_dry_run",
         "data_acceptance": "not_required",
@@ -838,6 +929,8 @@ def render_pr_quality_markdown(summary: dict[str, Any]) -> str:
         f"- task_tier: `{summary.get('task_tier')}`",
         f"- impacted_modules: `{', '.join(summary.get('impacted_modules') or []) or 'none'}`",
         f"- scope_check: `{(summary.get('scope_check') or {}).get('status')}`",
+        f"- scope_source: `{(summary.get('scope_check') or {}).get('status_source') or 'provided'}`",
+        f"- linkage_inference: `{(summary.get('linkage_inference') or {}).get('status')}`",
         f"- required_validation: `{', '.join((summary.get('selected_validation') or {}).get('required_plans') or [])}`",
         f"- validation_results: `{summary.get('validation_results')}`",
         f"- data_acceptance: `{summary.get('data_acceptance')}`",
