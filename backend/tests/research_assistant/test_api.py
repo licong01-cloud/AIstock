@@ -35,6 +35,7 @@ def test_research_assistant_catalog_readiness_api_is_explicit() -> None:
 
     health = client.get("/api/v1/research-assistant/health").json()["data"]
     assert health["status"] == "catalog_not_ready"
+    assert health["runtime_code"]["schema_version"] == "aistock_research_assistant_runtime_code_visibility_v1"
     assert health["catalog_readiness"]["ready"] is False
     assert "prompt_nodes" in health["catalog_readiness"]["missing_catalogs"]
 
@@ -52,7 +53,9 @@ def test_research_assistant_catalog_readiness_api_is_explicit() -> None:
 
     seed_result = client.post("/api/v1/research-assistant/catalogs/seed").json()["data"]
     assert seed_result["seeded"]["prompt_nodes"] >= 1
-    assert client.get("/api/v1/research-assistant/health").json()["data"]["status"] == "ok"
+    seeded_health = client.get("/api/v1/research-assistant/health").json()["data"]
+    assert seeded_health["status"] == "ok"
+    assert seeded_health["runtime_code"]["current_repo_git_commit_short"]
     assert client.post(
         "/api/v1/research-assistant/chat/turn",
         json={"message": "帮我设计一个 QE 实验草案，先不要执行。", "allow_execute": False},
@@ -119,6 +122,8 @@ def test_research_assistant_api_phase1_smoke() -> None:
     assert capability_resp["cards"]["intent_type"] == "capability_inquiry"
     assert capability_resp["mode_decision"]["mode"] == "dialogue"
     assert capability_resp["cards"]["action_proposals"] == []
+    assert capability_resp["cards"]["runtime_code"]["runtime_loaded_git_commit_short"]
+    assert capability_resp["cards"]["runtime_code"]["schema_version"] == "aistock_research_assistant_runtime_code_visibility_v1"
     assert "plan_card" not in capability_resp["cards"]
     assert "clarification_card" not in capability_resp["cards"]
     assert capability_resp["context_health"]["show_badge"] is False

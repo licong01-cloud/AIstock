@@ -53,6 +53,20 @@ type ContextHealth = {
   key_fact_count?: number;
   show_badge?: boolean;
 };
+type RuntimeCodeVisibility = {
+  schema_version?: string;
+  status?: string;
+  runtime_loaded_at?: string;
+  runtime_loaded_git_commit_short?: string | null;
+  current_repo_git_commit_short?: string | null;
+  origin_main_git_commit_short?: string | null;
+  loaded_source_matches_disk?: boolean;
+  loaded_commit_matches_repo?: boolean;
+  repo_matches_origin_main?: boolean;
+  runtime_matches_origin_main?: boolean;
+  restart_required_to_activate_main?: boolean;
+  operator_message?: string;
+};
 
 type ChatCards = {
   dialogue_mode?: string;
@@ -72,6 +86,7 @@ type ChatCards = {
   mcp_result_cards?: McpResultCard[];
   safety?: Record<string, unknown>;
   context_health?: ContextHealth;
+  runtime_code?: RuntimeCodeVisibility;
   ui_display?: {
     show_plan_card?: boolean;
     show_clarification_card?: boolean;
@@ -283,6 +298,15 @@ function hasLocalDataContext(cards: ChatCards): boolean {
   );
 }
 
+function runtimeCodeVisibility(cards: ChatCards): RuntimeCodeVisibility | null {
+  const runtime = asRecord(cards.runtime_code);
+  if (!runtime?.schema_version) return null;
+  return runtime as RuntimeCodeVisibility;
+}
+
+function hasRuntimeCodeVisibility(cards: ChatCards): boolean {
+  return Boolean(runtimeCodeVisibility(cards));
+}
 function localDataCapabilityText(capability: Record<string, unknown>): string {
   return String(
     capability.local_data_management ||
@@ -464,6 +488,38 @@ function McpSummaryResultCard({ cards }: { cards: ChatCards }) {
       {detailTool !== "-" ? <p>需要详情时再调用：{detailTool}</p> : null}
       {nextStep !== "-" ? <p>下一步：{nextStep}</p> : null}
     </div>
+  );
+}
+
+function RuntimeCodeCard({ cards }: { cards: ChatCards }) {
+  const runtime = runtimeCodeVisibility(cards);
+  if (!runtime) return null;
+  const restartRequired = runtime.restart_required_to_activate_main === true;
+  const status = textValue(runtime.status);
+  const runtimeCommit = textValue(runtime.runtime_loaded_git_commit_short);
+  const repoCommit = textValue(runtime.current_repo_git_commit_short);
+  const originCommit = textValue(runtime.origin_main_git_commit_short);
+  return (
+    <div className="ra-chat-confirm-card" data-testid="ra-runtime-code-card">
+      <strong>运行时代码可见性</strong>
+      <p>状态：{status}；运行中 commit：{runtimeCommit}；本地 main：{repoCommit}；origin/main：{originCommit}</p>
+      <p>{runtime.operator_message || (restartRequired ? "运行中的后端可能尚未加载已合入代码。" : "运行中的后端与仓库版本一致。")}</p>
+      <p>
+        加载文件匹配：{textValue(runtime.loaded_source_matches_disk)}；commit 匹配：{textValue(runtime.loaded_commit_matches_repo)}；main 同步：{textValue(runtime.repo_matches_origin_main)}
+      </p>
+      {restartRequired ? <p>需要你手动重启后端后，新合入代码才会在运行时生效；我不会自动重启服务。</p> : null}
+    </div>
+  );
+}
+
+function RuntimeCodePanel({ latest }: { latest: AssistantChatTurnResult | null }) {
+  const cards = asCards(latest?.cards || latest?.assistant_message?.content_json?.cards);
+  if (!hasRuntimeCodeVisibility(cards)) return null;
+  return (
+    <section className="ra-chat-card" data-testid="ra-runtime-code-panel">
+      <span className="ra-chat-eyebrow">Runtime</span>
+      <RuntimeCodeCard cards={cards} />
+    </section>
   );
 }
 
@@ -661,7 +717,10 @@ export default function ResearchAssistantChatPage() {
           onInitialize={initializeCatalogs}
         />
       ) : (
-        <PlanSummary latest={latest} />
+        <>
+          <RuntimeCodePanel latest={latest} />
+          <PlanSummary latest={latest} />
+        </>
       )}
     </main>
   );

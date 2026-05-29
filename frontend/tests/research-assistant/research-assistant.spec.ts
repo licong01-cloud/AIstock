@@ -50,6 +50,19 @@ const chatTurnResponse = {
       no_run_before_confirmation: true,
       no_raw_json_in_main_chat: true,
     },
+    runtime_code: {
+      schema_version: "aistock_research_assistant_runtime_code_visibility_v1",
+      status: "current",
+      runtime_loaded_at: "2026-05-29T06:00:00Z",
+      runtime_loaded_git_commit_short: "1d917189",
+      current_repo_git_commit_short: "1d917189",
+      origin_main_git_commit_short: "1d917189",
+      loaded_source_matches_disk: true,
+      loaded_commit_matches_repo: true,
+      repo_matches_origin_main: true,
+      restart_required_to_activate_main: false,
+      operator_message: "Running Research Assistant code matches local/origin main.",
+    },
   },
 };
 
@@ -156,6 +169,10 @@ test("Research Assistant main entry is a Codex-like LLM chat with readable cards
   await browserPage.getByRole("button", { name: "发送" }).click();
 
   await expect(browserPage.getByText("QE 实验方面我能生成草案").first()).toBeVisible();
+  await expect(browserPage.getByTestId("ra-runtime-code-card")).toBeVisible();
+  await expect(browserPage.getByTestId("ra-runtime-code-card")).toContainText("运行时代码可见性");
+  await expect(browserPage.getByTestId("ra-runtime-code-card")).toContainText("运行中 commit：1d917189");
+  await expect(browserPage.getByTestId("ra-runtime-code-card")).toContainText("本地 main：1d917189");
   await expect(browserPage.getByTestId("ra-chat-plan-card")).toHaveCount(0);
   await expect(browserPage.locator("[data-testid='ra-chat-main']")).not.toContainText("固定 PIT 股票池");
   await expect(browserPage.getByText("回答").first()).toBeVisible();
