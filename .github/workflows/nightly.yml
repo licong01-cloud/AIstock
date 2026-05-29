@@ -330,7 +330,7 @@ jobs:
               per_page: 100,
             });
             const existingLabels = new Set(allLabels.map((label) => label.name));
-            const labels = ["aistock:bug", "severity:P1", "module:validation.runner", "source:nightly"]
+            const labels = ["aistock:bug", "severity:p1", "P1", "module:validation", "module:validation.runner", "source:nightly", "status:open"]
               .filter((label) => existingLabels.has(label));
 
             const openIssues = await github.paginate(github.rest.issues.listForRepo, {

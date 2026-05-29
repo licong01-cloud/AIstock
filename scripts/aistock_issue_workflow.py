@@ -1530,6 +1530,16 @@ def build_submit_bug_plan(
                 "registry_pr_required": registry_pr_only,
                 "continue_to_fix_in_same_workflow": not registry_pr_only,
                 "run_next_command": payload["next_command"],
+                "next_command": (
+                    None
+                    if registry_pr_only
+                    else (
+                        f"python scripts/aistock_issue_workflow.py run --bug-id {canonical_bug_id} "
+                        "--mode plan --create-worktree"
+                    )
+                ),
+                "default_path": "registry_pr_only" if registry_pr_only else "continue_to_fix",
+                "stop_reason": "registry_pr_only_requested" if registry_pr_only else None,
                 "note": (
                     "User explicitly requested registry-only tracking; stop after the registry PR."
                     if registry_pr_only
@@ -2769,6 +2779,17 @@ def _classify_ci_issue(summary: dict[str, Any], issue: dict[str, Any]) -> str:
         for item in [job.get("error_signature"), *(job.get("key_log_excerpt") or [])]
         if item
     ).lower()
+    infra_signatures = [
+        "self-hosted",
+        "runner-preflight",
+        "runner unavailable",
+        "runner availability",
+        "no online github actions runner",
+        "unable to query github runner health",
+        "aistock_runner_health_token",
+    ]
+    if any(token in title_body or token in errors for token in infra_signatures):
+        return "infra_blocker"
     if any(token in title_body for token in ["flaky", "timeout", "network", "runner"]):
         return "infra_flaky"
     if any(token in errors for token in ["relation ", "does not exist", "fixture", "test fixture"]):
@@ -2856,7 +2877,7 @@ def build_triage_ci_issue_plan(
         "context_pack_md_path": _repo_rel(context_pack_md_path),
         "classification_recommendation": classification,
         "linked_bug": {"bug_id": linked[0].get("bug_id"), "path": _repo_rel(linked[1])} if linked else None,
-        "needs_bug_json": linked is None and classification != "infra_flaky",
+        "needs_bug_json": linked is None and classification not in {"infra_flaky", "infra_blocker"},
         "suggested_bug": {
             "module": module,
             "severity": summary.get("severity") or "P1",
@@ -2865,10 +2886,33 @@ def build_triage_ci_issue_plan(
             "allowed_write_scope": context_pack.get("allowed_write_scope") or [],
             "required_verification": context_pack.get("required_verification") or [],
         },
+        "infra_action": (
+            {
+                "workflow_gate": "infra_action_required",
+                "reason": "CI/Nightly failure is classified as infrastructure, not a code regression.",
+                "next_actions": [
+                    "restore or register the self-hosted Windows GitHub Actions runner",
+                    "verify runner labels include: self-hosted, windows",
+                    "configure AISTOCK_RUNNER_HEALTH_TOKEN if runner API access is denied",
+                    "rerun the failed workflow after infrastructure is healthy",
+                ],
+                "production_gates": {
+                    "production_ddl_gate": "noop",
+                    "production_frontend_dependency_gate": "noop",
+                    "production_backend_dependency_gate": "noop",
+                },
+            }
+            if classification in {"infra_flaky", "infra_blocker"}
+            else None
+        ),
         "next_command": (
-            f"python scripts/aistock_issue_workflow.py promote-ci-issue --issue {issue.get('number')} --apply"
-            if linked is None
-            else f"python scripts/aistock_issue_workflow.py run --bug-id {linked[0].get('bug_id')} --mode plan --create-worktree"
+            "infra_action_required_no_code_bug"
+            if classification in {"infra_flaky", "infra_blocker"} and linked is None
+            else (
+                f"python scripts/aistock_issue_workflow.py promote-ci-issue --issue {issue.get('number')} --apply"
+                if linked is None
+                else f"python scripts/aistock_issue_workflow.py run --bug-id {linked[0].get('bug_id')} --mode plan --create-worktree"
+            )
         ),
     }
     _write_json(failure_event_path, failure_event)
@@ -2899,6 +2943,16 @@ def build_promote_ci_issue_plan(
             "dry_run": not apply,
             "triage": triage,
             "next_command": f"python scripts/aistock_issue_workflow.py run --bug-id {triage['linked_bug']['bug_id']} --mode plan --create-worktree",
+        }
+    if triage.get("classification_recommendation") in {"infra_flaky", "infra_blocker"}:
+        return {
+            "schema_version": "aistock_issue_workflow_promote_ci_issue_v1",
+            "generated_at": _utc_now(),
+            "workflow_gate": "blocked_infra_issue_not_code_bug",
+            "dry_run": not apply,
+            "triage": triage,
+            "infra_action": triage.get("infra_action"),
+            "next_command": "resolve_infrastructure_then_rerun_triage_ci_issue",
         }
     summary = triage["summary"]
     suggested = triage["suggested_bug"]
