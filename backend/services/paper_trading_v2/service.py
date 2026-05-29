@@ -46,7 +46,6 @@ from backend.services.strategy_package.backtest_contract import (
 )
 
 from .market_data import (
-    ALLOWED_MARKET_SOURCES,
     MinuteDataSource,
     assert_broker_market_source_match,
 )
@@ -68,7 +67,7 @@ from .models import (
     compute_runtime_config_sha256,
 )
 from .repository import PaperTradingV2Repository
-from .auto_run import compute_auto_run_config_sha256, normalize_auto_run_config
+from .auto_run import auto_run_live_source_for_broker, compute_auto_run_config_sha256, normalize_auto_run_config
 
 # Allowed broker_backend values at the Paper v2 portfolio creation API.
 # minqmt_live is intentionally excluded - live admission goes through main
@@ -459,40 +458,44 @@ class PaperTradingV2PortfolioService:
         create_session: bool = True,
     ) -> dict[str, Any]:
         portfolio = self.repository.get_portfolio(portfolio_id)
-        if portfolio.broker_backend != "minqmt_sim":
-            raise RuntimeConfigInvalidError(
-                "Paper v2 auto-run enable currently supports MiniQMT SIM portfolios only",
-                context={"portfolio_id": portfolio_id, "broker_backend": portfolio.broker_backend},
-            )
+        broker_backend: BrokerBackendId = portfolio.broker_backend
+        account_id = str(broker_account_id or "").strip()
+        if not account_id:
+            account_id = f"{broker_backend}:{portfolio_id}"
         normalized = normalize_auto_run_config(
             config or portfolio.auto_run_config,
             package_id=portfolio.package_id,
-            broker_account_id=broker_account_id,
+            broker_account_id=account_id,
+            broker_backend=broker_backend,
             initial_cash=portfolio.initial_cash,
         )
+        broker_mode = str((normalized.get("broker") or {}).get("broker_mode") or "SIM").upper()
         existing = self.repository.get_active_broker_account_binding(
-            broker_backend="minqmt_sim",
-            broker_mode="SIM",
-            broker_account_id=str(broker_account_id),
+            broker_backend=broker_backend,
+            broker_mode=broker_mode,
+            broker_account_id=account_id,
         )
         if existing is not None and existing.portfolio_id != portfolio_id:
             raise InvalidStateTransitionError(
-                "MiniQMT account already has an active Paper v2 auto-run binding",
+                "Paper v2 auto-run account already has an active binding",
                 context={
-                    "broker_account_id": broker_account_id,
+                    "broker_backend": broker_backend,
+                    "broker_mode": broker_mode,
+                    "broker_account_id": account_id,
                     "existing_portfolio_id": existing.portfolio_id,
                     "portfolio_id": portfolio_id,
                 },
             )
         if existing is None:
+            allocation_mode = "exclusive_account" if broker_backend == "minqmt_sim" else "virtual_portfolio"
             binding = self.repository.create_broker_account_binding(
                 PaperBrokerAccountBinding(
-                    broker_backend="minqmt_sim",
-                    broker_mode="SIM",
-                    broker_account_id=str(broker_account_id),
+                    broker_backend=broker_backend,
+                    broker_mode=broker_mode,
+                    broker_account_id=account_id,
                     portfolio_id=portfolio_id,
                     binding_status=BrokerAccountBindingStatus.ACTIVE,
-                    allocation_mode="exclusive_account",
+                    allocation_mode=allocation_mode,
                     initial_cash=portfolio.initial_cash,
                     created_by=updated_by,
                 )
@@ -521,7 +524,7 @@ class PaperTradingV2PortfolioService:
                 portfolio_id=portfolio_id,
                 mode=PaperSessionMode.LIVE_ONLY,
                 start_date=portfolio.start_date,
-                live_data_source=MinuteDataSource.MINIQMT_REALTIME,
+                live_data_source=auto_run_live_source_for_broker(broker_backend),
                 runtime_config=session_config,
                 created_by=updated_by or "auto_run_enable",
             )
@@ -572,7 +575,7 @@ class PaperTradingV2PortfolioService:
     ) -> dict[str, Any]:
         portfolio = self.repository.get_portfolio(portfolio_id)
         merged = self._deep_merge(dict(portfolio.auto_run_config or {}), patch)
-        normalized = normalize_auto_run_config(merged, package_id=portfolio.package_id)
+        normalized = normalize_auto_run_config(merged, package_id=portfolio.package_id, broker_backend=portfolio.broker_backend)
         config_sha256 = compute_auto_run_config_sha256(normalized)
         portfolio = self.repository.update_portfolio_auto_run(
             portfolio_id,
@@ -595,7 +598,7 @@ class PaperTradingV2PortfolioService:
         portfolio = self.repository.get_portfolio(portfolio_id)
         sessions = self.repository.list_active_sessions(portfolio_id)
         bindings = self.repository.list_active_broker_account_bindings(portfolio_id)
-        config = normalize_auto_run_config(portfolio.auto_run_config, package_id=portfolio.package_id)
+        config = normalize_auto_run_config(portfolio.auto_run_config, package_id=portfolio.package_id, broker_backend=portfolio.broker_backend)
         return {
             "portfolio_id": portfolio_id,
             "enabled": portfolio.auto_run_enabled,

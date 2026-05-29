@@ -1,0 +1,64 @@
+{
+  "actual": "POST /portfolios/{portfolio_id}/auto-run/enable raises RuntimeConfigInvalidError unless broker_backend is minqmt_sim; AutoRunCoordinator._recover_portfolio always creates sessions with MinuteDataSource.MINIQMT_REALTIME.",
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/auto_run.py",
+    "backend/services/paper_trading_v2/service.py",
+    "backend/services/paper_trading_v2/session.py",
+    "backend/tests/paper_trading_v2/test_auto_run.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-147",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-29T00:59:22.134650Z",
+  "description": "POST /portfolios/{portfolio_id}/auto-run/enable raises RuntimeConfigInvalidError unless broker_backend is minqmt_sim; AutoRunCoordinator._recover_portfolio always creates sessions with MinuteDataSource.MINIQMT_REALTIME.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260529-17ae77b7644c",
+      "timestamp": "2026-05-29T00:59:22.134646Z"
+    }
+  ],
+  "evidence_uris": [
+    "2026-05-29 08:50 read-only runtime check: LocalSim active psess_96707b66ff5446d3a575fc385e848275 start_date=2026-05-29 LIVE_WAITING_FOR_BAR, auto_run.enabled=false, config.enabled=true; MiniQMT connected=true SIM account=62266303."
+  ],
+  "expected": "LocalSim paper_v2 portfolios can be marked auto-run enabled and recovered by scheduler into LIVE_ONLY sessions using TDX_REALTIME, while MiniQMT keeps MINIQMT_REALTIME exclusive-account behavior.",
+  "first_seen_at": "2026-05-29T00:59:22.134650Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 330,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/330",
+  "last_seen_at": "2026-05-29T00:59:22.134650Z",
+  "module": "paper_trading_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Invoke-RestMethod http://127.0.0.1:8001/api/v1/paper-v2/portfolios/paper_d842151c16494ea6847d0470fef99e10/auto-run/status | ConvertTo-Json -Depth 10; rg -n enable_auto_run|MINIQMT_REALTIME backend/services/paper_trading_v2/service.py backend/services/paper_trading_v2/auto_run.py",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "paper_trading_v2"
+  ],
+  "title": "Paper v2 LocalSim auto-run cannot be enabled safely for unattended recovery",
+  "trigger_condition": {
+    "fingerprint": "17ae77b7644cb23e4da8ff20",
+    "source_event_id": "FE-20260529-17ae77b7644c"
+  },
+  "verification_run_id": null
+}
