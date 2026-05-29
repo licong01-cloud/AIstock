@@ -280,6 +280,30 @@ def test_research_assistant_api_exposes_local_data_management_catalog() -> None:
     assert chat_resp["cards"]["action_proposals"][0]["status"] == "read_only"
 
 
+def test_bug_158_api_routes_chinese_business_mcp_overviews() -> None:
+    client = _client()
+    cases = {
+        "\u56e0\u5b50\u5e93\u6709\u54ea\u4e9b\u56e0\u5b50\uff1f\u53ea\u8981\u6982\u8981\u5217\u8868\uff0c\u4e0d\u8981\u5168\u91cf\u8be6\u60c5\u3002": ("factor_library_request", "aistock-factor-library", "factor_library_list"),
+        "\u67e5\u770b\u56e0\u5b50\u72ec\u7acb\u6307\u6807\u8ba1\u7b97\u80fd\u529b\u6982\u8981\u3002": ("factor_metrics_request", "aistock-factor-metrics", "factor_metrics_plan"),
+        "\u67e5\u770b\u56e0\u5b50\u76f8\u5173\u6027\u8ba1\u7b97\u80fd\u529b\u6982\u8981\u3002": ("factor_correlation_request", "aistock-factor-correlation", "factor_corr_plan"),
+        "\u67e5\u770b\u6a21\u578b\u5e93\u6982\u8981\u3002": ("model_registry_request", "aistock-model-registry", "model_registry_list"),
+        "\u67e5\u770b\u7b56\u7565\u5e93\u6982\u8981\u3002": ("strategy_governance_request", "aistock-strategy-governance", "strategy_governance_list_packages"),
+        "\u67e5\u770b\u6267\u884c\u7b56\u7565\u5e93\u6982\u8981\u3002": ("execution_policy_request", "aistock-execution-policy", "execution_policy_list_algos"),
+    }
+    for message, (intent, server, tool) in cases.items():
+        data = client.post(
+            "/api/v1/research-assistant/chat/turn",
+            json={"message": message, "allow_execute": False},
+        ).json()["data"]
+        route = data["cards"]["mcp_route_decision"]
+        assert data["mode_decision"]["intent_type"] == intent
+        assert route["server_key"] == server
+        assert route["tool_name"] == tool
+        assert route["summary_first"] is True
+        assert data["cards"].get("local_data_management") is None
+        assert data["cards"]["capability_summary"]["route"] == f"{server}/{tool}"
+
+
 def test_research_assistant_api_errors_are_explicit() -> None:
     client = _client()
 

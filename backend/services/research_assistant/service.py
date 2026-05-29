@@ -1469,18 +1469,25 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         if "qe" in lower and "template" in lower:
             return DialogueIntent.EXPERIMENT_VALIDATION_REQUEST
 
+        # Let the unified MCP router choose specific business domains before broad
+        # capability-inquiry and local-data keyword fallbacks.
+        route = route_request(user_message)
+        intent_value = route.get("intent_value")
+        if intent_value and str(route.get("domain") or "") != "mcp_capability":
+            if intent_value == DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST.value:
+                return DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST
+            if self._is_business_mcp_overview_request(user_message, route):
+                try:
+                    return DialogueIntent(str(intent_value))
+                except ValueError:
+                    pass
+
         asks_capability = self._has_any(lower, intent_config.get("capability_inquiry_patterns", []))
         if self._is_mcp_tool_catalog_inquiry(lower):
             return DialogueIntent.CAPABILITY_INQUIRY
         if asks_capability:
             return DialogueIntent.CAPABILITY_INQUIRY
-
-        # Let the unified MCP router choose specific domains before generic local-data fallbacks.
-        route = route_request(user_message)
-        intent_value = route.get("intent_value")
         if intent_value:
-            if intent_value == DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST.value:
-                return DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST
             try:
                 return DialogueIntent(str(intent_value))
             except ValueError:
@@ -1513,6 +1520,18 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         if explicit_task:
             return DialogueIntent.AMBIGUOUS_REQUEST
         return DialogueIntent.GENERAL_CHAT
+
+
+
+    @staticmethod
+    def _is_business_mcp_overview_request(user_message: str, route: dict[str, Any]) -> bool:
+        domain = str(route.get("domain") or "")
+        if domain in {"", "general", "mcp_capability", "local_data", "validation_issue", "qe_experiment"}:
+            return False
+        lower = user_message.lower()
+        overview_terms = ('overview', 'summary', 'catalog', 'list', 'available', '概要', '概览', '列表', '有哪些', '有什么', '可用')
+        business_terms = ('因子库', '因子独立指标', '因子相关性', '模型库', '策略库', '执行策略库', 'factor library', 'factor metrics', 'factor correlation', 'model registry', 'strategy library', 'execution policy')
+        return any(term in lower for term in overview_terms) and any(term in lower for term in business_terms)
 
 
     @staticmethod
@@ -2372,14 +2391,17 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         qe_capability_keys = set(self.active_runtime_config().get("planner", {}).get("qe_workflow_capability_keys", []))
         available_keys = {str(item.get("capability_key")) for item in capabilities}
         include_qe_capabilities = bool(template.get("include_qe_capabilities"))
-        is_local_data = dialogue_intent == DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST or self._is_local_data_management_request(user_message)
+        mcp_route = dict(route_request(user_message))
+        route_domain = str(mcp_route.get("domain") or "general")
+        is_local_data = dialogue_intent == DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST or (
+            route_domain in {"local_data", "general"} and self._is_local_data_management_request(user_message)
+        )
         local_data_capability_keys = set(self.active_runtime_config().get("planner", {}).get("local_data_workflow_capability_keys", []))
         capability_card_keys: set[str] = set()
         if include_qe_capabilities:
             capability_card_keys.update(qe_capability_keys)
         if is_local_data:
             capability_card_keys.update(local_data_capability_keys)
-        mcp_route = dict(route_request(user_message))
         route_capability_keys = set()
         if mcp_route.get("domain") and mcp_route.get("domain") != "general":
             route_capability_keys.add(f"{mcp_route['domain']}.mcp_orchestration")

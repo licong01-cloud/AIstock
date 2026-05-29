@@ -96,3 +96,22 @@ def test_utf8_chinese_catalog_questions_route_to_summary_first_read_tools() -> N
         assert route["server_key"] == server
         assert route["tool_name"] == tool
         assert route["side_effect"] == side_effect
+
+
+def test_bug_158_chinese_business_mcp_overviews_do_not_route_to_local_data() -> None:
+    cases = {
+        "因子库有哪些因子？只要概要列表，不要全量详情。": ("factor_library", "aistock-factor-library", "factor_library_list"),
+        "查看因子独立指标计算能力概要。": ("factor_metrics", "aistock-factor-metrics", "factor_metrics_plan"),
+        "查看因子相关性计算能力概要。": ("factor_correlation", "aistock-factor-correlation", "factor_corr_plan"),
+        "查看模型库概要。": ("model_registry", "aistock-model-registry", "model_registry_list"),
+        "查看策略库概要。": ("strategy_governance", "aistock-strategy-governance", "strategy_governance_list_packages"),
+        "查看执行策略库概要。": ("execution_policy", "aistock-execution-policy", "execution_policy_list_algos"),
+    }
+    for message, (domain, server, tool) in cases.items():
+        route = route_request(message)
+        assert route["domain"] == domain
+        assert route["server_key"] == server
+        assert route["tool_name"] == tool
+        assert route["side_effect"] in {"read_only", "plan_or_preflight"}
+        assert route["server_key"] != "aistock-local-data"
+
