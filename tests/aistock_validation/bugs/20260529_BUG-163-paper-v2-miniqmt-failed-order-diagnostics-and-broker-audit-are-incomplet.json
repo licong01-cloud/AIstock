@@ -66,7 +66,7 @@
   "first_seen_at": "2026-05-29T13:21:39.736973Z",
   "fix_branch": "bug/BUG-163-miniqmt-order-diagnostics-20260529-refresh",
   "fix_commit": "693b7c65fa34dca18bc67f473e0b47a43ef1092d",
-  "fixed_at": "2026-05-29T16:30:18.377023Z",
+  "fixed_at": "2026-05-29T16:35:28.024007Z",
   "github_issue_number": 386,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/386",
   "last_seen_at": "2026-05-29T13:21:39.736973Z",
@@ -97,18 +97,8 @@
     "source_event_id": "FE-20260529-04044fa79b3c"
   },
   "validation_evidence": [
-    "python -m ruff check backend/services/paper_trading_v2/day_runner.py backend/services/paper_trading_v2/repository.py backend/routers/paper_trading_v2.py backend/tests/paper_trading_v2/test_minqmtsim_backend.py backend/tests/paper_trading_v2/test_symbol_names.py backend/tests/paper_trading_v2/test_minqmt_vnpy_execution_adapter.py -> passed",
-    "python -m pytest backend/tests/paper_trading_v2/test_minqmtsim_backend.py backend/tests/paper_trading_v2/test_symbol_names.py backend/tests/paper_trading_v2/test_minqmt_vnpy_execution_adapter.py -q -> 42 passed",
-    "python -m compileall backend/services/paper_trading_v2/day_runner.py backend/services/paper_trading_v2/repository.py backend/routers/paper_trading_v2.py -> passed",
-    "git diff --check -> passed",
-    "python -m nox -s l0 -> passed",
-    "python -m nox -s paper_v2_backend -> 541 passed, 1 skipped, 2 xfailed",
-    "python -m nox -s paper_v2_data_quality -> passed",
-    "python -m nox -s data_quality_deep -> 10 passed, 21 skipped",
-    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> 5 sessions passed",
-    "python scripts/aistock_data_quality_smoke.py --scope paper_v2_selection_center --portfolio-id paper_1d9b1f03700f4810aef8351124c8ab6c --output tmp/paper_v2_data_quality_bug163_minqmt_after_bug167.json -> passed for MiniQMT portfolio",
-    "python -m nox -s validation_center_backend -> 275 passed, coverage line=79.64 branch=61.61",
-    "python -m nox -s validation_module_registry_l0 -> 8 passed, module ownership scan mapped=12 unmapped=0 ambiguous=0"
+    "PR #402 merged at 693b7c65fa34dca18bc67f473e0b47a43ef1092d",
+    "close-sync PR #403 checks green except non-blocking skipped Auto-register CI failures as BUGs"
   ],
   "verification_run_id": "BUG-163-local-validation-20260529T2358Z",
   "workflow_gate": "allowed",
