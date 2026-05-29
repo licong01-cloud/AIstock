@@ -29,8 +29,8 @@
   "expected": "chat/turn responses for summary-style MCP overview prompts should be compact, should expose only relevant route/card summaries and detail refs, and should not leak unrelated prompt.local_data_management/tool guard node refs in the public response.",
   "first_seen_at": "2026-05-29T11:32:55.647664Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "8503d67b1c4bee9680fd0953a79da9a0c52d924b",
+  "fixed_at": "2026-05-29T12:50:19.942985Z",
   "github_issue_number": 381,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/381",
   "last_seen_at": "2026-05-29T11:32:55.647664Z",
@@ -38,6 +38,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/383",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,7 +51,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -59,5 +60,12 @@
     "fingerprint": "b068ed586a958b2daf2c0163",
     "source_event_id": "FE-20260529-b068ed586a95"
   },
+  "validation_evidence": [
+    "git diff --check -> passed",
+    "python -m json.tool tests\\aistock_validation\\bugs\\.bug_id_allocator.json and tests\\aistock_validation\\bugs\\20260529_BUG-161-research-assistant-chat-turn-leaks-unrelated-local-data-prompt-nodes-and.json -> passed",
+    "python -m pytest -q backend/tests/research_assistant/test_api.py backend/tests/research_assistant/test_service.py -> 54 passed",
+    "python -m nox -s research_assistant_backend research_assistant_mcp_contract l0 --no-error-on-missing-interpreters -> passed (research_assistant_backend 79 passed; research_assistant_mcp_contract 26 passed; l0 succeeded)",
+    "python -m nox -s validation_center_backend validation_module_registry_l0 --no-error-on-missing-interpreters -> passed (validation_center_backend 269 passed; validation_module_registry_l0 8 passed)"
+  ],
   "verification_run_id": null
 }
