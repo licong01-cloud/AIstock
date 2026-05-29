@@ -779,6 +779,38 @@ def test_chat_turn_auto_executes_read_only_mcp_summary_cards() -> None:
     assert any(event["event_type"] == "mcp_done" for event in result["task_events"])
 
 
+def test_chat_turn_chinese_factor_library_overview_auto_executes_summary_list() -> None:
+    class FactorOverviewLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            return LlmCallResult(
+                content="因子库概要会展示全部因子明细和原始 payload。",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    svc = _chat_service(FactorOverviewLlmClient())
+
+    result = svc.chat_turn(ChatTurnRequest(message="查看因子库概要"))
+
+    text = result["assistant_message"]["content_text"]
+    assert "全部因子明细" not in text
+    assert "raw payload" not in text.lower()
+    execution = result["cards"]["mcp_execution_result"]
+    assert execution["auto_executed"] is True
+    assert execution["status"] == "succeeded"
+    assert execution["route"] == "aistock-factor-library/factor_library_list"
+    route = result["cards"]["mcp_route_decision"]
+    assert route["tool_name"] == "factor_library_list"
+    assert route["auto_execute"]["eligible"] is True
+    summary = result["cards"]["mcp_summary_result"]
+    assert summary["summary_first"] is True
+    assert summary["response_mode"] == "summary"
+    assert result["cards"]["mcp_result_cards"]
+
+
 def test_chat_turn_chinese_execution_policy_catalog_uses_read_only_list() -> None:
     class ExecutionPolicyHallucinationLlmClient(FakeLlmClient):
         def complete(self, **kwargs: object) -> LlmCallResult:
