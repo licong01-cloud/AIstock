@@ -27,8 +27,8 @@
   "expected": "后端重启后，恢复逻辑应按 task 的 execution_mode/node_parallelism 重建并行分发(semaphore)，保持配置的并行度继续执行。",
   "first_seen_at": "2026-05-29T13:21:57.062941Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "116f935a0395be93d0a8e5103d86090901e88e78",
+  "fixed_at": "2026-05-29T14:17:58.764793Z",
   "github_issue_number": 387,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/387",
   "last_seen_at": "2026-05-29T13:21:57.062941Z",
@@ -36,6 +36,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/390",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -48,7 +49,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -57,5 +58,12 @@
     "fingerprint": "e75ebe6faa310939ac93b939",
     "source_event_id": "FE-20260529-e75ebe6faa31"
   },
+  "validation_evidence": [
+    "python -m py_compile backend\\\\services\\\\quantevolver\\\\qe_evolution_service.py -> passed",
+    "python -m pytest backend\\\\tests\\\\unified_engine\\\\test_qe_evolution_service_unified_only.py backend\\\\tests\\\\unified_engine\\\\test_qe_node_execution.py backend\\\\tests\\\\unified_engine\\\\test_qe_custom_evo_status.py -q -> 14 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s qe_data_contract_backend -> passed",
+    "python -m nox -s qe_read_l3 -> backend/session passed; qe_read_ui env/data blocked unrelated to backend fix"
+  ],
   "verification_run_id": null
 }
