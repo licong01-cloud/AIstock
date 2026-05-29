@@ -1048,6 +1048,55 @@ def _branch_for_path(path: Path) -> str | None:
     return None
 
 
+def _state_issue_json_path(root: Path, state: dict[str, Any]) -> Path | None:
+    raw = str(state.get("source_bug_json") or state.get("target_bug_json") or "").strip()
+    if not raw:
+        return None
+    path = Path(raw)
+    if not path.is_absolute():
+        path = root / path
+    return path
+
+
+def _workflow_role_for_state(root: Path, state: dict[str, Any], git: dict[str, Any] | None = None) -> str:
+    explicit = str(state.get("workflow_role") or "").strip().lower()
+    if explicit:
+        return explicit
+    if state.get("registry_pr_only"):
+        return "registry_intake"
+    branch = str(state.get("branch") or (git or {}).get("branch") or _branch_for_path(root) or "")
+    worktree_name = Path(str(state.get("worktree") or root)).name
+    if branch.startswith("bug/registry-") or worktree_name.startswith("registry-"):
+        return "registry_intake"
+    return "fix"
+
+
+def _workflow_state_sort_key(root: Path, state: dict[str, Any]) -> tuple[int, str, str]:
+    state_rank = {
+        "discovered": 10,
+        "context_ready": 20,
+        "fix_in_progress": 30,
+        "fix_applied": 40,
+        "validation_planned": 50,
+        "validation_running": 60,
+        "validation_passed": 70,
+        "pushed": 80,
+        "pr_opened": 90,
+        "ci_running": 100,
+        "ci_green": 110,
+        "merged": 120,
+        "close_synced": 130,
+        "cleanup_done": 140,
+        "complete": 150,
+    }
+    role = _workflow_role_for_state(root, state)
+    role_bonus = -100 if role.startswith("registry") else 100
+    pr_bonus = 25 if state.get("pr_url") else 0
+    worktree_bonus = 10 if state.get("worktree") else 0
+    score = role_bonus + pr_bonus + worktree_bonus + state_rank.get(str(state.get("state") or ""), 0)
+    return (score, str(state.get("updated_at") or ""), str(root))
+
+
 def _state_is_active(state: dict[str, Any]) -> bool:
     value = str(state.get("state") or "")
     if not value:
@@ -1072,12 +1121,16 @@ def _active_workflows_for_bug(bug_id: str) -> list[dict[str, Any]]:
         if state.get("worktree") and not worktree.exists():
             continue
         git = _git_snapshot(worktree) if worktree.exists() else {"ok": False, "error": f"workflow worktree missing: {worktree}"}
+        role = _workflow_role_for_state(root, state, git)
+        issue_json = _state_issue_json_path(root, state)
         active.append(
             {
                 "bug_id": canonical_bug_id,
                 "root": str(root),
                 "worktree": str(worktree),
                 "branch": state.get("branch") or git.get("branch") or _branch_for_path(worktree),
+                "workflow_role": role,
+                "issue_json": str(issue_json) if issue_json and issue_json.exists() else None,
                 "state": state.get("state"),
                 "state_path": _repo_rel(_state_path(canonical_bug_id, root), root),
                 "dirty": bool(git.get("dirty")),
@@ -1112,7 +1165,58 @@ def _active_worktree_decision(
     }
     if not create_worktree or not active:
         return decision
-    dirty = [item for item in active if item.get("dirty")]
+    registry_active = [item for item in active if str(item.get("workflow_role") or "").startswith("registry")]
+    fix_active = [item for item in active if item not in registry_active]
+    if registry_active and not fix_active:
+        dirty_registry = [item for item in registry_active if item.get("dirty")]
+        first_registry = sorted(
+            registry_active,
+            key=lambda item: (
+                1 if item.get("issue_json") else 0,
+                str(item.get("state") or ""),
+                str(item.get("root") or ""),
+            ),
+            reverse=True,
+        )[0]
+        if dirty_registry:
+            dirty_first = dirty_registry[0]
+            decision["decision"] = "blocked_dirty_registry_intake"
+            decision["workflow_gate"] = "blocked"
+            decision["blocking"].append(
+                f"registry intake worktree is dirty and must be committed before creating a separate fix worktree: {dirty_first.get('worktree')}"
+            )
+            decision["next_command"] = (
+                f"cd /d {dirty_first.get('worktree')} && git status --short "
+                "&& git add tests/aistock_validation/bugs tmp/issue_workflow "
+                f"&& git commit -m \"chore(issue): register {bug_id}\""
+            )
+            decision["rescue_checklist"] = [
+                "commit_or_pr_the_registry_intake_branch",
+                "do_not_edit_code_in_the_registry_intake_worktree",
+                "rerun_with_create_worktree_to_build_the_fix_worktree",
+            ]
+            return decision
+        registry_issue_json = first_registry.get("issue_json")
+        if not registry_issue_json:
+            decision["decision"] = "blocked_registry_issue_json_missing"
+            decision["workflow_gate"] = "blocked"
+            decision["blocking"].append("registry intake workflow does not record a readable source_bug_json")
+            decision["next_command"] = f"python scripts/aistock_issue_workflow.py run --bug-id {bug_id} --issue-json <BUG_JSON> --mode plan --create-worktree"
+            return decision
+        decision["decision"] = "create_fix_from_registry_intake"
+        decision["workflow_gate"] = "ready"
+        decision["registry_intake_workflows"] = registry_active
+        decision["registry_issue_json"] = registry_issue_json
+        decision["warnings"].append(
+            "only registry intake workflow exists; creating a separate fix worktree from latest origin/main with the registry BUG JSON"
+        )
+        decision["next_command"] = (
+            f"python scripts/aistock_issue_workflow.py run --bug-id {bug_id} --issue-json \"{registry_issue_json}\" "
+            "--mode plan --create-worktree"
+        )
+        return decision
+    active_for_decision = fix_active or active
+    dirty = [item for item in active_for_decision if item.get("dirty")]
     if force_new_worktree:
         if not str(force_reason or "").strip():
             decision["decision"] = "blocked_dirty_active" if dirty else "blocked_requires_force_reason"
@@ -1123,7 +1227,7 @@ def _active_worktree_decision(
         decision["workflow_gate"] = "warning"
         decision["warnings"].append("active workflow exists, but --force-new-worktree was supplied with a reason")
         return decision
-    first = active[0]
+    first = active_for_decision[0]
     if dirty:
         dirty_first = dirty[0]
         decision["decision"] = "blocked_dirty_active"
@@ -1279,6 +1383,27 @@ def find_bug_record(bug_id: str | None = None, issue_json: str | None = None) ->
     if len(matches) > 1:
         raise WorkflowError(f"Multiple BUG records found for {normalized}: {[str(path) for _, path in matches]}")
     return matches[0]
+
+
+def _find_bug_record_from_active_registry(bug_id: str) -> tuple[dict[str, Any], Path] | None:
+    for item in sorted(
+        _active_workflows_for_bug(bug_id),
+        key=lambda entry: (
+            1 if str(entry.get("workflow_role") or "").startswith("registry") else 0,
+            1 if entry.get("issue_json") else 0,
+            str(entry.get("root") or ""),
+        ),
+        reverse=True,
+    ):
+        if not str(item.get("workflow_role") or "").startswith("registry"):
+            continue
+        issue_json = item.get("issue_json")
+        if not issue_json:
+            continue
+        path = Path(str(issue_json))
+        if path.exists():
+            return _load_json(path), path
+    return None
 
 
 def _render_github_issue_body(record: dict[str, Any], candidate: dict[str, Any]) -> str:
@@ -1519,7 +1644,7 @@ def build_submit_bug_plan(
         },
         "next_agent_steps": [
             "switch_to_registry_worktree",
-            "commit_registry_only_pr_without_fix" if registry_pr_only else "continue_fix_in_same_task_branch",
+            "commit_registry_only_pr_without_fix" if registry_pr_only else "commit_registry_files_then_continue_fix_worktree",
             "do_not_write_bug_json_in_canonical_root",
         ] if effective_apply else [
             "create_or_switch_to_clean_registry_worktree",
@@ -1530,8 +1655,10 @@ def build_submit_bug_plan(
             f"&& git commit -m \"chore(issue): register {canonical_bug_id}\""
             if registry_pr_only
             else (
-                f"cd /d {registry_root} && python scripts/aistock_issue_workflow.py run "
-                f"--bug-id {canonical_bug_id} --mode plan"
+                f"cd /d {registry_root} && git status --short && git add tests/aistock_validation/bugs tmp/issue_workflow "
+                f"&& git commit -m \"chore(issue): register {canonical_bug_id}\" "
+                f"&& python scripts/aistock_issue_workflow.py run --bug-id {canonical_bug_id} "
+                f"--issue-json \"{_repo_rel(bug_path, registry_root)}\" --mode plan --create-worktree"
             )
         )
         if effective_apply
@@ -1550,6 +1677,9 @@ def build_submit_bug_plan(
                 canonical_bug_id,
                 state="discovered",
                 root=registry_root,
+                branch=_branch_for_path(registry_root),
+                workflow_role="registry_intake",
+                registry_pr_only=registry_pr_only,
                 source_bug_json=_repo_rel(bug_path, registry_root),
                 candidate_path=_repo_rel(candidate_path, registry_root),
                 github_issue_number=record.get("github_issue_number"),
@@ -1567,15 +1697,15 @@ def build_submit_bug_plan(
                     if registry_pr_only
                     else (
                         f"python scripts/aistock_issue_workflow.py run --bug-id {canonical_bug_id} "
-                        "--mode plan --create-worktree"
+                        f"--issue-json \"{_repo_rel(bug_path, registry_root)}\" --mode plan --create-worktree"
                     )
                 ),
-                "default_path": "registry_pr_only" if registry_pr_only else "continue_to_fix",
+                "default_path": "registry_pr_only" if registry_pr_only else "commit_registry_then_create_fix_worktree",
                 "stop_reason": "registry_pr_only_requested" if registry_pr_only else None,
                 "note": (
                     "User explicitly requested registry-only tracking; stop after the registry PR."
                     if registry_pr_only
-                    else "BUG registration now seeds workflow state so the same branch/worktree can continue to fix unless the user explicitly asks for a registry-only PR."
+                    else "BUG registration seeds a registry-intake state. Commit the BUG JSON, then create a separate fix worktree from latest origin/main using the registry BUG JSON until it lands on main."
                 ),
             }
         return payload
@@ -2219,6 +2349,8 @@ def build_start_plan(
     allow_closed: bool,
     active_decision: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if not issue_json and active_decision and active_decision.get("registry_issue_json"):
+        issue_json = str(active_decision["registry_issue_json"])
     record, source_path = find_bug_record(bug_id=bug_id, issue_json=issue_json)
     canonical_bug_id = str(record.get("bug_id") or bug_id or source_path.stem).upper()
     missing_linkage = _require_github_linkage(record, allow_missing=allow_missing_linkage)
@@ -2280,6 +2412,7 @@ def build_start_plan(
             root=target_root,
             branch=actual_branch,
             planned_branch=planned_branch,
+            workflow_role="fix",
             worktree=actual_worktree,
             planned_worktree=planned_worktree,
             base=worktree_plan.get("base"),
@@ -3176,7 +3309,7 @@ def build_resume_plan(*, bug_id: str, worktree: str | None = None, events_limit:
     candidates = [(root, state) for root, state in candidates if state]
     if not candidates:
         raise WorkflowError(f"No workflow state found for {canonical_bug_id}; run start or run --mode plan first")
-    root, state = sorted(candidates, key=lambda item: str(item[0]))[-1]
+    root, state = sorted(candidates, key=lambda item: _workflow_state_sort_key(item[0], item[1]))[-1]
     events_path = _events_path(canonical_bug_id, root)
     events: list[dict[str, Any]] = []
     if events_path.exists():
@@ -3218,7 +3351,7 @@ def build_postmortem_plan(*, bug_id: str, worktree: str | None = None, output_ma
     candidates = [(root, state) for root, state in candidates if state]
     if not candidates:
         raise WorkflowError(f"No workflow state found for {canonical_bug_id}; run start or run --mode plan first")
-    root, state = sorted(candidates, key=lambda item: str(item[0]))[-1]
+    root, state = sorted(candidates, key=lambda item: _workflow_state_sort_key(item[0], item[1]))[-1]
     events = _read_events(canonical_bug_id, root)
     timing = _workflow_timing_summary(canonical_bug_id, root)
     active = _active_workflows_for_bug(canonical_bug_id)
@@ -4478,6 +4611,11 @@ def build_run_plan(
 ) -> dict[str, Any]:
     canonical_bug_id = bug_id.strip().upper()
     if mode in {"plan", "fix"}:
+        if not issue_json:
+            active_registry_record = _find_bug_record_from_active_registry(canonical_bug_id)
+            if active_registry_record:
+                _, active_registry_issue_path = active_registry_record
+                issue_json = str(active_registry_issue_path)
         active_decision = _active_worktree_decision(
             bug_id=canonical_bug_id,
             create_worktree=create_worktree,
