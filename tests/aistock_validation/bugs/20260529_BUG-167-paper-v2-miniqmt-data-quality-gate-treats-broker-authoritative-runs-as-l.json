@@ -31,8 +31,8 @@
   "expected": "Paper v2 data-quality validation must classify MiniQMT broker-authoritative runs with MiniQMT-specific success events and ledger/snapshot invariants instead of LocalSim-only cash_ledger and NAV formulas.",
   "first_seen_at": "2026-05-29T14:34:48.387307Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "44e464fca9c61bbac5c12b956d497ed4b5f75125",
+  "fixed_at": "2026-05-29T15:26:59.015084Z",
   "github_issue_number": 395,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/395",
   "last_seen_at": "2026-05-29T14:34:48.387307Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/398",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -60,5 +61,15 @@
     "fingerprint": "e6a0da2d3eb6a71591837d4e",
     "source_event_id": "FE-20260529-e6a0da2d3eb6"
   },
+  "validation_evidence": [
+    "python -m ruff check scripts/aistock_data_quality_smoke.py backend/tests/test_data_quality_smoke_env.py -> passed",
+    "python -m pytest backend/tests/test_data_quality_smoke_env.py -q -> 6 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s paper_v2_backend -> 537 passed, 1 skipped, 2 xfailed",
+    "python -m nox -s paper_v2_data_quality -> passed",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> 5 sessions passed",
+    "python -m nox -s validation_center_backend -> 272 passed; coverage passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed; ownership scan mapped=12"
+  ],
   "verification_run_id": null
 }
