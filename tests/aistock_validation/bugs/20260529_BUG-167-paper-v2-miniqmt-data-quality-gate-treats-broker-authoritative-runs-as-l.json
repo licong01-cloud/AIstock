@@ -1,0 +1,64 @@
+{
+  "actual": "python -m nox -s paper_v2_l3 failed in paper_v2_data_quality: missing_success_event=3, fills_without_cash_ledger=6, invalid_daily_snapshots=3 for MiniQMT portfolio paper_1d9b1f03700f4810aef8351124c8ab6c.",
+  "allowed_write_scope": [
+    "scripts/aistock_data_quality_smoke.py",
+    "backend/tests/test_data_quality_smoke_env.py",
+    "tests/aistock_validation/bugs/20260529_BUG-167-paper-v2-miniqmt-data-quality-gate-treats-broker-authoritative-runs-as-l.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/history/paper_v2_selection_center/**"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-167",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-29T14:34:48.387307Z",
+  "description": "python -m nox -s paper_v2_l3 failed in paper_v2_data_quality: missing_success_event=3, fills_without_cash_ledger=6, invalid_daily_snapshots=3 for MiniQMT portfolio paper_1d9b1f03700f4810aef8351124c8ab6c.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260529-e6a0da2d3eb6",
+      "timestamp": "2026-05-29T14:34:48.387303Z"
+    }
+  ],
+  "evidence_uris": [
+    "BUG-163 validation 2026-05-29T22:19+08: paper_v2_l3 paper_v2_data_quality failure isolated to MiniQMT portfolio; LocalSim portfolio paper_d842151c16494ea6847d0470fef99e10 data-quality passed."
+  ],
+  "expected": "Paper v2 data-quality validation must classify MiniQMT broker-authoritative runs with MiniQMT-specific success events and ledger/snapshot invariants instead of LocalSim-only cash_ledger and NAV formulas.",
+  "first_seen_at": "2026-05-29T14:34:48.387307Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 395,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/395",
+  "last_seen_at": "2026-05-29T14:34:48.387307Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/aistock_data_quality_smoke.py --scope paper_v2_selection_center --portfolio-id paper_1d9b1f03700f4810aef8351124c8ab6c --output tmp/paper_v2_data_quality_bug163_minqmt.json",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "Paper v2 MiniQMT data quality gate treats broker-authoritative runs as LocalSim ledger failures",
+  "trigger_condition": {
+    "fingerprint": "e6a0da2d3eb6a71591837d4e",
+    "source_event_id": "FE-20260529-e6a0da2d3eb6"
+  },
+  "verification_run_id": null
+}
