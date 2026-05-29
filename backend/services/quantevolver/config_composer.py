@@ -41,6 +41,14 @@ def _win_to_wsl_guess(path: Path) -> str:
     return text
 
 
+def _is_realtime_factor_cache_path(path_value: Optional[str]) -> bool:
+    """Return True when a cache path points anywhere under factor_values_realtime."""
+    if not path_value:
+        return False
+    normalized = str(path_value).strip().strip("\"'").replace("\\", "/").rstrip("/")
+    return any(part.lower() == "factor_values_realtime" for part in normalized.split("/") if part)
+
+
 def _env_path(name: str, default: Path) -> Path:
     return Path(os.getenv(name, str(default)))
 
@@ -3503,9 +3511,15 @@ class ConfigComposer:
         lines.append("# ── 因子值缓存 ──────────────────────────────────────────")
         lines.append("import hashlib")
         lines.append("import json as _json")
+        lines.append("def _is_forbidden_factor_cache_path(path_value):")
+        lines.append("    _parts = [p.lower() for p in re.split(r'[/\\\\]+', str(path_value).strip().strip(\"\\\"'\").rstrip('/\\\\')) if p]")
+        lines.append("    return 'factor_values_realtime' in _parts")
+        lines.append("")
         lines.append("RAW_FACTOR_CACHE_DIR = os.environ.get('FACTOR_CACHE_DIR', '')")
         lines.append("if RAW_FACTOR_CACHE_DIR:")
         lines.append(r"    _cache_base = RAW_FACTOR_CACHE_DIR.rstrip('/\\')")
+        lines.append("    if _is_forbidden_factor_cache_path(_cache_base):")
+        lines.append("        raise RuntimeError('QE backtest must not use factor_values_realtime as FACTOR_CACHE_DIR')")
         lines.append("    if os.path.basename(_cache_base) == 'single':")
         lines.append("        FACTOR_CACHE_SINGLE_DIR = _cache_base")
         lines.append("        FACTOR_CACHE_META = os.path.join(os.path.dirname(_cache_base), '_meta.json')")
@@ -3578,6 +3592,10 @@ class ConfigComposer:
         lines.append("        logger.warning(f'  {factor_name}: cache meta read failed: {e}')")
         lines.append("        return None")
         lines.append("    entry = meta.get('factors', {}).get(factor_name, {})")
+        lines.append("    data_mode = entry.get('data_source_mode')")
+        lines.append("    if data_mode and data_mode != 'backtest_factor_data_dir':")
+        lines.append("        logger.info(f'  {factor_name}: cache data mode mismatch ({data_mode})')")
+        lines.append("        return None")
         lines.append("    expected_universe = _expected_universe_meta()")
         lines.append("    universe_mismatch = _cache_universe_mismatch(entry, expected_universe)")
         lines.append("    if universe_mismatch:")
@@ -3646,6 +3664,7 @@ class ConfigComposer:
         lines.append("            'date_range': f'{d_min}~{d_max}',")
         lines.append("            'as_of_date': d_max,")
         lines.append("            'source_hash_raw': code_hash,")
+        lines.append("            'data_source_mode': 'backtest_factor_data_dir',")
         lines.append("            'window_train_start': TRAIN_START,")
         lines.append("            'window_backtest_end': TEST_END,")
         lines.append("        }")
@@ -3718,8 +3737,7 @@ class ConfigComposer:
         lines.append("    # 链接所有数据文件到因子执行目录")
         lines.append("    link_all_files_to_dir(FACTOR_DATA_DIR, factor_dir)")
         lines.append("")
-        lines.append("    # 直接使用原始因子源码，不做任何修改")
-        lines.append("    # 因子源码从 RDAgent API 获取，已保持原始完整格式")
+        lines.append("    # 直接使用因子库 code_text 源码，不做任何修改")
         lines.append("    factor_py_path = os.path.join(factor_dir, 'factor.py')")
         lines.append("    with open(factor_py_path, 'w', encoding='utf-8') as f:")
         lines.append("        f.write(factor_code)")
@@ -3899,8 +3917,9 @@ class ConfigComposer:
                           factor_sources: Optional[Dict[str, str]] = None) -> List[Dict]:
         """获取因子详细信息。
         
-        对于 RDAgent 因子（source=rdagent_task_sync），从 RDAgent API 获取原始源码，
-        确保源码保持原始格式不做任何修改。
+        QE 回测只使用因子库 aistock_factor_catalog.code_text 作为唯一权威源码。
+        不在实验运行时回连 RDAgent API 获取历史源码，避免已删除实验、格式差异
+        或远端 API 状态变化导致同名因子缓存 hash 不稳定。
         """
         if not factor_names:
             return []
@@ -3923,26 +3942,11 @@ class ConfigComposer:
             results = [r for r in results if r["factor_name"] not in factor_sources
                        or r["source"] == factor_sources[r["factor_name"]]]
 
-        # 对于 RDAgent 因子，从 API 获取原始源码
-        api_failures: list[str] = []
-        for r in results:
-            if r.get("source") == "rdagent_task_sync":
-                task_id = r.get("best_loop_task_run_id")
-                factor_name = r.get("factor_name")
-                if task_id and factor_name:
-                    try:
-                        source_code = self._fetch_factor_source_from_api(task_id, factor_name)
-                        if source_code:
-                            r["code_text"] = source_code
-                            logger.info(f"[QE] 从RDAgent API获取因子源码: {factor_name}, task={task_id}")
-                        else:
-                            api_failures.append(factor_name)
-                    except Exception as e:
-                        logger.warning(f"[QE] 获取因子源码失败 {factor_name}: {e}")
-                        api_failures.append(factor_name)
-        if api_failures:
+        missing_code = [r.get("factor_name") for r in results if not r.get("code_text")]
+        if missing_code:
             logger.warning(
-                f"[QE] {len(api_failures)} 个RDAgent因子源码获取失败: {api_failures[:10]}"
+                f"[QE] {len(missing_code)} 个因子缺少因子库 code_text，将无法作为自定义因子使用: "
+                f"{missing_code[:10]}"
             )
 
         # 补充未在数据库中的因子
@@ -4197,16 +4201,20 @@ class ConfigComposer:
         elif has_custom_factors:
             env_lines.append("# num_features 将在 qrun 时由 conf.yaml Jinja2 模板自动计算")
 
-        # 因子缓存目录：优先使用节点配置的路径（远端 rsync 同步目录），否则用本地默认
+        # 因子缓存目录：QE 回测只允许 backtest factor_values，不能继承或指向 realtime 缓存。
         if factor_cache_dir:
+            if _is_realtime_factor_cache_path(factor_cache_dir):
+                raise ValueError(
+                    "QE backtest factor_cache_dir must not point to factor_values_realtime"
+                )
             # 远端节点：直接使用配置的绝对路径
             env_lines.append(f'export FACTOR_CACHE_DIR="{factor_cache_dir}"')
         else:
-            # 本地节点：使用 Windows 路径转换后的 WSL 路径
+            # 本地节点：强制使用 Windows 路径转换后的 QE 回测缓存，覆盖任何继承环境变量。
             factor_cache_wsl = self._windows_to_wsl_path(str(FACTOR_CACHE_ROOT_WIN))
-            env_lines.append(
-                f'export FACTOR_CACHE_DIR="${{FACTOR_CACHE_DIR:-{factor_cache_wsl}}}"'
-            )
+            if _is_realtime_factor_cache_path(factor_cache_wsl):
+                raise RuntimeError("QE backtest FACTOR_CACHE_ROOT_WIN resolves to factor_values_realtime")
+            env_lines.append(f'export FACTOR_CACHE_DIR="{factor_cache_wsl}"')
         env_lines.append('export FACTOR_CACHE_DATA_MODE="backtest_factor_data_dir"')
 
         link_data_cmd = (

@@ -34,9 +34,9 @@ from typing import Any, Optional
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from backend.services.quantevolver.config_composer import ConfigComposer
-from backend.services.quantevolver.factor_cache_coverage import factor_cache_covers_window
-from backend.services.quantevolver.factor_value_pipeline import FactorComputeResult
+from backend.services.quantevolver.config_composer import ConfigComposer  # noqa: E402
+from backend.services.quantevolver.factor_cache_coverage import factor_cache_covers_window  # noqa: E402
+from backend.services.quantevolver.factor_value_pipeline import FactorComputeResult  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -212,6 +212,7 @@ def plan_factor_action(
     incremental: bool,
     force: bool,
     expected_universe_metadata: Optional[dict[str, Any]] = None,
+    expected_source_hash_raw: Optional[str] = None,
 ) -> dict:
     parquet_path = SINGLE_DIR / f"{name}.parquet"
     entry = meta.get("factors", {}).get(name, {})
@@ -223,6 +224,16 @@ def plan_factor_action(
         return {"action": "full_rebuild", "reason": "parquet_missing", "entry": entry}
     if not date_range or "~" not in date_range:
         return {"action": "full_rebuild", "reason": "no_date_range", "entry": entry}
+    if expected_source_hash_raw:
+        cached_hash = entry.get("source_hash_raw") or entry.get("source_hash")
+        if cached_hash != expected_source_hash_raw:
+            return {
+                "action": "full_rebuild",
+                "reason": "hash_mismatch",
+                "cached_hash": cached_hash,
+                "current_hash": expected_source_hash_raw,
+                "entry": entry,
+            }
 
     try:
         cached_start, cached_end = date_range.split("~")
@@ -776,7 +787,7 @@ def main():
             print(f"[ERROR] code manifest JSON 解析失败: {e}")
             sys.exit(1)
         if not isinstance(manifest_data, dict) or not manifest_data:
-            print(f"[ERROR] code manifest 为空或格式错误 (期望 dict)")
+            print("[ERROR] code manifest 为空或格式错误 (期望 dict)")
             sys.exit(1)
         code_texts = manifest_data
         print(f"  代码模式: 原始 code_text (subprocess), {len(code_texts)} 因子")
@@ -793,6 +804,11 @@ def main():
     action_counts: dict[str, int] = {}
 
     for name in sorted(targets.keys()):
+        expected_hash = None
+        if name in code_texts:
+            expected_hash = hashlib.sha256(code_texts[name].encode("utf-8")).hexdigest()[:16]
+        elif targets[name] is not None:
+            expected_hash = compute_source_hash_raw(targets[name])
         plan = plan_factor_action(
             name,
             start_date,
@@ -801,6 +817,7 @@ def main():
             incremental=args.incremental,
             force=args.force,
             expected_universe_metadata=universe_metadata or None,
+            expected_source_hash_raw=expected_hash,
         )
         action_counts[plan["action"]] = action_counts.get(plan["action"], 0) + 1
         if plan["action"] == "skip":

@@ -1,0 +1,67 @@
+{
+  "actual": "The factor cache source specs include realtime_snapshot and tests prefer realtime cache over backtest error; QE runtime trusts FACTOR_CACHE_DIR and _get_factors_info may fetch RDAgent API source for rdagent_task_sync factors, creating possible hash mismatch.",
+  "allowed_write_scope": [
+    "backend/routers/quantevolver.py",
+    "backend/services/quantevolver/config_composer.py",
+    "scripts/backfill_factor_cache.py",
+    "frontend/src/app/quantevolver/components/FactorList.tsx",
+    "backend/tests/test_factor_cache_wsl_env.py",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260529_BUG-162-qe-factor-cache-isolation-leaks-realtime-cache-and-unstable-rdagent-sour.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-162",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-29T13:03:30.350129Z",
+  "description": "The factor cache source specs include realtime_snapshot and tests prefer realtime cache over backtest error; QE runtime trusts FACTOR_CACHE_DIR and _get_factors_info may fetch RDAgent API source for rdagent_task_sync factors, creating possible hash mismatch.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260529-d69ca0037497",
+      "timestamp": "2026-05-29T13:03:30.350125Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "QE backtests and the factor library use only rdagent_assets/factor_values backtest cache. factor_values_realtime is invisible to QE cache display/stats/hit logic. Missing or invalid backtest cache recomputes and writes factor_values; next identical backtest hits. Factor catalog code_text is the only QE factor code authority.",
+  "first_seen_at": "2026-05-29T13:03:30.350129Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 385,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/385",
+  "last_seen_at": "2026-05-29T13:03:30.350129Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qe_read_l3",
+    "qe_data_contract_backend",
+    "qe_archive_l3",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE factor cache isolation leaks realtime cache and unstable RDAgent source",
+  "trigger_condition": {
+    "fingerprint": "d69ca003749778b274883fb8",
+    "source_event_id": "FE-20260529-d69ca0037497"
+  },
+  "verification_run_id": null
+}
