@@ -85,6 +85,36 @@ def test_build_factor_cache_wsl_shell_command_quotes_paths_and_omits_secret_valu
     assert "dummy-secret" not in command
 
 
+def test_qe_wsl_command_forces_backtest_cache_dir_over_inherited_env() -> None:
+    composer = ConfigComposer()
+    env_lines, _ = composer._build_auto_wsl_command_parts(
+        "/mnt/f/Dev/RD-Agent-main/qe_workspace/demo",
+        has_custom_factors=True,
+        use_custom_model=False,
+        backtest_freq="1min",
+    )
+
+    factor_cache_exports = [line for line in env_lines if "FACTOR_CACHE_DIR" in line]
+
+    assert len(factor_cache_exports) == 1
+    assert "factor_values_realtime" not in factor_cache_exports[0]
+    assert "FACTOR_CACHE_DIR:-" not in factor_cache_exports[0]
+    assert factor_cache_exports[0].startswith('export FACTOR_CACHE_DIR="')
+
+
+def test_qe_wsl_command_rejects_realtime_factor_cache_dir() -> None:
+    composer = ConfigComposer()
+
+    with pytest.raises(ValueError, match="factor_values_realtime"):
+        composer._build_auto_wsl_command_parts(
+            "/mnt/f/Dev/RD-Agent-main/qe_workspace/demo",
+            has_custom_factors=True,
+            use_custom_model=False,
+            backtest_freq="1min",
+            factor_cache_dir="/mnt/f/Dev/AIstock/rdagent_assets/factor_values_realtime/single",
+        )
+
+
 def _write_cache_meta(root, factors) -> None:
     root.mkdir(parents=True, exist_ok=True)
     (root / "single").mkdir(parents=True, exist_ok=True)
@@ -113,7 +143,35 @@ def _cache_source_specs(tmp_path):
     )
 
 
-def test_factor_cache_prefers_realtime_valid_cache_over_backtest_error(tmp_path) -> None:
+def test_factor_cache_rejects_backtest_spec_pointing_to_realtime_root(tmp_path) -> None:
+    qe_router._invalidate_cache_meta()
+    realtime_root = tmp_path / "factor_values_realtime"
+    _write_cache_meta(
+        realtime_root,
+        {
+            "LeakFactor": {
+                "status": "ok",
+                "date_range": "2018-08-01~2026-04-28",
+                "rows": 10,
+            }
+        },
+    )
+    (realtime_root / "single" / "LeakFactor.parquet").write_bytes(b"PAR1")
+    specs = (
+        {
+            "key": "backtest",
+            "label": "QE backtest",
+            "single_dir": realtime_root / "single",
+            "meta_path": realtime_root / "_meta.json",
+        },
+    )
+
+    candidates = qe_router._collect_factor_cache_candidates("LeakFactor", source_specs=specs)
+
+    assert candidates == []
+
+
+def test_factor_cache_ignores_realtime_cache_even_when_backtest_error(tmp_path) -> None:
     qe_router._invalidate_cache_meta()
     specs = _cache_source_specs(tmp_path)
     backtest_root = tmp_path / "factor_values"
@@ -150,11 +208,9 @@ def test_factor_cache_prefers_realtime_valid_cache_over_backtest_error(tmp_path)
     )
 
     assert selected is not None
-    assert selected["valid_cache"] is True
-    assert selected["source_key"] == "realtime_snapshot"
-    assert selected["cache_start_date"] == "2018-08-07"
-    assert selected["cache_end_date"] == "2026-04-10"
-    assert selected["cache_status"] == "ok"
+    assert selected["valid_cache"] is False
+    assert selected["source_key"] == "backtest"
+    assert selected["cache_status"] == "error"
 
 
 def test_factor_cache_covers_recorded_window_even_with_long_warmup(tmp_path) -> None:
@@ -275,6 +331,35 @@ def test_factor_cache_backfill_rebuilds_on_universe_mismatch(monkeypatch, tmp_pa
     assert plan["reason"] == "universe_mismatch"
 
 
+def test_factor_cache_backfill_rebuilds_on_hash_mismatch(monkeypatch, tmp_path) -> None:
+    single_dir = tmp_path / "single"
+    single_dir.mkdir()
+    monkeypatch.setattr(backfill_factor_cache, "SINGLE_DIR", single_dir)
+    (single_dir / "HashFactor.parquet").write_bytes(b"PAR1")
+
+    plan = backfill_factor_cache.plan_factor_action(
+        "HashFactor",
+        "2018-08-01",
+        "2026-04-28",
+        {
+            "factors": {
+                "HashFactor": {
+                    "date_range": "2018-08-01~2026-04-28",
+                    "window_train_start": "2018-08-01",
+                    "window_backtest_end": "2026-04-28",
+                    "source_hash_raw": "oldhash",
+                }
+            }
+        },
+        incremental=True,
+        force=False,
+        expected_source_hash_raw="newhash",
+    )
+
+    assert plan["action"] == "full_rebuild"
+    assert plan["reason"] == "hash_mismatch"
+
+
 def test_qe_prepare_factors_default_window_uses_current_signal_end_and_records_cache_window(monkeypatch) -> None:
     monkeypatch.setattr(
         ConfigComposer,
@@ -308,6 +393,9 @@ def test_qe_prepare_factors_default_window_uses_current_signal_end_and_records_c
     assert "os.makedirs(FACTOR_CACHE_SINGLE_DIR, exist_ok=True)" in script
     assert "os.fdopen(tmp_fd, 'w', encoding='utf-8')" in script
     assert "FACTOR_CACHE_EXPECTED_UNIVERSE_META" in script
+    assert "def _is_forbidden_factor_cache_path" in script
+    assert "factor_values_realtime" in script
+    assert "'data_source_mode': 'backtest_factor_data_dir'" in script
     assert "'universe_fingerprint_sha256': 'fp-test'" in script
     assert "_cache_universe_mismatch" in script
     assert "cache universe mismatch" in script
