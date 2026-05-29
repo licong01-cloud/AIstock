@@ -32,6 +32,12 @@
       "actor": "codex",
       "note": "Scope set for Research Assistant service runtime_code payload, chat UI runtime card, targeted backend/API/UI tests, and BUG registry files.",
       "timestamp": "2026-05-29T06:08:00Z"
+    },
+    {
+      "action": "metadata_cleanup",
+      "actor": "codex",
+      "note": "BUG-157 registry-only cleanup removed stale non-final workflow_gate from fixed Research Assistant BUG record; no runtime/code behavior changed.",
+      "timestamp": "2026-05-29T07:59:42Z"
     }
   ],
   "evidence_uris": [
@@ -78,6 +84,5 @@
     "python -X utf8 -m pytest backend/tests/research_assistant -q -p no:cacheprovider -> 73 passed",
     "python -m nox -s l0 research_assistant_backend research_assistant_mcp_contract validation_center_backend validation_module_registry_l0 --no-error-on-missing-interpreters -> 5 sessions successful"
   ],
-  "verification_run_id": null,
-  "workflow_gate": "open"
+  "verification_run_id": null
 }

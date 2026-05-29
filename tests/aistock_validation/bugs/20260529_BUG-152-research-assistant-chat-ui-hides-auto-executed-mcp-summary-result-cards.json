@@ -55,6 +55,12 @@
       "actor": "codex",
       "note": "Rebased BUG-152 fix branch onto latest origin/main before PR; commit hash updated.",
       "timestamp": "2026-05-29T05:04:24.4548099Z"
+    },
+    {
+      "action": "metadata_cleanup",
+      "actor": "codex",
+      "note": "BUG-157 registry-only cleanup removed stale non-final workflow_gate from fixed Research Assistant BUG record; no runtime/code behavior changed.",
+      "timestamp": "2026-05-29T07:59:42Z"
     }
   ],
   "evidence_uris": [
@@ -105,6 +111,5 @@
     "python -X utf8 -m pytest backend/tests/research_assistant/test_service.py backend/tests/research_assistant/test_api.py -q -p no:cacheprovider -> 48 passed",
     "python -m nox -s l0 research_assistant_backend research_assistant_mcp_contract validation_center_backend validation_module_registry_l0 --no-error-on-missing-interpreters -> 5 sessions successful"
   ],
-  "verification_run_id": null,
-  "workflow_gate": "open"
+  "verification_run_id": null
 }
