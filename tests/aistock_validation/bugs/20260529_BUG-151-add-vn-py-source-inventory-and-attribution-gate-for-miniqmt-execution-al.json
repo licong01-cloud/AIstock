@@ -1,0 +1,91 @@
+{
+  "actual": "Need to introduce a source inventory/license gate for vnpy_algotrading execution algorithms so later MiniQMT execution work does not devolve into same-name self-developed algorithms.",
+  "allowed_write_scope": [
+    "docs/architecture/miniqmt_execution_priority_and_qe_migration_design_20260529.md",
+    "docs/architecture/vnpy_execution_source_inventory_20260529.md",
+    "tests/aistock_validation/bugs/20260529_BUG-151-add-vn-py-source-inventory-and-attribution-gate-for-miniqmt-execution-al.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-151",
+  "closed_at": null,
+  "closure_requirements": [
+    "Record upstream vnpy_algotrading repository URL, audited commit hash, MIT license, and local audit path.",
+    "List file-level direct reuse mapping for sniper_algo.py, best_limit_algo.py, twap_algo.py, template.py, base.py, engine.py, iceberg_algo.py, and stop_algo.py.",
+    "For each mapped file, state target AIstock file, maximum-reuse strategy, behavior to preserve, dependencies to strip, and characterization test plan.",
+    "Declare that first implementation phase maximizes source reuse and forbids same-name self-developed algorithms without derived-from evidence.",
+    "Keep this issue as source-inventory/license/attribution gate only: do not implement runtime algorithm code, do not modify production .env, do not restart 8001/3000/19080, do not write production DB.",
+    "Run document validation: git diff --check plus a content check confirming source_inventory, upstream commit, MIT License, and all mapped vnpy files are present.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-29T03:58:37.285808Z",
+  "description": "Create the source inventory and attribution gate for introducing vnpy_algotrading Sniper/BestLimit/TWAP into AIstock MiniQMT execution. The implementation must maximize direct reuse of vn.py code semantics, produce the source inventory Markdown file with a machine-readable JSON block or equivalent file-level mapping, record upstream repo/commit/license/source files, define characterization test requirements, and keep runtime integration out of this first gate.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260529-9f213e8ab63d",
+      "timestamp": "2026-05-29T03:58:37.285804Z"
+    },
+    {
+      "timestamp": "2026-05-29T04:00:00Z",
+      "actor": "codex",
+      "action": "triage_scope_update",
+      "note": "Set allowed_write_scope and closure requirements for vnpy source inventory/license gate per design plan."
+    },
+    {
+      "timestamp": "2026-05-29T04:10:00Z",
+      "actor": "codex",
+      "action": "scope_adjustment",
+      "note": "Removed standalone .json inventory from allowed scope because repository .gitignore ignores *.json; inventory is recorded in markdown for this gate."
+    },
+    {
+      "timestamp": "2026-05-29T04:42:32.053935Z",
+      "actor": "codex",
+      "action": "validation_plan_alignment",
+      "note": "Aligned required_verification with issue workflow finish plan and completed local validation evidence for PR readiness."
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Before any Sniper/BestLimit/TWAP implementation begins, AIstock has a file-level vn.py source inventory and MIT attribution gate that maximizes direct reuse of vnpy_algotrading code while defining the AIstock adapter boundaries.",
+  "first_seen_at": "2026-05-29T03:58:37.285808Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 340,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/340",
+  "last_seen_at": "2026-05-29T03:58:37.285808Z",
+  "module": "paper_v2.execution",
+  "non_goals": [
+    "Do not implement Sniper/BestLimit/TWAP runtime code in this issue.",
+    "Do not introduce vn.py EventEngine/AlgoEngine as a production runtime.",
+    "Do not modify production .env.",
+    "Do not restart production runtime services without explicit approval.",
+    "Do not write production DB or apply DDL."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "git diff --check",
+    "content check: source inventory includes upstream commit, MIT License, sniper_algo.py, best_limit_algo.py, twap_algo.py, template.py, base.py, engine.py, iceberg_algo.py, stop_algo.py",
+    "l0",
+    "validation_module_registry_l0",
+    "validation_center_backend"
+  ],
+  "risk_area": "feature",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2.execution"
+  ],
+  "title": "Add vn.py source inventory and attribution gate for MiniQMT execution algos",
+  "trigger_condition": {
+    "fingerprint": "9f213e8ab63d9a09cb9eb9fb",
+    "source_event_id": "FE-20260529-9f213e8ab63d"
+  },
+  "verification_run_id": null,
+  "workflow_gate": "allowed"
+}
