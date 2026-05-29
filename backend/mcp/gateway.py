@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib
 import os
-from typing import Any
 
 import httpx
 
@@ -16,7 +15,7 @@ except ImportError as exc:  # pragma: no cover
 from .profiles import resolve_modules
 from .registry import ModuleRegistry
 
-DEFAULT_BASE_URL = "http://127.0.0.1:8011/api/v1"
+DEFAULT_BASE_URL = "http://127.0.0.1:8001/api/v1"
 DEFAULT_SERVER_NAME = "aistock-research"
 
 

@@ -22,7 +22,7 @@ except ImportError as exc:  # pragma: no cover
 
 from scripts.aistock_mcp_common import LoopbackApiClient, require_confirm, sanitize_identifier
 
-DEFAULT_BASE_URL = "http://127.0.0.1:8011/api/v1/qe-archive"
+DEFAULT_BASE_URL = "http://127.0.0.1:8001/api/v1/qe-archive"
 QE_ARCHIVE_BACKFILL_CONFIRM = "QE_ARCHIVE_BACKFILL"
 QE_ARCHIVE_WRITE_CONFIRM = "QE_ARCHIVE_WRITE"
 QE_ARCHIVE_WORKER_CONFIRM = "QE_ARCHIVE_WORKER_RUN"

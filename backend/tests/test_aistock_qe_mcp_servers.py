@@ -48,6 +48,26 @@ def _swap(module: Any, client: Any) -> None:
     module._default_client = client
 
 
+def test_qe_mcp_default_base_urls_use_production_loopback_port(monkeypatch):
+    monkeypatch.delenv("AISTOCK_QE_EXPERIMENT_BASE_URL", raising=False)
+    monkeypatch.delenv("AISTOCK_QE_ARCHIVE_BASE_URL", raising=False)
+    sys.modules.pop("scripts.aistock_qe_experiment_mcp_server", None)
+    sys.modules.pop("scripts.aistock_qe_archive_mcp_server", None)
+
+    experiment = importlib.import_module("scripts.aistock_qe_experiment_mcp_server")
+    archive = importlib.import_module("scripts.aistock_qe_archive_mcp_server")
+
+    assert experiment.DEFAULT_BASE_URL == "http://127.0.0.1:8001/api/v1"
+    assert archive.DEFAULT_BASE_URL == "http://127.0.0.1:8001/api/v1/qe-archive"
+    assert experiment._default_client.base_url == "http://127.0.0.1:8001/api/v1"
+    assert archive._default_client.base_url == "http://127.0.0.1:8001/api/v1/qe-archive"
+    assert ":8011" not in experiment.DEFAULT_BASE_URL
+    assert ":8011" not in archive.DEFAULT_BASE_URL
+
+    sys.modules.pop("scripts.aistock_qe_experiment_mcp_server", None)
+    sys.modules.pop("scripts.aistock_qe_archive_mcp_server", None)
+
+
 def test_qe_experiment_mcp_requires_loopback(monkeypatch):
     monkeypatch.setenv("AISTOCK_QE_EXPERIMENT_BASE_URL", "http://example.com/api/v1")
     sys.modules.pop("scripts.aistock_qe_experiment_mcp_server", None)
