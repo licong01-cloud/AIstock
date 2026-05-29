@@ -42,8 +42,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-05-29T07:49:00.782363Z",
   "fix_branch": null,
-  "fix_commit": "edfb9d7cebcbec4e26b864d4c8ae656c0f542b07",
-  "fixed_at": "2026-05-29T08:14:30.073914Z",
+  "fix_commit": "6b2fd36e3a857bac7f2839bcdf3d2662f65930fd",
+  "fixed_at": "2026-05-29T08:43:54.828866Z",
   "github_issue_number": 362,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/362",
   "last_seen_at": "2026-05-29T07:49:00.782363Z",
@@ -51,7 +51,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/364",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/367",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -74,11 +74,10 @@
     "source_event_id": "FE-20260529-b2d6bdc877cb"
   },
   "validation_evidence": [
-    "JSON parse for BUG-152/153/154/156/157 and .bug_id_allocator.json -> passed",
-    "Research Assistant fixed/verified BUG registry stale workflow_gate scan -> 0 stale records",
+    "python -m json.tool tests/aistock_validation/bugs/20260529_BUG-157-research-assistant-fixed-bug-registry-workflow-gates-remain-non-final.json -> passed",
+    "Research Assistant fixed/verified BUG registry stale workflow_gate scan including allowed -> 0 stale records",
     "git diff --check -> passed",
-    "python -m nox -s l0 research_assistant_backend research_assistant_mcp_contract --no-error-on-missing-interpreters -> 3 sessions successful; research_assistant_backend 73 passed; research_assistant_mcp_contract 26 passed",
-    "python -m nox -s validation_center_backend validation_module_registry_l0 --no-error-on-missing-interpreters -> 2 sessions successful; validation_center_backend 262 passed; validation_module_registry_l0 8 passed"
+    "PR #367 CI checks -> passed"
   ],
   "verification_run_id": null
 }
