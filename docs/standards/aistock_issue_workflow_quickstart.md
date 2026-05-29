@@ -290,6 +290,21 @@ python scripts/aistock_issue_workflow.py run --bug-id BUG-XXX --mode merge --pr-
 
 Without `--merge`, `run --mode merge` stops at an authorization gate. With `--merge`, the wrapper verifies PR checks are green, merges, runs close-sync through an isolated registry worktree, commits the BUG registry close-sync change, opens or reuses a close-sync PR, and prepares cleanup state. If `gh pr merge` exits non-zero after GitHub has already merged the PR, the wrapper must re-check the PR state, record `recovered_from_local_merge_error`, and continue to close-sync instead of leaving a manual fallback. Merge automation still does not touch production runtime or DB, and it commits only `tests/aistock_validation/bugs/**` from the close-sync worktree; unexpected dirty files block the close-sync PR.
 
+If the source/fix PR has already been merged, use the v2.3 finalizer instead of manually chaining close-sync, cleanup, and postmortem commands:
+
+```powershell
+python scripts/aistock_issue_workflow.py merge-finalizer `
+  --bug-id BUG-XXX `
+  --source-pr-url <PR_URL> `
+  --source-branch bug/BUG-XXX-scope `
+  --source-worktree F:/Dev/AIstock_worktrees/BUG-XXX-scope `
+  --validation-evidence "python -m nox -s l0 -> passed" `
+  --sync-root `
+  --apply
+```
+
+The finalizer verifies the source PR is merged, runs close-sync in an isolated registry worktree, commits and opens or reuses the close-sync PR, records postmortem output, and returns the remaining next actions. Add `--merge-close-sync-pr --cleanup` only when the user authorized the full aftercare loop and checks are green; otherwise stop with a merge-ready close-sync PR.
+
 
 ## Cleanup After Merge
 
