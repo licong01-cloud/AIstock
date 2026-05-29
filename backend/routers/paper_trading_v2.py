@@ -1131,9 +1131,34 @@ def create_coldstart_sentinel_order(req: ColdstartSentinelOrderRequest) -> dict[
 def list_orders(portfolio_id: str, limit: int = 500) -> dict[str, Any]:
     try:
         rows = PaperTradingV2Repository().list_orders(portfolio_id, limit=limit)
-        return {"ok": True, "orders": PaperV2SymbolNameResolver().enrich_rows(rows)}
+        enriched = PaperV2SymbolNameResolver().enrich_rows(rows)
+        return {"ok": True, "orders": [_expose_order_diagnostics(row) for row in enriched]}
     except TradingCoreError as exc:
         _raise_http(exc)
+
+
+def _expose_order_diagnostics(row: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(row)
+    metadata = enriched.get("metadata") if isinstance(enriched.get("metadata"), dict) else {}
+    diagnostic = metadata.get("broker_diagnostic") if isinstance(metadata.get("broker_diagnostic"), dict) else {}
+    for key in (
+        "broker_status",
+        "broker_raw_status",
+        "broker_status_msg",
+        "broker_rejection_reason",
+        "broker_status_raw",
+        "broker_audit",
+    ):
+        if enriched.get(key) is None and metadata.get(key) is not None:
+            enriched[key] = metadata.get(key)
+    if enriched.get("broker_diagnostic") is None and diagnostic:
+        enriched["broker_diagnostic"] = diagnostic
+    if enriched.get("status_msg") is None:
+        enriched["status_msg"] = enriched.get("broker_status_msg") or enriched.get("broker_rejection_reason")
+    if enriched.get("error_msg") is None:
+        broker_error = metadata.get("broker_error") if isinstance(metadata.get("broker_error"), dict) else {}
+        enriched["error_msg"] = broker_error.get("message") or enriched.get("broker_rejection_reason")
+    return enriched
 
 
 @router.get("/portfolios/{portfolio_id}/fills")

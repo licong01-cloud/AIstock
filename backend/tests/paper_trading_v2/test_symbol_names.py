@@ -140,6 +140,8 @@ def test_repository_persists_stock_name_on_trading_records() -> None:
         prices={order.symbol: 10.0},
     )
 
+    order_sql, _ = next((sql, params) for sql, params in conn.executed if "INSERT INTO paper_v2.orders" in sql)
+    assert "metadata = EXCLUDED.metadata" in order_sql
     assert _params_for(conn, "INSERT INTO paper_v2.orders")[6] == "Ping An Bank"
     assert _params_for(conn, "INSERT INTO paper_v2.fills")[4] == "Ping An Bank"
     assert _params_for(conn, "INSERT INTO paper_v2.cash_ledger")[5] == "Ping An Bank"

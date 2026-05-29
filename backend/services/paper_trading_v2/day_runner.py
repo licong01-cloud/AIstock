@@ -1088,40 +1088,87 @@ class PaperTradingDayRunner:
                     continue
 
                 order = self.oms.create_order(intent)
+                audit_before = self._miniqmt_broker_audit_snapshot(
+                    broker,
+                    phase="before_submit",
+                    intent=intent,
+                )
                 try:
                     handle = broker.submit_order_intent(intent)
                     native = broker.order_context(handle)
                     status = broker.query_status(handle)
+                    trade_rows = broker.query_trades(handle)
                 except TradingCoreError as exc:
+                    submit_native = self._miniqmt_submit_error_native(exc)
+                    audit_after = self._miniqmt_broker_audit_snapshot(
+                        broker,
+                        phase="submit_error",
+                        intent=intent,
+                        native=submit_native,
+                    )
+                    diagnostic = self._miniqmt_submit_error_diagnostic(
+                        exc,
+                        intent=intent,
+                        audit_before=audit_before,
+                        audit_after=audit_after,
+                    )
                     final_order, event = self.oms.reject_order(order, exc.message)
                     metadata = dict(final_order.metadata or {})
                     metadata.update(
                         {
                             "broker_backend": "minqmt_sim",
                             "authority_source": "MINIQMT",
+                            "broker_status": "submit_error",
+                            "broker_raw_status": None,
+                            "broker_status_msg": exc.message,
+                            "broker_rejection_reason": exc.message,
+                            "broker_status_raw": exc.to_dict(),
+                            "broker_handle_id": submit_native.get("handle_id"),
                             "broker_error": exc.to_dict(),
+                            "broker_diagnostic": diagnostic,
+                            "broker_audit": diagnostic["broker_audit"],
+                            **submit_native,
                         }
                     )
                     final_order = final_order.model_copy(update={"metadata": metadata})
+                    event = event.model_copy(update={"metadata": diagnostic})
                     self.repository.save_order(run.run_id, final_order)
                     self.repository.save_order_event(run.run_id, event)
+                    self.repository.save_run_event(
+                        run_id=run.run_id,
+                        event_type="MINIQMT_ORDER_SUBMIT_FAILED",
+                        message="MiniQMT order submit failed with broker diagnostic context",
+                        context=diagnostic,
+                    )
                     orders.append(final_order)
                     events.append(event)
                     raise
 
-                metadata = dict(order.metadata or {})
-                metadata.update(
-                    {
-                        "broker_backend": "minqmt_sim",
-                        "authority_source": "MINIQMT",
-                        "broker_handle_id": handle.handle_id,
-                        "broker_status": status.state,
-                        **native,
-                    }
+                audit_after = self._miniqmt_broker_audit_snapshot(
+                    broker,
+                    phase="after_reconcile",
+                    intent=intent,
+                    native=native,
+                    status=status,
+                )
+                diagnostic = self._miniqmt_order_diagnostic(
+                    status=status,
+                    native=native,
+                    visible_trade_count=len(trade_rows),
+                    audit_before=audit_before,
+                    audit_after=audit_after,
+                )
+                metadata = self._miniqmt_metadata_with_status(
+                    order.metadata,
+                    status=status,
+                    native=native,
+                    visible_trade_count=len(trade_rows),
+                    audit_before=audit_before,
+                    audit_after=audit_after,
                 )
                 order = order.model_copy(update={"metadata": metadata})
                 order_fills = self._miniqmt_fills_from_trades(
-                    broker.query_trades(handle),
+                    trade_rows,
                     order=order,
                     native=native,
                     trade_date=trade_date,
@@ -1144,10 +1191,24 @@ class PaperTradingDayRunner:
                     order_events.append(event)
                 broker_state = self._miniqmt_order_status_from_handle(status)
                 if not order_fills and broker_state in {OrderStatus.REJECTED, OrderStatus.CANCELLED}:
-                    if broker_state == OrderStatus.REJECTED:
+                    if final_order.status in {OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.REJECTED}:
+                        final_order = final_order.model_copy(update={"status": broker_state})
+                        event = OrderEvent(
+                            order_id=final_order.order_id,
+                            event_type=(
+                                OrderEventType.REJECTED
+                                if broker_state == OrderStatus.REJECTED
+                                else OrderEventType.CANCELLED
+                            ),
+                            reason=status.rejection_reason or f"MiniQMT order {broker_state.value.lower()}",
+                            metadata=diagnostic,
+                        )
+                    elif broker_state == OrderStatus.REJECTED:
                         final_order, event = self.oms.reject_order(order, status.rejection_reason or "MiniQMT order rejected")
+                        event = event.model_copy(update={"metadata": diagnostic})
                     else:
                         final_order, event = self.oms.cancel_order(order, status.rejection_reason or "MiniQMT order cancelled")
+                        event = event.model_copy(update={"metadata": diagnostic})
                     self.repository.save_order_event(run.run_id, event)
                     order_events.append(event)
                 elif (
@@ -1180,6 +1241,7 @@ class PaperTradingDayRunner:
                                 "broker_handle_id": handle.handle_id,
                                 "miniqmt_order_id": native["miniqmt_order_id"],
                                 "visible_trade_count": 0,
+                                "broker_diagnostic": diagnostic,
                             },
                         )
                         self.repository.save_order_event(run.run_id, event)
@@ -1201,15 +1263,14 @@ class PaperTradingDayRunner:
                         )
                 final_order = final_order.model_copy(
                     update={
-                        "metadata": {
-                            **dict(final_order.metadata or {}),
-                            "broker_backend": "minqmt_sim",
-                            "authority_source": "MINIQMT",
-                            "broker_handle_id": handle.handle_id,
-                            "broker_status": status.state,
-                            "miniqmt_trade_count": len(order_fills),
-                            **native,
-                        },
+                        "metadata": self._miniqmt_metadata_with_status(
+                            final_order.metadata,
+                            status=status,
+                            native=native,
+                            visible_trade_count=len(trade_rows),
+                            audit_before=audit_before,
+                            audit_after=audit_after,
+                        ),
                         "avg_fill_price": float(final_order.avg_fill_price) if final_order.avg_fill_price is not None else None,
                     }
                 )
@@ -1229,7 +1290,12 @@ class PaperTradingDayRunner:
                                 "broker_handle_id": handle.handle_id,
                                 "miniqmt_order_id": native["miniqmt_order_id"],
                                 "broker_status": status.state,
-                                "trade_count": len(order_fills),
+                                "broker_raw_status": status.raw_status,
+                                "broker_status_msg": status.status_msg,
+                                "broker_rejection_reason": status.rejection_reason,
+                                "trade_count": len(trade_rows),
+                                "fill_count": len(order_fills),
+                                "broker_diagnostic": diagnostic,
                             },
                             filled_quantity=final_order.filled_quantity,
                             remaining_quantity=final_order.remaining_quantity,
@@ -1252,9 +1318,13 @@ class PaperTradingDayRunner:
                         "broker_handle_id": handle.handle_id,
                         "miniqmt_order_id": native["miniqmt_order_id"],
                         "broker_status": status.state,
+                        "broker_raw_status": status.raw_status,
+                        "broker_status_msg": status.status_msg,
+                        "broker_rejection_reason": status.rejection_reason,
                         "fill_count": len(order_fills),
                         "paper_order_status": final_order.status.value,
                         "filled_quantity": final_order.filled_quantity,
+                        "broker_diagnostic": diagnostic,
                     },
                 )
 
@@ -1457,6 +1527,7 @@ class PaperTradingDayRunner:
             "broker_status": child.status.state if child.status else None,
             "broker_raw_status": child.status.raw_status if child.status else None,
             "broker_status_msg": child.status.status_msg if child.status else None,
+            "broker_rejection_reason": child.status.rejection_reason if child.status else None,
             "broker_status_raw": child.status.raw if child.status else None,
             "miniqmt_trade_count": len(child.trades),
             "child_submit_error": child.submit_error,
@@ -1543,6 +1614,18 @@ class PaperTradingDayRunner:
                 "nav": float(account.nav),
             },
         )
+        self.repository.save_run_event(
+            run_id=run.run_id,
+            event_type="RUN_SUCCEEDED",
+            message="paper v2 MiniQMT day run reconciled against broker authority",
+            context={
+                "broker_backend": "minqmt_sim",
+                "authority_source": "MINIQMT_QUERY",
+                "order_count": len(orders),
+                "fill_count": fill_count,
+                "new_fill_count": len(fills),
+            },
+        )
         return PaperDayRunResult(
             portfolio=ready_portfolio,
             run=succeeded,
@@ -1590,8 +1673,21 @@ class PaperTradingDayRunner:
                     )
                     continue
                 intent = self._miniqmt_intent_from_order(order, trade_date=trade_date)
+                audit_before = self._miniqmt_broker_audit_snapshot(
+                    broker,
+                    phase="before_native_reconcile",
+                    intent=self._miniqmt_intent_from_order(order, trade_date=trade_date),
+                    native=native,
+                )
                 status = broker.query_status_from_native(intent=intent, **native)
                 trade_rows = broker.query_trades_from_native(intent=intent, **native)
+                audit_after = self._miniqmt_broker_audit_snapshot(
+                    broker,
+                    phase="after_native_reconcile",
+                    intent=intent,
+                    native=native,
+                    status=status,
+                )
                 candidate_fills = self._miniqmt_fills_from_trades(
                     trade_rows,
                     order=order,
@@ -1631,6 +1727,9 @@ class PaperTradingDayRunner:
                     status=status,
                     native=native,
                     visible_trade_count=len(trade_rows),
+                    audit_before=audit_before,
+                    audit_after=audit_after,
+                    authority_source="MINIQMT_NATIVE_RECONCILE",
                 )
                 self.repository.save_order(run.run_id, final_order)
                 if session_id:
@@ -1648,7 +1747,18 @@ class PaperTradingDayRunner:
                                 "broker_handle_id": native["handle_id"],
                                 "miniqmt_order_id": native["miniqmt_order_id"],
                                 "broker_status": status.state,
+                                "broker_raw_status": status.raw_status,
+                                "broker_status_msg": status.status_msg,
+                                "broker_rejection_reason": status.rejection_reason,
                                 "trade_count": len(trade_rows),
+                                "broker_diagnostic": self._miniqmt_order_diagnostic(
+                                    status=status,
+                                    native=native,
+                                    visible_trade_count=len(trade_rows),
+                                    audit_before=audit_before,
+                                    audit_after=audit_after,
+                                    authority_source="MINIQMT_NATIVE_RECONCILE",
+                                ),
                             },
                             filled_quantity=final_order.filled_quantity,
                             remaining_quantity=final_order.remaining_quantity,
@@ -1714,30 +1824,212 @@ class PaperTradingDayRunner:
         status: Any,
         native: dict[str, Any],
         visible_trade_count: int,
+        audit_before: dict[str, Any] | None = None,
+        audit_after: dict[str, Any] | None = None,
+        authority_source: str = "MINIQMT_NATIVE_RECONCILE",
     ) -> Any:
         broker_state = self._miniqmt_order_status_from_handle(status)
+        metadata = self._miniqmt_metadata_with_status(
+            order.metadata,
+            status=status,
+            native=native,
+            visible_trade_count=visible_trade_count,
+            audit_before=audit_before,
+            audit_after=audit_after,
+            authority_source=authority_source,
+        )
         if broker_state in {OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED} and status.filled_quantity > order.filled_quantity:
             update: dict[str, Any] = {
                 "status": broker_state,
                 "filled_quantity": min(status.filled_quantity, order.quantity),
+                "metadata": metadata,
             }
             if status.avg_fill_price is not None:
                 update["avg_fill_price"] = float(status.avg_fill_price)
             return order.model_copy(update=update)
         if broker_state in {OrderStatus.REJECTED, OrderStatus.CANCELLED} and order.status != broker_state:
-            update = {"status": broker_state}
-            if status.rejection_reason:
-                update["metadata"] = {
-                    **dict(order.metadata or {}),
-                    "broker_status": status.state,
-                    "broker_rejection_reason": status.rejection_reason,
-                    "visible_trade_count": visible_trade_count,
-                    **native,
-                }
-            return order.model_copy(update=update)
+            return order.model_copy(update={"status": broker_state, "metadata": metadata})
         if order.status != broker_state and broker_state in {OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED}:
-            return order.model_copy(update={"status": broker_state})
-        return order
+            return order.model_copy(update={"status": broker_state, "metadata": metadata})
+        return order.model_copy(update={"metadata": metadata})
+
+    @classmethod
+    def _miniqmt_metadata_with_status(
+        cls,
+        metadata: dict[str, Any] | None,
+        *,
+        status: Any,
+        native: dict[str, Any],
+        visible_trade_count: int,
+        audit_before: dict[str, Any] | None = None,
+        audit_after: dict[str, Any] | None = None,
+        authority_source: str = "MINIQMT",
+    ) -> dict[str, Any]:
+        diagnostic = cls._miniqmt_order_diagnostic(
+            status=status,
+            native=native,
+            visible_trade_count=visible_trade_count,
+            audit_before=audit_before,
+            audit_after=audit_after,
+            authority_source=authority_source,
+        )
+        return {
+            **dict(metadata or {}),
+            "broker_backend": "minqmt_sim",
+            "authority_source": authority_source,
+            "broker_handle_id": native.get("handle_id"),
+            "broker_status": status.state,
+            "broker_raw_status": status.raw_status,
+            "broker_status_msg": status.status_msg,
+            "broker_rejection_reason": status.rejection_reason,
+            "broker_status_raw": status.raw,
+            "broker_diagnostic": diagnostic,
+            "broker_audit": diagnostic["broker_audit"],
+            "miniqmt_trade_count": visible_trade_count,
+            **native,
+        }
+
+    @classmethod
+    def _miniqmt_order_diagnostic(
+        cls,
+        *,
+        status: Any,
+        native: dict[str, Any],
+        visible_trade_count: int,
+        audit_before: dict[str, Any] | None,
+        audit_after: dict[str, Any] | None,
+        authority_source: str = "MINIQMT",
+    ) -> dict[str, Any]:
+        return {
+            "schema_version": "miniqmt_order_diagnostic_v1",
+            "broker_backend": "minqmt_sim",
+            "authority_source": authority_source,
+            "broker_handle_id": native.get("handle_id"),
+            "miniqmt_order_id": native.get("miniqmt_order_id"),
+            "strategy_name": native.get("strategy_name"),
+            "order_remark": native.get("order_remark"),
+            "broker_status": status.state,
+            "broker_raw_status": status.raw_status,
+            "broker_status_msg": status.status_msg,
+            "broker_rejection_reason": status.rejection_reason,
+            "broker_status_raw": status.raw,
+            "visible_trade_count": visible_trade_count,
+            "broker_audit": cls._miniqmt_audit_pair(audit_before, audit_after),
+        }
+
+    @classmethod
+    def _miniqmt_submit_error_diagnostic(
+        cls,
+        exc: TradingCoreError,
+        *,
+        intent: Any,
+        audit_before: dict[str, Any] | None,
+        audit_after: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        native = dict(audit_after.get("native") or {}) if isinstance(audit_after, dict) else {}
+        return {
+            "schema_version": "miniqmt_order_diagnostic_v1",
+            "broker_backend": "minqmt_sim",
+            "authority_source": "MINIQMT_SUBMIT_ERROR",
+            "intent_id": intent.intent_id,
+            "symbol": intent.symbol,
+            "side": intent.side.value,
+            "quantity": intent.quantity,
+            "broker_handle_id": native.get("handle_id"),
+            "miniqmt_order_id": native.get("miniqmt_order_id"),
+            "strategy_name": native.get("strategy_name"),
+            "order_remark": native.get("order_remark"),
+            "broker_error": exc.to_dict(),
+            "broker_status": "submit_error",
+            "broker_status_msg": exc.message,
+            "broker_rejection_reason": exc.message,
+            "broker_status_raw": exc.to_dict(),
+            "broker_audit": cls._miniqmt_audit_pair(audit_before, audit_after),
+        }
+
+    @staticmethod
+    def _miniqmt_submit_error_native(exc: TradingCoreError) -> dict[str, Any]:
+        context = exc.context if isinstance(exc.context, dict) else {}
+        native_keys = ("handle_id", "miniqmt_order_id", "strategy_name", "order_remark")
+        native = {key: context.get(key) for key in native_keys if context.get(key) is not None}
+        if context.get("message") is not None:
+            native["broker_submit_message"] = context.get("message")
+        return native
+
+    @staticmethod
+    def _miniqmt_audit_pair(
+        audit_before: dict[str, Any] | None,
+        audit_after: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        return {
+            "schema_version": "miniqmt_broker_audit_v1",
+            "before_submit": audit_before or {},
+            "after_reconcile": audit_after or {},
+        }
+
+    @staticmethod
+    def _miniqmt_broker_audit_snapshot(
+        broker: Any,
+        *,
+        phase: str,
+        intent: Any | None = None,
+        native: dict[str, Any] | None = None,
+        status: Any | None = None,
+    ) -> dict[str, Any]:
+        snapshot: dict[str, Any] = {
+            "schema_version": "miniqmt_broker_audit_snapshot_v1",
+            "phase": phase,
+            "captured_at": datetime.now(UTC).isoformat(),
+            "intent": PaperTradingDayRunner._miniqmt_intent_audit(intent) if intent is not None else None,
+            "native": dict(native or {}),
+            "status": PaperTradingDayRunner._miniqmt_status_audit(status) if status is not None else None,
+        }
+        try:
+            account = broker.query_account()
+            snapshot["account"] = {
+                "cash": float(account.cash),
+                "nav": float(account.nav),
+                "margin_used": float(account.margin_used) if account.margin_used is not None else None,
+                "as_of": account.as_of.isoformat(),
+            }
+        except Exception as exc:  # noqa: BLE001 - diagnostics must preserve query failure details.
+            snapshot["account_error"] = f"{type(exc).__name__}: {exc}"
+        try:
+            positions, prices = broker.query_position_marks()
+            snapshot["positions"] = {
+                "count": len(positions),
+                "symbols": sorted(positions)[:50],
+                "market_value": sum(float(pos.quantity) * float(prices.get(symbol, 0.0)) for symbol, pos in positions.items()),
+                "missing_price_symbols": sorted(symbol for symbol in positions if symbol not in prices)[:50],
+            }
+        except Exception as exc:  # noqa: BLE001 - diagnostics must preserve query failure details.
+            snapshot["positions_error"] = f"{type(exc).__name__}: {exc}"
+        return snapshot
+
+    @staticmethod
+    def _miniqmt_intent_audit(intent: Any) -> dict[str, Any]:
+        return {
+            "intent_id": intent.intent_id,
+            "symbol": intent.symbol,
+            "side": intent.side.value,
+            "quantity": intent.quantity,
+            "order_type": intent.order_type.value,
+            "limit_price": intent.limit_price,
+            "target_trade_date": intent.target_trade_date.isoformat(),
+        }
+
+    @staticmethod
+    def _miniqmt_status_audit(status: Any) -> dict[str, Any]:
+        return {
+            "broker_status": status.state,
+            "broker_raw_status": status.raw_status,
+            "broker_status_msg": status.status_msg,
+            "broker_rejection_reason": status.rejection_reason,
+            "filled_quantity": status.filled_quantity,
+            "avg_fill_price": float(status.avg_fill_price) if status.avg_fill_price is not None else None,
+            "last_event_at": status.last_event_at.isoformat(),
+            "raw": status.raw,
+        }
 
     @staticmethod
     def _miniqmt_session_id_from_run(run: PaperRun) -> str | None:
