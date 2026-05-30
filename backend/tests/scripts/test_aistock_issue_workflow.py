@@ -143,6 +143,45 @@ def test_emit_rejects_root_level_bare_output_path(
     assert not (tmp_path / "workflow-output").exists()
 
 
+def test_next_command_for_ci_running_uses_watch_ci() -> None:
+    command = workflow._next_command_for_state(
+        "BUG-199",
+        {"state": "ci_running", "pr_url": "https://github.example/pull/199"},
+    )
+
+    assert "watch-ci" in command
+    assert "--pr-url https://github.example/pull/199" in command
+
+
+def test_watch_ci_updates_state_when_checks_pass(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        workflow,
+        "_watch_pr_checks_compact",
+        lambda bug_id, pr_url, attempts=1, delay_seconds=0: {
+            "workflow_gate": "checks_passed",
+            "check_summary": {"failed_count": 0, "pending_count": 0, "passed_count": 3, "non_blocking_count": 1},
+            "next_actions": ["merge_only_if_user_authorized"],
+        },
+    )
+
+    payload = workflow.build_watch_ci_plan(
+        bug_id="BUG-199",
+        pr_url="https://github.example/pull/199",
+    )
+
+    assert payload["workflow_gate"] == "checks_passed"
+    assert payload["state"] == "ci_green"
+    assert payload["next_actions"] == ["merge_only_if_user_authorized"]
+    state = json.loads(
+        (isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "state.json").read_text(encoding="utf-8")
+    )
+    assert state["state"] == "ci_green"
+    assert "stop_reason" not in state
+
+
 @pytest.fixture
 def isolated_workflow_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(workflow, "REPO_ROOT", tmp_path)

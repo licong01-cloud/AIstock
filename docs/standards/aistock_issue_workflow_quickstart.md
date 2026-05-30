@@ -280,6 +280,14 @@ Before any push/PR automation, `run --mode pr` runs a pre-PR gate. It blocks mis
 
 When `--watch-ci` is used, the wrapper polls a compact check summary through `gh pr view --json statusCheckRollup`. Missing or not-yet-started checks are `checks_pending` with retry instructions, not a business failure. Full check JSON should be requested only when a failed check needs diagnosis.
 
+If the first watch exits while checks are still pending, refresh the workflow state with the compact command instead of manually editing `state.json` or requesting the full check rollup:
+
+```powershell
+python scripts/aistock_issue_workflow.py watch-ci --bug-id BUG-XXX --pr-url <PR_URL>
+```
+
+When checks pass, `watch-ci` updates the BUG workflow state to `ci_green` and returns `merge_only_if_user_authorized` as the next action.
+
 Do not stop at `validation_passed`. That state means required local evidence exists, but the work is not PR-ready yet. Commit only task files, then run the PR command from the issue worktree. The wrapper blocks PR automation from canonical root or `main` so accidental root pollution cannot become a PR.
 
 ## Close And Sync After Merge

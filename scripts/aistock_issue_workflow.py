@@ -4005,7 +4005,8 @@ def _next_command_for_state(bug_id: str, state: dict[str, Any]) -> str:
             "--validation-evidence \"<command> -> passed\" --push --create-pr"
         )
     if current in {"pr_opened", "ci_running"}:
-        return "watch CI and rerun finish if changes are needed"
+        pr_url = str(state.get("pr_url") or "<PR_URL>")
+        return f"{prefix}python scripts/aistock_issue_workflow.py watch-ci --bug-id {bug_id} --pr-url {pr_url}"
     return f"{prefix}python scripts/aistock_issue_workflow.py run --bug-id {bug_id} --mode plan"
 
 
@@ -4268,6 +4269,48 @@ def _watch_pr_checks_compact(bug_id: str, pr_url: str, *, attempts: int = 3, del
         evidence={"check_summary": payload["check_summary"]},
     )
     return payload
+
+
+def build_watch_ci_plan(
+    *,
+    bug_id: str,
+    pr_url: str | None = None,
+    attempts: int = 1,
+    delay_seconds: int = 0,
+) -> dict[str, Any]:
+    canonical_bug_id = bug_id.strip().upper()
+    state = _load_state(canonical_bug_id) or {}
+    resolved_pr_url = pr_url or str(state.get("pr_url") or "").strip()
+    if not resolved_pr_url:
+        raise WorkflowError("--pr-url is required when workflow state does not include a PR URL")
+    attempts = max(1, attempts)
+    delay_seconds = max(0, delay_seconds)
+    ci_watch = _watch_pr_checks_compact(
+        canonical_bug_id,
+        resolved_pr_url,
+        attempts=attempts,
+        delay_seconds=delay_seconds,
+    )
+    gate = str(ci_watch.get("workflow_gate") or "checks_pending")
+    check_ok = gate == "checks_passed"
+    _write_state(
+        canonical_bug_id,
+        state="ci_green" if check_ok else ("blocked" if gate == "checks_failed" else "ci_running"),
+        pr_url=resolved_pr_url,
+        checks=ci_watch.get("check_summary"),
+        next_actions=ci_watch.get("next_actions") or [],
+        stop_reason=None if check_ok else gate,
+    )
+    return {
+        "schema_version": "aistock_issue_workflow_watch_ci_v1",
+        "generated_at": _utc_now(),
+        "bug_id": canonical_bug_id,
+        "pr_url": resolved_pr_url,
+        "workflow_gate": gate,
+        "check_summary": ci_watch.get("check_summary"),
+        "next_actions": ci_watch.get("next_actions") or [],
+        "state": "ci_green" if check_ok else ("blocked" if gate == "checks_failed" else "ci_running"),
+    }
 
 
 def _maybe_create_pr(
@@ -5637,6 +5680,17 @@ def cmd_postmortem(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_watch_ci(args: argparse.Namespace) -> int:
+    payload = build_watch_ci_plan(
+        bug_id=args.bug_id,
+        pr_url=args.pr_url,
+        attempts=args.attempts,
+        delay_seconds=args.delay_seconds,
+    )
+    _emit_args(payload, args)
+    return 0 if payload.get("workflow_gate") in {"checks_passed", "checks_pending"} else 2
+
+
 def cmd_close_sync(args: argparse.Namespace) -> int:
     payload = build_close_sync_plan(
         bug_id=args.bug_id,
@@ -5823,6 +5877,14 @@ def build_parser() -> argparse.ArgumentParser:
     postmortem.add_argument("--no-markdown", action="store_true")
     add_output_options(postmortem)
     postmortem.set_defaults(func=cmd_postmortem)
+
+    watch_ci = sub.add_parser("watch-ci", help="Refresh compact GitHub PR check state for an existing BUG workflow.")
+    watch_ci.add_argument("--bug-id", required=True)
+    watch_ci.add_argument("--pr-url", help="PR URL; defaults to state.json pr_url when present.")
+    watch_ci.add_argument("--attempts", type=int, default=1)
+    watch_ci.add_argument("--delay-seconds", type=int, default=0)
+    add_output_options(watch_ci)
+    watch_ci.set_defaults(func=cmd_watch_ci)
 
     start = sub.add_parser("start", help="Prepare a BUG fix workflow and context pack.")
     start.add_argument("--bug-id")
