@@ -33,8 +33,8 @@
   "expected": "On successful doctor/start/finish/run/pr/merge/workflow-smoke/postmortem/CI-check paths, stdout contains only a compact pass/fail summary, PR/commit/gate/next_action, and production gates. Full JSON requires an explicit full-json/debug mode or artifact path. Disposable successful-run artifacts such as .coverage, synthetic BUG files, full check rollups, and no-value temporary JSON are ignored and cleaned, with no root pollution.",
   "first_seen_at": "2026-05-29T17:35:19.120989Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5e46e6d51165cf9cf20789e9817801412f1d4364",
+  "fixed_at": "2026-05-30T00:27:27.193112Z",
   "github_issue_number": 404,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/404",
   "last_seen_at": "2026-05-29T17:35:19.120989Z",
@@ -42,6 +42,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/406",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -57,7 +58,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -66,5 +67,8 @@
     "fingerprint": "47cd18e5fca8120c4226241b",
     "source_event_id": "FE-20260530-47cd18e5fca8"
   },
+  "validation_evidence": [
+    "py_compile scripts/aistock_issue_workflow.py noxfile.py -> passed; ruff workflow tests noxfile -> passed; pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> 77 passed; workflow-smoke -> passed unexpected_dirty_paths=[]; PR #406 checks -> 15 success/skipped; PR #410 checks -> 15 success/skipped"
+  ],
   "verification_run_id": null
 }
