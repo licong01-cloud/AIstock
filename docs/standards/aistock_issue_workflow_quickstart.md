@@ -79,7 +79,17 @@ Warnings about a dirty canonical root are not permission to write there. They me
 
 `--output` is a JSON file path, not an output format selector. Omit it for stdout or use `--output -`; do not pass `--output json`. File outputs should use an explicit path, preferably under `tmp/issue_workflow/` or `tmp/validation/`, so a client typo cannot create root-level files such as `json`.
 
-Stdout defaults to compact success output. A passing workflow command should show only the gate, issue id, branch/worktree or PR pointers, validation/CI counts, production gates, and the next action. Do not paste full JSON payloads, full `statusCheckRollup`, `recent_events`, skipped validation maps, or nox internals into chat when the command passed. Use `--output-format full-json` for local debugging, or `--output tmp/issue_workflow/<BUG-ID>/<name>.json` to persist full details as an ignored artifact. Failure output may include the smallest diagnostic signature needed to reproduce or unblock.
+Stdout defaults to compact success output. A passing workflow command should show only the gate, issue id, branch/worktree or PR pointers, validation/CI counts, production gates, and the next action. Do not paste full JSON payloads, full `statusCheckRollup`, `recent_events`, skipped validation maps, or nox internals into chat when the command passed. Use `--output-format full-json` for local debugging, or `--output tmp/issue_workflow/<BUG-ID>/<name>.json` to persist full details as an ignored artifact. Failure output may include the smallest diagnostic signature needed to reproduce or unblock. Registry intake commands must stage only committable BUG registry files, not ignored `tmp/issue_workflow` artifacts.
+
+## Optimized Tool Use Contract
+
+For Codex, Claude Code, Cursor, and other agents, context discovery should be cheap by default:
+
+- Read the workflow output, Context Pack, and `fix-ready.json` before searching code.
+- Use `allowed_write_scope` and `changed_files` as the initial search boundary.
+- Prefer `rg <pattern> <scoped-file-or-dir>` over broad repository scans; broaden only when the scoped search fails or the Context Pack is stale.
+- Do not load archived standards, old design notes, full logs, or module restart plans unless the current BUG explicitly needs that history.
+- Treat CodeGraph / Understand Anything references as acceleration hints; they do not replace selected nox / pytest / Validation Center evidence.
 
 Close-sync-only PRs that change only BUG JSON/status evidence should be treated as metadata aftercare. The workflow should summarize their CI/check state by counts and non-blocking skipped jobs; the long-term CI optimization is a fast metadata lane instead of re-running the full backend matrix for one registry-status file.
 ## Fast Path And Smoke Check
@@ -266,7 +276,9 @@ python scripts\aistock_issue_workflow.py run --bug-id BUG-XXX --mode pr --valida
 
 Add `--watch-ci` only when the user asked the agent to watch GitHub checks.
 
-Before any push/PR automation, `run --mode pr` runs a pre-PR gate. It blocks missing validation evidence, failed allowed-scope checks, temp/cache artifacts in git status such as `.codex_tmp` or `.coverage`, and changed Python files that fail Ruff when Ruff is available. Fix the issue inside the same task worktree and rerun the command; do not create a PR first and clean it up later with follow-up style/artifact commits.
+Before any push/PR automation, `run --mode pr` runs a pre-PR gate. It blocks missing validation evidence, failed allowed-scope checks, uncommitted task files, temp/cache artifacts in git status such as `.codex_tmp` or `.coverage`, and changed Python files that fail Ruff when Ruff is available. Fix or commit the issue inside the same task worktree and rerun the command; do not create a PR first and clean it up later with follow-up style/artifact commits.
+
+When `--watch-ci` is used, the wrapper polls a compact check summary through `gh pr view --json statusCheckRollup`. Missing or not-yet-started checks are `checks_pending` with retry instructions, not a business failure. Full check JSON should be requested only when a failed check needs diagnosis.
 
 Do not stop at `validation_passed`. That state means required local evidence exists, but the work is not PR-ready yet. Commit only task files, then run the PR command from the issue worktree. The wrapper blocks PR automation from canonical root or `main` so accidental root pollution cannot become a PR.
 

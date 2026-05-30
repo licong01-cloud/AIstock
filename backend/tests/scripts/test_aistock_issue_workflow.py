@@ -242,6 +242,39 @@ def test_start_writes_fix_ready_and_context_pack(
     assert json.loads(fix_ready.read_text(encoding="utf-8"))["workflow_gate"] == "allowed"
 
 
+def test_start_created_worktree_seeds_bug_json(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _write_json(isolated_workflow_root / "registry" / "tests" / "aistock_validation" / "bugs" / "BUG-199.json", _bug())
+    fix = isolated_workflow_root / "fix-worktree"
+    monkeypatch.setattr(workflow, "_target_names", lambda record, bug_id, task_slug=None: ("bug/BUG-199-fix", fix))
+    monkeypatch.setattr(workflow, "_build_code_intelligence_summary", lambda **kwargs: _fake_code_intelligence_summary())
+
+    def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
+        if args[:2] == ["worktree", "add"]:
+            fix.mkdir(parents=True)
+        return ""
+
+    monkeypatch.setattr(workflow, "_git", fake_git)
+
+    payload = workflow.build_start_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        changed_files=[],
+        create_worktree=True,
+        dry_run=False,
+        task_slug=None,
+        allow_missing_linkage=False,
+        allow_closed=False,
+    )
+
+    seeded = fix / payload["target_bug_json"]
+    assert payload["worktree_plan"]["seeded_issue_json"] == "tests/aistock_validation/bugs/BUG-199.json"
+    assert seeded.exists()
+    assert json.loads(seeded.read_text(encoding="utf-8"))["bug_id"] == "BUG-199"
+
+
 def test_finish_plan_selects_validation_and_requires_evidence(
     isolated_workflow_root: Path,
     capsys: pytest.CaptureFixture[str],
@@ -885,6 +918,7 @@ def test_run_plan_dirty_registry_intake_blocks_until_registry_commit(
     assert payload["workflow_gate"] == "blocked"
     assert payload["active_decision"]["decision"] == "blocked_dirty_registry_intake"
     assert "git commit" in payload["next_command"]
+    assert "tmp/issue_workflow" not in payload["next_command"]
 
 
 def test_run_plan_dirty_active_worktree_blocks_duplicate_creation(
@@ -962,6 +996,46 @@ def test_pre_pr_gate_blocks_artifacts_and_scope_violation(
     assert payload["artifact_guard"]["status"] == "failed"
     assert any("scope check failed" in item for item in payload["blocking"])
     assert any("temporary/cache artifacts" in item for item in payload["blocking"])
+
+
+def test_pre_pr_gate_requires_commit_only_for_push_or_pr(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    finish = {
+        "changed_files": ["scripts/aistock_issue_workflow.py"],
+        "scope_check": {"status": "passed"},
+    }
+    monkeypatch.setattr(
+        workflow,
+        "_git_status_paths",
+        lambda root: [{"status": " M", "path": "scripts/aistock_issue_workflow.py"}],
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_run_changed_file_lint",
+        lambda changed_files, root: {"status": "passed", "python_files": changed_files, "commands": []},
+    )
+
+    warning_only = workflow._pre_pr_gate(
+        finish=finish,
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        root=isolated_workflow_root,
+        require_clean=False,
+    )
+    blocking = workflow._pre_pr_gate(
+        finish=finish,
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        root=isolated_workflow_root,
+        require_clean=True,
+    )
+
+    assert warning_only["workflow_gate"] == "passed"
+    assert warning_only["warnings"]
+    assert blocking["workflow_gate"] == "blocked"
+    assert any("commit_required before push/PR" in item for item in blocking["blocking"])
+    assert blocking["next_actions"] == ['git add <task files> && git commit -m "fix: resolve issue"']
+
 
 def test_submit_bug_dry_run_requires_github_sync(isolated_workflow_root: Path) -> None:
     allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
@@ -1044,6 +1118,8 @@ def test_submit_bug_apply_with_existing_github_link_writes_registry(
     active_entry = json.loads(active_index.read_text(encoding="utf-8"))["active_bugs"]["BUG-118"]
     assert active_entry["active_state"] == "discovered"
     assert active_entry["branch"] is None
+    assert "git add tests/aistock_validation/bugs" in payload["next_command"]
+    assert "tmp/issue_workflow" not in payload["next_command"]
 
 
 def test_submit_bug_registry_pr_only_stops_after_intake(
@@ -1081,6 +1157,7 @@ def test_submit_bug_registry_pr_only_stops_after_intake(
     assert payload["fix_chain"]["registry_pr_required"] is True
     assert payload["fix_chain"]["continue_to_fix_in_same_workflow"] is False
     assert "git commit" in payload["next_command"]
+    assert "tmp/issue_workflow" not in payload["next_command"]
 
 
 def test_submit_bug_apply_blocks_canonical_root_pollution(
@@ -1630,6 +1707,29 @@ def test_run_pr_mode_drafts_pr_automation_without_side_effects(
     assert payload["workflow_gate"] == "ready_for_pr"
     assert payload["pr_automation"]["dry_run"] is True
     assert "gh pr create" in payload["pr_automation"]["next_commands"][1]
+
+
+def test_pr_check_watch_treats_missing_checks_as_pending(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        workflow,
+        "_run_command",
+        lambda args, **kwargs: {"ok": True, "returncode": 0, "stdout": json.dumps({"statusCheckRollup": []}), "stderr": ""},
+    )
+    monkeypatch.setattr(workflow.time, "sleep", lambda seconds: None)
+
+    payload = workflow._watch_pr_checks_compact(
+        "BUG-199",
+        "https://github.example/pull/199",
+        attempts=2,
+        delay_seconds=0,
+    )
+
+    assert payload["workflow_gate"] == "checks_pending"
+    assert payload["check_summary"]["pending_count"] == 0
+    assert len(payload["attempts"]) == 2
 
 
 def test_run_pr_mode_blocks_pr_automation_from_canonical_root(
