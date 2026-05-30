@@ -4434,24 +4434,32 @@ def _git_paths_equivalent(left: str, right: str, paths: list[str], *, cwd: Path 
     return bool(_run_command(["git", "diff", "--quiet", left, right, "--", *paths], cwd=root).get("ok"))
 
 
-def _git_squash_head_equivalent_to_origin(head_oid: str, *, cwd: Path | None = None) -> dict[str, Any]:
+def _git_squash_head_equivalent_to_ref(
+    head_oid: str,
+    target_ref: str,
+    *,
+    target_label: str | None = None,
+    cwd: Path | None = None,
+) -> dict[str, Any]:
     root = cwd or REPO_ROOT
+    base_ref = target_label or target_ref
     payload: dict[str, Any] = {
         "head_ref": head_oid,
-        "base_ref": "origin/main",
+        "base_ref": base_ref,
+        "target_ref": target_ref,
         "base": None,
         "changed_files": [],
         "verified": False,
         "reason": None,
     }
-    if not _git_ref_exists(head_oid, cwd=root) or not _git_ref_exists("origin/main", cwd=root):
+    if not _git_ref_exists(head_oid, cwd=root) or not _git_ref_exists(target_ref, cwd=root):
         payload["reason"] = "missing_ref"
         return payload
-    if _git_refs_tree_equivalent(head_oid, "origin/main", cwd=root):
+    if _git_refs_tree_equivalent(head_oid, target_ref, cwd=root):
         payload["verified"] = True
         payload["reason"] = "full_tree_equivalent"
         return payload
-    base = _git_merge_base(head_oid, "origin/main", cwd=root)
+    base = _git_merge_base(head_oid, target_ref, cwd=root)
     payload["base"] = base
     if not base:
         payload["reason"] = "missing_merge_base"
@@ -4461,9 +4469,13 @@ def _git_squash_head_equivalent_to_origin(head_oid: str, *, cwd: Path | None = N
     if not changed_files:
         payload["reason"] = "empty_pr_diff"
         return payload
-    payload["verified"] = _git_paths_equivalent(head_oid, "origin/main", changed_files, cwd=root)
+    payload["verified"] = _git_paths_equivalent(head_oid, target_ref, changed_files, cwd=root)
     payload["reason"] = "changed_paths_equivalent" if payload["verified"] else "changed_paths_differ"
     return payload
+
+
+def _git_squash_head_equivalent_to_origin(head_oid: str, *, cwd: Path | None = None) -> dict[str, Any]:
+    return _git_squash_head_equivalent_to_ref(head_oid, "origin/main", cwd=cwd)
 
 
 def _cleanup_merge_verification(branch: str, pr_url: str | None, merged: bool) -> dict[str, Any]:
@@ -4475,6 +4487,8 @@ def _cleanup_merge_verification(branch: str, pr_url: str | None, merged: bool) -
         "tree_equivalence_ref": "branch" if merged else None,
         "pr_check": None,
         "path_equivalence": None,
+        "merge_commit_path_equivalence": None,
+        "origin_path_equivalence": None,
     }
     if merged or not pr_url:
         return payload
@@ -4485,7 +4499,32 @@ def _cleanup_merge_verification(branch: str, pr_url: str | None, merged: bool) -
         return payload
 
     head_oid = _pr_head_oid_from_pr_check(pr_check)
+    merge_commit = _merge_commit_from_pr_check(pr_check)
+    if head_oid and merge_commit:
+        merge_commit_equivalence = _git_squash_head_equivalent_to_ref(
+            head_oid,
+            merge_commit,
+            target_label="source_pr_merge_commit",
+        )
+    else:
+        merge_commit_equivalence = {"verified": False, "reason": "missing_merge_commit" if head_oid else "missing_head_oid"}
+    payload["merge_commit_path_equivalence"] = merge_commit_equivalence
+    if head_oid and merge_commit_equivalence.get("verified"):
+        payload["path_equivalence"] = merge_commit_equivalence
+        payload.update(
+            {
+                "method": f"squash_merge_head_oid_{merge_commit_equivalence.get('reason')}_to_merge_commit",
+                "verified": True,
+                "squash_merge_verified": True,
+                "tree_equivalent_to_origin_main": False,
+                "tree_equivalence_ref": head_oid,
+                "tree_equivalence_target": merge_commit,
+            }
+        )
+        return payload
+
     head_equivalence = _git_squash_head_equivalent_to_origin(head_oid) if head_oid else {"verified": False, "reason": "missing_head_oid"}
+    payload["origin_path_equivalence"] = head_equivalence
     payload["path_equivalence"] = head_equivalence
     if head_oid and head_equivalence.get("verified"):
         payload.update(
