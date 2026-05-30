@@ -70,8 +70,8 @@
   "expected": "Production qe_archive schema has the 8 analytics views and QE archive MCP exposes summary-first query tools for these views.",
   "first_seen_at": "2026-05-30T09:37:51.397422Z",
   "fix_branch": "bug/BUG-170-qe-archive-analytics-views-missing-in-production-20260530",
-  "fix_commit": null,
-  "fixed_at": "2026-05-30T18:45:00+08:00",
+  "fix_commit": "ba698670c9ef8fb9a5557c11d1c68bd51938a5a6",
+  "fixed_at": "2026-05-30T12:24:02.375648Z",
   "github_issue_number": 411,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/411",
   "last_seen_at": "2026-05-30T09:37:51.397422Z",
@@ -79,6 +79,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/412",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "applied_and_verified",
   "production_frontend_dependency_gate": "noop",
@@ -105,24 +106,21 @@
     "fingerprint": "88a2f9747c53ec282c76d993",
     "source_event_id": "FE-20260530-88a2f9747c53"
   },
-  "verification_run_id": "BUG-170-20260530-qe-archive-analytics-validation",
-  "workflow_gate": "allowed",
   "validation_evidence": [
     "Production DDL authorized by user; backend/db/migrations/qe_archive_analytics_views_20260529.sql applied/reapplied to 127.0.0.1:5432/aistock -> all 8 qe_archive views available and SELECT count(*) passed (counts 112/49/67/226/112/112/0/112)",
-    "Direct repository analytics smoke against production DB -> passed; view status plus sample run_leaderboard, seed_robustness, factor_performance, model_hyperparam_seed_perf, overfit_flags, promotion_candidates, evolution_lineage queries returned compact rows",
-    "python -m py_compile backend/routers/qe_archive.py backend/services/qe_archive/repository.py backend/services/research_assistant/mcp_catalog_sync.py backend/services/research_assistant/domain_ontology.py backend/services/research_assistant/tool_router.py scripts/aistock_qe_archive_mcp_server.py -> passed",
-    "python -m compileall backend/routers/qe_archive.py backend/services/qe_archive scripts/aistock_qe_archive_mcp_server.py backend/services/research_assistant/mcp_catalog_sync.py backend/services/research_assistant/domain_ontology.py backend/services/research_assistant/tool_router.py -> passed",
+    "Direct repository analytics smoke against production DB -> passed; compact samples saved under tmp/issue_workflow/BUG-170/repository_analytics_smoke.json",
     "python -m pytest -q backend/tests/test_aistock_qe_mcp_servers.py backend/tests/test_qe_archive_repository_static.py backend/tests/research_assistant/test_mcp_catalog_sync.py backend/tests/research_assistant/test_natural_language_mcp_routing.py -p no:cacheprovider -> 81 passed",
-    "python -m ruff check backend/routers/qe_archive.py backend/services/qe_archive/repository.py backend/services/research_assistant/mcp_catalog_sync.py backend/services/research_assistant/domain_ontology.py backend/services/research_assistant/tool_router.py scripts/aistock_qe_archive_mcp_server.py backend/tests/test_aistock_qe_mcp_servers.py backend/tests/test_qe_archive_repository_static.py backend/tests/research_assistant/test_mcp_catalog_sync.py backend/tests/research_assistant/test_natural_language_mcp_routing.py -> passed",
+    "python -m ruff check changed BUG-170 Python files/tests -> passed",
     "git diff --check -> passed",
     "python -m nox -s l0 -> passed",
-    "with F:\\Dev\\AIstock\\.env DB vars and QE_ARCHIVE_L3_SKIP_UI=1, python -m nox -s qe_archive_l3 -> passed (qe_archive_l3, qe_archive_backend 121 passed, qe_archive_data_quality passed, data_quality_deep 10 passed/21 skipped)",
-    "PAPER_V2_L3_SKIP_UI=1 PAPER_V2_SKIP_REALTIME=1 python -m nox -s paper_v2_l3 -> passed (l0, paper_v2_backend 543 passed/1 skipped/2 xfailed, paper_v2_data_quality passed, data_quality_deep passed)",
+    "with F:\\Dev\\AIstock\\.env DB vars and QE_ARCHIVE_L3_SKIP_UI=1, python -m nox -s qe_archive_l3 -> passed",
+    "PAPER_V2_L3_SKIP_UI=1 PAPER_V2_SKIP_REALTIME=1 python -m nox -s paper_v2_l3 -> passed",
     "PAPER_V2_SKIP_REALTIME=1 python -m nox -s paper_v2_backend -> passed (543 passed, 1 skipped, 2 xfailed)",
     "python -m nox -s validation_center_backend -> passed (278 passed; coverage line=79.64 branch=61.71)",
     "python -m nox -s qe_data_contract_backend -> passed (17 passed)",
-    "QE_READ_L3_SKIP_UI=1 python -m nox -s qe_read_l3 -> passed (qe_read_l3 plus qe_read_backend 11 passed)",
+    "QE_READ_L3_SKIP_UI=1 python -m nox -s qe_read_l3 -> passed (qe_read_backend 11 passed)",
     "python -m nox -s validation_module_registry_l0 -> passed (8 passed; ownership mapped=12 unmapped=0 ambiguous=0)"
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/412"
+  "verification_run_id": "BUG-170-20260530-qe-archive-analytics-validation",
+  "workflow_gate": "allowed"
 }
