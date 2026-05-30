@@ -556,3 +556,203 @@ COMMENT ON TABLE qe_autonomous_evolution_runs IS 'QE 自主演进主循环运行
 3. 明确 L0–L5 + L1 双树/图谱 + L2.5 外部研究的边界与承接。
 4. 明确分阶段实施（§10）与每阶段验收标准、防漂移门禁（§11）、可追溯性矩阵（§12）、DAI（§13）。
 5. 本 PR 为 docs-only：`production_ddl_gate=noop`、`production_backend_dependency_gate=noop`、`production_frontend_dependency_gate=noop`（DDL 在后续实现 PR 中按 §14 处理）。
+
+---
+
+## 16. 蓝图增补（2026-05-31）：代码智能 / 主动汇报 / 自我学习
+
+> 增补背景：复查发现三项"原始设计存在、但未实现且未被本蓝图覆盖"的能力（典型"设计丢失"）。它们出自 issue-workflow / 研究 Agent 控制台 设计线，不在 §1.3 原 RA 命名文档清单内，故初版蓝图遗漏。本章按与正文一致的标准补齐：缺陷证据、来源承接、目标架构、DDL、分阶段实施、每阶段审计/验收、防漂移、可追溯性、DAI、外部范式兑现。本章同样不触碰 `8001`/`3000`，DDL 延后到实现 PR 按 §14 处理。
+
+### 16.1 新增缺陷（附证据）
+
+| 编号 | 缺陷 | 证据 | 影响 |
+|---|---|---|---|
+| DEF-10 | 代码智能适配器存在但未接入助手推理 | `scripts/code_intelligence_adapter.py`（+ `backend/tests/scripts/test_code_intelligence_adapter.py`、`tests/aistock_validation/catalog/code_intelligence.yaml`）已存在；但 `backend/services/research_assistant/` 无 codegraph/impact 引用，未注入 Context Pack | 跨模块/"这个模块怎么工作/改这里影响谁"靠猜，token 浪费 |
+| DEF-11 | 主动晨报 / 实验日报仅占位、未生成 | `service.py:3598-3599` 仅有"研究助理晨报模板"，body 注明"夜间自动任务将在后续阶段写入具体晨报" | 无主动汇报（Jarvis 式主动性缺失） |
+| DEF-12 | 无自我学习 / 提示词自评估闭环 | backend 无 `prompt_lab/reflection_card/research_curriculum` 实现；记忆有反思巩固但无"提示词/策略自改进" | 助手不能"越用越准"，提示词靠人工维护 |
+
+> 澄清（防误判）：复查中曾被怀疑"未实现"的上下文压缩 + key facts（`assistant_context_segments`/`assistant_context_key_facts`，写入见 `service.py:2406→2417`，回灌见 `:2316-2323`）、external_agent_session（`service.py:3402` + schema:490）、LLM 真实调用（`service.py:569` litellm）、mode router / `_select_prompt_nodes`（`:1295`）/ `tool_router.py` / `domain_ontology.py` 均**已实现并接入**，不属于缺口；用户画像由 L1 `personal.preference/habit` 覆盖；experiment lineage 由 `research_evolution_paths` + L4 覆盖。
+
+### 16.2 设计来源承接（补 §1.3）
+
+| 前序设计 | 提供内容 | 本章承接 |
+|---|---|---|
+| `aistock_code_intelligence_integration_design_20260526.md` | CodeGraph（tree-sitter 代码结构/调用链/影响半径/受影响测试，MCP/CLI）+ Understand Anything（代码知识图谱）作为 Context Pack/Research Assistant 证据层；只存轻量 manifest/impact summary/context refs，带 provenance + approval；不替代 nox/CI/生产门禁 | L1.6 直接承接 |
+| `aistock_research_agent_console_design_20260520.md` | 晨报/实验报告；Prompt Lab、Reflection Card、Research Curriculum、prompt feedback 自我学习闭环 | L6 / L7 承接 |
+| `aistock_research_agent_console_validation_matrix_20260521.md` | 上述能力的 PoC/验收项 | L6/L7 验收承接 |
+
+### 16.3 外部范式兑现（补 §9，前沿论文/工具，均可配国产模型、可门禁化）
+
+| 范式 / 来源 | 借鉴点 | AIstock 落地 | 验收命令 | 不采用项 |
+|---|---|---|---|---|
+| Codebase-Memory（arXiv 2603.27277，tree-sitter KG via MCP，10x 省 token） | 确定性代码图 + 结构化查询工具 | L1.6 复用 `code_intelligence_adapter.py` 的 CodeGraph 输出 | `pytest test_code_intel_context_injection.py` | 不在 MCP 内做全仓 LLM 扫描 |
+| Reliable Graph-RAG for Codebases（arXiv 2601.08773，AST确定性 > LLM抽取） | 用 AST 确定性图，避免随机性 | L1.6 仅用 tree-sitter/AST 派生图，**无 embedding** | 同上 | 不用 LLM 抽取代码图 |
+| RepoGraph（agent +32.8%） / CodeRAG 双图（arXiv 2504.10046） | repo 级代码图提升 agent | L1.6 注入 L3 任务分解 | `pytest test_code_intel_decomposition.py` | 不引入外部 agent 运行时 |
+| GEPA（arXiv 2507.19457，反思式提示词进化，比 RL 省 35x rollout，已入 DSPy） | 反思式提示词优化（ASI 反馈 + Pareto 池） | L7 Prompt Lab 优化器 | `pytest test_prompt_lab_gepa_offline.py` | 不引入 RL/权重训练 |
+| DSPy（声明式自改进，MIPROv2/BootstrapFewShot） | 提示词作可优化参数 + 评估驱动 | L7 优化与评估编排（可选直接用 dspy 库） | 同上 | 不强绑 DSPy 运行时（可纯自实现） |
+| Reflexion（arXiv 2303.11366，言语强化 + 情景反思缓冲） | 失败言语反思入情景记忆 | L7 Reflection Card → `personal.episodic.*` | `pytest test_reflection_card_loop.py` | 不外显推理链 |
+| Voyager（arXiv 2305.16291）/ SAGE（arXiv 2512.17102，技能库 + 经验回放） | 可复用技能库 + 自主课程 | L7 技能库（沉淀成功 workflow/prompt 为可复用技能）+ L4 课程 | `pytest test_skill_library.py` | 不做权重级 RL |
+| LLM-as-Judge / Agent-as-a-Judge（arXiv 2508.02994） | 评估信号闭环；**自改进须作为受门禁的提议** | L7 评估用 judge，改进一律走 approval | `pytest test_prompt_lab_judge_gated.py` | judge 不自动上线，须人工 approve |
+
+> 安全基线（采纳论文共识）：**所有自我学习只产出"提议"，经评估 + 人工 approval 才生效**，绝不自动改写线上提示词/策略（呼应 §2.2 红线与既有 approval 闭环）。
+
+### 16.4 L1.6 代码智能层（解决 DEF-10）
+
+定位：把**代码级**结构图（函数/类/调用链/导入/影响半径/受影响测试）作为助手证据层，与 L1 的**业务级**知识图谱互补——业务图答"模块依赖谁消费谁"，代码图答"具体哪个函数/调用链/测试受影响"。**纯 AST 确定性，无 embedding**（采纳 arXiv 2601.08773 结论）。
+
+- **复用现有资产**：`scripts/code_intelligence_adapter.py`（CodeGraph/Understand-Anything 适配，已存在）。L1.6 不重写适配器，只做"接入 Research Assistant"。
+- **后端 façade**：新增 `/api/v1/research-assistant/code-intelligence/*`（或在 RA 服务内封装），调用 adapter，返回 summary-first 的轻量结果（manifest/impact summary/context refs），带 `provenance` + `as_of`，遵守 token 契约。
+- **注入推理**：`build_context_pack` 对涉及具体代码/模块的 query，追加 `code_context_refs`（调用链/影响半径/受影响测试摘要）；喂 L3 orchestrator 任务分解（"改这里→受影响 worker/测试"）。
+- **证据契约**：代码结论须可追溯到 adapter 输出（文件/符号/边），无则降级；不替代 nox/pytest/CI（沿用原设计红线）。
+
+DDL（轻量缓存，触发 production_ddl_gate）：
+
+```sql
+CREATE TABLE IF NOT EXISTS assistant_code_context_refs (
+    code_ref_id   TEXT PRIMARY KEY,
+    task_id       TEXT,
+    query_scope   TEXT NOT NULL,           -- symbol/module/path
+    manifest_json JSONB NOT NULL,          -- adapter 输出的轻量 manifest/impact summary
+    source        TEXT NOT NULL,           -- codegraph | understand_anything
+    provenance_json JSONB NOT NULL DEFAULT '{}'::jsonb,  -- {commit, file, symbol, generated_at}
+    as_of         TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+COMMENT ON TABLE assistant_code_context_refs IS '代码智能(CodeGraph/Understand)注入 Context Pack 的轻量引用，AST确定性，无embedding';
+```
+
+### 16.5 L6 主动汇报（解决 DEF-11）
+
+定位：把占位的"晨报模板"落地为**真实生成**的主动汇报，作为 L3 的**定时 orchestrator 任务**（不是用户每次提问才触发）。
+
+- **聚合源**（全部只读、证据优先）：任务/任务事件、QE/实验状态、Validation/BUG/Issue、本地数据健康、Agent Teams 运行、`personal.task.*` 进展。
+- **生成**：orchestrator 用 `cheap_worker` 汇总为自然语言晨报 + 关键证据 + 待办；每条事实带来源（沿用 L2 证据契约，禁占位符）。
+- **触发**：定时（如交易日早间）；产物写报告表，前端/推送展示。
+- **边界**：只读聚合 + 汇报，不触发任何写入/高风险动作。
+
+DDL：
+
+```sql
+CREATE TABLE IF NOT EXISTS assistant_proactive_reports (
+    report_id     TEXT PRIMARY KEY,
+    report_type   TEXT NOT NULL,           -- morning_brief | experiment_daily
+    report_date   DATE NOT NULL,
+    summary_md    TEXT NOT NULL,
+    sections_json JSONB NOT NULL,          -- 各板块摘要 + source_refs
+    source_refs_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    status        TEXT NOT NULL DEFAULT 'generated',
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_apr UNIQUE (report_type, report_date)
+);
+COMMENT ON TABLE assistant_proactive_reports IS '主动晨报/实验日报，只读聚合 + 证据优先，不触发写入';
+```
+
+### 16.6 L7 自我学习（解决 DEF-12，全程"提议→评估→approval"门禁）
+
+定位：让助手基于成败**自改进提示词与策略**，并沉淀**可复用技能**——但绝不自动上线。
+
+三个子机制（均可配国产模型，经 litellm）：
+1. **Reflection Card（Reflexion）**：任务失败/纠偏后生成结构化反思（错因/教训/下次策略），写入 `personal.episodic.*` 并可被 L1 召回；不外显推理链。
+2. **Prompt Lab（DSPy/GEPA）**：以历史 trace 为评估集，用 **GEPA 反思式优化** 生成候选提示词；用 **LLM-as-judge** 离线评估；**仅产出 candidate**，经人工 approval 才切换 prompt activation（复用现有 Prompt Pack 版本/激活机制）。
+3. **技能库（Voyager/SAGE）**：把验证成功的 workflow/prompt 组合沉淀为可复用"技能"，相似任务经验回放；纳入 L4 自主课程。
+
+DDL：
+
+```sql
+CREATE TABLE IF NOT EXISTS assistant_reflection_cards (
+    card_id       TEXT PRIMARY KEY,
+    task_id       TEXT,
+    trigger       TEXT NOT NULL,           -- failure | correction | low_confidence
+    lesson_md     TEXT NOT NULL,
+    structured_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    memory_ref    TEXT,                    -- 写入的 personal.episodic.* memory_id
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS assistant_prompt_lab_runs (
+    lab_run_id    TEXT PRIMARY KEY,
+    target_prompt_key TEXT NOT NULL,
+    optimizer     TEXT NOT NULL,           -- gepa | dspy_mipro | manual
+    eval_set_ref  TEXT NOT NULL,           -- 历史 trace 评估集引用
+    candidate_text TEXT NOT NULL,
+    judge_score_json JSONB NOT NULL,       -- LLM-as-judge 评估结果
+    status        TEXT NOT NULL DEFAULT 'candidate',  -- candidate | approved | rejected
+    approval_request_id TEXT,              -- 复用 assistant_approval_requests
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS assistant_skill_library (
+    skill_id      TEXT PRIMARY KEY,
+    skill_key     TEXT NOT NULL UNIQUE,
+    description   TEXT NOT NULL,
+    recipe_json   JSONB NOT NULL,          -- 可复用 workflow/prompt/tool 组合
+    success_count INTEGER NOT NULL DEFAULT 0,
+    provenance_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    status        TEXT NOT NULL DEFAULT 'draft',  -- draft | approved | deprecated
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+COMMENT ON TABLE assistant_prompt_lab_runs IS '提示词自优化候选(GEPA/DSPy)+LLM-judge评估；仅候选，approval后才激活';
+```
+
+### 16.7 分阶段实施与验收（接 §10，Phase 8–12；不启动 8001/3000）
+
+#### Phase 8：L1.6 代码智能接入（DEF-10）
+- 交付：façade `/code-intelligence/*` 包裹现有 adapter；`assistant_code_context_refs` DDL；`build_context_pack` 注入 `code_context_refs`。
+- 验收：
+  - `pytest test_code_intel_context_injection.py test_code_intel_decomposition.py` 全绿。
+  - **防漂移消费断言**：涉及具体符号/模块的 query，context pack `code_context_refs` 非空且每条带 provenance（直接消灭 DEF-10"建了不用"）。
+  - 纯 AST，无 embedding 依赖；token 契约（summary-first）测试通过。
+
+#### Phase 9：L6 主动晨报生成（DEF-11）
+- 交付：`assistant_proactive_reports` DDL；orchestrator 定时任务聚合生成；替换占位模板。
+- 验收：
+  - `pytest test_proactive_report_generation.py`：晨报含任务/实验/Issue/数据健康板块，每条带 source_refs，快照无 `XX`/`X%`/`约X`。
+  - 只读断言：生成过程不产生任何写入/高风险 action proposal。
+
+#### Phase 10：L7 Reflection Card（DEF-12 之一）
+- 交付：`assistant_reflection_cards` DDL；失败/纠偏触发生成并写 `personal.episodic.*`。
+- 验收：`pytest test_reflection_card_loop.py`：失败任务生成反思卡 + 入记忆树 + 可被 L1 召回；不外显推理链。
+
+#### Phase 11：L7 Prompt Lab（DEF-12 之二，门禁化）
+- 交付：`assistant_prompt_lab_runs` DDL；GEPA/DSPy 离线优化 + LLM-judge 评估；candidate → approval → 激活（复用 Prompt Pack 激活）。
+- 验收：
+  - `pytest test_prompt_lab_gepa_offline.py test_prompt_lab_judge_gated.py`：产出 candidate + judge 分数；**未经 approval 不得改 activation**（断言）。
+  - 离线：不调用生产、不改线上 prompt。
+
+#### Phase 12：L7 技能库 + 课程（DEF-12 之三）
+- 交付：`assistant_skill_library` DDL；成功 workflow 沉淀为技能；接入 L4 自主课程经验回放。
+- 验收：`pytest test_skill_library.py`：成功任务沉淀技能（draft）+ approval 后可复用；技能复用经审批，不绕过风险门禁。
+
+### 16.8 防设计漂移门禁（补 §11）
+
+| 门禁 | 规则 | 检查 |
+|---|---|---|
+| ANTI-DRIFT-07 | 代码智能必须被消费 | context pack `code_context_refs` 注入断言（DEF-10） |
+| ANTI-DRIFT-08 | 晨报必须真实生成且证据优先 | 生成断言 + 无占位符快照（DEF-11） |
+| ANTI-DRIFT-09 | 自我学习仅提议、须 approval | Prompt Lab 未审批不得改 activation 的断言（DEF-12） |
+| ANTI-DRIFT-10 | 自我学习只读训练、离线评估 | 不调用生产、不改线上 prompt 的断言 |
+
+### 16.9 可追溯性矩阵（补 §12）
+
+| 设计项 | 缺陷 | 实现文件 | 测试 |
+|---|---|---|---|
+| 代码智能接入 | DEF-10 | `code_intelligence_adapter.py`(复用)、façade、`build_context_pack`、`assistant_code_context_refs` | `test_code_intel_context_injection.py` |
+| 主动晨报 | DEF-11 | orchestrator 定时任务、`assistant_proactive_reports` | `test_proactive_report_generation.py` |
+| Reflection Card | DEF-12 | `assistant_reflection_cards`、curator | `test_reflection_card_loop.py` |
+| Prompt Lab | DEF-12 | `assistant_prompt_lab_runs`、GEPA/DSPy+judge | `test_prompt_lab_gepa_offline.py` / `_judge_gated.py` |
+| 技能库 | DEF-12 | `assistant_skill_library`、L4 课程 | `test_skill_library.py` |
+
+### 16.10 Design Acceptance Index（补 §13）
+
+| 编号 | 用户要求 | 设计位置 | 验收标准 |
+|---|---|---|---|
+| DAI-CODE-001 | 代码智能助 LLM 理解任务/跨模块 | L1.6 §16.4 | 代码 query 的 pack `code_context_refs` 非空且带 provenance |
+| DAI-CODE-002 | 代码图无 embedding、AST 确定性 | L1.6 §16.4 | 无 embedding 依赖；纯 adapter/AST 输出 |
+| DAI-REPORT-001 | 主动晨报/汇报 | L6 §16.5 | 真实生成、证据优先、只读 |
+| DAI-LEARN-001 | 自我学习/提示词自改进 | L7 §16.6 | Reflection + Prompt Lab + 技能库 |
+| DAI-LEARN-002 | 自改进受门禁 | L7 §16.6 | 仅候选，approval 后激活；不自动上线 |
+| DAI-DRIFT-002 | 增补项无漂移 | §16.8/§16.9 | 矩阵无空行；消费/门禁断言存在 |
+
+### 16.11 边界
+
+- 本章 DDL（§16.4/16.5/16.6）均触发 `production_ddl_gate`，实现 PR 逐项报告 COMMENT 与幂等性，生产库由用户决定执行时机。
+- 代码智能不替代 nox/pytest/CI/生产门禁；自我学习不自动改线上提示词/策略；主动汇报只读。
+- 本 PR 仍为 docs-only：`production_ddl_gate=noop`、`production_backend_dependency_gate=noop`、`production_frontend_dependency_gate=noop`。
