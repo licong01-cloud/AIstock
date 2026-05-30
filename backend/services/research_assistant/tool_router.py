@@ -23,6 +23,14 @@ TOOL_HINTS: tuple[tuple[McpDomain, tuple[str, ...], str], ...] = (
     (McpDomain.QE_WAREHOUSE, ("outbox",), "qe_archive_list_outbox"),
     (McpDomain.QE_WAREHOUSE, ("backfill", "ruku", "louruku", "bulu"), "qe_archive_backfill_preview"),
     (McpDomain.QE_WAREHOUSE, ("source status", "source"), "qe_archive_get_source_status"),
+    (McpDomain.QE_WAREHOUSE, ("view", "views", "analytics view", "available views", "分析视图"), "qe_archive_query_analytics_view_status"),
+    (McpDomain.QE_WAREHOUSE, ("leaderboard", "run leaderboard", "ranking", "best run", "排行榜"), "qe_archive_query_run_leaderboard"),
+    (McpDomain.QE_WAREHOUSE, ("factor performance", "factor footprint", "因子表现"), "qe_archive_query_factor_performance"),
+    (McpDomain.QE_WAREHOUSE, ("model hyperparam", "hyperparam seed", "超参", "seed perf"), "qe_archive_query_model_hyperparam_seed_perf"),
+    (McpDomain.QE_WAREHOUSE, ("seed robustness", "seed stable", "seed stability", "种子鲁棒性", "seed"), "qe_archive_query_seed_robustness"),
+    (McpDomain.QE_WAREHOUSE, ("overfit", "suspicious", "red flag", "过拟合", "红旗"), "qe_archive_query_overfit_flags"),
+    (McpDomain.QE_WAREHOUSE, ("promotion candidate", "promote candidate", "晋升候选", "晋升榜"), "qe_archive_query_promotion_candidates"),
+    (McpDomain.QE_WAREHOUSE, ("lineage", "evolution lineage", "演进血缘", "血缘"), "qe_archive_query_evolution_lineage"),
     (McpDomain.QE_EXPERIMENT, ("template", "materialize"), "qe_template_create"),
     (McpDomain.QE_EXPERIMENT, ("loop", "compare"), "qe_custom_evo_loop_comparison"),
     (McpDomain.VALIDATION_ISSUE, ("sync", "close", "finish", "同步", "关闭", "完成"), "mcp_github_issue_sync_bug"),
@@ -81,6 +89,15 @@ def score_domains(message: str) -> list[dict[str, Any]]:
                 score += 3 if len(term) >= 3 else 1
                 matched.append(term)
         if spec.domain == McpDomain.QE_WAREHOUSE and _contains_any(lower, WAREHOUSE_TERMS):
+            score += 8
+        if spec.domain == McpDomain.QE_WAREHOUSE and any(
+            token in lower
+            for token in (
+                "leaderboard", "seed robustness", "promotion candidate", "overfit", "lineage",
+                "hyperparam seed", "factor performance", "analytics view", "排行榜", "种子鲁棒性",
+                "晋升候选", "过拟合", "演进血缘", "分析视图",
+            )
+        ):
             score += 8
         if spec.domain == McpDomain.LOCAL_DATA and _contains_any(lower, WAREHOUSE_TERMS):
             score -= 6

@@ -160,6 +160,14 @@ def test_repository_exposes_phase_one_write_methods() -> None:
         "query_model_trials",
         "query_seed_trials",
         "query_hyperparam_history",
+        "get_analytics_view_status",
+        "query_run_leaderboard",
+        "query_seed_robustness",
+        "query_factor_performance",
+        "query_model_hyperparam_seed_perf",
+        "query_overfit_flags",
+        "query_promotion_candidates",
+        "query_evolution_lineage",
     )
 
     for method_name in expected_methods:
@@ -1414,6 +1422,65 @@ def test_qe_archive_runs_api_returns_selectable_quality_sources(monkeypatch) -> 
     assert data[0]["run_id"] == "qear_run_1"
     assert data[0]["loop_id"] == "loop_3"
 
+
+
+
+def test_qe_archive_analytics_api_exposes_compact_view_queries(monkeypatch) -> None:
+    class FakeRepository:
+        def get_analytics_view_status(self):  # type: ignore[no-untyped-def]
+            return [{"view_name": "v_run_leaderboard", "available": True, "row_count": 2}]
+
+        def query_run_leaderboard(self, **kwargs):  # type: ignore[no-untyped-def]
+            assert kwargs == {"model_type": "LSTM", "min_icir": 0.5, "min_ir": None, "limit": 7, "order_by": "icir"}
+            return [{"run_id": "run_1", "icir": 0.6}]
+
+        def query_seed_robustness(self, **kwargs):  # type: ignore[no-untyped-def]
+            assert kwargs == {"model_type": None, "min_seed_count": 3, "stable_only": True, "limit": 5, "order_by": "cagr_mean"}
+            return [{"factor_set_hash": "hash", "distinct_seed_count": 3}]
+
+        def query_factor_performance(self, **kwargs):  # type: ignore[no-untyped-def]
+            assert kwargs == {"factor_name": "alpha_001", "min_runs": 2, "limit": 4, "order_by": "avg_icir"}
+            return [{"factor_name": "alpha_001", "run_count": 2}]
+
+        def query_model_hyperparam_seed_perf(self, **kwargs):  # type: ignore[no-untyped-def]
+            assert kwargs == {"model_type": "LSTM", "hyperparam_hash": None, "limit": 6, "order_by": "cagr"}
+            return [{"model_type": "LSTM", "hyperparam_hash": "abc"}]
+
+        def query_overfit_flags(self, **kwargs):  # type: ignore[no-untyped-def]
+            assert kwargs == {"suspicious_only": True, "model_type": None, "limit": 3}
+            return [{"run_id": "run_2", "is_suspicious": True}]
+
+        def query_promotion_candidates(self, **kwargs):  # type: ignore[no-untyped-def]
+            assert kwargs == {"model_type": None, "min_seed_count": 5, "limit": 8, "order_by": "ir_mean"}
+            return [{"factor_set_hash": "hash", "passes_gate": True}]
+
+        def query_evolution_lineage(self, **kwargs):  # type: ignore[no-untyped-def]
+            assert kwargs == {"task_id": "task_1", "experiment_id": None, "model_type": None, "limit": 9}
+            return [{"task_id": "task_1", "loop_index": 1}]
+
+    monkeypatch.setattr(qe_archive_router, "get_repository", lambda: FakeRepository())
+    app = FastAPI()
+    app.include_router(qe_archive_router.router, prefix="/api/v1")
+    client = TestClient(app)
+
+    cases = [
+        ("/api/v1/qe-archive/analytics/views", None, "v_run_leaderboard"),
+        ("/api/v1/qe-archive/analytics/run-leaderboard?model_type=LSTM&min_icir=0.5&limit=7&order_by=icir", "run_id", "run_1"),
+        ("/api/v1/qe-archive/analytics/seed-robustness?min_seed_count=3&stable_only=true&limit=5", "factor_set_hash", "hash"),
+        ("/api/v1/qe-archive/analytics/factor-performance?factor_name=alpha_001&min_runs=2&limit=4&order_by=avg_icir", "factor_name", "alpha_001"),
+        ("/api/v1/qe-archive/analytics/model-hyperparam-seed-perf?model_type=LSTM&limit=6", "model_type", "LSTM"),
+        ("/api/v1/qe-archive/analytics/overfit-flags?limit=3", "run_id", "run_2"),
+        ("/api/v1/qe-archive/analytics/promotion-candidates?min_seed_count=5&limit=8&order_by=ir_mean", "factor_set_hash", "hash"),
+        ("/api/v1/qe-archive/analytics/evolution-lineage?task_id=task_1&limit=9", "task_id", "task_1"),
+    ]
+    for url, key, expected in cases:
+        response = client.get(url)
+        assert response.status_code == 200
+        data = response.json()["data"]
+        if key is None:
+            assert data[0]["view_name"] == expected
+        else:
+            assert data[0][key] == expected
 
 def test_event_capture_is_disabled_by_default_and_does_not_write(monkeypatch) -> None:
     class FakeRepository:

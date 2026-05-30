@@ -46,7 +46,7 @@ def test_research_assistant_catalog_sources_keep_real_utf8_chinese() -> None:
 def test_default_catalog_contains_all_current_and_new_mcp_tools() -> None:
     catalog = load_catalog()
     assert catalog["server_count"] == 12
-    assert catalog["tool_count"] == 191
+    assert catalog["tool_count"] == 199
     assert {item["server_key"] for item in default_mcp_servers()} == {
         "research-assistant",
         "aistock-research",
@@ -73,17 +73,22 @@ def test_default_catalog_contains_all_current_and_new_mcp_tools() -> None:
 
     local_data_tools = [tool for tool in default_mcp_tools() if tool["server_key"] == "aistock-local-data"]
     assert len(local_data_tools) == 47
+    qe_archive_tools = [tool for tool in default_mcp_tools() if tool["server_key"] == "aistock-qe-archive"]
+    assert len(qe_archive_tools) == 28
+    assert any(tool["tool_name"] == "qe_archive_query_run_leaderboard" for tool in qe_archive_tools)
+    assert any(tool["tool_name"] == "qe_archive_query_promotion_candidates" for tool in qe_archive_tools)
 
 
 def test_seed_catalogs_registers_all_mcp_tools_and_capability_reply_is_humanized() -> None:
     svc = ResearchAssistantService(repository=InMemoryResearchAssistantRepository())
     result = svc.seed_catalogs()
     assert result["seeded"]["mcp_servers"] == 12
-    assert result["seeded"]["mcp_tools"] == 191
+    assert result["seeded"]["mcp_tools"] == 199
 
     tools = svc.repository.list_records("mcp_tools", limit=300)["items"]
-    assert len(tools) == 191
+    assert len(tools) == 199
     assert any(tool["server_key"] == "aistock-factor-library" and tool["tool_name"] == "factor_library_list" for tool in tools)
+    assert any(tool["server_key"] == "aistock-qe-archive" and tool["tool_name"] == "qe_archive_query_seed_robustness" for tool in tools)
     assert any(tool["server_key"] == "aistock-execution-policy" and tool["tool_name"] == "execution_policy_bind_confirmed" for tool in tools)
 
     catalog = svc._mcp_tool_catalog_snapshot()
