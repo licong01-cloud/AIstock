@@ -78,6 +78,10 @@ Code intelligence is non-blocking in KG-1/KG-3. If CodeGraph is installed and `.
 Warnings about a dirty canonical root are not permission to write there. They mean root sync/cleanup must stop until the unrelated work is resolved. New issue registration and fixes should continue only in a clean task or registry worktree.
 
 `--output` is a JSON file path, not an output format selector. Omit it for stdout or use `--output -`; do not pass `--output json`. File outputs should use an explicit path, preferably under `tmp/issue_workflow/` or `tmp/validation/`, so a client typo cannot create root-level files such as `json`.
+
+Stdout defaults to compact success output. A passing workflow command should show only the gate, issue id, branch/worktree or PR pointers, validation/CI counts, production gates, and the next action. Do not paste full JSON payloads, full `statusCheckRollup`, `recent_events`, skipped validation maps, or nox internals into chat when the command passed. Use `--output-format full-json` for local debugging, or `--output tmp/issue_workflow/<BUG-ID>/<name>.json` to persist full details as an ignored artifact. Failure output may include the smallest diagnostic signature needed to reproduce or unblock.
+
+Close-sync-only PRs that change only BUG JSON/status evidence should be treated as metadata aftercare. The workflow should summarize their CI/check state by counts and non-blocking skipped jobs; the long-term CI optimization is a fast metadata lane instead of re-running the full backend matrix for one registry-status file.
 ## Fast Path And Smoke Check
 
 Use `fast-path` when a client needs a cheap, machine-readable plan before loading more context:

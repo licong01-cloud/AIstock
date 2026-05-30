@@ -55,10 +55,64 @@ def _write_json(path: Path, payload: dict[str, Any]) -> Path:
 def test_emit_dash_writes_stdout_without_dash_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.chdir(tmp_path)
 
-    workflow._emit({"ok": True}, "-")
+    workflow._emit({"ok": True}, "-", output_format="full-json")
 
     assert json.loads(capsys.readouterr().out) == {"ok": True}
     assert not (tmp_path / "-").exists()
+
+
+def test_emit_defaults_to_compact_success_payload(capsys: pytest.CaptureFixture[str]) -> None:
+    workflow._emit(
+        {
+            "schema_version": "aistock_issue_workflow_smoke_v1",
+            "workflow_gate": "passed",
+            "bug_id": "BUG-199",
+            "fast_path": {"task_tier": "T1", "module": "validation", "validation": {"skip_reasons": {"x": "noisy"}}},
+            "postmortem_preview": {"recent_events": [{"event": "noisy"}], "timing_summary": {"event_count": 1}},
+            "statusCheckRollup": [{"name": "noisy"}],
+        }
+    )
+
+    out = capsys.readouterr().out
+    compact = json.loads(out)
+    assert compact["workflow_gate"] == "passed"
+    assert compact["full_payload"].startswith("use --output-format full-json")
+    assert "statusCheckRollup" not in out
+    assert "recent_events" not in out
+    assert "skip_reasons" not in out
+
+
+def test_emit_full_json_preserves_payload(capsys: pytest.CaptureFixture[str]) -> None:
+    payload = {
+        "schema_version": "aistock_issue_workflow_smoke_v1",
+        "workflow_gate": "passed",
+        "statusCheckRollup": [{"name": "Static gate"}],
+    }
+
+    workflow._emit(payload, output_format="full-json")
+
+    assert json.loads(capsys.readouterr().out)["statusCheckRollup"][0]["name"] == "Static gate"
+
+
+def test_emit_output_file_keeps_full_payload_while_stdout_is_compact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(workflow, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: tmp_path)
+    output = tmp_path / "tmp" / "issue_workflow" / "BUG-199" / "full.json"
+    payload = {
+        "schema_version": "aistock_issue_workflow_smoke_v1",
+        "workflow_gate": "passed",
+        "statusCheckRollup": [{"name": "Static gate"}],
+    }
+
+    workflow._emit(payload, str(output))
+
+    assert "statusCheckRollup" not in capsys.readouterr().out
+    assert json.loads(output.read_text(encoding="utf-8"))["statusCheckRollup"][0]["name"] == "Static gate"
 
 
 def test_emit_rejects_format_token_without_creating_root_file(
@@ -217,7 +271,7 @@ def test_finish_plan_selects_validation_and_requires_evidence(
     ready = json.loads(capsys.readouterr().out)
     assert ready["workflow_gate"] == "ready_for_pr"
     assert "l0" in ready["required_verification"]
-    assert ready["artifact_metrics"]["pr_body"]["estimated_tokens"] > 0
+    assert "artifact_metrics" not in ready
     assert (isolated_workflow_root / ready["pr_body_path"]).exists()
 
 

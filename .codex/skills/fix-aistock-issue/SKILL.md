@@ -22,6 +22,7 @@ English trigger example: `fix BUG-112 according to AIstock standards; do not mer
 - Do not touch production runtime services, write production DB, or apply DDL without explicit approval.
 - Preserve per-issue evidence even when batching same-module issues.
 - Stop and report when BUG JSON lacks GitHub linkage, has a closed status, needs scope expansion, lacks validation evidence, or `doctor` returns `workflow_gate=blocked`.
+- Successful workflow/validation commands should stay compact: do not paste full JSON payloads, full `statusCheckRollup`, `recent_events`, or skipped-plan maps into chat. Use default compact stdout for decisions, and use `--output-format full-json` or `--output tmp/issue_workflow/<BUG>/...json` only when exact diagnostics are needed.
 
 ## Workflow
 
