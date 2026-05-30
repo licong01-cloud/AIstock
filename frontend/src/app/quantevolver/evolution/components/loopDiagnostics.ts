@@ -314,15 +314,15 @@ export function extractLoopDiagnostics(loop: LoopLike, overrideEnhanced?: AnyRec
     "final_account",
     "final_nav_value",
   ]);
-  const finalCash = firstNumber(positionSources, ["final_cash", "final_cash_amount", "cash"]);
+  const finalCash = firstNumber(positionSources, ["final_cash", "final_cash_amount", "ending_cash", "end_cash", "cash"]);
   const position: LoopPositionDiagnostics = {
-    minCount: firstNumber(positionSources, ["position_count_min", "min_position_count", "holding_count_min", "min_holding_count"]),
-    avgCount: firstNumber(positionSources, ["position_count_avg", "avg_position_count", "holding_count_avg", "avg_holding_count"]),
-    maxCount: firstNumber(positionSources, ["position_count_max", "max_position_count", "holding_count_max", "max_holding_count"]),
+    minCount: firstNumber(positionSources, ["position_count_min", "min_position_count", "holding_count_min", "min_holding_count", "min_holdings"]),
+    avgCount: firstNumber(positionSources, ["position_count_avg", "avg_position_count", "holding_count_avg", "avg_holding_count", "average_holding_count", "avg_holdings", "average_holdings"]),
+    maxCount: firstNumber(positionSources, ["position_count_max", "max_position_count", "holding_count_max", "max_holding_count", "max_holdings"]),
     p95Count: firstNumber(positionSources, ["position_count_p95", "p95_position_count", "holding_count_p95", "p95_holding_count"]),
     finalStockCount: firstNumber(positionSources, ["final_stock_count", "final_position_count", "end_position_count"]),
     finalCash,
-    finalStockValue: firstNumber(positionSources, ["final_stock_value", "final_stock_market_value", "final_value", "stock_market_value"]),
+    finalStockValue: firstNumber(positionSources, ["final_stock_value", "final_stock_market_value", "ending_stock_market_value", "end_stock_market_value", "final_value", "stock_market_value"]),
     finalTotalValue,
     finalCashRatio: firstNumber(positionSources, ["final_cash_ratio"]) ?? (
       finalCash !== undefined && finalTotalValue !== undefined && finalTotalValue !== 0 ? finalCash / finalTotalValue : undefined
