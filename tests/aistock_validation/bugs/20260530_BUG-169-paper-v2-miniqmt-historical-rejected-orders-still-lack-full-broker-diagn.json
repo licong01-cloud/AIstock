@@ -32,8 +32,8 @@
   "expected": "Every persisted MiniQMT rejected order, including orders reconciled after BUG-163, exposes broker raw status, full or best-available status_msg, rejection classification, broker_diagnostic, broker audit, native order id, and an explicit gap marker if the broker only returns truncated text. Historical rows should either be repairable by an audited reconciliation/backfill flow or clearly marked as pre-fix diagnostic gaps without pretending complete evidence exists.",
   "first_seen_at": "2026-05-29T18:56:57.061924Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "8699144b79a51536744c2fcc0a7dfc2130e34a69",
+  "fixed_at": "2026-05-30T00:18:14.412423Z",
   "github_issue_number": 407,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/407",
   "last_seen_at": "2026-05-29T18:56:57.061924Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/408",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -53,7 +54,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -62,5 +63,9 @@
     "fingerprint": "64a9239c04cb90cfeb92aeed",
     "source_event_id": "FE-20260530-64a9239c04cb"
   },
+  "validation_evidence": [
+    "PR #408 CI: Static gate, PR Quality, Semgrep, CodeQL, and backend matrix passed; Auto-register CI failures skipped because no CI failures",
+    "local: py_compile, ruff, targeted pytest, nox l0, paper_v2_backend, validation_center_backend, validation_module_registry_l0, paper_v2_l3(skip UI) all passed"
+  ],
   "verification_run_id": null
 }
