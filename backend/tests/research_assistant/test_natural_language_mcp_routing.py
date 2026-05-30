@@ -98,6 +98,27 @@ def test_utf8_chinese_catalog_questions_route_to_summary_first_read_tools() -> N
         assert route["side_effect"] == side_effect
 
 
+
+
+def test_qe_archive_analytics_terms_select_view_tools() -> None:
+    cases = {
+        "QE 数仓分析视图是否已经创建": "qe_archive_query_analytics_view_status",
+        "查看 QE run leaderboard 最好的模型": "qe_archive_query_run_leaderboard",
+        "分析 QE seed robustness 和种子鲁棒性": "qe_archive_query_seed_robustness",
+        "最近因子表现 factor performance 怎么样": "qe_archive_query_factor_performance",
+        "模型超参和 seed 性能分析": "qe_archive_query_model_hyperparam_seed_perf",
+        "检查 QE 过拟合红旗": "qe_archive_query_overfit_flags",
+        "有哪些晋升候选配置": "qe_archive_query_promotion_candidates",
+        "查看 QE 演进血缘 lineage": "qe_archive_query_evolution_lineage",
+    }
+    for message, tool in cases.items():
+        route = route_request(message)
+        assert route["domain"] == "qe_warehouse"
+        assert route["server_key"] == "aistock-qe-archive"
+        assert route["tool_name"] == tool
+        assert route["side_effect"] == "read_only"
+
+
 def test_bug_160_utf8_chinese_business_mcp_overviews_are_routed() -> None:
     cases = {
         "\u56e0\u5b50\u5e93\u6709\u54ea\u4e9b\u56e0\u5b50\uff1f\u53ea\u8981\u6982\u8981\u5217\u8868\uff0c\u4e0d\u8981\u5168\u91cf\u8be6\u60c5\u3002": ("factor_library", "aistock-factor-library", "factor_library_list"),
