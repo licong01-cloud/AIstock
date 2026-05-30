@@ -1148,11 +1148,31 @@ def _expose_order_diagnostics(row: dict[str, Any]) -> dict[str, Any]:
         "broker_rejection_reason",
         "broker_status_raw",
         "broker_audit",
+        "broker_error_code",
+        "broker_rejection_classification",
+        "diagnostic_completeness",
+        "diagnostic_gap",
+        "diagnostic_gap_reason",
+        "status_msg_best_available",
+        "status_msg_maybe_truncated",
+        "status_msg_encoding_warning",
     ):
         if enriched.get(key) is None and metadata.get(key) is not None:
             enriched[key] = metadata.get(key)
     if enriched.get("broker_diagnostic") is None and diagnostic:
         enriched["broker_diagnostic"] = diagnostic
+    for key in (
+        "broker_error_code",
+        "broker_rejection_classification",
+        "diagnostic_completeness",
+        "diagnostic_gap",
+        "diagnostic_gap_reason",
+        "status_msg_best_available",
+        "status_msg_maybe_truncated",
+        "status_msg_encoding_warning",
+    ):
+        if enriched.get(key) is None and diagnostic.get(key) is not None:
+            enriched[key] = diagnostic.get(key)
     if enriched.get("status_msg") is None:
         enriched["status_msg"] = enriched.get("broker_status_msg") or enriched.get("broker_rejection_reason")
     if enriched.get("error_msg") is None:

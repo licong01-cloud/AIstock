@@ -410,7 +410,15 @@ class MiniQMTSimBackend(BrokerBackend):
         )
         order = self._find_qmt_order(record)
         if order is None:
-            return pending
+            return pending.model_copy(
+                update={
+                    "raw": {
+                        **pending.raw,
+                        "diagnostic_gap": True,
+                        "diagnostic_gap_reason": "native_order_snapshot_not_found",
+                    }
+                }
+            )
         return self._status_from_order(record, order)
 
     def query_trades_from_native(

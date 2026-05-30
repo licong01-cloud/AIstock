@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import UTC, date, datetime
 from typing import Any, Callable
 
@@ -1731,6 +1732,25 @@ class PaperTradingDayRunner:
                     audit_after=audit_after,
                     authority_source="MINIQMT_NATIVE_RECONCILE",
                 )
+                native_reconcile_event = self._miniqmt_native_terminal_order_event(
+                    run_id=run.run_id,
+                    previous_order=order,
+                    final_order=final_order,
+                    status=status,
+                    native=native,
+                    visible_trade_count=len(trade_rows),
+                    audit_before=audit_before,
+                    audit_after=audit_after,
+                )
+                if native_reconcile_event is not None:
+                    self.repository.save_order_event(run.run_id, native_reconcile_event)
+                    order_events.append(native_reconcile_event)
+                    self.repository.save_run_event(
+                        run_id=run.run_id,
+                        event_type=f"MINIQMT_NATIVE_ORDER_{native_reconcile_event.event_type.value}_RECONCILED",
+                        message="MiniQMT native terminal order state reconciled with broker diagnostic context",
+                        context=native_reconcile_event.metadata,
+                    )
                 self.repository.save_order(run.run_id, final_order)
                 if session_id:
                     self.repository.save_order_execution_state(
@@ -1854,6 +1874,91 @@ class PaperTradingDayRunner:
         return order.model_copy(update={"metadata": metadata})
 
     @classmethod
+    def _miniqmt_native_terminal_order_event(
+        cls,
+        *,
+        run_id: str,
+        previous_order: Any,
+        final_order: Any,
+        status: Any,
+        native: dict[str, Any],
+        visible_trade_count: int,
+        audit_before: dict[str, Any] | None,
+        audit_after: dict[str, Any] | None,
+    ) -> OrderEvent | None:
+        broker_state = cls._miniqmt_order_status_from_handle(status)
+        if broker_state not in {OrderStatus.REJECTED, OrderStatus.CANCELLED}:
+            return None
+        if not cls._miniqmt_needs_terminal_diagnostic_event(previous_order, final_order, status):
+            return None
+        diagnostic = cls._miniqmt_order_diagnostic(
+            status=status,
+            native=native,
+            visible_trade_count=visible_trade_count,
+            audit_before=audit_before,
+            audit_after=audit_after,
+            authority_source="MINIQMT_NATIVE_RECONCILE",
+        )
+        event_type = OrderEventType.REJECTED if broker_state == OrderStatus.REJECTED else OrderEventType.CANCELLED
+        metadata = {
+            **diagnostic,
+            "previous_paper_status": previous_order.status.value,
+            "paper_order_status": final_order.status.value,
+            "terminal_reconcile_event": True,
+        }
+        return OrderEvent(
+            event_id=cls._miniqmt_native_terminal_event_id(
+                run_id=run_id,
+                order_id=final_order.order_id,
+                event_type=event_type,
+                status=status,
+                native=native,
+            ),
+            order_id=final_order.order_id,
+            event_type=event_type,
+            event_time=status.last_event_at,
+            reason=status.rejection_reason or status.status_msg or f"MiniQMT order {broker_state.value.lower()}",
+            metadata=metadata,
+        )
+
+    @classmethod
+    def _miniqmt_needs_terminal_diagnostic_event(cls, previous_order: Any, final_order: Any, status: Any) -> bool:
+        if previous_order.status != final_order.status:
+            return True
+        metadata = previous_order.metadata if isinstance(previous_order.metadata, dict) else {}
+        diagnostic = metadata.get("broker_diagnostic") if isinstance(metadata.get("broker_diagnostic"), dict) else {}
+        if not diagnostic:
+            return True
+        if metadata.get("broker_status") != status.state:
+            return True
+        if metadata.get("broker_raw_status") != status.raw_status:
+            return True
+        if status.status_msg and metadata.get("broker_status_msg") != status.status_msg:
+            return True
+        return False
+
+    @staticmethod
+    def _miniqmt_native_terminal_event_id(
+        *,
+        run_id: str,
+        order_id: str,
+        event_type: OrderEventType,
+        status: Any,
+        native: dict[str, Any],
+    ) -> str:
+        payload = {
+            "run_id": run_id,
+            "order_id": order_id,
+            "event_type": event_type.value,
+            "miniqmt_order_id": native.get("miniqmt_order_id"),
+            "broker_status": status.state,
+            "broker_raw_status": status.raw_status,
+            "broker_status_msg": status.status_msg,
+        }
+        digest = hashlib.sha256(json.dumps(payload, ensure_ascii=True, sort_keys=True).encode("utf-8")).hexdigest()
+        return f"evt_minqmt_native_{digest[:24]}"
+
+    @classmethod
     def _miniqmt_metadata_with_status(
         cls,
         metadata: dict[str, Any] | None,
@@ -1885,6 +1990,12 @@ class PaperTradingDayRunner:
             "broker_status_raw": status.raw,
             "broker_diagnostic": diagnostic,
             "broker_audit": diagnostic["broker_audit"],
+            "broker_error_code": diagnostic.get("broker_error_code"),
+            "broker_rejection_classification": diagnostic.get("broker_rejection_classification"),
+            "diagnostic_completeness": diagnostic.get("diagnostic_completeness"),
+            "diagnostic_gap": diagnostic.get("diagnostic_gap", False),
+            "status_msg_best_available": diagnostic.get("status_msg_best_available"),
+            "status_msg_maybe_truncated": diagnostic.get("status_msg_maybe_truncated", False),
             "miniqmt_trade_count": visible_trade_count,
             **native,
         }
@@ -1900,6 +2011,9 @@ class PaperTradingDayRunner:
         audit_after: dict[str, Any] | None,
         authority_source: str = "MINIQMT",
     ) -> dict[str, Any]:
+        status_msg_quality = cls._miniqmt_status_msg_quality(status.status_msg, status.raw)
+        diagnostic_gap = bool(status_msg_quality.get("diagnostic_gap") or status.raw.get("diagnostic_gap"))
+        gap_reason = status.raw.get("diagnostic_gap_reason") or status_msg_quality.get("diagnostic_gap_reason")
         return {
             "schema_version": "miniqmt_order_diagnostic_v1",
             "broker_backend": "minqmt_sim",
@@ -1913,6 +2027,15 @@ class PaperTradingDayRunner:
             "broker_status_msg": status.status_msg,
             "broker_rejection_reason": status.rejection_reason,
             "broker_status_raw": status.raw,
+            "broker_error_code": cls._miniqmt_broker_error_code(status.status_msg),
+            "broker_rejection_classification": cls._miniqmt_rejection_classification(status),
+            "diagnostic_completeness": status_msg_quality["diagnostic_completeness"],
+            "diagnostic_gap": diagnostic_gap,
+            "diagnostic_gap_reason": gap_reason,
+            "status_msg_best_available": status.status_msg,
+            "status_msg_present": status_msg_quality["status_msg_present"],
+            "status_msg_maybe_truncated": status_msg_quality["status_msg_maybe_truncated"],
+            "status_msg_encoding_warning": status_msg_quality["status_msg_encoding_warning"],
             "visible_trade_count": visible_trade_count,
             "broker_audit": cls._miniqmt_audit_pair(audit_before, audit_after),
         }
@@ -1955,6 +2078,74 @@ class PaperTradingDayRunner:
         if context.get("message") is not None:
             native["broker_submit_message"] = context.get("message")
         return native
+
+    @staticmethod
+    def _miniqmt_broker_error_code(status_msg: str | None) -> str | None:
+        if not status_msg:
+            return None
+        match = re.search(r"\[(\d{6})\]", status_msg)
+        return match.group(1) if match else None
+
+    @staticmethod
+    def _miniqmt_rejection_classification(status: Any) -> str | None:
+        if status.state != "rejected":
+            return None
+        error_code = PaperTradingDayRunner._miniqmt_broker_error_code(status.status_msg)
+        if error_code:
+            return f"counter_{error_code}"
+        return "broker_rejected"
+
+    @staticmethod
+    def _miniqmt_status_msg_quality(status_msg: str | None, raw: dict[str, Any]) -> dict[str, Any]:
+        message = str(status_msg or "")
+        if raw.get("diagnostic_gap"):
+            return {
+                "diagnostic_completeness": "missing_broker_order_snapshot",
+                "diagnostic_gap": True,
+                "diagnostic_gap_reason": raw.get("diagnostic_gap_reason") or "native_order_snapshot_not_found",
+                "status_msg_present": bool(message),
+                "status_msg_maybe_truncated": False,
+                "status_msg_encoding_warning": False,
+            }
+        if not message:
+            return {
+                "diagnostic_completeness": "broker_status_msg_unavailable",
+                "diagnostic_gap": True,
+                "diagnostic_gap_reason": "broker_status_msg_missing",
+                "status_msg_present": False,
+                "status_msg_maybe_truncated": False,
+                "status_msg_encoding_warning": False,
+            }
+        mojibake_tokens = ("\u00c3", "\u00c2", "\u00e5", "\u00e6", "\u00e4")
+        encoding_warning = "\ufffd" in message or any(token in message for token in mojibake_tokens)
+        maybe_truncated = message.count("[") > message.count("]") or message.endswith(("[", ":", ";"))
+        code_only = re.fullmatch(r"(?:\[[^\]]+\])+", message) is not None
+        if maybe_truncated or encoding_warning:
+            return {
+                "diagnostic_completeness": "broker_status_msg_truncated_or_encoding_uncertain",
+                "diagnostic_gap": True,
+                "diagnostic_gap_reason": "broker_status_msg_truncated_or_encoding_uncertain",
+                "status_msg_present": True,
+                "status_msg_maybe_truncated": True,
+                "status_msg_encoding_warning": encoding_warning,
+            }
+        if code_only:
+            return {
+                "diagnostic_completeness": "broker_status_msg_code_only",
+                "diagnostic_gap": True,
+                "diagnostic_gap_reason": "broker_status_msg_code_only",
+                "status_msg_present": True,
+                "status_msg_maybe_truncated": False,
+                "status_msg_encoding_warning": False,
+            }
+        return {
+            "diagnostic_completeness": "best_available",
+            "diagnostic_gap": False,
+            "diagnostic_gap_reason": None,
+            "status_msg_present": True,
+            "status_msg_maybe_truncated": False,
+            "status_msg_encoding_warning": False,
+        }
 
     @staticmethod
     def _miniqmt_audit_pair(
