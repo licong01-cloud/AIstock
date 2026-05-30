@@ -71,7 +71,7 @@
   "first_seen_at": "2026-05-30T09:37:51.397422Z",
   "fix_branch": "bug/BUG-170-qe-archive-analytics-views-missing-in-production-20260530",
   "fix_commit": "ba698670c9ef8fb9a5557c11d1c68bd51938a5a6",
-  "fixed_at": "2026-05-30T12:19:31.508933Z",
+  "fixed_at": "2026-05-30T12:24:02.375648Z",
   "github_issue_number": 411,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/411",
   "last_seen_at": "2026-05-30T09:37:51.397422Z",
