@@ -32,8 +32,8 @@
   "expected": "Evolution trajectory overview computes best loop only from comparable complete metrics and exposes/derives required portfolio fields: CAGR, absolute MaxDD, Sharpe, average holdings, max holdings, ending cash, and stock market value.",
   "first_seen_at": "2026-05-30T12:22:12.711216Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "ebb224cc557cbbae5d6bd1c34a61514358b950e5",
+  "fixed_at": "2026-05-30T15:24:58.441189Z",
   "github_issue_number": 414,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/414",
   "last_seen_at": "2026-05-30T12:22:12.711216Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/415",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "qe"
   ],
@@ -61,6 +62,13 @@
     "fingerprint": "8d43402e2bcf89383d10a3cd",
     "source_event_id": "FE-20260530-8d43402e2bcf"
   },
+  "validation_evidence": [
+    "git diff --check -> passed",
+    "npm/next lint LoopMetricsComparison.tsx loopDiagnostics.ts -> passed",
+    "PLAYWRIGHT_SKIP_WEBSERVER=1 playwright qe-evolution-best-loop-ui.spec.ts -> passed",
+    "python -m nox -s l0 -> passed",
+    "GitHub PR checks: 14 passed; CI failure auto-register job skipped because no failure -> passed"
+  ],
   "verification_run_id": null,
   "workflow_gate": "fix_ready"
 }
