@@ -37,7 +37,7 @@
   "first_seen_at": "2026-05-31T15:51:22.104953Z",
   "fix_branch": null,
   "fix_commit": "f7809e44986248bed7bc4ba8b547b9cab2bc6f70",
-  "fixed_at": "2026-05-31T16:17:51.085842Z",
+  "fixed_at": "2026-05-31T16:21:59.170540Z",
   "github_issue_number": 429,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/429",
   "last_seen_at": "2026-05-31T15:51:22.104953Z",
@@ -70,12 +70,7 @@
     "source_event_id": "FE-20260531-cd0317fc8e9d"
   },
   "validation_evidence": [
-    "python -m py_compile backend/services/quantevolver/payload_summary.py backend/services/quantevolver/qe_evolution_service.py -> passed",
-    "python -m pytest backend/tests/quantevolver/test_payload_summary.py backend/tests/unified_engine/test_qe_evolution_read_paths.py -q -> 14 passed",
-    "frontend Playwright source-level qe-evolution-best-loop-ui.spec.ts -> 4 passed",
-    "python -m nox -s l0 -> passed",
-    "python -m nox -s validation_module_registry_l0 -> passed",
-    "GitHub PR #433 required CI checks -> passed; only Auto-register CI failures skipped"
+    "PR #433 CI passed; PR #434 close-sync CI passed with only Auto-register CI failures skipped"
   ],
   "verification_run_id": null
 }
