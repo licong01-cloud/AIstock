@@ -26,6 +26,7 @@
 - **不得"建了不用"**：凡新增存储 / 表 / API，必须有"被推理链路真实消费"的断言测试（见第 11 章防漂移门禁）。
 - **不得设计丢失 / 业务断层**：第 1.3、第 2.2 节锁定全部前序设计来源（含已丢失的外部搜索设计），逐条说明承接方式。
 - **分阶段但不得降级**：第 10 章每个 Phase 都有独立验收标准；任一 DAI 未过，不得宣称"完整实现完成"。
+- **可移植/剥离是贯穿约束，不是尾部章节**：助手未来要能独立成产品、对接任意 MCP 应用，因此"核心-适配器解耦、最小化对 AIstock 的依赖"**必须在下面每一章、每个设计里就地考虑**（每章设「🔗 剥离考虑」小节标注 core/adapter 归属与解耦方式）。§17 仅是这些就地考虑的**汇总与横切规范**，不替代各章自身的剥离设计。**核心引擎不得直接依赖 AIstock 的 façade/DB/领域符号**（见 §2.1 原则 7、§11 ANTI-DRIFT-11）。
 
 ---
 
@@ -87,6 +88,7 @@
 4. **国产模型为主**：主推理 deepseek（`primary_reasoner`）；worker/反思/curator/压缩 用 glm/qwen（`cheap_worker`）；长上下文 qwen-long。与现有 `route_model` 三档对齐。
 5. **不引入替换性框架**：吸收 Claude Code / OpenClaw / LangGraph / AutoGen / Mem0 / MemTree 等的**理念**，在现有 FastAPI/PostgreSQL/litellm 上自建，不引入 LangGraph/CrewAI/Temporal 作为运行时依赖。
 6. **fail-fast**：无静默降级、无空 `except: pass`、无默认值掩盖错误（遵循 AIstock 开发标准 v1.5 §6.3-6.4）。
+7. **可移植性与核心解耦（贯穿每一层）**：每一层都区分 `assistant_product_core`（领域无关引擎）与 `aistock_domain_adapter`/`aistock_knowledge_pack`（AIstock 领域内容）。core 一律通过 **provider 接口**（MCP/Memory/Storage/Model/Skill/Channel/KnowledgePack）访问外部，**不得 import AIstock 的 façade/DB/业务 service/领域符号**；AIstock 只是"第一个 adapter"。目标姿态为**可移植接缝**（现在不物理拆包，但耦合点全部收敛到接口背后，未来剥离成本低）。每章的「🔗 剥离考虑」小节给出该层的 core/adapter 划分与解耦做法；汇总见 §17。
 
 ### 2.2 红线（禁止形态）
 
@@ -96,6 +98,7 @@
 - 禁止 Agent Teams 让模型自行决定高风险执行（高风险动作仍走 preflight + approval）。
 - 禁止 QE 自主演进绕过预算 / 停止条件 / 审批。
 - 禁止任何阶段触碰 `8001` / `3000`。
+- **禁止核心引擎直接耦合 AIstock**：`assistant_product_core` 模块不得 import/调用 AIstock 的 `8001` façade、AIstock DB schema、AIstock 业务 service 或领域符号；一切经 provider 接口。任何新增层/表/服务若把 AIstock 领域内容写死进 core，视为违规（见 §11 ANTI-DRIFT-11）。
 
 ---
 
@@ -124,6 +127,8 @@
 │
 └─ L5 范式兑现 + 验收门禁：对照兑现表 + 可追溯性矩阵 + 防漂移门禁
 ```
+
+> **每层都是 core + adapter 两半**：上图每一层的"机制/引擎"属 `assistant_product_core`（领域无关，经 provider 接口工作），其"AIstock 领域内容"（12 个 MCP、业务本体/图谱 seed、QE 方法论、股票证据规则、worker 定义）属 `aistock_domain_adapter` / `aistock_knowledge_pack`。各层正文末尾的「🔗 剥离考虑」小节给出具体划分；横切规范与 provider 接口清单见 §17。
 
 模型分级映射（沿用 `assistant_model_profiles` / `assistant_routing_policies`）：
 
@@ -225,6 +230,13 @@ def select_memory_branches(user_message: str, intent, *, repo, runtime_config) -
 
 **定位分工**：树负责"逐级分类召回"，图负责"关系/依赖遍历"，互补（GraphRAG / Zep-Graphiti 思路），均无 embedding。
 
+### 4.6 🔗 剥离考虑（core/adapter）
+
+- **core（`assistant_product_core`）**：树引擎（`parent_key`/`tree_path`/分类召回/collapsed 选择/`importance×recency` 打分/curator 自扩展/反思巩固）、`MEMORY_TYPES` 的通用维度（`core/episodic/user_preference/directive/habit/analysis_note/task_state`）、`Memory Provider` 与 `Storage Provider` 接口。记忆引擎**不认识** AIstock。
+- **adapter/pack（`aistock_knowledge_pack`）**：`project.*` 项目知识树的具体内容（AIstock 模块/MCP/红线本体）、知识图谱 seed（`module/consumes/owned_by`）、QE/Paper 来源绑定。
+- **解耦做法**：① 记忆读写一律经 `Memory/Storage Provider`，**不直连 AIstock DB**（当前默认实现指向 AIstock PostgreSQL，但通过接口）；② `project.*` 树与图谱 seed 作为**可加载知识包**，core 默认空树空图，加载 AIstock pack 后才有领域内容；③ `personal.*` 个人树与 AIstock 无关，天然可移植。
+- **最小依赖断言**：`memory_tree.py`/`graph_context.py` 不得 import AIstock 业务 service（§11 ANTI-DRIFT-11）。
+
 ---
 
 ## 5. L2：工具接地推理内核（消除幻觉）
@@ -265,6 +277,13 @@ final_answer = compose_with_evidence_guard(llm_out, collected_results)  # 证据
 
 工具失败 / 证据不足 / preflight 阻塞时，模型生成简短复盘（写 trace），并在剩余 iteration 内自我修正重试（如换工具、补参数、缩小范围）；超过 `max_tool_iterations` 则 fail-fast 给出"已尝试 X，仍缺 Y"。
 
+### 5.5 🔗 剥离考虑（core/adapter）
+
+- **core**：ReAct 回灌循环、`assert_tool_in_catalog` 能力闸门、证据契约**机制**（"无源不下数值结论"这一通用规则）、Reflexion 复盘。这些都与领域无关。
+- **adapter/pack**：证据契约里的**领域专用规则**（股票 PE/资金流/支撑位、QE 指标口径）、catalog 里的 AIstock MCP 工具集。
+- **解耦做法**：① 工具调用经 `MCP Provider`（通用 `list_tools` 发现，见 §17.5），**不写死 AIstock 12 个 server**；② 闸门只校验"工具是否在当前已审核 catalog 内"，与具体是不是 AIstock 工具无关；③ 领域证据规则放进 `aistock_knowledge_pack` 的 evidence-rule 配置，core 只保留通用"占位符禁令 + 无源降级"。
+- **最小依赖断言**：ReAct 内核不 import 任何 AIstock 领域模块；领域规则经 KnowledgePack Provider 注入。
+
 ---
 
 ## 6. L2.5：外部研究 / 检索（受控、证据优先）
@@ -296,6 +315,13 @@ final_answer = compose_with_evidence_guard(llm_out, collected_results)  # 证据
 - 喂给 L4：论文/资料 → 候选假设 → 低成本验证，**不直接排高成本实验**。
 - summary-first + provenance + as_of；长正文走 detail/ref，遵守 token 契约。
 - 仍然**不自建向量库**：语义匹配由 provider 完成。
+
+### 6.4 🔗 剥离考虑（core/adapter）
+
+- **core**：外部检索**连接框架** + `Search Provider` 接口 + 证据入库机制（结果→`external.*` 候选、provenance、证据优先红线）。
+- **adapter/pack**：具体 provider 选型（博查/秘塔/arXiv/Semantic Scholar）与 AIstock 的领域查询偏好（因子/HMM/事件研究）。
+- **解耦做法**：检索 provider 全部经 `Search Provider` 接口可替换；core 不绑定任何搜索厂商；"外部资料只作证据不作结论"是通用红线，随 core 走。
+- **最小依赖断言**：`external_research` 模块经 provider 接口工作，不依赖 AIstock 领域 service。
 
 ---
 
@@ -364,6 +390,13 @@ orchestrator.run(user_goal):
 - 所有写入/高成本/生产敏感动作经统一审批门禁，**Agent Teams 不绕过**。
 - 主气泡只显示 orchestrator 的自然语言汇总；worker 过程进 Workbench/Trace。
 
+### 7.7 🔗 剥离考虑（core/adapter）
+
+- **core**：orchestrator/worker **运行时**（分解/并行派发/隔离上下文/结构化返回/reduce/仲裁）、`assistant_agent_runs` 表、声明式 worker 加载机制。
+- **adapter/pack**：具体 worker 定义（`qe_experiment_designer`/`hmm_evolution`/`factor_developer`/`local_data_doctor` 均为 AIstock 领域）及其 `allowed_tools`（AIstock MCP）。
+- **解耦做法**：① worker 全部经 `agent_teams.yaml` **声明式定义**（role/goal/tools/model），运行时不硬编码任何具体 worker；② worker 的工具子集经 `MCP Provider`；③ orchestrator 与"有哪些 worker"解耦——换领域只换 worker 配置 + 知识包，运行时不动。
+- **最小依赖断言**：orchestrator/worker runtime 不 import 具体领域 worker 的业务逻辑（业务在 adapter 侧实现，经接口注册）。
+
 ---
 
 ## 8. L4：QE 自主演进闭环
@@ -414,6 +447,15 @@ CREATE TABLE IF NOT EXISTS qe_autonomous_evolution_runs (
 COMMENT ON TABLE qe_autonomous_evolution_runs IS 'QE 自主演进主循环运行记录，含停止条件与预算守护';
 ```
 
+### 8.4 🔗 剥离考虑（core/adapter）
+
+> L4 是**领域性最强**的一层（QE 是 AIstock 特有），但"自主演进"这套状态机可抽象复用。
+
+- **core**：自主主循环**框架**（`loop→evaluate→decide→generate→budget/stop guard→submit` 状态机）、停止条件/预算守护机制——以"评估器 / 方向决策器 / loop 执行器"为**可插拔回调**。
+- **adapter/pack**：QE 特有的 Evaluator 三层、Analyst 两步、loop 执行、`qe_autonomous_evolution_runs`、QE 方法论/演进路线。
+- **解耦做法**：自主循环框架经回调接口调 QE，不被 QE 反向绑死；未来其他领域（因子/HMM 演进）可复用同一框架，只换回调实现。AIstock QE 是该框架的第一个实例。
+- **最小依赖断言**：自主循环框架模块不 import QE 业务 service，经注册的回调接口交互。
+
 ---
 
 ## 9. L5：外部范式兑现对照表（防止"纸面引用"）
@@ -434,12 +476,15 @@ COMMENT ON TABLE qe_autonomous_evolution_runs IS 'QE 自主演进主循环运行
 | Anthropic orchestrator-workers | 主分解/worker执行/主综合 | L3 §7.5 | `pytest test_orchestrator_reduce.py` | 不全自动放权高风险 |
 | Voyager / AI-Scientist | 自主课程 + 研究循环 | L4 自主主循环 | `pytest test_qe_autonomous_loop.py` | 不绕过预算/审批 |
 | 外部搜索（console 设计 §12） | 多 provider + 学术 MCP + 证据优先 | L2.5 `external_research` | `python debug_tools/mcp/list_tools_smoke.py --server aistock-external-research` | Firecrawl 非默认入口 |
+| 插件/适配器 + MCP 通用接口 + OpenClaw provider 形态 | core 稳定、领域可插拔、对接任意 MCP 应用 | 各层 §x.x「🔗 剥离考虑」+ §17 横切规范 | `pytest test_core_no_adapter_import.py`（依赖方向） | 现在不物理拆包，仅逻辑接缝 |
 
 ---
 
 ## 10. 实施阶段与验收标准
 
 > 允许分 PR 推进，但**每个 Phase 必须明确"尚未完整"，所有 DAI/防漂移门禁全过才可称完整实现完成**。每个 Phase 验收均**不启动 8001/3000**；运行时验证由用户启动后另做只读 smoke。
+>
+> **跨阶段剥离门禁（适用于每一个 Phase）**：任一 Phase 新增的 core 机制/表/服务，验收时必须同时满足该层「🔗 剥离考虑」的 core/adapter 划分——即 core 代码经 provider 接口工作、不 import AIstock 领域符号（`pytest test_core_no_adapter_import.py` 依赖方向检查通过）。**剥离不是 §17 单独阶段才做，而是每个 Phase 的交付门禁**（§17 的 P13–P15 是对这一约束的集中收敛与验证，不替代各 Phase 的就地遵守）。
 
 ### Phase 0：基线锁定与脚手架
 - **交付**：本蓝图合入；新增 `backend/tests/research_assistant/` 占位测试目录；DDL 迁移脚本骨架（不执行生产 DDL）。
@@ -495,6 +540,7 @@ COMMENT ON TABLE qe_autonomous_evolution_runs IS 'QE 自主演进主循环运行
 | ANTI-DRIFT-04 | 禁止业务断层 | 每个 Phase 有端到端断言（非仅单元 mock） |
 | ANTI-DRIFT-05 | 禁止占位/简化交付 | 快照测试禁 `XX`/`X%`/`约X`；read-only-only 不得声称完整 |
 | ANTI-DRIFT-06 | 范式兑现 | §9 每行范式必须有验收命令且通过 |
+| ANTI-DRIFT-11 | **核心解耦贯穿每层**：`assistant_product_core` 不得 import/依赖 AIstock façade/DB/领域符号；每层「🔗 剥离考虑」的 core/adapter 划分必须落实 | 依赖方向检查 `test_core_no_adapter_import.py`；core 模块一律经 provider 接口工作（详见 §17.9 ANTI-DRIFT-11~13） |
 
 ---
 
@@ -514,6 +560,7 @@ COMMENT ON TABLE qe_autonomous_evolution_runs IS 'QE 自主演进主循环运行
 | 外部研究 MCP | DEF-07 | `backend/mcp/modules/external_research.py`、façade | `test_external_research_evidence_first.py` |
 | Agent Teams | DEF-05 | `assistant_agent_runs`、`agent_teams.yaml`、orchestrator/worker | `test_agent_teams_parallel.py` 等 |
 | QE 自主闭环 | DEF-06 | `qe_evolution_service.py`、`qe_autonomous_evolution_runs` | `test_qe_autonomous_loop.py` |
+| 核心/适配器解耦（贯穿每层） | DEF-13 | 各层「🔗 剥离考虑」、7 类 provider 接口、依赖检查脚本、§17 | `test_core_no_adapter_import.py` |
 
 > 实现时每完成一项，在本矩阵对应行追加 PR 链接与提交哈希，保持设计-实现强一致。
 
@@ -621,6 +668,8 @@ CREATE TABLE IF NOT EXISTS assistant_code_context_refs (
 COMMENT ON TABLE assistant_code_context_refs IS '代码智能(CodeGraph/Understand)注入 Context Pack 的轻量引用，AST确定性，无embedding';
 ```
 
+**🔗 剥离考虑（core/adapter）**：core = 代码智能**注入框架** + `Code-Intelligence Provider` 接口（输入 query → 返回结构化 manifest/impact，与具体工具无关）；adapter = `code_intelligence_adapter.py` 对 AIstock 仓库的绑定。解耦：core 只依赖 provider 接口，底层换成任意 CodeGraph/Understand/其它实现都行；对接别的产品时只换 provider 指向其代码库，注入框架不动。
+
 ### 16.5 L6 主动汇报（解决 DEF-11）
 
 定位：把占位的"晨报模板"落地为**真实生成**的主动汇报，作为 L3 的**定时 orchestrator 任务**（不是用户每次提问才触发）。
@@ -646,6 +695,8 @@ CREATE TABLE IF NOT EXISTS assistant_proactive_reports (
 );
 COMMENT ON TABLE assistant_proactive_reports IS '主动晨报/实验日报，只读聚合 + 证据优先，不触发写入';
 ```
+
+**🔗 剥离考虑（core/adapter）**：core = 汇报**生成框架**（聚合源注册表 → 证据优先汇总 → 报告表）；adapter = 具体聚合源（QE/Validation/本地数据 均为 AIstock 数据源）。解耦：聚合源经 registry/provider 注册，core 不写死 AIstock 数据源；换领域时换一组聚合源清单即可复用同一汇报框架。
 
 ### 16.6 L7 自我学习（解决 DEF-12，全程"提议→评估→approval"门禁）
 
@@ -691,6 +742,8 @@ CREATE TABLE IF NOT EXISTS assistant_skill_library (
 );
 COMMENT ON TABLE assistant_prompt_lab_runs IS '提示词自优化候选(GEPA/DSPy)+LLM-judge评估；仅候选，approval后才激活';
 ```
+
+**🔗 剥离考虑（core/adapter）**：三机制（Reflection/Prompt Lab/技能库）**全部属 core、天然可移植**——它们作用于"本系统自己的 trace/prompt/skill"，与领域无关。adapter 侧仅是"评估集取自哪个领域的 trace、技能库沉淀哪个领域的 recipe"。解耦：自我学习引擎对任意领域的 trace/prompt 都适用，AIstock 只是数据来源；自改进产物经 approval 门禁，与剥离姿态一致。
 
 ### 16.7 分阶段实施与验收（接 §10，Phase 8–12；不启动 8001/3000）
 
@@ -761,7 +814,9 @@ COMMENT ON TABLE assistant_prompt_lab_runs IS '提示词自优化候选(GEPA/DSP
 
 ## 17. 横切设计（2026-05-31）：可移植性与独立产品化
 
-> 背景：助手当前是 AIstock 的一个模块，未来可能**独立成一个智能工具软件产品，对接任意提供 MCP 接口的应用**。原始设计 `aistock_research_agent_console_design_20260520.md` 行 2142「Phase 4：独立产品化」**仅有 5 条意图占位**（抽离 `assistant_product_core`、AIstock 作首个 adapter、可替换 Memory/Skill/MCP/Channel Provider、私有数据不外泄），无具体架构；初版蓝图（L0–L7 + §16）**未考虑此点，深度耦合 AIstock**（loopback `8001` façade、AIstock DB 表、写死 12 个 AIstock MCP、AIstock 业务本体）。本章把它升级为**横切架构约束**——因为它影响每一层的构建方式，若不在建设期留好接缝，未来独立产品化将整体返工。本章不触碰 `8001`/`3000`，DDL 延后到实现 PR。
+> 背景：助手当前是 AIstock 的一个模块，未来可能**独立成一个智能工具软件产品，对接任意提供 MCP 接口的应用**。原始设计 `aistock_research_agent_console_design_20260520.md` 行 2142「Phase 4：独立产品化」**仅有 5 条意图占位**（抽离 `assistant_product_core`、AIstock 作首个 adapter、可替换 Memory/Skill/MCP/Channel Provider、私有数据不外泄），无具体架构；初版蓝图（L0–L7 + §16）**未考虑此点，深度耦合 AIstock**（loopback `8001` façade、AIstock DB 表、写死 12 个 AIstock MCP、AIstock 业务本体）。本章把它升级为**横切架构约束**——因为它影响每一层的构建方式，若不在建设期留好接缝，未来独立产品化将整体返工。
+
+> **重要（2026-05-31 修订）**：可移植/剥离不再只放本章。已下沉为**贯穿全文的一等约束**——§2.1 原则 7、§2.2 红线、§3 总览、以及 §4.6/§5.5/§6.4/§7.7/§8.4/§16.4/§16.5/§16.6 每层的「🔗 剥离考虑」小节，都就地给出该层的 core/adapter 划分与解耦做法；§10 把"core/adapter 边界"列为**每个 Phase 的交付门禁**，§11 ANTI-DRIFT-11 强制依赖方向检查。**本章 §17 退为这些就地考虑的汇总与横切规范（provider 接口清单、通用 MCP 客户端、知识包隔离、P13–P15 集中验证）**，不替代各章自身的剥离设计。本章不触碰 `8001`/`3000`，DDL 延后到实现 PR。
 
 ### 17.1 新增缺陷
 
