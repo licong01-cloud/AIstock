@@ -54,6 +54,51 @@ def _write_catalog(path: Path, *, runner_enabled: bool = True, writes_business_s
     )
 
 
+def _write_named_catalog(
+    path: Path,
+    *,
+    plan_key: str,
+    command_key: str,
+    nox_session: str,
+    backend_ports: list[int] | None = None,
+    runner_enabled: bool = True,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    backend_ports = backend_ports or []
+    path.write_text(
+        "schema_version: aistock_validation_plans_v1\n"
+        "plans:\n"
+        f"  - plan_key: {plan_key}\n"
+        f"    title: {plan_key}\n"
+        "    module: validation_center\n"
+        "    level: L0\n"
+        f"    command_key: {command_key}\n"
+        f"    nox_session: {nox_session}\n"
+        "    enabled: true\n"
+        f"    requires_backend: {'true' if backend_ports else 'false'}\n"
+        "    requires_frontend: false\n"
+        f"    allowed_backend_ports: {json.dumps(backend_ports)}\n"
+        "    allowed_frontend_ports: []\n"
+        "    writes_database: false\n"
+        "    writes_artifacts: true\n"
+        "    writes_business_state: false\n"
+        "    requires_confirmation: false\n"
+        f"    runner_enabled: {'true' if runner_enabled else 'false'}\n"
+        "    max_duration_seconds: 60\n",
+        encoding="utf-8",
+    )
+
+
+def _write_workspace_plan_allowlist(path: Path, mapping: dict[str, str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "ALLOWED_COMMAND_KEYS: dict[str, str] = "
+        + json.dumps(mapping, indent=2, sort_keys=True)
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def _write_guardrail_catalog(path: Path) -> None:
     path.write_text(
         "schema_version: aistock_validation_plans_v1\n"
@@ -416,6 +461,18 @@ def _init_git_main_repo(path: Path) -> None:
     subprocess.run(["git", "checkout", "-q", "-B", "main"], cwd=str(path), check=True, shell=False)
 
 
+def _init_registered_worktree(repo_root: Path, worktree: Path, *, branch: str = "feature/ra-baseline") -> None:
+    repo_root.mkdir(parents=True, exist_ok=True)
+    _init_git_main_repo(repo_root)
+    worktree.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["git", "worktree", "add", "-q", "-b", branch, str(worktree), "HEAD"],
+        cwd=str(repo_root),
+        check=True,
+        shell=False,
+    )
+
+
 def test_workspace_path_accepted_for_allowlisted_worktree(tmp_path: Path) -> None:
     worktree = tmp_path / "worktrees" / "bug-xxx"
     worktree.mkdir(parents=True)
@@ -443,6 +500,135 @@ def test_workspace_path_accepted_for_allowlisted_worktree(tmp_path: Path) -> Non
     assert job["workspace_git"]["dirty"] is False
     assert job["workspace_git"]["detached"] is False
     assert str(worktree.resolve()) in job["workspace_path"]
+
+
+def test_workspace_path_uses_worktree_catalog_and_allowlist(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    worktree = tmp_path / "worktrees" / "ra-baseline"
+    _init_registered_worktree(repo_root, worktree)
+    root_catalog = tmp_path / "root-plans.yaml"
+    _write_catalog(root_catalog, runner_enabled=True)
+    _write_named_catalog(
+        worktree / "tests" / "aistock_validation" / "catalog" / "test_plans.yaml",
+        plan_key="ra_phase0_baseline",
+        command_key="nox_ra_phase0_baseline",
+        nox_session="ra_phase0_baseline",
+    )
+    _write_workspace_plan_allowlist(
+        worktree / "backend" / "services" / "validation" / "plan_catalog.py",
+        {"nox_ra_phase0_baseline": "ra_phase0_baseline"},
+    )
+    calls: list[tuple[list[str], Path]] = []
+
+    def fake_executor(command, _env, cwd, _timeout_seconds):
+        calls.append((command, cwd))
+        return RunnerResult(return_code=0, output="ok")
+
+    runner = ValidationExecutionRunner(
+        plan_catalog=ValidationPlanCatalog(root_catalog),
+        execution_root=tmp_path / "jobs",
+        history_root=tmp_path / "history",
+        repo_root=repo_root,
+        run_inline=True,
+        executor=fake_executor,
+    )
+
+    job = runner.start_job(plan_key="ra_phase0_baseline", workspace_path=str(worktree))
+
+    assert job["status"] == "passed"
+    assert job["nox_session"] == "ra_phase0_baseline"
+    assert calls[0][0][-2:] == ["-s", "ra_phase0_baseline"]
+    assert calls[0][1].resolve() == worktree.resolve()
+
+
+def test_plan_lookup_without_workspace_path_uses_root_catalog(tmp_path: Path) -> None:
+    root_catalog = tmp_path / "root-plans.yaml"
+    _write_catalog(root_catalog, runner_enabled=True)
+    runner = ValidationExecutionRunner(
+        plan_catalog=ValidationPlanCatalog(root_catalog),
+        execution_root=tmp_path / "jobs",
+        history_root=tmp_path / "history",
+        repo_root=tmp_path,
+        run_inline=True,
+    )
+
+    with pytest.raises(ValidationRunnerError, match="validation plan not found"):
+        runner.start_job(plan_key="ra_phase0_baseline")
+
+
+def test_workspace_path_rejects_unregistered_git_worktree(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    _init_git_main_repo(repo_root)
+    unregistered = tmp_path / "worktrees" / "unregistered"
+    unregistered.mkdir(parents=True, exist_ok=True)
+    _init_git_repo(unregistered)
+    catalog_path = tmp_path / "plans.yaml"
+    _write_catalog(catalog_path, runner_enabled=True)
+    runner = ValidationExecutionRunner(
+        plan_catalog=ValidationPlanCatalog(catalog_path),
+        execution_root=tmp_path / "jobs",
+        history_root=tmp_path / "history",
+        repo_root=repo_root,
+        run_inline=True,
+    )
+
+    with pytest.raises(ValidationRunnerError, match="registered git worktree"):
+        runner.start_job(plan_key="l0", workspace_path=str(unregistered))
+
+
+def test_workspace_catalog_rejects_missing_command_key_allowlist(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    worktree = tmp_path / "worktrees" / "ra-baseline"
+    _init_registered_worktree(repo_root, worktree)
+    root_catalog = tmp_path / "root-plans.yaml"
+    _write_catalog(root_catalog, runner_enabled=True)
+    _write_named_catalog(
+        worktree / "tests" / "aistock_validation" / "catalog" / "test_plans.yaml",
+        plan_key="ra_phase0_baseline",
+        command_key="nox_ra_phase0_baseline",
+        nox_session="ra_phase0_baseline",
+    )
+    _write_workspace_plan_allowlist(worktree / "backend" / "services" / "validation" / "plan_catalog.py", {})
+    runner = ValidationExecutionRunner(
+        plan_catalog=ValidationPlanCatalog(root_catalog),
+        execution_root=tmp_path / "jobs",
+        history_root=tmp_path / "history",
+        repo_root=repo_root,
+        run_inline=True,
+    )
+
+    with pytest.raises(ValidationCatalogError, match="non-allowlisted"):
+        runner.start_job(plan_key="ra_phase0_baseline", workspace_path=str(worktree))
+
+
+def test_workspace_catalog_keeps_forbidden_backend_port_gate(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    worktree = tmp_path / "worktrees" / "ra-baseline"
+    _init_registered_worktree(repo_root, worktree)
+    root_catalog = tmp_path / "root-plans.yaml"
+    _write_catalog(root_catalog, runner_enabled=True)
+    _write_named_catalog(
+        worktree / "tests" / "aistock_validation" / "catalog" / "test_plans.yaml",
+        plan_key="ra_phase0_baseline",
+        command_key="nox_ra_phase0_baseline",
+        nox_session="ra_phase0_baseline",
+        backend_ports=[8001],
+    )
+    _write_workspace_plan_allowlist(
+        worktree / "backend" / "services" / "validation" / "plan_catalog.py",
+        {"nox_ra_phase0_baseline": "ra_phase0_baseline"},
+    )
+    runner = ValidationExecutionRunner(
+        plan_catalog=ValidationPlanCatalog(root_catalog),
+        execution_root=tmp_path / "jobs",
+        history_root=tmp_path / "history",
+        repo_root=repo_root,
+        run_inline=True,
+    )
+
+    with pytest.raises(ValidationCatalogError, match="forbidden production backend port 8001"):
+        runner.start_job(plan_key="ra_phase0_baseline", workspace_path=str(worktree))
 
 
 def test_default_archive_root_follows_workspace_path(tmp_path: Path) -> None:

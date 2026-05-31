@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 from typing import Any
 
@@ -57,11 +58,46 @@ class ValidationCatalogError(ValueError):
     """Raised when the validation plan catalog violates safety rules."""
 
 
+def load_allowed_command_keys_from_source(source_path: Path) -> dict[str, str]:
+    """Read ALLOWED_COMMAND_KEYS from a plan_catalog.py file without importing it."""
+    try:
+        tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+    except OSError as exc:
+        raise ValidationCatalogError(f"Cannot read validation command allowlist: {source_path}") from exc
+    except SyntaxError as exc:
+        raise ValidationCatalogError(f"Invalid validation command allowlist source: {source_path}: {exc}") from exc
+
+    for node in tree.body:
+        value_node: ast.expr | None = None
+        if isinstance(node, ast.Assign):
+            if any(isinstance(target, ast.Name) and target.id == "ALLOWED_COMMAND_KEYS" for target in node.targets):
+                value_node = node.value
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and node.target.id == "ALLOWED_COMMAND_KEYS":
+                value_node = node.value
+        if value_node is None:
+            continue
+        try:
+            raw = ast.literal_eval(value_node)
+        except (ValueError, TypeError) as exc:
+            raise ValidationCatalogError(
+                f"Validation command allowlist must be a literal dict: {source_path}"
+            ) from exc
+        if not isinstance(raw, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in raw.items()):
+            raise ValidationCatalogError(
+                f"Validation command allowlist must be dict[str, str]: {source_path}"
+            )
+        return dict(raw)
+
+    raise ValidationCatalogError(f"Validation command allowlist not found: {source_path}")
+
+
 class ValidationPlanCatalog:
     """Read and validate the Validation Center nox-plan allowlist."""
 
-    def __init__(self, catalog_path: Path | None = None) -> None:
+    def __init__(self, catalog_path: Path | None = None, *, allowed_command_keys: dict[str, str] | None = None) -> None:
         self.catalog_path = Path(catalog_path or DEFAULT_PLAN_CATALOG_PATH)
+        self.allowed_command_keys = dict(allowed_command_keys or ALLOWED_COMMAND_KEYS)
 
     def load(self) -> dict[str, Any]:
         if not self.catalog_path.exists():
@@ -107,12 +143,12 @@ class ValidationPlanCatalog:
         command_key = str(plan.get("command_key") or "").strip()
         if not plan_key:
             raise ValidationCatalogError("Validation plan is missing plan_key.")
-        if command_key not in ALLOWED_COMMAND_KEYS:
+        if command_key not in self.allowed_command_keys:
             raise ValidationCatalogError(
                 f"Validation plan {plan_key} uses non-allowlisted command_key={command_key!r}."
             )
         nox_session = str(plan.get("nox_session") or "").strip()
-        expected_session = ALLOWED_COMMAND_KEYS[command_key]
+        expected_session = self.allowed_command_keys[command_key]
         if nox_session and nox_session != expected_session:
             raise ValidationCatalogError(
                 f"Validation plan {plan_key} maps {command_key} to nox_session={nox_session!r}, "
