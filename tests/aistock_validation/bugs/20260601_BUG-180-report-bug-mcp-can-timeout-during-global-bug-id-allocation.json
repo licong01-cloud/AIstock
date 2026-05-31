@@ -30,8 +30,8 @@
   "expected": "MCP BUG reporting should return promptly with deterministic id allocation, avoid long live scans inside report_bug, and direct agents to the GitHub-linked issue workflow for mergeable BUG records.",
   "first_seen_at": "2026-05-31T17:49:53.260294Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5a33bff8f5f2ce4fc0126284988b84827ca0173e",
+  "fixed_at": "2026-05-31T18:19:41.186418Z",
   "github_issue_number": 441,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/441",
   "last_seen_at": "2026-05-31T17:49:53.260294Z",
@@ -49,7 +49,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation_mcp"
   ],
@@ -58,5 +58,10 @@
     "fingerprint": "ba775e310861cc58c7b0e359",
     "source_event_id": "FE-20260601-ba775e310861"
   },
-  "verification_run_id": null
+  "verification_run_id": null,
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/442",
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_aistock_mcp_github_issue_tools.py -q -k report_bug -> passed",
+    "python -m nox -s validation_center_backend guardrail_changed_files -> passed"
+  ]
 }

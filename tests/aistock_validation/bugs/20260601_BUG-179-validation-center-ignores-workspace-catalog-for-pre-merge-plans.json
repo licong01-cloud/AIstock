@@ -1,71 +1,75 @@
-﻿{
-    "actual":  "Validation Center uses the running root/main catalog and rejects branch-only plans such as ra_phase0_baseline with validation plan not found.",
-    "allowed_write_scope":  [
-                                "backend/services/validation/execution_runner.py",
-                                "backend/services/validation/plan_catalog.py",
-                                "backend/tests/test_validation_execution_runner.py",
-                                "tests/aistock_validation/bugs/20260601_BUG-179-validation-center-ignores-workspace-catalog-for-pre-merge-plans.json",
-                                "tests/aistock_validation/bugs/.bug_id_allocator.json",
-                                "scripts/aistock_mcp_server.py",
-                                "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
-                                "tests/aistock_validation/bugs/20260601_BUG-180-report-bug-mcp-can-timeout-during-global-bug-id-allocation.json"
-                            ],
-    "assigned_agent":  null,
-    "bug_id":  "BUG-179",
-    "closed_at":  null,
-    "closure_requirements":  [
-                                 "Fix the observed behavior.",
-                                 "Run required verification plans.",
-                                 "Keep BUG JSON and GitHub Issue synchronized."
-                             ],
-    "created_at":  "2026-05-31T17:49:25.339637Z",
-    "description":  "Validation Center uses the running root/main catalog and rejects branch-only plans such as ra_phase0_baseline with validation plan not found.",
-    "events":  [
-                   {
-                       "action":  "promote_candidate_to_bug",
-                       "actor":  "issue_flow",
-                       "note":  "Promoted from IC-20260601-0183cf02a5f8",
-                       "timestamp":  "2026-05-31T17:49:25.339634Z"
-                   }
-               ],
-    "evidence_uris":  [
-                          "Claude Code repro: VC sees root/main 37 plans instead of ra-baseline worktree 38 plans"
-                      ],
-    "expected":  "When workspace_path is a valid registered worktree, Validation Center should resolve test_plans.yaml and command-key allowlist from that worktree while preserving runner_enabled, allowlist, port, and DB gates.",
-    "first_seen_at":  "2026-05-31T17:49:25.339637Z",
-    "fix_branch":  null,
-    "fix_commit":  null,
-    "fixed_at":  null,
-    "github_issue_number":  440,
-    "github_issue_url":  "https://github.com/licong01-cloud/AIstock/issues/440",
-    "last_seen_at":  "2026-05-31T17:49:25.339637Z",
-    "module":  "validation_center",
-    "non_goals":  [
-                      "Do not restart production runtime services without explicit approval."
-                  ],
-    "production_backend_dependency_gate":  "noop",
-    "production_ddl_gate":  "noop",
-    "production_frontend_dependency_gate":  "noop",
-    "reproduce_command":  "start_validation_execution(plan_key=\u0027ra_phase0_baseline\u0027, workspace_path=\u0027F:/Dev/AIstock_worktrees/ra-baseline-20260601\u0027, expected_commit=\u0027\u003cworktree commit\u003e\u0027)",
-    "required_verification":  [
-                                  "l0",
-                                  "validation_center_backend",
-                                  "validation_catalog_integrity",
-                                  "validation_coverage_backend",
-                                  "guardrail_changed_files",
-                                  "validation_module_registry_l0"
-                              ],
-    "risk_area":  "bug",
-    "schema_version":  "aistock_validation_bug_v1",
-    "severity":  "P1",
-    "status":  "open",
-    "suspected_modules":  [
-                              "validation_center"
-                          ],
-    "title":  "Validation Center ignores workspace catalog for pre-merge plans",
-    "trigger_condition":  {
-                              "fingerprint":  "0183cf02a5f8144a3e3a700e",
-                              "source_event_id":  "FE-20260601-0183cf02a5f8"
-                          },
-    "verification_run_id":  null
+{
+  "actual": "Validation Center uses the running root/main catalog and rejects branch-only plans such as ra_phase0_baseline with validation plan not found.",
+  "allowed_write_scope": [
+    "backend/services/validation/execution_runner.py",
+    "backend/services/validation/plan_catalog.py",
+    "backend/tests/test_validation_execution_runner.py",
+    "tests/aistock_validation/bugs/20260601_BUG-179-validation-center-ignores-workspace-catalog-for-pre-merge-plans.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/aistock_mcp_server.py",
+    "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+    "tests/aistock_validation/bugs/20260601_BUG-180-report-bug-mcp-can-timeout-during-global-bug-id-allocation.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-179",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-31T17:49:25.339637Z",
+  "description": "Validation Center uses the running root/main catalog and rejects branch-only plans such as ra_phase0_baseline with validation plan not found.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260601-0183cf02a5f8",
+      "timestamp": "2026-05-31T17:49:25.339634Z"
+    }
+  ],
+  "evidence_uris": [
+    "Claude Code repro: VC sees root/main 37 plans instead of ra-baseline worktree 38 plans"
+  ],
+  "expected": "When workspace_path is a valid registered worktree, Validation Center should resolve test_plans.yaml and command-key allowlist from that worktree while preserving runner_enabled, allowlist, port, and DB gates.",
+  "first_seen_at": "2026-05-31T17:49:25.339637Z",
+  "fix_branch": null,
+  "fix_commit": "5a33bff8f5f2ce4fc0126284988b84827ca0173e",
+  "fixed_at": "2026-05-31T18:17:39.444594Z",
+  "github_issue_number": 440,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/440",
+  "last_seen_at": "2026-05-31T17:49:25.339637Z",
+  "module": "validation_center",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/442",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "start_validation_execution(plan_key='ra_phase0_baseline', workspace_path='F:/Dev/AIstock_worktrees/ra-baseline-20260601', expected_commit='<worktree commit>')",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "validation_catalog_integrity",
+    "validation_coverage_backend",
+    "guardrail_changed_files",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation_center"
+  ],
+  "title": "Validation Center ignores workspace catalog for pre-merge plans",
+  "trigger_condition": {
+    "fingerprint": "0183cf02a5f8144a3e3a700e",
+    "source_event_id": "FE-20260601-0183cf02a5f8"
+  },
+  "validation_evidence": [
+    "python -m nox -s l0 validation_center_backend validation_catalog_integrity validation_coverage_backend validation_module_registry_l0 guardrail_changed_files -> passed"
+  ],
+  "verification_run_id": null
 }
