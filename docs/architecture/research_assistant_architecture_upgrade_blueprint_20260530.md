@@ -756,3 +756,146 @@ COMMENT ON TABLE assistant_prompt_lab_runs IS '提示词自优化候选(GEPA/DSP
 - 本章 DDL（§16.4/16.5/16.6）均触发 `production_ddl_gate`，实现 PR 逐项报告 COMMENT 与幂等性，生产库由用户决定执行时机。
 - 代码智能不替代 nox/pytest/CI/生产门禁；自我学习不自动改线上提示词/策略；主动汇报只读。
 - 本 PR 仍为 docs-only：`production_ddl_gate=noop`、`production_backend_dependency_gate=noop`、`production_frontend_dependency_gate=noop`。
+
+---
+
+## 17. 横切设计（2026-05-31）：可移植性与独立产品化
+
+> 背景：助手当前是 AIstock 的一个模块，未来可能**独立成一个智能工具软件产品，对接任意提供 MCP 接口的应用**。原始设计 `aistock_research_agent_console_design_20260520.md` 行 2142「Phase 4：独立产品化」**仅有 5 条意图占位**（抽离 `assistant_product_core`、AIstock 作首个 adapter、可替换 Memory/Skill/MCP/Channel Provider、私有数据不外泄），无具体架构；初版蓝图（L0–L7 + §16）**未考虑此点，深度耦合 AIstock**（loopback `8001` façade、AIstock DB 表、写死 12 个 AIstock MCP、AIstock 业务本体）。本章把它升级为**横切架构约束**——因为它影响每一层的构建方式，若不在建设期留好接缝，未来独立产品化将整体返工。本章不触碰 `8001`/`3000`，DDL 延后到实现 PR。
+
+### 17.1 新增缺陷
+
+| 编号 | 缺陷 | 证据 | 影响 |
+|---|---|---|---|
+| DEF-13 | 助手核心与 AIstock 领域强耦合，无 core/adapter 边界、无通用 MCP 客户端、无 provider 抽象 | 蓝图各层依赖 `8001` façade、AIstock DB schema、写死 12 个 MCP server；原设计仅有 Phase 4 意图占位（console 设计 :2142-2150） | 未来独立产品化/对接外部 MCP 应用需整体返工 |
+
+### 17.2 设计姿态（用户决策）：可移植接缝（非现在物理拆分）
+
+- **现在仍以 AIstock 为主交付**，不要求 Phase 0–12/§16 立即物理拆包重构。
+- 但**所有耦合点收敛到 provider 接口背后**，并**定义清晰的 core/adapter 逻辑边界**；新代码一律按接口写，旧耦合点逐步收敛。
+- 用**静态依赖方向检查**保证"核心不反向依赖 AIstock 领域"，使未来物理抽离成本低、当前每层成本仅小幅增加。
+
+### 17.3 Core / Adapter 边界（回贴 L0–L7 + §16）
+
+| 层 | 归属 | 说明 |
+|---|---|---|
+| L0 模型路由 / Prompt Tree 引擎 / 审批风险引擎 / 模式状态机 | **core** | 领域无关运行时 |
+| L1 记忆树**引擎**（分类召回/打分/curator/反思机制） | **core** | 机制领域无关 |
+| L1 业务知识图谱 seed + AIstock 本体 | adapter/pack | AIstock 领域内容 |
+| L1.6 代码智能**注入框架** | **core** | 通用 |
+| L1.6 `code_intelligence_adapter.py` 绑定与仓库 | adapter | AIstock 仓库特定 |
+| L2 ReAct 接地循环 + 能力闸门 + 证据契约**机制** | **core** | 通用 |
+| L2 证据契约里的**股票/QE 专用规则** | adapter/pack | AIstock 领域规则 |
+| L2.5 外部研究**连接框架** | **core** | provider 化 |
+| L3 Agent Teams orchestrator/worker **运行时** | **core** | 通用编排 |
+| L3 worker 定义（QE/HMM/因子/数据诊断） | adapter/pack | AIstock 领域 worker |
+| L4 QE 自主演进循环**框架** | **core** | 通用循环 |
+| L4 QE 方法论/演进路线**内容** | adapter/pack | AIstock 领域 |
+| L6 主动汇报**框架** | **core** | 通用 |
+| L6 聚合源（QE/Validation/本地数据…） | adapter | AIstock 数据源 |
+| L7 自我学习引擎（Reflection/Prompt Lab/技能库） | **core** | 通用 |
+| 12 个 AIstock MCP + façade + 领域 prompt pack | adapter/pack | AIstock 领域 |
+
+`assistant_product_core` = 领域无关引擎；`aistock_domain_adapter` + `aistock_knowledge_pack` = AIstock 全部领域内容。**AIstock 是第一个 adapter，不是唯一。**
+
+### 17.4 Provider 接口（可替换，逻辑接缝）
+
+| Provider | 抽象内容 | AIstock 默认实现 | 未来可替换为 |
+|---|---|---|---|
+| **MCP Gateway/Client Provider** | 连接任意 MCP server、能力发现、调用 | AIstock 统一 gateway + 12 server | 任意 MCP 应用（见 17.5） |
+| **Memory Provider** | 树形记忆存储/召回 | AIstock PostgreSQL | 其他 DB / 嵌入式存储 |
+| **Storage Provider** | 任务/审批/trace 持久化 | AIstock PostgreSQL | 可替换后端 |
+| **Model Provider** | LLM 调用（已天然可移植） | litellm + deepseek/glm/qwen | 任意 BYOK provider |
+| **Skill Provider** | 本地技能目录 | AIstock skill catalog | 其他技能源（人工审核导入） |
+| **Channel Provider** | 对话/通知渠道 | AIstock 前端 10 页 | 其他渠道（如 IM/CLI，参考 OpenClaw） |
+| **Knowledge Pack Provider** | 领域本体+图谱seed+证据规则+领域prompt | AIstock domain pack | 其他领域包；core 默认空载 |
+
+### 17.5 通用 MCP 客户端 + 能力发现（用户决策：自动发现 + 人工审核分级）
+
+- 对**任意 MCP server** 用 `list_tools` **自动发现**能力，动态生成能力目录（不再写死 AIstock 12 个）——这正是 MCP 协议的通用客户端用途。
+- 新发现的 server/工具进入 **`quarantine`（隔离待审）** 状态：必须经**人工审核分级**（risk_level + auto_call_policy + summary-first 契约校验）后才 `approved` 可用。
+- 与 §5.2 能力闸门联动：**未审核(quarantine)工具不得被 ReAct 循环调用**——既保通用接入，又防幻觉/越权。
+
+DDL（触发 production_ddl_gate）：
+
+```sql
+CREATE TABLE IF NOT EXISTS assistant_mcp_connections (
+    connection_id TEXT PRIMARY KEY,
+    server_key    TEXT NOT NULL UNIQUE,    -- 任意 MCP 应用的 server key
+    transport     TEXT NOT NULL,           -- stdio | http | sse
+    endpoint      TEXT NOT NULL,
+    domain_pack   TEXT,                    -- 关联的知识包(可空=通用)
+    status        TEXT NOT NULL DEFAULT 'discovered',  -- discovered | quarantine | approved | disabled
+    discovered_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    reviewed_by   TEXT,
+    review_status TEXT NOT NULL DEFAULT 'pending'       -- pending | approved | rejected
+);
+COMMENT ON TABLE assistant_mcp_connections IS '通用 MCP 客户端连接登记；list_tools 自动发现，新工具经人工审核分级后方可调用';
+```
+
+发现的工具进入既有 `assistant_capabilities`，新增 `review_status` 列（`pending|approved|rejected`）；闸门检查 `review_status='approved'` 才放行。
+
+### 17.6 数据隔离与不外泄（承接原设计第 5 条）
+
+- AIstock 私有策略、生产边界、研究记忆只存在于 `aistock_domain_adapter` + `aistock_knowledge_pack` + AIstock 存储，**不进 core 默认逻辑**。
+- core 设计为**多租户/多领域就绪**：知识包隔离、记忆 namespace 隔离；切换/卸载 AIstock pack 不应泄露其私有数据。
+
+### 17.7 外部范式兑现（补 §9）
+
+| 范式 | 借鉴点 | 落地 | 不采用 |
+|---|---|---|---|
+| MCP 协议（通用工具接口） | 任意应用经 MCP 接入同一客户端 | 17.5 通用客户端 + list_tools 发现 | 不写死特定应用 |
+| OpenClaw（自托管助手：网关+模型路由BYOK+渠道+skills） | core/provider/channel 可插拔形态 | 17.4 provider 接口 | 不做 IM 网关产品形态（仅留 Channel Provider 接口） |
+| 插件/适配器架构（core + domain adapter） | 核心稳定、领域可插拔 | 17.3 core/adapter 边界 | 现在不物理拆包 |
+
+### 17.8 分阶段实施与验收（接 §10/§16，Phase 13–15；不启动 8001/3000）
+
+#### Phase 13：定义 core/adapter 边界 + provider 接口收敛（DEF-13 之一）
+- 交付：按 17.3 标注各模块归属；定义 17.4 provider 接口；把现有耦合点（MCP/记忆/存储/模型/渠道）改为经 provider 接口访问（**逻辑接缝，不物理拆包**）。
+- 验收：
+  - **静态依赖方向检查**：`assistant_product_core` 模块不得 import AIstock 领域符号（CI 依赖检查脚本，**断言无反向依赖**）。
+  - provider 接口契约测试通过；现有功能行为不变（回归全绿）。
+
+#### Phase 14：通用 MCP 客户端 + 自动发现 + 人工审核（DEF-13 之二）
+- 交付：`assistant_mcp_connections` DDL + `capabilities.review_status`；list_tools 自动发现；quarantine→review→approved 流程；闸门联动。
+- 验收：
+  - `pytest test_generic_mcp_discovery.py`：接入一个**非 AIstock 的样例 MCP server**，工具被自动发现并进入 `quarantine`。
+  - `pytest test_quarantine_tool_blocked.py`：**未审核工具不得被 ReAct 调用**（断言，接 §5.2 闸门）；审核 approved 后可用。
+
+#### Phase 15：AIstock 知识包抽离 + 数据隔离（DEF-13 之三）
+- 交付：把 AIstock 本体/图谱seed/证据规则/领域prompt 抽为可加载 `aistock_knowledge_pack`；core 默认空载。
+- 验收：
+  - `pytest test_core_empty_boot.py`：core **空载启动**不报错、能力为空。
+  - `pytest test_pack_load_isolation.py`：加载 AIstock pack 后能力恢复；卸载后**私有记忆/策略不外泄**（隔离断言）。
+
+### 17.9 防设计漂移门禁（补 §11）
+
+| 门禁 | 规则 | 检查 |
+|---|---|---|
+| ANTI-DRIFT-11 | core 不反向依赖 adapter | 静态依赖方向检查（DEF-13） |
+| ANTI-DRIFT-12 | 未审核 MCP 工具不得被调用 | quarantine 工具被闸门拒绝的断言 |
+| ANTI-DRIFT-13 | 知识包隔离、私有数据不外泄 | core 空载 + pack 卸载隔离断言 |
+
+### 17.10 可追溯性矩阵（补 §12）
+
+| 设计项 | 缺陷 | 实现位置 | 测试 |
+|---|---|---|---|
+| core/adapter 边界 + provider 接口 | DEF-13 | core 包结构、provider 接口、依赖检查脚本 | `test_core_no_adapter_import.py` |
+| 通用 MCP 客户端 + 发现/审核 | DEF-13 | `assistant_mcp_connections`、`capabilities.review_status`、闸门 | `test_generic_mcp_discovery.py` / `test_quarantine_tool_blocked.py` |
+| 知识包抽离 + 数据隔离 | DEF-13 | `aistock_knowledge_pack`、Knowledge Pack Provider | `test_core_empty_boot.py` / `test_pack_load_isolation.py` |
+
+### 17.11 Design Acceptance Index（补 §13）
+
+| 编号 | 用户要求 | 设计位置 | 验收标准 |
+|---|---|---|---|
+| DAI-PORT-001 | 可独立成产品、对接任意 MCP 应用 | §17 | core/adapter 边界 + 通用 MCP 客户端落地 |
+| DAI-PORT-002 | 可移植接缝（现在不物理拆分） | §17.2/17.3 | provider 接口收敛 + 依赖方向检查通过 |
+| DAI-PORT-003 | 任意 MCP 应用自动发现 + 人工审核 | §17.5 | 非 AIstock server 可发现；未审核工具被闸门拒绝 |
+| DAI-PORT-004 | AIstock 私有数据不外泄 | §17.6 | 知识包隔离断言通过 |
+
+### 17.12 边界
+
+- 本章为**逻辑接缝**，不要求 Phase 0–12/§16 立即物理拆包重构；新代码按 provider 接口写，旧耦合点逐步收敛。
+- DDL（§17.5）触发 `production_ddl_gate`，实现 PR 逐项报告。
+- 不引入替换性外部 agent 框架；Channel/IM 产品形态仅保留接口、不在本期实现。
+- 本 PR 仍为 docs-only：`production_ddl_gate=noop`、`production_backend_dependency_gate=noop`、`production_frontend_dependency_gate=noop`。
