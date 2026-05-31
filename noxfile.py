@@ -890,6 +890,78 @@ def ra_phase0_baseline(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def ra_phase1_memory_tree(session: nox.Session) -> None:
+    """Run Phase 1 L1 memory tree DDL, retrieval, curator, and anti-drift gates."""
+    phase1_paths = [
+        "backend/db/migrations/ra_upgrade/001_memory_tree.sql",
+        "backend/db/init_research_assistant_schema_20260521.py",
+        "backend/services/research_assistant/models.py",
+        "backend/services/research_assistant/repository.py",
+        "backend/services/research_assistant/memory_tree.py",
+        "backend/services/research_assistant/memory_curator.py",
+        "backend/services/research_assistant/service.py",
+        "backend/tests/research_assistant/test_memory_tree_ddl_contract.py",
+        "backend/tests/research_assistant/test_memory_tree_retrieval.py",
+        "backend/tests/research_assistant/test_memory_autogrow.py",
+        "backend/tests/research_assistant/test_memory_scoring.py",
+        "backend/tests/research_assistant/test_memory_dedup_scope.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        "docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md",
+        "tests/aistock_validation/history/research_assistant/20260601_ra_phase1_memory_tree_validation.md",
+        "tests/aistock_validation/catalog/test_plans.yaml",
+        "backend/services/validation/plan_catalog.py",
+        "noxfile.py",
+    ]
+    session.run("git", "diff", "--check", external=True)
+    session.run(
+        sys.executable,
+        "-m",
+        "py_compile",
+        "backend/services/research_assistant/memory_tree.py",
+        "backend/services/research_assistant/memory_curator.py",
+        "backend/tests/research_assistant/test_memory_tree_ddl_contract.py",
+        "backend/tests/research_assistant/test_memory_tree_retrieval.py",
+        "backend/tests/research_assistant/test_memory_autogrow.py",
+        "backend/tests/research_assistant/test_memory_scoring.py",
+        "backend/tests/research_assistant/test_memory_dedup_scope.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/research_assistant/test_memory_tree_ddl_contract.py",
+        "backend/tests/research_assistant/test_memory_tree_retrieval.py",
+        "backend/tests/research_assistant/test_memory_autogrow.py",
+        "backend/tests/research_assistant/test_memory_scoring.py",
+        "backend/tests/research_assistant/test_memory_dedup_scope.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_validation_catalog_integrity.py",
+        "--output-json",
+        "tmp/validation/catalog/ra_phase1_memory_tree_integrity.json",
+        "--fail-on-warning",
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_module_ownership_scan.py",
+        "--output-json",
+        "tmp/validation/module_ownership/ra_phase1_memory_tree_paths.json",
+        "--summary-md",
+        "tmp/validation/module_ownership/ra_phase1_memory_tree_paths.md",
+        "--fail-on-unmapped",
+        "--fail-on-ambiguous",
+        *phase1_paths,
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
 def research_assistant_backend(session: nox.Session) -> None:
     """Run Research Assistant backend/schema/router tests without services."""
     session.run(

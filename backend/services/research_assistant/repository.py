@@ -51,8 +51,8 @@ TABLES: dict[str, dict[str, Any]] = {
     "memory_items": {
         "table": "research_memory_items",
         "id": "memory_id",
-        "json": {"content_json", "evidence_refs"},
-        "search": {"memory_id", "memory_type", "namespace", "subject_key", "title", "content_text", "approval_status"},
+        "json": {"content_json", "evidence_refs", "provenance_json"},
+        "search": {"memory_id", "memory_type", "namespace", "subject_key", "title", "content_text", "approval_status", "tree_path", "parent_key", "scope"},
     },
     "memory_access_log": {
         "table": "research_memory_access_log",

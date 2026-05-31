@@ -13,6 +13,7 @@ import os
 import re
 import hashlib
 import subprocess
+import threading
 from dataclasses import dataclass
 from enum import Enum
 from datetime import date
@@ -24,6 +25,8 @@ import jsonschema
 
 from .context_budget import ContextBudgetPlan, ContextBudgetPlanner
 from .execution import ResearchAssistantExecutionMixin
+from .memory_curator import CuratorResult, MemoryCurator
+from .memory_tree import select_memory_branches
 from .models import (
     ActionProposalCreate,
     ActionProposalExecuteRequest,
@@ -1682,6 +1685,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 agent_id="research_assistant_primary",
                 model_profile=model_profile["model_profile_id"],
                 token_budget=preliminary_budget.context_pack_budget_tokens,
+                user_message=data.message,
+                dialogue_intent=dialogue_intent.value,
             )
         )
         budget_plan = self.context_budget_planner.plan(
@@ -1818,6 +1823,14 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                     payload_json={"proposal_count": len(cards.get("action_proposals", [])), "safety": cards["safety"], "dialogue_intent": dialogue_intent.value},
                 ),
             )
+        self._schedule_memory_curator(
+            user_message=data.message,
+            assistant_message=assistant_text,
+            conversation_id=conversation_id,
+            user_message_id=user_message["message_id"],
+            assistant_message_id=assistant_message["message_id"],
+            task_id=task["task_id"],
+        )
         task_events = self.repository.list_records("task_events", filters={"task_id": task["task_id"]}, limit=self.configured_limit("task_events_detail"))["items"]
         public_cards = self._public_chat_cards(cards)
         return {
@@ -3092,17 +3105,6 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
 
     def build_context_pack(self, request: ContextPackBuildRequest | dict[str, Any]) -> dict[str, Any]:
         data = request if isinstance(request, ContextPackBuildRequest) else ContextPackBuildRequest(**request)
-        refs_by_type: dict[str, list[str]] = {}
-        memory_items: list[dict[str, Any]] = []
-        for memory_type in data.include_memory_types:
-            page = self.repository.list_records(
-                "memory_items",
-                filters={"namespace": data.namespace, "memory_type": memory_type, "approval_status": "approved"},
-                limit=self.configured_limit("memory_items_context_pack"),
-            )
-            refs = [item["memory_id"] for item in page["items"]]
-            refs_by_type[memory_type] = refs
-            memory_items.extend(page["items"])
         temp_refs = []
         if data.task_id:
             temp_page = self.repository.list_records("temp_memories", filters={"task_id": data.task_id}, limit=self.configured_limit("temp_memories_context_pack"))
@@ -3111,13 +3113,48 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         token_budget = data.token_budget or self.configured_limit("default_context_pack_token_budget")
         if token_budget > max_context_budget:
             raise ValueError(f"token_budget exceeds configured context_pack_max_token_budget: {max_context_budget}")
+        user_message = data.user_message or self._context_pack_user_message(data.task_id)
+        runtime_config = dict(self.active_runtime_config())
+        memory_tree_config = dict(runtime_config.get("memory_tree") or {})
+        memory_tree_config.update(
+            {
+                "namespace": data.namespace,
+                "token_budget": token_budget,
+                "candidate_limit": max(
+                    int(memory_tree_config.get("candidate_limit") or 0),
+                    self.configured_limit("memory_items_context_pack") * 4,
+                ),
+                "max_items": int(memory_tree_config.get("max_items") or self.configured_limit("memory_items_context_pack")),
+            }
+        )
+        runtime_config["memory_tree"] = memory_tree_config
+        memory_result = select_memory_branches(
+            user_message,
+            data.dialogue_intent,
+            repo=self.repository,
+            runtime_config=runtime_config,
+        )
+        refs_by_type = memory_result.refs_by_type
+        memory_items = memory_result.memory_items
+        core_refs = [
+            *refs_by_type.get("core", []),
+            *refs_by_type.get("directive", []),
+            *refs_by_type.get("user_preference", []),
+            *refs_by_type.get("habit", []),
+            *refs_by_type.get("analysis_note", []),
+        ]
         pack_json = {
             "mandatory_rules": [
-                "Memory Ledger 是事实源，RAG/向量只能辅助召回。",
-                "正式 Issue 必须人工审核并同步 GitHub。",
-                "高风险 MCP/Skill 必须 preflight 和 approval。",
+                "Memory Ledger remains the source of truth; retrieval only selects approved memory.",
+                "Formal GitHub issue creation still requires explicit approval and sync.",
+                "High-risk MCP or skill execution requires preflight and approval.",
             ],
             "memory_items": memory_items,
+            "memory_route": {
+                "route_reason": memory_result.route_reason,
+                "matched_branches": memory_result.matched_branches,
+                "omitted_refs": memory_result.omitted_refs,
+            },
             "task_id": data.task_id,
             "agent_id": data.agent_id,
             "token_budget": token_budget,
@@ -3129,7 +3166,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "agent_id": data.agent_id,
             "model_profile": data.model_profile,
             "token_budget": token_budget,
-            "core_memory_refs": refs_by_type.get("core", []),
+            "core_memory_refs": core_refs,
             "procedural_memory_refs": refs_by_type.get("procedural", []),
             "architecture_memory_refs": refs_by_type.get("architecture", []),
             "task_state_refs": refs_by_type.get("task_state", []),
@@ -3137,8 +3174,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "graph_relation_refs": [],
             "external_source_refs": [],
             "temp_memory_refs": temp_refs,
-            "omitted_relevant_refs": [],
-            "pack_summary": f"Context Pack: {len(memory_items)} approved memories, {len(temp_refs)} temp memories",
+            "omitted_relevant_refs": memory_result.omitted_refs,
+            "pack_summary": f"Context Pack: {len(memory_items)} tree-selected memories, {len(temp_refs)} temp memories",
             "pack_json": pack_json,
             "checksum": sha256_json(pack_json),
         }
@@ -3154,6 +3191,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                     "retrieval_reason": {
                         "context_pack_id": context_pack_id,
                         "memory_type": item.get("memory_type"),
+                        "tree_path": item.get("tree_path"),
+                        "matched_branches": memory_result.matched_branches,
                         "source": "context_pack_build",
                     },
                     "used_in_prompt": True,
@@ -3163,9 +3202,80 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                     },
                 },
             )
+            self._mark_memory_used(item)
         if data.task_id:
-            self.add_task_event(data.task_id, TaskEventCreate(event_type="context_pack_built", message="Context Pack 已构建", payload_json={"context_pack_id": row["context_pack_id"]}))
+            self.add_task_event(data.task_id, TaskEventCreate(event_type="context_pack_built", message="Context Pack built", payload_json={"context_pack_id": row["context_pack_id"]}))
         return context_pack
+
+    def _context_pack_user_message(self, task_id: str | None) -> str | None:
+        if not task_id:
+            return None
+        task = self.repository.get_record("tasks", task_id)
+        if not task:
+            return None
+        input_json = task.get("input_json") or {}
+        if isinstance(input_json, dict):
+            value = input_json.get("user_message") or input_json.get("message")
+            if value:
+                return str(value)
+        return None
+
+    def _mark_memory_used(self, item: dict[str, Any]) -> None:
+        memory_id = item.get("memory_id")
+        if not memory_id:
+            return
+        self.repository.update_record(
+            "memory_items",
+            str(memory_id),
+            {
+                "last_used_at": utc_now().isoformat(),
+                "use_count": int(item.get("use_count") or 0) + 1,
+            },
+        )
+
+    def _schedule_memory_curator(
+        self,
+        *,
+        user_message: str,
+        assistant_message: str,
+        conversation_id: str,
+        user_message_id: str,
+        assistant_message_id: str,
+        task_id: str,
+    ) -> None:
+        def run_curator() -> CuratorResult:
+            result = MemoryCurator(self.repository).curate_turn(
+                user_message=user_message,
+                assistant_message=assistant_message,
+                conversation_id=conversation_id,
+                user_message_id=user_message_id,
+                assistant_message_id=assistant_message_id,
+                task_id=task_id,
+            )
+            changed = result.created_branch_ids or result.created_memory_ids or result.updated_memory_ids
+            if changed or result.approval_required_ids:
+                self.add_task_event(
+                    task_id,
+                    TaskEventCreate(
+                        event_type="memory_written",
+                        message="Memory curator processed chat turn",
+                        payload_json={
+                            "created_branch_ids": result.created_branch_ids,
+                            "created_memory_ids": result.created_memory_ids,
+                            "updated_memory_ids": result.updated_memory_ids,
+                            "approval_required_ids": result.approval_required_ids,
+                            "skipped": result.skipped,
+                            "async_worker": self.repository.health().get("mode") != "in_memory_test_only",
+                        },
+                    ),
+                )
+            return result
+
+        if self.repository.health().get("mode") == "in_memory_test_only":
+            run_curator()
+            return
+        threading.Thread(target=run_curator, name="research-assistant-memory-curator", daemon=True).start()
+
 
 
     def create_graph_entity(self, request: GraphEntityCreate | dict[str, Any]) -> dict[str, Any]:

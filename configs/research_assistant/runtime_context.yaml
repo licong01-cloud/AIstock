@@ -873,6 +873,15 @@ ui_execution:
   show_raw_json_debug_drawer: true
   raw_json_main_view: false
 
+memory_tree:
+  candidate_limit: 200
+  max_items: 50
+  token_budget: 16000
+  resident_memory_types:
+    - directive
+    - user_preference
+    - habit
+
 query_limits:
   conversation_messages_full: 500
   prompt_nodes_active: 500

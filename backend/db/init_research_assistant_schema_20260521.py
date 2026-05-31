@@ -20,7 +20,7 @@ except ImportError:  # pragma: no cover
         sys.path.insert(0, str(repo_root))
     from backend.db.pg_pool import get_conn
 
-RESEARCH_ASSISTANT_SCHEMA_VERSION = "research_assistant_mcp_skill_execution_v1_20260525"
+RESEARCH_ASSISTANT_SCHEMA_VERSION = "research_assistant_memory_tree_v1_20260601"
 
 RESEARCH_ASSISTANT_EVENT_TYPES: tuple[str, ...] = (
     "planned",
@@ -159,19 +159,38 @@ BASE_DDL: list[str] = [
         valid_to TIMESTAMPTZ,
         supersedes_id TEXT,
         contradicts_id TEXT,
+        tree_path TEXT,
+        parent_key TEXT,
+        node_type TEXT NOT NULL DEFAULT 'fact',
+        scope TEXT NOT NULL DEFAULT 'project',
+        importance REAL NOT NULL DEFAULT 0.5,
+        last_used_at TIMESTAMPTZ,
+        use_count INTEGER NOT NULL DEFAULT 0,
+        auto_created BOOLEAN NOT NULL DEFAULT FALSE,
+        trust_level TEXT NOT NULL DEFAULT 'user_stated',
+        provenance_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        resident BOOLEAN NOT NULL DEFAULT FALSE,
         checksum TEXT NOT NULL,
         created_by TEXT NOT NULL DEFAULT 'user',
         approved_by TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        CONSTRAINT ck_rmi_type CHECK (memory_type IN ('core','procedural','architecture','roadmap','task_state','experiment','episodic','external','agenda')),
+        CONSTRAINT ck_rmi_type CHECK (memory_type IN ('core','procedural','architecture','roadmap','task_state','experiment','episodic','external','agenda','user_preference','directive','habit','analysis_note')),
         CONSTRAINT ck_rmi_approval CHECK (approval_status IN ('draft','approved','rejected','expired','superseded')),
         CONSTRAINT ck_rmi_risk CHECK (risk_level IN ('low','medium','high','production_sensitive')),
-        CONSTRAINT ck_rmi_confidence CHECK (confidence >= 0 AND confidence <= 1)
+        CONSTRAINT ck_rmi_confidence CHECK (confidence >= 0 AND confidence <= 1),
+        CONSTRAINT ck_rmi_node_type CHECK (node_type IN ('branch','fact')),
+        CONSTRAINT ck_rmi_scope CHECK (scope IN ('project','personal')),
+        CONSTRAINT ck_rmi_importance CHECK (importance >= 0 AND importance <= 1),
+        CONSTRAINT ck_rmi_trust_level CHECK (trust_level IN ('user_stated','assistant_inferred')),
+        CONSTRAINT ck_rmi_use_count CHECK (use_count >= 0)
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_rmi_scope_type ON research_memory_items(namespace, memory_type, approval_status, updated_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_rmi_subject ON research_memory_items(subject_key, valid_to)",
+    "CREATE INDEX IF NOT EXISTS idx_rmi_tree ON research_memory_items(scope, tree_path, approval_status, importance DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_rmi_parent ON research_memory_items(parent_key)",
+    "CREATE INDEX IF NOT EXISTS idx_rmi_resident ON research_memory_items(scope, resident) WHERE resident = TRUE",
     """
     CREATE TABLE IF NOT EXISTS research_memory_access_log (
         access_id TEXT PRIMARY KEY,
@@ -898,6 +917,17 @@ TABLE_COMMENTS = {
 }
 
 COLUMN_COMMENTS = {
+    "research_memory_items.tree_path": "Dotted memory tree path under project.* or personal.* used for collapsed branch retrieval.",
+    "research_memory_items.parent_key": "Parent memory key or branch path; root nodes keep NULL.",
+    "research_memory_items.node_type": "Memory node kind: branch for structural nodes, fact for retrievable content.",
+    "research_memory_items.scope": "Memory scope boundary: project for shared project memory, personal for user-specific memory.",
+    "research_memory_items.importance": "Normalized 0..1 priority used with recency for deterministic memory ordering.",
+    "research_memory_items.last_used_at": "Last timestamp when this memory was selected into a context pack.",
+    "research_memory_items.use_count": "Number of times this memory has been selected or self-edited.",
+    "research_memory_items.auto_created": "True when curator created this branch or fact without manual seed.",
+    "research_memory_items.trust_level": "user_stated means the user explicitly said it; assistant_inferred means the assistant inferred it.",
+    "research_memory_items.provenance_json": "Required provenance for auto-created memories, including conversation, message, turn, and source.",
+    "research_memory_items.resident": "True when directive or preference memory must be injected every turn regardless of branch match.",
     "assistant_prompt_sources.source_id": "Stable prompt pack source import identifier.",
     "assistant_prompt_sources.pack_key": "Logical prompt pack key such as research_assistant.main.",
     "assistant_prompt_sources.pack_version": "Semantic prompt pack version imported from Git files.",
