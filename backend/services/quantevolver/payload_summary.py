@@ -9,6 +9,7 @@ aliases.
 from __future__ import annotations
 
 import json
+import math
 from typing import Any, Mapping
 
 SCALAR_METRIC_ALIASES: dict[str, tuple[str, ...]] = {
@@ -69,6 +70,56 @@ SUMMARY_CONFIG_KEYS = (
     "backtest_only",
 )
 
+COMPACT_ABSOLUTE_RETURN_KEYS: dict[str, tuple[str, ...]] = {
+    "cagr": ("cagr", "cagr_absolute", "annualized_return_absolute"),
+    "sharpe": ("sharpe", "sharpe_absolute", "information_ratio"),
+    "max_drawdown": ("max_drawdown", "max_drawdown_absolute"),
+    "total_return": ("total_return", "absolute_total_return"),
+    "annualized_volatility": ("annualized_volatility", "volatility"),
+    "avg_cash_ratio": ("avg_cash_ratio", "average_cash_ratio"),
+    "initial_capital": ("initial_capital", "initial_cash"),
+    "final_cash": ("final_cash", "final_cash_amount", "ending_cash", "end_cash"),
+    "final_stock_value": (
+        "final_stock_value",
+        "final_stock_market_value",
+        "ending_stock_market_value",
+        "end_stock_market_value",
+    ),
+    "final_total_value": ("final_total_value", "final_account_value", "final_total_account", "final_account"),
+    "final_stock_count": ("final_stock_count", "final_position_count", "end_position_count"),
+    "n_trading_days": ("n_trading_days", "trading_days"),
+}
+
+COMPACT_TRADE_DIAGNOSTIC_KEYS: dict[str, tuple[str, ...]] = {
+    "avg_turnover": ("avg_turnover", "average_turnover"),
+    "annualized_turnover": ("annualized_turnover",),
+    "daily_trade_count_avg": ("daily_trade_count_avg", "avg_daily_trade_count"),
+    "total_turnover": ("total_turnover",),
+}
+
+COMPACT_POSITION_KEYS: dict[str, tuple[str, ...]] = {
+    "position_count_min": ("position_count_min", "min_position_count", "holding_count_min", "min_holding_count"),
+    "position_count_avg": (
+        "position_count_avg",
+        "avg_position_count",
+        "holding_count_avg",
+        "avg_holding_count",
+        "average_holding_count",
+    ),
+    "position_count_max": ("position_count_max", "max_position_count", "holding_count_max", "max_holding_count"),
+    "position_count_p95": ("position_count_p95", "p95_position_count", "holding_count_p95", "p95_holding_count"),
+    "final_stock_count": ("final_stock_count", "final_position_count", "end_position_count"),
+    "final_cash": ("final_cash", "final_cash_amount", "ending_cash", "end_cash"),
+    "final_stock_value": (
+        "final_stock_value",
+        "final_stock_market_value",
+        "ending_stock_market_value",
+        "end_stock_market_value",
+    ),
+    "final_total_value": ("final_total_value", "final_account_value", "final_total_account", "final_account"),
+    "final_cash_ratio": ("final_cash_ratio",),
+}
+
 
 def parse_jsonish(value: Any) -> Any:
     if isinstance(value, (dict, list)):
@@ -111,6 +162,22 @@ def _mapping(value: Any) -> dict[str, Any]:
     return dict(parsed) if isinstance(parsed, Mapping) else {}
 
 
+def _first_number_from_sources(sources: list[Mapping[str, Any]], aliases: tuple[str, ...]) -> float | int | None:
+    return first_number(_first_by_alias(sources, aliases))
+
+
+def _compact_numeric_fields(
+    sources: list[Mapping[str, Any]],
+    aliases_by_key: Mapping[str, tuple[str, ...]],
+) -> dict[str, Any]:
+    compact: dict[str, Any] = {}
+    for key, aliases in aliases_by_key.items():
+        value = _first_number_from_sources(sources, aliases)
+        if value is not None:
+            compact[key] = value
+    return compact
+
+
 def _containers(metrics: Mapping[str, Any] | None) -> list[Mapping[str, Any]]:
     if not isinstance(metrics, Mapping):
         return []
@@ -132,10 +199,140 @@ def _containers(metrics: Mapping[str, Any] | None) -> list[Mapping[str, Any]]:
 def _first_by_alias(containers: list[Mapping[str, Any]], aliases: tuple[str, ...]) -> Any:
     for container in containers:
         for alias in aliases:
+            if "." in alias and alias not in container:
+                current: Any = container
+                for part in alias.split("."):
+                    if not isinstance(current, Mapping) or part not in current:
+                        current = None
+                        break
+                    current = current[part]
+                if current is not None:
+                    return current
             value = container.get(alias)
             if value is not None:
                 return value
     return None
+
+
+def _trade_action(value: Any) -> str | None:
+    text = str(value or "").strip().lower()
+    if text in {"buy", "b", "open", "long", "entry"} or "buy" in text:
+        return "buy"
+    if text in {"sell", "s", "close", "exit"} or "sell" in text:
+        return "sell"
+    return None
+
+
+def _curve_dates(enhanced: Mapping[str, Any]) -> list[str]:
+    curves = enhanced.get("return_curves")
+    if not isinstance(curves, Mapping):
+        return []
+    dates = curves.get("dates")
+    if not isinstance(dates, list):
+        return []
+    return [str(item)[:10] for item in dates if item not in (None, "")]
+
+
+def _derive_position_counts_from_stock_trades(enhanced: Mapping[str, Any]) -> dict[str, Any]:
+    stock_trades = enhanced.get("stock_trades")
+    if not isinstance(stock_trades, Mapping):
+        return {}
+
+    events: dict[str, list[tuple[str, str]]] = {}
+    for symbol, trades in stock_trades.items():
+        if not isinstance(trades, list):
+            continue
+        symbol_text = str(symbol)
+        for trade in trades:
+            if not isinstance(trade, Mapping):
+                continue
+            trade_date = trade.get("date") or trade.get("datetime") or trade.get("trade_date")
+            action = _trade_action(trade.get("type") or trade.get("side") or trade.get("action"))
+            if not trade_date or not action:
+                continue
+            events.setdefault(str(trade_date)[:10], []).append((action, symbol_text))
+    if not events:
+        return {}
+
+    ordered_dates = _curve_dates(enhanced) or sorted(events)
+    active: set[str] = set()
+    counts: list[int] = []
+    for date in sorted(set(ordered_dates).union(events)):
+        for action, symbol in events.get(date, []):
+            if action == "buy":
+                active.add(symbol)
+            elif action == "sell":
+                active.discard(symbol)
+        if date in ordered_dates or date in events:
+            counts.append(len(active))
+
+    if not counts:
+        return {}
+    sorted_counts = sorted(counts)
+    p95_index = min(len(sorted_counts) - 1, max(0, math.ceil(len(sorted_counts) * 0.95) - 1))
+    return {
+        "position_count_min": min(counts),
+        "position_count_avg": sum(counts) / len(counts),
+        "position_count_max": max(counts),
+        "position_count_p95": sorted_counts[p95_index],
+        "final_stock_count": counts[-1],
+    }
+
+
+def derive_position_summary_from_enhanced_metrics(enhanced_metrics: Any) -> dict[str, Any]:
+    """Build a compact position summary without returning per-stock trade payloads."""
+    enhanced = _mapping(enhanced_metrics)
+    if not enhanced:
+        return {}
+
+    absolute = _mapping(enhanced.get("absolute_returns"))
+    existing_sources = [
+        _mapping(enhanced.get("position_summary")),
+        _mapping(enhanced.get("holding_audit")),
+        _mapping(enhanced.get("position_diagnostics")),
+        absolute,
+        enhanced,
+    ]
+    summary = _compact_numeric_fields(existing_sources, COMPACT_POSITION_KEYS)
+
+    if summary.get("position_count_avg") is None or summary.get("position_count_max") is None:
+        derived = _derive_position_counts_from_stock_trades(enhanced)
+        for key, value in derived.items():
+            summary.setdefault(key, value)
+
+    final_total = summary.get("final_total_value")
+    final_cash = summary.get("final_cash")
+    if summary.get("final_cash_ratio") is None and final_total not in (None, 0) and final_cash is not None:
+        summary["final_cash_ratio"] = final_cash / final_total
+
+    return summary
+
+
+def compact_enhanced_metric_summary(metrics: Any) -> dict[str, Any]:
+    """Return only enhanced scalar summaries needed by UI comparison views."""
+    parsed = _mapping(metrics)
+    enhanced = _mapping(parsed.get("enhanced_metrics"))
+    if not enhanced:
+        return {}
+
+    summary_sources = [_mapping(enhanced.get("summary")), _mapping(parsed.get("summary"))]
+    absolute_sources = [_mapping(enhanced.get("absolute_returns")), *summary_sources]
+    trade_sources = [_mapping(enhanced.get("trade_diagnostics")), _mapping(parsed.get("trade_diagnostics"))]
+
+    compact: dict[str, Any] = {}
+    absolute = _compact_numeric_fields(absolute_sources, COMPACT_ABSOLUTE_RETURN_KEYS)
+    if absolute:
+        compact["absolute_returns"] = absolute
+
+    position_summary = derive_position_summary_from_enhanced_metrics(enhanced)
+    if position_summary:
+        compact["position_summary"] = position_summary
+
+    trade = _compact_numeric_fields(trade_sources, COMPACT_TRADE_DIAGNOSTIC_KEYS)
+    if trade:
+        compact["trade_diagnostics"] = trade
+
+    return compact
 
 
 def compact_metric_summary(metrics: Any, *, row: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -159,6 +356,9 @@ def compact_metric_summary(metrics: Any, *, row: Mapping[str, Any] | None = None
             if val_final is not None and "val_loss_final" not in summary:
                 summary["val_loss_final"] = val_final
             break
+    enhanced_summary = compact_enhanced_metric_summary(parsed)
+    if enhanced_summary:
+        summary["enhanced_metrics"] = enhanced_summary
     return summary
 
 

@@ -224,6 +224,17 @@ function isHmmTask(task: Task): boolean {
 function normalizeSummaryLoop(loop: Loop): Loop {
   const configSummary = (loop as any).config_summary || {};
   const metricsSummary = (loop as any).metrics_summary || {};
+  const metricsJson = loop.metrics_json || {
+    ...metricsSummary,
+    IC: metricsSummary.ic ?? (loop as any).ic,
+    ICIR: metricsSummary.icir ?? (loop as any).icir,
+    Rank_IC: metricsSummary.rank_ic ?? (loop as any).rank_ic,
+    Rank_ICIR: metricsSummary.rank_icir ?? (loop as any).rank_icir,
+    annualized_return: metricsSummary.annualized_return ?? (loop as any).annualized_return,
+    max_drawdown: metricsSummary.max_drawdown ?? (loop as any).max_drawdown,
+    information_ratio: metricsSummary.information_ratio ?? (loop as any).information_ratio,
+    sharpe: metricsSummary.sharpe ?? metricsSummary.information_ratio ?? (loop as any).information_ratio,
+  };
   return {
     ...loop,
     config_json: loop.config_json || {
@@ -234,16 +245,7 @@ function normalizeSummaryLoop(loop: Loop): Loop {
       label_horizon: configSummary.label_horizon || (loop as any).label_horizon,
       execution_algo: configSummary.execution_algo || (loop as any).execution_algo,
     },
-    metrics_json: loop.metrics_json || {
-      ...metricsSummary,
-      IC: metricsSummary.ic ?? (loop as any).ic,
-      ICIR: metricsSummary.icir ?? (loop as any).icir,
-      Rank_IC: metricsSummary.rank_ic ?? (loop as any).rank_ic,
-      Rank_ICIR: metricsSummary.rank_icir ?? (loop as any).rank_icir,
-      annualized_return: metricsSummary.annualized_return ?? (loop as any).annualized_return,
-      max_drawdown: metricsSummary.max_drawdown ?? (loop as any).max_drawdown,
-      information_ratio: metricsSummary.information_ratio ?? (loop as any).information_ratio,
-    },
+    metrics_json: metricsJson,
   };
 }
 
