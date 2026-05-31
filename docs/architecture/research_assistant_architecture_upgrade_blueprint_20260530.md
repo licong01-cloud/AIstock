@@ -564,7 +564,7 @@ COMMENT ON TABLE qe_autonomous_evolution_runs IS 'QE 自主演进主循环运行
 
 > 实现时每完成一项，在本矩阵对应行追加 PR 链接与提交哈希，保持设计-实现强一致。
 
-> Phase 0 基线锁定锚点：`docs/process/research_assistant_baseline_verification_20260531.md` 逐条复验 DEF-01~12 与 §1.1 资产；`backend/tests/research_assistant/test_phase0_blueprint_baseline.py`、`tests/aistock_validation/catalog/module_registry.yaml`、`tests/aistock_validation/catalog/file_ownership.yaml`、`tests/aistock_validation/catalog/test_plans.yaml`、`noxfile.py` 将本矩阵登记为 `ra_phase0_baseline` 闸门。Phase 0 实现 commit `5ab79e2c625efa831da641298b9b08e81614bc72`；本锚点只声明基线和登记，不把未来行标记为已实现。
+> Phase 0 基线锁定锚点：`docs/process/research_assistant_baseline_verification_20260531.md` 逐条复验 DEF-01~12 与 §1.1 资产；`backend/tests/research_assistant/test_phase0_blueprint_baseline.py`、`tests/aistock_validation/catalog/module_registry.yaml`、`tests/aistock_validation/catalog/file_ownership.yaml`、`tests/aistock_validation/catalog/test_plans.yaml`、`noxfile.py` 将本矩阵登记为 `ra_phase0_baseline` 闸门。Phase 0 实现 commit `53a0f03d6a2bb05049a99f57998c3845b7d681f1`；本锚点只声明基线和登记，不把未来行标记为已实现。
 
 ---
 
@@ -795,7 +795,7 @@ COMMENT ON TABLE assistant_prompt_lab_runs IS '提示词自优化候选(GEPA/DSP
 | Prompt Lab | DEF-12 | `assistant_prompt_lab_runs`、GEPA/DSPy+judge | `test_prompt_lab_gepa_offline.py` / `_judge_gated.py` |
 | 技能库 | DEF-12 | `assistant_skill_library`、L4 课程 | `test_skill_library.py` |
 
-> Phase 0 增补锚点：`research_assistant.code_intelligence`、`research_assistant.proactive_reports`、`research_assistant.reflection_card`、`research_assistant.prompt_lab`、`research_assistant.skill_library` 已在 module/file ownership catalog 中登记；Phase 0 实现 commit `5ab79e2c625efa831da641298b9b08e81614bc72`。
+> Phase 0 增补锚点：`research_assistant.code_intelligence`、`research_assistant.proactive_reports`、`research_assistant.reflection_card`、`research_assistant.prompt_lab`、`research_assistant.skill_library` 已在 module/file ownership catalog 中登记；Phase 0 实现 commit `53a0f03d6a2bb05049a99f57998c3845b7d681f1`。
 
 ### 16.10 Design Acceptance Index（补 §13）
 
@@ -943,7 +943,7 @@ COMMENT ON TABLE assistant_mcp_connections IS '通用 MCP 客户端连接登记�
 | 通用 MCP 客户端 + 发现/审核 | DEF-13 | `assistant_mcp_connections`、`capabilities.review_status`、闸门 | `test_generic_mcp_discovery.py` / `test_quarantine_tool_blocked.py` |
 | 知识包抽离 + 数据隔离 | DEF-13 | `aistock_knowledge_pack`、Knowledge Pack Provider | `test_core_empty_boot.py` / `test_pack_load_isolation.py` |
 
-> Phase 0 解耦锚点：`research_assistant.product_core`、`research_assistant.core_adapter`、`research_assistant.generic_mcp_client`、`research_assistant.aistock_domain_adapter`、`research_assistant.aistock_knowledge_pack` 已在 module/file ownership catalog 中登记；Phase 0 实现 commit `5ab79e2c625efa831da641298b9b08e81614bc72`。
+> Phase 0 解耦锚点：`research_assistant.product_core`、`research_assistant.core_adapter`、`research_assistant.generic_mcp_client`、`research_assistant.aistock_domain_adapter`、`research_assistant.aistock_knowledge_pack` 已在 module/file ownership catalog 中登记；Phase 0 实现 commit `53a0f03d6a2bb05049a99f57998c3845b7d681f1`。
 
 ### 17.11 Design Acceptance Index（补 §13）
 
