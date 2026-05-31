@@ -327,6 +327,24 @@ plans:
     runner_enabled: true
     max_duration_seconds: 300
     evidence_kinds: [pytest]
+  - plan_key: ra_phase0_baseline
+    title: Research Assistant Phase 0 baseline lock and scaffold gate
+    module: research_assistant
+    level: L0
+    command_key: nox_ra_phase0_baseline
+    nox_session: ra_phase0_baseline
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: true
+    writes_business_state: false
+    runner_enabled: true
+    max_duration_seconds: 600
+    evidence_kinds: [baseline, pytest, catalog_integrity, guardrail]
+    manual_review_controls: [DESIGN-COMPLIANCE-001]
   - plan_key: research_assistant_backend
     title: Research Assistant Console backend and schema tests
     module: research_assistant
