@@ -3,7 +3,7 @@
 - batch_id: `ra_phase0`
 - branch: `codex/ra-baseline-20260601`
 - baseline_source_commit: `0b7a811235ff46c993f92b7c2c5d14bfe5225b77`
-- implementation_commit: `pending-after-first-phase0-commit`
+- implementation_commit: `5ab79e2c625efa831da641298b9b08e81614bc72`
 - traceability_commit: `pending-after-g3-commit`
 - 验证计划: `ra_phase0_baseline`
 - 生产影响: `production_ddl_gate=noop`; `production_backend_dependency_gate=noop`; `production_frontend_dependency_gate=noop`
@@ -85,5 +85,5 @@ DEF-13 是后续 Phase 13~15 的解耦缺口。Phase 0 已将 `research_assistan
 ## 待回填
 
 - G1 run_id: `pending-validation-center`
-- implementation_commit: `pending-after-first-phase0-commit`
+- implementation_commit: `5ab79e2c625efa831da641298b9b08e81614bc72`
 - traceability_commit: `pending-after-g3-commit`
