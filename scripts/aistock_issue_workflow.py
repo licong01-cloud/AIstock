@@ -1106,6 +1106,15 @@ def _bug_json_path(record: dict[str, Any], root: Path | None = None) -> Path:
     return _bugs_root(root) / f"{_today_compact()}_{bug_id}-{_slug(str(record.get('title') or bug_id))}.json"
 
 
+def _add_record_allowed_scope(record: dict[str, Any], *paths: str | Path) -> None:
+    scope = [str(item).replace("\\", "/").strip("/") for item in flow._as_list(record.get("allowed_write_scope"))]
+    for raw_path in paths:
+        path = str(raw_path).replace("\\", "/").strip("/")
+        if path and path not in scope:
+            scope.append(path)
+    record["allowed_write_scope"] = scope
+
+
 def _registry_target_root() -> Path:
     override = os.environ.get("AISTOCK_ISSUE_REGISTRY_ROOT")
     return Path(override) if override else REPO_ROOT
@@ -1890,6 +1899,11 @@ def build_submit_bug_plan(
         candidate_path = output_dir / "candidate.json"
         github_body_path = output_dir / "github-issue-body.md"
         bug_path = _bug_json_path(record, registry_root)
+        _add_record_allowed_scope(
+            record,
+            _repo_rel(bug_path, registry_root),
+            _repo_rel(_allocator_path(registry_root), registry_root),
+        )
         github_result: dict[str, Any] | None = None
 
         if effective_apply and bug_path.exists():
@@ -4214,6 +4228,7 @@ def _checks_summary_payload(checks_view: dict[str, list[str]]) -> dict[str, Any]
         "non_blocking_count": len(checks_view.get("non_blocking") or []),
         "failed": list(checks_view.get("failed") or [])[:5],
         "pending": list(checks_view.get("pending") or [])[:5],
+        "non_blocking": list(checks_view.get("non_blocking") or [])[:5],
     }
 
 
@@ -4591,6 +4606,152 @@ def _cleanup_merge_verification(branch: str, pr_url: str | None, merged: bool) -
                 "tree_equivalence_ref": branch,
             }
         )
+    return payload
+
+
+def _canonical_bug_record_snapshot(bug_id: str, root: Path | None = None) -> dict[str, Any]:
+    canonical_root = root or _canonical_root()
+    payload: dict[str, Any] = {
+        "bug_id": bug_id,
+        "canonical_root": str(canonical_root),
+        "persisted": False,
+        "path": None,
+        "status": None,
+    }
+    bugs_root = _bugs_root(canonical_root)
+    if not bugs_root.exists():
+        payload["reason"] = "bugs_root_missing"
+        return payload
+    for path in _bug_files(bugs_root):
+        try:
+            record = _load_json(path)
+        except WorkflowError:
+            continue
+        if str(record.get("bug_id") or "").strip().upper() != bug_id:
+            continue
+        payload.update(
+            {
+                "persisted": True,
+                "path": _repo_rel(path, canonical_root),
+                "status": record.get("status"),
+                "github_issue_number": record.get("github_issue_number"),
+                "github_issue_url": record.get("github_issue_url"),
+            }
+        )
+        return payload
+    payload["reason"] = "bug_record_missing"
+    return payload
+
+
+def build_registry_intake_cleanup_plan(
+    *,
+    bug_id: str,
+    apply: bool = False,
+    canonical_root: str | None = None,
+) -> dict[str, Any]:
+    canonical_bug_id = bug_id.strip().upper()
+    root = Path(canonical_root) if canonical_root else _canonical_root()
+    persisted = _canonical_bug_record_snapshot(canonical_bug_id, root)
+    current_cwd = Path.cwd().resolve()
+    local_branches = set(_git(["for-each-ref", "--format=%(refname:short)", "refs/heads"], check=False).splitlines())
+    merged_refs = set(_git(["branch", "--format=%(refname:short)", "--merged", "origin/main"], check=False).splitlines())
+    candidates: list[dict[str, Any]] = []
+    warnings: list[str] = []
+
+    for item in _active_workflows_for_bug(canonical_bug_id):
+        if not str(item.get("workflow_role") or "").startswith("registry"):
+            continue
+        worktree_path = Path(str(item.get("worktree") or item.get("root") or ""))
+        branch = str(item.get("branch") or "").strip()
+        exists = bool(str(worktree_path)) and worktree_path.exists()
+        git = item.get("git") if isinstance(item.get("git"), dict) else (_git_snapshot(worktree_path) if exists else {})
+        dirty = bool(git.get("dirty")) if git else True
+        is_current_cwd = exists and worktree_path.resolve() == current_cwd
+        remote_ref = _git(["ls-remote", "--heads", "origin", branch], check=False) if branch else ""
+        safe = bool(persisted.get("persisted")) and exists and not dirty and not is_current_cwd
+        reason = None
+        if not persisted.get("persisted"):
+            reason = "canonical_bug_record_missing"
+        elif not exists:
+            reason = "worktree_missing"
+        elif dirty:
+            reason = "worktree_dirty"
+        elif is_current_cwd:
+            reason = "refusing_current_cwd"
+        actions = []
+        if exists:
+            actions.append({"action": "remove_worktree", "worktree": str(worktree_path), "safe": safe})
+        if branch and branch in local_branches:
+            actions.append(
+                {
+                    "action": "delete_local_branch",
+                    "branch": branch,
+                    "safe": safe,
+                    "delete_flag": "-d" if branch in merged_refs else "-D",
+                }
+            )
+        if branch and remote_ref:
+            actions.append({"action": "delete_remote_branch", "branch": branch, "safe": safe})
+        if not safe and reason:
+            warnings.append(f"registry intake cleanup skipped for {worktree_path}: {reason}")
+        candidates.append(
+            {
+                "worktree": str(worktree_path) if str(worktree_path) else None,
+                "branch": branch or None,
+                "issue_json": item.get("issue_json"),
+                "dirty": dirty,
+                "safe": safe,
+                "skip_reason": None if safe else reason,
+                "actions": actions,
+            }
+        )
+
+    safe_candidates = [item for item in candidates if item.get("safe")]
+    payload: dict[str, Any] = {
+        "schema_version": "aistock_issue_workflow_registry_intake_cleanup_v1",
+        "generated_at": _utc_now(),
+        "bug_id": canonical_bug_id,
+        "canonical_bug_record": persisted,
+        "candidates": candidates,
+        "warnings": warnings,
+        "dry_run": not apply,
+        "workflow_gate": "ready_for_cleanup" if safe_candidates else "skipped",
+    }
+    if not apply or not safe_candidates:
+        return payload
+
+    started = time.monotonic()
+    applied: list[dict[str, Any]] = []
+    for candidate in safe_candidates:
+        for action in candidate.get("actions") or []:
+            if not action.get("safe"):
+                continue
+            if action["action"] == "remove_worktree":
+                applied.append(
+                    {
+                        "command": f"git worktree remove {action['worktree']}",
+                        "result": _execute_checked(["git", "worktree", "remove", str(action["worktree"])], cwd=REPO_ROOT, timeout=120),
+                    }
+                )
+            elif action["action"] == "delete_local_branch":
+                flag = str(action.get("delete_flag") or "-d")
+                applied.append(
+                    {
+                        "command": f"git branch {flag} {action['branch']}",
+                        "result": _execute_checked(["git", "branch", flag, str(action["branch"])], cwd=REPO_ROOT, timeout=120),
+                    }
+                )
+            elif action["action"] == "delete_remote_branch":
+                applied.append(
+                    {
+                        "command": f"git push origin --delete {action['branch']}",
+                        "result": _execute_checked(["git", "push", "origin", "--delete", str(action["branch"])], cwd=REPO_ROOT, timeout=180),
+                    }
+                )
+    payload["applied"] = applied
+    payload["duration_seconds"] = round(time.monotonic() - started, 3)
+    payload["workflow_gate"] = "cleanup_done"
+    payload["dry_run"] = False
     return payload
 
 
@@ -4994,6 +5155,7 @@ def build_merge_finalizer_plan(
     if cleanup and source_branch:
         cleanup_plan = build_cleanup_after_merge_plan(
             branch=source_branch,
+            bug_id=canonical_bug_id,
             worktree=source_worktree,
             pr_url=source_pr_url,
             apply=merge_close_sync_pr,
@@ -5366,6 +5528,7 @@ def build_close_sync_plan(
 def build_cleanup_after_merge_plan(
     *,
     branch: str,
+    bug_id: str | None = None,
     worktree: str | None = None,
     pr_url: str | None = None,
     apply: bool = False,
@@ -5438,6 +5601,12 @@ def build_cleanup_after_merge_plan(
         "dry_run": not apply,
         "workflow_gate": "ready_for_cleanup" if not blocking else "blocked",
     }
+    if bug_id:
+        payload["registry_intake_cleanup"] = build_registry_intake_cleanup_plan(
+            bug_id=bug_id,
+            apply=False,
+            canonical_root=str(root),
+        )
     output_dir = REPO_ROOT / WORKFLOW_ROOT / "cleanup"
     _write_json(output_dir / f"{_slug(branch)}-cleanup-plan.json", payload)
     if apply:
@@ -5466,6 +5635,15 @@ def build_cleanup_after_merge_plan(
             applied.append({"command": f"git branch {delete_flag} {branch}", "result": _execute_checked(["git", "branch", delete_flag, branch], cwd=REPO_ROOT, timeout=120)})
         if remote_ref:
             applied.append({"command": f"git push origin --delete {branch}", "result": _execute_checked(["git", "push", "origin", "--delete", branch], cwd=REPO_ROOT, timeout=180)})
+        if bug_id:
+            registry_cleanup = build_registry_intake_cleanup_plan(
+                bug_id=bug_id,
+                apply=True,
+                canonical_root=str(root),
+            )
+            payload["registry_intake_cleanup"] = registry_cleanup
+            if registry_cleanup.get("warnings"):
+                payload["warnings"].extend(registry_cleanup.get("warnings") or [])
         payload["applied"] = applied
         payload["workflow_gate"] = "cleanup_done"
         payload["dry_run"] = False
@@ -5712,6 +5890,7 @@ def cmd_close_sync(args: argparse.Namespace) -> int:
 def cmd_cleanup_after_merge(args: argparse.Namespace) -> int:
     payload = build_cleanup_after_merge_plan(
         branch=args.branch,
+        bug_id=args.bug_id,
         worktree=args.worktree,
         pr_url=args.pr_url,
         apply=args.apply,
