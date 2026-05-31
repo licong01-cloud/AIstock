@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from backend.infra.qmt_client import QMTStatus
+from backend.infra.qmt_client import QMTStatus, build_qmt_order_diagnostic
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
 from backend.services.paper_trading_v2.readiness import PaperTradingReadinessService
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
@@ -54,6 +54,31 @@ from backend.tests.paper_trading_v2.test_day_runner import (
 TRADE_DATE = date(2024, 1, 2)
 
 
+def test_build_qmt_order_diagnostic_marks_stale_cancelable_and_bad_status_msg() -> None:
+    stale_epoch = int(datetime(2024, 1, 2, 9, 31, tzinfo=UTC).timestamp())
+    diagnostic = build_qmt_order_diagnostic(
+        {
+            "order_id": "1090519216",
+            "order_status": 50,
+            "order_time": str(stale_epoch),
+            "status_msg": "[COUNTER][260200][\u00e5\u008f",
+        },
+        cancelable_only=True,
+    )
+
+    assert diagnostic["schema_version"] == "qmt_order_diagnostic_v1"
+    assert diagnostic["broker_error_code"] == "260200"
+    assert diagnostic["status_msg_maybe_truncated"] is True
+    assert diagnostic["status_msg_encoding_warning"] is True
+    assert diagnostic["diagnostic_gap"] is True
+    assert diagnostic["cancelable_stale_warning"] is True
+    assert diagnostic["cancelable_stale_reason"] == "historical_cancelable_order_reported_by_broker"
+
+    code_only = build_qmt_order_diagnostic({"order_status": 57, "status_msg": "[COUNTER][260200]"})
+    assert code_only["diagnostic_completeness"] == "broker_status_msg_code_only"
+    assert code_only["status_msg_maybe_truncated"] is False
+
+
 class FakeQMTClient:
     def __init__(
         self,
@@ -69,6 +94,7 @@ class FakeQMTClient:
         self.mode = mode
         self.place_calls: list[dict] = []
         self.cancel_calls: list[str] = []
+        self.last_order_diagnostic: dict | None = None
         self.orders: list[dict] = []
         self.trades: list[dict] = []
         self.account = {
@@ -103,9 +129,21 @@ class FakeQMTClient:
     def place_order(self, **kwargs):
         self.place_calls.append(kwargs)
         if self.next_order_id <= 0:
+            self.last_order_diagnostic = {
+                "schema_version": "qmt_order_submit_diagnostic_v1",
+                "accepted": False,
+                "raw_return_code": -1,
+                "classification": "xtquant_nonpositive_return",
+            }
             return -1, "fake rejected"
         order_id = self.next_order_id
         self.next_order_id += 1
+        self.last_order_diagnostic = {
+            "schema_version": "qmt_order_submit_diagnostic_v1",
+            "accepted": True,
+            "raw_return_code": order_id,
+            "classification": "accepted",
+        }
         self.orders.append(
             {
                 "order_id": str(order_id),
@@ -123,6 +161,9 @@ class FakeQMTClient:
             }
         )
         return order_id, "submitted"
+
+    def get_last_order_diagnostic(self):
+        return dict(self.last_order_diagnostic) if self.last_order_diagnostic else None
 
     def get_orders(self, cancelable_only: bool = False):
         return list(self.orders)
@@ -329,6 +370,9 @@ def test_place_order_failure_raises_broker_rejected_and_records_status() -> None
     status = backend.query_status(handle)
     assert status.state == "rejected"
     assert status.rejection_reason == "fake rejected"
+    assert status.raw["raw_return_code"] == -1
+    assert status.raw["submit_diagnostic"]["classification"] == "xtquant_nonpositive_return"
+    assert status.raw["diagnostic_gap_reason"] == "xtquant_nonpositive_return"
 
 
 def test_day_runner_minqmt_submit_error_persists_rejection_diagnostic() -> None:

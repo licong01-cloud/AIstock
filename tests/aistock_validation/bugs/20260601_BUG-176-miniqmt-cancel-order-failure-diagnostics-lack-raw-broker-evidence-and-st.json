@@ -1,0 +1,73 @@
+{
+  "actual": "Cancel endpoints return only success=false/message=cancel failed, qmt_client discards non-zero xtquant return codes, qmt/orders can report historical cancelable order without stale/window classification, and Paper v2 rejected-order evidence may still contain truncated counter text.",
+  "allowed_write_scope": [
+    "backend/infra/qmt_client.py",
+    "backend/routers/qmt.py",
+    "backend/services/paper_trading_v2/broker/minqmtsim.py",
+    "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+    "backend/tests/qmt_strategy_ledger/test_router_managed_orders_guard.py",
+    "tests/aistock_validation/bugs/20260601_BUG-176-miniqmt-cancel-order-failure-diagnostics-lack-raw-broker-evidence-and-st.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-176",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-31T16:04:21.680233Z",
+  "description": "Cancel endpoints return only success=false/message=cancel failed, qmt_client discards non-zero xtquant return codes, qmt/orders can report historical cancelable order without stale/window classification, and Paper v2 rejected-order evidence may still contain truncated counter text.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260601-0e7936c4ebee",
+      "timestamp": "2026-05-31T16:04:21.680229Z"
+    },
+    {
+      "action": "set_allowed_write_scope",
+      "actor": "codex",
+      "note": "Scope synchronized from BUG-176 fix-ready context pack before PR closure checks.",
+      "timestamp": "2026-05-31T16:54:44.690139Z"
+    }
+  ],
+  "evidence_uris": [
+    "2026-06-01 pre-open MiniQMT SIM: 688350.SH order_id=1090519216 stayed cancelable; cancel by order_id and sysid returned generic failure; scheduler and sessions remained healthy."
+  ],
+  "expected": "All MiniQMT submit/cancel/query surfaces used by Paper v2 expose structured broker diagnostics: raw return code, operation type, cancel method, order_id/order_sysid/market, full status_msg when available, exchange/counter rule classification when inferable, stale/non-trading-window warning semantics for cancelable orders, and tests proving no silent fallback or truncation.",
+  "first_seen_at": "2026-05-31T16:04:21.680233Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 431,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/431",
+  "last_seen_at": "2026-05-31T16:04:21.680233Z",
+  "module": "paper_trading_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "GET /api/v1/qmt/orders?cancelable_only=true, then POST /api/v1/qmt/cancel with order_id=1090519216 on MiniQMT SIM outside the valid cancellation window.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "paper_trading_v2"
+  ],
+  "title": "MiniQMT cancel/order failure diagnostics lack raw broker evidence and stale-order semantics",
+  "trigger_condition": {
+    "fingerprint": "0e7936c4ebee91b812bf24ed",
+    "source_event_id": "FE-20260601-0e7936c4ebee"
+  },
+  "verification_run_id": null,
+  "workflow_gate": "allowed"
+}

@@ -229,6 +229,7 @@ class MiniQMTSimBackend(BrokerBackend):
                     strategy_name=strategy_name,
                     order_remark=order_remark,
                 )
+                submit_diagnostic = _safe_last_order_diagnostic(self._qmt_client)
             except QMTNotAvailableError as exc:
                 raise BrokerConnectivityError(
                     "MiniQMT order submit failed because client is unavailable",
@@ -256,6 +257,7 @@ class MiniQMTSimBackend(BrokerBackend):
                     handle_id=f"mqh_{uuid4().hex}",
                     reason=str(message or "MiniQMT rejected the order"),
                     event_at=submitted_at,
+                    diagnostic=submit_diagnostic,
                 )
                 handle = OrderHandle(
                     handle_id=status.handle_id,
@@ -300,7 +302,11 @@ class MiniQMTSimBackend(BrokerBackend):
                 rejection_reason=None,
                 raw_status="submitted",
                 status_msg=None,
-                raw={"miniqmt_order_id": str(order_id), "message": str(message or "")},
+                raw={
+                    "miniqmt_order_id": str(order_id),
+                    "message": str(message or ""),
+                    **({"submit_diagnostic": submit_diagnostic} if submit_diagnostic else {}),
+                },
             )
             self._records[handle.handle_id] = _OrderRecord(
                 handle=handle,
@@ -701,7 +707,15 @@ class MiniQMTSimBackend(BrokerBackend):
         )
 
     @staticmethod
-    def _rejected_status(*, handle_id: str, reason: str, event_at: datetime) -> OrderHandleStatus:
+    def _rejected_status(
+        *, handle_id: str, reason: str, event_at: datetime, diagnostic: dict[str, Any] | None = None
+    ) -> OrderHandleStatus:
+        raw: dict[str, object] = {"message": reason}
+        if diagnostic:
+            raw["submit_diagnostic"] = diagnostic
+            raw["raw_return_code"] = diagnostic.get("raw_return_code")
+            raw["diagnostic_gap"] = True
+            raw["diagnostic_gap_reason"] = diagnostic.get("classification") or "miniqmt_submit_rejected"
         return OrderHandleStatus(
             handle_id=handle_id,
             state="rejected",
@@ -711,7 +725,7 @@ class MiniQMTSimBackend(BrokerBackend):
             rejection_reason=reason,
             raw_status="submit_rejected",
             status_msg=reason,
-            raw={"message": reason},
+            raw=raw,
         )
 
     def _safe_status(self) -> Any | None:
@@ -740,6 +754,17 @@ def _native_price(intent: OrderIntent) -> tuple[int, float]:
         "unsupported order type for MiniQMT",
         context={"intent_id": intent.intent_id, "order_type": str(intent.order_type)},
     )
+
+
+def _safe_last_order_diagnostic(qmt_client: Any) -> dict[str, Any] | None:
+    getter = getattr(qmt_client, "get_last_order_diagnostic", None)
+    if not callable(getter):
+        return None
+    try:
+        diagnostic = getter()
+    except Exception:  # noqa: BLE001
+        return None
+    return dict(diagnostic) if isinstance(diagnostic, dict) else None
 
 
 def _safe_strategy_name(value: str) -> str:
