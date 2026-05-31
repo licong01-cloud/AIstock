@@ -3,12 +3,38 @@
 from __future__ import annotations
 
 from backend.services.quantevolver.payload_summary import (
+    compact_config_summary,
     compact_enhanced_metric_summary,
     compact_experiment_row,
     compact_loop_row,
     compact_metric_summary,
     derive_position_summary_from_enhanced_metrics,
 )
+
+
+def test_compact_config_summary_preserves_strategy_tail_fields() -> None:
+    summary = compact_config_summary(
+        {
+            "model_id": "LGBModel",
+            "strategy_id": "TopkDropoutStrategy",
+            "strategy_params": {
+                "topk": 50,
+                "hold_thresh": 10,
+                "unfilled_handler": "TAIL_SUBSTITUTE",
+                "unfilled_backup_depth": 15,
+                "unfilled_handler_params": {"backup_depth": 15},
+                "candidate_symbols": ["too-large-to-return"],
+            },
+            "factor_list": ["alpha_a", "alpha_b"],
+        }
+    )
+
+    assert summary["strategy_params"]["hold_thresh"] == 10
+    assert summary["strategy_params"]["unfilled_handler"] == "TAIL_SUBSTITUTE"
+    assert summary["strategy_params"]["unfilled_backup_depth"] == 15
+    assert summary["unfilled_handler_params"]["backup_depth"] == 15
+    assert "candidate_symbols" not in summary["strategy_params"]
+    assert "factor_list" not in summary
 
 
 def test_compact_metric_summary_drops_large_enhanced_payloads() -> None:
