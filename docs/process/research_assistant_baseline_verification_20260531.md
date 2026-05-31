@@ -84,5 +84,5 @@ DEF-13 是后续 Phase 13~15 的解耦缺口。Phase 0 已将 `research_assistan
 ## 待回填
 
 - G1 run_id: `blocked-ra_phase0_baseline-plan-not-found`
-- G1 blocker: running Validation Center root catalog has 37 plans and rejects branch-local `ra_phase0_baseline`; fallback MCP run `research-assistant_20260531_171325_l2_research-assistant-backend_548f547b_runner-validation__7ce8141a40` passed `research_assistant_backend` against this worktree and commit.
+- G1 blocker: running Validation Center root catalog has 37 plans and rejects branch-local `ra_phase0_baseline`; fallback MCP validation must be reported externally and does not replace the required `ra_phase0_baseline` G1 gate.
 - implementation_commit: `53a0f03d6a2bb05049a99f57998c3845b7d681f1`
