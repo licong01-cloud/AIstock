@@ -36,8 +36,8 @@
   "expected": "Historical QE loops should display compact holdings/funds derived from existing enhanced metrics without rerunning experiments: min/avg/max/P95 holdings, final cash, stock market value, total equity, cash ratio, shortest holding, tail handling strategy, and backup depth when present.",
   "first_seen_at": "2026-05-31T15:51:22.104953Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f7809e44986248bed7bc4ba8b547b9cab2bc6f70",
+  "fixed_at": "2026-05-31T16:21:59.170540Z",
   "github_issue_number": 429,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/429",
   "last_seen_at": "2026-05-31T15:51:22.104953Z",
@@ -45,6 +45,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/433",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -59,7 +60,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "qe"
   ],
@@ -68,5 +69,8 @@
     "fingerprint": "cd0317fc8e9dc992a7d6e239",
     "source_event_id": "FE-20260531-cd0317fc8e9d"
   },
+  "validation_evidence": [
+    "PR #433 CI passed; PR #434 close-sync CI passed with only Auto-register CI failures skipped"
+  ],
   "verification_run_id": null
 }
