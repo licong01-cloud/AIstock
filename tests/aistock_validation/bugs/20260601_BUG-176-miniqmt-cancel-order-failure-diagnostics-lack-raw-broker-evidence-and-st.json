@@ -39,7 +39,7 @@
   "first_seen_at": "2026-05-31T16:04:21.680233Z",
   "fix_branch": null,
   "fix_commit": "f93b6ba4d6493f5125e8a5adfcff3f5948c9b365",
-  "fixed_at": "2026-05-31T17:10:44.021270Z",
+  "fixed_at": "2026-05-31T17:15:15.262076Z",
   "github_issue_number": 431,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/431",
   "last_seen_at": "2026-05-31T16:04:21.680233Z",
@@ -70,15 +70,7 @@
     "source_event_id": "FE-20260601-0e7936c4ebee"
   },
   "validation_evidence": [
-    "post-rebase python -m py_compile backend/infra/qmt_client.py backend/routers/qmt.py backend/services/paper_trading_v2/broker/minqmtsim.py backend/tests/paper_trading_v2/test_minqmtsim_backend.py backend/tests/qmt_strategy_ledger/test_router_managed_orders_guard.py -> passed",
-    "post-rebase python -m ruff check backend/infra/qmt_client.py backend/routers/qmt.py backend/services/paper_trading_v2/broker/minqmtsim.py backend/tests/paper_trading_v2/test_minqmtsim_backend.py backend/tests/qmt_strategy_ledger/test_router_managed_orders_guard.py -> passed",
-    "post-rebase python -m pytest -q backend/tests/qmt_strategy_ledger/test_router_managed_orders_guard.py -> 13 passed",
-    "post-rebase python -m pytest -q backend/tests/paper_trading_v2/test_minqmtsim_backend.py -> 37 passed",
-    "python -m nox -s l0 -> passed",
-    "python -m nox -s paper_v2_backend -> 544 passed, 1 skipped, 2 xfailed",
-    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> passed",
-    "python -m nox -s validation_center_backend -> 284 passed, coverage line=79.64 branch=61.71",
-    "python -m nox -s validation_module_registry_l0 -> 8 passed and ownership scan passed"
+    "PR #436 checks_passed and merged; PR #437 checks_passed"
   ],
   "verification_run_id": null,
   "workflow_gate": "allowed"
