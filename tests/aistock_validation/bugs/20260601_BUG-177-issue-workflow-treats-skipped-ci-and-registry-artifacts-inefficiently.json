@@ -1,0 +1,68 @@
+{
+  "actual": "BUG-175 required extra investigation for skipped CI, an amend for BUG JSON/allocator scope, and manual registry worktree cleanup after finalizer.",
+  "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    ".github/workflows/test.yml",
+    "tests/aistock_validation/bugs/20260601_BUG-177-issue-workflow-treats-skipped-ci-and-registry-artifacts-inefficiently.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-177",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-31T16:52:58.757707Z",
+  "description": "BUG-175 required extra investigation for skipped CI, an amend for BUG JSON/allocator scope, and manual registry worktree cleanup after finalizer.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260601-1316e683ad43",
+      "timestamp": "2026-05-31T16:52:58.757703Z"
+    }
+  ],
+  "evidence_uris": [
+    "BUG-175 PR #433/#434 skipped Auto-register job, scope amend, registry cleanup"
+  ],
+  "expected": "Small issue flows should avoid false CI failure interpretation, avoid scope-check amend loops for generated BUG JSON/allocator files, and complete safe source/close-sync/registry cleanup while preserving validation gates and production gates.",
+  "first_seen_at": "2026-05-31T16:52:58.757707Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 435,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/435",
+  "last_seen_at": "2026-05-31T16:52:58.757707Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "guardrail_changed_files",
+    "validation_catalog_integrity",
+    "validation_module_registry_l0",
+    "validation_coverage_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Issue workflow treats skipped CI and registry artifacts inefficiently",
+  "trigger_condition": {
+    "fingerprint": "1316e683ad43e9261db80287",
+    "source_event_id": "FE-20260601-1316e683ad43"
+  },
+  "verification_run_id": null
+}

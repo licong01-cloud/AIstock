@@ -1148,6 +1148,8 @@ def test_submit_bug_apply_with_existing_github_link_writes_registry(
     assert record["bug_id"] == "BUG-118"
     assert record["github_issue_number"] == 188
     assert record["production_ddl_gate"] == "noop"
+    assert payload["bug_json_path"] in record["allowed_write_scope"]
+    assert "tests/aistock_validation/bugs/.bug_id_allocator.json" in record["allowed_write_scope"]
     assert json.loads(allocator.read_text(encoding="utf-8"))["last_allocated"] == 118
     assert (isolated_workflow_root / payload["state_path"]).exists()
     assert payload["fix_chain"]["continue_to_fix_in_same_workflow"] is True
@@ -2396,6 +2398,95 @@ def test_pr_check_summary_treats_skipped_as_non_blocking() -> None:
     assert summary["failed"] == []
     assert summary["pending"] == []
     assert set(summary["non_blocking"]) == {"Auto-register CI failures as BUGs", "CodeQL"}
+    compact = workflow._checks_summary_payload(summary)
+    assert compact["failed"] == []
+    assert "Auto-register CI failures as BUGs" in compact["non_blocking"]
+
+
+def test_registry_intake_cleanup_removes_safe_persisted_worktree(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = isolated_workflow_root / "worktrees" / "registry-validation-smoke"
+    registry.mkdir(parents=True)
+    _write_json(isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug199.json", _bug())
+    branch = "bug/registry-validation-smoke"
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr(
+        workflow,
+        "_active_workflows_for_bug",
+        lambda bug_id: [
+            {
+                "workflow_role": "registry_intake",
+                "worktree": str(registry),
+                "branch": branch,
+                "issue_json": str(registry / "tests" / "aistock_validation" / "bugs" / "bug199.json"),
+                "git": {"ok": True, "branch": branch, "dirty": False, "dirty_count": 0},
+            }
+        ],
+    )
+
+    def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
+        if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
+            return branch
+        if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
+            return ""
+        if args[:2] == ["ls-remote", "--heads"]:
+            return ""
+        return ""
+
+    def fake_execute(args: list[str], **_kwargs: Any) -> dict[str, Any]:
+        commands.append(args)
+        return {"ok": True, "stdout": "", "stderr": "", "returncode": 0}
+
+    monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(workflow, "_execute_checked", fake_execute)
+
+    payload = workflow.build_registry_intake_cleanup_plan(
+        bug_id="BUG-199",
+        apply=True,
+        canonical_root=str(isolated_workflow_root),
+    )
+
+    assert payload["workflow_gate"] == "cleanup_done"
+    assert payload["candidates"][0]["safe"] is True
+    assert ["git", "worktree", "remove", str(registry)] in commands
+    assert ["git", "branch", "-D", branch] in commands
+
+
+def test_registry_intake_cleanup_skips_dirty_worktree(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = isolated_workflow_root / "worktrees" / "registry-validation-smoke"
+    registry.mkdir(parents=True)
+    _write_json(isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug199.json", _bug())
+    branch = "bug/registry-validation-smoke"
+
+    monkeypatch.setattr(
+        workflow,
+        "_active_workflows_for_bug",
+        lambda bug_id: [
+            {
+                "workflow_role": "registry_intake",
+                "worktree": str(registry),
+                "branch": branch,
+                "git": {"ok": True, "branch": branch, "dirty": True, "dirty_count": 1},
+            }
+        ],
+    )
+    monkeypatch.setattr(workflow, "_git", lambda *args, **kwargs: "")
+
+    payload = workflow.build_registry_intake_cleanup_plan(
+        bug_id="BUG-199",
+        apply=True,
+        canonical_root=str(isolated_workflow_root),
+    )
+
+    assert payload["workflow_gate"] == "skipped"
+    assert payload["candidates"][0]["skip_reason"] == "worktree_dirty"
+    assert payload["warnings"]
 
 
 def test_cleanup_after_merge_blocks_unmerged_branch(
