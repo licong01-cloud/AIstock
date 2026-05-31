@@ -280,6 +280,14 @@ Before any push/PR automation, `run --mode pr` runs a pre-PR gate. It blocks mis
 
 When `--watch-ci` is used, the wrapper polls a compact check summary through `gh pr view --json statusCheckRollup`. Missing or not-yet-started checks are `checks_pending` with retry instructions, not a business failure. Full check JSON should be requested only when a failed check needs diagnosis.
 
+If the first watch exits while checks are still pending, refresh the workflow state with the compact command instead of manually editing `state.json` or requesting the full check rollup:
+
+```powershell
+python scripts/aistock_issue_workflow.py watch-ci --bug-id BUG-XXX --pr-url <PR_URL>
+```
+
+When checks pass, `watch-ci` updates the BUG workflow state to `ci_green` and returns `merge_only_if_user_authorized` as the next action.
+
 Do not stop at `validation_passed`. That state means required local evidence exists, but the work is not PR-ready yet. Commit only task files, then run the PR command from the issue worktree. The wrapper blocks PR automation from canonical root or `main` so accidental root pollution cannot become a PR.
 
 ## Close And Sync After Merge
@@ -330,7 +338,7 @@ After a PR is merged and close-sync is complete, dry-run cleanup first:
 python scripts/aistock_issue_workflow.py cleanup-after-merge --branch bug/BUG-XXX-scope --worktree F:/Dev/AIstock_worktrees/BUG-XXX-scope --sync-root
 ```
 
-Only add `--apply` when the plan reports `workflow_gate=ready_for_cleanup`. The apply path refuses dirty worktrees, non-equivalent dirty canonical root, or the currently checked-out branch. If the only root dirty files are byte-equivalent to `origin/main` because a previous close-sync wrote the same registry content locally, cleanup records `origin_equivalent_dirty_files` and safely restores those paths from `origin/main` before fast-forwarding. For squash-merged PRs, pass `--pr-url <PR_URL>` so cleanup can verify the merged PR and tree equivalence before deleting the local branch:
+Only add `--apply` when the plan reports `workflow_gate=ready_for_cleanup`. The apply path refuses dirty worktrees, non-equivalent dirty canonical root, or the currently checked-out branch. If the only root dirty files are byte-equivalent to `origin/main` because a previous close-sync wrote the same registry content locally, cleanup records `origin_equivalent_dirty_files` and safely restores those paths from `origin/main` before fast-forwarding. For squash-merged PRs, pass `--pr-url <PR_URL>` so cleanup can verify the merged PR before deleting the local branch. The verification compares the source head changed paths to the source PR merge commit first, then falls back to current `origin/main`, so later close-sync BUG JSON drift does not force a manual cleanup:
 
 ```powershell
 python scripts/aistock_issue_workflow.py cleanup-after-merge `

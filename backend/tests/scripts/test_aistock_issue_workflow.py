@@ -143,6 +143,45 @@ def test_emit_rejects_root_level_bare_output_path(
     assert not (tmp_path / "workflow-output").exists()
 
 
+def test_next_command_for_ci_running_uses_watch_ci() -> None:
+    command = workflow._next_command_for_state(
+        "BUG-199",
+        {"state": "ci_running", "pr_url": "https://github.example/pull/199"},
+    )
+
+    assert "watch-ci" in command
+    assert "--pr-url https://github.example/pull/199" in command
+
+
+def test_watch_ci_updates_state_when_checks_pass(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        workflow,
+        "_watch_pr_checks_compact",
+        lambda bug_id, pr_url, attempts=1, delay_seconds=0: {
+            "workflow_gate": "checks_passed",
+            "check_summary": {"failed_count": 0, "pending_count": 0, "passed_count": 3, "non_blocking_count": 1},
+            "next_actions": ["merge_only_if_user_authorized"],
+        },
+    )
+
+    payload = workflow.build_watch_ci_plan(
+        bug_id="BUG-199",
+        pr_url="https://github.example/pull/199",
+    )
+
+    assert payload["workflow_gate"] == "checks_passed"
+    assert payload["state"] == "ci_green"
+    assert payload["next_actions"] == ["merge_only_if_user_authorized"]
+    state = json.loads(
+        (isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "state.json").read_text(encoding="utf-8")
+    )
+    assert state["state"] == "ci_green"
+    assert "stop_reason" not in state
+
+
 @pytest.fixture
 def isolated_workflow_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(workflow, "REPO_ROOT", tmp_path)
@@ -2567,18 +2606,24 @@ def test_cleanup_after_merge_allows_squash_merge_when_remote_branch_deleted(
             },
         },
     )
-    monkeypatch.setattr(
-        workflow,
-        "_git_squash_head_equivalent_to_origin",
-        lambda head_oid: {
+    def fake_squash_equivalence(
+        head_oid: str,
+        target_ref: str,
+        *,
+        target_label: str | None = None,
+        cwd: Path | None = None,
+    ) -> dict[str, Any]:
+        return {
             "head_ref": head_oid,
-            "base_ref": "origin/main",
+            "base_ref": target_label or target_ref,
+            "target_ref": target_ref,
             "base": "base123",
             "changed_files": ["scripts/aistock_issue_workflow.py"],
-            "verified": True,
-            "reason": "changed_paths_equivalent",
-        },
-    )
+            "verified": target_ref == "merge123",
+            "reason": "changed_paths_equivalent" if target_ref == "merge123" else "changed_paths_differ",
+        }
+
+    monkeypatch.setattr(workflow, "_git_squash_head_equivalent_to_ref", fake_squash_equivalence)
     monkeypatch.setattr(workflow, "_git_ref_exists", lambda ref, cwd=None: ref in {"origin/main"})
     monkeypatch.setattr(workflow, "_git_refs_tree_equivalent", lambda left, right, cwd=None: False)
 
@@ -2592,9 +2637,91 @@ def test_cleanup_after_merge_allows_squash_merge_when_remote_branch_deleted(
     assert payload["merged_into_origin_main"] is False
     assert payload["squash_merge_verified"] is True
     assert payload["tree_equivalent_to_origin_main"] is False
-    assert payload["merge_verification"]["method"] == "squash_merge_head_oid_changed_paths_equivalent"
+    assert payload["merge_verification"]["method"] == "squash_merge_head_oid_changed_paths_equivalent_to_merge_commit"
     assert payload["merge_verification"]["tree_equivalence_ref"] == "feature123"
+    assert payload["merge_verification"]["tree_equivalence_target"] == "merge123"
     assert payload["merge_verification"]["path_equivalence"]["changed_files"] == ["scripts/aistock_issue_workflow.py"]
+
+
+def test_cleanup_after_merge_uses_pr_merge_commit_when_origin_drifted(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "feature/squash-with-close-sync-drift"
+
+    def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
+        if args[:2] == ["branch", "--show-current"]:
+            return "main"
+        if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
+            return branch
+        if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
+            return ""
+        if args[:2] == ["ls-remote", "--heads"]:
+            return ""
+        return ""
+
+    def fake_squash_equivalence(
+        head_oid: str,
+        target_ref: str,
+        *,
+        target_label: str | None = None,
+        cwd: Path | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "head_ref": head_oid,
+            "base_ref": target_label or target_ref,
+            "target_ref": target_ref,
+            "base": "base123",
+            "changed_files": [
+                "scripts/aistock_issue_workflow.py",
+                "tests/aistock_validation/bugs/bug172.json",
+            ],
+            "verified": target_ref == "merge123",
+            "reason": "changed_paths_equivalent" if target_ref == "merge123" else "changed_paths_differ",
+        }
+
+    monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {
+            "ok": True,
+            "branch": "main",
+            "dirty": False,
+            "dirty_count": 0,
+            "head": "close_sync_merge",
+            "origin_main": "close_sync_merge",
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url: {
+            "checked": True,
+            "merged": True,
+            "pr": {
+                "url": pr_url,
+                "headRefOid": "feature123",
+                "mergeCommit": {"oid": "merge123"},
+            },
+        },
+    )
+    monkeypatch.setattr(workflow, "_git_squash_head_equivalent_to_ref", fake_squash_equivalence)
+    monkeypatch.setattr(workflow, "_git_ref_exists", lambda ref, cwd=None: ref in {"feature123", "merge123", "origin/main"})
+    monkeypatch.setattr(workflow, "_git_refs_tree_equivalent", lambda left, right, cwd=None: False)
+
+    payload = workflow.build_cleanup_after_merge_plan(
+        branch=branch,
+        pr_url="https://github.example/pull/418",
+        sync_root=True,
+    )
+
+    assert payload["workflow_gate"] == "ready_for_cleanup"
+    assert payload["squash_merge_verified"] is True
+    assert payload["tree_equivalent_to_origin_main"] is False
+    assert payload["merge_verification"]["method"] == "squash_merge_head_oid_changed_paths_equivalent_to_merge_commit"
+    assert payload["merge_verification"]["path_equivalence"]["target_ref"] == "merge123"
+    assert payload["merge_verification"]["merge_commit_path_equivalence"]["verified"] is True
 
 
 def test_cleanup_after_merge_blocks_when_squash_pr_head_tree_differs(
@@ -2623,12 +2750,21 @@ def test_cleanup_after_merge_blocks_when_squash_pr_head_tree_differs(
     monkeypatch.setattr(
         workflow,
         "_verify_pr_merged",
-        lambda pr_url: {"checked": True, "merged": True, "pr": {"url": pr_url, "headRefOid": "feature123"}},
+        lambda pr_url: {
+            "checked": True,
+            "merged": True,
+            "pr": {"url": pr_url, "headRefOid": "feature123", "mergeCommit": {"oid": "merge123"}},
+        },
     )
     monkeypatch.setattr(
         workflow,
-        "_git_squash_head_equivalent_to_origin",
-        lambda head_oid: {"verified": False, "reason": "changed_paths_differ", "changed_files": ["scripts/aistock_issue_workflow.py"]},
+        "_git_squash_head_equivalent_to_ref",
+        lambda head_oid, target_ref, **kwargs: {
+            "verified": False,
+            "reason": "changed_paths_differ",
+            "changed_files": ["scripts/aistock_issue_workflow.py"],
+            "target_ref": target_ref,
+        },
     )
     monkeypatch.setattr(workflow, "_git_ref_exists", lambda ref, cwd=None: ref in {"feature123", branch, "origin/main"})
     monkeypatch.setattr(workflow, "_git_refs_tree_equivalent", lambda left, right, cwd=None: False)
