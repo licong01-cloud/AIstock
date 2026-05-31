@@ -23,3 +23,13 @@ test("QE evolution best loop ranking excludes incomplete metrics", async () => {
   expect(source).not.toContain("rankReturn: cagr ?? annReturn ?? -Infinity");
   expect(source).not.toContain("}, rows[0])");
 });
+
+const pagePath = path.resolve(process.cwd(), "src/app/quantevolver/evolution/page.tsx");
+const pageSource = fs.readFileSync(pagePath, "utf8");
+
+test("QE summary loops preserve compact enhanced metrics for trajectory comparison", async () => {
+  expect(pageSource).toContain("const metricsJson = loop.metrics_json || {");
+  expect(pageSource).toContain("...metricsSummary,");
+  expect(pageSource).toContain("sharpe: metricsSummary.sharpe ?? metricsSummary.information_ratio");
+  expect(pageSource).toContain("metrics_json: metricsJson");
+});

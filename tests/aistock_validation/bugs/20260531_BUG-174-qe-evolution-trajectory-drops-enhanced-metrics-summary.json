@@ -1,0 +1,84 @@
+{
+  "actual": "Default /quantevolver/evolution/tasks/{task_id} summary returns only basic metrics_summary; enhanced_metrics scalar fields are omitted, position summary is not derived from stock_trades, and all loops can be shown as Incomplete metrics despite enhanced data existing.",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/payload_summary.py",
+    "backend/routers/quantevolver_evolution.py",
+    "frontend/src/app/quantevolver/evolution/page.tsx",
+    "frontend/src/app/quantevolver/evolution/components/loopDiagnostics.ts",
+    "frontend/src/app/quantevolver/evolution/components/LoopMetricsComparison.tsx",
+    "backend/tests/quantevolver/test_payload_summary.py",
+    "frontend/tests/qe/qe-evolution-best-loop-ui.spec.ts",
+    "backend/tests/unified_engine/test_qe_evolution_read_paths.py",
+    "tests/aistock_validation/bugs/20260531_BUG-174-qe-evolution-trajectory-drops-enhanced-metrics-summary.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-174",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-05-31T06:17:16.935363Z",
+  "description": "Default /quantevolver/evolution/tasks/{task_id} summary returns only basic metrics_summary; enhanced_metrics scalar fields are omitted, position summary is not derived from stock_trades, and all loops can be shown as Incomplete metrics despite enhanced data existing.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260531-18ae97c30f7c",
+      "timestamp": "2026-05-31T06:17:16.935360Z"
+    },
+    {
+      "timestamp": "2026-05-31T06:42:30.0790606Z",
+      "actor": "codex_issue_workflow",
+      "action": "expand_allowed_write_scope",
+      "note": "Added router read-path regression test and BUG JSON registry file after pre-PR scope gate detected missing scope entries."
+    },
+    {
+      "timestamp": "2026-05-31T06:48:00Z",
+      "actor": "codex_issue_workflow",
+      "action": "expand_allowed_write_scope",
+      "note": "Added allocator reservation file so the BUG-174 registry update remains in-scope for the fix PR."
+    }
+  ],
+  "evidence_uris": [
+    "user_report: qe_20260520_133940_fdb2 enhanced metrics missing from evolution curve page"
+  ],
+  "expected": "Evolution trajectory overview should preserve compact enhanced scalar summaries without returning large JSON arrays: CAGR, absolute MaxDD, absolute Sharpe, average/max holdings, ending cash, stock market value, and related fields should display and be used for complete best-loop ranking when available.",
+  "first_seen_at": "2026-05-31T06:17:16.935363Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 424,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/424",
+  "last_seen_at": "2026-05-31T06:17:16.935363Z",
+  "module": "qe",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Inspect /api/v1/quantevolver/evolution/tasks/qe_20260520_133940_fdb2 and /api/v1/quantevolver/evolution/tasks/qe_20260520_133940_fdb2/loops/Loop1/enhanced-metrics; then open QE evolution trajectory overview.",
+  "required_verification": [
+    "l0",
+    "qe_read_l3",
+    "qe_data_contract_backend",
+    "qe_archive_l3",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qe"
+  ],
+  "title": "QE evolution trajectory drops enhanced metrics summary",
+  "trigger_condition": {
+    "fingerprint": "18ae97c30f7c8ec0dedd6809",
+    "source_event_id": "FE-20260531-18ae97c30f7c"
+  },
+  "verification_run_id": null
+}
