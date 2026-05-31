@@ -15,7 +15,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from backend.services.validation.history_store import COVERAGE_SCHEMA, DEFAULT_HISTORY_ROOT, EVIDENCE_SCHEMA, RUN_SCHEMA
-from backend.services.validation.plan_catalog import FORBIDDEN_BACKEND_PORTS, REPO_ROOT, ValidationPlanCatalog
+from backend.services.validation.plan_catalog import (
+    FORBIDDEN_BACKEND_PORTS,
+    REPO_ROOT,
+    ValidationPlanCatalog,
+    load_allowed_command_keys_from_source,
+)
 
 
 DEFAULT_EXECUTION_ROOT = REPO_ROOT / "tmp" / "validation" / "runner" / "jobs"
@@ -75,6 +80,28 @@ def _is_inside(path: Path, parent: Path) -> bool:
 def _is_allowlisted_workspace_path(path: Path) -> bool:
     resolved = str(path.resolve()).replace("\\", "/")
     return any(resolved.startswith(prefix.replace("\\", "/")) for prefix in _WORKSPACE_PATH_ALLOWLIST)
+
+
+def _registered_git_worktree_paths(repo_root: Path) -> set[Path]:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(repo_root.resolve()), "worktree", "list", "--porcelain"],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            shell=False,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return set()
+    paths: set[Path] = set()
+    for line in completed.stdout.splitlines():
+        if line.startswith("worktree "):
+            raw_path = line.removeprefix("worktree ").strip()
+            if raw_path:
+                paths.add(Path(raw_path).resolve())
+    return paths
 
 
 def _safe_slug(value: Any, *, default: str = "validation") -> str:
@@ -280,18 +307,26 @@ class ValidationExecutionRunner:
 
     @staticmethod
     def _validate_workspace_path(workspace_path: str | None, repo_root: Path) -> Path:
+        repo_root_resolved = repo_root.resolve()
         if workspace_path is None:
-            return repo_root.resolve()
+            return repo_root_resolved
         resolved = Path(workspace_path).resolve()
         if not resolved.is_dir():
             raise ValidationRunnerError(f"workspace_path is not a directory: {workspace_path}")
+        registered_worktrees = _registered_git_worktree_paths(repo_root_resolved)
+        if registered_worktrees:
+            if resolved in registered_worktrees:
+                return resolved
+            raise ValidationRunnerError(
+                f"workspace_path is not a registered git worktree for this repository: {workspace_path}"
+            )
         resolved_str = str(resolved).replace("\\", "/")
         allowed = any(
             resolved_str.startswith(prefix.replace("\\", "/"))
             for prefix in _WORKSPACE_PATH_ALLOWLIST
         )
         try:
-            resolved.relative_to(repo_root.resolve())
+            resolved.relative_to(repo_root_resolved)
             allowed = True
         except ValueError:
             pass
@@ -427,13 +462,15 @@ class ValidationExecutionRunner:
         expected_branch: str | None = None,
         expected_commit: str | None = None,
     ) -> dict[str, Any]:
-        plan = self._validate_plan(plan_key, confirm_text=confirm_text)
+        explicit_workspace = workspace_path is not None
         resolved_cwd = self._validate_workspace_path(workspace_path, self.repo_root)
         workspace_metadata = _git_workspace_metadata(resolved_cwd)
         workspace_branch = workspace_metadata.get("branch")
         workspace_commit = workspace_metadata.get("commit")
         workspace_commit_full = workspace_metadata.get("commit_full")
         self._validate_root_main_workspace(resolved_cwd, workspace_branch, confirm_text)
+        plan_catalog = self._plan_catalog_for_workspace(resolved_cwd, explicit_workspace=explicit_workspace)
+        plan = self._validate_plan(plan_key, confirm_text=confirm_text, plan_catalog=plan_catalog)
         if expected_branch:
             if workspace_branch != expected_branch:
                 raise ValidationRunnerError(
@@ -523,8 +560,27 @@ class ValidationExecutionRunner:
                 f"confirm_text={ROOT_MAIN_VALIDATION_CONFIRM_TEXT!r} for an audited tmp-only root run"
             )
 
-    def _validate_plan(self, plan_key: str, *, confirm_text: str | None) -> dict[str, Any]:
-        plan = self.plan_catalog.get_plan(plan_key)
+    def _plan_catalog_for_workspace(self, workspace: Path, *, explicit_workspace: bool) -> ValidationPlanCatalog:
+        if not explicit_workspace:
+            return self.plan_catalog
+        catalog_path = workspace / "tests" / "aistock_validation" / "catalog" / "test_plans.yaml"
+        allowlist_source = workspace / "backend" / "services" / "validation" / "plan_catalog.py"
+        if (not catalog_path.exists() or not allowlist_source.exists()) and not _registered_git_worktree_paths(
+            self.repo_root
+        ):
+            return self.plan_catalog
+        allowed_command_keys = load_allowed_command_keys_from_source(allowlist_source)
+        return ValidationPlanCatalog(catalog_path, allowed_command_keys=allowed_command_keys)
+
+    def _validate_plan(
+        self,
+        plan_key: str,
+        *,
+        confirm_text: str | None,
+        plan_catalog: ValidationPlanCatalog | None = None,
+    ) -> dict[str, Any]:
+        catalog = plan_catalog or self.plan_catalog
+        plan = catalog.get_plan(plan_key)
         if plan is None:
             raise ValidationRunnerError(f"validation plan not found: {plan_key}")
         if not plan.get("enabled", True):
