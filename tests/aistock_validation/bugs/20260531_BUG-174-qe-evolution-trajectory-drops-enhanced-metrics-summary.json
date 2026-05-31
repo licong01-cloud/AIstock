@@ -49,7 +49,7 @@
   "first_seen_at": "2026-05-31T06:17:16.935363Z",
   "fix_branch": null,
   "fix_commit": "ab82720b1bae09a2f39c746b5824c6fcaa86ad9f",
-  "fixed_at": "2026-05-31T09:31:37.556796Z",
+  "fixed_at": "2026-05-31T09:35:49.239471Z",
   "github_issue_number": 424,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/424",
   "last_seen_at": "2026-05-31T06:17:16.935363Z",
@@ -82,7 +82,7 @@
     "source_event_id": "FE-20260531-18ae97c30f7c"
   },
   "validation_evidence": [
-    "python -m py_compile backend/services/quantevolver/payload_summary.py backend/routers/quantevolver_evolution.py -> passed; python -m pytest backend/tests/quantevolver/test_payload_summary.py backend/tests/unified_engine/test_qe_evolution_read_paths.py backend/tests/quantevolver/test_qe_payload_summary_services.py -q -> 18 passed; PLAYWRIGHT_SKIP_WEBSERVER=1 node root @playwright/test qe-evolution-best-loop-ui.spec.ts -> 2 passed; python -m nox -s l0 -> passed; python -m nox -s validation_module_registry_l0 -> passed; workflow-smoke -> passed; PR #425 CI -> checks_passed"
+    "PR #425 CI -> checks_passed; PR #426 close-sync CI -> checks_passed; production_ddl_gate=noop; production_frontend_dependency_gate=noop; production_backend_dependency_gate=noop"
   ],
   "verification_run_id": null
 }
