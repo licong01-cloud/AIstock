@@ -70,6 +70,38 @@ SUMMARY_CONFIG_KEYS = (
     "backtest_only",
 )
 
+COMPACT_STRATEGY_CONFIG_KEYS = (
+    "topk",
+    "n_drop",
+    "hold_thresh",
+    "risk_degree",
+    "initial_cash",
+    "label_horizon",
+    "unfilled_handler",
+    "unfilled_backup_depth",
+    "unfilled_trigger_minute",
+    "filter_suspended_on_signal",
+    "suspend_filter_strict",
+    "stock_pool",
+    "sector_blacklist_enabled",
+    "blacklist_enabled",
+)
+
+COMPACT_UNFILLED_PARAM_KEYS = (
+    "backup_depth",
+    "unfilled_backup_depth",
+    "unfilled_trigger_minute",
+)
+
+COMPACT_EXECUTION_PARAM_KEYS = (
+    "unfilled_handler",
+    "unfilled_backup_depth",
+    "unfilled_trigger_minute",
+    "max_single_order_value",
+    "max_weight",
+    "max_position_ratio",
+)
+
 COMPACT_ABSOLUTE_RETURN_KEYS: dict[str, tuple[str, ...]] = {
     "cagr": ("cagr", "cagr_absolute", "annualized_return_absolute"),
     "sharpe": ("sharpe", "sharpe_absolute", "information_ratio"),
@@ -175,6 +207,22 @@ def _compact_numeric_fields(
         value = _first_number_from_sources(sources, aliases)
         if value is not None:
             compact[key] = value
+    return compact
+
+
+def _compact_scalar_fields(sources: list[Mapping[str, Any]], keys: tuple[str, ...]) -> dict[str, Any]:
+    compact: dict[str, Any] = {}
+    for source in sources:
+        if not isinstance(source, Mapping):
+            continue
+        for key in keys:
+            if key in compact:
+                continue
+            value = source.get(key)
+            if value is None or value == "":
+                continue
+            if isinstance(value, (str, int, float, bool)):
+                compact[key] = value
     return compact
 
 
@@ -374,16 +422,50 @@ def factors_from_config(config: Any) -> list[Any]:
 def compact_config_summary(config: Any) -> dict[str, Any]:
     cfg = _mapping(config)
     summary = {key: cfg[key] for key in SUMMARY_CONFIG_KEYS if key in cfg and cfg[key] not in (None, [], {})}
-    model_params = cfg.get("model_params")
+    model_params = _mapping(cfg.get("model_params"))
+    strategy_params = _mapping(cfg.get("strategy_params"))
+    custom_params = _mapping(cfg.get("custom_params"))
+    execution_algo_params = _mapping(cfg.get("execution_algo_params"))
+    unfilled_handler_params = _mapping(cfg.get("unfilled_handler_params"))
+
     if isinstance(model_params, Mapping):
         for key in ("label_horizon", "random_seed", "execution_algo"):
             if key in model_params and key not in summary:
                 summary[key] = model_params[key]
-    runtime_flags = cfg.get("runtime_flags")
+    runtime_flags = _mapping(cfg.get("runtime_flags"))
     if isinstance(runtime_flags, Mapping):
         for key in ("random_seed", "seed"):
             if key in runtime_flags and key not in summary:
                 summary[key] = runtime_flags[key]
+    config_sources = [cfg, strategy_params, model_params, custom_params]
+    for key in ("hold_thresh", "unfilled_handler", "unfilled_backup_depth", "unfilled_trigger_minute", "stock_pool"):
+        if key not in summary:
+            compact = _compact_scalar_fields(config_sources, (key,))
+            if key in compact:
+                summary[key] = compact[key]
+
+    strategy_summary = _compact_scalar_fields(
+        [strategy_params, model_params, custom_params, cfg],
+        COMPACT_STRATEGY_CONFIG_KEYS,
+    )
+    if strategy_summary:
+        summary["strategy_params"] = strategy_summary
+
+    nested_unfilled_params = _mapping(strategy_params.get("unfilled_handler_params"))
+    unfilled_summary = _compact_scalar_fields(
+        [unfilled_handler_params, nested_unfilled_params, strategy_params, model_params, custom_params, execution_algo_params],
+        COMPACT_UNFILLED_PARAM_KEYS,
+    )
+    if unfilled_summary:
+        summary["unfilled_handler_params"] = unfilled_summary
+
+    nested_execution_params = _mapping(strategy_params.get("execution_algo_params"))
+    execution_summary = _compact_scalar_fields(
+        [execution_algo_params, nested_execution_params, strategy_params, model_params, custom_params],
+        COMPACT_EXECUTION_PARAM_KEYS,
+    )
+    if execution_summary:
+        summary["execution_algo_params"] = execution_summary
     return summary
 
 

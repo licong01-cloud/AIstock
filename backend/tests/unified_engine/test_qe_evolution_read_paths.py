@@ -2,6 +2,7 @@
 import asyncio
 
 from backend.routers import quantevolver_evolution as qe
+from backend.services.quantevolver import qe_evolution_service
 
 
 def test_evolution_router_no_longer_reads_worker_workspace_paths() -> None:
@@ -11,6 +12,13 @@ def test_evolution_router_no_longer_reads_worker_workspace_paths() -> None:
     assert "RDAGENT_WORKSPACE_WIN" not in source
     assert "positions_normal_1day.pkl" not in source
     assert "_find_positions_pickle" not in source
+
+
+def test_summary_read_path_selects_cached_json_for_compact_projection() -> None:
+    source = Path(qe_evolution_service.__file__).read_text(encoding="utf-8")
+
+    assert "config_json, metrics_json" in source
+    assert "result[\"loops\"] = [compact_loop_row(loop_data)" in source
 
 
 def test_position_enrichment_missing_metrics_is_read_only() -> None:

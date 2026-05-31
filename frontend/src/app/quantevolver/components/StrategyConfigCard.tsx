@@ -132,11 +132,13 @@ export function StrategyConfigCard({ source, titleColor = "#0ea5e9" }: StrategyC
   const cfgCustomResult = parseJsonObject(cfg.custom_params, "loopConfig.custom_params");
   const expCustomResult = parseJsonObject(exp.custom_params, "experiment.custom_params");
   const modelParamsResult = parseJsonObject(cfg.model_params, "loopConfig.model_params");
+  const strategyParamsResult = parseJsonObject(cfg.strategy_params, "loopConfig.strategy_params");
   const taskExecParamsResult = parseJsonObject(taskConfig?.execution_algo_params, "taskConfig.execution_algo_params");
   const cfgExecParamsResult = parseJsonObject(cfg.execution_algo_params, "loopConfig.execution_algo_params");
   const expExecParamsResult = parseJsonObject(exp.execution_algo_params, "experiment.execution_algo_params");
   const taskUnfilledParamsResult = parseJsonObject(taskConfig?.unfilled_handler_params, "taskConfig.unfilled_handler_params");
   const cfgUnfilledParamsResult = parseJsonObject(cfg.unfilled_handler_params, "loopConfig.unfilled_handler_params");
+  const strategyUnfilledParamsResult = parseJsonObject(strategyParamsResult.value.unfilled_handler_params, "loopConfig.strategy_params.unfilled_handler_params");
   const blacklistSnapshotResult = parseJsonObject(firstPresent(
     taskConfig?.sector_blacklist_snapshot,
     cfg.sector_blacklist_snapshot,
@@ -148,22 +150,26 @@ export function StrategyConfigCard({ source, titleColor = "#0ea5e9" }: StrategyC
   const cfgCustom = cfgCustomResult.value;
   const expCustom = expCustomResult.value;
   const mp = modelParamsResult.value;
+  const strategyParams = strategyParamsResult.value;
   const taskExecParams = taskExecParamsResult.value;
   const cfgExecParams = cfgExecParamsResult.value;
   const expExecParams = expExecParamsResult.value;
   const taskUnfilledParams = taskUnfilledParamsResult.value;
   const cfgUnfilledParams = cfgUnfilledParamsResult.value;
+  const strategyUnfilledParams = strategyUnfilledParamsResult.value;
   const blacklistSnapshot = blacklistSnapshotResult.value;
 
   const parseErrors = [
     cfgCustomResult.error,
     expCustomResult.error,
     modelParamsResult.error,
+    strategyParamsResult.error,
     taskExecParamsResult.error,
     cfgExecParamsResult.error,
     expExecParamsResult.error,
     taskUnfilledParamsResult.error,
     cfgUnfilledParamsResult.error,
+    strategyUnfilledParamsResult.error,
     blacklistSnapshotResult.error,
   ].filter(Boolean) as string[];
 
@@ -173,6 +179,7 @@ export function StrategyConfigCard({ source, titleColor = "#0ea5e9" }: StrategyC
   const executionAlgo: string | undefined = firstText(
     taskConfig?.execution_algo,
     cfg.execution_algo,
+    strategyParams.execution_algo,
     mp.execution_algo,
     cfgCustom.execution_algo,
     expCustom.execution_algo,
@@ -182,6 +189,7 @@ export function StrategyConfigCard({ source, titleColor = "#0ea5e9" }: StrategyC
   const executionAlgoParams = firstPresent(
     Object.keys(taskExecParams).length ? taskExecParams : undefined,
     Object.keys(cfgExecParams).length ? cfgExecParams : undefined,
+    strategyParams.execution_algo_params,
     mp.execution_algo_params,
     cfgCustom.execution_algo_params,
     expCustom.execution_algo_params,
@@ -191,6 +199,7 @@ export function StrategyConfigCard({ source, titleColor = "#0ea5e9" }: StrategyC
   const unfilledHandler: string | undefined = firstText(
     taskConfig?.unfilled_handler,
     cfg.unfilled_handler,
+    strategyParams.unfilled_handler,
     mp.unfilled_handler,
     cfgCustom.unfilled_handler,
     expCustom.unfilled_handler,
@@ -201,6 +210,8 @@ export function StrategyConfigCard({ source, titleColor = "#0ea5e9" }: StrategyC
   const unfilledBackupDepth = firstPresent(
     taskUnfilledParams.backup_depth,
     cfgUnfilledParams.backup_depth,
+    strategyUnfilledParams.backup_depth,
+    strategyParams.unfilled_backup_depth,
     mp.unfilled_backup_depth,
     cfgCustom.unfilled_backup_depth,
     expCustom.unfilled_backup_depth,
@@ -210,6 +221,7 @@ export function StrategyConfigCard({ source, titleColor = "#0ea5e9" }: StrategyC
   const sectorBlacklist = normalizeStringList(firstPresent(
     taskConfig?.sector_blacklist,
     cfg.sector_blacklist,
+    strategyParams.sector_blacklist,
     mp.sector_blacklist,
     cfgCustom.sector_blacklist,
     expCustom.sector_blacklist,
@@ -219,6 +231,7 @@ export function StrategyConfigCard({ source, titleColor = "#0ea5e9" }: StrategyC
   const stockPool: string | undefined = firstText(
     taskConfig?.stock_pool,
     cfg.stock_pool,
+    strategyParams.stock_pool,
     mp.stock_pool,
     cfgCustom.stock_pool,
     expCustom.stock_pool,
@@ -231,6 +244,8 @@ export function StrategyConfigCard({ source, titleColor = "#0ea5e9" }: StrategyC
     taskConfig?.blacklist_enabled,
     cfg.sector_blacklist_enabled,
     cfg.blacklist_enabled,
+    strategyParams.sector_blacklist_enabled,
+    strategyParams.blacklist_enabled,
     mp.sector_blacklist_enabled,
     mp.blacklist_enabled,
     cfgCustom.sector_blacklist_enabled,
@@ -257,6 +272,7 @@ export function StrategyConfigCard({ source, titleColor = "#0ea5e9" }: StrategyC
   const hmmEnabled = boolOrUndefined(firstPresent(
     taskConfig?.enable_sector_hmm,
     cfg.enable_sector_hmm,
+    strategyParams.enable_sector_hmm,
     mp.enable_sector_hmm,
     cfgCustom.enable_sector_hmm,
     expCustom.enable_sector_hmm,
@@ -286,6 +302,7 @@ export function StrategyConfigCard({ source, titleColor = "#0ea5e9" }: StrategyC
   const executionParamPreview = isPlainObject(executionAlgoParams) ? formatParamPreview(executionAlgoParams) : undefined;
   const labelType = firstText(
     cfg.label_type,
+    strategyParams.label_type,
     mp.label_type,
     cfgCustom.label_type,
     expCustom.label_type,
@@ -293,6 +310,7 @@ export function StrategyConfigCard({ source, titleColor = "#0ea5e9" }: StrategyC
   ) || "close";
   const labelHorizon = firstPresent(
     cfg.label_horizon,
+    strategyParams.label_horizon,
     mp.label_horizon,
     cfgCustom.label_horizon,
     expCustom.label_horizon,
@@ -300,6 +318,8 @@ export function StrategyConfigCard({ source, titleColor = "#0ea5e9" }: StrategyC
     1,
   );
   const holdThresh = firstPresent(
+    cfg.hold_thresh,
+    strategyParams.hold_thresh,
     mp.hold_thresh,
     cfgCustom.hold_thresh,
     expCustom.hold_thresh,

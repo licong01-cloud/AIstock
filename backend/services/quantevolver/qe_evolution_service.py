@@ -2769,32 +2769,7 @@ class AutoEvolutionScheduler:
                 else:
                     cur.execute("""
                         SELECT loop_id, task_id, loop_index, action_type,
-                               config_json->'factor_list' AS factor_list,
-                               config_json->'factor_names' AS factor_names,
-                               config_json->>'model_id' AS model_id,
-                               config_json->>'strategy_id' AS strategy_id,
-                               config_json->>'label_horizon' AS label_horizon,
-                               config_json->>'execution_algo' AS execution_algo,
-                               metrics_json->>'IC' AS ic,
-                               metrics_json->>'ICIR' AS icir,
-                               COALESCE(metrics_json->>'Rank_IC', metrics_json->>'Rank IC') AS rank_ic,
-                               COALESCE(metrics_json->>'Rank_ICIR', metrics_json->>'Rank ICIR') AS rank_icir,
-                               COALESCE(
-                                   metrics_json->>'annualized_return',
-                                   metrics_json->>'excess_return_with_cost_annualized',
-                                   metrics_json#>>'{summary,annualized_return}'
-                               ) AS annualized_return,
-                               COALESCE(
-                                   metrics_json->>'max_drawdown',
-                                   metrics_json->>'excess_return_with_cost_max_drawdown',
-                                   metrics_json#>>'{summary,max_drawdown}'
-                               ) AS max_drawdown,
-                               COALESCE(
-                                   metrics_json->>'information_ratio',
-                                   metrics_json->>'sharpe',
-                                   metrics_json->>'excess_return_with_cost_IR',
-                                   metrics_json#>>'{summary,information_ratio}'
-                               ) AS information_ratio,
+                               config_json, metrics_json,
                                is_sota, status,
                                node_id, experiment_id, created_at, updated_at
                         FROM qe_evolution_loops
@@ -2934,32 +2909,7 @@ class AutoEvolutionScheduler:
                     return None
                 cur.execute("""
                     SELECT loop_id, task_id, loop_index, action_type,
-                           config_json->'factor_list' AS factor_list,
-                           config_json->'factor_names' AS factor_names,
-                           config_json->>'model_id' AS model_id,
-                           config_json->>'strategy_id' AS strategy_id,
-                           config_json->>'label_horizon' AS label_horizon,
-                           config_json->>'execution_algo' AS execution_algo,
-                           metrics_json->>'IC' AS ic,
-                           metrics_json->>'ICIR' AS icir,
-                           COALESCE(metrics_json->>'Rank_IC', metrics_json->>'Rank IC') AS rank_ic,
-                           COALESCE(metrics_json->>'Rank_ICIR', metrics_json->>'Rank ICIR') AS rank_icir,
-                           COALESCE(
-                               metrics_json->>'annualized_return',
-                               metrics_json->>'excess_return_with_cost_annualized',
-                               metrics_json#>>'{summary,annualized_return}'
-                           ) AS annualized_return,
-                           COALESCE(
-                               metrics_json->>'max_drawdown',
-                               metrics_json->>'excess_return_with_cost_max_drawdown',
-                               metrics_json#>>'{summary,max_drawdown}'
-                           ) AS max_drawdown,
-                           COALESCE(
-                               metrics_json->>'information_ratio',
-                               metrics_json->>'sharpe',
-                               metrics_json->>'excess_return_with_cost_IR',
-                               metrics_json#>>'{summary,information_ratio}'
-                           ) AS information_ratio,
+                           config_json, metrics_json,
                            is_sota, status,
                            node_id, experiment_id, created_at, updated_at
                     FROM qe_evolution_loops

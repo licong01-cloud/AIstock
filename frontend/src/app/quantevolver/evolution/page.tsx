@@ -244,6 +244,13 @@ function normalizeSummaryLoop(loop: Loop): Loop {
       strategy_id: configSummary.strategy_id || (loop as any).strategy_id,
       label_horizon: configSummary.label_horizon || (loop as any).label_horizon,
       execution_algo: configSummary.execution_algo || (loop as any).execution_algo,
+      execution_algo_params: configSummary.execution_algo_params || {},
+      strategy_params: configSummary.strategy_params || {},
+      unfilled_handler: configSummary.unfilled_handler,
+      unfilled_handler_params: configSummary.unfilled_handler_params || {},
+      hold_thresh: configSummary.hold_thresh,
+      unfilled_backup_depth: configSummary.unfilled_backup_depth,
+      unfilled_trigger_minute: configSummary.unfilled_trigger_minute,
     },
     metrics_json: metricsJson,
   };
