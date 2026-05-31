@@ -29,8 +29,8 @@
   "expected": "cleanup-after-merge can safely cleanup a clean squash-merged source branch when the linked PR is merged and equivalent.",
   "first_seen_at": "2026-05-30T18:14:33.283225Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b979d252c4d3ad65b78848ce20b05abdbfa9cb0e",
+  "fixed_at": "2026-05-31T04:42:04.538343Z",
   "github_issue_number": 421,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/421",
   "last_seen_at": "2026-05-30T18:14:33.283225Z",
@@ -38,6 +38,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/422",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -53,7 +54,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -62,5 +63,8 @@
     "fingerprint": "4f0173c6c3ceb1cf5e1f27cd",
     "source_event_id": "FE-20260531-4f0173c6c3ce"
   },
+  "validation_evidence": [
+    "python -m py_compile scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow.py -> passed; python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> 83 passed; python -m nox -s l0 -- scoped files -> passed; python -m nox -s guardrail_changed_files -- --changed-only -> passed; python -m nox -s validation_catalog_integrity validation_module_registry_l0 validation_coverage_backend -> passed; python -m nox -s validation_center_backend -> 284 passed; python scripts/aistock_issue_workflow.py workflow-smoke --changed-file scripts/aistock_issue_workflow.py --module validation -> passed; python scripts/aistock_issue_workflow.py watch-ci --bug-id BUG-173 --pr-url https://github.com/licong01-cloud/AIstock/pull/422 -> checks_passed"
+  ],
   "verification_run_id": null
 }
