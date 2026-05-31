@@ -11,6 +11,7 @@ import type {
   HmmJob,
   HmmSnapshot,
   JsonObject,
+  MiniQMTExecutionQualityResponse,
   PaperPortfolio,
   PaperAutoRunSummary,
   PaperLiveDashboard,
@@ -655,6 +656,16 @@ export const paperV2Api = {
     const suffix = qs.toString() ? `?${qs.toString()}` : "";
     const data = await apiFetch<{ minute_execution: JsonObject }>(`/paper-v2/portfolios/${portfolioId}/minute-execution${suffix}`);
     return data.minute_execution;
+  },
+  async executionQuality(portfolioId: string, payload: { trade_date?: string | null; run_id?: string | null; limit?: number; scan_limit?: number } = {}): Promise<MiniQMTExecutionQualityResponse> {
+    const qs = new URLSearchParams();
+    if (payload.trade_date) qs.set("trade_date", payload.trade_date);
+    if (payload.run_id) qs.set("run_id", payload.run_id);
+    if (payload.limit) qs.set("limit", String(payload.limit));
+    if (payload.scan_limit) qs.set("scan_limit", String(payload.scan_limit));
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    const data = await apiFetch<{ execution_quality: MiniQMTExecutionQualityResponse }>(`/paper-v2/portfolios/${portfolioId}/execution-quality${suffix}`);
+    return data.execution_quality;
   },
   async orders(portfolioId: string): Promise<JsonObject[]> {
     const data = await apiFetch<{ orders: JsonObject[] }>(`/paper-v2/portfolios/${portfolioId}/orders`);

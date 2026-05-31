@@ -242,6 +242,12 @@ def test_minqmt_vnpy_twap_lite_can_persist_filled_child_trade() -> None:
     assert result.orders[0].status.value == "FILLED"
     assert repo.fills[0]["fill"].metadata["broker_reported_commission"] == 5.0
     assert repo.orders[0].metadata["execution_algo_code"] == "TWAP_LITE_MINIQMT"
+    quality_event = [event for event in repo.events if event["event_type"] == "MINIQMT_EXECUTION_QUALITY_REPORTED"][0]
+    quality = quality_event["context"]
+    assert quality["summary"]["broker_reported_fee_total"] == 5.0
+    assert quality["summary"]["cost_precision_counts"] == {"broker_aggregate": 1}
+    assert quality["fills"][0]["cost_reconciliation_delta"] == 0.0
+    assert repo.snapshots[0]["metadata"]["execution_quality_report"]["schema_version"].endswith("_v1")
 
 
 def test_minqmt_vnpy_rejected_child_preserves_raw_status_and_status_msg() -> None:

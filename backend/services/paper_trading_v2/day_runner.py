@@ -62,7 +62,7 @@ from backend.services.trading_core.models import (
 from backend.services.trading_core.oms import OMS
 
 from .broker import MiniQMTSimBackend
-from .execution import MiniQMTAlgoExecutionResult, MiniQMTLiveAlgoAdapter
+from .execution import MiniQMTAlgoExecutionResult, MiniQMTLiveAlgoAdapter, build_minqmt_execution_quality_report
 from .models import OrderExecutionState, PaperDayRunResult, PaperRun, PortfolioStatus
 from .repository import PaperTradingV2Repository
 from .risk_targets import overlay_risk_forced_exit_targets
@@ -464,6 +464,7 @@ class PaperTradingDayRunner:
                     intents=intents,
                     broker=minqmt_broker,
                     execution_policy_context=execution_policy_context,
+                    fee_model=fee_model,
                 )
 
             ledger = InMemoryLedger(
@@ -1028,6 +1029,7 @@ class PaperTradingDayRunner:
         intents: list[Any],
         broker: MiniQMTSimBackend | None = None,
         execution_policy_context: dict[str, Any] | None = None,
+        fee_model: FeeModel | None = None,
     ) -> PaperDayRunResult:
         broker = broker or self.minqmt_broker_factory(
             portfolio_id=portfolio.portfolio_id,
@@ -1035,6 +1037,7 @@ class PaperTradingDayRunner:
             data_source=MinuteDataSource.MINIQMT_REALTIME,
             strategy_slot_id=portfolio.portfolio_id,
         )
+        report_fee_model = fee_model or self._fee_model_from_policy(getattr(portfolio, "fee_policy", {}) or {})
         orders = []
         fills = []
         events = []
@@ -1337,6 +1340,7 @@ class PaperTradingDayRunner:
                 orders=orders,
                 fills=fills,
                 events=events,
+                fee_model=report_fee_model,
             )
         finally:
             if broker is not None:
@@ -1562,6 +1566,7 @@ class PaperTradingDayRunner:
         fills: list[Fill],
         events: list[Any],
         fill_count_override: int | None = None,
+        fee_model: FeeModel | None = None,
     ) -> PaperDayRunResult:
         account = broker.query_account()
         positions, prices = broker.query_position_marks()
@@ -1587,6 +1592,16 @@ class PaperTradingDayRunner:
             prices=prices,
         )
         fill_count = len(fills) if fill_count_override is None else int(fill_count_override)
+        execution_quality_report = build_minqmt_execution_quality_report(
+            portfolio_id=portfolio.portfolio_id,
+            run_id=run.run_id,
+            trade_date=trade_date,
+            orders=orders,
+            fills=fills,
+            fee_model=fee_model or self._fee_model_from_policy(getattr(portfolio, "fee_policy", {}) or {}),
+            fill_count_override=fill_count_override,
+            report_scope="native_reconcile" if fill_count_override is not None else "current_run_result",
+        )
         self.repository.save_daily_snapshot(
             run_id=run.run_id,
             trade_date=trade_date,
@@ -1598,6 +1613,7 @@ class PaperTradingDayRunner:
                 "broker_backend": "minqmt_sim",
                 "authority_source": "MINIQMT_QUERY",
                 "miniqmt_no_local_fills": fill_count == 0,
+                "execution_quality_report": execution_quality_report,
             },
         )
         succeeded = self.repository.update_run_status(run, RunStatus.SUCCEEDED)
@@ -1614,6 +1630,12 @@ class PaperTradingDayRunner:
                 "cash": float(account.cash),
                 "nav": float(account.nav),
             },
+        )
+        self.repository.save_run_event(
+            run_id=run.run_id,
+            event_type="MINIQMT_EXECUTION_QUALITY_REPORTED",
+            message="MiniQMT execution quality and broker-cost reconciliation report persisted",
+            context=execution_quality_report,
         )
         self.repository.save_run_event(
             run_id=run.run_id,
@@ -1796,6 +1818,7 @@ class PaperTradingDayRunner:
                 fills=new_fills,
                 events=order_events,
                 fill_count_override=persisted_fill_count,
+                fee_model=self._fee_model_from_policy(getattr(portfolio, "fee_policy", {}) or {}),
             )
             self.repository.save_run_event(
                 run_id=run.run_id,
