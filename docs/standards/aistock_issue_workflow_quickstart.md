@@ -227,6 +227,8 @@ python scripts/aistock_issue_workflow.py start --bug-id BUG-XXX --create-worktre
 
 Then switch to the returned worktree and read:
 
+- `task_card_md` first, because it is the compact agent-neutral handoff for Codex, Claude Code, Cursor, and CLI clients
+- `task_card_json` when a machine-readable handoff is needed
 - `context_pack_md`
 - `fix_ready_path`
 - `state_path`

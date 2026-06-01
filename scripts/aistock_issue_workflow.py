@@ -259,6 +259,8 @@ def _compact_start(value: Any) -> dict[str, Any] | None:
         "source_bug_json",
         "context_pack_md",
         "fix_ready_path",
+        "task_card_json",
+        "task_card_md",
         "state_path",
         "events_path",
         "github_issue_url",
@@ -416,6 +418,22 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
         if "batch_id" in payload:
             compact["batch_id"] = payload.get("batch_id")
             compact["bug_ids"] = payload.get("bug_ids")
+    elif schema.endswith("_resume_v1"):
+        compact.update(
+            _pick(
+                payload,
+                "workflow_root",
+                "worktree",
+                "planned_worktree",
+                "branch",
+                "planned_branch",
+                "task_card_json",
+                "task_card_md",
+                "state_path",
+                "events_path",
+                "stop_conditions",
+            )
+        )
     elif schema.endswith("_smoke_v1"):
         compact.update(
             _pick(
@@ -575,6 +593,14 @@ def _state_path(bug_id: str, root: Path | None = None) -> Path:
 
 def _events_path(bug_id: str, root: Path | None = None) -> Path:
     return _workflow_dir(bug_id, root) / "events.jsonl"
+
+
+def _task_card_json_path(bug_id: str, root: Path | None = None) -> Path:
+    return _workflow_dir(bug_id, root) / "task-card.json"
+
+
+def _task_card_md_path(bug_id: str, root: Path | None = None) -> Path:
+    return _workflow_dir(bug_id, root) / "task-card.md"
 
 
 def _active_index_path(root: Path | None = None) -> Path:
@@ -2302,6 +2328,145 @@ def _build_code_intelligence_summary(
     )
 
 
+def _compact_code_intelligence_for_task_card(code_intelligence_summary: dict[str, Any]) -> dict[str, Any]:
+    ua = code_intelligence_summary.get("understand_anything")
+    return {
+        "provider": code_intelligence_summary.get("provider"),
+        "status": code_intelligence_summary.get("status"),
+        "context_ref": code_intelligence_summary.get("context_ref"),
+        "manifest_ref": code_intelligence_summary.get("manifest_ref"),
+        "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
+        "fallback_used": bool(code_intelligence_summary.get("fallback_used")),
+        "fallback_reason": code_intelligence_summary.get("fallback_reason"),
+        "understand_anything_status": (ua or {}).get("status") if isinstance(ua, dict) else None,
+        "blocking_for_issue_workflow": False,
+    }
+
+
+def build_task_card(
+    *,
+    bug_id: str,
+    record: dict[str, Any],
+    root: Path,
+    branch: str | None,
+    planned_branch: str | None,
+    worktree: str | None,
+    planned_worktree: str | None,
+    context_pack_json_path: Path,
+    context_pack_md_path: Path,
+    fix_ready_path: Path,
+    state_path: Path,
+    events_path: Path,
+    fix_ready: dict[str, Any],
+    context_pack: dict[str, Any],
+    code_intelligence_summary: dict[str, Any],
+    fast_path: dict[str, Any],
+) -> dict[str, Any]:
+    validation = fix_ready.get("validation_selection") if isinstance(fix_ready.get("validation_selection"), dict) else {}
+    code_intel = _compact_code_intelligence_for_task_card(code_intelligence_summary)
+    return {
+        "schema_version": "aistock_agent_task_card_v1",
+        "generated_at": _utc_now(),
+        "task_card_id": f"TC-{bug_id}-{flow._stable_hash(record.get('github_issue_number'), record.get('title'), record.get('module'))}",
+        "agent_neutral": True,
+        "supported_clients": ["Codex", "Claude Code", "Cursor", "CLI"],
+        "bug_id": bug_id,
+        "github_issue": {
+            "number": record.get("github_issue_number"),
+            "url": record.get("github_issue_url"),
+        },
+        "module": record.get("module"),
+        "severity": record.get("severity"),
+        "risk_level": fix_ready.get("risk_level"),
+        "branch": branch,
+        "planned_branch": planned_branch,
+        "worktree": worktree,
+        "planned_worktree": planned_worktree,
+        "artifact_refs": {
+            "context_pack_json": _repo_rel(context_pack_json_path, root),
+            "context_pack_md": _repo_rel(context_pack_md_path, root),
+            "fix_ready_json": _repo_rel(fix_ready_path, root),
+            "state_json": _repo_rel(state_path, root),
+            "events_jsonl": _repo_rel(events_path, root),
+        },
+        "problem": {
+            "title": record.get("title"),
+            "statement": context_pack.get("problem_statement"),
+            "reproduce_command": context_pack.get("reproduce_command"),
+        },
+        "allowed_write_scope": fix_ready.get("allowed_write_scope") or [],
+        "required_verification": fix_ready.get("required_verification") or validation.get("required_plans") or [],
+        "recommended_verification": fix_ready.get("recommended_verification") or validation.get("recommended_plans") or [],
+        "production_gates": validation.get("production_gates") or _production_gates_payload(),
+        "code_intelligence": code_intel,
+        "fast_path": _pick(fast_path or {}, "task_tier", "module", "workflow_gate", "required_validation", "recommended_validation"),
+        "stop_conditions": [
+            "missing GitHub linkage",
+            "scope expansion required outside allowed_write_scope",
+            "required validation cannot run",
+            "production runtime or DB action requested without explicit approval",
+        ],
+        "next_client_steps": [
+            "switch_to_worktree_if_created",
+            "read task-card.md first, then context-pack.md only when needed",
+            "edit only files under allowed_write_scope or stop for scope expansion",
+            "run finish --plan-only before reporting the issue fixed",
+        ],
+        "token_budget": {
+            "context_pack_target_tokens": (context_pack.get("token_budget") or {}).get("target_tokens"),
+            "task_card_target_tokens": 2000,
+            "large_graph_payload_inlined": False,
+        },
+        "blocking_for_issue_workflow": False,
+    }
+
+
+def render_task_card_markdown(task_card: dict[str, Any]) -> str:
+    artifacts = task_card.get("artifact_refs") if isinstance(task_card.get("artifact_refs"), dict) else {}
+    github_issue = task_card.get("github_issue") if isinstance(task_card.get("github_issue"), dict) else {}
+    code_intel = task_card.get("code_intelligence") if isinstance(task_card.get("code_intelligence"), dict) else {}
+    lines = [
+        f"# AIstock Agent Task Card {task_card.get('bug_id')}",
+        "",
+        f"- task_card_id: `{task_card.get('task_card_id')}`",
+        f"- clients: `{', '.join(task_card.get('supported_clients') or [])}`",
+        f"- module: `{task_card.get('module') or 'unknown'}`",
+        f"- risk_level: `{task_card.get('risk_level') or 'unknown'}`",
+        f"- github_issue: {github_issue.get('url') or 'missing'}",
+        f"- branch: `{task_card.get('branch') or task_card.get('planned_branch') or 'not_created'}`",
+        f"- worktree: `{task_card.get('worktree') or task_card.get('planned_worktree') or 'not_created'}`",
+        "",
+        "## Start Here",
+        *[f"- {item}" for item in task_card.get("next_client_steps") or []],
+        "",
+        "## Problem",
+        f"- title: {((task_card.get('problem') or {}).get('title') if isinstance(task_card.get('problem'), dict) else None) or 'n/a'}",
+        f"- reproduce: `{((task_card.get('problem') or {}).get('reproduce_command') if isinstance(task_card.get('problem'), dict) else None) or 'n/a'}`",
+        "",
+        "## Allowed Write Scope",
+        *[f"- `{item}`" for item in task_card.get("allowed_write_scope") or ["triage_only_until_scope_is_set"]],
+        "",
+        "## Required Verification",
+        *[f"- `{item}`" for item in task_card.get("required_verification") or ["l0"]],
+        "",
+        "## Artifacts",
+        *[f"- {key}: `{value}`" for key, value in artifacts.items() if value],
+        "",
+        "## Code Intelligence",
+        f"- status: `{code_intel.get('status') or 'unknown'}`",
+        f"- context_ref: `{code_intel.get('context_ref') or 'not_generated'}`",
+        f"- affected_tests_ref: `{code_intel.get('affected_tests_ref') or 'not_generated'}`",
+        f"- fallback_used: `{str(bool(code_intel.get('fallback_used'))).lower()}`",
+        f"- blocking_for_issue_workflow: `{str(bool(code_intel.get('blocking_for_issue_workflow'))).lower()}`",
+        "",
+        "## Production Gates",
+        *[f"- {key}: `{value}`" for key, value in sorted((task_card.get("production_gates") or {}).items())],
+        "",
+        "Large graph payloads are intentionally not inlined. Use artifact refs only when needed.",
+    ]
+    return "\n".join(lines)
+
+
 def _batch_code_intelligence_query(records: list[dict[str, Any]], changed_files: list[str] | None = None) -> str:
     parts = ["AIstock batch issue"]
     parts.extend(
@@ -2861,14 +3026,38 @@ def build_start_plan(
     fix_ready_path = output_dir / "fix-ready.json"
     context_json_path = output_dir / "context-pack.json"
     context_md_path = output_dir / "context-pack.md"
+    task_card_json_path = _task_card_json_path(canonical_bug_id, target_root)
+    task_card_md_path = _task_card_md_path(canonical_bug_id, target_root)
+    task_card = build_task_card(
+        bug_id=canonical_bug_id,
+        record=record,
+        root=target_root,
+        branch=actual_branch,
+        planned_branch=planned_branch,
+        worktree=actual_worktree,
+        planned_worktree=planned_worktree,
+        context_pack_json_path=context_json_path,
+        context_pack_md_path=context_md_path,
+        fix_ready_path=fix_ready_path,
+        state_path=_state_path(canonical_bug_id, target_root),
+        events_path=_events_path(canonical_bug_id, target_root),
+        fix_ready=fix_ready,
+        context_pack=context_pack,
+        code_intelligence_summary=code_intelligence_summary,
+        fast_path=fast_path,
+    )
     if not dry_run:
         _write_json(fix_ready_path, fix_ready)
         _write_json(context_json_path, context_pack)
         _write_text(context_md_path, flow.render_context_pack_markdown(context_pack))
+        _write_json(task_card_json_path, task_card)
+        _write_text(task_card_md_path, render_task_card_markdown(task_card))
         context_metrics = {
             "context_pack_md": _size_and_token_estimate(context_md_path),
             "context_pack_json": _size_and_token_estimate(context_json_path),
             "fix_ready_json": _size_and_token_estimate(fix_ready_path),
+            "task_card_md": _size_and_token_estimate(task_card_md_path),
+            "task_card_json": _size_and_token_estimate(task_card_json_path),
         }
         _write_state(
             canonical_bug_id,
@@ -2885,6 +3074,8 @@ def build_start_plan(
             context_pack_md=_repo_rel(context_md_path, target_root),
             context_pack_json=_repo_rel(context_json_path, target_root),
             fix_ready_path=_repo_rel(fix_ready_path, target_root),
+            task_card_json=_repo_rel(task_card_json_path, target_root),
+            task_card_md=_repo_rel(task_card_md_path, target_root),
             github_issue_number=record.get("github_issue_number"),
             github_issue_url=record.get("github_issue_url"),
             production_gates=fix_ready.get("validation_selection", {}).get("production_gates", {}),
@@ -2904,6 +3095,8 @@ def build_start_plan(
             "context_pack_md": {"path": str(context_md_path), "exists": False, "bytes": 0, "estimated_tokens": 0},
             "context_pack_json": {"path": str(context_json_path), "exists": False, "bytes": 0, "estimated_tokens": 0},
             "fix_ready_json": {"path": str(fix_ready_path), "exists": False, "bytes": 0, "estimated_tokens": 0},
+            "task_card_md": {"path": str(task_card_md_path), "exists": False, "bytes": 0, "estimated_tokens": 0},
+            "task_card_json": {"path": str(task_card_json_path), "exists": False, "bytes": 0, "estimated_tokens": 0},
         }
     return {
         "schema_version": "aistock_issue_workflow_start_v1",
@@ -2920,6 +3113,8 @@ def build_start_plan(
         "fix_ready_path": _repo_rel(fix_ready_path, target_root),
         "context_pack_json": _repo_rel(context_json_path, target_root),
         "context_pack_md": _repo_rel(context_md_path, target_root),
+        "task_card_json": _repo_rel(task_card_json_path, target_root),
+        "task_card_md": _repo_rel(task_card_md_path, target_root),
         "state_path": _repo_rel(_state_path(canonical_bug_id, target_root), target_root),
         "events_path": _repo_rel(_events_path(canonical_bug_id, target_root), target_root),
         "allowed_write_scope": fix_ready.get("allowed_write_scope") or [],
@@ -3810,6 +4005,8 @@ def build_resume_plan(*, bug_id: str, worktree: str | None = None, events_limit:
         "planned_worktree": planned_worktree,
         "branch": state.get("branch") or git.get("branch"),
         "planned_branch": state.get("planned_branch"),
+        "task_card_json": state.get("task_card_json") or _repo_rel(_task_card_json_path(canonical_bug_id, root), root),
+        "task_card_md": state.get("task_card_md") or _repo_rel(_task_card_md_path(canonical_bug_id, root), root),
         "state_path": _repo_rel(_state_path(canonical_bug_id, root), root),
         "events_path": _repo_rel(events_path, root),
         "state": state,
@@ -6649,3 +6846,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

@@ -270,13 +270,29 @@ def test_start_writes_fix_ready_and_context_pack(
     fix_ready = isolated_workflow_root / payload["fix_ready_path"]
     context_json = isolated_workflow_root / payload["context_pack_json"]
     context_md = isolated_workflow_root / payload["context_pack_md"]
+    task_card_json = isolated_workflow_root / payload["task_card_json"]
+    task_card_md = isolated_workflow_root / payload["task_card_md"]
     assert fix_ready.exists()
     assert context_json.exists()
+    assert task_card_json.exists()
+    assert task_card_md.exists()
     context_payload = json.loads(context_json.read_text(encoding="utf-8"))
+    task_card = json.loads(task_card_json.read_text(encoding="utf-8"))
     assert context_md.read_text(encoding="utf-8").startswith("# AIstock Context Pack")
+    assert task_card_md.read_text(encoding="utf-8").startswith("# AIstock Agent Task Card BUG-199")
     assert context_payload["code_intelligence"]["provider"] == "codegraph"
+    assert task_card["schema_version"] == "aistock_agent_task_card_v1"
+    assert task_card["supported_clients"] == ["Codex", "Claude Code", "Cursor", "CLI"]
+    assert task_card["artifact_refs"]["context_pack_md"].endswith("context-pack.md")
+    assert task_card["code_intelligence"]["affected_tests_ref"].endswith("affected-tests.json")
+    assert task_card["code_intelligence"]["blocking_for_issue_workflow"] is False
+    assert task_card["token_budget"]["large_graph_payload_inlined"] is False
+    assert "suggested_tests" not in json.dumps(task_card, ensure_ascii=False)
+    assert "skip_reasons" not in json.dumps(task_card, ensure_ascii=False)
     assert payload["code_intelligence"]["affected_tests_ref"].endswith("affected-tests.json")
+    assert payload["task_card_md"].endswith("task-card.md")
     assert payload["context_metrics"]["context_pack_md"]["estimated_tokens"] > 0
+    assert payload["context_metrics"]["task_card_md"]["estimated_tokens"] > 0
     assert payload["context_metrics"]["fix_ready_json"]["bytes"] > 0
     assert json.loads(fix_ready.read_text(encoding="utf-8"))["workflow_gate"] == "allowed"
 
@@ -1564,6 +1580,8 @@ def test_run_plan_writes_state_and_resume_reads_it(isolated_workflow_root: Path)
     resume = workflow.build_resume_plan(bug_id="BUG-199", worktree=str(isolated_workflow_root))
     assert resume["schema_version"] == "aistock_issue_workflow_resume_v1"
     assert resume["state"]["context_pack_md"].endswith("context-pack.md")
+    assert resume["task_card_md"].endswith("task-card.md")
+    assert resume["state"]["task_card_json"].endswith("task-card.json")
     assert resume["worktree"] is None
     assert "run --bug-id BUG-199 --mode plan --create-worktree" in resume["next_command"]
 
@@ -3590,6 +3608,9 @@ def test_promote_ci_issue_blocks_infra_runner_outage(
     assert payload["triage"]["next_command"] == "infra_action_required_no_code_bug"
     assert payload["infra_action"]["workflow_gate"] == "infra_action_required"
     assert not list((isolated_workflow_root / "tests" / "aistock_validation" / "bugs").glob("*BUG-*.json"))
+
+
+
 
 
 
