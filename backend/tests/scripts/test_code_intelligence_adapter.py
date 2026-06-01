@@ -70,6 +70,86 @@ def test_context_and_affected_artifacts_use_fallback_when_index_missing(
     ]
 
 
+def test_codegraph_status_reuses_canonical_index_for_worktree(tmp_path: Path, monkeypatch) -> None:
+    canonical = tmp_path / "canonical"
+    worktree = tmp_path / "worktree"
+    (canonical / ".codegraph").mkdir(parents=True)
+    (canonical / ".codegraph" / "codegraph.db").write_text("db", encoding="utf-8")
+    worktree.mkdir()
+    monkeypatch.setattr(adapter, "_codegraph_command", lambda: "codegraph")
+    monkeypatch.setattr(adapter, "_canonical_repo_root", lambda root: canonical if root == worktree else root)
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
+    )
+
+    calls: list[list[str]] = []
+
+    def fake_run(args, cwd=None, timeout=30):
+        calls.append(args)
+        if args == ["codegraph", "--version"]:
+            return {"ok": True, "returncode": 0, "stdout": "0.9.4", "stderr": ""}
+        assert args == ["codegraph", "status", str(canonical)]
+        return {
+            "ok": True,
+            "returncode": 0,
+            "stdout": "Files: 1\nNodes: 2\nEdges: 3\nIndex is up to date",
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(adapter, "_run_command", fake_run)
+
+    payload = adapter.codegraph_status(worktree)
+
+    assert payload["status"] == "ok"
+    assert payload["index_exists"] is True
+    assert payload["graph_root"] == str(canonical)
+    assert payload["graph_root_source"] == "canonical_worktree_root"
+    assert calls[-1] == ["codegraph", "status", str(canonical)]
+
+
+def test_context_uses_repo_index_when_detail_context_fails(tmp_path: Path, monkeypatch) -> None:
+    canonical = tmp_path / "canonical"
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    monkeypatch.setattr(
+        adapter,
+        "codegraph_status",
+        lambda root, skip_external=False: {
+            "available": True,
+            "index_exists": True,
+            "command": "codegraph",
+            "version": "0.9.4",
+            "git_commit": "abc123",
+            "working_tree_dirty": False,
+            "graph_root": str(canonical),
+            "graph_root_source": "canonical_worktree_root",
+            "index_summary": {"files": 10, "nodes": 20, "edges": 30},
+        },
+    )
+
+    def fake_run(args, cwd=None, timeout=30):
+        assert args[:5] == ["codegraph", "context", "workflow bug", "--path", str(canonical)]
+        return {"ok": False, "returncode": 2, "stdout": "", "stderr": "no matching detail"}
+
+    monkeypatch.setattr(adapter, "_run_command", fake_run)
+
+    payload = adapter.build_context_artifacts(
+        item_id="BUG-199",
+        query="workflow bug",
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        root=worktree,
+    )
+
+    assert payload["status"] == "repo_index_ready"
+    assert payload["fallback"]["used"] is False
+    assert payload["channel"] == "repo_index"
+    assert payload["graph_root"] == str(canonical)
+    context_text = (worktree / payload["context_markdown"]).read_text(encoding="utf-8")
+    assert "repo_index_ready" in context_text
+
+
 def test_build_summary_links_context_and_affected_refs(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(adapter, "_codegraph_command", lambda: None)
     monkeypatch.setattr(

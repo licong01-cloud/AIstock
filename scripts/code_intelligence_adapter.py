@@ -137,6 +137,30 @@ def _git_text(args: list[str], cwd: Path | None = None) -> str:
     return str(result.get("stdout") or "").strip()
 
 
+def _canonical_repo_root(root: Path) -> Path:
+    """Return the main checkout that owns this git worktree when it can be inferred."""
+    result = _git(["rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=root)
+    if not result.get("ok"):
+        return root
+    common_dir = Path(str(result.get("stdout") or "").strip())
+    if not common_dir.is_absolute():
+        common_dir = root / common_dir
+    return common_dir.parent if common_dir.name == ".git" else root
+
+
+def _codegraph_index_path(root: Path) -> Path:
+    return root / ".codegraph" / "codegraph.db"
+
+
+def _codegraph_graph_root(root: Path) -> Path:
+    if _codegraph_index_path(root).exists():
+        return root
+    canonical = _canonical_repo_root(root)
+    if canonical != root and _codegraph_index_path(canonical).exists():
+        return canonical
+    return root
+
+
 def _git_snapshot(root: Path) -> dict[str, Any]:
     branch = _git(["branch", "--show-current"], cwd=root)
     head = _git(["rev-parse", "HEAD"], cwd=root)
@@ -192,6 +216,7 @@ def _understand_graph_path(root: Path) -> Path:
 
 def codegraph_status(root: Path | None = None, *, skip_external: bool = False) -> dict[str, Any]:
     root = root or REPO_ROOT
+    graph_root = _codegraph_graph_root(root)
     command = _codegraph_command()
     available = bool(command)
     version_result: dict[str, Any] = {"ok": False, "skipped": skip_external or not available}
@@ -200,9 +225,9 @@ def codegraph_status(root: Path | None = None, *, skip_external: bool = False) -
     if available and not skip_external:
         version_result = _run_command([command, "--version"], cwd=root, timeout=20)
         version = _parse_codegraph_version(str(version_result.get("stdout") or version_result.get("stderr") or ""))
-        status_result = _run_command([command, "status", str(root)], cwd=root, timeout=30)
+        status_result = _run_command([command, "status", str(graph_root)], cwd=root, timeout=30)
     status_summary = _parse_codegraph_status(str(status_result.get("stdout") or ""))
-    index_path = root / ".codegraph" / "codegraph.db"
+    index_path = _codegraph_index_path(graph_root)
     git = _git_snapshot(root)
     status = "ok" if available and index_path.exists() else ("missing_index" if available else "unavailable")
     if skip_external and available:
@@ -220,6 +245,8 @@ def codegraph_status(root: Path | None = None, *, skip_external: bool = False) -
             success_summary=version or _compact_text(str(version_result.get("stdout") or ""), max_chars=120),
         ),
         "index_path": _repo_rel(index_path, root),
+        "graph_root": str(graph_root),
+        "graph_root_source": "canonical_worktree_root" if graph_root != root else "current_worktree",
         "index_exists": index_path.exists(),
         "status_check": _compact_command_result(
             status_result,
@@ -451,6 +478,33 @@ def _fallback_context(query: str, changed_files: list[str]) -> str:
     return "\n".join(lines)
 
 
+def _repo_level_context(query: str, changed_files: list[str], status: dict[str, Any], reason: str | None) -> str:
+    summary = status.get("index_summary") if isinstance(status.get("index_summary"), dict) else {}
+    lines = [
+        "# Code Intelligence Context",
+        "",
+        "- provider: `codegraph`",
+        "- status: `repo_index_ready`",
+        f"- graph_root: `{status.get('graph_root') or 'unknown'}`",
+        f"- graph_root_source: `{status.get('graph_root_source') or 'unknown'}`",
+        f"- context_detail: `{_compact_text(reason, max_chars=240) or 'repo-level index used'}`",
+        f"- files: `{summary.get('files', 'unknown')}`",
+        f"- nodes: `{summary.get('nodes', 'unknown')}`",
+        f"- edges: `{summary.get('edges', 'unknown')}`",
+        f"- query: `{query or 'n/a'}`",
+        "",
+        "## Changed / scoped files",
+        *[f"- `{path}`" for path in changed_files or ["none"]],
+        "",
+        "## Guidance",
+        "Use the CodeGraph repo index plus AIstock allowed_write_scope, file_ownership.yaml, and targeted reads. Broad repo scans remain unnecessary unless this scoped context is insufficient.",
+    ]
+    text = ""
+    for line in lines:
+        text = f"{text}\n{line}" if text else line
+    return text
+
+
 def build_context_artifacts(
     *,
     item_id: str,
@@ -468,16 +522,27 @@ def build_context_artifacts(
     status = codegraph_status(root, skip_external=skip_external)
     fallback_used = True
     fallback_reason = "codegraph_unavailable_or_missing_index"
+    graph_ready = bool(status.get("available") and status.get("index_exists") and not skip_external)
     context_text = _fallback_context(query, changed)
-    if status.get("available") and status.get("index_exists") and not skip_external:
+    channel = "fallback"
+    if graph_ready:
         command = str(status["command"])
-        result = _run_command([command, "context", query or " ", "--max-nodes", str(max_symbols)], cwd=root, timeout=60)
+        graph_root = str(status.get("graph_root") or root)
+        result = _run_command(
+            [command, "context", query or " ", "--path", graph_root, "--max-nodes", str(max_symbols)],
+            cwd=root,
+            timeout=60,
+        )
         if result.get("ok") and (result.get("stdout") or "").strip():
             fallback_used = False
             fallback_reason = None
             context_text = str(result.get("stdout") or "")
+            channel = "cli"
         else:
             fallback_reason = result.get("stderr") or result.get("stdout") or "codegraph_context_failed"
+            fallback_used = False
+            context_text = _repo_level_context(query, changed, status, str(fallback_reason))
+            channel = "repo_index"
     _write_text(context_path, context_text)
     manifest = {
         "schema_version": "aistock_code_intelligence_context_v1",
@@ -489,10 +554,12 @@ def build_context_artifacts(
         "working_tree_dirty": status.get("working_tree_dirty"),
         "query": query,
         "changed_files": changed,
-        "status": "fallback" if fallback_used else "ok",
+        "status": "fallback" if fallback_used else ("repo_index_ready" if channel == "repo_index" else "ok"),
         "context_markdown": _repo_rel(context_path, root),
         "fallback": {"used": fallback_used, "reason": fallback_reason},
-        "channel": "cli" if not fallback_used else "fallback",
+        "graph_root": status.get("graph_root"),
+        "graph_root_source": status.get("graph_root_source"),
+        "channel": channel,
     }
     _write_json(manifest_path, manifest)
     return {**manifest, "manifest_path": _repo_rel(manifest_path, root)}
@@ -584,9 +651,11 @@ def build_affected_tests_artifact(
     suggested: list[str] = []
     fallback_used = True
     fallback_reason = "codegraph_unavailable_or_missing_index"
-    if changed and status.get("available") and status.get("index_exists") and not skip_external:
+    graph_ready = bool(changed and status.get("available") and status.get("index_exists") and not skip_external)
+    if graph_ready:
         command = str(status["command"])
-        args = [command, "affected", *changed, "--quiet"]
+        graph_root = str(status.get("graph_root") or root)
+        args = [command, "affected", "--path", graph_root, *changed, "--quiet"]
         if filter_glob:
             args.extend(["--filter", filter_glob])
         result = _run_command(args, cwd=root, timeout=60)
@@ -616,6 +685,8 @@ def build_affected_tests_artifact(
         "tool": "codegraph",
         "tool_version": status.get("version") or status.get("expected_version"),
         "changed_files": changed,
+        "graph_root": status.get("graph_root"),
+        "graph_root_source": status.get("graph_root_source"),
         "suggested_tests": suggested,
         "codegraph_suggested_tests": codegraph_suggested,
         "repo_fallback_suggested_tests": supplement,
@@ -661,11 +732,13 @@ def build_summary(
         "generated_at": _utc_now(),
         "item_id": item_id,
         "provider": "codegraph",
-        "status": "ok" if context["status"] == "ok" or affected["status"] == "ok" else "fallback",
+        "status": "ok" if context["status"] in {"ok", "repo_index_ready"} or affected["status"] == "ok" else "fallback",
         "context_ref": context.get("context_markdown"),
         "manifest_ref": context.get("manifest_path"),
         "affected_tests_ref": affected.get("artifact_path"),
         "fallback_used": bool(context.get("fallback", {}).get("used") and affected.get("fallback", {}).get("used")),
+        "graph_root": context.get("graph_root") or affected.get("graph_root"),
+        "graph_root_source": context.get("graph_root_source") or affected.get("graph_root_source"),
         "context": context,
         "affected_tests": affected,
         "understand_anything": understand_anything_status(root or REPO_ROOT),

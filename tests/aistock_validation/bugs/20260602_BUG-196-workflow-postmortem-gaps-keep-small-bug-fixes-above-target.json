@@ -1,0 +1,84 @@
+{
+  "actual": "BUG-195 required manual scope correction, heavier validation selection, and postmortem-driven follow-up not yet reflected in the implementation plan.",
+  "allowed_write_scope": [
+    "docs/architecture/aistock_issue_workflow_efficiency_hardening_design_v2_2_20260529.md",
+    "scripts/aistock_issue_workflow.py",
+    "scripts/issue_flow.py",
+    "tests/aistock_validation/catalog/test_plans.yaml",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "tests/aistock_validation/bugs/20260602_BUG-196-workflow-postmortem-gaps-keep-small-bug-fixes-above-target.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/code_intelligence_adapter.py",
+    "backend/tests/scripts/test_code_intelligence_adapter.py",
+    "backend/tests/scripts/test_issue_flow.py"
+  ],
+  "assigned_agent": "codex",
+  "bug_id": "BUG-196",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-01T17:13:33.049448Z",
+  "description": "BUG-195 required manual scope correction, heavier validation selection, and postmortem-driven follow-up not yet reflected in the implementation plan.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260602-a4f18275021a",
+      "timestamp": "2026-06-01T17:13:33.049443Z"
+    }
+  ],
+  "evidence_uris": [
+    "BUG-195 PR #496/#497 postmortem"
+  ],
+  "expected": "Small scoped BUG workflow should use CodeGraph/catalog context consistently, select the narrowest safe validation plan, keep successful stdout compact, and record BUG-195 follow-up priorities in the active design plan.",
+  "first_seen_at": "2026-06-01T17:13:33.049448Z",
+  "fix_branch": "bug/BUG-196-workflow-postmortem-gaps-keep-small-bug-fixes-ab-20260602",
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 499,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/499",
+  "last_seen_at": "2026-06-01T17:13:33.049448Z",
+  "module": "issue_workflow",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "guardrail_changed_files",
+    "validation_center_backend",
+    "validation_catalog_integrity"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "scope_expansion_reason": "BUG-195 postmortem showed the CodeGraph adapter and validation selector tests are the direct workflow efficiency fix surface.",
+  "severity": "P1",
+  "status": "in_progress",
+  "suspected_modules": [
+    "issue_workflow"
+  ],
+  "title": "Workflow postmortem gaps keep small BUG fixes above target",
+  "trigger_condition": {
+    "fingerprint": "a4f18275021ac60693eb1b09",
+    "source_event_id": "FE-20260602-a4f18275021a"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_code_intelligence_adapter.py backend/tests/scripts/test_issue_flow.py -q -p no:cacheprovider -> 30 passed",
+    "python -m ruff check scripts/code_intelligence_adapter.py backend/tests/scripts/test_code_intelligence_adapter.py backend/tests/scripts/test_issue_flow.py -> passed",
+    "python -m py_compile scripts/code_intelligence_adapter.py scripts/aistock_issue_workflow.py scripts/issue_flow.py -> passed",
+    "python scripts/code_intelligence_adapter.py doctor --root . -> codegraph_status=ok graph_root_source=canonical_worktree_root",
+    "python scripts/issue_flow.py validation-select --module watchlist ... -> required_plans=l0,validation_module_registry_l0; validation_center_backend not selected",
+    "python -m nox -s validation_center_backend validation_coverage_backend -> passed (302 passed; 10 passed)",
+    "python -m nox -s l0 validation_module_registry_l0 validation_catalog_integrity guardrail_changed_files -> passed",
+    "python -m nox -s guardrail_changed_files after staging -> passed (files=7 findings=0 blocking=0)",
+    "python scripts/aistock_issue_workflow.py workflow-smoke --changed-file scripts/code_intelligence_adapter.py --changed-file backend/tests/scripts/test_code_intelligence_adapter.py --changed-file backend/tests/scripts/test_issue_flow.py --changed-file tests/aistock_validation/catalog/file_ownership.yaml --module validation --output-format compact -> workflow_gate=passed unexpected_dirty_paths=[]"
+  ],
+  "verification_run_id": null
+}

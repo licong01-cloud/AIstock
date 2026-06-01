@@ -36,11 +36,11 @@ rules:
     priority: 70
     include:
       - tests/aistock_validation/bugs/**
-    primary_module: validation.center
-    impact_modules: [validation.module_quality, tests.validation_history]
+    primary_module: validation.module_quality
+    impact_modules: [tests.validation_history]
     layer: validation_bug_registry
     risk_level: high
-    ownership_reason: Local bug JSON records are the Validation Center source of truth and GitHub issue mirror input.
+    ownership_reason: Local bug JSON records are workflow metadata; normal BUG registration and close-sync should validate schema/module quality without forcing full Validation Center backend tests.
   - rule_id: validation_services
     priority: 100
     include:
@@ -78,6 +78,7 @@ rules:
       - scripts/aistock_module_ownership_scan.py
       - scripts/aistock_issue_workflow.py
       - scripts/issue_flow.py
+      - scripts/code_intelligence_adapter.py
       - scripts/ci_failure_issue_summary.py
       - scripts/validation_center_*.py
     primary_module: validation.guardrails
@@ -213,6 +214,21 @@ rules:
     layer: backend_service
     risk_level: high
     ownership_reason: Selection Center produces package-based portfolio candidates.
+  - rule_id: watchlist_services
+    priority: 82
+    include:
+      - backend/core/data_source_manager.py
+      - backend/core/data_source_manager_impl.py
+      - backend/services/watchlist_service.py
+      - backend/routers/watchlist.py
+      - backend/tests/watchlist/**
+      - frontend/src/app/watchlist/**
+      - frontend/tests/watchlist/**
+    primary_module: watchlist
+    impact_modules: [local_data]
+    layer: product_feature
+    risk_level: high
+    ownership_reason: Watchlist realtime quote normalization, import/display APIs, and focused tests must be attributed to watchlist so small data-display fixes use scoped validation instead of generic platform or Validation Center gates.
   - rule_id: strategy_package_services
     priority: 80
     include:
