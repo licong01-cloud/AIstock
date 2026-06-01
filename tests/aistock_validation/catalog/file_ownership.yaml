@@ -328,6 +328,8 @@ rules:
     include:
       - backend/services/research_assistant/memory_tree.py
       - backend/tests/research_assistant/test_memory_tree_retrieval.py
+      - backend/tests/research_assistant/test_memory_tree_ddl_contract.py
+      - backend/tests/research_assistant/test_memory_scoring.py
     primary_module: research_assistant.memory_tree
     impact_modules: [research_assistant.memory_curator, research_assistant.graph_context]
     layer: backend_service
@@ -338,6 +340,7 @@ rules:
     include:
       - backend/services/research_assistant/memory_curator.py
       - backend/tests/research_assistant/test_memory_autogrow.py
+      - backend/tests/research_assistant/test_memory_dedup_scope.py
       - backend/tests/research_assistant/test_memory_reflection.py
     primary_module: research_assistant.memory_curator
     impact_modules: [research_assistant.memory_tree, research_assistant.reflection_card]

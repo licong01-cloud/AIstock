@@ -564,7 +564,9 @@ COMMENT ON TABLE qe_autonomous_evolution_runs IS 'QE 自主演进主循环运行
 
 > 实现时每完成一项，在本矩阵对应行追加 PR 链接与提交哈希，保持设计-实现强一致。
 
-> Phase 0 基线锁定锚点：`docs/process/research_assistant_baseline_verification_20260531.md` 逐条复验 DEF-01~12 与 §1.1 资产；`backend/tests/research_assistant/test_phase0_blueprint_baseline.py`、`tests/aistock_validation/catalog/module_registry.yaml`、`tests/aistock_validation/catalog/file_ownership.yaml`、`tests/aistock_validation/catalog/test_plans.yaml`、`noxfile.py` 将本矩阵登记为 `ra_phase0_baseline` 闸门。Phase 0 原始实现 commit `53a0f03d6a2bb05049a99f57998c3845b7d681f1`，rebase 后合入前 HEAD `cff0b243`；G1-central run_id `research-assistant_20260601_011521_l0_ra-phase0-baseline_fba1c3de_runner-validation__289612b1db`，validated_commit `fba1c3de`，`return_code=0`。本锚点只声明基线和登记，不把未来行标记为已实现。
+> Phase 0 基线锁定锚点：`docs/process/research_assistant_baseline_verification_20260531.md` 逐条复验 DEF-01~12 与 §1.1 资产；`backend/tests/research_assistant/test_phase0_blueprint_baseline.py`、`tests/aistock_validation/catalog/module_registry.yaml`、`tests/aistock_validation/catalog/file_ownership.yaml`、`tests/aistock_validation/catalog/test_plans.yaml`、`noxfile.py` 将本矩阵登记为 `ra_phase0_baseline` 闸门。Phase 0 原始实现 commit `53a0f03d6a2bb05049a99f57998c3845b7d681f1`，合入分支最终 HEAD `30ffefb6bd666cbe8a3a5c6b55cb65ad32ee4931`，PR #448 squash merge commit `4eeaf2bc8978de575f29e7e2b7f8394c266b724d`；G1-central run_id `research-assistant_20260601_011521_l0_ra-phase0-baseline_fba1c3de_runner-validation__289612b1db`，validated_commit `fba1c3de`，`return_code=0`。本锚点只声明基线和登记，不把未来行标记为已实现。
+
+> Phase 1 G3 回填锚点：`backend/db/migrations/ra_upgrade/001_memory_tree.sql`、`backend/db/init_research_assistant_schema_20260521.py`、`backend/services/research_assistant/models.py`、`backend/services/research_assistant/memory_tree.py`、`backend/services/research_assistant/memory_curator.py`、`backend/services/research_assistant/service.py`、`configs/research_assistant/runtime_context.yaml`、`backend/tests/research_assistant/test_memory_tree_ddl_contract.py`、`backend/tests/research_assistant/test_memory_tree_retrieval.py`、`backend/tests/research_assistant/test_memory_scoring.py`、`backend/tests/research_assistant/test_memory_autogrow.py`、`backend/tests/research_assistant/test_memory_dedup_scope.py`、`backend/tests/research_assistant/test_core_no_adapter_import.py`、`tests/aistock_validation/catalog/test_plans.yaml`、`backend/services/validation/plan_catalog.py`、`noxfile.py` 将树形召回、记忆真树 DDL、个人维度类型、自动扩展 curator 接入 `ra_phase1_memory_tree` 闸门。Phase 1 原始实现 commit `d12f9aaca07960a577e055d46df47cc46d09aeca`，原始确定性修复 commit `b4c021345dd187f964bedfcfdf77ddeba1481d02`，rebase 后实现 commit `1d2bafbd`，rebase 后确定性修复 commit `47affe04`；G1-central run_id `research-assistant-memory-tree_20260601_013143_l1_ra-phase1-memory-tree_df500446_runner-validation__9756376ad7`，validated_commit `df500446`，`return_code=0`。`production_ddl_gate=pending_before_merge`，生产 `8001`/`3000` 与生产库未触碰。
 
 ---
 
@@ -795,7 +797,7 @@ COMMENT ON TABLE assistant_prompt_lab_runs IS '提示词自优化候选(GEPA/DSP
 | Prompt Lab | DEF-12 | `assistant_prompt_lab_runs`、GEPA/DSPy+judge | `test_prompt_lab_gepa_offline.py` / `_judge_gated.py` |
 | 技能库 | DEF-12 | `assistant_skill_library`、L4 课程 | `test_skill_library.py` |
 
-> Phase 0 增补锚点：`research_assistant.code_intelligence`、`research_assistant.proactive_reports`、`research_assistant.reflection_card`、`research_assistant.prompt_lab`、`research_assistant.skill_library` 已在 module/file ownership catalog 中登记；Phase 0 实现 commit `53a0f03d6a2bb05049a99f57998c3845b7d681f1`。
+> Phase 0 增补锚点：`research_assistant.code_intelligence`、`research_assistant.proactive_reports`、`research_assistant.reflection_card`、`research_assistant.prompt_lab`、`research_assistant.skill_library` 已在 module/file ownership catalog 中登记；Phase 0 原始实现 commit `53a0f03d6a2bb05049a99f57998c3845b7d681f1`，合入分支最终 HEAD `30ffefb6bd666cbe8a3a5c6b55cb65ad32ee4931`，PR #448 squash merge commit `4eeaf2bc8978de575f29e7e2b7f8394c266b724d`，G1-central run_id `research-assistant_20260601_011521_l0_ra-phase0-baseline_fba1c3de_runner-validation__289612b1db`。
 
 ### 16.10 Design Acceptance Index（补 §13）
 
@@ -943,7 +945,7 @@ COMMENT ON TABLE assistant_mcp_connections IS '通用 MCP 客户端连接登记�
 | 通用 MCP 客户端 + 发现/审核 | DEF-13 | `assistant_mcp_connections`、`capabilities.review_status`、闸门 | `test_generic_mcp_discovery.py` / `test_quarantine_tool_blocked.py` |
 | 知识包抽离 + 数据隔离 | DEF-13 | `aistock_knowledge_pack`、Knowledge Pack Provider | `test_core_empty_boot.py` / `test_pack_load_isolation.py` |
 
-> Phase 0 解耦锚点：`research_assistant.product_core`、`research_assistant.core_adapter`、`research_assistant.generic_mcp_client`、`research_assistant.aistock_domain_adapter`、`research_assistant.aistock_knowledge_pack` 已在 module/file ownership catalog 中登记；Phase 0 实现 commit `53a0f03d6a2bb05049a99f57998c3845b7d681f1`。
+> Phase 0 解耦锚点：`research_assistant.product_core`、`research_assistant.core_adapter`、`research_assistant.generic_mcp_client`、`research_assistant.aistock_domain_adapter`、`research_assistant.aistock_knowledge_pack` 已在 module/file ownership catalog 中登记；Phase 0 原始实现 commit `53a0f03d6a2bb05049a99f57998c3845b7d681f1`，合入分支最终 HEAD `30ffefb6bd666cbe8a3a5c6b55cb65ad32ee4931`，PR #448 squash merge commit `4eeaf2bc8978de575f29e7e2b7f8394c266b724d`，G1-central run_id `research-assistant_20260601_011521_l0_ra-phase0-baseline_fba1c3de_runner-validation__289612b1db`。
 
 ### 17.11 Design Acceptance Index（补 §13）
 

@@ -267,7 +267,7 @@ modules:
     description: Tree-shaped deterministic memory retrieval, governance columns, resident directives, and context-pack injection.
     description_zh: 覆盖树形记忆召回、真树治理列、常驻偏好指令与上下文注入。
     test_plans:
-      required_on_change: [l0, ra_phase0_baseline, research_assistant_backend]
+      required_on_change: [l0, ra_phase0_baseline, ra_phase1_memory_tree, research_assistant_backend]
       recommended: [research_assistant_mcp_contract]
   - module_id: research_assistant.memory_curator
     display_name: Research Assistant Memory Curator
@@ -278,7 +278,7 @@ modules:
     description: Memory auto-growth, reflection consolidation, de-duplication, and approval-aware curation.
     description_zh: 覆盖记忆自增长、反思巩固、去重与审批感知治理。
     test_plans:
-      required_on_change: [l0, ra_phase0_baseline, research_assistant_backend]
+      required_on_change: [l0, ra_phase0_baseline, ra_phase1_memory_tree, research_assistant_backend]
       recommended: [research_assistant_mcp_contract]
   - module_id: research_assistant.graph_context
     display_name: Research Assistant Graph Context

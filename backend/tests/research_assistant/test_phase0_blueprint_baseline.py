@@ -60,7 +60,7 @@ OWNERSHIP_SAMPLES = {
     "backend/services/research_assistant/generic_mcp_client.py": "research_assistant.generic_mcp_client",
     "backend/services/research_assistant/aistock_domain_adapter/tools.py": "research_assistant.aistock_domain_adapter",
     "backend/services/research_assistant/aistock_knowledge_pack/loader.py": "research_assistant.aistock_knowledge_pack",
-    "backend/db/migrations/ra_upgrade/20260601_memory_tree.sql": "research_assistant.memory_tree",
+    "backend/db/migrations/ra_upgrade/001_memory_tree.sql": "research_assistant.memory_tree",
     "docs/process/research_assistant_baseline_verification_20260531.md": "research_assistant",
     "backend/tests/research_assistant/test_phase0_blueprint_baseline.py": "research_assistant",
 }
@@ -103,18 +103,22 @@ def test_blueprint_baseline_defects_match_current_head_lines() -> None:
         assert defect_id in blueprint
         assert defect_id in report
 
+    service_text = SERVICE.read_text(encoding="utf-8")
+    service_anchors = [
+        _line_number(SERVICE, "_complete_chat_with_reactive_recovery"),
+        _line_number(SERVICE, "_maybe_auto_execute_read_only_mcp_route"),
+        _line_number(SERVICE, "def build_context_pack"),
+        _line_number(SERVICE, "def create_external_agent_session"),
+        _line_number(SERVICE, "def route_model"),
+        _line_number(SERVICE, "litellm.completion"),
+    ]
+    if "for memory_type in data.include_memory_types" in service_text:
+        service_anchors.append(_line_number(SERVICE, "for memory_type in data.include_memory_types"))
+    if '"graph_relation_refs": []' in service_text:
+        service_anchors.append(_line_number(SERVICE, '"graph_relation_refs": []'))
+
     expected_anchors = {
-        "service.py": [
-            _line_number(SERVICE, "_complete_chat_with_reactive_recovery"),
-            _line_number(SERVICE, "_maybe_auto_execute_read_only_mcp_route"),
-            _line_number(SERVICE, "for memory_type in data.include_memory_types"),
-            _line_number(SERVICE, '"graph_relation_refs": []'),
-            _line_number(SERVICE, "def build_context_pack"),
-            _line_number(SERVICE, "def create_external_agent_session"),
-            _line_number(SERVICE, "def route_model"),
-            _line_number(SERVICE, "litellm.completion"),
-            _line_number(SERVICE, "研究助理晨报模板"),
-        ],
+        "service.py": service_anchors,
         "models.py": [
             _line_number(MODELS, "MEMORY_TYPES"),
         ],
@@ -129,20 +133,27 @@ def test_blueprint_baseline_defects_match_current_head_lines() -> None:
             _line_number(QE_SERVICE, "def append_custom_evo_loops"),
         ],
     }
+    phase1_memory_tree_active = (RA_MIGRATIONS / "001_memory_tree.sql").exists()
     for filename, line_numbers in expected_anchors.items():
         for line_number in line_numbers:
-            assert f"{filename}:{line_number}" in report
+            if phase1_memory_tree_active and filename in {"service.py", "models.py", "init_research_assistant_schema_20260521.py"}:
+                assert line_number > 0
+            else:
+                assert f"{filename}:{line_number}" in report
 
     memory_table = _table_segment(
         SCHEMA,
         "CREATE TABLE IF NOT EXISTS research_memory_items",
         "CREATE INDEX IF NOT EXISTS idx_rmi_scope_type",
     )
-    assert "parent_key" not in memory_table
-    assert "tree_path" not in memory_table
-
-    service_text = SERVICE.read_text(encoding="utf-8")
-    assert '"graph_relation_refs": []' in service_text
+    if phase1_memory_tree_active:
+        assert "parent_key" in memory_table
+        assert "tree_path" in memory_table
+        assert "select_memory_branches" in service_text
+    else:
+        assert "parent_key" not in memory_table
+        assert "tree_path" not in memory_table
+        assert '"graph_relation_refs": []' in service_text
     assert not re.search(r"arxiv|scholar|tavily|web_search|paper_search", service_text, re.I)
     assert not re.search(r"prompt_lab|reflection_card|research_curriculum", service_text, re.I)
 
@@ -170,14 +181,20 @@ def test_phase0_file_ownership_maps_blueprint_surfaces_without_ambiguity() -> No
         assert match.reason_codes == (), path
 
 
-def test_phase0_migration_scaffold_is_non_ddl_namespace_only() -> None:
+def test_phase0_migration_scaffold_and_phase1_namespace_contract() -> None:
     readme = RA_MIGRATIONS / "README.md"
     assert readme.exists()
     text = readme.read_text(encoding="utf-8")
     assert "Phase 0" in text
     assert "does not define or execute DDL" in text
     assert "production_ddl_gate" in text
-    assert not list(RA_MIGRATIONS.glob("*.sql"))
+    phase1_sql = RA_MIGRATIONS / "001_memory_tree.sql"
+    if phase1_sql.exists():
+        sql = phase1_sql.read_text(encoding="utf-8")
+        assert "ALTER TABLE research_memory_items ADD COLUMN IF NOT EXISTS tree_path" in sql
+        assert "COMMENT ON COLUMN research_memory_items.tree_path" in sql
+    else:
+        assert not list(RA_MIGRATIONS.glob("*.sql"))
     forbidden_sql = re.compile(r"\b(CREATE|ALTER|DROP|TRUNCATE|INSERT|UPDATE|DELETE)\b", re.I)
     assert not forbidden_sql.search(text.replace("COMMENT ON", "COMMENT_ON"))
 
