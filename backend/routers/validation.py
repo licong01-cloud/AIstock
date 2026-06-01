@@ -263,6 +263,17 @@ def get_validation_evidence(
 
 
 @router.get(
+    "/code-intelligence/summary",
+    response_model=ValidationResponse,
+    summary="Summarize warning-only CodeGraph and Understand Anything artifacts",
+)
+def get_validation_code_intelligence_summary(
+    history_store: ValidationHistoryStore = Depends(get_history_store),
+):
+    return _success(history_store.code_intelligence_summary())
+
+
+@router.get(
     "/git/workspace-status",
     response_model=ValidationResponse,
     summary="Get read-only git workspace dirty-file status",
