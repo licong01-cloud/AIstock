@@ -9,7 +9,6 @@ from backend.services.research_assistant.react_grounding import (
     McpToolResult,
     ModelTurn,
     ReactGroundingConfig,
-    ToolCatalogEntry,
     ToolGateDecision,
     run_react_grounding_loop,
 )
