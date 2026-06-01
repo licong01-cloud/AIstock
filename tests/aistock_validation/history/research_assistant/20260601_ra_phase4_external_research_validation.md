@@ -3,8 +3,8 @@
 - branch: codex/ra-external-research-20260601
 - batch_id: ra_phase4
 - plan_key: ra_phase4_external_research
-- validated_commit: e6f6c2dedf5744b1c8f921b6333bd47095774773
-- g1_central_run_id: research-assistant-external-research_20260601_134346_l2-5_ra-phase4-external-research_4d4984e7_runner-validation__953cb90b2c
+- validated_commit: 2ff8ca3890573090bdbca037c017fa7a8b2492e0
+- g1_central_run_id: research-assistant-external-research_20260601_135339_l2-5_ra-phase4-external-research_335252bd_runner-validation__0cfd60b48f
 - g1_central: status=passed return_code=0 production_8001_touched=false
 - g1_local: nox -s ra_phase4_external_research => 74 passed; catalog_integrity passed; ownership_scan mapped=28 unmapped=0 ambiguous=0
 - production_ddl_gate: noop
