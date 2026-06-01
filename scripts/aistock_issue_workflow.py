@@ -5370,15 +5370,24 @@ def _close_sync_is_complete(
     stale = _stale_pr_check_for_bug(bug_id)
     source_pr_number = _pr_number_from_url(source_pr_url)
     merged_close_sync_prs = []
+    open_close_sync_prs = []
     for item in stale.get("merged_prs") or []:
         number = int(item.get("number") or 0)
         title = str(item.get("title") or "").lower()
         if number != source_pr_number and ("close-sync" in title or "close sync" in title):
             merged_close_sync_prs.append(item)
+    for item in stale.get("open_prs") or []:
+        number = int(item.get("number") or 0)
+        title = str(item.get("title") or "").lower()
+        if number != source_pr_number and ("close-sync" in title or "close sync" in title):
+            open_close_sync_prs.append(item)
     marker["stale_pr_check"] = stale
     marker["merged_close_sync_prs"] = merged_close_sync_prs
+    marker["open_close_sync_prs"] = open_close_sync_prs
     if merged_close_sync_prs:
         marker["close_sync_pr"] = merged_close_sync_prs[0]
+    if open_close_sync_prs:
+        marker["open_close_sync_pr"] = open_close_sync_prs[0]
     return marker
 
 
@@ -5390,6 +5399,29 @@ def _close_sync_commit_already_merged(close_sync: dict[str, Any]) -> dict[str, A
         "reason": "close_sync_already_persisted",
         "branch": pr.get("headRefName"),
         "pr_url": pr_url or None,
+        "commit": close_sync.get("merge_commit"),
+    }
+
+
+def _close_sync_commit_existing_open_pr(close_sync: dict[str, Any]) -> dict[str, Any]:
+    pr = close_sync.get("open_close_sync_pr") or {}
+    pr_url = str(pr.get("url") or "").strip()
+    return {
+        "workflow_gate": "pr_opened",
+        "reason": "close_sync_bug_json_already_persisted_with_open_pr",
+        "branch": pr.get("headRefName"),
+        "pr_url": pr_url or None,
+        "commit": close_sync.get("merge_commit"),
+    }
+
+
+def _close_sync_commit_needs_persistence(close_sync: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "workflow_gate": "blocked",
+        "reason": "close_sync_bug_json_fixed_but_not_persisted_to_origin_main",
+        "blocking": [
+            "BUG JSON is already fixed in the current close-sync snapshot, but no merged or open close-sync PR was found."
+        ],
         "commit": close_sync.get("merge_commit"),
     }
 
@@ -5495,13 +5527,29 @@ def build_merge_finalizer_plan(
         issue_json=issue_json,
     )
     if close_sync:
-        close_sync_commit = _close_sync_commit_already_merged(close_sync)
-        close_sync_pr_merge = {
-            "workflow_gate": "already_merged",
-            "auto_merge": merge_close_sync_pr,
-            "pr_url": close_sync_commit.get("pr_url"),
-            "reason": "close_sync_pr_or_bug_json_already_persisted",
-        }
+        if close_sync.get("close_sync_pr") or close_sync.get("snapshot_source") == "origin_main_ref":
+            close_sync_commit = _close_sync_commit_already_merged(close_sync)
+            close_sync_pr_merge = {
+                "workflow_gate": "already_merged",
+                "auto_merge": merge_close_sync_pr,
+                "pr_url": close_sync_commit.get("pr_url"),
+                "reason": "close_sync_pr_or_bug_json_already_persisted",
+            }
+        elif close_sync.get("open_close_sync_pr"):
+            close_sync_commit = _close_sync_commit_existing_open_pr(close_sync)
+            close_sync_pr_merge = _merge_close_sync_pr_if_ready(
+                bug_id=canonical_bug_id,
+                close_sync_commit=close_sync_commit,
+                auto_merge=merge_close_sync_pr,
+            )
+        else:
+            close_sync_commit = _close_sync_commit_needs_persistence(close_sync)
+            close_sync_pr_merge = {
+                "workflow_gate": "blocked",
+                "auto_merge": merge_close_sync_pr,
+                "blocking": close_sync_commit.get("blocking") or [],
+                "reason": close_sync_commit.get("reason"),
+            }
     else:
         close_sync = build_close_sync_plan(
             bug_id=canonical_bug_id,
@@ -5544,6 +5592,8 @@ def build_merge_finalizer_plan(
             "reason": str(exc),
         }
     final_blocking = []
+    if close_sync_commit.get("workflow_gate") == "blocked":
+        final_blocking.extend(close_sync_commit.get("blocking") or [])
     if close_sync_pr_merge.get("workflow_gate") == "blocked":
         final_blocking.extend(close_sync_pr_merge.get("blocking") or [])
     if cleanup_plan and cleanup_plan.get("workflow_gate") == "blocked":

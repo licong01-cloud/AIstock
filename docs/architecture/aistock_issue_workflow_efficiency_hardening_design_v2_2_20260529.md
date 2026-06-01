@@ -148,6 +148,18 @@ The second v2.3 slice hardens same-module batching without making ordinary singl
 
 This improves efficiency by allowing compatible issues to share context and validation while preserving per-issue evidence and preventing hidden cross-scope changes.
 
+## 6.3 BUG-197 Follow-Up: Close-Sync Finalizer Persistence State
+
+BUG-196 aftercare exposed a merge-finalizer edge case: a close-sync BUG JSON can be fixed in an existing close-sync branch and open PR while not yet merged into `origin/main`. That state must not be reported as `already_merged`.
+
+The v2.3 finalizer must distinguish three states without rebuilding duplicate registry work:
+
+- `origin_main_ref`: fixed BUG JSON is already visible from `origin/main`; finalizer can report `already_merged`.
+- `merged_close_sync_pr`: an existing close-sync PR is merged; finalizer can report `already_merged` and proceed to cleanup checks.
+- `open_close_sync_pr`: an existing close-sync PR is open; finalizer must report `pr_opened`, optionally merge it only when `--merge-close-sync-pr` is set, and otherwise return a merge next action.
+
+If a fixed BUG JSON is found only in the current snapshot and neither a merged nor open close-sync PR can be found, the finalizer blocks with an explicit persistence message instead of silently treating the state as merged. This keeps the common aftercare path fast while preventing false completion reports and duplicate close-sync PRs.
+
 ## 7. Acceptance Matrix
 
 | ID | Requirement | Validation |
@@ -166,6 +178,7 @@ This improves efficiency by allowing compatible issues to share context and vali
 | IWEH-012 | BUG registry metadata does not force `validation_center_backend` for product BUG fixes | `validation-select` unit test including BUG JSON plus product code |
 | IWEH-013 | CodeGraph context in a git worktree can reuse the canonical root index | Code intelligence adapter unit test for canonical worktree graph root |
 | IWEH-014 | CodeGraph detail failures downgrade to repo-index context, not full fallback, when the index is ready | Code intelligence adapter unit test for `repo_index_ready` context |
+| IWEH-015 | Merge finalizer does not treat an open close-sync PR as already merged | Unit tests for `open_close_sync_pr` ready-for-merge and auto-merge paths |
 
 ## 8. Expected Efficiency Impact
 

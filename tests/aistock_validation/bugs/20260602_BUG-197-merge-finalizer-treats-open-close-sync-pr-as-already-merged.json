@@ -1,0 +1,68 @@
+{
+  "actual": "merge-finalizer returned already_merged for close_sync_pr_merge while PR #501 was still OPEN, causing manual merge and cleanup.",
+  "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "docs/architecture/aistock_issue_workflow_efficiency_hardening_design_v2_2_20260529.md",
+    "tests/aistock_validation/bugs/20260602_BUG-197-merge-finalizer-treats-open-close-sync-pr-as-already-merged.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": "codex",
+  "bug_id": "BUG-197",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-01T17:54:50.531361Z",
+  "description": "merge-finalizer returned already_merged for close_sync_pr_merge while PR #501 was still OPEN, causing manual merge and cleanup.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260602-8d72f437c214",
+      "timestamp": "2026-06-01T17:54:50.531357Z"
+    }
+  ],
+  "evidence_uris": [
+    "BUG-196 PR #500/#501 aftercare"
+  ],
+  "expected": "merge-finalizer --merge-close-sync-pr --cleanup --apply completes or blocks accurately: existing open close-sync PR is discovered, checked, merged when green, then source and close-sync worktrees/branches are safely cleaned; already_merged is reported only when the close-sync PR is actually merged or the fixed BUG JSON is already on origin/main.",
+  "first_seen_at": "2026-06-01T17:54:50.531361Z",
+  "fix_branch": "bug/BUG-197-merge-finalizer-treats-open-close-sync-pr-as-alr-20260602",
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 502,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/502",
+  "last_seen_at": "2026-06-01T17:54:50.531361Z",
+  "module": "issue_workflow",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files",
+    "validation_center_backend",
+    "validation_catalog_integrity",
+    "validation_module_registry_l0",
+    "validation_coverage_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "in_progress",
+  "suspected_modules": [
+    "issue_workflow"
+  ],
+  "title": "Merge finalizer treats open close-sync PR as already merged",
+  "trigger_condition": {
+    "fingerprint": "8d72f437c214f2c9da16d0d8",
+    "source_event_id": "FE-20260602-8d72f437c214"
+  },
+  "verification_run_id": null
+}
