@@ -29,8 +29,8 @@
   "expected": "When backend tests do not fail, the Auto-register CI failures as BUGs lane should complete as a compact no-op success or be absent from failure summaries; it must only comment/register when backend-tests actually fails.",
   "first_seen_at": "2026-06-01T13:38:01.003758Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "76e70c8cb5e047cd9bd975d71c6d07f768e97b41",
+  "fixed_at": "2026-06-01T13:59:02.900134Z",
   "github_issue_number": 481,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/481",
   "last_seen_at": "2026-06-01T13:38:01.003758Z",
@@ -38,6 +38,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/484",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -60,5 +61,14 @@
     "fingerprint": "ec535f6e56a15f15fa87151a",
     "source_event_id": "FE-20260601-ec535f6e56a1"
   },
+  "validation_evidence": [
+    "workflow yaml assertions -> passed",
+    "git diff --check -> passed",
+    "python scripts/aistock_issue_workflow.py workflow-smoke --changed-file .github/workflows/test.yml --changed-file tests/aistock_validation/bugs/20260601_BUG-192-auto-register-ci-failures-check-reports-skipped-as-failed-on-non-failure.json --changed-file tests/aistock_validation/bugs/.bug_id_allocator.json --module validation --output-format compact -> workflow_gate=passed unexpected_dirty_paths=[]",
+    "python -m nox -s l0 -> success",
+    "python -m nox -s guardrail_changed_files -> success",
+    "python -m nox -s validation_catalog_integrity validation_module_registry_l0 -> success",
+    "python -m nox -s validation_center_backend -> 299 passed"
+  ],
   "verification_run_id": null
 }
