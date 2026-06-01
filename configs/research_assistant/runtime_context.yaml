@@ -116,6 +116,15 @@ assembly:
 trace:
   response_preview_chars: 500
 
+react_grounding:
+  max_tool_iterations: 4
+  evidence_required: true
+  placeholder_patterns:
+    - "\bXX\b"
+    - "\bX%\b"
+    - "approxX"
+    - "about X"
+
 ui:
   notify_auto_compaction: silent_by_default
   allow_user_expand_summary: true

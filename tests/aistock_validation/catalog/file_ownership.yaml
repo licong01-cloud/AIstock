@@ -279,6 +279,15 @@ rules:
     layer: database
     risk_level: high
     ownership_reason: Database schema and migrations affect persisted business state.
+  - rule_id: research_assistant_runtime_config
+    priority: 100
+    include:
+      - configs/research_assistant/runtime_context.yaml
+    primary_module: research_assistant
+    impact_modules: [research_assistant.react_grounding, research_assistant.evidence_guard]
+    layer: config
+    risk_level: high
+    ownership_reason: Runtime context config controls assistant dialogue, compaction, and ReAct grounding limits.
   - rule_id: research_assistant_phase0_docs
     priority: 95
     include:
@@ -359,10 +368,13 @@ rules:
     risk_level: high
     ownership_reason: Graph context makes knowledge graph relations consumable by assistant reasoning.
   - rule_id: research_assistant_react_grounding
-    priority: 100
+    priority: 110
     include:
       - backend/services/research_assistant/react_grounding.py
       - backend/tests/research_assistant/test_react_tool_loop.py
+      - backend/tests/research_assistant/test_tool_catalog_gate.py
+      - backend/tests/research_assistant/test_reflexion_retry.py
+      - backend/tests/research_assistant/test_react_phase1_phase2_context_regression.py
     primary_module: research_assistant.react_grounding
     impact_modules: [research_assistant.evidence_guard, research_assistant.generic_mcp_client]
     layer: backend_service
@@ -371,7 +383,6 @@ rules:
   - rule_id: research_assistant_evidence_guard
     priority: 100
     include:
-      - backend/services/research_assistant/evidence_guard.py
       - backend/tests/research_assistant/test_evidence_guard.py
     primary_module: research_assistant.evidence_guard
     impact_modules: [research_assistant.react_grounding, research_assistant.external_research]
