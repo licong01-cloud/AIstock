@@ -44,3 +44,11 @@ Verified backfill for a legacy row: `scope='project'`, `tree_path='project.rule.
 ## Remaining Gate
 
 G1-central remains blocked by the known Validation Center branch-local plan issue from Phase 0. Do not claim Phase 1 fully complete or merge before a canonical `ra_phase1_memory_tree` run_id exists after that blocker is fixed.
+
+## 2026-06-01 Central Runner Determinism Fix
+
+Canonical run `research-assistant-memory-tree_20260601_011622_l1_..._d4e4391667` exposed a non-deterministic test failure in `test_chat_turn_triggers_memory_curator_after_assistant_reply`: curator branch nodes reused the leaf `memory_type` (`user_preference`), so raw `list_records(filters={memory_type})` could return either the auto-created branch or fact first depending on repository ordering. The fix makes curator branch nodes use `memory_type='core'` while preserving leaf `memory_type` only on `node_type='fact'` rows. Local revalidation after the fix:
+
+- `python -m pytest backend/tests/research_assistant/test_memory_autogrow.py backend/tests/research_assistant/test_memory_dedup_scope.py backend/tests/research_assistant/test_memory_tree_retrieval.py -q -p no:cacheprovider`: 6 passed
+- `nox -s ra_phase1_memory_tree`: 14 targeted tests passed; catalog integrity 0 findings; ownership scan mapped=18/18 ambiguous=0
+- `python -m pytest backend/tests/research_assistant -q -p no:cacheprovider`: 101 passed

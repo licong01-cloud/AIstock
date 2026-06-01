@@ -43,6 +43,7 @@ def test_memory_curator_auto_creates_branch_and_fact_with_provenance() -> None:
     fact = next(item for item in rows if item["node_type"] == "fact")
     assert branch["auto_created"] is True
     assert branch["tree_path"] == "personal.preference.response"
+    assert branch["memory_type"] == "core"
     assert fact["memory_type"] == "user_preference"
     assert fact["scope"] == "personal"
     assert fact["resident"] is True

@@ -186,7 +186,7 @@ class MemoryCurator:
             "memory_items",
             {
                 "memory_id": _new_memory_id(),
-                "memory_type": candidate.memory_type,
+                "memory_type": "core",
                 "namespace": self.namespace,
                 "subject_key": candidate.tree_path,
                 "title": f"{candidate.title} branch",
