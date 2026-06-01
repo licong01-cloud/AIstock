@@ -1,4 +1,4 @@
-﻿# Research Assistant Phase 2 Graph Context Validation
+# Research Assistant Phase 2 Graph Context Validation
 
 - batch_id: `ra_phase2`
 - branch: `codex/ra-graph-context-20260601`
@@ -37,20 +37,24 @@
 | CR-P2-03 | Cross-module query consumption assertion passes and fixes DEF-04 | `test_graph_injected_into_context.py:63`; `pack["graph_relation_refs"] == ["rel_phase2_alpha_beta"]` | true |
 | CR-P2-04 | Summary-first/token-safe output only includes ids, entity keys/titles/types, short summaries, evidence refs, direction/depth/confidence | `graph_context.py:176`; `test_graph_context_expansion.py:87` | true |
 | CR-P2-05 | `ra_phase2_graph_context` is runner-enabled, allowlisted, and exposed as a nox session; G1-local is green | `test_plans.yaml`; `plan_catalog.py`; `noxfile.py`; `nox -s ra_phase2_graph_context` | true |
-| CR-P2-06 | G1-central returns `return_code=0` canonical run_id | pending until Validation Center run after implementation commit | false |
-| CR-P2-07 | Blueprint §12 knowledge graph injection row has implementation files + commit + run_id | pending until commit and G1-central run_id are available | false |
+| CR-P2-06 | G1-central returns `return_code=0` canonical run_id | `research-assistant-graph-context_20260601_032224_l1_ra-phase2-graph-context_3b4f3ef9_runner-validation__38f2586497`; validated_commit `7b434073`; `return_code=0` | true |
+| CR-P2-07 | Blueprint Section 12 knowledge graph injection row has implementation files + commit + run_id | Blueprint Section 12 Phase 2 anchor records implementation commit `7b434073fd38f229a61153c7d4a147341780e53d` and G1-central run_id `research-assistant-graph-context_20260601_032224_l1_ra-phase2-graph-context_3b4f3ef9_runner-validation__38f2586497` | true |
 | CR-P2-08 | [H1] Graph expansion results are deterministic; tests avoid incidental ordering | `graph_context.py:205`; `test_graph_context_expansion.py:70` | true |
 | CR-P2-09 | [H2] Fixture asserts true neighbor relation and personal-only negative case | `test_graph_injected_into_context.py:63`; `test_graph_injected_into_context.py:138` | true |
 | CR-P2-10 | [H3] Phase 1 tree route and resident directive/preference are preserved | `test_graph_injected_into_context.py:63`; Phase 1 regression tests | true |
 
 ## G1-central Evidence
 
-- status: pending.
-- Required invocation after implementation commit:
+- G1-central run_id: `research-assistant-graph-context_20260601_032224_l1_ra-phase2-graph-context_3b4f3ef9_runner-validation__38f2586497`
+- G1-central status: passed; `return_code=0`; canonical runner accepted `ra_phase2_graph_context`.
+- validated_commit: `7b434073` / `7b434073fd38f229a61153c7d4a147341780e53d`.
+- runner_job_id: `valjob_20260601_032219_3b4f3ef9`.
+- runner_run_record: `tests/aistock_validation/history/research-assistant-graph-context/20260601_032224_l1_ra-phase2-graph-context_3b4f3ef9_runner-validation.md`.
+- invocation:
   - `plan_key=ra_phase2_graph_context`
   - `workspace_path=F:/Dev/AIstock_worktrees/ra-graph-context-20260601`
   - `expected_branch=codex/ra-graph-context-20260601`
-  - `expected_commit=<implementation HEAD>`
+  - `expected_commit=7b434073fd38f229a61153c7d4a147341780e53d`
 
 ## Production Gates
 
