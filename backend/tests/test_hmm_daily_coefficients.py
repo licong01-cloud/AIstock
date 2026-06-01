@@ -117,6 +117,37 @@ def test_extract_signal_preset_coefficients_ignores_flat_metadata_without_coeffi
     assert coeffs == {"trending": 1.05, "neutral": 1.0, "fading": 0.96}
 
 
+def test_extract_signal_preset_coefficients_uses_default_when_builtin_preset_is_metadata_only() -> None:
+    coeffs = HMMTrainingService._extract_signal_preset_coefficients(
+        {
+            "signal_presets": {
+                "preset_A": {
+                    "label": "Preset A",
+                    "description": "metadata-only runtime preset",
+                }
+            }
+        },
+        "preset_A",
+    )
+
+    assert coeffs == {"trending": 1.05, "neutral": 1.0, "fading": 0.96}
+
+
+def test_extract_signal_preset_coefficients_rejects_custom_metadata_only_preset() -> None:
+    with pytest.raises(ValueError, match="HMM signal_preset has no coefficients: custom_A"):
+        HMMTrainingService._extract_signal_preset_coefficients(
+            {
+                "signal_presets": {
+                    "custom_A": {
+                        "label": "Custom preset",
+                        "description": "metadata-only custom preset must fail fast",
+                    }
+                }
+            },
+            "custom_A",
+        )
+
+
 def test_preview_daily_coefficients_uses_latest_asof_and_next_trading_day(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     svc, model_path = _service_with_snapshot(tmp_path, monkeypatch)
 
