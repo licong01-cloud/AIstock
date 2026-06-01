@@ -130,6 +130,62 @@ OMS / Ledger / QE account
 
 补充边界：策略包的选股功能必须把“建议买入价格范围”暴露给用户和后续系统，但它是基于信号时点 `reference_price`、alpha bucket 和已验证 PriceGuard policy 计算的 pre-trade guidance；开盘后或盘中仍必须由 PriceGuard 用实时/分钟市场上下文重新确认，不允许把选股页展示的价格范围当作无条件可成交价格。
 
+### 5.1 与日频策略和日内执行策略的边界
+
+PriceGuard 不是第三套选股策略，也不是替代 V25/V25.1/TWAP 的执行算法；它是日频策略和日内执行策略之间的价格接受层。三者关系如下：
+
+| 层 | 时间尺度 | 输入 | 输出 | 可替换性 |
+| --- | --- | --- | --- | --- |
+| 日频策略 / Selection | T 日收盘或盘前 | 因子、模型、universe、风险约束 | 候选股票、score、rank、target_weight、entry band | 可替换不同 alpha 策略，但不处理实时追价 |
+| Target / Rebalance | T/T+1 调仓前 | 当前持仓、目标权重、现金、board-lot | buy/sell raw order intents | 可替换组合构建或调仓规则 |
+| PriceGuard / ExecutionAcceptance | T+1 开盘前、集合竞价、连续竞价每个执行切片前 | raw order intent、reference_price、当前价/开盘价、limit、alpha budget | `ACCEPT/REDUCE/SKIP/WAITING`、保护价、size multiplier | 跨执行算法复用，决定“要不要以当前价交易” |
+| 日内执行策略 / ExecutionAlgo | 已通过 PriceGuard 后的日内切片 | guarded order intent、保护价、分钟线/quote、算法参数 | 子订单、成交、no-fill、partial-fill | 可替换 TWAP/V25/V25.1/vn.py-style |
+| ExitGuard / RiskGuard | 持仓期间或调仓扫描 | 持仓成本、当前价、alpha 衰减、回撤、持有期 | 止盈/止损/时间退出/alpha 退出 intents | 独立于买入 PriceGuard 验证 |
+
+原则：
+
+- 日频策略决定“今天想买什么、目标买多少”，但不能保证“明天任何价格都值得买”。
+- PriceGuard 决定“此刻价格是否仍在 alpha 预算内”，但不重新训练 alpha，也不重新排序候选池。
+- 日内执行策略决定“通过价格接受后的订单如何拆单和挂单”，但不应自行扩大追价预算。
+- ExitGuard 决定“已有仓位是否因风险/利润保护/alpha 衰减需要退出”，不能混入买入价格筛选。
+
+### 5.2 组合配置原则
+
+一个 StrategyPackage 应显式组合四类 policy：
+
+```yaml
+selection_policy:
+  strategy_code: ScoreWeightedTopkStrategyV2
+  rebalance_frequency: daily
+  output_entry_band: true
+
+target_policy:
+  sizing: score_weighted_topk
+  max_weight_per_symbol: 0.03
+  board_lot_rounding: true
+
+execution_acceptance_policy:
+  price_guard:
+    enabled: true
+    mode: rule_v1
+    validation_status: qe_ab_validated
+    scope: auction_and_intraday
+
+minute_execution_policy:
+  algo_code: V25_1_SMALL_CAP
+  algo_config:
+    min_cost: 5.0
+    max_buckets: 12
+```
+
+配置边界：
+
+- `selection_policy` 可输出 `suggested_entry_price_band`，但不直接生成 broker order。
+- `execution_acceptance_policy.price_guard` 必须引用已验证 policy hash；它消费 order intent 和市场价，输出 guarded intent。
+- `minute_execution_policy.algo_config` 只放拆单、bucket、最小佣金、参与率等执行算法内部参数。
+- 同一个日频策略可以配不同执行算法做 QE 对照；同一个执行算法也可以配不同 PriceGuard 做 A/B，但必须固定其它变量。
+- `CLOSE_PRICE` 日频成交路径只能作为 legacy baseline；若要验证开盘追价、集合竞价和全天阈值，必须使用分钟线或可重放的开盘/日内价格数据。
+
 ## 6. 外部依据：开源工具、机构实践与论文
 
 本设计不是凭经验凭空增加一层规则，而是把成熟交易系统、机构执行/TCA 实践和最优执行研究中的共同结论，收敛成适合 AIstock 当前小资金、多因子、分钟线 QE/Paper v2 架构的工程方案。
@@ -427,6 +483,70 @@ backend/services/trading_core/exit_guard.py
 
 兼容路径：第一阶段如不想改 policy 顶层 key，也可以临时放入 `algo_config.price_guard`，但最终 schema 应迁移到顶层 `price_guard` 并记录 migration。
 
+### 7.6 组合配置模板
+
+为避免“日频策略参数、价格接受参数、日内执行参数”混在一起，建议 StrategyPackage 使用以下逻辑分组：
+
+```json
+{
+  "selection_policy": {
+    "strategy_code": "ScoreWeightedTopkStrategyV2",
+    "signal_frequency": "daily",
+    "rebalance_frequency": "daily",
+    "entry_guidance": {
+      "enabled": true,
+      "source": "price_guard_policy",
+      "display_only": true
+    }
+  },
+  "target_policy": {
+    "sizing": "score_weighted_topk",
+    "max_weight_per_symbol": 0.03,
+    "cash_buffer_pct": 0.02
+  },
+  "execution_acceptance_policy": {
+    "price_guard": {
+      "enabled": true,
+      "mode": "rule_v1",
+      "policy_sha256": "...",
+      "scope": "auction_and_intraday",
+      "auction": {
+        "enabled": true,
+        "basis": "indicative_open_or_first_minute_open",
+        "action_on_red": "skip_today",
+        "action_on_yellow": "reduce"
+      },
+      "intraday": {
+        "enabled": true,
+        "recheck_before_each_slice": true,
+        "action_on_red": "pause_or_cancel_remaining",
+        "max_wait_minutes": 30
+      }
+    }
+  },
+  "minute_execution_policy": {
+    "algo_code": "V25_1_SMALL_CAP",
+    "algo_config": {
+      "min_cost": 5.0,
+      "commission_rate": 0.0003,
+      "max_buckets": 12
+    }
+  },
+  "exit_guard_policy": {
+    "enabled": false,
+    "mode": "rule_v1"
+  }
+}
+```
+
+校验要求：
+
+- `selection_policy.entry_guidance.display_only=true` 表示选股页价格范围只是展示/审批，不产生交易动作。
+- `execution_acceptance_policy.price_guard.scope` 决定 PriceGuard 只检查开盘、只检查全天、还是两者都检查。
+- `minute_execution_policy.algo_config` 不允许覆盖 `max_open_gap_bps/max_chase_bps` 等 PriceGuard 参数。
+- 如果 `scope=auction_only`，日内执行算法仍必须遵守初始 `limit_price`，但不做新的 residual-alpha recheck；这只适合短时间一次性下单。
+- 如果 `scope=auction_and_intraday`，每个执行切片前都要 recheck 当前价是否仍在预算内，适合 TWAP/V25/V25.1。
+
 ## 8. QE 整合方案
 
 ### 8.1 QE 生成配置
@@ -600,10 +720,14 @@ limit_up/limit_down/distance_to_limit
 | `price_guard_skip_buy_count` | 因价格过高跳过买入的次数 |
 | `price_guard_reduce_buy_count` | 因 yellow zone 减量买入的次数 |
 | `price_guard_skip_sell_count` | 普通调仓卖出因价格过差暂缓次数 |
+| `price_guard_auction_skip_count` | 集合竞价/开盘阶段因 gap 或涨停距离跳过次数 |
+| `price_guard_intraday_pause_count` | 盘中执行切片因追价预算暂停次数 |
+| `price_guard_cancel_remaining_count` | 盘中 red zone 取消剩余未成交订单次数 |
 | `price_guard_missed_alpha_bps` | 被跳过股票后续 alpha，用于评估是否过严 |
 | `price_guard_saved_loss_bps` | 跳过/减量避免的追高损失 |
 | `avg_open_gap_bps_accepted` | 接受买入的平均开盘 gap |
 | `avg_open_gap_bps_rejected` | 拒绝买入的平均开盘 gap |
+| `avg_intraday_gap_bps_paused` | 盘中暂停执行时的平均追价幅度 |
 | `net_alpha_after_guard` | 使用 price guard 后净 alpha |
 | `turnover_delta` | 价格保护导致的换手变化 |
 
@@ -853,6 +977,50 @@ exit_guard:
 ```
 
 解释：多因子组合更适合优先用 alpha 衰减/排名下降退出；硬止损和止盈容易改变持有期分布，必须单独做 QE A/B。若后续实验证明某类策略的止盈/止损稳定有效，再把 `exit_guard.enabled=true` 固化进 validated policy。
+
+### 10.6 集合竞价与全天阈值控制
+
+买入价格筛选不应只发生在集合竞价，也不应无差别地全天重新做复杂判断。建议按执行方式分级：
+
+| 执行模式 | 集合竞价/开盘检查 | 盘中检查 | 适用场景 |
+| --- | --- | --- | --- |
+| `auction_only` | 必须检查 `open_gap_bps`、接近涨停、停牌/无开盘价。 | 不重新计算 alpha 预算，只执行初始保护价。 | 开盘一次性或短时间完成的小单。 |
+| `auction_and_intraday` | 必须检查开盘是否进入 red/yellow。 | 每个执行 bucket/slice 前检查 `current_gap_bps`、`max_chase_bps`、limit 距离。 | TWAP、V25、V25.1 等分时执行。 |
+| `intraday_only` | 不依赖开盘价，但必须有 `arrival_price`。 | 从信号生成时刻开始检查追价预算。 | 盘中临时信号或人工触发再平衡。 |
+| `shadow_only` | 只记录会如何决策，不改变订单。 | 只记录。 | QE/Paper v2 诊断期。 |
+
+推荐默认：日频 T+1 多因子使用 `auction_and_intraday`。原因：
+
+- 集合竞价/开盘是最大 gap 风险点，必须决定是否跳过高开过多的股票。
+- 如果订单用 TWAP/V25/V25.1 分散到全天，价格可能在盘中继续上冲，全天不设阈值会重新暴露“无限追高”问题。
+- 盘中 recheck 不等于重新选股；它只检查剩余订单是否仍在已批准的 alpha/成本预算内。
+
+盘中阈值应比开盘阈值更偏“剩余订单控制”：
+
+```yaml
+price_guard:
+  scope: auction_and_intraday
+  auction:
+    max_open_gap_bps: 300
+    yellow_open_gap_bps: 150
+    action_on_red: skip_today
+    action_on_yellow: reduce
+  intraday:
+    max_chase_bps_from_reference: 300
+    max_chase_bps_from_arrival: 100
+    recheck_before_each_slice: true
+    red_action_for_remaining: cancel_remaining
+    yellow_action_for_remaining: pause_or_reduce_remaining
+    max_wait_minutes: 30
+```
+
+语义说明：
+
+- `max_open_gap_bps` 解决“开盘已吃掉 alpha”的问题。
+- `max_chase_bps_from_reference` 防止全天价格相对信号价继续失控。
+- `max_chase_bps_from_arrival` 防止执行开始后因算法等待而越追越高。
+- `red_action_for_remaining=cancel_remaining` 只取消未执行部分，不回滚已成交部分。
+- 如果价格回落到 green/yellow 区间，可按 policy 允许恢复执行，但必须记录 wait/resume reason，避免 silent fill。
 
 ## 11. 历史分桶校准方案
 
@@ -1121,6 +1289,7 @@ UNSUPPORTED_EXIT_GUARD_CONFIG_ERROR
 - 明确首个策略族：建议 `ScoreWeightedTopkStrategyV2 + V25_1_SMALL_CAP`。
 - 明确第一版参数网格和样本区间。
 - 明确策略包选股页是否展示 `suggested_entry_price_band`，以及止盈/止损是否只展示为未启用建议。
+- 明确 PriceGuard 默认 scope：建议日频 T+1 策略使用 `auction_and_intraday`，legacy 对照可保留 `disabled`。
 
 ### Phase 1：核心 DTO 与 validator
 
@@ -1136,11 +1305,13 @@ UNSUPPORTED_EXIT_GUARD_CONFIG_ERROR
 - Qlib helper strategy 支持 PriceGuard。
 - QE config truth tests 证明 YAML 切片正确。
 - 回测输出 reason summary。
+- QE YAML 必须区分 `selection_policy`、`execution_acceptance_policy`、`minute_execution_policy`，避免日频 alpha 参数和日内执行参数混放。
 
 ### Phase 3：QE A/B 回测对照验证
 
 - 在 QE 中支持 `baseline_no_price_guard` 与 `price_guard_enabled` 两个实验臂。
 - 支持 `disabled/shadow/enforced` 三种 `price_guard_mode`，其中正式审批只采信 `disabled` vs `enforced`。
+- 支持 `auction_only`、`auction_and_intraday`、`intraday_only` scope 对照，默认优先验证 `auction_and_intraday`。
 - 固定选股、目标权重、执行算法、成本、数据版本和随机种子，只改变 PriceGuard policy。
 - 输出 `price_guard_policy.json`、`policy_sha256`、A/B metrics、decision logs 和 comparison report。
 - 完成参数网格 sweep、walk-forward 稳定性检查、score/open-gap/market-regime 归因。
@@ -1184,13 +1355,16 @@ UNSUPPORTED_EXIT_GUARD_CONFIG_ERROR
 | --- | --- |
 | policy schema 支持 `price_guard` | validator 单测、policy sha256 稳定性测试 |
 | 策略包选股输出买入价格范围 | selection artifact 包含 `reference_price`、`suggested_entry_price_band`、`guidance_status`、`policy_sha256`，并标注非最终委托价 |
+| 日频策略、PriceGuard、日内执行参数分层 | StrategyPackage/YAML schema 中 `selection_policy`、`execution_acceptance_policy`、`minute_execution_policy` 分组清晰，validator 禁止混放关键字段 |
 | QE baseline 与 PriceGuard A/B 只切换价格限制 | A/B config diff 证明 strategy/model/data/cost/execution algo 相同，仅 `price_guard_mode/policy_sha256` 不同 |
+| PriceGuard scope 配置可验证 | QE config truth tests 覆盖 `auction_only`、`auction_and_intraday`、`intraday_only`，Paper v2 parity replay 对齐 scope 行为 |
 | QE A/B 产物完整 | `price_guard_policy.json`、`price_guard_policy.sha256`、`ab_baseline_metrics.json`、`ab_price_guard_metrics.json`、`price_guard_decisions.parquet/jsonl`、`ab_comparison_report.md` |
 | QE 参数网格可解释 | max open gap、chase budget、yellow multiplier、sell slippage sweep 报告，含 walk-forward 和 bucket stability |
 | Shadow 模式不被当作收益证据 | 报告字段区分 `shadow_diagnostics` 与 `enforced_backtest_metrics`，审批只引用 enforced 对照 |
 | QE YAML 注入正确 | `backend/tests/unified_engine/test_qe_config_truth.py` 新增切片断言 |
 | Qlib adjusted/raw 对齐 | 使用 `$factor` 转 raw 后计算 gap/limit 的回归样本 |
 | 买入高开超过阈值跳过 | QE helper 单测 + Paper v2 historical test |
+| 盘中切片前 recheck 生效 | TWAP/V25/V25.1 helper test 证明 red zone 会 `pause/cancel_remaining`，且不回滚已成交 |
 | Yellow zone 减量 | evaluator 单测 + order intent quantity test |
 | 普通调仓卖出价格过差暂缓 | Paper v2 test，reason 为 `SKIP_BELOW_MIN_SELL_PRICE_REBALANCE` |
 | 风险强制卖出更宽保护价 | risk forced exit target test + PriceGuard context |
@@ -1210,9 +1384,11 @@ UNSUPPORTED_EXIT_GUARD_CONFIG_ERROR
 4. 卖出场景必须区分 `rebalance_sell`、`risk_exit`、`forced_exit`、`cash_raise`。
 5. 如果 PriceGuard 导致买入未成交，后续目标权重如何处理：当日取消、次日继续、重新评分，需要策略级配置。
 6. `CLOSE_PRICE` 日频路径是否完全禁用 PriceGuard，还是仅支持简单 close-to-close guard，需要审批。
-7. 策略包选股页展示 `suggested_entry_price_band` 后，用户是否允许手工覆盖；若允许，必须作为新 policy 重新验证，不能覆盖原 hash。
-8. 止盈/止损第一版是只展示建议，还是进入 `shadow` 诊断；不建议未经 QE A/B 直接 enforced。
-9. 是否需要把 PriceGuard/ExitGuard 决策纳入前端 Paper v2 / StrategyPackage 审计页面，本设计暂不包含 UI。
+7. `auction_only` 与 `auction_and_intraday` 哪个作为默认生产候选，需要用 QE A/B 证明；本文建议日频 T+1 多因子优先 `auction_and_intraday`。
+8. 盘中 red zone 是取消剩余订单、暂停等待回落，还是改为更被动挂单，需要按策略族配置。
+9. 策略包选股页展示 `suggested_entry_price_band` 后，用户是否允许手工覆盖；若允许，必须作为新 policy 重新验证，不能覆盖原 hash。
+10. 止盈/止损第一版是只展示建议，还是进入 `shadow` 诊断；不建议未经 QE A/B 直接 enforced。
+11. 是否需要把 PriceGuard/ExitGuard 决策纳入前端 Paper v2 / StrategyPackage 审计页面，本设计暂不包含 UI。
 
 ## 18. 推荐审批结论
 
@@ -1223,6 +1399,8 @@ UNSUPPORTED_EXIT_GUARD_CONFIG_ERROR
 3. 第一版采用 `rule_v1 + historical bucket calibration`，不直接上 ML。
 4. ML 仅作为未来候选 policy，必须带模型资产、feature contract、walk-forward evidence、policy hash。
 5. 策略包选股结果应展示买入价格范围，但该范围是 pre-trade guidance；开盘后仍由 PriceGuard 重新确认。
-6. 止盈/止损属于独立 ExitGuard/RiskGuard，不与买入 PriceGuard 混合；默认先展示/诊断，QE A/B 通过后再考虑 enforced。
-7. 第一批落地策略建议限定为 `ScoreWeightedTopkStrategyV2` / `ScoreWeightedTopkStrategyV2CapacityV1` + `V25_1_SMALL_CAP`，避免一次性扩散到所有算法。
+6. 日频策略、PriceGuard、日内执行策略必须分层配置；`algo_config` 不能偷偷承载追价预算。
+7. 日频 T+1 多因子默认建议验证 `auction_and_intraday`：集合竞价/开盘先筛一次，全天分时执行时每个切片前再做剩余订单阈值控制。
+8. 止盈/止损属于独立 ExitGuard/RiskGuard，不与买入 PriceGuard 混合；默认先展示/诊断，QE A/B 通过后再考虑 enforced。
+9. 第一批落地策略建议限定为 `ScoreWeightedTopkStrategyV2` / `ScoreWeightedTopkStrategyV2CapacityV1` + `V25_1_SMALL_CAP`，避免一次性扩散到所有算法。
 
