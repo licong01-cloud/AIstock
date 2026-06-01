@@ -231,6 +231,7 @@ class MiniQMTSimBackend(BrokerBackend):
                 )
                 submit_diagnostic = _safe_last_order_diagnostic(self._qmt_client)
             except QMTNotAvailableError as exc:
+                submit_diagnostic = _safe_last_order_diagnostic(self._qmt_client)
                 raise BrokerConnectivityError(
                     "MiniQMT order submit failed because client is unavailable",
                     context={
@@ -239,6 +240,7 @@ class MiniQMTSimBackend(BrokerBackend):
                         "package_id": self._package_id,
                         "symbol": intent.symbol,
                         "reason": str(exc),
+                        **({"submit_diagnostic": submit_diagnostic} if submit_diagnostic else {}),
                     },
                 ) from exc
             except Exception as exc:
@@ -731,8 +733,8 @@ class MiniQMTSimBackend(BrokerBackend):
     def _safe_status(self) -> Any | None:
         try:
             return self._qmt_client.status()
-        except Exception:
-            return None
+        except Exception as exc:  # noqa: BLE001
+            return {"status_error": f"{type(exc).__name__}: {exc}"}
 
 
 def _native_order_type(side: OrderSide) -> int:

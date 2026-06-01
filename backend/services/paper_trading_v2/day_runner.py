@@ -2090,6 +2090,7 @@ class PaperTradingDayRunner:
             "broker_status_msg": exc.message,
             "broker_rejection_reason": exc.message,
             "broker_status_raw": exc.to_dict(),
+            "submit_diagnostic": exc.context.get("submit_diagnostic") if isinstance(exc.context, dict) else None,
             "broker_audit": cls._miniqmt_audit_pair(audit_before, audit_after),
         }
 
