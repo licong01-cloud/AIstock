@@ -29,8 +29,8 @@
   "expected": "自选股票池 API amount 字段统一为元；前端成交额列按元格式化，000411.SZ 这类样例应显示约 2.60 亿，而不是 25.97 万。",
   "first_seen_at": "2026-06-01T16:36:18.818232Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a9cb6c518ac5d486a92de6d89906af350ebd3c9b",
+  "fixed_at": "2026-06-01T16:56:35.343111Z",
   "github_issue_number": 495,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/495",
   "last_seen_at": "2026-06-01T16:36:18.818232Z",
@@ -38,6 +38,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/496",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -47,8 +48,9 @@
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
+  "scope_expansion_reason": "Root cause is TDX realtime quote normalization; backend/core/data_source_manager_impl.py must output amount in yuan consistently with Tushare fallback, with a focused unit test.",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "watchlist"
   ],
@@ -57,6 +59,13 @@
     "fingerprint": "ebddd6e3fd5e50deb5f7b5fa",
     "source_event_id": "FE-20260602-ebddd6e3fd5e"
   },
-  "verification_run_id": null,
-  "scope_expansion_reason": "Root cause is TDX realtime quote normalization; backend/core/data_source_manager_impl.py must output amount in yuan consistently with Tushare fallback, with a focused unit test."
+  "validation_evidence": [
+    "python -m pytest backend/tests/watchlist/test_realtime_amount_units.py -q -p no:cacheprovider -> 2 passed",
+    "python -m ruff check backend/core/data_source_manager_impl.py backend/tests/watchlist/test_realtime_amount_units.py -> passed",
+    "git diff --check -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s validation_center_backend -> 301 passed"
+  ],
+  "verification_run_id": null
 }
