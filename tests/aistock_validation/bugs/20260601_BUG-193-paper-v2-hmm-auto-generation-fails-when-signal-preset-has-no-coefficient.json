@@ -35,8 +35,8 @@
   "expected": "HMM runtime auto-generation/cache handles a signal_preset without embedded coefficients by deriving valid daily coefficients from the platform model/config or rejects the invalid preset during package/readiness preflight with model_id, snapshot_id, signal_preset, available_presets, and remediation guidance; autonomous Paper v2 sessions do not fail mid-run with ambiguous artifact generation errors.",
   "first_seen_at": "2026-06-01T14:16:02.960334Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "10945cfe4503eeb6d509c28da42da1ffa3f65061",
+  "fixed_at": "2026-06-01T15:46:58.513129Z",
   "github_issue_number": 487,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/487",
   "last_seen_at": "2026-06-01T14:16:02.960334Z",
@@ -44,6 +44,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/491",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -57,7 +58,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -66,5 +67,17 @@
     "fingerprint": "a001797dc107c146ad9e4ccd",
     "source_event_id": "FE-20260601-a001797dc107"
   },
+  "validation_evidence": [
+    "CI checks_passed for PR #491 after syncing origin/main 667f59c6",
+    "python -m pytest -q backend/tests/test_hmm_daily_coefficients.py backend/tests/selection_center/test_runtime_selection.py -p no:cacheprovider -> 61 passed after origin/main 667f59c6 sync",
+    "python -m ruff check backend/services/hmm_training_service.py backend/tests/test_hmm_daily_coefficients.py backend/tests/selection_center/test_runtime_selection.py -> passed after origin/main 667f59c6 sync",
+    "git diff --check -> passed after origin/main 667f59c6 sync",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s paper_v2_backend -> 560 passed, 1 skipped, 2 xfailed after origin/main 667f59c6 sync",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> paper_v2_l3/l0/paper_v2_backend/paper_v2_data_quality/data_quality_deep passed",
+    "QE_READ_L3_SKIP_UI=1 python -m nox -s qe_read_l3 -> qe_read_l3/qe_read_backend passed (14 passed)",
+    "python -m nox -s validation_center_backend -> 299 passed, coverage passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed and ownership scan mapped=12"
+  ],
   "verification_run_id": null
 }
