@@ -347,7 +347,93 @@ executor:
             risk_exit_max_slippage_bps: 500
 ```
 
-### 8.2 QE inner strategy 行为
+### 8.2 QE 先行 A/B 回测验证模式
+
+PriceGuard 不能一开始就作为 Paper v2 的运行时强规则上线。第一验证场应是 QE 实验：在同一个选股结果、同一组目标权重、同一个执行算法和同一份行情数据上，只切换是否启用买入/卖出价格限制，形成可审计的 A/B 对照。
+
+#### 8.2.1 实验臂定义
+
+| 实验臂 | 行为 | 目的 |
+| --- | --- | --- |
+| `baseline_no_price_guard` | 保持当前 AIstock/QE 行为：按选股与目标权重生成订单，执行算法按原有成交假设或分钟执行逻辑运行，不做追价预算判断。 | 作为当前模式基线，确认 PriceGuard 的收益、风险和成交率变化不是由选股或数据差异造成。 |
+| `price_guard_enabled` | 选股、目标权重、调仓日、执行算法、成本参数完全一致，仅在订单进入执行算法前调用 PriceGuard，可能输出 `ACCEPT/REDUCE/SKIP`。 | 验证买入高开、卖出低开、接近涨跌停等价格限制是否改善净收益、回撤、尾部风险或交易成本。 |
+
+对照实验必须锁定以下字段，不允许为了让结果更好而隐式变化：
+
+- 同一个 factor/model artifact、StrategyPackage、universe、benchmark、回测区间、数据切分和随机种子。
+- 同一份 Qlib 数据版本、分钟线版本、`suspend_d`、`limit_up/limit_down`、`pre_close`、`$factor` 复权转换语义。
+- 同一个 execution algo family，例如 `V25_1_SMALL_CAP` 或 `TWAP`，除 `price_guard.enabled` 和 PriceGuard 参数外不改变算法参数。
+- 同一个手续费、印花税、滑点、最小佣金、board-lot、T+1、停牌和涨跌停处理。
+- 同一个候选股票列表和目标权重；第一阶段不允许 PriceGuard 反向改写 selection score，避免把执行接受层和选股层混在一起。
+
+#### 8.2.2 QE 配置开关
+
+建议在 QE experiment config 中显式区分三种模式：
+
+```yaml
+execution_acceptance:
+  price_guard_mode: disabled | shadow | enforced
+  compare_with_baseline: true
+  policy_path: artifacts/price_guard_policy.json
+```
+
+- `disabled`：完全复现当前模式，用于 `baseline_no_price_guard`。
+- `shadow`：计算 PriceGuard 决策和指标，但不改变实际成交；适合先在历史 QE 结果或 Paper v2 旧会话上补充诊断。
+- `enforced`：PriceGuard 决策真实改变订单，产生 skip/reduce/no-fill，用于正式 A/B。
+
+`shadow` 不得被报告为真实收益改善证据，只能作为参数敏感性和解释性诊断。正式审批需要 `disabled` 与 `enforced` 的同窗对照。
+
+#### 8.2.3 参数网格和开盘涨停附近样例
+
+第一轮 QE sweep 不应直接训练复杂模型，而应先验证经验阈值是否有稳定经济含义：
+
+| 参数 | 建议网格 | 解释 |
+| --- | --- | --- |
+| `max_open_gap_bps` | `100/200/300/500` | 相对 `signal_close` 或审批的 `reference_price`，买入开盘高开超过该值进入 red zone。 |
+| `yellow_open_gap_bps` | `50/100/150/250` | 进入 yellow zone 后不完全放弃，但降低目标数量。 |
+| `max_chase_bps` | `50/100/150/300` | 盘中追价预算上限，防止从开盘后继续无限追高。 |
+| `yellow_size_multiplier` | `0.25/0.50/0.75` | yellow zone 的买入数量缩放。 |
+| `near_limit_up_skip_bps` | `50/80/120` | 接近涨停时避免买入排队或买在极端价位。 |
+| `rebalance_max_slippage_bps` | `100/150/250` | 普通调仓卖出可接受的低开/低价预算。 |
+| `risk_exit_max_slippage_bps` | `300/500/800` | 风险强制卖出比普通调仓更重视成交，因此保护价更宽。 |
+
+示例：若某股票 `signal_close=10.00`，T+1 开盘 `10.90`，开盘涨幅 `900bps`。在 `max_open_gap_bps=300` 的 policy 下，买入应进入 `SKIP_ABOVE_MAX_OPEN_GAP`，不再生成无条件买入订单；在 `shadow` 模式下只记录会被跳过但仍按原模式成交；在 `enforced` 模式下真实跳过或减量。
+
+#### 8.2.4 A/B 指标与归因
+
+QE 对照报告至少输出两类指标：
+
+1. 组合级指标：年化收益、最大回撤、Sharpe/IR、Calmar、换手、手续费/税费、成交率、未成交率、现金拖累、净值曲线差异。
+2. PriceGuard 归因指标：`skip/reduce` 次数、原因分布、按 score bucket/open-gap bucket/market regime 的收益差、`missed_alpha_if_skip`、`saved_loss_if_skip`、accepted/rejected open-gap 分布。
+
+`missed_alpha_if_skip` 和 `saved_loss_if_skip` 只能在决策后用未来收益做事后归因，不得作为当日 PriceGuard 输入；报告中必须标注它们是 post-decision diagnostics，避免未来函数泄漏。
+
+#### 8.2.5 QE 产物
+
+每个 QE A/B 实验组应产出可迁移到 Paper v2 的标准产物：
+
+| 产物 | 内容 |
+| --- | --- |
+| `price_guard_policy.json` | 完整 PriceGuard 参数、schema version、price basis、reference source、适用策略族。 |
+| `price_guard_policy.sha256` | policy hash；Paper v2 后续必须引用同一 hash 才能宣称同策略验证。 |
+| `ab_baseline_metrics.json` | 当前模式指标，包含数据版本、成本配置、execution algo config hash。 |
+| `ab_price_guard_metrics.json` | 启用 PriceGuard 后的组合级和 PriceGuard 归因指标。 |
+| `price_guard_decisions.parquet` 或 `.jsonl` | 按 symbol/date/side 记录 `ACCEPT/REDUCE/SKIP`、理由、价格、数量缩放。 |
+| `ab_comparison_report.md` | 面向审批的差异报告，明确收益、风险、成本、成交率和失败样例。 |
+
+所有产物必须带 `experiment_id`、`loop_id`、`strategy_package_id`、`policy_sha256`、数据区间、数据版本、config hash 和生成时间，便于后续 Paper v2 回放逐笔对齐。
+
+#### 8.2.6 晋级门槛
+
+PriceGuard 不应只因为“看起来更谨慎”就进入 Paper v2。建议审批门槛：
+
+- `price_guard_enabled` 不能在多个 walk-forward 窗口中显著降低净收益或 IR，除非同时明确降低最大回撤、尾部亏损、交易成本或极端追高损失。
+- `skip/reduce` 的主要原因必须可解释，且不能集中在数据缺失或 fallback 成功路径。
+- 参数网格不能只挑单一窗口最优值，应选择跨窗口、跨 score bucket 稳定的保守区间。
+- 所有 missing reference、missing limit、basis mismatch 必须 fail-fast；不能把数据错误伪装成 `SKIP`。
+- 只有通过 QE A/B 的 `price_guard_policy.json` 才允许进入 Paper v2 `shadow` 或 `enforced` 候选。
+
+### 8.3 QE inner strategy 行为
 
 在 Qlib inner execution strategy 中，PriceGuard 在订单进入分钟拆单前或第一个可观测分钟执行前评估：
 
@@ -382,7 +468,7 @@ price_basis
 limit_up/limit_down/distance_to_limit
 ```
 
-### 8.3 QE 评价指标
+### 8.4 QE 评价指标
 
 新增回测指标用于审批策略是否可进入 Paper v2：
 
@@ -398,7 +484,7 @@ limit_up/limit_down/distance_to_limit
 | `net_alpha_after_guard` | 使用 price guard 后净 alpha |
 | `turnover_delta` | 价格保护导致的换手变化 |
 
-### 8.4 QE 与现有策略族关系
+### 8.5 QE 与现有策略族关系
 
 | 策略/算法 | PriceGuard 接入方式 |
 | --- | --- |
@@ -485,6 +571,53 @@ MiniQMT/vn.py-style 算法应继续只消费 `price` 和交易量设置：
 - `BEST_LIMIT_MINIQMT`：更偏被动挂单，PriceGuard 仍需提供最大可接受价/最低可接受价，防止无限追价。
 
 PriceGuard 不应直接调用 broker；broker 下单仍由现有 MiniQMT adapter 执行。
+
+### 9.5 从 QE 验证迁移到 Paper v2 的晋级路径
+
+Paper v2 不应重新发明一套“模拟盘专用”价格限制。所谓可完美移植，指 Paper v2 与 QE 使用同一个 PriceGuard policy、同一套 core evaluator、同一组 reason codes 和同一套价格基准解释；差异只来自实时行情输入和 broker/order 生命周期，而不是策略规则差异。
+
+#### 9.5.1 迁移对象
+
+从 QE 晋级到 Paper v2 的最小迁移单元是：
+
+```text
+price_guard_policy.json
+price_guard_policy.sha256
+ValidatedExecutionPolicy.policy_json.price_guard
+PriceGuard decision schema
+reason_code enum
+price basis contract
+```
+
+Paper v2 运行时必须从 `ValidatedExecutionPolicy` 或 StrategyPackage artifact 读取已验证的 `policy_sha256`，不能让页面/runtime_config 临时覆盖阈值后仍宣称沿用 QE 验证结果。若需要改参数，应回到 QE A/B 重新生成 policy 和 hash。
+
+#### 9.5.2 历史 parity replay
+
+在进入实时或准实时模拟盘前，Paper v2 必须做一轮历史 parity replay：把 QE A/B 中同一批 `trade_date + symbol + side + target quantity` 输入 Paper v2 day runner，只验证 PriceGuard 决策一致性，不依赖 MiniQMT 实时行情。
+
+Parity checklist：
+
+| 对齐项 | 要求 |
+| --- | --- |
+| policy hash | Paper v2 读取的 `policy_sha256` 与 QE 产物完全一致。 |
+| market context | `reference_price`、`prev_close`、`limit_up/down`、minute open/current quote、`price_basis` 与 QE 同源或有明确转换。 |
+| decision | 同一 symbol/date/side 输出同一 `ACCEPT/REDUCE/SKIP/WAITING`。 |
+| reason code | 同一拒单/减量原因，例如 `SKIP_ABOVE_MAX_OPEN_GAP`、`REDUCE_YELLOW_OPEN_GAP`。 |
+| guard price | `max_buy_price/min_sell_price` 在 tick rounding 容忍范围内一致。 |
+| quantity | board-lot、min notional、size multiplier 后数量一致。 |
+| failure mode | 缺 reference/limit/factor 时两边都 fail-fast，不允许一边 fallback。 |
+
+若 parity replay 不一致，不能进入 Paper v2 `enforced`，必须先定位是数据源、复权转换、rounding、board-lot 还是执行路径差异。
+
+#### 9.5.3 Paper v2 验证阶段
+
+建议 Paper v2 分三步承接 QE 结果：
+
+1. `shadow`：使用真实 Paper v2 行情上下文计算 PriceGuard 决策，但不改变订单，确认实时/历史 provider 字段完整。
+2. `guarded_sim`：LocalSim/MiniQMT Sim 中真实执行 skip/reduce/limit intent，和当前模式会话做同日或同周对比。
+3. `enforced_candidate`：只允许使用已经通过 QE A/B + Paper v2 parity replay 的 `policy_sha256`，并在每个 rejected/reduced intent 上持久化 QE-compatible decision row。
+
+Paper v2 进一步验证的重点不是重新证明 alpha，而是验证运行时数据完整性、order intent 转换、broker adapter 限价语义、WAITING 状态、审计日志和异常处理是否与 QE 设计一致。
 
 ## 10. 初始经验参数
 
@@ -802,26 +935,35 @@ UNSUPPORTED_PRICE_GUARD_CONFIG_ERROR
 - QE config truth tests 证明 YAML 切片正确。
 - 回测输出 reason summary。
 
-### Phase 3：Paper v2 历史回放集成
+### Phase 3：QE A/B 回测对照验证
+
+- 在 QE 中支持 `baseline_no_price_guard` 与 `price_guard_enabled` 两个实验臂。
+- 支持 `disabled/shadow/enforced` 三种 `price_guard_mode`，其中正式审批只采信 `disabled` vs `enforced`。
+- 固定选股、目标权重、执行算法、成本、数据版本和随机种子，只改变 PriceGuard policy。
+- 输出 `price_guard_policy.json`、`policy_sha256`、A/B metrics、decision logs 和 comparison report。
+- 完成参数网格 sweep、walk-forward 稳定性检查、score/open-gap/market-regime 归因。
+
+### Phase 4：Paper v2 历史回放与 parity replay
 
 - day runner 在 raw intents 后调用 PriceGuard。
 - 生成 LIMIT intents 或 rejected/reduced events。
 - 复用 DB_HISTORICAL market input。
+- 用 QE A/B 的同一 `policy_sha256` 做 Paper v2 parity replay，逐 symbol/date/side 对齐决策、保护价和数量。
 - 增加 Paper v2 tests。
 
-### Phase 4：MiniQMT / vn.py-style 集成
+### Phase 5：MiniQMT / vn.py-style 集成
 
 - PriceGuard 为 vn.py-style template policy 提供 `price`。
 - realtime 缺 quote/bar 时进入 `WAITING_FOR_PRICE_GUARD_INPUT`。
 - 持久化 broker order 的 price guard context。
 
-### Phase 5：分桶校准工具
+### Phase 6：分桶校准工具
 
 - 从 QE/Paper 历史数据生成 open_gap x score bucket 表。
 - 产出参数候选与 walk-forward evidence。
 - 不自动激活生产 policy。
 
-### Phase 6：ML candidate policy
+### Phase 7：ML candidate policy
 
 - 训练 residual-alpha/acceptance 模型。
 - 注册模型资产、feature contract、walk-forward evidence。
@@ -832,12 +974,17 @@ UNSUPPORTED_PRICE_GUARD_CONFIG_ERROR
 | 设计项 | 验收证据 |
 | --- | --- |
 | policy schema 支持 `price_guard` | validator 单测、policy sha256 稳定性测试 |
+| QE baseline 与 PriceGuard A/B 只切换价格限制 | A/B config diff 证明 strategy/model/data/cost/execution algo 相同，仅 `price_guard_mode/policy_sha256` 不同 |
+| QE A/B 产物完整 | `price_guard_policy.json`、`price_guard_policy.sha256`、`ab_baseline_metrics.json`、`ab_price_guard_metrics.json`、`price_guard_decisions.parquet/jsonl`、`ab_comparison_report.md` |
+| QE 参数网格可解释 | max open gap、chase budget、yellow multiplier、sell slippage sweep 报告，含 walk-forward 和 bucket stability |
+| Shadow 模式不被当作收益证据 | 报告字段区分 `shadow_diagnostics` 与 `enforced_backtest_metrics`，审批只引用 enforced 对照 |
 | QE YAML 注入正确 | `backend/tests/unified_engine/test_qe_config_truth.py` 新增切片断言 |
 | Qlib adjusted/raw 对齐 | 使用 `$factor` 转 raw 后计算 gap/limit 的回归样本 |
 | 买入高开超过阈值跳过 | QE helper 单测 + Paper v2 historical test |
 | Yellow zone 减量 | evaluator 单测 + order intent quantity test |
 | 普通调仓卖出价格过差暂缓 | Paper v2 test，reason 为 `SKIP_BELOW_MIN_SELL_PRICE_REBALANCE` |
 | 风险强制卖出更宽保护价 | risk forced exit target test + PriceGuard context |
+| Paper v2 可完美移植 QE policy | Paper v2 historical parity replay：同一 `policy_sha256`、同一 symbol/date/side 决策、reason code、guard price、quantity 对齐 |
 | vn.py-style 消费保护价 | MiniQMT adapter/unit test，price 来自 PriceGuard |
 | 缺 reference_price fail-fast | core 单测 + Paper v2 runner test |
 | runtime 不允许临时覆盖 | Paper v2 runtime_config override test |
