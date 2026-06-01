@@ -78,6 +78,7 @@ MINIQMT_PLATFORM_DATA_RETRY_EVENTS = {
     "MINIQMT_LIVE_WAITING_PLATFORM_DATA",
     "MINIQMT_LIVE_PLATFORM_DATA_RETRY_THROTTLED",
 }
+MINIQMT_EMPTY_ACTIVE_RUN_STALE_SECONDS = 90.0
 
 
 class PaperTradingLiveMinuteExecutor:
@@ -421,6 +422,42 @@ class PaperTradingLiveMinuteExecutor:
             return self._progress(updated.session_id)
 
         existing = self.repository.get_run_by_portfolio_date(session.portfolio_id, trade_date)
+        if existing is not None:
+            stale_empty_run = self._miniqmt_stale_empty_active_run_context(
+                session=session,
+                run=existing,
+                local_as_of=local_as_of,
+            )
+            if stale_empty_run is not None:
+                if self._miniqmt_is_before_final_cutoff(session, local_as_of):
+                    reset_counts = self.repository.reset_portfolio_runs(
+                        portfolio_id=session.portfolio_id,
+                        start_date=trade_date,
+                        end_date=trade_date,
+                    )
+                    self.repository.update_portfolio_status(session.portfolio_id, PortfolioStatus.RUNNING)
+                    self.repository.save_session_event(
+                        session_id=session.session_id,
+                        event_type="MINIQMT_LIVE_STALE_EMPTY_RUN_RESET",
+                        message="stale MiniQMT active run had no persisted broker orders; reset run slot for before-cutoff retry",
+                        context={
+                            **stale_empty_run,
+                            "reset_counts": reset_counts,
+                            "broker_backend": portfolio.broker_backend,
+                        },
+                    )
+                    existing = None
+                else:
+                    return self._mark_minqmt_day_cutoff_failed(
+                        session,
+                        trade_date=trade_date,
+                        as_of_time=local_as_of,
+                        reason={
+                            "error_code": "MINIQMT_LIVE_STALE_EMPTY_RUN_AFTER_CUTOFF",
+                            "message": "MiniQMT live run stalled before broker order persistence and final cutoff has passed",
+                            "context": stale_empty_run,
+                        },
+                    )
         if existing is not None:
             if existing.status == RunStatus.SUCCEEDED:
                 self.day_helper.reconcile_minqmt_native_run(
@@ -808,6 +845,61 @@ class PaperTradingLiveMinuteExecutor:
             return cls._local_session_time(datetime.fromisoformat(str(raw)))
         except ValueError:
             return None
+
+    def _miniqmt_stale_empty_active_run_context(
+        self,
+        *,
+        session: PaperTradingSession,
+        run: PaperRun,
+        local_as_of: datetime,
+    ) -> dict[str, Any] | None:
+        if run.status != RunStatus.RUNNING:
+            return None
+        orders = self.repository.list_orders_for_run(run.run_id)
+        states = self.repository.list_order_execution_states(session_id=session.session_id, run_id=run.run_id)
+        if orders or states:
+            return None
+        run_events = self.repository.list_run_events(session.portfolio_id, run_id=run.run_id, limit=500)
+        event_types = [str(item.get("event_type") or "") for item in run_events]
+        if "MINIQMT_ORDER_SUBMISSION_SEQUENCE" not in event_types:
+            return None
+        submit_evidence = {
+            "MINIQMT_ORDER_SUBMITTED",
+            "MINIQMT_ORDER_SUBMIT_FAILED",
+            "MINIQMT_VNPY_STYLE_EXECUTION_STARTED",
+            "MINIQMT_VNPY_STYLE_EXECUTION_COMPLETED",
+            "MINIQMT_NATIVE_RUN_RECONCILED",
+            "RUN_SUCCEEDED",
+            "RUN_FAILED",
+        }
+        if any(event_type in submit_evidence for event_type in event_types):
+            return None
+        age_seconds = self._miniqmt_active_run_age_seconds(run, local_as_of)
+        if age_seconds < MINIQMT_EMPTY_ACTIVE_RUN_STALE_SECONDS:
+            return None
+        return {
+            "run_id": run.run_id,
+            "trade_date": run.trade_date.isoformat(),
+            "run_started_at": run.started_at.isoformat(),
+            "as_of_time": local_as_of.isoformat(),
+            "age_seconds": age_seconds,
+            "stale_after_seconds": MINIQMT_EMPTY_ACTIVE_RUN_STALE_SECONDS,
+            "order_count": len(orders),
+            "order_execution_state_count": len(states),
+            "run_event_types": event_types,
+            "last_run_event_type": event_types[-1] if event_types else None,
+            "recovery_action": "reset_run_slot_and_retry_before_cutoff",
+        }
+
+    @staticmethod
+    def _miniqmt_active_run_age_seconds(run: PaperRun, local_as_of: datetime) -> float:
+        started = run.started_at
+        if started.tzinfo is not None:
+            started = started.astimezone(LIVE_SESSION_TZ).replace(tzinfo=None)
+        current = local_as_of
+        if current.tzinfo is not None:
+            current = current.astimezone(LIVE_SESSION_TZ).replace(tzinfo=None)
+        return max(0.0, (current - started).total_seconds())
 
     @staticmethod
     def _miniqmt_trade_window_policy(session: PaperTradingSession) -> dict[str, Any]:
