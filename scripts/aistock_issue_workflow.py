@@ -1268,6 +1268,12 @@ def _origin_equivalent_dirty_files(root: Path, files: list[str]) -> list[str]:
     return equivalent
 
 
+def _root_sync_safe_with_dirty(root_git: dict[str, Any]) -> bool:
+    head = str(root_git.get("head") or "")
+    origin_main = str(root_git.get("origin_main") or "")
+    return bool(head and origin_main and head == origin_main)
+
+
 def _github_issue_number_from_url(url: str) -> int | None:
     match = re.search(r"/issues/(\d+)(?:$|[?#])", url.strip())
     return int(match.group(1)) if match else None
@@ -5770,6 +5776,8 @@ def build_cleanup_after_merge_plan(
     root_git = _git_snapshot(root) if root.exists() else {"ok": False, "error": "canonical root missing"}
     root_dirty_files = _dirty_files(root) if root.exists() else []
     origin_equivalent_dirty_files = _origin_equivalent_dirty_files(root, root_dirty_files) if root_dirty_files else []
+    unrelated_root_dirty_files = sorted(set(root_dirty_files) - set(origin_equivalent_dirty_files))
+    root_sync_safe_with_dirty = _root_sync_safe_with_dirty(root_git)
     blocking: list[str] = []
     warnings: list[str] = []
     if branch == current_branch and apply:
@@ -5781,12 +5789,19 @@ def build_cleanup_after_merge_plan(
     if sync_root:
         if not root.exists():
             blocking.append(f"canonical root missing: {root}")
-        elif root_git.get("dirty") and set(root_dirty_files) != set(origin_equivalent_dirty_files):
-            blocking.append(f"canonical root is dirty: {root}")
-        elif root_git.get("dirty"):
-            warnings.append("canonical root has only origin/main-equivalent dirty file(s); cleanup apply can restore them safely")
         elif root_git.get("branch") != "main":
             blocking.append(f"canonical root is not on main: {root_git.get('branch')}")
+        elif root_git.get("dirty") and origin_equivalent_dirty_files and not unrelated_root_dirty_files:
+            warnings.append("canonical root has only origin/main-equivalent dirty file(s); cleanup apply can restore them safely")
+        elif root_git.get("dirty") and root_sync_safe_with_dirty:
+            if unrelated_root_dirty_files:
+                warnings.append(
+                    "canonical root has unrelated dirty file(s); sync is already at origin/main and cleanup will ignore them"
+                )
+            if origin_equivalent_dirty_files:
+                warnings.append("canonical root has origin/main-equivalent dirty file(s); cleanup apply can restore them safely")
+        elif root_git.get("dirty"):
+            blocking.append(f"canonical root is dirty and not synced to origin/main: {root}")
     actions = []
     if sync_root:
         actions.append({"action": "sync_root_main", "root": str(root), "safe": not any("canonical root" in item for item in blocking)})
@@ -5812,6 +5827,8 @@ def build_cleanup_after_merge_plan(
         "root_git": root_git,
         "root_dirty_files": root_dirty_files,
         "origin_equivalent_dirty_files": origin_equivalent_dirty_files,
+        "unrelated_root_dirty_files": unrelated_root_dirty_files,
+        "root_sync_safe_with_dirty": root_sync_safe_with_dirty,
         "blocking": blocking,
         "warnings": warnings,
         "actions": actions,
@@ -5833,7 +5850,7 @@ def build_cleanup_after_merge_plan(
         applied: list[dict[str, Any]] = []
         if sync_root:
             applied.append({"command": "git fetch origin --prune", "result": _execute_checked(["git", "fetch", "origin", "--prune"], cwd=root, timeout=120)})
-            if origin_equivalent_dirty_files:
+            if origin_equivalent_dirty_files and not unrelated_root_dirty_files:
                 applied.append(
                     {
                         "command": "git restore origin/main-equivalent dirty file(s)",
@@ -5844,7 +5861,15 @@ def build_cleanup_after_merge_plan(
                         ),
                     }
                 )
-            applied.append({"command": "git merge --ff-only origin/main", "result": _execute_checked(["git", "merge", "--ff-only", "origin/main"], cwd=root, timeout=120)})
+            if root_sync_safe_with_dirty:
+                applied.append(
+                    {
+                        "command": "skip git merge --ff-only origin/main; canonical root already synced and dirty files are unrelated",
+                        "result": {"ok": True, "stdout": "", "stderr": "", "returncode": 0},
+                    }
+                )
+            else:
+                applied.append({"command": "git merge --ff-only origin/main", "result": _execute_checked(["git", "merge", "--ff-only", "origin/main"], cwd=root, timeout=120)})
         if worktree_path and worktree_path.exists():
             applied.append({"command": f"git worktree remove {worktree_path}", "result": _execute_checked(["git", "worktree", "remove", str(worktree_path)], cwd=REPO_ROOT, timeout=120)})
         if branch in local_branches:
