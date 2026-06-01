@@ -2733,6 +2733,77 @@ def test_cleanup_after_merge_allows_origin_equivalent_root_dirty_files(
     assert payload["warnings"]
 
 
+def test_cleanup_after_merge_ignores_unrelated_dirty_files_when_root_synced(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "bug/BUG-199-workflow"
+
+    def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
+        if args[:2] == ["branch", "--show-current"]:
+            return "feature/current"
+        if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
+            return branch
+        if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
+            return branch
+        if args[:2] == ["ls-remote", "--heads"]:
+            return ""
+        return ""
+
+    monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {"ok": True, "branch": "main", "dirty": True, "dirty_count": 1, "head": "abc", "origin_main": "abc"},
+    )
+    monkeypatch.setattr(workflow, "_dirty_files", lambda root: ["backend/services/paper_trading_v2/live_session.py"])
+    monkeypatch.setattr(workflow, "_origin_equivalent_dirty_files", lambda root, files: [])
+
+    payload = workflow.build_cleanup_after_merge_plan(branch=branch, sync_root=True)
+
+    assert payload["workflow_gate"] == "ready_for_cleanup"
+    assert payload["root_sync_safe_with_dirty"] is True
+    assert payload["unrelated_root_dirty_files"] == ["backend/services/paper_trading_v2/live_session.py"]
+    assert payload["blocking"] == []
+    assert "ignore them" in " ".join(payload["warnings"])
+
+
+def test_cleanup_after_merge_blocks_unrelated_dirty_files_when_root_behind(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "bug/BUG-199-workflow"
+
+    def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
+        if args[:2] == ["branch", "--show-current"]:
+            return "feature/current"
+        if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
+            return branch
+        if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
+            return branch
+        if args[:2] == ["ls-remote", "--heads"]:
+            return ""
+        return ""
+
+    monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {"ok": True, "branch": "main", "dirty": True, "dirty_count": 1, "head": "abc", "origin_main": "def"},
+    )
+    monkeypatch.setattr(workflow, "_dirty_files", lambda root: ["backend/services/paper_trading_v2/live_session.py"])
+    monkeypatch.setattr(workflow, "_origin_equivalent_dirty_files", lambda root, files: [])
+
+    payload = workflow.build_cleanup_after_merge_plan(branch=branch, sync_root=True)
+
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["root_sync_safe_with_dirty"] is False
+    assert payload["unrelated_root_dirty_files"] == ["backend/services/paper_trading_v2/live_session.py"]
+    assert "dirty and not synced" in payload["blocking"][0]
+
+
 def test_cleanup_after_merge_apply_can_mark_bug_complete(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
