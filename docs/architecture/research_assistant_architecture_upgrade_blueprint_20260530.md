@@ -564,7 +564,7 @@ COMMENT ON TABLE qe_autonomous_evolution_runs IS 'QE 自主演进主循环运行
 
 > 实现时每完成一项，在本矩阵对应行追加 PR 链接与提交哈希，保持设计-实现强一致。
 
-> Phase 0 基线锁定锚点：`docs/process/research_assistant_baseline_verification_20260531.md` 逐条复验 DEF-01~12 与 §1.1 资产；`backend/tests/research_assistant/test_phase0_blueprint_baseline.py`、`tests/aistock_validation/catalog/module_registry.yaml`、`tests/aistock_validation/catalog/file_ownership.yaml`、`tests/aistock_validation/catalog/test_plans.yaml`、`noxfile.py` 将本矩阵登记为 `ra_phase0_baseline` 闸门。Phase 0 实现 commit `53a0f03d6a2bb05049a99f57998c3845b7d681f1`；本锚点只声明基线和登记，不把未来行标记为已实现。
+> Phase 0 基线锁定锚点：`docs/process/research_assistant_baseline_verification_20260531.md` 逐条复验 DEF-01~12 与 §1.1 资产；`backend/tests/research_assistant/test_phase0_blueprint_baseline.py`、`tests/aistock_validation/catalog/module_registry.yaml`、`tests/aistock_validation/catalog/file_ownership.yaml`、`tests/aistock_validation/catalog/test_plans.yaml`、`noxfile.py` 将本矩阵登记为 `ra_phase0_baseline` 闸门。Phase 0 原始实现 commit `53a0f03d6a2bb05049a99f57998c3845b7d681f1`，rebase 后合入前 HEAD `cff0b243`；G1-central run_id `research-assistant_20260601_011521_l0_ra-phase0-baseline_fba1c3de_runner-validation__289612b1db`，validated_commit `fba1c3de`，`return_code=0`。本锚点只声明基线和登记，不把未来行标记为已实现。
 
 ---
 

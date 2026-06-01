@@ -81,8 +81,11 @@ DEF-13 是后续 Phase 13~15 的解耦缺口。Phase 0 已将 `research_assistan
 | `ra_phase0_baseline` 接入 Validation Center runner | `test_plans.yaml`; `plan_catalog.py`; `noxfile.py` | true |
 | 不触碰生产端口和生产库 | `requires_backend=false`; `requires_frontend=false`; `writes_database=false`; `production_ddl_gate=noop` | true |
 
-## 待回填
+## G1-central 回填
 
-- G1 run_id: `blocked-ra_phase0_baseline-plan-not-found`
-- G1 blocker: running Validation Center root catalog has 37 plans and rejects branch-local `ra_phase0_baseline`; fallback MCP validation must be reported externally and does not replace the required `ra_phase0_baseline` G1 gate.
-- implementation_commit: `53a0f03d6a2bb05049a99f57998c3845b7d681f1`
+- G1-central run_id: `research-assistant_20260601_011521_l0_ra-phase0-baseline_fba1c3de_runner-validation__289612b1db`
+- G1-central status: passed; `return_code=0`; canonical runner accepted `ra_phase0_baseline`.
+- validated_commit: `fba1c3de`（run_id 内记录的受控验证提交）。
+- implementation_commit_original: `53a0f03d6a2bb05049a99f57998c3845b7d681f1`。
+- implementation_commit_rebased_before_merge: `cff0b243`（rebase 到 `origin/main` 后的 Phase 0 HEAD，回填前）。
+- production_ddl_gate: `noop`; production runtime touched: false.
