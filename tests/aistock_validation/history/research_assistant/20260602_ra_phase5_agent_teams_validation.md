@@ -2,8 +2,10 @@
 
 - plan_key: ra_phase5_agent_teams
 - branch: codex/ra-agent-teams-20260601
-- validated_commit: 4a4eb15c477e8441c8c489d72ca2a59b72a09d89
-- g1_central_run_id: research-assistant-agent-teams_20260601_170018_l3_ra-phase5-agent-teams_52455a77_runner-validation__ec27d8d309
+- validated_commit: e57a8704a50ea44e2c35cf8e740198e43d9de1bc
+- runtime_implementation_commit: 4a4eb15c
+- g3_doc_only_fixup: this commit; code bytes unchanged from validated HEAD e57a8704
+- g1_central_run_id: research-assistant-agent-teams_20260601_171920_l3_ra-phase5-agent-teams_58979854_runner-validation__9d5a66f1cc
 - production_ddl_gate: required_pending_user_approval
 - production_ddl_apply: not executed
 - ddl_idempotency: real_postgres twice no-diff via local dev validation DB isolated schema
@@ -66,4 +68,4 @@
 - End-to-end: >=2 workers dispatch and reduce.
 
 ## G3 Traceability
-- Blueprint section 12 Agent Teams row updated for commit `4a4eb15c` and G1-central `research-assistant-agent-teams_20260601_170018_l3_ra-phase5-agent-teams_52455a77_runner-validation__ec27d8d309`.
+- Blueprint section 12 Agent Teams row updated for commit `4a4eb15c` and G1-central `research-assistant-agent-teams_20260601_171920_l3_ra-phase5-agent-teams_58979854_runner-validation__9d5a66f1cc`.
