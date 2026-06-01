@@ -322,7 +322,7 @@ modules:
     description: External search and academic research MCP facade with provider provenance and compact summaries.
     description_zh: 覆盖外部搜索、学术检索、来源证据与紧凑返回契约。
     test_plans:
-      required_on_change: [l0, ra_phase0_baseline, research_assistant_backend]
+      required_on_change: [l0, ra_phase0_baseline, ra_phase4_external_research, research_assistant_backend]
       recommended: [research_assistant_mcp_contract]
   - module_id: research_assistant.agent_teams
     display_name: Research Assistant Agent Teams

@@ -97,6 +97,7 @@ rules:
   - rule_id: dev_quality_tooling
     priority: 100
     include:
+      - .mcp.json
       - .github/ISSUE_TEMPLATE/*.yml
       - .github/workflows/*.yml
       - .pre-commit-config.yaml
@@ -394,7 +395,13 @@ rules:
     include:
       - backend/mcp/modules/external_research.py
       - backend/services/research_assistant/external_research.py
+      - backend/routers/external_research.py
+      - debug_tools/mcp/list_tools_smoke.py
       - backend/tests/research_assistant/test_external_research_evidence_first.py
+      - backend/tests/research_assistant/test_external_research_provider_contract.py
+      - backend/tests/research_assistant/test_external_research_token_budget.py
+      - backend/tests/research_assistant/test_external_research_react_consumption.py
+      - backend/tests/research_assistant/test_external_research_l4_redline.py
       - backend/tests/mcp/test_external_research_module.py
     primary_module: research_assistant.external_research
     impact_modules: [research_assistant.evidence_guard, research_assistant.generic_mcp_client]

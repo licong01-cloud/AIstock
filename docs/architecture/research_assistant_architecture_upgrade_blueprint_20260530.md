@@ -116,7 +116,7 @@
 │    ReAct 回灌循环 + 真实能力闸门 + 全局证据契约 + Reflexion 复盘
 │
 ├─ L2.5 外部研究/检索（受控、证据优先、无幻觉）
-│    中文 provider + 学术 MCP（arXiv/Semantic Scholar/Paper Search）；结果入 external.*/topic.*
+│    中文 provider + 学术 MCP（arXiv/Semantic Scholar/Paper Search）；结果入 external.*/personal.topic.*
 │
 ├─ L3 Agent Teams（主范本 = Claude Code subagent；配置范本 = OpenClaw 声明式）
 │    orchestrator（分解/派发/记忆/汇聚/仲裁） + workers（QE/HMM/因子/数据诊断）
@@ -510,7 +510,7 @@ COMMENT ON TABLE qe_autonomous_evolution_runs IS 'QE 自主演进主循环运行
 
 ### Phase 4：L2.5 外部研究检索
 - **交付**：`external_research` MCP module + profile + façade + 证据入库 + `.mcp.json` 登记。
-- **验收**：`list_tools_smoke.py --server aistock-external-research` 显示工具 schema；`pytest test_external_research_evidence_first.py`：搜索结果只入 `external.*`/`topic.*`，不直接成结论；token 契约测试通过。
+- **验收**：`list_tools_smoke.py --server aistock-external-research` 显示工具 schema；`pytest test_external_research_evidence_first.py`：搜索结果只入 `external.*`/`personal.topic.*`，不直接成结论；token 契约测试通过。
 
 ### Phase 5：L3 Agent Teams
 - **交付**：`assistant_agent_runs` DDL + `agent_teams.yaml` + orchestrator/worker 实现 + 并行派发 + reduce + 隔离上下文 + 工具子集闸门。
@@ -557,7 +557,7 @@ COMMENT ON TABLE qe_autonomous_evolution_runs IS 'QE 自主演进主循环运行
 | ReAct 回灌 | DEF-01 | `react_grounding.py:run_react_grounding_loop`（机制） + `service.py:chat_turn` / `_complete_chat_with_react_grounding`（消费）；commit `5f0d7e08`；G1-central `research-assistant-react-grounding_20260601_062917_l2_ra-phase3-react-grounding_0721d5b3_runner-validation__0cd2e47ef0`; review `research-assistant-react-grounding_20260601_065251_l2_ra-phase3-react-grounding_c1028802_runner-validation__9699ab021d` | `test_react_tool_loop.py`、`test_service.py`、`20260601_ra_phase3_react_grounding_validation.md` |
 | 能力闸门 | — | `react_grounding.py:assert_tool_in_catalog`（机制） + `service.py:chat_turn` / `_ServiceReactMcpProvider`（消费）；commit `5f0d7e08`；G1-central `research-assistant-react-grounding_20260601_062917_l2_ra-phase3-react-grounding_0721d5b3_runner-validation__0cd2e47ef0`; review `research-assistant-react-grounding_20260601_065251_l2_ra-phase3-react-grounding_c1028802_runner-validation__9699ab021d` | `test_tool_catalog_gate.py`、`test_core_no_adapter_import.py`、`20260601_ra_phase3_react_grounding_validation.md` |
 | 证据契约 | — | `react_grounding.py:compose_with_evidence_guard`（机制） + `service.py:chat_turn` / `_compose_assistant_reply`（消费）；commit `5f0d7e08`；G1-central `research-assistant-react-grounding_20260601_062917_l2_ra-phase3-react-grounding_0721d5b3_runner-validation__0cd2e47ef0`; review `research-assistant-react-grounding_20260601_065251_l2_ra-phase3-react-grounding_c1028802_runner-validation__9699ab021d` | `test_evidence_guard.py`、`test_react_tool_loop.py`、`20260601_ra_phase3_react_grounding_validation.md` |
-| 外部研究 MCP | DEF-07 | `backend/mcp/modules/external_research.py`、façade | `test_external_research_evidence_first.py` |
+| 外部研究 MCP | DEF-07 | `backend/services/research_assistant/external_research.py` (provider-only core + evidence contract), `backend/routers/external_research.py` (facade), `backend/mcp/modules/external_research.py` (gateway four tools), `service.py:chat_turn` / ReAct consumption, `.mcp.json`; commit `bf560be3`; G1-central `research-assistant-external-research_20260601_143547_l2-5_ra-phase4-external-research_e06c2074_runner-validation__8a33f0e7ac` | `test_external_research_provider_contract.py`, `test_external_research_evidence_first.py`, `test_external_research_token_budget.py`, `test_external_research_react_consumption.py`, `test_external_research_l4_redline.py`, `test_external_research_module.py`, `test_core_no_adapter_import.py` |
 | Agent Teams | DEF-05 | `assistant_agent_runs`、`agent_teams.yaml`、orchestrator/worker | `test_agent_teams_parallel.py` 等 |
 | QE 自主闭环 | DEF-06 | `qe_evolution_service.py`、`qe_autonomous_evolution_runs` | `test_qe_autonomous_loop.py` |
 | 核心/适配器解耦（贯穿每层） | DEF-13 | 各层「🔗 剥离考虑」、7 类 provider 接口、依赖检查脚本、§17 | `test_core_no_adapter_import.py` |

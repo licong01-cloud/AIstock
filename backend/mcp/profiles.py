@@ -12,6 +12,7 @@ GATEWAY_MODULES = {
     "model_registry",
     "strategy_governance",
     "execution_policy",
+    "external_research",
 }
 
 SCRIPT_BACKED_SERVERS = {"qe_experiment", "qe_archive", "validation"}
@@ -30,6 +31,7 @@ INITIAL_PROFILES: dict[str, list[str]] = {
     "model_registry": ["model_registry"],
     "strategy_governance": ["strategy_governance"],
     "execution_policy": ["execution_policy"],
+    "external_research": ["external_research"],
     "factor_research": ["factor_library", "factor_metrics", "factor_correlation"],
     "strategy_ops": ["strategy_governance", "execution_policy"],
     "research_full": [
@@ -42,6 +44,7 @@ INITIAL_PROFILES: dict[str, list[str]] = {
         "model_registry",
         "strategy_governance",
         "execution_policy",
+        "external_research",
     ],
     "full": [
         "research",
@@ -53,6 +56,7 @@ INITIAL_PROFILES: dict[str, list[str]] = {
         "model_registry",
         "strategy_governance",
         "execution_policy",
+        "external_research",
     ],
 }
 

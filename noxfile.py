@@ -1094,6 +1094,106 @@ def ra_phase3_react_grounding(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def ra_phase4_external_research(session: nox.Session) -> None:
+    """Run Phase 4 external research MCP, facade, evidence, and ReAct gates."""
+    phase4_paths = [
+        "backend/services/research_assistant/external_research.py",
+        "backend/routers/external_research.py",
+        "backend/mcp/modules/external_research.py",
+        "debug_tools/mcp/list_tools_smoke.py",
+        "backend/services/research_assistant/domain_ontology.py",
+        "backend/services/research_assistant/tool_router.py",
+        "backend/services/research_assistant/mcp_catalog_sync.py",
+        "backend/services/research_assistant/service.py",
+        "backend/services/research_assistant/react_grounding.py",
+        "backend/services/research_assistant/execution.py",
+        "backend/tests/research_assistant/test_external_research_provider_contract.py",
+        "backend/tests/research_assistant/test_external_research_evidence_first.py",
+        "backend/tests/research_assistant/test_external_research_token_budget.py",
+        "backend/tests/research_assistant/test_external_research_react_consumption.py",
+        "backend/tests/research_assistant/test_external_research_l4_redline.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        "backend/tests/research_assistant/test_natural_language_mcp_routing.py",
+        "backend/tests/research_assistant/test_mcp_catalog_sync.py",
+        "backend/tests/mcp/test_external_research_module.py",
+        "backend/tests/mcp/test_domain_modules.py",
+        "backend/tests/mcp/test_profiles_registry_gateway.py",
+        "tests/aistock_validation/history/research_assistant/20260601_ra_phase4_external_research_validation.md",
+        "tests/aistock_validation/catalog/test_plans.yaml",
+        "tests/aistock_validation/catalog/module_registry.yaml",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "backend/services/validation/plan_catalog.py",
+        "noxfile.py",
+        ".mcp.json",
+    ]
+    session.run("git", "diff", "--check", external=True)
+    session.run(
+        sys.executable,
+        "-m",
+        "py_compile",
+        "backend/services/research_assistant/external_research.py",
+        "backend/routers/external_research.py",
+        "backend/mcp/modules/external_research.py",
+        "debug_tools/mcp/list_tools_smoke.py",
+        "backend/services/research_assistant/service.py",
+        "backend/services/research_assistant/react_grounding.py",
+        "backend/services/research_assistant/execution.py",
+        "backend/tests/research_assistant/test_external_research_provider_contract.py",
+        "backend/tests/research_assistant/test_external_research_evidence_first.py",
+        "backend/tests/research_assistant/test_external_research_token_budget.py",
+        "backend/tests/research_assistant/test_external_research_react_consumption.py",
+        "backend/tests/research_assistant/test_external_research_l4_redline.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        "backend/tests/mcp/test_external_research_module.py",
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "debug_tools/mcp/list_tools_smoke.py",
+        "--server",
+        "aistock-external-research",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/research_assistant/test_external_research_provider_contract.py",
+        "backend/tests/research_assistant/test_external_research_evidence_first.py",
+        "backend/tests/research_assistant/test_external_research_token_budget.py",
+        "backend/tests/research_assistant/test_external_research_react_consumption.py",
+        "backend/tests/research_assistant/test_external_research_l4_redline.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        "backend/tests/research_assistant/test_natural_language_mcp_routing.py",
+        "backend/tests/research_assistant/test_mcp_catalog_sync.py",
+        "backend/tests/mcp/test_external_research_module.py",
+        "backend/tests/mcp/test_domain_modules.py",
+        "backend/tests/mcp/test_profiles_registry_gateway.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_validation_catalog_integrity.py",
+        "--output-json",
+        "tmp/validation/catalog/ra_phase4_external_research_integrity.json",
+        "--fail-on-warning",
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_module_ownership_scan.py",
+        "--output-json",
+        "tmp/validation/module_ownership/ra_phase4_external_research_paths.json",
+        "--summary-md",
+        "tmp/validation/module_ownership/ra_phase4_external_research_paths.md",
+        "--fail-on-unmapped",
+        "--fail-on-ambiguous",
+        *phase4_paths,
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
 def research_assistant_backend(session: nox.Session) -> None:
     """Run Research Assistant backend/schema/router tests without services."""
     session.run(
