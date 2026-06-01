@@ -98,7 +98,7 @@ class ValidationPlanCatalog:
 
     def __init__(self, catalog_path: Path | None = None, *, allowed_command_keys: dict[str, str] | None = None) -> None:
         self.catalog_path = Path(catalog_path or DEFAULT_PLAN_CATALOG_PATH)
-        self.allowed_command_keys = dict(allowed_command_keys or ALLOWED_COMMAND_KEYS)
+        self.allowed_command_keys = dict(ALLOWED_COMMAND_KEYS if allowed_command_keys is None else allowed_command_keys)
 
     def load(self) -> dict[str, Any]:
         if not self.catalog_path.exists():
