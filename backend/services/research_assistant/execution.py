@@ -697,6 +697,11 @@ class ResearchAssistantExecutionMixin:
             "method",
             "min_abs_corr",
             "qe_selectable",
+            "query",
+            "locale",
+            "provider",
+            "url",
+            "max_chars",
         ):
             if key in payload and key not in args:
                 args[key] = payload[key]
@@ -739,6 +744,18 @@ class ResearchAssistantExecutionMixin:
                 "source": "research_assistant_catalog_summary_adapter",
                 "live_backend_called": False,
                 "next_step": "Use the referenced detail tool or execute the backend MCP facade when live data is required.",
+                **(
+                    {
+                        "evidence_policy": {
+                            "external_evidence_only": True,
+                            "not_final_conclusion": True,
+                            "candidate_branches": ["external.", "personal.topic."],
+                            "l4_handoff": "hypothesis_then_low_cost_validation_only",
+                        }
+                    }
+                    if server_key == "aistock-external-research"
+                    else {}
+                ),
             },
         )
         assert_summary_payload(result_json)
@@ -794,6 +811,38 @@ class ResearchAssistantExecutionMixin:
                 }
                 for item in window
             ], len(tools)
+        if server_key == "aistock-external-research":
+            query = str(args.get("query") or args.get("q") or "external research").strip()
+            as_of = utc_now().date().isoformat()
+            if tool_name == "external_research_fetch_extract":
+                url = str(args.get("url") or "https://example.org/external-research")
+                return [
+                    {
+                        "title": f"Extracted evidence for {url}",
+                        "summary": "Capped extract preview; full content is behind detail_ref.",
+                        "url": url,
+                        "source": "external_research_summary_adapter",
+                        "as_of": as_of,
+                        "evidence_ref": f"external-evidence:{sha256_json({'url': url})[:16]}",
+                        "provider": "summary_adapter",
+                        "detail_ref": {"server": server_key, "tool": tool_name, "args_hint": {"url": url, "max_chars": args.get("max_chars") or 2000}},
+                    }
+                ], 1
+            result_type = "paper" if tool_name == "external_research_search_papers" else "web"
+            digest = sha256_json({"query": query, "tool": tool_name})
+            return [
+                {
+                    "title": f"{query} external evidence candidate",
+                    "summary": f"Summary-first {result_type} evidence for {query}; use as hypothesis evidence, not a final conclusion.",
+                    "url": f"https://example.org/external-research/{digest[:12]}",
+                    "source": "external_research_summary_adapter",
+                    "as_of": as_of,
+                    "evidence_ref": f"external-evidence:{digest[:16]}",
+                    "provider": "summary_adapter",
+                    "result_type": result_type,
+                    "detail_ref": {"server": server_key, "tool": "external_research_fetch_extract", "args_hint": {"url": "<url>", "max_chars": 2000}},
+                }
+            ][:limit], 1
         return [
             {
                 "item_type": "mcp_read_tool_summary",
@@ -820,6 +869,8 @@ class ResearchAssistantExecutionMixin:
             "execution_policy_list_algos": "execution_policy_get_algo",
             "mcp_github_issue_list": "mcp_github_issue_search",
             "qe_archive_health": "qe_archive_list_runs",
+            "external_research_search_web": "external_research_fetch_extract",
+            "external_research_search_papers": "external_research_fetch_extract",
         }
         detail = detail_by_tool.get(tool_name)
         return f"{server_key}/{detail}" if detail else f"{server_key}/{tool_name}"
@@ -847,6 +898,8 @@ class ResearchAssistantExecutionMixin:
             refs.append(artifact_ref("mcp_domain_artifact", f"{server_key}:{tool_name}:artifact_ref"))
         if "logs" in tool_name:
             refs.append(artifact_ref("mcp_log_tail", f"{server_key}:{tool_name}:log_ref"))
+        if server_key == "aistock-external-research":
+            refs.append(artifact_ref("external_evidence_summary", f"{server_key}:{tool_name}:evidence_ref", {"summary_first": True}))
         return refs
 
     def _qe_template_create_draft(self, payload: dict[str, Any]) -> dict[str, Any]:

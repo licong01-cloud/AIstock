@@ -81,10 +81,11 @@ def test_research_profile_is_only_current_module() -> None:
         ("model_registry", ["model_registry"]),
         ("strategy_governance", ["strategy_governance"]),
         ("execution_policy", ["execution_policy"]),
+        ("external_research", ["external_research"]),
         ("factor_research", ["factor_library", "factor_metrics", "factor_correlation"]),
         ("strategy_ops", ["strategy_governance", "execution_policy"]),
-        ("research_full", ["research", "research_assistant", "local_data", "factor_library", "factor_metrics", "factor_correlation", "model_registry", "strategy_governance", "execution_policy"]),
-        ("full", ["research", "research_assistant", "local_data", "factor_library", "factor_metrics", "factor_correlation", "model_registry", "strategy_governance", "execution_policy"]),
+        ("research_full", ["research", "research_assistant", "local_data", "factor_library", "factor_metrics", "factor_correlation", "model_registry", "strategy_governance", "execution_policy", "external_research"]),
+        ("full", ["research", "research_assistant", "local_data", "factor_library", "factor_metrics", "factor_correlation", "model_registry", "strategy_governance", "execution_policy", "external_research"]),
     ],
 )
 def test_unified_profiles_are_available(profile: str, expected: list[str]) -> None:
@@ -228,6 +229,20 @@ def test_gateway_loads_local_data_tools() -> None:
     assert registry.total_tool_count() == local_data.TOOL_COUNT
 
 
+def test_gateway_loads_external_research_tools() -> None:
+    from backend.mcp import gateway
+    from backend.mcp.modules import external_research
+
+    _mcp, registry = gateway.create_gateway(
+        profile="external_research",
+        base_url="http://127.0.0.1:8001/api/v1",
+        env_name="test",
+    )
+
+    assert registry.tool_count("external_research") == external_research.TOOL_COUNT
+    assert registry.total_tool_count() == external_research.TOOL_COUNT
+
+
 def test_gateway_loads_research_full_profile() -> None:
     from backend.mcp import gateway
 
@@ -246,4 +261,5 @@ def test_gateway_loads_research_full_profile() -> None:
     assert registry.tool_count("model_registry") == 9
     assert registry.tool_count("strategy_governance") == 9
     assert registry.tool_count("execution_policy") == 7
-    assert registry.total_tool_count() == 126
+    assert registry.tool_count("external_research") == 4
+    assert registry.total_tool_count() == 130

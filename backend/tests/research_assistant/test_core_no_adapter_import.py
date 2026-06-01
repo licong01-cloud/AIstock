@@ -10,6 +10,7 @@ CORE_FILES = [
     REPO_ROOT / "backend/services/research_assistant/memory_curator.py",
     REPO_ROOT / "backend/services/research_assistant/graph_context.py",
     REPO_ROOT / "backend/services/research_assistant/react_grounding.py",
+    REPO_ROOT / "backend/services/research_assistant/external_research.py",
 ]
 FORBIDDEN_IMPORT_PREFIXES = (
     "backend.db",

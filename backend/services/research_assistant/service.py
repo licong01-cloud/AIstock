@@ -305,6 +305,7 @@ class DialogueIntent(str, Enum):
     MODEL_REGISTRY_REQUEST = "model_registry_request"
     STRATEGY_GOVERNANCE_REQUEST = "strategy_governance_request"
     EXECUTION_POLICY_REQUEST = "execution_policy_request"
+    EXTERNAL_RESEARCH_REQUEST = "external_research_request"
     AMBIGUOUS_REQUEST = "ambiguous_request"
     GENERAL_CHAT = "general_chat"
     AUDIT_REQUEST = "audit_request"
@@ -1605,6 +1606,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             DialogueIntent.MODEL_REGISTRY_REQUEST,
             DialogueIntent.STRATEGY_GOVERNANCE_REQUEST,
             DialogueIntent.EXECUTION_POLICY_REQUEST,
+            DialogueIntent.EXTERNAL_RESEARCH_REQUEST,
         }:
             mode = DialogueMode.PLANNING
             reason = "explicit_task_request"
@@ -1827,6 +1829,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
 
         runtime_activation = self.active_runtime_config_activation()
         runtime_config = dict(runtime_activation["config_json"])
+        route_decision = route_request(data.message)
         initial_prior_messages = self._fetch_prior_chat_messages(conversation_id, data.message, runtime_config)
         initial_overhead = int(runtime_config["model_routing"]["initial_context_overhead_tokens"])
         history_tokens = sum(self.context_budget_planner.estimate_tokens(m["content"], runtime_config) for m in initial_prior_messages)
@@ -1917,6 +1920,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         )
         context_health = self._context_health_payload(conversation_id, budget_plan, mode_decision=mode_decision)
         cards = self._build_human_cards(data.message, task, bundle, route, dialogue_intent, mode_decision)
+        if isinstance(route_decision, dict) and route_decision.get("server_key") and route_decision.get("tool_name"):
+            cards["mcp_route_decision"] = dict(route_decision, request=data.message)
         llm_result, messages, react_result = self._complete_chat_with_react_grounding(
             user_message=data.message,
             conversation_id=conversation_id,
@@ -3422,6 +3427,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             DialogueIntent.MODEL_REGISTRY_REQUEST,
             DialogueIntent.STRATEGY_GOVERNANCE_REQUEST,
             DialogueIntent.EXECUTION_POLICY_REQUEST,
+            DialogueIntent.EXTERNAL_RESEARCH_REQUEST,
             DialogueIntent.QE_WAREHOUSE_REQUEST,
             DialogueIntent.RESEARCH_PIPELINE_REQUEST,
         }
