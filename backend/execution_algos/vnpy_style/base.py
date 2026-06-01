@@ -9,7 +9,7 @@ and finish cancelling active children. See attribution.py for license data.
 from __future__ import annotations
 
 import math
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -25,6 +25,8 @@ from .models import (
     VnpyTick,
     VnpyTradeUpdate,
 )
+
+UTC = timezone.utc
 
 
 class VnpyStyleConfigError(ValueError):
