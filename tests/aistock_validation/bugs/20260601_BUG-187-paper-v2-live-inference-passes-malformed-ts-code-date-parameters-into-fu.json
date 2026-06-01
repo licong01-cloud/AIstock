@@ -37,7 +37,7 @@
   "first_seen_at": "2026-06-01T06:26:11.246218Z",
   "fix_branch": null,
   "fix_commit": "ef1250864b0a0ff53a27eacfc2226e5a1c68ebeb",
-  "fixed_at": "2026-06-01T13:38:12.745258Z",
+  "fixed_at": "2026-06-01T13:54:51.825643Z",
   "github_issue_number": 464,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/464",
   "last_seen_at": "2026-06-01T06:26:11.246218Z",
@@ -70,7 +70,7 @@
   },
   "validation_evidence": [
     "CI checks_passed for PR #480",
-    "python -m pytest -q backend/tests/data_service backend/tests/strategy_package/test_live_inference_preflight.py backend/tests/test_qe_static_factors_live_asof.py -p no:cacheprovider -> 17 passed after rebase to origin/main da801c00"
+    "close-sync PR #482 checks green"
   ],
   "verification_run_id": null
 }
