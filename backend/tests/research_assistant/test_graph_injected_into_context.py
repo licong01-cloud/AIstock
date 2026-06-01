@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
+import backend.services.research_assistant.service as service_module
 from backend.services.research_assistant.models import ContextPackBuildRequest
 from backend.services.research_assistant.repository import InMemoryResearchAssistantRepository
 from backend.services.research_assistant.service import ResearchAssistantService
@@ -162,3 +165,93 @@ def test_build_context_pack_does_not_inject_graph_for_personal_only_query() -> N
     assert pack["pack_json"]["graph_context"]["relation_refs"] == []
     assert pack["pack_json"]["memory_route"]["route_reason"]
     assert "mem_personal_only" in pack["core_memory_refs"]
+
+
+def test_build_context_pack_injects_compact_code_intelligence_context(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setattr(service_module, "REPO_ROOT", tmp_path)
+    artifact_dir = tmp_path / "tmp" / "validation" / "code-intelligence"
+    artifact_dir.mkdir(parents=True)
+    (artifact_dir / "codegraph-freshness.md").write_text("## CodeGraph Freshness\n", encoding="utf-8")
+    _write_json(
+        artifact_dir / "codegraph-freshness.json",
+        {
+            "schema_version": "aistock_codegraph_freshness_v1",
+            "generated_at": "2026-06-02T00:00:00Z",
+            "provider": "codegraph",
+            "workflow_gate": "ready",
+            "freshness": "fresh",
+            "blocking_for_issue_workflow": False,
+            "git_commit": "abc1234",
+            "artifact_path": "tmp/validation/code-intelligence/codegraph-freshness.json",
+            "summary_ref": "tmp/validation/code-intelligence/codegraph-freshness.md",
+            "index_summary": {"files": 3, "nodes": 5, "edges": 7, "up_to_date": True},
+            "warnings": [],
+        },
+    )
+    _write_json(
+        artifact_dir / "ua-summary-manifest.json",
+        {
+            "schema_version": "aistock_understand_anything_summary_manifest_v1",
+            "generated_at": "2026-06-02T00:01:00Z",
+            "graph_provider": "understand_anything",
+            "summary_refs": [
+                {
+                    "module": "research_assistant",
+                    "status": "ok",
+                    "summary_ref": "tmp/validation/code-intelligence/ua-research_assistant-summary.md",
+                    "artifact_path": "tmp/validation/code-intelligence/ua-research_assistant-summary.json",
+                }
+            ],
+            "blocking_for_issue_workflow": False,
+        },
+    )
+    _write_json(
+        artifact_dir / "ua-research_assistant-summary.json",
+        {
+            "schema_version": "aistock_understand_anything_summary_v1",
+            "generated_at": "2026-06-02T00:02:00Z",
+            "graph_provider": "understand_anything",
+            "module": "research_assistant",
+            "status": "ok",
+            "artifact_path": "tmp/validation/code-intelligence/ua-research_assistant-summary.json",
+            "summary_ref": "tmp/validation/code-intelligence/ua-research_assistant-summary.md",
+            "node_count": 10,
+            "edge_count": 4,
+            "nodes_used": 2,
+            "edges_used": 1,
+            "blocking_for_issue_workflow": False,
+            "warnings": [],
+        },
+    )
+
+    pack = _service().build_context_pack(
+        ContextPackBuildRequest(user_message="use research assistant code graph summaries", token_budget=4000)
+    )
+
+    code_context = pack["pack_json"]["code_intelligence_context"]
+    assert code_context["data_state"] == "complete"
+    assert code_context["blocking_for_issue_workflow"] is False
+    assert code_context["codegraph"]["freshness"] == "fresh"
+    assert code_context["codegraph"]["index_summary"]["nodes"] == 5
+    assert code_context["understand_anything"]["summary_count"] == 1
+    assert "selected_nodes" not in json.dumps(code_context, ensure_ascii=False)
+    assert pack["external_source_refs"]
+    assert pack["pack_summary"].endswith("code-intelligence complete")
+
+
+def test_build_context_pack_degrades_when_code_intelligence_artifacts_missing(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setattr(service_module, "REPO_ROOT", tmp_path)
+
+    pack = _service().build_context_pack(
+        ContextPackBuildRequest(user_message="plain context request", token_budget=4000)
+    )
+
+    code_context = pack["pack_json"]["code_intelligence_context"]
+    assert code_context["data_state"] == "missing"
+    assert code_context["blocking_for_issue_workflow"] is False
+    assert code_context["artifact_refs"] == []
+    assert pack["external_source_refs"] == []
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

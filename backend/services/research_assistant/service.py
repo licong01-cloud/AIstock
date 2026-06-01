@@ -24,6 +24,7 @@ from typing import Any
 import jsonschema
 
 from .context_budget import ContextBudgetPlan, ContextBudgetPlanner
+from .code_intelligence import artifact_ref_paths, build_code_intelligence_context
 from .execution import ResearchAssistantExecutionMixin
 from .graph_context import expand_neighbors
 from .memory_curator import CuratorResult, MemoryCurator
@@ -3805,6 +3806,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             relation_filter=graph_context_config.get("relation_filter"),
             limit=int(graph_context_config.get("limit") or self.configured_limit("graph_summary_relations")),
         )
+        code_intelligence_context = build_code_intelligence_context(repo_root=REPO_ROOT)
+        code_intelligence_refs = artifact_ref_paths(code_intelligence_context)
         core_refs = [
             *refs_by_type.get("core", []),
             *refs_by_type.get("directive", []),
@@ -3831,6 +3834,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 "neighbor_entity_keys": graph_result.neighbor_entity_keys,
                 "omitted_relation_refs": graph_result.omitted_relation_refs,
             },
+            "code_intelligence_context": code_intelligence_context,
             "task_id": data.task_id,
             "agent_id": data.agent_id,
             "token_budget": token_budget,
@@ -3848,12 +3852,13 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "task_state_refs": refs_by_type.get("task_state", []),
             "experiment_memory_refs": refs_by_type.get("experiment", []),
             "graph_relation_refs": graph_result.graph_relation_refs,
-            "external_source_refs": [],
+            "external_source_refs": code_intelligence_refs,
             "temp_memory_refs": temp_refs,
             "omitted_relevant_refs": memory_result.omitted_refs,
             "pack_summary": (
                 f"Context Pack: {len(memory_items)} tree-selected memories, "
-                f"{len(graph_result.graph_relation_refs)} graph relations, {len(temp_refs)} temp memories"
+                f"{len(graph_result.graph_relation_refs)} graph relations, {len(temp_refs)} temp memories, "
+                f"code-intelligence {code_intelligence_context.get('data_state') or 'unknown'}"
             ),
             "pack_json": pack_json,
             "checksum": sha256_json(pack_json),
