@@ -490,6 +490,86 @@ def render_context_pack_markdown(context_pack: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def build_github_issue_payload(summary: dict[str, Any], *, repo: str = DEFAULT_REPO) -> dict[str, Any]:
+    """Build the GitHub issue payload used by CI registrar workflows."""
+    severity = summary.get("severity") or "P1"
+    if severity not in {"P0", "P1"}:
+        raise ValueError("Only P0/P1 auto-file behavior is allowed.")
+    fingerprint = summary.get("fingerprint") or f"run-{summary.get('run_id') or 'unknown'}"
+    run_id = str(summary.get("run_id") or "")
+    marker = f"<!-- aistock-ci-failure-fingerprint:{fingerprint} -->"
+    run_marker = f"<!-- aistock-issue-on-test-fail:{run_id} -->"
+    detail_body = [
+        marker,
+        run_marker,
+        f"<!-- aistock-ci-diagnostic-status:{summary.get('diagnostic_status') or 'partial'} -->",
+        "",
+        render_issue_markdown(summary).strip(),
+    ]
+    module_label_allowlist = {
+        "module:validation",
+        "module:validation.center",
+        "module:paper_v2",
+        "module:paper_v2_selection_center",
+        "module:qe_archive",
+        "module:qe",
+        "module:quantevolver",
+        "module:strategy_package",
+        "module:research_assistant",
+        "module:simulation_runtime",
+        "module:rl_execution",
+        "module:scripts",
+    }
+    module_labels = [
+        label
+        for module in summary.get("suspected_modules") or []
+        for label in [f"module:{module}"]
+        if label in module_label_allowlist
+    ]
+    labels = _unique(
+        [
+            "bug",
+            "ci",
+            "auto-filed",
+            str(severity),
+            "status:open" if summary.get("diagnostic_status") == "complete" else "risk:observability",
+            *module_labels,
+        ]
+    )
+    return {
+        "schema_version": "aistock_ci_failure_github_issue_payload_v1",
+        "repo": repo,
+        "title": summary.get("issue_title")
+        or f"[{severity}] {summary.get('workflow') or 'AIstock CI'} failed on {summary.get('branch') or 'unknown'}",
+        "body": "\n".join(detail_body).rstrip() + "\n",
+        "labels": labels,
+        "dedupe": {
+            "fingerprint": fingerprint,
+            "marker": marker,
+            "run_marker": run_marker,
+            "search_query": f"repo:{repo} is:issue in:body {marker}",
+        },
+        "recurrence_comment": render_recurrence_comment(summary),
+    }
+
+
+def render_recurrence_comment(summary: dict[str, Any]) -> str:
+    fingerprint = summary.get("fingerprint") or "unknown"
+    failed_jobs = summary.get("failed_jobs") or []
+    failed_job_names = [str(job.get("job_name")) for job in failed_jobs if job.get("job_name")]
+    return "\n".join(
+        [
+            f"### Recurrence observed for fingerprint {fingerprint}",
+            "",
+            f"- Latest run: {summary.get('run_url') or summary.get('run_id') or 'unknown'}",
+            f"- Branch: {summary.get('branch') or 'unknown'}",
+            f"- Commit: {summary.get('commit') or 'unknown'}",
+            f"- Diagnostic status: {summary.get('diagnostic_status') or 'partial'}",
+            f"- Failed jobs: {', '.join(failed_job_names) or 'unknown'}",
+        ]
+    )
+
+
 def summarize_manual(args: argparse.Namespace) -> dict[str, Any]:
     return finalize_summary(
         {
@@ -701,6 +781,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--markdown-output")
     parser.add_argument("--context-output")
     parser.add_argument("--context-markdown-output")
+    parser.add_argument("--github-issue-payload-output")
     return parser
 
 
@@ -735,6 +816,7 @@ def main(argv: list[str] | None = None) -> int:
     context_pack = build_context_pack(summary)
     _write_json(args.context_output, context_pack)
     _write_text(args.context_markdown_output, render_context_pack_markdown(context_pack))
+    _write_json(args.github_issue_payload_output, build_github_issue_payload(summary, repo=args.repo))
     sys.stdout.write(json.dumps(summary, ensure_ascii=True, indent=2, sort_keys=True) + "\n")
     return 0
 
