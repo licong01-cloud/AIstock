@@ -4,7 +4,7 @@
 - branch: codex/ra-agent-teams-20260601
 - validated_commit: e57a8704a50ea44e2c35cf8e740198e43d9de1bc
 - runtime_implementation_commit: 4a4eb15c
-- g3_doc_only_fixup_commit: edf9f44442187000b2b2b7a9e49ac8f87ed1782b
+- g3_doc_only_fixup_commit: cca829ee
 - g3_doc_only_fixup_note: code bytes unchanged from validated HEAD e57a8704
 - g1_central_run_id: research-assistant-agent-teams_20260601_171920_l3_ra-phase5-agent-teams_58979854_runner-validation__9d5a66f1cc
 - production_ddl_gate: required_pending_user_approval
