@@ -209,6 +209,42 @@ def test_cli_writes_github_issue_payload(tmp_path: Path, capsys: pytest.CaptureF
     assert "aistock-ci-failure-fingerprint" in issue_payload["body"]
 
 
+def test_cli_compact_stdout_keeps_details_in_artifact(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    status_path = tmp_path / "nightly-status.json"
+    output_path = tmp_path / "summary.json"
+    status_path.write_text(
+        json.dumps(
+            {
+                "statuses": {
+                    "runnerPreflight": "success",
+                    "drSnapshot": "success",
+                    "drValidate": "success",
+                    "nightlyL3": "failure",
+                    "paperV2Live": "skipped",
+                },
+                "run_id": "9001",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert summary.main([
+        "--nightly-status-json",
+        str(status_path),
+        "--output",
+        str(output_path),
+        "--stdout-format",
+        "compact",
+    ]) == 0
+
+    stdout_payload = json.loads(capsys.readouterr().out)
+    artifact_payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert stdout_payload["schema_version"] == "aistock_ci_failure_summary_compact_v1"
+    assert "failed_jobs" not in stdout_payload
+    assert stdout_payload["nightly_failed_stages"] == ["nightly_l3"]
+    assert artifact_payload["schema_version"] == "aistock_ci_failure_summary_v1"
+
+
 
 def test_locate_last_green_run_finds_previous_success() -> None:
     payload = summary.finalize_summary(
@@ -296,3 +332,55 @@ def test_regression_locator_is_rendered_and_carried_to_context_pack() -> None:
     assert context_pack["last_green_locator"]["status"] == "found"
     assert context_pack["agent_handoff"]["regression_locator"]["commit_range"] == "1234567890ab..abcdef123456"
     assert "## Regression Locator" in context_markdown
+
+
+def test_nightly_status_summary_uses_shared_payload_and_markers() -> None:
+    payload = summary.summarize_nightly_status(
+        {
+            "statuses": {
+                "runnerPreflight": "success",
+                "drSnapshot": "success",
+                "drValidate": "success",
+                "nightlyL3": "failure",
+                "paperV2Live": "skipped",
+            },
+            "run_id": "9001",
+            "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/9001",
+        },
+        branch="main",
+        commit="abcdef1234567890",
+    )
+    issue_payload = summary.build_github_issue_payload(payload)
+    context_pack = summary.build_context_pack(payload, github_issue_number=519)
+
+    assert payload["workflow"] == "AIstock Nightly L3 + DR"
+    assert payload["nightly_failed_stages"] == ["nightly_l3"]
+    assert payload["issue_title"].startswith("P1 Nightly failed:")
+    assert payload["reproduce_command"] == "gh run view 9001 --repo licong01-cloud/AIstock"
+    assert "<!-- aistock-nightly-failure:nightly-success-success-success-failure-skipped -->" in issue_payload["body"]
+    assert issue_payload["dedupe"]["nightly_marker"] in issue_payload["dedupe"]["search_query"]
+    assert "source:nightly" in issue_payload["labels"]
+    assert "module:validation.runner" in issue_payload["labels"]
+    assert context_pack["schema_version"] == "aistock_ci_failure_context_pack_v1"
+    assert context_pack["failure_event"]["source"] == "github_actions"
+    assert context_pack["token_budget"]["full_logs_included"] is False
+
+
+def test_nightly_runner_outage_preserves_existing_dedupe_title() -> None:
+    payload = summary.summarize_nightly_status(
+        {
+            "runner-preflight": "failure",
+            "dr-snapshot": "skipped",
+            "dr-validate": "skipped",
+            "nightly-l3": "skipped",
+            "paper-v2-live": "skipped",
+        },
+        run_id="9002",
+        run_url="https://github.com/licong01-cloud/AIstock/actions/runs/9002",
+    )
+    issue_payload = summary.build_github_issue_payload(payload)
+
+    assert payload["issue_title"] == "P1 Nightly blocked: self-hosted Windows runner unavailable"
+    assert payload["nightly_fingerprint"] == "runner-preflight-unavailable"
+    assert "<!-- aistock-nightly-failure:runner-preflight-unavailable -->" in issue_payload["body"]
+    assert "self-hosted Windows runner unavailable" in issue_payload["body"]

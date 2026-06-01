@@ -12,6 +12,15 @@ from typing import Any, Callable
 
 
 DEFAULT_REPO = "licong01-cloud/AIstock"
+NIGHTLY_STATUS_KEYS = ("runner_preflight", "dr_snapshot", "dr_validate", "nightly_l3", "paper_v2_live")
+NIGHTLY_STATUS_ALIASES = {
+    "runner_preflight": ("runnerPreflight", "runner-preflight", "runner_preflight"),
+    "dr_snapshot": ("drSnapshot", "dr-snapshot", "dr_snapshot"),
+    "dr_validate": ("drValidate", "dr-validate", "dr_validate"),
+    "nightly_l3": ("nightlyL3", "nightly-l3", "nightly_l3"),
+    "paper_v2_live": ("paperV2Live", "paper-v2-live", "paper_v2_live"),
+}
+NIGHTLY_FAILURE_STATUSES = {"failure", "cancelled", "timed_out", "timed-out", "startup_failure", "action_required"}
 
 
 def _utc_now() -> str:
@@ -73,6 +82,10 @@ def _unique(values: list[str]) -> list[str]:
             result.append(cleaned)
             seen.add(cleaned)
     return result
+
+
+def _status_value(value: Any) -> str:
+    return str(value or "unknown").strip().lower() or "unknown"
 
 
 def _infer_module(job_name: str, nox_session: str | None, failed_tests: list[str]) -> str | None:
@@ -610,15 +623,13 @@ def build_github_issue_payload(summary: dict[str, Any], *, repo: str = DEFAULT_R
         raise ValueError("Only P0/P1 auto-file behavior is allowed.")
     fingerprint = summary.get("fingerprint") or f"run-{summary.get('run_id') or 'unknown'}"
     run_id = str(summary.get("run_id") or "")
+    nightly_marker = None
+    if summary.get("nightly_fingerprint"):
+        nightly_marker = f"<!-- aistock-nightly-failure:{summary['nightly_fingerprint']} -->"
     marker = f"<!-- aistock-ci-failure-fingerprint:{fingerprint} -->"
     run_marker = f"<!-- aistock-issue-on-test-fail:{run_id} -->"
-    detail_body = [
-        marker,
-        run_marker,
-        f"<!-- aistock-ci-diagnostic-status:{summary.get('diagnostic_status') or 'partial'} -->",
-        "",
-        render_issue_markdown(summary).strip(),
-    ]
+    detail_body = [item for item in [nightly_marker, marker, run_marker, f"<!-- aistock-ci-diagnostic-status:{summary.get('diagnostic_status') or 'partial'} -->"] if item]
+    detail_body.extend(["", render_issue_markdown(summary).strip()])
     module_label_allowlist = {
         "module:validation",
         "module:validation.center",
@@ -645,6 +656,16 @@ def build_github_issue_payload(summary: dict[str, Any], *, repo: str = DEFAULT_R
             "ci",
             "auto-filed",
             str(severity),
+            *(
+                [
+                    "aistock:bug",
+                    f"severity:{str(severity).lower()}",
+                    "source:nightly",
+                    "module:validation.runner",
+                ]
+                if summary.get("nightly_statuses")
+                else []
+            ),
             "status:open" if summary.get("diagnostic_status") == "complete" else "risk:observability",
             *module_labels,
         ]
@@ -659,8 +680,9 @@ def build_github_issue_payload(summary: dict[str, Any], *, repo: str = DEFAULT_R
         "dedupe": {
             "fingerprint": fingerprint,
             "marker": marker,
+            "nightly_marker": nightly_marker,
             "run_marker": run_marker,
-            "search_query": f"repo:{repo} is:issue in:body {marker}",
+            "search_query": f"repo:{repo} is:issue in:body {nightly_marker or marker}",
         },
         "recurrence_comment": render_recurrence_comment(summary),
     }
@@ -670,17 +692,22 @@ def render_recurrence_comment(summary: dict[str, Any]) -> str:
     fingerprint = summary.get("fingerprint") or "unknown"
     failed_jobs = summary.get("failed_jobs") or []
     failed_job_names = [str(job.get("job_name")) for job in failed_jobs if job.get("job_name")]
-    return "\n".join(
-        [
-            f"### Recurrence observed for fingerprint {fingerprint}",
-            "",
-            f"- Latest run: {summary.get('run_url') or summary.get('run_id') or 'unknown'}",
-            f"- Branch: {summary.get('branch') or 'unknown'}",
-            f"- Commit: {summary.get('commit') or 'unknown'}",
-            f"- Diagnostic status: {summary.get('diagnostic_status') or 'partial'}",
-            f"- Failed jobs: {', '.join(failed_job_names) or 'unknown'}",
-        ]
-    )
+    lines = [
+        f"### Recurrence observed for fingerprint {fingerprint}",
+        "",
+        f"- Latest run: {summary.get('run_url') or summary.get('run_id') or 'unknown'}",
+        f"- Branch: {summary.get('branch') or 'unknown'}",
+        f"- Commit: {summary.get('commit') or 'unknown'}",
+        f"- Diagnostic status: {summary.get('diagnostic_status') or 'partial'}",
+        f"- Failed jobs: {', '.join(failed_job_names) or 'unknown'}",
+    ]
+    statuses = summary.get("nightly_statuses") if isinstance(summary.get("nightly_statuses"), dict) else None
+    if statuses:
+        lines.append(
+            "- Nightly statuses: "
+            + ", ".join(f"{key}={statuses.get(key) or 'unknown'}" for key in NIGHTLY_STATUS_KEYS)
+        )
+    return "\n".join(lines)
 
 
 def summarize_manual(args: argparse.Namespace) -> dict[str, Any]:
@@ -699,6 +726,128 @@ def summarize_manual(args: argparse.Namespace) -> dict[str, Any]:
             "extraction_errors": ["manual dispatch did not include machine-readable job logs"],
         }
     )
+
+
+def _nightly_statuses_from_payload(payload: dict[str, Any]) -> dict[str, str]:
+    nested = payload.get("statuses") if isinstance(payload.get("statuses"), dict) else {}
+    statuses: dict[str, str] = {}
+    for key in NIGHTLY_STATUS_KEYS:
+        value: Any = None
+        for alias in NIGHTLY_STATUS_ALIASES[key]:
+            if alias in payload:
+                value = payload[alias]
+                break
+            if alias in nested:
+                value = nested[alias]
+                break
+        statuses[key] = _status_value(value)
+    return statuses
+
+
+def _nightly_failed_keys(statuses: dict[str, str]) -> list[str]:
+    failed: list[str] = []
+    for key in NIGHTLY_STATUS_KEYS:
+        status = _status_value(statuses.get(key))
+        if status in NIGHTLY_FAILURE_STATUSES or (status not in {"success", "skipped", "neutral", "unknown"} and "fail" in status):
+            failed.append(key)
+    return failed
+
+
+def _nightly_fingerprint(statuses: dict[str, str]) -> str:
+    if statuses.get("runner_preflight") == "failure":
+        return "runner-preflight-unavailable"
+    return "nightly-" + "-".join(statuses.get(key, "unknown") for key in NIGHTLY_STATUS_KEYS)
+
+
+def _nightly_job_from_statuses(statuses: dict[str, str], *, run_url: str | None = None) -> dict[str, Any]:
+    failed_keys = _nightly_failed_keys(statuses)
+    if statuses.get("runner_preflight") == "failure":
+        error = "self-hosted Windows runner unavailable"
+        module = "validation"
+        files = [".github/workflows/nightly.yml", "scripts/aistock_runner_health.py"]
+    elif failed_keys:
+        error = "Nightly failed: " + ", ".join(f"{key}={statuses.get(key)}" for key in failed_keys)
+        module = "validation"
+        files = [".github/workflows/nightly.yml"]
+    else:
+        error = "Nightly status did not contain a failing stage"
+        module = "validation"
+        files = [".github/workflows/nightly.yml"]
+    return {
+        "job_name": "AIstock Nightly status",
+        "job_url": run_url,
+        "failed_step": failed_keys[0] if failed_keys else "nightly_status",
+        "command": "gh run view <run-id> --workflow nightly.yml",
+        "nox_session": None,
+        "pytest_summary": None,
+        "failed_tests": [],
+        "error_signature": error,
+        "key_log_excerpt": [f"{key}: {statuses.get(key)}" for key in NIGHTLY_STATUS_KEYS],
+        "key_log_excerpt_omitted_count": 0,
+        "suspected_module": module,
+        "suspected_files": files,
+    }
+
+
+def summarize_nightly_status(
+    payload: dict[str, Any],
+    *,
+    repo: str = DEFAULT_REPO,
+    run_id: str | None = None,
+    run_url: str | None = None,
+    severity: str = "P1",
+    branch: str | None = None,
+    commit: str | None = None,
+) -> dict[str, Any]:
+    statuses = _nightly_statuses_from_payload(payload)
+    effective_run_id = str(run_id or payload.get("run_id") or payload.get("runId") or "")
+    effective_run_url = run_url or payload.get("run_url") or payload.get("runUrl")
+    effective_branch = branch or payload.get("branch") or payload.get("headBranch") or "main"
+    effective_commit = commit or payload.get("commit") or payload.get("headSha")
+    fingerprint = _nightly_fingerprint(statuses)
+    runner_failed = statuses.get("runner_preflight") == "failure"
+    failed_keys = _nightly_failed_keys(statuses)
+    title = (
+        "P1 Nightly blocked: self-hosted Windows runner unavailable"
+        if runner_failed
+        else "P1 Nightly failed: "
+        + " ".join(
+            [
+                f"runner={statuses.get('runner_preflight')}",
+                f"dr={statuses.get('dr_snapshot')}/{statuses.get('dr_validate')}",
+                f"l3={statuses.get('nightly_l3')}",
+                f"live={statuses.get('paper_v2_live')}",
+            ]
+        )
+    )
+    job = _nightly_job_from_statuses(statuses, run_url=effective_run_url)
+    summary = finalize_summary(
+        {
+            "schema_version": "aistock_ci_failure_summary_v1",
+            "generated_at": _utc_now(),
+            "severity": severity,
+            "workflow": "AIstock Nightly L3 + DR",
+            "source_name": "AIstock Nightly",
+            "run_id": effective_run_id,
+            "run_url": effective_run_url,
+            "branch": effective_branch,
+            "commit": effective_commit,
+            "manual_summary": title,
+            "failed_jobs": [job] if failed_keys else [],
+            "extraction_errors": [] if failed_keys else ["nightly status payload did not include a failing stage"],
+            "nightly_statuses": statuses,
+            "nightly_fingerprint": fingerprint,
+            "nightly_failed_stages": failed_keys,
+        }
+    )
+    summary["fingerprint_source"] = fingerprint
+    summary["fingerprint"] = "ci-" + hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()[:16]
+    summary["issue_title"] = title[:240]
+    summary["reproduce_command"] = f"gh run view {effective_run_id} --repo {repo}" if effective_run_id else "Inspect the linked Nightly run."
+    summary["last_green_locator"] = _last_green_payload(summary, status="not_requested")
+    summary["failure_event"] = build_failure_event(summary)
+    summary["agent_handoff"] = build_agent_handoff(summary)
+    return summary
 
 
 def summarize_actions_run(
@@ -808,6 +957,11 @@ def render_issue_markdown(summary: dict[str, Any], *, github_issue_number: int |
         lines.append(f"- previous_success_run: {previous.get('run_url') or previous.get('run_id') or 'n/a'}")
     if locator.get("warnings"):
         lines.extend([f"- warning: `{item}`" for item in locator.get("warnings") or []])
+    statuses = summary.get("nightly_statuses") if isinstance(summary.get("nightly_statuses"), dict) else None
+    if statuses:
+        lines.extend(["", "## Nightly Statuses", ""])
+        for key in NIGHTLY_STATUS_KEYS:
+            lines.append(f"- {key}: `{statuses.get(key) or 'unknown'}`")
     lines.extend(
         [
             "",
@@ -908,6 +1062,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-url")
     parser.add_argument("--severity", default="P1", choices=["P0", "P1", "P2", "P3"])
     parser.add_argument("--manual-summary")
+    parser.add_argument("--nightly-status-json", help="Parse compact Nightly job result JSON instead of Actions logs.")
     parser.add_argument("--source-name")
     parser.add_argument("--branch")
     parser.add_argument("--commit")
@@ -918,7 +1073,31 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--context-output")
     parser.add_argument("--context-markdown-output")
     parser.add_argument("--github-issue-payload-output")
+    parser.add_argument("--stdout-format", choices=["full-json", "compact"], default="full-json")
     return parser
+
+
+def build_stdout_payload(summary: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    if args.stdout_format == "full-json":
+        return summary
+    return {
+        "schema_version": "aistock_ci_failure_summary_compact_v1",
+        "diagnostic_status": summary.get("diagnostic_status"),
+        "severity": summary.get("severity"),
+        "issue_title": summary.get("issue_title"),
+        "fingerprint": summary.get("fingerprint"),
+        "nightly_failed_stages": summary.get("nightly_failed_stages") or [],
+        "suspected_modules": summary.get("suspected_modules") or [],
+        "suspected_files_count": len(summary.get("suspected_files") or []),
+        "failed_jobs_count": len(summary.get("failed_jobs") or []),
+        "artifacts": {
+            "summary": args.output,
+            "markdown": args.markdown_output,
+            "context": args.context_output,
+            "context_markdown": args.context_markdown_output,
+            "github_issue_payload": args.github_issue_payload_output,
+        },
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -942,10 +1121,23 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif args.manual_summary:
         summary = summarize_manual(args)
+    elif args.nightly_status_json:
+        payload = json.loads(Path(args.nightly_status_json).read_text(encoding="utf-8-sig"))
+        if not isinstance(payload, dict):
+            raise SystemExit("--nightly-status-json must contain a JSON object")
+        summary = summarize_nightly_status(
+            payload,
+            repo=args.repo,
+            run_id=args.run_id,
+            run_url=args.run_url,
+            severity=args.severity,
+            branch=args.branch,
+            commit=args.commit,
+        )
     elif args.run_id:
         summary = summarize_actions_run(repo=args.repo, run_id=str(args.run_id), run_url=args.run_url, severity=args.severity)
     else:
-        raise SystemExit("--run-id, --manual-summary, or --log-file is required")
+        raise SystemExit("--run-id, --manual-summary, --nightly-status-json, or --log-file is required")
 
     _write_json(args.output, summary)
     _write_text(args.markdown_output, render_issue_markdown(summary))
@@ -953,7 +1145,7 @@ def main(argv: list[str] | None = None) -> int:
     _write_json(args.context_output, context_pack)
     _write_text(args.context_markdown_output, render_context_pack_markdown(context_pack))
     _write_json(args.github_issue_payload_output, build_github_issue_payload(summary, repo=args.repo))
-    sys.stdout.write(json.dumps(summary, ensure_ascii=True, indent=2, sort_keys=True) + "\n")
+    sys.stdout.write(json.dumps(build_stdout_payload(summary, args), ensure_ascii=True, indent=2, sort_keys=True) + "\n")
     return 0
 
 
