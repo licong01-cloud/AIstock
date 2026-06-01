@@ -91,7 +91,7 @@ For Codex, Claude Code, Cursor, and other agents, context discovery should be ch
 - Do not load archived standards, old design notes, full logs, or module restart plans unless the current BUG explicitly needs that history.
 - Treat CodeGraph / Understand Anything references as acceleration hints; they do not replace selected nox / pytest / Validation Center evidence.
 
-Close-sync-only PRs that change only BUG JSON/status evidence should be treated as metadata aftercare. The workflow should summarize their CI/check state by counts and non-blocking skipped jobs; the long-term CI optimization is a fast metadata lane instead of re-running the full backend matrix for one registry-status file.
+Close-sync-only PRs that change only BUG JSON/status evidence are metadata aftercare. AIstock CI uses `scripts/ci_change_classifier.py` to keep the static gate and PR Quality evidence while skipping unrelated backend matrix jobs when every changed BUG JSON is already `fixed`, `closed`, or `verified`. Any allocator change, open BUG registry intake, non-JSON registry file, or non-registry code/doc change keeps the full backend matrix.
 ## Fast Path And Smoke Check
 
 Use `fast-path` when a client needs a cheap, machine-readable plan before loading more context:

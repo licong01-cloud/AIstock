@@ -24,6 +24,47 @@ permissions:
   pull-requests: write
 
 jobs:
+  classify-changes:
+    name: Classify CI changed files
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      backend_required: ${{ steps.classify.outputs.backend_required }}
+      close_sync_metadata_only: ${{ steps.classify.outputs.close_sync_metadata_only }}
+      classification: ${{ steps.classify.outputs.classification }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build changed-file list
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          mkdir -p tmp/validation/ci_change_classifier
+          if [ -n "${BASE_SHA}" ] && git rev-parse --verify "${BASE_SHA}" >/dev/null 2>&1; then
+            git diff --name-only "${BASE_SHA}...${HEAD_SHA}" > tmp/validation/ci_change_classifier/changed_files.txt
+          else
+            git diff-tree --no-commit-id --name-only -r "${HEAD_SHA}" > tmp/validation/ci_change_classifier/changed_files.txt
+          fi
+          cat tmp/validation/ci_change_classifier/changed_files.txt
+
+      - name: Classify CI lane
+        id: classify
+        run: |
+          python scripts/ci_change_classifier.py \
+            --changed-files-file tmp/validation/ci_change_classifier/changed_files.txt \
+            --output-json tmp/validation/ci_change_classifier/summary.json
+
+      - name: Upload CI change-classifier artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-change-classifier
+          path: tmp/validation/ci_change_classifier/
+          if-no-files-found: ignore
+
   static-gate:
     name: Static gate (l0 + module registry)
     runs-on: windows-latest
@@ -63,7 +104,8 @@ jobs:
 
   backend-tests:
     name: Backend tests (${{ matrix.session }})
-    needs: static-gate
+    needs: [classify-changes, static-gate]
+    if: needs.classify-changes.outputs.backend_required != 'false'
     # ubuntu-latest is required because GitHub-hosted Windows runners do NOT
     # support `services:` containers (pg_isready / docker daemon are absent).
     # All current backend nox sessions are pure Python + a postgres URL, so
@@ -151,7 +193,7 @@ jobs:
   failure-bug-register:
     name: Auto-register CI failures as BUGs
     needs: backend-tests
-    if: failure() && github.event_name == 'pull_request'
+    if: failure() && github.event_name == 'pull_request' && needs.backend-tests.result == 'failure'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
