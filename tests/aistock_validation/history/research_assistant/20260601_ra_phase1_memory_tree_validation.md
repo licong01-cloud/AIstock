@@ -2,7 +2,7 @@
 
 - batch_id: `ra_phase1`
 - branch: `codex/ra-memory-tree-20260601`
-- base_branch: `codex/ra-baseline-20260601`
+- base_branch_after_rebase: `main` at Phase 0 PR #448 merge commit `4eeaf2bc8978de575f29e7e2b7f8394c266b724d`.
 - validation_plan: `ra_phase1_memory_tree`
 - runtime_boundary: no production `8001` / `3000` start, stop, restart, or smoke was performed.
 - production_ddl_gate: `pending_before_merge`; Phase 1 adds `backend/db/migrations/ra_upgrade/001_memory_tree.sql` and schema/bootstrap changes. Production DB was not touched.
@@ -39,11 +39,18 @@ Verified backfill for a legacy row: `scope='project'`, `tree_path='project.rule.
 | CR-P1-03 | `memory_curator.py` auto-grows branches, deduplicates, records trust/provenance, and enforces approval boundary | `memory_curator.py`; `service.py`; `test_memory_autogrow.py`; `test_memory_dedup_scope.py` | true |
 | CR-P1-04 | Core modules use provider protocols and do not import AIstock facade/DB/domain services | `test_core_no_adapter_import.py`; no forbidden import/static retrieval-token matches | true |
 | CR-P1-05 | Validation plan is runner-enabled and allowlisted | `test_plans.yaml`; `plan_catalog.py`; `noxfile.py`; `test_memory_tree_ddl_contract.py` | true |
-| CR-P1-06 | G3 traceability matrix anchors are updated | blueprint ?12 Phase 1 anchor line points to implementation files/tests and notes G1-central blocker | true |
+| CR-P1-06 | G3 traceability matrix anchors are updated | blueprint §12 Phase 1 anchor records G1-central run_id `research-assistant-memory-tree_20260601_013143_l1_ra-phase1-memory-tree_df500446_runner-validation__9756376ad7` plus original/rebased commits | true |
 
-## Remaining Gate
+## G1-central Evidence
 
-G1-central remains blocked by the known Validation Center branch-local plan issue from Phase 0. Do not claim Phase 1 fully complete or merge before a canonical `ra_phase1_memory_tree` run_id exists after that blocker is fixed.
+- G1-central run_id: `research-assistant-memory-tree_20260601_013143_l1_ra-phase1-memory-tree_df500446_runner-validation__9756376ad7`
+- G1-central status: passed; `return_code=0`; canonical runner accepted `ra_phase1_memory_tree`.
+- validated_commit: `df500446` (commit encoded in the canonical run_id).
+- implementation_commit_original: `d12f9aaca07960a577e055d46df47cc46d09aeca`.
+- determinism_fix_commit_original: `b4c021345dd187f964bedfcfdf77ddeba1481d02`.
+- implementation_commit_rebased_before_merge: `1d2bafbd`.
+- determinism_fix_commit_rebased_before_merge: `47affe04`.
+- production_ddl_gate: `pending_before_merge`; production runtime touched: false; production DB touched: false.
 
 ## 2026-06-01 Central Runner Determinism Fix
 
