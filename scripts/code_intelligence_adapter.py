@@ -260,6 +260,104 @@ def codegraph_status(root: Path | None = None, *, skip_external: bool = False) -
     }
 
 
+def _index_age(index_path: Path) -> dict[str, Any]:
+    if not index_path.exists():
+        return {"exists": False, "modified_at": None, "age_seconds": None}
+    modified = datetime.fromtimestamp(index_path.stat().st_mtime, timezone.utc)
+    age = max(0.0, (datetime.now(timezone.utc) - modified).total_seconds())
+    return {
+        "exists": True,
+        "modified_at": modified.isoformat().replace("+00:00", "Z"),
+        "age_seconds": round(age, 3),
+    }
+
+
+def build_codegraph_freshness_artifact(
+    *,
+    root: Path | None = None,
+    output_dir: Path | None = None,
+    max_age_hours: float = 36.0,
+    skip_external: bool = False,
+) -> dict[str, Any]:
+    root = root or REPO_ROOT
+    output_dir = output_dir or root / "tmp" / "validation" / "code-intelligence"
+    json_path = output_dir / "codegraph-freshness.json"
+    md_path = output_dir / "codegraph-freshness.md"
+    status = codegraph_status(root, skip_external=skip_external)
+    index_path = Path(str(status.get("graph_root") or root)) / ".codegraph" / "codegraph.db"
+    age = _index_age(index_path)
+    warnings: list[str] = []
+    freshness = "fresh"
+    if not status.get("available"):
+        freshness = "unavailable"
+        warnings.append("CodeGraph CLI is unavailable; Nightly should keep this as warning-only.")
+    elif not status.get("index_exists"):
+        freshness = "missing_index"
+        warnings.append(f"CodeGraph index is missing; bootstrap command: {status.get('bootstrap_command')}.")
+    elif skip_external:
+        freshness = "unverified"
+        warnings.append("CodeGraph external status check was skipped; freshness is based on index mtime only.")
+    elif not (status.get("status_check") or {}).get("ok"):
+        freshness = "status_check_failed"
+        warnings.append("CodeGraph status command failed; inspect compact status_check output in the JSON artifact.")
+    elif not (status.get("index_summary") or {}).get("up_to_date"):
+        freshness = "stale"
+        warnings.append("CodeGraph status did not report the index as up to date.")
+    age_seconds = age.get("age_seconds")
+    if isinstance(age_seconds, (int, float)) and age_seconds > max_age_hours * 3600:
+        freshness = "stale"
+        warnings.append(f"CodeGraph index age exceeds {max_age_hours:g} hours.")
+    payload = {
+        "schema_version": "aistock_codegraph_freshness_v1",
+        "generated_at": _utc_now(),
+        "provider": "codegraph",
+        "workflow_gate": "warning" if warnings else "ready",
+        "freshness": freshness,
+        "blocking_for_issue_workflow": False,
+        "root": str(root),
+        "graph_root": status.get("graph_root"),
+        "graph_root_source": status.get("graph_root_source"),
+        "git_commit": status.get("git_commit"),
+        "working_tree_dirty": status.get("working_tree_dirty"),
+        "max_age_hours": max_age_hours,
+        "index_age": age,
+        "index_summary": status.get("index_summary"),
+        "version": status.get("version") or status.get("expected_version"),
+        "status": status.get("status"),
+        "status_check": status.get("status_check"),
+        "warnings": warnings,
+        "artifact_path": _repo_rel(json_path, root),
+        "summary_ref": _repo_rel(md_path, root),
+    }
+    _write_json(json_path, payload)
+    _write_text(md_path, render_codegraph_freshness_markdown(payload))
+    return payload
+
+
+def render_codegraph_freshness_markdown(payload: dict[str, Any]) -> str:
+    age = payload.get("index_age") or {}
+    summary = payload.get("index_summary") or {}
+    lines = [
+        "## CodeGraph Freshness",
+        "",
+        f"- workflow_gate: `{payload.get('workflow_gate') or 'unknown'}`",
+        f"- freshness: `{payload.get('freshness') or 'unknown'}`",
+        f"- status: `{payload.get('status') or 'unknown'}`",
+        f"- version: `{payload.get('version') or 'unknown'}`",
+        f"- graph_root_source: `{payload.get('graph_root_source') or 'unknown'}`",
+        f"- git_commit: `{payload.get('git_commit') or 'unknown'}`",
+        f"- index_modified_at: `{age.get('modified_at') or 'missing'}`",
+        f"- index_age_seconds: `{age.get('age_seconds') if age.get('age_seconds') is not None else 'unknown'}`",
+        f"- files/nodes/edges: `{summary.get('files', 'unknown')}` / `{summary.get('nodes', 'unknown')}` / `{summary.get('edges', 'unknown')}`",
+        "",
+        "This artifact is warning-only and does not replace nox, pytest, Validation Center, or production gates.",
+    ]
+    warnings = payload.get("warnings") or []
+    if warnings:
+        lines.extend(["", "### Warnings", *[f"- {item}" for item in warnings]])
+    return "\n".join(lines)
+
+
 def understand_anything_status(root: Path | None = None) -> dict[str, Any]:
     root = root or REPO_ROOT
     graph_path = _understand_graph_path(root)
@@ -795,6 +893,17 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_freshness(args: argparse.Namespace) -> int:
+    payload = build_codegraph_freshness_artifact(
+        root=Path(args.root) if args.root else REPO_ROOT,
+        output_dir=Path(args.output_dir) if args.output_dir else None,
+        max_age_hours=args.max_age_hours,
+        skip_external=args.skip_external,
+    )
+    _emit(payload, args.output)
+    return 0
+
+
 def cmd_context(args: argparse.Namespace) -> int:
     payload = build_context_artifacts(
         item_id=args.item_id,
@@ -871,6 +980,14 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--skip-external", action="store_true")
     doctor.add_argument("--output")
     doctor.set_defaults(func=cmd_doctor)
+
+    freshness = sub.add_parser("freshness", help="Build a warning-only CodeGraph freshness artifact.")
+    freshness.add_argument("--root")
+    freshness.add_argument("--output-dir")
+    freshness.add_argument("--max-age-hours", type=float, default=36.0)
+    freshness.add_argument("--skip-external", action="store_true")
+    freshness.add_argument("--output")
+    freshness.set_defaults(func=cmd_freshness)
 
     context = sub.add_parser("context", help="Build a CodeGraph-backed context artifact.")
     context.add_argument("--item-id", required=True)

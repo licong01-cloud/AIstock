@@ -338,6 +338,81 @@ def test_codegraph_status_preserves_compact_failure_output(tmp_path: Path, monke
     assert "\x1b" not in json.dumps(payload)
 
 
+def test_codegraph_freshness_ready_for_up_to_date_index(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / ".codegraph").mkdir()
+    (tmp_path / ".codegraph" / "codegraph.db").write_text("db", encoding="utf-8")
+    monkeypatch.setattr(adapter, "_codegraph_command", lambda: "codegraph")
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
+    )
+
+    def fake_run(args, cwd=None, timeout=30):
+        if args == ["codegraph", "--version"]:
+            return {"ok": True, "returncode": 0, "stdout": "0.9.4", "stderr": ""}
+        return {
+            "ok": True,
+            "returncode": 0,
+            "stdout": "Files: 10\nNodes: 20\nEdges: 30\nIndex is up to date",
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(adapter, "_run_command", fake_run)
+
+    payload = adapter.build_codegraph_freshness_artifact(root=tmp_path, max_age_hours=36)
+
+    assert payload["schema_version"] == "aistock_codegraph_freshness_v1"
+    assert payload["workflow_gate"] == "ready"
+    assert payload["freshness"] == "fresh"
+    assert payload["blocking_for_issue_workflow"] is False
+    assert (tmp_path / payload["artifact_path"]).exists()
+    assert "CodeGraph Freshness" in (tmp_path / payload["summary_ref"]).read_text(encoding="utf-8")
+
+
+def test_codegraph_freshness_warns_for_missing_index(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(adapter, "_codegraph_command", lambda: None)
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
+    )
+
+    payload = adapter.build_codegraph_freshness_artifact(root=tmp_path, skip_external=True)
+
+    assert payload["workflow_gate"] == "warning"
+    assert payload["freshness"] == "unavailable"
+    assert payload["warnings"]
+
+
+def test_codegraph_freshness_warns_for_stale_index(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / ".codegraph").mkdir()
+    index = tmp_path / ".codegraph" / "codegraph.db"
+    index.write_text("db", encoding="utf-8")
+    old_time = index.stat().st_mtime - 10_000
+    index.touch()
+    import os
+
+    os.utime(index, (old_time, old_time))
+    monkeypatch.setattr(adapter, "_codegraph_command", lambda: "codegraph")
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_run_command",
+        lambda args, cwd=None, timeout=30: {"ok": True, "returncode": 0, "stdout": "Index is up to date", "stderr": ""},
+    )
+
+    payload = adapter.build_codegraph_freshness_artifact(root=tmp_path, max_age_hours=1)
+
+    assert payload["workflow_gate"] == "warning"
+    assert payload["freshness"] == "stale"
+    assert any("age exceeds" in item for item in payload["warnings"])
+
+
 def test_summary_markdown_contains_warning_only_artifact_refs(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(adapter, "_codegraph_command", lambda: None)
     monkeypatch.setattr(

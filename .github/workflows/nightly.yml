@@ -237,6 +237,10 @@ jobs:
           conda activate AIstock
           OUT_DIR="tmp/validation/code-intelligence/${{ github.run_id }}"
           mkdir -p "${OUT_DIR}"
+          python scripts/code_intelligence_adapter.py freshness \
+            --output-dir "${OUT_DIR}" \
+            --output "${OUT_DIR}/codegraph-freshness.stdout.json" || true
+          cat "${OUT_DIR}/codegraph-freshness.md" || true
           python scripts/code_intelligence_adapter.py ua-summary-all \
             --output-dir "${OUT_DIR}" \
             --output "${OUT_DIR}/ua-summary-manifest.stdout.json"
