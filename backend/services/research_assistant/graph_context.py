@@ -147,8 +147,8 @@ def _relations_for_entity(
     limit: int,
 ) -> list[tuple[str, dict[str, Any]]]:
     relations: list[tuple[str, dict[str, Any]]] = []
-    for direction, field in (("outgoing", "source_entity_id"), ("incoming", "target_entity_id")):
-        page = repo.list_records("relations", filters={field: entity_id}, limit=limit)
+    for direction, relation_field in (("outgoing", "source_entity_id"), ("incoming", "target_entity_id")):
+        page = repo.list_records("relations", filters={relation_field: entity_id}, limit=limit)
         for relation in page.get("items") or []:
             if relation_types and str(relation.get("relation_type") or "") not in relation_types:
                 continue
