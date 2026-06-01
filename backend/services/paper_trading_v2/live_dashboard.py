@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
+from backend.services.paper_trading_v2.execution import list_minqmt_execution_quality_reports
 from backend.services.paper_trading_v2.models import PaperRun, PaperSessionStatus, PaperTradingSession
 from backend.services.paper_trading_v2.repository import PaperTradingV2Repository
 from backend.services.strategy_package.selection_artifact import (
@@ -119,6 +120,14 @@ class PaperTradingLiveDashboardService:
         run_events = self.repository.list_run_events(portfolio_id, run_id=run_id, limit=event_limit) if run_id else []
         errors = self.repository.list_errors(portfolio_id, limit=event_limit)
         daily_snapshots = self.repository.list_daily_snapshots(portfolio_id, limit=event_limit)
+        execution_quality = list_minqmt_execution_quality_reports(
+            repository=self.repository,
+            portfolio_id=portfolio_id,
+            trade_date=selected_trade_date,
+            run_id=run_id,
+            limit=5,
+            scan_limit=event_limit,
+        )
 
         warnings = []
         if not sessions:
@@ -145,6 +154,7 @@ class PaperTradingLiveDashboardService:
             "daily_signal": self._daily_signal(portfolio, current_run),
             "target_rebalance": self._target_rebalance(run_events),
             "minute_execution": self._minute_execution_summary(orders, fills, order_events, states),
+            "execution_quality": execution_quality,
             "intraday_nav": {
                 "status": "AVAILABLE" if intraday_snapshots else "MISSING",
                 "missing_reason": None if intraday_snapshots else "尚未持久化分钟资产快照",

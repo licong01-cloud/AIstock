@@ -15,6 +15,7 @@ from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
 from backend.services.paper_trading_v2.coldstart_sentinel import ColdstartSentinelService, PaperV2DaemonUnavailableError
 from backend.services.paper_trading_v2.market_data import MinuteDataSource, TradeCalendarProvider
 from backend.services.paper_trading_v2.live_dashboard import PaperTradingLiveDashboardService
+from backend.services.paper_trading_v2.execution import list_minqmt_execution_quality_reports
 from backend.services.paper_trading_v2.readiness import PaperTradingReadinessService
 from backend.services.paper_trading_v2.replay import PaperTradingHistoricalReplay
 from backend.services.paper_trading_v2.repository import PaperTradingV2Repository
@@ -997,6 +998,30 @@ def get_portfolio_minute_execution(
                 trade_date=trade_date,
                 symbol=symbol,
                 limit=limit,
+            ),
+        }
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/portfolios/{portfolio_id}/execution-quality")
+def get_portfolio_execution_quality(
+    portfolio_id: str,
+    trade_date: date | None = None,
+    run_id: str | None = None,
+    limit: int = Query(default=20, ge=1, le=200),
+    scan_limit: int = Query(default=500, ge=1, le=2000),
+) -> dict[str, Any]:
+    try:
+        return {
+            "ok": True,
+            "execution_quality": list_minqmt_execution_quality_reports(
+                repository=PaperTradingV2Repository(),
+                portfolio_id=portfolio_id,
+                trade_date=trade_date,
+                run_id=run_id,
+                limit=limit,
+                scan_limit=scan_limit,
             ),
         }
     except TradingCoreError as exc:
