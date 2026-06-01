@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import threading
 import time
 from datetime import date, datetime
@@ -210,16 +211,51 @@ SECTOR_DATA_COLUMNS: List[str] = [
 ]
 
 
-def _normalize_instrument(code: str) -> str:
+TS_CODE_PATTERN = re.compile(r"^\d{6}\.(SH|SZ|BJ)$")
+INVALID_INSTRUMENT_SAMPLE_LIMIT = 10
+
+
+def _normalize_instrument(code: object) -> str:
     s = str(code).strip()
     if not s:
         return s
     if "." in s:
         return s.upper()
     up = s.upper()
-    if len(up) >= 8 and up[:2] in {"SH", "SZ", "BJ"}:
+    if len(up) == 8 and up[:2] in {"SH", "SZ", "BJ"} and up[2:].isdigit():
         return f"{up[2:]}.{up[:2]}"
     return up
+
+
+def _normalize_and_validate_instruments(
+    instruments: Iterable[object],
+    *,
+    source: str,
+    start_date: object | None = None,
+    end_date: object | None = None,
+) -> List[str]:
+    if instruments is None:
+        raw_values: List[object] = []
+    elif isinstance(instruments, str):
+        raw_values = [instruments]
+    else:
+        raw_values = list(instruments)
+    normalized: List[str] = []
+    invalid: List[Dict[str, str]] = []
+    for index, raw in enumerate(raw_values):
+        value = _normalize_instrument(raw)
+        normalized.append(value)
+        if not TS_CODE_PATTERN.fullmatch(value):
+            invalid.append({"index": str(index), "raw": str(raw), "normalized": value})
+
+    if invalid:
+        samples = invalid[:INVALID_INSTRUMENT_SAMPLE_LIMIT]
+        raise ValueError(
+            "invalid ts_code values before SQL execution: "
+            f"source={source} instruments_count={len(raw_values)} invalid_count={len(invalid)} "
+            f"start_date={start_date} end_date={end_date} invalid_samples={samples}"
+        )
+    return normalized
 
 
 def _to_date(d: Union[str, date, datetime]) -> date:
@@ -286,7 +322,9 @@ def load_daily_pv(
     """
     start = _to_date(start_date)
     end = _to_date(end_date)
-    ts_codes = [_normalize_instrument(i) for i in instruments]
+    ts_codes = _normalize_and_validate_instruments(
+        instruments, source="load_daily_pv", start_date=start, end_date=end
+    )
 
     if not ts_codes:
         return pd.DataFrame()
@@ -417,11 +455,13 @@ def load_daily_basic(
     """
     start = _to_date(start_date)
     end = _to_date(end_date)
-    ts_codes = [_normalize_instrument(i) for i in instruments]
+    ts_codes = _normalize_and_validate_instruments(
+        instruments, source="load_daily_basic", start_date=start, end_date=end
+    )
 
     cached = _CACHE.get("load_daily_basic", ts_codes, start.isoformat(), end.isoformat())
     if cached is not None:
-        logger.debug(f"load_daily_basic: 缓存命中")
+        logger.debug("load_daily_basic: 缓存命中")
         return cached
 
     placeholders = ",".join(["%s"] * len(ts_codes))
@@ -461,11 +501,13 @@ def load_moneyflow(
     """
     start = _to_date(start_date)
     end = _to_date(end_date)
-    ts_codes = [_normalize_instrument(i) for i in instruments]
+    ts_codes = _normalize_and_validate_instruments(
+        instruments, source="load_moneyflow", start_date=start, end_date=end
+    )
 
     cached = _CACHE.get("load_moneyflow", ts_codes, start.isoformat(), end.isoformat())
     if cached is not None:
-        logger.debug(f"load_moneyflow: 缓存命中")
+        logger.debug("load_moneyflow: 缓存命中")
         return cached
 
     placeholders = ",".join(["%s"] * len(ts_codes))
@@ -510,11 +552,13 @@ def load_bak_basic(
     """
     start = _to_date(start_date)
     end = _to_date(end_date)
-    ts_codes = [_normalize_instrument(i) for i in instruments]
+    ts_codes = _normalize_and_validate_instruments(
+        instruments, source="load_bak_basic", start_date=start, end_date=end
+    )
 
     cached = _CACHE.get("load_bak_basic", ts_codes, start.isoformat(), end.isoformat())
     if cached is not None:
-        logger.debug(f"load_bak_basic: 缓存命中")
+        logger.debug("load_bak_basic: 缓存命中")
         return cached
 
     placeholders = ",".join(["%s"] * len(ts_codes))
@@ -556,11 +600,13 @@ def load_cyq_perf(
     """
     start = _to_date(start_date)
     end = _to_date(end_date)
-    ts_codes = [_normalize_instrument(i) for i in instruments]
+    ts_codes = _normalize_and_validate_instruments(
+        instruments, source="load_cyq_perf", start_date=start, end_date=end
+    )
 
     cached = _CACHE.get("load_cyq_perf", ts_codes, start.isoformat(), end.isoformat())
     if cached is not None:
-        logger.debug(f"load_cyq_perf: 缓存命中")
+        logger.debug("load_cyq_perf: 缓存命中")
         return cached
 
     placeholders = ",".join(["%s"] * len(ts_codes))
@@ -598,7 +644,9 @@ def load_sector_data(
     """
     start = _to_date(start_date)
     end = _to_date(end_date)
-    ts_codes = [_normalize_instrument(i) for i in instruments]
+    ts_codes = _normalize_and_validate_instruments(
+        instruments, source="load_sector_data", start_date=start, end_date=end
+    )
 
     cached = _CACHE.get("load_sector_data", ts_codes, start.isoformat(), end.isoformat())
     if cached is not None:
@@ -639,7 +687,9 @@ def load_margin_detail(
     """
     start = _to_date(start_date)
     end = _to_date(end_date)
-    ts_codes = [_normalize_instrument(i) for i in instruments]
+    ts_codes = _normalize_and_validate_instruments(
+        instruments, source="load_margin_detail", start_date=start, end_date=end
+    )
 
     cached = _CACHE.get("load_margin_detail", ts_codes, start.isoformat(), end.isoformat())
     if cached is not None:
@@ -928,6 +978,9 @@ def build_static_factors(
     Returns:
         MultiIndex(datetime, instrument) DataFrame，包含所有 static_factors 字段
     """
+    instruments = _normalize_and_validate_instruments(
+        instruments, source="build_static_factors", start_date=start_date, end_date=end_date
+    )
     logger.info(f"build_static_factors: {len(instruments)} instruments, {start_date} ~ {end_date}")
 
     # 1. 加载各原始数据表

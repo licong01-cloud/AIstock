@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 
 from backend.services.strategy_package.live_inference import (
-    LiveInferencePreflightCheck,
+    _extract_malformed_ts_code_samples,
     LiveInferencePreflightError,
     LiveInferencePreflightResult,
     PREFLIGHT_CHECK_CONF_YAML,
@@ -384,3 +384,14 @@ def test_preflight_rejects_invalid_runtime_config_shape() -> None:
     qe_check = result.checks[0]
     assert qe_check.status == PREFLIGHT_STATUS_BLOCKED
     assert "object" in qe_check.message
+
+
+def test_extract_malformed_ts_code_samples_from_wsl_output() -> None:
+    output = (
+        "psycopg2 error params include 603819.S2026-06-01T01:59:30.734977444Z "
+        "and repeated 603819.S2026-06-01T01:59:30.734977444Z"
+    )
+
+    assert _extract_malformed_ts_code_samples(output) == [
+        "603819.S2026-06-01T01:59:30.734977444Z"
+    ]
