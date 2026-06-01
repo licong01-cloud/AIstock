@@ -2287,6 +2287,62 @@ def test_strategy_package_runtime_auto_generates_hmm_coefficients_on_miss(tmp_pa
     assert cached.candidates[0].component_scores["hmm"]["coefficients_path"] == snapshot.candidates[0].component_scores["hmm"]["coefficients_path"]
 
 
+def test_strategy_package_runtime_auto_generation_accepts_metadata_only_builtin_preset(tmp_path) -> None:
+    model_path = tmp_path / "models.json"
+    model_path.write_text("{}", encoding="utf-8")
+
+    class MetadataOnlyPresetProvider(FakeHMMSnapshotProvider):
+        def __init__(self) -> None:
+            super().__init__({"hmm_001": {"snapshot_id": "hmm_001", "model_path": str(model_path), "status": "completed"}})
+            self.calls = []
+
+        def _list_trading_days(self, start_date, end_date):
+            return [date(2024, 1, 1)]
+
+        def generate_daily_coefficients(self, snapshot_id, *, signal_preset, confirm_generate=False, as_of_date=None, effective_trade_date=None):
+            self.calls.append({"signal_preset": signal_preset, "as_of_date": as_of_date, "effective_trade_date": effective_trade_date})
+            output = tmp_path / "coefficients_preset_A_2024-01-02_2024-01-02.json"
+            output.write_text(
+                json.dumps(
+                    {
+                        "generation_mode": "daily_asof_prediction_v1",
+                        "snapshot_id": snapshot_id,
+                        "config_id": "cfg_001",
+                        "preset_key": signal_preset,
+                        "preset_coeffs": {"trending": 1.05, "neutral": 1.0, "fading": 0.96},
+                        "as_of_trade_date": as_of_date.isoformat(),
+                        "effective_trade_date": effective_trade_date.isoformat(),
+                        "daily_coefficients": {"2024-01-02": {"801780.SI": 1.05}},
+                        "stock_sector_map": {"000001.SZ": "801780.SI"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return {"status": "CREATED", "output_path": str(output)}
+
+    provider = MetadataOnlyPresetProvider()
+    manifest = ready_manifest_with_scores("pkg_hmm_metadata_preset", "000001.SZ", 1.0, 1)
+    runtime = StrategyPackageRuntime(hmm_runtime=SectorHMMRuntime(snapshot_provider=provider))
+
+    snapshot = runtime.build_signal_snapshot(
+        manifest=manifest,
+        trade_date=date(2024, 1, 2),
+        data_source="DB_HISTORICAL",
+        runtime_config={
+            "runtime_profile": {
+                "hmm": {
+                    "enabled": True,
+                    "model_snapshot_id": "hmm_001",
+                    "signal_preset": "preset_A",
+                }
+            }
+        },
+    )
+
+    assert provider.calls == [{"signal_preset": "preset_A", "as_of_date": date(2024, 1, 1), "effective_trade_date": date(2024, 1, 2)}]
+    assert snapshot.candidates[0].component_scores["hmm"]["coefficient"] == pytest.approx(1.05)
+
+
 def test_strategy_package_runtime_resolves_latest_ready_hmm_snapshot_from_model_config(tmp_path) -> None:
     old_model_path = tmp_path / "old_models.json"
     new_model_path = tmp_path / "new_models.json"
