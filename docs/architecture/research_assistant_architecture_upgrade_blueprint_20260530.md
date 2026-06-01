@@ -554,9 +554,9 @@ COMMENT ON TABLE qe_autonomous_evolution_runs IS 'QE 自主演进主循环运行
 | 自动扩展 curator | — | `memory_curator.py` | `test_memory_autogrow.py` |
 | 反思巩固 + 治理 | — | `memory_curator.py`（定时） | `test_memory_reflection.py` |
 | 知识图谱注入 | DEF-04 | `graph_context.py`、`build_context_pack` | `test_graph_injected_into_context.py` |
-| ReAct 回灌 | DEF-01 | `service.py:chat_turn` | `test_react_tool_loop.py` |
-| 能力闸门 | — | `service.py:assert_tool_in_catalog` | `test_tool_catalog_gate.py` |
-| 证据契约 | — | `compose_with_evidence_guard` | `test_evidence_guard.py` |
+| ReAct 回灌 | DEF-01 | `react_grounding.py:run_react_grounding_loop`（机制） + `service.py:chat_turn` / `_complete_chat_with_react_grounding`（消费）；commit `1dad08ed`；G1-central `research-assistant-react-grounding_20260601_062917_l2_ra-phase3-react-grounding_0721d5b3_runner-validation__0cd2e47ef0` | `test_react_tool_loop.py`、`test_service.py`、`20260601_ra_phase3_react_grounding_validation.md` |
+| 能力闸门 | — | `react_grounding.py:assert_tool_in_catalog`（机制） + `service.py:chat_turn` / `_ServiceReactMcpProvider`（消费）；commit `1dad08ed`；G1-central `research-assistant-react-grounding_20260601_062917_l2_ra-phase3-react-grounding_0721d5b3_runner-validation__0cd2e47ef0` | `test_tool_catalog_gate.py`、`test_core_no_adapter_import.py`、`20260601_ra_phase3_react_grounding_validation.md` |
+| 证据契约 | — | `react_grounding.py:compose_with_evidence_guard`（机制） + `service.py:chat_turn` / `_compose_assistant_reply`（消费）；commit `1dad08ed`；G1-central `research-assistant-react-grounding_20260601_062917_l2_ra-phase3-react-grounding_0721d5b3_runner-validation__0cd2e47ef0` | `test_evidence_guard.py`、`test_react_tool_loop.py`、`20260601_ra_phase3_react_grounding_validation.md` |
 | 外部研究 MCP | DEF-07 | `backend/mcp/modules/external_research.py`、façade | `test_external_research_evidence_first.py` |
 | Agent Teams | DEF-05 | `assistant_agent_runs`、`agent_teams.yaml`、orchestrator/worker | `test_agent_teams_parallel.py` 等 |
 | QE 自主闭环 | DEF-06 | `qe_evolution_service.py`、`qe_autonomous_evolution_runs` | `test_qe_autonomous_loop.py` |
