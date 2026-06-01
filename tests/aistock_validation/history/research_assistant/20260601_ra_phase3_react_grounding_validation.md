@@ -2,7 +2,8 @@
 
 - batch_id: `ra_phase3`
 - branch: `codex/ra-react-grounding-20260601`
-- implementation_commit: `1dad08ed2acf638f4fead2d9dda88aaa903e78e3`
+- implementation_commit: `5f0d7e08045f3eb7365a00eb988251113673b0dc`
+- pre_rebase_g1_central_commit: `1dad08ed2acf638f4fead2d9dda88aaa903e78e3`
 - validation_plan: `ra_phase3_react_grounding`
 - validated_workspace: `F:/Dev/AIstock_worktrees/ra-react-grounding-20260601`
 - runtime_boundary: no production `8001` / `3000` start, stop, restart, or process operation was performed.
@@ -37,6 +38,15 @@
   - `expected_branch=codex/ra-react-grounding-20260601`
   - `expected_commit=1dad08ed2acf638f4fead2d9dda88aaa903e78e3`
 
+
+## Terminal Review Evidence
+
+- Independent terminal-review G1-central run_id: `research-assistant-react-grounding_20260601_065251_l2_ra-phase3-react-grounding_c1028802_runner-validation__9699ab021d`
+- Independent review job_id: `valjob_20260601_065235_c1028802`
+- Independent review status: `passed`; `return_code=0`; `production_8001_touched=false`.
+- Independent review validated pre-rebase terminal-review commit `00561402fb9a9992e69aba4f1060c20289292614`; after rebase, G1-local was rerun against branch content on top of `origin/main`.
+- Independent review runner record: `tests/aistock_validation/history/research-assistant-react-grounding/20260601_065251_l2_ra-phase3-react-grounding_c1028802_runner-validation.md`
+
 ## Implementation Verification Summary
 
 - `backend/services/research_assistant/react_grounding.py` implements the provider-only ReAct core: `run_react_grounding_loop`, `assert_tool_in_catalog`, `compose_with_evidence_guard`, deterministic tool-call sorting, and internal-chain stripping.
@@ -69,7 +79,7 @@
 | CR-P3-11 | Phase 2 graph relation refs are consumed in ReAct prompt, not merely preserved in context pack | `test_react_phase1_phase2_context_regression.py` | true |
 | CR-P3-12 | Runtime config injects `max_tool_iterations`; core does not hard-code domain/server assumptions | `runtime_context.yaml`; `_react_grounding_config`; `test_core_no_adapter_import.py` | true |
 | CR-P3-13 | Validation plan is runner-enabled and allowlisted through catalog + nox + ownership rules | `test_plans.yaml`; `plan_catalog.py`; `noxfile.py`; `file_ownership.yaml`; G1-local | true |
-| CR-P3-14 | G1-central passed with `return_code=0`, `production_8001_touched=false`, and production gates noop | `research-assistant-react-grounding_20260601_062917_l2_ra-phase3-react-grounding_0721d5b3_runner-validation__0cd2e47ef0` | true |
+| CR-P3-14 | G1-central passed with `return_code=0`, `production_8001_touched=false`, and production gates noop | primary `research-assistant-react-grounding_20260601_062917_l2_ra-phase3-react-grounding_0721d5b3_runner-validation__0cd2e47ef0`; terminal-review `research-assistant-react-grounding_20260601_065251_l2_ra-phase3-react-grounding_c1028802_runner-validation__9699ab021d` | true |
 
 ## Production Gates
 
