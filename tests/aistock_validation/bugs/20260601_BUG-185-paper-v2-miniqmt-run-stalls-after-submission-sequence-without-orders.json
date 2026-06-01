@@ -33,7 +33,7 @@
   "first_seen_at": "2026-06-01T05:30:05.330176Z",
   "fix_branch": null,
   "fix_commit": "da0fe195dc7ab29550bbc834fbbfb4fe094d6ffd",
-  "fixed_at": "2026-06-01T13:49:57.057289Z",
+  "fixed_at": "2026-06-01T14:01:22.594849Z",
   "github_issue_number": 459,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/459",
   "last_seen_at": "2026-06-01T05:30:05.330176Z",
@@ -66,7 +66,7 @@
   "validation_evidence": [
     "CI checks_passed for PR #479 after rebase to include BUG-190",
     "python -m pytest -q backend/tests/paper_trading_v2/test_live_session.py -p no:cacheprovider -> 22 passed after rebase conflict resolution",
-    "git diff --check -> passed"
+    "close-sync PR #485 checks green"
   ],
   "verification_run_id": null
 }
