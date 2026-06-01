@@ -52,6 +52,7 @@ flowchart TD
 | Worktree state | Dirty or duplicate worktrees | Manual recovery and duplicated validation | Single-active worktree guard and resume-first behavior |
 | CI/Nightly intake | Runner outage promoted as code BUG | Wasted repair loops | Classify infra blockers and stop before BUG promotion |
 | Validation | T0/T1 changes run T2/T3 style validation | Slow feedback | Risk-tiered selector and batch shared validation |
+| Scope seed | Initial BUG scope misses shared root-cause files such as `backend/core/data_source_manager_impl.py` | Manual scope expansion before actual repair | File ownership must cover shared product support files and tests |
 | PR quality | `linked_issues: none`, `scope_check: not_provided` | Manual review and merge risk | PR Quality must infer BUG linkage and scope evidence |
 | Merge close | close-sync and cleanup require manual fallback | 10-60 minutes after merge | Merge finalizer and cleanup evidence |
 | Telemetry | Timing is reconstructed manually | Repeated debates without data | Default postmortem in PR/final report |
@@ -103,6 +104,16 @@ Every PR-ready or merged workflow should expose a `postmortem` next command. Thi
 - PR body and final output mention the postmortem command.
 - `postmortem` includes phase timing, known command durations, context token estimates, duplicate worktree count, stale PR check, and production gates.
 
+### 5.5 BUG-195 Follow-Up: Small-BUG Lower-Bound Path
+
+BUG-195 completed the full issue-to-cleanup loop in roughly 24 minutes, which is a major improvement over earlier 1-3 hour workflow loops, but its postmortem still exposed avoidable overhead. The next repair slice is therefore part of v2.2 efficiency hardening, not a new platform direction:
+
+- **Scope seeding**: product support files used by small operator-facing bugs must be covered by `file_ownership.yaml`. For the BUG-195 class, `backend/core/data_source_manager_impl.py`, watchlist service/router code, and focused watchlist tests map to the `watchlist` module so future runs do not require manual scope expansion.
+- **Metadata validation weight**: BUG registry JSON is workflow metadata. Registration and close-sync metadata should keep schema/module-quality validation, but they must not automatically add `validation_center_backend` to every product bug fix.
+- **CodeGraph reuse in worktrees**: `doctor` may report CodeGraph ready in canonical `F:\Dev\AIstock` while a new git worktree has no local `.codegraph` directory. Context and postmortem steps should reuse the canonical repo graph for matching commits/paths and only fall back to targeted `rg` when no usable graph index exists.
+- **Compact success output**: successful workflow commands keep stdout to compact PASS/summary fields. Full JSON, skipped-plan maps, raw check rollups, and verbose CodeGraph payloads stay in artifact files and require explicit `--output-format full-json` or `--output`.
+- **Quality boundary**: these optimizations do not skip tests. They replace broad default validation with narrower catalog/context selection and preserve production dependency/DDL gates.
+
 ## 6. Deferred But Required Follow-Up
 
 | Phase | Item | Reason for deferral |
@@ -151,6 +162,10 @@ This improves efficiency by allowing compatible issues to share context and vali
 | IWEH-008 | PR title/body issue references are available to PR Quality without GitHub API calls | Workflow env review plus unit test for `AISTOCK_PR_TITLE`/`AISTOCK_PR_BODY` |
 | IWEH-009 | Batch selector records shared scope and validation coverage | Unit test for `start-batch` payload and batch state |
 | IWEH-010 | Batch finish blocks changed files outside shared scope | Unit test for `finish-batch` with out-of-scope changed file |
+| IWEH-011 | Watchlist/shared quote files do not require manual scope expansion | `validation-select` unit test for `backend/core/data_source_manager_impl.py` + watchlist tests |
+| IWEH-012 | BUG registry metadata does not force `validation_center_backend` for product BUG fixes | `validation-select` unit test including BUG JSON plus product code |
+| IWEH-013 | CodeGraph context in a git worktree can reuse the canonical root index | Code intelligence adapter unit test for canonical worktree graph root |
+| IWEH-014 | CodeGraph detail failures downgrade to repo-index context, not full fallback, when the index is ready | Code intelligence adapter unit test for `repo_index_ready` context |
 
 ## 8. Expected Efficiency Impact
 

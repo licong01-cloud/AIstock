@@ -253,6 +253,26 @@ def test_validation_select_maps_catalog_plans_and_production_gates(capsys: pytes
     }
 
 
+def test_validation_select_keeps_watchlist_bug_on_narrow_plans(capsys: pytest.CaptureFixture[str]) -> None:
+    assert flow.main([
+        "validation-select",
+        "--module",
+        "watchlist",
+        "--changed-file",
+        "backend/core/data_source_manager_impl.py",
+        "--changed-file",
+        "backend/tests/watchlist/test_realtime_amount_units.py",
+        "--changed-file",
+        "tests/aistock_validation/bugs/20260602_BUG-195-watchlist-turnover-amount-column-displays-1000x-too-small-values.json",
+    ]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert "watchlist" in payload["impacted_modules"]
+    assert payload["ownership"]["unmatched_files"] == []
+    assert "validation_center_backend" not in payload["required_plans"]
+    assert payload["required_plans"] == ["l0", "validation_module_registry_l0"]
+
+
 def test_pr_check_reports_scope_and_dependency_gates(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     issue = _write_json(tmp_path / "bug.json", {
         "bug_id": "BUG-124",
