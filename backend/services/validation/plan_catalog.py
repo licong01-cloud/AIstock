@@ -31,6 +31,7 @@ ALLOWED_COMMAND_KEYS: dict[str, str] = {
     "nox_ra_phase0_baseline": "ra_phase0_baseline",
     "nox_ra_phase1_memory_tree": "ra_phase1_memory_tree",
     "nox_ra_phase2_graph_context": "ra_phase2_graph_context",
+    "nox_ra_phase3_react_grounding": "ra_phase3_react_grounding",
     "nox_research_assistant_backend": "research_assistant_backend",
     "nox_research_assistant_mcp_contract": "research_assistant_mcp_contract",
     "nox_research_assistant_ui": "research_assistant_ui",

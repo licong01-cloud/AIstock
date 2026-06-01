@@ -1021,6 +1021,79 @@ def ra_phase2_graph_context(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def ra_phase3_react_grounding(session: nox.Session) -> None:
+    """Run Phase 3 ReAct grounding, evidence guard, and anti-drift gates."""
+    phase3_paths = [
+        "backend/services/research_assistant/react_grounding.py",
+        "backend/services/research_assistant/service.py",
+        "backend/tests/research_assistant/test_react_tool_loop.py",
+        "backend/tests/research_assistant/test_tool_catalog_gate.py",
+        "backend/tests/research_assistant/test_evidence_guard.py",
+        "backend/tests/research_assistant/test_reflexion_retry.py",
+        "backend/tests/research_assistant/test_react_phase1_phase2_context_regression.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        "backend/tests/research_assistant/test_service.py",
+        "configs/research_assistant/runtime_context.yaml",
+        "docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md",
+        "tests/aistock_validation/history/research_assistant/20260601_ra_phase3_react_grounding_validation.md",
+        "tests/aistock_validation/catalog/test_plans.yaml",
+        "tests/aistock_validation/catalog/module_registry.yaml",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "backend/services/validation/plan_catalog.py",
+        "noxfile.py",
+    ]
+    session.run("git", "diff", "--check", external=True)
+    session.run(
+        sys.executable,
+        "-m",
+        "py_compile",
+        "backend/services/research_assistant/react_grounding.py",
+        "backend/services/research_assistant/service.py",
+        "backend/tests/research_assistant/test_react_tool_loop.py",
+        "backend/tests/research_assistant/test_tool_catalog_gate.py",
+        "backend/tests/research_assistant/test_evidence_guard.py",
+        "backend/tests/research_assistant/test_reflexion_retry.py",
+        "backend/tests/research_assistant/test_react_phase1_phase2_context_regression.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        "backend/tests/research_assistant/test_service.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/research_assistant/test_react_tool_loop.py",
+        "backend/tests/research_assistant/test_tool_catalog_gate.py",
+        "backend/tests/research_assistant/test_evidence_guard.py",
+        "backend/tests/research_assistant/test_reflexion_retry.py",
+        "backend/tests/research_assistant/test_react_phase1_phase2_context_regression.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        "backend/tests/research_assistant/test_service.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_validation_catalog_integrity.py",
+        "--output-json",
+        "tmp/validation/catalog/ra_phase3_react_grounding_integrity.json",
+        "--fail-on-warning",
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_module_ownership_scan.py",
+        "--output-json",
+        "tmp/validation/module_ownership/ra_phase3_react_grounding_paths.json",
+        "--summary-md",
+        "tmp/validation/module_ownership/ra_phase3_react_grounding_paths.md",
+        "--fail-on-unmapped",
+        "--fail-on-ambiguous",
+        *phase3_paths,
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
 def research_assistant_backend(session: nox.Session) -> None:
     """Run Research Assistant backend/schema/router tests without services."""
     session.run(
