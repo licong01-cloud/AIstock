@@ -190,6 +190,74 @@ def test_doctor_reads_code_intelligence_catalog(tmp_path: Path, monkeypatch) -> 
     assert payload["catalog"]["codegraph"]["version"] == "0.9.4"
 
 
+def test_codegraph_status_sanitizes_successful_external_output(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / ".codegraph").mkdir()
+    (tmp_path / ".codegraph" / "codegraph.db").write_text("db", encoding="utf-8")
+    monkeypatch.setattr(adapter, "_codegraph_command", lambda: "codegraph")
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
+    )
+
+    def fake_run(args, cwd=None, timeout=30):
+        if args == ["codegraph", "--version"]:
+            return {"ok": True, "returncode": 0, "stdout": "\x1b[32m0.9.4\x1b[0m", "stderr": ""}
+        return {
+            "ok": True,
+            "returncode": 0,
+            "stdout": (
+                "\x1b[1mCodeGraph Status\x1b[0m\n"
+                "  Files:     1,921\n"
+                "  Nodes:     40,678\n"
+                "  Edges:     109,343\n"
+                "  DB Size:   102.57 MB\n"
+                "\x1b[32m[OK]\x1b[0m Index is up to date"
+            ),
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(adapter, "_run_command", fake_run)
+
+    payload = adapter.codegraph_status(tmp_path)
+
+    assert payload["version"] == "0.9.4"
+    assert payload["version_check"] == {"ok": True, "returncode": 0, "stdout_summary": "0.9.4"}
+    assert payload["status_check"] == {"ok": True, "returncode": 0, "stdout_summary": "Index is up to date"}
+    assert payload["index_summary"] == {
+        "files": 1921,
+        "nodes": 40678,
+        "edges": 109343,
+        "db_size": "102.57 MB",
+        "up_to_date": True,
+    }
+    assert "stdout" not in payload["status_check"]
+    assert "\x1b" not in json.dumps(payload)
+
+
+def test_codegraph_status_preserves_compact_failure_output(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(adapter, "_codegraph_command", lambda: "codegraph")
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
+    )
+
+    def fake_run(args, cwd=None, timeout=30):
+        if args == ["codegraph", "--version"]:
+            return {"ok": True, "returncode": 0, "stdout": "0.9.4", "stderr": ""}
+        return {"ok": False, "returncode": 2, "stdout": "\x1b[31mbad\x1b[0m", "stderr": "failed"}
+
+    monkeypatch.setattr(adapter, "_run_command", fake_run)
+
+    payload = adapter.codegraph_status(tmp_path)
+
+    assert payload["status_check"]["ok"] is False
+    assert payload["status_check"]["stdout"] == "bad"
+    assert payload["status_check"]["stderr"] == "failed"
+    assert "\x1b" not in json.dumps(payload)
+
+
 def test_summary_markdown_contains_warning_only_artifact_refs(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(adapter, "_codegraph_command", lambda: None)
     monkeypatch.setattr(

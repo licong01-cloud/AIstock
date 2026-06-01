@@ -18,6 +18,7 @@ DEFAULT_CODEGRAPH_VERSION = "0.9.4"
 DEFAULT_UNDERSTAND_ANYTHING_VERSION = "v2.7.3"
 CATALOG_PATH = REPO_ROOT / "tests" / "aistock_validation" / "catalog" / "code_intelligence.yaml"
 DEFAULT_UA_MODULES = ["issue_workflow", "validation_center", "paper_v2", "research_assistant", "qe"]
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 def _load_catalog(root: Path | None = None) -> dict[str, Any]:
@@ -89,6 +90,42 @@ def _run_command(args: list[str], cwd: Path | None = None, timeout: int = 30) ->
         return {"ok": False, "returncode": None, "stdout": "", "stderr": str(exc)}
 
 
+def _strip_ansi(text: str | None) -> str:
+    return ANSI_ESCAPE_RE.sub("", str(text or ""))
+
+
+def _compact_text(text: str | None, *, max_chars: int = 2000) -> str:
+    clean = _strip_ansi(text).strip()
+    if len(clean) <= max_chars:
+        return clean
+    omitted = len(clean) - max_chars
+    return f"{clean[:max_chars]}... <truncated {omitted} chars>"
+
+
+def _compact_command_result(
+    result: dict[str, Any],
+    *,
+    success_summary: str | None = None,
+    include_output: bool = False,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "ok": bool(result.get("ok")),
+        "returncode": result.get("returncode"),
+    }
+    if "skipped" in result:
+        payload["skipped"] = result.get("skipped")
+    if success_summary:
+        payload["stdout_summary"] = success_summary
+    if include_output or not result.get("ok"):
+        stdout = _compact_text(str(result.get("stdout") or ""))
+        stderr = _compact_text(str(result.get("stderr") or ""))
+        if stdout:
+            payload["stdout"] = stdout
+        if stderr:
+            payload["stderr"] = stderr
+    return payload
+
+
 def _git(args: list[str], cwd: Path | None = None, check: bool = False) -> dict[str, Any]:
     return _run_command(["git", *args], cwd=cwd, timeout=30)
 
@@ -119,6 +156,24 @@ def _parse_codegraph_version(stdout: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _parse_codegraph_status(stdout: str) -> dict[str, Any]:
+    clean = _strip_ansi(stdout)
+    metrics: dict[str, Any] = {}
+    for label, key in (
+        ("Files", "files"),
+        ("Nodes", "nodes"),
+        ("Edges", "edges"),
+    ):
+        match = re.search(rf"^\s*{label}:\s*([\d,]+)\s*$", clean, re.MULTILINE)
+        if match:
+            metrics[key] = int(match.group(1).replace(",", ""))
+    db_match = re.search(r"^\s*DB Size:\s*([0-9.]+\s+\w+)\s*$", clean, re.MULTILINE)
+    if db_match:
+        metrics["db_size"] = db_match.group(1)
+    metrics["up_to_date"] = "Index is up to date" in clean
+    return metrics
+
+
 def _codegraph_command() -> str | None:
     override = os.environ.get("AISTOCK_CODEGRAPH_BIN")
     if override:
@@ -146,6 +201,7 @@ def codegraph_status(root: Path | None = None, *, skip_external: bool = False) -
         version_result = _run_command([command, "--version"], cwd=root, timeout=20)
         version = _parse_codegraph_version(str(version_result.get("stdout") or version_result.get("stderr") or ""))
         status_result = _run_command([command, "status", str(root)], cwd=root, timeout=30)
+    status_summary = _parse_codegraph_status(str(status_result.get("stdout") or ""))
     index_path = root / ".codegraph" / "codegraph.db"
     git = _git_snapshot(root)
     status = "ok" if available and index_path.exists() else ("missing_index" if available else "unavailable")
@@ -159,10 +215,17 @@ def codegraph_status(root: Path | None = None, *, skip_external: bool = False) -
         "command": command,
         "expected_version": DEFAULT_CODEGRAPH_VERSION,
         "version": version,
-        "version_check": version_result,
+        "version_check": _compact_command_result(
+            version_result,
+            success_summary=version or _compact_text(str(version_result.get("stdout") or ""), max_chars=120),
+        ),
         "index_path": _repo_rel(index_path, root),
         "index_exists": index_path.exists(),
-        "status_check": status_result,
+        "status_check": _compact_command_result(
+            status_result,
+            success_summary="Index is up to date" if status_summary.get("up_to_date") else None,
+        ),
+        "index_summary": status_summary,
         "git_commit": git.get("head"),
         "working_tree_dirty": git.get("dirty"),
         "channel": "mcp_or_cli",
