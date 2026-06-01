@@ -300,7 +300,7 @@ modules:
     description: Tool-use loop, tool-result message backfill, grounded answer composition, and retry recovery.
     description_zh: 覆盖工具调用循环、工具结果回灌、接地回答生成与失败恢复。
     test_plans:
-      required_on_change: [l0, ra_phase0_baseline, research_assistant_backend]
+      required_on_change: [l0, ra_phase0_baseline, ra_phase5_agent_teams, research_assistant_backend]
       recommended: [research_assistant_mcp_contract]
   - module_id: research_assistant.evidence_guard
     display_name: Research Assistant Evidence Guard

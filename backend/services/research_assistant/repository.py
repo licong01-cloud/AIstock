@@ -154,6 +154,12 @@ TABLES: dict[str, dict[str, Any]] = {
         "json": {"payload_json", "evidence_refs"},
         "search": {"external_event_id", "session_id", "event_type", "risk_level"},
     },
+    "agent_runs": {
+        "table": "assistant_agent_runs",
+        "id": "agent_run_id",
+        "json": {"input_json", "result_json"},
+        "search": {"agent_run_id", "parent_task_id", "agent_key", "role", "status", "model_profile_id", "trace_id"},
+    },
     "model_profiles": {
         "table": "assistant_model_profiles",
         "id": "model_profile_id",

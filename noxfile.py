@@ -329,6 +329,7 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         "scripts/seed_dataset_refresh_audit.py",
         "scripts/aistock_data_quality_smoke.py",
         "backend/services/validation/plan_catalog.py",
+        "backend/services/validation/catalog_integrity.py",
         "noxfile.py",
         external=True,
     )
@@ -849,6 +850,7 @@ def ra_phase0_baseline(session: nox.Session) -> None:
         "tests/aistock_validation/catalog/file_ownership.yaml",
         "tests/aistock_validation/catalog/test_plans.yaml",
         "backend/services/validation/plan_catalog.py",
+        "backend/services/validation/catalog_integrity.py",
         "noxfile.py",
     ]
     session.run("git", "diff", "--check", external=True)
@@ -910,6 +912,7 @@ def ra_phase1_memory_tree(session: nox.Session) -> None:
         "tests/aistock_validation/history/research_assistant/20260601_ra_phase1_memory_tree_validation.md",
         "tests/aistock_validation/catalog/test_plans.yaml",
         "backend/services/validation/plan_catalog.py",
+        "backend/services/validation/catalog_integrity.py",
         "noxfile.py",
     ]
     session.run("git", "diff", "--check", external=True)
@@ -976,6 +979,7 @@ def ra_phase2_graph_context(session: nox.Session) -> None:
         "tests/aistock_validation/catalog/module_registry.yaml",
         "tests/aistock_validation/catalog/file_ownership.yaml",
         "backend/services/validation/plan_catalog.py",
+        "backend/services/validation/catalog_integrity.py",
         "noxfile.py",
     ]
     session.run("git", "diff", "--check", external=True)
@@ -1040,6 +1044,7 @@ def ra_phase3_react_grounding(session: nox.Session) -> None:
         "tests/aistock_validation/catalog/module_registry.yaml",
         "tests/aistock_validation/catalog/file_ownership.yaml",
         "backend/services/validation/plan_catalog.py",
+        "backend/services/validation/catalog_integrity.py",
         "noxfile.py",
     ]
     session.run("git", "diff", "--check", external=True)
@@ -1123,6 +1128,7 @@ def ra_phase4_external_research(session: nox.Session) -> None:
         "tests/aistock_validation/catalog/module_registry.yaml",
         "tests/aistock_validation/catalog/file_ownership.yaml",
         "backend/services/validation/plan_catalog.py",
+        "backend/services/validation/catalog_integrity.py",
         "noxfile.py",
         ".mcp.json",
     ]
@@ -1189,6 +1195,89 @@ def ra_phase4_external_research(session: nox.Session) -> None:
         "--fail-on-unmapped",
         "--fail-on-ambiguous",
         *phase4_paths,
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
+def ra_phase5_agent_teams(session: nox.Session) -> None:
+    """Run Phase 5 Agent Teams DDL, runtime, reduce, and isolation gates."""
+    phase5_paths = [
+        "backend/db/migrations/ra_upgrade/002_agent_teams.sql",
+        "backend/db/init_research_assistant_schema_20260521.py",
+        "configs/research_assistant/agent_teams.yaml",
+        "backend/services/research_assistant/agent_teams/__init__.py",
+        "backend/services/research_assistant/agent_teams/models.py",
+        "backend/services/research_assistant/agent_teams/config.py",
+        "backend/services/research_assistant/agent_teams/providers.py",
+        "backend/services/research_assistant/agent_teams/runtime.py",
+        "backend/services/research_assistant/service.py",
+        "backend/services/research_assistant/repository.py",
+        "backend/services/validation/catalog_integrity.py",
+        "backend/tests/research_assistant/test_agent_teams_ddl_contract.py",
+        "backend/tests/research_assistant/test_agent_teams_config.py",
+        "backend/tests/research_assistant/test_agent_teams_parallel.py",
+        "backend/tests/research_assistant/test_orchestrator_reduce.py",
+        "backend/tests/research_assistant/test_worker_tool_isolation.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        "tests/aistock_validation/history/research_assistant/20260602_ra_phase5_agent_teams_validation.md",
+        "tests/aistock_validation/catalog/test_plans.yaml",
+        "tests/aistock_validation/catalog/module_registry.yaml",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "backend/services/validation/plan_catalog.py",
+        "backend/services/validation/catalog_integrity.py",
+        "noxfile.py",
+    ]
+    session.run("git", "diff", "--check", external=True)
+    session.run(
+        sys.executable,
+        "-m",
+        "py_compile",
+        "backend/services/research_assistant/agent_teams/__init__.py",
+        "backend/services/research_assistant/agent_teams/models.py",
+        "backend/services/research_assistant/agent_teams/config.py",
+        "backend/services/research_assistant/agent_teams/providers.py",
+        "backend/services/research_assistant/agent_teams/runtime.py",
+        "backend/services/research_assistant/service.py",
+        "backend/services/research_assistant/repository.py",
+        "backend/services/validation/catalog_integrity.py",
+        "backend/tests/research_assistant/test_agent_teams_ddl_contract.py",
+        "backend/tests/research_assistant/test_agent_teams_config.py",
+        "backend/tests/research_assistant/test_agent_teams_parallel.py",
+        "backend/tests/research_assistant/test_orchestrator_reduce.py",
+        "backend/tests/research_assistant/test_worker_tool_isolation.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/research_assistant/test_agent_teams_ddl_contract.py",
+        "backend/tests/research_assistant/test_agent_teams_config.py",
+        "backend/tests/research_assistant/test_agent_teams_parallel.py",
+        "backend/tests/research_assistant/test_orchestrator_reduce.py",
+        "backend/tests/research_assistant/test_worker_tool_isolation.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_validation_catalog_integrity.py",
+        "--output-json",
+        "tmp/validation/catalog/ra_phase5_agent_teams_integrity.json",
+        "--fail-on-warning",
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_module_ownership_scan.py",
+        "--output-json",
+        "tmp/validation/module_ownership/ra_phase5_agent_teams_paths.json",
+        "--summary-md",
+        "tmp/validation/module_ownership/ra_phase5_agent_teams_paths.md",
+        "--fail-on-unmapped",
+        "--fail-on-ambiguous",
+        *phase5_paths,
         external=True,
     )
 

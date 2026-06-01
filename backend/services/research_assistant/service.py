@@ -78,6 +78,142 @@ from .runtime_config import DEFAULT_ENVIRONMENT, REPO_ROOT, RUNTIME_CONFIG_KEY, 
 from .domain_ontology import domain_prompt_key
 from .mcp_catalog_sync import enrich_mcp_server_record, default_mcp_servers, default_mcp_tools, workflow_capabilities as catalog_workflow_capabilities
 from .tool_router import route_request
+from .agent_teams import AgentTeamsRuntime, AgentTeamsRuntimeProviders, WorkerRunResult, load_agent_teams_config
+from .agent_teams.models import WorkerTask
+
+
+class _ServiceAgentRunStore:
+    def __init__(self, service: Any) -> None:
+        self.service = service
+
+    def queue_run(self, task: WorkerTask, *, agent_run_id: str, model_profile_id: str | None, trace_id: str | None) -> None:
+        self.service.repository.create_record(
+            "agent_runs",
+            {
+                "agent_run_id": agent_run_id,
+                "parent_task_id": task.parent_task_id,
+                "agent_key": task.agent_key,
+                "role": task.role,
+                "status": "queued",
+                "input_json": task.input_json,
+                "result_json": {},
+                "model_profile_id": model_profile_id,
+                "trace_id": trace_id,
+            },
+        )
+
+    def finish_run(self, result: WorkerRunResult) -> None:
+        status = "succeeded" if result.status == "succeeded" else "failed"
+        self.service.repository.update_record(
+            "agent_runs",
+            result.agent_run_id,
+            {
+                "status": status,
+                "result_json": result.as_reduce_item(),
+                "trace_id": result.trace_id,
+            },
+        )
+
+
+class _ServiceAgentContextProvider:
+    def __init__(self, service: Any) -> None:
+        self.service = service
+
+    def build_for_worker(self, task: WorkerTask, agent: Any) -> dict[str, Any]:
+        return self.service.build_context_pack(
+            ContextPackBuildRequest(
+                task_id=task.parent_task_id,
+                agent_id=task.agent_key,
+                model_profile=agent.model_role,
+                query=task.objective,
+                budget_tokens=1800,
+            )
+        )
+
+
+class _ServiceAgentCatalogProvider:
+    def __init__(self, service: Any) -> None:
+        self.service = service
+
+    def entries_for_worker(self, agent: Any) -> list[ToolCatalogEntry]:
+        all_entries = self.service._react_tool_catalog_entries()
+        allowed = agent.allowed_tool_pairs()
+        return [entry for entry in all_entries if (entry.server_key, entry.tool_name) in allowed]
+
+
+class _ServiceAgentWorkerExecutor:
+    def __init__(self, service: Any, *, user_message: str) -> None:
+        self.service = service
+        self.user_message = user_message
+
+    def run_worker(self, task: WorkerTask, agent: Any, context_pack: dict[str, Any], catalog_entries: list[ToolCatalogEntry]) -> WorkerRunResult:
+        cards: dict[str, Any] = {"agent_key": task.agent_key, "action_proposals": []}
+        provider = _ServiceReactMcpProvider(
+            service=self.service,
+            conversation_id=str(task.input_json.get("conversation_id") or "agent_team"),
+            task={"task_id": task.parent_task_id},
+            context_pack=context_pack,
+            cards=cards,
+            user_message=self.user_message,
+        )
+        def model_complete(messages: list[dict[str, Any]]) -> ModelTurn:
+            context_summary = json.dumps(
+                {
+                    "agent_key": task.agent_key,
+                    "context_pack_id": context_pack.get("context_pack_id"),
+                    "route_reason": (context_pack.get("pack_json") or {}).get("route_reason"),
+                    "graph_relation_refs": (context_pack.get("pack_json") or {}).get("graph_relation_refs", [])[:3],
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            return ModelTurn(
+                content=f"{task.agent_key} completed with isolated context; source=agent_team_context as_of={utc_now().date().isoformat()} {context_summary}",
+                provider="agent_team_worker",
+                model=agent.model_role,
+                duration_ms=0,
+                usage={},
+            )
+        result = run_react_grounding_loop(
+            messages=[
+                {"role": "system", "content": f"Agent Team worker {task.agent_key}; allowed_tools={sorted(agent.allowed_tool_pairs())}"},
+                {"role": "user", "content": task.objective},
+            ],
+            model_complete=model_complete,
+            mcp_provider=provider,
+            catalog_entries=catalog_entries,
+            config=ReactGroundingConfig(max_tool_iterations=agent.max_tool_iterations, evidence_required=True),
+        )
+        status = "succeeded" if result.evidence_guard.allowed else "failed"
+        return WorkerRunResult(
+            agent_run_id="service_runtime_pending",
+            parent_task_id=task.parent_task_id,
+            agent_key=task.agent_key,
+            role=task.role,
+            status=status,
+            task_order=task.task_order,
+            summary=result.final_text,
+            artifacts=tuple(str(ref) for tool_result in result.tool_results for ref in tool_result.artifact_refs),
+            evidence_refs=tuple(sorted({ref for tool_result in result.tool_results for ref in tool_result.source_refs} | {"agent_team_context"})),
+            result_json={"react_stopped_reason": result.stopped_reason, "tool_result_count": len(result.tool_results), "cards": cards},
+            context_pack_id=str(context_pack.get("context_pack_id") or ""),
+        )
+
+
+class _ServiceAgentCurator:
+    def create_candidates(self, parent_task_id: str, reduce_json: dict[str, Any]) -> list[dict[str, Any]]:
+        evidence_refs = reduce_json.get("evidence_refs") if isinstance(reduce_json.get("evidence_refs"), list) else []
+        if not evidence_refs:
+            return []
+        return [
+            {
+                "memory_type": "analysis_note",
+                "tree_path": "personal.task.agent_team_progress",
+                "approval_status": "draft",
+                "content_text": str(reduce_json.get("assistant_text") or ""),
+                "provenance_json": {"parent_task_id": parent_task_id, "source": "agent_team_reduce", "evidence_refs": evidence_refs},
+            }
+        ]
 
 
 class _ServiceReactMcpProvider:
@@ -769,6 +905,50 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         self.llm_client = llm_client or ResearchAssistantLlmClient()
         self.environment = environment
         self.context_budget_planner = ContextBudgetPlanner()
+
+
+    def run_agent_team(self, *, parent_task_id: str, objective: str, requested_agent_keys: list[str] | None = None) -> dict[str, Any]:
+        config = load_agent_teams_config(REPO_ROOT / "configs/research_assistant/agent_teams.yaml")
+        runtime = AgentTeamsRuntime(
+            config=config,
+            providers=AgentTeamsRuntimeProviders(
+                run_store=_ServiceAgentRunStore(self),
+                context_provider=_ServiceAgentContextProvider(self),
+                worker_executor=_ServiceAgentWorkerExecutor(self, user_message=objective),
+                tool_catalog_provider=_ServiceAgentCatalogProvider(self),
+                curator=_ServiceAgentCurator(),
+            ),
+            id_factory=lambda task: new_id(f"aar_{task.task_order:03d}_{task.agent_key}"),
+        )
+        result = runtime.run(parent_task_id=parent_task_id, objective=objective, requested_agent_keys=requested_agent_keys)
+        for candidate in result.memory_candidates:
+            if not candidate.get("provenance_json"):
+                continue
+            self.create_memory(MemoryCreate(
+                memory_type=str(candidate.get("memory_type") or "analysis_note"),
+                namespace="personal",
+                subject_key=str(candidate.get("tree_path") or "personal.task.agent_team_progress"),
+                title="Agent Teams progress candidate",
+                content_text=str(candidate.get("content_text") or ""),
+                content_json={"source": "agent_team_reduce"},
+                evidence_refs=list((candidate.get("provenance_json") or {}).get("evidence_refs") or []),
+                approval_status="draft",
+                tree_path=str(candidate.get("tree_path") or "personal.task.agent_team_progress"),
+                scope="personal",
+                node_type="fact",
+                provenance_json=dict(candidate.get("provenance_json") or {}),
+                trust_level="assistant_inferred",
+            ))
+        return {
+            "schema_version": "research_assistant_agent_team_result_v1",
+            "parent_task_id": result.parent_task_id,
+            "status": result.status,
+            "assistant_text": result.assistant_text,
+            "reduce_json": result.reduce_json,
+            "worker_results": [item.as_reduce_item() for item in result.worker_results],
+            "memory_candidates": list(result.memory_candidates),
+            "trace": list(result.trace),
+        }
 
     def runtime_code_visibility(self) -> dict[str, Any]:
         current_commit = _git_output(["rev-parse", "HEAD"])

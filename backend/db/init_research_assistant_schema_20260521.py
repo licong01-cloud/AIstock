@@ -534,6 +534,24 @@ BASE_DDL: list[str] = [
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """,
+
+    """
+    CREATE TABLE IF NOT EXISTS assistant_agent_runs (
+        agent_run_id TEXT PRIMARY KEY,
+        parent_task_id TEXT NOT NULL,
+        agent_key TEXT NOT NULL,
+        role TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'queued',
+        input_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        result_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        model_profile_id TEXT,
+        trace_id TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT ck_assistant_agent_runs_status CHECK (status IN ('queued','running','succeeded','failed','cancelled'))
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_aar_parent ON assistant_agent_runs(parent_task_id, status)",
     """
     CREATE TABLE IF NOT EXISTS assistant_model_profiles (
         model_profile_id TEXT PRIMARY KEY,

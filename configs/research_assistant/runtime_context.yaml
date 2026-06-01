@@ -937,6 +937,7 @@ query_limits:
   api_list_issue_candidates: 50
   api_list_external_sessions: 50
   api_list_external_events: 50
+  api_list_agent_runs: 100
   api_list_model_profiles: 200
   api_list_routing_policies: 200
   api_list_prompt_nodes: 100

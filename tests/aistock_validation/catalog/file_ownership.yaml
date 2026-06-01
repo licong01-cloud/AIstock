@@ -428,8 +428,12 @@ rules:
     priority: 100
     include:
       - backend/services/research_assistant/agent_teams/**
+      - backend/db/migrations/ra_upgrade/002_agent_teams.sql
       - configs/research_assistant/agent_teams.yaml
-      - backend/tests/research_assistant/test_agent_teams_parallel.py
+      - backend/tests/research_assistant/test_agent_teams_*.py
+      - backend/tests/research_assistant/test_orchestrator_reduce.py
+      - backend/tests/research_assistant/test_worker_tool_isolation.py
+      - tests/aistock_validation/history/research_assistant/*ra_phase5_agent_teams*.md
     primary_module: research_assistant.agent_teams
     impact_modules: [research_assistant.product_core, research_assistant.aistock_domain_adapter]
     layer: backend_service
