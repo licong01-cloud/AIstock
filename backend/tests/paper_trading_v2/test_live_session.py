@@ -280,6 +280,29 @@ class FakeMiniQMTLiveDayHelper:
         )
 
 
+class PlatformDataDownMiniQMTLiveDayHelper:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def run_day(self, *, portfolio_id, trade_date, runtime_config=None, fee_model=None):
+        self.calls.append(
+            {
+                "portfolio_id": portfolio_id,
+                "trade_date": trade_date,
+                "runtime_config": runtime_config,
+                "fee_model": fee_model,
+            }
+        )
+        raise DataUnavailableError(
+            "WSL live QE model inference failed",
+            context={
+                "package_id": "pkg_test",
+                "trade_date": trade_date.isoformat(),
+                "malformed_ts_code_samples": ["603819.S2026-06-01T01:59:30Z"],
+            },
+        )
+
+
 class BrokerDownMiniQMTLiveDayHelper:
     def __init__(self) -> None:
         self.calls: list[dict] = []
@@ -593,6 +616,91 @@ def test_minqmt_live_session_waits_for_broker_before_cutoff() -> None:
     assert paper_repo.runs == {}
     event_types = [event["event_type"] for event in paper_repo.list_session_events(session.session_id)]
     assert "MINIQMT_LIVE_WAITING_BROKER" in event_types
+
+
+def test_minqmt_live_session_throttles_repeated_platform_data_live_inference_retry() -> None:
+    paper_repo, portfolio_id = make_portfolio_repo(
+        data_source=MinuteDataSource.MINIQMT_REALTIME,
+        broker_backend="minqmt_sim",
+    )
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.MINIQMT_REALTIME,
+        runtime_config={
+            "paper_v2_session": {"signal_data_source": "DB_HISTORICAL"},
+            "trade_window_policy": {
+                "prepare_start": "08:50",
+                "submit_windows": [{"start": "09:25", "end": "11:30"}],
+                "final_submit_cutoff": "14:55",
+                "platform_data_retry_after_seconds": 600,
+            },
+        },
+    )
+    live_executor = PaperTradingLiveMinuteExecutor(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=ExplodingLiveMarket(),  # type: ignore[arg-type]
+    )
+    platform_down = PlatformDataDownMiniQMTLiveDayHelper()
+    live_executor.day_helper = platform_down  # type: ignore[assignment]
+    runner = PaperTradingSessionRunner(repository=paper_repo, live_executor=live_executor)
+
+    first = runner.tick(session.session_id, as_of_time=datetime(2024, 1, 2, 9, 30))
+    second = runner.tick(session.session_id, as_of_time=datetime(2024, 1, 2, 9, 31))
+
+    assert first.session.status == PaperSessionStatus.LIVE_WAITING_PLATFORM_DATA
+    assert second.session.status == PaperSessionStatus.LIVE_WAITING_PLATFORM_DATA
+    assert len(platform_down.calls) == 1
+    assert paper_repo.runs == {}
+    events = paper_repo.list_session_events(session.session_id)
+    event_types = [event["event_type"] for event in events]
+    assert event_types.count("MINIQMT_LIVE_WAITING_PLATFORM_DATA") == 1
+    assert event_types.count("MINIQMT_LIVE_PLATFORM_DATA_RETRY_THROTTLED") == 1
+    wait_event = next(event for event in events if event["event_type"] == "MINIQMT_LIVE_WAITING_PLATFORM_DATA")
+    throttle_event = next(event for event in events if event["event_type"] == "MINIQMT_LIVE_PLATFORM_DATA_RETRY_THROTTLED")
+    assert wait_event["context"]["platform_data_retry"]["sql_storm_guard"] is True
+    assert throttle_event["context"]["platform_data_retry"]["retry_allowed"] is False
+
+
+def test_minqmt_live_session_retries_platform_data_after_retry_interval() -> None:
+    paper_repo, portfolio_id = make_portfolio_repo(
+        data_source=MinuteDataSource.MINIQMT_REALTIME,
+        broker_backend="minqmt_sim",
+    )
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.MINIQMT_REALTIME,
+        runtime_config={
+            "paper_v2_session": {"signal_data_source": "DB_HISTORICAL"},
+            "trade_window_policy": {
+                "prepare_start": "08:50",
+                "submit_windows": [{"start": "09:25", "end": "11:30"}],
+                "final_submit_cutoff": "14:55",
+                "platform_data_retry_after_seconds": 60,
+            },
+        },
+    )
+    live_executor = PaperTradingLiveMinuteExecutor(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=ExplodingLiveMarket(),  # type: ignore[arg-type]
+    )
+    platform_down = PlatformDataDownMiniQMTLiveDayHelper()
+    live_executor.day_helper = platform_down  # type: ignore[assignment]
+    runner = PaperTradingSessionRunner(repository=paper_repo, live_executor=live_executor)
+
+    runner.tick(session.session_id, as_of_time=datetime(2024, 1, 2, 9, 30))
+    runner.tick(session.session_id, as_of_time=datetime(2024, 1, 2, 9, 31, 1))
+
+    assert len(platform_down.calls) == 2
+    events = paper_repo.list_session_events(session.session_id)
+    event_types = [event["event_type"] for event in events]
+    assert event_types.count("MINIQMT_LIVE_WAITING_PLATFORM_DATA") == 2
+    assert "MINIQMT_LIVE_PLATFORM_DATA_RETRY_THROTTLED" not in event_types
 
 
 def test_minqmt_live_session_treats_submit_timeout_as_broker_wait_before_cutoff() -> None:
