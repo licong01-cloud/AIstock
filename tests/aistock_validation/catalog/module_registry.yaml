@@ -289,7 +289,7 @@ modules:
     description: Knowledge graph neighbor selection and graph_relation_refs injection into assistant context packs.
     description_zh: 覆盖知识图谱邻居选择与 graph_relation_refs 推理注入。
     test_plans:
-      required_on_change: [l0, ra_phase0_baseline, research_assistant_backend]
+      required_on_change: [l0, ra_phase0_baseline, ra_phase2_graph_context, research_assistant_backend]
       recommended: [research_assistant_mcp_contract]
   - module_id: research_assistant.react_grounding
     display_name: Research Assistant ReAct Grounding
