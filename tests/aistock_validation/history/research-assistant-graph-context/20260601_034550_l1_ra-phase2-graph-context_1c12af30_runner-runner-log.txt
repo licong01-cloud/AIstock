@@ -1,0 +1,32 @@
+nox > Running session ra_phase2_graph_context
+nox > git diff --check
+nox > C:\Users\lc999\miniconda3\envs\aistock\python.exe -m py_compile backend/services/research_assistant/graph_context.py backend/tests/research_assistant/test_graph_context_expansion.py backend/tests/research_assistant/test_graph_injected_into_context.py backend/tests/research_assistant/test_core_no_adapter_import.py
+nox > python -m pytest backend/tests/research_assistant/test_graph_context_expansion.py backend/tests/research_assistant/test_graph_injected_into_context.py backend/tests/research_assistant/test_core_no_adapter_import.py -q -p no:cacheprovider
+......                                                                   [100%]
+6 passed in 2.01s
+nox > C:\Users\lc999\miniconda3\envs\aistock\python.exe scripts/aistock_validation_catalog_integrity.py --output-json tmp/validation/catalog/ra_phase2_graph_context_integrity.json --fail-on-warning
+{
+  "schema_version": "aistock_validation_catalog_integrity_v1",
+  "generated_at": "2026-06-01T03:45:49.927609+00:00",
+  "repo_root": "F:\\Dev\\AIstock_worktrees\\ra-graph-context-20260601",
+  "state": "passed",
+  "summary": {
+    "error_count": 0,
+    "warning_count": 0,
+    "finding_count": 0,
+    "plans": 40,
+    "runner_enabled_plans": 23,
+    "modules": 74,
+    "ui_targets": 50,
+    "file_ownership_rules": 64,
+    "resource_policies": 9,
+    "nox_sessions": 51,
+    "workflow_nox_sessions": 15,
+    "production_8001_touched": false,
+    "production_db_touched": false
+  },
+  "findings": []
+}
+nox > C:\Users\lc999\miniconda3\envs\aistock\python.exe scripts/aistock_module_ownership_scan.py --output-json tmp/validation/module_ownership/ra_phase2_graph_context_paths.json --summary-md tmp/validation/module_ownership/ra_phase2_graph_context_paths.md --fail-on-unmapped --fail-on-ambiguous backend/services/research_assistant/graph_context.py backend/services/research_assistant/service.py backend/tests/research_assistant/test_graph_context_expansion.py backend/tests/research_assistant/test_graph_injected_into_context.py backend/tests/research_assistant/test_core_no_adapter_import.py docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md tests/aistock_validation/history/research_assistant/20260601_ra_phase2_graph_context_validation.md tests/aistock_validation/catalog/test_plans.yaml tests/aistock_validation/catalog/module_registry.yaml tests/aistock_validation/catalog/file_ownership.yaml backend/services/validation/plan_catalog.py noxfile.py
+Module ownership scan completed: files=12, mapped=12, unmapped=0, ambiguous=0
+nox > Session ra_phase2_graph_context was successful in 4 seconds.
