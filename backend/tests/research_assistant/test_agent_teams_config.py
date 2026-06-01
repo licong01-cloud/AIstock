@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 from backend.services.research_assistant.agent_teams.config import load_agent_teams_config
 

@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 from backend.services.research_assistant.agent_teams.config import load_agent_teams_config
 from backend.services.research_assistant.agent_teams.runtime import assert_worker_tool_allowed, enforce_worker_catalog
-from backend.services.research_assistant.react_grounding import McpToolCall, ToolCatalogEntry, ToolGateDecision
+from backend.services.research_assistant.react_grounding import McpToolCall, ToolCatalogEntry
 
 
 CONFIG_PATH = Path(__file__).resolve().parents[3] / "configs/research_assistant/agent_teams.yaml"

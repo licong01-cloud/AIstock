@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import pytest
 
 from backend.services.research_assistant.agent_teams.config import load_agent_teams_config
 from backend.services.research_assistant.agent_teams.models import WorkerRunResult, WorkerTask

@@ -4,7 +4,6 @@ import os
 from pathlib import Path
 
 import psycopg2
-import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
