@@ -554,6 +554,64 @@ def test_pr_check_p1_evidence_gate_passes_with_evidence(
     }
 
 
+def test_pr_check_t3_feature_warns_without_design_acceptance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(flow, "REPO_ROOT", tmp_path)
+    monkeypatch.setenv("AISTOCK_PR_TITLE", "feat: T3 Research Assistant workflow pack")
+    monkeypatch.setenv("AISTOCK_PR_BODY", "Feature implementation for a T3 architecture change.")
+    monkeypatch.setattr(flow, "_git_output", lambda args, cwd=flow.REPO_ROOT, check=True: "feature/t3-ra-workflow-pack")
+
+    assert flow.main(["pr-check", "--changed-file", "docs/architecture/example.md"]) == 0
+    summary = json.loads(capsys.readouterr().out)
+
+    gate = summary["design_compliance_gate"]
+    assert summary["task_tier"] == "T3"
+    assert gate["workflow_gate"] == "warning"
+    assert gate["blocking"] == []
+    assert gate["warnings"] == ["design_acceptance_matrix"]
+
+
+def test_pr_check_t3_feature_passes_with_design_acceptance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(flow, "REPO_ROOT", tmp_path)
+    monkeypatch.setenv("AISTOCK_PR_TITLE", "Feature: T3 validation workflow")
+    monkeypatch.setenv(
+        "AISTOCK_PR_BODY",
+        "## Design Acceptance Matrix\n- API contract: pass\n- Validation evidence: pass",
+    )
+    monkeypatch.setattr(flow, "_git_output", lambda args, cwd=flow.REPO_ROOT, check=True: "feature/t3-validation-workflow")
+
+    assert flow.main(["pr-check", "--changed-file", "docs/architecture/example.md"]) == 0
+    summary = json.loads(capsys.readouterr().out)
+
+    gate = summary["design_compliance_gate"]
+    assert gate["workflow_gate"] == "passed"
+    assert gate["warnings"] == []
+
+
+def test_pr_check_design_compliance_ignores_non_t3_bug(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(flow, "REPO_ROOT", tmp_path)
+    monkeypatch.setenv("AISTOCK_PR_TITLE", "fix: BUG-515 P1 workflow issue")
+    monkeypatch.setattr(flow, "_git_output", lambda args, cwd=flow.REPO_ROOT, check=True: "bug/BUG-515-workflow")
+
+    assert flow.main(["pr-check", "--changed-file", "scripts/issue_flow.py"]) == 0
+    summary = json.loads(capsys.readouterr().out)
+
+    gate = summary["design_compliance_gate"]
+    assert gate["workflow_gate"] == "not_applicable"
+    assert gate["warnings"] == []
+
+
 def test_open_source_tooling_configs_are_parseable() -> None:
     assert yaml.safe_load(Path(".pre-commit-config.yaml").read_text(encoding="utf-8"))["repos"]
     assert yaml.safe_load(Path(".semgrep.yml").read_text(encoding="utf-8"))["rules"]
