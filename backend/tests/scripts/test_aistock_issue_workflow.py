@@ -2733,6 +2733,75 @@ def test_cleanup_after_merge_allows_origin_equivalent_root_dirty_files(
     assert payload["warnings"]
 
 
+def test_origin_equivalent_dirty_files_excludes_untracked_paths(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], cwd: Path | None = None, **kwargs: Any) -> dict[str, Any]:
+        calls.append(args)
+        if args[:3] == ["git", "cat-file", "-e"]:
+            exists = args[3] == "origin/main:tests/aistock_validation/bugs/bug199.json"
+            return {"ok": exists, "returncode": 0 if exists else 1, "stdout": "", "stderr": ""}
+        if args[:3] == ["git", "diff", "--quiet"]:
+            return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+        return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+
+    equivalent = workflow._origin_equivalent_dirty_files(
+        isolated_workflow_root,
+        [
+            "tests/aistock_validation/bugs/bug199.json",
+            ".codex_tmp/qe_20260601_014515_310f_loop1_execution_truth_tmp.md",
+        ],
+    )
+
+    assert equivalent == ["tests/aistock_validation/bugs/bug199.json"]
+    assert ["git", "diff", "--quiet", "origin/main", "--", ".codex_tmp/qe_20260601_014515_310f_loop1_execution_truth_tmp.md"] not in calls
+
+
+def test_cleanup_after_merge_apply_ignores_untracked_root_files(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "bug/BUG-199-workflow"
+    executed: list[list[str]] = []
+
+    def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
+        if args[:2] == ["branch", "--show-current"]:
+            return "feature/current"
+        if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
+            return branch
+        if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
+            return branch
+        if args[:2] == ["ls-remote", "--heads"]:
+            return ""
+        return ""
+
+    def fake_execute(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        executed.append(args)
+        return {"ok": True, "stdout": "", "stderr": "", "returncode": 0}
+
+    monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {"ok": True, "branch": "main", "dirty": True, "dirty_count": 1, "head": "abc", "origin_main": "abc"},
+    )
+    monkeypatch.setattr(workflow, "_dirty_files", lambda root: [".codex_tmp/qe_20260601_014515_310f_loop1_execution_truth_tmp.md"])
+    monkeypatch.setattr(workflow, "_origin_equivalent_dirty_files", lambda root, files: [])
+    monkeypatch.setattr(workflow, "_execute_checked", fake_execute)
+
+    payload = workflow.build_cleanup_after_merge_plan(branch=branch, sync_root=True, apply=True)
+
+    assert payload["workflow_gate"] == "cleanup_done"
+    assert payload["unrelated_root_dirty_files"] == [".codex_tmp/qe_20260601_014515_310f_loop1_execution_truth_tmp.md"]
+    assert not any(args[:2] == ["git", "restore"] for args in executed)
+
+
 def test_cleanup_after_merge_ignores_unrelated_dirty_files_when_root_synced(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
