@@ -193,7 +193,11 @@ jobs:
   failure-bug-register:
     name: Auto-register CI failures as BUGs
     needs: backend-tests
-    if: failure() && github.event_name == 'pull_request' && needs.backend-tests.result == 'failure'
+    # Keep this job green/no-op when backend tests pass or are intentionally
+    # skipped, so PR check summaries do not report a skipped registrar as
+    # another failure. The failure path below still comments when backend
+    # tests actually fail.
+    if: ${{ always() && !cancelled() && github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -201,9 +205,17 @@ jobs:
       pull-requests: write
       issues: write
     steps:
+      - name: No backend failure to register
+        if: ${{ needs.backend-tests.result != 'failure' }}
+        run: |
+          echo "backend-tests result: ${{ needs.backend-tests.result }}"
+          echo "No CI failure BUG registration required."
+
       - uses: actions/checkout@v4
+        if: ${{ needs.backend-tests.result == 'failure' }}
 
       - name: Note pending bug-register tooling
+        if: ${{ needs.backend-tests.result == 'failure' }}
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           RUN_ID: ${{ github.run_id }}
@@ -214,6 +226,7 @@ jobs:
           echo "Until then, treat the failure as the canonical signal and decide whether to file a BUG manually via MCP report_bug or via the bug_report issue template."
 
       - name: Comment on PR
+        if: ${{ needs.backend-tests.result == 'failure' }}
         uses: actions/github-script@v7
         with:
           script: |
