@@ -1,0 +1,776 @@
+﻿# QE / Paper v2 价格接受层与执行价格保护设计方案
+
+> 日期：2026-06-01  
+> 状态：Draft / 待审批 / 文档设计方案，不含代码实现  
+> 适用范围：QuantEvolver（QE）分钟线回测、StrategyPackage validated execution policy、Selection Center 到 Paper Trading v2 的模拟盘运行、MiniQMT/vn.py-style 执行适配。  
+> 不适用范围：真实实盘自动下单、生产服务重启、生产 DB DDL、QMT 真实账户交易。  
+> 关联规范：`docs/standards/aistock_development_standard_v1.5_20260523.md`、`docs/architecture/minute_execution_algo_standard_contract.md`。
+
+## 1. 背景与问题
+
+当前 AIstock 的 QE 回测和 Paper v2 模拟盘已经具备选股、目标仓位、分钟线执行算法、涨跌停/停牌/分钟线 fail-fast 等能力，但多数策略路径仍以“选中股票 -> 按目标权重生成订单 -> 交给执行算法成交”为主。这个路径缺少一个显式问题：
+
+```text
+候选股票仍然值得买/卖吗？当前开盘价或当前分钟价是否已经吃掉了策略 alpha？
+```
+
+典型风险：
+
+- T 日信号选中股票，T+1 开盘高开 5%~9%，系统仍按目标权重买入，回测与模拟盘可能高估收益。
+- 调仓清仓股票在开盘急跌时被无条件卖出，无法区分普通换仓卖出和风险强制卖出。
+- vn.py-style 算法已有“给定价格才执行”的机制，但 AIstock 目前缺少统一生成 `max_buy_price` / `min_sell_price` 的上游策略层。
+- QE 与 Paper v2 如果各自临时加价格规则，会导致同一 StrategyPackage 在回测与模拟盘语义漂移。
+
+本方案引入独立的 `ExecutionAcceptance / PriceGuard` 层，用于在选股/目标仓位与执行算法之间判断“当前价格是否可接受”，并输出可审计的价格保护、减量或拒单原因。
+
+## 2. 设计目标
+
+1. **职责清晰**：选股层负责“买什么、买多少”，PriceGuard 负责“当前价格下是否仍值得交易”，执行算法负责“如何拆单/挂单/成交”。
+2. **QE 先验证，Paper v2 后消费**：Paper v2 只能使用 QE/StrategyPackage 回测验证过的价格接受策略快照，不允许 runtime 临时覆盖。
+3. **可解释**：每个被跳过、减量、限价的订单都要持久化 `reference_price`、价格带、当前价格、reason code 和 price basis。
+4. **一致性**：QE/Qlib、Paper v2 DB 历史回放、Paper v2 realtime/MiniQMT 共享同一核心语义；adapter 只做数据转换。
+5. **分阶段演进**：第一阶段用经验初值 + 历史分桶校准；后续可训练 ML residual-alpha / acceptance 模型，但不能绕过回测验证和 policy hash。
+6. **安全边界**：不引入 silent fallback，不修改 StrategyPackage frozen manifest、模型权重、QE workspace 历史资产或 Paper ledger。
+
+## 3. 非目标
+
+- 不在本设计阶段实现代码、DDL 或 UI。
+- 不把 tick 实时数据变成 Paper v2 或 QE 的运行时强依赖；tick 可用于未来离线特征/标签训练。
+- 不设计真实券商账户自动交易授权流程。
+- 不用 PriceGuard 替代涨跌停、停牌、T+1、board-lot、现金/持仓等现有风控约束。
+- 不把普通换仓未成交伪装为成功；必须显式记录 no-fill/skip/partial。
+
+## 4. 核心概念
+
+### 4.1 reference_price
+
+`reference_price` 是“信号可比价”，不是股票估值目标价。它用于衡量执行时的追价幅度和剩余 alpha。
+
+推荐策略：
+
+| 场景 | 推荐 reference | 说明 |
+| --- | --- | --- |
+| QE 日频信号、T+1 执行 | `signal_close` | T 日收盘产生信号，T+1 开盘/分钟线执行；最适合判断高开是否吃掉 alpha。 |
+| Paper v2 开盘前计划 | `signal_close` + `arrival_price` | `signal_close` 用于价格接受；`arrival_price` 用于执行质量/TCA。 |
+| Paper v2 盘中再平衡 | `arrival_price` 或 `open_vwap_5m` | 当前会话生成意图时的可观察价格。 |
+| 风险强制卖出 | `arrival_price` + risk reason | 更重视成交，保护价更宽。 |
+
+所有 price guard 计算必须声明：
+
+```text
+price_basis: raw
+reference_source: signal_close | prev_close | arrival_price | open_vwap_5m | open_vwap_15m
+reference_observed_at: timestamp/date
+```
+
+A 股分钟执行的权威市场状态价格基准沿用现有标准：raw / 不复权人民币价格。Qlib adapter 如使用复权 `$open/$close`，必须先用 `$factor` 转成 raw，再与 `prev_close/limit_up/limit_down` 比较。
+
+### 4.2 price guard 区间
+
+PriceGuard 输出三档：
+
+| 区间 | 买入行为 | 卖出行为 | 说明 |
+| --- | --- | --- | --- |
+| Green | 正常买入 | 正常卖出 | 当前价格在预算内。 |
+| Yellow | 减量/延后/更被动挂单 | 分批/延后/更宽保护价 | 当前价格已侵蚀部分 alpha，但不必完全放弃。 |
+| Red | 跳过买入 | 普通调仓可暂缓；风险卖出按风控通道 | 当前价格超过策略可接受边界。 |
+
+### 4.3 expected_alpha_budget
+
+PriceGuard 不需要预测“合理股价”，而是从策略 alpha 预算推导可接受追价：
+
+```text
+max_chase_bps = expected_alpha_bps
+              - explicit_cost_bps
+              - spread_or_slippage_buffer_bps
+              - safety_margin_bps
+              - optional_risk_buffer_bps
+
+max_buy_price = reference_price * (1 + max_chase_bps / 10000)
+min_sell_price = reference_price * (1 - max_sell_slippage_bps / 10000)
+```
+
+`expected_alpha_bps` 第一版来自历史分桶统计或策略默认配置；后续可来自 ML 模型。
+
+## 5. 分层架构
+
+目标架构：
+
+```text
+QE / Selection model
+  -> score, rank, target_weight, optional expected_alpha_bucket
+
+TargetPositionEngine
+  -> target positions
+
+RebalanceEngine
+  -> raw order intents
+
+ExecutionAcceptance / PriceGuard core
+  -> accepted / reduced / rejected guarded intents
+  -> max_buy_price / min_sell_price / reason codes
+
+ExecutionAlgo core and adapters
+  -> TWAP / V25 / V25.1 / vn.py-style / MiniQMT
+
+OMS / Ledger / QE account
+  -> fills, no-fills, events, quality report
+```
+
+职责边界：
+
+| 层 | 负责 | 不负责 |
+| --- | --- | --- |
+| Selection/QE alpha | 因子、模型分数、候选池、目标权重、alpha 分桶 | 当前盘口是否追价、具体限价单价格 |
+| Target/Rebalance | 目标持仓差分、买卖数量、board-lot 初步处理 | 判断开盘高开是否放弃 |
+| PriceGuard | 可接受价格、开盘跳空、追价预算、减量/拒单、理由 | 生成 alpha、训练主选股模型、实际拆单 |
+| ExecutionAlgo | 按给定价格/规则拆单、挂单、成交/未成交 | 决定某只股票是否值得追高 |
+| Risk/Market state | 停牌、涨跌停、T+1、现金、持仓、数据完整性 | 代替 alpha 预算 |
+
+## 6. 与现有 AIstock 架构整合
+
+### 6.1 当前接入点
+
+当前代码中已经具备以下可复用能力：
+
+- `StrategyPackage.minute_execution_policy` 已包含 `algo_code`、`algo_config`、`data_requirements`、`quality_report`。
+- `ValidatedExecutionPolicy` 已通过 `policy_json` 和 `policy_sha256` 固化回测验证过的执行策略。
+- Paper v2 当前禁止 `runtime_config` 直接覆盖执行策略，要求使用 backtest-validated execution policy snapshot。
+- `OrderIntent` 已支持 `LIMIT` 和 `limit_price`。
+- Paper v2 day runner 的顺序为：signal snapshot -> risk/tradability -> targets -> order intents -> minute execution。
+- `MinuteExecutionEngine` 已支持 `max_participation_rate`。
+- vn.py-style `TWAP_LITE_MINIQMT` / `SNIPER_MINIQMT` 已有“给定 price，买入 ask <= price / 卖出 bid >= price 才执行”的语义。
+- QE `ConfigComposer` 当前支持分钟模式 `NestedExecutor + inner_strategy`，执行算法参数进入 `inner_strategy.kwargs`。
+
+### 6.2 新增概念位置
+
+建议新增逻辑概念，不要求第一阶段立即新增 DB 表：
+
+```text
+backend/services/trading_core/price_guard.py
+backend/services/trading_core/execution_acceptance.py
+```
+
+并扩展 execution policy JSON：
+
+```json
+{
+  "execution_level": "minute",
+  "bar_freq": "1m",
+  "algo_code": "V25_1_SMALL_CAP",
+  "algo_config": {
+    "min_cost": 5.0,
+    "commission_rate": 0.0003,
+    "max_buckets": 12
+  },
+  "price_guard": {
+    "contract": "execution_price_guard_v1",
+    "enabled": true,
+    "mode": "rule_v1",
+    "price_basis": "raw",
+    "reference_price": {
+      "buy": "signal_close",
+      "sell": "signal_close",
+      "intraday": "arrival_price"
+    },
+    "buy": {
+      "max_open_gap_bps": 300,
+      "yellow_open_gap_bps": 150,
+      "yellow_size_multiplier": 0.5,
+      "max_chase_bps": 100,
+      "near_limit_up_skip_bps": 80,
+      "allow_partial": true
+    },
+    "sell": {
+      "rebalance_max_slippage_bps": 150,
+      "risk_exit_max_slippage_bps": 500,
+      "near_limit_down_rebalance_skip_bps": 80,
+      "allow_partial": true
+    },
+    "unfilled": {
+      "buy_red_zone": "cancel_today",
+      "buy_yellow_unfilled": "carry_once_or_cancel",
+      "sell_rebalance_red_zone": "carry_next_day",
+      "sell_risk_exit_red_zone": "execute_with_wider_limit"
+    }
+  },
+  "quality_report": {
+    "record_slippage": true,
+    "record_participation_rate": true,
+    "record_unfilled_reason": true,
+    "record_price_guard_decision": true
+  }
+}
+```
+
+说明：当前 `ALLOWED_POLICY_JSON_KEYS` 尚未允许 `price_guard`，实施阶段需要扩展并增加 validator；设计阶段仅定义目标 schema。
+
+### 6.3 是否放入 `algo_config`
+
+推荐把 PriceGuard 作为 `policy_json.price_guard` 顶层字段，而不是塞入 `algo_config`。
+
+原因：
+
+- `algo_config` 是执行算法内部参数，如 V25.1 的 `min_cost/max_buckets`、TWAP 的 `interval`。
+- PriceGuard 跨算法通用，且在算法执行前影响 `OrderIntent`。
+- 顶层字段便于 StrategyPackage validator、Paper v2 router、QE config truth tests 单独校验。
+
+兼容路径：第一阶段如不想改 policy 顶层 key，也可以临时放入 `algo_config.price_guard`，但最终 schema 应迁移到顶层 `price_guard` 并记录 migration。
+
+## 7. QE 整合方案
+
+### 7.1 QE 生成配置
+
+QE 必须是价格接受层的第一验证场。`ConfigComposer` 应将 `price_guard` 注入 Qlib workspace，原则如下：
+
+- `custom_params.price_guard` 或 `execution_algo_params.price_guard` 被解析成标准 `price_guard`。
+- 分钟线回测时，PriceGuard 参数必须进入 `NestedExecutor.inner_strategy.kwargs` 或由 inner strategy 可读取的 artifact 文件。
+- 如果 PriceGuard 同时影响信号候选过滤和执行安全，需像 `suspend_filter` 一样同时注入 outer strategy 和 inner strategy；第一阶段建议只在 inner execution 层生效，避免改变原始选股排名。
+- 生成的 `conf.yaml` 必须能证明：请求的 `price_guard.enabled=true` 实际进入执行路径。
+
+目标 YAML 形态示例：
+
+```yaml
+executor:
+  class: NestedExecutor
+  kwargs:
+    inner_strategy:
+      class: TailTWAPWithV25_1SmallCapStrategy
+      module_path: tail_twap_v25_1_strategy
+      kwargs:
+        min_cost: 5.0
+        commission_rate: 0.0003
+        max_buckets: 12
+        price_guard:
+          contract: execution_price_guard_v1
+          enabled: true
+          mode: rule_v1
+          price_basis: raw
+          reference_price:
+            buy: signal_close
+            sell: signal_close
+          buy:
+            max_open_gap_bps: 300
+            yellow_open_gap_bps: 150
+            max_chase_bps: 100
+            near_limit_up_skip_bps: 80
+          sell:
+            rebalance_max_slippage_bps: 150
+            risk_exit_max_slippage_bps: 500
+```
+
+### 7.2 QE inner strategy 行为
+
+在 Qlib inner execution strategy 中，PriceGuard 在订单进入分钟拆单前或第一个可观测分钟执行前评估：
+
+```text
+for each order:
+  build PriceGuardContext
+  compute guarded decision
+  if SKIP:
+      emit no-fill / skip reason
+      do not generate fallback order
+  if REDUCE:
+      reduce target amount/quantity before execution plan
+  if ACCEPT:
+      pass limit_price / guard metadata to execution algo
+```
+
+必须记录：
+
+```text
+symbol
+trade_date
+side
+reference_price
+reference_source
+current_price/open_price
+open_gap_bps
+max_buy_price or min_sell_price
+decision: ACCEPT | REDUCE | SKIP
+reason_code
+size_multiplier
+price_basis
+limit_up/limit_down/distance_to_limit
+```
+
+### 7.3 QE 评价指标
+
+新增回测指标用于审批策略是否可进入 Paper v2：
+
+| 指标 | 含义 |
+| --- | --- |
+| `price_guard_skip_buy_count` | 因价格过高跳过买入的次数 |
+| `price_guard_reduce_buy_count` | 因 yellow zone 减量买入的次数 |
+| `price_guard_skip_sell_count` | 普通调仓卖出因价格过差暂缓次数 |
+| `price_guard_missed_alpha_bps` | 被跳过股票后续 alpha，用于评估是否过严 |
+| `price_guard_saved_loss_bps` | 跳过/减量避免的追高损失 |
+| `avg_open_gap_bps_accepted` | 接受买入的平均开盘 gap |
+| `avg_open_gap_bps_rejected` | 拒绝买入的平均开盘 gap |
+| `net_alpha_after_guard` | 使用 price guard 后净 alpha |
+| `turnover_delta` | 价格保护导致的换手变化 |
+
+### 7.4 QE 与现有策略族关系
+
+| 策略/算法 | PriceGuard 接入方式 |
+| --- | --- |
+| `ScoreWeightedTopkStrategyV2` | 选股/权重保持不变；PriceGuard 在执行层拦截买卖。 |
+| `ScoreWeightedTopkStrategyV2CapacityV1` | 容量/单笔上限继续由策略或 target 层控制；PriceGuard 控制价格接受。 |
+| `TWAP` | PriceGuard 先给限价/减量；TWAP 只负责按时间拆单。 |
+| `V25_TWO_STAGE` | PriceGuard 决定是否生成/缩放 V25 plan；市场状态仍由 V25 处理。 |
+| `V25_1_SMALL_CAP` | PriceGuard 在 V25.1 cost-aware bucket 前决定 quantity multiplier；V25.1 继续处理小资金最小佣金和 bucket。 |
+| `CLOSE_PRICE` | 不建议接入；日频 close-price 路径无法验证开盘追价语义。 |
+| vn.py-style | PriceGuard 生成 `price`；vn.py-style 算法执行价格条件。 |
+
+## 8. Paper v2 整合方案
+
+### 8.1 运行时位置
+
+建议在 Paper v2 的 `build_order_intents` 后、`OMS.create_order` 前插入 PriceGuard：
+
+```text
+targets = TargetPositionEngine.build_targets(...)
+raw_intents = RebalanceEngine.build_order_intents(...)
+guarded_intents, guard_events = PriceGuard.evaluate_intents(...)
+orders = OMS.create_order(guarded_intents)
+MinuteExecutionEngine.execute_order(...)
+```
+
+这样可以保持 target 层与 rebalance 层职责稳定，同时让 rejected/reduced order intents 有完整审计记录。
+
+### 8.2 OrderIntent 输出
+
+对于通过的买单：
+
+```text
+OrderIntent.order_type = LIMIT
+OrderIntent.limit_price = max_buy_price
+OrderIntent.metadata.price_guard = {...}
+```
+
+对于通过的卖单：
+
+```text
+OrderIntent.order_type = LIMIT
+OrderIntent.limit_price = min_sell_price
+OrderIntent.metadata.price_guard = {...}
+```
+
+对于 rejected：不创建实际 Order，持久化 run event：
+
+```text
+ORDER_INTENT_REJECTED_BY_PRICE_GUARD
+```
+
+对于 reduced：调整 quantity，并持久化：
+
+```text
+ORDER_INTENT_REDUCED_BY_PRICE_GUARD
+```
+
+### 8.3 Market data requirements
+
+Paper v2 PriceGuard 需要：
+
+```text
+signal reference price: candidate.reference_price or manifest/backtest artifact
+current/open price: minute bar open, first executable minute price, or broker quote
+prev_close
+limit_up / limit_down
+suspend status
+price_basis metadata
+optional vwap / amount / volume
+```
+
+本地 DB 历史回放可从 `MinuteExecutionMarketDataProvider` 的 minute bars 和 `market_context` 获取；MiniQMT realtime 需要 broker quote 或第一根实时 bar。缺失时规则：
+
+- 缺 `reference_price` 且没有明确替代 source：fail-fast。
+- 缺 `limit_up/limit_down` 且策略要求 near-limit 判断：fail-fast，除非有权威停牌/no-bar 状态。
+- 实时开盘前尚无 quote/bar：`WAITING_FOR_PRICE_GUARD_INPUT`，不是成功也不是失败。
+
+### 8.4 与 MiniQMT / vn.py-style 关系
+
+MiniQMT/vn.py-style 算法应继续只消费 `price` 和交易量设置：
+
+- `TWAP_LITE_MINIQMT`：PriceGuard 提供 `price=max_buy_price/min_sell_price`，算法判断 `ask <= price` 或 `bid >= price`。
+- `SNIPER_MINIQMT`：PriceGuard 提供保护价，算法等待盘口触发。
+- `BEST_LIMIT_MINIQMT`：更偏被动挂单，PriceGuard 仍需提供最大可接受价/最低可接受价，防止无限追价。
+
+PriceGuard 不应直接调用 broker；broker 下单仍由现有 MiniQMT adapter 执行。
+
+## 9. 初始经验参数
+
+第一版参数应保守、可解释、按策略族配置。以下为建议初值，必须通过 QE walk-forward/分桶回测确认后才能进入 Paper v2：
+
+### 9.1 普通日频多因子 / 低换手
+
+```yaml
+price_guard:
+  mode: rule_v1
+  reference_price:
+    buy: signal_close
+    sell: signal_close
+  buy:
+    max_open_gap_bps: 300
+    yellow_open_gap_bps: 150
+    yellow_size_multiplier: 0.5
+    max_chase_bps: 100
+    near_limit_up_skip_bps: 80
+  sell:
+    rebalance_max_slippage_bps: 150
+    risk_exit_max_slippage_bps: 500
+    near_limit_down_rebalance_skip_bps: 80
+```
+
+解释：普通多因子 alpha 通常不能覆盖高开 5%~9% 的追价，3% 以上先跳过或改为 yellow/red 需要历史验证。
+
+### 9.2 高置信度短线动量 / 事件驱动
+
+```yaml
+buy:
+  max_open_gap_bps: 600
+  yellow_open_gap_bps: 300
+  yellow_size_multiplier: 0.5
+  max_chase_bps: 300
+  near_limit_up_skip_bps: 30
+sell:
+  rebalance_max_slippage_bps: 250
+  risk_exit_max_slippage_bps: 800
+```
+
+解释：允许更高追价，但必须有策略级证据证明 gap 后仍有 residual alpha。
+
+### 9.3 小资金 + V25.1 small-cap
+
+```yaml
+buy:
+  max_open_gap_bps: 300
+  yellow_open_gap_bps: 150
+  max_chase_bps: 100
+  near_limit_up_skip_bps: 80
+execution_algo_params:
+  min_cost: 5.0
+  commission_rate: 0.0003
+  tolerance_bps: 10.0
+  max_buckets: 12
+```
+
+解释：小资金不重点考虑市场冲击，但仍需考虑显性成本、最小佣金、追价吃掉 alpha。
+
+### 9.4 强制风控卖出
+
+```yaml
+sell:
+  rebalance_max_slippage_bps: 150
+  risk_exit_max_slippage_bps: 800
+  risk_exit_allow_market_if_no_limit: false
+  risk_exit_priority: execution_over_price
+```
+
+解释：普通调仓可以等，风险强制卖出更重视降低风险敞口，但仍需保护价和 reason。
+
+## 10. 历史分桶校准方案
+
+第一阶段不训练 ML，先用历史统计确认参数。
+
+### 10.1 分桶维度
+
+```text
+score_rank_bucket: top1%, top5%, top10%, top20%
+open_gap_bucket: <=0, 0~1%, 1~3%, 3~5%, 5~9%, near_limit_up
+market_state: bull/bear/sideways or HMM regime
+liquidity_bucket: turnover/amount/volume percentile
+board_type: main, ChiNext, STAR, ST
+holding_period: 1d, 3d, 5d, 10d
+```
+
+### 10.2 标签与统计
+
+```text
+future_alpha_after_open = forward_return_from_open - benchmark_return - explicit_cost
+future_alpha_after_signal_close = forward_return_from_signal_close - benchmark_return - explicit_cost
+missed_alpha_if_skip = future_alpha_after_open for skipped candidates
+saved_loss_if_skip = -future_alpha_after_open when future alpha is negative
+```
+
+校准问题：
+
+- top score 股票高开 1%/3%/5% 后，未来 5 日净 alpha 是否仍为正？
+- 高开 5%~9% 后买入是否显著降低 IR 或增加回撤？
+- `yellow_size_multiplier=0.5` 是否优于全买/全跳过？
+- 普通调仓卖出在低开 3%/5% 后延后是否改善净值，还是增加下行风险？
+
+### 10.3 Walk-forward 验证
+
+必须按时间滚动校准，避免同区间泄漏：
+
+```text
+train window: 2018-2022 校准参数
+valid window: 2023-2024 选择参数
+test window: 2024-2026 固定参数评估
+```
+
+输出：
+
+```text
+selected_policy_id
+parameter_grid
+walk_forward_metrics
+skip/reduce/fill counts
+reason distribution
+net performance delta
+stability by market regime
+```
+
+## 11. 未来 ML 训练方案
+
+### 11.1 模型定位
+
+未来 ML 模型不直接预测股票目标价，而预测“当前价格是否仍值得交易”。推荐命名：
+
+```text
+ExecutionAcceptanceModel
+ResidualAlphaAfterPriceModel
+```
+
+输入为选股分数 + 当前价格状态 + 流动性/市场状态，输出 acceptance decision 或 residual alpha。
+
+### 11.2 特征
+
+```text
+alpha features:
+  score, rank, score_z, component_scores, target_weight, alpha_family
+
+price features:
+  reference_price, open_gap_bps, current_gap_bps, intraday_return_bps,
+  distance_to_limit_up_bps, distance_to_limit_down_bps,
+  current_vs_open_bps, current_vs_vwap_bps
+
+market features:
+  index_return_1d, index_open_gap, HMM regime, volatility regime,
+  industry_return, market breadth
+
+liquidity features:
+  amount_20d, turnover_20d, volume_ratio_open, spread_bps if quote data exists,
+  board_type, ST flag
+
+execution context:
+  side, sell_reason, rebalance_frequency, holding_period,
+  previous_position, target_delta_weight
+```
+
+### 11.3 标签
+
+推荐三类标签：
+
+```text
+regression:
+  residual_alpha_bps = future_holding_alpha_from_current_price - explicit_cost
+
+classification:
+  accept = residual_alpha_bps > required_margin_bps
+
+policy label:
+  best_action in {ACCEPT_FULL, ACCEPT_PARTIAL, SKIP_TODAY, DELAY}
+```
+
+其中 `future_holding_alpha_from_current_price` 必须使用当时可观测价格，不得使用未来最低价/最高价作为成交价。
+
+### 11.4 模型与验证
+
+第一代模型建议：
+
+- LightGBM / XGBoost ranking or regression。
+- 按股票、日期、市场状态做 walk-forward。
+- 输出 calibrated probability 和 residual alpha bps。
+- 模型只能进入 candidate execution policy，必须经过 QE 回测验证、policy hash 固化、Paper v2 activation 后使用。
+
+禁用：
+
+- 直接在线学习影响当天下单。
+- 用同日未来 VWAP/收盘价做当前决策特征。
+- 未记录 feature availability timestamp。
+- 未通过 walk-forward 就替换 rule policy。
+
+### 11.5 ML policy schema
+
+```json
+{
+  "price_guard": {
+    "contract": "execution_price_guard_v1",
+    "enabled": true,
+    "mode": "ml_residual_alpha_v1",
+    "model_ref": "asset://execution_acceptance/ea_lgbm_202606xx",
+    "model_sha256": "...",
+    "feature_contract": "execution_acceptance_features_v1",
+    "fallback": "fail",
+    "decision_thresholds": {
+      "accept_full_min_residual_alpha_bps": 80,
+      "accept_partial_min_residual_alpha_bps": 20,
+      "skip_below_residual_alpha_bps": 0
+    }
+  }
+}
+```
+
+ML fallback 必须是 `fail`，不能回落到经验规则并报告成功，除非 policy 明确配置了已验证的 fallback policy 且单独 hash。
+
+## 12. 数据、Schema 与持久化建议
+
+### 12.1 第一阶段无 DDL 路径
+
+可先把 PriceGuard 配置放入 `ValidatedExecutionPolicy.policy_json`，把运行决策放入现有 event/order/fill metadata：
+
+```text
+run_event.context.price_guard_decisions
+order.metadata.price_guard
+fill.metadata.price_guard
+```
+
+适合文档审批后的最小实现。
+
+### 12.2 后续结构化表
+
+如果需要查询与前端分析，可新增表：
+
+```text
+paper_v2.price_guard_decision
+qe_archive.execution_price_guard_summary
+strategy_package.execution_acceptance_model_asset
+```
+
+字段建议：
+
+```text
+decision_id
+run_id / experiment_id
+policy_id
+policy_sha256
+symbol
+trade_date
+side
+reference_price
+reference_source
+current_price
+max_buy_price
+min_sell_price
+open_gap_bps
+decision
+reason_code
+size_multiplier
+price_basis
+created_at
+```
+
+DB schema 变更必须走 production DDL gate；本设计文档不实施 DDL。
+
+## 13. Reason Code 规范
+
+建议 reason code：
+
+```text
+ACCEPT_WITHIN_GREEN_ZONE
+REDUCE_YELLOW_OPEN_GAP
+REDUCE_YELLOW_CHASE_BAND
+SKIP_OPEN_GAP_EXCEEDED
+SKIP_ABOVE_MAX_BUY_PRICE
+SKIP_NEAR_LIMIT_UP
+SKIP_BELOW_MIN_SELL_PRICE_REBALANCE
+EXECUTE_RISK_EXIT_WITH_WIDER_LIMIT
+WAITING_FOR_PRICE_GUARD_INPUT
+REFERENCE_PRICE_MISSING_DATA_ERROR
+PRICE_BASIS_MISMATCH_ERROR
+LIMIT_PRICE_MISSING_DATA_ERROR
+UNSUPPORTED_PRICE_GUARD_CONFIG_ERROR
+```
+
+分类：
+
+- `SKIP/REDUCE/WAITING` 是业务状态。
+- `*_DATA_ERROR`、`*_CONFIG_ERROR` 是 fail-fast。
+- 不能把 data error 变成 skip，也不能把 skip 当作成功成交。
+
+## 14. 实施阶段建议拆分
+
+待审批后，建议拆成以下 issue/PR：
+
+### Phase 0：设计审批与验收矩阵
+
+- 审批本文档。
+- 明确首个策略族：建议 `ScoreWeightedTopkStrategyV2 + V25_1_SMALL_CAP`。
+- 明确第一版参数网格和样本区间。
+
+### Phase 1：核心 DTO 与 validator
+
+- 新增 PriceGuard core DTO 和 rule evaluator。
+- 扩展 `ValidatedExecutionPolicy` schema，允许 `price_guard`。
+- 增加 policy hash、unknown field、price basis validator。
+- 单元测试：green/yellow/red、missing reference、basis mismatch。
+
+### Phase 2：QE 回测集成
+
+- `ConfigComposer` 注入 `price_guard`。
+- Qlib helper strategy 支持 PriceGuard。
+- QE config truth tests 证明 YAML 切片正确。
+- 回测输出 reason summary。
+
+### Phase 3：Paper v2 历史回放集成
+
+- day runner 在 raw intents 后调用 PriceGuard。
+- 生成 LIMIT intents 或 rejected/reduced events。
+- 复用 DB_HISTORICAL market input。
+- 增加 Paper v2 tests。
+
+### Phase 4：MiniQMT / vn.py-style 集成
+
+- PriceGuard 为 vn.py-style template policy 提供 `price`。
+- realtime 缺 quote/bar 时进入 `WAITING_FOR_PRICE_GUARD_INPUT`。
+- 持久化 broker order 的 price guard context。
+
+### Phase 5：分桶校准工具
+
+- 从 QE/Paper 历史数据生成 open_gap x score bucket 表。
+- 产出参数候选与 walk-forward evidence。
+- 不自动激活生产 policy。
+
+### Phase 6：ML candidate policy
+
+- 训练 residual-alpha/acceptance 模型。
+- 注册模型资产、feature contract、walk-forward evidence。
+- 作为候选 policy 与 rule_v1 A/B，不直接覆盖已启用 policy。
+
+## 15. 测试与验收矩阵
+
+| 设计项 | 验收证据 |
+| --- | --- |
+| policy schema 支持 `price_guard` | validator 单测、policy sha256 稳定性测试 |
+| QE YAML 注入正确 | `backend/tests/unified_engine/test_qe_config_truth.py` 新增切片断言 |
+| Qlib adjusted/raw 对齐 | 使用 `$factor` 转 raw 后计算 gap/limit 的回归样本 |
+| 买入高开超过阈值跳过 | QE helper 单测 + Paper v2 historical test |
+| Yellow zone 减量 | evaluator 单测 + order intent quantity test |
+| 普通调仓卖出价格过差暂缓 | Paper v2 test，reason 为 `SKIP_BELOW_MIN_SELL_PRICE_REBALANCE` |
+| 风险强制卖出更宽保护价 | risk forced exit target test + PriceGuard context |
+| vn.py-style 消费保护价 | MiniQMT adapter/unit test，price 来自 PriceGuard |
+| 缺 reference_price fail-fast | core 单测 + Paper v2 runner test |
+| runtime 不允许临时覆盖 | Paper v2 runtime_config override test |
+| no silent fallback | 搜索 fallback/default 成功路径 + targeted tests |
+
+## 16. 风险与开放问题
+
+1. `expected_alpha_bps` 的来源需要确定：先用策略族默认值，还是从历史分桶预生成 artifact。
+2. Selection artifact 当前可能已有 `reference_price`，但不同 source 的语义需统一：是 signal close、next open 还是 manifest price。
+3. Qlib 回测中 `signal_close` 的读取方式需要明确，避免从未来价格取值。
+4. 卖出场景必须区分 `rebalance_sell`、`risk_exit`、`forced_exit`、`cash_raise`。
+5. 如果 PriceGuard 导致买入未成交，后续目标权重如何处理：当日取消、次日继续、重新评分，需要策略级配置。
+6. `CLOSE_PRICE` 日频路径是否完全禁用 PriceGuard，还是仅支持简单 close-to-close guard，需要审批。
+7. 是否需要把 PriceGuard 决策纳入前端 Paper v2 / StrategyPackage 审计页面，本设计暂不包含 UI。
+
+## 17. 推荐审批结论
+
+建议审批以下原则后再实施：
+
+1. PriceGuard 是独立于选股和执行算法之间的层，不并入原始因子选股，也不只作为 vn.py/TWAP 参数。
+2. QE 回测是 PriceGuard policy 的验证源；Paper v2 只能消费 validated execution policy snapshot。
+3. 第一版采用 `rule_v1 + historical bucket calibration`，不直接上 ML。
+4. ML 仅作为未来候选 policy，必须带模型资产、feature contract、walk-forward evidence、policy hash。
+5. 第一批落地策略建议限定为 `ScoreWeightedTopkStrategyV2` / `ScoreWeightedTopkStrategyV2CapacityV1` + `V25_1_SMALL_CAP`，避免一次性扩散到所有算法。
