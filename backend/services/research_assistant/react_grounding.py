@@ -216,6 +216,10 @@ def _compact_payload(payload: dict[str, Any], *, max_chars: int = 1400) -> dict[
         "artifact_refs",
         "omitted_sections",
         "detail_tool",
+        "evidence_policy",
+        "query",
+        "locale",
+        "provider",
     }
     compact = {key: value for key, value in payload.items() if key in allowed}
     if isinstance(compact.get("items"), list):
@@ -229,6 +233,11 @@ def _compact_payload(payload: dict[str, Any], *, max_chars: int = 1400) -> dict[
             "artifact_refs": (payload.get("artifact_refs") or [])[:3] if isinstance(payload.get("artifact_refs"), list) else [],
             "omitted_sections": payload.get("omitted_sections") or [],
         }
+        for key in ("domain", "server_key", "tool_name", "detail_tool", "evidence_policy", "query", "locale", "provider"):
+            if key in payload:
+                compact[key] = payload.get(key)
+        if isinstance(payload.get("items"), list):
+            compact["items"] = payload["items"][:1]
     return compact
 
 

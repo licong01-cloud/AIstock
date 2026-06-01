@@ -28,6 +28,7 @@ from .routers import (
     cloud_screening,
     config_env,
     execution_policy,
+    external_research,
     strategy_governance,
     model_registry,
     factor_correlation,
@@ -533,6 +534,7 @@ def create_app() -> FastAPI:
     app.include_router(model_registry.router, prefix="/api/v1")
     app.include_router(strategy_governance.router, prefix="/api/v1")
     app.include_router(execution_policy.router, prefix="/api/v1")
+    app.include_router(external_research.router, prefix="/api/v1")
     app.include_router(qe_archive.router, prefix="/api/v1")
     app.include_router(qe_templates.router, prefix="/api/v1")
     app.include_router(research_assistant.router, prefix="/api/v1")

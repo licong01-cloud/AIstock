@@ -20,6 +20,7 @@ class McpDomain(str, Enum):
     MODEL_REGISTRY = "model_registry"
     STRATEGY_GOVERNANCE = "strategy_governance"
     EXECUTION_POLICY = "execution_policy"
+    EXTERNAL_RESEARCH = "external_research"
     GENERAL = "general"
 
 
@@ -192,6 +193,41 @@ DOMAIN_SPECS: dict[McpDomain, DomainSpec] = {
         plan_tools=("execution_policy_validate_for_strategy", "execution_policy_plan_binding"),
         confirmed_tools=("execution_policy_bind_confirmed", "execution_policy_retire_confirmed"),
         prompt_key="domain.execution_policy",
+    ),
+    McpDomain.EXTERNAL_RESEARCH: DomainSpec(
+        domain=McpDomain.EXTERNAL_RESEARCH,
+        intent_value="external_research_request",
+        server_key="aistock-external-research",
+        default_tool="external_research_search_web",
+        risk_policy="read_only_search_draft_only_evidence_candidates",
+        summary_zh="External web and academic research search with provenance-first evidence candidates",
+        synonyms=(
+            "external research",
+            "external search",
+            "web search",
+            "search web",
+            "paper search",
+            "academic search",
+            "papers",
+            "arxiv",
+            "semantic scholar",
+            "literature",
+            "external evidence",
+            "fetch extract",
+            "save evidence",
+            "外部研究",
+            "外部检索",
+            "网页搜索",
+            "论文检索",
+            "学术检索",
+            "文献",
+            "外部证据",
+            "保存证据",
+        ),
+        read_tools=("external_research_search_web", "external_research_search_papers", "external_research_fetch_extract"),
+        plan_tools=("external_research_save_evidence",),
+        confirmed_tools=(),
+        prompt_key="domain.external_research",
     ),
 }
 

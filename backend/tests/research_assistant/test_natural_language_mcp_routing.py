@@ -21,6 +21,7 @@ def test_route_examples_cover_at_least_40_natural_language_cases() -> None:
         McpDomain.MODEL_REGISTRY,
         McpDomain.STRATEGY_GOVERNANCE,
         McpDomain.EXECUTION_POLICY,
+        McpDomain.EXTERNAL_RESEARCH,
     }
     assert required.issubset(covered)
 
@@ -60,6 +61,10 @@ def test_new_domain_routes_select_expected_tools() -> None:
         "model seed stability": ("aistock-model-registry", "model_registry_get_seed_stability"),
         "strategy package paper readiness": ("aistock-strategy-governance", "strategy_governance_get_paper_readiness"),
         "execution policy market state constraints": ("aistock-execution-policy", "execution_policy_get_market_state_constraints"),
+        "search external research about HMM factor timing": ("aistock-external-research", "external_research_search_web"),
+        "paper search for factor decay literature": ("aistock-external-research", "external_research_search_papers"),
+        "fetch extract from this research URL": ("aistock-external-research", "external_research_fetch_extract"),
+        "save external evidence candidate": ("aistock-external-research", "external_research_save_evidence"),
     }
     for message, (server, tool) in cases.items():
         route = route_request(message)
