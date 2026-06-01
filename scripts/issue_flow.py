@@ -811,6 +811,50 @@ def _infer_severity_from_text(*values: str) -> list[str]:
     return _unique_strings(severities)
 
 
+def _infer_task_tiers_from_text(*values: str) -> list[str]:
+    tiers: list[str] = []
+    for value in values:
+        tiers.extend(match.upper() for match in re.findall(r"\b(T[0-3])\b", value or "", flags=re.IGNORECASE))
+    return _unique_strings(tiers)
+
+
+def _highest_task_tier(values: list[str]) -> str | None:
+    rank = {"T0": 0, "T1": 1, "T2": 2, "T3": 3}
+    normalized = [
+        match.group(1).upper()
+        for value in values
+        if (match := re.search(r"\b(T[0-3])\b", str(value), flags=re.IGNORECASE))
+    ]
+    if not normalized:
+        return None
+    return sorted(normalized, key=lambda item: rank.get(item, -1), reverse=True)[0]
+
+
+def _infer_feature_signals_from_text(*values: str) -> list[str]:
+    signals: list[str] = []
+    patterns = {
+        "feature": r"\b(feature|feat|enhancement)\b",
+        "rfc": r"\b(rfc|proposal)\b",
+        "design": r"\b(design|architecture|blueprint)\b",
+    }
+    for value in values:
+        for signal, pattern in patterns.items():
+            if re.search(pattern, value or "", flags=re.IGNORECASE):
+                signals.append(signal)
+    return _unique_strings(signals)
+
+
+def _has_design_acceptance_matrix(*values: str) -> bool:
+    patterns = [
+        r"design acceptance (matrix|index|checklist)",
+        r"design_acceptance_(matrix|index|checklist)",
+        r"acceptance matrix",
+        r"architecture acceptance",
+    ]
+    combined = "\n".join(value or "" for value in values)
+    return any(re.search(pattern, combined, flags=re.IGNORECASE) for pattern in patterns)
+
+
 def _normalize_severity(value: Any) -> str | None:
     if value is None:
         return None
@@ -895,6 +939,53 @@ def _infer_pr_quality_context(changed_files: list[str], *, base: str, head: str)
         ),
         "pr_body_production_gates": all(key in pr_body for key in production_gate_keys),
         "bug_record_production_gates": any(all(record.get(key) for key in production_gate_keys) for record in bug_records),
+        "task_tier_signals": _infer_task_tiers_from_text(branch, commit_subjects, pr_title, pr_body),
+        "feature_signals": _infer_feature_signals_from_text(branch, commit_subjects, pr_title, pr_body),
+        "design_acceptance_present": _has_design_acceptance_matrix(pr_body),
+    }
+
+
+def evaluate_design_compliance_gate(summary: dict[str, Any]) -> dict[str, Any]:
+    """Warn when an explicitly T3 feature PR lacks a Design Acceptance Matrix."""
+    issue_record = summary.get("issue_record") or {}
+    inferred = summary.get("linkage_inference") or {}
+    task_tier = _highest_task_tier(
+        _as_list(issue_record.get("task_tier"))
+        + _as_list(issue_record.get("tier"))
+        + _as_list(inferred.get("task_tier_signals"))
+        + _as_list(summary.get("task_tier"))
+    )
+    issue_type_values = _as_list(issue_record.get("candidate_type")) + _as_list(issue_record.get("issue_type"))
+    feature_signals = _unique_strings(
+        [str(item).lower() for item in issue_type_values if str(item).lower() in {"feature", "enhancement", "rfc"}]
+        + [str(item).lower() for item in _as_list(inferred.get("feature_signals"))]
+    )
+    is_t3_feature = task_tier == "T3" and bool(feature_signals)
+    design_acceptance_present = bool(
+        inferred.get("design_acceptance_present")
+        or issue_record.get("design_acceptance_matrix")
+        or issue_record.get("design_acceptance_index")
+    )
+    checks = {
+        "t3_feature_signal": is_t3_feature,
+        "design_acceptance_matrix": design_acceptance_present,
+    }
+    if not is_t3_feature:
+        gate = "not_applicable"
+        warnings: list[str] = []
+    elif design_acceptance_present:
+        gate = "passed"
+        warnings = []
+    else:
+        gate = "warning"
+        warnings = ["design_acceptance_matrix"]
+    return {
+        "workflow_gate": gate,
+        "task_tier": task_tier,
+        "feature_signals": feature_signals,
+        "checks": checks,
+        "blocking": [],
+        "warnings": warnings,
     }
 
 
@@ -989,7 +1080,7 @@ def build_pr_quality(
         "head": head,
         "issue_record": issue_record or {},
         "linked_issues": linked,
-        "task_tier": "T1" if linked else "T0",
+        "task_tier": _highest_task_tier(inferred["task_tier_signals"]) or ("T1" if linked else "T0"),
         "changed_files": changed_files,
         "impacted_modules": validation["impacted_modules"],
         "scope_check": scope_result,
@@ -1001,6 +1092,9 @@ def build_pr_quality(
             "pr_body_validation_evidence": inferred["pr_body_validation_evidence"],
             "pr_body_production_gates": inferred["pr_body_production_gates"],
             "bug_record_production_gates": inferred["bug_record_production_gates"],
+            "task_tier_signals": inferred["task_tier_signals"],
+            "feature_signals": inferred["feature_signals"],
+            "design_acceptance_present": inferred["design_acceptance_present"],
             "status": "inferred" if inferred["linked_issues"] else "missing",
         },
         "selected_validation": validation,
@@ -1011,6 +1105,7 @@ def build_pr_quality(
         "production_backend_dependency_gate": validation["production_gates"]["backend_dependency"],
     }
     summary["p0p1_evidence_gate"] = evaluate_pr_quality_gate(summary, enforce_p0_p1=enforce_p0_p1_evidence)
+    summary["design_compliance_gate"] = evaluate_design_compliance_gate(summary)
     summary.pop("issue_record", None)
     return summary
 
@@ -1031,6 +1126,7 @@ def render_pr_quality_markdown(summary: dict[str, Any]) -> str:
         f"- scope_source: `{(summary.get('scope_check') or {}).get('status_source') or 'provided'}`",
         f"- linkage_inference: `{(summary.get('linkage_inference') or {}).get('status')}`",
         f"- p0p1_evidence_gate: `{(summary.get('p0p1_evidence_gate') or {}).get('workflow_gate')}`",
+        f"- design_compliance_gate: `{(summary.get('design_compliance_gate') or {}).get('workflow_gate')}`",
         f"- required_validation: `{', '.join((summary.get('selected_validation') or {}).get('required_plans') or [])}`",
         f"- validation_results: `{summary.get('validation_results')}`",
         f"- data_acceptance: `{summary.get('data_acceptance')}`",
