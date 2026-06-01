@@ -98,7 +98,8 @@ min_sell_price = reference_price * (1 - max_sell_slippage_bps / 10000)
 
 ```text
 QE / Selection model
-  -> score, rank, target_weight, optional expected_alpha_bucket
+  -> score, rank, target_weight, expected_alpha_bucket
+  -> suggested_entry_price_band for operator and downstream policy
 
 TargetPositionEngine
   -> target positions
@@ -121,11 +122,13 @@ OMS / Ledger / QE account
 
 | 层 | 负责 | 不负责 |
 | --- | --- | --- |
-| Selection/QE alpha | 因子、模型分数、候选池、目标权重、alpha 分桶 | 当前盘口是否追价、具体限价单价格 |
+| Selection/QE alpha | 因子、模型分数、候选池、目标权重、alpha 分桶、候选股买入价格范围建议 | 当前盘口是否追价、最终限价单价格 |
 | Target/Rebalance | 目标持仓差分、买卖数量、board-lot 初步处理 | 判断开盘高开是否放弃 |
 | PriceGuard | 可接受价格、开盘跳空、追价预算、减量/拒单、理由 | 生成 alpha、训练主选股模型、实际拆单 |
 | ExecutionAlgo | 按给定价格/规则拆单、挂单、成交/未成交 | 决定某只股票是否值得追高 |
 | Risk/Market state | 停牌、涨跌停、T+1、现金、持仓、数据完整性 | 代替 alpha 预算 |
+
+补充边界：策略包的选股功能必须把“建议买入价格范围”暴露给用户和后续系统，但它是基于信号时点 `reference_price`、alpha bucket 和已验证 PriceGuard policy 计算的 pre-trade guidance；开盘后或盘中仍必须由 PriceGuard 用实时/分钟市场上下文重新确认，不允许把选股页展示的价格范围当作无条件可成交价格。
 
 ## 6. 外部依据：开源工具、机构实践与论文
 
@@ -141,6 +144,8 @@ OMS / Ledger / QE account
 | NautilusTrader | Execution 文档将 Strategy、ExecAlgorithm、OrderEmulator、RiskEngine、ExecutionEngine/Client 分为多个组件，并支持自定义执行算法和内置 TWAP。参考：<https://nautilustrader.io/docs/latest/concepts/execution/> | 支持“执行算法是独立组件、风险引擎是独立组件”的架构；PriceGuard 也应是独立 pre-trade acceptance 组件。 |
 | Hummingbot V2 Executors | Executors 是由 Controller 条件驱动的自管理订单执行组件；TWAPExecutor 会创建订单计划、验证余额、刷新/取消订单、记录执行指标。参考：<https://hummingbot.org/v2-strategies/executors/twapexecutor/> | 执行器可以自管理订单生命周期，但触发条件应由上游策略/控制器给出；AIstock PriceGuard 可以类比 controller condition。 |
 | Backtrader | Backtrader 支持 Market、Limit、Stop、StopLimit；Limit order 只能以给定价格或更优价格成交，并可设置有效期。参考：<https://www.backtrader.com/docu/order/>、<https://www.backtrader.com/docu/order-creation-execution/order-creation-execution/> | 即使在通用回测框架里，价格限制也是基本订单语义；AIstock 不能只模拟“目标权重必成交”。 |
+| Backtrader bracket / stop order | Backtrader 支持 bracket order，把主订单、低侧 stop sell 和高侧 limit sell 组合管理，常用于一笔买入同时挂出止损和止盈条件。参考：<https://www.backtrader.com/docu/order-creation-execution/bracket/bracket/> | 止盈/止损通常属于持仓退出和风控策略，而不是纯选股分数本身；AIstock 可在策略包中展示候选 exit plan，但必须由 QE/Paper v2 验证。 |
+| QuantConnect LEAN Risk Management | LEAN Algorithm Framework 提供 trailing stop、maximum drawdown、maximum unrealized profit 等 risk management models，用于根据持仓盈亏或回撤调整/清空目标。参考：<https://www.quantconnect.com/docs/v2/writing-algorithms/algorithm-framework/risk-management/supported-models> | 机构/成熟框架常把止损、移动止盈、最大回撤退出放在 risk/portfolio layer，而不是只靠 alpha 信号自然换仓。AIstock 应把 exit guard 独立建模。 |
 
 对比结论：成熟开源工具普遍把“组合目标”与“订单执行”分开，并把价格、订单类型、有效期、成交失败作为显式状态。它们通常不替策略自动判断 alpha 是否被高开吃掉，所以 AIstock 需要新增 PriceGuard 来填补选股与执行之间的策略接受判断。
 
@@ -176,6 +181,30 @@ portfolio decision / alpha signal
 
 由于用户当前场景是小资金，第一版可以暂不建模市场冲击，但仍不能忽略显性成本、价差/滑点缓冲、延迟和未成交机会成本。小资金只意味着 `market_impact_bps` 可先设为 0 或很低，不意味着“开盘涨 9% 仍无条件买入”。
 
+### 6.2.1 机构是否预测止盈价、止损价
+
+机构并不存在统一答案，通常按策略类型分层处理：
+
+| 策略类型 | 常见退出方式 | 是否预测明确止盈/止损价 |
+| --- | --- | --- |
+| 低换手基本面/多因子组合 | 定期重算 alpha、风险模型和组合优化，alpha 衰减或排名下降后换仓。 | 通常不为每只股票预测固定“目标价”；更常用目标权重、风险预算、行业/风格约束和再平衡规则。 |
+| 中短线量价/事件驱动 | alpha 信号 + 时间止损 + 波动率/ATR stop + 事件窗口退出。 | 常设置规则化止损/止盈或 trailing stop，但阈值来自历史验证，不是主观目标价。 |
+| CTA/趋势/技术交易 | 通道突破、移动止损、波动率止损、盈亏比退出。 | 常有明确 stop/trailing/take-profit 规则，更多是风险控制和利润保护。 |
+| 做市/高频 | 库存风险、订单簿状态、成交强度、报价偏移。 | 不使用传统目标价；动态报价和库存约束决定退出。 |
+
+因此，AIstock 不应把“止盈价/止损价预测”强行并入每个多因子选股模型。推荐设计是：选股层输出 `expected_alpha_bucket` 和可解释 entry band；退出层另设 `ExitGuard/RiskGuard`，用已验证规则或 ML 模型决定止盈、止损、移动止盈、时间退出和 alpha 失效退出。
+
+### 6.2.2 止盈/止损与 alpha 信号的关系
+
+只看 alpha 信号的优点是组合一致、换手可控、避免过拟合；缺点是遇到跳空、极端波动、单票事件或短期大幅盈利回吐时，风险响应可能慢。加入止盈/止损的优点是尾部风险和路径风险更可控；缺点是容易被噪声洗出、提高换手、破坏原本的 alpha 持有期。
+
+对 AIstock 的折中原则：
+
+- 多因子策略第一版不预测“理论目标价”，而是给出 `entry_price_band` 和 `exit_guard_policy`。
+- 止损优先作为风险预算控制，例如 `max_loss_bps`、`volatility_stop`、`time_stop`、`drawdown_stop`。
+- 止盈优先作为利润保护或 alpha 衰减处理，例如 `take_profit_bps`、`trailing_stop_bps`、`rank_drop_exit`。
+- 所有止盈/止损规则必须作为 QE A/B 变量单独验证，不能把收益改善归因混到 PriceGuard 买入价格限制里。
+
 ### 6.3 A 股交易制度约束
 
 A 股交易制度天然要求执行系统具备价格保护：
@@ -199,6 +228,7 @@ A 股交易制度天然要求执行系统具备价格保护：
 | Bertsimas & Lo, 1998, `Optimal Control of Execution Costs` | 给定订单量、时间区间、市场状态和价格冲击函数，动态规划求最小期望执行成本的交易序列。参考：<https://web.mit.edu/Alo/www/Papers/bertlo98.html> | PriceGuard 的 `ACCEPT/REDUCE/SKIP` 可以视作简化的动态控制动作；后续 ML/RL 可扩展，但第一版不必复杂化。 |
 | Obizhaeva & Wang, 2005/2013, `Optimal Trading Strategy and Supply/Demand Dynamics` | 限价订单簿的供需是动态对象，最优交易可能包含离散和连续交易。参考：<https://www.nber.org/papers/w11444> | 支持把“当前盘口/价格状态”作为执行接受输入。AIstock 第一版可用分钟价/涨跌停，未来再接盘口深度。 |
 | Avellaneda & Stoikov, 2008, `High-frequency trading in a limit order book` | 限价订单定价受库存风险、成交强度和订单簿状态影响。参考：<https://www.tandfonline.com/doi/abs/10.1080/14697680701381228>、<https://math.nyu.edu/inmemoriam/avellaneda/HighFrequencyTrading.pdf> | 对 AIstock 当前小资金日频多因子不是第一优先级，但为未来用盘口/ML 生成更细保护价提供理论基础。 |
+| Lopez de Prado / Triple Barrier labeling | 金融 ML 中常用上轨、下轨、时间轨给交易事件打标签；Mlfin.py 文档将其描述为 upper barrier、lower barrier 和 vertical barrier。参考：<https://mlfinpy.readthedocs.io/en/stable/Labelling.html> | 支持把止盈、止损、时间退出作为 ML 标签或 ExitGuard 评估框架，但运行时不能用未来路径，只能用训练后冻结的 policy。 |
 | VWAP/POV/IS 相关研究与实践 | VWAP/TWAP/POV 是常用执行基准和拆单算法；implementation shortfall 更关注决策价到成交价之间的经济损失。参考：<https://arxiv.org/abs/1605.03683>、<https://arxiv.org/abs/1210.7608> | AIstock 应同时记录 execution benchmark 与 decision benchmark：前者评价执行算法，后者评价是否值得追价。 |
 
 论文启示不是给出“高开 9% 一律放弃”的固定阈值，而是提供统一框架：用 alpha、成本、风险、成交概率和机会成本决定是否执行、执行多少、何时执行。
@@ -237,6 +267,7 @@ A 股交易制度天然要求执行系统具备价格保护：
 ```text
 backend/services/trading_core/price_guard.py
 backend/services/trading_core/execution_acceptance.py
+backend/services/trading_core/exit_guard.py
 ```
 
 并扩展 execution policy JSON：
@@ -293,7 +324,98 @@ backend/services/trading_core/execution_acceptance.py
 
 说明：当前 `ALLOWED_POLICY_JSON_KEYS` 尚未允许 `price_guard`，实施阶段需要扩展并增加 validator；设计阶段仅定义目标 schema。
 
-### 7.3 是否放入 `algo_config`
+### 7.3 策略包选股结果中的买入价格范围
+
+策略包的选股功能不应只返回 `symbol + score + target_weight`。为了让用户审批和后续 Paper v2 迁移可解释，选股结果应同时输出候选买入价格范围，但该范围必须被标记为“建议/预算”，而不是最终下单限价。
+
+建议在 selection artifact 或 StrategyPackage candidate snapshot 中增加：
+
+```json
+{
+  "symbol": "000001.SZ",
+  "trade_date": "2026-06-02",
+  "score": 0.83,
+  "rank": 12,
+  "target_weight": 0.025,
+  "reference_price": 10.00,
+  "reference_source": "signal_close",
+  "expected_alpha_bucket": "top5_high_confidence",
+  "suggested_entry_price_band": {
+    "price_basis": "raw",
+    "green_max_buy_price": 10.15,
+    "yellow_max_buy_price": 10.30,
+    "red_above_price": 10.30,
+    "max_open_gap_bps": 300,
+    "yellow_open_gap_bps": 150,
+    "near_limit_up_skip_bps": 80,
+    "policy_sha256": "..."
+  },
+  "selection_price_guidance_reason": [
+    "score_bucket=top5_high_confidence",
+    "reference_price=signal_close",
+    "policy=execution_price_guard_v1"
+  ]
+}
+```
+
+语义要求：
+
+- `green_max_buy_price/yellow_max_buy_price` 由已验证 `price_guard_policy.json` 和 `reference_price` 计算，用于用户理解“什么价格还值得买”。
+- 选股页可展示该价格区间，但不得绕过开盘后 PriceGuard；实际下单仍以开盘/分钟 market context 重新评估。
+- 如果策略包没有经过 QE A/B 验证，只能展示 `guidance_status=unvalidated`，不能进入 Paper v2 `enforced`。
+- 如果缺少 `reference_price`、`price_basis` 或 `policy_sha256`，策略包发布应 fail-fast 或降级为“不提供价格范围”，不能填默认价格。
+- 对 ST、主板、创业板、科创板、涨跌停和停牌状态，展示价应同时显示交易所价格边界，避免把策略价格范围误解为可申报范围。
+
+### 7.4 ExitGuard：止盈/止损建议的独立位置
+
+止盈/止损不应塞进 PriceGuard 买入逻辑。建议新增独立 `exit_guard` 概念，和 `price_guard` 同属 execution/risk policy，但职责不同：
+
+| 组件 | 触发时点 | 输入 | 输出 |
+| --- | --- | --- | --- |
+| `PriceGuard` | 买入/卖出订单进入执行前 | reference/current price、open gap、limit、alpha budget | 是否接受当前交易价格、保护价、减量/拒单原因 |
+| `ExitGuard` | 持仓期间、调仓日、风险扫描时 | 持仓成本、当前价、最高价、持有期、alpha rank、波动率、事件风险 | `HOLD/TAKE_PROFIT/STOP_LOSS/TRAIL_STOP/TIME_EXIT/RANK_DROP_EXIT` |
+
+建议 schema：
+
+```json
+{
+  "exit_guard": {
+    "contract": "exit_guard_v1",
+    "enabled": false,
+    "mode": "rule_v1",
+    "stop_loss": {
+      "enabled": true,
+      "max_loss_bps": 600,
+      "volatility_multiple": 2.5,
+      "reference": "entry_cost"
+    },
+    "take_profit": {
+      "enabled": false,
+      "take_profit_bps": 1200,
+      "trailing_stop_bps": 500,
+      "reference": "entry_cost_or_peak"
+    },
+    "alpha_decay_exit": {
+      "enabled": true,
+      "rank_drop_below": "top40%",
+      "confirm_days": 2
+    },
+    "time_stop": {
+      "enabled": false,
+      "max_holding_days": 10
+    }
+  }
+}
+```
+
+第一阶段建议：
+
+- 策略包可展示 `suggested_exit_plan`，但默认 `exit_guard.enabled=false`，避免未经验证的止盈/止损影响 QE/Paper v2。
+- 先把止盈/止损作为 QE 独立 A/B 实验变量：`baseline_alpha_rebalance_only` vs `exit_guard_enabled`。
+- 若启用，止损 reason 应进入风险强制卖出通道，使用更宽 `risk_exit_max_slippage_bps`；止盈可走普通卖出或被动限价卖出。
+- `take_profit/stop_loss` 与 alpha 信号冲突时必须有优先级：第一版建议 `STOP_LOSS > forced risk > alpha rebalance > TAKE_PROFIT`，具体需 QE 验证。
+
+### 7.5 是否放入 `algo_config`
 
 推荐把 PriceGuard 作为 `policy_json.price_guard` 顶层字段，而不是塞入 `algo_config`。
 
@@ -416,6 +538,7 @@ QE 对照报告至少输出两类指标：
 | --- | --- |
 | `price_guard_policy.json` | 完整 PriceGuard 参数、schema version、price basis、reference source、适用策略族。 |
 | `price_guard_policy.sha256` | policy hash；Paper v2 后续必须引用同一 hash 才能宣称同策略验证。 |
+| `selection_price_guidance.parquet` 或 `.jsonl` | 策略包选股候选的 `reference_price`、`expected_alpha_bucket`、`suggested_entry_price_band` 和 guidance reason。 |
 | `ab_baseline_metrics.json` | 当前模式指标，包含数据版本、成本配置、execution algo config hash。 |
 | `ab_price_guard_metrics.json` | 启用 PriceGuard 后的组合级和 PriceGuard 归因指标。 |
 | `price_guard_decisions.parquet` 或 `.jsonl` | 按 symbol/date/side 记录 `ACCEPT/REDUCE/SKIP`、理由、价格、数量缩放。 |
@@ -623,6 +746,23 @@ Paper v2 进一步验证的重点不是重新证明 alpha，而是验证运行�
 
 第一版参数应保守、可解释、按策略族配置。以下为建议初值，必须通过 QE walk-forward/分桶回测确认后才能进入 Paper v2：
 
+### 10.0 策略包展示价与运行时保护价
+
+策略包选股页展示的买入价格范围建议从同一份 `price_guard_policy.json` 生成：
+
+```text
+green_max_buy_price = reference_price * (1 + yellow_open_gap_bps / 10000)
+yellow_max_buy_price = reference_price * (1 + max_open_gap_bps / 10000)
+red_above_price = yellow_max_buy_price
+```
+
+展示规则：
+
+- 展示价必须按 A 股 tick size 四舍五入或向下取整，具体 rounding 规则在实施阶段统一。
+- 展示价必须同时显示 `reference_source`、`price_basis`、`policy_sha256` 和 `guidance_status`。
+- 如果开盘价高于 `red_above_price`，运行时 PriceGuard 默认 `SKIP`；如果处于 green/yellow 区间，仍需根据涨跌停、停牌、现金、board-lot 和实时价重新确认。
+- 展示价不是券商委托价；委托价由 Paper v2/QE execution path 在当日 market context 中生成。
+
 ### 10.1 普通日频多因子 / 低换手
 
 ```yaml
@@ -689,6 +829,30 @@ sell:
 ```
 
 解释：普通调仓可以等，风险强制卖出更重视降低风险敞口，但仍需保护价和 reason。
+
+### 10.5 止盈/止损初始建议
+
+止盈/止损第一版不建议默认启用，应先作为独立实验。若需要给策略包展示建议，可用以下保守模板：
+
+```yaml
+exit_guard:
+  enabled: false
+  stop_loss:
+    max_loss_bps: 600
+    volatility_multiple: 2.5
+    reference: entry_cost
+  take_profit:
+    enabled: false
+    take_profit_bps: 1200
+    trailing_stop_bps: 500
+    reference: entry_cost_or_peak
+  alpha_decay_exit:
+    enabled: true
+    rank_drop_below: top40%
+    confirm_days: 2
+```
+
+解释：多因子组合更适合优先用 alpha 衰减/排名下降退出；硬止损和止盈容易改变持有期分布，必须单独做 QE A/B。若后续实验证明某类策略的止盈/止损稳定有效，再把 `exit_guard.enabled=true` 固化进 validated policy。
 
 ## 11. 历史分桶校准方案
 
@@ -836,6 +1000,32 @@ policy label:
 
 ML fallback 必须是 `fail`，不能回落到经验规则并报告成功，除非 policy 明确配置了已验证的 fallback policy 且单独 hash。
 
+### 12.6 ML 扩展到止盈/止损
+
+如果未来要用 ML 生成止盈/止损，不建议直接预测“最高能涨到多少钱”或“最低会跌到哪里”，而应预测退出动作的风险收益：
+
+```text
+exit_action in {HOLD, TAKE_PROFIT, STOP_LOSS, TRAIL_STOP, TIME_EXIT, RANK_DROP_EXIT}
+expected_forward_alpha_if_hold_bps
+expected_drawdown_if_hold_bps
+probability_of_profit_giveback
+probability_of_stop_hit
+```
+
+可用标签：
+
+- 固定持有期后的 residual alpha。
+- 从当前价继续持有的最大不利波动 MAE 和最大有利波动 MFE。
+- 是否触发 triple-barrier 风格的上轨/下轨/时间轨标签。
+- 止盈/止损后相对 alpha-only rebalance 的净值差。
+
+治理要求：
+
+- `ExitGuardModel` 必须与 `ExecutionAcceptanceModel` 分开注册模型资产和 feature contract。
+- 训练标签可以用未来路径，但运行时特征必须严格限制在决策时点可观测数据。
+- ML exit policy 只能先作为 `candidate_exit_guard_policy`，通过 QE A/B 后才能进入 Paper v2。
+- 如果 ML 模型缺特征或模型文件，必须 fail-fast；不能 fallback 到经验止损后仍宣称是 ML 策略。
+
 ## 13. 数据、Schema 与持久化建议
 
 ### 13.1 第一阶段无 DDL 路径
@@ -858,6 +1048,8 @@ fill.metadata.price_guard
 paper_v2.price_guard_decision
 qe_archive.execution_price_guard_summary
 strategy_package.execution_acceptance_model_asset
+strategy_package.selection_price_guidance
+paper_v2.exit_guard_decision
 ```
 
 字段建议：
@@ -885,6 +1077,8 @@ created_at
 
 DB schema 变更必须走 production DDL gate；本设计文档不实施 DDL。
 
+`selection_price_guidance` 可存储策略包候选展示价，`exit_guard_decision` 可存储持仓期止盈/止损/移动止盈/alpha 衰减退出决策；二者第一阶段都可先落 artifact，不要求立即建表。
+
 ## 14. Reason Code 规范
 
 建议 reason code：
@@ -899,10 +1093,16 @@ SKIP_NEAR_LIMIT_UP
 SKIP_BELOW_MIN_SELL_PRICE_REBALANCE
 EXECUTE_RISK_EXIT_WITH_WIDER_LIMIT
 WAITING_FOR_PRICE_GUARD_INPUT
+TAKE_PROFIT_TARGET_REACHED
+TRAILING_STOP_TRIGGERED
+STOP_LOSS_TRIGGERED
+TIME_STOP_TRIGGERED
+ALPHA_RANK_DROP_EXIT
 REFERENCE_PRICE_MISSING_DATA_ERROR
 PRICE_BASIS_MISMATCH_ERROR
 LIMIT_PRICE_MISSING_DATA_ERROR
 UNSUPPORTED_PRICE_GUARD_CONFIG_ERROR
+UNSUPPORTED_EXIT_GUARD_CONFIG_ERROR
 ```
 
 分类：
@@ -920,11 +1120,13 @@ UNSUPPORTED_PRICE_GUARD_CONFIG_ERROR
 - 审批本文档。
 - 明确首个策略族：建议 `ScoreWeightedTopkStrategyV2 + V25_1_SMALL_CAP`。
 - 明确第一版参数网格和样本区间。
+- 明确策略包选股页是否展示 `suggested_entry_price_band`，以及止盈/止损是否只展示为未启用建议。
 
 ### Phase 1：核心 DTO 与 validator
 
 - 新增 PriceGuard core DTO 和 rule evaluator。
 - 扩展 `ValidatedExecutionPolicy` schema，允许 `price_guard`。
+- 定义 selection price guidance DTO，支持 `reference_price`、`green/yellow/red` 买入价和 `policy_sha256`。
 - 增加 policy hash、unknown field、price basis validator。
 - 单元测试：green/yellow/red、missing reference、basis mismatch。
 
@@ -969,11 +1171,19 @@ UNSUPPORTED_PRICE_GUARD_CONFIG_ERROR
 - 注册模型资产、feature contract、walk-forward evidence。
 - 作为候选 policy 与 rule_v1 A/B，不直接覆盖已启用 policy。
 
+### Phase 8：ExitGuard 止盈/止损候选策略
+
+- 定义 `exit_guard` schema、reason codes 和持仓期 decision log。
+- 先在策略包中展示 `suggested_exit_plan`，默认不启用运行时强规则。
+- 用 QE A/B 对比 `alpha_rebalance_only` 与 `exit_guard_enabled`。
+- 通过 QE 和 Paper v2 parity replay 后，才允许进入 Paper v2 `shadow/guarded_sim`。
+
 ## 16. 测试与验收矩阵
 
 | 设计项 | 验收证据 |
 | --- | --- |
 | policy schema 支持 `price_guard` | validator 单测、policy sha256 稳定性测试 |
+| 策略包选股输出买入价格范围 | selection artifact 包含 `reference_price`、`suggested_entry_price_band`、`guidance_status`、`policy_sha256`，并标注非最终委托价 |
 | QE baseline 与 PriceGuard A/B 只切换价格限制 | A/B config diff 证明 strategy/model/data/cost/execution algo 相同，仅 `price_guard_mode/policy_sha256` 不同 |
 | QE A/B 产物完整 | `price_guard_policy.json`、`price_guard_policy.sha256`、`ab_baseline_metrics.json`、`ab_price_guard_metrics.json`、`price_guard_decisions.parquet/jsonl`、`ab_comparison_report.md` |
 | QE 参数网格可解释 | max open gap、chase budget、yellow multiplier、sell slippage sweep 报告，含 walk-forward 和 bucket stability |
@@ -988,6 +1198,8 @@ UNSUPPORTED_PRICE_GUARD_CONFIG_ERROR
 | vn.py-style 消费保护价 | MiniQMT adapter/unit test，price 来自 PriceGuard |
 | 缺 reference_price fail-fast | core 单测 + Paper v2 runner test |
 | runtime 不允许临时覆盖 | Paper v2 runtime_config override test |
+| 止盈/止损不混入买入 PriceGuard | `exit_guard` schema、reason code、A/B report 独立于 `price_guard`，默认未验证不启用 |
+| ExitGuard A/B 可解释 | QE 对比 `alpha_rebalance_only` 与 `exit_guard_enabled`，报告止盈/止损触发次数、收益差、回撤差、换手和噪声洗出率 |
 | no silent fallback | 搜索 fallback/default 成功路径 + targeted tests |
 
 ## 17. 风险与开放问题
@@ -998,7 +1210,9 @@ UNSUPPORTED_PRICE_GUARD_CONFIG_ERROR
 4. 卖出场景必须区分 `rebalance_sell`、`risk_exit`、`forced_exit`、`cash_raise`。
 5. 如果 PriceGuard 导致买入未成交，后续目标权重如何处理：当日取消、次日继续、重新评分，需要策略级配置。
 6. `CLOSE_PRICE` 日频路径是否完全禁用 PriceGuard，还是仅支持简单 close-to-close guard，需要审批。
-7. 是否需要把 PriceGuard 决策纳入前端 Paper v2 / StrategyPackage 审计页面，本设计暂不包含 UI。
+7. 策略包选股页展示 `suggested_entry_price_band` 后，用户是否允许手工覆盖；若允许，必须作为新 policy 重新验证，不能覆盖原 hash。
+8. 止盈/止损第一版是只展示建议，还是进入 `shadow` 诊断；不建议未经 QE A/B 直接 enforced。
+9. 是否需要把 PriceGuard/ExitGuard 决策纳入前端 Paper v2 / StrategyPackage 审计页面，本设计暂不包含 UI。
 
 ## 18. 推荐审批结论
 
@@ -1008,5 +1222,7 @@ UNSUPPORTED_PRICE_GUARD_CONFIG_ERROR
 2. QE 回测是 PriceGuard policy 的验证源；Paper v2 只能消费 validated execution policy snapshot。
 3. 第一版采用 `rule_v1 + historical bucket calibration`，不直接上 ML。
 4. ML 仅作为未来候选 policy，必须带模型资产、feature contract、walk-forward evidence、policy hash。
-5. 第一批落地策略建议限定为 `ScoreWeightedTopkStrategyV2` / `ScoreWeightedTopkStrategyV2CapacityV1` + `V25_1_SMALL_CAP`，避免一次性扩散到所有算法。
+5. 策略包选股结果应展示买入价格范围，但该范围是 pre-trade guidance；开盘后仍由 PriceGuard 重新确认。
+6. 止盈/止损属于独立 ExitGuard/RiskGuard，不与买入 PriceGuard 混合；默认先展示/诊断，QE A/B 通过后再考虑 enforced。
+7. 第一批落地策略建议限定为 `ScoreWeightedTopkStrategyV2` / `ScoreWeightedTopkStrategyV2CapacityV1` + `V25_1_SMALL_CAP`，避免一次性扩散到所有算法。
 
