@@ -172,6 +172,10 @@ function buildSectionView(section: PipelineSection, props: PipelineOverviewCards
     const productionTouched = Boolean(props.health?.production_8001_touched || props.cardsSummary?.production_8001_touched);
     const planCount = props.plans?.length ?? props.health?.plan_catalog?.plan_count ?? 0;
     const tone = productionTouched ? "red" : toneFromState(state);
+    const codeIntel = props.validationSummary?.code_intelligence;
+    const codegraph = isObject(codeIntel?.codegraph) ? codeIntel?.codegraph : {};
+    const ua = isObject(codeIntel?.understand_anything) ? codeIntel?.understand_anything : {};
+    const codeIntelWarnings = stringList(codeIntel?.warnings);
     return {
       id: section.id,
       label: section.label,
@@ -189,11 +193,16 @@ function buildSectionView(section: PipelineSection, props: PipelineOverviewCards
         ["catalog", objectField(props.health, "catalog_integrity") || props.health?.plan_catalog],
         ["runner", props.health?.runner || props.validationSummary?.runner],
         ["GitHub 连接", props.automationSummary?.gh_auth_status || props.githubIssueSummary?.data_state || props.githubPrSummary?.data_state],
+        ["code intelligence", codeIntel?.data_state || "missing"],
+        ["CodeGraph freshness", objectField(codegraph, "freshness") || objectField(codegraph, "status") || "-"],
+        ["UA summaries", objectField(ua, "summary_count") ?? "-"],
+        ["code intelligence warnings", codeIntelWarnings.length ? codeIntelWarnings.join(" / ") : "none"],
         ["可选 API 降级", warningKeys.length ? warningKeys.join(" / ") : "无"],
       ],
       reasonCodes: [
         ...(productionTouched ? ["production_8001_touched"] : []),
         ...warningKeys.map((key) => `optional_api_unavailable:${key}`),
+        ...stringList(codeIntel?.reason_codes),
       ],
     };
   }

@@ -158,6 +158,61 @@ def _write_history(history_root: Path) -> dict[str, Path]:
         "# Runner Guardrail Artifact\n\nThis copied artifact must not appear as a run.\n",
         encoding="utf-8",
     )
+    code_intel_dir = history_root.parent / "tmp" / "validation" / "code-intelligence"
+    (code_intel_dir / "codegraph-freshness.md").parent.mkdir(parents=True, exist_ok=True)
+    (code_intel_dir / "codegraph-freshness.md").write_text("# CodeGraph Freshness\n", encoding="utf-8")
+    _write_json(
+        code_intel_dir / "codegraph-freshness.json",
+        {
+            "schema_version": "aistock_codegraph_freshness_v1",
+            "generated_at": "2026-05-04T13:00:00Z",
+            "provider": "codegraph",
+            "workflow_gate": "ready",
+            "freshness": "fresh",
+            "status": "ok",
+            "git_commit": "abc1234",
+            "artifact_path": "tmp/validation/code-intelligence/codegraph-freshness.json",
+            "summary_ref": "tmp/validation/code-intelligence/codegraph-freshness.md",
+            "blocking_for_issue_workflow": False,
+            "index_summary": {"files": 10, "nodes": 20, "edges": 30, "up_to_date": True},
+            "warnings": [],
+        },
+    )
+    _write_json(
+        code_intel_dir / "ua-summary-manifest.json",
+        {
+            "schema_version": "aistock_understand_anything_summary_manifest_v1",
+            "generated_at": "2026-05-04T13:01:00Z",
+            "graph_provider": "understand_anything",
+            "summary_refs": [
+                {
+                    "module": "validation_center",
+                    "status": "fallback",
+                    "summary_ref": "tmp/validation/code-intelligence/ua-validation_center-summary.md",
+                    "artifact_path": "tmp/validation/code-intelligence/ua-validation_center-summary.json",
+                }
+            ],
+            "blocking_for_issue_workflow": False,
+        },
+    )
+    _write_json(
+        code_intel_dir / "ua-validation_center-summary.json",
+        {
+            "schema_version": "aistock_understand_anything_summary_v1",
+            "generated_at": "2026-05-04T13:02:00Z",
+            "graph_provider": "understand_anything",
+            "module": "validation_center",
+            "status": "fallback",
+            "summary_ref": "tmp/validation/code-intelligence/ua-validation_center-summary.md",
+            "artifact_path": "tmp/validation/code-intelligence/ua-validation_center-summary.json",
+            "node_count": 0,
+            "edge_count": 0,
+            "nodes_used": 0,
+            "edges_used": 0,
+            "blocking_for_issue_workflow": False,
+            "warnings": ["Understand Anything graph is missing; summary is a non-blocking placeholder."],
+        },
+    )
     return {"run_md": run_md, "markdown_only": markdown_only, "malformed": malformed}
 
 
@@ -446,6 +501,30 @@ def test_summary_reports_module_counts(client: TestClient) -> None:
     assert summary["quality"]["finding_count"] == 2
     assert summary["quality"]["bug_count"] == 1
     assert summary["modules"][0]["module"] == "validation_center"
+    assert summary["code_intelligence"]["data_state"] == "complete"
+    assert summary["code_intelligence"]["codegraph"]["freshness"] == "fresh"
+
+
+def test_code_intelligence_summary_endpoint_is_warning_only(client: TestClient) -> None:
+    payload = client.get("/api/v1/validation/code-intelligence/summary").json()["data"]
+
+    assert payload["schema_version"] == "aistock_validation_code_intelligence_summary_v1"
+    assert payload["blocking_for_issue_workflow"] is False
+    assert payload["artifact_count"] == 3
+    assert payload["codegraph"]["artifact_type"] == "codegraph_freshness"
+    assert payload["codegraph"]["index_summary"]["nodes"] == 20
+    assert payload["understand_anything"]["summary_count"] == 1
+
+
+def test_code_intelligence_summary_degrades_when_missing(tmp_path: Path) -> None:
+    store = ValidationHistoryStore(history_root=tmp_path / "history", repo_root=tmp_path)
+
+    payload = store.code_intelligence_summary()
+
+    assert payload["data_state"] == "missing"
+    assert payload["artifact_count"] == 0
+    assert payload["blocking_for_issue_workflow"] is False
+    assert "CodeGraph freshness artifact is missing." in payload["warnings"]
 
 
 def test_quality_findings_and_bug_agent_context(client: TestClient) -> None:

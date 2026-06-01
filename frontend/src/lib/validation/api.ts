@@ -160,6 +160,31 @@ export type ValidationEvidenceDetail = {
   manifest: JsonObject;
 };
 
+export type ValidationCodeIntelligenceSummary = JsonObject & {
+  schema_version?: string;
+  data_state?: string;
+  blocking_for_issue_workflow?: boolean;
+  artifact_count?: number;
+  artifact_roots?: string[];
+  codegraph?: (JsonObject & {
+    status?: string;
+    freshness?: string;
+    generated_at?: string;
+    artifact_path?: string;
+    summary_ref?: string | null;
+    warnings?: string[];
+    index_summary?: JsonObject;
+  }) | null;
+  understand_anything?: JsonObject & {
+    manifest?: JsonObject | null;
+    summary_count?: number;
+    latest_summaries?: JsonObject[];
+  };
+  artifacts?: JsonObject[];
+  warnings?: string[];
+  reason_codes?: string[];
+};
+
 export type ValidationSummary = {
   history_root?: string;
   run_count?: number;
@@ -175,6 +200,7 @@ export type ValidationSummary = {
   modules?: Array<JsonObject & { module?: string; run_count?: number; latest_run?: ValidationRunSummary }>;
   latest_runs?: ValidationRunSummary[];
   latest_coverage?: ValidationCoverageSummary | null;
+  code_intelligence?: ValidationCodeIntelligenceSummary | null;
 };
 
 export type ValidationRunnerHealth = JsonObject & {
@@ -921,6 +947,9 @@ export const validationApi = {
   },
   evidenceDetail(manifestId: string): Promise<ValidationEvidenceDetail> {
     return unwrap<ValidationEvidenceDetail>(`/validation/evidence/${encodeURIComponent(manifestId)}`);
+  },
+  codeIntelligenceSummary(): Promise<ValidationCodeIntelligenceSummary> {
+    return unwrap<ValidationCodeIntelligenceSummary>("/validation/code-intelligence/summary");
   },
   summary(): Promise<ValidationSummary> {
     return unwrap<ValidationSummary>("/validation/summary");
