@@ -318,6 +318,19 @@ def _compact_postmortem(value: Any) -> dict[str, Any] | None:
     timing_summary = _compact_timing_summary(value.get("timing_summary"))
     if timing_summary:
         compact["timing_summary"] = timing_summary
+    if isinstance(value.get("phase_cost_table"), list):
+        compact["phase_cost_table"] = value.get("phase_cost_table")
+    if isinstance(value.get("h6_summary"), dict):
+        compact["h6_summary"] = value.get("h6_summary")
+    if isinstance(value.get("h7_code_intelligence"), dict):
+        compact["h7_code_intelligence"] = _pick(
+            value["h7_code_intelligence"],
+            "status",
+            "codegraph_status",
+            "fallback_used",
+            "readiness_next_command",
+            "fallback_reason",
+        )
     active = value.get("active_workflows")
     if isinstance(active, list):
         compact["active_workflow_count"] = len(active)
@@ -378,6 +391,24 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
             compact["cleanup"] = _pick(payload["cleanup"], "workflow_gate", "branch", "worktree", "sync_root", "blocking", "warnings")
         if "active_decision" in payload:
             compact["active_decision"] = _pick(payload["active_decision"], "decision", "workflow_gate", "next_command", "blocking", "warnings")
+    elif schema.endswith("_doctor_v1"):
+        compact.update(_pick(payload, "restart_recommended", "install_client_next_command"))
+        if "client_manifest" in payload:
+            compact["client_manifest"] = _pick(
+                payload["client_manifest"],
+                "codex_skill_status",
+                "claude_command_status",
+                "restart_recommended",
+            )
+        if "h7_code_intelligence" in payload:
+            compact["h7_code_intelligence"] = _pick(
+                payload["h7_code_intelligence"],
+                "workflow_gate",
+                "codegraph_status",
+                "fallback_used",
+                "readiness_next_command",
+                "fallback_reason",
+            )
     elif schema.endswith("_start_v1"):
         compact.update(_compact_start(payload) or {})
     elif schema.endswith("_finish_v1") or schema.endswith("_finish_batch_v1"):
@@ -683,6 +714,88 @@ def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str,
             "inferred_elapsed_seconds is wall-clock distance between recorded events and may include human/CI wait time",
             "code_repair_seconds is intentionally not guessed unless the agent records explicit repair events",
         ],
+    }
+
+
+def _phase_cost_table(timing: dict[str, Any]) -> list[dict[str, Any]]:
+    phases = timing.get("phases") if isinstance(timing, dict) else {}
+    if not isinstance(phases, dict):
+        return []
+    rows: list[dict[str, Any]] = []
+    for phase, item in sorted(phases.items()):
+        if not isinstance(item, dict):
+            continue
+        known = round(float(item.get("known_duration_seconds") or 0), 3)
+        inferred = round(float(item.get("inferred_since_previous_seconds") or 0), 3)
+        rows.append(
+            {
+                "phase": str(phase),
+                "event_count": int(item.get("event_count") or 0),
+                "known_seconds": known,
+                "inferred_seconds": inferred,
+                "dominant_seconds": max(known, inferred),
+            }
+        )
+    return rows
+
+
+def _h6_summary(timing: dict[str, Any], context_metrics: dict[str, Any], artifact_metrics: dict[str, Any]) -> dict[str, Any]:
+    phase_rows = _phase_cost_table(timing)
+    top_phase = max(phase_rows, key=lambda item: item["dominant_seconds"], default=None)
+    context_tokens = sum(
+        int(item.get("estimated_tokens") or 0)
+        for item in context_metrics.values()
+        if isinstance(item, dict)
+    )
+    artifact_tokens = sum(
+        int(item.get("estimated_tokens") or 0)
+        for item in artifact_metrics.values()
+        if isinstance(item, dict)
+    )
+    return {
+        "schema_version": "aistock_issue_workflow_h6_summary_v1",
+        "event_count": timing.get("event_count"),
+        "known_duration_seconds": timing.get("known_duration_seconds"),
+        "inferred_elapsed_seconds": timing.get("inferred_elapsed_seconds"),
+        "top_phase": top_phase,
+        "context_estimated_tokens": context_tokens,
+        "artifact_estimated_tokens": artifact_tokens,
+        "total_estimated_tokens": context_tokens + artifact_tokens,
+        "code_repair_seconds": timing.get("code_repair_seconds"),
+        "code_repair_note": "explicit repair timing is reported only when events record it; workflow does not guess",
+    }
+
+
+def _code_intelligence_readiness(code_intel: dict[str, Any] | None) -> dict[str, Any]:
+    code_intel = code_intel or {}
+    codegraph = code_intel.get("codegraph") if isinstance(code_intel.get("codegraph"), dict) else {}
+    ua = code_intel.get("understand_anything") if isinstance(code_intel.get("understand_anything"), dict) else {}
+    bootstrap = code_intel.get("bootstrap_commands") if isinstance(code_intel.get("bootstrap_commands"), dict) else {}
+    context = code_intel.get("context") if isinstance(code_intel.get("context"), dict) else {}
+    fallback = context.get("fallback") if isinstance(context.get("fallback"), dict) else {}
+    fallback_used = bool(
+        code_intel.get("fallback_used")
+        or fallback.get("used")
+        or str(code_intel.get("status") or "").lower() == "fallback"
+        or str(codegraph.get("status") or "").lower() in {"unavailable", "missing_index", "stale"}
+    )
+    codegraph_status = str(codegraph.get("status") or code_intel.get("status") or "unknown")
+    fallback_reason = fallback.get("reason") or code_intel.get("fallback_reason")
+    if not fallback_reason and fallback_used:
+        fallback_reason = "codegraph_" + codegraph_status
+    next_command = codegraph.get("bootstrap_command") or bootstrap.get("codegraph")
+    if not next_command and fallback_used:
+        next_command = "codegraph init -i"
+    return {
+        "schema_version": "aistock_issue_workflow_h7_code_intelligence_readiness_v1",
+        "workflow_gate": "warning" if fallback_used else "ready",
+        "status": code_intel.get("status") or codegraph_status,
+        "codegraph_status": codegraph_status,
+        "understand_anything_status": ua.get("status"),
+        "fallback_used": fallback_used,
+        "fallback_reason": fallback_reason,
+        "readiness_next_command": next_command,
+        "blocking_for_issue_workflow": False,
     }
 
 
@@ -2848,6 +2961,7 @@ def build_finish_plan(
         changed_files=changed,
         root=REPO_ROOT,
     )
+    h7_code_intelligence = _code_intelligence_readiness(code_intelligence_summary)
     codegraph_tests = code_intelligence_summary.get("affected_tests", {}).get("suggested_tests") or []
     if codegraph_tests:
         validation["codegraph_suggested_tests"] = codegraph_tests
@@ -2864,6 +2978,7 @@ def build_finish_plan(
         "validation_evidence": evidence,
         "closure_ready": closure_ready,
         "code_intelligence": code_intelligence_summary,
+        "h7_code_intelligence": h7_code_intelligence,
     })
     _write_text(pr_body_path, pr_body)
     next_state = "validation_passed" if evidence else ("validation_planned" if plan_only else "blocked")
@@ -2879,6 +2994,8 @@ def build_finish_plan(
             "context_ref": code_intelligence_summary.get("context_ref"),
             "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
             "fallback_used": code_intelligence_summary.get("fallback_used"),
+            "readiness_next_command": h7_code_intelligence.get("readiness_next_command"),
+            "fallback_reason": h7_code_intelligence.get("fallback_reason"),
         },
         stop_reason=None if closure_ready else "validation_evidence_missing",
         next_actions=[
@@ -2914,6 +3031,7 @@ def build_finish_plan(
             "fallback_used": code_intelligence_summary.get("fallback_used"),
         },
         "codegraph_suggested_tests": codegraph_tests,
+        "h7_code_intelligence": h7_code_intelligence,
         "validation_evidence": evidence,
         "closure_ready": closure_ready,
         "workflow_gate": "ready_for_pr" if closure_ready else "validation_evidence_missing",
@@ -2941,6 +3059,7 @@ def render_pr_body(
     closure_ready: bool,
 ) -> str:
     gates = validation.get("production_gates") or {}
+    code_intel = validation.get("h7_code_intelligence") or {}
     lines = [
         f"## {bug_id} issue workflow summary",
         "",
@@ -2957,6 +3076,9 @@ def render_pr_body(
         "",
         "## Code intelligence",
         *[f"- CodeGraph suggested test: `{path}`" for path in validation.get("codegraph_suggested_tests") or ["none"]],
+        f"- H7 readiness: `{code_intel.get('workflow_gate') or 'unknown'}`",
+        f"- fallback_used: `{str(bool(code_intel.get('fallback_used'))).lower()}`",
+        f"- readiness_next_command: `{code_intel.get('readiness_next_command') or 'not_required'}`",
         "",
         "## Evidence",
         *[f"- {item}" for item in evidence or ["missing - run required validation before requesting merge"]],
@@ -3563,6 +3685,7 @@ def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
         warnings.append(f"code intelligence: {warning}")
     for item in code_intel.get("blocking") or []:
         blocking.append(f"code intelligence: {item}")
+    h7_code_intelligence = _code_intelligence_readiness(code_intel)
 
     gate = "blocked" if blocking else ("warning" if warnings else "ready")
     next_command = f"python {REPO_ROOT / 'scripts' / 'aistock_issue_workflow.py'} run --bug-id BUG-XXX --mode plan --create-worktree"
@@ -3579,6 +3702,7 @@ def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
         "github": github,
         "mcp": mcp,
         "code_intelligence": code_intel,
+        "h7_code_intelligence": h7_code_intelligence,
         "client_manifest": client_manifest,
         "restart_recommended": client_manifest.get("restart_recommended"),
         "install_client_next_command": client_manifest.get("install_client_next_command"),
@@ -3717,6 +3841,9 @@ def build_postmortem_plan(*, bug_id: str, worktree: str | None = None, output_ma
             "finish_plan": _size_and_token_estimate(finish_plan),
             "pr_body": _size_and_token_estimate(pr_body),
         }
+    phase_cost_table = _phase_cost_table(timing)
+    h6_summary = _h6_summary(timing, context_metrics, artifact_metrics)
+    h7_code_intelligence = _code_intelligence_readiness(state.get("code_intelligence") or {})
     payload = {
         "schema_version": "aistock_issue_workflow_postmortem_v1",
         "generated_at": _utc_now(),
@@ -3731,8 +3858,11 @@ def build_postmortem_plan(*, bug_id: str, worktree: str | None = None, output_ma
             "next_actions": state.get("next_actions") or [],
         },
         "timing_summary": timing,
+        "phase_cost_table": phase_cost_table,
+        "h6_summary": h6_summary,
         "context_metrics": context_metrics,
         "artifact_metrics": artifact_metrics,
+        "h7_code_intelligence": h7_code_intelligence,
         "active_workflows": active,
         "duplicate_active_count": duplicate_active_count,
         "stale_pr_check": stale_pr_check,
@@ -3740,11 +3870,9 @@ def build_postmortem_plan(*, bug_id: str, worktree: str | None = None, output_ma
             "known_duration_seconds": timing.get("known_duration_seconds"),
             "inferred_elapsed_seconds": timing.get("inferred_elapsed_seconds"),
             "event_count": timing.get("event_count"),
-            "context_estimated_tokens": sum(
-                int(item.get("estimated_tokens") or 0)
-                for item in context_metrics.values()
-                if isinstance(item, dict)
-            ),
+            "context_estimated_tokens": h6_summary.get("context_estimated_tokens"),
+            "artifact_estimated_tokens": h6_summary.get("artifact_estimated_tokens"),
+            "top_phase": h6_summary.get("top_phase"),
         },
         "production_gates": state.get("production_gates") or {},
         "recent_events": events[-20:],
@@ -3767,12 +3895,26 @@ def build_postmortem_plan(*, bug_id: str, worktree: str | None = None, output_ma
             "| Phase | Events | Known seconds | Inferred seconds |",
             "| --- | ---: | ---: | ---: |",
         ]
-        for phase, item in sorted((timing.get("phases") or {}).items()):
+        for item in phase_cost_table:
             lines.append(
-                f"| `{phase}` | {item.get('event_count')} | {item.get('known_duration_seconds')} | {item.get('inferred_since_previous_seconds')} |"
+                f"| `{item.get('phase')}` | {item.get('event_count')} | {item.get('known_seconds')} | {item.get('inferred_seconds')} |"
             )
         lines.extend(
             [
+                "",
+                "## H6 Cost Summary",
+                "",
+                f"- Top phase: `{(h6_summary.get('top_phase') or {}).get('phase') or 'none'}`",
+                f"- Context estimated tokens: `{h6_summary.get('context_estimated_tokens')}`",
+                f"- Artifact estimated tokens: `{h6_summary.get('artifact_estimated_tokens')}`",
+                f"- Code repair seconds: `{h6_summary.get('code_repair_seconds') or 'not_recorded'}`",
+                "",
+                "## H7 Code Intelligence",
+                "",
+                f"- status: `{h7_code_intelligence.get('status') or 'unknown'}`",
+                f"- codegraph_status: `{h7_code_intelligence.get('codegraph_status') or 'unknown'}`",
+                f"- fallback_used: `{str(bool(h7_code_intelligence.get('fallback_used'))).lower()}`",
+                f"- readiness_next_command: `{h7_code_intelligence.get('readiness_next_command') or 'not_required'}`",
                 "",
                 "## Production Gates",
                 "",
@@ -6457,8 +6599,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-
-
-
-

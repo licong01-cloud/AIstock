@@ -73,7 +73,7 @@ python scripts/aistock_issue_workflow.py doctor
 
 The `client_manifest` block is machine-readable. If `codex_skill_status` is `stale` or `missing_global`, the current repo CLI remains the source of truth, but older Codex windows may not auto-trigger the latest workflow. After the workflow branch is merged into `main`, run `install-client --apply` and restart old client windows before measuring workflow efficiency.
 
-Code intelligence is non-blocking in KG-1/KG-3. If CodeGraph is installed and `.codegraph/` exists, Context Pack, finish artifacts, and PR Quality artifacts include `code_intelligence` refs such as `codegraph-context.md`, `affected-tests.json`, and `code-intelligence-summary.md`. If CodeGraph or Understand Anything is unavailable, continue with the existing issue workflow fallback and record the warning; do not run full-repo exploration by default. PR Quality publishes these artifacts as warning-only acceleration hints; final validation still comes from AIstock nox / pytest / Validation Center gates.
+Code intelligence is non-blocking in KG-1/KG-3. If CodeGraph is installed and `.codegraph/` exists, Context Pack, finish artifacts, and PR Quality artifacts include `code_intelligence` refs such as `codegraph-context.md`, `affected-tests.json`, and `code-intelligence-summary.md`. If CodeGraph or Understand Anything is unavailable, continue with the existing issue workflow fallback and record the warning; do not run full-repo exploration by default. `doctor` and `postmortem` expose `h7_code_intelligence.readiness_next_command`, usually `codegraph init -i` when the index is missing. Run that command only when the current workflow needs graph context; missing graph data must not block ordinary T0/T1 fixes. PR Quality publishes these artifacts as warning-only acceleration hints; final validation still comes from AIstock nox / pytest / Validation Center gates.
 
 Warnings about a dirty canonical root are not permission to write there. They mean root sync/cleanup must stop until the unrelated work is resolved. New issue registration and fixes should continue only in a clean task or registry worktree.
 
@@ -356,7 +356,7 @@ After a PR is created, merged, or a workflow feels slow, generate the postmortem
 python scripts/aistock_issue_workflow.py postmortem --bug-id BUG-XXX
 ```
 
-The command writes `tmp/issue_workflow/<BUG>/postmortem.json` and `postmortem.md` with phase timing, command-duration telemetry, Context Pack token estimates, duplicate active-worktree count, stale PR check, production gates, and recent events. `known_duration_seconds` comes from commands run by the wrapper; `inferred_elapsed_seconds` includes wall-clock gaps such as human review and CI wait time, so do not treat it as pure code-repair time.
+The command writes `tmp/issue_workflow/<BUG>/postmortem.json` and `postmortem.md` with phase timing, command-duration telemetry, Context Pack token estimates, duplicate active-worktree count, stale PR check, production gates, and recent events. It also includes `phase_cost_table`, `h6_summary`, and `h7_code_intelligence` so agents can report the top time/token cost and CodeGraph readiness without pasting full JSON. `known_duration_seconds` comes from commands run by the wrapper; `inferred_elapsed_seconds` includes wall-clock gaps such as human review and CI wait time, so do not treat it as pure code-repair time. `code_repair_seconds` is reported only when explicit repair events exist; do not invent it from wall-clock gaps.
 
 ## Triage Current P0
 

@@ -750,7 +750,61 @@ def test_doctor_reports_ready_when_client_entries_exist(
     assert payload["workflow_gate"] == "ready"
     assert payload["blocking"] == []
     assert payload["code_intelligence"]["codegraph"]["status"] == "ok"
+    assert payload["h7_code_intelligence"]["workflow_gate"] == "ready"
     assert "run --bug-id BUG-XXX" in payload["next_command"]
+
+
+def test_doctor_compact_reports_codegraph_bootstrap_next_command(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (isolated_workflow_root / "scripts").mkdir()
+    (isolated_workflow_root / "scripts" / "aistock_issue_workflow.py").write_text("", encoding="utf-8")
+    (isolated_workflow_root / "scripts" / "issue_flow.py").write_text("", encoding="utf-8")
+    (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue").mkdir(parents=True)
+    (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue" / "SKILL.md").write_text("", encoding="utf-8")
+    (isolated_workflow_root / "docs" / "standards").mkdir(parents=True)
+    (isolated_workflow_root / "docs" / "standards" / "aistock_development_standard_v1.5_20260523.md").write_text("", encoding="utf-8")
+    (isolated_workflow_root / "docs" / "architecture").mkdir(parents=True)
+    (isolated_workflow_root / "docs" / "architecture" / "aistock_issue_workflow_opensource_cicd_design_v2_20260525.md").write_text("", encoding="utf-8")
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {
+            "ok": True,
+            "branch": "main",
+            "head": "abc1234",
+            "origin_main": "abc1234",
+            "dirty": False,
+            "dirty_count": 0,
+        },
+    )
+    monkeypatch.setattr(workflow, "_mcp_config_snapshot", lambda: {"files": [], "stale_worktree_config_files": []})
+    monkeypatch.setattr(
+        workflow.code_intelligence,
+        "build_doctor_report",
+        lambda root, skip_external=False: {
+            "schema_version": "aistock_code_intelligence_doctor_v1",
+            "workflow_gate": "warning",
+            "warnings": ["CodeGraph index is missing; run codegraph init -i"],
+            "blocking": [],
+            "codegraph": {
+                "status": "missing_index",
+                "index_exists": False,
+                "bootstrap_command": "codegraph init -i",
+            },
+            "understand_anything": {"status": "not_required_missing"},
+            "bootstrap_commands": {"codegraph": "codegraph init -i"},
+        },
+    )
+
+    payload = workflow.build_doctor_report(skip_external=True)
+    compact = workflow._compact_payload(payload)
+
+    assert payload["h7_code_intelligence"]["readiness_next_command"] == "codegraph init -i"
+    assert payload["h7_code_intelligence"]["blocking_for_issue_workflow"] is False
+    assert compact["h7_code_intelligence"]["readiness_next_command"] == "codegraph init -i"
 
 
 
@@ -1668,9 +1722,16 @@ def test_postmortem_reports_timing_context_and_duplicate_active_count(
     assert payload["timing_summary"]["event_count"] == 2
     assert payload["timing_summary"]["known_duration_seconds"] == 2.5
     assert payload["flow_overhead_estimate"]["context_estimated_tokens"] == 20
+    assert payload["h6_summary"]["top_phase"]["phase"] == "gh_pr_create"
+    assert payload["phase_cost_table"]
+    assert payload["h7_code_intelligence"]["workflow_gate"] == "ready"
     assert payload["duplicate_active_count"] == 1
+    postmortem_md = isolated_workflow_root / payload["postmortem_md_path"]
     assert (isolated_workflow_root / payload["postmortem_json_path"]).exists()
-    assert (isolated_workflow_root / payload["postmortem_md_path"]).exists()
+    assert postmortem_md.exists()
+    md_text = postmortem_md.read_text(encoding="utf-8")
+    assert "## H6 Cost Summary" in md_text
+    assert "## H7 Code Intelligence" in md_text
 
 
 def test_postmortem_prefers_fix_workflow_over_registry_intake(
