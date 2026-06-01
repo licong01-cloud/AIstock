@@ -1,0 +1,99 @@
+team_key: research_assistant.agent_teams.v1
+max_parallel_workers: 4
+orchestrator:
+  agent_key: orchestrator
+  role: orchestrator
+  model_role: primary_reasoner
+  goal: Decompose cross-module research goals, dispatch workers, reduce evidence, arbitrate conflicts, and request approval for high-risk actions without doing domain work directly.
+  prompt_nodes:
+    - agent_team.orchestrator
+    - governance.preflight
+  max_tool_iterations: 2
+  allowed_servers: []
+  allowed_tools: []
+reduce:
+  stable_order: [task_order, agent_key]
+  evidence_contract: source_as_of_required
+  expose_worker_chain_in_main_bubble: false
+workers:
+  - agent_key: qe_experiment_designer
+    task_order: 10
+    role: qe_experiment_designer
+    goal: Design low-cost QE experiment drafts, validation metrics, and promotion gates from evidence.
+    allowed_servers:
+      - aistock-qe-experiment
+      - aistock-qe-archive
+    allowed_tools:
+      - aistock-qe-experiment/qe_template_validate
+      - aistock-qe-experiment/qe_template_create
+      - aistock-qe-experiment/qe_template_materialize_confirmed
+      - aistock-qe-archive/qe_archive_search_runs
+      - aistock-qe-archive/qe_archive_run_leaderboard
+    model_role: cheap_worker
+    prompt_nodes:
+      - worker.qe_experiment_designer
+      - tool_guard.read_only_first
+    max_tool_iterations: 2
+    triggers: [qe, experiment, backtest, validation, 实验, 回测, 验证]
+    output_schema:
+      required: [summary, artifacts, evidence_refs, status]
+  - agent_key: hmm_evolution
+    task_order: 20
+    role: hmm_evolution
+    goal: Analyze HMM evolution candidates, state transitions, and low-cost diagnostics.
+    allowed_servers:
+      - aistock-qe-archive
+      - aistock-validation
+    allowed_tools:
+      - aistock-qe-archive/qe_archive_search_runs
+      - aistock-qe-archive/qe_archive_evolution_lineage
+      - aistock-validation/mcp_github_issue_create
+    model_role: cheap_worker
+    prompt_nodes:
+      - worker.hmm_evolution
+      - tool_guard.preflight_for_writes
+    max_tool_iterations: 2
+    triggers: [hmm, state, regime, evolution, 状态, 演进]
+    output_schema:
+      required: [summary, artifacts, evidence_refs, status]
+  - agent_key: factor_developer
+    task_order: 30
+    role: factor_developer
+    goal: Propose factor development or factor-library analysis tasks using compact evidence.
+    allowed_servers:
+      - aistock-factor-library
+      - aistock-qe-archive
+    allowed_tools:
+      - aistock-factor-library/factor_library_list
+      - aistock-factor-library/factor_library_get_detail
+      - aistock-factor-library/factor_independent_metrics
+      - aistock-factor-library/factor_correlation_summary
+      - aistock-qe-archive/qe_archive_factor_performance
+    model_role: cheap_worker
+    prompt_nodes:
+      - worker.factor_developer
+      - tool_guard.summary_first
+    max_tool_iterations: 2
+    triggers: [factor, alpha, 因子, 指标, 相关性]
+    output_schema:
+      required: [summary, artifacts, evidence_refs, status]
+  - agent_key: local_data_doctor
+    task_order: 40
+    role: local_data_doctor
+    goal: Diagnose local data health and plan repair proposals without applying repairs automatically.
+    allowed_servers:
+      - aistock-local-data
+    allowed_tools:
+      - aistock-local-data/local_data_health_overview
+      - aistock-local-data/local_data_get_dataset_status
+      - aistock-local-data/local_data_list_sync_targets
+      - aistock-local-data/local_data_plan_repair
+      - aistock-local-data/local_data_apply_repair_confirmed
+    model_role: cheap_worker
+    prompt_nodes:
+      - worker.local_data_doctor
+      - tool_guard.repair_requires_confirmation
+    max_tool_iterations: 2
+    triggers: [data, dataset, local data, 数据, 本地数据, 修复]
+    output_schema:
+      required: [summary, artifacts, evidence_refs, status]
