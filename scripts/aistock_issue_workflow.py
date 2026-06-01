@@ -1258,10 +1258,19 @@ def _dirty_files(root: Path) -> list[str]:
     return files
 
 
+def _git_ref_has_path(root: Path, ref: str, rel: str) -> bool:
+    normalized = rel.replace("\\", "/").strip("/")
+    if not normalized:
+        return False
+    return _run_command(["git", "cat-file", "-e", f"{ref}:{normalized}"], cwd=root).get("ok", False)
+
+
 def _origin_equivalent_dirty_files(root: Path, files: list[str]) -> list[str]:
     equivalent: list[str] = []
     for rel in files:
         if not rel:
+            continue
+        if not _git_ref_has_path(root, "origin/main", rel):
             continue
         if _run_command(["git", "diff", "--quiet", "origin/main", "--", rel], cwd=root).get("ok"):
             equivalent.append(rel)
