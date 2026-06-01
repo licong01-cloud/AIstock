@@ -8,7 +8,8 @@
     "backend/tests/selection_center/test_runtime_selection.py",
     "backend/tests/paper_trading_v2/test_live_session.py",
     "tests/aistock_validation/bugs/20260601_BUG-193-paper-v2-hmm-auto-generation-fails-when-signal-preset-has-no-coefficient.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/history/paper_trading_v2/20260601_222808_l2_bug-193-hmm-metadata-only-preset-auto-generation-regression.md"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-193",
