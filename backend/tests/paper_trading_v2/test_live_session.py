@@ -736,6 +736,119 @@ def test_minqmt_live_session_treats_submit_timeout_as_broker_wait_before_cutoff(
     assert "MINIQMT_LIVE_WAITING_BROKER" in event_types
 
 
+def test_minqmt_live_session_resets_stale_empty_running_run_before_cutoff() -> None:
+    paper_repo, portfolio_id = make_portfolio_repo(
+        data_source=MinuteDataSource.MINIQMT_REALTIME,
+        broker_backend="minqmt_sim",
+    )
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.MINIQMT_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+    )
+    stale_run = paper_repo.create_run(
+        PaperRun(
+            portfolio_id=portfolio_id,
+            trade_date=date(2024, 1, 2),
+            status=RunStatus.RUNNING,
+            data_source=MinuteDataSource.MINIQMT_REALTIME,
+            started_at=datetime(2024, 1, 2, 10, 0),
+        )
+    )
+    paper_repo.save_run_event(
+        run_id=stale_run.run_id,
+        event_type="MINIQMT_ORDER_SUBMISSION_SEQUENCE",
+        message="submission sequence created without persisted broker orders",
+    )
+    paper_repo.update_session_status(
+        session.session_id,
+        status=PaperSessionStatus.LIVE_RETRYING,
+        phase=PaperSessionPhase.LIVE_INTRADAY,
+    )
+    paper_repo.update_portfolio_status(portfolio_id, PortfolioStatus.RUNNING)
+    live_executor = PaperTradingLiveMinuteExecutor(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=ExplodingLiveMarket(),  # type: ignore[arg-type]
+    )
+    fake_day_helper = FakeMiniQMTLiveDayHelper(paper_repo)
+    live_executor.day_helper = fake_day_helper  # type: ignore[assignment]
+
+    progress = PaperTradingSessionRunner(repository=paper_repo, live_executor=live_executor).tick(
+        session.session_id,
+        as_of_time=datetime(2024, 1, 2, 13, 1),
+    )
+
+    retried_run = paper_repo.get_run_by_portfolio_date(portfolio_id, date(2024, 1, 2))
+    assert retried_run is not None
+    assert retried_run.run_id != stale_run.run_id
+    assert retried_run.status == RunStatus.SUCCEEDED
+    assert fake_day_helper.calls
+    assert progress.session.status == PaperSessionStatus.LIVE_WAITING_NEXT_TRADING_DAY
+    event_types = [event["event_type"] for event in paper_repo.list_session_events(session.session_id)]
+    assert "MINIQMT_LIVE_STALE_EMPTY_RUN_RESET" in event_types
+    reset_event = next(event for event in paper_repo.list_session_events(session.session_id) if event["event_type"] == "MINIQMT_LIVE_STALE_EMPTY_RUN_RESET")
+    assert reset_event["context"]["run_id"] == stale_run.run_id
+    assert reset_event["context"]["reset_counts"]["run"] == 1
+
+
+def test_minqmt_live_session_final_fails_stale_empty_running_run_after_cutoff() -> None:
+    paper_repo, portfolio_id = make_portfolio_repo(
+        data_source=MinuteDataSource.MINIQMT_REALTIME,
+        broker_backend="minqmt_sim",
+    )
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.MINIQMT_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+    )
+    stale_run = paper_repo.create_run(
+        PaperRun(
+            portfolio_id=portfolio_id,
+            trade_date=date(2024, 1, 2),
+            status=RunStatus.RUNNING,
+            data_source=MinuteDataSource.MINIQMT_REALTIME,
+            started_at=datetime(2024, 1, 2, 10, 0),
+        )
+    )
+    paper_repo.save_run_event(
+        run_id=stale_run.run_id,
+        event_type="MINIQMT_ORDER_SUBMISSION_SEQUENCE",
+        message="submission sequence created without persisted broker orders",
+    )
+    paper_repo.update_session_status(
+        session.session_id,
+        status=PaperSessionStatus.LIVE_RETRYING,
+        phase=PaperSessionPhase.LIVE_INTRADAY,
+    )
+    paper_repo.update_portfolio_status(portfolio_id, PortfolioStatus.RUNNING)
+    live_executor = PaperTradingLiveMinuteExecutor(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=ExplodingLiveMarket(),  # type: ignore[arg-type]
+    )
+    fake_day_helper = FakeMiniQMTLiveDayHelper(paper_repo)
+    live_executor.day_helper = fake_day_helper  # type: ignore[assignment]
+
+    progress = PaperTradingSessionRunner(repository=paper_repo, live_executor=live_executor).tick(
+        session.session_id,
+        as_of_time=datetime(2024, 1, 2, 14, 56),
+    )
+
+    failed_run = paper_repo.get_run_by_portfolio_date(portfolio_id, date(2024, 1, 2))
+    assert failed_run is not None
+    assert failed_run.run_id == stale_run.run_id
+    assert failed_run.status == RunStatus.FAILED
+    assert fake_day_helper.calls == []
+    assert progress.session.status == PaperSessionStatus.FAILED
+    assert progress.session.last_error is not None
+    assert progress.session.last_error["error_code"] == "MINIQMT_LIVE_STALE_EMPTY_RUN_AFTER_CUTOFF"
+
+
 def test_minqmt_live_session_after_cutoff_final_fails_without_fake_success() -> None:
     paper_repo, portfolio_id = make_portfolio_repo(
         data_source=MinuteDataSource.MINIQMT_REALTIME,
