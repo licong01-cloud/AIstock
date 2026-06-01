@@ -1,4 +1,4 @@
-﻿{
+{
   "actual": "Run stops after MINIQMT_ORDER_SUBMISSION_SEQUENCE; no MINIQMT_ORDER_SUBMITTED or VNPY_STYLE_EXECUTION events; no QMT orders for 2026-06-01; empty RUNNING run blocks retries.",
   "allowed_write_scope": [
     "backend/services/paper_trading_v2/live_session.py",
@@ -32,8 +32,8 @@
   "expected": "MiniQMT auto-run should either submit broker-authoritative orders and persist Paper v2 orders/fills/execution state, or fail/reset safely before final cutoff so the scheduler can retry.",
   "first_seen_at": "2026-06-01T05:30:05.330176Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "da0fe195dc7ab29550bbc834fbbfb4fe094d6ffd",
+  "fixed_at": "2026-06-01T13:49:57.057289Z",
   "github_issue_number": 459,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/459",
   "last_seen_at": "2026-06-01T05:30:05.330176Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/479",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -53,7 +54,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_trading_v2"
   ],
@@ -62,5 +63,10 @@
     "fingerprint": "1d529f48d44a50bd53576053",
     "source_event_id": "FE-20260601-1d529f48d44a"
   },
+  "validation_evidence": [
+    "CI checks_passed for PR #479 after rebase to include BUG-190",
+    "python -m pytest -q backend/tests/paper_trading_v2/test_live_session.py -p no:cacheprovider -> 22 passed after rebase conflict resolution",
+    "git diff --check -> passed"
+  ],
   "verification_run_id": null
 }
