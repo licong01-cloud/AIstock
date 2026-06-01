@@ -13,6 +13,7 @@ RealtimeFactorDataLoader - 实时因子数据加载器
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date, datetime
 from typing import Dict, List, Optional, Union
 
@@ -25,6 +26,51 @@ logger = logging.getLogger("aistock.realtime_factor_data_loader")
 
 # 价格单位转换：数据库存储为厘，输出为元
 PRICE_UNIT_DIVISOR = 1000.0
+TS_CODE_PATTERN = re.compile(r"^\d{6}\.(SH|SZ|BJ)$")
+INVALID_INSTRUMENT_SAMPLE_LIMIT = 10
+
+
+def _normalize_realtime_instrument(code: object) -> str:
+    s = str(code).strip()
+    if not s:
+        return s
+    if "." in s:
+        return s.upper()
+    up = s.upper()
+    if len(up) == 8 and up[:2] in {"SH", "SZ", "BJ"} and up[2:].isdigit():
+        return f"{up[2:]}.{up[:2]}"
+    return up
+
+
+def _validate_realtime_instruments(
+    instruments: list[object],
+    *,
+    source: str,
+    start_date: object | None = None,
+    end_date: object | None = None,
+) -> List[str]:
+    if instruments is None:
+        raw_values: List[object] = []
+    elif isinstance(instruments, str):
+        raw_values = [instruments]
+    else:
+        raw_values = list(instruments)
+    normalized: List[str] = []
+    invalid: List[Dict[str, str]] = []
+    for index, raw in enumerate(raw_values):
+        value = _normalize_realtime_instrument(raw)
+        normalized.append(value)
+        if not TS_CODE_PATTERN.fullmatch(value):
+            invalid.append({"index": str(index), "raw": str(raw), "normalized": value})
+
+    if invalid:
+        samples = invalid[:INVALID_INSTRUMENT_SAMPLE_LIMIT]
+        raise ValueError(
+            "invalid ts_code values before SQL execution: "
+            f"source={source} instruments_count={len(raw_values)} invalid_count={len(invalid)} "
+            f"start_date={start_date} end_date={end_date} invalid_samples={samples}"
+        )
+    return normalized
 
 
 class RealtimeFactorDataLoader:
@@ -98,20 +144,14 @@ class RealtimeFactorDataLoader:
         self._full_cache_key: Optional[tuple] = None
 
     def _normalize_instrument(self, code: str) -> str:
-        """标准化股票代码格式为 '000001.SZ' 格式"""
-        s = str(code).strip()
-        if not s:
-            return s
-        if "." in s:
-            return s.upper()
-        up = s.upper()
-        if len(up) >= 8 and up[:2] in {"SH", "SZ", "BJ"}:
-            return f"{up[2:]}.{up[:2]}"
-        return up
+        """Normalize stock code to '000001.SZ' format."""
+        return _normalize_realtime_instrument(code)
 
     def _to_ts_code(self, instrument: str) -> str:
-        """将 '000001.SZ' 格式转换为数据库的 ts_code 格式（相同格式）"""
-        return self._normalize_instrument(instrument)
+        """Convert instrument to validated database ts_code format."""
+        return _validate_realtime_instruments(
+            [instrument], source="RealtimeFactorDataLoader._to_ts_code"
+        )[0]
 
     def load(
         self,
@@ -144,7 +184,8 @@ class RealtimeFactorDataLoader:
         # 标准化参数
         if isinstance(instruments, str):
             instruments = [instruments]
-        instruments = [self._normalize_instrument(i) for i in instruments]
+        else:
+            instruments = list(instruments)
 
         if isinstance(start_date, str):
             start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
@@ -155,6 +196,13 @@ class RealtimeFactorDataLoader:
             end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
         elif isinstance(end_date, datetime):
             end_date = end_date.date()
+
+        instruments = _validate_realtime_instruments(
+            instruments,
+            source="RealtimeFactorDataLoader.load",
+            start_date=start_date,
+            end_date=end_date,
+        )
 
         if fields is None:
             fields = ["open", "close", "high", "low", "volume", "amount", "factor"]
@@ -278,7 +326,12 @@ class RealtimeFactorDataLoader:
         """从 kline_daily_raw + adj_factor 获取K线数据，与 qe_data_service.load_daily_pv 完全一致"""
         from datetime import date as date_type
 
-        ts_codes = [self._to_ts_code(i) for i in instruments]
+        ts_codes = _validate_realtime_instruments(
+            instruments,
+            source="RealtimeFactorDataLoader._fetch_from_db",
+            start_date=start_date,
+            end_date=end_date,
+        )
         placeholders = ",".join(["%s"] * len(ts_codes))
 
         # 1. 加载未复权原始行情
@@ -488,7 +541,12 @@ class RealtimeFactorDataLoader:
                 cur.execute(sql)
                 rows = cur.fetchall()
 
-        return [self._normalize_instrument(row[0]) for row in rows]
+        return _validate_realtime_instruments(
+            [row[0] for row in rows],
+            source="RealtimeFactorDataLoader.get_stock_universe",
+            start_date=trade_date,
+            end_date=trade_date,
+        )
 
 
 # 模块级单例，供因子代码直接使用

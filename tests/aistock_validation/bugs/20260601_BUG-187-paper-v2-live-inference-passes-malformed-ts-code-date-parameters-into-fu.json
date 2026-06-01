@@ -1,0 +1,71 @@
+﻿{
+    "actual":  "Runtime evidence shows a malformed code string like 603819.S2026-06-01T01:59:30.734977444Z near a full-universe SQL path. The data loaders currently normalize any value containing a dot by uppercasing it without strict ts_code validation, so date/timestamp contamination can be passed as a ts_code parameter. This can surface as DB errors during WSL live QE model inference and block Paper v2 simulation before MiniQMT order submission.",
+    "allowed_write_scope":  [
+                                "backend/data_service/qe_data_service.py",
+                                "backend/data_service/realtime_factor_data_loader.py",
+                                "scripts/strategy_package_live_inference.py",
+                                "backend/services/strategy_package/live_inference.py",
+                                "tests/aistock_validation/bugs/20260601_BUG-187-paper-v2-live-inference-passes-malformed-ts-code-date-parameters-into-fu.json",
+                                "tests/aistock_validation/bugs/.bug_id_allocator.json",
+                                "backend/tests/strategy_package/test_live_inference_preflight.py",
+                                "backend/tests/test_qe_static_factors_live_asof.py",
+                                "backend/tests/data_service/test_qe_data_service_instrument_validation.py",
+                                "backend/tests/data_service/test_realtime_factor_data_loader_validation.py"
+                            ],
+    "assigned_agent":  null,
+    "bug_id":  "BUG-187",
+    "closed_at":  null,
+    "closure_requirements":  [
+                                 "Fix the observed behavior.",
+                                 "Run required verification plans.",
+                                 "Keep BUG JSON and GitHub Issue synchronized."
+                             ],
+    "created_at":  "2026-06-01T06:26:11.246218Z",
+    "description":  "Runtime evidence shows a malformed code string like 603819.S2026-06-01T01:59:30.734977444Z near a full-universe SQL path. The data loaders currently normalize any value containing a dot by uppercasing it without strict ts_code validation, so date/timestamp contamination can be passed as a ts_code parameter. This can surface as DB errors during WSL live QE model inference and block Paper v2 simulation before MiniQMT order submission.",
+    "events":  [
+                   {
+                       "action":  "promote_candidate_to_bug",
+                       "actor":  "issue_flow",
+                       "note":  "Promoted from IC-20260601-1324e2003754",
+                       "timestamp":  "2026-06-01T06:26:11.246213Z"
+                   }
+               ],
+    "evidence_uris":  [
+                          "User runtime error snippet: 603819.S2026-06-01T01:59:30.734977444Z; repo paths backend/data_service/qe_data_service.py ORDER BY trade_date, ts_code and scripts/strategy_package_live_inference.py WSL runner"
+                      ],
+    "expected":  "Live inference validates all universe/instrument values before DB reads. Only canonical A-share ts_code values are passed into SQL, e.g. 000001.SZ / 600000.SH / 8xxxxx.BJ. Invalid values containing timestamp fragments or non-canonical suffixes fail fast with actionable diagnostics and do not reach SQL execution.",
+    "first_seen_at":  "2026-06-01T06:26:11.246218Z",
+    "fix_branch":  null,
+    "fix_commit":  null,
+    "fixed_at":  null,
+    "github_issue_number":  464,
+    "github_issue_url":  "https://github.com/licong01-cloud/AIstock/issues/464",
+    "last_seen_at":  "2026-06-01T06:26:11.246218Z",
+    "module":  "strategy_package",
+    "non_goals":  [
+                      "Do not restart production runtime services without explicit approval."
+                  ],
+    "production_backend_dependency_gate":  "noop",
+    "production_ddl_gate":  "noop",
+    "production_frontend_dependency_gate":  "noop",
+    "reproduce_command":  "Run Paper v2 StrategyPackage live inference for 2026-06-01 and inspect WSL/DataUnavailableError stderr/stdout tails for malformed ts_code samples and full-universe SQL",
+    "required_verification":  [
+                                  "l0",
+                                  "qe_read_l3",
+                                  "paper_v2_l3",
+                                  "paper_v2_backend"
+                              ],
+    "risk_area":  "bug",
+    "schema_version":  "aistock_validation_bug_v1",
+    "severity":  "P0",
+    "status":  "open",
+    "suspected_modules":  [
+                              "strategy_package"
+                          ],
+    "title":  "Paper v2 live inference passes malformed ts_code/date parameters into full-universe SQL",
+    "trigger_condition":  {
+                              "fingerprint":  "1324e20037543291d27a2bd8",
+                              "source_event_id":  "FE-20260601-1324e2003754"
+                          },
+    "verification_run_id":  null
+}
