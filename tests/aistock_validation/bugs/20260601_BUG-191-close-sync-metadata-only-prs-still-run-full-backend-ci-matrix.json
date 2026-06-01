@@ -33,8 +33,8 @@
   "expected": "Metadata-only close-sync PRs should keep PR Quality/static registry checks but skip unrelated backend matrix jobs through an auditable CI change classifier.",
   "first_seen_at": "2026-06-01T08:34:01.300486Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "021b0f16bf213b648ad4c47dbbb623427f1e0f50",
+  "fixed_at": "2026-06-01T09:07:52.551354Z",
   "github_issue_number": 475,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/475",
   "last_seen_at": "2026-06-01T08:34:01.300486Z",
@@ -42,6 +42,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/476",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -55,7 +56,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -64,5 +65,16 @@
     "fingerprint": "11b4f132690fa35f4072a19a",
     "source_event_id": "FE-20260601-11b4f132690f"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_ci_change_classifier.py -q -> 5 passed",
+    "python scripts/ci_change_classifier.py --repo-root <tmp> --changed-file tests/aistock_validation/bugs/20260601_BUG-191-fixed-demo.json -> backend_required=false classification=close_sync_metadata_only",
+    "python -m ruff check scripts/ci_change_classifier.py backend/tests/scripts/test_ci_change_classifier.py -> passed",
+    "git diff --check -> passed",
+    "python scripts/aistock_issue_workflow.py workflow-smoke --changed-file .github/workflows/test.yml --changed-file scripts/ci_change_classifier.py --changed-file backend/tests/scripts/test_ci_change_classifier.py --changed-file docs/standards/aistock_issue_workflow_quickstart.md --module validation --output-format compact -> workflow_gate=passed unexpected_dirty_paths=[]",
+    "python -m nox -s l0 -> success",
+    "python -m nox -s guardrail_changed_files -> success",
+    "python -m nox -s validation_catalog_integrity validation_module_registry_l0 -> success",
+    "python -m nox -s validation_center_backend -> 299 passed"
+  ],
   "verification_run_id": null
 }
