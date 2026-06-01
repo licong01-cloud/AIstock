@@ -1,0 +1,68 @@
+{
+  "actual": "failure-bug-register in .github/workflows/test.yml only writes a placeholder notice and PR comment for backend failures.",
+  "allowed_write_scope": [
+    ".github/workflows/test.yml",
+    "scripts/ci_failure_issue_summary.py",
+    "backend/tests/scripts/test_ci_failure_issue_summary.py",
+    "tests/aistock_validation/bugs/20260601_BUG-194-ci-failure-registrar-still-only-comments-on-pr-backend-failures-instead.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-194",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-01T14:16:08.977175Z",
+  "description": "failure-bug-register in .github/workflows/test.yml only writes a placeholder notice and PR comment for backend failures.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260601-98b3262d9f5a",
+      "timestamp": "2026-06-01T14:16:08.977171Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/validation_platform_p0p1_hardening_design_20260519.md#8.5"
+  ],
+  "expected": "When backend-tests fails on a PR, the CI registrar should reuse the existing ci_failure_issue_summary path to produce compact summary/context artifacts and create or update a diagnostic GitHub Issue, while avoiding duplicate issues by fingerprint. It should keep BUG JSON backfill explicit and not write production state.",
+  "first_seen_at": "2026-06-01T14:16:08.977175Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 488,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/488",
+  "last_seen_at": "2026-06-01T14:16:08.977175Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Inspect .github/workflows/test.yml failure-bug-register; compare with .github/workflows/issue-on-test-fail.yml and scripts/ci_failure_issue_summary.py",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "guardrail_changed_files",
+    "validation_catalog_integrity",
+    "validation_module_registry_l0",
+    "validation_coverage_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "CI failure registrar still only comments on PR backend failures instead of creating diagnostic issue artifacts",
+  "trigger_condition": {
+    "fingerprint": "98b3262d9f5a37df351d4289",
+    "source_event_id": "FE-20260601-98b3262d9f5a"
+  },
+  "verification_run_id": null
+}
