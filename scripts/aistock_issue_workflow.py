@@ -5035,6 +5035,208 @@ def _pr_url_from_create_output(result: dict[str, Any]) -> str | None:
     return match.group(0) if match else None
 
 
+def _pr_number_from_url(pr_url: str | None) -> int | None:
+    match = re.search(r"/pull/(\d+)(?:\D*$|$)", str(pr_url or ""))
+    return int(match.group(1)) if match else None
+
+
+def _bug_record_matches_close_sync(
+    record: dict[str, Any],
+    *,
+    source_pr_url: str,
+    merge_commit: str | None,
+) -> bool:
+    status = str(record.get("status") or "").strip().lower()
+    record_pr_url = str(record.get("pr_url") or "").strip()
+    record_commit = str(record.get("fix_commit") or "").strip()
+    expected_commit = str(merge_commit or "").strip()
+    if status not in {"fixed", "verified", "closed"}:
+        return False
+    if record_pr_url != source_pr_url:
+        return False
+    return not expected_commit or record_commit == expected_commit
+
+
+def _find_bug_record_in_root(root: Path, bug_id: str) -> tuple[dict[str, Any], Path] | None:
+    bugs_root = _bugs_root(root)
+    if not bugs_root.exists():
+        return None
+    normalized = bug_id.strip().upper()
+    for path in _bug_files(bugs_root):
+        try:
+            record = _load_json(path)
+        except WorkflowError:
+            continue
+        if str(record.get("bug_id") or "").strip().upper() == normalized:
+            return record, path
+    return None
+
+
+def _fetch_origin_main_for_close_sync(root: Path) -> dict[str, Any]:
+    if not (root / ".git").exists() and not (root / ".git").is_file():
+        return {"status": "skipped_no_git_checkout"}
+    result = _run_command(["git", "fetch", "origin", "main", "--quiet"], cwd=root, timeout=120)
+    return {"status": "fetched" if result.get("ok") else "warning", "result": result}
+
+
+def _find_bug_record_in_git_ref(
+    bug_id: str,
+    *,
+    ref: str = "origin/main",
+    cwd: Path | None = None,
+) -> tuple[dict[str, Any], str] | None:
+    root = cwd or (_canonical_root() if _canonical_root().exists() else REPO_ROOT)
+    if not (root / ".git").exists() and not (root / ".git").is_file():
+        return None
+    grep = _run_command(
+        ["git", "grep", "-l", bug_id.strip().upper(), ref, "--", "tests/aistock_validation/bugs"],
+        cwd=root,
+        timeout=30,
+    )
+    if not grep.get("ok"):
+        return None
+    for line in str(grep.get("stdout") or "").splitlines():
+        _, _, rel_path = line.partition(":")
+        rel_path = rel_path.strip()
+        if not rel_path or not rel_path.endswith(".json") or Path(rel_path).name.startswith("."):
+            continue
+        show = _run_command(["git", "show", f"{ref}:{rel_path}"], cwd=root, timeout=30)
+        if not show.get("ok"):
+            continue
+        try:
+            record = json.loads(str(show.get("stdout") or "{}"))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict) and str(record.get("bug_id") or "").strip().upper() == bug_id.strip().upper():
+            return record, f"{ref}:{rel_path}"
+    return None
+
+
+def _close_sync_bug_snapshot(
+    *,
+    bug_id: str,
+    source_pr_url: str,
+    merge_commit: str | None,
+    issue_json: str | None = None,
+) -> dict[str, Any] | None:
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add_candidate(record: dict[str, Any], path_label: str, source: str, root: Path | None = None) -> None:
+        key = f"{source}:{path_label}"
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append({"record": record, "path": path_label, "source": source, "root": str(root) if root else None})
+
+    if issue_json:
+        path = Path(issue_json)
+        if path.exists():
+            try:
+                add_candidate(_load_json(path), str(path), "issue_json", path.parent)
+            except WorkflowError:
+                pass
+
+    try:
+        record, path = find_bug_record(bug_id=bug_id)
+        add_candidate(record, _repo_rel(path, REPO_ROOT), "current_worktree", REPO_ROOT)
+    except WorkflowError:
+        pass
+
+    canonical = _canonical_root()
+    if canonical.exists():
+        found = _find_bug_record_in_root(canonical, bug_id)
+        if found:
+            record, path = found
+            add_candidate(record, _repo_rel(path, canonical), "canonical_root", canonical)
+
+    for candidate in candidates:
+        if _bug_record_matches_close_sync(candidate["record"], source_pr_url=source_pr_url, merge_commit=merge_commit):
+            return candidate
+
+    ref_root = canonical if canonical.exists() else REPO_ROOT
+    fetch = _fetch_origin_main_for_close_sync(ref_root)
+    found_in_ref = _find_bug_record_in_git_ref(bug_id, ref="origin/main", cwd=ref_root)
+    if found_in_ref:
+        record, path_label = found_in_ref
+        if _bug_record_matches_close_sync(record, source_pr_url=source_pr_url, merge_commit=merge_commit):
+            return {
+                "record": record,
+                "path": path_label,
+                "source": "origin_main_ref",
+                "root": str(ref_root),
+                "fetch": fetch,
+            }
+    return None
+
+
+def _close_sync_is_complete(
+    *,
+    bug_id: str,
+    source_pr_url: str,
+    merge_commit: str | None,
+    issue_json: str | None = None,
+) -> dict[str, Any] | None:
+    """Return a completed close-sync marker when BUG JSON already reflects this source PR."""
+    snapshot = _close_sync_bug_snapshot(
+        bug_id=bug_id,
+        source_pr_url=source_pr_url,
+        merge_commit=merge_commit,
+        issue_json=issue_json,
+    )
+    if not snapshot:
+        return None
+    record = snapshot["record"]
+    status = str(record.get("status") or "").strip().lower()
+    record_commit = str(record.get("fix_commit") or "").strip()
+    expected_commit = str(merge_commit or "").strip()
+
+    marker = {
+        "workflow_gate": "already_close_synced",
+        "bug_id": bug_id,
+        "registry_root": str(snapshot.get("root") or REPO_ROOT),
+        "source_bug_json": snapshot["path"],
+        "updated_bug_json": snapshot["path"],
+        "merged_pr": source_pr_url,
+        "merge_commit": record_commit or expected_commit or None,
+        "current_status": status,
+        "snapshot_source": snapshot["source"],
+        "production_gates": {
+            "production_backend_dependency_gate": record.get("production_backend_dependency_gate"),
+            "production_ddl_gate": record.get("production_ddl_gate"),
+            "production_frontend_dependency_gate": record.get("production_frontend_dependency_gate"),
+        },
+        "reason": "bug_json_already_fixed_for_source_pr",
+    }
+    if snapshot.get("fetch"):
+        marker["origin_main_fetch"] = snapshot["fetch"]
+    stale = _stale_pr_check_for_bug(bug_id)
+    source_pr_number = _pr_number_from_url(source_pr_url)
+    merged_close_sync_prs = []
+    for item in stale.get("merged_prs") or []:
+        number = int(item.get("number") or 0)
+        title = str(item.get("title") or "").lower()
+        if number != source_pr_number and ("close-sync" in title or "close sync" in title):
+            merged_close_sync_prs.append(item)
+    marker["stale_pr_check"] = stale
+    marker["merged_close_sync_prs"] = merged_close_sync_prs
+    if merged_close_sync_prs:
+        marker["close_sync_pr"] = merged_close_sync_prs[0]
+    return marker
+
+
+def _close_sync_commit_already_merged(close_sync: dict[str, Any]) -> dict[str, Any]:
+    pr = close_sync.get("close_sync_pr") or {}
+    pr_url = str(pr.get("url") or "").strip()
+    return {
+        "workflow_gate": "already_merged",
+        "reason": "close_sync_already_persisted",
+        "branch": pr.get("headRefName"),
+        "pr_url": pr_url or None,
+        "commit": close_sync.get("merge_commit"),
+    }
+
+
 def _merge_close_sync_pr_if_ready(
     *,
     bug_id: str,
@@ -5129,27 +5331,42 @@ def build_merge_finalizer_plan(
 
     source_pr_check = source_pr_check or _verify_pr_merged(source_pr_url)
     merge_commit = _merge_commit_from_pr_check(source_pr_check)
-    close_sync = build_close_sync_plan(
+    close_sync = _close_sync_is_complete(
         bug_id=canonical_bug_id,
-        issue_json=issue_json,
-        pr_url=source_pr_url,
-        apply=True,
-        allow_missing_linkage=allow_missing_linkage,
-        validation_evidence=evidence,
+        source_pr_url=source_pr_url,
         merge_commit=merge_commit,
-        production_gates=production_gates or _production_gates_payload(),
-        create_registry_worktree=True,
+        issue_json=issue_json,
     )
-    close_sync_commit = _maybe_commit_and_pr_close_sync(
-        bug_id=canonical_bug_id,
-        close_sync=close_sync,
-        validation_evidence=evidence,
-    )
-    close_sync_pr_merge = _merge_close_sync_pr_if_ready(
-        bug_id=canonical_bug_id,
-        close_sync_commit=close_sync_commit,
-        auto_merge=merge_close_sync_pr,
-    )
+    if close_sync:
+        close_sync_commit = _close_sync_commit_already_merged(close_sync)
+        close_sync_pr_merge = {
+            "workflow_gate": "already_merged",
+            "auto_merge": merge_close_sync_pr,
+            "pr_url": close_sync_commit.get("pr_url"),
+            "reason": "close_sync_pr_or_bug_json_already_persisted",
+        }
+    else:
+        close_sync = build_close_sync_plan(
+            bug_id=canonical_bug_id,
+            issue_json=issue_json,
+            pr_url=source_pr_url,
+            apply=True,
+            allow_missing_linkage=allow_missing_linkage,
+            validation_evidence=evidence,
+            merge_commit=merge_commit,
+            production_gates=production_gates or _production_gates_payload(),
+            create_registry_worktree=True,
+        )
+        close_sync_commit = _maybe_commit_and_pr_close_sync(
+            bug_id=canonical_bug_id,
+            close_sync=close_sync,
+            validation_evidence=evidence,
+        )
+        close_sync_pr_merge = _merge_close_sync_pr_if_ready(
+            bug_id=canonical_bug_id,
+            close_sync_commit=close_sync_commit,
+            auto_merge=merge_close_sync_pr,
+        )
 
     cleanup_plan = None
     if cleanup and source_branch:

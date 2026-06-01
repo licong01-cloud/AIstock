@@ -2241,6 +2241,159 @@ def test_merge_finalizer_can_merge_close_sync_pr_and_cleanup(
     assert payload["cleanup"]["workflow_gate"] == "cleanup_done"
 
 
+def test_merge_finalizer_reuses_existing_close_sync_without_duplicate_pr(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _write_json(
+        isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug199.json",
+        _bug(status="fixed", fix_commit="merge123", pr_url="https://github.example/pull/199"),
+    )
+    close_sync_calls: list[dict[str, Any]] = []
+    commit_calls: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url: {
+            "checked": True,
+            "merged": True,
+            "pr": {"url": pr_url, "mergeCommit": {"oid": "merge123"}, "headRefOid": "head123"},
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_stale_pr_check_for_bug",
+        lambda bug_id: {
+            "status": "checked",
+            "open_prs": [],
+            "merged_prs": [
+                {
+                    "number": 299,
+                    "title": "chore(issue): close-sync BUG-199",
+                    "url": "https://github.example/pull/299",
+                    "headRefName": "chore/BUG-199-close-sync",
+                    "mergedAt": "2026-06-01T00:00:00Z",
+                },
+            ],
+        },
+    )
+
+    def fail_close_sync(**kwargs: Any) -> dict[str, Any]:
+        close_sync_calls.append(kwargs)
+        raise AssertionError("finalizer must not rebuild close-sync for an already fixed BUG")
+
+    def fail_commit(**kwargs: Any) -> dict[str, Any]:
+        commit_calls.append(kwargs)
+        raise AssertionError("finalizer must not create a duplicate close-sync PR")
+
+    monkeypatch.setattr(workflow, "build_close_sync_plan", fail_close_sync)
+    monkeypatch.setattr(workflow, "_maybe_commit_and_pr_close_sync", fail_commit)
+    monkeypatch.setattr(
+        workflow,
+        "build_cleanup_after_merge_plan",
+        lambda **kwargs: {"workflow_gate": "ready_for_cleanup", "branch": kwargs["branch"]},
+    )
+    monkeypatch.setattr(workflow, "build_postmortem_plan", lambda **kwargs: {"schema_version": "postmortem"})
+
+    payload = workflow.build_merge_finalizer_plan(
+        bug_id="BUG-199",
+        issue_json=str(issue),
+        source_pr_url="https://github.example/pull/199",
+        source_branch="bug/BUG-199-workflow",
+        source_worktree=str(isolated_workflow_root / "task"),
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        production_gates={"production_ddl_gate": "noop"},
+        sync_root=True,
+        merge_close_sync_pr=True,
+        cleanup=True,
+        apply=True,
+    )
+
+    assert close_sync_calls == []
+    assert commit_calls == []
+    assert payload["close_sync"]["workflow_gate"] == "already_close_synced"
+    assert payload["close_sync_commit"]["workflow_gate"] == "already_merged"
+    assert payload["close_sync_commit"]["pr_url"] == "https://github.example/pull/299"
+    assert payload["close_sync_pr_merge"]["workflow_gate"] == "already_merged"
+    assert payload["cleanup"]["workflow_gate"] == "ready_for_cleanup"
+    assert payload["next_actions"] == ["rerun_cleanup_after_merge_with_apply"]
+
+
+def test_merge_finalizer_detects_close_sync_from_origin_main_when_root_is_stale(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stale_issue = _write_json(
+        isolated_workflow_root / "tests" / "aistock_validation" / "bugs" / "bug199.json",
+        _bug(status="in_progress", fix_commit=None, pr_url=None),
+    )
+    close_sync_calls: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url: {
+            "checked": True,
+            "merged": True,
+            "pr": {"url": pr_url, "mergeCommit": {"oid": "merge123"}, "headRefOid": "head123"},
+        },
+    )
+    monkeypatch.setattr(workflow, "_fetch_origin_main_for_close_sync", lambda root: {"status": "fetched"})
+    monkeypatch.setattr(
+        workflow,
+        "_find_bug_record_in_git_ref",
+        lambda bug_id, **kwargs: (
+            _bug(status="fixed", fix_commit="merge123", pr_url="https://github.example/pull/199"),
+            "origin/main:tests/aistock_validation/bugs/bug199.json",
+        ),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_stale_pr_check_for_bug",
+        lambda bug_id: {
+            "status": "checked",
+            "open_prs": [],
+            "merged_prs": [
+                {
+                    "number": 299,
+                    "title": "chore(issue): close-sync BUG-199",
+                    "url": "https://github.example/pull/299",
+                    "headRefName": "chore/BUG-199-close-sync",
+                },
+            ],
+        },
+    )
+
+    def fail_close_sync(**kwargs: Any) -> dict[str, Any]:
+        close_sync_calls.append(kwargs)
+        raise AssertionError("stale local root must not force a duplicate close-sync PR")
+
+    monkeypatch.setattr(workflow, "build_close_sync_plan", fail_close_sync)
+    monkeypatch.setattr(workflow, "_maybe_commit_and_pr_close_sync", fail_close_sync)
+    monkeypatch.setattr(workflow, "build_cleanup_after_merge_plan", lambda **kwargs: {"workflow_gate": "ready_for_cleanup"})
+    monkeypatch.setattr(workflow, "build_postmortem_plan", lambda **kwargs: {"schema_version": "postmortem"})
+
+    payload = workflow.build_merge_finalizer_plan(
+        bug_id="BUG-199",
+        issue_json=str(stale_issue),
+        source_pr_url="https://github.example/pull/199",
+        source_branch="bug/BUG-199-workflow",
+        source_worktree=str(isolated_workflow_root / "task"),
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        production_gates={"production_ddl_gate": "noop"},
+        sync_root=True,
+        merge_close_sync_pr=True,
+        cleanup=True,
+        apply=True,
+    )
+
+    assert close_sync_calls == []
+    assert payload["close_sync"]["workflow_gate"] == "already_close_synced"
+    assert payload["close_sync"]["snapshot_source"] == "origin_main_ref"
+    assert payload["close_sync_commit"]["pr_url"] == "https://github.example/pull/299"
+
+
 def test_close_sync_is_dry_run_and_requires_pr_url(
     isolated_workflow_root: Path,
     capsys: pytest.CaptureFixture[str],
