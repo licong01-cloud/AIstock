@@ -32,8 +32,8 @@
   "expected": "Paper v2/MiniQMT should prepare or reuse an as-of previous-trading-day selection artifact before order submission. During submit windows, repeated scheduler ticks must not repeatedly launch full-universe live inference; cache miss or inference failure must persist actionable diagnostics, bounded retry state, and avoid SQL storms.",
   "first_seen_at": "2026-06-01T07:58:21.044492Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "36597c8ecbe6bee1d4332baca3b46c80a96e32f4",
+  "fixed_at": "2026-06-01T13:39:31.921725Z",
   "github_issue_number": 474,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/474",
   "last_seen_at": "2026-06-01T07:58:21.044492Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/477",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -54,7 +55,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_trading_v2"
   ],
@@ -63,5 +64,9 @@
     "fingerprint": "6bea2edd092175ddf845c3d5",
     "source_event_id": "FE-20260601-6bea2edd0921"
   },
+  "validation_evidence": [
+    "CI checks_passed for PR #477",
+    "python -m pytest -q backend/tests/paper_trading_v2/test_live_session.py -p no:cacheprovider -> 20 passed"
+  ],
   "verification_run_id": null
 }
