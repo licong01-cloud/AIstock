@@ -630,6 +630,46 @@ def test_v2_scheduler_ticks_created_sessions_without_fake_success() -> None:
     assert fake_live.calls[0]["session_id"] == session.session_id
 
 
+def test_v2_scheduler_status_reports_in_progress_tick_metadata() -> None:
+    _package_repo, paper_repo, portfolio = make_portfolio(data_source=MinuteDataSource.TDX_REALTIME)
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio.portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+    )
+
+    class InspectingLiveExecutor:
+        def __init__(self) -> None:
+            self.scheduler: PaperTradingV2SessionScheduler | None = None
+
+        def tick(self, session, *, as_of_time=None):
+            status = self.scheduler.status()  # type: ignore[union-attr]
+            assert status["last_run_at"] is not None
+            assert status["last_result"]["in_progress"] is True
+            assert status["last_result"]["session_count"] == 1
+            assert status["last_result"]["processed"] == []
+            updated = paper_repo.update_session_status(
+                session.session_id,
+                status=PaperSessionStatus.LIVE_WAITING_FOR_BAR,
+            )
+            return PaperSessionProgress(session=updated, day_count=0, events=[])
+
+    fake_live = InspectingLiveExecutor()
+    scheduler = PaperTradingV2SessionScheduler(
+        repository=paper_repo,
+        runner=PaperTradingSessionRunner(repository=paper_repo, live_executor=fake_live),
+    )
+    fake_live.scheduler = scheduler
+
+    result = scheduler.run_once(limit=10)
+
+    assert result["processed"][0]["session_id"] == session.session_id
+    assert result["in_progress"] is False
+    assert scheduler.status()["last_result"]["in_progress"] is False
+
+
 def test_portfolio_pagination_and_bulk_lifecycle_use_runtime_state_only() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()

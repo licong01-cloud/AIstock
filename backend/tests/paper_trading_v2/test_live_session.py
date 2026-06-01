@@ -299,6 +299,33 @@ class BrokerDownMiniQMTLiveDayHelper:
         )
 
 
+class SubmitTimeoutMiniQMTLiveDayHelper:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def run_day(self, *, portfolio_id, trade_date, runtime_config=None, fee_model=None):
+        self.calls.append(
+            {
+                "portfolio_id": portfolio_id,
+                "trade_date": trade_date,
+                "runtime_config": runtime_config,
+                "fee_model": fee_model,
+            }
+        )
+        raise BrokerConnectivityError(
+            "MiniQMT order submit failed because client is unavailable",
+            context={
+                "portfolio_id": portfolio_id,
+                "trade_date": trade_date.isoformat(),
+                "submit_diagnostic": {
+                    "schema_version": "qmt_order_submit_diagnostic_v1",
+                    "classification": "adapter_timeout",
+                    "exception_type": "TimeoutError",
+                },
+            },
+        )
+
+
 def make_portfolio_repo(
     *,
     data_source: MinuteDataSource = MinuteDataSource.TDX_REALTIME,
@@ -563,6 +590,39 @@ def test_minqmt_live_session_waits_for_broker_before_cutoff() -> None:
 
     assert progress.session.status == PaperSessionStatus.LIVE_WAITING_BROKER
     assert broker_down.calls
+    assert paper_repo.runs == {}
+    event_types = [event["event_type"] for event in paper_repo.list_session_events(session.session_id)]
+    assert "MINIQMT_LIVE_WAITING_BROKER" in event_types
+
+
+def test_minqmt_live_session_treats_submit_timeout_as_broker_wait_before_cutoff() -> None:
+    paper_repo, portfolio_id = make_portfolio_repo(
+        data_source=MinuteDataSource.MINIQMT_REALTIME,
+        broker_backend="minqmt_sim",
+    )
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.MINIQMT_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+    )
+    live_executor = PaperTradingLiveMinuteExecutor(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=ExplodingLiveMarket(),  # type: ignore[arg-type]
+    )
+    submit_timeout = SubmitTimeoutMiniQMTLiveDayHelper()
+    live_executor.day_helper = submit_timeout  # type: ignore[assignment]
+
+    progress = PaperTradingSessionRunner(repository=paper_repo, live_executor=live_executor).tick(
+        session.session_id,
+        as_of_time=datetime(2024, 1, 2, 13, 1),
+    )
+
+    assert progress.session.status == PaperSessionStatus.LIVE_WAITING_BROKER
+    assert progress.session.last_error["context"]["submit_diagnostic"]["classification"] == "adapter_timeout"
+    assert submit_timeout.calls
     assert paper_repo.runs == {}
     event_types = [event["event_type"] for event in paper_repo.list_session_events(session.session_id)]
     assert "MINIQMT_LIVE_WAITING_BROKER" in event_types

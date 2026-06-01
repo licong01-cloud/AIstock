@@ -10,7 +10,6 @@ from __future__ import annotations
 import logging
 import os
 import threading
-import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -97,6 +96,15 @@ class PaperTradingV2SessionScheduler:
         if limit <= 0 or limit > 500:
             raise ValueError("paper v2 scheduler run_once limit must be in 1..500")
         started = datetime.now(UTC)
+        self._last_run_at = started
+        self._last_result = {
+            "started_at": started.isoformat(),
+            "in_progress": True,
+            "completed_at": None,
+            "session_count": None,
+            "processed": [],
+            "errors": [],
+        }
         auto_run_recovery = self.auto_run_coordinator.recover_enabled_portfolios(
             limit=limit,
             as_of_time=as_of_time,
@@ -104,11 +112,14 @@ class PaperTradingV2SessionScheduler:
         sessions = self.repository.list_tickable_sessions(statuses=TICKABLE_SESSION_STATUSES, limit=limit)
         result: dict[str, Any] = {
             "started_at": started.isoformat(),
+            "in_progress": True,
+            "completed_at": None,
             "auto_run_recovery": auto_run_recovery,
             "session_count": len(sessions),
             "processed": [],
             "errors": [],
         }
+        self._last_result = result
         for session in sessions:
             try:
                 progress = self.runner.tick(session.session_id, as_of_time=as_of_time)
@@ -123,6 +134,7 @@ class PaperTradingV2SessionScheduler:
                         else None,
                     }
                 )
+                self._last_result = result
             except TradingCoreError as exc:
                 payload = exc.to_dict()
                 payload["context"] = {
@@ -132,6 +144,7 @@ class PaperTradingV2SessionScheduler:
                 }
                 result["errors"].append(payload)
                 logger.warning("Paper v2 scheduler tick failed: %s", payload)
+                self._last_result = result
             except Exception as exc:  # pragma: no cover - defensive guard
                 payload = {
                     "error_code": "TRADING_CORE_ERROR",
@@ -144,7 +157,9 @@ class PaperTradingV2SessionScheduler:
                 }
                 result["errors"].append(payload)
                 logger.exception("Paper v2 scheduler tick crashed for session=%s", session.session_id)
+                self._last_result = result
         result["completed_at"] = datetime.now(UTC).isoformat()
+        result["in_progress"] = False
         self._last_run_at = started
         self._last_result = result
         return result

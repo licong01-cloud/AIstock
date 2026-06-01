@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from backend.infra.qmt_client import QMTStatus, build_qmt_order_diagnostic
+from backend.infra.qmt_client import QMTNotAvailableError, QMTStatus, build_qmt_order_diagnostic
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
 from backend.services.paper_trading_v2.readiness import PaperTradingReadinessService
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
@@ -180,6 +180,20 @@ class FakeQMTClient:
     def cancel_order(self, order_id: str):
         self.cancel_calls.append(str(order_id))
         return True, "cancel accepted"
+
+
+class TimeoutQMTClient(FakeQMTClient):
+    def place_order(self, **kwargs):
+        self.place_calls.append(kwargs)
+        self.last_order_diagnostic = {
+            "schema_version": "qmt_order_submit_diagnostic_v1",
+            "accepted": False,
+            "raw_return_code": None,
+            "classification": "adapter_timeout",
+            "exception_type": "TimeoutError",
+            "exception_message": "call timed out after 2.0s",
+        }
+        raise QMTNotAvailableError("miniQMT order submit timed out after 2.0s")
 
 
 class NoopRefreshAudit:
@@ -375,6 +389,19 @@ def test_place_order_failure_raises_broker_rejected_and_records_status() -> None
     assert status.raw["diagnostic_gap_reason"] == "xtquant_nonpositive_return"
 
 
+def test_place_order_timeout_is_connectivity_error_with_diagnostic() -> None:
+    client = TimeoutQMTClient()
+    backend = _backend(client=client)
+    intent = _intent()
+
+    with pytest.raises(BrokerConnectivityError) as exc_info:
+        backend.submit_order_intent(intent)
+
+    assert exc_info.value.context["reason"] == "miniQMT order submit timed out after 2.0s"
+    assert exc_info.value.context["submit_diagnostic"]["classification"] == "adapter_timeout"
+    assert client.place_calls[0]["stock_code"] == "000001.SZ"
+
+
 def test_day_runner_minqmt_submit_error_persists_rejection_diagnostic() -> None:
     manifest = make_paper_enabled_manifest()
     portfolio = PaperPortfolio(
@@ -428,6 +455,55 @@ def test_day_runner_minqmt_submit_error_persists_rejection_diagnostic() -> None:
     assert diagnostic["broker_audit"]["after_reconcile"]["native"]["broker_submit_message"] == "fake rejected"
     assert diagnostic["broker_audit"]["before_submit"]["account"]["cash"] == 123456.78
     assert repository.order_events[0].metadata["broker_error"]["context"]["message"] == "fake rejected"
+    assert repository.events[-1]["event_type"] == "MINIQMT_ORDER_SUBMIT_FAILED"
+
+
+def test_day_runner_minqmt_timeout_persists_connectivity_diagnostic() -> None:
+    manifest = make_paper_enabled_manifest()
+    portfolio = PaperPortfolio(
+        portfolio_id="paper_mq_1",
+        portfolio_name="mini qmt submit timeout diagnostic",
+        package_id=manifest.package_id,
+        manifest_sha256=manifest.manifest_sha256,
+        frozen_manifest=manifest,
+        initial_cash=100_000,
+        start_date=TRADE_DATE,
+        data_source=MinuteDataSource.MINIQMT_REALTIME,
+        broker_backend="minqmt_sim",
+    )
+    run = PaperRun(
+        portfolio_id=portfolio.portfolio_id,
+        trade_date=TRADE_DATE,
+        status=RunStatus.RUNNING,
+        data_source=MinuteDataSource.MINIQMT_REALTIME,
+        runtime_config={"paper_v2_session": {"session_id": "psess_unit"}},
+    )
+    repository = _SnapshotOnlyRepository(portfolio)
+    broker = MiniQMTSimBackend(
+        portfolio_id=portfolio.portfolio_id,
+        package_id=manifest.package_id,
+        data_source=MinuteDataSource.MINIQMT_REALTIME,
+        qmt_client=TimeoutQMTClient(),
+    )
+
+    with pytest.raises(BrokerConnectivityError):
+        PaperTradingDayRunner(repository=repository)._run_minqmt_sim_orders(
+            portfolio=portfolio,
+            run=run,
+            manifest=manifest,
+            trade_date=TRADE_DATE,
+            intents=[_intent(portfolio_id=portfolio.portfolio_id, package_id=manifest.package_id)],
+            broker=broker,
+        )
+
+    final_order = repository.orders[0]
+    diagnostic = final_order.metadata["broker_diagnostic"]
+    assert final_order.status.value == "REJECTED"
+    assert final_order.metadata["broker_error"]["error_code"] == "BROKER_CONNECTIVITY_ERROR"
+    assert final_order.metadata["broker_error"]["context"]["submit_diagnostic"]["classification"] == "adapter_timeout"
+    assert diagnostic["submit_diagnostic"]["classification"] == "adapter_timeout"
+    assert diagnostic["broker_audit"]["before_submit"]["account"]["cash"] == 123456.78
+    assert diagnostic["broker_audit"]["after_reconcile"]["account"]["cash"] == 123456.78
     assert repository.events[-1]["event_type"] == "MINIQMT_ORDER_SUBMIT_FAILED"
 
 
