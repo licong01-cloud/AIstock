@@ -351,6 +351,7 @@ rules:
     priority: 100
     include:
       - backend/services/research_assistant/graph_context.py
+      - backend/tests/research_assistant/test_graph_context_expansion.py
       - backend/tests/research_assistant/test_graph_injected_into_context.py
     primary_module: research_assistant.graph_context
     impact_modules: [research_assistant.memory_tree]

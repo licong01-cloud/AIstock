@@ -8,6 +8,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 CORE_FILES = [
     REPO_ROOT / "backend/services/research_assistant/memory_tree.py",
     REPO_ROOT / "backend/services/research_assistant/memory_curator.py",
+    REPO_ROOT / "backend/services/research_assistant/graph_context.py",
 ]
 FORBIDDEN_IMPORT_PREFIXES = (
     "backend.db",

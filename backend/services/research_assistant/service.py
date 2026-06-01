@@ -25,6 +25,7 @@ import jsonschema
 
 from .context_budget import ContextBudgetPlan, ContextBudgetPlanner
 from .execution import ResearchAssistantExecutionMixin
+from .graph_context import expand_neighbors
 from .memory_curator import CuratorResult, MemoryCurator
 from .memory_tree import select_memory_branches
 from .models import (
@@ -3136,6 +3137,16 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         )
         refs_by_type = memory_result.refs_by_type
         memory_items = memory_result.memory_items
+        graph_entity_keys = self._graph_entity_keys_for_memory_items(memory_items, user_message=user_message)
+        graph_context_config = dict(runtime_config.get("graph_context") or {})
+        graph_result = expand_neighbors(
+            graph_entity_keys,
+            repo=self.repository,
+            namespace=data.namespace,
+            hops=int(graph_context_config.get("hops") or 1),
+            relation_filter=graph_context_config.get("relation_filter"),
+            limit=int(graph_context_config.get("limit") or self.configured_limit("graph_summary_relations")),
+        )
         core_refs = [
             *refs_by_type.get("core", []),
             *refs_by_type.get("directive", []),
@@ -3155,6 +3166,13 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 "matched_branches": memory_result.matched_branches,
                 "omitted_refs": memory_result.omitted_refs,
             },
+            "graph_context": {
+                "route_reason": graph_result.route_reason,
+                "relation_refs": graph_result.relation_refs,
+                "seed_entity_keys": graph_result.seed_entity_keys,
+                "neighbor_entity_keys": graph_result.neighbor_entity_keys,
+                "omitted_relation_refs": graph_result.omitted_relation_refs,
+            },
             "task_id": data.task_id,
             "agent_id": data.agent_id,
             "token_budget": token_budget,
@@ -3171,11 +3189,14 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "architecture_memory_refs": refs_by_type.get("architecture", []),
             "task_state_refs": refs_by_type.get("task_state", []),
             "experiment_memory_refs": refs_by_type.get("experiment", []),
-            "graph_relation_refs": [],
+            "graph_relation_refs": graph_result.graph_relation_refs,
             "external_source_refs": [],
             "temp_memory_refs": temp_refs,
             "omitted_relevant_refs": memory_result.omitted_refs,
-            "pack_summary": f"Context Pack: {len(memory_items)} tree-selected memories, {len(temp_refs)} temp memories",
+            "pack_summary": (
+                f"Context Pack: {len(memory_items)} tree-selected memories, "
+                f"{len(graph_result.graph_relation_refs)} graph relations, {len(temp_refs)} temp memories"
+            ),
             "pack_json": pack_json,
             "checksum": sha256_json(pack_json),
         }
@@ -3219,6 +3240,79 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             if value:
                 return str(value)
         return None
+
+    def _graph_entity_keys_for_memory_items(self, memory_items: list[dict[str, Any]], *, user_message: str | None = None) -> list[str]:
+        keys: set[str] = set()
+        query_terms = self._graph_query_terms(user_message)
+        for item in memory_items:
+            tree_path = str(item.get("tree_path") or item.get("subject_key") or "")
+            if tree_path.startswith("personal."):
+                continue
+            item_keys: set[str] = set()
+            item_keys.update(self._graph_entity_keys_from_path(tree_path))
+            content_json = item.get("content_json") or {}
+            if isinstance(content_json, dict):
+                item_keys.update(self._graph_entity_keys_from_content(content_json))
+            keys.update(key for key in item_keys if self._graph_entity_key_matches_query(key, query_terms))
+        return sorted(keys)
+
+    @staticmethod
+    def _graph_entity_keys_from_path(path: str) -> set[str]:
+        keys: set[str] = set()
+        direct_prefixes = ("module.", "capability.", "mcp.", "api.", "process.", "dataset.", "strategy.", "model.")
+        if path.startswith(direct_prefixes):
+            keys.add(path)
+        parts = [part for part in path.split(".") if part]
+        if len(parts) >= 3 and parts[0] == "project" and parts[1] in {
+            "module",
+            "capability",
+            "mcp",
+            "api",
+            "process",
+            "dataset",
+            "strategy",
+            "model",
+        }:
+            keys.add(".".join(parts[1:]))
+        return keys
+
+    @staticmethod
+    def _graph_entity_keys_from_content(content_json: dict[str, Any]) -> set[str]:
+        keys: set[str] = set()
+        raw_entity_keys = content_json.get("entity_keys") or []
+        if isinstance(raw_entity_keys, str):
+            raw_entity_keys = [raw_entity_keys]
+        for value in raw_entity_keys:
+            if value:
+                keys.add(str(value))
+        if content_json.get("entity_key"):
+            keys.add(str(content_json["entity_key"]))
+        if content_json.get("capability_key"):
+            keys.add(f"capability.{content_json['capability_key']}")
+        if content_json.get("mcp_server"):
+            server_key = str(content_json["mcp_server"]).lower().replace("aistock-", "").replace("-", "_")
+            keys.add(f"mcp.{server_key}")
+        return keys
+
+    @staticmethod
+    def _graph_query_terms(user_message: str | None) -> set[str]:
+        if not user_message:
+            return set()
+        normalized = "".join(ch.lower() if ch.isalnum() else " " for ch in str(user_message))
+        generic_terms = {"module", "capability", "mcp", "api", "process", "dataset", "strategy", "model"}
+        return {term for term in normalized.split() if len(term) >= 3 and term not in generic_terms}
+
+    @staticmethod
+    def _graph_entity_key_matches_query(entity_key: str, query_terms: set[str]) -> bool:
+        if not query_terms:
+            return True
+        generic_terms = {"module", "capability", "mcp", "api", "process", "dataset", "strategy", "model"}
+        key_terms = [
+            term
+            for term in re.split(r"[^a-zA-Z0-9]+", entity_key.lower())
+            if len(term) >= 3 and term not in generic_terms
+        ]
+        return bool(key_terms and any(term in query_terms for term in key_terms))
 
     def _mark_memory_used(self, item: dict[str, Any]) -> None:
         memory_id = item.get("memory_id")
