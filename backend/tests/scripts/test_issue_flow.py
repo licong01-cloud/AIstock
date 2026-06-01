@@ -394,6 +394,166 @@ def test_pr_check_infers_linkage_from_pr_metadata(
     assert summary["linkage_inference"]["status"] == "inferred"
 
 
+def test_pr_check_does_not_use_stale_history_when_diff_log_is_empty(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(flow, "REPO_ROOT", tmp_path)
+
+    def fake_git(args: list[str], cwd: Path = flow.REPO_ROOT, check: bool = True) -> str:
+        if args[:2] == ["branch", "--show-current"]:
+            return "feature/pr-quality-gate"
+        return ""
+
+    monkeypatch.setattr(flow, "_git_output", fake_git)
+
+    assert flow.main(["pr-check", "--changed-file", "scripts/issue_flow.py"]) == 0
+    summary = json.loads(capsys.readouterr().out)
+
+    assert summary["linked_issues"] == []
+    assert summary["task_tier"] == "T0"
+    assert summary["linkage_inference"]["status"] == "missing"
+
+
+def test_pr_check_p1_evidence_gate_warns_by_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(flow, "REPO_ROOT", tmp_path)
+    bug_path = tmp_path / "tests" / "aistock_validation" / "bugs" / "20260602_BUG-198-pr-quality-gate.json"
+    bug_path.parent.mkdir(parents=True, exist_ok=True)
+    bug_path.write_text(
+        json.dumps(
+            {
+                "bug_id": "BUG-198",
+                "github_issue_number": 504,
+                "severity": "P1",
+                "module": "validation",
+                "allowed_write_scope": ["scripts/issue_flow.py", "tests/aistock_validation/bugs/**"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(flow, "_git_output", lambda args, cwd=flow.REPO_ROOT, check=True: "bug/BUG-198-pr-quality-gate")
+
+    assert flow.main(
+        [
+            "pr-check",
+            "--changed-file",
+            "scripts/issue_flow.py",
+            "--changed-file",
+            "tests/aistock_validation/bugs/20260602_BUG-198-pr-quality-gate.json",
+        ]
+    ) == 0
+    summary = json.loads(capsys.readouterr().out)
+
+    gate = summary["p0p1_evidence_gate"]
+    assert gate["workflow_gate"] == "warning"
+    assert gate["enforced"] is False
+    assert "validation_evidence" in gate["warnings"]
+
+
+def test_pr_check_p1_evidence_gate_blocks_when_enforced(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(flow, "REPO_ROOT", tmp_path)
+    bug_path = tmp_path / "tests" / "aistock_validation" / "bugs" / "20260602_BUG-198-pr-quality-gate.json"
+    bug_path.parent.mkdir(parents=True, exist_ok=True)
+    bug_path.write_text(
+        json.dumps(
+            {
+                "bug_id": "BUG-198",
+                "github_issue_number": 504,
+                "severity": "P1",
+                "module": "validation",
+                "allowed_write_scope": ["scripts/issue_flow.py", "tests/aistock_validation/bugs/**"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(flow, "_git_output", lambda args, cwd=flow.REPO_ROOT, check=True: "fix BUG-198 P1")
+
+    assert flow.main(
+        [
+            "pr-check",
+            "--changed-file",
+            "scripts/issue_flow.py",
+            "--changed-file",
+            "tests/aistock_validation/bugs/20260602_BUG-198-pr-quality-gate.json",
+            "--enforce-p0-p1-evidence",
+        ]
+    ) == 2
+    summary = json.loads(capsys.readouterr().out)
+
+    gate = summary["p0p1_evidence_gate"]
+    assert gate["workflow_gate"] == "blocked"
+    assert gate["enforced"] is True
+    assert gate["severity"] == "P1"
+    assert gate["checks"]["linked_issue"] is True
+    assert gate["checks"]["scope_passed"] is True
+    assert "validation_evidence" in gate["blocking"]
+    assert "production_gates" in gate["blocking"]
+
+
+def test_pr_check_p1_evidence_gate_passes_with_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(flow, "REPO_ROOT", tmp_path)
+    bug_path = tmp_path / "tests" / "aistock_validation" / "bugs" / "20260602_BUG-198-pr-quality-gate.json"
+    bug_path.parent.mkdir(parents=True, exist_ok=True)
+    bug_path.write_text(
+        json.dumps(
+            {
+                "bug_id": "BUG-198",
+                "github_issue_number": 504,
+                "severity": "P1",
+                "module": "validation",
+                "allowed_write_scope": ["scripts/issue_flow.py", "tests/aistock_validation/bugs/**"],
+                "production_ddl_gate": "noop",
+                "production_frontend_dependency_gate": "noop",
+                "production_backend_dependency_gate": "noop",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(
+        "AISTOCK_PR_BODY",
+        "Validation Evidence: python -m nox -s l0 -> passed\n"
+        "production_ddl_gate=noop\n"
+        "production_frontend_dependency_gate=noop\n"
+        "production_backend_dependency_gate=noop",
+    )
+    monkeypatch.setattr(flow, "_git_output", lambda args, cwd=flow.REPO_ROOT, check=True: "fix BUG-198 P1")
+
+    assert flow.main(
+        [
+            "pr-check",
+            "--changed-file",
+            "scripts/issue_flow.py",
+            "--changed-file",
+            "tests/aistock_validation/bugs/20260602_BUG-198-pr-quality-gate.json",
+            "--enforce-p0-p1-evidence",
+        ]
+    ) == 0
+    summary = json.loads(capsys.readouterr().out)
+
+    gate = summary["p0p1_evidence_gate"]
+    assert gate["workflow_gate"] == "passed"
+    assert gate["blocking"] == []
+    assert gate["checks"] == {
+        "linked_issue": True,
+        "scope_passed": True,
+        "validation_evidence": True,
+        "production_gates": True,
+    }
+
+
 def test_open_source_tooling_configs_are_parseable() -> None:
     assert yaml.safe_load(Path(".pre-commit-config.yaml").read_text(encoding="utf-8"))["repos"]
     assert yaml.safe_load(Path(".semgrep.yml").read_text(encoding="utf-8"))["rules"]
