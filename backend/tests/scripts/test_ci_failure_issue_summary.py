@@ -207,3 +207,92 @@ def test_cli_writes_github_issue_payload(tmp_path: Path, capsys: pytest.CaptureF
     issue_payload = json.loads(issue_payload_path.read_text(encoding="utf-8"))
     assert issue_payload["dedupe"]["fingerprint"].startswith("ci-")
     assert "aistock-ci-failure-fingerprint" in issue_payload["body"]
+
+
+
+def test_locate_last_green_run_finds_previous_success() -> None:
+    payload = summary.finalize_summary(
+        {
+            "schema_version": "aistock_ci_failure_summary_v1",
+            "severity": "P1",
+            "workflow": "AIstock CI",
+            "run_id": "200",
+            "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/200",
+            "branch": "main",
+            "commit": "abcdef1234567890",
+            "failed_jobs": [],
+            "extraction_errors": [],
+        }
+    )
+
+    def fake_run(args: list[str], **_: object) -> dict[str, object]:
+        assert args[:3] == ["gh", "run", "list"]
+        return {
+            "ok": True,
+            "stdout": json.dumps(
+                [
+                    {
+                        "databaseId": 200,
+                        "workflowName": "AIstock CI",
+                        "headSha": "abcdef1234567890",
+                        "headBranch": "main",
+                        "conclusion": "failure",
+                        "url": "https://github.com/licong01-cloud/AIstock/actions/runs/200",
+                    },
+                    {
+                        "databaseId": 198,
+                        "workflowName": "AIstock CI",
+                        "headSha": "1234567890abcdef",
+                        "headBranch": "main",
+                        "conclusion": "success",
+                        "url": "https://github.com/licong01-cloud/AIstock/actions/runs/198",
+                        "createdAt": "2026-06-01T00:00:00Z",
+                    },
+                ]
+            ),
+            "stderr": "",
+        }
+
+    locator = summary.locate_last_green_run(payload, repo="licong01-cloud/AIstock", run_provider=fake_run)
+
+    assert locator["schema_version"] == "aistock_ci_last_green_locator_v1"
+    assert locator["status"] == "found"
+    assert locator["blocking_for_issue_workflow"] is False
+    assert locator["commit_range"] == "1234567890ab..abcdef123456"
+    assert locator["previous_success_run"]["run_id"] == "198"
+
+
+def test_regression_locator_is_rendered_and_carried_to_context_pack() -> None:
+    parsed = summary.parse_job_log(CI_LOG, job_name="Backend tests (paper_v2_backend)")
+    payload = summary.finalize_summary(
+        {
+            "schema_version": "aistock_ci_failure_summary_v1",
+            "severity": "P1",
+            "workflow": "AIstock CI",
+            "run_id": "200",
+            "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/200",
+            "branch": "main",
+            "commit": "abcdef1234567890",
+            "failed_jobs": [parsed],
+            "extraction_errors": [],
+            "last_green_locator": {
+                "schema_version": "aistock_ci_last_green_locator_v1",
+                "status": "found",
+                "blocking_for_issue_workflow": False,
+                "commit_range": "1234567890ab..abcdef123456",
+                "previous_success_run": {"run_id": "198", "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/198"},
+                "warnings": [],
+            },
+        }
+    )
+
+    markdown = summary.render_issue_markdown(payload)
+    context_pack = summary.build_context_pack(payload, github_issue_number=517)
+
+    assert "## Regression Locator" in markdown
+    assert "1234567890ab..abcdef123456" in markdown
+    context_markdown = summary.render_context_pack_markdown(context_pack)
+
+    assert context_pack["last_green_locator"]["status"] == "found"
+    assert context_pack["agent_handoff"]["regression_locator"]["commit_range"] == "1234567890ab..abcdef123456"
+    assert "## Regression Locator" in context_markdown

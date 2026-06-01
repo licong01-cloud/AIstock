@@ -115,6 +115,110 @@ def _module_files(module: str | None, failed_tests: list[str]) -> list[str]:
     return _unique(files)
 
 
+def _short_sha(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text[:12] if text else None
+
+
+def _run_id_number(value: Any) -> int | None:
+    try:
+        return int(str(value or ""))
+    except ValueError:
+        return None
+
+
+def _last_green_payload(summary: dict[str, Any], *, status: str, previous_success: dict[str, Any] | None = None, warning: str | None = None) -> dict[str, Any]:
+    previous_success = previous_success or {}
+    previous_sha = previous_success.get("headSha") or previous_success.get("commit")
+    current_sha = summary.get("commit")
+    commit_range = f"{_short_sha(previous_sha)}..{_short_sha(current_sha)}" if previous_sha and current_sha else None
+    warnings = [warning] if warning else []
+    return {
+        "schema_version": "aistock_ci_last_green_locator_v1",
+        "status": status,
+        "blocking_for_issue_workflow": False,
+        "current_run": {
+            "run_id": str(summary.get("run_id") or ""),
+            "run_url": summary.get("run_url"),
+            "workflow": summary.get("workflow"),
+            "branch": summary.get("branch"),
+            "commit": current_sha,
+        },
+        "previous_success_run": {
+            "run_id": str(previous_success.get("databaseId") or previous_success.get("run_id") or "") or None,
+            "run_url": previous_success.get("url") or previous_success.get("run_url"),
+            "workflow": previous_success.get("workflowName") or previous_success.get("workflow"),
+            "branch": previous_success.get("headBranch") or previous_success.get("branch"),
+            "commit": previous_sha,
+            "created_at": previous_success.get("createdAt") or previous_success.get("created_at"),
+        }
+        if previous_success
+        else None,
+        "commit_range": commit_range,
+        "suspected_files": summary.get("suspected_files") or [],
+        "warnings": warnings,
+    }
+
+
+def locate_last_green_run(
+    summary: dict[str, Any],
+    *,
+    repo: str,
+    run_provider: Callable[..., dict[str, Any]] = _run,
+) -> dict[str, Any]:
+    """Find the most recent successful run for the same branch/workflow without making it a gate."""
+    branch = summary.get("branch")
+    workflow = summary.get("workflow")
+    current_run_id = str(summary.get("run_id") or "")
+    if not branch or not workflow:
+        return _last_green_payload(summary, status="unavailable", warning="missing branch or workflow")
+    result = run_provider(
+        [
+            "gh",
+            "run",
+            "list",
+            "--repo",
+            repo,
+            "--branch",
+            str(branch),
+            "--limit",
+            "50",
+            "--json",
+            "databaseId,workflowName,headSha,headBranch,conclusion,status,url,createdAt,displayTitle",
+        ],
+        timeout=120,
+    )
+    if not result.get("ok"):
+        return _last_green_payload(
+            summary,
+            status="unavailable",
+            warning=str(result.get("stderr") or result.get("stdout") or "gh run list failed")[:240],
+        )
+    try:
+        runs = json.loads(str(result.get("stdout") or "[]"))
+    except json.JSONDecodeError as exc:
+        return _last_green_payload(summary, status="unavailable", warning=f"invalid gh run list JSON: {exc}")
+    if not isinstance(runs, list):
+        return _last_green_payload(summary, status="unavailable", warning="gh run list JSON root was not a list")
+    current_number = _run_id_number(current_run_id)
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        if str(run.get("workflowName") or "") != str(workflow):
+            continue
+        if str(run.get("headBranch") or "") != str(branch):
+            continue
+        if str(run.get("conclusion") or "").lower() != "success":
+            continue
+        run_number = _run_id_number(run.get("databaseId"))
+        if current_number is not None and run_number is not None and run_number >= current_number:
+            continue
+        if str(run.get("databaseId") or "") == current_run_id:
+            continue
+        return _last_green_payload(summary, status="found", previous_success=run)
+    return _last_green_payload(summary, status="not_found", warning="no previous successful run found in the last 50 branch runs")
+
+
 def parse_job_log(log_text: str, *, job_name: str = "", job_url: str | None = None) -> dict[str, Any]:
     lines = normalize_log(log_text)
     joined = "\n".join(lines)
@@ -237,6 +341,7 @@ def finalize_summary(summary: dict[str, Any]) -> dict[str, Any]:
     summary.setdefault("production_ddl_gate", "noop")
     summary.setdefault("production_frontend_dependency_gate", "noop")
     summary.setdefault("production_backend_dependency_gate", "noop")
+    summary.setdefault("last_green_locator", _last_green_payload(summary, status="not_requested"))
     summary["failure_event"] = build_failure_event(summary)
     summary["agent_handoff"] = build_agent_handoff(summary)
     return summary
@@ -334,6 +439,7 @@ def build_failure_event(
         "evidence_refs": evidence_refs,
         "changed_files": summary.get("suspected_files") or [],
         "candidate_status": "new",
+        "last_green_locator": summary.get("last_green_locator"),
         "log_policy": {
             "full_log_embedded": False,
             "full_log_ref": summary.get("run_url"),
@@ -379,6 +485,7 @@ def build_agent_handoff(
         ],
         "allowed_write_scope": suspected_files,
         "required_verification": required_verification,
+        "regression_locator": summary.get("last_green_locator"),
         "token_budget": {
             "target_tokens": 4000,
             "max_tokens": 8000,
@@ -439,6 +546,7 @@ def build_context_pack(
         "required_verification": handoff["required_verification"],
         "evidence_refs": event["evidence_refs"],
         "failed_jobs": failed_jobs,
+        "last_green_locator": summary.get("last_green_locator"),
         "extraction_errors": summary.get("extraction_errors") or [],
         "token_budget": handoff["token_budget"],
         "omitted_details": {
@@ -459,6 +567,11 @@ def render_context_pack_markdown(context_pack: dict[str, Any]) -> str:
         f"- Severity: `{context_pack.get('severity') or 'unknown'}`",
         f"- Diagnostic status: `{context_pack.get('diagnostic_status') or 'partial'}`",
         f"- Problem: `{context_pack.get('problem_statement') or 'unknown'}`",
+        "",
+        "## Regression Locator",
+        "",
+        f"- last_green_status: `{(context_pack.get('last_green_locator') or {}).get('status') or 'not_requested'}`",
+        f"- commit_range: `{(context_pack.get('last_green_locator') or {}).get('commit_range') or 'unknown'}`",
         "",
         "## Agent Handoff",
         "",
@@ -645,7 +758,7 @@ def summarize_actions_run(
         parsed["conclusion"] = job.get("conclusion")
         parsed["database_id"] = job.get("databaseId")
         failed_jobs.append(parsed)
-    return finalize_summary(
+    finalized = finalize_summary(
         {
             "schema_version": "aistock_ci_failure_summary_v1",
             "generated_at": _utc_now(),
@@ -662,6 +775,10 @@ def summarize_actions_run(
             "extraction_errors": extraction_errors,
         }
     )
+    finalized["last_green_locator"] = locate_last_green_run(finalized, repo=repo)
+    finalized["failure_event"] = build_failure_event(finalized)
+    finalized["agent_handoff"] = build_agent_handoff(finalized)
+    return finalized
 
 
 def render_issue_markdown(summary: dict[str, Any], *, github_issue_number: int | str | None = None) -> str:
@@ -676,11 +793,30 @@ def render_issue_markdown(summary: dict[str, Any], *, github_issue_number: int |
         f"- Commit: `{summary.get('commit') or 'unknown'}`",
         f"- Fingerprint: `{summary.get('fingerprint')}`",
         "",
-        "## Failed Jobs",
-        "",
-        "| Job | Nox/session | Command | Result |",
-        "| --- | --- | --- | --- |",
     ]
+    locator = summary.get("last_green_locator") or {}
+    lines.extend(
+        [
+            "## Regression Locator",
+            "",
+            f"- last_green_status: `{locator.get('status') or 'not_requested'}`",
+            f"- commit_range: `{locator.get('commit_range') or 'unknown'}`",
+        ]
+    )
+    previous = locator.get("previous_success_run") if isinstance(locator.get("previous_success_run"), dict) else None
+    if previous:
+        lines.append(f"- previous_success_run: {previous.get('run_url') or previous.get('run_id') or 'n/a'}")
+    if locator.get("warnings"):
+        lines.extend([f"- warning: `{item}`" for item in locator.get("warnings") or []])
+    lines.extend(
+        [
+            "",
+            "## Failed Jobs",
+            "",
+            "| Job | Nox/session | Command | Result |",
+            "| --- | --- | --- | --- |",
+        ]
+    )
     failed_jobs = summary.get("failed_jobs") or []
     if not failed_jobs:
         lines.append("| n/a | n/a | n/a | diagnostic extraction did not find failed jobs |")
@@ -823,3 +959,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
