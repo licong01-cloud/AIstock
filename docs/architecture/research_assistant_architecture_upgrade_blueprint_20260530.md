@@ -56,9 +56,9 @@
 | DEF-03 | 无树形记忆召回 / 无打分 / 无反思 | 全仓 grep `importance/recency/relevance/reflection/embedding` 在记忆检索层 = 0 命中 | 记忆不可靠 |
 | DEF-04 | 知识图谱建了不用 | `service.py:3137` `"graph_relation_refs": []` 硬编码空 | 跨模块理解缺失 |
 | DEF-05 | 无 Agent Teams | 单体 `ResearchAssistantService`；无 orchestrator/worker | 无法并行多任务 |
-| DEF-06 | QE 无跨 loop 自主闭环 | `qe_evolution_service.py:133-312` `AutoEvolutionScheduler` 有单 loop 决策，rerun/retry 均被动触发 | 不能自主演进 |
+| DEF-06 | QE 无跨 loop 自主闭环 | `qe_evolution_service.py:133` `AutoEvolutionScheduler` + `:1600-1634` `submit_next_loop` 仍是单 loop 流转；`:5243`/`:5409`/`:5506` rerun/custom loop 均被动触发 | 不能自主演进 |
 | DEF-07 | 外部搜索/学术检索零实现 | 后端 grep `arxiv/scholar/tavily/web_search/paper_search` = 0 文件 | 无文献接地 |
-| DEF-08 | 记忆表无真树列 | `research_memory_items` 仅 `namespace + memory_type + 点分键`，无 `parent_key/tree_path`（仅 `assistant_prompt_nodes` 有） | 树存储是弱约定 |
+| DEF-08 | 记忆表无真树列 | `init_research_assistant_schema_20260521.py:143-171` `research_memory_items` 仅 `namespace + memory_type + 点分键`，无 `parent_key/tree_path`（仅 `assistant_prompt_nodes` `:548-565` 有） | 树存储是弱约定 |
 | DEF-09 | 记忆类型不含个人维度 | `models.py:61-71` `MEMORY_TYPES` 无 `user_preference/directive/analysis_note` | 无法装个人习惯/指令 |
 
 ### 1.3 前序设计来源与承接（防止设计丢失）
@@ -401,7 +401,7 @@ orchestrator.run(user_goal):
 
 ## 8. L4：QE 自主演进闭环
 
-> 解决 DEF-06。承接现有 `AutoEvolutionScheduler`（`qe_evolution_service.py:133-312`）+ Analyst 两步 + Evaluator 三层。范式：Voyager（技能库+自主课程）、AI-Scientist（研究循环）。作为 L3 的 `qe_experiment_designer` worker 落地。
+> 解决 DEF-06。承接现有 `AutoEvolutionScheduler`（`qe_evolution_service.py:133` + `submit_next_loop` `:1600-1634`）+ Analyst 两步 + Evaluator 三层。范式：Voyager（技能库+自主课程）、AI-Scientist（研究循环）。作为 L3 的 `qe_experiment_designer` worker 落地。
 
 ### 8.1 自主主循环
 
@@ -488,7 +488,7 @@ COMMENT ON TABLE qe_autonomous_evolution_runs IS 'QE 自主演进主循环运行
 
 ### Phase 0：基线锁定与脚手架
 - **交付**：本蓝图合入；新增 `backend/tests/research_assistant/` 占位测试目录；DDL 迁移脚本骨架（不执行生产 DDL）。
-- **验收**：`git diff --check` 通过；本文档 §1.2 缺陷清单与 §12 矩阵 cross-check 无遗漏；`rg "DEF-0" 本文件` 命中 9 项。
+- **验收**：`git diff --check` 通过；本文档 §1.2/§16.1 缺陷清单与 §12/§16.9/§17.10 矩阵 cross-check 无遗漏；`rg -n "DEF-0|DEF-1" 本文件` 覆盖 DEF-01~13。
 
 ### Phase 1：L1 记忆树（DDL + 召回 + curator）
 - **交付**：§4.2 DDL 迁移 + `memory_tree.py` + `memory_curator.py` + `build_context_pack` 改造（树形召回替换平铺）+ 常驻注入。
@@ -564,6 +564,8 @@ COMMENT ON TABLE qe_autonomous_evolution_runs IS 'QE 自主演进主循环运行
 
 > 实现时每完成一项，在本矩阵对应行追加 PR 链接与提交哈希，保持设计-实现强一致。
 
+> Phase 0 基线锁定锚点：`docs/process/research_assistant_baseline_verification_20260531.md` 逐条复验 DEF-01~12 与 §1.1 资产；`backend/tests/research_assistant/test_phase0_blueprint_baseline.py`、`tests/aistock_validation/catalog/module_registry.yaml`、`tests/aistock_validation/catalog/file_ownership.yaml`、`tests/aistock_validation/catalog/test_plans.yaml`、`noxfile.py` 将本矩阵登记为 `ra_phase0_baseline` 闸门。Phase 0 原始实现 commit `53a0f03d6a2bb05049a99f57998c3845b7d681f1`，rebase 后合入前 HEAD `cff0b243`；G1-central run_id `research-assistant_20260601_011521_l0_ra-phase0-baseline_fba1c3de_runner-validation__289612b1db`，validated_commit `fba1c3de`，`return_code=0`。本锚点只声明基线和登记，不把未来行标记为已实现。
+
 ---
 
 ## 13. Design Acceptance Index（DAI）
@@ -618,7 +620,7 @@ COMMENT ON TABLE qe_autonomous_evolution_runs IS 'QE 自主演进主循环运行
 | DEF-11 | 主动晨报 / 实验日报仅占位、未生成 | `service.py:3598-3599` 仅有"研究助理晨报模板"，body 注明"夜间自动任务将在后续阶段写入具体晨报" | 无主动汇报（Jarvis 式主动性缺失） |
 | DEF-12 | 无自我学习 / 提示词自评估闭环 | backend 无 `prompt_lab/reflection_card/research_curriculum` 实现；记忆有反思巩固但无"提示词/策略自改进" | 助手不能"越用越准"，提示词靠人工维护 |
 
-> 澄清（防误判）：复查中曾被怀疑"未实现"的上下文压缩 + key facts（`assistant_context_segments`/`assistant_context_key_facts`，写入见 `service.py:2406→2417`，回灌见 `:2316-2323`）、external_agent_session（`service.py:3402` + schema:490）、LLM 真实调用（`service.py:569` litellm）、mode router / `_select_prompt_nodes`（`:1295`）/ `tool_router.py` / `domain_ontology.py` 均**已实现并接入**，不属于缺口；用户画像由 L1 `personal.preference/habit` 覆盖；experiment lineage 由 `research_evolution_paths` + L4 覆盖。
+> 澄清（防误判）：复查中曾被怀疑"未实现"的上下文压缩 + key facts（`assistant_context_segments`/`assistant_context_key_facts`，写入见 `service.py:2381-2417`，回灌见 `:2316-2323`）、external_agent_session（`service.py:3402` + schema:490）、LLM 真实调用（`service.py:569` litellm）、mode router / `_select_prompt_nodes`（`:1295`）/ `tool_router.py` / `domain_ontology.py` 均**已实现并接入**，不属于缺口；用户画像由 L1 `personal.preference/habit` 覆盖；experiment lineage 由 `research_evolution_paths` + L4 覆盖。
 
 ### 16.2 设计来源承接（补 §1.3）
 
@@ -793,6 +795,8 @@ COMMENT ON TABLE assistant_prompt_lab_runs IS '提示词自优化候选(GEPA/DSP
 | Prompt Lab | DEF-12 | `assistant_prompt_lab_runs`、GEPA/DSPy+judge | `test_prompt_lab_gepa_offline.py` / `_judge_gated.py` |
 | 技能库 | DEF-12 | `assistant_skill_library`、L4 课程 | `test_skill_library.py` |
 
+> Phase 0 增补锚点：`research_assistant.code_intelligence`、`research_assistant.proactive_reports`、`research_assistant.reflection_card`、`research_assistant.prompt_lab`、`research_assistant.skill_library` 已在 module/file ownership catalog 中登记；Phase 0 实现 commit `53a0f03d6a2bb05049a99f57998c3845b7d681f1`。
+
 ### 16.10 Design Acceptance Index（补 §13）
 
 | 编号 | 用户要求 | 设计位置 | 验收标准 |
@@ -938,6 +942,8 @@ COMMENT ON TABLE assistant_mcp_connections IS '通用 MCP 客户端连接登记�
 | core/adapter 边界 + provider 接口 | DEF-13 | core 包结构、provider 接口、依赖检查脚本 | `test_core_no_adapter_import.py` |
 | 通用 MCP 客户端 + 发现/审核 | DEF-13 | `assistant_mcp_connections`、`capabilities.review_status`、闸门 | `test_generic_mcp_discovery.py` / `test_quarantine_tool_blocked.py` |
 | 知识包抽离 + 数据隔离 | DEF-13 | `aistock_knowledge_pack`、Knowledge Pack Provider | `test_core_empty_boot.py` / `test_pack_load_isolation.py` |
+
+> Phase 0 解耦锚点：`research_assistant.product_core`、`research_assistant.core_adapter`、`research_assistant.generic_mcp_client`、`research_assistant.aistock_domain_adapter`、`research_assistant.aistock_knowledge_pack` 已在 module/file ownership catalog 中登记；Phase 0 实现 commit `53a0f03d6a2bb05049a99f57998c3845b7d681f1`。
 
 ### 17.11 Design Acceptance Index（补 §13）
 

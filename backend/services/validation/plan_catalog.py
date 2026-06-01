@@ -28,6 +28,7 @@ ALLOWED_COMMAND_KEYS: dict[str, str] = {
     "nox_qe_read_l3": "qe_read_l3",
     "nox_research_pipeline_backend": "research_pipeline_backend",
     "nox_research_mcp_contract": "research_mcp_contract",
+    "nox_ra_phase0_baseline": "ra_phase0_baseline",
     "nox_research_assistant_backend": "research_assistant_backend",
     "nox_research_assistant_mcp_contract": "research_assistant_mcp_contract",
     "nox_research_assistant_ui": "research_assistant_ui",
@@ -97,7 +98,7 @@ class ValidationPlanCatalog:
 
     def __init__(self, catalog_path: Path | None = None, *, allowed_command_keys: dict[str, str] | None = None) -> None:
         self.catalog_path = Path(catalog_path or DEFAULT_PLAN_CATALOG_PATH)
-        self.allowed_command_keys = dict(allowed_command_keys or ALLOWED_COMMAND_KEYS)
+        self.allowed_command_keys = dict(ALLOWED_COMMAND_KEYS if allowed_command_keys is None else allowed_command_keys)
 
     def load(self) -> dict[str, Any]:
         if not self.catalog_path.exists():

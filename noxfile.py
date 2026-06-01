@@ -837,6 +837,59 @@ def research_mcp_contract(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def ra_phase0_baseline(session: nox.Session) -> None:
+    """Run Phase 0 baseline, scaffold, catalog, and ownership gates."""
+    phase0_paths = [
+        "docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md",
+        "docs/process/research_assistant_baseline_verification_20260531.md",
+        "backend/tests/research_assistant/__init__.py",
+        "backend/tests/research_assistant/test_phase0_blueprint_baseline.py",
+        "backend/db/migrations/ra_upgrade/README.md",
+        "tests/aistock_validation/catalog/module_registry.yaml",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "tests/aistock_validation/catalog/test_plans.yaml",
+        "backend/services/validation/plan_catalog.py",
+        "noxfile.py",
+    ]
+    session.run("git", "diff", "--check", external=True)
+    session.run(
+        sys.executable,
+        "-m",
+        "py_compile",
+        "backend/tests/research_assistant/__init__.py",
+        "backend/tests/research_assistant/test_phase0_blueprint_baseline.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/research_assistant",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_validation_catalog_integrity.py",
+        "--output-json",
+        "tmp/validation/catalog/ra_phase0_baseline_integrity.json",
+        "--fail-on-warning",
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_module_ownership_scan.py",
+        "--output-json",
+        "tmp/validation/module_ownership/ra_phase0_baseline_paths.json",
+        "--summary-md",
+        "tmp/validation/module_ownership/ra_phase0_baseline_paths.md",
+        "--fail-on-unmapped",
+        "--fail-on-ambiguous",
+        *phase0_paths,
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
 def research_assistant_backend(session: nox.Session) -> None:
     """Run Research Assistant backend/schema/router tests without services."""
     session.run(
