@@ -4128,6 +4128,107 @@ def test_promote_ci_issue_apply_requires_registry_worktree_for_code_bug(
     assert not list((isolated_workflow_root / "tests" / "aistock_validation" / "bugs").glob("*BUG-*.json"))
 
 
+def test_triage_ci_issue_compact_output_keeps_actionable_fields(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    workflow._emit(
+        {
+            "schema_version": "aistock_issue_workflow_triage_ci_issue_v1",
+            "detected_run_id": "26378872481",
+            "next_command": "python scripts/aistock_issue_workflow.py promote-ci-issue --issue 197 --create-registry-worktree --apply",
+            "classification_recommendation": "real_regression_candidate",
+            "needs_bug_json": True,
+            "failure_event_path": "tmp/issue_workflow/ci-issue-197/failure-event.json",
+            "context_pack_md_path": "tmp/issue_workflow/ci-issue-197/context-pack.md",
+            "github_issue": {
+                "number": 197,
+                "url": "https://github.com/licong01-cloud/AIstock/issues/197",
+                "title": "[P1] AIstock CI failed on main",
+                "state": "OPEN",
+                "body": "verbose body should stay hidden",
+            },
+            "summary": {
+                "diagnostic_status": "complete",
+                "workflow": "AIstock CI",
+                "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/26378872481",
+                "suspected_modules": ["validation"],
+                "suspected_files": ["scripts/aistock_issue_workflow.py"],
+                "reproduce_command": "python -m nox -s validation_center_backend",
+                "failed_jobs": [{"key_log_excerpt": ["large excerpt should stay hidden"]}],
+            },
+            "suggested_bug": {
+                "module": "validation",
+                "severity": "P1",
+                "title": "CI failure requires triage",
+                "risk_area": "ci_failure_intake",
+                "allowed_write_scope": ["scripts/aistock_issue_workflow.py"],
+                "required_verification": ["validation_center_backend"],
+            },
+        }
+    )
+
+    compact = json.loads(capsys.readouterr().out)
+    assert compact["classification_recommendation"] == "real_regression_candidate"
+    assert compact["diagnostic_status"] == "complete"
+    assert compact["needs_bug_json"] is True
+    assert compact["github_issue"]["number"] == 197
+    assert compact["suggested_bug"]["module"] == "validation"
+    assert compact["suggested_bug"]["allowed_write_scope_count"] == 1
+    assert "body" not in compact["github_issue"]
+    assert "summary" not in compact
+    assert "large excerpt" not in json.dumps(compact)
+
+
+def test_triage_ci_issue_compact_output_keeps_infra_action_without_full_summary(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    workflow._emit(
+        {
+            "schema_version": "aistock_issue_workflow_triage_ci_issue_v1",
+            "next_command": "infra_action_required_no_code_bug",
+            "classification_recommendation": "infra_blocker",
+            "needs_bug_json": False,
+            "github_issue": {
+                "number": 257,
+                "url": "https://github.com/licong01-cloud/AIstock/issues/257",
+                "title": "P1 Nightly blocked: self-hosted Windows runner unavailable",
+                "state": "OPEN",
+            },
+            "summary": {
+                "diagnostic_status": "complete",
+                "workflow": "AIstock Nightly L3 + DR",
+                "failed_jobs": [
+                    {
+                        "error_signature": "runner outage",
+                        "key_log_excerpt": ["full runner log should stay hidden"],
+                    }
+                ],
+            },
+            "infra_action": {
+                "workflow_gate": "infra_action_required",
+                "reason": "CI/Nightly failure is classified as infrastructure, not a code regression.",
+                "next_actions": [
+                    "restore or register the self-hosted Windows GitHub Actions runner",
+                    "verify runner labels include: self-hosted, windows",
+                ],
+                "production_gates": {
+                    "production_ddl_gate": "noop",
+                    "production_frontend_dependency_gate": "noop",
+                    "production_backend_dependency_gate": "noop",
+                },
+            },
+        }
+    )
+
+    compact = json.loads(capsys.readouterr().out)
+    assert compact["classification_recommendation"] == "infra_blocker"
+    assert compact["needs_bug_json"] is False
+    assert compact["infra_action"]["workflow_gate"] == "infra_action_required"
+    assert compact["infra_action"]["next_actions"][0].startswith("restore or register")
+    assert "summary" not in compact
+    assert "full runner log" not in json.dumps(compact)
+
+
 def test_promote_ci_issue_blocks_infra_runner_outage(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
