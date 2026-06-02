@@ -79,3 +79,28 @@ def test_qe_adapter_reuses_existing_scheduler_agents_evaluator_analyst_submit_an
     assert ("preflight_qe_node", "qe-task-contract") in calls
     assert decision.executed is True
     assert decision.submitted_loop_id == "qe-loop-submitted"
+
+
+def test_qe_adapter_does_not_fabricate_as_of_when_scheduler_omits_it() -> None:
+    class FakeScheduler:
+        def get_latest_loop_metrics(self, task_id: str) -> dict[str, object]:
+            return {
+                "loop_index": 2,
+                "metrics": {"IC": 0.018},
+                "source_refs": [f"qe_loop:{task_id}:2"],
+            }
+
+    adapter = QeAutonomyAdapter(scheduler=FakeScheduler(), agents=object())  # type: ignore[arg-type]
+    state = AutonomousEvolutionState(
+        auto_run_id="qaer-no-as-of",
+        qe_task_id="qe-task-no-as-of",
+        methodology_ref="methodology:test",
+        stop_conditions={"max_no_improve_rounds": 5},
+        budget={"max_loops": 5},
+        started_at=datetime(2026, 6, 2, tzinfo=timezone.utc),
+    )
+
+    observation = adapter.run_or_wait_loop_n(state)
+
+    assert observation.as_of is None
+    assert observation.to_prompt_safe_dict()["as_of"] is None

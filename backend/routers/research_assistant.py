@@ -168,6 +168,38 @@ def get_task(task_id: str, service: ResearchAssistantService = Depends(get_resea
         raise _map_error(exc) from exc
 
 
+@router.get("/agent-runs", response_model=ResearchAssistantResponse)
+def list_agent_runs(
+    parent_task_id: str | None = Query(None),
+    status: str | None = Query(None),
+    limit: int | None = Query(None, ge=1),
+    offset: int = Query(0, ge=0),
+    service: ResearchAssistantService = Depends(get_research_assistant_service),
+) -> ResearchAssistantResponse:
+    try:
+        return _success(
+            service.list_records(
+                "agent_runs",
+                filters={"parent_task_id": parent_task_id, "status": status},
+                limit=limit or 100,
+                offset=offset,
+            )
+        )
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.get("/agent-runs/{agent_run_id}", response_model=ResearchAssistantResponse)
+def get_agent_run(agent_run_id: str, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
+    try:
+        row = service.repository.get_record("agent_runs", agent_run_id)
+        if not row:
+            raise KeyError(f"agent_run not found: {agent_run_id}")
+        return _success(row)
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
 @router.post("/tasks/{task_id}/events", response_model=ResearchAssistantResponse)
 def add_task_event(task_id: str, request: TaskEventCreate, service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
     try:

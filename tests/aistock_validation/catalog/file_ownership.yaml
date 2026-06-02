@@ -349,6 +349,23 @@ rules:
     layer: product_feature
     risk_level: high
     ownership_reason: Research Assistant runtime, API, MCP, and UI surfaces must stay aligned with the assistant architecture blueprint.
+  - rule_id: research_assistant_phase7_full_accept
+    priority: 115
+    include:
+      - scripts/research_assistant_phase7_crosscheck.py
+      - tests/aistock_validation/catalog/research_assistant_phase7_expected.yaml
+      - backend/tests/research_assistant/test_phase7_blueprint_crosscheck.py
+      - frontend/src/components/research-assistant/**
+      - frontend/src/lib/research-assistant/**
+      - frontend/src/app/research-assistant/**
+      - frontend/tests/research-assistant/phase7-*.spec.ts
+      - tests/aistock_validation/history/research_assistant/*ra_phase7_full_accept*.md
+      - tests/aistock_validation/history/research_assistant/*ra_phase7_live_smoke*.md
+    primary_module: research_assistant
+    impact_modules: [research_assistant.memory_tree, research_assistant.agent_teams, research_assistant.evidence_guard, research_assistant.qe_autonomy, validation.runner]
+    layer: product_feature
+    risk_level: critical
+    ownership_reason: Phase 7 closes the Research Assistant frontend, evidence/blocker UI, full DAI cross-check, and validation runner gate without touching production ports.
   - rule_id: research_assistant_memory_tree
     priority: 100
     include:
@@ -400,6 +417,7 @@ rules:
   - rule_id: research_assistant_evidence_guard
     priority: 100
     include:
+      - backend/services/research_assistant/evidence_guard.py
       - backend/tests/research_assistant/test_evidence_guard.py
     primary_module: research_assistant.evidence_guard
     impact_modules: [research_assistant.react_grounding, research_assistant.external_research]
@@ -442,6 +460,7 @@ rules:
   - rule_id: research_assistant_qe_autonomy
     priority: 100
     include:
+      - backend/services/research_assistant/qe_autonomy.py
       - backend/services/research_assistant/qe_autonomy/**
       - backend/db/migrations/ra_upgrade/003_qe_autonomy.sql
       - backend/tests/research_assistant/test_qe_autonomy_*.py

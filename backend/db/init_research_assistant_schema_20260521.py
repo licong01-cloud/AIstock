@@ -43,6 +43,7 @@ RESEARCH_ASSISTANT_EVENT_TYPES: tuple[str, ...] = (
     "skill_started",
     "skill_done",
     "skill_failed",
+    "approval_required",
     "approved",
     "rejected",
     "memory_written",

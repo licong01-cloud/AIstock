@@ -1393,6 +1393,132 @@ def ra_phase6_qe_autonomy(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def ra_phase7_full_accept(session: nox.Session) -> None:
+    """Run Phase 7 frontend integration, full RA backend, and cross-check gates."""
+    phase7_paths = [
+        "backend/routers/research_assistant.py",
+        "backend/db/init_research_assistant_schema_20260521.py",
+        "backend/services/research_assistant/service.py",
+        "backend/services/research_assistant/qe_autonomy/adapter.py",
+        "backend/tests/research_assistant/test_agent_teams_api.py",
+        "backend/tests/research_assistant/test_phase7_blueprint_crosscheck.py",
+        "backend/tests/research_assistant/test_qe_autonomy_adapter_contract.py",
+        "frontend/src/app/research-assistant/chat/page.tsx",
+        "frontend/src/app/research-assistant/memory/page.tsx",
+        "frontend/src/app/research-assistant/research-assistant.css",
+        "frontend/src/app/research-assistant/tasks/page.tsx",
+        "frontend/src/app/research-assistant/trace/page.tsx",
+        "frontend/src/app/research-assistant/workbench/page.tsx",
+        "frontend/src/components/research-assistant/AgentTeamsRunView.tsx",
+        "frontend/src/components/research-assistant/BlockerCard.tsx",
+        "frontend/src/components/research-assistant/EvidenceCard.tsx",
+        "frontend/src/components/research-assistant/MemoryTreeView.tsx",
+        "frontend/src/lib/research-assistant/api.ts",
+        "frontend/tests/research-assistant/phase7-frontend-acceptance.spec.ts",
+        "frontend/tests/research-assistant/phase7-live-smoke.spec.ts",
+        "scripts/research_assistant_phase7_crosscheck.py",
+        "tests/aistock_validation/catalog/research_assistant_phase7_expected.yaml",
+        "tests/aistock_validation/catalog/test_plans.yaml",
+        "tests/aistock_validation/catalog/module_registry.yaml",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "tests/aistock_validation/history/research_assistant/20260602_ra_phase7_full_accept_validation.md",
+        "tests/aistock_validation/history/research_assistant/20260602_ra_phase7_full_accept_progress.md",
+        "tests/aistock_validation/history/research_assistant/20260602_ra_phase7_live_smoke_template.md",
+        "backend/services/validation/plan_catalog.py",
+        "noxfile.py",
+    ]
+    frontend_env = _env(
+        {
+            "FRONTEND_PORT": "3011",
+            "BACKEND_PORT": "8012",
+            "API_BASE": "http://127.0.0.1:8012/api/v1",
+            "NEXT_PUBLIC_API_BASE": "http://127.0.0.1:8012/api/v1",
+            "NEXT_PUBLIC_TDX_BACKEND_BASE": "http://127.0.0.1:8012",
+            "PAPER_V2_API_BASE": "http://127.0.0.1:8012/api/v1",
+            "PAPER_V2_API_PROXY_TARGET": "http://127.0.0.1:8012/api/v1",
+        }
+    )
+    session.run("git", "diff", "--check", external=True)
+    session.run(
+        sys.executable,
+        "-m",
+        "py_compile",
+        "backend/db/init_research_assistant_schema_20260521.py",
+        "backend/routers/research_assistant.py",
+        "backend/services/research_assistant/service.py",
+        "backend/services/research_assistant/qe_autonomy/adapter.py",
+        "backend/tests/research_assistant/test_agent_teams_api.py",
+        "backend/tests/research_assistant/test_phase7_blueprint_crosscheck.py",
+        "backend/tests/research_assistant/test_qe_autonomy_adapter_contract.py",
+        "scripts/research_assistant_phase7_crosscheck.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/research_assistant",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+    session.chdir("frontend")
+    session.run("npm", "run", "lint", env=frontend_env, external=True)
+    session.run("npm", "run", "build", env=frontend_env, external=True)
+    session.run(
+        "npx",
+        "playwright",
+        "test",
+        "tests/research-assistant/phase7-frontend-acceptance.spec.ts",
+        "--project",
+        "chromium",
+        env=frontend_env,
+        external=True,
+    )
+    session.run(
+        "npx",
+        "playwright",
+        "test",
+        "tests/research-assistant/research-assistant.spec.ts",
+        "--project",
+        "chromium",
+        env=frontend_env,
+        external=True,
+    )
+    session.chdir(str(ROOT))
+    session.run(
+        sys.executable,
+        "scripts/research_assistant_phase7_crosscheck.py",
+        "--blueprint",
+        "docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md",
+        "--expected",
+        "tests/aistock_validation/catalog/research_assistant_phase7_expected.yaml",
+        "--fail-on-drift",
+        "--output-json",
+        "tmp/validation/research_assistant/phase7/crosscheck.json",
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_validation_catalog_integrity.py",
+        "--output-json",
+        "tmp/validation/research_assistant/phase7/catalog_integrity.json",
+        "--fail-on-warning",
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_module_ownership_scan.py",
+        "--output-json",
+        "tmp/validation/research_assistant/phase7/ownership.json",
+        "--summary-md",
+        "tmp/validation/research_assistant/phase7/ownership.md",
+        "--fail-on-unmapped",
+        "--fail-on-ambiguous",
+        *phase7_paths,
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
 def research_assistant_backend(session: nox.Session) -> None:
     """Run Research Assistant backend/schema/router tests without services."""
     session.run(
