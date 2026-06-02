@@ -293,9 +293,18 @@ jobs:
                 core.info(`Created issue #${issueNumber} without labels.`);
               }
             }
+            const routingBody = [
+              '### CI failure issue routed',
+              '',
+              `Backend tests failed on this PR. Diagnostic issue: #${issueNumber}`,
+              '',
+              'Use generated context artifact pr-ci-failure-issue-context and run: '
+                + `python scripts/aistock_issue_workflow.py triage-ci-issue --issue ${issueNumber} `
+                + 'before promoting to BUG JSON.',
+            ].join('\n');
             await github.rest.issues.createComment({
               owner,
               repo,
               issue_number: context.issue.number,
-              body: `### CI failure issue routed\n\nBackend tests failed on this PR. Diagnostic issue: #${issueNumber}\n\nUse the generated context artifact \\`pr-ci-failure-issue-context\\` and run \\`python scripts/aistock_issue_workflow.py triage-ci-issue --issue ${issueNumber}\\` before promoting to BUG JSON.`,
+              body: routingBody,
             });
