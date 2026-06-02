@@ -9,7 +9,6 @@ from .models import (
     AutonomousEvolutionState,
     AutonomyBudgetUsage,
     AutonomyReport,
-    EvolutionDirection,
     LoopProposal,
     StopDecision,
 )
