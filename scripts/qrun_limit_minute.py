@@ -31,6 +31,7 @@ import sys
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 # 尾盘策略 14:30 前不出单，空 bar 触发 np.nanmean([]) 警告，无害
 # 仅过滤 qlib.utils.index_data 模块中的这一条，不影响其他来源的 RuntimeWarning
@@ -646,9 +647,12 @@ def _get_seed_ensemble_config(config: dict) -> dict | None:
     seeds = ensemble.get("seeds")
     if not isinstance(seeds, list) or not seeds:
         raise ValueError("qe_runtime.ensemble.seeds must be a non-empty list")
+    normalized_seeds = [int(seed) for seed in seeds]
+    if len(set(normalized_seeds)) != len(normalized_seeds):
+        raise ValueError("qe_runtime.ensemble.seeds must not contain duplicate seeds")
     normalized = {
         "enabled": True,
-        "seeds": [int(seed) for seed in seeds],
+        "seeds": normalized_seeds,
         "level": str(ensemble.get("level") or "score"),
         "agg": str(ensemble.get("agg") or "mean"),
     }
@@ -728,14 +732,339 @@ def _aggregate_seed_predictions(seed_scores: list[tuple[int, pd.Series]], agg: s
     return combined.to_frame("score")
 
 
+def _position_raw(position_obj: Any, *, seed: int | None = None, date: Any | None = None) -> dict:
+    if isinstance(position_obj, dict):
+        return position_obj
+    raw = getattr(position_obj, "position", None)
+    if isinstance(raw, dict):
+        return raw
+    location = ""
+    if seed is not None:
+        location += f" seed={seed}"
+    if date is not None:
+        location += f" date={date}"
+    raise TypeError(
+        "portfolio seed ensemble expects qlib Position/dict snapshots; "
+        f"got {type(position_obj).__name__}{location}"
+    )
+
+
+def _numeric_value(value: Any, default: float = 0.0) -> float:
+    if value is None:
+        return default
+    if isinstance(value, dict):
+        value = value.get("amount", default)
+    if value is None:
+        return default
+    try:
+        out = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"portfolio seed ensemble expected numeric value, got {value!r}") from exc
+    return out if pd.notna(out) else default
+
+
+def _position_account_value(raw_position: dict) -> float:
+    account = _numeric_value(raw_position.get("now_account_value"), 0.0)
+    if account > 0:
+        return account
+    cash = _numeric_value(raw_position.get("cash"), 0.0)
+    stock_value = 0.0
+    for instrument, info in raw_position.items():
+        if instrument in {"cash", "now_account_value"} or not isinstance(info, dict):
+            continue
+        stock_value += _numeric_value(info.get("amount"), 0.0) * _numeric_value(info.get("price"), 0.0)
+    return cash + stock_value
+
+
+def _normalize_daily_frame(obj: Any, *, seed: int, artifact_name: str) -> pd.DataFrame:
+    if isinstance(obj, pd.Series):
+        frame = obj.to_frame(obj.name or "value")
+    elif isinstance(obj, pd.DataFrame):
+        frame = obj.copy()
+    else:
+        raise TypeError(f"seed {seed}: {artifact_name} must be pandas Series/DataFrame, got {type(obj).__name__}")
+    if isinstance(frame.index, pd.MultiIndex):
+        raise ValueError(f"seed {seed}: {artifact_name} must use a daily DatetimeIndex, got MultiIndex")
+    try:
+        frame.index = pd.to_datetime(frame.index)
+    except Exception as exc:
+        raise ValueError(f"seed {seed}: {artifact_name} index cannot be parsed as datetime") from exc
+    if frame.index.has_duplicates:
+        frame = frame.groupby(level=0).last()
+    return frame.sort_index()
+
+
+def _normalize_position_dates(position_obj: Any, *, seed: int) -> dict[pd.Timestamp, Any]:
+    if not isinstance(position_obj, dict) or not position_obj:
+        raise ValueError(f"seed {seed}: positions_normal_1day.pkl must be a non-empty dict")
+    out: dict[pd.Timestamp, Any] = {}
+    for raw_dt, snapshot in position_obj.items():
+        out[pd.Timestamp(raw_dt)] = snapshot
+    return dict(sorted(out.items()))
+
+
+def _mean_daily_frames(seed_frames: list[tuple[int, pd.DataFrame]], common_dates: list[pd.Timestamp]) -> pd.DataFrame:
+    if not seed_frames:
+        raise ValueError("portfolio seed ensemble requires at least one daily frame")
+    combined = pd.DataFrame(index=pd.DatetimeIndex(common_dates))
+    common_index = combined.index
+    all_columns: list[Any] = []
+    for _, frame in seed_frames:
+        for col in frame.columns:
+            if col not in all_columns:
+                all_columns.append(col)
+    for col in all_columns:
+        total = pd.Series(0.0, index=common_index)
+        count = pd.Series(0.0, index=common_index)
+        for seed, frame in seed_frames:
+            if col not in frame.columns:
+                continue
+            series = pd.to_numeric(frame.reindex(common_index)[col], errors="coerce")
+            valid = series.notna()
+            total = total.add(series.fillna(0.0), fill_value=0.0)
+            count = count.add(valid.astype(float), fill_value=0.0)
+        if count.gt(0).any():
+            combined[col] = total / count.where(count > 0)
+    return combined
+
+
+def _aggregate_seed_positions(
+    seed_positions: list[tuple[int, dict[pd.Timestamp, Any]]],
+    seed_reports: list[tuple[int, pd.DataFrame]],
+) -> dict[pd.Timestamp, dict[str, Any]]:
+    if not seed_positions:
+        raise ValueError("portfolio seed ensemble requires positions from at least one seed")
+    position_date_sets = [set(positions) for _, positions in seed_positions]
+    report_date_sets = [set(report.index) for _, report in seed_reports]
+    common_dates = sorted(set.intersection(*(position_date_sets + report_date_sets)))
+    if not common_dates:
+        raise ValueError("portfolio seed ensemble daily position/report intersection is empty")
+
+    seed_count = len(seed_positions)
+    merged: dict[pd.Timestamp, dict[str, Any]] = {}
+    for date in common_dates:
+        stock_weight_sum: dict[str, float] = defaultdict(float)
+        stock_price_sum: dict[str, float] = defaultdict(float)
+        stock_price_count: dict[str, int] = defaultdict(int)
+        cash_weight_sum = 0.0
+        account_values: list[float] = []
+
+        for seed, positions in seed_positions:
+            raw = _position_raw(positions[date], seed=seed, date=date)
+            account = _position_account_value(raw)
+            if account <= 0:
+                raise ValueError(f"seed {seed}: invalid non-positive account value for portfolio ensemble on {date}")
+            account_values.append(account)
+            cash_weight_sum += _numeric_value(raw.get("cash"), 0.0) / account
+
+            for instrument, info in raw.items():
+                if instrument in {"cash", "now_account_value"} or not isinstance(info, dict):
+                    continue
+                amount = _numeric_value(info.get("amount"), 0.0)
+                price = _numeric_value(info.get("price"), 0.0)
+                stock_value = amount * price
+                if abs(amount) > 1e-12 and price <= 0:
+                    raise ValueError(
+                        f"seed {seed}: invalid non-positive price for held instrument "
+                        f"{instrument} on {date}"
+                    )
+                if abs(stock_value) <= 1e-12:
+                    continue
+                stock_weight_sum[str(instrument)] += stock_value / account
+                stock_price_sum[str(instrument)] += price
+                stock_price_count[str(instrument)] += 1
+
+        account = float(sum(account_values) / len(account_values))
+        averaged_weights = {instrument: weight / seed_count for instrument, weight in stock_weight_sum.items()}
+        stock_weight_total = sum(averaged_weights.values())
+        cash_weight = cash_weight_sum / seed_count
+        weight_total = cash_weight + stock_weight_total
+        if abs(weight_total - 1.0) > 1e-4:
+            raise ValueError(
+                "portfolio seed ensemble merged weights do not reconcile on "
+                f"{date}: cash_weight={cash_weight:.8f} stock_weight={stock_weight_total:.8f}"
+            )
+        if abs(weight_total - 1.0) > 1e-8:
+            cash_weight = max(0.0, 1.0 - stock_weight_total)
+
+        snapshot: dict[str, Any] = {
+            "cash": float(cash_weight * account),
+            "now_account_value": account,
+        }
+        for instrument in sorted(averaged_weights):
+            price = stock_price_sum[instrument] / max(stock_price_count[instrument], 1)
+            value = averaged_weights[instrument] * account
+            snapshot[instrument] = {
+                "amount": float(value / price) if price > 0 else 0.0,
+                "price": float(price),
+                "weight": float(averaged_weights[instrument]),
+            }
+        merged[date] = snapshot
+
+    return merged
+
+
+def _aggregate_seed_reports(
+    seed_reports: list[tuple[int, pd.DataFrame]],
+    merged_positions: dict[pd.Timestamp, dict[str, Any]],
+) -> pd.DataFrame:
+    common_dates = sorted(merged_positions)
+    report = _mean_daily_frames(seed_reports, common_dates)
+    nav = pd.Series(
+        {date: _numeric_value(snapshot.get("now_account_value"), 0.0) for date, snapshot in merged_positions.items()},
+        dtype=float,
+    ).sort_index()
+    cash = pd.Series(
+        {date: _numeric_value(snapshot.get("cash"), 0.0) for date, snapshot in merged_positions.items()},
+        dtype=float,
+    ).sort_index()
+    report["account"] = nav
+    report["cash"] = cash
+    report["value"] = nav - cash
+    report["return"] = nav.pct_change().replace([float("inf"), float("-inf")], 0.0).fillna(0.0)
+    if "bench" in report.columns:
+        bench = pd.to_numeric(report["bench"], errors="coerce").fillna(0.0)
+        excess = report["return"] - bench
+        report["excess_return_without_cost"] = excess
+        report["excess_return_with_cost"] = excess
+    return report
+
+
+def _aggregate_seed_indicators(
+    seed_indicators: list[tuple[int, pd.DataFrame]],
+    common_dates: list[pd.Timestamp],
+) -> pd.DataFrame | None:
+    if not seed_indicators:
+        return None
+    return _mean_daily_frames(seed_indicators, common_dates)
+
+
+def _series_metrics(series: pd.Series, *, prefix: str, trading_days: int) -> dict[str, float]:
+    clean = pd.to_numeric(series, errors="coerce").fillna(0.0)
+    if clean.empty:
+        return {}
+    cumulative = (1.0 + clean).cumprod()
+    final_nav = float(cumulative.iloc[-1])
+    annualized = final_nav ** (252.0 / max(trading_days, 1)) - 1.0 if final_nav > 0 else -1.0
+    std = float(clean.std())
+    mean = float(clean.mean())
+    ir = float(mean / std * (252.0 ** 0.5)) if std > 0 else 0.0
+    drawdown = cumulative / cumulative.cummax() - 1.0
+    return {
+        f"{prefix}.annualized_return": float(annualized),
+        f"{prefix}.information_ratio": ir,
+        f"{prefix}.max_drawdown": float(drawdown.min()),
+        f"{prefix}.mean": mean,
+        f"{prefix}.std": std,
+    }
+
+
+def _build_portfolio_ensemble_metrics(report: pd.DataFrame) -> dict[str, float]:
+    if "return" not in report.columns:
+        return {}
+    ret = pd.to_numeric(report["return"], errors="coerce").fillna(0.0)
+    trading_days = int(len(ret))
+    metrics = _series_metrics(ret, prefix="1day.return", trading_days=trading_days)
+    metrics["n_trading_days"] = float(trading_days)
+    cumulative = (1.0 + ret).cumprod()
+    if not cumulative.empty:
+        metrics["final_nav"] = float(cumulative.iloc[-1])
+        metrics["cagr"] = float(cumulative.iloc[-1] ** (252.0 / max(trading_days, 1)) - 1.0)
+    if "bench" in report.columns:
+        bench = pd.to_numeric(report["bench"], errors="coerce").fillna(0.0)
+    else:
+        bench = pd.Series(0.0, index=report.index)
+    excess = ret - bench
+    metrics.update(_series_metrics(excess, prefix="1day.excess_return_without_cost", trading_days=trading_days))
+    metrics.update(_series_metrics(excess, prefix="1day.excess_return_with_cost", trading_days=trading_days))
+    return {key: value for key, value in metrics.items() if pd.notna(value)}
+
+
+def _is_missing_recorder_artifact_error(exc: BaseException) -> bool:
+    if isinstance(exc, (FileNotFoundError, KeyError)):
+        return True
+    text = str(exc).lower()
+    return any(
+        marker in text
+        for marker in (
+            "not found",
+            "does not exist",
+            "doesn't exist",
+            "no such file",
+            "not exist",
+            "missing artifact",
+        )
+    )
+
+
+def _load_recorder_object(recorder, name: str, *, seed: int, required: bool = True):
+    try:
+        return recorder.load_object(name)
+    except Exception as exc:
+        if not required and _is_missing_recorder_artifact_error(exc):
+            print(f"[WARN] Seed ensemble: optional artifact missing for seed={seed}: {name}: {exc}")
+            return None
+        if required:
+            raise RuntimeError(f"seed {seed}: required recorder artifact missing: {name}") from exc
+        raise RuntimeError(f"seed {seed}: optional recorder artifact load failed: {name}") from exc
+
+
+def _load_test_label_from_config(config: dict):
+    from qlib.data.dataset import Dataset, DatasetH
+    from qlib.data.dataset.handler import DataHandlerLP
+    from qlib.utils import class_casting, init_instance_by_config
+
+    task_config = config.get("task") or {}
+    dataset: Dataset = init_instance_by_config(task_config["dataset"], accept_types=Dataset)
+    dataset.config(dump_all=False, recursive=True)
+    with class_casting(dataset, DatasetH):
+        try:
+            return dataset.prepare(segments="test", col_set="label", data_key=DataHandlerLP.DK_R)
+        except TypeError:
+            return dataset.prepare(segments="test", col_set="label")
+
+
+def _run_seed_analysis_records(config: dict, recorder, label_obj) -> None:
+    import copy
+    from qlib.data.dataset import Dataset
+    from qlib.utils import init_instance_by_config
+
+    if label_obj is None:
+        raise RuntimeError("portfolio seed ensemble final recorder requires label.pkl for IC diagnostics")
+    task_config = copy.deepcopy(config.get("task") or {})
+    records_config = task_config.get("record", [])
+    if isinstance(records_config, dict):
+        records_config = [records_config]
+    analysis_records = [
+        rec for rec in records_config
+        if "SigAna" in str(rec.get("class", "")) and "SignalRecord" not in str(rec.get("class", ""))
+    ]
+    if not analysis_records:
+        return
+    dataset: Dataset = init_instance_by_config(task_config["dataset"], accept_types=Dataset)
+    dataset.config(dump_all=False, recursive=True)
+    for record_config in analysis_records:
+        rec_class = record_config.get("class", "")
+        print(f"[INFO] Portfolio seed ensemble: executing final analysis record {rec_class}")
+        record = init_instance_by_config(
+            record_config,
+            recorder=recorder,
+            default_module="qlib.workflow.record_temp",
+            try_kwargs={"dataset": dataset},
+        )
+        record.generate()
+
+
+def _run_full_backtest(config: dict, experiment_name: str, *, mode: str = "full", output_dir: Path | str | None = None):
+    recorder = task_train(config.get("task"), experiment_name=experiment_name)
+    _write_qe_current_recorder(recorder, mode, experiment_name)
+    recorder.save_objects(config=config)
+    save_minute_trades_from_recorder(recorder, output_dir=output_dir or os.getcwd())
+    return recorder
+
+
 def _run_seed_score_ensemble(config: dict, experiment_name: str, ensemble: dict) -> None:
     import copy
-
-    if ensemble["level"] != "score":
-        raise NotImplementedError(
-            "qe_runtime.ensemble.level='portfolio' is not implemented in qrun_limit_minute.py; "
-            "use level='score' until portfolio-holdings aggregation is validated."
-        )
 
     seeds = [int(seed) for seed in ensemble["seeds"]]
     agg = ensemble["agg"]
@@ -785,6 +1114,139 @@ def _run_seed_score_ensemble(config: dict, experiment_name: str, ensemble: dict)
         f"rows={combined_pred.shape[0]}"
     )
     _run_pred_backtest(config, experiment_name, combined_path)
+
+
+def _run_seed_portfolio_ensemble(config: dict, experiment_name: str, ensemble: dict) -> None:
+    import copy
+    from qlib.workflow import R
+
+    seeds = [int(seed) for seed in ensemble["seeds"]]
+    agg = ensemble["agg"]
+    output_dir = Path("seed_ensemble")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    seed_scores: list[tuple[int, pd.Series]] = []
+    seed_reports: list[tuple[int, pd.DataFrame]] = []
+    seed_positions: list[tuple[int, dict[pd.Timestamp, Any]]] = []
+    seed_indicators: list[tuple[int, pd.DataFrame]] = []
+    label_obj = None
+    manifest = {
+        "schema_version": "qe_seed_ensemble_v1",
+        "level": "portfolio",
+        "agg": agg,
+        "portfolio_agg": "mean",
+        "seeds": seeds,
+        "seed_recorders": [],
+    }
+
+    for seed in seeds:
+        seed_config = copy.deepcopy(config)
+        _set_config_seed(seed_config, seed)
+        apply_qe_fixed_seed(seed_config)
+        seed_experiment_name = f"{experiment_name}__seed_{seed}"
+        seed_dir = output_dir / f"seed_{seed}"
+        seed_dir.mkdir(parents=True, exist_ok=True)
+        print(f"[INFO] Portfolio seed ensemble: full backtest seed={seed} experiment={seed_experiment_name}")
+        recorder = _run_full_backtest(
+            seed_config,
+            seed_experiment_name,
+            mode="seed_portfolio_member",
+            output_dir=seed_dir,
+        )
+
+        pred_obj = _load_recorder_object(recorder, "pred.pkl", seed=seed)
+        seed_scores.append((seed, _prediction_score_series(pred_obj, seed=seed)))
+
+        report_obj = _load_recorder_object(recorder, "portfolio_analysis/report_normal_1day.pkl", seed=seed)
+        seed_reports.append((seed, _normalize_daily_frame(report_obj, seed=seed, artifact_name="report_normal_1day.pkl")))
+
+        positions_obj = _load_recorder_object(recorder, "portfolio_analysis/positions_normal_1day.pkl", seed=seed)
+        seed_positions.append((seed, _normalize_position_dates(positions_obj, seed=seed)))
+
+        indicators_obj = _load_recorder_object(
+            recorder,
+            "portfolio_analysis/indicators_normal_1day.pkl",
+            seed=seed,
+            required=False,
+        )
+        if indicators_obj is not None:
+            seed_indicators.append(
+                (seed, _normalize_daily_frame(indicators_obj, seed=seed, artifact_name="indicators_normal_1day.pkl"))
+            )
+
+        if label_obj is None:
+            label_obj = _load_recorder_object(recorder, "label.pkl", seed=seed, required=False)
+        if label_obj is None:
+            label_obj = _load_recorder_object(recorder, "sig_analysis/label.pkl", seed=seed, required=False)
+
+        with (seed_dir / "report_normal_1day.pkl").open("wb") as f:
+            pickle.dump(seed_reports[-1][1], f, protocol=pickle.HIGHEST_PROTOCOL)
+        with (seed_dir / "positions_normal_1day.pkl").open("wb") as f:
+            pickle.dump(seed_positions[-1][1], f, protocol=pickle.HIGHEST_PROTOCOL)
+        manifest["seed_recorders"].append(
+            {
+                "seed": seed,
+                "experiment_name": seed_experiment_name,
+                "recorder_id": str((getattr(recorder, "info", {}) or {}).get("id") or ""),
+                "report_rows": int(seed_reports[-1][1].shape[0]),
+                "position_days": int(len(seed_positions[-1][1])),
+            }
+        )
+
+    combined_pred = _aggregate_seed_predictions(seed_scores, agg)
+    merged_positions = _aggregate_seed_positions(seed_positions, seed_reports)
+    merged_report = _aggregate_seed_reports(seed_reports, merged_positions)
+    common_dates = sorted(merged_positions)
+    merged_indicators = _aggregate_seed_indicators(seed_indicators, common_dates)
+    metrics = _build_portfolio_ensemble_metrics(merged_report)
+    if label_obj is None:
+        try:
+            label_obj = _load_test_label_from_config(config)
+        except Exception as exc:
+            print(f"[WARN] Portfolio seed ensemble: final IC label fallback failed: {exc}")
+    if label_obj is None or (hasattr(label_obj, "empty") and label_obj.empty):
+        raise RuntimeError("portfolio seed ensemble could not load a non-empty label for final IC diagnostics")
+
+    combined_path = output_dir / "ensemble_pred.pkl"
+    report_path = output_dir / "ensemble_report_normal_1day.pkl"
+    positions_path = output_dir / "ensemble_positions_normal_1day.pkl"
+    with combined_path.open("wb") as f:
+        pickle.dump(combined_pred, f, protocol=pickle.HIGHEST_PROTOCOL)
+    with report_path.open("wb") as f:
+        pickle.dump(merged_report, f, protocol=pickle.HIGHEST_PROTOCOL)
+    with positions_path.open("wb") as f:
+        pickle.dump(merged_positions, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    print(
+        f"[INFO] Portfolio seed ensemble: merged {len(seeds)} seeds; "
+        f"days={len(merged_positions)} pred_rows={combined_pred.shape[0]}"
+    )
+    with R.start(experiment_name=experiment_name):
+        recorder = R.get_recorder()
+        _write_qe_current_recorder(recorder, "seed_portfolio_ensemble", experiment_name)
+        save_payload = {
+            "pred.pkl": combined_pred,
+            "config": config,
+        }
+        if label_obj is not None and not (hasattr(label_obj, "empty") and label_obj.empty):
+            save_payload["label.pkl"] = label_obj
+        recorder.save_objects(**save_payload)
+        recorder.save_objects(**{"report_normal_1day.pkl": merged_report}, artifact_path="portfolio_analysis")
+        recorder.save_objects(**{"positions_normal_1day.pkl": merged_positions}, artifact_path="portfolio_analysis")
+        if merged_indicators is not None:
+            recorder.save_objects(**{"indicators_normal_1day.pkl": merged_indicators}, artifact_path="portfolio_analysis")
+        if metrics:
+            recorder.log_metrics(**metrics)
+        if "label.pkl" in save_payload:
+            _run_seed_analysis_records(config, recorder, label_obj)
+        recorder.save_objects(config=config)
+        manifest["final_recorder_id"] = str((getattr(recorder, "info", {}) or {}).get("id") or "")
+
+    manifest["combined_rows"] = int(combined_pred.shape[0])
+    manifest["combined_days"] = int(len(merged_positions))
+    manifest["combined_path"] = str(combined_path)
+    manifest["report_path"] = str(report_path)
+    manifest["positions_path"] = str(positions_path)
+    (output_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def main():
@@ -839,7 +1301,12 @@ def main():
 
     if seed_ensemble:
         print(f"[INFO] Seed ensemble mode: {seed_ensemble}")
-        _run_seed_score_ensemble(config, experiment_name, seed_ensemble)
+        if seed_ensemble["level"] == "score":
+            _run_seed_score_ensemble(config, experiment_name, seed_ensemble)
+        elif seed_ensemble["level"] == "portfolio":
+            _run_seed_portfolio_ensemble(config, experiment_name, seed_ensemble)
+        else:
+            raise ValueError(f"unsupported seed ensemble level: {seed_ensemble['level']}")
     elif args.pred_backtest:
         # Pred-backtest mode: use an externally supplied prediction file.
         pred_path = Path(args.pred_backtest)
@@ -859,12 +1326,7 @@ def main():
         _run_train_only(config, experiment_name)
     else:
         # Full mode: train and backtest.
-        recorder = task_train(config.get("task"), experiment_name=experiment_name)
-        _write_qe_current_recorder(recorder, "full", experiment_name)
-        recorder.save_objects(config=config)
-        
-        # 保存分钟级交易记录（环境变量控制）
-        save_minute_trades_from_recorder(recorder, output_dir=os.getcwd())
+        _run_full_backtest(config, experiment_name)
 
 
 def _run_pred_backtest(config: dict, experiment_name: str, pred_path: Path):

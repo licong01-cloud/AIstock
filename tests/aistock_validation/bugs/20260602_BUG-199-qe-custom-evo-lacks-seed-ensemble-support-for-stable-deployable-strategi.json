@@ -13,7 +13,8 @@
     "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
     "backend/tests/unified_engine/test_experiment_config.py",
     "backend/tests/unified_engine/test_backtest_executor.py",
-    "backend/tests/unified_engine/test_qe_config_truth.py"
+    "backend/tests/unified_engine/test_qe_config_truth.py",
+    "tests/aistock_validation/history/qe/20260602_120509_l2_bug-199-custom_evo-seed-ensemble-validation.md"
   ],
   "assigned_agent": "Codex",
   "bug_id": "BUG-199",
@@ -58,10 +59,23 @@
       "actor": "Codex",
       "action": "scope_alignment_fix",
       "note": "Added qe_evolution_service.py to allowed_write_scope because loop config persistence/action_type metadata is required for ensemble_config traceability."
+    },
+    {
+      "timestamp": "2026-06-02T05:42:50.549344Z",
+      "actor": "Codex",
+      "action": "portfolio_ensemble_implementation_added",
+      "note": "Implemented portfolio-level equal-weight daily holdings merge, final recorder artifacts, fail-fast optional artifact loading, and day-backtest runner packaging for seed ensembles."
+    },
+    {
+      "timestamp": "2026-06-02T05:42:50.549344Z",
+      "actor": "Codex",
+      "action": "validation_completed",
+      "note": "compileall, targeted seed ensemble pytest, changed-only guardrail, l0, validation_module_registry_l0, qe_data_contract_backend, and qe_read_l3 with UI skipped passed; production runtime and DB untouched."
     }
   ],
   "evidence_uris": [
-    "user report 2026-06-02: custom_evo seed variance 70%-108% CAGR and missing seed ensemble schema/runtime"
+    "user report 2026-06-02: custom_evo seed variance 70%-108% CAGR and missing seed ensemble schema/runtime",
+    "tests/aistock_validation/history/qe/20260602_120509_l2_bug-199-custom_evo-seed-ensemble-validation.md"
   ],
   "expected": "A custom_evo config can specify explicit ensemble seeds and aggregation level/operator. With ensemble.enabled=true, a loop emits one standard enhanced_metrics/IC/turnover result using deterministic aggregation. With ensemble absent or disabled, existing single random_seed behavior remains bitwise identical.",
   "first_seen_at": "2026-06-02T03:00:01.569924Z",
@@ -83,7 +97,13 @@
     "py_compile_changed_qe_seed_ensemble",
     "targeted_custom_evo_seed_ensemble_pytest",
     "git_diff_check",
-    "workflow_finish_plan"
+    "workflow_finish_plan",
+    "l0",
+    "validation_module_registry_l0",
+    "qe_data_contract_backend",
+    "qe_read_l3_skip_ui",
+    "changed_only_guardrail",
+    "targeted_seed_ensemble_pytest"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -97,6 +117,6 @@
     "fingerprint": "288a91f534e9ab70b940ea30",
     "source_event_id": "FE-20260602-288a91f534e9"
   },
-  "verification_run_id": null,
+  "verification_run_id": "20260602_120509_l2_bug-199-custom_evo-seed-ensemble-validation",
   "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
 }

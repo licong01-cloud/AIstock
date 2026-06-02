@@ -1061,8 +1061,10 @@ class ConfigComposer:
                 snapshot = hmm_svc.get_snapshot(str(snapshot_id))
                 if snapshot:
                     model_path = snapshot.get("model_path")
-            except Exception:
-                pass
+            except Exception as exc:
+                raise RuntimeError(
+                    f"failed to resolve HMM risk gate snapshot {snapshot_id!r}"
+                ) from exc
 
         if not model_path:
             model_path = strategy_params.get(
@@ -1232,8 +1234,8 @@ class ConfigComposer:
             source="config_composer",
             allow_default_execution_algo=True,
         )
-        execution_algo = custom_params.get("execution_algo")
-        execution_algo_params = dict(custom_params.get("execution_algo_params") or {})
+        execution_algo = custom_params.get("execution_algo") or execution_algo
+        execution_algo_params = dict(custom_params.get("execution_algo_params") or execution_algo_params or {})
 
         # HMM 预计算（必须在 conf.yaml 之前，使 hmm_coefficients_file 写入策略 kwargs）
         hmm_json_content: Optional[str] = None
@@ -1336,7 +1338,7 @@ class ConfigComposer:
         # 复制 qrun_limit runner（分钟线使用 qrun_limit_minute.py，日线使用 qrun_limit.py）
         scripts_dir = Path(__file__).parent.parent.parent.parent / "scripts"
         import shutil
-        if backtest_freq != "day":
+        if backtest_freq != "day" or bool((custom_params or {}).get("_seed_ensemble_config")):
             # 分钟线：复制 qrun_limit_minute.py（含内存 patch + benchmark 注入）
             minute_src = scripts_dir / "qrun_limit_minute.py"
             if minute_src.exists():
@@ -1528,8 +1530,8 @@ class ConfigComposer:
             source="config_composer_in_memory",
             allow_default_execution_algo=True,
         )
-        execution_algo = custom_params.get("execution_algo")
-        execution_algo_params = dict(custom_params.get("execution_algo_params") or {})
+        execution_algo = custom_params.get("execution_algo") or execution_algo
+        execution_algo_params = dict(custom_params.get("execution_algo_params") or execution_algo_params or {})
 
         # ── 获取路径配置（支持多节点） ──
         rdagent_cfg = self._fetch_workspace_config(node_id)
@@ -1655,7 +1657,7 @@ class ConfigComposer:
         qrun_limit_path = scripts_dir / "qrun_limit.py"
         if qrun_limit_path.exists():
             experiment_files["qrun_limit.py"] = qrun_limit_path.read_text(encoding="utf-8")
-        if backtest_freq != "day":
+        if backtest_freq != "day" or bool((custom_params or {}).get("_seed_ensemble_config")):
             minute_path = scripts_dir / "qrun_limit_minute.py"
             if minute_path.exists():
                 experiment_files["qrun_limit_minute.py"] = minute_path.read_text(encoding="utf-8")
@@ -2323,7 +2325,7 @@ class ConfigComposer:
         # 复制 qrun_limit runner（分钟线使用 qrun_limit_minute.py，日线使用 qrun_limit.py）
         scripts_dir = Path(__file__).parent.parent.parent.parent / "scripts"
         import shutil
-        if backtest_freq != "day":
+        if backtest_freq != "day" or bool((custom_params or {}).get("_seed_ensemble_config")):
             minute_src = scripts_dir / "qrun_limit_minute.py"
             if minute_src.exists():
                 shutil.copy2(minute_src, exp_dir / "qrun_limit_minute.py")
