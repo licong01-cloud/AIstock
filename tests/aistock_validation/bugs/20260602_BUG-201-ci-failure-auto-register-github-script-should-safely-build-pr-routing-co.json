@@ -29,8 +29,8 @@
   "expected": "CI failure auto-register should create or update the diagnostic issue and comment on the PR without JavaScript parse errors, even when the routing text contains artifact names or commands.",
   "first_seen_at": "2026-06-02T03:52:58.405037Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5176e9500d38e83c445561b451d08f5d215cbac5",
+  "fixed_at": "2026-06-02T04:48:13.085651Z",
   "github_issue_number": 534,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/534",
   "last_seen_at": "2026-06-02T03:52:58.405037Z",
@@ -38,6 +38,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/535",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation.guardrails"
   ],
@@ -60,5 +61,13 @@
     "fingerprint": "e513811df28410911ebfa06b",
     "source_event_id": "FE-20260602-e513811df284"
   },
+  "validation_evidence": [
+    "node --check extracted actions/github-script script -> passed",
+    "python -c yaml.safe_load(.github/workflows/test.yml) -> passed",
+    "git diff --check -> passed",
+    "python -m nox -s l0 guardrail_changed_files validation_catalog_integrity validation_module_registry_l0 -> passed",
+    "python -m nox -s validation_center_backend -> passed (324 passed)",
+    "workflow-smoke changed files for validation.guardrails -> passed, unexpected_dirty_paths=[]"
+  ],
   "verification_run_id": null
 }
