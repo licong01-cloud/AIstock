@@ -217,6 +217,53 @@ def _compact_check_summary(value: Any) -> dict[str, Any] | None:
     return summary
 
 
+def _compact_stale_pr_check(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return value if value is not None else None
+    compact = _pick(value, "status")
+    open_prs = value.get("open_prs")
+    merged_prs = value.get("merged_prs")
+    if isinstance(open_prs, list):
+        compact["open_pr_count"] = len(open_prs)
+    if isinstance(merged_prs, list):
+        compact["merged_pr_count"] = len(merged_prs)
+    return compact
+
+
+def _compact_phase_summary(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    return _pick(
+        value,
+        "event_count",
+        "known_duration_seconds",
+        "inferred_elapsed_seconds",
+        "code_repair_seconds",
+        "total_estimated_tokens",
+        "context_estimated_tokens",
+        "artifact_estimated_tokens",
+        "top_phase",
+    )
+
+
+def _compact_merge(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    compact = _pick(value, "already_merged", "merge_commit", "recovered_from_local_merge_error")
+    verified = value.get("verified")
+    if isinstance(verified, dict):
+        merge_commit = _merge_commit_from_pr_check(verified)
+        if merge_commit:
+            compact["merge_commit"] = merge_commit
+        pr = verified.get("pr")
+        if isinstance(pr, dict):
+            compact["merged_at"] = pr.get("mergedAt")
+            compact["pr_state"] = pr.get("state")
+    if "check_summary" in value:
+        compact["check_summary"] = _compact_check_summary(value["check_summary"])
+    return compact
+
+
 def _compact_pr_automation(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
@@ -310,20 +357,23 @@ def _compact_postmortem(value: Any) -> dict[str, Any] | None:
         value,
         "bug_id",
         "workflow_root",
-        "state",
         "duplicate_active_count",
-        "flow_overhead_estimate",
         "production_gates",
         "postmortem_md_path",
         "postmortem_json_path",
     )
+    if isinstance(value.get("state"), dict):
+        compact["state"] = _pick(value["state"], "state", "branch", "worktree", "pr_url", "commit", "next_actions")
     timing_summary = _compact_timing_summary(value.get("timing_summary"))
     if timing_summary:
         compact["timing_summary"] = timing_summary
-    if isinstance(value.get("phase_cost_table"), list):
-        compact["phase_cost_table"] = value.get("phase_cost_table")
+    flow_summary = _compact_phase_summary(value.get("flow_overhead_estimate"))
+    if flow_summary:
+        compact["flow_overhead_estimate"] = flow_summary
+    if isinstance(value.get("phase_cost_table"), list) and value["phase_cost_table"]:
+        compact["top_phase"] = value["phase_cost_table"][0]
     if isinstance(value.get("h6_summary"), dict):
-        compact["h6_summary"] = value.get("h6_summary")
+        compact["h6_summary"] = _compact_phase_summary(value["h6_summary"])
     if isinstance(value.get("h7_code_intelligence"), dict):
         compact["h7_code_intelligence"] = _pick(
             value["h7_code_intelligence"],
@@ -337,10 +387,9 @@ def _compact_postmortem(value: Any) -> dict[str, Any] | None:
     if isinstance(active, list):
         compact["active_workflow_count"] = len(active)
     stale = value.get("stale_pr_check")
-    if isinstance(stale, dict):
-        compact["stale_pr_check"] = _pick(stale, "status", "open_prs", "merged_prs")
-    elif stale is not None:
-        compact["stale_pr_check"] = stale
+    stale_compact = _compact_stale_pr_check(stale)
+    if stale_compact is not None:
+        compact["stale_pr_check"] = stale_compact
     return compact
 
 
@@ -357,7 +406,20 @@ def _compact_finalizer(value: Any) -> dict[str, Any] | None:
     if "cleanup" in value and isinstance(value["cleanup"], dict):
         compact["cleanup"] = _pick(value["cleanup"], "workflow_gate", "branch", "worktree", "sync_root", "blocking", "warnings")
     if "postmortem" in value:
-        compact["postmortem"] = _compact_postmortem(value["postmortem"])
+        postmortem = _compact_postmortem(value["postmortem"])
+        if postmortem:
+            compact["postmortem"] = _pick(
+                postmortem,
+                "bug_id",
+                "timing_summary",
+                "flow_overhead_estimate",
+                "top_phase",
+                "h6_summary",
+                "stale_pr_check",
+                "production_gates",
+                "postmortem_md_path",
+                "postmortem_json_path",
+            )
     return compact
 
 
@@ -380,9 +442,7 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
         if "pr_automation" in payload:
             compact["pr_automation"] = _compact_pr_automation(payload["pr_automation"])
         if "merge" in payload:
-            compact["merge"] = _pick(payload["merge"], "already_merged", "merge_commit", "verified")
-            if isinstance(payload["merge"], dict) and "check_summary" in payload["merge"]:
-                compact["merge"]["check_summary"] = _compact_check_summary(payload["merge"]["check_summary"])
+            compact["merge"] = _compact_merge(payload["merge"])
         if "finalizer" in payload:
             compact["finalizer"] = _compact_finalizer(payload["finalizer"])
         if "close_sync" in payload and "finalizer" not in payload:

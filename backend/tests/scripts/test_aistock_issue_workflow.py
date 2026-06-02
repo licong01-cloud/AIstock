@@ -82,6 +82,89 @@ def test_emit_defaults_to_compact_success_payload(capsys: pytest.CaptureFixture[
     assert "skip_reasons" not in out
 
 
+def test_compact_merge_output_hides_verbose_finalizer_and_postmortem_lists(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    workflow._emit(
+        {
+            "schema_version": "aistock_issue_workflow_run_v1",
+            "workflow_gate": "merged_close_synced",
+            "bug_id": "BUG-203",
+            "mode": "merge",
+            "merge": {
+                "already_merged": False,
+                "check_summary": {
+                    "failed": [],
+                    "pending": [],
+                    "non_blocking": [{"name": "neutral"}],
+                    "passed": [{"name": "Static gate"}],
+                },
+                "verified": {
+                    "checked": True,
+                    "merged": True,
+                    "pr": {
+                        "state": "MERGED",
+                        "mergedAt": "2026-06-02T00:00:00Z",
+                        "mergeCommit": {"oid": "merge123"},
+                        "headRefOid": "large-noisy-field",
+                    },
+                },
+            },
+            "finalizer": {
+                "schema_version": "aistock_issue_workflow_merge_finalizer_v1",
+                "workflow_gate": "complete",
+                "source_merge_commit": "merge123",
+                "next_actions": [],
+                "close_sync": {
+                    "workflow_gate": "already_close_synced",
+                    "registry_root": "F:/Dev/AIstock",
+                    "updated_bug_json": "origin/main:tests/aistock_validation/bugs/bug203.json",
+                    "merge_commit": "merge123",
+                    "stale_pr_check": {"merged_prs": [{"number": 1}]},
+                },
+                "close_sync_commit": {
+                    "workflow_gate": "already_merged",
+                    "branch": "chore/BUG-203-close-sync",
+                    "pr_url": "https://github.example/pull/2",
+                    "actions": [{"command": "noisy"}],
+                },
+                "postmortem": {
+                    "schema_version": "aistock_issue_workflow_postmortem_v1",
+                    "bug_id": "BUG-203",
+                    "workflow_root": "F:/Dev/AIstock_worktrees/BUG-203",
+                    "state": {"state": "complete", "recent_events": [{"event": "noisy"}]},
+                    "phase_cost_table": [{"phase": "validation", "dominant_seconds": 12}],
+                    "h6_summary": {
+                        "event_count": 3,
+                        "total_estimated_tokens": 100,
+                        "phase_cost_table": [{"phase": "noisy"}],
+                    },
+                    "stale_pr_check": {
+                        "status": "checked",
+                        "open_prs": [{"number": 3, "title": "verbose"}],
+                        "merged_prs": [{"number": 4, "title": "verbose"}],
+                    },
+                    "recent_events": [{"event": "noisy"}],
+                },
+            },
+        }
+    )
+
+    out = capsys.readouterr().out
+    compact = json.loads(out)
+    assert compact["merge"]["merge_commit"] == "merge123"
+    assert compact["merge"]["check_summary"]["passed_count"] == 1
+    assert compact["finalizer"]["postmortem"]["stale_pr_check"] == {
+        "status": "checked",
+        "open_pr_count": 1,
+        "merged_pr_count": 1,
+    }
+    assert "large-noisy-field" not in out
+    assert "recent_events" not in out
+    assert "open_prs" not in out
+    assert "merged_prs" not in out
+    assert '"command": "noisy"' not in out
+
 def test_emit_full_json_preserves_payload(capsys: pytest.CaptureFixture[str]) -> None:
     payload = {
         "schema_version": "aistock_issue_workflow_smoke_v1",
@@ -3663,6 +3746,7 @@ def test_promote_ci_issue_blocks_infra_runner_outage(
     assert payload["triage"]["next_command"] == "infra_action_required_no_code_bug"
     assert payload["infra_action"]["workflow_gate"] == "infra_action_required"
     assert not list((isolated_workflow_root / "tests" / "aistock_validation" / "bugs").glob("*BUG-*.json"))
+
 
 
 
