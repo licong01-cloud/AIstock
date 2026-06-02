@@ -26,8 +26,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-02T06:28:50.777808Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "fe6fd1b2870e9763199032011755a5bd3cad41fe",
+  "fixed_at": "2026-06-02T07:40:59.878928Z",
   "github_issue_number": 549,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/549",
   "last_seen_at": "2026-06-02T06:28:50.777808Z",
@@ -35,8 +35,9 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/547",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "noop",
+  "production_ddl_gate": "required_pending_user_approval",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
@@ -47,7 +48,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -56,6 +57,9 @@
     "fingerprint": "1c5f4c55eaeb07680837b3a9",
     "source_event_id": "FE-20260602-1c5f4c55eaeb"
   },
+  "validation_evidence": [
+    "BUG-206 lint-only scope: removed EvolutionDirection/dataclass unused imports only; ruff targeted passed; G1-local nox -s ra_phase6_qe_autonomy passed 22 passed on 84398c7f; G1-central research-assistant-qe-autonomy_20260602_072520_l4_ra-phase6-qe-autonomy_53872040_runner-validation__31cd146f58 passed return_code=0 production_8001_touched=false; PR #547 merged fe6fd1b2870e9763199032011755a5bd3cad41fe."
+  ],
   "verification_run_id": null,
   "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
 }
