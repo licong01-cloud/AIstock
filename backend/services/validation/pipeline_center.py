@@ -1171,6 +1171,8 @@ class ValidationPipelineCenterService:
 
     @staticmethod
     def _candidate_source_type(schema: str) -> str:
+        if schema == "aistock_ci_failure_candidate_history_v1":
+            return "ci_candidate_history"
         if schema == "aistock_ci_failure_context_pack_v1":
             return "ci_context_pack"
         if schema == "aistock_ci_failure_github_issue_payload_v1":

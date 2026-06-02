@@ -247,6 +247,38 @@ def test_issue_candidate_queue_reads_context_pack_and_dedupes_payloads(tmp_path:
     assert summary["linked_issue_count"] == 1
 
 
+def test_issue_candidate_queue_reads_persisted_history_without_tmp(tmp_path: Path) -> None:
+    history_dir = tmp_path / "tests" / "aistock_validation" / "history" / "issue_candidates" / "nightly"
+    history_dir.mkdir(parents=True)
+    history_payload = {
+        "schema_version": "aistock_ci_failure_candidate_history_v1",
+        "created_at": "2026-06-02T00:00:00Z",
+        "last_seen_at": "2026-06-02T01:00:00Z",
+        "run_count": 2,
+        "candidate": {
+            "candidate_id": "CAND-CI-abc123",
+            "title": "P1 Nightly failed",
+            "module": "validation",
+            "severity": "P1",
+            "status": "new",
+            "fingerprint": "ci-abc123",
+            "allowed_write_scope": [".github/workflows/nightly.yml"],
+            "required_validation": ["python -m nox -s validation_center_backend"],
+            "evidence": ["https://github.com/licong01-cloud/AIstock/actions/runs/1"],
+        },
+    }
+    (history_dir / "ci-abc123.json").write_text(json.dumps(history_payload), encoding="utf-8")
+
+    payload = _service(repo_root=tmp_path).issue_candidates(page=1, page_size=10)
+
+    assert payload["total"] == 1
+    item = payload["items"][0]
+    assert item["candidate_id"] == "CAND-CI-abc123"
+    assert item["source_type"] == "ci_candidate_history"
+    assert item["run_count"] == 2
+    assert item["source_path"] == "tests/aistock_validation/history/issue_candidates/nightly/ci-abc123.json"
+
+
 def test_phase1_cards_include_all_top_navigation_domains() -> None:
     cards = _service().cards_summary()["cards"]
     card_ids = {item["card_id"] for item in cards}
