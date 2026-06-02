@@ -636,6 +636,157 @@ def apply_qe_fixed_seed(config: dict) -> int | None:
     return seed
 
 
+def _get_seed_ensemble_config(config: dict) -> dict | None:
+    runtime = config.get("qe_runtime") if isinstance(config, dict) else None
+    if not isinstance(runtime, dict):
+        return None
+    ensemble = runtime.get("ensemble")
+    if not isinstance(ensemble, dict) or not ensemble.get("enabled"):
+        return None
+    seeds = ensemble.get("seeds")
+    if not isinstance(seeds, list) or not seeds:
+        raise ValueError("qe_runtime.ensemble.seeds must be a non-empty list")
+    normalized = {
+        "enabled": True,
+        "seeds": [int(seed) for seed in seeds],
+        "level": str(ensemble.get("level") or "score"),
+        "agg": str(ensemble.get("agg") or "mean"),
+    }
+    if normalized["level"] not in {"score", "portfolio"}:
+        raise ValueError("qe_runtime.ensemble.level must be score or portfolio")
+    if normalized["agg"] not in {"mean", "rank_mean", "median"}:
+        raise ValueError("qe_runtime.ensemble.agg must be mean, rank_mean, or median")
+    return normalized
+
+
+def _set_config_seed(config: dict, seed: int) -> None:
+    runtime = config.setdefault("qe_runtime", {})
+    runtime["seed_policy"] = "fixed"
+    runtime["random_seed"] = int(seed)
+    model_cfg = ((config.get("task") or {}).get("model") or {})
+    model_kwargs = model_cfg.setdefault("kwargs", {})
+    if not isinstance(model_kwargs, dict):
+        return
+    model_class = str(model_cfg.get("class") or "")
+    if model_class in {"LGBModel", "AIStockXGBModel", "XGBModel"}:
+        model_kwargs["seed"] = int(seed)
+        model_kwargs["random_state"] = int(seed)
+    elif model_class == "CatBoostModel":
+        model_kwargs["random_seed"] = int(seed)
+    elif model_class in {"TabPFNModel", "LambdaRankModel"}:
+        model_kwargs["random_state"] = int(seed)
+    else:
+        for key in ("seed", "random_seed", "random_state"):
+            if key in model_kwargs:
+                model_kwargs[key] = int(seed)
+
+
+def _prediction_score_series(pred_obj, *, seed: int) -> pd.Series:
+    if isinstance(pred_obj, pd.Series):
+        pred_df = pred_obj.to_frame("score")
+    elif isinstance(pred_obj, pd.DataFrame):
+        pred_df = pred_obj.copy()
+    else:
+        raise TypeError(f"seed {seed}: pred.pkl must be pandas Series/DataFrame, got {type(pred_obj).__name__}")
+    if not isinstance(pred_df.index, pd.MultiIndex):
+        raise ValueError(f"seed {seed}: pred.pkl index must be MultiIndex(datetime, instrument)")
+    if "score" not in pred_df.columns:
+        if pred_df.shape[1] != 1:
+            raise ValueError(f"seed {seed}: pred.pkl missing score column and has {pred_df.shape[1]} columns")
+        pred_df = pred_df.rename(columns={pred_df.columns[0]: "score"})
+    score = pd.to_numeric(pred_df["score"], errors="coerce").dropna()
+    if score.empty:
+        raise ValueError(f"seed {seed}: pred.pkl contains no numeric scores")
+    return score.sort_index()
+
+
+def _aggregate_seed_predictions(seed_scores: list[tuple[int, pd.Series]], agg: str) -> pd.DataFrame:
+    columns = [series.rename(f"seed_{seed}") for seed, series in seed_scores]
+    score_matrix = pd.concat(columns, axis=1, join="inner").sort_index()
+    if score_matrix.empty:
+        raise ValueError("seed ensemble prediction intersection is empty")
+    if score_matrix.shape[1] != len(seed_scores):
+        raise ValueError(
+            "seed ensemble prediction matrix lost seed columns during alignment: "
+            f"expected={len(seed_scores)} actual={score_matrix.shape[1]}"
+        )
+    if agg == "mean":
+        combined = score_matrix.mean(axis=1)
+    elif agg == "median":
+        combined = score_matrix.median(axis=1)
+    elif agg == "rank_mean":
+        ranked = score_matrix.groupby(level=0, group_keys=False).rank(
+            method="average",
+            ascending=True,
+            pct=True,
+        )
+        combined = ranked.mean(axis=1)
+    else:
+        raise ValueError(f"unsupported seed ensemble agg: {agg}")
+    combined = combined.sort_index()
+    combined.name = "score"
+    return combined.to_frame("score")
+
+
+def _run_seed_score_ensemble(config: dict, experiment_name: str, ensemble: dict) -> None:
+    import copy
+
+    if ensemble["level"] != "score":
+        raise NotImplementedError(
+            "qe_runtime.ensemble.level='portfolio' is not implemented in qrun_limit_minute.py; "
+            "use level='score' until portfolio-holdings aggregation is validated."
+        )
+
+    seeds = [int(seed) for seed in ensemble["seeds"]]
+    agg = ensemble["agg"]
+    output_dir = Path("seed_ensemble")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    seed_scores: list[tuple[int, pd.Series]] = []
+    manifest = {
+        "schema_version": "qe_seed_ensemble_v1",
+        "level": "score",
+        "agg": agg,
+        "seeds": seeds,
+        "seed_recorders": [],
+    }
+
+    for seed in seeds:
+        seed_config = copy.deepcopy(config)
+        _set_config_seed(seed_config, seed)
+        apply_qe_fixed_seed(seed_config)
+        seed_experiment_name = f"{experiment_name}__seed_{seed}"
+        print(f"[INFO] Seed ensemble: training seed={seed} experiment={seed_experiment_name}")
+        recorder = _run_train_only(seed_config, seed_experiment_name)
+        pred_obj = recorder.load_object("pred.pkl")
+        score_series = _prediction_score_series(pred_obj, seed=seed)
+        seed_scores.append((seed, score_series))
+        seed_dir = output_dir / f"seed_{seed}"
+        seed_dir.mkdir(parents=True, exist_ok=True)
+        with (seed_dir / "pred.pkl").open("wb") as f:
+            pickle.dump(score_series.to_frame("score"), f, protocol=pickle.HIGHEST_PROTOCOL)
+        manifest["seed_recorders"].append(
+            {
+                "seed": seed,
+                "experiment_name": seed_experiment_name,
+                "recorder_id": str((getattr(recorder, "info", {}) or {}).get("id") or ""),
+                "rows": int(score_series.shape[0]),
+            }
+        )
+
+    combined_pred = _aggregate_seed_predictions(seed_scores, agg)
+    combined_path = output_dir / "ensemble_pred.pkl"
+    with combined_path.open("wb") as f:
+        pickle.dump(combined_pred, f, protocol=pickle.HIGHEST_PROTOCOL)
+    manifest["combined_rows"] = int(combined_pred.shape[0])
+    manifest["combined_path"] = str(combined_path)
+    (output_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(
+        f"[INFO] Seed ensemble: aggregated {len(seeds)} seeds with agg={agg}; "
+        f"rows={combined_pred.shape[0]}"
+    )
+    _run_pred_backtest(config, experiment_name, combined_path)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("yaml_path", nargs="?", default="conf.yaml")
@@ -682,8 +833,14 @@ def main():
     inject_benchmark(config, benchmark_series)
 
     experiment_name = config.get("experiment_name", "workflow")
+    seed_ensemble = _get_seed_ensemble_config(config)
+    if seed_ensemble and (args.backtest_only or args.train_only or args.pred_backtest):
+        raise RuntimeError("qe_runtime.ensemble is only supported in full submit mode")
 
-    if args.pred_backtest:
+    if seed_ensemble:
+        print(f"[INFO] Seed ensemble mode: {seed_ensemble}")
+        _run_seed_score_ensemble(config, experiment_name, seed_ensemble)
+    elif args.pred_backtest:
         # Pred-backtest mode: use an externally supplied prediction file.
         pred_path = Path(args.pred_backtest)
         if not pred_path.exists():
@@ -874,6 +1031,7 @@ def _run_train_only(config: dict, experiment_name: str):
     _write_qe_current_recorder(recorder, "train_only", experiment_name)
     recorder.save_objects(config=config)
     print("[INFO] Train-only completed: model trained, pred.pkl generated")
+    return recorder
 
 
 def _load_backtest_only_model_from_loose_params(mlruns_dir: Path):

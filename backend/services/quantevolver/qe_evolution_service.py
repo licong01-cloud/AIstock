@@ -5620,15 +5620,18 @@ class AutoEvolutionScheduler:
             requested_seed = runtime_flags.get("random_seed")
             if requested_seed is None and not cfg.backtest_only:
                 raise ValueError(f"Loop {loop_index}: runtime_flags.random_seed is required before config persistence")
+            seed_ensemble = runtime_flags.get("ensemble") if isinstance(runtime_flags.get("ensemble"), dict) else None
+            action_type = "ensemble_config" if seed_ensemble else "custom_config"
 
             config_record = {
-                "action_type": "custom_config",
+                "action_type": action_type,
                 "label": loop_config.get("label"),
                 "factor_list": cfg.factor_names,
                 "model_id": cfg.model_id,
                 "strategy_id": cfg.strategy_id,
                 "strategy_params": cfg.build_strategy_params(),
                 "runtime_flags": runtime_flags,
+                "ensemble": seed_ensemble,
                 "execution_algo": cfg.execution_algo,
                 "execution_algo_params": cfg.execution_algo_params,
                 "disable_alpha158": bool(loop_config.get("disable_alpha158", False)),
@@ -5683,6 +5686,7 @@ class AutoEvolutionScheduler:
                 "execution_algo_params": cfg.execution_algo_params or {},
                 "runtime_flags": runtime_flags,
                 "random_seed": requested_seed,
+                "ensemble": seed_ensemble,
                 "node_id": effective_node_id,
                 "backtest_only": cfg.backtest_only,
             }
@@ -5690,9 +5694,9 @@ class AutoEvolutionScheduler:
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute("""
-                        UPDATE qe_evolution_loops SET config_json = %s, updated_at = NOW()
+                        UPDATE qe_evolution_loops SET config_json = %s, action_type = %s, updated_at = NOW()
                         WHERE loop_id = %s
-                    """, (json.dumps(config_record), evolution_loop_db_id))
+                    """, (json.dumps(config_record), action_type, evolution_loop_db_id))
                 conn.commit()
 
             # 3. 执行层提交

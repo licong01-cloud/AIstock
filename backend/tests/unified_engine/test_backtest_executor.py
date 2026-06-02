@@ -43,7 +43,7 @@ MOCK_EXPERIMENT_FILES = {"conf.yaml": "mock_yaml_content", "factor.py": "mock_fa
 def make_mock_composer(wsl_command: str = MOCK_WSL_COMMAND) -> MagicMock:
     composer = MagicMock()
     composer.compose_experiment_in_memory.return_value = {
-        "experiment_files": MOCK_EXPERIMENT_FILES,
+        "experiment_files": dict(MOCK_EXPERIMENT_FILES),
         "wsl_command": wsl_command,
     }
     return composer
@@ -130,6 +130,62 @@ class TestBacktestExecutorBasic:
         )
 
         assert "--backtest-only" not in (result.wsl_command or "")
+
+    def test_seed_ensemble_reaches_composer_but_not_model_params(self):
+        composer = make_mock_composer()
+        composer.compose_experiment_in_memory.return_value["experiment_files"]["conf.yaml"] = """
+qe_runtime:
+  seed_policy: fixed
+  random_seed: 42
+  ensemble:
+    enabled: true
+    level: score
+    agg: median
+    seeds: [42, 2026, 12345]
+task:
+  model:
+    class: LGBModel
+    kwargs:
+      seed: 42
+      random_state: 42
+  dataset:
+    class: DatasetH
+    kwargs:
+      handler:
+        class: DataHandlerLP
+port_analysis_config:
+  executor:
+    class: SimulatorExecutor
+  strategy:
+    class: TopkDropoutStrategy
+    kwargs: {}
+  backtest:
+    exchange_kwargs: {}
+"""
+        client = make_mock_client()
+        executor = BacktestExecutor(composer, client)
+        cfg = ExperimentConfig(
+            factor_names=["f1"],
+            model_id="lgbm",
+            runtime_flags={"random_seed": 42},
+            seed_ensemble={
+                "enabled": True,
+                "seeds": [42, 2026, 12345],
+                "level": "score",
+                "agg": "median",
+            },
+        )
+        ctx = make_ctx(require_fixed_seed=True)
+
+        asyncio.get_event_loop().run_until_complete(
+            executor.submit(cfg, ctx, mode=BacktestMode.FULL_TRAIN)
+        )
+
+        compose_kwargs = composer.compose_experiment_in_memory.call_args.kwargs
+        assert compose_kwargs["custom_params"]["_seed_ensemble_config"]["agg"] == "median"
+        rdagent_config = client.create_and_run_loop.call_args.args[2]
+        assert rdagent_config["runtime_flags"]["ensemble"]["seeds"] == [42, 2026, 12345]
+        assert "_seed_ensemble_config" not in rdagent_config["model_params"]
 
     def test_full_train_strict_seed_contract_rejects_missing_seed(self):
         executor = BacktestExecutor(make_mock_composer(), make_mock_client())

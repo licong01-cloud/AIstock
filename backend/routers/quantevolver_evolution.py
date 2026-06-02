@@ -1178,6 +1178,7 @@ class CustomEvoLoopConfig(BaseModel):
     strategy_id: Optional[str] = Field(None, description="交易策略ID，None=使用默认 TopkDropoutStrategy")
     strategy_params: Optional[Dict[str, Any]] = Field(None, description="策略参数: topk, n_drop, hold_thresh, risk_degree 等")
     runtime_flags: Optional[Dict[str, Any]] = Field(None, description="Runtime-only archive/seed/provenance flags")
+    ensemble: Optional[Dict[str, Any]] = Field(None, description="Optional deterministic seed ensemble: enabled, seeds, level, agg")
     execution_algo: Optional[str] = Field(None, description="日内执行算法code")
     execution_algo_params: Optional[Dict[str, Any]] = Field(None, description="执行算法参数")
     filter_suspended_on_signal: bool = Field(False, description="生成日频选股信号时使用 suspend_d 过滤已停牌股票")

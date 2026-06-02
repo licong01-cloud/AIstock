@@ -1043,6 +1043,37 @@ def test_score_weighted_v2_filters_archive_seed_metadata_from_strategy_kwargs():
     assert parsed["qe_runtime"]["seed_policy"] == "fixed"
 
 
+def test_seed_ensemble_runtime_metadata_stays_out_of_strategy_kwargs():
+    yaml_text = _base_yaml(
+        strategy_info={
+            "strategy_id": "score_weighted_topk_v2",
+            "source_code": "class ScoreWeightedTopkStrategyV2:\n    pass\n",
+            "portfolio_config": {"class": "ScoreWeightedTopkStrategyV2", "kwargs": {}},
+        },
+        custom_params={
+            "topk": 12,
+            "random_seed": 42,
+            "_seed_ensemble_config": {
+                "enabled": True,
+                "seeds": [42, 2026, 12345],
+                "level": "score",
+                "agg": "mean",
+            },
+        },
+    )
+
+    parsed = yaml.safe_load(yaml_text)
+    strategy_kwargs = parsed["port_analysis_config"]["strategy"]["kwargs"]
+    assert "_seed_ensemble_config" not in strategy_kwargs
+    assert parsed["qe_runtime"]["random_seed"] == 42
+    assert parsed["qe_runtime"]["ensemble"] == {
+        "enabled": True,
+        "level": "score",
+        "agg": "mean",
+        "seeds": [42, 2026, 12345],
+    }
+
+
 def test_suspend_runtime_flags_reject_nested_conflicts():
     merged = _merge_strategy_runtime_flags({"topk": 10}, True, False)
     assert merged["filter_suspended_on_signal"] is True

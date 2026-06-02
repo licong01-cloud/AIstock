@@ -1390,6 +1390,7 @@ class ConfigComposer:
             use_custom_model=bool(model_info and model_info.get("code_text")),
             model_type_tag=model_type_tag if model_info and model_info.get("code_text") else None,
             backtest_freq=backtest_freq,
+            seed_ensemble_enabled=bool((custom_params or {}).get("_seed_ensemble_config")),
         )
 
         # 保存实验记录到数据库
@@ -1706,6 +1707,7 @@ class ConfigComposer:
             backtest_freq=backtest_freq,
             train_only=train_only,
             factor_cache_dir=factor_cache_dir,
+            seed_ensemble_enabled=bool((custom_params or {}).get("_seed_ensemble_config")),
         )
         wsl_command = self._generate_wsl_command(
             wsl_path,
@@ -1716,6 +1718,7 @@ class ConfigComposer:
             backtest_freq=backtest_freq,
             train_only=train_only,
             factor_cache_dir=factor_cache_dir,
+            seed_ensemble_enabled=bool((custom_params or {}).get("_seed_ensemble_config")),
         )
 
         # ── 保存 DB 记录（不写文件） ──
@@ -2371,6 +2374,7 @@ class ConfigComposer:
             use_custom_model=bool(model_info and model_info.get("code_text")),
             model_type_tag=model_type_tag if model_info and model_info.get("code_text") else None,
             backtest_freq=backtest_freq,
+            seed_ensemble_enabled=bool((custom_params or {}).get("_seed_ensemble_config")),
         )
 
         # 更新数据库中的WSL命令和状态
@@ -2801,6 +2805,7 @@ class ConfigComposer:
             "risk_policy_enabled",
             "risk_policy_file",
             "risk_policy_strict",
+            "_seed_ensemble_config",
             # Industry blacklist metadata is persisted for UI/detail traceability.
             # The executable restriction is represented by stock_pool, not by
             # passing these metadata objects into the Qlib strategy constructor.
@@ -3044,10 +3049,11 @@ class ConfigComposer:
                 f"label_type={_label_type}, label_horizon={_label_horizon}, formula={_label_formula}"
             )
         _runtime_seed = (custom_params or {}).get("random_seed")
+        _seed_ensemble_config = (custom_params or {}).get("_seed_ensemble_config")
         lines.append(f"market: &market {stock_pool}")
         lines.append("benchmark: &benchmark 000300.SH")
-        if _runtime_seed is not None:
-            _seed_value = int(_runtime_seed)
+        if _runtime_seed is not None or _seed_ensemble_config:
+            _seed_value = int(_runtime_seed if _runtime_seed is not None else _seed_ensemble_config["seeds"][0])
             lines.append("")
             lines.append("qe_runtime:")
             lines.append("    seed_policy: fixed")
@@ -3059,6 +3065,14 @@ class ConfigComposer:
             lines.append("        torch_cuda_random: true")
             lines.append("        cudnn_deterministic: true")
             lines.append("        cudnn_benchmark: false")
+            if _seed_ensemble_config:
+                lines.append("    ensemble:")
+                lines.append("        enabled: true")
+                lines.append(f"        level: {self._yaml_scalar(_seed_ensemble_config.get('level') or 'score')}")
+                lines.append(f"        agg: {self._yaml_scalar(_seed_ensemble_config.get('agg') or 'mean')}")
+                lines.append("        seeds:")
+                for seed in _seed_ensemble_config.get("seeds") or []:
+                    lines.append(f"            - {int(seed)}")
         lines.append("")
 
         # data_handler_config
@@ -4177,6 +4191,7 @@ class ConfigComposer:
         backtest_freq: str = "1min",
         train_only: bool = False,
         factor_cache_dir: Optional[str] = None,
+        seed_ensemble_enabled: bool = False,
     ) -> tuple[list[str], list[str]]:
         """构造 auto 模式命令片段。
 
@@ -4223,7 +4238,7 @@ class ConfigComposer:
             '[ ! -e "$f" ] && [ -e "$_FDD/$f" ] && ln -sf "$_FDD/$f" .; done; true'
         )
 
-        runner = "qrun_limit_minute.py" if backtest_freq != "day" else "qrun_limit.py"
+        runner = "qrun_limit_minute.py" if seed_ensemble_enabled or backtest_freq != "day" else "qrun_limit.py"
 
         core_parts = [
             self._build_conda_activate_chain(),
@@ -4251,7 +4266,8 @@ class ConfigComposer:
                               mode: str = "manual",
                               backtest_freq: str = "1min",
                               train_only: bool = False,
-                              factor_cache_dir: Optional[str] = None) -> str:
+                              factor_cache_dir: Optional[str] = None,
+                              seed_ensemble_enabled: bool = False) -> str:
         """生成WSL执行命令。
 
         Args:
@@ -4268,6 +4284,7 @@ class ConfigComposer:
             backtest_freq=backtest_freq,
             train_only=train_only,
             factor_cache_dir=factor_cache_dir,
+            seed_ensemble_enabled=seed_ensemble_enabled,
         )
         env_block = "\n".join(env_lines)
 
@@ -4279,7 +4296,7 @@ for f in daily_basic.h5 daily_pv.h5 moneyflow.h5 bak_basic.h5 cyq_perf.h5 sector
 done"""
 
         # 分钟线使用 qrun_limit_minute.py（含内存 patch + benchmark），日线使用 qrun_limit.py
-        runner = "qrun_limit_minute.py" if backtest_freq != "day" else "qrun_limit.py"
+        runner = "qrun_limit_minute.py" if seed_ensemble_enabled or backtest_freq != "day" else "qrun_limit.py"
 
         # ── auto 模式：纯净命令链，供子进程直接执行 ──
         if mode == "auto":
