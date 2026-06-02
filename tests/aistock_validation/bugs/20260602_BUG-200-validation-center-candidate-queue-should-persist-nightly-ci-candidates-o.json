@@ -30,8 +30,8 @@
   "expected": "CI/nightly candidate artifacts can be persisted into a stable tests/aistock_validation candidate history path with deterministic dedupe, and Validation Center continues to read the persisted candidate queue.",
   "first_seen_at": "2026-06-02T03:03:26.887966Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "88174fbd3a9b2bf640c033255a0116d4a88df285",
+  "fixed_at": "2026-06-02T03:43:39.251930Z",
   "github_issue_number": 529,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/529",
   "last_seen_at": "2026-06-02T03:03:26.887966Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/530",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -54,7 +55,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation.center"
   ],
@@ -63,5 +64,13 @@
     "fingerprint": "40035935b1cff8d37a49200b",
     "source_event_id": "FE-20260602-40035935b1cf"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_ci_failure_issue_summary.py backend/tests/test_validation_pipeline_center_phase1.py::test_issue_candidate_queue_reads_context_pack_and_dedupes_payloads backend/tests/test_validation_pipeline_center_phase1.py::test_issue_candidate_queue_reads_persisted_history_without_tmp -q -p no:cacheprovider -> 16 passed",
+    "python -m ruff check scripts/ci_failure_issue_summary.py backend/services/validation/pipeline_center.py backend/tests/scripts/test_ci_failure_issue_summary.py backend/tests/test_validation_pipeline_center_phase1.py -> passed",
+    "git diff --check -> passed",
+    "python -m nox -s l0 validation_center_backend -> passed",
+    "python -m nox -s validation_catalog_integrity validation_coverage_backend guardrail_changed_files validation_module_registry_l0 -> passed",
+    "GitHub PR #530 CI -> passed"
+  ],
   "verification_run_id": null
 }
