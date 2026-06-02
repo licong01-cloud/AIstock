@@ -489,12 +489,18 @@ def build_agent_handoff(
         "intended_clients": ["Codex", "Claude Code", "Cursor", "generic CLI/IDE agent"],
         "workflow_entrypoints": {
             "triage": f"python scripts/aistock_issue_workflow.py triage-ci-issue --issue {issue_arg}",
-            "promote": f"python scripts/aistock_issue_workflow.py promote-ci-issue --issue {issue_arg} --apply",
+            "promote": (
+                f"python scripts/aistock_issue_workflow.py promote-ci-issue --issue {issue_arg} "
+                "--create-registry-worktree --apply"
+            ),
             "fix_after_promotion": "python scripts/aistock_issue_workflow.py run --bug-id <BUG-ID> --mode plan --create-worktree",
         },
         "next_commands": [
             f"python scripts/aistock_issue_workflow.py triage-ci-issue --issue {issue_arg}",
-            f"python scripts/aistock_issue_workflow.py promote-ci-issue --issue {issue_arg} --apply",
+            (
+                f"python scripts/aistock_issue_workflow.py promote-ci-issue --issue {issue_arg} "
+                "--create-registry-worktree --apply"
+            ),
             "python scripts/aistock_issue_workflow.py run --bug-id <BUG-ID> --mode plan --create-worktree",
         ],
         "allowed_write_scope": suspected_files,
@@ -1090,7 +1096,7 @@ def _auto_candidate_history_dir(output_path: str | None) -> str | None:
         return None
     normalized = Path(output_path).as_posix()
     if "/tmp/validation/ci_failure_issue/" in f"/{normalized}" or "/tmp/validation/nightly_failure_issue/" in f"/{normalized}":
-        return str(_default_candidate_history_dir())
+        return str(Path(output_path).parent / "candidate_history")
     return None
 
 

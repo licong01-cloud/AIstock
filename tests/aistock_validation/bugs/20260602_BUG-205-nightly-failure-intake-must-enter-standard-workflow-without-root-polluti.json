@@ -1,0 +1,77 @@
+{
+  "actual": "Open nightly issue #257 remains an infra/action item with handoff commands, but promote-ci-issue blocks as infra without a first-class workflow-safe issue path. The boundary that Nightly may not write BUG JSON in root or modify source code is not enforced/tested end-to-end.",
+  "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    "scripts/ci_failure_issue_summary.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "backend/tests/scripts/test_ci_failure_issue_summary.py",
+    ".github/workflows/nightly.yml",
+    "tests/aistock_validation/bugs/20260602_BUG-205-nightly-failure-intake-must-enter-standard-workflow-without-root-polluti.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "docs/standards/aistock_issue_workflow_quickstart.md"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-205",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-02T06:14:50.492265Z",
+  "description": "Open nightly issue #257 remains an infra/action item with handoff commands, but promote-ci-issue blocks as infra without a first-class workflow-safe issue path. The boundary that Nightly may not write BUG JSON in root or modify source code is not enforced/tested end-to-end.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260602-89e38f36c049",
+      "timestamp": "2026-06-02T06:14:50.492261Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Added issue workflow quickstart because BUG-205 changes the CI/Nightly handoff contract used by all developer clients.",
+      "timestamp": "2026-06-02T06:30:00Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/issues/257"
+  ],
+  "expected": "Nightly jobs only emit compact candidate/evidence artifacts and GitHub Issue diagnostics. Developer clients then triage/promote/fix through a clean task or registry worktree using aistock_issue_workflow.py. Infra-blocker nightly issues should return a standard non-code workflow handoff instead of encouraging direct source edits or root writes.",
+  "first_seen_at": "2026-06-02T06:14:50.492265Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 545,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/545",
+  "last_seen_at": "2026-06-02T06:14:50.492265Z",
+  "module": "validation.workflow",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/aistock_issue_workflow.py triage-ci-issue --issue 257 --skip-github-summary; python scripts/aistock_issue_workflow.py promote-ci-issue --issue 257 --skip-github-summary --apply",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files",
+    "validation_center_backend",
+    "validation_catalog_integrity",
+    "validation_module_registry_l0",
+    "validation_coverage_backend"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation.workflow"
+  ],
+  "title": "Nightly failure intake must enter standard workflow without root pollution or source writes",
+  "trigger_condition": {
+    "fingerprint": "89e38f36c04993d1f43b7335",
+    "source_event_id": "FE-20260602-89e38f36c049"
+  },
+  "verification_run_id": null
+}

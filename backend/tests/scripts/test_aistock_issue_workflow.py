@@ -3617,7 +3617,10 @@ def test_triage_ci_issue_extracts_run_summary_and_recommends_promotion(
     assert payload["detected_run_id"] == "26378872481"
     assert payload["needs_bug_json"] is True
     assert payload["suggested_bug"]["module"] == "paper_v2"
-    assert "promote-ci-issue --issue 197" in payload["next_command"]
+    assert payload["next_command"] == (
+        "python scripts/aistock_issue_workflow.py promote-ci-issue --issue 197 "
+        "--create-registry-worktree --apply"
+    )
     ci_dir = isolated_workflow_root / "tmp" / "issue_workflow" / "ci-issue-197"
     assert (ci_dir / "triage-ci-issue.json").exists()
     assert (ci_dir / "failure-event.json").exists()
@@ -3625,7 +3628,9 @@ def test_triage_ci_issue_extracts_run_summary_and_recommends_promotion(
     assert (ci_dir / "context-pack.md").exists()
     assert payload["failure_event"]["schema_version"] == "aistock_failure_event_v1"
     assert payload["context_pack"]["schema_version"] == "aistock_ci_failure_context_pack_v1"
-    assert payload["context_pack"]["agent_handoff"]["workflow_entrypoints"]["promote"].endswith("--issue 197 --apply")
+    assert payload["context_pack"]["agent_handoff"]["workflow_entrypoints"]["promote"].endswith(
+        "--issue 197 --create-registry-worktree --apply"
+    )
 
 
 def test_promote_ci_issue_writes_bug_json_with_existing_github_issue(
@@ -3679,12 +3684,28 @@ def test_promote_ci_issue_writes_bug_json_with_existing_github_issue(
         lambda root: {"blocking": [], "warnings": [], "target_root": str(root)},
     )
     monkeypatch.setattr(
+        workflow,
+        "_maybe_create_registry_worktree",
+        lambda **kwargs: {
+            "create_worktree": True,
+            "dry_run": False,
+            "branch": "bug/registry-ci-issue-test",
+            "worktree": str(isolated_workflow_root),
+            "created": False,
+        },
+    )
+    monkeypatch.setattr(
         workflow.ci_failure_summary,
         "summarize_actions_run",
         lambda **kwargs: summary,
     )
 
-    payload = workflow.build_promote_ci_issue_plan(issue_number=197, apply=True, bug_id=None)
+    payload = workflow.build_promote_ci_issue_plan(
+        issue_number=197,
+        apply=True,
+        bug_id=None,
+        create_registry_worktree=True,
+    )
 
     assert payload["workflow_gate"] == "promoted"
     assert payload["submit_bug"]["bug_id"] == "BUG-119"
@@ -3695,6 +3716,57 @@ def test_promote_ci_issue_writes_bug_json_with_existing_github_issue(
     assert record["module"] == "paper_v2"
     assert "tmp/issue_workflow/ci-issue-197/context-pack.md" in record["evidence_uris"]
     assert record["production_ddl_gate"] == "noop"
+
+
+def test_promote_ci_issue_apply_requires_registry_worktree_for_code_bug(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = {
+        "number": 197,
+        "title": "[P1] AIstock CI failed on main",
+        "state": "OPEN",
+        "url": "https://github.com/licong01-cloud/AIstock/issues/197",
+        "body": "<!-- aistock-issue-on-test-fail:26378872481 -->",
+        "labels": [],
+    }
+    summary = {
+        "schema_version": "aistock_ci_failure_summary_v1",
+        "diagnostic_status": "complete",
+        "severity": "P1",
+        "workflow": "AIstock CI",
+        "run_id": "26378872481",
+        "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/26378872481",
+        "branch": "main",
+        "commit": "62dc1b1",
+        "failed_jobs": [
+            {
+                "job_name": "Backend tests (validation_center_backend)",
+                "nox_session": "validation_center_backend",
+                "failed_tests": ["backend/tests/test_validation_center_api.py::test_runner"],
+                "error_signature": "assert 500 == 200",
+                "key_log_excerpt": ["AssertionError: assert 500 == 200"],
+                "suspected_module": "validation",
+                "suspected_files": ["backend/routers/validation.py"],
+            }
+        ],
+        "suspected_modules": ["validation"],
+        "suspected_files": ["backend/routers/validation.py"],
+        "fingerprint": "ci-validation",
+        "issue_title": "[P1][validation_center_backend] main CI failed: test_runner",
+        "reproduce_command": "python -m pytest backend/tests/test_validation_center_api.py::test_runner -q -p no:cacheprovider",
+    }
+
+    monkeypatch.setattr(workflow, "_load_github_issue", lambda issue_number: issue)
+    monkeypatch.setattr(workflow, "_find_bug_by_github_issue", lambda issue_number: None)
+    monkeypatch.setattr(workflow.ci_failure_summary, "summarize_actions_run", lambda **kwargs: summary)
+
+    payload = workflow.build_promote_ci_issue_plan(issue_number=197, apply=True, bug_id=None)
+
+    assert payload["workflow_gate"] == "registry_worktree_required"
+    assert "--create-registry-worktree --apply" in payload["next_command"]
+    assert payload["triage"]["needs_bug_json"] is True
+    assert not list((isolated_workflow_root / "tests" / "aistock_validation" / "bugs").glob("*BUG-*.json"))
 
 
 def test_promote_ci_issue_blocks_infra_runner_outage(

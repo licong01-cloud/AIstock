@@ -141,13 +141,14 @@ The command writes only ignored workflow artifacts under `tmp/issue_workflow/ci-
 - `context-pack.json`
 - `context-pack.md`
 
-If the triage result is a real regression candidate and no BUG JSON is linked yet, promote it from a clean task or registry worktree:
+If the triage result is a real regression candidate and no BUG JSON is linked yet, promote it through a clean registry worktree:
 
 ```powershell
-python scripts/aistock_issue_workflow.py promote-ci-issue --issue <issue-number> --apply
+python scripts/aistock_issue_workflow.py promote-ci-issue --issue <issue-number> --create-registry-worktree --apply
 ```
 
 After promotion, continue through the normal BUG workflow returned by `next_command`. CI/Nightly intake must not write BUG JSON directly from GitHub Actions or from the canonical root `main` checkout.
+Nightly jobs themselves must only write compact issue context, candidate history, and evidence under ignored `tmp/validation/...` artifact paths plus GitHub Issue comments/updates. They must not commit BUG JSON, mutate source files, or write tracked root files.
 
 If `triage-ci-issue` returns `classification_recommendation=infra_blocker` or
 `infra_flaky`, do not promote it into a code BUG. Follow the returned

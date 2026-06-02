@@ -59,6 +59,7 @@ def test_finalize_summary_builds_fingerprint_title_and_reproduce_command() -> No
     assert payload["failure_event"]["module_guess"] == "paper_v2"
     assert payload["agent_handoff"]["schema_version"] == "aistock_ci_failure_agent_handoff_v1"
     assert "triage-ci-issue --issue <issue-number>" in payload["agent_handoff"]["next_commands"][0]
+    assert "--create-registry-worktree" in payload["agent_handoff"]["workflow_entrypoints"]["promote"]
 
 
 def test_render_issue_markdown_contains_actionable_sections() -> None:
@@ -83,7 +84,7 @@ def test_render_issue_markdown_contains_actionable_sections() -> None:
     assert "## Failed Jobs" in markdown
     assert "## Failed Tests / Errors" in markdown
     assert "## Agent Handoff" in markdown
-    assert "promote-ci-issue --issue <issue-number> --apply" in markdown
+    assert "promote-ci-issue --issue <issue-number> --create-registry-worktree --apply" in markdown
     assert "assert 200 == 409" in markdown
     assert "production_ddl_gate" in markdown
 
@@ -111,7 +112,7 @@ def test_context_pack_is_agent_neutral_and_compact() -> None:
     assert context_pack["agent_handoff"]["intended_clients"] == ["Codex", "Claude Code", "Cursor", "generic CLI/IDE agent"]
     assert context_pack["token_budget"]["full_logs_included"] is False
     assert context_pack["github_issue_url"] == "https://github.com/licong01-cloud/AIstock/issues/197"
-    assert "promote-ci-issue --issue 197 --apply" in markdown
+    assert "promote-ci-issue --issue 197 --create-registry-worktree --apply" in markdown
 
 
 def test_cli_log_file_outputs_json_and_markdown(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -285,6 +286,8 @@ def test_cli_persists_tmp_failure_candidate_history(
     history_payload = json.loads(history_path.read_text(encoding="utf-8"))
 
     assert history_path.is_file()
+    assert "tmp/validation/nightly_failure_issue/candidate_history" in history_path.as_posix()
+    assert "tests/aistock_validation/history" not in history_path.as_posix()
     assert history_payload["schema_version"] == "aistock_ci_failure_candidate_history_v1"
     assert history_payload["candidate"]["fingerprint"] == stdout_payload["fingerprint"]
     assert history_payload["candidate"]["module"] == "validation"

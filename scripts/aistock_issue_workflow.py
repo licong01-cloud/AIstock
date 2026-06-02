@@ -4323,7 +4323,8 @@ def build_triage_ci_issue_plan(
             "infra_action_required_no_code_bug"
             if classification in {"infra_flaky", "infra_blocker"} and linked is None
             else (
-                f"python scripts/aistock_issue_workflow.py promote-ci-issue --issue {issue.get('number')} --apply"
+                f"python scripts/aistock_issue_workflow.py promote-ci-issue --issue {issue.get('number')} "
+                "--create-registry-worktree --apply"
                 if linked is None
                 else f"python scripts/aistock_issue_workflow.py run --bug-id {linked[0].get('bug_id')} --mode plan --create-worktree"
             )
@@ -4343,6 +4344,7 @@ def build_promote_ci_issue_plan(
     bug_id: str | None = None,
     summary_json: str | None = None,
     skip_github_summary: bool = False,
+    create_registry_worktree: bool = False,
 ) -> dict[str, Any]:
     triage = build_triage_ci_issue_plan(
         issue_number=issue_number,
@@ -4367,6 +4369,21 @@ def build_promote_ci_issue_plan(
             "triage": triage,
             "infra_action": triage.get("infra_action"),
             "next_command": "resolve_infrastructure_then_rerun_triage_ci_issue",
+        }
+    if apply and not create_registry_worktree:
+        return {
+            "schema_version": "aistock_issue_workflow_promote_ci_issue_v1",
+            "generated_at": _utc_now(),
+            "workflow_gate": "registry_worktree_required",
+            "dry_run": False,
+            "triage": triage,
+            "blocking": [
+                "promote-ci-issue --apply must use --create-registry-worktree so CI/Nightly intake cannot write BUG JSON from canonical root or main"
+            ],
+            "next_command": (
+                f"python scripts/aistock_issue_workflow.py promote-ci-issue --issue {issue_number} "
+                "--create-registry-worktree --apply"
+            ),
         }
     summary = triage["summary"]
     suggested = triage["suggested_bug"]
@@ -4401,6 +4418,7 @@ def build_promote_ci_issue_plan(
         github_issue_url=_github_issue_url(issue_number),
         create_github=False,
         apply=apply,
+        create_registry_worktree=create_registry_worktree,
         registry_pr_only=False,
     )
     return {
@@ -6516,6 +6534,7 @@ def cmd_promote_ci_issue(args: argparse.Namespace) -> int:
         bug_id=args.bug_id,
         summary_json=args.summary_json,
         skip_github_summary=args.skip_github_summary,
+        create_registry_worktree=args.create_registry_worktree,
     )
     _emit_args(payload, args)
     return 0 if payload.get("workflow_gate") in {"ready_for_apply", "promoted", "already_linked"} else 2
@@ -6719,6 +6738,11 @@ def build_parser() -> argparse.ArgumentParser:
     promote_ci.add_argument("--bug-id", help="Use an already reserved BUG-NNN id.")
     promote_ci.add_argument("--summary-json", help="Use an existing CI failure summary JSON instead of querying Actions.")
     promote_ci.add_argument("--skip-github-summary", action="store_true", help="Do not query Actions logs; promote with partial diagnostics.")
+    promote_ci.add_argument(
+        "--create-registry-worktree",
+        action="store_true",
+        help="Create a clean registry worktree before writing BUG JSON; required for normal Nightly/CI promotion.",
+    )
     promote_ci.add_argument("--apply", action="store_true")
     add_output_options(promote_ci)
     promote_ci.set_defaults(func=cmd_promote_ci_issue)
