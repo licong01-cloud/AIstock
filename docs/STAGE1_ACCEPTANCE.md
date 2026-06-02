@@ -1,6 +1,6 @@
 ﻿# STAGE1 验收文档
 
-分支/commit: codex/price-guard-stage1-20260602 / 分支 HEAD（本文档随最终提交一起提交）
+分支/commit: codex/price-guard-stage1-20260602 / 实现 commit: 2141163e；验收文档 commit: 本文件所在 HEAD
 
 ## 1. 功能清单完成度 (M1-M4)
 
