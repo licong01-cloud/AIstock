@@ -5,6 +5,7 @@
     "backend/routers/quantevolver_evolution.py",
     "backend/services/quantevolver/experiment_config.py",
     "backend/services/quantevolver/experiment_config_builders.py",
+    "backend/services/quantevolver/qe_evolution_service.py",
     "backend/services/quantevolver/seed_contract.py",
     "backend/services/quantevolver/executors/backtest.py",
     "backend/services/quantevolver/config_composer.py",
@@ -51,6 +52,12 @@
       "actor": "Codex",
       "action": "design_compliance_partial",
       "note": "Score-level seed bagging path is implemented and unit-tested; portfolio-level holdings-average alignment remains pending and issue must not be closed as fully fixed yet."
+    },
+    {
+      "timestamp": "2026-06-02T03:50:00Z",
+      "actor": "Codex",
+      "action": "scope_alignment_fix",
+      "note": "Added qe_evolution_service.py to allowed_write_scope because loop config persistence/action_type metadata is required for ensemble_config traceability."
     }
   ],
   "evidence_uris": [
