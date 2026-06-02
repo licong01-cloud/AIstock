@@ -483,6 +483,12 @@ def _compact_triage_ci_issue(value: Any) -> dict[str, Any] | None:
         actions = infra.get("next_actions")
         if isinstance(actions, list):
             compact["infra_action"]["next_actions"] = actions[:4]
+    superseded = value.get("superseded_action")
+    if isinstance(superseded, dict):
+        compact["superseded_action"] = _pick(superseded, "workflow_gate", "reason", "next_command", "production_gates")
+        run = superseded.get("superseding_run")
+        if isinstance(run, dict):
+            compact["superseded_action"]["superseding_run"] = _pick(run, "run_id", "run_url", "head_sha", "created_at")
     return compact
 
 
@@ -495,6 +501,8 @@ def _compact_promote_ci_issue(value: Any) -> dict[str, Any] | None:
         compact["triage"] = triage
     if isinstance(value.get("infra_action"), dict):
         compact["infra_action"] = _pick(value["infra_action"], "workflow_gate", "reason")
+    if isinstance(value.get("superseded_action"), dict):
+        compact["superseded_action"] = _pick(value["superseded_action"], "workflow_gate", "reason", "next_command")
     if isinstance(value.get("submit_bug"), dict):
         submit_bug = value["submit_bug"]
         compact["submit_bug"] = _pick(submit_bug, "workflow_gate", "bug_id", "state_path", "events_path", "next_command")
@@ -1967,6 +1975,109 @@ def _extract_run_id_from_issue_body(body: str) -> str | None:
         return marker.group(1)
     run_url = re.search(r"github\.com/[^/]+/[^/]+/actions/runs/(\d+)", body or "")
     return run_url.group(1) if run_url else None
+
+
+def _issue_body_failure_text(body: str) -> str:
+    """Keep CI classification focused on failure evidence, not generic checklists."""
+    text = str(body or "")
+    return re.split(r"\n##\s+(Agent Handoff|Suggested Triage|BUG JSON Linkage|Production Gates)\b", text, maxsplit=1)[0]
+
+
+def _extract_regression_locator_from_issue_body(body: str, summary: dict[str, Any]) -> dict[str, Any] | None:
+    text = str(body or "")
+    status_match = re.search(r"last_green_status:\s*`?([A-Za-z0-9_-]+)`?", text)
+    range_match = re.search(r"commit_range:\s*`?([0-9a-fA-F.]+)`?", text)
+    previous_match = re.search(r"previous_success_run:\s*(https://github\.com/[^\s`]+/actions/runs/(\d+))", text)
+    if not (status_match or range_match or previous_match):
+        return None
+    previous_run = None
+    if previous_match:
+        previous_run = {"run_url": previous_match.group(1), "run_id": previous_match.group(2)}
+    return {
+        "schema_version": "aistock_ci_last_green_locator_v1",
+        "status": status_match.group(1) if status_match else "found",
+        "commit_range": range_match.group(1) if range_match else None,
+        "previous_success_run": previous_run,
+        "current_run": {
+            "workflow": summary.get("workflow"),
+            "run_id": str(summary.get("run_id") or ""),
+            "run_url": summary.get("run_url"),
+            "branch": summary.get("branch"),
+            "commit": summary.get("commit"),
+        },
+        "blocking_for_issue_workflow": False,
+        "source": "github_issue_body",
+        "warnings": [],
+    }
+
+
+def _merge_issue_body_regression_locator(summary: dict[str, Any], body: str) -> dict[str, Any]:
+    locator = _extract_regression_locator_from_issue_body(body, summary)
+    if not locator:
+        return summary
+    current = summary.get("last_green_locator") if isinstance(summary.get("last_green_locator"), dict) else {}
+    if current and current.get("status") not in {None, "", "not_found", "unknown", "not_requested"}:
+        return summary
+    enriched = dict(summary)
+    enriched["last_green_locator"] = locator
+    notes = list(enriched.get("triage_notes") or [])
+    notes.append("last_green_locator recovered from GitHub Issue body")
+    enriched["triage_notes"] = notes
+    return enriched
+
+
+def _find_superseding_main_success(summary: dict[str, Any]) -> dict[str, Any] | None:
+    workflow = str(summary.get("workflow") or "").strip()
+    branch = str(summary.get("branch") or "").strip()
+    run_id = str(summary.get("run_id") or "").strip()
+    if not workflow or branch != "main" or not run_id.isdigit():
+        return None
+    result = _run_command(
+        [
+            "gh",
+            "run",
+            "list",
+            "--repo",
+            GITHUB_REPO,
+            "--branch",
+            branch,
+            "--workflow",
+            workflow,
+            "--limit",
+            "20",
+            "--json",
+            "databaseId,headSha,conclusion,status,url,createdAt,displayTitle",
+        ],
+        cwd=REPO_ROOT,
+        timeout=30,
+    )
+    if not result.get("ok"):
+        return None
+    try:
+        runs = json.loads(str(result.get("stdout") or "[]"))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(runs, list):
+        return None
+    current_id = int(run_id)
+    for item in runs:
+        if not isinstance(item, dict):
+            continue
+        candidate_id = str(item.get("databaseId") or "")
+        if not candidate_id.isdigit() or int(candidate_id) <= current_id:
+            continue
+        if str(item.get("status") or "").lower() != "completed":
+            continue
+        if str(item.get("conclusion") or "").lower() != "success":
+            continue
+        return {
+            "run_id": candidate_id,
+            "run_url": item.get("url"),
+            "head_sha": item.get("headSha"),
+            "created_at": item.get("createdAt"),
+            "display_title": item.get("displayTitle"),
+        }
+    return None
 
 
 def _load_github_issue(issue_number: int | str) -> dict[str, Any]:
@@ -4649,7 +4760,9 @@ def build_postmortem_plan(*, bug_id: str, worktree: str | None = None, output_ma
 
 
 def _classify_ci_issue(summary: dict[str, Any], issue: dict[str, Any]) -> str:
-    title_body = f"{issue.get('title') or ''}\n{issue.get('body') or ''}".lower()
+    title = str(issue.get("title") or "").lower()
+    evidence_body = _issue_body_failure_text(str(issue.get("body") or "")).lower()
+    title_body = f"{title}\n{evidence_body}"
     errors = "\n".join(
         str(item)
         for job in summary.get("failed_jobs") or []
@@ -4714,7 +4827,28 @@ def build_triage_ci_issue_plan(
                 "extraction_errors": extraction_errors,
             }
         )
+    summary = _merge_issue_body_regression_locator(summary, body)
     classification = _classify_ci_issue(summary, issue)
+    superseding_run = _find_superseding_main_success(summary)
+    superseded_action = None
+    if superseding_run and linked is None:
+        classification = "superseded_by_later_main_success"
+        close_command = (
+            f"gh issue close {issue.get('number')} --repo {GITHUB_REPO} --comment "
+            f"\"Superseded by later successful main {summary.get('workflow') or 'CI'} run: {superseding_run.get('run_url')}. "
+            "No BUG JSON promotion is required.\""
+        )
+        superseded_action = {
+            "workflow_gate": "superseded_by_latest_main_success",
+            "reason": "A later successful default-branch run of the same workflow supersedes this CI failure.",
+            "superseding_run": superseding_run,
+            "next_command": close_command,
+            "production_gates": {
+                "production_ddl_gate": "noop",
+                "production_frontend_dependency_gate": "noop",
+                "production_backend_dependency_gate": "noop",
+            },
+        }
     module = (summary.get("suspected_modules") or ["validation"])[0]
     first_job = (summary.get("failed_jobs") or [{}])[0]
     failed_test = ((first_job.get("failed_tests") or [None])[0] or "").split("::")[-1]
@@ -4733,6 +4867,24 @@ def build_triage_ci_issue_plan(
         github_issue_number=issue.get("number"),
         github_issue_url=github_issue_url,
     )
+    if superseded_action:
+        failure_event["candidate_status"] = "superseded_by_later_main_success"
+        failure_event["superseded_action"] = superseded_action
+        context_pack["failure_event"] = failure_event
+        context_pack["superseded_action"] = superseded_action
+        context_pack["required_verification"] = [
+            "Verify the superseding default-branch run for the same workflow is successful.",
+            "Close the auto-filed GitHub Issue with the superseding run URL; do not promote BUG JSON.",
+        ]
+        handoff = context_pack.get("agent_handoff") if isinstance(context_pack.get("agent_handoff"), dict) else {}
+        handoff["workflow_entrypoints"] = {
+            "triage": f"python scripts/aistock_issue_workflow.py triage-ci-issue --issue {issue.get('number')}",
+            "close_superseded_issue": superseded_action["next_command"],
+        }
+        handoff["next_commands"] = [superseded_action["next_command"]]
+        handoff["required_verification"] = context_pack["required_verification"]
+        handoff["stop_conditions"] = ["Do not promote BUG JSON for this superseded CI failure."]
+        context_pack["agent_handoff"] = handoff
     failure_event_path = output_dir / "failure-event.json"
     context_pack_json_path = output_dir / "context-pack.json"
     context_pack_md_path = output_dir / "context-pack.md"
@@ -4754,7 +4906,8 @@ def build_triage_ci_issue_plan(
         "context_pack_md_path": _repo_rel(context_pack_md_path),
         "classification_recommendation": classification,
         "linked_bug": {"bug_id": linked[0].get("bug_id"), "path": _repo_rel(linked[1])} if linked else None,
-        "needs_bug_json": linked is None and classification not in {"infra_flaky", "infra_blocker"},
+        "needs_bug_json": linked is None
+        and classification not in {"infra_flaky", "infra_blocker", "superseded_by_later_main_success"},
         "suggested_bug": {
             "module": module,
             "severity": summary.get("severity") or "P1",
@@ -4782,14 +4935,19 @@ def build_triage_ci_issue_plan(
             if classification in {"infra_flaky", "infra_blocker"}
             else None
         ),
+        "superseded_action": superseded_action,
         "next_command": (
             "infra_action_required_no_code_bug"
             if classification in {"infra_flaky", "infra_blocker"} and linked is None
             else (
-                f"python scripts/aistock_issue_workflow.py promote-ci-issue --issue {issue.get('number')} "
-                "--create-registry-worktree --apply"
-                if linked is None
-                else f"python scripts/aistock_issue_workflow.py run --bug-id {linked[0].get('bug_id')} --mode plan --create-worktree"
+                superseded_action["next_command"]
+                if classification == "superseded_by_later_main_success" and linked is None and superseded_action
+                else (
+                    f"python scripts/aistock_issue_workflow.py promote-ci-issue --issue {issue.get('number')} "
+                    "--create-registry-worktree --apply"
+                    if linked is None
+                    else f"python scripts/aistock_issue_workflow.py run --bug-id {linked[0].get('bug_id')} --mode plan --create-worktree"
+                )
             )
         ),
     }
@@ -4832,6 +4990,17 @@ def build_promote_ci_issue_plan(
             "triage": triage,
             "infra_action": triage.get("infra_action"),
             "next_command": "resolve_infrastructure_then_rerun_triage_ci_issue",
+        }
+    if triage.get("classification_recommendation") == "superseded_by_later_main_success":
+        action = triage.get("superseded_action") if isinstance(triage.get("superseded_action"), dict) else {}
+        return {
+            "schema_version": "aistock_issue_workflow_promote_ci_issue_v1",
+            "generated_at": _utc_now(),
+            "workflow_gate": "blocked_superseded_issue_not_code_bug",
+            "dry_run": not apply,
+            "triage": triage,
+            "superseded_action": action,
+            "next_command": action.get("next_command") or "close_ci_issue_as_superseded_after_review",
         }
     if apply and not create_registry_worktree:
         return {

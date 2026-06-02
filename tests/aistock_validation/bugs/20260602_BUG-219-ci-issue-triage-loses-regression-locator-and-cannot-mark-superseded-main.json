@@ -1,0 +1,68 @@
+{
+  "actual": "Issue #584 triage wrote failure-event.json with last_green_status=not_found and next_command=infra_action_required_no_code_bug despite the issue body carrying locator details and current main CI already succeeding.",
+  "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "tests/aistock_validation/bugs/20260602_BUG-219-ci-issue-triage-loses-regression-locator-and-cannot-mark-superseded-main.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-219",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-02T14:28:18.192814Z",
+  "description": "Issue #584 triage wrote failure-event.json with last_green_status=not_found and next_command=infra_action_required_no_code_bug despite the issue body carrying locator details and current main CI already succeeding.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260602-1c3ed05727bb",
+      "timestamp": "2026-06-02T14:28:18.192809Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/issues/584",
+    "https://github.com/licong01-cloud/AIstock/actions/runs/26825497246"
+  ],
+  "expected": "triage-ci-issue should preserve available regression locator fields from the GitHub Issue body and, for default-branch failures whose later same-workflow main run is green, return a compact superseded/close recommendation without requiring BUG JSON promotion.",
+  "first_seen_at": "2026-06-02T14:28:18.192814Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 596,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/596",
+  "last_seen_at": "2026-06-02T14:28:18.192814Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/aistock_issue_workflow.py triage-ci-issue --issue 584",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "guardrail_changed_files",
+    "validation_catalog_integrity",
+    "validation_module_registry_l0",
+    "validation_coverage_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "CI issue triage loses regression locator and cannot mark superseded main failures",
+  "trigger_condition": {
+    "fingerprint": "1c3ed05727bb991bce98c203",
+    "source_event_id": "FE-20260602-1c3ed05727bb"
+  },
+  "verification_run_id": null
+}
