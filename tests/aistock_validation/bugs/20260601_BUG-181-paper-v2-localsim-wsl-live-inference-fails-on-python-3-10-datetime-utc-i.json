@@ -30,8 +30,8 @@
   "expected": "LocalSim live inference imports execution_algos successfully in the WSL rdagent-gpu Python 3.10 environment and creates/progresses an active 2026-06-01 live session without DATA_UNAVAILABLE import failure.",
   "first_seen_at": "2026-06-01T01:19:57.179378Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "9ce47b9c5ee8a5598abd84614427c27727e19a18",
+  "fixed_at": "2026-06-02T05:05:33.190297Z",
   "github_issue_number": 446,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/446",
   "last_seen_at": "2026-06-01T01:19:57.179378Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/447",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_trading_v2"
   ],
@@ -61,5 +62,8 @@
     "fingerprint": "7391d5ae45152e1fac9a8520",
     "source_event_id": "FE-20260601-7391d5ae4515"
   },
+  "validation_evidence": [
+    "GitHub PR #447 merged at 2026-06-01T01:57:41Z and closed issue #446"
+  ],
   "verification_run_id": null
 }
