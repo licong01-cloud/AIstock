@@ -234,6 +234,33 @@
 .ra-chat-setup-button:disabled { cursor: not-allowed; opacity: 0.62; }
 .ra-chat-setup-result { margin-top: 12px; border-radius: 14px; padding: 10px 12px; background: #edf8ed; color: var(--ra-forest); font-weight: 800; }
 
+.ra-phase7-panel { display: grid; gap: 14px; margin-bottom: 16px; }
+.ra-card-headline { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.ra-phase7-card-grid,
+.ra-agent-run-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.ra-evidence-card,
+.ra-blocker-card,
+.ra-agent-run-card,
+.ra-memory-node { border: 1px solid var(--ra-line); border-radius: 18px; background: #fffdf6; padding: 14px; box-shadow: 0 12px 32px rgba(28, 40, 31, 0.07); }
+.ra-evidence-card-insufficient,
+.ra-blocker-card-warning { border-color: rgba(212, 147, 39, 0.32); background: #fff8e8; }
+.ra-evidence-card-blocked,
+.ra-blocker-card-danger { border-color: rgba(184, 59, 50, 0.26); background: #fff5f1; }
+.ra-evidence-gap { border: 1px dashed rgba(212, 147, 39, 0.42); border-radius: 14px; background: #fffaf0; color: #8a5a0a; padding: 10px 12px; font-weight: 800; }
+.ra-evidence-ref-list,
+.ra-context-pack-routes,
+.ra-memory-tree-list { display: grid; gap: 10px; }
+.ra-evidence-ref { border-top: 1px dashed var(--ra-line); padding-top: 10px; }
+.ra-evidence-ref-grid { display: grid; grid-template-columns: minmax(96px, 0.28fr) 1fr; gap: 8px 10px; margin-top: 10px; }
+.ra-evidence-ref-grid span { color: var(--ra-muted); font-weight: 900; }
+.ra-evidence-ref-grid strong { min-width: 0; word-break: break-word; }
+.ra-memory-tree-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.ra-memory-tree-list { list-style: none; padding: 0; margin: 0; }
+.ra-memory-node + .ra-memory-node { margin-top: 10px; }
+.ra-memory-node-head { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+.ra-agent-team-summary { border: 1px solid var(--ra-line); border-radius: 18px; padding: 12px 14px; background: rgba(215, 248, 223, 0.22); }
+.ra-agent-team-summary p { margin: 4px 0; color: var(--ra-muted); }
+
 .ra-mcp-page { display: grid; gap: 18px; }
 .ra-mcp-hero,
 .ra-mcp-section { padding: 22px; }
@@ -333,7 +360,10 @@
 @media (max-width: 1180px) {
   .ra-chat-shell,
   .ra-mcp-grid,
-  .ra-card-list { grid-template-columns: 1fr; }
+  .ra-card-list,
+  .ra-phase7-card-grid,
+  .ra-agent-run-grid,
+  .ra-memory-tree-grid { grid-template-columns: 1fr; }
   .ra-chat-rail { position: static; }
   .ra-mcp-phase-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ra-admin-grid { grid-template-columns: 1fr; }

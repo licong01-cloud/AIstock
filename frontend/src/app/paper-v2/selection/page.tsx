@@ -10,7 +10,7 @@ import StatusBadge from "@/components/paper-v2/StatusBadge";
 import WorkflowStepper from "@/components/paper-v2/WorkflowStepper";
 import { hmmTrainingApi, paperV2Api, selectionCenterApi } from "@/lib/paper-v2/api";
 import { asText, dataSourceLabel, formatNumber, formatPercent, paperV2WorkflowSteps, selectionRunLabel, shortHash, statusLabel, todayIso } from "@/lib/paper-v2/format";
-import type { HmmConfig, JsonObject, SelectablePackage, SelectionDataSource, SelectionMode, SelectionRun, SelectionWatchlistImportResult } from "@/lib/paper-v2/types";
+import type { HmmConfig, JsonObject, SelectablePackage, SelectionCandidate, SelectionDataSource, SelectionMode, SelectionRun, SelectionWatchlistImportResult } from "@/lib/paper-v2/types";
 
 function runLabel(run: SelectionRun): string {
   return `${run.trade_date} / ${statusLabel(run.mode)} / ${run.package_ids.map((item) => shortHash(item, 5)).join(", ")}`;
@@ -29,6 +29,38 @@ function packageHealthHint(packageRow: SelectablePackage): string {
   const checks = Array.isArray(health.checks) ? health.checks as JsonObject[] : [];
   const first = checks.find((item) => ["BLOCKED", "WARN"].includes(String(item.status))) || checks[0];
   return String(first?.message || health.status || "UNKNOWN");
+}
+
+function priceText(value: unknown): string {
+  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(2) : "-";
+}
+
+function guidanceBand(row: SelectionCandidate): JsonObject | null {
+  return (row.suggested_entry_price_band || null) as JsonObject | null;
+}
+
+function stopZone(row: SelectionCandidate): JsonObject | null {
+  return (row.suggested_stop_loss_zone || null) as JsonObject | null;
+}
+
+function renderEntryBand(row: SelectionCandidate): string {
+  const band = guidanceBand(row);
+  if (!band) return "未提供";
+  const green = (band.green || {}) as JsonObject;
+  const yellow = (band.yellow || {}) as JsonObject;
+  return `绿 ${priceText(green.min_price)}-${priceText(green.max_price)} / 黄 ${priceText(yellow.min_price)}-${priceText(yellow.max_price)}`;
+}
+
+function renderStopZone(row: SelectionCandidate): string {
+  const zone = stopZone(row);
+  if (!zone) return "未提供";
+  return `软 ${priceText(zone.soft_stop_price)} / 硬 ${priceText(zone.hard_stop_price)}`;
+}
+
+function renderLimitBoundary(row: SelectionCandidate): string {
+  const band = guidanceBand(row);
+  if (!band) return "-";
+  return `跌停 ${priceText(band.limit_down)} / 涨停 ${priceText(band.limit_up)}`;
 }
 
 export default function PaperV2SelectionPage() {
@@ -386,6 +418,10 @@ export default function PaperV2SelectionPage() {
             { key: "name", header: "股票名称", render: (row) => row.stock_name || "-" },
             { key: "score", header: "评分", render: (row) => row.score.toFixed(6) },
             { key: "entry", header: "入池价", render: (row) => row.selection_entry_price?.toFixed(3) || row.reference_price?.toFixed(3) || "-" },
+            { key: "entry_band", header: "建议买入区间", render: (row) => renderEntryBand(row) },
+            { key: "stop_zone", header: "建议止损", render: (row) => renderStopZone(row) },
+            { key: "limits", header: "涨跌停边界", render: (row) => renderLimitBoundary(row) },
+            { key: "guidance", header: "价格建议状态", render: (row) => row.guidance_status ? <StatusBadge status={row.guidance_status} /> : "未提供" },
             { key: "weight", header: "目标权重", render: (row) => formatPercent(row.target_weight) },
             { key: "reason", header: "原因", render: (row) => row.reason || "-" },
             { key: "current", header: "当前价", render: (row) => row.current_price?.toFixed(3) || "-" },
@@ -393,6 +429,9 @@ export default function PaperV2SelectionPage() {
             { key: "volume", header: "成交量", render: (row) => formatNumber(row.volume, 0) },
           ]}
         />
+        <NoticePanel title="价格区间说明" tone="info">
+          建议买入区间与止损区间仅为投顾展示，guidance_status=rule_default；未经过 QE 验证，不代表最终委托价、成交价或 validated PnL。
+        </NoticePanel>
         {watchlistResult ? (
           <NoticePanel title="已加入自选股票池" tone="success">
             分类 {watchlistCategoryName || watchlistResult.category_id}，来源 {watchlistResult.entry_source}，加入 {watchlistResult.imported_symbols.length} 只股票，入池基准时间 {watchlistResult.entry_as_of}。

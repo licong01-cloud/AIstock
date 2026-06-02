@@ -6,12 +6,15 @@ import JsonPanel from "@/components/paper-v2/JsonPanel";
 import PaperTable from "@/components/paper-v2/PaperTable";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
+import { AgentTeamsRunView } from "@/components/research-assistant/AgentTeamsRunView";
 import { ApiErrorBox, DetailDrawer, EmptyState, formatDateTime } from "@/components/research-assistant/AssistantShared";
-import { researchAssistantApi, type AssistantTask, type AssistantTaskEvent } from "@/lib/research-assistant/api";
+import { researchAssistantApi, type AssistantAgentRun, type AssistantTask, type AssistantTaskEvent, type AssistantTraceEvent } from "@/lib/research-assistant/api";
 
 export default function ResearchAssistantTasksPage() {
   const [tasks, setTasks] = useState<AssistantTask[]>([]);
   const [selected, setSelected] = useState<{ task: AssistantTask; events: AssistantTaskEvent[] } | null>(null);
+  const [agentRuns, setAgentRuns] = useState<AssistantAgentRun[]>([]);
+  const [traceEvents, setTraceEvents] = useState<AssistantTraceEvent[]>([]);
   const [title, setTitle] = useState("HMM 演进任务状态跟踪");
   const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(false);
@@ -20,8 +23,14 @@ export default function ResearchAssistantTasksPage() {
     setLoading(true);
     setError(null);
     try {
-      const page = await researchAssistantApi.tasks({ limit: 100 });
+      const [page, runsPage, tracesPage] = await Promise.all([
+        researchAssistantApi.tasks({ limit: 100 }),
+        researchAssistantApi.agentRuns({ limit: 100 }),
+        researchAssistantApi.traceEvents({ limit: 100 }),
+      ]);
       setTasks(page.items);
+      setAgentRuns(runsPage.items);
+      setTraceEvents(tracesPage.items);
       if (!selected && page.items[0]) setSelected(await researchAssistantApi.task(page.items[0].task_id));
     } catch (exc) {
       setError(exc);
@@ -50,6 +59,7 @@ export default function ResearchAssistantTasksPage() {
   return (
     <main>
       <ApiErrorBox error={error} />
+      <AgentTeamsRunView runs={agentRuns} traceEvents={traceEvents} />
       <SectionCard title="Task Ledger" eyebrow="idempotency / event replay" action={<button className="pv2-button-primary" type="button" onClick={() => void load()} disabled={loading}>刷新</button>}>
         <div className="pv2-form-grid pv2-filter-card">
           <label className="pv2-field" htmlFor="ra-task-title"><span>新任务标题</span><input className="pv2-input" id="ra-task-title" value={title} onChange={(event) => setTitle(event.target.value)} /></label>

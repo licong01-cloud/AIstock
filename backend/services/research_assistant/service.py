@@ -2154,7 +2154,21 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         context_health = self._context_health_payload(conversation_id, budget_plan, mode_decision=mode_decision)
         cards = self._build_human_cards(data.message, task, bundle, route, dialogue_intent, mode_decision)
         if isinstance(route_decision, dict) and route_decision.get("server_key") and route_decision.get("tool_name"):
-            cards["mcp_route_decision"] = dict(route_decision, request=data.message)
+            existing_route = cards.get("mcp_route_decision") if isinstance(cards.get("mcp_route_decision"), dict) else {}
+            route_card = dict(existing_route)
+            route_card.update(route_decision)
+            side_effect = str(route_card.get("side_effect") or "read_only")
+            route_card.update(
+                {
+                    "request": data.message,
+                    "summary_first": True,
+                    "preflight_required": side_effect != "read_only",
+                    "confirmation_required": side_effect == "confirmed_action",
+                    "ui_card": "mcp_route_decision",
+                }
+            )
+            route_card.setdefault("auto_execute", self._read_only_mcp_auto_execution_eligibility(route_card, mode_decision))
+            cards["mcp_route_decision"] = route_card
         llm_result, messages, react_result = self._complete_chat_with_react_grounding(
             user_message=data.message,
             conversation_id=conversation_id,

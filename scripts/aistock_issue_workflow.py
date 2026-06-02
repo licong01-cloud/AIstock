@@ -1,7 +1,9 @@
 ﻿from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
+import io
 import json
 import os
 import re
@@ -433,6 +435,87 @@ def _compact_finalizer(value: Any) -> dict[str, Any] | None:
     return compact
 
 
+def _compact_triage_ci_issue(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    compact = _pick(
+        value,
+        "detected_run_id",
+        "classification_recommendation",
+        "needs_bug_json",
+        "failure_event_path",
+        "context_pack_md_path",
+    )
+    issue = value.get("github_issue")
+    if isinstance(issue, dict):
+        compact["github_issue"] = _pick(issue, "number", "url", "title", "state")
+    summary = value.get("summary")
+    if isinstance(summary, dict):
+        compact["diagnostic_status"] = summary.get("diagnostic_status")
+        compact["workflow"] = summary.get("workflow")
+        compact["run_url"] = summary.get("run_url")
+        failed_jobs = summary.get("failed_jobs")
+        if isinstance(failed_jobs, list):
+            compact["failed_job_count"] = len(failed_jobs)
+        modules = summary.get("suspected_modules")
+        if modules:
+            compact["suspected_modules"] = modules[:5] if isinstance(modules, list) else modules
+        files = summary.get("suspected_files")
+        if files:
+            compact["suspected_files_count"] = len(files) if isinstance(files, list) else None
+        if summary.get("reproduce_command"):
+            compact["reproduce_command"] = summary.get("reproduce_command")
+    linked = value.get("linked_bug")
+    if isinstance(linked, dict) and linked:
+        compact["linked_bug"] = _pick(linked, "bug_id", "path")
+    suggested = value.get("suggested_bug")
+    if isinstance(suggested, dict) and value.get("needs_bug_json"):
+        compact["suggested_bug"] = _pick(suggested, "module", "severity", "title", "risk_area")
+        required = suggested.get("required_verification")
+        if isinstance(required, list):
+            compact["suggested_bug"]["required_verification_count"] = len(required)
+        scope = suggested.get("allowed_write_scope")
+        if isinstance(scope, list):
+            compact["suggested_bug"]["allowed_write_scope_count"] = len(scope)
+    infra = value.get("infra_action")
+    if isinstance(infra, dict):
+        compact["infra_action"] = _pick(infra, "workflow_gate", "reason", "production_gates")
+        actions = infra.get("next_actions")
+        if isinstance(actions, list):
+            compact["infra_action"]["next_actions"] = actions[:4]
+    superseded = value.get("superseded_action")
+    if isinstance(superseded, dict):
+        compact["superseded_action"] = _pick(superseded, "workflow_gate", "reason", "next_command", "production_gates")
+        run = superseded.get("superseding_run")
+        if isinstance(run, dict):
+            compact["superseded_action"]["superseding_run"] = _pick(run, "run_id", "run_url", "head_sha", "created_at")
+    return compact
+
+
+def _compact_promote_ci_issue(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    compact = _pick(value, "dry_run")
+    triage = _compact_triage_ci_issue(value.get("triage"))
+    if triage:
+        compact["triage"] = triage
+    if isinstance(value.get("infra_action"), dict):
+        compact["infra_action"] = _pick(value["infra_action"], "workflow_gate", "reason")
+    if isinstance(value.get("superseded_action"), dict):
+        compact["superseded_action"] = _pick(value["superseded_action"], "workflow_gate", "reason", "next_command")
+    if isinstance(value.get("submit_bug"), dict):
+        submit_bug = value["submit_bug"]
+        compact["submit_bug"] = _pick(submit_bug, "workflow_gate", "bug_id", "state_path", "events_path", "next_command")
+        if isinstance(submit_bug.get("fix_chain"), dict):
+            compact["submit_bug"]["fix_chain"] = _pick(
+                submit_bug["fix_chain"],
+                "continue_to_fix_in_same_workflow",
+                "registry_pr_only",
+                "next_command",
+            )
+    return compact
+
+
 def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
     schema = str(payload.get("schema_version") or "")
     if not schema:
@@ -481,6 +564,15 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 "readiness_next_command",
                 "fallback_reason",
             )
+        if "bug_id_allocation" in payload:
+            compact["bug_id_allocation"] = _pick(
+                payload["bug_id_allocation"],
+                "next_number",
+                "allocator_max_number",
+                "observed_max_number",
+                "github_max_number",
+                "github_scanned",
+            )
     elif schema.endswith("_start_v1"):
         compact.update(_compact_start(payload) or {})
     elif schema.endswith("_finish_v1") or schema.endswith("_finish_batch_v1"):
@@ -504,6 +596,36 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 "stop_conditions",
             )
         )
+    elif schema == "aistock_nightly_intake_smoke_v1":
+        compact.update(
+            _pick(
+                payload,
+                "dry_run",
+                "github_writes",
+                "candidate_history_path",
+                "nightly_failed_stages",
+                "unexpected_dirty_paths",
+                "production_gates",
+            )
+        )
+        if isinstance(payload.get("artifacts"), dict):
+            compact["artifacts"] = _pick(payload["artifacts"], "summary", "context", "github_issue_payload")
+    elif schema == "aistock_batch_workflow_smoke_v1":
+        compact.update(
+            _pick(
+                payload,
+                "dry_run",
+                "github_writes",
+                "batch_id",
+                "bug_ids",
+                "unexpected_dirty_paths",
+                "production_gates",
+            )
+        )
+        if isinstance(payload.get("artifacts"), dict):
+            compact["artifacts"] = _pick(payload["artifacts"], "batch_state", "finish_plan", "pr_body")
+        if isinstance(payload.get("finish"), dict):
+            compact["finish"] = _pick(payload["finish"], "workflow_gate", "closure_ready", "validation_evidence_count")
     elif schema.endswith("_smoke_v1"):
         compact.update(
             _pick(
@@ -565,6 +687,10 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
             compact["complete_state"] = _pick(payload["complete_state"], "state", "updated_at")
     elif schema.endswith("_merge_finalizer_v1"):
         compact.update(_compact_finalizer(payload) or {})
+    elif schema.endswith("_triage_ci_issue_v1"):
+        compact.update(_compact_triage_ci_issue(payload) or {})
+    elif schema.endswith("_promote_ci_issue_v1"):
+        compact.update(_compact_promote_ci_issue(payload) or {})
     else:
         for key in (
             "module",
@@ -1166,6 +1292,24 @@ def _bug_id_allocation_report(
         if github_required and github_warnings:
             raise WorkflowError("; ".join(github_warnings))
     max_number = max((int(source.get("number") or 0) for source in sources), default=0)
+    max_by_kind: dict[str, int] = {}
+    for source in sources:
+        kind = str(source.get("kind") or "unknown")
+        number = int(source.get("number") or 0)
+        if number > max_by_kind.get(kind, 0):
+            max_by_kind[kind] = number
+    allocator_max = max_by_kind.get("allocator", 0)
+    observed_max = max(
+        max_by_kind.get("bug_json", 0),
+        max_by_kind.get("reservation", 0),
+        max_by_kind.get("github_issue", 0),
+    )
+    if allocator_max and observed_max > allocator_max:
+        warnings.append(
+            "BUG id allocator is behind observed BUG ids: "
+            f"allocator=BUG-{allocator_max:03d}, observed=BUG-{observed_max:03d}; "
+            f"next allocation will use BUG-{max_number + 1:03d}"
+        )
     return {
         "schema_version": "aistock_bug_id_allocation_report_v1",
         "max_number": max_number,
@@ -1173,6 +1317,23 @@ def _bug_id_allocation_report(
         "sources": sources,
         "warnings": warnings,
         "github_scanned": include_github,
+        "max_by_kind": max_by_kind,
+        "allocator_max_number": allocator_max,
+        "observed_max_number": observed_max,
+        "github_max_number": max_by_kind.get("github_issue", 0),
+    }
+
+
+def _bug_id_allocation_summary(report: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": "aistock_bug_id_allocation_summary_v1",
+        "max_number": report.get("max_number"),
+        "next_number": report.get("next_number"),
+        "allocator_max_number": report.get("allocator_max_number"),
+        "observed_max_number": report.get("observed_max_number"),
+        "github_max_number": report.get("github_max_number"),
+        "github_scanned": report.get("github_scanned"),
+        "warnings": report.get("warnings", []),
     }
 
 
@@ -1814,6 +1975,109 @@ def _extract_run_id_from_issue_body(body: str) -> str | None:
         return marker.group(1)
     run_url = re.search(r"github\.com/[^/]+/[^/]+/actions/runs/(\d+)", body or "")
     return run_url.group(1) if run_url else None
+
+
+def _issue_body_failure_text(body: str) -> str:
+    """Keep CI classification focused on failure evidence, not generic checklists."""
+    text = str(body or "")
+    return re.split(r"\n##\s+(Agent Handoff|Suggested Triage|BUG JSON Linkage|Production Gates)\b", text, maxsplit=1)[0]
+
+
+def _extract_regression_locator_from_issue_body(body: str, summary: dict[str, Any]) -> dict[str, Any] | None:
+    text = str(body or "")
+    status_match = re.search(r"last_green_status:\s*`?([A-Za-z0-9_-]+)`?", text)
+    range_match = re.search(r"commit_range:\s*`?([0-9a-fA-F.]+)`?", text)
+    previous_match = re.search(r"previous_success_run:\s*(https://github\.com/[^\s`]+/actions/runs/(\d+))", text)
+    if not (status_match or range_match or previous_match):
+        return None
+    previous_run = None
+    if previous_match:
+        previous_run = {"run_url": previous_match.group(1), "run_id": previous_match.group(2)}
+    return {
+        "schema_version": "aistock_ci_last_green_locator_v1",
+        "status": status_match.group(1) if status_match else "found",
+        "commit_range": range_match.group(1) if range_match else None,
+        "previous_success_run": previous_run,
+        "current_run": {
+            "workflow": summary.get("workflow"),
+            "run_id": str(summary.get("run_id") or ""),
+            "run_url": summary.get("run_url"),
+            "branch": summary.get("branch"),
+            "commit": summary.get("commit"),
+        },
+        "blocking_for_issue_workflow": False,
+        "source": "github_issue_body",
+        "warnings": [],
+    }
+
+
+def _merge_issue_body_regression_locator(summary: dict[str, Any], body: str) -> dict[str, Any]:
+    locator = _extract_regression_locator_from_issue_body(body, summary)
+    if not locator:
+        return summary
+    current = summary.get("last_green_locator") if isinstance(summary.get("last_green_locator"), dict) else {}
+    if current and current.get("status") not in {None, "", "not_found", "unknown", "not_requested"}:
+        return summary
+    enriched = dict(summary)
+    enriched["last_green_locator"] = locator
+    notes = list(enriched.get("triage_notes") or [])
+    notes.append("last_green_locator recovered from GitHub Issue body")
+    enriched["triage_notes"] = notes
+    return enriched
+
+
+def _find_superseding_main_success(summary: dict[str, Any]) -> dict[str, Any] | None:
+    workflow = str(summary.get("workflow") or "").strip()
+    branch = str(summary.get("branch") or "").strip()
+    run_id = str(summary.get("run_id") or "").strip()
+    if not workflow or branch != "main" or not run_id.isdigit():
+        return None
+    result = _run_command(
+        [
+            "gh",
+            "run",
+            "list",
+            "--repo",
+            GITHUB_REPO,
+            "--branch",
+            branch,
+            "--workflow",
+            workflow,
+            "--limit",
+            "20",
+            "--json",
+            "databaseId,headSha,conclusion,status,url,createdAt,displayTitle",
+        ],
+        cwd=REPO_ROOT,
+        timeout=30,
+    )
+    if not result.get("ok"):
+        return None
+    try:
+        runs = json.loads(str(result.get("stdout") or "[]"))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(runs, list):
+        return None
+    current_id = int(run_id)
+    for item in runs:
+        if not isinstance(item, dict):
+            continue
+        candidate_id = str(item.get("databaseId") or "")
+        if not candidate_id.isdigit() or int(candidate_id) <= current_id:
+            continue
+        if str(item.get("status") or "").lower() != "completed":
+            continue
+        if str(item.get("conclusion") or "").lower() != "success":
+            continue
+        return {
+            "run_id": candidate_id,
+            "run_url": item.get("url"),
+            "head_sha": item.get("headSha"),
+            "created_at": item.get("createdAt"),
+            "display_title": item.get("displayTitle"),
+        }
+    return None
 
 
 def _load_github_issue(issue_number: int | str) -> dict[str, Any]:
@@ -3035,6 +3299,295 @@ def build_workflow_smoke_plan(
         else "python scripts/aistock_issue_workflow.py doctor",
     }
 
+
+def _smoke_nightly_status_payload() -> dict[str, Any]:
+    return {
+        "statuses": {
+            "runnerPreflight": "success",
+            "drSnapshot": "success",
+            "drValidate": "success",
+            "nightlyL3": "failure",
+            "paperV2Live": "skipped",
+        },
+        "run_id": "999999999",
+        "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/999999999",
+    }
+
+
+def _smoke_batch_record(
+    bug_id: str,
+    issue_number: int,
+    *,
+    title: str,
+) -> dict[str, Any]:
+    return {
+        "schema_version": "aistock_validation_bug_v1",
+        "bug_id": bug_id,
+        "title": title,
+        "module": "validation.guardrails",
+        "severity": "P1",
+        "status": "open",
+        "description": "Synthetic same-module batch workflow smoke record.",
+        "actual": "Batch handoff needs a compact no-root-pollution smoke gate.",
+        "expected": "Batch start/finish can produce per-issue context and closure evidence under ignored workflow artifacts.",
+        "reproduce_command": "python scripts/aistock_issue_workflow.py batch-workflow-smoke",
+        "allowed_write_scope": ["scripts/aistock_issue_workflow.py"],
+        "required_verification": ["l0"],
+        "closure_requirements": [
+            "Generate per-issue Context Packs.",
+            "Generate a batch finish plan and PR body.",
+            "Keep synthetic artifacts ignored.",
+        ],
+        "non_goals": ["Do not touch production runtime services."],
+        "github_issue_number": issue_number,
+        "github_issue_url": f"https://github.example/issues/{issue_number}",
+        "production_ddl_gate": "noop",
+        "production_frontend_dependency_gate": "noop",
+        "production_backend_dependency_gate": "noop",
+    }
+
+
+def build_batch_workflow_smoke_plan() -> dict[str, Any]:
+    """Dry-run same-module batch start/finish without GitHub or tracked writes."""
+    bug_ids = ["BUG-000", "BUG-001"]
+    smoke_root = REPO_ROOT / WORKFLOW_ROOT / "batch-smoke"
+    issue_dir = smoke_root / "synthetic-bugs"
+    records = [
+        _smoke_batch_record(bug_ids[0], 9000, title="Synthetic batch smoke one"),
+        _smoke_batch_record(bug_ids[1], 9001, title="Synthetic batch smoke two"),
+    ]
+    issue_paths = [issue_dir / f"{record['bug_id']}.json" for record in records]
+    blocking: list[str] = []
+    warnings: list[str] = []
+    dirty_before = _git_status_paths(REPO_ROOT)
+    start_payload: dict[str, Any] | None = None
+    finish_payload: dict[str, Any] | None = None
+
+    try:
+        for path, record in zip(issue_paths, records, strict=True):
+            _write_json(path, record)
+        start_payload = build_start_batch_plan(
+            bug_ids=bug_ids,
+            create_worktree=False,
+            dry_run=False,
+            task_slug="batch-smoke",
+            allow_missing_linkage=False,
+            allow_closed=False,
+            record_pairs=list(zip(records, issue_paths, strict=True)),
+        )
+        finish_payload = build_finish_batch_plan(
+            batch_id=str(start_payload["batch_id"]),
+            bug_ids=[],
+            changed_files=["scripts/aistock_issue_workflow.py"],
+            base="origin/main",
+            head="HEAD",
+            validation_evidence=["batch-workflow-smoke synthetic validation -> passed"],
+            issue_commit=["BUG-000=synthetic-shared-pr", "BUG-001=synthetic-shared-pr"],
+            plan_only=False,
+            allow_missing_evidence=False,
+            record_pairs=list(zip(records, issue_paths, strict=True)),
+        )
+    except Exception as exc:
+        blocking.append(str(exc))
+
+    batch_id = str((start_payload or {}).get("batch_id") or "BATCH-smoke")
+    output_dir = REPO_ROOT / WORKFLOW_ROOT / batch_id
+    artifacts = {
+        "batch_plan": output_dir / "batch-plan.json",
+        "batch_state": output_dir / "batch-state.json",
+        "finish_plan": output_dir / "finish-plan.json",
+        "pr_body": output_dir / "pr-body.md",
+    }
+    for label, path in artifacts.items():
+        if not path.exists():
+            blocking.append(f"missing batch smoke artifact: {label}={_repo_rel(path)}")
+
+    batch_state = _load_json(artifacts["batch_state"]) if artifacts["batch_state"].exists() else {}
+    finish_plan = _load_json(artifacts["finish_plan"]) if artifacts["finish_plan"].exists() else {}
+    pr_body = artifacts["pr_body"].read_text(encoding="utf-8", errors="replace") if artifacts["pr_body"].exists() else ""
+    context_dir = Path(str(batch_state.get("context_dir") or ""))
+    fix_ready_dir = Path(str(batch_state.get("fix_ready_dir") or ""))
+    for bug_id in bug_ids:
+        if context_dir and not (REPO_ROOT / context_dir / f"{bug_id}.md").exists():
+            blocking.append(f"missing per-issue context markdown for {bug_id}")
+        if fix_ready_dir and not (REPO_ROOT / fix_ready_dir / f"{bug_id}.json").exists():
+            blocking.append(f"missing per-issue fix-ready JSON for {bug_id}")
+        if bug_id not in str(finish_plan.get("per_issue_closure_map") or ""):
+            blocking.append(f"finish plan missing per-issue closure map for {bug_id}")
+        expected_issue = 9000 if bug_id == "BUG-000" else 9001
+        if f"Closes #{expected_issue}" not in pr_body:
+            blocking.append(f"batch PR body missing closing keyword for {bug_id}")
+
+    if (finish_payload or {}).get("workflow_gate") != "ready_for_pr":
+        blocking.append("batch finish smoke did not reach ready_for_pr")
+    if (finish_payload or {}).get("scope_check", {}).get("status") != "passed":
+        blocking.append("batch finish scope check did not pass")
+
+    dirty_after = _git_status_paths(REPO_ROOT)
+    before_paths = {row["path"] for row in dirty_before}
+    new_paths = sorted({row["path"] for row in dirty_after} - before_paths)
+    allowed_prefixes = (
+        f"{WORKFLOW_ROOT.as_posix()}/batch-smoke",
+        f"{WORKFLOW_ROOT.as_posix()}/{batch_id}",
+    )
+    unexpected = [
+        path
+        for path in new_paths
+        if not any(path == prefix or path.startswith(prefix + "/") for prefix in allowed_prefixes)
+    ]
+    if unexpected:
+        blocking.append(f"batch workflow smoke created unexpected git-status paths: {unexpected}")
+    if not dirty_before and not dirty_after:
+        warnings.append("git status stayed clean; tmp/issue_workflow batch smoke artifacts are ignored as expected")
+
+    return {
+        "schema_version": "aistock_batch_workflow_smoke_v1",
+        "generated_at": _utc_now(),
+        "workflow_gate": "passed" if not blocking else "blocked",
+        "blocking": blocking,
+        "warnings": warnings,
+        "dry_run": True,
+        "github_writes": False,
+        "bug_ids": bug_ids,
+        "batch_id": batch_id,
+        "artifacts": {key: _repo_rel(path) for key, path in artifacts.items()},
+        "start": start_payload,
+        "finish": finish_payload,
+        "dirty_paths_before": dirty_before,
+        "dirty_paths_after": dirty_after,
+        "new_dirty_paths": new_paths,
+        "unexpected_dirty_paths": unexpected,
+        "production_gates": _production_gates_payload(),
+        "next_command": "python scripts/aistock_issue_workflow.py start-batch --bug-id BUG-XXX --bug-id BUG-YYY --create-worktree",
+    }
+
+
+def _path_under_repo_tmp_validation(path: Path) -> bool:
+    try:
+        rel = path.resolve().relative_to(REPO_ROOT.resolve()).as_posix()
+    except ValueError:
+        return False
+    return rel.startswith("tmp/validation/")
+
+
+def build_nightly_intake_smoke_plan() -> dict[str, Any]:
+    """Dry-run Nightly failure intake artifacts without GitHub or tracked writes."""
+    smoke_root = REPO_ROOT / "tmp" / "validation" / "nightly_failure_issue" / "smoke"
+    status_path = smoke_root / "status.json"
+    summary_path = smoke_root / "summary.json"
+    markdown_path = smoke_root / "body.md"
+    context_path = smoke_root / "context-pack.json"
+    context_md_path = smoke_root / "context-pack.md"
+    issue_payload_path = smoke_root / "github-issue-payload.json"
+    artifacts = {
+        "status": status_path,
+        "summary": summary_path,
+        "markdown": markdown_path,
+        "context": context_path,
+        "context_markdown": context_md_path,
+        "github_issue_payload": issue_payload_path,
+    }
+    blocking: list[str] = []
+    warnings: list[str] = []
+    dirty_before = _git_status_paths(REPO_ROOT)
+    stdout_payload: dict[str, Any] = {}
+    try:
+        _write_json(status_path, _smoke_nightly_status_payload())
+        stdout_buffer = io.StringIO()
+        with contextlib.redirect_stdout(stdout_buffer):
+            exit_code = ci_failure_summary.main(
+                [
+                    "--nightly-status-json",
+                    str(status_path),
+                    "--run-id",
+                    "999999999",
+                    "--run-url",
+                    "https://github.com/licong01-cloud/AIstock/actions/runs/999999999",
+                    "--source-name",
+                    "AIstock Nightly",
+                    "--output",
+                    str(summary_path),
+                    "--markdown-output",
+                    str(markdown_path),
+                    "--context-output",
+                    str(context_path),
+                    "--context-markdown-output",
+                    str(context_md_path),
+                    "--github-issue-payload-output",
+                    str(issue_payload_path),
+                    "--stdout-format",
+                    "compact",
+                ]
+            )
+        if exit_code != 0:
+            blocking.append(f"Nightly intake summary command exited with {exit_code}")
+        stdout_payload = json.loads(stdout_buffer.getvalue() or "{}")
+    except Exception as exc:
+        blocking.append(str(exc))
+
+    for label, path in artifacts.items():
+        if not path.exists():
+            blocking.append(f"missing Nightly intake artifact: {label}={_repo_rel(path)}")
+        if not _path_under_repo_tmp_validation(path):
+            blocking.append(f"Nightly intake artifact is outside tmp/validation: {label}={path}")
+
+    candidate_history = stdout_payload.get("artifacts", {}).get("candidate_history") if isinstance(stdout_payload, dict) else None
+    candidate_history_path = Path(candidate_history) if candidate_history else None
+    if not candidate_history_path:
+        blocking.append("Nightly intake smoke did not persist compact candidate history")
+    elif "tests/aistock_validation/history" in candidate_history_path.as_posix():
+        blocking.append(f"candidate history used tracked history path: {candidate_history_path}")
+    elif not _path_under_repo_tmp_validation(candidate_history_path):
+        blocking.append(f"candidate history is outside tmp/validation: {candidate_history_path}")
+
+    context_pack = _load_json(context_path) if context_path.exists() else {}
+    issue_payload = _load_json(issue_payload_path) if issue_payload_path.exists() else {}
+    handoff = context_pack.get("agent_handoff") if isinstance(context_pack.get("agent_handoff"), dict) else {}
+    entrypoints = handoff.get("workflow_entrypoints") if isinstance(handoff.get("workflow_entrypoints"), dict) else {}
+    body = str(issue_payload.get("body") or "")
+    if "triage-ci-issue --issue <issue-number>" not in body:
+        blocking.append("GitHub Issue payload is missing triage-ci-issue handoff")
+    if "promote-ci-issue --issue <issue-number> --create-registry-worktree --apply" not in body:
+        blocking.append("GitHub Issue payload is missing promote-ci-issue registry worktree handoff")
+    if "triage-ci-issue" not in str(entrypoints.get("triage") or ""):
+        blocking.append("Context Pack is missing triage workflow entrypoint")
+    if "promote-ci-issue" not in str(entrypoints.get("promote") or ""):
+        blocking.append("Context Pack is missing promote workflow entrypoint")
+
+    dirty_after = _git_status_paths(REPO_ROOT)
+    before_paths = {row["path"] for row in dirty_before}
+    new_paths = sorted({row["path"] for row in dirty_after} - before_paths)
+    allowed_prefix = "tmp/validation/nightly_failure_issue/smoke"
+    unexpected = [
+        path for path in new_paths if not (path == allowed_prefix or path.startswith(allowed_prefix + "/"))
+    ]
+    if unexpected:
+        blocking.append(f"Nightly intake smoke created unexpected git-status paths: {unexpected}")
+    if not dirty_before and not dirty_after:
+        warnings.append("git status stayed clean; tmp/validation artifacts are ignored as expected")
+
+    return {
+        "schema_version": "aistock_nightly_intake_smoke_v1",
+        "generated_at": _utc_now(),
+        "workflow_gate": "passed" if not blocking else "blocked",
+        "blocking": blocking,
+        "warnings": warnings,
+        "dry_run": True,
+        "github_writes": False,
+        "production_gates": _production_gates_payload(),
+        "artifacts": {key: _repo_rel(path) for key, path in artifacts.items()},
+        "candidate_history_path": _repo_rel(candidate_history_path) if candidate_history_path else None,
+        "issue_title": issue_payload.get("title"),
+        "nightly_failed_stages": stdout_payload.get("nightly_failed_stages") if isinstance(stdout_payload, dict) else [],
+        "handoff_entrypoints": entrypoints,
+        "dirty_paths_before": dirty_before,
+        "dirty_paths_after": dirty_after,
+        "new_dirty_paths": new_paths,
+        "unexpected_dirty_paths": unexpected,
+        "next_command": "python scripts/aistock_issue_workflow.py triage-ci-issue --issue <created-nightly-issue-number>",
+    }
+
+
 def build_start_plan(
     *,
     bug_id: str | None,
@@ -3487,12 +4040,14 @@ def build_start_batch_plan(
     task_slug: str | None,
     allow_missing_linkage: bool,
     allow_closed: bool,
+    record_pairs: list[tuple[dict[str, Any], Path]] | None = None,
 ) -> dict[str, Any]:
-    record_pairs = _records_for_bug_ids(
-        bug_ids,
-        allow_missing_linkage=allow_missing_linkage,
-        allow_closed=allow_closed,
-    )
+    if record_pairs is None:
+        record_pairs = _records_for_bug_ids(
+            bug_ids,
+            allow_missing_linkage=allow_missing_linkage,
+            allow_closed=allow_closed,
+        )
     records = [record for record, _ in record_pairs]
     signature = _batch_signature(records)
     batch_plan = flow.build_batch_plan(records)
@@ -3698,14 +4253,16 @@ def build_finish_batch_plan(
     issue_commit: list[str] | None,
     plan_only: bool,
     allow_missing_evidence: bool,
+    record_pairs: list[tuple[dict[str, Any], Path]] | None = None,
 ) -> dict[str, Any]:
-    if not batch_id and not bug_ids:
+    if not batch_id and not bug_ids and record_pairs is None:
         raise WorkflowError("finish-batch requires --batch-id or at least two --bug-id values")
     if batch_id:
         state = _load_batch_state(batch_id)
         if state and not bug_ids:
             bug_ids = [str(item) for item in state.get("bug_ids") or []]
-    record_pairs = _records_for_bug_ids(bug_ids, allow_missing_linkage=False, allow_closed=True)
+    if record_pairs is None:
+        record_pairs = _records_for_bug_ids(bug_ids, allow_missing_linkage=False, allow_closed=True)
     records = [record for record, _ in record_pairs]
     signature = _batch_signature(records)
     if batch_id and batch_id != signature["batch_id"]:
@@ -3933,6 +4490,12 @@ def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
         if not github["repo"].get("ok"):
             warnings.append("GitHub repo check failed for licong01-cloud/AIstock")
 
+    bug_id_allocation = _bug_id_allocation_summary(
+        _bug_id_allocation_report(REPO_ROOT, include_github=not skip_external, github_required=False)
+    )
+    for warning in bug_id_allocation.get("warnings") or []:
+        warnings.append(f"bug id allocation: {warning}")
+
     mcp = _mcp_config_snapshot()
     if mcp["stale_worktree_config_files"]:
         warnings.append("MCP/Codex config mentions AIstock_worktrees; verify it is not a stale server target")
@@ -3965,6 +4528,7 @@ def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
         "canonical_root": str(canonical_root),
         "canonical_git": canonical_git,
         "github": github,
+        "bug_id_allocation": bug_id_allocation,
         "mcp": mcp,
         "code_intelligence": code_intel,
         "h7_code_intelligence": h7_code_intelligence,
@@ -4196,7 +4760,9 @@ def build_postmortem_plan(*, bug_id: str, worktree: str | None = None, output_ma
 
 
 def _classify_ci_issue(summary: dict[str, Any], issue: dict[str, Any]) -> str:
-    title_body = f"{issue.get('title') or ''}\n{issue.get('body') or ''}".lower()
+    title = str(issue.get("title") or "").lower()
+    evidence_body = _issue_body_failure_text(str(issue.get("body") or "")).lower()
+    title_body = f"{title}\n{evidence_body}"
     errors = "\n".join(
         str(item)
         for job in summary.get("failed_jobs") or []
@@ -4261,7 +4827,28 @@ def build_triage_ci_issue_plan(
                 "extraction_errors": extraction_errors,
             }
         )
+    summary = _merge_issue_body_regression_locator(summary, body)
     classification = _classify_ci_issue(summary, issue)
+    superseding_run = _find_superseding_main_success(summary)
+    superseded_action = None
+    if superseding_run and linked is None:
+        classification = "superseded_by_later_main_success"
+        close_command = (
+            f"gh issue close {issue.get('number')} --repo {GITHUB_REPO} --comment "
+            f"\"Superseded by later successful main {summary.get('workflow') or 'CI'} run: {superseding_run.get('run_url')}. "
+            "No BUG JSON promotion is required.\""
+        )
+        superseded_action = {
+            "workflow_gate": "superseded_by_latest_main_success",
+            "reason": "A later successful default-branch run of the same workflow supersedes this CI failure.",
+            "superseding_run": superseding_run,
+            "next_command": close_command,
+            "production_gates": {
+                "production_ddl_gate": "noop",
+                "production_frontend_dependency_gate": "noop",
+                "production_backend_dependency_gate": "noop",
+            },
+        }
     module = (summary.get("suspected_modules") or ["validation"])[0]
     first_job = (summary.get("failed_jobs") or [{}])[0]
     failed_test = ((first_job.get("failed_tests") or [None])[0] or "").split("::")[-1]
@@ -4280,6 +4867,24 @@ def build_triage_ci_issue_plan(
         github_issue_number=issue.get("number"),
         github_issue_url=github_issue_url,
     )
+    if superseded_action:
+        failure_event["candidate_status"] = "superseded_by_later_main_success"
+        failure_event["superseded_action"] = superseded_action
+        context_pack["failure_event"] = failure_event
+        context_pack["superseded_action"] = superseded_action
+        context_pack["required_verification"] = [
+            "Verify the superseding default-branch run for the same workflow is successful.",
+            "Close the auto-filed GitHub Issue with the superseding run URL; do not promote BUG JSON.",
+        ]
+        handoff = context_pack.get("agent_handoff") if isinstance(context_pack.get("agent_handoff"), dict) else {}
+        handoff["workflow_entrypoints"] = {
+            "triage": f"python scripts/aistock_issue_workflow.py triage-ci-issue --issue {issue.get('number')}",
+            "close_superseded_issue": superseded_action["next_command"],
+        }
+        handoff["next_commands"] = [superseded_action["next_command"]]
+        handoff["required_verification"] = context_pack["required_verification"]
+        handoff["stop_conditions"] = ["Do not promote BUG JSON for this superseded CI failure."]
+        context_pack["agent_handoff"] = handoff
     failure_event_path = output_dir / "failure-event.json"
     context_pack_json_path = output_dir / "context-pack.json"
     context_pack_md_path = output_dir / "context-pack.md"
@@ -4301,7 +4906,8 @@ def build_triage_ci_issue_plan(
         "context_pack_md_path": _repo_rel(context_pack_md_path),
         "classification_recommendation": classification,
         "linked_bug": {"bug_id": linked[0].get("bug_id"), "path": _repo_rel(linked[1])} if linked else None,
-        "needs_bug_json": linked is None and classification not in {"infra_flaky", "infra_blocker"},
+        "needs_bug_json": linked is None
+        and classification not in {"infra_flaky", "infra_blocker", "superseded_by_later_main_success"},
         "suggested_bug": {
             "module": module,
             "severity": summary.get("severity") or "P1",
@@ -4329,14 +4935,19 @@ def build_triage_ci_issue_plan(
             if classification in {"infra_flaky", "infra_blocker"}
             else None
         ),
+        "superseded_action": superseded_action,
         "next_command": (
             "infra_action_required_no_code_bug"
             if classification in {"infra_flaky", "infra_blocker"} and linked is None
             else (
-                f"python scripts/aistock_issue_workflow.py promote-ci-issue --issue {issue.get('number')} "
-                "--create-registry-worktree --apply"
-                if linked is None
-                else f"python scripts/aistock_issue_workflow.py run --bug-id {linked[0].get('bug_id')} --mode plan --create-worktree"
+                superseded_action["next_command"]
+                if classification == "superseded_by_later_main_success" and linked is None and superseded_action
+                else (
+                    f"python scripts/aistock_issue_workflow.py promote-ci-issue --issue {issue.get('number')} "
+                    "--create-registry-worktree --apply"
+                    if linked is None
+                    else f"python scripts/aistock_issue_workflow.py run --bug-id {linked[0].get('bug_id')} --mode plan --create-worktree"
+                )
             )
         ),
     }
@@ -4379,6 +4990,17 @@ def build_promote_ci_issue_plan(
             "triage": triage,
             "infra_action": triage.get("infra_action"),
             "next_command": "resolve_infrastructure_then_rerun_triage_ci_issue",
+        }
+    if triage.get("classification_recommendation") == "superseded_by_later_main_success":
+        action = triage.get("superseded_action") if isinstance(triage.get("superseded_action"), dict) else {}
+        return {
+            "schema_version": "aistock_issue_workflow_promote_ci_issue_v1",
+            "generated_at": _utc_now(),
+            "workflow_gate": "blocked_superseded_issue_not_code_bug",
+            "dry_run": not apply,
+            "triage": triage,
+            "superseded_action": action,
+            "next_command": action.get("next_command") or "close_ci_issue_as_superseded_after_review",
         }
     if apply and not create_registry_worktree:
         return {
@@ -6743,6 +7365,18 @@ def cmd_workflow_smoke(args: argparse.Namespace) -> int:
     return 0 if payload.get("workflow_gate") == "passed" else 2
 
 
+def cmd_nightly_intake_smoke(args: argparse.Namespace) -> int:
+    payload = build_nightly_intake_smoke_plan()
+    _emit_args(payload, args)
+    return 0 if payload.get("workflow_gate") == "passed" else 2
+
+
+def cmd_batch_workflow_smoke(args: argparse.Namespace) -> int:
+    payload = build_batch_workflow_smoke_plan()
+    _emit_args(payload, args)
+    return 0 if payload.get("workflow_gate") == "passed" else 2
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     payload = build_doctor_report(skip_external=args.skip_external)
     _emit_args(payload, args)
@@ -7141,6 +7775,20 @@ def build_parser() -> argparse.ArgumentParser:
     workflow_smoke.add_argument("--module")
     add_output_options(workflow_smoke)
     workflow_smoke.set_defaults(func=cmd_workflow_smoke)
+
+    nightly_smoke = sub.add_parser(
+        "nightly-intake-smoke",
+        help="Dry-run Nightly failure issue context generation without GitHub, DB, runtime, or tracked root writes.",
+    )
+    add_output_options(nightly_smoke)
+    nightly_smoke.set_defaults(func=cmd_nightly_intake_smoke)
+
+    batch_smoke = sub.add_parser(
+        "batch-workflow-smoke",
+        help="Dry-run same-module batch start/finish without GitHub, DB, runtime, or tracked root writes.",
+    )
+    add_output_options(batch_smoke)
+    batch_smoke.set_defaults(func=cmd_batch_workflow_smoke)
 
     close = sub.add_parser("close-sync", help="Prepare a dry-run close/sync plan after PR merge.")
     close.add_argument("--bug-id")

@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import PaperTable from "@/components/paper-v2/PaperTable";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
+import { AgentTeamsRunView } from "@/components/research-assistant/AgentTeamsRunView";
 import { ApiErrorBox, DetailDrawer, EmptyState, asObject, display, formatDateTime } from "@/components/research-assistant/AssistantShared";
 import {
   LOCAL_DATA_MANAGEMENT_CAPABILITY,
@@ -17,9 +18,11 @@ import {
   researchAssistantApi,
   type AssistantActionProposal,
   type AssistantActionProposalResult,
+  type AssistantAgentRun,
   type AssistantCapability,
   type AssistantMcpTool,
   type AssistantTask,
+  type AssistantTraceEvent,
   type JsonObject,
 } from "@/lib/research-assistant/api";
 import uiCopy from "@/lib/research-assistant/ui-copy";
@@ -147,6 +150,8 @@ export default function ResearchAssistantWorkbenchPage() {
   const [actions, setActions] = useState<AssistantActionProposal[]>([]);
   const [tools, setTools] = useState<AssistantMcpTool[]>([]);
   const [tasks, setTasks] = useState<AssistantTask[]>([]);
+  const [agentRuns, setAgentRuns] = useState<AssistantAgentRun[]>([]);
+  const [traceEvents, setTraceEvents] = useState<AssistantTraceEvent[]>([]);
   const [selectedCapabilityKey, setSelectedCapabilityKey] = useState("qe.create_experiment_draft");
   const [selectedActionId, setSelectedActionId] = useState("");
   const [selectedTool, setSelectedTool] = useState<AssistantMcpTool | null>(null);
@@ -197,16 +202,20 @@ export default function ResearchAssistantWorkbenchPage() {
     setLoading(true);
     setError(null);
     try {
-      const [capPage, actionPage, toolPage, taskPage] = await Promise.all([
+      const [capPage, actionPage, toolPage, taskPage, runsPage, tracesPage] = await Promise.all([
         researchAssistantApi.capabilities({ status: "approved", limit: 200 }),
         researchAssistantApi.actionProposals({ limit: 100 }),
         researchAssistantApi.mcpTools({ limit: 200 }),
         researchAssistantApi.tasks({ limit: 100 }),
+        researchAssistantApi.agentRuns({ limit: 100 }),
+        researchAssistantApi.traceEvents({ limit: 100 }),
       ]);
       setCapabilities(capPage.items);
       setActions(actionPage.items);
       setTools(toolPage.items);
       setTasks(taskPage.items);
+      setAgentRuns(runsPage.items);
+      setTraceEvents(tracesPage.items);
       setSelectedCapabilityKey((current) => capPage.items.some((item) => item.capability_key === current) ? current : capPage.items[0]?.capability_key || "");
       setSelectedActionId((current) => current || actionPage.items[0]?.action_proposal_id || "");
       setSelectedTool((current) => current || toolPage.items[0] || null);
@@ -323,6 +332,7 @@ export default function ResearchAssistantWorkbenchPage() {
   return (
     <main>
       <ApiErrorBox error={error} />
+      <AgentTeamsRunView runs={agentRuns} traceEvents={traceEvents} />
       <SectionCard title="本地数据 MCP 工作台" eyebrow="local_data_management / check-plan-confirm">
         <div className="pv2-readable-panel" data-testid="ra-local-data-workbench-card">
           <div className="pv2-readable-table">

@@ -1,0 +1,70 @@
+{
+  "actual": "Local allocator does not account for GitHub-only BUG IDs before allocating the next BUG number.",
+  "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260602_BUG-218-issue-workflow-allocator-ignores-github-only-bug-ids.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-218",
+  "closed_at": null,
+  "closure_requirements": [
+    "Allocator considers GitHub-only BUG IDs before assigning the next BUG ID.",
+    "Simulated GitHub BUG-217 with local allocator=216 allocates BUG-218 or higher.",
+    "GitHub fallback unavailable still uses local allocator safely.",
+    "BUG JSON and GitHub Issue are synchronized."
+  ],
+  "created_at": "2026-06-02T13:36:45.962616Z",
+  "description": "The local BUG allocator is at 216 while GitHub already contains BUG-217. A new submit-bug flow can therefore allocate a duplicate BUG-217 instead of BUG-218.",
+  "events": [
+    {
+      "action": "register_workflow_bug",
+      "actor": "codex",
+      "note": "Manual safe registration because submit-bug allocator would otherwise risk BUG-217 duplication.",
+      "timestamp": "2026-06-02T13:36:45.962616Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "BUG allocation uses max(local allocator, local BUG JSON IDs, GitHub BUG IDs) and allocates the next unused ID.",
+  "first_seen_at": "2026-06-02T13:36:45.962616Z",
+  "fix_branch": null,
+  "fix_commit": "7804421cdb4d410dc108784146eeb07465657d61",
+  "fixed_at": "2026-06-02T14:09:29.490758Z",
+  "github_issue_number": 592,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/592",
+  "last_seen_at": "2026-06-02T13:36:45.962616Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not touch production runtime services, production DB, DDL, or dependencies."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/593",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "gh issue list --repo licong01-cloud/AIstock --search \"BUG-217\" && Get-Content tests/aistock_validation/bugs/.bug_id_allocator.json",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "workflow",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "issue workflow allocator ignores GitHub-only BUG IDs",
+  "trigger_condition": {
+    "fingerprint": "BUG-218-github-id-sync",
+    "source_event_id": "manual-workflow-audit-20260602"
+  },
+  "validation_evidence": [
+    "PR #593 CI -> passed (mergeStateStatus=CLEAN; all checks success)",
+    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -p no:cacheprovider -> passed (107 passed)",
+    "python -m nox -s l0 validation_module_registry_l0 validation_center_backend -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_gate": "open_until_fix_validated"
+}

@@ -256,7 +256,7 @@ modules:
     ui_routes: [/research-assistant, /research-assistant/chat, /research-assistant/workbench, /research-assistant/tasks, /research-assistant/streams, /research-assistant/memory, /research-assistant/graph, /research-assistant/mcp-tools, /research-assistant/skills, /research-assistant/approvals, /research-assistant/reports, /research-assistant/models, /research-assistant/settings, /research-assistant/external-agents, /research-assistant/trace, /research-assistant/notifications, /research-assistant/issue-candidates]
     api_routes: [/api/v1/research-assistant/*]
     test_plans:
-      required_on_change: [l0, research_assistant_backend, research_assistant_mcp_contract]
+      required_on_change: [l0, research_assistant_backend, research_assistant_mcp_contract, ra_phase7_full_accept]
       recommended: [research_assistant_ui]
   - module_id: research_assistant.memory_tree
     display_name: Research Assistant Memory Tree
@@ -311,7 +311,7 @@ modules:
     description: Evidence-first answer contract, placeholder blocking, source_refs checks, and factual downgrade rules.
     description_zh: 覆盖证据优先回答契约、占位符阻断、来源检查与事实降级规则。
     test_plans:
-      required_on_change: [l0, ra_phase0_baseline, research_assistant_backend]
+      required_on_change: [l0, ra_phase0_baseline, research_assistant_backend, ra_phase7_full_accept]
       recommended: [research_assistant_mcp_contract]
   - module_id: research_assistant.external_research
     display_name: Research Assistant External Research MCP
@@ -333,7 +333,7 @@ modules:
     description: Orchestrator-worker team runtime, agent runs, parallel task delegation, and worker audit trail.
     description_zh: 覆盖主从编排、并行任务、agent run 账本与 worker 审计轨迹。
     test_plans:
-      required_on_change: [l0, ra_phase0_baseline, research_assistant_backend]
+      required_on_change: [l0, ra_phase0_baseline, ra_phase5_agent_teams, research_assistant_backend, ra_phase7_full_accept]
       recommended: [research_assistant_mcp_contract]
   - module_id: research_assistant.qe_autonomy
     display_name: Research Assistant QE Autonomy
@@ -344,7 +344,7 @@ modules:
     description: QE autonomous loop design, evaluator callbacks, stop conditions, budget guards, and submission boundary.
     description_zh: 覆盖 QE 自主 loop、评估回调、停止条件、预算守护与提交边界。
     test_plans:
-      required_on_change: [l0, ra_phase0_baseline, ra_phase6_qe_autonomy, research_assistant_backend]
+      required_on_change: [l0, ra_phase0_baseline, ra_phase6_qe_autonomy, research_assistant_backend, ra_phase7_full_accept]
       recommended: [research_assistant_mcp_contract]
   - module_id: research_assistant.code_intelligence
     display_name: Research Assistant Code Intelligence

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
 from backend.services.quantevolver.qe_evolution_agents import EvolutionAgents
@@ -64,7 +63,7 @@ class QeAutonomyAdapter:
             metrics=dict(raw.get("metrics") or {}),
             source_refs=tuple(str(ref) for ref in raw.get("source_refs") or [f"qe_task:{state.qe_task_id}:loop:{loop_index}"]),
             artifact_refs=tuple(str(ref) for ref in raw.get("artifact_refs") or []),
-            as_of=str(raw.get("as_of")) if raw.get("as_of") else datetime.now(timezone.utc).date().isoformat(),
+            as_of=str(raw["as_of"]) if raw.get("as_of") else None,
             gpu_occupancy_pct=float(raw["gpu_occupancy_pct"]) if raw.get("gpu_occupancy_pct") is not None else None,
             data_gap=bool(raw.get("data_gap", False)),
             failure=bool(raw.get("failure", False)),

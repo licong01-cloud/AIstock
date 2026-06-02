@@ -15,6 +15,8 @@ import {
 import Link from "next/link";
 import { useCallback, useMemo, useState } from "react";
 
+import { BlockerCard } from "@/components/research-assistant/BlockerCard";
+import { EvidenceCard, evidenceCompleteness, normalizeEvidenceRef } from "@/components/research-assistant/EvidenceCard";
 import {
   LOCAL_DATA_MANAGEMENT_CAPABILITY,
   LOCAL_DATA_MANAGEMENT_PHASES,
@@ -23,6 +25,8 @@ import {
   researchAssistantApi,
   type AssistantCatalogReadiness,
   type AssistantChatTurnResult,
+  type AssistantBlockerCard,
+  type AssistantEvidenceCard,
   type JsonObject,
   type LocalDataPhase,
   type LocalDataPhaseKey,
@@ -70,6 +74,10 @@ type RuntimeCodeVisibility = {
 
 type ChatCards = {
   dialogue_mode?: string;
+  summary?: string;
+  orchestrator_summary?: string;
+  evidence_cards?: JsonObject[];
+  blocker_cards?: JsonObject[];
   mode_decision?: Record<string, unknown>;
   plan_card?: PlanCard;
   clarification_card?: ClarificationCard;
@@ -198,6 +206,85 @@ function stringList(value: unknown): string[] {
   return value
     .map((item) => textValue(item))
     .filter((item) => item && item !== "-");
+}
+
+function extractEvidenceCards(cards: JsonObject, contextPack?: JsonObject): AssistantEvidenceCard[] {
+  const direct = [
+    ...recordList(cards.evidence_cards),
+    ...recordList(cards.stock_evidence_cards),
+    ...recordList(cards.evidence_card ? [cards.evidence_card] : []),
+  ];
+  const normalized = direct.map((item, index) => {
+    const refs = Array.isArray(item.evidence_refs) ? item.evidence_refs.map(normalizeEvidenceRef) : [];
+    const card: AssistantEvidenceCard = {
+      ...item,
+      card_id: String(item.card_id || `chat-evidence-${index + 1}`),
+      title: String(item.title || item.card_id || `Evidence ${index + 1}`),
+      summary: String(item.summary || item.description || ""),
+      evidence_refs: refs,
+      status: String(item.status || "supported"),
+    };
+    const completeness = evidenceCompleteness(card);
+    return { ...card, status: completeness.ok && card.status === "supported" ? "supported" : card.status === "blocked" ? "blocked" : "insufficient" };
+  });
+  if (normalized.length) return normalized;
+
+  const contextRefs = Array.isArray(contextPack?.evidence_refs) ? contextPack.evidence_refs.map(normalizeEvidenceRef) : [];
+  if (!contextRefs.length) return [];
+  const card: AssistantEvidenceCard = {
+    card_id: "context-pack-evidence",
+    title: "Context Pack evidence",
+    summary: "Evidence returned by the context pack. Missing source/provenance/as_of remains insufficient.",
+    evidence_refs: contextRefs,
+    status: "supported",
+  };
+  const completeness = evidenceCompleteness(card);
+  return [{ ...card, status: completeness.ok ? "supported" : "insufficient" }];
+}
+
+function extractBlockerCards(cards: JsonObject): AssistantBlockerCard[] {
+  const explicit = [
+    ...recordList(cards.blocker_cards),
+    ...recordList(cards.blockers),
+    ...recordList(cards.blocker_card ? [cards.blocker_card] : []),
+  ];
+  const blockers = explicit.flatMap((item, index) => {
+    const status = String(item.status || "");
+    const reason = String(item.reason || item.blocked_reason || "");
+    const nextStep = String(item.next_step || item.operator_action || "");
+    if (!status || !reason || !nextStep) return [];
+    return [{
+      ...item,
+      blocker_id: String(item.blocker_id || `chat-blocker-${index + 1}`),
+      status,
+      reason,
+      next_step: nextStep,
+      provenance: asRecord(item.provenance) || undefined,
+      as_of: typeof item.as_of === "string" ? item.as_of : undefined,
+    } as AssistantBlockerCard];
+  });
+  const proposalBlockers = recordList(cards.action_proposals).flatMap((proposal, index) => {
+    if (!proposal.approval_required && proposal.status !== "approval_required") return [];
+    return [{
+      blocker_id: String(proposal.action_proposal_id || `proposal-blocker-${index + 1}`),
+      status: "approval_required",
+      reason: String(proposal.title || "High risk action requires approval"),
+      next_step: "Review the Workbench preflight and provide explicit confirmation before execution.",
+      provenance: { source: "action_proposals" },
+      as_of: typeof proposal.as_of === "string" ? proposal.as_of : undefined,
+    } as AssistantBlockerCard];
+  });
+  return [...blockers, ...proposalBlockers];
+}
+
+function assistantSummaryText(result: AssistantChatTurnResult): string {
+  const cards = asCards(result.cards || result.assistant_message?.content_json?.cards);
+  const contentJson = asRecord(result.assistant_message?.content_json) || {};
+  const summary = String(cards.orchestrator_summary || cards.summary || contentJson.summary || result.assistant_message?.content_text || "").trim();
+  if (!summary || summary.startsWith("{") || summary.includes("worker_results") || summary.includes("payload_json")) {
+    return "The orchestrator summary is unavailable or unsafe for the main bubble. Open Workbench or Trace for worker process details.";
+  }
+  return summary;
 }
 
 function hasMcpExecutionCards(cards: ChatCards): boolean {
@@ -359,7 +446,7 @@ function createAdapter(
       onTurn(result);
       const cards = asCards(result.cards || result.assistant_message?.content_json?.cards);
       if (cards.status_rail?.length) onStage(cards.status_rail);
-      const reply = stripAssistantToolChoiceMarkup(result.assistant_message?.content_text || chatCopy.fallbackReply, routeDecision(cards));
+      const reply = stripAssistantToolChoiceMarkup(assistantSummaryText(result) || chatCopy.fallbackReply, routeDecision(cards));
       return { content: [{ type: "text", text: reply }] };
     },
   };
@@ -519,6 +606,27 @@ function RuntimeCodePanel({ latest }: { latest: AssistantChatTurnResult | null }
     <section className="ra-chat-card" data-testid="ra-runtime-code-panel">
       <span className="ra-chat-eyebrow">Runtime</span>
       <RuntimeCodeCard cards={cards} />
+    </section>
+  );
+}
+
+function Phase7EvidencePanel({ latest }: { latest: AssistantChatTurnResult | null }) {
+  if (!latest) return null;
+  const cards = asCards(latest.cards || latest.assistant_message?.content_json?.cards);
+  const contextPack = asRecord(latest.context_pack);
+  const evidenceCards = extractEvidenceCards(cards as JsonObject, contextPack || undefined);
+  const blockerCards = extractBlockerCards(cards as JsonObject);
+  if (!evidenceCards.length && !blockerCards.length) return null;
+  return (
+    <section className="ra-chat-card ra-phase7-panel" data-testid="ra-phase7-evidence-panel">
+      <span className="ra-chat-eyebrow">Phase 7 Evidence / Blockers</span>
+      <h2>Evidence cards and gated blockers</h2>
+      <p>Evidence must carry source, provenance, and as_of. Missing fields remain insufficient instead of receiving a generated date.</p>
+      <div className="ra-phase7-card-grid">
+        {evidenceCards.map((card) => <EvidenceCard card={card} key={card.card_id} />)}
+        {blockerCards.map((card) => <BlockerCard card={card} key={card.blocker_id} />)}
+      </div>
+      {latest.task?.task_id ? <Link className="ra-chat-admin-link" href={`/research-assistant/workbench?task_id=${encodeURIComponent(latest.task.task_id)}`}>Open Workbench process</Link> : null}
     </section>
   );
 }
@@ -718,6 +826,7 @@ export default function ResearchAssistantChatPage() {
         />
       ) : (
         <>
+          <Phase7EvidencePanel latest={latest} />
           <RuntimeCodePanel latest={latest} />
           <PlanSummary latest={latest} />
         </>

@@ -5,20 +5,23 @@ import { useCallback, useEffect, useState } from "react";
 import PaperTable from "@/components/paper-v2/PaperTable";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
+import { AgentTeamsRunView } from "@/components/research-assistant/AgentTeamsRunView";
 import { ApiErrorBox, DetailDrawer, EmptyState, formatDateTime } from "@/components/research-assistant/AssistantShared";
-import { researchAssistantApi, type AssistantOverview, type AssistantTraceEvent } from "@/lib/research-assistant/api";
+import { researchAssistantApi, type AssistantAgentRun, type AssistantOverview, type AssistantTraceEvent } from "@/lib/research-assistant/api";
 
 export default function ResearchAssistantTracePage() {
   const [overview, setOverview] = useState<AssistantOverview | null>(null);
   const [events, setEvents] = useState<AssistantTraceEvent[]>([]);
+  const [agentRuns, setAgentRuns] = useState<AssistantAgentRun[]>([]);
   const [error, setError] = useState<unknown>(null);
 
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [nextOverview, eventPage] = await Promise.all([researchAssistantApi.overview(), researchAssistantApi.traceEvents({ limit: 100 })]);
+      const [nextOverview, eventPage, runsPage] = await Promise.all([researchAssistantApi.overview(), researchAssistantApi.traceEvents({ limit: 100 }), researchAssistantApi.agentRuns({ limit: 100 })]);
       setOverview(nextOverview);
       setEvents(eventPage.items);
+      setAgentRuns(runsPage.items);
     } catch (exc) {
       setError(exc);
     }
@@ -31,6 +34,7 @@ export default function ResearchAssistantTracePage() {
   return (
     <main>
       <ApiErrorBox error={error} />
+      <AgentTeamsRunView runs={agentRuns} traceEvents={events} />
       <SectionCard title="Trace 与成本" eyebrow="assistant_trace_events">
         <div className="pv2-chip-row">
           {Object.entries(overview?.trace_status || {}).map(([status, count]) => <span className="pv2-chip" key={status}><StatusBadge status={status} /> {count}</span>)}

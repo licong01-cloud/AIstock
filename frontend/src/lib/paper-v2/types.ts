@@ -180,11 +180,16 @@ export type SelectionCandidate = {
   selection_entry_price?: number | null;
   selection_entry_price_source?: string | null;
   selection_entry_price_time?: string | null;
+  signal_ref_price?: number | null;
   previous_close?: number | null;
   volume?: number | null;
   current_price?: number | null;
   current_price_source?: string | null;
   current_price_time?: string | null;
+  suggested_entry_price_band?: JsonObject | null;
+  suggested_stop_loss_zone?: JsonObject | null;
+  guidance_status?: string | null;
+  price_guard_policy_sha256?: string | null;
   component_scores?: JsonObject;
   reason?: string | null;
   context?: JsonObject;

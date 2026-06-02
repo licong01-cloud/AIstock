@@ -1,0 +1,69 @@
+{
+  "actual": "Agents must infer batch safety from separate unit tests and manual commands; there is no one-command no-root-pollution smoke equivalent to workflow-smoke and nightly-intake-smoke for batch workflow.",
+  "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "docs/standards/aistock_issue_workflow_quickstart.md",
+    "tests/aistock_validation/bugs/20260602_BUG-213-batch-workflow-lacks-no-root-pollution-end-to-end-smoke-gate.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-213",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-02T10:10:56.353771Z",
+  "description": "Agents must infer batch safety from separate unit tests and manual commands; there is no one-command no-root-pollution smoke equivalent to workflow-smoke and nightly-intake-smoke for batch workflow.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260602-fea798e97df6",
+      "timestamp": "2026-06-02T10:10:56.353767Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "A repo workflow smoke validates same-module batch start/finish behavior with synthetic ignored BUG records, per-issue context/closure metadata, compact output, and unexpected_dirty_paths=[] without GitHub writes, production runtime access, DB writes, or tracked root file mutations.",
+  "first_seen_at": "2026-06-02T10:10:56.353771Z",
+  "fix_branch": null,
+  "fix_commit": "674f33c4a12bf9ce7cccb80116d9f686afc42896",
+  "fixed_at": "2026-06-02T10:54:38.032362Z",
+  "github_issue_number": 572,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/572",
+  "last_seen_at": "2026-06-02T10:10:56.353771Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/573",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/aistock_issue_workflow.py start-batch --bug-id BUG-A --bug-id BUG-B --dry-run && python scripts/aistock_issue_workflow.py finish-batch --batch-id <batch> --plan-only",
+  "required_verification": [
+    "l0",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Batch workflow lacks no-root-pollution end-to-end smoke gate",
+  "trigger_condition": {
+    "fingerprint": "fea798e97df6daddeff88311",
+    "source_event_id": "FE-20260602-fea798e97df6"
+  },
+  "validation_evidence": [
+    "PR #573 CI -> checks_passed",
+    "python scripts/aistock_issue_workflow.py batch-workflow-smoke -> workflow_gate=passed, unexpected_dirty_paths=[]",
+    "python -m nox -s l0 validation_module_registry_l0 validation_center_backend -> all 3 sessions successful"
+  ],
+  "verification_run_id": null,
+  "workflow_gate": "fix_ready"
+}
