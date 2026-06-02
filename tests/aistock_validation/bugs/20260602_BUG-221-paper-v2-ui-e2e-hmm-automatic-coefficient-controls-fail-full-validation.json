@@ -27,10 +27,10 @@
       "timestamp": "2026-06-02T15:35:49.705971Z"
     },
     {
-      "timestamp": "2026-06-02T16:14:04.603300Z",
-      "actor": "codex_issue_workflow",
       "action": "expand_allowed_write_scope",
-      "note": "Scope expanded after aistock_issue_workflow run --changed-file plan for BUG-221 UI automatic HMM coefficient validation fixes."
+      "actor": "codex_issue_workflow",
+      "note": "Scope expanded after aistock_issue_workflow run --changed-file plan for BUG-221 UI automatic HMM coefficient validation fixes.",
+      "timestamp": "2026-06-02T16:14:04.603300Z"
     }
   ],
   "evidence_uris": [
@@ -39,8 +39,8 @@
   "expected": "python -m nox -s paper_v2_ui -- 8012 3012 passes on dev ports; Selection Center and portfolio UI expose stable automatic HMM coefficient/cache contract and persist model config/preset without manual snapshot gate.",
   "first_seen_at": "2026-06-02T15:35:49.705976Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1b332540076cafa8c53028dfb847a150ad93f141",
+  "fixed_at": "2026-06-02T21:09:06.099126Z",
   "github_issue_number": 600,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/600",
   "last_seen_at": "2026-06-02T15:35:49.705976Z",
@@ -48,6 +48,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/618",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -61,7 +62,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_trading_v2"
   ],
@@ -70,6 +71,9 @@
     "fingerprint": "653c60c76edbe9b520a86411",
     "source_event_id": "FE-20260602-653c60c76edb"
   },
+  "validation_evidence": [
+    "PR #618 checks all green after rerun; paper_v2_l3 final rerun on 8012/3012 -> success; paper_v2_ui 16 passed, 1 skipped; paper_v2_backend 587 passed, 1 skipped, 2 xfailed"
+  ],
   "verification_run_id": null,
   "workflow_gate": "allowed"
 }
