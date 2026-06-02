@@ -31,8 +31,8 @@
   "expected": "A repo workflow smoke can validate Nightly failure context generation, handoff commands, candidate history artifact location, and root cleanliness without GitHub writes, production runtime access, DB writes, or tracked root file mutations.",
   "first_seen_at": "2026-06-02T09:17:35.338128Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "251b80f935eec56a50d44e4179d62ed753b6bd11",
+  "fixed_at": "2026-06-02T09:59:52.444355Z",
   "github_issue_number": 569,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/569",
   "last_seen_at": "2026-06-02T09:17:35.338128Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/570",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -55,7 +56,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -64,5 +65,10 @@
     "fingerprint": "9b344aeff94798fdac251b47",
     "source_event_id": "FE-20260602-9b344aeff947"
   },
+  "validation_evidence": [
+    "python scripts/aistock_issue_workflow.py nightly-intake-smoke -> workflow_gate=passed, unexpected_dirty_paths=[]",
+    "python -m nox -s l0 guardrail_changed_files validation_catalog_integrity validation_module_registry_l0 validation_coverage_backend validation_center_backend -> all 6 sessions successful",
+    "PR #570 CI -> 16 checks successful"
+  ],
   "verification_run_id": null
 }
