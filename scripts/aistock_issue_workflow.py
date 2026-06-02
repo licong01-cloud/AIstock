@@ -520,6 +520,22 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
         )
         if isinstance(payload.get("artifacts"), dict):
             compact["artifacts"] = _pick(payload["artifacts"], "summary", "context", "github_issue_payload")
+    elif schema == "aistock_batch_workflow_smoke_v1":
+        compact.update(
+            _pick(
+                payload,
+                "dry_run",
+                "github_writes",
+                "batch_id",
+                "bug_ids",
+                "unexpected_dirty_paths",
+                "production_gates",
+            )
+        )
+        if isinstance(payload.get("artifacts"), dict):
+            compact["artifacts"] = _pick(payload["artifacts"], "batch_state", "finish_plan", "pr_body")
+        if isinstance(payload.get("finish"), dict):
+            compact["finish"] = _pick(payload["finish"], "workflow_gate", "closure_ready", "validation_evidence_count")
     elif schema.endswith("_smoke_v1"):
         compact.update(
             _pick(
@@ -3066,6 +3082,154 @@ def _smoke_nightly_status_payload() -> dict[str, Any]:
     }
 
 
+def _smoke_batch_record(
+    bug_id: str,
+    issue_number: int,
+    *,
+    title: str,
+) -> dict[str, Any]:
+    return {
+        "schema_version": "aistock_validation_bug_v1",
+        "bug_id": bug_id,
+        "title": title,
+        "module": "validation.guardrails",
+        "severity": "P1",
+        "status": "open",
+        "description": "Synthetic same-module batch workflow smoke record.",
+        "actual": "Batch handoff needs a compact no-root-pollution smoke gate.",
+        "expected": "Batch start/finish can produce per-issue context and closure evidence under ignored workflow artifacts.",
+        "reproduce_command": "python scripts/aistock_issue_workflow.py batch-workflow-smoke",
+        "allowed_write_scope": ["scripts/aistock_issue_workflow.py"],
+        "required_verification": ["l0"],
+        "closure_requirements": [
+            "Generate per-issue Context Packs.",
+            "Generate a batch finish plan and PR body.",
+            "Keep synthetic artifacts ignored.",
+        ],
+        "non_goals": ["Do not touch production runtime services."],
+        "github_issue_number": issue_number,
+        "github_issue_url": f"https://github.example/issues/{issue_number}",
+        "production_ddl_gate": "noop",
+        "production_frontend_dependency_gate": "noop",
+        "production_backend_dependency_gate": "noop",
+    }
+
+
+def build_batch_workflow_smoke_plan() -> dict[str, Any]:
+    """Dry-run same-module batch start/finish without GitHub or tracked writes."""
+    bug_ids = ["BUG-000", "BUG-001"]
+    smoke_root = REPO_ROOT / WORKFLOW_ROOT / "batch-smoke"
+    issue_dir = smoke_root / "synthetic-bugs"
+    records = [
+        _smoke_batch_record(bug_ids[0], 9000, title="Synthetic batch smoke one"),
+        _smoke_batch_record(bug_ids[1], 9001, title="Synthetic batch smoke two"),
+    ]
+    issue_paths = [issue_dir / f"{record['bug_id']}.json" for record in records]
+    blocking: list[str] = []
+    warnings: list[str] = []
+    dirty_before = _git_status_paths(REPO_ROOT)
+    start_payload: dict[str, Any] | None = None
+    finish_payload: dict[str, Any] | None = None
+
+    try:
+        for path, record in zip(issue_paths, records, strict=True):
+            _write_json(path, record)
+        start_payload = build_start_batch_plan(
+            bug_ids=bug_ids,
+            create_worktree=False,
+            dry_run=False,
+            task_slug="batch-smoke",
+            allow_missing_linkage=False,
+            allow_closed=False,
+            record_pairs=list(zip(records, issue_paths, strict=True)),
+        )
+        finish_payload = build_finish_batch_plan(
+            batch_id=str(start_payload["batch_id"]),
+            bug_ids=[],
+            changed_files=["scripts/aistock_issue_workflow.py"],
+            base="origin/main",
+            head="HEAD",
+            validation_evidence=["batch-workflow-smoke synthetic validation -> passed"],
+            issue_commit=["BUG-000=synthetic-shared-pr", "BUG-001=synthetic-shared-pr"],
+            plan_only=False,
+            allow_missing_evidence=False,
+            record_pairs=list(zip(records, issue_paths, strict=True)),
+        )
+    except Exception as exc:
+        blocking.append(str(exc))
+
+    batch_id = str((start_payload or {}).get("batch_id") or "BATCH-smoke")
+    output_dir = REPO_ROOT / WORKFLOW_ROOT / batch_id
+    artifacts = {
+        "batch_plan": output_dir / "batch-plan.json",
+        "batch_state": output_dir / "batch-state.json",
+        "finish_plan": output_dir / "finish-plan.json",
+        "pr_body": output_dir / "pr-body.md",
+    }
+    for label, path in artifacts.items():
+        if not path.exists():
+            blocking.append(f"missing batch smoke artifact: {label}={_repo_rel(path)}")
+
+    batch_state = _load_json(artifacts["batch_state"]) if artifacts["batch_state"].exists() else {}
+    finish_plan = _load_json(artifacts["finish_plan"]) if artifacts["finish_plan"].exists() else {}
+    pr_body = artifacts["pr_body"].read_text(encoding="utf-8", errors="replace") if artifacts["pr_body"].exists() else ""
+    context_dir = Path(str(batch_state.get("context_dir") or ""))
+    fix_ready_dir = Path(str(batch_state.get("fix_ready_dir") or ""))
+    for bug_id in bug_ids:
+        if context_dir and not (REPO_ROOT / context_dir / f"{bug_id}.md").exists():
+            blocking.append(f"missing per-issue context markdown for {bug_id}")
+        if fix_ready_dir and not (REPO_ROOT / fix_ready_dir / f"{bug_id}.json").exists():
+            blocking.append(f"missing per-issue fix-ready JSON for {bug_id}")
+        if bug_id not in str(finish_plan.get("per_issue_closure_map") or ""):
+            blocking.append(f"finish plan missing per-issue closure map for {bug_id}")
+        expected_issue = 9000 if bug_id == "BUG-000" else 9001
+        if f"Closes #{expected_issue}" not in pr_body:
+            blocking.append(f"batch PR body missing closing keyword for {bug_id}")
+
+    if (finish_payload or {}).get("workflow_gate") != "ready_for_pr":
+        blocking.append("batch finish smoke did not reach ready_for_pr")
+    if (finish_payload or {}).get("scope_check", {}).get("status") != "passed":
+        blocking.append("batch finish scope check did not pass")
+
+    dirty_after = _git_status_paths(REPO_ROOT)
+    before_paths = {row["path"] for row in dirty_before}
+    new_paths = sorted({row["path"] for row in dirty_after} - before_paths)
+    allowed_prefixes = (
+        f"{WORKFLOW_ROOT.as_posix()}/batch-smoke",
+        f"{WORKFLOW_ROOT.as_posix()}/{batch_id}",
+    )
+    unexpected = [
+        path
+        for path in new_paths
+        if not any(path == prefix or path.startswith(prefix + "/") for prefix in allowed_prefixes)
+    ]
+    if unexpected:
+        blocking.append(f"batch workflow smoke created unexpected git-status paths: {unexpected}")
+    if not dirty_before and not dirty_after:
+        warnings.append("git status stayed clean; tmp/issue_workflow batch smoke artifacts are ignored as expected")
+
+    return {
+        "schema_version": "aistock_batch_workflow_smoke_v1",
+        "generated_at": _utc_now(),
+        "workflow_gate": "passed" if not blocking else "blocked",
+        "blocking": blocking,
+        "warnings": warnings,
+        "dry_run": True,
+        "github_writes": False,
+        "bug_ids": bug_ids,
+        "batch_id": batch_id,
+        "artifacts": {key: _repo_rel(path) for key, path in artifacts.items()},
+        "start": start_payload,
+        "finish": finish_payload,
+        "dirty_paths_before": dirty_before,
+        "dirty_paths_after": dirty_after,
+        "new_dirty_paths": new_paths,
+        "unexpected_dirty_paths": unexpected,
+        "production_gates": _production_gates_payload(),
+        "next_command": "python scripts/aistock_issue_workflow.py start-batch --bug-id BUG-XXX --bug-id BUG-YYY --create-worktree",
+    }
+
+
 def _path_under_repo_tmp_validation(path: Path) -> bool:
     try:
         rel = path.resolve().relative_to(REPO_ROOT.resolve()).as_posix()
@@ -3644,12 +3808,14 @@ def build_start_batch_plan(
     task_slug: str | None,
     allow_missing_linkage: bool,
     allow_closed: bool,
+    record_pairs: list[tuple[dict[str, Any], Path]] | None = None,
 ) -> dict[str, Any]:
-    record_pairs = _records_for_bug_ids(
-        bug_ids,
-        allow_missing_linkage=allow_missing_linkage,
-        allow_closed=allow_closed,
-    )
+    if record_pairs is None:
+        record_pairs = _records_for_bug_ids(
+            bug_ids,
+            allow_missing_linkage=allow_missing_linkage,
+            allow_closed=allow_closed,
+        )
     records = [record for record, _ in record_pairs]
     signature = _batch_signature(records)
     batch_plan = flow.build_batch_plan(records)
@@ -3855,14 +4021,16 @@ def build_finish_batch_plan(
     issue_commit: list[str] | None,
     plan_only: bool,
     allow_missing_evidence: bool,
+    record_pairs: list[tuple[dict[str, Any], Path]] | None = None,
 ) -> dict[str, Any]:
-    if not batch_id and not bug_ids:
+    if not batch_id and not bug_ids and record_pairs is None:
         raise WorkflowError("finish-batch requires --batch-id or at least two --bug-id values")
     if batch_id:
         state = _load_batch_state(batch_id)
         if state and not bug_ids:
             bug_ids = [str(item) for item in state.get("bug_ids") or []]
-    record_pairs = _records_for_bug_ids(bug_ids, allow_missing_linkage=False, allow_closed=True)
+    if record_pairs is None:
+        record_pairs = _records_for_bug_ids(bug_ids, allow_missing_linkage=False, allow_closed=True)
     records = [record for record, _ in record_pairs]
     signature = _batch_signature(records)
     if batch_id and batch_id != signature["batch_id"]:
@@ -6906,6 +7074,12 @@ def cmd_nightly_intake_smoke(args: argparse.Namespace) -> int:
     return 0 if payload.get("workflow_gate") == "passed" else 2
 
 
+def cmd_batch_workflow_smoke(args: argparse.Namespace) -> int:
+    payload = build_batch_workflow_smoke_plan()
+    _emit_args(payload, args)
+    return 0 if payload.get("workflow_gate") == "passed" else 2
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     payload = build_doctor_report(skip_external=args.skip_external)
     _emit_args(payload, args)
@@ -7311,6 +7485,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_output_options(nightly_smoke)
     nightly_smoke.set_defaults(func=cmd_nightly_intake_smoke)
+
+    batch_smoke = sub.add_parser(
+        "batch-workflow-smoke",
+        help="Dry-run same-module batch start/finish without GitHub, DB, runtime, or tracked root writes.",
+    )
+    add_output_options(batch_smoke)
+    batch_smoke.set_defaults(func=cmd_batch_workflow_smoke)
 
     close = sub.add_parser("close-sync", help="Prepare a dry-run close/sync plan after PR merge.")
     close.add_argument("--bug-id")

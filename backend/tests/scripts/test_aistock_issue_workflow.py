@@ -801,6 +801,36 @@ def test_nightly_intake_smoke_writes_only_tmp_artifacts_and_handoff(
     assert not list((isolated_workflow_root / "tests" / "aistock_validation" / "bugs").glob("*BUG-*.json"))
 
 
+def test_batch_workflow_smoke_writes_only_tmp_artifacts_and_per_issue_closure(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(workflow, "_git_status_paths", lambda root: [])
+    monkeypatch.setattr(
+        workflow,
+        "_build_batch_code_intelligence_summary",
+        lambda **kwargs: _fake_code_intelligence_summary(item_id=kwargs["batch_id"]),
+    )
+
+    payload = workflow.build_batch_workflow_smoke_plan()
+
+    assert payload["schema_version"] == "aistock_batch_workflow_smoke_v1"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["github_writes"] is False
+    assert payload["unexpected_dirty_paths"] == []
+    assert payload["finish"]["workflow_gate"] == "ready_for_pr"
+    assert payload["finish"]["scope_check"]["status"] == "passed"
+    assert payload["finish"]["per_issue_commit_map"] == {
+        "BUG-000": "synthetic-shared-pr",
+        "BUG-001": "synthetic-shared-pr",
+    }
+    assert set(payload["finish"]["per_issue_closure_map"]) == {"BUG-000", "BUG-001"}
+    for path in payload["artifacts"].values():
+        assert path.startswith("tmp/issue_workflow/")
+        assert (isolated_workflow_root / path).exists()
+    assert not list((isolated_workflow_root / "tests" / "aistock_validation" / "bugs").glob("*BUG-*.json"))
+
+
 def test_code_intelligence_doctor_reports_bootstrap_command(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
