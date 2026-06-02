@@ -24,10 +24,10 @@
       "timestamp": "2026-06-02T15:36:42.799559Z"
     },
     {
-      "timestamp": "2026-06-02T15:51:53.875620Z",
-      "actor": "codex_issue_workflow",
       "action": "expand_allowed_write_scope",
-      "note": "Scope expanded after aistock_issue_workflow run --changed-file plan for BUG-222."
+      "actor": "codex_issue_workflow",
+      "note": "Scope expanded after aistock_issue_workflow run --changed-file plan for BUG-222.",
+      "timestamp": "2026-06-02T15:51:53.875620Z"
     }
   ],
   "evidence_uris": [
@@ -36,8 +36,8 @@
   "expected": "StrategyPackage QE import is idempotent or returns structured JSON with existing package/conflict context; Paper v2 real-backend UI setup can continue and paper_v2_ui reaches all downstream cases.",
   "first_seen_at": "2026-06-02T15:36:42.799563Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1b332540076cafa8c53028dfb847a150ad93f141",
+  "fixed_at": "2026-06-02T21:09:55.098318Z",
   "github_issue_number": 601,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/601",
   "last_seen_at": "2026-06-02T15:36:42.799563Z",
@@ -45,6 +45,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/618",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -59,7 +60,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "strategy_package"
   ],
@@ -68,6 +69,9 @@
     "fingerprint": "591489ccf4e9507eb41468e1",
     "source_event_id": "FE-20260602-591489ccf4e9"
   },
+  "validation_evidence": [
+    "PR #618 checks all green after rerun; paper_v2_l3 final rerun on 8012/3012 -> success; paper_v2_ui 16 passed, 1 skipped; paper_v2_backend 587 passed, 1 skipped, 2 xfailed"
+  ],
   "verification_run_id": null,
   "workflow_gate": "allowed"
 }
