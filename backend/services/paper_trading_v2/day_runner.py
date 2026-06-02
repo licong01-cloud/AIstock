@@ -1683,7 +1683,6 @@ class PaperTradingDayRunner:
         try:
             existing_rows = self._miniqmt_existing_fill_rows(run.run_id)
             existing_fill_ids = {str(row.get("fill_id") or "") for row in existing_rows if row.get("fill_id")}
-            existing_fill_order_ids = {str(row.get("order_id") or "") for row in existing_rows if row.get("order_id")}
             for order in self.repository.list_orders_for_run(run.run_id):
                 native = self._miniqmt_native_context_from_order(order)
                 if native is None:
@@ -1711,24 +1710,35 @@ class PaperTradingDayRunner:
                     native=native,
                     status=status,
                 )
-                candidate_fills = self._miniqmt_fills_from_trades(
+                existing_order_fill_rows = [
+                    row for row in existing_rows if str(row.get("order_id") or "") == str(order.order_id)
+                ]
+                fill_base_order = self._miniqmt_reconcile_fill_base_order(order, existing_order_fill_rows)
+                candidate_fills = self._miniqmt_new_fills_from_trades(
                     trade_rows,
-                    order=order,
+                    order=fill_base_order,
                     native=native,
                     trade_date=trade_date,
+                    existing_fill_rows=existing_order_fill_rows,
                 )
-                final_order = order
-                if (
-                    candidate_fills
-                    and order.status in {OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.REJECTED}
-                    and order.order_id not in existing_fill_order_ids
-                ):
-                    final_order = order.model_copy(
-                        update={"status": OrderStatus.SUBMITTED, "filled_quantity": 0, "avg_fill_price": None}
-                    )
+                final_order = fill_base_order if candidate_fills else order
                 for fill in candidate_fills:
                     if fill.fill_id in existing_fill_ids:
                         continue
+                    if isinstance(fill.metadata, dict) and fill.metadata.get("broker_reconcile_delta_capped"):
+                        self.repository.save_run_event(
+                            run_id=run.run_id,
+                            event_type="MINIQMT_NATIVE_RECONCILE_OVERFILL_CAPPED",
+                            message="MiniQMT native trade delta exceeded Paper order remaining quantity and was capped",
+                            context={
+                                "order_id": order.order_id,
+                                "symbol": order.symbol,
+                                "remaining_quantity": final_order.remaining_quantity,
+                                "broker_reported_fill_quantity": fill.metadata.get("broker_reported_fill_quantity"),
+                                "applied_fill_quantity": fill.metadata.get("applied_fill_quantity"),
+                                "authority_source": "MINIQMT_NATIVE_RECONCILE",
+                            },
+                        )
                     final_order, event = self.oms.apply_fill(final_order, fill)
                     self.repository.save_fill(
                         run.run_id,
@@ -1742,7 +1752,6 @@ class PaperTradingDayRunner:
                     )
                     self.repository.save_order_event(run.run_id, event)
                     existing_fill_ids.add(fill.fill_id)
-                    existing_fill_order_ids.add(order.order_id)
                     new_fills.append(fill)
                     order_events.append(event)
                 final_order = self._reconcile_minqmt_order_status(
@@ -2285,6 +2294,104 @@ class PaperTradingDayRunner:
 
     def _miniqmt_existing_fill_rows(self, run_id: str) -> list[dict[str, Any]]:
         return [dict(row) for row in self.repository.list_fills_for_run(run_id)]
+
+    @staticmethod
+    def _miniqmt_reconcile_fill_base_order(order: Any, existing_fill_rows: list[dict[str, Any]]) -> Any:
+        if existing_fill_rows or not order.filled_quantity:
+            return order
+        if order.status not in {OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.REJECTED, OrderStatus.PARTIALLY_FILLED}:
+            return order
+        return order.model_copy(update={"status": OrderStatus.SUBMITTED, "filled_quantity": 0, "avg_fill_price": None})
+
+    @classmethod
+    def _miniqmt_new_fills_from_trades(
+        cls,
+        trades: list[dict[str, Any]],
+        *,
+        order: Any,
+        native: dict[str, Any],
+        trade_date: date,
+        existing_fill_rows: list[dict[str, Any]],
+    ) -> list[Fill]:
+        existing_trade_keys = cls._miniqmt_existing_trade_keys(existing_fill_rows)
+        new_trades: list[dict[str, Any]] = []
+        seen_new_trade_keys: set[str] = set()
+        for trade in trades:
+            trade_key = cls._miniqmt_trade_key(trade)
+            if trade_key in existing_trade_keys or trade_key in seen_new_trade_keys:
+                continue
+            seen_new_trade_keys.add(trade_key)
+            new_trades.append(dict(trade))
+        if not new_trades:
+            return []
+        candidate_fills = cls._miniqmt_fills_from_trades(
+            new_trades,
+            order=order,
+            native=native,
+            trade_date=trade_date,
+        )
+        return cls._miniqmt_cap_fills_to_remaining(candidate_fills, order=order)
+
+    @classmethod
+    def _miniqmt_existing_trade_keys(cls, existing_fill_rows: list[dict[str, Any]]) -> set[str]:
+        keys: set[str] = set()
+        for row in existing_fill_rows:
+            metadata = row.get("metadata") if isinstance(row, dict) else None
+            if not isinstance(metadata, dict):
+                metadata = {}
+            raw_rows = metadata.get("miniqmt_trade_raw_rows")
+            if isinstance(raw_rows, list):
+                for raw in raw_rows:
+                    if isinstance(raw, dict):
+                        keys.add(cls._miniqmt_trade_key(raw))
+            raw = metadata.get("miniqmt_trade_raw")
+            if isinstance(raw, dict):
+                keys.add(cls._miniqmt_trade_key(raw))
+            traded_id = str(metadata.get("traded_id") or "").strip()
+            if traded_id:
+                keys.add(f"traded_id:{traded_id}")
+        return keys
+
+    @staticmethod
+    def _miniqmt_trade_key(trade: dict[str, Any]) -> str:
+        traded_id = str(trade.get("traded_id") or "").strip()
+        if traded_id:
+            return f"traded_id:{traded_id}"
+        payload = {
+            "order_id": str(trade.get("order_id") or ""),
+            "order_sysid": str(trade.get("order_sysid") or ""),
+            "stock_code": str(trade.get("stock_code") or ""),
+            "order_type": str(trade.get("order_type") or ""),
+            "traded_time": str(trade.get("traded_time") or ""),
+            "quantity": int(trade.get("traded_volume") or 0),
+            "price": float(trade.get("traded_price") or 0.0),
+        }
+        encoded = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        return f"trade:{encoded}"
+
+    @staticmethod
+    def _miniqmt_cap_fills_to_remaining(fills: list[Fill], *, order: Any) -> list[Fill]:
+        remaining = max(0, int(order.remaining_quantity))
+        capped: list[Fill] = []
+        for fill in fills:
+            if remaining <= 0:
+                break
+            if fill.quantity <= remaining:
+                capped.append(fill)
+                remaining -= fill.quantity
+                continue
+            metadata = dict(fill.metadata or {})
+            metadata.update(
+                {
+                    "broker_reconcile_delta_capped": True,
+                    "broker_reported_fill_quantity": fill.quantity,
+                    "applied_fill_quantity": remaining,
+                    "cap_reason": "paper_order_remaining_quantity",
+                }
+            )
+            capped.append(fill.model_copy(update={"quantity": remaining, "metadata": metadata}))
+            remaining = 0
+        return capped
 
     @classmethod
     def _miniqmt_fills_from_trades(
