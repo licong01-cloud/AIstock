@@ -1,0 +1,63 @@
+{
+  "actual": "Current main has separate Paper v2 exclusive_account and MiniQMT virtual-strategy execution paths; the unified branch must merge fixes and capabilities without losing today-fixed bug regressions or vn.py-style execution behavior.",
+  "allowed_write_scope": [
+    "docs/architecture/paper_v2_miniqmt_unified_autorun_design_20260602.md",
+    "tests/aistock_validation/bugs/20260602_BUG-210-paper-v2-miniqmt-unified-single-and-multi-strategy-unattended-autorun-im.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-210",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-02T09:09:51.462245Z",
+  "description": "Current main has separate Paper v2 exclusive_account and MiniQMT virtual-strategy execution paths; the unified branch must merge fixes and capabilities without losing today-fixed bug regressions or vn.py-style execution behavior.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260602-eaea99c761df",
+      "timestamp": "2026-06-02T09:09:51.462238Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/paper_v2_miniqmt_unified_autorun_design_20260602.md"
+  ],
+  "expected": "Single-strategy (N=1) and multi-strategy (N>1) MiniQMT SIM portfolios run through one account-group/slot/plan/preflight/execution/reconcile/status/UI path. Every F2M capability has implementation location, automated tests, runtime/API/UI evidence, validation record, and DESIGN-COMPLIANCE-001 mapping. No main merge before complete development and validation.",
+  "first_seen_at": "2026-06-02T09:09:51.462245Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 567,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/567",
+  "last_seen_at": "2026-06-02T09:09:51.462245Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Read docs/architecture/paper_v2_miniqmt_unified_autorun_design_20260602.md sections 11.0-17 and verify current code still has separate Paper v2 exclusive and simulation_runtime/qmt_strategy_ledger paths.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "Paper v2 MiniQMT unified single and multi strategy unattended autorun implementation",
+  "trigger_condition": {
+    "fingerprint": "eaea99c761df061fada5eaa4",
+    "source_event_id": "FE-20260602-eaea99c761df"
+  },
+  "verification_run_id": null
+}
