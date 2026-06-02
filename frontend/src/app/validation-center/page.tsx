@@ -12,6 +12,7 @@ import {
   type ValidationAgentContext,
   type ValidationBug,
   type ValidationBugSummary,
+  type ValidationCodeIntelligenceSummary,
   type ValidationBusinessAssertion,
   type ValidationCoverageDetail,
   type ValidationCoverageSummary,
@@ -232,6 +233,38 @@ function IssueCandidateQueuePanel({ summary, items }: { summary?: ValidationIssu
             )) : <tr><td className="pv2-empty-cell" colSpan={6}>No issue candidates yet. CI/Nightly candidate artifacts can appear here without raw JSON dumps.</td></tr>}
           </tbody>
         </table>
+      </div>
+    </SectionCard>
+  );
+}
+
+function CodeIntelligencePanel({ summary }: { summary?: ValidationCodeIntelligenceSummary | null }) {
+  const codegraph = isObject(summary?.codegraph) ? summary?.codegraph : {};
+  const understandAnything = isObject(summary?.understand_anything) ? summary?.understand_anything : {};
+  const warnings = Array.isArray(summary?.warnings) ? summary?.warnings.filter((item): item is string => typeof item === "string") : [];
+  const reasonCodes = Array.isArray(summary?.reason_codes) ? summary?.reason_codes.filter((item): item is string => typeof item === "string") : [];
+  return (
+    <SectionCard title="Code Intelligence Freshness" eyebrow="CodeGraph / Understand Anything / warning-only">
+      <div className="pv2-notice pv2-notice-info">
+        <div className="pv2-notice-title">Warning-only acceleration context</div>
+        <div className="pv2-notice-body">CodeGraph and Understand Anything are context accelerators only. Missing or stale graph data must not block issue workflow, PR merge, nox, pytest, Validation Center, or production gates.</div>
+      </div>
+      <div className="pv2-grid pv2-grid-4">
+        <MetricCard label="Data State" value={display(summary?.data_state || "missing")} hint={`artifacts ${display(summary?.artifact_count ?? 0)}`} tone={summary?.data_state === "complete" ? "success" : "warning"} />
+        <MetricCard label="Workflow Blocking" value={display(summary?.blocking_for_issue_workflow)} hint="must stay false" tone={summary?.blocking_for_issue_workflow === false ? "success" : "warning"} />
+        <MetricCard label="CodeGraph" value={display(codegraph.freshness || codegraph.status || "missing")} hint={display(codegraph.generated_at)} tone={codegraph.freshness === "fresh" ? "success" : "warning"} />
+        <MetricCard label="UA Summaries" value={display(understandAnything.summary_count ?? 0)} hint="Understand Anything" tone={Number(understandAnything.summary_count ?? 0) ? "success" : "warning"} />
+      </div>
+      <KeyValuePanel rows={[
+        ["schema_version", summary?.schema_version],
+        ["artifact_roots", summary?.artifact_roots],
+        ["codegraph_artifact", codegraph.artifact_path],
+        ["codegraph_summary", codegraph.summary_ref],
+        ["understand_anything_manifest", isObject(understandAnything.manifest) ? understandAnything.manifest.artifact_path : undefined],
+      ]} />
+      <div className="pv2-grid pv2-grid-2" style={{ marginTop: 12 }}>
+        <div><h3 className="pv2-subtitle">Warnings</h3><BadgeList items={warnings} empty="No warning" /></div>
+        <div><h3 className="pv2-subtitle">Reason Codes</h3><BadgeList items={reasonCodes} empty="No reason code" /></div>
       </div>
     </SectionCard>
   );
@@ -748,6 +781,7 @@ export default function ValidationCenterPage() {
   const [health, setHealth] = useState<ValidationHealth | null>(null);
   const [platformHealth, setPlatformHealth] = useState<ValidationHealth | null>(null);
   const [summary, setSummary] = useState<ValidationSummary | null>(null);
+  const [codeIntelligenceSummary, setCodeIntelligenceSummary] = useState<ValidationCodeIntelligenceSummary | null>(null);
   const [findingSummary, setFindingSummary] = useState<ValidationFindingSummary | null>(null);
   const [bugSummary, setBugSummary] = useState<ValidationBugSummary | null>(null);
   const [workspaceStatus, setWorkspaceStatus] = useState<ValidationGitWorkspaceStatus | null>(null);
@@ -817,6 +851,7 @@ export default function ValidationCenterPage() {
         healthData,
         platformHealthData,
         summaryData,
+        codeIntelligenceData,
         planCatalog,
         coverageData,
         evidenceData,
@@ -850,6 +885,7 @@ export default function ValidationCenterPage() {
         validationApi.health(),
         optional("platform/health", () => validationApi.platformHealth(), null as ValidationHealth | null),
         validationApi.summary(),
+        optional("code-intelligence/summary", () => validationApi.codeIntelligenceSummary(), null as ValidationCodeIntelligenceSummary | null),
         validationApi.plans(),
         validationApi.coverage({ page: 1, page_size: 10 }),
         validationApi.evidence({ page: 1, page_size: 10 }),
@@ -883,6 +919,7 @@ export default function ValidationCenterPage() {
       setHealth(healthData);
       setPlatformHealth(platformHealthData);
       setSummary(summaryData);
+      setCodeIntelligenceSummary(codeIntelligenceData || summaryData.code_intelligence || null);
       setPlans(planCatalog.plans || []);
       setCoverage(coverageData || emptyPage<ValidationCoverageSummary>(10));
       setEvidence(evidenceData || emptyPage<ValidationEvidenceSummary>(10));
@@ -1149,6 +1186,7 @@ export default function ValidationCenterPage() {
         automationSummary={automationSummary}
         branchDetailSummary={branchDetailSummary}
         cardsSummary={phase1Cards}
+        codeIntelligenceSummary={codeIntelligenceSummary}
         executions={executions}
         githubIssueSummary={githubIssueSummary}
         githubPrSummary={githubPrSummary}
@@ -1174,6 +1212,8 @@ export default function ValidationCenterPage() {
       </section> : null}
 
       {activeSection === "merge_gate" ? <MergeGatePanel mergeGate={mergeGate} /> : null}
+
+      {activeSection === "code_intelligence" ? <CodeIntelligencePanel summary={codeIntelligenceSummary || summary?.code_intelligence || null} /> : null}
 
       {activeSection === "issue_workflow" ? (
         <>
