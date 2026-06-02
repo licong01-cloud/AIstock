@@ -4089,6 +4089,7 @@ def test_triage_ci_issue_extracts_run_summary_and_recommends_promotion(
         "summarize_actions_run",
         lambda **kwargs: summary,
     )
+    monkeypatch.setattr(workflow, "_find_superseding_main_success", lambda summary: None)
 
     payload = workflow.build_triage_ci_issue_plan(issue_number=197)
 
@@ -4110,6 +4111,127 @@ def test_triage_ci_issue_extracts_run_summary_and_recommends_promotion(
     assert payload["context_pack"]["agent_handoff"]["workflow_entrypoints"]["promote"].endswith(
         "--issue 197 --create-registry-worktree --apply"
     )
+
+
+def test_triage_ci_issue_preserves_issue_locator_and_marks_superseded_main_success(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = {
+        "number": 584,
+        "title": "[P1][l0] main CI failed: ##[error]Process completed with exit code 1.",
+        "state": "OPEN",
+        "url": "https://github.com/licong01-cloud/AIstock/issues/584",
+        "body": """<!-- aistock-issue-on-test-fail:26819596553 -->
+
+## Failure Summary
+
+- Diagnostic status: `complete`
+- Workflow/source: `AIstock CI`
+- Run: https://github.com/licong01-cloud/AIstock/actions/runs/26819596553
+- Branch: `main`
+- Commit: `a80f327f93c3b4c235e11e0e5b25d714c4874e9e`
+
+## Regression Locator
+
+- last_green_status: `found`
+- commit_range: `dae8bd170066..a80f327f93c3`
+- previous_success_run: https://github.com/licong01-cloud/AIstock/actions/runs/26817889738
+
+## Suggested Triage
+
+- [ ] real_regression
+- [ ] infra_flaky
+""",
+        "labels": [],
+    }
+    summary = {
+        "schema_version": "aistock_ci_failure_summary_v1",
+        "diagnostic_status": "complete",
+        "severity": "P1",
+        "workflow": "AIstock CI",
+        "run_id": "26819596553",
+        "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/26819596553",
+        "branch": "main",
+        "commit": "a80f327f93c3b4c235e11e0e5b25d714c4874e9e",
+        "failed_jobs": [
+            {
+                "job_name": "Static gate (l0 + module registry)",
+                "nox_session": "l0",
+                "failed_tests": [],
+                "error_signature": "##[error]Process completed with exit code 1.",
+                "key_log_excerpt": ["nox > Session l0 failed."],
+                "suspected_module": "validation",
+                "suspected_files": [],
+            }
+        ],
+        "suspected_modules": ["validation"],
+        "suspected_files": [],
+        "fingerprint": "ci-1b05b81d088257d5",
+        "last_green_locator": {
+            "schema_version": "aistock_ci_last_green_locator_v1",
+            "status": "not_found",
+            "commit_range": None,
+            "previous_success_run": None,
+        },
+        "reproduce_command": "python -m nox -s l0",
+    }
+
+    monkeypatch.setattr(workflow, "_load_github_issue", lambda issue_number: issue)
+    monkeypatch.setattr(workflow, "_find_bug_by_github_issue", lambda issue_number: None)
+    monkeypatch.setattr(workflow.ci_failure_summary, "summarize_actions_run", lambda **kwargs: summary)
+    monkeypatch.setattr(
+        workflow,
+        "_find_superseding_main_success",
+        lambda summary: {
+            "run_id": "26825497246",
+            "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/26825497246",
+            "head_sha": "440e410af8a8e999cfc7e73a85482758a089e39f",
+            "created_at": "2026-06-02T14:12:36Z",
+        },
+    )
+
+    payload = workflow.build_triage_ci_issue_plan(issue_number=584)
+
+    locator = payload["failure_event"]["last_green_locator"]
+    assert locator["status"] == "found"
+    assert locator["commit_range"] == "dae8bd170066..a80f327f93c3"
+    assert locator["previous_success_run"]["run_id"] == "26817889738"
+    assert payload["classification_recommendation"] == "superseded_by_later_main_success"
+    assert payload["needs_bug_json"] is False
+    assert payload["superseded_action"]["workflow_gate"] == "superseded_by_latest_main_success"
+    assert payload["superseded_action"]["superseding_run"]["run_id"] == "26825497246"
+    assert payload["next_command"].startswith("gh issue close 584")
+    assert payload["context_pack"]["last_green_locator"]["source"] == "github_issue_body"
+    assert payload["context_pack"]["agent_handoff"]["next_commands"] == [payload["next_command"]]
+    assert "promote" not in payload["context_pack"]["agent_handoff"]["workflow_entrypoints"]
+    assert payload["failure_event"]["candidate_status"] == "superseded_by_later_main_success"
+
+
+def test_triage_ci_issue_classification_ignores_generic_infra_checklist() -> None:
+    summary = {
+        "diagnostic_status": "complete",
+        "failed_jobs": [
+            {
+                "error_signature": "##[error]Process completed with exit code 1.",
+                "key_log_excerpt": ["nox > Session l0 failed."],
+            }
+        ],
+    }
+    issue = {
+        "title": "[P1][l0] main CI failed",
+        "body": """## Failure Summary
+
+- Diagnostic status: `complete`
+
+## Suggested Triage
+
+- [ ] infra_flaky
+- [ ] real_regression
+""",
+    }
+
+    assert workflow._classify_ci_issue(summary, issue) == "real_regression_candidate"
 
 
 def test_promote_ci_issue_writes_bug_json_with_existing_github_issue(
@@ -4178,6 +4300,7 @@ def test_promote_ci_issue_writes_bug_json_with_existing_github_issue(
         "summarize_actions_run",
         lambda **kwargs: summary,
     )
+    monkeypatch.setattr(workflow, "_find_superseding_main_success", lambda summary: None)
 
     payload = workflow.build_promote_ci_issue_plan(
         issue_number=197,
@@ -4239,6 +4362,7 @@ def test_promote_ci_issue_apply_requires_registry_worktree_for_code_bug(
     monkeypatch.setattr(workflow, "_load_github_issue", lambda issue_number: issue)
     monkeypatch.setattr(workflow, "_find_bug_by_github_issue", lambda issue_number: None)
     monkeypatch.setattr(workflow.ci_failure_summary, "summarize_actions_run", lambda **kwargs: summary)
+    monkeypatch.setattr(workflow, "_find_superseding_main_success", lambda summary: None)
 
     payload = workflow.build_promote_ci_issue_plan(issue_number=197, apply=True, bug_id=None)
 
@@ -4390,6 +4514,7 @@ def test_promote_ci_issue_blocks_infra_runner_outage(
     monkeypatch.setattr(workflow, "_load_github_issue", lambda issue_number: issue)
     monkeypatch.setattr(workflow, "_find_bug_by_github_issue", lambda issue_number: None)
     monkeypatch.setattr(workflow.ci_failure_summary, "summarize_actions_run", lambda **kwargs: summary)
+    monkeypatch.setattr(workflow, "_find_superseding_main_success", lambda summary: None)
 
     payload = workflow.build_promote_ci_issue_plan(issue_number=257, apply=True, bug_id=None)
 
