@@ -40,8 +40,8 @@
   "expected": "Nightly jobs only emit compact candidate/evidence artifacts and GitHub Issue diagnostics. Developer clients then triage/promote/fix through a clean task or registry worktree using aistock_issue_workflow.py. Infra-blocker nightly issues should return a standard non-code workflow handoff instead of encouraging direct source edits or root writes.",
   "first_seen_at": "2026-06-02T06:14:50.492265Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1073ea0c391111a2a058506aa8eba8a9f76c5ba4",
+  "fixed_at": "2026-06-02T07:13:26.397296Z",
   "github_issue_number": 545,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/545",
   "last_seen_at": "2026-06-02T06:14:50.492265Z",
@@ -49,6 +49,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/553",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -64,7 +65,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation.workflow"
   ],
@@ -73,5 +74,8 @@
     "fingerprint": "89e38f36c04993d1f43b7335",
     "source_event_id": "FE-20260602-89e38f36c049"
   },
+  "validation_evidence": [
+    "PR #553 checks -> 16 success; local pytest workflow tests -> 111 passed; nox validation_center_backend -> 326 passed; workflow-smoke -> passed unexpected_dirty_paths=[]"
+  ],
   "verification_run_id": null
 }
