@@ -31,8 +31,8 @@
   "expected": "A timed-out Paper v2 live session tick must release or mark the worker terminal/failed with actionable diagnostics, so subsequent scheduler ticks can recover, retry according to policy, or move the session to a correct waiting/failed state without an indefinitely active worker.",
   "first_seen_at": "2026-06-02T07:03:17.714526Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "855a448343134d4d2d7bd71867d45d47729abe8f",
+  "fixed_at": "2026-06-02T08:05:01.734497Z",
   "github_issue_number": 554,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/554",
   "last_seen_at": "2026-06-02T07:03:17.714526Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/560",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_trading_v2"
   ],
@@ -61,5 +62,13 @@
     "fingerprint": "53e1e4496c35c80e70c48cef",
     "source_event_id": "FE-20260602-53e1e4496c35"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/paper_trading_v2/test_session.py -q -> 29 passed",
+    "python -m ruff check backend/services/paper_trading_v2/scheduler.py backend/tests/paper_trading_v2/test_session.py -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s paper_v2_backend -> 570 passed, 1 skipped, 2 xfailed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> passed"
+  ],
   "verification_run_id": null
 }
