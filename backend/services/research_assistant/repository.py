@@ -70,6 +70,12 @@ TABLES: dict[str, dict[str, Any]] = {
         },
         "search": {"context_pack_id", "task_id", "agent_id", "model_profile", "pack_summary"},
     },
+    "code_context_refs": {
+        "table": "assistant_code_context_refs",
+        "id": "code_context_ref_id",
+        "json": {"edge_refs_json", "affected_tests_json", "manifest_json", "provenance_json"},
+        "search": {"code_context_ref_id", "context_pack_id", "task_id", "file_path", "symbol", "status", "query_text"},
+    },
     "entities": {
         "table": "research_memory_entities",
         "id": "entity_id",

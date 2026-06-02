@@ -1519,6 +1519,127 @@ def ra_phase7_full_accept(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def ra_phase8_code_intel(session: nox.Session) -> None:
+    """Run Phase 8 code intelligence DDL, reuse, context-pack, and L3 gates."""
+    phase8_paths = [
+        "backend/db/migrations/ra_upgrade/004_code_context_refs.sql",
+        "backend/services/research_assistant/code_intelligence_core.py",
+        "backend/services/research_assistant/code_intelligence_adapter_provider.py",
+        "backend/services/research_assistant/code_context_refs_repository.py",
+        "backend/services/research_assistant/models.py",
+        "backend/services/research_assistant/repository.py",
+        "backend/services/research_assistant/service.py",
+        "backend/services/research_assistant/agent_teams/models.py",
+        "backend/services/research_assistant/agent_teams/runtime.py",
+        "configs/research_assistant/runtime_context.yaml",
+        "backend/tests/scripts/test_code_intelligence_adapter.py",
+        "backend/tests/research_assistant/test_code_intel_true_reuse.py",
+        "backend/tests/research_assistant/test_code_intel_determinism.py",
+        "backend/tests/research_assistant/test_code_intel_token_safe.py",
+        "backend/tests/research_assistant/test_code_context_refs_ddl_contract.py",
+        "backend/tests/research_assistant/test_code_intel_context_injection.py",
+        "backend/tests/research_assistant/test_code_intel_decomposition.py",
+        "backend/tests/research_assistant/test_code_intel_evidence_contract.py",
+        "backend/tests/research_assistant/test_code_intel_not_test_replacement.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        "scripts/research_assistant_phase8_code_intel_guard.py",
+        "tests/aistock_validation/catalog/test_plans.yaml",
+        "tests/aistock_validation/catalog/module_registry.yaml",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "tests/aistock_validation/history/research_assistant/20260602_ra_phase8_code_intel_validation.md",
+        "tests/aistock_validation/history/research_assistant/20260602_ra_phase8_code_intel_progress.md",
+        "backend/services/validation/plan_catalog.py",
+        "docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md",
+        "noxfile.py",
+    ]
+    session.run("git", "diff", "--check", external=True)
+    session.run(
+        sys.executable,
+        "-m",
+        "py_compile",
+        "backend/services/research_assistant/code_intelligence_core.py",
+        "backend/services/research_assistant/code_intelligence_adapter_provider.py",
+        "backend/services/research_assistant/code_context_refs_repository.py",
+        "backend/services/research_assistant/models.py",
+        "backend/services/research_assistant/repository.py",
+        "backend/services/research_assistant/service.py",
+        "backend/services/research_assistant/agent_teams/models.py",
+        "backend/services/research_assistant/agent_teams/runtime.py",
+        "backend/tests/scripts/test_code_intelligence_adapter.py",
+        "backend/tests/research_assistant/test_code_intel_true_reuse.py",
+        "backend/tests/research_assistant/test_code_intel_determinism.py",
+        "backend/tests/research_assistant/test_code_intel_token_safe.py",
+        "backend/tests/research_assistant/test_code_context_refs_ddl_contract.py",
+        "backend/tests/research_assistant/test_code_intel_context_injection.py",
+        "backend/tests/research_assistant/test_code_intel_decomposition.py",
+        "backend/tests/research_assistant/test_code_intel_evidence_contract.py",
+        "backend/tests/research_assistant/test_code_intel_not_test_replacement.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        "scripts/research_assistant_phase8_code_intel_guard.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/scripts/test_code_intelligence_adapter.py",
+        "backend/tests/research_assistant/test_code_intel_true_reuse.py",
+        "backend/tests/research_assistant/test_code_intel_determinism.py",
+        "backend/tests/research_assistant/test_code_intel_token_safe.py",
+        "backend/tests/research_assistant/test_code_context_refs_ddl_contract.py",
+        "backend/tests/research_assistant/test_code_intel_context_injection.py",
+        "backend/tests/research_assistant/test_code_intel_decomposition.py",
+        "backend/tests/research_assistant/test_code_intel_evidence_contract.py",
+        "backend/tests/research_assistant/test_code_intel_not_test_replacement.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+    session.run(
+        sys.executable,
+        "scripts/research_assistant_phase8_code_intel_guard.py",
+        "--fail-on-embedding",
+        "--fail-on-nondeterminism",
+        "--fail-on-core-adapter-import",
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_validation_catalog_integrity.py",
+        "--output-json",
+        "tmp/validation/research_assistant/phase8/catalog_integrity.json",
+        "--fail-on-warning",
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_module_ownership_scan.py",
+        "--output-json",
+        "tmp/validation/research_assistant/phase8/ownership.json",
+        "--summary-md",
+        "tmp/validation/research_assistant/phase8/ownership.md",
+        "--fail-on-unmapped",
+        "--fail-on-ambiguous",
+        *phase8_paths,
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_guardrail_scan.py",
+        "--changed-only",
+        "--baseline-json",
+        _guardrail_baseline_json(session),
+        "--fail-new-only",
+        "--fail-on-severity",
+        "P1",
+        "--output-json",
+        "tmp/validation/guardrails/ra_phase8_code_intel.json",
+        "--summary-md",
+        "tmp/validation/guardrails/ra_phase8_code_intel.md",
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
 def research_assistant_backend(session: nox.Session) -> None:
     """Run Research Assistant backend/schema/router tests without services."""
     session.run(

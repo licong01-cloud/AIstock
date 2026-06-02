@@ -61,6 +61,10 @@ class WorkerTask:
     def stable_key(self) -> tuple[int, str]:
         return (self.task_order, self.agent_key)
 
+    def code_context_refs(self) -> list[dict[str, Any]]:
+        refs = self.input_json.get("code_context_refs")
+        return list(refs) if isinstance(refs, list) else []
+
 
 @dataclass(frozen=True)
 class WorkerRunResult:

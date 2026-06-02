@@ -9,6 +9,7 @@ CORE_FILES = [
     REPO_ROOT / "backend/services/research_assistant/memory_tree.py",
     REPO_ROOT / "backend/services/research_assistant/memory_curator.py",
     REPO_ROOT / "backend/services/research_assistant/graph_context.py",
+    REPO_ROOT / "backend/services/research_assistant/code_intelligence_core.py",
     REPO_ROOT / "backend/services/research_assistant/react_grounding.py",
     REPO_ROOT / "backend/services/research_assistant/external_research.py",
     REPO_ROOT / "backend/services/research_assistant/agent_teams/models.py",

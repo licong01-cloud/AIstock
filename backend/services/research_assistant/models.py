@@ -500,6 +500,97 @@ class ContextPackBuildRequest(StrictModel):
     dialogue_intent: str | None = None
 
 
+CODE_CONTEXT_REF_STATUSES = {"ok", "evidence_insufficient"}
+CODE_CONTEXT_MANIFEST_STATUSES = {"ok", "not_applicable", "evidence_insufficient"}
+AFFECTED_TEST_CLASSIFICATIONS = {"impacted", "recommended"}
+
+
+def _normalize_repo_ref_path(value: str) -> str:
+    text = str(value).replace("\\", "/").strip()
+    while text.startswith("./"):
+        text = text[2:]
+    if text.startswith("repo://"):
+        return "repo://" + re.sub(r"/+", "/", text[len("repo://"):])
+    text = re.sub(r"/+", "/", text)
+    return text
+
+
+class AffectedTestRef(StrictModel):
+    test_path: str = Field(..., min_length=1)
+    classification: str = "recommended"
+    source_ref: str | None = None
+    reason: str | None = None
+
+    @field_validator("test_path")
+    @classmethod
+    def _test_path(cls, value: str) -> str:
+        normalized = _normalize_repo_ref_path(value)
+        if not normalized:
+            raise ValueError("test_path must not be empty")
+        return normalized
+
+    @field_validator("classification")
+    @classmethod
+    def _classification(cls, value: str) -> str:
+        if value not in AFFECTED_TEST_CLASSIFICATIONS:
+            raise ValueError(f"classification must be one of {sorted(AFFECTED_TEST_CLASSIFICATIONS)}")
+        return value
+
+
+class CodeContextRef(StrictModel):
+    file_path: str = Field(..., min_length=1)
+    symbol: str = Field(..., min_length=1)
+    edge_refs: list[dict[str, Any]] = Field(..., min_length=1)
+    provenance: dict[str, Any] = Field(..., min_length=1)
+    as_of: str = Field(..., min_length=1)
+    summary: str = Field(..., min_length=1)
+    summary_ref: str | None = None
+    detail_ref: str | None = None
+    manifest_ref: str | None = None
+    call_chain: list[dict[str, Any]] = Field(default_factory=list)
+    impact_radius: dict[str, Any] = Field(default_factory=dict)
+    affected_tests: list[AffectedTestRef] = Field(default_factory=list)
+    status: str = "ok"
+    reason_code: str | None = None
+
+    @field_validator("file_path")
+    @classmethod
+    def _file_path(cls, value: str) -> str:
+        normalized = _normalize_repo_ref_path(value)
+        if not normalized:
+            raise ValueError("file_path must not be empty")
+        return normalized
+
+    @field_validator("status")
+    @classmethod
+    def _status(cls, value: str) -> str:
+        if value not in CODE_CONTEXT_REF_STATUSES:
+            raise ValueError(f"status must be one of {sorted(CODE_CONTEXT_REF_STATUSES)}")
+        return value
+
+
+class CodeContextManifest(StrictModel):
+    schema_version: str = "research_assistant_code_context_manifest_v1"
+    provider: str = Field(..., min_length=1)
+    query: str = ""
+    status: str = "ok"
+    refs: list[CodeContextRef] = Field(default_factory=list)
+    insufficient_refs: list[dict[str, Any]] = Field(default_factory=list)
+    reason_code: str | None = None
+    as_of: str | None = None
+    manifest_ref: str | None = None
+    summary_ref: str | None = None
+    detail_ref: str | None = None
+    source_refs: list[str] = Field(default_factory=list)
+
+    @field_validator("status")
+    @classmethod
+    def _manifest_status(cls, value: str) -> str:
+        if value not in CODE_CONTEXT_MANIFEST_STATUSES:
+            raise ValueError(f"status must be one of {sorted(CODE_CONTEXT_MANIFEST_STATUSES)}")
+        return value
+
+
 class McpPreflightRequest(StrictModel):
     server_key: str
     tool_name: str

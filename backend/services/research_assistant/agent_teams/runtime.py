@@ -50,12 +50,14 @@ class AgentTeamsRuntime:
         worker_inputs: dict[str, dict[str, object]] | None = None,
     ) -> AgentTeamResult:
         tasks = self.decompose(parent_task_id=parent_task_id, objective=objective, requested_agent_keys=requested_agent_keys, worker_inputs=worker_inputs)
+        consumed_code_refs = any(task.code_context_refs() for task in tasks)
         trace: list[dict[str, object]] = [
             {
                 "event": "orchestrator_decomposed",
                 "parent_task_id": parent_task_id,
                 "task_count": len(tasks),
                 "agent_keys": [task.agent_key for task in tasks],
+                "orchestrator_consumed_code_context_refs": consumed_code_refs,
                 "orchestrator_does_domain_work": False,
             }
         ]

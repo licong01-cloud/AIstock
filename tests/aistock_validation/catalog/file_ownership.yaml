@@ -475,11 +475,19 @@ rules:
     priority: 100
     include:
       - backend/services/research_assistant/code_intelligence.py
+      - backend/services/research_assistant/code_intelligence_core.py
+      - backend/services/research_assistant/code_intelligence_adapter_provider.py
+      - backend/services/research_assistant/code_context_refs_repository.py
+      - backend/db/migrations/ra_upgrade/004_code_context_refs.sql
+      - scripts/research_assistant_phase8_code_intel_guard.py
       - backend/tests/research_assistant/test_code_intel_context_injection.py
+      - backend/tests/research_assistant/test_code_intel_*.py
+      - backend/tests/research_assistant/test_code_context_refs_ddl_contract.py
+      - tests/aistock_validation/history/research_assistant/*ra_phase8_code_intel*.md
     primary_module: research_assistant.code_intelligence
-    impact_modules: [validation.guardrails, research_assistant.graph_context]
+    impact_modules: [validation.guardrails, research_assistant.graph_context, research_assistant.agent_teams, research_assistant.evidence_guard]
     layer: backend_service
-    risk_level: high
+    risk_level: critical
     ownership_reason: Code intelligence consumes CodeGraph context refs and impacted-test evidence inside assistant reasoning.
   - rule_id: research_assistant_proactive_reports
     priority: 100

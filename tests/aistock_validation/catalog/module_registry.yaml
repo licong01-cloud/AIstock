@@ -355,7 +355,7 @@ modules:
     description: CodeGraph adapter consumption, impact context refs, provenance, and affected-test evidence.
     description_zh: 覆盖代码图谱适配器消费、影响引用、来源追踪与受影响测试证据。
     test_plans:
-      required_on_change: [l0, ra_phase0_baseline, research_assistant_backend]
+      required_on_change: [l0, ra_phase0_baseline, ra_phase8_code_intel, research_assistant_backend, ra_phase7_full_accept]
       recommended: [research_assistant_mcp_contract]
   - module_id: research_assistant.proactive_reports
     display_name: Research Assistant Proactive Reports

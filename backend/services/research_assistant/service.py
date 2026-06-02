@@ -24,7 +24,15 @@ from typing import Any
 import jsonschema
 
 from .context_budget import ContextBudgetPlan, ContextBudgetPlanner
+from .code_context_refs_repository import CodeContextRefsRepository
 from .code_intelligence import artifact_ref_paths, build_code_intelligence_context
+from .code_intelligence_adapter_provider import AistockCodeIntelligenceAdapterProvider
+from .code_intelligence_core import (
+    build_code_context_manifest,
+    code_context_refs_for_pack,
+    code_context_refs_for_worker,
+    extract_repo_paths,
+)
 from .execution import ResearchAssistantExecutionMixin
 from .graph_context import expand_neighbors
 from .memory_curator import CuratorResult, MemoryCurator
@@ -184,6 +192,8 @@ class _ServiceAgentWorkerExecutor:
                     "context_pack_id": context_pack.get("context_pack_id"),
                     "route_reason": (context_pack.get("pack_json") or {}).get("route_reason"),
                     "graph_relation_refs": (context_pack.get("pack_json") or {}).get("graph_relation_refs", [])[:3],
+                    "code_context_refs": code_context_refs_for_worker(list(task.input_json.get("code_context_refs") or []))[:3],
+                    "affected_tests_summary": list(task.input_json.get("affected_tests_summary") or [])[:6],
                 },
                 ensure_ascii=False,
                 sort_keys=True,
@@ -235,6 +245,30 @@ class _ServiceAgentCurator:
                 "provenance_json": {"parent_task_id": parent_task_id, "source": "agent_team_reduce", "evidence_refs": evidence_refs},
             }
         ]
+
+
+def _code_context_worker_payload(context_pack: dict[str, Any]) -> dict[str, object]:
+    pack_json = context_pack.get("pack_json") if isinstance(context_pack.get("pack_json"), dict) else {}
+    refs = pack_json.get("code_context_refs") if isinstance(pack_json.get("code_context_refs"), list) else []
+    if not refs:
+        return {}
+    worker_refs = code_context_refs_for_worker(list(refs))
+    affected_tests: list[dict[str, Any]] = []
+    for ref in worker_refs:
+        for test in ref.get("affected_tests") or []:
+            compact = {
+                "classification": test.get("classification"),
+                "source_ref": test.get("source_ref"),
+                "test_path": test.get("test_path"),
+            }
+            if compact not in affected_tests:
+                affected_tests.append(compact)
+    return {
+        "affected_tests_summary": affected_tests[:12],
+        "code_context_pack_id": context_pack.get("context_pack_id"),
+        "code_context_refs": worker_refs,
+        "orchestrator_consumed_code_context_refs": True,
+    }
 
 
 class _ServiceReactMcpProvider:
@@ -921,11 +955,19 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
     def default_workflow_capabilities() -> list[dict[str, Any]]:
         return _default_workflow_capabilities()
 
-    def __init__(self, repository: Any | None = None, llm_client: Any | None = None, *, environment: str = DEFAULT_ENVIRONMENT) -> None:
+    def __init__(
+        self,
+        repository: Any | None = None,
+        llm_client: Any | None = None,
+        *,
+        environment: str = DEFAULT_ENVIRONMENT,
+        code_intelligence_provider: Any | None = None,
+    ) -> None:
         self.repository = repository or DatabaseResearchAssistantRepository()
         self.llm_client = llm_client or ResearchAssistantLlmClient()
         self.environment = environment
         self.context_budget_planner = ContextBudgetPlanner()
+        self.code_intelligence_provider = code_intelligence_provider or AistockCodeIntelligenceAdapterProvider()
 
 
     def run_agent_team(
@@ -938,6 +980,15 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         qe_autonomy_request: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         config = load_agent_teams_config(REPO_ROOT / "configs/research_assistant/agent_teams.yaml")
+        team_context_pack = self.build_context_pack(
+            ContextPackBuildRequest(
+                task_id=parent_task_id,
+                agent_id="agent_team_orchestrator",
+                user_message=objective,
+                token_budget=1800,
+            )
+        )
+        code_worker_payload = _code_context_worker_payload(team_context_pack)
         runtime = AgentTeamsRuntime(
             config=config,
             providers=AgentTeamsRuntimeProviders(
@@ -950,6 +1001,9 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             id_factory=lambda task: new_id(f"aar_{task.task_order:03d}_{task.agent_key}"),
         )
         merged_worker_inputs: dict[str, dict[str, object]] = {key: dict(value) for key, value in (worker_inputs or {}).items()}
+        if code_worker_payload:
+            for worker in config.workers:
+                merged_worker_inputs.setdefault(worker.agent_key, {}).update(code_worker_payload)
         if qe_autonomy_request is not None:
             merged_worker_inputs.setdefault("qe_experiment_designer", {})["qe_autonomy_request"] = dict(qe_autonomy_request)
         result = runtime.run(
@@ -3874,6 +3928,16 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         )
         code_intelligence_context = build_code_intelligence_context(repo_root=REPO_ROOT)
         code_intelligence_refs = artifact_ref_paths(code_intelligence_context)
+        changed_files = extract_repo_paths(user_message or "")
+        code_context_manifest = build_code_context_manifest(
+            provider=self.code_intelligence_provider,
+            query=user_message or "",
+            task_id=data.task_id,
+            changed_files=changed_files,
+            repo_root=REPO_ROOT,
+        )
+        code_context_refs = code_context_refs_for_pack(code_context_manifest)
+        code_intelligence_refs = sorted({*code_intelligence_refs, *code_context_manifest.source_refs})
         core_refs = [
             *refs_by_type.get("core", []),
             *refs_by_type.get("directive", []),
@@ -3901,6 +3965,15 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 "omitted_relation_refs": graph_result.omitted_relation_refs,
             },
             "code_intelligence_context": code_intelligence_context,
+            "code_context_ref_reason_code": code_context_manifest.reason_code,
+            "code_context_ref_status": code_context_manifest.status,
+            "code_context_refs": code_context_refs,
+            "code_context_manifest": {
+                "as_of": code_context_manifest.as_of,
+                "provider": code_context_manifest.provider,
+                "source_refs": code_context_manifest.source_refs,
+                "status": code_context_manifest.status,
+            },
             "task_id": data.task_id,
             "agent_id": data.agent_id,
             "token_budget": token_budget,
@@ -3924,12 +3997,20 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "pack_summary": (
                 f"Context Pack: {len(memory_items)} tree-selected memories, "
                 f"{len(graph_result.graph_relation_refs)} graph relations, {len(temp_refs)} temp memories, "
-                f"code-intelligence {code_intelligence_context.get('data_state') or 'unknown'}"
+                f"code-intelligence {code_intelligence_context.get('data_state') or 'unknown'}, "
+                f"code_context_refs {len(code_context_refs)}:{code_context_manifest.status}"
             ),
             "pack_json": pack_json,
             "checksum": sha256_json(pack_json),
         }
         context_pack = self.repository.create_record("context_packs", row)
+        if code_context_manifest.refs:
+            CodeContextRefsRepository(self.repository).persist_manifest(
+                context_pack_id=context_pack_id,
+                task_id=data.task_id,
+                query_text=user_message or "",
+                manifest=code_context_manifest,
+            )
         for item in memory_items:
             self.repository.create_record(
                 "memory_access_log",
@@ -3954,7 +4035,18 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             )
             self._mark_memory_used(item)
         if data.task_id:
-            self.add_task_event(data.task_id, TaskEventCreate(event_type="context_pack_built", message="Context Pack built", payload_json={"context_pack_id": row["context_pack_id"]}))
+            self.add_task_event(
+                data.task_id,
+                TaskEventCreate(
+                    event_type="context_pack_built",
+                    message="Context Pack built",
+                    payload_json={
+                        "code_context_ref_count": len(code_context_refs),
+                        "code_context_ref_status": code_context_manifest.status,
+                        "context_pack_id": row["context_pack_id"],
+                    },
+                ),
+            )
         return context_pack
 
     def _context_pack_user_message(self, task_id: str | None) -> str | None:
