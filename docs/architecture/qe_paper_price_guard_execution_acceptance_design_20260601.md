@@ -261,6 +261,24 @@ portfolio decision / alpha signal
 - 止盈优先作为利润保护或 alpha 衰减处理，例如 `take_profit_bps`、`trailing_stop_bps`、`rank_drop_exit`。
 - 所有止盈/止损规则必须作为 QE A/B 变量单独验证，不能把收益改善归因混到 PriceGuard 买入价格限制里。
 
+### 6.2.3 机构荐股场景怎样处理价格范围
+
+机构荐股或研究报告通常分为多类语义：
+
+| 场景 | 常见输出 | 价格范围怎样评估 |
+| --- | --- | --- |
+| 卖方研究 / equity research | 评级、目标价、上行空间、估值方法、风险因素。 | 目标价通常来自 DCF、相对估值、分部估值或情景分析；监管要求 price target 具备合理基础，并披露估值方法和阻碍达成的风险。参考 FINRA Rule 2241：<https://www.finra.org/rules-guidance/rulebooks/finra-rules/2241>、FINRA Regulatory Notice 17-06：<https://www.finra.org/rules-guidance/notices/17-06>。 |
+| 买方组合经理 / quant PM | alpha score、目标权重、风险预算、交易成本预算、执行限制。 | 很少给固定“荐股买入价”；更常把买入区间拆成 entry budget、execution limit、capacity/cost 约束，再由交易执行系统确认。 |
+| 短线交易建议 / model portfolio alert | entry zone、stop-loss、take-profit、time stop、仓位建议。 | 价格区间常由支撑/压力、波动率、ATR、前高/前低、盈亏比、事件窗口、历史 MAE/MFE 分布校准。 |
+| 投顾/内容平台荐股 | 买入区间、目标价、止损价、风险提示。 | 需要明确是“建议/教育/观察区间”还是可执行指令；实际交易仍要处理滑点、涨跌停、流动性和适当性风险。 |
+
+对 AIstock 的启示：
+
+- 选股功能可以给出 `suggested_buy_zone` 和 `suggested_stop_loss_zone`，但应定义为策略建议和风险预算，不是最终委托价格。
+- `target_price` 与 `take_profit` 不应默认存在。基本面/多因子策略可以先只给 `expected_return_bucket` 与 `risk_budget`；短线策略才考虑显示目标价或止盈区间。
+- 每个价格区间必须有来源：`valuation_based`、`alpha_budget_based`、`volatility_based`、`technical_level_based`、`ml_calibrated`。
+- 必须评估区间质量：进入区间后的 forward alpha、未进入区间的 missed alpha、止损触发率、止损后反弹率、盈亏比、换手和尾部回撤。
+
 ### 6.3 A 股交易制度约束
 
 A 股交易制度天然要求执行系统具备价格保护：
@@ -380,9 +398,9 @@ backend/services/trading_core/exit_guard.py
 
 说明：当前 `ALLOWED_POLICY_JSON_KEYS` 尚未允许 `price_guard`，实施阶段需要扩展并增加 validator；设计阶段仅定义目标 schema。
 
-### 7.3 策略包选股结果中的买入价格范围
+### 7.3 策略包选股结果中的买入与止损价格范围
 
-策略包的选股功能不应只返回 `symbol + score + target_weight`。为了让用户审批和后续 Paper v2 迁移可解释，选股结果应同时输出候选买入价格范围，但该范围必须被标记为“建议/预算”，而不是最终下单限价。
+策略包的选股功能不应只返回 `symbol + score + target_weight`。为了让用户审批和后续 Paper v2 迁移可解释，选股结果应同时输出候选买入价格范围；如果策略族支持，还可以输出建议止损区间。但这些范围必须被标记为“建议/预算”，而不是最终下单限价或强制止损单。
 
 建议在 selection artifact 或 StrategyPackage candidate snapshot 中增加：
 
@@ -406,6 +424,23 @@ backend/services/trading_core/exit_guard.py
     "near_limit_up_skip_bps": 80,
     "policy_sha256": "..."
   },
+  "suggested_stop_loss_zone": {
+    "enabled": true,
+    "status": "guidance_only",
+    "price_basis": "raw",
+    "reference": "planned_entry_or_actual_entry",
+    "soft_stop_price": 9.55,
+    "hard_stop_price": 9.40,
+    "max_loss_bps": 600,
+    "volatility_multiple": 2.5,
+    "policy_sha256": "..."
+  },
+  "suggested_take_profit_zone": {
+    "enabled": false,
+    "status": "not_applicable_for_alpha_strategy",
+    "take_profit_price": null,
+    "trailing_stop_bps": null
+  },
   "selection_price_guidance_reason": [
     "score_bucket=top5_high_confidence",
     "reference_price=signal_close",
@@ -418,9 +453,43 @@ backend/services/trading_core/exit_guard.py
 
 - `green_max_buy_price/yellow_max_buy_price` 由已验证 `price_guard_policy.json` 和 `reference_price` 计算，用于用户理解“什么价格还值得买”。
 - 选股页可展示该价格区间，但不得绕过开盘后 PriceGuard；实际下单仍以开盘/分钟 market context 重新评估。
+- `suggested_stop_loss_zone` 可以展示风险预算，例如 soft stop、hard stop、波动率止损，但第一阶段默认 `guidance_only`，不直接生成强制卖出单。
+- 止损区间的 `reference` 若是 `planned_entry`，Paper v2 实际持仓后必须转换为 `actual_entry_cost` 或成交均价再评估，不能继续用计划价。
+- `suggested_take_profit_zone` 对低换手多因子可为空或 `not_applicable_for_alpha_strategy`；只有短线/事件/动量策略通过 QE A/B 后才建议启用。
 - 如果策略包没有经过 QE A/B 验证，只能展示 `guidance_status=unvalidated`，不能进入 Paper v2 `enforced`。
 - 如果缺少 `reference_price`、`price_basis` 或 `policy_sha256`，策略包发布应 fail-fast 或降级为“不提供价格范围”，不能填默认价格。
 - 对 ST、主板、创业板、科创板、涨跌停和停牌状态，展示价应同时显示交易所价格边界，避免把策略价格范围误解为可申报范围。
+
+#### 7.3.1 买入区间计算来源
+
+候选买入区间可以按策略类型选择来源：
+
+| 来源 | 适用策略 | 计算方式 | 风险 |
+| --- | --- | --- | --- |
+| `alpha_budget_based` | 日频多因子、低换手组合 | `reference_price` 加上经 QE A/B 验证的 `yellow/max_open_gap_bps`。 | 如果 alpha bucket 过粗，可能过严或过松。 |
+| `cost_budget_based` | 对成本敏感的小资金/V25.1 | alpha 预算减去显性成本、滑点缓冲、最小佣金影响。 | 需要真实成本模型。 |
+| `volatility_based` | 短线/动量/事件 | ATR、历史波动、开盘波动分布定义 entry band。 | 容易随市场 regime 漂移。 |
+| `technical_level_based` | 人工/半自动短线策略 | 支撑/压力、前高/前低、缺口、均线位置。 | 主观性强，必须记录来源。 |
+| `ml_calibrated` | 未来 ML 价格接受模型 | residual alpha 或 accept probability 推导 entry band。 | 必须有 feature contract 和 walk-forward。 |
+
+AIstock 第一版建议 `alpha_budget_based + cost_budget_based`，因为它最贴近日频多因子和小资金 QE/Paper v2 场景。
+
+#### 7.3.2 止损区间计算来源
+
+建议止损区间不是“预测会跌到哪里”，而是“若价格或路径证明假设失效，应控制最大损失到哪里”：
+
+| 类型 | 计算方式 | 适用场景 |
+| --- | --- | --- |
+| 固定风险预算 | `entry_cost * (1 - max_loss_bps / 10000)` | 初始简单规则，便于 QE A/B。 |
+| 波动率/ATR stop | `entry_cost - k * ATR` 或按近 N 日波动换算。 | 波动差异较大的股票池。 |
+| 结构位 stop | 跌破支撑、前低、事件窗口失效价。 | 技术/事件策略。 |
+| alpha 失效 stop | rank 跌出阈值、因子暴露变化、风险事件触发。 | 多因子组合更推荐。 |
+| trailing stop | 从持仓以来最高价回撤超过阈值。 | 趋势/动量/短线策略。 |
+
+第一阶段建议展示 soft/hard 两档：
+
+- `soft_stop_price`：触发后进入观察、减仓或等待确认。
+- `hard_stop_price`：触发后生成 risk exit intent，但仍需要 PriceGuard/market state 处理限价、跌停和可成交性。
 
 ### 7.4 ExitGuard：止盈/止损建议的独立位置
 
@@ -658,7 +727,7 @@ QE 对照报告至少输出两类指标：
 | --- | --- |
 | `price_guard_policy.json` | 完整 PriceGuard 参数、schema version、price basis、reference source、适用策略族。 |
 | `price_guard_policy.sha256` | policy hash；Paper v2 后续必须引用同一 hash 才能宣称同策略验证。 |
-| `selection_price_guidance.parquet` 或 `.jsonl` | 策略包选股候选的 `reference_price`、`expected_alpha_bucket`、`suggested_entry_price_band` 和 guidance reason。 |
+| `selection_price_guidance.parquet` 或 `.jsonl` | 策略包选股候选的 `reference_price`、`expected_alpha_bucket`、`suggested_entry_price_band`、`suggested_stop_loss_zone` 和 guidance reason。 |
 | `ab_baseline_metrics.json` | 当前模式指标，包含数据版本、成本配置、execution algo config hash。 |
 | `ab_price_guard_metrics.json` | 启用 PriceGuard 后的组合级和 PriceGuard 归因指标。 |
 | `price_guard_decisions.parquet` 或 `.jsonl` | 按 symbol/date/side 记录 `ACCEPT/REDUCE/SKIP`、理由、价格、数量缩放。 |
@@ -978,6 +1047,33 @@ exit_guard:
 
 解释：多因子组合更适合优先用 alpha 衰减/排名下降退出；硬止损和止盈容易改变持有期分布，必须单独做 QE A/B。若后续实验证明某类策略的止盈/止损稳定有效，再把 `exit_guard.enabled=true` 固化进 validated policy。
 
+### 10.5.1 选股页可展示的区间样式
+
+选股页建议展示三类价格，不建议只显示一个“买入价”：
+
+```text
+建议买入区间:
+  green: <= 10.15
+  yellow: 10.15 ~ 10.30, 建议减量或等待
+  red: > 10.30, 默认放弃当日买入
+
+建议止损区间:
+  soft stop: 9.55, 进入观察/减仓/等待确认
+  hard stop: 9.40, 生成风险退出意图
+
+止盈/利润保护:
+  alpha strategy: 不给固定目标价，优先 rank drop / alpha decay exit
+  momentum/event strategy: 可展示 take profit 或 trailing stop, 但必须 QE A/B 验证
+```
+
+展示文案必须包含：
+
+- `reference_price` 和来源，例如 `signal_close`。
+- 区间来源，例如 `alpha_budget_based` 或 `volatility_based`。
+- `policy_sha256` 和验证状态。
+- `guidance_only` 或 `enforced_candidate` 状态。
+- “最终委托价格由 PriceGuard + 执行算法在开盘/盘中重新确认”的提示。
+
 ### 10.6 集合竞价与全天阈值控制
 
 买入价格筛选不应只发生在集合竞价，也不应无差别地全天重新做复杂判断。建议按执行方式分级：
@@ -1074,6 +1170,29 @@ reason distribution
 net performance delta
 stability by market regime
 ```
+
+### 11.4 选股建议区间的质量评估
+
+策略包展示买入区间和止损区间后，必须把它们当作可检验的预测/建议，而不是静态文案。建议新增评估：
+
+| 评估项 | 说明 |
+| --- | --- |
+| `entry_zone_hit_rate` | 候选股 T+1 是否进入建议买入区间。 |
+| `entry_zone_fillable_rate` | 进入区间时是否具备成交条件，排除停牌、涨停排队、无分钟价等市场状态。 |
+| `alpha_if_entered_zone` | 进入建议区间并买入后的 forward alpha。 |
+| `alpha_if_chased_above_zone` | 超出建议区间仍买入后的 forward alpha，用于衡量追价伤害。 |
+| `missed_alpha_if_not_entered` | 未进入区间而放弃买入后是否错过收益。 |
+| `soft_stop_trigger_rate` | soft stop 触发比例。 |
+| `hard_stop_trigger_rate` | hard stop 触发比例。 |
+| `stop_saved_loss_bps` | 止损避免的后续亏损。 |
+| `stop_whipsaw_cost_bps` | 止损后快速反弹造成的机会损失。 |
+| `reward_risk_realized` | 实际收益与建议止损风险预算之比。 |
+
+通过标准不应只看命中率：
+
+- 买入区间可以命中率低，但若显著提高 `alpha_if_entered_zone` 并降低追高亏损，仍可能有效。
+- 止损区间可以降低尾部亏损，但若 `stop_whipsaw_cost_bps` 过高，会破坏多因子持有期，应调宽或只做 soft stop。
+- 所有评估必须分 score bucket、open gap bucket、市场 regime、流动性 bucket 和板块类型，否则容易把单一窗口过拟合成规则。
 
 ## 12. 未来 ML 训练方案
 
@@ -1295,7 +1414,7 @@ UNSUPPORTED_EXIT_GUARD_CONFIG_ERROR
 
 - 新增 PriceGuard core DTO 和 rule evaluator。
 - 扩展 `ValidatedExecutionPolicy` schema，允许 `price_guard`。
-- 定义 selection price guidance DTO，支持 `reference_price`、`green/yellow/red` 买入价和 `policy_sha256`。
+- 定义 selection price guidance DTO，支持 `reference_price`、`green/yellow/red` 买入价、`soft/hard stop` 止损区间和 `policy_sha256`。
 - 增加 policy hash、unknown field、price basis validator。
 - 单元测试：green/yellow/red、missing reference、basis mismatch。
 
@@ -1334,6 +1453,7 @@ UNSUPPORTED_EXIT_GUARD_CONFIG_ERROR
 
 - 从 QE/Paper 历史数据生成 open_gap x score bucket 表。
 - 产出参数候选与 walk-forward evidence。
+- 增加买入区间和止损区间质量评估：zone hit、entered-zone alpha、chase-above-zone alpha、stop saved loss、whipsaw cost。
 - 不自动激活生产 policy。
 
 ### Phase 7：ML candidate policy
@@ -1355,12 +1475,15 @@ UNSUPPORTED_EXIT_GUARD_CONFIG_ERROR
 | --- | --- |
 | policy schema 支持 `price_guard` | validator 单测、policy sha256 稳定性测试 |
 | 策略包选股输出买入价格范围 | selection artifact 包含 `reference_price`、`suggested_entry_price_band`、`guidance_status`、`policy_sha256`，并标注非最终委托价 |
+| 策略包选股输出止损区间 | selection artifact 包含 `suggested_stop_loss_zone`、`soft_stop_price`、`hard_stop_price`、`reference` 和 `guidance_only/enforced_candidate` 状态 |
+| 机构荐股式价格范围有依据 | 每个区间记录 `range_source`：`alpha_budget_based/cost_budget_based/volatility_based/technical_level_based/ml_calibrated` |
 | 日频策略、PriceGuard、日内执行参数分层 | StrategyPackage/YAML schema 中 `selection_policy`、`execution_acceptance_policy`、`minute_execution_policy` 分组清晰，validator 禁止混放关键字段 |
 | QE baseline 与 PriceGuard A/B 只切换价格限制 | A/B config diff 证明 strategy/model/data/cost/execution algo 相同，仅 `price_guard_mode/policy_sha256` 不同 |
 | PriceGuard scope 配置可验证 | QE config truth tests 覆盖 `auction_only`、`auction_and_intraday`、`intraday_only`，Paper v2 parity replay 对齐 scope 行为 |
 | QE A/B 产物完整 | `price_guard_policy.json`、`price_guard_policy.sha256`、`ab_baseline_metrics.json`、`ab_price_guard_metrics.json`、`price_guard_decisions.parquet/jsonl`、`ab_comparison_report.md` |
 | QE 参数网格可解释 | max open gap、chase budget、yellow multiplier、sell slippage sweep 报告，含 walk-forward 和 bucket stability |
 | Shadow 模式不被当作收益证据 | 报告字段区分 `shadow_diagnostics` 与 `enforced_backtest_metrics`，审批只引用 enforced 对照 |
+| 买入/止损区间质量可评估 | 报告包含 `entry_zone_hit_rate`、`alpha_if_entered_zone`、`alpha_if_chased_above_zone`、`stop_saved_loss_bps`、`stop_whipsaw_cost_bps` |
 | QE YAML 注入正确 | `backend/tests/unified_engine/test_qe_config_truth.py` 新增切片断言 |
 | Qlib adjusted/raw 对齐 | 使用 `$factor` 转 raw 后计算 gap/limit 的回归样本 |
 | 买入高开超过阈值跳过 | QE helper 单测 + Paper v2 historical test |
@@ -1386,9 +1509,10 @@ UNSUPPORTED_EXIT_GUARD_CONFIG_ERROR
 6. `CLOSE_PRICE` 日频路径是否完全禁用 PriceGuard，还是仅支持简单 close-to-close guard，需要审批。
 7. `auction_only` 与 `auction_and_intraday` 哪个作为默认生产候选，需要用 QE A/B 证明；本文建议日频 T+1 多因子优先 `auction_and_intraday`。
 8. 盘中 red zone 是取消剩余订单、暂停等待回落，还是改为更被动挂单，需要按策略族配置。
-9. 策略包选股页展示 `suggested_entry_price_band` 后，用户是否允许手工覆盖；若允许，必须作为新 policy 重新验证，不能覆盖原 hash。
-10. 止盈/止损第一版是只展示建议，还是进入 `shadow` 诊断；不建议未经 QE A/B 直接 enforced。
-11. 是否需要把 PriceGuard/ExitGuard 决策纳入前端 Paper v2 / StrategyPackage 审计页面，本设计暂不包含 UI。
+9. 策略包选股页展示 `suggested_entry_price_band` 与 `suggested_stop_loss_zone` 后，用户是否允许手工覆盖；若允许，必须作为新 policy 重新验证，不能覆盖原 hash。
+10. 多因子策略是否显示 `suggested_take_profit_zone`：本文建议默认不显示固定目标价，只显示 alpha decay / rank-drop exit。
+11. 止盈/止损第一版是只展示建议，还是进入 `shadow` 诊断；不建议未经 QE A/B 直接 enforced。
+12. 是否需要把 PriceGuard/ExitGuard 决策纳入前端 Paper v2 / StrategyPackage 审计页面，本设计暂不包含 UI。
 
 ## 18. 推荐审批结论
 
@@ -1398,9 +1522,10 @@ UNSUPPORTED_EXIT_GUARD_CONFIG_ERROR
 2. QE 回测是 PriceGuard policy 的验证源；Paper v2 只能消费 validated execution policy snapshot。
 3. 第一版采用 `rule_v1 + historical bucket calibration`，不直接上 ML。
 4. ML 仅作为未来候选 policy，必须带模型资产、feature contract、walk-forward evidence、policy hash。
-5. 策略包选股结果应展示买入价格范围，但该范围是 pre-trade guidance；开盘后仍由 PriceGuard 重新确认。
+5. 策略包选股结果应展示买入价格范围；也可以展示止损区间，但二者都是 guidance/risk budget，开盘后和持仓后仍由 PriceGuard/ExitGuard 重新确认。
 6. 日频策略、PriceGuard、日内执行策略必须分层配置；`algo_config` 不能偷偷承载追价预算。
 7. 日频 T+1 多因子默认建议验证 `auction_and_intraday`：集合竞价/开盘先筛一次，全天分时执行时每个切片前再做剩余订单阈值控制。
 8. 止盈/止损属于独立 ExitGuard/RiskGuard，不与买入 PriceGuard 混合；默认先展示/诊断，QE A/B 通过后再考虑 enforced。
-9. 第一批落地策略建议限定为 `ScoreWeightedTopkStrategyV2` / `ScoreWeightedTopkStrategyV2CapacityV1` + `V25_1_SMALL_CAP`，避免一次性扩散到所有算法。
+9. 机构荐股式目标价可以作为未来 research/valuation 扩展，但第一版多因子策略不默认预测目标价；优先评估买入区间、止损风险预算和 alpha 衰减退出。
+10. 第一批落地策略建议限定为 `ScoreWeightedTopkStrategyV2` / `ScoreWeightedTopkStrategyV2CapacityV1` + `V25_1_SMALL_CAP`，避免一次性扩散到所有算法。
 
