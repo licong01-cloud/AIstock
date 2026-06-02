@@ -31,8 +31,8 @@
   "expected": "Auto-filed CI failure issues contain actionable failed job/test/error diagnostics when logs are available, and avoid filing premature diagnostic-extraction-incomplete issues while the run is still in progress.",
   "first_seen_at": "2026-06-02T11:07:38.697029Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "7156201a2f25e0b2885f80bfcd21b80e80dd7e36",
+  "fixed_at": "2026-06-02T11:49:36.619372Z",
   "github_issue_number": 578,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/578",
   "last_seen_at": "2026-06-02T11:07:38.697029Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/579",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -55,7 +56,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -64,5 +65,13 @@
     "fingerprint": "7d2d6e6f8674002a85a92e33",
     "source_event_id": "FE-20260602-7d2d6e6f8674"
   },
+  "validation_evidence": [
+    "PR #579 CI -> checks_passed",
+    "python -m pytest backend/tests/scripts/test_ci_failure_issue_summary.py -q -p no:cacheprovider -> 19 passed",
+    "python -m ruff check scripts/ci_failure_issue_summary.py backend/tests/scripts/test_ci_failure_issue_summary.py -> passed",
+    "python -m nox -s l0 validation_center_backend -> success",
+    "python -m nox -s validation_module_registry_l0 validation_catalog_integrity -> success",
+    "python scripts/aistock_issue_workflow.py nightly-intake-smoke -> workflow_gate=passed, unexpected_dirty_paths=[]"
+  ],
   "verification_run_id": null
 }
