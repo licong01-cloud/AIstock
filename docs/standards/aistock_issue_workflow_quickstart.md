@@ -330,7 +330,7 @@ python scripts/aistock_issue_workflow.py merge-finalizer `
   --apply
 ```
 
-The finalizer verifies the source PR is merged, runs close-sync in an isolated registry worktree, commits and opens or reuses the close-sync PR, records postmortem output, and returns the remaining next actions. Add `--merge-close-sync-pr --cleanup` only when the user authorized the full aftercare loop and checks are green; otherwise stop with a merge-ready close-sync PR.
+The finalizer verifies the source PR is merged, runs close-sync in an isolated registry worktree, commits and opens or reuses the close-sync PR, records postmortem output, and returns the remaining next actions. Retries after GitHub/TLS/CI interruptions must reuse an existing open close-sync PR for the same BUG/source PR instead of appending duplicate registry commits. Add `--merge-close-sync-pr --cleanup` only when the user authorized the full aftercare loop and checks are green; otherwise stop with a merge-ready close-sync PR.
 
 
 ## Cleanup After Merge
