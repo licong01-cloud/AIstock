@@ -60,8 +60,8 @@
   "expected": "Both Paper v2 single-strategy MiniQMT execution and MiniQMT virtual-strategy multi-strategy execution use the same shared vn.py-style adapter with deterministic child-order semantics, complete diagnostics, fail-fast validation, and targeted tests proving inheritance of prior fixes.",
   "first_seen_at": "2026-06-02T12:51:51.142040Z",
   "fix_branch": "bug/paper-v2-unified-phase2-vnpy-adapter-20260602",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "cfeee46351141a90a13952c9f47f71c0a57e3a8a",
+  "fixed_at": "2026-06-02T14:15:32.329423Z",
   "github_issue_number": 588,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/588",
   "last_seen_at": "2026-06-02T13:53:37.212125Z",
@@ -69,6 +69,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/594",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -83,7 +84,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -92,5 +93,14 @@
     "fingerprint": "2937e767096710b0509cb905",
     "source_event_id": "FE-20260602-2937e7670967"
   },
+  "validation_evidence": [
+    "pytest backend/tests/trading_core/test_minqmt_vnpy_shared_adapter.py backend/tests/paper_trading_v2/test_minqmt_vnpy_execution_adapter.py backend/tests/simulation_runtime/test_target_rebalance_shared.py::test_miniqmt_execution_bridge_uses_managed_orders_and_strategy_attribution -q -p no:cacheprovider -> 11 passed",
+    "python -m ruff check changed Python files -> All checks passed",
+    "git diff --check -> passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed; mapped=12 unmapped=0 ambiguous=0",
+    "python -m nox -s paper_v2_backend -> 578 passed, 1 skipped, 2 xfailed",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> passed",
+    "QE_READ_L3_SKIP_UI=1 python -m nox -s qe_read_l3 -> passed"
+  ],
   "verification_run_id": null
 }
