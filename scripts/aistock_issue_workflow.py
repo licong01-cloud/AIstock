@@ -556,6 +556,15 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 "readiness_next_command",
                 "fallback_reason",
             )
+        if "bug_id_allocation" in payload:
+            compact["bug_id_allocation"] = _pick(
+                payload["bug_id_allocation"],
+                "next_number",
+                "allocator_max_number",
+                "observed_max_number",
+                "github_max_number",
+                "github_scanned",
+            )
     elif schema.endswith("_start_v1"):
         compact.update(_compact_start(payload) or {})
     elif schema.endswith("_finish_v1") or schema.endswith("_finish_batch_v1"):
@@ -1275,6 +1284,24 @@ def _bug_id_allocation_report(
         if github_required and github_warnings:
             raise WorkflowError("; ".join(github_warnings))
     max_number = max((int(source.get("number") or 0) for source in sources), default=0)
+    max_by_kind: dict[str, int] = {}
+    for source in sources:
+        kind = str(source.get("kind") or "unknown")
+        number = int(source.get("number") or 0)
+        if number > max_by_kind.get(kind, 0):
+            max_by_kind[kind] = number
+    allocator_max = max_by_kind.get("allocator", 0)
+    observed_max = max(
+        max_by_kind.get("bug_json", 0),
+        max_by_kind.get("reservation", 0),
+        max_by_kind.get("github_issue", 0),
+    )
+    if allocator_max and observed_max > allocator_max:
+        warnings.append(
+            "BUG id allocator is behind observed BUG ids: "
+            f"allocator=BUG-{allocator_max:03d}, observed=BUG-{observed_max:03d}; "
+            f"next allocation will use BUG-{max_number + 1:03d}"
+        )
     return {
         "schema_version": "aistock_bug_id_allocation_report_v1",
         "max_number": max_number,
@@ -1282,6 +1309,23 @@ def _bug_id_allocation_report(
         "sources": sources,
         "warnings": warnings,
         "github_scanned": include_github,
+        "max_by_kind": max_by_kind,
+        "allocator_max_number": allocator_max,
+        "observed_max_number": observed_max,
+        "github_max_number": max_by_kind.get("github_issue", 0),
+    }
+
+
+def _bug_id_allocation_summary(report: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": "aistock_bug_id_allocation_summary_v1",
+        "max_number": report.get("max_number"),
+        "next_number": report.get("next_number"),
+        "allocator_max_number": report.get("allocator_max_number"),
+        "observed_max_number": report.get("observed_max_number"),
+        "github_max_number": report.get("github_max_number"),
+        "github_scanned": report.get("github_scanned"),
+        "warnings": report.get("warnings", []),
     }
 
 
@@ -4335,6 +4379,12 @@ def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
         if not github["repo"].get("ok"):
             warnings.append("GitHub repo check failed for licong01-cloud/AIstock")
 
+    bug_id_allocation = _bug_id_allocation_summary(
+        _bug_id_allocation_report(REPO_ROOT, include_github=not skip_external, github_required=False)
+    )
+    for warning in bug_id_allocation.get("warnings") or []:
+        warnings.append(f"bug id allocation: {warning}")
+
     mcp = _mcp_config_snapshot()
     if mcp["stale_worktree_config_files"]:
         warnings.append("MCP/Codex config mentions AIstock_worktrees; verify it is not a stale server target")
@@ -4367,6 +4417,7 @@ def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
         "canonical_root": str(canonical_root),
         "canonical_git": canonical_git,
         "github": github,
+        "bug_id_allocation": bug_id_allocation,
         "mcp": mcp,
         "code_intelligence": code_intel,
         "h7_code_intelligence": h7_code_intelligence,
