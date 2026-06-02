@@ -117,20 +117,19 @@ def test_extract_signal_preset_coefficients_ignores_flat_metadata_without_coeffi
     assert coeffs == {"trending": 1.05, "neutral": 1.0, "fading": 0.96}
 
 
-def test_extract_signal_preset_coefficients_uses_default_when_builtin_preset_is_metadata_only() -> None:
-    coeffs = HMMTrainingService._extract_signal_preset_coefficients(
-        {
-            "signal_presets": {
-                "preset_A": {
-                    "label": "Preset A",
-                    "description": "metadata-only runtime preset",
+def test_extract_signal_preset_coefficients_rejects_builtin_metadata_only_preset() -> None:
+    with pytest.raises(ValueError, match="HMM signal_preset has no coefficients: preset_A"):
+        HMMTrainingService._extract_signal_preset_coefficients(
+            {
+                "signal_presets": {
+                    "preset_A": {
+                        "label": "Preset A",
+                        "description": "metadata-only runtime preset",
+                    }
                 }
-            }
-        },
-        "preset_A",
-    )
-
-    assert coeffs == {"trending": 1.05, "neutral": 1.0, "fading": 0.96}
+            },
+            "preset_A",
+        )
 
 
 def test_extract_signal_preset_coefficients_rejects_custom_metadata_only_preset() -> None:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import os
 from datetime import date, datetime, timezone
@@ -21,6 +22,11 @@ import psycopg2.extras
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend.db.pg_pool import get_conn
+from backend.services.market_data.instrument_validator import (
+    DEFAULT_SQL_CHUNK_SIZE,
+    load_chunks_with_logging,
+    normalize_and_validate_ts_codes,
+)
 from backend.services.selection_center.runtime_profile import parse_selection_runtime_profile
 from backend.services.trading_core.errors import (
     ArtifactGenerationFailedError,
@@ -44,6 +50,7 @@ from .repository import StrategyPackageRepository
 from .workspace_policy import ensure_not_forbidden_worker_workspace_path
 
 ConnFactory = Callable[[], Iterator[Any]]
+logger = logging.getLogger("aistock.strategy_package.selection_artifact")
 
 
 def _canonical_json_sha256(payload: Any) -> str:
@@ -817,20 +824,48 @@ class StrategyPackageSelectionArtifactService:
         return output
 
     def _load_reference_prices(self, symbols: list[str], trade_date: date) -> dict[str, float]:
-        if not symbols:
+        ts_codes = normalize_and_validate_ts_codes(
+            symbols,
+            source="StrategyPackageSelectionArtifactService._load_reference_prices",
+            start_date=trade_date,
+            end_date=trade_date,
+        )
+        if not ts_codes:
             return {}
-        with self._conn_factory() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT ts_code, close_li
-                    FROM market.kline_daily_raw
-                    WHERE trade_date = %s
-                      AND ts_code = ANY(%s)
-                      AND close_li IS NOT NULL
-                      AND close_li > 0
-                    """,
-                    (trade_date, symbols),
+
+        def _load_reference_chunk(chunk: list[str], _chunk_index: int, correlation_id: str) -> list[tuple[Any, Any]]:
+            try:
+                with self._conn_factory() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            SELECT ts_code, close_li
+                            FROM market.kline_daily_raw
+                            WHERE trade_date = %s
+                              AND ts_code = ANY(%s)
+                              AND close_li IS NOT NULL
+                              AND close_li > 0
+                            """,
+                            (trade_date, chunk),
+                        )
+                        return list(cur.fetchall())
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "selection artifact reference price chunk failed: correlation_id=%s symbols=%s trade_date=%s error=%s",
+                    correlation_id,
+                    len(chunk),
+                    trade_date,
+                    exc,
                 )
-                rows = cur.fetchall()
+                raise
+
+        row_chunks = load_chunks_with_logging(
+            ts_codes=ts_codes,
+            source="SelectionArtifact.reference_price",
+            start_date=trade_date,
+            end_date=trade_date,
+            chunk_size=DEFAULT_SQL_CHUNK_SIZE,
+            loader=_load_reference_chunk,
+        )
+        rows = [row for chunk in row_chunks for row in chunk]
         return {str(symbol): float(close_li) / 1000.0 for symbol, close_li in rows}
