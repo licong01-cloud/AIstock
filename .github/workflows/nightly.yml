@@ -227,12 +227,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build Understand Anything summary placeholders
+      - name: Build CodeGraph freshness artifact
         run: |
-          if [ "${GITHUB_EVENT_NAME}" = "schedule" ] && [ "$(date -u +%u)" != "7" ]; then
-            echo "Skipping weekly code intelligence graph summary outside Sunday UTC."
-            exit 0
-          fi
           source "$(conda info --base)/etc/profile.d/conda.sh"
           conda activate AIstock
           OUT_DIR="tmp/validation/code-intelligence/${{ github.run_id }}"
@@ -241,6 +237,17 @@ jobs:
             --output-dir "${OUT_DIR}" \
             --output "${OUT_DIR}/codegraph-freshness.stdout.json" || true
           cat "${OUT_DIR}/codegraph-freshness.md" || true
+
+      - name: Build weekly Understand Anything summaries
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "schedule" ] && [ "$(date -u +%u)" != "7" ]; then
+            echo "Skipping weekly Understand Anything summary outside Sunday UTC."
+            exit 0
+          fi
+          source "$(conda info --base)/etc/profile.d/conda.sh"
+          conda activate AIstock
+          OUT_DIR="tmp/validation/code-intelligence/${{ github.run_id }}"
+          mkdir -p "${OUT_DIR}"
           python scripts/code_intelligence_adapter.py ua-summary-all \
             --output-dir "${OUT_DIR}" \
             --output "${OUT_DIR}/ua-summary-manifest.stdout.json"
