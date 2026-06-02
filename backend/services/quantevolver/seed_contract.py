@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from .experiment_config import normalize_qe_random_seed
+from .experiment_config import normalize_qe_random_seed, normalize_qe_seed_ensemble_config
 
 SEED_ALIAS_KEYS = ("random_seed", "seed", "loop_seed", "random_state", "torch_seed", "numpy_seed")
 
@@ -38,6 +38,15 @@ def ensure_loop_fixed_seed(loop: dict[str, Any], *, context: str, trainable: boo
     runtime_flags = dict(loop.get("runtime_flags") or {})
     seed_value = _pop_seed_aliases(runtime_flags, prefer_existing=runtime_flags.get("random_seed"))
 
+    seed_ensemble = normalize_qe_seed_ensemble_config(
+        loop.get("ensemble") or runtime_flags.get("ensemble"),
+        context=f"{context}.ensemble",
+    )
+    if seed_ensemble:
+        loop["ensemble"] = seed_ensemble
+        runtime_flags["ensemble"] = seed_ensemble
+        runtime_flags.setdefault("seed_policy", "fixed")
+
     seed_value = _pop_seed_aliases(loop, prefer_existing=seed_value)
 
     strategy_params = loop.get("strategy_params")
@@ -51,6 +60,9 @@ def ensure_loop_fixed_seed(loop: dict[str, Any], *, context: str, trainable: boo
         mutable_model = dict(model_params)
         seed_value = _pop_seed_aliases(mutable_model, prefer_existing=seed_value)
         loop["model_params"] = mutable_model
+
+    if seed_ensemble and seed_value in (None, ""):
+        seed_value = seed_ensemble["seeds"][0]
 
     if seed_value not in (None, ""):
         runtime_flags["random_seed"] = normalize_qe_random_seed(

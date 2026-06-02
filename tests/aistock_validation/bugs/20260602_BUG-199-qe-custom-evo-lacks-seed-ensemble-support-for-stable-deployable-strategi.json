@@ -1,0 +1,136 @@
+{
+  "actual": "CustomEvoLoopConfig.runtime_flags only has scalar random_seed/seed_policy/archive_policy. The loop has a single model_id and action_type custom_config. Model catalog/registry has no seed-ensemble model concept, and runtime orchestration has no aggregation point after score generation or after portfolio generation.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260602_BUG-199-qe-custom-evo-lacks-seed-ensemble-support-for-stable-deployable-strategi.json",
+    "backend/routers/quantevolver_evolution.py",
+    "backend/services/quantevolver/experiment_config.py",
+    "backend/services/quantevolver/experiment_config_builders.py",
+    "backend/services/quantevolver/qe_evolution_service.py",
+    "backend/services/quantevolver/seed_contract.py",
+    "backend/services/quantevolver/executors/backtest.py",
+    "backend/services/quantevolver/config_composer.py",
+    "scripts/qrun_limit_minute.py",
+    "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
+    "backend/tests/unified_engine/test_experiment_config.py",
+    "backend/tests/unified_engine/test_backtest_executor.py",
+    "backend/tests/unified_engine/test_qe_config_truth.py",
+    "tests/aistock_validation/history/qe/20260602_120509_l2_bug-199-custom_evo-seed-ensemble-validation.md"
+  ],
+  "assigned_agent": "Codex",
+  "bug_id": "BUG-199",
+  "closed_at": null,
+  "closure_requirements": [
+    "CustomEvoLoopConfig accepts optional ensemble block with explicit deterministic seeds and preserves disabled/absent single-seed behavior bitwise.",
+    "Score-level seed ensemble trains each configured seed, aggregates pred.pkl scores by mean/rank_mean/median, then runs a single pred-backtest so enhanced_metrics fields keep existing schema/units.",
+    "Runtime metadata is persisted in loop config/runtime_flags/execution manifest and kept out of Qlib strategy kwargs.",
+    "Fixed ensemble seeds produce deterministic aggregation; random_seed is normalized from explicit ensemble seeds when scalar random_seed is omitted.",
+    "Portfolio-level ensemble evaluates equal-weight merged daily target holdings and aligns with offline holdings-average proxy evidence.",
+    "Regression tests cover schema normalization, config building, composer YAML, executor payload, runner aggregation helpers, and single-seed fallback behavior."
+  ],
+  "created_at": "2026-06-02T03:00:01.569924Z",
+  "description": "CustomEvoLoopConfig.runtime_flags only has scalar random_seed/seed_policy/archive_policy. The loop has a single model_id and action_type custom_config. Model catalog/registry has no seed-ensemble model concept, and runtime orchestration has no aggregation point after score generation or after portfolio generation.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260602-288a91f534e9",
+      "timestamp": "2026-06-02T03:00:01.569919Z"
+    },
+    {
+      "action": "triage_scope_expanded",
+      "actor": "Codex",
+      "note": "Expanded allowed_write_scope from registry-only to custom_evo schema, execution, runner, and targeted unit tests after codegraph did not identify backend execution paths.",
+      "timestamp": "2026-06-02T03:08:00Z"
+    },
+    {
+      "action": "score_ensemble_implementation_added",
+      "actor": "Codex",
+      "note": "Added optional custom_evo ensemble config, runtime propagation, qrun score-level seed bagging, and targeted unit tests; portfolio level remains fail-fast pending offline holdings evidence.",
+      "timestamp": "2026-06-02T03:35:00Z"
+    },
+    {
+      "action": "design_compliance_partial",
+      "actor": "Codex",
+      "note": "Score-level seed bagging path is implemented and unit-tested; portfolio-level holdings-average alignment remains pending and issue must not be closed as fully fixed yet.",
+      "timestamp": "2026-06-02T03:43:00Z"
+    },
+    {
+      "action": "scope_alignment_fix",
+      "actor": "Codex",
+      "note": "Added qe_evolution_service.py to allowed_write_scope because loop config persistence/action_type metadata is required for ensemble_config traceability.",
+      "timestamp": "2026-06-02T03:50:00Z"
+    },
+    {
+      "action": "portfolio_ensemble_implementation_added",
+      "actor": "Codex",
+      "note": "Implemented portfolio-level equal-weight daily holdings merge, final recorder artifacts, fail-fast optional artifact loading, and day-backtest runner packaging for seed ensembles.",
+      "timestamp": "2026-06-02T05:42:50.549344Z"
+    },
+    {
+      "action": "validation_completed",
+      "actor": "Codex",
+      "note": "compileall, targeted seed ensemble pytest, changed-only guardrail, l0, validation_module_registry_l0, qe_data_contract_backend, and qe_read_l3 with UI skipped, and validation_center_backend passed; production runtime and DB untouched.",
+      "timestamp": "2026-06-02T05:42:50.549344Z"
+    },
+    {
+      "action": "validation_center_backend_passed",
+      "actor": "Codex",
+      "note": "validation_center_backend passed after final gate follow-up: 321 passed in 117.95s; coverage line=79.92 branch=62.07 status=passed; production runtime and DB untouched.",
+      "timestamp": "2026-06-02T06:20:00Z"
+    },
+    {
+      "action": "pre_pr_lint_fix_completed",
+      "actor": "Codex",
+      "note": "Fixed changed-file Ruff pre-PR lint findings without changing ensemble semantics; reran compileall, targeted pytest, Ruff, and changed-only guardrail successfully.",
+      "timestamp": "2026-06-02T06:35:00Z"
+    }
+  ],
+  "evidence_uris": [
+    "user report 2026-06-02: custom_evo seed variance 70%-108% CAGR and missing seed ensemble schema/runtime",
+    "tests/aistock_validation/history/qe/20260602_120509_l2_bug-199-custom_evo-seed-ensemble-validation.md"
+  ],
+  "expected": "A custom_evo config can specify explicit ensemble seeds and aggregation level/operator. With ensemble.enabled=true, a loop emits one standard enhanced_metrics/IC/turnover result using deterministic aggregation. With ensemble absent or disabled, existing single random_seed behavior remains bitwise identical.",
+  "first_seen_at": "2026-06-02T03:00:01.569924Z",
+  "fix_branch": "bug/BUG-199-qe-custom-evo-lacks-seed-ensemble-support-for-st-20260602",
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 528,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/528",
+  "last_seen_at": "2026-06-02T03:00:01.569924Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "POST /api/v1/quantevolver/evolution/tasks/{task_id}/custom-evo/run with runtime_flags.random_seed plus no ensemble block; validate/materialize configs also have no ensemble expression path.",
+  "required_verification": [
+    "py_compile_changed_qe_seed_ensemble",
+    "targeted_custom_evo_seed_ensemble_pytest",
+    "git_diff_check",
+    "workflow_finish_plan",
+    "l0",
+    "validation_module_registry_l0",
+    "validation_center_backend",
+    "qe_data_contract_backend",
+    "qe_read_l3_skip_ui",
+    "changed_only_guardrail",
+    "targeted_seed_ensemble_pytest",
+    "changed_file_ruff_lint"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "in_progress",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE custom_evo lacks seed ensemble support for stable deployable strategies",
+  "trigger_condition": {
+    "fingerprint": "288a91f534e9ab70b940ea30",
+    "source_event_id": "FE-20260602-288a91f534e9"
+  },
+  "verification_run_id": "20260602_120509_l2_bug-199-custom_evo-seed-ensemble-validation",
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
