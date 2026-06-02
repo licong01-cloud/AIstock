@@ -80,6 +80,7 @@ python -m nox -s paper_v2_l3
 ## Evidence
 
 - Official Paper v2 L3 run record: `tests/aistock_validation/history/paper_v2_selection_center/20260603_042304_l3_paper-v2-selection-center-l3-regression.md`.
+- Final UI-inclusive L3 rerun record after confirming frontend `3012`: `tests/aistock_validation/history/paper_v2_selection_center/20260603_044153_l3_paper-v2-selection-center-l3-regression.md`.
 - This comprehensive merge-readiness record: `tests/aistock_validation/history/paper_trading_v2/20260602_230614_l3_paper-v2-miniqmt-unified-integration-full-validation-before-main-merge.md`.
 - Playwright artifacts: `tmp/playwright-results/` (ignored runtime artifacts, not committed).
 - Data-quality output: `tmp/paper_v2_data_quality_smoke.json`.
@@ -109,3 +110,4 @@ python -m nox -s paper_v2_l3
 - production_ddl_gate: noop.
 - production_frontend_dependency_gate: noop.
 - production_backend_dependency_gate: noop.
+
