@@ -7,7 +7,12 @@ from typing import Any
 
 import pytest
 
-from backend.infra.qmt_client import QMTNotAvailableError, QMTStatus, build_qmt_order_diagnostic
+from backend.infra.qmt_client import (
+    QMTNotAvailableError,
+    QMTStatus,
+    XtQuantQMTClient,
+    build_qmt_order_diagnostic,
+)
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
 from backend.services.paper_trading_v2.readiness import PaperTradingReadinessService
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
@@ -79,6 +84,81 @@ def test_build_qmt_order_diagnostic_marks_stale_cancelable_and_bad_status_msg() 
     assert code_only["status_msg_maybe_truncated"] is False
 
 
+class SlowOrderTrader:
+    def order_stock(self, *args, **kwargs):
+        import time
+
+        time.sleep(0.05)
+        return 10001
+
+
+def test_xtquant_place_order_timeout_default_is_independent_from_query_timeout(monkeypatch) -> None:
+    monkeypatch.delenv("MINIQMT_ORDER_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setenv("MINIQMT_QUERY_TIMEOUT_SECONDS", "0.01")
+    client = XtQuantQMTClient(
+        enabled=True,
+        account_id="acct_unit",
+        mode="SIM",
+        userdata_path=None,
+        session_id=1,
+    )
+    client._connected = True
+    client._trader = SlowOrderTrader()
+    client._account = object()
+    client._ensure_xtquant = lambda: None  # type: ignore[method-assign]
+
+    order_id, _message = client.place_order(
+        stock_code="000001.SZ",
+        order_type=23,
+        order_volume=100,
+        price_type=5,
+        price=0.0,
+        strategy_name="paper_slot",
+        order_remark="remark_1",
+    )
+
+    diagnostic = client.get_last_order_diagnostic()
+    assert order_id == 10001
+    assert diagnostic["timeout_seconds"] == 15.0
+    assert diagnostic["timeout_env_key"] == "MINIQMT_ORDER_TIMEOUT_SECONDS"
+    assert diagnostic["timeout_policy"] == "bounded_order_submit_ack_wait"
+    assert diagnostic["strategy_name"] == "paper_slot"
+    assert diagnostic["order_remark"] == "remark_1"
+
+
+def test_xtquant_place_order_timeout_diagnostic_includes_retry_identity(monkeypatch) -> None:
+    monkeypatch.setenv("MINIQMT_ORDER_TIMEOUT_SECONDS", "0.01")
+    client = XtQuantQMTClient(
+        enabled=True,
+        account_id="acct_unit",
+        mode="SIM",
+        userdata_path=None,
+        session_id=1,
+    )
+    client._connected = True
+    client._trader = SlowOrderTrader()
+    client._account = object()
+    client._ensure_xtquant = lambda: None  # type: ignore[method-assign]
+
+    with pytest.raises(QMTNotAvailableError) as exc_info:
+        client.place_order(
+            stock_code="000001.SZ",
+            order_type=23,
+            order_volume=100,
+            price_type=5,
+            price=0.0,
+            strategy_name="paper_slot",
+            order_remark="remark_1",
+        )
+
+    diagnostic = client.get_last_order_diagnostic()
+    assert "timed out after 0.01s" in str(exc_info.value)
+    assert diagnostic["classification"] == "adapter_timeout"
+    assert diagnostic["timeout_seconds"] == 0.01
+    assert diagnostic["strategy_name"] == "paper_slot"
+    assert diagnostic["order_remark"] == "remark_1"
+
+
 class FakeQMTClient:
     def __init__(
         self,
@@ -97,6 +177,8 @@ class FakeQMTClient:
         self.last_order_diagnostic: dict | None = None
         self.orders: list[dict] = []
         self.trades: list[dict] = []
+        self.order_query_calls = 0
+        self.trade_query_calls = 0
         self.account = {
             "available_cash": 123456.78,
             "total_asset": 234567.89,
@@ -166,9 +248,11 @@ class FakeQMTClient:
         return dict(self.last_order_diagnostic) if self.last_order_diagnostic else None
 
     def get_orders(self, cancelable_only: bool = False):
+        self.order_query_calls += 1
         return list(self.orders)
 
     def get_trades(self):
+        self.trade_query_calls += 1
         return list(self.trades)
 
     def get_account_info(self):
@@ -192,6 +276,9 @@ class TimeoutQMTClient(FakeQMTClient):
             "classification": "adapter_timeout",
             "exception_type": "TimeoutError",
             "exception_message": "call timed out after 2.0s",
+            "timeout_seconds": 2.0,
+            "timeout_env_key": "MINIQMT_ORDER_TIMEOUT_SECONDS",
+            "timeout_policy": "bounded_order_submit_ack_wait",
         }
         raise QMTNotAvailableError("miniQMT order submit timed out after 2.0s")
 
@@ -399,6 +486,13 @@ def test_place_order_timeout_is_connectivity_error_with_diagnostic() -> None:
 
     assert exc_info.value.context["reason"] == "miniQMT order submit timed out after 2.0s"
     assert exc_info.value.context["submit_diagnostic"]["classification"] == "adapter_timeout"
+    assert exc_info.value.context["submit_diagnostic"]["timeout_seconds"] == 2.0
+    assert exc_info.value.context["order_remark"]
+    assert exc_info.value.context["native_reconcile"]["schema_version"] == "miniqmt_submit_error_native_probe_v1"
+    assert exc_info.value.context["native_reconcile"]["orders_query_ok"] is True
+    assert exc_info.value.context["native_reconcile"]["trades_query_ok"] is True
+    assert client.order_query_calls == 1
+    assert client.trade_query_calls == 1
     assert client.place_calls[0]["stock_code"] == "000001.SZ"
 
 
@@ -502,6 +596,9 @@ def test_day_runner_minqmt_timeout_persists_connectivity_diagnostic() -> None:
     assert final_order.metadata["broker_error"]["error_code"] == "BROKER_CONNECTIVITY_ERROR"
     assert final_order.metadata["broker_error"]["context"]["submit_diagnostic"]["classification"] == "adapter_timeout"
     assert diagnostic["submit_diagnostic"]["classification"] == "adapter_timeout"
+    assert diagnostic["broker_error"]["context"]["native_reconcile"]["schema_version"] == "miniqmt_submit_error_native_probe_v1"
+    assert diagnostic["broker_error"]["context"]["native_reconcile"]["orders_query_ok"] is True
+    assert diagnostic["broker_error"]["context"]["native_reconcile"]["trades_query_ok"] is True
     assert diagnostic["broker_audit"]["before_submit"]["account"]["cash"] == 123456.78
     assert diagnostic["broker_audit"]["after_reconcile"]["account"]["cash"] == 123456.78
     assert repository.events[-1]["event_type"] == "MINIQMT_ORDER_SUBMIT_FAILED"

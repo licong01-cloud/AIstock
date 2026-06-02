@@ -232,6 +232,11 @@ class MiniQMTSimBackend(BrokerBackend):
                 submit_diagnostic = _safe_last_order_diagnostic(self._qmt_client)
             except QMTNotAvailableError as exc:
                 submit_diagnostic = _safe_last_order_diagnostic(self._qmt_client)
+                native_probe = _probe_native_order_after_submit_error(
+                    qmt_client=self._qmt_client,
+                    miniqmt_order_id=None,
+                    order_remark=order_remark,
+                )
                 raise BrokerConnectivityError(
                     "MiniQMT order submit failed because client is unavailable",
                     context={
@@ -239,7 +244,10 @@ class MiniQMTSimBackend(BrokerBackend):
                         "portfolio_id": self._portfolio_id,
                         "package_id": self._package_id,
                         "symbol": intent.symbol,
+                        "strategy_name": strategy_name,
+                        "order_remark": order_remark,
                         "reason": str(exc),
+                        "native_reconcile": native_probe,
                         **({"submit_diagnostic": submit_diagnostic} if submit_diagnostic else {}),
                     },
                 ) from exc
@@ -767,6 +775,59 @@ def _safe_last_order_diagnostic(qmt_client: Any) -> dict[str, Any] | None:
     except Exception:  # noqa: BLE001
         return None
     return dict(diagnostic) if isinstance(diagnostic, dict) else None
+
+
+def _probe_native_order_after_submit_error(
+    *,
+    qmt_client: Any,
+    miniqmt_order_id: str | None,
+    order_remark: str,
+) -> dict[str, Any]:
+    probe: dict[str, Any] = {
+        "schema_version": "miniqmt_submit_error_native_probe_v1",
+        "matched": False,
+        "match_key": None,
+        "order_remark": order_remark,
+        "miniqmt_order_id": miniqmt_order_id,
+        "orders_query_ok": False,
+        "trades_query_ok": False,
+        "matched_order": None,
+        "matched_trades": [],
+        "query_errors": [],
+    }
+    try:
+        orders = qmt_client.get_orders(cancelable_only=False) or []
+        probe["orders_query_ok"] = True
+        for order in orders:
+            if miniqmt_order_id is not None and str(order.get("order_id") or "") == str(miniqmt_order_id):
+                probe["matched"] = True
+                probe["match_key"] = "order_id"
+                probe["matched_order"] = dict(order)
+                break
+            if str(order.get("order_remark") or "") == str(order_remark):
+                probe["matched"] = True
+                probe["match_key"] = "order_remark"
+                probe["matched_order"] = dict(order)
+                break
+    except Exception as exc:  # noqa: BLE001 - diagnostic probe must not hide the original submit error.
+        probe["query_errors"].append({"source": "orders", "reason": f"{type(exc).__name__}: {exc}"})
+    try:
+        trades = qmt_client.get_trades() or []
+        probe["trades_query_ok"] = True
+        matched_trades = []
+        for trade in trades:
+            if miniqmt_order_id is not None and str(trade.get("order_id") or "") == str(miniqmt_order_id):
+                matched_trades.append(dict(trade))
+                continue
+            if str(trade.get("order_remark") or "") == str(order_remark):
+                matched_trades.append(dict(trade))
+        probe["matched_trades"] = matched_trades
+        if matched_trades and not probe["matched"]:
+            probe["matched"] = True
+            probe["match_key"] = "trade_order_remark"
+    except Exception as exc:  # noqa: BLE001
+        probe["query_errors"].append({"source": "trades", "reason": f"{type(exc).__name__}: {exc}"})
+    return probe
 
 
 def _safe_strategy_name(value: str) -> str:

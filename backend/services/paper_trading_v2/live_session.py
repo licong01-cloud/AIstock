@@ -78,6 +78,11 @@ MINIQMT_PLATFORM_DATA_RETRY_EVENTS = {
     "MINIQMT_LIVE_WAITING_PLATFORM_DATA",
     "MINIQMT_LIVE_PLATFORM_DATA_RETRY_THROTTLED",
 }
+MINIQMT_BROKER_RETRY_AFTER_SECONDS = 120.0
+MINIQMT_BROKER_RETRY_EVENTS = {
+    "MINIQMT_LIVE_WAITING_BROKER",
+    "MINIQMT_LIVE_BROKER_RETRY_THROTTLED",
+}
 MINIQMT_EMPTY_ACTIVE_RUN_STALE_SECONDS = 90.0
 
 
@@ -589,6 +594,20 @@ class PaperTradingLiveMinuteExecutor:
                 message="MiniQMT live session is throttling repeated platform-data/live-inference retry",
                 context=retry_throttle,
             )
+        broker_retry_throttle = self._miniqmt_broker_retry_throttle_context(
+            session=session,
+            trade_date=trade_date,
+            local_as_of=local_as_of,
+        )
+        if broker_retry_throttle is not None:
+            return self._save_minqmt_waiting_status(
+                session,
+                trade_date=trade_date,
+                status=PaperSessionStatus.LIVE_WAITING_BROKER,
+                event_type="MINIQMT_LIVE_BROKER_RETRY_THROTTLED",
+                message="MiniQMT live session is throttling repeated broker submit retry",
+                context=broker_retry_throttle,
+            )
 
         self.repository.save_session_event(
             session_id=session.session_id,
@@ -622,13 +641,25 @@ class PaperTradingLiveMinuteExecutor:
                     end_date=trade_date,
                 )
                 self.repository.update_portfolio_status(session.portfolio_id, PortfolioStatus.RUNNING)
+                retry_after_seconds = self._miniqmt_broker_retry_after_seconds(session)
+                next_retry_not_before = local_as_of + timedelta(seconds=retry_after_seconds)
                 return self._save_minqmt_waiting_status(
                     session,
                     trade_date=trade_date,
                     status=PaperSessionStatus.LIVE_WAITING_BROKER,
                     event_type="MINIQMT_LIVE_WAITING_BROKER",
                     message="MiniQMT live session is waiting for broker connectivity before final cutoff",
-                    context={"trade_date": trade_date.isoformat(), "as_of_time": local_as_of.isoformat(), "reason": exc.to_dict()},
+                    context={
+                        "trade_date": trade_date.isoformat(),
+                        "as_of_time": local_as_of.isoformat(),
+                        "reason": exc.to_dict(),
+                        "broker_retry": {
+                            "retry_after_seconds": retry_after_seconds,
+                            "next_retry_not_before": next_retry_not_before.isoformat(),
+                            "retry_policy": "bounded_broker_retry_after_native_reconcile",
+                            "native_order_reconcile_required": True,
+                        },
+                    },
                 )
             raise
         except MINIQMT_RETRYABLE_DATA_ERRORS as exc:
@@ -818,6 +849,40 @@ class PaperTradingLiveMinuteExecutor:
             }
         return None
 
+    def _miniqmt_broker_retry_throttle_context(
+        self,
+        *,
+        session: PaperTradingSession,
+        trade_date: date,
+        local_as_of: datetime,
+    ) -> dict[str, Any] | None:
+        for event in reversed(self.repository.list_session_events(session.session_id, limit=500)):
+            event_type = str(event.get("event_type") or "")
+            if event_type not in MINIQMT_BROKER_RETRY_EVENTS:
+                continue
+            context = event.get("context") or {}
+            if not isinstance(context, dict) or context.get("trade_date") != trade_date.isoformat():
+                continue
+            retry_context = context.get("broker_retry") or {}
+            if not isinstance(retry_context, dict):
+                return None
+            next_retry = self._parse_minqmt_retry_not_before(retry_context.get("next_retry_not_before"))
+            if next_retry is None or local_as_of >= next_retry:
+                return None
+            return {
+                "trade_date": trade_date.isoformat(),
+                "as_of_time": local_as_of.isoformat(),
+                "reason": context.get("reason") if isinstance(context.get("reason"), dict) else None,
+                "previous_event_type": event_type,
+                "broker_retry": {
+                    **retry_context,
+                    "throttled": True,
+                    "retry_allowed": False,
+                    "current_time": local_as_of.isoformat(),
+                },
+            }
+        return None
+
     def _miniqmt_platform_data_retry_after_seconds(self, session: PaperTradingSession) -> float:
         policy = self._miniqmt_trade_window_policy(session)
         raw = policy.get("platform_data_retry_after_seconds", policy.get("live_inference_retry_after_seconds"))
@@ -834,6 +899,25 @@ class PaperTradingLiveMinuteExecutor:
             raise SessionConfigError(
                 "MiniQMT platform_data_retry_after_seconds must be at least 1 second",
                 context={"platform_data_retry_after_seconds": raw},
+            )
+        return seconds
+
+    def _miniqmt_broker_retry_after_seconds(self, session: PaperTradingSession) -> float:
+        policy = self._miniqmt_trade_window_policy(session)
+        raw = policy.get("broker_retry_after_seconds")
+        if raw is None:
+            return MINIQMT_BROKER_RETRY_AFTER_SECONDS
+        try:
+            seconds = float(raw)
+        except (TypeError, ValueError) as exc:
+            raise SessionConfigError(
+                "MiniQMT broker_retry_after_seconds must be numeric",
+                context={"broker_retry_after_seconds": raw},
+            ) from exc
+        if seconds < 1:
+            raise SessionConfigError(
+                "MiniQMT broker_retry_after_seconds must be at least 1 second",
+                context={"broker_retry_after_seconds": raw},
             )
         return seconds
 
