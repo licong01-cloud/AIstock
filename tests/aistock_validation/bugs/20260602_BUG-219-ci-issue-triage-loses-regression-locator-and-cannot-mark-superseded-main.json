@@ -31,8 +31,8 @@
   "expected": "triage-ci-issue should preserve available regression locator fields from the GitHub Issue body and, for default-branch failures whose later same-workflow main run is green, return a compact superseded/close recommendation without requiring BUG JSON promotion.",
   "first_seen_at": "2026-06-02T14:28:18.192814Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6b6a6d9b8cc8e8109a8f8ad616aa85b860e08be9",
+  "fixed_at": "2026-06-02T15:10:10.241834Z",
   "github_issue_number": 596,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/596",
   "last_seen_at": "2026-06-02T14:28:18.192814Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/597",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -55,7 +56,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -64,5 +65,9 @@
     "fingerprint": "1c3ed05727bb991bce98c203",
     "source_event_id": "FE-20260602-1c3ed05727bb"
   },
+  "validation_evidence": [
+    "PR #597 local validation passed: pytest 109, ruff, compileall, workflow-smoke, nox l0/validation_module_registry_l0/validation_catalog_integrity/validation_coverage_backend/validation_center_backend/guardrail_changed_files",
+    "PR #597 GitHub CI checks passed: 16/16"
+  ],
   "verification_run_id": null
 }
