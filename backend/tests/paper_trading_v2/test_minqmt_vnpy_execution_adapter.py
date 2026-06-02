@@ -13,7 +13,7 @@ from backend.services.paper_trading_v2.broker import (
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
 from backend.services.paper_trading_v2.market_data import MinuteDataSource
 from backend.services.paper_trading_v2.models import PaperPortfolio, PaperRun
-from backend.services.trading_core.models import OrderIntent, OrderSide, OrderType, PositionLot, RunStatus
+from backend.services.trading_core.models import Fill, OrderIntent, OrderSide, OrderStatus, OrderType, PositionLot, RunStatus
 from backend.tests.paper_trading_v2.test_day_runner import make_paper_enabled_manifest
 from backend.tests.paper_trading_v2.test_minqmtsim_backend import TRADE_DATE, _SnapshotOnlyRepository
 
@@ -90,6 +90,28 @@ class VnpyRecordingMiniQMTBroker:
     def query_trades(self, handle: OrderHandle) -> list[dict[str, Any]]:
         return list(self._trades.get(handle.handle_id, []))
 
+    def query_status_from_native(
+        self,
+        *,
+        handle_id: str,
+        intent: OrderIntent,
+        miniqmt_order_id: str,
+        strategy_name: str,
+        order_remark: str,
+    ) -> OrderHandleStatus:
+        return self._statuses[handle_id]
+
+    def query_trades_from_native(
+        self,
+        *,
+        handle_id: str,
+        intent: OrderIntent,
+        miniqmt_order_id: str,
+        strategy_name: str,
+        order_remark: str,
+    ) -> list[dict[str, Any]]:
+        return list(self._trades.get(handle_id, []))
+
     def query_quote(self, symbol: str) -> dict[str, Any]:
         return {
             "symbol": symbol,
@@ -159,13 +181,19 @@ def _portfolio_and_run(policy_json: dict[str, Any]):
     return manifest, portfolio, run, {**policy, "policy_json": policy_json}
 
 
-def _intent(*, side: OrderSide = OrderSide.BUY, order_type: OrderType = OrderType.LIMIT, limit_price: float | None = 10.0):
+def _intent(
+    *,
+    side: OrderSide = OrderSide.BUY,
+    order_type: OrderType = OrderType.LIMIT,
+    limit_price: float | None = 10.0,
+    quantity: int = 200,
+):
     return OrderIntent(
         package_id="pkg_mq_1",
         portfolio_id="paper_mq_1",
         symbol="000001.SZ",
         side=side,
-        quantity=200,
+        quantity=quantity,
         order_type=order_type,
         limit_price=limit_price,
         target_trade_date=date(2024, 1, 2),
@@ -248,6 +276,198 @@ def test_minqmt_vnpy_twap_lite_can_persist_filled_child_trade() -> None:
     assert quality["summary"]["cost_precision_counts"] == {"broker_aggregate": 1}
     assert quality["fills"][0]["cost_reconciliation_delta"] == 0.0
     assert repo.snapshots[0]["metadata"]["execution_quality_report"]["schema_version"].endswith("_v1")
+
+
+def test_minqmt_native_reconcile_applies_only_new_trade_delta_and_caps_overfill() -> None:
+    manifest, portfolio, run, _policy_context = _portfolio_and_run({"algo_code": "SNIPER_MINIQMT", "algo_config": {}})
+    repo = _SnapshotOnlyRepository(portfolio)
+    broker = VnpyRecordingMiniQMTBroker()
+    result = PaperTradingDayRunner(repository=repo)._run_minqmt_sim_orders(
+        portfolio=portfolio,
+        run=run,
+        manifest=manifest,
+        trade_date=TRADE_DATE,
+        intents=[_intent(order_type=OrderType.LIMIT, limit_price=82.33, quantity=44_000)],
+        broker=broker,  # type: ignore[arg-type]
+        execution_policy_context={"algo_code": "V25_1_SMALL_CAP", "policy_json": {"algo_code": "V25_1_SMALL_CAP"}},
+    )
+    order = repo.orders[0]
+    handle_id = order.metadata["broker_handle_id"]
+    native_id = order.metadata["miniqmt_order_id"]
+    existing_fill = Fill(
+        fill_id="fill_minqmt_agg_existing",
+        order_id=order.order_id,
+        symbol=order.symbol,
+        side=order.side,
+        quantity=14_600,
+        price=82.33,
+        trade_time=datetime(2024, 1, 2, 13, 30, tzinfo=UTC),
+        bar_time=datetime(2024, 1, 2, 13, 30, tzinfo=UTC),
+        reason="miniqmt_trade_reconciliation_aggregate",
+        metadata={
+            "authority_source": "MINIQMT_TRADE_AGGREGATE",
+            "miniqmt_trade_raw_rows": [
+                {
+                    "traded_id": "trade_seen_1",
+                    "stock_code": order.symbol,
+                    "order_type": 23,
+                    "traded_time": "133000",
+                    "traded_price": 82.33,
+                    "traded_volume": 14_600,
+                    "order_id": native_id,
+                    "order_sysid": "sys_seen",
+                }
+            ],
+        },
+    )
+    repo.save_fill(result.run.run_id, existing_fill)
+    repo.save_order(
+        result.run.run_id,
+        order.model_copy(
+            update={
+                "status": OrderStatus.PARTIALLY_FILLED,
+                "filled_quantity": 14_600,
+                "avg_fill_price": 82.33,
+            }
+        ),
+    )
+    broker._statuses[handle_id] = OrderHandleStatus(
+        handle_id=handle_id,
+        state="filled",
+        filled_quantity=44_000,
+        avg_fill_price=Decimal("82.40"),
+        last_event_at=datetime(2024, 1, 2, 13, 31, tzinfo=UTC),
+        rejection_reason=None,
+    )
+    broker._trades[handle_id] = [
+        {
+            "traded_id": "trade_seen_1",
+            "stock_code": order.symbol,
+            "stock_name": "Unit Test Stock",
+            "order_type": 23,
+            "traded_time": "133000",
+            "traded_price": 82.33,
+            "traded_volume": 14_600,
+            "traded_amount": 1_201_018.0,
+            "order_id": native_id,
+            "order_sysid": "sys_seen",
+            "commission": 5.0,
+            "strategy_name": "slot_alpha",
+            "order_remark": order.metadata["order_remark"],
+        },
+        {
+            "traded_id": "trade_new_1",
+            "stock_code": order.symbol,
+            "stock_name": "Unit Test Stock",
+            "order_type": 23,
+            "traded_time": "133100",
+            "traded_price": 82.41,
+            "traded_volume": 44_000,
+            "traded_amount": 3_626_040.0,
+            "order_id": native_id,
+            "order_sysid": "sys_new",
+            "commission": 5.0,
+            "strategy_name": "slot_alpha",
+            "order_remark": order.metadata["order_remark"],
+        },
+    ]
+
+    reconciled = PaperTradingDayRunner(repository=repo).reconcile_minqmt_native_run(
+        portfolio=portfolio,
+        run=result.run,
+        trade_date=TRADE_DATE,
+        broker=broker,  # type: ignore[arg-type]
+    )
+    repeated = PaperTradingDayRunner(repository=repo).reconcile_minqmt_native_run(
+        portfolio=portfolio,
+        run=reconciled.run,
+        trade_date=TRADE_DATE,
+        broker=broker,  # type: ignore[arg-type]
+    )
+
+    assert len(repo.fills) == 2
+    assert repo.fills[-1]["fill"].quantity == 29_400
+    assert repo.fills[-1]["fill"].metadata["broker_reconcile_delta_capped"] is True
+    assert repo.orders[-1].filled_quantity == 44_000
+    assert repo.orders[-1].status == OrderStatus.FILLED
+    assert repeated.fills == []
+    assert len(repo.fills) == 2
+    capped_event = next(event for event in repo.events if event["event_type"] == "MINIQMT_NATIVE_RECONCILE_OVERFILL_CAPPED")
+    assert capped_event["context"]["broker_reported_fill_quantity"] == 44_000
+    assert capped_event["context"]["applied_fill_quantity"] == 29_400
+
+
+def test_minqmt_native_reconcile_resets_status_only_fill_when_no_local_fill_rows() -> None:
+    manifest, portfolio, run, _policy_context = _portfolio_and_run({"algo_code": "SNIPER_MINIQMT", "algo_config": {}})
+    repo = _SnapshotOnlyRepository(portfolio)
+    broker = VnpyRecordingMiniQMTBroker()
+    result = PaperTradingDayRunner(repository=repo)._run_minqmt_sim_orders(
+        portfolio=portfolio,
+        run=run,
+        manifest=manifest,
+        trade_date=TRADE_DATE,
+        intents=[_intent(order_type=OrderType.LIMIT, limit_price=82.33, quantity=44_000)],
+        broker=broker,  # type: ignore[arg-type]
+        execution_policy_context={"algo_code": "V25_1_SMALL_CAP", "policy_json": {"algo_code": "V25_1_SMALL_CAP"}},
+    )
+    order = repo.orders[0]
+    handle_id = order.metadata["broker_handle_id"]
+    native_id = order.metadata["miniqmt_order_id"]
+    repo.save_order(
+        result.run.run_id,
+        order.model_copy(
+            update={
+                "status": OrderStatus.PARTIALLY_FILLED,
+                "filled_quantity": 14_600,
+                "avg_fill_price": 82.33,
+            }
+        ),
+    )
+    broker._statuses[handle_id] = OrderHandleStatus(
+        handle_id=handle_id,
+        state="filled",
+        filled_quantity=44_000,
+        avg_fill_price=Decimal("82.40"),
+        last_event_at=datetime(2024, 1, 2, 13, 31, tzinfo=UTC),
+        rejection_reason=None,
+    )
+    broker._trades[handle_id] = [
+        {
+            "traded_id": "trade_full_after_status_only_partial",
+            "stock_code": order.symbol,
+            "stock_name": "Unit Test Stock",
+            "order_type": 23,
+            "traded_time": "133100",
+            "traded_price": 82.40,
+            "traded_volume": 44_000,
+            "traded_amount": 3_625_600.0,
+            "order_id": native_id,
+            "order_sysid": "sys_full_after_status_only_partial",
+            "commission": 5.0,
+            "strategy_name": "slot_alpha",
+            "order_remark": order.metadata["order_remark"],
+        },
+    ]
+
+    reconciled = PaperTradingDayRunner(repository=repo).reconcile_minqmt_native_run(
+        portfolio=portfolio,
+        run=result.run,
+        trade_date=TRADE_DATE,
+        broker=broker,  # type: ignore[arg-type]
+    )
+    repeated = PaperTradingDayRunner(repository=repo).reconcile_minqmt_native_run(
+        portfolio=portfolio,
+        run=reconciled.run,
+        trade_date=TRADE_DATE,
+        broker=broker,  # type: ignore[arg-type]
+    )
+
+    assert len(repo.fills) == 1
+    assert repo.fills[0]["fill"].quantity == 44_000
+    assert repo.orders[-1].filled_quantity == 44_000
+    assert repo.orders[-1].status == OrderStatus.FILLED
+    assert repeated.fills == []
+    assert not any(event["event_type"] == "MINIQMT_NATIVE_RECONCILE_OVERFILL_CAPPED" for event in repo.events)
 
 
 def test_minqmt_vnpy_rejected_child_preserves_raw_status_and_status_msg() -> None:
