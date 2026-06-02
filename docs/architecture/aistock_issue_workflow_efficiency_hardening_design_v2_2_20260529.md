@@ -114,6 +114,16 @@ BUG-195 completed the full issue-to-cleanup loop in roughly 24 minutes, which is
 - **Compact success output**: successful workflow commands keep stdout to compact PASS/summary fields. Full JSON, skipped-plan maps, raw check rollups, and verbose CodeGraph payloads stay in artifact files and require explicit `--output-format full-json` or `--output`.
 - **Quality boundary**: these optimizations do not skip tests. They replace broad default validation with narrower catalog/context selection and preserve production dependency/DDL gates.
 
+### 5.6 Workflow/Validation CI Fast Lane
+
+Workflow and CI/CD hardening PRs should not pay the full business backend matrix cost when they only touch issue-flow scripts, workflow YAML, workflow docs, and their focused unit tests.
+
+- `ci_change_classifier.py` must classify a conservative allowlist as `workflow_validation_only`.
+- `workflow_validation_only` must set `backend_required=false` and `workflow_validation_required=true`.
+- GitHub Actions must still run static gate, PR Quality, Semgrep, CodeQL, and a focused workflow validation test job.
+- Any backend router/service, business module, Paper v2, QE, Research Assistant, or production-adjacent file must keep `classification=full_ci_required`.
+- Close-sync metadata-only behavior remains a separate lane and must not be weakened.
+
 ## 6. Deferred But Required Follow-Up
 
 | Phase | Item | Reason for deferral |
@@ -179,6 +189,7 @@ If a fixed BUG JSON is found only in the current snapshot and neither a merged n
 | IWEH-013 | CodeGraph context in a git worktree can reuse the canonical root index | Code intelligence adapter unit test for canonical worktree graph root |
 | IWEH-014 | CodeGraph detail failures downgrade to repo-index context, not full fallback, when the index is ready | Code intelligence adapter unit test for `repo_index_ready` context |
 | IWEH-015 | Merge finalizer does not treat an open close-sync PR as already merged | Unit tests for `open_close_sync_pr` ready-for-merge and auto-merge paths |
+| IWEH-016 | Workflow/validation-only PRs run focused workflow validation instead of full backend matrix | `ci_change_classifier` tests plus GitHub workflow wiring test |
 
 ## 8. Expected Efficiency Impact
 
@@ -188,5 +199,6 @@ If a fixed BUG JSON is found only in the current snapshot and neither a merged n
 | T1 single-module bug | Context rediscovery and PR aftercare | 25-50% faster |
 | T2 cross-module bug | Repeated validation and scope uncertainty | 15-35% faster |
 | Infra/CI blocker | Misrouted code repair attempts | Avoids wasted repair loop entirely |
+| Workflow/validation hardening | Full backend matrix for issue-flow-only changes | Avoids unrelated business-session wait while preserving focused workflow tests |
 
 The key success metric is not a fixed minute target. The key metric is code/verification time as the majority of total elapsed time, with workflow overhead becoming bounded and visible.

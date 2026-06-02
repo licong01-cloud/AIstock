@@ -8,10 +8,31 @@ from typing import Any
 
 BUG_REGISTRY_PREFIX = "tests/aistock_validation/bugs/"
 CLOSE_SYNC_STATUSES = {"fixed", "closed", "verified"}
+WORKFLOW_VALIDATION_FAST_LANE_FILES = {
+    ".github/workflows/issue-auto-link.yml",
+    ".github/workflows/pr-quality.yml",
+    ".github/workflows/semgrep.yml",
+    ".github/workflows/test.yml",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "backend/tests/scripts/test_ci_failure_issue_summary.py",
+    "backend/tests/scripts/test_code_intelligence_adapter.py",
+    "backend/tests/scripts/test_issue_flow.py",
+    "docs/architecture/aistock_issue_workflow_efficiency_hardening_design_v2_2_20260529.md",
+    "docs/standards/aistock_issue_workflow_quickstart.md",
+    "scripts/aistock_issue_workflow.py",
+    "scripts/ci_change_classifier.py",
+    "scripts/ci_failure_issue_summary.py",
+    "scripts/code_intelligence_adapter.py",
+    "scripts/issue_flow.py",
+}
 
 
 def _normalize_path(value: str) -> str:
-    return value.replace("\\", "/").strip().lstrip("./")
+    normalized = value.replace("\\", "/").strip()
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized
 
 
 def _load_changed_files(args: argparse.Namespace) -> list[str]:
@@ -38,6 +59,10 @@ def _bug_status(path: Path) -> str | None:
         return None
     status = payload.get("status")
     return str(status).strip().lower() if status is not None else None
+
+
+def _workflow_validation_fast_lane(path: str) -> bool:
+    return path in WORKFLOW_VALIDATION_FAST_LANE_FILES
 
 
 def classify_changed_files(changed_files: list[str], *, repo_root: Path | None = None) -> dict[str, Any]:
@@ -77,7 +102,20 @@ def classify_changed_files(changed_files: list[str], *, repo_root: Path | None =
     if close_sync_metadata_only:
         reasons.append("only fixed/closed/verified BUG JSON metadata changed; backend matrix can be skipped")
 
-    backend_required = not close_sync_metadata_only
+    workflow_validation_only = (
+        bool(normalized)
+        and not bug_registry_files
+        and all(_workflow_validation_fast_lane(path) for path in non_bug_registry_files)
+    )
+    if workflow_validation_only:
+        reasons.append("only workflow/validation fast-lane files changed; run focused workflow validation instead of backend matrix")
+
+    backend_required = not (close_sync_metadata_only or workflow_validation_only)
+    classification = "full_ci_required"
+    if close_sync_metadata_only:
+        classification = "close_sync_metadata_only"
+    elif workflow_validation_only:
+        classification = "workflow_validation_only"
     return {
         "schema_version": "aistock_ci_change_classifier_v1",
         "changed_files": normalized,
@@ -87,10 +125,12 @@ def classify_changed_files(changed_files: list[str], *, repo_root: Path | None =
         "metadata_statuses": metadata_statuses,
         "metadata_only": metadata_only,
         "close_sync_metadata_only": close_sync_metadata_only,
+        "workflow_validation_only": workflow_validation_only,
+        "workflow_validation_required": workflow_validation_only,
         "backend_required": backend_required,
         "static_gate_required": True,
         "pr_quality_required": True,
-        "classification": "close_sync_metadata_only" if close_sync_metadata_only else "full_ci_required",
+        "classification": classification,
         "reasons": reasons,
         "blocking": blocking,
         "workflow_gate": "passed",
@@ -106,6 +146,7 @@ def _write_github_output(path: str, payload: dict[str, Any]) -> None:
     lines = [
         f"backend_required={str(payload['backend_required']).lower()}",
         f"close_sync_metadata_only={str(payload['close_sync_metadata_only']).lower()}",
+        f"workflow_validation_required={str(payload['workflow_validation_required']).lower()}",
         f"classification={payload['classification']}",
     ]
     with open(path, "a", encoding="utf-8") as handle:
@@ -130,6 +171,7 @@ def main(argv: list[str] | None = None) -> int:
         "workflow_gate": payload["workflow_gate"],
         "classification": payload["classification"],
         "backend_required": payload["backend_required"],
+        "workflow_validation_required": payload["workflow_validation_required"],
         "changed_file_count": payload["changed_file_count"],
     }, ensure_ascii=False, sort_keys=True))
     return 0
