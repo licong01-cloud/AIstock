@@ -37,40 +37,46 @@
       "timestamp": "2026-06-02T03:00:01.569919Z"
     },
     {
-      "timestamp": "2026-06-02T03:08:00Z",
-      "actor": "Codex",
       "action": "triage_scope_expanded",
-      "note": "Expanded allowed_write_scope from registry-only to custom_evo schema, execution, runner, and targeted unit tests after codegraph did not identify backend execution paths."
+      "actor": "Codex",
+      "note": "Expanded allowed_write_scope from registry-only to custom_evo schema, execution, runner, and targeted unit tests after codegraph did not identify backend execution paths.",
+      "timestamp": "2026-06-02T03:08:00Z"
     },
     {
-      "timestamp": "2026-06-02T03:35:00Z",
-      "actor": "Codex",
       "action": "score_ensemble_implementation_added",
-      "note": "Added optional custom_evo ensemble config, runtime propagation, qrun score-level seed bagging, and targeted unit tests; portfolio level remains fail-fast pending offline holdings evidence."
+      "actor": "Codex",
+      "note": "Added optional custom_evo ensemble config, runtime propagation, qrun score-level seed bagging, and targeted unit tests; portfolio level remains fail-fast pending offline holdings evidence.",
+      "timestamp": "2026-06-02T03:35:00Z"
     },
     {
-      "timestamp": "2026-06-02T03:43:00Z",
-      "actor": "Codex",
       "action": "design_compliance_partial",
-      "note": "Score-level seed bagging path is implemented and unit-tested; portfolio-level holdings-average alignment remains pending and issue must not be closed as fully fixed yet."
+      "actor": "Codex",
+      "note": "Score-level seed bagging path is implemented and unit-tested; portfolio-level holdings-average alignment remains pending and issue must not be closed as fully fixed yet.",
+      "timestamp": "2026-06-02T03:43:00Z"
     },
     {
-      "timestamp": "2026-06-02T03:50:00Z",
-      "actor": "Codex",
       "action": "scope_alignment_fix",
-      "note": "Added qe_evolution_service.py to allowed_write_scope because loop config persistence/action_type metadata is required for ensemble_config traceability."
+      "actor": "Codex",
+      "note": "Added qe_evolution_service.py to allowed_write_scope because loop config persistence/action_type metadata is required for ensemble_config traceability.",
+      "timestamp": "2026-06-02T03:50:00Z"
     },
     {
-      "timestamp": "2026-06-02T05:42:50.549344Z",
-      "actor": "Codex",
       "action": "portfolio_ensemble_implementation_added",
-      "note": "Implemented portfolio-level equal-weight daily holdings merge, final recorder artifacts, fail-fast optional artifact loading, and day-backtest runner packaging for seed ensembles."
+      "actor": "Codex",
+      "note": "Implemented portfolio-level equal-weight daily holdings merge, final recorder artifacts, fail-fast optional artifact loading, and day-backtest runner packaging for seed ensembles.",
+      "timestamp": "2026-06-02T05:42:50.549344Z"
     },
     {
-      "timestamp": "2026-06-02T05:42:50.549344Z",
-      "actor": "Codex",
       "action": "validation_completed",
-      "note": "compileall, targeted seed ensemble pytest, changed-only guardrail, l0, validation_module_registry_l0, qe_data_contract_backend, and qe_read_l3 with UI skipped passed; production runtime and DB untouched."
+      "actor": "Codex",
+      "note": "compileall, targeted seed ensemble pytest, changed-only guardrail, l0, validation_module_registry_l0, qe_data_contract_backend, and qe_read_l3 with UI skipped, and validation_center_backend passed; production runtime and DB untouched.",
+      "timestamp": "2026-06-02T05:42:50.549344Z"
+    },
+    {
+      "action": "validation_center_backend_passed",
+      "actor": "Codex",
+      "note": "validation_center_backend passed after final gate follow-up: 321 passed in 117.95s; coverage line=79.92 branch=62.07 status=passed; production runtime and DB untouched.",
+      "timestamp": "2026-06-02T06:20:00Z"
     }
   ],
   "evidence_uris": [
@@ -100,6 +106,7 @@
     "workflow_finish_plan",
     "l0",
     "validation_module_registry_l0",
+    "validation_center_backend",
     "qe_data_contract_backend",
     "qe_read_l3_skip_ui",
     "changed_only_guardrail",

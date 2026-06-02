@@ -3,7 +3,7 @@
 - Module: qe
 - Level: L2
 - Date: 2026-06-02T13:45:00+08:00
-- Git commit before final commit: 9b72609d + working tree changes
+- Git commit before evidence update: e8a4bb3c
 - Operator: Codex
 
 ## Scope
@@ -38,6 +38,7 @@ rtk C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m nox -s qe_data_contract
 rtk cmd /c "set QE_READ_L3_SKIP_UI=1&& C:\Users\lc999\miniconda3\envs\AIstock\python.exe -m nox -s qe_read_l3"
 rtk C:/Users/lc999/miniconda3/envs/AIstock/python.exe scripts/aistock_issue_workflow.py finish --bug-id BUG-199 --plan-only
 rtk git diff --check
+rtk C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m nox -s validation_center_backend
 ```
 
 ## Evidence
@@ -51,6 +52,7 @@ rtk git diff --check
 - `qe_read_l3` with `QE_READ_L3_SKIP_UI=1`: PASS; read backend `14 passed`. Full UI sub-session was attempted earlier and failed only because dev backend `127.0.0.1:8011` was not running; production ports were not started or restarted.
 - `finish --plan-only`: PASS, `closure_ready=true`, `workflow_gate=ready_for_pr`, scope_check passed; validation evidence still supplied in later finish/PR step.
 - `git diff --check`: PASS.
+- `validation_center_backend`: PASS, `321 passed in 117.95s`; coverage `line=79.92`, `branch=62.07`, status `passed`.
 
 ## Failures And Fixes
 
@@ -63,7 +65,7 @@ rtk git diff --check
 
 ## Result
 
-- Final status: PASS for code/schema/runner/backend validations; PR-ready pending final commit/finish evidence.
+- Final status: PASS for code/schema/runner/backend/validation-center validations; PR-ready pending final workflow PR gate.
 - Remaining risks: Real long-running QE ensemble backtest and user-provided R8A offline holdings proxy were not executed in this local turn.
 - Need production backend restart: no
 - Need dev service restart: no
