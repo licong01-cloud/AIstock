@@ -29,8 +29,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-02T12:40:29.685376Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "86a87f0e66e137597f04983207ac1ab00c1ff7d6",
+  "fixed_at": "2026-06-02T13:16:17.298904Z",
   "github_issue_number": 587,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/587",
   "last_seen_at": "2026-06-02T12:40:29.685376Z",
@@ -38,6 +38,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/589",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -58,6 +59,11 @@
     "fingerprint": "528c55b877aa926baffa79f8",
     "source_event_id": "FE-20260602-528c55b877aa"
   },
+  "validation_evidence": [
+    "PR #589 CI -> passed (mergeStateStatus=CLEAN; 16/16 checks success)",
+    "python scripts/aistock_guardrail_scan.py backend/tests/selection_center/test_price_guidance.py --baseline-json tests/aistock_validation/guardrails_baseline_20260511.json --fail-new-only --fail-on-severity P1 -> passed (findings=0, blocking=0)",
+    "python -m nox -s l0 validation_module_registry_l0 validation_center_backend -> passed"
+  ],
   "verification_run_id": null,
   "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
 }
