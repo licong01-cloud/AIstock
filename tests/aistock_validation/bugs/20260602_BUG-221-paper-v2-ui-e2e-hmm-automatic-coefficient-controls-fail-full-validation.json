@@ -1,0 +1,75 @@
+{
+  "actual": "paper_v2_ui returned 4 failed / 4 passed / 9 did not run; HMM tests failed on missing selection-hmm-snapshot and portfolio-hmm-snapshot test ids and captures.length expected >=2 but got 1.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260602_BUG-221-paper-v2-ui-e2e-hmm-automatic-coefficient-controls-fail-full-validation.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "frontend/src/app/paper-v2/selection/page.tsx",
+    "frontend/src/app/paper-v2/portfolios/page.tsx",
+    "frontend/tests/paper-v2/paper-v2-hmm-refresh.spec.ts",
+    "frontend/tests/paper-v2/paper-v2-hmm-runtime-coefficients.spec.ts",
+    "frontend/tests/paper-v2/paper-v2-real-flow.spec.ts"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-221",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-02T15:35:49.705976Z",
+  "description": "paper_v2_ui returned 4 failed / 4 passed / 9 did not run; HMM tests failed on missing selection-hmm-snapshot and portfolio-hmm-snapshot test ids and captures.length expected >=2 but got 1.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260602-653c60c76edb",
+      "timestamp": "2026-06-02T15:35:49.705971Z"
+    },
+    {
+      "timestamp": "2026-06-02T16:14:04.603300Z",
+      "actor": "codex_issue_workflow",
+      "action": "expand_allowed_write_scope",
+      "note": "Scope expanded after aistock_issue_workflow run --changed-file plan for BUG-221 UI automatic HMM coefficient validation fixes."
+    }
+  ],
+  "evidence_uris": [
+    "tests/aistock_validation/history/paper_trading_v2/20260602_230614_l3_paper-v2-miniqmt-unified-integration-full-validation-before-main-merge.md; tmp/paper_v2_ui_20260602_233000_correct_env.log; tmp/playwright-results/tests-paper-v2-paper-v2-hm-*/error-context.md"
+  ],
+  "expected": "python -m nox -s paper_v2_ui -- 8012 3012 passes on dev ports; Selection Center and portfolio UI expose stable automatic HMM coefficient/cache contract and persist model config/preset without manual snapshot gate.",
+  "first_seen_at": "2026-06-02T15:35:49.705976Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 600,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/600",
+  "last_seen_at": "2026-06-02T15:35:49.705976Z",
+  "module": "paper_trading_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "BACKEND_PORT=8012 FRONTEND_PORT=3012 PAPER_V2_API_BASE=http://127.0.0.1:8012/api/v1 NEXT_PUBLIC_API_BASE=http://127.0.0.1:8012/api/v1 python -m nox -s paper_v2_ui -- 8012 3012",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "paper_v2_l3",
+    "paper_v2_backend"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "paper_trading_v2"
+  ],
+  "title": "Paper v2 UI E2E HMM automatic coefficient controls fail full validation",
+  "trigger_condition": {
+    "fingerprint": "653c60c76edbe9b520a86411",
+    "source_event_id": "FE-20260602-653c60c76edb"
+  },
+  "verification_run_id": null,
+  "workflow_gate": "allowed"
+}

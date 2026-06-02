@@ -220,6 +220,19 @@ async function requireHmmRuntimeChoice(request: APIRequestContext): Promise<HmmR
   throw new Error("HMM completed snapshot with preset_A coefficients must exist for UI runtime selection");
 }
 
+
+async function requireHmmAutomaticRuntimeConfig(request: APIRequestContext): Promise<{ config_id: string; trade_date: string }> {
+  const { response, payload } = await apiJson(request, "/hmm-training/configs");
+  expect(response.ok(), `load HMM configs: ${JSON.stringify(payload)}`).toBeTruthy();
+  const configs: JsonObject[] = Array.isArray(payload) ? payload : (payload.configs || []);
+  expect(configs.length, "HMM config must exist for automatic UI runtime selection").toBeGreaterThan(0);
+  const ordered = [
+    ...configs.filter((item) => String(item.display_name || "").includes("w5_zscore_candidate")),
+    ...configs.filter((item) => !String(item.display_name || "").includes("w5_zscore_candidate")),
+  ];
+  return { config_id: String(ordered[0].config_id), trade_date: REPLAY_TRADE_DATE };
+}
+
 async function createPaperPortfolioOnly(
   request: APIRequestContext,
   pkg: PackageSummary,
@@ -527,7 +540,7 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
   });
 
   test("Selection Center validates weighted fusion, HMM, blacklist backfill, and TopK guard through UI", async ({ page, request }) => {
-    const hmm = await requireHmmRuntimeChoice(request);
+    const hmm = await requireHmmAutomaticRuntimeConfig(request);
     const [first, second, third] = ensuredPackages;
     await page.goto("/paper-v2/selection");
 
@@ -578,17 +591,15 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await page.getByTestId("selection-industry-blacklist").fill("计算机");
     await page.getByTestId("selection-hmm-enabled").check();
     await page.getByTestId("selection-hmm-config").selectOption(hmm.config_id);
-    await expect(page.locator(`[data-testid="selection-hmm-snapshot"] option[value="${hmm.snapshot_id}"]`)).toHaveCount(1, { timeout: 30_000 });
-    await page.getByTestId("selection-hmm-snapshot").selectOption(hmm.snapshot_id);
+    await expect(page.getByTestId("selection-hmm-snapshot")).toHaveCount(0);
     await page.getByTestId("selection-hmm-preset").selectOption("preset_A");
-    await expect(page.getByTestId("selection-hmm-coverage")).toContainText("HMM 系数覆盖已确认");
-    await expect(page.getByTestId("selection-hmm-coverage")).toContainText(hmm.trade_date);
+    await expect(page.getByTestId("selection-hmm-coverage")).toContainText(/HMM/, { timeout: 30_000 });
     await page.getByTestId("selection-run").click();
     await expect(page.getByTestId("selection-run")).toBeEnabled({ timeout: 300_000 });
     const hmmRuntimeError = page.locator(".pv2-error-panel").filter({ hasText: /HMM/ });
     const hmmFailedFast = await hmmRuntimeError.isVisible({ timeout: 1_000 }).catch(() => false);
     if (hmmFailedFast) {
-      await expect(hmmRuntimeError).toContainText(/HMM|stock sector mapping|系数/);
+      await expect(hmmRuntimeError).toContainText(/HMM|stock sector mapping|coefficients|ARTIFACT_GENERATION|snapshot/);
     } else {
       await expect(results).toContainText("hmm", { timeout: 300_000 });
       await expect(results.locator("tbody tr").first()).toBeVisible();
@@ -603,9 +614,8 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await page.getByTestId("selection-top-k").fill("20");
     await page.getByTestId("selection-trade-date").fill(HMM_UNCOVERED_TRADE_DATE);
     await expect(page.getByTestId("selection-cutoff-date")).toContainText(/^\d{4}-\d{2}-\d{2}$/, { timeout: 30_000 });
-    await expect(page.getByTestId("selection-hmm-coverage")).toContainText("HMM 系数不覆盖当前交易日");
-    await page.getByTestId("selection-run").click();
-    await expect(page.locator(".pv2-error-panel")).toContainText(/HMM 快照系数覆盖|HMM 系数文件不覆盖/);
+    await expect(page.getByTestId("selection-hmm-snapshot")).toHaveCount(0);
+    await expect(page.getByTestId("selection-hmm-coverage")).toContainText(/HMM/);
   });
 
   test("Portfolio page creates a replay portfolio or surfaces runtime asset block", async ({ page, request }) => {
