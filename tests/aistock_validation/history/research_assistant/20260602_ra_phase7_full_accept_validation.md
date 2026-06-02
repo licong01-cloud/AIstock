@@ -3,14 +3,14 @@
 - date: 2026-06-02
 - worktree: `F:\Dev\AIstock_worktrees\ra-frontend-accept-20260602`
 - branch: `codex/ra-frontend-accept-20260602`
-- implementation_code_commit: `90cda3b01c2118c5701e36787e897a6e47f728e2`
-- validated_head_commit: `43f8ea86c26e17ae060f001786911ce1692cd611`
+- implementation_code_commit: `c5774de7eb67218490bd44a2d79d320862f92fe5`
+- validated_head_commit: `b3961d1552c169616fdb2276fa901b9e958b8300`
 - plan_key: `ra_phase7_full_accept`
 - batch_id: `ra_phase7`
-- G1-central run_id: `research-assistant_20260602_130855_l4_ra-phase7-full-accept_7a69e093_runner-validation__70be551adb`
-- G1-central job_id: `valjob_20260602_130720_7a69e093`
+- G1-central run_id: `research-assistant_20260602_131908_l4_ra-phase7-full-accept_c31a5833_runner-validation__eaa766ad04`
+- G1-central job_id: `valjob_20260602_131738_c31a5833`
 - G1-central return_code: 0
-- G1-central validated_origin_main: `8a5d47f184b1f12f1b89d1b1b96a8c4bbc34795e`
+- G1-central validated_origin_main: `86a87f0e66e137597f04983207ac1ab00c1ff7d6`
 - production_ddl_gate: `required_pending_user_approval`
 - production_frontend_dependency_gate: `noop`
 - production_backend_dependency_gate: `noop`
@@ -38,21 +38,21 @@ Phase 7 implements the frontend memory tree view, Agent Teams run view, evidence
 
 ## G1-central
 
-- invocation: local ValidationExecutionRunner allowlisted run equivalent to `start_validation_execution(plan_key="ra_phase7_full_accept", workspace_path="F:\Dev\AIstock_worktrees\ra-frontend-accept-20260602", expected_branch="codex/ra-frontend-accept-20260602", expected_commit="43f8ea86c26e17ae060f001786911ce1692cd611", frontend_port=3011)`; MCP 8001 catalog was stale/read-only 404, so the same controlled runner service was invoked locally against the workspace catalog.
-- job_id: `valjob_20260602_130720_7a69e093`
-- run_id: `research-assistant_20260602_130855_l4_ra-phase7-full-accept_7a69e093_runner-validation__70be551adb`
+- invocation: local ValidationExecutionRunner allowlisted run equivalent to `start_validation_execution(plan_key="ra_phase7_full_accept", workspace_path="F:\Dev\AIstock_worktrees\ra-frontend-accept-20260602", expected_branch="codex/ra-frontend-accept-20260602", expected_commit="b3961d1552c169616fdb2276fa901b9e958b8300", frontend_port=3011)`; MCP 8001 catalog was stale/read-only 404, so the same controlled runner service was invoked locally against the workspace catalog.
+- job_id: `valjob_20260602_131738_c31a5833`
+- run_id: `research-assistant_20260602_131908_l4_ra-phase7-full-accept_c31a5833_runner-validation__eaa766ad04`
 - status: passed
 - return_code: 0
 - production_8001_touched: false
 - arbitrary_shell_allowed: false
 - workspace_scope: worktree
 - runner archive:
-  - `tests/aistock_validation/history/research-assistant/20260602_130855_l4_ra-phase7-full-accept_7a69e093_runner-validation.md`
-  - `tests/aistock_validation/history/research-assistant/20260602_130855_l4_ra-phase7-full-accept_7a69e093_runner-validation.json`
-  - `tests/aistock_validation/history/research-assistant/20260602_130855_l4_ra-phase7-full-accept_7a69e093_runner-runner-job.json`
-  - `tests/aistock_validation/history/research-assistant/20260602_130855_l4_ra-phase7-full-accept_7a69e093_runner-runner-log.txt`
-  - `tests/aistock_validation/history/research-assistant/20260602_130855_l4_ra-phase7-full-accept_7a69e093_runner-runner-evidence.json`
-  - `tests/aistock_validation/history/research-assistant/20260602_130855_l4_ra-phase7-full-accept_7a69e093_runner-evidence.json`
+  - `tests/aistock_validation/history/research-assistant/20260602_131908_l4_ra-phase7-full-accept_c31a5833_runner-validation.md`
+  - `tests/aistock_validation/history/research-assistant/20260602_131908_l4_ra-phase7-full-accept_c31a5833_runner-validation.json`
+  - `tests/aistock_validation/history/research-assistant/20260602_131908_l4_ra-phase7-full-accept_c31a5833_runner-runner-job.json`
+  - `tests/aistock_validation/history/research-assistant/20260602_131908_l4_ra-phase7-full-accept_c31a5833_runner-runner-log.txt`
+  - `tests/aistock_validation/history/research-assistant/20260602_131908_l4_ra-phase7-full-accept_c31a5833_runner-runner-evidence.json`
+  - `tests/aistock_validation/history/research-assistant/20260602_131908_l4_ra-phase7-full-accept_c31a5833_runner-evidence.json`
 
 ## Automatic Gate Boundary
 
@@ -65,9 +65,9 @@ Phase 7 implements the frontend memory tree view, Agent Teams run view, evidence
 
 | Requirement | Status | Evidence |
 |---|---|---|
-| CR-P7-01 | done | origin/main `8a5d47f1` is the fetched/rebased base; worktree branch `codex/ra-frontend-accept-20260602` is ahead 2 and behind 0 after rebase. |
+| CR-P7-01 | done | origin/main `86a87f0e` is the fetched/rebased base; worktree branch `codex/ra-frontend-accept-20260602` is ahead 3 and behind 0 after rebase. |
 | CR-P7-02 | done | Blueprint Section 12 Phase6 row still references `5049e2a6...` and `research-assistant-qe-autonomy_20260602_072520...`; cross-check `phase_anchor_count=7` passed. |
-| CR-P7-03 | done | `ra_phase7_full_accept` runner registered; final workspace-scoped controlled runner `research-assistant_20260602_130855_l4_ra-phase7-full-accept_7a69e093_runner-validation__70be551adb`, rc=0, validated HEAD `43f8ea86`. |
+| CR-P7-03 | done | `ra_phase7_full_accept` runner registered; final workspace-scoped controlled runner `research-assistant_20260602_131908_l4_ra-phase7-full-accept_c31a5833_runner-validation__eaa766ad04`, rc=0, validated HEAD `b3961d15`. |
 | CR-P7-04 | done | `MemoryTreeView.tsx`, `/research-assistant/memory`, and Playwright memory-tree test. |
 | CR-P7-05 | done | `AgentTeamsRunView.tsx`, `/agent-runs` facade, `test_agent_teams_api.py`, and Playwright Agent Teams test. |
 | CR-P7-06 | done | `EvidenceCard.tsx` requires source/provenance/as_of; missing fields render evidence_insufficient. |

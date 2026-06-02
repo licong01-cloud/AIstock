@@ -5,7 +5,7 @@ nox > python -m pytest backend/tests/research_assistant -q -p no:cacheprovider
 ........................................................................ [ 43%]
 ........................................................................ [ 87%]
 .....................                                                    [100%]
-165 passed in 33.57s
+165 passed in 30.62s
 nox > cd frontend
 nox > npm run lint
 
@@ -282,49 +282,49 @@ Route (app)                                                Size     First Load J
 ƒ  (Dynamic)  server-rendered on demand
 
 nox > npx playwright test tests/research-assistant/phase7-frontend-acceptance.spec.ts --project chromium
-[2m[WebServer] [22m(node:32552) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[2m[WebServer] [22m(node:97868) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
 [2m[WebServer] [22m(Use `node --trace-warnings ...` to show where the warning was created)
-[2m[WebServer] [22m(node:93208) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[2m[WebServer] [22m(node:9036) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
 [2m[WebServer] [22m(Use `node --trace-warnings ...` to show where the warning was created)
-[2m[WebServer] [22m(node:82280) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[2m[WebServer] [22m(node:5276) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
 [2m[WebServer] [22m(Use `node --trace-warnings ...` to show where the warning was created)
 
 Running 4 tests using 1 worker
 
-(node:97688) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(node:73564) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
 (Use `node --trace-warnings ...` to show where the warning was created)
-(node:97688) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(node:73564) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
 (Use `node --trace-warnings ...` to show where the warning was created)
-  ✓  1 [chromium] › tests\research-assistant\phase7-frontend-acceptance.spec.ts:224:5 › Phase 7 chat shows evidence and blockers while main bubble stays summary-only (3.1s)
+  ✓  1 [chromium] › tests\research-assistant\phase7-frontend-acceptance.spec.ts:224:5 › Phase 7 chat shows evidence and blockers while main bubble stays summary-only (3.2s)
   ✓  2 [chromium] › tests\research-assistant\phase7-frontend-acceptance.spec.ts:246:5 › Phase 7 memory tree renders project and personal branches with context pack route evidence (1.4s)
-  ✓  3 [chromium] › tests\research-assistant\phase7-frontend-acceptance.spec.ts:260:5 › Phase 7 Agent Teams view shows orchestrator, workers, reduce, evidence, and approval blockers (1.5s)
-  ✓  4 [chromium] › tests\research-assistant\phase7-frontend-acceptance.spec.ts:274:5 › Phase 7 Trace page carries worker process instead of hiding failures (1.3s)
+  ✓  3 [chromium] › tests\research-assistant\phase7-frontend-acceptance.spec.ts:260:5 › Phase 7 Agent Teams view shows orchestrator, workers, reduce, evidence, and approval blockers (1.7s)
+  ✓  4 [chromium] › tests\research-assistant\phase7-frontend-acceptance.spec.ts:274:5 › Phase 7 Trace page carries worker process instead of hiding failures (1.5s)
 
-  4 passed (14.0s)
+  4 passed (14.9s)
 nox > npx playwright test tests/research-assistant/research-assistant.spec.ts --project chromium
-[2m[WebServer] [22m(node:95192) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[2m[WebServer] [22m(node:90728) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
 [2m[WebServer] [22m(Use `node --trace-warnings ...` to show where the warning was created)
-[2m[WebServer] [22m(node:92376) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[2m[WebServer] [22m(node:48880) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
 [2m[WebServer] [22m(Use `node --trace-warnings ...` to show where the warning was created)
-[2m[WebServer] [22m(node:96856) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[2m[WebServer] [22m(node:65796) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
 [2m[WebServer] [22m(Use `node --trace-warnings ...` to show where the warning was created)
 
 Running 7 tests using 1 worker
 
-(node:73660) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(node:67864) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
 (Use `node --trace-warnings ...` to show where the warning was created)
-(node:73660) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(node:67864) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
 (Use `node --trace-warnings ...` to show where the warning was created)
-  ✓  1 [chromium] › tests\research-assistant\research-assistant.spec.ts:88:5 › Research Assistant chat shows readable catalog setup state instead of backend error JSON (2.8s)
-  ✓  2 [chromium] › tests\research-assistant\research-assistant.spec.ts:135:5 › Research Assistant main entry is a Codex-like LLM chat with readable cards (1.3s)
-  ✓  3 [chromium] › tests\research-assistant\research-assistant.spec.ts:192:5 › Research Assistant chat renders tool choice markup as readable MCP route cards (1.2s)
-  ✓  4 [chromium] › tests\research-assistant\research-assistant.spec.ts:231:5 › Research Assistant chat renders auto-executed MCP summary result cards (1.4s)
+  ✓  1 [chromium] › tests\research-assistant\research-assistant.spec.ts:88:5 › Research Assistant chat shows readable catalog setup state instead of backend error JSON (2.6s)
+  ✓  2 [chromium] › tests\research-assistant\research-assistant.spec.ts:135:5 › Research Assistant main entry is a Codex-like LLM chat with readable cards (1.2s)
+  ✓  3 [chromium] › tests\research-assistant\research-assistant.spec.ts:192:5 › Research Assistant chat renders tool choice markup as readable MCP route cards (932ms)
+  ✓  4 [chromium] › tests\research-assistant\research-assistant.spec.ts:231:5 › Research Assistant chat renders auto-executed MCP summary result cards (1.2s)
   ✓  5 [chromium] › tests\research-assistant\research-assistant.spec.ts:319:5 › Research Assistant MCP tools page treats ready servers as ready (1.4s)
 [2m[WebServer] [22m ⚠ Fast Refresh had to perform a full reload. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
-  ✓  6 [chromium] › tests\research-assistant\research-assistant.spec.ts:360:5 › Research Assistant admin page separates audit tools from the chat entry (2.2s)
+  ✓  6 [chromium] › tests\research-assistant\research-assistant.spec.ts:360:5 › Research Assistant admin page separates audit tools from the chat entry (2.0s)
   ✓  7 [chromium] › tests\research-assistant\research-assistant.spec.ts:399:5 › Research Assistant workbench surfaces local data MCP tools as readable cards (1.0s)
 
-  7 passed (17.9s)
+  7 passed (17.0s)
 nox > cd F:\Dev\AIstock_worktrees\ra-frontend-accept-20260602
 nox > C:\Users\lc999\miniconda3\envs\AIstock\python.exe scripts/research_assistant_phase7_crosscheck.py --blueprint docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md --expected tests/aistock_validation/catalog/research_assistant_phase7_expected.yaml --fail-on-drift --output-json tmp/validation/research_assistant/phase7/crosscheck.json
 {
@@ -342,7 +342,7 @@ nox > C:\Users\lc999\miniconda3\envs\AIstock\python.exe scripts/research_assista
 nox > C:\Users\lc999\miniconda3\envs\AIstock\python.exe scripts/aistock_validation_catalog_integrity.py --output-json tmp/validation/research_assistant/phase7/catalog_integrity.json --fail-on-warning
 {
   "schema_version": "aistock_validation_catalog_integrity_v1",
-  "generated_at": "2026-06-02T13:08:55.167364+00:00",
+  "generated_at": "2026-06-02T13:19:08.216147+00:00",
   "repo_root": "F:\\Dev\\AIstock_worktrees\\ra-frontend-accept-20260602",
   "state": "passed",
   "summary": {
@@ -364,4 +364,4 @@ nox > C:\Users\lc999\miniconda3\envs\AIstock\python.exe scripts/aistock_validati
 }
 nox > C:\Users\lc999\miniconda3\envs\AIstock\python.exe scripts/aistock_module_ownership_scan.py --output-json tmp/validation/research_assistant/phase7/ownership.json --summary-md tmp/validation/research_assistant/phase7/ownership.md --fail-on-unmapped --fail-on-ambiguous backend/routers/research_assistant.py backend/db/init_research_assistant_schema_20260521.py backend/services/research_assistant/service.py backend/services/research_assistant/qe_autonomy/adapter.py backend/tests/research_assistant/test_agent_teams_api.py backend/tests/research_assistant/test_phase7_blueprint_crosscheck.py backend/tests/research_assistant/test_qe_autonomy_adapter_contract.py frontend/src/app/research-assistant/chat/page.tsx frontend/src/app/research-assistant/memory/page.tsx frontend/src/app/research-assistant/research-assistant.css frontend/src/app/research-assistant/tasks/page.tsx frontend/src/app/research-assistant/trace/page.tsx frontend/src/app/research-assistant/workbench/page.tsx frontend/src/components/research-assistant/AgentTeamsRunView.tsx frontend/src/components/research-assistant/BlockerCard.tsx frontend/src/components/research-assistant/EvidenceCard.tsx frontend/src/components/research-assistant/MemoryTreeView.tsx frontend/src/lib/research-assistant/api.ts frontend/tests/research-assistant/phase7-frontend-acceptance.spec.ts frontend/tests/research-assistant/phase7-live-smoke.spec.ts scripts/research_assistant_phase7_crosscheck.py tests/aistock_validation/catalog/research_assistant_phase7_expected.yaml tests/aistock_validation/catalog/test_plans.yaml tests/aistock_validation/catalog/module_registry.yaml tests/aistock_validation/catalog/file_ownership.yaml tests/aistock_validation/history/research_assistant/20260602_ra_phase7_full_accept_validation.md tests/aistock_validation/history/research_assistant/20260602_ra_phase7_full_accept_progress.md tests/aistock_validation/history/research_assistant/20260602_ra_phase7_live_smoke_template.md backend/services/validation/plan_catalog.py noxfile.py
 Module ownership scan completed: files=30, mapped=30, unmapped=0, ambiguous=0
-nox > Session ra_phase7_full_accept was successful in 2 minutes.
+nox > Session ra_phase7_full_accept was successful in a minute.
