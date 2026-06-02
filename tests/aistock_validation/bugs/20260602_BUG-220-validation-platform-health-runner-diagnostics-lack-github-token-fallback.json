@@ -1,0 +1,67 @@
+{
+  "actual": "backend/services/validation/platform_health.py calls gh auth status and gh api/run commands directly, with tests only covering gh_available true/false and no token fallback path.",
+  "allowed_write_scope": [
+    "backend/services/validation/platform_health.py",
+    "backend/tests/test_validation_platform_health.py",
+    "tests/aistock_validation/bugs/20260602_BUG-220-validation-platform-health-runner-diagnostics-lack-github-token-fallback.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-220",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-02T15:28:27.839624Z",
+  "description": "backend/services/validation/platform_health.py calls gh auth status and gh api/run commands directly, with tests only covering gh_available true/false and no token fallback path.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260602-8938bdd51afd",
+      "timestamp": "2026-06-02T15:28:27.839619Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/issues/257"
+  ],
+  "expected": "Runner health diagnostics try AISTOCK_RUNNER_HEALTH_TOKEN, GH_TOKEN, GITHUB_TOKEN, and gh auth token in order; missing tokens degrade compactly without crashing or promoting runner outage as a code BUG.",
+  "first_seen_at": "2026-06-02T15:28:27.839624Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 599,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/599",
+  "last_seen_at": "2026-06-02T15:28:27.839624Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m pytest backend/tests/test_validation_platform_health.py -q -p no:cacheprovider",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "validation_catalog_integrity",
+    "validation_coverage_backend",
+    "guardrail_changed_files",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Validation Platform Health runner diagnostics lack GitHub token fallback",
+  "trigger_condition": {
+    "fingerprint": "8938bdd51afd528f8504bd37",
+    "source_event_id": "FE-20260602-8938bdd51afd"
+  },
+  "verification_run_id": null
+}
