@@ -29,8 +29,8 @@
   "expected": "A repo workflow smoke validates same-module batch start/finish behavior with synthetic ignored BUG records, per-issue context/closure metadata, compact output, and unexpected_dirty_paths=[] without GitHub writes, production runtime access, DB writes, or tracked root file mutations.",
   "first_seen_at": "2026-06-02T10:10:56.353771Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "674f33c4a12bf9ce7cccb80116d9f686afc42896",
+  "fixed_at": "2026-06-02T10:54:38.032362Z",
   "github_issue_number": 572,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/572",
   "last_seen_at": "2026-06-02T10:10:56.353771Z",
@@ -38,6 +38,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/573",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -58,6 +59,11 @@
     "fingerprint": "fea798e97df6daddeff88311",
     "source_event_id": "FE-20260602-fea798e97df6"
   },
+  "validation_evidence": [
+    "PR #573 CI -> checks_passed",
+    "python scripts/aistock_issue_workflow.py batch-workflow-smoke -> workflow_gate=passed, unexpected_dirty_paths=[]",
+    "python -m nox -s l0 validation_module_registry_l0 validation_center_backend -> all 3 sessions successful"
+  ],
   "verification_run_id": null,
   "workflow_gate": "fix_ready"
 }
