@@ -5,6 +5,7 @@ import {
   type JsonObject,
   type ValidationAutomationSummary,
   type ValidationBranchDetailSummary,
+  type ValidationCodeIntelligenceSummary,
   type ValidationExecutionJob,
   type ValidationGithubPrSummary,
   type ValidationHealth,
@@ -23,6 +24,7 @@ import {
 
 export type PipelineOverviewSectionId =
   | "overview"
+  | "code_intelligence"
   | "merge_gate"
   | "issue_workflow"
   | "pipeline_tests"
@@ -59,6 +61,7 @@ export type PipelineOverviewCardsProps = {
   cardsSummary?: ValidationPhase1CardsSummary | null;
   health?: ValidationHealth | null;
   validationSummary?: ValidationSummary | null;
+  codeIntelligenceSummary?: ValidationCodeIntelligenceSummary | null;
   plans?: ValidationPlan[];
   executions?: ValidationPage<ValidationExecutionJob> | null;
   mergeGate?: ValidationMergeGate | null;
@@ -77,6 +80,7 @@ export type PipelineOverviewCardsProps = {
 
 export const PIPELINE_OVERVIEW_SECTIONS: PipelineSection[] = [
   { id: "overview", label: "平台健康", hint: "运行环境 / catalog / 连接" },
+  { id: "code_intelligence", label: "Code Intelligence", hint: "CodeGraph / UA freshness" },
   { id: "merge_gate", label: "合入门禁", hint: "只读预览" },
   { id: "issue_workflow", label: "Issue 修复流程", hint: "BUG / GitHub / 验证" },
   { id: "pipeline_tests", label: "测试计划", hint: "计划 / 证据 / Runner" },
@@ -204,6 +208,40 @@ function buildSectionView(section: PipelineSection, props: PipelineOverviewCards
         ...warningKeys.map((key) => `optional_api_unavailable:${key}`),
         ...stringList(codeIntel?.reason_codes),
       ],
+    };
+  }
+
+  if (section.id === "code_intelligence") {
+    const codeIntel = props.codeIntelligenceSummary || props.validationSummary?.code_intelligence;
+    const codegraph = isObject(codeIntel?.codegraph) ? codeIntel?.codegraph : {};
+    const ua = isObject(codeIntel?.understand_anything) ? codeIntel?.understand_anything : {};
+    const warningsList = stringList(codeIntel?.warnings);
+    const freshness = String(objectField(codegraph, "freshness") || objectField(codegraph, "status") || "missing");
+    const dataState = String(codeIntel?.data_state || "missing");
+    const warningOnly = codeIntel?.blocking_for_issue_workflow === false;
+    const tone = freshness === "fresh" && dataState === "complete" ? "green" : "yellow";
+    return {
+      id: section.id,
+      label: section.label,
+      hint: section.hint,
+      tone,
+      state: warningOnly ? "warning-only" : display(dataState),
+      meta: `CodeGraph ${display(freshness)} / UA ${display(objectField(ua, "summary_count") ?? 0)}`,
+      risk: warningsList.length ? Math.min(60, warningsList.length * 15) : tone === "green" ? 0 : 25,
+      rows: [
+        ...baseRows,
+        ["data_state", dataState],
+        ["blocking_for_issue_workflow", codeIntel?.blocking_for_issue_workflow],
+        ["artifact_count", codeIntel?.artifact_count],
+        ["artifact_roots", codeIntel?.artifact_roots],
+        ["CodeGraph freshness", freshness],
+        ["CodeGraph generated_at", objectField(codegraph, "generated_at")],
+        ["CodeGraph artifact_path", objectField(codegraph, "artifact_path")],
+        ["CodeGraph summary_ref", objectField(codegraph, "summary_ref")],
+        ["Understand Anything summaries", objectField(ua, "summary_count")],
+        ["warnings", warningsList.length ? warningsList.join(" / ") : "none"],
+      ],
+      reasonCodes: stringList(codeIntel?.reason_codes),
     };
   }
 
