@@ -296,6 +296,11 @@ class WatchlistRepoPG:
                     it.get("entry_task_id"),
                     it.get("entry_loop_id"),
                     it.get("entry_as_of"),
+                    it.get("lifecycle_status") or "CANDIDATE",
+                    it.get("planned_entry_price") or it.get("entry_price"),
+                    it.get("actual_entry_price") or it.get("entry_price"),
+                    it.get("actual_entry_date") or it.get("entry_as_of"),
+                    bool(it.get("advisory_enabled", False)),
                 )
             )
 
@@ -313,7 +318,12 @@ class WatchlistRepoPG:
                         entry_source,
                         entry_task_id,
                         entry_loop_id,
-                        entry_as_of
+                        entry_as_of,
+                        lifecycle_status,
+                        planned_entry_price,
+                        actual_entry_price,
+                        actual_entry_date,
+                        advisory_enabled
                     )
                     VALUES %s
                     ON CONFLICT (code) DO UPDATE
@@ -325,6 +335,14 @@ class WatchlistRepoPG:
                         entry_task_id = COALESCE(EXCLUDED.entry_task_id, app.watchlist_items.entry_task_id),
                         entry_loop_id = COALESCE(EXCLUDED.entry_loop_id, app.watchlist_items.entry_loop_id),
                         entry_as_of = COALESCE(EXCLUDED.entry_as_of, app.watchlist_items.entry_as_of),
+                        lifecycle_status = CASE
+                            WHEN app.watchlist_items.lifecycle_status = 'EXITED' THEN app.watchlist_items.lifecycle_status
+                            ELSE COALESCE(EXCLUDED.lifecycle_status, app.watchlist_items.lifecycle_status)
+                        END,
+                        planned_entry_price = COALESCE(EXCLUDED.planned_entry_price, app.watchlist_items.planned_entry_price),
+                        actual_entry_price = COALESCE(EXCLUDED.actual_entry_price, app.watchlist_items.actual_entry_price),
+                        actual_entry_date = COALESCE(EXCLUDED.actual_entry_date, app.watchlist_items.actual_entry_date),
+                        advisory_enabled = COALESCE(EXCLUDED.advisory_enabled, app.watchlist_items.advisory_enabled),
                         updated_at = now()
                     """,
                     upsert_rows,
@@ -434,12 +452,19 @@ class WatchlistRepoPG:
                            i.entry_source,
                            i.entry_task_id,
                            i.entry_loop_id,
-                           i.entry_as_of
+                           i.entry_as_of,
+                           i.lifecycle_status,
+                           i.planned_entry_price,
+                           i.actual_entry_price,
+                           i.actual_entry_date,
+                           i.exited_at,
+                           i.exit_reason,
+                           i.advisory_enabled
                       FROM app.watchlist_items i
                  LEFT JOIN app.watchlist_item_categories w ON w.item_id = i.id
                  LEFT JOIN app.watchlist_categories c ON c.id = w.category_id
                      WHERE i.code = %s
-                  GROUP BY i.id, i.code, i.name, i.note, i.created_at, i.updated_at, i.entry_price, i.entry_rank, i.entry_source, i.entry_task_id, i.entry_loop_id, i.entry_as_of
+                  GROUP BY i.id, i.code, i.name, i.note, i.created_at, i.updated_at, i.entry_price, i.entry_rank, i.entry_source, i.entry_task_id, i.entry_loop_id, i.entry_as_of, i.lifecycle_status, i.planned_entry_price, i.actual_entry_price, i.actual_entry_date, i.exited_at, i.exit_reason, i.advisory_enabled
                     """,
                     (code,),
                 )
@@ -461,6 +486,13 @@ class WatchlistRepoPG:
                     "entry_task_id": r[11],
                     "entry_loop_id": r[12],
                     "entry_as_of": r[13].isoformat() if r[13] else None,
+                    "lifecycle_status": r[14],
+                    "planned_entry_price": float(r[15]) if r[15] is not None else None,
+                    "actual_entry_price": float(r[16]) if r[16] is not None else None,
+                    "actual_entry_date": r[17].isoformat() if r[17] else None,
+                    "exited_at": r[18].isoformat() if r[18] else None,
+                    "exit_reason": r[19],
+                    "advisory_enabled": bool(r[20]),
                 }
 
     def get_items_by_codes(self, codes: List[str]) -> List[Dict[str, Any]]:
@@ -479,12 +511,19 @@ class WatchlistRepoPG:
                            i.entry_source,
                            i.entry_task_id,
                            i.entry_loop_id,
-                           i.entry_as_of
+                           i.entry_as_of,
+                           i.lifecycle_status,
+                           i.planned_entry_price,
+                           i.actual_entry_price,
+                           i.actual_entry_date,
+                           i.exited_at,
+                           i.exit_reason,
+                           i.advisory_enabled
                       FROM app.watchlist_items i
                  LEFT JOIN app.watchlist_item_categories w ON w.item_id = i.id
                  LEFT JOIN app.watchlist_categories c ON c.id = w.category_id
                      WHERE i.code = ANY(%s)
-                  GROUP BY i.id, i.code, i.name, i.note, i.created_at, i.updated_at, i.entry_price, i.entry_rank, i.entry_source, i.entry_task_id, i.entry_loop_id, i.entry_as_of
+                  GROUP BY i.id, i.code, i.name, i.note, i.created_at, i.updated_at, i.entry_price, i.entry_rank, i.entry_source, i.entry_task_id, i.entry_loop_id, i.entry_as_of, i.lifecycle_status, i.planned_entry_price, i.actual_entry_price, i.actual_entry_date, i.exited_at, i.exit_reason, i.advisory_enabled
                     """,
                     (codes,),
                 )
@@ -505,6 +544,13 @@ class WatchlistRepoPG:
                             "entry_task_id": r[11],
                             "entry_loop_id": r[12],
                             "entry_as_of": r[13].isoformat() if r[13] else None,
+                            "lifecycle_status": r[14],
+                            "planned_entry_price": float(r[15]) if r[15] is not None else None,
+                            "actual_entry_price": float(r[16]) if r[16] is not None else None,
+                            "actual_entry_date": r[17].isoformat() if r[17] else None,
+                            "exited_at": r[18].isoformat() if r[18] else None,
+                            "exit_reason": r[19],
+                            "advisory_enabled": bool(r[20]),
                         }
                     )
         return out
@@ -544,10 +590,17 @@ class WatchlistRepoPG:
                            a.conclusion AS last_conclusion,
                            i.entry_price,
                            i.entry_rank,
-                           i.entry_source,
-                           i.entry_task_id,
-                           i.entry_loop_id,
-                           i.entry_as_of
+                            i.entry_source,
+                            i.entry_task_id,
+                            i.entry_loop_id,
+                            i.entry_as_of,
+                            i.lifecycle_status,
+                            i.planned_entry_price,
+                            i.actual_entry_price,
+                            i.actual_entry_date,
+                            i.exited_at,
+                            i.exit_reason,
+                            i.advisory_enabled
                       FROM app.watchlist_items i
                  LEFT JOIN app.watchlist_item_categories w ON w.item_id = i.id
                  LEFT JOIN app.watchlist_categories c ON c.id = w.category_id
@@ -561,7 +614,7 @@ class WatchlistRepoPG:
                          LIMIT 1
                    ) a ON TRUE
                    {where}
-                  GROUP BY i.id, i.code, i.name, i.note, i.created_at, i.updated_at, a.analysis_date, a.rating, a.conclusion, i.entry_price, i.entry_rank, i.entry_source, i.entry_task_id, i.entry_loop_id, i.entry_as_of
+                  GROUP BY i.id, i.code, i.name, i.note, i.created_at, i.updated_at, a.analysis_date, a.rating, a.conclusion, i.entry_price, i.entry_rank, i.entry_source, i.entry_task_id, i.entry_loop_id, i.entry_as_of, i.lifecycle_status, i.planned_entry_price, i.actual_entry_price, i.actual_entry_date, i.exited_at, i.exit_reason, i.advisory_enabled
                   ORDER BY {order_expr} {dir_kw} NULLS LAST, i.code ASC
                   OFFSET %s LIMIT %s
                 """
@@ -587,6 +640,13 @@ class WatchlistRepoPG:
                             "entry_task_id": r[14],
                             "entry_loop_id": r[15],
                             "entry_as_of": r[16].isoformat() if r[16] else None,
+                            "lifecycle_status": r[17],
+                            "planned_entry_price": float(r[18]) if r[18] is not None else None,
+                            "actual_entry_price": float(r[19]) if r[19] is not None else None,
+                            "actual_entry_date": r[20].isoformat() if r[20] else None,
+                            "exited_at": r[21].isoformat() if r[21] else None,
+                            "exit_reason": r[22],
+                            "advisory_enabled": bool(r[23]),
                         }
                     )
         return {"total": total, "items": items}
