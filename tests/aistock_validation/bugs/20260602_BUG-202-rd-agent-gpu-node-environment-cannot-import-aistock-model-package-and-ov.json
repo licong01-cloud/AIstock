@@ -1,0 +1,77 @@
+{
+  "actual": "Model import and/or training fails on the remote node because aistock_models is not deployed in the rdagent-gpu environment, while GPU training can compete with V25 RL for limited VRAM.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260602_BUG-202-rd-agent-gpu-node-environment-cannot-import-aistock-model-package-and-ov.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-202",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-02T04:59:03.691928Z",
+  "description": "Model import and/or training fails on the remote node because aistock_models is not deployed in the rdagent-gpu environment, while GPU training can compete with V25 RL for limited VRAM.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260602-18a073aa465e",
+      "timestamp": "2026-06-02T04:59:03.691925Z"
+    },
+    {
+      "action": "environment_fix_applied",
+      "actor": "codex",
+      "note": "Deployed aistock_models into rdagent-node1 rdagent-gpu, verified XGBoost/LambdaMART imports and tiny training, and forced remote Qlib CatBoostModel CPU training to avoid 6GB VRAM contention with V25 RL.",
+      "timestamp": "2026-06-02T05:37:38Z"
+    }
+  ],
+  "evidence_uris": [
+    "2026-06-02 rdagent-node1 precheck: rdagent-gpu had xgboost/lightgbm/catboost but aistock_models import was missing; GPU RTX 2060 6144 MiB.",
+    "2026-06-02 deployed /home/lc999/projects/AIstock/aistock_models and installed editable with /home/lc999/miniconda3/envs/rdagent-gpu/bin/python -m pip install --no-deps -e.",
+    "2026-06-02 patched remote /home/lc999/projects/RD-Agent-main/qlib-main/qlib/contrib/model/catboost_model.py to force CatBoostModel task_type=CPU; backup kept as catboost_model.py.BUG-202-20260602.bak."
+  ],
+  "expected": "rdagent-node1 rdagent-gpu can import aistock_models classes and xgboost/lambdarank dependencies; CatBoost and comparable GPU-class loops avoid exhausting the 6GB GPU, preferably by CPU training or constrained node_parallelism.",
+  "first_seen_at": "2026-06-02T04:59:03.691928Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 537,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/537",
+  "last_seen_at": "2026-06-02T04:59:03.691928Z",
+  "module": "rdagent",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "applied_and_verified",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "ssh rdagent-node1 \"conda run -n rdagent-gpu python -c 'import aistock_models'\"",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "rdagent"
+  ],
+  "title": "RD-Agent GPU node environment cannot import AIstock model package and overuses 6GB GPU memory",
+  "trigger_condition": {
+    "fingerprint": "18a073aa465e52ed046306bc",
+    "source_event_id": "FE-20260602-18a073aa465e"
+  },
+  "verification_run_id": null,
+  "validation_evidence": [
+    "remote rdagent-node1 precheck -> aistock_models missing, xgboost/lightgbm/catboost available, RTX 2060 6144 MiB",
+    "scp aistock_models to /home/lc999/projects/AIstock/aistock_models and pip install --no-deps -e in rdagent-gpu -> aistock_models import path resolved",
+    "remote init_instance_by_config smoke -> AIStockXGBModel OK and LambdaRankModel OK",
+    "remote xgboost train + lightgbm lambdarank train + catboost task_type=CPU train -> passed; nvidia-smi memory.used 1 MiB",
+    "remote qlib CatBoostModel patched to force CPU even when task_type=GPU; py_compile and FakeDataset fit -> qlib_catboost_forced_task_type CPU",
+    "python -m nox -s l0 validation_module_registry_l0 -> passed"
+  ]
+}
