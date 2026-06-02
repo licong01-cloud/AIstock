@@ -906,6 +906,72 @@ def test_doctor_reports_ready_when_client_entries_exist(
     assert "run --bug-id BUG-XXX" in payload["next_command"]
 
 
+def test_doctor_warns_when_bug_allocator_lags_github(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (isolated_workflow_root / "scripts").mkdir()
+    (isolated_workflow_root / "scripts" / "aistock_issue_workflow.py").write_text("", encoding="utf-8")
+    (isolated_workflow_root / "scripts" / "issue_flow.py").write_text("", encoding="utf-8")
+    (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue").mkdir(parents=True)
+    (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue" / "SKILL.md").write_text("", encoding="utf-8")
+    (isolated_workflow_root / ".claude" / "commands").mkdir(parents=True)
+    (isolated_workflow_root / ".claude" / "commands" / "fix-aistock-issue.md").write_text("", encoding="utf-8")
+    (isolated_workflow_root / "docs" / "standards").mkdir(parents=True)
+    (isolated_workflow_root / "docs" / "standards" / "aistock_development_standard_v1.5_20260523.md").write_text("", encoding="utf-8")
+    (isolated_workflow_root / "docs" / "architecture").mkdir(parents=True)
+    (isolated_workflow_root / "docs" / "architecture" / "aistock_issue_workflow_opensource_cicd_design_v2_20260525.md").write_text("", encoding="utf-8")
+    _write_json(workflow.BUGS_ROOT / ".bug_id_allocator.json", {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 216})
+    codex_home = isolated_workflow_root / "codex_home"
+    (codex_home / "skills" / "fix-aistock-issue").mkdir(parents=True)
+    (codex_home / "skills" / "fix-aistock-issue" / "SKILL.md").write_text("", encoding="utf-8")
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {
+            "ok": True,
+            "branch": "main",
+            "head": "abc1234",
+            "origin_main": "abc1234",
+            "dirty": False,
+            "dirty_count": 0,
+        },
+    )
+    monkeypatch.setattr(workflow, "_mcp_config_snapshot", lambda: {"files": [], "stale_worktree_config_files": []})
+    monkeypatch.setattr(workflow, "_run_command", lambda *_args, **_kwargs: {"ok": True, "stdout": "{}", "stderr": ""})
+    monkeypatch.setattr(
+        workflow,
+        "_scan_github_bug_ids",
+        lambda **_kwargs: (
+            [{"bug_id": "BUG-217", "number": 217, "kind": "github_issue", "source": "https://github.example/issues/588"}],
+            [],
+        ),
+    )
+    monkeypatch.setattr(
+        workflow.code_intelligence,
+        "build_doctor_report",
+        lambda root, skip_external=False: {
+            "schema_version": "aistock_code_intelligence_doctor_v1",
+            "workflow_gate": "ready",
+            "warnings": [],
+            "blocking": [],
+            "codegraph": {"status": "ok"},
+            "understand_anything": {"status": "available"},
+        },
+    )
+
+    payload = workflow.build_doctor_report(skip_external=False)
+    compact = workflow._compact_payload(payload)
+
+    assert payload["workflow_gate"] == "warning"
+    assert payload["bug_id_allocation"]["next_number"] == 218
+    assert payload["bug_id_allocation"]["github_max_number"] == 217
+    assert any("bug id allocation" in warning for warning in payload["warnings"])
+    assert compact["bug_id_allocation"]["next_number"] == 218
+
+
 def test_doctor_compact_reports_codegraph_bootstrap_next_command(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1559,6 +1625,60 @@ def test_submit_bug_allocator_scans_stale_worktrees(
     assert payload["bug_id"] == "BUG-137"
     assert payload["bug_id_allocation"]["global_max_number"] == 136
     assert json.loads(allocator.read_text(encoding="utf-8"))["last_allocated"] == 137
+
+
+def test_submit_bug_allocator_scans_github_only_bug_ids(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
+    _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 216})
+    monkeypatch.setattr(workflow, "_validate_registry_apply_target", lambda root: {"blocking": [], "warnings": [], "target_root": str(root)})
+    monkeypatch.setattr(
+        workflow,
+        "_scan_github_bug_ids",
+        lambda **_kwargs: (
+            [
+                {
+                    "bug_id": "BUG-217",
+                    "number": 217,
+                    "kind": "github_issue",
+                    "source": "https://github.example/issues/588",
+                    "github_issue_number": 588,
+                    "github_state": "OPEN",
+                }
+            ],
+            [],
+        ),
+    )
+
+    payload = workflow.build_submit_bug_plan(
+        title="Allocator GitHub-only regression",
+        module="validation",
+        severity="P1",
+        description="A GitHub-only BUG id should advance allocation.",
+        expected="The next BUG id should be globally unique.",
+        actual="The local allocator points at BUG-216 while GitHub has BUG-217.",
+        reproduce_command="n/a",
+        evidence_refs=[],
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        plan_key=None,
+        nox_session=None,
+        candidate_type="bug",
+        bug_id=None,
+        github_issue_number="592",
+        github_issue_url="https://github.com/licong01-cloud/AIstock/issues/592",
+        create_github=False,
+        apply=True,
+        create_registry_worktree=False,
+        registry_pr_only=False,
+        dry_run=False,
+    )
+
+    assert payload["bug_id"] == "BUG-218"
+    assert payload["bug_id_allocation"]["global_max_number"] == 217
+    assert payload["bug_id_allocation"]["warnings"]
+    assert json.loads(allocator.read_text(encoding="utf-8"))["last_allocated"] == 218
 
 
 def test_submit_bug_explicit_duplicate_fails_before_github_create(
