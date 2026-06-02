@@ -1,0 +1,78 @@
+{
+  "actual": "The unified design requires Phase 2 implementation before branch integration can continue. Current code still has separated execution paths that must be unified through a shared adapter before final validation.",
+  "allowed_write_scope": [
+    "docs/architecture/paper_v2_miniqmt_unified_autorun_design_20260602.md",
+    "backend/execution_algos/vnpy_style",
+    "backend/services/trading_core",
+    "backend/services/paper_trading_v2",
+    "backend/services/simulation_runtime",
+    "backend/tests/trading_core",
+    "backend/tests/paper_trading_v2",
+    "backend/tests/simulation_runtime",
+    "tests/aistock_validation/bugs/20260602_BUG-217-paper-v2-miniqmt-unified-phase-2-vn-py-style-shared-execution-adapter.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-217",
+  "closed_at": null,
+  "closure_requirements": [
+    "Implement shared UnifiedMiniQMTVnpyExecutionAdapter/trading-core adapter semantics for vn.py-style child-order actions.",
+    "Wire Paper v2 MiniQMT single-strategy execution and MiniQMT virtual-strategy multi-strategy bridge to the shared adapter without divergent semantics.",
+    "Prove Sniper, BestLimit, and TWAP-lite fail-fast config validation, source attribution, policy id/hash, parent intent, child order id/action, and raw diagnostics.",
+    "Prove BUG-198 submit/cancel timeout diagnostics and prior exclusive_account fixes are inherited in the unified path.",
+    "Run required targeted tests and workflow finish/PR gates; keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-02T12:51:51.142040Z",
+  "description": "Phase 2 of docs/architecture/paper_v2_miniqmt_unified_autorun_design_20260602.md: implement the unified vn.py-style shared execution adapter on the MiniQMT unified integration branch, not main. This must satisfy F2M-04/P2M-03 and design sections 11.3, 11.4, and 14.2: Paper v2 exclusive-account and MiniQMT virtual-strategy multi-strategy execution must share one child-order/action generation adapter; Sniper, BestLimit, and TWAP-lite must preserve source attribution, parent intent, policy id/hash, child order diagnostics, raw broker diagnostics, and fail-fast unsupported config behavior; BUG-198 timeout/diagnostics and all accepted exclusive_account fixes must remain inherited; do not import vn.py EventEngine/MainEngine/gateway runtime and do not deliver any simplified/POC/minimum viable subset.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260602-2937e7670967",
+      "timestamp": "2026-06-02T12:51:51.142036Z"
+    },
+    {
+      "action": "phase2_scope_enriched",
+      "actor": "codex",
+      "note": "Expanded Phase 2 acceptance requirements for unified vn.py-style adapter before implementation.",
+      "timestamp": "2026-06-02T12:51:51.142040Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Both Paper v2 single-strategy MiniQMT execution and MiniQMT virtual-strategy multi-strategy execution use the same shared vn.py-style adapter with deterministic child-order semantics, complete diagnostics, fail-fast validation, and targeted tests proving inheritance of prior fixes.",
+  "first_seen_at": "2026-06-02T12:51:51.142040Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 588,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/588",
+  "last_seen_at": "2026-06-02T12:51:51.142040Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "paper_v2_l3",
+    "qe_read_l3",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "Paper v2 MiniQMT unified Phase 2 vn.py-style shared execution adapter",
+  "trigger_condition": {
+    "fingerprint": "2937e767096710b0509cb905",
+    "source_event_id": "FE-20260602-2937e7670967"
+  },
+  "verification_run_id": null
+}
