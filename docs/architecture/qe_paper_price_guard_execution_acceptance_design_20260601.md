@@ -129,6 +129,27 @@ min_sell_price = reference_price * (1 - max_sell_slippage_bps / 10000)
 
 `expected_alpha_bps` 第一版来自历史分桶统计或策略默认配置；后续可来自 ML 模型。
 
+### 4.4 PriceGuard 设计思路
+
+PriceGuard 的核心不是预测股票“应该值多少钱”，而是回答一个更适合多因子执行的问题：当前价格是否已经把本次 alpha 信号可赚的预算吃掉。设计上采用四步：
+
+1. **固定信号基准**：T 日多因子信号以 `signal_close` 或审批后的 `reference_price` 作为可比价，盘中临时意图以 `arrival_price` 作为可比价。
+2. **估计剩余 alpha 预算**：按 score/rank bucket、行业/市值/流动性、市场 regime、持有期和历史 open-gap 分桶，估计买入后可实现的净 alpha。
+3. **扣除执行与安全缓冲**：扣除显性成本、价差/滑点缓冲、最小佣金影响、风险缓冲和接近涨停/跌停的不可成交风险。
+4. **输出动作而非单点价格**：输出 `green/yellow/red`、`ACCEPT/REDUCE/SKIP/WAITING`、保护价、数量缩放和 reason code。
+
+因此，PriceGuard 给出的“准确建议”应理解为经过回测校准的价格接受区间，而不是单个确定买入价。准确性的衡量标准不是“是否买在最低点”，而是：
+
+| 维度 | 准确建议应满足 |
+| --- | --- |
+| 经济含义 | 超出建议区间后的 forward net alpha 显著下降，或尾部亏损/回撤明显恶化。 |
+| 可复现 | 同一 `policy_sha256` 在 QE 与 Paper v2 历史回放中对同一 symbol/date/side 给出一致决策。 |
+| 可解释 | 每次跳过、减量、等待都有 `reference_price`、当前价、区间、阈值来源和 reason code。 |
+| 可验证 | `disabled` vs `enforced` 的 QE A/B 能证明收益、回撤、尾部风险或交易成本有净改善。 |
+| 可降级 | 证据不足时输出 `guidance_low_confidence` 或只做 shadow，不允许假装成已验证建议。 |
+
+例如：多因子 topk 股票 T 日收盘价 10.00，T+1 开盘 10.90，高开 9%。如果该策略在历史上 `top score + open_gap 5%~9%` 分桶的 5 日净 alpha 为负，或虽然均值为正但最大回撤/尾部亏损显著恶化，则 PriceGuard 应在 `enforced` 模式下输出 `SKIP_ABOVE_MAX_OPEN_GAP` 或 `REDUCE_ABOVE_YELLOW_GAP`。只有当短线动量/事件策略经 QE 证明“高开后仍有 residual alpha”时，才允许使用更宽的追价区间。
+
 ## 5. 分层架构
 
 目标架构：
@@ -415,7 +436,7 @@ AIstock 已有多因子策略包、选股和模拟盘链路，因此阶段目标
 
 | 本次能力 | 机构常见处理 | 论文/工具依据 | AIstock 落地 |
 | --- | --- | --- | --- |
-| topk 股票开盘涨太多是否继续买 | 买方通常用 arrival/decision price、pre-trade TCA、implementation shortfall 和交易成本预算判断是否继续追价；交易台不会因为 PM 给了目标权重就无限追高。 | Perold implementation shortfall、Almgren-Chriss optimal execution、Bertsimas-Lo execution control、Qlib/LEAN execution framework。 | PriceGuard 使用 `reference_price=signal_close/arrival_price`、`max_open_gap_bps/max_chase_bps`、`ACCEPT/REDUCE/SKIP`，在 QE A/B 验证后进入 Paper v2。 |
+| topk 股票开盘涨太多是否继续买 | 买方通常用 arrival/decision price、pre-trade TCA、implementation shortfall 和交易成本预算判断是否继续追价；交易台不会因为 PM 给了目标权重就无限追高。 | Perold implementation shortfall（参考：<https://cir.nii.ac.jp/crid/1360011143955136384>）、Almgren-Chriss optimal execution、Bertsimas-Lo execution control、Qlib/LEAN execution framework。 | PriceGuard 使用 `reference_price=signal_close/arrival_price`、`max_open_gap_bps/max_chase_bps`、`ACCEPT/REDUCE/SKIP`，在 QE A/B 验证后进入 Paper v2。 |
 | 选股列表提供买入价格区间 | 机构研究或投顾会给 entry zone/买入区间，但买方量化通常把它表达为 alpha budget + cost budget + execution limit。 | FINRA research report price target/valuation disclosure、TCA、Alphalens factor tear sheet。 | `suggested_entry_price_band` 来自 `alpha_budget_based/cost_budget_based`，标注 policy hash 和 guidance status，不作为最终委托价。 |
 | 选股列表提供止损区间 | 短线/事件/投顾常给 stop-loss；量化组合更多用风险预算、波动率 stop、rank drop、alpha decay。 | Triple-barrier labeling、MAE/MFE 分析、风险模型/Barra-like exposure control。 | `suggested_stop_loss_zone` 提供 soft/hard stop guidance；运行时由独立 ExitGuard/RiskGuard 处理，默认不强制启用。 |
 | 未来止盈区间 | 趋势/动量/短线策略常用 take-profit/trailing stop；低换手多因子通常更依赖 alpha 衰减或再平衡。 | Backtrader bracket order、QuantConnect risk models、triple-barrier 上轨标签。 | `suggested_take_profit_zone` 第一版默认关闭，仅短线/事件策略通过 QE A/B 后作为增强。 |
@@ -837,6 +858,45 @@ execution_acceptance:
 
 `shadow` 不得被报告为真实收益改善证据，只能作为参数敏感性和解释性诊断。正式审批需要 `disabled` 与 `enforced` 的同窗对照。
 
+#### 8.2.2.1 QE 实验作为唯一晋级入口
+
+PriceGuard 的开发顺序必须从 QE 实验环境开始，而不是先接 Paper v2 再观察效果。建议把每个候选 policy 都当成实验资产处理：
+
+```text
+candidate_price_guard_policy
+  -> QE disabled/shadow sanity check
+  -> QE enforced A/B backtest
+  -> QE walk-forward and bucket diagnostics
+  -> approved_price_guard_policy + policy_sha256
+  -> Paper v2 historical parity replay
+  -> Paper v2 shadow
+  -> Paper v2 guarded_sim
+```
+
+规则：
+
+- QE 实验中必须同时保留当前模式 `baseline_no_price_guard` 和候选 `price_guard_enabled`，由用户或审批流程直接比较。
+- 第一阶段 UI/API 可以把 `price_guard_mode` 暴露为可选项，但默认仍是 `disabled` 或 `shadow`，避免未验证 policy 影响正式模拟盘。
+- 没有 QE enforced A/B 结果的 policy 不能进入 Paper v2 `enforced_candidate`，即使它在经验上看起来合理。
+- Paper v2 的任务是验证运行时数据、adapter、OMS 和审计链路是否能完美复用 QE policy，不重新选择阈值。
+- 若 Paper v2 运行发现阈值不适合最新市场，处理方式是回到 QE 重新生成 policy，而不是在模拟盘 runtime 直接热改。
+
+#### 8.2.2.2 准确性验证闭环
+
+PriceGuard 的“建议是否准确”必须在 QE 中形成闭环评价。建议每次实验同时输出以下诊断：
+
+| 诊断 | 用途 |
+| --- | --- |
+| `gap_bucket_forward_alpha` | 验证不同开盘涨幅分桶是否真的侵蚀 alpha。 |
+| `accepted_vs_rejected_return` | 比较被接受和被拒绝候选的后续收益，判断阈值是否过宽或过严。 |
+| `missed_winner_rate` | 被跳过股票中后续大涨的比例，用于衡量机会成本。 |
+| `saved_loser_rate` | 被跳过股票中后续下跌或跑输的比例，用于衡量保护收益。 |
+| `drawdown_contribution_saved` | 被跳过/减量交易对组合最大回撤和尾部亏损的贡献。 |
+| `cash_drag_after_skip` | 跳过买入后现金闲置或候补买入造成的收益拖累。 |
+| `substitute_candidate_effect` | 若启用候补买入，比较买入下一候选与保持现金的差异。 |
+
+审批时不应只看年化收益单点提升；如果 PriceGuard 降低了极端追高亏损和最大回撤，但略微牺牲部分牛市收益，也可以作为 risk-control policy 候选。反之，如果收益提升只来自单一窗口、单一行业或单一极端样本，应保持 `shadow` 并继续校准。
+
 #### 8.2.3 参数网格和开盘涨停附近样例
 
 第一轮 QE sweep 不应直接训练复杂模型，而应先验证经验阈值是否有稳定经济含义：
@@ -861,6 +921,16 @@ QE 对照报告至少输出两类指标：
 2. PriceGuard 归因指标：`skip/reduce` 次数、原因分布、按 score bucket/open-gap bucket/market regime 的收益差、`missed_alpha_if_skip`、`saved_loss_if_skip`、accepted/rejected open-gap 分布。
 
 `missed_alpha_if_skip` 和 `saved_loss_if_skip` 只能在决策后用未来收益做事后归因，不得作为当日 PriceGuard 输入；报告中必须标注它们是 post-decision diagnostics，避免未来函数泄漏。
+
+候补买入需要单独作为实验变量，不能默认为跳过后自动买下一只。建议三种对照：
+
+| 候补模式 | 行为 | 适用判断 |
+| --- | --- | --- |
+| `skip_to_cash` | 超出区间后保持现金。 | 判断 PriceGuard 本身是否减少追高损失。 |
+| `buy_next_candidate` | 买入同一选股列表中下一只通过 PriceGuard 的候选。 | 判断 topk 候补是否改善现金拖累。 |
+| `proportional_redistribute` | 把未买金额按剩余通过候选权重再分配。 | 判断组合层重分配是否提高收益，但要控制集中度。 |
+
+审批报告必须分别展示 `skip_to_cash` 和候补模式，避免把“候补选股收益”误归因给 PriceGuard 的价格限制能力。
 
 #### 8.2.5 QE 产物
 
@@ -1099,6 +1169,16 @@ red_above_price = yellow_max_buy_price
 - 如果开盘价高于 `red_above_price`，运行时 PriceGuard 默认 `SKIP`；如果处于 green/yellow 区间，仍需根据涨跌停、停牌、现金、board-lot 和实时价重新确认。
 - 展示价不是券商委托价；委托价由 Paper v2/QE execution path 在当日 market context 中生成。
 
+准确建议的生成路径建议分三档：
+
+| 生成方式 | 当前是否采用 | 用途 |
+| --- | --- | --- |
+| `rule_default` | 第一版默认 | 用经验阈值和保守安全边界快速进入 QE shadow/enforced 对照。 |
+| `bucket_calibrated` | 第一版优先验证 | 用历史分桶 forward alpha、open-gap 和回撤贡献校准阈值，是进入 Paper v2 前的推荐形态。 |
+| `ml_calibrated` | 后续增强 | 用模型预测 residual alpha / accepted probability，但必须作为 candidate policy 重新走 QE A/B。 |
+
+因此，第一版可以从经验值开始，但不能停留在经验值；真正可用于模拟盘的 `approved_price_guard_policy` 应至少经过 `bucket_calibrated` 或等价的 walk-forward 证据支持。
+
 ### 10.1 普通日频多因子 / 低换手
 
 ```yaml
@@ -1285,6 +1365,18 @@ missed_alpha_if_skip = future_alpha_after_open for skipped candidates
 saved_loss_if_skip = -future_alpha_after_open when future alpha is negative
 ```
 
+阈值校准建议使用稳健统计而不是均值单点：
+
+```text
+expected_alpha_bps(bucket) = median(future_alpha_after_open)
+tail_loss_bps(bucket) = percentile_10(future_alpha_after_open)
+recommended_max_gap_bps = largest_gap_bucket where
+  median_alpha > explicit_cost + safety_margin
+  and tail_loss / drawdown contribution within approved risk budget
+```
+
+如果 `open_gap 5%~9%` 分桶均值偶尔为正，但中位数为负或左尾亏损显著，第一版仍应归入 red zone；如果 `top1% score + momentum regime` 分桶在多个 walk-forward 窗口中高开后仍有稳定正 alpha，才允许为该策略族配置更宽的 `max_open_gap_bps`。
+
 校准问题：
 
 - top score 股票高开 1%/3%/5% 后，未来 5 日净 alpha 是否仍为正？
@@ -1349,6 +1441,23 @@ ResidualAlphaAfterPriceModel
 ```
 
 输入为选股分数 + 当前价格状态 + 流动性/市场状态，输出 acceptance decision 或 residual alpha。
+
+ML 的角色应是替代或增强 `expected_alpha_budget` 和阈值校准，而不是绕过 PriceGuard 分层。训练出的模型输出仍要落成 `candidate_price_guard_policy`，通过 QE A/B 后才可以固化为 `approved_price_guard_policy`。
+
+建议模型目标：
+
+| 目标 | 说明 | 运行时用途 |
+| --- | --- | --- |
+| residual alpha regression | 预测在给定 gap/current price 下还能保留多少净 alpha。 | 动态计算 `max_chase_bps`。 |
+| accept/skip classification | 预测买入后是否跑赢基准和成本。 | 生成 `ACCEPT/REDUCE/SKIP` 候选动作。 |
+| quantile/tail risk model | 预测左尾亏损或回撤贡献。 | 控制 red zone 和 `safety_margin_bps`。 |
+| policy learning / uplift | 比较买入、减量、跳过、候补买入的净效果。 | 只作为离线研究，不能直接在线探索。 |
+
+禁止事项：
+
+- 不允许用当日尚不可观察的未来分钟价、收盘价或后验成交结果作为运行时特征。
+- 不允许模型缺失时 fallback 到经验阈值后仍标记为 `ml_calibrated`。
+- 不允许在线学习直接改变当天 Paper v2 阈值；参数更新必须重新生成 policy hash 并回到 QE 验证。
 
 ### 12.2 特征
 
@@ -1562,6 +1671,13 @@ UNSUPPORTED_EXIT_GUARD_CONFIG_ERROR
 - 为现有选股列表补充 `recommendation_tier`、因子解释、`suggested_entry_price_band`、`suggested_stop_loss_zone` 的 artifact schema。
 - 验证买入/止损区间的历史质量评估，但不生成新的交易架构或自动下单。
 
+### Phase 0.6：QE 实验开关与对照入口
+
+- 在 QE 实验配置中增加 `price_guard_mode=disabled|shadow|enforced`，默认 `disabled`，允许同一策略包直接生成 baseline 与 guarded 两组回测。
+- 固定 StrategyPackage、topk、目标权重、执行算法、成本和数据版本，只允许 `execution_acceptance_policy` 差异进入 config diff。
+- 输出 `ab_comparison_report.md`，明确收益提升、最大回撤变化、现金拖累、跳过/减量原因和候补买入效果。
+- 该阶段不接 Paper v2 实时模拟盘；只验证 PriceGuard 是否值得晋级。
+
 ### Phase 1：核心 DTO 与 validator
 
 - 新增 PriceGuard core DTO 和 rule evaluator。
@@ -1584,6 +1700,7 @@ UNSUPPORTED_EXIT_GUARD_CONFIG_ERROR
 - 支持 `disabled/shadow/enforced` 三种 `price_guard_mode`，其中正式审批只采信 `disabled` vs `enforced`。
 - 支持 `auction_only`、`auction_and_intraday`、`intraday_only` scope 对照，默认优先验证 `auction_and_intraday`。
 - 固定选股、目标权重、执行算法、成本、数据版本和随机种子，只改变 PriceGuard policy。
+- 支持 `skip_to_cash`、`buy_next_candidate`、`proportional_redistribute` 三种跳过后处理对照，避免把候补买入收益误算成价格保护收益。
 - 输出 `price_guard_policy.json`、`policy_sha256`、A/B metrics、decision logs 和 comparison report。
 - 完成参数网格 sweep、walk-forward 稳定性检查、score/open-gap/market-regime 归因。
 
@@ -1639,6 +1756,9 @@ UNSUPPORTED_EXIT_GUARD_CONFIG_ERROR
 | QE 参数网格可解释 | max open gap、chase budget、yellow multiplier、sell slippage sweep 报告，含 walk-forward 和 bucket stability |
 | Shadow 模式不被当作收益证据 | 报告字段区分 `shadow_diagnostics` 与 `enforced_backtest_metrics`，审批只引用 enforced 对照 |
 | 买入/止损区间质量可评估 | 报告包含 `entry_zone_hit_rate`、`alpha_if_entered_zone`、`alpha_if_chased_above_zone`、`stop_saved_loss_bps`、`stop_whipsaw_cost_bps` |
+| PriceGuard 必须先在 QE 证明有效 | 任何进入 Paper v2 的 `policy_sha256` 都能追溯到 QE `disabled` vs `enforced` A/B、walk-forward、open-gap bucket 诊断和审批报告 |
+| 建议准确性可量化 | QE 报告包含 `accepted_vs_rejected_return`、`missed_winner_rate`、`saved_loser_rate`、`drawdown_contribution_saved`、`cash_drag_after_skip` |
+| 候补买入不混淆归因 | `skip_to_cash`、`buy_next_candidate`、`proportional_redistribute` 分别报告，审批结论区分价格保护收益和候补选择收益 |
 | QE YAML 注入正确 | `backend/tests/unified_engine/test_qe_config_truth.py` 新增切片断言 |
 | Qlib adjusted/raw 对齐 | 使用 `$factor` 转 raw 后计算 gap/limit 的回归样本 |
 | 买入高开超过阈值跳过 | QE helper 单测 + Paper v2 historical test |
@@ -1685,4 +1805,6 @@ UNSUPPORTED_EXIT_GUARD_CONFIG_ERROR
 9. 机构荐股式目标价可以作为未来 research/valuation 扩展，但第一版不默认预测目标价；优先评估买入区间、止损风险预算和 alpha 衰减退出。
 10. 实施必须围绕现有策略包链路：先固化 baseline，再补选股 guidance，再做 QE PriceGuard A/B，最后迁移 Paper v2 shadow/guarded sim。
 11. 第一批落地策略建议限定为已有 `ScoreWeightedTopkStrategyV2` / `ScoreWeightedTopkStrategyV2CapacityV1` + `V25_1_SMALL_CAP`，避免一次性扩散到所有算法。
-
+12. 任何价格限制要先作为 QE 实验可选项验证；只有在收益、最大回撤、尾部风险、交易成本或追高损失中至少有一项呈现稳定净改善，且未显著破坏 IR/成交率时，才考虑迁移到 Paper v2。
+13. `suggested_entry_price_band` 的准确性按区间命中、区间内 alpha、区间外追价伤害、missed winner 和 saved loser 评估；不能用主观经验或单个样例宣称准确。
+14. 跳过后是否买候补股票是组合层独立实验变量，不能与 PriceGuard 本身混合归因。
