@@ -435,6 +435,79 @@ def _compact_finalizer(value: Any) -> dict[str, Any] | None:
     return compact
 
 
+def _compact_triage_ci_issue(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    compact = _pick(
+        value,
+        "detected_run_id",
+        "classification_recommendation",
+        "needs_bug_json",
+        "failure_event_path",
+        "context_pack_md_path",
+    )
+    issue = value.get("github_issue")
+    if isinstance(issue, dict):
+        compact["github_issue"] = _pick(issue, "number", "url", "title", "state")
+    summary = value.get("summary")
+    if isinstance(summary, dict):
+        compact["diagnostic_status"] = summary.get("diagnostic_status")
+        compact["workflow"] = summary.get("workflow")
+        compact["run_url"] = summary.get("run_url")
+        failed_jobs = summary.get("failed_jobs")
+        if isinstance(failed_jobs, list):
+            compact["failed_job_count"] = len(failed_jobs)
+        modules = summary.get("suspected_modules")
+        if modules:
+            compact["suspected_modules"] = modules[:5] if isinstance(modules, list) else modules
+        files = summary.get("suspected_files")
+        if files:
+            compact["suspected_files_count"] = len(files) if isinstance(files, list) else None
+        if summary.get("reproduce_command"):
+            compact["reproduce_command"] = summary.get("reproduce_command")
+    linked = value.get("linked_bug")
+    if isinstance(linked, dict) and linked:
+        compact["linked_bug"] = _pick(linked, "bug_id", "path")
+    suggested = value.get("suggested_bug")
+    if isinstance(suggested, dict) and value.get("needs_bug_json"):
+        compact["suggested_bug"] = _pick(suggested, "module", "severity", "title", "risk_area")
+        required = suggested.get("required_verification")
+        if isinstance(required, list):
+            compact["suggested_bug"]["required_verification_count"] = len(required)
+        scope = suggested.get("allowed_write_scope")
+        if isinstance(scope, list):
+            compact["suggested_bug"]["allowed_write_scope_count"] = len(scope)
+    infra = value.get("infra_action")
+    if isinstance(infra, dict):
+        compact["infra_action"] = _pick(infra, "workflow_gate", "reason", "production_gates")
+        actions = infra.get("next_actions")
+        if isinstance(actions, list):
+            compact["infra_action"]["next_actions"] = actions[:4]
+    return compact
+
+
+def _compact_promote_ci_issue(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    compact = _pick(value, "dry_run")
+    triage = _compact_triage_ci_issue(value.get("triage"))
+    if triage:
+        compact["triage"] = triage
+    if isinstance(value.get("infra_action"), dict):
+        compact["infra_action"] = _pick(value["infra_action"], "workflow_gate", "reason")
+    if isinstance(value.get("submit_bug"), dict):
+        submit_bug = value["submit_bug"]
+        compact["submit_bug"] = _pick(submit_bug, "workflow_gate", "bug_id", "state_path", "events_path", "next_command")
+        if isinstance(submit_bug.get("fix_chain"), dict):
+            compact["submit_bug"]["fix_chain"] = _pick(
+                submit_bug["fix_chain"],
+                "continue_to_fix_in_same_workflow",
+                "registry_pr_only",
+                "next_command",
+            )
+    return compact
+
+
 def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
     schema = str(payload.get("schema_version") or "")
     if not schema:
@@ -597,6 +670,10 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
             compact["complete_state"] = _pick(payload["complete_state"], "state", "updated_at")
     elif schema.endswith("_merge_finalizer_v1"):
         compact.update(_compact_finalizer(payload) or {})
+    elif schema.endswith("_triage_ci_issue_v1"):
+        compact.update(_compact_triage_ci_issue(payload) or {})
+    elif schema.endswith("_promote_ci_issue_v1"):
+        compact.update(_compact_promote_ci_issue(payload) or {})
     else:
         for key in (
             "module",
