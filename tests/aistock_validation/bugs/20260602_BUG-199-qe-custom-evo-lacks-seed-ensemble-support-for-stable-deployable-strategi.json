@@ -93,7 +93,7 @@
   "first_seen_at": "2026-06-02T03:00:01.569924Z",
   "fix_branch": "bug/BUG-199-qe-custom-evo-lacks-seed-ensemble-support-for-st-20260602",
   "fix_commit": "1b42cd3aebc13481d5dbffe213a815c90543fe95",
-  "fixed_at": "2026-06-02T06:32:14.748210Z",
+  "fixed_at": "2026-06-02T06:35:16.303262Z",
   "github_issue_number": 528,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/528",
   "last_seen_at": "2026-06-02T03:00:01.569924Z",
