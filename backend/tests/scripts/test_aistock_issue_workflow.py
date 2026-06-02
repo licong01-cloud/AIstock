@@ -3031,6 +3031,61 @@ def test_cleanup_after_merge_apply_ignores_untracked_root_files(
     assert not any(args[:2] == ["git", "restore"] for args in executed)
 
 
+def test_cleanup_after_merge_uses_canonical_root_when_called_from_task_worktree(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    branch = "bug/BUG-199-workflow"
+    task_worktree = isolated_workflow_root / "worktrees" / "BUG-199-workflow"
+    task_worktree.mkdir(parents=True)
+    calls: list[tuple[tuple[str, ...], Path | None]] = []
+    executed: list[tuple[tuple[str, ...], Path | None]] = []
+
+    def fake_git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
+        calls.append((tuple(args), cwd))
+        if args[:2] == ["branch", "--show-current"]:
+            return "main" if cwd == isolated_workflow_root else branch
+        if args[:3] == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
+            return branch
+        if args[:3] == ["branch", "--format=%(refname:short)", "--merged"]:
+            return branch
+        if args[:2] == ["ls-remote", "--heads"]:
+            return ""
+        return ""
+
+    def fake_run(args: list[str], cwd: Path | None = None, timeout: int = 30) -> dict[str, Any]:
+        if args[:3] == ["git", "status", "--porcelain=v1"]:
+            return {"ok": True, "stdout": "", "stderr": "", "returncode": 0}
+        return {"ok": True, "stdout": "", "stderr": "", "returncode": 0}
+
+    def fake_execute(args: list[str], cwd: Path | None = None, timeout: int = 30) -> dict[str, Any]:
+        executed.append((tuple(args), cwd))
+        return {"ok": True, "stdout": "", "stderr": "", "returncode": 0}
+
+    monkeypatch.chdir(task_worktree)
+    monkeypatch.setattr(workflow, "_git", fake_git)
+    monkeypatch.setattr(workflow, "_run_command", fake_run)
+    monkeypatch.setattr(workflow, "_execute_checked", fake_execute)
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
+    monkeypatch.setattr(
+        workflow,
+        "_git_snapshot",
+        lambda root: {"ok": True, "branch": "main", "dirty": False, "dirty_count": 0, "head": "abc", "origin_main": "abc"},
+    )
+
+    payload = workflow.build_cleanup_after_merge_plan(
+        branch=branch,
+        worktree=str(task_worktree),
+        sync_root=True,
+        apply=True,
+    )
+
+    assert payload["workflow_gate"] == "cleanup_done"
+    assert "currently checked-out branch" not in " ".join(payload["blocking"])
+    assert (("branch", "--show-current"), isolated_workflow_root) in calls
+    assert all(cwd == isolated_workflow_root for args, cwd in executed if args[:2] in {("git", "worktree"), ("git", "branch")})
+
+
 def test_cleanup_after_merge_ignores_unrelated_dirty_files_when_root_synced(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
