@@ -25,20 +25,57 @@
 
 ## 2. 设计目标
 
-1. **职责清晰**：选股层负责“买什么、买多少”，PriceGuard 负责“当前价格下是否仍值得交易”，执行算法负责“如何拆单/挂单/成交”。
-2. **QE 先验证，Paper v2 后消费**：Paper v2 只能使用 QE/StrategyPackage 回测验证过的价格接受策略快照，不允许 runtime 临时覆盖。
-3. **可解释**：每个被跳过、减量、限价的订单都要持久化 `reference_price`、价格带、当前价格、reason code 和 price basis。
-4. **一致性**：QE/Qlib、Paper v2 DB 历史回放、Paper v2 realtime/MiniQMT 共享同一核心语义；adapter 只做数据转换。
-5. **分阶段演进**：第一阶段用经验初值 + 历史分桶校准；后续可训练 ML residual-alpha / acceptance 模型，但不能绕过回测验证和 policy hash。
-6. **安全边界**：不引入 silent fallback，不修改 StrategyPackage frozen manifest、模型权重、QE workspace 历史资产或 Paper ledger。
+本方案不是重建 AIstock 的选股、模拟盘或未来实盘架构。AIstock 已有多因子策略包、基于策略包的选股功能、QE 回测、Paper v2 模拟盘和未来实盘执行路径；本次补齐的是现有链路中的两个缺口：
+
+1. **模拟盘运行时价格接受**：多因子策略包在 Paper v2/QE 中按 alpha 信号 topk 买入排名靠前股票时，增加“开盘或盘中价格是否已经涨太多、是否还值得买”的 PriceGuard 机制，避免无论涨多少都执行买入。
+2. **选股荐股展示增强**：现有选股结果从“股票列表/排名”增强为“股票列表 + 推荐理由 + 建议买入价格区间 + 建议止损区间”，未来可选增加止盈区间，但这些是 guidance/risk budget，不是最终委托价。
+
+进一步目标：
+
+- **职责清晰**：选股层仍负责“买什么、排第几、目标权重多少”；PriceGuard 只负责“当前价格是否仍可接受”；执行算法仍负责“如何拆单/挂单/成交”。
+- **QE 先验证，Paper v2 后消费**：Paper v2 只能使用 QE/StrategyPackage 回测验证过的价格接受策略快照，不允许 runtime 临时覆盖。
+- **可解释**：每个被跳过、减量、限价的订单都要持久化 `reference_price`、价格带、当前价格、reason code 和 price basis。
+- **一致性**：QE/Qlib、Paper v2 DB 历史回放、Paper v2 realtime/MiniQMT 共享同一核心语义；adapter 只做数据转换。
+- **分阶段演进**：第一阶段用经验初值 + 历史分桶校准；后续可训练 ML residual-alpha / acceptance 模型，但不能绕过回测验证和 policy hash。
+- **安全边界**：不引入 silent fallback，不修改 StrategyPackage frozen manifest、模型权重、QE workspace 历史资产或 Paper ledger。
 
 ## 3. 非目标
 
 - 不在本设计阶段实现代码、DDL 或 UI。
+- 不重做 AIstock 已有的多因子选股、策略包、模拟盘或未来实盘架构。
+- 不新增一套独立于 StrategyPackage / QE / Paper v2 的交易系统。
+- 不把“选股荐股展示”直接变成自动下单指令；建议买入区间和止损区间必须经过 PriceGuard/ExitGuard 和执行路径确认。
 - 不把 tick 实时数据变成 Paper v2 或 QE 的运行时强依赖；tick 可用于未来离线特征/标签训练。
 - 不设计真实券商账户自动交易授权流程。
 - 不用 PriceGuard 替代涨跌停、停牌、T+1、board-lot、现金/持仓等现有风控约束。
 - 不把普通换仓未成交伪装为成功；必须显式记录 no-fill/skip/partial。
+
+## 3.1 本次增量能力与现有链路的关系
+
+现有链路保持不变：
+
+```text
+StrategyPackage 多因子选股
+  -> topk/rank/target_weight
+  -> QE 回测或 Paper v2 模拟盘生成订单意图
+  -> 分钟执行算法 / vn.py-style / MiniQMT adapter
+```
+
+本次只插入和扩展两个能力：
+
+```text
+能力 A：PriceGuard for runtime execution
+  插入点：order intent 进入分钟执行算法之前
+  作用：对已选中的 topk 股票，判断开盘或盘中价格是否仍可买
+  输出：ACCEPT / REDUCE / SKIP / WAITING、limit price、reason
+
+能力 B：Recommendation price guidance for selection UI
+  插入点：策略包选股结果生成之后、展示给用户之前
+  作用：给股票列表补充建议买入区间、止损区间、可选止盈区间
+  输出：suggested_entry_price_band / suggested_stop_loss_zone / guidance evidence
+```
+
+因此，后续实施不应改变“多因子 topk 选股”的 alpha 逻辑，也不应改变已有 Paper v2 的账户、ledger、broker adapter 和执行框架；只是在订单接受和选股展示层补充价格预算与风险预算。
 
 ## 4. 核心概念
 
@@ -281,7 +318,7 @@ portfolio decision / alpha signal
 
 ### 6.2.4 多因子策略是否适合选股/荐股
 
-结论：多因子策略适合做“系统化选股、候选池排序、组合型荐股、观察清单、模型组合建议”，但不适合直接包装成“单票确定性荐股”或“保证某个目标价”的场景。
+结论：多因子策略适合做“系统化选股、候选池排序、策略包候选解释、组合上下文中的荐股展示”，但不适合直接包装成“单票确定性荐股”或“保证某个目标价”的场景。本节只解释现有策略包选股能力为什么适合增强荐股展示，不表示要新建一套交易架构。
 
 适合的原因：
 
@@ -300,7 +337,7 @@ portfolio decision / alpha signal
 对 AIstock 的建议定位：
 
 ```text
-多因子荐股 = ranked candidates / model portfolio suggestions
+多因子选股展示 = existing StrategyPackage ranked candidates
            + explanation
            + entry price guidance
            + stop-loss risk budget
@@ -328,7 +365,7 @@ portfolio decision / alpha signal
 | 投资/盈利 q-factor | Hou, Xue & Zhang, 2015, `Digesting Anomalies`。参考：<https://global-q.org/uploads/1/2/2/6/122679606/houxuezhang2015rfs.pdf> | 用市场、规模、投资、盈利因子吸收大量 anomalies。 | 策略包可记录因子族，避免数百个变体重复表达同一风险溢价。 |
 | 主动管理理论 | Grinold, 1989, Fundamental Law of Active Management。参考：<https://www.sciencedirect.com/science/article/pii/S0927539817300543> | IR 与预测 skill、breadth 有关。 | 多因子荐股应追求稳定小 IC + 足够 breadth，而不是押单票。 |
 | 机构风险模型 | MSCI Barra equity factor models。参考：<https://www.msci.com/our-solutions/factor-investing/factor-models>、<https://www.msci.com/documents/10199/248121/MSCI-Equity-Factor-Models.pdf> | 用多因子暴露衡量风险、归因、组合优化和风险预测。 | AIstock 需要推荐解释、组合风险暴露、行业/风格归因。 |
-| 机构多因子产品 | AQR multi-factor / style premia。参考：<https://www.aqr.com/insights/research/journal-article/understanding-style-premia>、<https://funds.aqr.com/Insights/Strategies/Multi-Factor> | 把 value、momentum、quality、defensive 等风格整合成组合。 | AIstock 可以把单票荐股升级为 model portfolio，而不是孤立推荐。 |
+| 机构多因子产品 | AQR multi-factor / style premia。参考：<https://www.aqr.com/insights/research/journal-article/understanding-style-premia>、<https://funds.aqr.com/Insights/Strategies/Multi-Factor> | 把 value、momentum、quality、defensive 等风格整合成组合。 | AIstock 已有 StrategyPackage/组合上下文，荐股展示应体现组合约束和风险预算，而不是孤立给单票结论。 |
 | 开源因子评估 | Alphalens。参考：<https://quantopian.github.io/alphalens/alphalens.html> | 使用 IC、RankIC、quantile returns、turnover 等评估因子。 | AIstock 选股荐股上线前应先有 factor tear sheet 和 OOS 证据。 |
 | 开源研究到生产 | Microsoft Qlib。参考：<https://github.com/microsoft/qlib>、<https://arxiv.org/abs/2009.11189> | 覆盖数据、模型训练、回测、组合和执行的端到端量化流程。 | AIstock 的 QE -> StrategyPackage -> Paper v2 路径与 Qlib 思路一致，应保留 policy hash 与回测证据。 |
 
@@ -351,28 +388,39 @@ factor research -> factor tear sheet -> model score/rank
 5. `execution acceptance`：把目标订单转为 entry band、limit、skip/reduce 决策。
 6. `recommendation governance`：记录证据、模型版本、因子贡献、风险提示、适用条件和事后归因。
 
-### 6.2.6 多因子荐股分阶段执行目标
+### 6.2.6 本次两项补齐能力的分阶段执行目标
 
-如果分阶段实施，建议不要一开始就做“自动荐股 + 自动交易”。每个阶段目标如下：
+AIstock 已有多因子策略包、选股和模拟盘链路，因此阶段目标应围绕“补齐现有链路”而不是另建荐股/交易系统：
 
-| 阶段 | 名称 | 可实现目标 | 不做什么 | 验收证据 |
-| --- | --- | --- | --- | --- |
-| Stage 0 | 因子诊断与数据可信度 | 建立因子覆盖率、缺失率、极值、行业/市值暴露、IC/RankIC、quantile returns。 | 不对用户展示荐股，不生成交易意图。 | factor tear sheet、OOS IC、分组收益、数据质量报告。 |
-| Stage 1 | 观察清单 / Watchlist | 输出 TopN 候选、score、rank、因子解释、风险标签。 | 不给目标权重，不给买入价，不进入 Paper v2。 | 推荐解释一致性、候选池稳定性、人工审批反馈。 |
-| Stage 2 | 荐股候选 + 买入/止损建议区间 | 输出 `suggested_entry_price_band`、`suggested_stop_loss_zone`、`guidance_status=unvalidated/validated`。 | 不作为最终委托价，不自动下单。 | entry zone hit、entered-zone alpha、chase-above-zone alpha、stop whipsaw。 |
-| Stage 3 | 模型组合建议 | 把单票候选升级为 target weights、现金缓冲、行业/风格约束。 | 不启用未经验证的 PriceGuard/ExitGuard。 | 组合回测、风险归因、换手、成本、容量。 |
-| Stage 4 | QE A/B 验证 | 对比当前模式与 PriceGuard/ExitGuard 模式，验证收益、回撤、成本、跳过/减量原因。 | 不进入 Paper v2 enforced。 | A/B metrics、decision logs、policy hash、walk-forward。 |
-| Stage 5 | Paper v2 shadow / guarded sim | 在模拟盘计算并记录决策，逐步启用 skip/reduce/limit intent。 | 不接真实自动交易，不允许 runtime 临时改阈值。 | Paper v2 parity replay、shadow vs enforced diff、broker adapter 语义。 |
-| Stage 6 | 受控荐股产品化 | 展示推荐等级、买入区间、止损预算、证据链、适用市场状态和风险提示。 | 不承诺收益，不把多因子 score 当目标价。 | 前端审计页、推荐后归因、用户审批记录、模型版本。 |
-| Stage 7 | ML/估值混合增强 | 引入 residual alpha、价格接受模型、估值 target price 或基本面 research 节点。 | 不替代已验证 policy，不在线学习直接影响当日推荐。 | model asset hash、feature contract、walk-forward、漂移监控。 |
+| 阶段 | 名称 | 对应能力 | 可实现目标 | 不做什么 | 验收证据 |
+| --- | --- | --- | --- | --- | --- |
+| Stage 0 | 现状基线固化 | 两项能力共同基础 | 固化当前策略包 topk 选股 + 模拟盘执行的 baseline，记录无 PriceGuard 的开盘追高行为。 | 不改选股逻辑，不改执行算法。 | baseline backtest/paper metrics、open-gap buy distribution。 |
+| Stage 1 | 选股展示 price guidance | 能力 B | 在现有选股列表中增加 `suggested_entry_price_band`、`suggested_stop_loss_zone`、range source、guidance status。 | 不自动下单，不生成新交易架构。 | selection artifact、UI/API payload、区间质量历史评估。 |
+| Stage 2 | QE PriceGuard shadow | 能力 A | 在 QE 中计算“如果启用 PriceGuard 会跳过/减量哪些 topk 买入”，但不改变成交。 | 不把 shadow 当收益证据。 | shadow decision logs、skip/reduce reason distribution。 |
+| Stage 3 | QE A/B enforced | 能力 A | 在同一 topk、同一权重、同一执行算法下，对比 baseline 与 PriceGuard enforced。 | 不改变 alpha score，不替换 topk 选股。 | A/B metrics、policy hash、walk-forward、missed/saved alpha。 |
+| Stage 4 | Paper v2 parity replay | 能力 A | 用 QE 验证通过的 policy 在 Paper v2 历史回放逐笔对齐决策。 | 不进入实时 enforced。 | symbol/date/side decision parity、guard price parity。 |
+| Stage 5 | Paper v2 shadow / guarded sim | 能力 A | 在现有模拟盘中先 shadow，再 guarded_sim 启用 skip/reduce/limit intent。 | 不接真实自动交易，不允许 runtime 临时改阈值。 | Paper v2 run events、order intent diff、broker adapter 限价语义。 |
+| Stage 6 | 选股荐股展示增强 | 能力 B | 面向用户展示推荐理由、买入区间、止损区间、验证状态、适用条件和风险提示。 | 不承诺收益，不把 score 当目标价。 | 前端审计页、推荐后归因、用户审批记录。 |
+| Stage 7 | 可选止盈/ML/估值增强 | 能力 B 未来增强 | 对短线/事件策略增加止盈区间，对长期策略可接入估值 target price 或 ML acceptance。 | 不替代已验证 PriceGuard，不在线学习直接影响当日交易。 | model/valuation artifact、feature contract、walk-forward、漂移监控。 |
 
 阶段推进规则：
 
-- Stage 0/1 可以较快上线为研究辅助功能，因为不产生交易动作。
-- Stage 2 必须有历史区间质量评估，否则只允许展示 `unvalidated`。
-- Stage 3/4 是进入 Paper v2 前的最低门槛。
-- Stage 5 通过后才允许把 PriceGuard/ExitGuard 从 `shadow` 提升为 `guarded_sim`。
-- Stage 6 若面向用户展示，需要额外加入风险披露、适用条件、推荐有效期和审计日志。
+- Stage 1 可以先做，因为它只增强已有选股列表展示，不改变交易。
+- Stage 2/3 是能力 A 进入 Paper v2 前的最低门槛。
+- Stage 4 通过后，Paper v2 才能宣称复用了 QE 验证语义。
+- Stage 5 仍属于模拟盘验证，不等同未来实盘启用。
+- Stage 6 只是在现有选股功能上做机构荐股式表达，不能被解释为新建自动荐股交易架构。
+
+### 6.2.7 两项能力的机构/论文依据映射
+
+| 本次能力 | 机构常见处理 | 论文/工具依据 | AIstock 落地 |
+| --- | --- | --- | --- |
+| topk 股票开盘涨太多是否继续买 | 买方通常用 arrival/decision price、pre-trade TCA、implementation shortfall 和交易成本预算判断是否继续追价；交易台不会因为 PM 给了目标权重就无限追高。 | Perold implementation shortfall、Almgren-Chriss optimal execution、Bertsimas-Lo execution control、Qlib/LEAN execution framework。 | PriceGuard 使用 `reference_price=signal_close/arrival_price`、`max_open_gap_bps/max_chase_bps`、`ACCEPT/REDUCE/SKIP`，在 QE A/B 验证后进入 Paper v2。 |
+| 选股列表提供买入价格区间 | 机构研究或投顾会给 entry zone/买入区间，但买方量化通常把它表达为 alpha budget + cost budget + execution limit。 | FINRA research report price target/valuation disclosure、TCA、Alphalens factor tear sheet。 | `suggested_entry_price_band` 来自 `alpha_budget_based/cost_budget_based`，标注 policy hash 和 guidance status，不作为最终委托价。 |
+| 选股列表提供止损区间 | 短线/事件/投顾常给 stop-loss；量化组合更多用风险预算、波动率 stop、rank drop、alpha decay。 | Triple-barrier labeling、MAE/MFE 分析、风险模型/Barra-like exposure control。 | `suggested_stop_loss_zone` 提供 soft/hard stop guidance；运行时由独立 ExitGuard/RiskGuard 处理，默认不强制启用。 |
+| 未来止盈区间 | 趋势/动量/短线策略常用 take-profit/trailing stop；低换手多因子通常更依赖 alpha 衰减或再平衡。 | Backtrader bracket order、QuantConnect risk models、triple-barrier 上轨标签。 | `suggested_take_profit_zone` 第一版默认关闭，仅短线/事件策略通过 QE A/B 后作为增强。 |
+
+关键原则：机构实践不是把“荐股价”“止损价”直接变成成交价格，而是把它们作为投资假设、风险预算和执行约束；真正成交还要经过市场状态、流动性、成本和执行算法。AIstock 的设计应保持同样分层。
 
 ### 6.3 A 股交易制度约束
 
@@ -1504,14 +1552,15 @@ UNSUPPORTED_EXIT_GUARD_CONFIG_ERROR
 - 明确第一版参数网格和样本区间。
 - 明确策略包选股页是否展示 `suggested_entry_price_band`，以及止盈/止损是否只展示为未启用建议。
 - 明确 PriceGuard 默认 scope：建议日频 T+1 策略使用 `auction_and_intraday`，legacy 对照可保留 `disabled`。
-- 明确多因子荐股的阶段边界：Stage 0/1 只做研究辅助和观察清单，Stage 2 起才展示价格区间，Stage 4 后才考虑 Paper v2。
+- 明确本次只是补齐两项能力：Paper v2/QE 运行时开盘追高控制、选股列表买入/止损区间展示；不重建选股或交易架构。
+- 明确第一版不改变多因子 topk alpha 逻辑，不改变已有 StrategyPackage/Paper v2 执行链路。
 
-### Phase 0.5：多因子荐股基础评估
+### Phase 0.5：现有多因子策略包基线与选股展示评估
 
-- 为首个策略族生成 factor tear sheet：IC/RankIC、quantile returns、turnover、coverage、行业/市值暴露。
-- 定义 `recommendation_tier`：`BUY_CANDIDATE/WATCHLIST/AVOID_NEW_BUY/RISK_EXIT_CANDIDATE`。
-- 输出 TopN 观察清单和因子解释，但不生成交易意图。
-- 验证多因子 score 的 OOS 稳定性和推荐解释一致性。
+- 固化当前策略包 topk 选股和 Paper v2/QE baseline，不改变 alpha score、rank、target weight。
+- 统计当前 baseline 中 T+1 开盘高开后仍买入的分布、收益、回撤和成本影响。
+- 为现有选股列表补充 `recommendation_tier`、因子解释、`suggested_entry_price_band`、`suggested_stop_loss_zone` 的 artifact schema。
+- 验证买入/止损区间的历史质量评估，但不生成新的交易架构或自动下单。
 
 ### Phase 1：核心 DTO 与 validator
 
@@ -1576,9 +1625,9 @@ UNSUPPORTED_EXIT_GUARD_CONFIG_ERROR
 
 | 设计项 | 验收证据 |
 | --- | --- |
-| 多因子适合作为荐股候选而非目标价承诺 | 文档/前端文案区分 `recommendation_tier`、score/rank、target weight、price guidance 和 target price |
-| 多因子基础证据完整 | factor tear sheet 包含 IC/RankIC、quantile returns、turnover、coverage、行业/市值/风格暴露和 OOS 窗口 |
-| 荐股阶段边界清晰 | Stage 0/1 不生成交易意图，Stage 2 只展示 guidance，Stage 4 后才进入 Paper v2 验证 |
+| 本次范围不重建交易架构 | 文档、schema 和测试均复用 StrategyPackage/QE/Paper v2；无新独立交易系统、无替换 topk alpha 逻辑 |
+| 能力 A：开盘追高控制可验证 | baseline 统计开盘高开仍买入分布；PriceGuard A/B 只改变 `ACCEPT/REDUCE/SKIP`，不改变 topk 选股 |
+| 能力 B：选股价格区间展示可验证 | 现有选股 artifact 增加 entry/stop guidance；不生成 broker order，不绕过 Paper v2 执行路径 |
 | policy schema 支持 `price_guard` | validator 单测、policy sha256 稳定性测试 |
 | 策略包选股输出买入价格范围 | selection artifact 包含 `reference_price`、`suggested_entry_price_band`、`guidance_status`、`policy_sha256`，并标注非最终委托价 |
 | 策略包选股输出止损区间 | selection artifact 包含 `suggested_stop_loss_zone`、`soft_stop_price`、`hard_stop_price`、`reference` 和 `guidance_only/enforced_candidate` 状态 |
@@ -1617,7 +1666,7 @@ UNSUPPORTED_EXIT_GUARD_CONFIG_ERROR
 8. 盘中 red zone 是取消剩余订单、暂停等待回落，还是改为更被动挂单，需要按策略族配置。
 9. 策略包选股页展示 `suggested_entry_price_band` 与 `suggested_stop_loss_zone` 后，用户是否允许手工覆盖；若允许，必须作为新 policy 重新验证，不能覆盖原 hash。
 10. 多因子策略是否显示 `suggested_take_profit_zone`：本文建议默认不显示固定目标价，只显示 alpha decay / rank-drop exit。
-11. 多因子荐股是否需要叠加基本面/估值 target price；本文建议作为 Stage 7 research/valuation 扩展，不作为第一版必需项。
+11. 是否需要叠加基本面/估值 target price；本文建议作为未来选股展示增强，不属于本次两项必需能力。
 12. 止盈/止损第一版是只展示建议，还是进入 `shadow` 诊断；不建议未经 QE A/B 直接 enforced。
 13. 是否需要把 PriceGuard/ExitGuard 决策纳入前端 Paper v2 / StrategyPackage 审计页面，本设计暂不包含 UI。
 
@@ -1633,7 +1682,7 @@ UNSUPPORTED_EXIT_GUARD_CONFIG_ERROR
 6. 日频策略、PriceGuard、日内执行策略必须分层配置；`algo_config` 不能偷偷承载追价预算。
 7. 日频 T+1 多因子默认建议验证 `auction_and_intraday`：集合竞价/开盘先筛一次，全天分时执行时每个切片前再做剩余订单阈值控制。
 8. 止盈/止损属于独立 ExitGuard/RiskGuard，不与买入 PriceGuard 混合；默认先展示/诊断，QE A/B 通过后再考虑 enforced。
-9. 机构荐股式目标价可以作为未来 research/valuation 扩展，但第一版多因子策略不默认预测目标价；优先评估买入区间、止损风险预算和 alpha 衰减退出。
-10. 多因子荐股必须分阶段：先观察清单和解释，再价格 guidance，再组合权重和 QE A/B，最后才进入 Paper v2 shadow/guarded sim。
-11. 第一批落地策略建议限定为 `ScoreWeightedTopkStrategyV2` / `ScoreWeightedTopkStrategyV2CapacityV1` + `V25_1_SMALL_CAP`，避免一次性扩散到所有算法。
+9. 机构荐股式目标价可以作为未来 research/valuation 扩展，但第一版不默认预测目标价；优先评估买入区间、止损风险预算和 alpha 衰减退出。
+10. 实施必须围绕现有策略包链路：先固化 baseline，再补选股 guidance，再做 QE PriceGuard A/B，最后迁移 Paper v2 shadow/guarded sim。
+11. 第一批落地策略建议限定为已有 `ScoreWeightedTopkStrategyV2` / `ScoreWeightedTopkStrategyV2CapacityV1` + `V25_1_SMALL_CAP`，避免一次性扩散到所有算法。
 
