@@ -10,7 +10,9 @@
     "backend/tests/paper_trading_v2",
     "backend/tests/simulation_runtime",
     "tests/aistock_validation/bugs/20260602_BUG-217-paper-v2-miniqmt-unified-phase-2-vn-py-style-shared-execution-adapter.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/history/paper_v2_selection_center",
+    "tests/aistock_validation/history/qe"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-217",
@@ -36,17 +38,33 @@
       "actor": "codex",
       "note": "Expanded Phase 2 acceptance requirements for unified vn.py-style adapter before implementation.",
       "timestamp": "2026-06-02T12:51:51.142040Z"
+    },
+    {
+      "action": "phase2_validation_scope_and_evidence_recorded",
+      "actor": "codex",
+      "note": "Recorded Phase 2 validation history paths and explicit skip-UI evidence for required L3 plans; full UI attempts remain separate non-Phase-2 environment/data findings.",
+      "timestamp": "2026-06-02T13:53:37.212145Z"
     }
   ],
-  "evidence_uris": [],
+  "evidence_uris": [
+    "tests/aistock_validation/history/paper_v2_selection_center/20260602_214859_l3_paper-v2-selection-center-l3-regression.md",
+    "tests/aistock_validation/history/qe/20260602_215137_l3_qe-read-only-workspace-access-regression.md",
+    "validation: pytest backend/tests/trading_core/test_minqmt_vnpy_shared_adapter.py backend/tests/paper_trading_v2/test_minqmt_vnpy_execution_adapter.py backend/tests/simulation_runtime/test_target_rebalance_shared.py::test_miniqmt_execution_bridge_uses_managed_orders_and_strategy_attribution -q -p no:cacheprovider -> passed",
+    "validation: python -m ruff check changed Python files -> passed",
+    "validation: git diff --check -> passed",
+    "validation: python -m nox -s validation_module_registry_l0 -> passed",
+    "validation: python -m nox -s paper_v2_backend -> 578 passed, 1 skipped, 2 xfailed",
+    "validation: PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> passed; full paper_v2_ui attempted separately and failed on pre-existing UI/data fixtures outside Phase 2 scope",
+    "validation: QE_READ_L3_SKIP_UI=1 python -m nox -s qe_read_l3 -> passed; full qe_read_ui requires an external 8011 dev backend and was not used as Phase 2 evidence"
+  ],
   "expected": "Both Paper v2 single-strategy MiniQMT execution and MiniQMT virtual-strategy multi-strategy execution use the same shared vn.py-style adapter with deterministic child-order semantics, complete diagnostics, fail-fast validation, and targeted tests proving inheritance of prior fixes.",
   "first_seen_at": "2026-06-02T12:51:51.142040Z",
-  "fix_branch": null,
+  "fix_branch": "bug/paper-v2-unified-phase2-vnpy-adapter-20260602",
   "fix_commit": null,
   "fixed_at": null,
   "github_issue_number": 588,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/588",
-  "last_seen_at": "2026-06-02T12:51:51.142040Z",
+  "last_seen_at": "2026-06-02T13:53:37.212125Z",
   "module": "paper_v2",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
