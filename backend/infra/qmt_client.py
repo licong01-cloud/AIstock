@@ -119,7 +119,11 @@ def build_qmt_order_submit_diagnostic(
     order_volume: int | None = None,
     price_type: int | None = None,
     price: float | None = None,
+    strategy_name: str | None = None,
+    order_remark: str | None = None,
     exception: BaseException | None = None,
+    timeout_seconds: float | None = None,
+    timeout_env_key: str | None = None,
 ) -> Dict[str, Any]:
     if isinstance(exception, TimeoutError):
         classification = "adapter_timeout"
@@ -150,10 +154,15 @@ def build_qmt_order_submit_diagnostic(
         "order_volume": order_volume,
         "price_type": price_type,
         "price": price,
+        "strategy_name": strategy_name,
+        "order_remark": order_remark,
         "classification": classification,
         "operator_hint": operator_hint,
         "exception_type": type(exception).__name__ if exception is not None else None,
         "exception_message": str(exception) if exception is not None else None,
+        "timeout_seconds": timeout_seconds,
+        "timeout_env_key": timeout_env_key,
+        "timeout_policy": "bounded_order_submit_ack_wait" if timeout_seconds is not None else None,
     }
 
 
@@ -472,7 +481,7 @@ Notes:
 
     def _mark_operation_timeout(self, operation: str, timeout_s: float, exc: TimeoutError) -> QMTNotAvailableError:
         self._connected = False
-        self._last_error = f"miniQMT {operation} 超时 after {timeout_s}s: {exc!r}"
+        self._last_error = f"miniQMT {operation} timed out after {timeout_s}s: {exc!r}"
         return QMTNotAvailableError(self._last_error)
 
     def _resolve_xtquant_dir(self) -> Optional[Path]:
@@ -1227,7 +1236,7 @@ Notes:
             self._last_order_diagnostic = None
             order_timeout_s = _env_float(
                 "MINIQMT_ORDER_TIMEOUT_SECONDS",
-                default=_env_float("MINIQMT_QUERY_TIMEOUT_SECONDS", default=2.0),
+                default=15.0,
             )
             try:
                 self._ensure_xtquant()
@@ -1254,6 +1263,10 @@ Notes:
                     order_volume=int(order_volume),
                     price_type=int(price_type),
                     price=float(price or 0.0),
+                    strategy_name=strategy_name,
+                    order_remark=order_remark,
+                    timeout_seconds=order_timeout_s,
+                    timeout_env_key="MINIQMT_ORDER_TIMEOUT_SECONDS",
                 )
                 if accepted:
                     return raw_return_code, f"下单成功，订单编号：{raw_return_code}"
@@ -1267,7 +1280,11 @@ Notes:
                     order_volume=int(order_volume),
                     price_type=int(price_type),
                     price=float(price or 0.0),
+                    strategy_name=strategy_name,
+                    order_remark=order_remark,
                     exception=e,
+                    timeout_seconds=order_timeout_s,
+                    timeout_env_key="MINIQMT_ORDER_TIMEOUT_SECONDS",
                 )
                 raise self._mark_operation_timeout("order submit", order_timeout_s, e) from e
             except QMTNotAvailableError as e:
@@ -1279,7 +1296,11 @@ Notes:
                     order_volume=int(order_volume),
                     price_type=int(price_type),
                     price=float(price or 0.0),
+                    strategy_name=strategy_name,
+                    order_remark=order_remark,
                     exception=e,
+                    timeout_seconds=order_timeout_s,
+                    timeout_env_key="MINIQMT_ORDER_TIMEOUT_SECONDS",
                 )
                 raise
             except Exception as e:  # noqa: BLE001
@@ -1291,7 +1312,11 @@ Notes:
                     order_volume=int(order_volume),
                     price_type=int(price_type),
                     price=float(price or 0.0),
+                    strategy_name=strategy_name,
+                    order_remark=order_remark,
                     exception=e,
+                    timeout_seconds=order_timeout_s,
+                    timeout_env_key="MINIQMT_ORDER_TIMEOUT_SECONDS",
                 )
                 return -1, f"下单失败: {e!r}"
 
