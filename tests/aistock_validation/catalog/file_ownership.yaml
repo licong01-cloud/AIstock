@@ -301,7 +301,7 @@ rules:
     include:
       - configs/research_assistant/runtime_context.yaml
     primary_module: research_assistant
-    impact_modules: [research_assistant.react_grounding, research_assistant.evidence_guard]
+    impact_modules: [research_assistant.react_grounding, research_assistant.evidence_guard, research_assistant.qe_autonomy]
     layer: config
     risk_level: high
     ownership_reason: Runtime context config controls assistant dialogue, compaction, and ReAct grounding limits.
@@ -442,13 +442,16 @@ rules:
   - rule_id: research_assistant_qe_autonomy
     priority: 100
     include:
-      - backend/services/research_assistant/qe_autonomy.py
+      - backend/services/research_assistant/qe_autonomy/**
+      - backend/db/migrations/ra_upgrade/003_qe_autonomy.sql
+      - backend/tests/research_assistant/test_qe_autonomy_*.py
       - backend/tests/research_assistant/test_qe_autonomous_loop.py
+      - tests/aistock_validation/history/research_assistant/*ra_phase6_qe_autonomy*.md
     primary_module: research_assistant.qe_autonomy
     impact_modules: [qe.auto_evolution, research_assistant.agent_teams, research_assistant.evidence_guard]
     layer: backend_service
     risk_level: critical
-    ownership_reason: QE autonomy must enforce evaluator callbacks, budget guardrails, stop conditions, and approval boundaries.
+    ownership_reason: QE autonomy must enforce evaluator callbacks, budget guardrails, stop conditions, DDL ledger consumption, worker reduce, and approval boundaries.
   - rule_id: research_assistant_code_intelligence
     priority: 100
     include:

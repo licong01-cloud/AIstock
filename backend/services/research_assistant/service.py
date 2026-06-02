@@ -81,6 +81,8 @@ from .mcp_catalog_sync import enrich_mcp_server_record, default_mcp_servers, def
 from .tool_router import route_request
 from .agent_teams import AgentTeamsRuntime, AgentTeamsRuntimeProviders, WorkerRunResult, load_agent_teams_config
 from .agent_teams.models import WorkerTask
+from .qe_autonomy import AutonomousEvolutionProviders, AutonomousEvolutionRuntime, request_from_mapping
+from .qe_autonomy.adapter import QeAutonomyAdapter, ResearchAssistantQeAutonomyRunStore
 
 
 class _ServiceAgentRunStore:
@@ -126,8 +128,8 @@ class _ServiceAgentContextProvider:
                 task_id=task.parent_task_id,
                 agent_id=task.agent_key,
                 model_profile=agent.model_role,
-                query=task.objective,
-                budget_tokens=1800,
+                user_message=task.objective,
+                token_budget=1800,
             )
         )
 
@@ -149,6 +151,24 @@ class _ServiceAgentWorkerExecutor:
 
     def run_worker(self, task: WorkerTask, agent: Any, context_pack: dict[str, Any], catalog_entries: list[ToolCatalogEntry]) -> WorkerRunResult:
         cards: dict[str, Any] = {"agent_key": task.agent_key, "action_proposals": []}
+        if task.agent_key == "qe_experiment_designer" and isinstance(task.input_json.get("qe_autonomy_request"), dict):
+            report = self.service.run_qe_autonomous_evolution(dict(task.input_json["qe_autonomy_request"]))
+            report_dict = report.to_dict() if hasattr(report, "to_dict") else dict(report)
+            status = "failed" if report_dict.get("status") == "failed" else "succeeded"
+            evidence_refs = tuple(sorted(str(ref) for ref in report_dict.get("evidence_refs", []) or ["qe_autonomy_report"]))
+            return WorkerRunResult(
+                agent_run_id="service_runtime_pending",
+                parent_task_id=task.parent_task_id,
+                agent_key=task.agent_key,
+                role=task.role,
+                status=status,
+                task_order=task.task_order,
+                summary=f"QE autonomy {report_dict.get('status')}: {report_dict.get('stop_reason')}",
+                artifacts=tuple(str(ref) for ref in report_dict.get("artifact_refs", []) or []),
+                evidence_refs=evidence_refs,
+                result_json={"autonomy_report": report_dict, "worker_consumed_autonomy": True},
+                context_pack_id=str(context_pack.get("context_pack_id") or ""),
+            )
         provider = _ServiceReactMcpProvider(
             service=self.service,
             conversation_id=str(task.input_json.get("conversation_id") or "agent_team"),
@@ -908,7 +928,15 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         self.context_budget_planner = ContextBudgetPlanner()
 
 
-    def run_agent_team(self, *, parent_task_id: str, objective: str, requested_agent_keys: list[str] | None = None) -> dict[str, Any]:
+    def run_agent_team(
+        self,
+        *,
+        parent_task_id: str,
+        objective: str,
+        requested_agent_keys: list[str] | None = None,
+        worker_inputs: dict[str, dict[str, object]] | None = None,
+        qe_autonomy_request: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         config = load_agent_teams_config(REPO_ROOT / "configs/research_assistant/agent_teams.yaml")
         runtime = AgentTeamsRuntime(
             config=config,
@@ -921,7 +949,15 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             ),
             id_factory=lambda task: new_id(f"aar_{task.task_order:03d}_{task.agent_key}"),
         )
-        result = runtime.run(parent_task_id=parent_task_id, objective=objective, requested_agent_keys=requested_agent_keys)
+        merged_worker_inputs: dict[str, dict[str, object]] = {key: dict(value) for key, value in (worker_inputs or {}).items()}
+        if qe_autonomy_request is not None:
+            merged_worker_inputs.setdefault("qe_experiment_designer", {})["qe_autonomy_request"] = dict(qe_autonomy_request)
+        result = runtime.run(
+            parent_task_id=parent_task_id,
+            objective=objective,
+            requested_agent_keys=requested_agent_keys,
+            worker_inputs=merged_worker_inputs,
+        )
         for candidate in result.memory_candidates:
             if not candidate.get("provenance_json"):
                 continue
@@ -950,6 +986,22 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "memory_candidates": list(result.memory_candidates),
             "trace": list(result.trace),
         }
+
+    def run_qe_autonomous_evolution(self, request_payload: dict[str, Any]) -> Any:
+        request = request_from_mapping(request_payload)
+        adapter = QeAutonomyAdapter()
+        runtime = AutonomousEvolutionRuntime(
+            providers=AutonomousEvolutionProviders(
+                run_store=ResearchAssistantQeAutonomyRunStore(self.repository),
+                loop_executor=adapter,
+                evaluator=adapter,
+                direction_decider=adapter,
+                config_generator=adapter,
+                submitter=adapter,
+            ),
+            id_factory=lambda prefix, stable_key: new_id(f"{prefix}_{stable_key}"),
+        )
+        return runtime.autonomous_evolve(request)
 
     def runtime_code_visibility(self) -> dict[str, Any]:
         current_commit = _git_output(["rev-parse", "HEAD"])

@@ -1283,6 +1283,116 @@ def ra_phase5_agent_teams(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def ra_phase6_qe_autonomy(session: nox.Session) -> None:
+    """Run Phase 6 QE autonomy DDL, runtime, budget, approval, and worker gates."""
+    phase6_paths = [
+        "backend/db/migrations/ra_upgrade/003_qe_autonomy.sql",
+        "backend/db/init_research_assistant_schema_20260521.py",
+        "backend/services/research_assistant/qe_autonomy/__init__.py",
+        "backend/services/research_assistant/qe_autonomy/models.py",
+        "backend/services/research_assistant/qe_autonomy/providers.py",
+        "backend/services/research_assistant/qe_autonomy/guards.py",
+        "backend/services/research_assistant/qe_autonomy/runtime.py",
+        "backend/services/research_assistant/qe_autonomy/adapter.py",
+        "backend/services/research_assistant/agent_teams/models.py",
+        "backend/services/research_assistant/agent_teams/runtime.py",
+        "backend/services/research_assistant/service.py",
+        "backend/services/research_assistant/repository.py",
+        "configs/research_assistant/agent_teams.yaml",
+        "configs/research_assistant/runtime_context.yaml",
+        "backend/tests/research_assistant/test_qe_autonomy_ddl_contract.py",
+        "backend/tests/research_assistant/test_qe_autonomous_loop.py",
+        "backend/tests/research_assistant/test_qe_autonomy_default_disabled.py",
+        "backend/tests/research_assistant/test_qe_autonomy_stop_conditions.py",
+        "backend/tests/research_assistant/test_qe_autonomy_budget_guard.py",
+        "backend/tests/research_assistant/test_qe_autonomy_high_risk_preflight.py",
+        "backend/tests/research_assistant/test_qe_autonomy_adapter_contract.py",
+        "backend/tests/research_assistant/test_qe_autonomy_agent_team_integration.py",
+        "backend/tests/research_assistant/test_qe_autonomy_external_hypotheses.py",
+        "backend/tests/research_assistant/test_qe_autonomy_runtime_consumption.py",
+        "backend/tests/research_assistant/test_qe_autonomy_determinism.py",
+        "backend/tests/research_assistant/test_qe_autonomy_fakes.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        "tests/aistock_validation/history/research_assistant/20260602_ra_phase6_qe_autonomy_validation.md",
+        "tests/aistock_validation/catalog/test_plans.yaml",
+        "tests/aistock_validation/catalog/module_registry.yaml",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "backend/services/validation/plan_catalog.py",
+        "noxfile.py",
+    ]
+    session.run("git", "diff", "--check", external=True)
+    session.run(
+        sys.executable,
+        "-m",
+        "py_compile",
+        "backend/services/research_assistant/qe_autonomy/__init__.py",
+        "backend/services/research_assistant/qe_autonomy/models.py",
+        "backend/services/research_assistant/qe_autonomy/providers.py",
+        "backend/services/research_assistant/qe_autonomy/guards.py",
+        "backend/services/research_assistant/qe_autonomy/runtime.py",
+        "backend/services/research_assistant/qe_autonomy/adapter.py",
+        "backend/services/research_assistant/agent_teams/models.py",
+        "backend/services/research_assistant/agent_teams/runtime.py",
+        "backend/services/research_assistant/service.py",
+        "backend/services/research_assistant/repository.py",
+        external=True,
+    )
+    _run_pytest(
+        session,
+        "backend/tests/research_assistant/test_qe_autonomy_ddl_contract.py",
+        "backend/tests/research_assistant/test_qe_autonomous_loop.py",
+        "backend/tests/research_assistant/test_qe_autonomy_default_disabled.py",
+        "backend/tests/research_assistant/test_qe_autonomy_stop_conditions.py",
+        "backend/tests/research_assistant/test_qe_autonomy_budget_guard.py",
+        "backend/tests/research_assistant/test_qe_autonomy_high_risk_preflight.py",
+        "backend/tests/research_assistant/test_qe_autonomy_adapter_contract.py",
+        "backend/tests/research_assistant/test_qe_autonomy_agent_team_integration.py",
+        "backend/tests/research_assistant/test_qe_autonomy_external_hypotheses.py",
+        "backend/tests/research_assistant/test_qe_autonomy_runtime_consumption.py",
+        "backend/tests/research_assistant/test_qe_autonomy_determinism.py",
+        "backend/tests/research_assistant/test_core_no_adapter_import.py",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_validation_catalog_integrity.py",
+        "--output-json",
+        "tmp/validation/catalog/ra_phase6_qe_autonomy_integrity.json",
+        "--fail-on-warning",
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_module_ownership_scan.py",
+        "--output-json",
+        "tmp/validation/module_ownership/ra_phase6_qe_autonomy_paths.json",
+        "--summary-md",
+        "tmp/validation/module_ownership/ra_phase6_qe_autonomy_paths.md",
+        "--fail-on-unmapped",
+        "--fail-on-ambiguous",
+        *phase6_paths,
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "scripts/aistock_guardrail_scan.py",
+        "--changed-only",
+        "--baseline-json",
+        _guardrail_baseline_json(session),
+        "--fail-new-only",
+        "--fail-on-severity",
+        "P1",
+        "--output-json",
+        "tmp/validation/guardrails/ra_phase6_qe_autonomy.json",
+        "--summary-md",
+        "tmp/validation/guardrails/ra_phase6_qe_autonomy.md",
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
 def research_assistant_backend(session: nox.Session) -> None:
     """Run Research Assistant backend/schema/router tests without services."""
     session.run(

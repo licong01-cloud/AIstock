@@ -88,6 +88,7 @@ class WorkerRunResult:
             "context_pack_id": self.context_pack_id,
             "evidence_refs": list(self.evidence_refs),
             "role": self.role,
+            "result_json": self.result_json,
             "status": self.status,
             "summary": self.summary,
             "task_order": self.task_order,

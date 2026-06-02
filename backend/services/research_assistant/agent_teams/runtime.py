@@ -41,8 +41,15 @@ class AgentTeamsRuntime:
         self.id_factory = id_factory
         self.clock = clock or (lambda: datetime.now(timezone.utc))
 
-    def run(self, *, parent_task_id: str, objective: str, requested_agent_keys: list[str] | None = None) -> AgentTeamResult:
-        tasks = self.decompose(parent_task_id=parent_task_id, objective=objective, requested_agent_keys=requested_agent_keys)
+    def run(
+        self,
+        *,
+        parent_task_id: str,
+        objective: str,
+        requested_agent_keys: list[str] | None = None,
+        worker_inputs: dict[str, dict[str, object]] | None = None,
+    ) -> AgentTeamResult:
+        tasks = self.decompose(parent_task_id=parent_task_id, objective=objective, requested_agent_keys=requested_agent_keys, worker_inputs=worker_inputs)
         trace: list[dict[str, object]] = [
             {
                 "event": "orchestrator_decomposed",
@@ -72,19 +79,31 @@ class AgentTeamsRuntime:
             trace=tuple(trace),
         )
 
-    def decompose(self, *, parent_task_id: str, objective: str, requested_agent_keys: list[str] | None = None) -> list[WorkerTask]:
+    def decompose(
+        self,
+        *,
+        parent_task_id: str,
+        objective: str,
+        requested_agent_keys: list[str] | None = None,
+        worker_inputs: dict[str, dict[str, object]] | None = None,
+    ) -> list[WorkerTask]:
         selected = self._select_workers(objective, requested_agent_keys)
-        return [
-            WorkerTask(
-                parent_task_id=parent_task_id,
-                agent_key=agent.agent_key,
-                role=agent.role,
-                task_order=order,
-                objective=objective,
-                input_json={"objective": objective, "agent_key": agent.agent_key, "prompt_nodes": list(agent.prompt_nodes)},
+        tasks: list[WorkerTask] = []
+        worker_inputs = worker_inputs or {}
+        for order, agent in enumerate(selected):
+            input_json: dict[str, object] = {"objective": objective, "agent_key": agent.agent_key, "prompt_nodes": list(agent.prompt_nodes)}
+            input_json.update(worker_inputs.get(agent.agent_key, {}))
+            tasks.append(
+                WorkerTask(
+                    parent_task_id=parent_task_id,
+                    agent_key=agent.agent_key,
+                    role=agent.role,
+                    task_order=order,
+                    objective=objective,
+                    input_json=input_json,
+                )
             )
-            for order, agent in enumerate(selected)
-        ]
+        return tasks
 
     def _select_workers(self, objective: str, requested_agent_keys: list[str] | None) -> list[AgentDefinition]:
         if requested_agent_keys:

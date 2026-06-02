@@ -160,6 +160,12 @@ TABLES: dict[str, dict[str, Any]] = {
         "json": {"input_json", "result_json"},
         "search": {"agent_run_id", "parent_task_id", "agent_key", "role", "status", "model_profile_id", "trace_id"},
     },
+    "qe_autonomy_runs": {
+        "table": "qe_autonomous_evolution_runs",
+        "id": "auto_run_id",
+        "json": {"stop_conditions_json", "budget_json", "last_verdict_json"},
+        "search": {"auto_run_id", "qe_task_id", "methodology_ref", "status"},
+    },
     "model_profiles": {
         "table": "assistant_model_profiles",
         "id": "model_profile_id",
