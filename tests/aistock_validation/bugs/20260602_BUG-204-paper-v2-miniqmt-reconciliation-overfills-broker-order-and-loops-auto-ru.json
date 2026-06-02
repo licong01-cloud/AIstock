@@ -33,8 +33,8 @@
   "expected": "Broker-authoritative reconciliation must be idempotent across scheduler retries/sessions: already-reconciled broker trades are skipped or applied only as deltas, local fills never exceed remaining quantity, and auto-run must not repeatedly recreate failed sessions after a completed same-day run.",
   "first_seen_at": "2026-06-02T05:45:43.210521Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6592e7a80882fb2ac2941b354652b2da2424c65e",
+  "fixed_at": "2026-06-02T06:44:05.511687Z",
   "github_issue_number": 542,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/542",
   "last_seen_at": "2026-06-02T05:45:43.210521Z",
@@ -42,6 +42,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/551",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -54,7 +55,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_trading_v2"
   ],
@@ -63,5 +64,14 @@
     "fingerprint": "18aa460964b960dfe7f8b97e",
     "source_event_id": "FE-20260602-18aa460964b9"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/paper_trading_v2/test_minqmt_vnpy_execution_adapter.py -q -> passed (6 passed)",
+    "python -m pytest backend/tests/paper_trading_v2/test_live_session.py -q -> passed (24 passed)",
+    "python -m ruff check backend/services/paper_trading_v2/day_runner.py backend/tests/paper_trading_v2/test_minqmt_vnpy_execution_adapter.py; git diff --check -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s paper_v2_backend -> passed (568 passed, 1 skipped, 2 xfailed)",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> passed (l0, paper_v2_backend, paper_v2_data_quality, data_quality_deep); UI sub-session requires dev 8012/3012 service and was not used for production 8001"
+  ],
   "verification_run_id": null
 }
