@@ -245,6 +245,87 @@ def test_cli_compact_stdout_keeps_details_in_artifact(tmp_path: Path, capsys: py
     assert artifact_payload["schema_version"] == "aistock_ci_failure_summary_v1"
 
 
+def test_cli_persists_tmp_failure_candidate_history(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    status_path = tmp_path / "nightly-status.json"
+    output_path = tmp_path / "tmp" / "validation" / "nightly_failure_issue" / "summary.json"
+    history_dir = tmp_path / "tests" / "aistock_validation" / "history" / "issue_candidates"
+    monkeypatch.setattr(summary, "_default_candidate_history_dir", lambda: history_dir)
+    status_path.write_text(
+        json.dumps(
+            {
+                "statuses": {
+                    "runnerPreflight": "success",
+                    "drSnapshot": "success",
+                    "drValidate": "success",
+                    "nightlyL3": "failure",
+                    "paperV2Live": "skipped",
+                },
+                "run_id": "9001",
+                "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/9001",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert summary.main(
+        [
+            "--nightly-status-json",
+            str(status_path),
+            "--output",
+            str(output_path),
+            "--stdout-format",
+            "compact",
+        ]
+    ) == 0
+
+    stdout_payload = json.loads(capsys.readouterr().out)
+    history_path = Path(stdout_payload["artifacts"]["candidate_history"])
+    history_payload = json.loads(history_path.read_text(encoding="utf-8"))
+
+    assert history_path.is_file()
+    assert history_payload["schema_version"] == "aistock_ci_failure_candidate_history_v1"
+    assert history_payload["candidate"]["fingerprint"] == stdout_payload["fingerprint"]
+    assert history_payload["candidate"]["module"] == "validation"
+    assert history_payload["run_count"] == 1
+    assert history_payload["observed_run_ids"] == ["9001"]
+    assert history_payload["log_policy"]["full_log_embedded"] is False
+
+
+def test_candidate_history_persistence_dedupes_by_fingerprint(tmp_path: Path) -> None:
+    history_dir = tmp_path / "tests" / "aistock_validation" / "history" / "issue_candidates"
+    first = summary.finalize_summary(
+        {
+            "schema_version": "aistock_ci_failure_summary_v1",
+            "generated_at": "2026-06-02T00:00:00Z",
+            "severity": "P1",
+            "workflow": "AIstock CI",
+            "run_id": "1001",
+            "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/1001",
+            "branch": "main",
+            "commit": "abc",
+            "failed_jobs": [],
+            "extraction_errors": [],
+        }
+    )
+    second = dict(first)
+    second["run_id"] = "1002"
+    second["run_url"] = "https://github.com/licong01-cloud/AIstock/actions/runs/1002"
+    second["generated_at"] = "2026-06-02T01:00:00Z"
+    second["failure_event"] = summary.build_failure_event(second)
+    second["agent_handoff"] = summary.build_agent_handoff(second)
+
+    first_path = summary.persist_candidate_history(first, history_dir=str(history_dir))
+    second_path = summary.persist_candidate_history(second, history_dir=str(history_dir))
+
+    assert first_path == second_path
+    payload = json.loads(second_path.read_text(encoding="utf-8"))  # type: ignore[union-attr]
+    assert payload["run_count"] == 2
+    assert payload["observed_run_ids"] == ["1001", "1002"]
+    assert payload["last_seen_at"] == "2026-06-02T01:00:00Z"
+
+
 
 def test_locate_last_green_run_finds_previous_success() -> None:
     payload = summary.finalize_summary(

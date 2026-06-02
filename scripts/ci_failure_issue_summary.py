@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 
 DEFAULT_REPO = "licong01-cloud/AIstock"
+CANDIDATE_HISTORY_SCHEMA = "aistock_ci_failure_candidate_history_v1"
 NIGHTLY_STATUS_KEYS = ("runner_preflight", "dr_snapshot", "dr_validate", "nightly_l3", "paper_v2_live")
 NIGHTLY_STATUS_ALIASES = {
     "runner_preflight": ("runnerPreflight", "runner-preflight", "runner_preflight"),
@@ -1055,6 +1056,113 @@ def _write_text(path: str | None, text: str) -> None:
     target.write_text(text, encoding="utf-8")
 
 
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _default_candidate_history_dir() -> Path:
+    return _repo_root() / "tests" / "aistock_validation" / "history" / "issue_candidates"
+
+
+def _safe_filename(value: Any, *, fallback: str = "candidate") -> str:
+    text = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(value or "").strip()).strip(".-")
+    return text[:120] or fallback
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _candidate_history_path(summary: dict[str, Any], history_dir: str | None) -> Path | None:
+    if not history_dir:
+        return None
+    source = "nightly" if summary.get("nightly_statuses") else "ci"
+    fingerprint = _safe_filename(summary.get("fingerprint") or summary.get("nightly_fingerprint") or summary.get("run_id"))
+    return Path(history_dir) / source / f"{fingerprint}.json"
+
+
+def _auto_candidate_history_dir(output_path: str | None) -> str | None:
+    if not output_path:
+        return None
+    normalized = Path(output_path).as_posix()
+    if "/tmp/validation/ci_failure_issue/" in f"/{normalized}" or "/tmp/validation/nightly_failure_issue/" in f"/{normalized}":
+        return str(_default_candidate_history_dir())
+    return None
+
+
+def _build_candidate_history(summary: dict[str, Any], *, existing: dict[str, Any] | None = None) -> dict[str, Any]:
+    fingerprint = str(summary.get("fingerprint") or "ci-unknown")
+    event = summary.get("failure_event") if isinstance(summary.get("failure_event"), dict) else build_failure_event(summary)
+    handoff = summary.get("agent_handoff") if isinstance(summary.get("agent_handoff"), dict) else build_agent_handoff(summary)
+    existing = existing or {}
+    observed_run_ids = _unique(
+        [
+            *[str(item) for item in existing.get("observed_run_ids") or [] if item],
+            *[str(item) for item in [summary.get("run_id")] if item],
+        ]
+    )
+    existing_run_count = int(existing.get("run_count") or 0)
+    run_count = max(existing_run_count, len(observed_run_ids), 1)
+    if summary.get("run_id") and str(summary["run_id"]) not in set(str(item) for item in existing.get("observed_run_ids") or []):
+        run_count = max(run_count, existing_run_count + 1 if existing_run_count else 1)
+    created_at = existing.get("created_at") or summary.get("generated_at") or _utc_now()
+    module = event.get("module_guess") or (summary.get("suspected_modules") or ["validation"])[0]
+    return {
+        "schema_version": CANDIDATE_HISTORY_SCHEMA,
+        "created_at": created_at,
+        "last_seen_at": summary.get("generated_at") or _utc_now(),
+        "run_count": run_count,
+        "observed_run_ids": observed_run_ids,
+        "candidate": {
+            "candidate_id": existing.get("candidate", {}).get("candidate_id") if isinstance(existing.get("candidate"), dict) else None,
+            "title": summary.get("issue_title") or _primary_failure(summary),
+            "module": module,
+            "severity": str(summary.get("severity") or "P1").upper(),
+            "status": "new",
+            "fingerprint": fingerprint,
+            "dedupe_key": (build_github_issue_payload(summary).get("dedupe") or {}).get("marker"),
+            "allowed_write_scope": handoff.get("allowed_write_scope") or summary.get("suspected_files") or [],
+            "required_validation": handoff.get("required_verification") or [],
+            "evidence": event.get("evidence_refs") or [],
+        },
+        "failure_event": event,
+        "agent_handoff": handoff,
+        "source_summary": {
+            "diagnostic_status": summary.get("diagnostic_status"),
+            "workflow": summary.get("workflow"),
+            "run_id": summary.get("run_id"),
+            "run_url": summary.get("run_url"),
+            "branch": summary.get("branch"),
+            "commit": summary.get("commit"),
+            "nightly_failed_stages": summary.get("nightly_failed_stages") or [],
+            "fingerprint": fingerprint,
+        },
+        "log_policy": {
+            "full_log_embedded": False,
+            "full_log_ref": summary.get("run_url"),
+            "reason": "Candidate history stores compact handoff metadata only; use the run URL for full logs.",
+        },
+    }
+
+
+def persist_candidate_history(summary: dict[str, Any], *, history_dir: str | None) -> Path | None:
+    target = _candidate_history_path(summary, history_dir)
+    if target is None:
+        return None
+    existing = _read_json_object(target)
+    payload = _build_candidate_history(summary, existing=existing)
+    candidate = payload.get("candidate")
+    if isinstance(candidate, dict) and not candidate.get("candidate_id"):
+        candidate["candidate_id"] = f"CAND-CI-{str(payload['source_summary']['fingerprint']).replace('ci-', '')[:16]}"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return target
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Summarize AIstock CI/Nightly failures for actionable GitHub Issues.")
     parser.add_argument("--repo", default=DEFAULT_REPO)
@@ -1073,13 +1181,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--context-output")
     parser.add_argument("--context-markdown-output")
     parser.add_argument("--github-issue-payload-output")
+    parser.add_argument(
+        "--candidate-history-dir",
+        help=(
+            "Persist compact candidate handoff JSON under this stable directory. "
+            "If omitted, tmp/validation CI/Nightly outputs are mirrored to tests/aistock_validation/history/issue_candidates."
+        ),
+    )
+    parser.add_argument("--no-candidate-history", action="store_true", help="Do not persist compact candidate history JSON.")
     parser.add_argument("--stdout-format", choices=["full-json", "compact"], default="full-json")
     return parser
 
 
-def build_stdout_payload(summary: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+def build_stdout_payload(summary: dict[str, Any], args: argparse.Namespace, *, candidate_history_path: Path | None = None) -> dict[str, Any]:
     if args.stdout_format == "full-json":
-        return summary
+        payload = dict(summary)
+        if candidate_history_path:
+            payload["candidate_history_path"] = str(candidate_history_path)
+        return payload
     return {
         "schema_version": "aistock_ci_failure_summary_compact_v1",
         "diagnostic_status": summary.get("diagnostic_status"),
@@ -1096,6 +1215,7 @@ def build_stdout_payload(summary: dict[str, Any], args: argparse.Namespace) -> d
             "context": args.context_output,
             "context_markdown": args.context_markdown_output,
             "github_issue_payload": args.github_issue_payload_output,
+            "candidate_history": str(candidate_history_path) if candidate_history_path else None,
         },
     }
 
@@ -1145,7 +1265,9 @@ def main(argv: list[str] | None = None) -> int:
     _write_json(args.context_output, context_pack)
     _write_text(args.context_markdown_output, render_context_pack_markdown(context_pack))
     _write_json(args.github_issue_payload_output, build_github_issue_payload(summary, repo=args.repo))
-    sys.stdout.write(json.dumps(build_stdout_payload(summary, args), ensure_ascii=True, indent=2, sort_keys=True) + "\n")
+    history_dir = None if args.no_candidate_history else (args.candidate_history_dir or _auto_candidate_history_dir(args.output))
+    candidate_history_path = persist_candidate_history(summary, history_dir=history_dir)
+    sys.stdout.write(json.dumps(build_stdout_payload(summary, args, candidate_history_path=candidate_history_path), ensure_ascii=True, indent=2, sort_keys=True) + "\n")
     return 0
 
 
