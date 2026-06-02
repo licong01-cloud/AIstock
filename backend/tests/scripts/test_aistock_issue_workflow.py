@@ -3579,6 +3579,10 @@ def test_cleanup_after_merge_uses_canonical_root_when_called_from_task_worktree(
 
     assert payload["workflow_gate"] == "cleanup_done"
     assert "currently checked-out branch" not in " ".join(payload["blocking"])
+    assert payload["worktree_is_current_cwd"] is True
+    assert any(item["action"] == "relocate_current_cwd" for item in payload["actions"])
+    assert any(item["command"].startswith("chdir ") for item in payload["applied"])
+    assert Path.cwd() == isolated_workflow_root
     assert (("branch", "--show-current"), isolated_workflow_root) in calls
     assert all(cwd == isolated_workflow_root for args, cwd in executed if args[:2] in {("git", "worktree"), ("git", "branch")})
 

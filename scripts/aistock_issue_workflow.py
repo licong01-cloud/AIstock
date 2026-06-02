@@ -7117,7 +7117,9 @@ def build_cleanup_after_merge_plan(
     worktree_is_current_cwd = False
     if worktree_path and worktree_path.exists():
         try:
-            worktree_is_current_cwd = worktree_path.resolve() == Path.cwd().resolve()
+            current_cwd = Path.cwd().resolve()
+            resolved_worktree = worktree_path.resolve()
+            worktree_is_current_cwd = current_cwd == resolved_worktree or resolved_worktree in current_cwd.parents
         except OSError:
             worktree_is_current_cwd = False
         try:
@@ -7141,8 +7143,8 @@ def build_cleanup_after_merge_plan(
         blocking.append("refusing to cleanup the currently checked-out branch")
     if not merge_verified:
         blocking.append(f"branch is not merged into origin/main: {branch}")
-    if worktree_path and worktree_exists and not worktree_registered and worktree_empty and worktree_is_current_cwd and apply:
-        blocking.append(f"refusing to remove the current working directory even though it is an empty orphan worktree dir: {worktree_path}")
+    if worktree_path and worktree_exists and worktree_is_current_cwd and apply and not root.exists():
+        blocking.append(f"refusing to remove the current working directory because canonical root is unavailable: {worktree_path}")
     if worktree_path and worktree_exists and not worktree_registered and not worktree_empty:
         blocking.append(f"worktree path exists but is not a registered git worktree: {worktree_path}")
     if worktree_path and worktree_registered and not worktree_clean:
@@ -7167,8 +7169,12 @@ def build_cleanup_after_merge_plan(
     if sync_root:
         actions.append({"action": "sync_root_main", "root": str(root), "safe": not any("canonical root" in item for item in blocking)})
     if worktree_path and worktree_exists and worktree_registered:
+        if worktree_is_current_cwd:
+            actions.append({"action": "relocate_current_cwd", "root": str(root), "safe": root.exists()})
         actions.append({"action": "remove_worktree", "worktree": str(worktree_path), "safe": merge_verified and worktree_clean})
     elif worktree_path and worktree_exists and worktree_empty:
+        if worktree_is_current_cwd:
+            actions.append({"action": "relocate_current_cwd", "root": str(root), "safe": root.exists()})
         actions.append({"action": "remove_empty_worktree_dir", "worktree": str(worktree_path), "safe": merge_verified})
     if branch in local_branches:
         actions.append({"action": "delete_local_branch", "branch": branch, "safe": merge_verified})
@@ -7237,6 +7243,14 @@ def build_cleanup_after_merge_plan(
                 )
             else:
                 applied.append({"command": "git merge --ff-only origin/main", "result": _execute_checked(["git", "merge", "--ff-only", "origin/main"], cwd=root, timeout=120)})
+        if worktree_path and worktree_path.exists() and worktree_is_current_cwd:
+            os.chdir(root)
+            applied.append(
+                {
+                    "command": f"chdir {root} before removing current worktree",
+                    "result": {"ok": True, "stdout": "", "stderr": "", "returncode": 0},
+                }
+            )
         if worktree_path and worktree_path.exists() and worktree_registered:
             applied.append({"command": f"git worktree remove {worktree_path}", "result": _execute_checked(["git", "worktree", "remove", str(worktree_path)], cwd=root, timeout=120)})
         elif worktree_path and worktree_path.exists() and worktree_empty:
