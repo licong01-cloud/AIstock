@@ -41,7 +41,7 @@
   "first_seen_at": "2026-06-02T06:14:50.492265Z",
   "fix_branch": null,
   "fix_commit": "1073ea0c391111a2a058506aa8eba8a9f76c5ba4",
-  "fixed_at": "2026-06-02T07:13:26.397296Z",
+  "fixed_at": "2026-06-02T07:16:20.797558Z",
   "github_issue_number": 545,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/545",
   "last_seen_at": "2026-06-02T06:14:50.492265Z",
@@ -75,7 +75,7 @@
     "source_event_id": "FE-20260602-89e38f36c049"
   },
   "validation_evidence": [
-    "PR #553 checks -> 16 success; local pytest workflow tests -> 111 passed; nox validation_center_backend -> 326 passed; workflow-smoke -> passed unexpected_dirty_paths=[]"
+    "PR #553 checks -> 16 success; close-sync PR #555 checks -> 9 success and 1 skipped; local validation -> passed"
   ],
   "verification_run_id": null
 }
