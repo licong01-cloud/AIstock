@@ -1,0 +1,64 @@
+{
+  "actual": "On PR #530 CI run 26796399983, job `Auto-register CI failures as BUGs` failed in actions/github-script with `SyntaxError: Unexpected identifier 'pr'` while building the routing comment body.",
+  "allowed_write_scope": [
+    ".github/workflows/test.yml",
+    "tests/aistock_validation/bugs/20260602_BUG-201-ci-failure-auto-register-github-script-should-safely-build-pr-routing-co.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-201",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-02T03:52:58.405037Z",
+  "description": "On PR #530 CI run 26796399983, job `Auto-register CI failures as BUGs` failed in actions/github-script with `SyntaxError: Unexpected identifier 'pr'` while building the routing comment body.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260602-e513811df284",
+      "timestamp": "2026-06-02T03:52:58.405032Z"
+    }
+  ],
+  "evidence_uris": [
+    "PR #530 CI run 26796399983 job 78994013609: SyntaxError Unexpected identifier pr in actions/github-script"
+  ],
+  "expected": "CI failure auto-register should create or update the diagnostic issue and comment on the PR without JavaScript parse errors, even when the routing text contains artifact names or commands.",
+  "first_seen_at": "2026-06-02T03:52:58.405037Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 534,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/534",
+  "last_seen_at": "2026-06-02T03:52:58.405037Z",
+  "module": "validation.guardrails",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Inspect .github/workflows/test.yml Auto-register CI failures as BUGs github-script body or trigger a backend-tests failure on a PR.",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files",
+    "validation_catalog_integrity",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation.guardrails"
+  ],
+  "title": "CI failure auto-register github-script should safely build PR routing comment",
+  "trigger_condition": {
+    "fingerprint": "e513811df28410911ebfa06b",
+    "source_event_id": "FE-20260602-e513811df284"
+  },
+  "verification_run_id": null
+}
