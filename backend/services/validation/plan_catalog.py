@@ -35,6 +35,7 @@ ALLOWED_COMMAND_KEYS: dict[str, str] = {
     "nox_ra_phase4_external_research": "ra_phase4_external_research",
     "nox_ra_phase5_agent_teams": "ra_phase5_agent_teams",
     "nox_ra_phase6_qe_autonomy": "ra_phase6_qe_autonomy",
+    "nox_ra_phase7_full_accept": "ra_phase7_full_accept",
     "nox_research_assistant_backend": "research_assistant_backend",
     "nox_research_assistant_mcp_contract": "research_assistant_mcp_contract",
     "nox_research_assistant_ui": "research_assistant_ui",
