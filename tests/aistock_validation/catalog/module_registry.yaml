@@ -344,7 +344,7 @@ modules:
     description: QE autonomous loop design, evaluator callbacks, stop conditions, budget guards, and submission boundary.
     description_zh: 覆盖 QE 自主 loop、评估回调、停止条件、预算守护与提交边界。
     test_plans:
-      required_on_change: [l0, ra_phase0_baseline, research_assistant_backend]
+      required_on_change: [l0, ra_phase0_baseline, ra_phase6_qe_autonomy, research_assistant_backend]
       recommended: [research_assistant_mcp_contract]
   - module_id: research_assistant.code_intelligence
     display_name: Research Assistant Code Intelligence

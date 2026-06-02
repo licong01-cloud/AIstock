@@ -15,6 +15,10 @@ CORE_FILES = [
     REPO_ROOT / "backend/services/research_assistant/agent_teams/config.py",
     REPO_ROOT / "backend/services/research_assistant/agent_teams/providers.py",
     REPO_ROOT / "backend/services/research_assistant/agent_teams/runtime.py",
+    REPO_ROOT / "backend/services/research_assistant/qe_autonomy/models.py",
+    REPO_ROOT / "backend/services/research_assistant/qe_autonomy/providers.py",
+    REPO_ROOT / "backend/services/research_assistant/qe_autonomy/guards.py",
+    REPO_ROOT / "backend/services/research_assistant/qe_autonomy/runtime.py",
 ]
 FORBIDDEN_IMPORT_PREFIXES = (
     "backend.db",

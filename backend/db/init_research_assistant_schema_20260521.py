@@ -43,7 +43,6 @@ RESEARCH_ASSISTANT_EVENT_TYPES: tuple[str, ...] = (
     "skill_started",
     "skill_done",
     "skill_failed",
-    "approval_required",
     "approved",
     "rejected",
     "memory_written",
@@ -553,6 +552,23 @@ BASE_DDL: list[str] = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_aar_parent ON assistant_agent_runs(parent_task_id, status)",
     """
+    CREATE TABLE IF NOT EXISTS qe_autonomous_evolution_runs (
+        auto_run_id TEXT PRIMARY KEY,
+        qe_task_id TEXT NOT NULL,
+        methodology_ref TEXT,
+        stop_conditions_json JSONB NOT NULL,
+        budget_json JSONB NOT NULL,
+        status TEXT NOT NULL,
+        loops_completed INTEGER NOT NULL DEFAULT 0,
+        last_verdict_json JSONB,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT ck_qaer_status CHECK (status IN ('running','stopped_target','stopped_no_improve','stopped_budget','failed'))
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_qaer_task_status ON qe_autonomous_evolution_runs(qe_task_id, status)",
+    "CREATE INDEX IF NOT EXISTS idx_qaer_updated_at ON qe_autonomous_evolution_runs(updated_at)",
+    """
     CREATE TABLE IF NOT EXISTS assistant_model_profiles (
         model_profile_id TEXT PRIMARY KEY,
         provider TEXT NOT NULL,
@@ -932,6 +948,7 @@ TABLE_COMMENTS = {
     "assistant_context_segments": "Derived compact summaries and recovery notes linked to original conversation messages.",
     "assistant_context_key_facts": "Structured key facts extracted from compacted context with source message references.",
     "assistant_context_assembly_traces": "Per-turn context assembly budget, ordering and source-reference audit trail.",
+    "qe_autonomous_evolution_runs": "QE autonomous evolution loop ledger with stop conditions, budget guardrails and approval boundary reports.",
 }
 
 COLUMN_COMMENTS = {
@@ -1065,6 +1082,16 @@ COLUMN_COMMENTS = {
     "assistant_context_assembly_traces.status": "Assembly status such as ok, retry_after_compaction or failed.",
     "assistant_context_assembly_traces.created_at": "Row creation timestamp.",
     "assistant_context_assembly_traces.updated_at": "Row update timestamp.",
+    "qe_autonomous_evolution_runs.auto_run_id": "Stable autonomous QE run identifier.",
+    "qe_autonomous_evolution_runs.qe_task_id": "QE evolution task controlled by this autonomous loop.",
+    "qe_autonomous_evolution_runs.methodology_ref": "Methodology or evolution-route reference used by the autonomous loop.",
+    "qe_autonomous_evolution_runs.stop_conditions_json": "JSONB stop-condition policy including target, no-improve and failure guards.",
+    "qe_autonomous_evolution_runs.budget_json": "JSONB budget guard policy including max loops, elapsed time and GPU occupancy.",
+    "qe_autonomous_evolution_runs.status": "Autonomous loop status: running, stopped_target, stopped_no_improve, stopped_budget, or failed.",
+    "qe_autonomous_evolution_runs.loops_completed": "Number of QE loops observed by the autonomous state machine.",
+    "qe_autonomous_evolution_runs.last_verdict_json": "Compact last verdict and final autonomy report; large artifacts remain referenced externally.",
+    "qe_autonomous_evolution_runs.created_at": "Row creation timestamp.",
+    "qe_autonomous_evolution_runs.updated_at": "Row update timestamp.",
     "assistant_capabilities.capability_id": "Stable capability registry identifier used by planner and audit replay.",
     "assistant_capabilities.capability_key": "Human and model readable capability key such as qe.create_experiment_draft.",
     "assistant_capabilities.capability_type": "Capability implementation type: mcp_tool, skill, workflow_pack or composite.",
