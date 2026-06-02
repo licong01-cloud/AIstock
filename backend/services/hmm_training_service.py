@@ -611,13 +611,11 @@ class HMMTrainingService:
             raw_preset_coeffs,
             signal_preset=signal_preset,
         )
-        if (
-            (not isinstance(preset_coeffs, dict) or not preset_coeffs)
-            and signal_preset in default_presets
-            and cls._is_metadata_only_signal_preset(raw_preset_coeffs)
-        ):
-            preset_coeffs = default_presets[signal_preset]
         if not isinstance(preset_coeffs, dict) or not preset_coeffs:
+            # Metadata-only presets are invalid even for built-in names. Using
+            # default coefficients here hides a broken runtime HMM config.
+            if cls._is_metadata_only_signal_preset(raw_preset_coeffs):
+                raise ValueError(f"HMM signal_preset has no coefficients: {signal_preset}")
             raise ValueError(f"HMM signal_preset has no coefficients: {signal_preset}")
         result: Dict[str, float] = {}
         for label, raw_value in preset_coeffs.items():
