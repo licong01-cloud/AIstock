@@ -1,0 +1,64 @@
+{
+  "actual": "BUG-205 aftercare exposed a workflow defect: run --mode merge created close-sync PR #555, then merge-finalizer retries after TLS timeout and source worktree cleanup appended duplicate close-sync commits and could fail with 'is not a working tree' after the source worktree had already been removed. The workflow should reuse an existing open close-sync PR/branch for the same BUG/source PR, avoid duplicate registry commits when BUG JSON content is unchanged, and treat an already-unregistered/absent source worktree as cleanup-complete when the merged source PR verifies the branch is safe. This keeps merge -> close-sync -> root sync -> cleanup retry-safe without root pollution or manual intervention.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260602_BUG-208-merge-finalizer-retries-should-be-idempotent-after-close-sync-pr-creatio.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "docs/standards/aistock_issue_workflow_quickstart.md"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-208",
+  "closed_at": null,
+  "closure_requirements": [
+    "merge-finalizer retries reuse an existing open close-sync PR/branch for the same BUG/source PR instead of appending duplicate registry commits when BUG JSON content is unchanged.",
+    "cleanup treats an already-unregistered or already-absent source worktree as cleanup-complete when the merged source PR verifies branch safety.",
+    "Regression tests cover idempotent close-sync PR reuse and missing-worktree cleanup retry.",
+    "Run required workflow validation without touching production runtime or DB."
+  ],
+  "created_at": "2026-06-02T07:40:23.916886Z",
+  "description": "BUG-205 aftercare exposed a workflow defect: run --mode merge created close-sync PR #555, then merge-finalizer retries after TLS timeout and source worktree cleanup appended duplicate close-sync commits and could fail with 'is not a working tree' after the source worktree had already been removed. The workflow should reuse an existing open close-sync PR/branch for the same BUG/source PR, avoid duplicate registry commits when BUG JSON content is unchanged, and treat an already-unregistered/absent source worktree as cleanup-complete when the merged source PR verifies the branch is safe. This keeps merge -> close-sync -> root sync -> cleanup retry-safe without root pollution or manual intervention.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260602-32f719e2484f",
+      "timestamp": "2026-06-02T07:40:23.916880Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-02T07:40:23.916886Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 556,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/556",
+  "last_seen_at": "2026-06-02T07:40:23.916886Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "merge-finalizer retries should be idempotent after close-sync PR creation and cleanup",
+  "trigger_condition": {
+    "fingerprint": "32f719e2484fd106194e4d2f",
+    "source_event_id": "FE-20260602-32f719e2484f"
+  },
+  "verification_run_id": null,
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

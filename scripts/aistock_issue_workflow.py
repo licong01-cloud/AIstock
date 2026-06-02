@@ -4889,6 +4889,32 @@ def _git_ref_exists(ref: str, *, cwd: Path | None = None) -> bool:
     return bool(_run_command(["git", "rev-parse", "--verify", "--quiet", ref], cwd=cwd or REPO_ROOT).get("ok"))
 
 
+def _registered_worktree_paths(*, cwd: Path | None = None) -> set[Path]:
+    result = _run_command(["git", "worktree", "list", "--porcelain"], cwd=cwd or REPO_ROOT, timeout=30)
+    if not result.get("ok"):
+        return set()
+    paths: set[Path] = set()
+    for line in str(result.get("stdout") or "").splitlines():
+        if not line.startswith("worktree "):
+            continue
+        raw_path = line.removeprefix("worktree ").strip()
+        if not raw_path:
+            continue
+        try:
+            paths.add(Path(raw_path).resolve())
+        except OSError:
+            paths.add(Path(raw_path))
+    return paths
+
+
+def _path_is_registered_worktree(path: Path, *, cwd: Path | None = None) -> bool:
+    try:
+        target = path.resolve()
+    except OSError:
+        target = path
+    return target in _registered_worktree_paths(cwd=cwd)
+
+
 def _git_refs_tree_equivalent(left: str, right: str, *, cwd: Path | None = None) -> bool:
     if not left or not right:
         return False
@@ -5341,6 +5367,37 @@ def _close_sync_changed_files(close_sync: dict[str, Any]) -> list[str]:
     return sorted(set(files))
 
 
+def _open_pr_for_branch(branch: str, *, root: Path) -> dict[str, Any] | None:
+    if not branch:
+        return None
+    existing = _run_command(
+        [
+            "gh",
+            "pr",
+            "list",
+            "--repo",
+            GITHUB_REPO,
+            "--head",
+            branch,
+            "--state",
+            "open",
+            "--json",
+            "number,url,headRefName,title",
+            "--limit",
+            "1",
+        ],
+        cwd=root,
+        timeout=60,
+    )
+    if not existing.get("ok"):
+        return None
+    try:
+        rows = json.loads(str(existing.get("stdout") or "[]"))
+    except json.JSONDecodeError:
+        return None
+    return rows[0] if isinstance(rows, list) and rows else None
+
+
 def _maybe_commit_and_pr_close_sync(
     *,
     bug_id: str,
@@ -5354,7 +5411,6 @@ def _maybe_commit_and_pr_close_sync(
     changed_files = _close_sync_changed_files(close_sync)
     if not changed_files:
         return {"workflow_gate": "no_changes", "root": str(root), "branch": branch}
-
     dirty = _dirty_files(root)
     unexpected_dirty = sorted(
         path for path in dirty if not path.replace("\\", "/").startswith("tests/aistock_validation/bugs/")
@@ -5364,6 +5420,18 @@ def _maybe_commit_and_pr_close_sync(
             "close-sync worktree has unexpected dirty files outside BUG registry: "
             + ", ".join(unexpected_dirty[:10])
         )
+    existing_pr = _open_pr_for_branch(branch, root=root)
+    if existing_pr:
+        return {
+            "workflow_gate": "pr_opened",
+            "reason": "existing_open_close_sync_pr_for_branch",
+            "root": str(root),
+            "branch": branch,
+            "changed_files": changed_files,
+            "pr_url": existing_pr.get("url"),
+            "open_pr": existing_pr,
+            "commit": None,
+        }
 
     started = time.monotonic()
     actions: list[dict[str, Any]] = []
@@ -5674,6 +5742,65 @@ def _close_sync_is_complete(
     return marker
 
 
+def _looks_like_close_sync_pr_for_source(
+    item: dict[str, Any],
+    *,
+    source_pr_number: int | None,
+    source_pr_url: str,
+) -> bool:
+    number = int(item.get("number") or 0)
+    title = str(item.get("title") or "").lower()
+    body = str(item.get("body") or "")
+    if source_pr_number and number == source_pr_number:
+        return False
+    if "close-sync" not in title and "close sync" not in title:
+        return False
+    if source_pr_url and source_pr_url in body:
+        return True
+    if source_pr_number and re.search(rf"(?:#|/pull/){source_pr_number}\b", body):
+        return True
+    # Older PR list payloads and tests may not include body. The title and BUG search still identify the retry target.
+    return not body.strip()
+
+
+def _close_sync_pr_in_progress_marker(
+    *,
+    bug_id: str,
+    source_pr_url: str,
+    merge_commit: str | None,
+) -> dict[str, Any] | None:
+    """Return an existing close-sync PR marker even before BUG JSON reaches origin/main."""
+    stale = _stale_pr_check_for_bug(bug_id)
+    source_pr_number = _pr_number_from_url(source_pr_url)
+    open_close_sync_prs = [
+        item
+        for item in stale.get("open_prs") or []
+        if _looks_like_close_sync_pr_for_source(
+            item,
+            source_pr_number=source_pr_number,
+            source_pr_url=source_pr_url,
+        )
+    ]
+    if not open_close_sync_prs:
+        return None
+    pr = open_close_sync_prs[0]
+    return {
+        "workflow_gate": "close_sync_pr_open",
+        "bug_id": bug_id,
+        "registry_root": str(REPO_ROOT),
+        "source_bug_json": None,
+        "updated_bug_json": None,
+        "merged_pr": source_pr_url,
+        "merge_commit": merge_commit,
+        "current_status": "unknown",
+        "snapshot_source": "open_close_sync_pr",
+        "reason": "existing_open_close_sync_pr_for_source",
+        "stale_pr_check": stale,
+        "open_close_sync_prs": open_close_sync_prs,
+        "open_close_sync_pr": pr,
+    }
+
+
 def _close_sync_commit_already_merged(close_sync: dict[str, Any]) -> dict[str, Any]:
     pr = close_sync.get("close_sync_pr") or {}
     pr_url = str(pr.get("url") or "").strip()
@@ -5691,7 +5818,7 @@ def _close_sync_commit_existing_open_pr(close_sync: dict[str, Any]) -> dict[str,
     pr_url = str(pr.get("url") or "").strip()
     return {
         "workflow_gate": "pr_opened",
-        "reason": "close_sync_bug_json_already_persisted_with_open_pr",
+        "reason": "existing_open_close_sync_pr",
         "branch": pr.get("headRefName"),
         "pr_url": pr_url or None,
         "commit": close_sync.get("merge_commit"),
@@ -5809,6 +5936,12 @@ def build_merge_finalizer_plan(
         merge_commit=merge_commit,
         issue_json=issue_json,
     )
+    if not close_sync:
+        close_sync = _close_sync_pr_in_progress_marker(
+            bug_id=canonical_bug_id,
+            source_pr_url=source_pr_url,
+            merge_commit=merge_commit,
+        )
     if close_sync:
         if close_sync.get("close_sync_pr") or close_sync.get("snapshot_source") == "origin_main_ref":
             close_sync_commit = _close_sync_commit_already_merged(close_sync)
@@ -6257,8 +6390,25 @@ def build_cleanup_after_merge_plan(
     merge_verified = bool(merge_verification["verified"])
     worktree_path = Path(worktree) if worktree else None
     worktree_clean = True
+    worktree_registered = False
+    worktree_exists = bool(worktree_path and worktree_path.exists())
+    worktree_empty = False
+    worktree_is_current_cwd = False
     if worktree_path and worktree_path.exists():
-        worktree_clean = _run_command(["git", "status", "--porcelain=v1"], cwd=worktree_path).get("stdout") == ""
+        try:
+            worktree_is_current_cwd = worktree_path.resolve() == Path.cwd().resolve()
+        except OSError:
+            worktree_is_current_cwd = False
+        try:
+            worktree_empty = not any(worktree_path.iterdir())
+        except OSError:
+            worktree_empty = False
+        status_result = _run_command(["git", "status", "--porcelain=v1"], cwd=worktree_path)
+        worktree_branch = _git(["branch", "--show-current"], cwd=worktree_path, check=False) if status_result.get("ok") else ""
+        worktree_registered = _path_is_registered_worktree(worktree_path, cwd=root) or (
+            bool(status_result.get("ok")) and worktree_branch == branch
+        )
+        worktree_clean = bool(status_result.get("ok")) and status_result.get("stdout") == ""
     root_git = _git_snapshot(root) if root.exists() else {"ok": False, "error": "canonical root missing"}
     root_dirty_files = _dirty_files(root) if root.exists() else []
     origin_equivalent_dirty_files = _origin_equivalent_dirty_files(root, root_dirty_files) if root_dirty_files else []
@@ -6270,7 +6420,11 @@ def build_cleanup_after_merge_plan(
         blocking.append("refusing to cleanup the currently checked-out branch")
     if not merge_verified:
         blocking.append(f"branch is not merged into origin/main: {branch}")
-    if worktree_path and worktree_path.exists() and not worktree_clean:
+    if worktree_path and worktree_exists and not worktree_registered and worktree_empty and worktree_is_current_cwd and apply:
+        blocking.append(f"refusing to remove the current working directory even though it is an empty orphan worktree dir: {worktree_path}")
+    if worktree_path and worktree_exists and not worktree_registered and not worktree_empty:
+        blocking.append(f"worktree path exists but is not a registered git worktree: {worktree_path}")
+    if worktree_path and worktree_registered and not worktree_clean:
         blocking.append(f"worktree is dirty: {worktree_path}")
     if sync_root:
         if not root.exists():
@@ -6291,8 +6445,10 @@ def build_cleanup_after_merge_plan(
     actions = []
     if sync_root:
         actions.append({"action": "sync_root_main", "root": str(root), "safe": not any("canonical root" in item for item in blocking)})
-    if worktree_path and worktree_path.exists():
+    if worktree_path and worktree_exists and worktree_registered:
         actions.append({"action": "remove_worktree", "worktree": str(worktree_path), "safe": merge_verified and worktree_clean})
+    elif worktree_path and worktree_exists and worktree_empty:
+        actions.append({"action": "remove_empty_worktree_dir", "worktree": str(worktree_path), "safe": merge_verified})
     if branch in local_branches:
         actions.append({"action": "delete_local_branch", "branch": branch, "safe": merge_verified})
     if remote_ref:
@@ -6310,6 +6466,10 @@ def build_cleanup_after_merge_plan(
         "tree_equivalent_to_origin_main": tree_equivalent,
         "pr_check": pr_check,
         "worktree_clean": worktree_clean,
+        "worktree_exists": worktree_exists,
+        "worktree_registered": worktree_registered,
+        "worktree_empty": worktree_empty,
+        "worktree_is_current_cwd": worktree_is_current_cwd,
         "root_git": root_git,
         "root_dirty_files": root_dirty_files,
         "origin_equivalent_dirty_files": origin_equivalent_dirty_files,
@@ -6356,8 +6516,16 @@ def build_cleanup_after_merge_plan(
                 )
             else:
                 applied.append({"command": "git merge --ff-only origin/main", "result": _execute_checked(["git", "merge", "--ff-only", "origin/main"], cwd=root, timeout=120)})
-        if worktree_path and worktree_path.exists():
+        if worktree_path and worktree_path.exists() and worktree_registered:
             applied.append({"command": f"git worktree remove {worktree_path}", "result": _execute_checked(["git", "worktree", "remove", str(worktree_path)], cwd=root, timeout=120)})
+        elif worktree_path and worktree_path.exists() and worktree_empty:
+            worktree_path.rmdir()
+            applied.append(
+                {
+                    "command": f"rmdir {worktree_path}",
+                    "result": {"ok": True, "stdout": "", "stderr": "", "returncode": 0},
+                }
+            )
         if branch in local_branches:
             delete_flag = "-d" if merged else "-D"
             applied.append({"command": f"git branch {delete_flag} {branch}", "result": _execute_checked(["git", "branch", delete_flag, branch], cwd=root, timeout=120)})
