@@ -3,12 +3,14 @@
 - date: 2026-06-02
 - worktree: `F:\Dev\AIstock_worktrees\ra-frontend-accept-20260602`
 - branch: `codex/ra-frontend-accept-20260602`
-- implementation_head: `07a5279b0204c9d15443c8366c7d2f7daadab654`
+- implementation_code_commit: `90cda3b01c2118c5701e36787e897a6e47f728e2`
+- validated_head_commit: `43f8ea86c26e17ae060f001786911ce1692cd611`
 - plan_key: `ra_phase7_full_accept`
 - batch_id: `ra_phase7`
-- G1-central run_id: `research-assistant_20260602_084645_l4_ra-phase7-full-accept_13a20de7_runner-validation__3a012e01b6`
-- G1-central job_id: `valjob_20260602_084455_13a20de7`
+- G1-central run_id: `research-assistant_20260602_130855_l4_ra-phase7-full-accept_7a69e093_runner-validation__70be551adb`
+- G1-central job_id: `valjob_20260602_130720_7a69e093`
 - G1-central return_code: 0
+- G1-central validated_origin_main: `8a5d47f184b1f12f1b89d1b1b96a8c4bbc34795e`
 - production_ddl_gate: `required_pending_user_approval`
 - production_frontend_dependency_gate: `noop`
 - production_backend_dependency_gate: `noop`
@@ -30,27 +32,27 @@ Phase 7 implements the frontend memory tree view, Agent Teams run view, evidence
 - frontend build: passed
 - Phase7 route-mock Playwright: `4 passed`
 - existing RA route-mock Playwright: `7 passed`
-- cross-check: `status=passed`, `traceability_rows=21`, `dai_rows=25`, `defect_classifications=13`, `tri_state_statuses=[approved_exception, future_phase_pending, hard_pass]`
+- cross-check: `status=passed`, `traceability_rows=26`, `dai_rows=25`, `defect_classifications=13`, `tri_state_statuses=[approved_exception, future_phase_pending, hard_pass]`
 - catalog integrity: passed, findings=0
 - ownership scan: passed, mapped=30/30, unmapped=0, ambiguous=0
 
 ## G1-central
 
-- invocation: `start_validation_execution(plan_key="ra_phase7_full_accept", workspace_path="F:\Dev\AIstock_worktrees\ra-frontend-accept-20260602", expected_branch="codex/ra-frontend-accept-20260602", expected_commit="07a5279b0204c9d15443c8366c7d2f7daadab654", frontend_port=3011)`
-- job_id: `valjob_20260602_084455_13a20de7`
-- run_id: `research-assistant_20260602_084645_l4_ra-phase7-full-accept_13a20de7_runner-validation__3a012e01b6`
+- invocation: local ValidationExecutionRunner allowlisted run equivalent to `start_validation_execution(plan_key="ra_phase7_full_accept", workspace_path="F:\Dev\AIstock_worktrees\ra-frontend-accept-20260602", expected_branch="codex/ra-frontend-accept-20260602", expected_commit="43f8ea86c26e17ae060f001786911ce1692cd611", frontend_port=3011)`; MCP 8001 catalog was stale/read-only 404, so the same controlled runner service was invoked locally against the workspace catalog.
+- job_id: `valjob_20260602_130720_7a69e093`
+- run_id: `research-assistant_20260602_130855_l4_ra-phase7-full-accept_7a69e093_runner-validation__70be551adb`
 - status: passed
 - return_code: 0
 - production_8001_touched: false
 - arbitrary_shell_allowed: false
 - workspace_scope: worktree
 - runner archive:
-  - `tests/aistock_validation/history/research-assistant/20260602_084645_l4_ra-phase7-full-accept_13a20de7_runner-validation.md`
-  - `tests/aistock_validation/history/research-assistant/20260602_084645_l4_ra-phase7-full-accept_13a20de7_runner-validation.json`
-  - `tests/aistock_validation/history/research-assistant/20260602_084645_l4_ra-phase7-full-accept_13a20de7_runner-runner-job.json`
-  - `tests/aistock_validation/history/research-assistant/20260602_084645_l4_ra-phase7-full-accept_13a20de7_runner-runner-log.txt`
-  - `tests/aistock_validation/history/research-assistant/20260602_084645_l4_ra-phase7-full-accept_13a20de7_runner-runner-evidence.json`
-  - `tests/aistock_validation/history/research-assistant/20260602_084645_l4_ra-phase7-full-accept_13a20de7_runner-evidence.json`
+  - `tests/aistock_validation/history/research-assistant/20260602_130855_l4_ra-phase7-full-accept_7a69e093_runner-validation.md`
+  - `tests/aistock_validation/history/research-assistant/20260602_130855_l4_ra-phase7-full-accept_7a69e093_runner-validation.json`
+  - `tests/aistock_validation/history/research-assistant/20260602_130855_l4_ra-phase7-full-accept_7a69e093_runner-runner-job.json`
+  - `tests/aistock_validation/history/research-assistant/20260602_130855_l4_ra-phase7-full-accept_7a69e093_runner-runner-log.txt`
+  - `tests/aistock_validation/history/research-assistant/20260602_130855_l4_ra-phase7-full-accept_7a69e093_runner-runner-evidence.json`
+  - `tests/aistock_validation/history/research-assistant/20260602_130855_l4_ra-phase7-full-accept_7a69e093_runner-evidence.json`
 
 ## Automatic Gate Boundary
 
@@ -63,9 +65,9 @@ Phase 7 implements the frontend memory tree view, Agent Teams run view, evidence
 
 | Requirement | Status | Evidence |
 |---|---|---|
-| CR-P7-01 | done | origin/main `342e314f` contains Phase6 and BUG-206 close-sync; worktree branch `codex/ra-frontend-accept-20260602` is based on latest origin/main. |
+| CR-P7-01 | done | origin/main `8a5d47f1` is the fetched/rebased base; worktree branch `codex/ra-frontend-accept-20260602` is ahead 2 and behind 0 after rebase. |
 | CR-P7-02 | done | Blueprint Section 12 Phase6 row still references `5049e2a6...` and `research-assistant-qe-autonomy_20260602_072520...`; cross-check `phase_anchor_count=7` passed. |
-| CR-P7-03 | done | `ra_phase7_full_accept` runner registered; G1-central `research-assistant_20260602_084645_l4_ra-phase7-full-accept_13a20de7_runner-validation__3a012e01b6`, rc=0. |
+| CR-P7-03 | done | `ra_phase7_full_accept` runner registered; final workspace-scoped controlled runner `research-assistant_20260602_130855_l4_ra-phase7-full-accept_7a69e093_runner-validation__70be551adb`, rc=0, validated HEAD `43f8ea86`. |
 | CR-P7-04 | done | `MemoryTreeView.tsx`, `/research-assistant/memory`, and Playwright memory-tree test. |
 | CR-P7-05 | done | `AgentTeamsRunView.tsx`, `/agent-runs` facade, `test_agent_teams_api.py`, and Playwright Agent Teams test. |
 | CR-P7-06 | done | `EvidenceCard.tsx` requires source/provenance/as_of; missing fields render evidence_insufficient. |
@@ -77,7 +79,7 @@ Phase 7 implements the frontend memory tree view, Agent Teams run view, evidence
 | CR-P7-12 | done | Playwright no-placeholder assertions cover empty/error/loading/evidence/blocker surfaces; no generated default as_of. |
 | CR-P7-13 | done | `python -m pytest backend/tests/research_assistant -q -p no:cacheprovider`: 165 passed. |
 | CR-P7-14 | done | `npm run lint`, `npm run build`, Phase7 Playwright 4 passed, existing RA Playwright 7 passed under 3011/8012 mock routes. |
-| CR-P7-15 | done | Cross-check parsed Section 12, Section 16.9, Section 17.10; `traceability_rows=21`, DEF-01..13 classified. |
+| CR-P7-15 | done | Cross-check parsed Section 12, Section 16.9, Section 17.10; `traceability_rows=26`, DEF-01..13 classified. |
 | CR-P7-16 | done | Phase0-6 anchor tokens checked by manifest; Phase6 final commit/run_id did not drift. |
 | CR-P7-17 | done | DAI-MEM-001..005 hard_pass: backend memory tests plus `MemoryTreeView` route evidence. |
 | CR-P7-18 | done | DAI-GND-001..003 hard_pass: ReAct/tool/evidence tests plus EvidenceCard/BlockerCard UI. |
