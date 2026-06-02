@@ -753,6 +753,36 @@ export type ValidationIssueWorkflowSummary = JsonObject & {
   reason_codes?: string[];
 };
 
+export type ValidationIssueCandidateItem = JsonObject & {
+  candidate_id: string;
+  title?: string;
+  source_type?: string;
+  module_id?: string;
+  severity?: string;
+  status?: string;
+  fingerprint?: string;
+  run_count?: number;
+  github_issue_number?: string | number | null;
+  github_issue_url?: string | null;
+  linked_pr_url?: string | null;
+  evidence_refs?: string[];
+  recommended_validation?: string[];
+  allowed_write_scope?: string[];
+  source_path?: string;
+  source_paths?: string[];
+};
+
+export type ValidationIssueCandidateSummary = JsonObject & {
+  candidate_count?: number;
+  open_count?: number;
+  linked_issue_count?: number;
+  missing_issue_link_count?: number;
+  by_status?: Record<string, number>;
+  by_module?: Record<string, number>;
+  by_severity?: Record<string, number>;
+  reason_codes?: string[];
+};
+
 export type ValidationPipelineTestItem = JsonObject & {
   test_id: string;
   title?: string;
@@ -1004,6 +1034,12 @@ export const validationApi = {
   },
   issueWorkflowDetail(bugId: string): Promise<ValidationIssueWorkflowItem> {
     return unwrap<ValidationIssueWorkflowItem>(`/validation/issues/${encodeURIComponent(bugId)}/workflow`);
+  },
+  issueCandidateSummary(): Promise<ValidationIssueCandidateSummary> {
+    return unwrap<ValidationIssueCandidateSummary>("/validation/issues/candidates/summary");
+  },
+  issueCandidates(query: ValidationListQuery & { severity?: string; status?: string } = {}): Promise<ValidationPage<ValidationIssueCandidateItem>> {
+    return unwrap<ValidationPage<ValidationIssueCandidateItem>>(appendQuery("/validation/issues/candidates", query));
   },
   moduleDetailSummary(): Promise<ValidationModuleQualitySummary> {
     return unwrap<ValidationModuleQualitySummary>("/validation/modules/detail-summary");

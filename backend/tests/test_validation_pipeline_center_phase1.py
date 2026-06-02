@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 from backend.services.validation.pipeline_center import ValidationPipelineCenterService
@@ -125,8 +127,9 @@ class _FakeModuleRegistry:
         return [SimpleNamespace(module_id="validation.center"), SimpleNamespace(module_id="validation.runner")]
 
 
-def _service() -> ValidationPipelineCenterService:
+def _service(repo_root: Path | None = None) -> ValidationPipelineCenterService:
     return ValidationPipelineCenterService(
+        repo_root=repo_root,
         history_store=_FakeHistoryStore(),
         plan_catalog=_FakePlanCatalog(),
         finding_store=_FakeFindingStore(
@@ -192,6 +195,56 @@ def test_issue_workflow_and_github_sync_distinguish_missing_scope_and_links() ->
     detail = service.issue_workflow_detail("BUG-002")
     assert detail is not None
     assert detail["gate_state"] == "triage_only_until_allowed_write_scope_is_set"
+
+
+def test_issue_candidate_queue_reads_context_pack_and_dedupes_payloads(tmp_path: Path) -> None:
+    candidate_dir = tmp_path / "tests" / "aistock_validation" / "runs" / "candidates"
+    candidate_dir.mkdir(parents=True)
+    context_pack = {
+        "schema_version": "aistock_ci_failure_context_pack_v1",
+        "pack_id": "CP-CI-abc123",
+        "module": "validation",
+        "severity": "P1",
+        "problem_statement": "Nightly validation failed",
+        "github_issue_number": "521",
+        "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/521",
+        "failure_event": {
+            "event_id": "FE-CI-abc123",
+            "fingerprint": "ci-abc123",
+            "candidate_status": "new",
+            "evidence_refs": ["https://github.com/licong01-cloud/AIstock/actions/runs/1"],
+        },
+        "agent_handoff": {
+            "required_verification": ["python -m nox -s validation_center_backend"],
+            "allowed_write_scope": ["backend/services/validation/pipeline_center.py"],
+        },
+    }
+    github_payload = {
+        "schema_version": "aistock_ci_failure_github_issue_payload_v1",
+        "title": "P1 Nightly failed",
+        "labels": ["P1", "severity:p1", "module:validation"],
+        "dedupe": {"fingerprint": "ci-abc123", "marker": "<!-- marker -->"},
+        "run_count": 2,
+    }
+    (candidate_dir / "context-pack.json").write_text(json.dumps(context_pack), encoding="utf-8")
+    (candidate_dir / "github-payload.json").write_text(json.dumps(github_payload), encoding="utf-8")
+
+    service = _service(repo_root=tmp_path)
+    payload = service.issue_candidates(page=1, page_size=10)
+    summary = service.issue_candidate_summary()
+
+    assert payload["total"] == 1
+    item = payload["items"][0]
+    assert item["candidate_id"] == "CP-CI-abc123"
+    assert item["fingerprint"] == "ci-abc123"
+    assert item["module_id"] == "validation"
+    assert item["github_issue_number"] == "521"
+    assert item["run_count"] == 2
+    assert item["recommended_validation"] == ["python -m nox -s validation_center_backend"]
+    assert item["allowed_write_scope"] == ["backend/services/validation/pipeline_center.py"]
+    assert len(item["source_paths"]) == 2
+    assert summary["candidate_count"] == 1
+    assert summary["linked_issue_count"] == 1
 
 
 def test_phase1_cards_include_all_top_navigation_domains() -> None:

@@ -394,6 +394,33 @@ def get_validation_issue_workflow(
     return _success(detail)
 
 
+@router.get("/issues/candidates/summary", response_model=ValidationResponse, summary="Summarize issue workflow candidates")
+def get_validation_issue_candidates_summary(
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+):
+    return _success(pipeline_center.issue_candidate_summary())
+
+
+@router.get("/issues/candidates", response_model=ValidationResponse, summary="List issue workflow candidates")
+def list_validation_issue_candidates(
+    module: str | None = Query(None),
+    severity: str | None = Query(None),
+    status: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    pipeline_center: ValidationPipelineCenterService = Depends(get_pipeline_center_service),
+):
+    return _success(
+        pipeline_center.issue_candidates(
+            module=module,
+            severity=severity,
+            status=status,
+            page=page,
+            page_size=page_size,
+        )
+    )
+
+
 @router.get("/modules/detail-summary", response_model=ValidationResponse, summary="Get module quality detail summary")
 def get_validation_modules_detail_summary(
     include: str | None = Query(None),

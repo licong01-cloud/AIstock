@@ -556,6 +556,20 @@ def test_quality_findings_and_bug_agent_context(client: TestClient) -> None:
     assert agent_context["closure_requirements"] == ["verification_run_id required"]
 
 
+def test_issue_candidate_endpoints_are_read_only_and_empty_safe(client: TestClient) -> None:
+    summary = client.get("/api/v1/validation/issues/candidates/summary")
+    assert summary.status_code == 200
+    summary_payload = summary.json()["data"]
+    assert summary_payload["schema_version"] == "aistock_validation_candidate_queue_v1"
+    assert summary_payload["production_8001_touched"] is False
+
+    candidates = client.get("/api/v1/validation/issues/candidates", params={"page_size": 10})
+    assert candidates.status_code == 200
+    payload = candidates.json()["data"]
+    assert payload["schema_version"] == "aistock_validation_candidate_queue_v1"
+    assert "items" in payload
+
+
 def test_finding_store_accepts_bom_encoded_bug_json_and_preserves_invalid_json_diagnostics(tmp_path: Path) -> None:
     roots = _write_quality_inputs(tmp_path)
     bug_root = roots["bug_root"]
