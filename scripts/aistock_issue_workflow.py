@@ -405,6 +405,16 @@ def _compact_finalizer(value: Any) -> dict[str, Any] | None:
         compact["close_sync_pr_merge"] = _pick(value["close_sync_pr_merge"], "workflow_gate", "merge_commit", "blocking")
     if "cleanup" in value and isinstance(value["cleanup"], dict):
         compact["cleanup"] = _pick(value["cleanup"], "workflow_gate", "branch", "worktree", "sync_root", "blocking", "warnings")
+    if "close_sync_cleanup" in value and isinstance(value["close_sync_cleanup"], dict):
+        compact["close_sync_cleanup"] = _pick(
+            value["close_sync_cleanup"],
+            "workflow_gate",
+            "branch",
+            "worktree",
+            "sync_root",
+            "blocking",
+            "warnings",
+        )
     if "postmortem" in value:
         postmortem = _compact_postmortem(value["postmortem"])
         if postmortem:
@@ -4915,6 +4925,26 @@ def _path_is_registered_worktree(path: Path, *, cwd: Path | None = None) -> bool
     return target in _registered_worktree_paths(cwd=cwd)
 
 
+def _registered_worktree_for_branch(branch: str, *, cwd: Path | None = None) -> Path | None:
+    if not branch:
+        return None
+    result = _run_command(["git", "worktree", "list", "--porcelain"], cwd=cwd or REPO_ROOT, timeout=30)
+    if not result.get("ok"):
+        return None
+    current: Path | None = None
+    expected_ref = f"refs/heads/{branch}"
+    for line in str(result.get("stdout") or "").splitlines():
+        if line.startswith("worktree "):
+            raw_path = line.removeprefix("worktree ").strip()
+            current = Path(raw_path) if raw_path else None
+            continue
+        if line.startswith("branch ") and current:
+            ref = line.removeprefix("branch ").strip()
+            if ref in {branch, expected_ref}:
+                return current
+    return None
+
+
 def _git_refs_tree_equivalent(left: str, right: str, *, cwd: Path | None = None) -> bool:
     if not left or not right:
         return False
@@ -5875,6 +5905,57 @@ def _merge_close_sync_pr_if_ready(
     }
 
 
+def _path_differs_from_canonical_root(path: Path) -> bool:
+    canonical = _canonical_root()
+    try:
+        return path.resolve() != canonical.resolve()
+    except OSError:
+        return path != canonical
+
+
+def _close_sync_worktree_for_cleanup(
+    *,
+    branch: str,
+    close_sync_commit: dict[str, Any],
+) -> str | None:
+    root_text = str(close_sync_commit.get("root") or "").strip()
+    if root_text:
+        root_path = Path(root_text)
+        if _path_differs_from_canonical_root(root_path):
+            return str(root_path)
+    discovered = _registered_worktree_for_branch(branch, cwd=_canonical_root()) if branch else None
+    if discovered and _path_differs_from_canonical_root(discovered):
+        return str(discovered)
+    return None
+
+
+def _build_close_sync_cleanup_after_merge_plan(
+    *,
+    bug_id: str,
+    close_sync_commit: dict[str, Any],
+    close_sync_pr_merge: dict[str, Any],
+    cleanup: bool,
+    apply: bool,
+) -> dict[str, Any] | None:
+    if not cleanup or close_sync_pr_merge.get("workflow_gate") not in {"merged", "already_merged"}:
+        return None
+    branch = str(close_sync_commit.get("branch") or "").strip()
+    worktree = _close_sync_worktree_for_cleanup(
+        branch=branch,
+        close_sync_commit=close_sync_commit,
+    )
+    if not branch or not worktree:
+        return None
+    return build_cleanup_after_merge_plan(
+        branch=branch,
+        bug_id=bug_id,
+        worktree=worktree,
+        pr_url=close_sync_commit.get("pr_url") or close_sync_pr_merge.get("pr_url"),
+        apply=bool(apply and close_sync_pr_merge.get("auto_merge")),
+        sync_root=False,
+    )
+
+
 def build_merge_finalizer_plan(
     *,
     bug_id: str,
@@ -5999,6 +6080,13 @@ def build_merge_finalizer_plan(
             apply=merge_close_sync_pr,
             sync_root=sync_root,
         )
+    close_sync_cleanup_plan = _build_close_sync_cleanup_after_merge_plan(
+        bug_id=canonical_bug_id,
+        close_sync_commit=close_sync_commit,
+        close_sync_pr_merge=close_sync_pr_merge,
+        cleanup=cleanup,
+        apply=apply,
+    )
     try:
         postmortem = build_postmortem_plan(bug_id=canonical_bug_id)
     except WorkflowError as exc:
@@ -6014,11 +6102,18 @@ def build_merge_finalizer_plan(
         final_blocking.extend(close_sync_pr_merge.get("blocking") or [])
     if cleanup_plan and cleanup_plan.get("workflow_gate") == "blocked":
         final_blocking.extend(cleanup_plan.get("blocking") or [])
+    if close_sync_cleanup_plan and close_sync_cleanup_plan.get("workflow_gate") == "blocked":
+        final_blocking.extend(close_sync_cleanup_plan.get("blocking") or [])
+
+    cleanup_complete = bool(cleanup_plan and cleanup_plan.get("workflow_gate") == "cleanup_done")
+    close_sync_cleanup_complete = (
+        close_sync_cleanup_plan is None or close_sync_cleanup_plan.get("workflow_gate") == "cleanup_done"
+    )
 
     payload.update(
         {
             "workflow_gate": "blocked" if final_blocking else (
-                "complete" if cleanup_plan and cleanup_plan.get("workflow_gate") == "cleanup_done" else "close_sync_persisted"
+                "complete" if cleanup_complete and close_sync_cleanup_complete else "close_sync_persisted"
             ),
             "blocking": final_blocking,
             "source_pr_check": source_pr_check,
@@ -6027,6 +6122,7 @@ def build_merge_finalizer_plan(
             "close_sync_commit": close_sync_commit,
             "close_sync_pr_merge": close_sync_pr_merge,
             "cleanup": cleanup_plan,
+            "close_sync_cleanup": close_sync_cleanup_plan,
             "postmortem": postmortem,
             "next_actions": [],
         }
@@ -6037,6 +6133,8 @@ def build_merge_finalizer_plan(
         payload["next_actions"].append("run_cleanup_after_merge")
     if cleanup_plan and cleanup_plan.get("workflow_gate") == "ready_for_cleanup":
         payload["next_actions"].append("rerun_cleanup_after_merge_with_apply")
+    if close_sync_cleanup_plan and close_sync_cleanup_plan.get("workflow_gate") == "ready_for_cleanup":
+        payload["next_actions"].append("rerun_close_sync_cleanup_after_merge_with_apply")
     _write_state(
         canonical_bug_id,
         state="complete" if payload["workflow_gate"] == "complete" else "close_synced",
@@ -6046,6 +6144,7 @@ def build_merge_finalizer_plan(
         close_sync_commit=close_sync_commit,
         close_sync_pr_merge=close_sync_pr_merge,
         cleanup_plan=cleanup_plan,
+        close_sync_cleanup_plan=close_sync_cleanup_plan,
         postmortem=postmortem,
         next_actions=payload["next_actions"],
     )
