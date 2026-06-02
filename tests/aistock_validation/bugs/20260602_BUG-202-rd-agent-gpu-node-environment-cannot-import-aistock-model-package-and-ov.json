@@ -37,7 +37,7 @@
   "first_seen_at": "2026-06-02T04:59:03.691928Z",
   "fix_branch": null,
   "fix_commit": "4cb144be3b6ec821dc7075f7fc60f88ebce2305d",
-  "fixed_at": "2026-06-02T06:03:29.816062Z",
+  "fixed_at": "2026-06-02T06:10:23.984039Z",
   "github_issue_number": 537,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/537",
   "last_seen_at": "2026-06-02T04:59:03.691928Z",
@@ -67,7 +67,7 @@
     "source_event_id": "FE-20260602-18a073aa465e"
   },
   "validation_evidence": [
-    "remote init_instance_by_config smoke: AIStockXGBModel and LambdaRankModel import passed; remote xgboost train + lightgbm lambdarank train + catboost CPU train passed; qlib CatBoostModel forced CPU smoke passed; local python -m nox -s l0 validation_module_registry_l0 passed; gh pr checks 541 passed 16/16 after origin/main merge refresh"
+    "remote init_instance_by_config smoke: AIStockXGBModel and LambdaRankModel import passed; remote xgboost train + lightgbm lambdarank train + catboost CPU train passed; qlib CatBoostModel forced CPU fit smoke passed; local python -m nox -s l0 validation_module_registry_l0 passed; PR #541 checks passed 16/16; close-sync PR #544 checks green"
   ],
   "verification_run_id": null
 }
