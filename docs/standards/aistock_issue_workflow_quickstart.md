@@ -172,6 +172,10 @@ If `triage-ci-issue` returns `classification_recommendation=infra_blocker` or
 runners, runner API permission failures, or missing
 `AISTOCK_RUNNER_HEALTH_TOKEN`. These issues should restore infrastructure and
 rerun CI/Nightly, not consume a developer window as a code repair.
+Auto-filed infra-only CI/Nightly issues should therefore expose only the
+`triage-ci-issue` entrypoint, `needs_bug_json=false`, and an infra action card.
+They must not present `promote-ci-issue` or `run --bug-id` as the next command
+unless triage later reclassifies the failure as a real code or test regression.
 
 ## Submit Or Register A New BUG
 
