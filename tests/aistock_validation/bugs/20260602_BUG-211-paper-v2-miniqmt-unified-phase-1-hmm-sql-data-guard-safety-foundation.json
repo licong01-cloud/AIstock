@@ -56,8 +56,8 @@
   "expected": "HMM missing preset/date/non-numeric/no coverage fails with readable error context and no default coefficient; malformed symbols such as 603819.S2026... are rejected before DB SQL; full-market kline requests are chunked/cached/logged with correlation and do not repeat during submit ticks; LocalSim and MiniQMT use the same DailySelectionEvidence hash/status. BUG-181/193/199/202 inheritance evidence is recorded.",
   "first_seen_at": "2026-06-02T09:12:35.195169Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e6e2da1b79cc46e5b8babf5c5a07cfb6b60cd00e",
+  "fixed_at": "2026-06-02T12:33:46.452318Z",
   "github_issue_number": 568,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/568",
   "last_seen_at": "2026-06-02T09:17:53.858733Z",
@@ -65,6 +65,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/574",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -80,7 +81,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -89,5 +90,8 @@
     "fingerprint": "9a8316010af1127dae2850ba",
     "source_event_id": "FE-20260602-9a8316010af1"
   },
+  "validation_evidence": [
+    "PR #574 merged into feature/paper-v2-miniqmt-unified-integration-20260602; checks_passed; local validation record tests/aistock_validation/history/paper_v2_miniqmt_unified/20260602_bug211_phase1_hmm_sql_data_guard.md"
+  ],
   "verification_run_id": null
 }
