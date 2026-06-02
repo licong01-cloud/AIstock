@@ -1,0 +1,73 @@
+{
+  "actual": "POST /api/v1/strategy-packages/from-qe-experiment returned 500 Internal Server Error with duplicate key ux_strategy_pkg_source_version; Playwright failed JSON.parse with Unexpected token I and skipped 9 UI real-flow cases.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260602_BUG-222-strategypackage-qe-import-duplicate-source-returns-raw-500-and-blocks-pa.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/strategy_package/repository.py",
+    "backend/tests/strategy_package/test_repository_service.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-222",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-02T15:36:42.799563Z",
+  "description": "POST /api/v1/strategy-packages/from-qe-experiment returned 500 Internal Server Error with duplicate key ux_strategy_pkg_source_version; Playwright failed JSON.parse with Unexpected token I and skipped 9 UI real-flow cases.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260602-591489ccf4e9",
+      "timestamp": "2026-06-02T15:36:42.799559Z"
+    },
+    {
+      "timestamp": "2026-06-02T15:51:53.875620Z",
+      "actor": "codex_issue_workflow",
+      "action": "expand_allowed_write_scope",
+      "note": "Scope expanded after aistock_issue_workflow run --changed-file plan for BUG-222."
+    }
+  ],
+  "evidence_uris": [
+    "tests/aistock_validation/history/paper_trading_v2/20260602_230614_l3_paper-v2-miniqmt-unified-integration-full-validation-before-main-merge.md; tmp/paper_v2_ui_20260602_233000_correct_env.log; tmp/playwright-results/tests-paper-v2-paper-v2-re-f1a73--strategies-and-paper-entry-chromium/error-context.md"
+  ],
+  "expected": "StrategyPackage QE import is idempotent or returns structured JSON with existing package/conflict context; Paper v2 real-backend UI setup can continue and paper_v2_ui reaches all downstream cases.",
+  "first_seen_at": "2026-06-02T15:36:42.799563Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 601,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/601",
+  "last_seen_at": "2026-06-02T15:36:42.799563Z",
+  "module": "strategy_package",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "BACKEND_PORT=8012 FRONTEND_PORT=3012 PAPER_V2_API_BASE=http://127.0.0.1:8012/api/v1 NEXT_PUBLIC_API_BASE=http://127.0.0.1:8012/api/v1 python -m nox -s paper_v2_ui -- 8012 3012",
+  "required_verification": [
+    "l0",
+    "paper_v2_backend",
+    "validation_module_registry_l0",
+    "paper_v2_l3",
+    "qe_read_l3"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "strategy_package"
+  ],
+  "title": "StrategyPackage QE import duplicate source returns raw 500 and blocks Paper v2 UI E2E",
+  "trigger_condition": {
+    "fingerprint": "591489ccf4e9507eb41468e1",
+    "source_event_id": "FE-20260602-591489ccf4e9"
+  },
+  "verification_run_id": null,
+  "workflow_gate": "allowed"
+}

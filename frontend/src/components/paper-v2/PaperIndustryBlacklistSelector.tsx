@@ -76,6 +76,7 @@ export default function PaperIndustryBlacklistSelector({ selected, onChange }: P
             <div key={group.l1_code}>
               <button
                 className="pv2-link-button"
+                data-testid={`paper-industry-group-${group.l1_code}`}
                 type="button"
                 onClick={() => setExpanded((current) => {
                   const next = new Set(current);
@@ -86,9 +87,9 @@ export default function PaperIndustryBlacklistSelector({ selected, onChange }: P
                 {expanded.has(group.l1_code) ? "▼" : "▶"} {group.l1_name}
               </button>
               {expanded.has(group.l1_code) ? group.children.map((child) => (
-                <div key={child.l2_code} className="pv2-row-actions" style={{ justifyContent: "space-between", padding: "4px 0 4px 18px" }}>
+                <div key={child.l2_code} className="pv2-row-actions" data-testid={`paper-industry-child-${child.l2_code}`} style={{ justifyContent: "space-between", padding: "4px 0 4px 18px" }}>
                   <span>{child.l2_name}</span>
-                  <button className="pv2-button-ghost" type="button" disabled={selectedCodes.has(child.l2_code)} onClick={() => add(group, child)}>
+                  <button className="pv2-button-ghost" data-testid={`paper-industry-add-${child.l2_code}`} type="button" disabled={selectedCodes.has(child.l2_code)} onClick={() => add(group, child)}>
                     {selectedCodes.has(child.l2_code) ? "已选择" : "忽略"}
                   </button>
                 </div>
@@ -99,9 +100,9 @@ export default function PaperIndustryBlacklistSelector({ selected, onChange }: P
         <div className="pv2-card" style={{ maxHeight: 260, overflowY: "auto" }}>
           {selected.length === 0 ? <span className="pv2-muted">未选择忽略行业。</span> : null}
           {selected.map((item) => (
-            <div key={item.l2_code} className="pv2-row-actions" style={{ justifyContent: "space-between", marginBottom: 8 }}>
+            <div key={item.l2_code} className="pv2-row-actions" data-testid={`paper-industry-selected-${item.l2_code}`} style={{ justifyContent: "space-between", marginBottom: 8 }}>
               <span><strong>{item.l2_name}</strong><br /><span className="pv2-muted">{item.l1_name} / {item.l2_code}</span></span>
-              <button className="pv2-button-ghost" type="button" onClick={() => remove(item.l2_code)}>移除</button>
+              <button className="pv2-button-ghost" data-testid={`paper-industry-remove-${item.l2_code}`} type="button" onClick={() => remove(item.l2_code)}>移除</button>
             </div>
           ))}
         </div>
