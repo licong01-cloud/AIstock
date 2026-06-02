@@ -21,8 +21,8 @@
   python qrun_limit_minute.py conf.yaml --train-only      # 只训练，跳过回测
   python qrun_limit_minute.py conf.yaml --pred-backtest combined_prediction.pkl  # 从已有预测直接回测
 """
+# ruff: noqa: E402
 import argparse
-import gc
 import os
 import random
 import shutil
@@ -468,7 +468,7 @@ def save_minute_trades_from_recorder(recorder, output_dir='.'):
             print(f'[INFO] ✓ Summary saved: {summary_path}')
             print(f'[INFO]   Samples: {len(df)}')
             print(f'[INFO]   Avg early 30min: {df["early_pct"].mean():.2f}%')
-            print(f'[INFO]   v25 target: 88.79%')
+            print('[INFO]   v25 target: 88.79%')
             
             if df['early_pct'].mean() > 70:
                 print('[INFO]   ✅ Matches v25 high-weight pattern')
@@ -500,7 +500,8 @@ def patch_backtest_config(config: dict):
     if isinstance(config, dict):
         for key, val in config.items():
             if key == 'exchange_kwargs' and isinstance(val, dict):
-                _maybe_enable_board_lot_exchange(val); lt = val.get('limit_threshold')
+                _maybe_enable_board_lot_exchange(val)
+                lt = val.get('limit_threshold')
                 if isinstance(lt, list):
                     val['limit_threshold'] = tuple(lt)
                 # V24/V25 策略需要额外分钟字段；V25 必须用 $factor
@@ -547,7 +548,6 @@ def load_benchmark_series(config=None):
         # 从 config 提取回测区间
         start, end = "2024-07-01", "2026-04-27"
         if config:
-            _extract_backtest_range(config, lambda s, e: None)  # just to find range
             # 简单递归查找 backtest.start_time / end_time
             bt = _find_backtest_config(config)
             if bt:
@@ -1273,7 +1273,7 @@ def main():
     # 限制 qlib 并行度（必须在 qlib.init 之前！）
     # 默认 kernels=28 会导致 28 个子进程各自继承父进程内存
     C["kernels"] = 4
-    print(f"[INFO] Limited qlib kernels to 4")
+    print("[INFO] Limited qlib kernels to 4")
 
     isolation_manifest = None
     if args.backtest_only:
@@ -1343,7 +1343,6 @@ def _run_pred_backtest(config: dict, experiment_name: str, pred_path: Path):
     5. 执行 PortAnaRecord（选股+分钟线回测：收益/回撤/Sharpe/换手率/持仓）
     """
     import copy
-    import pickle
     import pandas as pd
     from qlib.utils import init_instance_by_config
     from qlib.workflow import R
@@ -1530,7 +1529,6 @@ def _run_backtest_only(config: dict, experiment_name: str):
     from qlib.utils import init_instance_by_config
     from qlib.workflow import R
     from qlib.data.dataset import Dataset
-    from qlib.model.base import Model
     from qlib.model.trainer import fill_placeholder
 
     task_config = config.get("task")
@@ -1541,7 +1539,6 @@ def _run_backtest_only(config: dict, experiment_name: str):
             f"{ERR_SOURCE_PARAMS_MISSING}: Backtest-only source params.pkl not found "
             f"under {source_params_dir}; target mlruns is reserved for recorder writes."
         )
-    rec_id = str(params_path)
     print(f"[INFO] Loaded trained model from isolated source params.pkl {params_path}")
 
     # 重建 dataset（从配置重新初始化，不需要训练数据）

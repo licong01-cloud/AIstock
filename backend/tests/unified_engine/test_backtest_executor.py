@@ -8,9 +8,9 @@ import pytest
 import asyncio
 import threading
 import time
-from unittest.mock import MagicMock, AsyncMock, patch, call
+from unittest.mock import MagicMock, AsyncMock, patch
 
-from backend.services.quantevolver.experiment_config import ExperimentConfig, HmmConfig
+from backend.services.quantevolver.experiment_config import ExperimentConfig
 from backend.services.quantevolver.experiment_config_builders import (
     build_config_from_evolution_loop,
     build_config_from_strategy_evo_loop,

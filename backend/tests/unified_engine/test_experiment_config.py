@@ -272,7 +272,8 @@ class TestBuildConfigFromExpRecord:
         # 合法 JSON 但类型是 list，不是 dict
         with pytest.raises(ValueError, match="unfilled_handler_params must be a dict"):
             _build_unfilled_handler_params(json.dumps([1, 2, 3]))
-    def test_minimal(self):
+
+    def test_evolution_loop_minimal(self):
         cfg = build_config_from_evolution_loop(
             EVOLUTION_CONFIG_MINIMAL, EVOLUTION_TASK_MINIMAL
         )

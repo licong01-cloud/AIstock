@@ -77,6 +77,12 @@
       "actor": "Codex",
       "note": "validation_center_backend passed after final gate follow-up: 321 passed in 117.95s; coverage line=79.92 branch=62.07 status=passed; production runtime and DB untouched.",
       "timestamp": "2026-06-02T06:20:00Z"
+    },
+    {
+      "action": "pre_pr_lint_fix_completed",
+      "actor": "Codex",
+      "note": "Fixed changed-file Ruff pre-PR lint findings without changing ensemble semantics; reran compileall, targeted pytest, Ruff, and changed-only guardrail successfully.",
+      "timestamp": "2026-06-02T06:35:00Z"
     }
   ],
   "evidence_uris": [
@@ -110,7 +116,8 @@
     "qe_data_contract_backend",
     "qe_read_l3_skip_ui",
     "changed_only_guardrail",
-    "targeted_seed_ensemble_pytest"
+    "targeted_seed_ensemble_pytest",
+    "changed_file_ruff_lint"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
