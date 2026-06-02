@@ -30,8 +30,8 @@
   "expected": "Runner health diagnostics try AISTOCK_RUNNER_HEALTH_TOKEN, GH_TOKEN, GITHUB_TOKEN, and gh auth token in order; missing tokens degrade compactly without crashing or promoting runner outage as a code BUG.",
   "first_seen_at": "2026-06-02T15:28:27.839624Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "9576cbe6175a7c4a2d6ea8b7c59a717977ebb347",
+  "fixed_at": "2026-06-02T16:11:12.476170Z",
   "github_issue_number": 599,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/599",
   "last_seen_at": "2026-06-02T15:28:27.839624Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/602",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -54,7 +55,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -63,5 +64,8 @@
     "fingerprint": "8938bdd51afd528f8504bd37",
     "source_event_id": "FE-20260602-8938bdd51afd"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/test_validation_platform_health.py -q -p no:cacheprovider -> 6 passed; python -m ruff check backend/services/validation/platform_health.py backend/tests/test_validation_platform_health.py -> passed; python -m nox -s l0 validation_center_backend validation_catalog_integrity validation_coverage_backend guardrail_changed_files validation_module_registry_l0 -> 6 sessions passed; GitHub PR #602 CI -> all checks passed"
+  ],
   "verification_run_id": null
 }
