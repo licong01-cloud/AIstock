@@ -778,6 +778,29 @@ def test_workflow_smoke_uses_synthetic_issue_and_no_unexpected_dirty_paths(
     assert not list((isolated_workflow_root / "tests" / "aistock_validation" / "bugs").glob("*BUG-000*.json"))
 
 
+def test_nightly_intake_smoke_writes_only_tmp_artifacts_and_handoff(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(workflow, "_git_status_paths", lambda root: [])
+
+    payload = workflow.build_nightly_intake_smoke_plan()
+
+    assert payload["schema_version"] == "aistock_nightly_intake_smoke_v1"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["github_writes"] is False
+    assert payload["unexpected_dirty_paths"] == []
+    assert payload["candidate_history_path"].startswith("tmp/validation/nightly_failure_issue/smoke/")
+    assert "tests/aistock_validation/history" not in payload["candidate_history_path"]
+    for path in payload["artifacts"].values():
+        assert path.startswith("tmp/validation/nightly_failure_issue/smoke/")
+        assert (isolated_workflow_root / path).exists()
+    assert (isolated_workflow_root / payload["candidate_history_path"]).exists()
+    assert "triage-ci-issue" in payload["handoff_entrypoints"]["triage"]
+    assert "promote-ci-issue" in payload["handoff_entrypoints"]["promote"]
+    assert not list((isolated_workflow_root / "tests" / "aistock_validation" / "bugs").glob("*BUG-*.json"))
+
+
 def test_code_intelligence_doctor_reports_bootstrap_command(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,

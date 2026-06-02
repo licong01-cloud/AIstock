@@ -1,7 +1,9 @@
 ﻿from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
+import io
 import json
 import os
 import re
@@ -504,6 +506,20 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 "stop_conditions",
             )
         )
+    elif schema == "aistock_nightly_intake_smoke_v1":
+        compact.update(
+            _pick(
+                payload,
+                "dry_run",
+                "github_writes",
+                "candidate_history_path",
+                "nightly_failed_stages",
+                "unexpected_dirty_paths",
+                "production_gates",
+            )
+        )
+        if isinstance(payload.get("artifacts"), dict):
+            compact["artifacts"] = _pick(payload["artifacts"], "summary", "context", "github_issue_payload")
     elif schema.endswith("_smoke_v1"):
         compact.update(
             _pick(
@@ -3034,6 +3050,147 @@ def build_workflow_smoke_plan(
         if bug_id
         else "python scripts/aistock_issue_workflow.py doctor",
     }
+
+
+def _smoke_nightly_status_payload() -> dict[str, Any]:
+    return {
+        "statuses": {
+            "runnerPreflight": "success",
+            "drSnapshot": "success",
+            "drValidate": "success",
+            "nightlyL3": "failure",
+            "paperV2Live": "skipped",
+        },
+        "run_id": "999999999",
+        "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/999999999",
+    }
+
+
+def _path_under_repo_tmp_validation(path: Path) -> bool:
+    try:
+        rel = path.resolve().relative_to(REPO_ROOT.resolve()).as_posix()
+    except ValueError:
+        return False
+    return rel.startswith("tmp/validation/")
+
+
+def build_nightly_intake_smoke_plan() -> dict[str, Any]:
+    """Dry-run Nightly failure intake artifacts without GitHub or tracked writes."""
+    smoke_root = REPO_ROOT / "tmp" / "validation" / "nightly_failure_issue" / "smoke"
+    status_path = smoke_root / "status.json"
+    summary_path = smoke_root / "summary.json"
+    markdown_path = smoke_root / "body.md"
+    context_path = smoke_root / "context-pack.json"
+    context_md_path = smoke_root / "context-pack.md"
+    issue_payload_path = smoke_root / "github-issue-payload.json"
+    artifacts = {
+        "status": status_path,
+        "summary": summary_path,
+        "markdown": markdown_path,
+        "context": context_path,
+        "context_markdown": context_md_path,
+        "github_issue_payload": issue_payload_path,
+    }
+    blocking: list[str] = []
+    warnings: list[str] = []
+    dirty_before = _git_status_paths(REPO_ROOT)
+    stdout_payload: dict[str, Any] = {}
+    try:
+        _write_json(status_path, _smoke_nightly_status_payload())
+        stdout_buffer = io.StringIO()
+        with contextlib.redirect_stdout(stdout_buffer):
+            exit_code = ci_failure_summary.main(
+                [
+                    "--nightly-status-json",
+                    str(status_path),
+                    "--run-id",
+                    "999999999",
+                    "--run-url",
+                    "https://github.com/licong01-cloud/AIstock/actions/runs/999999999",
+                    "--source-name",
+                    "AIstock Nightly",
+                    "--output",
+                    str(summary_path),
+                    "--markdown-output",
+                    str(markdown_path),
+                    "--context-output",
+                    str(context_path),
+                    "--context-markdown-output",
+                    str(context_md_path),
+                    "--github-issue-payload-output",
+                    str(issue_payload_path),
+                    "--stdout-format",
+                    "compact",
+                ]
+            )
+        if exit_code != 0:
+            blocking.append(f"Nightly intake summary command exited with {exit_code}")
+        stdout_payload = json.loads(stdout_buffer.getvalue() or "{}")
+    except Exception as exc:
+        blocking.append(str(exc))
+
+    for label, path in artifacts.items():
+        if not path.exists():
+            blocking.append(f"missing Nightly intake artifact: {label}={_repo_rel(path)}")
+        if not _path_under_repo_tmp_validation(path):
+            blocking.append(f"Nightly intake artifact is outside tmp/validation: {label}={path}")
+
+    candidate_history = stdout_payload.get("artifacts", {}).get("candidate_history") if isinstance(stdout_payload, dict) else None
+    candidate_history_path = Path(candidate_history) if candidate_history else None
+    if not candidate_history_path:
+        blocking.append("Nightly intake smoke did not persist compact candidate history")
+    elif "tests/aistock_validation/history" in candidate_history_path.as_posix():
+        blocking.append(f"candidate history used tracked history path: {candidate_history_path}")
+    elif not _path_under_repo_tmp_validation(candidate_history_path):
+        blocking.append(f"candidate history is outside tmp/validation: {candidate_history_path}")
+
+    context_pack = _load_json(context_path) if context_path.exists() else {}
+    issue_payload = _load_json(issue_payload_path) if issue_payload_path.exists() else {}
+    handoff = context_pack.get("agent_handoff") if isinstance(context_pack.get("agent_handoff"), dict) else {}
+    entrypoints = handoff.get("workflow_entrypoints") if isinstance(handoff.get("workflow_entrypoints"), dict) else {}
+    body = str(issue_payload.get("body") or "")
+    if "triage-ci-issue --issue <issue-number>" not in body:
+        blocking.append("GitHub Issue payload is missing triage-ci-issue handoff")
+    if "promote-ci-issue --issue <issue-number> --create-registry-worktree --apply" not in body:
+        blocking.append("GitHub Issue payload is missing promote-ci-issue registry worktree handoff")
+    if "triage-ci-issue" not in str(entrypoints.get("triage") or ""):
+        blocking.append("Context Pack is missing triage workflow entrypoint")
+    if "promote-ci-issue" not in str(entrypoints.get("promote") or ""):
+        blocking.append("Context Pack is missing promote workflow entrypoint")
+
+    dirty_after = _git_status_paths(REPO_ROOT)
+    before_paths = {row["path"] for row in dirty_before}
+    new_paths = sorted({row["path"] for row in dirty_after} - before_paths)
+    allowed_prefix = "tmp/validation/nightly_failure_issue/smoke"
+    unexpected = [
+        path for path in new_paths if not (path == allowed_prefix or path.startswith(allowed_prefix + "/"))
+    ]
+    if unexpected:
+        blocking.append(f"Nightly intake smoke created unexpected git-status paths: {unexpected}")
+    if not dirty_before and not dirty_after:
+        warnings.append("git status stayed clean; tmp/validation artifacts are ignored as expected")
+
+    return {
+        "schema_version": "aistock_nightly_intake_smoke_v1",
+        "generated_at": _utc_now(),
+        "workflow_gate": "passed" if not blocking else "blocked",
+        "blocking": blocking,
+        "warnings": warnings,
+        "dry_run": True,
+        "github_writes": False,
+        "production_gates": _production_gates_payload(),
+        "artifacts": {key: _repo_rel(path) for key, path in artifacts.items()},
+        "candidate_history_path": _repo_rel(candidate_history_path) if candidate_history_path else None,
+        "issue_title": issue_payload.get("title"),
+        "nightly_failed_stages": stdout_payload.get("nightly_failed_stages") if isinstance(stdout_payload, dict) else [],
+        "handoff_entrypoints": entrypoints,
+        "dirty_paths_before": dirty_before,
+        "dirty_paths_after": dirty_after,
+        "new_dirty_paths": new_paths,
+        "unexpected_dirty_paths": unexpected,
+        "next_command": "python scripts/aistock_issue_workflow.py triage-ci-issue --issue <created-nightly-issue-number>",
+    }
+
 
 def build_start_plan(
     *,
@@ -6743,6 +6900,12 @@ def cmd_workflow_smoke(args: argparse.Namespace) -> int:
     return 0 if payload.get("workflow_gate") == "passed" else 2
 
 
+def cmd_nightly_intake_smoke(args: argparse.Namespace) -> int:
+    payload = build_nightly_intake_smoke_plan()
+    _emit_args(payload, args)
+    return 0 if payload.get("workflow_gate") == "passed" else 2
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     payload = build_doctor_report(skip_external=args.skip_external)
     _emit_args(payload, args)
@@ -7141,6 +7304,13 @@ def build_parser() -> argparse.ArgumentParser:
     workflow_smoke.add_argument("--module")
     add_output_options(workflow_smoke)
     workflow_smoke.set_defaults(func=cmd_workflow_smoke)
+
+    nightly_smoke = sub.add_parser(
+        "nightly-intake-smoke",
+        help="Dry-run Nightly failure issue context generation without GitHub, DB, runtime, or tracked root writes.",
+    )
+    add_output_options(nightly_smoke)
+    nightly_smoke.set_defaults(func=cmd_nightly_intake_smoke)
 
     close = sub.add_parser("close-sync", help="Prepare a dry-run close/sync plan after PR merge.")
     close.add_argument("--bug-id")
