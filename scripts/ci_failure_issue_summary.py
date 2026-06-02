@@ -1067,7 +1067,7 @@ def _repo_root() -> Path:
 
 
 def _default_candidate_history_dir() -> Path:
-    return _repo_root() / "tests" / "aistock_validation" / "history" / "issue_candidates"
+    return _repo_root() / "tmp" / "validation" / "ci_failure_issue" / "candidate_history"
 
 
 def _safe_filename(value: Any, *, fallback: str = "candidate") -> str:
@@ -1191,7 +1191,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--candidate-history-dir",
         help=(
             "Persist compact candidate handoff JSON under this stable directory. "
-            "If omitted, tmp/validation CI/Nightly outputs are mirrored to tests/aistock_validation/history/issue_candidates."
+            "If omitted, CI/Nightly outputs under tmp/validation write candidate history next to the output artifact; "
+            "other invocations do not persist candidate history."
         ),
     )
     parser.add_argument("--no-candidate-history", action="store_true", help="Do not persist compact candidate history JSON.")
