@@ -282,7 +282,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           DATE=$(date +%Y%m%d)
-          SUMMARY_DIR="tests/aistock_validation/history/${DATE}"
+          SUMMARY_DIR="tmp/validation/nightly_summary/${DATE}"
           mkdir -p "${SUMMARY_DIR}"
           cat <<EOF > "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
           # Nightly run ${RUN_ID} ${DATE}
@@ -335,6 +335,7 @@ jobs:
             --context-output tmp/validation/nightly_failure_issue/context-pack.json \
             --context-markdown-output tmp/validation/nightly_failure_issue/context-pack.md \
             --github-issue-payload-output tmp/validation/nightly_failure_issue/github-issue-payload.json \
+            --candidate-history-dir tmp/validation/nightly_failure_issue/candidate_history \
             --stdout-format compact
 
       - name: Upload Nightly failure issue context
@@ -411,5 +412,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: nightly-summary-${{ github.run_id }}
-          path: tests/aistock_validation/history/
+          path: tmp/validation/nightly_summary/
           if-no-files-found: ignore
