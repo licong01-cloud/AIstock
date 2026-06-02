@@ -36,8 +36,8 @@
   "expected": "rdagent-node1 rdagent-gpu can import aistock_models classes and xgboost/lambdarank dependencies; CatBoost and comparable GPU-class loops avoid exhausting the 6GB GPU, preferably by CPU training or constrained node_parallelism.",
   "first_seen_at": "2026-06-02T04:59:03.691928Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "4cb144be3b6ec821dc7075f7fc60f88ebce2305d",
+  "fixed_at": "2026-06-02T06:03:29.816062Z",
   "github_issue_number": 537,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/537",
   "last_seen_at": "2026-06-02T04:59:03.691928Z",
@@ -45,6 +45,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/541",
   "production_backend_dependency_gate": "applied_and_verified",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -56,7 +57,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "rdagent"
   ],
@@ -65,13 +66,8 @@
     "fingerprint": "18a073aa465e52ed046306bc",
     "source_event_id": "FE-20260602-18a073aa465e"
   },
-  "verification_run_id": null,
   "validation_evidence": [
-    "remote rdagent-node1 precheck -> aistock_models missing, xgboost/lightgbm/catboost available, RTX 2060 6144 MiB",
-    "scp aistock_models to /home/lc999/projects/AIstock/aistock_models and pip install --no-deps -e in rdagent-gpu -> aistock_models import path resolved",
-    "remote init_instance_by_config smoke -> AIStockXGBModel OK and LambdaRankModel OK",
-    "remote xgboost train + lightgbm lambdarank train + catboost task_type=CPU train -> passed; nvidia-smi memory.used 1 MiB",
-    "remote qlib CatBoostModel patched to force CPU even when task_type=GPU; py_compile and FakeDataset fit -> qlib_catboost_forced_task_type CPU",
-    "python -m nox -s l0 validation_module_registry_l0 -> passed"
-  ]
+    "remote init_instance_by_config smoke: AIStockXGBModel and LambdaRankModel import passed; remote xgboost train + lightgbm lambdarank train + catboost CPU train passed; qlib CatBoostModel forced CPU smoke passed; local python -m nox -s l0 validation_module_registry_l0 passed; gh pr checks 541 passed 16/16 after origin/main merge refresh"
+  ],
+  "verification_run_id": null
 }
