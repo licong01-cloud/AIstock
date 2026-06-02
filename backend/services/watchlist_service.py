@@ -535,6 +535,11 @@ def add_items_bulk_from_task_selection(
                 "entry_task_id": it.get("task_id"),
                 "entry_loop_id": it.get("loop_id"),
                 "entry_as_of": as_of,
+                "lifecycle_status": "ENTERED",
+                "planned_entry_price": float(p),
+                "actual_entry_price": float(p),
+                "actual_entry_date": as_of,
+                "advisory_enabled": True,
             }
         )
 
