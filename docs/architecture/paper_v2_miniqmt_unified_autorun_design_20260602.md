@@ -384,6 +384,27 @@ class UnifiedMiniQMTVnpyExecutionAdapter:
 
 以上功能项是后续分支拆分的最小完整模块边界；任何实现分支只能交付其中一个或多个完整功能项，不允许交付“最小可验收闭环”或临时 POC。
 
+### 11.0 全功能验收要求矩阵
+
+本节把第 11 章所有功能项升级为强制验收合同。后续任何开发阶段、阶段 PR、统一集成分支最终验收，都必须把本表逐行映射到“实现位置 -> 自动化测试 -> API/UI/运行证据 -> 结论”。若某阶段尚未实现某功能，必须标记 `not_in_phase`；若声称该功能完成，必须同时满足本表的实现完整性和验证完整性，不允许只用单一路径、mock、手工观察或局部 happy path 代替。
+
+| 功能项 | 完整实现边界 | 必须自动化验收 | 必须运行/接口证据 | 不允许的精简形态 |
+|---|---|---|---|---|
+| F2M-01 account group | `broker_account_id` 下统一建模 account group、`N=1`/`N>1` strategy slots、资金权重、slot 状态、legacy exclusive mapping；Paper v2 与 virtual-strategy 不再是两个并行产品入口。 | `test_account_group_slots.py` 覆盖 N=1/N=2、资金合计、slot 唯一性、legacy mapping、重复 slot 拒绝；repository/service model 均有单元测试。 | scheduler/status API 返回 account_group、slots、legacy/unified flags；validation record 记录同账号单/多策略 schema。 | 只支持 N=2 多策略而 N=1 仍走 exclusive；只建 UI 分组但后端仍两套 submit path。 |
+| F2M-02 release/binding/plan | StrategyPackage release、资金 binding、每日 ExecutionPlan 三层分离；plan 带 package/release/policy/evidence hash 和 idempotency key。 | release/binding/plan snapshot 测试覆盖同一 package 多日期、已有 plan 不覆盖、hash 变化检测、缺 release fail-fast。 | auto-run status 展示 release_id、binding_id、plan_id、plan_state、evidence_hash。 | Paper v2 session 直接从 package manifest 取当日 target；重启后重新生成不同 plan。 |
+| F2M-03 selection readiness | HMM、ST/PIT、tradability、reference price、SQL/data guard 在 prepare window 生成 `DailySelectionEvidence`；LocalSim/MiniQMT 共用 evidence。 | HMM missing/non-numeric/no coverage、invalid ts_code、SQL chunk/cache、prepare once/reuse tests；BUG-181/193/199/202 继承测试。 | readiness API 返回 `READY/FAILED/DATA_UNAVAILABLE`、error_code/context、query correlation、artifact hash。 | submit 窗口临时全市场重算；HMM 缺失时默认系数成功；SQL 前不校验畸形 ts_code。 |
+| F2M-04 unified vn.py execution | Sniper/BestLimit/TWAP-lite 通过 `UnifiedMiniQMTVnpyExecutionAdapter` 同时服务 Paper v2 单策略和 MiniQMT bridge 多策略，保留 upstream attribution、policy hash、parent intent、child action。 | vn.py characterization、shared adapter、Paper v2 adapter、simulation bridge tests；不支持算法/非法 config fail-fast；child order/cancel/timer/fill/reject 全覆盖。 | order diagnostic 展示 algorithm、source_attribution、parent_intent_id、child_order_id、policy_id/hash、raw broker result。 | Paper v2 用 vn.py adapter，多策略仍直接一笔 `ManagedOrderRequest`；非法算法 fallback 到 TWAP/default。 |
+| F2M-05 order/preflight | `QmtManagedOrderService` 成为唯一 MiniQMT preview/submit 权威；batch cash、can_sell、board lot、duplicate、status 57 preflight 同时覆盖所有 slots。 | preflight contract tests 覆盖 sell-before-buy、cash release、buy shortfall、T+1 can_sell、duplicate order、board lot、partial failure/retry/compensation。 | preview API/事件保存 batch summary、per-slot decision、资金快照、拒绝原因。 | 每个 slot 各自判断现金导致超买；Paper v2 绕过 ledger 直接调用 QMT。 |
+| F2M-06 restart idempotency | scheduler bootstrap 恢复 account group/slots/plan/order state；已提交 plan 只 reconcile，不重复 submit；timeout/late-worker guard 继承 BUG-207。 | bootstrap、submitted-plan resume、reconcile-only、timeout abandon、late completion 不覆盖 terminal tests。 | bootstrap-status 返回 `active_session_ticks=[]`、`abandoned_session_ticks`、last_plan、last_reconcile、thread_alive。 | 重启后创建新 session/plan 并二次下单；超时 worker 继续占 active guard。 |
+| F2M-07 diagnostics | request/preflight/submit/query/reconcile/cancel/raw broker status 全链路保存 `MiniQMTOrderDiagnosticPacket`；失败订单可追溯到 slot/order/trade。 | status 57、柜台原文、submit timeout、cancel failure、stale pending、mojibake/truncated status_msg、retry query tests。 | UI/API 可展开完整 packet，含 status/status_msg/order_sysid/qmt_order_id/cash snapshot/request payload 摘要。 | 只显示“失败”或只保存截断状态；失败订单返回空数组伪成功。 |
+| F2M-08 holdings/cost | 持仓 code/name、quantity/available/cost/market_value/unrealized/realized/cost_source/fee_source/today_closed 分层；broker reported、pending statement、estimated policy 明确区分。 | buy/sell fill、partial/full close、zero quantity today_closed、fee/tax source、market value backfill、reconcile overfill tests。 | holdings API/UI 展示成本、市值、费用来源、今日清仓状态；数量 0 不混入当前持仓。 | 把估算费用当真实费用；数量 0 持仓无解释；成本/市值缺失不报原因。 |
+| F2M-09 operator UI | Paper v2 是统一无人值守入口，展示 account group、slots、single/multi package、scheduler 状态、legacy/unified flags。 | API contract + Playwright 覆盖 account group 切换、slot 展示、N=1/N=2 状态一致、禁用/只读 legacy 提示。 | `/bootstrap-status`、`/status`、auto-run status 与 UI 卡片字段一致。 | 单策略和多策略仍是两个页面/按钮/后端分支；UI 只展示 raw JSON。 |
+| F2M-10 Selection Center UI | 策略包选择器置顶纵向；选股历史当前页全选、批量选择、跨页状态清晰；与 package/evidence contract 绑定。 | Playwright 覆盖置顶布局、当前页全选/取消、批量选择、页内/跨页行为、错误提示。 | UI 截图或 E2E evidence；API payload 包含 selected history ids 和 package id。 | 只改 CSS 布局不实现批量选择；全选误选跨页记录。 |
+| F2M-11 MiniQMT tables | 持仓/当日成交 code/name 分列、所有字段三态排序、成交默认折叠后分页、失败诊断展开；后端提供 stock name enrichment 与 sortable fields。 | API sorting/pagination tests + Playwright 覆盖 asc/desc/clear、分页、折叠、名称列、诊断展开。 | UI 展示排序状态、分页参数、stock_name、diagnostic drawer；API 返回 sort metadata。 | 仅前端排序当前页；成交表默认大表常驻；无法清空排序。 |
+| F2M-12 legacy migration | full validation 前 legacy exclusive/virtual path 只兼容、不删除；Phase 7 才能迁移/关闭/删除，且必须用户确认。 | compatibility tests 覆盖 legacy read-only、migration preview、unified/legacy flags、旧测试保留为兼容测试。 | migration report、diff review、Phase 7 DESIGN-COMPLIANCE-001、用户确认记录。 | 为了统一提前删除旧路径/旧字段/旧测试；未验证就改默认入口。 |
+
+每个功能项的验收记录必须进入 `tests/aistock_validation/history/paper_v2_miniqmt_unified/`，并在对应 GitHub Issue/PR 中引用。本表与第 15 章 gate 同时生效：功能项验收未 complete 时，即使阶段 smoke 通过，也只能报告“阶段未完成”，不得进入最终 `main` 合入准备。
+
 ### 11.1 `exclusive_account` 历史修复继承验收矩阵
 
 以下清单是迁移到 unified path 时必须逐项继承的历史修复基线。后续最终实现分支的 PR acceptance matrix 必须逐行标记 `implemented/tested/not_applicable`；除非对应 BUG 被明确证明与 MiniQMT unified path 无关，否则不得关闭或合入。
@@ -501,7 +522,7 @@ vn.py 相关功能是最终 unified path 的硬性验收项，并继承 `BUG-151
 - 每个 issue 写入 `allowed_write_scope`、`closure_requirements`、`required_verification`，并把第 11.1、11.2、11.3、11.4 节相关行写入 closure requirements。
 - 可对 P2M-06/07/08/11 使用同模块 batch，但每项独立 issue/commit/closure；batch 只能共享 worktree 和验证，不共享验收结论。
 
-阶段验收：文档验证通过；无运行时代码变更；根目录未污染；明确记录“禁止合入 main，后续只进入集成分支”。本阶段只允许提交/推送设计分支或集成分支初始化提交。
+阶段验收：文档验证通过；无运行时代码变更；根目录未污染；明确记录“禁止合入 main，后续只进入集成分支”；第 11.0 节 F2M-01 到 F2M-12 均有完整实现边界、自动化验收、运行/接口证据和禁止精简形态。本阶段只允许提交/推送设计分支或集成分支初始化提交。
 
 ### Phase 1：HMM + SQL/data guard 安全底座
 
@@ -676,6 +697,7 @@ vn.py 相关功能是最终 unified path 的硬性验收项，并继承 `BUG-151
 | DC-16 | vn.py 功能逐项作为最终验收项 | Phase 2/4 | 第 11.3 节每项 tests + shared adapter integration。 |
 | DC-17 | 2026-06-02 已修复问题不得回退 | Phase 1-7 | 第 11.4 节 BUG-181/193/198/204/207/199/202/workflow 项逐项 complete。 |
 | DC-18 | 完整开发和验证前不合入 main | Phase 0-7 | 所有阶段 PR 目标为统一集成分支；最终 main PR 只在 Phase 7 全量验收和用户确认后创建。 |
+| DC-19 | 所有 F2M 功能项都有完整验收要求且最终实现不得缺项 | Phase 0-7 | 第 11.0 节 F2M-01 到 F2M-12 逐项 `implemented/tested/evidence_recorded`；任何 `missing/not_in_phase` 都不得进入最终 main 合入。 |
 
 ## 17. 开发过程中的禁止事项
 
