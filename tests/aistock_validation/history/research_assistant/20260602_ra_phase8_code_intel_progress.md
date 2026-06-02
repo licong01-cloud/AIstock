@@ -1,8 +1,8 @@
 # Research Assistant Phase 8 closure progress
 
 - branch：`codex/ra-code-intel-20260602`
-- final_head_commit：`PENDING_FINAL_HEAD_AFTER_COMMIT`
-- g1_central_run_id：`PENDING_G1_CENTRAL`
+- final_head_commit：`5c4c6320c07d8fb8073f461f1eb78db8ab4c5a3c`
+- g1_central_run_id：`research-assistant-code-intelligence_20260602_163726_l4_ra-phase8-code-intel_e5458fe3_runner-validation__c437b541de`
 - production_ddl_gate：`required_pending_user_approval`
 
 | ID | 状态 | 证据 |
@@ -28,10 +28,10 @@
 | CR-P8-19 | done | `test_code_intel_true_reuse.py::test_adapter_provider_failure_is_not_swallowed` |
 | CR-P8-20 | done | `test_core_no_adapter_import.py` covers `code_intelligence_core.py` |
 | CR-P8-21 | done | `module_registry.yaml`, `file_ownership.yaml`; ownership scan files=29 mapped=29 unmapped=0 ambiguous=0 |
-| CR-P8-22 | pending_final_g3 | blueprint §12/§16.9/§16.10 final commit/run backfill pending |
-| CR-P8-23 | pending_final_g3 | validation record final G1 run_id pending |
+| CR-P8-22 | done_impl_head | blueprint §12/§16.9/§16.10 backfilled with implementation/control commit and G1-central run_id |
+| CR-P8-23 | done_impl_head | validation record backfilled with G1-central job/run evidence |
 | CR-P8-24 | done_g1_local | `python -m nox -s ra_phase8_code_intel` passed; 40 pytest passed, catalog 0 findings, guardrail 0 blocking |
-| CR-P8-25 | pending_g1_central | Validation Center final run pending |
+| CR-P8-25 | done_impl_head | controlled runner passed on clean implementation/control HEAD; post-backfill doc drift requires final rerun |
 | CR-P8-26 | pending_pr | PR checks/mergeStateStatus pending after push/PR |
 | CR-P8-27 | done | no production port/DB touched during implementation |
 | CR-P8-28 | in_progress | DESIGN-COMPLIANCE-001 matrix in this file + validation record |
@@ -45,4 +45,4 @@
 3. 消费链路到 L3：done；pack refs feed worker inputs and runtime trace.
 4. provenance/as_of 不伪造：done；missing refs excluded/evidence_insufficient, no current-clock as_of in Phase8 files.
 5. token-safe + 不替代测试：done；summary/ref/detail only, impacted/recommended only.
-6. G3 不漂移：pending final G1-central run_id and final commit backfill.
+6. G3 不漂移：implementation/control commit and G1-central run_id backfilled；post-backfill doc-only drift will be revalidated rather than fake-green.

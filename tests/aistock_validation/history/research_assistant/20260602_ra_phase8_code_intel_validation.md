@@ -1,11 +1,11 @@
-# Research Assistant Phase 8 / L1.6 代码智能接入验证记录
+﻿# Research Assistant Phase 8 / L1.6 代码智能接入验证记录
 
 - 日期：2026-06-02
 - batch_id：`ra_phase8`
 - plan_key：`ra_phase8_code_intel`
 - branch：`codex/ra-code-intel-20260602`
-- final_head_commit：`PENDING_FINAL_HEAD_AFTER_COMMIT`
-- validation_run_id：`PENDING_G1_CENTRAL`
+- final_head_commit：`5c4c6320c07d8fb8073f461f1eb78db8ab4c5a3c`
+- validation_run_id：`research-assistant-code-intelligence_20260602_163726_l4_ra-phase8-code-intel_e5458fe3_runner-validation__c437b541de`
 - production_ddl_gate：`required_pending_user_approval`
 - production_8001_touched：`false`
 - production_3000_touched：`false`
@@ -40,11 +40,11 @@ result: passed
 
 ```text
 python -m nox -s ra_phase8_code_intel
-result: passed in 34s
+result: passed (latest clean HEAD run: 26s)
 pytest result: 40 passed
 catalog_integrity: passed; findings=0; warnings=0
 ownership_scan: files=29, mapped=29, unmapped=0, ambiguous=0
-guardrail_scan: files=28, findings=0, blocking=0
+guardrail_scan: files=30, findings=0, blocking=0 (clean HEAD uses --base-ref origin/main)
 production_8001_touched=false
 ```
 
@@ -52,13 +52,14 @@ production_8001_touched=false
 
 ## G1-central
 
-- job_id：`PENDING_G1_CENTRAL`
-- run_id：`PENDING_G1_CENTRAL`
-- return_code：`PENDING`
+- job_id：`valjob_20260602_163700_e5458fe3`
+- run_id：`research-assistant-code-intelligence_20260602_163726_l4_ra-phase8-code-intel_e5458fe3_runner-validation__c437b541de`
+- return_code：`0`
 - expected_branch：`codex/ra-code-intel-20260602`
-- expected_commit：`PENDING_FINAL_HEAD_AFTER_COMMIT`
+- expected_commit：`5c4c6320c07d8fb8073f461f1eb78db8ab4c5a3c`
 - production_8001_touched：`false`
 - arbitrary_shell_allowed：`false`
+- runner_archive：`tmp/validation/runner/jobs/history/research-assistant-code-intelligence/20260602_163726_l4_ra-phase8-code-intel_e5458fe3_runner-validation.md`
 
 ## 六条硬收口映射
 
@@ -67,7 +68,7 @@ production_8001_touched=false
 3. 消费链路到 L3：`test_code_intel_context_injection.py`、`test_code_intel_decomposition.py`
 4. provenance/as_of 不伪造：`test_code_intel_evidence_contract.py`
 5. token-safe + 不替代测试：`test_code_intel_token_safe.py`、`test_code_intel_not_test_replacement.py`
-6. G3 不漂移：本文件、`20260602_ra_phase8_code_intel_progress.md`、蓝图 §12/§16.9/§16.10，最终以 G1-central run_id 回填。
+6. G3 不漂移：本文件、`20260602_ra_phase8_code_intel_progress.md`、蓝图 §12/§16.9/§16.10 已回填 implementation/control commit 与 G1-central run_id；post-backfill doc-only drift 另行复验。
 
 ## production gates
 
