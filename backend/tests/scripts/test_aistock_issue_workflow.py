@@ -2411,6 +2411,8 @@ def test_merge_finalizer_can_merge_close_sync_pr_and_cleanup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     issue = _write_json(isolated_workflow_root / "bug.json", _bug(status="in_progress"))
+    close_sync_root = isolated_workflow_root / "registry"
+    cleanup_calls: list[dict[str, Any]] = []
 
     monkeypatch.setattr(
         workflow,
@@ -2426,7 +2428,7 @@ def test_merge_finalizer_can_merge_close_sync_pr_and_cleanup(
         "build_close_sync_plan",
         lambda **kwargs: {
             "workflow_gate": "close_synced",
-            "registry_root": str(isolated_workflow_root / "registry"),
+            "registry_root": str(close_sync_root),
             "registry_worktree_plan": {"branch": "chore/BUG-199-close-sync"},
             "merge_commit": "merge123",
             "updated_bug_json": "tests/aistock_validation/bugs/bug199.json",
@@ -2435,18 +2437,28 @@ def test_merge_finalizer_can_merge_close_sync_pr_and_cleanup(
     monkeypatch.setattr(
         workflow,
         "_maybe_commit_and_pr_close_sync",
-        lambda **kwargs: {"workflow_gate": "pr_opened", "pr_url": "https://github.example/pull/299"},
+        lambda **kwargs: {
+            "workflow_gate": "pr_opened",
+            "root": str(close_sync_root),
+            "branch": "chore/BUG-199-close-sync",
+            "pr_url": "https://github.example/pull/299",
+        },
     )
     monkeypatch.setattr(
         workflow,
         "_merge_pr_if_ready_for_bug",
         lambda bug_id, pr_url: {"already_merged": False, "verified": {"pr": {"mergeCommit": {"oid": "syncmerge123"}}}},
     )
-    monkeypatch.setattr(
-        workflow,
-        "build_cleanup_after_merge_plan",
-        lambda **kwargs: {"workflow_gate": "cleanup_done", "branch": kwargs["branch"]},
-    )
+    def fake_cleanup(**kwargs: Any) -> dict[str, Any]:
+        cleanup_calls.append(kwargs)
+        return {
+            "workflow_gate": "cleanup_done",
+            "branch": kwargs["branch"],
+            "worktree": kwargs.get("worktree"),
+            "sync_root": kwargs.get("sync_root"),
+        }
+
+    monkeypatch.setattr(workflow, "build_cleanup_after_merge_plan", fake_cleanup)
     monkeypatch.setattr(workflow, "build_postmortem_plan", lambda **kwargs: {"schema_version": "postmortem"})
 
     payload = workflow.build_merge_finalizer_plan(
@@ -2467,6 +2479,95 @@ def test_merge_finalizer_can_merge_close_sync_pr_and_cleanup(
     assert payload["close_sync_pr_merge"]["workflow_gate"] == "merged"
     assert payload["close_sync_pr_merge"]["merge_commit"] == "syncmerge123"
     assert payload["cleanup"]["workflow_gate"] == "cleanup_done"
+    assert payload["close_sync_cleanup"]["workflow_gate"] == "cleanup_done"
+    assert cleanup_calls == [
+        {
+            "branch": "bug/BUG-199-workflow",
+            "bug_id": "BUG-199",
+            "worktree": str(isolated_workflow_root / "task"),
+            "pr_url": "https://github.example/pull/199",
+            "apply": True,
+            "sync_root": True,
+        },
+        {
+            "branch": "chore/BUG-199-close-sync",
+            "bug_id": "BUG-199",
+            "worktree": str(close_sync_root),
+            "pr_url": "https://github.example/pull/299",
+            "apply": True,
+            "sync_root": False,
+        },
+    ]
+
+
+def test_merge_finalizer_blocks_when_close_sync_cleanup_blocks(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _write_json(isolated_workflow_root / "bug.json", _bug(status="in_progress"))
+    close_sync_root = isolated_workflow_root / "registry"
+
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url: {
+            "checked": True,
+            "merged": True,
+            "pr": {"url": pr_url, "mergeCommit": {"oid": "merge123"}, "headRefOid": "head123"},
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "build_close_sync_plan",
+        lambda **kwargs: {
+            "workflow_gate": "close_synced",
+            "registry_root": str(close_sync_root),
+            "registry_worktree_plan": {"branch": "chore/BUG-199-close-sync"},
+            "merge_commit": "merge123",
+            "updated_bug_json": "tests/aistock_validation/bugs/bug199.json",
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_maybe_commit_and_pr_close_sync",
+        lambda **kwargs: {
+            "workflow_gate": "pr_opened",
+            "root": str(close_sync_root),
+            "branch": "chore/BUG-199-close-sync",
+            "pr_url": "https://github.example/pull/299",
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_merge_pr_if_ready_for_bug",
+        lambda bug_id, pr_url: {"already_merged": False, "verified": {"pr": {"mergeCommit": {"oid": "syncmerge123"}}}},
+    )
+
+    def fake_cleanup(**kwargs: Any) -> dict[str, Any]:
+        if kwargs["branch"] == "chore/BUG-199-close-sync":
+            return {"workflow_gate": "blocked", "branch": kwargs["branch"], "blocking": ["worktree is dirty"]}
+        return {"workflow_gate": "cleanup_done", "branch": kwargs["branch"]}
+
+    monkeypatch.setattr(workflow, "build_cleanup_after_merge_plan", fake_cleanup)
+    monkeypatch.setattr(workflow, "build_postmortem_plan", lambda **kwargs: {"schema_version": "postmortem"})
+
+    payload = workflow.build_merge_finalizer_plan(
+        bug_id="BUG-199",
+        issue_json=str(issue),
+        source_pr_url="https://github.example/pull/199",
+        source_branch="bug/BUG-199-workflow",
+        source_worktree=str(isolated_workflow_root / "task"),
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        production_gates={"production_ddl_gate": "noop"},
+        sync_root=True,
+        merge_close_sync_pr=True,
+        cleanup=True,
+        apply=True,
+    )
+
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["close_sync_cleanup"]["workflow_gate"] == "blocked"
+    assert payload["blocking"] == ["worktree is dirty"]
 
 
 def test_merge_finalizer_reuses_existing_close_sync_without_duplicate_pr(

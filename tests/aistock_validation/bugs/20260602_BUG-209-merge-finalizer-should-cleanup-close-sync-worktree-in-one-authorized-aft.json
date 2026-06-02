@@ -1,0 +1,63 @@
+{
+  "actual": "After BUG-208, merge-finalizer can reuse an existing close-sync PR and cleanup the source worktree, but the authorized full aftercare run still leaves the close-sync worktree/branch to be cleaned by a separate cleanup-after-merge command. The planned next phase requires merge-finalizer --merge-close-sync-pr --cleanup --apply to merge the close-sync PR, sync root, cleanup the source worktree/branch, and cleanup the close-sync worktree/branch in the same retry-safe state machine without root pollution or manual extra steps.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260602_BUG-209-merge-finalizer-should-cleanup-close-sync-worktree-in-one-authorized-aft.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-209",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-02T08:29:43.832793Z",
+  "description": "After BUG-208, merge-finalizer can reuse an existing close-sync PR and cleanup the source worktree, but the authorized full aftercare run still leaves the close-sync worktree/branch to be cleaned by a separate cleanup-after-merge command. The planned next phase requires merge-finalizer --merge-close-sync-pr --cleanup --apply to merge the close-sync PR, sync root, cleanup the source worktree/branch, and cleanup the close-sync worktree/branch in the same retry-safe state machine without root pollution or manual extra steps.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260602-f57acd620678",
+      "timestamp": "2026-06-02T08:29:43.832789Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-02T08:29:43.832793Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 564,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/564",
+  "last_seen_at": "2026-06-02T08:29:43.832793Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "merge-finalizer should cleanup close-sync worktree in one authorized aftercare run",
+  "trigger_condition": {
+    "fingerprint": "f57acd620678394c49f2c4c1",
+    "source_event_id": "FE-20260602-f57acd620678"
+  },
+  "verification_run_id": null,
+  "workflow_gate": "implementation_scope_set"
+}
