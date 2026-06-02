@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import socket
+import subprocess
 import sys
 from pathlib import Path
 from urllib.parse import urlparse
@@ -36,6 +37,19 @@ def _run_pytest(session: nox.Session, *args: str) -> None:
         env=_env(),
         external=True,
     )
+
+
+def _git_worktree_clean() -> bool:
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    return result.returncode == 0 and not result.stdout.strip()
 
 
 def _hosted_ci() -> bool:
@@ -1622,10 +1636,13 @@ def ra_phase8_code_intel(session: nox.Session) -> None:
         *phase8_paths,
         external=True,
     )
+    guardrail_scope_args = ["--changed-only"]
+    if _git_worktree_clean():
+        guardrail_scope_args.extend(["--base-ref", "origin/main"])
     session.run(
         sys.executable,
         "scripts/aistock_guardrail_scan.py",
-        "--changed-only",
+        *guardrail_scope_args,
         "--baseline-json",
         _guardrail_baseline_json(session),
         "--fail-new-only",

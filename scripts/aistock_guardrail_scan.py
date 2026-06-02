@@ -163,10 +163,13 @@ def git_tracked_files(root: Path, roots: Iterable[str]) -> list[Path]:
     return [root / line.strip() for line in output.splitlines() if line.strip()]
 
 
-def git_changed_files(root: Path) -> list[Path]:
-    changed = _git_output(["git", "diff", "--name-only", "HEAD"], root)
+def git_changed_files(root: Path, *, base_ref: str | None = None) -> list[Path]:
+    changed_parts: list[str] = []
+    if base_ref:
+        changed_parts.append(_git_output(["git", "diff", "--name-only", f"{base_ref}...HEAD"], root))
+    changed_parts.append(_git_output(["git", "diff", "--name-only", "HEAD"], root))
     untracked = _git_output(["git", "ls-files", "--others", "--exclude-standard"], root)
-    names = [line.strip() for line in (changed + "\n" + untracked).splitlines() if line.strip()]
+    names = [line.strip() for line in ("\n".join(changed_parts) + "\n" + untracked).splitlines() if line.strip()]
     return [root / name for name in dict.fromkeys(names)]
 
 
@@ -275,10 +278,12 @@ def scan_files(files: Iterable[Path], rules: Iterable[CompiledRule], root: Path)
     return findings
 
 
-def _changed_line_numbers(root: Path, paths: Iterable[Path], *, staged: bool) -> dict[str, set[int]]:
+def _changed_line_numbers(root: Path, paths: Iterable[Path], *, staged: bool, base_ref: str | None = None) -> dict[str, set[int]]:
     args = ["git", "diff", "--unified=0"]
     if staged:
         args.append("--cached")
+    elif base_ref:
+        args.append(f"{base_ref}...HEAD")
     args.append("--")
     args.extend(_path_key(path, root) for path in paths)
     output = _git_output(args, root)
@@ -505,6 +510,7 @@ def main() -> int:
     parser.add_argument("--baseline", action="store_true", help="Scan tracked files under catalog roots.")
     parser.add_argument("--changed-only", action="store_true", help="Scan changed and untracked files only.")
     parser.add_argument("--staged-only", action="store_true", help="Scan staged files only; useful before committing in a dirty workspace.")
+    parser.add_argument("--base-ref", help="With --changed-only, compare committed changes against this base ref.")
     parser.add_argument("--baseline-json", help="Existing guardrail JSON whose fingerprints are treated as historical baseline.")
     parser.add_argument("--fail-new-only", action="store_true", help="Do not fail on findings whose fingerprint exists in --baseline-json.")
     parser.add_argument("--output-json", help="Write machine-readable result JSON.")
@@ -527,7 +533,7 @@ def main() -> int:
 
     if args.changed_only:
         mode = "changed_only"
-        candidate_paths = git_changed_files(root)
+        candidate_paths = git_changed_files(root, base_ref=args.base_ref)
     elif args.staged_only:
         mode = "staged_only"
         candidate_paths = git_staged_files(root)
@@ -546,7 +552,7 @@ def main() -> int:
     if args.changed_only or args.staged_only:
         findings = filter_findings_to_changed_lines(
             findings,
-            _changed_line_numbers(root, files, staged=args.staged_only),
+            _changed_line_numbers(root, files, staged=args.staged_only, base_ref=args.base_ref if args.changed_only else None),
         )
     baseline_path = root / args.baseline_json if args.baseline_json else None
     baseline_fingerprints = load_baseline_fingerprints(baseline_path)

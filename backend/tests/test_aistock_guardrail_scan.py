@@ -177,6 +177,28 @@ def test_git_changed_files_uses_utf8_for_unicode_paths(tmp_path: Path, monkeypat
     ]
 
 
+def test_git_changed_files_can_compare_committed_branch_against_base_ref(tmp_path: Path, monkeypatch) -> None:
+    scanner = _load_module()
+    calls: list[tuple[str, ...]] = []
+
+    def fake_check_output(args, **_kwargs):
+        calls.append(tuple(args))
+        if args == ["git", "diff", "--name-only", "origin/main...HEAD"]:
+            return "backend/services/feature.py\n"
+        if args == ["git", "diff", "--name-only", "HEAD"]:
+            return ""
+        if args == ["git", "ls-files", "--others", "--exclude-standard"]:
+            return ""
+        raise AssertionError(args)
+
+    monkeypatch.setattr(scanner.subprocess, "check_output", fake_check_output)
+
+    paths = scanner.git_changed_files(tmp_path, base_ref="origin/main")
+
+    assert [path.relative_to(tmp_path).as_posix() for path in paths] == ["backend/services/feature.py"]
+    assert ("git", "diff", "--name-only", "origin/main...HEAD") in calls
+
+
 def test_git_staged_files_uses_cached_diff_only(tmp_path: Path, monkeypatch) -> None:
     scanner = _load_module()
 
@@ -252,6 +274,31 @@ def test_changed_line_numbers_handles_pure_insertion_hunks(tmp_path: Path, monke
     )
 
     assert changed == {"backend/main.py": {507, 508}}
+
+
+def test_changed_line_numbers_can_compare_against_base_ref(tmp_path: Path, monkeypatch) -> None:
+    scanner = _load_module()
+
+    def fake_git_output(args, root):
+        assert args[:4] == ["git", "diff", "--unified=0", "origin/main...HEAD"]
+        return (
+            "diff --git a/backend/main.py b/backend/main.py\n"
+            "--- a/backend/main.py\n"
+            "+++ b/backend/main.py\n"
+            "@@ -10,0 +11,1 @@\n"
+            "+except Exception:\n"
+        )
+
+    monkeypatch.setattr(scanner, "_git_output", fake_git_output)
+
+    changed = scanner._changed_line_numbers(
+        tmp_path,
+        [tmp_path / "backend" / "main.py"],
+        staged=False,
+        base_ref="origin/main",
+    )
+
+    assert changed == {"backend/main.py": {11}}
 
 
 def test_baseline_status_and_new_only_blocking(tmp_path: Path) -> None:
