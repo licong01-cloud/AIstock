@@ -4,8 +4,8 @@
 - batch_id：`ra_phase8`
 - plan_key：`ra_phase8_code_intel`
 - branch：`codex/ra-code-intel-20260602`
-- final_head_commit：`5c4c6320c07d8fb8073f461f1eb78db8ab4c5a3c`
-- validation_run_id：`research-assistant-code-intelligence_20260602_163726_l4_ra-phase8-code-intel_e5458fe3_runner-validation__c437b541de`
+- final_head_commit：`5fc6ceb5e6b669a0eb44eccf0019389207ad13bd`
+- validation_run_id：`research-assistant-code-intelligence_20260602_164246_l4_ra-phase8-code-intel_870cf59f_runner-validation__fde5e4a6cb`
 - production_ddl_gate：`required_pending_user_approval`
 - production_8001_touched：`false`
 - production_3000_touched：`false`
@@ -48,18 +48,18 @@ guardrail_scan: files=30, findings=0, blocking=0 (clean HEAD uses --base-ref ori
 production_8001_touched=false
 ```
 
-最终文档回填后如产生 doc/evidence drift，将按最终 HEAD 再执行 G1-local/G1-central，不把旧 HEAD 结果伪装为最终绿证。
+This record backfills the G1-central result for clean HEAD 5fc6ceb5; if later evidence-only commits are added, final HEAD and rerun evidence must be reported separately rather than faking green.
 
 ## G1-central
 
-- job_id：`valjob_20260602_163700_e5458fe3`
-- run_id：`research-assistant-code-intelligence_20260602_163726_l4_ra-phase8-code-intel_e5458fe3_runner-validation__c437b541de`
+- job_id：`valjob_20260602_164217_870cf59f`
+- run_id：`research-assistant-code-intelligence_20260602_164246_l4_ra-phase8-code-intel_870cf59f_runner-validation__fde5e4a6cb`
 - return_code：`0`
 - expected_branch：`codex/ra-code-intel-20260602`
-- expected_commit：`5c4c6320c07d8fb8073f461f1eb78db8ab4c5a3c`
+- expected_commit：`5fc6ceb5e6b669a0eb44eccf0019389207ad13bd`
 - production_8001_touched：`false`
 - arbitrary_shell_allowed：`false`
-- runner_archive：`tmp/validation/runner/jobs/history/research-assistant-code-intelligence/20260602_163726_l4_ra-phase8-code-intel_e5458fe3_runner-validation.md`
+- runner_archive：`tmp/validation/runner/jobs/history/research-assistant-code-intelligence/20260602_164246_l4_ra-phase8-code-intel_870cf59f_runner-validation.md`
 
 ## 六条硬收口映射
 
@@ -68,7 +68,7 @@ production_8001_touched=false
 3. 消费链路到 L3：`test_code_intel_context_injection.py`、`test_code_intel_decomposition.py`
 4. provenance/as_of 不伪造：`test_code_intel_evidence_contract.py`
 5. token-safe + 不替代测试：`test_code_intel_token_safe.py`、`test_code_intel_not_test_replacement.py`
-6. G3 不漂移：本文件、`20260602_ra_phase8_code_intel_progress.md`、蓝图 §12/§16.9/§16.10 已回填 implementation/control commit 与 G1-central run_id；post-backfill doc-only drift 另行复验。
+6. G3 no drift: this file, progress record, and blueprint sections 12/16.9/16.10 backfill clean HEAD 5fc6ceb5 and the G1-central run_id; any post-backfill evidence-only drift must be revalidated/reported separately.
 
 ## production gates
 
