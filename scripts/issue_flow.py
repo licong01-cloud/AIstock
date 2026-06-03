@@ -937,6 +937,7 @@ def _infer_pr_quality_context(changed_files: list[str], *, base: str, head: str)
         "pr_body_validation_evidence": bool(
             re.search(r"(validation evidence|validation_evidence|nox|pytest|passed|success)", pr_body, flags=re.IGNORECASE)
         ),
+        "bug_record_validation_evidence": any(bool(_as_list(record.get("validation_evidence"))) for record in bug_records),
         "pr_body_production_gates": all(key in pr_body for key in production_gate_keys),
         "bug_record_production_gates": any(all(record.get(key) for key in production_gate_keys) for record in bug_records),
         "task_tier_signals": _infer_task_tiers_from_text(branch, commit_subjects, pr_title, pr_body),
@@ -1002,6 +1003,8 @@ def evaluate_pr_quality_gate(summary: dict[str, Any], *, enforce_p0_p1: bool = F
     is_high_risk = severity in {"P0", "P1"}
     validation_evidence_present = bool(
         issue_record.get("verification_run_id")
+        or _as_list(issue_record.get("validation_evidence"))
+        or inferred.get("bug_record_validation_evidence")
         or inferred.get("pr_body_validation_evidence")
     )
     production_gate_keys = [
@@ -1090,6 +1093,7 @@ def build_pr_quality(
             "pr_metadata_present": inferred["pr_metadata_present"],
             "severity_signals": inferred["severity_signals"],
             "pr_body_validation_evidence": inferred["pr_body_validation_evidence"],
+            "bug_record_validation_evidence": inferred["bug_record_validation_evidence"],
             "pr_body_production_gates": inferred["pr_body_production_gates"],
             "bug_record_production_gates": inferred["bug_record_production_gates"],
             "task_tier_signals": inferred["task_tier_signals"],

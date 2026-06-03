@@ -49,7 +49,7 @@ jobs:
           BASE_REF: ${{ github.base_ref || inputs.base_ref || 'main' }}
           AISTOCK_PR_TITLE: ${{ github.event.pull_request.title || '' }}
           AISTOCK_PR_BODY: ${{ github.event.pull_request.body || '' }}
-          AISTOCK_PR_QUALITY_ENFORCE_P0P1: ${{ vars.AISTOCK_PR_QUALITY_ENFORCE_P0P1 || 'false' }}
+          AISTOCK_PR_QUALITY_ENFORCE_P0P1: ${{ vars.AISTOCK_PR_QUALITY_ENFORCE_P0P1 || 'true' }}
         run: |
           mkdir -p tmp/validation/pr_quality
           # Keep base history available for three-dot diffs on branches that merge main.

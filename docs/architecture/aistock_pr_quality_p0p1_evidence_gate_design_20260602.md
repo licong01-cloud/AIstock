@@ -1,8 +1,8 @@
 ﻿# AIstock PR Quality P0/P1 Evidence Gate Design
 
-版本: v1.0
+版本: v1.1
 日期: 2026-06-02
-状态: implementation-ready
+状态: implemented
 关联 Issue: https://github.com/licong01-cloud/AIstock/issues/504
 
 ## 1. 背景
@@ -13,7 +13,8 @@ AIstock issue workflow 已经能在 PR Quality 中生成 linkage、scope、requi
 
 ## 2. 目标
 
-- 默认兼容现有 PR：未显式启用时只输出 warning，不阻断普通开发。
+- 本地 `pr-check` 仍保持默认 warning，避免打断普通离线探索。
+- GitHub PR Quality 对 P0/P1 默认启用阻断，尽早拦截缺少证据的修复 PR。
 - 对 P0/P1 PR 可 opt-in 阻断缺少证据的情况。
 - 输出保持紧凑：PR comment 只显示 gate 状态和缺失项；完整 JSON 留在 artifact。
 - 不触碰生产 8001/3000、生产 DB、DDL 或依赖。
@@ -56,22 +57,22 @@ Gate 状态：
 python scripts/issue_flow.py pr-check --enforce-p0-p1-evidence ...
 ```
 
-GitHub Actions 通过仓库变量启用：
+GitHub PR Quality 现在默认启用，可通过仓库变量显式关闭：
 
 ```text
-AISTOCK_PR_QUALITY_ENFORCE_P0P1=true
+AISTOCK_PR_QUALITY_ENFORCE_P0P1=false
 ```
 
-默认值是 `false`，因此该变更不会突然阻断历史 PR 或普通功能 PR。
+默认值是 `true`。如果仓库变量未设置，GitHub PR Quality 会对 P0/P1 PR 执行 blocking gate；本地命令仍需显式传 `--enforce-p0-p1-evidence` 或设置环境变量。close-sync BUG JSON 已记录 `validation_evidence` 时，也可直接满足 gate，不需要额外在 PR body 复制整段命令输出。
 
 ## 6. 验收矩阵
 
 | ID | 验收项 | 验证 |
 | --- | --- | --- |
-| PQG-001 | 默认不阻断 P0/P1 缺证据 PR | unit test: warning by default |
+| PQG-001 | 本地默认不阻断 P0/P1 缺证据 PR | unit test: warning by default |
 | PQG-002 | opt-in 后缺 evidence/gates 返回非零 | unit test: enforced blocked |
 | PQG-003 | evidence 和 production gates 齐全时通过 | unit test: enforced passed |
-| PQG-004 | PR Quality workflow 可通过变量启用 | workflow YAML parse + local dry-run |
+| PQG-004 | PR Quality workflow 默认启用，可通过变量关闭 | workflow YAML parse + local dry-run |
 | PQG-005 | 输出紧凑，不输出 PR body 原文 | summary only stores booleans |
 | PQG-006 | 空 diff log 不使用旧历史 BUG/PR 作为当前 linkage | unit test: no stale history fallback |
 
@@ -79,7 +80,7 @@ AISTOCK_PR_QUALITY_ENFORCE_P0P1=true
 
 1. Phase A: 合入 opt-in gate，仓库变量保持 false。
 2. Phase B: 对新 workflow P0/P1 PR 手动 dry-run 或临时启用变量验证。
-3. Phase C: 稳定后再把 P0/P1 gate 改为默认阻断。
+3. Phase C: 默认启用 GitHub PR Quality blocking gate；如发现特殊兼容性问题，可临时设置 `AISTOCK_PR_QUALITY_ENFORCE_P0P1=false` 回退。
 
 ## 8. 影响范围
 
