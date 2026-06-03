@@ -554,6 +554,94 @@ def test_pr_check_p1_evidence_gate_passes_with_evidence(
     }
 
 
+def test_pr_check_p1_evidence_gate_accepts_bug_record_validation_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(flow, "REPO_ROOT", tmp_path)
+    bug_path = tmp_path / "tests" / "aistock_validation" / "bugs" / "20260602_BUG-198-pr-quality-gate.json"
+    bug_path.parent.mkdir(parents=True, exist_ok=True)
+    bug_path.write_text(
+        json.dumps(
+            {
+                "bug_id": "BUG-198",
+                "github_issue_number": 504,
+                "severity": "P1",
+                "module": "validation",
+                "status": "fixed",
+                "allowed_write_scope": ["tests/aistock_validation/bugs/**"],
+                "validation_evidence": ["python -m nox -s l0 -> passed"],
+                "production_ddl_gate": "noop",
+                "production_frontend_dependency_gate": "noop",
+                "production_backend_dependency_gate": "noop",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(flow, "_git_output", lambda args, cwd=flow.REPO_ROOT, check=True: "chore(issue): close-sync BUG-198")
+
+    assert flow.main(
+        [
+            "pr-check",
+            "--changed-file",
+            "tests/aistock_validation/bugs/20260602_BUG-198-pr-quality-gate.json",
+            "--enforce-p0-p1-evidence",
+        ]
+    ) == 0
+    summary = json.loads(capsys.readouterr().out)
+
+    gate = summary["p0p1_evidence_gate"]
+    assert gate["workflow_gate"] == "passed"
+    assert gate["checks"] == {
+        "linked_issue": True,
+        "scope_passed": True,
+        "validation_evidence": True,
+        "production_gates": True,
+    }
+
+
+def test_pr_check_does_not_treat_workflow_gate_design_pr_as_high_risk(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(flow, "REPO_ROOT", tmp_path)
+    monkeypatch.setenv("AISTOCK_PR_TITLE", "fix(validation): enforce P0/P1 PR evidence gate by default")
+    monkeypatch.setenv(
+        "AISTOCK_PR_BODY",
+        "## What\n"
+        "- enable GitHub PR Quality P0/P1 evidence gate by default\n"
+        "## Scope notes\n"
+        "- GitHub Issue #257 remains an infra blocker and is not fixed by this PR",
+    )
+    monkeypatch.setattr(
+        flow,
+        "_git_output",
+        lambda args, cwd=flow.REPO_ROOT, check=True: (
+            "codex/workflow-pr-quality-evidence-20260603"
+            if args[:2] == ["branch", "--show-current"]
+            else "fix(validation): enforce p0 p1 pr evidence gate by default"
+        ),
+    )
+
+    assert flow.main(
+        [
+            "pr-check",
+            "--changed-file",
+            ".github/workflows/pr-quality.yml",
+            "--changed-file",
+            "scripts/issue_flow.py",
+            "--enforce-p0-p1-evidence",
+        ]
+    ) == 0
+    summary = json.loads(capsys.readouterr().out)
+
+    gate = summary["p0p1_evidence_gate"]
+    assert gate["workflow_gate"] == "not_applicable"
+    assert gate["blocking"] == []
+
+
 def test_pr_check_t3_feature_warns_without_design_acceptance(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -644,6 +732,20 @@ def test_pr_quality_semgrep_scans_changed_files_only() -> None:
     assert "xargs -a tmp/validation/pr_quality/semgrep_changed_files.txt semgrep" in run
     assert "semgrep --config .semgrep.yml --json --output tmp/validation/pr_quality/semgrep.json ." not in run
     assert '"paths":{"scanned":[]}' in run
+
+
+def test_pr_quality_workflow_enforces_p0_p1_evidence_by_default() -> None:
+    workflow = yaml.safe_load(Path(".github/workflows/pr-quality.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["pr-quality"]["steps"]
+    build_steps = [
+        step
+        for step in steps
+        if isinstance(step, dict) and str(step.get("name") or "") == "Build AIstock PR quality summary"
+    ]
+    assert len(build_steps) == 1
+
+    env = build_steps[0]["env"]
+    assert env["AISTOCK_PR_QUALITY_ENFORCE_P0P1"] == "${{ vars.AISTOCK_PR_QUALITY_ENFORCE_P0P1 || 'true' }}"
 
 
 def test_standalone_semgrep_scans_changed_files_only() -> None:

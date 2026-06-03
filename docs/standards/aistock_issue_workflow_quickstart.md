@@ -92,6 +92,8 @@ For Codex, Claude Code, Cursor, and other agents, context discovery should be ch
 - Treat CodeGraph / Understand Anything references as acceleration hints; they do not replace selected nox / pytest / Validation Center evidence.
 
 Close-sync-only PRs that change only BUG JSON/status evidence are metadata aftercare. AIstock CI uses `scripts/ci_change_classifier.py` to keep the static gate and PR Quality evidence while skipping unrelated backend matrix jobs when every changed BUG JSON is already `fixed`, `closed`, or `verified`. Any allocator change, open BUG registry intake, non-JSON registry file, or non-registry code/doc change keeps the full backend matrix.
+
+GitHub PR Quality now treats the P0/P1 evidence gate as blocking by default, so source fix PRs must provide linked issue context, scope, validation evidence, and production gates before merge. Local `python scripts/issue_flow.py pr-check` still stays warning-only unless `--enforce-p0-p1-evidence` or `AISTOCK_PR_QUALITY_ENFORCE_P0P1=true` is set. Code-intelligence and Semgrep artifacts remain report-only acceleration hints rather than merge blockers.
 ## Fast Path And Smoke Check
 
 Use `fast-path` when a client needs a cheap, machine-readable plan before loading more context:
