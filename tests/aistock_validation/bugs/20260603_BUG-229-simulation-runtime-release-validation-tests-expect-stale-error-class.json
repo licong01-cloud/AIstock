@@ -30,8 +30,8 @@
   "expected": "simulation_runtime regression tests should pass and assert the current fail-fast runtime config error contract.",
   "first_seen_at": "2026-06-03T07:21:09.177890Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6876b550aff4ccd8ec51823f56cbb23ce31a9f1b",
+  "fixed_at": "2026-06-03T10:50:08.803712Z",
   "github_issue_number": 635,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/635",
   "last_seen_at": "2026-06-03T07:21:09.177890Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/637",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -58,5 +59,11 @@
     "fingerprint": "b980dd1c543836854f1c4a9f",
     "source_event_id": "FE-20260603-b980dd1c5438"
   },
+  "validation_evidence": [
+    "pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/simulation_runtime/test_ops_api.py backend/tests/simulation_runtime/test_strategy_runtime_release.py -q -> 37 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "PR #637 CI -> 16 passed, 0 failed"
+  ],
   "verification_run_id": null
 }
