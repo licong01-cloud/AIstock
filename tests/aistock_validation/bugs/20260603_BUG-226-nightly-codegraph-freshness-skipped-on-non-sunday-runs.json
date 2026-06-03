@@ -29,8 +29,8 @@
   "expected": "Nightly should build and upload CodeGraph freshness artifacts on every scheduled or workflow_dispatch run, keep the result warning-only, and gate only Understand Anything summary generation to the weekly cadence.",
   "first_seen_at": "2026-06-02T19:59:45.761678Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6947b287aa44e3cee885758cb72421bff9b35101",
+  "fixed_at": "2026-06-03T02:33:20.355172Z",
   "github_issue_number": 611,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/611",
   "last_seen_at": "2026-06-02T19:59:45.761678Z",
@@ -38,6 +38,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/612",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -53,7 +54,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -62,5 +63,8 @@
     "fingerprint": "0de0015ec7a43fc7d739deac",
     "source_event_id": "FE-20260603-0de0015ec7a4"
   },
+  "validation_evidence": [
+    "PR #612 CI green and merged -> passed"
+  ],
   "verification_run_id": null
 }
