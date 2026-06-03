@@ -351,6 +351,101 @@ for each active advisory item:
 - UI 对每只荐股展示：入选日期/入选 rank/入选价、当前 rank/当前价/收益率、当前 stop/take/trailing 价、最新复评 action、退出原因与证据链。
 - 退出只改变 advisory lifecycle 状态，不写 Paper v2 ledger、不调用 OMS/broker、不产生模拟或真实成交。
 
+#### 5.4 多策略包组合荐股：独立证据 + canonical fusion rank
+
+**设计决议**：选股荐股允许多个 StrategyPackage 共同生成一个主荐股池，但每日复评必须同时保留每个策略包的独立评分/排名证据，并生成一个唯一的 `fusion_rank` 作为 advisory 生命周期的 canonical rank。不得把不同策略包的 raw score 直接平均后作为跨包排序依据。
+
+当前 Selection Center 已支持 `single_package` / `intersection` / `union` / `weighted_fusion`。能力 C 的多策略包复评必须在此基础上补齐以下语义：
+
+```text
+package_set = [pkgA, pkgB, ...]
+fusion_policy = {
+  "method": "weighted_rank_fusion",
+  "package_weights": {"pkgA": 0.5, "pkgB": 0.5},
+  "candidate_top_k": 40 或 60,
+  "active_pool_inclusion": true,
+  "missing_rank_policy": "data_missing_fail_fast | not_selected_zero_score",
+  "tie_breaker": ["fusion_score desc", "support_count desc", "best_package_rank asc", "symbol asc"]
+}
+fusion_policy_sha256 = sha256(canonical_json(fusion_policy))
+```
+
+**独立证据字段**（写入 `selection.daily_selection_evidence.evidence_payload_json`，并由 `advisory_daily_review.evidence_id` 引用）：
+
+- `package_raw_scores`: 每个 package 的原始 score，仅用于解释、诊断、质量报告，不直接跨包比较。
+- `package_raw_ranks`: 每个 package 的原始 rank。
+- `package_rank_scores`: 每个 package 归一化后的 rank score。
+- `package_presence`: `selected_topK` / `not_selected_in_full_evidence` / `eligibility_excluded` / `data_missing`。
+- `package_weights` 与 `normalized_package_weights`。
+- `support_count`: `package_presence=selected_topK` 的包数量。
+- `rank_dispersion`: 多包 rank 分歧，例如 max(rank)-min(rank) 或 robust dispersion。
+- `fusion_score`、`fusion_rank`、`fusion_policy_sha256`。
+
+**第一版融合方法**：默认使用 `weighted_rank_fusion`，而非 raw score 平均：
+
+```text
+rank_score_p(symbol) = 1 - (rank_p(symbol) - 1) / max(candidate_count_p - 1, 1)
+fusion_score(symbol) = Σ normalized_weight_p * rank_score_p(symbol)
+fusion_rank = sort(symbols by fusion_score desc, support_count desc, best_package_rank asc, symbol asc)
+```
+
+缺失语义必须区分：
+
+- `not_selected_in_full_evidence`：该 package 有完整 evidence，但该股票未入候选，可记该包贡献为 0 或最低 rank score。
+- `data_missing`：该 package 当日数据/产物缺失，不能当作 0 分；必须 fail-fast 或将该 item 记 `WAITING_DATA`，不得静默降低股票排名。
+- `eligibility_excluded`：该 package 因停牌/ST/流动性/黑名单等可解释规则排除，必须记录 exclusion reason。
+
+**复评口径**：
+
+- `latest_rank` 在多策略包 advisory 中一律指 `fusion_rank`；单包 rank 只能写入 `package_raw_ranks` / `package_rank_scores` 作为解释证据。
+- Top20 入选、Top40 缓冲、rank decay 退出均基于 `fusion_rank`，避免两个 package rank 被混用。
+- 独立 package rank 用于解释与二级决策：`CONSENSUS_STRONG`（多包共同靠前）、`SINGLE_PACKAGE_SUPPORT`（单包强推）、`RANK_CONFLICT`（包间显著分歧）、`PACKAGE_DATA_MISSING`（数据缺失）。
+- 策略包集合、权重、融合方法、缺失处理策略任一变化，必须生成新的 `fusion_policy_sha256`；历史 episode 不得无标记跨 policy 比较。
+
+**融合池模式 vs 策略袖珍组合模式（sleeve mode）**：
+
+| 模式 | 适用场景 | 复评 rank | UI/报告 |
+| --- | --- | --- | --- |
+| `fusion_pool`（第一版默认） | 多个策略包同一 horizon、同一股票池、同一荐股目标 | 唯一 `fusion_rank` | 一张主荐股表 + 展开显示 package 证据 |
+| `sleeve_mode`（保留设计接口，暂不作为 Phase 2 默认实现） | 策略包 horizon/风格/风险预算明显不同 | 每个 package 各自生命周期 rank；汇总层只做去重/总览 | 分 sleeve 展示，避免强行合成 Top20 |
+
+第一版只要求 `fusion_pool + weighted_rank_fusion` 完整落地；若用户选择 `sleeve_mode`，必须作为新 policy/新实施阶段审批，不得复用 fusion_pool 的验收口径。
+
+**每日复评流程（多策略包）**：
+
+```text
+for each trade_date:
+  for each package in package_set:
+    run Selection Center independently
+    evidence must cover package.topK + active_pool symbols
+
+  build per-symbol package evidence
+  compute fusion_score/fusion_rank by fusion_policy
+  review_universe = active_pool ∪ fusion_topK
+
+  for each active item:
+    use latest_rank = fusion_rank
+    use package evidence for explanation / rank conflict flags
+    call ExitGuard for stop loss / take profit / alpha decay / time stop
+    persist advisory_daily_review with fusion_policy_sha256 + per-package evidence_id(s)
+
+  for each new candidate in fusion_top20 - active_pool:
+    apply entry hysteresis and replacement budget
+    enter only when fusion rank and policy evidence are complete
+```
+
+**质量报告新增指标**：
+
+- `overlap_at_20` / `overlap_at_40`: 多策略包候选重合度。
+- `rank_corr`: 包间 rank 相关性。
+- `consensus_bucket_return`: 多包共识股表现。
+- `single_package_support_return`: 单包支持股表现。
+- `rank_conflict_bucket_return`: 包间强分歧股票表现。
+- `fusion_vs_single_package`: 融合池相对各单包 TopK 的收益、回撤、换手、退出原因差异。
+- `turnover_by_fusion_policy`: 不同 package 权重/缺失策略的换手差异。
+
+该规则参考成熟量化组合实践：多模型/多因子组合通常先做因子标准化、rank/score fusion 或 sleeve portfolio construction，再由组合层统一控制权重、换手、风险与解释；当 raw score 标尺不可比时，rank fusion 比直接分数平均更稳健。MSCI 多因子指数、Black-Litterman views、多 alpha portfolio construction、Reciprocal Rank Fusion、transaction-cost-aware rebalancing 均可作为后续 Phase 3/4 质量报告与 QE 验证的参考。
+
 ---
 
 ## 6. 实施阶段（粗粒度 5 阶段 + 严格验收）
@@ -391,7 +486,7 @@ for each active advisory item:
 
 - **目标**：实现 §5 状态机与每日复评闭环，"观察选股/荐股效果"的主场。
 - **复用**：`app.watchlist_items`（扩列 `status`/`exited_at`/`exit_reason`/`planned_entry`/`actual_entry` 或新增 `app.advisory_lifecycle` + `app.advisory_daily_review` 表，二选一在 Phase 2 设计评审定）；`/to-watchlist` 端点；`selection.daily_selection_evidence`；Phase 0 `exit_guard` evaluator。
-- **范围-做**：状态机 CANDIDATE→ENTERED→HOLDING→EXITED；每日复评 job（读当日 daily_selection_evidence + watchlist → action+reason+evidence 落库）；Top20 重跑但不全量覆盖荐股池，采用 `active_pool ∪ topK` 合并复评、入选/退出阈值分离、替换预算；ExitGuard 覆盖 stop loss、trailing/take profit、alpha/rank 衰减、time stop；T+1 标注（★4）；advisory 退出仅改 status，不成交。
+- **范围-做**：状态机 CANDIDATE→ENTERED→HOLDING→EXITED；每日复评 job（读当日 daily_selection_evidence + watchlist → action+reason+evidence 落库）；Top20 重跑但不全量覆盖荐股池，采用 `active_pool ∪ topK` 合并复评、入选/退出阈值分离、替换预算；多策略包默认采用 `fusion_pool + weighted_rank_fusion`，保留 per-package rank/score evidence，并以 `fusion_rank` 作为 lifecycle canonical rank；ExitGuard 覆盖 stop loss、trailing/take profit、alpha/rank 衰减、time stop；T+1 标注（★4）；advisory 退出仅改 status，不成交。
 - **范围-不做**：**绝不**写 Paper v2 ledger、**绝不**下单；不依赖 QE 验证（advisory 可先用 rule_default policy）。
 - **验收标准（客观）**：
   1. 状态机迁移完备且单测覆盖全部合法/非法迁移。
@@ -404,6 +499,8 @@ for each active advisory item:
   8. Top20 复评语义正确：每日新 Top20 不直接全量覆盖旧荐股；旧荐股在 `rank_enter=20`、`rank_exit=40`、`confirm_days=2` 等 hysteresis 规则下保留或退出；普通替换受 `daily_replacement_budget` 限制。
   9. selection evidence 覆盖 `topK + active_pool`；active item 缺 rank/score evidence 时 fail-fast 或记 `WAITING_DATA`，不得静默退出或填默认 rank。
   10. 退出机制覆盖 STOP_LOSS / STOP_LOSS_DEFERRED_T1 / TAKE_PROFIT_TRAILING / TAKE_PROFIT_ALPHA_DECAY / ALPHA_RANK_DROP_EXIT / TIME_STOP / EXIT_ELIGIBILITY；同 code 重新入选必须生成新 episode。
+  11. 多策略包复评中，`latest_rank` 明确等于 `fusion_rank`；`package_raw_scores`、`package_raw_ranks`、`package_rank_scores`、`support_count`、`rank_dispersion`、`fusion_policy_sha256` 均进入 evidence；raw score 不得跨包直接平均作为排序依据。
+  12. 策略包集合、权重、融合方法或缺失策略变化时生成新的 `fusion_policy_sha256`；历史 episode 不得无标记跨 policy 比较。
 - **审核 checklist**：状态机正确、每日复评幂等可重跑、T+1 正确、复权/停牌处理正确、零成交/零 ledger、与 Paper v2 边界清晰、reason/evidence 齐全。
 - **门槛**：上述 + 我签核。
 
@@ -479,6 +576,7 @@ for each active advisory item:
 3. 首个进入 Phase 4 enforced 的策略族：建议 `ScoreWeightedTopkStrategyV2 + V25_1_SMALL_CAP`。
 4. 能力 C 每日复评的退出规则第一版：建议 `alpha_decay_exit(rank_drop) + soft/hard stop`，`take_profit` 默认关闭（多因子优先 alpha 衰减退出）。
 5. advisory 层是否对用户开放手工建仓价/手工止损：若开放，须作为新 policy 重新验证，不得覆盖原 hash。
+6. 多策略包能力 C 第一版是否采纳 `fusion_pool + weighted_rank_fusion` 为默认，`sleeve_mode` 仅保留设计接口、暂不进入 Phase 2 默认实现？建议采纳，避免不同 horizon/风格策略被强行合并。
 
 ---
 
