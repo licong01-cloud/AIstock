@@ -1,0 +1,65 @@
+{
+  "actual": "merge-finalizer can attempt to delete the current cwd worktree and fail with Permission denied, leaving aftercare partially complete until an operator switches to root and manually cleans up.",
+  "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "tests/aistock_validation/bugs/20260603_BUG-236-merge-finalizer-cleanup-fails-when-executed-from-source-worktree-cwd.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-236",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized.",
+    "Add regression coverage for merge-finalizer cleanup from source worktree cwd."
+  ],
+  "created_at": "2026-06-03T15:09:57.219631Z",
+  "description": "merge-finalizer can attempt to delete the current cwd worktree and fail with Permission denied, leaving aftercare partially complete until an operator switches to root and manually cleans up.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260603-0fac8b410572",
+      "timestamp": "2026-06-03T15:09:57.219628Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "When cleanup is requested, merge-finalizer should run cleanup from a safe cwd outside any worktree it may delete, then remove the source worktree/branch only after normal safety checks pass.",
+  "first_seen_at": "2026-06-03T15:09:57.219631Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 659,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/659",
+  "last_seen_at": "2026-06-03T15:09:57.219631Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/aistock_issue_workflow.py merge-finalizer --bug-id BUG-234 --source-pr-url https://github.com/licong01-cloud/AIstock/pull/655 --source-branch bug/BUG-234-dr-snapshot-uses-stale-aistock-pg-container-name-20260603 --source-worktree F:\\Dev\\AIstock_worktrees\\BUG-234-dr-snapshot-uses-stale-aistock-pg-container-name-20260603 --validation-evidence ... --sync-root --merge-close-sync-pr --cleanup --apply",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "guardrail_changed_files",
+    "validation_catalog_integrity",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "merge-finalizer cleanup fails when executed from source worktree cwd",
+  "trigger_condition": {
+    "fingerprint": "0fac8b4105723d7b306d2df5",
+    "source_event_id": "FE-20260603-0fac8b410572"
+  },
+  "verification_run_id": null
+}

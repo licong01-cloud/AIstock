@@ -2673,7 +2673,7 @@ def test_merge_finalizer_can_merge_close_sync_pr_and_cleanup(
     ]
 
 
-def test_merge_finalizer_relocates_before_cleaning_current_source_worktree(
+def test_merge_finalizer_defers_source_cleanup_when_invoked_from_source_worktree(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2748,14 +2748,19 @@ def test_merge_finalizer_relocates_before_cleaning_current_source_worktree(
         apply=True,
     )
 
-    assert payload["workflow_gate"] == "complete"
+    assert payload["workflow_gate"] == "close_sync_persisted"
     assert payload["cleanup_cwd_relocation"] == {
         "from": str(source_worktree),
         "to": str(isolated_workflow_root),
         "reason": "cleanup_target_contains_current_cwd",
         "relocated": True,
     }
-    assert cleanup_cwds == [isolated_workflow_root, isolated_workflow_root]
+    assert payload["source_cleanup_deferred"] is True
+    assert payload["cleanup"]["workflow_gate"] == "ready_for_cleanup"
+    assert payload["cleanup"]["reason"] == "source_worktree_contains_invoking_cwd"
+    assert "cleanup-after-merge" in payload["cleanup"]["next_command"]
+    assert payload["next_commands"] == [payload["cleanup"]["next_command"]]
+    assert cleanup_cwds == [isolated_workflow_root]
     assert Path.cwd() == isolated_workflow_root
 
 
