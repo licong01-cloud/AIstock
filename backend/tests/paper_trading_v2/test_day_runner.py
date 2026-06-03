@@ -33,7 +33,7 @@ from backend.services.strategy_package.selection_artifact import (
 from backend.services.strategy_package.service import StrategyPackageService
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, RuntimeConfigInvalidError, StrategyPackageValidationError
 from backend.services.trading_core.limit_price_provider import DailyLimitPrice
-from backend.services.trading_core.models import AccountSnapshot, MinuteBar, PositionLot, RunStatus
+from backend.services.trading_core.models import AccountSnapshot, MinuteBar, Order, OrderSide, OrderStatus, OrderType, PositionLot, RunStatus
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
 
@@ -120,6 +120,49 @@ def make_raw_bars(*, include_suspend_status: bool = True) -> list[dict]:
             row["is_suspended"] = False
         rows.append(row)
     return rows
+
+
+def test_minqmt_reconcile_accepts_broker_partial_odd_lot_trade_row() -> None:
+    order = Order(
+        order_id="ord_minqmt_partial_odd_lot",
+        intent_id="intent_minqmt_partial_odd_lot",
+        package_id="pkg_unit",
+        portfolio_id="paper_unit",
+        symbol="301135.SZ",
+        side=OrderSide.SELL,
+        quantity=30_100,
+        order_type=OrderType.LIMIT,
+        limit_price=18.1,
+        status=OrderStatus.SUBMITTED,
+    )
+
+    fills = PaperTradingDayRunner._miniqmt_fills_from_trades(
+        [
+            {
+                "traded_id": "1010000037440494",
+                "stock_code": "301135.SZ",
+                "stock_name": "瑞德智能",
+                "order_type": 24,
+                "traded_time": "144315",
+                "traded_price": 18.11,
+                "traded_volume": 190,
+                "traded_amount": 3440.9,
+                "order_id": "1090535320",
+                "order_sysid": "4933",
+                "commission": 0.0,
+                "strategy_name": "paper_1d9b1f03700f4810a",
+                "order_remark": "paper-v2-miniqmt",
+            }
+        ],
+        order=order,
+        native={"miniqmt_order_id": "1090535320"},
+        trade_date=date(2026, 6, 3),
+    )
+
+    assert len(fills) == 1
+    assert fills[0].quantity == 190
+    assert fills[0].metadata["authority_source"] == "MINIQMT_TRADE"
+    assert fills[0].metadata["miniqmt_trade_raw"]["traded_volume"] == 190
 
 
 class FakeDbMinuteProvider:
