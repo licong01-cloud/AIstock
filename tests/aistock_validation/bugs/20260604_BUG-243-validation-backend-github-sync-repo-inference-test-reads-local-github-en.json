@@ -1,0 +1,76 @@
+{
+  "actual": "Post-merge validation_center_backend on canonical root fails because test_run_infers_repo_from_git_remote_for_live_sync deletes GITHUB_REPOSITORY but does not skip the repo-local .env.github-issues-local loader, so scripts/bug_github_sync.py loads GITHUB_REPOSITORY=licong01-cloud/AIstock instead of using the mocked tmp_path git remote owner/repo. This makes validation_center_backend fail in the production sync root after BUG-242 merge.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260604_BUG-243-validation-backend-github-sync-repo-inference-test-reads-local-github-en.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/scripts/test_bug_github_sync.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-243",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-03T19:16:19.597882Z",
+  "description": "Post-merge validation_center_backend on canonical root fails because test_run_infers_repo_from_git_remote_for_live_sync deletes GITHUB_REPOSITORY but does not skip the repo-local .env.github-issues-local loader, so scripts/bug_github_sync.py loads GITHUB_REPOSITORY=licong01-cloud/AIstock instead of using the mocked tmp_path git remote owner/repo. This makes validation_center_backend fail in the production sync root after BUG-242 merge.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260604-771ee66b6d37",
+      "timestamp": "2026-06-03T19:16:19.597878Z"
+    },
+    {
+      "action": "validation_passed",
+      "actor": "codex",
+      "note": "BUG-243 validation passed: targeted repo inference pytest, full bug_github_sync script tests, validation_module_registry_l0, validation_center_backend, l0, and git diff --check.",
+      "timestamp": "2026-06-03T19:22:21.300319Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-03T19:16:19.597882Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 679,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/679",
+  "last_seen_at": "2026-06-03T19:16:19.597882Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m pytest backend/tests/scripts/test_bug_github_sync.py::test_run_infers_repo_from_git_remote_for_live_sync -q -p no:cacheprovider",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Validation backend GitHub sync repo inference test reads local GitHub env",
+  "trigger_condition": {
+    "fingerprint": "771ee66b6d371ebc04b9a213",
+    "source_event_id": "FE-20260604-771ee66b6d37"
+  },
+  "verification_run_id": null,
+  "workflow_gate": "validation_passed_pending_pr",
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_bug_github_sync.py::test_run_infers_repo_from_git_remote_for_live_sync -q -p no:cacheprovider -> 1 passed",
+    "python -m pytest backend/tests/scripts/test_bug_github_sync.py -q -p no:cacheprovider -> 34 passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed and ownership scan passed",
+    "python -m nox -s validation_center_backend -> 356 passed; coverage line 80.07 branch 62.34",
+    "python -m nox -s l0 -> success; guardrail blocking=0",
+    "git diff --check origin/main...HEAD -> passed"
+  ]
+}
