@@ -5797,6 +5797,17 @@ def _cleanup_merge_verification(
     return payload
 
 
+def _cleanup_preflight_fetch_origin(root: Path, *, apply: bool) -> dict[str, Any]:
+    if not apply:
+        return {"status": "skipped", "reason": "dry_run"}
+    result = _run_command(["git", "fetch", "origin", "--prune"], cwd=root, timeout=120)
+    return {
+        "status": "fetched" if result.get("ok") else "failed",
+        "command": "git fetch origin --prune",
+        "result": result,
+    }
+
+
 def _canonical_bug_record_snapshot(bug_id: str, root: Path | None = None) -> dict[str, Any]:
     canonical_root = root or _canonical_root()
     payload: dict[str, Any] = {
@@ -7189,6 +7200,7 @@ def build_cleanup_after_merge_plan(
     canonical_root: str | None = None,
 ) -> dict[str, Any]:
     root = Path(canonical_root) if canonical_root else _canonical_root()
+    pre_cleanup_fetch = _cleanup_preflight_fetch_origin(root, apply=apply)
     current_branch = _git(["branch", "--show-current"], cwd=root, check=False)
     local_branches = set(
         _git(["for-each-ref", "--format=%(refname:short)", "refs/heads"], cwd=root, check=False).splitlines()
@@ -7231,6 +7243,10 @@ def build_cleanup_after_merge_plan(
     root_sync_safe_with_dirty = _root_sync_safe_with_dirty(root_git)
     blocking: list[str] = []
     warnings: list[str] = []
+    if pre_cleanup_fetch.get("status") == "failed":
+        result = pre_cleanup_fetch.get("result") if isinstance(pre_cleanup_fetch.get("result"), dict) else {}
+        detail = result.get("stderr") or result.get("stdout") or "unknown error"
+        blocking.append(f"failed to refresh origin/main before cleanup: {detail}")
     if branch == current_branch and apply:
         blocking.append("refusing to cleanup the currently checked-out branch")
     if not merge_verified:
@@ -7289,6 +7305,7 @@ def build_cleanup_after_merge_plan(
         "worktree_registered": worktree_registered,
         "worktree_empty": worktree_empty,
         "worktree_is_current_cwd": worktree_is_current_cwd,
+        "pre_cleanup_fetch": pre_cleanup_fetch,
         "root_git": root_git,
         "root_dirty_files": root_dirty_files,
         "origin_equivalent_dirty_files": origin_equivalent_dirty_files,
@@ -7313,8 +7330,17 @@ def build_cleanup_after_merge_plan(
             raise WorkflowError("; ".join(blocking))
         started = time.monotonic()
         applied: list[dict[str, Any]] = []
+        if pre_cleanup_fetch.get("status") == "fetched":
+            applied.append(
+                {
+                    "command": pre_cleanup_fetch.get("command") or "git fetch origin --prune",
+                    "phase": "pre_cleanup_verification",
+                    "result": pre_cleanup_fetch.get("result"),
+                }
+            )
         if sync_root:
-            applied.append({"command": "git fetch origin --prune", "result": _execute_checked(["git", "fetch", "origin", "--prune"], cwd=root, timeout=120)})
+            if pre_cleanup_fetch.get("status") != "fetched":
+                applied.append({"command": "git fetch origin --prune", "result": _execute_checked(["git", "fetch", "origin", "--prune"], cwd=root, timeout=120)})
             if origin_equivalent_dirty_files and not unrelated_root_dirty_files:
                 applied.append(
                     {
