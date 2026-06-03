@@ -1,0 +1,66 @@
+{
+  "actual": "DR snapshot checkout in run 26866682639 spent ~25 minutes in git fetch/retry before manual cancellation.",
+  "allowed_write_scope": [
+    ".github/workflows/nightly.yml",
+    "tests/aistock_validation/bugs/20260603_BUG-228-self-hosted-nightly-checkout-stalls-during-actions-checkout-git-fetch-on.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-228",
+  "closed_at": null,
+  "closure_requirements": [
+    "Self-hosted Nightly checkout steps are bounded so checkout stalls fail fast instead of occupying the runner indefinitely.",
+    "Checkout progress logs are suppressed for self-hosted Nightly jobs to reduce noisy GitHub logs/token-heavy diagnostics.",
+    "Run required validation plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-03T06:33:43.204093Z",
+  "description": "Nightly run 26866682639 proved the self-hosted Windows runner was online and accepted work, but the DR snapshot job stalled during actions/checkout@v4. The checkout fetch first failed after about 12 minutes with curl 18 / early EOF / invalid index-pack output, then retried and stayed in git fetch until the run was manually cancelled around 25 minutes. This should be bounded and quieter so one flaky network checkout cannot occupy the only self-hosted runner indefinitely.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260603-8e04b593f600",
+      "timestamp": "2026-06-03T06:33:43.204089Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/actions/runs/26866682639/job/79231854294"
+  ],
+  "expected": "Nightly self-hosted checkout completes quickly or fails fast with actionable evidence.",
+  "first_seen_at": "2026-06-03T06:33:43.204093Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 630,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/630",
+  "last_seen_at": "2026-06-03T06:33:43.204093Z",
+  "module": "validation.runner",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "gh run view 26866682639 --repo licong01-cloud/AIstock --job 79231854294 --log",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files",
+    "validation_catalog_integrity",
+    "validation_center_backend",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "infra_failure",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation.runner"
+  ],
+  "title": "Self-hosted Nightly checkout stalls during actions/checkout git fetch on Windows runner",
+  "trigger_condition": {
+    "fingerprint": "8e04b593f60035866b2574b3",
+    "source_event_id": "FE-20260603-8e04b593f600"
+  },
+  "verification_run_id": null
+}
