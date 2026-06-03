@@ -4,6 +4,8 @@ import json
 import textwrap
 from pathlib import Path
 
+import yaml
+
 from backend.services.validation.catalog_integrity import (
     CATALOG_INTEGRITY_SCHEMA,
     run_catalog_integrity,
@@ -259,6 +261,24 @@ def test_catalog_integrity_passes_on_aligned_catalogs(tmp_path: Path) -> None:
     assert report["summary"]["plans"] == 4
     assert report["summary"]["runner_enabled_plans"] == 3
     assert report["findings"] == []
+
+
+def test_nightly_codegraph_freshness_is_not_skipped_by_weekly_ua_guard() -> None:
+    workflow_path = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "nightly.yml"
+    workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8")) or {}
+    steps = workflow["jobs"]["code-intelligence-weekly"]["steps"]
+    run_blocks = [str(step.get("run") or "") for step in steps if isinstance(step, dict)]
+
+    freshness_runs = [block for block in run_blocks if "code_intelligence_adapter.py freshness" in block]
+    ua_runs = [block for block in run_blocks if "code_intelligence_adapter.py ua-summary-all" in block]
+
+    assert freshness_runs
+    assert "date -u +%u" not in freshness_runs[0]
+    assert "exit 0" not in freshness_runs[0]
+    assert "|| true" in freshness_runs[0]
+    assert ua_runs
+    assert "date -u +%u" in ua_runs[0]
+    assert "exit 0" in ua_runs[0]
 
 
 def test_catalog_integrity_reports_command_session_module_and_resource_issues(tmp_path: Path) -> None:

@@ -32,7 +32,12 @@ CodeGraph 已经被 issue workflow 和 PR Quality 用作代码结构与 affected
 
 ## 4. Nightly 接入
 
-现有 `code-intelligence-weekly` job 在生成 Understand Anything summary 前执行：
+现有 `code-intelligence-weekly` job 拆成两个步骤：
+
+1. 每次 scheduled / workflow_dispatch 运行都先生成 CodeGraph freshness artifact。
+2. 只有 Sunday UTC 或手动 workflow_dispatch 才继续生成 Understand Anything summary。
+
+CodeGraph freshness 不得被 weekly UA guard 提前跳过：
 
 ```bash
 python scripts/code_intelligence_adapter.py freshness \
@@ -42,6 +47,8 @@ python scripts/code_intelligence_adapter.py freshness \
 
 `|| true` 是有意设计：CodeGraph 是上下文加速器，不是验证真源。Nightly 的真实质量门禁仍由 nox、Validation Center、DR、Paper v2/QE L3 负责。
 
+Understand Anything 摘要继续保持 weekly / manual cadence，避免让普通 Nightly 和小 issue workflow 增加 LLM 图谱成本。
+
 ## 5. 验收矩阵
 
 | ID | 验收项 | 验证 |
@@ -49,7 +56,7 @@ python scripts/code_intelligence_adapter.py freshness \
 | CGF-001 | fresh index 返回 ready | unit test: up-to-date index |
 | CGF-002 | CodeGraph 缺失返回 warning | unit test: missing CLI/index |
 | CGF-003 | 过期 index 返回 warning/stale | unit test: stale mtime |
-| CGF-004 | Nightly 上传 freshness artifact | workflow YAML parse + local dry-run |
+| CGF-004 | Nightly 每次运行上传 freshness artifact | workflow YAML parse 确认 freshness step 不含 Sunday guard + local dry-run |
 | CGF-005 | 不阻断 issue workflow | payload `blocking_for_issue_workflow=false` |
 
 ## 6. 上线策略
