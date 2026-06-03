@@ -29,6 +29,11 @@ python scripts/aistock_mcp_gateway.py --list-tools --profile=full
 python scripts/aistock_mcp_gateway.py --self-check --profile=lite
 python scripts/aistock_mcp_gateway_doctor.py --json
 python -m pytest tests/mcp -q -p no:cacheprovider
+$files = git diff --name-only origin/main | Where-Object { $_ -and (Test-Path -LiteralPath $_) }; python scripts/aistock_guardrail_scan.py @($files) --baseline-json tests/aistock_validation/guardrails_baseline_20260511.json --fail-new-only --fail-on-severity P1
+$files = git diff --name-only origin/main | Where-Object { $_ -and (Test-Path -LiteralPath $_) }; python scripts/aistock_module_ownership_scan.py @($files) --fail-on-unmapped --fail-on-ambiguous
+python scripts/aistock_validation_catalog_integrity.py --output-json tmp/validation/mcp_gateway/catalog_integrity.json --fail-on-warning
+python -m pytest tests/mcp backend/tests/test_aistock_guardrail_scan.py backend/tests/test_validation_module_ownership.py -q -p no:cacheprovider
+$files = git diff --name-only origin/main | Where-Object { $_ -and (Test-Path -LiteralPath $_) }; python -m nox -s l0 -- @($files)
 ```
 
 ## 结果摘要
@@ -39,6 +44,11 @@ python -m pytest tests/mcp -q -p no:cacheprovider
 - `full` profile：209 个工具（203 个既有业务工具 + 6 个 catalog 平台工具）。
 - `tests/mcp`：17 passed。
 - `aistock_mcp_gateway_doctor.py --json`：`status=pass`，`static_no_llm.findings=[]`。
+- 显式 branch/worktree changed-file guardrail：`files=24, findings=0, blocking=0`；`.mcp.json` 按项目级稳定 MCP 配置纳入根目录配置白名单。
+- 模块归属扫描：`files=24, mapped=24, unmapped=0, ambiguous=0`；新增 `platform.mcp_gateway` ownership。
+- Catalog integrity：`state=passed`，`error_count=0`，`warning_count=0`。
+- MCP + guardrail/module ownership 回归：`tests/mcp` + `backend/tests/test_aistock_guardrail_scan.py` + `backend/tests/test_validation_module_ownership.py` -> 40 passed。
+- L0 preflight：`python -m nox -s l0 -- @($files)` -> PASS；`scan_quality_guardrails` 仅保留 1 条 non-blocking MEDIUM review note，P1 guardrail `blocking=0`。
 
 ## 生产门禁
 

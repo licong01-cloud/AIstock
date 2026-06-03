@@ -112,6 +112,18 @@ rules:
     layer: dev_quality_tooling
     risk_level: high
     ownership_reason: Open-source CI/CD and local quality tool configs define issue workflow automation gates.
+  - rule_id: mcp_gateway_platform
+    priority: 90
+    include:
+      - backend/mcp/**
+      - tests/mcp/**
+      - scripts/aistock_mcp_gateway.py
+      - scripts/aistock_mcp_gateway_doctor.py
+    primary_module: platform.mcp_gateway
+    impact_modules: [validation.guardrails, research_pipeline, research_assistant, qe, platform.config]
+    layer: mcp_gateway
+    risk_level: high
+    ownership_reason: Unified MCP gateway code, profiles, manifests, and contract tests control agent-facing access to AIstock tools.
   - rule_id: validation_backend_tests
     priority: 95
     include:

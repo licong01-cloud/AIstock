@@ -523,6 +523,16 @@ modules:
     description_zh: 覆盖共享后端、API、数据库、调度、配置、监控和跨模块基础设施。
     test_plans:
       required_on_change: [l0]
+  - module_id: platform.mcp_gateway
+    display_name: MCP Gateway
+    parent_module: platform
+    module_type: cross_cutting
+    risk_level: high
+    description: Unified MCP gateway, profile registry, tool manifest, and client-facing MCP configuration.
+    description_zh: 覆盖统一 MCP gateway、profile 注册表、工具清单和客户端侧 MCP 配置。
+    test_plans:
+      required_on_change: [l0]
+      recommended: [qe_mcp_backend, research_mcp_contract, research_assistant_mcp_contract]
   - module_id: platform.api
     display_name: Platform API
     parent_module: platform
