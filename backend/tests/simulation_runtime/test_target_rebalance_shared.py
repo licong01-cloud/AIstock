@@ -34,7 +34,7 @@ from backend.services.simulation_runtime import (
     TradingRuleService,
 )
 from backend.services.simulation_runtime.models import canonical_json_sha256
-from backend.services.trading_core.errors import StrategyPackageValidationError
+from backend.services.trading_core.errors import RuntimeConfigInvalidError
 from backend.services.trading_core.models import OrderSide, PositionLot
 
 
@@ -380,7 +380,7 @@ def test_execution_plan_compiler_rejects_paper_only_policy() -> None:
         ),
     )
 
-    with pytest.raises(StrategyPackageValidationError):
+    with pytest.raises(RuntimeConfigInvalidError):
         ExecutionPlanCompiler().compile_plan(
             runtime_release=release,
             binding=binding,
