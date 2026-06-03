@@ -35,8 +35,8 @@
   "expected": "Self-hosted Nightly jobs can start from a clean disposable workspace without polluting F:\\\\Dev\\\\AIstock and without depending on GitHub checkout for every job when the expected main commit is already present locally.",
   "first_seen_at": "2026-06-03T07:57:48.464463Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "627ece8d3fa63f1ef1f332495b79e3e1bb6cecc7",
+  "fixed_at": "2026-06-03T09:10:33.208010Z",
   "github_issue_number": 639,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/639",
   "last_seen_at": "2026-06-03T07:57:48.464463Z",
@@ -44,6 +44,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/643",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -57,7 +58,7 @@
   "risk_area": "infra_failure",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -66,5 +67,8 @@
     "fingerprint": "3747c81767c8f6edbf4407e4",
     "source_event_id": "FE-20260603-3747c81767c8"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_prepare_self_hosted_workspace.py backend/tests/scripts/test_ci_failure_issue_summary.py -q -> passed (22 passed); python -m ruff check scripts/ci/prepare_self_hosted_workspace.py scripts/ci_failure_issue_summary.py backend/tests/scripts/test_prepare_self_hosted_workspace.py backend/tests/scripts/test_ci_failure_issue_summary.py -> passed; git diff --check -> passed; prepare_self_hosted_workspace smoke -> passed; python -m nox -s l0 -> passed; python -m nox -s validation_center_backend -> passed (355 passed); python -m nox -s validation_catalog_integrity validation_module_registry_l0 validation_coverage_backend -> passed; GitHub PR #643 CI -> all green"
+  ],
   "verification_run_id": null
 }
