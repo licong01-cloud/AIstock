@@ -73,6 +73,7 @@ jobs:
         shell: powershell
     env:
       DR_TARGET_DIR: 'E:/DEV backup/aistock_pg_snapshots'
+      DR_PG_CONTAINER: 'timescaledb'
     steps:
       - name: Prepare local workspace (no GitHub checkout)
         timeout-minutes: 2
@@ -90,6 +91,11 @@ jobs:
             Write-Host "::error::docker not on PATH on this self-hosted runner"
             exit 1
           }
+          $containers = docker ps --format "{{.Names}}"
+          if ($containers -notcontains $env:DR_PG_CONTAINER) {
+            Write-Host "::error::DR postgres container $env:DR_PG_CONTAINER is not running on this self-hosted runner"
+            exit 1
+          }
           if (-not (Test-Path -LiteralPath $env:DR_TARGET_DIR -PathType Container)) {
             Write-Host "::error::DR target dir $env:DR_TARGET_DIR missing on this runner"
             exit 1
@@ -97,7 +103,7 @@ jobs:
 
       - name: Run dr_snapshot_prod_db.py
         run: |
-          conda run -n AIstock python scripts/dr_snapshot_prod_db.py --target-dir "$env:DR_TARGET_DIR"
+          conda run -n AIstock python scripts/dr_snapshot_prod_db.py --target-dir "$env:DR_TARGET_DIR" --container "$env:DR_PG_CONTAINER"
 
       - name: Run dr_cleanup_old_snapshots.py (apply)
         run: |
@@ -141,6 +147,7 @@ jobs:
         shell: powershell
     env:
       DR_BACKUP_DIR: 'E:/DEV backup/aistock_pg_snapshots'
+      DR_PG_CONTAINER: 'timescaledb'
     steps:
       - name: Prepare local workspace (no GitHub checkout)
         timeout-minutes: 2
