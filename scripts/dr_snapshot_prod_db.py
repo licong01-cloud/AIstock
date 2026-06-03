@@ -7,10 +7,11 @@ Strategy
 1. Read prod connection details from F:/Dev/AIstock/.env (TDX_DB_HOST/PORT/...).
 2. Refuse to run unless TDX_DB_PORT == 5432 and TDX_DB_NAME == 'aistock'
    (defends against accidentally snapshotting a dev DB).
-3. Locate the local docker container that hosts that prod DB (default name
-   ``aistock-pg`` -- override via ``--container``) and run pg_dump *inside*
-   the container so the dump is produced with the exact pg version that
-   wrote the rows.
+3. Locate the local docker container that hosts that prod DB. The default
+   name is ``aistock-pg`` for historical hosts, but ``DR_PG_CONTAINER``
+   or ``--container`` may override it for hosts whose canonical container
+   is named differently. Run pg_dump *inside* that container so the dump
+   is produced with the exact pg version that wrote the rows.
 4. ``docker cp`` the dump out to ``--target-dir`` (default ``E:/DEV backup/``)
    with filename ``aistock_pg_<YYYYMMDD>.dump`` (or
    ``aistock_pg_<YYYYMM01>_permanent.dump`` on the 1st of each month).
@@ -54,7 +55,6 @@ import dataclasses
 import datetime as dt
 import json
 import os
-import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -67,12 +67,12 @@ ENV_FILE = Path("F:/Dev/AIstock/.env")
 # updating both keeps the nightly workflow chain consistent.
 DEFAULT_TARGET_DIR = Path("E:/DEV backup/aistock_pg_snapshots")
 DEFAULT_CONTAINER = "aistock-pg"
+CONTAINER_ENV_VAR = "DR_PG_CONTAINER"
 DEFAULT_DB_USER_INSIDE = "postgres"
 PROD_PORT = 5432
 PROD_DBNAME = "aistock"
 DUMP_FORMAT = "custom"
 DUMP_COMPRESS = "9"
-DUMP_JOBS = "2"
 MIN_EXPECTED_DUMP_BYTES = 1024  # anything below this is suspect
 
 
@@ -180,7 +180,6 @@ def execute_pg_dump_inside_container(plan: SnapshotPlan) -> None:
         plan.pg_dbname,
         f"--format={DUMP_FORMAT}",
         f"--compress={DUMP_COMPRESS}",
-        f"--jobs={DUMP_JOBS}",
         "--no-owner",
         "--no-acl",
         f"--file={plan.in_container_path}",
@@ -212,11 +211,8 @@ def validate_dump(plan: SnapshotPlan) -> dict[str, object]:
             f"FATAL: dump at {plan.target_path} is suspiciously small ({size} bytes); "
             "aborting before publishing snapshot."
         )
-    cmd = ["docker", "exec", "-i", plan.container, "pg_restore", "--list"]
-    proc = run(cmd, capture=True)
     # Pipe the file in via stdin. We could also docker cp it back in but
     # streaming via stdin is simpler and avoids round-tripping the file.
-    # Recompute: feed the local file via stdin to avoid round-trip.
     list_cmd = ["docker", "exec", "-i", plan.container, "pg_restore", "--list"]
     with plan.target_path.open("rb") as fh:
         proc = subprocess.run(list_cmd, input=fh.read(), capture_output=True, check=True)
@@ -254,7 +250,7 @@ def render_dry_run(plan: SnapshotPlan) -> str:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--target-dir", default=str(DEFAULT_TARGET_DIR), type=Path)
-    p.add_argument("--container", default=DEFAULT_CONTAINER)
+    p.add_argument("--container", default=os.environ.get(CONTAINER_ENV_VAR, DEFAULT_CONTAINER))
     p.add_argument("--pg-user", default=DEFAULT_DB_USER_INSIDE)
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--keep-temp", action="store_true")
