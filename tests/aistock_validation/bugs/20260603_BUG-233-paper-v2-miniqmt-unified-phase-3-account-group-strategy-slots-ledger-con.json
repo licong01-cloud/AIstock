@@ -36,10 +36,10 @@
       "timestamp": "2026-06-03T12:29:14.476021Z"
     },
     {
-      "timestamp": "2026-06-03T13:58:35Z",
-      "actor": "codex-cli",
       "action": "fixed_pending_review",
-      "note": "Implemented MiniQMT account_group_slots in qmt_strategy_ledger metadata/repository, QmtManagedOrderService batch account-group cash preflight, MiniQMTSim unified attribution/capacity, Paper v2 account_binding_mode default, and simulation_runtime group/slot binding fields. Validation passed: targeted 67 passed; focused 107 passed; qmt_strategy_ledger 105 passed; validation_module_registry_l0, l0, paper_v2_backend, PAPER_V2_L3_SKIP_UI=1 paper_v2_l3, validation_center_backend, py_compile, and git diff --check passed. Production gates noop."
+      "actor": "codex-cli",
+      "note": "Implemented MiniQMT account_group_slots in qmt_strategy_ledger metadata/repository, QmtManagedOrderService batch account-group cash preflight, MiniQMTSim unified attribution/capacity, Paper v2 account_binding_mode default, and simulation_runtime group/slot binding fields. Validation passed: targeted 67 passed; focused 107 passed; qmt_strategy_ledger 105 passed; validation_module_registry_l0, l0, paper_v2_backend, PAPER_V2_L3_SKIP_UI=1 paper_v2_l3, validation_center_backend, py_compile, and git diff --check passed. Production gates noop.",
+      "timestamp": "2026-06-03T13:58:35Z"
     }
   ],
   "evidence_uris": [
@@ -50,8 +50,8 @@
   "expected": "Same broker_account_id can host N=1 and N=2 strategy slots through one account group; allocated cash totals, strategy_name, order_remark, duplicate slot constraints, broker raw positions versus virtual lots reconciliation, and legacy exclusive read/disable compatibility are implemented and tested. BUG-204 fill idempotency/no-overfill remains inherited in slot ledger. No legacy exclusive path is deleted before Phase 7 user confirmation.",
   "first_seen_at": "2026-06-03T12:29:14.476024Z",
   "fix_branch": "bug/BUG-233-paper-v2-miniqmt-unified-phase-3-account-group-s-20260603",
-  "fix_commit": "e8ed7db32512b1376e0ebcf1a728db99c9c21a5f",
-  "fixed_at": "2026-06-03T13:58:35Z",
+  "fix_commit": "bee935906d5c05f6bb74a97424b29bc3a07781c9",
+  "fixed_at": "2026-06-03T14:59:33.486554Z",
   "github_issue_number": 652,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/652",
   "last_seen_at": "2026-06-03T13:58:35Z",
@@ -59,6 +59,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/654",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -82,5 +83,8 @@
     "fingerprint": "ebb701ee58e6754f041ad3db",
     "source_event_id": "FE-20260603-ebb701ee58e6"
   },
+  "validation_evidence": [
+    "PR #654 checks all successful; no DDL files changed -> production_ddl_gate=noop; local required validation passed before PR"
+  ],
   "verification_run_id": "tests/aistock_validation/history/paper_v2_miniqmt_unified/20260603_215310_l3_bug-233-account-group-strategy-slots-ledger-convergence.md"
 }
