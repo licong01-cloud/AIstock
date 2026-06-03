@@ -364,6 +364,100 @@ class StrategyPackageSelectionService:
         )
 
     @staticmethod
+    def release_selection_runtime_config(runtime_release: StrategyRuntimeRelease) -> dict[str, Any]:
+        """Return the broker-neutral selection config persisted with a runtime release."""
+
+        release_config = runtime_release.release_config_json if isinstance(runtime_release.release_config_json, dict) else {}
+        metadata = release_config.get("metadata") if isinstance(release_config.get("metadata"), dict) else {}
+        candidate = StrategyPackageSelectionService._first_release_selection_config(
+            (
+                ("release_config_json.selection_runtime_config", release_config.get("selection_runtime_config")),
+                ("release_config_json.metadata.selection_runtime_config", metadata.get("selection_runtime_config")),
+            ),
+            runtime_release=runtime_release,
+        )
+        if candidate is None:
+            candidate = StrategyPackageSelectionService._first_release_selection_artifact_config(
+                (
+                    ("release_config_json.selection_artifact_config", release_config.get("selection_artifact_config")),
+                    ("release_config_json.selection_artifact", release_config.get("selection_artifact")),
+                    ("release_config_json.metadata.selection_artifact_config", metadata.get("selection_artifact_config")),
+                    ("release_config_json.metadata.selection_artifact", metadata.get("selection_artifact")),
+                ),
+                runtime_release=runtime_release,
+            )
+        if candidate is None:
+            return {}
+        assert_selection_only_payload_boundary(
+            candidate,
+            context={
+                "release_id": runtime_release.release_id,
+                "package_id": runtime_release.package_id,
+                "path": "strategy_runtime_release.selection_runtime_config",
+            },
+        )
+        return candidate
+
+    @staticmethod
+    def _first_release_selection_config(
+        candidates: tuple[tuple[str, Any], ...],
+        *,
+        runtime_release: StrategyRuntimeRelease,
+    ) -> dict[str, Any] | None:
+        for source, value in candidates:
+            if value is None:
+                continue
+            if not isinstance(value, dict):
+                raise RuntimeConfigInvalidError(
+                    "StrategyRuntimeRelease selection_runtime_config must be an object",
+                    context={
+                        "release_id": runtime_release.release_id,
+                        "package_id": runtime_release.package_id,
+                        "source": source,
+                        "selection_runtime_config_type": type(value).__name__,
+                    },
+                )
+            return deepcopy(value)
+        return None
+
+    @staticmethod
+    def _first_release_selection_artifact_config(
+        candidates: tuple[tuple[str, Any], ...],
+        *,
+        runtime_release: StrategyRuntimeRelease,
+    ) -> dict[str, Any] | None:
+        for source, value in candidates:
+            if value is None:
+                continue
+            if not isinstance(value, dict):
+                raise RuntimeConfigInvalidError(
+                    "StrategyRuntimeRelease selection_artifact_config must be an object",
+                    context={
+                        "release_id": runtime_release.release_id,
+                        "package_id": runtime_release.package_id,
+                        "source": source,
+                        "selection_artifact_config_type": type(value).__name__,
+                    },
+                )
+            return {"selection_artifact_config": deepcopy(value)}
+        return None
+
+    @staticmethod
+    def _merge_selection_runtime_config(
+        release_config: dict[str, Any],
+        request_config: dict[str, Any],
+    ) -> dict[str, Any]:
+        merged = deepcopy(release_config)
+        for key, value in request_config.items():
+            if isinstance(value, dict) and isinstance(merged.get(key), dict):
+                nested = deepcopy(merged[key])
+                nested.update(deepcopy(value))
+                merged[key] = nested
+            else:
+                merged[key] = deepcopy(value)
+        return merged
+
+    @staticmethod
     def _attach_runtime_release_binding(
         runtime_config: dict[str, Any],
         runtime_release: StrategyRuntimeRelease,
@@ -374,8 +468,12 @@ class StrategyPackageSelectionService:
             raise RuntimeConfigInvalidError(
                 "StrategyRuntimeRelease can only bind selection for its own single StrategyPackage",
                 context={"release_package_id": runtime_release.package_id, "package_ids": package_ids},
-            )
-        config = dict(runtime_config)
+                )
+        release_selection_config = StrategyPackageSelectionService.release_selection_runtime_config(runtime_release)
+        config = StrategyPackageSelectionService._merge_selection_runtime_config(
+            release_selection_config,
+            dict(runtime_config),
+        )
         existing = config.get(RUNTIME_PROFILE_BINDING_KEY)
         if isinstance(existing, dict):
             existing_version = str(existing.get("profile_version_id") or "")

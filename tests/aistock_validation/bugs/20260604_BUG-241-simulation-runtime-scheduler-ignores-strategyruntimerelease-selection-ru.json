@@ -1,0 +1,75 @@
+{
+  "actual": "Production SimulationLifecycleScheduler invokes StrategyPackageSelectionService with runtime_config={} when processing StrategyRuntimeRelease bindings, so unattended LocalSim/MiniQMT multi-strategy runs cannot find the authoritative selection artifact for the release runtime hash (observed runtime_config_hash=44136... instead of the 2026-06-04 package runtime hashes) and fail before plan/submit. This blocks unattended AIstock LocalSim and MiniQMT multi-strategy simulation validation.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260604_BUG-241-simulation-runtime-scheduler-ignores-strategyruntimerelease-selection-ru.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/simulation_runtime/selection.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/simulation_runtime/test_strategy_package_selection_service.py",
+    "tests/aistock_validation/history/paper_v2_selection_center/20260604_012529_l3_paper-v2-selection-center-l3-regression.md"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-241",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-03T17:12:30.982172Z",
+  "description": "Production SimulationLifecycleScheduler invokes StrategyPackageSelectionService with runtime_config={} when processing StrategyRuntimeRelease bindings, so unattended LocalSim/MiniQMT multi-strategy runs cannot find the authoritative selection artifact for the release runtime hash (observed runtime_config_hash=44136... instead of the 2026-06-04 package runtime hashes) and fail before plan/submit. This blocks unattended AIstock LocalSim and MiniQMT multi-strategy simulation validation.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260604-c5f29b46ff48",
+      "timestamp": "2026-06-03T17:12:30.982169Z"
+    },
+    {
+      "action": "validation_passed",
+      "actor": "codex",
+      "note": "BUG-241 code fix validated with targeted pytest, l0, paper_v2_backend, PAPER_V2_L3_SKIP_UI=1 paper_v2_l3, localsim_unattended_l3, miniqmt_sim_stub_l3, simulation_dual_backend_l4, validation_module_registry_l0, validation_center_backend, ruff, and git diff --check.",
+      "timestamp": "2026-06-03T17:32:15.085783Z"
+    }
+  ],
+  "evidence_uris": [
+    "tests/aistock_validation/history/paper_v2_selection_center/20260604_012529_l3_paper-v2-selection-center-l3-regression.md"
+  ],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-03T17:12:30.982172Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 672,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/672",
+  "last_seen_at": "2026-06-03T17:12:30.982172Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "StrategyPackageSelectionService.run_selection(... runtime_config={}, runtime_release=<release with metadata.selection_runtime_config>) before BUG-241 fix looks up runtime_config_hash=44136fa... instead of release-backed selection_artifact_config hash",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "validation_module_registry_l0",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "Simulation runtime scheduler ignores StrategyRuntimeRelease selection runtime config for unattended runs",
+  "trigger_condition": {
+    "fingerprint": "c5f29b46ff480758c1bd8378",
+    "source_event_id": "FE-20260604-c5f29b46ff48"
+  },
+  "verification_run_id": null,
+  "workflow_gate": "validation_passed_pending_pr"
+}

@@ -115,7 +115,13 @@ def _package_with_artifact(rows: list[dict]):
     return package_repo, artifact_repo, manifest, runtime
 
 
-def _release_for(manifest, runtime_config: dict, repository: InMemorySimulationRuntimeRepository):
+def _release_for(
+    manifest,
+    runtime_config: dict,
+    repository: InMemorySimulationRuntimeRepository,
+    *,
+    release_metadata: dict | None = None,
+):
     profile_hash = runtime_profile_config_sha256(runtime_config)
     return StrategyRuntimeReleaseService(repository=repository).create_release(
         package_id=manifest.package_id,
@@ -128,6 +134,7 @@ def _release_for(manifest, runtime_config: dict, repository: InMemorySimulationR
         execution_policy_sha256="unit_execution_policy_hash",
         tail_policy_version_id="unit_tail_policy_v1",
         tail_policy_sha256="unit_tail_policy_hash",
+        release_metadata=release_metadata,
         created_by="unit_test",
         created_reason="shared selection evidence test",
     )
@@ -178,6 +185,72 @@ def test_strategy_package_selection_service_persists_release_backed_evidence() -
     assert runtime_repo.get_daily_selection_evidence(evidence.evidence_id).artifact_hash == evidence.artifact_hash
     assert result.runtime_config["daily_selection_evidence"]["evidence_ids_by_package"][manifest.package_id] == evidence.evidence_id
     assert [item.symbol for item in result.aggregate_results] == ["000001.SZ", "000002.SZ"]
+
+
+def test_strategy_package_selection_service_uses_release_selection_artifact_config() -> None:
+    rows = [
+        {"symbol": "000001.SZ", "score": 0.9, "rank": 1, "reference_price": 10.0},
+        {"symbol": "000002.SZ", "score": 0.8, "rank": 2, "reference_price": 11.0},
+    ]
+    package_repo = InMemoryStrategyPackageRepository()
+    artifact_repo = InMemorySelectionScoreArtifactRepository()
+    manifest = freeze_manifest(
+        make_manifest().model_copy(
+            update={
+                "package_status": PackageStatus.SELECTION_ENABLED,
+                "strategy_config": {"strategy_id": "pkg_release_selection_config"},
+            }
+        )
+    )
+    package_repo.save_manifest(manifest)
+    release_selection_config = {
+        "selection_artifact_config": {
+            "auto_generate": True,
+            "signal_data_source": "DB_HISTORICAL",
+            "pit_mode": "PREVIOUS_TRADING_DAY_CLOSE",
+            "cutoff_date": "2024-01-02",
+            "include_reference_price": True,
+            "artifact_reuse": "same_trade_date_config_hash",
+        },
+        "runtime_profile": {
+            "selection": {"top_k": 2},
+            "tradability": {"exclude_suspended": False},
+        },
+    }
+    _seed_artifact(
+        artifact_repo,
+        manifest,
+        rows,
+        trade_date=date(2024, 1, 3),
+        runtime_config=release_selection_config,
+    )
+    runtime = StrategyPackageRuntime(artifact_repository=artifact_repo)
+    runtime_repo = InMemorySimulationRuntimeRepository()
+    release = _release_for(
+        manifest,
+        release_selection_config,
+        runtime_repo,
+        release_metadata={"selection_runtime_config": release_selection_config},
+    )
+
+    result = _selection_service(package_repo, runtime, runtime_repo).run_selection(
+        package_ids=[manifest.package_id],
+        mode=SelectionMode.SINGLE_PACKAGE,
+        trade_date=date(2024, 1, 3),
+        data_source="DB_HISTORICAL",
+        runtime_config={},
+        runtime_release=release,
+        created_by="unit_test",
+    )
+
+    assert [item.symbol for item in result.aggregate_results] == ["000001.SZ", "000002.SZ"]
+    assert result.runtime_config["selection_artifact_config"]["cutoff_date"] == "2024-01-02"
+    assert selection_artifact_runtime_hash(result.runtime_config) == selection_artifact_runtime_hash(
+        release_selection_config
+    )
+    evidence = result.evidence_by_package[manifest.package_id]
+    assert evidence.release_id == release.release_id
+    assert evidence.evidence_payload_json["selection_artifact_config"]["artifact_reuse"] == "same_trade_date_config_hash"
 
 
 @pytest.mark.parametrize(

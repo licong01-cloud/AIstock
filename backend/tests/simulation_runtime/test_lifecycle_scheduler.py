@@ -56,7 +56,7 @@ from backend.services.trading_core.models import PositionLot
 TRADE_DATE = date(2026, 5, 21)
 
 
-def _release_and_bindings(*, qmt_only: bool = False):
+def _release_and_bindings(*, qmt_only: bool = False, release_metadata: dict | None = None):
     repo = InMemorySimulationRuntimeRepository()
     service = StrategyRuntimeReleaseService(repository=repo)
     release = service.create_release(
@@ -70,6 +70,7 @@ def _release_and_bindings(*, qmt_only: bool = False):
         execution_policy_sha256="exec_policy_hash_v25_1_small_cap",
         tail_policy_version_id="tail_policy_close_v1",
         tail_policy_sha256="tail_policy_hash_close_v1",
+        release_metadata=release_metadata,
         created_by="unit-test",
         created_reason="scheduler test",
     )
@@ -404,6 +405,44 @@ def test_scheduler_plans_active_local_and_miniqmt_bindings_from_same_selection_e
     ]
     assert normalized_intents[0] == normalized_intents[1]
     assert ("000003.SZ", "SELL", 77, "DROPPED_FROM_SELECTION") in normalized_intents[0]
+
+
+def test_scheduler_passes_release_selection_runtime_config_to_selection_service() -> None:
+    release_selection_config = {
+        "selection_artifact_config": {
+            "pit_mode": "PREVIOUS_TRADING_DAY_CLOSE",
+            "cutoff_date": "2026-05-20",
+            "include_reference_price": True,
+            "artifact_reuse": "same_trade_date_config_hash",
+        },
+        "runtime_profile": {
+            "selection": {"top_k": 2},
+            "tradability": {"exclude_suspended": False},
+        },
+    }
+    release, local_binding, _, repo = _release_and_bindings(
+        release_metadata={"selection_runtime_config": release_selection_config}
+    )
+    assert local_binding is not None
+    fake_selection = FakeSelectionService(release, candidates=_candidate_rows())
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=fake_selection,
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={local_binding.binding_id: _position_context(portfolio_id="portfolio_release_config")}
+        ),
+    )
+
+    result = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+    )
+
+    assert result.planned_count == 1
+    assert len(fake_selection.calls) == 1
+    assert fake_selection.calls[0]["runtime_config"] == release_selection_config
 
 
 def test_scheduler_reuses_existing_plans_on_restart_without_reselection_or_resubmit() -> None:

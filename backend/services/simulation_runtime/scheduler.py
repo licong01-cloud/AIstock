@@ -1416,7 +1416,7 @@ class SimulationLifecycleScheduler:
                 mode=SelectionMode.SINGLE_PACKAGE,
                 trade_date=trade_date,
                 data_source=data_source,
-                runtime_config={},
+                runtime_config=StrategyPackageSelectionService.release_selection_runtime_config(runtime_release),
                 runtime_release=runtime_release,
                 created_by=created_by,
             )
