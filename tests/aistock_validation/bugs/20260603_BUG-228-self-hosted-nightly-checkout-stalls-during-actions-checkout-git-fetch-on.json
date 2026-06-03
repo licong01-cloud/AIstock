@@ -30,8 +30,8 @@
   "expected": "Nightly self-hosted checkout completes quickly or fails fast with actionable evidence.",
   "first_seen_at": "2026-06-03T06:33:43.204093Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f1c31a293f86d5e72faf165284b17f3c5e41e71c",
+  "fixed_at": "2026-06-03T06:55:56.624930Z",
   "github_issue_number": 630,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/630",
   "last_seen_at": "2026-06-03T06:33:43.204093Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/631",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -53,7 +54,7 @@
   "risk_area": "infra_failure",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation.runner"
   ],
@@ -62,5 +63,8 @@
     "fingerprint": "8e04b593f60035866b2574b3",
     "source_event_id": "FE-20260603-8e04b593f600"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 validation_catalog_integrity validation_center_backend validation_module_registry_l0 guardrail_changed_files -> passed; PR #631 CI checks 16 pass / 0 fail; production_ddl_gate=noop; production_frontend_dependency_gate=noop; production_backend_dependency_gate=noop"
+  ],
   "verification_run_id": null
 }
