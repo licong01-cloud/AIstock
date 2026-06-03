@@ -36,8 +36,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-03T18:30:51.756432Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b01dac1b2f063d6950a3274f4957260d475c44fc",
+  "fixed_at": "2026-06-03T19:06:08.575845Z",
   "github_issue_number": 676,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/676",
   "last_seen_at": "2026-06-03T18:30:51.756432Z",
@@ -45,6 +45,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/677",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -59,7 +60,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -68,18 +69,9 @@
     "fingerprint": "cc54f2c6d26c5eb0e847d9b3",
     "source_event_id": "FE-20260604-cc54f2c6d26c"
   },
-  "verification_run_id": null,
-  "workflow_gate": "validation_passed_pending_pr",
   "validation_evidence": [
-    "python -m ruff check backend/tests/simulation_runtime/test_lifecycle_scheduler.py -> passed",
-    "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_background_scheduler_runs_planning_window_and_keeps_submit_disabled_by_default -q -> 1 passed",
-    "python -m nox -s l0 -> success; guardrail blocking=0",
-    "python -m nox -s localsim_unattended_l3 -> 32 passed",
-    "python -m nox -s miniqmt_sim_stub_l3 -> 45 passed",
-    "python -m nox -s simulation_dual_backend_l4 -> 91 passed",
-    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> l0 success, paper_v2_backend 596 passed/1 skipped/2 xfailed, paper_v2_data_quality and data_quality_deep passed",
-    "python -m nox -s validation_module_registry_l0 -> 8 passed and ownership scan passed",
-    "python -m nox -s validation_center_backend -> 356 passed; coverage line 80.09 branch 62.34",
-    "git diff --check origin/main...HEAD -> passed"
-  ]
+    "CI green on PR #677 after evidence commit 35ecc6a0; final local rerun passed ruff, targeted pytest, l0, localsim_unattended_l3, miniqmt_sim_stub_l3, simulation_dual_backend_l4, PAPER_V2_L3_SKIP_UI=1 paper_v2_l3, validation_module_registry_l0, validation_center_backend, and git diff --check"
+  ],
+  "verification_run_id": null,
+  "workflow_gate": "validation_passed_pending_pr"
 }
