@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from collections.abc import Iterable
 from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any
@@ -263,6 +264,7 @@ class AutoRunCoordinator:
         *,
         limit: int | None = None,
         as_of_time: datetime | None = None,
+        blocked_portfolio_ids: Iterable[str] | None = None,
     ) -> dict[str, Any]:
         started = datetime.now(UTC)
         if not self.env_enabled():
@@ -275,16 +277,27 @@ class AutoRunCoordinator:
             }
         max_items = limit or self.default_limit()
         portfolios = self.repository.list_auto_run_portfolios(limit=max_items)
+        blocked_ids = {str(item) for item in blocked_portfolio_ids or [] if str(item or "").strip()}
         result: dict[str, Any] = {
             "enabled": True,
             "started_at": started.isoformat(),
             "portfolio_count": len(portfolios),
+            "blocked_portfolio_ids": sorted(blocked_ids),
             "recovered": [],
             "skipped": [],
             "errors": [],
         }
         for portfolio in portfolios:
             try:
+                if portfolio.portfolio_id in blocked_ids:
+                    result["skipped"].append(
+                        {
+                            "portfolio_id": portfolio.portfolio_id,
+                            "reason": "abandoned_session_tick_active",
+                            "policy": "block_auto_run_recovery_until_stale_worker_completes",
+                        }
+                    )
+                    continue
                 action = self._recover_portfolio(portfolio, as_of_time=as_of_time)
                 result[action["bucket"]].append(action["payload"])
             except TradingCoreError as exc:
