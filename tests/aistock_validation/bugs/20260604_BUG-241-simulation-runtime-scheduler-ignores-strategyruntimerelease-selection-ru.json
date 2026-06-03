@@ -39,8 +39,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-03T17:12:30.982172Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "01d2b130fd65992255f3fb517a0c1dcab1b7403f",
+  "fixed_at": "2026-06-03T17:39:53.610193Z",
   "github_issue_number": 672,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/672",
   "last_seen_at": "2026-06-03T17:12:30.982172Z",
@@ -48,6 +48,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/673",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -61,7 +62,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -70,6 +71,10 @@
     "fingerprint": "c5f29b46ff480758c1bd8378",
     "source_event_id": "FE-20260604-c5f29b46ff48"
   },
+  "validation_evidence": [
+    "CI checks passed on PR #673 (17 passed, 0 failed, 0 pending; Workflow validation fast lane non-blocking)",
+    "local validation passed: ruff, targeted pytest, l0, paper_v2_backend, PAPER_V2_L3_SKIP_UI=1 paper_v2_l3, localsim_unattended_l3, miniqmt_sim_stub_l3, simulation_dual_backend_l4, validation_module_registry_l0, validation_center_backend, git diff --check"
+  ],
   "verification_run_id": null,
   "workflow_gate": "validation_passed_pending_pr"
 }
