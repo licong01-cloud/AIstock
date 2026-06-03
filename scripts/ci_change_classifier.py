@@ -18,6 +18,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "backend/tests/scripts/test_ci_failure_issue_summary.py",
     "backend/tests/scripts/test_code_intelligence_adapter.py",
     "backend/tests/scripts/test_issue_flow.py",
+    "docs/architecture/aistock_pr_quality_p0p1_evidence_gate_design_20260602.md",
     "docs/architecture/aistock_issue_workflow_efficiency_hardening_design_v2_2_20260529.md",
     "docs/standards/aistock_issue_workflow_quickstart.md",
     "scripts/aistock_issue_workflow.py",

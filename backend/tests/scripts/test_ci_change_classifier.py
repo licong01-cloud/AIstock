@@ -68,6 +68,7 @@ def test_workflow_validation_only_uses_focused_fast_lane(tmp_path: Path) -> None
             ".github/workflows/test.yml",
             "scripts/ci_change_classifier.py",
             "backend/tests/scripts/test_ci_change_classifier.py",
+            "docs/architecture/aistock_pr_quality_p0p1_evidence_gate_design_20260602.md",
         ],
         repo_root=tmp_path,
     )
