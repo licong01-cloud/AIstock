@@ -65,6 +65,13 @@ def confirm(actual: str | None, expected: str, field_name: str) -> None:
         raise ValueError(f"{field_name} must equal {expected!r}")
 
 
+def sanitize_tail(value: int | None, *, default: int = 500, maximum: int = 5000) -> int:
+    tail = int(default if value is None else value)
+    if tail < 1 or tail > maximum:
+        raise ValueError(f"tail must be between 1 and {maximum}; got {tail}")
+    return tail
+
+
 def _clean_params(params: dict[str, Any] | None) -> dict[str, Any] | None:
     if params is None:
         return None
