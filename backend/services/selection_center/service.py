@@ -28,7 +28,6 @@ from backend.services.strategy_package.selection_artifact import (
 from backend.services.strategy_package.live_inference import (
     AUTHORITATIVE_SELECTION_SCOPE,
     AUTHORITATIVE_SELECTION_SOURCE_TYPE,
-    LiveInferencePreflightError,
     LiveInferencePreflightResult,
 )
 from backend.services.strategy_package.service import StrategyPackageService
