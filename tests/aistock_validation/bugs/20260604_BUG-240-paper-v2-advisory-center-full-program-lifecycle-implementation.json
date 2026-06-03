@@ -20,7 +20,11 @@
     "frontend/src/app/paper-v2/selection",
     "frontend/src/app/paper-v2/layout.tsx",
     "frontend/src/lib/api/advisory.ts",
-    "frontend/src/lib/api/selectionCenter.ts"
+    "frontend/src/lib/api/selectionCenter.ts",
+    "backend/main.py",
+    "backend/services/advisory_program.py",
+    "backend/tests/watchlist/test_advisory_program.py",
+    "frontend/src/app/watchlist/page.tsx"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-240",
@@ -55,7 +59,7 @@
     "Do not restart production runtime services without explicit approval."
   ],
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "noop",
+  "production_ddl_gate": "pending",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
@@ -63,7 +67,8 @@
     "paper_v2_backend",
     "validation_module_registry_l0",
     "paper_v2_l3",
-    "validation_center_backend"
+    "validation_center_backend",
+    "qe_archive_l3"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",

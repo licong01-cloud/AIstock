@@ -2,17 +2,28 @@
 
 from __future__ import annotations
 
-from datetime import date
+from dataclasses import asdict
+from datetime import date, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from backend.services.paper_trading_v2.market_data import MinuteDataSource
+from backend.services.advisory_lifecycle import (
+    AdvisoryLifecycleService,
+    AdvisoryMarketSnapshot,
+    AdvisoryWatchlistItem,
+    FusionPolicy,
+    InMemoryAdvisoryReviewRepository,
+    PackageSelectionEvidence,
+)
+from backend.services.advisory_quality import generate_quality_report
 from backend.services.selection_center.models import SelectionMode
 from backend.services.selection_center.industry_tree import SelectionIndustryTreeService
 from backend.services.selection_center.service import SelectionCenterService
 from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError, TradingCoreError, UnsupportedFeatureError
+from backend.services.trading_core.exit_guard import ExitGuardPolicy
 
 router = APIRouter(prefix="/selection-center", tags=["selection-center"])
 
@@ -51,6 +62,53 @@ class AddSelectionRunToWatchlistRequest(BaseModel):
 class DeleteSelectionRunsRequest(BaseModel):
     run_ids: list[str] = Field(min_length=1)
     confirm_delete: bool = False
+
+
+class AdvisoryWatchlistItemInput(BaseModel):
+    watchlist_item_id: int
+    code: str
+    lifecycle_status: str = "HOLDING"
+    advisory_enabled: bool = True
+    planned_entry_price: float | None = None
+    actual_entry_price: float | None = None
+    actual_entry_date: date | None = None
+    high_since_entry: float | None = None
+    days_since_entry: int | None = None
+
+
+class AdvisoryMarketSnapshotInput(BaseModel):
+    code: str
+    trade_date: date
+    current_price: float | None
+    suspend_status: str | None = None
+    high_since_entry: float | None = None
+    latest_factor: float | None = None
+
+
+class AdvisoryPackageEvidenceInput(BaseModel):
+    package_id: str
+    evidence_id: str | None = None
+    code: str
+    trade_date: date
+    score: float | None = None
+    rank: int | None = None
+    candidate_count: int | None = None
+    presence: str = "selected_topK"
+    feature_availability_ts: datetime | None = None
+
+
+class MultiPackageAdvisoryReviewPreviewRequest(BaseModel):
+    items: list[AdvisoryWatchlistItemInput] = Field(min_length=1)
+    package_evidence_by_code: dict[str, dict[str, AdvisoryPackageEvidenceInput]]
+    market_by_code: dict[str, AdvisoryMarketSnapshotInput]
+    trade_date: date
+    exit_guard_policy: dict[str, Any]
+    fusion_policy: dict[str, Any]
+
+
+class AdvisoryQualityReportRequest(BaseModel):
+    records: list[dict[str, Any]] = Field(default_factory=list)
+    min_bucket_size: int = Field(default=30, ge=1)
 
 
 def _raise_http(exc: TradingCoreError) -> None:
@@ -179,6 +237,46 @@ def get_selection_run(
         _raise_http(exc)
 
 
+@router.get("/runs/{run_id}/fusion-diagnostics")
+def get_selection_run_fusion_diagnostics(
+    run_id: str,
+    service: SelectionCenterService = Depends(get_selection_center_service),
+) -> dict[str, Any]:
+    try:
+        run = service.get_run(run_id)
+        diagnostics = []
+        for row in run.aggregate_results:
+            scores = row.component_scores or {}
+            diagnostics.append(
+                {
+                    "symbol": row.symbol,
+                    "rank": row.rank,
+                    "score": row.score,
+                    "fusion_score": scores.get("fusion_score", row.score),
+                    "source_package_ids": scores.get("source_package_ids", []),
+                    "package_raw_scores": scores.get("package_raw_scores", {}),
+                    "package_ranks": scores.get("package_ranks", {}),
+                    "package_rank_scores": scores.get("package_rank_scores", {}),
+                    "package_presence": scores.get("package_presence", {}),
+                    "support_count": scores.get("support_count"),
+                    "rank_dispersion": scores.get("rank_dispersion"),
+                    "fusion_policy_sha256": scores.get("fusion_policy_sha256"),
+                }
+            )
+        first_scores = (run.aggregate_results[0].component_scores or {}) if run.aggregate_results else {}
+        return {
+            "ok": True,
+            "run_id": run.run_id,
+            "mode": run.mode.value,
+            "package_ids": run.package_ids,
+            "fusion_method": first_scores.get("fusion_method"),
+            "fusion_policy_sha256": first_scores.get("fusion_policy_sha256"),
+            "diagnostics": diagnostics,
+        }
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
 @router.delete("/runs/{run_id}")
 def delete_selection_run(
     run_id: str,
@@ -235,6 +333,40 @@ def add_selection_run_to_watchlist(
             on_conflict=req.on_conflict,
         )
         return {"ok": True, "result": result}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/advisory/multi-package-review/preview")
+def preview_multi_package_advisory_review(req: MultiPackageAdvisoryReviewPreviewRequest) -> dict[str, Any]:
+    try:
+        service = AdvisoryLifecycleService(repository=InMemoryAdvisoryReviewRepository())
+        records = service.run_multi_package_daily_review(
+            items=[AdvisoryWatchlistItem(**item.model_dump()) for item in req.items],
+            package_evidence_by_code={
+                code: {
+                    package_id: PackageSelectionEvidence(**evidence.model_dump())
+                    for package_id, evidence in by_package.items()
+                }
+                for code, by_package in req.package_evidence_by_code.items()
+            },
+            market_by_code={
+                code: AdvisoryMarketSnapshot(**snapshot.model_dump())
+                for code, snapshot in req.market_by_code.items()
+            },
+            trade_date=req.trade_date,
+            policy=ExitGuardPolicy.from_dict(req.exit_guard_policy),
+            fusion_policy=FusionPolicy(**req.fusion_policy),
+        )
+        return {"ok": True, "records": [asdict(record) for record in records]}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/advisory/quality-report")
+def build_advisory_quality_report(req: AdvisoryQualityReportRequest) -> dict[str, Any]:
+    try:
+        return {"ok": True, "report": generate_quality_report(req.records, min_bucket_size=req.min_bucket_size)}
     except TradingCoreError as exc:
         _raise_http(exc)
 
