@@ -644,3 +644,22 @@ def test_pr_quality_semgrep_scans_changed_files_only() -> None:
     assert "xargs -a tmp/validation/pr_quality/semgrep_changed_files.txt semgrep" in run
     assert "semgrep --config .semgrep.yml --json --output tmp/validation/pr_quality/semgrep.json ." not in run
     assert '"paths":{"scanned":[]}' in run
+
+
+def test_standalone_semgrep_scans_changed_files_only() -> None:
+    workflow = yaml.safe_load(Path(".github/workflows/semgrep.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["semgrep"]["steps"]
+    semgrep_steps = [
+        step
+        for step in steps
+        if isinstance(step, dict) and str(step.get("name") or "") == "Run Semgrep"
+    ]
+    assert len(semgrep_steps) == 1
+
+    run = str(semgrep_steps[0]["run"])
+    assert "git diff --name-only --diff-filter=ACMRT" in run
+    assert "git diff-tree --no-commit-id --name-only --diff-filter=ACMRT" in run
+    assert "semgrep_changed_files.txt" in run
+    assert "xargs -a tmp/validation/semgrep/semgrep_changed_files.txt semgrep" in run
+    assert "semgrep --config .semgrep.yml --json --output tmp/validation/semgrep/semgrep.json ." not in run
+    assert '"paths":{"scanned":[]}' in run
