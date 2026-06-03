@@ -54,6 +54,12 @@
       "actor": "codex",
       "note": "Targeted backend/API tests, py_compile, diff-check, l0, paper_v2_backend, and validation_module_registry_l0 passed; implementation branch is ready for PR gate.",
       "timestamp": "2026-06-03T14:32:27Z"
+    },
+    {
+      "action": "fix_commit_recorded",
+      "actor": "codex",
+      "note": "Recorded implementation commit 4bb9e628d570bb18b343f0d7d4249f4099c033e3 for BUG-235 before PR creation.",
+      "timestamp": "2026-06-03T14:37:23Z"
     }
   ],
   "evidence_uris": [
@@ -62,7 +68,7 @@
   "expected": "多策略包荐股每日复评以 fusion_rank 作为 canonical rank，同时保留 package_raw_scores/package_raw_ranks/package_rank_scores/support_count/rank_dispersion/fusion_policy_sha256，缺失 evidence fail-fast 或 WAITING_DATA，并提供 UI/质量报告可消费的证据。",
   "first_seen_at": "2026-06-03T13:56:52.031349Z",
   "fix_branch": "bug/BUG-235-issue-20260603",
-  "fix_commit": null,
+  "fix_commit": "4bb9e628d570bb18b343f0d7d4249f4099c033e3",
   "fixed_at": null,
   "github_issue_number": 653,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/653",
