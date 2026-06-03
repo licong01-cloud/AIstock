@@ -830,7 +830,9 @@ def test_scheduler_reports_unattended_trading_windows_without_submitting_orders(
     assert result.schedule_windows[3]["state"] == "UPCOMING"
 
 
-def test_background_scheduler_runs_planning_window_and_keeps_submit_disabled_by_default() -> None:
+def test_background_scheduler_runs_planning_window_and_keeps_submit_disabled_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     release, local_binding, qmt_binding, repo = _release_and_bindings()
     assert local_binding is not None
     lifecycle = SimulationLifecycleScheduler(
@@ -843,6 +845,7 @@ def test_background_scheduler_runs_planning_window_and_keeps_submit_disabled_by_
             }
         ),
     )
+    monkeypatch.setenv("SIMULATION_RUNTIME_SCHEDULER_DEFAULT_SUBMIT", "false")
     background = SimulationLifecycleBackgroundScheduler(lifecycle_scheduler=lifecycle)
 
     result = background.run_once(as_of_time=datetime(2026, 5, 21, 9, 22, tzinfo=UTC))
