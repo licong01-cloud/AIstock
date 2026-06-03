@@ -1,0 +1,70 @@
+{
+  "actual": "Run 26869773853 and its failed-job rerun had runner preflight success but DR/code-intelligence failed in self-hosted checkout/action download due GitHub/codeload connection resets/timeouts.",
+  "allowed_write_scope": [
+    ".github/workflows/nightly.yml",
+    "scripts/ci/prepare_self_hosted_workspace.py",
+    "tests/aistock_validation/bugs/20260603_BUG-231-self-hosted-nightly-checkout-depends-on-github-network-and-blocks-dr-cod.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/ci_failure_issue_summary.py",
+    "backend/tests/scripts/test_ci_failure_issue_summary.py",
+    "backend/tests/scripts/test_prepare_self_hosted_workspace.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-231",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized.",
+    "Nightly auto-issue summary includes code-intelligence-weekly status when that self-hosted job fails.",
+    "Local self-hosted workspace preparation has targeted regression tests and does not write the canonical root worktree."
+  ],
+  "created_at": "2026-06-03T07:57:48.464463Z",
+  "description": "Run 26869773853 and its failed-job rerun had runner preflight success but DR/code-intelligence failed in self-hosted checkout/action download due GitHub/codeload connection resets/timeouts.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260603-3747c81767c8",
+      "timestamp": "2026-06-03T07:57:48.464459Z"
+    }
+  ],
+  "evidence_uris": [
+    "GitHub Actions run 26869773853; Issue #636; DR job 79241981144; Code intelligence job 79241981165; rerun DR job 79245492051"
+  ],
+  "expected": "Self-hosted Nightly jobs can start from a clean disposable workspace without polluting F:\\\\Dev\\\\AIstock and without depending on GitHub checkout for every job when the expected main commit is already present locally.",
+  "first_seen_at": "2026-06-03T07:57:48.464463Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 639,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/639",
+  "last_seen_at": "2026-06-03T07:57:48.464463Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "gh run view 26869773853 --repo licong01-cloud/AIstock",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "guardrail_changed_files",
+    "validation_catalog_integrity"
+  ],
+  "risk_area": "infra_failure",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Self-hosted Nightly checkout depends on GitHub network and blocks DR/code intelligence",
+  "trigger_condition": {
+    "fingerprint": "3747c81767c8f6edbf4407e4",
+    "source_event_id": "FE-20260603-3747c81767c8"
+  },
+  "verification_run_id": null
+}
